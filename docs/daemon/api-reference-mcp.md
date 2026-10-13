@@ -185,7 +185,7 @@ Create a new vTPM bundle.
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | name | string | Yes | Bundle hostname |
-| algorithm | string | No | EK algorithm: RSA, ECC (default: RSA) |
+| algorithm | string | No | EK algorithm: RSA or ECC, any case (default: the daemon's configured `ek-algorithm`); anything else is InvalidArgument |
 
 **Returns:**
 ```json

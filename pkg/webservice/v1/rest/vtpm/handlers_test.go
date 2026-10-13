@@ -454,15 +454,40 @@ func TestCreateBundle_InvalidBundleMode(t *testing.T) {
 	assert.True(t, ok)
 }
 
-func TestCreateBundle_UnknownEKAlgorithmDefaultsToRSA(t *testing.T) {
-	// When an unknown EK algorithm is provided, parseEKAlgorithm defaults to RSA
-	// which is always valid. This tests that the service is called with RSA.
+// TestCreateBundle_UnknownEKAlgorithmRejected guards the coercion bug: an
+// algorithm other than RSA or ECC used to create an RSA EK.
+func TestCreateBundle_UnknownEKAlgorithmRejected(t *testing.T) {
+	service := &mockVTPMService{
+		createBundleFn: func(ctx context.Context, opts *vtpm.CreateBundleOptions) (*vtpm.Bundle, error) {
+			t.Fatalf("service called with EK algorithm %q", opts.EKAlgorithm)
+			return nil, nil
+		},
+	}
+
+	handlers, writer := newTestHandlers(service)
+
+	body := CreateBundleRequest{
+		Mode:        "pre-assigned",
+		Hostname:    "test-host",
+		EKAlgorithm: "ECDSA",
+	}
+
+	req := createRequestWithVars(http.MethodPost, "/api/v1/vtpm/bundles", body, nil)
+	rec := httptest.NewRecorder()
+
+	handlers.CreateBundle(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+	var invalid vtpm.ErrInvalidEKAlgorithm
+	assert.ErrorAs(t, writer.lastError, &invalid)
+}
+
+func TestCreateBundle_EKAlgorithmIgnoresCase(t *testing.T) {
 	bundle := createTestBundle("test-bundle")
 
 	service := &mockVTPMService{
 		createBundleFn: func(ctx context.Context, opts *vtpm.CreateBundleOptions) (*vtpm.Bundle, error) {
-			// Unknown algorithm defaults to RSA
-			assert.Equal(t, vtpm.EKAlgorithmRSA, opts.EKAlgorithm)
+			assert.Equal(t, vtpm.EKAlgorithmECC, opts.EKAlgorithm)
 			return bundle, nil
 		},
 	}
@@ -472,7 +497,7 @@ func TestCreateBundle_UnknownEKAlgorithmDefaultsToRSA(t *testing.T) {
 	body := CreateBundleRequest{
 		Mode:        "pre-assigned",
 		Hostname:    "test-host",
-		EKAlgorithm: "UNKNOWN",
+		EKAlgorithm: "ecc",
 	}
 
 	req := createRequestWithVars(http.MethodPost, "/api/v1/vtpm/bundles", body, nil)
@@ -827,16 +852,13 @@ func TestCreateTemplate_MissingID(t *testing.T) {
 	assert.True(t, ok)
 }
 
-func TestCreateTemplate_UnknownEKAlgorithmDefaultsToRSA(t *testing.T) {
-	// When an unknown EK algorithm is provided, parseEKAlgorithm defaults to RSA
-	// which is always valid. This tests that the service is called with RSA.
-	template := createTestTemplate("test-template")
-
+// TestCreateTemplate_UnknownEKAlgorithmRejected guards the coercion bug: an
+// algorithm other than RSA or ECC used to create an RSA EK.
+func TestCreateTemplate_UnknownEKAlgorithmRejected(t *testing.T) {
 	service := &mockVTPMService{
 		createTemplateFn: func(ctx context.Context, opts *vtpm.CreateTemplateOptions) (*vtpm.Template, error) {
-			// Unknown algorithm defaults to RSA
-			assert.Equal(t, vtpm.EKAlgorithmRSA, opts.EKAlgorithm)
-			return template, nil
+			t.Fatalf("service called with EK algorithm %q", opts.EKAlgorithm)
+			return nil, nil
 		},
 	}
 
@@ -852,7 +874,9 @@ func TestCreateTemplate_UnknownEKAlgorithmDefaultsToRSA(t *testing.T) {
 
 	handlers.CreateTemplate(rec, req)
 
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+	var invalid vtpm.ErrInvalidEKAlgorithm
+	assert.ErrorAs(t, writer.lastError, &invalid)
 }
 
 func TestCreateTemplate_ServiceError(t *testing.T) {
@@ -1491,31 +1515,6 @@ func TestParseBundleMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
 			result := handlers.parseBundleMode(tt.input)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestParseEKAlgorithm(t *testing.T) {
-	handlers, _ := newTestHandlers(&mockVTPMService{})
-
-	tests := []struct {
-		input    string
-		expected vtpm.EKAlgorithm
-	}{
-		{"RSA", vtpm.EKAlgorithmRSA},
-		{"rsa", vtpm.EKAlgorithmRSA},
-		{"Rsa", vtpm.EKAlgorithmRSA},
-		{"ECC", vtpm.EKAlgorithmECC},
-		{"ecc", vtpm.EKAlgorithmECC},
-		{"Ecc", vtpm.EKAlgorithmECC},
-		{"", vtpm.EKAlgorithmRSA},        // Default to RSA
-		{"invalid", vtpm.EKAlgorithmRSA}, // Default to RSA
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			result := handlers.parseEKAlgorithm(tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

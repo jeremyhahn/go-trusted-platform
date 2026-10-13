@@ -87,6 +87,18 @@ explains why. `control-plane.yaml` has no challenge: it is the CA.
   in `/etc/network/interfaces`. OVS claims them when `ovsdb-server` +
   `ovs-vswitchd` start at boot.
 
+### Overlay Underlay
+
+The gateway templates enable the overlay without IPsec, so they name its
+underlay explicitly: `sdn.overlay.underlay-interface: zone401` (the fabric
+zone's internal port on `br-fabric`, VLAN 401) and `sdn.overlay.vtep-address`
+the gateway's fabric address `10.4.1.2`. Nothing falls back to loopback: an
+overlay without IPsec that lacks the underlay interface refuses to start
+with `OverlayVTEPSettingError` (#93), and an unset `vtep-address` falls back
+only to the node's detected public IPv4. A node that enables the overlay
+uses its own fabric address. The control-plane and compute templates leave
+the overlay disabled. See `docs/sdn/overlay/configuration.md`.
+
 ### Host Addressing by Role
 
 A host holds an address only on the zones it uses (reference network,
@@ -114,13 +126,17 @@ A host holds an address only on the zones it uses (reference network,
 
 Each node runs a **local `dnsmasq`** on `127.0.0.1:53`. dnsmasq's
 upstream (`server=`) is the control plane's internal DNS on
-`<cp_ip>#9053`. Why this pattern?
+`<cp_ip>#<port>`, where `<port>` is the control-plane template's
+`dns.internal.port` (`9053` when unset). Bootstrap reads it from that
+template, so moving the port there moves every node's forwarder with it.
+Why this pattern?
 
 - `platformd` does **not** run as root; its DNS service binds to
-  unprivileged ports (9053 for internal zone, 8053 for public).
+  unprivileged ports (`dns.internal.port`, default 9053, and
+  `dns.public.port`, default 8053).
 - libc resolvers always query port 53, so clients need something
   listening there.
-- Local `dnsmasq` + explicit port forward (`server=<cp_ip>#9053`)
+- Local `dnsmasq` + explicit port forward (`server=<cp_ip>#<port>`)
   lets the kernel-level resolver talk to CP's DNS via a standard
   port without granting `CAP_NET_BIND_SERVICE` to platformd workers.
 

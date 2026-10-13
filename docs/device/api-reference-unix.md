@@ -82,37 +82,26 @@ and MCP (`device_attest`); see [`api.md`](api.md) §2.
 ### Profile Operations
 
 ```bash
-# Create profile
-platformctl profile create \
+# Create profile (create, update, assign and unassign live under device profile)
+platformctl device profile create \
   --name "IoT Sensor Profile" \
   --model IoT-Sensor-v1 \
-  --role iot \
-  --mac-prefix "52:54:00" \
-  --serial-prefix "IOT-"
+  --role iot
 
-# Get profile
-platformctl profile get --id 1
+# Get, list and delete a profile (platformctl profile runs the same verbs)
+platformctl profile get 1
+platformctl profile list
+platformctl profile delete 1
 
 # Update profile
-platformctl profile update --id 1 --name "IoT Sensor Profile v2"
+platformctl device profile update 1 --name "IoT Sensor Profile v2"
 
-# Delete profile
-platformctl profile delete --id 1
-
-# List profiles
-platformctl profile list
-
-# Find matching profile
+# Find the matching profile; MAC and serial match by prefix, model exactly.
+# No match exits non-zero with "no profile matches ..." (gRPC NOT_FOUND).
 platformctl profile match \
   --mac 52:54:00:aa:bb:cc \
   --serial IOT-001 \
   --model IoT-Sensor-v1
-
-# Find by MAC prefix
-platformctl profile find-mac --prefix "52:54:00"
-
-# Find by serial prefix
-platformctl profile find-serial --prefix "IOT-"
 
 # Name the certificate the attestation collector verifies nodes of a
 # profile against (the pb DeviceProfile tls_server_name; docs/device/cli.md §3),

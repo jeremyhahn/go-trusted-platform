@@ -1,6 +1,6 @@
 # Go SDK — User Guide
 
-> **Status: NORMATIVE** · Scope: connecting to `platformd` from Go · Last verified: 2026-10-11
+> **Status: NORMATIVE** · Scope: connecting to `platformd` from Go · Last verified: 2026-10-13
 > Conflicts with this document are defects. Fix them here first.
 
 ---
@@ -181,6 +181,40 @@ value auto-detects. Any other name makes `QuicBaaS()` return
 `ErrQuicBaaSInitFailed` wrapping `ErrProtocolNotSupported`; platformd services
 are unaffected. For typed accessors, wrap the client with
 `quicbaas.NewClientFromSDK(qb)` from `sdk/go/services/quicbaas`.
+
+### Agentic orchestration
+
+The typed wrapper routes the agentic clients: `Orchestrator()` (agents,
+sessions, tasks, jobs, workflows), `Project()` and `Account()` (the pooled
+provider accounts a session is spawned against). The container-trust types come
+from `sdk/go/services/orchestration`:
+
+```go
+import (
+    sdkquicbaas "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/quicbaas"
+    "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/orchestration"
+)
+
+baas, err := sdkquicbaas.NewClientFromSDK(qb)
+if err != nil {
+    return err
+}
+agents := baas.Orchestrator()
+
+level, err := orchestration.ResolveTrustLevel(
+    orchestration.TrustLevelDefault,
+    orchestration.TrustPolicyAttested,
+    nil, // no tenant override
+    orchestration.TrustCapabilities{DigestPinning: true, HostTPM: true},
+)
+var violation *orchestration.TrustLevelViolationError
+if errors.As(err, &violation) {
+    return err // the host cannot prove the tier the policy requires
+}
+```
+
+The request and response types of those clients are not re-exported yet
+([api.md §3](api.md#3-go-quicbaas-re-export-surface)).
 
 ## 6. In-process (embedded)
 

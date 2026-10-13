@@ -109,9 +109,15 @@ different concepts, one key name.
    [`docs/attestation/`](../attestation/).
 4. **Migration is two-phase.** `PrepareMigration` and `FinalizeMigration` exist
    alongside `MigrateVM` precisely so a migration can be staged and confirmed;
-   `vm_receive.go` is the receiving side.
+   `vm_receive.go` is the receiving side. The receiver binds
+   `compute.migration_listen_address` (defaults layer `0.0.0.0:0`, port 0 =
+   ephemeral per receiver). An empty or non-`IP:port` value refuses the
+   receiver with `MigrationListenAddressError` (`FAILED_PRECONDITION`); no
+   address is assumed ([Configuration](configuration.md#migration-listen-address)).
 5. **Live migration requires shared storage.** The CLI says so on `--live`; the
-   backend cannot copy a disk it does not share.
+   backend cannot copy a disk it does not share. `compute.shared_storage`
+   reaches the orchestrator through `applyLocalQEMUSettings`
+   (`pkg/daemon/commands/serve.go`).
 6. **Placement decides where, port auth decides whether.** `placement.go` picks
    a host; `port_auth.go` decides whether the resulting VNIC is allowed on the
    network. Both must succeed.

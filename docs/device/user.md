@@ -393,11 +393,10 @@ The client posted to the bare endpoint, which answers the HTTP mux's plain-text
 `404 page not found`. JSON-RPC is served only on the `/mcp` path — use
 `https://<host>:9445/mcp`.
 
-**`platformctl profile list` says "daemon connection required" no matter what.**
-That group is a stub; all four of its verbs return that error unconditionally,
-including under `--transport embedded`. Use
-`platformctl device profile …` for writes and REST for reads
-([cli.md](cli.md) §6).
+**`platformctl profile get` or `match` fails with "not found" / "no profile matches".**
+Both exit non-zero on purpose: the id does not exist, or no profile's match
+rules fit the MAC, serial or model given. `platformctl profile list` shows
+what exists ([cli.md](cli.md) §3.0a).
 
 ---
 

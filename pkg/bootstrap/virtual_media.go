@@ -134,11 +134,6 @@ const (
 // it via this share name.
 const virtualMediaShareName = "boot"
 
-// cpWebservicePort is the HTTPS port on which the control-plane webservice
-// is expected to listen. It is a variable rather than a constant so tests
-// can override it with the httptest.Server ephemeral port.
-var cpWebservicePort = "8443"
-
 // NodeRegistration is the JSON payload that platformd uploads to the
 // bootstrap server at /installs/<hostname>/registration.json after it
 // starts on a freshly-installed node. The IP field is the address
@@ -1615,7 +1610,7 @@ func (o *Orchestrator) fetchControlPlaneCABundle(ctx context.Context) (string, e
 // host, verifying the served chain against the fetched bundle for
 // tlsName. It returns the bundle body and the pool built from it.
 func (o *Orchestrator) fetchCABundleFrom(ctx context.Context, host, tlsName string) ([]byte, *x509.CertPool, error) {
-	endpoint := net.JoinHostPort(host, cpWebservicePort)
+	endpoint := net.JoinHostPort(host, o.controlPlanePort())
 	url := "https://" + endpoint + "/api/v1/acme/ca-bundle"
 
 	// Capture-then-verify: the CP's CA was just self-provisioned, so no
@@ -1749,7 +1744,7 @@ func (o *Orchestrator) fetchControlPlaneSPKIPin(ctx context.Context) (string, er
 		return "", ControlPlaneStaticIPRequiredError{Hostname: cpNode.Hostname}
 	}
 
-	endpoint := net.JoinHostPort(cpIPs[0], cpWebservicePort)
+	endpoint := net.JoinHostPort(cpIPs[0], o.controlPlanePort())
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	tlsCfg := &tls.Config{
 		MinVersion: tls.VersionTLS13,

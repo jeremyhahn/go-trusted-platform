@@ -311,9 +311,9 @@ and a saved device. The daemon REST handler rejects the same body with `400`.
 | Delete profile | `DELETE /api/v1/device/profiles/{id}` | `DeleteProfile` | `OpDeviceDeleteProfile` (`0x39`) | `profile_delete_by_id` | ✅ |
 | List profiles | `GET /api/v1/device/profiles` | `ListProfiles` | `OpDeviceListProfiles` (`0x37`) | `profile_list_all` | ✅ |
 | Count profiles | `GET /api/v1/device/profiles/count` | `CountProfiles` | `OpDeviceListProfiles` (`0x37`) — total in the list reply | `MISSING — docs/13 G7` | ✅ |
-| Find profile by MAC | `GET /api/v1/device/profiles/mac/{mac}` | `FindProfileByMACAddress` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
-| Find profile by serial | `GET /api/v1/device/profiles/serial/{serial}` | `FindProfileBySerial` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
-| Find matching profile | `POST /api/v1/device/profiles/match` | `FindMatchingProfile` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+| Find profile by MAC | `GET /api/v1/device/profiles/mac/{mac}` | `FindProfileByMACAddress` | `MISSING — docs/13 G7` | `profile_find_by_mac` — no match `NotFound` | ✅ |
+| Find profile by serial | `GET /api/v1/device/profiles/serial/{serial}` | `FindProfileBySerial` | `MISSING — docs/13 G7` | `profile_find_by_serial` — no match `NotFound` | ✅ |
+| Find matching profile | `POST /api/v1/device/profiles/match` | `FindMatchingProfile` — no match `NotFound` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubFindMatchingProfile` (`0x29`) — see §3.7 | `profile_find_matching` — no match `NotFound` | ✅ |
 | Find config for a device (EK serial / MAC) | `GET /api/v1/device/profiles/find-config` | `FindConfigForDevice` — no identity `InvalidArgument`, unknown identity `NotFound` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Assign profile to a device identity (explicit `ek_serial`/`mac_address`, or `device_id` of a registered device — the server derives the EK serial from its stored EK certificate, #463) | `POST /api/v1/device/profiles/{id}/assign` | `AssignProfileToDevice` | `OpProvisioningCategory` (`0xCF`) sub `0x20` — see §3.7 | `profile_assign_to_device` | ✅ |
 | Unassign profile | `POST /api/v1/device/profiles/{id}/unassign` | `UnassignProfileFromDevice` | `MISSING — docs/13 G7` | `profile_unassign_from_device` | ✅ |
@@ -611,7 +611,8 @@ dispatcher; §4.5 records it. So do `DeviceSubBootCertificate` (`0x23`) and
 `DeviceSubDisable` (`0x25`) and `DeviceSubEnable` (`0x26`), the operator
 lifecycle transitions of §4.7, and `DeviceSubTemplateCreate` (`0x27`) and
 `DeviceSubProfileFromTemplate` (`0x28`), which carry `CreateTemplate` and
-`CreateProfileFromTemplate` (§4). The device integration suite's QUIC adapter
+`CreateProfileFromTemplate` (§4), and `DeviceSubFindMatchingProfile` (`0x29`),
+which carries `FindMatchingProfile` (#460). The device integration suite's QUIC adapter
 reaches the profile, attestation-certificate, lifecycle and template
 sub-opcodes through the category opcode rather than a top-level one.
 
@@ -1259,7 +1260,7 @@ and every tool in them is dispatched and scope-checked.
 | Family | Registered by | Executor | In the authorization map |
 |---|---|---|---|
 | `device_register`, `device_get`, `device_find_by_serial`, `device_list`, `device_delete`, `device_update`, `device_attest`, `device_record_attest_cert`, `device_provision`, `device_disable`, `device_enable` | `registerDeviceTools` (`tools.go:557`) | `ExecuteTool` (`tools.go:1325`) | **yes** — `device:write` / `device:read` / `device:delete` |
-| `profile_create`, `profile_get_by_id`, `profile_list_all`, `profile_update_by_id`, `profile_delete_by_id`, `profile_assign_to_device`, `profile_unassign_from_device` | `registerDeviceToolsV2` (`device_tools.go:99`) | `deviceProfileToolDispatch` | **yes** — all seven mapped to `device:*` |
+| `profile_create`, `profile_get_by_id`, `profile_list_all`, `profile_update_by_id`, `profile_delete_by_id`, `profile_find_matching`, `profile_find_by_mac`, `profile_find_by_serial`, `profile_assign_to_device`, `profile_unassign_from_device` | `registerDeviceToolsV2` (`device_tools.go:99`) | `deviceProfileToolDispatch` | **yes** — all ten mapped to `device:*` |
 | `device_template_create`, `profile_create_from_template` (§4) | `registerDeviceTemplateTools` (`device_template_tools.go:157`) | `deviceProfileToolDispatch` | **yes** — both `device:write` |
 
 The two template tools are not the `vtpm_*_template_*` tools, which create
@@ -1304,7 +1305,8 @@ device opcode (`0x30`–`0x3E`) and `categoryPermissions` maps the device
 sub-opcodes under `OpProvisioningCategory` (`0xCF`, keyed by `payload[0]`):
 `0x20`/`0x21` assign and unassign, `0x22` record attestation certificate,
 `0x25`/`0x26` disable and enable, `0x27` create template, `0x28` create profile
-from template — all `device:write`. The diskless boot sub-opcodes `0x23`/`0x24`
+from template — all `device:write` — and `0x29` find matching profile,
+`device:read`. The diskless boot sub-opcodes `0x23`/`0x24`
 are pre-auth (§4.6). Both catalogs are in `pkg/api/quic/opcode_permissions.go`;
 an operation absent from them is refused, so a new sub-opcode without an entry
 fails closed. `pkg/api/daemon/quic_device_authz_test.go` sends every device

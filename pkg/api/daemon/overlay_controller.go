@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/netip"
 	"slices"
+	"strconv"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -50,6 +51,27 @@ func (e *OverlayVTEPError) Unwrap() error {
 	return e.Err
 }
 
+// The overlay keys an OverlayVTEPSettingError names.
+const (
+	overlayVTEPAddressKey       = "sdn.overlay.vtep-address"
+	overlayUnderlayInterfaceKey = "sdn.overlay.underlay-interface"
+)
+
+// OverlayVTEPSettingError refuses an overlay VTEP (without IPsec) that the
+// configuration does not determine: Setting is the key to set, and Value the
+// configured value when one was given but is not a usable unicast address.
+type OverlayVTEPSettingError struct {
+	Setting string
+	Value   string
+}
+
+func (e *OverlayVTEPSettingError) Error() string {
+	if e.Value != "" {
+		return "daemon: overlay VTEP: " + e.Setting + " " + strconv.Quote(e.Value) + " is not a unicast IP address"
+	}
+	return "daemon: overlay VTEP undetermined: set " + e.Setting
+}
+
 // overlayVTEP is the local VTEP: the address the overlay controller
 // registers and sources VXLAN from, and the underlay interface it leaves by.
 type overlayVTEP struct {
@@ -69,21 +91,39 @@ type interfaceAddrsFunc func(name string) ([]netip.Addr, error)
 // unset or name the fabric interface; the local address must be one of the
 // fabric interface's addresses. Anything else is an *OverlayVTEPError.
 //
-// Without IPsec the VTEP is publicIPv4 (127.0.0.1 when nil or unspecified,
-// for test and loopback nodes) on overlay.underlay-interface ("lo" when
-// unset), and the interfaces are not read.
+// Without IPsec the VTEP address is overlay.vtep-address, else the node's
+// detected publicIPv4, on overlay.underlay-interface; the interfaces are not
+// read. Nothing is guessed: no address or no interface is an
+// *OverlayVTEPSettingError naming the key to set. A loopback VTEP (single
+// node, tests) is an explicit vtep-address: 127.0.0.1 on underlay-interface: lo.
 func resolveOverlayVTEP(publicIPv4 net.IP, cfg *sdn.OverlayConfig, addrsOf interfaceAddrsFunc) (overlayVTEP, error) {
 	if cfg.IPsec != nil && cfg.IPsec.Enabled {
 		return ipsecVTEP(cfg, addrsOf)
 	}
-	vtep := overlayVTEP{addr: netip.MustParseAddr("127.0.0.1"), iface: "lo"}
+	addr, err := plainVTEPAddress(publicIPv4, cfg.VTEPAddress)
+	if err != nil {
+		return overlayVTEP{}, err
+	}
+	if cfg.UnderlayInterface == "" {
+		return overlayVTEP{}, &OverlayVTEPSettingError{Setting: overlayUnderlayInterfaceKey}
+	}
+	return overlayVTEP{addr: addr, iface: cfg.UnderlayInterface}, nil
+}
+
+// plainVTEPAddress is the VTEP address of an overlay without IPsec: the
+// configured vtep-address when set, otherwise the detected public address.
+func plainVTEPAddress(publicIPv4 net.IP, configured string) (netip.Addr, error) {
+	if configured != "" {
+		addr, err := netip.ParseAddr(configured)
+		if err != nil || addr.Unmap().IsUnspecified() || addr.Unmap().IsMulticast() {
+			return netip.Addr{}, &OverlayVTEPSettingError{Setting: overlayVTEPAddressKey, Value: configured}
+		}
+		return addr.Unmap(), nil
+	}
 	if addr, ok := netip.AddrFromSlice(publicIPv4); ok && !addr.Unmap().IsUnspecified() {
-		vtep.addr = addr.Unmap()
+		return addr.Unmap(), nil
 	}
-	if cfg.UnderlayInterface != "" {
-		vtep.iface = cfg.UnderlayInterface
-	}
-	return vtep, nil
+	return netip.Addr{}, &OverlayVTEPSettingError{Setting: overlayVTEPAddressKey}
 }
 
 // ipsecVTEP is the IPsec local endpoint on the fabric interface, refused

@@ -26,7 +26,7 @@ go-trusted-platform implements a secure authentication architecture based on:
 |----------|-----------|------|----------|
 | REST | HTTP/HTTPS | 8443/9443 | Web clients (public/internal) |
 | gRPC | TCP | 10443 | High-performance service-to-service |
-| QUIC | UDP | 11443 | Low-latency, mobile clients |
+| QUIC | UDP | 9444 | Low-latency, mobile clients |
 | MCP | HTTP | 8000 | AI/LLM integration (OAuth 2.1) |
 | Unix | gRPC UDS | /run/platformd.sock | Local IPC, CLI (SO_PEERCRED) |
 

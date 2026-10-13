@@ -7,6 +7,8 @@
 #
 # Required env vars (passed via `docker run -e`):
 #   BOOTSTRAP_INTERFACE   network interface to bind (e.g. eth0)
+#   BOOTSTRAP_BIND_HOST   address the HTTP and TFTP servers bind (optional;
+#                         unset binds every interface, DHCP always does)
 #   BOOTSTRAP_HTTP_PORT   HTTP port (default 8080)
 #   BOOTSTRAP_SERVER_IP   server IP advertised by DHCP
 #   BOOTSTRAP_DHCP_START  DHCP range start
@@ -46,6 +48,9 @@ set -eu
 # flag as its value. This one variable closes the command, so empty is
 # nothing.
 BOOTSTRAP_PXEBOOT_ARGS=""
+if [ -n "${BOOTSTRAP_BIND_HOST:-}" ]; then
+    BOOTSTRAP_PXEBOOT_ARGS="$BOOTSTRAP_PXEBOOT_ARGS --bind-host $BOOTSTRAP_BIND_HOST"
+fi
 if [ -n "${BOOTSTRAP_TFTP_DIR:-}" ]; then
     BOOTSTRAP_PXEBOOT_ARGS="$BOOTSTRAP_PXEBOOT_ARGS --tftp-dir $BOOTSTRAP_TFTP_DIR"
 fi

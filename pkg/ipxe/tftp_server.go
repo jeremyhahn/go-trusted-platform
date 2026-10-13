@@ -107,7 +107,7 @@ func (s *TFTPServer) Start(ctx context.Context, bound chan<- struct{}) error {
 		return &WrappedError{Msg: "failed to load firmware", Err: err}
 	}
 
-	addr := fmt.Sprintf(":%d", s.config.TFTPPort)
+	addr := s.config.listenAddr(s.config.TFTPPort)
 
 	// Create TFTP server with read handler
 	s.server = tftp.NewServer(s.readHandler, nil)

@@ -66,6 +66,12 @@ func (d tempDirT) TempDir() string { return d.dir }
 func (tempDirT) Name() string      { return "shared-embedded-server" }
 func (tempDirT) Helper()           {}
 
+// Fatalf panics: the shared server boots outside any one test, so there is
+// no test to fail, and a panic fails the whole run loudly.
+func (tempDirT) Fatalf(format string, args ...any) {
+	panic(fmt.Sprintf(format, args...))
+}
+
 func TestMain(m *testing.M) {
 	code := m.Run()
 	stopSharedServer()

@@ -47,15 +47,6 @@ func (e ErrInvalidBundleMode) Error() string {
 	return fmt.Sprintf("invalid bundle mode: %s", e.Mode)
 }
 
-// ErrInvalidEKAlgorithm is returned when the EK algorithm is invalid.
-type ErrInvalidEKAlgorithm struct {
-	Algorithm string
-}
-
-func (e ErrInvalidEKAlgorithm) Error() string {
-	return fmt.Sprintf("invalid EK algorithm: %s", e.Algorithm)
-}
-
 // ErrBundleNotFound is returned when a bundle is not found.
 type ErrBundleNotFound struct {
 	ID string

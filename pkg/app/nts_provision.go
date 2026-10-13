@@ -26,6 +26,7 @@ import (
 	"encoding/pem"
 	"math/big"
 	"net"
+	"strconv"
 	"time"
 
 	baasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
@@ -347,20 +348,28 @@ func (app *App) ntsRenewalPaths() (keyPath, certPath string, ok bool) {
 	return app.ntsKMSPaths()
 }
 
-// ntsKEDialAddr is where the renewal sweep reads the NTS-KE certificate the
-// running chronyd actually serves. chrony listens on the fixed IANA NTS-KE
-// port. Variable so tests point it at a local listener.
-var ntsKEDialAddr = "127.0.0.1:4460"
+// ntsKEInspectHost is the host the renewal sweep dials to read the NTS-KE
+// certificate the running chronyd serves. The rendered chrony.conf sets no
+// NTS-KE bindaddress, so chronyd listens on every local address and loopback
+// always reaches it; this is a local-inspection-only surface.
+const ntsKEInspectHost = "127.0.0.1"
+
+// ntsKEDialAddress returns where the renewal sweep reads the served NTS-KE
+// certificate: loopback on the configured ntp.serve.nts.port, the same port
+// the chrony.conf renderer gives chronyd.
+func (app *App) ntsKEDialAddress() string {
+	return net.JoinHostPort(ntsKEInspectHost, strconv.Itoa(app.NTPConfig.NTSKEPort()))
+}
 
 // ntsKEALPN is the RFC 8915 ALPN protocol identifier for NTS-KE.
 const ntsKEALPN = "ntske/1"
 
-// ntsServedCertificate dials the local NTS-KE endpoint and returns the leaf
+// ntsServedCertificate dials the NTS-KE endpoint at addr and returns the leaf
 // certificate chronyd is serving. The DEPLOYED certificate — not the KMS
 // copy — is the renewal authority: KMS entries that were written but never
 // reached chrony (torn write, failed restart) must keep the target due so
 // the sweep repairs them.
-func ntsServedCertificate(ctx context.Context) (*x509.Certificate, error) {
+func ntsServedCertificate(ctx context.Context, addr string) (*x509.Certificate, error) {
 	dialer := &tls.Dialer{
 		NetDialer: &net.Dialer{Timeout: 5 * time.Second},
 		Config: &tls.Config{
@@ -371,7 +380,7 @@ func ntsServedCertificate(ctx context.Context) (*x509.Certificate, error) {
 			NextProtos:         []string{ntsKEALPN},
 		},
 	}
-	conn, err := dialer.DialContext(ctx, "tcp", ntsKEDialAddr)
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, &ErrNTSProvision{Stage: "read served certificate", Cause: err}
 	}
@@ -380,7 +389,7 @@ func ntsServedCertificate(ctx context.Context) (*x509.Certificate, error) {
 	if len(certs) == 0 {
 		return nil, &ErrNTSProvision{
 			Stage: "read served certificate",
-			Cause: &MessageError{Msg: "no peer certificates from " + ntsKEDialAddr},
+			Cause: &MessageError{Msg: "no peer certificates from " + addr},
 		}
 	}
 	return certs[0], nil
@@ -407,9 +416,11 @@ func (app *App) RegisterNTSCertTarget(ctx context.Context) {
 	}
 
 	target := &CertTarget{
-		Name:    ntsCertTargetName,
-		Kind:    CertKindNTS,
-		Current: ntsServedCertificate,
+		Name: ntsCertTargetName,
+		Kind: CertKindNTS,
+		Current: func(ctx context.Context) (*x509.Certificate, error) {
+			return ntsServedCertificate(ctx, app.ntsKEDialAddress())
+		},
 		Reissue: func(ctx context.Context) error {
 			return app.reissueNTSCertificateFromCA(ctx, keyPath, certPath)
 		},

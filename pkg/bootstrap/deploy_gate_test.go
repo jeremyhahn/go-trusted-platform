@@ -393,6 +393,43 @@ func TestBootstrapConfig_Validate_Ports(t *testing.T) {
 	}
 }
 
+// TestBootstrapConfig_Validate_BindHost pins deployer.bootstrap_bind_host
+// (#93): empty or an IP address validates, anything else names the field.
+func TestBootstrapConfig_Validate_BindHost(t *testing.T) {
+	cases := []struct {
+		name     string
+		bindHost string
+		wantErr  bool
+	}{
+		{"unset is every interface", "", false},
+		{"IPv4", "192.0.2.1", false},
+		{"IPv6", "fd00::1", false},
+		{"hostname", "pxe.example.com", true},
+		{"host and port", "192.0.2.1:8080", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dep := DeployerConfig{BootstrapBindHost: tc.bindHost}
+			err := dep.validateBindHost()
+
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("validateBindHost = %v, want nil", err)
+				}
+				return
+			}
+			var invalid ErrInvalidConfig
+			if !errors.As(err, &invalid) {
+				t.Fatalf("validateBindHost = %v, want ErrInvalidConfig", err)
+			}
+			if invalid.Field != "deployer.bootstrap_bind_host" {
+				t.Fatalf("Field = %q, want deployer.bootstrap_bind_host", invalid.Field)
+			}
+		})
+	}
+}
+
 // TestBootstrapConfig_Validate_RejectsBadPorts proves the check is
 // actually reached from BootstrapConfig.Validate, not merely present.
 func TestBootstrapConfig_Validate_RejectsBadPorts(t *testing.T) {

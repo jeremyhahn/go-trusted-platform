@@ -16,7 +16,21 @@ package mcp
 import (
 	"context"
 	"encoding/base64"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 )
+
+// ekAlgorithmArg reads the optional "algorithm" argument of the vTPM create
+// tools as the canonical EK algorithm name. Absent is empty, so the service
+// applies its configured default; anything but RSA or ECC (in any case) is
+// InvalidArgument rather than an RSA EK.
+func ekAlgorithmArg(args map[string]interface{}) (string, error) {
+	alg, err := vtpm.ParseEKAlgorithm(getString(args, "algorithm"))
+	if err != nil {
+		return "", ErrInvalidArgument{Msg: "invalid algorithm", Cause: err}
+	}
+	return string(alg), nil
+}
 
 // =============================================================================
 // vTPM Extended Tool Execution Functions
@@ -70,9 +84,9 @@ func (r *ToolRegistry) executeVTPMImport(ctx context.Context, args map[string]in
 func (r *ToolRegistry) executeVTPMTemplateCreate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	id := getString(args, "id")
 	description := getString(args, "description")
-	algorithm := getString(args, "algorithm")
-	if algorithm == "" {
-		algorithm = "RSA"
+	algorithm, err := ekAlgorithmArg(args)
+	if err != nil {
+		return nil, err
 	}
 	secureBoot := getBool(args, "secure_boot")
 

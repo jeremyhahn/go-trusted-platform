@@ -145,11 +145,24 @@ Cluster deployment is configured under **`quicbaas:`**, not `cluster:`
 | `quicbaas.data-dir` | string | required for `file`/`pebble` |
 | `quicbaas.wal-dir` | string | required for `pebble`; defaults to `<data-dir>/wal` |
 | `quicbaas.node-id` | uint64 | unique per node |
-| `quicbaas.raft-address` | string | `host:port` for Raft communication |
+| `quicbaas.raft-address` | string | `host:port` advertised to peers; env `PLATFORMD_QUICBAAS_RAFT_ADDRESS`, flag `--raft-address` |
+| `quicbaas.raft-listen-address` | string | `host:port` the Raft transport binds; empty binds `raft-address`; env `PLATFORMD_QUICBAAS_RAFT_LISTEN_ADDRESS`, flag `--raft-listen-address` |
 | `quicbaas.join-addresses` | []string | peer addresses for multi-node clusters |
 | `quicbaas.consistency-level` | `linearizable` \| `strong` \| `eventual` | default `linearizable` |
 | `quicbaas.cache-size`, `compression`, `sync-writes`, `log-level`, `request-timeout` | | |
 | `quicbaas.startup-timeout` | duration | default `2m`; liveness backstop for embedded-server startup |
+
+**Raft addresses are configuration, never probed** (#93). `pkg/config/raft.go`
+binds both keys to the file, the environment and `platformd serve` flags. A node
+with `join-addresses` must advertise a routable `raft-address`. If it is
+loopback, unspecified or empty, `Config.Validate` returns
+`ErrRaftAdvertiseAddress`, which names the three ways to set it. A single node
+may leave the address loopback. Free-port probing exists only in the test
+constructors (`pkg/storage/quicbaas/testconfig.go`). The upstream embedded node
+(go-quicbaas `pkg/server/qrdb_node.go`) still rewrites an empty
+`raft-listen-address`, or `127.0.0.1:63000`, to `0.0.0.0:<port>`. Until that is
+fixed upstream, an explicit non-default `raft-listen-address` is the only way to
+keep the Raft bind off the wildcard.
 
 **`startup-timeout` is deliberately separate from `request-timeout`** (#270).
 `request-timeout` bounds ONE DAO operation; startup constructs the data-plane

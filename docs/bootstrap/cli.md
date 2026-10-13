@@ -255,8 +255,8 @@ authenticated `admin` (see [`docs/auth/architecture.md`](../auth/architecture.md
 §6c); this command holds no credential.
 
 **The probe tries several ports**, because the webservice port depends on the
-node's role: `8443` for control-plane and single-node, `9443` for compute, `443`
-for gateway. They are tried in that order and the first port that *answers*
+node's role: `platform.control_plane_port` (default `8443`) for control-plane and
+single-node, `9443` for compute, `443` for gateway. They are tried in that order and the first port that *answers*
 decides the verdict — an unreachable port says nothing about the others, but a
 port that replies is that node's answer and ends the search.
 

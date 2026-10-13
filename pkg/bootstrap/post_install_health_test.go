@@ -56,16 +56,13 @@ func (h *hookedHealthTicker) New(d time.Duration) (<-chan time.Time, func()) {
 // closedTCPPort returns a loopback port that nothing listens on, so a
 // dial to it is refused immediately — the shape of "the node is still
 // booting" without waiting on a real boot.
-func closedTCPPort(t *testing.T) string {
+func closedTCPPort(t *testing.T) int {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	_, port, err := net.SplitHostPort(l.Addr().String())
-	if err != nil {
-		t.Fatalf("split addr: %v", err)
-	}
+	port := l.Addr().(*net.TCPAddr).Port
 	if err := l.Close(); err != nil {
 		t.Fatalf("close listener: %v", err)
 	}
@@ -80,17 +77,10 @@ func newGateTestOrchestrator(t *testing.T, srv *httptest.Server, ticker interfac
 }) *Orchestrator {
 	t.Helper()
 	o := newTrustTestOrchestrator()
-	hc := newHTTPHealthChecker(slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	hc := newHTTPHealthChecker(slog.New(slog.NewTextHandler(io.Discard, nil)), nil, o.config.HealthProbePorts())
 	if srv != nil {
-		_, port, err := net.SplitHostPort(srv.Listener.Addr().String())
-		if err != nil {
-			t.Fatalf("split server addr: %v", err)
-		}
-		p, err := strconv.Atoi(port)
-		if err != nil {
-			t.Fatalf("parse port: %v", err)
-		}
-		hc.httpsPorts = []int{p}
+		pointControlPlaneAt(t, o, srv)
+		hc.httpsPorts = []int{serverPort(t, srv)}
 	}
 	o.healthChk = hc
 	o.pollTicker = ticker.New
@@ -181,13 +171,14 @@ func TestAwaitPostInstallHealth_ControlPlane_MismatchedBundleFailsFast(t *testin
 func TestAwaitPostInstallHealth_ControlPlane_RetriesUntilTheNodeIsUp(t *testing.T) {
 	pki := newTestCPPKI(t)
 	srv := startTestCPServer(t, pki, http.StatusOK, pki.caPEM)
-	livePort := cpWebservicePort
+	livePort := serverPort(t, srv)
 	// First capture attempt dials a port nothing listens on (connection
 	// refused = still booting); the ticker hook then "boots" the node by
 	// pointing the CP port back at the live server before the tick.
-	cpWebservicePort = closedTCPPort(t)
-	ticker := newHookedHealthTicker(1, func() { cpWebservicePort = livePort })
-	o := newGateTestOrchestrator(t, srv, ticker)
+	var o *Orchestrator
+	ticker := newHookedHealthTicker(1, func() { o.config.Platform.ControlPlanePort = livePort })
+	o = newGateTestOrchestrator(t, srv, ticker)
+	o.config.Platform.ControlPlanePort = closedTCPPort(t)
 
 	err := o.awaitPostInstallHealth(t.Context(), &o.discovered[0], []string{"127.0.0.1"}, "")
 	if err != nil {
@@ -202,13 +193,11 @@ func TestAwaitPostInstallHealth_ControlPlane_RetriesUntilTheNodeIsUp(t *testing.
 }
 
 func TestAwaitPostInstallHealth_ControlPlane_DeadlineReportsLastCaptureError(t *testing.T) {
-	prev := cpWebservicePort
-	cpWebservicePort = closedTCPPort(t)
-	t.Cleanup(func() { cpWebservicePort = prev })
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	ticker := newHookedHealthTicker(0, cancel)
 	o := newGateTestOrchestrator(t, nil, ticker)
+	o.config.Platform.ControlPlanePort = closedTCPPort(t)
 
 	err := o.awaitPostInstallHealth(ctx, &o.discovered[0], []string{"127.0.0.1"}, "")
 	var unavailable CABundleUnavailableError
@@ -245,7 +234,7 @@ func TestAwaitPostInstallHealth_ControlPlane_CachedPoolIsPropagatedWithoutFetch(
 	o.storeControlPlaneCAPool(pool)
 	// Point the bundle endpoint at a dead port: a capture would fail, so
 	// passing also proves the cached pool was reused.
-	cpWebservicePort = closedTCPPort(t)
+	o.config.Platform.ControlPlanePort = closedTCPPort(t)
 
 	if err := o.awaitPostInstallHealth(t.Context(), &o.discovered[0], []string{"127.0.0.1"}, ""); err != nil {
 		t.Fatalf("a cached pool must be propagated without refetching: %v", err)
@@ -429,7 +418,7 @@ func TestAwaitControlPlaneCAPool_NoStaticIPIsTerminal(t *testing.T) {
 	o.discovered[0].Interfaces = nil
 	o.discovered[0].MACs = []string{"aa:bb:cc:dd:ee:01"}
 	o.config.Deployer = registrationSink(t, &o.discovered[0], "127.0.0.1")
-	o.healthChk = newHTTPHealthChecker(slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	o.healthChk = newHTTPHealthChecker(slog.New(slog.NewTextHandler(io.Discard, nil)), nil, o.config.HealthProbePorts())
 	ticker := newFakeHealthTicker(0)
 	o.pollTicker = ticker.New
 
@@ -490,7 +479,7 @@ func registrationSink(t *testing.T, node *DiscoveredNode, ip string) DeployerCon
 // on 127.0.0.2 at the same port as the genuine one, presenting a leaf
 // for the same TLS name issued by its own CA and serving that CA as its
 // bundle. It returns a counter of requests that completed a handshake.
-func startRogueCPServer(t *testing.T, port string) (rogue *testCPPKI, hits *atomic.Int64) {
+func startRogueCPServer(t *testing.T, port int) (rogue *testCPPKI, hits *atomic.Int64) {
 	t.Helper()
 	rogue = newTestCPPKI(t)
 	hits = &atomic.Int64{}
@@ -503,9 +492,9 @@ func startRogueCPServer(t *testing.T, port string) (rogue *testCPPKI, hits *atom
 	if err := srv.Listener.Close(); err != nil {
 		t.Fatalf("close default listener: %v", err)
 	}
-	l, err := net.Listen("tcp", net.JoinHostPort("127.0.0.2", port))
+	l, err := net.Listen("tcp", net.JoinHostPort("127.0.0.2", strconv.Itoa(port)))
 	if err != nil {
-		t.Fatalf("listen on 127.0.0.2:%s: %v", port, err)
+		t.Fatalf("listen on 127.0.0.2:%d: %v", port, err)
 	}
 	srv.Listener = l
 	srv.TLS = &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{rogue.tlsCert}}
@@ -520,8 +509,9 @@ func startRogueCPServer(t *testing.T, port string) (rogue *testCPPKI, hits *atom
 func rogueRegistration(t *testing.T, o *Orchestrator) (genuine, rogue *testCPPKI, rogueHits *atomic.Int64) {
 	t.Helper()
 	genuine = newTestCPPKI(t)
-	startTestCPServer(t, genuine, http.StatusOK, genuine.caPEM)
-	rogue, rogueHits = startRogueCPServer(t, cpWebservicePort)
+	srv := startTestCPServer(t, genuine, http.StatusOK, genuine.caPEM)
+	pointControlPlaneAt(t, o, srv)
+	rogue, rogueHits = startRogueCPServer(t, o.config.Platform.ControlPlanePort)
 	o.discovered[0].MACs = []string{"aa:bb:cc:dd:ee:01"}
 	o.config.Deployer = registrationSink(t, &o.discovered[0], "127.0.0.2")
 	return genuine, rogue, rogueHits
@@ -553,8 +543,9 @@ func TestFetchControlPlaneCABundle_NeverTrustsRegistrationForTheAnchor(t *testin
 
 func TestFetchControlPlaneCABundle_NoFallbackWhenStaticIsDown(t *testing.T) {
 	pki := newTestCPPKI(t)
-	startTestCPServer(t, pki, http.StatusOK, pki.caPEM)
+	srv := startTestCPServer(t, pki, http.StatusOK, pki.caPEM)
 	o := newTrustTestOrchestrator()
+	pointControlPlaneAt(t, o, srv)
 	// The genuine control plane answers on 127.0.0.1 and both the
 	// registration IP and the hostname would reach it; the declared
 	// static address is where nothing listens. The capture must fail
@@ -581,11 +572,7 @@ func TestAwaitPostInstallHealth_RedirectedRegistrationFailsVerificationAfterCapt
 	o := newGateTestOrchestrator(t, nil, newFakeHealthTicker(0))
 	_, _, rogueHits := rogueRegistration(t, o)
 	hc := o.healthChk.(*httpHealthChecker)
-	port, err := strconv.Atoi(cpWebservicePort)
-	if err != nil {
-		t.Fatalf("parse port: %v", err)
-	}
-	hc.httpsPorts = []int{port}
+	hc.httpsPorts = []int{o.config.Platform.ControlPlanePort}
 
 	// The gate captures from the static address, then probes the
 	// registration address first: the rogue's certificate does not chain

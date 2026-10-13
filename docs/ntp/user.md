@@ -472,7 +472,8 @@ chronyc -N sources        # the source shows Reach 0 with no traffic counted
 getent hosts cp.example.internal
 ```
 
-On the control plane, read the certificate chronyd is actually serving:
+On the control plane, read the certificate chronyd is actually serving
+(replace `4460` if `serve.nts.port` is set):
 
 ```sh
 openssl s_client -connect 127.0.0.1:4460 -alpn ntske/1 </dev/null 2>/dev/null \

@@ -220,7 +220,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 				},
 				"algorithm": map[string]interface{}{
 					"type":        "string",
-					"description": "EK algorithm (RSA or ECC)",
+					"description": "EK algorithm (RSA or ECC; omit for the configured default)",
 					"enum":        []string{"RSA", "ECC"},
 					"default":     "RSA",
 				},

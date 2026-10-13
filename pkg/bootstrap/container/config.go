@@ -61,6 +61,11 @@ type ServerConfig struct {
 	// Interface is the network interface to bind to.
 	Interface string
 
+	// BindHost is the address the HTTP and TFTP servers bind (#93); empty
+	// is every interface. DHCP keeps the unspecified address on Interface:
+	// see ipxe.ServerConfig.BindHost.
+	BindHost string
+
 	// HTTPPort is the HTTP server port (default: 8080).
 	HTTPPort int
 

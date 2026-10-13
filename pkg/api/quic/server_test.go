@@ -828,7 +828,7 @@ func TestServerConfigValidationNegativeMaxIdleTimeout(t *testing.T) {
 func TestDefaultServerConfigValues(t *testing.T) {
 	config := DefaultServerConfig()
 
-	if config.ListenAddr != "0.0.0.0:9444" {
+	if config.ListenAddr != "127.0.0.1:9444" {
 		t.Errorf("expected ListenAddr '0.0.0.0:9444', got '%s'", config.ListenAddr)
 	}
 

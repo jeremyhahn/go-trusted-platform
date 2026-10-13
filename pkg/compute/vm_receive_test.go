@@ -16,9 +16,12 @@ package compute
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"os"
+	"strings"
 	"testing"
 
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -114,6 +117,109 @@ func TestReceiveIncoming_HappyPath(t *testing.T) {
 	require.NotNil(t, gotParams)
 	assert.Equal(t, tlsProv.dir, gotParams.credsDir)
 	assert.Equal(t, "guest", gotParams.spec.VMName)
+	assert.Equal(t, netip.MustParseAddrPort(DefaultMigrationListenAddress), gotParams.listen)
+}
+
+func TestReceiveIncoming_ListensOnTheConfiguredAddress(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	orch.config.MigrationTLS = &fakeServerTLS{dir: t.TempDir()}
+	orch.config.MigrationListenAddress = "10.20.0.11:49152"
+
+	var gotParams *incomingReceiverParams
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		gotParams = p
+		return &fakeIncomingReceiver{port: 49152}, nil
+	})
+
+	_, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+		VMName: "guest",
+		Config: &InstanceConfig{Memory: 1024},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, gotParams)
+	assert.Equal(t, netip.MustParseAddrPort("10.20.0.11:49152"), gotParams.listen)
+}
+
+func TestReceiveIncoming_RefusesAnUndeterminedListenAddress(t *testing.T) {
+	for _, address := range []string{"", "eth0:49152", "10.20.0.11", "224.0.0.1:49152"} {
+		t.Run(address, func(t *testing.T) {
+			orch := newOpsOrchestrator(t)
+			tlsProv := &fakeServerTLS{dir: t.TempDir()}
+			orch.config.MigrationTLS = tlsProv
+			orch.config.MigrationListenAddress = address
+			swapReceiverLauncher(t, func(context.Context, *incomingReceiverParams) (incomingReceiver, error) {
+				t.Fatal("a receiver was launched without a listen address")
+				return nil, nil
+			})
+
+			_, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+				VMName: "guest",
+				Config: &InstanceConfig{Memory: 1024},
+			})
+			var listenErr *MigrationListenAddressError
+			require.ErrorAs(t, err, &listenErr)
+			assert.Equal(t, address, listenErr.Address)
+			assert.False(t, tlsProv.materialized, "no credentials are issued for a receiver that cannot listen")
+		})
+	}
+}
+
+func TestMigrationListenAddressError_Message(t *testing.T) {
+	assert.Equal(t,
+		"compute: migration receiver listen address undetermined: set compute.migration_listen_address",
+		(&MigrationListenAddressError{}).Error())
+	assert.Equal(t,
+		`compute: compute.migration_listen_address "eth0:1" is not an IP:port address`,
+		(&MigrationListenAddressError{Address: "eth0:1", Reason: "is not an IP:port address"}).Error())
+}
+
+func TestReceiverPort_ConfiguredPortIsNotProbed(t *testing.T) {
+	// 192.0.2.1 (TEST-NET-1) is on no interface: binding it would fail.
+	port, err := receiverPort(netip.MustParseAddrPort("192.0.2.1:49152"))
+	require.NoError(t, err)
+	assert.Equal(t, 49152, port)
+}
+
+func TestReceiverPort_EphemeralPortOnTheListenAddress(t *testing.T) {
+	port, err := receiverPort(netip.MustParseAddrPort("127.0.0.1:0"))
+	require.NoError(t, err)
+	assert.Positive(t, port)
+}
+
+func TestReceiverPort_UnbindableListenAddress(t *testing.T) {
+	_, err := receiverPort(netip.MustParseAddrPort("192.0.2.1:0"))
+	require.Error(t, err)
+}
+
+func TestMigrateIncomingURI(t *testing.T) {
+	assert.Equal(t, "tcp:10.20.0.11:49152", migrateIncomingURI(netip.MustParseAddr("10.20.0.11"), 49152))
+	assert.Equal(t, "tcp:[fd00::11]:49152", migrateIncomingURI(netip.MustParseAddr("fd00::11"), 49152))
+}
+
+func TestMigrationListenAddress_Defaults(t *testing.T) {
+	assert.Equal(t, DefaultMigrationListenAddress, DefaultOrchestratorConfig(ComputeTypeVM).MigrationListenAddress)
+	assert.Empty(t, DefaultOrchestratorConfig(ComputeTypeContainer).MigrationListenAddress,
+		"containers do not receive VM migrations")
+
+	unset := &OrchestratorConfig{}
+	unset.ApplyLocalQEMUDefaults()
+	assert.Equal(t, DefaultMigrationListenAddress, unset.MigrationListenAddress)
+
+	configured := &OrchestratorConfig{MigrationListenAddress: "10.20.0.11:0"}
+	configured.ApplyLocalQEMUDefaults()
+	assert.Equal(t, "10.20.0.11:0", configured.MigrationListenAddress, "the defaults never replace a configured value")
+}
+
+func TestMigrationListenAddress_DecodesFromTheComputeSection(t *testing.T) {
+	v := viper.New()
+	v.SetConfigType("yaml")
+	require.NoError(t, v.ReadConfig(strings.NewReader("compute:\n  migration_listen_address: 10.20.0.11:49152\n")))
+	var file struct {
+		Compute *OrchestratorConfig `mapstructure:"compute"`
+	}
+	require.NoError(t, v.Unmarshal(&file))
+	require.NotNil(t, file.Compute)
+	assert.Equal(t, "10.20.0.11:49152", file.Compute.MigrationListenAddress)
 }
 
 func TestReceiveIncoming_MissingSpecConfig(t *testing.T) {

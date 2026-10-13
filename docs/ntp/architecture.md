@@ -279,7 +279,8 @@ Hand edits are overwritten on the next `Apply`.
    the one `InsecureSkipVerify` in this feature and is on the Makefile's
    `check-insecure-tls` allowlist. It is the same **capture-only** pattern
    the platform already permits for `captureAndConfirmSPKI` and
-   `fetchControlPlaneCABundle`: it connects to `127.0.0.1:4460`, exchanges
+   `fetchControlPlaneCABundle`: it connects to loopback on `ntp.serve.nts.port`
+   (default `4460`, the same port rendered into chrony.conf as `ntsport`), exchanges
    **no application data**, and exists solely to read the leaf chronyd is
    serving. Verification cannot run at handshake time precisely because
    the served certificate may still legitimately be the self-signed

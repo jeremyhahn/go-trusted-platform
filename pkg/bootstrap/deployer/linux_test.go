@@ -469,6 +469,21 @@ func TestBootstrapEnvFlags_PortsEmittedWhenSet(t *testing.T) {
 	}
 }
 
+// TestBootstrapEnvFlags_BindHost pins BOOTSTRAP_BIND_HOST (#93): the
+// configured host reaches the container, and an unset one leaves the
+// entrypoint's every-interface default alone.
+func TestBootstrapEnvFlags_BindHost(t *testing.T) {
+	unset := bootstrapEnvFlags(&DeployConfig{BootstrapServerIP: "10.4.2.91"})
+	if strings.Contains(unset, "BOOTSTRAP_BIND_HOST") {
+		t.Fatalf("env flags = %q, must not mention BOOTSTRAP_BIND_HOST when unset", unset)
+	}
+
+	got := bootstrapEnvFlags(&DeployConfig{BootstrapServerIP: "10.4.2.91", BootstrapBindHost: "10.4.2.91"})
+	if want := "-e BOOTSTRAP_BIND_HOST='10.4.2.91'"; !strings.Contains(got, want) {
+		t.Fatalf("env flags = %q, want it to contain %q", got, want)
+	}
+}
+
 // TestGenerateRunCommand_CarriesPorts pins that the ports survive into
 // the actual docker run command, not just the flag builder.
 func TestGenerateRunCommand_CarriesPorts(t *testing.T) {

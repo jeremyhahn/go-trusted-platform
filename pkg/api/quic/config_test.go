@@ -30,7 +30,7 @@ func TestDefaultServerConfig(t *testing.T) {
 		t.Fatal("DefaultServerConfig returned nil")
 	}
 
-	if config.ListenAddr != "0.0.0.0:9444" {
+	if config.ListenAddr != "127.0.0.1:9444" {
 		t.Errorf("expected ListenAddr '0.0.0.0:9444', got '%s'", config.ListenAddr)
 	}
 
@@ -287,7 +287,7 @@ func TestDefaultServerConfigWithTLS(t *testing.T) {
 	}
 
 	// Verify default values are set
-	if config.ListenAddr != "0.0.0.0:9444" {
+	if config.ListenAddr != "127.0.0.1:9444" {
 		t.Errorf("expected ListenAddr '0.0.0.0:9444', got '%s'", config.ListenAddr)
 	}
 

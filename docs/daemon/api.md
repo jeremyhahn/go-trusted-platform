@@ -246,7 +246,7 @@ distinct values, eighteen names:
 | `0xCC` | `OpSwitchCategory` | Physical switch; sub-opcodes `SwitchSub*` `0x01`–`0x05` |
 | `0xCD` | `OpKMSExtendedCategory` | KMS key-lifecycle verbs; `KMSSubSignCSR` (`0x07`) is CA Sign CSR, which requires `ca:sign-csr` (`docs/ca/api.md` §4) |
 | `0xCE` | `OpSecretsCategory` | Secrets |
-| `0xCF` | `OpProvisioningCategory` | Provisioning / config delivery. Device sub-opcodes `0x20`–`0x28` (profile assign/unassign, attestation certificate, diskless boot certificate and delivery, disable/enable, template create, profile from template) are routed first — [`docs/device/api.md`](../device/api.md) §3.7 |
+| `0xCF` | `OpProvisioningCategory` | Provisioning / config delivery. Device sub-opcodes `0x20`–`0x29` (profile assign/unassign, attestation certificate, diskless boot certificate and delivery, disable/enable, template create, profile from template, find matching profile) are routed first — [`docs/device/api.md`](../device/api.md) §3.7 |
 
 **This is why opcode values repeat.** `OpOverlayStatus`, `OpGatewayStatus` and
 `OpLiveness` are all `0x01`: the first two are sub-opcodes inside their category,

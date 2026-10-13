@@ -283,23 +283,24 @@ type ServiceConfig struct {
 // `daemon:` section (file, environment, flags); a transport reaches an
 // interface only because an operator named it (#552).
 func DefaultConfig() *Config {
+	listeners := tpconfig.DefaultDaemonListeners()
 	return &Config{
 		SocketPath:      "/run/platformd.sock",
 		SocketGroup:     "trusted-platform",
 		SocketMode:      0660,
 		EnableGRPCTCP:   true,
-		GRPCListenAddr:  "127.0.0.1:10443",
+		GRPCListenAddr:  listeners.GRPC.Address(),
 		GRPCTLSCertFile: "",
 		GRPCTLSKeyFile:  "",
 		EnableGRPCUDS:   true,
 		GRPCSocketPath:  "/run/platformd.sock",
 		EnableQUIC:      false,
-		QUICListenAddr:  "127.0.0.1:11443",
+		QUICListenAddr:  listeners.QUIC.Address(),
 		QUICConfig:      nil,
 		EnableMCP:       false,
 		MCPConfig:       DefaultMCPConfig(),
 		EnableREST:      true,
-		RESTListenAddr:  "127.0.0.1:8443",
+		RESTListenAddr:  listeners.REST.Address(),
 		RESTTLSCertFile: "",
 		RESTTLSKeyFile:  "",
 		RESTConfig:      DefaultRESTServerConfig(),

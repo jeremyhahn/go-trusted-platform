@@ -42,6 +42,7 @@ func TestLinuxDeployerAdapter_DeployConfig(t *testing.T) {
 		NetbootMediaDir:    "/srv/netboot-media",
 		ProxyDHCP:          true,
 		BootstrapHTTPPort:  9000,
+		BootstrapBindHost:  "10.0.0.1",
 	}
 	a := newLinuxDeployerAdapter(cfg, nil, nil)
 
@@ -55,6 +56,7 @@ func TestLinuxDeployerAdapter_DeployConfig(t *testing.T) {
 	assert.True(t, dc.BootstrapProxyDHCP)
 	assert.Equal(t, "http://mirror", dc.BootstrapAPKMirror)
 	assert.Equal(t, 9000, dc.BootstrapHTTPPort)
+	assert.Equal(t, "10.0.0.1", dc.BootstrapBindHost)
 	assert.Equal(t, 9001, dc.BootstrapDeviceScriptPort, "the device script port follows the HTTP port")
 	assert.Equal(t, 22, dc.Port, "defaults applied")
 	require.NoError(t, dc.Validate())

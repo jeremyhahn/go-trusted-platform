@@ -75,6 +75,10 @@ const DefaultGateTimeout = 120 * time.Second
 // control plane clearly below any real upstream chain.
 const DefaultLocalStratum = 10
 
+// DefaultNTSKEPort is the NTS-KE TCP port applied when serve.nts.port is
+// omitted: the IANA-assigned RFC 8915 port.
+const DefaultNTSKEPort = 4460
+
 // Config is the `ntp:` configuration section. A nil *Config means the
 // section is absent and platformd leaves chrony completely alone.
 type Config struct {
@@ -190,6 +194,11 @@ type NTSConfig struct {
 	// DNS-only by standing ruling, so an address here would produce a
 	// certificate no client could validate.
 	ServerNames []string `yaml:"server-names,omitempty" json:"server_names,omitempty" mapstructure:"server-names"`
+
+	// Port is the TCP port chronyd's NTS-KE server listens on, rendered as
+	// chrony's `ntsport`. The renewal sweep dials the same port to read the
+	// certificate chronyd serves. 0 means DefaultNTSKEPort.
+	Port int `yaml:"port,omitempty" json:"port,omitempty" mapstructure:"port"`
 }
 
 // NTSServerNames returns the extra DNS names the served NTS-KE certificate
@@ -254,6 +263,14 @@ func (c *Config) LocalStratum() int {
 		return DefaultLocalStratum
 	}
 	return c.Serve.LocalStratum
+}
+
+// NTSKEPort returns the effective NTS-KE server port.
+func (c *Config) NTSKEPort() int {
+	if c == nil || c.Serve == nil || c.Serve.NTS == nil || c.Serve.NTS.Port == 0 {
+		return DefaultNTSKEPort
+	}
+	return c.Serve.NTS.Port
 }
 
 // NTSServing reports whether the node runs an NTS-KE server.
@@ -385,6 +402,9 @@ func (c *Config) validateServe() error {
 		}
 		if err := validateNTSServerNames(nts.ServerNames); err != nil {
 			return err
+		}
+		if nts.Port < 0 || nts.Port > 65535 {
+			return ErrInvalidNTSKEPort{Port: nts.Port}
 		}
 	}
 

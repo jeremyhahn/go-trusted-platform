@@ -59,6 +59,10 @@ var ErrDeviceProfileNotConfigured = errors.New("device_profile: profile service 
 // carried neither an EK serial nor a MAC address.
 var ErrDeviceProfileIdentityRequired = errors.New("device_profile: device_id, ek_serial or mac_address is required")
 
+// ErrDeviceProfileMatchCriteriaRequired indicates a profile match request
+// carried no MAC address, serial or model to match on.
+var ErrDeviceProfileMatchCriteriaRequired = errors.New("device_profile: mac_address, serial or model is required")
+
 // ErrDeviceProfileInvalidArgs indicates the tool arguments did not decode
 // into the device profile request shape.
 type ErrDeviceProfileInvalidArgs struct {
@@ -77,6 +81,23 @@ func (e ErrDeviceProfileInvalidArgs) Unwrap() error {
 
 // GRPCStatus classifies undecodable tool arguments as InvalidArgument.
 func (e ErrDeviceProfileInvalidArgs) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
+// ErrDeviceProfileLookupKeyRequired indicates a profile lookup tool was
+// called without the device attribute it looks up by.
+type ErrDeviceProfileLookupKeyRequired struct {
+	Field string
+}
+
+// Error returns a human-readable description of the error.
+func (e ErrDeviceProfileLookupKeyRequired) Error() string {
+	return "device_profile: " + e.Field + " is required"
+}
+
+// GRPCStatus classifies a missing lookup key as InvalidArgument, as gRPC
+// does.
+func (e ErrDeviceProfileLookupKeyRequired) GRPCStatus() *status.Status {
 	return status.New(codes.InvalidArgument, e.Error())
 }
 
@@ -103,6 +124,18 @@ type DeviceProfileProvider interface {
 
 	// DeviceProfileDelete removes a device profile by ID.
 	DeviceProfileDelete(ctx context.Context, id uint64) error
+
+	// DeviceProfileMatch returns the profile whose match rules fit the
+	// device's MAC address, serial or model.
+	DeviceProfileMatch(ctx context.Context, macAddr, serial, model string) (*entities.DeviceProfile, error)
+
+	// DeviceProfileFindByMAC returns the profile whose MAC prefix rule fits
+	// the device's MAC address.
+	DeviceProfileFindByMAC(ctx context.Context, macAddr string) (*entities.DeviceProfile, error)
+
+	// DeviceProfileFindBySerial returns the profile whose serial prefix rule
+	// fits the device's serial number.
+	DeviceProfileFindBySerial(ctx context.Context, serial string) (*entities.DeviceProfile, error)
 
 	// DeviceProfileAssign binds a profile to a device identity — a
 	// registered device (deviceID != 0, whose stored EK certificate supplies
@@ -234,6 +267,9 @@ var deviceProfileToolDispatch = map[string]deviceProfileToolHandler{
 	"profile_list_all":             (*ToolRegistry).executeDeviceProfileList,
 	"profile_update_by_id":         (*ToolRegistry).executeDeviceProfileUpdate,
 	"profile_delete_by_id":         (*ToolRegistry).executeDeviceProfileDelete,
+	"profile_find_matching":        (*ToolRegistry).executeDeviceProfileMatch,
+	"profile_find_by_mac":          (*ToolRegistry).executeDeviceProfileFindByMAC,
+	"profile_find_by_serial":       (*ToolRegistry).executeDeviceProfileFindBySerial,
 	"profile_assign_to_device":     (*ToolRegistry).executeDeviceProfileAssign,
 	"profile_unassign_from_device": (*ToolRegistry).executeDeviceProfileUnassign,
 	"device_template_create":       (*ToolRegistry).executeDeviceTemplateCreate,
@@ -333,6 +369,66 @@ func (r *ToolRegistry) executeDeviceProfileGet(ctx context.Context, args map[str
 		return nil, ErrProfileIDRequired
 	}
 	profile, err := p.DeviceProfileGet(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return deviceProfileToolResult(profile)
+}
+
+// executeDeviceProfileMatch returns the profile whose match rules fit the
+// device attributes given; at least one is required.
+func (r *ToolRegistry) executeDeviceProfileMatch(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	p := r.deviceProfileProvider()
+	if p == nil {
+		return nil, ErrDeviceProfileNotConfigured
+	}
+	macAddr := getString(args, "mac_address")
+	serial := getString(args, "serial")
+	model := getString(args, "model")
+	if macAddr == "" && serial == "" && model == "" {
+		return nil, ErrDeviceProfileMatchCriteriaRequired
+	}
+	profile, err := p.DeviceProfileMatch(ctx, macAddr, serial, model)
+	if err != nil {
+		return nil, err
+	}
+	return deviceProfileToolResult(profile)
+}
+
+// executeDeviceProfileFindByMAC returns the profile whose MAC prefix rule
+// fits the mac_address given.
+func (r *ToolRegistry) executeDeviceProfileFindByMAC(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	p := r.deviceProfileProvider()
+	if p == nil {
+		return nil, ErrDeviceProfileNotConfigured
+	}
+	return lookupDeviceProfile(ctx, args, "mac_address", p.DeviceProfileFindByMAC)
+}
+
+// executeDeviceProfileFindBySerial returns the profile whose serial prefix
+// rule fits the serial given.
+func (r *ToolRegistry) executeDeviceProfileFindBySerial(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	p := r.deviceProfileProvider()
+	if p == nil {
+		return nil, ErrDeviceProfileNotConfigured
+	}
+	return lookupDeviceProfile(ctx, args, "serial", p.DeviceProfileFindBySerial)
+}
+
+// lookupDeviceProfile runs a single-attribute profile lookup: the attribute
+// named by field is required, and the profile is returned in its domain JSON
+// shape.
+func lookupDeviceProfile(
+	ctx context.Context,
+	args map[string]interface{},
+	field string,
+	lookup func(context.Context, string) (*entities.DeviceProfile, error),
+) (interface{}, error) {
+	value := getString(args, field)
+	if value == "" {
+		return nil, ErrDeviceProfileLookupKeyRequired{Field: field}
+	}
+	profile, err := lookup(ctx, value)
 	if err != nil {
 		return nil, err
 	}

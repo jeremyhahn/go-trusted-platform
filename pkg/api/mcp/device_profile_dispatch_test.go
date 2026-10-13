@@ -28,6 +28,9 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"google.golang.org/grpc/codes"
 )
 
 // deviceProfileToolNames is the authoritative list of profile CRUD and
@@ -38,6 +41,9 @@ var deviceProfileToolNames = []string{
 	"profile_list_all",
 	"profile_update_by_id",
 	"profile_delete_by_id",
+	"profile_find_matching",
+	"profile_find_by_mac",
+	"profile_find_by_serial",
 	"profile_assign_to_device",
 	"profile_unassign_from_device",
 }
@@ -123,6 +129,23 @@ func (s *deviceProfileStubProvider) DeviceProfileDelete(ctx context.Context, id 
 	}
 	delete(s.profiles, id)
 	return nil
+}
+
+func (s *deviceProfileStubProvider) DeviceProfileMatch(ctx context.Context, macAddr, serial, model string) (*entities.DeviceProfile, error) {
+	for _, profile := range s.profiles {
+		if profile.MatchRules != nil && profile.MatchRules.Matches(macAddr, serial, model) {
+			return profile, nil
+		}
+	}
+	return nil, datastore.ErrRecordNotFound
+}
+
+func (s *deviceProfileStubProvider) DeviceProfileFindByMAC(ctx context.Context, macAddr string) (*entities.DeviceProfile, error) {
+	return s.DeviceProfileMatch(ctx, macAddr, "", "")
+}
+
+func (s *deviceProfileStubProvider) DeviceProfileFindBySerial(ctx context.Context, serial string) (*entities.DeviceProfile, error) {
+	return s.DeviceProfileMatch(ctx, "", serial, "")
 }
 
 func (s *deviceProfileStubProvider) DeviceProfileAssign(ctx context.Context, profileID, deviceID uint64, ekSerial, macAddress, ekCertPEM string) (*entities.DeviceProfile, error) {
@@ -418,6 +441,109 @@ func TestDeviceProfileGetListDelete(t *testing.T) {
 			t.Fatalf("err = %v, want ErrProfileIDRequired", err)
 		}
 	})
+}
+
+func TestDeviceProfileMatch(t *testing.T) {
+	registry, stub := newDeviceProfileRegistry()
+	stub.profiles[42] = &entities.DeviceProfile{
+		ID:         42,
+		Name:       "rack-a",
+		MatchRules: &entities.ProfileMatchRules{SerialPrefix: "SN100"},
+	}
+
+	result, err := registry.ExecuteTool(context.Background(), "profile_find_matching", map[string]interface{}{"serial": "SN100-XYZ"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	obj := result.(map[string]interface{})
+	if obj["id"] != "42" || obj["name"] != "rack-a" {
+		t.Fatalf("match result = %v", obj)
+	}
+}
+
+func TestDeviceProfileMatch_Errors(t *testing.T) {
+	registry, _ := newDeviceProfileRegistry()
+
+	t.Run("no criteria", func(t *testing.T) {
+		_, err := registry.ExecuteTool(context.Background(), "profile_find_matching", map[string]interface{}{})
+		if !errors.Is(err, ErrDeviceProfileMatchCriteriaRequired) {
+			t.Fatalf("err = %v, want ErrDeviceProfileMatchCriteriaRequired", err)
+		}
+		if toolErrorCode(err) != mcpwire.CodeForClass(codes.InvalidArgument) {
+			t.Errorf("code = %d, want the InvalidArgument code", toolErrorCode(err))
+		}
+	})
+
+	t.Run("no match is not found", func(t *testing.T) {
+		_, err := registry.ExecuteTool(context.Background(), "profile_find_matching", map[string]interface{}{"model": "R999"})
+		if toolErrorCode(err) != mcpwire.CodeForClass(codes.NotFound) {
+			t.Fatalf("err = %v (code %d), want the NotFound code", err, toolErrorCode(err))
+		}
+	})
+}
+
+// TestDeviceProfileFindByMACAndSerial proves each single-attribute lookup
+// tool consults only its own rule: the MAC lookup finds the MAC-prefix
+// profile and not the serial-prefix one, and the reverse.
+func TestDeviceProfileFindByMACAndSerial(t *testing.T) {
+	registry, stub := newDeviceProfileRegistry()
+	stub.profiles[7] = &entities.DeviceProfile{
+		ID:         7,
+		Name:       "by-mac",
+		MatchRules: &entities.ProfileMatchRules{MACPrefix: "52:54:00"},
+	}
+	stub.profiles[8] = &entities.DeviceProfile{
+		ID:         8,
+		Name:       "by-serial",
+		MatchRules: &entities.ProfileMatchRules{SerialPrefix: "SRV-"},
+	}
+
+	tests := []struct {
+		tool   string
+		args   map[string]interface{}
+		wantID string
+	}{
+		{"profile_find_by_mac", map[string]interface{}{"mac_address": "52:54:00:aa:bb:cc"}, "7"},
+		{"profile_find_by_serial", map[string]interface{}{"serial": "SRV-0042"}, "8"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.tool, func(t *testing.T) {
+			result, err := registry.ExecuteTool(context.Background(), tt.tool, tt.args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := result.(map[string]interface{})["id"]; got != tt.wantID {
+				t.Fatalf("id = %v, want %s", got, tt.wantID)
+			}
+		})
+	}
+}
+
+func TestDeviceProfileFindByMACAndSerial_Errors(t *testing.T) {
+	registry, _ := newDeviceProfileRegistry()
+
+	for tool, field := range map[string]string{
+		"profile_find_by_mac":    "mac_address",
+		"profile_find_by_serial": "serial",
+	} {
+		t.Run(tool+" without its key", func(t *testing.T) {
+			_, err := registry.ExecuteTool(context.Background(), tool, map[string]interface{}{"model": "R640"})
+			var keyErr ErrDeviceProfileLookupKeyRequired
+			if !errors.As(err, &keyErr) || keyErr.Field != field {
+				t.Fatalf("err = %v, want ErrDeviceProfileLookupKeyRequired{Field: %q}", err, field)
+			}
+			if toolErrorCode(err) != mcpwire.CodeForClass(codes.InvalidArgument) {
+				t.Errorf("code = %d, want the InvalidArgument code", toolErrorCode(err))
+			}
+		})
+
+		t.Run(tool+" no match is not found", func(t *testing.T) {
+			_, err := registry.ExecuteTool(context.Background(), tool, map[string]interface{}{field: "zz"})
+			if toolErrorCode(err) != mcpwire.CodeForClass(codes.NotFound) {
+				t.Fatalf("err = %v (code %d), want the NotFound code", err, toolErrorCode(err))
+			}
+		})
+	}
 }
 
 // TestDeviceProfileSchemas_PrestageFields verifies the profile_create and

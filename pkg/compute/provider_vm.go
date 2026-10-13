@@ -50,4 +50,7 @@ func (c *OrchestratorConfig) ApplyLocalQEMUDefaults() {
 	if c.NetworkBridge == "" {
 		c.NetworkBridge = defaults.NetworkBridge
 	}
+	if c.MigrationListenAddress == "" {
+		c.MigrationListenAddress = defaults.MigrationListenAddress
+	}
 }

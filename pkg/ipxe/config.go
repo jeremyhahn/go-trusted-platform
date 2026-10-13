@@ -19,6 +19,7 @@ import (
 	"io"
 	"net"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -35,6 +36,10 @@ const (
 	// binds the real 67 depends on host state it does not control.
 	DefaultDHCPPort = 67
 
+	// DefaultBindHost is the address the HTTP and TFTP servers bind: empty
+	// is the unspecified address, every interface (#93).
+	DefaultBindHost = ""
+
 	// DefaultLeaseTime is the default DHCP lease time (1 hour).
 	DefaultLeaseTime = 1 * time.Hour
 
@@ -46,6 +51,16 @@ const (
 type ServerConfig struct {
 	// Interface is the network interface to bind to.
 	Interface string
+
+	// BindHost is the IP address the HTTP and TFTP servers bind (#93).
+	// Empty, the default, is the unspecified address: every interface.
+	//
+	// The DHCP server does not bind it. A UDP socket bound to a unicast
+	// address never receives a datagram sent to 255.255.255.255, and a
+	// PXE client with no address can only broadcast, so the DHCP socket
+	// keeps the unspecified address and is scoped to its segment by
+	// SO_BINDTODEVICE on DHCPInterface (or Interface) instead.
+	BindHost string
 
 	// HTTPPort is the HTTP server port (default: 8080).
 	HTTPPort int
@@ -232,6 +247,7 @@ type BootEntry struct {
 func DefaultServerConfig() *ServerConfig {
 	return &ServerConfig{
 		Interface:          "",
+		BindHost:           DefaultBindHost,
 		HTTPPort:           DefaultHTTPPort,
 		TFTPPort:           DefaultTFTPPort,
 		DHCPPort:           DefaultDHCPPort,
@@ -277,6 +293,12 @@ func (c *ServerConfig) Validate() error {
 	// every ServerConfig literal predating this field keeps working.
 	if c.DHCPPort < 0 || c.DHCPPort > 65535 {
 		return &SentinelCauseError{Sentinel: ErrInvalidPort, Cause: &MessageError{Msg: "DHCP port must be between 1 and 65535"}}
+	}
+
+	// Validate bind host: an IP literal, so a typo fails here rather than
+	// at bind time, and a hostname never binds whatever it resolves to.
+	if c.BindHost != "" && net.ParseIP(c.BindHost) == nil {
+		return &SentinelCauseError{Sentinel: ErrInvalidBindHost, Cause: &MessageError{Msg: c.BindHost + " is not an IP address"}}
 	}
 
 	// Validate interface if specified
@@ -459,6 +481,11 @@ func (c *ServerConfig) GetServerIP() (string, error) {
 		return c.DHCPServerIP, nil
 	}
 
+	// Servers bound to one address are reachable only there
+	if ip := net.ParseIP(c.BindHost); ip != nil && !ip.IsUnspecified() {
+		return c.BindHost, nil
+	}
+
 	// Auto-detect from interface
 	if c.Interface != "" {
 		ip, err := getInterfaceIP(c.Interface)
@@ -475,6 +502,12 @@ func (c *ServerConfig) GetServerIP() (string, error) {
 	}
 
 	return ip, nil
+}
+
+// listenAddr returns the address a server listening on port binds: the
+// configured BindHost, or every interface when it is empty.
+func (c *ServerConfig) listenAddr(port int) string {
+	return net.JoinHostPort(c.BindHost, strconv.Itoa(port))
 }
 
 // Validate validates the boot entry.

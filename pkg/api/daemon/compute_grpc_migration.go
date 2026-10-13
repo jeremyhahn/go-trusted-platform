@@ -131,10 +131,12 @@ func fromProtoMigrationSpec(spec *platformv1.VMMigrationSpec) *compute.InstanceC
 
 // prepareMigrationErrToStatus maps ReceiveIncoming errors onto gRPC status codes.
 func prepareMigrationErrToStatus(err error) error {
+	var listenErr *compute.MigrationListenAddressError
 	switch {
 	case errors.Is(err, compute.ErrMigrationSpecRequired):
 		return status.Error(codes.InvalidArgument, err.Error())
-	case errors.Is(err, compute.ErrMigrationServerTLSNotConfigured):
+	case errors.Is(err, compute.ErrMigrationServerTLSNotConfigured),
+		errors.As(err, &listenErr):
 		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, compute.ErrMigrationReceiveFailed):
 		return status.Error(codes.Internal, err.Error())

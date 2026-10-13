@@ -196,8 +196,9 @@ func TestService_CreateBundle_InvalidEKAlgorithm(t *testing.T) {
 		EKAlgorithm: EKAlgorithm("invalid"),
 	}
 	_, err = service.CreateBundle(ctx, opts)
-	if err == nil {
-		t.Error("CreateBundle should fail with invalid EK algorithm")
+	var invalidAlg ErrInvalidEKAlgorithm
+	if !errors.As(err, &invalidAlg) || invalidAlg.Algorithm != "invalid" {
+		t.Errorf("CreateBundle err = %v, want ErrInvalidEKAlgorithm{invalid}", err)
 	}
 }
 

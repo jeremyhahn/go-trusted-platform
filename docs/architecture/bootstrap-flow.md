@@ -46,7 +46,7 @@ processes even when collocated on a single box.
 │  │   • QuicBaaS         │      │  8080 REST             │       │
 │  │   • REST 8443/9443   │      │  10444 gRPC            │       │
 │  │   • gRPC 10443       │      │                        │       │
-│  │   • QUIC 11443       │      │                        │       │
+│  │   • QUIC 9444        │      │                        │       │
 │  │   • MCP 8000         │      │                        │       │
 │  │   • Unix /run/       │      │                        │       │
 │  │     platformd.sock   │      │                        │       │

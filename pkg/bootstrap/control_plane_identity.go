@@ -16,23 +16,21 @@ package bootstrap
 import (
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
-
-// cpWebserviceTLSPort is the TLS port of the control plane's public
-// webservice as the device template declares it (webservices[].tls-port).
-// It selects which webservice entry's certificate identity the
-// orchestrator verifies against. cpWebservicePort, the port actually
-// dialed, defaults to it; tests redirect only the dial.
-const cpWebserviceTLSPort = 8443
 
 // nodeWebserviceTLSPort is the TLS port of the platform listener a gateway or
 // worker serves (webservice[s].tls-port). Its certificate is issued by the
 // control-plane CA through device-attest-01, so the post-install probe
 // verifies it against the platform anchor under the name declared here.
 const nodeWebserviceTLSPort = 9443
+
+// gatewayWebserviceTLSPort is the HTTPS port a gateway's public listener
+// serves. Health probes try it after the control-plane and node ports.
+const gatewayWebserviceTLSPort = 443
 
 // controlPlaneTLSNameFallbackSource names the source recorded when the
 // merged control-plane config carries no webservice certificate identity
@@ -50,6 +48,13 @@ func (o *Orchestrator) firstControlPlaneNode() *DiscoveredNode {
 	return nil
 }
 
+// controlPlanePort is the control plane's webservice port as the dial
+// address wants it: platform.control_plane_port, else
+// DefaultControlPlanePort.
+func (o *Orchestrator) controlPlanePort() string {
+	return strconv.Itoa(o.config.EffectiveControlPlanePort())
+}
+
 // controlPlaneTLSName returns the DNS name every orchestrator TLS client
 // verifies the control plane's certificate against, resolved once per
 // orchestrator and logged once.
@@ -61,7 +66,7 @@ func (o *Orchestrator) firstControlPlaneNode() *DiscoveredNode {
 // has to come from configuration: the merged control-plane config the
 // orchestrator itself stages is the single source of truth (the subject CN,
 // or failing that the first DNS SAN, of the webservices entry on
-// cpWebserviceTLSPort). Only when that config carries no such name does the
+// platform.control_plane_port). Only when that config carries no such name does the
 // "cp." role alias under the platform domain stand in, logged at WARN. The
 // node's hostname is never used: it is not what the certificate says.
 func (o *Orchestrator) controlPlaneTLSName() (string, error) {
@@ -78,7 +83,7 @@ func (o *Orchestrator) resolveControlPlaneTLSName() (string, error) {
 			o.logger.Warn("bootstrap: control-plane TLS name: merged control-plane config unavailable, falling back to the cp role alias",
 				slog.String("hostname", cpNode.Hostname),
 				slog.String("error", err.Error()))
-		} else if name, source, err := webserviceTLSNameFromConfig(merged, cpWebserviceTLSPort); err != nil {
+		} else if name, source, err := webserviceTLSNameFromConfig(merged, o.config.EffectiveControlPlanePort()); err != nil {
 			o.logger.Warn("bootstrap: control-plane TLS name: merged control-plane config is not YAML, falling back to the cp role alias",
 				slog.String("hostname", cpNode.Hostname),
 				slog.String("error", err.Error()))
@@ -90,7 +95,7 @@ func (o *Orchestrator) resolveControlPlaneTLSName() (string, error) {
 		} else {
 			o.logger.Warn("bootstrap: control-plane TLS name: merged control-plane config carries no webservice certificate name, falling back to the cp role alias",
 				slog.String("hostname", cpNode.Hostname),
-				slog.Int("tls_port", cpWebserviceTLSPort))
+				slog.Int("tls_port", o.config.EffectiveControlPlanePort()))
 		}
 	}
 	domain := ""

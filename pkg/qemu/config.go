@@ -18,6 +18,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 )
 
 // Config holds the configuration for a QEMU VM
@@ -237,10 +239,10 @@ func DefaultPortForwards() []PortForward {
 		{HostPort: 9080, GuestPort: 9080, Protocol: "tcp"}, // HTTP
 		{HostPort: 9443, GuestPort: 9443, Protocol: "tcp"}, // HTTPS
 		// DNS services
-		{HostPort: 8053, GuestPort: 8053, Protocol: "udp"}, // Public DNS
-		{HostPort: 8053, GuestPort: 8053, Protocol: "tcp"}, // Public DNS (TCP)
-		{HostPort: 9053, GuestPort: 9053, Protocol: "udp"}, // Internal DNS
-		{HostPort: 9053, GuestPort: 9053, Protocol: "tcp"}, // Internal DNS (TCP)
+		{HostPort: dns.DefaultPublicPort, GuestPort: dns.DefaultPublicPort, Protocol: "udp"},     // Public DNS
+		{HostPort: dns.DefaultPublicPort, GuestPort: dns.DefaultPublicPort, Protocol: "tcp"},     // Public DNS (TCP)
+		{HostPort: dns.DefaultInternalPort, GuestPort: dns.DefaultInternalPort, Protocol: "udp"}, // Internal DNS
+		{HostPort: dns.DefaultInternalPort, GuestPort: dns.DefaultInternalPort, Protocol: "tcp"}, // Internal DNS (TCP)
 	}
 }
 

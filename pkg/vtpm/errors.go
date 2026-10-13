@@ -271,6 +271,16 @@ func (e ErrInvalidConfig) Error() string {
 	return fmt.Sprintf("vtpm: invalid config for %s: %s", e.Field, e.Reason)
 }
 
+// ErrInvalidEKAlgorithm indicates a requested EK algorithm is neither RSA
+// nor ECC.
+type ErrInvalidEKAlgorithm struct {
+	Algorithm string
+}
+
+func (e ErrInvalidEKAlgorithm) Error() string {
+	return fmt.Sprintf("vtpm: invalid EK algorithm %q (must be RSA or ECC)", e.Algorithm)
+}
+
 // ErrChecksumMismatch indicates a file checksum does not match the manifest.
 type ErrChecksumMismatch struct {
 	File     string

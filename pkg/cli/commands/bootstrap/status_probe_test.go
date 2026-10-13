@@ -19,10 +19,13 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 )
 
 // The regressions in #235. Each asserts a way this probe used to report a
@@ -46,19 +49,38 @@ func TestHealthEndpointPath_IsAPathTheWebserviceServes(t *testing.T) {
 // (configs/platform/templates/**), so those nodes reported "unreachable"
 // however healthy they were.
 func TestHealthPorts_CoverEveryRolesWebservicePort(t *testing.T) {
-	for _, port := range []string{
-		"8443", // control-plane, single-node
-		"9443", // compute
-		"443",  // gateway
+	ports := (&bootstrap.BootstrapConfig{}).HealthProbePorts()
+	for _, port := range []int{
+		8443, // control-plane, single-node
+		9443, // compute
+		443,  // gateway
 	} {
-		assert.Contains(t, healthPorts, port,
+		assert.Contains(t, ports, port,
 			"a role's webservice port is missing from the probe's candidates")
 	}
 }
 
+// TestStatusProber_ProbesTheConfiguredControlPlanePort proves the status
+// command reaches a control plane whose webservice is moved off 8443 by
+// platform.control_plane_port, and only through that setting.
+func TestStatusProber_ProbesTheConfiguredControlPlanePort(t *testing.T) {
+	host, ports, client := newProbeServer(t, http.StatusOK, `{"payload":{}}`)
+	node := &bootstrap.DiscoveredNode{NodeConfig: bootstrap.NodeConfig{Hostname: "cp-01", Role: bootstrap.RoleControlPlane}}
+	cpAddresses := func(*bootstrap.DiscoveredNode) []string { return []string{host} }
+
+	configured := &bootstrap.BootstrapConfig{Platform: bootstrap.PlatformGlobalConfig{ControlPlanePort: ports[0]}}
+	prober := statusProber{cpClient: client, cpAddresses: cpAddresses, ports: configured.HealthProbePorts()}
+	assert.Equal(t, "healthy", prober.health(t.Context(), node))
+
+	prober.ports = (&bootstrap.BootstrapConfig{}).HealthProbePorts()
+	assert.Equal(t, "unreachable", prober.health(t.Context(), node),
+		"without the setting the moved control plane must not be found")
+}
+
 // newProbeServer starts a TLS listener answering the probe's path with the
-// supplied status and body, and returns a client that trusts it.
-func newProbeServer(t *testing.T, status int, body string) (host string, client *http.Client) {
+// supplied status and body, and returns its host, its port as the only probe
+// candidate, and a client that trusts it.
+func newProbeServer(t *testing.T, status int, body string) (host string, ports []int, client *http.Client) {
 	t.Helper()
 
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -78,12 +100,10 @@ func newProbeServer(t *testing.T, status int, body string) (host string, client 
 
 	h, port, err := net.SplitHostPort(srv.Listener.Addr().String())
 	require.NoError(t, err)
+	p, err := strconv.Atoi(port)
+	require.NoError(t, err)
 
-	prev := healthPorts
-	healthPorts = []string{port}
-	t.Cleanup(func() { healthPorts = prev })
-
-	return h, &http.Client{
+	return h, []int{p}, &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: certPool},
 		},
@@ -95,29 +115,29 @@ func newProbeServer(t *testing.T, status int, body string) (host string, client 
 // that is not hypothetical: until #251 the platform's own SPA fallback
 // answered this probe with a 200 and the command reported every node healthy.
 func TestProbe_RejectsAnEmpty200(t *testing.T) {
-	host, client := newProbeServer(t, http.StatusOK, "")
+	host, ports, client := newProbeServer(t, http.StatusOK, "")
 
-	assert.Equal(t, "unhealthy", checkNodeHealth(t.Context(), client, host),
+	assert.Equal(t, "unhealthy", checkNodeHealth(t.Context(), client, host, ports),
 		"an empty 200 was accepted as a platform answer")
 }
 
 // TestProbe_RejectsAnHTMLPage is the same defect in the shape it actually
 // took: a 200 carrying the SPA shell.
 func TestProbe_RejectsAnHTMLPage(t *testing.T) {
-	host, client := newProbeServer(t, http.StatusOK,
+	host, ports, client := newProbeServer(t, http.StatusOK,
 		"<!DOCTYPE html><html><head><title>Trusted Platform</title></head><body></body></html>")
 
-	assert.Equal(t, "unhealthy", checkNodeHealth(t.Context(), client, host),
+	assert.Equal(t, "unhealthy", checkNodeHealth(t.Context(), client, host, ports),
 		"an HTML page was accepted as a platform answer — this is the exact pre-#251 behaviour")
 }
 
 // TestProbe_AcceptsAPlatformAnswer is the positive case, without which the
 // two rejections above would pass against a probe that rejects everything.
 func TestProbe_AcceptsAPlatformAnswer(t *testing.T) {
-	host, client := newProbeServer(t, http.StatusOK,
+	host, ports, client := newProbeServer(t, http.StatusOK,
 		`{"payload":{"os":{"hostname":"node-1"},"runtime":{"version":"test"}}}`)
 
-	assert.Equal(t, "healthy", checkNodeHealth(t.Context(), client, host))
+	assert.Equal(t, "healthy", checkNodeHealth(t.Context(), client, host, ports))
 }
 
 // TestProbe_AcceptsATruncatedPlatformAnswer covers the bounded read: the
@@ -127,31 +147,30 @@ func TestProbe_AcceptsAPlatformAnswer(t *testing.T) {
 func TestProbe_AcceptsATruncatedPlatformAnswer(t *testing.T) {
 	long := `{"payload":{"os":{"hostname":"node-1","kernel":"` +
 		string(make([]byte, 0, 600)) + repeatByte('x', 600) + `"}}}`
-	host, client := newProbeServer(t, http.StatusOK, long)
+	host, ports, client := newProbeServer(t, http.StatusOK, long)
 
-	assert.Equal(t, "healthy", checkNodeHealth(t.Context(), client, host),
+	assert.Equal(t, "healthy", checkNodeHealth(t.Context(), client, host, ports),
 		"a valid but truncated platform response was rejected")
 }
 
 // TestProbe_ReportsUnhealthyForANonOKStatus keeps the original contract: a
 // node that answers but is not OK is unhealthy, not unreachable.
 func TestProbe_ReportsUnhealthyForANonOKStatus(t *testing.T) {
-	host, client := newProbeServer(t, http.StatusServiceUnavailable, `{"error":"down"}`)
+	host, ports, client := newProbeServer(t, http.StatusServiceUnavailable, `{"error":"down"}`)
 
-	assert.Equal(t, "unhealthy", checkNodeHealth(t.Context(), client, host))
+	assert.Equal(t, "unhealthy", checkNodeHealth(t.Context(), client, host, ports))
 }
 
 // TestCheckNodeHealth_TriesEveryCandidatePort proves the port search reaches a
 // node that serves on the last candidate rather than the first — the compute
 // and gateway case.
 func TestCheckNodeHealth_TriesEveryCandidatePort(t *testing.T) {
-	host, client := newProbeServer(t, http.StatusOK, `{"payload":{}}`)
+	host, ports, client := newProbeServer(t, http.StatusOK, `{"payload":{}}`)
 
 	// Put two dead ports ahead of the live one.
-	live := healthPorts[0]
-	healthPorts = []string{"1", "2", live}
+	ports = []int{1, 2, ports[0]}
 
-	assert.Equal(t, "healthy", checkNodeHealth(t.Context(), client, host),
+	assert.Equal(t, "healthy", checkNodeHealth(t.Context(), client, host, ports),
 		"the probe stopped at the first unreachable port instead of trying the rest")
 }
 
@@ -159,12 +178,11 @@ func TestCheckNodeHealth_TriesEveryCandidatePort(t *testing.T) {
 // answers "unhealthy" on an early port must not be re-probed on later ones and
 // reported healthy by a different service that happens to listen there.
 func TestCheckNodeHealth_AnsweredPortEndsTheSearch(t *testing.T) {
-	host, client := newProbeServer(t, http.StatusServiceUnavailable, `{"error":"down"}`)
+	host, ports, client := newProbeServer(t, http.StatusServiceUnavailable, `{"error":"down"}`)
 
-	live := healthPorts[0]
-	healthPorts = []string{live, "8443", "9443"}
+	ports = []int{ports[0], 8443, 9443}
 
-	assert.Equal(t, "unhealthy", checkNodeHealth(t.Context(), client, host))
+	assert.Equal(t, "unhealthy", checkNodeHealth(t.Context(), client, host, ports))
 }
 
 // repeatByte builds a run of one byte without pulling in strings.Repeat's

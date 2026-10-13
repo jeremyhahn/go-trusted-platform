@@ -24,6 +24,7 @@ import (
 	"net"
 	"time"
 
+	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
@@ -69,7 +70,7 @@ type ServerConfig struct {
 // DefaultServerConfig returns a ServerConfig with sensible defaults
 func DefaultServerConfig() *ServerConfig {
 	return &ServerConfig{
-		ListenAddr:                 "0.0.0.0:9444",
+		ListenAddr:                 tpconfig.DefaultDaemonListeners().QUIC.Address(),
 		MaxStreams:                 1000,
 		MaxIdleTimeout:             30 * time.Second,
 		MaxIncomingStreams:         1000,

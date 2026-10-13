@@ -14,7 +14,6 @@
 package cluster
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -184,19 +183,6 @@ func TestConfig() *Config {
 	}
 }
 
-// ClusterConfig returns a configuration for a multi-node cluster.
-// nodeID: The unique identifier for this node (1, 2, 3, ...)
-// raftPort: The Raft port for this node
-// peers: The Raft addresses of peer nodes
-func ClusterConfig(nodeID uint64, raftPort int, peers []string) *Config {
-	cfg := DefaultConfig()
-	cfg.NodeID = nodeID
-	cfg.RaftAddress = formatRaftAddress("127.0.0.1", raftPort)
-	cfg.ClusterPeers = peers
-	cfg.EnableAutoSync = true
-	return cfg
-}
-
 // Validate checks that the configuration is valid.
 func (c *Config) Validate() error {
 	if c.NodeID == 0 {
@@ -227,9 +213,4 @@ func (c *Config) Validate() error {
 		return ErrInvalidConfig{Field: "CacheSize", Reason: "cache size cannot be negative"}
 	}
 	return nil
-}
-
-// formatRaftAddress formats a Raft address from host and port.
-func formatRaftAddress(host string, port int) string {
-	return fmt.Sprintf("%s:%d", host, port)
 }

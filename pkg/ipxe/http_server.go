@@ -137,7 +137,7 @@ func (s *HTTPServer) Start(ctx context.Context, bound chan<- struct{}) error {
 	// when a match is found.
 	mux.HandleFunc("/config/", s.handleConfig)
 
-	addr := fmt.Sprintf(":%d", s.config.HTTPPort)
+	addr := s.config.listenAddr(s.config.HTTPPort)
 
 	s.server = &http.Server{
 		Addr:         addr,

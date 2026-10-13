@@ -23,9 +23,9 @@ import (
 
 func (r *ToolRegistry) executeVTPMCreate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	name := getString(args, "name")
-	algorithm := getString(args, "algorithm")
-	if algorithm == "" {
-		algorithm = "RSA"
+	algorithm, err := ekAlgorithmArg(args)
+	if err != nil {
+		return nil, err
 	}
 
 	result, err := r.service.VTPMCreate(ctx, name, algorithm)

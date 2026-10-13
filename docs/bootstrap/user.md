@@ -132,6 +132,16 @@ names the file and the line — delete the duplicate rather than reconciling it.
 **Secrets belong behind a URI.** `bmc_password` accepts a `kms://` reference. Do
 not commit a plaintext password into a file you will paste into a ticket.
 
+If your control-plane template moves its webservice off `8443`, set
+`platform.control_plane_port` to the template's `tls-port`. Bootstrap reaches
+the control plane on that port to capture its CA, seed it and check its health,
+and `bootstrap status` probes it there; a mismatch shows up as a control plane
+that never answers. A value outside 1-65535 is refused when the file loads.
+
+Moving the control plane's internal DNS zone needs no bootstrap setting: set
+`dns.internal.port` in the control-plane template (or its `overrides:`) and
+every node's DNS forwarder follows it. Unset, it is `9053`.
+
 ---
 
 ## Step 2 — Check what will happen, before it happens

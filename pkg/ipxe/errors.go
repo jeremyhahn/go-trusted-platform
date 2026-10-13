@@ -48,6 +48,9 @@ var (
 	// ErrInvalidPort indicates an invalid port number.
 	ErrInvalidPort = errors.New("invalid port number")
 
+	// ErrInvalidBindHost indicates a bind host that is not an IP address.
+	ErrInvalidBindHost = errors.New("invalid bind host")
+
 	// ErrNoBootEntries indicates no boot entries are configured.
 	ErrNoBootEntries = errors.New("no boot entries configured")
 

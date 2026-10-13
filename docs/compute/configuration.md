@@ -149,7 +149,28 @@ compute:
   auto_cleanup: false
   debug: false
   port_auth_enabled: false
+  migration_listen_address: 0.0.0.0:0
 ```
+
+### Migration listen address
+
+`compute.migration_listen_address` is the `IP:port` a receiving QEMU binds
+for an inbound VM migration stream ([Migration](migration.md)). It is a file
+setting only; the `compute:` section has no environment or flag binding.
+
+| Value | Effect |
+|-------|--------|
+| unset (`local-qemu` provider) | The defaults layer: `0.0.0.0:0`, every address, an ephemeral port per receiver |
+| `<ip>:0` | Bind one address (the migration network's), an ephemeral port per receiver |
+| `<ip>:<port>` | Bind one address and a fixed port, for a firewall rule; one receiver at a time |
+
+The port the receiver listens on is returned to the source in the
+`PrepareMigration` reply. An unparsable value — a hostname, a missing port, a
+multicast address — refuses the receiver with `MigrationListenAddressError`,
+which names the setting; nothing is guessed. `PrepareMigration` then
+returns `FAILED_PRECONDITION`. The stream is mutual TLS on any
+interface, so the wildcard default is safe. Binding the migration network's
+address keeps guest memory off every other network.
 
 ## Environment Variables
 

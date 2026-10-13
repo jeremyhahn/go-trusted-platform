@@ -624,6 +624,36 @@ func TestVTPMHandleCreateBundle(t *testing.T) {
 		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
+	t.Run("EK algorithm accepts RSA or ECC in any case and nothing else", func(t *testing.T) {
+		tests := []struct {
+			algorithm string
+			want      byte
+		}{
+			{algorithm: "ecc", want: quicwire.StatusOK},
+			{algorithm: "Rsa", want: quicwire.StatusOK},
+			{algorithm: "ECDSA", want: quicwire.StatusInvalidArgument},
+			{algorithm: "DSA", want: quicwire.StatusInvalidArgument},
+		}
+		for _, tt := range tests {
+			t.Run(tt.algorithm, func(t *testing.T) {
+				handler, _ := createTestVTPMHandler()
+
+				payload, err := quicwire.EncodePayload(&VTPMCreateBundleRequest{
+					Hostname:    "host-" + tt.algorithm,
+					EKAlgorithm: tt.algorithm,
+				})
+				require.NoError(t, err)
+
+				resp := handler.HandleRequest(ctx, &quicwire.Request{
+					Opcode:  quicwire.OpVTPMCreate,
+					Payload: payload,
+				})
+
+				assert.Equal(t, tt.want, resp.Status)
+			})
+		}
+	})
+
 	t.Run("returns error when service unavailable", func(t *testing.T) {
 		handler := NewVTPMHandler(newVTPMTestLogger(), nil)
 
@@ -1079,6 +1109,36 @@ func TestVTPMHandleCreateTemplate(t *testing.T) {
 		resp := handler.HandleRequest(ctx, req)
 
 		assert.Equal(t, quicwire.StatusOK, resp.Status)
+	})
+
+	t.Run("EK algorithm accepts RSA or ECC in any case and nothing else", func(t *testing.T) {
+		tests := []struct {
+			algorithm string
+			want      byte
+		}{
+			{algorithm: "ecc", want: quicwire.StatusOK},
+			{algorithm: "Rsa", want: quicwire.StatusOK},
+			{algorithm: "ECDSA", want: quicwire.StatusInvalidArgument},
+			{algorithm: "DSA", want: quicwire.StatusInvalidArgument},
+		}
+		for _, tt := range tests {
+			t.Run(tt.algorithm, func(t *testing.T) {
+				handler, _ := createTestVTPMHandler()
+
+				payload, err := quicwire.EncodePayload(&VTPMCreateTemplateRequest{
+					ID:          "template-" + tt.algorithm,
+					EKAlgorithm: tt.algorithm,
+				})
+				require.NoError(t, err)
+
+				resp := handler.HandleRequest(ctx, &quicwire.Request{
+					Opcode:  quicwire.OpVTPMCreateTemplate,
+					Payload: payload,
+				})
+
+				assert.Equal(t, tt.want, resp.Status)
+			})
+		}
 	})
 
 	t.Run("returns error when service unavailable", func(t *testing.T) {

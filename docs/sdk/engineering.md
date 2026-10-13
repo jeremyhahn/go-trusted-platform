@@ -1,6 +1,6 @@
 # Go SDK — Engineering
 
-> **Status: NORMATIVE** · Scope: building, extending and testing `sdk/go` · Last verified: 2026-10-12
+> **Status: NORMATIVE** · Scope: building, extending and testing `sdk/go` · Last verified: 2026-10-13
 > Conflicts with this document are defects. Fix them here first.
 
 ---
@@ -64,6 +64,7 @@ go test -tags "$(make -C ../.. -s print-build-tags)" ./transport/rest/ -run Test
 | `gen/` | generated protobuf and gRPC code, package `platformv1`, 31 services |
 | `services/<name>/` | domain wrappers over the generated clients, plus `common` (pagination, shared errors) |
 | `services/quicbaas/`, `services/auth/` | typed frontage over the go-quicbaas SDK |
+| `services/orchestration/` | container-trust aliases over `go-quicbaas/sdk/go/orchestration` |
 | `auth/` | `Provider`, `MTLSProvider`, `TokenProvider`, `NoneProvider` |
 
 ### Service wrapper constructors
@@ -83,6 +84,20 @@ Most wrappers have two constructors:
 
 `switch` (package `switchsdk`) is HTTP-only: `NewClient(baseURL, *http.Client)`.
 `invitation` and `tenant` (user client) have both REST and gRPC constructors.
+
+### Re-exporting a go-quicbaas capability
+
+A go-quicbaas client is re-exported by a one-line accessor on
+`services/quicbaas.Client` that returns the upstream client (`c.sdk.Orchestrator()`),
+plus a row flipped to ✅ in [api.md §3](api.md#3-go-quicbaas-re-export-surface).
+Its tests prove the accessor returns the SDK's own client and returns nil when the
+SDK serves none.
+
+Upstream types are re-exported as aliases (`type TrustLevel = quicbaasorch.TrustLevel`),
+never as copies, so `errors.As` and type assertions hold across the boundary;
+`services/orchestration` tests that through a wrap chain. Upstream functions are
+wrapped in a function, not bound to an exported `var`, so no linked package can
+replace them.
 
 ## 3. Adding a service or method
 

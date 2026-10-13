@@ -1156,10 +1156,16 @@ func (server *WebServerV1) ReloadCertificate(ctx context.Context) error {
 	return nil
 }
 
-// Add HTTP/3 alt-svc header to responses
-func addAltSvcHeader(next http.Handler) http.Handler {
+// addAltSvcHeader advertises the HTTP/3 listener on every response. HTTP/3
+// listens on UDP at the TLS port number, so that port is what Alt-Svc names.
+func addAltSvcHeader(next http.Handler, tlsPort int) http.Handler {
+	if tlsPort <= 0 {
+		// No TLS listener means no HTTP/3 listener: advertise nothing.
+		return next
+	}
+	altSvc := fmt.Sprintf(`h3=":%d"; ma=86400`, tlsPort)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Alt-Svc", `h3=":443"; ma=86400`)
+		w.Header().Set("Alt-Svc", altSvc)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -1246,7 +1252,7 @@ func (server *WebServerV1) buildRoutes() {
 
 	server.routerMutex.Lock()
 	server.router = muxRouter
-	server.httpServer.Handler = addAltSvcHeader(server.router)
+	server.httpServer.Handler = addAltSvcHeader(server.router, server.config.TLSPort)
 	server.routerMutex.Unlock()
 
 	if server.debug {

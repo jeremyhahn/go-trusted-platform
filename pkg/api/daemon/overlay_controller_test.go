@@ -31,7 +31,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/overlay"
 )
 
-// loopbackVTEP is the VTEP of a node with no public address and no IPsec.
+// loopbackVTEP is the VTEP of a node configured with vtep-address 127.0.0.1
+// on underlay-interface lo, without IPsec.
 var loopbackVTEP = overlayVTEP{addr: netip.MustParseAddr("127.0.0.1"), iface: "lo"}
 
 // errInterfaceLookup stands in for a fabric interface that cannot be read.
@@ -175,8 +176,17 @@ func TestResolveOverlayVTEP_WithoutIPsec(t *testing.T) {
 		cfg    *sdn.OverlayConfig
 		want   overlayVTEP
 	}{
-		{"loopback node", nil, &sdn.OverlayConfig{Enabled: true}, loopbackVTEP},
-		{"unspecified public address", net.IPv4zero, &sdn.OverlayConfig{Enabled: true}, loopbackVTEP},
+		{"configured loopback node", nil, &sdn.OverlayConfig{Enabled: true, VTEPAddress: "127.0.0.1", UnderlayInterface: "lo"}, loopbackVTEP},
+		{
+			"configured address wins over the public one", net.ParseIP("203.0.113.7"),
+			&sdn.OverlayConfig{Enabled: true, VTEPAddress: "10.20.0.11", UnderlayInterface: "bond0"},
+			overlayVTEP{addr: netip.MustParseAddr("10.20.0.11"), iface: "bond0"},
+		},
+		{
+			"configured IPv4-mapped address is unmapped", nil,
+			&sdn.OverlayConfig{Enabled: true, VTEPAddress: "::ffff:10.20.0.11", UnderlayInterface: "bond0"},
+			overlayVTEP{addr: netip.MustParseAddr("10.20.0.11"), iface: "bond0"},
+		},
 		{
 			"public address on the uplink", net.ParseIP("203.0.113.7"),
 			&sdn.OverlayConfig{Enabled: true, UnderlayInterface: "eth0"},
@@ -194,6 +204,47 @@ func TestResolveOverlayVTEP_WithoutIPsec(t *testing.T) {
 				t.Fatalf("resolveOverlayVTEP = %+v, %v; want %+v", vtep, err, tt.want)
 			}
 		})
+	}
+}
+
+// TestResolveOverlayVTEP_RefusesAnUndeterminedVTEP: without IPsec nothing is
+// guessed; a missing or unusable address or interface names the key to set.
+func TestResolveOverlayVTEP_RefusesAnUndeterminedVTEP(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		public  net.IP
+		cfg     *sdn.OverlayConfig
+		setting string
+		value   string
+	}{
+		{"no address at all", nil, &sdn.OverlayConfig{Enabled: true, UnderlayInterface: "lo"}, overlayVTEPAddressKey, ""},
+		{"unspecified public address", net.IPv4zero, &sdn.OverlayConfig{Enabled: true, UnderlayInterface: "eth0"}, overlayVTEPAddressKey, ""},
+		{"configured address is not an IP", nil, &sdn.OverlayConfig{Enabled: true, VTEPAddress: "node-1", UnderlayInterface: "eth0"}, overlayVTEPAddressKey, "node-1"},
+		{"configured address is unspecified", nil, &sdn.OverlayConfig{Enabled: true, VTEPAddress: "0.0.0.0", UnderlayInterface: "eth0"}, overlayVTEPAddressKey, "0.0.0.0"},
+		{"configured address is multicast", nil, &sdn.OverlayConfig{Enabled: true, VTEPAddress: "239.1.1.1", UnderlayInterface: "eth0"}, overlayVTEPAddressKey, "239.1.1.1"},
+		{"no underlay interface", net.ParseIP("203.0.113.7"), &sdn.OverlayConfig{Enabled: true}, overlayUnderlayInterfaceKey, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := resolveOverlayVTEP(tt.public, tt.cfg, noInterfaceLookup(t))
+			var settingErr *OverlayVTEPSettingError
+			if !errors.As(err, &settingErr) {
+				t.Fatalf("err = %v, want an OverlayVTEPSettingError", err)
+			}
+			if settingErr.Setting != tt.setting || settingErr.Value != tt.value {
+				t.Fatalf("error names %s=%q, want %s=%q", settingErr.Setting, settingErr.Value, tt.setting, tt.value)
+			}
+		})
+	}
+}
+
+func TestOverlayVTEPSettingError_Message(t *testing.T) {
+	missing := &OverlayVTEPSettingError{Setting: overlayVTEPAddressKey}
+	if want := "daemon: overlay VTEP undetermined: set sdn.overlay.vtep-address"; missing.Error() != want {
+		t.Fatalf("Error() = %q, want %q", missing.Error(), want)
+	}
+	invalid := &OverlayVTEPSettingError{Setting: overlayVTEPAddressKey, Value: "0.0.0.0"}
+	if want := `daemon: overlay VTEP: sdn.overlay.vtep-address "0.0.0.0" is not a unicast IP address`; invalid.Error() != want {
+		t.Fatalf("Error() = %q, want %q", invalid.Error(), want)
 	}
 }
 

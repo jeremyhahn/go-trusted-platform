@@ -250,6 +250,27 @@ func (c *Client) Ollama() quicbaas.OllamaClient {
 }
 
 // =============================================================================
+// Agentic Operations
+// =============================================================================
+
+// Orchestrator returns the orchestrator service client for agent fleet
+// management: agents, sessions, tasks, jobs and workflows.
+func (c *Client) Orchestrator() quicbaas.OrchestratorClient {
+	return c.sdk.Orchestrator()
+}
+
+// Project returns the project service client for agentic project management.
+func (c *Client) Project() quicbaas.ProjectClient {
+	return c.sdk.Project()
+}
+
+// Account returns the account service client for the per-tenant pool of
+// provider accounts an agent session can be spawned against.
+func (c *Client) Account() quicbaas.AccountClient {
+	return c.sdk.Account()
+}
+
+// =============================================================================
 // Transport Access
 // =============================================================================
 

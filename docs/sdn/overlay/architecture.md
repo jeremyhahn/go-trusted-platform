@@ -553,6 +553,7 @@ has been renewed at the same mark.
 | `FloorError` | `ipsec` | `Service.Install` could not put the fail-closed floor in; wraps the `OpError` (`nftables apply` or `xfrm install`). platformd refuses to start |
 | `ErrNoVTEPAdmission` | `ipsec` | a route named a VTEP on a node with no EVPN route source; only static peers are admitted |
 | `OverlayVTEPError` | `daemon` | the overlay VTEP would sit outside the IPsec it runs beside: `local-address` is not on `fabric-interface` (`ErrVTEPNotOnFabric`), the interface could not be read, or `underlay-interface` names another interface (`ErrUnderlayNotFabric`). Names the address and interface; platformd refuses to start before the floor goes in |
+| `OverlayVTEPSettingError` | `daemon` | without IPsec, the configuration does not determine the VTEP: no `vtep-address` and no public IPv4, a `vtep-address` that is not a unicast IP, or no `underlay-interface`. Names the key to set (`sdn.overlay.vtep-address`, `sdn.overlay.underlay-interface`); nothing falls back to loopback, and platformd refuses to start |
 
 ## See Also
 

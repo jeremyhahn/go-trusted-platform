@@ -61,7 +61,7 @@ inside `vtpm export`, `-o` means the archive path. Use long forms.
 | `--bundle-id` | string | | Bundle ID (**required**) |
 | `--hostname` | string | | Hostname for the VM (**required**) |
 | `--secure-boot` | bool | **`true`** | Generate and enroll Secure Boot keys |
-| `--ek-algorithm` | string | `RSA` | `RSA` or `ECC` |
+| `--ek-algorithm` | string | `RSA` | `RSA` or `ECC`, any case; anything else is rejected |
 | `--template-id` | string | | Template to use as a base |
 | `--label` | string array | | `key=value`, repeatable |
 

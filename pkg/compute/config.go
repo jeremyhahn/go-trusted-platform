@@ -97,6 +97,15 @@ type OrchestratorConfig struct {
 	// serialized.
 	MigrationTLS MigrationTLSProvider `json:"-" yaml:"-"`
 
+	// MigrationListenAddress is the IP:port a receiving QEMU binds for an
+	// inbound migration stream. Port 0 allocates an ephemeral port per
+	// receiver, returned to the source in the PrepareMigration reply; a fixed
+	// port admits one receiver at a time. The VM defaults are
+	// DefaultMigrationListenAddress; set the migration network's address to
+	// keep the stream off every other interface. A receiver is refused, never
+	// guessed, when this is empty or unparsable.
+	MigrationListenAddress string `json:"migration_listen_address,omitempty" yaml:"migration_listen_address,omitempty" mapstructure:"migration_listen_address"`
+
 	// Provider selects the compute orchestrator backend that the factory
 	// (NewOrchestratorForConfig) resolves. An empty value defaults to
 	// ProviderLocalContainer to preserve historical behavior. Cloud
@@ -269,6 +278,12 @@ type AzureProviderConfig struct {
 	TenantID string `json:"tenant_id,omitempty" yaml:"tenant_id,omitempty" mapstructure:"tenant_id"`
 }
 
+// DefaultMigrationListenAddress is the defaults-layer value of
+// compute.migration_listen_address: every address, an ephemeral port per
+// receiver. The stream is mutually authenticated TLS whichever interface
+// carries it.
+const DefaultMigrationListenAddress = "0.0.0.0:0"
+
 // DefaultOrchestratorConfig returns a configuration with sensible defaults
 func DefaultOrchestratorConfig(computeType ComputeType) *OrchestratorConfig {
 	config := &OrchestratorConfig{
@@ -292,6 +307,7 @@ func DefaultOrchestratorConfig(computeType ComputeType) *OrchestratorConfig {
 		config.OVMFCode = "/usr/share/OVMF/OVMF_CODE_4M.fd"
 		config.OVMFCodeSecure = "/usr/share/OVMF/OVMF_CODE_4M.secboot.fd"
 		config.OVMFVars = "/usr/share/OVMF/OVMF_VARS_4M.fd"
+		config.MigrationListenAddress = DefaultMigrationListenAddress
 	}
 
 	return config

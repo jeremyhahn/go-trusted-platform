@@ -24,6 +24,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"math/big"
+	"net"
 	"testing"
 	"time"
 
@@ -277,20 +278,37 @@ func TestNTSServedCertificate(t *testing.T) {
 		}
 	}()
 
-	previous := ntsKEDialAddr
-	ntsKEDialAddr = listener.Addr().String()
-	defer func() { ntsKEDialAddr = previous }()
+	// The sweep dials the configured NTS-KE port, so pointing the config at
+	// the listener exercises the same address resolution production uses.
+	app.NTPConfig.Serve.NTS.Port = listener.Addr().(*net.TCPAddr).Port
 
-	served, err := ntsServedCertificate(context.Background())
+	served, err := ntsServedCertificate(context.Background(), app.ntsKEDialAddress())
 	require.NoError(t, err)
 	assert.Equal(t, "cp-test.example.test", served.Subject.CommonName)
 
 	t.Run("unreachable endpoint is the typed error", func(t *testing.T) {
 		listener.Close()
-		_, err := ntsServedCertificate(context.Background())
+		_, err := ntsServedCertificate(context.Background(), app.ntsKEDialAddress())
 		var typed *ErrNTSProvision
 		require.ErrorAs(t, err, &typed)
 	})
+}
+
+// TestNTSKEDialAddress asserts the sweep dials the port chronyd is rendered
+// with: the configured serve.nts.port, or the IANA default when it is unset.
+func TestNTSKEDialAddress(t *testing.T) {
+	app := ntsTestApp()
+	assert.Equal(t, "127.0.0.1:4460", app.ntsKEDialAddress())
+
+	app.NTPConfig.Serve.NTS.Port = 14460
+	assert.Equal(t, "127.0.0.1:14460", app.ntsKEDialAddress())
+}
+
+// TestNTSKEDialAddress_NoNTPSection asserts a node without an ntp section
+// still resolves the default port rather than panicking.
+func TestNTSKEDialAddress_NoNTPSection(t *testing.T) {
+	app := &App{}
+	assert.Equal(t, "127.0.0.1:4460", app.ntsKEDialAddress())
 }
 
 // fakeNTPApplier records deployment requests from certificate renewal.

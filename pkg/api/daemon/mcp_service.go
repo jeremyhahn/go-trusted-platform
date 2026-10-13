@@ -245,9 +245,9 @@ func (p *MCPServiceProvider) VTPMCreate(ctx context.Context, name string, algori
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
 
-	ekAlg := vtpm.EKAlgorithmRSA
-	if algorithm == "ECC" {
-		ekAlg = vtpm.EKAlgorithmECC
+	ekAlg, err := vtpm.ParseEKAlgorithm(algorithm)
+	if err != nil {
+		return nil, err
 	}
 
 	opts := &vtpm.CreateBundleOptions{
@@ -442,9 +442,9 @@ func (p *MCPServiceProvider) VTPMCreateTemplate(ctx context.Context, id string, 
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
-	ekAlg := vtpm.EKAlgorithmRSA
-	if algorithm == "ECC" {
-		ekAlg = vtpm.EKAlgorithmECC
+	ekAlg, err := vtpm.ParseEKAlgorithm(algorithm)
+	if err != nil {
+		return nil, err
 	}
 	opts := &vtpm.CreateTemplateOptions{
 		ID:                id,

@@ -401,6 +401,12 @@ sdn:
   overlay:
     enabled: true
     vxlan-port: 4789
+    # The VTEP sits on the fabric zone (VLAN 401): its host address is the
+    # zone401 internal port platformd creates on br-fabric for the bond0
+    # fabric entry above. Without IPsec both keys are required; an overlay
+    # missing either refuses to start (#93).
+    underlay-interface: zone401
+    vtep-address: 10.4.1.2
   gateway:
     enabled: true
 

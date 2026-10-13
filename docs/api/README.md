@@ -20,7 +20,7 @@ See [Go SDK architecture](../sdk/architecture.md) for architecture details.
 | REST | HTTPS | :8443 (public), :9443 (internal) | Web clients, external systems |
 | gRPC | TCP | :10443 | High-performance service-to-service |
 | gRPC | Unix Socket | /run/platformd.sock | Local IPC, CLI (SO_PEERCRED auth) |
-| QUIC | UDP | :11443 | Low-latency, mobile clients |
+| QUIC | UDP | :9444 | Low-latency, mobile clients |
 | MCP | HTTP | :9445 | AI/LLM integration (OAuth 2.1) |
 
 Note: Unix socket uses gRPC protocol with SO_PEERCRED for kernel-verified authentication.
@@ -47,7 +47,7 @@ For the complete multi-protocol API reference and service parity matrix, see [AP
                                                               │
 ┌───────────────────┐      ┌───────────────────┐              │
 │  QUIC Client      │ ───▶ │  QUIC Server      │──────────────┤
-│  (Binary)         │      │  (port 11443)     │              │
+│  (Binary)         │      │  (port 9444)      │              │
 └───────────────────┘      └───────────────────┘              │
                                                               │
 ┌───────────────────┐      ┌───────────────────┐              │

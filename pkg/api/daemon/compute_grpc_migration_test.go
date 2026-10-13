@@ -123,6 +123,22 @@ func TestPrepareMigration_ReceiveFailure(t *testing.T) {
 	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
 }
 
+func TestPrepareMigration_UndeterminedListenAddress(t *testing.T) {
+	recv := &migrationReceiverOrchestrator{
+		grpcMockOrchestrator: newGRPCMockOrchestrator(),
+		receiveErr:           &compute.MigrationListenAddressError{Address: "eth0:0", Reason: "is not an IP:port address"},
+	}
+	svc := newMigrationReceiverService(recv)
+
+	_, err := svc.PrepareMigration(context.Background(), &platformv1.PrepareMigrationRequest{
+		VmName: "guest",
+		Spec:   &platformv1.VMMigrationSpec{MemoryMb: 1024},
+	})
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err), "a destination without a listen address is misconfigured")
+	assert.Contains(t, status.Convert(err).Message(), "compute.migration_listen_address")
+}
+
 func TestPrepareMigration_NotSupported(t *testing.T) {
 	// A plain orchestrator that does not implement MigrationReceiver.
 	svc := NewComputeGRPCService(logging.DefaultLogger(), newGRPCMockOrchestrator())

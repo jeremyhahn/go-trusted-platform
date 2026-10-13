@@ -391,7 +391,8 @@ and [§3](../barrier/engineering.md#3-configuration).
     certificates carry DNS SANs only, so a client that dials the control plane by
     IP must say which name it expects. `controlPlaneTLSName` resolves that name
     once per orchestrator — the `webservices[i].certificate.subject.cn` (else the
-    first `sans.dns`) of the `tls-port: 8443` entry in the merged control-plane
+    first `sans.dns`) of the entry whose `tls-port` is `platform.control_plane_port`
+    (default `8443`) in the merged control-plane
     config from `resolveNodeConfig`, logged at INFO with its config key; when the
     merged config carries none, `cp.` + `platform.domain`, logged at WARN; never
     the node hostname; `ControlPlaneTLSNameUnknownError` when neither exists —
@@ -724,7 +725,8 @@ rather than silently ignored.
 | `deployer.redeploy_mode` | string | `if-stale` | `always`, `if-stale`, `never`; unrecognised values normalise to `if-stale` |
 | `deployer.smb_host` | string | `deployer.host` | The address the BMC uses for the SMB share; also preferred for the install-log base URL |
 | `deployer.bootstrap_interface` | string | container default `eth0` | Sets `BOOTSTRAP_INTERFACE` |
-| `deployer.bootstrap_server_ip` | string | container default | Sets `BOOTSTRAP_SERVER_IP`; must be an address the deployer host already holds on a first bootstrap |
+| `deployer.bootstrap_bind_host` | string | every interface | Sets `BOOTSTRAP_BIND_HOST` (pxeboot `--bind-host`): the address the container's HTTP and TFTP servers bind. Must be an IP address (`ErrInvalidConfig` at load). DHCP never binds it — see [`docs/ipxe/configuration.md`](../ipxe/configuration.md#bind-address) |
+| `deployer.bootstrap_server_ip` | string | container default | Sets `BOOTSTRAP_SERVER_IP`: the address advertised as DHCP server and next server, and the one the device-script listener binds; must be an address the deployer host already holds on a first bootstrap |
 | `deployer.bootstrap_http_port` | int | `8080` | Sets `BOOTSTRAP_HTTP_PORT`. The container's HTTP service — per-MAC config endpoint, install-log sink, `/health` — and the port the orchestrator builds its own URLs against (`installLogBaseURL`) |
 | `deployer.bootstrap_device_script_port` | int | `bootstrap_http_port` + 1 | Sets `BOOTSTRAP_DEVICE_SCRIPT_PORT`. The container's second listener, `/boot/device/{mac}.ipxe`. Set it when something else on the deployer already owns the derived port |
 | `deployer.bootstrap_dhcp_start` / `_end` | string | container defaults | `BOOTSTRAP_DHCP_START` / `BOOTSTRAP_DHCP_END` |
@@ -740,6 +742,7 @@ rather than silently ignored.
 | `platform.domain` | string | **required** | |
 | `platform.internal_domain`, `hostmaster`, `tenant_id`, `environment`, `upstream_dns`, `bootstrap_strategy` | | | Injected into merged device configs. `internal_domain` also becomes `quicbaas.spiffe-trust-domain`, and the seeder creates the `quicbaas:` section when the role template has none: platformd rejects at load an embedded-server config without the key ([daemon configuration](../daemon/configuration.md#required-keys-at-load)) |
 | `platform.health_timeout` | duration | `25m` | How long the post-install health probe waits for a freshly installed node to answer. Omit the key to take the default; a Go duration string (`30m`, `1h`) overrides it. The key cannot be set to `0` — yaml.v3 rejects a bare `0` for a duration field, so "unset" is expressed by leaving the key out |
+| `platform.control_plane_port` | int | `8443` (`DefaultControlPlanePort`) | TLS port of the control plane's webservice — the `webservices[].tls-port` its role template declares. The orchestrator dials it to capture the CA bundle and SPKI pin and to seed templates, selects the control plane's TLS name from the webservice entry on it, and tries it first in the post-install and `bootstrap status` health probes (then `9443`, `443`). Addresses are joined with `net.JoinHostPort`, so IPv6 literals work. Outside 1-65535 is `ErrInvalidPort` at config load; omit or `0` for the default |
 | `templates` | map role→path | — | Missing role means the node is skipped at profile creation with a warning |
 | `iso_path` | string | — | Required when any installing node uses `virtual-media` |
 | `backups_dir` | string | a `~`-relative default | `~` expanded at load; set it explicitly rather than relying on the default |
@@ -770,8 +773,22 @@ documents — therefore killed pxeboot on bind with no way to move it.
 
 Both ports are validated at config load: an explicit value must be in 1-65535, the two effective ports must differ, and `bootstrap_http_port: 65535` with the device-script port unset is refused because it would derive 65536. Catching these at load rather than at bind is the same principle as the deploy gate — a port problem should not first appear as a container that came up with nothing serving.
 
-Still not configurable: the control-plane webservice is assumed on `8443` for
-seeding (`cpWebservicePort`) and for the CLI health probe.
+The control plane's webservice port is `platform.control_plane_port`, the same
+setting for seeding, CA-bundle and SPKI capture, TLS-name selection and both
+health probes; before #93 it was a package variable fixed at `8443`. The other
+probe candidates, `9443` (compute) and `443` (gateway), are the role templates'
+webservice ports and stay constants: the discovered node does not carry its
+port, so the probe tries each (`BootstrapConfig.HealthProbePorts`).
+
+Each node's dnsmasq forwards to the control plane's internal DNS zone
+(`network.dns.upstream-dns`: `<cp-ip>#<port>` on other roles, `127.0.0.1#<port>`
+on the control plane itself). The port is the control plane's own
+`dns.internal.port`, read from its merged config — the setting platformd's DNS
+service binds — so the forwarder and the listener cannot disagree; before #93 it
+was a literal `9053`. A control-plane config that leaves it unset gets
+`dns.DefaultInternalPort` (`9053`), the DNS service's own default. A value that
+is not a port in 1-65535 fails node-config resolution with `ErrInvalidPort`
+(field `dns.internal.port`), not a silent default.
 
 ### Platform config — the daemon's own bootstrap block
 
@@ -803,9 +820,10 @@ sub-blocks.
 entrypoint consumes `BOOTSTRAP_INTERFACE`, `BOOTSTRAP_SERVER_IP`,
 `BOOTSTRAP_HTTP_PORT`, `BOOTSTRAP_DEVICE_SCRIPT_PORT`,
 `BOOTSTRAP_DHCP_START`, `BOOTSTRAP_DHCP_END`, `BOOTSTRAP_GATEWAY`,
-`BOOTSTRAP_DNS`, `BOOTSTRAP_APK_MIRROR`, and — for a netboot media build —
-`BOOTSTRAP_TFTP_DIR`, `BOOTSTRAP_ARM64_IPXE` and `BOOTSTRAP_PROXY_DHCP`, all
-set from the deployer block (the optional three are assembled into one
+`BOOTSTRAP_DNS`, `BOOTSTRAP_APK_MIRROR`, the optional `BOOTSTRAP_BIND_HOST`,
+and — for a netboot media build — `BOOTSTRAP_TFTP_DIR`, `BOOTSTRAP_ARM64_IPXE`
+and `BOOTSTRAP_PROXY_DHCP`, all set from the deployer block (the optional four
+are assembled into one
 `BOOTSTRAP_PXEBOOT_ARGS`, since an unset supervisord `%(ENV_*)s` would leave a
 bare flag). An
 unset port is omitted from the `docker run` command entirely so the entrypoint's
@@ -1002,8 +1020,9 @@ the test, and so does any other request.
 **Fault-injection seams.** `OrchestratorParams.Deployer` and `.HealthChecker` are
 interfaces; `BMCFactory` is injectable; `ISOStager` is an interface;
 `DANEPublisher` depends on the narrow `DANEDNSService` rather than the whole DNS
-service; `cpWebservicePort` is a package variable specifically so a test server's
-ephemeral port can be substituted, and `Orchestrator.pollTicker` lets a test
+service; a test points one orchestrator at a test server's ephemeral port
+through its own `config.Platform.ControlPlanePort` (no package state, so the
+tests stay parallel-safe), and `Orchestrator.pollTicker` lets a test
 drive the health and power-verification poll cadence instead of waiting the
 real intervals for it (`waitForHealth`, `waitForHealthAny` and
 `awaitControlPlaneCAPool` probe once immediately and build their ticker only

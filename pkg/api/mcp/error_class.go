@@ -78,6 +78,7 @@ var sentinelClasses = []struct {
 	{ErrRegistryNotConfigured, codes.Unavailable},
 
 	{ErrDeviceProfileIdentityRequired, codes.InvalidArgument},
+	{ErrDeviceProfileMatchCriteriaRequired, codes.InvalidArgument},
 	{ErrBMCProfileIDRequired, codes.InvalidArgument},
 	{ErrBMCBootDeviceRequired, codes.InvalidArgument},
 	{ErrBMCISOURLRequired, codes.InvalidArgument},

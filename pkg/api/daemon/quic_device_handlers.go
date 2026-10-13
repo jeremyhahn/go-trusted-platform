@@ -458,6 +458,7 @@ var deviceQUICDispatch = map[byte]deviceQUICHandler{
 	quicwire.DeviceSubEnable:              (*QUICServiceHandler).handleDeviceEnable,
 	quicwire.DeviceSubTemplateCreate:      (*QUICServiceHandler).handleDeviceTemplateCreate,
 	quicwire.DeviceSubProfileFromTemplate: (*QUICServiceHandler).handleDeviceProfileFromTemplate,
+	quicwire.DeviceSubFindMatchingProfile: (*QUICServiceHandler).handleDeviceFindMatchingProfile,
 }
 
 // handleDeviceRecordAttestCert records a device's attestation certificate
@@ -582,6 +583,26 @@ func (h *QUICServiceHandler) handleDeviceProfileFromTemplate(ctx context.Context
 	resp, err := h.deviceGRPC.CreateProfileFromTemplate(ctx, &fromReq)
 	if err != nil {
 		return h.deviceGRPCErrorToQUIC("DeviceProfileFromTemplate", err)
+	}
+	return h.encodeDeviceQUICResponse(resp)
+}
+
+// handleDeviceFindMatchingProfile serves DeviceSubFindMatchingProfile by
+// delegating to the shared DeviceGRPCService.FindMatchingProfile, so a
+// device with no matching profile is the same NotFound on every transport.
+func (h *QUICServiceHandler) handleDeviceFindMatchingProfile(ctx context.Context, payload []byte) *quicwire.Response {
+	if h.profileService == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDeviceProfileServiceNotAvailable{})
+	}
+
+	var matchReq platformv1.FindMatchingProfileRequest
+	if err := quicwire.DecodePayload(payload, &matchReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	resp, err := h.deviceGRPC.FindMatchingProfile(ctx, &matchReq)
+	if err != nil {
+		return h.deviceGRPCErrorToQUIC("DeviceFindMatchingProfile", err)
 	}
 	return h.encodeDeviceQUICResponse(resp)
 }

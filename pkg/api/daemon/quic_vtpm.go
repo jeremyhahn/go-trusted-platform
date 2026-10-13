@@ -747,9 +747,9 @@ func (h *QUICServiceHandler) handleVTPMCreateTemplate(ctx context.Context, req *
 		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "id"})
 	}
 
-	ekAlg := vtpm.EKAlgorithmRSA
-	if createReq.EKAlgorithm == "ECC" || createReq.EKAlgorithm == "ECDSA" {
-		ekAlg = vtpm.EKAlgorithmECC
+	ekAlg, err := vtpm.ParseEKAlgorithm(createReq.EKAlgorithm)
+	if err != nil {
+		return h.errorResponse(quicwire.StatusInvalidArgument, err)
 	}
 
 	opts := &vtpm.CreateTemplateOptions{
@@ -1321,9 +1321,9 @@ func (h *QUICServiceHandler) handleVTPMCreate(ctx context.Context, req *quicwire
 		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "hostname"})
 	}
 
-	ekAlg := vtpm.EKAlgorithmRSA
-	if createReq.EKAlgorithm == "ECC" || createReq.EKAlgorithm == "ECDSA" {
-		ekAlg = vtpm.EKAlgorithmECC
+	ekAlg, err := vtpm.ParseEKAlgorithm(createReq.EKAlgorithm)
+	if err != nil {
+		return h.errorResponse(quicwire.StatusInvalidArgument, err)
 	}
 
 	opts := &vtpm.CreateBundleOptions{

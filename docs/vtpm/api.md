@@ -148,8 +148,17 @@ change the gRPC or MCP positions above.**
 | `0x04` | `StatusInternalError` | 500 | `ErrGenerationFailed`, `ErrEKGenerationFailed`, `ErrSRKGenerationFailed`, `ErrEKCertInjectionFailed`, `ErrSecureBootEnrollmentFailed`, `ErrSWTPMOperationFailed` |
 | `0x06` | `StatusAlreadyExists` | 409 | `ErrVTPMAlreadyExists`, `ErrBundleAlreadyExists`, `ErrTemplateAlreadyExists` |
 | `0x07` | `StatusPermissionDenied` | 403 | Missing `vtpm:*` scope; `ErrTPMDeviceOpenFailed` on permissions |
-| `0x09` | `StatusInvalidArgument` | 400 | `ErrUnknownTPMTarget`, `ErrNotCharDevice`, `ErrNotUnixSocket`, `ErrNilTPMConfig` |
+| `0x09` | `StatusInvalidArgument` | 400 | `ErrInvalidEKAlgorithm`, `ErrUnknownTPMTarget`, `ErrNotCharDevice`, `ErrNotUnixSocket`, `ErrNilTPMConfig` |
 | `0x0A` | `StatusUnavailable` | 503 | `ErrSwtpmSocketUnavailable`, `ErrHardwareTPMUnavailable`, `ErrNoTPMDetected` |
+
+**The EK algorithm is `RSA` or `ECC`, in any letter case, and nothing else.**
+Bundle and template creation parse `ek_algorithm` (`algorithm` on the MCP
+`vtpm_create` and `vtpm_template_create` tools) the same way on every
+transport. An omitted or empty value, or `EK_ALGORITHM_UNSPECIFIED` on gRPC,
+takes the daemon's configured `ek-algorithm`. Any other value — `ECDSA`
+included, which is not an alias — is `ErrInvalidEKAlgorithm`: 400 on REST,
+`StatusInvalidArgument` on QUIC, `InvalidArgument` on gRPC and MCP. Before #460
+an unrecognized value silently became RSA.
 
 **503 on a runtime operation usually means the swtpm daemon is not running**
 (`ErrSwtpmSocketUnavailable`) — start the bundle before quoting it.

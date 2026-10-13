@@ -80,6 +80,7 @@ func TestGRPCMethodToOpcodeMap_Device(t *testing.T) {
 		{"/platform.v1.DeviceService/EnableDevice", quicwire.DeviceSubEnable},
 		{"/platform.v1.DeviceService/CreateTemplate", quicwire.DeviceSubTemplateCreate},
 		{"/platform.v1.DeviceService/CreateProfileFromTemplate", quicwire.DeviceSubProfileFromTemplate},
+		{"/platform.v1.DeviceService/FindMatchingProfile", quicwire.DeviceSubFindMatchingProfile},
 	}
 	for _, tt := range subTests {
 		if opcode := grpcMethodToOpcodeMap[tt.method]; opcode != quicwire.OpProvisioningCategory {

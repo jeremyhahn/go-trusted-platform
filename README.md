@@ -50,7 +50,7 @@ All platform services are exposed via multiple protocols for seamless integratio
 | MCP | HTTP | 9445 | AI/LLM tool integration |
 | Unix | Socket | /run/platformd.sock | Local IPC, CLI |
 
-These are the defaults of `platformd serve`, overridable with `--rest-port`, `--grpc-port`, `--quic-port`, and `--mcp-port`. REST, gRPC, and QUIC bind `0.0.0.0`; MCP binds `127.0.0.1` only.
+These are the defaults of `platformd serve`, overridable with `--rest-port`, `--grpc-port`, `--quic-port`, and `--mcp-port`. Every listener binds `127.0.0.1` unless its `--<transport>-bind-host` flag or `daemon.<transport>.bind-host` key names another address (see [docs/daemon/cli.md](docs/daemon/cli.md)).
 
 Each protocol provides full feature parity with the others, allowing you to choose the best fit for your integration. The platform daemon starts all protocol servers automatically based on your configuration.
 

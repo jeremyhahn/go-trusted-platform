@@ -16,10 +16,11 @@ package compute
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
@@ -37,8 +38,8 @@ import (
 //      (MigrationServerTLSProvider) so the stream authenticates mutually and is
 //      never accepted in plaintext;
 //   2. launches a receiving QEMU with "-incoming defer" + the server tls-creds
-//      object, then over QMP sets tls-creds and issues migrate-incoming on a
-//      freshly allocated TCP port;
+//      object, then over QMP sets tls-creds and issues migrate-incoming on
+//      compute.migration_listen_address (an ephemeral port when its port is 0);
 //   3. returns the port and the TLS hostname the source must pin.
 //
 // FinalizeIncoming commits (resume the received guest) or aborts (tear the
@@ -120,6 +121,37 @@ var (
 	ErrMigrationReceiveFailed = errors.New("VM migration receive failed")
 )
 
+// MigrationListenAddressError refuses a receiver whose bind address cannot be
+// determined: compute.migration_listen_address is empty, or is not an IP:port
+// a receiving QEMU can listen on. It names the setting and the value.
+type MigrationListenAddressError struct {
+	Address string
+	Reason  string
+}
+
+func (e *MigrationListenAddressError) Error() string {
+	if e.Address == "" {
+		return "compute: migration receiver listen address undetermined: set compute.migration_listen_address"
+	}
+	return "compute: compute.migration_listen_address " + strconv.Quote(e.Address) + " " + e.Reason
+}
+
+// parseMigrationListenAddress resolves compute.migration_listen_address into
+// the address a receiving QEMU binds. Port 0 asks for an ephemeral port.
+func parseMigrationListenAddress(address string) (netip.AddrPort, error) {
+	if address == "" {
+		return netip.AddrPort{}, &MigrationListenAddressError{}
+	}
+	listen, err := netip.ParseAddrPort(address)
+	if err != nil {
+		return netip.AddrPort{}, &MigrationListenAddressError{Address: address, Reason: "is not an IP:port address"}
+	}
+	if listen.Addr().IsMulticast() {
+		return netip.AddrPort{}, &MigrationListenAddressError{Address: address, Reason: "is a multicast address"}
+	}
+	return listen, nil
+}
+
 // =============================================================================
 // Launch seam
 // =============================================================================
@@ -144,6 +176,7 @@ type incomingReceiverParams struct {
 	orchestrator *QEMUOrchestrator
 	spec         MigrationSpec
 	credsDir     string
+	listen       netip.AddrPort
 }
 
 // newIncomingReceiver launches a receiving QEMU. It is a package-level seam so
@@ -212,6 +245,11 @@ func (o *QEMUOrchestrator) ReceiveIncoming(ctx context.Context, spec MigrationSp
 		return nil, ErrMigrationServerTLSNotConfigured
 	}
 
+	listen, err := parseMigrationListenAddress(o.config.MigrationListenAddress)
+	if err != nil {
+		return nil, err
+	}
+
 	// The receiver's certificate is issued for this host's name; the source pins
 	// it as the migration tls-hostname.
 	hostname, err := os.Hostname()
@@ -228,6 +266,7 @@ func (o *QEMUOrchestrator) ReceiveIncoming(ctx context.Context, spec MigrationSp
 		orchestrator: o,
 		spec:         spec,
 		credsDir:     credsDir,
+		listen:       listen,
 	})
 	if err != nil {
 		cleanup()
@@ -301,7 +340,7 @@ func (r *qemuIncomingReceiver) Abort(_ context.Context) error {
 // defaultNewIncomingReceiver launches a real receiving QEMU: it builds a machine
 // model matching the source spec, comes up with "-incoming defer" plus the
 // server tls-creds object, then over QMP installs the tls-creds migration
-// parameter and issues migrate-incoming on a freshly allocated port.
+// parameter and issues migrate-incoming on the configured listen address.
 func defaultNewIncomingReceiver(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
 	o := p.orchestrator
 
@@ -359,7 +398,7 @@ func defaultNewIncomingReceiver(ctx context.Context, p *incomingReceiverParams) 
 		return nil, &WrappedError{Msg: "create receiver disk", Err: err}
 	}
 
-	port, err := allocateReceiverPort()
+	port, err := receiverPort(p.listen)
 	if err != nil {
 		return nil, &WrappedError{Msg: "allocate receiver port", Err: err}
 	}
@@ -382,7 +421,7 @@ func defaultNewIncomingReceiver(ctx context.Context, p *incomingReceiverParams) 
 		_ = vm.Stop()
 		return nil, &WrappedError{Msg: "set receiver migration TLS parameter", Err: err}
 	}
-	if err := mgr.MigrateIncoming(ctx, fmt.Sprintf("tcp:0.0.0.0:%d", port)); err != nil {
+	if err := mgr.MigrateIncoming(ctx, migrateIncomingURI(p.listen.Addr(), port)); err != nil {
 		_ = vm.Stop()
 		return nil, &WrappedError{Msg: "arm receiver migrate-incoming", Err: err}
 	}
@@ -390,12 +429,14 @@ func defaultNewIncomingReceiver(ctx context.Context, p *incomingReceiverParams) 
 	return &qemuIncomingReceiver{vm: vm, monitor: mon, port: port}, nil
 }
 
-// allocateReceiverPort reserves a free TCP port for the incoming migration
-// stream by briefly binding an ephemeral port and releasing it for QEMU to
-// rebind. The window is small and the port is bound to 0.0.0.0 so the receiving
-// QEMU can accept the source's connection.
-func allocateReceiverPort() (int, error) {
-	l, err := net.Listen("tcp", "0.0.0.0:0")
+// receiverPort is the TCP port the receiver listens on: the configured port,
+// or for port 0 a free port reserved by briefly binding the listen address
+// and released for QEMU to rebind. The window between the two is small.
+func receiverPort(listen netip.AddrPort) (int, error) {
+	if listen.Port() != 0 {
+		return int(listen.Port()), nil
+	}
+	l, err := net.Listen("tcp", listen.String())
 	if err != nil {
 		return 0, err
 	}
@@ -405,4 +446,10 @@ func allocateReceiverPort() (int, error) {
 		return 0, &MessageError{Msg: "unexpected listener address type"}
 	}
 	return addr.Port, nil
+}
+
+// migrateIncomingURI is the QEMU migrate-incoming URI for host and port;
+// an IPv6 host is bracketed.
+func migrateIncomingURI(host netip.Addr, port int) string {
+	return "tcp:" + net.JoinHostPort(host.String(), strconv.Itoa(port))
 }

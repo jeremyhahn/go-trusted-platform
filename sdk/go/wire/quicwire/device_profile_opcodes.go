@@ -77,4 +77,10 @@ const (
 	// Request/response: platform.v1 CreateProfileFromTemplateRequest/
 	// CreateProfileResponse.
 	DeviceSubProfileFromTemplate byte = 0x28
+
+	// DeviceSubFindMatchingProfile finds the profile whose match rules fit a
+	// device's MAC, serial or model: DeviceService.FindMatchingProfile.
+	// Request/response: platform.v1 FindMatchingProfileRequest/
+	// FindMatchingProfileResponse.
+	DeviceSubFindMatchingProfile byte = 0x29
 )

@@ -13,7 +13,11 @@
 
 package device
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/common"
+)
 
 // ErrInvalidDeviceID is returned when an invalid device ID is provided
 type ErrInvalidDeviceID struct {
@@ -249,6 +253,74 @@ func (e ErrProfileListFailed) Error() string {
 }
 
 func (e ErrProfileListFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrProfileNotFound is returned when the control plane has no profile with
+// the id. It matches the SDK's common.ErrNotFound under errors.Is.
+type ErrProfileNotFound struct {
+	ID uint64
+}
+
+func (e ErrProfileNotFound) Error() string {
+	return fmt.Sprintf("device profile: profile %d not found", e.ID)
+}
+
+func (e ErrProfileNotFound) Is(target error) bool {
+	return target == common.ErrNotFound
+}
+
+// ErrProfileDeleteFailed is returned when a profile delete fails for a reason
+// other than a missing profile.
+type ErrProfileDeleteFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e ErrProfileDeleteFailed) Error() string {
+	return fmt.Sprintf("device profile: failed to delete profile %d: %v", e.ID, e.Cause)
+}
+
+func (e ErrProfileDeleteFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrProfileMatchCriteriaRequired is returned when match is given no device
+// attribute to match on.
+type ErrProfileMatchCriteriaRequired struct{}
+
+func (e ErrProfileMatchCriteriaRequired) Error() string {
+	return "device profile: at least one of --mac, --serial or --model is required"
+}
+
+// ErrNoMatchingProfile is returned when no profile's match rules fit the
+// device. It matches the SDK's common.ErrNotFound under errors.Is.
+type ErrNoMatchingProfile struct {
+	MACAddress string
+	Serial     string
+	Model      string
+}
+
+func (e ErrNoMatchingProfile) Error() string {
+	return fmt.Sprintf("device profile: no profile matches mac %q, serial %q, model %q",
+		e.MACAddress, e.Serial, e.Model)
+}
+
+func (e ErrNoMatchingProfile) Is(target error) bool {
+	return target == common.ErrNotFound
+}
+
+// ErrProfileMatchFailed is returned when the profile match fails for a reason
+// other than no profile matching.
+type ErrProfileMatchFailed struct {
+	Cause error
+}
+
+func (e ErrProfileMatchFailed) Error() string {
+	return fmt.Sprintf("device profile: failed to match a profile: %v", e.Cause)
+}
+
+func (e ErrProfileMatchFailed) Unwrap() error {
 	return e.Cause
 }
 

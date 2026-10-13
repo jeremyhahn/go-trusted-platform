@@ -183,6 +183,18 @@ func (e ErrRaftNotReady) Error() string {
 	return fmt.Sprintf("raft not ready: %s", e.Reason)
 }
 
+// ErrRaftAdvertiseAddress is returned when a node that joins peers has no
+// routable Raft advertise address. Peers dial the advertised address, so a
+// loopback, unspecified or empty quicbaas.raft-address would publish a peer
+// nobody can reach; the node refuses to start instead.
+type ErrRaftAdvertiseAddress struct {
+	Address string
+}
+
+func (e ErrRaftAdvertiseAddress) Error() string {
+	return fmt.Sprintf("quicbaas.raft-address %q is not routable: a node with join-addresses must advertise an address its peers can dial (set quicbaas.raft-address, PLATFORMD_QUICBAAS_RAFT_ADDRESS or --raft-address)", e.Address)
+}
+
 // ErrFactoryClosed is returned when the factory has been closed.
 type ErrFactoryClosed struct{}
 

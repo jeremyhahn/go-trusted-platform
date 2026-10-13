@@ -30,7 +30,18 @@ type mockSDKClient struct {
 	transport   quicbaas.Transport
 	kvClient    quicbaas.KVClient
 	batchClient quicbaas.BatchClient
+
+	orchestratorClient quicbaas.OrchestratorClient
+	projectClient      quicbaas.ProjectClient
+	accountClient      quicbaas.AccountClient
 }
+
+// Distinct non-nil clients for the agentic accessors. Each embeds the
+// upstream interface, so a test can tell the wrapper returned this exact
+// value rather than nil or another service's client.
+type stubOrchestratorClient struct{ quicbaas.OrchestratorClient }
+type stubProjectClient struct{ quicbaas.ProjectClient }
+type stubAccountClient struct{ quicbaas.AccountClient }
 
 func newMockSDKClient() *mockSDKClient {
 	return &mockSDKClient{}
@@ -73,9 +84,9 @@ func (m *mockSDKClient) Messaging() quicbaas.MessagingClient                   {
 func (m *mockSDKClient) Embedding() quicbaas.EmbeddingClient                   { return nil }
 func (m *mockSDKClient) Ollama() quicbaas.OllamaClient                         { return nil }
 func (m *mockSDKClient) RAG() quicbaas.RAGClient                               { return nil }
-func (m *mockSDKClient) Project() quicbaas.ProjectClient                       { return nil }
-func (m *mockSDKClient) Account() quicbaas.AccountClient                       { return nil }
-func (m *mockSDKClient) Orchestrator() quicbaas.OrchestratorClient             { return nil }
+func (m *mockSDKClient) Project() quicbaas.ProjectClient                       { return m.projectClient }
+func (m *mockSDKClient) Account() quicbaas.AccountClient                       { return m.accountClient }
+func (m *mockSDKClient) Orchestrator() quicbaas.OrchestratorClient             { return m.orchestratorClient }
 func (m *mockSDKClient) SDLC() quicbaas.SDLCClient                             { return nil }
 
 // QRDB-backed accessors (returning two values, error path always nil).
@@ -281,6 +292,53 @@ func TestClient_ServiceAccessors(t *testing.T) {
 				t.Errorf("%s() expected nil from mock, got %v", tt.name, result)
 			}
 		})
+	}
+}
+
+// TestClient_AgenticAccessors proves each agentic accessor routes to its own
+// go-quicbaas client: the value returned is the SDK's, not a sibling's.
+func TestClient_AgenticAccessors(t *testing.T) {
+	orchestrator := &stubOrchestratorClient{}
+	project := &stubProjectClient{}
+	account := &stubAccountClient{}
+	mockSDK := newMockSDKClient()
+	mockSDK.orchestratorClient = orchestrator
+	mockSDK.projectClient = project
+	mockSDK.accountClient = account
+
+	client, err := NewClientFromSDK(mockSDK)
+	if err != nil {
+		t.Fatalf("NewClientFromSDK() error = %v", err)
+	}
+
+	if got := client.Orchestrator(); got != orchestrator {
+		t.Errorf("Orchestrator() = %v, want the SDK's orchestrator client", got)
+	}
+	if got := client.Project(); got != project {
+		t.Errorf("Project() = %v, want the SDK's project client", got)
+	}
+	if got := client.Account(); got != account {
+		t.Errorf("Account() = %v, want the SDK's account client", got)
+	}
+}
+
+// TestClient_AgenticAccessors_ServiceUnavailable proves an SDK that does not
+// serve the agentic surface yields nil from each accessor rather than a
+// panic or a client for some other service.
+func TestClient_AgenticAccessors_ServiceUnavailable(t *testing.T) {
+	client, err := NewClientFromSDK(newMockSDKClient())
+	if err != nil {
+		t.Fatalf("NewClientFromSDK() error = %v", err)
+	}
+
+	if got := client.Orchestrator(); got != nil {
+		t.Errorf("Orchestrator() = %v, want nil", got)
+	}
+	if got := client.Project(); got != nil {
+		t.Errorf("Project() = %v, want nil", got)
+	}
+	if got := client.Account(); got != nil {
+		t.Errorf("Account() = %v, want nil", got)
 	}
 }
 

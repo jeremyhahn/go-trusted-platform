@@ -146,6 +146,7 @@ Global platform settings shared across all nodes.
 | `upstream_dns` | list | Upstream DNS resolvers |
 | `bootstrap_strategy` | string | Trust bootstrap strategy |
 | `health_timeout` | duration | Post-install health wait per node. Default `25m`. A node must finish install-reboot → firstboot seal → auto-provision → ACME enrollment → service restart before it answers; size this to that cycle, not to boot time (#134). **Must carry a unit** (`25m`, `90s`, `1h`) like every other duration in this file — a bare number is a config parse error, not a default. A zero or negative *duration* (`0s`, `-5m`) is treated as unset rather than as "no wait", since a zero-length window would fail every node instantly |
+| `control_plane_port` | int | TLS port of the control plane's webservice, the `webservices[].tls-port` its role template declares. Default `8443`. Bootstrap dials it to capture the CA bundle and SPKI pin and to seed templates, takes the control plane's TLS name from the webservice entry on it, and probes it first for health. Set it when the control-plane template moves the webservice; omit it (or `0`) for the default |
 
 ```yaml
 platform:
@@ -159,6 +160,9 @@ platform:
   bootstrap_strategy: dane
   # Optional. Omit to use the 25m default; raise it on slower chassis.
   health_timeout: 25m
+  # Optional. Omit to use 8443; must match the control-plane template's
+  # webservice tls-port.
+  control_plane_port: 8443
 ```
 
 ## Templates
@@ -329,6 +333,7 @@ Empty means `backups/` beside this file.
 - No duplicate BMC addresses
 - `deployer.host` is required
 - `deployer.bootstrap_http_port` and `deployer.bootstrap_device_script_port`, when set, must be in 1-65535
+- `platform.control_plane_port`, when set, must be in 1-65535 (`ErrInvalidPort`)
 - The two ports must not resolve to the same value
 - `bootstrap_http_port: 65535` is refused unless `bootstrap_device_script_port` is set explicitly, since it would otherwise derive 65536
 - `provisioning_network.subnet` is required

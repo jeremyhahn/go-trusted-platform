@@ -30,14 +30,6 @@ import (
 // shutdown.
 const shutdownTimeout = 30 * time.Second
 
-var (
-	serveListenAddr  string
-	serveBGPASN      uint32
-	serveBGPRouterID string
-	serveAPIPort     int
-	serveGRPCPort    int
-)
-
 var serveCmd = &cobra.Command{
 	Use:   "serve",
 	Short: "Start the gateway daemon",
@@ -69,20 +61,6 @@ Examples:
   # Start with custom data directory
   gatewayd serve --config config.yaml --data-dir /var/lib/gatewayd`,
 	RunE: runServe,
-}
-
-func init() {
-	serveCmd.Flags().StringVar(&serveListenAddr, "listen", ":8080", "API listen address")
-	serveCmd.Flags().Uint32Var(&serveBGPASN, "bgp-asn", 0, "BGP AS number")
-	serveCmd.Flags().StringVar(&serveBGPRouterID, "bgp-router-id", "", "BGP router ID")
-	serveCmd.Flags().IntVar(&serveAPIPort, "api-port", 8080, "REST API port")
-	serveCmd.Flags().IntVar(&serveGRPCPort, "grpc-port", 10444, "gRPC port")
-
-	viper.BindPFlag("listen", serveCmd.Flags().Lookup("listen"))
-	viper.BindPFlag("bgp.asn", serveCmd.Flags().Lookup("bgp-asn"))
-	viper.BindPFlag("bgp.router_id", serveCmd.Flags().Lookup("bgp-router-id"))
-	viper.BindPFlag("api.port", serveCmd.Flags().Lookup("api-port"))
-	viper.BindPFlag("grpc.port", serveCmd.Flags().Lookup("grpc-port"))
 }
 
 // buildServeLogger constructs the daemon logger from the persistent flags.

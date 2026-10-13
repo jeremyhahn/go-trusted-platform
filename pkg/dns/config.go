@@ -24,6 +24,16 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 )
 
+// DefaultInternalPort is the port the internal zone's server listens on when
+// a deployment does not set dns.internal.port. It is unprivileged so platformd
+// needs no CAP_NET_BIND_SERVICE; each node's dnsmasq maps :53 onto it.
+const DefaultInternalPort = 9053
+
+// DefaultPublicPort is the port the public zone's server listens on when a
+// deployment does not set dns.public.port, and the port the default resolver
+// queries. It is unprivileged for the same reason as DefaultInternalPort.
+const DefaultPublicPort = 8053
+
 var (
 	DatastorePartition = "dns/zones"
 
@@ -58,7 +68,7 @@ var (
 			ConsistencyLevel:  quicbaas.ConsistencyLinearizable,
 		},
 		PublicServer: &PublicServer{
-			Port:       8053,
+			Port:       DefaultPublicPort,
 			Forwarders: []string{"4.4.4.4", "8.8.8.8"},
 			Zone: entities.Zone{
 				ID:          1,
@@ -100,7 +110,7 @@ var (
 			},
 		},
 		InternalServer: &InternalServer{
-			Port:       9053,
+			Port:       DefaultInternalPort,
 			Forwarders: []string{"192.168.1.1", "192.168.2.1", "192.168.3.1"},
 			Zone: entities.Zone{
 				ID:          2,
@@ -137,14 +147,7 @@ var (
 				},
 			},
 		},
-		Resolver: &ResolverConfig{
-			Servers:  []ResolverServer{{Address: "127.0.0.1", Port: 8053}},
-			Fallback: []string{"1.1.1.1:53", "8.8.8.8:53"},
-			LocalForwarder: &LocalForwarderConfig{
-				Listen:    "127.0.0.1:53",
-				CacheSize: 1000,
-			},
-		},
+		Resolver: DefaultResolverConfig(),
 	}
 )
 

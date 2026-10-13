@@ -137,9 +137,9 @@ func (h *VTPMHandlers) CreateBundle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ekAlg := h.parseEKAlgorithm(req.EKAlgorithm)
-	if req.EKAlgorithm != "" && !ekAlg.IsValid() {
-		h.respWriter.Error400(w, r, ErrInvalidEKAlgorithm{Algorithm: req.EKAlgorithm})
+	ekAlg, err := vtpm.ParseEKAlgorithm(req.EKAlgorithm)
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
 		return
 	}
 
@@ -264,9 +264,9 @@ func (h *VTPMHandlers) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ekAlg := h.parseEKAlgorithm(req.EKAlgorithm)
-	if req.EKAlgorithm != "" && !ekAlg.IsValid() {
-		h.respWriter.Error400(w, r, ErrInvalidEKAlgorithm{Algorithm: req.EKAlgorithm})
+	ekAlg, err := vtpm.ParseEKAlgorithm(req.EKAlgorithm)
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
 		return
 	}
 
@@ -511,17 +511,6 @@ func (h *VTPMHandlers) parseBundleMode(mode string) vtpm.BundleMode {
 		return vtpm.BundleModePreAssigned
 	default:
 		return ""
-	}
-}
-
-func (h *VTPMHandlers) parseEKAlgorithm(alg string) vtpm.EKAlgorithm {
-	switch strings.ToUpper(alg) {
-	case "RSA":
-		return vtpm.EKAlgorithmRSA
-	case "ECC":
-		return vtpm.EKAlgorithmECC
-	default:
-		return vtpm.EKAlgorithmRSA
 	}
 }
 

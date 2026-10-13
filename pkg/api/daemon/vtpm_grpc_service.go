@@ -16,6 +16,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 
@@ -717,14 +718,21 @@ func (s *VTPMServiceServer) protoToBundleMode(mode platformv1.BundleMode) vtpm.B
 	}
 }
 
+// protoToEKAlgorithm maps the wire enum to the service algorithm.
+// UNSPECIFIED is the empty algorithm, which the service replaces with its
+// configured default. An enum value this server does not know is passed
+// through by name so the service rejects it with ErrInvalidEKAlgorithm
+// instead of silently creating an RSA EK.
 func (s *VTPMServiceServer) protoToEKAlgorithm(alg platformv1.EKAlgorithm) vtpm.EKAlgorithm {
 	switch alg {
+	case platformv1.EKAlgorithm_EK_ALGORITHM_UNSPECIFIED:
+		return ""
 	case platformv1.EKAlgorithm_EK_ALGORITHM_RSA:
 		return vtpm.EKAlgorithmRSA
 	case platformv1.EKAlgorithm_EK_ALGORITHM_ECC:
 		return vtpm.EKAlgorithmECC
 	default:
-		return vtpm.EKAlgorithmRSA
+		return vtpm.EKAlgorithm(alg.String())
 	}
 }
 
@@ -896,6 +904,11 @@ func (s *VTPMServiceServer) mapError(err error) error {
 
 	// Check for known error types and map to appropriate gRPC codes
 	errMsg := err.Error()
+
+	var invalidEKAlgorithm vtpm.ErrInvalidEKAlgorithm
+	if errors.As(err, &invalidEKAlgorithm) {
+		return status.Error(codes.InvalidArgument, errMsg)
+	}
 
 	// Check for not found errors
 	if containsAny(errMsg, "not found", "does not exist", "no such") {

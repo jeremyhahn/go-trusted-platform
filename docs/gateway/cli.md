@@ -27,7 +27,10 @@ verbs are subgroups of `sdn`:
 
 `gatewayd` itself is the daemon binary (`cmd/gatewayd/main.go`), not an
 administrative CLI: its `main` calls `commands.Execute()` and it is run as a
-service, configured by file.
+service, configured by file. `gatewayd serve` takes only the global `--config` and
+`--data-dir`: every listener address and the BGP speaker come from that file.
+The `--listen`, `--api-port`, `--grpc-port`, `--bgp-asn` and `--bgp-router-id`
+flags it once had configured nothing and are gone (#93).
 
 `gatewayd service run <process>` is the child half of the supervised process
 model (`process:` in [`user.md`](user.md), #557). `gatewayd serve` starts it;

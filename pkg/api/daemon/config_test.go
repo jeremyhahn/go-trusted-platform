@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -410,6 +411,23 @@ func TestDefaultConfig_ListenAddressesAreLoopback(t *testing.T) {
 		}
 		if port == "" || port == "0" {
 			t.Errorf("%s: default port = %q, want a canonical port", name, port)
+		}
+	}
+}
+
+// The library defaults are the platformd serve defaults; a second copy of
+// the numbers drifted once (QUIC defaulted to 11443 here, 9444 in serve).
+func TestDefaultConfig_ListenAddressesMatchTheDaemonListenerDefaults(t *testing.T) {
+	config := DefaultConfig()
+	listeners := tpconfig.DefaultDaemonListeners()
+	for name, tc := range map[string]struct{ got, want string }{
+		"grpc": {config.GRPCListenAddr, listeners.GRPC.Address()},
+		"quic": {config.QUICListenAddr, listeners.QUIC.Address()},
+		"rest": {config.RESTListenAddr, listeners.REST.Address()},
+		"mcp":  {config.MCPConfig.HTTPAddr, listeners.MCP.Address()},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s: default listen address = %q, want %q", name, tc.got, tc.want)
 		}
 	}
 }

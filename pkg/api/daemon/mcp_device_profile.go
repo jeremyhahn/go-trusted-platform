@@ -43,12 +43,56 @@ func (p *MCPServiceProvider) DeviceProfileCreate(ctx context.Context, profile *d
 	return profile, nil
 }
 
-// DeviceProfileGet retrieves a device profile by ID.
+// DeviceProfileGet retrieves a device profile by ID. A missing profile is
+// NotFound, as on gRPC.
 func (p *MCPServiceProvider) DeviceProfileGet(ctx context.Context, id uint64) (*deviceentities.DeviceProfile, error) {
 	if p.deviceProfileService == nil {
 		return nil, ErrServiceNotAvailable{Service: "device_profile"}
 	}
-	return p.deviceProfileService.Get(ctx, id)
+	profile, err := p.deviceProfileService.Get(ctx, id)
+	if err != nil {
+		return nil, deviceStatusError(err)
+	}
+	return profile, nil
+}
+
+// DeviceProfileMatch returns the profile whose match rules fit the device
+// attributes. No match is NotFound, as on gRPC.
+func (p *MCPServiceProvider) DeviceProfileMatch(ctx context.Context, macAddr, serial, model string) (*deviceentities.DeviceProfile, error) {
+	if p.deviceProfileService == nil {
+		return nil, ErrServiceNotAvailable{Service: "device_profile"}
+	}
+	profile, err := p.deviceProfileService.FindMatchingProfile(ctx, macAddr, serial, model)
+	if err != nil {
+		return nil, deviceStatusError(err)
+	}
+	return profile, nil
+}
+
+// DeviceProfileFindByMAC returns the profile whose MAC prefix rule fits the
+// device MAC address. No match is NotFound, as on gRPC.
+func (p *MCPServiceProvider) DeviceProfileFindByMAC(ctx context.Context, macAddr string) (*deviceentities.DeviceProfile, error) {
+	if p.deviceProfileService == nil {
+		return nil, ErrServiceNotAvailable{Service: "device_profile"}
+	}
+	profile, err := p.deviceProfileService.FindByMACAddress(ctx, macAddr)
+	if err != nil {
+		return nil, deviceStatusError(err)
+	}
+	return profile, nil
+}
+
+// DeviceProfileFindBySerial returns the profile whose serial prefix rule fits
+// the device serial number. No match is NotFound, as on gRPC.
+func (p *MCPServiceProvider) DeviceProfileFindBySerial(ctx context.Context, serial string) (*deviceentities.DeviceProfile, error) {
+	if p.deviceProfileService == nil {
+		return nil, ErrServiceNotAvailable{Service: "device_profile"}
+	}
+	profile, err := p.deviceProfileService.FindBySerial(ctx, serial)
+	if err != nil {
+		return nil, deviceStatusError(err)
+	}
+	return profile, nil
 }
 
 // DeviceProfileList returns a page of device profiles and the total count.
@@ -78,16 +122,17 @@ func (p *MCPServiceProvider) DeviceProfileUpdate(ctx context.Context, profile *d
 	return profile, nil
 }
 
-// DeviceProfileDelete removes a device profile by ID.
+// DeviceProfileDelete removes a device profile by ID. A missing profile is
+// NotFound, as on gRPC.
 func (p *MCPServiceProvider) DeviceProfileDelete(ctx context.Context, id uint64) error {
 	if p.deviceProfileService == nil {
 		return ErrServiceNotAvailable{Service: "device_profile"}
 	}
 	profile, err := p.deviceProfileService.Get(ctx, id)
 	if err != nil {
-		return err
+		return deviceStatusError(err)
 	}
-	return p.deviceProfileService.Delete(ctx, profile)
+	return deviceStatusError(p.deviceProfileService.Delete(ctx, profile))
 }
 
 // DeviceProfileAssign binds a profile to a device identity (EK serial

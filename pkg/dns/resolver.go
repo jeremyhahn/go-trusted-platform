@@ -48,7 +48,7 @@ type LocalForwarderConfig struct {
 // to the local platform DNS server with public DNS fallback.
 func DefaultResolverConfig() *ResolverConfig {
 	return &ResolverConfig{
-		Servers:  []ResolverServer{{Address: "127.0.0.1", Port: 8053}},
+		Servers:  []ResolverServer{{Address: "127.0.0.1", Port: DefaultPublicPort}},
 		Fallback: []string{"1.1.1.1:53", "8.8.8.8:53"},
 		LocalForwarder: &LocalForwarderConfig{
 			Listen:    "127.0.0.1:53",

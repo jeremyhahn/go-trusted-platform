@@ -473,9 +473,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// background goroutines, so it does not block daemon startup. With IPsec
 	// the VTEP is the IPsec local endpoint on the fabric interface, and a
 	// VTEP the floor would not protect stops platformd; without it the VTEP
-	// IP defaults to loopback when App.PublicIPv4 is nil (test and
-	// single-node environments without a public IP), and the underlay
-	// interface defaults to "lo" when not set in config (resolveOverlayVTEP).
+	// is sdn.overlay.vtep-address (else App.PublicIPv4) on
+	// sdn.overlay.underlay-interface, and a missing one stops platformd
+	// naming the key to set (resolveOverlayVTEP).
 	//
 	// overlayCtrl is hoisted so the QUIC overlay adapter can reference it below
 	// when wiring quicHandler.SetOverlayHandler.

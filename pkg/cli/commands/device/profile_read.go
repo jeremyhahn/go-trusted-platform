@@ -27,8 +27,8 @@ import (
 
 // The read verbs of `platformctl device profile`. They ride the same SDK
 // device client as create/update so an operator can confirm a write over the
-// transport that made it (the top-level `platformctl profile` reads are
-// stubs, #460).
+// transport that made it. The top-level `platformctl profile` group mounts
+// them too (NewProfileLookupCommands).
 
 // newProfileGetCommand creates the profile get subcommand.
 func newProfileGetCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
@@ -65,6 +65,9 @@ func runProfileGet(flags *cli.CommonFlags, id uint64) error {
 	deviceClient := device.NewClientFromGRPC(base.Client().Device())
 	profile, err := deviceClient.GetProfile(base.Context(), id)
 	if err != nil {
+		if isNotFound(err) {
+			return ErrProfileNotFound{ID: id}
+		}
 		return ErrProfileGetFailed{ID: id, Cause: err}
 	}
 	return outputProfile(base, flags, profile)

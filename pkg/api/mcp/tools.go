@@ -170,7 +170,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 			"type": "object",
 			"properties": map[string]interface{}{
 				"name":      map[string]interface{}{"type": "string", "description": "Name for the vTPM instance"},
-				"algorithm": map[string]interface{}{"type": "string", "description": "Algorithm type (RSA, ECC)", "default": "RSA"},
+				"algorithm": map[string]interface{}{"type": "string", "description": "EK algorithm (RSA or ECC; omit for the configured default)", "enum": []string{"RSA", "ECC"}},
 			},
 			"required": []string{"name"},
 		},

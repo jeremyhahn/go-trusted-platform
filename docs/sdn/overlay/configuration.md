@@ -25,6 +25,7 @@ sdn:
     enabled: true
     vxlan-port: 4789
     underlay-interface: "eth0"
+    vtep-address: "10.20.0.11"   # optional; defaults to the node's public IPv4
 ```
 
 ### Overlay Parameters
@@ -33,7 +34,10 @@ sdn:
 |-----------|------|---------|-------------|
 | enabled | bool | false | Enable overlay networking |
 | vxlan-port | uint16 | 4789 | UDP port for VXLAN encapsulation |
-| underlay-interface | string | "lo" | Physical interface for VXLAN underlay traffic. The loopback default suits single-node and test environments; production deployments should set the uplink interface (e.g., `eth0`, `bond0`) |
+| underlay-interface | string | none | Interface VXLAN underlay traffic leaves by (`eth0`, `bond0`; `lo` for a loopback VTEP). Required without IPsec: an enabled overlay without it refuses to start with `*daemon.OverlayVTEPSettingError` naming `sdn.overlay.underlay-interface`. With IPsec it may be unset or name `ipsec.fabric-interface` |
+| vtep-address | string | node public IPv4 | Without IPsec, the unicast address this node registers as its VTEP and sources VXLAN from. Unset falls back to the node's detected public IPv4. With neither, or with a value that is not a unicast IP, platformd refuses to start with `*daemon.OverlayVTEPSettingError` naming `sdn.overlay.vtep-address`. A single-node or test overlay sets `127.0.0.1` with `underlay-interface: lo`. Ignored with IPsec, whose VTEP is `ipsec.local-address` |
+
+The overlay keys are set in the configuration file. Like the rest of the `sdn:` section, they have no environment or flag binding.
 
 ### Overlay IPsec (`sdn.overlay.ipsec`)
 
@@ -119,8 +123,8 @@ floor drops.
 
 | Setting | Source | Default |
 |---------|--------|---------|
-| VTEP IP | With overlay IPsec: `overlay.ipsec.local-address`. Without: node public IPv4 | Without IPsec, 127.0.0.1 when unset (test / loopback nodes) |
-| Underlay interface | With overlay IPsec: `overlay.ipsec.fabric-interface`. Without: `overlay.underlay-interface` | Without IPsec, `lo` when unset |
+| VTEP IP | With overlay IPsec: `overlay.ipsec.local-address`. Without: `overlay.vtep-address`, else node public IPv4 | none: without IPsec and with neither, platformd refuses to start |
+| Underlay interface | With overlay IPsec: `overlay.ipsec.fabric-interface`. Without: `overlay.underlay-interface` | none: without IPsec it is required |
 | Bridge name | Applied default | `br-int`, the workload integration bridge. Never `sdn.ovs.bridge` (`br-fabric`, which carries the physical trunk) |
 | Underlay MTU | Applied default | 9216, the platform switch-port MTU (`netplan.MTU`) |
 | Environment | `sdn.environment.id` | none: without an environment every VNI must be explicit |

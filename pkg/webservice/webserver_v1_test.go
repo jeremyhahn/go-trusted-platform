@@ -412,36 +412,36 @@ func TestReverseProxyHandler(t *testing.T) {
 }
 
 func TestAddAltSvcHeader(t *testing.T) {
-	t.Run("adds Alt-Svc header to response", func(t *testing.T) {
+	t.Run("advertises the configured TLS port", func(t *testing.T) {
 		nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte("OK"))
 		})
 
-		handler := addAltSvcHeader(nextHandler)
+		handler := addAltSvcHeader(nextHandler, 8443)
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		w := httptest.NewRecorder()
 
 		handler.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Equal(t, `h3=":443"; ma=86400`, w.Header().Get("Alt-Svc"))
+		assert.Equal(t, `h3=":8443"; ma=86400`, w.Header().Get("Alt-Svc"))
 		assert.Equal(t, "OK", w.Body.String())
 	})
 
-	t.Run("does not override existing Alt-Svc header", func(t *testing.T) {
+	t.Run("advertises nothing without a TLS listener", func(t *testing.T) {
 		nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		})
 
-		handler := addAltSvcHeader(nextHandler)
+		handler := addAltSvcHeader(nextHandler, 0)
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		w := httptest.NewRecorder()
 
 		handler.ServeHTTP(w, req)
 
-		// The middleware always sets the header
-		assert.Equal(t, `h3=":443"; ma=86400`, w.Header().Get("Alt-Svc"))
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Empty(t, w.Header().Get("Alt-Svc"))
 	})
 
 	t.Run("passes through POST requests", func(t *testing.T) {
@@ -450,14 +450,14 @@ func TestAddAltSvcHeader(t *testing.T) {
 			w.WriteHeader(http.StatusCreated)
 		})
 
-		handler := addAltSvcHeader(nextHandler)
+		handler := addAltSvcHeader(nextHandler, 443)
 		req := httptest.NewRequest(http.MethodPost, "/api/resource", nil)
 		w := httptest.NewRecorder()
 
 		handler.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusCreated, w.Code)
-		assert.NotEmpty(t, w.Header().Get("Alt-Svc"))
+		assert.Equal(t, `h3=":443"; ma=86400`, w.Header().Get("Alt-Svc"))
 	})
 }
 

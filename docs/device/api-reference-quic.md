@@ -89,6 +89,7 @@ precedent as the EAB sub-range): `payload[0]` is the sub-opcode and
 | `0x26` | Enable a `suspended` device into quarantine and request re-attestation; a refusal is status `0x01` | `EnableDeviceRequest` | `DeviceLifecycleResponse` |
 | `0x27` | Create a device template ([api.md §4](api.md#4-device-templates)); not a vTPM template | `DeviceTemplateCreateRequest` | `DeviceTemplateCreateResponse` |
 | `0x28` | Build and save a profile from a stored device template | `CreateProfileFromTemplateRequest` | `CreateProfileResponse` |
+| `0x29` | Find the profile whose match rules fit a MAC, serial or model; no match is status `NotFound` | `FindMatchingProfileRequest` | `FindMatchingProfileResponse` |
 
 Sub-opcodes `0x23` and `0x24` are exempt from token authentication: a
 diskless node holds no token, and the service authenticates every request
@@ -114,8 +115,9 @@ The SDK adapter emits this framing automatically for
 `DeviceService/BootDelivery`,
 `DeviceService/DisableDevice`,
 `DeviceService/EnableDevice`,
-`DeviceService/CreateTemplate` and
-`DeviceService/CreateProfileFromTemplate`.
+`DeviceService/CreateTemplate`,
+`DeviceService/CreateProfileFromTemplate` and
+`DeviceService/FindMatchingProfile`.
 
 ## Authorization
 
@@ -131,7 +133,7 @@ the catalogs is refused, so a new sub-opcode without an entry fails closed.
 
 | Scope | Opcodes |
 |-------|---------|
-| `device:read` | `0x32`, `0x33`, `0x35`, `0x37`, `0x3D`, `0x3E` |
+| `device:read` | `0x32`, `0x33`, `0x35`, `0x37`, `0x3D`, `0x3E`; sub-opcode `0x29` |
 | `device:write` | `0x30`, `0x34`, `0x36`, `0x38`, `0x3A`, `0x3B`, `0x3C`; sub-opcodes `0x20`–`0x22`, `0x25`–`0x28` |
 | `device:delete` | `0x31`, `0x39` |
 

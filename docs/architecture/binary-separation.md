@@ -174,7 +174,7 @@ The CLI client provides all operational commands via the daemon's APIs.
 | Unix Socket | /run/platformd.sock | Local management (default) |
 | gRPC | host:10443 | High-performance |
 | REST | https://host:8443 | Web/curl access |
-| QUIC | host:11443 | Low-latency |
+| QUIC | host:9444 | Low-latency |
 
 **Source Code:**
 - `cmd/platformctl/` - Binary entry point
@@ -226,7 +226,7 @@ Worker processes handle all network-facing services:
 |---------|----------|------|-------------|
 | REST API | HTTPS | 8443/9443 | Public/internal HTTP endpoints |
 | gRPC API | TCP | 10443 | High-performance RPC |
-| QUIC API | UDP | 11443 | Low-latency transport |
+| QUIC API | UDP | 9444 | Low-latency transport |
 | MCP API | HTTP | 8000 | AI/LLM integration (OAuth 2.1) |
 | Unix Socket | gRPC UDS | /run/platformd.sock | Local IPC (SO_PEERCRED) |
 | ACME Server | HTTPS | 8443 | Device enrollment |

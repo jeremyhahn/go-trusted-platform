@@ -245,10 +245,18 @@ type Config struct {
 	// on a loaded host. Zero means DefaultStartupTimeout.
 	StartupTimeout time.Duration `yaml:"startup-timeout,omitempty" json:"startup_timeout,omitempty" mapstructure:"startup-timeout"`
 
-	// RaftAddress is the address for Raft consensus communication.
-	// Required when StorageBackend is "raft".
-	// Format: "host:port"
+	// RaftAddress is the Raft address this node ADVERTISES to its peers
+	// ("host:port"). Peers dial it, so a node with JoinAddresses must set a
+	// routable one: Validate refuses a loopback, unspecified or empty value
+	// there with ErrRaftAdvertiseAddress rather than publish an unreachable
+	// peer. A single node may leave it loopback.
 	RaftAddress string `yaml:"raft-address" json:"raft_address" mapstructure:"raft-address"`
+
+	// RaftListenAddress is the local address the Raft transport binds
+	// ("host:port"). Empty binds RaftAddress itself; set it when the bind
+	// differs from the advertised address (NAT, a wildcard bind, a
+	// container port mapping).
+	RaftListenAddress string `yaml:"raft-listen-address" json:"raft_listen_address" mapstructure:"raft-listen-address"`
 
 	// JoinAddresses is a list of peer addresses to join for multi-node clusters.
 	// Only used with "raft" backend for production clusters.
@@ -345,7 +353,9 @@ func (c ConsistencyLevel) MarshalText() ([]byte, error) {
 
 // DefaultConfig returns a configuration suitable for embedded single-node usage.
 // Uses PebbleDB backend for high-performance local storage (fastest, single-node only).
-// KMS is supported in all backends.
+// KMS is supported in all backends. RaftAddress is left empty, as it is for a
+// platformd config file that omits quicbaas.raft-address: a single node
+// advertises nothing to peers, and a node that joins them must set one.
 func DefaultConfig() *Config {
 	return &Config{
 		TransportStr:      "embedded",
@@ -354,7 +364,6 @@ func DefaultConfig() *Config {
 		SPIFFETrustDomain: "example.internal",
 		DataDir:           "./data/quicbaas",
 		WALDir:            "./data/quicbaas/wal",
-		RaftAddress:       "127.0.0.1:63000",
 		NodeID:            1,
 		CacheSize:         128 * 1024 * 1024, // 128MB
 		LogLevel:          "info",
@@ -362,107 +371,6 @@ func DefaultConfig() *Config {
 		Compression:       "snappy",
 		SyncWrites:        true,
 		RequestTimeout:    5 * time.Second,
-	}
-}
-
-// TestConfig returns a configuration optimized for unit testing.
-// Uses minimal resources and fast timeouts. Creates a temporary
-// directory that will be cleaned up when the test completes.
-// Uses PebbleDB backend for high-performance local storage without Raft.
-// For faster unit tests that don't need persistence, use MemoryTestConfig instead.
-func TestConfig(t TestingT) *Config {
-	t.Helper()
-	dataDir := t.TempDir()
-	port := getFreePort()
-	return &Config{
-		TransportStr:      "embedded",
-		Transport:         TransportEmbedded,
-		StorageBackend:    quicbaas.StorageBackendPebble, // High-performance local storage, no Raft
-		SPIFFETrustDomain: "example.internal",
-		DataDir:           dataDir,
-		WALDir:            dataDir + "/wal",
-		RaftAddress:       fmt.Sprintf("127.0.0.1:%d", port),
-		NodeID:            1,
-		CacheSize:         8 * 1024 * 1024, // 8MB
-		LogLevel:          "error",         // Reduce log noise in tests
-		ConsistencyLevel:  ConsistencyLinearizable,
-		Compression:       "none",
-		SyncWrites:        false,
-		RequestTimeout:    30 * time.Second,
-	}
-}
-
-// MemoryTestConfig returns a configuration using in-memory storage.
-// This is the fastest option for unit tests that don't need persistence.
-// Data is lost when the server stops - ideal for isolated test cases.
-func MemoryTestConfig(t TestingT) *Config {
-	t.Helper()
-	dataDir := t.TempDir() // Still needed for some internal operations
-	return &Config{
-		TransportStr:      "embedded",
-		Transport:         TransportEmbedded,
-		StorageBackend:    quicbaas.StorageBackendMemory,
-		SPIFFETrustDomain: "example.internal",
-		DataDir:           dataDir,
-		WALDir:            dataDir + "/wal",
-		RaftAddress:       "",              // Not needed for memory backend
-		NodeID:            0,               // Not needed for memory backend
-		CacheSize:         4 * 1024 * 1024, // 4MB - smaller for tests
-		LogLevel:          "error",
-		ConsistencyLevel:  ConsistencyEventual, // Memory is always consistent
-		Compression:       "none",
-		SyncWrites:        false,
-		RequestTimeout:    10 * time.Second,
-	}
-}
-
-// FileTestConfig returns a configuration using file-based storage.
-// Each key-value pair is stored as a separate file, making it easy
-// to inspect and debug data. Slower than Pebble but human-readable.
-func FileTestConfig(t TestingT) *Config {
-	t.Helper()
-	dataDir := t.TempDir()
-	return &Config{
-		TransportStr:      "embedded",
-		Transport:         TransportEmbedded,
-		StorageBackend:    quicbaas.StorageBackendFile,
-		SPIFFETrustDomain: "example.internal",
-		DataDir:           dataDir,
-		WALDir:            dataDir + "/wal",
-		RaftAddress:       "",              // Not needed for file backend
-		NodeID:            0,               // Not needed for file backend
-		CacheSize:         4 * 1024 * 1024, // 4MB
-		LogLevel:          "debug",         // Debug level for visibility
-		ConsistencyLevel:  ConsistencyLinearizable,
-		Compression:       "none", // No compression for readability
-		SyncWrites:        true,   // Sync for debugging reliability
-		RequestTimeout:    30 * time.Second,
-	}
-}
-
-// RaftTestConfig returns a configuration suitable for Raft cluster testing.
-// Uses PebbleDB storage with Raft-related settings configured.
-// Note: Raft consensus is enabled via server mode, not storage backend.
-// This config just ensures Raft address and NodeID are set for cluster tests.
-func RaftTestConfig(t TestingT) *Config {
-	t.Helper()
-	dataDir := t.TempDir()
-	port := getFreePort()
-	return &Config{
-		TransportStr:      "embedded",
-		Transport:         TransportEmbedded,
-		StorageBackend:    quicbaas.StorageBackendPebble, // Raft uses pebble for storage
-		SPIFFETrustDomain: "example.internal",
-		DataDir:           dataDir,
-		WALDir:            dataDir + "/wal",
-		RaftAddress:       fmt.Sprintf("127.0.0.1:%d", port),
-		NodeID:            1,
-		CacheSize:         8 * 1024 * 1024, // 8MB
-		LogLevel:          "error",
-		ConsistencyLevel:  ConsistencyLinearizable,
-		Compression:       "snappy",
-		SyncWrites:        true,
-		RequestTimeout:    30 * time.Second,
 	}
 }
 
@@ -517,40 +425,6 @@ func (c *Config) SetTransport(transport Transport) {
 	c.TransportStr = transport.String()
 }
 
-// getFreePort returns an available TCP port by briefly binding to port 0.
-// Returns 0 if no port can be found (e.g., loopback interface not available).
-func getFreePort() int {
-	// Try localhost first
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		// Try binding to any interface as fallback
-		listener, err = net.Listen("tcp", "0.0.0.0:0")
-		if err != nil {
-			// In initrd/early boot, network may not be available
-			// Return a default port instead of panicking
-			return 17001
-		}
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
-	return port
-}
-
-// GetFreeAddress returns a free localhost address in the format "127.0.0.1:PORT".
-// This is useful for embedded mode when no specific Raft address is configured.
-// Falls back to a default port if network is unavailable (e.g., during initrd boot).
-func GetFreeAddress() string {
-	return fmt.Sprintf("127.0.0.1:%d", getFreePort())
-}
-
-// TestingT is a minimal interface for testing helpers.
-// Satisfied by *testing.T and *testing.B.
-type TestingT interface {
-	TempDir() string
-	Name() string
-	Helper()
-}
-
 // ToQuicBaaSConfig converts our Config to go-quicbaas's native config.Config.
 // This is only applicable for embedded transport mode.
 func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
@@ -577,7 +451,7 @@ func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
 	// Raft settings (only used in cluster/node modes)
 	cfg.Raft.NodeID = c.NodeID
 	cfg.Raft.RaftAddress = c.RaftAddress
-	cfg.Raft.ListenAddress = c.RaftAddress
+	cfg.Raft.ListenAddress = c.EffectiveRaftListenAddress()
 	cfg.Raft.RequestTimeout = c.RequestTimeout
 
 	// Join addresses for multi-node production clusters
@@ -698,8 +572,6 @@ func validateSPIFFETrustDomain(domain string) error {
 	return nil
 }
 
-// SetDefaults sets default values for zero-valued fields.
-// This ensures the config has sensible defaults when fields are omitted from YAML/JSON.
 // EffectiveStartupTimeout returns the startup budget to use, falling back to
 // DefaultStartupTimeout when none is configured.
 //
@@ -717,6 +589,43 @@ func (c *Config) EffectiveStartupTimeout() time.Duration {
 	return c.StartupTimeout
 }
 
+// EffectiveRaftListenAddress returns the address the Raft transport binds:
+// RaftListenAddress when set, otherwise the advertised RaftAddress.
+func (c *Config) EffectiveRaftListenAddress() string {
+	if c.RaftListenAddress != "" {
+		return c.RaftListenAddress
+	}
+	return c.RaftAddress
+}
+
+// IsRoutableRaftAddress reports whether addr advertises a node to peers on
+// the network, as opposed to the loopback, unspecified or empty values a
+// single-node deployment carries. A host that is not an IP literal (a DNS
+// name other than localhost) is treated as routable: it is not evidence of
+// a single node, so callers gating on it fail closed.
+func IsRoutableRaftAddress(addr string) bool {
+	if strings.TrimSpace(addr) == "" {
+		return false
+	}
+	host := addr
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		host = h
+	}
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return !ip.IsLoopback() && !ip.IsUnspecified()
+	}
+	return true
+}
+
+// SetDefaults sets default values for zero-valued fields.
+// This ensures the config has sensible defaults when fields are omitted from YAML/JSON.
 func (c *Config) SetDefaults() {
 	if c.RequestTimeout <= 0 {
 		c.RequestTimeout = 30 * time.Second // Default 30s timeout
@@ -820,6 +729,12 @@ func (c *Config) validateEmbeddedConfig() error {
 
 	if c.CacheSize < 0 {
 		return ErrInvalidConfig{Field: "CacheSize", Reason: "cache size cannot be negative"}
+	}
+
+	// A node that joins peers is a cluster member, and its peers dial the
+	// address it advertises: loopback would publish an unreachable peer.
+	if len(c.JoinAddresses) > 0 && !IsRoutableRaftAddress(c.RaftAddress) {
+		return ErrRaftAdvertiseAddress{Address: c.RaftAddress}
 	}
 
 	// The embedded server runs qrdb first-boot, whose IAM seeding (system

@@ -27,6 +27,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 )
 
 // templateRoot is the tree of shipped platform templates.
@@ -153,5 +154,35 @@ func TestShippedTemplates_RetiredKeysAreGone(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestShippedTemplates_QuicBaaSValidates runs every template's quicbaas
+// section through the validation platformd runs before it opens the store,
+// including the Raft rule: a template with join-addresses advertises a
+// routable raft-address, or platformd refuses to start.
+func TestShippedTemplates_QuicBaaSValidates(t *testing.T) {
+	for _, path := range shippedPlatformTemplates(t) {
+		a := loadTemplate(t, path)
+		require.NotNil(t, a.QuicBaaSConfig, "%s: quicbaas section", path)
+		require.NoError(t, a.QuicBaaSConfig.Validate(), path)
+		if len(a.QuicBaaSConfig.JoinAddresses) > 0 {
+			assert.True(t, quicbaas.IsRoutableRaftAddress(a.QuicBaaSConfig.RaftAddress),
+				"%s: a node that joins peers advertises a routable raft-address", path)
+		}
+	}
+}
+
+// TestShippedTemplates_JoinWithoutRaftAddressRefused proves the check above
+// can fail: a shipped template made to join a peer without a routable
+// raft-address is refused naming the setting.
+func TestShippedTemplates_JoinWithoutRaftAddressRefused(t *testing.T) {
+	for _, path := range shippedPlatformTemplates(t) {
+		a := loadTemplate(t, path)
+		require.NotNil(t, a.QuicBaaSConfig, "%s: quicbaas section", path)
+		a.QuicBaaSConfig.JoinAddresses = []string{"10.4.6.10:63000"}
+		a.QuicBaaSConfig.RaftAddress = "127.0.0.1:63000"
+		var target quicbaas.ErrRaftAdvertiseAddress
+		require.ErrorAs(t, a.QuicBaaSConfig.Validate(), &target, path)
 	}
 }

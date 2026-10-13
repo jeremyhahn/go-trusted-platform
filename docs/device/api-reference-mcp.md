@@ -314,7 +314,9 @@ decode, never stored (`docs/device/api.md` §3.6).
 
 ### profile_get_by_id
 
-Get profile by ID.
+Get profile by ID. A missing profile is `NotFound` here and from
+`profile_delete_by_id`, as on gRPC, so the SDK reports the same error on
+every transport.
 
 ```json
 {
@@ -403,7 +405,11 @@ List profiles with pagination.
 
 ### profile_find_matching
 
-Find profile matching device attributes.
+Find the profile whose match rules fit a device's MAC address, serial or
+model; the SDK's `FindMatchingProfile` uses it on this transport. At least
+one attribute is required (`InvalidArgument` otherwise), and no matching
+profile is `NotFound`, as on gRPC. Requires `device:read`. The result is
+the profile in its domain JSON shape.
 
 ```json
 {
@@ -422,36 +428,44 @@ Find profile matching device attributes.
 
 ### profile_find_by_mac
 
-Find profile by MAC address prefix.
+Find the profile whose `mac_prefix` rule is a prefix of a device MAC address
+(compared case-insensitively); the SDK's `FindProfileByMACAddress` uses it on
+this transport. A missing `mac_address` is `InvalidArgument`, and no matching
+profile is `NotFound`, as on gRPC. Requires `device:read`. The result is the
+profile in its domain JSON shape.
 
 ```json
 {
   "name": "profile_find_by_mac",
-  "description": "Find profile by MAC address prefix",
+  "description": "Find the profile whose MAC prefix rule fits a device MAC address",
   "inputSchema": {
     "type": "object",
     "properties": {
-      "mac_prefix": {"type": "string", "description": "MAC address prefix"}
+      "mac_address": {"type": "string", "description": "Device MAC address"}
     },
-    "required": ["mac_prefix"]
+    "required": ["mac_address"]
   }
 }
 ```
 
 ### profile_find_by_serial
 
-Find profile by serial prefix.
+Find the profile whose `serial_prefix` rule is a prefix of a device serial
+number (compared case-insensitively); the SDK's `FindProfileBySerial` uses it
+on this transport. A missing `serial` is `InvalidArgument`, and no matching
+profile is `NotFound`, as on gRPC. Requires `device:read`. The result is the
+profile in its domain JSON shape.
 
 ```json
 {
   "name": "profile_find_by_serial",
-  "description": "Find profile by serial prefix",
+  "description": "Find the profile whose serial prefix rule fits a device serial number",
   "inputSchema": {
     "type": "object",
     "properties": {
-      "serial_prefix": {"type": "string", "description": "Serial number prefix"}
+      "serial": {"type": "string", "description": "Device serial number"}
     },
-    "required": ["serial_prefix"]
+    "required": ["serial"]
   }
 }
 ```

@@ -118,7 +118,7 @@ MigrateVM(vm, dest:port, {live?})
   │                                         -incoming defer
   │                                         -object tls-creds-x509,endpoint=server
   │                                       QMP: migrate-set-parameters tls-creds
-  │                                       QMP: migrate-incoming tcp:0.0.0.0:PORT
+  │                                       QMP: migrate-incoming tcp:LISTEN:PORT
   │   ◀── {receiver_id, port, tls_hostname}
   │
   ├── install client tls-creds on source QMP monitor (CA-issued)
@@ -158,6 +158,12 @@ message MigrateVMRequest {
 The source combines `destination_host` with the receiver `port` returned by
 `PrepareMigration` to form the QEMU migrate URI (`tcp:<host>:<port>`).
 
+The destination's receiver binds `compute.migration_listen_address` (`LISTEN`
+and `PORT` in the flow above). By default that is `0.0.0.0:0`: every address,
+with an ephemeral port per receiver. Set it to the migration network's address
+to keep the stream on that network, and give it a fixed port when a firewall
+needs one ([Configuration](configuration.md#migration-listen-address)).
+
 ## Error semantics
 
 | Condition | gRPC status |
@@ -168,11 +174,12 @@ The source combines `destination_host` with the receiver `port` returned by
 | Orchestrator does not support VM migration | `FAILED_PRECONDITION` |
 | Unknown receiver on finalize | `NOT_FOUND` |
 | Receiver launch / stream failure | `INTERNAL` |
+| Destination `compute.migration_listen_address` unset or not an `IP:port` (`MigrationListenAddressError`) | `FAILED_PRECONDITION` |
 
 When the platform CA is available (the daemon has provisioned its TLS identity)
 the migration coordinator and TLS provider are wired automatically for the
 `local-qemu` provider; no additional operator configuration is required beyond
-the optional `shared_storage` block.
+the optional `shared_storage` block and `migration_listen_address`.
 
 ## See Also
 

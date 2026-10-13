@@ -1113,7 +1113,8 @@ func TestVTPMServiceServer_EKAlgorithmConversion(t *testing.T) {
 	}{
 		{platformv1.EKAlgorithm_EK_ALGORITHM_RSA, vtpm.EKAlgorithmRSA},
 		{platformv1.EKAlgorithm_EK_ALGORITHM_ECC, vtpm.EKAlgorithmECC},
-		{platformv1.EKAlgorithm_EK_ALGORITHM_UNSPECIFIED, vtpm.EKAlgorithmRSA},
+		// Unspecified defers to the service's configured default.
+		{platformv1.EKAlgorithm_EK_ALGORITHM_UNSPECIFIED, ""},
 	}
 
 	for _, tt := range tests {
@@ -1123,6 +1124,24 @@ func TestVTPMServiceServer_EKAlgorithmConversion(t *testing.T) {
 				t.Errorf("expected %v, got %v", tt.expectedAlg, result)
 			}
 		})
+	}
+}
+
+// TestVTPMServiceServer_UnknownEKAlgorithmIsInvalidArgument guards the
+// coercion bug: an enum value outside RSA/ECC used to become an RSA EK. It
+// now reaches the service as an invalid algorithm, and the service's
+// rejection is InvalidArgument on the wire.
+func TestVTPMServiceServer_UnknownEKAlgorithmIsInvalidArgument(t *testing.T) {
+	server := NewVTPMServiceServer(&mockVTPMService{}, vtpmTestLogger())
+
+	alg := server.protoToEKAlgorithm(platformv1.EKAlgorithm(99))
+	if alg.IsValid() {
+		t.Fatalf("unknown enum mapped to valid algorithm %q", alg)
+	}
+
+	err := server.mapError(vtpm.ErrInvalidEKAlgorithm{Algorithm: string(alg)})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("mapError code = %v, want InvalidArgument", status.Code(err))
 	}
 }
 

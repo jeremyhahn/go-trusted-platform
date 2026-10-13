@@ -537,6 +537,7 @@ func bootstrapEnvFlags(config *DeployConfig) string {
 		name, value string
 	}{
 		{"BOOTSTRAP_INTERFACE", config.BootstrapInterface},
+		{"BOOTSTRAP_BIND_HOST", config.BootstrapBindHost},
 		{"BOOTSTRAP_SERVER_IP", config.BootstrapServerIP},
 		{"BOOTSTRAP_HTTP_PORT", portEnvValue(config.BootstrapHTTPPort)},
 		{"BOOTSTRAP_DEVICE_SCRIPT_PORT", portEnvValue(config.BootstrapDeviceScriptPort)},

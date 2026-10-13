@@ -150,6 +150,7 @@ func (a *linuxDeployerAdapter) deployConfig(manifestPath string) *deployer.Deplo
 		DataDir:            c.EffectiveDataDir(),
 		RedeployMode:       string(c.EffectiveRedeployMode()),
 		BootstrapInterface: c.BootstrapInterface,
+		BootstrapBindHost:  c.BootstrapBindHost,
 		BootstrapServerIP:  c.BootstrapServerIP,
 		// Effective* rather than the raw fields so the deployer sends the
 		// same ports the orchestrator builds its URLs against.

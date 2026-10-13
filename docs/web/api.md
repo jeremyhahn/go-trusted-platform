@@ -72,9 +72,10 @@ else falls back to the SPA shell with **status 200** — a client that treats
 check, no attestation, no identity headers. The authenticating proxy is a
 different feature ([`docs/proxy/`](../proxy/)).
 
-`Alt-Svc: h3=":443"; ma=86400` is set on **every** response by
-`addAltSvcHeader`, including plain-HTTP ones. The value is hard-coded and does
-not follow `tls-port`.
+`Alt-Svc: h3=":<tls-port>"; ma=86400` is set on **every** response by
+`addAltSvcHeader`, including plain-HTTP ones. It names the configured
+`tls-port`, where HTTP/3 listens on UDP; with `tls-port: 0` the header is not
+sent.
 
 ## 4. Introspection
 

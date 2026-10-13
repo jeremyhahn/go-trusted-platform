@@ -299,63 +299,40 @@ func (a *MCPAdapter) FindBySerial(ctx context.Context, opts FindBySerialOptions)
 // Profile CRUD Operations
 // ============================================================================
 
-// CreateProfile creates a new device profile
+// CreateProfile creates a new device profile through profile_create.
 func (a *MCPAdapter) CreateProfile(ctx context.Context, opts CreateProfileOptions) (*CreateProfileResult, error) {
-	result, err := a.callTool(ctx, "device_profile_create", opts)
+	args := profileToolArgs(opts.Name, opts.Model, opts.Role, opts.MACPrefix, opts.SerialPrefix, opts.MatchRules)
+	profile, err := a.callProfileTool(ctx, "CreateProfile", "profile_create", args)
 	if err != nil {
 		return nil, err
 	}
-
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(result, &profile); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "CreateProfile",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &CreateProfileResult{Profile: &profile}, nil
+	return &CreateProfileResult{Profile: profile}, nil
 }
 
-// GetProfile retrieves a profile by its key
+// GetProfile retrieves a profile by ID through profile_get_by_id.
 func (a *MCPAdapter) GetProfile(ctx context.Context, opts GetProfileOptions) (*GetProfileResult, error) {
-	result, err := a.callTool(ctx, "device_profile_get", opts)
+	args := map[string]interface{}{"id": opts.ProfileID}
+	profile, err := a.callProfileTool(ctx, "GetProfile", "profile_get_by_id", args)
 	if err != nil {
 		return nil, err
 	}
-
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(result, &profile); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "GetProfile",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &GetProfileResult{Profile: &profile}, nil
+	return &GetProfileResult{Profile: profile}, nil
 }
 
-// UpdateProfile updates an existing profile
+// UpdateProfile updates an existing profile through profile_update_by_id.
 func (a *MCPAdapter) UpdateProfile(ctx context.Context, opts UpdateProfileOptions) (*UpdateProfileResult, error) {
-	result, err := a.callTool(ctx, "device_profile_update", opts)
+	args := profileToolArgs(opts.Name, opts.Model, opts.Role, opts.MACPrefix, opts.SerialPrefix, opts.MatchRules)
+	args["id"] = opts.ProfileID
+	profile, err := a.callProfileTool(ctx, "UpdateProfile", "profile_update_by_id", args)
 	if err != nil {
 		return nil, err
 	}
-
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(result, &profile); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "UpdateProfile",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &UpdateProfileResult{Profile: &profile}, nil
+	return &UpdateProfileResult{Profile: profile}, nil
 }
 
-// DeleteProfile removes a profile
+// DeleteProfile removes a profile through profile_delete_by_id.
 func (a *MCPAdapter) DeleteProfile(ctx context.Context, opts DeleteProfileOptions) (*DeleteProfileResult, error) {
-	_, err := a.callTool(ctx, "device_profile_delete", opts)
+	_, err := a.callTool(ctx, "profile_delete_by_id", map[string]interface{}{"id": opts.ProfileID})
 	if err != nil {
 		return nil, err
 	}
@@ -363,85 +340,116 @@ func (a *MCPAdapter) DeleteProfile(ctx context.Context, opts DeleteProfileOption
 	return &DeleteProfileResult{Success: true}, nil
 }
 
-// ListProfiles lists all profiles with optional filtering
+// ListProfiles lists profiles through profile_list_all, which pages by
+// page and page_size; Limit is the page size and Offset selects the page.
 func (a *MCPAdapter) ListProfiles(ctx context.Context, opts ListProfilesOptions) (*ListProfilesResult, error) {
-	result, err := a.callTool(ctx, "device_profile_list", opts)
+	args := map[string]interface{}{}
+	if opts.Limit > 0 {
+		args["page_size"] = opts.Limit
+		args["page"] = opts.Offset/opts.Limit + 1
+	}
+	result, err := a.callTool(ctx, "profile_list_all", args)
 	if err != nil {
 		return nil, err
 	}
 
-	var listResult ListProfilesResult
-	if err := json.Unmarshal(result, &listResult); err != nil {
-		var profiles []*entities.DeviceProfile
-		if err := json.Unmarshal(result, &profiles); err != nil {
-			return nil, &MCPAdapterError{
-				Operation: "ListProfiles",
-				Message:   "failed to parse response: " + err.Error(),
-			}
+	var page struct {
+		Profiles []json.RawMessage `json:"profiles"`
+		Total    int               `json:"total"`
+	}
+	if err := json.Unmarshal(result, &page); err != nil {
+		return nil, &MCPAdapterError{
+			Operation: "ListProfiles",
+			Message:   "failed to parse response: " + err.Error(),
 		}
-		listResult.Profiles = profiles
-		listResult.Total = len(profiles)
 	}
 
-	return &listResult, nil
+	listResult := &ListProfilesResult{
+		Profiles: make([]*entities.DeviceProfile, 0, len(page.Profiles)),
+		Total:    page.Total,
+	}
+	for _, raw := range page.Profiles {
+		var profile entities.DeviceProfile
+		if err := decodeToolEntity("ListProfiles", raw, &profile, nil); err != nil {
+			return nil, err
+		}
+		listResult.Profiles = append(listResult.Profiles, &profile)
+	}
+	return listResult, nil
 }
 
 // ============================================================================
 // Profile Lookups
 // ============================================================================
 
-// FindProfileByMACAddress finds a profile by MAC address prefix
+// FindProfileByMACAddress finds the profile whose MAC prefix fits the
+// address, through profile_find_by_mac.
 func (a *MCPAdapter) FindProfileByMACAddress(ctx context.Context, opts FindProfileByMACAddressOptions) (*FindProfileByMACAddressResult, error) {
-	result, err := a.callTool(ctx, "device_profile_find_by_mac", opts)
+	args := map[string]interface{}{"mac_address": opts.MACAddress}
+	profile, err := a.callProfileTool(ctx, "FindProfileByMACAddress", "profile_find_by_mac", args)
 	if err != nil {
 		return nil, err
 	}
-
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(result, &profile); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "FindProfileByMACAddress",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &FindProfileByMACAddressResult{Profile: &profile}, nil
+	return &FindProfileByMACAddressResult{Profile: profile}, nil
 }
 
-// FindProfileBySerial finds a profile by serial pattern
+// FindProfileBySerial finds the profile whose serial prefix fits the
+// serial, through profile_find_by_serial.
 func (a *MCPAdapter) FindProfileBySerial(ctx context.Context, opts FindProfileBySerialOptions) (*FindProfileBySerialResult, error) {
-	result, err := a.callTool(ctx, "device_profile_find_by_serial", opts)
+	args := map[string]interface{}{"serial": opts.Serial}
+	profile, err := a.callProfileTool(ctx, "FindProfileBySerial", "profile_find_by_serial", args)
 	if err != nil {
 		return nil, err
 	}
-
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(result, &profile); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "FindProfileBySerial",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &FindProfileBySerialResult{Profile: &profile}, nil
+	return &FindProfileBySerialResult{Profile: profile}, nil
 }
 
-// FindMatchingProfile finds a profile matching device attributes
+// FindMatchingProfile finds a profile matching device attributes through
+// profile_find_matching.
 func (a *MCPAdapter) FindMatchingProfile(ctx context.Context, opts FindMatchingProfileOptions) (*FindMatchingProfileResult, error) {
-	result, err := a.callTool(ctx, "device_profile_find_matching", opts)
+	args := map[string]interface{}{
+		"mac_address": opts.MACAddress,
+		"serial":      opts.Serial,
+		"model":       opts.Model,
+	}
+	profile, err := a.callProfileTool(ctx, "FindMatchingProfile", "profile_find_matching", args)
+	if err != nil {
+		return nil, err
+	}
+	return &FindMatchingProfileResult{Profile: profile}, nil
+}
+
+// callProfileTool runs a profile tool whose reply is one profile.
+func (a *MCPAdapter) callProfileTool(ctx context.Context, operation, tool string, args map[string]interface{}) (*entities.DeviceProfile, error) {
+	result, err := a.callTool(ctx, tool, args)
 	if err != nil {
 		return nil, err
 	}
 
 	var profile entities.DeviceProfile
-	if err := json.Unmarshal(result, &profile); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "FindMatchingProfile",
-			Message:   "failed to parse response: " + err.Error(),
-		}
+	if err := decodeToolEntity(operation, result, &profile, nil); err != nil {
+		return nil, err
 	}
+	return &profile, nil
+}
 
-	return &FindMatchingProfileResult{Profile: &profile}, nil
+// profileToolArgs builds the profile_create / profile_update_by_id
+// arguments. The tools take match rules only as a match_rules object, so the
+// options' top-level prefixes are folded into one, as the gRPC adapter does;
+// explicit MatchRules win.
+func profileToolArgs(name, model string, role entities.DeviceRole, macPrefix, serialPrefix string, rules *entities.ProfileMatchRules) map[string]interface{} {
+	args := map[string]interface{}{
+		"name":  name,
+		"model": model,
+		"role":  string(role),
+	}
+	if rules == nil && (macPrefix != "" || serialPrefix != "") {
+		rules = &entities.ProfileMatchRules{MACPrefix: macPrefix, SerialPrefix: serialPrefix}
+	}
+	if rules != nil {
+		args["match_rules"] = rules
+	}
+	return args
 }
 
 // ============================================================================

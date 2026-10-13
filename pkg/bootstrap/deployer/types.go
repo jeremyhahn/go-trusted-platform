@@ -89,8 +89,17 @@ type DeployConfig struct {
 	// "eth0" default takes effect.
 	BootstrapInterface string
 
+	// BootstrapBindHost is the address the bootstrap container's HTTP
+	// and TFTP servers bind (BOOTSTRAP_BIND_HOST env var, pxeboot
+	// --bind-host). Empty binds every interface. DHCP never binds it: it
+	// must receive broadcasts, so it stays on the unspecified address
+	// scoped to BootstrapInterface (#93).
+	BootstrapBindHost string
+
 	// BootstrapServerIP is the IP address the bootstrap container
-	// binds DHCP/TFTP/HTTP services to (BOOTSTRAP_SERVER_IP env var).
+	// advertises as the DHCP server and next server, and the address
+	// the per-device boot script server binds (BOOTSTRAP_SERVER_IP env
+	// var). The HTTP and TFTP servers bind BootstrapBindHost instead.
 	// The image's entrypoint defaults this to 192.0.2.1, which
 	// matches a typical post-bootstrap provisioning subnet. For the
 	// FIRST bootstrap on a fresh deploy (when no provisioning subnet

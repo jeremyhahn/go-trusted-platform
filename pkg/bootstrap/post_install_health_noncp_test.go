@@ -14,7 +14,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -73,8 +72,8 @@ func issueTestNodeLeaf(t *testing.T, ca *testCPPKI, dnsName string) tls.Certific
 }
 
 // startTestNodeServer serves /api/v1/status with 200 over TLS 1.3 on
-// 127.0.0.1:0, presenting cert. Unlike startTestCPServer it leaves
-// cpWebservicePort alone, so a control plane and a node can run side by side.
+// 127.0.0.1:0, presenting cert, so a control plane and a node can run side
+// by side on different ports.
 func startTestNodeServer(t *testing.T, cert tls.Certificate) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -106,8 +105,11 @@ func newNodeHealthTestOrchestrator(t *testing.T, cp *testCPPKI, nodeCert tls.Cer
 	New(time.Duration) (<-chan time.Time, func())
 }) *Orchestrator {
 	t.Helper()
-	startTestCPServer(t, cp, http.StatusOK, cp.caPEM)
-	return newGateTestOrchestrator(t, startTestNodeServer(t, nodeCert), ticker)
+	cpSrv := startTestCPServer(t, cp, http.StatusOK, cp.caPEM)
+	o := newGateTestOrchestrator(t, startTestNodeServer(t, nodeCert), ticker)
+	// The health checker probes the node; the bundle comes from the CP.
+	pointControlPlaneAt(t, o, cpSrv)
+	return o
 }
 
 func TestAwaitPostInstallHealth_NonControlPlane_PassesAgainstPlatformAnchorByName(t *testing.T) {
@@ -171,15 +173,12 @@ func TestAwaitPostInstallHealth_NonControlPlane_NotServingFailsAtTheDeadline(t *
 	cp := newTestCPPKI(t)
 	o := newNodeHealthTestOrchestrator(t, cp, issueTestNodeLeaf(t, cp, "gw.example.test"), newFakeHealthTicker(0))
 	writeRoleTemplate(t, o, RoleGateway, gatewayTemplate)
-	port, err := strconv.Atoi(closedTCPPort(t))
-	if err != nil {
-		t.Fatalf("parse port: %v", err)
-	}
+	port := closedTCPPort(t)
 	o.healthChk.(*httpHealthChecker).httpsPorts = []int{port}
 	o.config.Platform.HealthTimeout = 50 * time.Millisecond
 	node := &DiscoveredNode{NodeConfig: NodeConfig{Hostname: "gw1", Role: RoleGateway}}
 
-	err = o.awaitPostInstallHealth(t.Context(), node, []string{"127.0.0.1"}, "")
+	err := o.awaitPostInstallHealth(t.Context(), node, []string{"127.0.0.1"}, "")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("a node that never serves must fail at the health deadline, got %v", err)
 	}
@@ -260,10 +259,7 @@ func TestHTTPHealthChecker_RefusedPortDoesNotHideTLSFailure(t *testing.T) {
 	cp := newTestCPPKI(t)
 	o := newNodeHealthTestOrchestrator(t, cp, issueTestNodeLeaf(t, newTestCPPKI(t), "gw.example.test"), newFakeHealthTicker(0))
 	hc := o.healthChk.(*httpHealthChecker)
-	closed, err := strconv.Atoi(closedTCPPort(t))
-	if err != nil {
-		t.Fatalf("parse port: %v", err)
-	}
+	closed := closedTCPPort(t)
 	// The serving port is probed first and fails verification; the closed
 	// port probed after it must not replace that failure.
 	hc.httpsPorts = append(hc.httpsPorts, closed)
@@ -271,7 +267,7 @@ func TestHTTPHealthChecker_RefusedPortDoesNotHideTLSFailure(t *testing.T) {
 	pool.AddCert(cp.caCert)
 	hc.WithCAPool(pool)
 
-	err = hc.CheckServerName(t.Context(), "127.0.0.1", "gw.example.test")
+	err := hc.CheckServerName(t.Context(), "127.0.0.1", "gw.example.test")
 	if err == nil {
 		t.Fatal("expected the probe to fail")
 	}
@@ -283,13 +279,10 @@ func TestHTTPHealthChecker_RefusedPortDoesNotHideTLSFailure(t *testing.T) {
 func TestHTTPHealthChecker_AllPortsRefusedReportsTheDial(t *testing.T) {
 	o := newGateTestOrchestrator(t, nil, newFakeHealthTicker(0))
 	hc := o.healthChk.(*httpHealthChecker)
-	closed, err := strconv.Atoi(closedTCPPort(t))
-	if err != nil {
-		t.Fatalf("parse port: %v", err)
-	}
+	closed := closedTCPPort(t)
 	hc.httpsPorts = []int{closed}
 
-	err = hc.Check(t.Context(), "127.0.0.1")
+	err := hc.Check(t.Context(), "127.0.0.1")
 	if err == nil || !strings.Contains(err.Error(), "connection refused") {
 		t.Fatalf("with nothing reachable the dial failure is the report, got %v", err)
 	}

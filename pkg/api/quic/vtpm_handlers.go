@@ -462,9 +462,9 @@ func (h *VTPMHandler) handleCreateBundle(ctx context.Context, req *quicwire.Requ
 		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingHostname)
 	}
 
-	ekAlg := vtpm.EKAlgorithmRSA
-	if createReq.EKAlgorithm == "ECC" || createReq.EKAlgorithm == "ECDSA" {
-		ekAlg = vtpm.EKAlgorithmECC
+	ekAlg, err := vtpm.ParseEKAlgorithm(createReq.EKAlgorithm)
+	if err != nil {
+		return h.errorResponse(quicwire.StatusInvalidArgument, err)
 	}
 
 	opts := &vtpm.CreateBundleOptions{
@@ -645,9 +645,9 @@ func (h *VTPMHandler) handleCreateTemplate(ctx context.Context, req *quicwire.Re
 		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingTemplateID)
 	}
 
-	ekAlg := vtpm.EKAlgorithmRSA
-	if createReq.EKAlgorithm == "ECC" || createReq.EKAlgorithm == "ECDSA" {
-		ekAlg = vtpm.EKAlgorithmECC
+	ekAlg, err := vtpm.ParseEKAlgorithm(createReq.EKAlgorithm)
+	if err != nil {
+		return h.errorResponse(quicwire.StatusInvalidArgument, err)
 	}
 
 	opts := &vtpm.CreateTemplateOptions{
@@ -1545,6 +1545,7 @@ func (h *VTPMHandler) vtpmErrorResponse(err error) *quicwire.Response {
 	var templateNotFound vtpm.ErrTemplateNotFound
 	var templateExists vtpm.ErrTemplateAlreadyExists
 	var invalidConfig vtpm.ErrInvalidConfig
+	var invalidEKAlgorithm vtpm.ErrInvalidEKAlgorithm
 	var invalidManifest vtpm.ErrInvalidManifest
 	var vtpmNotRunning vtpm.ErrVTPMNotRunning
 	var vtpmAlreadyRunning vtpm.ErrVTPMAlreadyRunning
@@ -1563,6 +1564,8 @@ func (h *VTPMHandler) vtpmErrorResponse(err error) *quicwire.Response {
 	case errors.As(err, &templateExists):
 		status = quicwire.StatusAlreadyExists
 	case errors.As(err, &invalidConfig):
+		status = quicwire.StatusInvalidArgument
+	case errors.As(err, &invalidEKAlgorithm):
 		status = quicwire.StatusInvalidArgument
 	case errors.As(err, &invalidManifest):
 		status = quicwire.StatusInvalidArgument

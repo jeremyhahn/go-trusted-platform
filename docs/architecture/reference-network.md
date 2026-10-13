@@ -261,8 +261,10 @@ tenant networks and workload networks.
 - **Isolation.** Overlays are isolated from each other. Traffic between VRFs, and between an overlay
   and a zone, passes the gateway's policy.
 - **One public network.** All of the platform's internet exposure collapses into a single `public`
-  overlay that the gateways announce over BGP. Lighting it needs the overlay service (#709) and
-  gateway HA (#596, #710).
+  overlay that the gateways announce over BGP. Only the platform exposes services to the internet,
+  and only through `public`: an internal or site network beside the platform runs no DMZ of its
+  own (owner, 2026-09-27). Lighting it needs the overlay service (#709) and gateway HA (#596,
+  #710).
 
 On a host, the physical trunk rides the OVS bridge **`br-fabric`**, which also holds the host's own
 zone addresses as internal ports. Workload ports sit on a separate integration bridge, **`br-int`**,

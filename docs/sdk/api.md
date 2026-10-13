@@ -1,6 +1,6 @@
 # Go SDK — API
 
-> **Status: NORMATIVE** · Scope: what `sdk/go` carries, per service and per transport · Last verified: 2026-10-11
+> **Status: NORMATIVE** · Scope: what `sdk/go` carries, per service and per transport · Last verified: 2026-10-13
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING`, never omitted.
@@ -89,11 +89,39 @@ platform code and SDK consumers program against.
 | `AI()` | `RAG()` | `MISSING — docs/13 G7` |
 | `BarrierCeremonyMgmt()` | `Ceremony()`, `CustodianGroup()`, `Share()` | `MISSING — docs/13 G7` |
 | `TenantMgmtService()` | `Tenant()` | `MISSING — docs/13 G7` |
-| agentic | `Orchestrator()`, `Project()`, `Account()`, `SDLC()` | `MISSING — docs/13 G7` |
-| agentic | container-trust types from `go-quicbaas/sdk/go/orchestration` | `MISSING — docs/13 G7` |
+| agentic | `Orchestrator()`, `Project()`, `Account()` | ✅ each |
+| agentic | `SDLC()` | `MISSING — docs/13 G7` |
+| agentic | container-trust types from `go-quicbaas/sdk/go/orchestration` | ✅ `sdk/go/services/orchestration` (§3.1) |
+| agentic | request / response types of `client/orchestrator`, `client/project`, `client/account` | `MISSING — docs/13 G7` |
+| agentic | a platform container attestor registered into `WithContainerAttestor` | `MISSING — docs/13 G7` |
 | service registry | `Discovery()`, `DataStore()` | `MISSING — docs/13 G7` |
 | connection | `Transport()` | ✅ |
 | qrdb surface go-quicbaas does not route | `SQL()`, `Collections()`, `Lock()`, `Lease()` and the rest | `MISSING — docs/13 G1` |
+
+A re-exported accessor rides the side-client's transport (`QuicBaaSTransport`:
+unix, grpc, rest, quic or mcp) to quicbaasd, so its transport coverage is
+go-quicbaas's own. platformd serves none of these groups and `platformctl` has
+no command group for them.
+
+### 3.1 Container-trust types
+
+`sdk/go/services/orchestration` re-exports the trust axis as aliases and
+thin functions. Values are the upstream ones, so `errors.As` matches across the
+boundary.
+
+| Identifier | Kind |
+|---|---|
+| `TrustLevel`: `TrustLevelDefault`, `TrustLevelNone`, `TrustLevelPinned`, `TrustLevelAttested`, `TrustLevelMeasured` | type alias, constants |
+| `TrustPolicy`: `TrustPolicyOptIn`, `TrustPolicyPinned`, `TrustPolicyAttested`, `TrustPolicyMeasured` | type alias, constants |
+| `TrustCapabilities` (`DigestPinning`, `HostTPM`, `MeasuredLaunch`) | type alias |
+| `ResolveTrustLevel(requested, serverPolicy, tenantOverride, caps) (TrustLevel, error)` | function |
+| `ParseTrustLevel(string)`, `ParseTrustPolicy(string)` | function |
+| `TrustLevelViolationError` (`Requested`, `Policy`, `Reason`) | error type alias, from `ResolveTrustLevel` |
+| `InputValidationError` (`Field`, `Message`), `ErrInvalidInput` | error type alias and sentinel, from the `Parse*` functions |
+
+`ResolveTrustLevel` is deny-by-default: a tenant override may only tighten the
+server policy, and a level below the floor or one the host cannot prove is a
+`*TrustLevelViolationError`, never a downgrade.
 
 `sdk/go/services/auth` is a second, purpose-built adapter over
 `Security().Auth()` for `platformctl auth`: `Login`, `AddFactor`,

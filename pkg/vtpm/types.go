@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/x509"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
@@ -88,6 +89,23 @@ func (a EKAlgorithm) IsValid() bool {
 		return true
 	}
 	return false
+}
+
+// ParseEKAlgorithm parses an EK algorithm a caller supplied. Matching ignores
+// case and surrounding whitespace, so "ecc" is ECC. An empty value parses to
+// the empty algorithm, which the service replaces with its configured
+// default. Any other value is ErrInvalidEKAlgorithm: it is never coerced to
+// RSA.
+func ParseEKAlgorithm(s string) (EKAlgorithm, error) {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return "", nil
+	}
+	alg := EKAlgorithm(strings.ToUpper(trimmed))
+	if !alg.IsValid() {
+		return "", ErrInvalidEKAlgorithm{Algorithm: s}
+	}
+	return alg, nil
 }
 
 // NVIndex returns the TCG-defined NV index for EK certificates.

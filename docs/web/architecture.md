@@ -164,7 +164,7 @@ and vendors Swagger UI into `public_html/swagger/`; the embed path
 1. **Listener.** Plain HTTP on `port` (a redirect to the TLS port, #535);
    when `tls-port > 0`, additionally HTTPS on TCP **and HTTP/3 on UDP at the
    same port number**. ALPN is `["h3", "h2", "http/1.1"]`; every response
-   carries `Alt-Svc: h3=":443"; ma=86400`. Each TCP listener is capped at
+   carries `Alt-Svc: h3=":<tls-port>"; ma=86400`. Each TCP listener is capped at
    `max-connections` when set (always on an edge surface). **Residual risk:**
    the cap counts TCP connections only; QUIC connections over UDP are not
    counted (quic-go exposes no server-side connection cap), so an edge

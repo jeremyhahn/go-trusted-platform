@@ -1,6 +1,6 @@
 # Go SDK — Architecture
 
-> **Status: NORMATIVE** · Scope: the `sdk/go` module · Last verified: 2026-10-11
+> **Status: NORMATIVE** · Scope: the `sdk/go` module · Last verified: 2026-10-13
 > Conflicts with this document are defects. Fix them here first.
 
 ---
@@ -22,7 +22,8 @@ The SDK owns three things:
 | Service clients and domain wrappers | `sdk/go/gen` (package `platformv1`), `sdk/go/services/*` |
 
 It also carries connection credentials (`sdk/go/auth`) and a typed frontage
-over the go-quicbaas SDK (`sdk/go/services/quicbaas`, `sdk/go/services/auth`).
+over the go-quicbaas SDK (`sdk/go/services/quicbaas`, `sdk/go/services/auth`,
+`sdk/go/services/orchestration`).
 
 ## 2. Layering
 
@@ -137,8 +138,15 @@ it.
 
 `sdk/go/services/quicbaas.Client` wraps a `quicbaas.Client` with typed
 accessors. `sdk/go/services/auth` adapts `Security().Auth()` for
-`platformctl auth`. [api.md §3](api.md#3-go-quicbaas-re-export-surface) lists
+`platformctl auth`. `sdk/go/services/orchestration` re-exports the container-trust
+types of the agentic surface as aliases. [api.md §3](api.md#3-go-quicbaas-re-export-surface) lists
 which go-quicbaas groups are re-exported.
+
+A re-exported accessor is a route, not a platform service: its calls travel on
+the side-client's own transport (`QuicBaaSTransport`) straight to quicbaasd.
+platformd serves none of them and `platformctl` has no command group for them,
+except where the platform adds its own behaviour (`platformctl auth`,
+`platformctl barrier`, `platformctl kms`).
 
 ## 6. Invariants
 

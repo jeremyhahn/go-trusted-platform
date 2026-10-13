@@ -390,9 +390,10 @@ func (h *VTPMHandlers) handleCreateBundle(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	ekAlg := vtpm.EKAlgorithmRSA
-	if req.EKAlgorithm == "ECC" || req.EKAlgorithm == "ECDSA" {
-		ekAlg = vtpm.EKAlgorithmECC
+	ekAlg, err := vtpm.ParseEKAlgorithm(req.EKAlgorithm)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, err)
+		return
 	}
 
 	opts := &vtpm.CreateBundleOptions{
@@ -1092,9 +1093,10 @@ func (h *VTPMHandlers) handleCreateTemplate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	ekAlg := vtpm.EKAlgorithmRSA
-	if req.EKAlgorithm == "ECC" || req.EKAlgorithm == "ECDSA" {
-		ekAlg = vtpm.EKAlgorithmECC
+	ekAlg, err := vtpm.ParseEKAlgorithm(req.EKAlgorithm)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, err)
+		return
 	}
 
 	opts := &vtpm.CreateTemplateOptions{
@@ -1415,6 +1417,7 @@ func (h *VTPMHandlers) writeVTPMError(w http.ResponseWriter, operation string, e
 	var templateNotFound vtpm.ErrTemplateNotFound
 	var templateExists vtpm.ErrTemplateAlreadyExists
 	var invalidConfig vtpm.ErrInvalidConfig
+	var invalidEKAlgorithm vtpm.ErrInvalidEKAlgorithm
 	var invalidManifest vtpm.ErrInvalidManifest
 	var vtpmNotRunning vtpm.ErrVTPMNotRunning
 	var vtpmAlreadyRunning vtpm.ErrVTPMAlreadyRunning
@@ -1433,6 +1436,8 @@ func (h *VTPMHandlers) writeVTPMError(w http.ResponseWriter, operation string, e
 	case errors.As(err, &templateExists):
 		status = http.StatusConflict
 	case errors.As(err, &invalidConfig):
+		status = http.StatusBadRequest
+	case errors.As(err, &invalidEKAlgorithm):
 		status = http.StatusBadRequest
 	case errors.As(err, &invalidManifest):
 		status = http.StatusBadRequest

@@ -786,6 +786,7 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.DeviceSubEnable:              deviceWrite,
 		quicwire.DeviceSubTemplateCreate:      deviceWrite,
 		quicwire.DeviceSubProfileFromTemplate: deviceWrite,
+		quicwire.DeviceSubFindMatchingProfile: deviceRead,
 	},
 }
 

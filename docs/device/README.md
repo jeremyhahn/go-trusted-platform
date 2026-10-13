@@ -164,11 +164,15 @@ Profiles are automatically matched to devices using `ProfileMatchRules`:
 | MACPrefix | Prefix match | "52:54:00" matches "52:54:00:aa:bb:cc" |
 | SerialPrefix | Prefix match | "SRV-" matches "SRV-001234" |
 | Model | Exact match | "TrustedNode-v1" |
-| ModelPattern | Pattern match (legacy) | "TrustedNode-*" |
-| ManufacturerMatch | String match (legacy) | "Dell Inc." |
-| TPMVendor | String match (legacy) | "STM" |
+| ModelPattern | Exact match (legacy; no wildcards) | "TrustedNode-v1" |
+| SerialPattern | Prefix match (legacy) | "SRV-" |
+| ManufacturerMatch | Stored, not evaluated (legacy) | "Dell Inc." |
+| TPMVendor | Stored, not evaluated (legacy) | "STM" |
 
-Match priority: First matching profile wins (ordered by ID ascending).
+Match priority: none. A profile matches when any one of its non-empty rules
+fits, and the first matching profile in storage-iteration order wins; that
+order is not specified, so write disjoint rules
+([architecture.md](architecture.md) §7).
 
 ## Integration
 

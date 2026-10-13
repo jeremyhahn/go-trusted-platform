@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -509,27 +510,38 @@ func TestVTPMCreate_WithECCAlgorithm(t *testing.T) {
 	}
 }
 
-func TestVTPMCreate_WithECDSAAlgorithm(t *testing.T) {
-	handler, _ := createQUICTestHandler()
-	ctx := context.Background()
-
-	createReq := VTPMCreateRequest{
-		Hostname:    "test-vm-ecdsa",
-		EKAlgorithm: "ECDSA",
+// TestVTPMCreate_EKAlgorithm guards the coercion bug: "ECDSA" (and any other
+// undocumented value) used to be accepted, and anything not ECC became RSA.
+// Only RSA and ECC are accepted, in any case.
+func TestVTPMCreate_EKAlgorithm(t *testing.T) {
+	tests := []struct {
+		algorithm string
+		want      byte
+	}{
+		{"ecc", quicwire.StatusOK},
+		{"ECDSA", quicwire.StatusInvalidArgument},
+		{"DSA", quicwire.StatusInvalidArgument},
 	}
-	payload, err := quicwire.EncodePayload(&createReq)
-	if err != nil {
-		t.Fatalf("failed to encode payload: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.algorithm, func(t *testing.T) {
+			handler, _ := createQUICTestHandler()
 
-	req := &quicwire.Request{
-		Opcode:  quicwire.OpVTPMCreate,
-		Payload: payload,
-	}
+			payload, err := quicwire.EncodePayload(&VTPMCreateRequest{
+				Hostname:    "test-vm-" + strings.ToLower(tt.algorithm),
+				EKAlgorithm: tt.algorithm,
+			})
+			if err != nil {
+				t.Fatalf("failed to encode payload: %v", err)
+			}
 
-	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quicwire.StatusOK {
-		t.Errorf("expected status OK, got %s", quicwire.StatusToString(resp.Status))
+			resp := handler.HandleRequest(context.Background(), &quicwire.Request{
+				Opcode:  quicwire.OpVTPMCreate,
+				Payload: payload,
+			})
+			if resp.Status != tt.want {
+				t.Errorf("status = %s, want %s", quicwire.StatusToString(resp.Status), quicwire.StatusToString(tt.want))
+			}
+		})
 	}
 }
 
@@ -1760,27 +1772,36 @@ func TestVTPMCreateTemplate_WithECCAlgorithm(t *testing.T) {
 	}
 }
 
-func TestVTPMCreateTemplate_WithECDSAAlgorithm(t *testing.T) {
-	handler, _ := createQUICTestHandler()
-	ctx := context.Background()
-
-	createReq := VTPMCreateTemplateRequest{
-		ID:          "test-template-ecdsa",
-		Description: "Test ECDSA template",
-		EKAlgorithm: "ECDSA",
+// TestVTPMCreateTemplate_EKAlgorithm is TestVTPMCreate_EKAlgorithm for
+// templates.
+func TestVTPMCreateTemplate_EKAlgorithm(t *testing.T) {
+	tests := []struct {
+		algorithm string
+		want      byte
+	}{
+		{"ecc", quicwire.StatusOK},
+		{"ECDSA", quicwire.StatusInvalidArgument},
+		{"DSA", quicwire.StatusInvalidArgument},
 	}
-	payload, err := quicwire.EncodePayload(&createReq)
-	if err != nil {
-		t.Fatalf("failed to encode payload: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.algorithm, func(t *testing.T) {
+			handler, _ := createQUICTestHandler()
 
-	req := &quicwire.Request{
-		Opcode:  quicwire.OpVTPMCreateTemplate,
-		Payload: payload,
-	}
+			payload, err := quicwire.EncodePayload(&VTPMCreateTemplateRequest{
+				ID:          "test-template-" + strings.ToLower(tt.algorithm),
+				EKAlgorithm: tt.algorithm,
+			})
+			if err != nil {
+				t.Fatalf("failed to encode payload: %v", err)
+			}
 
-	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quicwire.StatusOK {
-		t.Errorf("expected status OK, got %s", quicwire.StatusToString(resp.Status))
+			resp := handler.HandleRequest(context.Background(), &quicwire.Request{
+				Opcode:  quicwire.OpVTPMCreateTemplate,
+				Payload: payload,
+			})
+			if resp.Status != tt.want {
+				t.Errorf("status = %s, want %s", quicwire.StatusToString(resp.Status), quicwire.StatusToString(tt.want))
+			}
+		})
 	}
 }

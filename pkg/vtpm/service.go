@@ -117,7 +117,7 @@ func (s *Service) CreateBundle(ctx context.Context, opts *CreateBundleOptions) (
 		return nil, ErrInvalidConfig{Field: "Hostname", Reason: "required for pre-assigned mode"}
 	}
 	if !opts.EKAlgorithm.IsValid() {
-		return nil, ErrInvalidConfig{Field: "EKAlgorithm", Reason: fmt.Sprintf("invalid algorithm: %s", opts.EKAlgorithm)}
+		return nil, ErrInvalidEKAlgorithm{Algorithm: string(opts.EKAlgorithm)}
 	}
 
 	// Generate bundle ID
@@ -763,7 +763,7 @@ func (s *Service) CreateTemplate(ctx context.Context, opts *CreateTemplateOption
 		TPMStateDir:       filepath.Join(newPath, "tpm"),
 		NVRAMPath:         filepath.Join(newPath, "ovmf", "OVMF_VARS.fd"),
 		SecureBootKeysDir: filepath.Join(newPath, "secure-boot-keys"),
-		EKAlgorithm:       opts.EKAlgorithm,
+		EKAlgorithm:       bundleOpts.EKAlgorithm, // resolved: an omitted value took the configured default
 		SecureBootEnabled: opts.SecureBootEnabled,
 		CreatedAt:         bundle.CreatedAt,
 	}

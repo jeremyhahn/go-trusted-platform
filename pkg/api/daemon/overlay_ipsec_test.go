@@ -216,14 +216,14 @@ func TestStartOverlay_WithoutIPsec(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newOverlayStartHarness(t)
-			sec, ctrl, err := h.start(&sdn.OverlayConfig{Enabled: true, IPsec: tt.ipsec})
+			sec, ctrl, err := h.start(&sdn.OverlayConfig{Enabled: true, UnderlayInterface: "eth0", IPsec: tt.ipsec})
 			if err != nil || sec != nil || ctrl != h.ctrl {
 				t.Fatalf("startOverlay = %v, %v, %v; want the controller alone", sec, ctrl, err)
 			}
 			if want := []string{"overlay controller"}; !slices.Equal(h.steps, want) {
 				t.Fatalf("steps %v, want %v", h.steps, want)
 			}
-			if want := (overlayVTEP{addr: netip.MustParseAddr("203.0.113.7"), iface: "lo"}); h.gotVTEP != want {
+			if want := (overlayVTEP{addr: netip.MustParseAddr("203.0.113.7"), iface: "eth0"}); h.gotVTEP != want {
 				t.Fatalf("controller started with VTEP %+v, want the public address %+v", h.gotVTEP, want)
 			}
 		})

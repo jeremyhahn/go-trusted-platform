@@ -32,7 +32,7 @@ func TestIsMultiInstanceDeployment(t *testing.T) {
 		want bool
 	}{
 		{"nil config", nil, false},
-		{"DefaultConfig — single node, loopback raft address", platformquicbaas.DefaultConfig(), false},
+		{"DefaultConfig — single node, no raft address", platformquicbaas.DefaultConfig(), false},
 		{"empty", &platformquicbaas.Config{}, false},
 		{"loopback ipv4", &platformquicbaas.Config{RaftAddress: "127.0.0.1:63000"}, false},
 		{"loopback ipv6", &platformquicbaas.Config{RaftAddress: "[::1]:63000"}, false},

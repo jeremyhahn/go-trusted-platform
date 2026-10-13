@@ -37,9 +37,6 @@ const (
 
 	// platformTypeDHCP is the DHCP platform type for ApplyNetworkConfig (user-mode networking).
 	platformTypeDHCP = "dhcp"
-
-	// defaultPublicDNSPort is the default port for the platform public DNS server.
-	defaultPublicDNSPort = 8053
 )
 
 // ReadServerPlatformConfig reads the server platform config file.
@@ -88,7 +85,8 @@ func WritePlatformConfig(data []byte, path string) error {
 //
 // For server: sets static IP from netConfig.ServerIP with external DNS nameservers.
 // For client: sets static IP from netConfig.ClientIP with upstream DNS pointing
-// to the server's internal DNS on port 9053, plus search domains.
+// to the server's internal DNS on dns.DefaultInternalPort (the port the
+// server platform config serves its internal zone on), plus search domains.
 // For dhcp: sets DHCP interface with external DNS nameservers (used for
 // user-mode networking where QEMU provides DHCP). netConfig may be nil for dhcp.
 func ApplyNetworkConfig(platformData []byte, netConfig *testenv.NetworkConfig, platformType string, debug bool) ([]byte, error) {
@@ -160,7 +158,7 @@ func buildServerNetwork(netConfig *testenv.NetworkConfig) map[string]interface{}
 func buildClientNetwork(netConfig *testenv.NetworkConfig) map[string]interface{} {
 	return map[string]interface{}{
 		"dns": map[string]interface{}{
-			"upstream-dns":   fmt.Sprintf("%s#9053", netConfig.ServerIP.String()),
+			"upstream-dns":   fmt.Sprintf("%s#%d", netConfig.ServerIP.String(), dns.DefaultInternalPort),
 			"nameservers":    []string{"8.8.8.8", netConfig.ServerIP.String()},
 			"search-domains": []string{netConfig.Domain},
 		},
@@ -207,7 +205,7 @@ func buildDHCPNetwork() map[string]interface{} {
 // This allows the DNS server address to be centrally configured in the
 // dns.resolver section rather than hardcoded per-service.
 func resolveBootstrapDNSServer(clientConfigPath string, serverIP string) string {
-	fallback := fmt.Sprintf("%s:%d", serverIP, defaultPublicDNSPort)
+	fallback := fmt.Sprintf("%s:%d", serverIP, dns.DefaultPublicPort)
 
 	configData, err := ReadClientPlatformConfig(clientConfigPath)
 	if err != nil {

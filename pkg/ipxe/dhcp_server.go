@@ -17,7 +17,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -154,8 +153,14 @@ func (f *DefaultPacketConnFactory) CreateConn(iface string, serverIP net.IP, use
 	// an error, and it is bound to every interface, so a multi-homed
 	// host may route the broadcast out the wrong one. Both are set by
 	// dhcpServerSocketControl before bind (#649).
+	//
+	// The socket binds the unspecified address, never ServerConfig.BindHost
+	// or serverIP (#93): Linux delivers a datagram sent to 255.255.255.255
+	// only to sockets bound to INADDR_ANY, and a client with no address
+	// can only broadcast. SO_BINDTODEVICE on iface is what scopes it.
 	lc := net.ListenConfig{Control: dhcpServerSocketControl(iface)}
-	conn, err := lc.ListenPacket(context.Background(), "udp4", net.JoinHostPort("0.0.0.0", strconv.Itoa(port)))
+	unspecified := &net.UDPAddr{IP: net.IPv4zero, Port: port}
+	conn, err := lc.ListenPacket(context.Background(), "udp4", unspecified.String())
 	if err != nil {
 		return nil, err
 	}

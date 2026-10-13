@@ -1433,7 +1433,7 @@ func TestBuildFlowActions_MixedTypes(t *testing.T) {
 // VTPM Algorithm Selection Tests
 // =============================================================================
 
-func TestPlatformServiceProvider_VTPMCreate_DefaultAlgorithm(t *testing.T) {
+func TestPlatformServiceProvider_VTPMCreate_RejectsUndocumentedAlgorithm(t *testing.T) {
 	ctx := context.Background()
 	mockSvc := newSPExtMockVTPMService()
 
@@ -1441,10 +1441,13 @@ func TestPlatformServiceProvider_VTPMCreate_DefaultAlgorithm(t *testing.T) {
 		VTPMService: mockSvc,
 	})
 
-	// Any non-ECC algorithm should default to RSA
 	_, err := provider.VTPMCreate(ctx, "test-vtpm", "UNKNOWN")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	var invalid vtpm.ErrInvalidEKAlgorithm
+	if !errors.As(err, &invalid) {
+		t.Fatalf("err = %v, want vtpm.ErrInvalidEKAlgorithm", err)
+	}
+	if len(mockSvc.bundles) != 0 {
+		t.Error("an invalid algorithm must not create a bundle")
 	}
 }
 
@@ -1456,7 +1459,7 @@ func TestPlatformServiceProvider_VTPMCreate_EmptyAlgorithm(t *testing.T) {
 		VTPMService: mockSvc,
 	})
 
-	// Empty algorithm should default to RSA
+	// An empty algorithm leaves the choice to the configured default.
 	_, err := provider.VTPMCreate(ctx, "test-vtpm", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

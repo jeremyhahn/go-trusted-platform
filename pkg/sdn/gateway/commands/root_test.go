@@ -87,17 +87,18 @@ func TestServeCommandFlags(t *testing.T) {
 		t.Error("modes flag should not exist (config-driven service loading)")
 	}
 
-	// These flags should still exist
-	expectedFlags := []string{
+	// Every listener and the BGP speaker come from the config file. These
+	// flags once existed with hard-coded defaults (--listen :8080) that
+	// nothing read, so setting them bound nothing (#93).
+	removedFlags := []string{
 		"listen", "bgp-asn",
 		"bgp-router-id",
 		"api-port", "grpc-port",
 	}
 
-	for _, flagName := range expectedFlags {
-		flag := serveCmd.Flags().Lookup(flagName)
-		if flag == nil {
-			t.Errorf("flag %s should exist on serve command", flagName)
+	for _, flagName := range removedFlags {
+		if serveCmd.Flags().Lookup(flagName) != nil {
+			t.Errorf("flag %s must not exist on serve command: it configures nothing", flagName)
 		}
 	}
 }

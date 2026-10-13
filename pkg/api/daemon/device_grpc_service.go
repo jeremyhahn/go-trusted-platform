@@ -1063,6 +1063,13 @@ func (s *DeviceGRPCService) calculateTotalPages(total, pageSize int) int {
 }
 
 func (s *DeviceGRPCService) toGRPCError(err error) error {
+	return deviceStatusError(err)
+}
+
+// deviceStatusError classifies a device or profile service failure as the
+// gRPC status every transport reports for it. The MCP profile tools use it
+// too, so a missing profile is NotFound there as it is on gRPC.
+func deviceStatusError(err error) error {
 	if err == nil {
 		return nil
 	}

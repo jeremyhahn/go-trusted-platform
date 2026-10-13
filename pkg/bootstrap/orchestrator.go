@@ -333,7 +333,7 @@ func NewOrchestrator(params OrchestratorParams) (*Orchestrator, error) {
 	}
 	healthChk := params.HealthChecker
 	if healthChk == nil {
-		hc := newHTTPHealthChecker(logger, nil)
+		hc := newHTTPHealthChecker(logger, nil, params.Config.HealthProbePorts())
 		// Wire the pxeboot base URL so the checker can consult the
 		// node-uploaded registration.json as the authoritative signal
 		// that platformd is actually running, instead of guessing at
@@ -1033,7 +1033,7 @@ func (o *Orchestrator) seedTemplatesWithSeeder(ctx context.Context) (*Seeder, er
 				slog.String("ip", controlHost))
 		}
 	}
-	controlAddr := controlHost + ":8443"
+	controlAddr := net.JoinHostPort(controlHost, o.controlPlanePort())
 	o.logger.Info("bootstrap: seeding templates to control plane",
 		slog.String("address", controlAddr))
 
@@ -1628,8 +1628,8 @@ func toDiscoveredNodeInfos(nodes []DiscoveredNode) []container.DiscoveredNodeInf
 // The registration.json path is authoritative: the node self-reports
 // `{"services":{"platformd":"running","sshd":"running"}}` after it has
 // fully booted and all services are listening. Polling that artifact
-// avoids having to guess the correct webservice port (CP uses 8443,
-// gateway uses 443/9443) and avoids the need for InsecureSkipVerify
+// avoids having to guess the correct webservice port (CP uses
+// platform.control_plane_port, gateway uses 443/9443) and avoids the need for InsecureSkipVerify
 // against a not-yet-trusted CA.
 type httpHealthChecker struct {
 	// client probes without an expected server name; namedClients hold
@@ -1646,17 +1646,15 @@ type httpHealthChecker struct {
 
 // newHTTPHealthChecker creates a health checker that first probes the
 // pxeboot-hosted registration.json (plain HTTP, known-trusted) and
-// falls back to HTTPS /api/v1/status across the candidate platformd
-// ports. When caPool is non-nil it is used to verify the server's TLS
+// falls back to HTTPS /api/v1/status across httpsPorts, the candidate
+// platformd ports (BootstrapConfig.HealthProbePorts). When caPool is non-nil it is used to verify the server's TLS
 // certificate; when nil the system certificate pool is used.
-func newHTTPHealthChecker(logger *slog.Logger, caPool *x509.CertPool) *httpHealthChecker {
-	// Force the pure-Go DNS resolver to avoid SIGFPE in CGO's getaddrinfo
-	// when running as a statically linked binary with glibc.
+func newHTTPHealthChecker(logger *slog.Logger, caPool *x509.CertPool, httpsPorts []int) *httpHealthChecker {
 	return &httpHealthChecker{
 		client:     newHealthHTTPClient(caPool, ""),
 		caPool:     caPool,
 		logger:     logger,
-		httpsPorts: []int{8443, 9443, 443},
+		httpsPorts: httpsPorts,
 	}
 }
 
@@ -1748,7 +1746,7 @@ type regStatus struct {
 // target IP when the hostname wouldn't resolve, but it is never
 // authoritative on its own — the file is written by the forensic
 // uploader early in firstboot, BEFORE platformd reaches listening
-// state, so trusting it would let health return true while :8443 is
+// state, so trusting it would let health return true while the webservice is
 // still down and subsequent seed/gRPC calls fail with "connection
 // refused".
 func (h *httpHealthChecker) Check(ctx context.Context, address string) error {
@@ -1784,7 +1782,7 @@ func (h *httpHealthChecker) CheckServerName(ctx context.Context, address, server
 
 	var lastErr error
 	for _, port := range h.httpsPorts {
-		url := fmt.Sprintf("https://%s:%d/api/v1/status", probeAddr, port)
+		url := "https://" + net.JoinHostPort(probeAddr, strconv.Itoa(port)) + "/api/v1/status"
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			lastErr = err

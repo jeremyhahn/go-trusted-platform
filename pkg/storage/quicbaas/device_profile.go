@@ -186,8 +186,12 @@ func (d *DeviceProfileDAO) FindBySerialPrefix(ctx context.Context, serial string
 	return nil, ErrNotFoundByIndex{EntityType: entityTypeDeviceProfile, IndexField: "SerialPrefix", Value: serial}
 }
 
-// FindMatchingProfile finds a profile that matches any of: MAC prefix, serial prefix, or model.
-// It checks in priority order: MAC prefix first, then serial prefix, then model.
+// FindMatchingProfile returns the first stored profile whose match rules fit
+// the MAC prefix, the serial prefix or the model: any one non-empty rule is
+// enough (ProfileMatchRules.Matches). There is no priority between the fields
+// or between profiles; the scan returns the first hit in storage-iteration
+// order, which is not specified, so overlapping rules make the result
+// arbitrary (docs/device/architecture.md §7).
 func (d *DeviceProfileDAO) FindMatchingProfile(ctx context.Context, macAddr, serial, model string) (*entities.DeviceProfile, error) {
 	ctx, cancel := context.WithTimeout(ctx, d.requestTimeout)
 	defer cancel()

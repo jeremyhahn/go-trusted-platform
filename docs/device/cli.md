@@ -1,11 +1,12 @@
 # Device Identity, Profiles and Inventory — CLI
 
-> **Status: NORMATIVE** · Scope: `platformctl device`, `platformctl profile` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `platformctl device`, `platformctl profile` · Last verified: 2026-10-13
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
 > Every verb and every flag below was read out of `pkg/cli/commands/device/`
-> and `pkg/cli/commands/profile/` on 2026-08-18.
+> and `pkg/cli/commands/profile/` on 2026-08-18; the profile read, delete and
+> match verbs were re-read on 2026-10-13 (#460).
 
 ---
 
@@ -15,13 +16,14 @@
 platformctl device            Device management operations
 platformctl device profile    Device profile management
 platformctl device attest-cert  The attestation certificate on a device record (§2.6)
-platformctl profile           Device profile management (READ PATHS ARE STUBS — §6)
+platformctl profile           Device profile get/list/delete/match (§4)
 ```
 
 Both groups are registered on the root command
-(`pkg/cli/commands/root.go:177` and `:187`). They are **not** the same group:
-`device profile` writes through the SDK; the top-level `profile` group is
-unimplemented. See §6 before using it.
+(`pkg/cli/commands/root.go:181` and `:192`). `device profile` is canonical; the
+top-level `profile` group mounts the same `get`, `list`, `delete` and `match`
+commands (`device.NewProfileLookupCommands`), so the two trees run one
+implementation and behave identically (§4).
 
 ### Global flags
 
@@ -269,10 +271,10 @@ and [api.md §4.7](api.md#47-operator-disable-and-enable-250).
 
 ## 3. `platformctl device profile`
 
-Six verbs: `get`, `list`, `create`, `update`, `assign`, `unassign`. All ride
-the SDK device client (gRPC / Unix / QUIC / REST per the active context), so
-the two read verbs confirm a write over the transport that made it — unlike
-the top-level `platformctl profile` reads, which are stubs (§6, #460).
+Eight verbs: `get`, `list`, `delete`, `match`, `create`, `update`, `assign`,
+`unassign`. All ride the SDK device client over whichever transport the active
+context selects — `unix`, `grpc`, `rest`, `quic`, `mcp` or `embedded` — so the
+read verbs confirm a write over the transport that made it.
 
 ### 3.0 `device profile get <id>` and `device profile list`
 
@@ -289,6 +291,40 @@ in `--output json` it is `{page, page_size, total, total_pages, profiles: [...]}
 with each item in the §3.6 shape. A non-numeric id fails with
 `device profile: invalid profile ID: <id>`; a page or page size below one
 fails with `device profile: invalid pagination: …` — both before connecting.
+A profile that does not exist fails with `device profile: profile <id> not
+found`; any other control-plane failure with `device profile: failed to get
+profile <id>: <reason>`.
+
+### 3.0a `device profile delete <id>` and `device profile match`
+
+```bash
+platformctl device profile delete 123
+platformctl device profile match --mac 00:25:90:ff:aa:02
+platformctl device profile match --serial SN100-XYZ --output json
+platformctl device profile match --model R640
+```
+
+`delete` removes the profile and prints `Profile <id> deleted`; in
+`--output json` it is `{"id": "<id>", "deleted": true}`. A non-numeric id fails
+before connecting with `device profile: invalid profile ID: <id>`.
+
+`match` finds a profile whose match rules fit the device: MAC and serial
+match by prefix, model exactly, and a profile matches when any one of its
+non-empty rules fits. The control plane returns the first such profile it
+scans, so keep match rules disjoint ([api.md](api.md) §3). It renders the profile as §3.6. **At least
+one of `--mac`, `--serial` or `--model` is required**, checked before
+connecting: `device profile: at least one of --mac, --serial or --model is
+required`.
+
+**A missing profile is an error, not empty output.** `get` and `delete` on an
+unknown id fail with `device profile: profile <id> not found`; `match` with no
+fitting profile fails with `device profile: no profile matches mac "…",
+serial "…", model "…"`. Both exit non-zero. Every transport reports the miss
+as gRPC `NOT_FOUND`, and the CLI's typed errors (`ErrProfileNotFound`,
+`ErrNoMatchingProfile`) satisfy `errors.Is(err, common.ErrNotFound)` from
+`sdk/go/services/common`. Any other failure is
+`device profile: failed to delete profile <id>: <reason>` or
+`device profile: failed to match a profile: <reason>`.
 
 ### 3.1 Shared field flags (`create` and `update`)
 
@@ -420,16 +456,22 @@ wire. Parse it as a string.
 
 | Verb | Argument | Flags |
 |---|---|---|
-| `list` | — | `--page` (int, `1`), `--page-size` (int, `20`) |
 | `get` | `<id>` | — |
+| `list` | — | `--page` (int, `1`), `--page-size` (int, `20`) |
 | `delete` | `<id>` | — |
 | `match` | — | `--mac`, `--serial`, `--model` (at least one required) |
 
-`match` validates its arguments before dispatch:
-`at least one of --mac, --serial, or --model is required`. `get` and `delete`
-validate that `<id>` parses as an unsigned integer.
+These are the `device profile` commands themselves, not copies: the group is
+built from `device.NewProfileLookupCommands`. Arguments, output, errors and
+transports are exactly as §3.0 and §3.0a describe. Creating, updating,
+assigning and unassigning stay under `device profile` only.
 
-**Then all four fail.** See §6.
+```bash
+platformctl profile list --page 2 --page-size 50
+platformctl profile get 123
+platformctl profile delete 123
+platformctl profile match --mac 00:25:90:ff:aa:02
+```
 
 ---
 
@@ -444,23 +486,9 @@ its columns are not a stable interface.
 
 ## 6. Defects and gaps in this surface
 
-**The top-level `platformctl profile` group is a stub.** `runList`, `runGet`,
-`runDelete` and `runMatch` in `pkg/cli/commands/profile/` each return
-`ErrDaemonConnectionRequired{}` — *"daemon connection required"* —
-**unconditionally**, with the comment *"Daemon connection required - dual-mode
-will be added later."* No transport is attempted, so the failure is identical
-whether or not a daemon is reachable and whether or not `--transport embedded`
-is set. The typed errors `ErrProfileNotFound`, `ErrListProfilesFailed`,
-`ErrGetProfileFailed`, `ErrDeleteProfileFailed`, `ErrMatchProfileFailed` and
-`ErrNoMatchingProfile` are declared in that package and never returned.
-
-Use `platformctl device profile get|list` for reads and
-`platformctl device profile create|update|assign|unassign` for writes (§3);
-matching and the by-MAC / by-serial lookups remain REST/gRPC/QUIC/MCP only
-([api.md](api.md) §3) until the group is implemented (#460).
-
 **No CLI verb covers**: device update (a lifecycle state is changed only by
-`disable`/`enable`, §2.7), profile delete, template CRUD (including template
+`disable`/`enable`, §2.7), the separate by-MAC / by-serial profile lookups
+(`match` covers both), template CRUD (including template
 create and create-profile-from-template, which every transport and the Go SDK
 `device.Client` serve — [api.md](api.md) §4), device activation, or
 `find-config`. Reach those through the transports in [api.md](api.md).

@@ -81,7 +81,7 @@ func newProfileCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "profile",
 		Short: "Device profile management",
-		Long: `Create and update device profiles on the control plane.
+		Long: `Create, update, read, match and delete device profiles on the control plane.
 
 A device profile is the pre-boot record for a node: it binds the device
 identity (TPM EK certificate serial, MAC address), the prestaged EK
@@ -107,8 +107,7 @@ Examples:
   platformctl device profile get 123 --output json`,
 	}
 
-	cmd.AddCommand(newProfileGetCommand(getFlags))
-	cmd.AddCommand(newProfileListCommand(getFlags))
+	cmd.AddCommand(NewProfileLookupCommands(getFlags)...)
 	cmd.AddCommand(newProfileCreateCommand(getFlags))
 	cmd.AddCommand(newProfileUpdateCommand(getFlags))
 	cmd.AddCommand(newProfileAssignCommand(getFlags))

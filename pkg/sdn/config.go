@@ -549,11 +549,18 @@ type OverlayConfig struct {
 	// VXLANPort is the UDP port for VXLAN encapsulation.
 	VXLANPort uint16 `yaml:"vxlan-port,omitempty" json:"vxlan_port,omitempty" mapstructure:"vxlan-port"`
 
-	// UnderlayInterface is the physical network interface used for VXLAN underlay
-	// traffic. When empty the daemon defaults to "lo" (loopback), which is always
-	// present and sufficient for single-node and test environments. Production
-	// deployments should set this to the uplink interface (e.g., "eth0", "bond0").
+	// UnderlayInterface is the network interface VXLAN underlay traffic leaves
+	// by (e.g. "eth0", "bond0"; "lo" for a loopback VTEP). Required without
+	// IPsec: there is no default, and an enabled overlay without it refuses to
+	// start. With IPsec it may be unset or name the fabric interface.
 	UnderlayInterface string `yaml:"underlay-interface,omitempty" json:"underlay_interface,omitempty" mapstructure:"underlay-interface"`
+
+	// VTEPAddress is the address this node registers as its VTEP and sources
+	// VXLAN from when IPsec is off. Empty uses the node's detected public IPv4;
+	// with neither, an enabled overlay refuses to start. A single-node or test
+	// overlay sets 127.0.0.1 explicitly. With IPsec the VTEP is always
+	// ipsec.local-address and this field is ignored.
+	VTEPAddress string `yaml:"vtep-address,omitempty" json:"vtep_address,omitempty" mapstructure:"vtep-address"`
 
 	// IPsec protects the underlay with host-to-host transport SAs between
 	// VTEPs and fails closed without them (docs/sdn/overlay/).

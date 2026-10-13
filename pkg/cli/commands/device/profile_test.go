@@ -254,8 +254,10 @@ func TestNewProfileCommand(t *testing.T) {
 	for _, sub := range cmd.Commands() {
 		subs[sub.Name()] = true
 	}
-	if !subs["create"] || !subs["update"] || !subs["assign"] || !subs["unassign"] || !subs["get"] || !subs["list"] {
-		t.Fatalf("profile command must expose get, list, create, update, assign, and unassign, got %v", subs)
+	for _, verb := range []string{"get", "list", "delete", "match", "create", "update", "assign", "unassign"} {
+		if !subs[verb] {
+			t.Fatalf("profile command must expose %s, got %v", verb, subs)
+		}
 	}
 
 	for _, sub := range cmd.Commands() {

@@ -110,6 +110,7 @@ func NewServer(config *ServerConfig, logger *slog.Logger) (*Server, error) {
 	// Build the underlying ipxe.ServerConfig for the iPXE server.
 	ipxeConfig := &ipxe.ServerConfig{
 		Interface:        config.Interface,
+		BindHost:         config.BindHost,
 		HTTPPort:         config.HTTPPort,
 		TFTPPort:         config.TFTPPort,
 		FirmwareDir:      config.FirmwareDir,

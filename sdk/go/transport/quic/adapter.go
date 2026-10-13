@@ -562,6 +562,9 @@ var categorySubOpcodeMap = map[string]byte{
 	"/platform.v1.DeviceService/CreateTemplate":            quicwire.DeviceSubTemplateCreate,
 	"/platform.v1.DeviceService/CreateProfileFromTemplate": quicwire.DeviceSubProfileFromTemplate,
 
+	// Profile matching: handleDeviceFindMatchingProfile.
+	"/platform.v1.DeviceService/FindMatchingProfile": quicwire.DeviceSubFindMatchingProfile,
+
 	// Proxy Service — multiplexed under OpGatewayCategory (0x2F),
 	// sub-range 0x20-0x2D (the single-byte opcode space is fully
 	// allocated). Server dispatcher:
@@ -746,6 +749,7 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.DeviceService/EnableDevice":                 quicwire.OpProvisioningCategory,
 	"/platform.v1.DeviceService/CreateTemplate":               quicwire.OpProvisioningCategory,
 	"/platform.v1.DeviceService/CreateProfileFromTemplate":    quicwire.OpProvisioningCategory,
+	"/platform.v1.DeviceService/FindMatchingProfile":          quicwire.OpProvisioningCategory,
 
 	// SDN Service — proto: pkg/api/grpc/proto/sdn.proto
 	"/platform.v1.SDNService/CreateBridge": quicwire.OpSDNCreateBridge,

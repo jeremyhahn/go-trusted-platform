@@ -84,6 +84,13 @@ func init() {
 	if err := tpconfig.BindDaemonListenerFlags(viper.GetViper(), serveCmd.Flags()); err != nil {
 		log.Fatal(err)
 	}
+	// The Raft advertise and listen addresses take the same three paths
+	// (quicbaas.raft-address / raft-listen-address, PLATFORMD_QUICBAAS_RAFT_*,
+	// --raft-address / --raft-listen-address); quicbaas.Config.Validate
+	// refuses a joining node without a routable advertise address.
+	if err := tpconfig.BindRaftAddressFlags(viper.GetViper(), serveCmd.Flags()); err != nil {
+		log.Fatal(err)
+	}
 	serveCmd.Flags().BoolVar(&serveEnableREST, "enable-rest", true, "Enable REST API (daemon-only mode: requires --enable-mtls, its only authentication; refused otherwise)")
 	serveCmd.Flags().BoolVar(&serveEnableGRPC, "enable-grpc", true, "Enable gRPC")
 	serveCmd.Flags().BoolVar(&serveEnableQUIC, "enable-quic", true, "Enable QUIC")
@@ -312,33 +319,7 @@ func newComputeOrchestrator(logger *logging.Logger, a *app.App, ovsSocketPath st
 	if computeConfig.Provider.IsVM() {
 		computeConfig.ApplyLocalQEMUDefaults()
 		if a != nil && a.ComputeConfig != nil {
-			if a.ComputeConfig.QEMUBinary != "" {
-				computeConfig.QEMUBinary = a.ComputeConfig.QEMUBinary
-			}
-			if a.ComputeConfig.OVMFCode != "" {
-				computeConfig.OVMFCode = a.ComputeConfig.OVMFCode
-			}
-			if a.ComputeConfig.OVMFCodeSecure != "" {
-				computeConfig.OVMFCodeSecure = a.ComputeConfig.OVMFCodeSecure
-			}
-			if a.ComputeConfig.OVMFVars != "" {
-				computeConfig.OVMFVars = a.ComputeConfig.OVMFVars
-			}
-			if a.ComputeConfig.WorkDir != "" {
-				computeConfig.WorkDir = a.ComputeConfig.WorkDir
-			}
-			if a.ComputeConfig.NetworkBridge != "" {
-				computeConfig.NetworkBridge = a.ComputeConfig.NetworkBridge
-			}
-			if a.ComputeConfig.EnableKVM {
-				computeConfig.EnableKVM = true
-			}
-			if a.ComputeConfig.DefaultMemory > 0 {
-				computeConfig.DefaultMemory = a.ComputeConfig.DefaultMemory
-			}
-			if a.ComputeConfig.DefaultCPUs > 0 {
-				computeConfig.DefaultCPUs = a.ComputeConfig.DefaultCPUs
-			}
+			applyLocalQEMUSettings(computeConfig, a.ComputeConfig)
 		}
 
 		// Wire the inter-daemon VM migration seams for the local QEMU provider.
@@ -372,6 +353,43 @@ func newComputeOrchestrator(logger *logging.Logger, a *app.App, ovsSocketPath st
 	}
 
 	return compute.NewOrchestratorForConfig(context.Background(), computeConfig, deps)
+}
+
+// applyLocalQEMUSettings copies the operator's `compute:` settings for the
+// local QEMU provider over dst, which already holds the defaults layer
+// (ApplyLocalQEMUDefaults). An unset field keeps its default.
+func applyLocalQEMUSettings(dst, src *compute.OrchestratorConfig) {
+	if src.QEMUBinary != "" {
+		dst.QEMUBinary = src.QEMUBinary
+	}
+	if src.OVMFCode != "" {
+		dst.OVMFCode = src.OVMFCode
+	}
+	if src.OVMFCodeSecure != "" {
+		dst.OVMFCodeSecure = src.OVMFCodeSecure
+	}
+	if src.OVMFVars != "" {
+		dst.OVMFVars = src.OVMFVars
+	}
+	if src.WorkDir != "" {
+		dst.WorkDir = src.WorkDir
+	}
+	if src.NetworkBridge != "" {
+		dst.NetworkBridge = src.NetworkBridge
+	}
+	if src.EnableKVM {
+		dst.EnableKVM = true
+	}
+	if src.DefaultMemory > 0 {
+		dst.DefaultMemory = src.DefaultMemory
+	}
+	if src.DefaultCPUs > 0 {
+		dst.DefaultCPUs = src.DefaultCPUs
+	}
+	if src.MigrationListenAddress != "" {
+		dst.MigrationListenAddress = src.MigrationListenAddress
+	}
+	dst.SharedStorage = src.SharedStorage
 }
 
 // seedSDNVLANsFromConfig walks the zones of the network plan and calls
@@ -1906,31 +1924,5 @@ func isMultiInstanceDeployment(cfg *platformquicbaas.Config) bool {
 	if len(cfg.JoinAddresses) > 0 {
 		return true
 	}
-	return isRoutableRaftAddress(cfg.RaftAddress)
-}
-
-// isRoutableRaftAddress reports whether addr advertises this node to
-// peers on the network, as opposed to the loopback/unspecified defaults
-// a single-node deployment carries. A host that cannot be parsed is
-// treated as routable: an unparseable advertise address is not evidence
-// of a single-node deployment, and this gate fails closed.
-func isRoutableRaftAddress(addr string) bool {
-	if strings.TrimSpace(addr) == "" {
-		return false
-	}
-	host := addr
-	if h, _, err := net.SplitHostPort(addr); err == nil {
-		host = h
-	}
-	host = strings.Trim(strings.TrimSpace(host), "[]")
-	if host == "" {
-		return false
-	}
-	if strings.EqualFold(host, "localhost") {
-		return false
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return !ip.IsLoopback() && !ip.IsUnspecified()
-	}
-	return true
+	return platformquicbaas.IsRoutableRaftAddress(cfg.RaftAddress)
 }

@@ -182,6 +182,7 @@ ntp:
       key-uri: kms://platform/ntp/nts-server.key
       server-names:                # DNS names clients dial this NTS-KE
         - cp.example.internal      # server as; DNS only, never an address
+      port: 4460                   # NTS-KE TCP port; omitted ⇒ DefaultNTSKEPort
   rtc:
     write-back: true
 ```
@@ -209,6 +210,7 @@ ntp:
 | `ntp.serve.nts.cert-uri` | secret ref | when NTS serving | `ErrMissingNTSMaterial` |
 | `ntp.serve.nts.key-uri` | secret ref | when NTS serving | `ErrMissingNTSMaterial` |
 | `ntp.serve.nts.server-names` | []string | — | empty; DNS names only, `ErrInvalidNTSServerName` |
+| `ntp.serve.nts.port` | int 1–65535 | — | `4460` (IANA NTS-KE); `ErrInvalidNTSKEPort` |
 | `ntp.rtc.write-back` | bool | — | `false` |
 
 **There are no NTP environment variables.** The section is YAML only; there is
@@ -229,6 +231,7 @@ platform config loader applies to the file as a whole
 | `RTCWriteBack()` | `rtc.write-back` |
 | `LocalStratum()` | the configured stratum, or `DefaultLocalStratum` when unset/zero |
 | `NTSServing()` | active **and** serving **and** `serve.nts.enabled` |
+| `NTSKEPort()` | the configured `serve.nts.port`, or `DefaultNTSKEPort` when unset/zero |
 
 ### Validation rules
 
@@ -362,8 +365,10 @@ is due for reissue rather than healthy until expiry.
 4. **Server side**:
    - not serving ⇒ `port 0`, and nothing else.
    - serving ⇒ one `allow <cidr>` per entry; `local stratum <n>` when
-     `orphan-fallback`; `ntsservercert` / `ntsserverkey` / `ntsdumpdir` when
-     NTS serving.
+     `orphan-fallback`; `ntsservercert` / `ntsserverkey` / `ntsdumpdir` /
+     `ntsport <NTSKEPort()>` when NTS serving. No NTS-KE `bindaddress` is
+     rendered, so chronyd accepts NTS-KE on every local address; the renewal
+     sweep reads the served certificate over loopback on the same port.
 5. **Control**: `bindcmdaddress <paths.CommandSocket>`, `cmdport 0`.
 
 `firstBootStepUpdates = 3` and `firstBootStepThresholdSeconds = "1.0"` are the
@@ -400,7 +405,7 @@ fails the rotation closed rather than publishing an empty key file.
 
 ## 5. Error semantics
 
-All 27 are struct types. Match with `errors.As` (or `errors.Is` on a zero-value
+All 29 are struct types. Match with `errors.As` (or `errors.Is` on a zero-value
 struct, which the daemon does for `ErrDisabled{}`). Those wrapping a cause
 implement `Unwrap`.
 
@@ -421,13 +426,14 @@ implement `Unwrap`.
 | `ErrInvalidLocalStratum` | `Stratum` | Outside 1–15 |
 | `ErrMissingNTSMaterial` | `Field` | NTS enabled without cert or key |
 | `ErrInvalidNTSServerName` | `Name`, `Reason` | A `serve.nts.server-names` entry that cannot become a DNS SAN |
+| `ErrInvalidNTSKEPort` | `Port` | `serve.nts.port` outside 1–65535 |
+| `ErrInvalidTimeoutAction` | `Action` | Unknown `on-timeout` |
+| `ErrInvalidGateTimeout` | `Seconds` | Negative gate timeout |
 
 A serve-name/allow-list mismatch is deliberately **not** an error: it is a
 health finding. Failing startup or renewal over it would take a control plane
 offline for a condition an operator must resolve by a policy decision the
 platform does not own.
-| `ErrInvalidTimeoutAction` | `Action` | Unknown `on-timeout` |
-| `ErrInvalidGateTimeout` | `Seconds` | Negative gate timeout |
 
 ### Runtime
 

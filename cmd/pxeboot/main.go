@@ -29,12 +29,16 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/container"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 )
 
 func main() {
 	manifest := flag.String("manifest", "", "path to manifest.yaml (required)")
 	configDir := flag.String("config-dir", "/data/configs", "directory with per-device configs")
 	iface := flag.String("interface", "eth0", "network interface to bind")
+	// DHCP does not bind it: it must receive broadcasts, so it keeps the
+	// unspecified address on --interface (#93).
+	bindHost := flag.String("bind-host", ipxe.DefaultBindHost, "address the HTTP and TFTP servers bind (default: every interface)")
 	httpPort := flag.Int("http-port", 8080, "HTTP server port")
 	// Zero derives http-port+1, which is where this listener lived when
 	// the offset was hardcoded. It is settable because the deployer is
@@ -87,6 +91,7 @@ func main() {
 
 	config := &container.ServerConfig{
 		Interface:         *iface,
+		BindHost:          *bindHost,
 		HTTPPort:          *httpPort,
 		DeviceScriptPort:  *deviceScriptPort,
 		TFTPPort:          *tftpPort,
@@ -127,6 +132,7 @@ func main() {
 
 	logger.Info("starting PXE bootstrap server",
 		slog.String("interface", *iface),
+		slog.String("bind_host", *bindHost),
 		slog.Int("http_port", *httpPort),
 		slog.Int("tftp_port", *tftpPort),
 		slog.String("dhcp_server_ip", *dhcpServerIP),

@@ -218,7 +218,7 @@ The configuration is validated before service initialization:
 | `OVMFCodeSecure` | If specified, file must exist |
 | `PCRBanks` | At least one valid bank required |
 | `SecureBootKeySize` | Must be at least 2048 |
-| `EKAlgorithm` | Must be "RSA" or "ECC" |
+| `EKAlgorithm` | Must be "RSA" or "ECC"; a request may use any case, anything else is `ErrInvalidEKAlgorithm` |
 | `SecureBootKeysDir` | If specified, directory must exist |
 
 ## Dependencies

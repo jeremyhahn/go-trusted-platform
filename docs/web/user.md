@@ -277,9 +277,10 @@ raise `jwt.expiration`.
 mismatch is rejected by the browser, not by the platform, and the message is
 unhelpful.
 
-**HTTP/3 is not being used.** `Alt-Svc: h3=":443"` is sent on every response
-regardless of your actual `tls-port` — the value is hard-coded. On a
-non-standard port, clients will not upgrade. Everything still works over
+**HTTP/3 is not being used.** Every response carries `Alt-Svc: h3=":<tls-port>"`,
+and HTTP/3 listens on UDP at that same port number. Clients only upgrade if UDP
+reaches that port: open it in the firewall alongside TCP. With `tls-port: 0`
+there is no HTTP/3 and no `Alt-Svc` header. Everything still works over
 HTTP/1.1 and HTTP/2.
 
 **A long-running request is cut off around 30 seconds.** The server's write

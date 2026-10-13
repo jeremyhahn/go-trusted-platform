@@ -191,12 +191,31 @@ func TestMCPServiceProvider_VTPMCreate_Success(t *testing.T) {
 		VTPMService: mockSvc,
 	})
 
-	result, err := provider.VTPMCreate(ctx, "test-vtpm", "RSA2048")
+	result, err := provider.VTPMCreate(ctx, "test-vtpm", "rsa")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result == nil {
 		t.Error("expected non-nil result")
+	}
+}
+
+func TestMCPServiceProvider_VTPMCreate_RejectsUndocumentedAlgorithm(t *testing.T) {
+	ctx := context.Background()
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+		VTPMService: newMCPMockVTPMService(),
+	})
+
+	for _, algorithm := range []string{"RSA2048", "ECDSA"} {
+		_, err := provider.VTPMCreate(ctx, "test-vtpm", algorithm)
+		var invalid vtpm.ErrInvalidEKAlgorithm
+		if !errors.As(err, &invalid) {
+			t.Errorf("VTPMCreate(%q): err = %v, want vtpm.ErrInvalidEKAlgorithm", algorithm, err)
+		}
+		_, err = provider.VTPMCreateTemplate(ctx, "tpl", "desc", algorithm, false)
+		if !errors.As(err, &invalid) {
+			t.Errorf("VTPMCreateTemplate(%q): err = %v, want vtpm.ErrInvalidEKAlgorithm", algorithm, err)
+		}
 	}
 }
 

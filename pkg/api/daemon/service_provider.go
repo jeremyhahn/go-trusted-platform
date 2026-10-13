@@ -132,10 +132,9 @@ func (p *PlatformServiceProvider) VTPMCreate(ctx context.Context, name string, a
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
 
-	// Map algorithm string to EKAlgorithm
-	ekAlg := vtpm.EKAlgorithmRSA
-	if algorithm == "ECC" {
-		ekAlg = vtpm.EKAlgorithmECC
+	ekAlg, err := vtpm.ParseEKAlgorithm(algorithm)
+	if err != nil {
+		return nil, err
 	}
 
 	opts := &vtpm.CreateBundleOptions{
@@ -318,9 +317,9 @@ func (p *PlatformServiceProvider) VTPMCreateTemplate(ctx context.Context, id str
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
-	ekAlg := vtpm.EKAlgorithmRSA
-	if algorithm == "ECC" {
-		ekAlg = vtpm.EKAlgorithmECC
+	ekAlg, err := vtpm.ParseEKAlgorithm(algorithm)
+	if err != nil {
+		return nil, err
 	}
 	opts := &vtpm.CreateTemplateOptions{
 		ID:                id,

@@ -41,8 +41,12 @@ quicbaas:
   # Default: linearizable
   consistency-level: linearizable
 
-  # Raft cluster address (required for raft backend)
+  # Raft address advertised to peers (required with join-addresses;
+  # must be routable: loopback, 0.0.0.0 or empty is refused)
   raft-address: "192.168.1.10:63000"
+
+  # Raft transport bind address (optional; empty binds raft-address)
+  raft-listen-address: ""
 
   # Peer addresses to join (required for raft backend)
   join-addresses:
@@ -150,10 +154,26 @@ Default read consistency level:
 | Property | Value |
 |----------|-------|
 | Type | string |
-| Required | Yes (for raft backend) |
+| Required | Yes, when `join-addresses` is set |
+| Default | empty (a single node advertises nothing to peers) |
+| Env | `PLATFORMD_QUICBAAS_RAFT_ADDRESS` |
+| Flag | `platformd serve --raft-address` |
 | Example | `192.168.1.10:63000` |
 
-Address for Raft cluster communication. Must be reachable by all peer nodes.
+The address this node advertises to its peers; they dial it, so it must be reachable by every peer. A node with `join-addresses` and a loopback, unspecified (`0.0.0.0`, `::`) or empty `raft-address` refuses to start with `ErrRaftAdvertiseAddress`, which names the setting. The platform never guesses or probes for an address.
+
+#### raft-listen-address
+
+| Property | Value |
+|----------|-------|
+| Type | string |
+| Required | No |
+| Default | empty: binds `raft-address` |
+| Env | `PLATFORMD_QUICBAAS_RAFT_LISTEN_ADDRESS` |
+| Flag | `platformd serve --raft-listen-address` |
+| Example | `0.0.0.0:63000` |
+
+The local address the Raft transport binds. Set it when the bind differs from the advertised address, for example behind NAT, with a container port mapping or for a wildcard bind.
 
 #### join-addresses
 
@@ -254,18 +274,19 @@ quicbaas:
 
 ## Environment Variables
 
-Configuration values can be overridden using environment variables:
+platformd's environment prefix is `PLATFORMD_`. The precedence is flags > environment > file > defaults. The two Raft addresses are always bound. Any other key is overridden from the environment only when the configuration file declares it, because viper consults the environment only for keys it knows.
 
 | Variable | Config Path | Example |
 |----------|-------------|---------|
-| `PLATFORM_QUICBAAS_STORAGE_BACKEND` | `quicbaas.storage-backend` | `pebble` |
-| `PLATFORM_QUICBAAS_DATA_DIR` | `quicbaas.data-dir` | `/var/lib/trusted-platform/quicbaas` |
-| `PLATFORM_QUICBAAS_WAL_DIR` | `quicbaas.wal-dir` | `/var/lib/trusted-platform/quicbaas/wal` |
-| `PLATFORM_QUICBAAS_NODE_ID` | `quicbaas.node-id` | `1` |
-| `PLATFORM_QUICBAAS_CACHE_SIZE` | `quicbaas.cache-size` | `134217728` |
-| `PLATFORM_QUICBAAS_LOG_LEVEL` | `quicbaas.log-level` | `info` |
-| `PLATFORM_QUICBAAS_CONSISTENCY` | `quicbaas.consistency-level` | `linearizable` |
-| `PLATFORM_QUICBAAS_RAFT_ADDRESS` | `quicbaas.raft-address` | `192.168.1.10:63000` |
+| `PLATFORMD_QUICBAAS_RAFT_ADDRESS` | `quicbaas.raft-address` | `192.168.1.10:63000` |
+| `PLATFORMD_QUICBAAS_RAFT_LISTEN_ADDRESS` | `quicbaas.raft-listen-address` | `0.0.0.0:63000` |
+| `PLATFORMD_QUICBAAS_STORAGE_BACKEND` | `quicbaas.storage-backend` | `pebble` |
+| `PLATFORMD_QUICBAAS_DATA_DIR` | `quicbaas.data-dir` | `/var/lib/trusted-platform/quicbaas` |
+| `PLATFORMD_QUICBAAS_WAL_DIR` | `quicbaas.wal-dir` | `/var/lib/trusted-platform/quicbaas/wal` |
+| `PLATFORMD_QUICBAAS_NODE_ID` | `quicbaas.node-id` | `1` |
+| `PLATFORMD_QUICBAAS_CACHE_SIZE` | `quicbaas.cache-size` | `134217728` |
+| `PLATFORMD_QUICBAAS_LOG_LEVEL` | `quicbaas.log-level` | `info` |
+| `PLATFORMD_QUICBAAS_CONSISTENCY_LEVEL` | `quicbaas.consistency-level` | `linearizable` |
 
 ## Performance Tuning
 
@@ -318,7 +339,7 @@ The configuration is validated at startup. Common validation errors:
 | `node ID must be > 0` | `node-id: 0` | Use positive integer for `node-id` |
 | `cache size cannot be negative` | Negative `cache-size` | Use positive value for `cache-size` |
 | `invalid consistency level` | Invalid `consistency-level` | Use `linearizable`, `strong`, or `eventual` |
-| `raft address required` | Missing `raft-address` for raft backend | Specify `raft-address` |
+| `quicbaas.raft-address "…" is not routable` | `join-addresses` set with a loopback, unspecified or empty `raft-address` | Set a routable `raft-address` (file, `PLATFORMD_QUICBAAS_RAFT_ADDRESS` or `--raft-address`) |
 
 ## Related Documentation
 

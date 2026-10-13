@@ -554,6 +554,43 @@ func TestHandleCreateBundle(t *testing.T) {
 		assert.Equal(t, "ECC", bundleResp.EKAlgorithm)
 	})
 
+	t.Run("accepts the EK algorithm in any case", func(t *testing.T) {
+		svc := newMockVTPMService()
+		_, router := setupVTPMTestHandler(svc)
+
+		body, _ := json.Marshal(CreateBundleRequest{Hostname: "lower-vm", EKAlgorithm: "ecc"})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/vtpm/bundles", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusCreated, resp.StatusCode)
+
+		var bundleResp BundleResponse
+		decodeVTPMResponse(t, resp.Body, &bundleResp)
+		assert.Equal(t, "ECC", bundleResp.EKAlgorithm)
+	})
+
+	t.Run("rejects an undocumented EK algorithm", func(t *testing.T) {
+		svc := newMockVTPMService()
+		_, router := setupVTPMTestHandler(svc)
+
+		body, _ := json.Marshal(CreateBundleRequest{Hostname: "ecdsa-vm", EKAlgorithm: "ECDSA"})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/vtpm/bundles", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		assert.Empty(t, svc.bundles, "an invalid algorithm must not create a bundle")
+	})
+
 	t.Run("returns error when service not available", func(t *testing.T) {
 		handlers := NewVTPMHandlers(nil, slog.Default())
 		router := mux.NewRouter()
@@ -1690,6 +1727,41 @@ func TestHandleCreateTemplate(t *testing.T) {
 		decodeVTPMResponse(t, resp.Body, &templateResp)
 		assert.Equal(t, "test-template", templateResp.ID)
 		assert.Equal(t, "Test template", templateResp.Description)
+	})
+
+	t.Run("accepts the EK algorithm in any case", func(t *testing.T) {
+		svc := newMockVTPMService()
+		_, router := setupVTPMTestHandler(svc)
+
+		body, _ := json.Marshal(CreateTemplateRequest{ID: "lower-template", EKAlgorithm: "ecc"})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/vtpm/templates", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusCreated, resp.StatusCode)
+		require.Contains(t, svc.templates, "lower-template")
+		assert.Equal(t, vtpm.EKAlgorithmECC, svc.templates["lower-template"].EKAlgorithm)
+	})
+
+	t.Run("rejects an undocumented EK algorithm", func(t *testing.T) {
+		svc := newMockVTPMService()
+		_, router := setupVTPMTestHandler(svc)
+
+		body, _ := json.Marshal(CreateTemplateRequest{ID: "ecdsa-template", EKAlgorithm: "ECDSA"})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/vtpm/templates", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		assert.Empty(t, svc.templates, "an invalid algorithm must not create a template")
 	})
 
 	t.Run("returns error when id is missing", func(t *testing.T) {

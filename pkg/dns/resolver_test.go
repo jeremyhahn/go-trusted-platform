@@ -253,7 +253,11 @@ func TestDefaultConfig_HasResolver(t *testing.T) {
 	require.NotNil(t, DefaultConfig.Resolver)
 	assert.Len(t, DefaultConfig.Resolver.Servers, 1)
 	assert.Equal(t, "127.0.0.1", DefaultConfig.Resolver.Servers[0].Address)
-	assert.Equal(t, 8053, DefaultConfig.Resolver.Servers[0].Port)
+	// The default resolver queries the default public server, so the two
+	// defaults must name the same port.
+	require.NotNil(t, DefaultConfig.PublicServer)
+	assert.Equal(t, DefaultConfig.PublicServer.Port, DefaultConfig.Resolver.Servers[0].Port)
+	assert.Equal(t, DefaultResolverConfig(), DefaultConfig.Resolver)
 	assert.NoError(t, DefaultConfig.Resolver.Validate())
 }
 

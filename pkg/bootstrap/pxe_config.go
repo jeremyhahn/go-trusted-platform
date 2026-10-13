@@ -14,8 +14,10 @@
 package bootstrap
 
 import (
+	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -205,6 +207,45 @@ type PlatformGlobalConfig struct {
 	// minutes later, and that failure cancelled the whole remaining-nodes
 	// phase. An operator on slower chassis can raise it without a rebuild.
 	HealthTimeout time.Duration `yaml:"health_timeout,omitempty"`
+
+	// ControlPlanePort is the TLS port of the control plane's webservice,
+	// the webservices[].tls-port its role template declares. The
+	// orchestrator dials it to capture the CA bundle and SPKI pin, to seed
+	// templates and to probe health, and picks the certificate identity
+	// it verifies from the webservice entry on this port. Zero uses
+	// DefaultControlPlanePort; set it when the control-plane template
+	// moves the webservice.
+	ControlPlanePort int `yaml:"control_plane_port,omitempty"`
+}
+
+// DefaultControlPlanePort is the control plane's webservice TLS port when
+// platform.control_plane_port is unset: the tls-port the shipped
+// control-plane template declares.
+const DefaultControlPlanePort = 8443
+
+// EffectiveControlPlanePort returns the configured control-plane webservice
+// port, or DefaultControlPlanePort when unset. Config validation has already
+// bounded an explicit value.
+func (c *BootstrapConfig) EffectiveControlPlanePort() int {
+	if c == nil || c.Platform.ControlPlanePort == 0 {
+		return DefaultControlPlanePort
+	}
+	return c.Platform.ControlPlanePort
+}
+
+// HealthProbePorts returns the HTTPS ports a node health probe tries, in
+// order: the control plane's webservice port, then the gateway and worker
+// listener (nodeWebserviceTLSPort) and the gateway's 443. A node's port
+// depends on its role, which a probe by address cannot see, so the probe
+// tries each; a control-plane port equal to one of the others is tried once.
+func (c *BootstrapConfig) HealthProbePorts() []int {
+	ports := []int{c.EffectiveControlPlanePort()}
+	for _, port := range []int{nodeWebserviceTLSPort, gatewayWebserviceTLSPort} {
+		if !slices.Contains(ports, port) {
+			ports = append(ports, port)
+		}
+	}
+	return ports
 }
 
 // EffectivePostInstallHealthTimeout returns the configured post-install health
@@ -278,8 +319,16 @@ type DeployerConfig struct {
 	// up the right NIC for DHCP/TFTP listening.
 	BootstrapInterface string `yaml:"bootstrap_interface,omitempty"`
 
-	// BootstrapServerIP is the IP the bootstrap container's
-	// DHCP/TFTP/HTTP services bind to. Default in the entrypoint is
+	// BootstrapBindHost is the address the bootstrap container's HTTP
+	// and TFTP servers bind. Empty, the default, binds every interface.
+	// DHCP never binds it: PXE clients broadcast, and Linux delivers a
+	// broadcast only to a socket on the unspecified address, so DHCP
+	// stays there, scoped to bootstrap_interface (#93).
+	BootstrapBindHost string `yaml:"bootstrap_bind_host,omitempty"`
+
+	// BootstrapServerIP is the IP the bootstrap container advertises as
+	// the DHCP server and next server; the per-device boot script server
+	// binds it. Default in the entrypoint is
 	// 192.0.2.1, suitable for a deployment that already has the
 	// provisioning subnet configured. For first bootstrap on a
 	// fresh deploy (no provisioning subnet yet) this MUST point at
@@ -452,6 +501,18 @@ func (d *DeployerConfig) validatePorts() error {
 		}
 	}
 	return nil
+}
+
+// validateBindHost rejects a bootstrap_bind_host that is not an IP
+// address. Empty is valid: every interface.
+func (d *DeployerConfig) validateBindHost() error {
+	if d.BootstrapBindHost == "" || net.ParseIP(d.BootstrapBindHost) != nil {
+		return nil
+	}
+	return ErrInvalidConfig{
+		Field:  "deployer.bootstrap_bind_host",
+		Reason: d.BootstrapBindHost + " is not an IP address",
+	}
 }
 
 // validateExplicitPort bounds a port an operator actually set. Zero is
@@ -1046,6 +1107,12 @@ func (c *BootstrapConfig) ValidateDefinition() error {
 	}
 
 	if err := c.Deployer.validatePorts(); err != nil {
+		return err
+	}
+	if err := c.Deployer.validateBindHost(); err != nil {
+		return err
+	}
+	if err := validateExplicitPort("platform.control_plane_port", c.Platform.ControlPlanePort); err != nil {
 		return err
 	}
 
