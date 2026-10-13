@@ -36,7 +36,10 @@ flags it once had configured nothing and are gone (#93).
 model (`process:` in [`user.md`](user.md), #557). `gatewayd serve` starts it;
 an operator does not. It takes `--ipc-socket`, `--socket-group`,
 `--supervisor-uid`, `--uid` and `--gid` from the supervisor, plus the global
-`--config`. It drops to the process's privilege class before it reads the
+flags the supervisor resolved: `--config`, `--data-dir`, `--log-format` and
+`--debug` (a flag the supervisor left unset is left unset). Without
+`--data-dir` the proxy child would open the default pin store rather than the
+supervisor's and trust every `tofu` peer afresh. It drops to the process's privilege class before it reads the
 configuration, so it exits with an error if that file is unreadable by the
 service account, or if the process hosts no enabled service.
 

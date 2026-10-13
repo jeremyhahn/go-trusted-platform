@@ -37,10 +37,11 @@ func TestVMHandleVerifyAttestation(t *testing.T) {
 		createTestVM(orchestrator.mockVMOrchestrator, "vm-1", "test-vm")
 
 		verifyReq := &VMVerifyAttestRequest{
-			ID:        "vm-1",
-			Quote:     []byte("quote"),
-			Signature: []byte("signature"),
-			Nonce:     []byte("nonce"),
+			ID:                 "vm-1",
+			Quote:              []byte("quote"),
+			Signature:          []byte("signature"),
+			SignatureAlgorithm: "SHA256-RSAPSS",
+			Nonce:              []byte("nonce"),
 			ExpectedPCRs: map[int][]byte{
 				0: {0x01},
 			},
@@ -64,6 +65,8 @@ func TestVMHandleVerifyAttestation(t *testing.T) {
 		assert.True(t, verifyResp.NonceValid)
 		assert.True(t, verifyResp.PCRsValid)
 		assert.Equal(t, "attestation verified", verifyResp.Message)
+		require.NotNil(t, orchestrator.lastEvidence)
+		assert.Equal(t, "SHA256-RSAPSS", orchestrator.lastEvidence.SignatureAlgorithm)
 	})
 
 	t.Run("returns error when VM ID missing", func(t *testing.T) {

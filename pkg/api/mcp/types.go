@@ -256,6 +256,19 @@ type KMSVerifyRequest struct {
 	KeyVersion    int    `json:"key_version,omitempty"`
 }
 
+// TPMVerifyQuoteRequest represents a TPM quote verification request for MCP,
+// with the same fields as the gRPC VerifyQuoteRequest. AKPublic is the
+// attestation key's PKIX DER; when it is empty the platform IAK verifies.
+// SignatureAlgorithm is the scheme the quote declares (#482).
+type TPMVerifyQuoteRequest struct {
+	Quote              []byte `json:"quote"`
+	Signature          []byte `json:"signature"`
+	Nonce              []byte `json:"nonce"`
+	ChannelBinding     []byte `json:"channel_binding,omitempty"`
+	AKPublic           []byte `json:"ak_public,omitempty"`
+	SignatureAlgorithm string `json:"signature_algorithm"`
+}
+
 // KMSGenerateDataKeyRequest represents a data key generation request for MCP.
 // Data keys are used for envelope encryption where:
 // 1. A data encryption key (DEK) is generated
@@ -747,7 +760,7 @@ type ServiceProvider interface {
 	TPMCreateIAK(ctx context.Context) (interface{}, error)
 	TPMDeleteIAK(ctx context.Context) (interface{}, error)
 	TPMQuote(ctx context.Context, nonce []byte, pcrs []int) (interface{}, error)
-	TPMVerifyQuote(ctx context.Context, quote, signature, nonce, channelBinding []byte) (interface{}, error)
+	TPMVerifyQuote(ctx context.Context, req *TPMVerifyQuoteRequest) (interface{}, error)
 	TPMReadPCRs(ctx context.Context, indices []int) (interface{}, error)
 	TPMExtendPCR(ctx context.Context, pcrIndex int, data []byte) (interface{}, error)
 	TPMEventLog(ctx context.Context) (interface{}, error)

@@ -39,6 +39,7 @@ type fakeVTPMDevice struct {
 
 	quoteErr  error
 	aikErr    error
+	sigAlgErr error
 	closed    bool
 	lastPCRs  []int
 	lastNonce []byte
@@ -98,11 +99,21 @@ func (f *fakeVTPMDevice) GenerateQuote(ctx context.Context, nonce []byte, pcrInd
 
 	quote := f.buildQuote(nonce, pcrIndices)
 	hashed := sha256.Sum256(quote)
-	signature, err := rsa.SignPKCS1v15(rand.Reader, f.key, crypto.SHA256, hashed[:])
+	// The fake AK is an RSA-PSS IAK, so a verifier that inferred PKCS#1 v1.5
+	// from the RSA key would refuse every quote it makes.
+	signature, err := rsa.SignPSS(rand.Reader, f.key, crypto.SHA256, hashed[:],
+		&rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash})
 	if err != nil {
 		return nil, nil, err
 	}
 	return quote, signature, nil
+}
+
+func (f *fakeVTPMDevice) GetAIKSignatureAlgorithm(ctx context.Context) (string, error) {
+	if f.sigAlgErr != nil {
+		return "", f.sigAlgErr
+	}
+	return x509.SHA256WithRSAPSS.String(), nil
 }
 
 func (f *fakeVTPMDevice) ReadPCR(ctx context.Context, pcr int, algorithm vm.HashAlgorithm) ([]byte, error) {
@@ -174,8 +185,10 @@ func TestQEMUOrchestrator_AttestVM(t *testing.T) {
 	assert.Len(t, report.PCRValues, 2)
 	assert.Equal(t, []int{0, 7}, device.lastPCRs)
 
-	// The generated quote must verify against the fake device's AK.
-	require.NoError(t, vm.VerifyQuoteSignature(report.AKPublicKey, report.Quote, report.Signature))
+	// The generated quote must verify against the fake device's AK under the
+	// scheme the report declares.
+	assert.Equal(t, x509.SHA256WithRSAPSS.String(), report.SignatureAlgorithm)
+	require.NoError(t, vm.VerifyQuoteSignatureWithAlgorithm(report.AKPublicKey, report.Quote, report.Signature, report.SignatureAlgorithm))
 	require.NoError(t, vm.VerifyQuoteNonce(report.Quote, nonce))
 }
 
@@ -228,6 +241,15 @@ func TestQEMUOrchestrator_AttestVM_Errors(t *testing.T) {
 		assert.ErrorIs(t, err, ErrVTPMNotAvailable)
 	})
 
+	t.Run("AK scheme unavailable", func(t *testing.T) {
+		device.sigAlgErr = errors.New("IAK attributes unavailable")
+		defer func() { device.sigAlgErr = nil }()
+
+		_, err := orch.AttestVM(ctx, "vm1", nil, nil)
+		var quoteErr vm.ErrQuoteGenerationFailed
+		assert.ErrorAs(t, err, &quoteErr)
+	})
+
 	t.Run("device factory failure", func(t *testing.T) {
 		orig := orch.vtpmDeviceFor
 		defer func() { orch.vtpmDeviceFor = orig }()
@@ -253,9 +275,10 @@ func TestQEMUOrchestrator_VerifyVMAttestation(t *testing.T) {
 
 	t.Run("full verification passes", func(t *testing.T) {
 		result, err := orch.VerifyVMAttestation(ctx, "vm1", &VMAttestationEvidence{
-			Quote:     report.Quote,
-			Signature: report.Signature,
-			Nonce:     nonce,
+			Quote:              report.Quote,
+			Signature:          report.Signature,
+			SignatureAlgorithm: report.SignatureAlgorithm,
+			Nonce:              nonce,
 			ExpectedPCRs: map[int][]byte{
 				0: device.pcrValues[0],
 				7: device.pcrValues[7],
@@ -275,9 +298,10 @@ func TestQEMUOrchestrator_VerifyVMAttestation(t *testing.T) {
 		tampered[0] ^= 0xFF
 
 		result, err := orch.VerifyVMAttestation(ctx, "vm1", &VMAttestationEvidence{
-			Quote:     report.Quote,
-			Signature: tampered,
-			Nonce:     nonce,
+			Quote:              report.Quote,
+			Signature:          tampered,
+			SignatureAlgorithm: report.SignatureAlgorithm,
+			Nonce:              nonce,
 		})
 		require.NoError(t, err)
 		assert.False(t, result.Verified)
@@ -288,9 +312,10 @@ func TestQEMUOrchestrator_VerifyVMAttestation(t *testing.T) {
 
 	t.Run("wrong nonce fails", func(t *testing.T) {
 		result, err := orch.VerifyVMAttestation(ctx, "vm1", &VMAttestationEvidence{
-			Quote:     report.Quote,
-			Signature: report.Signature,
-			Nonce:     []byte("wrong-nonce"),
+			Quote:              report.Quote,
+			Signature:          report.Signature,
+			SignatureAlgorithm: report.SignatureAlgorithm,
+			Nonce:              []byte("wrong-nonce"),
 		})
 		require.NoError(t, err)
 		assert.False(t, result.Verified)
@@ -311,6 +336,27 @@ func TestQEMUOrchestrator_VerifyVMAttestation(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, result.Verified)
 		assert.False(t, result.PCRsValid)
+	})
+
+	t.Run("undeclared or mismatched scheme fails", func(t *testing.T) {
+		for name, scheme := range map[string]string{
+			"undeclared":                      "",
+			"PKCS#1 v1.5 for a PSS signature": x509.SHA256WithRSA.String(),
+			"ECDSA for an RSA AK":             x509.ECDSAWithSHA256.String(),
+		} {
+			t.Run(name, func(t *testing.T) {
+				result, err := orch.VerifyVMAttestation(ctx, "vm1", &VMAttestationEvidence{
+					Quote:              report.Quote,
+					Signature:          report.Signature,
+					SignatureAlgorithm: scheme,
+					Nonce:              nonce,
+				})
+				require.NoError(t, err)
+				assert.False(t, result.Verified)
+				assert.False(t, result.SignatureValid)
+				assert.True(t, result.NonceValid)
+			})
+		}
 	})
 }
 

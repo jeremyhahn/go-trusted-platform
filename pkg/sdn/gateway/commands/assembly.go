@@ -201,22 +201,38 @@ func LoadServeConfig(v *viper.Viper) (*ServeConfig, error) {
 // enables (#557) and attaches it to the gateway configuration, so
 // BuildGateway hands every supervised service to a child process. It
 // returns nil when the section is absent or disabled, or when there is no
-// `gateway:` section whose services could move. The children read
-// configFile, the file this process loaded.
-func BuildSupervisor(cfg *ServeConfig, configFile string, logger *slog.Logger) (*process.Supervisor, error) {
+// `gateway:` section whose services could move. The children are started
+// with inherited, the part of this process's command line they resolve the
+// same way (see childInheritance).
+func BuildSupervisor(cfg *ServeConfig, inherited process.Inherited, logger *slog.Logger) (*process.Supervisor, error) {
 	if cfg == nil {
 		return nil, ErrConfigLoadFailed
 	}
 	if cfg.Process == nil || !cfg.Process.Enabled || cfg.Gateway == nil {
 		return nil, nil
 	}
-	processCfg, err := cfg.Process.Config(configFile, logger)
+	processCfg, err := cfg.Process.Config(inherited, logger)
 	if err != nil {
 		return nil, &ErrConfigSection{Section: "process", Cause: err}
 	}
 	supervisor := process.New(processCfg)
 	cfg.Gateway.Supervisor = supervisor
 	return supervisor, nil
+}
+
+// enabledServices are the services this gatewayd configuration runs: the
+// gateway's enabled sections, then the proxy, whose section is gatewayd's
+// own rather than the gateway's. A supervised child picks its own process's
+// services out of this list.
+func enabledServices(cfg *ServeConfig) []string {
+	var out []string
+	if cfg.Gateway != nil {
+		out = cfg.Gateway.EnabledServices()
+	}
+	if cfg.Proxy != nil && cfg.Proxy.Enabled {
+		out = append(out, gateway.ServiceProxy)
+	}
+	return out
 }
 
 // BuildGateway assembles the gateway node from the parsed configuration:
@@ -280,10 +296,13 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 	// what the platform did not issue (BMC backends). Building each once
 	// here keeps every consumer on the same trust.
 	// The resolver serves the proxy alone, so a supervised child that does
-	// not host the proxy neither builds it nor touches its pin directory.
-	hostsProxy := gwCfg.Hosts(gateway.ServiceProxy)
+	// not host the proxy neither builds it nor touches its pin directory,
+	// and neither does a supervisor whose proxy runs in its own child.
+	proxyEnabled := cfg.Proxy != nil && cfg.Proxy.Enabled
+	proxySupervised := gwCfg.Supervisor != nil && gwCfg.Supervisor.Supervises(gateway.ServiceProxy)
+	runsProxy := proxyEnabled && gwCfg.Hosts(gateway.ServiceProxy) && !proxySupervised
 	var trustResolver trust.Resolver
-	if hostsProxy {
+	if runsProxy {
 		resolver, err := buildTrustResolver(cfg.Trust, cfg.DataDir, logger)
 		if err != nil {
 			return nil, err
@@ -326,7 +345,14 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 		gwCfg.MinUptimePct,
 	)
 
-	if hostsProxy && cfg.Proxy != nil && cfg.Proxy.Enabled {
+	switch {
+	case proxyEnabled && proxySupervised:
+		// The proxy parses untrusted TLS from the internet; it runs in its
+		// own unprivileged child and this process only relays to it (#557).
+		if err := gw.RegisterSupervisedService(gateway.ServiceProxy); err != nil {
+			return nil, err
+		}
+	case runsProxy:
 		handler, err := BuildProxyHandler(cfg.Proxy, trustResolver, anchor, logger)
 		if err != nil {
 			return nil, err

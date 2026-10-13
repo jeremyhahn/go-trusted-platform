@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -29,6 +30,7 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/orchestration"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // testImageDigest is a canonical OCI content digest used across the
@@ -388,6 +390,19 @@ func (m *mockHostTPM) IAK() (crypto.PublicKey, error) {
 		return nil, m.iakErr
 	}
 	return []byte("mock-iak"), nil
+}
+
+// IAKAttributes declares an RSA-PSS IAK. The mock's signatures are not real,
+// so the scheme only has to be present for the QuoteTPM contract.
+func (m *mockHostTPM) IAKAttributes() (*xkmssdk.KeyAttributes, error) {
+	if m.iakErr != nil {
+		return nil, m.iakErr
+	}
+	return &xkmssdk.KeyAttributes{
+		KeyAlgorithm:       x509.RSA,
+		SignatureAlgorithm: x509.SHA256WithRSAPSS,
+		Hash:               crypto.SHA256,
+	}, nil
 }
 
 func (m *mockHostTPM) VerifyQuote(_ context.Context, quoted, signature []byte) error {

@@ -153,16 +153,30 @@ func parityCertificate(t *testing.T, template, parent *x509.Certificate, parentK
 // connect wraps an SDK adapter as a CA client and closes it after the test.
 func connect(t *testing.T, adapter transport.Adapter, err error) platformv1.CAServiceClient {
 	t.Helper()
+	return platformv1.NewCAServiceClient(connection(t, adapter, err))
+}
+
+// connection returns an SDK adapter's connection and closes the adapter
+// after the test.
+func connection(t *testing.T, adapter transport.Adapter, err error) grpc.ClientConnInterface {
+	t.Helper()
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, adapter.Close()) })
-	return platformv1.NewCAServiceClient(adapter.Connection())
+	return adapter.Connection()
 }
 
 // serveGRPC serves the CA service on lis until the test ends.
 func serveGRPC(t *testing.T, svc *CAGRPCService, lis net.Listener, opts ...grpc.ServerOption) {
 	t.Helper()
+	serveGRPCServices(t, lis, func(srv grpc.ServiceRegistrar) { platformv1.RegisterCAServiceServer(srv, svc) }, opts...)
+}
+
+// serveGRPCServices serves the services register adds on lis until the test
+// ends.
+func serveGRPCServices(t *testing.T, lis net.Listener, register func(grpc.ServiceRegistrar), opts ...grpc.ServerOption) {
+	t.Helper()
 	srv := grpc.NewServer(opts...)
-	platformv1.RegisterCAServiceServer(srv, svc)
+	register(srv)
 	done := make(chan error, 1)
 	go func() { done <- srv.Serve(lis) }()
 	t.Cleanup(func() {
@@ -231,6 +245,13 @@ func (f *caParityFixture) quicClient(t *testing.T) platformv1.CAServiceClient {
 // returns an SDK QUIC client for it that presents the token "tok".
 func serveQUICCA(t *testing.T, tlsBundle *testutil.TestTLSBundle, handler *QUICServiceHandler) platformv1.CAServiceClient {
 	t.Helper()
+	return platformv1.NewCAServiceClient(serveQUIC(t, tlsBundle, handler))
+}
+
+// serveQUIC serves handler on a daemon QUIC server until the test ends and
+// returns an SDK QUIC connection to it that presents the token "tok".
+func serveQUIC(t *testing.T, tlsBundle *testutil.TestTLSBundle, handler *QUICServiceHandler) grpc.ClientConnInterface {
+	t.Helper()
 	config := quic.DefaultServerConfig()
 	config.ListenAddr = "127.0.0.1:0"
 	config.TLSConfig = tlsBundle.ServerTLSConfig()
@@ -246,7 +267,7 @@ func serveQUICCA(t *testing.T, tlsBundle *testutil.TestTLSBundle, handler *QUICS
 	))
 	require.NoError(t, err)
 	adapter.(*sdkquic.Adapter).SetToken("tok")
-	return connect(t, adapter, err)
+	return connection(t, adapter, err)
 }
 
 func (f *caParityFixture) mcpClient(t *testing.T) platformv1.CAServiceClient {

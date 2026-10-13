@@ -123,11 +123,27 @@ Containers are the most evenly covered capability set in this feature.
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
 | Attest VM | `POST /api/v1/compute/vms/{id}/attest` | `AttestVM` | `OpVMAttest` (`0xB9`) | `vm_attest` | ✅ |
-| Verify VM attestation | `POST /api/v1/compute/vms/{id}/attest/verify` | `VerifyVMAttestation` | `MISSING — docs/13 G7` | `vm_attest_verify` | ✅ |
+| Verify VM attestation | `POST /api/v1/compute/vms/{id}/attest/verify` | `VerifyVMAttestation` | `OpVMVerifyAttest` (`0xBF`) | `vm_attest_verify` | ✅ |
 | Attest container | `MISSING — docs/13 G7` | `AttestContainer` | `OpContainerAttest` (`0xEC`) | `container_attest` | ✅ |
 
 `platformctl container attest` is the only attestation CLI verb in the whole
 platform — see [`docs/attestation/cli.md`](../attestation/cli.md).
+
+### A VM quote declares its signature scheme
+
+Attest VM returns `signature_algorithm` beside `signature` on every transport:
+the scheme the vTPM's attestation key signed the quote with, named as
+`x509.SignatureAlgorithm` names it (`SHA256-RSA`, `SHA256-RSAPSS`,
+`ECDSA-SHA256`, and the SHA-384/512 forms). It comes from the AK's key
+attributes, not from its key type.
+
+Verify VM attestation takes the same field back (REST and MCP
+`signature_algorithm`, gRPC `VerifyVMAttestationRequest.signature_algorithm`,
+QUIC `signature_algorithm`) and checks the signature under that scheme alone.
+An absent or unknown scheme, or one the live AK cannot carry, is not a
+transport error: the call succeeds with `verified` and `signature_valid` false
+and the reason in `message`. A client therefore echoes Attest VM's
+`signature_algorithm` unchanged.
 
 ### Streaming capabilities are transport-limited by design
 

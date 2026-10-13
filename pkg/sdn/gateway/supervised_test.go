@@ -145,6 +145,57 @@ func TestSupervisor_ServicesThatHaveNotMovedStayInProcess(t *testing.T) {
 		"a partial move keeps the declared start order")
 }
 
+func TestRegisterSupervisedService_RelaysAServiceOutsideTheGatewaySections(t *testing.T) {
+	sup := newFakeSupervisor()
+	gw := newSupervisedGateway(t, sup)
+
+	require.NoError(t, gw.RegisterSupervisedService(ServiceProxy))
+
+	assert.IsType(t, &supervisedServiceHandler{}, gw.serviceHandlers[ServiceProxy])
+	assert.Equal(t, ServiceProxy, gw.serviceOrder[len(gw.serviceOrder)-1],
+		"the relay starts after the configured sections, as the in-process proxy did")
+	require.NoError(t, gw.Start(context.Background()))
+	assert.Contains(t, sup.started, ServiceProxy, "starting the gateway starts the proxy's process")
+}
+
+func TestRegisterSupervisedService_RefusesAServiceNoChildRuns(t *testing.T) {
+	unsupervised := newFakeSupervisor()
+	unsupervised.unsupervised[ServiceProxy] = true
+	tests := map[string]*Gateway{
+		"no supervisor":                      newGatewayWithoutSupervisor(t),
+		"the supervisor keeps it in-process": newSupervisedGateway(t, unsupervised),
+	}
+	for name, gw := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := gw.RegisterSupervisedService(ServiceProxy)
+
+			var notSupervised *ErrServiceNotSupervised
+			require.ErrorAs(t, err, &notSupervised)
+			assert.Equal(t, ServiceProxy, notSupervised.Service)
+			assert.NotContains(t, gw.serviceHandlers, ServiceProxy, "no relay to a process that does not exist")
+		})
+	}
+}
+
+func TestRegisterSupervisedService_RefusesASecondRegistration(t *testing.T) {
+	gw := newSupervisedGateway(t, newFakeSupervisor())
+	require.NoError(t, gw.RegisterSupervisedService(ServiceProxy))
+
+	err := gw.RegisterSupervisedService(ServiceProxy)
+
+	var exists *ErrServiceAlreadyExists
+	require.ErrorAs(t, err, &exists)
+}
+
+// newGatewayWithoutSupervisor is a gateway that runs everything it hosts
+// in its own process.
+func newGatewayWithoutSupervisor(t *testing.T) *Gateway {
+	t.Helper()
+	gw, err := NewGateway(baseGatewayConfig("plain-gw"))
+	require.NoError(t, err)
+	return gw
+}
+
 // supervisedTransitGateway is a gateway whose BGP speaker runs in a
 // supervised child.
 func supervisedTransitGateway(t *testing.T, sup *fakeSupervisor) *Gateway {

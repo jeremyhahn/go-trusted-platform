@@ -1,6 +1,6 @@
 # Remote-Access VPN — API
 
-> **Status: PARTIAL — the operator control plane ships on every transport (#584 PR 3); the client admission verbs are planned.** · Last verified: 2026-10-13
+> **Status: PARTIAL — the operator control plane ships on every transport (#584 PR 3) and in the JS SDK and the web console (#584 PR 4); the client admission verbs are planned.** · Last verified: 2026-10-13
 > §1–§4 describe `VPNService` as it is routed today. §5 is still a requirement:
 > the client verbs terminate on the gateway's admission listener, which waits on
 > the gateway process model (#557).
@@ -40,6 +40,9 @@ every transport; the per-transport tables are pinned against
   route takes the scope when a scope authorizer is configured.
 - **Embedded / Go SDK**: `sdk/go/services/vpn.Client`, over any of the
   transports above.
+- **JS SDK**: `VPNService` (`client.vpn`, React `useVPN()`) in
+  `sdk/javascript/src/services/vpn-service.ts`, over the REST routes, with the
+  same eight operations.
 
 How each transport authenticates is the platform-wide picture in
 [docs/daemon/api.md](../daemon/api.md); the VPN adds no transport of its own.
@@ -67,6 +70,10 @@ reports telemetry.
   "reason": "vpn: zone \"storage\" is not reachable through this service"}] }
 ```
 
+- The names above are the proto field names. REST bodies are protojson: it
+  writes camelCase names (`tenantId`, `enrolledAtUnix`) and reads either form,
+  and it encodes the 64-bit fields (the `*_unix` times, `admissions`,
+  `refusals`) as decimal strings. The JS SDK types follow that encoding.
 - `zones` narrows the gateway's `allow-to` set; empty means every allowed zone.
 - `enrolled_at_unix` and `updated_at_unix` are set by the service and ignored on
   write. Re-enrolling a device replaces its zones and keeps its first enrolment

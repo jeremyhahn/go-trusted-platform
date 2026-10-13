@@ -53,6 +53,7 @@ function node(quoted: (nonce: Uint8Array) => Promise<Uint8Array>, echo?: Uint8Ar
     data: {
       quote: b64(attest(await quoted(unb64(req.nonce)))),
       signature: "c2ln",
+      signatureAlgorithm: "SHA256-RSAPSS",
       ...(echo ? { channelBinding: b64(echo) } : {}),
     },
   }));
@@ -85,6 +86,21 @@ describe("TPMQuotePage channel binding", () => {
     await waitFor(() => expect(tpm.verifyQuote).toHaveBeenCalledTimes(1));
     expect(tpm.verifyQuote.mock.calls[0]?.[0]).toMatchObject({ channelBinding: b64(callerBinding) });
     expect(await screen.findByText("VERIFIED")).toBeTruthy();
+  });
+
+  // The signature is checked under the scheme the quote declared, so the
+  // verify panel carries it over from the quote (#482).
+  it("verifies under the scheme the quote declared", async () => {
+    node(boundTo(callerBinding), callerBinding);
+    tpm.verifyQuote.mockResolvedValue({ success: true, data: { verified: true } });
+    render(<TPMQuotePage />);
+
+    generate();
+    await waitFor(() => expect(screen.getByLabelText(/Signature scheme/)).toHaveProperty("value", "SHA256-RSAPSS"));
+    fireEvent.click(screen.getByRole("button", { name: /Verify Quote/ }));
+
+    await waitFor(() => expect(tpm.verifyQuote).toHaveBeenCalledTimes(1));
+    expect(tpm.verifyQuote.mock.calls[0]?.[0]).toMatchObject({ signatureAlgorithm: "SHA256-RSAPSS" });
   });
 
   it("refuses a quote of the bare nonce", async () => {

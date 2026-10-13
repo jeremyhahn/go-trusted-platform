@@ -75,9 +75,9 @@ func (e *ErrUserUnknown) Error() string {
 func (e *ErrUserUnknown) Unwrap() error { return e.Cause }
 
 // Config builds the supervisor configuration from the settings, resolving
-// the service account and filling defaults. configFile is the gatewayd
-// configuration the children read.
-func (s Settings) Config(configFile string, logger *slog.Logger) (Config, error) {
+// the service account and filling defaults. inherited is the part of the
+// supervisor's command line every child is started with.
+func (s Settings) Config(inherited Inherited, logger *slog.Logger) (Config, error) {
 	runtimeDir := s.RuntimeDir
 	if runtimeDir == "" {
 		runtimeDir = DefaultRuntimeDir
@@ -96,7 +96,7 @@ func (s Settings) Config(configFile string, logger *slog.Logger) (Config, error)
 	}
 	return Config{
 		RuntimeDir: runtimeDir,
-		ConfigFile: configFile,
+		Inherited:  inherited,
 		UID:        uid,
 		GID:        gid,
 		// The control sockets are group-owned by the service account so an

@@ -386,6 +386,29 @@ func TestErrSignatureSchemeMismatch(t *testing.T) {
 	}
 }
 
+func TestErrQuoteSchemeUnavailable(t *testing.T) {
+	t.Run("with cause", func(t *testing.T) {
+		cause := errors.New("TPM_RC_HANDLE")
+		err := ErrQuoteSchemeUnavailable{Cause: cause}
+		if err.Error() != "vm: IAK signature scheme unavailable: TPM_RC_HANDLE" {
+			t.Errorf("unexpected error message: %s", err.Error())
+		}
+		if !errors.Is(err, cause) {
+			t.Error("expected error to unwrap to its cause")
+		}
+	})
+
+	t.Run("without cause", func(t *testing.T) {
+		err := ErrQuoteSchemeUnavailable{}
+		if err.Error() != "vm: the IAK declares no signature scheme" {
+			t.Errorf("unexpected error message: %s", err.Error())
+		}
+		if err.Unwrap() != nil {
+			t.Error("expected nil unwrap without a cause")
+		}
+	})
+}
+
 func TestErrPCRReadFailed(t *testing.T) {
 	t.Run("with cause", func(t *testing.T) {
 		cause := errors.New("auth error")

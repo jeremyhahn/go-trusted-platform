@@ -359,7 +359,12 @@ func TestMCPServiceProvider_TPMStubs(t *testing.T) {
 		{"TPMCreateIAK", func() error { _, err := p.TPMCreateIAK(ctx); return err }},
 		{"TPMDeleteIAK", func() error { _, err := p.TPMDeleteIAK(ctx); return err }},
 		{"TPMQuote", func() error { _, err := p.TPMQuote(ctx, []byte("n"), []int{0}); return err }},
-		{"TPMVerifyQuote", func() error { _, err := p.TPMVerifyQuote(ctx, []byte("q"), []byte("s"), []byte("n"), nil); return err }},
+		{"TPMVerifyQuote", func() error {
+			_, err := p.TPMVerifyQuote(ctx, &mcp.TPMVerifyQuoteRequest{
+				Quote: []byte("q"), Signature: []byte("s"), Nonce: []byte("n"), SignatureAlgorithm: "SHA256-RSAPSS",
+			})
+			return err
+		}},
 		{"TPMReadPCRs", func() error { _, err := p.TPMReadPCRs(ctx, []int{0}); return err }},
 		{"TPMExtendPCR", func() error { _, err := p.TPMExtendPCR(ctx, 0, []byte("d")); return err }},
 		{"TPMEventLog", func() error { _, err := p.TPMEventLog(ctx); return err }},

@@ -14,6 +14,8 @@
 package tpm_test
 
 import (
+	"crypto"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -23,6 +25,7 @@ import (
 	"strings"
 	"testing"
 
+	tpmgo "github.com/google/go-tpm/tpm2"
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -46,6 +49,15 @@ type quotingTPM struct {
 func (q *quotingTPM) Quote(_ []uint, nonce []byte) (xkmssdk.Quote, error) {
 	q.quoted = nonce
 	return xkmssdk.Quote{Quoted: []byte("attest"), Signature: []byte("sig")}, nil
+}
+
+// IAKAttributes declares an RSA-PSS IAK, the scheme the quote is signed under.
+func (q *quotingTPM) IAKAttributes() (*xkmssdk.KeyAttributes, error) {
+	return &xkmssdk.KeyAttributes{
+		KeyAlgorithm:       x509.RSA,
+		SignatureAlgorithm: x509.SHA256WithRSAPSS,
+		Hash:               crypto.SHA256,
+	}, nil
 }
 
 // quoteRouter serves POST /api/v1/tpm/quote over the production TPM service.
@@ -89,13 +101,15 @@ func TestQuote_BindsTheConnectionItArrivedOn(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var envelope struct {
 		Payload struct {
-			ChannelBinding []byte `json:"channelBinding"`
+			ChannelBinding     []byte `json:"channelBinding"`
+			SignatureAlgorithm string `json:"signatureAlgorithm"`
 		} `json:"payload"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
 	callerBinding, err := xkmssdk.PeerChannelBinding(resp.TLS)
 	require.NoError(t, err)
 	assert.Equal(t, callerBinding, envelope.Payload.ChannelBinding, "the echo is the caller's own connection")
+	assert.Equal(t, testutil.PSSQuoteScheme, envelope.Payload.SignatureAlgorithm, "the quote names the scheme it is signed under")
 	assert.Equal(t, xkmssdk.PeerQualifyingData(nonce, callerBinding), tpmDevice.quoted,
 		"the TPM quoted the nonce bound to the connection, not the nonce as sent")
 }
@@ -114,4 +128,48 @@ func TestQuote_RefusesPlainHTTP(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(reason), "this REST request has none", "refused for the missing binding, not a bad body")
 	assert.Nil(t, tpmDevice.quoted, "the TPM was never asked to quote")
+}
+
+// TestVerifyQuote_UsesTheDeclaredScheme: POST /api/v1/tpm/quote/verify
+// checks the signature under the scheme the request declares (#482). An
+// RSA-PSS quote verifies under SHA256-RSAPSS; with no scheme, or PKCS#1
+// v1.5 inferred from the RSA key, it does not.
+func TestVerifyQuote_UsesTheDeclaredScheme(t *testing.T) {
+	quote := tpmgo.Marshal(tpmgo.TPMSAttest{
+		Magic:    tpmgo.TPMGeneratedValue,
+		Type:     tpmgo.TPMSTAttestQuote,
+		Attested: tpmgo.NewTPMUAttest(tpmgo.TPMSTAttestQuote, &tpmgo.TPMSQuoteInfo{}),
+	})
+	signature, akPublic := testutil.SignPSSQuote(t, quote)
+	router := quoteRouter(&quotingTPM{})
+	verify := func(scheme string) (bool, string) {
+		t.Helper()
+		body, err := json.Marshal(map[string]string{
+			"quote":              base64.StdEncoding.EncodeToString(quote),
+			"signature":          base64.StdEncoding.EncodeToString(signature),
+			"akPublic":           base64.StdEncoding.EncodeToString(akPublic),
+			"signatureAlgorithm": scheme,
+		})
+		require.NoError(t, err)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/tpm/quote/verify", strings.NewReader(string(body))))
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		var envelope struct {
+			Payload struct {
+				Verified bool   `json:"verified"`
+				Message  string `json:"message"`
+			} `json:"payload"`
+		}
+		require.NoError(t, json.NewDecoder(w.Body).Decode(&envelope))
+		return envelope.Payload.Verified, envelope.Payload.Message
+	}
+
+	verified, message := verify(testutil.PSSQuoteScheme)
+	assert.True(t, verified, message)
+
+	for _, scheme := range []string{"", x509.SHA256WithRSA.String()} {
+		verified, message := verify(scheme)
+		assert.False(t, verified, "scheme %q", scheme)
+		assert.Contains(t, message, "signature_verification_failed", "scheme %q", scheme)
+	}
 }

@@ -35,6 +35,10 @@ type VMQuoteTPM interface {
 	// IAK returns the Initial Attestation Key public key.
 	IAK() (crypto.PublicKey, error)
 
+	// IAKAttributes returns the IAK's key attributes, whose
+	// SignatureAlgorithm names the scheme every quote is signed under.
+	IAKAttributes() (*xkmssdk.KeyAttributes, error)
+
 	// EKCertificate returns the Endorsement Key certificate.
 	EKCertificate() (*x509.Certificate, error)
 }
@@ -147,6 +151,20 @@ func (d *VMAttestorDevice) GetAIKPublicKey(ctx context.Context) ([]byte, error) 
 	}
 
 	return der, nil
+}
+
+// GetAIKSignatureAlgorithm returns the x509.SignatureAlgorithm name of the
+// scheme the vTPM IAK signs quotes under, read from the IAK's attributes.
+func (d *VMAttestorDevice) GetAIKSignatureAlgorithm(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", ErrAIKSignatureAlgorithmUnavailable{Cause: err}
+	}
+
+	algorithm, err := vm.QuoteSignatureAlgorithm(d.tpm)
+	if err != nil {
+		return "", ErrAIKSignatureAlgorithmUnavailable{Cause: err}
+	}
+	return algorithm, nil
 }
 
 // GetEKCertificate returns the DER encoding of the vTPM EK certificate.

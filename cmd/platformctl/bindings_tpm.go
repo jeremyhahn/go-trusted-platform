@@ -386,20 +386,22 @@ func (b *TPMBinding) Quote(akHandle uint32, akPassword string,
 
 // VerifyQuote verifies a TPM quote for remote attestation. channelBinding
 // is the binding Quote returned with the quote; when set, the quote must
-// carry SHA-256(nonce || channelBinding).
+// carry SHA-256(nonce || channelBinding). signatureAlgorithm is the scheme
+// Quote declared; the signature is checked under it and fails without it.
 func (b *TPMBinding) VerifyQuote(quote, signature, akPublic,
-	nonce, channelBinding []byte) (map[string]interface{}, error) {
+	nonce, channelBinding []byte, signatureAlgorithm string) (map[string]interface{}, error) {
 
 	cl, err := b.getClient()
 	if err != nil {
 		return nil, err
 	}
 	resp, err := tpmsvc.NewClientFromGRPC(cl.TPM()).VerifyQuote(b.conn.ctx, &platformv1.VerifyQuoteRequest{
-		Quote:          quote,
-		Signature:      signature,
-		AkPublic:       akPublic,
-		Nonce:          nonce,
-		ChannelBinding: channelBinding,
+		Quote:              quote,
+		Signature:          signature,
+		AkPublic:           akPublic,
+		Nonce:              nonce,
+		ChannelBinding:     channelBinding,
+		SignatureAlgorithm: signatureAlgorithm,
 	})
 	if err != nil {
 		return nil, err

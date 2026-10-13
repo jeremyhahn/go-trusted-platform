@@ -284,6 +284,12 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.PlatformDaemon/StopService":      "platform_daemon_stop_service",
 	"/platform.v1.PlatformDaemon/RestartService":   "platform_daemon_restart_service",
 
+	// TPM Service — proto: pkg/api/grpc/proto/tpm.proto. Only the quote
+	// pair is routed (#482); the SDK refuses Quote here, because MCP has no
+	// TLS connection to bind it to.
+	"/platform.v1.TPMService/Quote":       "platform_tpm_quote",
+	"/platform.v1.TPMService/VerifyQuote": "platform_tpm_verify_quote",
+
 	// CA Service — proto: pkg/api/grpc/proto/ca.proto
 	"/platform.v1.CAService/GetCAInfo":         "ca_info",
 	"/platform.v1.CAService/IssueCertificate":  "ca_issue",

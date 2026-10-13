@@ -130,6 +130,7 @@ export default function TPMQuotePage() {
   const [verifySignature, setVerifySignature] = React.useState("");
   const [verifyNonce, setVerifyNonce] = React.useState("");
   const [verifyBinding, setVerifyBinding] = React.useState("");
+  const [verifyScheme, setVerifyScheme] = React.useState("");
   const [verifying, setVerifying] = React.useState(false);
   const [verifyResult, setVerifyResult] = React.useState<VerifyQuoteResponse | null>(null);
   const [verifyError, setVerifyError] = React.useState<string | null>(null);
@@ -168,6 +169,7 @@ export default function TPMQuotePage() {
       if (s) setVerifySignature(s);
       setVerifyNonce(nonce);
       setVerifyBinding(payload?.channelBinding ?? "");
+      setVerifyScheme(payload?.signatureAlgorithm ?? "");
       toast({
         title: "Quote generated",
         description: `Attested ${selectedPCRs.length} PCR(s)`,
@@ -206,6 +208,8 @@ export default function TPMQuotePage() {
         signature: verifySignature,
         nonce: looksBase64(verifyNonce) ? verifyNonce : hexToBase64(verifyNonce),
         ...(verifyBinding ? { channelBinding: verifyBinding } : {}),
+        // The signature is checked under the scheme the quote declared.
+        signatureAlgorithm: verifyScheme,
       });
       const payload = resp.data ?? null;
       setVerifyResult(payload);
@@ -408,6 +412,18 @@ export default function TPMQuotePage() {
                 id="vnonce"
                 value={verifyNonce}
                 onChange={(e) => setVerifyNonce(e.target.value)}
+                className="font-mono text-xs mt-1"
+              />
+            </div>
+            <div>
+              <Label htmlFor="vscheme" className="text-sm font-medium">
+                Signature scheme
+              </Label>
+              <Input
+                id="vscheme"
+                value={verifyScheme}
+                onChange={(e) => setVerifyScheme(e.target.value)}
+                placeholder="The signatureAlgorithm returned with the quote, e.g. SHA256-RSAPSS"
                 className="font-mono text-xs mt-1"
               />
             </div>

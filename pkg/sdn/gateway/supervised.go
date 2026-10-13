@@ -69,6 +69,17 @@ func newSupervisedServiceHandler(name string, supervisor ServiceSupervisor) *sup
 	return &supervisedServiceHandler{name: name, supervisor: supervisor}
 }
 
+// RegisterSupervisedService registers the relay for a service that is not a
+// gateway section, so the configured-section walk never sees it: the proxy,
+// whose section belongs to gatewayd rather than to GatewayConfig. The
+// service must be one the gateway's supervisor runs out of process.
+func (g *Gateway) RegisterSupervisedService(name string) error {
+	if !g.supervises(name) {
+		return &ErrServiceNotSupervised{Service: name}
+	}
+	return g.RegisterServiceHandler(newSupervisedServiceHandler(name, g.config.Supervisor))
+}
+
 func (h *supervisedServiceHandler) Name() string { return h.name }
 
 func (h *supervisedServiceHandler) Start(ctx context.Context) error {

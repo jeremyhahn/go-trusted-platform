@@ -402,6 +402,10 @@ func (r *ToolRegistry) registerVMTools() {
 					"type":        "string",
 					"description": "Base64-encoded AK signature over the quote",
 				},
+				"signature_algorithm": map[string]interface{}{
+					"type":        "string",
+					"description": "Scheme the quote declares, as vm_attest returned it (e.g. SHA256-RSAPSS); an absent or unknown scheme fails verification",
+				},
 				"nonce": map[string]interface{}{
 					"type":        "string",
 					"description": "Base64-encoded expected anti-replay nonce",

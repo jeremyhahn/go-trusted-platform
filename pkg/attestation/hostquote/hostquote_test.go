@@ -127,7 +127,7 @@ func TestCollect_ProducesEvidenceTheVerifierAccepts(t *testing.T) {
 
 	akDER, err := x509.MarshalPKIXPublicKey(&tpm.key.PublicKey)
 	require.NoError(t, err)
-	require.NoError(t, vm.VerifyQuoteSignature(akDER, evidence.Quote, evidence.Signature))
+	require.NoError(t, vm.VerifyQuoteSignatureWithAlgorithm(akDER, evidence.Quote, evidence.Signature, x509.ECDSAWithSHA256.String()))
 	require.NoError(t, vm.VerifyQuoteNonce(evidence.Quote, nonce))
 	require.NoError(t, vm.VerifyQuotePCRDigest(evidence.Quote, evidence.PCRs))
 }

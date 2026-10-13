@@ -31,10 +31,9 @@ type Spec struct {
 	Definition Definition
 	// Socket is the control socket path the child must listen on.
 	Socket string
-	// ConfigFile is the gatewayd config the child reads. It reads the same
-	// file the supervisor did: a process hosts a subset of the services,
-	// not a subset of the configuration.
-	ConfigFile string
+	// Inherited is the part of the supervisor's own command line the child
+	// is started with, so it resolves the same configuration and state.
+	Inherited Inherited
 	// UID and GID are the credentials an unprivileged child drops to.
 	UID, GID uint32
 	// SocketGID, when non-negative, owns the child's control socket so a
@@ -48,6 +47,60 @@ type Spec struct {
 	// kernel places the child in at clone time (clone3 CLONE_INTO_CGROUP),
 	// so the child is never accounted outside its own limits.
 	CgroupFD int
+}
+
+// Inherited holds the gatewayd root flags a child is started with. A child
+// is a fresh gatewayd invocation that resolves these the way the supervisor
+// did, so anything the supervisor was given on its command line and not
+// passed on here silently falls back to the flag default in the child.
+type Inherited struct {
+	// ConfigFile is the gatewayd config the child reads. It reads the same
+	// file the supervisor did: a process hosts a subset of the services,
+	// not a subset of the configuration.
+	ConfigFile string
+	// DataDir is the gatewayd state directory (--data-dir). The proxy's
+	// TOFU pin store lives under it, so a child resolving the default
+	// instead would open a different store and trust peers afresh.
+	DataDir string
+	// LogFormat and Debug select the child's log handler and level, so
+	// every process of one gatewayd logs the same way.
+	LogFormat string
+	Debug     bool
+}
+
+// args returns the root flags that carry the inherited settings. An empty
+// value is left out, so the child applies the same default the supervisor
+// did.
+func (in Inherited) args() []string {
+	var args []string
+	if in.ConfigFile != "" {
+		args = append(args, "--config", in.ConfigFile)
+	}
+	if in.DataDir != "" {
+		args = append(args, "--data-dir", in.DataDir)
+	}
+	if in.LogFormat != "" {
+		args = append(args, "--log-format", in.LogFormat)
+	}
+	if in.Debug {
+		args = append(args, "--debug")
+	}
+	return args
+}
+
+// Args returns the child's command line after the executable: the fixed
+// `service run` verb, the per-process control arguments, then the root
+// flags the child inherits from the supervisor.
+func (spec Spec) Args() []string {
+	args := []string{
+		"service", "run", spec.Definition.Name,
+		"--ipc-socket", spec.Socket,
+		"--socket-group", strconv.Itoa(spec.SocketGID),
+		"--supervisor-uid", strconv.FormatUint(uint64(spec.SupervisorUID), 10),
+		"--uid", strconv.FormatUint(uint64(spec.UID), 10),
+		"--gid", strconv.FormatUint(uint64(spec.GID), 10),
+	}
+	return append(args, spec.Inherited.args()...)
 }
 
 // Child is a launched process the supervisor watches.
@@ -96,17 +149,7 @@ func (l *ExecLauncher) Launch(ctx context.Context, spec Spec) (Child, error) {
 	if err != nil {
 		return nil, &ErrProcessLaunch{Process: spec.Definition.Name, Cause: err}
 	}
-	args := []string{
-		"service", "run", spec.Definition.Name,
-		"--ipc-socket", spec.Socket,
-		"--socket-group", strconv.Itoa(spec.SocketGID),
-		"--supervisor-uid", strconv.FormatUint(uint64(spec.SupervisorUID), 10),
-		"--uid", strconv.FormatUint(uint64(spec.UID), 10),
-		"--gid", strconv.FormatUint(uint64(spec.GID), 10),
-	}
-	if spec.ConfigFile != "" {
-		args = append(args, "--config", spec.ConfigFile)
-	}
+	args := spec.Args()
 	// The binary is this process's own executable unless a deployment names
 	// another; the arguments are a fixed verb plus paths from the daemon's
 	// own configuration. Nothing here comes from the network.

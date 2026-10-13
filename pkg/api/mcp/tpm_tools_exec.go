@@ -265,8 +265,19 @@ func (r *ToolRegistry) executeTPMVerifyQuote(ctx context.Context, args map[strin
 	if err != nil {
 		return nil, ErrTPMInvalidData
 	}
+	akPublic, err := base64.StdEncoding.DecodeString(getString(args, "ak_public"))
+	if err != nil {
+		return nil, ErrTPMInvalidData
+	}
 
-	result, err := r.service.TPMVerifyQuote(ctx, quote, signature, nonce, channelBinding)
+	result, err := r.service.TPMVerifyQuote(ctx, &TPMVerifyQuoteRequest{
+		Quote:              quote,
+		Signature:          signature,
+		Nonce:              nonce,
+		ChannelBinding:     channelBinding,
+		AKPublic:           akPublic,
+		SignatureAlgorithm: getString(args, "signature_algorithm"),
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -19,16 +19,50 @@ bytes and the category-opcode rule are in
 |---|---|
 | gRPC | `TPMService`, **27 RPCs** (`pkg/api/grpc/proto/tpm.proto`); `IDevIDService`, **20 RPCs** (`idevid.proto`) |
 | Embedded | `ServiceRegistry.TPM` (`platformv1.TPMServiceServer`) and `ServiceRegistry.IDevID` — the embedded adapter dispatches gRPC method strings, so **embedded coverage equals gRPC coverage exactly** |
-| REST | `/api/v1/tpm` (`pkg/webservice/v1/rest/tpm/router.go`) and `/api/v1/idevid` (`pkg/webservice/v1/rest/idevid/router.go`) |
+| REST | web service: `/api/v1/tpm` (`pkg/webservice/v1/rest/tpm/router.go`) and `/api/v1/idevid` (`pkg/webservice/v1/rest/idevid/router.go`); daemon REST listener: `/api/v1/tpm` (`pkg/api/rest/tpm_handlers.go`, mounted by `RESTServer.SetTPMHandlers`) |
 | QUIC | category opcode `OpTPM2Category` = **`0x99`**, sub-opcode in `payload[0]` (`pkg/api/quic/tpm_handlers.go`); device identity uses **top-level** opcodes `0x56`–`0x5F`, `0x6B`–`0x6E`, `0x78`–`0x7B` |
 | MCP | 31 `platform_tpm_*` tools (`pkg/api/mcp/tpm_tools.go`) plus 17 `idevid_*` / `iak_*` tools (`idevid_tools.go`, `ldevid_tools.go`) |
 
-**A second REST surface exists and is not served.** `pkg/api/rest/tpm_handlers.go`
-registers `/api/v1/tpm/make-credential`, `/activate-credential`, `/certify`,
-`/capabilities`, `/pcrs/extend`, `/nv/read`, `/nv/write`, `/nv/define`, `/nv`,
-`/csr/idevid`, `/csr/ldevid`, `/platform` and `/idevid`. `NewTPMHandlers` is
-constructed only in its own tests. **Do not document, call, or build against
-those paths.** Only the routes in §3–§8 below are reachable.
+**Two REST servers serve `/api/v1/tpm`.** The web service mounts its router;
+platformd's own REST listener mounts `restapi.TPMHandlers`. On the daemon
+listener every route needs a platform bearer token granting the scope in §9.
+**Every daemon-listener route calls one RPC of the daemon's `TPMService`** —
+the same `TPMGRPCService` that gRPC, Unix and embedded call, with no TPM logic
+of its own — and speaks the SDK wire contract, so both SDK REST adapters work
+against it (`TestTPMRoutesServeTheSDKContract`,
+`pkg/api/rest/tpm_handlers_test.go`; `TestTPMQuoteParity_*`,
+`pkg/api/daemon/tpm_quote_transport_parity_test.go`):
+
+- The request is the RPC's request message. The body is protojson, with either
+  the camelCase JSON name (the JavaScript SDK) or the proto name (the Go SDK)
+  of each field, and enums given by name or number. An empty body is the empty
+  request.
+- Query parameters and path parameters set fields of the same message, by
+  either name: a `uint32` handle or index in decimal or `0x` hex, an enum by
+  name or number, a bool, a string, and one parameter per element of a
+  repeated field (`?indices=0&indices=7`). A path parameter wins over a query
+  parameter of the same name. Bytes and message fields travel only in the body.
+- **A field the message does not have is `400`, never a silent default** — in
+  the body (`ErrInvalidRequestBody`, `unknown field "x"`) or as a parameter
+  (`ErrTPMInvalidQueryParameter`). So is a parameter that does not parse, or a
+  single-valued field given twice. The TPM service is not called.
+- The reply is the bare protojson response message, with camelCase keys and
+  every field present. An RPC error is the standard error envelope, its status
+  mapped from the gRPC code.
+
+The path-parameter forms the JavaScript SDK calls are
+`DELETE /tpm/{ek,srk,ak}/{handle}` and `GET`/`PUT`/`DELETE /tpm/nvram/{index}`;
+the Go SDK sends the same requests to `DELETE /tpm/{ek,srk,ak}` and
+`GET`/`PUT`/`DELETE /tpm/nvram` with the fields in the body, and `POST
+/tpm/nvram` defines an index. `GET /tpm/pcrs` (parameters) and `POST /tpm/pcrs`
+(body) both call `GetPCRs`. No `TPMHandlers` route calls the
+`ActivateCredential` RPC. The routes with no `TPMService` RPC behind them —
+`certify`, `capabilities`, `platform`, `pcrs/extend`, `csr/idevid` and
+`POST /tpm/iak` — are not served by the daemon listener. The daemon listener's `/tpm/idevid*`, `/tpm/iak*`,
+`/tpm/device/attributes` and `/tpm/activate-credential`
+routes are its device-identity routes (`pkg/api/daemon/rest_idevid.go`), not
+`TPMHandlers`, and carry no TPM scope. The cells in §3–§8 name the web service
+routes.
 
 ---
 
@@ -180,9 +214,7 @@ Key algorithms across all transports: `RSA-2048`, `RSA-3072`, `RSA-4096`,
 because the JavaScript SDK sends the index list and bank selection in a body.
 Both dispatch to the same handler.
 
-**Certify exists on MCP alone** on the served surface. One transport out of
-six, with no gRPC method behind it to grow into. The `pkg/api/rest` handler set
-also carries `POST /api/v1/tpm/certify`; given a nonce it is bound like a quote.
+**Certify has no gRPC method behind it.** It is served by MCP only.
 
 **A quote is bound to the connection it is requested over (#482).** The node
 never quotes the nonce as sent: it derives the TLS exporter binding of the
@@ -196,6 +228,21 @@ quote bound elsewhere (`quotebind.ErrQuoteNotBound` inside `ErrQuoteFailed`).
 qualifying data; a passing verify is not channel proof. The contract and its
 tests are in [attestation/api.md](../attestation/api.md) §5.1a.
 
+**A quote is verified under the scheme it declares (#482).** `Quote` returns
+`signature_algorithm`, the IAK's TPMT_SIGNATURE scheme as an
+`x509.SignatureAlgorithm` name (`SHA256-RSAPSS`, `SHA256-RSA`,
+`ECDSA-SHA256`), read from the IAK key attributes with
+`vm.QuoteSignatureAlgorithm` before the TPM is asked to sign. An IAK that
+declares no scheme is refused (gRPC `FailedPrecondition`) and no quote is
+taken. `VerifyQuote` takes `signature_algorithm` back on every transport —
+REST and gRPC/Unix through the proto field (`signatureAlgorithm` in the REST
+protojson body), QUIC `TPM2VerifyQuoteRequest.signature_algorithm`, MCP
+`platform_tpm_verify_quote` argument `signature_algorithm` — and checks the
+signature with `vm.VerifyQuoteSignatureWithAlgorithm`. A missing, unknown or
+mismatched scheme returns `verified: false` with
+`signature_verification_failed: …`; nothing infers PKCS#1 v1.5 from an RSA
+key any more, so an RSA-PSS IAK's quotes verify.
+
 Schemas: `SealRequest` (`data`, `cn`, `parent_handle`, `parent_password`,
 `password`, `pcr_indices`, `pcr_bank`, `overwrite`) / `SealResponse`
 (`status`, `sealed_data`, `public_key`, `private_key`); `UnsealRequest`
@@ -203,8 +250,29 @@ Schemas: `SealRequest` (`data`, `cn`, `parent_handle`, `parent_password`,
 `pcr_bank`) / `UnsealResponse` (`status`, `data`); `QuoteRequest`
 (`ak_handle`, `ak_password`, `pcr_indices`, `pcr_bank`, `nonce`) /
 `QuoteResponse` (`status`, `quote`, `signature`, `pcr_values`, `event_log`,
-`channel_binding`); `VerifyQuoteRequest` carries an optional
-`channel_binding`.
+`channel_binding`, `signature_algorithm`); `VerifyQuoteRequest` carries the
+required `signature_algorithm` and an optional `channel_binding`.
+
+**`ak_public` names the key that signed the quote, on every transport.** It is
+the attestation key's PKIX DER — the `ak_public` proto field on REST and
+gRPC/Unix (`akPublic` in the protojson body), raw bytes in QUIC
+`TPM2VerifyQuoteRequest.ak_public`, and the base64 `platform_tpm_verify_quote`
+argument `ak_public` on MCP. Left empty, the platform IAK verifies. Both MCP
+service providers (`MCPServiceProvider` and `PlatformServiceProvider`) serve
+the quote tools on the same `TPMGRPCService` as gRPC, so there is one quote
+path and one verifier (`pkg/api/daemon/tpm_quote_tools.go`).
+
+**The SDK `tpm` client reaches `Quote` and `VerifyQuote` on every transport.**
+The SDK QUIC adapter routes both onto `0x99` · `0x0F` / `0x10`
+(`sdk/go/transport/quic/tpm_quote.go`), encoding the `quicwire.TPM2Quote*`
+bodies the server decodes, so `ak_public`, `channel_binding` and
+`signature_algorithm` arrive on QUIC as they do on gRPC. The SDK MCP adapter
+routes both onto `platform_tpm_quote` / `platform_tpm_verify_quote`
+(`sdk/go/transport/mcp/tpm_quote.go`); the verify arguments are the proto's own
+JSON names. Over Unix, MCP and embedded the SDK refuses `Quote` with
+`transport.ErrChannelBindingUnavailable` inside `ErrQuoteFailed` and the TPM is
+not touched; `VerifyQuote` works there. The
+cross-transport tests are `pkg/api/daemon/tpm_quote_transport_parity_test.go`.
 
 **There is no `platform_policy` field on `SealRequest` on any transport.**
 Sealing under the platform PCR policy is a server-side property of how the
@@ -309,11 +377,14 @@ catalogs are default-deny** ([`docs/daemon/api.md`](../daemon/api.md) §5).
 |---|---|
 | gRPC `TPMService` | **every RPC scoped** in `pkg/api/grpc/method_permissions.go`: `tpm:read` for the observers plus `Quote`, `VerifyQuote`, `ReadNVRAM`, `Unseal` and `MakeCredential`; `tpm:write` for `ActivateCredential`, the `Create*` calls, `DefineNVRAM`, `WriteNVRAM`, `ImportEKCertificate`, `Provision` and `Seal`; `tpm:delete` for `DeleteAK`, `DeleteEK`, `DeleteSRK`, `UndefineNVRAM` and `Clear` |
 | gRPC `IDevIDService` | **every RPC scoped**: `idevid:read` for the `Get*` / `Has*` calls; `idevid:write` for CSR, generate, install, `CreateLDevID`, `ActivateCredential` and `FlushTransientContexts`; `idevid:delete` for the four `Delete*` calls |
-| MCP — `platform_tpm_*` tools | **refused**: not in `pkg/api/mcp/authz.go`, so `AuthorizeTool` answers `AuthErrorToolNotClassified` for every caller |
+| MCP — `platform_tpm_quote`, `platform_tpm_verify_quote` | **scoped `tpm:read`** in `pkg/api/mcp/authz.go`, the scope of their gRPC twins |
+| MCP — every other `platform_tpm_*` tool | **refused**: not in `pkg/api/mcp/authz.go`, so `AuthorizeTool` answers `AuthErrorToolNotClassified` for every caller |
 | MCP — `idevid_*` / `iak_*` tools | **refused**, likewise |
 | QUIC `0x99` category | **every sub-opcode scoped** in `pkg/api/quic/opcode_permissions.go`, which is fail-closed: `tpm:read` for the observers plus `Quote`, `VerifyQuote`, `Unseal`, `MakeCred` and the NV reads; `tpm:write` for `Provision`, the `Create*` calls, `ImportEKCert`, `ExtendPCR`, `Seal`, `NVWrite`, the IDevID / LDevID CSRs and `ActivateCred`; `tpm:delete` for `Clear`, the `Delete*` calls and `NVDelete` |
 | QUIC device-identity opcodes | **scoped under `tpm:*`**, not `idevid:*` as on gRPC: `tpm:read` for info and get-cert, `tpm:write` for generate, CSR and install-cert, `tpm:delete` for the deletes ([engineering.md](engineering.md) §13) |
-| REST | route-level middleware only; no per-operation TPM scope |
+| REST — web service | route-level middleware only; no per-operation TPM scope (below) |
+| REST — daemon listener, `TPMHandlers` | **every route scoped** in `TPMHandlers.routes` (`pkg/api/rest/tpm_handlers.go`), on the gRPC tiers: `tpm:read` for the `GET` routes plus `POST pcrs`, `quote`, `quote/verify`, `make-credential`, `random` and `unseal`; `tpm:write` for `provision`, `POST ek`, `POST ek/certificate`, `POST srk`, `POST ak`, `POST`/`PUT nvram` and `seal`; `tpm:delete` for `clear` and every `DELETE` (`ek`, `srk`, `ak`, `nvram`, with or without the path parameter). The bearer token is checked by the shared platform-token validator: no token is `401` (`ErrTPMTokenRequired`), a token without the scope or no validator configured is `403` (`ErrTPMForbidden`) |
+| REST — daemon listener, `rest_idevid.go` | no per-operation scope; mTLS only |
 
 **Concretely: on gRPC, `Clear` and `DeleteEK` need `tpm:delete`, `Unseal`
 needs `tpm:read`, and `DeleteIDevID` needs `idevid:delete`.** Note that
@@ -321,7 +392,7 @@ needs `tpm:read`, and `DeleteIDevID` needs `idevid:delete`.** Note that
 can be called until they are classified. On QUIC, `SubOpTPM2Clear` needs
 `tpm:delete` and `SubOpTPM2Unseal` `tpm:read`, matching gRPC.
 
-### REST is gated on the `admin` role (#165)
+### Web service REST is gated on the `admin` role (#165)
 
 `/api/v1/tpm/**` requires an authenticated caller holding `admin` — including
 `POST /tpm/clear`, `POST /tpm/provision`, EK/SRK/AK create and delete,
@@ -375,9 +446,7 @@ equivalent in `pkg/api/daemon/recovery_interceptor.go`.
 ## 11. Versioning
 
 REST under `/api/v1`; gRPC package `platform.v1`; QUIC `ProtocolVersion` `0x01`.
-Nothing in this feature is deprecated. The unserved routes in
-`pkg/api/rest/tpm_handlers.go` (§1) are not a deprecated version of anything —
-they were never wired.
+Nothing in this feature is deprecated.
 
 ## 12. Related
 

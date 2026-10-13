@@ -2,720 +2,165 @@
 
 Base URL: `https://localhost:8443/api/v1/tpm`
 
-All endpoints require mTLS client certificate authentication unless `--skip-iam-validation` is used.
+These are the routes platformd's own REST listener serves through
+`restapi.TPMHandlers` (`pkg/api/rest/tpm_handlers.go`). The web service's
+`/api/v1/tpm` router is described in [api.md](api.md) §3–§8.
 
-## TPM Information and Management
+Every route needs the mTLS client certificate the listener asks for **and** a
+platform bearer token (`Authorization: Bearer <token>`) granting the route's
+scope ([api.md](api.md) §9):
 
-### Get TPM Info
+| Scope | Routes |
+|-------|--------|
+| `tpm:read` | every `GET`, plus `POST pcrs`, `quote`, `quote/verify`, `make-credential`, `random`, `unseal` |
+| `tpm:write` | `POST provision`, `ek`, `ek/certificate`, `srk`, `ak`, `nvram`, `seal`; `PUT nvram` |
+| `tpm:delete` | `POST clear`, every `DELETE` |
 
-```
-GET /api/v1/tpm/info
-```
+`GET`/`DELETE /iak` and `GET /idevid` are the listener's device-identity routes
+(`pkg/api/daemon/rest_idevid.go`); they take no token and are not described
+here.
 
-**Response:** `200 OK`. The payload is the flat proto `TPMInfoResponse` in the
-standard envelope, with camelCase keys and enums spelled as their proto names.
-Every field is always present: `manufacturer` is `null` when the TPM's fixed
-properties could not be read (the text report in `properties.info` is still
-returned), and empty lists and maps are `[]` and `{}`.
+## Wire contract
+
+Every route calls one RPC of the daemon's `TPMService` — the service gRPC,
+Unix and embedded call — and speaks that RPC's messages
+(`pkg/api/grpc/proto/tpm.proto`):
+
+- **Request.** The body is the RPC's request message as protojson. Each field
+  may be spelled with its camelCase JSON name (`pcrIndices`, what the
+  JavaScript SDK sends) or its proto name (`pcr_indices`, what the Go SDK
+  sends); enums by name (`PCR_BANK_SHA256`) or number (`2`); bytes as base64.
+  An empty body is the empty request.
+- **Parameters.** Query and path parameters set fields of the same message, by
+  either name. A `uint32` takes decimal or `0x` hex (`0x81000002`), an enum its
+  name or number, a bool `true`/`false`, and a repeated field one parameter per
+  element (`?indices=0&indices=7`). A path parameter wins over a query
+  parameter of the same name. Bytes and message fields travel only in the body.
+- **Refusals.** A field the message does not have is `400`, in the body
+  (`unknown field "x"`) or as a parameter (`ErrTPMInvalidQueryParameter`), and
+  so is a parameter that does not parse or a single-valued field given twice.
+  The TPM is not touched.
+- **Response.** The bare protojson response message, camelCase keys, every
+  field present (empty lists `[]`, empty maps `{}`, unset messages `null`).
+
+## Routes
+
+| Route | RPC | Request fields (body, or parameters where shown) |
+|-------|-----|------|
+| `GET /info` | `Info` | none |
+| `POST /provision` | `Provision` | `ownerPassword`, `endorsementPassword`, `createEk`, `createSrk`, `createAk`, `ekAttributes`, `srkAttributes`, `akAttributes` |
+| `POST /clear` | `Clear` | `ownerPassword`, `confirm` |
+| `GET /ek` | `GetEK` | `?algorithm=&handle=` |
+| `POST /ek` | `CreateEK` | `attributes`, `persistent` |
+| `DELETE /ek`, `DELETE /ek/{handle}` | `DeleteEK` | `handle`, `algorithm`, `password` |
+| `GET /ek/certificate` | `GetEKCertificate` | `?algorithm=&handle=` |
+| `POST /ek/certificate` | `ImportEKCertificate` | `certificate` (DER, base64), `format`, `nvramIndex` |
+| `GET /srk` | `GetSRK` | `?algorithm=&handle=` |
+| `POST /srk` | `CreateSRK` | `attributes`, `persistent`, `parentHandle`, `parentPassword` |
+| `DELETE /srk`, `DELETE /srk/{handle}` | `DeleteSRK` | `handle`, `algorithm`, `password` |
+| `GET /ak` | `GetAK` | `?algorithm=&handle=` |
+| `POST /ak` | `CreateAK` | `attributes`, `persistent`, `parentHandle`, `parentPassword` |
+| `DELETE /ak`, `DELETE /ak/{handle}` | `DeleteAK` | `handle`, `algorithm`, `password` |
+| `POST /make-credential` | `MakeCredential` | `akName`, `secret`, `ekCert`, `iakPub` |
+| `POST /quote` | `Quote` | `akHandle`, `akPassword`, `pcrIndices`, `pcrBank`, `nonce` |
+| `POST /quote/verify` | `VerifyQuote` | `quote`, `signature`, `signatureAlgorithm`, `akPublic`, `nonce`, `expectedPcrs`, `channelBinding`, … |
+| `GET /pcrs`, `POST /pcrs` | `GetPCRs` | `indices`, `bank` (`GET`: `?indices=0&indices=7&bank=PCR_BANK_SHA256`) |
+| `GET /eventlog` | `GetEventLog` | `?format=` |
+| `POST /nvram` | `DefineNVRAM` | `index`, `size`, `password`, `attributes`, `parentPassword` |
+| `GET /nvram`, `GET /nvram/{index}` | `ReadNVRAM` | `index`, `password`, `offset`, `size` (`?offset=&size=` on the path form) |
+| `PUT /nvram`, `PUT /nvram/{index}` | `WriteNVRAM` | `index`, `data`, `password`, `offset` |
+| `DELETE /nvram`, `DELETE /nvram/{index}` | `UndefineNVRAM` | `index`, `parentPassword`, `password` |
+| `POST /random` | `GetRandom` | `numBytes` |
+| `POST /seal` | `Seal` | `data`, `cn`, `parentHandle`, … |
+| `POST /unseal` | `Unseal` | `cn`, `parentHandle`, `parentPassword`, `password`, `pcrIndices`, `pcrBank` |
+
+The path forms (`/ek/{handle}`, `/nvram/{index}`) are what the JavaScript SDK
+calls; the Go SDK sends the same fields in the body of the bare route.
+
+### Info
+
+`Info` reports the TPM's identity and the configured SRK handles
+([api.md](api.md) §3). `manufacturer` is `null` when the fixed properties
+could not be read; the text report in `properties.info` is still returned.
+
 ```json
 {
-  "code": 200,
-  "error": "",
-  "success": true,
-  "payload": {
-    "version": "TPM_VERSION_2_0",
-    "manufacturer": {
-      "name": "Infineon",
-      "id": 1229346816,
-      "model": "SLB9670",
-      "firmwareVersion": "7.85"
-    },
-    "capabilities": [
-      { "name": "SHA256", "supported": true, "value": "supported" }
-    ],
-    "pcrBanks": ["PCR_BANK_SHA256"],
-    "maxNvramSize": 2048,
-    "isSimulator": false,
-    "fipsMode": true,
-    "properties": { "info": "..." },
-    "nvIndexes": [
-      { "handle": 29360130, "type": "ordinary", "size": 1024, "authRead": true, "authWrite": false }
-    ]
-  }
+  "version": "TPM_VERSION_2_0",
+  "manufacturer": { "name": "Infineon", "id": 1229346816, "model": "SLB9670", "firmwareVersion": "7.85" },
+  "capabilities": [{ "name": "SHA256", "supported": true, "value": "supported" }],
+  "pcrBanks": ["PCR_BANK_SHA256"],
+  "maxNvramSize": 2048,
+  "isSimulator": false,
+  "fipsMode": true,
+  "properties": { "info": "...", "platform_srk_handle": "0x81000002", "ssrk_handle": "0x81000001" },
+  "nvIndexes": [{ "handle": 29360130, "type": "ordinary", "size": 1024, "authRead": true, "authWrite": false }]
 }
 ```
 
 There is no availability flag. A TPM is available exactly when this call
-succeeds; without one the daemon answers `503 Service Unavailable` with
-`success: false`. The JavaScript SDK's `client.tpm.getInfo()` and
-`client.platform.getTPMInfo()` both call this endpoint and return the payload
-typed as `TPMInfoResponse`.
+succeeds; without one the daemon answers `503 Service Unavailable`.
 
-### Provision TPM
+### Quote and verify
 
-```
-POST /api/v1/tpm/provision
-```
-
-**Request:**
 ```json
-{
-  "owner_password": "secure-password"
-}
-```
-
-**Response:** `200 OK`
-```json
-{
-  "success": true,
-  "message": "TPM provisioned successfully",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-### Clear TPM
-
-```
-POST /api/v1/tpm/clear
-```
-
-**Request:**
-```json
-{
-  "owner_password": "secure-password"
-}
-```
-
-**Response:** `200 OK`
-```json
-{
-  "success": true,
-  "message": "TPM cleared successfully",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-## Endorsement Key Operations
-
-### Get Endorsement Key
-
-```
-GET /api/v1/tpm/ek
-```
-
-**Response:** `200 OK`
-```json
-{
-  "handle": 2147483655,
-  "public_key": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----",
-  "algorithm": "RSA_2048",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-### Create Endorsement Key
-
-```
-POST /api/v1/tpm/ek
-```
-
-**Request:**
-```json
-{
-  "persistent": true
-}
-```
-
-**Response:** `201 Created`
-```json
-{
-  "success": true,
-  "handle": 2147483655,
-  "public_key": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-### Delete Endorsement Key
-
-```
-DELETE /api/v1/tpm/ek
-```
-
-**Response:** `204 No Content`
-
-### Get EK Certificate
-
-```
-GET /api/v1/tpm/ek/certificate
-```
-
-**Response:** `200 OK`
-```json
-{
-  "certificate": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-### Import EK Certificate
-
-```
-POST /api/v1/tpm/ek/certificate
-```
-
-**Request:**
-```json
-{
-  "certificate": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"
-}
-```
-
-**Response:** `201 Created`
-```json
-{
-  "success": true,
-  "message": "EK certificate imported",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-## Storage Root Key Operations
-
-### Get Storage Root Key
-
-```
-GET /api/v1/tpm/srk
-```
-
-**Response:** `200 OK`
-```json
-{
-  "handle": 2147483656,
-  "public_key": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----",
-  "algorithm": "RSA_2048",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-### Create Storage Root Key
-
-```
-POST /api/v1/tpm/srk
-```
-
-**Response:** `201 Created`
-```json
-{
-  "success": true,
-  "handle": 2147483656,
-  "public_key": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-### Delete Storage Root Key
-
-```
-DELETE /api/v1/tpm/srk
-```
-
-**Response:** `204 No Content`
-
-## Initial Attestation Key Operations
-
-### Get Initial Attestation Key
-
-```
-GET /api/v1/tpm/iak
-```
-
-**Response:** `200 OK`
-```json
-{
-  "handle": 2147483657,
-  "public_key": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----",
-  "algorithm": "RSA_2048",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-### Create Initial Attestation Key
-
-```
-POST /api/v1/tpm/iak
-```
-
-**Response:** `201 Created`
-```json
-{
-  "success": true,
-  "handle": 2147483657,
-  "public_key": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-### Delete Initial Attestation Key
-
-```
-DELETE /api/v1/tpm/iak
-```
-
-**Response:** `204 No Content`
-
-### Get Initial Device ID
-
-```
-GET /api/v1/tpm/idevid
-```
-
-**Response:** `200 OK`
-```json
-{
-  "certificate": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-## Attestation Operations
-
-### Quote PCRs
-
-```
 POST /api/v1/tpm/quote
-```
+{ "nonce": "dGVzdG5vbmNl", "pcrIndices": [0, 7], "pcrBank": "PCR_BANK_SHA256" }
 
-**Request:**
-```json
+200 OK
 {
-  "nonce": "base64-encoded-nonce",
-  "pcr_indices": [0, 1, 2, 3, 7, 8, 9]
-}
-```
-
-**Response:** `200 OK`
-```json
-{
-  "quote": "base64-encoded-quote",
-  "signature": "base64-encoded-signature",
-  "event_log": "base64-encoded-event-log",
-  "channel_binding": "base64-encoded-tls-exporter",
-  "timestamp": "2024-01-15T10:30:00Z"
+  "quote": "…", "signature": "…", "signatureAlgorithm": "SHA256-RSAPSS",
+  "pcrValues": [], "eventLog": "…", "channelBinding": "…"
 }
 ```
 
 The quote covers `SHA-256(nonce ‖ channel_binding)`, where `channel_binding` is
 the TLS exporter of the connection the request arrived on; a request over
-plain HTTP is refused. See [api.md](api.md) §5.
+plain HTTP is refused. `POST /quote/verify` takes the quote, the
+`signatureAlgorithm` the quote declared, `akPublic` and the same `nonce` and
+`channelBinding`. A quote that does not verify is still `200 OK`, with
+`verified: false` and the reason in `message`. See [api.md](api.md) §5.
 
-### Verify Quote
+## Error responses
 
-```
-POST /api/v1/tpm/verify-quote
-```
+A refused request, or an RPC error, is the standard error body:
 
-**Request:**
 ```json
-{
-  "quote": "base64-encoded-quote",
-  "signature": "base64-encoded-signature",
-  "ak_public": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----",
-  "nonce": "base64-encoded-nonce"
-}
+{ "error": "invalid query parameter handle=\"persistent\": not a valid uint32", "code": 400, "timestamp": "2026-10-13T10:30:00Z" }
 ```
 
-**Response:** `200 OK`
-```json
-{
-  "verified": true,
-  "message": "Quote verified successfully",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-### Certify Key
-
-```
-POST /api/v1/tpm/certify
-```
-
-**Request:**
-```json
-{
-  "handle": 2147483657,
-  "nonce": "base64-encoded-nonce"
-}
-```
-
-**Response:** `200 OK`
-```json
-{
-  "certify_info": "base64-encoded-certify-info",
-  "signature": "base64-encoded-signature",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-## Platform Configuration Register Operations
-
-### Read PCRs
-
-```
-GET /api/v1/tpm/pcrs?indices=0,1,2,3,7,8,9&bank=SHA256
-```
-
-**Query Parameters:**
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `indices` | string | Comma-separated PCR indices |
-| `bank` | string | Hash bank (SHA1, SHA256, SHA384, SHA512) |
-
-**Response:** `200 OK`
-```json
-{
-  "pcr_values": [
-    {
-      "index": 0,
-      "bank": "SHA256",
-      "value": "base64-encoded-pcr-value"
-    }
-  ],
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-### Extend PCR
-
-```
-POST /api/v1/tpm/pcrs/extend
-```
-
-**Request:**
-```json
-{
-  "pcr_index": 9,
-  "hash_alg": "SHA256",
-  "data": "base64-encoded-data"
-}
-```
-
-**Response:** `200 OK`
-```json
-{
-  "success": true,
-  "message": "PCR extended",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-## Event Log
-
-### Get Event Log
-
-```
-GET /api/v1/tpm/eventlog?format=json
-```
-
-**Query Parameters:**
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `format` | string | Output format (json, binary, text) |
-
-**Response:** `200 OK`
-```json
-{
-  "event_log": "base64-encoded-event-log",
-  "format": "json",
-  "event_count": 42,
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-## Capabilities
-
-### Get TPM Capabilities
-
-```
-GET /api/v1/tpm/capabilities
-```
-
-**Response:** `200 OK`
-```json
-{
-  "capabilities": [
-    {
-      "name": "SHA256",
-      "value": "supported",
-      "supported": true
-    },
-    {
-      "name": "HMAC",
-      "value": "supported",
-      "supported": true
-    }
-  ],
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-## Random Number Generation
-
-### Get Random Bytes
-
-```
-POST /api/v1/tpm/random
-```
-
-**Request:**
-```json
-{
-  "num_bytes": 32
-}
-```
-
-**Response:** `200 OK`
-```json
-{
-  "random_bytes": "base64-encoded-random-bytes",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-## Seal and Unseal Operations
-
-### Seal Data
-
-```
-POST /api/v1/tpm/seal
-```
-
-**Request:**
-```json
-{
-  "data": "base64-encoded-plaintext"
-}
-```
-
-**Response:** `200 OK`
-```json
-{
-  "sealed_data": "base64-encoded-sealed-data",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-### Unseal Data
-
-```
-POST /api/v1/tpm/unseal
-```
-
-**Request:**
-```json
-{
-  "cn": "object-common-name"
-}
-```
-
-**Response:** `200 OK`
-```json
-{
-  "data": "base64-encoded-plaintext",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-## NVRAM Operations
-
-### Define NVRAM Index
-
-```
-POST /api/v1/tpm/nv/define
-```
-
-**Request:**
-```json
-{
-  "index": 2148007936,
-  "size": 256,
-  "password": "index-password"
-}
-```
-
-**Response:** `201 Created`
-```json
-{
-  "success": true,
-  "message": "NV index defined",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-### Write NVRAM
-
-```
-POST /api/v1/tpm/nv/write
-```
-
-**Request:**
-```json
-{
-  "index": 2148007936,
-  "data": "base64-encoded-data",
-  "password": "index-password"
-}
-```
-
-**Response:** `200 OK`
-```json
-{
-  "success": true,
-  "message": "NVRAM write complete",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-### Read NVRAM
-
-```
-POST /api/v1/tpm/nv/read
-```
-
-**Request:**
-```json
-{
-  "index": 2148007936,
-  "data_size": 256
-}
-```
-
-**Response:** `200 OK`
-```json
-{
-  "data": "base64-encoded-data",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-### Delete NVRAM Index
-
-```
-DELETE /api/v1/tpm/nv?index=2148007936
-```
-
-**Response:** `204 No Content`
-
-## Certificate Signing Request Operations
-
-### Create IDevID CSR
-
-```
-POST /api/v1/tpm/csr/idevid
-```
-
-**Request:**
-```json
-{}
-```
-
-**Response:** `201 Created`
-```json
-{
-  "csr": "-----BEGIN CERTIFICATE REQUEST-----\n...\n-----END CERTIFICATE REQUEST-----",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-### Create LDevID CSR
-
-```
-POST /api/v1/tpm/csr/ldevid
-```
-
-**Request:**
-```json
-{}
-```
-
-**Response:** `201 Created`
-```json
-{
-  "csr": "-----BEGIN CERTIFICATE REQUEST-----\n...\n-----END CERTIFICATE REQUEST-----",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-## Platform Attributes
-
-### Get Platform Attributes
-
-```
-GET /api/v1/tpm/platform
-```
-
-**Response:** `200 OK`
-```json
-{
-  "attributes": {
-    "manufacturer": "Infineon",
-    "model": "SLB9670",
-    "firmware_version": "7.85",
-    "tpm_version": "2.0"
-  },
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-## Error Responses
-
-| Status | Description |
-|--------|-------------|
-| `400 Bad Request` | Invalid request body or parameters |
-| `401 Unauthorized` | Missing or invalid authentication |
-| `404 Not Found` | Key or object not found |
-| `409 Conflict` | Object already exists |
-| `500 Internal Server Error` | TPM operation failed |
-| `503 Service Unavailable` | TPM service not available |
-
-**Error Response Format:**
-```json
-{
-  "error": "invalid pcr index",
-  "code": "INVALID_ARGUMENT"
-}
-```
-
-## cURL Examples
+| Status | Cause |
+|--------|-------|
+| `400 Bad Request` | A malformed or unknown body field (`ErrInvalidRequestBody`) or URL parameter (`ErrTPMInvalidQueryParameter`); the RPC's `InvalidArgument` or `FailedPrecondition` |
+| `401 Unauthorized` | No bearer token (`ErrTPMTokenRequired`) |
+| `403 Forbidden` | The token is rejected or lacks the route's scope, or no token validator is configured (`ErrTPMForbidden`); the RPC's `PermissionDenied` |
+| `404 Not Found` | The RPC's `NotFound` |
+| `409 Conflict` | The RPC's `AlreadyExists` or `Aborted` |
+| `500 Internal Server Error` | Any other RPC error, or a response that cannot be encoded |
+| `503 Service Unavailable` | No TPM service (`ErrTPMServiceNotAvailable`), or the RPC's `Unavailable` |
+
+## cURL examples
 
 ```bash
-# Get TPM info
-curl -X GET https://localhost:8443/api/v1/tpm/info \
-  --cacert ca.crt --cert client.crt --key client.key
+AUTH=(--cacert ca.crt --cert client.crt --key client.key -H "Authorization: Bearer $TOKEN")
 
-# Provision TPM
-curl -X POST https://localhost:8443/api/v1/tpm/provision \
-  --cacert ca.crt --cert client.crt --key client.key \
-  -H "Content-Type: application/json" \
-  -d '{"owner_password":"secure-password"}'
+# TPM info
+curl "${AUTH[@]}" https://localhost:8443/api/v1/tpm/info
 
-# Get Endorsement Key
-curl -X GET https://localhost:8443/api/v1/tpm/ek \
-  --cacert ca.crt --cert client.crt --key client.key
+# The SRK at a given handle
+curl "${AUTH[@]}" "https://localhost:8443/api/v1/tpm/srk?handle=0x81000002"
 
-# Read PCRs
-curl -X GET "https://localhost:8443/api/v1/tpm/pcrs?indices=0,1,2,3,7&bank=SHA256" \
-  --cacert ca.crt --cert client.crt --key client.key
+# Read PCRs 0 and 7 from the SHA-256 bank
+curl "${AUTH[@]}" "https://localhost:8443/api/v1/tpm/pcrs?indices=0&indices=7&bank=PCR_BANK_SHA256"
 
-# Generate quote
-curl -X POST https://localhost:8443/api/v1/tpm/quote \
-  --cacert ca.crt --cert client.crt --key client.key \
-  -H "Content-Type: application/json" \
-  -d '{"nonce":"dGVzdG5vbmNl","pcr_indices":[0,1,2,3,7,8,9]}'
+# Quote
+curl "${AUTH[@]}" -H "Content-Type: application/json" \
+  -d '{"nonce":"dGVzdG5vbmNl","pcrIndices":[0,7]}' \
+  https://localhost:8443/api/v1/tpm/quote
 
-# Get random bytes
-curl -X POST https://localhost:8443/api/v1/tpm/random \
-  --cacert ca.crt --cert client.crt --key client.key \
-  -H "Content-Type: application/json" \
-  -d '{"num_bytes":32}'
+# Read 32 bytes of an NV index
+curl "${AUTH[@]}" "https://localhost:8443/api/v1/tpm/nvram/0x1c00002?size=32"
+
+# Random bytes
+curl "${AUTH[@]}" -H "Content-Type: application/json" \
+  -d '{"numBytes":32}' https://localhost:8443/api/v1/tpm/random
 ```

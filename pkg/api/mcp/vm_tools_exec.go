@@ -94,10 +94,13 @@ func (e ErrVMInvalidEvidence) Unwrap() error {
 // VMAttestVerifyMCPRequest carries decoded VM attestation evidence for the
 // vm_attest_verify tool.
 type VMAttestVerifyMCPRequest struct {
-	Quote        []byte
-	Signature    []byte
-	Nonce        []byte
-	ExpectedPCRs map[int][]byte
+	Quote     []byte
+	Signature []byte
+	// SignatureAlgorithm is the scheme the quote declares; an absent or
+	// unknown scheme fails verification.
+	SignatureAlgorithm string
+	Nonce              []byte
+	ExpectedPCRs       map[int][]byte
 }
 
 // VMProvider is the optional interface a ServiceProvider can satisfy to
@@ -359,9 +362,10 @@ func (r *ToolRegistry) executeVMAttestVerify(ctx context.Context, args map[strin
 	}
 
 	req := &VMAttestVerifyMCPRequest{
-		Quote:     quote,
-		Signature: signature,
-		Nonce:     nonce,
+		Quote:              quote,
+		Signature:          signature,
+		SignatureAlgorithm: getString(args, "signature_algorithm"),
+		Nonce:              nonce,
 	}
 
 	if raw, ok := args["expected_pcrs"].(map[string]interface{}); ok && len(raw) > 0 {

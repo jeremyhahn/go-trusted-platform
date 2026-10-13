@@ -434,6 +434,19 @@ func TestHostQuote_SurfacesTPMFailuresTyped(t *testing.T) {
 	assert.ErrorIs(t, err, q.readErr)
 }
 
+// A quote handed out without its scheme could not be verified by anyone, so
+// an IAK that declares none is refused rather than quoted.
+func TestHostQuote_RefusesAnIAKWithoutAScheme(t *testing.T) {
+	q := newFakeQuoter(t)
+	q.sigAlg = x509.UnknownSignatureAlgorithm
+	svc := newQuoteService(t, q)
+
+	_, err := svc.GetQuote(context.Background(), nil, []byte("n"))
+	var qerr ErrHostQuoteFailed
+	require.ErrorAs(t, err, &qerr)
+	assert.ErrorAs(t, err, &vm.ErrQuoteSchemeUnavailable{})
+}
+
 func TestHostQuote_HonoursContextCancellation(t *testing.T) {
 	q := newFakeQuoter(t)
 	ctx, cancel := context.WithCancel(context.Background())

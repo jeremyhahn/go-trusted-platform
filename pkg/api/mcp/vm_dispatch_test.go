@@ -344,10 +344,11 @@ func TestExecuteVMAttestVerify(t *testing.T) {
 	b64 := func(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
 
 	result, err := registry.ExecuteTool(ctx, "vm_attest_verify", map[string]interface{}{
-		"vm_id":     "vm1",
-		"quote":     b64([]byte("quote")),
-		"signature": b64([]byte("signature")),
-		"nonce":     b64([]byte("nonce")),
+		"vm_id":               "vm1",
+		"quote":               b64([]byte("quote")),
+		"signature":           b64([]byte("signature")),
+		"signature_algorithm": "SHA256-RSAPSS",
+		"nonce":               b64([]byte("nonce")),
 		"expected_pcrs": map[string]interface{}{
 			"0": b64([]byte{0x01}),
 			"7": b64([]byte{0x07}),
@@ -368,6 +369,9 @@ func TestExecuteVMAttestVerify(t *testing.T) {
 	}
 	if string(req.Quote) != "quote" || string(req.Signature) != "signature" || string(req.Nonce) != "nonce" {
 		t.Errorf("evidence mismatch: %+v", req)
+	}
+	if req.SignatureAlgorithm != "SHA256-RSAPSS" {
+		t.Errorf("expected the declared scheme SHA256-RSAPSS, got %q", req.SignatureAlgorithm)
 	}
 	if len(req.ExpectedPCRs) != 2 || req.ExpectedPCRs[0][0] != 0x01 || req.ExpectedPCRs[7][0] != 0x07 {
 		t.Errorf("expected PCRs mismatch: %v", req.ExpectedPCRs)

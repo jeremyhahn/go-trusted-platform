@@ -24,6 +24,7 @@ import type {
   TenantService,
   TPMService,
   VTPMService,
+  VPNService,
 } from '../../services/index.js';
 import { usePlatformClient } from '../context.js';
 
@@ -432,4 +433,27 @@ export function useTPM(): TPMService {
 export function useVTPM(): VTPMService {
   const client = usePlatformClient();
   return client.vtpm;
+}
+
+/**
+ * Hook to access the VPN service
+ *
+ * @returns The VPNService instance from the current client
+ *
+ * @example
+ * ```tsx
+ * function VPNPeers() {
+ *   const vpn = useVPN();
+ *
+ *   const revoke = async (tenantId: string, deviceId: string) => {
+ *     await vpn.revokePeer(tenantId, deviceId);
+ *   };
+ *
+ *   // ... render
+ * }
+ * ```
+ */
+export function useVPN(): VPNService {
+  const client = usePlatformClient();
+  return client.vpn;
 }

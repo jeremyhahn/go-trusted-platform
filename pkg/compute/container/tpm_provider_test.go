@@ -20,19 +20,24 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"errors"
 	"strings"
 	"testing"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/orchestration"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
 )
 
 // mockQuoteTPM is a mock QuoteTPM for HostTPMProvider tests. It signs
-// quotes with a real RSA key so signature verification exercises the real
-// crypto path.
+// quotes with a real RSA key under the scheme its IAK declares (RSA-PSS
+// unless a test says otherwise), so signature verification exercises the
+// real crypto path.
 type mockQuoteTPM struct {
 	key         *rsa.PrivateKey
+	scheme      x509.SignatureAlgorithm
+	attrsErr    error
 	extendCalls int
 	extendAlg   string
 	extendErr   error
@@ -50,6 +55,7 @@ func newMockQuoteTPM(t *testing.T) *mockQuoteTPM {
 	}
 	return &mockQuoteTPM{
 		key:       key,
+		scheme:    x509.SHA256WithRSAPSS,
 		pcrValues: map[int][]byte{DefaultPCRIndex: bytes.Repeat([]byte{0xAB}, 32)},
 	}
 }
@@ -86,7 +92,12 @@ func (m *mockQuoteTPM) Quote(pcrs []uint, nonce []byte) (xkmssdk.Quote, error) {
 		return xkmssdk.Quote{}, err
 	}
 	digest := sha256.Sum256(quoted)
-	signature, err := rsa.SignPKCS1v15(rand.Reader, m.key, crypto.SHA256, digest[:])
+	var signature []byte
+	if m.scheme == x509.SHA256WithRSAPSS {
+		signature, err = rsa.SignPSS(rand.Reader, m.key, crypto.SHA256, digest[:], nil)
+	} else {
+		signature, err = rsa.SignPKCS1v15(rand.Reader, m.key, crypto.SHA256, digest[:])
+	}
 	if err != nil {
 		return xkmssdk.Quote{}, err
 	}
@@ -94,6 +105,18 @@ func (m *mockQuoteTPM) Quote(pcrs []uint, nonce []byte) (xkmssdk.Quote, error) {
 		Quoted:    quoted,
 		Signature: signature,
 		Nonce:     nonce,
+	}, nil
+}
+
+// IAKAttributes declares the mock IAK's signature scheme.
+func (m *mockQuoteTPM) IAKAttributes() (*xkmssdk.KeyAttributes, error) {
+	if m.attrsErr != nil {
+		return nil, m.attrsErr
+	}
+	return &xkmssdk.KeyAttributes{
+		KeyAlgorithm:       x509.RSA,
+		SignatureAlgorithm: m.scheme,
+		Hash:               crypto.SHA256,
 	}, nil
 }
 
@@ -298,7 +321,7 @@ func TestHostTPMProvider_VerifyQuote(t *testing.T) {
 	ctx := context.Background()
 	nonce := bytes.Repeat([]byte{0x42}, 32)
 
-	t.Run("verifies IAK-signed quote", func(t *testing.T) {
+	t.Run("verifies an RSA-PSS IAK-signed quote", func(t *testing.T) {
 		provider, _ := NewHostTPMProvider(newMockQuoteTPM(t))
 
 		quote, err := provider.Quote([]uint{DefaultPCRIndex}, nonce)
@@ -307,6 +330,70 @@ func TestHostTPMProvider_VerifyQuote(t *testing.T) {
 		}
 		if err := provider.VerifyQuote(ctx, quote.Quoted, quote.Signature); err != nil {
 			t.Fatalf("expected quote to verify, got %v", err)
+		}
+	})
+
+	t.Run("verifies a PKCS#1 v1.5 IAK-signed quote", func(t *testing.T) {
+		tpm := newMockQuoteTPM(t)
+		tpm.scheme = x509.SHA256WithRSA
+		provider, _ := NewHostTPMProvider(tpm)
+
+		quote, err := provider.Quote([]uint{DefaultPCRIndex}, nonce)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if err := provider.VerifyQuote(ctx, quote.Quoted, quote.Signature); err != nil {
+			t.Fatalf("expected quote to verify, got %v", err)
+		}
+	})
+
+	// The IAK, not the key type, names the scheme: a PSS signature checked
+	// under a declared PKCS#1 v1.5 scheme must fail, as it would if the
+	// verifier inferred the scheme from the RSA key.
+	t.Run("rejects a quote signed under another scheme", func(t *testing.T) {
+		tpm := newMockQuoteTPM(t)
+		provider, _ := NewHostTPMProvider(tpm)
+
+		quote, err := provider.Quote([]uint{DefaultPCRIndex}, nonce)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tpm.scheme = x509.SHA256WithRSA
+
+		var invalid vm.ErrSignatureInvalid
+		if err := provider.VerifyQuote(ctx, quote.Quoted, quote.Signature); !errors.As(err, &invalid) {
+			t.Fatalf("expected ErrSignatureInvalid, got %v", err)
+		}
+	})
+
+	t.Run("rejects an IAK that names no scheme", func(t *testing.T) {
+		tpm := newMockQuoteTPM(t)
+		provider, _ := NewHostTPMProvider(tpm)
+
+		quote, err := provider.Quote([]uint{DefaultPCRIndex}, nonce)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tpm.scheme = x509.UnknownSignatureAlgorithm
+
+		var unavailable vm.ErrQuoteSchemeUnavailable
+		if err := provider.VerifyQuote(ctx, quote.Quoted, quote.Signature); !errors.As(err, &unavailable) {
+			t.Fatalf("expected ErrQuoteSchemeUnavailable, got %v", err)
+		}
+	})
+
+	t.Run("wraps IAK attribute failure", func(t *testing.T) {
+		tpm := newMockQuoteTPM(t)
+		tpm.attrsErr = errors.New("no attributes")
+		provider, _ := NewHostTPMProvider(tpm)
+
+		err := provider.VerifyQuote(ctx, []byte("q"), []byte("s"))
+		var target ErrHostTPMOperationFailed
+		if !errors.As(err, &target) {
+			t.Fatalf("expected ErrHostTPMOperationFailed, got %v", err)
+		}
+		if !errors.Is(err, tpm.attrsErr) {
+			t.Fatalf("expected the attribute failure as the cause, got %v", err)
 		}
 	})
 

@@ -246,42 +246,6 @@ type TPM2ImportEKCertRequest struct {
 	Certificate []byte `codec:"certificate"`
 }
 
-// TPM2QuoteRequest represents a TPM quote request.
-type TPM2QuoteRequest struct {
-	PCRIndices []uint32 `codec:"pcr_indices"`
-	Nonce      []byte   `codec:"nonce"`
-}
-
-// TPM2QuoteResponse represents a TPM quote response.
-type TPM2QuoteResponse struct {
-	Quote     []byte `codec:"quote"`
-	Signature []byte `codec:"signature"`
-	EventLog  []byte `codec:"event_log"`
-	// ChannelBinding is the TLS exporter of the connection the request
-	// arrived on; the TPM quoted SHA-256(nonce || ChannelBinding) (#482).
-	ChannelBinding []byte `codec:"channel_binding"`
-	Timestamp      int64  `codec:"timestamp"`
-}
-
-// TPM2VerifyQuoteRequest represents a TPM quote verification request.
-// Field names mirror the gRPC VerifyQuoteRequest proto.
-type TPM2VerifyQuoteRequest struct {
-	Quote     []byte `codec:"quote"`
-	Signature []byte `codec:"signature"`
-	Nonce     []byte `codec:"nonce"`
-	AKPublic  []byte `codec:"ak_public"`
-	// ChannelBinding, when set, is the binding the quote was produced
-	// under; the quote must then carry SHA-256(Nonce || ChannelBinding).
-	ChannelBinding []byte `codec:"channel_binding"`
-}
-
-// TPM2VerifyQuoteResponse represents a TPM quote verification response.
-type TPM2VerifyQuoteResponse struct {
-	Verified  bool   `codec:"verified"`
-	Message   string `codec:"message"`
-	Timestamp int64  `codec:"timestamp"`
-}
-
 // TPM2ReadPCRsRequest represents a PCR read request.
 type TPM2ReadPCRsRequest struct {
 	Indices []uint32 `codec:"indices"`
@@ -806,7 +770,7 @@ func (h *TPM2Handler) handleDeleteIAK(ctx context.Context, payload []byte) *quic
 
 // handleQuote creates a TPM quote over selected PCRs.
 func (h *TPM2Handler) handleQuote(ctx context.Context, payload []byte) *quicwire.Response {
-	var req TPM2QuoteRequest
+	var req quicwire.TPM2QuoteRequest
 	if err := quicwire.DecodePayload(payload, &req); err != nil {
 		return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
 	}
@@ -824,17 +788,22 @@ func (h *TPM2Handler) handleQuote(ctx context.Context, payload []byte) *quicwire
 		return h.errorResponse(quicwire.StatusInvalidRequest, err)
 	}
 
+	sigAlg, err := attestvm.QuoteSignatureAlgorithm(h.tpm)
+	if err != nil {
+		return h.tpmErrorResponse(err)
+	}
 	quote, err := h.tpm.Quote(pcrs, bound.QualifyingData)
 	if err != nil {
 		return h.tpmErrorResponse(err)
 	}
 
-	return h.encodeResponse(&TPM2QuoteResponse{
-		Quote:          quote.Quoted,
-		Signature:      quote.Signature,
-		EventLog:       quote.EventLog,
-		ChannelBinding: bound.Binding,
-		Timestamp:      time.Now().Unix(),
+	return h.encodeResponse(&quicwire.TPM2QuoteResponse{
+		Quote:              quote.Quoted,
+		Signature:          quote.Signature,
+		EventLog:           quote.EventLog,
+		ChannelBinding:     bound.Binding,
+		Timestamp:          time.Now().Unix(),
+		SignatureAlgorithm: sigAlg,
 	})
 }
 
@@ -844,9 +813,10 @@ func (h *TPM2Handler) handleQuote(ctx context.Context, payload []byte) *quicwire
 // it falls back to this platform's provisioned IAK. Verification reuses
 // the canonical pkg/attestation/vm helpers: the anti-replay nonce
 // (TPMS_ATTEST extraData) must match, and the signature over the quote
-// must validate against the AK public key.
+// must validate against the AK public key under the scheme
+// signature_algorithm declares (no scheme fails).
 func (h *TPM2Handler) handleVerifyQuote(ctx context.Context, payload []byte) *quicwire.Response {
-	var req TPM2VerifyQuoteRequest
+	var req quicwire.TPM2VerifyQuoteRequest
 	if err := quicwire.DecodePayload(payload, &req); err != nil {
 		return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
 	}
@@ -859,7 +829,7 @@ func (h *TPM2Handler) handleVerifyQuote(ctx context.Context, payload []byte) *qu
 
 	akPublic, err := h.resolveVerifyAKPublic(req.AKPublic)
 	if err != nil {
-		return h.encodeResponse(&TPM2VerifyQuoteResponse{
+		return h.encodeResponse(&quicwire.TPM2VerifyQuoteResponse{
 			Verified:  false,
 			Message:   "ak_public_resolution_failed: " + err.Error(),
 			Timestamp: time.Now().Unix(),
@@ -874,7 +844,7 @@ func (h *TPM2Handler) handleVerifyQuote(ctx context.Context, payload []byte) *qu
 	}
 	if len(expectedNonce) > 0 {
 		if err := attestvm.VerifyQuoteNonce(req.Quote, expectedNonce); err != nil {
-			return h.encodeResponse(&TPM2VerifyQuoteResponse{
+			return h.encodeResponse(&quicwire.TPM2VerifyQuoteResponse{
 				Verified:  false,
 				Message:   "nonce_verification_failed: " + err.Error(),
 				Timestamp: time.Now().Unix(),
@@ -882,15 +852,15 @@ func (h *TPM2Handler) handleVerifyQuote(ctx context.Context, payload []byte) *qu
 		}
 	}
 
-	if err := attestvm.VerifyQuoteSignature(akPublic, req.Quote, req.Signature); err != nil {
-		return h.encodeResponse(&TPM2VerifyQuoteResponse{
+	if err := attestvm.VerifyQuoteSignatureWithAlgorithm(akPublic, req.Quote, req.Signature, req.SignatureAlgorithm); err != nil {
+		return h.encodeResponse(&quicwire.TPM2VerifyQuoteResponse{
 			Verified:  false,
 			Message:   "signature_verification_failed: " + err.Error(),
 			Timestamp: time.Now().Unix(),
 		})
 	}
 
-	return h.encodeResponse(&TPM2VerifyQuoteResponse{
+	return h.encodeResponse(&quicwire.TPM2VerifyQuoteResponse{
 		Verified:  true,
 		Message:   "quote verified: nonce matches, signature valid",
 		Timestamp: time.Now().Unix(),

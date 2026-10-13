@@ -116,6 +116,9 @@ var definitions = []Definition{
 		MemoryMax:    1 << 30,
 		CPUMax:       "200000 100000",
 		Unprivileged: true,
+		// Second to move: the same one capability, and the next most
+		// exposed parser — it terminates TLS from the internet.
+		Supervised: true,
 	},
 	{
 		Name:         "provisioning",

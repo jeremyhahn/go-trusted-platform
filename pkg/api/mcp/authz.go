@@ -59,6 +59,12 @@ func toolPermissionCatalog() map[string]string {
 	permissions["vtpm_extend_pcr"] = "vtpm:write"
 	permissions["vtpm_read_pcr"] = "vtpm:read"
 
+	// Platform TPM quote tools carry the scope of their gRPC TPMService twin
+	// (pkg/api/grpc/method_permissions.go). The quote is channel-bound, so
+	// over stdio, which has no TLS connection, the service refuses it (#482).
+	permissions["platform_tpm_quote"] = "tpm:read"
+	permissions["platform_tpm_verify_quote"] = "tpm:read"
+
 	// DNS tools
 	permissions["dns_add_record"] = "dns:write"
 	permissions["dns_delete_record"] = "dns:delete"

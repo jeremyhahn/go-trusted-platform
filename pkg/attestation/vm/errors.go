@@ -268,6 +268,24 @@ func (e ErrSignatureSchemeMismatch) Error() string {
 	return fmt.Sprintf("vm: %s quote signature cannot be verified with a %s AK", e.Scheme, e.KeyType)
 }
 
+// ErrQuoteSchemeUnavailable indicates the TPM could not name the signature
+// scheme its IAK signs quotes under, so a quote it produces could not be
+// verified by anyone it is handed to.
+type ErrQuoteSchemeUnavailable struct {
+	Cause error
+}
+
+func (e ErrQuoteSchemeUnavailable) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("vm: IAK signature scheme unavailable: %v", e.Cause)
+	}
+	return "vm: the IAK declares no signature scheme"
+}
+
+func (e ErrQuoteSchemeUnavailable) Unwrap() error {
+	return e.Cause
+}
+
 // ErrPCRReadFailed indicates a PCR read operation failed.
 type ErrPCRReadFailed struct {
 	PCR   int

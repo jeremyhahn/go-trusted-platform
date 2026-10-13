@@ -17,8 +17,6 @@ import (
 	"bytes"
 	"context"
 	"crypto"
-	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
 	"log/slog"
@@ -311,32 +309,14 @@ func (v *vmVerifier) Close() error {
 	return nil
 }
 
-// verifySignature verifies the TPM quote signature.
+// verifySignature verifies the TPM quote signature under the scheme the quote
+// declares in SignatureAlgorithm, never one inferred from the AIK key type.
 func (v *vmVerifier) verifySignature(ctx context.Context, quote *VMQuote) (bool, error) {
-	if len(quote.AIKPublicKey) == 0 {
-		return false, ErrSignatureInvalid{Reason: "AIK public key is empty"}
-	}
-
-	// Parse the AIK public key
-	pubKey, err := parsePublicKey(quote.AIKPublicKey)
+	err := VerifyQuoteSignatureWithAlgorithm(quote.AIKPublicKey, quote.QuoteData, quote.Signature, quote.SignatureAlgorithm)
 	if err != nil {
-		return false, ErrSignatureInvalid{Reason: "failed to parse AIK public key", Cause: err}
+		return false, err
 	}
-
-	// Compute hash of quote data
-	hashed := sha256.Sum256(quote.QuoteData)
-
-	// Verify the signature based on key type
-	switch key := pubKey.(type) {
-	case *rsa.PublicKey:
-		err = rsa.VerifyPKCS1v15(key, crypto.SHA256, hashed[:], quote.Signature)
-		if err != nil {
-			return false, ErrSignatureInvalid{Reason: "RSA signature verification failed", Cause: err}
-		}
-		return true, nil
-	default:
-		return false, ErrSignatureInvalid{Reason: "unsupported key type"}
-	}
+	return true, nil
 }
 
 // verifyCertificateChain verifies the EK certificate chain.

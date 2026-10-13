@@ -94,6 +94,7 @@ export {
   TenantService,
   TPMService,
   VTPMService,
+  VPNService,
   InvitationService,
   EABService,
   // QuicBaaS Services (28 services)
@@ -990,6 +991,25 @@ export type {
   GetVTPMInstanceEKFingerprintResponse,
 } from './types/vtpm.js';
 
+// VPN types
+export type {
+  VPNPeer,
+  VPNPosturePolicy,
+  VPNLease,
+  VPNRejectedPeer,
+  VPNGatewayStatus,
+  EnrolVPNPeerRequest,
+  EnrolVPNPeerResponse,
+  ListVPNPeersResponse,
+  RevokeVPNPeerResponse,
+  GetVPNStatusResponse,
+  SetVPNPosturePolicyRequest,
+  GetVPNPosturePolicyResponse,
+  SetVPNPosturePolicyResponse,
+  DeleteVPNPosturePolicyResponse,
+  ListVPNPosturePoliciesResponse,
+} from './types/vpn.js';
+
 // =============================================================================
 // QuicBaaS Type Exports (28 services)
 // =============================================================================
@@ -1024,6 +1044,7 @@ export {
   useTenant,
   useTPM,
   useVTPM,
+  useVPN,
   // Invitation hooks
   useInvitation,
   useInvitationList,

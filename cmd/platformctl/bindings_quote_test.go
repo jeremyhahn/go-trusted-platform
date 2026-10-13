@@ -174,7 +174,7 @@ func TestTPMBinding_VerifyQuoteSendsTheBinding(t *testing.T) {
 	server := &quoteServer{}
 	_, tpm := quoteBindingsOver(t, server)
 
-	result, err := tpm.VerifyQuote([]byte("attest"), []byte("sig"), []byte("ak"), []byte("nonce"), []byte("binding"))
+	result, err := tpm.VerifyQuote([]byte("attest"), []byte("sig"), []byte("ak"), []byte("nonce"), []byte("binding"), "SHA256-RSAPSS")
 	if err != nil {
 		t.Fatalf("VerifyQuote: %v", err)
 	}
@@ -184,13 +184,16 @@ func TestTPMBinding_VerifyQuoteSendsTheBinding(t *testing.T) {
 	if !bytes.Equal(server.verifyTPM.GetChannelBinding(), []byte("binding")) || !bytes.Equal(server.verifyTPM.GetNonce(), []byte("nonce")) {
 		t.Errorf("request = %v, want the nonce and binding as given", server.verifyTPM)
 	}
+	if got := server.verifyTPM.GetSignatureAlgorithm(); got != "SHA256-RSAPSS" {
+		t.Errorf("signature_algorithm = %q, want the scheme as given (#482)", got)
+	}
 }
 
 func TestTPMBinding_VerifyQuoteReturnsTheRefusal(t *testing.T) {
 	server := &quoteServer{err: status.Error(codes.InvalidArgument, "channel binding without a nonce")}
 	_, tpm := quoteBindingsOver(t, server)
 
-	_, err := tpm.VerifyQuote([]byte("attest"), nil, nil, nil, []byte("binding"))
+	_, err := tpm.VerifyQuote([]byte("attest"), nil, nil, nil, []byte("binding"), "")
 	var failed *tpmsvc.ErrVerifyQuoteFailed
 	if !errors.As(err, &failed) || status.Code(failed.Cause) != codes.InvalidArgument {
 		t.Fatalf("err = %v, want ErrVerifyQuoteFailed carrying InvalidArgument", err)

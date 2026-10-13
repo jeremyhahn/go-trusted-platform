@@ -428,6 +428,8 @@ message QuoteResponse {
   bytes signature = 3;
   repeated PCRValue pcr_values = 4;
   bytes event_log = 5;
+  // The IAK's signature scheme, e.g. "SHA256-RSAPSS".
+  string signature_algorithm = 7;
 }
 ```
 
@@ -456,6 +458,9 @@ message VerifyQuoteRequest {
   bytes ak_public = 3;
   bytes nonce = 4;
   repeated PCRValue expected_pcrs = 5;
+  // The scheme QuoteResponse declared; required, the signature is checked
+  // under it.
+  string signature_algorithm = 7;
 }
 ```
 

@@ -313,7 +313,11 @@ Generate a TPM quote for remote attestation, signed by the attestation key.
 
 ### platform_tpm_verify_quote
 
-Verify a TPM quote against the attestation key and expected PCR values.
+Verify a TPM quote against the attestation key that signed it — `ak_public`,
+or the platform IAK when it is omitted — under the scheme the quote declares.
+Requires scope `tpm:read`, as does `platform_tpm_quote`. The result is
+`{"verified": bool, "message": string}`; a wrong scheme or key answers
+`verified: false` with `signature_verification_failed: …`.
 
 **Input Schema:**
 ```json
@@ -331,9 +335,21 @@ Verify a TPM quote against the attestation key and expected PCR values.
     "nonce": {
       "type": "string",
       "description": "Base64-encoded nonce used during quoting"
+    },
+    "channel_binding": {
+      "type": "string",
+      "description": "Base64-encoded channel binding the quote was produced under; the quote must then carry SHA-256(nonce || channel_binding)"
+    },
+    "ak_public": {
+      "type": "string",
+      "description": "Base64-encoded PKIX DER public key of the attestation key that signed the quote; omit it to verify against the platform IAK"
+    },
+    "signature_algorithm": {
+      "type": "string",
+      "description": "Signature scheme platform_tpm_quote declared, e.g. SHA256-RSAPSS; the signature is checked under it"
     }
   },
-  "required": ["quote", "signature", "nonce"]
+  "required": ["quote", "signature", "nonce", "signature_algorithm"]
 }
 ```
 

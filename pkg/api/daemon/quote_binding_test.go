@@ -28,6 +28,7 @@ import (
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	apiquic "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
@@ -246,12 +247,19 @@ func TestAttestationQuote_CarriesTheSignatureAlgorithm(t *testing.T) {
 // quotingTPM is a TPM whose Quote records the qualifying data it was given
 // and whose IAK is an ECDSA P-256 key, so VerifyQuote can run without an
 // ak_public from the caller.
+// quotingTPM quotes with an ECDSA IAK by default; iak and attrs, when set,
+// replace that IAK's public half and key attributes.
 type quotingTPM struct {
 	xkmssdk.TrustedPlatformModule
 	quoted []byte
+	iak    crypto.PublicKey
+	attrs  *xkmssdk.KeyAttributes
 }
 
 func (q *quotingTPM) IAK() (crypto.PublicKey, error) {
+	if q.iak != nil {
+		return q.iak, nil
+	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, err
@@ -260,6 +268,9 @@ func (q *quotingTPM) IAK() (crypto.PublicKey, error) {
 }
 
 func (q *quotingTPM) IAKAttributes() (*xkmssdk.KeyAttributes, error) {
+	if q.attrs != nil {
+		return q.attrs, nil
+	}
 	return &xkmssdk.KeyAttributes{
 		KeyAlgorithm:       x509.ECDSA,
 		SignatureAlgorithm: x509.ECDSAWithSHA256,
@@ -294,8 +305,21 @@ func TestTPMQuote_QuotesTheNonceBoundToItsOwnConnection(t *testing.T) {
 			binding := exportedBinding(t, state)
 			assert.Equal(t, binding, resp.GetChannelBinding())
 			assert.Equal(t, xkmssdk.PeerQualifyingData(nonce, binding), tpm.quoted)
+			assert.Equal(t, x509.ECDSAWithSHA256.String(), resp.GetSignatureAlgorithm())
 		})
 	}
+}
+
+// TestTPMQuote_RefusesAnIAKWithoutAScheme: a quote nobody can verify is
+// not taken (#482). An IAK whose attributes name no signature scheme fails
+// Quote before the TPM is asked to sign.
+func TestTPMQuote_RefusesAnIAKWithoutAScheme(t *testing.T) {
+	tpm := &quotingTPM{attrs: &xkmssdk.KeyAttributes{KeyAlgorithm: x509.ECDSA, Hash: crypto.SHA256}}
+	ctx := boundQuoteContexts()["gRPC"](testutil.ServerConnectionState(t))
+
+	_, err := newQuotingTPMService(tpm).Quote(ctx, &platformv1.QuoteRequest{Nonce: []byte("n"), PcrIndices: []uint32{0}})
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	assert.Nil(t, tpm.quoted)
 }
 
 func TestTPMQuote_RefusesARequestWithNoBinding(t *testing.T) {
@@ -353,6 +377,55 @@ func TestTPMVerifyQuote_ChecksTheBoundEcho(t *testing.T) {
 	})
 }
 
+// quoteEchoing marshals a TPMS_ATTEST quote whose ExtraData is extraData.
+func quoteEchoing(extraData []byte) []byte {
+	return tpmgo.Marshal(tpmgo.TPMSAttest{
+		Magic:     tpmgo.TPMGeneratedValue,
+		Type:      tpmgo.TPMSTAttestQuote,
+		ExtraData: tpmgo.TPM2BData{Buffer: extraData},
+		Attested:  tpmgo.NewTPMUAttest(tpmgo.TPMSTAttestQuote, &tpmgo.TPMSQuoteInfo{}),
+	})
+}
+
+// TestTPMVerifyQuote_UsesTheDeclaredScheme: the TPM service's VerifyQuote,
+// which gRPC, Unix and MCP all run, checks the signature under the scheme
+// the request declares (#482). An RSA-PSS quote verifies under
+// SHA256-RSAPSS; with no scheme, or one the signature was not made under,
+// it fails instead of being checked as PKCS#1 v1.5.
+func TestTPMVerifyQuote_UsesTheDeclaredScheme(t *testing.T) {
+	nonce := []byte("pss-nonce")
+	quote := quoteEchoing(nonce)
+	signature, akPublic := testutil.SignPSSQuote(t, quote)
+	verify := func(scheme string) *platformv1.VerifyQuoteResponse {
+		t.Helper()
+		resp, err := newQuotingTPMService(&quotingTPM{}).VerifyQuote(context.Background(), &platformv1.VerifyQuoteRequest{
+			Quote:              quote,
+			Signature:          signature,
+			Nonce:              nonce,
+			AkPublic:           akPublic,
+			SignatureAlgorithm: scheme,
+		})
+		require.NoError(t, err)
+		return resp
+	}
+
+	t.Run("an RSA-PSS quote verifies under its scheme", func(t *testing.T) {
+		resp := verify(testutil.PSSQuoteScheme)
+		assert.True(t, resp.GetVerified(), resp.GetMessage())
+	})
+	for name, scheme := range map[string]string{
+		"undeclared":  "",
+		"PKCS#1 v1.5": x509.SHA256WithRSA.String(),
+		"ECDSA":       x509.ECDSAWithSHA256.String(),
+	} {
+		t.Run(name+" scheme fails", func(t *testing.T) {
+			resp := verify(scheme)
+			assert.False(t, resp.GetVerified())
+			assert.Contains(t, resp.GetMessage(), "signature_verification_failed")
+		})
+	}
+}
+
 // TestMCPTPMQuote_BindsTheMCPConnection: platform_tpm_quote over MCP HTTP
 // quotes under its TLS connection's binding; over stdio it is refused.
 func TestMCPTPMQuote_BindsTheMCPConnection(t *testing.T) {
@@ -371,6 +444,7 @@ func TestMCPTPMQuote_BindsTheMCPConnection(t *testing.T) {
 		result, ok := out.(map[string]interface{})
 		require.True(t, ok)
 		assert.Equal(t, base64.StdEncoding.EncodeToString(binding), result["channel_binding"])
+		assert.Equal(t, x509.ECDSAWithSHA256.String(), result["signature_algorithm"])
 	})
 
 	t.Run("stdio", func(t *testing.T) {
@@ -407,15 +481,53 @@ func TestMCPTPMVerifyQuote_PassesTheBinding(t *testing.T) {
 		return text
 	}
 
-	out, err := p.TPMVerifyQuote(context.Background(), quote, []byte("sig"), nonce, binding)
+	verify := func(nonce, binding []byte) (interface{}, error) {
+		return p.TPMVerifyQuote(context.Background(), &mcp.TPMVerifyQuoteRequest{
+			Quote:              quote,
+			Signature:          []byte("sig"),
+			Nonce:              nonce,
+			ChannelBinding:     binding,
+			SignatureAlgorithm: x509.ECDSAWithSHA256.String(),
+		})
+	}
+
+	out, err := verify(nonce, binding)
 	require.NoError(t, err)
 	assert.Contains(t, message(out), "signature_verification_failed")
 
-	out, err = p.TPMVerifyQuote(context.Background(), quote, []byte("sig"), nonce, nil)
+	out, err = verify(nonce, nil)
 	require.NoError(t, err)
 	assert.Contains(t, message(out), "nonce mismatch")
 
-	_, err = p.TPMVerifyQuote(context.Background(), quote, []byte("sig"), nil, binding)
+	_, err = verify(nil, binding)
 	var unpaired channelbind.ErrBindingWithoutNonce
 	require.ErrorAs(t, err, &unpaired)
+}
+
+// TestMCPTPMVerifyQuote_PassesTheScheme: the MCP verify tool hands its
+// signature_algorithm to the TPM service (#482), so an RSA-PSS quote from
+// the node's IAK verifies under SHA256-RSAPSS and fails with no scheme.
+func TestMCPTPMVerifyQuote_PassesTheScheme(t *testing.T) {
+	nonce := []byte("mcp-pss")
+	quote := quoteEchoing(nonce)
+	signature, akPublic := testutil.SignPSSQuote(t, quote)
+	iak, err := x509.ParsePKIXPublicKey(akPublic)
+	require.NoError(t, err)
+	p := &MCPServiceProvider{logger: slog.Default(), tpm2Service: &quotingTPM{iak: iak}}
+	verified := func(scheme string) map[string]interface{} {
+		t.Helper()
+		out, err := p.TPMVerifyQuote(context.Background(), &mcp.TPMVerifyQuoteRequest{
+			Quote: quote, Signature: signature, Nonce: nonce, SignatureAlgorithm: scheme,
+		})
+		require.NoError(t, err)
+		result, ok := out.(map[string]interface{})
+		require.True(t, ok)
+		return result
+	}
+
+	assert.Equal(t, true, verified(testutil.PSSQuoteScheme)["verified"])
+
+	result := verified("")
+	assert.Equal(t, false, result["verified"])
+	assert.Contains(t, result["message"], "signature_verification_failed")
 }

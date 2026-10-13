@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
@@ -65,7 +66,9 @@ type PlatformServiceProvider struct {
 	sdnService    *SDNService
 	zoneService   gateway.ZoneService
 	healthService *Service
-	logger        *slog.Logger
+	// tpmQuotes serves the TPM quote and verify tools (#482).
+	tpmQuotes tpmQuoteTools
+	logger    *slog.Logger
 }
 
 // PlatformServiceProviderConfig holds configuration for creating a PlatformServiceProvider.
@@ -90,7 +93,10 @@ type PlatformServiceProviderConfig struct {
 	ZoneService     gateway.ZoneService
 	HealthService   *Service
 	NTPService      platformv1.NTPServiceServer
-	Logger          *slog.Logger
+	// TPM2Service backs platform_tpm_quote and platform_tpm_verify_quote;
+	// nil means the tools answer that no TPM is available.
+	TPM2Service xkmssdk.TrustedPlatformModule
+	Logger      *slog.Logger
 }
 
 // NewPlatformServiceProvider creates a new PlatformServiceProvider.
@@ -118,6 +124,7 @@ func NewPlatformServiceProvider(config *PlatformServiceProviderConfig) *Platform
 		zoneService:        config.ZoneService,
 		healthService:      config.HealthService,
 		ntpService:         config.NTPService,
+		tpmQuotes:          tpmQuoteTools{tpm: config.TPM2Service, logger: logger},
 		logger:             logger,
 	}
 }
@@ -1924,14 +1931,17 @@ func (p *PlatformServiceProvider) TPMDeleteIAK(ctx context.Context) (interface{}
 	return nil, ErrTPMOperationNotImplemented{Operation: "TPMDeleteIAK"}
 }
 
-// TPMQuote generates a TPM quote.
+// TPMQuote generates a TPM quote over SHA-256(nonce || channel_binding),
+// where channel_binding is the TLS exporter of the connection the request
+// arrived on, on the same TPM service as every other transport (#482).
 func (p *PlatformServiceProvider) TPMQuote(ctx context.Context, nonce []byte, pcrs []int) (interface{}, error) {
-	return nil, ErrTPMOperationNotImplemented{Operation: "TPMQuote"}
+	return p.tpmQuotes.quote(ctx, nonce, pcrs)
 }
 
-// TPMVerifyQuote verifies a TPM quote.
-func (p *PlatformServiceProvider) TPMVerifyQuote(ctx context.Context, quote, signature, nonce, channelBinding []byte) (interface{}, error) {
-	return nil, ErrTPMOperationNotImplemented{Operation: "TPMVerifyQuote"}
+// TPMVerifyQuote verifies a TPM quote against req.AKPublic, or the platform
+// IAK when it is empty, under the scheme the quote declares (#482).
+func (p *PlatformServiceProvider) TPMVerifyQuote(ctx context.Context, req *mcp.TPMVerifyQuoteRequest) (interface{}, error) {
+	return p.tpmQuotes.verify(ctx, req)
 }
 
 // TPMReadPCRs reads PCR values.

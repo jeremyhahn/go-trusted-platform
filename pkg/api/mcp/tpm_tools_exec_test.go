@@ -290,6 +290,28 @@ func TestTPMToolExecution(t *testing.T) {
 		registry := NewToolRegistry(svc, log)
 
 		result, err := registry.ExecuteTool(ctx, "platform_tpm_verify_quote", map[string]interface{}{
+			"quote":               base64.StdEncoding.EncodeToString([]byte("quote-data")),
+			"signature":           base64.StdEncoding.EncodeToString([]byte("sig-data")),
+			"nonce":               base64.StdEncoding.EncodeToString([]byte("nonce-data")),
+			"signature_algorithm": "SHA256-RSAPSS",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		out, ok := result.(map[string]interface{})
+		if !ok {
+			t.Fatalf("result = %T, want a map", result)
+		}
+		if got := out["signature_algorithm"]; got != "SHA256-RSAPSS" {
+			t.Errorf("service received signature_algorithm %v, want SHA256-RSAPSS", got)
+		}
+	})
+
+	t.Run("executeTPMVerifyQuote without a scheme passes none", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		registry := NewToolRegistry(svc, log)
+
+		result, err := registry.ExecuteTool(ctx, "platform_tpm_verify_quote", map[string]interface{}{
 			"quote":     base64.StdEncoding.EncodeToString([]byte("quote-data")),
 			"signature": base64.StdEncoding.EncodeToString([]byte("sig-data")),
 			"nonce":     base64.StdEncoding.EncodeToString([]byte("nonce-data")),
@@ -297,8 +319,54 @@ func TestTPMToolExecution(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if result == nil {
-			t.Fatal("result should not be nil")
+		out, ok := result.(map[string]interface{})
+		if !ok {
+			t.Fatalf("result = %T, want a map", result)
+		}
+		if got := out["signature_algorithm"]; got != "" {
+			t.Errorf("service received signature_algorithm %q, want none for the verifier to refuse", got)
+		}
+		if got := out["ak_public"]; got != "" {
+			t.Errorf("service received ak_public %q, want none so the platform IAK verifies", got)
+		}
+	})
+
+	t.Run("executeTPMVerifyQuote passes ak_public", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		registry := NewToolRegistry(svc, log)
+
+		result, err := registry.ExecuteTool(ctx, "platform_tpm_verify_quote", map[string]interface{}{
+			"quote":               base64.StdEncoding.EncodeToString([]byte("quote-data")),
+			"signature":           base64.StdEncoding.EncodeToString([]byte("sig-data")),
+			"nonce":               base64.StdEncoding.EncodeToString([]byte("nonce-data")),
+			"ak_public":           base64.StdEncoding.EncodeToString([]byte("ak-der")),
+			"signature_algorithm": "SHA256-RSAPSS",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		out, ok := result.(map[string]interface{})
+		if !ok {
+			t.Fatalf("result = %T, want a map", result)
+		}
+		if got := out["ak_public"]; got != "ak-der" {
+			t.Errorf("service received ak_public %v, want the decoded key", got)
+		}
+	})
+
+	t.Run("executeTPMVerifyQuote invalid ak_public base64", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		registry := NewToolRegistry(svc, log)
+
+		_, err := registry.ExecuteTool(ctx, "platform_tpm_verify_quote", map[string]interface{}{
+			"quote":               base64.StdEncoding.EncodeToString([]byte("quote-data")),
+			"signature":           base64.StdEncoding.EncodeToString([]byte("sig-data")),
+			"nonce":               base64.StdEncoding.EncodeToString([]byte("nonce-data")),
+			"ak_public":           "!!!not-base64!!!",
+			"signature_algorithm": "SHA256-RSAPSS",
+		})
+		if err != ErrTPMInvalidData {
+			t.Fatalf("expected ErrTPMInvalidData, got %v", err)
 		}
 	})
 

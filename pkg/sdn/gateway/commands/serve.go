@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/process"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -81,6 +82,19 @@ func buildServeLogger() *slog.Logger {
 	return logger
 }
 
+// childInheritance is the part of this invocation's command line a
+// supervised child is started with: the configuration file this process
+// loaded, the state directory it resolved (the proxy's TOFU pins live under
+// it) and the log settings buildServeLogger read.
+func childInheritance(cfg *ServeConfig, configFile string) process.Inherited {
+	return process.Inherited{
+		ConfigFile: configFile,
+		DataDir:    cfg.DataDir,
+		LogFormat:  logFormat,
+		Debug:      debugMode,
+	}
+}
+
 func runServe(cmd *cobra.Command, args []string) error {
 	logger := buildServeLogger()
 
@@ -97,7 +111,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// With the `process:` section enabled, the supervised services run in
 	// child processes. The children outlive gw.Stop, which stops the
 	// services they host, so they are shut down after it on every exit path.
-	supervisor, err := BuildSupervisor(cfg, viper.ConfigFileUsed(), logger)
+	supervisor, err := BuildSupervisor(cfg, childInheritance(cfg, viper.ConfigFileUsed()), logger)
 	if err != nil {
 		return err
 	}

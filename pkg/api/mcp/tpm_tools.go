@@ -351,8 +351,16 @@ func (r *ToolRegistry) registerTPMTools() {
 					"type":        "string",
 					"description": "Base64-encoded channel binding the quote was produced under; the quote must then carry SHA-256(nonce || channel_binding)",
 				},
+				"ak_public": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded PKIX DER public key of the attestation key that signed the quote; omit it to verify against the platform IAK",
+				},
+				"signature_algorithm": map[string]interface{}{
+					"type":        "string",
+					"description": "Scheme the quote declares, as platform_tpm_quote returned it (e.g. SHA256-RSAPSS); an absent or unknown scheme fails verification",
+				},
 			},
-			"required": []string{"quote", "signature", "nonce"},
+			"required": []string{"quote", "signature", "nonce", "signature_algorithm"},
 		},
 	})
 

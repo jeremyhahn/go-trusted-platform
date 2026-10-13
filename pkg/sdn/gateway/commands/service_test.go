@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,6 +35,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/process"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/proxysvc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
 func TestLoadServeConfig_ProcessSection(t *testing.T) {
@@ -76,12 +79,13 @@ func supervisorSettings(t *testing.T) *process.Settings {
 func TestBuildSupervisor_AttachesTheSupervisorToTheGateway(t *testing.T) {
 	cfg := &ServeConfig{Gateway: &gateway.GatewayConfig{Enabled: true}, Process: supervisorSettings(t)}
 
-	supervisor, err := BuildSupervisor(cfg, "/etc/gatewayd/config.yaml", testLogger())
+	supervisor, err := BuildSupervisor(cfg, process.Inherited{ConfigFile: "/etc/gatewayd/config.yaml"}, testLogger())
 	require.NoError(t, err)
 	require.NotNil(t, supervisor)
 	assert.True(t, cfg.Gateway.Supervisor == gateway.ServiceSupervisor(supervisor),
 		"BuildGateway must see the supervisor it will hand services to")
 	assert.True(t, cfg.Gateway.Supervisor.Supervises(gateway.ServiceTransit))
+	assert.True(t, cfg.Gateway.Supervisor.Supervises(gateway.ServiceProxy))
 }
 
 func TestBuildSupervisor_NothingToSupervise(t *testing.T) {
@@ -95,7 +99,7 @@ func TestBuildSupervisor_NothingToSupervise(t *testing.T) {
 	}
 	for name, cfg := range tests {
 		t.Run(name, func(t *testing.T) {
-			supervisor, err := BuildSupervisor(cfg, "", testLogger())
+			supervisor, err := BuildSupervisor(cfg, process.Inherited{ConfigFile: "$!1"}, testLogger())
 			require.NoError(t, err)
 			assert.Nil(t, supervisor)
 			if cfg.Gateway != nil {
@@ -107,7 +111,7 @@ func TestBuildSupervisor_NothingToSupervise(t *testing.T) {
 
 func TestBuildSupervisor_Errors(t *testing.T) {
 	t.Run("no configuration", func(t *testing.T) {
-		_, err := BuildSupervisor(nil, "", testLogger())
+		_, err := BuildSupervisor(nil, process.Inherited{}, testLogger())
 		require.ErrorIs(t, err, ErrConfigLoadFailed)
 	})
 	t.Run("an unknown service account", func(t *testing.T) {
@@ -115,7 +119,7 @@ func TestBuildSupervisor_Errors(t *testing.T) {
 		settings.User = "gatewayd-no-such-account-557"
 		cfg := &ServeConfig{Gateway: &gateway.GatewayConfig{Enabled: true}, Process: settings}
 
-		_, err := BuildSupervisor(cfg, "", testLogger())
+		_, err := BuildSupervisor(cfg, process.Inherited{ConfigFile: "$!1"}, testLogger())
 		var section *ErrConfigSection
 		require.ErrorAs(t, err, &section)
 		assert.Equal(t, "process", section.Section)
@@ -123,6 +127,81 @@ func TestBuildSupervisor_Errors(t *testing.T) {
 		require.ErrorAs(t, err, &unknown)
 		assert.Nil(t, cfg.Gateway.Supervisor, "a supervisor that failed to build is not attached")
 	})
+}
+
+// parseChildCommandLine parses a supervised child's argv the way gatewayd's
+// root command does, so the test reads the configuration the child would
+// resolve. The flags are global, so they are put back afterwards.
+func parseChildCommandLine(t *testing.T, args []string) *viper.Viper {
+	t.Helper()
+	cmd, rest, err := rootCmd.Find(args)
+	require.NoError(t, err)
+	require.Equal(t, serviceRunCmd, cmd, "the child runs `service run`")
+	t.Cleanup(func() {
+		cmd.Flags().VisitAll(func(f *pflag.Flag) {
+			if err := f.Value.Set(f.DefValue); err != nil {
+				t.Errorf("reset --%s: %v", f.Name, err)
+			}
+			f.Changed = false
+		})
+	})
+	require.NoError(t, cmd.ParseFlags(rest))
+	return viper.GetViper()
+}
+
+func TestChildInheritance_TheProxyChildOpensTheSupervisorsPinStore(t *testing.T) {
+	// A supervisor run with a custom --data-dir captured a TOFU pin. Its
+	// proxy child must resolve the same directory and read that pin, not
+	// fall back to /var/lib/gatewayd and trust the peer afresh.
+	dataDir := t.TempDir()
+	parentStore, err := newGatewayTOFUPinStore(dataDir)
+	require.NoError(t, err)
+	pin := &trust.TOFUPin{
+		Host:       "bmc.example",
+		Port:       443,
+		SPKISHA256: strings.Repeat("ab", 32),
+		FirstSeen:  time.Now().UTC(),
+		Source:     "tofu",
+	}
+	require.NoError(t, parentStore.Put(context.Background(), pin))
+
+	def, err := process.DefinitionByName("proxy")
+	require.NoError(t, err)
+	spec := process.Spec{
+		Definition: def,
+		Socket:     filepath.Join(t.TempDir(), "proxy.sock"),
+		SocketGID:  -1,
+		Inherited:  childInheritance(&ServeConfig{DataDir: dataDir}, ""),
+	}
+
+	cfg, err := LoadServeConfig(parseChildCommandLine(t, spec.Args()))
+	require.NoError(t, err)
+	assert.Equal(t, dataDir, cfg.DataDir, "the child resolves the supervisor's state directory")
+
+	childStore, err := newGatewayTOFUPinStore(cfg.DataDir)
+	require.NoError(t, err)
+	got, err := childStore.Get(context.Background(), pin.Host, pin.Port)
+	require.NoError(t, err, "the child reads the pin the supervisor captured")
+	assert.Equal(t, pin.SPKISHA256, got.SPKISHA256)
+}
+
+func TestChildInheritance_AnUnsetStateDirectoryKeepsTheDefault(t *testing.T) {
+	// Nothing to inherit is not an empty flag: the child resolves the same
+	// default the supervisor did, and the log settings still travel.
+	origFormat, origDebug := logFormat, debugMode
+	t.Cleanup(func() { logFormat, debugMode = origFormat, origDebug })
+	logFormat, debugMode = "text", true
+
+	inherited := childInheritance(&ServeConfig{}, "")
+	assert.Equal(t, process.Inherited{LogFormat: "text", Debug: true}, inherited)
+
+	def, err := process.DefinitionByName("proxy")
+	require.NoError(t, err)
+	args := process.Spec{Definition: def, Socket: "/s", SocketGID: -1, Inherited: inherited}.Args()
+	assert.NotContains(t, args, "--data-dir")
+	cfg, err := LoadServeConfig(parseChildCommandLine(t, args))
+	require.NoError(t, err)
+	assert.Equal(t, "/var/lib/gatewayd", cfg.DataDir)
 }
 
 type fakeShutdowner struct {
@@ -291,11 +370,11 @@ func serviceTestOptions(t *testing.T) serviceOptions {
 }
 
 // startServiceProcess runs serveProcess until the returned cancel is called.
-func startServiceProcess(t *testing.T, run *serviceRun, opts serviceOptions) (context.CancelFunc, <-chan error) {
+func startServiceProcess(t *testing.T, name string, run *serviceRun, opts serviceOptions) (context.CancelFunc, <-chan error) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- serveProcess(ctx, "routing", opts, run.deps(), testLogger()) }()
+	go func() { done <- serveProcess(ctx, name, opts, run.deps(), testLogger()) }()
 	t.Cleanup(cancel)
 	return cancel, done
 }
@@ -326,7 +405,7 @@ func TestServeProcess_HostsItsOwnServicesAndServesTheSupervisor(t *testing.T) {
 	run := newServiceRun()
 	opts := serviceTestOptions(t)
 
-	cancel, done := startServiceProcess(t, run, opts)
+	cancel, done := startServiceProcess(t, "routing", run, opts)
 	require.Eventually(t, func() bool {
 		_, active, ok := processStatus(t, opts.socket)
 		return ok && active[gateway.ServiceTransit]
@@ -346,12 +425,44 @@ func TestServeProcess_HostsItsOwnServicesAndServesTheSupervisor(t *testing.T) {
 	assert.Nil(t, run.built.Gateway.Supervisor)
 }
 
+func TestServeProcess_TheProxyProcessHostsOnlyTheProxy(t *testing.T) {
+	run := newServiceRun()
+	run.handler = &fakeServiceHandler{name: gateway.ServiceProxy}
+	run.loaded.Proxy = &proxysvc.Config{Enabled: true}
+	opts := serviceTestOptions(t)
+
+	cancel, done := startServiceProcess(t, "proxy", run, opts)
+	require.Eventually(t, func() bool {
+		_, active, ok := processStatus(t, opts.socket)
+		return ok && active[gateway.ServiceProxy]
+	}, 5*time.Second, 10*time.Millisecond, "the supervisor must see the proxy active")
+
+	cancel()
+	require.NoError(t, <-done)
+	require.Len(t, run.hardened, 1)
+	assert.Equal(t, "proxy", run.hardened[0].Name)
+	assert.Equal(t, []string{gateway.ServiceProxy}, run.built.Gateway.HostedServices,
+		"transit and DHCP are enabled but belong to other processes")
+}
+
+func TestServeProcess_TheProxyProcessRefusesADisabledProxy(t *testing.T) {
+	run := newServiceRun()
+	run.loaded.Proxy = &proxysvc.Config{Enabled: false}
+
+	err := serveProcess(context.Background(), "proxy", serviceTestOptions(t), run.deps(), testLogger())
+
+	var nothing *ErrProcessHostsNothing
+	require.ErrorAs(t, err, &nothing)
+	assert.Equal(t, "proxy", nothing.Process)
+	assert.Nil(t, run.built, "an empty host list would host every service")
+}
+
 func TestServeProcess_AStartFailureReachesTheSupervisor(t *testing.T) {
 	run := newServiceRun()
 	run.handler.startErr = &gateway.ErrNilServiceHandler{}
 	opts := serviceTestOptions(t)
 
-	cancel, done := startServiceProcess(t, run, opts)
+	cancel, done := startServiceProcess(t, "routing", run, opts)
 	require.Eventually(t, func() bool {
 		startErr, _, ok := processStatus(t, opts.socket)
 		return ok && strings.Contains(startErr, gateway.ServiceTransit)

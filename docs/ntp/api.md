@@ -50,7 +50,7 @@ the message with `protojson` under identical options
 (`UseProtoNames: false`, `EmitUnpopulated: true`). The paths match by design —
 `ntpBasePath` is hard-coded to `/api/v1/ntp` in the daemon handler
 *"so a client sees the same URLs regardless of which listener it reaches"* —
-and the status mapping is duplicated to match: `ntpGRPCToHTTPStatus` in the
+and the status mapping is duplicated to match: `protorestHTTPStatus` in the
 daemon handler mirrors `protorest`'s switch.
 
 **The envelopes differ, and this is the one place the two listeners are not

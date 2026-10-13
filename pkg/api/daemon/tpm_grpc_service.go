@@ -16,14 +16,9 @@ package daemon
 import (
 	"bytes"
 	"context"
-	"crypto"
-	"crypto/ecdsa"
-	"crypto/rsa"
 	"crypto/x509"
-	"encoding/asn1"
 	"fmt"
 	"log/slog"
-	"math/big"
 	"sync"
 
 	tpmgo "github.com/google/go-tpm/tpm2"
@@ -31,6 +26,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
+	attestvm "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
@@ -940,6 +936,11 @@ func (s *TPMGRPCService) Quote(
 		return nil, err
 	}
 
+	sigAlg, err := attestvm.QuoteSignatureAlgorithm(tpm)
+	if err != nil {
+		s.logger.Slog().Error("TPM Quote refused", slog.String("error", err.Error()))
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
 	quote, err := tpm.Quote(pcrs, bound.QualifyingData)
 	if err != nil {
 		s.logger.Slog().Error("TPM Quote failed", slog.String("error", err.Error()))
@@ -948,10 +949,11 @@ func (s *TPMGRPCService) Quote(
 
 	s.logger.Debug("TPM Quote completed")
 	return &platformv1.QuoteResponse{
-		Quote:          quote.Quoted,
-		Signature:      quote.Signature,
-		EventLog:       quote.EventLog,
-		ChannelBinding: bound.Binding,
+		Quote:              quote.Quoted,
+		Signature:          quote.Signature,
+		EventLog:           quote.EventLog,
+		ChannelBinding:     bound.Binding,
+		SignatureAlgorithm: sigAlg,
 	}, nil
 }
 
@@ -965,9 +967,10 @@ func (s *TPMGRPCService) Quote(
 //  3. The ExtraData (qualifying data) field exactly matches the
 //     verifier-supplied nonce — anti-replay.
 //  4. The signature over the raw Quoted bytes validates against the
-//     attestation key's public half. RSASSA-PKCS1v15, RSA-PSS, and
-//     ECDSA are supported, with the digest algorithm taken from the
-//     IAK's KeyAttributes (typically SHA-256).
+//     attestation key's public half under the scheme the request
+//     declares in signature_algorithm (QuoteResponse.signature_algorithm),
+//     through the platform's one quote verifier. No scheme, or one the
+//     key cannot carry, fails; the scheme is never inferred from the key.
 //
 // AK public key resolution order:
 //   - If req.AkPublic is non-empty, parse it as PKIX DER and use it
@@ -1006,8 +1009,7 @@ func (s *TPMGRPCService) VerifyQuote(
 		return nil, status.Error(codes.InvalidArgument, "signature is required")
 	}
 
-	// Resolve the AK public key + signing/hash algorithms.
-	pubKey, hashAlg, sigAlgo, keyAlgo, err := s.resolveVerifyKeyMaterial(req.GetAkPublic())
+	akPublic, err := s.resolveVerifyAKPublic(req.GetAkPublic())
 	if err != nil {
 		s.logger.Slog().Error("Failed to resolve AK public key", slog.String("error", err.Error()))
 		return &platformv1.VerifyQuoteResponse{
@@ -1053,8 +1055,8 @@ func (s *TPMGRPCService) VerifyQuote(
 		}
 	}
 
-	// Verify the signature over the raw Quoted bytes.
-	if err := s.verifyQuoteSignature(pubKey, hashAlg, sigAlgo, keyAlgo, req.GetQuote(), req.GetSignature()); err != nil {
+	// Verify the signature over the raw Quoted bytes under the declared scheme.
+	if err := attestvm.VerifyQuoteSignatureWithAlgorithm(akPublic, req.GetQuote(), req.GetSignature(), req.GetSignatureAlgorithm()); err != nil {
 		s.logger.Slog().Warn("TPM quote signature verification failed", slog.String("error", err.Error()))
 		return &platformv1.VerifyQuoteResponse{
 			Verified: false,
@@ -1069,94 +1071,22 @@ func (s *TPMGRPCService) VerifyQuote(
 	}, nil
 }
 
-// resolveVerifyKeyMaterial picks the AK public key + signing
-// algorithms used to verify the quote. Caller-supplied AkPublic
-// (PKIX DER) wins; otherwise we fall back to the IAK provisioned on
-// this platform.
-func (s *TPMGRPCService) resolveVerifyKeyMaterial(akPublic []byte) (crypto.PublicKey, crypto.Hash, x509.SignatureAlgorithm, x509.PublicKeyAlgorithm, error) {
+// resolveVerifyAKPublic returns the PKIX DER of the AK public key the
+// quote is verified against. Caller-supplied akPublic wins; otherwise
+// the IAK provisioned on this platform is used.
+func (s *TPMGRPCService) resolveVerifyAKPublic(akPublic []byte) ([]byte, error) {
 	if len(akPublic) > 0 {
-		pub, err := x509.ParsePKIXPublicKey(akPublic)
-		if err != nil {
-			return nil, 0, 0, 0, &WrappedError{Msg: "parse PKIX ak_public", Err: err}
-		}
-		// Without ak attrs from the caller, infer reasonable defaults:
-		// SHA-256 is the canonical hash for TPM 2.0 quotes, RSASSA for
-		// RSA keys, ECDSA for EC keys. Callers that need RSA-PSS need
-		// to supply the IAK side-channel; this branch is primarily for
-		// remote verifiers that accept the platform's signing
-		// conventions.
-		switch pub.(type) {
-		case *rsa.PublicKey:
-			return pub, crypto.SHA256, x509.SHA256WithRSA, x509.RSA, nil
-		case *ecdsa.PublicKey:
-			return pub, crypto.SHA256, x509.ECDSAWithSHA256, x509.ECDSA, nil
-		default:
-			return nil, 0, 0, 0, &MessageError{Msg: fmt.Sprintf("unsupported ak_public key type: %T", pub)}
-		}
+		return akPublic, nil
 	}
-
 	pub, err := s.tpm.IAK()
 	if err != nil {
-		return nil, 0, 0, 0, &WrappedError{Msg: "read IAK public", Err: err}
+		return nil, &WrappedError{Msg: "read IAK public", Err: err}
 	}
-	attrs, err := s.tpm.IAKAttributes()
+	der, err := x509.MarshalPKIXPublicKey(pub)
 	if err != nil {
-		return nil, 0, 0, 0, &WrappedError{Msg: "read IAK attributes", Err: err}
+		return nil, &WrappedError{Msg: "marshal IAK public", Err: err}
 	}
-	hashAlg := attrs.Hash
-	if hashAlg == 0 {
-		hashAlg = crypto.SHA256
-	}
-	return pub, hashAlg, attrs.SignatureAlgorithm, attrs.KeyAlgorithm, nil
-}
-
-// verifyQuoteSignature validates `signature` over `quoted` using the
-// supplied public key. Algorithm dispatch follows the IAK's
-// configured signing scheme. The TPM emits raw RSA signature bytes
-// for both RSASSA and RSA-PSS, and ASN.1-encoded R||S for ECDSA
-// (matching go-xkms's Quote() encoding).
-func (s *TPMGRPCService) verifyQuoteSignature(
-	pub crypto.PublicKey,
-	hashAlg crypto.Hash,
-	sigAlgo x509.SignatureAlgorithm,
-	keyAlgo x509.PublicKeyAlgorithm,
-	quoted, signature []byte,
-) error {
-	if !hashAlg.Available() {
-		return &MessageError{Msg: fmt.Sprintf("hash algorithm %v not linked into binary", hashAlg)}
-	}
-	h := hashAlg.New()
-	h.Write(quoted)
-	digest := h.Sum(nil)
-
-	switch keyAlgo {
-	case x509.RSA:
-		rsaPub, ok := pub.(*rsa.PublicKey)
-		if !ok {
-			return &MessageError{Msg: fmt.Sprintf("public key is %T, not *rsa.PublicKey", pub)}
-		}
-		if quicbaassdk.IsRSAPSS(sigAlgo) {
-			return rsa.VerifyPSS(rsaPub, hashAlg, digest, signature, nil)
-		}
-		return rsa.VerifyPKCS1v15(rsaPub, hashAlg, digest, signature)
-
-	case x509.ECDSA:
-		ecPub, ok := pub.(*ecdsa.PublicKey)
-		if !ok {
-			return &MessageError{Msg: fmt.Sprintf("public key is %T, not *ecdsa.PublicKey", pub)}
-		}
-		var rs struct{ R, S *big.Int }
-		if _, err := asn1.Unmarshal(signature, &rs); err != nil {
-			return &WrappedError{Msg: "decode ECDSA R||S", Err: err}
-		}
-		if !ecdsa.Verify(ecPub, digest, rs.R, rs.S) {
-			return &MessageError{Msg: "ECDSA signature does not validate"}
-		}
-		return nil
-
-	default:
-		return &MessageError{Msg: fmt.Sprintf("unsupported key algorithm: %v", keyAlgo)}
-	}
+	return der, nil
 }
 
 // GetEventLog retrieves the TPM event log.

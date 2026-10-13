@@ -17,6 +17,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/x509"
 	"testing"
 	"time"
 
@@ -101,9 +102,10 @@ func (m *vmCapableMockOrchestrator) AttestVM(ctx context.Context, instanceID str
 			0: {0x01},
 			7: {0x07},
 		},
-		Quote:       []byte("quote-bytes"),
-		Signature:   []byte("signature-bytes"),
-		AKPublicKey: []byte("ak-public"),
+		Quote:              []byte("quote-bytes"),
+		Signature:          []byte("signature-bytes"),
+		SignatureAlgorithm: x509.SHA256WithRSAPSS.String(),
+		AKPublicKey:        []byte("ak-public"),
 	}, nil
 }
 
@@ -396,6 +398,7 @@ func TestComputeGRPCService_AttestVM(t *testing.T) {
 		assert.True(t, resp.GetStatus().GetSuccess())
 		assert.Equal(t, []byte("quote-bytes"), resp.GetQuote())
 		assert.Equal(t, []byte("signature-bytes"), resp.GetSignature())
+		assert.Equal(t, x509.SHA256WithRSAPSS.String(), resp.GetSignatureAlgorithm())
 		assert.Equal(t, []byte("ak-public"), resp.GetAkPublic())
 		require.Len(t, resp.GetPcrValues(), 2)
 		assert.Equal(t, uint32(0), resp.GetPcrValues()[0].GetIndex())
@@ -418,10 +421,11 @@ func TestComputeGRPCService_VerifyVMAttestation(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		svc, orchestrator := newVMCapableComputeService()
 		resp, err := svc.VerifyVMAttestation(ctx, &platformv1.VerifyVMAttestationRequest{
-			VmId:      "vm1",
-			Quote:     []byte("quote"),
-			Signature: []byte("signature"),
-			Nonce:     []byte("nonce"),
+			VmId:               "vm1",
+			Quote:              []byte("quote"),
+			Signature:          []byte("signature"),
+			SignatureAlgorithm: x509.SHA256WithRSAPSS.String(),
+			Nonce:              []byte("nonce"),
 			ExpectedPcrs: []*platformv1.PCRValue{
 				{Index: 0, Bank: platformv1.PCRBank_PCR_BANK_SHA256, Value: []byte{0x01}},
 			},
@@ -433,6 +437,7 @@ func TestComputeGRPCService_VerifyVMAttestation(t *testing.T) {
 
 		require.NotNil(t, orchestrator.lastEvidence)
 		assert.Equal(t, []byte("quote"), orchestrator.lastEvidence.Quote)
+		assert.Equal(t, x509.SHA256WithRSAPSS.String(), orchestrator.lastEvidence.SignatureAlgorithm)
 		assert.Equal(t, []byte{0x01}, orchestrator.lastEvidence.ExpectedPCRs[0])
 	})
 

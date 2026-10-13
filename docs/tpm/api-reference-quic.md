@@ -279,12 +279,16 @@ type TPM2QuoteRequest struct {
 **Response Payload:**
 ```go
 type TPM2QuoteResponse struct {
-    Quote     []byte `codec:"quote"`
-    Signature []byte `codec:"signature"`
-    EventLog  []byte `codec:"event_log"`
-    Timestamp int64  `codec:"timestamp"`
+    Quote              []byte `codec:"quote"`
+    Signature          []byte `codec:"signature"`
+    SignatureAlgorithm string `codec:"signature_algorithm"`
+    EventLog           []byte `codec:"event_log"`
+    Timestamp          int64  `codec:"timestamp"`
 }
 ```
+
+`TPM2VerifyQuoteRequest` (0x10) carries `signature_algorithm` back; the
+signature is checked under it and fails without it.
 
 ### ReadPCRs (0x11)
 

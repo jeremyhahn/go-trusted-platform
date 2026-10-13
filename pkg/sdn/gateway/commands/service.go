@@ -132,7 +132,7 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 	if cfg.Gateway == nil {
 		return &ErrProcessHostsNothing{Process: def.Name}
 	}
-	hosted := def.ServicesFor(cfg.Gateway.EnabledServices())
+	hosted := def.ServicesFor(enabledServices(cfg))
 	// An empty HostedServices means every service, so a process with
 	// nothing to host stops here rather than hosting everything.
 	if len(hosted) == 0 {

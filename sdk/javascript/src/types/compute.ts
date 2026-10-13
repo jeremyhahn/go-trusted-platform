@@ -747,6 +747,12 @@ export interface VerifyVMAttestationRequest {
   nonce: string;
   /** Expected PCR values */
   expectedPcrs?: PCRValue[];
+  /**
+   * Signature scheme the quote declares (AttestVMResponse.signatureAlgorithm,
+   * e.g. "SHA256-RSAPSS"). The quote is verified under it alone; an absent
+   * or unknown scheme fails verification.
+   */
+  signatureAlgorithm: string;
 }
 
 // =============================================================================
@@ -1003,6 +1009,12 @@ export interface AttestVMResponse {
   eventLog?: string;
   /** AK public key (base64) */
   akPublic?: string;
+  /**
+   * x509.SignatureAlgorithm name of the scheme the AK signed the quote under
+   * (e.g. "SHA256-RSAPSS"); the signature itself is bare bytes. Send it back
+   * as VerifyVMAttestationRequest.signatureAlgorithm.
+   */
+  signatureAlgorithm?: string;
 }
 
 /**

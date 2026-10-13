@@ -67,7 +67,8 @@ func TestSupervises_OnlyTheMovedProcessIsSupervised(t *testing.T) {
 	sup := &Supervisor{}
 
 	assert.True(t, sup.Supervises(gateway.ServiceTransit), "routing is the first process moved out (#557)")
-	for _, service := range []string{gateway.ServiceFirewall, gateway.ServiceNAT, gateway.ServiceProxy, gateway.ServiceDHCP, gateway.ServiceManagementVPN} {
+	assert.True(t, sup.Supervises(gateway.ServiceProxy), "proxy is the second process moved out (#557)")
+	for _, service := range []string{gateway.ServiceFirewall, gateway.ServiceNAT, gateway.ServiceDHCP, gateway.ServiceManagementVPN} {
 		assert.Falsef(t, sup.Supervises(service), "%s has not moved yet", service)
 	}
 	// Only a parser moves first: the kernel class stays with the parent
@@ -75,6 +76,7 @@ func TestSupervises_OnlyTheMovedProcessIsSupervised(t *testing.T) {
 	for _, def := range Definitions() {
 		if def.Supervised {
 			assert.Equal(t, ClassParser, def.Class, def.Name)
+			assert.True(t, def.Unprivileged, "%s: a moved parser drops to the service account", def.Name)
 		}
 	}
 }
@@ -530,7 +532,7 @@ func newSupervisor(t *testing.T, tune func(*Config)) (*Supervisor, *fakeLauncher
 	cfg := Config{
 		Launcher:      launcher,
 		RuntimeDir:    dir,
-		ConfigFile:    filepath.Join(dir, "config.yaml"),
+		Inherited:     Inherited{ConfigFile: filepath.Join(dir, "config.yaml")},
 		SocketGID:     -1,
 		Clock:         clock,
 		ReadyTimeout:  2 * time.Second,
@@ -1149,7 +1151,8 @@ func TestSettings_ResolvesTheServiceAccountAndDefaults(t *testing.T) {
 	// gatewayd account here.
 	name := currentUserName(t)
 
-	cfg, err := Settings{Enabled: true, User: name}.Config("/etc/gatewayd/config.yaml", nil)
+	inherited := Inherited{ConfigFile: "/etc/gatewayd/config.yaml", DataDir: "/srv/gatewayd"}
+	cfg, err := Settings{Enabled: true, User: name}.Config(inherited, nil)
 	require.NoError(t, err)
 	assert.Equal(t, DefaultRuntimeDir, cfg.RuntimeDir)
 	assert.Equal(t, uint32(os.Getuid()), cfg.UID)
@@ -1161,18 +1164,18 @@ func TestSettings_ResolvesTheServiceAccountAndDefaults(t *testing.T) {
 	// An operator who writes an empty parent means it: no placement, no
 	// limits, and the capability separation untouched.
 	off := ""
-	disabled, err := Settings{Enabled: true, User: name, CgroupParent: &off}.Config("", nil)
+	disabled, err := Settings{Enabled: true, User: name, CgroupParent: &off}.Config(Inherited{}, nil)
 	require.NoError(t, err)
 	assert.False(t, disabled.Cgroups.Enabled())
-	assert.Equal(t, "/etc/gatewayd/config.yaml", cfg.ConfigFile)
+	assert.Equal(t, inherited, cfg.Inherited, "the children are started with the supervisor's own flags")
 
-	_, err = Settings{Enabled: true, User: "no-such-account-for-tests"}.Config("", nil)
+	_, err = Settings{Enabled: true, User: "no-such-account-for-tests"}.Config(Inherited{}, nil)
 	var unknown *ErrUserUnknown
 	require.ErrorAs(t, err, &unknown)
 
 	// An explicit group that does not exist is the same refusal: running a
 	// parser under a group nobody defined is not a degraded mode.
-	_, err = Settings{Enabled: true, User: name, Group: "no-such-group-for-tests"}.Config("", nil)
+	_, err = Settings{Enabled: true, User: name, Group: "no-such-group-for-tests"}.Config(Inherited{}, nil)
 	require.ErrorAs(t, err, &unknown)
 	assert.Equal(t, "no-such-group-for-tests", unknown.Name)
 }
@@ -1270,7 +1273,7 @@ func TestExecLauncher_PassesTheClassPrivilegeAndTheChildArguments(t *testing.T) 
 	spec := Spec{
 		Definition: def,
 		Socket:     "/run/gatewayd/routing.sock",
-		ConfigFile: "/etc/gatewayd/config.yaml",
+		Inherited:  Inherited{ConfigFile: "/etc/gatewayd/config.yaml"},
 		UID:        1001,
 		GID:        1001,
 		SocketGID:  1001,
@@ -1300,6 +1303,53 @@ func TestExecLauncher_PassesTheClassPrivilegeAndTheChildArguments(t *testing.T) 
 	var launchErr *ErrProcessLaunch
 	require.ErrorAs(t, err, &launchErr)
 	assert.Equal(t, "vpn", launchErr.Process)
+}
+
+func TestSpecArgs_CarryEveryInheritedRootFlag(t *testing.T) {
+	// A child is a fresh gatewayd invocation: a root flag the supervisor
+	// was given and the child is not falls back to its default there. For
+	// --data-dir that is a different TOFU pin store (#881 review).
+	def, err := DefinitionByName("proxy")
+	require.NoError(t, err)
+	spec := Spec{
+		Definition:    def,
+		Socket:        "/run/gatewayd/proxy.sock",
+		SocketGID:     1002,
+		SupervisorUID: 0,
+		UID:           1001,
+		GID:           1002,
+		Inherited: Inherited{
+			ConfigFile: "/srv/gw/config.yaml",
+			DataDir:    "/srv/gw/state",
+			LogFormat:  "text",
+			Debug:      true,
+		},
+	}
+	assert.Equal(t, []string{
+		"service", "run", "proxy",
+		"--ipc-socket", "/run/gatewayd/proxy.sock",
+		"--socket-group", "1002",
+		"--supervisor-uid", "0",
+		"--uid", "1001",
+		"--gid", "1002",
+		"--config", "/srv/gw/config.yaml",
+		"--data-dir", "/srv/gw/state",
+		"--log-format", "text",
+		"--debug",
+	}, spec.Args())
+}
+
+func TestSpecArgs_LeaveUnsetInheritedFlagsToTheChildDefault(t *testing.T) {
+	// An empty value is not forwarded as an empty flag: `--data-dir ""`
+	// would point the pin store at the working directory rather than at
+	// the default the supervisor itself resolved.
+	def, err := DefinitionByName("vpn")
+	require.NoError(t, err)
+	args := Spec{Definition: def, Socket: "/s", SocketGID: -1}.Args()
+	for _, flag := range []string{"--config", "--data-dir", "--log-format", "--debug"} {
+		assert.NotContains(t, args, flag)
+	}
+	assert.Equal(t, "-1", args[6], "a negative socket group is passed through unchanged")
 }
 
 // recordingHardenOps records the privilege-dropping syscalls Harden makes

@@ -502,6 +502,24 @@ func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, tokens 
 	s.logger.Info("Auth factor REST routes registered")
 }
 
+// SetTPMHandlers mounts the physical TPM routes (/api/v1/tpm/...). Every
+// route runs on tpm, the daemon's TPM service, with the protobuf JSON request
+// and response the SDK speaks, so a REST call is the one gRPC, QUIC, MCP and
+// Unix serve. Every route requires a platform bearer token granting tpm:read,
+// tpm:write or tpm:delete; with no validator every route refuses. A nil TPM
+// service mounts nothing.
+func (s *RESTServer) SetTPMHandlers(tpm platformv1.TPMServiceServer, tokens *platformTokenValidator) {
+	if tpm == nil {
+		return
+	}
+	handlers := restapi.NewTPMHandlers(s.logger).WithTPMService(tpm)
+	// A nil *platformTokenValidator must not become a non-nil interface.
+	if tokens != nil {
+		handlers.WithTokenAuthorizer(tokens)
+	}
+	handlers.RegisterRoutes(s.router)
+}
+
 // applyMiddleware wraps the router with middleware handlers
 func (s *RESTServer) applyMiddleware(handler http.Handler) http.Handler {
 	// Apply CORS middleware if enabled

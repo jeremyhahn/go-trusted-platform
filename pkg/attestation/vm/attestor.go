@@ -57,6 +57,10 @@ type VTPMDevice interface {
 	// GetAIKPublicKey returns the public key of the AIK/AK.
 	GetAIKPublicKey(ctx context.Context) ([]byte, error)
 
+	// GetAIKSignatureAlgorithm returns the x509.SignatureAlgorithm name of
+	// the scheme the AIK/AK signs quotes under (for example "SHA256-RSAPSS").
+	GetAIKSignatureAlgorithm(ctx context.Context) (string, error)
+
 	// GetEKCertificate returns the vTPM EK certificate.
 	GetEKCertificate(ctx context.Context) ([]byte, error)
 
@@ -217,10 +221,15 @@ func (a *vmAttestor) GenerateQuote(ctx context.Context, request *QuoteRequest) (
 		return nil, ErrQuoteGenerationFailed{Reason: "failed to get AIK public key", Cause: err}
 	}
 
+	sigAlg, err := a.vtpm.GetAIKSignatureAlgorithm(ctx)
+	if err != nil {
+		return nil, ErrQuoteGenerationFailed{Reason: "failed to get AIK signature algorithm", Cause: err}
+	}
+
 	quote := &VMQuote{
 		QuoteData:          quoteData,
 		Signature:          signature,
-		SignatureAlgorithm: "RSASSA-PKCS1-v1_5-SHA256",
+		SignatureAlgorithm: sigAlg,
 		PCRs:               pcrs,
 		PCRDigest:          pcrDigest,
 		Nonce:              request.Nonce,

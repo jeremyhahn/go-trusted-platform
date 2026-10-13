@@ -405,9 +405,12 @@ alone cannot tell a passed check from a check that never happened**, which is
 what these routes reported before #483: both response builders set
 `verified: true` from a literal, on every response, for any evidence.
 
-VM evidence carries a quote, an AIK and a signature, so it is verified for
-real: the quote's `ExtraData` must equal the nonce the caller supplied
-(anti-replay) and the signature must check out against the AIK. That is the
+VM evidence carries a quote, an AIK, a signature and the scheme it was signed
+under (`signature_algorithm`), so it is verified for real: the quote's
+`ExtraData` must equal the nonce the caller supplied (anti-replay) and the
+signature must check out against the AIK under the declared scheme (#482).
+Evidence that names no scheme is `not_evaluated` — no scheme is guessed from
+the key type — and a scheme the signature was not made under is `failed`. That is the
 rule for evidence a caller submits on a transport. A device quote the
 collector fetches on the reporting path is bound to the TLS connection it was
 collected over, so its `ExtraData` is

@@ -25,6 +25,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/hostquote"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
 )
 
 // HostQuoter is the narrow slice of a TPM the attestation service needs to
@@ -95,9 +96,9 @@ func (s *Service) hostQuote(ctx context.Context, config *daemon.QuoteConfig, non
 	if err != nil {
 		return nil, ErrHostQuoteFailed{Op: op, Reason: "IAK public key not encodable", Cause: err}
 	}
-	attrs, err := s.tpm.IAKAttributes()
-	if err != nil || attrs == nil {
-		return nil, ErrHostQuoteFailed{Op: op, Reason: "IAK attributes unavailable", Cause: err}
+	sigAlg, err := vm.QuoteSignatureAlgorithm(s.tpm)
+	if err != nil {
+		return nil, ErrHostQuoteFailed{Op: op, Reason: "IAK signature scheme unavailable", Cause: err}
 	}
 
 	return &hostQuote{
@@ -105,7 +106,7 @@ func (s *Service) hostQuote(ctx context.Context, config *daemon.QuoteConfig, non
 		values:   collected.Values,
 		digest:   collected.Digest,
 		akPublic: akDER,
-		sigAlg:   attrs.SignatureAlgorithm.String(),
+		sigAlg:   sigAlg,
 		quotedAt: time.Now().UTC(),
 	}, nil
 }

@@ -106,6 +106,7 @@ export {
   useTenant,
   useTPM,
   useVTPM,
+  useVPN,
   // Invitation hooks
   useInvitation,
   useInvitationList,

@@ -373,10 +373,16 @@ export interface VerifyQuoteRequest {
   /**
    * AK public key (base64). Optional: proto3 `bytes ak_public` has no
    * presence, and both the REST and gRPC servers verify against the
-   * platform IAK when it is absent (tpm_handlers.go handleVerifyQuote,
-   * tpm_grpc_service.go resolveVerifyKeyMaterial).
+   * platform IAK when it is absent (tpm_grpc_service.go
+   * resolveVerifyAKPublic).
    */
   akPublic?: string;
+  /**
+   * Signature scheme the quote declared (QuoteResponse.signatureAlgorithm,
+   * e.g. "SHA256-RSAPSS"). The signature is checked under it; a request
+   * without it does not verify.
+   */
+  signatureAlgorithm?: string;
   /** Nonce (base64) */
   nonce: string;
   /**
@@ -691,6 +697,11 @@ export interface QuoteResponse {
   quote?: string;
   /** Signature (base64) */
   signature?: string;
+  /**
+   * Signature scheme the quote is signed under, e.g. "SHA256-RSAPSS".
+   * Send it back as VerifyQuoteRequest.signatureAlgorithm.
+   */
+  signatureAlgorithm?: string;
   /** PCR values */
   pcrValues?: PCRValue[];
   /** Event log (base64) */

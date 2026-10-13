@@ -203,16 +203,17 @@ func (m *MCPServiceProvider) VMAttest(ctx context.Context, vmID string, nonce []
 	}
 
 	return map[string]interface{}{
-		"vm_id":      report.VMID,
-		"vm_name":    report.VMName,
-		"timestamp":  report.Timestamp.Format(time.RFC3339),
-		"verified":   report.Verified,
-		"nonce":      base64.StdEncoding.EncodeToString(report.Nonce),
-		"pcr_values": pcrValues,
-		"quote":      base64.StdEncoding.EncodeToString(report.Quote),
-		"signature":  base64.StdEncoding.EncodeToString(report.Signature),
-		"event_log":  base64.StdEncoding.EncodeToString(report.EventLog),
-		"ak_public":  base64.StdEncoding.EncodeToString(report.AKPublicKey),
+		"vm_id":               report.VMID,
+		"vm_name":             report.VMName,
+		"timestamp":           report.Timestamp.Format(time.RFC3339),
+		"verified":            report.Verified,
+		"nonce":               base64.StdEncoding.EncodeToString(report.Nonce),
+		"pcr_values":          pcrValues,
+		"quote":               base64.StdEncoding.EncodeToString(report.Quote),
+		"signature":           base64.StdEncoding.EncodeToString(report.Signature),
+		"signature_algorithm": report.SignatureAlgorithm,
+		"event_log":           base64.StdEncoding.EncodeToString(report.EventLog),
+		"ak_public":           base64.StdEncoding.EncodeToString(report.AKPublicKey),
 	}, nil
 }
 
@@ -228,10 +229,11 @@ func (m *MCPServiceProvider) VMAttestVerify(ctx context.Context, vmID string, re
 	}
 
 	result, err := attester.VerifyVMAttestation(ctx, vmID, &compute.VMAttestationEvidence{
-		Quote:        req.Quote,
-		Signature:    req.Signature,
-		Nonce:        req.Nonce,
-		ExpectedPCRs: req.ExpectedPCRs,
+		Quote:              req.Quote,
+		Signature:          req.Signature,
+		SignatureAlgorithm: req.SignatureAlgorithm,
+		Nonce:              req.Nonce,
+		ExpectedPCRs:       req.ExpectedPCRs,
 	})
 	if err != nil {
 		return nil, err

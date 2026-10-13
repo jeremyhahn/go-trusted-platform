@@ -167,6 +167,18 @@ different concepts, one key name.
 
    Without them, `AttestContainer` returns
    `ErrContainerAttestorNotAvailable`.
+9. **A VM quote is verified under the scheme it declares.** `AttestVM` stamps
+   `VMAttestationReport.SignatureAlgorithm` from the vTPM AK's key attributes
+   (`VMAttestorDevice.GetAIKSignatureAlgorithm`); `VerifyVMAttestation` passes
+   `VMAttestationEvidence.SignatureAlgorithm` to
+   `vm.VerifyQuoteSignatureWithAlgorithm`, the one quote verifier
+   ([`docs/attestation/engineering.md`](../attestation/engineering.md)
+   invariant 12). The scheme is never inferred from the AK key type, so an
+   RSA-PSS AK verifies and an absent, unknown or mismatched scheme fails.
+   The container host-IAK path holds the same rule: `HostTPMProvider.VerifyQuote`
+   takes the scheme from the IAK's key attributes (`vm.QuoteSignatureAlgorithm`),
+   because the evidence type is the SDK's `orchestration.ContainerAttestation`
+   and the verifier owns the IAK that signed it.
 
 ## 6. Streaming operations are transport-limited
 

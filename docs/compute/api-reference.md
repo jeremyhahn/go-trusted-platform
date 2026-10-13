@@ -788,8 +788,10 @@ capability interface:
   (`ErrVTPMNotAvailable` otherwise).
 - `VerifyVMAttestation(ctx, instanceID, evidence)` verifies submitted quote
   evidence against the instance's **live** vTPM attestation key: the AK
-  signature over the marshaled `TPMS_ATTEST` (RSASSA-PKCS1-v1_5 or ECDSA
-  ASN.1 over SHA-256), the embedded anti-replay nonce, and — when expected
+  signature over the marshaled `TPMS_ATTEST` under the scheme the evidence
+  declares in `SignatureAlgorithm` (RSASSA-PKCS1-v1_5, RSA-PSS or ECDSA
+  ASN.1 over SHA-256/384/512, as `AttestVM` reported it; absent, unknown or
+  mismatched fails), the embedded anti-replay nonce, and — when expected
   PCR values are supplied — the quote's PCR digest recomputed from the
   expected values (the expected index set must exactly match the quote's
   PCR selection). Live PCR values for the expected indices are returned as

@@ -397,7 +397,11 @@ its artifact is not evidence. An orchestrator with no `ImageManager` returns
      the quoted PCR set against that golden value, returning
      `orchestration.PCRMismatchError` on drift.
    - The platform then verifies the quote's IAK signature, binding the
-     evidence to this device.
+     evidence to this device. `HostTPMProvider.VerifyQuote` checks it under
+     the scheme the IAK's key attributes declare (`vm.QuoteSignatureAlgorithm`,
+     then `vm.VerifyQuoteSignatureWithAlgorithm`), so an RSA-PSS IAK verifies
+     and an IAK that names no scheme fails with `ErrQuoteSchemeUnavailable`
+     rather than have PKCS#1 v1.5 inferred from its key type (#482).
 
 ### Verification
 

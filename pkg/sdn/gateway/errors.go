@@ -549,6 +549,18 @@ func (e *ErrSupervisedSnapshot) Unwrap() error {
 	return e.Cause
 }
 
+// ErrServiceNotSupervised reports a request to relay a service to a
+// supervised child when the gateway has no supervisor, or its supervisor
+// does not run that service out of process (#557). Registering the relay
+// anyway would leave the service with no process hosting it.
+type ErrServiceNotSupervised struct {
+	Service string
+}
+
+func (e *ErrServiceNotSupervised) Error() string {
+	return fmt.Sprintf("gateway service %q is not run by a supervised process", e.Service)
+}
+
 // ErrNAT64ConfigInvalid wraps a NAT64 configuration error with the section
 // it came from (#601).
 type ErrNAT64ConfigInvalid struct {

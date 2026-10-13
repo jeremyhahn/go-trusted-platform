@@ -274,7 +274,9 @@ func (c *Client) Quote(ctx context.Context, akHandle uint32, akPassword string, 
 
 // VerifyQuote verifies a TPM quote. For a quote Quote returned, set
 // channel_binding to the binding it echoed: the daemon then expects
-// SHA-256(nonce || channel_binding).
+// SHA-256(nonce || channel_binding). Set signature_algorithm to the scheme
+// the quote declared: the signature is checked under it, and a request
+// without it fails verification.
 func (c *Client) VerifyQuote(ctx context.Context, req *platformv1.VerifyQuoteRequest) (*platformv1.VerifyQuoteResponse, error) {
 	resp, err := c.grpc.VerifyQuote(ctx, req)
 	if err != nil {

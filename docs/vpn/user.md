@@ -1,6 +1,6 @@
 # Remote-Access VPN — User Guide
 
-> **Status: PARTIAL — operators can manage enrolment, posture policies and session status today (#584 PR 3); connecting a machine is planned.** · Last verified: 2026-10-13
+> **Status: PARTIAL — operators can manage enrolment, posture policies and session status today, from the CLI (#584 PR 3) and the web console (#584 PR 4); connecting a machine is planned.** · Last verified: 2026-10-13
 > "Operator tasks" below works now. "First connection" and the client tasks
 > describe `platformctl vpn connect`, which has not shipped: until it does, the
 > interim administrative VPN on the site firewall remains the way in.
@@ -50,6 +50,13 @@ background; you do nothing.
 
 These work today, over any transport `platformctl` is configured for. Each needs
 the scope listed in [cli.md](cli.md).
+
+The web console's **Networking → VPN** page does the same without the CLI: it
+shows each gateway's status and live sessions (with any refused peer or
+unloadable policy), lists the enrolled peers with a **Revoke** button, and
+lists the posture policies, which open in an editor (**View / Edit**, or
+**New Policy**). A module that does not compile is refused and the editor
+stays open. Enrolling a peer and deleting a policy remain CLI tasks.
 
 - **Let a machine in**: `platformctl vpn peer enrol <device-id> --tenant <t>`.
   Add `--zone <name>` (repeatable) to narrow the zones it may reach; without it

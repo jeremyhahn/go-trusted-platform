@@ -131,7 +131,8 @@ func (h *NTPHandlers) handleStep(w http.ResponseWriter, r *http.Request) {
 
 // protorestHTTPStatus maps the service's gRPC codes onto HTTP status codes
 // (map-based for O(1) lookup). It mirrors the webservice's protorest mapping
-// so both REST listeners answer identically.
+// so both REST listeners answer identically. The NTP, TPM and VPN handlers
+// share it.
 var protorestHTTPStatus = map[codes.Code]int{
 	codes.OK:                 http.StatusOK,
 	codes.InvalidArgument:    http.StatusBadRequest,

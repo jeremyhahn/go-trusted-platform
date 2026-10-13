@@ -57,6 +57,7 @@ type mockVMOrchestrator struct {
 	attestReport   *VMAttestationReport
 	verifyErr      error
 	verifyResult   *compute.VMVerificationResult
+	lastEvidence   *compute.VMAttestationEvidence
 	consoleInfo    *VMConsoleInfo
 }
 
@@ -239,9 +240,10 @@ func (m *mockVMOrchestrator) AttestVM(ctx context.Context, instanceID string, no
 			0: {0x01, 0x02, 0x03},
 			7: {0x04, 0x05, 0x06},
 		},
-		Quote:     []byte("test-quote"),
-		Signature: []byte("test-signature"),
-		EventLog:  []byte("test-event-log"),
+		Quote:              []byte("test-quote"),
+		Signature:          []byte("test-signature"),
+		SignatureAlgorithm: "SHA256-RSAPSS",
+		EventLog:           []byte("test-event-log"),
 	}, nil
 }
 
@@ -252,6 +254,7 @@ func (m *mockVMOrchestrator) VerifyVMAttestation(ctx context.Context, instanceID
 	if _, ok := m.instances[instanceID]; !ok {
 		return nil, compute.ErrInstanceNotFound
 	}
+	m.lastEvidence = evidence
 	if m.verifyResult != nil {
 		return m.verifyResult, nil
 	}
@@ -953,6 +956,7 @@ func TestComputeHandlers_AttestVM_Success(t *testing.T) {
 	err := json.NewDecoder(rec.Body).Decode(&resp)
 	require.NoError(t, err)
 	assert.True(t, resp.Verified)
+	assert.Equal(t, "SHA256-RSAPSS", resp.SignatureAlgorithm)
 }
 
 func TestComputeHandlers_AttestVM_WithBody(t *testing.T) {

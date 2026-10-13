@@ -685,6 +685,9 @@ message AttestVMResponse {
   repeated PCRValue pcr_values = 4;
   bytes event_log = 5;
   bytes ak_public = 6;
+  // The x509.SignatureAlgorithm name of the scheme the AK signed the quote
+  // under (e.g. "SHA256-RSAPSS"); the signature itself is bare bytes.
+  string signature_algorithm = 7;
 }
 
 message VerifyVMAttestationRequest {
@@ -693,6 +696,9 @@ message VerifyVMAttestationRequest {
   bytes signature = 3;
   bytes nonce = 4;
   repeated PCRValue expected_pcrs = 5;
+  // The scheme the quote declares (AttestVMResponse.signature_algorithm).
+  // The quote is verified under it alone; absent or unknown fails.
+  string signature_algorithm = 6;
 }
 
 message VerifyVMAttestationResponse {

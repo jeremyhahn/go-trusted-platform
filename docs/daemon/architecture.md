@@ -179,7 +179,13 @@ REST Server
     +-- /api/v1/services/{service}/stop   POST - Stop service
     +-- /api/v1/services/{service}/restart POST - Restart service
     +-- /api/v1/protocols   GET  - Protocol status
+    +-- /api/v1/tpm/...     TPM routes (restapi.TPMHandlers, SetTPMHandlers)
 ```
+
+Each TPM route needs a platform bearer token granting `tpm:read`, `tpm:write`
+or `tpm:delete`, checked by the shared platform-token validator, and quote and
+verify run on the daemon's `TPMService` ([`docs/tpm/api.md`](../tpm/api.md)
+§1, §9).
 
 **Middleware Stack:**
 - Request ID generation
@@ -451,7 +457,8 @@ installed with `WithRequireAuth(true)` unconditionally. mTLS is enforced the
 same way: `EnableMTLS` with no CA service (gRPC) or no resolvable client CA
 pool (gRPC, QUIC, REST) is a typed error, never a listener that merely does
 not ask for a client certificate. The daemon REST server has no token
-middleware — mTLS at the TLS layer is its only authentication — so
+middleware — mTLS at the TLS layer is its only listener-wide authentication;
+the CA sign-csr and `/api/v1/tpm` routes check a platform token per route — so
 `EnableREST` without `EnableMTLS` is refused by both `New` and
 `RESTServer.Start`; in daemon-only mode `platformd serve --enable-rest`
 therefore requires `--enable-mtls`. `SkipIAMValidation` (testing only) is the

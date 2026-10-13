@@ -32,13 +32,16 @@ serves:
 | `sdk/go/services/tpm/` | `Client`, the domain types, the converters |
 | `test/integration/tpm/` | the six-transport parity suite |
 
-**Dead code, do not extend:** `pkg/api/rest/tpm_handlers.go` defines a second,
-richer `TPMHandlers` with `RegisterRoutes` on absolute `/api/v1/tpm/...` paths
-(`make-credential`, `activate-credential`, `certify`, `capabilities`,
-`csr/idevid`, `csr/ldevid`, `platform`, `pcrs/extend`, `nv/*`). `NewTPMHandlers`
-is constructed **only in its own tests**. The registered REST surface is
-`pkg/webservice/v1/rest/tpm` (wired at `pkg/webservice/v1/router.go`,
-`tpmRoutes`). Those extra routes are **not served**.
+**Two REST servers.** The web service serves `pkg/webservice/v1/rest/tpm`
+(wired at `pkg/webservice/v1/router.go`, `tpmRoutes`). platformd's own REST
+listener serves `restapi.TPMHandlers` (`pkg/api/rest/tpm_handlers.go`), mounted
+by `RESTServer.SetTPMHandlers` with the daemon's `TPMGRPCService` as its
+`TPMQuoteService` and the shared platform-token validator as its
+`TokenAuthorizer`. Each route in `TPMHandlers.routes` names its scope, and
+`requireScope` checks it before the handler runs. Quote and verify delegate to
+the `TPMQuoteService`; the handler set has no verifier of its own. Without a
+quote service `SetTPMHandlers` mounts nothing; without a validator every route
+answers `403`.
 
 ## 2. The SDK edge
 
@@ -516,17 +519,30 @@ Recorded here so they are debts with a location, not discoveries:
    opcodes take `tpm:read` / `tpm:write` / `tpm:delete` where gRPC
    `IDevIDService` takes `idevid:*`, so one grant does not cover the same
    operation on both transports.
-4. **`TPMService` and `IDevIDService` are scoped on gRPC; their MCP tools are
-   refused.** Every RPC of both services is in the default-deny gRPC scope
-   catalog (`pkg/api/grpc/method_permissions.go`) under `tpm:*` and
-   `idevid:*`. The `platform_tpm_*`, `idevid_*` and `iak_*` MCP tools are absent
-   from `pkg/api/mcp/authz.go`, which is also default-deny, so every caller is
+4. **`TPMService` and `IDevIDService` are scoped on gRPC; most of their MCP
+   tools are refused.** Every RPC of both services is in the default-deny gRPC
+   scope catalog (`pkg/api/grpc/method_permissions.go`) under `tpm:*` and
+   `idevid:*`. Of the MCP tools only `platform_tpm_quote` and
+   `platform_tpm_verify_quote` are classified (`tpm:read`, #482); the other
+   `platform_tpm_*`, `idevid_*` and `iak_*` tools are absent from
+   `pkg/api/mcp/authz.go`, which is also default-deny, so every caller is
    refused until they are classified ([api.md](api.md) §9).
 5. **AK and IAK are the same key under two names.** gRPC and REST call it `ak`
    (`CreateAK`, `/api/v1/tpm/ak`); QUIC and MCP call it IAK (`SubOpTPM2CreateIAK`,
    `platform_tpm_iak_create`). A client author reading one transport will not
    find the other.
-6. **`pkg/api/rest/tpm_handlers.go` is unreachable production code** (§1).
+6. **The daemon REST listener's TPM routes are a thin protojson front for
+   `TPMService`.** Each `TPMHandlers` route decodes the RPC's request message
+   (body, then query and path parameters through `decodeTPMParams`), calls the
+   RPC on the same `TPMGRPCService` gRPC serves, and writes the response
+   message; it holds no TPM logic. A field the message does not have is `400`,
+   never ignored, so a client and server that disagree on a name fail loudly
+   instead of running with a default ([api.md](api.md) §1). The LDevID CSR and
+   `ActivateCredential` are not `TPMHandlers` routes.
+7. **The daemon REST listener's device-identity routes carry no scope.**
+   `/api/v1/tpm/idevid*`, `/tpm/iak*` and
+   `/tpm/activate-credential` (`pkg/api/daemon/rest_idevid.go`) rely on mTLS
+   alone, where `TPMHandlers` routes need a scoped platform token.
 
 ## 14. Related
 

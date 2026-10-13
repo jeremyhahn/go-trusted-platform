@@ -163,17 +163,23 @@ type AttestVMResponse struct {
 	PCRValues map[int]string `json:"pcr_values,omitempty"`
 	Quote     string         `json:"quote,omitempty"`
 	Signature string         `json:"signature,omitempty"`
-	EventLog  string         `json:"event_log,omitempty"`
-	AKPublic  string         `json:"ak_public,omitempty"`
+	// SignatureAlgorithm names the scheme the AK signed the quote with
+	// ("SHA256-RSAPSS", ...); verification checks the quote under it alone.
+	SignatureAlgorithm string `json:"signature_algorithm,omitempty"`
+	EventLog           string `json:"event_log,omitempty"`
+	AKPublic           string `json:"ak_public,omitempty"`
 }
 
 // VerifyVMAttestationRequest carries VM attestation evidence for
 // verification. Binary fields are base64 (standard) encoded.
 type VerifyVMAttestationRequest struct {
-	Quote        string         `json:"quote"`
-	Signature    string         `json:"signature"`
-	Nonce        string         `json:"nonce"`
-	ExpectedPCRs map[int]string `json:"expected_pcrs,omitempty"`
+	Quote     string `json:"quote"`
+	Signature string `json:"signature"`
+	// SignatureAlgorithm is the scheme the quote declares, as AttestVM
+	// returned it; an absent or unknown scheme fails verification.
+	SignatureAlgorithm string         `json:"signature_algorithm"`
+	Nonce              string         `json:"nonce"`
+	ExpectedPCRs       map[int]string `json:"expected_pcrs,omitempty"`
 }
 
 // VerifyVMAttestationResponse reports the attestation verification outcome.
@@ -946,9 +952,10 @@ func (h *ComputeHandlers) verifyRequestToEvidence(req *VerifyVMAttestationReques
 	}
 
 	evidence := &compute.VMAttestationEvidence{
-		Quote:     quote,
-		Signature: signature,
-		Nonce:     nonce,
+		Quote:              quote,
+		Signature:          signature,
+		SignatureAlgorithm: req.SignatureAlgorithm,
+		Nonce:              nonce,
 	}
 	if len(req.ExpectedPCRs) > 0 {
 		evidence.ExpectedPCRs = make(map[int][]byte, len(req.ExpectedPCRs))
@@ -1460,10 +1467,11 @@ func (h *ComputeHandlers) instanceToVMResponse(inst *compute.Instance) VMRespons
 // attestationReportToVMResponse converts a VMAttestationReport to AttestVMResponse.
 func (h *ComputeHandlers) attestationReportToVMResponse(report *VMAttestationReport) AttestVMResponse {
 	resp := AttestVMResponse{
-		VMID:      report.VMID,
-		VMName:    report.VMName,
-		Verified:  report.Verified,
-		Timestamp: report.Timestamp,
+		VMID:               report.VMID,
+		VMName:             report.VMName,
+		Verified:           report.Verified,
+		Timestamp:          report.Timestamp,
+		SignatureAlgorithm: report.SignatureAlgorithm,
 	}
 
 	if len(report.Nonce) > 0 {

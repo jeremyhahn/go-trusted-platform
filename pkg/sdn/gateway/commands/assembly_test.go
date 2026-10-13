@@ -30,6 +30,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/proxy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/process"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/proxysvc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/secrets"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
@@ -241,6 +242,112 @@ func TestBuildGatewayProxyHostedElsewhere(t *testing.T) {
 		if report.Name == gateway.ServiceProxy {
 			t.Fatal("a child that does not host the proxy must not register it")
 		}
+	}
+}
+
+func TestBuildGatewayRelaysASupervisedProxy(t *testing.T) {
+	proxyCfg := publicProxyConfig()
+	// mTLS without server TLS fails BuildProxyHandler, so the build only
+	// succeeds if this process relays the proxy instead of building it.
+	proxyCfg.Routes[0].Auth.Mode = proxy.AuthModeMTLS
+	cfg := &ServeConfig{
+		Gateway: &gateway.GatewayConfig{Enabled: true, ID: "supervising-parent"},
+		Proxy:   proxyCfg,
+		Process: supervisorSettings(t),
+		DataDir: t.TempDir(),
+	}
+	if _, err := BuildSupervisor(cfg, process.Inherited{ConfigFile: "/etc/gatewayd/config.yaml"}, testLogger()); err != nil {
+		t.Fatalf("BuildSupervisor: %v", err)
+	}
+
+	gw, err := BuildGateway(context.Background(), cfg, testLogger())
+	if err != nil {
+		t.Fatalf("BuildGateway must relay the proxy, not build it: %v", err)
+	}
+	found := false
+	for _, report := range gw.ServiceReports() {
+		found = found || report.Name == gateway.ServiceProxy
+	}
+	if !found {
+		t.Fatal("the supervising parent must register the proxy relay")
+	}
+	entries, err := os.ReadDir(cfg.DataDir)
+	if err != nil {
+		t.Fatalf("read data dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("the parent opened proxy state it no longer owns: %v", entries)
+	}
+}
+
+func TestBuildGatewaySupervisorDoesNotRelayADisabledProxy(t *testing.T) {
+	proxyCfg := publicProxyConfig()
+	proxyCfg.Enabled = false
+	cfg := &ServeConfig{
+		Gateway: &gateway.GatewayConfig{Enabled: true, ID: "supervising-parent"},
+		Proxy:   proxyCfg,
+		Process: supervisorSettings(t),
+	}
+	if _, err := BuildSupervisor(cfg, process.Inherited{ConfigFile: "/etc/gatewayd/config.yaml"}, testLogger()); err != nil {
+		t.Fatalf("BuildSupervisor: %v", err)
+	}
+
+	gw, err := BuildGateway(context.Background(), cfg, testLogger())
+	if err != nil {
+		t.Fatalf("BuildGateway: %v", err)
+	}
+	for _, report := range gw.ServiceReports() {
+		if report.Name == gateway.ServiceProxy {
+			t.Fatal("a disabled proxy must not be relayed to a child")
+		}
+	}
+}
+
+func TestEnabledServices(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *ServeConfig
+		want []string
+	}{
+		{
+			name: "the gateway sections, then the proxy",
+			cfg: &ServeConfig{
+				Gateway: &gateway.GatewayConfig{Enabled: true, Transit: &gateway.TransitServiceConfig{Enabled: true}},
+				Proxy:   publicProxyConfig(),
+			},
+			want: []string{gateway.ServiceTransit, gateway.ServiceProxy},
+		},
+		{
+			name: "the proxy alone, with no gateway section",
+			cfg:  &ServeConfig{Proxy: publicProxyConfig()},
+			want: []string{gateway.ServiceProxy},
+		},
+		{
+			name: "a disabled proxy is not a service",
+			cfg: &ServeConfig{
+				Gateway: &gateway.GatewayConfig{Enabled: true, Transit: &gateway.TransitServiceConfig{Enabled: true}},
+				Proxy:   &proxysvc.Config{Enabled: false},
+			},
+			want: []string{gateway.ServiceTransit},
+		},
+		{
+			name: "nothing configured",
+			cfg:  &ServeConfig{},
+			want: nil,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := enabledServices(tc.cfg)
+			if len(got) != len(tc.want) {
+				t.Fatalf("enabledServices = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("enabledServices = %v, want %v", got, tc.want)
+				}
+			}
+		})
 	}
 }
 

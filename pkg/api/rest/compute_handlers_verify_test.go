@@ -34,9 +34,10 @@ func TestComputeHandlers_VerifyVMAttestation_Success(t *testing.T) {
 	_, router := setupComputeHandlers(t, vmOrch, containerOrch)
 
 	req := createTestRequest(http.MethodPost, "/api/v1/compute/vms/vm-1/attest/verify", VerifyVMAttestationRequest{
-		Quote:     b64([]byte("quote")),
-		Signature: b64([]byte("signature")),
-		Nonce:     b64([]byte("nonce")),
+		Quote:              b64([]byte("quote")),
+		Signature:          b64([]byte("signature")),
+		SignatureAlgorithm: "SHA256-RSAPSS",
+		Nonce:              b64([]byte("nonce")),
 		ExpectedPCRs: map[int]string{
 			0: b64([]byte{0x01}),
 		},
@@ -46,6 +47,8 @@ func TestComputeHandlers_VerifyVMAttestation_Success(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.NotNil(t, vmOrch.lastEvidence)
+	assert.Equal(t, "SHA256-RSAPSS", vmOrch.lastEvidence.SignatureAlgorithm)
 
 	var resp VerifyVMAttestationResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))

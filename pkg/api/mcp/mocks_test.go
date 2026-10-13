@@ -2458,8 +2458,14 @@ func (m *mockServiceProvider) TPMQuote(ctx context.Context, nonce []byte, pcrs [
 	return map[string]interface{}{"quote": "base64quote"}, nil
 }
 
-func (m *mockServiceProvider) TPMVerifyQuote(ctx context.Context, quote, signature, nonce, channelBinding []byte) (interface{}, error) {
-	return map[string]interface{}{"valid": true}, nil
+// TPMVerifyQuote echoes the scheme and attestation key it received so a tool
+// test can see the signature_algorithm and ak_public arguments arrive.
+func (m *mockServiceProvider) TPMVerifyQuote(ctx context.Context, req *TPMVerifyQuoteRequest) (interface{}, error) {
+	return map[string]interface{}{
+		"valid":               true,
+		"signature_algorithm": req.SignatureAlgorithm,
+		"ak_public":           string(req.AKPublic),
+	}, nil
 }
 
 func (m *mockServiceProvider) TPMReadPCRs(ctx context.Context, indices []int) (interface{}, error) {

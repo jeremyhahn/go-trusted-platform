@@ -348,7 +348,8 @@ On an internet edge, the parsers that face the internet should not share a
 process with the datapath. The `process:` section turns on the supervised
 model (#557): `gatewayd serve` starts each supervised process as a child,
 dropped to its own privilege class, and restarts it with backoff if it dies.
-Today only `routing` (`transit`, the BGP speaker) moves. It runs as the
+Today two processes move: `routing` (`transit`, the BGP speaker) and `proxy`
+(the authenticating reverse proxy, when `proxy:` enables it). Each runs as the
 service account and holds `CAP_NET_BIND_SERVICE` alone. Every other service
 stays in the main process.
 
@@ -368,7 +369,10 @@ process:
 The values shown are the defaults; `cgroup-root` defaults to `/sys/fs/cgroup`.
 The account must exist, and **the configuration file and every file it names
 must be readable by it**: the child reads them after it drops privileges, and
-it exits with an error rather than start without them. A process that has
+it exits with an error rather than start without them. For the proxy that
+includes its TLS certificate, key and client CAs, and — when a `trust:` scope
+uses `tofu` — the pin directory `<data-dir>/trust/tofu-pins`, which the
+account must own. A process that has
 used up its restart budget stays down, and the gateway status reports it.
 The gateway snapshot still shows the BGP peers, read from the routing
 process; if that process cannot be reached, the snapshot's `bgp.error` says

@@ -496,6 +496,12 @@ var categorySubOpcodeMap = map[string]byte{
 	"/platform.v1.CeremonyService/ClaimShareComplete": quicwire.CeremonySubClaimShareComplete,
 	"/platform.v1.CeremonyService/SignCSR":            quicwire.CeremonySubSignCSR,
 
+	// TPM Service — OpTPM2Category (0x99)
+	// Server dispatcher: pkg/api/quic/tpm_handlers.go::TPM2Handler; codecs in
+	// tpm_quote.go (#482).
+	"/platform.v1.TPMService/Quote":       quicwire.SubOpTPM2Quote,
+	"/platform.v1.TPMService/VerifyQuote": quicwire.SubOpTPM2VerifyQuote,
+
 	// PIV Service — OpPIVCategory (0x9B)
 	// Server dispatcher: pkg/api/daemon/phase35_quic.go::pivQUICDispatch
 	"/platform.v1.PIVService/ListDevices": quicwire.PIVSubListDevices,
@@ -764,6 +770,10 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.VTPMService/UnsealVTPM":    quicwire.OpVTPMUnseal,
 	"/platform.v1.VTPMService/ExtendVTPMPCR": quicwire.OpVTPMExtendPCR,
 	"/platform.v1.VTPMService/ReadVTPMPCR":   quicwire.OpVTPMReadPCR,
+
+	// TPM Service — proto: pkg/api/grpc/proto/tpm.proto; category-routed
+	"/platform.v1.TPMService/Quote":       quicwire.OpTPM2Category,
+	"/platform.v1.TPMService/VerifyQuote": quicwire.OpTPM2Category,
 
 	// Device Service — proto: pkg/api/grpc/proto/device.proto
 	"/platform.v1.DeviceService/CreateDevice":       quicwire.OpDeviceRegister,

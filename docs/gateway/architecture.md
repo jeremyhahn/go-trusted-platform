@@ -350,11 +350,14 @@ class) and this process only relays:
 | `Health` | `ErrServiceUnhealthy{Service, Cause}` when the child is down, over its restart budget, or reports the service unhealthy |
 
 **The processes move one at a time.** `routing` (`transit`, the BGP speaker)
-is the only supervised process today: the smallest privilege set of the
-processes with a backend (`CAP_NET_BIND_SERVICE` alone) and the most exposed
-parser. Every other section keeps its in-process handler, exactly as with the
-model off. The order still to come is `proxy`, `provisioning`, `vpn` once it
-has a backend, and `datapath` last;
+moved first: the smallest privilege set of the processes with a backend
+(`CAP_NET_BIND_SERVICE` alone) and the most exposed parser. `proxy` followed:
+the same one capability, and it terminates TLS from the internet. Its
+`proxy:` section is gatewayd's own, not a gateway section, so `BuildGateway`
+registers its relay directly (`RegisterSupervisedService`). Every other
+section keeps its in-process handler, exactly as with the model off. The order
+still to come is `provisioning`, `vpn` once it has a backend, and `datapath`
+last;
 [`engineering.md`](engineering.md) §The process model carries the state.
 
 Once `datapath` moves, two consequences are deliberate. `Gateway.Apply`

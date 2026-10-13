@@ -72,8 +72,10 @@ type Config struct {
 	Cgroups *CgroupManager
 	// RuntimeDir holds the per-process control sockets, e.g. /run/gatewayd.
 	RuntimeDir string
-	// ConfigFile is the gatewayd configuration the children read.
-	ConfigFile string
+	// Inherited is the part of the supervisor's command line every child is
+	// started with: the configuration file, the state directory and the
+	// log settings.
+	Inherited Inherited
 	// UID and GID are the credentials the unprivileged classes drop to.
 	UID, GID uint32
 	// SocketGID, when non-negative, owns the control sockets so an
@@ -381,7 +383,7 @@ func (s *Supervisor) launch(ctx context.Context, proc *supervised) error {
 	spec := Spec{
 		Definition: proc.def,
 		Socket:     proc.socket,
-		ConfigFile: s.cfg.ConfigFile,
+		Inherited:  s.cfg.Inherited,
 		UID:        s.cfg.UID,
 		GID:        s.cfg.GID,
 		SocketGID:  s.cfg.SocketGID,

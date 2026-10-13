@@ -435,6 +435,9 @@ type VMAttestResponse struct {
 	Signature []byte         `codec:"signature"`
 	EventLog  []byte         `codec:"event_log"`
 	AKPublic  []byte         `codec:"ak_public"`
+	// SignatureAlgorithm names the scheme the AK signed the quote with
+	// ("SHA256-RSAPSS", ...); verification checks the quote under it alone.
+	SignatureAlgorithm string `codec:"signature_algorithm"`
 }
 
 // VMVerifyAttestRequest carries VM attestation evidence for verification.
@@ -444,6 +447,9 @@ type VMVerifyAttestRequest struct {
 	Signature    []byte         `codec:"signature"`
 	Nonce        []byte         `codec:"nonce"`
 	ExpectedPCRs map[int][]byte `codec:"expected_pcrs"`
+	// SignatureAlgorithm is the scheme the quote declares; an absent or
+	// unknown scheme fails verification.
+	SignatureAlgorithm string `codec:"signature_algorithm"`
 }
 
 // VMVerifyAttestResponse reports the attestation verification outcome.
@@ -1056,6 +1062,8 @@ func (h *VMHandler) handleAttest(ctx context.Context, req *quicwire.Request) *qu
 		Signature: report.Signature,
 		EventLog:  report.EventLog,
 		AKPublic:  report.AKPublicKey,
+		// The scheme the AK signed under; OpVMVerifyAttest needs it back.
+		SignatureAlgorithm: report.SignatureAlgorithm,
 	}
 
 	payload, err := quicwire.EncodePayload(resp)
@@ -1090,10 +1098,11 @@ func (h *VMHandler) handleVerifyAttestation(ctx context.Context, req *quicwire.R
 	}
 
 	result, err := attester.VerifyVMAttestation(ctx, verifyReq.ID, &compute.VMAttestationEvidence{
-		Quote:        verifyReq.Quote,
-		Signature:    verifyReq.Signature,
-		Nonce:        verifyReq.Nonce,
-		ExpectedPCRs: verifyReq.ExpectedPCRs,
+		Quote:              verifyReq.Quote,
+		Signature:          verifyReq.Signature,
+		SignatureAlgorithm: verifyReq.SignatureAlgorithm,
+		Nonce:              verifyReq.Nonce,
+		ExpectedPCRs:       verifyReq.ExpectedPCRs,
 	})
 	if err != nil {
 		h.logger.Error(err, "failed to verify VM attestation")

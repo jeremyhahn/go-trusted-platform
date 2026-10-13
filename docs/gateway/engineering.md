@@ -147,11 +147,18 @@ registered handler in registration order. `Snapshot().Health.Components` is
 derived from it, and the IPC `Status` RPC returns the same list, so a service
 reads identically from either side of the socket.
 
-**No supervisor is wired into `gatewayd serve` yet**: with `Supervisor` nil —
-which is every configuration today — registration is unchanged and the daemon
-runs single-process. The interface lives beside the handler so the process
-layer that implements it depends on `pkg/sdn/gateway`, never the other way
-round (epic #553, R14).
+`gatewayd serve` attaches a supervisor when the `process:` section enables
+it (`BuildSupervisor`, below); with `Supervisor` nil registration is unchanged
+and the daemon runs single-process. The interface lives beside the handler so
+the process layer that implements it depends on `pkg/sdn/gateway`, never the
+other way round (epic #553, R14).
+
+`RegisterSupervisedService(name)` registers the relay for a service that is
+not a `GatewayConfig` section, so the section walk never sees it — the proxy,
+whose `proxy:` section is gatewayd's own. It refuses with
+`ErrServiceNotSupervised{Service}` when the gateway has no supervisor or the
+supervisor does not run that service out of process, because the relay would
+then forward to no process at all.
 
 ### `GatewayMode` — deprecated, do not build on it
 
@@ -1027,14 +1034,21 @@ been reaped. Every path that ends a child goes through the same
 graceful-then-kill `terminate`, so none of them can wait on a wedged child
 forever.
 
-**Processes move one at a time — `routing` first.** `Definition.Supervised`
-marks the processes that have left `gatewayd serve`; `Supervisor.Supervises`
-answers from it, and the gateway (`handlers.go`) registers a supervised handler
-only for those services. Every other service keeps its in-process handler,
-exactly as with the model off. `routing` (`transit`: the BGP speaker) moved
-first: it has the smallest privilege set of the processes that have a backend —
-`CAP_NET_BIND_SERVICE` for port 179, no kernel programming (`pkg/sdn/bgp`
-uses no netlink) — and BGP is the most exposed untrusted parser gatewayd runs.
+**Processes move one at a time — `routing`, then `proxy`.**
+`Definition.Supervised` marks the processes that have left `gatewayd serve`;
+`Supervisor.Supervises` answers from it, and the gateway (`handlers.go`)
+registers a supervised handler only for those services. Every other service
+keeps its in-process handler, exactly as with the model off. `routing`
+(`transit`: the BGP speaker) moved first: it has the smallest privilege set of
+the processes that have a backend — `CAP_NET_BIND_SERVICE` for port 179, no
+kernel programming (`pkg/sdn/bgp` uses no netlink) — and BGP is the most
+exposed untrusted parser gatewayd runs. `proxy` moved second: the same one
+capability, and it terminates TLS from the internet. Its section is not a
+gateway section, so `BuildGateway` registers its relay itself
+(`RegisterSupervisedService`) and builds neither the trust resolver nor the
+proxy handler in the parent; a disabled proxy is relayed to no one. Every
+supervised process is a parser class and runs unprivileged
+(`TestSupervises_OnlyTheMovedProcessIsSupervised`).
 `Gateway.Apply` forwards the desired document to the supervisor only once
 `nat` or `load-balancer` is supervised; until `datapath` moves, it is applied
 in-process.
@@ -1045,8 +1059,9 @@ in-process.
 |---|---|
 | `ServeConfig.Process` | the `process:` section, decoded by `LoadServeConfig` |
 | `BuildSupervisor` | builds the supervisor from `process:` and attaches it to `GatewayConfig.Supervisor` before `BuildGateway`; nil when the section is absent or `enabled: false`, or there is no `gateway:` section |
+| `childInheritance` → `process.Inherited` | the global flags every child is started with, as the supervisor resolved them: the config file it loaded, `--data-dir`, `--log-format`, `--debug`. `Spec.Args` appends them after the `service run` arguments and leaves out an empty one, so the child applies the same default. A child is a fresh `gatewayd` invocation: a flag not passed on falls back to its default there, and for `--data-dir` that is a different TOFU pin store |
 | `runServe` | shuts the supervisor down after `gw.Stop` on every exit path, within `shutdownTimeout` |
-| `gatewayd service run <process>` | the child: `EnterHardened`, then the configuration read as the service account (`ErrServiceConfigUnreadable` if it cannot), `GatewayConfig.HostedServices` set to the process's enabled services, `BuildGateway`, the IPC server listening at mode `0660`, then `gw.Start` |
+| `gatewayd service run <process>` | the child: `EnterHardened`, then the configuration read as the service account (`ErrServiceConfigUnreadable` if it cannot), `GatewayConfig.HostedServices` set to the process's enabled services (`enabledServices`: the enabled gateway sections, then the proxy when `proxy:` enables it), `BuildGateway`, the IPC server listening at mode `0660`, then `gw.Start` |
 
 `GatewayConfig.HostedServices` restricts a gateway to one process's services:
 `Hosts(service)` gates handler registration, the OVS runtime (built only when
@@ -1071,7 +1086,13 @@ though they share an account.
 **Readable as the service account.** The child reads the gatewayd
 configuration — and, for the processes that build them, the `secret-store:`
 client files and `platform-ca-file` — after dropping to `process.user`. Those
-files must be readable by that account or by `process.group`.
+files must be readable by that account or by `process.group`. The proxy child
+also loads the proxy's TLS certificate, key and client CAs and any CA file a
+`trust:` strategy names; when a `trust:` scope uses `tofu` it opens the pin
+directory `<data-dir>/trust/tofu-pins` — the supervisor's `--data-dir`,
+inherited — which it creates `0700` and must own:
+a directory left by a root-run gatewayd fails the child with
+`ErrTOFUPinDirUnusable`.
 
 **The snapshot reads the child.** With `transit` supervised, the parent's
 `Gateway.Snapshot` takes its `bgp` section from the routing child's own
@@ -1083,9 +1104,7 @@ socket no longer answers is `process.ErrProcessDown`; the parent wraps it in
 configured `local_asn` and `router_id`, rather than presenting a speaker with
 no peers.
 
-**Still pending:** the next processes, in this order: `proxy` (the same one
-capability, the next most exposed parser; its TLS material and the TOFU pin
-directory under `--data-dir` must then be usable by the service account),
+**Still pending:** the next processes, in this order:
 `provisioning` (`dhcp`/`pxe`/`edge`), `vpn` once it has a backend (the
 management VPN is a refused section today, #558), and `datapath` last —
 moving it changes where `Apply` and the rest of the snapshot come from. Each

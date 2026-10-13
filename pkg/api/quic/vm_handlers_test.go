@@ -225,6 +225,7 @@ type mockExtendedVMOrchestrator struct {
 	attestReport         *VMAttestationReport
 	verifyAttestError    error
 	verifyResult         *compute.VMVerificationResult
+	lastEvidence         *compute.VMAttestationEvidence
 	consoleInfo          *VMConsoleInfo
 	snapshots            map[string][]*VMSnapshot
 }
@@ -307,15 +308,16 @@ func (m *mockExtendedVMOrchestrator) AttestVM(ctx context.Context, instanceID st
 	}
 
 	return &VMAttestationReport{
-		VMID:      instanceID,
-		VMName:    "test-vm",
-		Timestamp: time.Now(),
-		Verified:  true,
-		Nonce:     nonce,
-		PCRValues: map[int][]byte{0: []byte("pcr0"), 7: []byte("pcr7")},
-		Quote:     []byte("test-quote"),
-		Signature: []byte("test-signature"),
-		EventLog:  []byte("test-event-log"),
+		VMID:               instanceID,
+		VMName:             "test-vm",
+		Timestamp:          time.Now(),
+		Verified:           true,
+		Nonce:              nonce,
+		PCRValues:          map[int][]byte{0: []byte("pcr0"), 7: []byte("pcr7")},
+		Quote:              []byte("test-quote"),
+		Signature:          []byte("test-signature"),
+		SignatureAlgorithm: "SHA256-RSAPSS",
+		EventLog:           []byte("test-event-log"),
 	}, nil
 }
 
@@ -328,6 +330,7 @@ func (m *mockExtendedVMOrchestrator) VerifyVMAttestation(ctx context.Context, in
 		return nil, compute.ErrInstanceNotFound
 	}
 
+	m.lastEvidence = evidence
 	if m.verifyResult != nil {
 		return m.verifyResult, nil
 	}
@@ -1654,6 +1657,7 @@ func TestVMHandleAttest(t *testing.T) {
 		assert.True(t, attestResp.Verified)
 		assert.NotEmpty(t, attestResp.Quote)
 		assert.NotEmpty(t, attestResp.Signature)
+		assert.Equal(t, "SHA256-RSAPSS", attestResp.SignatureAlgorithm)
 		assert.NotEmpty(t, attestResp.PCRValues)
 	})
 

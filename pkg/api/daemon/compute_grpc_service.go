@@ -1231,6 +1231,8 @@ func (s *ComputeGRPCService) AttestVM(ctx context.Context, req *platformv1.Attes
 		PcrValues: vmPCRValuesToProto(report.PCRValues),
 		EventLog:  report.EventLog,
 		AkPublic:  report.AKPublicKey,
+		// The scheme the AK signed under; VerifyVMAttestation needs it back.
+		SignatureAlgorithm: report.SignatureAlgorithm,
 	}, nil
 }
 
@@ -1256,10 +1258,11 @@ func (s *ComputeGRPCService) VerifyVMAttestation(ctx context.Context, req *platf
 	}
 
 	result, err := attester.VerifyVMAttestation(ctx, vmID, &compute.VMAttestationEvidence{
-		Quote:        req.GetQuote(),
-		Signature:    req.GetSignature(),
-		Nonce:        req.GetNonce(),
-		ExpectedPCRs: expectedPCRs,
+		Quote:              req.GetQuote(),
+		Signature:          req.GetSignature(),
+		SignatureAlgorithm: req.GetSignatureAlgorithm(),
+		Nonce:              req.GetNonce(),
+		ExpectedPCRs:       expectedPCRs,
 	})
 	if err != nil {
 		s.logger.Error(err, "Failed to verify VM attestation", "vm_id", vmID)

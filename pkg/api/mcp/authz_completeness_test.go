@@ -226,14 +226,12 @@ var knownUnclassified = []string{
 	"platform_tpm_pcrs",
 	"platform_tpm_platform",
 	"platform_tpm_provision",
-	"platform_tpm_quote",
 	"platform_tpm_random",
 	"platform_tpm_seal",
 	"platform_tpm_srk",
 	"platform_tpm_srk_create",
 	"platform_tpm_srk_delete",
 	"platform_tpm_unseal",
-	"platform_tpm_verify_quote",
 	"provision_fetch_config",
 	"provision_fulfill_session",
 	"provision_get_nonce",
@@ -508,6 +506,18 @@ func TestBMCToolsAreClassified(t *testing.T) {
 		got, ok := checker.toolPermissions[tool]
 		require.True(t, ok, "%s must have an explicit permission entry", tool)
 		assert.Equal(t, want, got, "%s", tool)
+	}
+}
+
+// TestTPMQuoteToolsAreClassified: the quote tools carry the scope of their
+// gRPC TPMService twin, so an MCP caller reaches the same service (#482).
+func TestTPMQuoteToolsAreClassified(t *testing.T) {
+	checker := NewAuthorizationChecker(nil, nil)
+
+	for _, tool := range []string{"platform_tpm_quote", "platform_tpm_verify_quote"} {
+		got, ok := checker.toolPermissions[tool]
+		require.True(t, ok, "%s must have an explicit permission entry", tool)
+		assert.Equal(t, "tpm:read", got, "%s", tool)
 	}
 }
 

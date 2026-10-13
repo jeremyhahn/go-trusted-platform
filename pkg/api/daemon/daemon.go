@@ -1462,6 +1462,13 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		daemon.concreteRestServer.SetCAHandlers(config.CAService, platformTokenValidatorShared)
 	}
 
+	// Wire the physical TPM REST handlers. Quote and verify run on the same
+	// TPM service gRPC and the Unix socket serve, so one quote verifies the
+	// same way on every transport (#482).
+	if daemon.concreteRestServer != nil {
+		daemon.concreteRestServer.SetTPMHandlers(tpmService, platformTokenValidatorShared)
+	}
+
 	// Wire KMS REST handlers when the platform KMS backend is available.
 	// Without this, /api/v1/kms/* would not be served and the REST adapter
 	// for `platformctl --protocol rest kms ...` would 404. The facade shares

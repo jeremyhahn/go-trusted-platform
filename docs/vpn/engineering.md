@@ -1,6 +1,6 @@
 # Remote-Access VPN — Engineering Contract
 
-> **Status: PARTIAL — the core (#584 PR 1), both data planes (#584 PR 2), the gateway service and the operator control plane (#584 PR 3) exist; left for PR 4: the web page, the JS SDK and `platformctl vpn connect`. The admission listener and the gatewayd runtime assembly are planned (§1).** · Scope: `pkg/sdn/gateway/services/vpn`, `pkg/sdn/tunnel`, `pkg/vpn` · Last verified: 2026-10-13
+> **Status: PARTIAL — the core (#584 PR 1), both data planes (#584 PR 2), the gateway service and the operator control plane (#584 PR 3) exist; the JS SDK client and the web page (#584 PR 4) exist; left for PR 4: `platformctl vpn connect`. The admission listener and the gatewayd runtime assembly are planned (§1).** · Scope: `pkg/sdn/gateway/services/vpn`, `pkg/sdn/tunnel`, `pkg/vpn` · Last verified: 2026-10-13
 > Identifiers below are either real today (grepped) or marked *(planned)*. A
 > planned name is a requirement for the implementing PR, not a claim.
 > Feature folder: [architecture.md](architecture.md) · engineering (this file) ·
@@ -74,6 +74,8 @@
 | `(*Service).DesiredVPN(ctx)` | The `vpn` section the daemon overlays on every gateway's desired config ([docs/gateway/engineering.md](../gateway/engineering.md)) |
 | `VPNGRPCService`, `vpnErrToGRPC` | The one service every transport calls. Errors map as [api.md](api.md) §3; a daemon without the service refuses every RPC `Unavailable` |
 | `sdk/go/services/vpn.Client`, `NewClientFromGRPC` | The Go client the CLI and the integration suite use, over any transport |
+| `VPNService` (`sdk/javascript/src/services/vpn-service.ts`), `PlatformClient.vpn`, `useVPN` | The JS client over the REST routes: the same eight operations, with the protojson field names and string 64-bit integers ([api.md](api.md) §2) |
+| `web/src/app/(dashboard)/networking/vpn/page.tsx` (Networking → VPN) | The operator page over `useVPN`: gateway status and sessions, enrolled peers with revoke, posture policies listed, viewed and edited. A node without the control plane shows the not-available state; a daemon without gateway telemetry still lists peers and policies |
 
 ### Planned (still to be created — names are the requirement)
 
@@ -82,7 +84,6 @@
 | The admission listener (mTLS-only, `Config.Listener`) and the datapath process client | `pkg/sdn/gateway/services/vpn` | The gateway process model (#557) |
 | The gatewayd assembly of `VPNRuntime`: the planes from `masque.*` / `wireguard.*` keys and a `FactorVerifier` over the SDK | `pkg/sdn/gateway/commands` | Blocked on the SDK: no quicbaas verb verifies a FIDO2 or PIV assertion over a caller nonce |
 | The control-plane `LeaseStore` | daemon | §6 |
-| The operator web page and the JS SDK client for `VPNService` | web UI, JS SDK | #584 PR 4 |
 | `platformctl vpn connect` and the other client-agent verbs ([cli.md](cli.md)) | `pkg/cli/commands/vpn` | #584 PR 4; needs the admission listener |
 
 ## 2. Invariants

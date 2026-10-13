@@ -193,9 +193,14 @@ IMA: `Event`, `EventLog`, `EventFilter`, `Status`.
     -384 and -512. A quote declaring none or any other scheme is
     `vm.ErrUnsupportedSignatureAlgorithm`; a scheme the AK's key type cannot
     carry is `vm.ErrSignatureSchemeMismatch`. Never infer the scheme from the
-    key type: that is how every PSS quote failed as PKCS#1 v1.5. The legacy
-    `vm.VerifyQuoteSignature` infers it and so verifies only RSASSA and
-    ECDSA quotes.
+    key type: that is how every PSS quote failed as PKCS#1 v1.5. It is the
+    only quote signature check (#482): the inferring `vm.VerifyQuoteSignature`
+    is deleted, and every caller — the TPM verify handlers on each transport,
+    the VM and container compute paths, and the workload verdict — passes
+    the scheme the quote or its IAK declares. A producer reads that scheme
+    with `vm.QuoteSignatureAlgorithm`, which is
+    `vm.ErrQuoteSchemeUnavailable` when the IAK names none, so no quote
+    leaves without one.
 
 ### 3a. Signing paths that are not relay oracles
 
