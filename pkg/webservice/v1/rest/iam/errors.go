@@ -175,3 +175,15 @@ type ErrMirrorClientMissing struct{}
 func (e ErrMirrorClientMissing) Error() string {
 	return "rest/iam: user mirror has no IAM client"
 }
+
+// ErrForeignBodyTenant is returned when a request body names a tenant other
+// than the one the route acts on: the path's {tenant}, otherwise the
+// session's. It is refused with 403, as the own-tenant guard refuses the same
+// tenant named in the path or the tenant_id query (#401).
+type ErrForeignBodyTenant struct {
+	Tenant string
+}
+
+func (e ErrForeignBodyTenant) Error() string {
+	return fmt.Sprintf("rest/iam: request body names a tenant other than %q", e.Tenant)
+}

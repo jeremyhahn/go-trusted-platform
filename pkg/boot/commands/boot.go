@@ -15,6 +15,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -488,10 +489,11 @@ type installerCloser struct {
 	sync func()
 }
 
-// Retry policy for closing the LUKS mapping: the same shape as firstboot's
-// closeInstaller.
+// Retry policy for closing the LUKS mapping. go-luks2's Lock already retries a
+// busy mapping for about 3s before it returns luks2.ErrMappingBusy, so three
+// attempts give a mapping held after the unmount about 10s to come free.
 const (
-	installerLockAttempts = 10
+	installerLockAttempts = 3
 	installerLockInterval = 500 * time.Millisecond
 )
 
@@ -527,10 +529,17 @@ func closeInstaller(loopDev string, ops installerCloser) error {
 
 	var lockErr error
 	for attempt := 1; attempt <= installerLockAttempts; attempt++ {
-		if lockErr = ops.lock("installer"); lockErr == nil {
+		lockErr = ops.lock("installer")
+		if lockErr == nil || errors.Is(lockErr, luks2.ErrVolumeNotUnlocked) {
+			// A mapping that is not open is already closed.
+			lockErr = nil
 			break
 		}
 		fmt.Fprintf(os.Stderr, "[BOOT] LUKS close attempt %d/%d failed: %v\n", attempt, installerLockAttempts, lockErr)
+		if !errors.Is(lockErr, luks2.ErrMappingBusy) {
+			// Only a held mapping can come free; anything else will not.
+			break
+		}
 		if attempt < installerLockAttempts {
 			ops.wait()
 		}

@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/jeremyhahn/go-luks2/pkg/luks2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -65,10 +66,28 @@ func TestCloseInstaller_Closes(t *testing.T) {
 	assert.Zero(t, r.waits)
 }
 
+// go-luks2 v0.2.0's Lock reports a name nothing has open as
+// luks2.ErrVolumeNotUnlocked; there is nothing left to close.
+func TestCloseInstaller_MappingAlreadyGoneIsClosed(t *testing.T) {
+	r := &closerRecorder{lockErrs: []error{luks2.ErrVolumeNotUnlocked}}
+
+	require.NoError(t, closeInstaller("/dev/loop7", r.closer()))
+
+	assert.Equal(t, 1, r.lockCalls)
+	assert.Zero(t, r.waits)
+	assert.Equal(t, []string{"/dev/loop7"}, r.detached)
+}
+
+// mappingBusy is the error go-luks2's Lock returns once its own EBUSY retries
+// run out.
+func mappingBusy() error {
+	return &WrappedError{Msg: "installer still held", Err: luks2.ErrMappingBusy}
+}
+
 func TestCloseInstaller_LazyUnmountAndLockRetry(t *testing.T) {
 	r := &closerRecorder{
 		unmountErrs: map[int]error{0: errors.New("EBUSY")},
-		lockErrs:    []error{errors.New("device busy"), errors.New("device busy")},
+		lockErrs:    []error{mappingBusy(), mappingBusy()},
 	}
 
 	require.NoError(t, closeInstaller("/dev/loop7", r.closer()))
@@ -95,7 +114,7 @@ func TestCloseInstaller_ReportsWhatStaysOpen(t *testing.T) {
 	t.Run("the mapping never closes", func(t *testing.T) {
 		busy := make([]error, installerLockAttempts)
 		for i := range busy {
-			busy[i] = errors.New("device busy")
+			busy[i] = mappingBusy()
 		}
 		r := &closerRecorder{lockErrs: busy}
 
@@ -106,6 +125,18 @@ func TestCloseInstaller_ReportsWhatStaysOpen(t *testing.T) {
 		assert.Equal(t, installerLockAttempts, r.lockCalls)
 		assert.Equal(t, installerLockAttempts-1, r.waits)
 		assert.Empty(t, r.detached, "the loop device under a live mapping is not detached")
+	})
+
+	t.Run("a close that cannot come free is not retried", func(t *testing.T) {
+		r := &closerRecorder{lockErrs: []error{errors.New("failed to remove device-mapper: EPERM")}}
+
+		err := closeInstaller("/dev/loop7", r.closer())
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "closing the installer LUKS mapping")
+		assert.Equal(t, 1, r.lockCalls, "only luks2.ErrMappingBusy is worth another attempt")
+		assert.Zero(t, r.waits)
+		assert.Empty(t, r.detached)
 	})
 
 	t.Run("the loop device will not detach", func(t *testing.T) {

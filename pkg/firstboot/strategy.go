@@ -687,28 +687,11 @@ func (s *FirstbootSealStrategy) closeInstaller(loopDev, installerPath string, pa
 	// result is no longer held in a variable that outlives the log line.
 	syscall.Sync()
 
-	// Close LUKS container with retries and increasing delays
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Closing LUKS container...\n")
-	var luksErr error
-	for i := 0; i < 10; i++ {
-		if luksErr = luks2.Lock("installer"); luksErr == nil {
-			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] LUKS container closed\n")
-			break
-		}
-		if i < 9 {
-			delay := time.Duration((i+1)*200) * time.Millisecond
-			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] LUKS close attempt %d failed: %v, retrying in %v...\n", i+1, luksErr, delay)
-			// Try force-closing any remaining users of the device
-			if i >= 3 {
-				// After several attempts, try dmsetup remove --force
-				if output, dmErr := exec.Command("dmsetup", "remove", "--force", "installer").CombinedOutput(); dmErr != nil {
-					fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] dmsetup remove --force failed: %s\n", strings.TrimSpace(string(output)))
-				}
-			}
-			<-time.After(delay)
-		}
-	}
-	if luksErr != nil {
+	luksErr := closeInstallerMapping(defaultInstallerMappingCloser())
+	if luksErr == nil {
+		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] LUKS container closed\n")
+	} else {
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: Failed to close LUKS container: %v\n", luksErr)
 		// Final attempt: dmsetup remove with deferred option
 		if output, err := exec.Command("dmsetup", "remove", "--deferred", "installer").CombinedOutput(); err != nil {
@@ -756,6 +739,62 @@ func (s *FirstbootSealStrategy) closeInstaller(loopDev, installerPath string, pa
 
 	syscall.Sync()
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Installer cleanup complete\n")
+}
+
+// installerMappingCloser holds what closeInstallerMapping calls, so its retry
+// policy is testable without device-mapper. Production uses go-luks2 and
+// dmsetup.
+type installerMappingCloser struct {
+	lock func(name string) error
+	// forceRemove runs dmsetup remove --force, which swaps a held mapping's
+	// table for an error target so the next close can remove it.
+	forceRemove func(name string) error
+	wait        func(d time.Duration)
+}
+
+// Retry policy for closing the installer mapping. go-luks2's Lock already
+// retries a busy mapping for about 3s before it returns luks2.ErrMappingBusy,
+// so a failed attempt has waited on its own: every retry force-removes the
+// mapping first, and four attempts bound the close at about 13s.
+const (
+	installerMappingCloseAttempts = 4
+	installerMappingCloseDelay    = 200 * time.Millisecond
+)
+
+func defaultInstallerMappingCloser() installerMappingCloser {
+	return installerMappingCloser{
+		lock: luks2.Lock,
+		forceRemove: func(name string) error {
+			if output, err := exec.Command("dmsetup", "remove", "--force", name).CombinedOutput(); err != nil {
+				return &WrappedError{Msg: "dmsetup remove --force " + name + ": " + strings.TrimSpace(string(output)), Err: err}
+			}
+			return nil
+		},
+		wait: func(d time.Duration) { <-time.After(d) },
+	}
+}
+
+// closeInstallerMapping closes the "installer" LUKS mapping and returns the
+// last close error when it stays open. A name nothing has open
+// (luks2.ErrVolumeNotUnlocked) is already closed; that is also how a
+// successful forced removal shows up on the attempt after it.
+func closeInstallerMapping(ops installerMappingCloser) error {
+	var err error
+	for attempt := 0; attempt < installerMappingCloseAttempts; attempt++ {
+		if attempt > 0 {
+			delay := time.Duration(attempt) * installerMappingCloseDelay
+			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] LUKS close attempt %d failed: %v, retrying in %v...\n", attempt, err, delay)
+			if forceErr := ops.forceRemove("installer"); forceErr != nil {
+				fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] %v\n", forceErr)
+			}
+			ops.wait(delay)
+		}
+		err = ops.lock("installer")
+		if err == nil || errors.Is(err, luks2.ErrVolumeNotUnlocked) {
+			return nil
+		}
+	}
+	return err
 }
 
 // provisionInsideInstaller runs minimal TPM provisioning (EK + SSRK only).

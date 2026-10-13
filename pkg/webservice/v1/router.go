@@ -893,11 +893,10 @@ func (v1Router *Router) iamRoutes() {
 			// tenant this guard admits.
 			RequireSystemTenant: guard.RequireTenant(v1Router.restHandlerRegistry.TenantID()),
 			// The IAM handlers give the URL's {tenant} precedence over the
-			// session's, so the tenant a request NAMES has to be the
-			// caller's own.
-			RequireOwnTenant: guard.RequireOwnTenant(func(r *http.Request) string {
-				return mux.Vars(r)["tenant"]
-			}),
+			// session's, and a flat route names its tenant in the
+			// tenant_id query, so the tenant a request NAMES has to be
+			// the caller's own.
+			RequireOwnTenant: guard.RequireOwnTenant(restiam.RequestedTenant),
 		})
 	if err != nil {
 		v1Router.logger.Error(err, "IAM routes not registered")

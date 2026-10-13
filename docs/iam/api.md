@@ -37,17 +37,27 @@ unscoped path **and** a tenant-scoped path, both dispatching to the same handler
 | Applications | `/api/v1/iam/apps` | `/api/v1/iam/tenants/{tenant}/apps` |
 
 **Which tenant an unscoped call operates on is not visible from the route.** It
-is the tenant of the verified session; a `tenant_id` in the body or query is
-ignored. For anything multi-tenant, use the `/tenants/{tenant}/...` form so the
-target is explicit and the own-tenant guard checks it — the CLI takes the same
-position by making `<tenant-id>` a required positional argument.
+is the tenant of the verified session. An unscoped route may name its tenant in
+the `tenant_id` query parameter: the own-tenant guard refuses it with `403`
+unless it is the session's tenant, so a foreign tenant is never answered from
+the session's tenant under the same id (#401). A tenant named in the request
+body — `tenant_id`, or the JS SDK's `tenantId` — is refused the same way: the
+handler decodes it with the rest of the body and answers `403` unless it is
+the tenant the route acts on (the path's `{tenant}`, otherwise the session's),
+before anything is read or written. That holds on both route forms and on the
+list routes, whose optional GET body the handler reads for exactly this
+reason. A body naming no tenant is served. For anything multi-tenant, use the `/tenants/{tenant}/...` form so
+the target is explicit — the CLI takes the same position by making
+`<tenant-id>` a required positional argument.
 
 The Go SDK's REST transport sends the item operations — Get, Delete,
 AssignRole, RevokeRole, AddGroupMember, RemoveGroupMember on users, roles and
 groups — to the tenant-scoped form, so the request's `tenant_id` reaches the
 guard exactly as it does on gRPC (#401). An empty `tenant_id` is refused with
-`InvalidArgument` before anything is sent. Create, List and Update still use
-the unscoped form and therefore act on the session's tenant.
+`InvalidArgument` before anything is sent. Create and List still use the
+unscoped form, but they carry the request's `tenant_id` in the body, so a
+foreign tenant is refused there and surfaces as `PermissionDenied`, as on
+gRPC; an empty one acts on the session's tenant.
 
 Rows below give the unscoped path; the tenant-scoped equivalent always exists.
 
@@ -162,9 +172,18 @@ served only from its own tenant:
 
 | Transport | Caller's tenant | Request names another tenant | Request names no tenant |
 |---|---|---|---|
-| REST | the session — token `tenant_id` claim, or the mTLS certificate | `403` from `RequireOwnTenant` on `/tenants/{tenant}/...` | unscoped routes use the session tenant |
+| REST | the session — token `tenant_id` claim, or the mTLS certificate | `403` from `RequireOwnTenant`, on `/tenants/{tenant}/...` and on an unscoped route's `?tenant_id=`; `403` `ErrForeignBodyTenant` from the handler for a body `tenant_id` / `tenantId` | unscoped routes use the session tenant |
 | gRPC, QUIC | the platform token's `tenant_id` claim, or the mTLS certificate | `PermissionDenied`, `ErrIAMTenantForbidden` | `InvalidArgument`, `tenant_id` is required |
 | Unix | none — peer-credential operator | served (the operator is not tenant-bound) | `InvalidArgument` |
+| MCP | — | refused: no `iam_*` tool is in the authorization map (below) | refused |
+
+On REST the extractor the guard reads is `RequestedTenant`
+(`pkg/webservice/v1/rest/iam/router.go`): the path's `{tenant}`, otherwise the
+`tenant_id` query. Every IAM route except the tenant-record routes, which are
+system-tenant only, is behind it. The guard does not read the body; each
+handler decodes it once and refuses a body tenant that differs from the one
+the route acts on (`ownBodyTenant`, `pkg/webservice/v1/rest/iam/handlers.go`),
+before any IAM lookup or write.
 
 On gRPC and QUIC the check is `authorizeIAMTenant`
 (`pkg/api/daemon/iam_tenant_authz.go`). It covers every user, role, group,

@@ -264,7 +264,8 @@ Strategy constructors: `NewKeyfileStrategy`, `NewTPMPCRStrategy`,
     unmount fails), removes the `vg0-root` mapping and closes the LUKS
     mapping, on its own 30-second context so a cancelled install still
     cleans up, and logs every step that did not complete as
-    `ErrDiskRelease`. The install error is what `Install` returns; the
+    `ErrDiskRelease`. A LUKS mapping nothing has open
+    (`luks2.ErrVolumeNotUnlocked`) is already released, not a failure. The install error is what `Install` returns; the
     release never replaces it. A live install keeps its mounts because the
     operator is on the node and the reboot clears them; an image build has
     no reboot, and a mapping or loop device left open on the build host
@@ -299,6 +300,16 @@ Strategy constructors: `NewKeyfileStrategy`, `NewTPMPCRStrategy`,
     and dracut's `/lib/modules/<release>` see a packaged kernel. Failures are
     `ErrMediaKernel` (`ErrorTypeOSInstall`). The QEMU virt stand-in of the
     Raspberry Pi image is the consumer ([factory-image architecture.md](../factory-image/architecture.md) §2).
+20. **A successful install closes the root LUKS mapping, retrying only while
+    it is busy.** `closeInstalledLUKS` (`pkg/installer/release.go`) calls
+    `luks2.Lock` up to three times. go-luks2 v0.2.0's `Lock` retries a busy
+    target for about 3s itself before it returns `luks2.ErrMappingBusy`, so
+    only that error earns another attempt, after a 1s and then a 2s backoff
+    that a cancelled install interrupts. A name nothing has open
+    (`luks2.ErrVolumeNotUnlocked`) is closed. Any other failure, or a mapping
+    still busy after the last attempt, falls back to `devmapper.Remove`; a
+    failure there is logged as data that may not be persisted and does not
+    fail the install.
 
 ## 5. Unlock strategy table — as the code registers it
 
@@ -408,7 +419,7 @@ re-applies only the flags cobra reports as `Changed`.
 | `disk.encryption.key-size` | int (bits) | `512` |
 | `disk.encryption.hash` | string | `sha256` |
 | `disk.encryption.pbkdf` | string | **empty** — `fips.GetKDF()` auto-detects from `/proc/sys/crypto/fips_enabled` |
-| `disk.encryption.mapped-name` | string | `cryptroot` |
+| `disk.encryption.mapped-name` | string | `cryptroot` — `Validate` checks it with `luks2.ValidateMappingName` (`[A-Za-z0-9]` first, then `[A-Za-z0-9_.+-]`, at most 127 bytes) and refuses a bad name as `ErrorTypeInvalidConfig` before the disk is formatted, since `Unlock` would refuse it only after the wipe |
 | `disk.encryption.password` / `passphrase` | string, `secret:"true"` | — |
 | `disk.encryption.tpm.enabled` | bool | — |
 | `disk.encryption.tpm.handle` | uint32 | `DefaultLUKSTPMHandle` = `0x81000001` (SSRK) |

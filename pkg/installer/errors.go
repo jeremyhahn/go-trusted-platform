@@ -194,6 +194,13 @@ func ErrUnknownBootFirmware(name string) error {
 	return &InstallerError{Type: ErrorTypeInvalidConfig, Message: "unknown boot firmware " + name + " (uefi, uboot)"}
 }
 
+// ErrInvalidMappedName reports a disk.encryption.mapped-name that go-luks2's
+// Unlock would refuse (luks2.ValidateMappingName). Validation catches it
+// before the installer formats the disk, not at the unlock that follows.
+func ErrInvalidMappedName(name string, cause error) error {
+	return &InstallerError{Type: ErrorTypeInvalidConfig, Message: "invalid disk encryption mapped-name " + name, Cause: cause}
+}
+
 // ErrBootFirmwareStage reports a failure to lay the staged boot firmware
 // onto the EFI partition.
 func ErrBootFirmwareStage(message string, cause error) error {

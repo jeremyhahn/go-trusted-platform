@@ -13,7 +13,10 @@
 
 package drive
 
-import "errors"
+import (
+	"errors"
+	"strconv"
+)
 
 var (
 	// ErrNoDrivesConfigured is returned when no drives are configured
@@ -61,3 +64,21 @@ var (
 	// ErrEncryptionMappingNameRequired is returned when encryption lacks mapping name
 	ErrEncryptionMappingNameRequired = errors.New("encryption mapping name is required")
 )
+
+// InvalidMappingNameError is returned when an encrypted partition's
+// mapping-name is one go-luks2 refuses to unlock under. The partition is
+// formatted before it is unlocked, so the name must be refused at validation,
+// before the drive is wiped.
+type InvalidMappingNameError struct {
+	PartitionID string
+	Name        string
+	Err         error
+}
+
+func (e *InvalidMappingNameError) Error() string {
+	return "partition " + e.PartitionID + ": invalid encryption mapping-name " + strconv.Quote(e.Name) + ": " + e.Err.Error()
+}
+
+func (e *InvalidMappingNameError) Unwrap() error {
+	return e.Err
+}

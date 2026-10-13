@@ -615,47 +615,8 @@ func (i *installer) Install(ctx context.Context) (err error) {
 
 	// Close the main LUKS device - CRITICAL for flushing encrypted data
 	if diskInfo.MappedDevice != "" {
-		mappedName := i.luksMappedName()
-
-		// Try up to 3 times with increasing delays
-		luksClosed := false
-		for attempt := 1; attempt <= 3; attempt++ {
-			i.logger.Info("[INSTALLER] Closing LUKS device", "name", mappedName, "attempt", attempt)
-			if err := luks2.Lock(mappedName); err != nil {
-				i.logger.Warn("[INSTALLER] Failed to close LUKS device", "error", err, "attempt", attempt)
-				if attempt < 3 {
-					// Cancellable backoff. This is a DIFFERENT change from
-					// removing a guess: the wait itself is legitimate — the
-					// device is genuinely busy and retrying immediately would
-					// fail the same way. What was wrong is that it could not be
-					// interrupted, so a cancelled install kept going for the
-					// remainder of the interval while writing to disks.
-					select {
-					case <-ctx.Done():
-						i.logger.Warn("[INSTALLER] cancelled while waiting to retry LUKS close", "error", ctx.Err())
-						return ctx.Err()
-					case <-time.After(time.Duration(attempt) * time.Second):
-					}
-					unix.Sync()
-				}
-			} else {
-				i.logger.Info("[INSTALLER] LUKS device closed successfully", "name", mappedName)
-				luksClosed = true
-				break
-			}
-		}
-
-		// If still not closed, try devmapper.Remove directly
-		if !luksClosed {
-			i.logger.Warn("[INSTALLER] LUKS close failed after 3 attempts, trying devmapper.Remove directly")
-			// Sync first to flush dm-crypt buffers
-			unix.Sync()
-
-			if err := devmapper.Remove(mappedName); err != nil {
-				i.logger.Warn("[INSTALLER] devmapper.Remove failed - DATA MAY NOT BE PERSISTED!", "device", mappedName, "error", err)
-			} else {
-				i.logger.Info("[INSTALLER] devmapper.Remove succeeded", "name", mappedName)
-			}
+		if err := i.closeInstalledLUKS(ctx, i.luksMappedName(), i.release, time.Second); err != nil {
+			return err
 		}
 	}
 

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
+	"github.com/jeremyhahn/go-luks2/pkg/luks2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
@@ -19,7 +21,8 @@ type releaseRecorder struct {
 	unmountErr     map[string]error // keyed by "<target>:<flags>"
 	removeDMErr    error
 	lockErr        error
-	mappingPresent bool // device-mapper still reports the mapping after removal
+	lockErrs       []error // answered in order before lockErr
+	mappingPresent bool    // device-mapper still reports the mapping after removal
 }
 
 func (r *releaseRecorder) ops() diskRelease {
@@ -35,6 +38,11 @@ func (r *releaseRecorder) ops() diskRelease {
 		},
 		lockLUKS: func(name string) error {
 			r.calls = append(r.calls, "lockLUKS "+name)
+			if len(r.lockErrs) > 0 {
+				err := r.lockErrs[0]
+				r.lockErrs = r.lockErrs[1:]
+				return err
+			}
 			return r.lockErr
 		},
 		mappingExists: func(name string) bool {
@@ -90,6 +98,82 @@ func TestReleaseDisk_UsesTheConfiguredLUKSMappingName(t *testing.T) {
 
 	assert.Contains(t, rec.calls, "lockLUKS imageroot")
 	assert.NotContains(t, rec.calls, "lockLUKS cryptroot")
+}
+
+// go-luks2 v0.2.0's Lock reports luks2.ErrVolumeNotUnlocked for a name nothing
+// has open. The mapping is already released, so that is not a failure.
+func TestReleaseDisk_AMappingAlreadyClosedIsReleased(t *testing.T) {
+	rec := &releaseRecorder{lockErr: luks2.ErrVolumeNotUnlocked}
+	inst := newReleaseInstaller(InstallTargetImage, "")
+
+	require.NoError(t, inst.releaseDisk(context.Background(), fullDiskInfo(), rec.ops()))
+
+	assert.Contains(t, rec.calls, "lockLUKS cryptroot")
+}
+
+func TestCloseInstalledLUKS_ClosesOnTheFirstAttempt(t *testing.T) {
+	rec := &releaseRecorder{}
+	inst := newReleaseInstaller(InstallTargetImage, "")
+
+	require.NoError(t, inst.closeInstalledLUKS(context.Background(), "cryptroot", rec.ops(), 0))
+
+	assert.Equal(t, []string{"lockLUKS cryptroot"}, rec.calls)
+}
+
+// go-luks2 v0.2.0's Lock reports luks2.ErrVolumeNotUnlocked for a name nothing
+// has open. That is closed: no retry, and no forced device-mapper removal.
+func TestCloseInstalledLUKS_AMappingAlreadyClosedIsClosed(t *testing.T) {
+	rec := &releaseRecorder{lockErr: luks2.ErrVolumeNotUnlocked}
+	inst := newReleaseInstaller(InstallTargetImage, "")
+
+	require.NoError(t, inst.closeInstalledLUKS(context.Background(), "cryptroot", rec.ops(), 0))
+
+	assert.Equal(t, []string{"lockLUKS cryptroot"}, rec.calls)
+}
+
+func TestCloseInstalledLUKS_RetriesABusyMapping(t *testing.T) {
+	rec := &releaseRecorder{lockErrs: []error{luks2.ErrMappingBusy}}
+	inst := newReleaseInstaller(InstallTargetImage, "")
+
+	require.NoError(t, inst.closeInstalledLUKS(context.Background(), "cryptroot", rec.ops(), 0))
+
+	assert.Equal(t, []string{"lockLUKS cryptroot", "lockLUKS cryptroot"}, rec.calls)
+}
+
+func TestCloseInstalledLUKS_ABusyMappingFallsBackToDeviceMapper(t *testing.T) {
+	rec := &releaseRecorder{lockErr: luks2.ErrMappingBusy}
+	inst := newReleaseInstaller(InstallTargetImage, "")
+
+	require.NoError(t, inst.closeInstalledLUKS(context.Background(), "cryptroot", rec.ops(), 0))
+
+	assert.Equal(t, []string{
+		"lockLUKS cryptroot",
+		"lockLUKS cryptroot",
+		"lockLUKS cryptroot",
+		"removeDM cryptroot",
+	}, rec.calls)
+}
+
+// Lock retries busy itself, so any other failure will not clear by retrying.
+func TestCloseInstalledLUKS_AFailureThatIsNotBusyIsNotRetried(t *testing.T) {
+	rec := &releaseRecorder{lockErr: errors.New("dm ioctl failed"), removeDMErr: errors.New("remove failed")}
+	inst := newReleaseInstaller(InstallTargetImage, "")
+
+	require.NoError(t, inst.closeInstalledLUKS(context.Background(), "cryptroot", rec.ops(), 0))
+
+	assert.Equal(t, []string{"lockLUKS cryptroot", "removeDM cryptroot"}, rec.calls)
+}
+
+func TestCloseInstalledLUKS_StopsWhenCancelled(t *testing.T) {
+	rec := &releaseRecorder{lockErr: luks2.ErrMappingBusy}
+	inst := newReleaseInstaller(InstallTargetImage, "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := inst.closeInstalledLUKS(ctx, "cryptroot", rec.ops(), time.Hour)
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, []string{"lockLUKS cryptroot"}, rec.calls)
 }
 
 func TestReleaseDisk_FallsBackToLazyUnmount(t *testing.T) {

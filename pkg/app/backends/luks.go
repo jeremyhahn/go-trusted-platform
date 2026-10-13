@@ -48,6 +48,45 @@ var ErrLUKSTPMNotWired = errors.New("luks backend: tpm handler not configured")
 // "handler configured but hardware unavailable".
 var ErrLUKSHardwareUnavailable = errors.New("luks backend: hardware unavailable")
 
+// ErrLUKSNewSlotNotFound indicates AddKey returned success but no keyslot
+// appeared that was absent before the call. The backend reports no slot rather
+// than guess one: the highest existing slot is not the new one when the free
+// slots are not contiguous.
+var ErrLUKSNewSlotNotFound = errors.New("luks backend: no new keyslot appeared after adding the key")
+
+// ErrLUKSTokenMissing indicates an enrollment handler returned no token for
+// the new keyslot. A FIDO2 or TPM keyslot without its token cannot be used by
+// any unlock strategy.
+var ErrLUKSTokenMissing = errors.New("luks backend: the handler returned no token for the new keyslot")
+
+// LUKSTokenWriteError reports that the token binding a newly added keyslot to
+// its unlock method could not be written — for example because the header's
+// JSON area is full (luks2.ErrMetadataTooLarge) or no token slot is free.
+// The keyslot was removed again; when RollbackErr is set that removal failed
+// too and the keyslot is still on the volume, without a token.
+type LUKSTokenWriteError struct {
+	Slot        int
+	Err         error
+	RollbackErr error
+}
+
+// Error implements the error interface.
+func (e *LUKSTokenWriteError) Error() string {
+	msg := "luks backend: writing the token for keyslot " + strconv.Itoa(e.Slot) + " failed: " + e.Err.Error()
+	if e.RollbackErr != nil {
+		return msg + "; removing the keyslot also failed and it is still on the volume: " + e.RollbackErr.Error()
+	}
+	return msg + "; the keyslot was removed"
+}
+
+// Unwrap returns the token write cause and, when set, the rollback cause.
+func (e *LUKSTokenWriteError) Unwrap() []error {
+	if e.RollbackErr != nil {
+		return []error{e.Err, e.RollbackErr}
+	}
+	return []error{e.Err}
+}
+
 // LUKSFIDO2Handler is the narrow surface LUKSBackend needs from the FIDO2
 // layer to enroll a volume keyslot. It's decoupled from the full FIDO2
 // backend so the LUKS backend can be constructed with just the pieces it
@@ -336,28 +375,16 @@ func (b *LUKSBackend) EnrollFIDO2(ctx context.Context, req *daemon.LUKSEnrollFID
 		return nil, err
 	}
 
-	tokenID, tokenErr := luks2.FindFreeTokenSlot(req.Device)
-	if tokenErr == nil {
-		if len(tokenJSON) > 0 {
-			// Rich handler: write the full token (includes salt) via the
-			// JSON entry point so the schema is not constrained by the
-			// luks2.Token struct.
-			patched, perr := injectKeyslotsIntoTokenJSON(tokenJSON, strconv.Itoa(newSlot))
-			if perr == nil {
-				_ = luks2.ImportTokenJSON(req.Device, tokenID, patched)
-			} else {
-				_ = luks2.ImportTokenJSON(req.Device, tokenID, tokenJSON)
-			}
-		} else {
-			// Fallback for minimal LUKSFIDO2Handler implementations.
-			token := &luks2.Token{
-				Type:            "fido2-manual",
-				Keyslots:        []string{strconv.Itoa(newSlot)},
-				FIDO2Credential: req.CredentialID,
-				FIDO2UPRequired: req.RequirePIN || req.RequireUV,
-			}
-			_ = luks2.ImportToken(req.Device, tokenID, token)
-		}
+	// A rich handler's token carries its salt and is written as-is; a minimal
+	// LUKSFIDO2Handler gets a fido2-manual token built here.
+	fallback := &luks2.Token{
+		Type:            "fido2-manual",
+		FIDO2Credential: req.CredentialID,
+		FIDO2UPRequired: req.RequirePIN || req.RequireUV,
+	}
+	tokenID, err := writeEnrollToken(req.Device, newSlot, tokenJSON, fallback)
+	if err != nil {
+		return nil, err
 	}
 
 	return &daemon.LUKSEnrollFIDO2Result{
@@ -399,14 +426,9 @@ func (b *LUKSBackend) EnrollTPM(ctx context.Context, req *daemon.LUKSEnrollTPMRe
 		return nil, err
 	}
 
-	tokenID, tokenErr := luks2.FindFreeTokenSlot(req.Device)
-	if tokenErr == nil && len(tokenJSON) > 0 {
-		patched, perr := injectKeyslotsIntoTokenJSON(tokenJSON, strconv.Itoa(newSlot))
-		if perr == nil {
-			_ = luks2.ImportTokenJSON(req.Device, tokenID, patched)
-		} else {
-			_ = luks2.ImportTokenJSON(req.Device, tokenID, tokenJSON)
-		}
+	tokenID, err := writeEnrollToken(req.Device, newSlot, tokenJSON, nil)
+	if err != nil {
+		return nil, err
 	}
 	return &daemon.LUKSEnrollTPMResult{
 		Slot:    int32(newSlot),
@@ -481,7 +503,7 @@ func (b *LUKSBackend) ChangePassphrase(ctx context.Context, req *daemon.LUKSChan
 }
 
 // detectNewSlot returns the slot number that appears in the current slot list
-// but was absent in the prior snapshot.
+// but was absent in the prior snapshot, or ErrLUKSNewSlotNotFound.
 func detectNewSlot(device string, before []luks2.KeyslotInfo) (int, error) {
 	after, err := luks2.ListKeyslots(device)
 	if err != nil {
@@ -496,18 +518,52 @@ func detectNewSlot(device string, before []luks2.KeyslotInfo) (int, error) {
 			return s.ID, nil
 		}
 	}
-	// No new slot found — return the highest existing one as a best-effort
-	// fallback so the caller gets a valid index.
-	max := -1
-	for _, s := range after {
-		if s.ID > max {
-			max = s.ID
+	return 0, ErrLUKSNewSlotNotFound
+}
+
+// writeEnrollToken writes the LUKS2 token that binds the freshly added
+// keyslot slot to its unlock method and returns the token ID. A keyslot
+// without its token is unusable, so on any failure the keyslot is removed
+// again and a *LUKSTokenWriteError is returned.
+func writeEnrollToken(device string, slot int, tokenJSON []byte, fallback *luks2.Token) (int, error) {
+	tokenID, err := importEnrollToken(device, slot, tokenJSON, fallback)
+	if err != nil {
+		return 0, &LUKSTokenWriteError{
+			Slot:        slot,
+			Err:         err,
+			RollbackErr: luks2.KillKeyslot(device, slot),
 		}
 	}
-	if max < 0 {
-		return 0, ErrLUKSVolumeNotFound
+	return tokenID, nil
+}
+
+// importEnrollToken writes tokenJSON, with its keyslots rewritten to name
+// slot, into the first free token slot. Without tokenJSON it writes fallback
+// instead; with neither it returns ErrLUKSTokenMissing.
+func importEnrollToken(device string, slot int, tokenJSON []byte, fallback *luks2.Token) (int, error) {
+	if len(tokenJSON) == 0 && fallback == nil {
+		return 0, ErrLUKSTokenMissing
 	}
-	return max, nil
+	tokenID, err := luks2.FindFreeTokenSlot(device)
+	if err != nil {
+		return 0, err
+	}
+	keyslot := strconv.Itoa(slot)
+	if len(tokenJSON) > 0 {
+		patched, err := injectKeyslotsIntoTokenJSON(tokenJSON, keyslot)
+		if err != nil {
+			return 0, err
+		}
+		if err := luks2.ImportTokenJSON(device, tokenID, patched); err != nil {
+			return 0, err
+		}
+		return tokenID, nil
+	}
+	fallback.Keyslots = []string{keyslot}
+	if err := luks2.ImportToken(device, tokenID, fallback); err != nil {
+		return 0, err
+	}
+	return tokenID, nil
 }
 
 // resolveSlotTypes inspects the LUKS2 token table to derive slot types beyond

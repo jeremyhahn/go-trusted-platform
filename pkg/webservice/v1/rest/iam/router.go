@@ -25,7 +25,27 @@ import (
 
 const (
 	basePath = "/iam"
+
+	// tenantQueryParam is the query parameter a request on a flat route
+	// uses to name its tenant, mirroring the tenant_id field the gRPC
+	// request messages carry.
+	tenantQueryParam = "tenant_id"
 )
+
+// RequestedTenant returns the tenant a request names: the URL's {tenant}
+// variable on the tenant-scoped routes, otherwise the tenant_id query
+// parameter. It is empty when the request names no tenant.
+//
+// It is the extractor the daemon hands to RequireOwnTenant, so a request
+// naming a tenant other than the caller's is refused with 403 on either
+// route form — exactly as gRPC refuses a foreign tenant_id with
+// PermissionDenied — instead of being answered from the session's tenant.
+func RequestedTenant(r *http.Request) string {
+	if tenant := mux.Vars(r)["tenant"]; tenant != "" {
+		return tenant
+	}
+	return r.URL.Query().Get(tenantQueryParam)
+}
 
 // Authorization carries the server-side guards the IAM router mounts. IAM
 // is the platform's administration surface: every route under it reads or
@@ -40,11 +60,14 @@ const (
 //     §"Control plane vs data plane"): a tenant-scoped admin holds the same
 //     "admin" role inside their own tenant and must not create or delete
 //     tenants with it.
-//   - RequireOwnTenant gates every route whose target tenant comes from the
-//     URL. The handlers give the path's {tenant} precedence over the
-//     session's, so the admin role alone would otherwise let a tenant
-//     administrator reach any other tenant's users, groups, roles, policies
-//     or applications by naming it in the path.
+//   - RequireOwnTenant gates every route a request can name a tenant on:
+//     the /tenants/{tenant}/... routes and the flat routes' tenant_id query
+//     parameter (see RequestedTenant). The handlers give the path's
+//     {tenant} precedence over the session's, so the admin role alone
+//     would otherwise let a tenant administrator reach any other tenant's
+//     users, groups, roles, policies or applications by naming it in the
+//     path; on a flat route a foreign tenant_id would otherwise be answered
+//     from the session's tenant.
 //
 // All four are required. NewIAMRouter refuses to build with any of them
 // missing, and the caller must then leave the IAM routes unregistered —
@@ -111,9 +134,11 @@ func (r *IAMRouter) RegisterRoutes(router *mux.Router) {
 
 	// Flat (tenant-implicit) routes — convenience aliases that the
 	// WebUI hits without carrying the tenant in the URL. The
-	// handlers' `getTenantID` falls back to the JWT `tenant_id`
-	// claim when the URL doesn't contain {tenant}, so the same
-	// handler body backs both forms.
+	// handlers' `getTenantID` falls back to the session's tenant
+	// when the URL doesn't contain {tenant}, so the same handler
+	// body backs both forms; a tenant_id query naming another
+	// tenant is refused by the own-tenant guard, and a request
+	// body naming one by the handler (decodeTenantBody).
 	r.registerFlatRoutes(iamRouter)
 }
 
@@ -122,54 +147,57 @@ func (r *IAMRouter) RegisterRoutes(router *mux.Router) {
 // from the JWT rather than encoding it in every URL.
 func (r *IAMRouter) registerFlatRoutes(router *mux.Router) {
 	// Users
-	router.HandleFunc("/users", r.handlers.CreateUser).Methods("POST")
-	router.HandleFunc("/users", r.handlers.ListUsers).Methods("GET")
-	router.HandleFunc("/users/{id}", r.handlers.GetUser).Methods("GET")
-	router.HandleFunc("/users/{id}", r.handlers.UpdateUser).Methods("PUT")
-	router.HandleFunc("/users/{id}", r.handlers.DeleteUser).Methods("DELETE")
-	router.HandleFunc("/users/{id}/roles/{role}", r.handlers.AssignUserRole).Methods("POST")
-	router.HandleFunc("/users/{id}/roles/{role}", r.handlers.RevokeUserRole).Methods("DELETE")
+	router.Handle("/users", r.tenantScoped(r.handlers.CreateUser)).Methods("POST")
+	router.Handle("/users", r.tenantScoped(r.handlers.ListUsers)).Methods("GET")
+	router.Handle("/users/{id}", r.tenantScoped(r.handlers.GetUser)).Methods("GET")
+	router.Handle("/users/{id}", r.tenantScoped(r.handlers.UpdateUser)).Methods("PUT")
+	router.Handle("/users/{id}", r.tenantScoped(r.handlers.DeleteUser)).Methods("DELETE")
+	router.Handle("/users/{id}/roles/{role}", r.tenantScoped(r.handlers.AssignUserRole)).Methods("POST")
+	router.Handle("/users/{id}/roles/{role}", r.tenantScoped(r.handlers.RevokeUserRole)).Methods("DELETE")
 
 	// Groups
-	router.HandleFunc("/groups", r.handlers.CreateGroup).Methods("POST")
-	router.HandleFunc("/groups", r.handlers.ListGroups).Methods("GET")
-	router.HandleFunc("/groups/{id}", r.handlers.GetGroup).Methods("GET")
-	router.HandleFunc("/groups/{id}", r.handlers.UpdateGroup).Methods("PUT")
-	router.HandleFunc("/groups/{id}", r.handlers.DeleteGroup).Methods("DELETE")
-	router.HandleFunc("/groups/{id}/members/{user}", r.handlers.AddGroupMember).Methods("POST")
-	router.HandleFunc("/groups/{id}/members/{user}", r.handlers.RemoveGroupMember).Methods("DELETE")
+	router.Handle("/groups", r.tenantScoped(r.handlers.CreateGroup)).Methods("POST")
+	router.Handle("/groups", r.tenantScoped(r.handlers.ListGroups)).Methods("GET")
+	router.Handle("/groups/{id}", r.tenantScoped(r.handlers.GetGroup)).Methods("GET")
+	router.Handle("/groups/{id}", r.tenantScoped(r.handlers.UpdateGroup)).Methods("PUT")
+	router.Handle("/groups/{id}", r.tenantScoped(r.handlers.DeleteGroup)).Methods("DELETE")
+	router.Handle("/groups/{id}/members/{user}", r.tenantScoped(r.handlers.AddGroupMember)).Methods("POST")
+	router.Handle("/groups/{id}/members/{user}", r.tenantScoped(r.handlers.RemoveGroupMember)).Methods("DELETE")
 
 	// Roles
-	router.HandleFunc("/roles", r.handlers.CreateRole).Methods("POST")
-	router.HandleFunc("/roles", r.handlers.ListRoles).Methods("GET")
-	router.HandleFunc("/roles/{id}", r.handlers.GetRole).Methods("GET")
-	router.HandleFunc("/roles/{id}", r.handlers.UpdateRole).Methods("PUT")
-	router.HandleFunc("/roles/{id}", r.handlers.DeleteRole).Methods("DELETE")
+	router.Handle("/roles", r.tenantScoped(r.handlers.CreateRole)).Methods("POST")
+	router.Handle("/roles", r.tenantScoped(r.handlers.ListRoles)).Methods("GET")
+	router.Handle("/roles/{id}", r.tenantScoped(r.handlers.GetRole)).Methods("GET")
+	router.Handle("/roles/{id}", r.tenantScoped(r.handlers.UpdateRole)).Methods("PUT")
+	router.Handle("/roles/{id}", r.tenantScoped(r.handlers.DeleteRole)).Methods("DELETE")
 
 	// Policies (special action routes registered before {id} to
 	// avoid conflicts).
-	router.HandleFunc("/policies/validate", r.handlers.ValidatePolicy).Methods("POST")
-	router.HandleFunc("/policies/test", r.handlers.TestPolicy).Methods("POST")
-	router.HandleFunc("/policies", r.handlers.CreatePolicy).Methods("POST")
-	router.HandleFunc("/policies", r.handlers.ListPolicies).Methods("GET")
-	router.HandleFunc("/policies/{id}", r.handlers.GetPolicy).Methods("GET")
-	router.HandleFunc("/policies/{id}", r.handlers.UpdatePolicy).Methods("PUT")
-	router.HandleFunc("/policies/{id}", r.handlers.DeletePolicy).Methods("DELETE")
+	router.Handle("/policies/validate", r.tenantScoped(r.handlers.ValidatePolicy)).Methods("POST")
+	router.Handle("/policies/test", r.tenantScoped(r.handlers.TestPolicy)).Methods("POST")
+	router.Handle("/policies", r.tenantScoped(r.handlers.CreatePolicy)).Methods("POST")
+	router.Handle("/policies", r.tenantScoped(r.handlers.ListPolicies)).Methods("GET")
+	router.Handle("/policies/{id}", r.tenantScoped(r.handlers.GetPolicy)).Methods("GET")
+	router.Handle("/policies/{id}", r.tenantScoped(r.handlers.UpdatePolicy)).Methods("PUT")
+	router.Handle("/policies/{id}", r.tenantScoped(r.handlers.DeletePolicy)).Methods("DELETE")
 
 	// Applications
-	router.HandleFunc("/apps", r.handlers.RegisterApp).Methods("POST")
-	router.HandleFunc("/apps", r.handlers.ListApps).Methods("GET")
-	router.HandleFunc("/apps/{id}", r.handlers.GetApp).Methods("GET")
-	router.HandleFunc("/apps/{id}", r.handlers.UpdateApp).Methods("PUT")
-	router.HandleFunc("/apps/{id}", r.handlers.DeleteApp).Methods("DELETE")
-	router.HandleFunc("/apps/{id}/rotate", r.handlers.RotateAppSecret).Methods("POST")
+	router.Handle("/apps", r.tenantScoped(r.handlers.RegisterApp)).Methods("POST")
+	router.Handle("/apps", r.tenantScoped(r.handlers.ListApps)).Methods("GET")
+	router.Handle("/apps/{id}", r.tenantScoped(r.handlers.GetApp)).Methods("GET")
+	router.Handle("/apps/{id}", r.tenantScoped(r.handlers.UpdateApp)).Methods("PUT")
+	router.Handle("/apps/{id}", r.tenantScoped(r.handlers.DeleteApp)).Methods("DELETE")
+	router.Handle("/apps/{id}/rotate", r.tenantScoped(r.handlers.RotateAppSecret)).Methods("POST")
 }
 
-// tenantScoped wraps a handler whose target tenant comes from the URL's
-// {tenant} variable, requiring it to be the caller's own tenant. Every
+// tenantScoped wraps a handler on which a request can name a tenant,
+// requiring the named tenant to be the caller's own. Every
 // /tenants/{tenant}/<collection> route needs it: the handlers give the
 // path's tenant precedence over the session's, so the admin role alone
 // would let a tenant administrator reach any other tenant by naming it.
+// Every flat route needs it too: there a request names its tenant with the
+// tenant_id query parameter, and a foreign one must be refused rather than
+// silently answered from the session's tenant (#401).
 //
 // It is applied per route rather than on the subtree because the tenant
 // RECORD routes (/tenants/{tenant}) share the same variable but are a

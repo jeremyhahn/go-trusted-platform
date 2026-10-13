@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jeremyhahn/go-luks2/pkg/luks2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
@@ -1087,6 +1088,11 @@ func (c *Config) Validate() error {
 	}
 	if c.Disk.Device == "" {
 		return ErrInvalidConfig("disk device is required")
+	}
+	if enc := c.Disk.Encryption; enc != nil && enc.MappedName != "" {
+		if err := luks2.ValidateMappingName(enc.MappedName); err != nil {
+			return ErrInvalidMappedName(enc.MappedName, err)
+		}
 	}
 	if c.OS == nil {
 		return ErrInvalidConfig("OS configuration is required")

@@ -130,7 +130,8 @@ func (i *installer) releaseDisk(ctx context.Context, info *DiskInfo, ops diskRel
 	if info.MappedDevice != "" {
 		name := i.luksMappedName()
 		i.logger.Info("[INSTALLER] Closing LUKS device", "name", name)
-		if err := ops.lockLUKS(name); err != nil {
+		// A name nothing has open is already released.
+		if err := ops.lockLUKS(name); err != nil && !errors.Is(err, luks2.ErrVolumeNotUnlocked) {
 			failures = append(failures, ErrDiskRelease("closing the LUKS mapping "+name, err))
 		}
 	}
@@ -140,6 +141,51 @@ func (i *installer) releaseDisk(ctx context.Context, info *DiskInfo, ops diskRel
 		return errors.Join(failures...)
 	}
 	i.logger.Info("[INSTALLER] Disk resources released")
+	return nil
+}
+
+// installLUKSCloseAttempts bounds closing the root mapping at the end of an
+// install. go-luks2 v0.2.0's Lock already retries a busy mapping for about 3s
+// before it returns luks2.ErrMappingBusy, so three attempts with a 1s and a 2s
+// backoff give about 12s.
+const installLUKSCloseAttempts = 3
+
+// closeInstalledLUKS closes the root LUKS mapping at the end of a successful
+// install; the close is what flushes the encrypted data. Only a busy mapping is
+// retried, and a name nothing has open is already closed. When Lock gives up,
+// the mapping is removed through device-mapper directly. The only error is a
+// cancelled ctx.
+func (i *installer) closeInstalledLUKS(ctx context.Context, name string, ops diskRelease, backoff time.Duration) error {
+	var lockErr error
+	for attempt := 1; attempt <= installLUKSCloseAttempts; attempt++ {
+		i.logger.Info("[INSTALLER] Closing LUKS device", "name", name, "attempt", attempt)
+		lockErr = ops.lockLUKS(name)
+		if lockErr == nil || errors.Is(lockErr, luks2.ErrVolumeNotUnlocked) {
+			i.logger.Info("[INSTALLER] LUKS device closed", "name", name)
+			return nil
+		}
+		i.logger.Warn("[INSTALLER] Failed to close LUKS device", "error", lockErr, "attempt", attempt)
+		if !errors.Is(lockErr, luks2.ErrMappingBusy) || attempt == installLUKSCloseAttempts {
+			break
+		}
+		// The wait is cancellable so a cancelled install stops writing to
+		// disks instead of running out the backoff.
+		select {
+		case <-ctx.Done():
+			i.logger.Warn("[INSTALLER] cancelled while waiting to retry LUKS close", "error", ctx.Err())
+			return ctx.Err()
+		case <-time.After(time.Duration(attempt) * backoff):
+		}
+		unix.Sync()
+	}
+
+	i.logger.Warn("[INSTALLER] LUKS close failed, trying devmapper.Remove directly", "name", name, "error", lockErr)
+	unix.Sync()
+	if err := ops.removeDM(name); err != nil {
+		i.logger.Warn("[INSTALLER] devmapper.Remove failed - DATA MAY NOT BE PERSISTED!", "device", name, "error", err)
+		return nil
+	}
+	i.logger.Info("[INSTALLER] devmapper.Remove succeeded", "name", name)
 	return nil
 }
 

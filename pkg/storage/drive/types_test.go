@@ -14,7 +14,10 @@
 package drive
 
 import (
+	"errors"
 	"testing"
+
+	"github.com/jeremyhahn/go-luks2/pkg/luks2"
 )
 
 func TestDefaultStorageConfig(t *testing.T) {
@@ -278,6 +281,24 @@ func TestPartitionConfigValidate(t *testing.T) {
 			partition:   &PartitionConfig{ID: "root", Number: 1, Size: "100%"},
 			expectError: nil,
 		},
+		{
+			name: "encrypted partition without a mapping name",
+			partition: &PartitionConfig{ID: "data", Number: 2, Size: "100%",
+				Encryption: &EncryptionConfig{Enabled: true}},
+			expectError: ErrEncryptionMappingNameRequired,
+		},
+		{
+			name: "encrypted partition with a valid mapping name",
+			partition: &PartitionConfig{ID: "data", Number: 2, Size: "100%",
+				Encryption: &EncryptionConfig{Enabled: true, MappingName: "cryptdata"}},
+			expectError: nil,
+		},
+		{
+			name: "disabled encryption needs no mapping name",
+			partition: &PartitionConfig{ID: "data", Number: 2, Size: "100%",
+				Encryption: &EncryptionConfig{Enabled: false}},
+			expectError: nil,
+		},
 	}
 
 	for _, tt := range tests {
@@ -294,6 +315,39 @@ func TestPartitionConfigValidate(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// go-luks2 v0.1.10 made Unlock refuse names device-mapper would mangle. The
+// initrd formats an encrypted partition before it unlocks it under this name,
+// so the name must be refused here, before the drive is wiped.
+func TestPartitionConfigValidate_RejectsMappingNamesUnlockWouldRefuse(t *testing.T) {
+	for _, name := range []string{"-data", "crypt/data", "crypt data", "../cryptdata"} {
+		part := &PartitionConfig{ID: "data", Number: 2, Size: "100%",
+			Encryption: &EncryptionConfig{Enabled: true, MappingName: name}}
+
+		err := part.Validate()
+
+		var invalid *InvalidMappingNameError
+		if !errors.As(err, &invalid) || invalid.PartitionID != "data" || invalid.Name != name {
+			t.Errorf("Validate() error for mapping-name %q = %v, want an InvalidMappingNameError naming partition data", name, err)
+			continue
+		}
+		if !errors.Is(err, luks2.ErrInvalidMappingName) {
+			t.Errorf("Validate() error for mapping-name %q = %v, want it to wrap luks2.ErrInvalidMappingName", name, err)
+		}
+	}
+}
+
+func TestInvalidMappingNameError(t *testing.T) {
+	cause := errors.New("bad name")
+	err := &InvalidMappingNameError{PartitionID: "data", Name: "crypt/data", Err: cause}
+
+	if !errors.Is(err, cause) {
+		t.Fatalf("InvalidMappingNameError does not unwrap to its cause")
+	}
+	if want := `partition data: invalid encryption mapping-name "crypt/data": bad name`; err.Error() != want {
+		t.Fatalf("Error() = %q, want %q", err.Error(), want)
 	}
 }
 
