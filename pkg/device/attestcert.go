@@ -180,9 +180,12 @@ func WithAttestCertClock(now func() time.Time) AttestCertRecorderOption {
 // than the device's attestation key fails every quote signature the same
 // way. The recorder therefore fails closed: it writes only a certificate
 // that parses, chains to the platform CA, carries the attribute and
-// certifies the device's enrolled attestation public key — the same
-// vm.VerifyAKCertificate the verifier runs, so the two agree by
-// construction. There is no override.
+// certifies the device's enrolled attestation public key — the chain and
+// the 2.23.133.11.1.3 attribute the verifier's attested-peer check demands.
+// It runs them through vm.VerifyAKCertificate rather than that check itself:
+// the standalone certificate check (go-xkms PeerVerifyIAK) is not yet
+// re-exported by go-quicbaas, and the verdict carries no typed refusal for
+// the recorder to report (#482). There is no override.
 type AttestCertRecorder struct {
 	devices DeviceService
 	ca      AttestationCertificateAuthority
@@ -380,8 +383,8 @@ func (r *AttestCertRecorder) record(ctx context.Context, dev *entities.Device, r
 }
 
 // preflight is the fail-closed gate: parse, chain, tcg-cap-verifiedTPMRestricted
-// (all three via the verifier's own VerifyAKCertificate) and then that the
-// certified key is the device's enrolled attestation key.
+// (all three via vm.VerifyAKCertificate) and then that the certified key is
+// the device's enrolled attestation key.
 func (r *AttestCertRecorder) preflight(certPEM []byte, roots, intermediates *x509.CertPool, expected crypto.PublicKey) (*x509.Certificate, error) {
 	certified, err := vm.VerifyAKCertificate(certPEM, roots, intermediates, r.now())
 	if err != nil {

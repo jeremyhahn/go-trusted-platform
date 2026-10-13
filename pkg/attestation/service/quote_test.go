@@ -19,6 +19,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"errors"
@@ -31,6 +32,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/store"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
@@ -41,8 +43,10 @@ import (
 // checked by the same vm verifier the control plane uses — the test proves
 // the round trip, not that two fakes agree with each other.
 type fakeQuoter struct {
-	key    *ecdsa.PrivateKey
-	values map[int][]byte // the "TPM's" PCR values, sha256 bank
+	key    crypto.Signer           // the IAK
+	opts   crypto.SignerOpts       // the IAK's signing scheme
+	sigAlg x509.SignatureAlgorithm // what IAKAttributes declares
+	values map[int][]byte          // the "TPM's" PCR values, sha256 bank
 
 	// knobs
 	echoNonce    []byte // when non-nil, returned instead of the caller's nonce
@@ -66,7 +70,20 @@ func newFakeQuoter(t *testing.T) *fakeQuoter {
 	// "SHA256" is the label go-xkms actually puts on the bank (the TPM spec
 	// spelling); the manifest vocabulary is lowercase. The default fake uses
 	// the real label so the suite exercises the same shape the fleet does.
-	return &fakeQuoter{key: key, values: values, bankLabel: "SHA256"}
+	return &fakeQuoter{key: key, opts: crypto.SHA256, sigAlg: x509.ECDSAWithSHA256, values: values, bankLabel: "SHA256"}
+}
+
+// newRSAPSSFakeQuoter is a fakeQuoter whose IAK is an RSA key that signs its
+// quotes RSASSA-PSS, as an IAK with an RSA-PSS signature algorithm does.
+func newRSAPSSFakeQuoter(t *testing.T) *fakeQuoter {
+	t.Helper()
+	q := newFakeQuoter(t)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	q.key = key
+	q.opts = &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: crypto.SHA256}
+	q.sigAlg = x509.SHA256WithRSAPSS
+	return q
 }
 
 func (f *fakeQuoter) Quote(pcrs []uint, nonce []byte) (xkmssdk.Quote, error) {
@@ -100,8 +117,9 @@ func (f *fakeQuoter) Quote(pcrs []uint, nonce []byte) (xkmssdk.Quote, error) {
 		}),
 	}
 	quoted := tpm2.Marshal(attest)
-	digest := sha256.Sum256(quoted)
-	sig, err := ecdsa.SignASN1(rand.Reader, f.key, digest[:])
+	digest := f.opts.HashFunc().New()
+	digest.Write(quoted)
+	sig, err := f.key.Sign(rand.Reader, digest.Sum(nil), f.opts)
 	if err != nil {
 		return xkmssdk.Quote{}, err
 	}
@@ -129,10 +147,10 @@ func (f *fakeQuoter) ReadPCRs(pcrList []uint) ([]xkmssdk.PCRBank, error) {
 	return []xkmssdk.PCRBank{bank}, nil
 }
 
-func (f *fakeQuoter) IAK() (crypto.PublicKey, error) { return &f.key.PublicKey, nil }
+func (f *fakeQuoter) IAK() (crypto.PublicKey, error) { return f.key.Public(), nil }
 
 func (f *fakeQuoter) IAKAttributes() (*xkmssdk.KeyAttributes, error) {
-	return &xkmssdk.KeyAttributes{SignatureAlgorithm: x509.ECDSAWithSHA256}, nil
+	return &xkmssdk.KeyAttributes{SignatureAlgorithm: f.sigAlg}, nil
 }
 
 // newTestStore is a real file store on a temp dir: the service package has
@@ -162,7 +180,7 @@ func TestCollectHostAttestation_ProducesEvidenceTheVerifierAccepts(t *testing.T)
 	require.NoError(t, err)
 
 	// The same three checks the control plane's verifier runs.
-	require.NoError(t, vm.VerifyQuoteSignature(att.AKPublicKey, att.QuoteData, att.Signature), "signature over the quote")
+	require.NoError(t, vm.VerifyQuoteSignatureWithAlgorithm(att.AKPublicKey, att.QuoteData, att.Signature, att.SignatureAlgorithm), "signature over the quote")
 	require.NoError(t, vm.VerifyQuoteNonce(att.QuoteData, nonce), "the caller's nonce, embedded")
 	reported := map[int][]byte{}
 	for _, p := range att.PCRs {
@@ -189,6 +207,112 @@ func TestGetQuote_IsTheSameQuoteShapedForTheDaemon(t *testing.T) {
 	// No selection given: the manifest default (boot chain + workload PCR).
 	assert.Equal(t, manifest.DefaultManifestConfig().DefaultPCRIndices, indicesOf(res.PCRValues))
 	assert.Equal(t, []byte("evlog"), res.EventLog)
+	assert.Equal(t, "ECDSA-SHA256", res.SignatureAlgorithm, "the quote declares the IAK's signing scheme")
+}
+
+// boundQuote has the fake TPM quote nonce bound to binding, as a node does
+// over a TLS connection, and returns the quote with its AK public key.
+func boundQuote(t *testing.T, svc *Service, nonce, binding []byte) (*daemon.QuoteResult, []byte) {
+	t.Helper()
+	qualifying, err := channelbind.ExpectedQualifyingData(nonce, binding)
+	require.NoError(t, err)
+	att, err := svc.CollectHostAttestation(context.Background(), &daemon.QuoteConfig{PCRIndices: []int{7}}, qualifying)
+	require.NoError(t, err)
+	return &daemon.QuoteResult{
+		QuoteData:          att.QuoteData,
+		Signature:          att.Signature,
+		PCRValues:          att.PCRs,
+		SignatureAlgorithm: att.SignatureAlgorithm,
+	}, att.AKPublicKey
+}
+
+func TestVerifyQuote_AcceptsTheBoundEcho(t *testing.T) {
+	svc := newQuoteService(t, newFakeQuoter(t))
+	nonce := []byte("verifier-chosen-nonce-0123456789")
+	binding := []byte("connection-A-exporter-0123456789")
+	quote, ak := boundQuote(t, svc, nonce, binding)
+	expected, err := channelbind.ExpectedQualifyingData(nonce, binding)
+	require.NoError(t, err)
+
+	res, err := svc.VerifyQuote(context.Background(), quote, ak, expected, quote.PCRValues)
+
+	require.NoError(t, err)
+	assert.True(t, res.Verified, res.Message)
+}
+
+// TestVerifyQuote_RejectsAQuoteBoundToAnotherConnection is #482 on the
+// verifier side: a quote a relay obtained over its own connection carries
+// that connection's binding, and neither the bare nonce nor the caller's
+// own binding matches it.
+func TestVerifyQuote_RejectsAQuoteBoundToAnotherConnection(t *testing.T) {
+	svc := newQuoteService(t, newFakeQuoter(t))
+	nonce := []byte("verifier-chosen-nonce-0123456789")
+	quote, ak := boundQuote(t, svc, nonce, []byte("connection-B-exporter-0123456789"))
+	callers, err := channelbind.ExpectedQualifyingData(nonce, []byte("connection-A-exporter-0123456789"))
+	require.NoError(t, err)
+
+	for name, expected := range map[string][]byte{"the caller's binding": callers, "the bare nonce": nonce} {
+		t.Run(name, func(t *testing.T) {
+			res, err := svc.VerifyQuote(context.Background(), quote, ak, expected, nil)
+			require.NoError(t, err)
+			assert.False(t, res.Verified)
+			assert.Contains(t, res.Message, "nonce")
+		})
+	}
+}
+
+func TestVerifyQuote_RejectsASignatureTheAKDidNotMake(t *testing.T) {
+	svc := newQuoteService(t, newFakeQuoter(t))
+	quote, _ := boundQuote(t, svc, []byte("n"), nil)
+	_, otherAK := boundQuote(t, newQuoteService(t, newFakeQuoter(t)), []byte("n"), nil)
+
+	res, err := svc.VerifyQuote(context.Background(), quote, otherAK, nil, nil)
+
+	require.NoError(t, err)
+	assert.False(t, res.Verified)
+	assert.Contains(t, res.Message, "signature")
+}
+
+// An RSA IAK whose signature algorithm is RSA-PSS signs its quotes RSASSA-PSS.
+// VerifyQuote must accept the quote GetQuote produced, which it cannot do by
+// checking every RSA signature as PKCS#1 v1.5.
+func TestVerifyQuote_AcceptsAnRSAPSSQuote(t *testing.T) {
+	svc := newQuoteService(t, newRSAPSSFakeQuoter(t))
+	quote, ak := boundQuote(t, svc, []byte("n"), nil)
+	require.Equal(t, "SHA256-RSAPSS", quote.SignatureAlgorithm)
+
+	res, err := svc.VerifyQuote(context.Background(), quote, ak, nil, quote.PCRValues)
+
+	require.NoError(t, err)
+	assert.True(t, res.Verified, res.Message)
+}
+
+// The declared scheme is the one checked, and a quote that declares none or
+// one the verifier has no scheme for is rejected rather than guessed at.
+func TestVerifyQuote_RejectsAQuoteUnderAnyOtherScheme(t *testing.T) {
+	svc := newQuoteService(t, newRSAPSSFakeQuoter(t))
+
+	tests := []struct {
+		algorithm   string
+		wantMessage string
+	}{
+		{"SHA256-RSA", "RSA signature verification failed"},
+		{"ECDSA-SHA256", "cannot be verified"},
+		{"", "unsupported quote signature algorithm"},
+		{"SHA1-RSA", "unsupported quote signature algorithm"},
+	}
+	for _, tt := range tests {
+		t.Run("declared "+tt.algorithm, func(t *testing.T) {
+			quote, ak := boundQuote(t, svc, []byte("n"), nil)
+			quote.SignatureAlgorithm = tt.algorithm
+
+			res, err := svc.VerifyQuote(context.Background(), quote, ak, nil, nil)
+
+			require.NoError(t, err)
+			assert.False(t, res.Verified)
+			assert.Contains(t, res.Message, tt.wantMessage)
+		})
+	}
 }
 
 func TestHostQuote_WithoutATPMStaysHonest(t *testing.T) {

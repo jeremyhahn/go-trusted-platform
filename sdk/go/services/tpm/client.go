@@ -18,6 +18,7 @@ import (
 	"context"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/quotebind"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/common"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
 )
@@ -247,22 +248,33 @@ func (c *Client) Unseal(ctx context.Context, req *platformv1.UnsealRequest) ([]b
 
 // Attestation Operations
 
-// Quote generates a TPM quote.
+// Quote generates a TPM quote over nonce bound to the connection the call
+// travels on (#482): the daemon quotes SHA-256(nonce || channel_binding)
+// and echoes channel_binding, and the response is returned only if both
+// match the binding this end derives. A quote relayed from another
+// connection is refused with *quotebind.ErrQuoteNotBound; transports with
+// no TLS 1.3 connection refuse the call.
 func (c *Client) Quote(ctx context.Context, akHandle uint32, akPassword string, pcrIndices []uint32, pcrBank platformv1.PCRBank, nonce []byte) (*platformv1.QuoteResponse, error) {
+	var capture quotebind.Capture
 	resp, err := c.grpc.Quote(ctx, &platformv1.QuoteRequest{
 		AkHandle:   akHandle,
 		AkPassword: akPassword,
 		PcrIndices: pcrIndices,
 		PcrBank:    pcrBank,
 		Nonce:      nonce,
-	})
+	}, capture.Option())
 	if err != nil {
+		return nil, &ErrQuoteFailed{Cause: err}
+	}
+	if err := capture.CheckEcho(nonce, resp.GetChannelBinding(), resp.GetQuote()); err != nil {
 		return nil, &ErrQuoteFailed{Cause: err}
 	}
 	return resp, nil
 }
 
-// VerifyQuote verifies a TPM quote.
+// VerifyQuote verifies a TPM quote. For a quote Quote returned, set
+// channel_binding to the binding it echoed: the daemon then expects
+// SHA-256(nonce || channel_binding).
 func (c *Client) VerifyQuote(ctx context.Context, req *platformv1.VerifyQuoteRequest) (*platformv1.VerifyQuoteResponse, error) {
 	resp, err := c.grpc.VerifyQuote(ctx, req)
 	if err != nil {

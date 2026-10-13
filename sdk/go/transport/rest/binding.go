@@ -62,7 +62,7 @@ func (b *boundConnection) release() error {
 // HTTP client that sends the bound request on it. The daemon's REST
 // handler reads the exporter from the connection that carries the
 // request, so the proof bind computes here is the one it checks.
-func (a *Adapter) bindChannel(ctx context.Context, bind transport.BindFunc) (*boundConnection, error) {
+func (a *Adapter) bindChannel(ctx context.Context, bind transport.ChannelBinder) (*boundConnection, error) {
 	if a.closed.Load() {
 		return nil, ErrClientClosed{}
 	}

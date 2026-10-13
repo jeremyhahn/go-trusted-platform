@@ -48,12 +48,12 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
 	github.com/insomniacslk/dhcp v0.0.0-20251020182700-175e84fbb167
-	github.com/jeremyhahn/arduino-generic/sdk/go v0.6.0-alpha
 	github.com/jeremyhahn/go-codec v1.4.0
 	github.com/jeremyhahn/go-luks2 v0.2.0-alpha
 	github.com/jeremyhahn/go-quicbaas v0.12.0-alpha
 	github.com/jeremyhahn/go-quicbaas/sdk/go v0.12.0-alpha
 	github.com/jeremyhahn/go-trusted-platform/sdk/go v0.1.0-alpha
+	github.com/jeremyhahn/trusted-firmware/sdk/go v0.3.0-alpha
 	github.com/klauspost/compress v1.19.1
 	github.com/libp2p/go-libp2p v0.46.0
 	github.com/libp2p/go-libp2p-kad-dht v0.37.0
@@ -71,8 +71,8 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/spf13/viper v1.21.0
-	github.com/strongswan/govici v0.8.2
 	github.com/stretchr/testify v1.12.1
+	github.com/strongswan/govici v0.8.2
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
 	github.com/wailsapp/wails/v2 v2.12.0

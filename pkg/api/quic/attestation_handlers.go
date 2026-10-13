@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -725,6 +726,14 @@ func (h *AttestationHandler) handleCollectHostAttestation(ctx context.Context, r
 	opts, err := h.parseCollectOptions(&collectReq)
 	if err != nil {
 		return h.errorResponse(quicwire.StatusInvalidArgument, err)
+	}
+
+	// Quote the nonce bound to this connection, never the nonce as sent
+	// (#482): a relay forwarding a collector's nonce over a second connection
+	// gets a quote the collector refuses.
+	opts.Nonce, err = channelbind.QualifyingData(ConnectionTLS(ctx), channelbind.TransportQUIC, opts.Nonce)
+	if err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, err)
 	}
 
 	attestation, err := h.service.CollectHostAttestation(ctx, opts)

@@ -162,7 +162,7 @@ func (v *Verifier) checkIssuer(trusted []string, info *bmcattestation.Measuremen
 }
 
 // checkReference runs the golden-build comparison. This is where
-// arduino-generic's reproducible FWHash lands.
+// trusted-firmware's reproducible FWHash lands.
 func (v *Verifier) checkReference(ctx context.Context, live, ref *bmcattestation.Evidence, fail func(rule, detail string)) {
 	cmp, err := v.provider.Compare(ctx, live, ref)
 	if err != nil {

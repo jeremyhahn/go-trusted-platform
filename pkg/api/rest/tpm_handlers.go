@@ -31,6 +31,7 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 	attestvm "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
 )
 
@@ -208,21 +209,28 @@ type TPMQuoteRequest struct {
 }
 
 // TPMQuoteResponse represents a TPM quote response.
+// ChannelBinding is the TLS exporter of the connection the request arrived
+// on; the TPM quoted SHA-256(nonce || ChannelBinding), never the nonce as
+// sent (#482).
 type TPMQuoteResponse struct {
-	Quote     string    `json:"quote"`
-	Signature string    `json:"signature"`
-	EventLog  string    `json:"event_log,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
+	Quote          string    `json:"quote"`
+	Signature      string    `json:"signature"`
+	EventLog       string    `json:"event_log,omitempty"`
+	ChannelBinding string    `json:"channel_binding"`
+	Timestamp      time.Time `json:"timestamp"`
 }
 
 // TPMVerifyQuoteRequest represents a TPM quote verification request. All
 // binary fields are base64-encoded. ak_public (PKIX/PEM DER) is
 // optional; when omitted the platform's provisioned IAK is used.
+// channel_binding, when set, is the binding the quote was produced under;
+// the quote must then carry SHA-256(nonce || channel_binding).
 type TPMVerifyQuoteRequest struct {
-	Quote     string `json:"quote"`
-	Signature string `json:"signature"`
-	Nonce     string `json:"nonce,omitempty"`
-	AKPublic  string `json:"ak_public,omitempty"`
+	Quote          string `json:"quote"`
+	Signature      string `json:"signature"`
+	Nonce          string `json:"nonce,omitempty"`
+	AKPublic       string `json:"ak_public,omitempty"`
+	ChannelBinding string `json:"channel_binding,omitempty"`
 }
 
 // TPMVerifyQuoteResponse represents a TPM quote verification result.
@@ -299,11 +307,14 @@ type TPMCertifyRequest struct {
 	Nonce  string `json:"nonce,omitempty"`
 }
 
-// TPMCertifyResponse represents a TPM certify response.
+// TPMCertifyResponse represents a TPM certify response. When the request
+// carried a nonce, ChannelBinding is the TLS exporter of its connection and
+// the TPM certified SHA-256(nonce || ChannelBinding) (#482).
 type TPMCertifyResponse struct {
-	CertifyInfo string    `json:"certify_info"`
-	Signature   string    `json:"signature"`
-	Timestamp   time.Time `json:"timestamp"`
+	CertifyInfo    string    `json:"certify_info"`
+	Signature      string    `json:"signature"`
+	ChannelBinding string    `json:"channel_binding,omitempty"`
+	Timestamp      time.Time `json:"timestamp"`
 }
 
 // TPMNVReadRequest represents an NV read request.
@@ -1133,7 +1144,16 @@ func (h *TPMHandlers) handleQuote(w http.ResponseWriter, r *http.Request) {
 		pcrs[i] = uint(pcr)
 	}
 
-	quote, err := tpm.Quote(pcrs, nonce)
+	// Quote the nonce bound to this connection, never the nonce as sent
+	// (#482): a relay forwarding a caller's nonce over a second connection
+	// gets a quote the caller refuses.
+	bound, err := channelbind.Bind(r.TLS, channelbind.TransportREST, nonce)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	quote, err := tpm.Quote(pcrs, bound.QualifyingData)
 	if err != nil {
 		h.logger.Error("TPM Quote failed", "error", err)
 		h.writeTPMError(w, "quote", err)
@@ -1141,9 +1161,10 @@ func (h *TPMHandlers) handleQuote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := TPMQuoteResponse{
-		Quote:     base64.StdEncoding.EncodeToString(quote.Quoted),
-		Signature: base64.StdEncoding.EncodeToString(quote.Signature),
-		Timestamp: time.Now().UTC(),
+		Quote:          base64.StdEncoding.EncodeToString(quote.Quoted),
+		Signature:      base64.StdEncoding.EncodeToString(quote.Signature),
+		ChannelBinding: base64.StdEncoding.EncodeToString(bound.Binding),
+		Timestamp:      time.Now().UTC(),
 	}
 	if len(quote.EventLog) > 0 {
 		resp.EventLog = base64.StdEncoding.EncodeToString(quote.EventLog)
@@ -1200,6 +1221,21 @@ func (h *TPMHandlers) handleVerifyQuote(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+	var binding []byte
+	if req.ChannelBinding != "" {
+		binding, err = base64.StdEncoding.DecodeString(req.ChannelBinding)
+		if err != nil {
+			h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: "invalid base64 channel_binding"})
+			return
+		}
+	}
+	// A quote the node produced over a bound connection carries
+	// SHA-256(nonce || binding), not the nonce itself.
+	expectedNonce, err := channelbind.ExpectedQualifyingData(nonce, binding)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	var akPublic []byte
 	if req.AKPublic != "" {
 		akPublic, err = base64.StdEncoding.DecodeString(req.AKPublic)
@@ -1232,8 +1268,8 @@ func (h *TPMHandlers) handleVerifyQuote(w http.ResponseWriter, r *http.Request) 
 		akPublic = der
 	}
 
-	if len(nonce) > 0 {
-		if err := attestvm.VerifyQuoteNonce(quote, nonce); err != nil {
+	if len(expectedNonce) > 0 {
+		if err := attestvm.VerifyQuoteNonce(quote, expectedNonce); err != nil {
 			h.writeJSON(w, http.StatusOK, TPMVerifyQuoteResponse{
 				Verified:  false,
 				Message:   "nonce_verification_failed: " + err.Error(),
@@ -1289,6 +1325,18 @@ func (h *TPMHandlers) handleCertify(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// A caller's nonce is certified bound to this connection, as a quote's
+	// is (#482); with no nonce there is no caller-chosen data to bind.
+	var qualifying, binding []byte
+	if len(nonce) > 0 {
+		bound, bindErr := channelbind.Bind(r.TLS, channelbind.TransportREST, nonce)
+		if bindErr != nil {
+			h.writeError(w, http.StatusBadRequest, bindErr)
+			return
+		}
+		qualifying, binding = bound.QualifyingData, bound.Binding
+	}
+
 	keyAttrs, err := tpm.KeyAttributes(xkmssdk.TPMHandle(req.Handle))
 	if err != nil {
 		h.logger.Error("Failed to get key attributes for certify", "error", err, "handle", req.Handle)
@@ -1296,7 +1344,7 @@ func (h *TPMHandlers) handleCertify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := tpm.CertifyKey(keyAttrs, nonce, nil)
+	result, err := tpm.CertifyKey(keyAttrs, qualifying, nil)
 	if err != nil {
 		h.logger.Error("TPM Certify failed", "error", err, "handle", req.Handle)
 		h.writeTPMError(w, "certify", err)
@@ -1304,9 +1352,10 @@ func (h *TPMHandlers) handleCertify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.writeJSON(w, http.StatusOK, TPMCertifyResponse{
-		CertifyInfo: base64.StdEncoding.EncodeToString(result.CertifyInfo),
-		Signature:   base64.StdEncoding.EncodeToString(result.Signature),
-		Timestamp:   time.Now().UTC(),
+		CertifyInfo:    base64.StdEncoding.EncodeToString(result.CertifyInfo),
+		Signature:      base64.StdEncoding.EncodeToString(result.Signature),
+		ChannelBinding: base64.StdEncoding.EncodeToString(binding),
+		Timestamp:      time.Now().UTC(),
 	})
 }
 

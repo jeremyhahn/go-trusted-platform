@@ -38,9 +38,9 @@ MCP: fifteen `attestation_*` tools.
 | Build manifest | `POST /api/v1/attestation/manifests/build` | `BuildManifest` | `OpAttestBuildManifest` (`0x7C`) | `attestation_create_manifest` | ✅ |
 | Verify manifest | `POST /api/v1/attestation/manifests/verify` | `VerifyManifest` | `OpAttestVerifyManifest` (`0x7D`) | `attestation_verify_manifest` | ✅ |
 | Delete manifest | `DELETE /api/v1/attestation/manifests/{id}` | `DeleteManifest` | `MISSING — docs/13 G7` | `attestation_delete_manifest` | ✅ |
-| Get quote | `POST /api/v1/attestation/quote` | `GetAttestationQuote` | `OpAttestQuote` (`0x70`) | `MISSING — docs/13 G7` | ✅ |
+| Get quote (TLS only — §5.1a) | `POST /api/v1/attestation/quote` | `GetAttestationQuote` (refused over Unix) | `OpAttestQuote` (`0x70`) | `MISSING — docs/13 G7` | refused — no TLS (§5.1a) |
 | Verify quote | `POST /api/v1/attestation/quote/verify` | `VerifyAttestationQuote` | `OpAttestVerify` (`0x71`) | `MISSING — docs/13 G7` | ✅ |
-| Collect host attestation | `POST /api/v1/attestation/host` | `CollectHostAttestation` | `OpAttestHost` (`0x7E`), `OpAttestCollectHost` (`0x72`) | `MISSING — docs/13 G7` | ✅ |
+| Collect host attestation (TLS only — §5.1a) | `POST /api/v1/attestation/host` | `CollectHostAttestation` (refused over Unix) | `OpAttestHost` (`0x7E`), `OpAttestCollectHost` (`0x72`) | `MISSING — docs/13 G7` | refused — no TLS (§5.1a) |
 | Collect VM attestation | `POST /api/v1/attestation/vm/{id}` | `CollectVMAttestation` | `OpAttestVMWorkload` (`0x7F`) | `MISSING — docs/13 G7` | ✅ |
 | Collect container attestation | `POST /api/v1/attestation/container/{id}` | `CollectContainerAttestation` | `OpAttestContainerWorkload` (`0xED`) | `MISSING — docs/13 G7` | ✅ |
 | Attest a workload | `MISSING — docs/13 G7` | (covered by the two Collect RPCs) | `OpAttestDeviceWorkload` (`0xEE`) | `attestation_attest_workload` | — |
@@ -162,14 +162,89 @@ cache-and-gate design ([architecture.md](architecture.md), design of record)
 exists to prevent.
 
 **Request contract.** `POST /attestation/host` decodes a protobuf-JSON
-`CollectHostAttestationRequest`: `nonce` (base64, **required** — the TPM signs
-it and the caller checks the echo) and `config` (`AttestationQuoteConfig`,
-**optional**). An absent or empty `config` asks for the node's default PCR
+`CollectHostAttestationRequest`: `nonce` (base64, **required** — the bare
+challenge; the node binds it to the connection before quoting, §5.1a) and
+`config` (`AttestationQuoteConfig`, **optional**). An absent or empty `config` asks for the node's default PCR
 selection (`DefaultPCRIndices`, 0–7 and 14); `config.pcrIndices` narrows it. The
 collector always sends a `config` object, empty when it has no selection —
 measured 2026-09-05, the handler had required the field and every collection
 on the fleet answered `400 quote config is required` while the service would
 have defaulted it.
+
+### 5.1a Every node quote is bound to the connection it arrives on (#482)
+
+The node, not the caller, binds the quote. On every transport that serves a
+quote, the node derives the channel binding from **its own end of the
+connection the request arrived on** — 32 bytes of TLS exporter output under
+`xkms.PeerChannelBindingExporterLabel` (`xkms.PeerChannelBinding`) — and the
+TPM quotes `QualifyingData(nonce, binding)` = SHA-256(nonce ‖ binding)
+(`xkms.PeerQualifyingData`), never the nonce as sent. The rule covers every
+operation that has the node's TPM sign a caller's nonce:
+
+| Operation | Endpoints | The node returns |
+|---|---|---|
+| Collect host attestation | REST `POST /api/v1/attestation/host`; gRPC `CollectHostAttestation`; QUIC `0x72` (daemon), `0x7E` (`pkg/api/quic`) | `attestation.nonce` = the value quoted |
+| Get quote | REST `POST /api/v1/attestation/quote`; gRPC and Unix `GetAttestationQuote`; QUIC `0x70` | `channel_binding` beside the quote |
+| TPM quote | REST `POST /api/v1/tpm/quote` (webservice and daemon REST); gRPC and Unix `TPMService.Quote`; QUIC `0x99`·`0x0F`; MCP `platform_tpm_quote` | `channel_binding` beside the quote |
+| TPM certify with a nonce | daemon REST `POST /api/v1/tpm/certify` | `channel_binding` beside the certify structure |
+
+The caller derives the binding from its own end of the same connection and
+accepts the quote only when its qualifying data (the TPMS_ATTEST `extraData`)
+equals `QualifyingData(nonce, its binding)`. The collector reports anything else
+as `reporting.ErrQuoteNotBound`, the cause of `ErrNodeUnreachable`; the Go SDK
+as `quotebind.ErrQuoteNotBound`, wrapped in the client's `ErrGetQuoteFailed` /
+`ErrQuoteFailed` / `ErrCollectHostAttestationFailed`. The echoed `channel_binding` is only
+compared against the caller's own, never trusted: a relay can rewrite it.
+
+**Why the node derives it.** Were the caller to send the bound value, or were
+the node to quote the nonce as sent, a relay — any endpoint with a valid
+certificate — could forward the caller's nonce unchanged to a healthy node over
+a second connection and hand back a quote that passes. With the node deriving,
+the relay's forward lands on connection B and the quote is bound to B; the
+caller holds A, so the relay cannot pass off another node's attested state as
+its own (`TestCollectHost_RelayedQuoteIsRejected`,
+`TestGetAttestationQuote_RelayedQuoteIsRejected`).
+
+| Transport | Binding taken from | No binding available |
+|---|---|---|
+| REST | the request's `http.Request.TLS` | plain HTTP, or an exporter that refuses → `400` |
+| gRPC | the peer's `credentials.TLSInfo` | exporter refuses → `FailedPrecondition` |
+| QUIC | the QUIC connection's TLS state | exporter refuses → `StatusInvalidRequest` |
+| MCP over HTTPS | the request's `http.Request.TLS` | plain HTTP → tool error |
+| MCP over stdio | — (no TLS) | always refused (tool error) |
+| Unix socket, embedded | — (no TLS) | always refused (`FailedPrecondition`) |
+
+A request with no binding is refused with
+`channelbind.ErrChannelBindingRequired` (it names the transport) before the
+TPM is touched; the node never falls back to quoting the bare nonce, since a
+bare quote is exactly what a relay needs. The SDK refuses the same calls on
+its side before sending them: over Unix, MCP and embedded it returns
+`transport.ErrChannelBindingUnavailable`, since it has no connection of its own
+to check the echo against.
+
+**Verifying a bound quote.** `VerifyAttestationQuote` and `TPMService.VerifyQuote`
+take an optional `channel_binding`. With it, the expected qualifying data is
+`QualifyingData(expected_nonce, channel_binding)`; without it, the bare nonce.
+`channel_binding` without a nonce is `InvalidArgument`. A verify request is a
+signature check, not channel proof: the verifier that accepts a quote as
+evidence of a peer — the reporting collector — derives the binding itself.
+
+**Signature scheme.** `AttestationQuote.signature_algorithm` names the scheme
+the AK signed under, as `x509.SignatureAlgorithm` names it (`SHA256-RSA`,
+`SHA256-RSAPSS`, `ECDSA-SHA256`, and their SHA-384/512 forms).
+`GetAttestationQuote` fills it from the IAK; pass the returned quote to
+`VerifyAttestationQuote` unchanged (`platformctl`'s binding takes it as an
+argument). The signature is checked under that scheme only. A quote that
+declares no scheme or an unknown one is refused as
+`vm.ErrUnsupportedSignatureAlgorithm`; one whose scheme the AK key cannot
+carry, as `vm.ErrSignatureSchemeMismatch` — never retried under another
+scheme. See [engineering.md](engineering.md) §3 invariant 12.
+
+**Browsers.** A browser cannot read the TLS exporter of its own connection. The
+JavaScript SDK's `checkQuoteBinding` (and the web console's quote page, which
+runs it) proves the quote is bound to the `channelBinding` the node returned —
+never a quote of the bare nonce — but not that the binding is the page's own
+connection. See [engineering.md](engineering.md) §3 invariant 10.
 
 ### 5.2 The two quote-producing routes carry a second principal (#226)
 
@@ -332,7 +407,13 @@ what these routes reported before #483: both response builders set
 
 VM evidence carries a quote, an AIK and a signature, so it is verified for
 real: the quote's `ExtraData` must equal the nonce the caller supplied
-(anti-replay) and the signature must check out against the AIK. Container
+(anti-replay) and the signature must check out against the AIK. That is the
+rule for evidence a caller submits on a transport. A device quote the
+collector fetches on the reporting path is bound to the TLS connection it was
+collected over, so its `ExtraData` is
+`QualifyingData(nonce, binding)` = SHA-256(nonce ‖ binding)
+(`xkms.PeerQualifyingData`), and the reporting verifier refuses a quote of the
+bare nonce ([engineering §3, invariant 10](engineering.md#3-invariants)). Container
 evidence carries a digest and a PCR value and **no signature**, so no
 cryptographic verification is defined for it; those responses are always
 `not_evaluated`, never a pass. Both transports call one implementation
@@ -391,7 +472,7 @@ verdicts follow` ([cli.md](cli.md) §3.5) is thin over this call.
 | QUIC byte | Name | REST | Attestation cause |
 |---|---|---|---|
 | `0x00` | `StatusOK` | 200 | — |
-| `0x01` | `StatusInvalidRequest` | 400 | `ErrInvalidManifest`, `ErrEmptyManifest`, `ErrInvalidVMIdentity` |
+| `0x01` | `StatusInvalidRequest` | 400 | `ErrInvalidManifest`, `ErrEmptyManifest`, `ErrInvalidVMIdentity`, `ErrChannelBindingRequired` (gRPC `FailedPrecondition`, §5.1a) |
 | `0x02` | `StatusNotFound` | 404 | `ErrManifestNotFound`, `ErrAKNotFound`, `ErrAIKNotFound` |
 | `0x03` | `StatusUnauthorized` | 401 | `ErrAuthFailed` |
 | `0x04` | `StatusInternalError` | 500 | `ErrQuoteGenerationFailed`, `ErrSerializationFailed` |

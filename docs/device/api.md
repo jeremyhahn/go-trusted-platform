@@ -810,7 +810,11 @@ delegate here (§2.1).
 **A failed verification is a `200` with a negative verdict, not an error.**
 The caller asked whether the device attests; "no" is a successful answer.
 Error statuses are reserved for requests that could not be evaluated at all —
-unusable evidence, an unknown device, or a missing dependency.
+unusable evidence, an unknown device, a missing dependency, a profile store
+that could not answer (`ErrDeviceProfileLookupFailed`; distinct from no
+profile, which is an absence verdict), or a verification abandoned by a
+cancelled or expired request (`ErrAttestationFailed`, which wraps the context
+error so `errors.Is(err, context.Canceled)` still matches).
 
 Request body — `evidence` is the JSON-encoded `DeviceQuoteEvidence`
 (base64 in JSON), identical on every transport so the wire contract does not
@@ -828,7 +832,7 @@ The checks, in order, and what each one means:
 |---|---|---|
 | `ak_certificate_verified` | the device's **enrolled `attest_cert`** chains to the platform CA and carries `tcg-cap-verifiedTPMRestricted` (2.23.133.11.1.3), the MUST of TCG DevID v1 r12 §8.2 | no certificate / no CA → *absence*; wrong CA or attribute missing → *cryptographic* |
 | `signature_valid` | the certified key signed the quote | cryptographic |
-| `nonce_valid` | the quote's `extraData` is the caller's nonce | cryptographic |
+| `nonce_valid` | the quote's `extraData` is the caller's nonce; on the attestation reporting path, where the collector binds the quote to its TLS connection, it is `QualifyingData(nonce, binding)` instead ([attestation engineering §3, invariant 10](../attestation/engineering.md#3-invariants)) | cryptographic |
 | `pcrs_valid` | the reported values hash to the signed digest **and** equal the PCR baseline on the device's profile | digest mismatch or baseline mismatch → cryptographic; no matching profile → absence |
 
 A bare `attest_pub` is **not** a trust anchor: without the certificate the
@@ -905,8 +909,10 @@ is the trust anchor every later quote is verified against, so a candidate is
 written only if it (a) parses, (b) chains to the platform CA, (c) carries
 `tcg-cap-verifiedTPMRestricted` (2.23.133.11.1.3) and (d) certifies the
 device's **enrolled attestation public key** (`att_pub`, the TPMT_PUBLIC
-recorded at enrollment). (a)–(c) run through the very `VerifyAKCertificate`
-the verifier uses, so the verb and the verifier agree by construction; (d)
+recorded at enrollment). (a)–(c) are the checks the quote verifier's
+attested-peer primitive applies to the same certificate; the verb runs them
+through `pkg/attestation/vm.VerifyAKCertificate` because go-quicbaas does not
+yet re-export the primitive's standalone certificate check (#482); (d)
 exists because a certificate over any other key would fail every quote
 signature and quarantine the device. A certificate that chains but lacks the
 attribute — which is what the fleet's CA issued at enrollment before go-xkms

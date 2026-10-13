@@ -17,11 +17,6 @@ import (
 	"context"
 	"crypto"
 	"errors"
-	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"syscall"
 	"testing"
 
 	gotpm2 "github.com/google/go-tpm/tpm2"
@@ -680,83 +675,6 @@ func TestApp_NewCertificateStore_NilObjectStore(t *testing.T) {
 	require.Error(t, err)
 	var target ErrNilObjectStore
 	assert.ErrorAs(t, err, &target)
-}
-
-// TestApp_DropPrivileges_Downgrade exercises DropPrivileges in a child
-// process: a successful drop is irreversible for the calling process
-// (Setuid cannot be undone) and failures exit via log.Fatal, so running it
-// in-process as root kills the whole test binary (this is what broke the CI
-// race job, which runs as root). The child re-runs this test gated by an
-// env var. Non-root: the uid guard makes it a no-op. Root: the drop really
-// runs, and the child asserts it is no longer uid 0 afterwards.
-func TestApp_DropPrivileges_Downgrade(t *testing.T) {
-	if os.Getenv("TP_DROP_PRIVILEGES_CHILD") == "1" {
-		a := &App{
-			Logger:      logging.DefaultLogger(),
-			RuntimeUser: "nobody",
-			LogDir:      os.Getenv("TP_DROP_PRIVILEGES_LOGDIR"),
-		}
-		a.DropPrivileges()
-		if syscall.Getuid() == 0 {
-			fmt.Fprintln(os.Stderr, "still uid 0 after DropPrivileges")
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
-
-	// World-writable log dir so a root child that has dropped to "nobody"
-	// can still create its log file inside it.
-	logDir := t.TempDir()
-	if err := os.Chmod(logDir, 0777); err != nil {
-		t.Fatalf("chmod logDir: %v", err)
-	}
-	if err := os.Chmod(filepath.Dir(logDir), 0755); err != nil {
-		t.Fatalf("chmod logDir parent: %v", err)
-	}
-
-	cmd := exec.Command(os.Args[0], "-test.run", "^TestApp_DropPrivileges_Downgrade$", "-test.v")
-	cmd.Env = append(os.Environ(),
-		"TP_DROP_PRIVILEGES_CHILD=1",
-		"TP_DROP_PRIVILEGES_LOGDIR="+logDir)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("child DropPrivileges run failed: %v\n%s", err, out)
-	}
-}
-
-// TestApp_DropPrivileges_RootRuntimeUserNoOp verifies the RuntimeUser guard:
-// with RuntimeUser "root" the drop is a no-op under every uid, so this is
-// safe in-process on both root and non-root runners.
-func TestApp_DropPrivileges_RootRuntimeUserNoOp(t *testing.T) {
-	app := &App{
-		Logger:      logging.DefaultLogger(),
-		RuntimeUser: "root",
-	}
-	app.DropPrivileges()
-	// Reaching this line is the assertion: no Fatal, no panic, and for a
-	// non-root runner no uid change was possible in the first place.
-}
-
-// TestApp_DropPrivileges_EmptyUser verifies the misconfiguration contract in
-// a child process: a non-root runner no-ops on the uid guard, while a root
-// runner treats an empty RuntimeUser as fatal (user.Lookup("") cannot
-// succeed) — fail-closed rather than running on as root.
-func TestApp_DropPrivileges_EmptyUser(t *testing.T) {
-	if os.Getenv("TP_DROP_PRIVILEGES_EMPTY_CHILD") == "1" {
-		(&App{Logger: logging.DefaultLogger(), RuntimeUser: ""}).DropPrivileges()
-		os.Exit(0)
-	}
-
-	cmd := exec.Command(os.Args[0], "-test.run", "^TestApp_DropPrivileges_EmptyUser$", "-test.v")
-	cmd.Env = append(os.Environ(), "TP_DROP_PRIVILEGES_EMPTY_CHILD=1")
-	out, err := cmd.CombinedOutput()
-	if syscall.Getuid() == 0 {
-		if err == nil {
-			t.Fatalf("as root, an empty RuntimeUser must be a fatal misconfiguration; child output:\n%s", out)
-		}
-	} else if err != nil {
-		t.Fatalf("as non-root, DropPrivileges with empty user must be a no-op: %v\n%s", err, out)
-	}
 }
 
 // TestApp_SecureWipePasses verifies the field can be set and read.

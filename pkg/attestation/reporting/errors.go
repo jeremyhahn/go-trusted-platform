@@ -160,11 +160,60 @@ func (e ErrInsecureDialer) Error() string {
 	return "attestation reporting: refusing to dial " + e.Endpoint + " with certificate verification disabled"
 }
 
+// ErrChannelBinding reports a node connection that cannot yield a channel
+// binding (TLS 1.2 without the extended master secret). The collector refuses
+// to fall back to an unbound nonce: a quote it cannot tie to the session is
+// not collected at all.
+type ErrChannelBinding struct {
+	Endpoint string
+	Cause    error
+}
+
+func (e ErrChannelBinding) Error() string {
+	msg := "attestation reporting: no channel binding on the connection to " + e.Endpoint
+	if e.Cause != nil {
+		msg += ": " + e.Cause.Error()
+	}
+	return msg
+}
+
+func (e ErrChannelBinding) Unwrap() error { return e.Cause }
+
+// ErrQuoteNotBound reports a node that answered with a quote over something
+// other than the collector's nonce bound to this connection (#482). A node
+// derives the binding from its own end of the connection, so the values
+// differ exactly when the endpoint relayed the request over a connection of
+// its own: the attested state is not the TLS endpoint's, and is refused.
+type ErrQuoteNotBound struct {
+	Endpoint string
+}
+
+func (e ErrQuoteNotBound) Error() string {
+	return "attestation reporting: the quote from " + e.Endpoint +
+		" is not bound to this connection"
+}
+
+// ErrConnectionSpent reports the HTTP transport asking for a second
+// connection to a node. Each request rides exactly the connection its channel
+// binding was derived from; a redial would silently unbind it.
+type ErrConnectionSpent struct {
+	Endpoint string
+}
+
+func (e ErrConnectionSpent) Error() string {
+	return "attestation reporting: the connection to " + e.Endpoint + " was already used; refusing to redial"
+}
+
 // ErrNodeUnreachable reports that no candidate endpoint yielded evidence.
+// Causes holds each endpoint's error, so a caller can still tell a refused
+// quote (ErrQuoteNotBound) from a node that could not be reached.
 type ErrNodeUnreachable struct {
 	DeviceID string
 	Attempts []string
+	Causes   []error
 }
+
+func (e ErrNodeUnreachable) Unwrap() []error { return e.Causes }
 
 func (e ErrNodeUnreachable) Error() string {
 	msg := "attestation reporting: no endpoint of device " + e.DeviceID + " yielded evidence"

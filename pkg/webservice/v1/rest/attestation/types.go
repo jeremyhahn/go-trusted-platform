@@ -225,27 +225,6 @@ type GetQuoteRequest struct {
 	HashAlgorithm string `json:"hash_algorithm,omitempty"`
 }
 
-// VerifyQuoteRequest is the request body for verifying a TPM quote.
-type VerifyQuoteRequest struct {
-	// QuoteData is the base64-encoded TPM quote data.
-	QuoteData string `json:"quote_data"`
-
-	// Signature is the base64-encoded quote signature.
-	Signature string `json:"signature"`
-
-	// PublicKeyPEM is the PEM-encoded AK public key.
-	PublicKeyPEM string `json:"public_key_pem"`
-
-	// ExpectedNonce is the base64-encoded expected nonce.
-	ExpectedNonce string `json:"expected_nonce"`
-
-	// PCRs contains the expected PCR values.
-	PCRs []PCRValueRequest `json:"pcrs,omitempty"`
-
-	// HashAlgorithm is the hash algorithm used.
-	HashAlgorithm string `json:"hash_algorithm,omitempty"`
-}
-
 // ManifestResponse is the response for manifest operations.
 type ManifestResponse struct {
 	// ID is the manifest identifier.

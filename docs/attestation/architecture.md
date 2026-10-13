@@ -173,7 +173,12 @@ rather than decorative:
 
 - **Channel binding.** A quote proves state at quote time, not request time. The
   TLS channel binding goes in the quote's qualifying data, so a valid quote
-  cannot be replayed onto another connection (go-xkms#273).
+  cannot be replayed onto another connection (go-xkms#273). This is built
+  for every quote a node produces over TLS: the node derives the binding of
+  the connection the request arrived on and quotes it with the caller's
+  nonce, so neither the reporting collector nor a direct caller can be fed a
+  quote a relay obtained over its own connection (#482, §The collector, as
+  built; [api.md](api.md) §5.1a).
 - **Measured userspace is mandatory here.** A firmware/bootchain PCR set does
   not detect a swapped userspace daemon — precisely the threat when the peer is
   a reporting service. Policy for this use **must** include PCR 10 / the IMA log
@@ -301,7 +306,35 @@ control plane composes them in `pkg/daemon/commands/attestation_reporting.go`:
   uses for the control plane — with `ServerName` pinned, refuses a dialer with
   verification disabled,
   follows no redirects, bounds the response at 1 MiB, and refuses a response
-  that does not echo its nonce before anything reaches the verifier. A non-200
+  whose echo is not bound to its connection before anything reaches the
+  verifier.
+  **Every quote is bound to its connection, by both ends (#482).** The
+  collector sends the node the **bare** nonce. The node derives the channel
+  binding of the connection the request arrived on — 32 bytes of TLS
+  exporter output under the upstream label `EXPORTER-attested-peer`
+  (`xkms.PeerChannelBinding`) — and its TPM quotes
+  `QualifyingData(nonce, binding)` = SHA-256(nonce ‖ binding)
+  (`xkms.PeerQualifyingData`), which it echoes
+  (`pkg/attestation/channelbind`, [api.md](api.md) §5.1a). The collector
+  derives the binding from its own end of the same connection and accepts
+  the echo only when it equals `QualifyingData(nonce, its binding)`;
+  otherwise the attempt fails with `ErrQuoteNotBound`. The request is pinned
+  to the dialled connection and a redial is refused (`ErrConnectionSpent`).
+  The evidence carries the bare nonce and the binding beside the quote, and
+  the reporting verifier requires both. A connection that cannot export
+  keying material (TLS 1.2 without the extended master secret) is refused on
+  either end — `ErrChannelBinding` on the collector,
+  `ErrChannelBindingRequired` on the node, which also refuses the Unix
+  socket, the embedded transport and plain HTTP; neither falls back to an
+  unbound nonce.
+  **Why the node must derive it.** When the collector sent the bound value
+  and the node quoted it as received, any endpoint holding a valid
+  certificate could relay that value unchanged to a healthy node over a
+  second connection and return a quote that passed. Now the relay's forward
+  is bound by the node to the relay's connection (B), the collector holds
+  connection A, and the quote is refused: the attested state is accepted
+  only from whoever terminates the collector's own TLS connection
+  (`TestCollectHost_RelayedQuoteIsRejected`). A non-200
   from the node — including the node's own caller policy refusing this
   reporting server — is a collection failure, never a verdict.
 - **Address provenance (#377).** `DeviceAddressResolver` dials only what the
@@ -326,7 +359,11 @@ control plane composes them in `pkg/daemon/commands/attestation_reporting.go`:
   `AssignProfileToDevice` records; a device record carries no MAC); (2) else
   a profile whose **match rules** cover the device's serial and model; (3)
   else `ErrNoProfileForDevice`, which the collector reports as "no
-  tls-server-name" and the verifier as an absence. Installer-created profiles
+  tls-server-name" and the verifier as an absence. Any other error is a store
+  that could not answer, not "no profile": the verifier fails closed with
+  `ErrDeviceProfileLookupFailed` (cause attached) and records no verdict,
+  because a lookup that decided nothing must not be read as an absence.
+  Installer-created profiles
   carry neither rules nor a binding, so the operator binds each enrolled
   device once (`platformctl device profile assign <profile-id> --device
   <device-id>`); the EK serial is derived on the control plane from the
@@ -488,10 +525,13 @@ decisions. Collection works without one: the control plane's own certificate
 name comes from its own configuration.
 
 **What is not in this half.** Nodes verifying the control plane — the mutual
-half — needs the channel-bound attested-peer primitive and lands with #482 once
-go-quicbaas re-exports it (#533). Until then the control plane is collected and
-verdicted like a node, and nodes still take its identity on its certificate
-alone.
+half. #482 put the device quote verifier on the attested-peer primitive and
+bound the collector's quotes to their connection, but a node verifying the
+control plane must derive the binding on its own end of the connection, and
+go-quicbaas does not yet re-export the node-side helpers
+(`QualifyingDataFromTLS`, `EvidenceFromTLS`). Until then the control plane is
+collected and verdicted like a node, and nodes still take its identity on its
+certificate alone.
 
 ### Transports
 
@@ -530,7 +570,12 @@ RPC on it answered `FailedPrecondition`.
 `CollectHostAttestation` and `GetQuote` produce real quotes once the daemon
 hands the attestation service the node's TPM (`attestation_init.go`). The
 quote is signed by the **IAK** — the Restricted attestation key TCG assigns to
-attestation — over the **caller's** nonce, unmodified. Before returning, the
+attestation. `CollectHostAttestation` quotes the caller's nonce bound to the
+connection the request arrived on, `QualifyingData(nonce, binding)` (#482,
+§The collector, as built), and refuses a request whose connection carries no
+binding. `GetQuote` does the same and returns the binding so a direct
+caller can check the echo against its own connection
+([engineering.md](engineering.md) §3 invariant 11). Before returning, the
 node checks that the PCR values it is about to report hash to the digest its
 TPM signed, and refuses to emit evidence its own verifier would reject. The
 REST routes that expose this are gated ([api.md](api.md) §5.1) in the same
@@ -605,21 +650,41 @@ when none was supplied (an attacker chose what "good" meant), and it never
 checked `tcg-cap-verifiedTPMRestricted`, the check TCG DevID v1 r12 §8.2 makes
 a MUST before trusting a quote.
 
+- **The checks are upstream's (#482).** Certificate chain and Restricted,
+  quote signature, nonce, PCR digest and baseline comparison are the go-xkms
+  attested-peer verifier, reached through the go-quicbaas re-export
+  `xkms.NewPeerAttestationVerifier`. The platform keeps only what it alone
+  knows: which profile holds the baseline, trust-on-first-use capture into it,
+  the verdict sink, and the transports. There is no local copy of any check.
 - **Trust anchor** is the device's enrolled attestation **certificate**,
   chained to the platform CA (root + intermediate) and required to carry
-  2.23.133.11.1.3. A bare public key is not accepted; `pkg/attestation/vm`
-  `VerifyAKCertificate` is the primitive.
+  2.23.133.11.1.3. A bare public key is not accepted.
 - **Expected state** is the `PCRBaseline` on the device's `DeviceProfile`
   (`source` = `signed` | `tofu`). Reported values must hash to the signed
   digest before they are compared. A profile without a baseline captures one
-  from the first fully verified quote (owner ruling: signed manifest, TOFU
-  fallback per profile); the capture is a `pcr_baseline_captured` event.
+  from the first quote whose every other check held (owner ruling: signed
+  manifest, TOFU fallback per profile); only the values the verifier proved
+  are captured, and the capture is a `pcr_baseline_captured` event.
+- **Channel binding is required on the collector's verifier, ignored on the
+  transports (#482).** `DeviceQuoteVerifierForReporting` refuses evidence
+  without a `channel_binding` (`ErrInvalidAttestationEvidence`, no verdict)
+  and hands the binding to the peer policy, which requires the quote's
+  extraData to equal SHA-256(nonce ‖ binding). A quote over the bare nonce
+  is a cryptographic failure. The transports verify evidence a caller
+  submits, where a binding names no session the verifier saw, so they ignore
+  the field rather than honour it.
 - **Verdict classes** are carried by `pkg/attestation/verdict.DeviceVerdict`
   and recorded by the attestation service (`RecordDeviceVerdict`): a
   cryptographic failure reaches the quarantine observers (deny + SDN
   quarantine, the #226 ruling); an absence of evidence is denied but never
-  quarantined. Which class a failure falls in is decided in exactly one place,
-  `quoteChecks.fail` vs `quoteChecks.absent`.
+  quarantined. Which class a failure falls in is the peer verdict's
+  `Failure`, mapped onto `DeviceVerdict.Cryptographic` and nowhere else
+  decided. A quoted PCR **selection** that differs from the baseline's
+  register set is an absence — nothing the TPM signed was wrong, the quote
+  just does not cover what the profile accepts — while a **value** that
+  diverges on a covered register is cryptographic. A missing certificate,
+  CA, profile or baseline, or a stored baseline the verifier refuses as
+  unusable, is an absence.
 - **Enrollment records the anchor (#404).** The ACME finalize for a
   TCG-CSR-IDEVID order issues the IAK certificate together with the IDevID
   and hands it to the platform's device registration hook as DER; the hook

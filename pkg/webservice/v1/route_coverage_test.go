@@ -161,12 +161,6 @@ var unservedPrefixes = map[string]string{
 // describe the intended surface correctly; this router's half is what is
 // missing.
 var unroutedClaims = map[string]string{
-	"/platform.v1.AttestationService/ChallengeAK":              "POST /api/v1/attestation/challenge",
-	"/platform.v1.AttestationService/CreateAK":                 "POST /api/v1/attestation/ak",
-	"/platform.v1.AttestationService/GetAK":                    "GET /api/v1/attestation/ak",
-	"/platform.v1.AttestationService/GetEK":                    "GET /api/v1/attestation/ek",
-	"/platform.v1.AttestationService/VerifyChalleng":           "POST /api/v1/attestation/challenge/verify",
-	"/platform.v1.AttestationService/VerifyQuote":              "POST /api/v1/attestation/verify",
 	"/platform.v1.CAService/RenewCertificate":                  "POST /api/v1/ca/certificates/renew",
 	"/platform.v1.CAService/RevokeCertificate":                 "POST /api/v1/ca/certificates/revoke",
 	"/platform.v1.CAService/VerifyCertificate":                 "POST /api/v1/ca/certificates/verify",

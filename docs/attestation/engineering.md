@@ -131,6 +131,91 @@ IMA: `Event`, `EventLog`, `EventFilter`, `Status`.
    provenance, `reporting.SourceControlPlaneLoopback`, which applies to
    exactly one device id and is a property of the dialling process rather
    than of a record.
+10. **A collected quote is bound to the connection it was collected over,
+    and both ends derive the binding (#482).** `NodeQuoteSource` sends the
+    **bare** nonce. The node derives the binding of the connection the
+    request arrived on and quotes `xkms.PeerQualifyingData(nonce, binding)`
+    — `pkg/attestation/channelbind.QualifyingData`, called by every
+    collect-host entry point (`AttestationServiceServer.CollectHostAttestation`
+    for gRPC, Unix, daemon QUIC `0x72` and the REST router, which records
+    `req.TLS` with `channelbind.WithConnectionTLS`; the `pkg/api/quic` `0x7E`
+    and `pkg/api/rest` handlers). A request with no binding (Unix, embedded,
+    plain HTTP, an exporter that refuses) is
+    `channelbind.ErrChannelBindingRequired` (FailedPrecondition) before the
+    TPM is touched. The collector derives the binding with
+    `xkms.PeerChannelBinding` (the upstream exporter label, never a local
+    one) on the connection it sends on — `dial` completes the handshake,
+    `exchange` rides that connection, and `singleUseDialer` refuses a redial
+    (`ErrConnectionSpent`) — and an echo other than
+    `PeerQualifyingData(nonce, binding)` is `ErrQuoteNotBound`, kept in
+    `ErrNodeUnreachable.Causes`. A connection that cannot export keying
+    material is `ErrChannelBinding`; neither end falls back to the bare
+    nonce. **Never let the caller supply the bound value**: a relay forwards
+    it unchanged to a healthy node and the quote passes; the node binding to
+    its own connection is what makes the relay fail
+    (`TestCollectHost_RelayedQuoteIsRejected`). The reporting verifier
+    requires the binding. The transport verify endpoints take an optional
+    `channel_binding` only to recompute the qualifying data a bound quote
+    carries; a verify that passes is **not** channel proof — a relay can
+    submit its own binding just as well. Channel proof belongs to the end
+    that derived the binding from its own connection.
+11. **Every quote a node produces over a TLS connection is bound to that
+    connection (#482).** Invariant 10 holds for every endpoint that quotes a
+    caller's nonce with the node's TPM, not only collect-host: attestation
+    `GetAttestationQuote` (REST `/api/v1/attestation/quote`, QUIC `0x70`,
+    gRPC, MCP), TPM `Quote` (`TPMGRPCService.Quote` behind gRPC, MCP
+    `platform_tpm_quote` and the webservice `/api/v1/tpm/quote`; the
+    `pkg/api/rest` and `pkg/api/quic` `0x99·0x0F` handlers) and the daemon
+    REST `/api/v1/tpm/certify` when it is given a nonce. Each derives the
+    binding itself (`channelbind.Bind`), quotes
+    `PeerQualifyingData(nonce, binding)`, returns `channel_binding`, and
+    refuses a request it cannot bind with `ErrChannelBindingRequired` before
+    the TPM is touched — Unix, embedded and MCP over stdio included
+    (`TestGetAttestationQuote_RelayedQuoteIsRejected`,
+    `unboundQuoteContexts` in `pkg/api/daemon`). Every caller in this repo
+    checks the echo against its own binding, never the bare nonce: the Go SDK
+    `attestation` and `tpm` clients through `sdk/go/quotebind` (a quote bound
+    elsewhere is `quotebind.ErrQuoteNotBound`), and `platformctl` through the
+    SDK. Over a transport with no TLS state the SDK refuses before asking
+    (`transport.ErrChannelBindingUnavailable`). A browser cannot read the TLS
+    exporter, so `checkQuoteBinding` in `sdk/javascript` and the web TPM quote
+    page prove only that the quote is bound to the binding the node returned —
+    never the bare nonce — not that it is the page's own connection. Treat
+    browser output as display, never as evidence another component trusts.
+12. **A quote is verified under the scheme it declares (#874).** A TPM quote
+    signature is bare bytes — the TPMT_SIGNATURE that names the scheme is
+    stripped — and an RSA IAK signs RSASSA or RSASSA-PSS as its
+    `SignatureAlgorithm` says. So `GetAttestationQuote` returns
+    `signature_algorithm` (the x509.SignatureAlgorithm name of the IAK's
+    scheme) beside the signature, and `VerifyAttestationQuote` hands it to
+    `vm.VerifyQuoteSignatureWithAlgorithm`, which dispatches on it: the
+    PKCS#1 v1.5, PSS (either salt length) and ECDSA families over SHA-256,
+    -384 and -512. A quote declaring none or any other scheme is
+    `vm.ErrUnsupportedSignatureAlgorithm`; a scheme the AK's key type cannot
+    carry is `vm.ErrSignatureSchemeMismatch`. Never infer the scheme from the
+    key type: that is how every PSS quote failed as PKCS#1 v1.5. The legacy
+    `vm.VerifyQuoteSignature` infers it and so verifies only RSASSA and
+    ECDSA quotes.
+
+### 3a. Signing paths that are not relay oracles
+
+Order #482 asked for every path that quotes, certifies or signs
+caller-supplied data. Those not bound above are not oracles for one reason:
+nothing in this repo accepts their output as proof that the node's TPM spoke
+over a given connection.
+
+| Path | Why it is not an oracle |
+|------|-------------------------|
+| `pkg/vtpm` `Service.Quote` (REST, QUIC, gRPC `QuoteVTPM`, MCP `vtpm_quote` / `vtpm_bundle_quote`) and compute `AttestVM` (QEMU, AWS, GCP; Azure refuses) | Signed by the guest's vTPM, or by no key at all for the cloud EK paths — never by the node IAK. No node collector or device verifier accepts a vTPM quote as host evidence. |
+| attestation `AttestVM` / `CollectVMAttestation` / `CollectContainerAttestation` | Return `ErrTPMSessionNotConfigured`; no quote is produced. |
+| container `Attest(ctx, id)`, PIV `Attest(slot)`, MCP `platform_tpm_certify` | Take no caller qualifying data. |
+| daemon REST `/api/v1/tpm/certify` | Bound when a nonce is given (invariant 11). Its output is a `TPM_ST_ATTEST_CERTIFY` structure, which every quote verifier, `quotebind.QuotedData` and the JS `quotedData` refuse. |
+| diskless boot quote (`app.disklessBootQuote` → `hostquote.Collect`) | Quotes the binding the node derived from the connection it dialled itself; the caller never supplies it. |
+| AVR firmware `Backend.AttestCert` | Signs a device-attest-01 enrolment challenge (SHA-256 of the ACME key authorization) with the device's DICE alias key, not a TPM; no platformd endpoint exposes it. |
+| `HostTPMProvider.Quote`, podman `GetContainerQuote`, NV certify | No production caller passes caller qualifying data; NV certify does not exist in production code. |
+
+A new path that signs caller data with the node's TPM joins invariant 11 or
+this table in the same change.
 
 ## 4. Error semantics
 
@@ -141,7 +226,14 @@ strings. Grouped by what a caller should do about them:
 `ErrAttestationFailed`, `ErrQuoteVerificationFailed`, `ErrQuoteExpired`,
 `ErrNonceMismatch`, `ErrPCRMismatch`, `ErrManifestVerifyFailed`,
 `ErrMerkleRootMismatch`, `ErrCertificateChainInvalid`, `ErrEKCertificateInvalid`,
-`ErrHostNotAttested`, `ErrHostBindingInvalid`, `ErrManifestExpired`.
+`ErrHostNotAttested`, `ErrHostBindingInvalid`, `ErrManifestExpired`,
+`ErrQuoteNotBound` (a collected quote bound to another connection, §3
+invariant 10; the SDK's `quotebind.ErrQuoteNotBound` is the caller-side twin,
+invariant 11).
+
+**Request cannot be bound — refuse, never quote:**
+`ErrChannelBindingRequired` (a quote request whose connection carries no
+channel binding; §3 invariants 10 and 11).
 
 **Identity material missing:**
 `ErrAKNotFound`, `ErrAIKNotFound` (both exist — `AK` and `AIK` are used in
@@ -173,6 +265,15 @@ branch to a verifier, the default arm denies. The configured
 `attestation.policy.default-action` defaults to **`deny`**
 (`DefaultPolicyAction = DefaultActionDeny`) and that default must not be
 inverted.
+
+**The device quote verifier keeps causes (#482).** `DeviceQuoteVerifier`
+(`pkg/api/daemon`) returns an error only when it reached no verdict, and the
+error carries what stopped it: an upstream verifier error is
+`ErrAttestationFailed{Err: …}`, so `errors.Is(err, context.Canceled)` /
+`context.DeadlineExceeded` and the upstream typed errors still match; a
+profile store error is `ErrDeviceProfileLookupFailed{Cause: …}`. Only
+`device.ErrNoProfileForDevice` means "no profile" (an absence verdict); never
+fold a lookup failure into it.
 
 ## 5. Configuration
 

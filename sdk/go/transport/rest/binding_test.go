@@ -24,6 +24,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
+
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
 )
@@ -75,13 +77,24 @@ func stallingListener(t *testing.T) string {
 	return "https://" + listener.Addr().String()
 }
 
+// binder returns the ChannelBinder transport.WithChannelBinding(bind)
+// carries.
+func binder(t *testing.T, bind transport.BindFunc) transport.ChannelBinder {
+	t.Helper()
+	b, ok := transport.ChannelBindingFrom([]grpc.CallOption{transport.WithChannelBinding(bind)})
+	if !ok {
+		t.Fatal("the option carries no channel binding")
+	}
+	return b
+}
+
 // bindAgainst runs bindChannel on adapter in a goroutine and returns its
 // error, failing the test if the call outlives stalledCallWatchdog.
 func bindAgainst(t *testing.T, ctx context.Context, adapter *Adapter) error {
 	t.Helper()
 	result := make(chan error, 1)
 	go func() {
-		bound, err := adapter.bindChannel(ctx, func(context.Context, []byte) error { return nil })
+		bound, err := adapter.bindChannel(ctx, binder(t, func(context.Context, []byte) error { return nil }))
 		if err == nil {
 			err = bound.release()
 		}
@@ -118,10 +131,10 @@ func TestBindChannel_BindsTheDialedConnection(t *testing.T) {
 	}()
 
 	var binding []byte
-	bound, err := adapter.bindChannel(context.Background(), func(_ context.Context, b []byte) error {
+	bound, err := adapter.bindChannel(context.Background(), binder(t, func(_ context.Context, b []byte) error {
 		binding = b
 		return nil
-	})
+	}))
 	if err != nil {
 		t.Fatalf("bindChannel() returned error: %v", err)
 	}
@@ -186,7 +199,7 @@ func TestBindChannel_ClosedAdapter(t *testing.T) {
 	adapter := &Adapter{httpClient: &http.Client{}, baseURL: "https://127.0.0.1:1"}
 	adapter.closed.Store(true)
 
-	_, err := adapter.bindChannel(context.Background(), func(context.Context, []byte) error { return nil })
+	_, err := adapter.bindChannel(context.Background(), binder(t, func(context.Context, []byte) error { return nil }))
 
 	if !errors.As(err, new(ErrClientClosed)) {
 		t.Fatalf("err = %v, want ErrClientClosed", err)

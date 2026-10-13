@@ -170,7 +170,7 @@ Key algorithms across all transports: `RSA-2048`, `RSA-3072`, `RSA-4096`,
 | Unseal | `POST /api/v1/tpm/unseal` | `Unseal` | `0x99` · `0x16` | `platform_tpm_unseal` | ✅ |
 | Read PCRs | `GET /api/v1/tpm/pcrs`, `POST /api/v1/tpm/pcrs` | `GetPCRs` | `0x99` · `0x11` | `platform_tpm_pcrs` | ✅ |
 | **Extend PCR** | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `0x99` · `0x12` | `platform_tpm_pcr_extend` | `MISSING — docs/13 G7` |
-| Quote | `POST /api/v1/tpm/quote` | `Quote` | `0x99` · `0x0F` | `platform_tpm_quote` | ✅ |
+| Quote (TLS only — bound, see below) | `POST /api/v1/tpm/quote` | `Quote` (refused over Unix) | `0x99` · `0x0F` | `platform_tpm_quote` (refused over stdio) | refused — no TLS |
 | Verify quote | `POST /api/v1/tpm/quote/verify` | `VerifyQuote` | `0x99` · `0x10` | `platform_tpm_verify_quote` | ✅ |
 | **Certify** | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `platform_tpm_certify` | `MISSING — docs/13 G7` |
 | Event log | `GET /api/v1/tpm/eventlog` | `GetEventLog` | `0x99` · `0x13` | `platform_tpm_eventlog` | ✅ |
@@ -180,8 +180,21 @@ Key algorithms across all transports: `RSA-2048`, `RSA-3072`, `RSA-4096`,
 because the JavaScript SDK sends the index list and bank selection in a body.
 Both dispatch to the same handler.
 
-**Certify exists on MCP alone.** One transport out of six, with no gRPC method
-behind it to grow into.
+**Certify exists on MCP alone** on the served surface. One transport out of
+six, with no gRPC method behind it to grow into. The `pkg/api/rest` handler set
+also carries `POST /api/v1/tpm/certify`; given a nonce it is bound like a quote.
+
+**A quote is bound to the connection it is requested over (#482).** The node
+never quotes the nonce as sent: it derives the TLS exporter binding of the
+connection the request arrived on, quotes `SHA-256(nonce ‖ channel_binding)`
+and returns `channel_binding` so the caller can check the echo against its own
+connection. A request with no TLS state (Unix, embedded, MCP over stdio, plain
+HTTP) is refused with `ErrChannelBindingRequired` before the TPM is touched.
+The SDK `tpm` client checks the echo with `sdk/go/quotebind` and refuses a
+quote bound elsewhere (`quotebind.ErrQuoteNotBound` inside `ErrQuoteFailed`).
+`VerifyQuote` takes the same optional `channel_binding` to recompute the
+qualifying data; a passing verify is not channel proof. The contract and its
+tests are in [attestation/api.md](../attestation/api.md) §5.1a.
 
 Schemas: `SealRequest` (`data`, `cn`, `parent_handle`, `parent_password`,
 `password`, `pcr_indices`, `pcr_bank`, `overwrite`) / `SealResponse`
@@ -189,7 +202,9 @@ Schemas: `SealRequest` (`data`, `cn`, `parent_handle`, `parent_password`,
 (`cn`, `parent_handle`, `parent_password`, `password`, `pcr_indices`,
 `pcr_bank`) / `UnsealResponse` (`status`, `data`); `QuoteRequest`
 (`ak_handle`, `ak_password`, `pcr_indices`, `pcr_bank`, `nonce`) /
-`QuoteResponse` (`status`, `quote`, `signature`, `pcr_values`, `event_log`).
+`QuoteResponse` (`status`, `quote`, `signature`, `pcr_values`, `event_log`,
+`channel_binding`); `VerifyQuoteRequest` carries an optional
+`channel_binding`.
 
 **There is no `platform_policy` field on `SealRequest` on any transport.**
 Sealing under the platform PCR policy is a server-side property of how the

@@ -16,11 +16,13 @@
 package quic
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"math/big"
@@ -30,6 +32,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -72,6 +75,7 @@ type mockTPM struct {
 	idevidPubKey       crypto.PublicKey
 	idevidPubKeyErr    error
 	quoteResult        xkmssdk.Quote
+	quoted             []byte
 	quoteErr           error
 	readPCRsResult     []xkmssdk.PCRBank
 	readPCRsErr        error
@@ -227,6 +231,7 @@ func (m *mockTPM) IDevID() (crypto.PublicKey, error) {
 	return &key.PublicKey, nil
 }
 func (m *mockTPM) Quote(pcrs []uint, nonce []byte) (xkmssdk.Quote, error) {
+	m.quoted = nonce
 	return m.quoteResult, m.quoteErr
 }
 func (m *mockTPM) ReadPCRs(pcrList []uint) ([]xkmssdk.PCRBank, error) {
@@ -579,8 +584,36 @@ func TestTPM2Handler_HandleQuote_Success(t *testing.T) {
 	h.SetTPM2Service(mock)
 	req := &TPM2QuoteRequest{PCRIndices: []uint32{0, 1, 7}, Nonce: []byte("nonce")}
 	payload, _ := quicwire.EncodePayload(req)
-	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Quote}, payload...)})
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
+	state := testutil.ServerConnectionState(t)
+	resp := h.HandleMessage(WithConnectionTLS(context.Background(), state), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Quote}, payload...)})
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+
+	// The TPM quoted SHA-256(nonce || binding) for this connection, and the
+	// response echoes that binding so the caller can check it.
+	var out TPM2QuoteResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+	binding, err := xkmssdk.PeerChannelBinding(state)
+	require.NoError(t, err)
+	assert.Equal(t, binding, out.ChannelBinding)
+	assert.Equal(t, xkmssdk.PeerQualifyingData([]byte("nonce"), binding), mock.quoted)
+}
+
+func TestTPM2Handler_HandleQuote_RefusesAConnectionItCannotBind(t *testing.T) {
+	for name, ctx := range map[string]context.Context{
+		"no TLS state": context.Background(),
+		"TLS 1.2":      WithConnectionTLS(context.Background(), &tls.ConnectionState{Version: tls.VersionTLS12}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := NewTPM2Handler(logging.DefaultLogger())
+			mock := newMockTPM()
+			h.SetTPM2Service(mock)
+			payload, err := quicwire.EncodePayload(&TPM2QuoteRequest{PCRIndices: []uint32{0}, Nonce: []byte("nonce")})
+			require.NoError(t, err)
+			resp := h.HandleMessage(ctx, &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Quote}, payload...)})
+			assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
+			assert.Nil(t, mock.quoted, "nothing may be quoted unbound")
+		})
+	}
 }
 
 func TestTPM2Handler_HandleQuote_Error(t *testing.T) {
@@ -590,7 +623,8 @@ func TestTPM2Handler_HandleQuote_Error(t *testing.T) {
 	h.SetTPM2Service(mock)
 	req := &TPM2QuoteRequest{PCRIndices: []uint32{0}}
 	payload, _ := quicwire.EncodePayload(req)
-	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Quote}, payload...)})
+	ctx := WithConnectionTLS(context.Background(), testutil.ServerConnectionState(t))
+	resp := h.HandleMessage(ctx, &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Quote}, payload...)})
 	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
@@ -831,6 +865,48 @@ func TestTPM2Handler_HandleVerifyQuote_BadSignature(t *testing.T) {
 	var out TPM2VerifyQuoteResponse
 	require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
 	assert.False(t, out.Verified)
+}
+
+func TestTPM2Handler_HandleVerifyQuote_ChannelBinding(t *testing.T) {
+	nonce := []byte("verify-nonce")
+	binding := bytes.Repeat([]byte{0x5a}, 32)
+	quote := tpm2.Marshal(tpm2.TPMSAttest{
+		Magic:     tpm2.TPMGeneratedValue,
+		Type:      tpm2.TPMSTAttestQuote,
+		ExtraData: tpm2.TPM2BData{Buffer: xkmssdk.PeerQualifyingData(nonce, binding)},
+		Attested:  tpm2.NewTPMUAttest(tpm2.TPMSTAttestQuote, &tpm2.TPMSQuoteInfo{}),
+	})
+	verify := func(t *testing.T, req TPM2VerifyQuoteRequest) *quicwire.Response {
+		t.Helper()
+		h := NewTPM2Handler(logging.DefaultLogger())
+		h.SetTPM2Service(newMockTPM())
+		req.Quote = quote
+		req.Signature = []byte("garbage-signature")
+		body, err := quicwire.EncodePayload(&req)
+		require.NoError(t, err)
+		return h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2VerifyQuote}, body...)})
+	}
+	message := func(t *testing.T, resp *quicwire.Response) string {
+		t.Helper()
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		var out TPM2VerifyQuoteResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+		assert.False(t, out.Verified)
+		return out.Message
+	}
+
+	t.Run("the bound echo passes the nonce check", func(t *testing.T) {
+		resp := verify(t, TPM2VerifyQuoteRequest{Nonce: nonce, ChannelBinding: binding})
+		assert.Contains(t, message(t, resp), "signature_verification_failed")
+	})
+	t.Run("the bare nonce does not", func(t *testing.T) {
+		resp := verify(t, TPM2VerifyQuoteRequest{Nonce: nonce})
+		assert.Contains(t, message(t, resp), "nonce_verification_failed")
+	})
+	t.Run("a binding without a nonce is refused", func(t *testing.T) {
+		resp := verify(t, TPM2VerifyQuoteRequest{ChannelBinding: binding})
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+	})
 }
 
 func TestTPM2Handler_HandlePlatformAttributes_Success(t *testing.T) {

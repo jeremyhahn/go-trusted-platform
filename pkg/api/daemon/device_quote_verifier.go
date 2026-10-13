@@ -9,10 +9,12 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
@@ -92,6 +94,18 @@ type DeviceQuoteVerifier struct {
 	verdicts verdict.Sink
 	now      func() time.Time
 	logger   *slog.Logger
+	// requireChannelBinding holds the verifier the reporting collector
+	// feeds: its evidence must carry the TLS channel binding the quote was
+	// collected over, and the quote must be bound to it. Off, the binding
+	// field is ignored, so a caller-submitted binding is never honoured.
+	requireChannelBinding bool
+}
+
+// boundQuoteEvidence is DeviceQuoteEvidence plus the channel binding the
+// collector derived from the connection the quote was collected over.
+type boundQuoteEvidence struct {
+	DeviceQuoteEvidence
+	ChannelBinding []byte `json:"channel_binding,omitempty"`
 }
 
 // NewDeviceQuoteVerifier constructs a verifier. trust and verdicts may be nil
@@ -117,30 +131,16 @@ func NewDeviceQuoteVerifier(
 	}
 }
 
-// quoteChecks accumulates the outcome of the individual checks so the
-// verdict's failure class can be derived in one place.
-type quoteChecks struct {
-	failures      []string
-	cryptographic bool
-}
-
-// fail records a cryptographic failure: the evidence was present and did not
-// verify.
-func (c *quoteChecks) fail(reason string) {
-	c.failures = append(c.failures, reason)
-	c.cryptographic = true
-}
-
-// absent records an absence of evidence: a check that could not run. The
-// device is denied service but not quarantined.
-func (c *quoteChecks) absent(reason string) {
-	c.failures = append(c.failures, reason)
-}
-
 // Verify evaluates one quote for one device. It returns an error only when
 // the request itself is unusable (unknown device, malformed evidence, a
-// dependency missing); a quote that fails verification is a successful call
-// whose result says Verified=false.
+// dependency missing, the context done); a quote that fails verification is
+// a successful call whose result says Verified=false.
+//
+// The checks themselves — the attestation certificate's chain and
+// tcg-cap-verifiedTPMRestricted, the quote signature, the nonce, the PCR
+// digest and the baseline — are the upstream attested-peer verifier's. What
+// stays here is what only the platform knows: which profile holds the
+// baseline, trust-on-first-use capture into it, and the verdict sink.
 func (v *DeviceQuoteVerifier) Verify(ctx context.Context, deviceID string, evidence []byte) (*DeviceAttestationResult, error) {
 	if v == nil || v.devices == nil {
 		return nil, ErrServiceNotAvailable{Service: "device"}
@@ -160,7 +160,7 @@ func (v *DeviceQuoteVerifier) Verify(ctx context.Context, deviceID string, evide
 		return nil, err
 	}
 
-	var quote DeviceQuoteEvidence
+	var quote boundQuoteEvidence
 	if err := json.Unmarshal(evidence, &quote); err != nil {
 		return nil, ErrInvalidAttestationEvidence{Reason: "evidence must be JSON-encoded device quote evidence"}
 	}
@@ -176,6 +176,13 @@ func (v *DeviceQuoteVerifier) Verify(ctx context.Context, deviceID string, evide
 	if len(quote.PCRs) == 0 {
 		return nil, ErrInvalidAttestationEvidence{Reason: "pcrs are required: the device must report the values it quoted"}
 	}
+	var channelBinding []byte
+	if v.requireChannelBinding {
+		if len(quote.ChannelBinding) == 0 {
+			return nil, ErrInvalidAttestationEvidence{Reason: "channel binding is required: the quote must be bound to the TLS session it was collected over"}
+		}
+		channelBinding = quote.ChannelBinding
+	}
 
 	dev, err := v.devices.Get(ctx, id)
 	if err != nil {
@@ -189,36 +196,94 @@ func (v *DeviceQuoteVerifier) Verify(ctx context.Context, deviceID string, evide
 		Model:      dev.Model,
 		AttestedAt: now,
 	}
-	checks := &quoteChecks{}
 	dv := verdict.DeviceVerdict{DeviceID: dev.ID, TenantID: dev.TenantID, HostID: dev.Hostname, Serial: dev.Serial, AttestedAt: now}
 
-	akPublicKey := v.verifyAKCertificate(dev, now, result, checks)
-
-	quoteVerified := false
-	if akPublicKey != nil {
-		quoteVerified = v.verifyQuote(akPublicKey, &quote, result, checks)
-	} else {
-		checks.absent("quote not evaluated: no verified attestation key")
+	// The one device -> profile resolver the collector also uses (#463):
+	// the profile bound to this device's EK identity first, else the match
+	// rules. Both consumers therefore always land on the same profile.
+	// No profile is a verdict; a store that could not answer is not, so it
+	// fails closed instead of reading as "no profile".
+	profile, err := v.profiles.FindProfileForDevice(ctx, dev)
+	if err != nil {
+		var unbound device.ErrNoProfileForDevice
+		if !errors.As(err, &unbound) {
+			return nil, ErrDeviceProfileLookupFailed{DeviceID: deviceID, Cause: err}
+		}
+		profile = nil
+	}
+	var baseline map[int][]byte
+	if profile != nil {
+		dv.ProfileID = profile.ID
+		if profile.PCRBaseline != nil {
+			baseline = profile.PCRBaseline.Values
+			result.PCRBaselineSource = string(profile.PCRBaseline.Source)
+			result.PCRBaselineRecordedAt = profile.PCRBaseline.RecordedAt
+			dv.BaselineSource = string(profile.PCRBaseline.Source)
+		}
 	}
 
-	if quoteVerified {
-		v.evaluateBaseline(ctx, dev, quote.PCRs, now, result, checks, &dv)
-	} else {
-		checks.absent("PCR baseline not evaluated: quote did not verify")
+	peer, err := xkms.NewPeerAttestationVerifier(xkms.WithPeerVerifierClock(func() time.Time { return now })).Verify(ctx,
+		xkms.PeerEvidence{
+			Quote:            quote.Quote,
+			Signature:        quote.Signature,
+			Nonce:            quote.Nonce,
+			PCRs:             quote.PCRs,
+			AKCertificatePEM: []byte(dev.AttestCert),
+		},
+		v.policy(baseline, channelBinding))
+	if err != nil {
+		var policyErr *xkms.PeerPolicyError
+		if !errors.As(err, &policyErr) {
+			return nil, ErrAttestationFailed{Reason: "peer verification did not complete", Err: err}
+		}
+		// A stored baseline the verifier refuses is a check that could not
+		// run: the device is denied, not quarantined.
+		peer = xkms.PeerVerdict{Failure: xkms.PeerFailureAbsence, Reason: "profile PCR baseline is unusable: " + err.Error()}
 	}
 
-	result.Verified = result.AKCertificateVerified && result.SignatureValid && result.NonceValid && result.PCRsValid
+	result.AKCertificateVerified = peer.Checks.AKCertificate
+	result.SignatureValid = peer.Checks.Signature
+	result.NonceValid = peer.Checks.Nonce && peer.Checks.ChannelBinding
+	result.PCRsValid = peer.Checks.Baseline
+	result.Verified = peer.Passed
+	cryptographic := peer.Failure == xkms.PeerFailureCryptographic
+	var failures []string
+	if !peer.Passed {
+		failures = append(failures, peer.Reason)
+	}
+
+	switch {
+	case profile == nil:
+		failures = append(failures, "no device profile is bound to or matches this device; nothing holds its PCR baseline")
+	case profile.PCRBaseline == nil && provenExceptBaseline(peer.Checks):
+		// The only failed check is the baseline the profile does not have
+		// yet: the proven values become it.
+		captured, reason := v.captureBaseline(ctx, dev, profile, peer.PCRs, now)
+		if captured == nil {
+			failures = []string{reason}
+			break
+		}
+		failures = nil
+		result.Verified = true
+		result.PCRsValid = true
+		result.PCRBaselineCaptured = true
+		result.PCRBaselineSource = string(captured.Source)
+		result.PCRBaselineRecordedAt = captured.RecordedAt
+		dv.BaselineCaptured = true
+		dv.BaselineSource = string(captured.Source)
+	}
+
 	if result.Verified {
 		result.Status = "verified"
 		result.Message = "device attestation verified"
 	} else {
 		result.Status = "failed"
-		result.Message = strings.Join(checks.failures, "; ")
+		result.Message = strings.Join(failures, "; ")
 	}
 
-	result.CryptographicFailure = !result.Verified && checks.cryptographic
+	result.CryptographicFailure = !result.Verified && cryptographic
 	dv.Passed = result.Verified
-	dv.Cryptographic = checks.cryptographic
+	dv.Cryptographic = result.CryptographicFailure
 	if !result.Verified {
 		dv.Reason = result.Message
 	}
@@ -227,142 +292,73 @@ func (v *DeviceQuoteVerifier) Verify(ctx context.Context, deviceID string, evide
 	return result, nil
 }
 
-// verifyAKCertificate resolves the trust anchor for the quote signature: the
-// device's enrolled attestation certificate, chained to the platform CA and
-// carrying tcg-cap-verifiedTPMRestricted. It returns the certified public key
-// in PKIX DER, or nil when no key can be trusted.
+// policy assembles what a device is judged against: the platform CA as the
+// anchor for its attestation certificate, and the profile baseline.
 //
-// A bare AttestPub is deliberately not accepted as an anchor: without the
-// certificate the Restricted attribute cannot be checked, and DevID §8.2
-// makes that check a MUST for a relying party. A device enrolled before
-// certificates were recorded is denied service, not quarantined.
-func (v *DeviceQuoteVerifier) verifyAKCertificate(dev *deviceentities.Device, now time.Time, result *DeviceAttestationResult, checks *quoteChecks) []byte {
-	if strings.TrimSpace(dev.AttestCert) == "" {
-		checks.absent("no attestation certificate enrolled for device; tcg-cap-verifiedTPMRestricted cannot be checked (TCG DevID §8.2)")
-		return nil
-	}
+// A bare AttestPub is deliberately never an anchor: without the certificate
+// the Restricted attribute cannot be checked, and DevID §8.2 makes that check
+// a MUST for a relying party. A CA that cannot be read leaves Anchors nil,
+// which the verifier reports as an absence — denied service, not quarantine.
+func (v *DeviceQuoteVerifier) policy(baseline map[int][]byte, channelBinding []byte) xkms.PeerPolicy {
+	policy := xkms.PeerPolicy{Baseline: baseline, ChannelBinding: channelBinding}
 	if v.trust == nil {
-		checks.absent("no CA trust anchor configured; attestation certificate cannot be chained")
-		return nil
+		return policy
 	}
-
-	roots := x509.NewCertPool()
 	root, err := v.trust.TrustedRoot()
 	if err != nil || root == nil {
-		checks.absent("CA trust anchor unavailable; attestation certificate cannot be chained")
-		return nil
+		v.logger.Warn("CA trust anchor unavailable; attestation certificates cannot be chained", "error", err)
+		return policy
 	}
-	roots.AddCert(root)
-
-	var intermediates *x509.CertPool
+	policy.Anchors = x509.NewCertPool()
+	policy.Anchors.AddCert(root)
 	if intermediate, err := v.trust.TrustedIntermediate(); err == nil && intermediate != nil {
-		intermediates = x509.NewCertPool()
-		intermediates.AddCert(intermediate)
+		policy.Intermediates = x509.NewCertPool()
+		policy.Intermediates.AddCert(intermediate)
 	}
-
-	pub, err := vm.VerifyAKCertificate([]byte(dev.AttestCert), roots, intermediates, now)
-	if err != nil {
-		checks.fail(err.Error())
-		return nil
-	}
-	der, err := x509.MarshalPKIXPublicKey(pub)
-	if err != nil {
-		checks.fail("attestation certificate carries an unsupported public key: " + err.Error())
-		return nil
-	}
-	result.AKCertificateVerified = true
-	return der
+	return policy
 }
 
-// verifyQuote checks the signature, the nonce and that the reported PCR
-// values are the ones the TPM signed. It returns true only when all three
-// hold, which is the precondition for reading the PCR values as evidence.
-func (v *DeviceQuoteVerifier) verifyQuote(akPublicKey []byte, quote *DeviceQuoteEvidence, result *DeviceAttestationResult, checks *quoteChecks) bool {
-	if err := vm.VerifyQuoteSignature(akPublicKey, quote.Quote, quote.Signature); err != nil {
-		checks.fail(err.Error())
-	} else {
-		result.SignatureValid = true
-	}
-
-	if err := vm.VerifyQuoteNonce(quote.Quote, quote.Nonce); err != nil {
-		checks.fail(err.Error())
-	} else {
-		result.NonceValid = true
-	}
-
-	digestValid := false
-	if err := vm.VerifyQuotePCRDigest(quote.Quote, quote.PCRs); err != nil {
-		checks.fail("reported PCR values do not match the signed digest: " + err.Error())
-	} else {
-		digestValid = true
-	}
-
-	return result.SignatureValid && result.NonceValid && digestValid
+// provenExceptBaseline reports whether every check but the baseline held:
+// the quoted PCR values are proven genuine and fresh, so they may seed a
+// profile that has no baseline yet. Nothing unproven ever becomes one.
+func provenExceptBaseline(c xkms.PeerChecks) bool {
+	return c.AKCertificate && c.Signature && c.Nonce && c.ChannelBinding &&
+		c.PCRDigest && c.RequiredPCRs && c.Freshness
 }
 
-// evaluateBaseline compares the (now proven) reported PCR values against the
-// baseline on the device's profile. A profile with no baseline captures one
-// on first use — a trust-on-first-use event that is recorded as such — and
-// the quote passes against the baseline it just set.
-func (v *DeviceQuoteVerifier) evaluateBaseline(
+// captureBaseline records the proven PCR values as the profile's
+// trust-on-first-use baseline — a security event, logged as one. It returns
+// the recorded baseline, or nil and the reason it could not be recorded; a
+// capture that fails leaves the device denied, never verified.
+func (v *DeviceQuoteVerifier) captureBaseline(
 	ctx context.Context,
 	dev *deviceentities.Device,
-	reported map[int][]byte,
+	profile *deviceentities.DeviceProfile,
+	proven map[int][]byte,
 	now time.Time,
-	result *DeviceAttestationResult,
-	checks *quoteChecks,
-	dv *verdict.DeviceVerdict,
-) {
-	// The one device -> profile resolver the collector also uses (#463):
-	// the profile bound to this device's EK identity first, else the match
-	// rules. Both consumers therefore always land on the same profile.
-	profile, err := v.profiles.FindProfileForDevice(ctx, dev)
-	if err != nil || profile == nil {
-		checks.absent("no device profile is bound to or matches this device; nothing holds its PCR baseline")
-		return
+) (*deviceentities.PCRBaseline, string) {
+	baseline := &deviceentities.PCRBaseline{
+		Values:               copyPCRValues(proven),
+		Source:               deviceentities.BaselineSourceTOFU,
+		RecordedAt:           now,
+		RecordedFromDeviceID: dev.ID,
 	}
-	dv.ProfileID = profile.ID
-
-	if profile.PCRBaseline == nil {
-		baseline := &deviceentities.PCRBaseline{
-			Values:               copyPCRValues(reported),
-			Source:               deviceentities.BaselineSourceTOFU,
-			RecordedAt:           now,
-			RecordedFromDeviceID: dev.ID,
-		}
-		if err := baseline.Validate(); err != nil {
-			checks.absent("PCR baseline could not be captured: " + err.Error())
-			return
-		}
-		profile.PCRBaseline = baseline
-		if err := v.profiles.Update(ctx, profile); err != nil {
-			checks.absent("PCR baseline could not be recorded on profile: " + err.Error())
-			return
-		}
-		v.logger.Warn("PCR baseline captured on first use",
-			"profile_id", profile.ID,
-			"profile_name", profile.Name,
-			"device_id", dev.ID,
-			"serial", dev.Serial,
-			"pcr_count", len(baseline.Values),
-		)
-		result.PCRsValid = true
-		result.PCRBaselineCaptured = true
-		result.PCRBaselineSource = string(baseline.Source)
-		result.PCRBaselineRecordedAt = baseline.RecordedAt
-		dv.BaselineCaptured = true
-		dv.BaselineSource = string(baseline.Source)
-		return
+	if err := baseline.Validate(); err != nil {
+		return nil, "PCR baseline could not be captured: " + err.Error()
 	}
-
-	result.PCRBaselineSource = string(profile.PCRBaseline.Source)
-	result.PCRBaselineRecordedAt = profile.PCRBaseline.RecordedAt
-	dv.BaselineSource = string(profile.PCRBaseline.Source)
-	if err := vm.ComparePCRBaseline(reported, profile.PCRBaseline.Values); err != nil {
-		checks.fail(err.Error())
-		return
+	profile.PCRBaseline = baseline
+	if err := v.profiles.Update(ctx, profile); err != nil {
+		profile.PCRBaseline = nil
+		return nil, "PCR baseline could not be recorded on profile: " + err.Error()
 	}
-	result.PCRsValid = true
+	v.logger.Warn("PCR baseline captured on first use",
+		"profile_id", profile.ID,
+		"profile_name", profile.Name,
+		"device_id", dev.ID,
+		"serial", dev.Serial,
+		"pcr_count", len(baseline.Values),
+	)
+	return baseline, ""
 }
 
 // record hands the verdict to the sink. A sink failure is logged, not

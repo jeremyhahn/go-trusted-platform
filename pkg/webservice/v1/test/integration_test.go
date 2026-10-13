@@ -80,7 +80,10 @@ func setup() {
 	// Use simpler IAK strategy to avoid credential activation issues with simulators
 	app.TestConfig.TPMConfig.IdentityProvisioningStrategy = "IAK"
 
-	App = app.DefaultTestConfig()
+	App, err = app.DefaultTestConfig()
+	if err != nil {
+		panic(fmt.Sprintf("Failed to load the test configuration: %v", err))
+	}
 
 	// Configure ACME server for tests
 	// BaseRESTURI should be the base URL without /acme, so the directory handler

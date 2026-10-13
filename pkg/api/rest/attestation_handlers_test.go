@@ -16,6 +16,7 @@ package rest
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -29,7 +30,9 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 )
 
 // =============================================================================
@@ -709,6 +712,7 @@ func TestAttestationHandlers_CollectHostAttestation(t *testing.T) {
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/attestation/host", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
+		req.TLS = testutil.ServerConnectionState(t)
 		w := httptest.NewRecorder()
 
 		handlers.handleCollectHostAttestation(w, req)
@@ -727,6 +731,71 @@ func TestAttestationHandlers_CollectHostAttestation(t *testing.T) {
 		}
 	})
 
+	t.Run("QuotesTheNonceBoundToItsOwnConnection", func(t *testing.T) {
+		var quoted []byte
+		service := &mockAttestationService{
+			collectHostAttestationFunc: func(ctx context.Context, opts *CollectAttestationOptions) (*manifest.HostAttestation, error) {
+				quoted = opts.Nonce
+				return createTestHostAttestation(), nil
+			},
+		}
+		handlers := NewAttestationHandlers(service, testLogger())
+		nonce := []byte("0123456789abcdef")
+		body, err := json.Marshal(CollectHostAttestationRequest{Nonce: base64.StdEncoding.EncodeToString(nonce)})
+		if err != nil {
+			t.Fatalf("failed to encode request: %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/attestation/host", bytes.NewReader(body))
+		req.TLS = testutil.ServerConnectionState(t)
+		w := httptest.NewRecorder()
+
+		handlers.handleCollectHostAttestation(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+		}
+		binding, err := req.TLS.ExportKeyingMaterial(xkmssdk.PeerChannelBindingExporterLabel, nil, xkmssdk.PeerChannelBindingLength)
+		if err != nil {
+			t.Fatalf("exporter failed: %v", err)
+		}
+		if !bytes.Equal(quoted, xkmssdk.PeerQualifyingData(nonce, binding)) {
+			t.Errorf("the service was handed %x, want the nonce bound to the request's connection (#482)", quoted)
+		}
+	})
+
+	t.Run("RefusesAConnectionWithNoBinding", func(t *testing.T) {
+		states := map[string]*tls.ConnectionState{
+			"plain HTTP":       nil,
+			"exporter refused": {Version: tls.VersionTLS12},
+		}
+		for name, state := range states {
+			t.Run(name, func(t *testing.T) {
+				called := false
+				service := &mockAttestationService{
+					collectHostAttestationFunc: func(ctx context.Context, opts *CollectAttestationOptions) (*manifest.HostAttestation, error) {
+						called = true
+						return createTestHostAttestation(), nil
+					},
+				}
+				handlers := NewAttestationHandlers(service, testLogger())
+
+				req := httptest.NewRequest(http.MethodPost, "/api/v1/attestation/host", strings.NewReader(`{}`))
+				req.TLS = state
+				w := httptest.NewRecorder()
+
+				handlers.handleCollectHostAttestation(w, req)
+
+				if w.Code != http.StatusBadRequest {
+					t.Errorf("expected status %d, got %d", http.StatusBadRequest, w.Code)
+				}
+				if called {
+					t.Error("an unbound request must never reach the TPM")
+				}
+			})
+		}
+	})
+
 	t.Run("ServiceError", func(t *testing.T) {
 		service := &mockAttestationService{
 			collectHostAttestationFunc: func(ctx context.Context, opts *CollectAttestationOptions) (*manifest.HostAttestation, error) {
@@ -740,6 +809,7 @@ func TestAttestationHandlers_CollectHostAttestation(t *testing.T) {
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/attestation/host", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
+		req.TLS = testutil.ServerConnectionState(t)
 		w := httptest.NewRecorder()
 
 		handlers.handleCollectHostAttestation(w, req)

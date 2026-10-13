@@ -14,6 +14,7 @@
 package reporting
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -25,6 +26,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -34,6 +36,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -96,6 +99,7 @@ type fakeNode struct {
 	hits         atomic.Int32
 	clockHits    atomic.Int32
 	lastBody     []byte
+	lastBinding  []byte
 	respond      func(w http.ResponseWriter, nonce []byte, body map[string]any)
 	respondClock func(w http.ResponseWriter)
 }
@@ -127,12 +131,19 @@ func newFakeNode(t *testing.T, pki *testPKI) *fakeNode {
 		body, err := io.ReadAll(r.Body)
 		require.NoError(t, err)
 		n.lastBody = body
+		// The node derives the binding from its own end of the connection,
+		// the way a real node's quote handler does.
+		binding, err := r.TLS.ExportKeyingMaterial(xkms.PeerChannelBindingExporterLabel, nil, xkms.PeerChannelBindingLength)
+		require.NoError(t, err)
+		n.lastBinding = binding
 		var req map[string]any
 		require.NoError(t, json.Unmarshal(body, &req))
 		nonceStr, _ := req["nonce"].(string)
 		nonce, err := base64.StdEncoding.DecodeString(nonceStr)
 		require.NoError(t, err)
-		n.respond(w, nonce, req)
+		// It quotes the nonce bound to that connection, never the nonce as
+		// sent (#482), and echoes the value it quoted.
+		n.respond(w, xkms.PeerQualifyingData(nonce, binding), req)
 	})
 	n.srv = httptest.NewUnstartedServer(handler)
 	n.srv.TLS = &tls.Config{
@@ -194,9 +205,13 @@ func TestNodeQuoteSource_CollectsEvidenceOverMTLS(t *testing.T) {
 	assert.Equal(t, nonce, ev.Nonce)
 	assert.Equal(t, []byte("TPMS_ATTEST"), ev.Quote)
 	assert.Len(t, ev.PCRs, 2)
+	// The evidence carries the binding the node derived on its own end.
+	require.Len(t, node.lastBinding, xkms.PeerChannelBindingLength)
+	assert.Equal(t, node.lastBinding, ev.ChannelBinding)
 
-	// The request carried the nonce and the PCR selection in the node's
-	// protojson vocabulary.
+	// The collector sends the bare nonce: the node binds it to the
+	// connection itself (#482). The PCR selection is in the node's protojson
+	// vocabulary.
 	var sent map[string]any
 	require.NoError(t, json.Unmarshal(node.lastBody, &sent))
 	assert.Equal(t, base64.StdEncoding.EncodeToString(nonce), sent["nonce"])
@@ -312,8 +327,97 @@ func TestNodeQuoteSource_WrongNonceEchoIsRefused(t *testing.T) {
 	})
 	require.NoError(t, err)
 	_, err = src.Collect(context.Background(), "42", []byte("n"))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "did not echo")
+	var notBound ErrQuoteNotBound
+	require.ErrorAs(t, err, &notBound)
+	assert.Equal(t, node.address(), notBound.Endpoint)
+}
+
+// TestNodeQuoteSource_BareNonceEchoIsRefused is a node on the old contract,
+// or one that quotes whatever it is sent: it echoes the bare nonce, which
+// proves nothing about the connection, so it is refused (#482).
+func TestNodeQuoteSource_BareNonceEchoIsRefused(t *testing.T) {
+	pki := newTestPKI(t, "node-01.example.internal")
+	node := newFakeNode(t, pki)
+	nonce := []byte("fresh-nonce")
+	node.respond = func(w http.ResponseWriter, _ []byte, _ map[string]any) {
+		_, err := w.Write(envelope(t, goodAttestation(nonce)))
+		require.NoError(t, err)
+	}
+	src, err := NewNodeQuoteSource(NodeQuoteSourceConfig{
+		Addresses: &fixedResolver{eps: []Endpoint{{Address: node.address(), ServerName: "node-01.example.internal"}}},
+		TLS:       dialerWith(pki, pki.client),
+	})
+	require.NoError(t, err)
+
+	_, err = src.Collect(context.Background(), "42", nonce)
+
+	var notBound ErrQuoteNotBound
+	require.ErrorAs(t, err, &notBound)
+	assert.Contains(t, err.Error(), "not bound to this connection")
+}
+
+// TestNodeQuoteSource_RelayedQuoteIsRefused is the relay of #482 against the
+// collector: the endpoint it dials terminates TLS and forwards the bare
+// request to a healthy node over a connection of its own (connection B). The
+// node binds its quote to connection B, so the collector, which holds
+// connection A, refuses it.
+func TestNodeQuoteSource_RelayedQuoteIsRefused(t *testing.T) {
+	pki := newTestPKI(t, "node-01.example.internal")
+	node := newFakeNode(t, pki)
+	relay := newRelay(t, pki, node)
+	src, err := NewNodeQuoteSource(NodeQuoteSourceConfig{
+		Addresses: &fixedResolver{eps: []Endpoint{{Address: relay.Listener.Addr().String(), ServerName: "node-01.example.internal"}}},
+		TLS:       dialerWith(pki, pki.client),
+	})
+	require.NoError(t, err)
+
+	_, err = src.Collect(context.Background(), "42", []byte("fresh-nonce"))
+
+	var notBound ErrQuoteNotBound
+	require.ErrorAs(t, err, &notBound)
+	assert.Equal(t, int32(1), node.hits.Load(), "the node was reached through the relay and quoted")
+
+	// The refusal is the recorded cause of the collection failing, not
+	// flattened into a string.
+	var unreachable ErrNodeUnreachable
+	require.ErrorAs(t, err, &unreachable)
+	require.Len(t, unreachable.Causes, 1)
+	assert.Equal(t, notBound, unreachable.Causes[0])
+}
+
+// newRelay is an endpoint that holds a valid certificate and passes every
+// host-attestation request on to node over its own mTLS connection,
+// returning the node's answer verbatim.
+func newRelay(t *testing.T, pki *testPKI, node *fakeNode) *httptest.Server {
+	t.Helper()
+	upstream := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{
+		Certificates: []tls.Certificate{pki.client},
+		RootCAs:      pki.pool,
+		ServerName:   "node-01.example.internal",
+		MinVersion:   tls.VersionTLS12,
+	}}}
+	t.Cleanup(upstream.CloseIdleConnections)
+	relay := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		forward, err := http.NewRequestWithContext(r.Context(), r.Method, node.srv.URL+r.URL.Path, r.Body)
+		require.NoError(t, err)
+		forward.Header.Set("Content-Type", r.Header.Get("Content-Type"))
+		resp, err := upstream.Do(forward)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, resp.Body.Close()) }()
+		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+		w.WriteHeader(resp.StatusCode)
+		_, err = io.Copy(w, resp.Body)
+		require.NoError(t, err)
+	}))
+	relay.TLS = &tls.Config{
+		Certificates: []tls.Certificate{pki.server},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    pki.pool,
+		MinVersion:   tls.VersionTLS12,
+	}
+	relay.StartTLS()
+	t.Cleanup(relay.Close)
+	return relay
 }
 
 func TestNodeQuoteSource_OversizedResponseIsRefused(t *testing.T) {
@@ -379,6 +483,144 @@ func TestNodeQuoteSource_DialerErrorsAndInsecureConfigsAreRefused(t *testing.T) 
 	assert.Contains(t, ErrInsecureDialer{Endpoint: "x"}.Error(), "verification disabled")
 }
 
+// A quote relayed from another session must not verify, so every
+// connection hands the node different qualifying data for the same nonce.
+func TestNodeQuoteSource_EachConnectionIsBoundSeparately(t *testing.T) {
+	pki := newTestPKI(t, "node-01.example.internal")
+	node := newFakeNode(t, pki)
+	src, err := NewNodeQuoteSource(NodeQuoteSourceConfig{
+		Addresses: &fixedResolver{eps: []Endpoint{{Address: node.address(), ServerName: "node-01.example.internal"}}},
+		TLS:       dialerWith(pki, pki.client),
+	})
+	require.NoError(t, err)
+
+	nonce := []byte("same-nonce")
+	firstEvidence, err := src.Collect(context.Background(), "42", nonce)
+	require.NoError(t, err)
+	first := node.lastBinding
+	secondEvidence, err := src.Collect(context.Background(), "42", nonce)
+	require.NoError(t, err)
+	assert.NotEqual(t, first, node.lastBinding)
+
+	var a, b Evidence
+	require.NoError(t, json.Unmarshal(firstEvidence, &a))
+	require.NoError(t, json.Unmarshal(secondEvidence, &b))
+	assert.NotEqual(t, a.ChannelBinding, b.ChannelBinding,
+		"the same nonce over two connections is bound to two different values")
+	assert.Equal(t, int32(2), node.hits.Load())
+}
+
+func TestNodeQuoteSource_DialCompletesTheHandshake(t *testing.T) {
+	pki := newTestPKI(t, "node-01.example.internal")
+	node := newFakeNode(t, pki)
+	src, err := NewNodeQuoteSource(NodeQuoteSourceConfig{
+		Addresses: &fixedResolver{},
+		TLS:       dialerWith(pki, pki.client),
+	})
+	require.NoError(t, err)
+
+	conn, err := src.dial(context.Background(), Endpoint{Address: node.address(), ServerName: "node-01.example.internal"})
+	require.NoError(t, err)
+	t.Cleanup(func() { src.closeConn(conn) })
+
+	state := conn.ConnectionState()
+	assert.True(t, state.HandshakeComplete)
+	assert.Equal(t, "node-01.example.internal", state.ServerName)
+	binding, err := xkms.PeerChannelBinding(&state)
+	require.NoError(t, err)
+	assert.Len(t, binding, xkms.PeerChannelBindingLength)
+}
+
+func TestNodeQuoteSource_DialRefusesAnUnreachableEndpoint(t *testing.T) {
+	pki := newTestPKI(t, "node-01.example.internal")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := ln.Addr().String()
+	require.NoError(t, ln.Close())
+
+	src, err := NewNodeQuoteSource(NodeQuoteSourceConfig{
+		Addresses: &fixedResolver{},
+		TLS:       dialerWith(pki, pki.client),
+	})
+	require.NoError(t, err)
+	conn, err := src.dial(context.Background(), Endpoint{Address: addr, ServerName: "node-01.example.internal"})
+	require.Error(t, err)
+	assert.Nil(t, conn)
+}
+
+func TestNodeQuoteSource_CloseConnIsQuietOnAClosedConnection(t *testing.T) {
+	pki := newTestPKI(t, "node-01.example.internal")
+	node := newFakeNode(t, pki)
+	var logs bytes.Buffer
+	src, err := NewNodeQuoteSource(NodeQuoteSourceConfig{
+		Addresses: &fixedResolver{},
+		TLS:       dialerWith(pki, pki.client),
+		Logger:    slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	})
+	require.NoError(t, err)
+	conn, err := src.dial(context.Background(), Endpoint{Address: node.address(), ServerName: "node-01.example.internal"})
+	require.NoError(t, err)
+
+	src.closeConn(conn)
+	src.closeConn(conn)
+	assert.Empty(t, logs.String())
+}
+
+// failingCloseConn is a connection whose Close fails with something other
+// than net.ErrClosed.
+type failingCloseConn struct{ net.Conn }
+
+func (failingCloseConn) Close() error { return errors.New("close failed") }
+
+func TestNodeQuoteSource_CloseConnLogsARealCloseFailure(t *testing.T) {
+	client, server := net.Pipe()
+	t.Cleanup(func() {
+		assert.NoError(t, client.Close())
+		assert.NoError(t, server.Close())
+	})
+	var logs bytes.Buffer
+	src, err := NewNodeQuoteSource(NodeQuoteSourceConfig{
+		Addresses: &fixedResolver{},
+		TLS:       func(context.Context, Endpoint) (*tls.Config, error) { return nil, nil },
+		Logger:    slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	})
+	require.NoError(t, err)
+
+	src.closeConn(tls.Client(failingCloseConn{client}, &tls.Config{MinVersion: tls.VersionTLS12}))
+	assert.Contains(t, logs.String(), "close failed")
+}
+
+func TestSingleUseDialer_HandsOverOneConnectionThenRefuses(t *testing.T) {
+	client, server := net.Pipe()
+	t.Cleanup(func() {
+		assert.NoError(t, client.Close())
+		assert.NoError(t, server.Close())
+	})
+	dial := singleUseDialer(Endpoint{Address: "node-01:9443"}, client)
+
+	got, err := dial(context.Background(), "tcp", "node-01:9443")
+	require.NoError(t, err)
+	assert.Equal(t, client, got)
+
+	got, err = dial(context.Background(), "tcp", "node-01:9443")
+	assert.Nil(t, got)
+	var spent ErrConnectionSpent
+	require.ErrorAs(t, err, &spent)
+	assert.Equal(t, "node-01:9443", spent.Endpoint)
+	assert.Contains(t, err.Error(), "refusing to redial")
+}
+
+func TestErrChannelBinding_NamesTheEndpointAndCause(t *testing.T) {
+	cause := errors.New("TLS exporter refused")
+	var err error = ErrChannelBinding{Endpoint: "10.0.0.5:9443", Cause: cause}
+	assert.Contains(t, err.Error(), "10.0.0.5:9443")
+	assert.Contains(t, err.Error(), "TLS exporter refused")
+	assert.ErrorIs(t, err, cause)
+
+	assert.Equal(t, "attestation reporting: no channel binding on the connection to x",
+		ErrChannelBinding{Endpoint: "x"}.Error())
+}
+
 func TestNodeQuoteSource_ContextCancellationStopsTheAttempts(t *testing.T) {
 	pki := newTestPKI(t, "node-01.example.internal")
 	dead, err := net.Listen("tcp", "127.0.0.1:0")
@@ -395,6 +637,7 @@ func TestNodeQuoteSource_ContextCancellationStopsTheAttempts(t *testing.T) {
 	var unreachable ErrNodeUnreachable
 	require.ErrorAs(t, err, &unreachable)
 	assert.Len(t, unreachable.Attempts, 1, "a cancelled context stops after the first attempt")
+	assert.Len(t, unreachable.Causes, 1, "each attempt keeps its cause")
 }
 
 func TestNodeQuoteSource_RedirectsAreNotFollowed(t *testing.T) {

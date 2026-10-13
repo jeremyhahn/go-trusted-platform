@@ -1244,14 +1244,11 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.DNSService/DeleteZone":   {"/api/v1/dns/zones", http.MethodDelete},
 	"/platform.v1.DNSService/ListZones":    {"/api/v1/dns/zones", http.MethodGet},
 
-	// Attestation Service
-	"/platform.v1.AttestationService/GetQuote":       {"/api/v1/attestation/quote", http.MethodPost},
-	"/platform.v1.AttestationService/VerifyQuote":    {"/api/v1/attestation/verify", http.MethodPost},
-	"/platform.v1.AttestationService/GetEK":          {"/api/v1/attestation/ek", http.MethodGet},
-	"/platform.v1.AttestationService/GetAK":          {"/api/v1/attestation/ak", http.MethodGet},
-	"/platform.v1.AttestationService/CreateAK":       {"/api/v1/attestation/ak", http.MethodPost},
-	"/platform.v1.AttestationService/ChallengeAK":    {"/api/v1/attestation/challenge", http.MethodPost},
-	"/platform.v1.AttestationService/VerifyChalleng": {"/api/v1/attestation/challenge/verify", http.MethodPost},
+	// Attestation Service. The keys are the rpcs attestation.proto declares;
+	// the routes are pkg/webservice/v1/rest/attestation/server_router.go's.
+	"/platform.v1.AttestationService/GetAttestationQuote":    {"/api/v1/attestation/quote", http.MethodPost},
+	"/platform.v1.AttestationService/VerifyAttestationQuote": {"/api/v1/attestation/quote/verify", http.MethodPost},
+	"/platform.v1.AttestationService/CollectHostAttestation": {"/api/v1/attestation/host", http.MethodPost},
 
 	// IDevID Service
 	"/platform.v1.IDevIDService/Generate":    {"/api/v1/idevid", http.MethodPost},

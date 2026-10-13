@@ -379,6 +379,12 @@ export interface VerifyQuoteRequest {
   akPublic?: string;
   /** Nonce (base64) */
   nonce: string;
+  /**
+   * Channel binding the quote was bound to (base64), as returned with it.
+   * The node quoted SHA-256(nonce || channelBinding), so a bound quote
+   * verifies only when this is sent with the nonce.
+   */
+  channelBinding?: string;
   /** Expected PCR values */
   expectedPcrs?: PCRValue[];
 }
@@ -689,6 +695,12 @@ export interface QuoteResponse {
   pcrValues?: PCRValue[];
   /** Event log (base64) */
   eventLog?: string;
+  /**
+   * TLS exporter binding of the connection the request arrived on (base64).
+   * The quote's qualifying data is SHA-256(nonce || channelBinding); see
+   * checkQuoteBinding.
+   */
+  channelBinding?: string;
 }
 
 /**

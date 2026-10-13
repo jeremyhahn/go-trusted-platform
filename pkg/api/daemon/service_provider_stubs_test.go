@@ -304,7 +304,7 @@ func TestPlatformServiceProvider_TPMStubs(t *testing.T) {
 		{"TPMDeleteIAK", func() error { _, err := provider.TPMDeleteIAK(ctx); return err }},
 		{"TPMQuote", func() error { _, err := provider.TPMQuote(ctx, []byte("nonce"), []int{0, 1}); return err }},
 		{"TPMVerifyQuote", func() error {
-			_, err := provider.TPMVerifyQuote(ctx, []byte("q"), []byte("s"), []byte("n"))
+			_, err := provider.TPMVerifyQuote(ctx, []byte("q"), []byte("s"), []byte("n"), nil)
 			return err
 		}},
 		{"TPMReadPCRs", func() error { _, err := provider.TPMReadPCRs(ctx, []int{0, 1}); return err }},

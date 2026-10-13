@@ -247,6 +247,12 @@ export interface AttestationQuote {
   quoteData: string;
   /** AK signature (base64) */
   signature: string;
+  /**
+   * Scheme the AK signed under, as x509.SignatureAlgorithm names it
+   * (e.g. "SHA256-RSAPSS", "ECDSA-SHA256"). Verification refuses a
+   * quote that declares none or an unknown one.
+   */
+  signatureAlgorithm: string;
   /** PCR values */
   pcrValues: AttestationPCRValue[];
   /** Nonce (base64) */
@@ -347,6 +353,12 @@ export interface VerifyAttestationQuoteRequest {
   akPublicKeyPem: string;
   /** Expected nonce (base64) */
   expectedNonce: string;
+  /**
+   * Channel binding the quote was bound to (base64), as returned with it.
+   * The node quoted SHA-256(nonce || channelBinding), so a bound quote
+   * verifies only when this is sent with the nonce.
+   */
+  channelBinding?: string;
   /** Expected PCR values */
   expectedPcrs?: AttestationPCRValue[];
 }
@@ -455,6 +467,12 @@ export interface GetAttestationQuoteResponse {
   status: AttestationStatus;
   /** Generated quote */
   quote?: AttestationQuote;
+  /**
+   * TLS exporter binding of the connection the request arrived on (base64).
+   * The quote's qualifying data is SHA-256(nonce || channelBinding); see
+   * checkQuoteBinding.
+   */
+  channelBinding?: string;
 }
 
 /**

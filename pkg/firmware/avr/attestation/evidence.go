@@ -11,13 +11,18 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 
-	aggeneric "github.com/jeremyhahn/arduino-generic/sdk/go"
+	tfw "github.com/jeremyhahn/trusted-firmware/sdk/go"
 
 	bmcattestation "github.com/jeremyhahn/go-trusted-platform/pkg/bmc/attestation"
 )
 
-// Vendor identifies arduino-generic evidence inside the vendor-neutral
+// Vendor identifies trusted-firmware evidence inside the vendor-neutral
 // contract.
+//
+// The backend keeps no evidence store (see [Backend.noEvidenceStore]): every
+// Evidence it checks in [Backend.GetInfo] was produced by this build's own
+// Dump, so the value can change without stranding evidence written under an
+// earlier name.
 //
 // [bmcattestation.Vendor] is an open string type whose named constants are BMC
 // manufacturers, and [bmcattestation.DetectVendor] can never return this one:
@@ -25,7 +30,7 @@ import (
 // sniff. So this backend is NOT registered with the BMC dispatcher — routing
 // to it is the caller's decision, made from the transport, not from a Redfish
 // reply.
-const Vendor bmcattestation.Vendor = "arduino-generic"
+const Vendor bmcattestation.Vendor = "trusted-firmware"
 
 // Attestation operations this backend performs.
 //
@@ -48,7 +53,7 @@ const (
 // second name for the same bytes.
 const (
 	// FormatFrame is the fixed-layout signed evidence frame defined by
-	// include/ag/protocol.h in arduino-generic.
+	// include/tfw/protocol.h in trusted-firmware.
 	FormatFrame = "ag-attest-v1"
 
 	// FormatDICE is the alias certificate. The string matches the format
@@ -137,7 +142,7 @@ const (
 // TPM PCRs and a verifier must never compare them against one. See the
 // package documentation for the full rationale.
 const (
-	// PCRBootloader is reserved for ag-boot's measurement of its own boot
+	// PCRBootloader is reserved for tfw-boot's measurement of its own boot
 	// section. The wire protocol does not carry it today, so this index is
 	// ABSENT from every PCRBank this backend produces. It is reserved so
 	// that when the bootloader does report it, PCRApplication does not
@@ -145,17 +150,17 @@ const (
 	PCRBootloader uint32 = 0
 
 	// PCRApplication is FWHash: SHA-256 over the application flash, taken
-	// by ag-boot before it jumps to the application. This is the
+	// by tfw-boot before it jumps to the application. This is the
 	// reproducible golden-build value Policy.Reference compares.
 	PCRApplication uint32 = 1
 )
 
-// The evidence frame layout, mirroring include/ag/protocol.h:
+// The evidence frame layout, mirroring include/tfw/protocol.h:
 //
 //	[Version:1][Nonce:16][DeviceID:16][FWHash:32][BootCount:4]
 //	[UptimeMs:4][AlgID:1][Signature:64][Reserved:26]
 //
-// THIS IS A SECOND COPY OF A WIRE DEFINITION arduino-generic owns, and it is
+// THIS IS A SECOND COPY OF A WIRE DEFINITION trusted-firmware owns, and it is
 // here only because its Go SDK returns the frame as opaque bytes and exposes
 // no parser for it. The gap is filed upstream; when the SDK grows a
 // ParseEvidence, these offsets are deleted rather than kept in step. The
@@ -200,8 +205,8 @@ type frame struct {
 // contract's single parse point. Nothing else in this package — not Verify,
 // not Compare — reads Raw.
 func parseFrame(raw []byte) (*frame, error) {
-	if len(raw) != aggeneric.EvidenceLen {
-		return nil, ErrEvidenceLength{Got: len(raw), Want: aggeneric.EvidenceLen}
+	if len(raw) != tfw.EvidenceLen {
+		return nil, ErrEvidenceLength{Got: len(raw), Want: tfw.EvidenceLen}
 	}
 	version := raw[offFrameVersion]
 	if version != frameVersion {
@@ -209,7 +214,7 @@ func parseFrame(raw []byte) (*frame, error) {
 	}
 	return &frame{
 		version:   version,
-		nonce:     clone(raw[offFrameNonce : offFrameNonce+aggeneric.AttestNonceLen]),
+		nonce:     clone(raw[offFrameNonce : offFrameNonce+tfw.AttestNonceLen]),
 		deviceID:  clone(raw[offFrameDevice : offFrameDevice+lenFrameDeviceID]),
 		fwHash:    clone(raw[offFrameFWHash : offFrameFWHash+lenFrameFWHash]),
 		bootCount: binary.LittleEndian.Uint32(raw[offFrameBoot : offFrameBoot+4]),

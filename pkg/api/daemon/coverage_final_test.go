@@ -103,6 +103,8 @@ func TestCoverageFinalUncoveredErrors(t *testing.T) {
 		// Device errors
 		{"ErrDeviceOperationFailed", ErrDeviceOperationFailed{Operation: "provision", Cause: sentinel}, "device operation provision failed"},
 		{"ErrDeviceProfileServiceNotAvailable", ErrDeviceProfileServiceNotAvailable{}, "device: profile service not available"},
+		{"ErrDeviceProfileLookupFailed", ErrDeviceProfileLookupFailed{DeviceID: "7", Cause: sentinel}, "device profile lookup failed for device 7"},
+		{"ErrAttestationFailed with cause", ErrAttestationFailed{Reason: "peer verification did not complete", Err: sentinel}, "attestation failed: peer verification did not complete: "},
 
 		// TLS config
 		{"ErrTLSConfigFailed", ErrTLSConfigFailed{Reason: "missing cert"}, "tls config failed: missing cert"},
@@ -153,6 +155,8 @@ func TestCoverageFinalUnwrapMethods(t *testing.T) {
 		{"ErrTPM2OperationFailed", ErrTPM2OperationFailed{Operation: "x", Cause: sentinel}, sentinel},
 		{"ErrContainerOperationFailed", ErrContainerOperationFailed{Operation: "x", Cause: sentinel}, sentinel},
 		{"ErrDeviceOperationFailed", ErrDeviceOperationFailed{Operation: "x", Cause: sentinel}, sentinel},
+		{"ErrDeviceProfileLookupFailed", ErrDeviceProfileLookupFailed{DeviceID: "x", Cause: sentinel}, sentinel},
+		{"ErrAttestationFailed", ErrAttestationFailed{Reason: "x", Err: sentinel}, sentinel},
 		{"ErrTenantDEKProvision", ErrTenantDEKProvision{TenantID: "t", Cause: sentinel}, sentinel},
 		{"ErrTenantDEKDeprovision", ErrTenantDEKDeprovision{TenantID: "t", Cause: sentinel}, sentinel},
 		{"ErrPXERegistrationFailed", ErrPXERegistrationFailed{MACAddress: "m", Cause: sentinel}, sentinel},

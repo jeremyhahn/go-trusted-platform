@@ -181,6 +181,17 @@ It should not — panicking handlers are recovered into an internal-error respon
 on both QUIC and gRPC specifically so a client never sees a bare EOF. A genuine
 bare EOF is a different problem.
 
+**`platformd` refuses to start with a log error.**
+It could not use `--log-dir`. "invalid log directory" means the value is
+empty or contains a NUL byte; "failed to create log directory" or "failed to
+open log file" carries the operating system's reason, usually a permission
+problem or a file where a directory should be. `platformd serve` prints the
+error and exits non-zero; it no longer panics with a stack trace.
+
+**`platformd` refuses to start with "failed to read the local hostname".**
+No hostname is configured and the operating system could not supply one. Set
+the hostname in the configuration.
+
 **`platformd serve` refuses to start: "tokens without scope claims are authorized by the IAM policy enforcement point".**
 gRPC TCP is on with neither mTLS nor platform tokens, and quicbaas is embedded.
 The embedded SDK cannot answer the policy check that plain tokens need, so

@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/quotebind"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/common"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
 )
@@ -97,19 +98,34 @@ func (c *Client) DeleteManifest(ctx context.Context, id string) error {
 	return nil
 }
 
-// GetAttestationQuote generates a TPM quote for the specified PCRs.
-func (c *Client) GetAttestationQuote(ctx context.Context, config *platformv1.AttestationQuoteConfig, nonce []byte) (*platformv1.AttestationQuote, error) {
+// GetAttestationQuote asks the node for a quote over nonce bound to the
+// connection the call travels on (#482). The node quotes
+// SHA-256(nonce || channel_binding), channel_binding being the TLS exporter
+// of that connection (label EXPORTER-attested-peer), and echoes the
+// binding. The response is returned only if the echo and the signed quote
+// both match the binding this end derives, so a quote relayed from another
+// connection is refused with *quotebind.ErrQuoteNotBound. Pass the
+// response's channel_binding with the nonce to VerifyAttestationQuote.
+// Transports with no TLS 1.3 connection (Unix socket, MCP, embedded)
+// refuse the call.
+func (c *Client) GetAttestationQuote(ctx context.Context, config *platformv1.AttestationQuoteConfig, nonce []byte) (*platformv1.GetAttestationQuoteResponse, error) {
+	var capture quotebind.Capture
 	resp, err := c.grpc.GetAttestationQuote(ctx, &platformv1.GetAttestationQuoteRequest{
 		Config: config,
 		Nonce:  nonce,
-	})
+	}, capture.Option())
 	if err != nil {
 		return nil, &ErrGetQuoteFailed{Cause: err}
 	}
-	return resp.Quote, nil
+	if err := capture.CheckEcho(nonce, resp.GetChannelBinding(), resp.GetQuote().GetQuoteData()); err != nil {
+		return nil, &ErrGetQuoteFailed{Cause: err}
+	}
+	return resp, nil
 }
 
 // VerifyAttestationQuote verifies a TPM quote against expected values.
+// For a quote GetAttestationQuote returned, set channel_binding to the
+// binding it echoed: the daemon then expects SHA-256(nonce || binding).
 func (c *Client) VerifyAttestationQuote(ctx context.Context, req *platformv1.VerifyAttestationQuoteRequest) (*platformv1.VerifyAttestationQuoteResponse, error) {
 	resp, err := c.grpc.VerifyAttestationQuote(ctx, req)
 	if err != nil {
@@ -118,13 +134,20 @@ func (c *Client) VerifyAttestationQuote(ctx context.Context, req *platformv1.Ver
 	return resp, nil
 }
 
-// CollectHostAttestation collects attestation data from the host TPM.
+// CollectHostAttestation collects attestation data from the host TPM,
+// bound to the connection the call travels on exactly as
+// GetAttestationQuote is: the attestation is returned only if its signed
+// quote carries SHA-256(nonce || binding) for this end's binding.
 func (c *Client) CollectHostAttestation(ctx context.Context, config *platformv1.AttestationQuoteConfig, nonce []byte) (*platformv1.HostAttestation, error) {
+	var capture quotebind.Capture
 	resp, err := c.grpc.CollectHostAttestation(ctx, &platformv1.CollectHostAttestationRequest{
 		Config: config,
 		Nonce:  nonce,
-	})
+	}, capture.Option())
 	if err != nil {
+		return nil, &ErrCollectHostAttestationFailed{Cause: err}
+	}
+	if err := capture.Check(nonce, resp.GetAttestation().GetQuoteData()); err != nil {
 		return nil, &ErrCollectHostAttestationFailed{Cause: err}
 	}
 	return resp.Attestation, nil

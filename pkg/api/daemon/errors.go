@@ -653,10 +653,37 @@ func (e ErrInvalidDeviceID) GRPCStatus() *status.Status {
 // ErrAttestationFailed is returned when device attestation fails
 type ErrAttestationFailed struct {
 	Reason string
+	// Err is the underlying cause, when there is one: a context error or a
+	// typed upstream verifier error stays matchable through errors.Is/As.
+	Err error
 }
 
 func (e ErrAttestationFailed) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("attestation failed: %s: %v", e.Reason, e.Err)
+	}
 	return fmt.Sprintf("attestation failed: %s", e.Reason)
+}
+
+func (e ErrAttestationFailed) Unwrap() error {
+	return e.Err
+}
+
+// ErrDeviceProfileLookupFailed is returned when the profile store could not
+// answer which profile holds a device's PCR baseline. It is distinct from a
+// device with no profile (device.ErrNoProfileForDevice), which is a verdict:
+// a lookup failure decides nothing, so the verification fails closed.
+type ErrDeviceProfileLookupFailed struct {
+	DeviceID string
+	Cause    error
+}
+
+func (e ErrDeviceProfileLookupFailed) Error() string {
+	return fmt.Sprintf("device profile lookup failed for device %s: %v", e.DeviceID, e.Cause)
+}
+
+func (e ErrDeviceProfileLookupFailed) Unwrap() error {
+	return e.Cause
 }
 
 // ErrDeviceNotFound is returned when a device is not found

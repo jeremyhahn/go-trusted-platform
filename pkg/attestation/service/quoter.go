@@ -136,10 +136,11 @@ func (h *hostQuote) attestation(nonce []byte) *manifest.HostAttestation {
 
 func (h *hostQuote) result(nonce []byte) *daemon.QuoteResult {
 	return &daemon.QuoteResult{
-		QuoteData: h.quote.Quoted,
-		Signature: h.quote.Signature,
-		PCRValues: h.values,
-		Nonce:     nonce,
-		EventLog:  h.quote.EventLog,
+		QuoteData:          h.quote.Quoted,
+		Signature:          h.quote.Signature,
+		PCRValues:          h.values,
+		Nonce:              nonce,
+		EventLog:           h.quote.EventLog,
+		SignatureAlgorithm: h.sigAlg,
 	}
 }

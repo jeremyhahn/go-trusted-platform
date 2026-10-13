@@ -81,12 +81,21 @@ func tlsPair(t *testing.T, version uint16) (client, server tls.ConnectionState) 
 	return cli.ConnectionState(), srv.ConnectionState()
 }
 
+// binderOf returns the ChannelBinder opt carries.
+func binderOf(t *testing.T, opt grpc.CallOption) ChannelBinder {
+	t.Helper()
+	binder, ok := ChannelBindingFrom([]grpc.CallOption{opt})
+	if !ok {
+		t.Fatal("the option carries no channel binding")
+	}
+	return binder
+}
+
 func TestChannelBindingFrom(t *testing.T) {
 	bind := func(context.Context, []byte) error { return nil }
 	opts := []grpc.CallOption{grpc.WaitForReady(true), WithChannelBinding(bind)}
 
-	got, ok := ChannelBindingFrom(opts)
-	if !ok || got == nil {
+	if _, ok := ChannelBindingFrom(opts); !ok {
 		t.Fatal("ChannelBindingFrom did not find the binding option")
 	}
 }
@@ -98,6 +107,10 @@ func TestChannelBindingFrom_Absent(t *testing.T) {
 	if _, ok := ChannelBindingFrom([]grpc.CallOption{WithChannelBinding(nil)}); ok {
 		t.Fatal("ChannelBindingFrom accepted a nil BindFunc")
 	}
+	bind := func(context.Context, []byte) error { return nil }
+	if _, ok := ChannelBindingFrom([]grpc.CallOption{WithExportedChannelBinding(nil, bind)}); ok {
+		t.Fatal("ChannelBindingFrom accepted a nil ExportFunc")
+	}
 }
 
 func TestBindChannel_MatchesPeerExporter(t *testing.T) {
@@ -108,10 +121,10 @@ func TestBindChannel_MatchesPeerExporter(t *testing.T) {
 	}
 
 	var got []byte
-	err = BindChannel(context.Background(), "test", &client, func(_ context.Context, binding []byte) error {
+	err = BindChannel(context.Background(), "test", &client, binderOf(t, WithChannelBinding(func(_ context.Context, binding []byte) error {
 		got = binding
 		return nil
-	})
+	})))
 	if err != nil {
 		t.Fatalf("BindChannel: %v", err)
 	}
@@ -133,10 +146,10 @@ func TestBindChannel_Refusals(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			called := false
-			err := BindChannel(context.Background(), "test", tt.state, func(context.Context, []byte) error {
+			err := BindChannel(context.Background(), "test", tt.state, binderOf(t, WithChannelBinding(func(context.Context, []byte) error {
 				called = true
 				return nil
-			})
+			})))
 			var unavailable *ErrChannelBindingUnavailable
 			if !errors.As(err, &unavailable) {
 				t.Fatalf("err = %v, want ErrChannelBindingUnavailable", err)
@@ -152,8 +165,59 @@ func TestBindChannel_Refusals(t *testing.T) {
 	}
 
 	client13, _ := tlsPair(t, tls.VersionTLS13)
-	err := BindChannel(context.Background(), "test", &client13, func(context.Context, []byte) error { return bindErr })
+	err := BindChannel(context.Background(), "test", &client13, binderOf(t, WithChannelBinding(func(context.Context, []byte) error { return bindErr })))
 	if !errors.Is(err, bindErr) {
 		t.Fatalf("err = %v, want the BindFunc's error", err)
+	}
+}
+
+// peerLabel stands in for an exporter label other than the default one.
+const peerLabel = "EXPORTER-binding-test-peer"
+
+func exportPeer(state *tls.ConnectionState) ([]byte, error) {
+	return state.ExportKeyingMaterial(peerLabel, nil, ChannelBindingSize)
+}
+
+func TestBindChannel_UsesTheCallsExporter(t *testing.T) {
+	client, server := tlsPair(t, tls.VersionTLS13)
+	want, err := exportPeer(&server)
+	if err != nil {
+		t.Fatalf("server exporter: %v", err)
+	}
+	diskless, err := ExportChannelBinding(&server)
+	if err != nil {
+		t.Fatalf("default exporter: %v", err)
+	}
+
+	var got []byte
+	binder := binderOf(t, WithExportedChannelBinding(exportPeer, func(_ context.Context, binding []byte) error {
+		got = binding
+		return nil
+	}))
+	if err := BindChannel(context.Background(), "test", &client, binder); err != nil {
+		t.Fatalf("BindChannel: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("the binding was not derived with the call's exporter")
+	}
+	if bytes.Equal(got, diskless) {
+		t.Fatal("the binding was derived with the default exporter")
+	}
+}
+
+func TestBindChannel_ExporterFailureIsUnavailable(t *testing.T) {
+	exportErr := errors.New("exporter failed")
+	called := false
+	binder := binderOf(t, WithExportedChannelBinding(
+		func(*tls.ConnectionState) ([]byte, error) { return nil, exportErr },
+		func(context.Context, []byte) error { called = true; return nil },
+	))
+	err := BindChannel(context.Background(), "test", nil, binder)
+	var unavailable *ErrChannelBindingUnavailable
+	if !errors.As(err, &unavailable) || !errors.Is(err, exportErr) {
+		t.Fatalf("err = %v, want ErrChannelBindingUnavailable caused by the exporter", err)
+	}
+	if called {
+		t.Fatal("bind was called without a channel binding")
 	}
 }

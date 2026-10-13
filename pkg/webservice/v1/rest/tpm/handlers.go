@@ -19,6 +19,7 @@ import (
 
 	"github.com/gorilla/mux"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest"
@@ -363,7 +364,10 @@ func (h *Handlers) Quote(w http.ResponseWriter, r *http.Request) {
 		h.respWriter.Error400(w, r, err)
 		return
 	}
-	resp, err := h.server.Quote(r.Context(), req)
+	// The node binds its quote to the connection this request arrived on
+	// (#482); nil records a plain-HTTP request, which it refuses.
+	ctx := channelbind.WithConnectionTLS(r.Context(), channelbind.TransportREST, r.TLS)
+	resp, err := h.server.Quote(ctx, req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return

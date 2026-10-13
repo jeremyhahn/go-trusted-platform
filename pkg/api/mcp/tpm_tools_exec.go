@@ -261,8 +261,12 @@ func (r *ToolRegistry) executeTPMVerifyQuote(ctx context.Context, args map[strin
 	if err != nil {
 		return nil, ErrTPMInvalidNonce
 	}
+	channelBinding, err := base64.StdEncoding.DecodeString(getString(args, "channel_binding"))
+	if err != nil {
+		return nil, ErrTPMInvalidData
+	}
 
-	result, err := r.service.TPMVerifyQuote(ctx, quote, signature, nonce)
+	result, err := r.service.TPMVerifyQuote(ctx, quote, signature, nonce, channelBinding)
 	if err != nil {
 		return nil, err
 	}

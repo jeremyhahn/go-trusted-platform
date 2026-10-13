@@ -59,7 +59,7 @@ EEPROM Layout (1KB):
 ### Arduino Nano (ATmega328P - 32KB Flash)
 
 > **CORRECTED 2026-09-23 against a measured implementation.** Every figure in
-> the original breakdown was an estimate; `jeremyhahn/arduino-generic` has since
+> the original breakdown was an estimate; `jeremyhahn/trusted-firmware` has since
 > built this bootloader and measured it with avr-gcc 14.2 at `-Os -flto
 > --gc-sections`. Two of the estimates were not close, and one of them decided
 > an architectural choice this document then recommended. Reproduce with
@@ -98,7 +98,7 @@ EEPROM Layout (1KB):
   **Secure boot on AVR therefore requires an element.** A board without one gets
   measured boot — the platform refuses to trust a device whose `FWHash` does not
   match the golden build — but a tampered image still runs locally until the
-  next attestation. See `docs/security/bootloader.md` in arduino-generic.
+  next attestation. See `docs/secure-boot/architecture.md` in trusted-firmware.
 - **Optional libtrusted-avr.a**: 1-3KB (if user links it)
   - Attestation helpers: ~1KB
   - ATECC608A helpers: ~2KB
@@ -125,7 +125,7 @@ For devices with OTA support, flash can be partitioned:
 > still to place.
 >
 > A/B slots are not available on this part at all: 28KB of application plus 28KB
-> of staging does not fit 32KB of flash. arduino-generic updates **in place**
+> of staging does not fit 32KB of flash. trusted-firmware updates **in place**
 > and keeps a `STAGED` marker in reserved EEPROM, so an interrupted update
 > leaves the device in the bootloader rather than bricked — the recovery is the
 > bootloader. A part with external flash or a larger device can have A/B; a bare
@@ -711,7 +711,7 @@ func (a *ATECC608A) Lock() error {
 > (Layering Architecture §8.1.1.5), and the measurement binding lives in the CDI,
 > computed by the element's own HMAC so the UDS never crosses the bus.
 >
-> Three profiles, in `docs/attestation/dice-profiles.md` in arduino-generic:
+> Three profiles, in `docs/dice-attestation/architecture.md` in trusted-firmware:
 > **DICE-TPM** (discrete TPM), **DICE-HW** (ATECC608A), **DICE-SW** (neither,
 > and it reports `notSecure` and means it).
 >
@@ -723,7 +723,7 @@ func (a *ATECC608A) Lock() error {
 > what you believe it holds, and on a part with no erase and no reset that turns
 > one transcription error into scrap.
 >
-> See `docs/security/provisioning.md` in arduino-generic for the corrected
+> See `docs/device-provisioning/` in trusted-firmware for the corrected
 > sequence and its failure modes.
 
 ```bash

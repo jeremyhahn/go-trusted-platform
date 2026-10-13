@@ -166,6 +166,7 @@ type mockProfileService struct {
 	findByMACErr           error
 	findBySerialErr        error
 	findMatchingProfileErr error
+	findForDeviceErr       error
 	assignErr              error
 	unassignErr            error
 }
@@ -2230,6 +2231,9 @@ func TestContainsAlreadyExists(t *testing.T) {
 func (m *mockProfileService) FindProfileForDevice(ctx context.Context, dev *entities.Device) (*entities.DeviceProfile, error) {
 	if dev == nil {
 		return nil, device.ErrDeviceRequired{}
+	}
+	if m.findForDeviceErr != nil {
+		return nil, m.findForDeviceErr
 	}
 	ekSerial := ""
 	if dev.EKCert != "" {

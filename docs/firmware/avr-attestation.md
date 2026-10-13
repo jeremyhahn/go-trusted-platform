@@ -3,7 +3,7 @@
 Status: Implemented (provider only)
 Owner: `pkg/firmware/avr/attestation`
 
-The platform-side attestation provider for arduino-generic AVR devices. It
+The platform-side attestation provider for trusted-firmware AVR devices. It
 collects device-signed evidence, parses it, and appraises it against a policy,
 using the same vendor-neutral contract the BMC attestation subsystem defines
 (`pkg/bmc/attestation`).
@@ -16,7 +16,7 @@ using the same vendor-neutral contract the BMC attestation subsystem defines
 - Relay device-signed evidence **verbatim**, so a compromised gateway cannot
   lie about what a device measured.
 - Carry tenancy from the first record.
-- Land arduino-generic's reproducible `FWHash` in `Policy.Reference`, the
+- Land trusted-firmware's reproducible `FWHash` in `Policy.Reference`, the
   golden-build comparison.
 
 ## Non-goals
@@ -38,8 +38,8 @@ a truncated challenge cannot tell it was truncated.
 
 | Method | Challenge | Wire | Evidence | Question |
 |---|---|---|---|---|
-| `Dump` | `aggeneric.AttestNonceLen` (16) | `ATTEST` | 164-byte signed frame | Is this device reporting *now*? |
-| `AttestCert` | `aggeneric.AliasNonceLen` (32) | `ATTEST_CERT` | DICE alias certificate (DER) | Is this key on *this* device? |
+| `Dump` | `tfw.AttestNonceLen` (16) | `ATTEST` | 164-byte signed frame | Is this device reporting *now*? |
+| `AttestCert` | `tfw.AliasNonceLen` (32) | `ATTEST_CERT` | DICE alias certificate (DER) | Is this key on *this* device? |
 
 `AttestCert` is not on the shared provider interface. It lives on
 `CertAttester`, a one-method interface this package declares, because a BMC has
@@ -48,7 +48,7 @@ leave every other backend with a method it must refuse.
 
 ## The evidence frame
 
-`include/ag/protocol.h` in arduino-generic defines it:
+`include/tfw/protocol.h` in trusted-firmware defines it:
 
 ```
 [Version:1][Nonce:16][DeviceID:16][FWHash:32][BootCount:4]
@@ -68,15 +68,15 @@ one.
 
 | Index | Constant | Contents |
 |---|---|---|
-| 0 | `PCRBootloader` | ag-boot's measurement of its own boot section. **Reserved and absent.** |
-| 1 | `PCRApplication` | `FWHash` — SHA-256 over the application flash, taken by ag-boot before it jumps. The reproducible golden-build value. |
+| 0 | `PCRBootloader` | tfw-boot's measurement of its own boot section. **Reserved and absent.** |
+| 1 | `PCRApplication` | `FWHash` — SHA-256 over the application flash, taken by tfw-boot before it jumps. The reproducible golden-build value. |
 
 Index 0 is reserved rather than populated because **the wire does not carry a
-measurement of the bootloader**. ag-boot measures the *application*; it is
+measurement of the bootloader**. tfw-boot measures the *application*; it is
 itself anchored out of band, by the public-key hash pinned in reserved EEPROM
-(`docs/security/bootloader.md` in arduino-generic), and the device does not
-report that hash in signed evidence. Reserving the index means that the day
-ag-boot does report its own measurement, nothing below has to renumber.
+(`docs/secure-boot/architecture.md` in trusted-firmware), and the device does
+not report that hash in signed evidence. Reserving the index means that the day
+tfw-boot does report its own measurement, nothing below has to renumber.
 
 An absent index is **absent from the map**, never zero-filled. A verifier must
 be able to tell "the device did not report this" from "the device reported
@@ -88,7 +88,7 @@ is.
 
 | Contract member | AVR meaning |
 |---|---|
-| `Vendor` | `"arduino-generic"`. Not registered with the BMC dispatcher: an AVR part has no manufacturer string to sniff, so routing is the caller's decision from the transport. |
+| `Vendor` | `"trusted-firmware"`. Not registered with the BMC dispatcher: an AVR part has no manufacturer string to sniff, so routing is the caller's decision from the transport. |
 | `Dump` | `ATTEST`, 16-byte nonce. |
 | `List` / `Download` / `Delete` | `ErrAttestationUnsupported`, terminal. The device regenerates evidence per nonce and caches none — which is also why both attestation commands page. |
 | `GetInfo` | **The single parse point.** Nothing else in the package reads `Evidence.Raw`; `Compare` and `Verify` both come through here. |
@@ -151,7 +151,7 @@ than worked around.
    `pkg/bmc/attestation` keeping the dispatcher, the BMC `Vendor` constants
    and the vendor backends.
 2. **`Vendor` and `DetectVendor` are closed to BMC manufacturers.** `Vendor`
-   is an open string type, so `"arduino-generic"` is legal, but
+   is an open string type, so `"trusted-firmware"` is legal, but
    `DetectVendor` can never return it and `NewProvider` routes from a Redfish
    manufacturer string. This backend is therefore not registered.
 3. **`Target` describes a network BMC** — address, port, username, password.
@@ -163,7 +163,7 @@ than worked around.
    `Metadata`. When the device registry lands, a typed `TenantID` on the
    contract's `Evidence` would be better than a map key.
 
-One thing arduino-generic's Go SDK does not yet provide: **a parser for the
+One thing trusted-firmware's Go SDK does not yet provide: **a parser for the
 evidence frame.** `Device.Attest` returns 164 opaque bytes, so every consumer
 must know the offsets. They are duplicated in `evidence.go`, marked as such,
 and should be deleted when the SDK grows a `ParseEvidence`. The lengths and
@@ -172,18 +172,23 @@ not guess at are not guessed at.
 
 ## Constructing the device
 
-`New` takes an already-built `*aggeneric.Device`; the caller owns the link.
-Since arduino-generic v0.5.0-alpha, `aggeneric.New` waits up to
-`aggeneric.DefaultBootWait` (2 s) for the firmware's BOOT event before it
+`New` takes an already-built `*tfw.Device` from
+`github.com/jeremyhahn/trusted-firmware/sdk/go` (package `tfw`, pinned at
+`sdk/go/v0.3.0-alpha`); the caller owns the link. `tfw.New` waits up to
+`tfw.DefaultBootWait` (2 s) for the firmware's BOOT event before it
 returns, so the first frame lands on a running application and not in the
 bootloader's window after a DTR auto-reset. An adapter that never resets the
 board simply pays that bound.
 
-- A device running `ag-boot` built with `BOOT_MEASURE=atecc608a` measures the
+- A device running `tfw-boot` built with `BOOT_MEASURE=atecc608a` measures the
   application through the secure element and can outrun the default. Pass
-  `aggeneric.WithBootWait` sized to the flashed image.
-- `aggeneric.WithBootWait(0)` disables the wait for a link known never to
+  `tfw.WithBootWait` sized to the flashed image.
+- `tfw.WithBootWait(0)` disables the wait for a link known never to
   reset the board, such as the in-memory link used by this package's tests.
+- The SDK speaks wire protocol 2.x and refuses a device reporting 1.x in
+  `CAPS`, so `New` fails with `ErrAttestationFailed` (`CAPS`) against a board
+  still running firmware from before the trusted-firmware rename. Reflash it;
+  the evidence frame itself is unchanged (version 1, 164 bytes).
 
 ## Testing without hardware
 
@@ -194,7 +199,7 @@ parsed by the SDK's own `Decode`. Mocking the SDK's methods would replace the
 one thing worth exercising — a reply's layout, a status code's meaning, the
 width a command needs — with this package's own opinion of it, and the tests
 would pass for a device that does not exist. The shape follows
-arduino-generic's `cannedLink` and go-xkms's `pkg/backend/avr` harness.
+trusted-firmware's `cannedLink` and go-xkms's `pkg/backend/avr` harness.
 
 ```
 make test-avr-attestation

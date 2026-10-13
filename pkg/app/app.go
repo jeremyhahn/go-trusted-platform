@@ -24,14 +24,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
-	"os/user"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -596,7 +593,9 @@ func (app *App) Init(ctx context.Context, initParams *AppInitParams) (*App, erro
 	}
 
 	// Initialize the logger
-	app.initLogger()
+	if err := app.initLogger(); err != nil {
+		return nil, err
+	}
 
 	// Debug: Log the environment value
 	app.Logger.Debug("Environment configuration",
@@ -604,12 +603,8 @@ func (app *App) Init(ctx context.Context, initParams *AppInitParams) (*App, erro
 		"is_test", app.Environment == EnvTest)
 
 	// Set the hostname
-	if app.Hostname == "" {
-		hostname, err := os.Hostname()
-		if err != nil {
-			panic("Unable to get the local hostname")
-		}
-		app.Hostname = hostname
+	if err := app.resolveHostname(os.Hostname); err != nil {
+		return nil, err
 	}
 
 	// TenantID is defaulted to "default" via viper.SetDefault in
@@ -1278,8 +1273,8 @@ func (app *App) StartDNS() error {
 	//
 	// We replicate the keystore construction from newDNSService
 	// here — extracting a helper is overkill for two call sites
-	// that use slightly different error propagation (one FatalErrors,
-	// this one logs and continues).
+	// that use slightly different error propagation (one returns the
+	// error, this one logs and continues).
 	if app.DNSConfig.DNSSEC != nil && app.DNSConfig.DNSSEC.Enabled && dns.KeyStore == nil {
 		if dbFactory == nil {
 			app.Logger.Error(nil, "DNSSEC enabled but QuicBaaS factory unavailable; CoreDNS will fail to load zones")
@@ -1587,27 +1582,20 @@ func (app *App) initConfig(env string) error {
 	return nil
 }
 
-// Creates a new file and STDOUT logger. If the global DebugFlag is set,
-// the logger is initialized in debug mode, executing all logger.Debug*
-// statements.
-func (app *App) initLogger() {
+// initLogger creates the platform log file under LogDir and the logger that
+// writes to it, in debug mode when DebugFlag is set. A LogDir it cannot use
+// is returned as LogDirInvalidError, LogDirCreateError or LogFileOpenError.
+func (app *App) initLogger() error {
+	if err := validateLogDir(app.LogDir); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(app.LogDir, os.ModePerm); err != nil {
-		panic(err)
+		return LogDirCreateError{Dir: app.LogDir, Cause: err}
 	}
-	// Name is an ldflag-populated package variable. When a build skips
-	// the -X linker flag (e.g. a bare `go build ./cmd/platformd` used
-	// for quick debug iteration), Name is empty and the log filename
-	// becomes a hidden ".log" file with no prefix. Fall back to a
-	// stable known name so the log is always discoverable by the
-	// OpenRC init script and by operators grepping /var/log.
-	logName := Name
-	if logName == "" {
-		logName = "platformd"
-	}
-	logfile := fmt.Sprintf("%s/%s.log", app.LogDir, logName)
+	logfile := filepath.Join(app.LogDir, logFileName())
 	file, err := os.Create(logfile)
 	if err != nil {
-		panic(err)
+		return LogFileOpenError{Path: logfile, Cause: err}
 	}
 	format := logging.ParseFormat(app.LogFormat)
 	if app.DebugFlag {
@@ -1619,6 +1607,21 @@ func (app *App) initLogger() {
 		slog.String("file", viper.ConfigFileUsed()),
 		slog.String("config-dir", app.ConfigDir),
 		slog.String("log-dir", app.LogDir))
+	return nil
+}
+
+// resolveHostname fills an unset Hostname from osHostname (os.Hostname in
+// production).
+func (app *App) resolveHostname(osHostname func() (string, error)) error {
+	if app.Hostname != "" {
+		return nil
+	}
+	hostname, err := osHostname()
+	if err != nil {
+		return HostnameError{Cause: err}
+	}
+	app.Hostname = hostname
+	return nil
 }
 
 // Initialize object and certificate stores
@@ -4486,77 +4489,13 @@ func (app *App) NewCertificateStore(
 	return certStore, nil
 }
 
-// Initialize the platform log file
-func (app *App) InitLogFile(uid, gid int) *os.File {
-	// Same defensive fallback as initLogger — Name is ldflag-populated
-	// and is empty on bare `go build` runs, which would produce a
-	// hidden ".log" file.
-	logName := Name
-	if logName == "" {
-		logName = "platformd"
-	}
-	logFile := fmt.Sprintf("%s/%s.log", app.LogDir, logName)
-	if err := os.MkdirAll(app.LogDir, os.ModePerm); err != nil {
-		log.Fatal(err)
-	}
-	f, err := os.OpenFile(logFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, os.ModePerm)
-	if err != nil {
-		log.Fatal(err)
-	}
-	if uid == 0 {
-		if err = os.Chown(logFile, uid, gid); err != nil {
-			log.Fatal(err)
-		}
-		perm := os.FileMode(0644)
-		if app.DebugFlag {
-			perm = os.ModePerm
-		}
-		if err = os.Chmod(logFile, perm); err != nil {
-			log.Fatal(err)
-		}
-	}
-	return f
-}
-
-// If started as root, drop the privileges after startup to
-// the lesser privileged app user.
-func (app *App) DropPrivileges() {
-	if runtime.GOOS != "linux" {
-		return
-	}
-	if syscall.Getuid() == 0 && app.RuntimeUser != "root" {
-		app.Logger.Debugf("Running as root, downgrading to user %s", app.RuntimeUser)
-		user, err := user.Lookup(app.RuntimeUser)
-		if err != nil {
-			log.Fatalf("setuid %s user not found! Error: %s", app.RuntimeUser, err)
-		}
-		uid, err := strconv.ParseInt(user.Uid, 10, 32)
-		if err != nil {
-			app.Logger.Fatalf("Unable to parse UID: %s", err)
-		}
-		gid, err := strconv.ParseInt(user.Gid, 10, 32)
-		if err != nil {
-			app.Logger.Fatalf("Unable to parse GID: %s", err)
-		}
-		cerr := syscall.Setgid(int(gid))
-		if cerr != nil {
-			app.Logger.Fatalf("Unable to setgid: message=%s", cerr)
-		}
-		cerr = syscall.Setuid(int(uid))
-		if cerr != nil {
-			app.Logger.Fatalf("Unable to setuid: message=%s", cerr)
-		}
-		app.InitLogFile(int(uid), int(gid))
-	}
-}
-
-func DefaultTestConfig() *App {
+func DefaultTestConfig() (*App, error) {
 	// Storage is nil initially; tests must start the QuicBaaS factory
 	// to get an ObjectStorage client, or inject one via TestConfigWithStorage.
 	return TestConfigWithStorage(nil)
 }
 
-func TestConfigWithStorage(storage objectstorage.Client) *App {
+func TestConfigWithStorage(storage objectstorage.Client) (*App, error) {
 	Name = "trusted-platform"
 
 	app := NewApp()
@@ -4572,7 +4511,7 @@ func TestConfigWithStorage(storage objectstorage.Client) *App {
 
 	configYaml, err := yaml.Marshal(testConfig)
 	if err != nil {
-		panic(err)
+		return nil, TestConfigError{Step: "marshal", Cause: err}
 	}
 
 	fmt.Println("Test configuration:")
@@ -4580,20 +4519,20 @@ func TestConfigWithStorage(storage objectstorage.Client) *App {
 
 	// Create log directory on real filesystem for tests
 	if err := os.MkdirAll(testConfig.LogDir, os.ModePerm); err != nil {
-		panic(err)
+		return nil, LogDirCreateError{Dir: testConfig.LogDir, Cause: err}
 	}
-	logFile := fmt.Sprintf("%s/trusted-platform.log", testConfig.LogDir)
+	logFile := filepath.Join(testConfig.LogDir, logFileName())
 	if err := os.WriteFile(logFile, []byte{}, os.ModePerm); err != nil {
-		panic(err)
+		return nil, LogFileOpenError{Path: logFile, Cause: err}
 	}
 
 	// Write app config to real filesystem for viper
 	if err := os.MkdirAll(testConfig.ConfigDir, os.ModePerm); err != nil {
-		panic(err)
+		return nil, TestConfigError{Step: "create config directory", Path: testConfig.ConfigDir, Cause: err}
 	}
-	configFile := fmt.Sprintf("%s/config.yaml", testConfig.ConfigDir)
+	configFile := filepath.Join(testConfig.ConfigDir, "config.yaml")
 	if err := os.WriteFile(configFile, configYaml, os.ModePerm); err != nil {
-		panic(err)
+		return nil, TestConfigError{Step: "write config", Path: configFile, Cause: err}
 	}
 
 	// Configure viper with real filesystem
@@ -4603,17 +4542,17 @@ func TestConfigWithStorage(storage objectstorage.Client) *App {
 	// Debug info
 	fmt.Println(viper.GetViper().ConfigFileUsed())
 	if err = viper.ReadInConfig(); err != nil {
-		panic(err)
+		return nil, TestConfigError{Step: "read config", Path: configFile, Cause: err}
 	}
 
 	// Unmarshal with TextUnmarshaler support for custom types
 	if err := viper.Unmarshal(app, config.DecodeHook()); err != nil {
-		panic(err)
+		return nil, TestConfigError{Step: "unmarshal config", Path: configFile, Cause: err}
 	}
 
 	app.Logger = logging.NewLoggerWithFormat(slog.LevelDebug, logging.FormatJSON, os.Stdout)
 
-	return app
+	return app, nil
 }
 
 func parsePublicIPs(_ Environment) (net.IP, net.IP, error) {

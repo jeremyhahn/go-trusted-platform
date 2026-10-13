@@ -6,7 +6,7 @@
 // Dual-licensed under AGPL-3.0 or a commercial license.
 
 // Package attestation implements the platform's attestation provider for
-// arduino-generic AVR devices.
+// trusted-firmware AVR devices.
 //
 // It satisfies [bmcattestation.AttestationProvider] — the vendor-neutral
 // contract the BMC attestation subsystem defines — so an AVR part appraises
@@ -21,10 +21,10 @@
 // challenges. Merging the widths is a wire break, so this package refuses
 // each command the other's width before a frame is built:
 //
-//	Dump        aggeneric.AttestNonceLen (16)  RUNTIME FRESHNESS.  Returns the
+//	Dump        tfw.AttestNonceLen (16)        RUNTIME FRESHNESS.  Returns the
 //	                                           164-byte signed evidence frame:
 //	                                           is this device reporting now?
-//	AttestCert  aggeneric.AliasNonceLen  (32)  ENROLMENT.  Returns a DICE alias
+//	AttestCert  tfw.AliasNonceLen  (32)        ENROLMENT.  Returns a DICE alias
 //	                                           certificate whose critical
 //	                                           tcg-dice-UCCS-evidence extension
 //	                                           carries the challenge: is this
@@ -56,15 +56,15 @@
 // indices in this package's own namespace. They are NOT TPM PCRs and must
 // never be compared against one:
 //
-//	index 0  PCRBootloader   ag-boot's measurement of its own boot section.
+//	index 0  PCRBootloader   tfw-boot's measurement of its own boot section.
 //	                         RESERVED AND ABSENT: the wire protocol does not
 //	                         carry it today (the bootloader is anchored out of
 //	                         band by the public-key hash pinned in reserved
 //	                         EEPROM, which the device does not report). The
-//	                         index is reserved so that when ag-boot does
+//	                         index is reserved so that when tfw-boot does
 //	                         report it, nothing below has to renumber.
 //	index 1  PCRApplication  FWHash: SHA-256 over the application flash,
-//	                         taken by ag-boot before it jumps. This is the
+//	                         taken by tfw-boot before it jumps. This is the
 //	                         reproducible golden-build value, and it is what
 //	                         Policy.Reference compares.
 //

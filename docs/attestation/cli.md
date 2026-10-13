@@ -302,8 +302,8 @@ Recorded explicitly so the next agent does not go looking:
 | Capability | Reachable via |
 |---|---|
 | Build / verify / list / delete manifests | REST, gRPC, QUIC, MCP, SDK |
-| Get / verify a quote | REST, gRPC, QUIC, SDK |
-| Collect host attestation | REST, gRPC, QUIC, SDK |
+| Get / verify a quote | REST, gRPC, QUIC, SDK — getting one is over TLS only; the quote is bound to the connection ([api.md](api.md) §5.1a) |
+| Collect host attestation | REST, gRPC, QUIC, SDK — over TLS only; the quote is bound to the connection ([api.md](api.md) §5.1a) |
 | Collect VM attestation | REST, gRPC, QUIC, SDK |
 | Attestation reports (workload) | QUIC, MCP |
 | Attestation policies | QUIC, MCP |

@@ -275,6 +275,28 @@ func signedEvidence(t *testing.T, key *rsa.PrivateKey, nonce []byte, quoted, rep
 	return raw
 }
 
+// boundEvidence builds collector evidence: the quote's extraData carries
+// qualifying, and the evidence carries the collector nonce and the channel
+// binding beside it, so a test can quote something other than the bound
+// value.
+func (f *quoteFixture) boundEvidence(t *testing.T, nonce, qualifying, binding []byte) []byte {
+	t.Helper()
+	quote := buildAttestTestQuote(t, qualifying, goldenPCRs())
+	raw, err := json.Marshal(boundQuoteEvidence{
+		DeviceQuoteEvidence: DeviceQuoteEvidence{
+			Quote:     quote,
+			Signature: signAttestQuote(t, f.key, quote),
+			Nonce:     nonce,
+			PCRs:      goldenPCRs(),
+		},
+		ChannelBinding: binding,
+	})
+	if err != nil {
+		t.Fatalf("marshal evidence: %v", err)
+	}
+	return raw
+}
+
 // goldenPCRs is a fixed PCR set shared by the tests.
 func goldenPCRs() map[int][]byte {
 	return map[int][]byte{

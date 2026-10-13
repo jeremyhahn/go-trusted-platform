@@ -112,7 +112,7 @@ func TestControlPlaneAsDevice_EndToEnd(t *testing.T) {
 		nonce, err := base64.StdEncoding.DecodeString(req.Nonce)
 		require.NoError(t, err)
 		w.Header().Set("Content-Type", "application/json")
-		_, err = w.Write(nodeEnvelope(t, signedEvidence(t, f.key, nonce, goldenPCRs(), goldenPCRs())))
+		_, err = w.Write(nodeEnvelope(t, signedEvidence(t, f.key, boundTo(t, r.TLS, nonce), goldenPCRs(), goldenPCRs())))
 		require.NoError(t, err)
 	})
 	gate := restattestation.NewCallerGate(
@@ -338,7 +338,7 @@ func TestControlPlaneAsDevice_LegacyIAKCertificateDoesNotQuarantineTheControlPla
 		nonce, err := base64.StdEncoding.DecodeString(req.Nonce)
 		require.NoError(t, err)
 		w.Header().Set("Content-Type", "application/json")
-		_, err = w.Write(nodeEnvelope(t, signedEvidence(t, f.key, nonce, goldenPCRs(), goldenPCRs())))
+		_, err = w.Write(nodeEnvelope(t, signedEvidence(t, f.key, boundTo(t, r.TLS, nonce), goldenPCRs(), goldenPCRs())))
 		require.NoError(t, err)
 	}), nil))
 	cp.TLS = &tls.Config{

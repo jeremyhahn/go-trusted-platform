@@ -310,7 +310,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	// Quote
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_quote",
-		Description: "Generate a TPM quote for remote attestation, signed by the attestation key",
+		Description: "Generate a TPM quote for remote attestation, signed by the attestation key. The TPM quotes SHA-256(nonce || channel_binding), where channel_binding (returned) is the TLS exporter of this connection; MCP over stdio is refused",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -346,6 +346,10 @@ func (r *ToolRegistry) registerTPMTools() {
 				"nonce": map[string]interface{}{
 					"type":        "string",
 					"description": "Base64-encoded nonce used during quoting",
+				},
+				"channel_binding": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded channel binding the quote was produced under; the quote must then carry SHA-256(nonce || channel_binding)",
 				},
 			},
 			"required": []string{"quote", "signature", "nonce"},

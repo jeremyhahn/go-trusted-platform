@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
@@ -156,6 +157,162 @@ func TestVerifyQuoteSignature_InvalidInputs(t *testing.T) {
 			assert.True(t, errors.As(err, &sigErr))
 		})
 	}
+}
+
+// signQuote signs quote the way a TPM AK under opts would, returning the PKIX
+// encoded AK public key and the raw signature.
+func signQuote(t *testing.T, signer crypto.Signer, quote []byte, opts crypto.SignerOpts) ([]byte, []byte) {
+	t.Helper()
+
+	h := opts.HashFunc().New()
+	h.Write(quote)
+	signature, err := signer.Sign(rand.Reader, h.Sum(nil), opts)
+	require.NoError(t, err)
+
+	akPub, err := x509.MarshalPKIXPublicKey(signer.Public())
+	require.NoError(t, err)
+	return akPub, signature
+}
+
+func TestVerifyQuoteSignatureWithAlgorithm_RoundTrips(t *testing.T) {
+	quote := buildTestQuote(t, []byte("nonce"), map[int][]byte{7: make([]byte, 32)})
+
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	p256, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	p384, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name      string
+		signer    crypto.Signer
+		opts      crypto.SignerOpts
+		algorithm x509.SignatureAlgorithm
+	}{
+		{"RSASSA SHA-256", rsaKey, crypto.SHA256, x509.SHA256WithRSA},
+		{"RSASSA SHA-384", rsaKey, crypto.SHA384, x509.SHA384WithRSA},
+		{"RSA-PSS salt equals hash", rsaKey,
+			&rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: crypto.SHA256}, x509.SHA256WithRSAPSS},
+		{"RSA-PSS maximum salt", rsaKey,
+			&rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthAuto, Hash: crypto.SHA256}, x509.SHA256WithRSAPSS},
+		{"RSA-PSS SHA-512", rsaKey,
+			&rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: crypto.SHA512}, x509.SHA512WithRSAPSS},
+		{"ECDSA P-256", p256, crypto.SHA256, x509.ECDSAWithSHA256},
+		{"ECDSA P-384", p384, crypto.SHA384, x509.ECDSAWithSHA384},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			akPub, signature := signQuote(t, tt.signer, quote, tt.opts)
+			require.NoError(t, VerifyQuoteSignatureWithAlgorithm(akPub, quote, signature, tt.algorithm.String()))
+
+			tampered := append([]byte(nil), quote...)
+			tampered[len(tampered)-1] ^= 0xFF
+			err := VerifyQuoteSignatureWithAlgorithm(akPub, tampered, signature, tt.algorithm.String())
+			var sigErr ErrSignatureInvalid
+			require.True(t, errors.As(err, &sigErr), "tampered quote must fail verification, got %v", err)
+		})
+	}
+}
+
+// TestVerifyQuoteSignatureWithAlgorithm_DeclaredSchemeIsTheOneChecked proves
+// the declared scheme is used and no other: an RSA-PSS quote does not pass as
+// RSASSA, nor RSASSA as RSA-PSS, under the same key.
+func TestVerifyQuoteSignatureWithAlgorithm_DeclaredSchemeIsTheOneChecked(t *testing.T) {
+	quote := buildTestQuote(t, []byte("nonce"), map[int][]byte{7: make([]byte, 32)})
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	pssOpts := &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: crypto.SHA256}
+	akPub, pssSig := signQuote(t, rsaKey, quote, pssOpts)
+	_, pkcs1Sig := signQuote(t, rsaKey, quote, crypto.SHA256)
+
+	var sigErr ErrSignatureInvalid
+	err = VerifyQuoteSignatureWithAlgorithm(akPub, quote, pssSig, x509.SHA256WithRSA.String())
+	assert.True(t, errors.As(err, &sigErr), "RSA-PSS signature declared as RSASSA: %v", err)
+	err = VerifyQuoteSignatureWithAlgorithm(akPub, quote, pkcs1Sig, x509.SHA256WithRSAPSS.String())
+	assert.True(t, errors.As(err, &sigErr), "RSASSA signature declared as RSA-PSS: %v", err)
+	err = VerifyQuoteSignature(akPub, quote, pssSig)
+	assert.True(t, errors.As(err, &sigErr), "VerifyQuoteSignature checks RSASSA only: %v", err)
+}
+
+func TestVerifyQuoteSignatureWithAlgorithm_SchemeKeyMismatch(t *testing.T) {
+	quote := buildTestQuote(t, []byte("nonce"), map[int][]byte{7: make([]byte, 32)})
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	rsaPub, rsaSig := signQuote(t, rsaKey, quote, crypto.SHA256)
+	ecPub, ecSig := signQuote(t, ecKey, quote, crypto.SHA256)
+
+	tests := []struct {
+		name       string
+		akPub      []byte
+		signature  []byte
+		algorithm  x509.SignatureAlgorithm
+		wantScheme string
+	}{
+		{"RSA-PSS declared with an ECDSA key", ecPub, ecSig, x509.SHA256WithRSAPSS, "RSASSA-PSS"},
+		{"RSASSA declared with an ECDSA key", ecPub, ecSig, x509.SHA256WithRSA, "RSASSA-PKCS1-v1_5"},
+		{"ECDSA declared with an RSA key", rsaPub, rsaSig, x509.ECDSAWithSHA256, "ECDSA"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := VerifyQuoteSignatureWithAlgorithm(tt.akPub, quote, tt.signature, tt.algorithm.String())
+			var mismatch ErrSignatureSchemeMismatch
+			require.True(t, errors.As(err, &mismatch), "want ErrSignatureSchemeMismatch, got %v", err)
+			assert.Equal(t, tt.wantScheme, mismatch.Scheme)
+		})
+	}
+}
+
+func TestVerifyQuoteSignatureWithAlgorithm_FailsClosed(t *testing.T) {
+	quote := buildTestQuote(t, []byte("nonce"), map[int][]byte{7: make([]byte, 32)})
+	akPub, signature := signTestQuote(t, quote)
+
+	for _, algorithm := range []string{"", "SHA1-RSA", "Ed25519", "sha256-rsa"} {
+		t.Run("algorithm "+algorithm, func(t *testing.T) {
+			err := VerifyQuoteSignatureWithAlgorithm(akPub, quote, signature, algorithm)
+			var unsupported ErrUnsupportedSignatureAlgorithm
+			require.True(t, errors.As(err, &unsupported), "want ErrUnsupportedSignatureAlgorithm, got %v", err)
+			assert.Equal(t, algorithm, unsupported.Algorithm)
+		})
+	}
+
+	inputs := []struct {
+		name      string
+		akPub     []byte
+		quote     []byte
+		signature []byte
+	}{
+		{"empty key", nil, quote, signature},
+		{"empty quote", akPub, nil, signature},
+		{"empty signature", akPub, quote, nil},
+		{"garbage key", []byte("not-a-key"), quote, signature},
+	}
+	for _, tt := range inputs {
+		t.Run(tt.name, func(t *testing.T) {
+			err := VerifyQuoteSignatureWithAlgorithm(tt.akPub, tt.quote, tt.signature, x509.SHA256WithRSA.String())
+			var sigErr ErrSignatureInvalid
+			assert.True(t, errors.As(err, &sigErr), "want ErrSignatureInvalid, got %v", err)
+		})
+	}
+}
+
+func TestVerifyQuoteSignature_UnsupportedKeyType(t *testing.T) {
+	quote := buildTestQuote(t, []byte("nonce"), map[int][]byte{7: make([]byte, 32)})
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	akPub, err := x509.MarshalPKIXPublicKey(pub)
+	require.NoError(t, err)
+
+	err = VerifyQuoteSignature(akPub, quote, []byte("signature"))
+	var sigErr ErrSignatureInvalid
+	require.True(t, errors.As(err, &sigErr))
+	assert.Equal(t, "unsupported AK key type", sigErr.Reason)
 }
 
 func TestParseQuoteNonce(t *testing.T) {

@@ -356,3 +356,30 @@ func TestClientTLSConfig(t *testing.T) {
 		}
 	})
 }
+
+func TestServerConnectionState(t *testing.T) {
+	t.Run("is a completed TLS 1.3 handshake", func(t *testing.T) {
+		state := ServerConnectionState(t)
+
+		if !state.HandshakeComplete {
+			t.Error("HandshakeComplete = false, want true")
+		}
+		if state.Version != tls.VersionTLS13 {
+			t.Errorf("Version = %d, want %d (TLS 1.3)", state.Version, tls.VersionTLS13)
+		}
+	})
+
+	t.Run("each call is a separate connection", func(t *testing.T) {
+		first, err := ServerConnectionState(t).ExportKeyingMaterial("testutil", nil, 32)
+		if err != nil {
+			t.Fatalf("first exporter failed: %v", err)
+		}
+		second, err := ServerConnectionState(t).ExportKeyingMaterial("testutil", nil, 32)
+		if err != nil {
+			t.Fatalf("second exporter failed: %v", err)
+		}
+		if bytes.Equal(first, second) {
+			t.Error("two connections exported the same keying material")
+		}
+	})
+}

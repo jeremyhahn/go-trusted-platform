@@ -496,8 +496,6 @@ github.com/jbenet/go-temp-err-catcher v0.1.0 h1:zpb3ZH6wIE8Shj2sKS+khgRvf7T7RABo
 github.com/jbenet/go-temp-err-catcher v0.1.0/go.mod h1:0kJRvmDZXNMIiJirNPEYfhpPwbGVtZVWC34vc5WLsDk=
 github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 h1:njuLRcjAuMKr7kI3D85AXWkw6/+v9PwtV6M6o11sWHQ=
 github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1/go.mod h1:alcuEEnZsY1WQsagKhZDsoPCRoOijYqhZvPwLG0kzVs=
-github.com/jeremyhahn/arduino-generic/sdk/go v0.6.0-alpha h1:1gXOiwKKCzSEo053uiIohLrqV1aEn7qmtpe6bGA48Og=
-github.com/jeremyhahn/arduino-generic/sdk/go v0.6.0-alpha/go.mod h1:VLTlzXNHnxl+ra+yahvWOkKElRTRWsM1vrNOX7cHPcw=
 github.com/jeremyhahn/go-auth v0.2.0-alpha h1:BW+KU+uYPSpoRB8IW6l9aJrvMEMHSGYLQyAezlaBoLo=
 github.com/jeremyhahn/go-auth v0.2.0-alpha/go.mod h1:EpLRQmiMJiKYS4dYiLI61es7o0wbsXXNVg4tc8Rums0=
 github.com/jeremyhahn/go-codec v1.4.0 h1:ORbXlqpzg5RDlYGKyqKmbVNdF7TFjabO/7lVgpJ96W8=
@@ -526,6 +524,8 @@ github.com/jeremyhahn/go-xkms v0.17.0-alpha h1:rwqI1O+ekvRWf+p54jfzzWpuBzLLqF91l
 github.com/jeremyhahn/go-xkms v0.17.0-alpha/go.mod h1:yn5Li85iCXWYWduGKDZmLV7VYDh5kJxuVUoHpIiWU3A=
 github.com/jeremyhahn/go-xkms/sdk/go v0.17.0-alpha h1:Y05pdChxFNLLugDI7KGymbFah4uszC+qAW1U4dEehX4=
 github.com/jeremyhahn/go-xkms/sdk/go v0.17.0-alpha/go.mod h1:9mJOqbxYpKn8GenmWHXmw6Iz6PmPCUDgQ/qGA89ZCrQ=
+github.com/jeremyhahn/trusted-firmware/sdk/go v0.3.0-alpha h1:H6oOW5ie+5jLNB/l21DUZgByK5jPbJV6gPrO6yrpQUA=
+github.com/jeremyhahn/trusted-firmware/sdk/go v0.3.0-alpha/go.mod h1:g/g63MFhR5vIdjhhjZYDxwwNSTESjFP8Rn6xo9QWKpM=
 github.com/jeroenrinzema/psql-wire v0.18.0 h1:w8VZLCbyzx5UHQb3zojTBWYuOd9L2TlgrboD5jpsC4E=
 github.com/jeroenrinzema/psql-wire v0.18.0/go.mod h1:i7+aXJyIrgcXmbTkij68LdFs03w2f9kt18HIUo+eXmY=
 github.com/jmespath/go-jmespath v0.4.0 h1:BEgLn5cpjn8UN1mAw4NjwDrS35OdebyEtFe+9YPoQUg=
@@ -1079,8 +1079,6 @@ golang.org/x/net v0.15.0/go.mod h1:idbUs1IY1+zTqbi8yxTbhexhEEk5ur9LInksu6HrEpk=
 golang.org/x/net v0.20.0/go.mod h1:z8BVo6PvndSri0LbOE3hAn0apkU+1YvI6E70E9jsnvY=
 golang.org/x/net v0.21.0/go.mod h1:bIjVDfnllIU7BJ2DNgfnXvpSvtn8VRwhlsaeUTyUS44=
 golang.org/x/net v0.25.0/go.mod h1:JkAGAh7GEvH74S6FOH42FLoXpXbE/aqXSrIQjXgsiwM=
-golang.org/x/net v0.58.0 h1:ynWG7rqYi4ccpTEuPZ2QGWHktVEM9DMCj9yzDE0Q7To=
-golang.org/x/net v0.58.0/go.mod h1:YwCddHnFlT7eLQqVprV19OnhLGtc5xOKgE0RyqgfWAU=
 golang.org/x/net v0.60.0 h1:79p50tfZlm0J9YfoDsSi639qSXNGVwEzOPLCxM2FsYU=
 golang.org/x/net v0.60.0/go.mod h1:2DA/G1UfVbCpQPeWTmMPGY7Cs2PkBkwu743bVX5PIVg=
 golang.org/x/oauth2 v0.36.0 h1:peZ/1z27fi9hUOFCAZaHyrpWG5lwe0RJEEEeH0ThlIs=

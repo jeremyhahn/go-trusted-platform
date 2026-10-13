@@ -56,11 +56,29 @@ func ExportChannelBinding(state *tls.ConnectionState) ([]byte, error) {
 // and before the request is encoded.
 type BindFunc func(ctx context.Context, binding []byte) error
 
-// channelBindingOption carries a BindFunc through a gRPC call's options to
-// the adapter that owns the connection.
+// ExportFunc derives the channel binding of a TLS connection from its
+// state. ExportChannelBinding is the default; a call that proves under a
+// different RFC 8446 §7.5 exporter label supplies its own.
+type ExportFunc func(state *tls.ConnectionState) ([]byte, error)
+
+// ChannelBinder is the channel-binding request a call carries: the
+// exporter its binding is derived with and the BindFunc that completes the
+// request with it.
+type ChannelBinder struct {
+	export ExportFunc
+	bind   BindFunc
+}
+
+// Bind hands binding to the call's BindFunc.
+func (b ChannelBinder) Bind(ctx context.Context, binding []byte) error {
+	return b.bind(ctx, binding)
+}
+
+// channelBindingOption carries a ChannelBinder through a gRPC call's
+// options to the adapter that owns the connection.
 type channelBindingOption struct {
 	grpc.EmptyCallOption
-	bind BindFunc
+	binder ChannelBinder
 }
 
 // WithChannelBinding asks the transport adapter to call bind with the
@@ -69,27 +87,35 @@ type channelBindingOption struct {
 // refuse such calls with ErrChannelBindingUnavailable instead of sending
 // a request that could never be bound.
 func WithChannelBinding(bind BindFunc) grpc.CallOption {
-	return channelBindingOption{bind: bind}
+	return WithExportedChannelBinding(ExportChannelBinding, bind)
 }
 
-// ChannelBindingFrom returns the BindFunc carried by opts, if any.
-func ChannelBindingFrom(opts []grpc.CallOption) (BindFunc, bool) {
+// WithExportedChannelBinding is WithChannelBinding with the binding
+// derived by export instead of ExportChannelBinding, for calls the daemon
+// binds under another exporter label.
+func WithExportedChannelBinding(export ExportFunc, bind BindFunc) grpc.CallOption {
+	return channelBindingOption{binder: ChannelBinder{export: export, bind: bind}}
+}
+
+// ChannelBindingFrom returns the ChannelBinder carried by opts, if any.
+func ChannelBindingFrom(opts []grpc.CallOption) (ChannelBinder, bool) {
 	for _, opt := range opts {
-		if binding, ok := opt.(channelBindingOption); ok && binding.bind != nil {
-			return binding.bind, true
+		if option, ok := opt.(channelBindingOption); ok && option.binder.export != nil && option.binder.bind != nil {
+			return option.binder, true
 		}
 	}
-	return nil, false
+	return ChannelBinder{}, false
 }
 
 // BindChannel derives the channel binding from state — the TLS state of
-// the connection the call is about to travel on — and hands it to bind.
-func BindChannel(ctx context.Context, transportName string, state *tls.ConnectionState, bind BindFunc) error {
-	binding, err := ExportChannelBinding(state)
+// the connection the call is about to travel on — with the binder's
+// exporter and hands it to the binder.
+func BindChannel(ctx context.Context, transportName string, state *tls.ConnectionState, binder ChannelBinder) error {
+	binding, err := binder.export(state)
 	if err != nil {
 		return &ErrChannelBindingUnavailable{Transport: transportName, Reason: "the connection exports no channel binding", Cause: err}
 	}
-	return bind(ctx, binding)
+	return binder.Bind(ctx, binding)
 }
 
 // ErrChannelBindingUnavailable is returned when a call needs the channel

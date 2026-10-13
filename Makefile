@@ -1548,7 +1548,7 @@ coverage-bmc:
 # AVR firmware attestation tests
 #
 # No hardware and no device. The tests drive a fake link through the real
-# arduino-generic codec, so they run as fast as any other unit test and
+# trusted-firmware codec, so they run as fast as any other unit test and
 # modify nothing on the host.
 ## test-avr-attestation: Run AVR firmware attestation provider unit tests
 .PHONY: test-avr-attestation

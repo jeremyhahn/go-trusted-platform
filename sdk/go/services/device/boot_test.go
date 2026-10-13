@@ -47,7 +47,7 @@ func (f *fakeBootClient) bind(ctx context.Context, opts []grpc.CallOption) error
 	if !ok {
 		return errors.New("boot call sent without a channel-binding option")
 	}
-	return bind(ctx, fakeBinding)
+	return bind.Bind(ctx, fakeBinding)
 }
 
 func (f *fakeBootClient) BootCertificate(ctx context.Context, in *platformv1.BootCertificateRequest, opts ...grpc.CallOption) (*platformv1.BootCertificateResponse, error) {

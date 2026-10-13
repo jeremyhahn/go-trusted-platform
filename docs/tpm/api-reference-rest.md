@@ -300,9 +300,14 @@ POST /api/v1/tpm/quote
   "quote": "base64-encoded-quote",
   "signature": "base64-encoded-signature",
   "event_log": "base64-encoded-event-log",
+  "channel_binding": "base64-encoded-tls-exporter",
   "timestamp": "2024-01-15T10:30:00Z"
 }
 ```
+
+The quote covers `SHA-256(nonce ‖ channel_binding)`, where `channel_binding` is
+the TLS exporter of the connection the request arrived on; a request over
+plain HTTP is refused. See [api.md](api.md) §5.
 
 ### Verify Quote
 

@@ -31,11 +31,15 @@ import (
 	"strings"
 	"testing"
 
+	tpmgo "github.com/google/go-tpm/tpm2"
 	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 )
 
 // =============================================================================
@@ -78,8 +82,10 @@ type mockTPMService struct {
 	idevidPubKeyErr     error
 	quoteResult         xkmssdk.Quote
 	quoteErr            error
+	quoted              []byte
 	certifyResult       *xkmssdk.CertifyResult
 	certifyErr          error
+	certified           []byte
 	keyAttrs            *xkmssdk.KeyAttributes
 	keyAttrsErr         error
 	readPCRsResult      []xkmssdk.PCRBank
@@ -244,10 +250,12 @@ func (m *mockTPMService) IDevID() (crypto.PublicKey, error) {
 }
 
 func (m *mockTPMService) Quote(pcrs []uint, nonce []byte) (xkmssdk.Quote, error) {
+	m.quoted = nonce
 	return m.quoteResult, m.quoteErr
 }
 
 func (m *mockTPMService) CertifyKey(keyAttrs *xkmssdk.KeyAttributes, nonce []byte, backend xkmssdk.TPMKeyBackend) (*xkmssdk.CertifyResult, error) {
+	m.certified = nonce
 	return m.certifyResult, m.certifyErr
 }
 
@@ -1413,6 +1421,7 @@ func TestTPMHandleQuote(t *testing.T) {
 			PCRIndices: []int{0, 1, 7},
 		})
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/quote", bytes.NewReader(body))
+		req.TLS = testutil.ServerConnectionState(t)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -1423,6 +1432,31 @@ func TestTPMHandleQuote(t *testing.T) {
 		decodeTPMResponse(t, resp, &quoteResp)
 		assert.NotEmpty(t, quoteResp.Quote)
 		assert.NotEmpty(t, quoteResp.Signature)
+
+		// The TPM quoted the nonce bound to this connection, and the
+		// response names the binding so the caller can check it (#482).
+		want, err := channelbind.QualifyingData(req.TLS, channelbind.TransportREST, []byte("test-nonce"))
+		require.NoError(t, err)
+		assert.Equal(t, want, tpm.quoted)
+		binding, err := base64.StdEncoding.DecodeString(quoteResp.ChannelBinding)
+		require.NoError(t, err)
+		expected, err := channelbind.ExpectedQualifyingData([]byte("test-nonce"), binding)
+		require.NoError(t, err)
+		assert.Equal(t, want, expected)
+	})
+
+	t.Run("refuses a request with no TLS connection to bind", func(t *testing.T) {
+		tpm := newMockTPMService()
+		_, router := setupTPMTestHandler(tpm)
+
+		nonce := base64.StdEncoding.EncodeToString([]byte("nonce"))
+		body, _ := json.Marshal(TPMQuoteRequest{Nonce: nonce})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/quote", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+		assert.Nil(t, tpm.quoted, "the bare nonce was never quoted")
 	})
 
 	t.Run("includes event log when present", func(t *testing.T) {
@@ -1437,6 +1471,7 @@ func TestTPMHandleQuote(t *testing.T) {
 		nonce := base64.StdEncoding.EncodeToString([]byte("nonce"))
 		body, _ := json.Marshal(TPMQuoteRequest{Nonce: nonce})
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/quote", bytes.NewReader(body))
+		req.TLS = testutil.ServerConnectionState(t)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -1523,6 +1558,7 @@ func TestTPMHandleQuote(t *testing.T) {
 		nonce := base64.StdEncoding.EncodeToString([]byte("nonce"))
 		body, _ := json.Marshal(TPMQuoteRequest{Nonce: nonce})
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/quote", bytes.NewReader(body))
+		req.TLS = testutil.ServerConnectionState(t)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -1584,6 +1620,79 @@ func TestTPMHandleVerifyQuote(t *testing.T) {
 	})
 }
 
+// TestTPMHandleVerifyQuote_ChannelBinding: a quote produced over a bound
+// connection carries SHA-256(nonce || binding), so it passes the nonce check
+// only when the caller names the binding (#482). The signature is garbage,
+// so a quote that passed the nonce check fails on the signature instead.
+func TestTPMHandleVerifyQuote_ChannelBinding(t *testing.T) {
+	nonce := []byte("verify-nonce")
+	binding := bytes.Repeat([]byte{0x5a}, 32)
+	qualifying, err := channelbind.ExpectedQualifyingData(nonce, binding)
+	require.NoError(t, err)
+	quote := tpmgo.Marshal(tpmgo.TPMSAttest{
+		Magic:     tpmgo.TPMGeneratedValue,
+		Type:      tpmgo.TPMSTAttestQuote,
+		ExtraData: tpmgo.TPM2BData{Buffer: qualifying},
+		Attested:  tpmgo.NewTPMUAttest(tpmgo.TPMSTAttestQuote, &tpmgo.TPMSQuoteInfo{}),
+	})
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	der, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	require.NoError(t, err)
+
+	verify := func(t *testing.T, req TPMVerifyQuoteRequest) *http.Response {
+		t.Helper()
+		_, router := setupTPMTestHandler(newMockTPMService())
+		req.Quote = base64.StdEncoding.EncodeToString(quote)
+		req.Signature = base64.StdEncoding.EncodeToString([]byte("garbage"))
+		req.AKPublic = base64.StdEncoding.EncodeToString(der)
+		body, marshalErr := json.Marshal(req)
+		require.NoError(t, marshalErr)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/tpm/verify-quote", bytes.NewReader(body)))
+		return w.Result()
+	}
+	decode := func(t *testing.T, resp *http.Response) TPMVerifyQuoteResponse {
+		t.Helper()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var out TPMVerifyQuoteResponse
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+		return out
+	}
+
+	t.Run("the bound echo passes the nonce check", func(t *testing.T) {
+		out := decode(t, verify(t, TPMVerifyQuoteRequest{
+			Nonce:          base64.StdEncoding.EncodeToString(nonce),
+			ChannelBinding: base64.StdEncoding.EncodeToString(binding),
+		}))
+		assert.False(t, out.Verified)
+		assert.Contains(t, out.Message, "signature_verification_failed")
+	})
+
+	t.Run("the bare nonce does not", func(t *testing.T) {
+		out := decode(t, verify(t, TPMVerifyQuoteRequest{
+			Nonce: base64.StdEncoding.EncodeToString(nonce),
+		}))
+		assert.False(t, out.Verified)
+		assert.Contains(t, out.Message, "nonce_verification_failed")
+	})
+
+	t.Run("a binding without a nonce is refused", func(t *testing.T) {
+		resp := verify(t, TPMVerifyQuoteRequest{
+			ChannelBinding: base64.StdEncoding.EncodeToString(binding),
+		})
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+
+	t.Run("an undecodable binding is refused", func(t *testing.T) {
+		resp := verify(t, TPMVerifyQuoteRequest{
+			Nonce:          base64.StdEncoding.EncodeToString(nonce),
+			ChannelBinding: "not-base64!!!",
+		})
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+}
+
 // =============================================================================
 // Certify Handler Tests
 // =============================================================================
@@ -1630,11 +1739,37 @@ func TestTPMHandleCertify(t *testing.T) {
 		nonce := base64.StdEncoding.EncodeToString([]byte("test-nonce"))
 		body, _ := json.Marshal(TPMCertifyRequest{Handle: 0x81000001, Nonce: nonce})
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/certify", bytes.NewReader(body))
+		req.TLS = testutil.ServerConnectionState(t)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
 		resp := w.Result()
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		// A caller's nonce is certified bound to this connection (#482).
+		var certResp TPMCertifyResponse
+		decodeTPMResponse(t, resp, &certResp)
+		want, err := channelbind.QualifyingData(req.TLS, channelbind.TransportREST, []byte("test-nonce"))
+		require.NoError(t, err)
+		assert.Equal(t, want, tpm.certified)
+		assert.NotEmpty(t, certResp.ChannelBinding)
+	})
+
+	t.Run("refuses a nonce with no TLS connection to bind", func(t *testing.T) {
+		tpm := newMockTPMService()
+		tpm.keyAttrs = &xkmssdk.KeyAttributes{
+			TPMAttributes: &xkmssdk.TPMAttributes{Handle: 0x81000001},
+		}
+		_, router := setupTPMTestHandler(tpm)
+
+		nonce := base64.StdEncoding.EncodeToString([]byte("test-nonce"))
+		body, _ := json.Marshal(TPMCertifyRequest{Handle: 0x81000001, Nonce: nonce})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/certify", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+		assert.Nil(t, tpm.certified, "the bare nonce was never certified")
 	})
 
 	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {

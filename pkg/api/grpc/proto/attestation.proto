@@ -398,6 +398,12 @@ message AttestationQuote {
 
   // EventLog contains the TPM event log.
   bytes event_log = 5;
+
+  // SignatureAlgorithm is the scheme the AK signed the quote with, named as
+  // x509.SignatureAlgorithm names it ("SHA256-RSA", "SHA256-RSAPSS",
+  // "ECDSA-SHA256", ...). VerifyAttestationQuote checks the signature under
+  // this scheme and refuses a quote that declares none or an unknown one.
+  string signature_algorithm = 6;
 }
 
 // =============================================================================
@@ -522,8 +528,16 @@ message GetAttestationQuoteResponse {
   // Status indicates the operation status.
   Status status = 1;
 
-  // Quote is the generated quote.
+  // Quote is the generated quote. Its nonce is the value the TPM quoted:
+  // SHA-256(nonce || channel_binding), never the nonce as sent (#482).
   AttestationQuote quote = 2;
+
+  // ChannelBinding is the TLS exporter of the connection the request arrived
+  // on (label EXPORTER-attested-peer, 32 bytes). A caller that derives the
+  // same value from its own end of the connection, and finds the quote's
+  // nonce equal to SHA-256(nonce || channel_binding), knows the quote came
+  // from the node terminating its connection and was not relayed.
+  bytes channel_binding = 3;
 }
 
 message VerifyAttestationQuoteRequest {
@@ -538,6 +552,11 @@ message VerifyAttestationQuoteRequest {
 
   // ExpectedPCRs contains expected PCR values for validation.
   repeated AttestationPCRValue expected_pcrs = 4;
+
+  // ChannelBinding, when set, is the binding the quote was produced under:
+  // the quote must then carry SHA-256(expected_nonce || channel_binding).
+  // Setting it requires expected_nonce.
+  bytes channel_binding = 5;
 }
 
 message VerifyAttestationQuoteResponse {

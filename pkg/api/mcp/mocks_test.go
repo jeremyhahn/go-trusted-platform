@@ -2384,7 +2384,7 @@ func (m *mockServiceProvider) TPMQuote(ctx context.Context, nonce []byte, pcrs [
 	return map[string]interface{}{"quote": "base64quote"}, nil
 }
 
-func (m *mockServiceProvider) TPMVerifyQuote(ctx context.Context, quote []byte, signature []byte, nonce []byte) (interface{}, error) {
+func (m *mockServiceProvider) TPMVerifyQuote(ctx context.Context, quote, signature, nonce, channelBinding []byte) (interface{}, error) {
 	return map[string]interface{}{"valid": true}, nil
 }
 

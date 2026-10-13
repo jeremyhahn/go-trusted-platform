@@ -28,7 +28,9 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 	attestationsvc "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/service"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -69,7 +71,10 @@ func TestWireAttestationOnConfig_WithoutTPM(t *testing.T) {
 	require.ErrorAs(t, err, &notConfigured)
 
 	server := daemon.NewAttestationServiceServer(cfg.AttestationService, slog.Default())
-	_, err = server.CollectHostAttestation(context.Background(),
+	// A request over a real TLS connection, so the refusal under test is the
+	// TPM session's, not the channel binding's (#482).
+	restCtx := channelbind.WithConnectionTLS(context.Background(), channelbind.TransportREST, testutil.ServerConnectionState(t))
+	_, err = server.CollectHostAttestation(restCtx,
 		&platformv1.CollectHostAttestationRequest{Nonce: []byte("nonce")})
 	require.Error(t, err)
 	assert.NotEqual(t, codes.FailedPrecondition, status.Code(err))

@@ -17,15 +17,18 @@ package quic
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-codec"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -836,7 +839,47 @@ func TestHandleVerifyManifest(t *testing.T) {
 // =============================================================================
 
 func TestHandleCollectHostAttestation(t *testing.T) {
-	ctx := context.Background()
+	state := testutil.ServerConnectionState(t)
+	ctx := WithConnectionTLS(context.Background(), state)
+
+	t.Run("quotes the nonce bound to its own connection", func(t *testing.T) {
+		handler, _ := createTestAttestationHandler()
+		nonce := []byte("test-nonce-12345678")
+
+		payload, err := quicwire.EncodePayload(&CollectHostAttestationRequest{Nonce: nonce})
+		require.NoError(t, err)
+
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpAttestHost, Payload: payload})
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+
+		var collectResp CollectHostAttestationResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &collectResp))
+		binding, err := state.ExportKeyingMaterial(xkmssdk.PeerChannelBindingExporterLabel, nil, xkmssdk.PeerChannelBindingLength)
+		require.NoError(t, err)
+		assert.Equal(t, xkmssdk.PeerQualifyingData(nonce, binding), collectResp.Attestation.Nonce,
+			"the service quotes the connection-bound value, never the nonce as sent (#482)")
+	})
+
+	t.Run("refuses a connection with no channel binding", func(t *testing.T) {
+		contexts := map[string]context.Context{
+			"no TLS state":     context.Background(),
+			"exporter refused": WithConnectionTLS(context.Background(), &tls.ConnectionState{Version: tls.VersionTLS12}),
+		}
+		for name, unbound := range contexts {
+			t.Run(name, func(t *testing.T) {
+				handler, service := createTestAttestationHandler()
+				service.collectHostErr = errors.New("the TPM must not be reached")
+
+				payload, err := quicwire.EncodePayload(&CollectHostAttestationRequest{Nonce: []byte("test-nonce-12345678")})
+				require.NoError(t, err)
+
+				resp := handler.HandleRequest(unbound, &quicwire.Request{Opcode: quicwire.OpAttestHost, Payload: payload})
+
+				assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
+				assert.Contains(t, string(resp.Payload), "bound to the TLS connection")
+			})
+		}
+	})
 
 	t.Run("collects host attestation successfully", func(t *testing.T) {
 		handler, _ := createTestAttestationHandler()

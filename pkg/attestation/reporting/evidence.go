@@ -31,11 +31,14 @@ type Evidence struct {
 	Quote []byte `json:"quote"`
 	// Signature is the attestation-key signature over Quote.
 	Signature []byte `json:"signature"`
-	// Nonce is the collector-issued anti-replay value, which the quote's
-	// extraData must carry.
+	// Nonce is the collector-issued anti-replay value. The quote's extraData
+	// carries QualifyingData(Nonce, ChannelBinding), not the bare nonce.
 	Nonce []byte `json:"nonce"`
 	// PCRs maps PCR index to the value the device read for it.
 	PCRs map[int][]byte `json:"pcrs"`
+	// ChannelBinding is the TLS exporter value of the connection the quote
+	// was collected over (xkms.PeerChannelBindingExporterLabel).
+	ChannelBinding []byte `json:"channel_binding,omitempty"`
 }
 
 // Encode serialises the evidence for the verifier.

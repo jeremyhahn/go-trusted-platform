@@ -27,6 +27,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 	attestvm "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
@@ -256,7 +257,10 @@ type TPM2QuoteResponse struct {
 	Quote     []byte `codec:"quote"`
 	Signature []byte `codec:"signature"`
 	EventLog  []byte `codec:"event_log"`
-	Timestamp int64  `codec:"timestamp"`
+	// ChannelBinding is the TLS exporter of the connection the request
+	// arrived on; the TPM quoted SHA-256(nonce || ChannelBinding) (#482).
+	ChannelBinding []byte `codec:"channel_binding"`
+	Timestamp      int64  `codec:"timestamp"`
 }
 
 // TPM2VerifyQuoteRequest represents a TPM quote verification request.
@@ -266,6 +270,9 @@ type TPM2VerifyQuoteRequest struct {
 	Signature []byte `codec:"signature"`
 	Nonce     []byte `codec:"nonce"`
 	AKPublic  []byte `codec:"ak_public"`
+	// ChannelBinding, when set, is the binding the quote was produced
+	// under; the quote must then carry SHA-256(Nonce || ChannelBinding).
+	ChannelBinding []byte `codec:"channel_binding"`
 }
 
 // TPM2VerifyQuoteResponse represents a TPM quote verification response.
@@ -809,16 +816,25 @@ func (h *TPM2Handler) handleQuote(ctx context.Context, payload []byte) *quicwire
 		pcrs[i] = uint(pcr)
 	}
 
-	quote, err := h.tpm.Quote(pcrs, req.Nonce)
+	// Quote the nonce bound to this connection, never the nonce as sent
+	// (#482): a relay forwarding a caller's nonce over a second connection
+	// gets a quote the caller refuses.
+	bound, err := channelbind.Bind(ConnectionTLS(ctx), channelbind.TransportQUIC, req.Nonce)
+	if err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, err)
+	}
+
+	quote, err := h.tpm.Quote(pcrs, bound.QualifyingData)
 	if err != nil {
 		return h.tpmErrorResponse(err)
 	}
 
 	return h.encodeResponse(&TPM2QuoteResponse{
-		Quote:     quote.Quoted,
-		Signature: quote.Signature,
-		EventLog:  quote.EventLog,
-		Timestamp: time.Now().Unix(),
+		Quote:          quote.Quoted,
+		Signature:      quote.Signature,
+		EventLog:       quote.EventLog,
+		ChannelBinding: bound.Binding,
+		Timestamp:      time.Now().Unix(),
 	})
 }
 
@@ -850,8 +866,14 @@ func (h *TPM2Handler) handleVerifyQuote(ctx context.Context, payload []byte) *qu
 		})
 	}
 
-	if len(req.Nonce) > 0 {
-		if err := attestvm.VerifyQuoteNonce(req.Quote, req.Nonce); err != nil {
+	// A quote the node produced over a bound connection carries
+	// SHA-256(nonce || binding), not the nonce itself.
+	expectedNonce, err := channelbind.ExpectedQualifyingData(req.Nonce, req.ChannelBinding)
+	if err != nil {
+		return h.errorResponse(quicwire.StatusInvalidArgument, err)
+	}
+	if len(expectedNonce) > 0 {
+		if err := attestvm.VerifyQuoteNonce(req.Quote, expectedNonce); err != nil {
 			return h.encodeResponse(&TPM2VerifyQuoteResponse{
 				Verified:  false,
 				Message:   "nonce_verification_failed: " + err.Error(),

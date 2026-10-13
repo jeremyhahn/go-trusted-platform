@@ -43,6 +43,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
@@ -4076,37 +4077,63 @@ func (p *MCPServiceProvider) TPMDeleteIAK(ctx context.Context) (interface{}, err
 	}, nil
 }
 
-// TPMQuote generates a TPM quote.
+// tpmQuotes is the TPM gRPC service over the provider's TPM, so an MCP quote
+// is bound to its connection and verified exactly as on every other
+// transport (#482).
+func (p *MCPServiceProvider) tpmQuotes() *TPMGRPCService {
+	svc := NewTPMGRPCService(logging.NewFromSlog(p.logger))
+	svc.SetTPM2Service(p.tpm2Service)
+	return svc
+}
+
+// TPMQuote generates a TPM quote over SHA-256(nonce || channel_binding),
+// where channel_binding is the TLS exporter of the MCP connection the
+// request arrived on. MCP over stdio has no TLS connection and is refused.
 func (p *MCPServiceProvider) TPMQuote(ctx context.Context, nonce []byte, pcrs []int) (interface{}, error) {
 	if p.tpm2Service == nil {
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	pcrIndices := make([]uint, len(pcrs))
+	pcrIndices := make([]uint32, len(pcrs))
 	for i, pcr := range pcrs {
-		pcrIndices[i] = uint(pcr)
+		pcrIndices[i] = uint32(pcr)
 	}
 
-	quote, err := p.tpm2Service.Quote(pcrIndices, nonce)
+	quote, err := p.tpmQuotes().Quote(ctx, &platformv1.QuoteRequest{Nonce: nonce, PcrIndices: pcrIndices})
 	if err != nil {
 		return nil, err
 	}
 
 	return map[string]interface{}{
-		"quote":     base64.StdEncoding.EncodeToString(quote.Quoted),
-		"signature": base64.StdEncoding.EncodeToString(quote.Signature),
-		"event_log": base64.StdEncoding.EncodeToString(quote.EventLog),
+		"quote":           base64.StdEncoding.EncodeToString(quote.GetQuote()),
+		"signature":       base64.StdEncoding.EncodeToString(quote.GetSignature()),
+		"event_log":       base64.StdEncoding.EncodeToString(quote.GetEventLog()),
+		"channel_binding": base64.StdEncoding.EncodeToString(quote.GetChannelBinding()),
 	}, nil
 }
 
-// TPMVerifyQuote verifies a TPM quote.
-func (p *MCPServiceProvider) TPMVerifyQuote(ctx context.Context, quote []byte, signature []byte, nonce []byte) (interface{}, error) {
+// TPMVerifyQuote verifies a TPM quote against the platform IAK. A non-empty
+// channelBinding is the binding the quote was produced under; the quote must
+// then carry SHA-256(nonce || channelBinding).
+func (p *MCPServiceProvider) TPMVerifyQuote(ctx context.Context, quote, signature, nonce, channelBinding []byte) (interface{}, error) {
 	if p.tpm2Service == nil {
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	// Quote verification is not yet implemented in the gRPC service either
-	return nil, ErrTPMOperationNotImplemented{Operation: "VerifyQuote"}
+	result, err := p.tpmQuotes().VerifyQuote(ctx, &platformv1.VerifyQuoteRequest{
+		Quote:          quote,
+		Signature:      signature,
+		Nonce:          nonce,
+		ChannelBinding: channelBinding,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"verified": result.GetVerified(),
+		"message":  result.GetMessage(),
+	}, nil
 }
 
 // TPMReadPCRs reads PCR values.

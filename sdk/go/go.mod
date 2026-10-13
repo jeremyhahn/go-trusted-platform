@@ -3,6 +3,7 @@ module github.com/jeremyhahn/go-trusted-platform/sdk/go
 go 1.27.2
 
 require (
+	github.com/google/go-tpm v0.9.8
 	github.com/jeremyhahn/go-codec v1.4.0
 	github.com/jeremyhahn/go-quicbaas/sdk/go v0.12.0-alpha
 	github.com/quic-go/quic-go v0.62.0
@@ -115,7 +116,6 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
-	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/google/go-tpm-tools v0.4.9 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect

@@ -29,6 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
@@ -251,8 +252,11 @@ func (s *Server) handleStdioRequests() {
 				continue
 			}
 
-			// Handle request with timeout
+			// Handle request with timeout. stdio has no TLS connection, so
+			// a quote requested over it is refused rather than produced
+			// unbound.
 			ctx, cancel := context.WithTimeout(context.Background(), s.config.RequestTimeout)
+			ctx = channelbind.WithConnectionTLS(ctx, channelbind.TransportMCP, nil)
 			resp := s.handleRequest(ctx, &req)
 			cancel()
 
@@ -381,7 +385,7 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 	token := extractTokenFromHTTPRequest(r)
 
 	// Create context with token
-	ctx := ContextWithToken(r.Context(), token)
+	ctx := channelbind.WithConnectionTLS(ContextWithToken(r.Context(), token), channelbind.TransportMCP, r.TLS)
 
 	// Handle request
 	resp := s.handleRequest(ctx, &req)

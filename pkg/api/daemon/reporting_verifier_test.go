@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -122,8 +123,14 @@ func TestDeviceQuoteVerifierForReporting_UsesThePlatformVerifier(t *testing.T) {
 	_, err = v.VerifyDeviceQuote(context.Background(), "", []byte("e"))
 	require.Error(t, err, "the platform verifier refuses an empty device id")
 
+	// Unbound evidence is refused: the collector always binds its quotes.
 	nonce := []byte("collector-nonce")
-	report, err := v.VerifyDeviceQuote(context.Background(), strconv.FormatUint(f.device.ID, 10), f.evidence(t, nonce, goldenPCRs()))
+	_, err = v.VerifyDeviceQuote(context.Background(), strconv.FormatUint(f.device.ID, 10), f.evidence(t, nonce, goldenPCRs()))
+	var invalid ErrInvalidAttestationEvidence
+	require.ErrorAs(t, err, &invalid)
+
+	bound := f.boundEvidence(t, nonce, xkms.PeerQualifyingData(nonce, testChannelBinding), testChannelBinding)
+	report, err := v.VerifyDeviceQuote(context.Background(), strconv.FormatUint(f.device.ID, 10), bound)
 	require.NoError(t, err)
 	assert.True(t, report.Verified, report.Message)
 	assert.True(t, report.AKCertificateVerified)

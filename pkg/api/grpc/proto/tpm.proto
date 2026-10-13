@@ -332,6 +332,10 @@ message QuoteResponse {
   bytes signature = 3;
   repeated PCRValue pcr_values = 4;
   bytes event_log = 5;
+  // channel_binding is the TLS exporter of the connection the request arrived
+  // on (label EXPORTER-attested-peer, 32 bytes). The TPM quoted
+  // SHA-256(nonce || channel_binding), never the nonce as sent (#482).
+  bytes channel_binding = 6;
 }
 
 message VerifyQuoteRequest {
@@ -340,6 +344,10 @@ message VerifyQuoteRequest {
   bytes ak_public = 3;
   bytes nonce = 4;
   repeated PCRValue expected_pcrs = 5;
+  // channel_binding, when set, is the binding the quote was produced under:
+  // the quote must then carry SHA-256(nonce || channel_binding). Setting it
+  // requires nonce.
+  bytes channel_binding = 6;
 }
 
 message VerifyQuoteResponse {

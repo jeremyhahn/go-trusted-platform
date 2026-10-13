@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 )
@@ -739,6 +740,15 @@ func (h *AttestationHandlers) handleCollectHostAttestation(w http.ResponseWriter
 	}
 
 	opts, err := h.parseCollectAttestationOptions(&req)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	// Quote the nonce bound to this connection, never the nonce as sent
+	// (#482): a relay forwarding a collector's nonce over a second connection
+	// gets a quote the collector refuses.
+	opts.Nonce, err = channelbind.QualifyingData(r.TLS, channelbind.TransportREST, opts.Nonce)
 	if err != nil {
 		h.writeError(w, http.StatusBadRequest, err)
 		return

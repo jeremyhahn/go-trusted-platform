@@ -735,7 +735,7 @@ type ServiceProvider interface {
 	TPMCreateIAK(ctx context.Context) (interface{}, error)
 	TPMDeleteIAK(ctx context.Context) (interface{}, error)
 	TPMQuote(ctx context.Context, nonce []byte, pcrs []int) (interface{}, error)
-	TPMVerifyQuote(ctx context.Context, quote []byte, signature []byte, nonce []byte) (interface{}, error)
+	TPMVerifyQuote(ctx context.Context, quote, signature, nonce, channelBinding []byte) (interface{}, error)
 	TPMReadPCRs(ctx context.Context, indices []int) (interface{}, error)
 	TPMExtendPCR(ctx context.Context, pcrIndex int, data []byte) (interface{}, error)
 	TPMEventLog(ctx context.Context) (interface{}, error)

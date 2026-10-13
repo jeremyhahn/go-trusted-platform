@@ -30,6 +30,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
@@ -931,7 +932,15 @@ func (s *TPMGRPCService) Quote(
 		pcrs[i] = uint(pcr)
 	}
 
-	quote, err := tpm.Quote(pcrs, req.GetNonce())
+	// The TPM quotes the nonce bound to the connection the request arrived
+	// on, never the nonce as sent (#482); a request with no TLS connection
+	// is refused.
+	bound, err := bindQuote(ctx, req.GetNonce())
+	if err != nil {
+		return nil, err
+	}
+
+	quote, err := tpm.Quote(pcrs, bound.QualifyingData)
 	if err != nil {
 		s.logger.Slog().Error("TPM Quote failed", slog.String("error", err.Error()))
 		return nil, s.mapError(err)
@@ -939,9 +948,10 @@ func (s *TPMGRPCService) Quote(
 
 	s.logger.Debug("TPM Quote completed")
 	return &platformv1.QuoteResponse{
-		Quote:     quote.Quoted,
-		Signature: quote.Signature,
-		EventLog:  quote.EventLog,
+		Quote:          quote.Quoted,
+		Signature:      quote.Signature,
+		EventLog:       quote.EventLog,
+		ChannelBinding: bound.Binding,
 	}, nil
 }
 
@@ -1027,13 +1037,18 @@ func (s *TPMGRPCService) VerifyQuote(
 		}, nil
 	}
 
-	// Anti-replay: ExtraData must equal the supplied nonce.
-	if len(req.GetNonce()) > 0 {
-		if !bytes.Equal(attest.ExtraData.Buffer, req.GetNonce()) {
+	// Anti-replay: ExtraData must equal the supplied nonce, or, for a quote
+	// the node produced over a bound connection, SHA-256(nonce || binding).
+	expectedNonce, err := channelbind.ExpectedQualifyingData(req.GetNonce(), req.GetChannelBinding())
+	if err != nil {
+		return nil, err
+	}
+	if len(expectedNonce) > 0 {
+		if !bytes.Equal(attest.ExtraData.Buffer, expectedNonce) {
 			return &platformv1.VerifyQuoteResponse{
 				Verified: false,
-				Message: fmt.Sprintf("nonce mismatch: quote carries %d bytes of ExtraData, request supplied %d bytes",
-					len(attest.ExtraData.Buffer), len(req.GetNonce())),
+				Message: fmt.Sprintf("nonce mismatch: quote carries %d bytes of ExtraData, request expects %d bytes",
+					len(attest.ExtraData.Buffer), len(expectedNonce)),
 			}, nil
 		}
 	}

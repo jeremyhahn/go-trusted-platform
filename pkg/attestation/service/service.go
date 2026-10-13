@@ -31,6 +31,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/store"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
 )
 
 // Service is the production AttestationService backed by a store +
@@ -220,10 +221,19 @@ func (s *Service) GetQuote(ctx context.Context, config *daemon.QuoteConfig, nonc
 	return q.result(nonce), nil
 }
 
-// VerifyQuote verifies a TPM quote against expected values. This
-// path doesn't require a TPM session — only public-key crypto and
-// PCR comparison — so it can run today against a quote supplied by
-// any client.
+// VerifyQuote verifies a TPM quote against expected values: the AK
+// signature over the quote, the qualifying data it carries, and the PCR
+// values. This path doesn't require a TPM session, only public-key crypto
+// and comparison, so it runs against a quote supplied by any client.
+//
+// The signature is checked under the scheme quote.SignatureAlgorithm
+// declares, so an RSA-PSS IAK's quotes verify as RSA-PSS. A quote that
+// declares no algorithm, or one with no scheme, is rejected.
+//
+// expectedNonce is the value the TPM must have quoted. For a quote the node
+// produced over a bound connection that is SHA-256(nonce || binding), which
+// the caller derives with channelbind.ExpectedQualifyingData (#482). An
+// empty expectedNonce skips the check.
 func (s *Service) VerifyQuote(
 	ctx context.Context,
 	quote *daemon.QuoteResult,
@@ -237,12 +247,14 @@ func (s *Service) VerifyQuote(
 	if len(akPublicKey) == 0 {
 		return nil, &MessageError{Msg: "attestation/service: AK public key is required"}
 	}
-	// PCR comparison — the structural check. Full TPM2_VerifySignature
-	// + TPMS_ATTEST parsing lives in the manifest verifier and is
-	// reused there; for the standalone Quote-only endpoint, we
-	// match PCR values byte-for-byte since the AK signature
-	// verification + nonce check have already been performed during
-	// import by the enrollment hook.
+	if err := vm.VerifyQuoteSignatureWithAlgorithm(akPublicKey, quote.QuoteData, quote.Signature, quote.SignatureAlgorithm); err != nil {
+		return quoteRejected(quote, err), nil
+	}
+	if len(expectedNonce) > 0 {
+		if err := vm.VerifyQuoteNonce(quote.QuoteData, expectedNonce); err != nil {
+			return quoteRejected(quote, err), nil
+		}
+	}
 	mismatched := []string{}
 	expected := map[int][]byte{}
 	for _, p := range expectedPCRs {
@@ -267,6 +279,16 @@ func (s *Service) VerifyQuote(
 		res.Message = "PCR values match the expected policy"
 	}
 	return res, nil
+}
+
+// quoteRejected reports a quote whose signature or qualifying data failed
+// verification. The failure is the answer, not an error of the call.
+func quoteRejected(quote *daemon.QuoteResult, cause error) *daemon.QuoteVerificationResult {
+	return &daemon.QuoteVerificationResult{
+		Verified:   false,
+		Message:    cause.Error(),
+		ActualPCRs: quote.PCRValues,
+	}
 }
 
 // CollectHostAttestation quotes the caller's nonce over the selected PCRs

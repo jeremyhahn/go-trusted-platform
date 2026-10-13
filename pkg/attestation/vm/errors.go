@@ -245,6 +245,29 @@ func (e ErrSignatureInvalid) Unwrap() error {
 	return e.Cause
 }
 
+// ErrUnsupportedSignatureAlgorithm indicates a quote declared a signature
+// algorithm the verifier has no scheme for, or declared none at all. The
+// quote is refused rather than checked under a guessed scheme.
+type ErrUnsupportedSignatureAlgorithm struct {
+	Algorithm string
+}
+
+func (e ErrUnsupportedSignatureAlgorithm) Error() string {
+	return fmt.Sprintf("vm: unsupported quote signature algorithm %q", e.Algorithm)
+}
+
+// ErrSignatureSchemeMismatch indicates the AK public key cannot carry the
+// signature scheme the quote declared, such as an RSA-PSS quote presented
+// with an ECDSA key.
+type ErrSignatureSchemeMismatch struct {
+	Scheme  string
+	KeyType string
+}
+
+func (e ErrSignatureSchemeMismatch) Error() string {
+	return fmt.Sprintf("vm: %s quote signature cannot be verified with a %s AK", e.Scheme, e.KeyType)
+}
+
 // ErrPCRReadFailed indicates a PCR read operation failed.
 type ErrPCRReadFailed struct {
 	PCR   int
@@ -281,41 +304,6 @@ type ErrHostBindingInvalid struct {
 func (e ErrHostBindingInvalid) Error() string {
 	return fmt.Sprintf("vm: host binding invalid: expected host %q, got %q",
 		e.ExpectedHostID, e.ActualHostID)
-}
-
-// ErrBaselineMissing reports that no PCR baseline exists to verify against.
-// It is deliberately distinct from ErrBaselineMismatch: a device with no
-// baseline has not FAILED attestation, it cannot be evaluated — and only a
-// cryptographic failure may drive quarantine (design of record, #226).
-type ErrBaselineMissing struct {
-	Reason string
-}
-
-func (e ErrBaselineMissing) Error() string {
-	msg := "vm: no PCR baseline"
-	if e.Reason != "" {
-		msg = fmt.Sprintf("%s: %s", msg, e.Reason)
-	}
-	return msg
-}
-
-// ErrBaselineMismatch reports that a device's reported PCR values diverge
-// from the platform's baseline. Index is the first divergent register, or -1
-// when the register SETS differ rather than a value.
-type ErrBaselineMismatch struct {
-	Index  int
-	Reason string
-}
-
-func (e ErrBaselineMismatch) Error() string {
-	msg := "vm: PCR baseline mismatch"
-	if e.Reason != "" {
-		msg = fmt.Sprintf("%s: %s", msg, e.Reason)
-	}
-	if e.Index >= 0 {
-		msg = fmt.Sprintf("%s (pcr %d)", msg, e.Index)
-	}
-	return msg
 }
 
 // ErrAKCertificateInvalid reports an attestation-key certificate that could

@@ -1953,7 +1953,7 @@ func (p *PlatformServiceProvider) TPMQuote(ctx context.Context, nonce []byte, pc
 }
 
 // TPMVerifyQuote verifies a TPM quote.
-func (p *PlatformServiceProvider) TPMVerifyQuote(ctx context.Context, quote []byte, signature []byte, nonce []byte) (interface{}, error) {
+func (p *PlatformServiceProvider) TPMVerifyQuote(ctx context.Context, quote, signature, nonce, channelBinding []byte) (interface{}, error) {
 	return nil, ErrTPMOperationNotImplemented{Operation: "TPMVerifyQuote"}
 }
 
