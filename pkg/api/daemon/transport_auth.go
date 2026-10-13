@@ -14,10 +14,12 @@
 package daemon
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"os"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"google.golang.org/grpc"
 
 	grpccreds "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
@@ -135,18 +137,32 @@ func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, logger *l
 
 // selectQUICAuth decides how the QUIC transport authenticates callers. It
 // always returns a middleware, because the QUIC dispatcher authorizes every
-// request against the operation catalog (#767). Under mTLS the verified peer
-// certificate authenticates a tokenless request (resolveMTLSClientCAPool
-// guarantees the TLS layer really verifies it) and a presented token is still
+// request against the operation catalog (#767). Under mTLS the TLS layer
+// verifies the client certificate against clientCAPool and the middleware
+// turns it into the principal of a tokenless request, so the per-operation
+// scope checks see an authorized caller (#720); a presented token is still
 // validated when the shared platform-token validator exists. Under the
 // SkipIAMValidation opt-out authentication is skipped, but unclassified
 // operations are still refused. A configuration with no backend is refused
 // with ErrTransportAuthRequired instead of yielding an unauthenticated server
 // (#550).
-func selectQUICAuth(config *Config, shared *platformTokenValidator, logger *logging.Logger) (*quic.AuthMiddleware, *grpcTokenValidator, error) {
+func selectQUICAuth(config *Config, shared *platformTokenValidator, clientCAPool *x509.CertPool, logger *logging.Logger) (*quic.AuthMiddleware, *grpcTokenValidator, error) {
 	if config.EnableMTLS {
-		logger.Info("QUIC server: mTLS authentication enabled (TLS layer)")
-		opts := []quic.AuthMiddlewareOption{quic.WithQUICPeerAuthenticated()}
+		if clientCAPool == nil {
+			return nil, nil, ErrTransportAuthRequired{
+				Transport: transportQUIC,
+				Reason:    "mTLS is enabled but no client CA pool is available to authenticate client certificates",
+			}
+		}
+		mtlsAuth, err := auth.NewMTLSAdapterFromRoots(logger, clientCAPool)
+		if err != nil {
+			return nil, nil, ErrTLSConfigFailed{Reason: "QUIC mTLS auth: " + err.Error()}
+		}
+		logger.Info("QUIC server: mTLS authentication enabled")
+		opts := []quic.AuthMiddlewareOption{
+			quic.WithQUICPeerAuthenticator(mtlsPeerAuthenticator{authenticator: mtlsAuth}),
+			quic.WithQUICRequireAuth(true),
+		}
 		if shared != nil {
 			opts = append(opts, quic.WithQUICTokenValidator(shared))
 		}
@@ -174,6 +190,37 @@ func selectQUICAuth(config *Config, shared *platformTokenValidator, logger *logg
 		quic.WithQUICTokenValidator(local),
 		quic.WithQUICRequireAuth(true),
 	), local, nil
+}
+
+// mtlsOperatorScope is the grant of a principal authenticated by an mTLS
+// client certificate. The daemon's client CA pool admits only operator
+// certificates (the admin bundle /init issues), and gRPC and REST authorize
+// such a caller for every operation without a scope check, so QUIC grants the
+// same authority rather than refusing the operator its own platform.
+const mtlsOperatorScope = "*:*"
+
+// mtlsPeerAuthenticator turns the verified client certificate of a QUIC
+// connection into the principal its requests act as, through the same
+// certificate authenticator the gRPC mTLS interceptor uses.
+type mtlsPeerAuthenticator struct {
+	authenticator auth.Authenticator
+}
+
+// AuthenticatePeer implements quic.PeerAuthenticator.
+func (a mtlsPeerAuthenticator) AuthenticatePeer(ctx context.Context, chain []*x509.Certificate) (*platformtoken.AuthorizedContext, error) {
+	if len(chain) == 0 {
+		return nil, quic.ErrMissingClientCertificate{}
+	}
+	identity, err := a.authenticator.Authenticate(ctx, chain[0])
+	if err != nil {
+		return nil, err
+	}
+	return &platformtoken.AuthorizedContext{
+		Subject:  identity.ID,
+		Username: identity.Name,
+		TenantID: identity.TenantID,
+		Scopes:   []string{mtlsOperatorScope},
+	}, nil
 }
 
 // buildLocalTokenValidator builds the per-transport token validator from the

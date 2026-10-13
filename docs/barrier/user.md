@@ -53,8 +53,11 @@ curl -s -X POST http://127.0.0.1:9446/init \
   -d '{"so_pin":"<so-pin>","user_pin":"<user-pin>","hostname":"<node-fqdn>"}'
 ```
 
-Add `"threshold": 3, "shares": 5` for an M-of-N ceremony. The full request is
-in [api.md §2](api.md#2-the-barrier-gate).
+For an M-of-N ceremony add `"threshold": 3, "shares": 5` and the five Security
+Officers who will hold the shares, each with a CSR for their own key:
+`"officers": [{"username":"alice","csr_pem":"-----BEGIN CERTIFICATE REQUEST-----..."}, ...]`.
+`platformctl init --officer alice=alice.csr ...` builds this for you. The full
+request is in [api.md §2](api.md#2-the-barrier-gate).
 
 **Keep the user PIN.** The gate uses it as the barrier secret, so it is what
 you unseal with later.

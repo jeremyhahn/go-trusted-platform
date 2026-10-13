@@ -42,10 +42,19 @@ runs `initialize`. A failure returns `ErrConnectionFailed`, so auto-detection
 moves on to the next protocol instead of handing back a dead client.
 
 **The embedded transport's reach is bounded by `ServiceRegistry`**
-(`sdk/go/transport/embedded/adapter.go:32`), which has **22 fields**: Daemon, CA,
+(`sdk/go/transport/embedded/adapter.go:32`), which has **25 service fields**: Daemon, CA,
 TPM, VTPM, Device, IAM, KMS, SDN, Compute, IDevID, Attestation, Tenant, PXE,
-DNS, Gateway, Proxy, Overlay, Registry, Cluster, EAB, Invitation and
-ConfigDelivery. Anything not in that list has **no embedded route** —
+DNS, Gateway, Proxy, Overlay, Registry, Cluster, EAB, Invitation,
+ConfigDelivery, Ceremony, PIV and FIDO2, plus the `CallerContext` hook that
+attaches the caller's identity. platformctl's embedded hosts (the desktop
+standalone daemon and a CLI context whose transport is embedded) both start
+through `daemon.StartEmbeddedHost`, which fills each field from the daemon
+accessor of the same service (`pkg/api/daemon/embedded_host.go`); a service the
+daemon did not build stays nil and registers no methods. Both pass
+`appbackends.WireEmbeddedHost` as `WireBackends`, which wires the same ceremony
+backend `platformd serve` does (`appbackends.WireSDKBackends`), so the ceremony
+answers on the embedded transport too, and without an SDK client the embedded
+host refuses to start (`ErrEmbeddedHostFailed{Op: "backends"}`). Anything not in that list has **no embedded route** —
 `SwitchService` is the notable absentee ([`docs/sdn/api.md`](../sdn/api.md) §7).
 
 **An enabled transport that cannot be constructed or started stops the
@@ -58,6 +67,27 @@ fails startup. The rule and its errors are specified in
 [`architecture.md` § Protocol Feature Matrix](architecture.md#protocol-feature-matrix).
 
 `/api/v1/platform/protocols` reports which transports are actually serving.
+
+### Before and after unseal
+
+None of the six transports exists until the barrier is unsealed. Until then
+platformd serves only the **pre-unseal mux**: plain HTTP with `GET /healthz`,
+`POST /init` and `POST /unseal` ([`docs/bootstrap/api.md`](../bootstrap/api.md) §3).
+
+| Daemon phase | Listening | Client |
+|---|---|---|
+| Uninitialized or sealed | Pre-unseal mux on the Unix socket and `127.0.0.1:9446` only | `sdk/go/services/gate` (`platformctl init`) |
+| Unsealed | The six transports above; the pre-unseal mux is torn down | `sdk/go` (`platformd.Connect`), every other `platformctl` command |
+
+The pre-unseal mux carries PINs and returns the one-shot admin bundle in clear,
+so it is never bound off-host, and the gate client refuses any endpoint that is
+not `unix://<path>` or a loopback `host:port`. `platformctl init` uses the Unix
+socket unless `--loopback-http` is passed: only there can a lost `/init`
+response be replayed ([`docs/bootstrap/cli.md`](../bootstrap/cli.md) §1a).
+`CeremonyService/Init` on the
+six transports reaches the same ceremony backend, but it is only reachable after
+unseal, so it cannot bootstrap a fresh platform — `platformctl init` does not use
+it.
 
 ### Error classes on MCP (#505)
 
@@ -207,10 +237,10 @@ distinct values, eighteen names:
 | `0x51` | `OpIAMCategory` | IAM tenant records; sub-opcodes `IAMSub*` `0x01`–`0x05`. Not the platform tenancy opcodes `0xDB`–`0xEB` |
 | `0x69` | `OpVMExtendedCategory` | VM operational sub-opcodes (`0xCC`–`0xD0`) |
 | `0x99` | `OpTPM2Category` | Physical TPM |
-| `0x9A` | `OpCeremonyCategory` | Phase 3.5 |
-| `0x9B` | `OpPIVCategory` | Phase 3.5 |
-| `0x9C` | `OpLUKSCategory` | Phase 3.5 |
-| `0x9D` | `OpFIDO2Category` | Phase 3.5 |
+| `0x9A` | `OpCeremonyCategory` | Bootstrap ceremony; per-sub-opcode scopes in [`docs/cli/ceremony.md`](../cli/ceremony.md) |
+| `0x9B` | `OpPIVCategory` | PIV smartcards; scopes in [`docs/cli/piv.md`](../cli/piv.md) |
+| `0x9C` | `OpLUKSCategory` | LUKS volumes |
+| `0x9D` | `OpFIDO2Category` | FIDO2 tokens; scopes in [`docs/cli/fido2.md`](../cli/fido2.md) |
 | `0x9E` | `OpTenantBarrierCategory` | Per-tenant barrier |
 | `0x9F` | `OpBMCCategory` | BMC enrollment |
 | `0xCC` | `OpSwitchCategory` | Physical switch; sub-opcodes `SwitchSub*` `0x01`–`0x05` |
@@ -273,15 +303,17 @@ from a panicking handler."* gRPC has the equivalent in
 Platform tokens carry an `scp` claim in the qrdb-canonical
 `"<resource>:<action>"` form, minted by the broker from the subject's resolved
 permissions. Enforcement is per operation: gRPC `RequireScope`, QUIC
-`AuthMiddleware.GuardRequest`, MCP `AuthorizeTool`.
+`AuthMiddleware.GuardRequest`, MCP `AuthorizeTool`. On QUIC the ceremony, PIV
+and FIDO2 categories also run `AuthorizeSubOpcode`, which requires a principal
+(#720, below).
 
 Three catalogs with **different defaults** — gRPC allows an unlisted entry, MCP
 (since #300) and QUIC (since #767) deny one:
 
 | Catalog | Coverage | Default for an unlisted entry |
 |---|---|---|
-| gRPC (`pkg/api/grpc/method_permissions.go`) | **185 of 461 RPCs**, across 11 of 31 services | *"carries no required scope: the interceptor allows it once the token is validated"* |
-| MCP (`pkg/api/mcp/authz.go`) | **124 of 434 registered tools** (5 of them explicitly open with `""`) | **denied**: `AuthorizeTool` refuses a tool with no map entry (`AuthErrorToolNotClassified`, reported on the wire as `-32603`); the 310 unmapped tools are enumerated in `knownUnclassified` (`authz_completeness_test.go`), a list that may only shrink (#304) |
+| gRPC (`pkg/api/grpc/method_permissions.go`) | **208 of 468 RPCs**, across 13 of 31 services | *"carries no required scope: the interceptor allows it once the token is validated"* |
+| MCP (`pkg/api/mcp/authz.go`) | **144 of 434 registered tools** (5 of them explicitly open with `""`) | **denied**: `AuthorizeTool` refuses a tool with no map entry (`AuthErrorToolNotClassified`, reported on the wire as `-32603`); the 290 unmapped tools are enumerated in `knownUnclassified` (`authz_completeness_test.go`), a list that may only shrink (#304) |
 | QUIC (`pkg/api/quic/opcode_permissions.go`) | **every routable opcode and sub-opcode** — pinned by `pkg/api/daemon/quic_authz_contract_test.go` | **denied**: `StatusPermissionDenied`, payload `QUIC operation not classified for authorization: …` (`ErrOperationNotClassified`) |
 
 **gRPC TCP, QUIC and REST fail closed without an authentication backend
@@ -320,8 +352,10 @@ operation, whatever its `scp`. `HandleRequest` now runs
 4. **Authorization** of the pair: on the platform-token path the scope
    `"<resource>:<action>"` is enforced by `RequireScope` (wildcards apply);
    otherwise a configured `AuthorizationChecker` decides. A scope-less
-   credential with no checker (a peer certificate, the legacy bool-only
-   token validator) authorizes every *classified* operation, as on gRPC.
+   credential with no checker (a peer certificate admitted without a
+   principal, the legacy bool-only token validator) authorizes every *classified* operation, as on gRPC —
+   except the ceremony, PIV and FIDO2 categories, which need a principal
+   (below).
 
 The pairs mirror the gRPC catalog and the MCP map for the same capability;
 `TestQUICAuthzContract_ScopesMatchGRPC` pins one mutating and one reading
@@ -330,10 +364,41 @@ sub-opcode is added without a catalog entry. A `QUICServiceHandler` cannot be
 built without a middleware (`NewQUICServiceHandler` returns
 `ErrQUICAuthMiddlewareRequired`), and a handler built as a bare literal
 answers `StatusUnavailable` to everything. Under mTLS the verified client
-certificate authenticates a tokenless request (`WithQUICPeerAuthenticated`) —
-as on gRPC, where the certificate alone authenticates — while a presented
-token is still validated and scope-checked. `SkipIAMValidation` skips
+certificate authenticates a tokenless request — as on gRPC, where the
+certificate alone authenticates — while a presented token is still validated
+and scope-checked. The daemon installs `WithQUICPeerAuthenticator`, which
+attaches the certificate's principal; `WithQUICPeerAuthenticated` marks a
+transport-verified peer authenticated without one. `SkipIAMValidation` skips
 authentication only; unclassified operations are refused there too.
+
+**QUIC category operations need a principal (#720).** The ceremony (`0x9A`),
+PIV (`0x9B`) and FIDO2 (`0x9D`) categories check the caller's scope per
+sub-opcode (`pkg/api/quic/phase35_auth.go`) and refuse a request that carries
+no `AuthorizedContext` with `PermissionDenied`. The QUIC auth middleware
+attaches one in two cases:
+
+- a platform token: the `scp` claim is the scope set;
+- under `EnableMTLS`: the connection's verified client certificate,
+  authenticated against the client CA pool. The certificate is admitted as the
+  operator principal holding `*:*`, the standing gRPC and REST give an mTLS
+  caller. Only `VerifiedChains` is read, never `PeerCertificates`.
+
+A legacy bool-only token validator (QuicBaaS `ValidateToken`, the platform JWT
+verifier) and `SkipIAMValidation` attach none, so on those daemons the three
+categories are refused over QUIC. The Unix socket and the embedded transport
+dispatch through gRPC and never reach this check.
+
+**gRPC TCP refuses the same three services to a bool-only validator (#720).**
+Without the platform-token validator the gRPC TCP interceptor falls back to
+the legacy bool-only validator, which proves a token valid but yields no
+scopes. That path used to call the handler once the token validated, so any
+valid token reached `CeremonyService/Init`, `PIVService/Sign` and
+`FIDO2Service/Register` whatever its scope. The interceptor now refuses every
+`CeremonyService`, `PIVService` and `FIDO2Service` method on that path with
+`PermissionDenied` (`ErrScopeRequiresClaims`; the resource set is
+`claimsOnlyResources` in `pkg/api/grpc/method_permissions.go`). Other methods
+keep the bool-only behaviour. Under `EnableMTLS` the verified client
+certificate is the operator principal and the interceptor is not involved.
 
 **MCP fails closed without an authorization backend (#440).** With neither the
 platform-token validator nor the QuicBaaS auth adapter configured,

@@ -19,7 +19,7 @@ Verified against the tree on 2026-08-18:
 | A DHT opcode in `sdk/go/wire/quicwire/protocol.go` | **none** |
 | A DHT tool in `pkg/api/mcp/` | **none** |
 | A `/api/v1/dht` route | **none** |
-| A DHT field on `ServiceRegistry` (`sdk/go/transport/embedded/adapter.go`) | **none** — the registry has 22 fields and none is DHT |
+| A DHT field on `ServiceRegistry` (`sdk/go/transport/embedded/adapter.go`) | **none** — the registry has 25 fields and none is DHT |
 
 The only Kademlia code in the repository is the SDN gateway libp2p host and the
 IPAM DHT allocator, both behind the `platform_p2p` build tag, and neither

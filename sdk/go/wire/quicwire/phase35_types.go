@@ -11,7 +11,7 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
-package quic
+package quicwire
 
 import "time"
 
@@ -34,6 +34,9 @@ type CeremonyInitResp struct {
 	CeremonyID    string    `codec:"ceremony_id"`
 	State         string    `codec:"state"`
 	InitializedAt time.Time `codec:"initialized_at"`
+	AdminCertPEM  string    `codec:"admin_cert_pem"`
+	AdminKeyPEM   string    `codec:"admin_key_pem"`
+	SPKIPin       string    `codec:"spki_pin"`
 }
 
 // CeremonyStatusResp is the QUIC ceremony status response payload.

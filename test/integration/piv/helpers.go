@@ -19,8 +19,6 @@ import (
 	"os"
 
 	daemonpkg "github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
-	mcpapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
-	pivsdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/piv"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
@@ -59,15 +57,12 @@ func GetServiceEndpoints() *ServiceEndpoints {
 }
 
 // isBackendUnavailable reports whether err is a declared gap: a typed
-// not-implemented declaration or the daemon's PIV not-configured sentinel,
+// not-implemented declaration or the daemon's typed ErrPIVNotConfigured,
 // which every transport carries as the sentinel's text. Any other error
 // fails the test (#487).
 func isBackendUnavailable(err error) bool {
-	return surface.IsNotImplemented(err) || surface.IsDeclaredRefusal(err,
-		daemonpkg.ErrPIVNotConfigured,
-		pivsdk.ErrNotYetWired,
-		mcpapi.ErrPhase35NotConfigured,
-	)
+	return surface.IsNotImplemented(err) ||
+		surface.IsDeclaredRefusal(err, daemonpkg.ErrPIVNotConfigured)
 }
 
 // SkipIfNotIntegration skips the test when INTEGRATION_TEST is not set.

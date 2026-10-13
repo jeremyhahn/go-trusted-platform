@@ -1056,9 +1056,15 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 
 		// Configure QUIC authentication middleware. When mTLS is enabled the
-		// TLS layer authenticates (enforced below); otherwise a token
-		// validator is mandatory and its absence refuses the transport (#550).
-		quicAuthMiddleware, quicLocalValidator, quicAuthErr := selectQUICAuth(config, platformTokenValidatorShared, logger)
+		// TLS layer verifies the client certificate against this pool
+		// (enforced below) and the middleware authenticates it as the
+		// request's principal; otherwise a token validator is mandatory and
+		// its absence refuses the transport (#550).
+		quicClientCAPool, poolErr := resolveMTLSClientCAPool(config, transportQUIC)
+		if poolErr != nil {
+			return nil, poolErr
+		}
+		quicAuthMiddleware, quicLocalValidator, quicAuthErr := selectQUICAuth(config, platformTokenValidatorShared, quicClientCAPool, logger)
 		if quicAuthErr != nil {
 			return nil, quicAuthErr
 		}
@@ -1241,8 +1247,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		// verification. mTLS is QUIC's only authentication when enabled, so
 		// it fails closed: no TLS config to enforce it on, or no resolvable
 		// client CA pool, refuses the transport instead of a Warn followed by
-		// an unauthenticated listener (#550).
-		if err := quicServerMTLS(config, quicConfig.TLSConfig, quicHandler, logger); err != nil {
+		// an unauthenticated listener (#550). The pool is the one resolved
+		// above for the authenticator; the CA file is read once (#766).
+		if err := quicServerMTLS(config, quicConfig.TLSConfig, quicClientCAPool, quicHandler, logger); err != nil {
 			return nil, err
 		}
 

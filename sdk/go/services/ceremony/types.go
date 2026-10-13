@@ -15,8 +15,8 @@
 // service. Ceremony covers barrier initialization, officer enrollment, share
 // claims, and CSR signing under the Shamir quorum model.
 //
-// The Phase 3 implementation is a scaffolding-only SDK: all client methods
-// return ErrNotYetWired until the server-side handlers land in Phase 3.5.
+// Requests and responses are transported through the platform SDK ceremony client;
+// ceremony state and policy are implemented by the composed security stack.
 package ceremony
 
 import "time"

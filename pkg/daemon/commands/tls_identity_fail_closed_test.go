@@ -55,8 +55,23 @@ func TestApplyDaemonTLSIdentity_NilAppFailsClosed(t *testing.T) {
 	}
 }
 
-func TestApplyDaemonTLSIdentity_NilCAFailsClosed(t *testing.T) {
+// TestApplyDaemonTLSIdentity_NoPlatformDirFailsClosed asserts the bundles
+// are never written to a fallback location: without a platform directory
+// there is nowhere sanctioned to keep them.
+func TestApplyDaemonTLSIdentity_NoPlatformDirFailsClosed(t *testing.T) {
 	err := applyDaemonTLSIdentity(context.Background(), newTestLogger(), &app.App{}, tlsTransportConfig(), false)
+	if err == nil {
+		t.Fatal("expected typed error for an empty platform directory, got nil")
+	}
+	var typed ErrTLSIdentityRequiresPlatformDir
+	if !errors.As(err, &typed) {
+		t.Fatalf("expected ErrTLSIdentityRequiresPlatformDir, got %T (%v)", err, err)
+	}
+}
+
+func TestApplyDaemonTLSIdentity_NilCAFailsClosed(t *testing.T) {
+	a := &app.App{PlatformDir: t.TempDir()}
+	err := applyDaemonTLSIdentity(context.Background(), newTestLogger(), a, tlsTransportConfig(), false)
 	if err == nil {
 		t.Fatal("expected typed error for nil CA, got nil")
 	}
@@ -90,7 +105,7 @@ func TestApplyDaemonTLSIdentity_MCPHTTPOnlyRequiresIdentity(t *testing.T) {
 	cfg.MCPConfig = daemon.DefaultMCPConfig()
 	cfg.MCPConfig.Transport = "http"
 
-	err := applyDaemonTLSIdentity(context.Background(), newTestLogger(), &app.App{}, cfg, false)
+	err := applyDaemonTLSIdentity(context.Background(), newTestLogger(), &app.App{PlatformDir: t.TempDir()}, cfg, false)
 	var typed ErrProvisionMissingCA
 	if !errors.As(err, &typed) {
 		t.Fatalf("expected ErrProvisionMissingCA for MCP-HTTP-only mode, got %T (%v)", err, err)

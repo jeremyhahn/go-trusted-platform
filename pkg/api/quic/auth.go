@@ -112,6 +112,7 @@ func TokenFromContext(ctx context.Context) (string, bool) {
 // permission. Unclassified operations are refused.
 type AuthMiddleware struct {
 	tokenValidator    TokenValidator
+	peerAuthenticator PeerAuthenticator
 	authzChecker      AuthorizationChecker
 	requireAuth       bool
 	peerAuthenticated bool
@@ -201,6 +202,13 @@ func (m *AuthMiddleware) GuardRequest(ctx context.Context, req *quicwire.Request
 // AuthenticateRequest validates the token in a request.
 // Returns the validated token, or an error response if authentication fails.
 func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *quicwire.Request) (context.Context, *quicwire.Response) {
+	// Under mTLS the connection's verified client certificate is the
+	// credential of a request without a token, and of every request when no
+	// token validator is configured. A presented token is still validated.
+	if m.peerAuthenticator != nil && (req.Token == "" || m.tokenValidator == nil) {
+		return m.authenticatePeer(ctx)
+	}
+
 	// The transport verified the peer certificate; a request without a token
 	// is authenticated by it.
 	if m.peerAuthenticated && req.Token == "" {

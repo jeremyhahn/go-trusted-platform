@@ -16,6 +16,8 @@ package backends
 import (
 	"context"
 	"errors"
+	"strconv"
+	"strings"
 	"time"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
@@ -34,6 +36,56 @@ var ErrCeremonyBackendClientNil = errors.New("ceremony backend: quicbaas client 
 // not be resolved from the QuicBaaS SDK.
 var ErrCeremonyTransportUnavailable = errors.New("ceremony backend: ceremony transport client not available")
 
+// ErrCeremonyAdminIssuerNil indicates Initialize was called on a backend
+// constructed without an AdminBundleIssuer. Init is refused before the
+// ceremony runs, because an init without an admin bundle locks the operator
+// out of the platform it just initialized.
+type ErrCeremonyAdminIssuerNil struct{}
+
+// Error returns a human-readable description.
+func (e *ErrCeremonyAdminIssuerNil) Error() string {
+	return "ceremony backend: no admin bundle issuer configured"
+}
+
+// ErrCeremonyAdminBundle indicates minting the admin bundle failed. The
+// ceremony has not run, so the platform is still uninitialized.
+type ErrCeremonyAdminBundle struct {
+	Cause error
+}
+
+// Error returns a human-readable description.
+func (e *ErrCeremonyAdminBundle) Error() string {
+	return "ceremony backend: issue admin bundle: " + e.Cause.Error()
+}
+
+// Unwrap returns the underlying failure.
+func (e *ErrCeremonyAdminBundle) Unwrap() error {
+	return e.Cause
+}
+
+// ErrAdminBundleIncomplete indicates an AdminBundleIssuer returned no error
+// but also no certificate or no key.
+type ErrAdminBundleIncomplete struct{}
+
+// Error returns a human-readable description.
+func (e *ErrAdminBundleIncomplete) Error() string {
+	return "admin bundle is missing its certificate or key"
+}
+
+// AdminBundle is the one-shot admin client credential returned by init.
+type AdminBundle struct {
+	// CertPEM is the admin client certificate, signed by the platform CA.
+	CertPEM string
+	// KeyPEM is the matching private key.
+	KeyPEM string
+}
+
+// AdminBundleIssuer mints the admin client credential that Initialize
+// returns. The platform keeps no copy of the key.
+type AdminBundleIssuer interface {
+	IssueAdminBundle(ctx context.Context) (*AdminBundle, error)
+}
+
 // CeremonyBackend implements daemon.CeremonyBackend by delegating every call
 // to the QuicBaaS SDK's BarrierCeremonyService. The underlying transport
 // terminates at go-qrdb's ceremony service.
@@ -44,19 +96,21 @@ var ErrCeremonyTransportUnavailable = errors.New("ceremony backend: ceremony tra
 type CeremonyBackend struct {
 	logger *logging.Logger
 	client quicbaassdk.Client
+	admin  AdminBundleIssuer
 }
 
 // Compile-time assertion that CeremonyBackend satisfies daemon.CeremonyBackend.
 var _ daemon.CeremonyBackend = (*CeremonyBackend)(nil)
 
 // NewCeremonyBackend constructs a new ceremony backend bound to the given
-// QuicBaaS SDK client.
+// QuicBaaS SDK client. admin mints the admin bundle that Initialize returns.
 //
 // Passing a nil client is allowed so that the daemon can be partially wired
 // during bootstrap. Calls will return ErrCeremonyBackendClientNil until the
-// backend is replaced with a live one.
-func NewCeremonyBackend(logger *logging.Logger, client quicbaassdk.Client) *CeremonyBackend {
-	return &CeremonyBackend{logger: logger, client: client}
+// backend is replaced with a live one. A nil admin issuer makes Initialize
+// return ErrCeremonyAdminIssuerNil; the other calls do not need it.
+func NewCeremonyBackend(logger *logging.Logger, client quicbaassdk.Client, admin AdminBundleIssuer) *CeremonyBackend {
+	return &CeremonyBackend{logger: logger, client: client, admin: admin}
 }
 
 // transport resolves the ceremony transport client from the QuicBaaS SDK.
@@ -98,30 +152,36 @@ func parseExpiresAt(s string) time.Time {
 	return t
 }
 
-// parseThreshold parses a "n-of-m" style descriptor into the M component.
-// Shapes that don't match (including empty strings) yield zero.
-func thresholdTotal(s string) int {
-	// Minimal hand-roll to avoid a strconv + strings dependency surface: format
-	// is "<digits>-of-<digits>". We only need the trailing integer (M).
-	if s == "" {
+// thresholdQuorum returns M from an "M-of-N" threshold spec: the number of
+// officer shares that reconstruct the secret, which is what the ceremony's
+// Threshold field means. N is the officer count. A spec that does not match,
+// including the empty one, yields zero, the ceremony's single-admin mode.
+func thresholdQuorum(spec string) int {
+	quorum, _, found := strings.Cut(spec, "-of-")
+	if !found {
 		return 0
 	}
-	var total int
-	seenOf := false
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c == '-' && i+3 <= len(s) && s[i+1] == 'o' && s[i+2] == 'f' {
-			seenOf = true
-			i += 2
-			continue
-		}
-		if seenOf {
-			if c >= '0' && c <= '9' {
-				total = total*10 + int(c-'0')
-			}
-		}
+	m, err := strconv.Atoi(quorum)
+	if err != nil || m < 0 {
+		return 0
 	}
-	return total
+	return m
+}
+
+// ceremonyOfficers maps the service-layer officers onto the SDK ceremony
+// request. It returns nil for none, so a single-admin init carries no list.
+func ceremonyOfficers(officers []daemon.CeremonyOfficer) []quicbaassdk.QRDBCeremonyOfficerRequest {
+	if len(officers) == 0 {
+		return nil
+	}
+	out := make([]quicbaassdk.QRDBCeremonyOfficerRequest, 0, len(officers))
+	for _, officer := range officers {
+		out = append(out, quicbaassdk.QRDBCeremonyOfficerRequest{
+			Username: officer.Username,
+			CSRPEM:   officer.CSRPEM,
+		})
+	}
+	return out
 }
 
 // mapCeremonyState translates the upstream state string to the service-layer
@@ -149,20 +209,36 @@ var ceremonyStateMap = map[string]daemon.CeremonyStateValue{
 	"finalized":     daemon.CeremonyStateComplete,
 }
 
-// Initialize delegates to go-qrdb's ceremony.Initialize.
+// Initialize delegates to go-qrdb's ceremony.Initialize and returns the
+// admin bundle with the result.
+//
+// The bundle is minted before the ceremony runs. Minting changes nothing on
+// the platform, so if it fails, init can simply be retried. Once the ceremony
+// has succeeded, the result always carries the bundle.
 func (b *CeremonyBackend) Initialize(ctx context.Context, req *daemon.CeremonyInitRequest) (*daemon.CeremonyInitResult, error) {
 	c, err := b.transport()
 	if err != nil {
 		return nil, err
+	}
+	if b.admin == nil {
+		return nil, &ErrCeremonyAdminIssuerNil{}
+	}
+	bundle, err := b.admin.IssueAdminBundle(ctx)
+	if err != nil {
+		return nil, &ErrCeremonyAdminBundle{Cause: err}
+	}
+	if bundle == nil || bundle.CertPEM == "" || bundle.KeyPEM == "" {
+		return nil, &ErrCeremonyAdminBundle{Cause: &ErrAdminBundleIncomplete{}}
 	}
 
 	initReq := &quicbaassdk.QRDBCeremonyInitializeRequest{
 		SOPin:                  req.SOPIN,
 		UserPin:                req.UserPIN,
 		CredentialSealStrategy: req.CredentialSealStrategy,
-		Threshold:              thresholdTotal(req.Threshold),
+		Threshold:              thresholdQuorum(req.Threshold),
 		Hostname:               req.Hostname,
 		SANs:                   req.SANs,
+		Officers:               ceremonyOfficers(req.Officers),
 	}
 
 	resp, err := c.CeremonyInitialize(ctx, initReq)
@@ -174,11 +250,17 @@ func (b *CeremonyBackend) Initialize(ctx context.Context, req *daemon.CeremonyIn
 	}
 
 	return &daemon.CeremonyInitResult{
-		// The ceremony ID is not returned by the upstream type; fall back to
-		// the SPKI pin which is a stable, reproducible identifier.
+		// The ceremony ID is the SPKI pin, by design rather than as a
+		// placeholder: a cluster runs exactly one bootstrap ceremony, and
+		// the pin names the CA key that ceremony minted, so it identifies
+		// the ceremony uniquely and stays stable across restarts. go-qrdb
+		// assigns no other identifier (CeremonyInitializeResponse carries
+		// none), and Status reports the same value, so the IDs agree.
 		CeremonyID:    resp.SPKIPin,
 		State:         mapCeremonyState(resp.State),
 		InitializedAt: time.Now().UTC(),
+		AdminCertPEM:  bundle.CertPEM,
+		AdminKeyPEM:   bundle.KeyPEM,
 		SPKIPin:       resp.SPKIPin,
 	}, nil
 }

@@ -59,7 +59,10 @@ func runInfo(commonFlags *cli.CommonFlags, f *infoFlags) error {
 	}
 	defer base.Close()
 
-	client := fido2svc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.Info(base.Context(), &fido2svc.InfoRequest{Device: f.device})
 	if err != nil {
 		return err

@@ -24,6 +24,8 @@ import (
 	"time"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/barrier"
 )
 
 // Transport defines the transport type for QuicBaaS connections.
@@ -168,6 +170,19 @@ type Config struct {
 	WebAuthnRPID          string   `yaml:"-" json:"-" mapstructure:"-"`
 	WebAuthnRPDisplayName string   `yaml:"-" json:"-" mapstructure:"-"`
 	WebAuthnRPOrigins     []string `yaml:"-" json:"-" mapstructure:"-"`
+
+	// BarrierSealStrategy, BarrierShamirThreshold and BarrierShamirShares
+	// select the embedded server's data-plane barrier strategy. Only
+	// "shamir" is passed through (seal.strategy: shamir, with the M-of-N
+	// when set; quicbaas defaults 2-of-3 otherwise), because the Shamir
+	// strategy is the one the SDK registers from config alone. They are
+	// populated programmatically from the platform's barrier section — they
+	// are NOT platform YAML keys. Without them the barrier is single-key,
+	// and a shamir /init would split only the user PIN while that PIN alone
+	// still unseals.
+	BarrierSealStrategy    string `yaml:"-" json:"-" mapstructure:"-"`
+	BarrierShamirThreshold int    `yaml:"-" json:"-" mapstructure:"-"`
+	BarrierShamirShares    int    `yaml:"-" json:"-" mapstructure:"-"`
 
 	// BootstrapAdminCSRPath, BootstrapAdminPIVCertPath, AdminFactors and
 	// PasskeyDevice select how the FIRST administrator is enrolled at first
@@ -605,6 +620,19 @@ func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
 	cfg.IAM.WebAuthn.RPID = c.WebAuthnRPID
 	cfg.IAM.WebAuthn.RPDisplayName = c.WebAuthnRPDisplayName
 	cfg.IAM.WebAuthn.RPOrigins = c.WebAuthnRPOrigins
+
+	// Data-plane barrier: a shamir barrier must be sealed by the Shamir
+	// strategy, or InitializeShamir runs in credential mode and the quorum
+	// is not enforced. Every other strategy keeps the embedded default.
+	if c.BarrierSealStrategy == barrier.SealStrategyShamir {
+		cfg.Seal.Strategy = barrier.SealStrategyShamir
+		if c.BarrierShamirThreshold > 0 {
+			cfg.Seal.Threshold = c.BarrierShamirThreshold
+		}
+		if c.BarrierShamirShares > 0 {
+			cfg.Seal.TotalShares = c.BarrierShamirShares
+		}
+	}
 
 	// Enable KMS for key management operations
 	// This is required for DNSSEC key management and other crypto operations.

@@ -86,7 +86,10 @@ func runClaimShareBegin(commonFlags *cli.CommonFlags, f *claimShareBeginFlags) e
 	}
 	defer base.Close()
 
-	client := ceremonysvc.NewClient()
+	client, err := NewService(base.Client())
+	if err != nil {
+		return err
+	}
 
 	req := &ceremonysvc.ClaimShareBeginRequest{Username: f.username}
 
@@ -143,7 +146,10 @@ func runClaimShareComplete(commonFlags *cli.CommonFlags, f *claimShareCompleteFl
 	}
 	defer base.Close()
 
-	client := ceremonysvc.NewClient()
+	client, err := NewService(base.Client())
+	if err != nil {
+		return err
+	}
 
 	req := &ceremonysvc.ClaimShareCompleteRequest{
 		Username:  f.username,

@@ -196,32 +196,58 @@ returns `ErrInitOnlyNotRunning`. Both listeners use a 5-second
 
 ### The gate's `/init`
 
+The handler rate limits every attempt first (per key: the socket peer uid from
+`SO_PEERCRED`, or one shared key for loopback HTTP; `InitOnlyConfig.InitAttemptBurst` 5, `InitAttemptInterval` 12 s), answering
+`429` with `ErrInitRateLimited`. A state other than `uninitialized` goes to the
+init service's `Replay`, which answers the retained response or `409`.
+
 The gate's init service:
 
-1. With a manager wired, refuses an empty `user_pin` with
-   `ErrMissingRequiredField{Field: "user_pin"}` before anything runs.
-2. Calls the quicbaas ceremony backend (`CeremonyBackend.Initialize`) with
+1. Plans the barrier step from `barrier.seal_strategy` (`planBarrierInit`):
+   a strategy outside `barrierInitStrategies` is
+   `ErrBarrierStrategyUnsupported` (`500`); an empty `user_pin` is
+   `ErrInitInvalidRequest{ErrBarrierInitMissingSecret}`, and a `shamir` quorum
+   outside `2 <= threshold <= shares` is
+   `ErrInitInvalidRequest{ErrBarrierShamirQuorum}` (both `400`).
+2. For `shamir`, reads `Manager.Status` (`requireQuorumBarrier`). A registered
+   strategy other than `shamir`, or no manager, is
+   `ErrInitBarrierConflict{ErrBarrierShamirUnenforceable}` (`409`); a failed
+   read is `ErrBarrierStatusUnavailable` (`500`).
+3. Under its mutex, digests the request (SHA-256). When a response is already
+   retained, an identical request from the issuing socket uid re-runs steps 5–6
+   and gets the retained response; anything else is `ErrInitAlreadyIssued`
+   (`409`).
+4. Calls the quicbaas ceremony backend (`CeremonyBackend.Initialize`) with
    `so_pin`, `user_pin`, a `"M-of-N"` threshold built from `threshold` and
    `shares` (empty unless both are positive), `hostname`, `sans` and
-   `credential_seal_strategy`.
-3. Calls `Manager.Initialize(ctx, user_pin)`, **using the user PIN as the barrier
-   secret**. An error fails the request with `ErrBarrierInitFailed{Cause}`, which
-   unwraps to the manager's error.
-4. Calls `SyncStatus`. An error is logged as a warning. The response then
+   `credential_seal_strategy`. The backend mints the admin bundle from the
+   platform CA before the ceremony. The response is retained
+   (`newIssuedInit`: digest, caller uid, the admin key in a `pkg/memguard`
+   enclave) **before** the barrier step.
+5. Unless the manager already reports initialized, calls `Manager.Initialize(ctx,
+   user_pin)`, or `Manager.InitializeShamir(ctx, user_pin, threshold, shares)`
+   for `shamir`, **using the user PIN as the barrier secret**. An error fails
+   the request with `ErrBarrierInitFailed{Cause}`, which unwraps to the
+   manager's error; the retained response lets an identical retry re-attempt it.
+6. Calls `SyncStatus`. An error is logged as a warning. The response then
    reports the flags `Initialize` cached, which are already correct.
-5. Returns `ceremony_id`, `initialized_at`, `spki_pin` and the current `state`.
-   The backend copies `spki_pin` from the upstream
+7. Returns `ceremony_id`, `initialized_at`, `spki_pin`, `admin_cert_pem`,
+   `admin_key_pem` and the current `state`, and destroys the retained key once
+   the state is `unsealed`. The backend copies `spki_pin` from the upstream
    `CeremonyInitializeResponse.SPKIPin`. It also uses that value as
    `ceremony_id`, because upstream returns no ceremony ID.
 
 The ceremony and the barrier initialize are two upstream calls, not one
 transaction. If the ceremony succeeds and the barrier initialize fails, the
-ceremony stays initialized.
+ceremony stays initialized; only an identical Unix-socket retry from the
+issuing uid can finish the barrier step.
 
 The handlers decode with `DisallowUnknownFields`, so a body that carries a field
 the request does not define, such as the removed `barrier_strategy`, is a `400`.
-A service error that wraps `ErrMissingRequiredField` or `ErrInvalidRequestBody`
-is also a `400`. Any other service error is a `500`.
+`serviceErrorStatus` maps a service error that wraps `ErrMissingRequiredField`,
+`ErrInvalidRequestBody` or `ErrInitInvalidRequest` to `400`, and
+`ErrInitAlreadyIssued` or `ErrInitBarrierConflict` to `409`. Any other service
+error takes its status from `barrier.Code`, else `500`.
 [api.md §2](api.md#2-the-barrier-gate) shows
 the wire behaviour.
 
@@ -279,11 +305,15 @@ which unwraps. `barrier.Code` classifies all of them for every transport
 ([§5](#5-barriergrpcservice)).
 
 The gate's REST handlers use `ErrInitNotPermitted{Current}`,
-`ErrUnsealNotPermitted{Current}`, `ErrBarrierInitServiceUnavailable{}` and
-`ErrBarrierUnsealServiceUnavailable{}`. The gate itself adds
-`ErrBarrierGateRequiresApp`, `ErrBarrierGateRequiresSDK` and
-`ErrBarrierInitFailed{Cause}`. Request validation reuses the REST package's
-`ErrMissingRequiredField`.
+`ErrUnsealNotPermitted{Current}`, `ErrBarrierInitServiceUnavailable{}`,
+`ErrBarrierUnsealServiceUnavailable{}`, `ErrInitRateLimited`,
+`ErrInitAlreadyIssued`, `ErrInitInvalidRequest{Err}` and
+`ErrInitBarrierConflict{Err}`. The gate itself adds
+`ErrBarrierGateRequiresApp`, `ErrBarrierGateRequiresSDK`,
+`ErrBarrierInitFailed{Cause}`, `ErrBarrierStrategyUnsupported`,
+`ErrBarrierInitMissingSecret`, `ErrBarrierShamirQuorum`,
+`ErrBarrierShamirUnenforceable` and `ErrBarrierStatusUnavailable`. Request
+validation reuses the REST package's `ErrMissingRequiredField`.
 
 The CLI's typed errors are listed in [cli.md §4](cli.md#4-validation).
 

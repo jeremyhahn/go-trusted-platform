@@ -65,7 +65,10 @@ func runReset(commonFlags *cli.CommonFlags, f *resetFlags) error {
 	}
 	defer base.Close()
 
-	client := pivsvc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.Reset(base.Context(), &pivsvc.ResetRequest{Device: f.device})
 	if err != nil {
 		return err

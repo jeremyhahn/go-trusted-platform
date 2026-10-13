@@ -113,7 +113,10 @@ func runClaimCertBegin(commonFlags *cli.CommonFlags, f *claimCertBeginFlags) err
 	}
 	defer base.Close()
 
-	client := ceremonysvc.NewClient()
+	client, err := NewService(base.Client())
+	if err != nil {
+		return err
+	}
 
 	req := &ceremonysvc.ClaimCertBeginRequest{
 		Username:          f.username,
@@ -169,7 +172,10 @@ func runClaimCertComplete(commonFlags *cli.CommonFlags, f *claimCertCompleteFlag
 	}
 	defer base.Close()
 
-	client := ceremonysvc.NewClient()
+	client, err := NewService(base.Client())
+	if err != nil {
+		return err
+	}
 
 	req := &ceremonysvc.ClaimCertCompleteRequest{
 		Username:  f.username,

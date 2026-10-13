@@ -739,6 +739,86 @@ func TestOIDCStreamInterceptor_ValidToken(t *testing.T) {
 	}
 }
 
+// claimsOnlyMethods are scoped methods of the services a bool-only validator
+// cannot authorize: it proves a token is valid but carries no scopes to check.
+var claimsOnlyMethods = []string{
+	"/platform.v1.PIVService/Sign",
+	"/platform.v1.PIVService/ListSlots",
+	"/platform.v1.FIDO2Service/Register",
+	"/platform.v1.FIDO2Service/ListDevices",
+	"/platform.v1.CeremonyService/Init",
+	"/platform.v1.CeremonyService/Status",
+}
+
+func TestOIDCUnaryInterceptor_BoolOnlyValidatorDeniesClaimsOnlyMethods(t *testing.T) {
+	interceptor := OIDCUnaryInterceptor(WithTokenValidator(&mockTokenValidator{valid: true}))
+	md := metadata.Pairs("authorization", "Bearer legacy-token")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	for _, method := range claimsOnlyMethods {
+		t.Run(method, func(t *testing.T) {
+			handlerCalled := false
+			handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+				handlerCalled = true
+				return "response", nil
+			}
+
+			_, err := interceptor(ctx, "request", &grpc.UnaryServerInfo{FullMethod: method}, handler)
+
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("code = %v, want %v (err %v)", status.Code(err), codes.PermissionDenied, err)
+			}
+			if handlerCalled {
+				t.Fatal("handler ran for a scoped method the validator cannot authorize")
+			}
+		})
+	}
+}
+
+func TestOIDCUnaryInterceptor_BoolOnlyValidatorKeepsOtherMethods(t *testing.T) {
+	interceptor := OIDCUnaryInterceptor(WithTokenValidator(&mockTokenValidator{valid: true}))
+	md := metadata.Pairs("authorization", "Bearer legacy-token")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return "response", nil
+	}
+
+	info := &grpc.UnaryServerInfo{FullMethod: "/platform.v1.DNSService/ListZones"}
+	resp, err := interceptor(ctx, "request", info, handler)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp != "response" {
+		t.Errorf("response = %v, want %q", resp, "response")
+	}
+}
+
+func TestOIDCStreamInterceptor_BoolOnlyValidatorDeniesClaimsOnlyMethods(t *testing.T) {
+	interceptor := OIDCStreamInterceptor(WithTokenValidator(&mockTokenValidator{valid: true}))
+	md := metadata.Pairs("authorization", "Bearer legacy-token")
+	stream := &mockOIDCServerStream{ctx: metadata.NewIncomingContext(context.Background(), md)}
+
+	for _, method := range claimsOnlyMethods {
+		t.Run(method, func(t *testing.T) {
+			handlerCalled := false
+			handler := func(srv interface{}, ss grpc.ServerStream) error {
+				handlerCalled = true
+				return nil
+			}
+
+			err := interceptor(nil, stream, &grpc.StreamServerInfo{FullMethod: method}, handler)
+
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("code = %v, want %v (err %v)", status.Code(err), codes.PermissionDenied, err)
+			}
+			if handlerCalled {
+				t.Fatal("handler ran for a scoped method the validator cannot authorize")
+			}
+		})
+	}
+}
+
 // =============================================================================
 // Wrapped Server Stream Tests
 // =============================================================================

@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
+	appbackends "github.com/jeremyhahn/go-trusted-platform/pkg/app/backends"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 )
 
@@ -73,6 +74,7 @@ func (b *EmbeddedServerBinding) Start(configPath string, skipIAMValidation bool)
 	host, err := daemon.StartEmbeddedHost(ctx, daemon.EmbeddedHostOptions{
 		ConfigFile:        configPath,
 		SkipIAMValidation: skipIAMValidation,
+		WireBackends:      appbackends.WireEmbeddedHost,
 	})
 	if err != nil {
 		return &EmbeddedServerError{Op: "start", Err: err}

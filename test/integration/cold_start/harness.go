@@ -251,6 +251,8 @@ func (h *Harness) IssueAdminBundle(ctx context.Context, soPin, userPin, hostname
 		"--so-pin", soPin,
 		"--user-pin", userPin,
 		"--hostname", hostname,
+		// Before unseal the daemon socket serves only the pre-unseal mux.
+		"--gate-endpoint", "unix://" + h.cfg.SocketPath,
 	}
 	if sans != "" {
 		args = append(args, "--sans", sans)

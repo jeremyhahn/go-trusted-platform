@@ -33,6 +33,11 @@ type EmbeddedHostOptions struct {
 
 	// SkipIAMValidation disables IAM validation. Testing only.
 	SkipIAMValidation bool
+
+	// WireBackends gives the hosted daemon the backends platformd wires
+	// (pkg/app/backends.WireEmbeddedHost), which this package cannot
+	// import. Nil leaves the ceremony service unconfigured.
+	WireBackends func(*Daemon, *app.App) error
 }
 
 // EmbeddedHost is platformd hosted inside the calling process: the daemon's
@@ -77,7 +82,23 @@ func StartEmbeddedHost(ctx context.Context, opts EmbeddedHostOptions) (*Embedded
 		return nil, errors.Join(err, a.Close(ctx))
 	}
 	host.app = a
+	if err := host.wireBackends(ctx, opts.WireBackends); err != nil {
+		return nil, err
+	}
 	return host, nil
+}
+
+// wireBackends hands the hosted daemon to the embedder's backend wiring. A
+// host whose wiring fails is stopped: it would serve a ceremony that
+// answers "not configured".
+func (h *EmbeddedHost) wireBackends(ctx context.Context, wire func(*Daemon, *app.App) error) error {
+	if wire == nil {
+		return nil
+	}
+	if err := wire(h.daemon, h.app); err != nil {
+		return ErrEmbeddedHostFailed{Op: "backends", Err: errors.Join(err, h.Stop(ctx))}
+	}
+	return nil
 }
 
 // NewEmbeddedHost builds the daemon's services from config and serves them
@@ -159,6 +180,15 @@ func (d *Daemon) embeddedServices() *embedded.ServiceRegistry {
 	}
 	if svc := d.KMSGRPCService(); svc != nil {
 		registry.KMS = svc
+	}
+	if svc := d.CeremonyService(); svc != nil {
+		registry.Ceremony = svc
+	}
+	if svc := d.PIVService(); svc != nil {
+		registry.PIV = svc
+	}
+	if svc := d.FIDO2Service(); svc != nil {
+		registry.FIDO2 = svc
 	}
 	return registry
 }

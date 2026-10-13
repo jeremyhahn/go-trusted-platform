@@ -268,6 +268,23 @@ func (s *Server) handleStdioRequests() {
 	}
 }
 
+// Handler returns the HTTP transport's routes: the RFC 9728 metadata
+// endpoint, JSON-RPC on /mcp and /health. startHTTPTransport serves it on
+// the configured address; callers that own their listener can mount it.
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+
+	// OAuth 2.1 Protected Resource Metadata (RFC 9728)
+	// This endpoint MUST be available without authentication
+	mux.Handle("/.well-known/oauth-protected-resource", s.oauthMetadata)
+
+	// MCP protocol endpoints
+	mux.HandleFunc("/mcp", s.handleHTTPRequest)
+	mux.HandleFunc("/health", s.handleHealthCheck)
+
+	return mux
+}
+
 // startHTTPTransport starts the HTTP transport (JSON-RPC over HTTPS). It
 // serves TLS 1.3 only and refuses to start without a server certificate;
 // there is no plaintext listener.
@@ -280,19 +297,9 @@ func (s *Server) startHTTPTransport() error {
 		return &HTTPTLSRequiredError{Addr: s.config.HTTPAddr}
 	}
 
-	mux := http.NewServeMux()
-
-	// OAuth 2.1 Protected Resource Metadata (RFC 9728)
-	// This endpoint MUST be available without authentication
-	mux.Handle("/.well-known/oauth-protected-resource", s.oauthMetadata)
-
-	// MCP protocol endpoints
-	mux.HandleFunc("/mcp", s.handleHTTPRequest)
-	mux.HandleFunc("/health", s.handleHealthCheck)
-
 	s.httpServer = &http.Server{
 		Addr:         s.config.HTTPAddr,
-		Handler:      mux,
+		Handler:      s.Handler(),
 		TLSConfig:    tlsConfig,
 		ReadTimeout:  s.config.RequestTimeout,
 		WriteTimeout: s.config.RequestTimeout,

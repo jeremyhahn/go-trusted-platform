@@ -119,6 +119,9 @@ func (w *provisioningPollSessionWire) toProto() *platformv1.PollSessionResponse 
 var categoryEmptyBodyMethods = map[string]struct{}{
 	platformv1.ConfigDeliveryService_GetNonce_FullMethodName:     {},
 	platformv1.ConfigDeliveryService_ListSessions_FullMethodName: {},
+	platformv1.CeremonyService_Status_FullMethodName:             {},
+	platformv1.PIVService_ListDevices_FullMethodName:             {},
+	platformv1.FIDO2Service_ListDevices_FullMethodName:           {},
 }
 
 // categoryResponseDecoder decodes a category-opcode response payload into

@@ -78,6 +78,83 @@ func TestNewEmbeddedHost_ServesTheDaemonInProcessOnly(t *testing.T) {
 	}
 }
 
+// The ceremony, PIV and FIDO2 services answer on the embedded transport as
+// they do over the socket.
+func TestNewEmbeddedHost_ServesTheAuthenticatorServices(t *testing.T) {
+	host, err := NewEmbeddedHost(testConfig(filepath.Join(t.TempDir(), "platformd.sock")))
+	if err != nil {
+		t.Fatalf("NewEmbeddedHost: %v", err)
+	}
+
+	services := host.Services()
+	if services.Ceremony != platformv1.CeremonyServiceServer(host.daemon.CeremonyService()) {
+		t.Errorf("Ceremony = %v, want the daemon's service", services.Ceremony)
+	}
+	if services.PIV != platformv1.PIVServiceServer(host.daemon.PIVService()) {
+		t.Errorf("PIV = %v, want the daemon's service", services.PIV)
+	}
+	if services.FIDO2 != platformv1.FIDO2ServiceServer(host.daemon.FIDO2Service()) {
+		t.Errorf("FIDO2 = %v, want the daemon's service", services.FIDO2)
+	}
+
+	if err := host.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+}
+
+// The embedder's wiring is handed the hosted daemon; without a hook there is
+// nothing to wire.
+func TestEmbeddedHost_WireBackendsReceivesTheDaemon(t *testing.T) {
+	host, err := NewEmbeddedHost(testConfig(filepath.Join(t.TempDir(), "platformd.sock")))
+	if err != nil {
+		t.Fatalf("NewEmbeddedHost: %v", err)
+	}
+
+	if err := host.wireBackends(context.Background(), nil); err != nil {
+		t.Fatalf("wireBackends(nil): %v", err)
+	}
+
+	var wired *Daemon
+	err = host.wireBackends(context.Background(), func(d *Daemon, _ *app.App) error {
+		wired = d
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("wireBackends: %v", err)
+	}
+	if wired != host.daemon {
+		t.Fatalf("wired daemon = %p, want the host's %p", wired, host.daemon)
+	}
+}
+
+// errWiringRefused is the failure a test's backend wiring reports.
+type errWiringRefused struct{}
+
+func (errWiringRefused) Error() string { return "wiring refused" }
+
+// A failed wiring stops the host and names the step, keeping the cause.
+func TestEmbeddedHost_WireBackendsFailureStopsTheHost(t *testing.T) {
+	host, err := NewEmbeddedHost(testConfig(filepath.Join(t.TempDir(), "platformd.sock")))
+	if err != nil {
+		t.Fatalf("NewEmbeddedHost: %v", err)
+	}
+
+	err = host.wireBackends(context.Background(), func(*Daemon, *app.App) error {
+		return errWiringRefused{}
+	})
+
+	var failed ErrEmbeddedHostFailed
+	if !errors.As(err, &failed) || failed.Op != "backends" {
+		t.Fatalf("err = %v, want ErrEmbeddedHostFailed{Op: backends}", err)
+	}
+	if !errors.Is(err, errWiringRefused{}) {
+		t.Fatalf("err = %v, want it to keep the wiring's cause", err)
+	}
+	if host.daemon.IsRunning() {
+		t.Fatal("daemon still running after a failed wiring")
+	}
+}
+
 // AttachNodeCA attaches the node's loaded CA as the daemon's CA service.
 func TestAttachNodeCA_AttachesTheNodeCA(t *testing.T) {
 	config := testConfig(filepath.Join(t.TempDir(), "platformd.sock"))

@@ -313,6 +313,33 @@ func TestServer_handleHealthCheck(t *testing.T) {
 	})
 }
 
+// TestServer_Handler proves the exported routes are the ones the HTTP
+// transport serves, so a caller mounting Handler gets the same surface.
+func TestServer_Handler(t *testing.T) {
+	server := NewServer(newMockServiceProvider(), DefaultConfig(), newTestLogger())
+	h := server.Handler()
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		want   int
+	}{
+		{"health is served", http.MethodGet, "/health", http.StatusOK},
+		{"mcp refuses GET", http.MethodGet, "/mcp", http.StatusMethodNotAllowed},
+		{"unknown path is not routed", http.MethodGet, "/nope", http.StatusNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest(tt.method, tt.path, nil))
+			if w.Code != tt.want {
+				t.Errorf("%s %s = %d, want %d", tt.method, tt.path, w.Code, tt.want)
+			}
+		})
+	}
+}
+
 func TestServer_handleRequest(t *testing.T) {
 	svc := newMockServiceProvider()
 	config := DefaultConfig()

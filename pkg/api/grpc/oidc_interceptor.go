@@ -81,6 +81,32 @@ func (e ErrScopeDenied) Error() string {
 	return "permission denied: " + e.Method + " requires scope " + e.Scope
 }
 
+// ErrScopeRequiresClaims is returned when a method's scope can only be
+// authorized from platform-token claims but the configured validator is
+// bool-only. The token is valid; it simply cannot prove the scope. The
+// interceptor maps it to codes.PermissionDenied.
+type ErrScopeRequiresClaims struct {
+	// Method is the gRPC FullMethod that was denied.
+	Method string
+	// Scope is the colon "resource:action" scope that could not be checked.
+	Scope string
+}
+
+func (e ErrScopeRequiresClaims) Error() string {
+	return "permission denied: " + e.Method + " requires scope " + e.Scope +
+		", which only a platform token with claims can grant"
+}
+
+// denyUncheckableScope refuses a method whose scope the bool-only path cannot
+// check. It returns nil for every other method.
+func denyUncheckableScope(fullMethod string) error {
+	scope := ScopeForMethod(fullMethod)
+	if !scopeRequiresClaims(scope) {
+		return nil
+	}
+	return status.Error(codes.PermissionDenied, ErrScopeRequiresClaims{Method: fullMethod, Scope: scope}.Error())
+}
+
 // =============================================================================
 // Token Validator Interface
 // =============================================================================
@@ -242,6 +268,9 @@ func OIDCUnaryInterceptor(opts ...OIDCInterceptorOption) grpc.UnaryServerInterce
 		if !valid {
 			return nil, status.Error(codes.Unauthenticated, "invalid token")
 		}
+		if err := denyUncheckableScope(info.FullMethod); err != nil {
+			return nil, err
+		}
 
 		// Add validated token to context and continue
 		ctx = ContextWithToken(ctx, token)
@@ -326,6 +355,9 @@ func OIDCStreamInterceptor(opts ...OIDCInterceptorOption) grpc.StreamServerInter
 		}
 		if !valid {
 			return status.Error(codes.Unauthenticated, "invalid token")
+		}
+		if err := denyUncheckableScope(info.FullMethod); err != nil {
+			return err
 		}
 
 		// Wrap stream with token in context

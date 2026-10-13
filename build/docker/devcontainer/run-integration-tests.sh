@@ -605,7 +605,13 @@ start_platformd() {
             echo "=== platformd app log ==="
             cat /tmp/platformd-integration/log/trusted-platform.log 2>/dev/null || true
 
-            # Wait for mTLS certificates to be generated
+            # Wait for mTLS certificates to be generated. They land in
+            # <platform-dir>/tls (platform-dir comes from the config). The
+            # admin client-bundle.pem exists only because /tmp/platformd is
+            # built with the integration tag
+            # (pkg/daemon/commands/harness_admin_bundle_integration.go); a
+            # production platformd mints no admin key, and this harness has
+            # no barrier, so it has no /init step to take one from.
             for j in $(seq 1 10); do
                 if [ -f /tmp/platformd-integration/tls/client-bundle.pem ] && \
                    [ -f /tmp/platformd-integration/tls/ca-bundle.crt ]; then

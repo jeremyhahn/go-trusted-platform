@@ -39,6 +39,7 @@ import (
 	noiseapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/noise"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	appbackends "github.com/jeremyhahn/go-trusted-platform/pkg/app/backends"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
 	_ "github.com/jeremyhahn/go-trusted-platform/pkg/compute/container" // registers the local-container orchestrator factory
@@ -503,26 +504,18 @@ func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.
 		return ErrTLSIdentityRequiresApp{}
 	case cfg == nil:
 		return ErrTLSIdentityRequiresConfig{}
-	case a.CA == nil:
-		return ErrProvisionMissingCA{}
 	case a.PlatformDir == "":
 		return ErrTLSIdentityRequiresPlatformDir{}
+	case a.CA == nil:
+		return ErrProvisionMissingCA{}
 	}
-	// The server key lives in the CA keystore (#33). Only the admin
-	// bootstrap bundle and the public CA bundle are written, under
-	// <platform-dir>/tls.
-	tlsDir := filepath.Join(a.PlatformDir, "tls")
+	// The server key lives in the CA keystore (#33). Only the public CA
+	// bundle is written, under <platform-dir>/tls.
+	tlsDir := daemonTLSDir(a.PlatformDir)
 	if mkErr := os.MkdirAll(tlsDir, 0700); mkErr != nil {
 		return ErrProvisionPersist{Path: tlsDir, Cause: mkErr}
 	}
-	// Prefer the SDK-based issuer for the admin bootstrap certificate, but
-	// fall back to the local CA when the embedded transport doesn't
-	// register a Certificate service.
-	var issuer = newSDKCertIssuer(a.QuicBaaSSDKClient())
-	if localIssuer := newLocalCACertIssuer(a.CA); localIssuer != nil {
-		issuer = localIssuer
-	}
-	identity, mtlsErr := provisionDaemonIdentity(ctx, logger, a.CA, issuer, tlsDir, daemonServerSANs(a))
+	identity, mtlsErr := provisionDaemonIdentity(ctx, logger, a.CA, tlsDir, daemonServerSANs(a))
 	if mtlsErr != nil {
 		return mtlsErr
 	}
@@ -530,6 +523,15 @@ func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.
 		// provisionDaemonIdentity returning (nil, nil) is an internal
 		// contract violation; treat it as a missing identity, not success.
 		return ErrProvisionIssue{Role: "server", Cause: ErrTLSIdentityNotProvisioned{}}
+	}
+	// Only a binary built with the integration tag sets this hook: the
+	// devcontainer harness has no /init step, so it takes its admin
+	// credential from here. A production binary mints no admin key.
+	if harnessAdminBundle != nil {
+		issuer := appbackends.PlatformCertIssuer(a.CA, a.QuicBaaSSDKClient())
+		if harnessErr := harnessAdminBundle(ctx, logger, issuer, tlsDir); harnessErr != nil {
+			return harnessErr
+		}
 	}
 	cfg.TLSCertificate = &identity.ServerCert
 	cfg.MTLSClientCAPool = identity.AdminTrustPool
@@ -540,7 +542,6 @@ func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.
 	cfg.EnableMTLS = requireClientCert
 	logger.Info("Daemon TLS identity provisioned",
 		"server_key", "ca-keystore:"+daemonServerCN,
-		"admin_bundle", identity.AdminBundlePath,
 		"ca_bundle", identity.CABundlePath,
 		"client_cert_required", requireClientCert,
 		"reused", identity.Reused,
@@ -952,6 +953,11 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		logger.Error(err, "Failed to create platform daemon")
 		cmd.PrintErrln(fmt.Sprintf("Failed to create platform daemon: %v", err))
 		return ErrServeStartup{Phase: "platform daemon creation", Cause: err}
+	}
+	if err := appbackends.WireSDKBackends(platformDaemon, platformSDKBackendSources(App), logger); err != nil {
+		logger.Error(err, "Failed to wire the SDK backends")
+		cmd.PrintErrln(fmt.Sprintf("Failed to wire the SDK backends: %v", err))
+		return ErrServeStartup{Phase: "SDK backends", Cause: err}
 	}
 
 	// The gateway telemetry store backs the snapshot RPCs on every
@@ -1604,6 +1610,11 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 		cmd.PrintErrln(fmt.Sprintf("Failed to create daemon: %v", err))
 		return ErrServeStartup{Phase: "daemon creation", Cause: err}
 	}
+	if err := appbackends.WireSDKBackends(d, platformSDKBackendSources(App), logger); err != nil {
+		logger.Error(err, "Failed to wire the SDK backends")
+		cmd.PrintErrln(fmt.Sprintf("Failed to wire the SDK backends: %v", err))
+		return ErrServeStartup{Phase: "SDK backends", Cause: err}
+	}
 
 	if App != nil && App.TPM != nil {
 		logger.Info("TPM available for IDevID/IAK operations")
@@ -1660,17 +1671,32 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 // remote transports. ServerCert is the daemon's gRPC TCP / QUIC / REST / MCP
 // HTTP server certificate; its PrivateKey is the CA keystore's crypto.Signer,
 // so the server key never leaves the keystore (#33). AdminTrustPool gates
-// incoming mTLS client certificates. AdminBundlePath and CABundlePath point
-// at the operator-pickup files under <platform-dir>/tls: the admin bootstrap
-// bundle (the one argued on-disk key) and the public CA bundle. Reused reports
-// that the keystore already held a current server certificate.
+// incoming mTLS client certificates. CABundlePath points at the public CA
+// bundle under <platform-dir>/tls for operator pickup. There is no admin
+// bundle: the one-shot /init reply is the only admin credential. Reused
+// reports that the keystore already held a current server certificate.
 type ProvisionedIdentity struct {
-	ServerCert      tls.Certificate
-	AdminTrustPool  *x509.CertPool
-	AdminBundlePath string
-	CABundlePath    string
-	Reused          bool
+	ServerCert     tls.Certificate
+	AdminTrustPool *x509.CertPool
+	CABundlePath   string
+	Reused         bool
 }
+
+// daemonTLSDirName is the directory, under the platform directory, that
+// holds the public CA bundle. The server key stays in the CA keystore.
+const daemonTLSDirName = "tls"
+
+// daemonTLSDir returns where the daemon persists its TLS bundles.
+func daemonTLSDir(platformDir string) string {
+	return filepath.Join(platformDir, daemonTLSDirName)
+}
+
+// harnessAdminBundleFunc mints an admin client bundle into dir.
+type harnessAdminBundleFunc func(ctx context.Context, logger *logging.Logger, issuer appbackends.CertIssuer, dir string) error
+
+// harnessAdminBundle is nil in every production build. Only the
+// integration build tag sets it (harness_admin_bundle_integration.go).
+var harnessAdminBundle harnessAdminBundleFunc
 
 // renewalThreshold is the minimum time-to-expiry below which a persisted
 // daemon certificate is considered stale and re-issued. 30 days matches
@@ -1689,6 +1715,15 @@ type ErrProvisionMissingSDK struct{}
 // Error returns a human-readable description of the error.
 func (ErrProvisionMissingSDK) Error() string {
 	return "provisionDaemonIdentity: quicbaas SDK client is required"
+}
+
+// ErrTLSIdentityRequiresPlatformDir is returned when the app has no
+// platform directory to hold the public CA bundle.
+type ErrTLSIdentityRequiresPlatformDir struct{}
+
+// Error returns a human-readable description of the error.
+func (ErrTLSIdentityRequiresPlatformDir) Error() string {
+	return "daemon TLS identity requires a platform directory"
 }
 
 // ErrProvisionMissingCA is returned when no CA trust-pool provider is
@@ -1744,15 +1779,6 @@ func (ErrTLSIdentityNotProvisioned) Error() string {
 	return "daemon TLS identity was not provisioned"
 }
 
-// ErrTLSIdentityRequiresPlatformDir is returned when the app has no platform
-// directory to hold the admin bootstrap bundle and the public CA bundle.
-type ErrTLSIdentityRequiresPlatformDir struct{}
-
-// Error returns a human-readable description of the error.
-func (ErrTLSIdentityRequiresPlatformDir) Error() string {
-	return "daemon TLS identity requires a platform directory"
-}
-
 // ErrTLSIdentityKeystore is returned when the CA keystore that holds the
 // daemon's server key cannot issue, supersede or load the server identity.
 // The daemon starts no TLS listener without it.
@@ -1784,52 +1810,11 @@ func (e ErrProvisionPersist) Error() string {
 // Unwrap returns the underlying cause.
 func (e ErrProvisionPersist) Unwrap() error { return e.Cause }
 
-// tlsCertificateFromFile loads a PEM cert+key bundle (concatenated) from
-// disk and returns the parsed tls.Certificate with Leaf populated.
-func tlsCertificateFromFile(path string) (tls.Certificate, error) {
-	pemBytes, err := os.ReadFile(path)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	return tlsCertificateFromBundle(pemBytes)
-}
-
-// tlsCertificateFromBundle parses a single PEM blob containing one or more
-// CERTIFICATE blocks followed by a key block.
-func tlsCertificateFromBundle(pemBytes []byte) (tls.Certificate, error) {
-	cert, err := tls.X509KeyPair(pemBytes, pemBytes)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	if len(cert.Certificate) == 0 {
-		return tls.Certificate{}, errors.New("provisionDaemonIdentity: bundle contained no certificates")
-	}
-	leaf, err := x509.ParseCertificate(cert.Certificate[0])
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	cert.Leaf = leaf
-	return cert, nil
-}
-
 // writeBundle persists a single PEM cert+key bundle file with the given
 // mode. The format (CERTIFICATE block(s) followed by an EC PRIVATE KEY
 // block) is compatible with tls.LoadX509KeyPair(bundle, bundle).
-func writeBundle(path, certPEM, keyPEM string, mode os.FileMode) error {
-	bundle := bytesJoin(certPEM, keyPEM)
-	return os.WriteFile(path, bundle, mode)
-}
-
 // bytesJoin concatenates two PEM strings, ensuring exactly one newline
 // separator between them.
-func bytesJoin(a, b string) []byte {
-	out := []byte(a)
-	if len(out) > 0 && out[len(out)-1] != '\n' {
-		out = append(out, '\n')
-	}
-	return append(out, []byte(b)...)
-}
-
 // certWithinRenewalWindow returns true when the certificate's NotAfter is
 // at least `headroom` away from now (i.e., not expired and not due for
 // renewal yet).

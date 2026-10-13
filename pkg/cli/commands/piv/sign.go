@@ -72,7 +72,10 @@ func runSign(commonFlags *cli.CommonFlags, f *signFlags) error {
 	}
 	defer base.Close()
 
-	client := pivsvc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.Sign(base.Context(), &pivsvc.SignRequest{
 		Slot:    f.slot,
 		Payload: payload,

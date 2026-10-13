@@ -332,7 +332,7 @@ GID}` land on the context. `RequireRoot` / `RequireUID` / `RequireGID` /
    unauthenticated.
 
 7. **Token validation is per transport, and only the gRPC scope catalog
-   defaults to allow.** gRPC covers 185 of 461 RPCs, and a method absent from
+   defaults to allow.** gRPC covers 208 of 468 RPCs, and a method absent from
    its catalog is permitted once the token validates. MCP (since #300) and
    QUIC (since #767) deny an operation absent from their catalogs
    ([`docs/daemon/api.md`](../daemon/api.md) §5). On gRPC, authentication is
@@ -487,6 +487,18 @@ carries it, and requiring it keeps the bootstrap credential class to exactly
 that identity rather than to any ClientAuth certificate the anchor ever
 issued with `CN=admin`. The path is matched **segment-wise**, so a trust
 domain, tenant or user crafted to end in `user/admin` does not satisfy it.
+
+The `/init` admin bundle carries the same identity. When the platform CA is
+loaded, the bundle's certificate is signed with the CA's SPIFFE sign options:
+trust domain `quicbaas.spiffe-trust-domain`, tenant `system`, name `admin`. The
+CA builds the SAN `spiffe://<trust-domain>/tenant/system/user/admin` with its
+canonical SPIFFE helper. The platform hands it the identity as
+`pkg/app/backends.AdminIdentity`. Without a trust
+domain, `/init` refuses to mint the bundle (`ErrAdminIdentityIncomplete`)
+rather than hand out a certificate that admin-claim would reject. With no
+local CA, the bundle is issued through the SDK Certificate service, whose
+request has no identity field; that path depends on the server's CA adapter
+to stamp the SAN.
 
 **The tenant segment is compared**, against the platform's adopted operating
 tenant. The same deployment CA also issues certificates for tenant users, so

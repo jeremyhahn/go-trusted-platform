@@ -141,7 +141,7 @@ func serveLiveQUIC(t *testing.T, pki gatePKI, boot BootProvider) string {
 	daemonConfig := DefaultConfig()
 	daemonConfig.EnableMTLS = true
 	daemonConfig.MTLSClientCAPool = pki.pool
-	require.NoError(t, quicServerMTLS(daemonConfig, config.TLSConfig, handler, logging.DefaultLogger()))
+	require.NoError(t, quicServerMTLS(daemonConfig, config.TLSConfig, pki.pool, handler, logging.DefaultLogger()))
 	server, err := quic.NewServer(config, quic.WithHandler(handler))
 	require.NoError(t, err)
 	require.NoError(t, server.Start())

@@ -56,38 +56,127 @@ sealed. With no `barrier:` configuration it reports
 
 ### `POST /init`
 
-Accepted only in `uninitialized`.
+Accepted only in `uninitialized`, or as an identical retry (below).
 
 | Request field | Type | Used |
 |---|---|---|
 | `so_pin` | string | Passed to the ceremony |
 | `user_pin` | string | Passed to the ceremony, **and used as the barrier secret** |
-| `shares`, `threshold` | int | Passed to the ceremony as `"<threshold>-of-<shares>"` when both are positive, otherwise empty |
+| `shares`, `threshold` | int | Passed to the ceremony as `"<threshold>-of-<shares>"` when both are positive, otherwise empty; the Shamir split when the strategy is `shamir` |
+| `officers` | array of `{username, csr_pem}` | The Security Officers: exactly one per share when `shares`/`threshold` are set, none otherwise. Passed to the ceremony, which signs each CSR and seals it one share of the user PIN; with `barrier.seal_strategy: shamir` also enrolled with the barrier's share ceremony before the split (below) |
 | `hostname` | string | Passed to the ceremony |
 | `sans` | string array | Passed to the ceremony |
 | `credential_seal_strategy` | string | Passed to the ceremony |
 
 The barrier's seal strategy comes from `barrier.seal_strategy` in the
-configuration, not from the request. A body with any other field is refused
-with 400.
+configuration (default `software`), not from the request. A body with any
+other field, `barrier_strategy` included, is refused with 400. The strategy
+selects the barrier operation:
 
-With a barrier configured, an empty `user_pin` is refused with 400 before the
-ceremony runs. The gate then runs the upstream ceremony initialize. If that
-fails, the gate returns 500. If it succeeds, the gate initializes the barrier
-with `user_pin` as the secret. If that fails, the gate returns 500
-(`ErrBarrierInitFailed`). Last, it refreshes the state from upstream. A failed
+| `barrier.seal_strategy` | Barrier operation |
+|---|---|
+| `shamir` | `Manager.RegisterOfficer` for each `officers` entry not yet enrolled (`Security().Barrier()` `OfficerRegister`, after `OfficerList`), then `Manager.InitializeShamir(user_pin, threshold, shares)`. The shares go to those Security Officers, who claim them ([`docs/cli/ceremony.md`](../cli/ceremony.md)); none is returned |
+| `software`, `passphrase`, `tpm2`, `pkcs11`, `awskms`, `gcpkms`, `azurekv`, `vault` | `Manager.Initialize(user_pin)`; the node seals the key with its registered strategy |
+| `none`, anything else | refused with 500 (`ErrBarrierStrategyUnsupported`): the SDK's system-barrier initialize cannot select an unencrypted barrier |
+
+These are refused **before the ceremony runs**, so no admin bundle is minted:
+
+- an unsupported configured strategy (500, above);
+- an empty `user_pin` (400, `ErrInitInvalidRequest` wrapping
+  `ErrBarrierInitMissingSecret`, which unwraps to `ErrMissingRequiredField`):
+  every strategy uses it as the barrier secret;
+- `shamir` without `2 <= threshold <= shares` (400, `ErrInitInvalidRequest`
+  wrapping `ErrBarrierShamirQuorum`);
+- an officer set the ceremony could not enroll (400, `ErrInitInvalidRequest`
+  wrapping one of): not exactly one officer per share when a quorum is sent,
+  or officers sent without a quorum (`ErrBarrierInitOfficers`); an officer with no
+  `username`, a username given twice, or a `csr_pem` that is not a PEM block
+  (`ErrBarrierInitOfficerCSRNotPEM`), not a CSR, or not self-signed
+  (`ErrBarrierInitOfficerInvalid`, naming the officer's index and username).
+  Without this check a Shamir init with no officers reached the upstream
+  ceremony and failed there with its `ErrNoOfficers`;
+- `shamir` on a barrier the SDK does not seal with its Shamir strategy. The gate
+  reads the registered strategy from the SDK's barrier status
+  (`Security().Barrier().BarrierStatus`, through `Manager.Status`). On any other
+  barrier the SDK's `InitializeShamir` runs in credential mode: it initializes a
+  single-key barrier with `user_pin` and splits only that PIN, so the initiating
+  operator could still unseal alone
+  ([architecture.md](architecture.md#the-barrier-gate)).
+
+| Barrier, for `shamir` | Result |
+|---|---|
+| Sealed by any other strategy, or the daemon has no barrier manager | 409 (`ErrInitBarrierConflict` wrapping `ErrBarrierShamirUnenforceable`); nothing is initialized |
+| Status cannot be read | 500 (`ErrBarrierStatusUnavailable`); the quorum is never assumed |
+
+The daemon passes `barrier.seal_strategy: shamir`, with
+`barrier.shamir_threshold` / `barrier.shamir_shares` when set (2-of-3
+otherwise), to the embedded SDK as `seal.strategy: shamir`. The strategy is
+fixed when the barrier is initialized: set `barrier.seal_strategy` before
+`/init`. Switching it on a node whose barrier is already initialized is not
+supported.
+
+The gate then runs the upstream ceremony initialize. If that fails, the gate
+returns 500 and the platform stays `uninitialized`, so the request can simply be
+repeated. If it succeeds, the gate keeps the response (below) and initializes
+the barrier with `user_pin` as the secret. If that fails, the gate returns 500
+(`ErrBarrierInitFailed`), including when enrolling an officer with the barrier
+fails; an identical retry enrolls only the officers still missing. Last, it
+refreshes the state from upstream. A failed
 refresh is logged, and the response reports the state cached by the barrier
 initialize.
 
 | Response field | Set |
 |---|---|
-| `ceremony_id` | Yes. Upstream returns no ID, so this is the SPKI pin. |
+| `ceremony_id` | Yes. Upstream returns no ID, so this is the SPKI pin of the CA key the ceremony minted; `platformctl ceremony status` reports the same value. |
 | `initialized_at` | Yes |
 | `state` | Yes, after the barrier initialize |
 | `spki_pin` | Yes, from the upstream ceremony initialize |
+| `admin_cert_pem`, `admin_key_pem` | The one-shot admin bundle, minted from the platform CA before the ceremony runs. The certificate is `CN=admin` with the URI SAN `spiffe://<quicbaas.spiffe-trust-domain>/tenant/system/user/admin` that admin-claim requires ([auth architecture](../auth/architecture.md)); without a trust domain `/init` fails rather than mint it |
 
-The response carries no admin certificate or key: the upstream ceremony
-initialize returns none.
+**The `/init` response is the only time the admin key is available.** Capture
+it, along with `spki_pin`, before doing anything else. The daemon keeps no copy
+of this key, and it is the only admin credential the daemon issues: starting
+the TLS transports mints none.
+
+#### Retrying `/init`
+
+The gate keeps the response of the ceremony it completed **in memory, for as
+long as the gate is up**, keyed by a SHA-256 digest of the whole request (PINs
+included, compared in constant time). The admin key is held in a
+`pkg/memguard` enclave (locked, zeroed on release), never in a plain string,
+and is destroyed as soon as the barrier reports `unsealed` or the gate shuts
+down. Nothing is written to disk.
+
+The bundle is replayed **only over the Unix socket, and only to the uid that
+was issued it**, read from the kernel (`SO_PEERCRED`). An init sent over
+loopback HTTP has no peer identity, so its bundle is never replayed — and a
+loopback init whose barrier step failed cannot be retried. `platformctl init`
+therefore sends `/init` over the Unix socket by default, and uses loopback HTTP
+only when `--loopback-http` is passed
+([`docs/bootstrap/cli.md`](../bootstrap/cli.md) §1a).
+
+| Retry | Result |
+|---|---|
+| Identical request from the issuing uid on the Unix socket, barrier still `uninitialized` (the barrier step failed) | 200, the same admin bundle; the barrier initialize is attempted again |
+| Identical request from the issuing uid on the Unix socket, barrier `sealed` / `unsealing` (the response was lost) | 200, the same admin bundle, with the current `state` |
+| Anything else: a different request, or an identical one over loopback HTTP, from another uid, or after an HTTP-issued init | 409 (`ErrInitAlreadyIssued` / `ErrInitNotPermitted`) |
+
+The 409 does not depend on the PINs: a caller other than the issuing uid on the
+socket gets the same answer whether its PINs are right or wrong, so the gate
+confirms the PINs to nobody but the operator who already holds them.
+
+The replay window closes when the barrier unseals and the gate shuts down. With
+the software strategy that happens as part of the same `/init` call, so the
+response is the only copy — which is why `platformctl init` creates its
+`--admin-bundle` file *before* it sends `/init`, and sends nothing when the
+file cannot be created.
+
+Every `POST /init` attempt is rate limited, before the state is even read: a
+caller may make 5 attempts back to back and regains one every 12 seconds
+(`InitOnlyConfig.InitAttemptBurst` / `InitAttemptInterval`). Past that the gate
+answers 429 (`ErrInitRateLimited`). Each peer uid on the Unix socket has its
+own budget and loopback HTTP shares one, so a process guessing PINs over
+loopback cannot spend the operator's attempts on the socket.
 
 ### `POST /unseal`
 
@@ -109,10 +198,11 @@ Accepted only in `sealed` or `unsealing`.
 | Code | `/init` | `/unseal` |
 |---|---|---|
 | 200 | Ceremony initialized | Secret or share accepted |
-| 400 | Body not valid JSON, over 64 KiB, or with an unknown field; an empty `user_pin` with a barrier configured (`ErrMissingRequiredField`) | Body not valid JSON, over 64 KiB, or with an unknown field; neither `secret` nor `share` (`ErrMissingRequiredField`) |
+| 400 | Body not valid JSON, over 64 KiB, or with an unknown field; an empty `user_pin` (`ErrInitInvalidRequest`, unwrapping to `ErrMissingRequiredField`); a `shamir` quorum outside `2 <= threshold <= shares` (`ErrInitInvalidRequest`) | Body not valid JSON, over 64 KiB, or with an unknown field; neither `secret` nor `share` (`ErrMissingRequiredField`) |
 | 405 | Not `POST` | Not `POST` |
-| 409 | State not `uninitialized` (`ErrInitNotPermitted`) | State not `sealed`/`unsealing` (`ErrUnsealNotPermitted`) |
-| 500 | An unclassified ceremony or barrier failure | An unclassified service error |
+| 409 | State not `uninitialized` and not an identical retry (`ErrInitNotPermitted`); a different init already issued (`ErrInitAlreadyIssued`); `shamir` on a barrier that cannot enforce the quorum (`ErrInitBarrierConflict`) | State not `sealed`/`unsealing` (`ErrUnsealNotPermitted`) |
+| 429 | Attempt budget spent (`ErrInitRateLimited`) | — |
+| 500 | An unclassified ceremony or barrier failure, including admin-bundle minting; an unsupported `barrier.seal_strategy` (`ErrBarrierStrategyUnsupported`); unreadable barrier status (`ErrBarrierStatusUnavailable`) | An unclassified service error |
 | 503 | No quicbaas SDK client (`ErrBarrierInitServiceUnavailable`) | No barrier manager (`ErrBarrierUnsealServiceUnavailable`) |
 
 Any other service error takes its code from `barrier.Code`, which the gRPC

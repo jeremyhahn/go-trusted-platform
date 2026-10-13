@@ -20,6 +20,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
 )
 
@@ -425,8 +426,56 @@ func TestPlatformClient_ServiceClients(t *testing.T) {
 	if c.Overlay() != nil {
 		t.Error("Overlay() should return nil with nil services")
 	}
+	if c.PIV() != nil {
+		t.Error("PIV() should return nil with nil services")
+	}
+	if c.FIDO2() != nil {
+		t.Error("FIDO2() should return nil with nil services")
+	}
+	if c.Ceremony() != nil {
+		t.Error("Ceremony() should return nil with nil services")
+	}
 	if c.ConfigDelivery() != nil {
 		t.Error("ConfigDelivery() should return nil with nil services")
+	}
+}
+
+type fakePIVClient struct {
+	platformv1.PIVServiceClient
+}
+
+type fakeFIDO2Client struct {
+	platformv1.FIDO2ServiceClient
+}
+
+type fakeCeremonyClient struct {
+	platformv1.CeremonyServiceClient
+}
+
+func TestPlatformClient_PIVReturnsTheConfiguredServiceClient(t *testing.T) {
+	want := &fakePIVClient{}
+	c := &platformClient{services: &ServiceClients{PIV: want}}
+
+	if got := c.PIV(); got != platformv1.PIVServiceClient(want) {
+		t.Errorf("PIV() = %v, want the client held by ServiceClients", got)
+	}
+}
+
+func TestPlatformClient_FIDO2ReturnsTheConfiguredServiceClient(t *testing.T) {
+	want := &fakeFIDO2Client{}
+	c := &platformClient{services: &ServiceClients{FIDO2: want}}
+
+	if got := c.FIDO2(); got != platformv1.FIDO2ServiceClient(want) {
+		t.Errorf("FIDO2() = %v, want the client held by ServiceClients", got)
+	}
+}
+
+func TestPlatformClient_CeremonyReturnsTheConfiguredServiceClient(t *testing.T) {
+	want := &fakeCeremonyClient{}
+	c := &platformClient{services: &ServiceClients{Ceremony: want}}
+
+	if got := c.Ceremony(); got != platformv1.CeremonyServiceClient(want) {
+		t.Errorf("Ceremony() = %v, want the client held by ServiceClients", got)
 	}
 }
 

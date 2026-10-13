@@ -117,7 +117,7 @@ config file "/etc/trusted-platform/config.yaml": key quicbaas.spiffe-trust-domai
 
 | Key | Required when | Why |
 |-----|---------------|-----|
-| `quicbaas.spiffe-trust-domain` | the embedded server is selected: `quicbaas.transport` is `embedded` or unset, **or the `quicbaas:` section is absent** | qrdb first boot seeds IAM (system tenant, roles, admin certificate) under this trust domain. It must be a lowercase name with no scheme, port or path. |
+| `quicbaas.spiffe-trust-domain` | the embedded server is selected: `quicbaas.transport` is `embedded` or unset, **or the `quicbaas:` section is absent** | qrdb first boot seeds IAM (system tenant, roles, admin certificate) under this trust domain, and the `/init` admin bundle's SPIFFE SAN is issued under it. It must be a lowercase name with no scheme, port or path. |
 | `quicbaas.transport` | set | It must be `embedded`, `unix`, `grpc`, `rest` or `quic`. |
 
 The remote transports (`unix`, `grpc`, `rest`, `quic`) run no first boot, so

@@ -184,7 +184,7 @@ Roll back to a snapshot. If you did not take one, that is the lesson.
 
 `PlatformDaemon` has 17 RPCs and **16 of them carry no required scope** —
 including `Shutdown`, `UpdateConfig` and `StopService`. The gRPC scope catalog
-covers 185 of 461 RPCs and the MCP authorization map covers 71 of 449 tools, and
+covers 208 of 468 RPCs and the MCP authorization map covers 144 of 434 tools, and
 **both default to allow** for anything unlisted.
 
 In practice that means a valid token is close to an administrative credential on

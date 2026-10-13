@@ -36,6 +36,7 @@ GET /.well-known/oauth-protected-resource
     "attestation:read", "attestation:write",
     "bmc:admin", "bmc:media", "bmc:power", "bmc:read", "bmc:write",
     "ca:read", "ca:sign-csr", "ca:write",
+    "ceremony:read", "ceremony:write",
     "device:delete", "device:read", "device:write",
     "..."
   ],

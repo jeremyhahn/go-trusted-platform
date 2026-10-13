@@ -55,7 +55,10 @@ func runWaitDevice(commonFlags *cli.CommonFlags, f *waitDeviceFlags) error {
 	}
 	defer base.Close()
 
-	client := fido2svc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.WaitDevice(base.Context(), &fido2svc.WaitDeviceRequest{TimeoutSeconds: f.timeout})
 	if err != nil {
 		return err

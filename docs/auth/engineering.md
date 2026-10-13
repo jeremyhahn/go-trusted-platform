@@ -512,7 +512,13 @@ func AddBearerToken(ctx context.Context, token string) context.Context
 ```
 
 Errors: `ErrTokenValidatorNotConfigured`, `ErrMissingAuthorizationHeader`,
-`ErrInvalidAuthorizationHeader`, `ErrTokenValidationFailed`, `ErrScopeDenied`.
+`ErrInvalidAuthorizationHeader`, `ErrTokenValidationFailed`, `ErrScopeDenied`,
+`ErrScopeRequiresClaims`.
+
+A validator that is not a `ClaimsTokenValidator` yields no scopes. On that
+path the interceptor refuses any method whose scope resource is `ceremony`,
+`piv` or `fido2` with `PermissionDenied` (`ErrScopeRequiresClaims`), mirroring
+QUIC `AuthorizeSubOpcode`; see `docs/daemon/api.md` §5.
 
 ### Unix `SO_PEERCRED` (`pkg/util/peercred/peercred.go`)
 

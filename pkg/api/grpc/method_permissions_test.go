@@ -22,6 +22,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // =============================================================================
@@ -67,17 +69,61 @@ func TestScopeForMethod_KnownMethods(t *testing.T) {
 	}
 	for method, want := range cases {
 		if got := ScopeForMethod(method); got != want {
-			t.Errorf("scopeForMethod(%q) = %q, want %q", method, got, want)
+			t.Errorf("ScopeForMethod(%q) = %q, want %q", method, got, want)
+		}
+	}
+}
+
+// TestScopeForMethod_PIVFIDO2Ceremony pins the read/write split of the three
+// hardware and bootstrap services. Ceremony Init and Status are deliberately
+// scoped, not pre-auth: first boot uses the Unix socket, which is not
+// token-gated.
+func TestScopeForMethod_PIVFIDO2Ceremony(t *testing.T) {
+	cases := map[string]string{
+		"/platform.v1.PIVService/ListDevices":             "piv:read",
+		"/platform.v1.PIVService/Attest":                  "piv:read",
+		"/platform.v1.PIVService/Generate":                "piv:write",
+		"/platform.v1.PIVService/Sign":                    "piv:write",
+		"/platform.v1.PIVService/Reset":                   "piv:write",
+		"/platform.v1.FIDO2Service/Info":                  "fido2:read",
+		"/platform.v1.FIDO2Service/Register":              "fido2:write",
+		"/platform.v1.FIDO2Service/Authenticate":          "fido2:write",
+		"/platform.v1.CeremonyService/Status":             "ceremony:read",
+		"/platform.v1.CeremonyService/Init":               "ceremony:write",
+		"/platform.v1.CeremonyService/SignCSR":            "ceremony:write",
+		"/platform.v1.CeremonyService/ClaimShareComplete": "ceremony:write",
+	}
+	for method, want := range cases {
+		if got := ScopeForMethod(method); got != want {
+			t.Errorf("ScopeForMethod(%q) = %q, want %q", method, got, want)
+		}
+	}
+}
+
+// TestGRPCMethodPermissions_CoverEveryPIVFIDO2CeremonyMethod fails when a
+// method is added to one of the three services without a scope: an unmapped
+// gRPC method requires none.
+func TestGRPCMethodPermissions_CoverEveryPIVFIDO2CeremonyMethod(t *testing.T) {
+	for _, desc := range []grpc.ServiceDesc{
+		platformv1.PIVService_ServiceDesc,
+		platformv1.FIDO2Service_ServiceDesc,
+		platformv1.CeremonyService_ServiceDesc,
+	} {
+		for _, m := range desc.Methods {
+			full := "/" + desc.ServiceName + "/" + m.MethodName
+			if ScopeForMethod(full) == "" {
+				t.Errorf("%s has no required scope", full)
+			}
 		}
 	}
 }
 
 func TestScopeForMethod_UnknownMethodIsUnscoped(t *testing.T) {
 	if got := ScopeForMethod("/platform.v1.PlatformDaemon/HealthCheck"); got != "" {
-		t.Errorf("scopeForMethod(health) = %q, want empty", got)
+		t.Errorf("ScopeForMethod(health) = %q, want empty", got)
 	}
 	if got := ScopeForMethod("/some.unknown.Service/Method"); got != "" {
-		t.Errorf("scopeForMethod(unknown) = %q, want empty", got)
+		t.Errorf("ScopeForMethod(unknown) = %q, want empty", got)
 	}
 }
 
@@ -88,6 +134,7 @@ func TestGRPCMethodPermissions_WellFormed(t *testing.T) {
 		"vtpm": true, "dns": true, "device": true,
 		"sdn": true, "kms": true, "iam": true, "ca": true,
 		"proxy": true, "ntp": true,
+		"piv": true, "fido2": true, "ceremony": true,
 	}
 	validActions := map[string]bool{"read": true, "write": true, "delete": true, "sign-csr": true}
 

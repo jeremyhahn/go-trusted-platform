@@ -369,9 +369,10 @@ SDK ceremony service and issues the first admin client certificate bundle.
 | `--barrier-strategy` | string | `software` | `PLATFORMCTL_BARRIER_STRATEGY` | `software`, `shamir`, `pkcs11`, `tpm2`, `awskms`, `gcpkms`, `azurekv`, `vault`, `none` |
 | `--shares` | int | | `PLATFORMCTL_SHARES` | Shamir share count; **required** for `shamir`, ≥ 2; rejected otherwise |
 | `--threshold` | int | | `PLATFORMCTL_THRESHOLD` | Shamir threshold; **required** for `shamir`, 2 ≤ threshold ≤ shares; rejected otherwise |
+| `--officer` | string, repeatable | | | Security Officer as `username=path/to/csr.pem`; **required** for `shamir`, exactly once per share; rejected otherwise ([`docs/bootstrap/cli.md`](../bootstrap/cli.md) §1a) |
 | `--hostname` | string | | `PLATFORMCTL_HOSTNAME` | FQDN for the admin/server certificate CN |
 | `--sans` | string | | `PLATFORMCTL_SANS` | Comma-separated extra DNS/IP SANs |
-| `--admin-bundle` | string | `-` (stdout) | `PLATFORMCTL_ADMIN_BUNDLE` | Where to write the admin cert+key bundle; files are written `0600` |
+| `--admin-bundle` | string | `-` (stdout) | `PLATFORMCTL_ADMIN_BUNDLE` | Where to write the admin cert+key bundle; files are written `0600`. A directory is refused before `/init`; if the final rename fails the temporary file is kept and named in the error |
 | `--force` | bool | `false` | | Overwrite an existing `--admin-bundle` file (refused otherwise) |
 
 Backend-specific settings (HSM PINs, KMS key ARNs, Vault tokens) are daemon
@@ -381,16 +382,15 @@ out of shell history.
 - **Exit:** 0; 1 on a flag-validation error, e.g.
   `init: --so-pin is required (or set PLATFORMCTL_SO_PIN)`.
 
-**Known defect.** When the daemon is unreachable or the ceremony call fails,
-`init` does not fail: it prints a summary headed
-`=== platformctl init: Canonical Surface Validated ===` and exits 0. Do not
-treat exit 0 as proof that the platform was initialised; check
-`platformctl status` afterwards.
+An unreachable gate or a refused `/init` fails the command with
+`ErrInitStepFailed`, naming the step. The gate endpoint flags, the admin bundle
+handling and retries are in [`docs/bootstrap/cli.md`](../bootstrap/cli.md) §1a.
 
 ```bash
 PLATFORMCTL_SO_PIN=... PLATFORMCTL_USER_PIN=... \
   platformctl init --hostname cp.example.com --admin-bundle ./admin-bundle.pem
-platformctl init --barrier-strategy shamir --shares 5 --threshold 3 \
+platformctl init --barrier-strategy shamir --shares 3 --threshold 2 \
+  --officer alice=alice.csr --officer bob=bob.csr --officer carol=carol.csr \
   --so-pin "$SO_PIN" --user-pin "$USER_PIN"
 ```
 

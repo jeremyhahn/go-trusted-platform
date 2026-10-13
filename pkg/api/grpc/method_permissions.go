@@ -13,6 +13,8 @@
 
 package grpc
 
+import "strings"
+
 // =============================================================================
 // gRPC Method -> Scope Permission Catalog
 // =============================================================================
@@ -47,6 +49,25 @@ func ScopeForMethod(fullMethod string) string {
 	return grpcMethodPermissions[fullMethod]
 }
 
+// claimsOnlyResources are the scope resources that only a claims-bearing
+// platform token can authorize. A bool-only validator proves a token is valid
+// but yields no scopes, so the interceptor refuses these methods on that path
+// instead of letting any valid token through. This mirrors QUIC
+// AuthorizeSubOpcode, which refuses the same ceremony, PIV and FIDO2
+// operations when no AuthorizedContext is attached.
+var claimsOnlyResources = map[string]bool{
+	"piv":      true,
+	"fido2":    true,
+	"ceremony": true,
+}
+
+// scopeRequiresClaims reports whether a colon "resource:action" scope names a
+// resource in claimsOnlyResources.
+func scopeRequiresClaims(scope string) bool {
+	resource, _, found := strings.Cut(scope, ":")
+	return found && claimsOnlyResources[resource]
+}
+
 // buildGRPCMethodPermissions constructs the FullMethod -> scope catalog. The
 // resource/action pairs mirror the QUIC operation catalog and the MCP
 // toolPermissions for the same capabilities; the daemon's QUIC authorization
@@ -69,6 +90,9 @@ func buildGRPCMethodPermissions() map[string]string {
 		ca      = "ca"
 		prox    = "proxy"
 		ntp     = "ntp"
+		piv     = "piv"
+		fido2   = "fido2"
+		cer     = "ceremony"
 	)
 
 	scope := func(resource, action string) string {
@@ -128,6 +152,45 @@ func buildGRPCMethodPermissions() map[string]string {
 		"/platform.v1.NTPService/GetStatus":   scope(ntp, read),
 		"/platform.v1.NTPService/ListSources": scope(ntp, read),
 		"/platform.v1.NTPService/Step":        scope(ntp, write),
+
+		// ---------------------------------------------------------------------
+		// PIV (PIVService) — smartcard slots. Generate, Import, Sign and Reset
+		// change key material or use a private key; enumeration and attestation
+		// are reads.
+		// ---------------------------------------------------------------------
+		"/platform.v1.PIVService/ListDevices": scope(piv, read),
+		"/platform.v1.PIVService/ListSlots":   scope(piv, read),
+		"/platform.v1.PIVService/SlotInfo":    scope(piv, read),
+		"/platform.v1.PIVService/Attest":      scope(piv, read),
+		"/platform.v1.PIVService/Generate":    scope(piv, write),
+		"/platform.v1.PIVService/Import":      scope(piv, write),
+		"/platform.v1.PIVService/Sign":        scope(piv, write),
+		"/platform.v1.PIVService/Reset":       scope(piv, write),
+
+		// ---------------------------------------------------------------------
+		// FIDO2 (FIDO2Service) — device enumeration is a read; Register and
+		// Authenticate drive a user-presence ceremony on the token.
+		// ---------------------------------------------------------------------
+		"/platform.v1.FIDO2Service/ListDevices":  scope(fido2, read),
+		"/platform.v1.FIDO2Service/WaitDevice":   scope(fido2, read),
+		"/platform.v1.FIDO2Service/Info":         scope(fido2, read),
+		"/platform.v1.FIDO2Service/Register":     scope(fido2, write),
+		"/platform.v1.FIDO2Service/Authenticate": scope(fido2, write),
+
+		// ---------------------------------------------------------------------
+		// Ceremony (CeremonyService) — Init and Status are scoped like the rest.
+		// First boot has no token to present, so it reaches them over the Unix
+		// socket (not token-gated) or the pre-auth REST /init route; the scope
+		// protects the TCP listener, where an unauthenticated Init would let a
+		// remote caller seize an uninitialized platform.
+		// ---------------------------------------------------------------------
+		"/platform.v1.CeremonyService/Status":             scope(cer, read),
+		"/platform.v1.CeremonyService/Init":               scope(cer, write),
+		"/platform.v1.CeremonyService/ClaimCertBegin":     scope(cer, write),
+		"/platform.v1.CeremonyService/ClaimCertComplete":  scope(cer, write),
+		"/platform.v1.CeremonyService/ClaimShareBegin":    scope(cer, write),
+		"/platform.v1.CeremonyService/ClaimShareComplete": scope(cer, write),
+		"/platform.v1.CeremonyService/SignCSR":            scope(cer, write),
 
 		// ---------------------------------------------------------------------
 		// Proxy (ProxyService) — reverse-proxy route/pool source of truth

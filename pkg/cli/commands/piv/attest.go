@@ -59,7 +59,10 @@ func runAttest(commonFlags *cli.CommonFlags, f *attestFlags) error {
 	}
 	defer base.Close()
 
-	client := pivsvc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.Attest(base.Context(), &pivsvc.AttestRequest{Slot: f.slot})
 	if err != nil {
 		return err

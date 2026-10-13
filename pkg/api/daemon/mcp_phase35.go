@@ -92,6 +92,9 @@ func (p *MCPServiceProvider) CeremonyInit(ctx context.Context, args map[string]i
 		"ceremony_id":    out.CeremonyID,
 		"state":          string(out.State),
 		"initialized_at": out.InitializedAt,
+		"admin_cert_pem": out.AdminCertPEM,
+		"admin_key_pem":  out.AdminKeyPEM,
+		"spki_pin":       out.SPKIPin,
 	}, nil
 }
 

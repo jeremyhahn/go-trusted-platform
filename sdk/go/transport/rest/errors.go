@@ -108,9 +108,9 @@ func (e ErrUnexpectedReplyType) Error() string {
 	return fmt.Sprintf("unexpected reply message type for gRPC method %s", e.Method)
 }
 
-// ErrUnexpectedRequestType indicates a custom REST request encoder received
-// a request message of an unexpected concrete type. Like
-// ErrUnexpectedReplyType, it is a routing defect in the adapter.
+// ErrUnexpectedRequestType indicates a custom REST request encoder received a
+// request message of an unexpected concrete type. This is a programming error
+// in the adapter's method routing, not a wire failure.
 type ErrUnexpectedRequestType struct {
 	Method string
 }

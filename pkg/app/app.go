@@ -838,11 +838,11 @@ func (app *App) parsePrivateAndPublicIPs() error {
 }
 
 // Returns a singleton instance of the platform service registry
-// systemTenantID is the fixed ID of the system tenant created by go-qrdb's
+// SystemTenantID is the fixed ID of the system tenant created by go-qrdb's
 // firstboot on first server start. It mirrors go-qrdb/pkg/tenant.SystemTenantID;
 // the platform consumes it through the go-quicbaas IAM SDK rather than importing
 // go-qrdb directly.
-const systemTenantID = "system"
+const SystemTenantID = "system"
 
 // adoptSystemTenant verifies that firstboot's system tenant exists in IAM (the
 // embedded QuicBaaS server runs firstboot idempotently on Start) and adopts it
@@ -863,7 +863,7 @@ func (app *App) adoptSystemTenant(ctx context.Context) error {
 	if tenantClient == nil {
 		return nil
 	}
-	t, err := tenantClient.Get(ctx, systemTenantID)
+	t, err := tenantClient.Get(ctx, SystemTenantID)
 	if err != nil {
 		// A lean build's embedded server has no IAM, but the SDK
 		// constructs its IAM/Tenant clients lazily and always non-nil —
@@ -878,7 +878,7 @@ func (app *App) adoptSystemTenant(ctx context.Context) error {
 				slog.String("error", err.Error()))
 			return nil
 		}
-		return &WrappedError{Msg: fmt.Sprintf("adopt system tenant: firstboot system tenant %q not present after factory start", systemTenantID), Err: err}
+		return &WrappedError{Msg: fmt.Sprintf("adopt system tenant: firstboot system tenant %q not present after factory start", SystemTenantID), Err: err}
 	}
 	app.TenantID = t.ID
 	app.tenantAdopted = true
@@ -1503,6 +1503,21 @@ func (app *App) mirrorWebAuthnRelyingParty() {
 	app.QuicBaaSConfig.WebAuthnRPOrigins = origins
 }
 
+// mirrorBarrierSealStrategy copies the platform barrier's shamir seal
+// strategy into the embedded QuicBaaS config, so the SDK seals the data-plane
+// barrier with its Shamir strategy. The barrier section is the single YAML
+// source; without the mirror the embedded barrier is single-key and the gate
+// refuses a shamir /init it could not enforce. Other strategies are left to
+// the embedded default.
+func (app *App) mirrorBarrierSealStrategy() {
+	if app.BarrierConfig == nil || app.BarrierConfig.SealStrategy != barrier.SealStrategyShamir {
+		return
+	}
+	app.QuicBaaSConfig.BarrierSealStrategy = barrier.SealStrategyShamir
+	app.QuicBaaSConfig.BarrierShamirThreshold = app.BarrierConfig.ShamirThreshold
+	app.QuicBaaSConfig.BarrierShamirShares = app.BarrierConfig.ShamirShares
+}
+
 // Initializes the Viper configuration library and unmarshals it
 // into this App struct.
 func (app *App) initConfig(env string) error {
@@ -1679,6 +1694,7 @@ func (app *App) initStores() error {
 		// a DIFFERENT RP ID are alarmed — their WebAuthn ceremonies
 		// cannot work against a single-RP factory (upstream gap).
 		app.mirrorWebAuthnRelyingParty()
+		app.mirrorBarrierSealStrategy()
 
 		app.Logger.Info("Initializing QuicBaaS",
 			slog.String("transport", app.QuicBaaSConfig.Transport.String()),

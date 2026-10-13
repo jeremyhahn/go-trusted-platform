@@ -40,7 +40,10 @@ func runListDevices(commonFlags *cli.CommonFlags) error {
 	}
 	defer base.Close()
 
-	client := fido2svc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.ListDevices(base.Context(), &fido2svc.ListDevicesRequest{})
 	if err != nil {
 		return err

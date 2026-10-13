@@ -84,7 +84,8 @@ const (
 	CeremonyStateComplete CeremonyStateValue = "complete"
 )
 
-// CeremonyInitRequest is the service-layer init request.
+// CeremonyInitRequest is the service-layer init request. Threshold is an
+// "M-of-N" spec; an M-of-N init names one officer per share in Officers.
 type CeremonyInitRequest struct {
 	SOPIN                  string
 	UserPIN                string
@@ -92,13 +93,26 @@ type CeremonyInitRequest struct {
 	Hostname               string
 	SANs                   []string
 	CredentialSealStrategy string
+	Officers               []CeremonyOfficer
+}
+
+// CeremonyOfficer is a Security Officer enrolled by an M-of-N init: the
+// ceremony signs CSRPEM into the officer's custodian certificate.
+type CeremonyOfficer struct {
+	Username string
+	CSRPEM   string
 }
 
 // CeremonyInitResult is the service-layer init response.
+//
+// AdminCertPEM and AdminKeyPEM are the one-shot admin client credential: the
+// platform keeps no copy, so every transport must deliver both to the caller.
 type CeremonyInitResult struct {
 	CeremonyID    string
 	State         CeremonyStateValue
 	InitializedAt time.Time
+	AdminCertPEM  string
+	AdminKeyPEM   string
 	// SPKIPin is the SHA-256 pin of the ceremony CA's public key, as
 	// returned by the upstream ceremony initialize.
 	SPKIPin string

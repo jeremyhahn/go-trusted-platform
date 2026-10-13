@@ -23,6 +23,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	fido2svc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/fido2"
 )
 
 // NewCommand creates the fido2 root command.
@@ -71,4 +73,17 @@ Examples:
 	cmd.AddCommand(newAuthenticateCommand(getFlags))
 
 	return cmd
+}
+
+const fido2svcName = "fido2"
+
+// newService returns the FIDO2 service backed by the client's active
+// transport, or ErrServiceUnavailable when the client exposes no FIDO2
+// service.
+func newService(client platform.Client) (fido2svc.Service, error) {
+	rpc := client.FIDO2()
+	if rpc == nil {
+		return nil, platform.ErrServiceUnavailable{Service: fido2svcName}
+	}
+	return fido2svc.NewGRPCClientFromClient(rpc), nil
 }

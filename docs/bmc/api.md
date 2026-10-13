@@ -31,7 +31,8 @@ opcode table, the platform authorization model — is
 `ServiceRegistry` (`sdk/go/transport/embedded/adapter.go`) is the complete
 reach of the embedded transport. Its fields are Daemon, CA, TPM, VTPM, Device,
 IAM, KMS, SDN, Compute, IDevID, Attestation, Tenant, PXE, DNS, Gateway, Proxy,
-Overlay, Registry, Cluster, EAB, Invitation, ConfigDelivery.
+Overlay, Registry, Cluster, EAB, Invitation, ConfigDelivery, Ceremony, PIV,
+FIDO2.
 
 **There is no `BMC` field.** Every embedded cell in the tables below is
 therefore `MISSING — docs/13 G7`, for every capability, without exception.

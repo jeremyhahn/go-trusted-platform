@@ -23,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	fido2sdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/fido2"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
@@ -136,7 +135,7 @@ func (q *QUICAdapter) sendSub(ctx context.Context, sub byte, in interface{}, out
 }
 
 // quicToSDKDevice converts a QUIC FIDO2 device to the SDK type.
-func quicToSDKDevice(d quic.FIDO2Device) fido2sdk.Device {
+func quicToSDKDevice(d quicwire.FIDO2Device) fido2sdk.Device {
 	return fido2sdk.Device{
 		ID:           d.ID,
 		Path:         d.Path,
@@ -150,7 +149,7 @@ func quicToSDKDevice(d quic.FIDO2Device) fido2sdk.Device {
 // ListDevices issues FIDO2SubListDevices.
 func (q *QUICAdapter) ListDevices(ctx context.Context, req *fido2sdk.ListDevicesRequest) (*fido2sdk.ListDevicesResponse, error) {
 	_ = req
-	var wire quic.FIDO2ListDevicesResp
+	var wire quicwire.FIDO2ListDevicesResp
 	if err := q.sendSub(ctx, quicwire.FIDO2SubListDevices, nil, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "FIDO2ListDevices", Err: err}
 	}
@@ -166,8 +165,8 @@ func (q *QUICAdapter) WaitDevice(ctx context.Context, req *fido2sdk.WaitDeviceRe
 	if req == nil {
 		req = &fido2sdk.WaitDeviceRequest{}
 	}
-	in := &quic.FIDO2WaitDeviceReq{TimeoutSeconds: req.TimeoutSeconds}
-	var wire quic.FIDO2WaitDeviceResp
+	in := &quicwire.FIDO2WaitDeviceReq{TimeoutSeconds: req.TimeoutSeconds}
+	var wire quicwire.FIDO2WaitDeviceResp
 	if err := q.sendSub(ctx, quicwire.FIDO2SubWaitDevice, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "FIDO2WaitDevice", Err: err}
 	}
@@ -179,8 +178,8 @@ func (q *QUICAdapter) Info(ctx context.Context, req *fido2sdk.InfoRequest) (*fid
 	if req == nil {
 		req = &fido2sdk.InfoRequest{}
 	}
-	in := &quic.FIDO2InfoReq{Device: req.Device}
-	var wire quic.FIDO2InfoResp
+	in := &quicwire.FIDO2InfoReq{Device: req.Device}
+	var wire quicwire.FIDO2InfoResp
 	if err := q.sendSub(ctx, quicwire.FIDO2SubInfo, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "FIDO2Info", Err: err}
 	}
@@ -201,11 +200,11 @@ func (q *QUICAdapter) Register(ctx context.Context, req *fido2sdk.RegisterReques
 	if req == nil {
 		req = &fido2sdk.RegisterRequest{}
 	}
-	in := &quic.FIDO2RegisterReq{
+	in := &quicwire.FIDO2RegisterReq{
 		Username: req.Username, Role: string(req.Role),
 		RequirePIN: req.RequirePIN, RequireUV: req.RequireUV, RPID: req.RPID,
 	}
-	var wire quic.FIDO2RegisterResp
+	var wire quicwire.FIDO2RegisterResp
 	if err := q.sendSub(ctx, quicwire.FIDO2SubRegister, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "FIDO2Register", Err: err}
 	}
@@ -219,8 +218,8 @@ func (q *QUICAdapter) Authenticate(ctx context.Context, req *fido2sdk.Authentica
 	if req == nil {
 		req = &fido2sdk.AuthenticateRequest{}
 	}
-	in := &quic.FIDO2AuthenticateReq{CredentialID: req.CredentialID}
-	var wire quic.FIDO2AuthenticateResp
+	in := &quicwire.FIDO2AuthenticateReq{CredentialID: req.CredentialID}
+	var wire quicwire.FIDO2AuthenticateResp
 	if err := q.sendSub(ctx, quicwire.FIDO2SubAuthenticate, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "FIDO2Authenticate", Err: err}
 	}

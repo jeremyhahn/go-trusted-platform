@@ -200,6 +200,65 @@ func (m *Manager) InitializeShamir(ctx context.Context, secret string, threshold
 	return resp, nil
 }
 
+// RegisterOfficer enrolls a Security Officer with the barrier's share
+// ceremony through the SDK: the ceremony signs csrPEM into the officer's
+// custodian certificate and reserves the officer a share slot. A Shamir
+// barrier seals one share to each enrolled officer, so InitializeShamir needs
+// one registered officer per share.
+func (m *Manager) RegisterOfficer(ctx context.Context, username string, csrPEM []byte) error {
+	if ctx == nil {
+		return ErrNilContext
+	}
+	if username == "" {
+		return ErrEmptyUsername
+	}
+	if len(csrPEM) == 0 {
+		return ErrEmptyCSR
+	}
+
+	barrierClient, err := m.barrierClient()
+	if err != nil {
+		return &ManagerError{Op: "RegisterOfficer", Err: err}
+	}
+
+	_, err = barrierClient.OfficerRegister(ctx, &quicbaassdk.QRDBOfficerRegisterRequest{
+		Username: username,
+		CSRPEM:   csrPEM,
+	})
+	if err != nil {
+		return &ManagerError{Op: "RegisterOfficer", Err: err}
+	}
+
+	m.logger.Info("Barrier officer registered", slog.String("username", username))
+	return nil
+}
+
+// Officers returns the usernames of the Security Officers enrolled with the
+// barrier's share ceremony.
+func (m *Manager) Officers(ctx context.Context) ([]string, error) {
+	if ctx == nil {
+		return nil, ErrNilContext
+	}
+
+	barrierClient, err := m.barrierClient()
+	if err != nil {
+		return nil, &ManagerError{Op: "Officers", Err: err}
+	}
+
+	statuses, err := barrierClient.OfficerList(ctx)
+	if err != nil {
+		return nil, &ManagerError{Op: "Officers", Err: err}
+	}
+
+	usernames := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		if status != nil {
+			usernames = append(usernames, status.Username)
+		}
+	}
+	return usernames, nil
+}
+
 // Unseal unseals the barrier using the master key.
 func (m *Manager) Unseal(ctx context.Context, secret string) error {
 	if ctx == nil {

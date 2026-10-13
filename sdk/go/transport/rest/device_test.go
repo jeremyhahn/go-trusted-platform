@@ -209,8 +209,8 @@ func TestEncodeRequestBody_PassesUnencodedMethodsThrough(t *testing.T) {
 	require.Same(t, req, body)
 }
 
-func TestEncodeRequestBody_ReportsEncoderFailureAsInvalidArgument(t *testing.T) {
-	_, err := encodeRequestBody(platformv1.DeviceService_UpdateProfile_FullMethodName, &platformv1.GetDeviceRequest{})
+func TestEncodeInvokeBody_ReportsEncoderFailureAsInvalidArgument(t *testing.T) {
+	_, err := encodeInvokeBody(platformv1.DeviceService_UpdateProfile_FullMethodName, &platformv1.GetDeviceRequest{})
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 }
 

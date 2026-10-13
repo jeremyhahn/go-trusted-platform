@@ -68,7 +68,10 @@ func runGenerate(commonFlags *cli.CommonFlags, f *generateFlags) error {
 	}
 	defer base.Close()
 
-	client := pivsvc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.Generate(base.Context(), &pivsvc.GenerateRequest{
 		Slot:      f.slot,
 		Algorithm: pivsvc.Algorithm(algorithms[f.algorithm]),

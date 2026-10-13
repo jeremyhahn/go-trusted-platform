@@ -1,6 +1,6 @@
 # Bootstrap — CLI
 
-> **Status: NORMATIVE** · Scope: `platformctl bootstrap`, `platformctl firstboot`, `platform-initrd` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `platformctl init`, `platformctl bootstrap`, `platformctl firstboot`, `platform-initrd` · Last verified: 2026-08-18
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
@@ -12,6 +12,7 @@
 ## 1. Command groups
 
 ```
+platformctl init                 Initialize a fresh platform (barrier, CA, admin bundle)
 platformctl bootstrap            Platform bootstrap operations
 platformctl bootstrap secrets    Manage bootstrap secrets
 platformctl firstboot            First-boot TPM PCR sealing operations
@@ -61,7 +62,87 @@ thing — the configuration file being rewritten.
 the control plane over plain HTTPS. `--transport` therefore has no effect on
 them. `bootstrap secrets` needs a local KMS. `bootstrap trust` needs only the
 target server's bundle endpoint. `platformctl firstboot` runs on the node itself
-with no server at all.
+with no server at all. `platformctl init` talks to the daemon, but only to its
+pre-unseal mux — see §1a.
+
+---
+
+## 1a. `platformctl init`
+
+Initialize a fresh platform in one call: barrier, CA-issued admin client
+certificate, SPKI pin. It runs **before** the barrier is unsealed, when none of
+the six transports is bound, so it does not use `--transport`, `--server` or a
+context's connection settings. It sends `POST /init` to the barrier gate
+([`../barrier/api.md`](../barrier/api.md#post-init)) through
+`sdk/go/services/gate`. The client accepts only a Unix socket or a literal
+loopback address, uses no proxy, and **never follows a redirect**: the request
+carries the PINs, so a `3xx` is returned as `ErrInitRejected` with its status
+code, and nothing is resent to the `Location` it names.
+
+| Flag | Default | Environment | Meaning |
+|---|---|---|---|
+| `--so-pin` | | `PLATFORMCTL_SO_PIN` | SO PIN; required unless `--barrier-strategy=none` |
+| `--user-pin` | | `PLATFORMCTL_USER_PIN` | User PIN; required unless `--barrier-strategy=none`. It is the barrier secret, so platformd refuses an init without one with `400` before anything is minted |
+| `--barrier-strategy` | `software` | `PLATFORMCTL_BARRIER_STRATEGY` | `software`, `shamir`, `pkcs11`, `tpm2`, `awskms`, `gcpkms`, `azurekv`, `vault`, `none`. Sent as `credential_seal_strategy`, the strategy the ceremony seals credentials with. It does **not** choose the barrier's strategy: platformd initializes the barrier with its configured `barrier.seal_strategy` ([`../barrier/api.md`](../barrier/api.md#post-init)). With `shamir` the `--shares` / `--threshold` quorum is sent too, and a platformd configured for `shamir` splits the barrier with it |
+| `--shares`, `--threshold` | | `PLATFORMCTL_SHARES`, `PLATFORMCTL_THRESHOLD` | Shamir quorum; required for, and only accepted with, `shamir` |
+| `--officer` | | | `username=path/to/csr.pem`, repeated once per share; required for, and only accepted with, `shamir`. Each officer's CSR file is read before `/init` is sent and sent as `officers` ([`../barrier/api.md`](../barrier/api.md#post-init)); the gate refuses a CSR that does not parse or is not self-signed. A count other than `--shares`, a malformed value, a repeated username or an unreadable file fails the command (`ErrOfficerCount`, `ErrInvalidOfficerFlag`, `ErrOfficerCSRUnreadable`) and nothing is sent |
+| `--hostname` | | `PLATFORMCTL_HOSTNAME` | CN for the issued certificate |
+| `--sans` | | `PLATFORMCTL_SANS` | Comma-separated extra DNS / IP SANs |
+| `--admin-bundle` | `-` (stdout) | `PLATFORMCTL_ADMIN_BUNDLE` | Where the admin cert + key + SPKI pin go |
+| `--force` | `false` | | Replace an existing `--admin-bundle` file |
+| `--gate-endpoint` | local context socket, else `unix:///run/platformd.sock` | `PLATFORMCTL_GATE_ENDPOINT` | `unix://<socket>`, or with `--loopback-http` a literal loopback `ip:port` (`127.0.0.1:9446`, `[::1]:9446`); anything else, including the name `localhost`, is refused, because the request carries both PINs |
+| `--loopback-http` | `false` | `PLATFORMCTL_LOOPBACK_HTTP` | Send `/init` over loopback HTTP: to `--gate-endpoint` if it names an `ip:port`, else `127.0.0.1:9446`. **A lost response cannot be replayed over HTTP** (see below), so the one-shot admin bundle is lost with it. Combined with a `unix://` endpoint it is refused |
+
+**The admin bundle is returned once.** The daemon does not keep the key, so:
+
+- A file `--admin-bundle` is created (mode `0600`, as a temporary file beside the
+  target) **before** `/init` is sent. A path that is a directory (even with
+  `--force`), an existing file without `--force`, or a parent directory that
+  cannot be written fails the command and nothing is sent.
+- After a successful `/init` the bundle is renamed into place, and the command
+  prints only a summary: `ceremony_id`, `state`, `initialized_at`, `spki_pin`,
+  `admin_bundle` (the path). The key is never printed.
+- If the bundle was written but the rename fails, the temporary file is kept
+  and the command fails with an error naming it. Move it to the target by hand:
+  the platform will not issue the bundle again.
+- With `--admin-bundle -`, the default, stdout carries **only** the bundle, so it
+  can be redirected to a file, and the summary goes to stderr. The private key
+  is written to stdout exactly once, and whatever captures that stdout (a
+  terminal's scrollback, a CI job log, a `tee`) now holds the platform's root
+  admin key. Unless stdout is redirected straight to a file you protect, pass a
+  path instead.
+- If the response is lost, repeat the identical command as the same user: while
+  the daemon is still pre-unseal it replays the same bundle, but only over the
+  Unix socket ([`../barrier/api.md`](../barrier/api.md#retrying-init)). That is why init
+  uses a Unix socket unless you pass `--loopback-http`: an init sent to the
+  loopback HTTP endpoint is never replayed, and a loopback `--gate-endpoint`
+  without the flag is refused before anything is sent.
+- Attempts are rate limited (5 back to back, then one every 12 seconds); past
+  that the command fails with HTTP `429`.
+
+**There is no second admin credential.** `platformd` keeps its server key in
+the CA keystore and writes only the public CA bundle to `<platform-dir>/tls/`
+([`../daemon/architecture.md`](../daemon/architecture.md)); it mints no admin
+key. Earlier builds also wrote `client-bundle.pem`, a `CN=admin` certificate
+and its private key in clear, to `/tmp/platformd-integration/tls/` on every
+host with a TLS transport enabled. On a host that ran one of them, delete that
+file and revoke its certificate (`platformctl ca revoke <serial>`): it carries the same authority as the `/init`
+bundle and stays valid for 365 days from issue.
+
+The devcontainer integration harness
+(`build/docker/devcontainer/run-integration-tests.sh`) runs `platformd` without
+a barrier, so there is no `/init` to take a bundle from. Its `platformd` is
+built with the `integration` build tag, which compiles in
+`pkg/daemon/commands/harness_admin_bundle_integration.go`: that binary, and
+only that binary, writes a test `client-bundle.pem` beside the CA bundle.
+
+```bash
+platformctl init --so-pin "$SO_PIN" --user-pin "$USER_PIN" \
+  --hostname cp-01.example.com --admin-bundle /root/admin.pem -o json
+```
+
+`platformctl ceremony init` was removed in favour of this command
+([`docs/cli/ceremony.md`](../cli/ceremony.md)).
 
 ---
 

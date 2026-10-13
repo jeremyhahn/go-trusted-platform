@@ -19,9 +19,8 @@
 // either a real backend result or a consistent "backend not configured"
 // error surface across every transport.
 //
-// No real smartcards are required — a software stub backend is exercised
-// when available; otherwise the test treats the Unavailable error surface
-// as the contract.
+// No real smartcards are required. When the daemon has no PIV backend, every
+// transport must report ErrPIVNotConfigured; any other error fails the test.
 //
 // Run via:
 //

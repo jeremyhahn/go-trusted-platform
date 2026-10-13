@@ -34,7 +34,6 @@ import (
 	"testing"
 	"time"
 
-	certclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/certificate"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasacme "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
@@ -290,56 +289,6 @@ func (f *fakeKeystoreCA) Certificate(_ context.Context, attrs *xkmssdk.KeyAttrib
 // server CN.
 func (f *fakeKeystoreCA) serverSigner() *keystoreSigner { return f.keys[daemonServerCN] }
 
-// fakeIssuer is a daemonCertIssuer for the admin bootstrap certificate,
-// signing with the shared root. Each call increments a counter so tests
-// can assert the §8 #7 one-shot requirement.
-type fakeIssuer struct {
-	root        *testRoot
-	notAfterOff time.Duration
-	calls       int
-	failOnRole  string
-}
-
-// newFakeIssuer returns an admin issuer over root.
-func newFakeIssuer(root *testRoot) *fakeIssuer {
-	return &fakeIssuer{root: root, notAfterOff: 365 * 24 * time.Hour}
-}
-
-// IssueCertificate mints a client cert + PEM key signed by the root.
-func (f *fakeIssuer) IssueCertificate(_ context.Context, req *certclient.IssueCertificateRequest) (*certclient.IssueCertificateResponse, error) {
-	f.calls++
-	if f.failOnRole != "" && req.Usage == f.failOnRole {
-		return nil, errFake{op: "issue " + req.Usage}
-	}
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, err
-	}
-	now := time.Now()
-	cert, err := f.root.sign(&x509.Certificate{
-		SerialNumber: big.NewInt(int64(f.calls + 1000)),
-		Subject:      pkix.Name{CommonName: req.CommonName},
-		NotBefore:    now.Add(-time.Minute),
-		NotAfter:     now.Add(f.notAfterOff),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-	}, &key.PublicKey)
-	if err != nil {
-		return nil, err
-	}
-	keyDER, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		return nil, err
-	}
-	return &certclient.IssueCertificateResponse{
-		CertificatePEM: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})),
-		PrivateKeyPEM:  string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})),
-		SerialNumber:   cert.SerialNumber.String(),
-		NotBefore:      cert.NotBefore,
-		NotAfter:       cert.NotAfter,
-	}, nil
-}
-
 // =============================================================================
 // Helpers
 // =============================================================================
@@ -359,28 +308,26 @@ func readFile(t *testing.T, path string) []byte {
 	return b
 }
 
-// provisionFixture is a fresh CA, admin issuer and output directory.
+// provisionFixture is a fresh CA and output directory.
 type provisionFixture struct {
-	ca     *fakeKeystoreCA
-	issuer *fakeIssuer
-	dir    string
-	sans   daemonSANs
+	ca   *fakeKeystoreCA
+	dir  string
+	sans daemonSANs
 }
 
 func newProvisionFixture(t *testing.T) *provisionFixture {
 	t.Helper()
 	ca := newFakeKeystoreCA(t)
 	return &provisionFixture{
-		ca:     ca,
-		issuer: newFakeIssuer(ca.root),
-		dir:    t.TempDir(),
-		sans:   daemonSANs{DNS: []string{"unit-test.example"}},
+		ca:   ca,
+		dir:  t.TempDir(),
+		sans: daemonSANs{DNS: []string{"unit-test.example"}},
 	}
 }
 
 func (p *provisionFixture) provision(t *testing.T) (*ProvisionedIdentity, error) {
 	t.Helper()
-	return provisionDaemonIdentity(context.Background(), newTestLogger(), p.ca, p.issuer, p.dir, p.sans)
+	return provisionDaemonIdentity(context.Background(), newTestLogger(), p.ca, p.dir, p.sans)
 }
 
 // assertNoServerKeyOnDisk fails when any file under dir holds a private
@@ -450,9 +397,6 @@ func TestProvisionDaemonIdentity_ServerKeyStaysInKeystore(t *testing.T) {
 	if id.AdminTrustPool == nil {
 		t.Error("expected AdminTrustPool populated")
 	}
-	if id.AdminBundlePath != filepath.Join(p.dir, "client-bundle.pem") {
-		t.Errorf("AdminBundlePath = %q", id.AdminBundlePath)
-	}
 	wantBundle, err := p.ca.CABundle()
 	if err != nil {
 		t.Fatalf("ca bundle: %v", err)
@@ -461,8 +405,8 @@ func TestProvisionDaemonIdentity_ServerKeyStaysInKeystore(t *testing.T) {
 		t.Error("ca-bundle.crt does not hold the CA bundle")
 	}
 	assertNoServerKeyOnDisk(t, p.dir, signer.Public())
-	if p.ca.issueCalls != 1 || p.issuer.calls != 1 {
-		t.Errorf("issue calls: server %d, admin %d; want 1 and 1", p.ca.issueCalls, p.issuer.calls)
+	if p.ca.issueCalls != 1 {
+		t.Errorf("server issue calls = %d, want 1", p.ca.issueCalls)
 	}
 }
 
@@ -473,7 +417,6 @@ func TestProvisionDaemonIdentity_ReusesKeystoreIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first provision: %v", err)
 	}
-	adminBefore := readFile(t, first.AdminBundlePath)
 
 	second, err := p.provision(t)
 	if err != nil {
@@ -482,17 +425,14 @@ func TestProvisionDaemonIdentity_ReusesKeystoreIdentity(t *testing.T) {
 	if !second.Reused {
 		t.Error("expected Reused=true on second provision")
 	}
-	if p.ca.issueCalls != 1 || p.issuer.calls != 1 {
-		t.Errorf("issue calls after reuse: server %d, admin %d; want 1 and 1", p.ca.issueCalls, p.issuer.calls)
+	if p.ca.issueCalls != 1 {
+		t.Errorf("server issue calls after reuse = %d, want 1", p.ca.issueCalls)
 	}
 	if p.ca.revokeCalls != 0 {
 		t.Errorf("a reused identity must not be revoked, revoke calls = %d", p.ca.revokeCalls)
 	}
 	if second.ServerCert.Leaf.SerialNumber.Cmp(first.ServerCert.Leaf.SerialNumber) != 0 {
 		t.Error("server certificate changed across reuse")
-	}
-	if !bytes.Equal(adminBefore, readFile(t, second.AdminBundlePath)) {
-		t.Error("admin bundle changed across reuse")
 	}
 }
 
@@ -541,32 +481,36 @@ func TestProvisionDaemonIdentity_SupersedesWhenSANsChange(t *testing.T) {
 	if !certCoversDNSNames(second.ServerCert.Leaf, []string{"new-host.example"}) {
 		t.Errorf("re-issued SANs = %v", second.ServerCert.Leaf.DNSNames)
 	}
-	if p.issuer.calls != 1 {
-		t.Errorf("a server re-issue must not re-issue a current admin bundle; admin calls = %d", p.issuer.calls)
+}
+
+// TestProvisionDaemonIdentity_WritesNoAdminCredential asserts the daemon
+// leaves only the public CA bundle on disk: the /init reply is the one
+// admin credential (docs/bootstrap/cli.md §1a).
+func TestProvisionDaemonIdentity_WritesNoAdminCredential(t *testing.T) {
+	p := newProvisionFixture(t)
+	if _, err := p.provision(t); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	entries, err := os.ReadDir(p.dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "ca-bundle.crt" {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("tls dir holds %v, want only ca-bundle.crt", names)
 	}
 }
 
-func TestProvisionDaemonIdentity_ReissuesMissingAdminBundle(t *testing.T) {
-	p := newProvisionFixture(t)
-	first, err := p.provision(t)
-	if err != nil {
-		t.Fatalf("first provision: %v", err)
+func TestDaemonTLSDir_UnderPlatformDir(t *testing.T) {
+	for _, platformDir := range []string{"/var/lib/trusted-platform", "/srv/tp"} {
+		want := filepath.Join(platformDir, "tls")
+		if got := daemonTLSDir(platformDir); got != want {
+			t.Errorf("daemonTLSDir(%q) = %q, want %q", platformDir, got, want)
+		}
 	}
-	if err := os.Remove(first.AdminBundlePath); err != nil {
-		t.Fatalf("remove admin bundle: %v", err)
-	}
-
-	second, err := p.provision(t)
-	if err != nil {
-		t.Fatalf("second provision: %v", err)
-	}
-	if !second.Reused {
-		t.Error("the keystore-held server identity should still be reused")
-	}
-	if p.issuer.calls != 2 {
-		t.Errorf("expected the admin bundle to be re-issued, admin calls = %d", p.issuer.calls)
-	}
-	readFile(t, second.AdminBundlePath)
 }
 
 func TestProvisionDaemonIdentity_KeystoreUnavailable(t *testing.T) {
@@ -738,35 +682,11 @@ func TestProvisionDaemonIdentity_CertificateLookupFails(t *testing.T) {
 	}
 }
 
-func TestProvisionDaemonIdentity_PropagatesAdminIssuerError(t *testing.T) {
-	p := newProvisionFixture(t)
-	p.issuer.failOnRole = "client"
-
-	_, err := p.provision(t)
-	var typed ErrProvisionIssue
-	if !errors.As(err, &typed) {
-		t.Fatalf("expected ErrProvisionIssue, got %T (%v)", err, err)
-	}
-	if typed.Role != "admin" {
-		t.Errorf("Role = %q, want admin", typed.Role)
-	}
-}
-
 func TestProvisionDaemonIdentity_ErrorsWhenCANil(t *testing.T) {
-	_, err := provisionDaemonIdentity(context.Background(), newTestLogger(), nil, nil, t.TempDir(), daemonSANs{})
+	_, err := provisionDaemonIdentity(context.Background(), newTestLogger(), nil, t.TempDir(), daemonSANs{})
 	var typed ErrProvisionMissingCA
 	if !errors.As(err, &typed) {
 		t.Fatalf("expected ErrProvisionMissingCA, got %T (%v)", err, err)
-	}
-}
-
-func TestProvisionDaemonIdentity_ErrorsWhenIssuerMissing(t *testing.T) {
-	p := newProvisionFixture(t)
-
-	_, err := provisionDaemonIdentity(context.Background(), newTestLogger(), p.ca, nil, p.dir, p.sans)
-	var typed ErrProvisionMissingSDK
-	if !errors.As(err, &typed) {
-		t.Fatalf("expected ErrProvisionMissingSDK, got %T (%v)", err, err)
 	}
 }
 
@@ -903,72 +823,6 @@ func TestAppendTrustedIntermediate(t *testing.T) {
 	full := tls.Certificate{Certificate: [][]byte{[]byte("leaf"), []byte("inter")}}
 	if len(appendTrustedIntermediate(fakeIntermediate{cert: inter}, full).Certificate) != 2 {
 		t.Error("a chain that already carries an intermediate must be left unchanged")
-	}
-}
-
-func TestAdminBundleCurrent(t *testing.T) {
-	p := newProvisionFixture(t)
-	path := filepath.Join(p.dir, "client-bundle.pem")
-	logger := newTestLogger()
-
-	if adminBundleCurrent(logger, path, p.ca.root.pool()) {
-		t.Error("a missing bundle must not be current")
-	}
-	if err := provisionAdminBundle(context.Background(), logger, p.issuer, path, p.ca.root.pool()); err != nil {
-		t.Fatalf("provision admin bundle: %v", err)
-	}
-	if !adminBundleCurrent(logger, path, p.ca.root.pool()) {
-		t.Error("a freshly issued bundle must be current")
-	}
-	if adminBundleCurrent(logger, path, newTestRoot(t).pool()) {
-		t.Error("a bundle from a foreign root must not be current")
-	}
-	if err := os.WriteFile(path, []byte("garbage"), 0600); err != nil {
-		t.Fatalf("corrupt bundle: %v", err)
-	}
-	if adminBundleCurrent(logger, path, p.ca.root.pool()) {
-		t.Error("an unparseable bundle must not be current")
-	}
-}
-
-func TestProvisionAdminBundle_PersistFailure(t *testing.T) {
-	p := newProvisionFixture(t)
-	path := filepath.Join(p.dir, "missing-dir", "client-bundle.pem")
-
-	err := provisionAdminBundle(context.Background(), newTestLogger(), p.issuer, path, p.ca.root.pool())
-	var typed ErrProvisionPersist
-	if !errors.As(err, &typed) || typed.Path != path {
-		t.Fatalf("expected ErrProvisionPersist for %s, got %T (%v)", path, err, err)
-	}
-}
-
-func TestLocalCACertIssuer_IssuesAdminClientCert(t *testing.T) {
-	ca := newFakeKeystoreCA(t)
-	issuer := newLocalCACertIssuer(ca)
-
-	resp, err := issuer.IssueCertificate(context.Background(), &certclient.IssueCertificateRequest{
-		CommonName: "admin", Organization: "Trusted Platform", Usage: "client", ValidityDays: 365,
-	})
-	if err != nil {
-		t.Fatalf("issue: %v", err)
-	}
-	cert, err := tlsCertificateFromBundle(bytesJoin(resp.CertificatePEM, resp.PrivateKeyPEM))
-	if err != nil {
-		t.Fatalf("admin bundle does not parse as a key pair: %v", err)
-	}
-	if len(cert.Leaf.ExtKeyUsage) != 1 || cert.Leaf.ExtKeyUsage[0] != x509.ExtKeyUsageClientAuth {
-		t.Errorf("admin ExtKeyUsage = %v, want client auth only", cert.Leaf.ExtKeyUsage)
-	}
-}
-
-func TestLocalCACertIssuer_Errors(t *testing.T) {
-	if newLocalCACertIssuer(nil) != nil {
-		t.Error("a nil CA must yield a nil issuer")
-	}
-	_, err := newLocalCACertIssuer(newFakeKeystoreCA(t)).IssueCertificate(context.Background(), nil)
-	var typed ErrProvisionMissingCA
-	if !errors.As(err, &typed) {
-		t.Fatalf("expected ErrProvisionMissingCA for a nil request, got %T (%v)", err, err)
 	}
 }
 

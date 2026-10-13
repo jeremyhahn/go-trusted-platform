@@ -23,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	pivsdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/piv"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
@@ -136,7 +135,7 @@ func (q *QUICAdapter) sendSub(ctx context.Context, sub byte, in interface{}, out
 }
 
 // quicToSDKDevice converts a QUIC PIV device to the SDK type.
-func quicToSDKDevice(d quic.PIVDevice) pivsdk.Device {
+func quicToSDKDevice(d quicwire.PIVDevice) pivsdk.Device {
 	return pivsdk.Device{
 		ID:              d.ID,
 		Name:            d.Name,
@@ -148,7 +147,7 @@ func quicToSDKDevice(d quic.PIVDevice) pivsdk.Device {
 }
 
 // quicToSDKSlot converts a QUIC PIV slot to the SDK type.
-func quicToSDKSlot(s quic.PIVSlot) pivsdk.Slot {
+func quicToSDKSlot(s quicwire.PIVSlot) pivsdk.Slot {
 	return pivsdk.Slot{
 		ID:             s.ID,
 		Name:           s.Name,
@@ -161,7 +160,7 @@ func quicToSDKSlot(s quic.PIVSlot) pivsdk.Slot {
 // ListDevices issues PIVSubListDevices.
 func (q *QUICAdapter) ListDevices(ctx context.Context, req *pivsdk.ListDevicesRequest) (*pivsdk.ListDevicesResponse, error) {
 	_ = req
-	var wire quic.PIVListDevicesResp
+	var wire quicwire.PIVListDevicesResp
 	if err := q.sendSub(ctx, quicwire.PIVSubListDevices, nil, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "PIVListDevices", Err: err}
 	}
@@ -177,8 +176,8 @@ func (q *QUICAdapter) ListSlots(ctx context.Context, req *pivsdk.ListSlotsReques
 	if req == nil {
 		req = &pivsdk.ListSlotsRequest{}
 	}
-	in := &quic.PIVListSlotsReq{Device: req.Device}
-	var wire quic.PIVListSlotsResp
+	in := &quicwire.PIVListSlotsReq{Device: req.Device}
+	var wire quicwire.PIVListSlotsResp
 	if err := q.sendSub(ctx, quicwire.PIVSubListSlots, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "PIVListSlots", Err: err}
 	}
@@ -194,8 +193,8 @@ func (q *QUICAdapter) SlotInfo(ctx context.Context, req *pivsdk.SlotInfoRequest)
 	if req == nil {
 		req = &pivsdk.SlotInfoRequest{}
 	}
-	in := &quic.PIVSlotInfoReq{Slot: req.Slot, Device: req.Device}
-	var wire quic.PIVSlotInfoResp
+	in := &quicwire.PIVSlotInfoReq{Slot: req.Slot, Device: req.Device}
+	var wire quicwire.PIVSlotInfoResp
 	if err := q.sendSub(ctx, quicwire.PIVSubSlotInfo, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "PIVSlotInfo", Err: err}
 	}
@@ -211,8 +210,8 @@ func (q *QUICAdapter) Generate(ctx context.Context, req *pivsdk.GenerateRequest)
 	if req == nil {
 		req = &pivsdk.GenerateRequest{}
 	}
-	in := &quic.PIVGenerateReq{Slot: req.Slot, Algorithm: string(req.Algorithm), PIN: req.PIN}
-	var wire quic.PIVGenerateResp
+	in := &quicwire.PIVGenerateReq{Slot: req.Slot, Algorithm: string(req.Algorithm), PIN: req.PIN}
+	var wire quicwire.PIVGenerateResp
 	if err := q.sendSub(ctx, quicwire.PIVSubGenerate, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "PIVGenerate", Err: err}
 	}
@@ -224,8 +223,8 @@ func (q *QUICAdapter) Import(ctx context.Context, req *pivsdk.ImportRequest) (*p
 	if req == nil {
 		req = &pivsdk.ImportRequest{}
 	}
-	in := &quic.PIVImportReq{Slot: req.Slot, PrivateKeyPEM: req.PrivateKeyPEM, PIN: req.PIN}
-	var wire quic.PIVImportResp
+	in := &quicwire.PIVImportReq{Slot: req.Slot, PrivateKeyPEM: req.PrivateKeyPEM, PIN: req.PIN}
+	var wire quicwire.PIVImportResp
 	if err := q.sendSub(ctx, quicwire.PIVSubImport, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "PIVImport", Err: err}
 	}
@@ -237,8 +236,8 @@ func (q *QUICAdapter) Sign(ctx context.Context, req *pivsdk.SignRequest) (*pivsd
 	if req == nil {
 		req = &pivsdk.SignRequest{}
 	}
-	in := &quic.PIVSignReq{Slot: req.Slot, Payload: req.Payload, PIN: req.PIN}
-	var wire quic.PIVSignResp
+	in := &quicwire.PIVSignReq{Slot: req.Slot, Payload: req.Payload, PIN: req.PIN}
+	var wire quicwire.PIVSignResp
 	if err := q.sendSub(ctx, quicwire.PIVSubSign, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "PIVSign", Err: err}
 	}
@@ -250,8 +249,8 @@ func (q *QUICAdapter) Attest(ctx context.Context, req *pivsdk.AttestRequest) (*p
 	if req == nil {
 		req = &pivsdk.AttestRequest{}
 	}
-	in := &quic.PIVAttestReq{Slot: req.Slot}
-	var wire quic.PIVAttestResp
+	in := &quicwire.PIVAttestReq{Slot: req.Slot}
+	var wire quicwire.PIVAttestResp
 	if err := q.sendSub(ctx, quicwire.PIVSubAttest, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "PIVAttest", Err: err}
 	}
@@ -266,8 +265,8 @@ func (q *QUICAdapter) Reset(ctx context.Context, req *pivsdk.ResetRequest) (*piv
 	if req == nil {
 		req = &pivsdk.ResetRequest{}
 	}
-	in := &quic.PIVResetReq{Device: req.Device}
-	var wire quic.PIVResetResp
+	in := &quicwire.PIVResetReq{Device: req.Device}
+	var wire quicwire.PIVResetResp
 	if err := q.sendSub(ctx, quicwire.PIVSubReset, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "PIVReset", Err: err}
 	}

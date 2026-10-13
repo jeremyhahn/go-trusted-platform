@@ -15,12 +15,14 @@ package daemon
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,8 +31,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
@@ -142,7 +147,7 @@ func TestSelectQUICAuth_NoBackend_ReturnsTypedError(t *testing.T) {
 	}
 	for name, config := range cases {
 		t.Run(name, func(t *testing.T) {
-			mw, validator, err := selectQUICAuth(config, nil, logging.DefaultLogger())
+			mw, validator, err := selectQUICAuth(config, nil, nil, logging.DefaultLogger())
 			require.Error(t, err)
 			var want ErrTransportAuthRequired
 			require.True(t, errors.As(err, &want), "error is %T, want ErrTransportAuthRequired", err)
@@ -159,7 +164,7 @@ func TestSelectQUICAuth_JWTVerifier_BuildsRequiredMiddleware(t *testing.T) {
 	config.App = &app.App{}
 	config.PlatformJWTVerifier = alwaysValidJWTVerifier{}
 
-	mw, validator, err := selectQUICAuth(config, nil, logging.DefaultLogger())
+	mw, validator, err := selectQUICAuth(config, nil, nil, logging.DefaultLogger())
 	require.NoError(t, err)
 	require.NotNil(t, mw)
 	require.NotNil(t, validator)
@@ -167,28 +172,41 @@ func TestSelectQUICAuth_JWTVerifier_BuildsRequiredMiddleware(t *testing.T) {
 
 func TestSelectQUICAuth_SharedValidator_BuildsRequiredMiddleware(t *testing.T) {
 	t.Parallel()
-	mw, validator, err := selectQUICAuth(failClosedConfig(), &platformTokenValidator{}, logging.DefaultLogger())
+	mw, validator, err := selectQUICAuth(failClosedConfig(), &platformTokenValidator{}, nil, logging.DefaultLogger())
 	require.NoError(t, err)
 	require.NotNil(t, mw)
 	assert.Nil(t, validator)
 }
 
+// Under mTLS the QUIC connection's client certificate is the credential, and
+// the middleware must turn it into a principal: without one every category
+// operation guarded by AuthorizeSubOpcode is refused (#720). The QUIC
+// dispatcher always authorizes, so the middleware is never nil (#767).
 func TestSelectQUICAuth_MTLS_AuthenticatesByCertificate(t *testing.T) {
 	t.Parallel()
 	config := failClosedConfig()
 	config.EnableMTLS = true
-	mw, validator, err := selectQUICAuth(config, nil, logging.DefaultLogger())
+	bundle := testutil.GenerateTestTLSBundle(t)
+
+	mw, validator, err := selectQUICAuth(config, nil, bundle.CAPool, logging.DefaultLogger())
 	require.NoError(t, err)
 	require.NotNil(t, mw, "the QUIC dispatcher always authorizes; mTLS supplies the identity")
 	assert.Nil(t, validator)
 
 	// The verified peer certificate authenticates a tokenless request...
-	_, resp := mw.GuardRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpKMSDeleteKey})
+	verified := quic.WithConnectionTLS(context.Background(), &tls.ConnectionState{
+		VerifiedChains: [][]*x509.Certificate{{leafOf(t, bundle.ClientCert), bundle.CACert}},
+	})
+	_, resp := mw.GuardRequest(verified, &quicwire.Request{Opcode: quicwire.OpKMSDeleteKey})
 	assert.Nil(t, resp)
-	// ...but an unclassified operation is still refused.
-	_, resp = mw.GuardRequest(context.Background(), &quicwire.Request{Opcode: 0x90})
+	// ...but an unclassified operation is still refused...
+	_, resp = mw.GuardRequest(verified, &quicwire.Request{Opcode: 0x90})
 	require.NotNil(t, resp)
 	assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
+	// ...and a connection with no verified certificate is not authenticated.
+	_, resp = mw.GuardRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpKMSDeleteKey})
+	require.NotNil(t, resp)
+	assert.Equal(t, quicwire.StatusUnauthorized, resp.Status)
 }
 
 func TestSelectQUICAuth_MTLS_WithSharedValidator_ValidatesPresentedTokens(t *testing.T) {
@@ -196,7 +214,7 @@ func TestSelectQUICAuth_MTLS_WithSharedValidator_ValidatesPresentedTokens(t *tes
 	config := failClosedConfig()
 	config.EnableMTLS = true
 	shared := &platformTokenValidator{}
-	mw, _, err := selectQUICAuth(config, shared, logging.DefaultLogger())
+	mw, _, err := selectQUICAuth(config, shared, testutil.GenerateTestTLSBundle(t).CAPool, logging.DefaultLogger())
 	require.NoError(t, err)
 	require.NotNil(t, mw)
 
@@ -207,11 +225,76 @@ func TestSelectQUICAuth_MTLS_WithSharedValidator_ValidatesPresentedTokens(t *tes
 	assert.Equal(t, quicwire.StatusUnauthorized, resp.Status)
 }
 
+func TestSelectQUICAuth_MTLSWithoutClientCAPool_ReturnsTypedError(t *testing.T) {
+	t.Parallel()
+	config := failClosedConfig()
+	config.EnableMTLS = true
+
+	mw, validator, err := selectQUICAuth(config, nil, nil, logging.DefaultLogger())
+	require.Error(t, err)
+	var want ErrTransportAuthRequired
+	require.True(t, errors.As(err, &want), "error is %T, want ErrTransportAuthRequired", err)
+	assert.Equal(t, transportQUIC, want.Transport)
+	assert.Nil(t, mw)
+	assert.Nil(t, validator)
+}
+
+// --- mtlsPeerAuthenticator -----------------------------------------------------
+
+func newTestMTLSPeerAuthenticator(t *testing.T, roots *x509.CertPool) mtlsPeerAuthenticator {
+	t.Helper()
+	adapter, err := auth.NewMTLSAdapterFromRoots(logging.DefaultLogger(), roots)
+	require.NoError(t, err)
+	return mtlsPeerAuthenticator{authenticator: adapter}
+}
+
+func leafOf(t *testing.T, cert tls.Certificate) *x509.Certificate {
+	t.Helper()
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	require.NoError(t, err)
+	return leaf
+}
+
+func TestMTLSPeerAuthenticator_TrustedCertificate_IsTheOperator(t *testing.T) {
+	t.Parallel()
+	bundle := testutil.GenerateTestTLSBundle(t)
+	peer := newTestMTLSPeerAuthenticator(t, bundle.CAPool)
+
+	authCtx, err := peer.AuthenticatePeer(context.Background(), []*x509.Certificate{leafOf(t, bundle.ClientCert), bundle.CACert})
+	require.NoError(t, err)
+	assert.Equal(t, "test-client", authCtx.Subject)
+	assert.Equal(t, "test-client", authCtx.Username)
+	assert.Equal(t, "Test Platform Client", authCtx.TenantID)
+	assert.True(t, authCtx.HasScope("piv:sign"), "an operator certificate holds every scope, as on gRPC and REST")
+	assert.True(t, authCtx.HasScope("ceremony:init"))
+}
+
+func TestMTLSPeerAuthenticator_UntrustedCertificate_ReturnsError(t *testing.T) {
+	t.Parallel()
+	trusted := testutil.GenerateTestTLSBundle(t)
+	foreign := testutil.GenerateTestTLSBundle(t)
+	peer := newTestMTLSPeerAuthenticator(t, trusted.CAPool)
+
+	authCtx, err := peer.AuthenticatePeer(context.Background(), []*x509.Certificate{leafOf(t, foreign.ClientCert)})
+	require.Error(t, err)
+	assert.Nil(t, authCtx)
+}
+
+func TestMTLSPeerAuthenticator_EmptyChain_ReturnsTypedError(t *testing.T) {
+	t.Parallel()
+	peer := newTestMTLSPeerAuthenticator(t, testutil.GenerateTestTLSBundle(t).CAPool)
+
+	authCtx, err := peer.AuthenticatePeer(context.Background(), nil)
+	require.Error(t, err)
+	assert.True(t, errors.As(err, &quic.ErrMissingClientCertificate{}), "error is %T", err)
+	assert.Nil(t, authCtx)
+}
+
 func TestSelectQUICAuth_SkipIAMValidation_IsTheOnlyOptOut(t *testing.T) {
 	t.Parallel()
 	config := DefaultConfig()
 	config.SkipIAMValidation = true
-	mw, validator, err := selectQUICAuth(config, nil, logging.DefaultLogger())
+	mw, validator, err := selectQUICAuth(config, nil, nil, logging.DefaultLogger())
 	require.NoError(t, err)
 	require.NotNil(t, mw)
 	assert.Nil(t, validator)
@@ -297,6 +380,24 @@ func TestNew_GRPCTCPWithoutAuthBackend_RefusesToConstruct(t *testing.T) {
 	var want ErrTransportAuthRequired
 	require.True(t, errors.As(err, &want), "error is %T, want ErrTransportAuthRequired", err)
 	assert.Nil(t, d, "no daemon, and therefore no gRPC server, may exist without an auth backend")
+}
+
+func TestNew_QUICMTLSWithUnreadableCAFile_RefusesToConstruct(t *testing.T) {
+	t.Parallel()
+	config := testConfig(filepath.Join(t.TempDir(), "quic-ca.sock"))
+	config.EnableREST = false
+	config.EnableMCP = false
+	config.EnableQUIC = true
+	config.QUICListenAddr = "127.0.0.1:0"
+	config.EnableMTLS = true
+	config.MTLSClientCAFile = filepath.Join(t.TempDir(), "missing-ca.pem")
+
+	d, err := New(config)
+	require.Error(t, err)
+	var want ErrTLSConfigFailed
+	require.True(t, errors.As(err, &want), "error is %T, want ErrTLSConfigFailed", err)
+	assert.True(t, strings.HasPrefix(want.Reason, transportQUIC+":"), "reason %q names the QUIC transport", want.Reason)
+	assert.Nil(t, d, "no daemon, and therefore no QUIC listener, may exist without its client CA pool")
 }
 
 // TestNew_GRPCTCPWithJWTVerifier_RejectsAnonymousCalls proves the interceptor

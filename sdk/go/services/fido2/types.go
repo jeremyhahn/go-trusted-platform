@@ -17,8 +17,8 @@
 // Scope: device enumeration (CTAP2) and WebAuthn register / authenticate. LUKS
 // FIDO2 enrollment lives in the luks package.
 //
-// The Phase 3 implementation is a scaffolding-only SDK: all client methods
-// return ErrNotYetWired until server-side handlers land in Phase 3.5.
+// Requests and responses are transported through the platform SDK FIDO2 client;
+// authenticator operations are implemented by the composed security stack.
 package fido2
 
 // Role enumerates the ceremony roles a WebAuthn credential may be registered for.

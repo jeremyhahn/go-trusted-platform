@@ -310,16 +310,21 @@ func TestPhase35Provider_CeremonyDelegation(t *testing.T) {
 	p.SetPhase35Services(Phase35Services{Ceremony: NewCeremonyService(nil, cb)})
 	ctx := context.Background()
 
-	// Init: args pass through.
-	if _, err := p.CeremonyInit(ctx, map[string]interface{}{
+	// Init: args pass through and the admin bundle comes back.
+	initOut, err := p.CeremonyInit(ctx, map[string]interface{}{
 		"so_pin":                   "1234",
 		"user_pin":                 "5678",
 		"threshold":                "2-of-3",
 		"hostname":                 "cp01.lan",
 		"sans":                     []interface{}{"a.lan", "b.lan"},
 		"credential_seal_strategy": "tpm",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("CeremonyInit: %v", err)
+	}
+	initMap := initOut.(map[string]interface{})
+	if initMap["admin_cert_pem"] != "ADMIN-CERT" || initMap["admin_key_pem"] != "ADMIN-KEY" || initMap["spki_pin"] != "PIN" {
+		t.Errorf("CeremonyInit: admin bundle not returned: %+v", initMap)
 	}
 	if cb.lastInit == nil || cb.lastInit.SOPIN != "1234" || cb.lastInit.Threshold != "2-of-3" {
 		t.Errorf("CeremonyInit: bad request translation: %+v", cb.lastInit)

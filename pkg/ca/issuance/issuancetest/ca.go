@@ -24,6 +24,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net/url"
 	"testing"
 	"time"
 
@@ -31,8 +32,11 @@ import (
 )
 
 // CA certifies CSRs with a throwaway root, as the platform CA's SignCSR
-// does, and records the options it was asked to sign with.
+// does, and records the options it was asked to sign with. The embedded
+// interface is nil: CA is passed where the platform takes a CA, and only
+// SignCSR may be called.
 type CA struct {
+	quicbaasca.CACertificateAuthority
 	Key  *rsa.PrivateKey
 	Root *x509.Certificate
 	// Opts is the last SignCSR's options; nil until a CSR reaches the CA.
@@ -65,7 +69,9 @@ func NewCA(t testing.TB) *CA {
 	return &CA{Key: key, Root: root}
 }
 
-// SignCSR certifies the CSR's key under the CSR's subject.
+// SignCSR certifies the CSR's key under the CSR's subject. Like the platform
+// CA, it adds the tenant-scoped SPIFFE URI SAN when opts carry a SPIFFE
+// trust domain and a tenant.
 func (c *CA) SignCSR(_ context.Context, csrPEM []byte, opts *quicbaasca.SignOptions) (*x509.Certificate, error) {
 	c.Opts = opts
 	if c.Err != nil {
@@ -87,6 +93,9 @@ func (c *CA) SignCSR(_ context.Context, csrPEM []byte, opts *quicbaasca.SignOpti
 		KeyUsage:     opts.KeyUsage,
 		ExtKeyUsage:  opts.ExtKeyUsage,
 	}
+	if id := spiffeURI(opts, csr.Subject.CommonName); id != nil {
+		tmpl.URIs = []*url.URL{id}
+	}
 	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, c.Root, csr.PublicKey, c.Key)
 	if err != nil {
 		return nil, err
@@ -95,6 +104,27 @@ func (c *CA) SignCSR(_ context.Context, csrPEM []byte, opts *quicbaasca.SignOpti
 }
 
 // RSAKey returns a fresh RSA-2048 key, the size of a Pi fleet key.
+// spiffeURI is the SAN the platform CA synthesizes from opts:
+// spiffe://<trust-domain>/tenant/<tenant>/<kind>/<name>, the kind defaulting
+// to "user" and the name to the subject CN. Nil when opts ask for none.
+func spiffeURI(opts *quicbaasca.SignOptions, commonName string) *url.URL {
+	if opts.SPIFFETrustDomain == "" || opts.TenantID == "" {
+		return nil
+	}
+	kind, name := opts.SPIFFEKind, opts.SPIFFEName
+	if kind == "" {
+		kind = "user"
+	}
+	if name == "" {
+		name = commonName
+	}
+	return &url.URL{
+		Scheme: "spiffe",
+		Host:   opts.SPIFFETrustDomain,
+		Path:   "/tenant/" + opts.TenantID + "/" + kind + "/" + name,
+	}
+}
+
 func RSAKey(t testing.TB) *rsa.PrivateKey {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)

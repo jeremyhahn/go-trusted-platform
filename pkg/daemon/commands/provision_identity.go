@@ -15,31 +15,22 @@
 // entry point is provisionDaemonIdentity(). The server certificate's key is
 // generated in, and never leaves, the platform CA keystore (#33): the
 // listeners get a tls.Certificate whose PrivateKey is the keystore's
-// crypto.Signer. The admin bootstrap client certificate is issued behind
-// daemonCertIssuer so unit tests can drive the reuse / re-issue logic
-// without spinning up a full SDK transport.
+// crypto.Signer. The daemon mints no admin client certificate: the
+// one-shot /init bundle is the only admin credential.
 
 package commands
 
 import (
 	"context"
 	"crypto"
-	"crypto/ecdsa"
 	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"errors"
-	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
-	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
-	certclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/certificate"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasacme "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
@@ -71,146 +62,22 @@ type intermediateProvider interface {
 	TrustedIntermediate() (*x509.Certificate, error)
 }
 
-// daemonCertIssuer is the minimum surface of the quicbaas
-// CertificateService used to issue the admin bootstrap client certificate.
-// Tests substitute their own implementation; production wiring is provided
-// by sdkCertIssuer or localCACertIssuer.
-type daemonCertIssuer interface {
-	IssueCertificate(ctx context.Context, req *certclient.IssueCertificateRequest) (*certclient.IssueCertificateResponse, error)
-}
-
-// sdkCertIssuer adapts a quicbaassdk.Client into the daemonCertIssuer
-// surface. This keeps provisionDaemonIdentity decoupled from the wider
-// SDK interface (and from the SDK construction quirks of any specific
-// transport).
-type sdkCertIssuer struct {
-	client quicbaassdk.Client
-}
-
-// IssueCertificate delegates to Security().Certificate().IssueCertificate.
-func (i *sdkCertIssuer) IssueCertificate(ctx context.Context, req *certclient.IssueCertificateRequest) (*certclient.IssueCertificateResponse, error) {
-	return i.client.Security().Certificate().IssueCertificate(ctx, req)
-}
-
-// newSDKCertIssuer wraps a quicbaassdk.Client. Returns nil when the SDK
-// client is missing so callers can fall through to a typed error
-// (ErrProvisionMissingSDK).
-func newSDKCertIssuer(client quicbaassdk.Client) daemonCertIssuer {
-	if client == nil {
-		return nil
-	}
-	return &sdkCertIssuer{client: client}
-}
-
-// localCACertIssuer issues the admin bootstrap client certificate by
-// calling the platform's loaded CA directly, bypassing the QuicBaaS SDK /
-// embedded transport. The QuicBaaS embedded transport does not register a
-// Certificate service, so the SDK-based issuer returns
-// "UNAVAILABLE: embedded: service not configured: Certificate" at
-// startup. The platform CA is already loaded in App.CA at the moment
-// applyDaemonTLSIdentity runs, so we use it directly.
-type localCACertIssuer struct {
-	ca quicbaasca.CACertificateAuthority
-}
-
-// IssueCertificate generates a fresh ECDSA P-256 key locally, builds a
-// CSR, and asks the platform CA to sign it. The admin bootstrap bundle is
-// handed to the operator as a file, so its key must exist as PEM; this is
-// the one daemon key that leaves a keystore. Returns the certificate and
-// the freshly-minted PEM-encoded EC private key.
-func (i *localCACertIssuer) IssueCertificate(ctx context.Context, req *certclient.IssueCertificateRequest) (*certclient.IssueCertificateResponse, error) {
-	if req == nil {
-		return nil, ErrProvisionMissingCA{}
-	}
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, ErrProvisionIssue{Role: req.Usage, Cause: err}
-	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		return nil, ErrProvisionIssue{Role: req.Usage, Cause: err}
-	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-
-	// Build a CSR carrying the requested subject, DNS SANs, and IP SANs.
-	ips := make([]net.IP, 0, len(req.IPAddresses))
-	for _, s := range req.IPAddresses {
-		if ip := net.ParseIP(s); ip != nil {
-			ips = append(ips, ip)
-		}
-	}
-	csrTpl := &x509.CertificateRequest{
-		Subject: pkix.Name{
-			CommonName:   req.CommonName,
-			Organization: []string{req.Organization},
-		},
-		DNSNames:    req.DNSNames,
-		IPAddresses: ips,
-	}
-	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTpl, priv)
-	if err != nil {
-		return nil, ErrProvisionIssue{Role: req.Usage, Cause: err}
-	}
-	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
-
-	usage := strings.ToLower(strings.TrimSpace(req.Usage))
-	signOpts := &quicbaasca.SignOptions{
-		ValidityDays: int(req.ValidityDays),
-	}
-	switch usage {
-	case "client":
-		signOpts.KeyUsage = x509.KeyUsageDigitalSignature
-		signOpts.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
-	default: // "server"
-		signOpts.KeyUsage = x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment
-		signOpts.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
-	}
-
-	cert, err := i.ca.SignCSR(ctx, csrPEM, signOpts)
-	if err != nil {
-		return nil, ErrProvisionIssue{Role: req.Usage, Cause: err}
-	}
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
-	serial := ""
-	if cert.SerialNumber != nil {
-		serial = cert.SerialNumber.String()
-	}
-	return &certclient.IssueCertificateResponse{
-		CertificatePEM: string(certPEM),
-		PrivateKeyPEM:  string(keyPEM),
-		SerialNumber:   serial,
-		NotBefore:      cert.NotBefore,
-		NotAfter:       cert.NotAfter,
-	}, nil
-}
-
-// newLocalCACertIssuer returns an issuer that delegates to the platform
-// CA directly. Returns nil when the CA is missing so the caller can
-// surface ErrProvisionMissingCA.
-func newLocalCACertIssuer(ca quicbaasca.CACertificateAuthority) daemonCertIssuer {
-	if ca == nil {
-		return nil
-	}
-	return &localCACertIssuer{ca: ca}
-}
-
 // provisionDaemonIdentity returns the daemon's TLS material:
 //   - the server certificate, held in the CA keystore under daemonServerCN.
 //     A current certificate is reused; a stale one is superseded (its key
 //     deleted) and re-issued. The key is never encoded or written.
-//   - <dir>/client-bundle.pem, the admin bootstrap cert + key (mode 0600),
-//     reused while current (§8 #7).
 //   - <dir>/ca-bundle.crt, the public CA trust bundle (mode 0644).
 //
-// The server identity is provisioned first, so a keystore failure writes
-// nothing. The daemon caller wires ServerCert into config.TLSCertificate /
+// It issues no admin client certificate: the one-shot /init bundle is the
+// only admin credential (docs/bootstrap/cli.md §1a). The server identity is
+// provisioned first, so a keystore failure writes nothing. The daemon caller
+// wires ServerCert into config.TLSCertificate /
 // QUICConfig.TLSConfig.Certificates and AdminTrustPool into
 // config.MTLSClientCAPool.
 func provisionDaemonIdentity(
 	ctx context.Context,
 	logger *logging.Logger,
 	ca daemonIdentityCA,
-	issuer daemonCertIssuer,
 	outputDir string,
 	sans daemonSANs,
 ) (*ProvisionedIdentity, error) {
@@ -231,11 +98,6 @@ func provisionDaemonIdentity(
 		return nil, err
 	}
 
-	adminBundlePath := filepath.Join(outputDir, "client-bundle.pem")
-	if err := provisionAdminBundle(ctx, logger, issuer, adminBundlePath, trustPool); err != nil {
-		return nil, err
-	}
-
 	caBundlePath := filepath.Join(outputDir, "ca-bundle.crt")
 	caPEM, err := ca.CABundle()
 	if err != nil {
@@ -246,11 +108,10 @@ func provisionDaemonIdentity(
 	}
 
 	return &ProvisionedIdentity{
-		ServerCert:      serverCert,
-		AdminTrustPool:  trustPool,
-		AdminBundlePath: adminBundlePath,
-		CABundlePath:    caBundlePath,
-		Reused:          reused,
+		ServerCert:     serverCert,
+		AdminTrustPool: trustPool,
+		CABundlePath:   caBundlePath,
+		Reused:         reused,
 	}, nil
 }
 
@@ -432,69 +293,4 @@ func appendTrustedIntermediate(ca intermediateProvider, cert tls.Certificate) tl
 	}
 	cert.Certificate = append(cert.Certificate, inter.Raw)
 	return cert
-}
-
-// provisionAdminBundle keeps a current admin bootstrap bundle at path,
-// issuing and writing a fresh one only when the existing bundle is
-// missing, expiring or no longer chains to trustPool.
-func provisionAdminBundle(
-	ctx context.Context,
-	logger *logging.Logger,
-	issuer daemonCertIssuer,
-	path string,
-	trustPool *x509.CertPool,
-) error {
-
-	if adminBundleCurrent(logger, path, trustPool) {
-		return nil
-	}
-	if issuer == nil {
-		return ErrProvisionMissingSDK{}
-	}
-
-	resp, err := issuer.IssueCertificate(ctx, &certclient.IssueCertificateRequest{
-		CommonName:   "admin",
-		Organization: "Trusted Platform",
-		Usage:        "client",
-		KeyAlgorithm: "ecdsa",
-		ValidityDays: 365,
-	})
-	if err != nil {
-		return ErrProvisionIssue{Role: "admin", Cause: err}
-	}
-	if err := writeBundle(path, resp.CertificatePEM, resp.PrivateKeyPEM, 0600); err != nil {
-		return ErrProvisionPersist{Path: path, Cause: err}
-	}
-
-	logger.Info("provisionDaemonIdentity: issued admin bootstrap bundle",
-		"path", path,
-		"serial", resp.SerialNumber,
-		"not_after", resp.NotAfter.Format(time.RFC3339))
-	return nil
-}
-
-// adminBundleCurrent reports whether the admin bootstrap bundle at path
-// can be reused: present, parseable, outside the renewal window, and
-// chaining to the CA trust pool.
-func adminBundleCurrent(logger *logging.Logger, path string, trustPool *x509.CertPool) bool {
-	adminCert, err := tlsCertificateFromFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			logger.Debug("provisionDaemonIdentity: admin bundle invalid, will reissue",
-				"path", path, "error", err.Error())
-		}
-		return false
-	}
-	if !certWithinRenewalWindow(adminCert.Leaf, renewalThreshold) {
-		logger.Debug("provisionDaemonIdentity: admin bundle expired or near-expiry, will reissue",
-			"path", path,
-			"not_after", adminCert.Leaf.NotAfter.Format(time.RFC3339))
-		return false
-	}
-	if err := verifyChain(adminCert.Leaf, trustPool); err != nil {
-		logger.Debug("provisionDaemonIdentity: admin bundle chain invalid, will reissue",
-			"path", path, "error", err.Error())
-		return false
-	}
-	return true
 }

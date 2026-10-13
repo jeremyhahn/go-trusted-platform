@@ -46,6 +46,8 @@ var canonicalInitFlagNames = []string{
 	"hostname",
 	"sans",
 	"admin-bundle",
+	"gate-endpoint",
+	"loopback-http",
 }
 
 // TestCanonicalSurface_RootHasInit verifies the platformctl root

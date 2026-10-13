@@ -23,12 +23,13 @@ does not repeat them.
 is deliberate for half of it and a gap for the other half.** Read §5 before
 concluding anything is missing by accident.
 
-Two surfaces in this feature are **not** among the six, and a client that needs
-them cannot reach them through the SDK:
+Three surfaces in this feature are **not** among the six. Only the pre-unseal
+mux has an SDK client — `sdk/go/services/gate`, a separate package because it
+speaks plain HTTP to a local endpoint rather than any of the six transports:
 
 | Out-of-band surface | Where | Why it exists |
 |---|---|---|
-| The pre-unseal HTTP mux — `/healthz`, `/init`, `/unseal` | `pkg/api/rest/init_handlers.go`, bound on a bare `http.ServeMux` with no `/api/v1` prefix | It has to answer *before* the barrier is unsealed, when no other transport is bound |
+| The pre-unseal HTTP mux — `/healthz`, `/init`, `/unseal` | `pkg/api/rest/init_handlers.go`, bound on a bare `http.ServeMux` with no `/api/v1` prefix, on the Unix socket and `127.0.0.1:9446` only | It has to answer *before* the barrier is unsealed, when no other transport is bound ([`docs/daemon/api.md`](../daemon/api.md) §1) |
 | The Noise_NK bundle listener | `pkg/api/noise`, default `:9999` | It has to work when TLS cannot be verified at all |
 | The bootstrap container's HTTP server — `/installs/…`, `/config/mac/…`, `/boot.ipxe`, `/health` | `pkg/ipxe/http_server.go`, `:8080` on the deployer host | It serves machines that have no identity yet; see [`docs/ipxe/architecture.md`](../ipxe/architecture.md) |
 
@@ -128,11 +129,12 @@ What bootstrap adds on top is the officer ceremony:
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Ceremony status, claim-cert, claim-share | `MISSING — docs/13 G7` | `CeremonyService` | `OpCeremonyCategory` (`0x9A`) | `MISSING — docs/13 G7` | `Manager.CeremonyInitialize`, `.CeremonyStatus`, `.BeginClaimCert`, `.CompleteClaimCert`, `.BeginClaimShare`, `.CompleteClaimShare` |
+| Ceremony status, claim-cert, claim-share | `MISSING — docs/13 G7` | `CeremonyService` | `OpCeremonyCategory` (`0x9A`) | `platform_ceremony_*` ([`docs/cli/ceremony.md`](../cli/ceremony.md)) | `ServiceRegistry.Ceremony`; `Manager.CeremonyInitialize`, `.CeremonyStatus`, `.BeginClaimCert`, `.CompleteClaimCert`, `.BeginClaimShare`, `.CompleteClaimShare` |
 
 **`OpTenantBarrierCategory` (`0x9E`) and the `platform_tenant_barrier_*` MCP
 tools are a different capability**: they operate on per-tenant barriers, not on
-the platform barrier that gates daemon start-up.
+the platform barrier that gates daemon start-up. Do not reach for them expecting
+to unseal the platform.
 
 ---
 

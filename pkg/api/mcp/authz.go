@@ -172,6 +172,37 @@ func toolPermissionCatalog() map[string]string {
 	permissions["ntp_sources"] = "ntp:read"
 	permissions["ntp_step"] = "ntp:write"
 
+	// PIV tools. Generate, Import, Sign and Reset change key material or use a
+	// private key, so they require piv:write; the rest are reads.
+	permissions["platform_piv_list_devices"] = "piv:read"
+	permissions["platform_piv_list_slots"] = "piv:read"
+	permissions["platform_piv_slot_info"] = "piv:read"
+	permissions["platform_piv_attest"] = "piv:read"
+	permissions["platform_piv_generate"] = "piv:write"
+	permissions["platform_piv_import"] = "piv:write"
+	permissions["platform_piv_sign"] = "piv:write"
+	permissions["platform_piv_reset"] = "piv:write"
+
+	// FIDO2 tools. Register and Authenticate drive a user-presence ceremony on
+	// the token; enumeration is a read.
+	permissions["platform_fido2_list_devices"] = "fido2:read"
+	permissions["platform_fido2_wait_device"] = "fido2:read"
+	permissions["platform_fido2_info"] = "fido2:read"
+	permissions["platform_fido2_register"] = "fido2:write"
+	permissions["platform_fido2_authenticate"] = "fido2:write"
+
+	// Ceremony tools. Init and Status are scoped, not pre-auth: first boot has
+	// no token to present, so it runs over the Unix socket (not token-gated) or
+	// the pre-auth REST /init route. Over MCP an unauthenticated Init would let
+	// a remote caller seize an uninitialized platform.
+	permissions["platform_ceremony_status"] = "ceremony:read"
+	permissions["platform_ceremony_init"] = "ceremony:write"
+	permissions["platform_ceremony_claim_cert_begin"] = "ceremony:write"
+	permissions["platform_ceremony_claim_cert_complete"] = "ceremony:write"
+	permissions["platform_ceremony_claim_share_begin"] = "ceremony:write"
+	permissions["platform_ceremony_claim_share_complete"] = "ceremony:write"
+	permissions["platform_ceremony_sign_csr"] = "ceremony:write"
+
 	// CA: signing a CSR certifies a KMS key for code signing, which is what
 	// the boot chain of every netbooted device trusts. It needs its own
 	// admin-level scope; ca:write, which issues ordinary certificates, does

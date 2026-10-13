@@ -168,6 +168,23 @@ finds no manager, treats the platform as ready and releases at once.
   wins.
 - The state checks are the guard. `/init` is refused unless the state is
   `uninitialized`; `/unseal` is refused unless it is `sealed` or `unsealing`.
+  The one exception is an identical `/init` retry from the uid that was issued
+  the admin bundle, on the Unix socket (`SO_PEERCRED`): it receives the same
+  bundle, and re-attempts a barrier initialize that failed.
+- Every `/init` attempt is rate limited per socket peer uid, with loopback HTTP
+  sharing one budget, so PIN guessing cannot run at line rate.
+- A `shamir` init is refused unless the SDK seals the barrier with its Shamir
+  strategy, so the quorum is never silently reduced to one operator.
+- A `shamir` init names its Security Officers, one per share, each with a CSR.
+  The gate checks the set before the ceremony runs, then enrolls each officer
+  with the barrier's own share ceremony (`OfficerRegister`), which is separate
+  from the bootstrap ceremony's officer list. The split refuses an officer
+  registry whose size differs from the share count. Enrollment signs the CSR
+  with the ceremony CA the embedded SDK was started with, so the platform CA
+  must be loaded before the embedded server starts; if it is not, enrollment
+  fails and `/init` returns 500 without splitting.
+
+See [api.md §2](api.md#post-init) for the contract.
 
 ## Platform `BarrierService`
 
@@ -182,7 +199,8 @@ seal and rekey on a running node. It has no REST, QUIC or MCP binding; see
 - **It does not implement barrier crypto.** No strategy, no Shamir, no PIN
   check runs in this repository.
 - **It does not run the officer ceremony.** `barrier.Manager` forwards the
-  ceremony calls; the ceremony itself is upstream. The ceremony's own surface
+  ceremony calls, officer enrollment (`RegisterOfficer`, `Officers`) included;
+  the ceremony itself is upstream. The ceremony's own surface
   is documented with first boot in [`docs/bootstrap/`](../bootstrap/).
 - **It does not auto-unseal.** `platformd` never unseals the barrier itself; a
   sealed barrier waits for an operator — see [engineering.md §3](engineering.md#3-configuration).

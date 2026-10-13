@@ -20,6 +20,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -28,6 +29,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 )
 
 // =============================================================================
@@ -335,6 +337,83 @@ func TestErrInitOnlyListenerFailed_Error(t *testing.T) {
 	}
 }
 
+// peerInit records the Unix peer credentials each /init call carried.
+type peerInit struct {
+	creds chan peercred.UnixCredentials
+}
+
+func (s *peerInit) Initialize(ctx context.Context, _ *rest.BarrierInitRequest) (*rest.BarrierInitResponse, error) {
+	creds, ok := peercred.UnixCredentialsFromContext(ctx)
+	if !ok {
+		creds = peercred.UnixCredentials{PID: -1}
+	}
+	s.creds <- creds
+	return &rest.BarrierInitResponse{}, nil
+}
+
+func unixPost(t *testing.T, socket, path, body string) int {
+	t.Helper()
+	client := &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", socket)
+		},
+	}}
+	resp, err := client.Post("http://platformd"+path, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST unix %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
+
+// TestInitOnlyServer_UnixPeerCredentialsReachService: the init service sees
+// the kernel-verified uid of a Unix-socket caller, and no credentials at all
+// for a loopback HTTP caller.
+func TestInitOnlyServer_UnixPeerCredentialsReachService(t *testing.T) {
+	init := &peerInit{creds: make(chan peercred.UnixCredentials, 2)}
+	socket := filepath.Join(t.TempDir(), "platformd.sock")
+	srv := startInitOnly(t, InitOnlyConfig{
+		SocketPath: socket,
+		State:      newFakeStateProvider(rest.PlatformStateUninitialized),
+		Init:       init,
+	})
+
+	if code := unixPost(t, socket, "/init", "{}"); code != http.StatusOK {
+		t.Fatalf("unix /init: expected 200, got %d", code)
+	}
+	if got := <-init.creds; got.PID <= 0 || got.UID != uint32(os.Getuid()) {
+		t.Errorf("unix caller credentials: got %+v, want uid %d", got, os.Getuid())
+	}
+
+	if code, _ := httpPost(t, "http://"+srv.HTTPListenAddr()+"/init", "{}"); code != http.StatusOK {
+		t.Fatalf("http /init: expected 200, got %d", code)
+	}
+	if got := <-init.creds; got.PID != -1 {
+		t.Errorf("loopback HTTP caller must carry no peer credentials, got %+v", got)
+	}
+}
+
+func TestInitOnlyServer_RateLimitsInit(t *testing.T) {
+	init := &fakeInit{resp: &rest.BarrierInitResponse{}}
+	srv := startInitOnly(t, InitOnlyConfig{
+		SocketPath:       filepath.Join(t.TempDir(), "platformd.sock"),
+		State:            newFakeStateProvider(rest.PlatformStateUninitialized),
+		Init:             init,
+		InitAttemptBurst: 1,
+	})
+	url := "http://" + srv.HTTPListenAddr() + "/init"
+	if code, _ := httpPost(t, url, "{}"); code != http.StatusOK {
+		t.Fatalf("first /init: expected 200, got %d", code)
+	}
+	if code, _ := httpPost(t, url, "{}"); code != http.StatusTooManyRequests {
+		t.Fatalf("second /init: expected 429, got %d", code)
+	}
+	if init.called.Load() != 1 {
+		t.Errorf("rate-limited /init reached the service: called=%d", init.called.Load())
+	}
+}
+
 func TestInitOnlyConfig_Defaults(t *testing.T) {
 	srv, err := NewInitOnlyServer(InitOnlyConfig{
 		State:  newFakeStateProvider(rest.PlatformStateUninitialized),
@@ -354,6 +433,9 @@ func TestInitOnlyConfig_Defaults(t *testing.T) {
 	}
 	if srv.cfg.ShutdownTimeout <= 0 {
 		t.Error("ShutdownTimeout default must be positive")
+	}
+	if srv.cfg.InitAttemptBurst <= 0 || srv.cfg.InitAttemptInterval <= 0 {
+		t.Error("/init must be rate limited by default")
 	}
 }
 

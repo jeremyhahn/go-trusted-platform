@@ -102,8 +102,11 @@ func (h *ceremonyRESTHandlers) init(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	payload := map[string]interface{}{
-		"ceremony_id": out.CeremonyID,
-		"state":       string(out.State),
+		"ceremony_id":    out.CeremonyID,
+		"state":          string(out.State),
+		"admin_cert_pem": out.AdminCertPEM,
+		"admin_key_pem":  out.AdminKeyPEM,
+		"spki_pin":       out.SPKIPin,
 	}
 	if !out.InitializedAt.IsZero() {
 		payload["initialized_at"] = out.InitializedAt

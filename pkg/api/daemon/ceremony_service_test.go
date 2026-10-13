@@ -42,7 +42,10 @@ func (f *fakeCeremonyBackend) Initialize(ctx context.Context, req *CeremonyInitR
 	if f.initFn != nil {
 		return f.initFn(ctx, req)
 	}
-	return &CeremonyInitResult{CeremonyID: "cid", State: CeremonyStateInProgress, InitializedAt: time.Unix(1000, 0)}, nil
+	return &CeremonyInitResult{
+		CeremonyID: "cid", State: CeremonyStateInProgress, InitializedAt: time.Unix(1000, 0),
+		AdminCertPEM: "ADMIN-CERT", AdminKeyPEM: "ADMIN-KEY", SPKIPin: "PIN",
+	}, nil
 }
 
 func (f *fakeCeremonyBackend) Status(ctx context.Context) (*CeremonyStatusInfo, error) {

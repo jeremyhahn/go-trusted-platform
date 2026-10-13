@@ -379,38 +379,23 @@ func route(method string, args interface{}) (httpMethod, path string, body inter
 		if err != nil {
 			return "", "", nil, err
 		}
-		body, err = encodeRequestBody(method, body)
-		if err != nil {
+		if body, err = encodeInvokeBody(method, body); err != nil {
 			return "", "", nil, err
 		}
 		return entry.method, path, body, nil
 	}
 	path, httpMethod = mapGRPCMethodToREST(method)
-	body, err = encodeRequestBody(method, args)
-	if err != nil {
+	if body, err = encodeInvokeBody(method, args); err != nil {
 		return "", "", nil, err
 	}
 	return httpMethod, path, body, nil
 }
 
-// restRequestEncoder rewrites a request body into the JSON shape the
-// server handler decodes, for methods whose handler does not accept the pb
-// request message as is.
-type restRequestEncoder func(body interface{}) (interface{}, error)
-
-// restRequestEncoders routes gRPC methods whose REST request bodies need
-// custom encoding. Methods absent from this map send the body unchanged.
-var restRequestEncoders = map[string]restRequestEncoder{}
-
-// encodeRequestBody applies the method's request encoder, if any. An encoder
-// failure is the caller's request, so it surfaces as InvalidArgument and
-// nothing is sent.
-func encodeRequestBody(method string, body interface{}) (interface{}, error) {
-	encode, ok := restRequestEncoders[method]
-	if !ok {
-		return body, nil
-	}
-	encoded, err := encode(body)
+// encodeInvokeBody applies the method's request encoder, if any, and reports a
+// body the encoder refuses (an enum outside the wire set) as InvalidArgument
+// before anything is sent.
+func encodeInvokeBody(method string, body interface{}) (interface{}, error) {
+	encoded, err := encodeRequestBody(method, body)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -1292,9 +1277,9 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.EABService/CleanupExpiredCredentials": {"/api/v1/eab/credentials/cleanup", http.MethodPost},
 
 	// FIDO2 Service — proto: pkg/api/grpc/proto/fido2.proto
+	// WaitDevice and Info name the device or the timeout in the URL and live in
+	// templatedRouteTable (phase35.go).
 	"/platform.v1.FIDO2Service/ListDevices":  {"/api/v1/fido2/devices", http.MethodGet},
-	"/platform.v1.FIDO2Service/WaitDevice":   {"/api/v1/fido2/devices/wait", http.MethodPost},
-	"/platform.v1.FIDO2Service/Info":         {"/api/v1/fido2/info", http.MethodGet},
 	"/platform.v1.FIDO2Service/Register":     {"/api/v1/fido2/register", http.MethodPost},
 	"/platform.v1.FIDO2Service/Authenticate": {"/api/v1/fido2/authenticate", http.MethodPost},
 
@@ -1375,14 +1360,9 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.OverlayService/GetOverlayStatus": {"/api/v1/overlay/status", http.MethodGet},
 
 	// PIV Service — proto: pkg/api/grpc/proto/piv.proto
+	// Every other PIV method names a slot or a device in the URL and lives in
+	// templatedRouteTable (phase35.go).
 	"/platform.v1.PIVService/ListDevices": {"/api/v1/piv/devices", http.MethodGet},
-	"/platform.v1.PIVService/ListSlots":   {"/api/v1/piv/slots", http.MethodGet},
-	"/platform.v1.PIVService/SlotInfo":    {"/api/v1/piv/slots/info", http.MethodGet},
-	"/platform.v1.PIVService/Generate":    {"/api/v1/piv/generate", http.MethodPost},
-	"/platform.v1.PIVService/Import":      {"/api/v1/piv/import", http.MethodPost},
-	"/platform.v1.PIVService/Sign":        {"/api/v1/piv/sign", http.MethodPost},
-	"/platform.v1.PIVService/Attest":      {"/api/v1/piv/attest", http.MethodPost},
-	"/platform.v1.PIVService/Reset":       {"/api/v1/piv/reset", http.MethodPost},
 
 	// Config Delivery (provisioning) — proto: pkg/api/grpc/proto/configdelivery.proto
 	// Server registrations live in pkg/api/daemon/rest_service.go::SetConfigDeliveryHandler.

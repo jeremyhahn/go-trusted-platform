@@ -19,8 +19,6 @@ import (
 	"os"
 
 	daemonpkg "github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
-	mcpapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
-	fido2sdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/fido2"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
@@ -57,14 +55,12 @@ func GetServiceEndpoints() *ServiceEndpoints {
 }
 
 // isBackendUnavailable reports whether err is a declared gap: a typed
-// not-implemented declaration or the daemon's FIDO2 not-configured sentinel.
-// Any other error, a missing authenticator included, fails the test (#487).
+// not-implemented declaration or the daemon's typed ErrFIDO2NotConfigured,
+// which every transport carries to the client. Any other error, a missing
+// authenticator included, fails the test (#487).
 func isBackendUnavailable(err error) bool {
-	return surface.IsNotImplemented(err) || surface.IsDeclaredRefusal(err,
-		daemonpkg.ErrFIDO2NotConfigured,
-		fido2sdk.ErrNotYetWired,
-		mcpapi.ErrPhase35NotConfigured,
-	)
+	return surface.IsNotImplemented(err) ||
+		surface.IsDeclaredRefusal(err, daemonpkg.ErrFIDO2NotConfigured)
 }
 
 // SkipIfNotIntegration skips when INTEGRATION_TEST is not set.

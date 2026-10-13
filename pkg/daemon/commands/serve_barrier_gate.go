@@ -21,6 +21,15 @@ package commands
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"crypto/x509"
+	"encoding/binary"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"strconv"
+	"sync"
 	"time"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
@@ -31,6 +40,8 @@ import (
 	appbackends "github.com/jeremyhahn/go-trusted-platform/pkg/app/backends"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/barrier"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/memguard"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 )
 
 // =============================================================================
@@ -78,13 +89,23 @@ func (e ErrBarrierInitFailed) Unwrap() error {
 // Barrier seam
 // =============================================================================
 
-// gateBarrier is the part of *barrier.Manager the gate services drive.
-type gateBarrier interface {
+// barrierLifecycle is the part of *barrier.Manager POST /init drives.
+type barrierLifecycle interface {
+	IsInitialized() bool
 	Initialize(ctx context.Context, secret string) error
+	InitializeShamir(ctx context.Context, secret string, threshold, shares int) (*quicbaassdk.QRDBBarrierInitializeShamirResponse, error)
+	RegisterOfficer(ctx context.Context, username string, csrPEM []byte) error
+	Officers(ctx context.Context) ([]string, error)
+	Status(ctx context.Context) (*quicbaassdk.QRDBBarrierStatusResponse, error)
 	SyncStatus(ctx context.Context) error
+}
+
+// gateBarrier is the part of *barrier.Manager the gate services drive: the
+// /init lifecycle, the /unseal operations and the state flags.
+type gateBarrier interface {
+	barrierLifecycle
 	Unseal(ctx context.Context, secret string) error
 	UnsealWithShare(ctx context.Context, share string) (*quicbaassdk.QRDBBarrierUnsealShareResponse, error)
-	IsInitialized() bool
 	IsSealed() bool
 	IsUnsealing() bool
 }
@@ -103,6 +124,126 @@ func gateBarrierOf(a *app.App) gateBarrier {
 		return nil
 	}
 	return mgr
+}
+
+// ErrBarrierStrategyUnsupported is returned when barrier.seal_strategy names
+// a strategy /init cannot initialize the platform barrier with. "none" is
+// one: the SDK's system-barrier initialize seals with the node's registered
+// strategies and cannot select an unencrypted barrier.
+type ErrBarrierStrategyUnsupported struct {
+	Strategy string
+}
+
+// Error returns a human-readable description of the error.
+func (e *ErrBarrierStrategyUnsupported) Error() string {
+	return fmt.Sprintf("barrier strategy %q cannot initialize the platform barrier", e.Strategy)
+}
+
+// ErrBarrierInitMissingSecret is returned when /init carries no user PIN,
+// which every barrier strategy uses as the barrier secret.
+type ErrBarrierInitMissingSecret struct {
+	Strategy string
+}
+
+// Error returns a human-readable description of the error.
+func (e *ErrBarrierInitMissingSecret) Error() string {
+	return fmt.Sprintf("barrier strategy %q requires the user PIN as the barrier secret", e.Strategy)
+}
+
+// Unwrap reports the missing secret as the missing user_pin request field.
+func (e *ErrBarrierInitMissingSecret) Unwrap() error {
+	return rest.ErrMissingRequiredField{Field: "user_pin"}
+}
+
+// ErrBarrierShamirQuorum is returned when a shamir /init does not carry a
+// quorum with 2 <= threshold <= shares.
+type ErrBarrierShamirQuorum struct {
+	Threshold int
+	Shares    int
+}
+
+// Error returns a human-readable description of the error.
+func (e *ErrBarrierShamirQuorum) Error() string {
+	return fmt.Sprintf("shamir barrier requires 2 <= threshold <= shares, got threshold %d of %d shares", e.Threshold, e.Shares)
+}
+
+// ErrBarrierInitOfficers is returned when an M-of-N /init does not name one
+// Security Officer per share, or names officers without a quorum. The
+// ceremony seals each share to an enrolled officer, so a share without an
+// officer could never be claimed.
+type ErrBarrierInitOfficers struct {
+	Officers int
+	Shares   int
+}
+
+// Error returns a human-readable description of the error.
+func (e *ErrBarrierInitOfficers) Error() string {
+	return fmt.Sprintf("an M-of-N init needs one officer per share, got %d officers for %d shares", e.Officers, e.Shares)
+}
+
+// ErrBarrierInitOfficerInvalid is returned when an /init officer cannot be
+// enrolled. Index is the officer's position in the request, Reason names the
+// defect and Err carries the CSR parse failure, if that was the defect.
+type ErrBarrierInitOfficerInvalid struct {
+	Index    int
+	Username string
+	Reason   string
+	Err      error
+}
+
+// Error returns a human-readable description of the error.
+func (e *ErrBarrierInitOfficerInvalid) Error() string {
+	msg := fmt.Sprintf("officer %d %q cannot be enrolled: %s", e.Index, e.Username, e.Reason)
+	if e.Err != nil {
+		msg += ": " + e.Err.Error()
+	}
+	return msg
+}
+
+// Unwrap returns the CSR parse failure, if any.
+func (e *ErrBarrierInitOfficerInvalid) Unwrap() error { return e.Err }
+
+// ErrBarrierInitOfficerCSRNotPEM is the CSR defect of an /init officer whose
+// csr_pem holds no PEM block.
+type ErrBarrierInitOfficerCSRNotPEM struct{}
+
+// Error returns a human-readable description of the error.
+func (e *ErrBarrierInitOfficerCSRNotPEM) Error() string {
+	return "csr_pem holds no PEM block"
+}
+
+// ErrBarrierShamirUnenforceable is returned when /init asks for a shamir
+// barrier but the platform barrier is not sealed by a Shamir strategy. Without
+// one, the SDK's InitializeShamir falls back to credential mode: it initializes
+// a single-key barrier with the user PIN and distributes shares of that PIN,
+// so the initiating operator could still unseal alone. Registered is the
+// strategy the barrier reports, empty when the daemon has no barrier manager.
+type ErrBarrierShamirUnenforceable struct {
+	Registered string
+}
+
+// Error returns a human-readable description of the error.
+func (e *ErrBarrierShamirUnenforceable) Error() string {
+	if e.Registered == "" {
+		return "shamir barrier requested but the daemon has no barrier that can enforce the quorum"
+	}
+	return fmt.Sprintf("shamir barrier requested but the platform barrier seals with %q, which cannot enforce the quorum", e.Registered)
+}
+
+// ErrBarrierStatusUnavailable is returned when /init cannot read the platform
+// barrier's seal strategy, so a shamir request cannot be verified.
+type ErrBarrierStatusUnavailable struct {
+	Err error
+}
+
+// Error returns a human-readable description of the error.
+func (e *ErrBarrierStatusUnavailable) Error() string {
+	return "barrier status unavailable: " + e.Err.Error()
+}
+
+// Unwrap returns the status read failure.
+func (e *ErrBarrierStatusUnavailable) Unwrap() error {
+	return e.Err
 }
 
 // =============================================================================
@@ -143,20 +284,190 @@ func (p *barrierStateProvider) State(_ context.Context) rest.PlatformState {
 // Init service (POST /init)
 // =============================================================================
 
+// barrierInitFunc initializes the platform barrier for one strategy.
+type barrierInitFunc func(ctx context.Context, mgr barrierLifecycle, req *rest.BarrierInitRequest) error
+
+// barrierInitStrategies maps each strategy /init accepts to the barrier
+// lifecycle operation that honours it. Shamir splits the barrier key M-of-N;
+// every other strategy initializes it with the user PIN, and the node seals
+// it with its registered strategy (TPM, PKCS#11, cloud KMS or software).
+var barrierInitStrategies = map[string]barrierInitFunc{
+	barrier.SealStrategyShamir:     initShamirBarrier,
+	barrier.SealStrategySoftware:   initSingleKeyBarrier,
+	barrier.SealStrategyPassphrase: initSingleKeyBarrier,
+	barrier.SealStrategyTPM2:       initSingleKeyBarrier,
+	barrier.SealStrategyPKCS11:     initSingleKeyBarrier,
+	"awskms":                       initSingleKeyBarrier,
+	"gcpkms":                       initSingleKeyBarrier,
+	"azurekv":                      initSingleKeyBarrier,
+	"vault":                        initSingleKeyBarrier,
+}
+
+// initSingleKeyBarrier initializes the barrier with the user PIN.
+func initSingleKeyBarrier(ctx context.Context, mgr barrierLifecycle, req *rest.BarrierInitRequest) error {
+	return mgr.Initialize(ctx, req.UserPIN)
+}
+
+// initShamirBarrier initializes the barrier with Shamir secret sharing. The
+// shares go to enrolled Security Officers, who claim them through the
+// share-claim flow; none comes back here.
+func initShamirBarrier(ctx context.Context, mgr barrierLifecycle, req *rest.BarrierInitRequest) error {
+	if err := enrollBarrierOfficers(ctx, mgr, req.Officers); err != nil {
+		return err
+	}
+	_, err := mgr.InitializeShamir(ctx, req.UserPIN, req.Threshold, req.Shares)
+	return err
+}
+
+// enrollBarrierOfficers registers every /init officer with the barrier's
+// share ceremony through the SDK; InitializeShamir seals one share to each
+// enrolled officer and refuses a set smaller than the share count. Officers an
+// earlier, failed attempt already enrolled are skipped, so an identical retry
+// completes the set instead of failing on a duplicate username.
+func enrollBarrierOfficers(ctx context.Context, mgr barrierLifecycle, officers []rest.BarrierInitOfficer) error {
+	enrolled, err := mgr.Officers(ctx)
+	if err != nil {
+		return err
+	}
+	known := make(map[string]struct{}, len(enrolled))
+	for _, username := range enrolled {
+		known[username] = struct{}{}
+	}
+	for _, officer := range officers {
+		if _, ok := known[officer.Username]; ok {
+			continue
+		}
+		if err := mgr.RegisterOfficer(ctx, officer.Username, []byte(officer.CSRPEM)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// firstNonEmpty returns the first non-empty value.
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // barrierInitService implements rest.BarrierInitService by delegating to the
 // QuicBaaS ceremony backend (which terminates at go-qrdb's CeremonyService).
 // On success the backend response is rendered into a rest.BarrierInitResponse
-// and the barrier is initialized; a barrier failure fails the request.
+// and the barrier is initialized; a barrier failure fails the request. The
+// platform state then moves to sealed (passphrase/shamir) or unsealed
+// (software with auto-unseal) depending on the strategy.
+//
+// The service is retry-safe for the operator who ran it. The first
+// successful init is held in memory while the gate is up, keyed by a digest
+// of the request (PINs included), with the admin key in a memguard enclave.
+// An identical retry from the same uid over the Unix socket receives the
+// same admin bundle and re-attempts the barrier initialization if it failed.
+// Every other request — a different one, or an identical one from loopback
+// HTTP or another uid — is rejected the same way, so the gate never confirms
+// the PINs to anyone but the operator. The key is destroyed as soon as the
+// barrier unseals or the gate shuts down; nothing is persisted.
 type barrierInitService struct {
 	logger  *logging.Logger
 	backend apidaemon.CeremonyBackend
-	barrier gateBarrier
 	state   rest.PlatformStateProvider
+
+	// barrier is the platform barrier /init initializes after the ceremony;
+	// nil when the daemon has no barrier manager.
+	barrier barrierLifecycle
+	// defaultStrategy is the daemon's configured barrier seal strategy
+	// (barrier.seal_strategy); empty selects barrier.DefaultSealStrategy.
+	// The request cannot override it.
+	defaultStrategy string
+
+	// mu serializes Initialize so concurrent requests cannot run the
+	// ceremony (and mint an admin key) twice.
+	mu     sync.Mutex
+	issued *issuedInit
+}
+
+// issuedInit is the response of the init this gate completed.
+type issuedInit struct {
+	digest [sha256.Size]byte
+	// resp is the issued response without the admin key; key holds it.
+	resp rest.BarrierInitResponse
+	key  *memguard.MemoryEnclave
+	// caller is the Unix peer that was issued the bundle. callerKnown is
+	// false when it was issued over loopback HTTP, which has no peer
+	// identity, so that bundle is never replayed.
+	caller      peercred.UnixCredentials
+	callerKnown bool
+}
+
+// newIssuedInit moves the admin key of resp into locked memory. The string
+// the backend returned cannot be wiped, but it is not retained either.
+func newIssuedInit(ctx context.Context, digest [sha256.Size]byte, resp rest.BarrierInitResponse) *issuedInit {
+	caller, known := peercred.UnixCredentialsFromContext(ctx)
+	key := memguard.NewMemoryEnclaveFromString(resp.AdminKeyPEM)
+	resp.AdminKeyPEM = ""
+	return &issuedInit{digest: digest, resp: resp, key: key, caller: caller, callerKnown: known}
+}
+
+// replay returns the issued response, admin key included, when the caller
+// in ctx is the Unix peer it was issued to and digest matches the issued
+// request. It returns false once the key has been destroyed.
+func (i *issuedInit) replay(ctx context.Context, digest [sha256.Size]byte) (rest.BarrierInitResponse, bool) {
+	caller, ok := peercred.UnixCredentialsFromContext(ctx)
+	if !ok || !i.callerKnown || caller.UID != i.caller.UID {
+		return rest.BarrierInitResponse{}, false
+	}
+	if subtle.ConstantTimeCompare(i.digest[:], digest[:]) != 1 {
+		return rest.BarrierInitResponse{}, false
+	}
+	resp := i.resp
+	err := i.key.Open(func(key []byte) error {
+		resp.AdminKeyPEM = string(key)
+		return nil
+	})
+	return resp, err == nil
+}
+
+// initRequestDigest hashes every request field, each length-prefixed so no
+// two different requests share an encoding.
+func initRequestDigest(req *rest.BarrierInitRequest) [sha256.Size]byte {
+	fields := []string{
+		req.SOPIN, req.UserPIN,
+		strconv.Itoa(req.Shares), strconv.Itoa(req.Threshold),
+		req.Hostname, req.CredentialSealStrategy,
+		strconv.Itoa(len(req.Officers)),
+	}
+	for _, officer := range req.Officers {
+		fields = append(fields, officer.Username, officer.CSRPEM)
+	}
+	fields = append(fields, req.SANs...)
+	var buf []byte
+	for _, field := range fields {
+		buf = binary.AppendUvarint(buf, uint64(len(field)))
+		buf = append(buf, field...)
+	}
+	return sha256.Sum256(buf)
+}
+
+// ceremonyOfficers maps the /init officers onto the ceremony request, which
+// signs each officer's CSR. It returns nil for none.
+func ceremonyOfficers(officers []rest.BarrierInitOfficer) []apidaemon.CeremonyOfficer {
+	if len(officers) == 0 {
+		return nil
+	}
+	out := make([]apidaemon.CeremonyOfficer, 0, len(officers))
+	for _, officer := range officers {
+		out = append(out, apidaemon.CeremonyOfficer{Username: officer.Username, CSRPEM: officer.CSRPEM})
+	}
+	return out
 }
 
 // Initialize delegates the canonical ceremony bootstrap to the configured
-// backend, then initializes the barrier. The state in the response reflects
-// the barrier state after both steps.
+// backend, then initializes the barrier, or replays the issued response for an
+// identical retry. The state in the response reflects the barrier state after
+// both steps.
 func (s *barrierInitService) Initialize(ctx context.Context, req *rest.BarrierInitRequest) (*rest.BarrierInitResponse, error) {
 	if s == nil || s.backend == nil {
 		return nil, &rest.ErrBarrierInitServiceUnavailable{}
@@ -164,17 +475,40 @@ func (s *barrierInitService) Initialize(ctx context.Context, req *rest.BarrierIn
 	if req == nil {
 		req = &rest.BarrierInitRequest{}
 	}
-	// The user PIN is the barrier secret. Refuse an empty one before the
-	// ceremony runs, so a request that cannot initialize the barrier
-	// leaves nothing half done.
-	if s.barrier != nil && req.UserPIN == "" {
-		return nil, rest.ErrMissingRequiredField{Field: "user_pin"}
+	// Refuse a request the barrier cannot honour before the ceremony mints
+	// the one-shot admin bundle, so it leaves nothing half done.
+	strategy := s.resolveBarrierStrategy()
+	initBarrier, err := planBarrierInit(strategy, req)
+	if err != nil {
+		return nil, err
 	}
+	if err := s.requireQuorumBarrier(ctx, strategy); err != nil {
+		var unenforceable *ErrBarrierShamirUnenforceable
+		if errors.As(err, &unenforceable) {
+			return nil, &rest.ErrInitBarrierConflict{Err: err}
+		}
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	digest := initRequestDigest(req)
+	if s.issued != nil {
+		resp, ok := s.issued.replay(ctx, digest)
+		if !ok {
+			return nil, &rest.ErrInitAlreadyIssued{}
+		}
+		if err := s.initializeBarrier(ctx, initBarrier, req, &resp); err != nil {
+			return nil, err
+		}
+		s.destroyKeyIfUnsealed(resp.State)
+		return &resp, nil
+	}
+
 	thresholdSpec := ""
 	if req.Shares > 0 || req.Threshold > 0 {
 		thresholdSpec = formatThreshold(req.Threshold, req.Shares)
 	}
-
 	// The qrdb embedded ceremony transport threads the per-request
 	// SOPin/UserPin from the ceremony-initialize request directly into the
 	// service layer, so the PINs are supplied on the call itself below.
@@ -185,38 +519,210 @@ func (s *barrierInitService) Initialize(ctx context.Context, req *rest.BarrierIn
 		Hostname:               req.Hostname,
 		SANs:                   req.SANs,
 		CredentialSealStrategy: req.CredentialSealStrategy,
+		Officers:               ceremonyOfficers(req.Officers),
 	})
 	if err != nil {
 		return nil, err
 	}
-	resp := &rest.BarrierInitResponse{}
+	resp := rest.BarrierInitResponse{}
 	if out != nil {
 		resp.CeremonyID = out.CeremonyID
 		resp.InitializedAt = out.InitializedAt
 		resp.SPKIPin = out.SPKIPin
+		resp.AdminCertPEM = out.AdminCertPEM
+		resp.AdminKeyPEM = out.AdminKeyPEM
 	}
+	// The bundle is retained before the barrier step: when that step fails,
+	// an identical retry from the issuing uid receives the bundle and
+	// re-attempts it.
+	s.issued = newIssuedInit(ctx, digest, resp)
+	if err := s.initializeBarrier(ctx, initBarrier, req, &resp); err != nil {
+		return nil, err
+	}
+	s.destroyKeyIfUnsealed(resp.State)
+	return &resp, nil
+}
+
+// destroyKeyIfUnsealed wipes the retained admin key once the barrier is
+// unsealed: the gate is closing and no replay can follow. The caller holds
+// s.mu.
+func (s *barrierInitService) destroyKeyIfUnsealed(state rest.PlatformState) {
+	if state == rest.PlatformStateUnsealed {
+		s.issued.key.Destroy()
+	}
+}
+
+// Replay implements rest.BarrierInitReplayer: the issued response for a
+// request identical to the one that was issued, to the Unix peer it was
+// issued to, while the barrier is still sealed.
+func (s *barrierInitService) Replay(ctx context.Context, req *rest.BarrierInitRequest) (*rest.BarrierInitResponse, bool) {
+	if s == nil || req == nil {
+		return nil, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.issued == nil {
+		return nil, false
+	}
+	state := rest.PlatformStateSealed
+	if s.state != nil {
+		state = s.state.State(ctx)
+	}
+	if state == rest.PlatformStateUnsealed {
+		s.issued.key.Destroy()
+		return nil, false
+	}
+	resp, ok := s.issued.replay(ctx, initRequestDigest(req))
+	if !ok {
+		return nil, false
+	}
+	resp.State = state
+	return &resp, true
+}
+
+// release destroys the retained admin key when the gate shuts down.
+// Initialize and Replay already destroy it as soon as they see the barrier
+// unsealed. Safe to call more than once.
+func (s *barrierInitService) release() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.issued != nil {
+		s.issued.key.Destroy()
+	}
+}
+
+// initializeBarrier drives the data-plane barrier after the ceremony and
+// records the resulting state in resp.
+//
+// The qrdb ceremony service does not initialize the StorageBarrier as a side
+// effect — it only stores PINs in the credential service and transitions its
+// own state machine. The barrier must be initialized explicitly so the
+// BarrierServicer (which the waitForUnseal loop polls) reports initialized +
+// unsealed and the gate releases. A barrier failure is returned as
+// ErrBarrierInitFailed; the issued bundle stays retained, so an identical
+// retry from the issuing uid re-attempts it.
+func (s *barrierInitService) initializeBarrier(ctx context.Context, initBarrier barrierInitFunc, req *rest.BarrierInitRequest, resp *rest.BarrierInitResponse) error {
 	if s.barrier != nil {
-		// The qrdb ceremony service does not initialize the data-plane
-		// StorageBarrier as a side effect — it only stores PINs in the
-		// credential service and transitions its own state machine. We
-		// must explicitly drive Manager.Initialize so the BarrierServicer
-		// (which the M6 waitForUnseal loop polls via SDK.Security().
-		// Barrier().BarrierStatus) reports initialized + unsealed and the
-		// gate releases.
-		if err := s.barrier.Initialize(ctx, req.UserPIN); err != nil {
-			return nil, ErrBarrierInitFailed{Cause: err}
+		if !s.barrier.IsInitialized() {
+			if err := initBarrier(ctx, s.barrier, req); err != nil {
+				return ErrBarrierInitFailed{Cause: err}
+			}
 		}
 		// Refresh the cached flags from the backend. Initialize has already
 		// set them, so a failed refresh leaves a correct state to report.
-		if err := s.barrier.SyncStatus(ctx); err != nil && s.logger != nil {
-			s.logger.Warn("barrier status refresh after init failed; reporting the cached state",
-				"error", err.Error())
+		if err := s.barrier.SyncStatus(ctx); err != nil {
+			s.warn("barrier status refresh after init failed; reporting the cached state", err)
 		}
 	}
 	if s.state != nil {
 		resp.State = s.state.State(ctx)
 	}
-	return resp, nil
+	return nil
+}
+
+// planBarrierInit returns the barrier operation for strategy and checks that
+// req can drive it. A strategy the platform barrier cannot be initialized
+// with is a configuration fault and is returned as is; a request that cannot
+// drive the operation is refused as rest.ErrInitInvalidRequest.
+func planBarrierInit(strategy string, req *rest.BarrierInitRequest) (barrierInitFunc, error) {
+	initBarrier, ok := barrierInitStrategies[strategy]
+	if !ok {
+		return nil, &ErrBarrierStrategyUnsupported{Strategy: strategy}
+	}
+	if req.UserPIN == "" {
+		return nil, &rest.ErrInitInvalidRequest{Err: &ErrBarrierInitMissingSecret{Strategy: strategy}}
+	}
+	if strategy == barrier.SealStrategyShamir && (req.Threshold < 2 || req.Threshold > req.Shares) {
+		return nil, &rest.ErrInitInvalidRequest{Err: &ErrBarrierShamirQuorum{Threshold: req.Threshold, Shares: req.Shares}}
+	}
+	if err := validateInitOfficers(req); err != nil {
+		return nil, &rest.ErrInitInvalidRequest{Err: err}
+	}
+	return initBarrier, nil
+}
+
+// validateInitOfficers checks the officers an /init enrolls before the
+// ceremony mints anything. They accompany exactly the M-of-N threshold the
+// ceremony receives: one per share, each with a unique username and a CSR
+// that parses and verifies, and none when the request carries no threshold.
+func validateInitOfficers(req *rest.BarrierInitRequest) error {
+	shares := 0
+	if formatThreshold(req.Threshold, req.Shares) != "" {
+		shares = req.Shares
+	}
+	if len(req.Officers) != shares {
+		return &ErrBarrierInitOfficers{Officers: len(req.Officers), Shares: shares}
+	}
+	seen := make(map[string]struct{}, len(req.Officers))
+	for i, officer := range req.Officers {
+		if officer.Username == "" {
+			return &ErrBarrierInitOfficerInvalid{Index: i, Reason: "missing username"}
+		}
+		if _, duplicate := seen[officer.Username]; duplicate {
+			return &ErrBarrierInitOfficerInvalid{Index: i, Username: officer.Username, Reason: "duplicate username"}
+		}
+		seen[officer.Username] = struct{}{}
+		if err := verifyOfficerCSR(officer.CSRPEM); err != nil {
+			return &ErrBarrierInitOfficerInvalid{Index: i, Username: officer.Username, Reason: "unusable csr_pem", Err: err}
+		}
+	}
+	return nil
+}
+
+// verifyOfficerCSR reports whether csrPEM holds a certificate signing request
+// whose signature verifies, the precondition the ceremony checks before it
+// signs the officer's certificate.
+func verifyOfficerCSR(csrPEM string) error {
+	block, _ := pem.Decode([]byte(csrPEM))
+	if block == nil {
+		return &ErrBarrierInitOfficerCSRNotPEM{}
+	}
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		return err
+	}
+	return csr.CheckSignature()
+}
+
+// resolveBarrierStrategy returns the barrier strategy /init initializes: the
+// configured barrier.seal_strategy, else barrier.DefaultSealStrategy.
+func (s *barrierInitService) resolveBarrierStrategy() string {
+	return firstNonEmpty(s.defaultStrategy, barrier.DefaultSealStrategy)
+}
+
+// requireQuorumBarrier refuses a shamir request unless the platform barrier,
+// as reported by the SDK's barrier status, is sealed by the Shamir strategy.
+// Any other barrier would run InitializeShamir in credential mode and let one
+// operator unseal with the user PIN alone. A status that cannot be read
+// refuses too: the quorum is never assumed.
+func (s *barrierInitService) requireQuorumBarrier(ctx context.Context, strategy string) error {
+	if strategy != barrier.SealStrategyShamir {
+		return nil
+	}
+	if s.barrier == nil {
+		return &ErrBarrierShamirUnenforceable{}
+	}
+	status, err := s.barrier.Status(ctx)
+	if err != nil {
+		return &ErrBarrierStatusUnavailable{Err: err}
+	}
+	if status == nil || status.Strategy != barrier.SealStrategyShamir {
+		registered := ""
+		if status != nil {
+			registered = status.Strategy
+		}
+		return &ErrBarrierShamirUnenforceable{Registered: registered}
+	}
+	return nil
+}
+
+func (s *barrierInitService) warn(msg string, err error) {
+	if s.logger != nil {
+		s.logger.Warn(msg, "error", err.Error())
+	}
 }
 
 // =============================================================================
@@ -326,12 +832,20 @@ func runInitOnlyMode(ctx context.Context, a *app.App, logger *logging.Logger, ga
 	// but /init returns 503 ErrBarrierInitServiceUnavailable.
 	var initSvc rest.BarrierInitService
 	if sdk := a.QuicBaaSSDKClient(); sdk != nil {
-		initSvc = &barrierInitService{
+		admin := appbackends.NewAdminBundleIssuer(appbackends.PlatformCertIssuer(a.CA, sdk), appbackends.PlatformAdminIdentity(a))
+		backend := appbackends.NewCeremonyBackend(logger, sdk, admin)
+		issuer := &barrierInitService{
 			logger:  logger,
-			backend: appbackends.NewCeremonyBackend(logger, sdk),
+			backend: backend,
 			barrier: gate,
 			state:   stateProvider,
 		}
+		if a.BarrierConfig != nil {
+			issuer.defaultStrategy = a.BarrierConfig.SealStrategy
+		}
+		// The admin key must not outlive the gate, whichever way it exits.
+		defer issuer.release()
+		initSvc = issuer
 	}
 
 	// Wire unseal service when the barrier manager is available. The

@@ -60,7 +60,9 @@ func errResponseFrom(err error) *quicwire.Response {
 		errors.Is(err, ErrPIVNotConfigured),
 		errors.Is(err, ErrLUKSNotConfigured),
 		errors.Is(err, ErrFIDO2NotConfigured):
-		return &quicwire.Response{Status: quicwire.StatusUnavailable}
+		// The message names the service, so a client can tell "not configured"
+		// from any other Unavailable.
+		return &quicwire.Response{Status: quicwire.StatusUnavailable, Payload: []byte(err.Error())}
 	case errors.Is(err, ErrLUKSRootRequired):
 		return &quicwire.Response{Status: quicwire.StatusPermissionDenied}
 	case errors.Is(err, ErrCeremonyOfficerRequired),
@@ -95,6 +97,9 @@ func (h *ceremonyQUICHandlers) Handle(ctx context.Context, req *quicwire.Request
 	if errResp != nil {
 		return errResp
 	}
+	if denied := quic.AuthorizeSubOpcode(ctx, quic.CeremonySubOpcodePermissions, sub); denied != nil {
+		return denied
+	}
 	fn, ok := ceremonyQUICDispatch[sub]
 	if !ok {
 		return &quicwire.Response{Status: quicwire.StatusNotImplemented}
@@ -115,7 +120,7 @@ var ceremonyQUICDispatch = map[byte]ceremonyQUICHandler{
 }
 
 func (h *ceremonyQUICHandlers) init(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.CeremonyInitReq
+	var in quicwire.CeremonyInitReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -126,8 +131,9 @@ func (h *ceremonyQUICHandlers) init(ctx context.Context, payload []byte) *quicwi
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.CeremonyInitResp{
+	return okResponse(&quicwire.CeremonyInitResp{
 		CeremonyID: out.CeremonyID, State: string(out.State), InitializedAt: out.InitializedAt,
+		AdminCertPEM: out.AdminCertPEM, AdminKeyPEM: out.AdminKeyPEM, SPKIPin: out.SPKIPin,
 	})
 }
 
@@ -136,7 +142,7 @@ func (h *ceremonyQUICHandlers) status(ctx context.Context, _ []byte) *quicwire.R
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.CeremonyStatusResp{
+	return okResponse(&quicwire.CeremonyStatusResp{
 		CeremonyID:       out.CeremonyID,
 		State:            string(out.State),
 		Threshold:        out.Threshold,
@@ -147,7 +153,7 @@ func (h *ceremonyQUICHandlers) status(ctx context.Context, _ []byte) *quicwire.R
 }
 
 func (h *ceremonyQUICHandlers) claimCertBegin(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.CeremonyClaimCertBeginReq
+	var in quicwire.CeremonyClaimCertBeginReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -160,13 +166,13 @@ func (h *ceremonyQUICHandlers) claimCertBegin(ctx context.Context, payload []byt
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.CeremonyClaimCertBeginResp{
+	return okResponse(&quicwire.CeremonyClaimCertBeginResp{
 		Nonce: out.Nonce, ChallengeID: out.ChallengeID, ExpiresAt: out.ExpiresAt,
 	})
 }
 
 func (h *ceremonyQUICHandlers) claimCertComplete(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.CeremonyClaimCertCompleteReq
+	var in quicwire.CeremonyClaimCertCompleteReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -176,13 +182,13 @@ func (h *ceremonyQUICHandlers) claimCertComplete(ctx context.Context, payload []
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.CeremonyClaimCertCompleteResp{
+	return okResponse(&quicwire.CeremonyClaimCertCompleteResp{
 		CertificatePEM: out.CertificatePEM, ChainPEM: out.ChainPEM,
 	})
 }
 
 func (h *ceremonyQUICHandlers) claimShareBegin(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.CeremonyClaimShareBeginReq
+	var in quicwire.CeremonyClaimShareBeginReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -190,11 +196,11 @@ func (h *ceremonyQUICHandlers) claimShareBegin(ctx context.Context, payload []by
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.CeremonyClaimShareBeginResp{Nonce: out.Nonce, ExpiresAt: out.ExpiresAt})
+	return okResponse(&quicwire.CeremonyClaimShareBeginResp{Nonce: out.Nonce, ExpiresAt: out.ExpiresAt})
 }
 
 func (h *ceremonyQUICHandlers) claimShareComplete(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.CeremonyClaimShareCompleteReq
+	var in quicwire.CeremonyClaimShareCompleteReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -204,11 +210,11 @@ func (h *ceremonyQUICHandlers) claimShareComplete(ctx context.Context, payload [
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.CeremonyClaimShareCompleteResp{Share: out.Share, Index: out.Index})
+	return okResponse(&quicwire.CeremonyClaimShareCompleteResp{Share: out.Share, Index: out.Index})
 }
 
 func (h *ceremonyQUICHandlers) signCSR(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.CeremonySignCSRReq
+	var in quicwire.CeremonySignCSRReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -218,7 +224,7 @@ func (h *ceremonyQUICHandlers) signCSR(ctx context.Context, payload []byte) *qui
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.CeremonySignCSRResp{
+	return okResponse(&quicwire.CeremonySignCSRResp{
 		CertificatePEM: out.CertificatePEM, ChainPEM: out.ChainPEM,
 	})
 }
@@ -247,6 +253,9 @@ func (h *pivQUICHandlers) Handle(ctx context.Context, req *quicwire.Request) *qu
 	if errResp != nil {
 		return errResp
 	}
+	if denied := quic.AuthorizeSubOpcode(ctx, quic.PIVSubOpcodePermissions, sub); denied != nil {
+		return denied
+	}
 	fn, ok := pivQUICDispatch[sub]
 	if !ok {
 		return &quicwire.Response{Status: quicwire.StatusNotImplemented}
@@ -259,9 +268,9 @@ func (h *pivQUICHandlers) listDevices(ctx context.Context, _ []byte) *quicwire.R
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	resp := &quic.PIVListDevicesResp{Devices: make([]quic.PIVDevice, 0, len(d))}
+	resp := &quicwire.PIVListDevicesResp{Devices: make([]quicwire.PIVDevice, 0, len(d))}
 	for _, v := range d {
-		resp.Devices = append(resp.Devices, quic.PIVDevice{
+		resp.Devices = append(resp.Devices, quicwire.PIVDevice{
 			ID: v.ID, Name: v.Name, Manufacturer: v.Manufacturer, Model: v.Model,
 			Serial: v.Serial, FirmwareVersion: v.FirmwareVersion,
 		})
@@ -270,7 +279,7 @@ func (h *pivQUICHandlers) listDevices(ctx context.Context, _ []byte) *quicwire.R
 }
 
 func (h *pivQUICHandlers) listSlots(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.PIVListSlotsReq
+	var in quicwire.PIVListSlotsReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -278,9 +287,9 @@ func (h *pivQUICHandlers) listSlots(ctx context.Context, payload []byte) *quicwi
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	resp := &quic.PIVListSlotsResp{Slots: make([]quic.PIVSlot, 0, len(slots))}
+	resp := &quicwire.PIVListSlotsResp{Slots: make([]quicwire.PIVSlot, 0, len(slots))}
 	for _, s := range slots {
-		resp.Slots = append(resp.Slots, quic.PIVSlot{
+		resp.Slots = append(resp.Slots, quicwire.PIVSlot{
 			ID: s.ID, Name: s.Name, Algorithm: string(s.Algorithm),
 			HasKey: s.HasKey, HasCertificate: s.HasCertificate,
 		})
@@ -289,7 +298,7 @@ func (h *pivQUICHandlers) listSlots(ctx context.Context, payload []byte) *quicwi
 }
 
 func (h *pivQUICHandlers) slotInfo(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.PIVSlotInfoReq
+	var in quicwire.PIVSlotInfoReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -297,8 +306,8 @@ func (h *pivQUICHandlers) slotInfo(ctx context.Context, payload []byte) *quicwir
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.PIVSlotInfoResp{
-		Slot: quic.PIVSlot{
+	return okResponse(&quicwire.PIVSlotInfoResp{
+		Slot: quicwire.PIVSlot{
 			ID: out.Slot.ID, Name: out.Slot.Name, Algorithm: string(out.Slot.Algorithm),
 			HasKey: out.Slot.HasKey, HasCertificate: out.Slot.HasCertificate,
 		},
@@ -308,7 +317,7 @@ func (h *pivQUICHandlers) slotInfo(ctx context.Context, payload []byte) *quicwir
 }
 
 func (h *pivQUICHandlers) generate(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.PIVGenerateReq
+	var in quicwire.PIVGenerateReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -322,11 +331,11 @@ func (h *pivQUICHandlers) generate(ctx context.Context, payload []byte) *quicwir
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.PIVGenerateResp{PublicKeyPEM: out.PublicKeyPEM})
+	return okResponse(&quicwire.PIVGenerateResp{PublicKeyPEM: out.PublicKeyPEM})
 }
 
 func (h *pivQUICHandlers) doImport(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.PIVImportReq
+	var in quicwire.PIVImportReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -340,11 +349,11 @@ func (h *pivQUICHandlers) doImport(ctx context.Context, payload []byte) *quicwir
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.PIVImportResp{Imported: true})
+	return okResponse(&quicwire.PIVImportResp{Imported: true})
 }
 
 func (h *pivQUICHandlers) sign(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.PIVSignReq
+	var in quicwire.PIVSignReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -358,11 +367,11 @@ func (h *pivQUICHandlers) sign(ctx context.Context, payload []byte) *quicwire.Re
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.PIVSignResp{Signature: sig})
+	return okResponse(&quicwire.PIVSignResp{Signature: sig})
 }
 
 func (h *pivQUICHandlers) attest(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.PIVAttestReq
+	var in quicwire.PIVAttestReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -370,20 +379,20 @@ func (h *pivQUICHandlers) attest(ctx context.Context, payload []byte) *quicwire.
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.PIVAttestResp{
+	return okResponse(&quicwire.PIVAttestResp{
 		AttestationCertPEM: out.AttestationCertPEM, AttestationChainPEM: out.AttestationChainPEM,
 	})
 }
 
 func (h *pivQUICHandlers) reset(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.PIVResetReq
+	var in quicwire.PIVResetReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
 	if err := h.service.Reset(ctx, in.Device); err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.PIVResetResp{Reset: true})
+	return okResponse(&quicwire.PIVResetResp{Reset: true})
 }
 
 // luksQUICHandlers dispatches LUKS sub-opcodes.
@@ -419,10 +428,10 @@ func (h *luksQUICHandlers) Handle(ctx context.Context, req *quicwire.Request) *q
 	return fn(h, ctx, payload)
 }
 
-func (h *luksQUICHandlers) encodeSlots(slots []LUKSKeyslot) []quic.LUKSKeyslot {
-	out := make([]quic.LUKSKeyslot, 0, len(slots))
+func (h *luksQUICHandlers) encodeSlots(slots []LUKSKeyslot) []quicwire.LUKSKeyslot {
+	out := make([]quicwire.LUKSKeyslot, 0, len(slots))
 	for _, s := range slots {
-		out = append(out, quic.LUKSKeyslot{
+		out = append(out, quicwire.LUKSKeyslot{
 			Slot: s.Slot, Type: string(s.Type), KeySize: s.KeySize, Priority: s.Priority,
 		})
 	}
@@ -430,7 +439,7 @@ func (h *luksQUICHandlers) encodeSlots(slots []LUKSKeyslot) []quic.LUKSKeyslot {
 }
 
 func (h *luksQUICHandlers) status(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.LUKSStatusReq
+	var in quicwire.LUKSStatusReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -438,14 +447,14 @@ func (h *luksQUICHandlers) status(ctx context.Context, payload []byte) *quicwire
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.LUKSStatusResp{
+	return okResponse(&quicwire.LUKSStatusResp{
 		Device: out.Device, IsLUKS: out.IsLUKS, Version: out.Version,
 		UUID: out.UUID, Label: out.Label, Cipher: out.Cipher, ActiveSlots: out.ActiveSlots,
 	})
 }
 
 func (h *luksQUICHandlers) listSlots(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.LUKSListSlotsReq
+	var in quicwire.LUKSListSlotsReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -453,11 +462,11 @@ func (h *luksQUICHandlers) listSlots(ctx context.Context, payload []byte) *quicw
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.LUKSListSlotsResp{Device: out.Device, Slots: h.encodeSlots(out.Slots)})
+	return okResponse(&quicwire.LUKSListSlotsResp{Device: out.Device, Slots: h.encodeSlots(out.Slots)})
 }
 
 func (h *luksQUICHandlers) info(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.LUKSInfoReq
+	var in quicwire.LUKSInfoReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -465,7 +474,7 @@ func (h *luksQUICHandlers) info(ctx context.Context, payload []byte) *quicwire.R
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.LUKSInfoResp{
+	return okResponse(&quicwire.LUKSInfoResp{
 		Device: out.Device, UUID: out.UUID, Label: out.Label, Version: out.Version,
 		Cipher: out.Cipher, KeySize: out.KeySize, SectorSize: out.SectorSize,
 		Slots: h.encodeSlots(out.Slots), MetadataJSON: out.MetadataJSON,
@@ -473,7 +482,7 @@ func (h *luksQUICHandlers) info(ctx context.Context, payload []byte) *quicwire.R
 }
 
 func (h *luksQUICHandlers) enrollPassphrase(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.LUKSEnrollPassphraseReq
+	var in quicwire.LUKSEnrollPassphraseReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -483,11 +492,11 @@ func (h *luksQUICHandlers) enrollPassphrase(ctx context.Context, payload []byte)
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.LUKSEnrollPassphraseResp{Slot: out.Slot})
+	return okResponse(&quicwire.LUKSEnrollPassphraseResp{Slot: out.Slot})
 }
 
 func (h *luksQUICHandlers) enrollFIDO2(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.LUKSEnrollFIDO2Req
+	var in quicwire.LUKSEnrollFIDO2Req
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -498,11 +507,11 @@ func (h *luksQUICHandlers) enrollFIDO2(ctx context.Context, payload []byte) *qui
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.LUKSEnrollFIDO2Resp{Slot: out.Slot, TokenID: out.TokenID})
+	return okResponse(&quicwire.LUKSEnrollFIDO2Resp{Slot: out.Slot, TokenID: out.TokenID})
 }
 
 func (h *luksQUICHandlers) enrollTPM(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.LUKSEnrollTPMReq
+	var in quicwire.LUKSEnrollTPMReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -512,11 +521,11 @@ func (h *luksQUICHandlers) enrollTPM(ctx context.Context, payload []byte) *quicw
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.LUKSEnrollTPMResp{Slot: out.Slot, TokenID: out.TokenID})
+	return okResponse(&quicwire.LUKSEnrollTPMResp{Slot: out.Slot, TokenID: out.TokenID})
 }
 
 func (h *luksQUICHandlers) enrollRecovery(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.LUKSEnrollRecoveryReq
+	var in quicwire.LUKSEnrollRecoveryReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -526,22 +535,22 @@ func (h *luksQUICHandlers) enrollRecovery(ctx context.Context, payload []byte) *
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.LUKSEnrollRecoveryResp{Slot: out.Slot, RecoveryKey: out.RecoveryKey})
+	return okResponse(&quicwire.LUKSEnrollRecoveryResp{Slot: out.Slot, RecoveryKey: out.RecoveryKey})
 }
 
 func (h *luksQUICHandlers) removeKey(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.LUKSRemoveKeyReq
+	var in quicwire.LUKSRemoveKeyReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
 	if err := h.service.RemoveKey(ctx, &LUKSRemoveKeyRequest{Device: in.Device, Slot: in.Slot}); err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.LUKSRemoveKeyResp{Removed: true})
+	return okResponse(&quicwire.LUKSRemoveKeyResp{Removed: true})
 }
 
 func (h *luksQUICHandlers) testUnlock(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.LUKSTestUnlockReq
+	var in quicwire.LUKSTestUnlockReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -549,11 +558,11 @@ func (h *luksQUICHandlers) testUnlock(ctx context.Context, payload []byte) *quic
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.LUKSTestUnlockResp{Unlocked: ok})
+	return okResponse(&quicwire.LUKSTestUnlockResp{Unlocked: ok})
 }
 
 func (h *luksQUICHandlers) changePassphrase(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.LUKSChangePassphraseReq
+	var in quicwire.LUKSChangePassphraseReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -563,7 +572,7 @@ func (h *luksQUICHandlers) changePassphrase(ctx context.Context, payload []byte)
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.LUKSChangePassphraseResp{Changed: true})
+	return okResponse(&quicwire.LUKSChangePassphraseResp{Changed: true})
 }
 
 // fido2QUICHandlers dispatches FIDO2 sub-opcodes.
@@ -587,6 +596,9 @@ func (h *fido2QUICHandlers) Handle(ctx context.Context, req *quicwire.Request) *
 	if errResp != nil {
 		return errResp
 	}
+	if denied := quic.AuthorizeSubOpcode(ctx, quic.FIDO2SubOpcodePermissions, sub); denied != nil {
+		return denied
+	}
 	fn, ok := fido2QUICDispatch[sub]
 	if !ok {
 		return &quicwire.Response{Status: quicwire.StatusNotImplemented}
@@ -594,8 +606,8 @@ func (h *fido2QUICHandlers) Handle(ctx context.Context, req *quicwire.Request) *
 	return fn(h, ctx, payload)
 }
 
-func (h *fido2QUICHandlers) encodeDevice(d FIDO2Device) quic.FIDO2Device {
-	return quic.FIDO2Device{
+func (h *fido2QUICHandlers) encodeDevice(d FIDO2Device) quicwire.FIDO2Device {
+	return quicwire.FIDO2Device{
 		ID: d.ID, Path: d.Path, Manufacturer: d.Manufacturer, Product: d.Product,
 		ProductID: d.ProductID, VendorID: d.VendorID,
 	}
@@ -606,7 +618,7 @@ func (h *fido2QUICHandlers) listDevices(ctx context.Context, _ []byte) *quicwire
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	resp := &quic.FIDO2ListDevicesResp{Devices: make([]quic.FIDO2Device, 0, len(devices))}
+	resp := &quicwire.FIDO2ListDevicesResp{Devices: make([]quicwire.FIDO2Device, 0, len(devices))}
 	for _, d := range devices {
 		resp.Devices = append(resp.Devices, h.encodeDevice(d))
 	}
@@ -614,7 +626,7 @@ func (h *fido2QUICHandlers) listDevices(ctx context.Context, _ []byte) *quicwire
 }
 
 func (h *fido2QUICHandlers) waitDevice(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.FIDO2WaitDeviceReq
+	var in quicwire.FIDO2WaitDeviceReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -626,11 +638,11 @@ func (h *fido2QUICHandlers) waitDevice(ctx context.Context, payload []byte) *qui
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.FIDO2WaitDeviceResp{Device: h.encodeDevice(*dev)})
+	return okResponse(&quicwire.FIDO2WaitDeviceResp{Device: h.encodeDevice(*dev)})
 }
 
 func (h *fido2QUICHandlers) info(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.FIDO2InfoReq
+	var in quicwire.FIDO2InfoReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -638,7 +650,7 @@ func (h *fido2QUICHandlers) info(ctx context.Context, payload []byte) *quicwire.
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.FIDO2InfoResp{
+	return okResponse(&quicwire.FIDO2InfoResp{
 		Device:          h.encodeDevice(out.Device),
 		AAGUID:          out.AAGUID,
 		FirmwareVersion: out.FirmwareVersion,
@@ -649,7 +661,7 @@ func (h *fido2QUICHandlers) info(ctx context.Context, payload []byte) *quicwire.
 }
 
 func (h *fido2QUICHandlers) register(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.FIDO2RegisterReq
+	var in quicwire.FIDO2RegisterReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -660,13 +672,13 @@ func (h *fido2QUICHandlers) register(ctx context.Context, payload []byte) *quicw
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.FIDO2RegisterResp{
+	return okResponse(&quicwire.FIDO2RegisterResp{
 		CredentialID: out.CredentialID, AAGUID: out.AAGUID, PublicKeyPEM: out.PublicKeyPEM,
 	})
 }
 
 func (h *fido2QUICHandlers) authenticate(ctx context.Context, payload []byte) *quicwire.Response {
-	var in quic.FIDO2AuthenticateReq
+	var in quicwire.FIDO2AuthenticateReq
 	if err := quicwire.DecodePayload(payload, &in); err != nil {
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
@@ -674,7 +686,7 @@ func (h *fido2QUICHandlers) authenticate(ctx context.Context, payload []byte) *q
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.FIDO2AuthenticateResp{
+	return okResponse(&quicwire.FIDO2AuthenticateResp{
 		Authenticated: out.Authenticated, Counter: out.Counter,
 	})
 }

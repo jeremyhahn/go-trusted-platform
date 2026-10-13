@@ -31,7 +31,7 @@ REST transport.
 `ProtocolGRPC`, `ProtocolREST`, `ProtocolQUIC`, `ProtocolMCP`.
 
 **Every capability in this feature is HTTP-shaped and REST-only.** There is no
-`WebService` in `ServiceRegistry` (`sdk/go/transport/embedded/adapter.go`'s 22
+`WebService` in `ServiceRegistry` (`sdk/go/transport/embedded/adapter.go`'s 25
 fields do not include one), no `.proto` for it, no QUIC opcode range, and no
 `web_*` MCP tool. Grepped 2026-08-18.
 

@@ -217,6 +217,87 @@ func TestManager_InitializeShamir_AlreadyInitialized(t *testing.T) {
 	}
 }
 
+// TestManager_RegisterOfficer forwards the officer's username and CSR to the
+// SDK barrier client, which is what enrolls the officer for share sealing.
+func TestManager_RegisterOfficer(t *testing.T) {
+	fake := &fakeBarrierClient{}
+	m := newSealedManager(fake)
+
+	if err := m.RegisterOfficer(context.Background(), "alice", []byte("csr")); err != nil {
+		t.Fatalf("RegisterOfficer: %v", err)
+	}
+	if len(fake.registered) != 1 {
+		t.Fatalf("registered %d officers, want 1", len(fake.registered))
+	}
+	got := fake.registered[0]
+	if got.Username != "alice" || string(got.CSRPEM) != "csr" {
+		t.Errorf("registered %q with CSR %q, want alice with csr", got.Username, got.CSRPEM)
+	}
+}
+
+func TestManager_RegisterOfficer_Errors(t *testing.T) {
+	upstream := errors.New("ceremony CA not initialized")
+	cases := []struct {
+		name     string
+		ctx      context.Context
+		username string
+		csr      []byte
+		fakeErr  error
+		want     error
+	}{
+		{name: "nil context", ctx: nil, username: "alice", csr: []byte("csr"), want: ErrNilContext},
+		{name: "empty username", ctx: context.Background(), csr: []byte("csr"), want: ErrEmptyUsername},
+		{name: "empty CSR", ctx: context.Background(), username: "alice", want: ErrEmptyCSR},
+		{name: "SDK rejects", ctx: context.Background(), username: "alice", csr: []byte("csr"), fakeErr: upstream, want: upstream},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeBarrierClient{registerErr: tc.fakeErr}
+			m := newSealedManager(fake)
+
+			err := m.RegisterOfficer(tc.ctx, tc.username, tc.csr)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("RegisterOfficer error = %v, want %v", err, tc.want)
+			}
+			if len(fake.registered) != 0 {
+				t.Errorf("a refused registration reached the SDK: %d registered", len(fake.registered))
+			}
+		})
+	}
+}
+
+func TestManager_Officers(t *testing.T) {
+	fake := &fakeBarrierClient{officers: []*quicbaassdk.QRDBOfficerStatus{
+		{Username: "alice", ShareIndex: 1},
+		nil,
+		{Username: "bob", ShareIndex: 2},
+	}}
+	m := newSealedManager(fake)
+
+	got, err := m.Officers(context.Background())
+	if err != nil {
+		t.Fatalf("Officers: %v", err)
+	}
+	if len(got) != 2 || got[0] != "alice" || got[1] != "bob" {
+		t.Errorf("Officers = %v, want [alice bob]", got)
+	}
+}
+
+func TestManager_Officers_Errors(t *testing.T) {
+	m := newSealedManager(&fakeBarrierClient{})
+	if _, err := m.Officers(nil); !errors.Is(err, ErrNilContext) { //nolint:staticcheck
+		t.Errorf("nil context: got %v, want ErrNilContext", err)
+	}
+
+	upstream := errors.New("ceremony not configured")
+	m = newSealedManager(&fakeBarrierClient{listErr: upstream})
+	_, err := m.Officers(context.Background())
+	var managerErr *ManagerError
+	if !errors.As(err, &managerErr) || !errors.Is(err, upstream) {
+		t.Errorf("SDK failure: got %v, want a ManagerError wrapping it", err)
+	}
+}
+
 func TestManager_Unseal_NilContext(t *testing.T) {
 	m := newTestManager()
 	m.sealed.Store(true)
@@ -362,6 +443,23 @@ type fakeBarrierClient struct {
 	shareResp *quicbaassdk.QRDBBarrierUnsealShareResponse
 	shareErr  error
 	status    *quicbaassdk.QRDBBarrierStatusResponse
+
+	registered  []*quicbaassdk.QRDBOfficerRegisterRequest
+	registerErr error
+	officers    []*quicbaassdk.QRDBOfficerStatus
+	listErr     error
+}
+
+func (f *fakeBarrierClient) OfficerRegister(_ context.Context, req *quicbaassdk.QRDBOfficerRegisterRequest) (*quicbaassdk.QRDBOfficerRegisterResponse, error) {
+	if f.registerErr != nil {
+		return nil, f.registerErr
+	}
+	f.registered = append(f.registered, req)
+	return &quicbaassdk.QRDBOfficerRegisterResponse{ShareIndex: len(f.registered)}, nil
+}
+
+func (f *fakeBarrierClient) OfficerList(context.Context) ([]*quicbaassdk.QRDBOfficerStatus, error) {
+	return f.officers, f.listErr
 }
 
 func (f *fakeBarrierClient) BarrierUnsealWithShare(context.Context, *quicbaassdk.QRDBBarrierUnsealShareRequest) (*quicbaassdk.QRDBBarrierUnsealShareResponse, error) {

@@ -17,6 +17,7 @@ import (
 	"context"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
+	appbackends "github.com/jeremyhahn/go-trusted-platform/pkg/app/backends"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -25,7 +26,9 @@ import (
 // platformd itself searches, so on a node it runs with the node's own
 // configuration and this process's credentials.
 func startEmbeddedHost(ctx context.Context, _ *cli.Context) (cli.EmbeddedHost, error) {
-	host, err := daemon.StartEmbeddedHost(ctx, daemon.EmbeddedHostOptions{})
+	host, err := daemon.StartEmbeddedHost(ctx, daemon.EmbeddedHostOptions{
+		WireBackends: appbackends.WireEmbeddedHost,
+	})
 	if err != nil {
 		// A nil *EmbeddedHost in the interface would not compare nil.
 		return nil, err

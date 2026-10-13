@@ -47,6 +47,9 @@ func buildHandlerMap(reg *ServiceRegistry) map[string]handlerFunc {
 	registerInvitationHandlers(m, reg)
 	registerConfigDeliveryHandlers(m, reg)
 	registerProxyHandlers(m, reg)
+	registerCeremonyHandlers(m, reg)
+	registerPIVHandlers(m, reg)
+	registerFIDO2Handlers(m, reg)
 
 	return m
 }
@@ -1246,6 +1249,90 @@ func registerEABHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	}
 	m[platformv1.EABService_CleanupExpiredCredentials_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.CleanupExpiredCredentials(ctx, req.(*platformv1.CleanupExpiredEABCredentialsRequest))
+	}
+}
+
+func registerCeremonyHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.Ceremony == nil {
+		return
+	}
+	svc := reg.Ceremony
+
+	m[platformv1.CeremonyService_Init_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Init(ctx, req.(*platformv1.CeremonyInitRequest))
+	}
+	m[platformv1.CeremonyService_Status_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Status(ctx, req.(*platformv1.CeremonyStatusRequest))
+	}
+	m[platformv1.CeremonyService_ClaimCertBegin_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ClaimCertBegin(ctx, req.(*platformv1.CeremonyClaimCertBeginRequest))
+	}
+	m[platformv1.CeremonyService_ClaimCertComplete_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ClaimCertComplete(ctx, req.(*platformv1.CeremonyClaimCertCompleteRequest))
+	}
+	m[platformv1.CeremonyService_ClaimShareBegin_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ClaimShareBegin(ctx, req.(*platformv1.CeremonyClaimShareBeginRequest))
+	}
+	m[platformv1.CeremonyService_ClaimShareComplete_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ClaimShareComplete(ctx, req.(*platformv1.CeremonyClaimShareCompleteRequest))
+	}
+	m[platformv1.CeremonyService_SignCSR_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.SignCSR(ctx, req.(*platformv1.CeremonySignCSRRequest))
+	}
+}
+
+func registerPIVHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.PIV == nil {
+		return
+	}
+	svc := reg.PIV
+
+	m[platformv1.PIVService_ListDevices_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListDevices(ctx, req.(*platformv1.PIVListDevicesRequest))
+	}
+	m[platformv1.PIVService_ListSlots_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListSlots(ctx, req.(*platformv1.PIVListSlotsRequest))
+	}
+	m[platformv1.PIVService_SlotInfo_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.SlotInfo(ctx, req.(*platformv1.PIVSlotInfoRequest))
+	}
+	m[platformv1.PIVService_Generate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Generate(ctx, req.(*platformv1.PIVGenerateRequest))
+	}
+	m[platformv1.PIVService_Import_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Import(ctx, req.(*platformv1.PIVImportRequest))
+	}
+	m[platformv1.PIVService_Sign_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Sign(ctx, req.(*platformv1.PIVSignRequest))
+	}
+	m[platformv1.PIVService_Attest_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Attest(ctx, req.(*platformv1.PIVAttestRequest))
+	}
+	m[platformv1.PIVService_Reset_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Reset(ctx, req.(*platformv1.PIVResetRequest))
+	}
+}
+
+func registerFIDO2Handlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.FIDO2 == nil {
+		return
+	}
+	svc := reg.FIDO2
+
+	m[platformv1.FIDO2Service_ListDevices_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListDevices(ctx, req.(*platformv1.FIDO2ListDevicesRequest))
+	}
+	m[platformv1.FIDO2Service_WaitDevice_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.WaitDevice(ctx, req.(*platformv1.FIDO2WaitDeviceRequest))
+	}
+	m[platformv1.FIDO2Service_Info_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Info(ctx, req.(*platformv1.FIDO2InfoRequest))
+	}
+	m[platformv1.FIDO2Service_Register_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Register(ctx, req.(*platformv1.FIDO2RegisterRequest))
+	}
+	m[platformv1.FIDO2Service_Authenticate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Authenticate(ctx, req.(*platformv1.FIDO2AuthenticateRequest))
 	}
 }
 

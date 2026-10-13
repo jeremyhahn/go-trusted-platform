@@ -2,9 +2,20 @@
 
 PIV (Personal Identity Verification, NIST SP 800-73-4) smartcard operations.
 
-Routes through `quicbaas.SDK().Security().Auth().PIV()`. The PIV
-implementation lives in go-xkms; the platform repo contains no PIV-side
-code and never imports `go-xkms/pkg/piv` directly.
+Routes through `platform.Client.PIV()` and the platform SDK PIV service
+adapter. The device implementation remains in the composed security stack;
+the platform repo contains no PIV-side implementation and never imports
+`go-xkms/pkg/piv` directly.
+
+**Known gap: platformd does not wire a PIV backend yet**, so every
+subcommand answers `piv: backend not configured`. The backend needs the
+go-xkms PIV manager initialised with a slot certificate store, and the
+store constructor and its registration (`NewPIVFileBackend`,
+`RegisterPIVStore`) are not re-exported under `go-quicbaas/sdk/go/xkms`
+(v0.12, nor v0.14). Building a local store would reimplement an SDK
+capability, so the gap closes upstream: once quicbaas re-exports them,
+`wireSDKBackends` (`pkg/daemon/commands/serve_sdk_backends.go`) wires PIV
+beside the ceremony and FIDO2 backends.
 
 The subcommands honor the global flags `--config`, `--context`,
 `--transport`, `--server`, `--output`.
@@ -111,8 +122,8 @@ Non-zero on any SDK error. Typed errors live in
 ## Wire surface
 
 Every CLI subcommand maps 1:1 to a REST endpoint, gRPC RPC, QUIC opcode,
-and MCP tool. All transports terminate at the same SDK
-`Security().Auth().PIV()` backend.
+and MCP tool. The CLI opens the selected platform SDK transport and dispatches
+through the PIV service client exposed by `platform.Client.PIV()`.
 
 | Subcommand | REST | MCP tool |
 |------------|------|----------|
@@ -127,3 +138,30 @@ and MCP tool. All transports terminate at the same SDK
 
 MCP `platform_piv_sign` takes a base64-encoded payload and returns the
 signature base64-encoded.
+
+### Transports and scopes
+
+Every subcommand is served by the daemon over REST, gRPC, QUIC, MCP and the Unix
+socket, and the SDK client for each transport is tested against the daemon's real
+handlers. QUIC uses category opcode `0x9B` with the sub-opcode in `payload[0]`.
+The embedded transport dispatches every RPC in-process through
+`ServiceRegistry.PIV`.
+
+| Subcommand | gRPC method (`platform.v1.PIVService`) | QUIC sub-opcode | Scope |
+|------------|----------------------------------------|-----------------|-------|
+| `piv list-devices` | `ListDevices` | `0x01` | `piv:read` |
+| `piv list-slots` | `ListSlots` | `0x02` | `piv:read` |
+| `piv slot-info` | `SlotInfo` | `0x03` | `piv:read` |
+| `piv generate` | `Generate` | `0x04` | `piv:write` |
+| `piv import` | `Import` | `0x05` | `piv:write` |
+| `piv sign` | `Sign` | `0x06` | `piv:write` |
+| `piv attest` | `Attest` | `0x07` | `piv:read` |
+| `piv reset` | `Reset` | `0x08` | `piv:write` |
+
+gRPC (TCP), QUIC and MCP refuse a token that lacks the scope (`PermissionDenied`
+/ `StatusPermissionDenied`). QUIC refuses a caller with no principal the same
+way; under mTLS the client certificate is the principal and holds every scope
+([`docs/daemon/api.md`](../daemon/api.md) §5). The Unix socket is local and not
+token-gated. Scopes are minted by the broker from the subject's IAM
+permissions, so a role gains `piv:read` / `piv:write` by being granted those permissions; the admin role needs
+both.

@@ -57,6 +57,9 @@ type Client interface {
 	Overlay() platformv1.OverlayServiceClient
 	Registry() platformv1.RegistryServiceClient
 	Cluster() platformv1.ClusterServiceClient
+	PIV() platformv1.PIVServiceClient
+	FIDO2() platformv1.FIDO2ServiceClient
+	Ceremony() platformv1.CeremonyServiceClient
 
 	// ConfigDelivery returns the config-delivery provisioning client
 	// (nonce issuance, pre-enrollment config fetch, remote Secure Boot
@@ -108,6 +111,9 @@ type ServiceClients struct {
 	Overlay     platformv1.OverlayServiceClient
 	Registry    platformv1.RegistryServiceClient
 	Cluster     platformv1.ClusterServiceClient
+	PIV         platformv1.PIVServiceClient
+	FIDO2       platformv1.FIDO2ServiceClient
+	Ceremony    platformv1.CeremonyServiceClient
 
 	// ConfigDelivery is the config-delivery provisioning service client.
 	ConfigDelivery platformv1.ConfigDeliveryServiceClient
@@ -340,6 +346,9 @@ func (c *platformClient) initServiceClients() {
 		Overlay:     platformv1.NewOverlayServiceClient(conn),
 		Registry:    platformv1.NewRegistryServiceClient(conn),
 		Cluster:     platformv1.NewClusterServiceClient(conn),
+		PIV:         platformv1.NewPIVServiceClient(conn),
+		FIDO2:       platformv1.NewFIDO2ServiceClient(conn),
+		Ceremony:    platformv1.NewCeremonyServiceClient(conn),
 
 		ConfigDelivery: platformv1.NewConfigDeliveryServiceClient(conn),
 	}
@@ -578,6 +587,30 @@ func (c *platformClient) Cluster() platformv1.ClusterServiceClient {
 		return nil
 	}
 	return c.services.Cluster
+}
+
+// PIV returns the PIV smartcard service client.
+func (c *platformClient) PIV() platformv1.PIVServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.PIV
+}
+
+// FIDO2 returns the FIDO2 authenticator service client.
+func (c *platformClient) FIDO2() platformv1.FIDO2ServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.FIDO2
+}
+
+// Ceremony returns the ceremony service client.
+func (c *platformClient) Ceremony() platformv1.CeremonyServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.Ceremony
 }
 
 // ConfigDelivery returns the config-delivery provisioning service client.

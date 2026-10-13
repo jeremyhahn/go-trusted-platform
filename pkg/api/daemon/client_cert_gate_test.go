@@ -12,6 +12,8 @@ import (
 	"errors"
 	"math/big"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -22,6 +24,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
@@ -246,18 +249,66 @@ func TestQUICServerMTLS_RefusesWhatItCannotEnforce(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	off := &tls.Config{}
-	if err := quicServerMTLS(DefaultConfig(), off, nil, logger); err != nil || off.ClientAuth != tls.NoClientCert {
+	if err := quicServerMTLS(DefaultConfig(), off, nil, nil, logger); err != nil || off.ClientAuth != tls.NoClientCert {
 		t.Errorf("mTLS off = %v, ClientAuth %v; want no change", err, off.ClientAuth)
 	}
 
 	config := DefaultConfig()
 	config.EnableMTLS = true
 	var required ErrTransportAuthRequired
-	if err := quicServerMTLS(config, nil, nil, logger); !errors.As(err, &required) {
+	if err := quicServerMTLS(config, nil, x509.NewCertPool(), nil, logger); !errors.As(err, &required) {
 		t.Errorf("mTLS with no TLS config = %v, want ErrTransportAuthRequired", err)
 	}
-	if err := quicServerMTLS(config, &tls.Config{}, nil, logger); !errors.As(err, &required) {
+	if err := quicServerMTLS(config, &tls.Config{}, nil, nil, logger); !errors.As(err, &required) {
 		t.Errorf("mTLS with no client CA pool = %v, want ErrTransportAuthRequired", err)
+	}
+}
+
+// TestQUICServerMTLS_SharesTheAuthenticatorsPool follows New's QUIC wiring:
+// the client CA file is resolved once, then the peer authenticator and the
+// listener's TLS config are both built from that pool. The file is removed
+// between the two steps, so a consumer that read it again would fail (#766).
+func TestQUICServerMTLS_SharesTheAuthenticatorsPool(t *testing.T) {
+	logger := logging.DefaultLogger()
+	bundle := testutil.GenerateTestTLSBundle(t)
+	caFile := filepath.Join(t.TempDir(), "client-ca.pem")
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: bundle.CACert.Raw})
+	if err := os.WriteFile(caFile, caPEM, 0o600); err != nil {
+		t.Fatalf("write CA file: %v", err)
+	}
+	config := DefaultConfig()
+	config.SkipIAMValidation = false
+	config.EnableMTLS = true
+	config.MTLSClientCAFile = caFile
+
+	pool, err := resolveMTLSClientCAPool(config, transportQUIC)
+	if err != nil {
+		t.Fatalf("resolve client CA pool: %v", err)
+	}
+	if err := os.Remove(caFile); err != nil {
+		t.Fatalf("remove CA file: %v", err)
+	}
+
+	mw, _, err := selectQUICAuth(config, nil, pool, logger)
+	if err != nil {
+		t.Fatalf("selectQUICAuth: %v", err)
+	}
+	verified := quic.WithConnectionTLS(context.Background(), &tls.ConnectionState{
+		VerifiedChains: [][]*x509.Certificate{{leafOf(t, bundle.ClientCert), bundle.CACert}},
+	})
+	if _, resp := mw.GuardRequest(verified, &quicwire.Request{Opcode: quicwire.OpKMSDeleteKey}); resp != nil {
+		t.Errorf("authenticator refused a certificate from the pool's CA: status %#x", resp.Status)
+	}
+
+	tlsConfig := &tls.Config{}
+	if err := quicServerMTLS(config, tlsConfig, pool, &QUICServiceHandler{}, logger); err != nil {
+		t.Fatalf("quicServerMTLS re-read the removed CA file: %v", err)
+	}
+	if tlsConfig.ClientCAs != pool {
+		t.Error("the listener verifies against a different pool than the authenticator")
+	}
+	if tlsConfig.ClientAuth != tls.VerifyClientCertIfGiven {
+		t.Errorf("ClientAuth = %v, want VerifyClientCertIfGiven", tlsConfig.ClientAuth)
 	}
 }
 

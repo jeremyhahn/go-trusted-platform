@@ -15,12 +15,9 @@
 
 // Package fido2 provides multi-protocol integration tests for the platformd
 // FIDO2 service. The suite drives the SDK clients across all six protocols
-// (CLI, REST, gRPC, QUIC, MCP, Unix) and validates that each transport
-// returns either a real backend result or a consistent "backend not
-// configured" error when no FIDO2 authenticator is attached to the host.
-//
-// No physical authenticator is required for the CI path: the test treats
-// the Unavailable surface as the contract under test.
+// (CLI, REST, gRPC, QUIC, MCP, Unix) and asserts that each transport carries
+// the typed ErrFIDO2NotConfigured for every operation: platformd wires no
+// FIDO2 backend until the SDK exposes a runtime authenticator surface.
 //
 // Run via:
 //
@@ -32,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	daemonpkg "github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	fido2sdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/fido2"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
@@ -70,73 +68,47 @@ func TestFIDO2MultiProtocol(t *testing.T) {
 func runFIDO2Scenario(t *testing.T, ctx context.Context, cmd FIDO2Commands) {
 	t.Helper()
 
-	t.Run("ListDevices", func(t *testing.T) {
-		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		_, err := cmd.ListDevices(cctx, &fido2sdk.ListDevicesRequest{})
-		if err == nil {
-			return
-		}
-		if !isBackendUnavailable(err) {
-			t.Fatalf("unexpected ListDevices error: %v", err)
-		}
-	})
+	// No FIDO2 backend is wired into platformd: the daemon reaches FIDO2 only
+	// through the SDK, which has no runtime authenticator surface yet. Every
+	// operation must therefore fail with the typed ErrFIDO2NotConfigured. A
+	// nil error would mean a ceremony "succeeded" with no authenticator.
+	steps := []struct {
+		name string
+		call func(context.Context) error
+	}{
+		{"ListDevices", func(c context.Context) error {
+			_, err := cmd.ListDevices(c, &fido2sdk.ListDevicesRequest{})
+			return err
+		}},
+		{"WaitDevice", func(c context.Context) error {
+			_, err := cmd.WaitDevice(c, &fido2sdk.WaitDeviceRequest{TimeoutSeconds: 1})
+			return err
+		}},
+		{"Info", func(c context.Context) error {
+			_, err := cmd.Info(c, &fido2sdk.InfoRequest{Device: "software-0"})
+			return err
+		}},
+		{"Register", func(c context.Context) error {
+			_, err := cmd.Register(c, &fido2sdk.RegisterRequest{
+				Username: "alice",
+				Role:     fido2sdk.RoleAdmin,
+			})
+			return err
+		}},
+		{"Authenticate", func(c context.Context) error {
+			_, err := cmd.Authenticate(c, &fido2sdk.AuthenticateRequest{CredentialID: "integration-credential-placeholder"})
+			return err
+		}},
+	}
 
-	t.Run("WaitDevice", func(t *testing.T) {
-		// Use a short timeout to bound worst-case CI time when no device is
-		// attached. The backend returns Unavailable once the timeout fires
-		// or immediately if not configured.
-		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-		_, err := cmd.WaitDevice(cctx, &fido2sdk.WaitDeviceRequest{TimeoutSeconds: 1})
-		if err == nil {
-			return
-		}
-		if !isBackendUnavailable(err) {
-			t.Fatalf("unexpected WaitDevice error: %v", err)
-		}
-	})
-
-	t.Run("Info", func(t *testing.T) {
-		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		_, err := cmd.Info(cctx, &fido2sdk.InfoRequest{Device: "software-0"})
-		if err == nil {
-			return
-		}
-		if !isBackendUnavailable(err) {
-			t.Fatalf("unexpected Info error: %v", err)
-		}
-	})
-
-	t.Run("Register", func(t *testing.T) {
-		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		req := &fido2sdk.RegisterRequest{
-			Username:   "alice",
-			Role:       fido2sdk.RoleAdmin,
-			RequirePIN: false,
-			RequireUV:  false,
-		}
-		_, err := cmd.Register(cctx, req)
-		if err == nil {
-			return
-		}
-		if !isBackendUnavailable(err) {
-			t.Fatalf("unexpected Register error: %v", err)
-		}
-	})
-
-	t.Run("Authenticate", func(t *testing.T) {
-		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		req := &fido2sdk.AuthenticateRequest{CredentialID: "integration-credential-placeholder"}
-		_, err := cmd.Authenticate(cctx, req)
-		if err == nil {
-			return
-		}
-		if !isBackendUnavailable(err) {
-			t.Fatalf("unexpected Authenticate error: %v", err)
-		}
-	})
+	for _, step := range steps {
+		t.Run(step.name, func(t *testing.T) {
+			cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			err := step.call(cctx)
+			if !isBackendUnavailable(err) {
+				t.Fatalf("%s error = %v, want %v", step.name, err, daemonpkg.ErrFIDO2NotConfigured)
+			}
+		})
+	}
 }

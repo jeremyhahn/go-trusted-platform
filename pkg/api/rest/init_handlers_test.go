@@ -228,6 +228,161 @@ func TestInit_NotPermittedWhenInitialized(t *testing.T) {
 	}
 }
 
+// replayingInitService is an init service that already completed an init and
+// replays it for a matching request.
+type replayingInitService struct {
+	fakeInitService
+	matchSOPIN string
+	cached     *BarrierInitResponse
+}
+
+func (s *replayingInitService) Replay(_ context.Context, req *BarrierInitRequest) (*BarrierInitResponse, bool) {
+	if req.SOPIN != s.matchSOPIN {
+		return nil, false
+	}
+	out := *s.cached
+	return &out, true
+}
+
+// TestInit_ReplaysIssuedBundleAfterInitialization covers the retry after a
+// lost response: the barrier is already initialized, and an identical
+// request receives the bundle that was issued, not a 409.
+func TestInit_ReplaysIssuedBundleAfterInitialization(t *testing.T) {
+	init := &replayingInitService{
+		matchSOPIN: "sopin",
+		cached:     &BarrierInitResponse{CeremonyID: "c1", AdminCertPEM: "CERT", AdminKeyPEM: "KEY", SPKIPin: "PIN"},
+	}
+	ts := newTestServer(newFakeStateProvider(PlatformStateSealed), init, nil)
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Post(ts.URL+"/init", "application/json", strings.NewReader(`{"so_pin":"sopin"}`))
+	if err != nil {
+		t.Fatalf("POST /init: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var out BarrierInitResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.AdminKeyPEM != "KEY" || out.AdminCertPEM != "CERT" || out.SPKIPin != "PIN" {
+		t.Errorf("bundle not replayed: %+v", out)
+	}
+	if out.State != PlatformStateSealed {
+		t.Errorf("replayed state = %q, want the current state", out.State)
+	}
+	if init.called.Load() != 0 {
+		t.Error("a replay must not run the ceremony again")
+	}
+}
+
+func TestInit_ReplayMismatchIsConflict(t *testing.T) {
+	init := &replayingInitService{matchSOPIN: "sopin", cached: &BarrierInitResponse{}}
+	ts := newTestServer(newFakeStateProvider(PlatformStateSealed), init, nil)
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Post(ts.URL+"/init", "application/json", strings.NewReader(`{"so_pin":"other"}`))
+	if err != nil {
+		t.Fatalf("POST /init: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+}
+
+func TestInit_ReplayBadJSONReturns400(t *testing.T) {
+	init := &replayingInitService{matchSOPIN: "sopin", cached: &BarrierInitResponse{}}
+	ts := newTestServer(newFakeStateProvider(PlatformStateSealed), init, nil)
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Post(ts.URL+"/init", "application/json", strings.NewReader(`{not json`))
+	if err != nil {
+		t.Fatalf("POST /init: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+// TestInit_AlreadyIssuedIsConflict covers a second, different init racing
+// the first while the barrier still reports uninitialized.
+func TestInit_AlreadyIssuedIsConflict(t *testing.T) {
+	init := &fakeInitService{err: &ErrInitAlreadyIssued{}}
+	ts := newTestServer(newFakeStateProvider(PlatformStateUninitialized), init, nil)
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Post(ts.URL+"/init", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("POST /init: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+}
+
+// TestInit_InvalidRequestIs400 covers a request the init service refused
+// before running the ceremony, such as an unsupported barrier strategy.
+func TestInit_InvalidRequestIs400(t *testing.T) {
+	cause := errors.New("strategy refused")
+	init := &fakeInitService{err: fmt.Errorf("init: %w", &ErrInitInvalidRequest{Err: cause})}
+	ts := newTestServer(newFakeStateProvider(PlatformStateUninitialized), init, nil)
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Post(ts.URL+"/init", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("POST /init: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestErrInitInvalidRequest_ErrorAndUnwrap(t *testing.T) {
+	cause := errors.New("strategy refused")
+	err := &ErrInitInvalidRequest{Err: cause}
+	if !strings.Contains(err.Error(), "strategy refused") {
+		t.Errorf("Error() = %q, want the cause in it", err.Error())
+	}
+	if !errors.Is(err, cause) {
+		t.Error("ErrInitInvalidRequest must unwrap to its cause")
+	}
+}
+
+// TestInit_BarrierConflictIs409 covers a request the platform barrier cannot
+// honour as configured, such as shamir on a barrier without a Shamir strategy.
+func TestInit_BarrierConflictIs409(t *testing.T) {
+	cause := errors.New("barrier cannot enforce the quorum")
+	init := &fakeInitService{err: fmt.Errorf("init: %w", &ErrInitBarrierConflict{Err: cause})}
+	ts := newTestServer(newFakeStateProvider(PlatformStateUninitialized), init, nil)
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Post(ts.URL+"/init", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("POST /init: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", resp.StatusCode)
+	}
+}
+
+func TestErrInitBarrierConflict_ErrorAndUnwrap(t *testing.T) {
+	cause := errors.New("barrier cannot enforce the quorum")
+	err := &ErrInitBarrierConflict{Err: cause}
+	if !strings.Contains(err.Error(), "barrier cannot enforce the quorum") {
+		t.Errorf("Error() = %q, want the cause in it", err.Error())
+	}
+	if !errors.Is(err, cause) {
+		t.Error("ErrInitBarrierConflict must unwrap to its cause")
+	}
+}
+
 func TestInit_ServiceUnavailableWhenNoBackend(t *testing.T) {
 	state := newFakeStateProvider(PlatformStateUninitialized)
 	ts := newTestServer(state, nil, nil)
@@ -308,6 +463,42 @@ func TestInit_RejectsUnknownField(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	status := postStatus(t, ts, "/init", `{"user_pin":"p","barrier_strategy":"software"}`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", status)
+	}
+	if init.called.Load() != 0 {
+		t.Error("init must not run for a refused body")
+	}
+}
+
+// TestInit_DecodesOfficers proves the officers field is part of the /init
+// contract, so a Shamir init can name the Security Officers who receive its
+// shares.
+func TestInit_DecodesOfficers(t *testing.T) {
+	init := &fakeInitService{resp: &BarrierInitResponse{}}
+	ts := newTestServer(newFakeStateProvider(PlatformStateUninitialized), init, nil)
+	t.Cleanup(ts.Close)
+
+	body := `{"user_pin":"p","threshold":2,"shares":2,"officers":[` +
+		`{"username":"alice","csr_pem":"csr-a"},{"username":"bob","csr_pem":"csr-b"}]}`
+	if status := postStatus(t, ts, "/init", body); status != http.StatusOK {
+		t.Fatalf("expected 200, got %d", status)
+	}
+	want := []BarrierInitOfficer{{Username: "alice", CSRPEM: "csr-a"}, {Username: "bob", CSRPEM: "csr-b"}}
+	if init.last == nil || len(init.last.Officers) != 2 ||
+		init.last.Officers[0] != want[0] || init.last.Officers[1] != want[1] {
+		t.Fatalf("officers decoded as %+v, want %+v", init.last, want)
+	}
+}
+
+// TestInit_RejectsUnknownOfficerField keeps the strict decoding inside the
+// officers array: a misspelt CSR field is refused, not silently dropped.
+func TestInit_RejectsUnknownOfficerField(t *testing.T) {
+	init := &fakeInitService{}
+	ts := newTestServer(newFakeStateProvider(PlatformStateUninitialized), init, nil)
+	t.Cleanup(ts.Close)
+
+	status := postStatus(t, ts, "/init", `{"user_pin":"p","officers":[{"username":"alice","csr":"x"}]}`)
 	if status != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", status)
 	}
@@ -524,6 +715,12 @@ func TestErrUnsealNotPermitted_Error(t *testing.T) {
 	e := &ErrUnsealNotPermitted{Current: PlatformStateUninitialized}
 	if !strings.Contains(e.Error(), "uninitialized") {
 		t.Errorf("error should include current state: %q", e.Error())
+	}
+}
+
+func TestErrInitAlreadyIssued_Error(t *testing.T) {
+	if msg := (&ErrInitAlreadyIssued{}).Error(); !strings.Contains(msg, "already") {
+		t.Errorf("unexpected message %q", msg)
 	}
 }
 

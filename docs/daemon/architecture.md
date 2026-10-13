@@ -228,7 +228,7 @@ The MCP server (`mcp_service.go`) enables AI/LLM integration via the Model Conte
 0. platformd serve: applyDaemonTLSIdentity()
    |
    +-- Load or issue the server identity in the CA keystore
-   +-- Write the admin bootstrap bundle and CA bundle to <platform-dir>/tls
+   +-- Write the public CA bundle to <platform-dir>/tls
 
 1. Create()
    |
@@ -429,6 +429,17 @@ Unix-domain-socket transport is the single sanctioned non-TLS carve-out
 (filesystem-permission-scoped); MCP binds loopback only. With no
 TLS-terminating transport enabled (UDS-only mode), startup proceeds without provisioning a TLS identity.
 
+The server key and certificate live in the platform CA keystore; the only
+TLS file on disk is `ca-bundle.crt`, the public CA trust bundle (`0644`), in
+`<platform-dir>/tls/` (mode `0700`). `provisionDaemonIdentity`
+(`pkg/daemon/commands/provision_identity.go`) reuses the keystore identity
+across restarts while the server certificate verifies, covers the required
+SANs and is more than 30 days from expiry, and otherwise issues a new one
+(§Daemon TLS identity and key custody). A daemon with no platform directory
+refuses to start (`ErrTLSIdentityRequiresPlatformDir`). Provisioning issues
+**no** admin client certificate: the one-shot `/init` bundle is the platform's
+only admin credential ([`../bootstrap/cli.md`](../bootstrap/cli.md) §1a).
+
 Network transports also fail closed on **authentication** (#550, #312). With
 `SkipIAMValidation` off, gRPC TCP and QUIC refuse to be constructed — `New`
 returns `ErrTransportAuthRequired` naming the transport — whenever no
@@ -458,7 +469,7 @@ transport is unaffected: peer-credential authentication is unconditional.
 |----------|----------------|-------|
 | Server key (`platformd.localhost`, ECDSA P-256) | Platform CA keystore | Never written to disk. The listeners get a `tls.Certificate` whose `PrivateKey` is the keystore's `crypto.Signer`, from `CA.TLSCertificate` via the `sdk/go/xkms/ca` re-export. |
 | Server certificate | Platform CA certificate store | Issued by `CA.IssueCertificate` with `KeyAttributes`, so the CA generates the key in its keystore. |
-| Admin bootstrap bundle | `<platform-dir>/tls/client-bundle.pem`, mode 0600 | The one key on disk. See below. |
+| Admin client credential | Not on disk | The one-shot `/init` reply. See below. |
 | CA bundle | `<platform-dir>/tls/ca-bundle.crt`, mode 0644 | Public. Rewritten from `CA.CABundle()` on every boot. |
 
 On each boot the server identity is loaded from the keystore. It is reused
@@ -471,11 +482,11 @@ installation upgrade from the pre-#33 PEM-backed identity, whose certificate is
 in the CA store but whose key never was in the keystore
 ([engineering.md](engineering.md) §7).
 
-**Why the admin bundle stays on disk.** It is the client credential an
-operator (or the integration harness) hands to `platformctl` for the first mTLS
-connection, before any other identity exists. It therefore has to be a file a
-separate process can read. It is client-auth only, signed by the platform CA,
-and lives in the 0700 `<platform-dir>/tls` directory rather than `/tmp`.
+**No admin key on disk.** The daemon mints no admin client certificate. The
+operator's first credential is the one-shot `/init` reply
+([`../bootstrap/cli.md`](../bootstrap/cli.md) §1a). Only a binary built with the
+`integration` tag writes a test `client-bundle.pem` into `<platform-dir>/tls`
+for the devcontainer harness (`harnessAdminBundle`).
 
 **Fail closed.** The server identity is resolved before any file is written:
 

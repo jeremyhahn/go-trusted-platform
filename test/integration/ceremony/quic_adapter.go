@@ -23,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	ceremonysdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ceremony"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
@@ -147,11 +146,11 @@ func (q *QUICAdapter) Init(ctx context.Context, req *ceremonysdk.InitRequest) (*
 	if req == nil {
 		req = &ceremonysdk.InitRequest{}
 	}
-	in := &quic.CeremonyInitReq{
+	in := &quicwire.CeremonyInitReq{
 		SOPIN: req.SOPIN, UserPIN: req.UserPIN, Threshold: req.Threshold,
 		Hostname: req.Hostname, SANs: req.SANs, CredentialSealStrategy: req.CredentialSealStrategy,
 	}
-	var wire quic.CeremonyInitResp
+	var wire quicwire.CeremonyInitResp
 	if err := q.sendSub(ctx, quicwire.CeremonySubInit, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CeremonyInit", Err: err}
 	}
@@ -168,7 +167,7 @@ func (q *QUICAdapter) Init(ctx context.Context, req *ceremonysdk.InitRequest) (*
 
 // Status invokes the ceremony status sub-opcode.
 func (q *QUICAdapter) Status(ctx context.Context) (*ceremonysdk.StatusResponse, error) {
-	var wire quic.CeremonyStatusResp
+	var wire quicwire.CeremonyStatusResp
 	if err := q.sendSub(ctx, quicwire.CeremonySubStatus, nil, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CeremonyStatus", Err: err}
 	}
@@ -191,13 +190,13 @@ func (q *QUICAdapter) ClaimCertBegin(ctx context.Context, req *ceremonysdk.Claim
 	if req == nil {
 		req = &ceremonysdk.ClaimCertBeginRequest{}
 	}
-	in := &quic.CeremonyClaimCertBeginReq{
+	in := &quicwire.CeremonyClaimCertBeginReq{
 		Username:          req.Username,
 		AuthenticatorType: string(req.AuthenticatorType),
 		Slot:              req.Slot,
 		CredentialID:      req.CredentialID,
 	}
-	var wire quic.CeremonyClaimCertBeginResp
+	var wire quicwire.CeremonyClaimCertBeginResp
 	if err := q.sendSub(ctx, quicwire.CeremonySubClaimCertBegin, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CeremonyClaimCertBegin", Err: err}
 	}
@@ -217,10 +216,10 @@ func (q *QUICAdapter) ClaimCertComplete(ctx context.Context, req *ceremonysdk.Cl
 	if req == nil {
 		req = &ceremonysdk.ClaimCertCompleteRequest{}
 	}
-	in := &quic.CeremonyClaimCertCompleteReq{
+	in := &quicwire.CeremonyClaimCertCompleteReq{
 		Username: req.Username, Nonce: req.Nonce, Signature: req.Signature,
 	}
-	var wire quic.CeremonyClaimCertCompleteResp
+	var wire quicwire.CeremonyClaimCertCompleteResp
 	if err := q.sendSub(ctx, quicwire.CeremonySubClaimCertComplete, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CeremonyClaimCertComplete", Err: err}
 	}
@@ -235,8 +234,8 @@ func (q *QUICAdapter) ClaimShareBegin(ctx context.Context, req *ceremonysdk.Clai
 	if req == nil {
 		req = &ceremonysdk.ClaimShareBeginRequest{}
 	}
-	in := &quic.CeremonyClaimShareBeginReq{Username: req.Username}
-	var wire quic.CeremonyClaimShareBeginResp
+	in := &quicwire.CeremonyClaimShareBeginReq{Username: req.Username}
+	var wire quicwire.CeremonyClaimShareBeginResp
 	if err := q.sendSub(ctx, quicwire.CeremonySubClaimShareBegin, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CeremonyClaimShareBegin", Err: err}
 	}
@@ -253,12 +252,12 @@ func (q *QUICAdapter) ClaimShareComplete(ctx context.Context, req *ceremonysdk.C
 	if req == nil {
 		req = &ceremonysdk.ClaimShareCompleteRequest{}
 	}
-	in := &quic.CeremonyClaimShareCompleteReq{
+	in := &quicwire.CeremonyClaimShareCompleteReq{
 		Username:  req.Username,
 		Nonce:     req.Nonce,
 		Signature: req.Signature,
 	}
-	var wire quic.CeremonyClaimShareCompleteResp
+	var wire quicwire.CeremonyClaimShareCompleteResp
 	if err := q.sendSub(ctx, quicwire.CeremonySubClaimShareComplete, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CeremonyClaimShareComplete", Err: err}
 	}
@@ -270,10 +269,10 @@ func (q *QUICAdapter) SignCSR(ctx context.Context, req *ceremonysdk.SignCSRReque
 	if req == nil {
 		req = &ceremonysdk.SignCSRRequest{}
 	}
-	in := &quic.CeremonySignCSRReq{
+	in := &quicwire.CeremonySignCSRReq{
 		Username: req.Username, SOPIN: req.SOPIN, CSRPEM: req.CSRPEM, Role: string(req.Role),
 	}
-	var wire quic.CeremonySignCSRResp
+	var wire quicwire.CeremonySignCSRResp
 	if err := q.sendSub(ctx, quicwire.CeremonySubSignCSR, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CeremonySignCSR", Err: err}
 	}

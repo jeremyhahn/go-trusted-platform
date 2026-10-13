@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -126,8 +127,10 @@ func grpcTCPServerTLS(config *Config, logger *logging.Logger) ([]grpc.ServerOpti
 // client certificate only if one is given and the handler requires one on
 // every request but a boot-certificate request (#690). mTLS is QUIC's only
 // authentication when enabled, so it fails closed: no TLS config to enforce it
-// on, or no resolvable client CA pool, refuses the transport (#550).
-func quicServerMTLS(config *Config, tlsConfig *tls.Config, handler *QUICServiceHandler, logger *logging.Logger) error {
+// on, or no client CA pool, refuses the transport (#550). clientCAPool is the
+// pool New resolved once for the QUIC peer authenticator, so the handshake and
+// the authenticator verify against the same CA set (#766).
+func quicServerMTLS(config *Config, tlsConfig *tls.Config, clientCAPool *x509.CertPool, handler *QUICServiceHandler, logger *logging.Logger) error {
 	if !config.EnableMTLS {
 		return nil
 	}
@@ -137,9 +140,11 @@ func quicServerMTLS(config *Config, tlsConfig *tls.Config, handler *QUICServiceH
 			Reason:    "mTLS is enabled but the QUIC server has no TLS configuration to enforce it on",
 		}
 	}
-	clientCAPool, err := resolveMTLSClientCAPool(config, transportQUIC)
-	if err != nil {
-		return err
+	if clientCAPool == nil {
+		return ErrTransportAuthRequired{
+			Transport: transportQUIC,
+			Reason:    "mTLS is enabled but no client CA pool is available to verify client certificates",
+		}
 	}
 	tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
 	tlsConfig.ClientCAs = clientCAPool

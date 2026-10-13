@@ -234,6 +234,13 @@ func (c *quicClientConn) Invoke(ctx context.Context, method string, args interfa
 		if _, emptyBody := categoryEmptyBodyMethods[method]; emptyBody {
 			payloadArgs = nil
 		}
+		if encode, translated := categoryRequestEncoders[method]; translated {
+			wire, err := encode(args)
+			if err != nil {
+				return status.Error(codes.Internal, err.Error())
+			}
+			payloadArgs = wire
+		}
 
 		encode := func() ([]byte, error) {
 			payload, err := buildCategoryPayload(subOpcode, payloadArgs)
@@ -437,6 +444,35 @@ var categoryOpcodes = map[byte]struct{}{
 // init function asserts this invariant at startup so a missing mapping
 // is caught at process start, not at first request.
 var categorySubOpcodeMap = map[string]byte{
+	// Ceremony Service — OpCeremonyCategory (0x9A)
+	// Server dispatcher: pkg/api/daemon/phase35_quic.go::ceremonyQUICDispatch
+	"/platform.v1.CeremonyService/Init":               quicwire.CeremonySubInit,
+	"/platform.v1.CeremonyService/Status":             quicwire.CeremonySubStatus,
+	"/platform.v1.CeremonyService/ClaimCertBegin":     quicwire.CeremonySubClaimCertBegin,
+	"/platform.v1.CeremonyService/ClaimCertComplete":  quicwire.CeremonySubClaimCertComplete,
+	"/platform.v1.CeremonyService/ClaimShareBegin":    quicwire.CeremonySubClaimShareBegin,
+	"/platform.v1.CeremonyService/ClaimShareComplete": quicwire.CeremonySubClaimShareComplete,
+	"/platform.v1.CeremonyService/SignCSR":            quicwire.CeremonySubSignCSR,
+
+	// PIV Service — OpPIVCategory (0x9B)
+	// Server dispatcher: pkg/api/daemon/phase35_quic.go::pivQUICDispatch
+	"/platform.v1.PIVService/ListDevices": quicwire.PIVSubListDevices,
+	"/platform.v1.PIVService/ListSlots":   quicwire.PIVSubListSlots,
+	"/platform.v1.PIVService/SlotInfo":    quicwire.PIVSubSlotInfo,
+	"/platform.v1.PIVService/Generate":    quicwire.PIVSubGenerate,
+	"/platform.v1.PIVService/Import":      quicwire.PIVSubImport,
+	"/platform.v1.PIVService/Sign":        quicwire.PIVSubSign,
+	"/platform.v1.PIVService/Attest":      quicwire.PIVSubAttest,
+	"/platform.v1.PIVService/Reset":       quicwire.PIVSubReset,
+
+	// FIDO2 Service — OpFIDO2Category (0x9D)
+	// Server dispatcher: pkg/api/daemon/phase35_quic.go::fido2QUICDispatch
+	"/platform.v1.FIDO2Service/ListDevices":  quicwire.FIDO2SubListDevices,
+	"/platform.v1.FIDO2Service/WaitDevice":   quicwire.FIDO2SubWaitDevice,
+	"/platform.v1.FIDO2Service/Info":         quicwire.FIDO2SubInfo,
+	"/platform.v1.FIDO2Service/Register":     quicwire.FIDO2SubRegister,
+	"/platform.v1.FIDO2Service/Authenticate": quicwire.FIDO2SubAuthenticate,
+
 	// Switch Service — OpSwitchCategory (0xCC)
 	// Server dispatcher: pkg/api/daemon/quic_switch.go::handleSwitchCategory
 	"/platform.v1.SwitchService/ListPorts":     quicwire.SwitchSubListPorts,
@@ -810,6 +846,39 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.SwitchService/SetPortVLAN":   quicwire.OpSwitchCategory,
 	"/platform.v1.SwitchService/EnablePort":    quicwire.OpSwitchCategory,
 	"/platform.v1.SwitchService/DisablePort":   quicwire.OpSwitchCategory,
+
+	// Ceremony Service — proto: pkg/api/grpc/proto/ceremony.proto
+	// All CeremonyService methods route to OpCeremonyCategory (0x9A).
+	// Requests and responses are translated to the daemon wire structs in
+	// ceremony.go.
+	"/platform.v1.CeremonyService/Init":               quicwire.OpCeremonyCategory,
+	"/platform.v1.CeremonyService/Status":             quicwire.OpCeremonyCategory,
+	"/platform.v1.CeremonyService/ClaimCertBegin":     quicwire.OpCeremonyCategory,
+	"/platform.v1.CeremonyService/ClaimCertComplete":  quicwire.OpCeremonyCategory,
+	"/platform.v1.CeremonyService/ClaimShareBegin":    quicwire.OpCeremonyCategory,
+	"/platform.v1.CeremonyService/ClaimShareComplete": quicwire.OpCeremonyCategory,
+	"/platform.v1.CeremonyService/SignCSR":            quicwire.OpCeremonyCategory,
+
+	// PIV Service — proto: pkg/api/grpc/proto/piv.proto
+	// All PIVService methods route to OpPIVCategory (0x9B). Translated in
+	// piv.go.
+	"/platform.v1.PIVService/ListDevices": quicwire.OpPIVCategory,
+	"/platform.v1.PIVService/ListSlots":   quicwire.OpPIVCategory,
+	"/platform.v1.PIVService/SlotInfo":    quicwire.OpPIVCategory,
+	"/platform.v1.PIVService/Generate":    quicwire.OpPIVCategory,
+	"/platform.v1.PIVService/Import":      quicwire.OpPIVCategory,
+	"/platform.v1.PIVService/Sign":        quicwire.OpPIVCategory,
+	"/platform.v1.PIVService/Attest":      quicwire.OpPIVCategory,
+	"/platform.v1.PIVService/Reset":       quicwire.OpPIVCategory,
+
+	// FIDO2 Service — proto: pkg/api/grpc/proto/fido2.proto
+	// All FIDO2Service methods route to OpFIDO2Category (0x9D). Translated
+	// in fido2.go.
+	"/platform.v1.FIDO2Service/ListDevices":  quicwire.OpFIDO2Category,
+	"/platform.v1.FIDO2Service/WaitDevice":   quicwire.OpFIDO2Category,
+	"/platform.v1.FIDO2Service/Info":         quicwire.OpFIDO2Category,
+	"/platform.v1.FIDO2Service/Register":     quicwire.OpFIDO2Category,
+	"/platform.v1.FIDO2Service/Authenticate": quicwire.OpFIDO2Category,
 
 	// Daemon Service — proto: pkg/api/grpc/proto/daemon.proto
 	"/platform.v1.PlatformDaemon/GetVersion":       quicwire.OpDaemonVersion,

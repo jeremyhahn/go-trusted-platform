@@ -29,14 +29,15 @@
 package commands
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
-
-	ceremonysvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ceremony"
 )
 
 // canonicalStrategies enumerates every strategy the CLI must accept.
@@ -93,6 +94,24 @@ func strategyFlags(strategy string, shares, threshold int) map[string]string {
 		out["threshold"] = strconv.Itoa(threshold)
 	}
 	return out
+}
+
+// addOfficers sets n --officer flags, officer-1 … officer-n, each naming a
+// CSR file in a temporary directory whose content is "csr-<username>". The
+// CLI only reads the files; the gate is what parses them.
+func addOfficers(t *testing.T, cmd *cobra.Command, n int) {
+	t.Helper()
+	dir := t.TempDir()
+	for i := 1; i <= n; i++ {
+		username := "officer-" + strconv.Itoa(i)
+		path := filepath.Join(dir, username+".csr")
+		if err := os.WriteFile(path, []byte("csr-"+username), 0o600); err != nil {
+			t.Fatalf("write officer CSR: %v", err)
+		}
+		if err := cmd.Flags().Set("officer", username+"="+path); err != nil {
+			t.Fatalf("set --officer: %v", err)
+		}
+	}
 }
 
 // TestCanonicalInit_AllStrategiesAreRegistered guards the registry
@@ -188,6 +207,9 @@ func TestCanonicalInit_StrategyValidationMatrix(t *testing.T) {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
 			cmd, f := newInitCmdForTest(t, strategyFlags(c.strategy, c.shares, c.threshold))
+			if c.strategy == "shamir" {
+				addOfficers(t, cmd, c.shares)
+			}
 			err := resolveAndValidateCanonicalInit(cmd, f, "PLATFORMCTL_TEST_NOENV")
 
 			if c.wantErr {
@@ -233,6 +255,15 @@ func TestCanonicalInit_BuildInitRequest_StrategyPropagation(t *testing.T) {
 				t.Errorf("CredentialSealStrategy: want %q, got %q",
 					strategy, req.CredentialSealStrategy)
 			}
+			// The daemon refuses unknown /init fields and takes the barrier
+			// strategy from its own configuration, so the body never names one.
+			body, err := json.Marshal(req)
+			if err != nil {
+				t.Fatalf("marshal init request: %v", err)
+			}
+			if strings.Contains(string(body), "barrier_strategy") {
+				t.Errorf("init body names a barrier strategy: %s", body)
+			}
 			if req.SOPIN != "so" || req.UserPIN != "user" {
 				t.Errorf("PIN propagation broken: SOPIN=%q UserPIN=%q",
 					req.SOPIN, req.UserPIN)
@@ -245,19 +276,15 @@ func TestCanonicalInit_BuildInitRequest_StrategyPropagation(t *testing.T) {
 				t.Errorf("SANs: want [alt.example.com], got %v", req.SANs)
 			}
 
-			// Threshold must only be populated for shamir; every
-			// other strategy ignores it and emitting "0-of-0" leaks
-			// an internal default into the wire request.
+			// Shares/Threshold must only be populated for shamir;
+			// every other strategy ignores them.
+			wantShares, wantThreshold := 0, 0
 			if strategy == "shamir" {
-				if req.Threshold != "3-of-5" {
-					t.Errorf("shamir Threshold: want %q, got %q",
-						"3-of-5", req.Threshold)
-				}
-			} else {
-				if req.Threshold != "" {
-					t.Errorf("non-shamir Threshold: want empty, got %q",
-						req.Threshold)
-				}
+				wantShares, wantThreshold = 5, 3
+			}
+			if req.Shares != wantShares || req.Threshold != wantThreshold {
+				t.Errorf("quorum: want %d-of-%d, got %d-of-%d",
+					wantThreshold, wantShares, req.Threshold, req.Shares)
 			}
 		})
 	}
@@ -292,8 +319,13 @@ func TestCanonicalInit_BarrierStrategyEnvVar(t *testing.T) {
 			}
 
 			// No flag overrides; the validator must hydrate every
-			// field from PLATFORMCTL_TEST_ENV_*.
+			// field from PLATFORMCTL_TEST_ENV_*. --officer has no
+			// environment variable, so shamir still names its officers
+			// as flags.
 			cmd, f := newInitCmdForTest(t, nil)
+			if strategy == "shamir" {
+				addOfficers(t, cmd, 5)
+			}
 			if err := resolveAndValidateCanonicalInit(cmd, f, "PLATFORMCTL_TEST_ENV"); err != nil {
 				t.Fatalf("strategy %q: validation failed: %v", strategy, err)
 			}
@@ -316,27 +348,107 @@ func TestCanonicalInit_BarrierStrategyEnvVar(t *testing.T) {
 	}
 }
 
-// TestCanonicalInit_ShamirThresholdFormat verifies the canonical
-// "M-of-N" Shamir threshold descriptor matches what the SDK and qrdb
-// ceremony service expect. Drift here would silently break Shamir
-// share recovery on the platform side.
-func TestCanonicalInit_ShamirThresholdFormat(t *testing.T) {
+// TestCanonicalInit_ShamirQuorumNotSwapped verifies --shares and
+// --threshold reach the /init request in their own fields. The daemon
+// formats the "M-of-N" descriptor; a swap here would silently break
+// Shamir share recovery on the platform side.
+func TestCanonicalInit_ShamirQuorumNotSwapped(t *testing.T) {
 	cases := []struct {
 		shares    int
 		threshold int
-		want      string
 	}{
-		{shares: 2, threshold: 2, want: "2-of-2"},
-		{shares: 5, threshold: 3, want: "3-of-5"},
-		{shares: 7, threshold: 4, want: "4-of-7"},
+		{shares: 2, threshold: 2},
+		{shares: 5, threshold: 3},
+		{shares: 7, threshold: 4},
 	}
 	for _, c := range cases {
 		_, f := newInitCmdForTest(t, strategyFlags("shamir", c.shares, c.threshold))
 		req := buildInitRequest(f)
-		if req.Threshold != c.want {
-			t.Errorf("threshold %d-of-%d: want %q, got %q",
-				c.threshold, c.shares, c.want, req.Threshold)
+		if req.Shares != c.shares || req.Threshold != c.threshold {
+			t.Errorf("quorum %d-of-%d: got shares=%d threshold=%d",
+				c.threshold, c.shares, req.Shares, req.Threshold)
 		}
+	}
+}
+
+// TestCanonicalInit_ShamirOfficersSent reads each --officer CSR file and
+// sends it, under its username and in flag order, in the /init body.
+func TestCanonicalInit_ShamirOfficersSent(t *testing.T) {
+	cmd, f := newInitCmdForTest(t, strategyFlags("shamir", 3, 2))
+	addOfficers(t, cmd, 3)
+	if err := resolveAndValidateCanonicalInit(cmd, f, "PLATFORMCTL_TEST_OFFICERS"); err != nil {
+		t.Fatalf("validation: %v", err)
+	}
+	req := buildInitRequest(f)
+	if len(req.Officers) != 3 {
+		t.Fatalf("officers: want 3, got %d", len(req.Officers))
+	}
+	for i, officer := range req.Officers {
+		username := "officer-" + strconv.Itoa(i+1)
+		if officer.Username != username || officer.CSRPEM != "csr-"+username {
+			t.Errorf("officer %d: got %+v, want %s with its CSR", i, officer, username)
+		}
+	}
+}
+
+// TestCanonicalInit_OfficerFlagErrors refuses every officer set the gate
+// could not enroll, before anything is sent.
+func TestCanonicalInit_OfficerFlagErrors(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing.csr")
+	cases := []struct {
+		name     string
+		strategy string
+		shares   int
+		officers []string
+		want     any
+	}{
+		{"shamir without officers", "shamir", 2, nil, new(*ErrOfficerCount)},
+		{"fewer officers than shares", "shamir", 3, []string{"a=x", "b=y"}, new(*ErrOfficerCount)},
+		{"no separator", "shamir", 2, []string{"a", "b=y"}, new(*ErrInvalidOfficerFlag)},
+		{"empty username", "shamir", 2, []string{"=x", "b=y"}, new(*ErrInvalidOfficerFlag)},
+		{"empty path", "shamir", 2, []string{"a=", "b=y"}, new(*ErrInvalidOfficerFlag)},
+		{"duplicate username", "shamir", 2, []string{"a=" + missing, "a=" + missing}, new(*ErrInvalidOfficerFlag)},
+		{"unreadable CSR", "shamir", 2, []string{"a=" + missing, "b=" + missing}, new(*ErrOfficerCSRUnreadable)},
+		{"officer without shamir", "software", 0, []string{"a=x"}, new(*MessageError)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			threshold := 0
+			if c.strategy == "shamir" {
+				threshold = 2
+			}
+			cmd, f := newInitCmdForTest(t, strategyFlags(c.strategy, c.shares, threshold))
+			for _, value := range c.officers {
+				if err := cmd.Flags().Set("officer", value); err != nil {
+					t.Fatalf("set --officer: %v", err)
+				}
+			}
+			err := resolveAndValidateCanonicalInit(cmd, f, "PLATFORMCTL_TEST_OFFICER_ERR")
+			if !errors.As(err, c.want) {
+				t.Fatalf("got %v (%T), want %T", err, err, c.want)
+			}
+			if f.officers != nil {
+				t.Errorf("a refused officer set was kept: %+v", f.officers)
+			}
+		})
+	}
+}
+
+// TestCanonicalInit_OfficerErrorMessages names the offending value, the
+// counts, and the unreadable file, so the operator can fix the command.
+func TestCanonicalInit_OfficerErrorMessages(t *testing.T) {
+	cases := map[string]error{
+		`invalid --officer "a": want username=path`:            &ErrInvalidOfficerFlag{Value: "a", Reason: "want username=path"},
+		"got 2 for --shares 3":                                 &ErrOfficerCount{Officers: 2, Shares: 3},
+		`officer "a": cannot read CSR /x: file does not exist`: &ErrOfficerCSRUnreadable{Username: "a", Path: "/x", Err: os.ErrNotExist},
+	}
+	for want, err := range cases {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("message %q does not contain %q", err.Error(), want)
+		}
+	}
+	if !errors.Is(&ErrOfficerCSRUnreadable{Err: os.ErrNotExist}, os.ErrNotExist) {
+		t.Error("ErrOfficerCSRUnreadable does not unwrap its read failure")
 	}
 }
 
@@ -344,12 +456,6 @@ func TestCanonicalInit_ShamirThresholdFormat(t *testing.T) {
 // fully exercisable at unit-test scope and which require external
 // dependencies (hardware, cloud creds) that live in the integration
 // suite.
-//
-// Per the locked Phase 3 SDK contract (sdk/go/services/ceremony):
-// NewClient() returns a stub that returns ErrNotYetWired for every
-// method until the in-process server-side handlers land in Phase 3.5.
-// The grpc-backed client wires through to the real qrdb ceremony
-// service when a daemon is reachable.
 //
 // What this test asserts:
 //
@@ -382,6 +488,9 @@ func TestCanonicalInit_StrategyEndToEnd(t *testing.T) {
 				fields["threshold"] = "3"
 			}
 			cmd, f := newInitCmdForTest(t, fields)
+			if strategy == "shamir" {
+				addOfficers(t, cmd, 5)
+			}
 			if err := resolveAndValidateCanonicalInit(cmd, f, "PLATFORMCTL_TEST_E2E"); err != nil {
 				t.Fatalf("strategy %q validation: %v", strategy, err)
 			}
@@ -389,26 +498,6 @@ func TestCanonicalInit_StrategyEndToEnd(t *testing.T) {
 			req := buildInitRequest(f)
 			if req.CredentialSealStrategy != strategy {
 				t.Fatalf("strategy %q not propagated", strategy)
-			}
-
-			// The Phase 3 stub client deliberately fails so callers
-			// observe the wiring rather than a silent no-op. Verify
-			// the failure mode is the typed ErrInitFailed wrapping
-			// ErrNotYetWired so the strategy plumbing is reachable
-			// regardless of which backend the daemon would invoke.
-			client := ceremonysvc.NewClient()
-			_, err := client.Init(t.Context(), req)
-			if err == nil {
-				t.Fatal("Phase 3 stub client must surface ErrNotYetWired")
-			}
-			var initFailed *ceremonysvc.ErrInitFailed
-			if !errors.As(err, &initFailed) {
-				t.Fatalf("strategy %q: want *ceremonysvc.ErrInitFailed, got %T",
-					strategy, err)
-			}
-			if !errors.Is(initFailed.Cause, ceremonysvc.ErrNotYetWired) {
-				t.Errorf("strategy %q: want ErrNotYetWired, got %v",
-					strategy, initFailed.Cause)
 			}
 		})
 	}
@@ -466,33 +555,15 @@ func TestCanonicalInit_NoneStrategyProducesWorkingInitRequest(t *testing.T) {
 		t.Errorf("none-strategy InitRequest must carry empty PINs; got SOPIN=%q UserPIN=%q",
 			req.SOPIN, req.UserPIN)
 	}
-	if req.Threshold != "" {
-		t.Errorf("none-strategy InitRequest must not carry a Shamir threshold; got %q",
-			req.Threshold)
+	if req.Shares != 0 || req.Threshold != 0 {
+		t.Errorf("none-strategy InitRequest must not carry a Shamir quorum; got %d-of-%d",
+			req.Threshold, req.Shares)
 	}
 	if req.Hostname != "dev.example.com" {
 		t.Errorf("Hostname: want %q, got %q", "dev.example.com", req.Hostname)
 	}
 	if len(req.SANs) != 2 || req.SANs[0] != "alt.example.com" || req.SANs[1] != "127.0.0.1" {
 		t.Errorf("SANs: want [alt.example.com 127.0.0.1], got %v", req.SANs)
-	}
-
-	// Drive the same request through the Phase 3 stub client to
-	// confirm the strategy plumbing is reachable end-to-end. The stub
-	// surfaces ErrNotYetWired wrapped in ErrInitFailed; what we are
-	// asserting here is that "none" is dispatchable rather than
-	// silently filtered upstream.
-	client := ceremonysvc.NewClient()
-	_, callErr := client.Init(t.Context(), req)
-	if callErr == nil {
-		t.Fatal("Phase 3 stub client must surface ErrNotYetWired")
-	}
-	var initFailed *ceremonysvc.ErrInitFailed
-	if !errors.As(callErr, &initFailed) {
-		t.Fatalf("none-strategy: want *ceremonysvc.ErrInitFailed, got %T", callErr)
-	}
-	if !errors.Is(initFailed.Cause, ceremonysvc.ErrNotYetWired) {
-		t.Errorf("none-strategy: want ErrNotYetWired, got %v", initFailed.Cause)
 	}
 }
 

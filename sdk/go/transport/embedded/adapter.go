@@ -57,6 +57,12 @@ type ServiceRegistry struct {
 	// provisioning session management).
 	ConfigDelivery platformv1.ConfigDeliveryServiceServer
 
+	// Ceremony, PIV and FIDO2 back the barrier ceremony and the local
+	// authenticator verbs.
+	Ceremony platformv1.CeremonyServiceServer
+	PIV      platformv1.PIVServiceServer
+	FIDO2    platformv1.FIDO2ServiceServer
+
 	// CallerContext attaches the in-process caller's identity to every
 	// call, as a network transport's authentication interceptors do; the
 	// embedded transport runs none. The embedder sets it: the services

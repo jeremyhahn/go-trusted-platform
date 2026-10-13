@@ -180,7 +180,7 @@ unconfigured (`requireDelivery`) while the credential service is fine.
 ## 5. Authorization
 
 **`EABService` is not in the gRPC scope catalog.** `pkg/api/grpc/method_permissions.go`
-covers 185 of 461 RPCs across 11 of 31 services, and `EABService` is one of the
+covers 208 of 468 RPCs across 13 of 31 services, and `EABService` is one of the
 services **not** covered ([`docs/daemon/api.md`](../daemon/api.md) §5). The
 interceptor's documented behaviour for an uncatalogued method is that it
 *"carries no required scope: the interceptor allows it once the token is

@@ -120,9 +120,9 @@ var unservedPrefixes = map[string]string{
 	// 70 routes, and every IAM claim is resolved below like any other.
 	"proxy":    "quicbaas re-export, no REST route in this repo (docs/13 G7)",
 	"luks":     "xkms re-export, no REST route in this repo (docs/13 G7)",
-	"piv":      "xkms re-export, no REST route in this repo (docs/13 G7)",
-	"ceremony": "qrdb re-export, no REST route in this repo (docs/13 G7)",
-	"fido2":    "xkms re-export, no REST route in this repo (docs/13 G7)",
+	"piv":      "served by the daemon REST server (pkg/api/daemon/piv_rest.go), not this router",
+	"ceremony": "served by the daemon REST server (pkg/api/daemon/ceremony_rest.go), not this router",
+	"fido2":    "served by the daemon REST server (pkg/api/daemon/fido2_rest.go), not this router",
 	"cluster":  "quicbaas re-export, no REST route in this repo (docs/13 G7)",
 
 	// /api/v1/version is served by the daemon REST server (handleVersion), not

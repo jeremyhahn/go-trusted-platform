@@ -1089,7 +1089,9 @@ it, before the boot service runs — an empty nonce never reaches it:
   node has none yet); `BootDelivery` and every other RPC or QUIC opcode are
   refused (`Unauthenticated` / `StatusUnauthorized`) without a verified
   certificate. A certificate that does not chain to the client CA fails the
-  handshake. Both boot calls therefore share one listener.
+  handshake. On QUIC the handshake and the request authenticator verify
+  against one client CA pool, read once when the daemon is constructed.
+  Both boot calls therefore share one listener.
 - A TLS-terminating proxy or load balancer in front of the control plane breaks
   diskless boot: the channel nonce and the client certificate belong to the
   proxy's connection, not the node's, so the proof fails closed. Pass TLS

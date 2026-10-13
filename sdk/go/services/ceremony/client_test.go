@@ -14,43 +14,9 @@
 package ceremony
 
 import (
-	"context"
 	"errors"
 	"testing"
 )
-
-func TestNewClient_NotNil(t *testing.T) {
-	if NewClient() == nil {
-		t.Fatal("expected non-nil client")
-	}
-}
-
-func TestClient_AllMethodsReturnNotYetWired(t *testing.T) {
-	ctx := context.Background()
-	c := NewClient()
-
-	if _, err := c.Init(ctx, &InitRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("Init: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.Status(ctx); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("Status: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.ClaimCertBegin(ctx, &ClaimCertBeginRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("ClaimCertBegin: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.ClaimCertComplete(ctx, &ClaimCertCompleteRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("ClaimCertComplete: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.ClaimShareBegin(ctx, &ClaimShareBeginRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("ClaimShareBegin: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.ClaimShareComplete(ctx, &ClaimShareCompleteRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("ClaimShareComplete: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.SignCSR(ctx, &SignCSRRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("SignCSR: expected ErrNotYetWired, got %v", err)
-	}
-}
 
 func TestErrors_Messages(t *testing.T) {
 	cause := errors.New("underlying")
@@ -79,6 +45,6 @@ func TestErrors_Messages(t *testing.T) {
 	}
 }
 
-func TestClientImplementsService(t *testing.T) {
-	var _ Service = (*Client)(nil)
+func TestGRPCClientImplementsService(t *testing.T) {
+	var _ Service = (*GRPCClient)(nil)
 }

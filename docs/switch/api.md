@@ -33,10 +33,10 @@ appears here.
 
 ## 2. There is no embedded transport for switches
 
-`ServiceRegistry` (`sdk/go/transport/embedded/adapter.go:32`) has **22 fields**
+`ServiceRegistry` (`sdk/go/transport/embedded/adapter.go:32`) has **25 fields**
 — Daemon, CA, TPM, VTPM, Device, IAM, KMS, SDN, Compute, IDevID, Attestation,
-Tenant, PXE, DNS, Gateway, Proxy, Overlay, Registry, Cluster, EAB, Invitation
-and ConfigDelivery — and **`Switch` is not one of them**. There is no
+Tenant, PXE, DNS, Gateway, Proxy, Overlay, Registry, Cluster, EAB, Invitation,
+ConfigDelivery, Ceremony, PIV and FIDO2 — and **`Switch` is not one of them**. There is no
 `registerSwitchHandlers` in `sdk/go/transport/embedded/dispatch.go`.
 
 `--transport embedded` therefore cannot reach physical switch management at

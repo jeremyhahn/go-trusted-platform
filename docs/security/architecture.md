@@ -253,11 +253,11 @@ Nothing. Policies live in the binary and on disk; the engine's store is
    daemon's mTLS server key is generated and held in the platform CA keystore.
    The listeners present it through a `crypto.Signer`. Before #33 it was
    written as a PEM bundle to `/tmp/platformd-integration/tls`.
-   - **The admin bootstrap bundle is the one argued on-disk key.** It lives at
-     `<platform-dir>/tls/client-bundle.pem` (0600, in a 0700 directory) because
-     a separate process (`platformctl`) needs it for the first mTLS connection.
-     **Read access to that file is admin access to the daemon API.**
-   - The CA bundle beside it is public.
+   - **No admin key is written.** The operator's only admin credential is the
+     one-shot `/init` reply ([`docs/bootstrap/cli.md`](../bootstrap/cli.md)
+     §1a). Only an `integration`-tagged test build writes a
+     `client-bundle.pem` for the devcontainer harness.
+   - The CA bundle in `<platform-dir>/tls` is public.
    - The QEMU migration tls-creds directory is a second on-disk key. QEMU reads
      its credentials from files, so that key is not a daemon key.
 

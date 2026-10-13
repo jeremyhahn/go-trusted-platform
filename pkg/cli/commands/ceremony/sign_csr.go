@@ -90,7 +90,10 @@ func runSignCSR(commonFlags *cli.CommonFlags, f *signCSRFlags) error {
 	}
 	defer base.Close()
 
-	client := ceremonysvc.NewClient()
+	client, err := NewService(base.Client())
+	if err != nil {
+		return err
+	}
 
 	req := &ceremonysvc.SignCSRRequest{
 		Username: f.username,

@@ -394,9 +394,12 @@ permission) contribute nothing. As of 2026-10-12:
 attestation:read|write,
 bmc:read|write|power|media|admin,
 ca:read|write|sign-csr,
+ceremony:read|write,
 device:read|write|delete, dns:read|write|delete,
+fido2:read|write,
 invitation:read|write|delete,
 ntp:read|write,
+piv:read|write,
 proxy:read|write|delete,
 sdn:read|write|delete,
 vtpm:read|write|delete
@@ -462,8 +465,8 @@ operation against a scope catalog, and **only gRPC allows an unlisted entry**:
 
 | Catalog | Coverage | Default for an unlisted entry |
 |---|---|---|
-| gRPC `pkg/api/grpc/method_permissions.go` | 185 of 461 RPCs, 11 of 31 services | Allowed once the token validates |
-| MCP `pkg/api/mcp/authz.go` | 94 of 428 registered tools | Denied (`AuthErrorToolNotClassified`, #300) |
+| gRPC `pkg/api/grpc/method_permissions.go` | 208 of 468 RPCs, 13 of 31 services | Allowed once the token validates |
+| MCP `pkg/api/mcp/authz.go` | 144 of 434 registered tools | Denied (`AuthErrorToolNotClassified`, #300) |
 | QUIC `pkg/api/quic/opcode_permissions.go` | every routable opcode and sub-opcode | Denied (`StatusPermissionDenied`, #767) |
 
 Detail, service lists and the standing owner question are in

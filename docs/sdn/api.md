@@ -208,7 +208,7 @@ Sub-opcode names use the `SwitchSub*` prefix rather than `Op*`, because they are
 not top-level opcodes. Do not send them at top level — `0x01` at top level is
 `OpLiveness`.
 
-`ServiceRegistry` (`sdk/go/transport/embedded/adapter.go:32`) has 22 fields and
+`ServiceRegistry` (`sdk/go/transport/embedded/adapter.go:32`) has 25 fields and
 **`Switch` is not one of them**, so the embedded transport cannot reach physical
 switch management. That is a genuine embedded-mode hole, distinct from the REST
 and QUIC gaps above.
