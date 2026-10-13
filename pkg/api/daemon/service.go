@@ -74,6 +74,11 @@ type Service struct {
 	onSubscribe func()
 	subIDSeq    atomic.Uint64
 
+	// now, when non-nil, replaces time.Now so tests can advance uptime and
+	// timestamps instead of sleeping (#284). Nil on every production path;
+	// read it through currentTime.
+	now func() time.Time
+
 	shutdownCh chan struct{}
 	shutdownFn func() error
 
@@ -133,6 +138,15 @@ func NewService(config *Config, opts ...ServiceOption) (*Service, error) {
 	s.systemStatus.Store(int32(platformv1.SystemStatus_SYSTEM_STATUS_INITIALIZING))
 
 	return s, nil
+}
+
+// currentTime returns the service's time source: time.Now unless a test set
+// s.now.
+func (s *Service) currentTime() time.Time {
+	if s.now == nil {
+		return time.Now()
+	}
+	return s.now()
 }
 
 // RegisterService registers a managed service with the daemon
@@ -198,7 +212,7 @@ func (s *Service) GetStatus(ctx context.Context, req *platformv1.GetStatusReques
 		var uptimeSeconds uint64
 		if !state.startedAt.IsZero() {
 			startedAt = timestamppb.New(state.startedAt)
-			uptimeSeconds = uint64(time.Since(state.startedAt).Seconds())
+			uptimeSeconds = uint64(s.currentTime().Sub(state.startedAt).Seconds())
 		}
 
 		info := &platformv1.ServiceInfo{
@@ -225,7 +239,7 @@ func (s *Service) GetStatus(ctx context.Context, req *platformv1.GetStatusReques
 		TotalMemoryMb:     memStats.Sys / 1024 / 1024,
 		AvailableMemoryMb: (memStats.Sys - memStats.Alloc) / 1024 / 1024,
 		BootTime:          timestamppb.New(s.startTime),
-		UptimeSeconds:     uint64(time.Since(s.startTime).Seconds()),
+		UptimeSeconds:     uint64(s.currentTime().Sub(s.startTime).Seconds()),
 	}
 
 	appVersion := app.GetVersion()
@@ -241,7 +255,7 @@ func (s *Service) GetStatus(ctx context.Context, req *platformv1.GetStatusReques
 		Status:    systemStatus,
 		Info:      platformInfo,
 		Services:  services,
-		Timestamp: timestamppb.New(time.Now()),
+		Timestamp: timestamppb.New(s.currentTime()),
 	}, nil
 }
 
@@ -293,7 +307,7 @@ func (s *Service) GetHealth(ctx context.Context, req *platformv1.GetHealthReques
 			Name:      name,
 			Status:    healthStatusFromServiceStatus(svcStatus),
 			Message:   lastError,
-			LastCheck: timestamppb.New(time.Now()),
+			LastCheck: timestamppb.New(s.currentTime()),
 		}
 
 		if compHealth.Status != platformv1.HealthStatus_HEALTH_STATUS_HEALTHY {
@@ -306,7 +320,7 @@ func (s *Service) GetHealth(ctx context.Context, req *platformv1.GetHealthReques
 	return &platformv1.GetHealthResponse{
 		Status:     overallHealth,
 		Components: componentHealth,
-		Timestamp:  timestamppb.New(time.Now()),
+		Timestamp:  timestamppb.New(s.currentTime()),
 	}, nil
 }
 
@@ -532,7 +546,7 @@ func (s *Service) StartService(ctx context.Context, req *platformv1.StartService
 	}
 
 	state.status.Store(int32(platformv1.ServiceStatus_SERVICE_STATUS_RUNNING))
-	state.startedAt = time.Now()
+	state.startedAt = s.currentTime()
 	state.startCount.Add(1)
 
 	// Build service info for response
@@ -658,7 +672,7 @@ func (s *Service) GetServiceStatus(ctx context.Context, req *platformv1.GetServi
 	var uptimeSeconds uint64
 	if !state.startedAt.IsZero() {
 		startedAt = timestamppb.New(state.startedAt)
-		uptimeSeconds = uint64(time.Since(state.startedAt).Seconds())
+		uptimeSeconds = uint64(s.currentTime().Sub(state.startedAt).Seconds())
 	}
 
 	serviceInfo := &platformv1.ServiceInfo{
@@ -696,7 +710,7 @@ func (s *Service) ListServices(ctx context.Context, req *platformv1.ListServices
 		var uptimeSeconds uint64
 		if !state.startedAt.IsZero() {
 			startedAt = timestamppb.New(state.startedAt)
-			uptimeSeconds = uint64(time.Since(state.startedAt).Seconds())
+			uptimeSeconds = uint64(s.currentTime().Sub(state.startedAt).Seconds())
 		}
 
 		info := &platformv1.ServiceInfo{
@@ -1053,7 +1067,7 @@ func (s *Service) getQuicBaaSClient() (quicbaas.ClientInterface, string, error) 
 // exactly the behaviour it warns about.
 func (s *Service) generateSubscriptionID() string {
 	id := s.subIDSeq.Add(1)
-	return time.Now().Format("20060102150405") + "-" + strconv.FormatUint(id, 10)
+	return s.currentTime().Format("20060102150405") + "-" + strconv.FormatUint(id, 10)
 }
 
 func serviceTypeFromName(name string) platformv1.ServiceType {

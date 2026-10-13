@@ -16,6 +16,7 @@ package mcp
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"math"
 )
 
@@ -454,11 +455,39 @@ func (r *ToolRegistry) executeSDNSetPortState(ctx context.Context, args map[stri
 	bridgeName := getString(args, "bridge_name")
 	portName := getString(args, "port_name")
 	state := getString(args, "state")
-
-	if err := r.service.SDNSetPortState(ctx, bridgeName, portName, state); err != nil {
+	rates, err := portRatesArgs(args)
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+
+	port, err := r.service.SDNSetPortState(ctx, bridgeName, portName, state, rates)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"success": true, "port": port}, nil
+}
+
+// portRatesArgs reads the optional ingress_rate, ingress_burst, egress_rate
+// and egress_burst arguments of sdn_set_port_state.
+func portRatesArgs(args map[string]interface{}) (PortRates, error) {
+	var rates PortRates
+	fields := []struct {
+		key string
+		dst *uint64
+	}{
+		{"ingress_rate", &rates.IngressRate},
+		{"ingress_burst", &rates.IngressBurst},
+		{"egress_rate", &rates.EgressRate},
+		{"egress_burst", &rates.EgressBurst},
+	}
+	for _, f := range fields {
+		v, err := optionalUint64Arg(args, f.key)
+		if err != nil {
+			return PortRates{}, err
+		}
+		*f.dst = v
+	}
+	return rates, nil
 }
 
 func (r *ToolRegistry) executeSDNListBridges(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -508,14 +537,19 @@ func (r *ToolRegistry) executeSDNDeletePort(ctx context.Context, args map[string
 	return map[string]interface{}{"success": true}, nil
 }
 
+// executeSDNApplyPolicy hands the tool arguments to the service as the REST
+// create-policy body, so MCP accepts exactly the policy document REST does.
 func (r *ToolRegistry) executeSDNApplyPolicy(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	policyID := getString(args, "policy_id")
-	bridgeName := getString(args, "bridge_name")
+	body, err := json.Marshal(args)
+	if err != nil {
+		return nil, ErrInvalidArgument{Msg: "policy arguments are not a JSON object", Cause: err}
+	}
 
-	if err := r.service.SDNApplyPolicy(ctx, policyID, bridgeName); err != nil {
+	policy, err := r.service.SDNApplyPolicy(ctx, body)
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return marshalResult(policy)
 }
 
 func (r *ToolRegistry) executeSDNGetPolicy(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -529,11 +563,18 @@ func (r *ToolRegistry) executeSDNGetPolicy(ctx context.Context, args map[string]
 }
 
 func (r *ToolRegistry) executeSDNListPolicies(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	policies, err := r.service.SDNListPolicies(ctx)
+	policies, err := r.service.SDNListPolicies(ctx, getString(args, "type"), getString(args, "target_id"))
 	if err != nil {
 		return nil, err
 	}
 	return map[string]interface{}{"policies": policies}, nil
+}
+
+func (r *ToolRegistry) executeSDNDeletePolicy(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	if err := r.service.SDNDeletePolicy(ctx, getString(args, "policy_id")); err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"success": true}, nil
 }
 
 // SDN Flow execution handlers

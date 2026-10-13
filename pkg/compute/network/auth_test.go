@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1366,22 +1367,16 @@ func TestNetworkAuthService_CertificateValidation(t *testing.T) {
 }
 
 func TestGenerateSessionID(t *testing.T) {
-	t.Run("generates unique IDs", func(t *testing.T) {
-		id1 := generateSessionID("eth0")
-		id2 := generateSessionID("eth0")
+	t.Run("generates unique IDs with no time between them", func(t *testing.T) {
+		id1 := generateSessionID()
+		id2 := generateSessionID()
 
-		assert.NotEmpty(t, id1)
-		assert.NotEmpty(t, id2)
-		assert.Len(t, id1, 32) // 16 bytes hex encoded
+		assert.NotEqual(t, id1, id2, "session IDs must not depend on the clock advancing")
 	})
 
-	t.Run("different ports produce different IDs", func(t *testing.T) {
-		id1 := generateSessionID("eth0")
-		id2 := generateSessionID("eth1")
-
-		assert.NotEmpty(t, id1)
-		assert.NotEmpty(t, id2)
-		assert.NotEqual(t, id1, id2)
+	t.Run("generates a UUID", func(t *testing.T) {
+		_, err := uuid.Parse(generateSessionID())
+		assert.NoError(t, err)
 	})
 }
 

@@ -40,6 +40,7 @@ func newTestSDNService(mockClient *ConfigurableMockOVSClient) *SDNService {
 		ports:          make(map[string]*portResource),
 		taps:           make(map[string]*tapResource),
 		vlans:          make(map[string]*vlanResource),
+		policies:       make(map[string]*policyResource),
 		portAuths:      make(map[string]*portAuthResource),
 	}
 }
@@ -632,6 +633,151 @@ func TestSDNServiceUnit_GetPort_OVSError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, resp)
 	assert.Contains(t, err.Error(), "failed to get port")
+}
+
+func newSetPortStateTestService(mockClient *ConfigurableMockOVSClient) *SDNService {
+	svc := newTestSDNService(mockClient)
+	svc.bridges["br0"] = &bridgeResource{id: "uuid-br0", name: "br0"}
+	svc.ports["port0"] = &portResource{id: "uuid-port0", name: "port0", bridgeID: "br0"}
+	return svc
+}
+
+func TestSDNServiceUnit_SetPortState_AppliesIngressPolicing(t *testing.T) {
+	mockClient := NewConfigurableMockOVSClient()
+	svc := newSetPortStateTestService(mockClient)
+
+	resp, err := svc.SetPortState(context.Background(), &platformv1.SetPortStateRequest{
+		BridgeId: "br0", PortId: "port0", AdminState: "up",
+		IngressRate: 10_000_000, IngressBurst: 1_000_000,
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.GetStatus().GetSuccess())
+
+	calls := mockClient.GetCalls("SetIngressPolicing")
+	require.Len(t, calls, 1)
+	assert.Equal(t, []interface{}{"port0", uint64(10_000_000), uint64(1_000_000)}, calls[0].Args)
+}
+
+func TestSDNServiceUnit_SetPortState_ZeroRateLeavesPolicing(t *testing.T) {
+	mockClient := NewConfigurableMockOVSClient()
+	svc := newSetPortStateTestService(mockClient)
+
+	_, err := svc.SetPortState(context.Background(), &platformv1.SetPortStateRequest{
+		BridgeId: "br0", PortId: "port0", AdminState: "down",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, mockClient.GetCalls("SetIngressPolicing"))
+	assert.Empty(t, mockClient.GetCalls("SetEgressShaping"))
+}
+
+func TestSDNServiceUnit_SetPortState_InvalidIngressPolicing(t *testing.T) {
+	tests := []struct {
+		name  string
+		rate  uint64
+		burst uint64
+	}{
+		{name: "rate below 1 kbps", rate: 999},
+		{name: "rate not a whole kbps", rate: 1500},
+		{name: "burst not a whole kb", rate: 1000, burst: 1},
+		{name: "burst without a rate", burst: 1000},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := NewConfigurableMockOVSClient()
+			svc := newSetPortStateTestService(mockClient)
+
+			_, err := svc.SetPortState(context.Background(), &platformv1.SetPortStateRequest{
+				BridgeId: "br0", PortId: "port0", AdminState: "up",
+				IngressRate: tt.rate, IngressBurst: tt.burst,
+			})
+			assert.Equal(t, codes.InvalidArgument, status.Code(err))
+			assert.Contains(t, err.Error(), "invalid ingress policing")
+			// Nothing is applied when the request is refused.
+			assert.Empty(t, mockClient.GetCalls("SetPortState"))
+			assert.Empty(t, mockClient.GetCalls("SetIngressPolicing"))
+		})
+	}
+}
+
+func TestSDNServiceUnit_SetPortState_IngressPolicingErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		ovsErr   error
+		wantCode codes.Code
+	}{
+		{name: "interface gone", ovsErr: ovs.ErrInterfaceNotFound, wantCode: codes.NotFound},
+		{name: "transaction failed", ovsErr: errors.New("ovsdb down"), wantCode: codes.Internal},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := NewConfigurableMockOVSClient()
+			mockClient.OnSetIngressPolicing(func(context.Context, string, uint64, uint64) error {
+				return tt.ovsErr
+			})
+			svc := newSetPortStateTestService(mockClient)
+
+			_, err := svc.SetPortState(context.Background(), &platformv1.SetPortStateRequest{
+				BridgeId: "br0", PortId: "port0", AdminState: "up", IngressRate: 1000,
+			})
+			assert.Equal(t, tt.wantCode, status.Code(err))
+		})
+	}
+}
+
+func TestSDNServiceUnit_SetPortState_AppliesEgressShaping(t *testing.T) {
+	mockClient := NewConfigurableMockOVSClient()
+	svc := newSetPortStateTestService(mockClient)
+
+	resp, err := svc.SetPortState(context.Background(), &platformv1.SetPortStateRequest{
+		BridgeId: "br0", PortId: "port0", AdminState: "up",
+		EgressRate: 20_000_000, EgressBurst: 2_000_000,
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.GetStatus().GetSuccess())
+
+	calls := mockClient.GetCalls("SetEgressShaping")
+	require.Len(t, calls, 1)
+	assert.Equal(t, []interface{}{"port0", uint64(20_000_000), uint64(2_000_000)}, calls[0].Args)
+	assert.Empty(t, mockClient.GetCalls("SetIngressPolicing"), "an egress rate is not an ingress rate")
+}
+
+func TestSDNServiceUnit_SetPortState_InvalidEgressShaping(t *testing.T) {
+	mockClient := NewConfigurableMockOVSClient()
+	svc := newSetPortStateTestService(mockClient)
+
+	_, err := svc.SetPortState(context.Background(), &platformv1.SetPortStateRequest{
+		BridgeId: "br0", PortId: "port0", AdminState: "up", EgressBurst: 1000,
+	})
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	assert.Contains(t, err.Error(), "invalid egress shaping")
+	// Nothing is applied when the request is refused.
+	assert.Empty(t, mockClient.GetCalls("SetPortState"))
+	assert.Empty(t, mockClient.GetCalls("SetEgressShaping"))
+}
+
+func TestSDNServiceUnit_SetPortState_EgressShapingErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		ovsErr   error
+		wantCode codes.Code
+	}{
+		{name: "port gone", ovsErr: ovs.ErrPortNotFound, wantCode: codes.NotFound},
+		{name: "transaction failed", ovsErr: errors.New("ovsdb down"), wantCode: codes.Internal},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := NewConfigurableMockOVSClient()
+			mockClient.OnSetEgressShaping(func(context.Context, string, uint64, uint64) error {
+				return tt.ovsErr
+			})
+			svc := newSetPortStateTestService(mockClient)
+
+			_, err := svc.SetPortState(context.Background(), &platformv1.SetPortStateRequest{
+				BridgeId: "br0", PortId: "port0", AdminState: "up", EgressRate: 1000,
+			})
+			assert.Equal(t, tt.wantCode, status.Code(err))
+		})
+	}
 }
 
 // =============================================================================

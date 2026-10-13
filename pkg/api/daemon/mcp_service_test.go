@@ -175,44 +175,6 @@ func TestNormalizeKeyAlgorithm(t *testing.T) {
 	}
 }
 
-func TestMCPParsePortState(t *testing.T) {
-	tests := []struct {
-		name    string
-		input   string
-		wantErr bool
-	}{
-		{"unconnected", "unconnected", false},
-		{"Unconnected", "Unconnected", false},
-		{"UNCONNECTED", "UNCONNECTED", false},
-		{"provisioning", "provisioning", false},
-		{"enrolled", "enrolled", false},
-		{"unauthorized", "unauthorized", false},
-		{"authenticating", "authenticating", false},
-		{"authorized", "authorized", false},
-		{"quarantined", "quarantined", false},
-		{"blocked", "blocked", false},
-		{"with_spaces", "  authorized  ", false},
-		{"invalid", "invalid_state", true},
-		{"empty", "", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := parsePortState(tt.input)
-			if tt.wantErr {
-				if err == nil {
-					t.Error("expected error")
-				}
-				if _, ok := err.(ErrSDNInvalidPortState); !ok {
-					t.Errorf("expected ErrSDNInvalidPortState, got %T", err)
-				}
-			} else if err != nil {
-				t.Errorf("unexpected error: %v", err)
-			}
-		})
-	}
-}
-
 func TestParseKMSKeyUsage(t *testing.T) {
 	tests := []struct {
 		name    string

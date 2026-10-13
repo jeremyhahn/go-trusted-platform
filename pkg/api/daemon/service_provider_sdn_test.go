@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -774,17 +775,6 @@ func TestServiceProvider_BuildFlowActions_WithInvalidActionType(t *testing.T) {
 // Additional SDN Nil Service Tests - Service Provider
 // =============================================================================
 
-func TestServiceProvider_SDNSetPortState_NotImplemented(t *testing.T) {
-	ctx := context.Background()
-	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
-
-	// SDNSetPortState is not implemented and returns an error directly
-	err := provider.SDNSetPortState(ctx, "br0", "eth0", "authorized")
-	if err == nil {
-		t.Fatal("expected error")
-	}
-}
-
 func TestServiceProvider_SDNCreateBridge_NilServiceReturnsError(t *testing.T) {
 	ctx := context.Background()
 	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
@@ -837,36 +827,33 @@ func TestServiceProvider_SDNDeletePort_NilServiceReturnsError(t *testing.T) {
 	}
 }
 
-func TestServiceProvider_SDNApplyPolicy_NotImplemented(t *testing.T) {
+func TestServiceProvider_SDNPolicies_NilServiceReturnsError(t *testing.T) {
 	ctx := context.Background()
 	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
 
-	// SDNApplyPolicy is not implemented
-	err := provider.SDNApplyPolicy(ctx, "policy1", "br0")
-	if err == nil {
-		t.Fatal("expected error")
+	calls := map[string]func() error{
+		"apply": func() error {
+			_, err := provider.SDNApplyPolicy(ctx, json.RawMessage(`{"name":"p1","type":"acl"}`))
+			return err
+		},
+		"get": func() error {
+			_, err := provider.SDNGetPolicy(ctx, "p1")
+			return err
+		},
+		"list": func() error {
+			_, err := provider.SDNListPolicies(ctx, "", "")
+			return err
+		},
+		"delete": func() error {
+			return provider.SDNDeletePolicy(ctx, "p1")
+		},
 	}
-}
-
-func TestServiceProvider_SDNGetPolicy_NotImplemented(t *testing.T) {
-	ctx := context.Background()
-	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
-
-	// SDNGetPolicy is not implemented
-	_, err := provider.SDNGetPolicy(ctx, "policy1")
-	if err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-func TestServiceProvider_SDNListPolicies_NotImplemented(t *testing.T) {
-	ctx := context.Background()
-	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
-
-	// SDNListPolicies is not implemented
-	_, err := provider.SDNListPolicies(ctx)
-	if err == nil {
-		t.Fatal("expected error")
+	for name, call := range calls {
+		t.Run(name, func(t *testing.T) {
+			if _, ok := call().(ErrServiceNotAvailable); !ok {
+				t.Errorf("expected ErrServiceNotAvailable")
+			}
+		})
 	}
 }
 

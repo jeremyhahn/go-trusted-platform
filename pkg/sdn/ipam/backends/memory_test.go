@@ -11,7 +11,6 @@ import (
 	"net/netip"
 	"sync"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -1334,88 +1333,71 @@ func TestMemoryBackend_Renew(t *testing.T) {
 
 	t.Run("renews lease successfully", func(t *testing.T) {
 		t.Parallel()
-		synctest.Test(t, func(t *testing.T) {
-			ctx := context.Background()
-			backend := NewMemoryBackend()
-			defer backend.Close()
+		ctx := context.Background()
+		clock := newManualClock()
+		backend := newClockedMemoryBackend(clock)
+		defer backend.Close()
 
-			pool := &ipam.Pool{
-				ID:                   "pool-1",
-				Name:                 "test-pool",
-				CIDR:                 netip.MustParsePrefix("10.0.0.0/24"),
-				DefaultLeaseDuration: 1 * time.Hour,
-			}
-			_ = backend.CreatePool(ctx, pool)
+		pool := &ipam.Pool{
+			ID:                   "pool-1",
+			Name:                 "test-pool",
+			CIDR:                 netip.MustParsePrefix("10.0.0.0/24"),
+			DefaultLeaseDuration: 1 * time.Hour,
+		}
+		_ = backend.CreatePool(ctx, pool)
 
-			req := &ipam.AllocationRequest{
-				PoolID:   "pool-1",
-				DeviceID: "device-1",
-			}
-			alloc, err := backend.Allocate(ctx, req)
-			if err != nil {
-				t.Fatalf("Allocate failed: %v", err)
-			}
-			originalLastSeen := alloc.LastSeen
+		req := &ipam.AllocationRequest{
+			PoolID:   "pool-1",
+			DeviceID: "device-1",
+		}
+		alloc, err := backend.Allocate(ctx, req)
+		require.NoError(t, err)
+		require.Equal(t, clock.Now(), alloc.LastSeen)
 
-			// Advance the fake clock so renewal stamps a later time
-			<-time.After(10 * time.Millisecond)
+		clock.Advance(10 * time.Minute)
 
-			err = backend.Renew(ctx, alloc.IP)
-			if err != nil {
-				t.Fatalf("Renew failed: %v", err)
-			}
+		err = backend.Renew(ctx, alloc.IP)
+		if err != nil {
+			t.Fatalf("Renew failed: %v", err)
+		}
 
-			renewed, _ := backend.GetAllocation(ctx, alloc.IP)
-			if !renewed.LastSeen.After(originalLastSeen) {
-				t.Error("LastSeen should be updated after renewal")
-			}
-			if want := originalLastSeen.Add(10 * time.Millisecond); !renewed.LastSeen.Equal(want) {
-				t.Errorf("LastSeen = %v, want %v", renewed.LastSeen, want)
-			}
-		})
+		renewed, _ := backend.GetAllocation(ctx, alloc.IP)
+		assert.Equal(t, clock.Now(), renewed.LastSeen, "renewal must stamp LastSeen with the current time")
+		assert.Equal(t, clock.Now().Add(time.Hour), renewed.ExpiresAt, "renewal must extend the lease from the current time")
 	})
 
 	t.Run("returns error for expired allocation", func(t *testing.T) {
 		t.Parallel()
-		synctest.Test(t, func(t *testing.T) {
-			ctx := context.Background()
-			backend := NewMemoryBackend()
-			defer backend.Close()
+		ctx := context.Background()
+		clock := newManualClock()
+		backend := newClockedMemoryBackend(clock)
+		defer backend.Close()
 
-			pool := &ipam.Pool{
-				ID:                "pool-1",
-				Name:              "test-pool",
-				CIDR:              netip.MustParsePrefix("10.0.0.0/24"),
-				InactivityTimeout: 1 * time.Millisecond,
-			}
-			_ = backend.CreatePool(ctx, pool)
+		pool := &ipam.Pool{
+			ID:                "pool-1",
+			Name:              "test-pool",
+			CIDR:              netip.MustParsePrefix("10.0.0.0/24"),
+			InactivityTimeout: time.Hour,
+		}
+		_ = backend.CreatePool(ctx, pool)
 
-			req := &ipam.AllocationRequest{
-				PoolID:   "pool-1",
-				DeviceID: "device-1",
-			}
-			alloc, err := backend.Allocate(ctx, req)
-			if err != nil {
-				t.Fatalf("Allocate failed: %v", err)
-			}
+		req := &ipam.AllocationRequest{
+			PoolID:   "pool-1",
+			DeviceID: "device-1",
+		}
+		alloc, err := backend.Allocate(ctx, req)
+		require.NoError(t, err)
 
-			// Pass the inactivity timeout on the fake clock
-			<-time.After(pool.InactivityTimeout + time.Nanosecond)
+		clock.Advance(time.Hour + time.Nanosecond)
 
-			// Expire inactive allocations
-			expired, err := backend.ExpireInactive(ctx, "pool-1")
-			if err != nil {
-				t.Fatalf("ExpireInactive failed: %v", err)
-			}
-			if len(expired) != 1 {
-				t.Fatalf("expected 1 expired allocation, got %d", len(expired))
-			}
+		expired, err := backend.ExpireInactive(ctx, "pool-1")
+		require.NoError(t, err)
+		require.Len(t, expired, 1)
 
-			err = backend.Renew(ctx, alloc.IP)
-			if !errors.Is(err, ipam.ErrAllocationExpired) {
-				t.Errorf("expected ErrAllocationExpired, got %v", err)
-			}
-		})
+		err = backend.Renew(ctx, alloc.IP)
+		if !errors.Is(err, ipam.ErrAllocationExpired) {
+			t.Errorf("expected ErrAllocationExpired, got %v", err)
+		}
 	})
 
 	t.Run("returns error for released allocation", func(t *testing.T) {
@@ -1704,67 +1686,56 @@ func TestMemoryBackend_ExpireInactive(t *testing.T) {
 
 	t.Run("expires inactive allocations", func(t *testing.T) {
 		t.Parallel()
-		synctest.Test(t, func(t *testing.T) {
-			ctx := context.Background()
-			backend := NewMemoryBackend()
-			defer backend.Close()
-
-			pool := &ipam.Pool{
-				ID:                "pool-1",
-				Name:              "test-pool",
-				CIDR:              netip.MustParsePrefix("10.0.0.0/24"),
-				InactivityTimeout: 1 * time.Millisecond,
-			}
-			_ = backend.CreatePool(ctx, pool)
-
-			req := &ipam.AllocationRequest{
-				PoolID:   "pool-1",
-				DeviceID: "device-1",
-			}
-			alloc, err := backend.Allocate(ctx, req)
-			if err != nil {
-				t.Fatalf("Allocate failed: %v", err)
-			}
-
-			// Exactly at the timeout the allocation is still live
-			<-time.After(pool.InactivityTimeout)
-			expired, err := backend.ExpireInactive(ctx, "pool-1")
-			if err != nil {
-				t.Fatalf("ExpireInactive failed: %v", err)
-			}
-			if len(expired) != 0 {
-				t.Fatalf("expected no expiry at the timeout boundary, got %d", len(expired))
-			}
-
-			// One nanosecond past it, it expires
-			<-time.After(time.Nanosecond)
-			expired, err = backend.ExpireInactive(ctx, "pool-1")
-			if err != nil {
-				t.Fatalf("ExpireInactive failed: %v", err)
-			}
-			if len(expired) != 1 {
-				t.Errorf("expected 1 expired allocation, got %d", len(expired))
-			}
-
-			// Verify allocation is expired
-			retrievedAlloc, _ := backend.GetAllocation(ctx, alloc.IP)
-			if retrievedAlloc.Status != ipam.AllocationStatusExpired {
-				t.Errorf("expected status %v, got %v", ipam.AllocationStatusExpired, retrievedAlloc.Status)
-			}
-		})
-	})
-
-	t.Run("does not expire active allocations", func(t *testing.T) {
-		t.Parallel()
 		ctx := context.Background()
-		backend := NewMemoryBackend()
+		clock := newManualClock()
+		backend := newClockedMemoryBackend(clock)
 		defer backend.Close()
 
 		pool := &ipam.Pool{
 			ID:                "pool-1",
 			Name:              "test-pool",
 			CIDR:              netip.MustParsePrefix("10.0.0.0/24"),
-			InactivityTimeout: 1 * time.Hour, // Long timeout
+			InactivityTimeout: time.Hour,
+		}
+		_ = backend.CreatePool(ctx, pool)
+
+		req := &ipam.AllocationRequest{
+			PoolID:   "pool-1",
+			DeviceID: "device-1",
+		}
+		alloc, err := backend.Allocate(ctx, req)
+		require.NoError(t, err)
+
+		clock.Advance(time.Hour + time.Nanosecond)
+
+		expired, err := backend.ExpireInactive(ctx, "pool-1")
+		if err != nil {
+			t.Fatalf("ExpireInactive failed: %v", err)
+		}
+		if len(expired) != 1 {
+			t.Errorf("expected 1 expired allocation, got %d", len(expired))
+		}
+
+		// Verify allocation is expired
+		retrievedAlloc, _ := backend.GetAllocation(ctx, alloc.IP)
+		if retrievedAlloc.Status != ipam.AllocationStatusExpired {
+			t.Errorf("expected status %v, got %v", ipam.AllocationStatusExpired, retrievedAlloc.Status)
+		}
+		assert.Equal(t, clock.Now(), retrievedAlloc.ReleasedAt)
+	})
+
+	t.Run("does not expire an allocation idle for exactly the timeout", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		clock := newManualClock()
+		backend := newClockedMemoryBackend(clock)
+		defer backend.Close()
+
+		pool := &ipam.Pool{
+			ID:                "pool-1",
+			Name:              "test-pool",
+			CIDR:              netip.MustParsePrefix("10.0.0.0/24"),
+			InactivityTimeout: time.Hour,
 		}
 		_ = backend.CreatePool(ctx, pool)
 
@@ -1774,6 +1745,10 @@ func TestMemoryBackend_ExpireInactive(t *testing.T) {
 		}
 		_, _ = backend.Allocate(ctx, req)
 
+		// The timeout is exclusive: an allocation last seen exactly one
+		// timeout ago is still active.
+		clock.Advance(time.Hour)
+
 		expired, err := backend.ExpireInactive(ctx, "pool-1")
 		if err != nil {
 			t.Fatalf("ExpireInactive failed: %v", err)
@@ -1781,6 +1756,31 @@ func TestMemoryBackend_ExpireInactive(t *testing.T) {
 		if len(expired) != 0 {
 			t.Errorf("expected 0 expired allocations, got %d", len(expired))
 		}
+	})
+
+	t.Run("renewal restarts the inactivity window", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		clock := newManualClock()
+		backend := newClockedMemoryBackend(clock)
+		defer backend.Close()
+
+		require.NoError(t, backend.CreatePool(ctx, &ipam.Pool{
+			ID:                "pool-1",
+			Name:              "test-pool",
+			CIDR:              netip.MustParsePrefix("10.0.0.0/24"),
+			InactivityTimeout: time.Hour,
+		}))
+		alloc, err := backend.Allocate(ctx, &ipam.AllocationRequest{PoolID: "pool-1", DeviceID: "device-1"})
+		require.NoError(t, err)
+
+		clock.Advance(45 * time.Minute)
+		require.NoError(t, backend.Renew(ctx, alloc.IP))
+		clock.Advance(45 * time.Minute)
+
+		expired, err := backend.ExpireInactive(ctx, "pool-1")
+		require.NoError(t, err)
+		assert.Empty(t, expired, "90 minutes after allocation but 45 after renewal is inside the window")
 	})
 
 	t.Run("returns nil when no timeout configured", func(t *testing.T) {
@@ -1908,49 +1908,45 @@ func TestMemoryBackend_GetPoolStats(t *testing.T) {
 
 	t.Run("counts expired and reserved allocations", func(t *testing.T) {
 		t.Parallel()
-		synctest.Test(t, func(t *testing.T) {
-			ctx := context.Background()
-			backend := NewMemoryBackend()
-			defer backend.Close()
+		ctx := context.Background()
+		clock := newManualClock()
+		backend := newClockedMemoryBackend(clock)
+		defer backend.Close()
 
-			pool := &ipam.Pool{
-				ID:                "pool-1",
-				Name:              "test-pool",
-				CIDR:              netip.MustParsePrefix("10.0.0.0/28"),
-				InactivityTimeout: 1 * time.Millisecond,
-			}
-			_ = backend.CreatePool(ctx, pool)
+		pool := &ipam.Pool{
+			ID:                "pool-1",
+			Name:              "test-pool",
+			CIDR:              netip.MustParsePrefix("10.0.0.0/28"),
+			InactivityTimeout: time.Hour,
+		}
+		_ = backend.CreatePool(ctx, pool)
 
-			// Create a reservation
-			_ = backend.Reserve(ctx, "pool-1", netip.MustParseAddr("10.0.0.1"), "gateway")
+		// Create a reservation
+		_ = backend.Reserve(ctx, "pool-1", netip.MustParseAddr("10.0.0.1"), "gateway")
 
-			// Create and expire an allocation
-			req := &ipam.AllocationRequest{
-				PoolID:   "pool-1",
-				DeviceID: "device-1",
-			}
-			if _, err := backend.Allocate(ctx, req); err != nil {
-				t.Fatalf("Allocate failed: %v", err)
-			}
+		// Create and expire an allocation
+		req := &ipam.AllocationRequest{
+			PoolID:   "pool-1",
+			DeviceID: "device-1",
+		}
+		_, err := backend.Allocate(ctx, req)
+		require.NoError(t, err)
 
-			// Pass the inactivity timeout on the fake clock, then expire
-			<-time.After(pool.InactivityTimeout + time.Nanosecond)
-			if _, err := backend.ExpireInactive(ctx, "pool-1"); err != nil {
-				t.Fatalf("ExpireInactive failed: %v", err)
-			}
+		clock.Advance(time.Hour + time.Nanosecond)
+		_, err = backend.ExpireInactive(ctx, "pool-1")
+		require.NoError(t, err)
 
-			stats, err := backend.GetPoolStats(ctx, "pool-1")
-			if err != nil {
-				t.Fatalf("GetPoolStats failed: %v", err)
-			}
+		stats, err := backend.GetPoolStats(ctx, "pool-1")
+		if err != nil {
+			t.Fatalf("GetPoolStats failed: %v", err)
+		}
 
-			if stats.ReservedIPs != 1 {
-				t.Errorf("expected ReservedIPs %d, got %d", 1, stats.ReservedIPs)
-			}
-			if stats.ExpiredIPs != 1 {
-				t.Errorf("expected ExpiredIPs %d, got %d", 1, stats.ExpiredIPs)
-			}
-		})
+		if stats.ReservedIPs != 1 {
+			t.Errorf("expected ReservedIPs %d, got %d", 1, stats.ReservedIPs)
+		}
+		if stats.ExpiredIPs != 1 {
+			t.Errorf("expected ExpiredIPs %d, got %d", 1, stats.ExpiredIPs)
+		}
 	})
 }
 
@@ -2794,6 +2790,40 @@ func TestNewMemoryBackendWithConfig(t *testing.T) {
 		if backend == nil {
 			t.Fatal("expected non-nil backend")
 		}
+	})
+
+	t.Run("stamps pools from the configured clock", func(t *testing.T) {
+		t.Parallel()
+		clock := newManualClock()
+		backend := newClockedMemoryBackend(clock)
+		defer backend.Close()
+
+		ctx := context.Background()
+		require.NoError(t, backend.CreatePool(ctx, &ipam.Pool{
+			ID:   "pool-1",
+			Name: "test-pool",
+			CIDR: netip.MustParsePrefix("10.0.0.0/24"),
+		}))
+		got, err := backend.GetPool(ctx, "pool-1")
+		require.NoError(t, err)
+		assert.Equal(t, clock.Now(), got.CreatedAt)
+	})
+
+	t.Run("falls back to the wall clock when no clock is configured", func(t *testing.T) {
+		t.Parallel()
+		backend := NewMemoryBackendWithConfig(&MemoryBackendConfig{Clock: nil})
+		defer backend.Close()
+
+		ctx := context.Background()
+		before := time.Now()
+		require.NoError(t, backend.CreatePool(ctx, &ipam.Pool{
+			ID:   "pool-1",
+			Name: "test-pool",
+			CIDR: netip.MustParsePrefix("10.0.0.0/24"),
+		}))
+		got, err := backend.GetPool(ctx, "pool-1")
+		require.NoError(t, err)
+		assert.False(t, got.CreatedAt.Before(before), "a nil Clock must fall back to time.Now")
 	})
 }
 

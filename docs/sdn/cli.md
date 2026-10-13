@@ -117,7 +117,16 @@ Every verb requires `--bridge <bridge-id>`.
 | `--mtu` | int | | MTU |
 | `--admin-state` | string | | `up` or `down` |
 
-**`set-state`** takes `--bridge` and `--admin-state`.
+**`set-state`**
+
+| Flag | Type | Required | Meaning |
+|---|---|---|---|
+| `--bridge` | string | **yes** | Bridge ID |
+| `--admin-state` | string | **yes** | `up` or `down` |
+| `--ingress-rate` | uint | | Ingress policing rate in bps, a whole multiple of 1000; `0` leaves policing unchanged |
+| `--ingress-burst` | uint | | Ingress policing burst in bits, a whole multiple of 1000; needs `--ingress-rate` |
+| `--egress-rate` | uint | | Egress shaping rate in bps; `0` leaves shaping unchanged |
+| `--egress-burst` | uint | | Egress shaping burst in bits; needs `--egress-rate` |
 
 **Administrative state is not authentication state.** `--admin-state up|down`
 controls whether the port is administratively enabled. The eight-value

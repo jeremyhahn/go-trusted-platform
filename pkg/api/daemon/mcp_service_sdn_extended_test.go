@@ -19,7 +19,6 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"google.golang.org/grpc"
 )
@@ -216,21 +215,6 @@ func (m *mockSDNServiceClient) GetFlowStats(ctx context.Context, in *platformv1.
 
 func (m *mockSDNServiceClient) StreamFlowLogs(ctx context.Context, in *platformv1.StreamFlowLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[platformv1.FlowLogEntry], error) {
 	return nil, errors.New("streaming not implemented in mock")
-}
-
-// =============================================================================
-// Helper function to create SDN service for testing
-// =============================================================================
-
-// createTestSDNService creates an SDNService with empty maps for testing
-func createTestSDNService() *SDNService {
-	return &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
-	}
 }
 
 // =============================================================================
@@ -529,49 +513,6 @@ func TestMCPServiceProvider_SDNDeletePort_VerifyErrorType(t *testing.T) {
 // =============================================================================
 // SDNListPolicies Tests
 // =============================================================================
-
-func TestMCPServiceProvider_SDNListPolicies_NilPolicyEngineExtended(t *testing.T) {
-	ctx := context.Background()
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		Logger: slog.Default(),
-	})
-
-	_, err := provider.SDNListPolicies(ctx)
-	if err == nil {
-		t.Fatal("expected error for nil policy engine")
-	}
-
-	_, ok := err.(ErrSDNPolicyEngineNotConfigured)
-	if !ok {
-		t.Fatalf("expected ErrSDNPolicyEngineNotConfigured, got %T: %v", err, err)
-	}
-}
-
-func TestMCPServiceProvider_SDNListPolicies_WithPolicyEngineAndSDNService(t *testing.T) {
-	ctx := context.Background()
-	sdnService := createTestSDNService()
-	mockEngine := &sdnTestMockPolicyEngine{}
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService:   sdnService,
-		PolicyEngine: mockEngine,
-		Logger:       slog.Default(),
-	})
-
-	result, err := provider.SDNListPolicies(ctx)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Should return empty list when no policies exist
-	if result == nil {
-		t.Fatal("expected non-nil result")
-	}
-
-	if len(result) != 0 {
-		t.Errorf("expected empty result, got %d items", len(result))
-	}
-}
 
 // =============================================================================
 // SDNAddFlow Tests
@@ -1279,97 +1220,8 @@ func TestMCPServiceProvider_SDN_NilServiceErrors_ReturningValues_TableDriven(t *
 }
 
 // =============================================================================
-// SDNSetPortState Extended Tests - Port Not Found
-// =============================================================================
-
-func TestMCPServiceProvider_SDNSetPortState_InvalidStateRejected(t *testing.T) {
-	// Test that invalid port states are rejected.
-	// We need both SDN service and policy engine to reach the state validation.
-	testCases := []struct {
-		name  string
-		state string
-	}{
-		{"invalid-state", "invalid-state"},
-		{"typo forwarding", "forwading"},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			sdnService := createTestSDNService()
-			provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-				SDNService:   sdnService,
-				PolicyEngine: &sdnTestMockPolicyEngine{},
-				Logger:       slog.Default(),
-			})
-
-			err := provider.SDNSetPortState(ctx, "br0", "port1", tc.state)
-			if err == nil {
-				t.Fatal("expected error for invalid state")
-			}
-
-			// Should get invalid port state error
-			_, ok := err.(ErrSDNInvalidPortState)
-			if !ok {
-				t.Fatalf("expected ErrSDNInvalidPortState, got %T: %v", err, err)
-			}
-		})
-	}
-}
-
-func TestMCPServiceProvider_SDNSetPortState_ValidatesStateAfterServiceAndPolicyCheck(t *testing.T) {
-	// This test verifies that state validation happens after SDN service and policy engine checks.
-	// The order is: params -> SDN service nil -> policy engine nil -> state validation
-	ctx := context.Background()
-	sdnService := createTestSDNService()
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService:   sdnService,
-		PolicyEngine: &sdnTestMockPolicyEngine{},
-		Logger:       slog.Default(),
-	})
-
-	// Invalid state should be rejected after passing SDN and policy checks
-	err := provider.SDNSetPortState(ctx, "br0", "port1", "invalid-state")
-	if err == nil {
-		t.Fatal("expected error for invalid state")
-	}
-
-	// Verify it's the right error type
-	_, ok := err.(ErrSDNInvalidPortState)
-	if !ok {
-		t.Fatalf("expected ErrSDNInvalidPortState, got %T: %v", err, err)
-	}
-}
-
-// =============================================================================
 // SDNApplyPolicy Success Test
 // =============================================================================
-
-func TestMCPServiceProvider_SDNApplyPolicy_SuccessWithMockEngine(t *testing.T) {
-	ctx := context.Background()
-	// SDNApplyPolicy does not call SDN service methods directly - it only uses policy engine
-	mockEngine := &sdnTestMockPolicyEngine{
-		getPolicyResp: &policy.PortPolicy{
-			TenantID: "tenant-1",
-			VLAN:     100,
-		},
-		applyPolicyErr: nil,
-	}
-
-	// Need SDN service to pass the nil check, but it won't be called
-	sdnService := createTestSDNService()
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService:   sdnService,
-		PolicyEngine: mockEngine,
-		Logger:       slog.Default(),
-	})
-
-	err := provider.SDNApplyPolicy(ctx, "port1", "br0")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
 
 // =============================================================================
 // SDNAuthenticatePort Format Variations
@@ -1816,83 +1668,6 @@ func TestMCPServiceProvider_SDNDeletePort_NonexistentPort(t *testing.T) {
 // =============================================================================
 // SDNListPolicies Extended Tests - With Policy Engine
 // =============================================================================
-
-func TestMCPServiceProvider_SDNListPolicies_WithPolicyEngineOnly(t *testing.T) {
-	// Test that SDNListPolicies works with just policy engine (no SDN service)
-	ctx := context.Background()
-	mockEngine := &sdnTestMockPolicyEngine{}
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService:   nil,
-		PolicyEngine: mockEngine,
-		Logger:       slog.Default(),
-	})
-
-	// With policy engine but no SDN service, should return empty list
-	result, err := provider.SDNListPolicies(ctx)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if result == nil {
-		t.Fatal("expected non-nil result")
-	}
-
-	if len(result) != 0 {
-		t.Errorf("expected empty result, got %d items", len(result))
-	}
-}
-
-func TestMCPServiceProvider_SDNListPolicies_WithNilSDNService(t *testing.T) {
-	ctx := context.Background()
-	mockEngine := &sdnTestMockPolicyEngine{}
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService:   nil,
-		PolicyEngine: mockEngine,
-		Logger:       slog.Default(),
-	})
-
-	// SDN service is nil, so the internal iteration won't find bridges
-	// but the policy engine is configured, so it should return empty list
-	result, err := provider.SDNListPolicies(ctx)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if result == nil {
-		t.Fatal("expected non-nil result")
-	}
-
-	if len(result) != 0 {
-		t.Errorf("expected empty result, got %d items", len(result))
-	}
-}
-
-func TestMCPServiceProvider_SDNListPolicies_PolicyEngineTypeAssertion(t *testing.T) {
-	// This test verifies that the type assertion for policy.Engine works
-	ctx := context.Background()
-
-	// Using the mock policy engine (which is NOT *policy.Engine)
-	mockEngine := &sdnTestMockPolicyEngine{}
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService:   nil,
-		PolicyEngine: mockEngine,
-		Logger:       slog.Default(),
-	})
-
-	// The function checks if policyEngine is *policy.Engine
-	// Our mock is not, so it should skip that branch and return empty list
-	result, err := provider.SDNListPolicies(ctx)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(result) != 0 {
-		t.Errorf("expected empty result since mock is not *policy.Engine, got %d items", len(result))
-	}
-}
 
 // =============================================================================
 // SDNAddFlow Extended Tests - Parameter Validation

@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	sdnsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/sdn"
 )
 
@@ -160,12 +161,8 @@ Examples:
 }
 
 func newPortSetStateCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
-	var (
-		bridgeID    string
-		adminState  string
-		ingressRate uint64
-		egressRate  uint64
-	)
+	// The flags fill the request; the port ID is the argument.
+	req := &platformv1.SetPortStateRequest{}
 
 	cmd := &cobra.Command{
 		Use:   "set-state <port-id>",
@@ -174,18 +171,23 @@ func newPortSetStateCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 
 Examples:
   platformctl sdn port set-state --bridge br0 port1 --admin-state up
-  platformctl sdn port set-state --bridge br0 port1 --ingress-rate 1000000 --egress-rate 1000000`,
+  platformctl sdn port set-state --bridge br0 port1 --admin-state up --ingress-rate 10000000 --ingress-burst 1000000
+  platformctl sdn port set-state --bridge br0 port1 --admin-state up --egress-rate 20000000 --egress-burst 2000000`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPortSetState(getFlags(), bridgeID, args[0], adminState, ingressRate, egressRate)
+			req.PortId = args[0]
+			return runPortSetState(getFlags(), req)
 		},
 	}
 
-	cmd.Flags().StringVar(&bridgeID, "bridge", "", "Bridge ID (required)")
-	cmd.Flags().StringVar(&adminState, "admin-state", "", "Administrative state: up, down")
-	cmd.Flags().Uint64Var(&ingressRate, "ingress-rate", 0, "Ingress rate limit in bps")
-	cmd.Flags().Uint64Var(&egressRate, "egress-rate", 0, "Egress rate limit in bps")
+	cmd.Flags().StringVar(&req.BridgeId, "bridge", "", "Bridge ID (required)")
+	cmd.Flags().StringVar(&req.AdminState, "admin-state", "", "Administrative state: up, down (required)")
+	cmd.Flags().Uint64Var(&req.IngressRate, "ingress-rate", 0, "Ingress policing rate in bps, a whole multiple of 1000 (0 leaves policing unchanged)")
+	cmd.Flags().Uint64Var(&req.IngressBurst, "ingress-burst", 0, "Ingress policing burst in bits, a whole multiple of 1000 (needs --ingress-rate)")
+	cmd.Flags().Uint64Var(&req.EgressRate, "egress-rate", 0, "Egress shaping rate in bps (0 leaves shaping unchanged)")
+	cmd.Flags().Uint64Var(&req.EgressBurst, "egress-burst", 0, "Egress shaping burst in bits (needs --egress-rate)")
 	cmd.MarkFlagRequired("bridge")
+	cmd.MarkFlagRequired("admin-state")
 
 	return cmd
 }
@@ -306,9 +308,7 @@ func runPortGetState(flags *cli.CommonFlags, bridgeID, portID string) error {
 	return base.Output(resp)
 }
 
-func runPortSetState(flags *cli.CommonFlags, bridgeID, portID, adminState string,
-	ingressRate, egressRate uint64) error {
-
+func runPortSetState(flags *cli.CommonFlags, req *platformv1.SetPortStateRequest) error {
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
 		return err
@@ -317,21 +317,12 @@ func runPortSetState(flags *cli.CommonFlags, bridgeID, portID, adminState string
 
 	sdkClient := sdnsvc.NewClientFromGRPC(base.Client().SDN())
 
-	// Get current port to update it
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	port, err := sdkClient.GetPort(ctx, bridgeID, portID)
+	port, err := sdkClient.SetPortState(ctx, req)
 	if err != nil {
-		return &cli.ErrOperationFailed{Operation: "port set-state (get current)", Err: err}
+		return &cli.ErrOperationFailed{Operation: "port set-state", Err: err}
 	}
-
-	// The SDN service GetPort returns the current port state.
-	// We return the current state with any updates reflected.
-	// Since the gRPC API does not have an explicit SetPortState RPC,
-	// we output the current port state as the response.
-	_ = adminState
-	_ = ingressRate
-	_ = egressRate
 
 	return base.Output(port)
 }

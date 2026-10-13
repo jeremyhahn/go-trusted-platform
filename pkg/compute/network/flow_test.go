@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -580,24 +581,16 @@ func TestFlowManager_Close(t *testing.T) {
 }
 
 func TestGenerateRuleID(t *testing.T) {
-	t.Run("generates unique IDs", func(t *testing.T) {
-		id1 := generateRuleID("eth0", "quarantine", "ingress")
-		id2 := generateRuleID("eth0", "quarantine", "ingress")
+	t.Run("generates unique IDs with no time between them", func(t *testing.T) {
+		id1 := generateRuleID()
+		id2 := generateRuleID()
 
-		// IDs should be different due to timestamp
-		// Note: In fast execution, they might be the same
-		assert.NotEmpty(t, id1)
-		assert.NotEmpty(t, id2)
-		assert.Len(t, id1, 16) // 8 bytes hex encoded
+		assert.NotEqual(t, id1, id2, "rule IDs must not depend on the clock advancing")
 	})
 
-	t.Run("different inputs produce different IDs", func(t *testing.T) {
-		id1 := generateRuleID("eth0", "quarantine", "ingress")
-		id2 := generateRuleID("eth1", "production", "egress")
-
-		assert.NotEmpty(t, id1)
-		assert.NotEmpty(t, id2)
-		assert.NotEqual(t, id1, id2)
+	t.Run("generates a UUID", func(t *testing.T) {
+		_, err := uuid.Parse(generateRuleID())
+		assert.NoError(t, err)
 	})
 }
 

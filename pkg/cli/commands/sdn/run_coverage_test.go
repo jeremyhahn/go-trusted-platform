@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // noContextFlags returns CommonFlags with nil GetContext, which causes
@@ -289,7 +290,10 @@ func TestRunPortGetState_NoContext(t *testing.T) {
 }
 
 func TestRunPortSetState_NoContext(t *testing.T) {
-	err := runPortSetState(noContextFlags(), "br0", "port-1", "up", 1000, 2000)
+	err := runPortSetState(noContextFlags(), &platformv1.SetPortStateRequest{
+		BridgeId: "br0", PortId: "port-1", AdminState: "up",
+		IngressRate: 1000, IngressBurst: 2000, EgressRate: 3000, EgressBurst: 4000,
+	})
 	assertNoContextError(t, err)
 }
 

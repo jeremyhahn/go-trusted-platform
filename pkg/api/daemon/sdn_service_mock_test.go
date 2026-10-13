@@ -56,6 +56,8 @@ type ConfigurableMockOVSClient struct {
 	setPortVLANFunc          func(ctx context.Context, portName string, tag int64) error
 	setPortTrunksFunc        func(ctx context.Context, portName string, trunks []int64) error
 	setPortStateFunc         func(ctx context.Context, portName string, state ovs.PortState) error
+	setIngressPolicingFunc   func(ctx context.Context, name string, rateBps, burstBits uint64) error
+	setEgressShapingFunc     func(ctx context.Context, name string, rateBps, burstBits uint64) error
 	getInterfaceFunc         func(ctx context.Context, name string) (*ovs.Interface, error)
 	getOFPortFunc            func(ctx context.Context, portName string) (int32, error)
 	getInterfaceOptionsFunc  func(ctx context.Context, name string) (map[string]string, error)
@@ -311,6 +313,22 @@ func (m *ConfigurableMockOVSClient) SetPortState(ctx context.Context, portName s
 	m.recordCall("SetPortState", portName, state)
 	if m.setPortStateFunc != nil {
 		return m.setPortStateFunc(ctx, portName, state)
+	}
+	return nil
+}
+
+func (m *ConfigurableMockOVSClient) SetIngressPolicing(ctx context.Context, name string, rateBps, burstBits uint64) error {
+	m.recordCall("SetIngressPolicing", name, rateBps, burstBits)
+	if m.setIngressPolicingFunc != nil {
+		return m.setIngressPolicingFunc(ctx, name, rateBps, burstBits)
+	}
+	return nil
+}
+
+func (m *ConfigurableMockOVSClient) SetEgressShaping(ctx context.Context, name string, rateBps, burstBits uint64) error {
+	m.recordCall("SetEgressShaping", name, rateBps, burstBits)
+	if m.setEgressShapingFunc != nil {
+		return m.setEgressShapingFunc(ctx, name, rateBps, burstBits)
 	}
 	return nil
 }
@@ -767,6 +785,16 @@ func (m *ConfigurableMockOVSClient) OnSetPortTrunks(fn func(ctx context.Context,
 
 func (m *ConfigurableMockOVSClient) OnSetPortState(fn func(ctx context.Context, portName string, state ovs.PortState) error) *ConfigurableMockOVSClient {
 	m.setPortStateFunc = fn
+	return m
+}
+
+func (m *ConfigurableMockOVSClient) OnSetIngressPolicing(fn func(ctx context.Context, name string, rateBps, burstBits uint64) error) *ConfigurableMockOVSClient {
+	m.setIngressPolicingFunc = fn
+	return m
+}
+
+func (m *ConfigurableMockOVSClient) OnSetEgressShaping(fn func(ctx context.Context, name string, rateBps, burstBits uint64) error) *ConfigurableMockOVSClient {
+	m.setEgressShapingFunc = fn
 	return m
 }
 

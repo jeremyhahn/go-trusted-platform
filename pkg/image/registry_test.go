@@ -538,7 +538,9 @@ func TestSignatureCache(t *testing.T) {
 }
 
 func TestSignatureCache_Expiry(t *testing.T) {
-	cache := NewSignatureCache(10 * time.Millisecond)
+	current := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	cache := NewSignatureCache(time.Minute)
+	cache.now = func() time.Time { return current }
 
 	sig := &ImageSignature{
 		ImageDigest: "sha256:abc123",
@@ -546,16 +548,24 @@ func TestSignatureCache_Expiry(t *testing.T) {
 
 	cache.Set("key1", sig)
 
-	// Should exist immediately
-	_, ok := cache.Get("key1")
+	// Set stamps the entry from the cache's clock.
+	stored, ok := cache.cache.Load("key1")
+	require.True(t, ok)
+	entry := stored.(*CacheEntry)
+	assert.Equal(t, current, entry.CreatedAt)
+	assert.Equal(t, current.Add(time.Minute), entry.ExpiresAt)
+
+	// Still valid at exactly the TTL: expiry is strictly after ExpiresAt.
+	current = current.Add(time.Minute)
+	_, ok = cache.Get("key1")
 	assert.True(t, ok)
 
-	// Wait for expiry
-	time.Sleep(20 * time.Millisecond)
-
-	// Should be expired
+	// Expired one tick past the TTL, and evicted on that read.
+	current = current.Add(time.Nanosecond)
 	_, ok = cache.Get("key1")
 	assert.False(t, ok)
+	_, ok = cache.cache.Load("key1")
+	assert.False(t, ok, "expired entry should be evicted")
 }
 
 func TestCachingRegistryClient(t *testing.T) {

@@ -569,6 +569,10 @@ func TestService_GetServiceStatus(t *testing.T) {
 			t.Fatalf("NewService() error: %v", err)
 		}
 
+		startedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		current := startedAt
+		svc.now = func() time.Time { return current }
+
 		mock := newMockService("tpm")
 		_ = svc.RegisterService(mock)
 
@@ -581,22 +585,47 @@ func TestService_GetServiceStatus(t *testing.T) {
 			t.Fatalf("StartService() error: %v", err)
 		}
 
-		// Wait a bit for uptime
-		time.Sleep(1100 * time.Millisecond) // Sleep at least 1 second to ensure UptimeSeconds > 0
+		current = current.Add(90 * time.Second)
 
 		resp, err := svc.GetServiceStatus(ctx, &platformv1.GetServiceStatusRequest{
 			Service: platformv1.ServiceType_SERVICE_TYPE_TPM,
 		})
 		if err != nil {
-			t.Errorf("GetServiceStatus() error: %v", err)
+			t.Fatalf("GetServiceStatus() error: %v", err)
 		}
 
 		if resp.Service.StartedAt == nil {
-			t.Error("StartedAt should not be nil for running service")
+			t.Fatal("StartedAt should not be nil for running service")
+		}
+		if got := resp.Service.StartedAt.AsTime(); !got.Equal(startedAt) {
+			t.Errorf("StartedAt = %v, want %v", got, startedAt)
 		}
 
-		if resp.Service.UptimeSeconds == 0 {
-			t.Error("UptimeSeconds should be greater than 0")
+		if resp.Service.UptimeSeconds != 90 {
+			t.Errorf("UptimeSeconds = %d, want 90", resp.Service.UptimeSeconds)
+		}
+	})
+}
+
+func TestService_CurrentTime(t *testing.T) {
+	t.Run("uses the injected clock", func(t *testing.T) {
+		fixed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		svc := &Service{now: func() time.Time { return fixed }}
+
+		if got := svc.currentTime(); !got.Equal(fixed) {
+			t.Errorf("currentTime() = %v, want %v", got, fixed)
+		}
+	})
+
+	t.Run("falls back to the wall clock when unset", func(t *testing.T) {
+		svc := &Service{}
+
+		before := time.Now()
+		got := svc.currentTime()
+		after := time.Now()
+
+		if got.Before(before) || got.After(after) {
+			t.Errorf("currentTime() = %v, want between %v and %v", got, before, after)
 		}
 	})
 }

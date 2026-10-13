@@ -24,6 +24,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // LocalKMSClient is a single-node KMSClient that persists encryption
@@ -111,7 +113,10 @@ func (c *LocalKMSClient) GenerateKey(ctx context.Context, name, algorithm string
 	if _, err := io.ReadFull(rand.Reader, key); err != nil {
 		return "", &WrappedError{Msg: "registry: generate key", Err: err}
 	}
-	keyID := fmt.Sprintf("local-%x", sha256.Sum256([]byte(name+time.Now().Format(time.RFC3339Nano))))[:24]
+	// Random, not derived from name and time: two keys of the same name made
+	// within one clock tick would otherwise share an ID and the second would
+	// overwrite the first key file (#284).
+	keyID := "local-" + uuid.NewString()
 	path := c.keyPath(keyID)
 	c.mu.Lock()
 	defer c.mu.Unlock()

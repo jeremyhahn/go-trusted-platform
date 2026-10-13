@@ -1,6 +1,6 @@
 # SDN — API
 
-> **Status: NORMATIVE** · Scope: SDN, overlay and switch routes on every transport · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: SDN, overlay and switch routes on every transport · Last verified: 2026-10-13
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING`, never omitted.
@@ -30,11 +30,11 @@ REST base path `/api/v1/sdn` (`pkg/webservice/v1/rest/sdn/router.go`).
 |---|---|---|---|---|---|
 | Create bridge | `POST /api/v1/sdn/bridges` | `CreateBridge` | `OpSDNCreateBridge` (`0xB0`) | `sdn_create_bridge` | ✅ |
 | List bridges | `GET /api/v1/sdn/bridges` | `ListBridges` | `OpSDNListBridges` (`0x4B`) | `sdn_list_bridges` | ✅ |
-| Get bridge | `GET /api/v1/sdn/bridges/{name}` | `GetBridge` | `OpSDNGetBridge` (`0x4A`) | `MISSING — docs/13 G7` | ✅ |
+| Get bridge | `GET /api/v1/sdn/bridges/{name}` | `GetBridge` | `OpSDNGetBridge` (`0x4A`) | `sdn_list_bridges`, filtered by the SDK on the bridge's UUID or name | ✅ |
 | Delete bridge | `DELETE /api/v1/sdn/bridges/{name}` | `DeleteBridge` | `OpSDNDeleteBridge` (`0xB1`) | `sdn_delete_bridge` | ✅ |
 | Add port | `POST /api/v1/sdn/bridges/{name}/ports` | `AddPort` | `OpSDNCreatePort` (`0xB2`) | `sdn_add_port` | ✅ |
 | List ports | `GET /api/v1/sdn/bridges/{name}/ports` | `ListPorts` | `OpSDNListPorts` (`0x42`) | `MISSING — docs/13 G7` | ✅ |
-| Get port | `MISSING — docs/13 G7` | `GetPort` | `OpSDNGetPort` (`0x4F`) | `MISSING — docs/13 G7` | ✅ |
+| Get port | `MISSING — docs/13 G7` | `GetPort` | `OpSDNGetPort` (`0x4F`) | `sdn_get_port_state` | ✅ |
 | Delete port | `DELETE /api/v1/sdn/bridges/{name}/ports/{port}` | `DeletePort` | `OpSDNDeletePort` (`0xB3`) | `sdn_delete_port` | ✅ |
 | Get port state | `GET /api/v1/sdn/bridges/{name}/ports/{port}/state` | (via `GetPort`) | `OpSDNGetPortState` (`0x40`) | `sdn_get_port_state` | ✅ |
 | Set port state | `PUT /api/v1/sdn/bridges/{name}/ports/{port}/state` | `SetPortState` | `OpSDNSetPortState` (`0x41`) | `sdn_set_port_state` | ✅ |
@@ -62,6 +62,46 @@ stats act on exactly the flow carrying that cookie (`ovs.ParseFlowID`,
 string, which the flow encoder emptied, so "delete this flow" removed every
 flow on the bridge.
 
+**Set port state applies ingress policing and egress shaping, on every
+transport.** `ingress_rate`
+(bps) and `ingress_burst` (bits) set the interface's Open vSwitch ingress
+policing (`ovs.Client.SetIngressPolicing`); a zero rate leaves it unchanged.
+Each must be 0 or a whole multiple of 1000 and a burst needs a rate, otherwise
+the request is refused before anything changes (`400` / `InvalidArgument`,
+`ovs.ErrInvalidPolicing`). REST validates and applies through the OVS client;
+gRPC, Unix, QUIC and MCP go through `SDNService.SetPortState`, and the CLI's
+`--ingress-rate`/`--ingress-burst` call that RPC. Until #730 every transport
+accepted `ingress_rate` and dropped it, MCP handed `up`/`down` to the 802.1X
+engine (which refused both), and `platformctl sdn port set-state` changed
+nothing.
+
+`egress_rate` (bps) and `egress_burst` (bits) set the port's egress shaping
+(`ovs.Client.SetEgressShaping`): a `linux-htb` QoS whose queue 0 carries the
+rate and burst. A zero rate leaves it unchanged; a burst without a rate is
+refused before anything changes (`400` / `InvalidArgument`,
+`ovs.ErrInvalidShaping`). Every transport takes the same path as ingress
+policing, and the CLI's `--egress-rate`/`--egress-burst` call the same RPC.
+Until #730 every transport accepted `egress_rate` and dropped it.
+
+**Every SDN call the CLI makes reaches MCP.** The SDK's MCP transport
+(`sdk/go/transport/mcp/sdn.go`, `sdn_policy.go`, `sdn_zone.go`) maps each of
+the 23 `SDNService` methods behind `platformctl sdn` to the tool in the
+tables above and builds the tool's own arguments: `bridge_name`, `port_name`
+and `state` for the port tools, the four rates as decimal strings,
+`port_type` as the short type name (`internal`, `tap`, …), the REST policy
+document for the policy tools and the zone fields for the zone tools.
+`sdn_set_port_state` answers with the refreshed port, and `sdn_add_port`
+refuses a `port_type` it does not know instead of adding an unspecified port.
+A request field the tool cannot carry is refused before the call
+(`InvalidArgument`, `ErrFieldNotSupported` naming the field), never dropped:
+on MCP, `AddFlow` takes no flow body, `CreateBridge` only the name and type
+`ovs`, `DeleteBridge` no `force`, `AddPort` no VLAN, trunk, MAC,
+MTU, promiscuous flag, options or zone, `CreateVLAN` no ports, `FlushFlows`
+no table, and the list calls no selector or pagination. Labels pass,
+since the daemon ignores them on every transport. Until #730 the SDK
+mapped six of these methods, sent the gRPC field names the tools do not
+read, and `platformctl sdn port set-state` over MCP failed `Unimplemented`.
+
 ---
 
 ## 3. VLANs
@@ -70,10 +110,20 @@ flow on the bridge.
 |---|---|---|---|---|---|
 | Create VLAN | `POST /api/v1/sdn/vlans`, `POST /api/v1/sdn/bridges/{bridge_id}/vlans` | `CreateVLAN` | `OpSDNSetVLAN` (`0x4D`) | `sdn_create_vlan` | ✅ |
 | List VLANs | `GET /api/v1/sdn/vlans`, `GET /api/v1/sdn/bridges/{bridge_id}/vlans` | `ListVLANs` | `OpSDNGetVLAN` (`0x4E`) | `sdn_list_vlans` | ✅ |
-| Delete VLAN | `MISSING — docs/13 G7` | `DeleteVLAN` | `MISSING — docs/13 G7` | `sdn_delete_vlan` | ✅ |
+| Delete VLAN | `DELETE /api/v1/sdn/vlans/{vlan_id}?bridge_id=` (daemon REST only) | `DeleteVLAN` | `MISSING — docs/13 G7` | `sdn_delete_vlan` | ✅ |
 
-**VLAN delete has no REST route.** A VLAN can be created over REST and not
-removed over REST — an asymmetry worth closing.
+**The daemon's REST VLAN routes are the gRPC operations.** The daemon's
+standalone REST server (`pkg/api/rest/sdn_handlers.go`) hands `POST`, `GET` and
+`DELETE` on `/api/v1/sdn/vlans` to the same `SDNService` instance the gRPC
+transport serves (`pkg/api/daemon/rest_sdn.go`), so a VLAN created on one
+transport is listed and deleted on the other, and both enforce the same rules:
+`vlan_id` 1–4095 and `bridge_id` required (`400`), unknown bridge or VLAN
+(`404`), a VLAN ID already on the bridge (`409`), a port that refuses the tag
+(`500`). The gRPC status maps to HTTP through the table in
+`pkg/api/rest/proxy_handlers.go`; with no SDN service wired the routes answer
+`503`. Until #730 these routes echoed the request, listed nothing and reported
+every delete as done without touching any state. The webservice still has no
+VLAN delete route.
 
 Note the path-parameter inconsistency: bridge-scoped port and flow routes use
 `{name}`, bridge-scoped VLAN routes use `{bridge_id}`. Same identifier, two
@@ -90,7 +140,25 @@ spellings.
 | Apply policy | `POST /api/v1/sdn/policies` | `ApplyPolicy` | `OpSDNApplyPolicy` (`0x47`) | `sdn_apply_policy` | ✅ |
 | List policies | `GET /api/v1/sdn/policies` | `ListPolicies` | `OpSDNListPolicies` (`0x49`) | `sdn_list_policies` | ✅ |
 | Get policy | `GET /api/v1/sdn/policies/{id}` | `GetPolicy` | `OpSDNGetPolicy` (`0x48`) | `sdn_get_policy` | ✅ |
-| Delete policy | `MISSING — docs/13 G7` | `DeletePolicy` | `OpSDNDeletePolicy` (`0xB4`) | `MISSING — docs/13 G7` | ✅ |
+| Delete policy | `DELETE /api/v1/sdn/policies/{id}` (daemon REST only) | `DeletePolicy` | `OpSDNDeletePolicy` (`0xB4`) | `sdn_delete_policy` | ✅ |
+
+**The daemon's REST policy routes are the gRPC operations.** Like the VLAN
+routes (§3), the daemon's standalone REST server hands the four policy routes to
+the shared `SDNService`, so a policy applied on one transport is read, listed
+and deleted on the other under the same rules: a name is required (`400`), an
+unknown `type`, rule `action` or target `type` is refused (`400`), a second
+policy with the same name conflicts (`409`), and get or delete of an unknown ID
+or name is `404`. Until #730 these routes kept their own in-process map that no
+other transport saw. The REST policy object no longer carries `labels` — the
+gRPC `Policy` has no such field. The webservice still has no policy delete
+route.
+
+**The MCP policy tools are the same operations.** `sdn_apply_policy`,
+`sdn_get_policy`, `sdn_list_policies` and `sdn_delete_policy` call the same
+`SDNService` on both MCP providers and speak the REST policy document, so a
+policy created over MCP is seen over REST and gRPC and the other way round.
+Until #730 the MCP tools kept their own policy-engine path and their own
+argument shape.
 
 **Port authentication has no REST and no QUIC route.** It is reachable over
 gRPC, Unix, MCP and embedded only. Given that port authentication is the SDN
@@ -157,6 +225,10 @@ and the same object shape (`pkg/sdn/gateway.ZoneView`) bare, without the
 envelope, when `EnableREST` is set. The QUIC zone operations are
 sub-opcodes multiplexed under the **gateway category opcode `0x2F`**, not
 first-class opcodes — see §8.
+
+The MCP zone tools hold the offset in a byte and take no `omit`, so the
+SDK refuses an offset above 255 (`ErrValueOutOfRange`) and an omit
+(`ErrFieldNotSupported`) with `InvalidArgument` instead of sending them.
 
 ---
 

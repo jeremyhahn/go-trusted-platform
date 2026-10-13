@@ -453,24 +453,6 @@ func TestErrInvalidAttestationEvidence(t *testing.T) {
 
 // SDN Service Errors
 
-func TestErrSDNPolicyEngineNotConfigured(t *testing.T) {
-	t.Parallel()
-	err := ErrSDNPolicyEngineNotConfigured{}
-	expected := "SDN policy engine not configured"
-	if got := err.Error(); got != expected {
-		t.Errorf("Error() = %q, want %q", got, expected)
-	}
-}
-
-func TestErrSDNInvalidPortState(t *testing.T) {
-	t.Parallel()
-	err := ErrSDNInvalidPortState{State: "invalid_state"}
-	expected := "invalid port state: invalid_state"
-	if got := err.Error(); got != expected {
-		t.Errorf("Error() = %q, want %q", got, expected)
-	}
-}
-
 func TestErrSDNPolicyNotFound(t *testing.T) {
 	t.Parallel()
 	err := ErrSDNPolicyNotFound{PolicyID: "policy-abc"}

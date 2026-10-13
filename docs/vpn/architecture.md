@@ -1,6 +1,6 @@
 # Remote-Access VPN Architecture
 
-> **Status: PARTIAL — the admission core and both data planes (#584 PR 1, PR 2), the gateway service and the operator control plane on every transport with `platformctl vpn` (#584 PR 3) exist; the JS SDK client and the web page (#584 PR 4) exist; left for PR 4: `platformctl vpn connect`.** · Scope: `pkg/sdn/gateway/services/vpn`, `pkg/vpn`, `gatewayd` · Last verified: 2026-10-13
+> **Status: PARTIAL — the admission core and both data planes (#584 PR 1, PR 2), the gateway service and the operator control plane on every transport with `platformctl vpn` (#584 PR 3) exist, as do the admission wire contract and the client agent core (`pkg/vpn/agent`); the JS SDK client and the web page (#584 PR 4) exist; left for PR 4: `platformctl vpn connect` with its TPM device, factor signers and client data planes.** · Scope: `pkg/sdn/gateway/services/vpn`, `pkg/vpn`, `gatewayd` · Last verified: 2026-10-13
 > `pkg/sdn/gateway/services/vpn` ships the lease model, the five-step
 > admission pipeline behind `Deps` interfaces, the typed error vocabulary, the
 > config schema with its FIPS refusal, the in-memory lease store and the

@@ -17,8 +17,11 @@ import (
 	"context"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -119,88 +122,27 @@ type SDNGetFlowResponse struct {
 // Policy Operations (daemon-native)
 // =============================================================================
 
-// SDNApplyPolicyRequest represents a request to apply a policy
-type SDNApplyPolicyRequest struct {
-	PortID   string            `codec:"port_id"`
-	TenantID string            `codec:"tenant_id"`
-	VLAN     uint16            `codec:"vlan"`
-	ACLs     []*SDNACLRule     `codec:"acls"`
-	Metadata map[string]string `codec:"metadata"`
-}
+// The policy operations carry the policy shape REST, gRPC and MCP use: apply
+// takes a rest.CreatePolicyRequest and returns a rest.PolicyResponse, get
+// returns a rest.PolicyResponse, list returns a rest.SDNPolicyListResponse and
+// delete returns a rest.SDNActionResponse. The wire codec keys fields by their
+// Go names, so those types are the QUIC contract as they stand.
 
-// SDNACLRule represents an ACL rule for QUIC protocol
-type SDNACLRule struct {
-	Priority    int           `codec:"priority"`
-	Match       *SDNFlowMatch `codec:"match"`
-	Action      string        `codec:"action"`
-	Description string        `codec:"description"`
-}
-
-// SDNFlowMatch represents flow match criteria
-type SDNFlowMatch struct {
-	InPort  string `codec:"in_port"`
-	EthSrc  string `codec:"eth_src"`
-	EthDst  string `codec:"eth_dst"`
-	EthType uint16 `codec:"eth_type"`
-	VLANVid uint16 `codec:"vlan_vid"`
-	IPProto uint8  `codec:"ip_proto"`
-	IPv4Src string `codec:"ipv4_src"`
-	IPv4Dst string `codec:"ipv4_dst"`
-	TCPSrc  uint16 `codec:"tcp_src"`
-	TCPDst  uint16 `codec:"tcp_dst"`
-	UDPSrc  uint16 `codec:"udp_src"`
-	UDPDst  uint16 `codec:"udp_dst"`
-}
-
-// SDNApplyPolicyResponse represents the response after applying a policy
-type SDNApplyPolicyResponse struct {
-	PortID    string `codec:"port_id"`
-	Success   bool   `codec:"success"`
-	Timestamp int64  `codec:"timestamp"`
-}
-
-// SDNDeletePolicyRequest represents a request to delete/remove a policy
+// SDNDeletePolicyRequest represents a request to delete a policy by ID or name.
 type SDNDeletePolicyRequest struct {
-	PortID string `codec:"port_id"`
+	PolicyID string `codec:"policy_id"`
 }
 
-// SDNDeletePolicyResponse represents the response after removing a policy
-type SDNDeletePolicyResponse struct {
-	PortID    string `codec:"port_id"`
-	Success   bool   `codec:"success"`
-	Timestamp int64  `codec:"timestamp"`
-}
-
-// SDNGetPolicyRequest represents a request to get a policy
+// SDNGetPolicyRequest represents a request to get a policy by ID or name.
 type SDNGetPolicyRequest struct {
-	PortID string `codec:"port_id"`
+	PolicyID string `codec:"policy_id"`
 }
 
-// SDNPolicy represents a policy in QUIC responses
-type SDNPolicy struct {
-	PortID    string            `codec:"port_id"`
-	TenantID  string            `codec:"tenant_id"`
-	VLAN      uint16            `codec:"vlan"`
-	ACLs      []*SDNACLRule     `codec:"acls"`
-	ExpiresAt int64             `codec:"expires_at"`
-	IssuedAt  int64             `codec:"issued_at"`
-	Metadata  map[string]string `codec:"metadata"`
-}
-
-// SDNGetPolicyResponse represents the response containing a policy
-type SDNGetPolicyResponse struct {
-	Policy    *SDNPolicy `codec:"policy"`
-	Timestamp int64      `codec:"timestamp"`
-}
-
-// SDNListPoliciesRequest represents a request to list policies
-type SDNListPoliciesRequest struct{}
-
-// SDNListPoliciesResponse represents the response containing policies
-type SDNListPoliciesResponse struct {
-	Policies  []*SDNPolicy `codec:"policies"`
-	Total     int          `codec:"total"`
-	Timestamp int64        `codec:"timestamp"`
+// SDNListPoliciesRequest filters a policy listing the way REST's type and
+// target_id query parameters do; empty fields do not filter.
+type SDNListPoliciesRequest struct {
+	Type     string `codec:"type"`
+	TargetID string `codec:"target_id"`
 }
 
 // =============================================================================
@@ -491,6 +433,25 @@ func (h *QUICServiceHandler) handleSDNListPorts(ctx context.Context, req *quicwi
 	return h.encodeSDNResponse(resp)
 }
 
+// sdnQUICStatus maps a gRPC status error from the shared SDNService to the
+// QUIC status the other transports would answer with (an invalid argument is
+// not an internal error).
+func sdnQUICStatus(err error) byte {
+	if mapped, ok := deviceGRPCCodeToQUICStatus[status.Code(err)]; ok {
+		return mapped
+	}
+	return quicwire.StatusInternalError
+}
+
+// sdnPolicyError names the requested policy when the shared SDNService has no
+// such policy, and otherwise reports op as failed with its cause.
+func sdnPolicyError(op, policyID string, err error) error {
+	if status.Code(err) == codes.NotFound {
+		return ErrSDNPolicyNotFound{PolicyID: policyID}
+	}
+	return ErrQUICOperationFailed{Op: op, Cause: err}
+}
+
 func (h *QUICServiceHandler) handleSDNSetPortState(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var setReq platformv1.SetPortStateRequest
 	if err := quicwire.DecodePayload(req.Payload, &setReq); err != nil {
@@ -518,7 +479,7 @@ func (h *QUICServiceHandler) handleSDNSetPortState(ctx context.Context, req *qui
 	if err != nil {
 		h.logger.Error(err, "failed to set SDN port state",
 			"port", setReq.GetPortId(), "state", setReq.GetAdminState())
-		return h.errorResponse(quicwire.StatusInternalError, ErrSDNSetPortStateFailed{PortID: setReq.GetPortId(), Cause: err})
+		return h.errorResponse(sdnQUICStatus(err), ErrSDNSetPortStateFailed{PortID: setReq.GetPortId(), Cause: err})
 	}
 
 	return h.encodeSDNResponse(resp)
@@ -753,40 +714,23 @@ func (h *QUICServiceHandler) handleSDNGetFlow(ctx context.Context, req *quicwire
 // =============================================================================
 
 func (h *QUICServiceHandler) handleSDNApplyPolicy(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	var applyReq SDNApplyPolicyRequest
-	if err := quicwire.DecodePayload(req.Payload, &applyReq); err != nil {
+	var policyReq rest.CreatePolicyRequest
+	if err := quicwire.DecodePayload(req.Payload, &policyReq); err != nil {
 		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
-	if applyReq.PortID == "" {
-		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "port_id"})
-	}
-	if applyReq.TenantID == "" {
-		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "tenant_id"})
-	}
-
-	rules := convertSDNACLsToPbRules(applyReq.ACLs)
-
-	pbResp, err := h.sdnService.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{
-		Config: &platformv1.PolicyConfig{
-			Name:    applyReq.PortID,
-			Type:    platformv1.PolicyType_POLICY_TYPE_ACL,
-			Enabled: true,
-			Rules:   rules,
-		},
-	})
+	applyReq, err := rest.PolicyRequestToProto(policyReq)
 	if err != nil {
-		h.logger.Error(err, "failed to apply policy", "port_id", applyReq.PortID, "tenant_id", applyReq.TenantID)
-		return h.errorResponse(quicwire.StatusInternalError, ErrSDNApplyPolicyFailed{PolicyID: applyReq.PortID, Cause: err})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrSDNInvalidPolicy{Reason: err.Error()})
 	}
 
-	success := pbResp.GetStatus() != nil && pbResp.GetStatus().GetSuccess()
+	resp, err := h.sdnService.ApplyPolicy(ctx, applyReq)
+	if err != nil {
+		h.logger.Error(err, "failed to apply policy", "name", policyReq.Name)
+		return h.errorResponse(sdnQUICStatus(err), ErrSDNApplyPolicyFailed{PolicyID: policyReq.Name, Cause: err})
+	}
 
-	return h.encodeSDNResponse(&SDNApplyPolicyResponse{
-		PortID:    applyReq.PortID,
-		Success:   success,
-		Timestamp: time.Now().Unix(),
-	})
+	return h.encodeSDNResponse(rest.PolicyToResponse(resp.GetPolicy()))
 }
 
 func (h *QUICServiceHandler) handleSDNDeletePolicy(ctx context.Context, req *quicwire.Request) *quicwire.Response {
@@ -795,22 +739,24 @@ func (h *QUICServiceHandler) handleSDNDeletePolicy(ctx context.Context, req *qui
 		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
-	if deleteReq.PortID == "" {
-		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "port_id"})
+	if deleteReq.PolicyID == "" {
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "policy_id"})
 	}
 
-	_, err := h.sdnService.DeletePolicy(ctx, &platformv1.DeletePolicyRequest{
-		PolicyId: deleteReq.PortID,
+	resp, err := h.sdnService.DeletePolicy(ctx, &platformv1.DeletePolicyRequest{
+		PolicyId: deleteReq.PolicyID,
 	})
 	if err != nil {
-		h.logger.Error(err, "failed to remove policy", "port_id", deleteReq.PortID)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "SDNDeletePolicy", Cause: err})
+		h.logger.Error(err, "failed to remove policy", "policy_id", deleteReq.PolicyID)
+		return h.errorResponse(sdnQUICStatus(err), sdnPolicyError("SDNDeletePolicy", deleteReq.PolicyID, err))
 	}
 
-	return h.encodeSDNResponse(&SDNDeletePolicyResponse{
-		PortID:    deleteReq.PortID,
-		Success:   true,
-		Timestamp: time.Now().Unix(),
+	return h.encodeSDNResponse(rest.SDNActionResponse{
+		ResourceID:   deleteReq.PolicyID,
+		ResourceType: "policy",
+		Action:       "delete",
+		Success:      resp.GetStatus().GetSuccess(),
+		Message:      resp.GetStatus().GetMessage(),
 	})
 }
 
@@ -820,40 +766,45 @@ func (h *QUICServiceHandler) handleSDNGetPolicy(ctx context.Context, req *quicwi
 		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
-	if getReq.PortID == "" {
-		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "port_id"})
+	if getReq.PolicyID == "" {
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "policy_id"})
 	}
 
-	pbResp, err := h.sdnService.GetPolicy(ctx, &platformv1.GetPolicyRequest{
-		PolicyId: getReq.PortID,
+	resp, err := h.sdnService.GetPolicy(ctx, &platformv1.GetPolicyRequest{
+		PolicyId: getReq.PolicyID,
 	})
 	if err != nil {
-		h.logger.Error(err, "failed to get policy", "port_id", getReq.PortID)
-		return h.errorResponse(quicwire.StatusNotFound, ErrSDNPolicyNotFound{PolicyID: getReq.PortID})
+		h.logger.Error(err, "failed to get policy", "policy_id", getReq.PolicyID)
+		return h.errorResponse(sdnQUICStatus(err), sdnPolicyError("SDNGetPolicy", getReq.PolicyID, err))
 	}
 
-	return h.encodeSDNResponse(&SDNGetPolicyResponse{
-		Policy:    convertPbPolicyToSDNPolicy(getReq.PortID, pbResp.GetPolicy()),
-		Timestamp: time.Now().Unix(),
-	})
+	return h.encodeSDNResponse(rest.PolicyToResponse(resp.GetPolicy()))
 }
 
 func (h *QUICServiceHandler) handleSDNListPolicies(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	pbResp, err := h.sdnService.ListPolicies(ctx, &platformv1.ListPoliciesRequest{})
+	var listReq SDNListPoliciesRequest
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	resp, err := h.sdnService.ListPolicies(ctx, &platformv1.ListPoliciesRequest{
+		Type:     listReq.Type,
+		TargetId: listReq.TargetID,
+	})
 	if err != nil {
 		h.logger.Error(err, "failed to list policies")
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "SDNListPolicies", Cause: err})
+		return h.errorResponse(sdnQUICStatus(err), ErrQUICOperationFailed{Op: "SDNListPolicies", Cause: err})
 	}
 
-	policies := make([]*SDNPolicy, 0, len(pbResp.GetPolicies()))
-	for _, p := range pbResp.GetPolicies() {
-		policies = append(policies, convertPbPolicyToSDNPolicy(p.GetId(), p))
+	policies := make([]rest.PolicyResponse, 0, len(resp.GetPolicies()))
+	for _, policy := range resp.GetPolicies() {
+		policies = append(policies, rest.PolicyToResponse(policy))
 	}
 
-	return h.encodeSDNResponse(&SDNListPoliciesResponse{
+	return h.encodeSDNResponse(rest.SDNPolicyListResponse{
 		Policies:  policies,
-		Total:     len(policies),
-		Timestamp: time.Now().Unix(),
+		Count:     len(policies),
+		Timestamp: time.Now().UTC(),
 	})
 }
 
@@ -924,109 +875,4 @@ func (h *QUICServiceHandler) handleSDNGetMetrics(ctx context.Context, req *quicw
 		Metrics:   metrics,
 		Timestamp: time.Now().Unix(),
 	})
-}
-
-// =============================================================================
-// Conversion Helpers (protobuf to QUIC types, policy surface only)
-// =============================================================================
-
-// convertPbPolicyToSDNPolicy converts a protobuf Policy to the QUIC SDNPolicy type.
-func convertPbPolicyToSDNPolicy(portID string, p *platformv1.Policy) *SDNPolicy {
-	if p == nil {
-		return nil
-	}
-
-	sdnPolicy := &SDNPolicy{
-		PortID: portID,
-	}
-
-	if p.GetCreatedAt() != nil {
-		sdnPolicy.IssuedAt = p.GetCreatedAt().GetSeconds()
-	}
-
-	if config := p.GetConfig(); config != nil {
-		sdnPolicy.ACLs = convertPbRulesToSDNACLs(config.GetRules())
-	}
-
-	return sdnPolicy
-}
-
-// convertSDNACLsToPbRules converts QUIC SDNACLRule slice to protobuf PolicyRule slice.
-func convertSDNACLsToPbRules(acls []*SDNACLRule) []*platformv1.PolicyRule {
-	if len(acls) == 0 {
-		return nil
-	}
-
-	rules := make([]*platformv1.PolicyRule, 0, len(acls))
-	for _, acl := range acls {
-		rule := &platformv1.PolicyRule{
-			Priority: int32(acl.Priority),
-		}
-
-		switch acl.Action {
-		case "allow":
-			rule.Action = platformv1.PolicyRuleAction_POLICY_RULE_ACTION_ALLOW
-		case "deny":
-			rule.Action = platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY
-		default:
-			rule.Action = platformv1.PolicyRuleAction_POLICY_RULE_ACTION_UNSPECIFIED
-		}
-
-		if acl.Match != nil {
-			rule.Match = &platformv1.PolicyRuleMatch{
-				SourceIp:      acl.Match.IPv4Src,
-				DestinationIp: acl.Match.IPv4Dst,
-			}
-			if acl.Match.TCPDst > 0 {
-				rule.Match.DestinationPort = uint32(acl.Match.TCPDst)
-			}
-			if acl.Match.TCPSrc > 0 {
-				rule.Match.SourcePort = uint32(acl.Match.TCPSrc)
-			}
-			if acl.Match.VLANVid > 0 {
-				rule.Match.VlanId = uint32(acl.Match.VLANVid)
-			}
-		}
-
-		rules = append(rules, rule)
-	}
-
-	return rules
-}
-
-// convertPbRulesToSDNACLs converts protobuf PolicyRule slice to QUIC SDNACLRule slice.
-func convertPbRulesToSDNACLs(rules []*platformv1.PolicyRule) []*SDNACLRule {
-	if len(rules) == 0 {
-		return nil
-	}
-
-	acls := make([]*SDNACLRule, 0, len(rules))
-	for _, rule := range rules {
-		acl := &SDNACLRule{
-			Priority: int(rule.GetPriority()),
-		}
-
-		switch rule.GetAction() {
-		case platformv1.PolicyRuleAction_POLICY_RULE_ACTION_ALLOW:
-			acl.Action = "allow"
-		case platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY:
-			acl.Action = "deny"
-		default:
-			acl.Action = "unspecified"
-		}
-
-		if match := rule.GetMatch(); match != nil {
-			acl.Match = &SDNFlowMatch{
-				IPv4Src: match.GetSourceIp(),
-				IPv4Dst: match.GetDestinationIp(),
-				TCPSrc:  uint16(match.GetSourcePort()),
-				TCPDst:  uint16(match.GetDestinationPort()),
-				VLANVid: uint16(match.GetVlanId()),
-			}
-		}
-
-		acls = append(acls, acl)
-	}
-
-	return acls
 }

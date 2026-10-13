@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -770,16 +771,23 @@ func (p *PlatformServiceProvider) SDNGetPortState(ctx context.Context, bridgeNam
 // SDNSetPortState sets the admin state ("up"/"down") of an SDN port by
 // delegating to the SDNService, which toggles the OVSDB Interface
 // admin_state column and returns the refreshed port view.
-func (p *PlatformServiceProvider) SDNSetPortState(ctx context.Context, bridgeName string, portName string, state string) error {
+func (p *PlatformServiceProvider) SDNSetPortState(ctx context.Context, bridgeName string, portName string, state string, rates mcp.PortRates) (interface{}, error) {
 	if p.sdnService == nil {
-		return ErrServiceNotAvailable{Service: "sdn"}
+		return nil, ErrServiceNotAvailable{Service: "sdn"}
 	}
-	_, err := p.sdnService.SetPortState(ctx, &platformv1.SetPortStateRequest{
-		BridgeId:   bridgeName,
-		PortId:     portName,
-		AdminState: state,
+	resp, err := p.sdnService.SetPortState(ctx, &platformv1.SetPortStateRequest{
+		BridgeId:     bridgeName,
+		PortId:       portName,
+		AdminState:   state,
+		IngressRate:  rates.IngressRate,
+		IngressBurst: rates.IngressBurst,
+		EgressRate:   rates.EgressRate,
+		EgressBurst:  rates.EgressBurst,
 	})
-	return err
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetPort(), nil
 }
 
 // SDNListBridges lists all SDN bridges.
@@ -826,17 +834,21 @@ func (p *PlatformServiceProvider) SDNDeleteBridge(ctx context.Context, bridgeNam
 	return err
 }
 
-// SDNAddPort adds a port to an SDN bridge.
+// SDNAddPort adds a port of the given type to an SDN bridge.
 func (p *PlatformServiceProvider) SDNAddPort(ctx context.Context, bridgeName string, portName string, portType string) error {
 	if p.sdnService == nil {
 		return ErrServiceNotAvailable{Service: "sdn"}
 	}
+	pbType, err := portTypeFromName(portType)
+	if err != nil {
+		return err
+	}
 
-	_, err := p.sdnService.AddPort(ctx, &platformv1.AddPortRequest{
+	_, err = p.sdnService.AddPort(ctx, &platformv1.AddPortRequest{
 		BridgeId: bridgeName,
 		Config: &platformv1.PortConfig{
 			Name: portName,
-			Type: platformv1.PortType(platformv1.PortType_value[portType]),
+			Type: pbType,
 		},
 	})
 	return err
@@ -855,22 +867,26 @@ func (p *PlatformServiceProvider) SDNDeletePort(ctx context.Context, bridgeName 
 	return err
 }
 
-// SDNApplyPolicy applies a policy to an SDN bridge.
-func (p *PlatformServiceProvider) SDNApplyPolicy(ctx context.Context, policyID string, bridgeName string) error {
-	// Policy application not yet implemented in SDN service
-	return &MessageError{Msg: "SDN policy application not yet implemented"}
+// SDNApplyPolicy creates or replaces a policy, given as the REST create-policy
+// body, through the shared SDNService.
+func (p *PlatformServiceProvider) SDNApplyPolicy(ctx context.Context, policy json.RawMessage) (interface{}, error) {
+	return applySDNPolicy(ctx, p.sdnService, policy)
 }
 
-// SDNGetPolicy gets an SDN policy.
+// SDNGetPolicy returns a policy by ID or name from the shared SDNService.
 func (p *PlatformServiceProvider) SDNGetPolicy(ctx context.Context, policyID string) (interface{}, error) {
-	// Policy retrieval not yet implemented in SDN service
-	return nil, &MessageError{Msg: "SDN policy retrieval not yet implemented"}
+	return getSDNPolicy(ctx, p.sdnService, policyID)
 }
 
-// SDNListPolicies lists all SDN policies.
-func (p *PlatformServiceProvider) SDNListPolicies(ctx context.Context) ([]interface{}, error) {
-	// Policy listing not yet implemented in SDN service
-	return nil, &MessageError{Msg: "SDN policy listing not yet implemented"}
+// SDNListPolicies lists the shared SDNService's policies, optionally filtered by
+// type and target.
+func (p *PlatformServiceProvider) SDNListPolicies(ctx context.Context, policyType string, targetID string) ([]interface{}, error) {
+	return listSDNPolicies(ctx, p.sdnService, policyType, targetID)
+}
+
+// SDNDeletePolicy deletes a policy by ID or name through the shared SDNService.
+func (p *PlatformServiceProvider) SDNDeletePolicy(ctx context.Context, policyID string) error {
+	return deleteSDNPolicy(ctx, p.sdnService, policyID)
 }
 
 // SDNAddFlow adds an OpenFlow rule to an SDN bridge.

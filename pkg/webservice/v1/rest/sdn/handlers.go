@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -394,8 +395,9 @@ func (h *SDNHandlers) GetPortState(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.respWriter.Success200(w, r, PortStateResponse{
-		PortID: portName,
-		State:  state,
+		BridgeID:   bridgeName,
+		PortID:     portName,
+		AdminState: state,
 	})
 }
 
@@ -419,17 +421,33 @@ func (h *SDNHandlers) SetPortState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.State != "up" && req.State != "down" {
-		h.respWriter.Error400(w, r, ErrInvalidPortState(req))
+	adminState := strings.ToLower(req.AdminState)
+	if adminState != "up" && adminState != "down" {
+		h.respWriter.Error400(w, r, ErrInvalidPortState{State: req.AdminState})
 		return
 	}
 
-	// Note: The gRPC service doesn't have a SetPortState method exposed
-	// This would need to be added or we call the OVS client directly through the service
-	// For now, we'll return success as the service layer would handle this
+	ctx, cancel := h.createContext()
+	defer cancel()
+
+	resp, err := h.sdnService.SetPortState(ctx, &platformv1.SetPortStateRequest{
+		BridgeId:     bridgeName,
+		PortId:       portName,
+		AdminState:   adminState,
+		IngressRate:  req.IngressRate,
+		IngressBurst: req.IngressBurst,
+		EgressRate:   req.EgressRate,
+		EgressBurst:  req.EgressBurst,
+	})
+	if err != nil {
+		h.handleGRPCError(w, r, err)
+		return
+	}
+
 	h.respWriter.Success200(w, r, PortStateResponse{
-		PortID: portName,
-		State:  req.State,
+		BridgeID:   bridgeName,
+		PortID:     portName,
+		AdminState: h.portStatusToString(resp.GetPort().GetStatus()),
 	})
 }
 

@@ -21,7 +21,6 @@ import (
 	"log/slog"
 	"os"
 	"testing"
-	"testing/synctest"
 	"time"
 )
 
@@ -963,40 +962,41 @@ func TestImageManagerConfigValidate(t *testing.T) {
 
 // TestVerificationCacheExpiry tests that cached entries expire.
 func TestVerificationCacheExpiry(t *testing.T) {
-	// Inside a synctest bubble time.Now reads a fake clock that only moves when
-	// a timer fires, so the expiry boundary is exact and needs no wall-clock wait.
-	synctest.Test(t, func(t *testing.T) {
-		const ttl = 10 * time.Millisecond
-		config := ImageManagerConfig{
-			Logger:   testImageLogger(),
-			CacheTTL: ttl,
+	config := ImageManagerConfig{
+		Logger:   testImageLogger(),
+		CacheTTL: time.Minute,
+	}
+	verifier := NewMockImageVerifier(true)
+	manager, _ := newImageManagerWithImages(t, config,
+		[]ImageManagerOption{WithImageVerifier(verifier)}, "alpine:latest")
+	defer manager.Close()
+
+	current := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	manager.now = func() time.Time { return current }
+
+	verify := func(wantCalls int, why string) {
+		t.Helper()
+		if _, err := manager.VerifyImage(context.Background(), "alpine:latest"); err != nil {
+			t.Fatalf("VerifyImage: %v", err)
 		}
-		verifier := NewMockImageVerifier(true)
-		manager, _ := newImageManagerWithImages(t, config,
-			[]ImageManagerOption{WithImageVerifier(verifier)}, "alpine:latest")
-		defer manager.Close()
-
-		verify := func(wantCalls int, why string) {
-			t.Helper()
-			if _, err := manager.VerifyImage(context.Background(), "alpine:latest"); err != nil {
-				t.Fatalf("VerifyImage: %v", err)
-			}
-			if verifier.verifyCalls != wantCalls {
-				t.Errorf("expected verifyCalls=%d (%s), got %d", wantCalls, why, verifier.verifyCalls)
-			}
+		if verifier.verifyCalls != wantCalls {
+			t.Errorf("expected verifyCalls=%d (%s), got %d", wantCalls, why, verifier.verifyCalls)
 		}
+	}
 
-		// First call populates cache
-		verify(1, "first call")
+	// First call populates cache
+	verify(1, "first call")
 
-		// At exactly the TTL the entry is still valid
-		<-time.After(ttl)
-		verify(1, "cached")
+	// Immediate second call uses cache
+	verify(1, "cached")
 
-		// One tick past the TTL the entry has expired
-		<-time.After(time.Nanosecond)
-		verify(2, "expired")
-	})
+	// Still cached at exactly the TTL
+	current = current.Add(time.Minute)
+	verify(1, "cached at TTL")
+
+	// Expired one nanosecond past the TTL: re-verify
+	current = current.Add(time.Nanosecond)
+	verify(2, "expired")
 }
 
 // TestImageManagerRemoveImage tests image removal.

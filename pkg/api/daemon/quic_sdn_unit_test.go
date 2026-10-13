@@ -30,7 +30,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -307,6 +308,13 @@ func (s *stubOVSClient) SetPortVLAN(_ context.Context, _ string, _ int64) error 
 func (s *stubOVSClient) SetPortState(_ context.Context, _ string, _ ovs.PortState) error {
 	return nil
 }
+func (s *stubOVSClient) SetIngressPolicing(_ context.Context, _ string, _, _ uint64) error {
+	return nil
+}
+
+func (s *stubOVSClient) SetEgressShaping(_ context.Context, _ string, _, _ uint64) error {
+	return nil
+}
 func (s *stubOVSClient) GetInterface(_ context.Context, name string) (*ovs.Interface, error) {
 	return &ovs.Interface{Name: name}, nil
 }
@@ -471,96 +479,6 @@ func TestQUICSDN_GetPortState_WithSDNService(t *testing.T) {
 	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
-func TestQUICSDN_ApplyPolicy_Success(t *testing.T) {
-	th := newTestSDNHandlerWithMocks(t)
-	defer th.cleanup()
-
-	applyReq := &SDNApplyPolicyRequest{
-		PortID:   "eth0",
-		TenantID: "tenant-001",
-		VLAN:     100,
-		ACLs: []*SDNACLRule{
-			{
-				Priority:    100,
-				Action:      "allow",
-				Description: "Allow HTTP",
-				Match: &SDNFlowMatch{
-					InPort:  "1",
-					IPProto: 6,
-					TCPDst:  80,
-				},
-			},
-		},
-		Metadata: map[string]string{
-			"env": "prod",
-		},
-	}
-
-	payload, err := quicwire.EncodePayload(applyReq)
-	require.NoError(t, err)
-
-	req := &quicwire.Request{
-		Opcode:  quicwire.OpSDNApplyPolicy,
-		Payload: payload,
-	}
-
-	// handleSDNApplyPolicy checks policyEngine first
-	resp := th.handler.handleSDNApplyPolicy(th.ctx, req)
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
-
-	// Verify policy was applied
-	var applyResp SDNApplyPolicyResponse
-	err = quicwire.DecodePayload(resp.Payload, &applyResp)
-	require.NoError(t, err)
-	assert.Equal(t, "eth0", applyResp.PortID)
-	assert.True(t, applyResp.Success)
-
-}
-
-func TestQUICSDN_ApplyPolicy_MissingPortID(t *testing.T) {
-	th := newTestSDNHandlerWithMocks(t)
-	defer th.cleanup()
-
-	applyReq := &SDNApplyPolicyRequest{
-		PortID:   "", // Missing
-		TenantID: "tenant-001",
-		VLAN:     100,
-	}
-
-	payload, err := quicwire.EncodePayload(applyReq)
-	require.NoError(t, err)
-
-	req := &quicwire.Request{
-		Opcode:  quicwire.OpSDNApplyPolicy,
-		Payload: payload,
-	}
-
-	resp := th.handler.handleSDNApplyPolicy(th.ctx, req)
-	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
-}
-
-func TestQUICSDN_ApplyPolicy_MissingTenantID(t *testing.T) {
-	th := newTestSDNHandlerWithMocks(t)
-	defer th.cleanup()
-
-	applyReq := &SDNApplyPolicyRequest{
-		PortID:   "eth0",
-		TenantID: "", // Missing
-		VLAN:     100,
-	}
-
-	payload, err := quicwire.EncodePayload(applyReq)
-	require.NoError(t, err)
-
-	req := &quicwire.Request{
-		Opcode:  quicwire.OpSDNApplyPolicy,
-		Payload: payload,
-	}
-
-	resp := th.handler.handleSDNApplyPolicy(th.ctx, req)
-	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
-}
-
 func TestQUICSDN_ApplyPolicy_DecodingErrorUnit(t *testing.T) {
 	th := newTestSDNHandlerWithMocks(t)
 	defer th.cleanup()
@@ -574,76 +492,12 @@ func TestQUICSDN_ApplyPolicy_DecodingErrorUnit(t *testing.T) {
 	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
-func TestQUICSDN_ApplyPolicy_NilSDNService(t *testing.T) {
-	logger := logging.DefaultLogger()
-	handler := newTestQUICServiceHandler(logger) // No SDN service
-
-	ctx := context.Background()
-
-	applyReq := &SDNApplyPolicyRequest{
-		PortID:   "eth0",
-		TenantID: "tenant-001",
-		VLAN:     100,
-	}
-
-	payload, err := quicwire.EncodePayload(applyReq)
-	require.NoError(t, err)
-
-	req := &quicwire.Request{
-		Opcode:  quicwire.OpSDNApplyPolicy,
-		Payload: payload,
-	}
-
-	// Route through handleSDNOperation which checks sdnService nil
-	resp := handler.handleSDNOperation(ctx, req)
-	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
-}
-
-func TestQUICSDN_DeletePolicy_Success(t *testing.T) {
-	th := newTestSDNHandlerWithMocks(t)
-	defer th.cleanup()
-
-	// First apply a policy through the handler
-	applyReq := &SDNApplyPolicyRequest{
-		PortID:   "delete-unit-test",
-		TenantID: "tenant-001",
-		VLAN:     100,
-	}
-	applyPayload, err := quicwire.EncodePayload(applyReq)
-	require.NoError(t, err)
-	applyResp := th.handler.handleSDNApplyPolicy(th.ctx, &quicwire.Request{
-		Opcode: quicwire.OpSDNApplyPolicy, Payload: applyPayload,
-	})
-	require.Equal(t, quicwire.StatusOK, applyResp.Status)
-
-	deleteReq := &SDNDeletePolicyRequest{
-		PortID: "delete-unit-test",
-	}
-
-	payload, err := quicwire.EncodePayload(deleteReq)
-	require.NoError(t, err)
-
-	req := &quicwire.Request{
-		Opcode:  quicwire.OpSDNDeletePolicy,
-		Payload: payload,
-	}
-
-	resp := th.handler.handleSDNDeletePolicy(th.ctx, req)
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
-
-	var deleteResp SDNDeletePolicyResponse
-	err = quicwire.DecodePayload(resp.Payload, &deleteResp)
-	require.NoError(t, err)
-	assert.Equal(t, "delete-unit-test", deleteResp.PortID)
-	assert.True(t, deleteResp.Success)
-}
-
-func TestQUICSDN_DeletePolicy_MissingPortID(t *testing.T) {
+func TestQUICSDN_DeletePolicy_MissingPolicyID(t *testing.T) {
 	th := newTestSDNHandlerWithMocks(t)
 	defer th.cleanup()
 
 	deleteReq := &SDNDeletePolicyRequest{
-		PortID: "",
+		PolicyID: "",
 	}
 
 	payload, err := quicwire.EncodePayload(deleteReq)
@@ -663,7 +517,7 @@ func TestQUICSDN_DeletePolicy_NotFound(t *testing.T) {
 	defer th.cleanup()
 
 	deleteReq := &SDNDeletePolicyRequest{
-		PortID: "nonexistent-policy",
+		PolicyID: "nonexistent-policy",
 	}
 
 	payload, err := quicwire.EncodePayload(deleteReq)
@@ -675,46 +529,8 @@ func TestQUICSDN_DeletePolicy_NotFound(t *testing.T) {
 	}
 
 	resp := th.handler.handleSDNDeletePolicy(th.ctx, req)
-	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
-}
-
-func TestQUICSDN_GetPolicy_Success(t *testing.T) {
-	th := newTestSDNHandlerWithMocks(t)
-	defer th.cleanup()
-
-	// First apply a policy through the handler
-	applyReq := &SDNApplyPolicyRequest{
-		PortID:   "get-unit-policy",
-		TenantID: "tenant-001",
-		VLAN:     100,
-	}
-	applyPayload, err := quicwire.EncodePayload(applyReq)
-	require.NoError(t, err)
-	applyResp := th.handler.handleSDNApplyPolicy(th.ctx, &quicwire.Request{
-		Opcode: quicwire.OpSDNApplyPolicy, Payload: applyPayload,
-	})
-	require.Equal(t, quicwire.StatusOK, applyResp.Status)
-
-	getReq := &SDNGetPolicyRequest{
-		PortID: "get-unit-policy",
-	}
-
-	payload, err := quicwire.EncodePayload(getReq)
-	require.NoError(t, err)
-
-	req := &quicwire.Request{
-		Opcode:  quicwire.OpSDNGetPolicy,
-		Payload: payload,
-	}
-
-	resp := th.handler.handleSDNGetPolicy(th.ctx, req)
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
-
-	var getResp SDNGetPolicyResponse
-	err = quicwire.DecodePayload(resp.Payload, &getResp)
-	require.NoError(t, err)
-	require.NotNil(t, getResp.Policy)
-	assert.Equal(t, "get-unit-policy", getResp.Policy.PortID)
+	assert.Equal(t, quicwire.StatusNotFound, resp.Status)
+	assert.Contains(t, string(resp.Payload), "nonexistent-policy", "the error names the policy, not a port")
 }
 
 func TestQUICSDN_GetPolicy_NotFound(t *testing.T) {
@@ -722,7 +538,7 @@ func TestQUICSDN_GetPolicy_NotFound(t *testing.T) {
 	defer th.cleanup()
 
 	getReq := &SDNGetPolicyRequest{
-		PortID: "nonexistent",
+		PolicyID: "nonexistent",
 	}
 
 	payload, err := quicwire.EncodePayload(getReq)
@@ -735,14 +551,37 @@ func TestQUICSDN_GetPolicy_NotFound(t *testing.T) {
 
 	resp := th.handler.handleSDNGetPolicy(th.ctx, req)
 	assert.Equal(t, quicwire.StatusNotFound, resp.Status)
+	assert.Equal(t, ErrSDNPolicyNotFound{PolicyID: "nonexistent"}.Error(), string(resp.Payload),
+		"the error names the policy, not a port")
 }
 
-func TestQUICSDN_GetPolicy_MissingPortID(t *testing.T) {
+func TestSDNPolicyError_NotFoundNamesPolicy(t *testing.T) {
+	err := sdnPolicyError("SDNGetPolicy", "policy-7", status.Error(codes.NotFound, "policy not found"))
+
+	var notFound ErrSDNPolicyNotFound
+	require.ErrorAs(t, err, &notFound)
+	assert.Equal(t, "policy-7", notFound.PolicyID)
+}
+
+func TestSDNPolicyError_OtherFailureIsNotNotFound(t *testing.T) {
+	cause := status.Error(codes.Internal, "store unavailable")
+
+	err := sdnPolicyError("SDNGetPolicy", "policy-7", cause)
+
+	var failed ErrQUICOperationFailed
+	require.ErrorAs(t, err, &failed)
+	assert.Equal(t, "SDNGetPolicy", failed.Op)
+	assert.ErrorIs(t, err, cause)
+	var notFound ErrSDNPolicyNotFound
+	assert.False(t, errors.As(err, &notFound), "a store failure is not reported as a missing policy")
+}
+
+func TestQUICSDN_GetPolicy_MissingPolicyID(t *testing.T) {
 	th := newTestSDNHandlerWithMocks(t)
 	defer th.cleanup()
 
 	getReq := &SDNGetPolicyRequest{
-		PortID: "",
+		PolicyID: "",
 	}
 
 	payload, err := quicwire.EncodePayload(getReq)
@@ -755,25 +594,6 @@ func TestQUICSDN_GetPolicy_MissingPortID(t *testing.T) {
 
 	resp := th.handler.handleSDNGetPolicy(th.ctx, req)
 	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
-}
-
-func TestQUICSDN_ListPolicies_Success(t *testing.T) {
-	th := newTestSDNHandlerWithMocks(t)
-	defer th.cleanup()
-
-	req := &quicwire.Request{
-		Opcode:  quicwire.OpSDNListPolicies,
-		Payload: nil,
-	}
-
-	resp := th.handler.handleSDNListPolicies(th.ctx, req)
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
-
-	var listResp SDNListPoliciesResponse
-	err := quicwire.DecodePayload(resp.Payload, &listResp)
-	require.NoError(t, err)
-	assert.NotNil(t, listResp.Policies)
-	assert.Equal(t, 0, listResp.Total) // Empty initially
 }
 
 func TestQUICSDN_ListPolicies_NilSDNService(t *testing.T) {
@@ -842,7 +662,7 @@ func TestQUICSDN_DeletePolicy_NilSDNService(t *testing.T) {
 	ctx := context.Background()
 
 	deleteReq := &SDNDeletePolicyRequest{
-		PortID: "eth0",
+		PolicyID: "eth0",
 	}
 
 	payload, err := quicwire.EncodePayload(deleteReq)
@@ -864,7 +684,7 @@ func TestQUICSDN_GetPolicy_NilSDNService(t *testing.T) {
 	ctx := context.Background()
 
 	getReq := &SDNGetPolicyRequest{
-		PortID: "eth0",
+		PolicyID: "eth0",
 	}
 
 	payload, err := quicwire.EncodePayload(getReq)
@@ -882,83 +702,6 @@ func TestQUICSDN_GetPolicy_NilSDNService(t *testing.T) {
 // =============================================================================
 // SDN Type Conversion Tests - Additional Coverage
 // =============================================================================
-
-func TestQUICSDN_ConvertSDNACLsToPbRules_AllFields(t *testing.T) {
-	acls := []*SDNACLRule{
-		{
-			Priority: 100,
-			Action:   "allow",
-			Match: &SDNFlowMatch{
-				IPv4Src: "192.168.1.0/24",
-				IPv4Dst: "10.0.0.0/8",
-				TCPSrc:  12345,
-				TCPDst:  443,
-				VLANVid: 100,
-			},
-		},
-		{
-			Priority: 200,
-			Action:   "deny",
-			Match: &SDNFlowMatch{
-				IPv4Src: "10.0.0.0/8",
-			},
-		},
-	}
-
-	result := convertSDNACLsToPbRules(acls)
-	require.NotNil(t, result)
-	require.Len(t, result, 2)
-
-	assert.Equal(t, int32(100), result[0].Priority)
-	assert.Equal(t, platformv1.PolicyRuleAction_POLICY_RULE_ACTION_ALLOW, result[0].Action)
-	assert.Equal(t, "192.168.1.0/24", result[0].Match.SourceIp)
-	assert.Equal(t, "10.0.0.0/8", result[0].Match.DestinationIp)
-	assert.Equal(t, uint32(12345), result[0].Match.SourcePort)
-	assert.Equal(t, uint32(443), result[0].Match.DestinationPort)
-	assert.Equal(t, uint32(100), result[0].Match.VlanId)
-
-	assert.Equal(t, int32(200), result[1].Priority)
-	assert.Equal(t, platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY, result[1].Action)
-}
-
-func TestQUICSDN_ConvertPbPolicyToSDNPolicy_AllFields(t *testing.T) {
-	now := time.Now()
-	pol := &platformv1.Policy{
-		Id: "policy-1",
-		Config: &platformv1.PolicyConfig{
-			Rules: []*platformv1.PolicyRule{
-				{
-					Priority: 100,
-					Action:   platformv1.PolicyRuleAction_POLICY_RULE_ACTION_ALLOW,
-					Match: &platformv1.PolicyRuleMatch{
-						SourceIp: "192.168.1.0/24",
-					},
-				},
-			},
-		},
-		CreatedAt: timestamppb.New(now),
-	}
-
-	result := convertPbPolicyToSDNPolicy("port1", pol)
-	require.NotNil(t, result)
-	assert.Equal(t, "port1", result.PortID)
-	assert.Equal(t, now.Unix(), result.IssuedAt)
-	require.Len(t, result.ACLs, 1)
-	assert.Equal(t, 100, result.ACLs[0].Priority)
-	assert.Equal(t, "allow", result.ACLs[0].Action)
-}
-
-func TestQUICSDN_ConvertPbPolicyToSDNPolicy_NilPolicy(t *testing.T) {
-	result := convertPbPolicyToSDNPolicy("port1", nil)
-	assert.Nil(t, result)
-}
-
-func TestQUICSDN_ConvertPbPolicyToSDNPolicy_ZeroCreatedAt(t *testing.T) {
-	pol := &platformv1.Policy{Id: "policy-1"}
-	result := convertPbPolicyToSDNPolicy("port1", pol)
-	require.NotNil(t, result)
-	assert.Equal(t, int64(0), result.IssuedAt)
-}
 
 // Mock Policy Engine Interface Verification Test
 // =============================================================================
@@ -1107,90 +850,3 @@ func TestMockSDNPolicyEngine_ErrorInjection(t *testing.T) {
 // =============================================================================
 // Additional SDN Request Validation Tests
 // =============================================================================
-
-func TestQUICSDN_ApplyPolicy_WithNilMatch(t *testing.T) {
-	th := newTestSDNHandlerWithMocks(t)
-	defer th.cleanup()
-
-	applyReq := &SDNApplyPolicyRequest{
-		PortID:   "eth0",
-		TenantID: "tenant-001",
-		VLAN:     100,
-		ACLs: []*SDNACLRule{
-			{
-				Priority:    100,
-				Action:      "deny",
-				Description: "Deny all",
-				Match:       nil, // Nil match
-			},
-		},
-	}
-
-	payload, err := quicwire.EncodePayload(applyReq)
-	require.NoError(t, err)
-
-	req := &quicwire.Request{
-		Opcode:  quicwire.OpSDNApplyPolicy,
-		Payload: payload,
-	}
-
-	resp := th.handler.handleSDNApplyPolicy(th.ctx, req)
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
-}
-
-func TestQUICSDN_ApplyPolicy_EmptyACLs(t *testing.T) {
-	th := newTestSDNHandlerWithMocks(t)
-	defer th.cleanup()
-
-	applyReq := &SDNApplyPolicyRequest{
-		PortID:   "eth0",
-		TenantID: "tenant-001",
-		VLAN:     100,
-		ACLs:     []*SDNACLRule{}, // Empty ACLs
-	}
-
-	payload, err := quicwire.EncodePayload(applyReq)
-	require.NoError(t, err)
-
-	req := &quicwire.Request{
-		Opcode:  quicwire.OpSDNApplyPolicy,
-		Payload: payload,
-	}
-
-	resp := th.handler.handleSDNApplyPolicy(th.ctx, req)
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
-}
-
-func TestQUICSDN_ApplyPolicy_NilMetadata(t *testing.T) {
-	th := newTestSDNHandlerWithMocks(t)
-	defer th.cleanup()
-
-	applyReq := &SDNApplyPolicyRequest{
-		PortID:   "eth0",
-		TenantID: "tenant-001",
-		VLAN:     100,
-		ACLs:     nil,
-		Metadata: nil, // Nil metadata
-	}
-
-	payload, err := quicwire.EncodePayload(applyReq)
-	require.NoError(t, err)
-
-	req := &quicwire.Request{
-		Opcode:  quicwire.OpSDNApplyPolicy,
-		Payload: payload,
-	}
-
-	resp := th.handler.handleSDNApplyPolicy(th.ctx, req)
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
-}
-
-func TestQUICSDN_ConvertSDNACLsToPbRules_NilACLs(t *testing.T) {
-	result := convertSDNACLsToPbRules(nil)
-	assert.Nil(t, result)
-}
-
-func TestQUICSDN_ConvertPbRulesToSDNACLs_NilRules(t *testing.T) {
-	result := convertPbRulesToSDNACLs(nil)
-	assert.Nil(t, result)
-}

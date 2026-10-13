@@ -11,7 +11,7 @@ defined in `sdk/go/wire/quicwire/protocol.go`.
 | Opcode | Operation | Description |
 |--------|-----------|-------------|
 | `0x40` | SDNGetPortState | Get port admin state |
-| `0x41` | SDNSetPortState | Set port admin state |
+| `0x41` | SDNSetPortState | Set port admin state, ingress policing and egress shaping |
 | `0x42` | SDNListPorts | List ports on a bridge |
 | `0x43` | SDNGetFlow | Get a flow |
 | `0x44` | SDNAddFlow | Add a flow rule |
@@ -31,6 +31,29 @@ defined in `sdk/go/wire/quicwire/protocol.go`.
 | `0xB2` | SDNCreatePort | Create a port |
 | `0xB3` | SDNDeletePort | Delete a port |
 | `0xB4` | SDNDeletePolicy | Delete a policy |
+
+The policy operations carry the policy shape REST, gRPC and MCP use, so a
+policy applied on one transport reads back the same on the others. The
+apply request and the responses are the REST types in
+`pkg/api/rest/sdn_handlers.go`, keyed by their Go field names (`Name`,
+`Type`, `Rules`, `DestinationPort`, …), not by the snake_case JSON names:
+
+| Opcode | Request | Response |
+|--------|---------|----------|
+| `0x47` SDNApplyPolicy | `CreatePolicyRequest` | `PolicyResponse` |
+| `0x48` SDNGetPolicy | `PolicyID` | `PolicyResponse` |
+| `0x49` SDNListPolicies | `Type`, `TargetID` (empty fields do not filter) | `SDNPolicyListResponse` (`Policies`, `Count`, `Timestamp`) |
+| `0xB4` SDNDeletePolicy | `PolicyID` | `SDNActionResponse` (`ResourceType` `policy`, `Action` `delete`) |
+
+`SDNApplyPolicy` refuses an unknown policy type, target type or rule action
+with `StatusInvalidArgument`, a missing name with `StatusInvalidArgument`, and
+a name already in use with `StatusAlreadyExists`.
+
+`SDNGetPolicy` and `SDNDeletePolicy` take the policy ID or name in
+`PolicyID`. When no such policy exists the response is `StatusNotFound`
+and the error names the requested policy (`SDN policy not found: <id>`);
+any other failure keeps its own status and is not reported as a missing
+policy.
 
 Related SDN category opcodes: the overlay service uses category opcode
 `0x2E` with its own sub-opcodes (see

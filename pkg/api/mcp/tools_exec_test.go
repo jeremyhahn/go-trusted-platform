@@ -16,6 +16,7 @@ package mcp
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"testing"
 )
@@ -563,8 +564,8 @@ func TestSDNToolExecution(t *testing.T) {
 
 	t.Run("executeSDNSetPortState error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.sdnSetPortStateFunc = func(ctx context.Context, bridgeName, portName, state string) error {
-			return ErrMockServiceError
+		svc.sdnSetPortStateFunc = func(ctx context.Context, bridgeName, portName, state string, rates PortRates) (interface{}, error) {
+			return nil, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)
 
@@ -657,19 +658,48 @@ func TestSDNToolExecution(t *testing.T) {
 
 	t.Run("executeSDNApplyPolicy error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.sdnApplyPolicyFunc = func(ctx context.Context, policyID, bridgeName string) error {
-			return ErrMockServiceError
+		svc.sdnApplyPolicyFunc = func(ctx context.Context, policy json.RawMessage) (interface{}, error) {
+			return nil, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)
 
-		args := map[string]interface{}{
-			"policy_id":   "policy-1",
-			"bridge_name": "br0",
-		}
+		args := map[string]interface{}{"name": "web-acl", "type": "acl"}
 
 		_, err := registry.ExecuteTool(ctx, "sdn_apply_policy", args)
 		if err == nil {
 			t.Error("expected error")
+		}
+	})
+
+	t.Run("executeSDNApplyPolicy forwards the policy document", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		var got map[string]interface{}
+		svc.sdnApplyPolicyFunc = func(ctx context.Context, policy json.RawMessage) (interface{}, error) {
+			if err := json.Unmarshal(policy, &got); err != nil {
+				return nil, err
+			}
+			return got, nil
+		}
+		registry := NewToolRegistry(svc, log)
+
+		args := map[string]interface{}{"name": "web-acl", "type": "acl", "priority": float64(10)}
+		if _, err := registry.ExecuteTool(ctx, "sdn_apply_policy", args); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got["name"] != "web-acl" || got["type"] != "acl" || got["priority"] != float64(10) {
+			t.Errorf("forwarded document = %v", got)
+		}
+	})
+
+	t.Run("executeSDNApplyPolicy rejects arguments that are not JSON", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		registry := NewToolRegistry(svc, log)
+
+		args := map[string]interface{}{"name": "web-acl", "schedule": make(chan int)}
+		_, err := registry.ExecuteTool(ctx, "sdn_apply_policy", args)
+		var invalid ErrInvalidArgument
+		if !errors.As(err, &invalid) {
+			t.Errorf("expected ErrInvalidArgument, got %T: %v", err, err)
 		}
 	})
 
@@ -688,7 +718,7 @@ func TestSDNToolExecution(t *testing.T) {
 
 	t.Run("executeSDNListPolicies error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.sdnListPoliciesFunc = func(ctx context.Context) ([]interface{}, error) {
+		svc.sdnListPoliciesFunc = func(ctx context.Context, policyType, targetID string) ([]interface{}, error) {
 			return nil, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)
@@ -696,6 +726,55 @@ func TestSDNToolExecution(t *testing.T) {
 		_, err := registry.ExecuteTool(ctx, "sdn_list_policies", nil)
 		if err == nil {
 			t.Error("expected error")
+		}
+	})
+
+	t.Run("executeSDNListPolicies passes the filters", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		var gotType, gotTarget string
+		svc.sdnListPoliciesFunc = func(ctx context.Context, policyType, targetID string) ([]interface{}, error) {
+			gotType, gotTarget = policyType, targetID
+			return []interface{}{}, nil
+		}
+		registry := NewToolRegistry(svc, log)
+
+		args := map[string]interface{}{"type": "acl", "target_id": "eth0"}
+		if _, err := registry.ExecuteTool(ctx, "sdn_list_policies", args); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if gotType != "acl" || gotTarget != "eth0" {
+			t.Errorf("filters = (%q, %q), want (acl, eth0)", gotType, gotTarget)
+		}
+	})
+
+	t.Run("executeSDNDeletePolicy deletes the named policy", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		var deleted string
+		svc.sdnDeletePolicyFunc = func(ctx context.Context, policyID string) error {
+			deleted = policyID
+			return nil
+		}
+		registry := NewToolRegistry(svc, log)
+
+		args := map[string]interface{}{"policy_id": "policy-1"}
+		if _, err := registry.ExecuteTool(ctx, "sdn_delete_policy", args); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if deleted != "policy-1" {
+			t.Errorf("deleted %q, want policy-1", deleted)
+		}
+	})
+
+	t.Run("executeSDNDeletePolicy error", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		svc.sdnDeletePolicyFunc = func(ctx context.Context, policyID string) error {
+			return ErrMockServiceError
+		}
+		registry := NewToolRegistry(svc, log)
+
+		args := map[string]interface{}{"policy_id": "policy-1"}
+		if _, err := registry.ExecuteTool(ctx, "sdn_delete_policy", args); !errors.Is(err, ErrMockServiceError) {
+			t.Errorf("expected ErrMockServiceError, got %v", err)
 		}
 	})
 }

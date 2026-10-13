@@ -178,6 +178,7 @@ func toolPermissionCatalog() map[string]string {
 	permissions["sdn_apply_policy"] = "sdn:write"
 	permissions["sdn_get_policy"] = "sdn:read"
 	permissions["sdn_list_policies"] = "sdn:read"
+	permissions["sdn_delete_policy"] = "sdn:delete"
 
 	// Proxy (reverse-proxy configuration) tools
 	permissions["proxy_route_create"] = "proxy:write"

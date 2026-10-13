@@ -17,6 +17,8 @@ package sdn
 
 import (
 	"context"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -394,9 +396,14 @@ func testPortSetState(t *testing.T, ctx context.Context, adapter SDNCommands) {
 		t.Fatalf("PortAdd failed: %v", err)
 	}
 
-	// Set port state
+	// Set port state, ingress policing (10 Mbps, 1 Mbit burst) and egress
+	// shaping (20 Mbps, 2 Mbit burst).
 	stateOpts := PortSetStateOptions{
-		AdminState: "down",
+		AdminState:   "down",
+		IngressRate:  10_000_000,
+		IngressBurst: 1_000_000,
+		EgressRate:   20_000_000,
+		EgressBurst:  2_000_000,
 	}
 
 	result, err := adapter.PortSetState(ctx, bridge.BridgeID, port.PortID, stateOpts)
@@ -407,6 +414,33 @@ func testPortSetState(t *testing.T, ctx context.Context, adapter SDNCommands) {
 
 	if result.AdminState != "down" {
 		t.Errorf("Expected AdminState 'down', got '%s'", result.AdminState)
+	}
+
+	// Open vSwitch stores policing in kbps and kb.
+	for column, want := range map[string]string{"ingress_policing_rate": "10000", "ingress_policing_burst": "1000"} {
+		out, err := exec.CommandContext(ctx, "ovs-vsctl", "get", "interface", portOpts.Name, column).CombinedOutput()
+		if err != nil {
+			t.Fatalf("ovs-vsctl get %s: %v: %s", column, err, out)
+		}
+		if got := strings.TrimSpace(string(out)); got != want {
+			t.Errorf("%s = %s, want %s", column, got, want)
+		}
+	}
+
+	// Egress shaping is a linux-htb QoS on the port, stored in bps.
+	out, err := exec.CommandContext(ctx, "ovs-vsctl", "get", "port", portOpts.Name, "qos").CombinedOutput()
+	if err != nil {
+		t.Fatalf("ovs-vsctl get port qos: %v: %s", err, out)
+	}
+	qosUUID := strings.TrimSpace(string(out))
+	for column, want := range map[string]string{"type": "linux-htb", "other_config:max-rate": `"20000000"`} {
+		out, err := exec.CommandContext(ctx, "ovs-vsctl", "get", "qos", qosUUID, column).CombinedOutput()
+		if err != nil {
+			t.Fatalf("ovs-vsctl get qos %s: %v: %s", column, err, out)
+		}
+		if got := strings.TrimSpace(string(out)); got != want {
+			t.Errorf("qos %s = %s, want %s", column, got, want)
+		}
 	}
 }
 

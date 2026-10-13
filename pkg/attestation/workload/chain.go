@@ -67,6 +67,7 @@ type chainManager struct {
 	algorithm   HashAlgorithm
 	entries     []*ChainEntry
 	logger      *slog.Logger
+	now         func() time.Time // time.Now in production; tests replace it to control entry timestamps (#284)
 }
 
 // ChainManagerOption configures a chain manager.
@@ -90,6 +91,7 @@ func WithLogger(logger *slog.Logger) ChainManagerOption {
 func NewChainManager(opts ...ChainManagerOption) ChainManager {
 	cm := &chainManager{
 		entries: make([]*ChainEntry, 0),
+		now:     time.Now,
 	}
 
 	for _, opt := range opts {
@@ -213,7 +215,7 @@ func (cm *chainManager) ExtendPCR(ctx context.Context, measurement *WorkloadMeas
 
 	// Create the chain entry
 	entry := &ChainEntry{
-		Timestamp:    time.Now().UTC(),
+		Timestamp:    cm.now().UTC(),
 		WorkloadType: measurement.WorkloadType,
 		WorkloadID:   measurement.WorkloadID,
 		ImageDigest:  measurement.ImageDigest,

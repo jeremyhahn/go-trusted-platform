@@ -18,6 +18,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -140,7 +141,7 @@ func TestPlatformServiceProvider_VTPMRuntime_ServiceUnavailable(t *testing.T) {
 
 func TestPlatformServiceProvider_SDNSetPortState_Unavailable(t *testing.T) {
 	p := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
-	err := p.SDNSetPortState(context.Background(), "br0", "p0", "up")
+	_, err := p.SDNSetPortState(context.Background(), "br0", "p0", "up", mcp.PortRates{})
 	var e ErrServiceNotAvailable
 	assert.ErrorAs(t, err, &e)
 }

@@ -1,6 +1,8 @@
 package sdn
 
 import (
+	"io"
+	"strings"
 	"testing"
 
 	sdnsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/sdn"
@@ -126,7 +128,7 @@ func TestStringToPortTypeMapCompleteness(t *testing.T) {
 func TestPortSetStateCommandFlags(t *testing.T) {
 	cmd := newPortSetStateCommand(testGetFlags())
 
-	flags := []string{"bridge", "admin-state", "ingress-rate", "egress-rate"}
+	flags := []string{"bridge", "admin-state", "ingress-rate", "ingress-burst", "egress-rate", "egress-burst"}
 	for _, flagName := range flags {
 		flag := cmd.Flags().Lookup(flagName)
 		if flag == nil {
@@ -136,6 +138,21 @@ func TestPortSetStateCommandFlags(t *testing.T) {
 
 	if cmd.Args == nil {
 		t.Error("Args validation should not be nil")
+	}
+}
+
+// TestPortSetStateCommand_RequiresAdminState checks the CLI refuses a
+// set-state without --admin-state rather than sending a request every
+// transport would reject.
+func TestPortSetStateCommand_RequiresAdminState(t *testing.T) {
+	cmd := newPortSetStateCommand(testGetFlags())
+	cmd.SetArgs([]string{"--bridge", "br0", "--ingress-rate", "10000000", "port1"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "admin-state") {
+		t.Fatalf("Execute() error = %v, want a missing admin-state error", err)
 	}
 }
 

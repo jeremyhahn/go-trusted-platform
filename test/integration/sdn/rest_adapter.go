@@ -88,12 +88,11 @@ type RESTAdapter struct {
 	client    *http.Client
 	authToken string
 
-	// mu guards bridgeMTUs and vlans: TestSDNStressOperations drives one
-	// adapter from concurrent goroutines, and unguarded writes crashed the
-	// whole package with "concurrent map writes" (#730).
+	// mu guards bridgeMTUs: TestSDNStressOperations drives one adapter from
+	// concurrent goroutines, and unguarded writes crashed the whole package
+	// with "concurrent map writes" (#730).
 	mu         sync.Mutex
 	bridgeMTUs map[string]int32
-	vlans      map[int32]*VLANCreateResult
 }
 
 // NewRESTAdapter creates a new REST adapter with default settings.
@@ -112,7 +111,6 @@ func NewRESTAdapter() *RESTAdapter {
 			},
 		},
 		bridgeMTUs: make(map[string]int32),
-		vlans:      make(map[int32]*VLANCreateResult),
 	}
 }
 
@@ -852,15 +850,21 @@ func (r *RESTAdapter) FlowList(ctx context.Context, bridgeID string, opts FlowLi
 
 // VLANCreate creates a VLAN via REST API.
 func (r *RESTAdapter) VLANCreate(ctx context.Context, opts VLANCreateOptions) (*VLANCreateResult, error) {
-	reqBody := map[string]interface{}{
-		"vlan_id": opts.VLANID,
-		"name":    opts.Name,
-	}
+	// The REST route, like gRPC, places a VLAN on one bridge.
+	var bridgeID string
 	if len(opts.BridgeIDs) > 0 {
-		reqBody["bridge_ids"] = opts.BridgeIDs
+		bridgeID = opts.BridgeIDs[0]
 	}
-	if len(opts.Tagged) > 0 {
-		reqBody["ports"] = opts.Tagged
+
+	ports := make([]string, 0, len(opts.Tagged)+len(opts.Untagged))
+	ports = append(ports, opts.Tagged...)
+	ports = append(ports, opts.Untagged...)
+
+	reqBody := map[string]interface{}{
+		"vlan_id":   opts.VLANID,
+		"name":      opts.Name,
+		"bridge_id": bridgeID,
+		"ports":     ports,
 	}
 
 	respBody, err := r.doRequest(ctx, http.MethodPost, "/api/v1/sdn/vlans", reqBody)
@@ -868,84 +872,68 @@ func (r *RESTAdapter) VLANCreate(ctx context.Context, opts VLANCreateOptions) (*
 		return nil, err
 	}
 
-	var result struct {
-		VLANID      int32  `json:"vlan_id"`
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		Status      string `json:"status"`
-		BridgeCount int32  `json:"bridge_count"`
-		PortCount   int32  `json:"port_count"`
-		CreatedAt   string `json:"created_at"`
-	}
-
+	var result restVLAN
 	if err := r.parseResponse(respBody, &result); err != nil {
 		return nil, err
 	}
 
-	createdAt, _ := time.Parse(time.RFC3339, result.CreatedAt)
-
-	vlanResult := &VLANCreateResult{
-		VLANID:      result.VLANID,
+	return &VLANCreateResult{
+		VLANID:      int32(result.VLANID),
 		Name:        result.Name,
-		Description: result.Description,
-		Status:      result.Status,
-		BridgeCount: result.BridgeCount,
-		PortCount:   result.PortCount,
-		CreatedAt:   createdAt,
-	}
-
-	// Store locally since the REST server does not persist VLANs
-	r.mu.Lock()
-	r.vlans[result.VLANID] = vlanResult
-	r.mu.Unlock()
-
-	return vlanResult, nil
+		Description: opts.Description,
+		Status:      "active",
+		PortCount:   int32(result.PortCount),
+		CreatedAt:   result.CreatedAt,
+	}, nil
 }
 
-// VLANDelete deletes a VLAN via REST API.
+// VLANDelete deletes a VLAN from a bridge via REST.
 func (r *RESTAdapter) VLANDelete(ctx context.Context, bridgeID string, vlanID int32) (*VLANDeleteResult, error) {
-	path := "/api/v1/sdn/vlans/" + strconv.Itoa(int(vlanID))
+	params := url.Values{}
+	params.Set("bridge_id", bridgeID)
+	path := "/api/v1/sdn/vlans/" + strconv.Itoa(int(vlanID)) + "?" + params.Encode()
 	respBody, err := r.doRequest(ctx, http.MethodDelete, path, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	var result struct {
-		VLANID  int32 `json:"vlan_id"`
-		Deleted bool  `json:"deleted"`
+		Success bool `json:"success"`
 	}
-
 	if err := r.parseResponse(respBody, &result); err != nil {
 		return nil, err
 	}
 
-	// Remove from local state
-	r.mu.Lock()
-	delete(r.vlans, result.VLANID)
-	r.mu.Unlock()
-
 	return &VLANDeleteResult{
-		VLANID:  result.VLANID,
-		Deleted: result.Deleted,
+		VLANID:  vlanID,
+		Deleted: result.Success,
 	}, nil
 }
 
-// VLANList lists VLANs via REST API.
-// The REST server does not persist VLANs, so this returns locally tracked VLANs
-// that were created through this adapter instance.
+// VLANList lists the VLANs on a bridge via REST.
 func (r *RESTAdapter) VLANList(ctx context.Context, opts VLANListOptions) (*VLANListResult, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	vlans := make([]VLANSummary, 0, len(r.vlans))
-	for _, v := range r.vlans {
+	params := url.Values{}
+	params.Set("bridge_id", opts.BridgeID)
+	respBody, err := r.doRequest(ctx, http.MethodGet, "/api/v1/sdn/vlans?"+params.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		VLANs []restVLAN `json:"vlans"`
+	}
+	if err := r.parseResponse(respBody, &result); err != nil {
+		return nil, err
+	}
+
+	vlans := make([]VLANSummary, 0, len(result.VLANs))
+	for _, v := range result.VLANs {
 		vlans = append(vlans, VLANSummary{
-			VLANID:      v.VLANID,
-			Name:        v.Name,
-			Description: v.Description,
-			Status:      v.Status,
-			BridgeCount: v.BridgeCount,
-			PortCount:   v.PortCount,
-			CreatedAt:   v.CreatedAt,
+			VLANID:    int32(v.VLANID),
+			Name:      v.Name,
+			Status:    "active",
+			PortCount: int32(v.PortCount),
+			CreatedAt: v.CreatedAt,
 		})
 	}
 
@@ -955,66 +943,81 @@ func (r *RESTAdapter) VLANList(ctx context.Context, opts VLANListOptions) (*VLAN
 	}, nil
 }
 
+// restVLAN is the VLAN object the REST VLAN routes return.
+type restVLAN struct {
+	VLANID    uint32    `json:"vlan_id"`
+	Name      string    `json:"name"`
+	PortCount uint32    `json:"port_count"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // =============================================================================
 // Policy Commands
 // =============================================================================
 
 // PolicyApply applies a network policy via REST API.
 func (r *RESTAdapter) PolicyApply(ctx context.Context, opts PolicyApplyOptions) (*PolicyApplyResult, error) {
-	// Convert rules to server's PolicyRule format
-	restRules := make([]map[string]interface{}, 0, len(opts.Rules))
-	for _, rule := range opts.Rules {
-		restRule := map[string]interface{}{
-			"action":    rule.Action,
-			"direction": rule.Match.Direction,
-		}
-		if rule.Match.Protocol != "" {
-			restRule["protocol"] = rule.Match.Protocol
-		}
-		restRules = append(restRules, restRule)
-	}
-
-	// Include type in labels so PolicyGet can retrieve it
-	labels := map[string]string{
-		"type": opts.Type,
-	}
-
-	reqBody := map[string]interface{}{
-		"name":        opts.Name,
-		"description": opts.Description,
-		"priority":    opts.Priority,
-		"rules":       restRules,
-		"labels":      labels,
-	}
-
-	respBody, err := r.doRequest(ctx, http.MethodPost, "/api/v1/sdn/policies", reqBody)
+	respBody, err := r.doRequest(ctx, http.MethodPost, "/api/v1/sdn/policies", newRESTPolicyBody(opts))
 	if err != nil {
 		return nil, err
 	}
 
-	var result struct {
-		ID          string    `json:"id"`
-		Name        string    `json:"name"`
-		Description string    `json:"description"`
-		Priority    int       `json:"priority"`
-		Status      string    `json:"status"`
-		CreatedAt   time.Time `json:"created_at"`
-		UpdatedAt   time.Time `json:"updated_at"`
-	}
-
+	var result restPolicy
 	if err := r.parseResponse(respBody, &result); err != nil {
 		return nil, err
 	}
+	return result.applyResult(), nil
+}
 
-	return &PolicyApplyResult{
-		PolicyID:    result.ID,
-		Name:        result.Name,
+// newPolicyBody builds the create-policy request from opts. QUIC sends it as
+// is; REST and MCP send it as newRESTPolicyBody.
+func newPolicyBody(opts PolicyApplyOptions) sdnPolicyBody {
+	rules := make([]restPolicyRule, 0, len(opts.Rules))
+	for _, rule := range opts.Rules {
+		rules = append(rules, newRESTPolicyRule(rule))
+	}
+	targets := make([]restPolicyTarget, 0, len(opts.Targets))
+	for _, target := range opts.Targets {
+		targets = append(targets, restPolicyTarget(target))
+	}
+
+	var schedule *restPolicySchedule
+	if opts.Schedule != nil {
+		converted := restPolicySchedule(*opts.Schedule)
+		schedule = &converted
+	}
+
+	return sdnPolicyBody{
+		ID:          opts.PolicyID,
+		Name:        opts.Name,
+		Description: opts.Description,
 		Type:        opts.Type,
-		Status:      result.Status,
-		RuleCount:   int32(len(opts.Rules)),
-		TargetCount: int32(len(opts.Targets)),
-		AppliedAt:   result.CreatedAt,
-	}, nil
+		Priority:    opts.Priority,
+		Enabled:     opts.Enabled,
+		Rules:       rules,
+		Targets:     targets,
+		Schedule:    schedule,
+	}
+}
+
+// newRESTPolicyBody builds the REST create-policy body, which the MCP
+// sdn_apply_policy tool takes as its arguments too.
+func newRESTPolicyBody(opts PolicyApplyOptions) map[string]interface{} {
+	policy := newPolicyBody(opts)
+	body := map[string]interface{}{
+		"id":          policy.ID,
+		"name":        policy.Name,
+		"description": policy.Description,
+		"type":        policy.Type,
+		"priority":    policy.Priority,
+		"enabled":     policy.Enabled,
+		"rules":       policy.Rules,
+		"targets":     policy.Targets,
+	}
+	if policy.Schedule != nil {
+		body["schedule"] = policy.Schedule
+	}
+	return body
 }
 
 // PolicyGet retrieves a policy by ID via REST API.
@@ -1025,59 +1028,11 @@ func (r *RESTAdapter) PolicyGet(ctx context.Context, policyID string) (*PolicyGe
 		return nil, err
 	}
 
-	var result struct {
-		ID          string `json:"id"`
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		Priority    int32  `json:"priority"`
-		Status      string `json:"status"`
-		Rules       []struct {
-			Direction string `json:"direction"`
-			Protocol  string `json:"protocol"`
-			PortRange string `json:"port_range"`
-			Source    string `json:"source"`
-			Dest      string `json:"dest"`
-			Action    string `json:"action"`
-		} `json:"rules"`
-		Labels    map[string]string `json:"labels"`
-		CreatedAt time.Time         `json:"created_at"`
-		UpdatedAt time.Time         `json:"updated_at"`
-	}
-
+	var result restPolicy
 	if err := r.parseResponse(respBody, &result); err != nil {
 		return nil, err
 	}
-
-	rules := make([]PolicyRule, len(result.Rules))
-	for i, r := range result.Rules {
-		rules[i] = PolicyRule{
-			RuleID: fmt.Sprintf("rule-%d", i+1),
-			Match: PolicyMatch{
-				Protocol:  r.Protocol,
-				Direction: r.Direction,
-			},
-			Action: r.Action,
-		}
-	}
-
-	// Extract type from labels if available
-	policyType := result.Labels["type"]
-	if policyType == "" {
-		policyType = "acl"
-	}
-
-	return &PolicyGetResult{
-		PolicyID:    result.ID,
-		Name:        result.Name,
-		Description: result.Description,
-		Type:        policyType,
-		Priority:    result.Priority,
-		Enabled:     true,
-		Status:      result.Status,
-		Rules:       rules,
-		CreatedAt:   result.CreatedAt,
-		UpdatedAt:   result.UpdatedAt,
-	}, nil
+	return result.getResult(), nil
 }
 
 // PolicyList lists policies via REST API.
@@ -1105,49 +1060,182 @@ func (r *RESTAdapter) PolicyList(ctx context.Context, opts PolicyListOptions) (*
 		return nil, err
 	}
 
-	// Server returns SDNPolicyListResponse with "policies" array and "count"
 	var result struct {
-		Policies []struct {
-			ID          string            `json:"id"`
-			Name        string            `json:"name"`
-			Description string            `json:"description"`
-			Priority    int32             `json:"priority"`
-			Status      string            `json:"status"`
-			Rules       []interface{}     `json:"rules"`
-			Labels      map[string]string `json:"labels"`
-			CreatedAt   time.Time         `json:"created_at"`
-			UpdatedAt   time.Time         `json:"updated_at"`
-		} `json:"policies"`
-		Count     int       `json:"count"`
-		Timestamp time.Time `json:"timestamp"`
+		Policies []restPolicy `json:"policies"`
+		Count    int          `json:"count"`
 	}
-
 	if err := r.parseResponse(respBody, &result); err != nil {
 		return nil, err
 	}
 
 	policies := make([]PolicySummary, len(result.Policies))
 	for i, p := range result.Policies {
-		policyType := p.Labels["type"]
-		if policyType == "" {
-			policyType = "acl"
-		}
-		policies[i] = PolicySummary{
-			PolicyID:  p.ID,
-			Name:      p.Name,
-			Type:      policyType,
-			Priority:  p.Priority,
-			Enabled:   true,
-			Status:    p.Status,
-			RuleCount: int32(len(p.Rules)),
-			CreatedAt: p.CreatedAt,
-		}
+		policies[i] = p.summary()
 	}
 
 	return &PolicyListResult{
 		Policies:   policies,
 		TotalCount: int32(result.Count),
 	}, nil
+}
+
+// restPolicy is a policy as the REST policy routes answer it.
+type restPolicy struct {
+	ID          string              `json:"id"`
+	Name        string              `json:"name"`
+	Description string              `json:"description"`
+	Type        string              `json:"type"`
+	Priority    int32               `json:"priority"`
+	Enabled     bool                `json:"enabled"`
+	Status      string              `json:"status"`
+	Rules       []restPolicyRule    `json:"rules"`
+	Targets     []restPolicyTarget  `json:"targets"`
+	Schedule    *restPolicySchedule `json:"schedule"`
+	HitCount    uint64              `json:"hit_count"`
+	ByteCount   uint64              `json:"byte_count"`
+	CreatedAt   time.Time           `json:"created_at"`
+	UpdatedAt   time.Time           `json:"updated_at"`
+}
+
+// applyResult converts the policy returned by a create into PolicyApplyResult.
+func (p restPolicy) applyResult() *PolicyApplyResult {
+	return &PolicyApplyResult{
+		PolicyID:    p.ID,
+		Name:        p.Name,
+		Type:        p.Type,
+		Status:      p.Status,
+		RuleCount:   int32(len(p.Rules)),
+		TargetCount: int32(len(p.Targets)),
+		AppliedAt:   p.CreatedAt,
+	}
+}
+
+// getResult converts the policy into PolicyGetResult.
+func (p restPolicy) getResult() *PolicyGetResult {
+	rules := make([]PolicyRule, 0, len(p.Rules))
+	for _, rule := range p.Rules {
+		rules = append(rules, rule.policyRule())
+	}
+	targets := make([]PolicyTarget, 0, len(p.Targets))
+	for _, target := range p.Targets {
+		targets = append(targets, PolicyTarget(target))
+	}
+	var schedule *PolicySchedule
+	if p.Schedule != nil {
+		converted := PolicySchedule(*p.Schedule)
+		schedule = &converted
+	}
+
+	return &PolicyGetResult{
+		PolicyID:    p.ID,
+		Name:        p.Name,
+		Description: p.Description,
+		Type:        p.Type,
+		Priority:    p.Priority,
+		Enabled:     p.Enabled,
+		Status:      p.Status,
+		Rules:       rules,
+		Targets:     targets,
+		Schedule:    schedule,
+		HitCount:    p.HitCount,
+		ByteCount:   p.ByteCount,
+		CreatedAt:   p.CreatedAt,
+		UpdatedAt:   p.UpdatedAt,
+	}
+}
+
+// summary converts the policy into a PolicySummary list entry.
+func (p restPolicy) summary() PolicySummary {
+	return PolicySummary{
+		PolicyID:    p.ID,
+		Name:        p.Name,
+		Type:        p.Type,
+		Priority:    p.Priority,
+		Enabled:     p.Enabled,
+		Status:      p.Status,
+		RuleCount:   int32(len(p.Rules)),
+		TargetCount: int32(len(p.Targets)),
+		HitCount:    p.HitCount,
+		CreatedAt:   p.CreatedAt,
+	}
+}
+
+// restPolicyRule is a policy rule with its match fields inlined, as REST carries it.
+type restPolicyRule struct {
+	RuleID          string `json:"rule_id,omitempty"`
+	Priority        int32  `json:"priority,omitempty"`
+	SourceIP        string `json:"source_ip,omitempty"`
+	DestinationIP   string `json:"destination_ip,omitempty"`
+	SourcePort      int32  `json:"source_port,omitempty"`
+	DestinationPort int32  `json:"destination_port,omitempty"`
+	Protocol        string `json:"protocol,omitempty"`
+	Direction       string `json:"direction,omitempty"`
+	Interface       string `json:"interface,omitempty"`
+	VLANID          int32  `json:"vlan_id,omitempty"`
+	DSCP            int32  `json:"dscp,omitempty"`
+	Application     string `json:"application,omitempty"`
+	Action          string `json:"action,omitempty"`
+	ActionValue     string `json:"action_value,omitempty"`
+	Log             bool   `json:"log,omitempty"`
+	Counter         bool   `json:"counter,omitempty"`
+}
+
+type restPolicyTarget struct {
+	Type      string `json:"type"`
+	ID        string `json:"id"`
+	Direction string `json:"direction,omitempty"`
+}
+
+type restPolicySchedule struct {
+	StartTime string   `json:"start_time,omitempty"`
+	EndTime   string   `json:"end_time,omitempty"`
+	Days      []string `json:"days,omitempty"`
+	Timezone  string   `json:"timezone,omitempty"`
+	Enabled   bool     `json:"enabled"`
+}
+
+func newRESTPolicyRule(rule PolicyRule) restPolicyRule {
+	return restPolicyRule{
+		RuleID:          rule.RuleID,
+		Priority:        rule.Priority,
+		SourceIP:        rule.Match.SourceIP,
+		DestinationIP:   rule.Match.DestinationIP,
+		SourcePort:      rule.Match.SourcePort,
+		DestinationPort: rule.Match.DestinationPort,
+		Protocol:        rule.Match.Protocol,
+		Direction:       rule.Match.Direction,
+		Interface:       rule.Match.Interface,
+		VLANID:          rule.Match.VLANID,
+		DSCP:            rule.Match.DSCP,
+		Application:     rule.Match.Application,
+		Action:          rule.Action,
+		ActionValue:     rule.ActionValue,
+		Log:             rule.Log,
+		Counter:         rule.Counter,
+	}
+}
+
+func (r restPolicyRule) policyRule() PolicyRule {
+	return PolicyRule{
+		RuleID:   r.RuleID,
+		Priority: r.Priority,
+		Match: PolicyMatch{
+			SourceIP:        r.SourceIP,
+			DestinationIP:   r.DestinationIP,
+			SourcePort:      r.SourcePort,
+			DestinationPort: r.DestinationPort,
+			Protocol:        r.Protocol,
+			Direction:       r.Direction,
+			Interface:       r.Interface,
+			VLANID:          r.VLANID,
+			DSCP:            r.DSCP,
+			Application:     r.Application,
+		},
+		Action:      r.Action,
+		ActionValue: r.ActionValue,
+		Log:         r.Log,
+		Counter:     r.Counter,
+	}
 }
 
 // =============================================================================

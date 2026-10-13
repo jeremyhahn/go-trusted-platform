@@ -471,12 +471,14 @@ func cloneRequest(ctx context.Context, req *http.Request) (*http.Request, error)
 type SignatureCache struct {
 	cache sync.Map
 	ttl   time.Duration
+	now   func() time.Time // time.Now in production; tests replace it to advance time (#284)
 }
 
 // NewSignatureCache creates a new signature cache.
 func NewSignatureCache(ttl time.Duration) *SignatureCache {
 	return &SignatureCache{
 		ttl: ttl,
+		now: time.Now,
 	}
 }
 
@@ -492,7 +494,7 @@ func (c *SignatureCache) Get(key string) (*ImageSignature, bool) {
 		return nil, false
 	}
 
-	if time.Now().After(entry.ExpiresAt) {
+	if c.now().After(entry.ExpiresAt) {
 		c.cache.Delete(key)
 		return nil, false
 	}
@@ -503,11 +505,12 @@ func (c *SignatureCache) Get(key string) (*ImageSignature, bool) {
 
 // Set stores a signature in the cache.
 func (c *SignatureCache) Set(key string, sig *ImageSignature) {
+	now := c.now()
 	entry := &CacheEntry{
 		Key:       key,
 		Value:     sig,
-		ExpiresAt: time.Now().Add(c.ttl),
-		CreatedAt: time.Now(),
+		ExpiresAt: now.Add(c.ttl),
+		CreatedAt: now,
 	}
 	c.cache.Store(key, entry)
 }

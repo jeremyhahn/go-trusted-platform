@@ -88,7 +88,7 @@ func TestToolRegistry_ListTools(t *testing.T) {
 			// SDN
 			"sdn_get_port_state", "sdn_set_port_state", "sdn_list_bridges",
 			"sdn_create_bridge", "sdn_delete_bridge", "sdn_add_port", "sdn_delete_port",
-			"sdn_apply_policy", "sdn_get_policy", "sdn_list_policies",
+			"sdn_apply_policy", "sdn_get_policy", "sdn_list_policies", "sdn_delete_policy",
 			// Health
 			"platform_health", "platform_liveness", "platform_readiness",
 		}
@@ -841,14 +841,27 @@ func TestToolRegistry_SDNTools(t *testing.T) {
 	})
 
 	t.Run("sdn_apply_policy success", func(t *testing.T) {
-		args := map[string]interface{}{
-			"policy_id":   "policy-1",
-			"bridge_name": "br0",
-		}
+		args := map[string]interface{}{"name": "test-policy", "type": "acl"}
 
 		result, err := registry.ExecuteTool(ctx, "sdn_apply_policy", args)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
+		}
+		resultMap, ok := result.(map[string]interface{})
+		if !ok {
+			t.Fatal("result is not a map")
+		}
+		if resultMap["id"] != "policy-1" || resultMap["name"] != "test-policy" {
+			t.Errorf("applied policy = %v, want id policy-1 name test-policy", resultMap)
+		}
+	})
+
+	t.Run("sdn_delete_policy success", func(t *testing.T) {
+		args := map[string]interface{}{"policy_id": "policy-1"}
+
+		result, err := registry.ExecuteTool(ctx, "sdn_delete_policy", args)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
 		resultMap, ok := result.(map[string]interface{})
 		if !ok {

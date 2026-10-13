@@ -116,47 +116,6 @@ func TestMCPServiceProvider_SDNListFlows_NilServiceTableDriven(t *testing.T) {
 }
 
 // =============================================================================
-// SDNListPolicies Tests - Extended Table-Driven Coverage
-// =============================================================================
-
-func TestMCPServiceProvider_SDNListPolicies_NilPolicyEngineTableDriven(t *testing.T) {
-	testCases := []struct {
-		name string
-	}{
-		{
-			name: "nil_policy_engine_returns_error",
-		},
-		{
-			name: "nil_policy_engine_different_context",
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-				SDNService:   nil,
-				PolicyEngine: nil,
-				Logger:       slog.Default(),
-			})
-
-			result, err := provider.SDNListPolicies(ctx)
-			if err == nil {
-				t.Fatal("expected error for nil policy engine")
-			}
-			if result != nil {
-				t.Error("expected nil result for nil policy engine")
-			}
-
-			_, ok := err.(ErrSDNPolicyEngineNotConfigured)
-			if !ok {
-				t.Fatalf("expected ErrSDNPolicyEngineNotConfigured, got %T: %v", err, err)
-			}
-		})
-	}
-}
-
-// =============================================================================
 // SDNGetPortState Tests - Extended Table-Driven Coverage
 // =============================================================================
 
@@ -597,9 +556,8 @@ func TestMCPServiceProvider_SDNDeleteFlow_NilServiceTableDriven(t *testing.T) {
 func TestMCPServiceProvider_SDN_NilService_ErrorMessages(t *testing.T) {
 	ctx := context.Background()
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService:   nil,
-		PolicyEngine: nil,
-		Logger:       slog.Default(),
+		SDNService: nil,
+		Logger:     slog.Default(),
 	})
 
 	testCases := []struct {
@@ -630,10 +588,10 @@ func TestMCPServiceProvider_SDN_NilService_ErrorMessages(t *testing.T) {
 			name:      "SDNListPolicies_error_message",
 			operation: "SDNListPolicies",
 			callFunc: func() error {
-				_, err := provider.SDNListPolicies(ctx)
+				_, err := provider.SDNListPolicies(ctx, "", "")
 				return err
 			},
-			expectedMsg: "SDN policy engine not configured",
+			expectedMsg: "service not available: sdn",
 		},
 		{
 			name:      "SDNGetPortState_error_message",
@@ -718,9 +676,8 @@ func TestMCPServiceProvider_SDN_NilService_WithCancelledContext(t *testing.T) {
 	cancel() // Cancel immediately
 
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService:   nil,
-		PolicyEngine: nil,
-		Logger:       slog.Default(),
+		SDNService: nil,
+		Logger:     slog.Default(),
 	})
 
 	// The nil service check should happen before context is used,
@@ -801,28 +758,5 @@ func TestMCPServiceProvider_SDN_NilService_WithCancelledContext(t *testing.T) {
 				t.Errorf("expected ErrServiceNotAvailable, got %T: %v", err, err)
 			}
 		})
-	}
-}
-
-// SDNListPolicies with cancelled context should return ErrSDNPolicyEngineNotConfigured
-func TestMCPServiceProvider_SDNListPolicies_WithCancelledContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService:   nil,
-		PolicyEngine: nil,
-		Logger:       slog.Default(),
-	})
-
-	_, err := provider.SDNListPolicies(ctx)
-	if err == nil {
-		t.Fatal("expected error but got nil")
-	}
-
-	// Should be ErrSDNPolicyEngineNotConfigured
-	_, ok := err.(ErrSDNPolicyEngineNotConfigured)
-	if !ok {
-		t.Errorf("expected ErrSDNPolicyEngineNotConfigured, got %T: %v", err, err)
 	}
 }

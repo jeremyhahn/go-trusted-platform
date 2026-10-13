@@ -238,7 +238,7 @@ func (r *ResourceRegistry) readSDNResource(ctx context.Context, parts []string) 
 
 	if parts[0] == "policies" {
 		// List all policies
-		policies, err := r.service.SDNListPolicies(ctx)
+		policies, err := r.service.SDNListPolicies(ctx, "", "")
 		if err != nil {
 			return nil, err
 		}

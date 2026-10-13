@@ -544,13 +544,13 @@ func (m *SessionManager) Close() error {
 
 // Helper functions
 
-// generateSessionID generates a cryptographically secure session ID.
+// generateSessionID generates a cryptographically secure session ID. There
+// is no fallback: crypto/rand.Read never returns an error (since Go 1.24 it
+// crashes the program instead), and a timestamp-derived ID would be a
+// guessable session credential (#284).
 func generateSessionID() string {
 	b := make([]byte, sessionIDLength)
-	if _, err := rand.Read(b); err != nil {
-		// Fallback to timestamp-based ID if crypto/rand fails
-		return hex.EncodeToString([]byte(time.Now().UTC().Format(time.RFC3339Nano)))
-	}
+	rand.Read(b)
 	return hex.EncodeToString(b)
 }
 

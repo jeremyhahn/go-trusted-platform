@@ -77,13 +77,19 @@ type ListPortsResponse struct {
 
 // SetPortStateRequest is the request body for setting port state
 type SetPortStateRequest struct {
-	State string `json:"state"` // "up" or "down"
+	AdminState   string `json:"admin_state"`   // "up" or "down", case-insensitive
+	IngressRate  uint64 `json:"ingress_rate"`  // bits/s; 0 leaves policing as it is
+	IngressBurst uint64 `json:"ingress_burst"` // bits; 0 lets Open vSwitch pick
+	EgressRate   uint64 `json:"egress_rate"`   // bits/s; 0 leaves shaping as it is
+	EgressBurst  uint64 `json:"egress_burst"`  // bits; 0 lets Open vSwitch pick
 }
 
-// PortStateResponse is the response for port state operations
+// PortStateResponse is the response for port state operations. The field
+// names match the daemon REST answer (docs/sdn/api-reference-rest.md).
 type PortStateResponse struct {
-	PortID string `json:"port_id"`
-	State  string `json:"state"`
+	BridgeID   string `json:"bridge_id"`
+	PortID     string `json:"port_id"`
+	AdminState string `json:"admin_state"`
 }
 
 // AddFlowRequest is the request body for adding a flow

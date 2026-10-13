@@ -1612,52 +1612,6 @@ func TestPlatformServiceProvider_DeviceProvision_WithService(t *testing.T) {
 }
 
 // =============================================================================
-// SDN Policy Tests - Return Not Implemented
-// =============================================================================
-
-func TestPlatformServiceProvider_SDNSetPortState_AlwaysNotImplemented(t *testing.T) {
-	ctx := context.Background()
-	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
-
-	// SDNSetPortState always returns not implemented error
-	err := provider.SDNSetPortState(ctx, "br0", "eth0", "up")
-	if err == nil {
-		t.Error("expected error")
-	}
-	// This method returns a specific "not yet implemented" error
-}
-
-func TestPlatformServiceProvider_SDNApplyPolicy_AlwaysNotImplemented(t *testing.T) {
-	ctx := context.Background()
-	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
-
-	err := provider.SDNApplyPolicy(ctx, "policy1", "br0")
-	if err == nil {
-		t.Error("expected error")
-	}
-}
-
-func TestPlatformServiceProvider_SDNGetPolicy_AlwaysNotImplemented(t *testing.T) {
-	ctx := context.Background()
-	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
-
-	_, err := provider.SDNGetPolicy(ctx, "policy1")
-	if err == nil {
-		t.Error("expected error")
-	}
-}
-
-func TestPlatformServiceProvider_SDNListPolicies_AlwaysNotImplemented(t *testing.T) {
-	ctx := context.Background()
-	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
-
-	_, err := provider.SDNListPolicies(ctx)
-	if err == nil {
-		t.Error("expected error")
-	}
-}
-
-// =============================================================================
 // Timestamp and Duration Tests (Edge Cases)
 // =============================================================================
 

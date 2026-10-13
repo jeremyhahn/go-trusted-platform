@@ -17,7 +17,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -691,6 +693,26 @@ func (r *ToolRegistry) registerSDNTools() {
 				"bridge_name": map[string]interface{}{"type": "string", "description": "Bridge name"},
 				"port_name":   map[string]interface{}{"type": "string", "description": "Port name"},
 				"state":       map[string]interface{}{"type": "string", "description": "Port state (up, down)"},
+				"ingress_rate": map[string]interface{}{
+					"type":        "integer",
+					"minimum":     0,
+					"description": "Ingress policing rate in bits per second, a whole multiple of 1000 (0 leaves policing unchanged)",
+				},
+				"ingress_burst": map[string]interface{}{
+					"type":        "integer",
+					"minimum":     0,
+					"description": "Ingress policing burst in bits, a whole multiple of 1000 (needs ingress_rate; 0 is the Open vSwitch default)",
+				},
+				"egress_rate": map[string]interface{}{
+					"type":        "integer",
+					"minimum":     0,
+					"description": "Egress shaping rate in bits per second (0 leaves shaping unchanged)",
+				},
+				"egress_burst": map[string]interface{}{
+					"type":        "integer",
+					"minimum":     0,
+					"description": "Egress shaping burst in bits (needs egress_rate; 0 is the Open vSwitch default)",
+				},
 			},
 			"required": []string{"bridge_name", "port_name", "state"},
 		},
@@ -758,24 +780,42 @@ func (r *ToolRegistry) registerSDNTools() {
 
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_apply_policy",
-		Description: "Apply a network policy to a bridge",
+		Description: "Create or replace a network policy; the arguments are the REST create-policy body",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"policy_id":   map[string]interface{}{"type": "string", "description": "Policy ID"},
-				"bridge_name": map[string]interface{}{"type": "string", "description": "Bridge name"},
+				"id":          map[string]interface{}{"type": "string", "description": "Policy ID (generated when omitted)"},
+				"name":        map[string]interface{}{"type": "string", "description": "Unique policy name"},
+				"description": map[string]interface{}{"type": "string", "description": "Policy description"},
+				"type":        map[string]interface{}{"type": "string", "description": "acl, qos, nat, firewall or routing"},
+				"priority":    map[string]interface{}{"type": "integer", "description": "Policy priority"},
+				"enabled":     map[string]interface{}{"type": "boolean", "description": "Whether the policy is enabled"},
+				"rules": map[string]interface{}{
+					"type":        "array",
+					"description": "Rules: rule_id, priority, source_ip, destination_ip, source_port, destination_port, protocol, direction, interface, vlan_id, dscp, application, action, action_value, log, counter",
+					"items":       map[string]interface{}{"type": "object"},
+				},
+				"targets": map[string]interface{}{
+					"type":        "array",
+					"description": "Targets: type (bridge, port, vlan, interface), id, direction, zone",
+					"items":       map[string]interface{}{"type": "object"},
+				},
+				"schedule": map[string]interface{}{
+					"type":        "object",
+					"description": "Schedule: start_time, end_time, days, timezone, enabled",
+				},
 			},
-			"required": []string{"policy_id", "bridge_name"},
+			"required": []string{"name"},
 		},
 	})
 
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_get_policy",
-		Description: "Get a network policy",
+		Description: "Get a network policy by ID or name",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"policy_id": map[string]interface{}{"type": "string", "description": "Policy ID"},
+				"policy_id": map[string]interface{}{"type": "string", "description": "Policy ID or name"},
 			},
 			"required": []string{"policy_id"},
 		},
@@ -783,10 +823,25 @@ func (r *ToolRegistry) registerSDNTools() {
 
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_list_policies",
-		Description: "List all network policies",
+		Description: "List network policies",
 		InputSchema: map[string]interface{}{
-			"type":       "object",
-			"properties": map[string]interface{}{},
+			"type": "object",
+			"properties": map[string]interface{}{
+				"type":      map[string]interface{}{"type": "string", "description": "Only policies of this type"},
+				"target_id": map[string]interface{}{"type": "string", "description": "Only policies with this target"},
+			},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "sdn_delete_policy",
+		Description: "Delete a network policy by ID or name",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"policy_id": map[string]interface{}{"type": "string", "description": "Policy ID or name"},
+			},
+			"required": []string{"policy_id"},
 		},
 	})
 
@@ -1391,6 +1446,8 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeSDNGetPolicy(ctx, args)
 	case "sdn_list_policies":
 		return r.executeSDNListPolicies(ctx, args)
+	case "sdn_delete_policy":
+		return r.executeSDNDeletePolicy(ctx, args)
 	case "sdn_add_flow":
 		return r.executeSDNAddFlow(ctx, args)
 	case "sdn_delete_flow":
@@ -1924,6 +1981,51 @@ func getInt64(args map[string]interface{}, key string) int64 {
 		}
 	}
 	return 0
+}
+
+// optionalUint64Arg reads an optional unsigned integer argument. An absent
+// key is 0; a negative, fractional or non-numeric value is ErrInvalidArgument
+// rather than a silent 0.
+func optionalUint64Arg(args map[string]interface{}, key string) (uint64, error) {
+	raw, present := args[key]
+	if !present || raw == nil {
+		return 0, nil
+	}
+	invalid := ErrInvalidArgument{Msg: key + " must be a non-negative integer"}
+	switch v := raw.(type) {
+	case float64:
+		if v < 0 || v >= math.MaxUint64 || v != math.Trunc(v) {
+			return 0, invalid
+		}
+		return uint64(v), nil
+	case int:
+		if v < 0 {
+			return 0, invalid
+		}
+		return uint64(v), nil
+	case int64:
+		if v < 0 {
+			return 0, invalid
+		}
+		return uint64(v), nil
+	case uint64:
+		return v, nil
+	case json.Number:
+		return parseUint64Arg(v.String(), invalid)
+	case string:
+		return parseUint64Arg(strings.TrimSpace(v), invalid)
+	default:
+		return 0, invalid
+	}
+}
+
+func parseUint64Arg(s string, invalid ErrInvalidArgument) (uint64, error) {
+	n, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		invalid.Cause = err
+		return 0, invalid
+	}
+	return n, nil
 }
 
 func getIntSlice(args map[string]interface{}, key string) []int {

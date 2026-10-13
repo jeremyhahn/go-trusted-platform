@@ -49,6 +49,8 @@ type ClientInterface interface {
 	SetPortVLAN(ctx context.Context, portName string, tag int64) error
 	SetPortTrunks(ctx context.Context, portName string, trunks []int64) error
 	SetPortState(ctx context.Context, portName string, state PortState) error
+	SetIngressPolicing(ctx context.Context, name string, rateBps, burstBits uint64) error
+	SetEgressShaping(ctx context.Context, name string, rateBps, burstBits uint64) error
 
 	// Interface operations
 	GetInterface(ctx context.Context, name string) (*Interface, error)

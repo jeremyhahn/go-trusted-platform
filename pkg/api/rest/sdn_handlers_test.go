@@ -22,7 +22,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
@@ -55,6 +54,21 @@ type mockSDNService struct {
 	listPortsErr     error
 	setPortVLANErr   error
 	setPortTrunksErr error
+	setPortStateErr  error
+	getInterfaceErr  error
+	setPolicingErr   error
+	setShapingErr    error
+
+	// policing records every SetIngressPolicing call, keyed by port name,
+	// as {rateBps, burstBits}.
+	policing map[string][2]uint64
+	// shaping records every SetEgressShaping call the same way.
+	shaping map[string][2]uint64
+
+	// interfaces holds the Open vSwitch interface rows GetInterface reads.
+	interfaces map[string]*ovs.Interface
+	// portStates records every SetPortState call, keyed by port name.
+	portStates map[string]ovs.PortState
 
 	addFlowErr        error
 	deleteFlowErr     error
@@ -64,9 +78,13 @@ type mockSDNService struct {
 
 func newMockSDNService() *mockSDNService {
 	return &mockSDNService{
-		bridges: make(map[string]*ovs.Bridge),
-		ports:   make(map[string]*ovs.Port),
-		flows:   make(map[string][]*ovs.Flow),
+		bridges:    make(map[string]*ovs.Bridge),
+		ports:      make(map[string]*ovs.Port),
+		flows:      make(map[string][]*ovs.Flow),
+		interfaces: make(map[string]*ovs.Interface),
+		portStates: make(map[string]ovs.PortState),
+		policing:   make(map[string][2]uint64),
+		shaping:    make(map[string][2]uint64),
 	}
 }
 
@@ -233,6 +251,40 @@ func (m *mockSDNService) SetPortTrunks(ctx context.Context, portName string, tru
 	return nil
 }
 
+func (m *mockSDNService) SetPortState(ctx context.Context, portName string, state ovs.PortState) error {
+	m.portStates[portName] = state
+	if m.setPortStateErr != nil {
+		return m.setPortStateErr
+	}
+	iface, exists := m.interfaces[portName]
+	if !exists {
+		return ovs.ErrPortNotFound
+	}
+	iface.AdminState = string(state)
+	return nil
+}
+
+func (m *mockSDNService) SetIngressPolicing(ctx context.Context, name string, rateBps, burstBits uint64) error {
+	m.policing[name] = [2]uint64{rateBps, burstBits}
+	return m.setPolicingErr
+}
+
+func (m *mockSDNService) SetEgressShaping(ctx context.Context, name string, rateBps, burstBits uint64) error {
+	m.shaping[name] = [2]uint64{rateBps, burstBits}
+	return m.setShapingErr
+}
+
+func (m *mockSDNService) GetInterface(ctx context.Context, name string) (*ovs.Interface, error) {
+	if m.getInterfaceErr != nil {
+		return nil, m.getInterfaceErr
+	}
+	iface, exists := m.interfaces[name]
+	if !exists {
+		return nil, ovs.ErrPortNotFound
+	}
+	return iface, nil
+}
+
 func (m *mockSDNService) AddFlow(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error {
 	if m.addFlowErr != nil {
 		return m.addFlowErr
@@ -384,16 +436,6 @@ func TestSDNHandlerErrors(t *testing.T) {
 		assert.Equal(t, "invalid flow ID: bad-flow", err.Error())
 	})
 
-	t.Run("ErrInvalidSDNPolicyID with empty ID", func(t *testing.T) {
-		err := ErrInvalidSDNPolicyID{}
-		assert.Equal(t, "policy ID is required", err.Error())
-	})
-
-	t.Run("ErrInvalidSDNPolicyID with ID", func(t *testing.T) {
-		err := ErrInvalidSDNPolicyID{ID: "bad-policy"}
-		assert.Equal(t, "invalid policy ID: bad-policy", err.Error())
-	})
-
 	t.Run("ErrSDNOperationFailed", func(t *testing.T) {
 		cause := errors.New("underlying error")
 		err := ErrSDNOperationFailed{Operation: "create_bridge", Cause: cause}
@@ -416,19 +458,9 @@ func TestSDNHandlerErrors(t *testing.T) {
 		assert.Equal(t, "flow not found: flow-1", err.Error())
 	})
 
-	t.Run("ErrSDNPolicyNotFound", func(t *testing.T) {
-		err := ErrSDNPolicyNotFound{ID: "policy-1"}
-		assert.Equal(t, "policy not found: policy-1", err.Error())
-	})
-
 	t.Run("ErrBridgeAlreadyExists", func(t *testing.T) {
 		err := ErrBridgeAlreadyExists{Name: "br0"}
 		assert.Equal(t, "bridge already exists: br0", err.Error())
-	})
-
-	t.Run("ErrPolicyAlreadyExists", func(t *testing.T) {
-		err := ErrPolicyAlreadyExists{Name: "test-policy"}
-		assert.Equal(t, "policy already exists: test-policy", err.Error())
 	})
 }
 
@@ -1190,259 +1222,6 @@ func TestDeleteFlow(t *testing.T) {
 // Policy Handler Tests
 // =============================================================================
 
-func TestCreatePolicy(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		svc := newMockSDNService()
-		_, router := setupSDNTestHandler(svc)
-
-		reqBody := CreatePolicyRequest{
-			Name:        "test-policy",
-			Description: "Test network policy",
-			Priority:    100,
-			Rules: []PolicyRule{
-				{
-					Direction: "ingress",
-					Protocol:  "tcp",
-					PortRange: "80",
-					Action:    "allow",
-				},
-			},
-		}
-		body, _ := json.Marshal(reqBody)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/policies", bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusCreated, w.Code)
-
-		var resp PolicyResponse
-		decodeSDNResponse(t, w.Body, &resp)
-		assert.Equal(t, "test-policy", resp.Name)
-		assert.Equal(t, 100, resp.Priority)
-		assert.Equal(t, "active", resp.Status)
-	})
-
-	t.Run("missing name", func(t *testing.T) {
-		svc := newMockSDNService()
-		_, router := setupSDNTestHandler(svc)
-
-		reqBody := CreatePolicyRequest{
-			Description: "Test policy",
-		}
-		body, _ := json.Marshal(reqBody)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/policies", bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusBadRequest, w.Code)
-	})
-
-	t.Run("invalid json", func(t *testing.T) {
-		svc := newMockSDNService()
-		_, router := setupSDNTestHandler(svc)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/policies", bytes.NewReader([]byte("invalid")))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusBadRequest, w.Code)
-	})
-
-	t.Run("service not available", func(t *testing.T) {
-		handlers := NewSDNHandlers(nil, nil)
-		router := mux.NewRouter()
-		handlers.RegisterRoutes(router)
-
-		reqBody := CreatePolicyRequest{Name: "test-policy"}
-		body, _ := json.Marshal(reqBody)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/policies", bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-	})
-}
-
-func TestListPolicies(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		svc := newMockSDNService()
-		handlers, router := setupSDNTestHandler(svc)
-
-		// Add some policies directly
-		now := time.Now().UTC()
-		handlers.policies["policy-1"] = &PolicyResponse{
-			ID:        "policy-1",
-			Name:      "test-policy-1",
-			Status:    "active",
-			CreatedAt: now,
-			UpdatedAt: now,
-		}
-		handlers.policies["policy-2"] = &PolicyResponse{
-			ID:        "policy-2",
-			Name:      "test-policy-2",
-			Status:    "active",
-			CreatedAt: now,
-			UpdatedAt: now,
-		}
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/sdn/policies", nil)
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusOK, w.Code)
-
-		var resp SDNPolicyListResponse
-		decodeSDNResponse(t, w.Body, &resp)
-		assert.Equal(t, 2, resp.Count)
-	})
-
-	t.Run("empty list", func(t *testing.T) {
-		svc := newMockSDNService()
-		_, router := setupSDNTestHandler(svc)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/sdn/policies", nil)
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusOK, w.Code)
-
-		var resp SDNPolicyListResponse
-		decodeSDNResponse(t, w.Body, &resp)
-		assert.Equal(t, 0, resp.Count)
-	})
-
-	t.Run("service not available", func(t *testing.T) {
-		handlers := NewSDNHandlers(nil, nil)
-		router := mux.NewRouter()
-		handlers.RegisterRoutes(router)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/sdn/policies", nil)
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-	})
-}
-
-func TestGetPolicy(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		svc := newMockSDNService()
-		handlers, router := setupSDNTestHandler(svc)
-
-		now := time.Now().UTC()
-		handlers.policies["policy-1"] = &PolicyResponse{
-			ID:        "policy-1",
-			Name:      "test-policy",
-			Status:    "active",
-			CreatedAt: now,
-			UpdatedAt: now,
-		}
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/sdn/policies/policy-1", nil)
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusOK, w.Code)
-
-		var resp PolicyResponse
-		decodeSDNResponse(t, w.Body, &resp)
-		assert.Equal(t, "test-policy", resp.Name)
-	})
-
-	t.Run("not found", func(t *testing.T) {
-		svc := newMockSDNService()
-		_, router := setupSDNTestHandler(svc)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/sdn/policies/nonexistent", nil)
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusNotFound, w.Code)
-	})
-
-	t.Run("service not available", func(t *testing.T) {
-		handlers := NewSDNHandlers(nil, nil)
-		router := mux.NewRouter()
-		handlers.RegisterRoutes(router)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/sdn/policies/policy-1", nil)
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-	})
-}
-
-func TestDeletePolicy(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		svc := newMockSDNService()
-		handlers, router := setupSDNTestHandler(svc)
-
-		now := time.Now().UTC()
-		handlers.policies["policy-1"] = &PolicyResponse{
-			ID:        "policy-1",
-			Name:      "test-policy",
-			Status:    "active",
-			CreatedAt: now,
-			UpdatedAt: now,
-		}
-
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/sdn/policies/policy-1", nil)
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusOK, w.Code)
-
-		var resp SDNActionResponse
-		decodeSDNResponse(t, w.Body, &resp)
-		assert.True(t, resp.Success)
-		assert.Equal(t, "delete", resp.Action)
-	})
-
-	t.Run("not found", func(t *testing.T) {
-		svc := newMockSDNService()
-		_, router := setupSDNTestHandler(svc)
-
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/sdn/policies/nonexistent", nil)
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusNotFound, w.Code)
-	})
-
-	t.Run("service not available", func(t *testing.T) {
-		handlers := NewSDNHandlers(nil, nil)
-		router := mux.NewRouter()
-		handlers.RegisterRoutes(router)
-
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/sdn/policies/policy-1", nil)
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-	})
-}
-
 // =============================================================================
 // Topology Handler Tests
 // =============================================================================
@@ -1568,7 +1347,6 @@ func TestNewSDNHandlers(t *testing.T) {
 		assert.NotNil(t, handlers)
 		assert.NotNil(t, handlers.sdnService)
 		assert.NotNil(t, handlers.logger)
-		assert.NotNil(t, handlers.policies)
 	})
 
 	t.Run("without logger", func(t *testing.T) {
@@ -1585,18 +1363,6 @@ func TestNewSDNHandlers(t *testing.T) {
 		assert.NotNil(t, handlers)
 		assert.Nil(t, handlers.sdnService)
 	})
-}
-
-func TestSetPolicyService(t *testing.T) {
-	svc := newMockSDNService()
-	handlers := NewSDNHandlers(svc, nil)
-
-	assert.Nil(t, handlers.policyService)
-
-	// Note: PolicyServiceInterface is defined but not implemented in mock
-	handlers.SetPolicyService(nil)
-
-	assert.Nil(t, handlers.policyService)
 }
 
 func TestSDNRegisterRoutes(t *testing.T) {
@@ -1741,35 +1507,6 @@ func TestOVSFlowToResponse(t *testing.T) {
 // Policy Already Exists Test
 // =============================================================================
 
-func TestCreatePolicyAlreadyExists(t *testing.T) {
-	svc := newMockSDNService()
-	handlers, router := setupSDNTestHandler(svc)
-
-	// Add existing policy
-	now := time.Now().UTC()
-	handlers.policies["existing-policy"] = &PolicyResponse{
-		ID:        "existing-policy",
-		Name:      "test-policy",
-		Status:    "active",
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-
-	// Try to create policy with same name
-	reqBody := CreatePolicyRequest{
-		Name: "test-policy",
-	}
-	body, _ := json.Marshal(reqBody)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/policies", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusConflict, w.Code)
-}
-
 // =============================================================================
 // Additional Error Path Tests
 // =============================================================================
@@ -1863,122 +1600,6 @@ func TestPortTrunksError(t *testing.T) {
 // =============================================================================
 // Port State Tests
 // =============================================================================
-
-func TestGetPortState(t *testing.T) {
-	t.Run("returns port state", func(t *testing.T) {
-		svc := newMockSDNService()
-		svc.addTestBridge("br-test")
-		svc.addTestPort("br-test", "eth0")
-		_, router := setupSDNTestHandler(svc)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/sdn/bridges/br-test/ports/eth0/state", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusOK, w.Code)
-
-		var resp map[string]interface{}
-		decodeSDNResponse(t, w.Body, &resp)
-		assert.Equal(t, "br-test", resp["bridge_id"])
-		assert.Equal(t, "up", resp["admin_state"])
-	})
-
-	t.Run("returns service unavailable when service not set", func(t *testing.T) {
-		handlers := NewSDNHandlers(nil, slog.Default())
-		router := mux.NewRouter()
-		handlers.RegisterRoutes(router)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/sdn/bridges/br-test/ports/eth0/state", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-	})
-
-	t.Run("returns error when GetPort fails", func(t *testing.T) {
-		svc := newMockSDNService()
-		svc.getPortErr = errors.New("port not found")
-		_, router := setupSDNTestHandler(svc)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/sdn/bridges/br-test/ports/missing/state", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.NotEqual(t, http.StatusOK, w.Code)
-	})
-}
-
-func TestSetPortState(t *testing.T) {
-	t.Run("sets port state", func(t *testing.T) {
-		svc := newMockSDNService()
-		_, router := setupSDNTestHandler(svc)
-
-		body, _ := json.Marshal(map[string]string{"admin_state": "down"})
-		req := httptest.NewRequest(http.MethodPut, "/api/v1/sdn/bridges/br-test/ports/eth0/state", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusOK, w.Code)
-
-		var resp map[string]interface{}
-		decodeSDNResponse(t, w.Body, &resp)
-		assert.Equal(t, "down", resp["admin_state"])
-	})
-
-	t.Run("returns service unavailable when service not set", func(t *testing.T) {
-		handlers := NewSDNHandlers(nil, slog.Default())
-		router := mux.NewRouter()
-		handlers.RegisterRoutes(router)
-
-		body, _ := json.Marshal(map[string]string{"admin_state": "up"})
-		req := httptest.NewRequest(http.MethodPut, "/api/v1/sdn/bridges/br-test/ports/eth0/state", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-	})
-
-	t.Run("returns error for invalid body", func(t *testing.T) {
-		svc := newMockSDNService()
-		_, router := setupSDNTestHandler(svc)
-
-		req := httptest.NewRequest(http.MethodPut, "/api/v1/sdn/bridges/br-test/ports/eth0/state", bytes.NewReader([]byte("bad")))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusBadRequest, w.Code)
-	})
-}
-
-func TestGetPortStats(t *testing.T) {
-	t.Run("returns port stats", func(t *testing.T) {
-		svc := newMockSDNService()
-		_, router := setupSDNTestHandler(svc)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/sdn/bridges/br-test/ports/eth0/stats", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusOK, w.Code)
-
-		var resp map[string]interface{}
-		decodeSDNResponse(t, w.Body, &resp)
-		assert.Equal(t, "br-test", resp["bridge_id"])
-		assert.Equal(t, "eth0", resp["port_id"])
-	})
-
-	t.Run("returns service unavailable when service not set", func(t *testing.T) {
-		handlers := NewSDNHandlers(nil, slog.Default())
-		router := mux.NewRouter()
-		handlers.RegisterRoutes(router)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/sdn/bridges/br-test/ports/eth0/stats", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-	})
-}
 
 // =============================================================================
 // Per-Bridge Flow Tests
@@ -2138,113 +1759,5 @@ func TestDeleteFlowForBridge(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		assert.NotEqual(t, http.StatusOK, w.Code)
-	})
-}
-
-// =============================================================================
-// VLAN Handler Tests
-// =============================================================================
-
-func TestCreateVLAN(t *testing.T) {
-	t.Run("creates VLAN", func(t *testing.T) {
-		svc := newMockSDNService()
-		_, router := setupSDNTestHandler(svc)
-
-		body, _ := json.Marshal(map[string]interface{}{
-			"vlan_id":     100,
-			"name":        "test-vlan",
-			"description": "Test VLAN",
-			"bridge_ids":  []string{"br-test"},
-		})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/vlans", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusCreated, w.Code)
-	})
-
-	t.Run("returns service unavailable when service not set", func(t *testing.T) {
-		handlers := NewSDNHandlers(nil, slog.Default())
-		router := mux.NewRouter()
-		handlers.RegisterRoutes(router)
-
-		body, _ := json.Marshal(map[string]interface{}{"vlan_id": 100})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/vlans", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-	})
-
-	t.Run("returns error for invalid body", func(t *testing.T) {
-		svc := newMockSDNService()
-		_, router := setupSDNTestHandler(svc)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/vlans", bytes.NewReader([]byte("bad")))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusBadRequest, w.Code)
-	})
-}
-
-func TestListVLANs(t *testing.T) {
-	t.Run("lists VLANs", func(t *testing.T) {
-		svc := newMockSDNService()
-		_, router := setupSDNTestHandler(svc)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/sdn/vlans", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusOK, w.Code)
-	})
-
-	t.Run("returns service unavailable when service not set", func(t *testing.T) {
-		handlers := NewSDNHandlers(nil, slog.Default())
-		router := mux.NewRouter()
-		handlers.RegisterRoutes(router)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/sdn/vlans", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-	})
-}
-
-func TestDeleteVLAN(t *testing.T) {
-	t.Run("deletes VLAN", func(t *testing.T) {
-		svc := newMockSDNService()
-		_, router := setupSDNTestHandler(svc)
-
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/sdn/vlans/100", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusOK, w.Code)
-	})
-
-	t.Run("returns service unavailable when service not set", func(t *testing.T) {
-		handlers := NewSDNHandlers(nil, slog.Default())
-		router := mux.NewRouter()
-		handlers.RegisterRoutes(router)
-
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/sdn/vlans/100", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-	})
-
-	t.Run("returns error for invalid VLAN ID", func(t *testing.T) {
-		svc := newMockSDNService()
-		_, router := setupSDNTestHandler(svc)
-
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/sdn/vlans/abc", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 }

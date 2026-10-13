@@ -1264,9 +1264,9 @@ func TestMCPServiceProvider_SDNListPolicies(t *testing.T) {
 	provider := &MCPServiceProvider{}
 	ctx := context.Background()
 
-	result, err := provider.SDNListPolicies(ctx)
+	result, err := provider.SDNListPolicies(ctx, "", "")
 	assert.Nil(t, result)
-	assert.Error(t, err)
+	assert.IsType(t, ErrServiceNotAvailable{}, err)
 }
 
 func TestMCPServiceProvider_SDNGetPolicy(t *testing.T) {
@@ -1275,7 +1275,7 @@ func TestMCPServiceProvider_SDNGetPolicy(t *testing.T) {
 
 	result, err := provider.SDNGetPolicy(ctx, "policy-1")
 	assert.Nil(t, result)
-	assert.Error(t, err)
+	assert.IsType(t, ErrServiceNotAvailable{}, err)
 }
 
 func TestMCPServiceProvider_SDNListBridges(t *testing.T) {

@@ -1,6 +1,6 @@
 # Remote-Access VPN — Engineering Contract
 
-> **Status: PARTIAL — the core (#584 PR 1), both data planes (#584 PR 2), the gateway service and the operator control plane (#584 PR 3) exist; the JS SDK client and the web page (#584 PR 4) exist; left for PR 4: `platformctl vpn connect`. The admission listener and the gatewayd runtime assembly are planned (§1).** · Scope: `pkg/sdn/gateway/services/vpn`, `pkg/sdn/tunnel`, `pkg/vpn` · Last verified: 2026-10-13
+> **Status: PARTIAL — the core (#584 PR 1), both data planes (#584 PR 2), the gateway service and the operator control plane (#584 PR 3) exist, and so do the admission wire contract and the client agent core (`pkg/vpn/agent`); the JS SDK client and the web page (#584 PR 4) exist; left for PR 4: the client's TPM device, factor signers and data planes, and the `platformctl vpn connect` verbs. The admission listener and the gatewayd runtime assembly are planned (§1).** · Scope: `pkg/sdn/gateway/services/vpn`, `pkg/sdn/tunnel`, `pkg/vpn` · Last verified: 2026-10-13
 > Identifiers below are either real today (grepped) or marked *(planned)*. A
 > planned name is a requirement for the implementing PR, not a claim.
 > Feature folder: [architecture.md](architecture.md) · engineering (this file) ·
@@ -74,6 +74,12 @@
 | `(*Service).DesiredVPN(ctx)` | The `vpn` section the daemon overlays on every gateway's desired config ([docs/gateway/engineering.md](../gateway/engineering.md)) |
 | `VPNGRPCService`, `vpnErrToGRPC` | The one service every transport calls. Errors map as [api.md](api.md) §3; a daemon without the service refuses every RPC `Unavailable` |
 | `sdk/go/services/vpn.Client`, `NewClientFromGRPC` | The Go client the CLI and the integration suite use, over any transport |
+| `PathChallenges`, `PathAdmissions`, `LeasePath`, `LeaseRenewPath`; `ChallengeWire`, `AdmissionRequestWire`, `AttestationWire`, `PersonFactorWire`, `PeerWire`, `LeaseWire`, `EndpointWire`; `RefusalClass`, `RefusalWire`, `RefusalOf(err)` (`pkg/sdn/gateway/services/vpn/wire.go`) | The admission listener's wire contract ([api.md](api.md) §5), shared by the listener and the client so the two cannot drift. `RefusalOf` is the one place a typed admission error becomes a reason class and an HTTP status |
+| `pkg/vpn/agent`: `Agent` (`New(Deps)`, `Connect`, `Disconnect`, `Lease`), the `Device` / `PostureSource` / `FactorSigner` / `DataPlane` / `Gateway` / `StateStore` seams | The client admission: dial with the device certificate, fetch the challenge, pick a plane, bind the quote and the factor to the nonce, admit, bring the plane up, record the lease. A plane that fails to come up, or a lease that cannot be recorded, is torn down and revoked (`ErrRollback` when the cleanup itself fails). The undo runs on its own context, bounded at 10 s from the moment the cleanup begins and detached from the connect's cancellation, so a connect cancelled or timed out after admission still releases the peer and its address. `Disconnect` revokes and tears down; a lease the gateway no longer holds counts as gone |
+| `HTTPGateway`, `NewHTTPGateway`, `DialHTTPGateway` | The admission client: TLS 1.3, the device certificate as the client certificate, the gateway verified against the given roots. A non-2xx answer decodes as `RefusedError{Status, Class, Rules}`; anything that is not the contract is `ErrInvalidResponse` |
+| `HostPosture`, `NewHostPosture` | The posture collector (§4) |
+| `FileStateStore` (`/run/platformctl/vpn.json`, 0600 in a 0700 directory, atomic rename) | The held lease and the local session; no secrets |
+| `ExitCode(err)`: 0, 4 refused, 5 posture violation, 6 not connected, 1 otherwise | The exit codes of [cli.md](cli.md). A refusal met while rolling back never decides the code |
 | `VPNService` (`sdk/javascript/src/services/vpn-service.ts`), `PlatformClient.vpn`, `useVPN` | The JS client over the REST routes: the same eight operations, with the protojson field names and string 64-bit integers ([api.md](api.md) §2) |
 | `web/src/app/(dashboard)/networking/vpn/page.tsx` (Networking → VPN) | The operator page over `useVPN`: gateway status and sessions, enrolled peers with revoke, posture policies listed, viewed and edited. A node without the control plane shows the not-available state; a daemon without gateway telemetry still lists peers and policies |
 
@@ -84,7 +90,10 @@
 | The admission listener (mTLS-only, `Config.Listener`) and the datapath process client | `pkg/sdn/gateway/services/vpn` | The gateway process model (#557) |
 | The gatewayd assembly of `VPNRuntime`: the planes from `masque.*` / `wireguard.*` keys and a `FactorVerifier` over the SDK | `pkg/sdn/gateway/commands` | Blocked on the SDK: no quicbaas verb verifies a FIDO2 or PIV assertion over a caller nonce |
 | The control-plane `LeaseStore` | daemon | §6 |
-| `platformctl vpn connect` and the other client-agent verbs ([cli.md](cli.md)) | `pkg/cli/commands/vpn` | #584 PR 4; needs the admission listener |
+| `platformctl vpn connect` and the other client-agent verbs ([cli.md](cli.md)) over `pkg/vpn/agent`, with the exit-code plumbing in `cmd/platformctl` | `pkg/cli/commands/vpn` | #584 PR 4; needs the admission listener |
+| The TPM-backed `Device` (IDevID certificate and key, quote over the nonce) for `platformctl` | `pkg/vpn/agent` | #584 PR 4. Open: the TPM handle and the IDevID live in platformd's storage today |
+| The FIDO2 / PIV `FactorSigner` over the SDK | `pkg/vpn/agent` | Blocked on the SDK as the `FactorVerifier` row above |
+| The client `DataPlane`s: WireGuard (`!fips`, through `pkg/sdn/tunnel`) and MASQUE CONNECT-IP | `pkg/vpn/agent` | #584 PR 4 |
 
 ## 2. Invariants
 
@@ -135,6 +144,12 @@
 | `ErrPosturePolicyInvalid{TenantID, Name, Reason}` | a tenant module does not parse, compile, or declare `vpn.posture` | 400 / `InvalidArgument` on the control plane; on the gateway the tenant is refused |
 | `ErrInvalidConfig{Field, Reason}` | at load: TTL bounds, WireGuard in FIPS, empty pool, unknown zone | startup refusal |
 
+On the admission listener each of these reaches the client as a `RefusalClass`
+(`RefusalOf`, [api.md](api.md) §5): the `calleradmission` reason for
+`ErrPeerRefused`, otherwise the error's kebab-case name (`posture-violation`,
+`pool-exhausted`, …). The client turns the class back into `RefusedError` and
+its exit code.
+
 ## 4. Posture
 
 The report is what the client agent can collect **from this repository's code
@@ -144,7 +159,7 @@ today**; anything else is future and must not be assumed by a policy:
 |---|---|---|
 | Secure Boot enabled, setup mode, efivars availability | `pkg/uefi.ReadSecureBootStatus` | collectable |
 | IMA available / enabled / policy loaded; measurement log digest | `pkg/ima.Status`, `pkg/ima.NewReader` | collectable |
-| Full-disk encryption present on the root volume | LUKS2 state via `go-quicbaas/sdk/go/xkms/luks` | collectable |
+| Full-disk encryption present on the root volume | sysfs: the root mount's block device (`/proc/self/mountinfo`; the source device for an anonymous device number; for btrfs, every member device the filesystem lists under `/sys/fs/btrfs/<fsid>/devices/`, since the mount names only one) is a device-mapper target whose `dm/uuid` starts `CRYPT-LUKS`, directly or under other layers through `slaves/` (LVM on LUKS, RAID on LUKS). Every path down to the physical devices must pass through a LUKS mapping: one plain member of an LVM group, RAID array or btrfs filesystem makes the root unencrypted, and so does a btrfs root whose filesystem is not found in sysfs or a part of the device tree that cannot be read (fail closed). The `sdk/go/xkms/luks` re-export opens and seals volumes but has no probe for the mounted root | collected (`HostPosture`) |
 | Agent version, OS release, kernel release | the agent binary and `/etc/os-release`, `uname` | collectable |
 | Patch level, EDR presence, screen-lock policy | — | **future**; a policy referencing them fails closed with `ErrPostureUnavailable` |
 

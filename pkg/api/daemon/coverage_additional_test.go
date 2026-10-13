@@ -229,12 +229,12 @@ func TestMCPService_SDNOperations_NoService(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("SDNSetPortState without SDN service", func(t *testing.T) {
-		err := provider.SDNSetPortState(ctx, "br0", "eth0", "up")
+		_, err := provider.SDNSetPortState(ctx, "br0", "eth0", "up", mcp.PortRates{})
 		assert.Error(t, err)
 	})
 
 	t.Run("SDNListPolicies without SDN service", func(t *testing.T) {
-		result, err := provider.SDNListPolicies(ctx)
+		result, err := provider.SDNListPolicies(ctx, "", "")
 		assert.Nil(t, result)
 		assert.Error(t, err)
 	})

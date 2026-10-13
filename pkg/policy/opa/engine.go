@@ -68,6 +68,8 @@ type OPAEngine struct {
 	totalDuration   atomic.Int64
 	lastEvaluation  atomic.Pointer[time.Time]
 	initializedAt   time.Time
+
+	now func() time.Time // time.Now in production; tests replace it to control timestamps (#284)
 }
 
 // NewOPAEngine creates a new OPA policy engine instance.
@@ -75,6 +77,7 @@ func NewOPAEngine() *OPAEngine {
 	return &OPAEngine{
 		policies: make(map[string]*PolicyBundle),
 		store:    inmem.New(),
+		now:      time.Now,
 	}
 }
 
@@ -105,7 +108,7 @@ func (e *OPAEngine) Initialize(ctx context.Context, cfg *config.PolicyConfig) er
 	e.mu.Lock()
 	e.config = cfg
 	e.policies = make(map[string]*PolicyBundle)
-	e.initializedAt = time.Now()
+	e.initializedAt = e.now()
 	e.mu.Unlock()
 
 	// Load policies from directory if specified
@@ -162,7 +165,7 @@ func (e *OPAEngine) LoadPolicy(ctx context.Context, name string, content []byte)
 	bundle := &PolicyBundle{
 		Name:     name,
 		Content:  string(content),
-		LoadedAt: time.Now(),
+		LoadedAt: e.now(),
 		Package:  packageName,
 		Checksum: checksum,
 	}
@@ -208,7 +211,7 @@ func (e *OPAEngine) Evaluate(ctx context.Context, policyName string, input map[s
 
 // EvaluateWithData evaluates a policy with additional data context.
 func (e *OPAEngine) EvaluateWithData(ctx context.Context, policyName string, input map[string]interface{}, data map[string]interface{}) (*EvaluationResult, error) {
-	startTime := time.Now()
+	startTime := e.now()
 
 	if !e.initialized.Load() {
 		e.errorCount.Add(1)
@@ -340,12 +343,12 @@ func (e *OPAEngine) EvaluateWithData(ctx context.Context, policyName string, inp
 		}
 	}
 
-	duration := time.Since(startTime)
+	duration := e.now().Sub(startTime)
 
 	// Update statistics
 	e.evaluationCount.Add(1)
 	e.totalDuration.Add(int64(duration))
-	now := time.Now()
+	now := e.now()
 	e.lastEvaluation.Store(&now)
 
 	if allowed {
@@ -516,7 +519,7 @@ func (e *OPAEngine) loadPoliciesFromDir(ctx context.Context, dir string) error {
 		bundle := &PolicyBundle{
 			Name:     name,
 			Content:  string(content),
-			LoadedAt: time.Now(),
+			LoadedAt: e.now(),
 			Package:  packageName,
 			Path:     path,
 			Checksum: checksum,
@@ -579,7 +582,7 @@ func (e *OPAEngine) loadEmbeddedPolicies(ctx context.Context) error {
 		bundle := &PolicyBundle{
 			Name:     name,
 			Content:  string(content),
-			LoadedAt: time.Now(),
+			LoadedAt: e.now(),
 			Package:  packageName,
 			Checksum: checksum,
 		}

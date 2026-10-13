@@ -16,7 +16,6 @@ package workload
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 )
@@ -377,11 +376,9 @@ func TestLifecycleManager_GetEventHistory(t *testing.T) {
 		if err := lm.OnWorkloadStart(ctx, WorkloadTypeContainer, "c1", "d1"); err != nil {
 			t.Fatalf("OnWorkloadStart c1 failed: %v", err)
 		}
-		time.Sleep(time.Millisecond)
 		if err := lm.OnWorkloadStart(ctx, WorkloadTypeVM, "v1", "d2"); err != nil {
 			t.Fatalf("OnWorkloadStart v1 failed: %v", err)
 		}
-		time.Sleep(time.Millisecond)
 		if err := lm.OnWorkloadStop(ctx, WorkloadTypeContainer, "c1"); err != nil {
 			t.Fatalf("OnWorkloadStop c1 failed: %v", err)
 		}

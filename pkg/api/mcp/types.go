@@ -26,6 +26,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
@@ -296,6 +297,17 @@ type KMSGenerateWrappedDataKeyRequest struct {
 }
 
 // IPAMPoolCreateRequest represents an IPAM pool creation request for MCP.
+// PortRates are the rate limits SDNSetPortState applies to a port: ingress
+// policing on what it receives and egress shaping on what it sends, each a
+// rate in bits per second and a burst in bits. A zero rate leaves that
+// direction as it is; a zero burst lets Open vSwitch pick its default.
+type PortRates struct {
+	IngressRate  uint64
+	IngressBurst uint64
+	EgressRate   uint64
+	EgressBurst  uint64
+}
+
 type IPAMPoolCreateRequest struct {
 	Name                 string `json:"name"`
 	CIDR                 string `json:"cidr"`
@@ -492,15 +504,21 @@ type ServiceProvider interface {
 
 	// SDN Bridge operations
 	SDNGetPortState(ctx context.Context, bridgeName string, portName string) (interface{}, error)
-	SDNSetPortState(ctx context.Context, bridgeName string, portName string, state string) error
+	// SDNSetPortState sets a port's admin state (up or down) and the rate
+	// limits in rates, and returns the updated port.
+	SDNSetPortState(ctx context.Context, bridgeName string, portName string, state string, rates PortRates) (interface{}, error)
 	SDNListBridges(ctx context.Context) ([]interface{}, error)
 	SDNCreateBridge(ctx context.Context, bridgeName string) error
 	SDNDeleteBridge(ctx context.Context, bridgeName string) error
 	SDNAddPort(ctx context.Context, bridgeName string, portName string, portType string) error
 	SDNDeletePort(ctx context.Context, bridgeName string, portName string) error
-	SDNApplyPolicy(ctx context.Context, policyID string, bridgeName string) error
+	// SDNApplyPolicy creates or replaces a policy. The document is the REST
+	// create-policy body (docs/sdn/api-reference-rest.md), so a policy has one
+	// shape on every transport.
+	SDNApplyPolicy(ctx context.Context, policy json.RawMessage) (interface{}, error)
 	SDNGetPolicy(ctx context.Context, policyID string) (interface{}, error)
-	SDNListPolicies(ctx context.Context) ([]interface{}, error)
+	SDNListPolicies(ctx context.Context, policyType string, targetID string) ([]interface{}, error)
+	SDNDeletePolicy(ctx context.Context, policyID string) error
 
 	// SDN Flow operations
 	SDNAddFlow(ctx context.Context, bridgeName string, flow map[string]interface{}) error

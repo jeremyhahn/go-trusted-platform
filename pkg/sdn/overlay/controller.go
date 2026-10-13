@@ -54,6 +54,7 @@ type Controller struct {
 	// Lifecycle state
 	controllerState atomic.Uint32
 	startedAt       time.Time
+	now             func() time.Time // uptime clock (startedAt, Uptime): time.Now in production; tests replace it (#284)
 	mu              sync.RWMutex
 	// vniMu serialises VNI derivation with the state write, so concurrent
 	// AddVNI calls never derive the same overlay network number.
@@ -83,6 +84,7 @@ func New(config *Config, opts ...Option) (*Controller, error) {
 		state:  NewStateManager(),
 		logger: slog.Default(),
 		stopCh: make(chan struct{}),
+		now:    time.Now,
 	}
 
 	c.controllerState.Store(uint32(ControllerStateStopped))
@@ -119,7 +121,7 @@ func (c *Controller) Start(ctx context.Context) error {
 	// This prevents a race condition where background tasks try to read
 	// from stopCh before it's initialized
 	c.mu.Lock()
-	c.startedAt = time.Now()
+	c.startedAt = c.now()
 	c.stopCh = make(chan struct{})
 	c.stopOnce = sync.Once{}
 	c.mu.Unlock()
@@ -740,5 +742,5 @@ func (c *Controller) Uptime() time.Duration {
 	if !c.IsOperational() || c.startedAt.IsZero() {
 		return 0
 	}
-	return time.Since(c.startedAt)
+	return c.now().Sub(c.startedAt)
 }

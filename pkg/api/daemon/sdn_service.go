@@ -17,11 +17,13 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netlink"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
@@ -1175,6 +1177,12 @@ func (s *SDNService) SetPortState(ctx context.Context, req *platformv1.SetPortSt
 	if req.GetAdminState() == "" {
 		return nil, status.Error(codes.InvalidArgument, "admin_state is required")
 	}
+	if err := ovs.ValidateIngressPolicing(req.GetIngressRate(), req.GetIngressBurst()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if err := ovs.ValidateEgressShaping(req.GetEgressRate(), req.GetEgressBurst()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 
 	portName, _, found := s.findPortName(req.GetPortId())
 	if !found {
@@ -1197,6 +1205,28 @@ func (s *SDNService) SetPortState(ctx context.Context, req *platformv1.SetPortSt
 	// Set port state via OVS without holding the lock
 	if err := client.SetPortState(ctx, portName, portState); err != nil {
 		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to set port state: %v", err))
+	}
+
+	// A zero ingress rate leaves the port's policing as it is.
+	if req.GetIngressRate() > 0 {
+		err := client.SetIngressPolicing(ctx, portName, req.GetIngressRate(), req.GetIngressBurst())
+		if errors.Is(err, ovs.ErrInterfaceNotFound) {
+			return nil, status.Error(codes.NotFound, "port interface not found")
+		}
+		if err != nil {
+			return nil, status.Error(codes.Internal, fmt.Sprintf("failed to set ingress policing: %v", err))
+		}
+	}
+
+	// A zero egress rate leaves the port's shaping as it is.
+	if req.GetEgressRate() > 0 {
+		err := client.SetEgressShaping(ctx, portName, req.GetEgressRate(), req.GetEgressBurst())
+		if errors.Is(err, ovs.ErrPortNotFound) {
+			return nil, status.Error(codes.NotFound, "port not found")
+		}
+		if err != nil {
+			return nil, status.Error(codes.Internal, fmt.Sprintf("failed to set egress shaping: %v", err))
+		}
 	}
 
 	// Retrieve updated port information
@@ -1237,7 +1267,9 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 	// Determine policy ID
 	policyID := req.GetPolicyId()
 	if policyID == "" {
-		policyID = fmt.Sprintf("policy-%d", time.Now().UnixNano())
+		// Random, not a timestamp: two policies applied within the clock's
+		// resolution would otherwise share an ID (#284).
+		policyID = "policy-" + uuid.NewString()
 	}
 
 	// Check for duplicate policy name under read lock
@@ -1274,7 +1306,7 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 				// Best-effort: log flow installation failures but continue
 				continue
 			}
-			flowID := fmt.Sprintf("policy-%s-rule-%s-%d", policyID, rule.GetRuleId(), time.Now().UnixNano())
+			flowID := fmt.Sprintf("policy-%s-rule-%s-%s", policyID, rule.GetRuleId(), uuid.NewString())
 			flowIDs = append(flowIDs, flowID)
 		}
 	}

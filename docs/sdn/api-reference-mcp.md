@@ -24,7 +24,7 @@ tools; tools without a mapping defer to the tool registry.
 | `sdn_add_port` | Add a port to an OVS bridge |
 | `sdn_delete_port` | Delete a port from an OVS bridge |
 | `sdn_get_port_state` | Get the state of an OVS port |
-| `sdn_set_port_state` | Set the state of an OVS port |
+| `sdn_set_port_state` | Set a port's admin state (`up`/`down`) and optional ingress policing (`ingress_rate` bps, `ingress_burst` bits) and egress shaping (`egress_rate` bps, `egress_burst` bits) |
 | `sdn_get_port_stats` | Get statistics for a port |
 | `sdn_authenticate_port` | Authenticate a port (802.1X style) |
 | `sdn_revoke_port_auth` | Revoke port authentication |
@@ -51,9 +51,16 @@ tools; tools without a mapping defer to the tool registry.
 
 | Tool | Description |
 |------|-------------|
-| `sdn_apply_policy` | Apply a network policy to a bridge |
-| `sdn_get_policy` | Get a network policy |
-| `sdn_list_policies` | List all network policies |
+| `sdn_apply_policy` | Apply a network policy; the arguments are the REST create-policy body (`name` required, plus `type`, `priority`, `enabled`, `rules`, `targets`, `schedule`) |
+| `sdn_get_policy` | Get a network policy by ID or name (`policy_id`) |
+| `sdn_list_policies` | List network policies, optionally filtered by `type` and `target_id`; returns `{"policies": [...]}` |
+| `sdn_delete_policy` | Delete a network policy by ID or name (`policy_id`); scope `sdn:delete` |
+
+The policy tools call the same SDN service as REST and gRPC, so they return
+the REST policy object (`id`, `name`, `type`, `priority`, `status`, `rules`,
+`targets`, …) and see every policy created on any other transport. A get or
+delete of an unknown policy fails with `SDN_POLICY_NOT_FOUND` naming the
+requested policy.
 
 ### Related Tool Families
 

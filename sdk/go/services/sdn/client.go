@@ -137,6 +137,17 @@ func (c *Client) GetPort(ctx context.Context, bridgeID, portID string) (*platfor
 	return resp.Port, nil
 }
 
+// SetPortState sets a port's admin state ("up" or "down") and, when
+// req.IngressRate is non-zero, its ingress policing (rate in bps, burst in
+// bits, each a whole multiple of 1000). It returns the updated port.
+func (c *Client) SetPortState(ctx context.Context, req *platformv1.SetPortStateRequest) (*platformv1.Port, error) {
+	resp, err := c.grpc.SetPortState(ctx, req)
+	if err != nil {
+		return nil, &ErrSetPortStateFailed{BridgeID: req.GetBridgeId(), PortID: req.GetPortId(), Cause: err}
+	}
+	return resp.GetPort(), nil
+}
+
 // ListPorts lists ports on a bridge.
 func (c *Client) ListPorts(ctx context.Context, bridgeID string, selector *platformv1.LabelSelector, pagination *platformv1.PaginationRequest) ([]*platformv1.Port, *common.PageResult, error) {
 	resp, err := c.grpc.ListPorts(ctx, &platformv1.ListPortsRequest{

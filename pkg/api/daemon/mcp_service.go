@@ -22,6 +22,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -47,7 +48,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
@@ -82,7 +82,6 @@ type MCPServiceProviderConfig struct {
 	AttestationServer     *AttestationServiceServer
 	DNSService            dns.DNSService
 	SDNService            *SDNService
-	PolicyEngine          policy.PolicyEngine
 	HealthService         *Service
 	IAMClient             quicbaassdk.IAMClient
 	PEPClient             quicbaassdk.IAMPEPClient
@@ -140,7 +139,6 @@ type MCPServiceProvider struct {
 	attestationServer     *AttestationServiceServer
 	dnsService            dns.DNSService
 	sdnService            *SDNService
-	policyEngine          policy.PolicyEngine
 	healthService         *Service
 	iamClient             quicbaassdk.IAMClient
 	pepClient             quicbaassdk.IAMPEPClient
@@ -198,7 +196,6 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		attestationServer:     config.AttestationServer,
 		dnsService:            config.DNSService,
 		sdnService:            config.SDNService,
-		policyEngine:          config.PolicyEngine,
 		healthService:         config.HealthService,
 		iamClient:             config.IAMClient,
 		pepClient:             config.PEPClient,
@@ -964,56 +961,26 @@ func (p *MCPServiceProvider) SDNGetPortState(ctx context.Context, bridgeName str
 	return resp.GetPort(), nil
 }
 
-// SDNSetPortState sets the state of an SDN port.
-// Valid states: "blocked", "unblocked", "authorized", "unauthorized", "quarantined"
-func (p *MCPServiceProvider) SDNSetPortState(ctx context.Context, bridgeName string, portName string, state string) error {
-	// Validate parameters
-	if bridgeName == "" {
-		return ErrSDNMissingParameter{Parameter: "bridgeName"}
-	}
-	if portName == "" {
-		return ErrSDNMissingParameter{Parameter: "portName"}
-	}
-	if state == "" {
-		return ErrSDNMissingParameter{Parameter: "state"}
-	}
-
-	// Check if SDN service is available
+// SDNSetPortState sets a port's admin state ("up" or "down") and ingress
+// policing through the shared SDNService, as gRPC SetPortState does, and
+// returns the updated port.
+func (p *MCPServiceProvider) SDNSetPortState(ctx context.Context, bridgeName string, portName string, state string, rates mcp.PortRates) (interface{}, error) {
 	if p.sdnService == nil {
-		return ErrServiceNotAvailable{Service: "sdn"}
+		return nil, ErrServiceNotAvailable{Service: "sdn"}
 	}
-
-	// Check if policy engine is available
-	if p.policyEngine == nil {
-		return ErrSDNPolicyEngineNotConfigured{}
-	}
-
-	// Parse the state string to policy.PortState
-	portState, err := parsePortState(state)
-	if err != nil {
-		return err
-	}
-
-	// Verify the port exists via SDN service
-	_, getErr := p.sdnService.GetPort(ctx, &platformv1.GetPortRequest{
-		BridgeId: bridgeName,
-		PortId:   portName,
+	resp, err := p.sdnService.SetPortState(ctx, &platformv1.SetPortStateRequest{
+		BridgeId:     bridgeName,
+		PortId:       portName,
+		AdminState:   state,
+		IngressRate:  rates.IngressRate,
+		IngressBurst: rates.IngressBurst,
+		EgressRate:   rates.EgressRate,
+		EgressBurst:  rates.EgressBurst,
 	})
-	if getErr != nil {
-		return ErrSDNPortNotFound{BridgeName: bridgeName, PortName: portName}
+	if err != nil {
+		return nil, err
 	}
-
-	// Apply the state change via the policy engine
-	if err := p.policyEngine.SetPortState(portName, portState); err != nil {
-		return ErrSDNSetPortStateFailed{PortID: portName, Cause: err}
-	}
-
-	p.logger.Info("set port state",
-		slog.String("bridge", bridgeName),
-		slog.String("port", portName),
-		slog.String("state", state))
-
-	return nil
+	return resp.GetPort(), nil
 }
 
 // SDNListBridges lists all SDN bridges.
@@ -1052,16 +1019,40 @@ func (p *MCPServiceProvider) SDNDeleteBridge(ctx context.Context, bridgeName str
 	return err
 }
 
-// SDNAddPort adds a port to an SDN bridge.
+// SDNAddPort adds a port of the given type to an SDN bridge.
 func (p *MCPServiceProvider) SDNAddPort(ctx context.Context, bridgeName string, portName string, portType string) error {
 	if p.sdnService == nil {
 		return ErrServiceNotAvailable{Service: "sdn"}
 	}
-	_, err := p.sdnService.AddPort(ctx, &platformv1.AddPortRequest{
+	pbType, err := portTypeFromName(portType)
+	if err != nil {
+		return err
+	}
+	_, err = p.sdnService.AddPort(ctx, &platformv1.AddPortRequest{
 		BridgeId: bridgeName,
-		Config:   &platformv1.PortConfig{Name: portName},
+		Config:   &platformv1.PortConfig{Name: portName, Type: pbType},
 	})
 	return err
+}
+
+// portTypeFromName parses the sdn_add_port port_type argument. It takes the
+// schema's short form ("internal", "tap") or the enum name
+// ("PORT_TYPE_INTERNAL"), in any case; an empty name leaves the type
+// unspecified, and an unknown one is refused rather than dropped.
+func portTypeFromName(name string) (platformv1.PortType, error) {
+	if name == "" {
+		return platformv1.PortType_PORT_TYPE_UNSPECIFIED, nil
+	}
+	const prefix = "PORT_TYPE_"
+	upper := strings.ToUpper(name)
+	if !strings.HasPrefix(upper, prefix) {
+		upper = prefix + upper
+	}
+	value, ok := platformv1.PortType_value[upper]
+	if !ok {
+		return platformv1.PortType_PORT_TYPE_UNSPECIFIED, ErrInvalidPortType{Type: name}
+	}
+	return platformv1.PortType(value), nil
 }
 
 // SDNDeletePort deletes a port from an SDN bridge.
@@ -1076,188 +1067,26 @@ func (p *MCPServiceProvider) SDNDeletePort(ctx context.Context, bridgeName strin
 	return err
 }
 
-// SDNApplyPolicy applies a network policy to a port.
-// The policyID is the port identifier, and bridgeName specifies the target bridge.
-// This method retrieves the policy from the policy engine and applies it to the port.
-func (p *MCPServiceProvider) SDNApplyPolicy(ctx context.Context, policyID string, bridgeName string) error {
-	// Validate parameters
-	if policyID == "" {
-		return ErrSDNMissingParameter{Parameter: "policyID"}
-	}
-	if bridgeName == "" {
-		return ErrSDNMissingParameter{Parameter: "bridgeName"}
-	}
-
-	// Check if SDN service is available
-	if p.sdnService == nil {
-		return ErrServiceNotAvailable{Service: "sdn"}
-	}
-
-	// Check if policy engine is available
-	if p.policyEngine == nil {
-		return ErrSDNPolicyEngineNotConfigured{}
-	}
-
-	// Get the policy from the engine
-	portPolicy, err := p.policyEngine.GetPolicy(policyID)
-	if err != nil {
-		return ErrSDNPolicyNotFound{PolicyID: policyID}
-	}
-
-	// Apply the policy to the port
-	if err := p.policyEngine.ApplyPolicy(policyID, portPolicy); err != nil {
-		return ErrSDNApplyPolicyFailed{PolicyID: policyID, Cause: err}
-	}
-
-	p.logger.Info("applied SDN policy",
-		slog.String("policy_id", policyID),
-		slog.String("bridge", bridgeName),
-		slog.String("tenant_id", portPolicy.TenantID),
-		slog.Int("vlan", int(portPolicy.VLAN)))
-
-	return nil
+// SDNApplyPolicy creates or replaces a policy, given as the REST create-policy
+// body, through the shared SDNService.
+func (p *MCPServiceProvider) SDNApplyPolicy(ctx context.Context, policy json.RawMessage) (interface{}, error) {
+	return applySDNPolicy(ctx, p.sdnService, policy)
 }
 
-// SDNGetPolicy retrieves an SDN policy by port ID.
-// Returns the policy information including VLAN, ACLs, tenant ID, and expiration.
+// SDNGetPolicy returns a policy by ID or name from the shared SDNService.
 func (p *MCPServiceProvider) SDNGetPolicy(ctx context.Context, policyID string) (interface{}, error) {
-	// Validate parameters
-	if policyID == "" {
-		return nil, ErrSDNMissingParameter{Parameter: "policyID"}
-	}
-
-	// Check if policy engine is available
-	if p.policyEngine == nil {
-		return nil, ErrSDNPolicyEngineNotConfigured{}
-	}
-
-	// Get the policy from the engine
-	portPolicy, err := p.policyEngine.GetPolicy(policyID)
-	if err != nil {
-		return nil, ErrSDNPolicyNotFound{PolicyID: policyID}
-	}
-
-	// Get port info for additional state information
-	portInfo, infoErr := p.policyEngine.GetPortInfo(policyID)
-
-	// Convert to a response format suitable for MCP
-	response := map[string]interface{}{
-		"port_id":   policyID,
-		"tenant_id": portPolicy.TenantID,
-		"vlan":      portPolicy.VLAN,
-		"acl_count": len(portPolicy.ACLs),
-		"issued_at": portPolicy.IssuedAt.Format(time.RFC3339),
-	}
-
-	if !portPolicy.ExpiresAt.IsZero() {
-		response["expires_at"] = portPolicy.ExpiresAt.Format(time.RFC3339)
-	}
-
-	if portPolicy.Metadata != nil {
-		response["metadata"] = portPolicy.Metadata
-	}
-
-	// Add port state information if available
-	if infoErr == nil && portInfo != nil {
-		response["state"] = portInfo.State.String()
-		response["last_state_change"] = portInfo.LastStateChange.Format(time.RFC3339)
-		response["auth_attempts"] = portInfo.AuthAttempts
-		response["error_count"] = portInfo.ErrorCount
-		if portInfo.LastError != "" {
-			response["last_error"] = portInfo.LastError
-		}
-	}
-
-	// Convert ACLs to a serializable format
-	if len(portPolicy.ACLs) > 0 {
-		acls := make([]map[string]interface{}, len(portPolicy.ACLs))
-		for i, acl := range portPolicy.ACLs {
-			acls[i] = map[string]interface{}{
-				"priority":    acl.Priority,
-				"description": acl.Description,
-				"action":      string(acl.Action.Type),
-			}
-		}
-		response["acls"] = acls
-	}
-
-	return response, nil
+	return getSDNPolicy(ctx, p.sdnService, policyID)
 }
 
-// SDNListPolicies lists all SDN policies currently applied to ports.
-// Returns a list of port IDs with their associated policy information.
-func (p *MCPServiceProvider) SDNListPolicies(ctx context.Context) ([]interface{}, error) {
-	// Check if policy engine is available
-	if p.policyEngine == nil {
-		return nil, ErrSDNPolicyEngineNotConfigured{}
-	}
+// SDNListPolicies lists the shared SDNService's policies, optionally filtered by
+// type and target.
+func (p *MCPServiceProvider) SDNListPolicies(ctx context.Context, policyType string, targetID string) ([]interface{}, error) {
+	return listSDNPolicies(ctx, p.sdnService, policyType, targetID)
+}
 
-	// Get all port info from the policy engine's state machine
-	// The policy engine manages port state internally, so we iterate through
-	// known ports and collect their policies
-	var policies []interface{}
-
-	// Get port info for all known ports by checking policy engine state
-	// We need to use a type assertion to access the underlying engine
-	// that has the state machine with ListPorts capability
-	if engine, ok := p.policyEngine.(*policy.Engine); ok {
-		// Access the state machine through GetPortInfo calls
-		// Since Engine doesn't expose ListPorts directly, we work with
-		// what the interface provides - GetPortInfo for known ports
-
-		// For now, we'll iterate through SDN service ports if available
-		if p.sdnService != nil {
-			// Get all bridges
-			bridgesResp, err := p.sdnService.ListBridges(ctx, &platformv1.ListBridgesRequest{})
-			if err == nil {
-				for _, bridge := range bridgesResp.GetBridges() {
-					// Get all ports on each bridge
-					portsResp, portErr := p.sdnService.ListPorts(ctx, &platformv1.ListPortsRequest{
-						BridgeId: bridge.GetId(),
-					})
-					if portErr == nil {
-						for _, port := range portsResp.GetPorts() {
-							portID := port.GetConfig().GetName()
-							if portID == "" {
-								portID = port.GetId()
-							}
-
-							// Try to get policy for this port
-							portPolicy, policyErr := engine.GetPolicy(portID)
-							if policyErr == nil && portPolicy != nil {
-								policyInfo := map[string]interface{}{
-									"port_id":   portID,
-									"bridge_id": bridge.GetId(),
-									"tenant_id": portPolicy.TenantID,
-									"vlan":      portPolicy.VLAN,
-									"acl_count": len(portPolicy.ACLs),
-								}
-
-								// Get port state
-								portState, stateErr := engine.GetPortState(portID)
-								if stateErr == nil {
-									policyInfo["state"] = portState.String()
-								}
-
-								if !portPolicy.ExpiresAt.IsZero() {
-									policyInfo["expires_at"] = portPolicy.ExpiresAt.Format(time.RFC3339)
-								}
-
-								policies = append(policies, policyInfo)
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// If no policies found, return empty list rather than nil
-	if policies == nil {
-		policies = make([]interface{}, 0)
-	}
-
-	return policies, nil
+// SDNDeletePolicy deletes a policy by ID or name through the shared SDNService.
+func (p *MCPServiceProvider) SDNDeletePolicy(ctx context.Context, policyID string) error {
+	return deleteSDNPolicy(ctx, p.sdnService, policyID)
 }
 
 // SDNAddFlow adds a flow to an SDN bridge.
@@ -3052,31 +2881,6 @@ func parsePlatformKeyAlgorithm(alg string) (platformv1.KeyAlgorithm, error) {
 		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519, nil
 	default:
 		return platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED, ErrCAInvalidKeyAlgorithm{Algorithm: alg}
-	}
-}
-
-// parsePortState converts a string state to policy.PortState.
-func parsePortState(state string) (policy.PortState, error) {
-	normalizedState := strings.ToLower(strings.TrimSpace(state))
-	switch normalizedState {
-	case "unconnected":
-		return policy.PortStateUnconnected, nil
-	case "provisioning":
-		return policy.PortStateProvisioning, nil
-	case "enrolled":
-		return policy.PortStateEnrolled, nil
-	case "unauthorized":
-		return policy.PortStateUnauthorized, nil
-	case "authenticating":
-		return policy.PortStateAuthenticating, nil
-	case "authorized":
-		return policy.PortStateAuthorized, nil
-	case "quarantined":
-		return policy.PortStateQuarantined, nil
-	case "blocked":
-		return policy.PortStateBlocked, nil
-	default:
-		return policy.PortStateUnconnected, ErrSDNInvalidPortState{State: state}
 	}
 }
 

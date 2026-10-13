@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
@@ -322,7 +323,7 @@ func TestPlatformServiceProvider_SDNOperations_NilService(t *testing.T) {
 	})
 
 	t.Run("SDNSetPortState returns error", func(t *testing.T) {
-		err := provider.SDNSetPortState(ctx, "br0", "eth0", "up")
+		_, err := provider.SDNSetPortState(ctx, "br0", "eth0", "up", mcp.PortRates{})
 		if err == nil {
 			t.Error("expected error")
 		}
@@ -380,27 +381,31 @@ func TestPlatformServiceProvider_SDNOperations_NilService(t *testing.T) {
 	})
 
 	t.Run("SDNApplyPolicy returns error", func(t *testing.T) {
-		err := provider.SDNApplyPolicy(ctx, "policy1", "br0")
-		if err == nil {
-			t.Error("expected error")
+		_, err := provider.SDNApplyPolicy(ctx, json.RawMessage(`{"name":"p1","type":"acl"}`))
+		if _, ok := err.(ErrServiceNotAvailable); !ok {
+			t.Errorf("expected ErrServiceNotAvailable, got %T", err)
 		}
-		// This method is not implemented yet
 	})
 
 	t.Run("SDNGetPolicy returns error", func(t *testing.T) {
 		_, err := provider.SDNGetPolicy(ctx, "policy1")
-		if err == nil {
-			t.Error("expected error")
+		if _, ok := err.(ErrServiceNotAvailable); !ok {
+			t.Errorf("expected ErrServiceNotAvailable, got %T", err)
 		}
-		// This method is not implemented yet
 	})
 
 	t.Run("SDNListPolicies returns error", func(t *testing.T) {
-		_, err := provider.SDNListPolicies(ctx)
-		if err == nil {
-			t.Error("expected error")
+		_, err := provider.SDNListPolicies(ctx, "", "")
+		if _, ok := err.(ErrServiceNotAvailable); !ok {
+			t.Errorf("expected ErrServiceNotAvailable, got %T", err)
 		}
-		// This method is not implemented yet
+	})
+
+	t.Run("SDNDeletePolicy returns error", func(t *testing.T) {
+		err := provider.SDNDeletePolicy(ctx, "policy1")
+		if _, ok := err.(ErrServiceNotAvailable); !ok {
+			t.Errorf("expected ErrServiceNotAvailable, got %T", err)
+		}
 	})
 
 	t.Run("SDNAddFlow returns error", func(t *testing.T) {

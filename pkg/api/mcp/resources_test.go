@@ -466,7 +466,7 @@ func TestResourceRegistry_ReadSDNResource(t *testing.T) {
 
 	t.Run("handles sdn list policies error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.sdnListPoliciesFunc = func(ctx context.Context) ([]interface{}, error) {
+		svc.sdnListPoliciesFunc = func(ctx context.Context, policyType, targetID string) ([]interface{}, error) {
 			return nil, ErrMockServiceError
 		}
 		registry := NewResourceRegistry(svc, log)

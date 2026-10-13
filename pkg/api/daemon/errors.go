@@ -650,6 +650,20 @@ func (e ErrInvalidDeviceID) GRPCStatus() *status.Status {
 	return status.New(codes.InvalidArgument, e.Error())
 }
 
+// ErrInvalidPortType is returned when an MCP port type names no PortType.
+type ErrInvalidPortType struct {
+	Type string
+}
+
+func (e ErrInvalidPortType) Error() string {
+	return fmt.Sprintf("invalid port type: %s", e.Type)
+}
+
+// GRPCStatus classifies an unknown port type as InvalidArgument.
+func (e ErrInvalidPortType) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // ErrAttestationFailed is returned when device attestation fails
 type ErrAttestationFailed struct {
 	Reason string
@@ -754,22 +768,6 @@ type ErrSDNOperationNotImplemented struct {
 
 func (e ErrSDNOperationNotImplemented) Error() string {
 	return fmt.Sprintf("SDN operation not implemented: %s", e.Operation)
-}
-
-// ErrSDNPolicyEngineNotConfigured is returned when policy engine is not configured
-type ErrSDNPolicyEngineNotConfigured struct{}
-
-func (e ErrSDNPolicyEngineNotConfigured) Error() string {
-	return "SDN policy engine not configured"
-}
-
-// ErrSDNInvalidPortState is returned when an invalid port state is specified
-type ErrSDNInvalidPortState struct {
-	State string
-}
-
-func (e ErrSDNInvalidPortState) Error() string {
-	return fmt.Sprintf("invalid port state: %s", e.State)
 }
 
 // ErrSDNPolicyNotFound is returned when a policy is not found

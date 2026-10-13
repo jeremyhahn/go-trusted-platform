@@ -96,6 +96,20 @@ func (e *ErrGetPortFailed) Error() string {
 
 func (e *ErrGetPortFailed) Unwrap() error { return e.Cause }
 
+// ErrSetPortStateFailed is returned when setting a port's admin state or
+// ingress policing fails.
+type ErrSetPortStateFailed struct {
+	BridgeID string
+	PortID   string
+	Cause    error
+}
+
+func (e *ErrSetPortStateFailed) Error() string {
+	return fmt.Sprintf("failed to set state of port %s on bridge %s: %v", e.PortID, e.BridgeID, e.Cause)
+}
+
+func (e *ErrSetPortStateFailed) Unwrap() error { return e.Cause }
+
 type ErrListPortsFailed struct {
 	BridgeID string
 	Cause    error

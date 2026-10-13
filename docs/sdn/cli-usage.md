@@ -133,13 +133,16 @@ platformctl sdn port state <port-id> --bridge <bridge-id>
 platformctl sdn port set-state <port-id> --bridge <bridge-id> [options]
 
 Options:
-  --admin-state    Administrative state: up, down
-  --ingress-rate   Ingress rate limit in bps
-  --egress-rate    Egress rate limit in bps
+  --admin-state    Administrative state: up, down (required)
+  --ingress-rate   Ingress policing rate in bps, a whole multiple of 1000 (0 leaves policing unchanged)
+  --ingress-burst  Ingress policing burst in bits, a whole multiple of 1000 (needs --ingress-rate)
+  --egress-rate    Egress shaping rate in bps (0 leaves shaping unchanged)
+  --egress-burst   Egress shaping burst in bits (needs --egress-rate)
 
 Examples:
   platformctl sdn port set-state eth0 --bridge br0 --admin-state down
-  platformctl sdn port set-state eth0 --bridge br0 --admin-state up
+  platformctl sdn port set-state eth0 --bridge br0 --admin-state up --ingress-rate 10000000 --ingress-burst 1000000
+  platformctl sdn port set-state eth0 --bridge br0 --admin-state up --egress-rate 20000000 --egress-burst 2000000
 ```
 
 ### Port Statistics

@@ -34,7 +34,7 @@ The SDN subsystem provides network management through multiple protocols for max
 | GetPort | Get port details |
 | ListPorts | List ports on a bridge |
 | GetPortState | Get port admin state |
-| SetPortState | Set port admin state |
+| SetPortState | Set port admin state and ingress policing |
 | GetPortStats | Get port statistics |
 
 ### Flow Operations

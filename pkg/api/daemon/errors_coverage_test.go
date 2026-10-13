@@ -112,8 +112,6 @@ func TestAllErrorTypes_ErrorMethod(t *testing.T) {
 
 		// SDN errors
 		{"ErrSDNOperationNotImplemented", ErrSDNOperationNotImplemented{Operation: "create-vlan"}, "SDN operation not implemented: create-vlan"},
-		{"ErrSDNPolicyEngineNotConfigured", ErrSDNPolicyEngineNotConfigured{}, "SDN policy engine not configured"},
-		{"ErrSDNInvalidPortState", ErrSDNInvalidPortState{State: "invalid"}, "invalid port state: invalid"},
 		{"ErrSDNPolicyNotFound", ErrSDNPolicyNotFound{PolicyID: "policy-1"}, "SDN policy not found: policy-1"},
 		{"ErrSDNInvalidPolicy", ErrSDNInvalidPolicy{Reason: "missing action"}, "invalid SDN policy: missing action"},
 		{"ErrSDNSetPortStateFailed", ErrSDNSetPortStateFailed{PortID: "eth0", Cause: errors.New("permission denied")}, "failed to set port state for eth0: permission denied"},
@@ -329,8 +327,6 @@ func TestErrorsImplementErrorInterface(t *testing.T) {
 	var _ error = ErrProfileNotFound{}
 	var _ error = ErrInvalidAttestationEvidence{}
 	var _ error = ErrSDNOperationNotImplemented{}
-	var _ error = ErrSDNPolicyEngineNotConfigured{}
-	var _ error = ErrSDNInvalidPortState{}
 	var _ error = ErrSDNPolicyNotFound{}
 	var _ error = ErrSDNInvalidPolicy{}
 	var _ error = ErrSDNSetPortStateFailed{}

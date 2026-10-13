@@ -15,11 +15,12 @@ package qemu
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/user"
 	"strconv"
-	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netlink"
@@ -200,11 +201,13 @@ func (n *OVSNetwork) generateTAPName() string {
 		return n.config.OVS.PortName
 	}
 
-	// Generate unique name based on timestamp
-	// Format: qemu-XXXX where XXXX is last 4 chars of timestamp
-	timestamp := time.Now().UnixNano()
-	suffix := fmt.Sprintf("%04d", timestamp%10000)
-	return fmt.Sprintf("qemu-%s", suffix)
+	// Format: qemu-XXXXXXXX, 32 random bits in hex (13 chars, within
+	// IFNAMSIZ). A timestamp suffix mod 10000 let two VMs started close
+	// together collide on the same TAP device (#284). crypto/rand.Read
+	// never returns an error.
+	b := make([]byte, 4)
+	rand.Read(b)
+	return "qemu-" + hex.EncodeToString(b)
 }
 
 // getOwnership returns the UID and GID for TAP device ownership

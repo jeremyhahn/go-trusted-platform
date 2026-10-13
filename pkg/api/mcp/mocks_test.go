@@ -15,6 +15,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -90,15 +91,16 @@ type mockServiceProvider struct {
 
 	// SDN Bridge
 	sdnGetPortStateFunc     func(ctx context.Context, bridgeName, portName string) (interface{}, error)
-	sdnSetPortStateFunc     func(ctx context.Context, bridgeName, portName, state string) error
+	sdnSetPortStateFunc     func(ctx context.Context, bridgeName, portName, state string, rates PortRates) (interface{}, error)
 	sdnListBridgesFunc      func(ctx context.Context) ([]interface{}, error)
 	sdnCreateBridgeFunc     func(ctx context.Context, bridgeName string) error
 	sdnDeleteBridgeFunc     func(ctx context.Context, bridgeName string) error
 	sdnAddPortFunc          func(ctx context.Context, bridgeName, portName, portType string) error
 	sdnDeletePortFunc       func(ctx context.Context, bridgeName, portName string) error
-	sdnApplyPolicyFunc      func(ctx context.Context, policyID, bridgeName string) error
+	sdnApplyPolicyFunc      func(ctx context.Context, policy json.RawMessage) (interface{}, error)
 	sdnGetPolicyFunc        func(ctx context.Context, policyID string) (interface{}, error)
-	sdnListPoliciesFunc     func(ctx context.Context) ([]interface{}, error)
+	sdnListPoliciesFunc     func(ctx context.Context, policyType, targetID string) ([]interface{}, error)
+	sdnDeletePolicyFunc     func(ctx context.Context, policyID string) error
 	sdnAddFlowFunc          func(ctx context.Context, bridgeName string, flow map[string]interface{}) error
 	sdnDeleteFlowFunc       func(ctx context.Context, bridgeName, flowID string) error
 	sdnListFlowsFunc        func(ctx context.Context, bridgeName string) ([]interface{}, error)
@@ -390,8 +392,8 @@ func newMockServiceProvider() *mockServiceProvider {
 		sdnGetPortStateFunc: func(ctx context.Context, bridgeName, portName string) (interface{}, error) {
 			return map[string]interface{}{"bridge": bridgeName, "port": portName, "state": "up"}, nil
 		},
-		sdnSetPortStateFunc: func(ctx context.Context, bridgeName, portName, state string) error {
-			return nil
+		sdnSetPortStateFunc: func(ctx context.Context, bridgeName, portName, state string, rates PortRates) (interface{}, error) {
+			return nil, nil
 		},
 		sdnListBridgesFunc: func(ctx context.Context) ([]interface{}, error) {
 			return []interface{}{
@@ -411,13 +413,13 @@ func newMockServiceProvider() *mockServiceProvider {
 		sdnDeletePortFunc: func(ctx context.Context, bridgeName, portName string) error {
 			return nil
 		},
-		sdnApplyPolicyFunc: func(ctx context.Context, policyID, bridgeName string) error {
-			return nil
+		sdnApplyPolicyFunc: func(ctx context.Context, policy json.RawMessage) (interface{}, error) {
+			return map[string]interface{}{"id": "policy-1", "name": "test-policy"}, nil
 		},
 		sdnGetPolicyFunc: func(ctx context.Context, policyID string) (interface{}, error) {
 			return map[string]interface{}{"id": policyID, "name": "test-policy"}, nil
 		},
-		sdnListPoliciesFunc: func(ctx context.Context) ([]interface{}, error) {
+		sdnListPoliciesFunc: func(ctx context.Context, policyType, targetID string) ([]interface{}, error) {
 			return []interface{}{
 				map[string]interface{}{"id": "policy-1", "name": "Policy 1"},
 			}, nil
@@ -1178,11 +1180,11 @@ func (m *mockServiceProvider) SDNGetPortState(ctx context.Context, bridgeName, p
 	return nil, nil
 }
 
-func (m *mockServiceProvider) SDNSetPortState(ctx context.Context, bridgeName, portName, state string) error {
+func (m *mockServiceProvider) SDNSetPortState(ctx context.Context, bridgeName, portName, state string, rates PortRates) (interface{}, error) {
 	if m.sdnSetPortStateFunc != nil {
-		return m.sdnSetPortStateFunc(ctx, bridgeName, portName, state)
+		return m.sdnSetPortStateFunc(ctx, bridgeName, portName, state, rates)
 	}
-	return nil
+	return nil, nil
 }
 
 func (m *mockServiceProvider) SDNListBridges(ctx context.Context) ([]interface{}, error) {
@@ -1220,11 +1222,11 @@ func (m *mockServiceProvider) SDNDeletePort(ctx context.Context, bridgeName, por
 	return nil
 }
 
-func (m *mockServiceProvider) SDNApplyPolicy(ctx context.Context, policyID, bridgeName string) error {
+func (m *mockServiceProvider) SDNApplyPolicy(ctx context.Context, policy json.RawMessage) (interface{}, error) {
 	if m.sdnApplyPolicyFunc != nil {
-		return m.sdnApplyPolicyFunc(ctx, policyID, bridgeName)
+		return m.sdnApplyPolicyFunc(ctx, policy)
 	}
-	return nil
+	return nil, nil
 }
 
 func (m *mockServiceProvider) SDNGetPolicy(ctx context.Context, policyID string) (interface{}, error) {
@@ -1234,11 +1236,18 @@ func (m *mockServiceProvider) SDNGetPolicy(ctx context.Context, policyID string)
 	return nil, nil
 }
 
-func (m *mockServiceProvider) SDNListPolicies(ctx context.Context) ([]interface{}, error) {
+func (m *mockServiceProvider) SDNListPolicies(ctx context.Context, policyType, targetID string) ([]interface{}, error) {
 	if m.sdnListPoliciesFunc != nil {
-		return m.sdnListPoliciesFunc(ctx)
+		return m.sdnListPoliciesFunc(ctx, policyType, targetID)
 	}
 	return nil, nil
+}
+
+func (m *mockServiceProvider) SDNDeletePolicy(ctx context.Context, policyID string) error {
+	if m.sdnDeletePolicyFunc != nil {
+		return m.sdnDeletePolicyFunc(ctx, policyID)
+	}
+	return nil
 }
 
 func (m *mockServiceProvider) SDNAddFlow(ctx context.Context, bridgeName string, flow map[string]interface{}) error {

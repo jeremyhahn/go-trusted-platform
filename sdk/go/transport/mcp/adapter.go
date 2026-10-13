@@ -233,11 +233,11 @@ func (c *mcpClientConn) Invoke(ctx context.Context, method string, args interfac
 	// Convert result to reply. Methods with a custom decoder (domain JSON
 	// shapes, flattened oneofs) bypass the generic JSON round-trip.
 	if reply != nil && result != nil {
+		if decode, hasDecoder := mcpRequestReplyDecoders[method]; hasDecoder {
+			return decodeStatus(decode(args, result, reply))
+		}
 		if decode, hasDecoder := mcpReplyDecoders[method]; hasDecoder {
-			if decErr := decode(result, reply); decErr != nil {
-				return status.Error(codes.Internal, decErr.Error())
-			}
-			return nil
+			return decodeStatus(decode(result, reply))
 		}
 		if err := mapToStruct(result, reply); err != nil {
 			return status.Error(codes.Internal, ErrUnmarshalFailed{Err: err}.Error())
@@ -245,6 +245,19 @@ func (c *mcpClientConn) Invoke(ctx context.Context, method string, args interfac
 	}
 
 	return nil
+}
+
+// decodeStatus maps a reply decoder's error onto a gRPC status: an error
+// that carries its own status (e.g. a lookup that finds nothing) keeps it,
+// and any other is Internal.
+func decodeStatus(err error) error {
+	if err == nil {
+		return nil
+	}
+	if st, ok := status.FromError(err); ok {
+		return st.Err()
+	}
+	return status.Error(codes.Internal, err.Error())
 }
 
 // NewStream opens a server-streaming RPC by long-polling its unary twin; MCP
@@ -381,13 +394,7 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.DeviceService/DisableDevice": "device_disable",
 	"/platform.v1.DeviceService/EnableDevice":  "device_enable",
 
-	// SDN — proto: pkg/api/grpc/proto/sdn.proto
-	"/platform.v1.SDNService/CreateBridge": "sdn_create_bridge",
-	"/platform.v1.SDNService/DeleteBridge": "sdn_delete_bridge",
-	"/platform.v1.SDNService/ListBridges":  "sdn_list_bridges",
-	"/platform.v1.SDNService/AddFlow":      "sdn_add_flow",
-	"/platform.v1.SDNService/DeleteFlow":   "sdn_delete_flow",
-	"/platform.v1.SDNService/ListFlows":    "sdn_list_flows",
+	// SDN — proto: pkg/api/grpc/proto/sdn.proto; registered in sdn.go
 
 	// DNS — proto: pkg/api/grpc/proto/platform_dns.proto
 	"/platform.v1.DNSService/AddRecord":    "dns_add_record",

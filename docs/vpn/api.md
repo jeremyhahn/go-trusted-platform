@@ -1,6 +1,6 @@
 # Remote-Access VPN — API
 
-> **Status: PARTIAL — the operator control plane ships on every transport (#584 PR 3) and in the JS SDK and the web console (#584 PR 4); the client admission verbs are planned.** · Last verified: 2026-10-13
+> **Status: PARTIAL — the operator control plane ships on every transport (#584 PR 3) and in the JS SDK and the web console (#584 PR 4); the client admission verbs are planned; their wire contract is fixed (§5).** · Last verified: 2026-10-13
 > §1–§4 describe `VPNService` as it is routed today. §5 is still a requirement:
 > the client verbs terminate on the gateway's admission listener, which waits on
 > the gateway process model (#557).
@@ -116,13 +116,24 @@ Routes are unversioned beyond the `/api/v1` prefix.
 ## 5. Client admission *(planned)*
 
 These verbs terminate on the **gateway's admission listener** (mTLS, device
-identity, no bearer token), not on the control plane. Nothing below is routed.
+identity, no bearer token), not on the control plane. Nothing below is routed
+yet: the wire contract (routes, bodies, refusal classes) is fixed in
+`pkg/sdn/gateway/services/vpn/wire.go`, and the client in `pkg/vpn/agent`
+already speaks it.
 
 | Capability | REST | gRPC | `scp` |
 |---|---|---|---|
+| Challenge | `POST /api/v1/vpn/challenges` | `VPNService.Challenge` | device identity (mTLS), no token |
 | Admit | `POST /api/v1/vpn/admissions` | `VPNService.Admit` | device identity (mTLS), no token |
 | Renew | `POST /api/v1/vpn/leases/{id}/renew` | `VPNService.Renew` | device identity |
 | Disconnect | `DELETE /api/v1/vpn/leases/{id}` (own lease) | `VPNService.Revoke` | device identity |
+
+The challenge answers a single-use nonce and the data planes this gateway
+serves, in its order of preference:
+
+```json
+{ "nonce": "<base64>", "data_planes": ["masque", "wireguard"] }
+```
 
 `AdmissionRequest`:
 
@@ -140,11 +151,37 @@ identity, no bearer token), not on the control plane. Nothing below is routed.
 ```
 
 The response is the lease (the `VPNLease` fields above, plus the data plane's
-endpoint and the verdict). A refusal carries only `reason` (the class from
-[engineering.md](engineering.md) §3) and, for a posture violation, the rule
-names — never the policy text or the identity list. Identity and factor
-failures are 401, attestation and posture 403, an unavailable verifier, policy
-engine, pool or datapath 503.
+endpoint and the verdict), with `renew_at_unix` — when the renewal window
+opens — so the client knows its next re-attestation:
+
+```json
+{
+  "id": "…", "device_id": "…", "tenant_id": "…", "address": "10.8.0.2/32", "zones": ["management"],
+  "data_plane": "masque", "issued_at_unix": 0, "expires_at_unix": 0, "renew_at_unix": 0, "renewals": 0,
+  "verdict": "…",
+  "endpoint": { "masque": { "template": "https://gw.example:443/.well-known/masque/ip/", "routes": ["10.20.0.0/16"] } }
+}
+```
+
+A WireGuard lease carries `endpoint.wireguard` (`public_key`, `endpoint`,
+`routes`) instead.
+
+A refusal carries only `reason` (the class from [engineering.md](engineering.md)
+§3) and, for a posture violation, `rules` — the rule names, never the policy
+text or the identity list:
+
+```json
+{ "reason": "posture-violation", "rules": ["secure_boot", "fde"] }
+```
+
+| Status | Classes |
+|---|---|
+| 400 | `invalid-request` |
+| 401 | `untrusted-issuer`, `no-identity`, `nonce-unknown`, `person-factor-required`, `person-factor-invalid` |
+| 403 | the other identity refusals (`not-listed`, `not-attested`, …), `attestation-failed`, `posture-violation`, `peer-not-enrolled`, `zone-not-allowed` |
+| 404 / 409 / 410 | `lease-not-found` / `renewal-not-open` / `lease-expired` |
+| 503 | `posture-unavailable`, `pool-exhausted`, `data-plane-unavailable`, `lease-store-unavailable`, `not-started` |
+| 500 | `internal` |
 
 The client verbs are not offered on MCP: an LLM client is not a device with a
 TPM, and there is no honest way for it to attest.

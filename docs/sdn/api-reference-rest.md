@@ -30,8 +30,39 @@ PUT    /api/v1/sdn/bridges/{id}/ports/{port}/state    # Set port state
 GET    /api/v1/sdn/bridges/{id}/ports/{port}/stats    # Port statistics
 ```
 
-Set-state request body accepts `admin_state` (`up`|`down`) and optional
-`ingress_rate` / `egress_rate` limits (bps).
+The state and stats routes read the port's Open vSwitch interface row. State
+answers `port_number` (ofport), `admin_state`, `oper_state` (the link state),
+`link_state`, `speed` and `duplex`. Stats answers the interface counters:
+`rx_`/`tx_` `packets`, `bytes`, `dropped` and `errors`, plus `rx_frame_err`,
+`rx_over_err`, `rx_crc_err` and `collisions`.
+
+Set-state takes `{"admin_state": "up"|"down"}` (case-insensitive; anything else
+is `400`), sets it in Open vSwitch, and answers the state read back. An
+unknown port is `404`.
+
+The webservice router (`pkg/webservice/v1/rest/sdn/`) serves the same two state
+routes through the gRPC `SDNService`. It takes the same set-state body and
+answers `bridge_id`, `port_id` and `admin_state`; it has no interface row, so
+the link fields are absent. The Go SDK's REST `SetPortState` uses this route on
+either server and reads those three fields.
+
+The body may also carry `ingress_rate` (bps) and `ingress_burst` (bits). A
+non-zero `ingress_rate` sets the interface's Open vSwitch ingress policing
+(`ingress_policing_rate`/`ingress_policing_burst`, stored in kbps and kb); `0`
+or absent leaves the current policing as it is. Each value must be `0` or a
+whole multiple of 1000, and a burst needs a rate; anything else is `400`
+before any state changes. An interface that disappears before policing is
+applied is `404`.
+
+`egress_rate` (bps) and `egress_burst` (bits) shape what the port transmits.
+A non-zero `egress_rate` gives the port a `linux-htb` Open vSwitch QoS whose
+queue 0 carries the rate and burst, stored as given in bps and bits; `0` or
+absent leaves the current shaping as it is, and `egress_burst` `0` lets Open
+vSwitch pick the burst. Any rate is accepted, but a burst needs a rate; a burst
+without one is `400` before any state changes. Shaping set by an earlier
+request is replaced and its rows deleted; a QoS something else attached is
+detached and left in the database. A port that disappears before shaping is
+applied is `404`.
 
 ## Flow Endpoints
 
@@ -52,10 +83,37 @@ Flow bodies carry `id`, `table`, `priority`, match fields (`in_port`,
 ## VLAN Endpoints
 
 ```http
-POST   /api/v1/sdn/vlans            # Create VLAN
-GET    /api/v1/sdn/vlans            # List VLANs
-DELETE /api/v1/sdn/vlans/{id}       # Delete VLAN
+POST   /api/v1/sdn/vlans                              # Create VLAN
+GET    /api/v1/sdn/vlans?bridge_id={bridge}           # List a bridge's VLANs
+DELETE /api/v1/sdn/vlans/{vlan_id}?bridge_id={bridge} # Delete VLAN
 ```
+
+These routes call the daemon's `SDNService` — the same operations and state
+as gRPC `CreateVLAN`, `ListVLANs` and `DeleteVLAN`.
+
+Create body: `vlan_id` (1–4095), `bridge_id` (bridge name or ID), optional
+`name`, `ports` (tagged with the VLAN) and `labels`. Create answers `201`
+with the VLAN object; list answers `200` with `{vlans, count, timestamp}`:
+
+```json
+{
+  "id": "vlan-br0-100",
+  "vlan_id": 100,
+  "name": "tenant-a",
+  "bridge_id": "br0",
+  "ports": ["p1"],
+  "port_count": 1,
+  "created_at": "2026-10-13T12:00:00Z"
+}
+```
+
+Delete answers `200` with
+`{"resource_id": "100", "resource_type": "vlan", "action": "deleted", "success": true, "message": "VLAN deleted successfully"}`.
+
+Errors: `400` for a malformed body, a non-numeric or out-of-range
+`vlan_id`, or a missing `bridge_id`; `404` for an unknown bridge or VLAN;
+`409` when the bridge already carries the VLAN ID; `503` when the daemon
+runs without an SDN service.
 
 ## Policy Endpoints
 
@@ -66,8 +124,47 @@ GET    /api/v1/sdn/policies/{id}    # Get policy
 DELETE /api/v1/sdn/policies/{id}    # Delete policy
 ```
 
-Policy bodies carry `id`, `name`, `type` (`acl`, `qos`, `nat`,
-`firewall`, `routing`), `priority`, `bridge_id`, and `enabled`.
+These routes call the daemon's `SDNService` — the same operations and state
+as gRPC `ApplyPolicy`, `ListPolicies`, `GetPolicy` and `DeletePolicy`.
+
+Apply body: `name` (required), optional `id`, `description`, `type`
+(`acl`, `qos`, `nat`, `firewall`, `routing`), `priority`, `enabled`,
+`rules`, `targets` and `schedule`:
+
+```json
+{
+  "name": "web",
+  "type": "acl",
+  "priority": 10,
+  "enabled": true,
+  "rules": [
+    {"rule_id": "r1", "priority": 1, "source_ip": "10.0.0.0/24",
+     "destination_port": 22, "protocol": "tcp", "action": "deny", "log": true}
+  ],
+  "targets": [{"type": "bridge", "id": "br0", "direction": "ingress"}],
+  "schedule": {"start_time": "08:00", "end_time": "18:00",
+               "days": ["mon", "tue"], "timezone": "UTC", "enabled": true}
+}
+```
+
+A rule matches on `source_ip`, `destination_ip`, `source_port`,
+`destination_port`, `protocol`, `direction`, `interface`, `vlan_id`, `dscp`
+and `application`, and carries `action` (`allow`, `deny`, `rate-limit`,
+`redirect`, `mirror`, `log`), `action_value`, `log` and `counter`. A target
+`type` is `bridge`, `port`, `vlan` or `interface`. An empty enum is left
+unspecified. The policy object has no `labels`.
+
+Apply answers `201` with the policy object: the body's fields plus `status`,
+`hit_count`, `byte_count`, `created_at` and `updated_at`. List takes optional
+`type` and `target_id` filters and answers `200` with
+`{policies, count, timestamp}`. Get and delete take the policy ID or name;
+delete answers `200` with
+`{"resource_id": "web", "resource_type": "policy", "action": "delete", "success": true, "message": "policy deleted successfully"}`.
+
+Errors: `400` for a malformed body, a missing `name`, or an unknown `type`,
+rule `action` or target `type`; `404` for an unknown policy; `409` when a
+policy with the same name exists; `503` when the daemon runs without an SDN
+service.
 
 ## Topology
 
@@ -84,6 +181,7 @@ HTTP status codes:
 - 404: Not Found
 - 409: Conflict (e.g., bridge exists)
 - 500: Internal Server Error
+- 503: Service Unavailable (the backing service is not wired)
 
 ## Network Zone API
 

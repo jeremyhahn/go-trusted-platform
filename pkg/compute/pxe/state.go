@@ -52,7 +52,10 @@ type StateManager struct {
 	byMAC      sync.Map       // map[string]string (MAC address string -> device ID)
 	handlers   []EventHandler // Registered event handlers
 	handlersMu sync.RWMutex   // Protects handlers slice
-	now        func() time.Time
+
+	// now is the time source for every timestamp the state machine stamps.
+	// time.Now in production; tests inject a clock they step by hand (#284).
+	now func() time.Time
 }
 
 // NewStateManager creates a new StateManager instance.

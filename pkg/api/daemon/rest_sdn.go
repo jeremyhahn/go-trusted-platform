@@ -17,17 +17,21 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 )
 
-// SetSDNService sets the SDN service for REST handlers.
-// This allows SDN bridge, port, flow, and policy operations via REST API.
-// The ovs.ClientInterface satisfies rest.SDNServiceInterface.
-// When svc is nil (no OVS socket configured), handlers are still created so
-// that zone endpoints (registered unconditionally in RegisterRoutes) are
-// available; bridge/port/flow/policy handlers return 503 when svc is nil.
-func (s *RESTServer) SetSDNService(svc ovs.ClientInterface) {
-	sdnHandlers := rest.NewSDNHandlers(svc, s.logger)
+// SetSDNService wires the shared SDN service into the REST handlers.
+// Bridge, port and flow routes drive its OVS client; the routes whose state
+// the service owns (VLANs) call the service itself, the same instance the
+// gRPC, QUIC, MCP and Unix transports serve, so every transport sees one
+// state. When svc is nil, handlers are still created so that zone endpoints
+// (registered unconditionally in RegisterRoutes) are available; the SDN
+// routes return 503.
+func (s *RESTServer) SetSDNService(svc *SDNService) {
+	sdnHandlers := rest.NewSDNHandlers(nil, s.logger)
+	if svc != nil {
+		sdnHandlers = rest.NewSDNHandlers(svc.OVSClient(), s.logger)
+		sdnHandlers.SetControlService(svc)
+	}
 	sdnHandlers.RegisterRoutes(s.router)
 	s.sdnHandlers = sdnHandlers
 }

@@ -1507,7 +1507,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	// Wire SDN service into REST server if both are available
 	if daemon.concreteRestServer != nil && daemon.sdnService != nil {
-		daemon.concreteRestServer.SetSDNService(daemon.sdnService.OVSClient())
+		daemon.concreteRestServer.SetSDNService(daemon.sdnService)
 		logger.Info("SDN service wired into REST server")
 	}
 

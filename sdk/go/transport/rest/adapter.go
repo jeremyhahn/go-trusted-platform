@@ -1222,8 +1222,6 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.SDNService/CreateBridge":     {"/api/v1/sdn/bridges", http.MethodPost},
 	"/platform.v1.SDNService/DeleteBridge":     {"/api/v1/sdn/bridges", http.MethodDelete},
 	"/platform.v1.SDNService/ListBridges":      {"/api/v1/sdn/bridges", http.MethodGet},
-	"/platform.v1.SDNService/GetPortState":     {"/api/v1/sdn/ports/state", http.MethodGet},
-	"/platform.v1.SDNService/SetPortState":     {"/api/v1/sdn/ports/state", http.MethodPost},
 	"/platform.v1.SDNService/AddPort":          {"/api/v1/sdn/ports", http.MethodPost},
 	"/platform.v1.SDNService/DeletePort":       {"/api/v1/sdn/ports", http.MethodDelete},
 	"/platform.v1.SDNService/AddFlow":          {"/api/v1/sdn/flows", http.MethodPost},

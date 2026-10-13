@@ -1029,7 +1029,7 @@ func TestOVSFlowControllerAdapter_ConcurrentAccess(t *testing.T) {
 		go func(id int) {
 			for j := 0; j < 100; j++ {
 				rule := &FlowRule{
-					ID:     generateRuleID("eth0", "test", string(rune(id))+string(rune(j))),
+					ID:     generateRuleID(),
 					PortID: "eth0",
 				}
 				_ = adapter.AddFlow(ctx, "br0", rule)

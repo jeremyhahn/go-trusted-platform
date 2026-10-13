@@ -46,6 +46,7 @@ type mockSDNService struct {
 	addPortFunc      func(ctx context.Context, req *platformv1.AddPortRequest) (*platformv1.AddPortResponse, error)
 	deletePortFunc   func(ctx context.Context, req *platformv1.DeletePortRequest) (*platformv1.DeletePortResponse, error)
 	getPortFunc      func(ctx context.Context, req *platformv1.GetPortRequest) (*platformv1.GetPortResponse, error)
+	setPortStateFunc func(ctx context.Context, req *platformv1.SetPortStateRequest) (*platformv1.SetPortStateResponse, error)
 	addFlowFunc      func(ctx context.Context, req *platformv1.AddFlowRequest) (*platformv1.AddFlowResponse, error)
 	deleteFlowFunc   func(ctx context.Context, req *platformv1.DeleteFlowRequest) (*platformv1.DeleteFlowResponse, error)
 	listFlowsFunc    func(ctx context.Context, req *platformv1.ListFlowsRequest) (*platformv1.ListFlowsResponse, error)
@@ -99,6 +100,13 @@ func (m *mockSDNService) DeletePort(ctx context.Context, req *platformv1.DeleteP
 func (m *mockSDNService) GetPort(ctx context.Context, req *platformv1.GetPortRequest) (*platformv1.GetPortResponse, error) {
 	if m.getPortFunc != nil {
 		return m.getPortFunc(ctx, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockSDNService) SetPortState(ctx context.Context, req *platformv1.SetPortStateRequest) (*platformv1.SetPortStateResponse, error) {
+	if m.setPortStateFunc != nil {
+		return m.setPortStateFunc(ctx, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
@@ -722,44 +730,62 @@ func TestGetPortState_NilPort(t *testing.T) {
 	assert.Equal(t, http.StatusOK, respWriter.lastStatus)
 	payload, ok := respWriter.lastPayload.(PortStateResponse)
 	require.True(t, ok)
-	assert.Equal(t, "unknown", payload.State)
+	assert.Equal(t, "unknown", payload.AdminState)
+}
+
+// putPortState sends body to the set-state handler for port0 on br0.
+func putPortState(handlers *SDNHandlers, body string) {
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/sdn/bridges/br0/ports/port0/state", bytes.NewBufferString(body))
+	req = mux.SetURLVars(req, map[string]string{"name": "br0", "port": "port0"})
+	req.Header.Set("Content-Type", "application/json")
+	handlers.SetPortState(httptest.NewRecorder(), req)
 }
 
 func TestSetPortState_Success(t *testing.T) {
-	mock := &mockSDNService{}
+	var got *platformv1.SetPortStateRequest
+	mock := &mockSDNService{
+		setPortStateFunc: func(_ context.Context, req *platformv1.SetPortStateRequest) (*platformv1.SetPortStateResponse, error) {
+			got = req
+			return &platformv1.SetPortStateResponse{
+				Port: &platformv1.Port{Status: platformv1.PortStatus_PORT_STATUS_DOWN},
+			}, nil
+		},
+	}
 	handlers, respWriter := createTestHandlers(mock)
 
-	body := `{"state": "up"}`
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/sdn/bridges/br0/ports/port0/state", bytes.NewBufferString(body))
-	req = mux.SetURLVars(req, map[string]string{"name": "br0", "port": "port0"})
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
+	putPortState(handlers, `{"admin_state": "DOWN", "ingress_rate": 10000000, "ingress_burst": 1000000,
+		"egress_rate": 20000000, "egress_burst": 2000000}`)
 
-	handlers.SetPortState(w, req)
-
-	assert.Equal(t, http.StatusOK, respWriter.lastStatus)
+	require.Equal(t, http.StatusOK, respWriter.lastStatus)
+	require.NotNil(t, got, "the handler answered without calling the SDN service")
+	assert.Equal(t, "br0", got.GetBridgeId())
+	assert.Equal(t, "port0", got.GetPortId())
+	assert.Equal(t, "down", got.GetAdminState())
+	assert.Equal(t, uint64(10_000_000), got.GetIngressRate())
+	assert.Equal(t, uint64(1_000_000), got.GetIngressBurst())
+	assert.Equal(t, uint64(20_000_000), got.GetEgressRate())
+	assert.Equal(t, uint64(2_000_000), got.GetEgressBurst())
+	assert.Equal(t, PortStateResponse{BridgeID: "br0", PortID: "port0", AdminState: "down"}, respWriter.lastPayload)
 }
 
-func TestSetPortState_Down(t *testing.T) {
-	mock := &mockSDNService{}
+func TestSetPortState_ServiceError(t *testing.T) {
+	mock := &mockSDNService{
+		setPortStateFunc: func(context.Context, *platformv1.SetPortStateRequest) (*platformv1.SetPortStateResponse, error) {
+			return nil, status.Error(codes.NotFound, "port not found")
+		},
+	}
 	handlers, respWriter := createTestHandlers(mock)
 
-	body := `{"state": "down"}`
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/sdn/bridges/br0/ports/port0/state", bytes.NewBufferString(body))
-	req = mux.SetURLVars(req, map[string]string{"name": "br0", "port": "port0"})
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
+	putPortState(handlers, `{"admin_state": "up"}`)
 
-	handlers.SetPortState(w, req)
-
-	assert.Equal(t, http.StatusOK, respWriter.lastStatus)
+	assert.Equal(t, http.StatusNotFound, respWriter.lastStatus)
 }
 
 func TestSetPortState_InvalidState(t *testing.T) {
 	mock := &mockSDNService{}
 	handlers, respWriter := createTestHandlers(mock)
 
-	body := `{"state": "invalid"}`
+	body := `{"admin_state": "invalid"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/sdn/bridges/br0/ports/port0/state", bytes.NewBufferString(body))
 	req = mux.SetURLVars(req, map[string]string{"name": "br0", "port": "port0"})
 	req.Header.Set("Content-Type", "application/json")
@@ -774,7 +800,7 @@ func TestSetPortState_MissingBridgeName(t *testing.T) {
 	mock := &mockSDNService{}
 	handlers, respWriter := createTestHandlers(mock)
 
-	body := `{"state": "up"}`
+	body := `{"admin_state": "up"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/sdn/bridges//ports/port0/state", bytes.NewBufferString(body))
 	req = mux.SetURLVars(req, map[string]string{"port": "port0"})
 	req.Header.Set("Content-Type", "application/json")
@@ -789,7 +815,7 @@ func TestSetPortState_MissingPortName(t *testing.T) {
 	mock := &mockSDNService{}
 	handlers, respWriter := createTestHandlers(mock)
 
-	body := `{"state": "up"}`
+	body := `{"admin_state": "up"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/sdn/bridges/br0/ports//state", bytes.NewBufferString(body))
 	req = mux.SetURLVars(req, map[string]string{"name": "br0"})
 	req.Header.Set("Content-Type", "application/json")

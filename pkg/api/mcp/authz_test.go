@@ -153,6 +153,7 @@ func TestToolPermissionCatalog(t *testing.T) {
 		{"sdn_apply_policy", "sdn:write"},
 		{"sdn_get_policy", "sdn:read"},
 		{"sdn_list_policies", "sdn:read"},
+		{"sdn_delete_policy", "sdn:delete"},
 
 		// Health tools (no auth required)
 		{"platform_health", ""},
