@@ -128,3 +128,15 @@ type ErrInvalidArgsType struct {
 func (e ErrInvalidArgsType) Error() string {
 	return fmt.Sprintf("unexpected request message type for gRPC method %s", e.Method)
 }
+
+// ErrDurationClearNotSupported is returned when an IPAM pool update asks to
+// set a duration to zero over QUIC. The QUIC update keeps a zero duration,
+// so a clear cannot be expressed; send -1 to keep the value instead.
+type ErrDurationClearNotSupported struct {
+	Field string
+}
+
+// Error implements the error interface.
+func (e ErrDurationClearNotSupported) Error() string {
+	return fmt.Sprintf("QUIC cannot set %s to zero: the QUIC pool update keeps a zero duration (send -1 to keep it)", e.Field)
+}

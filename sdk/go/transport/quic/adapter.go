@@ -237,10 +237,12 @@ func (c *quicClientConn) Invoke(ctx context.Context, method string, args interfa
 		if _, emptyBody := categoryEmptyBodyMethods[method]; emptyBody {
 			payloadArgs = nil
 		}
+		// A request its translator refuses never reaches the wire and is
+		// the caller's InvalidArgument, as in wireRequest.
 		if encode, translated := categoryRequestEncoders[method]; translated {
 			wire, err := encode(args)
 			if err != nil {
-				return status.Error(codes.Internal, err.Error())
+				return status.Error(codes.InvalidArgument, err.Error())
 			}
 			payloadArgs = wire
 		}
@@ -582,6 +584,20 @@ var categorySubOpcodeMap = map[string]byte{
 	// range. Server dispatcher: pkg/api/quic/gateway_nat64_handlers.go.
 	"/platform.v1.GatewayService/GetNAT64Status": quicwire.OpGatewayNAT64Status,
 
+	// Gateway status, mode set and IPAM — the gateway range 0x01-0x0F.
+	// Requests and replies use the quicwire shapes the server handler
+	// speaks (gateway_status_ipam.go converts them).
+	"/platform.v1.GatewayService/GetGatewayStatus": quicwire.OpGatewayStatus,
+	"/platform.v1.GatewayService/SetGatewayMode":   quicwire.OpGatewaySetMode,
+	"/platform.v1.GatewayService/ListIPAMPools":    quicwire.OpGatewayListIPAMPools,
+	"/platform.v1.GatewayService/GetIPAMPool":      quicwire.OpGatewayGetIPAMPool,
+	"/platform.v1.GatewayService/CreateIPAMPool":   quicwire.OpGatewayCreateIPAMPool,
+	"/platform.v1.GatewayService/UpdateIPAMPool":   quicwire.OpGatewayUpdateIPAMPool,
+	"/platform.v1.GatewayService/DeleteIPAMPool":   quicwire.OpGatewayDeleteIPAMPool,
+	"/platform.v1.GatewayService/AllocateIP":       quicwire.OpGatewayAllocateIP,
+	"/platform.v1.GatewayService/ReleaseIP":        quicwire.OpGatewayReleaseIP,
+	"/platform.v1.GatewayService/ListAllocations":  quicwire.OpGatewayListAllocations,
+
 	// Admitted overlay VTEPs — read from the gateway telemetry snapshot.
 	// Server dispatcher: pkg/api/quic/gateway_handlers.go; requests and
 	// responses are translated in gateway_admitted_vtep.go.
@@ -820,6 +836,16 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.GatewayService/GetPerfDatapath":  quicwire.OpGatewayCategory,
 	"/platform.v1.GatewayService/GetPerfConntrack": quicwire.OpGatewayCategory,
 	"/platform.v1.GatewayService/GetNAT64Status":   quicwire.OpGatewayCategory,
+	"/platform.v1.GatewayService/GetGatewayStatus": quicwire.OpGatewayCategory,
+	"/platform.v1.GatewayService/SetGatewayMode":   quicwire.OpGatewayCategory,
+	"/platform.v1.GatewayService/ListIPAMPools":    quicwire.OpGatewayCategory,
+	"/platform.v1.GatewayService/GetIPAMPool":      quicwire.OpGatewayCategory,
+	"/platform.v1.GatewayService/CreateIPAMPool":   quicwire.OpGatewayCategory,
+	"/platform.v1.GatewayService/UpdateIPAMPool":   quicwire.OpGatewayCategory,
+	"/platform.v1.GatewayService/DeleteIPAMPool":   quicwire.OpGatewayCategory,
+	"/platform.v1.GatewayService/AllocateIP":       quicwire.OpGatewayCategory,
+	"/platform.v1.GatewayService/ReleaseIP":        quicwire.OpGatewayCategory,
+	"/platform.v1.GatewayService/ListAllocations":  quicwire.OpGatewayCategory,
 
 	"/platform.v1.GatewayService/GetGatewayAdmittedVTEP":   quicwire.OpGatewayCategory,
 	"/platform.v1.GatewayService/ListGatewayAdmittedVTEPs": quicwire.OpGatewayCategory,

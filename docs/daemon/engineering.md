@@ -243,6 +243,19 @@ daemon-and-CLI-level observation, not a per-feature one.
 `/health`, `/status`, `/version`, `/system` and `/protocols` are the REST
 equivalents.
 
+The log store is the JSON-lines sink `installJSONLLogging` tees onto the
+daemon logger (`pkg/daemon/commands/log_sink.go`). It returns a **new**
+logger, and `serve` hands that one to everything built afterwards (the
+webservice registry included). A component given the pre-tee logger logs
+around the store, and its records never reach the console Logs page.
+
+Levels are stored as `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL` and
+`SECURITY`, lowest to highest. `SECURITY` is `logging.LevelSecurity`, the
+level `Logger.Security` writes. The store names it explicitly because slog
+would write `ERROR+12`, which ranks as `INFO` under a `?level=` filter. A
+`?level=` minimum keeps every record at or above it, so a `SECURITY`
+record survives every filter.
+
 `/api/v1/platform/protocols` reports which transports are actually serving —
 the fastest way to answer "is QUIC even on".
 

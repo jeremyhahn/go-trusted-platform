@@ -14,6 +14,7 @@
 package adminclaim
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
@@ -22,6 +23,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"math/big"
 	"net/url"
@@ -199,6 +201,39 @@ func (f *fakeFactors) enrolFIDO2() {
 	f.resp = &quicbaassdk.AuthFactorListResponse{
 		Enrollments: []quicbaassdk.AuthFactorEntry{{FactorName: "fido2"}},
 	}
+}
+
+// logSink captures the service's JSON log lines so tests can assert the
+// audit record a claim produced. Writes are serialised because concurrent
+// claim tests log from several goroutines.
+type logSink struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *logSink) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+// records decodes every captured line whose msg equals msg.
+func (l *logSink) records(t *testing.T, msg string) []map[string]any {
+	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []map[string]any
+	for _, line := range bytes.Split(l.buf.Bytes(), []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var record map[string]any
+		require.NoError(t, json.Unmarshal(line, &record), "log line %q", line)
+		if record["msg"] == msg {
+			out = append(out, record)
+		}
+	}
+	return out
 }
 
 // fakeUsers is an in-memory service.UserServicer.

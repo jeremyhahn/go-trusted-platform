@@ -45,6 +45,10 @@ type PlatformServiceProvider struct {
 	gatewayPerf  GatewayPerfInterface
 	// gatewaySnapshotTools serves the telemetry snapshot tools (#594).
 	gatewaySnapshotTools
+	// gatewayStatusTools serves the gateway status and mode tools (#65).
+	gatewayStatusTools
+	// gatewayIPAMTools serves the gateway IPAM tools (#65).
+	gatewayIPAMTools
 	ntpService     platformv1.NTPServiceServer
 	vtpmService    vtpm.VTPMService
 	dnsService     dns.DNSService
@@ -1763,15 +1767,10 @@ func (p *PlatformServiceProvider) OverlayMACForget(ctx context.Context, mac stri
 // Gateway Operations - Stub implementations pending gateway service integration
 // =============================================================================
 
-// GatewayStatus returns the status of the gateway.
-func (p *PlatformServiceProvider) GatewayStatus(ctx context.Context) (interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayStatus"}
-}
-
-// GatewayModeSet sets the gateway operating modes.
-func (p *PlatformServiceProvider) GatewayModeSet(ctx context.Context, modes []string) (interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayModeSet"}
-}
+// GatewayStatus and GatewayModeSet come from the embedded gatewayStatusTools
+// and the IPAM tools from the embedded gatewayIPAMTools. The BGP operations
+// below stay unimplemented: platformd constructs no BGP speaker (gatewayd
+// owns it).
 
 // GatewayBGPStatus returns the BGP status of the gateway.
 func (p *PlatformServiceProvider) GatewayBGPStatus(ctx context.Context) (interface{}, error) {
@@ -1796,46 +1795,6 @@ func (p *PlatformServiceProvider) GatewayBGPWithdraw(ctx context.Context, prefix
 // GatewayBGPPrefixes lists all announced BGP prefixes.
 func (p *PlatformServiceProvider) GatewayBGPPrefixes(ctx context.Context) ([]interface{}, error) {
 	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayBGPPrefixes"}
-}
-
-// GatewayIPAMPools lists IPAM pools, optionally filtered by zone.
-func (p *PlatformServiceProvider) GatewayIPAMPools(ctx context.Context, zone string) ([]interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayIPAMPools"}
-}
-
-// GatewayIPAMPoolGet retrieves a single IPAM pool by ID.
-func (p *PlatformServiceProvider) GatewayIPAMPoolGet(ctx context.Context, poolID string) (interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayIPAMPoolGet"}
-}
-
-// GatewayIPAMAllocate allocates an IP address from a pool.
-func (p *PlatformServiceProvider) GatewayIPAMAllocate(ctx context.Context, poolID string, deviceID string, hostname string) (interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayIPAMAllocate"}
-}
-
-// GatewayIPAMRelease releases an IP address back to the pool.
-func (p *PlatformServiceProvider) GatewayIPAMRelease(ctx context.Context, ip string) error {
-	return ErrGatewayOperationNotImplemented{Operation: "GatewayIPAMRelease"}
-}
-
-// GatewayIPAMAllocations lists all IP address allocations.
-func (p *PlatformServiceProvider) GatewayIPAMAllocations(ctx context.Context, poolID string) ([]interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayIPAMAllocations"}
-}
-
-// GatewayIPAMPoolCreate creates a new IPAM pool.
-func (p *PlatformServiceProvider) GatewayIPAMPoolCreate(ctx context.Context, req *mcp.IPAMPoolCreateRequest) (interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayIPAMPoolCreate"}
-}
-
-// GatewayIPAMPoolUpdate updates mutable fields of an IPAM pool.
-func (p *PlatformServiceProvider) GatewayIPAMPoolUpdate(ctx context.Context, poolID string, req *mcp.IPAMPoolUpdateRequest) (interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayIPAMPoolUpdate"}
-}
-
-// GatewayIPAMPoolDelete deletes an IPAM pool.
-func (p *PlatformServiceProvider) GatewayIPAMPoolDelete(ctx context.Context, poolID string) error {
-	return ErrGatewayOperationNotImplemented{Operation: "GatewayIPAMPoolDelete"}
 }
 
 // =============================================================================

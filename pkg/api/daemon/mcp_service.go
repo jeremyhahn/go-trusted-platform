@@ -26,12 +26,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/netip"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -109,6 +106,9 @@ type MCPServiceProviderConfig struct {
 	// (gateway_snapshot, gateway_snapshots); nil answers that no gateway
 	// snapshot surface is configured on this node.
 	GatewaySnapshots GatewaySnapshotReader
+	// GatewayStatus serves the gateway_status and gateway_mode_set tools;
+	// nil answers that the gateway service is not available.
+	GatewayStatus GatewayStatusController
 
 	// GatewayPerf serves gateway performance verification tools
 	// (gateway_perf_*).
@@ -147,7 +147,6 @@ type MCPServiceProvider struct {
 	bmcRestorer           BMCRestorer
 	phase35               phase35State
 	zoneService           gateway.ZoneService
-	ipamService           ipam.Allocator
 	configDeliveryService *configdelivery.Service
 	proxyService          *grpcapi.ProxyGRPCService
 	gatewayLB             GatewayLoadBalancerInterface
@@ -155,6 +154,10 @@ type MCPServiceProvider struct {
 	gatewayPerf           GatewayPerfInterface
 	// gatewaySnapshotTools serves the telemetry snapshot tools.
 	gatewaySnapshotTools
+	// gatewayStatusTools serves the gateway status and mode tools (#65).
+	gatewayStatusTools
+	// gatewayIPAMTools serves the gateway IPAM tools.
+	gatewayIPAMTools
 	ntpService    platformv1.NTPServiceServer
 	logger        *slog.Logger
 	idevidService *IDevIDGRPCService
@@ -195,12 +198,13 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		eabService:            config.EABService,
 		eabDelivery:           config.EABDelivery,
 		zoneService:           config.ZoneService,
-		ipamService:           config.IPAMService,
+		gatewayIPAMTools:      gatewayIPAMTools{ipam: config.IPAMService},
 		configDeliveryService: config.ConfigDeliveryService,
 		proxyService:          config.ProxyService,
 		gatewayLB:             config.GatewayLB,
 		gatewayPerf:           config.GatewayPerf,
 		gatewaySnapshotTools:  gatewaySnapshotTools{reader: config.GatewaySnapshots},
+		gatewayStatusTools:    gatewayStatusTools{controller: config.GatewayStatus},
 		logger:                logger,
 	}
 }
@@ -3634,15 +3638,10 @@ func (m *MCPServiceProvider) OverlayMACForget(ctx context.Context, mac string, v
 // Gateway Operations - Stub implementations pending gateway service integration
 // =============================================================================
 
-// GatewayStatus returns the status of the gateway.
-func (m *MCPServiceProvider) GatewayStatus(ctx context.Context) (interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayStatus"}
-}
-
-// GatewayModeSet sets the gateway operating modes.
-func (m *MCPServiceProvider) GatewayModeSet(ctx context.Context, modes []string) (interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayModeSet"}
-}
+// GatewayStatus and GatewayModeSet come from the embedded gatewayStatusTools
+// (gateway_status_bindings.go) and the IPAM tools from the embedded
+// gatewayIPAMTools (gateway_ipam_tools.go). The BGP operations below stay unimplemented:
+// platformd constructs no BGP speaker (gatewayd owns it).
 
 // GatewayBGPStatus returns the BGP status of the gateway.
 func (m *MCPServiceProvider) GatewayBGPStatus(ctx context.Context) (interface{}, error) {
@@ -3667,170 +3666,6 @@ func (m *MCPServiceProvider) GatewayBGPWithdraw(ctx context.Context, prefix stri
 // GatewayBGPPrefixes lists all announced BGP prefixes.
 func (m *MCPServiceProvider) GatewayBGPPrefixes(ctx context.Context) ([]interface{}, error) {
 	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayBGPPrefixes"}
-}
-
-// requireIPAMService returns an error when the IPAM allocator is not configured.
-func (m *MCPServiceProvider) requireIPAMService() error {
-	if m.ipamService == nil {
-		return ErrServiceNotAvailable{Service: "ipam"}
-	}
-	return nil
-}
-
-// GatewayIPAMPools lists IPAM pools, optionally filtered by zone.
-func (m *MCPServiceProvider) GatewayIPAMPools(ctx context.Context, filterZone string) ([]interface{}, error) {
-	if err := m.requireIPAMService(); err != nil {
-		return nil, err
-	}
-	var pools []*ipam.Pool
-	var err error
-	if filterZone != "" {
-		pools, err = m.ipamService.ListPoolsByZone(ctx, filterZone)
-	} else {
-		pools, err = m.ipamService.ListPools(ctx)
-	}
-	if err != nil {
-		return nil, err
-	}
-	out := make([]interface{}, 0, len(pools))
-	for _, p := range pools {
-		out = append(out, p)
-	}
-	return out, nil
-}
-
-// GatewayIPAMPoolGet retrieves a single IPAM pool by ID.
-func (m *MCPServiceProvider) GatewayIPAMPoolGet(ctx context.Context, poolID string) (interface{}, error) {
-	if err := m.requireIPAMService(); err != nil {
-		return nil, err
-	}
-	return m.ipamService.GetPool(ctx, poolID)
-}
-
-// GatewayIPAMAllocate allocates an IP address from a pool.
-func (m *MCPServiceProvider) GatewayIPAMAllocate(ctx context.Context, poolID string, deviceID string, hostname string) (interface{}, error) {
-	if err := m.requireIPAMService(); err != nil {
-		return nil, err
-	}
-	alloc, err := m.ipamService.Allocate(ctx, &ipam.AllocationRequest{
-		PoolID:   poolID,
-		DeviceID: deviceID,
-		Hostname: hostname,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return alloc, nil
-}
-
-// GatewayIPAMRelease releases an IP address back to the pool.
-func (m *MCPServiceProvider) GatewayIPAMRelease(ctx context.Context, ipStr string) error {
-	if err := m.requireIPAMService(); err != nil {
-		return err
-	}
-	addr, parseErr := netip.ParseAddr(ipStr)
-	if parseErr != nil {
-		return &WrappedError{Msg: fmt.Sprintf("invalid ip address %q", ipStr), Err: parseErr}
-	}
-	return m.ipamService.Release(ctx, addr)
-}
-
-// GatewayIPAMAllocations lists all IP address allocations for a pool.
-func (m *MCPServiceProvider) GatewayIPAMAllocations(ctx context.Context, poolID string) ([]interface{}, error) {
-	if err := m.requireIPAMService(); err != nil {
-		return nil, err
-	}
-	allocs, err := m.ipamService.GetAllocationsByPool(ctx, poolID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]interface{}, 0, len(allocs))
-	for _, a := range allocs {
-		out = append(out, a)
-	}
-	return out, nil
-}
-
-// GatewayIPAMPoolCreate creates a new IPAM pool.
-func (m *MCPServiceProvider) GatewayIPAMPoolCreate(ctx context.Context, req *mcp.IPAMPoolCreateRequest) (interface{}, error) {
-	if err := m.requireIPAMService(); err != nil {
-		return nil, err
-	}
-	cidr, err := netip.ParsePrefix(req.CIDR)
-	if err != nil {
-		return nil, &WrappedError{Msg: fmt.Sprintf("invalid cidr %q", req.CIDR), Err: err}
-	}
-	pool := &ipam.Pool{
-		ID:                   uuid.New().String(),
-		Name:                 req.Name,
-		CIDR:                 cidr.Masked(),
-		Zone:                 req.Zone,
-		Description:          req.Description,
-		DefaultLeaseDuration: time.Duration(req.LeaseDurationSeconds) * time.Second,
-	}
-	if req.Gateway != "" {
-		gw, parseErr := netip.ParseAddr(req.Gateway)
-		if parseErr != nil {
-			return nil, &WrappedError{Msg: fmt.Sprintf("invalid gateway %q", req.Gateway), Err: parseErr}
-		}
-		pool.Gateway = gw
-	}
-	reserved, rangeStart, rangeEnd, err := ipam.ParseWindow(req.Reserved, req.RangeStart, req.RangeEnd)
-	if err != nil {
-		return nil, err
-	}
-	pool.Reserved = reserved
-	pool.RangeStart = rangeStart
-	pool.RangeEnd = rangeEnd
-	if err := m.ipamService.CreatePool(ctx, pool); err != nil {
-		return nil, err
-	}
-	return m.ipamService.GetPool(ctx, pool.ID)
-}
-
-// GatewayIPAMPoolUpdate updates mutable fields of an IPAM pool. CIDR is immutable.
-func (m *MCPServiceProvider) GatewayIPAMPoolUpdate(ctx context.Context, poolID string, req *mcp.IPAMPoolUpdateRequest) (interface{}, error) {
-	if err := m.requireIPAMService(); err != nil {
-		return nil, err
-	}
-	pool, err := m.ipamService.GetPool(ctx, poolID)
-	if err != nil {
-		return nil, err
-	}
-	if req.Name != "" {
-		pool.Name = req.Name
-	}
-	if req.Zone != "" {
-		pool.Zone = req.Zone
-	}
-	if req.Description != "" {
-		pool.Description = req.Description
-	}
-	if req.Gateway != "" {
-		gw, parseErr := netip.ParseAddr(req.Gateway)
-		if parseErr != nil {
-			return nil, &WrappedError{Msg: fmt.Sprintf("invalid gateway %q", req.Gateway), Err: parseErr}
-		}
-		pool.Gateway = gw
-	}
-	if req.LeaseDurationSeconds > 0 {
-		pool.DefaultLeaseDuration = time.Duration(req.LeaseDurationSeconds) * time.Second
-	}
-	if err := pool.ApplyWindowUpdate(req.Reserved, req.RangeStart, req.RangeEnd); err != nil {
-		return nil, err
-	}
-	if err := m.ipamService.UpdatePool(ctx, pool); err != nil {
-		return nil, err
-	}
-	return m.ipamService.GetPool(ctx, poolID)
-}
-
-// GatewayIPAMPoolDelete deletes an IPAM pool.
-func (m *MCPServiceProvider) GatewayIPAMPoolDelete(ctx context.Context, poolID string) error {
-	if err := m.requireIPAMService(); err != nil {
-		return err
-	}
-	return m.ipamService.DeletePool(ctx, poolID)
 }
 
 // =============================================================================

@@ -477,6 +477,13 @@ func TestGatewayService_SetGatewayMode(t *testing.T) {
 			errorContains: "modes is required",
 		},
 		{
+			name:          "undefined mode bit",
+			modes:         uint32(gateway.GatewayModeOverlay) | 8,
+			setupMock:     newMockGateway,
+			expectError:   true,
+			errorContains: "undefined mode bit",
+		},
+		{
 			name:  "gateway not configured",
 			modes: uint32(gateway.GatewayModeOverlay),
 			setupMock: func() *mockGateway {

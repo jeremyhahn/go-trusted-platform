@@ -79,6 +79,7 @@ package adminclaim
 import (
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -113,6 +114,17 @@ const (
 	// under. It is the marker that distinguishes an operator-enrolled
 	// authenticator from the mtls factor firstboot created.
 	factorFIDO2 = "fido2"
+
+	// EventReclaim is the audit event type of a claim that completed on an
+	// identity which previously carried a revoked fido2 factor. The owner
+	// ruling on #169 keeps the claim re-claimable, so detection is the
+	// control: a re-claim must never read as a first claim.
+	EventReclaim = "adminclaim.reclaim"
+
+	// EventReclaimStatusUnknown is the audit event type of a claim whose
+	// factor history the SDK did not report, so a re-claim cannot be
+	// ruled out. It is raised at the same severity as EventReclaim.
+	EventReclaimStatusUnknown = "adminclaim.reclaim_status_unknown"
 )
 
 // FIDO2Ceremony is the narrow slice of the SDK WebAuthn relying-party
@@ -270,22 +282,48 @@ func (s *Service) tenantContext(ctx context.Context) context.Context {
 // It never guesses: an SDK failure is returned to the caller so the
 // endpoint can fail closed rather than report an unclaimed node.
 func (s *Service) Claimed(ctx context.Context) (bool, error) {
-	resp, err := s.factors.List(s.tenantContext(ctx), s.adminUsername)
+	history, err := s.factorHistory(ctx)
 	if err != nil {
 		return false, err
 	}
-	if resp == nil {
-		return false, nil
+	return history.claimed, nil
+}
+
+// claimHistory is what one SDK factor listing says about the admin
+// identity's fido2 factors.
+type claimHistory struct {
+	// claimed is true while a non-revoked fido2 factor exists.
+	claimed bool
+	// known is false when the SDK answered without error but returned no
+	// listing at all, which proves nothing about the identity's history.
+	known bool
+	// revoked holds the fido2 enrollments revoked before now: the
+	// authenticators a claim completing over this history replaces.
+	revoked []quicbaassdk.AuthFactorEntry
+}
+
+// factorHistory reads the admin identity's factors once through the SDK
+// and classifies its fido2 enrollments.
+func (s *Service) factorHistory(ctx context.Context) (claimHistory, error) {
+	resp, err := s.factors.List(s.tenantContext(ctx), s.adminUsername)
+	if err != nil {
+		return claimHistory{}, err
 	}
+	if resp == nil {
+		return claimHistory{}, nil
+	}
+	history := claimHistory{known: true}
 	for _, e := range resp.Enrollments {
-		if e.RevokedAt != nil {
+		if !strings.EqualFold(e.FactorName, factorFIDO2) {
 			continue
 		}
-		if strings.EqualFold(e.FactorName, factorFIDO2) {
-			return true, nil
+		if e.RevokedAt != nil {
+			history.revoked = append(history.revoked, e)
+			continue
 		}
+		history.claimed = true
 	}
-	return false, nil
+	return history, nil
 }
 
 // Challenge issues a possession nonce for the operator to sign.
@@ -293,7 +331,7 @@ func (s *Service) Challenge(ctx context.Context) (string, time.Time, error) {
 	if s.multiInstance {
 		return "", time.Time{}, ErrMultiInstanceUnsupported{}
 	}
-	if err := s.refuseIfClaimed(ctx); err != nil {
+	if _, err := s.refuseIfClaimed(ctx); err != nil {
 		return "", time.Time{}, err
 	}
 	return s.challenges.issue(s.adminUsername)
@@ -326,7 +364,7 @@ func (s *Service) Prove(
 		return "", time.Time{}, ErrMultiInstanceUnsupported{}
 	}
 
-	if err := s.refuseIfClaimed(ctx); err != nil {
+	if _, err := s.refuseIfClaimed(ctx); err != nil {
 		return "", time.Time{}, err
 	}
 	if cert := s.adminPeerCertificate(peerCertificates); cert != nil {
@@ -388,7 +426,7 @@ func (s *Service) BeginPasskey(
 	if _, ok := s.claims.peek(claimToken); !ok {
 		return nil, ErrClaimTokenInvalid{}
 	}
-	if err := s.refuseIfClaimed(ctx); err != nil {
+	if _, err := s.refuseIfClaimed(ctx); err != nil {
 		return nil, err
 	}
 	return s.ceremony.BeginRegistration(s.tenantContext(ctx),
@@ -431,7 +469,12 @@ func (s *Service) FinishPasskey(
 	if _, ok := s.claims.redeem(claimToken); !ok {
 		return "", ErrClaimTokenInvalid{}
 	}
-	if err := s.refuseIfClaimed(ctx); err != nil {
+	// The listing that refuses a claimed identity is also the factor
+	// history the audit record is decided by, read once and before the
+	// enrolment adds the new passkey to it. A listing that fails refuses
+	// the claim, so no claim completes without that decision made.
+	history, err := s.refuseIfClaimed(ctx)
+	if err != nil {
 		return "", err
 	}
 	// Materialise the platform-local admin BEFORE the enrolment commits.
@@ -454,12 +497,82 @@ func (s *Service) FinishPasskey(
 	if credential == nil || !credential.Success {
 		return "", ErrCeremonyRejected{}
 	}
-	s.logger.Info("adminclaim: system admin claimed",
-		"credential_id", credential.CredentialID,
-		"tenant_id", s.tenantID)
+	s.recordClaim(ctx, history, credential.CredentialID)
 	// A failure here costs the operator only this response: the passkey is
 	// enrolled, so they sign in to the console with it as normal.
 	return s.tokenIssuer.GenerateToken(user)
+}
+
+// reclaimDetails is the machine-readable body of a re-claim security
+// record, carried as JSON in SecurityLogEntry.Details.
+type reclaimDetails struct {
+	Event        string           `json:"event"`
+	Identity     string           `json:"identity"`
+	Email        string           `json:"email"`
+	TenantID     string           `json:"tenant_id"`
+	ClaimedAt    string           `json:"claimed_at"`
+	CredentialID string           `json:"credential_id"`
+	Replaced     []replacedFactor `json:"replaced_factors"`
+}
+
+// replacedFactor names one revoked fido2 enrollment a re-claim replaces.
+type replacedFactor struct {
+	EnrollmentID string `json:"enrollment_id"`
+	EnrolledAt   string `json:"enrolled_at"`
+	RevokedAt    string `json:"revoked_at"`
+}
+
+// recordClaim writes the audit record of a completed claim. A first claim
+// keeps its routine record. A claim completing over a revoked fido2
+// factor is a re-claim and is raised as a high-severity security event of
+// its own type, naming the factors it replaces; so is a claim whose
+// factor history the SDK did not report, because a re-claim cannot be
+// ruled out (detection over denial, per the #169 ruling).
+func (s *Service) recordClaim(ctx context.Context, history claimHistory, credentialID string) {
+	if history.known && len(history.revoked) == 0 {
+		s.logger.Info("adminclaim: system admin claimed",
+			"credential_id", credentialID,
+			"tenant_id", s.tenantID)
+		return
+	}
+	event := EventReclaim
+	description := "system admin re-claimed: a new passkey was enrolled on an " +
+		"identity whose previous FIDO2 factor was revoked"
+	if !history.known {
+		event = EventReclaimStatusUnknown
+		description = "system admin claimed with unknown factor history: " +
+			"the SDK returned no factor listing, so a re-claim cannot be ruled out"
+	}
+	claimedAt := time.Now().UTC()
+	replaced := make([]replacedFactor, 0, len(history.revoked))
+	for _, e := range history.revoked {
+		replaced = append(replaced, replacedFactor{
+			EnrollmentID: e.EnrollmentID,
+			EnrolledAt:   e.EnrolledAt.UTC().Format(time.RFC3339Nano),
+			RevokedAt:    e.RevokedAt.UTC().Format(time.RFC3339Nano),
+		})
+	}
+	details, err := json.Marshal(reclaimDetails{
+		Event:        event,
+		Identity:     s.adminUsername,
+		Email:        s.adminEmail,
+		TenantID:     s.tenantID,
+		ClaimedAt:    claimedAt.Format(time.RFC3339Nano),
+		CredentialID: credentialID,
+		Replaced:     replaced,
+	})
+	if err != nil {
+		// Unreachable for a struct of strings; still never drop the event.
+		details = []byte(event)
+	}
+	s.logger.Security(ctx, logging.SecurityLogEntry{
+		Timestamp:   claimedAt,
+		Severity:    logging.SeverityHigh,
+		Category:    logging.CategoryAccessControl,
+		Description: description,
+		Details:     string(details),
+		Source:      logging.SourceAuthentication,
+	})
 }
 
 // materialiseAdmin creates or updates the platform-local record for the
@@ -506,16 +619,17 @@ func hasRole(user *entities.User, name string) bool {
 
 // refuseIfClaimed closes every step of the flow while an authenticator is
 // enrolled. It fails closed on an SDK error: unable to tell, unable to
-// claim.
-func (s *Service) refuseIfClaimed(ctx context.Context) error {
-	claimed, err := s.Claimed(ctx)
+// claim. On success it returns the factor history it read, which
+// FinishPasskey uses to decide the claim's audit record.
+func (s *Service) refuseIfClaimed(ctx context.Context) (claimHistory, error) {
+	history, err := s.factorHistory(ctx)
 	if err != nil {
-		return err
+		return claimHistory{}, err
 	}
-	if claimed {
-		return ErrAlreadyClaimed{}
+	if history.claimed {
+		return claimHistory{}, ErrAlreadyClaimed{}
 	}
-	return nil
+	return history, nil
 }
 
 // PeerCertificates extracts the client chain a request presented in the

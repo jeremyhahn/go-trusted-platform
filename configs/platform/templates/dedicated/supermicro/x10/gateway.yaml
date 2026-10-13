@@ -726,7 +726,7 @@ gateway:
     router-id: 10.4.6.2
     listen-port: 179
     peers:
-      - name: vps-primary
+      - name: relay-ispa
         address: 10.4.128.3
         asn: 64512
         families:
@@ -736,8 +736,8 @@ gateway:
         # the standard (auth-type: tcp-ao with a keychain below); TCP-MD5
         # is a compatibility option that non-FIPS builds accept only:
         #   auth-type: md5
-        #   auth-key-ref: kms://platform/gateway/bgp/vps-primary
-      - name: vps-backup
+        #   auth-key-ref: kms://platform/gateway/bgp/relay-ispa
+      - name: relay-ispb
         address: 10.4.128.5
         asn: 64512
         families:

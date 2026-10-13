@@ -182,7 +182,7 @@ file, or use another transport. See [cli.md](cli.md) §2.
 ```bash
 platformctl proxy route add --id partner \
     --host partner.example.com --path-prefix / --pool partner-pool \
-    --auth-mode mtls --allowed-zone dmz --opa-policy proxy_authz
+    --auth-mode mtls --allowed-zone lab --opa-policy proxy_authz
 ```
 
 The policy runs **after** authentication, so it decides what an already-known

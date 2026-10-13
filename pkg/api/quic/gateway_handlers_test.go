@@ -27,6 +27,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -88,7 +90,7 @@ type testGatewayService struct {
 	lastVIPSpec       *LBVIPSpec
 
 	// Capture last request for validation
-	lastMode           string
+	lastModes          uint32
 	lastPrefix         string
 	lastPrefixOpts     *AnnouncePrefixOptions
 	lastPoolID         string
@@ -102,19 +104,14 @@ func newTestGatewayService() *testGatewayService {
 	now := time.Now().Unix()
 	return &testGatewayService{
 		statusResp: &GatewayStatusInfo{
-			Enabled:       true,
-			Mode:          GatewayModeL3,
-			BGPEnabled:    true,
-			BGPRouterID:   "10.0.0.1",
-			BGPLocalAS:    65000,
-			ExternalIface: "eth0",
-			InternalIface: "eth1",
-			NATEnabled:    false,
-			PeerCount:     2,
-			PrefixCount:   5,
-			PoolCount:     3,
-			HealthStatus:  "healthy",
-			Uptime:        3600,
+			ID:            "gw-1",
+			NodeID:        "node-1",
+			Modes:         quicwire.GatewayModeOverlay | quicwire.GatewayModeEdge,
+			Tier:          "edge",
+			Reputation:    0.9,
+			UptimeSeconds: 3600,
+			Healthy:       true,
+			StartedAt:     now - 3600,
 		},
 		bgpStatusResp: &BGPStatusInfo{
 			Enabled:           true,
@@ -263,12 +260,14 @@ func (s *testGatewayService) ListAdmittedVTEPs(_ context.Context, _ string) ([]*
 	return nil, ErrGatewayFeatureNotConfigured
 }
 
-func (s *testGatewayService) SetMode(ctx context.Context, mode string) error {
-	s.lastMode = mode
+func (s *testGatewayService) SetModes(ctx context.Context, modes uint32) (*GatewayStatusInfo, error) {
+	s.lastModes = modes
 	if s.setModeErr != nil {
-		return s.setModeErr
+		return nil, s.setModeErr
 	}
-	return nil
+	status := *s.statusResp
+	status.Modes = modes
+	return &status, nil
 }
 
 func (s *testGatewayService) BGPStatus(ctx context.Context) (*BGPStatusInfo, error) {
@@ -580,9 +579,9 @@ func TestGatewayHandleStatus(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.NotNil(t, statusResp.Status)
-		assert.Equal(t, true, statusResp.Status.Enabled)
-		assert.Equal(t, GatewayModeL3, statusResp.Status.Mode)
-		assert.Equal(t, "healthy", statusResp.Status.HealthStatus)
+		assert.True(t, statusResp.Status.Healthy)
+		assert.Equal(t, quicwire.GatewayModeOverlay|quicwire.GatewayModeEdge, statusResp.Status.Modes)
+		assert.Equal(t, "gw-1", statusResp.Status.ID)
 	})
 
 	t.Run("returns error when service unavailable", func(t *testing.T) {
@@ -623,95 +622,75 @@ func TestGatewayHandleSetMode(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	t.Run("sets mode successfully", func(t *testing.T) {
-		t.Parallel()
-		handler, service := createTestGatewayHandler()
-
-		setReq := &GatewaySetModeRequest{
-			Mode: GatewayModeL2,
-		}
-
-		payload, err := quicwire.EncodePayload(setReq)
+	setMode := func(t *testing.T, handler *GatewayHandler, modes uint32) *quicwire.Response {
+		t.Helper()
+		payload, err := quicwire.EncodePayload(&GatewaySetModeRequest{Modes: modes})
 		require.NoError(t, err)
-
-		req := &quicwire.Request{
+		return handler.HandleRequest(ctx, &quicwire.Request{
 			Opcode:  quicwire.OpGatewaySetMode,
 			Payload: payload,
-		}
+		})
+	}
 
-		resp := handler.HandleRequest(ctx, req)
+	t.Run("sets modes and returns the status after the change", func(t *testing.T) {
+		t.Parallel()
+		handler, service := createTestGatewayHandler()
+		want := quicwire.GatewayModeEdge | quicwire.GatewayModeTransit
 
-		assert.Equal(t, quicwire.StatusOK, resp.Status)
-		assert.Equal(t, GatewayModeL2, service.lastMode)
+		resp := setMode(t, handler, want)
 
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		assert.Equal(t, want, service.lastModes)
 		var setResp GatewaySetModeResponse
-		err = quicwire.DecodePayload(resp.Payload, &setResp)
-		require.NoError(t, err)
-
-		assert.Equal(t, GatewayModeL2, setResp.Mode)
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &setResp))
 		assert.True(t, setResp.Success)
+		require.NotNil(t, setResp.Status)
+		assert.Equal(t, want, setResp.Status.Modes)
+	})
+
+	t.Run("accepts every single mode and all three together", func(t *testing.T) {
+		t.Parallel()
+		for _, modes := range []uint32{
+			quicwire.GatewayModeOverlay,
+			quicwire.GatewayModeEdge,
+			quicwire.GatewayModeTransit,
+			quicwire.GatewayModesAll,
+		} {
+			handler, service := createTestGatewayHandler()
+			resp := setMode(t, handler, modes)
+			assert.Equal(t, quicwire.StatusOK, resp.Status, "modes %d should be valid", modes)
+			assert.Equal(t, modes, service.lastModes)
+		}
 	})
 
 	t.Run("returns error when service unavailable", func(t *testing.T) {
 		t.Parallel()
 		handler := NewGatewayHandler(newGatewayTestLogger(), nil)
 
-		setReq := &GatewaySetModeRequest{
-			Mode: GatewayModeL3,
-		}
-
-		payload, err := quicwire.EncodePayload(setReq)
-		require.NoError(t, err)
-
-		req := &quicwire.Request{
-			Opcode:  quicwire.OpGatewaySetMode,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
+		resp := setMode(t, handler, quicwire.GatewayModeEdge)
 
 		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
-	t.Run("returns error for missing mode", func(t *testing.T) {
+	t.Run("refuses an empty mode set before the service", func(t *testing.T) {
 		t.Parallel()
-		handler, _ := createTestGatewayHandler()
+		handler, service := createTestGatewayHandler()
 
-		setReq := &GatewaySetModeRequest{}
-
-		payload, err := quicwire.EncodePayload(setReq)
-		require.NoError(t, err)
-
-		req := &quicwire.Request{
-			Opcode:  quicwire.OpGatewaySetMode,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
+		resp := setMode(t, handler, 0)
 
 		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "mode")
+		assert.Zero(t, service.lastModes)
 	})
 
-	t.Run("returns error for invalid mode", func(t *testing.T) {
+	t.Run("refuses an undefined mode bit before the service", func(t *testing.T) {
 		t.Parallel()
-		handler, _ := createTestGatewayHandler()
+		handler, service := createTestGatewayHandler()
 
-		setReq := &GatewaySetModeRequest{
-			Mode: "invalid-mode",
-		}
-
-		payload, err := quicwire.EncodePayload(setReq)
-		require.NoError(t, err)
-
-		req := &quicwire.Request{
-			Opcode:  quicwire.OpGatewaySetMode,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
+		resp := setMode(t, handler, quicwire.GatewayModeEdge|8)
 
 		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+		assert.Zero(t, service.lastModes)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
@@ -733,46 +712,25 @@ func TestGatewayHandleSetMode(t *testing.T) {
 		handler, service := createTestGatewayHandler()
 		service.setModeErr = errors.New("failed to set mode")
 
-		setReq := &GatewaySetModeRequest{
-			Mode: GatewayModeNAT,
-		}
-
-		payload, err := quicwire.EncodePayload(setReq)
-		require.NoError(t, err)
-
-		req := &quicwire.Request{
-			Opcode:  quicwire.OpGatewaySetMode,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
+		resp := setMode(t, handler, quicwire.GatewayModeTransit)
 
 		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 
-	t.Run("sets all valid modes", func(t *testing.T) {
+	t.Run("maps a gRPC status from the service to its QUIC status", func(t *testing.T) {
 		t.Parallel()
-		modes := []string{GatewayModeL2, GatewayModeL3, GatewayModeNAT, GatewayModeDisabled}
-
-		for _, mode := range modes {
+		cases := map[codes.Code]byte{
+			codes.Unavailable:     quicwire.StatusUnavailable,
+			codes.InvalidArgument: quicwire.StatusInvalidArgument,
+			codes.NotFound:        quicwire.StatusNotFound,
+		}
+		for code, want := range cases {
 			handler, service := createTestGatewayHandler()
+			service.setModeErr = grpcstatus.Error(code, "from the gateway service")
 
-			setReq := &GatewaySetModeRequest{
-				Mode: mode,
-			}
+			resp := setMode(t, handler, quicwire.GatewayModeEdge)
 
-			payload, err := quicwire.EncodePayload(setReq)
-			require.NoError(t, err)
-
-			req := &quicwire.Request{
-				Opcode:  quicwire.OpGatewaySetMode,
-				Payload: payload,
-			}
-
-			resp := handler.HandleRequest(ctx, req)
-
-			assert.Equal(t, quicwire.StatusOK, resp.Status, "mode %s should be valid", mode)
-			assert.Equal(t, mode, service.lastMode)
+			assert.Equal(t, want, resp.Status, "gRPC code %s", code)
 		}
 	})
 }

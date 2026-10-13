@@ -45,6 +45,9 @@ type zoneGatewayAdapter struct {
 	// gatewaySnapshotQUICAdapter serves the telemetry snapshot sub-opcodes
 	// from the gateway gRPC service when one is wired (#594).
 	gatewaySnapshotQUICAdapter
+	// gatewayStatusQUICAdapter serves status and mode; with no controller
+	// it reports the gateway as not configured.
+	gatewayStatusQUICAdapter
 }
 
 // Compile-time check: zoneGatewayAdapter implements quic.GatewayServiceInterface.
@@ -58,14 +61,6 @@ func newZoneGatewayAdapter(svc gateway.ZoneService) *zoneGatewayAdapter {
 // =============================================================================
 // Non-zone methods — return "not configured" so QUIC handler emits Unavailable
 // =============================================================================
-
-func (a *zoneGatewayAdapter) Status(_ context.Context) (*quic.GatewayStatusInfo, error) {
-	return nil, errGatewayFeatureNotConfigured
-}
-
-func (a *zoneGatewayAdapter) SetMode(_ context.Context, _ string) error {
-	return errGatewayFeatureNotConfigured
-}
 
 func (a *zoneGatewayAdapter) BGPStatus(_ context.Context) (*quic.BGPStatusInfo, error) {
 	return nil, errGatewayFeatureNotConfigured
@@ -347,6 +342,9 @@ type fullGatewayQUICAdapter struct {
 	// gatewaySnapshotQUICAdapter serves the telemetry snapshot sub-opcodes
 	// from the gateway gRPC service when one is wired (#594).
 	gatewaySnapshotQUICAdapter
+	// gatewayStatusQUICAdapter serves the status and mode sub-opcodes from
+	// the gateway gRPC service (#65).
+	gatewayStatusQUICAdapter
 }
 
 // Compile-time check: fullGatewayQUICAdapter implements quic.GatewayServiceInterface.
@@ -355,25 +353,18 @@ var _ quic.GatewayServiceInterface = (*fullGatewayQUICAdapter)(nil)
 // newFullGatewayQUICAdapter creates a fullGatewayQUICAdapter.
 // ipamAlloc must be non-nil; zoneSvc may be nil (zone methods will return
 // errGatewayFeatureNotConfigured in that case).
-func newFullGatewayQUICAdapter(ipamAlloc ipam.Allocator, zoneSvc gateway.ZoneService, snapshots GatewaySnapshotReader) *fullGatewayQUICAdapter {
+func newFullGatewayQUICAdapter(ipamAlloc ipam.Allocator, zoneSvc gateway.ZoneService, snapshots GatewaySnapshotReader, status GatewayStatusController) *fullGatewayQUICAdapter {
 	return &fullGatewayQUICAdapter{
 		ipamAlloc:                  ipamAlloc,
 		zoneSvc:                    zoneSvc,
 		gatewaySnapshotQUICAdapter: gatewaySnapshotQUICAdapter{reader: snapshots},
+		gatewayStatusQUICAdapter:   gatewayStatusQUICAdapter{controller: status},
 	}
 }
 
 // =============================================================================
-// Non-IPAM / non-zone stubs
+// BGP stubs: platformd constructs no BGP speaker (gatewayd owns it)
 // =============================================================================
-
-func (a *fullGatewayQUICAdapter) Status(_ context.Context) (*quic.GatewayStatusInfo, error) {
-	return nil, errGatewayFeatureNotConfigured
-}
-
-func (a *fullGatewayQUICAdapter) SetMode(_ context.Context, _ string) error {
-	return errGatewayFeatureNotConfigured
-}
 
 func (a *fullGatewayQUICAdapter) BGPStatus(_ context.Context) (*quic.BGPStatusInfo, error) {
 	return nil, errGatewayFeatureNotConfigured
@@ -575,6 +566,9 @@ func (a *fullGatewayQUICAdapter) CreateIPAMPool(ctx context.Context, opts *quic.
 	if opts.LeaseDuration > 0 {
 		pool.DefaultLeaseDuration = time.Duration(opts.LeaseDuration)
 	}
+	if opts.InactivityTimeout > 0 {
+		pool.InactivityTimeout = time.Duration(opts.InactivityTimeout)
+	}
 	reserved, rangeStart, rangeEnd, err := ipam.ParseWindow(opts.Reserved, opts.RangeStart, opts.RangeEnd)
 	if err != nil {
 		return nil, mapIPAMToQUICError(err)
@@ -622,6 +616,9 @@ func (a *fullGatewayQUICAdapter) UpdateIPAMPool(ctx context.Context, poolID stri
 		}
 		if opts.LeaseDuration > 0 {
 			updated.DefaultLeaseDuration = time.Duration(opts.LeaseDuration)
+		}
+		if opts.InactivityTimeout > 0 {
+			updated.InactivityTimeout = time.Duration(opts.InactivityTimeout)
 		}
 		if opts.UpdateWindow {
 			reserved, rangeStart, rangeEnd, parseErr := ipam.ParseWindow(opts.Reserved, opts.RangeStart, opts.RangeEnd)
@@ -778,19 +775,25 @@ func ipamPoolToQUICInfo(p *ipam.Pool) *quic.IPAMPoolInfo {
 	if p.Gateway.IsValid() {
 		gw = p.Gateway.String()
 	}
-	return &quic.IPAMPoolInfo{
-		ID:           p.ID,
-		Name:         p.Name,
-		CIDR:         cidr,
-		Gateway:      gw,
-		Zone:         p.Zone,
-		Description:  p.Description,
-		TotalIPs:     int(p.TotalIPs),
-		AllocatedIPs: int(p.AllocatedIPs),
-		AvailableIPs: int(p.AvailableIPs),
-		CreatedAt:    p.CreatedAt.Unix(),
-		Reserved:     p.ReservedStrings(),
-		RangeStart:   ipam.AddrString(p.RangeStart),
-		RangeEnd:     ipam.AddrString(p.RangeEnd),
+	info := &quic.IPAMPoolInfo{
+		ID:                p.ID,
+		Name:              p.Name,
+		CIDR:              cidr,
+		Gateway:           gw,
+		Zone:              p.Zone,
+		Description:       p.Description,
+		TotalIPs:          int(p.TotalIPs),
+		AllocatedIPs:      int(p.AllocatedIPs),
+		AvailableIPs:      int(p.AvailableIPs),
+		CreatedAt:         p.CreatedAt.Unix(),
+		LeaseDuration:     int64(p.DefaultLeaseDuration),
+		InactivityTimeout: int64(p.InactivityTimeout),
+		Reserved:          p.ReservedStrings(),
+		RangeStart:        ipam.AddrString(p.RangeStart),
+		RangeEnd:          ipam.AddrString(p.RangeEnd),
 	}
+	if !p.UpdatedAt.IsZero() {
+		info.UpdatedAt = p.UpdatedAt.Unix()
+	}
+	return info
 }

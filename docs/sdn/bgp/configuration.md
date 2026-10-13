@@ -32,18 +32,18 @@ gateway:
       ipv4: [203.0.113.0/24]
       ipv6: [2001:db8::/36]
     keychains:                       # TCP-AO keychains peers reference by name
-      - name: vps
+      - name: relays
         keys:
           - send-id: 1
             receive-id: 1
             algorithm: hmac-sha256-128   # hmac-sha256-96 | aes-128-cmac-96 | hmac-sha1-96
-            master-key-ref: kms://platform/bgp/vps-key-1
+            master-key-ref: kms://platform/bgp/relays-key-1
     peers:
-      - name: popa-ispa
-        address: 10.4.255.2
+      - name: relay-ispa
+        address: 10.4.128.3          # the relay's end of the tunnel /31 (10.4.128.0/22)
         asn: 64512
         auth-type: md5               # none | md5 (!fips builds only) | tcp-ao
-        auth-key-ref: kms://platform/bgp/popa-ispa
+        auth-key-ref: kms://platform/bgp/relay-ispa
         hold-time: 30
         keepalive-interval: 10
         connect-retry: 120
@@ -594,7 +594,7 @@ separately for IPv4 and IPv6; l2vpn-evpn has its own:
 
 ```yaml
 peers:
-  - address: 10.4.255.2
+  - address: 10.4.128.3
     families: [ipv4-unicast, ipv6-unicast]
     max-prefixes: 10            # default 1000
   - address: 10.4.0.1

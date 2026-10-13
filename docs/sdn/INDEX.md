@@ -153,7 +153,7 @@ tunnel/
 ```
 
 **When to use:**
-- Creating GRE tunnels to VPS nodes
+- Creating GRE tunnels to the transit relays
 - Configuring IPv6 tunnels
 - Setting up BGP peer transport
 

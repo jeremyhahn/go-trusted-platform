@@ -36,9 +36,13 @@ configured twice and drifting.
 You will find `platformctl sdn gateway mode set --modes ...`, a
 `SetGatewayMode` RPC, and a `gateway_mode_set` MCP tool. They drive a deprecated
 three-value bitmask that can express only `overlay`, `edge` and `transit`. It
-is retained for compatibility during migration.
+is retained for compatibility during migration. Asked of `platformd`, it
+answers "not configured", as `gateway status` and the `gateway bgp` verbs do:
+those read a gateway in the daemon's own process, and the control plane runs
+none.
 
-Configure a gateway by its service sections.
+Configure a gateway by its service sections. To see what a gateway is doing,
+use `platformctl sdn gateway snapshot`.
 
 ---
 
@@ -549,15 +553,15 @@ Then reference values from it:
 gateway:
   bgp:
     peers:
-      - name: vps-primary
+      - name: relay-ispa
         auth-type: md5                                   # non-FIPS builds only
-        auth-key-ref: kms://platform/gateway/bgp/vps-primary
+        auth-key-ref: kms://platform/gateway/bgp/relay-ispa
   tunnels:
-    - name: ipsec-primary
+    - name: gre-relay-ispa
       transport: ipsec
       ipsec:
-        key-ref: kms://platform/gateway/tunnel/primary/out?enc=base64
-        peer-key-ref: kms://platform/gateway/tunnel/primary/in?enc=base64
+        key-ref: kms://platform/gateway/tunnel/relay-ispa/out?enc=base64
+        peer-key-ref: kms://platform/gateway/tunnel/relay-ispa/in?enc=base64
 ```
 
 A reference is `kms://<path>` or `secret://<path>` — the same store under two

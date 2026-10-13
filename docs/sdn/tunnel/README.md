@@ -1,7 +1,7 @@
 # Tunnel Management
 
 The `pkg/sdn/tunnel` package manages the gateway's point-to-point tunnels to
-remote relays (the POP A / POP B VPS nodes that hold the site's eBGP) through
+the transit relays (the remote nodes that hold the site's eBGP) through
 Linux netlink, under a **pluggable transport**, and pins each tunnel's outer
 packets to the WAN uplink it was sourced from (#582).
 
@@ -23,7 +23,7 @@ prerequisites are missing is refused before any netlink call
 
 | `transport` | Carrier | Protection | Builds |
 |---|---|---|---|
-| `gre` (default) | `gre` / `gre6` / `ipip` link | none — the shape the VPS relays speak today | all |
+| `gre` (default) | `gre` / `gre6` / `ipip` link | none — the shape most relays speak today | all |
 | `ipsec` | the same carrier | ESP, transport mode, `rfc4106(gcm(aes))` 256-bit with 128-bit ICV, ESN, anti-replay window — programmed as XFRM states and policies selecting only the carrier protocol between the two endpoints | all (FIPS-approved primitives) |
 | `wireguard` | its own kernel interface | WireGuard (Curve25519 / ChaCha20-Poly1305 / BLAKE2s) | `!fips` only — refused with `ErrTransportUnavailable` under the `fips` build tag |
 
@@ -69,15 +69,17 @@ mgr := tunnel.NewManager(logger, tunnel.WithKeyProvider(kms), tunnel.WithUplinks
 defer mgr.Close()
 
 err := mgr.EnsureTunnel(ctx, tunnel.TunnelConfig{
-    Name: "gre-popa-ispa", Type: "gre", Transport: "ipsec", Uplink: "ispa",
-    Local: "198.51.100.4", Remote: "198.51.100.100", TunnelIP: "10.4.255.1/30",
-    IPsec: &tunnel.IPsecConfig{KeyRef: "kms://platform/tunnel/popa-ispa/out", SPIOut: 0x1001, SPIIn: 0x1002},
+    Name: "gre-relay-ispa", Type: "gre", Transport: "ipsec", Uplink: "ispa",
+    Local: "198.51.100.4", Remote: "203.0.113.100", TunnelIP: "10.4.128.2/31",
+    IPsec: &tunnel.IPsecConfig{KeyRef: "kms://platform/tunnel/relay-ispa/out", SPIOut: 0x1001, SPIIn: 0x1002},
 })
 ```
 
 ## Integration with BGP
 
-The tunnel addresses (`10.4.255.x/30`, from the environment's IPAM pool) are the iBGP peer addresses in
+The tunnel addresses (`/31`s from the environment's tunnel point-to-point range,
+`10.4.128.0/22` in environment 4 of the
+[reference network](../../architecture/reference-network.md)) are the iBGP peer addresses in
 `BGPConfig.Neighbors`. The gateway service handler that builds both managers
 from the `tunnels:` and `uplinks:` sections is #568's `backedServiceHandler`.
 

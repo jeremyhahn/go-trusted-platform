@@ -1322,10 +1322,8 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.GatewayService/AnnouncePrefix":        {"/api/v1/gateway/bgp/prefixes", http.MethodPost},
 	"/platform.v1.GatewayService/WithdrawPrefix":        {"/api/v1/gateway/bgp/prefixes", http.MethodDelete},
 	"/platform.v1.GatewayService/ListAnnouncedPrefixes": {"/api/v1/gateway/bgp/prefixes", http.MethodGet},
-	"/platform.v1.GatewayService/ListIPAMPools":         {"/api/v1/gateway/ipam/pools", http.MethodGet},
-	"/platform.v1.GatewayService/AllocateIP":            {"/api/v1/gateway/ipam/allocations", http.MethodPost},
-	"/platform.v1.GatewayService/ReleaseIP":             {"/api/v1/gateway/ipam/allocations", http.MethodDelete},
-	"/platform.v1.GatewayService/ListAllocations":       {"/api/v1/gateway/ipam/allocations", http.MethodGet},
+	// The IPAM verbs route to the full /sdn/gateway/ipam surface; see
+	// gateway_ipam.go.
 
 	// Gateway perf verification — server registrations live in
 	// pkg/api/rest/gateway_perf_handlers.go::registerPerfRoutes.

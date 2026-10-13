@@ -83,8 +83,8 @@ func (s *testTransportGatewayService) GetAdmittedVTEP(_ context.Context, _, _ st
 func (s *testTransportGatewayService) ListAdmittedVTEPs(_ context.Context, _ string) ([]*quicwire.GatewayAdmittedVTEPInfo, error) {
 	return nil, ErrGatewayFeatureNotConfigured
 }
-func (s *testTransportGatewayService) SetMode(_ context.Context, _ string) error {
-	return ErrGatewayFeatureNotConfigured
+func (s *testTransportGatewayService) SetModes(_ context.Context, _ uint32) (*GatewayStatusInfo, error) {
+	return nil, ErrGatewayFeatureNotConfigured
 }
 func (s *testTransportGatewayService) BGPStatus(_ context.Context) (*BGPStatusInfo, error) {
 	return nil, ErrGatewayFeatureNotConfigured

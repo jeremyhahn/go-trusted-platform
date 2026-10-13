@@ -769,22 +769,25 @@ func TestHandleSetGatewayMode(t *testing.T) {
 
 	t.Run("returns error for invalid gateway mode", func(t *testing.T) {
 		t.Parallel()
-		svc := newMockGatewayService()
-		_, router := setupGatewayTestHandler(svc)
+		// No mode, a value past every defined bit, and a defined bit
+		// combined with an undefined one are all refused.
+		for _, modes := range []uint32{0, 999, uint32(GatewayModeOverlay) | 8} {
+			svc := newMockGatewayService()
+			_, router := setupGatewayTestHandler(svc)
 
-		reqBody := SetGatewayModeRequest{Modes: 999}
-		body, _ := json.Marshal(reqBody)
+			body, err := json.Marshal(SetGatewayModeRequest{Modes: modes})
+			require.NoError(t, err)
 
-		req := httptest.NewRequest(http.MethodPut, "/api/v1/sdn/gateway/mode", bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPut, "/api/v1/sdn/gateway/mode", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
 
-		router.ServeHTTP(w, req)
+			router.ServeHTTP(w, req)
 
-		resp := w.Result()
-		defer resp.Body.Close()
-
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			resp := w.Result()
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "modes %d", modes)
+			require.NoError(t, resp.Body.Close())
+		}
 	})
 
 	t.Run("returns error when service fails", func(t *testing.T) {

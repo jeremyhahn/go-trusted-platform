@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
@@ -203,9 +204,9 @@ func TestPlatformServiceProvider_OverlayStubs(t *testing.T) {
 	}
 }
 
-// TestPlatformServiceProvider_GatewayStubs verifies all gateway stub methods
-// return ErrGatewayOperationNotImplemented.
-func TestPlatformServiceProvider_GatewayStubs(t *testing.T) {
+// TestPlatformServiceProvider_GatewayBGPStubs pins the BGP operations as
+// unimplemented: platformd constructs no BGP speaker (gatewayd owns it).
+func TestPlatformServiceProvider_GatewayBGPStubs(t *testing.T) {
 	ctx := context.Background()
 	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
 
@@ -213,28 +214,11 @@ func TestPlatformServiceProvider_GatewayStubs(t *testing.T) {
 		name string
 		fn   func() error
 	}{
-		{"GatewayStatus", func() error { _, err := provider.GatewayStatus(ctx); return err }},
-		{"GatewayModeSet", func() error { _, err := provider.GatewayModeSet(ctx, []string{"router"}); return err }},
 		{"GatewayBGPStatus", func() error { _, err := provider.GatewayBGPStatus(ctx); return err }},
 		{"GatewayBGPPeers", func() error { _, err := provider.GatewayBGPPeers(ctx); return err }},
 		{"GatewayBGPAnnounce", func() error { return provider.GatewayBGPAnnounce(ctx, "10.0.0.0/24", "10.0.0.1") }},
 		{"GatewayBGPWithdraw", func() error { return provider.GatewayBGPWithdraw(ctx, "10.0.0.0/24") }},
 		{"GatewayBGPPrefixes", func() error { _, err := provider.GatewayBGPPrefixes(ctx); return err }},
-		{"GatewayIPAMPools", func() error { _, err := provider.GatewayIPAMPools(ctx, ""); return err }},
-		{"GatewayIPAMAllocate", func() error {
-			_, err := provider.GatewayIPAMAllocate(ctx, "pool1", "dev1", "host1")
-			return err
-		}},
-		{"GatewayIPAMRelease", func() error { return provider.GatewayIPAMRelease(ctx, "10.0.0.5") }},
-		{"GatewayIPAMAllocations", func() error {
-			_, err := provider.GatewayIPAMAllocations(ctx, "pool1")
-			return err
-		}},
-		{"GatewayIPAMPoolCreate", func() error {
-			_, err := provider.GatewayIPAMPoolCreate(ctx, &mcp.IPAMPoolCreateRequest{})
-			return err
-		}},
-		{"GatewayIPAMPoolDelete", func() error { return provider.GatewayIPAMPoolDelete(ctx, "pool1") }},
 	}
 
 	for _, tt := range tests {
@@ -242,6 +226,53 @@ func TestPlatformServiceProvider_GatewayStubs(t *testing.T) {
 			err := tt.fn()
 			if _, ok := err.(ErrGatewayOperationNotImplemented); !ok {
 				t.Errorf("expected ErrGatewayOperationNotImplemented, got %T: %v", err, err)
+			}
+		})
+	}
+}
+
+// TestPlatformServiceProvider_GatewayToolsUnwired checks that the status,
+// mode and IPAM tools are real (#65): with no gateway service or allocator
+// wired they report the missing service rather than a stub.
+func TestPlatformServiceProvider_GatewayToolsUnwired(t *testing.T) {
+	ctx := context.Background()
+	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
+
+	tests := []struct {
+		name    string
+		service string
+		fn      func() error
+	}{
+		{"GatewayStatus", "gateway", func() error { _, err := provider.GatewayStatus(ctx); return err }},
+		{"GatewayModeSet", "gateway", func() error { _, err := provider.GatewayModeSet(ctx, []string{"edge"}); return err }},
+		{"GatewayIPAMPools", "ipam", func() error { _, err := provider.GatewayIPAMPools(ctx, ""); return err }},
+		{"GatewayIPAMPoolGet", "ipam", func() error { _, err := provider.GatewayIPAMPoolGet(ctx, "pool1"); return err }},
+		{"GatewayIPAMAllocate", "ipam", func() error {
+			_, err := provider.GatewayIPAMAllocate(ctx, "pool1", "dev1", "host1")
+			return err
+		}},
+		{"GatewayIPAMRelease", "ipam", func() error { return provider.GatewayIPAMRelease(ctx, "10.0.0.5") }},
+		{"GatewayIPAMAllocations", "ipam", func() error {
+			_, err := provider.GatewayIPAMAllocations(ctx, "pool1")
+			return err
+		}},
+		{"GatewayIPAMPoolCreate", "ipam", func() error {
+			_, err := provider.GatewayIPAMPoolCreate(ctx, &mcp.IPAMPoolCreateRequest{})
+			return err
+		}},
+		{"GatewayIPAMPoolUpdate", "ipam", func() error {
+			_, err := provider.GatewayIPAMPoolUpdate(ctx, "pool1", &mcp.IPAMPoolUpdateRequest{})
+			return err
+		}},
+		{"GatewayIPAMPoolDelete", "ipam", func() error { return provider.GatewayIPAMPoolDelete(ctx, "pool1") }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.fn()
+			var notAvailable ErrServiceNotAvailable
+			if !errors.As(err, &notAvailable) || notAvailable.Service != tt.service {
+				t.Errorf("expected ErrServiceNotAvailable{%q}, got %T: %v", tt.service, err, err)
 			}
 		})
 	}

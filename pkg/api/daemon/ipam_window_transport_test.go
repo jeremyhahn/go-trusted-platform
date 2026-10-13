@@ -136,7 +136,7 @@ func TestIPAMWindow_REST(t *testing.T) {
 // the typed refusal.
 func TestIPAMWindow_QUIC(t *testing.T) {
 	ctx := context.Background()
-	a := newFullGatewayQUICAdapter(backends.NewMemoryBackend(), nil, nil)
+	a := newFullGatewayQUICAdapter(backends.NewMemoryBackend(), nil, nil, nil)
 
 	info, err := a.CreateIPAMPool(ctx, &quic.CreateIPAMPoolOptions{
 		ID: "prov", Name: "prov", CIDR: windowCIDR, Gateway: "192.0.2.1",

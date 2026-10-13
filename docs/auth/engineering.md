@@ -255,7 +255,7 @@ Everything reaches auth capabilities through the quicbaas SDK:
 
 | Need | Call |
 |---|---|
-| Is the admin claimed? | `Security().Auth().Factors().List(ctx, "admin")` |
+| Is the admin claimed? Was a `fido2` factor revoked before? | `Security().Auth().Factors().List(ctx, "admin")` — one read answers both |
 | WebAuthn registration | `Security().Auth().FIDO2().Begin/FinishRegistration` |
 
 **The passkey is NOT enrolled via `Factors().Add`.** The WebAuthn registration
@@ -352,6 +352,28 @@ seam alone.)
    re-opens the ceremony, which is the recovery path for a lost
    authenticator. Deliberate trade-off, recorded in
    [architecture.md §6b.5](architecture.md).
+8a. **A re-claim is never silent (#169).** The listing that refuses a claimed
+   identity in `FinishPasskey` is also the history the audit record is
+   decided by, read once, before the enrolment adds the new passkey. Exactly
+   one record is written per completed claim:
+   - no revoked `fido2` factor → the routine INFO record
+     `adminclaim: system admin claimed` (a first claim; other factor types
+     do not count);
+   - one or more revoked `fido2` factors → a `security_log` record, severity
+     `High`, category `Access Control`, source `authentication`, whose
+     `details` JSON carries `event: "adminclaim.reclaim"`, the identity,
+     email, tenant, `claimed_at`, the new `credential_id` and
+     `replaced_factors[]` (`enrollment_id`, `enrolled_at`, `revoked_at`);
+   - an error-free but empty SDK answer (no listing) → the same record with
+     `event: "adminclaim.reclaim_status_unknown"` and no replaced factors:
+     nothing proves it is a first claim, so it is raised, not assumed.
+
+   A listing that **fails** refuses the claim (the existing fail-closed
+   path, before any enrolment), so a claim never completes with its audit
+   decision unmade. The record goes through the platform's audit emitter,
+   `logging.Logger.Security`. It is stored at level `SECURITY` and shown on
+   the console's Platform → Logs page under that filter (see
+   [daemon engineering §9](../daemon/engineering.md)).
 9. **`RefreshToken` re-reads the user and mints from the store**, not from
    the presented token. `GenerateToken` derives `tenant_id`, `email` and
    `roles` from the user it is handed, so both shortcuts are wrong: a bare
@@ -370,7 +392,7 @@ seam alone.)
 
 | Layer | Location | Covers |
 |---|---|---|
-| Ceremony | `pkg/webservice/v1/adminclaim/service_test.go` | Both proof paths, leaf-only mTLS acceptance, read-error fail-closed, non-stranding ordering, and completion serialisation (all mutation-verified), nine rejection cases (foreign CA, wrong CN, wrong SPIFFE user, wrong key, no signature, expired, self-signed, garbage PEM, foreign peer cert), replay, already-claimed at every step, role materialisation, token spent on failure |
+| Ceremony | `pkg/webservice/v1/adminclaim/service_test.go` | Both proof paths, leaf-only mTLS acceptance, read-error fail-closed, non-stranding ordering, and completion serialisation (all mutation-verified), nine rejection cases (foreign CA, wrong CN, wrong SPIFFE user, wrong key, no signature, expired, self-signed, garbage PEM, foreign peer cert), replay, already-claimed at every step, role materialisation, token spent on failure, the claim audit record (first claim routine, re-claim `High` with the replaced factor, unknown history `High`, unreadable history refuses before enrolment) |
 | Proof primitives | `.../proof_test.go` | Anchor loading, EKU rejection, the mandatory SPIFFE identity (11 shapes incl. a suffix smuggled into the tenant segment), ECDSA/RSA/Ed25519 verification, unsupported key type, every typed error |
 | Store | `.../store_test.go` | Single use, expiry via injected clock, capacity refusal, sweep reclaim, 32-way redemption race with exactly one winner, and a 256-way issue burst that must not exceed the cap (both races mutation-verified against the buggy implementations) |
 | REST | `.../handler_test.go` | Real router + real response writer; status fails closed, rejection is uninformative, mTLS peer path, rate limit |

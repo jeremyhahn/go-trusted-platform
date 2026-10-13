@@ -405,6 +405,21 @@ func TestGatewayToolExecution(t *testing.T) {
 	})
 }
 
+// TestGatewayStatusModePermissions pins the catalog entries for the status
+// and mode tools; a tool without an entry is refused by authz (#65).
+func TestGatewayStatusModePermissions(t *testing.T) {
+	checker := NewAuthorizationChecker(nil, nil)
+	cases := map[string]string{
+		"gateway_status":   "sdn:read",
+		"gateway_mode_set": "sdn:write",
+	}
+	for tool, want := range cases {
+		if got := checker.toolPermissions[tool]; got != want {
+			t.Errorf("permission for %s = %q, want %q", tool, got, want)
+		}
+	}
+}
+
 func TestGatewayIPAMPoolCRUD(t *testing.T) {
 	ctx := context.Background()
 	log := newTestLogger()

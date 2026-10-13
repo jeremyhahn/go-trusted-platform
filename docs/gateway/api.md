@@ -66,6 +66,23 @@ above (daemon REST stack only), QUIC translates to and from the
 messages, with `verdict_at` as Unix seconds), and REST and MCP wrap the bare
 single-VTEP record into `GetGatewayAdmittedVTEPResponse.vtep`.
 
+**Every transport answers status and mode from the one gateway gRPC service
+(#65).** QUIC, MCP and the `/api/v1/sdn/gateway/{status,mode}` REST routes
+bind to it in `pkg/api/daemon/gateway_status_bindings.go`; gRPC, Unix and the
+embedded SDK call it directly, and `/api/v1/gateway/*` proxies gRPC. The
+service reads the gateway that runs in the same process. `platformd` runs
+none (`gatewayd` constructs it), so on a live control plane both verbs answer
+"not configured" everywhere: `Unavailable` on gRPC and Unix, 503 on REST,
+`StatusUnavailable` on QUIC, and the service error from MCP.
+
+The mode is a bitmask: overlay `1`, edge `2`, transit `4`. Every transport
+refuses an empty set or an undefined bit before it asks the gateway:
+`InvalidArgument` on gRPC and Unix, 400 on REST, `StatusInvalidArgument` on
+QUIC.
+MCP's `gateway_mode_set` takes names (`overlay`, `edge`, `transit`) and
+refuses any other name; its result spells the active modes out beside the
+bitmask.
+
 **`SetGatewayMode` is the deprecated compatibility surface.** `GatewayMode`
 carries a deprecation notice in `pkg/sdn/gateway/compat.go` and maps only three
 of the service sections. It is documented here because it exists and is
@@ -84,7 +101,14 @@ callable, not because it is the way to configure a gateway — see
 | Announce prefix | `POST /api/v1/gateway/bgp/prefixes` | `AnnouncePrefix` | `OpGatewayAnnouncePrefix` (`0x05`) | `gateway_bgp_announce` | ✅ |
 | Withdraw prefix | `DELETE /api/v1/gateway/bgp/prefixes` | `WithdrawPrefix` | `OpGatewayWithdrawPrefix` (`0x06`) | `gateway_bgp_withdraw` | ✅ |
 
-BGP is complete on all five reachable transports. Announce and withdraw share
+> **Production status: routed, not backed.** The BGP speaker runs in
+> `gatewayd`; `platformd` never hands one to the gateway service
+> (`GatewayService.SetBGPSpeaker` has no production caller). gRPC, Unix,
+> REST, QUIC and the embedded SDK therefore answer "not configured", and the
+> MCP `gateway_bgp_*` tools answer "not implemented". Backing them needs the
+> same control-plane link to gatewayd-resident services as §5a.
+
+Announce and withdraw share
 the `/bgp/prefixes` path and are distinguished by method; the prefix travels in
 the body, which is why withdraw is a `DELETE` with a payload rather than a path
 parameter.
@@ -114,6 +138,39 @@ category opcode `0x3F`**.
 The `/sdn/gateway/ipam` surface wraps the documented snake_case objects in
 the standard platform response envelope (`{code, error, success, payload}`);
 the reduced `/gateway/ipam` surface keeps its protojson payloads.
+
+**Every IPAM verb is served from the allocator `platformd` owns**, on every
+transport; the MCP tools live in `pkg/api/daemon/gateway_ipam_tools.go`.
+A pool update changes only what it names on REST, QUIC and MCP. The gRPC
+`UpdateIPAMPool` replaces `zone` and `description` outright, and either
+duration whenever it is not negative: send `-1` to keep a duration, and the
+current zone and description to keep those. `platformctl sdn ipam pool
+update` does that for every flag it was not given.
+
+**The Go SDK client carries status, mode and every IPAM verb on every
+transport.** Over REST it uses the full `/api/v1/sdn/gateway/ipam` surface
+(`sdk/go/transport/rest/gateway_ipam.go`). Over QUIC it uses the `0x2F`
+sub-opcodes (`sdk/go/transport/quic/gateway_status_ipam.go`), and over MCP
+the `gateway_*` tools (`sdk/go/transport/mcp/gateway_status_ipam.go`). gRPC,
+Unix and embedded call the service directly. The client maps the gRPC
+`UpdateIPAMPool` onto the REST, QUIC and MCP updates, which change only what
+they name:
+
+- A `-1` duration is omitted, and a positive one is sent.
+- `update_window` sends the whole window, so an empty bound or reserved list
+  clears it, as on gRPC.
+
+Before anything is sent, the client refuses with `InvalidArgument` what a
+transport cannot carry:
+
+- On REST, QUIC and MCP: a zero duration, because those updates keep a
+  duration they are not given.
+- On MCP only:
+  - an inactivity timeout;
+  - a caller-chosen pool ID on create;
+  - a duration that is not a whole number of seconds.
+
+An empty zone or description is kept on those three transports, not cleared.
 
 ---
 

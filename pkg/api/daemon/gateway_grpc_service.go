@@ -26,6 +26,7 @@ import (
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -211,6 +212,9 @@ func (s *GatewayService) GetGatewayStatus(ctx context.Context, req *platformv1.G
 func (s *GatewayService) SetGatewayMode(ctx context.Context, req *platformv1.SetGatewayModeRequest) (*platformv1.SetGatewayModeResponse, error) {
 	if req.GetModes() == 0 {
 		return nil, status.Error(codes.InvalidArgument, "modes is required")
+	}
+	if req.GetModes()&^quicwire.GatewayModesAll != 0 {
+		return nil, status.Errorf(codes.InvalidArgument, "modes %#x sets an undefined mode bit", req.GetModes())
 	}
 
 	s.mu.Lock()

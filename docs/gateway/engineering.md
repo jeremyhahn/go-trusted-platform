@@ -868,7 +868,7 @@ unexported `hardenOps` seam so the ordering is a unit test rather than a
 hope — the drop is irreversible, so a test that made the real calls would
 strip the test binary for the rest of the run.
 
-**Every thread, not one: the drop re-executes ([#657](http://git.example.internal/jeremyhahn/go-trusted-platform/issues/657)).**
+**Every thread, not one: the drop re-executes (#657).**
 `prctl` and `capset` apply to the calling thread only, while the Go runtime
 has started several threads before `main` runs, so the steps above harden one
 thread out of many. `EnterHardened` closes that by re-executing gatewayd from

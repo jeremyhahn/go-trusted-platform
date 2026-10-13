@@ -449,7 +449,11 @@ classifies a tool it cannot be called by any caller, which is why `platform_tpm_
 and `attestation_*` answer `-32603 tool '<name>' has no permission mapping` on
 the fleet. Where a capability has two tool names, frequently only the older one
 is mapped ([`docs/dns/api.md`](../dns/api.md) §3,
-[`docs/vtpm/api.md`](../vtpm/api.md) §5).
+[`docs/vtpm/api.md`](../vtpm/api.md) §5). Since that measurement #65 mapped
+`gateway_status` (`sdn:read`) and `gateway_mode_set` (`sdn:write`), so the
+`gateway` family has two fewer refused tools than the count above; its
+`gateway_bgp_*` tools remain unmapped
+([`docs/gateway/api.md`](../gateway/api.md) §3).
 
 **MCP discovery is not gated.** Over HTTPS, `initialize` and `tools/list` read no
 token (`pkg/api/mcp/server.go` `handleInitialize`, `handleToolsList`), so an

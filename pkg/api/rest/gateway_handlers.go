@@ -596,9 +596,9 @@ func (h *GatewayHandlers) handleSetGatewayMode(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Validate mode bitmask
+	// Validate mode bitmask: at least one mode, and no undefined bit.
 	validModes := uint32(GatewayModeOverlay | GatewayModeEdge | GatewayModeTransit)
-	if req.Modes > validModes {
+	if req.Modes == 0 || req.Modes&^validModes != 0 {
 		h.writeError(w, http.StatusBadRequest, ErrInvalidGatewayMode{Mode: req.Modes})
 		return
 	}

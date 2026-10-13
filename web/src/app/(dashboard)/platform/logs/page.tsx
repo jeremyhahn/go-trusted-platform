@@ -16,9 +16,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { LogViewer } from "@/components/features/platform";
 import { useToast } from "@/hooks/use-toast";
+import { LOG_LEVELS, toLogLevel } from "@/lib/log-level";
 import type { LogEntry, LogLevel } from "@/types/platform";
-
-const LOG_LEVELS: LogLevel[] = ["DEBUG", "INFO", "WARN", "ERROR"];
 
 interface WireEntry {
   time: string;
@@ -358,7 +357,7 @@ function toEntry(w: WireEntry): LogEntry {
   return {
     id: `${w.time}-${__entrySeq}`,
     timestamp: w.time,
-    level: (w.level?.toUpperCase() as LogLevel) ?? "INFO",
+    level: toLogLevel(w.level),
     service: w.service ?? "platformd",
     message: w.msg ?? "",
     metadata: w.attrs,

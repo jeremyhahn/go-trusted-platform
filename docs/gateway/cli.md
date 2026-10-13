@@ -72,8 +72,13 @@ service account, or if the process hosts no enabled service.
 
 **`gateway mode set`** takes `--modes <comma-separated>` (required). It drives
 the deprecated `GatewayMode` bitmask, which can express only three of the
-service sections (`overlay`, `edge`, `transit`). It is retained for
-compatibility. Configure a gateway by its service sections, not with this verb —
+service sections (`overlay`, `edge`, `transit`). Any other name is refused
+before the request is sent. It is retained for compatibility.
+
+**`gateway status` and `gateway mode set` answer "not configured" from
+`platformd`.** They read the gateway in the daemon's own process, and the
+control plane runs none (`gatewayd` does). The `gateway bgp` verbs answer
+the same way: `platformd` has no BGP speaker. See [api.md](api.md) §2 and §3. Configure a gateway by its service sections, not with this verb —
 see [architecture.md](architecture.md).
 
 **`gateway bgp announce`**: `--prefix` (required), `--next-hop` (optional).
@@ -123,8 +128,14 @@ Pools first, then allocations from them.
 | `list` | `--zone` (filter; empty returns all pools) |
 | `get` | `--id` (required) |
 | `create` | `--id` (optional, generated if omitted), `--name` (required), `--cidr` (required, **immutable**), `--gateway`, `--zone`, `--description` |
-| `update` | `--id` (required), `--name`, `--gateway`, `--zone`, `--description` |
+| `update` | `--id` (required), `--name`, `--gateway`, `--zone`, `--description`, `--lease-seconds`, `--reserved`, `--range-start`, `--range-end` |
 | `delete` | `--id` (required) |
+
+**`update` changes only the flags you pass.** It reads the pool first and
+sends the current zone and description, and leaves the lease and inactivity
+timeout alone, for every flag it was not given. Pass a flag empty
+(`--zone ""`) or zero (`--lease-seconds 0`) to clear it. The window flags are
+the exception: passing any of them replaces the whole window.
 
 **`--cidr` is immutable.** `update` has no `--cidr` flag, deliberately: changing
 a pool's range under live allocations would orphan them. A pool with the wrong

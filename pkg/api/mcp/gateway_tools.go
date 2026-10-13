@@ -230,7 +230,7 @@ func (r *ToolRegistry) registerGatewayTools() {
 
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_mode_set",
-		Description: "Set the active gateway modes. Modes determine gateway capabilities (e.g., router, NAT, firewall)",
+		Description: "Set the active gateway modes, replacing the current set. Returns the gateway status after the change",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -238,8 +238,10 @@ func (r *ToolRegistry) registerGatewayTools() {
 					"type": "array",
 					"items": map[string]interface{}{
 						"type": "string",
+						"enum": []string{"overlay", "edge", "transit"},
 					},
-					"description": "Array of mode names to activate (e.g., ['router', 'nat', 'firewall'])",
+					"minItems":    1,
+					"description": "Mode names to activate: overlay, edge and/or transit",
 				},
 			},
 			"required": []string{"modes"},

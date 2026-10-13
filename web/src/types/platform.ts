@@ -4,7 +4,7 @@
 
 export type ServiceStatus = 'up' | 'down' | 'degraded';
 export type SystemStatus = 'healthy' | 'degraded' | 'down';
-export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
+export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'FATAL' | 'SECURITY';
 
 export interface ServiceHealth {
   name: string;

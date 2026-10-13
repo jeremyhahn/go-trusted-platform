@@ -199,9 +199,9 @@ func (h *ProxyHandler) errorResponse(statusByte byte, err error) *quicwire.Respo
 	}
 }
 
-// proxyGRPCCodeToQUICStatus maps gRPC codes produced by the shared
-// ProxyGRPCService to QUIC status bytes.
-var proxyGRPCCodeToQUICStatus = map[codes.Code]byte{
+// grpcCodeToQUICStatus maps gRPC codes produced by the shared gRPC services
+// (ProxyGRPCService, the gateway service) to QUIC status bytes.
+var grpcCodeToQUICStatus = map[codes.Code]byte{
 	codes.InvalidArgument:    quicwire.StatusInvalidArgument,
 	codes.Unauthenticated:    quicwire.StatusUnauthorized,
 	codes.PermissionDenied:   quicwire.StatusPermissionDenied,
@@ -217,7 +217,7 @@ var proxyGRPCCodeToQUICStatus = map[codes.Code]byte{
 // semantics established by the service's mapError table.
 func (h *ProxyHandler) proxyErrorResponse(op string, err error) *quicwire.Response {
 	quicStatus := quicwire.StatusInternalError
-	if mapped, ok := proxyGRPCCodeToQUICStatus[status.Code(err)]; ok {
+	if mapped, ok := grpcCodeToQUICStatus[status.Code(err)]; ok {
 		quicStatus = mapped
 	}
 	h.logger.Error(err, "proxy QUIC operation failed", "operation", op)

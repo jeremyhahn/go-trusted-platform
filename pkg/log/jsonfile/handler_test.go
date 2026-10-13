@@ -22,6 +22,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
 func newTestHandler(t *testing.T, opts Options) (*Handler, string) {
@@ -157,6 +159,62 @@ func TestQuery_FiltersByLevelAndService(t *testing.T) {
 	}
 	if len(got.Entries) != 1 || got.Entries[0].Msg != "boom" {
 		t.Fatalf("grep result = %+v", got.Entries)
+	}
+}
+
+// TestHandler_NamesPlatformLevels proves the platform's custom levels land
+// on disk under names the level filter ranks. Written as slog's default
+// "ERROR+12", a security record ranked as INFO and vanished from an
+// ERROR-and-above view.
+func TestHandler_NamesPlatformLevels(t *testing.T) {
+	h, dir := newTestHandler(t, Options{Service: "levels"})
+	l := slog.New(h)
+	ctx := context.Background()
+	l.Log(ctx, slog.LevelWarn+1, "unregistered")
+	l.Log(ctx, logging.LevelFatal, "fatal")
+	l.Log(ctx, logging.LevelSecurity, "security_log")
+
+	got, err := Query(dir, Filter{})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	want := map[string]string{
+		"unregistered": "WARN+1",
+		"fatal":        "FATAL",
+		"security_log": "SECURITY",
+	}
+	if len(got.Entries) != len(want) {
+		t.Fatalf("expected %d entries, got %d", len(want), len(got.Entries))
+	}
+	for _, e := range got.Entries {
+		if e.Level != want[e.Msg] {
+			t.Errorf("%s: Level = %q, want %q", e.Msg, e.Level, want[e.Msg])
+		}
+	}
+
+	got, err = Query(dir, Filter{MinLevel: "ERROR"})
+	if err != nil {
+		t.Fatalf("Query (ERROR): %v", err)
+	}
+	if len(got.Entries) != 2 {
+		t.Fatalf("expected fatal and security at ERROR+, got %+v", got.Entries)
+	}
+
+	got, err = Query(dir, Filter{MinLevel: "security"})
+	if err != nil {
+		t.Fatalf("Query (security): %v", err)
+	}
+	if len(got.Entries) != 1 || got.Entries[0].Msg != "security_log" {
+		t.Fatalf("expected only the security record, got %+v", got.Entries)
+	}
+}
+
+func TestLevelRank_OrdersSecurityAboveFatal(t *testing.T) {
+	if levelRank("SECURITY") <= levelRank("FATAL") {
+		t.Errorf("SECURITY must outrank FATAL so no level filter hides it")
+	}
+	if levelRank("ERROR+12") != levelRank("INFO") {
+		t.Errorf("an unknown level must rank as INFO")
 	}
 }
 

@@ -1199,7 +1199,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		// 0x08, 0x0C-0x0F) and zone operations (0x10-0x14) are both served over QUIC.
 		// defaultIPAM is the in-memory allocator created above. zoneSvcInstance may
 		// be nil — zone methods degrade to StatusUnavailable in that case.
-		quicGatewaySvc := newFullGatewayQUICAdapter(defaultIPAM, zoneSvcInstance, gatewayService)
+		quicGatewaySvc := newFullGatewayQUICAdapter(defaultIPAM, zoneSvcInstance, gatewayService, gatewayService)
 		gatewayQUICHandler := quic.NewGatewayHandler(quicLogger, quicGatewaySvc)
 		// Wire the perf backend so the perf sub-opcodes (0x36-0x38) are
 		// served over QUIC by the same shared perf service as the other
@@ -1483,7 +1483,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Wire gateway IPAM REST handlers. Pass the same in-memory allocator
 	// used by the gRPC service so REST and gRPC share the same state.
 	if daemon.concreteRestServer != nil && daemon.gatewayGRPCService != nil {
-		daemon.concreteRestServer.SetGatewayIPAMService(daemon.gatewayGRPCService.IPAMAllocator())
+		daemon.concreteRestServer.SetGatewayIPAMService(daemon.gatewayGRPCService.IPAMAllocator(), daemon.gatewayGRPCService)
 		daemon.concreteRestServer.SetGatewaySnapshotService(daemon.gatewayGRPCService)
 		daemon.concreteRestServer.SetGatewayPerfService(daemon.gatewayPerfService)
 		logger.Info("Gateway IPAM REST service wired into REST server")
@@ -1839,6 +1839,7 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		IPAMService:           d.gatewayGRPCService.IPAMAllocator(),
 		GatewayPerf:           d.gatewayPerfService,
 		GatewaySnapshots:      d.gatewayGRPCService,
+		GatewayStatus:         d.gatewayGRPCService,
 		ConfigDeliveryService: d.configDeliveryService,
 		ProxyService:          d.proxyGRPCService,
 	})

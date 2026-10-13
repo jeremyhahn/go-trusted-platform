@@ -110,6 +110,10 @@ func toolPermissionCatalog() map[string]string {
 	// Gateway load balancer tools
 	// The telemetry snapshot is a read of what the datapath programmed.
 	permissions["gateway_snapshot"] = "sdn:read"
+	// Gateway status and the deprecated mode bitmask (#65). Setting the mode
+	// reconfigures the gateway's services, so it is a write.
+	permissions["gateway_status"] = "sdn:read"
+	permissions["gateway_mode_set"] = "sdn:write"
 	// Admitted overlay VTEPs are read from the same snapshot.
 	permissions["gateway_admitted_vtep"] = "sdn:read"
 	permissions["gateway_admitted_vteps"] = "sdn:read"

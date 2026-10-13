@@ -118,7 +118,7 @@ func TestGatewayAdmittedVTEP_QUICRefusesMistypedMessages(t *testing.T) {
 	conn := newConnWithSender(t, sender)
 	err := conn.Invoke(context.Background(), platformv1.GatewayService_GetGatewayAdmittedVTEP_FullMethodName,
 		&platformv1.ListGatewayAdmittedVTEPsRequest{}, &platformv1.GetGatewayAdmittedVTEPResponse{})
-	if status.Code(err) != codes.Internal || sender.rawCalls != 0 {
+	if status.Code(err) != codes.InvalidArgument || sender.rawCalls != 0 {
 		t.Fatalf("a mistyped request must fail before the wire: code %v, sends %d", status.Code(err), sender.rawCalls)
 	}
 

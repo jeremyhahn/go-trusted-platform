@@ -19,6 +19,8 @@ import (
 	"net"
 	"time"
 
+	grpcstatus "google.golang.org/grpc/status"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
@@ -27,14 +29,6 @@ import (
 const (
 	gatewayDefaultLimit int32 = 100
 	gatewayMaxLimit     int32 = 1000
-)
-
-// Gateway modes
-const (
-	GatewayModeL2       = "l2"
-	GatewayModeL3       = "l3"
-	GatewayModeNAT      = "nat"
-	GatewayModeDisabled = "disabled"
 )
 
 // Gateway sentinel errors
@@ -48,7 +42,7 @@ var (
 	ErrGatewayMissingMode = errors.New("gateway mode is required")
 
 	// ErrGatewayInvalidMode is returned when an invalid gateway mode is specified.
-	ErrGatewayInvalidMode = errors.New("invalid gateway mode: must be l2, l3, nat, or disabled")
+	ErrGatewayInvalidMode = errors.New("invalid gateway mode: must combine overlay (1), edge (2) and transit (4)")
 
 	// ErrGatewayMissingPrefix is returned when a prefix is required but
 	// not provided.
@@ -173,8 +167,9 @@ type GatewayServiceInterface interface {
 	GetAdmittedVTEP(ctx context.Context, gatewayID, vtep string) (*quicwire.GatewayAdmittedVTEPInfo, error)
 	ListAdmittedVTEPs(ctx context.Context, gatewayID string) ([]*quicwire.GatewayAdmittedVTEPInfo, error)
 
-	// Mode operations
-	SetMode(ctx context.Context, mode string) error
+	// Mode operations. SetModes takes the GatewayModeEnum bitmask and
+	// returns the gateway status after the change.
+	SetModes(ctx context.Context, modes uint32) (*GatewayStatusInfo, error)
 
 	// BGP operations
 	BGPStatus(ctx context.Context) (*BGPStatusInfo, error)
@@ -211,23 +206,9 @@ type GatewayServiceInterface interface {
 	NAT64Status(ctx context.Context) (*quicwire.NAT64StatusInfo, error)
 }
 
-// GatewayStatusInfo contains gateway status information
-type GatewayStatusInfo struct {
-	Enabled       bool              `codec:"enabled"`
-	Mode          string            `codec:"mode"`
-	BGPEnabled    bool              `codec:"bgp_enabled"`
-	BGPRouterID   string            `codec:"bgp_router_id,omitempty"`
-	BGPLocalAS    uint32            `codec:"bgp_local_as,omitempty"`
-	ExternalIface string            `codec:"external_iface,omitempty"`
-	InternalIface string            `codec:"internal_iface,omitempty"`
-	NATEnabled    bool              `codec:"nat_enabled"`
-	PeerCount     int               `codec:"peer_count"`
-	PrefixCount   int               `codec:"prefix_count"`
-	PoolCount     int               `codec:"pool_count"`
-	HealthStatus  string            `codec:"health_status"`
-	Uptime        int64             `codec:"uptime"`
-	Metadata      map[string]string `codec:"metadata,omitempty"`
-}
+// GatewayStatusInfo contains gateway status information; the wire shape
+// lives in quicwire so the SDK adapter decodes the same struct.
+type GatewayStatusInfo = quicwire.GatewayStatusInfo
 
 // GatewaySnapshotInfo is one gateway's telemetry snapshot on the wire: the
 // datapath sections each service reports, carried verbatim so QUIC clients
@@ -463,48 +444,12 @@ type AnnouncePrefixOptions struct {
 	Labels      map[string]string `codec:"labels,omitempty"`
 }
 
-// IPAMPoolInfo contains IPAM pool information
-type IPAMPoolInfo struct {
-	ID            string            `codec:"id"`
-	Name          string            `codec:"name"`
-	CIDR          string            `codec:"cidr"`
-	Gateway       string            `codec:"gateway,omitempty"`
-	Zone          string            `codec:"zone,omitempty"`
-	Description   string            `codec:"description,omitempty"`
-	TotalIPs      int               `codec:"total_ips"`
-	AllocatedIPs  int               `codec:"allocated_ips"`
-	AvailableIPs  int               `codec:"available_ips"`
-	ReservedIPs   int               `codec:"reserved_ips"`
-	Type          string            `codec:"type"` // static, dynamic, dhcp
-	VNI           uint32            `codec:"vni,omitempty"`
-	TenantID      string            `codec:"tenant_id,omitempty"`
-	Labels        map[string]string `codec:"labels,omitempty"`
-	CreatedAt     int64             `codec:"created_at"`
-	LastAllocated int64             `codec:"last_allocated,omitempty"`
-	// Reserved lists never-allocatable prefixes (CIDR notation); the
-	// gateway is always reserved as well.
-	Reserved []string `codec:"reserved,omitempty"`
-	// RangeStart and RangeEnd bound dynamic allocation; empty means the
-	// whole CIDR.
-	RangeStart string `codec:"range_start,omitempty"`
-	RangeEnd   string `codec:"range_end,omitempty"`
-}
+// IPAMPoolInfo contains IPAM pool information (wire shape in quicwire).
+type IPAMPoolInfo = quicwire.IPAMPoolInfo
 
-// IPAllocationInfo contains IP allocation information
-type IPAllocationInfo struct {
-	ID         string            `codec:"id"`
-	PoolID     string            `codec:"pool_id"`
-	IPAddress  string            `codec:"ip_address"`
-	MACAddress string            `codec:"mac_address,omitempty"`
-	Hostname   string            `codec:"hostname,omitempty"`
-	Owner      string            `codec:"owner,omitempty"`
-	Type       string            `codec:"type"` // static, dynamic
-	Status     string            `codec:"status"`
-	ExpiresAt  int64             `codec:"expires_at,omitempty"`
-	Labels     map[string]string `codec:"labels,omitempty"`
-	CreatedAt  int64             `codec:"created_at"`
-	UpdatedAt  int64             `codec:"updated_at"`
-}
+// IPAllocationInfo contains IP allocation information (wire shape in
+// quicwire).
+type IPAllocationInfo = quicwire.IPAllocationInfo
 
 // AllocateIPOptions contains options for allocating an IP address
 type AllocateIPOptions struct {
@@ -526,6 +471,8 @@ type CreateIPAMPoolOptions struct {
 	Zone          string `codec:"zone,omitempty"`
 	Description   string `codec:"description,omitempty"`
 	LeaseDuration int64  `codec:"lease_duration_nanos,omitempty"`
+	// InactivityTimeout is nanoseconds; zero keeps the allocator default.
+	InactivityTimeout int64 `codec:"inactivity_timeout_nanos,omitempty"`
 	// Reserved lists never-allocatable prefixes (CIDR notation).
 	Reserved []string `codec:"reserved,omitempty"`
 	// RangeStart and RangeEnd bound dynamic allocation; set both or neither.
@@ -541,6 +488,8 @@ type UpdateIPAMPoolOptions struct {
 	Zone          string `codec:"zone,omitempty"`
 	Description   string `codec:"description,omitempty"`
 	LeaseDuration int64  `codec:"lease_duration_nanos,omitempty"`
+	// InactivityTimeout is nanoseconds; zero leaves it unchanged.
+	InactivityTimeout int64 `codec:"inactivity_timeout_nanos,omitempty"`
 	// UpdateWindow, when true, makes Reserved, RangeStart and RangeEnd
 	// replace the pool's allocation window (empty values clear it).
 	UpdateWindow bool     `codec:"update_window,omitempty"`
@@ -767,14 +716,13 @@ func (h *GatewayHandler) HandleRequest(ctx context.Context, req *quicwire.Reques
 // Request/Response Types
 // =============================================================================
 
-// GatewayStatusRequest represents a status request
-type GatewayStatusRequest struct{}
-
-// GatewayStatusResponse represents a status response
-type GatewayStatusResponse struct {
-	Status    *GatewayStatusInfo `codec:"status"`
-	Timestamp int64              `codec:"timestamp"`
-}
+// Status and mode wire shapes live in quicwire.
+type (
+	GatewayStatusRequest   = quicwire.GatewayStatusRequest
+	GatewayStatusResponse  = quicwire.GatewayStatusResponse
+	GatewaySetModeRequest  = quicwire.GatewaySetModeRequest
+	GatewaySetModeResponse = quicwire.GatewaySetModeResponse
+)
 
 // GatewaySnapshotRequest asks for one gateway's telemetry snapshot; an
 // empty GatewayID means the gateway this node runs itself.
@@ -793,18 +741,6 @@ type GatewayListSnapshotsResponse struct {
 	Snapshots []*GatewaySnapshotInfo `codec:"snapshots"`
 	Count     int32                  `codec:"count"`
 	Timestamp int64                  `codec:"timestamp"`
-}
-
-// GatewaySetModeRequest represents a mode set request
-type GatewaySetModeRequest struct {
-	Mode string `codec:"mode"`
-}
-
-// GatewaySetModeResponse represents a mode set response
-type GatewaySetModeResponse struct {
-	Mode      string `codec:"mode"`
-	Success   bool   `codec:"success"`
-	Timestamp int64  `codec:"timestamp"`
 }
 
 // GatewayBGPStatusRequest represents a BGP status request
@@ -869,132 +805,25 @@ type GatewayListPrefixesResponse struct {
 	Timestamp int64         `codec:"timestamp"`
 }
 
-// GatewayListIPAMPoolsRequest represents an IPAM pools list request
-type GatewayListIPAMPoolsRequest struct {
-	// Zone filters pools by trust/exposure zone; empty returns all pools.
-	Zone  string `codec:"zone,omitempty"`
-	Limit int32  `codec:"limit,omitempty"`
-}
-
-// GatewayGetIPAMPoolRequest represents an IPAM pool get request
-type GatewayGetIPAMPoolRequest struct {
-	PoolID string `codec:"pool_id"`
-}
-
-// GatewayGetIPAMPoolResponse represents an IPAM pool get response
-type GatewayGetIPAMPoolResponse struct {
-	Pool      *IPAMPoolInfo `codec:"pool"`
-	Timestamp int64         `codec:"timestamp"`
-}
-
-// GatewayUpdateIPAMPoolRequest represents an IPAM pool update request
-type GatewayUpdateIPAMPoolRequest struct {
-	PoolID        string `codec:"pool_id"`
-	Name          string `codec:"name,omitempty"`
-	Gateway       string `codec:"gateway,omitempty"`
-	Zone          string `codec:"zone,omitempty"`
-	Description   string `codec:"description,omitempty"`
-	LeaseDuration int64  `codec:"lease_duration_nanos,omitempty"`
-	// UpdateWindow, when true, makes Reserved, RangeStart and RangeEnd
-	// replace the pool's allocation window (empty values clear it).
-	UpdateWindow bool     `codec:"update_window,omitempty"`
-	Reserved     []string `codec:"reserved,omitempty"`
-	RangeStart   string   `codec:"range_start,omitempty"`
-	RangeEnd     string   `codec:"range_end,omitempty"`
-}
-
-// GatewayUpdateIPAMPoolResponse represents an IPAM pool update response
-type GatewayUpdateIPAMPoolResponse struct {
-	Pool      *IPAMPoolInfo `codec:"pool"`
-	Timestamp int64         `codec:"timestamp"`
-}
-
-// GatewayListIPAMPoolsResponse represents an IPAM pools list response
-type GatewayListIPAMPoolsResponse struct {
-	Pools     []*IPAMPoolInfo `codec:"pools"`
-	Count     int32           `codec:"count"`
-	Timestamp int64           `codec:"timestamp"`
-}
-
-// GatewayCreateIPAMPoolRequest represents an IPAM pool create request
-type GatewayCreateIPAMPoolRequest struct {
-	ID            string `codec:"id,omitempty"`
-	Name          string `codec:"name"`
-	CIDR          string `codec:"cidr"`
-	Gateway       string `codec:"gateway,omitempty"`
-	Zone          string `codec:"zone,omitempty"`
-	Description   string `codec:"description,omitempty"`
-	LeaseDuration int64  `codec:"lease_duration_nanos,omitempty"`
-	// Reserved lists never-allocatable prefixes (CIDR notation).
-	Reserved []string `codec:"reserved,omitempty"`
-	// RangeStart and RangeEnd bound dynamic allocation; set both or neither.
-	RangeStart string `codec:"range_start,omitempty"`
-	RangeEnd   string `codec:"range_end,omitempty"`
-}
-
-// GatewayCreateIPAMPoolResponse represents an IPAM pool create response
-type GatewayCreateIPAMPoolResponse struct {
-	Pool      *IPAMPoolInfo `codec:"pool"`
-	Timestamp int64         `codec:"timestamp"`
-}
-
-// GatewayDeleteIPAMPoolRequest represents an IPAM pool delete request
-type GatewayDeleteIPAMPoolRequest struct {
-	PoolID string `codec:"pool_id"`
-}
-
-// GatewayDeleteIPAMPoolResponse represents an IPAM pool delete response
-type GatewayDeleteIPAMPoolResponse struct {
-	PoolID    string `codec:"pool_id"`
-	Success   bool   `codec:"success"`
-	Timestamp int64  `codec:"timestamp"`
-}
-
-// GatewayAllocateIPRequest represents an IP allocation request
-type GatewayAllocateIPRequest struct {
-	PoolID     string            `codec:"pool_id"`
-	IPAddress  string            `codec:"ip_address,omitempty"`
-	MACAddress string            `codec:"mac_address,omitempty"`
-	Hostname   string            `codec:"hostname,omitempty"`
-	Owner      string            `codec:"owner,omitempty"`
-	Type       string            `codec:"type,omitempty"`
-	TTL        int64             `codec:"ttl,omitempty"`
-	Labels     map[string]string `codec:"labels,omitempty"`
-}
-
-// GatewayAllocateIPResponse represents an IP allocation response
-type GatewayAllocateIPResponse struct {
-	Allocation *IPAllocationInfo `codec:"allocation"`
-	Timestamp  int64             `codec:"timestamp"`
-}
-
-// GatewayReleaseIPRequest represents an IP release request. PoolID is
-// optional; when set, the address must belong to that pool.
-type GatewayReleaseIPRequest struct {
-	PoolID    string `codec:"pool_id,omitempty"`
-	IPAddress string `codec:"ip_address"`
-}
-
-// GatewayReleaseIPResponse represents an IP release response
-type GatewayReleaseIPResponse struct {
-	PoolID    string `codec:"pool_id"`
-	IPAddress string `codec:"ip_address"`
-	Success   bool   `codec:"success"`
-	Timestamp int64  `codec:"timestamp"`
-}
-
-// GatewayListAllocationsRequest represents an allocations list request
-type GatewayListAllocationsRequest struct {
-	PoolID string `codec:"pool_id"`
-	Limit  int32  `codec:"limit,omitempty"`
-}
-
-// GatewayListAllocationsResponse represents an allocations list response
-type GatewayListAllocationsResponse struct {
-	Allocations []*IPAllocationInfo `codec:"allocations"`
-	Count       int32               `codec:"count"`
-	Timestamp   int64               `codec:"timestamp"`
-}
+// IPAM wire shapes live in quicwire.
+type (
+	GatewayListIPAMPoolsRequest    = quicwire.GatewayListIPAMPoolsRequest
+	GatewayListIPAMPoolsResponse   = quicwire.GatewayListIPAMPoolsResponse
+	GatewayGetIPAMPoolRequest      = quicwire.GatewayGetIPAMPoolRequest
+	GatewayGetIPAMPoolResponse     = quicwire.GatewayGetIPAMPoolResponse
+	GatewayCreateIPAMPoolRequest   = quicwire.GatewayCreateIPAMPoolRequest
+	GatewayCreateIPAMPoolResponse  = quicwire.GatewayCreateIPAMPoolResponse
+	GatewayUpdateIPAMPoolRequest   = quicwire.GatewayUpdateIPAMPoolRequest
+	GatewayUpdateIPAMPoolResponse  = quicwire.GatewayUpdateIPAMPoolResponse
+	GatewayDeleteIPAMPoolRequest   = quicwire.GatewayDeleteIPAMPoolRequest
+	GatewayDeleteIPAMPoolResponse  = quicwire.GatewayDeleteIPAMPoolResponse
+	GatewayAllocateIPRequest       = quicwire.GatewayAllocateIPRequest
+	GatewayAllocateIPResponse      = quicwire.GatewayAllocateIPResponse
+	GatewayReleaseIPRequest        = quicwire.GatewayReleaseIPRequest
+	GatewayReleaseIPResponse       = quicwire.GatewayReleaseIPResponse
+	GatewayListAllocationsRequest  = quicwire.GatewayListAllocationsRequest
+	GatewayListAllocationsResponse = quicwire.GatewayListAllocationsResponse
+)
 
 // =============================================================================
 // Handler Methods
@@ -1133,25 +962,21 @@ func (h *GatewayHandler) handleSetMode(ctx context.Context, req *quicwire.Reques
 		return h.errorResponse(quicwire.StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
 	}
 
-	if setReq.Mode == "" {
+	if setReq.Modes == 0 {
 		return h.errorResponse(quicwire.StatusInvalidArgument, ErrGatewayMissingMode)
 	}
-
-	// Validate mode
-	switch setReq.Mode {
-	case GatewayModeL2, GatewayModeL3, GatewayModeNAT, GatewayModeDisabled:
-		// Valid mode
-	default:
+	if setReq.Modes&^quicwire.GatewayModesAll != 0 {
 		return h.errorResponse(quicwire.StatusInvalidArgument, ErrGatewayInvalidMode)
 	}
 
-	if err := h.gatewayService.SetMode(ctx, setReq.Mode); err != nil {
+	status, err := h.gatewayService.SetModes(ctx, setReq.Modes)
+	if err != nil {
 		h.logger.Error(err, "failed to set gateway mode")
 		return h.gatewayErrorResponse(err)
 	}
 
 	resp := &GatewaySetModeResponse{
-		Mode:      setReq.Mode,
+		Status:    status,
 		Success:   true,
 		Timestamp: time.Now().Unix(),
 	}
@@ -1453,16 +1278,17 @@ func (h *GatewayHandler) handleCreateIPAMPool(ctx context.Context, req *quicwire
 	}
 
 	opts := &CreateIPAMPoolOptions{
-		ID:            createReq.ID,
-		Name:          createReq.Name,
-		CIDR:          createReq.CIDR,
-		Gateway:       createReq.Gateway,
-		Zone:          createReq.Zone,
-		Description:   createReq.Description,
-		LeaseDuration: createReq.LeaseDuration,
-		Reserved:      createReq.Reserved,
-		RangeStart:    createReq.RangeStart,
-		RangeEnd:      createReq.RangeEnd,
+		ID:                createReq.ID,
+		Name:              createReq.Name,
+		CIDR:              createReq.CIDR,
+		Gateway:           createReq.Gateway,
+		Zone:              createReq.Zone,
+		Description:       createReq.Description,
+		LeaseDuration:     createReq.LeaseDuration,
+		InactivityTimeout: createReq.InactivityTimeout,
+		Reserved:          createReq.Reserved,
+		RangeStart:        createReq.RangeStart,
+		RangeEnd:          createReq.RangeEnd,
 	}
 
 	pool, err := h.gatewayService.CreateIPAMPool(ctx, opts)
@@ -1725,15 +1551,16 @@ func (h *GatewayHandler) handleUpdateIPAMPool(ctx context.Context, req *quicwire
 	}
 
 	opts := &UpdateIPAMPoolOptions{
-		Name:          updateReq.Name,
-		Gateway:       updateReq.Gateway,
-		Zone:          updateReq.Zone,
-		Description:   updateReq.Description,
-		LeaseDuration: updateReq.LeaseDuration,
-		UpdateWindow:  updateReq.UpdateWindow,
-		Reserved:      updateReq.Reserved,
-		RangeStart:    updateReq.RangeStart,
-		RangeEnd:      updateReq.RangeEnd,
+		Name:              updateReq.Name,
+		Gateway:           updateReq.Gateway,
+		Zone:              updateReq.Zone,
+		Description:       updateReq.Description,
+		LeaseDuration:     updateReq.LeaseDuration,
+		InactivityTimeout: updateReq.InactivityTimeout,
+		UpdateWindow:      updateReq.UpdateWindow,
+		Reserved:          updateReq.Reserved,
+		RangeStart:        updateReq.RangeStart,
+		RangeEnd:          updateReq.RangeEnd,
 	}
 
 	pool, err := h.gatewayService.UpdateIPAMPool(ctx, updateReq.PoolID, opts)
@@ -1840,10 +1667,22 @@ func (h *GatewayHandler) gatewayErrorResponse(err error) *quicwire.Response {
 	case errors.Is(err, ErrGatewayZoneInvalid):
 		status = quicwire.StatusInvalidArgument
 	default:
-		status = quicwire.StatusInternalError
+		status = gatewayGRPCStatus(err)
 	}
 
 	return h.errorResponse(status, err)
+}
+
+// gatewayGRPCStatus maps an error from the shared gateway gRPC service
+// (status, mode and snapshots delegate to it) to its QUIC status. Errors
+// that carry no gRPC status are internal.
+func gatewayGRPCStatus(err error) byte {
+	if st, ok := grpcstatus.FromError(err); ok {
+		if mapped, found := grpcCodeToQUICStatus[st.Code()]; found {
+			return mapped
+		}
+	}
+	return quicwire.StatusInternalError
 }
 
 // =============================================================================

@@ -62,7 +62,7 @@ therefore see one API and one error model whichever transport carried the call.
 | unix | native gRPC over `unix://<socket>` | yes |
 | grpc | native gRPC over TLS 1.3 | yes |
 | rest | method → HTTP route (`grpcMethodToRESTMap`, `templatedRouteTable`); HTTP status → gRPC code | no |
-| quic | method → opcode (`grpcMethodToOpcodeMap`, `categorySubOpcodeMap`); QUIC status → gRPC code | no |
+| quic | method → opcode (`grpcMethodToOpcodeMap`, `categorySubOpcodeMap`); a request its translator refuses fails `InvalidArgument` before it is sent; QUIC status → gRPC code | no |
 | mcp | method → MCP tool (`grpcMethodToMCPToolMap`) via `CallTool` | no |
 | embedded | method → in-process handler map built from `ServiceRegistry`; reply copied by proto marshal | no |
 

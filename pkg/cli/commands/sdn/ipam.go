@@ -14,6 +14,8 @@
 package sdn
 
 import (
+	"time"
+
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
@@ -178,22 +180,15 @@ Examples:
 }
 
 func newIPAMPoolUpdateCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
-	var (
-		poolID      string
-		name        string
-		gatewayAddr string
-		zone        string
-		description string
-		leaseSecs   int64
-		window      ipamWindowFlags
-	)
+	var opts ipamPoolUpdateFlags
 
 	cmd := &cobra.Command{
 		Use:   "update",
 		Short: "Update a pool",
 		Long: `Update mutable fields of an existing IPAM pool.
 
-The CIDR cannot be changed after pool creation.
+The CIDR cannot be changed after pool creation. Fields whose flags are not
+passed keep their current values.
 
 Examples:
   platformctl sdn ipam pool update --id pool-1 --name new-name
@@ -204,32 +199,68 @@ Examples:
 Passing any of --reserved, --range-start or --range-end replaces the pool's
 allocation window with exactly the values given (omitted ones are cleared).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			req := &platformv1.UpdateIPAMPoolRequest{
-				Id:                        poolID,
-				Name:                      name,
-				Gateway:                   gatewayAddr,
-				Zone:                      zone,
-				Description:               description,
-				DefaultLeaseDurationNanos: leaseSecs * int64(1e9),
-				UpdateWindow:              window.changed(cmd),
-				Reserved:                  window.reserved,
-				RangeStart:                window.rangeStart,
-				RangeEnd:                  window.rangeEnd,
-			}
-			return runIPAMPoolUpdate(getFlags(), req)
+			return runIPAMPoolUpdate(getFlags(), opts.poolID, func(current *platformv1.IPAMPool) *platformv1.UpdateIPAMPoolRequest {
+				return opts.request(cmd, current)
+			})
 		},
 	}
 
-	cmd.Flags().StringVar(&poolID, "id", "", "Pool ID to update (required)")
-	cmd.Flags().StringVar(&name, "name", "", "Updated display name")
-	cmd.Flags().StringVar(&gatewayAddr, "gateway", "", "Updated gateway IP address")
-	cmd.Flags().StringVar(&zone, "zone", "", "Updated zone")
-	cmd.Flags().StringVar(&description, "description", "", "Updated description")
-	cmd.Flags().Int64Var(&leaseSecs, "lease-seconds", 0, "Updated default lease duration in seconds (0 = no change)")
-	window.register(cmd)
+	cmd.Flags().StringVar(&opts.poolID, "id", "", "Pool ID to update (required)")
+	cmd.Flags().StringVar(&opts.name, "name", "", "Updated display name")
+	cmd.Flags().StringVar(&opts.gatewayAddr, "gateway", "", "Updated gateway IP address")
+	cmd.Flags().StringVar(&opts.zone, "zone", "", "Updated zone")
+	cmd.Flags().StringVar(&opts.description, "description", "", "Updated description")
+	cmd.Flags().Int64Var(&opts.leaseSecs, "lease-seconds", 0, "Updated default lease duration in seconds")
+	opts.window.register(cmd)
 	cmd.MarkFlagRequired("id")
 
 	return cmd
+}
+
+// ipamPoolUpdateFlags holds the flag values of "ipam pool update".
+type ipamPoolUpdateFlags struct {
+	poolID      string
+	name        string
+	gatewayAddr string
+	zone        string
+	description string
+	leaseSecs   int64
+	window      ipamWindowFlags
+}
+
+// keepDuration is the UpdateIPAMPoolRequest duration value that leaves the
+// pool's current duration unchanged.
+const keepDuration int64 = -1
+
+// request builds the update for the pool as it currently stands.
+// UpdateIPAMPool replaces the zone and description outright and a duration
+// whenever it is not negative, so a flag the operator did not pass carries
+// the pool's current zone or description, or keepDuration.
+func (f *ipamPoolUpdateFlags) request(cmd *cobra.Command, current *platformv1.IPAMPool) *platformv1.UpdateIPAMPoolRequest {
+	flags := cmd.Flags()
+	req := &platformv1.UpdateIPAMPoolRequest{
+		Id:                        f.poolID,
+		Name:                      f.name,
+		Gateway:                   f.gatewayAddr,
+		Zone:                      current.GetZone(),
+		Description:               current.GetDescription(),
+		DefaultLeaseDurationNanos: keepDuration,
+		InactivityTimeoutNanos:    keepDuration,
+		UpdateWindow:              f.window.changed(cmd),
+		Reserved:                  f.window.reserved,
+		RangeStart:                f.window.rangeStart,
+		RangeEnd:                  f.window.rangeEnd,
+	}
+	if flags.Changed("zone") {
+		req.Zone = f.zone
+	}
+	if flags.Changed("description") {
+		req.Description = f.description
+	}
+	if flags.Changed("lease-seconds") {
+		req.DefaultLeaseDurationNanos = f.leaseSecs * int64(time.Second)
+	}
+	return req
 }
 
 func newIPAMPoolDeleteCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
@@ -387,7 +418,7 @@ func runIPAMPoolCreate(flags *cli.CommonFlags, req *platformv1.CreateIPAMPoolReq
 	return base.Output(pool)
 }
 
-func runIPAMPoolUpdate(flags *cli.CommonFlags, req *platformv1.UpdateIPAMPoolRequest) error {
+func runIPAMPoolUpdate(flags *cli.CommonFlags, poolID string, build func(current *platformv1.IPAMPool) *platformv1.UpdateIPAMPoolRequest) error {
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
 		return err
@@ -398,7 +429,11 @@ func runIPAMPoolUpdate(flags *cli.CommonFlags, req *platformv1.UpdateIPAMPoolReq
 
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	pool, err := gatewayClient.UpdateIPAMPool(ctx, req)
+	current, err := gatewayClient.GetIPAMPool(ctx, poolID)
+	if err != nil {
+		return &WrappedError{Msg: "failed to read IPAM pool before update", Err: err}
+	}
+	pool, err := gatewayClient.UpdateIPAMPool(ctx, build(current))
 	if err != nil {
 		return &WrappedError{Msg: "failed to update IPAM pool", Err: err}
 	}

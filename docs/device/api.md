@@ -509,17 +509,18 @@ profile's networks as:
   "networks": {
     "provisioning": { "vlan": 998, "dhcp": true },
     "admitted":     { "vlan": 406, "static_ip": "203.0.113.50" },
-    "lab-dmz":      { "vlan": 42 }
+    "lab":          { "vlan": 409 }
   },
   "enrollment_network": "provisioning",
-  "post_enrollment_network": "lab-dmz",
+  "post_enrollment_network": "lab",
   "failure_network": "quarantine"
 }
 ```
 
 - **`networks` is open-keyed.** `provisioning`, `admitted` and `quarantine` are
   the keys the selectors fall back to when unset (`entities.Default*Network`),
-  not an enumeration; `lab-dmz` above is as valid as any of them.
+  not an enumeration; `lab` above (an owner-defined zone) is as valid as any of
+  them.
 - **The three selectors are strings naming a key**, and each is `omitempty`.
   Absent on the wire means the default applies — it never means "no network".
   Resolve before reading (the JavaScript SDK's `networkPhaseSelectors`).

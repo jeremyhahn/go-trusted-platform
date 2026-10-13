@@ -120,6 +120,18 @@ func (e ErrUnexpectedRequestType) Error() string {
 	return fmt.Sprintf("unexpected request message type for gRPC method %s", e.Method)
 }
 
+// ErrDurationClearNotSupported indicates an UpdateIPAMPool request asked to
+// set a pool duration to zero. The REST pool update keeps any duration it
+// is not given a positive value for, so the request cannot be carried.
+type ErrDurationClearNotSupported struct {
+	Field string
+}
+
+// Error implements the error interface.
+func (e ErrDurationClearNotSupported) Error() string {
+	return fmt.Sprintf("REST cannot set %s to zero: the REST pool update keeps a zero duration (send -1 to keep it)", e.Field)
+}
+
 // ErrProfileConfigNotJSON indicates a DeviceProfile's config bytes are not a
 // JSON document. The REST profile routes carry config as a JSON value, so
 // bytes that are not JSON cannot be sent without corrupting them.

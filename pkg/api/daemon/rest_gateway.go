@@ -22,7 +22,7 @@ import (
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
@@ -31,14 +31,16 @@ import (
 )
 
 // gatewayRESTService implements rest.GatewayServiceInterface using the
-// daemon's ipam.Allocator directly. Gateway status/BGP/mode methods return
-// rest.ErrGatewayFeatureNotConfigured because those features require a full gateway
-// controller that is only present when an SDN fabric is wired in.
+// daemon's ipam.Allocator directly. Gateway status and mode delegate to the
+// gateway gRPC service, so they report not configured exactly when gRPC
+// does (no in-process gateway). BGP methods return
+// rest.ErrGatewayFeatureNotConfigured: platformd constructs no BGP speaker.
 //
 // This service is always registered so that IPAM pool CRUD and IP allocation
 // endpoints work over REST even without an SDN controller.
 type gatewayRESTService struct {
 	ipam   ipam.Allocator
+	status GatewayStatusController
 	lb     GatewayLoadBalancerInterface
 	nat64  GatewayNAT64Interface
 	reader GatewaySnapshotReader
@@ -65,17 +67,80 @@ func newGatewayRESTService(allocator ipam.Allocator, logger *slog.Logger) *gatew
 }
 
 // =============================================================================
-// Gateway status / mode — not available without a hardware gateway
+// Gateway status / mode — served by the gateway gRPC service (#65)
 // =============================================================================
 
-// GetGatewayStatus returns rest.ErrGatewayFeatureNotConfigured; no hardware gateway is wired.
-func (s *gatewayRESTService) GetGatewayStatus(_ context.Context) (*rest.GatewayStatusResponse, error) {
-	return nil, rest.ErrGatewayFeatureNotConfigured{Feature: "gateway status"}
+// SetGatewayStatusController wires the gateway gRPC service the status and
+// mode routes answer from.
+func (s *gatewayRESTService) SetGatewayStatusController(controller GatewayStatusController) {
+	s.status = controller
 }
 
-// SetGatewayMode returns rest.ErrGatewayFeatureNotConfigured; no hardware gateway is wired.
-func (s *gatewayRESTService) SetGatewayMode(_ context.Context, _ uint32) (*rest.SetGatewayModeResponse, error) {
-	return nil, rest.ErrGatewayFeatureNotConfigured{Feature: "gateway mode"}
+// GetGatewayStatus returns the gateway status from the gateway gRPC service.
+func (s *gatewayRESTService) GetGatewayStatus(ctx context.Context) (*rest.GatewayStatusResponse, error) {
+	const feature = "gateway status"
+	if s.status == nil {
+		return nil, rest.ErrGatewayFeatureNotConfigured{Feature: feature}
+	}
+	resp, err := s.status.GetGatewayStatus(ctx, &platformv1.GetGatewayStatusRequest{})
+	if err != nil {
+		return nil, gatewayStatusRESTError(feature, 0, err)
+	}
+	return protoGatewayStatusToREST(resp.GetStatus()), nil
+}
+
+// SetGatewayMode sets the gateway's mode bitmask through the gateway gRPC
+// service and returns its status after the change.
+func (s *gatewayRESTService) SetGatewayMode(ctx context.Context, modes uint32) (*rest.SetGatewayModeResponse, error) {
+	const feature = "gateway mode"
+	if s.status == nil {
+		return nil, rest.ErrGatewayFeatureNotConfigured{Feature: feature}
+	}
+	resp, err := s.status.SetGatewayMode(ctx, &platformv1.SetGatewayModeRequest{Modes: modes})
+	if err != nil {
+		return nil, gatewayStatusRESTError(feature, modes, err)
+	}
+	return &rest.SetGatewayModeResponse{
+		Success:       true,
+		GatewayStatus: protoGatewayStatusToREST(resp.GetGatewayStatus()),
+	}, nil
+}
+
+// gatewayStatusRESTError maps a gateway gRPC status error to the typed REST
+// error its handler turns into an HTTP status: Unavailable (no in-process
+// gateway) is not configured, InvalidArgument is an invalid mode. Any other
+// error passes through.
+func gatewayStatusRESTError(feature string, modes uint32, err error) error {
+	switch grpcstatus.Code(err) {
+	case codes.Unavailable:
+		return rest.ErrGatewayFeatureNotConfigured{Feature: feature}
+	case codes.InvalidArgument:
+		return rest.ErrInvalidGatewayMode{Mode: modes}
+	default:
+		return err
+	}
+}
+
+// protoGatewayStatusToREST converts the gRPC gateway status to its REST
+// shape; nil stays nil.
+func protoGatewayStatusToREST(s *platformv1.GatewayStatus) *rest.GatewayStatusResponse {
+	if s == nil {
+		return nil
+	}
+	resp := &rest.GatewayStatusResponse{
+		ID:            s.GetId(),
+		NodeID:        s.GetNodeId(),
+		Modes:         s.GetModes(),
+		Tier:          s.GetTier(),
+		Reputation:    s.GetReputation(),
+		UptimeSeconds: s.GetUptimeSeconds(),
+		Healthy:       s.GetHealthy(),
+		Timestamp:     time.Now(),
+	}
+	if s.GetStartedAt() != nil {
+		resp.StartedAt = s.GetStartedAt().AsTime()
+	}
+	return resp
 }
 
 // =============================================================================
@@ -418,7 +483,7 @@ func admittedVTEPToREST(vtep *platformv1.GatewayAdmittedVTEP) *rest.GatewayAdmit
 }
 
 func gatewayAdmissionErrToREST(vtep string, err error) error {
-	switch status.Code(err) {
+	switch grpcstatus.Code(err) {
 	case codes.NotFound:
 		return rest.ErrGatewayAdmittedVTEPNotFound{VTEP: vtep}
 	case codes.Unavailable:

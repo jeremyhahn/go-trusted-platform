@@ -300,7 +300,8 @@ func TestMCPServiceProvider_OverlayStubs(t *testing.T) {
 	}
 }
 
-// TestMCPServiceProvider_GatewayStubs verifies gateway stub methods.
+// TestMCPServiceProvider_GatewayStubs verifies the gateway tools fail on a
+// provider with no gateway service, allocator or BGP speaker wired.
 func TestMCPServiceProvider_GatewayStubs(t *testing.T) {
 	ctx := context.Background()
 	p := newMCPProvider()

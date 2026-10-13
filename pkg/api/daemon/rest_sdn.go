@@ -35,8 +35,10 @@ func (s *RESTServer) SetSDNService(svc ovs.ClientInterface) {
 // SetGatewayIPAMService wires IPAM and gateway REST handlers using the provided
 // allocator. When allocator is nil, a default in-memory allocator is used so
 // that IPAM pool CRUD endpoints work out-of-the-box without a full SDN controller.
-func (s *RESTServer) SetGatewayIPAMService(allocator ipam.Allocator) {
+// The status and mode routes answer from status; nil reports them not configured.
+func (s *RESTServer) SetGatewayIPAMService(allocator ipam.Allocator, status GatewayStatusController) {
 	svc := newGatewayRESTService(allocator, s.logger)
+	svc.SetGatewayStatusController(status)
 	handlers := rest.NewGatewayHandlers(svc, s.logger)
 	handlers.RegisterRoutes(s.router)
 	s.gatewayService = svc
@@ -51,7 +53,7 @@ func (s *RESTServer) SetGatewaySnapshotService(reader GatewaySnapshotReader) {
 		return
 	}
 	if s.gatewayService == nil {
-		s.SetGatewayIPAMService(nil)
+		s.SetGatewayIPAMService(nil, nil)
 	}
 	s.gatewayService.reader = reader
 	s.logger.Info("Gateway overlay admission REST service wired into gateway handlers")

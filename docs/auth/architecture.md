@@ -534,7 +534,11 @@ identity and signature checks before it touches the SDK.
   failure than a re-claim, which still demands the node's root-only
   bootstrap private key, and which can only be reached by first removing the
   factor through an authenticated admin session. *(Raised in review; recorded
-  here as a deliberate trade-off rather than settled silently.)*
+  here as a deliberate trade-off rather than settled silently.)* What makes
+  the trade-off acceptable is that a re-claim is **detected, not denied**: a
+  claim completing over a revoked `fido2` factor raises a high-severity
+  security event of its own type (#169) — see
+  [engineering.md invariant 8a](engineering.md).
 - A **multi-instance deployment is refused, not unregistered** — and that
   asymmetry with the bullet above is deliberate. The four conditions there
   mean the node cannot *verify* a certificate, so publishing the ceremony

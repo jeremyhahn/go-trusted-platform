@@ -132,3 +132,51 @@ type ErrUnexpectedReplyType struct {
 func (e ErrUnexpectedReplyType) Error() string {
 	return fmt.Sprintf("unexpected reply message type for gRPC method %s", e.Method)
 }
+
+// ErrUnknownGatewayModes indicates a gateway mode bitmask carrying bits
+// that name no gateway mode. The MCP tool takes mode names, so an unknown
+// bit cannot be sent and would otherwise be dropped silently.
+type ErrUnknownGatewayModes struct {
+	Modes uint32
+}
+
+// Error implements the error interface.
+func (e ErrUnknownGatewayModes) Error() string {
+	return fmt.Sprintf("gateway mode bitmask %#x names an unknown mode (overlay=1, edge=2, transit=4)", e.Modes)
+}
+
+// ErrFieldNotSupported indicates a request field the MCP tool has no
+// argument for. The adapter refuses it rather than dropping it.
+type ErrFieldNotSupported struct {
+	Method string
+	Field  string
+}
+
+// Error implements the error interface.
+func (e ErrFieldNotSupported) Error() string {
+	return fmt.Sprintf("MCP cannot carry %s for gRPC method %s", e.Field, e.Method)
+}
+
+// ErrDurationNotWholeSeconds indicates a nanosecond duration the MCP tool
+// cannot carry because its argument counts whole seconds.
+type ErrDurationNotWholeSeconds struct {
+	Field string
+	Nanos int64
+}
+
+// Error implements the error interface.
+func (e ErrDurationNotWholeSeconds) Error() string {
+	return fmt.Sprintf("MCP carries %s in whole seconds; %dns is not a whole number of seconds", e.Field, e.Nanos)
+}
+
+// ErrDurationClearNotSupported indicates an update that sets a duration to
+// zero. The MCP pool update reads a zero duration as "keep", so the clear
+// cannot be expressed.
+type ErrDurationClearNotSupported struct {
+	Field string
+}
+
+// Error implements the error interface.
+func (e ErrDurationClearNotSupported) Error() string {
+	return fmt.Sprintf("MCP cannot set %s to zero: the MCP pool update keeps a zero duration (send -1 to keep it)", e.Field)
+}

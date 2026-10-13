@@ -95,8 +95,6 @@ var knownUnclassified = []string{
 	"gateway_bgp_prefixes",
 	"gateway_bgp_status",
 	"gateway_bgp_withdraw",
-	"gateway_mode_set",
-	"gateway_status",
 	"iak_csr",
 	"iak_delete",
 	"iak_delete_cert",

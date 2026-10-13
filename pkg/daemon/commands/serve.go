@@ -651,8 +651,10 @@ Example:
 		// stderr/file logger via MultiHandler so nothing about the
 		// existing logging story changes — every record continues to
 		// land where it always did, plus a structured copy lands in
-		// <LogDir>/jsonl/.
-		jsonlQuerier := installJSONLLogging(logger)
+		// <LogDir>/jsonl/. Everything built from here on takes the teed
+		// logger, or its records never reach the console Logs page.
+		var jsonlQuerier *jsonfile.Querier
+		logger, jsonlQuerier = installJSONLLogging(App, logger)
 
 		// First-run escrow consumer.
 		if App != nil && appErr == nil {

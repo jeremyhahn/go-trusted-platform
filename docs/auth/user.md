@@ -104,6 +104,13 @@ state:          unclaimed
   an authenticated admin session — that re-opens the ceremony so you can
   claim again with the certificate. There is deliberately no permanent
   lock-out marker: losing a security key should not brick the deployment.
+- **A re-claim is announced.** Claiming an admin whose passkey was revoked
+  raises a high-severity security event (`adminclaim.reclaim`) naming the
+  revoked factor it replaces, the time and the new credential. If you did
+  not just recover a lost key yourself, treat it as an intrusion. A claim the
+  node cannot classify raises `adminclaim.reclaim_status_unknown` at the
+  same severity. A first claim is logged as routine. In the console, open
+  **Platform → Logs** and pick the **SECURITY** level to see these events.
 - **Every rejection looks the same.** A wrong certificate, an expired nonce and
   a bad signature all answer "proof rejected". That is deliberate; the message
   is not a diagnostic.

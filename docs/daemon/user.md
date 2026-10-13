@@ -130,6 +130,12 @@ curl -s https://platform.example.com/api/v1/platform/system
 `StreamEvents`, `StreamLogs` and `StreamMetrics` are the gRPC streaming
 equivalents.
 
+`?level=` takes a minimum level: `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`
+or `SECURITY`. `level=SECURITY` returns only security events, such as the
+admin re-claim alert (`adminclaim.reclaim`; see
+[`docs/auth/user.md`](../auth/user.md)). The console's **Platform → Logs**
+page has the same filter. Expand a row to read the event's `details`.
+
 `ListEntityTypes` and `DumpEntityType` (gRPC) enumerate and dump the stored
 entity types — a debugging surface, and `DumpEntityType` streams because a dump
 is unbounded.

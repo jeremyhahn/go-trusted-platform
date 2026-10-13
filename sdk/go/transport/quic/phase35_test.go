@@ -410,8 +410,9 @@ func TestPhase35InvokeTranslatesBothDirections(t *testing.T) {
 
 // TestPhase35InvokeRejectsBadMessages covers the error paths: a request of
 // the wrong type, an enum outside the proto, and a daemon response carrying
-// a value the SDK does not recognise must each fail with Internal rather
-// than send or report a silently altered message.
+// a value the SDK does not recognise must each fail rather than send or
+// report a silently altered message: a refused request is the caller's
+// InvalidArgument and never reaches the wire, a refused response Internal.
 func TestPhase35InvokeRejectsBadMessages(t *testing.T) {
 	unknownSlot, err := quicwire.EncodePayload(&quicwire.PIVListSlotsResp{Slots: []quicwire.PIVSlot{{ID: "9a", Algorithm: "dsa"}}})
 	if err != nil {
@@ -446,8 +447,12 @@ func TestPhase35InvokeRejectsBadMessages(t *testing.T) {
 			conn := newConnWithSender(t, sender)
 
 			err := conn.Invoke(context.Background(), tt.method, tt.request, tt.reply)
-			if status.Code(err) != codes.Internal {
-				t.Fatalf("Invoke error = %v, want code Internal", err)
+			wantCode := codes.InvalidArgument
+			if tt.wantSent {
+				wantCode = codes.Internal
+			}
+			if status.Code(err) != wantCode {
+				t.Fatalf("Invoke error = %v, want code %v", err, wantCode)
 			}
 			if sent := sender.rawCalls > 0; sent != tt.wantSent {
 				t.Errorf("request sent = %v, want %v", sent, tt.wantSent)
