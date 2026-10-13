@@ -25,7 +25,7 @@ ServiceNAT           = "nat"
 ServiceTunnels       = "tunnels"
 ServiceProxy         = "proxy"
 ServiceHostFW        = "hostfw"         // #569
-ServiceManagementVPN = "management-vpn" // design only, refused
+ServiceManagementVPN = "management-vpn" // runs over GatewayRuntime.VPN
 ```
 
 **`load-balancer` and `management-vpn` are hyphenated; the others are single
@@ -40,8 +40,8 @@ section from neither (see *Supervised handlers* below):
 
 | Table | Type | `Start` | `IsActive` / `Health` |
 |---|---|---|---|
-| `serviceBuilders` (`overlay`, `firewall`, `nat`, `load-balancer`, `hostfw`, `tunnels`, `transit`) | `backedServiceHandler` | builds the backend; a build or start failure returns the backend's error and leaves nothing registered | the built backend's own `Active` / `Healthy` |
-| `serviceRefusals` (`edge`, `dhcp`, `pxe`, `management-vpn`) | `refusedServiceHandler` | `ErrServiceUnavailable{Service, Reason}` | `false` / `ErrServiceUnavailable` |
+| `serviceBuilders` (`overlay`, `firewall`, `nat`, `load-balancer`, `hostfw`, `tunnels`, `transit`, `management-vpn`) | `backedServiceHandler` | builds the backend; a build or start failure returns the backend's error and leaves nothing registered | the built backend's own `Active` / `Healthy` |
+| `serviceRefusals` (`edge`, `dhcp`, `pxe`) | `refusedServiceHandler` | `ErrServiceUnavailable{Service, Reason}` | `false` / `ErrServiceUnavailable` |
 
 Every refusal reason says the service is **planned**, cites no issue number
 and names no constructor — the operator reads it in `ErrServiceUnavailable`
@@ -207,6 +207,24 @@ restart budget; it unwraps to the supervisor's own error).
 **`ErrServiceAlreadyActive` and `ErrServiceNotActive` are both real errors.**
 Starting a running service and stopping a stopped one are both bugs in the
 caller, and the gateway says so rather than treating either as a no-op.
+
+### BGP operator verbs in platformd (#65)
+
+The five BGP verbs (status, peers, announce, withdraw, prefixes) have one
+implementation, `GatewayService` in `pkg/api/daemon`, and every transport binds
+to it: gRPC and Unix directly, REST through `rest_sdn.go` and the web service,
+QUIC and MCP through `gateway_bgp_bindings.go`, and the embedded SDK through
+the service provider. The SDK clients map the same methods in
+`sdk/go/transport/{quic,mcp}/gateway_bgp.go`; the QUIC wire shapes live once in
+`sdk/go/wire/quicwire/gateway_bgp.go`, shared by server and client.
+
+`GatewayService.SetBGPSpeaker` has no production caller, so every verb answers
+the typed "not configured" error (`Unavailable`; REST 503). Backing it needs
+the platformd→gatewayd link that [api.md](api.md) §5a leaves to a design
+decision. A malformed prefix or next hop is `InvalidArgument`; an announce
+carrying `local_pref`, `med`, `communities` or `labels` is refused with
+`ErrBGPAttributeUnsupported` (`InvalidArgument`), since the speaker interface
+takes a prefix and a next hop only.
 
 ## 3. Exported surface — the trusted reverse proxy
 
@@ -490,6 +508,16 @@ block of its own configuration (`pkg/daemon/commands/gateway_control_init.go`)
 and validates it before serving, so a control plane authoring intent the
 gateway would refuse learns it from its own log. The same document goes to
 every gateway until per-gateway overrides exist.
+
+The `vpn` section is the exception: it is not configuration. platformd
+fills it from the VPN control plane (`pkg/vpn.Service.DesiredVPN`, the whole
+enrolment set and every tenant posture policy), so a `gateway.desired.vpn`
+block in the configuration file is refused with `ErrDesiredVPNConfigured`
+rather than silently overridden. An operator `version` is served as
+`<version>+vpn.<content version>`, because a gateway re-applies only when the
+version changes and an enrolment or a revocation does not change what the
+operator wrote. A failing enrolment store fails the whole document: serving
+it without the section would revoke every peer.
 
 ### IPv6-only clients — NAT64 packet path (`nat64:`)
 

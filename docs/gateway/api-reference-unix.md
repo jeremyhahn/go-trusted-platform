@@ -11,5 +11,11 @@ socket. The RPC surface is the same as [api-reference-grpc.md](api-reference-grp
 | `ListGatewaySnapshots` | List reported gateway snapshots. |
 | `GetGatewayAdmittedVTEP` | Read one admitted overlay VTEP by IP address. |
 | `ListGatewayAdmittedVTEPs` | List admitted overlay VTEPs. |
+| `GetBGPStatus` | BGP speaker status. |
+| `ListBGPPeers` | List BGP peers. |
+| `ListAnnouncedPrefixes` | List announced prefixes. |
+| `AnnouncePrefix` | Announce a prefix with a next hop. |
+| `WithdrawPrefix` | Withdraw an announced prefix. |
 
-The overlay status shape and admitted-VTEP results match gRPC exactly.
+The overlay status shape, admitted-VTEP results, BGP results and BGP errors
+match gRPC exactly.

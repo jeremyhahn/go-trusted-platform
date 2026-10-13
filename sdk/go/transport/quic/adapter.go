@@ -237,6 +237,10 @@ func (c *quicClientConn) Invoke(ctx context.Context, method string, args interfa
 		if _, emptyBody := categoryEmptyBodyMethods[method]; emptyBody {
 			payloadArgs = nil
 		}
+		if pager, paged := categoryPagers[method]; paged {
+			return c.invokePaged(ctx, opcode, subOpcode, pager, args, reply, opts)
+		}
+
 		// A request its translator refuses never reaches the wire and is
 		// the caller's InvalidArgument, as in wireRequest.
 		if encode, translated := categoryRequestEncoders[method]; translated {
@@ -247,14 +251,7 @@ func (c *quicClientConn) Invoke(ctx context.Context, method string, args interfa
 			payloadArgs = wire
 		}
 
-		encode := func() ([]byte, error) {
-			payload, err := buildCategoryPayload(subOpcode, payloadArgs)
-			if err != nil {
-				return nil, status.Error(codes.Internal, err.Error())
-			}
-			return payload, nil
-		}
-		resp, err := c.sendRaw(ctx, opcode, encode, opts)
+		resp, err := c.sendCategory(ctx, opcode, subOpcode, payloadArgs, opts)
 		if err != nil {
 			return err
 		}
@@ -311,6 +308,46 @@ func (c *quicClientConn) Invoke(ctx context.Context, method string, args interfa
 	}
 
 	return nil
+}
+
+// sendCategory sends one category-opcode request: the sub-opcode byte
+// followed by the encoded wire request.
+func (c *quicClientConn) sendCategory(ctx context.Context, opcode, subOpcode byte, payloadArgs interface{}, opts []grpc.CallOption) (*quicwire.Response, error) {
+	encode := func() ([]byte, error) {
+		payload, err := buildCategoryPayload(subOpcode, payloadArgs)
+		if err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		return payload, nil
+	}
+	return c.sendRaw(ctx, opcode, encode, opts)
+}
+
+// invokePaged collects a paged category list into reply. It asks for the
+// page after the entries already received until the daemon reports none
+// left, so the caller gets the whole list, as over gRPC. A daemon that
+// reports no total (one predating paging) answers in a single page.
+func (c *quicClientConn) invokePaged(ctx context.Context, opcode, subOpcode byte, pager categoryPager, args, reply interface{}, opts []grpc.CallOption) error {
+	var offset int32
+	for {
+		wire, err := pager.request(args, offset)
+		if err != nil {
+			return status.Error(codes.InvalidArgument, err.Error())
+		}
+		resp, err := c.sendCategory(ctx, opcode, subOpcode, wire, opts)
+		if err != nil {
+			return err
+		}
+		page, err := pager.decode(resp.Payload, reply)
+		if err != nil {
+			return status.Error(codes.Internal, err.Error())
+		}
+		// int64, so a hostile total cannot wrap the remaining count.
+		if page.received <= 0 || int64(page.received) >= int64(page.total)-int64(offset) {
+			return nil
+		}
+		offset += page.received
+	}
 }
 
 // sendRaw sends the payload encode builds and returns the response, with
@@ -612,6 +649,13 @@ var categorySubOpcodeMap = map[string]byte{
 	"/platform.v1.GatewayService/ReleaseIP":        quicwire.OpGatewayReleaseIP,
 	"/platform.v1.GatewayService/ListAllocations":  quicwire.OpGatewayListAllocations,
 
+	// BGP speaker — shapes and conversions in gateway_bgp.go.
+	"/platform.v1.GatewayService/GetBGPStatus":          quicwire.OpGatewayBGPStatus,
+	"/platform.v1.GatewayService/ListBGPPeers":          quicwire.OpGatewayBGPPeers,
+	"/platform.v1.GatewayService/AnnouncePrefix":        quicwire.OpGatewayAnnouncePrefix,
+	"/platform.v1.GatewayService/WithdrawPrefix":        quicwire.OpGatewayWithdrawPrefix,
+	"/platform.v1.GatewayService/ListAnnouncedPrefixes": quicwire.OpGatewayListPrefixes,
+
 	// Admitted overlay VTEPs — read from the gateway telemetry snapshot.
 	// Server dispatcher: pkg/api/quic/gateway_handlers.go; requests and
 	// responses are translated in gateway_admitted_vtep.go.
@@ -865,6 +909,12 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.GatewayService/AllocateIP":       quicwire.OpGatewayCategory,
 	"/platform.v1.GatewayService/ReleaseIP":        quicwire.OpGatewayCategory,
 	"/platform.v1.GatewayService/ListAllocations":  quicwire.OpGatewayCategory,
+
+	"/platform.v1.GatewayService/GetBGPStatus":          quicwire.OpGatewayCategory,
+	"/platform.v1.GatewayService/ListBGPPeers":          quicwire.OpGatewayCategory,
+	"/platform.v1.GatewayService/AnnouncePrefix":        quicwire.OpGatewayCategory,
+	"/platform.v1.GatewayService/WithdrawPrefix":        quicwire.OpGatewayCategory,
+	"/platform.v1.GatewayService/ListAnnouncedPrefixes": quicwire.OpGatewayCategory,
 
 	"/platform.v1.GatewayService/GetGatewayAdmittedVTEP":   quicwire.OpGatewayCategory,
 	"/platform.v1.GatewayService/ListGatewayAdmittedVTEPs": quicwire.OpGatewayCategory,

@@ -52,6 +52,7 @@ type Client interface {
 	PXE() platformv1.PXEServiceClient
 	DNS() platformv1.DNSServiceClient
 	NTP() platformv1.NTPServiceClient
+	VPN() platformv1.VPNServiceClient
 	Gateway() platformv1.GatewayServiceClient
 	Proxy() platformv1.ProxyServiceClient
 	Overlay() platformv1.OverlayServiceClient
@@ -106,6 +107,7 @@ type ServiceClients struct {
 	PXE         platformv1.PXEServiceClient
 	DNS         platformv1.DNSServiceClient
 	NTP         platformv1.NTPServiceClient
+	VPN         platformv1.VPNServiceClient
 	Gateway     platformv1.GatewayServiceClient
 	Proxy       platformv1.ProxyServiceClient
 	Overlay     platformv1.OverlayServiceClient
@@ -341,6 +343,7 @@ func (c *platformClient) initServiceClients() {
 		PXE:         platformv1.NewPXEServiceClient(conn),
 		DNS:         platformv1.NewDNSServiceClient(conn),
 		NTP:         platformv1.NewNTPServiceClient(conn),
+		VPN:         platformv1.NewVPNServiceClient(conn),
 		Gateway:     platformv1.NewGatewayServiceClient(conn),
 		Proxy:       platformv1.NewProxyServiceClient(conn),
 		Overlay:     platformv1.NewOverlayServiceClient(conn),
@@ -547,6 +550,14 @@ func (c *platformClient) NTP() platformv1.NTPServiceClient {
 		return nil
 	}
 	return c.services.NTP
+}
+
+// VPN returns the management-VPN control-plane service client.
+func (c *platformClient) VPN() platformv1.VPNServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.VPN
 }
 
 // Gateway returns the Gateway service client.

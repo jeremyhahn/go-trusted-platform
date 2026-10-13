@@ -807,6 +807,7 @@ type RestHandlerRegistry interface {
 	PlatformRestRouter() *platform.PlatformRouter
 	PXEServiceServer() platformv1.PXEServiceServer
 	NTPServiceServer() platformv1.NTPServiceServer
+	VPNServiceServer() platformv1.VPNServiceServer
 	RegistryService() grpcapi.RegistryService
 	OCIDistBackend() restregistry.OCIDistBackend
 	AttestationEventReader() restattestation.EventReader
@@ -1023,6 +1024,7 @@ type RegistryParams struct {
 	OverlayServiceServer     platformv1.OverlayServiceServer
 	PXEServiceServer         platformv1.PXEServiceServer
 	NTPServiceServer         platformv1.NTPServiceServer
+	VPNServiceServer         platformv1.VPNServiceServer
 	SDNEnrollmentHook        *policy.SDNEnrollmentHook
 	// SDNIdentityConfig is sourced from app.SDNConfig.Identity. When present and
 	// encode_zone_in_cert is true, the ACME pre-sign hook embeds the device's
@@ -2024,6 +2026,11 @@ func (registry *HandlerRegistry) PXEServiceServer() platformv1.PXEServiceServer 
 // NTPServiceServer returns the in-process NTPService gRPC implementation, or nil.
 func (registry *HandlerRegistry) NTPServiceServer() platformv1.NTPServiceServer {
 	return registry.params.NTPServiceServer
+}
+
+// VPNServiceServer returns the in-process VPNService gRPC implementation, or nil.
+func (registry *HandlerRegistry) VPNServiceServer() platformv1.VPNServiceServer {
+	return registry.params.VPNServiceServer
 }
 
 // TenantServiceServer returns the in-process TenantService gRPC implementation, or nil.

@@ -67,6 +67,7 @@ type Snapshot struct {
 	NAT          *NATState          `json:"nat,omitempty"`
 	Pipeline     *PipelineState     `json:"pipeline,omitempty"`
 	Overlay      *OverlayState      `json:"overlay,omitempty"`
+	VPN          *VPNState          `json:"vpn,omitempty"`
 	Interfaces   []Interface        `json:"interfaces,omitempty"`
 	Annotations  map[string]string  `json:"annotations,omitempty"`
 }
@@ -88,6 +89,43 @@ type OverlayState struct {
 	Uptime                   time.Duration         `json:"uptime,omitempty"`
 	AdmittedVTEPs            []AdmittedVTEPState   `json:"admitted_vteps,omitempty"`
 	NDCounters               OverlayNDCounterState `json:"nd_counters"`
+}
+
+// VPNState reports the remote-access VPN service (docs/vpn/): its counters,
+// the enrolled peers in force and the live leases. Lease keys are never
+// reported.
+type VPNState struct {
+	Running             bool            `json:"running"`
+	Admissions          uint64          `json:"admissions"`
+	Refusals            uint64          `json:"refusals"`
+	LastRefusal         string          `json:"last_refusal,omitempty"`
+	EnrolledPeers       int             `json:"enrolled_peers"`
+	LeasesByDataPlane   map[string]int  `json:"leases_by_data_plane,omitempty"`
+	Leases              []VPNLeaseState `json:"leases,omitempty"`
+	PosturePolicyErrors []string        `json:"posture_policy_errors,omitempty"`
+	// RejectedPeers are the peers of the delivered enrolment set this
+	// gateway refused to enrol; the rest of the set applies.
+	RejectedPeers []VPNRejectedPeer `json:"rejected_peers,omitempty"`
+}
+
+// VPNRejectedPeer is one enrolment a gateway refused, and why.
+type VPNRejectedPeer struct {
+	TenantID string `json:"tenant_id"`
+	DeviceID string `json:"device_id"`
+	Reason   string `json:"reason"`
+}
+
+// VPNLeaseState is one live VPN lease.
+type VPNLeaseState struct {
+	ID        string    `json:"id"`
+	TenantID  string    `json:"tenant_id"`
+	DeviceID  string    `json:"device_id"`
+	Address   string    `json:"address"`
+	DataPlane string    `json:"data_plane"`
+	Zones     []string  `json:"zones,omitempty"`
+	IssuedAt  time.Time `json:"issued_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+	Renewals  int       `json:"renewals"`
 }
 
 // AdmittedVTEPState is a VTEP the overlay decap table currently admits.

@@ -67,14 +67,35 @@ func (f *fakeIdentity) Evaluate(context.Context, *calleradmission.Peer) callerad
 	return f.decision
 }
 
+// pause parks one call of a fake until the test releases it, so a test can
+// order a concurrent step deterministically. A nil pause never blocks.
+type pause struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func newPause() *pause {
+	return &pause{entered: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (p *pause) wait() {
+	if p == nil {
+		return
+	}
+	p.entered <- struct{}{}
+	<-p.release
+}
+
 type fakeVerifier struct {
 	mu      sync.Mutex
 	verdict *verdict.DeviceVerdict
 	err     error
 	calls   int
+	pause   *pause
 }
 
 func (f *fakeVerifier) Verify(_ context.Context, deviceID string, _ []byte, _ *manifest.HostAttestation) (*verdict.DeviceVerdict, error) {
+	f.pause.wait()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
@@ -143,6 +164,7 @@ type fakePlane struct {
 	mu         sync.Mutex
 	installed  map[LeaseID]*Lease
 	removed    []LeaseID
+	pause      *pause
 }
 
 func newFakePlane(kind DataPlaneKind) *fakePlane {
@@ -152,6 +174,7 @@ func newFakePlane(kind DataPlaneKind) *fakePlane {
 func (p *fakePlane) Kind() DataPlaneKind { return p.kind }
 
 func (p *fakePlane) InstallPeer(_ context.Context, lease *Lease) error {
+	p.pause.wait()
 	if p.installErr != nil {
 		return p.installErr
 	}
@@ -290,7 +313,7 @@ func testConfig() Config {
 	}
 }
 
-func newHarness(t *testing.T, cfg Config) *harness {
+func newHarness(t testing.TB, cfg Config) *harness {
 	t.Helper()
 	h := &harness{
 		clock:    newFakeClock(),
@@ -318,6 +341,7 @@ func newHarness(t *testing.T, cfg Config) *harness {
 	svc, err := New(deps, cfg)
 	require.NoError(t, err)
 	h.svc = svc
+	require.NoError(t, svc.SetEnrolments(context.Background(), []Enrolment{{TenantID: "tenant-a", DeviceID: "mini-99"}}))
 	require.NoError(t, svc.Start(context.Background()))
 	t.Cleanup(func() { _ = svc.Stop(context.Background()) })
 	return h

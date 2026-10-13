@@ -76,6 +76,7 @@ func (g *Gateway) Snapshot() *gwstate.Snapshot {
 	snap.NAT = g.collectNAT()
 	snap.Pipeline = g.collectPipeline()
 	snap.Overlay = g.collectOverlay(ctx)
+	snap.VPN = g.collectVPN(ctx)
 	snap.PXE.Status = serviceStatus(g.hasActiveService(ServicePXE))
 	snap.DHCP.Status = serviceStatus(g.hasActiveService(ServiceDHCP))
 	snap.DesiredConfig = g.DesiredConfigState()

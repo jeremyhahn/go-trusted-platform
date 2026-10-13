@@ -174,8 +174,8 @@ const (
 	// opcodes that were never implemented or dispatched — the real
 	// provisioning surface ships under OpProvisioningCategory (0xCF). The
 	// head of that dead range is reclaimed for the time-synchronization
-	// category (see ntp_opcodes.go); 0x51-0x55 stay reserved for NTP
-	// growth.
+	// category (see ntp_opcodes.go); 0x51 and 0x52 now carry the IAM and VPN
+	// categories, and 0x53-0x55 stay reserved.
 
 	// IDevID/IAK Device Identity Operations (0x56-0x5F)
 	OpIDevIDGenerate    byte = 0x56

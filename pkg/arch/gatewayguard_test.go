@@ -112,11 +112,13 @@ var gatewayAllowedPrefixes = []string{
 	// packages of pkg/attestation with no reach into pkg/api or pkg/app.
 	// The attestation SERVICE (pkg/attestation/service, which drags the
 	// daemon in) stays forbidden: the VPN service takes a Verifier
-	// interface the daemon fills.
+	// interface the daemon fills. The verdict type checks workload quotes
+	// with pkg/attestation/vm, a leaf over go-tpm and the SDK CA re-export.
 	"pkg/attestation/calleradmission",
 	"pkg/attestation/deviceverdict",
 	"pkg/attestation/verdict",
 	"pkg/attestation/manifest",
+	"pkg/attestation/vm",
 }
 
 // gatewayForbiddenExamples are packages that must never enter the gatewayd
@@ -141,7 +143,7 @@ var gatewayForbiddenExamples = []string{
 	"pkg/installer",
 	"pkg/initrd",
 	// The attestation service and reporting trees reach the daemon; only the
-	// three leaf packages above are allowed (#584).
+	// leaf packages above are allowed (#584).
 	"pkg/attestation/service",
 	"pkg/attestation/reporting",
 	"pkg/attestation",

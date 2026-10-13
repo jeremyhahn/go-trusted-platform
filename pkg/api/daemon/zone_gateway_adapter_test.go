@@ -61,7 +61,7 @@ func TestQUICGatewayListNetworkZones_Reproduction(t *testing.T) {
 	ipamAlloc := ipamBackends.NewMemoryBackend()
 
 	// Wire fullGatewayQUICAdapter exactly as newFullGatewayQUICAdapter does in the daemon.
-	adapter := newFullGatewayQUICAdapter(ipamAlloc, zoneSvc, nil, nil)
+	adapter := newFullGatewayQUICAdapter(ipamAlloc, zoneSvc, nil, nil, nil)
 
 	// Build the GatewayHandler exactly as the daemon does.
 	logger := logging.DefaultLogger()
@@ -120,7 +120,7 @@ func TestQUICGatewayListNetworkZones_FilterByRole(t *testing.T) {
 	require.NoError(t, err)
 
 	ipamAlloc := ipamBackends.NewMemoryBackend()
-	adapter := newFullGatewayQUICAdapter(ipamAlloc, zoneSvc, nil, nil)
+	adapter := newFullGatewayQUICAdapter(ipamAlloc, zoneSvc, nil, nil, nil)
 	logger := logging.DefaultLogger()
 	gatewayHandler := quic.NewGatewayHandler(logger, adapter)
 	h := newTestQUICServiceHandler(logger, WithQUICGatewayHandler(gatewayHandler))
@@ -176,7 +176,7 @@ func TestQUICGatewayListNetworkZones_NilZoneSvc(t *testing.T) {
 
 	ipamAlloc := ipamBackends.NewMemoryBackend()
 	// zoneSvc is nil — simulates daemon started without sdn config.
-	adapter := newFullGatewayQUICAdapter(ipamAlloc, nil, nil, nil)
+	adapter := newFullGatewayQUICAdapter(ipamAlloc, nil, nil, nil, nil)
 	logger := logging.DefaultLogger()
 	gatewayHandler := quic.NewGatewayHandler(logger, adapter)
 	h := newTestQUICServiceHandler(logger, WithQUICGatewayHandler(gatewayHandler))

@@ -410,8 +410,13 @@ func TestGatewayToolExecution(t *testing.T) {
 func TestGatewayStatusModePermissions(t *testing.T) {
 	checker := NewAuthorizationChecker(nil, nil)
 	cases := map[string]string{
-		"gateway_status":   "sdn:read",
-		"gateway_mode_set": "sdn:write",
+		"gateway_status":       "sdn:read",
+		"gateway_mode_set":     "sdn:write",
+		"gateway_bgp_status":   "sdn:read",
+		"gateway_bgp_peers":    "sdn:read",
+		"gateway_bgp_prefixes": "sdn:read",
+		"gateway_bgp_announce": "sdn:write",
+		"gateway_bgp_withdraw": "sdn:write",
 	}
 	for tool, want := range cases {
 		if got := checker.toolPermissions[tool]; got != want {

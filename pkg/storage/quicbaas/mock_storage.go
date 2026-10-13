@@ -16,6 +16,8 @@ package quicbaas
 import (
 	"context"
 	"encoding/binary"
+	"maps"
+	"slices"
 	"sync"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
@@ -173,14 +175,16 @@ func (m *MockStorage) List(ctx context.Context, entityType string, pageSize uint
 			startID = parsePageToken(pageToken)
 		}
 
-		// Collect entities after startID
+		// Collect entities after startID in ascending ID order: the page
+		// token is an ID cursor, so a map-ordered walk would repeat some
+		// entities and skip others across pages.
 		count := uint64(0)
 		var lastID uint64
-		for id, data := range typeData {
+		for _, id := range slices.Sorted(maps.Keys(typeData)) {
 			if id > startID {
 				entities = append(entities, &service.Entity{
 					ID:   id,
-					Data: data,
+					Data: typeData[id],
 				})
 				lastID = id
 				count++

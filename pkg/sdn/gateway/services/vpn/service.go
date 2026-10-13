@@ -59,6 +59,21 @@ type Service struct {
 	// instant they expire.
 	nonces map[string]time.Time
 
+	// enrolments is the control plane's peer set; nil until the first
+	// delivery, which refuses every admission.
+	enrolments atomic.Pointer[enrolmentSet]
+	// enrolGate makes a lease commit atomic with an enrolment update.
+	// SetEnrolments holds it exclusively while it publishes a set and sweeps
+	// the leases that set no longer covers; Admit holds it shared from its
+	// final enrolment check to the lease write. Order: enrolGate before a
+	// device lock, never the reverse.
+	enrolGate sync.RWMutex
+	// rejectedEnrolments holds the peers of the last delivered set this
+	// gateway refused (a zone it does not serve).
+	rejectedEnrolments atomic.Pointer[[]EnrolmentRejection]
+	// tenantPosture holds the compiled tenant posture policies, by tenant.
+	tenantPosture atomic.Pointer[map[string]tenantPosture]
+
 	admissions  atomic.Uint64
 	refusals    atomic.Uint64
 	lastRefusal atomic.Pointer[string]

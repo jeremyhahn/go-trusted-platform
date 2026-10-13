@@ -1,34 +1,121 @@
 # Remote-Access VPN — API
 
-> **Status: DESIGN — not implemented.** · Last verified: 2026-09-08
-> Every row below is a requirement. Nothing is routed today; the Tier-1 rule
-> (docs/00 L11) means each capability ships on all six transports in the
-> implementing change set, so every cell reads `MISSING — docs/13 G7` until then.
+> **Status: PARTIAL — the operator control plane ships on every transport (#584 PR 3); the client admission verbs are planned.** · Last verified: 2026-10-13
+> §1–§4 describe `VPNService` as it is routed today. §5 is still a requirement:
+> the client verbs terminate on the gateway's admission listener, which waits on
+> the gateway process model (#557).
 > Feature folder: [architecture.md](architecture.md) · [engineering.md](engineering.md) ·
 > [cli.md](cli.md) · api (this file) · [user.md](user.md).
 
-## 1. Transport matrix *(planned)*
+## 1. Transport matrix — operator control plane
 
-| Capability | REST | gRPC / Unix | QUIC | MCP | Embedded | `scp` |
-|---|---|---|---|---|---|---|
-| Admit (client) | `POST /api/v1/vpn/admissions` — `MISSING — docs/13 G7` | `VPNService.Admit` — `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | not offered (client-only) | `MISSING — docs/13 G7` | device identity (mTLS), no token |
-| Renew (client) | `POST /api/v1/vpn/leases/{id}/renew` — `MISSING — docs/13 G7` | `VPNService.Renew` — `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | not offered | `MISSING — docs/13 G7` | device identity |
-| Disconnect (client) | `DELETE /api/v1/vpn/leases/{id}` (own lease) — `MISSING — docs/13 G7` | `VPNService.Revoke` — `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | not offered | `MISSING — docs/13 G7` | device identity |
-| List leases (operator) | `GET /api/v1/vpn/leases` — `MISSING — docs/13 G7` | `VPNService.ListLeases` — `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `vpn_lease_list` — `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `vpn:read` |
-| Get lease (operator) | `GET /api/v1/vpn/leases/{id}` — `MISSING — docs/13 G7` | `VPNService.GetLease` — `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `vpn_lease_get` — `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `vpn:read` |
-| Revoke lease (operator) | `DELETE /api/v1/vpn/leases/{id}` — `MISSING — docs/13 G7` | `VPNService.Revoke` — `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `vpn_lease_revoke` — `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `vpn:write` |
-| Status | `GET /api/v1/vpn/status` — `MISSING — docs/13 G7` | `VPNService.Status` — `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `vpn_status` — `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `vpn:read` |
-| Posture policy CRUD | `GET/PUT/DELETE /api/v1/vpn/posture-policies/{name}` — `MISSING — docs/13 G7` | `VPNService.{Get,Set,Delete}PosturePolicy` — `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `vpn_posture_policy_{get,set,delete}` — `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `vpn:admin` |
-| Key rotation | `POST /api/v1/vpn/keys/rotate` — `MISSING — docs/13 G7` | `VPNService.RotateKeys` — `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `vpn_keys_rotate` — `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `vpn:admin` |
+`VPNService` (`pkg/api/grpc/proto/vpn.proto`) is served by the daemon
+(`pkg/api/daemon/vpn_grpc_service.go`) over `pkg/vpn.Service`. Every row is on
+every transport; the per-transport tables are pinned against
+`VPNService_ServiceDesc`, so a method missing from one transport fails its tests.
 
-The client verbs terminate on the **gateway's admission listener** (mTLS,
-device identity, no bearer token); the operator verbs terminate on the
-**control plane** like every other operator surface and are gated by the
-platform's role guard plus the `scp` claims above. QUIC frames take the next
-free category opcode from the platform-wide table in
-[docs/daemon/api.md](../daemon/api.md) when the implementing PR assigns it.
+| RPC | REST | QUIC `0x52` sub | MCP tool | Scope |
+|---|---|---|---|---|
+| `EnrolPeer` | `POST /api/v1/vpn/peers` (body: `VPNPeer`) | `0x01` | `vpn_peer_enrol` | `vpn:write` |
+| `ListPeers` | `GET /api/v1/vpn/peers?tenant_id=` | `0x02` | `vpn_peer_list` | `vpn:read` |
+| `RevokePeer` | `DELETE /api/v1/vpn/peers/{device_id}?tenant_id=` | `0x03` | `vpn_peer_revoke` | `vpn:write` |
+| `GetStatus` | `GET /api/v1/vpn/status?gateway_id=` | `0x04` | `vpn_status` | `vpn:read` |
+| `GetPosturePolicy` | `GET /api/v1/vpn/posture-policies/{name}?tenant_id=` | `0x05` | `vpn_posture_policy_get` | `vpn:admin` |
+| `SetPosturePolicy` | `PUT /api/v1/vpn/posture-policies/{name}` (body: `VPNPosturePolicy`) | `0x06` | `vpn_posture_policy_set` | `vpn:admin` |
+| `DeletePosturePolicy` | `DELETE /api/v1/vpn/posture-policies/{name}?tenant_id=` | `0x07` | `vpn_posture_policy_delete` | `vpn:admin` |
+| `ListPosturePolicies` | `GET /api/v1/vpn/posture-policies?tenant_id=` | `0x08` | `vpn_posture_policy_list` | `vpn:admin` |
 
-## 2. Schemas *(planned)*
+- **gRPC / Unix**: `platform.v1.VPNService/<RPC>`; the scope comes from the gRPC
+  method catalog (`pkg/api/grpc/method_permissions.go`).
+- **QUIC**: category opcode `OpVPNCategory` (`0x52`), sub-opcodes `VPNSub*` in
+  `sdk/go/wire/quicwire/vpn_opcodes.go`; scopes in
+  `pkg/api/quic/opcode_permissions.go`.
+- **MCP**: tool scopes in `pkg/api/mcp/authz.go`.
+- **REST**: the same paths on the daemon listener (`pkg/api/rest/vpn_handlers.go`)
+  and on the webservice (`pkg/webservice/v1/rest/vpn`). On the daemon listener
+  every route requires the scope above through `restapi.ScopeGuard`: a platform
+  token's `scp`, or the verified mTLS client certificate admitted as the
+  operator (`*:*`). No credential is 401, a missing scope 403, and handlers
+  built without a guard refuse every route with 403. On the webservice each
+  route takes the scope when a scope authorizer is configured.
+- **Embedded / Go SDK**: `sdk/go/services/vpn.Client`, over any of the
+  transports above.
+
+How each transport authenticates is the platform-wide picture in
+[docs/daemon/api.md](../daemon/api.md); the VPN adds no transport of its own.
+
+An empty `tenant_id` on the list routes lists every tenant; the item routes
+require it. `GetStatus` with an empty `gateway_id` returns every gateway that
+reports telemetry.
+
+## 2. Schemas
+
+```json
+// VPNPeer
+{ "tenant_id": "acme", "device_id": "laptop-1", "zones": ["management"], "enrolled_at_unix": 1760300000 }
+
+// VPNPosturePolicy
+{ "tenant_id": "acme", "name": "corp", "module": "package vpn.posture\n…", "updated_at_unix": 1760300000 }
+
+// VPNGatewayStatus
+{ "gateway_id": "gw-01", "reported_at_unix": 1760300000, "reporting": true, "running": true,
+  "admissions": 12, "refusals": 1, "last_refusal": "posture violation", "enrolled_peers": 3,
+  "leases_by_data_plane": {"masque": 2}, "leases": [{"id": "…", "tenant_id": "acme",
+  "device_id": "laptop-1", "address": "10.8.0.2", "data_plane": "masque", "zones": ["management"],
+  "issued_at_unix": 1760300000, "expires_at_unix": 1760328800, "renewals": 0}],
+  "posture_policy_errors": [], "rejected_peers": [{"tenant_id": "acme", "device_id": "laptop-9",
+  "reason": "vpn: zone \"storage\" is not reachable through this service"}] }
+```
+
+- `zones` narrows the gateway's `allow-to` set; empty means every allowed zone.
+- `enrolled_at_unix` and `updated_at_unix` are set by the service and ignored on
+  write. Re-enrolling a device replaces its zones and keeps its first enrolment
+  time.
+- A policy name is letters, digits, `_`, `-` and `.`. The module must compile
+  and declare package `vpn.posture`, or the write is refused.
+- `reporting: false` means the gateway sends telemetry without a VPN section:
+  the service is not configured there, and the remaining fields are zero.
+- `rejected_peers` lists the enrolments the gateway refused from the last set
+  it applied, each with the reason: today a zone the gateway's `allow-to` does
+  not serve. A refused peer is not enrolled there and loses its leases; the
+  rest of the set applies. Every transport returns the field.
+
+The enrolment set and the posture policies reach the gateways as the `vpn`
+section of the desired config ([engineering.md](engineering.md) §1).
+
+## 3. Status and error mapping
+
+| `pkg/vpn` error | gRPC | REST | QUIC |
+|---|---|---|---|
+| `ErrInvalidArgument`, `ErrInvalidPosturePolicy` | `InvalidArgument` | 400 | `StatusInvalidArgument` |
+| `ErrPeerNotFound`, `ErrPosturePolicyNotFound`, `ErrGatewayNotFound` | `NotFound` | 404 | `StatusNotFound` |
+| `ErrKeyCollision` (two keys hash to one record; the write is refused) | `Aborted` | 409 | `StatusAlreadyExists` |
+| `ErrStoreUnavailable`, `ErrPolicyEngineUnavailable`, `ErrStatusUnavailable` | `Unavailable` | 503 | `StatusUnavailable` |
+| caller deadline | `DeadlineExceeded` | 504 | `StatusTimeout` |
+| anything else | `Internal` | 500 | `StatusInternalError` |
+
+MCP returns the gRPC error as a tool error.
+
+**Fails closed.** A daemon without a VPN control plane refuses every RPC with
+`Unavailable` (REST 503, QUIC `StatusUnavailable`); none of them answers with
+an empty result. `GetStatus` is `Unavailable` on a daemon that has no gateway
+telemetry store.
+
+## 4. Pagination and versioning
+
+The list RPCs are not paginated: they return the full set for the tenant.
+Routes are unversioned beyond the `/api/v1` prefix.
+
+## 5. Client admission *(planned)*
+
+These verbs terminate on the **gateway's admission listener** (mTLS, device
+identity, no bearer token), not on the control plane. Nothing below is routed.
+
+| Capability | REST | gRPC | `scp` |
+|---|---|---|---|
+| Admit | `POST /api/v1/vpn/admissions` | `VPNService.Admit` | device identity (mTLS), no token |
+| Renew | `POST /api/v1/vpn/leases/{id}/renew` | `VPNService.Renew` | device identity |
+| Disconnect | `DELETE /api/v1/vpn/leases/{id}` (own lease) | `VPNService.Revoke` | device identity |
 
 `AdmissionRequest`:
 
@@ -45,34 +132,12 @@ free category opcode from the platform-wide table in
 }
 ```
 
-`Lease` (response and operator read):
-
-```json
-{ "id": "…", "device_id": "…", "tenant_id": "…", "address": "…/32", "zones": ["management"], "data_plane": "masque", "expires_at": "<RFC 3339>", "renewals": 0,
-  "endpoint": { "wireguard": {"server_public_key": "<base64>", "endpoint": "host:51820"}, "masque": {"template": "https://…/.well-known/masque/ip/"} },
-  "verdict": { "passed": true, "cryptographic": true, "profile_id": 0 } }
-```
-
-A refusal body carries only `reason` (the class from
+The response is the lease (the `VPNLease` fields above, plus the data plane's
+endpoint and the verdict). A refusal carries only `reason` (the class from
 [engineering.md](engineering.md) §3) and, for a posture violation, the rule
-names — never the policy text or the identity list.
+names — never the policy text or the identity list. Identity and factor
+failures are 401, attestation and posture 403, an unavailable verifier, policy
+engine, pool or datapath 503.
 
-## 3. Status and error mapping
-
-Per [engineering.md](engineering.md) §3: 401 `Unauthenticated` for identity and
-factor failures, 403 `PermissionDenied` for attestation and posture, 503
-`Unavailable`/`ResourceExhausted` for verifier, policy engine, pool or datapath
-unavailability (all refusals), 404/410 for lease lookups. QUIC status bytes map
-onto the platform's canonical vocabulary in `sdk/go/wire/quicwire/protocol.go`.
-
-## 4. Pagination and versioning
-
-`ListLeases` is paginated (`limit`/`cursor`) — a tenant may hold thousands of
-leases. Routes are unversioned beyond the `/api/v1` prefix; the request and
-lease schemas carry no version field until a breaking change requires one.
-
-## 5. Deliberate omissions
-
-The client admission verbs are not offered on MCP: an LLM client is not a
-device with a TPM, and there is no honest way for it to attest. Operator verbs
-are.
+The client verbs are not offered on MCP: an LLM client is not a device with a
+TPM, and there is no honest way for it to attest.

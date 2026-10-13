@@ -14,6 +14,7 @@
 package commands
 
 import (
+	"context"
 	"path/filepath"
 
 	"github.com/spf13/viper"
@@ -66,10 +67,27 @@ func initGatewayControlPlane(logger *logging.Logger, a *app.App) *gatewayControl
 // gatewayID is advisory: the same intent is served to every gatewayd
 // until the deployment grows a second gateway and per-gateway overrides
 // with it.
+//
+// The vpn section is not configuration: it is the enrolment set and the
+// posture policies operators manage through VPNService, so once a VPN
+// source is wired it is the section's only author.
 type viperDesiredConfigSource struct {
 	// v is the configuration tree to read; the platform's global instance
 	// in the daemon, a private one in tests.
 	v *viper.Viper
+	// vpn supplies the vpn section; nil serves the document without one.
+	vpn desiredVPNSource
+}
+
+// desiredVPNSource produces the vpn section of the desired configuration
+// (pkg/vpn.Service).
+type desiredVPNSource interface {
+	DesiredVPN(ctx context.Context) (*gwstate.DesiredVPN, error)
+}
+
+// SetVPNSource makes source the author of the vpn section.
+func (v *viperDesiredConfigSource) SetVPNSource(source desiredVPNSource) {
+	v.vpn = source
 }
 
 // desiredConfigKey is the Viper key holding the fleet's desired gateway
@@ -83,17 +101,45 @@ func (v *viperDesiredConfigSource) DesiredConfig(gatewayID string) (*gwstate.Des
 	if tree == nil {
 		tree = viper.GetViper()
 	}
-	if !tree.IsSet(desiredConfigKey) {
-		return desired, nil
+	if tree.IsSet(desiredConfigKey) {
+		if err := tree.UnmarshalKey(desiredConfigKey, desired); err != nil {
+			return nil, &ErrDesiredConfigDecode{Key: desiredConfigKey, Cause: err}
+		}
+		desired.GatewayID = gatewayID
 	}
-	if err := tree.UnmarshalKey(desiredConfigKey, desired); err != nil {
-		return nil, &ErrDesiredConfigDecode{Key: desiredConfigKey, Cause: err}
+	if err := v.overlayVPN(desired); err != nil {
+		return nil, err
 	}
-	desired.GatewayID = gatewayID
 	if err := desired.Validate(); err != nil {
 		return nil, err
 	}
 	return desired, nil
+}
+
+// desiredVPNKey is the Viper key a vpn section would be configured under,
+// which the VPN source refuses.
+const desiredVPNKey = desiredConfigKey + ".vpn"
+
+// overlayVPN sets the vpn section from the VPN source. An operator version
+// is suffixed with the content version, because the gateway re-applies only
+// when the version changes and an enrolment or a revocation does not change
+// what the operator wrote.
+func (v *viperDesiredConfigSource) overlayVPN(desired *gwstate.DesiredConfig) error {
+	if v.vpn == nil {
+		return nil
+	}
+	if desired.VPN != nil {
+		return &ErrDesiredVPNConfigured{Key: desiredVPNKey}
+	}
+	section, err := v.vpn.DesiredVPN(context.Background())
+	if err != nil {
+		return err
+	}
+	desired.VPN = section
+	if desired.Version != "" {
+		desired.Version += "+vpn." + desired.ContentVersion()
+	}
+	return nil
 }
 
 // ErrDesiredConfigDecode reports a `gateway.desired:` block that does not
@@ -110,3 +156,15 @@ func (e *ErrDesiredConfigDecode) Error() string {
 
 // Unwrap returns the decode failure.
 func (e *ErrDesiredConfigDecode) Unwrap() error { return e.Cause }
+
+// ErrDesiredVPNConfigured reports a vpn section in the configuration file
+// while VPNService authors it: serving either would silently discard the
+// other.
+type ErrDesiredVPNConfigured struct {
+	Key string
+}
+
+// Error implements the error interface.
+func (e *ErrDesiredVPNConfigured) Error() string {
+	return "gateway control plane: " + e.Key + " is managed through VPNService (platformctl vpn); remove it from the configuration"
+}

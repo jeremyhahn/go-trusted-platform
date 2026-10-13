@@ -25,6 +25,8 @@ package quic
 // and their response back onto the pb reply through the maps below.
 
 import (
+	"math"
+
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
@@ -76,4 +78,42 @@ func registerCategoryCodecs(encoders map[string]categoryRequestEncoder, decoders
 	for method, decode := range decoders {
 		categoryResponseDecoders[method] = decode
 	}
+}
+
+// categoryPage reports one page of a paged list reply: the entries it
+// carried and the number the daemon holds in all.
+type categoryPage struct {
+	received int32
+	total    int32
+}
+
+// categoryPager drives a category list method the daemon serves one page at
+// a time, so the caller still receives the whole list in one reply, as over
+// gRPC. request builds the wire request for the page starting at offset, and
+// decode appends that page's entries to the pb reply.
+type categoryPager struct {
+	request func(args interface{}, offset int32) (interface{}, error)
+	decode  func(payload []byte, reply interface{}) (categoryPage, error)
+}
+
+// categoryPagers routes the paged category list methods. A paged method
+// takes this route instead of the request encoder and reply decoder tables.
+var categoryPagers = map[string]categoryPager{}
+
+// pagedRequest builds a categoryPager request that type-checks the pb
+// request and converts it into the daemon wire struct for one page.
+func pagedRequest[P any](method string, convert func(req *P, offset int32) interface{}) func(interface{}, int32) (interface{}, error) {
+	return func(args interface{}, offset int32) (interface{}, error) {
+		req, ok := args.(*P)
+		if !ok || req == nil {
+			return nil, ErrInvalidArgsType{Method: method}
+		}
+		return convert(req, offset), nil
+	}
+}
+
+// pageCount converts a page's entry count to the wire's int32, capped at the
+// largest count the wire carries.
+func pageCount(n int) int32 {
+	return int32(min(n, math.MaxInt32))
 }

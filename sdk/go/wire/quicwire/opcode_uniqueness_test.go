@@ -51,6 +51,7 @@ var opcodeNamespaces = map[string]string{
 	"kms_opcodes.go":           nsTopLevel, // "KMS extended and Secrets category opcodes" — category markers are top-level
 	"ntp_opcodes.go":           nsTopLevel, // "NTP (time synchronization) category opcode"
 	"iam_opcodes.go":           nsTopLevel, // "IAM category opcode"
+	"vpn_opcodes.go":           nsTopLevel, // "VPN category opcode"
 	"phase35_opcodes.go":       nsTopLevel, // "Phase 3.5 category opcodes"
 	"provisioning_opcodes.go":  nsTopLevel, // "Provisioning (config delivery) category opcode"
 	"attestation_opcodes.go":   nsTopLevel, // no header claim; measured — handleRequest switches on req.Opcode

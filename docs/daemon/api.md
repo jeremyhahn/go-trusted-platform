@@ -224,8 +224,8 @@ changing, validate before applying, roll back if wrong.
 
 The opcode is a **single byte** with a **two-level extension**: certain values
 are *category* opcodes whose sub-opcode is carried in the payload, and the daemon
-routes them to a dedicated handler (`pkg/api/daemon/quic_service.go`). Seventeen
-distinct values, eighteen names:
+routes them to a dedicated handler (`pkg/api/daemon/quic_service.go`). Eighteen
+distinct values, nineteen names:
 
 | Opcode | Category | Notes |
 |---|---|---|
@@ -235,6 +235,7 @@ distinct values, eighteen names:
 | `0x3F` | `OpIPAMCategory` | IPAM |
 | `0x50` | `OpNTPCategory` | Time synchronisation |
 | `0x51` | `OpIAMCategory` | IAM tenant records; sub-opcodes `IAMSub*` `0x01`–`0x05`. Not the platform tenancy opcodes `0xDB`–`0xEB` |
+| `0x52` | `OpVPNCategory` | VPN control plane; sub-opcodes `VPNSub*` `0x01`–`0x08`, scopes `vpn:read`/`vpn:write`/`vpn:admin` ([docs/vpn/api.md](../vpn/api.md)) |
 | `0x69` | `OpVMExtendedCategory` | VM operational sub-opcodes (`0xCC`–`0xD0`) |
 | `0x99` | `OpTPM2Category` | Physical TPM |
 | `0x9A` | `OpCeremonyCategory` | Bootstrap ceremony; per-sub-opcode scopes in [`docs/cli/ceremony.md`](../cli/ceremony.md) |
@@ -334,6 +335,24 @@ pool is refused the same way. The daemon REST server authenticates by mTLS
 only, so `EnableREST` requires `EnableMTLS`. Before #550 the interceptors were
 installed with `WithRequireAuth(tokenValidator != nil)`, so the misconfigured
 state served the whole daemon API anonymously.
+
+**The daemon REST VPN and NTP routes check the RPC's scope (#584).** mTLS at
+the handshake is not authorization: each `/api/v1/vpn/*` and `/api/v1/ntp/*`
+route on the daemon listener runs through `restapi.ScopeGuard`
+(`pkg/api/rest/route_scope.go`) and requires the scope the gRPC catalog gives
+its RPC (`vpn:read|write|admin`, `ntp:read` for status and sources, `ntp:write`
+for step). The guard takes the credentials QUIC takes, in the same order:
+
+- a `Bearer` platform token (with its `DPoP` proof), validated by the shared
+  platform-token validator; its `scp` is the scope set;
+- otherwise the verified client certificate (`VerifiedChains` only),
+  authenticated against the mTLS client CA pool and admitted as the operator
+  holding `*:*`.
+
+No credential, or one with no verifier configured, is 401; a caller without the
+scope is 403. A handler set built without a guard answers 403 on every route
+(default-deny). The guard is built by `newRESTScopeGuard`; it does not change
+the routes of the other REST handler sets.
 
 **QUIC authorizes every request before dispatch (#767).** Before #767 the QUIC
 dispatcher authenticated a token when a middleware was installed and then
@@ -442,6 +461,7 @@ are `read`, `write` and `delete`; `bmc` adds `power`, `media` and `admin`, and
 are:
 
 - `vtpm`, `dns`, `ntp`, `proxy`, `device`, `sdn`, `kms` and `iam`
+- `vpn`, whose actions are `read`, `write` and `admin` (posture policies)
 - `platform` (`PlatformDaemon`, including `StreamEvents`, `StreamLogs` and
   `StreamMetrics`)
 - `attestation`, `bmc`, `cluster`, `container`, `vm`, `provisioning`, `eab`,
@@ -524,7 +544,8 @@ certificate and does not apply the per-method scope catalog. The UDS server
 authorizes by peer credentials.
 
 MCP's 94 mapped tools are the vtpm, dns, device, profile, gateway-lb,
-gateway-perf, sdn, proxy, ntp, bmc and invitation families. The 334 unmapped
+gateway-perf, sdn, proxy, ntp, bmc and invitation families. The eight `vpn_*`
+tools (#584) are mapped as well. The 334 unmapped
 tools are **refused, not served** — measured from the built registry on
 2026-09-05 (#412): `platform_tpm` 31, `vtpm` 26, `iam` 25, `vm` 23, `kms` 20,
 `gateway` 20, `tenant` 17, `attestation` 15, `dns` 12, `sdn` 11, `platform_eab`

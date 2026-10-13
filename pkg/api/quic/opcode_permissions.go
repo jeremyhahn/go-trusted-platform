@@ -174,6 +174,10 @@ var (
 	ntpRead  = OpcodePermission{Resource: "ntp", Action: actionRead}
 	ntpWrite = OpcodePermission{Resource: "ntp", Action: actionWrite}
 
+	vpnRead  = OpcodePermission{Resource: "vpn", Action: actionRead}
+	vpnWrite = OpcodePermission{Resource: "vpn", Action: actionWrite}
+	vpnAdmin = OpcodePermission{Resource: "vpn", Action: actionAdmin}
+
 	tpmRead   = OpcodePermission{Resource: "tpm", Action: actionRead}
 	tpmWrite  = OpcodePermission{Resource: "tpm", Action: actionWrite}
 	tpmDelete = OpcodePermission{Resource: "tpm", Action: actionDelete}
@@ -588,6 +592,19 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.NTPSubGetStatus:   ntpRead,
 		quicwire.NTPSubListSources: ntpRead,
 		quicwire.NTPSubStep:        ntpWrite,
+	},
+
+	// VPN control plane (gRPC VPNService). Posture policies are tenant
+	// security policy, so every policy operation needs vpn:admin.
+	quicwire.OpVPNCategory: {
+		quicwire.VPNSubEnrolPeer:           vpnWrite,
+		quicwire.VPNSubListPeers:           vpnRead,
+		quicwire.VPNSubRevokePeer:          vpnWrite,
+		quicwire.VPNSubGetStatus:           vpnRead,
+		quicwire.VPNSubGetPosturePolicy:    vpnAdmin,
+		quicwire.VPNSubSetPosturePolicy:    vpnAdmin,
+		quicwire.VPNSubDeletePosturePolicy: vpnAdmin,
+		quicwire.VPNSubListPosturePolicies: vpnAdmin,
 	},
 
 	// IAM tenant records (gRPC PlatformIAMService tenant methods)

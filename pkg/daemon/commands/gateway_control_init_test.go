@@ -14,6 +14,7 @@
 package commands
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -87,4 +88,72 @@ func TestViperDesiredConfigSource_NilTreeUsesTheGlobal(t *testing.T) {
 	cfg, err := (&viperDesiredConfigSource{}).DesiredConfig("gw-1")
 	require.NoError(t, err)
 	assert.Equal(t, "gw-1", cfg.GatewayID)
+}
+
+// fixedVPNSource serves one vpn section, or fails with err.
+type fixedVPNSource struct {
+	section *gwstate.DesiredVPN
+	err     error
+}
+
+func (f *fixedVPNSource) DesiredVPN(context.Context) (*gwstate.DesiredVPN, error) {
+	return f.section, f.err
+}
+
+// errVPNStoreDown is the failure a broken enrolment store reports.
+type errVPNStoreDown struct{}
+
+func (errVPNStoreDown) Error() string { return "vpn store down" }
+
+func TestViperDesiredConfigSource_VPNSectionComesFromTheVPNSource(t *testing.T) {
+	section := &gwstate.DesiredVPN{
+		Peers: []gwstate.DesiredVPNPeer{{TenantID: "acme", DeviceID: "laptop-1", Zones: []string{"management"}}},
+	}
+	src := sourceFor(t, "sdn:\n  enabled: true\n")
+	src.SetVPNSource(&fixedVPNSource{section: section})
+
+	cfg, err := src.DesiredConfig("gw-1")
+	require.NoError(t, err)
+	assert.Equal(t, "gw-1", cfg.GatewayID)
+	assert.Equal(t, section, cfg.VPN)
+	assert.Empty(t, cfg.Version, "without an operator version the gateway derives one from the content")
+}
+
+// TestViperDesiredConfigSource_OperatorVersionFollowsTheEnrolmentSet checks
+// that an enrolment change reaches a gateway whose operator version did not
+// change: the served version carries the content version.
+func TestViperDesiredConfigSource_OperatorVersionFollowsTheEnrolmentSet(t *testing.T) {
+	vpn := &fixedVPNSource{section: &gwstate.DesiredVPN{}}
+	src := sourceFor(t, "gateway:\n  desired:\n    version: rev-4\n")
+	src.SetVPNSource(vpn)
+
+	before, err := src.DesiredConfig("gw-1")
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(before.Version, "rev-4+vpn.sha256:"), "version = %q", before.Version)
+
+	vpn.section = &gwstate.DesiredVPN{
+		Peers: []gwstate.DesiredVPNPeer{{TenantID: "acme", DeviceID: "laptop-1", Zones: []string{"management"}}},
+	}
+	after, err := src.DesiredConfig("gw-1")
+	require.NoError(t, err)
+	assert.NotEqual(t, before.Version, after.Version)
+}
+
+func TestViperDesiredConfigSource_RefusesAConfiguredVPNSection(t *testing.T) {
+	src := sourceFor(t, "gateway:\n  desired:\n    vpn:\n      peers:\n        - tenant-id: acme\n          device-id: laptop-1\n")
+	src.SetVPNSource(&fixedVPNSource{section: &gwstate.DesiredVPN{}})
+
+	_, err := src.DesiredConfig("gw-1")
+	var configured *ErrDesiredVPNConfigured
+	require.True(t, errors.As(err, &configured), "got %v", err)
+	assert.Equal(t, desiredVPNKey, configured.Key)
+}
+
+func TestViperDesiredConfigSource_VPNSourceFailureFailsTheDocument(t *testing.T) {
+	src := sourceFor(t, "sdn:\n  enabled: true\n")
+	src.SetVPNSource(&fixedVPNSource{err: errVPNStoreDown{}})
+
+	cfg, err := src.DesiredConfig("gw-1")
+	require.ErrorIs(t, err, errVPNStoreDown{})
+	assert.Nil(t, cfg, "a document without its vpn section would revoke every peer")
 }

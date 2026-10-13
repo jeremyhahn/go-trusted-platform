@@ -19,6 +19,8 @@ package ntp
 
 import (
 	"context"
+	"io"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -60,12 +62,13 @@ type outputFunc func(flags *cli.CommonFlags, v any) error
 
 // output is the production output renderer.
 var output outputFunc = func(flags *cli.CommonFlags, v any) error {
-	base, err := cli.NewBaseCommand(flags)
-	if err != nil {
-		return err
-	}
-	defer base.Close()
-	return base.Output(v)
+	return render(os.Stdout, flags, v)
+}
+
+// render writes v to w in the selected output format. Printing needs no
+// daemon connection, so it does not open one.
+func render(w io.Writer, flags *cli.CommonFlags, v any) error {
+	return cli.NewPrinterWithWriter(flags.OutputFormat, flags.NoColor, w).Print(v)
 }
 
 // NewCommand creates the root ntp command.

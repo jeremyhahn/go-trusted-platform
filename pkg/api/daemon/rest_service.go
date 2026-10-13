@@ -345,14 +345,28 @@ func (s *RESTServer) SetBMCHandler(handler bmcwebsvc.RestHandler) {
 // the same in-process NTPServiceServer that backs gRPC, QUIC, MCP, and the
 // Unix socket, so every transport reports one clock. A nil server leaves the
 // routes unmounted, which is the correct signal on a node with no `ntp:`
-// section.
-func (s *RESTServer) SetNTPHandlers(server platformv1.NTPServiceServer) {
+// section. guard checks each route's ntp:* scope; nil refuses every route.
+func (s *RESTServer) SetNTPHandlers(server platformv1.NTPServiceServer, guard *restapi.ScopeGuard) {
 	if server == nil {
 		return
 	}
-	handlers := restapi.NewNTPHandlers(server, s.logger)
+	handlers := restapi.NewNTPHandlers(server, guard, s.logger)
 	handlers.RegisterRoutes(s.router)
 	s.logger.Info("NTP REST routes registered")
+}
+
+// SetVPNHandlers wires the VPN control-plane REST handlers onto the daemon's
+// REST router so /api/v1/vpn/* is served. The handlers delegate to the same
+// in-process VPNServiceServer that backs gRPC, QUIC, MCP, and the Unix
+// socket. A nil server leaves the routes unmounted. guard checks each route's
+// vpn:* scope; nil refuses every route.
+func (s *RESTServer) SetVPNHandlers(server platformv1.VPNServiceServer, guard *restapi.ScopeGuard) {
+	if server == nil {
+		return
+	}
+	handlers := restapi.NewVPNHandlers(server, guard, s.logger)
+	handlers.RegisterRoutes(s.router)
+	s.logger.Info("VPN REST routes registered")
 }
 
 // SetDeviceHandlers wires the device REST handlers (CRUD + profiles) onto

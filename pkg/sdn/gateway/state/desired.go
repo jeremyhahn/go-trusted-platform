@@ -40,6 +40,68 @@ type DesiredConfig struct {
 	Version      string               `json:"version,omitempty" yaml:"version,omitempty" mapstructure:"version"`
 	LoadBalancer *DesiredLoadBalancer `json:"load_balancer,omitempty" yaml:"load-balancer,omitempty" mapstructure:"load-balancer"`
 	NAT          *DesiredNAT          `json:"nat,omitempty" yaml:"nat,omitempty" mapstructure:"nat"`
+	VPN          *DesiredVPN          `json:"vpn,omitempty" yaml:"vpn,omitempty" mapstructure:"vpn"`
+}
+
+// DesiredVPN is the control plane's remote-access VPN state for one gateway:
+// the enrolled peers and the tenant posture policies (docs/vpn/). The
+// gateway admits only enrolled peers, so an empty Peers list admits nobody.
+type DesiredVPN struct {
+	Peers           []DesiredVPNPeer          `json:"peers,omitempty" yaml:"peers,omitempty" mapstructure:"peers"`
+	PosturePolicies []DesiredVPNPosturePolicy `json:"posture_policies,omitempty" yaml:"posture-policies,omitempty" mapstructure:"posture-policies"`
+}
+
+// DesiredVPNPeer is one enrolled device of a tenant.
+type DesiredVPNPeer struct {
+	TenantID string   `json:"tenant_id" yaml:"tenant-id" mapstructure:"tenant-id"`
+	DeviceID string   `json:"device_id" yaml:"device-id" mapstructure:"device-id"`
+	Zones    []string `json:"zones,omitempty" yaml:"zones,omitempty" mapstructure:"zones"`
+}
+
+// DesiredVPNPosturePolicy is one tenant posture policy (a Rego module).
+type DesiredVPNPosturePolicy struct {
+	TenantID string `json:"tenant_id" yaml:"tenant-id" mapstructure:"tenant-id"`
+	Name     string `json:"name" yaml:"name" mapstructure:"name"`
+	Module   string `json:"module" yaml:"module" mapstructure:"module"`
+}
+
+// validate checks each peer and policy names its tenant and is unique.
+func (v *DesiredVPN) validate() error {
+	// Keys keep tenant and name apart: a joined "tenant/name" string would
+	// make ("a/b", "c") and ("a", "b/c") the same peer.
+	peers := map[[2]string]bool{}
+	for i, p := range v.Peers {
+		field := SectionVPN + ".peers[" + itoa(i) + "]"
+		if p.TenantID == "" {
+			return &ErrDesiredConfigInvalid{Field: field + ".tenant_id", Reason: "required"}
+		}
+		if p.DeviceID == "" {
+			return &ErrDesiredConfigInvalid{Field: field + ".device_id", Reason: "required"}
+		}
+		key := [2]string{p.TenantID, p.DeviceID}
+		if peers[key] {
+			return &ErrDesiredConfigInvalid{Field: field, Reason: "duplicate peer " + strconv.Quote(p.DeviceID) + " of tenant " + strconv.Quote(p.TenantID)}
+		}
+		peers[key] = true
+	}
+	policies := map[[2]string]bool{}
+	for i, p := range v.PosturePolicies {
+		field := SectionVPN + ".posture_policies[" + itoa(i) + "]"
+		switch {
+		case p.TenantID == "":
+			return &ErrDesiredConfigInvalid{Field: field + ".tenant_id", Reason: "required"}
+		case p.Name == "":
+			return &ErrDesiredConfigInvalid{Field: field + ".name", Reason: "required"}
+		case p.Module == "":
+			return &ErrDesiredConfigInvalid{Field: field + ".module", Reason: "required"}
+		}
+		key := [2]string{p.TenantID, p.Name}
+		if policies[key] {
+			return &ErrDesiredConfigInvalid{Field: field, Reason: "duplicate posture policy " + strconv.Quote(p.Name) + " of tenant " + strconv.Quote(p.TenantID)}
+		}
+		policies[key] = true
+	}
+	return nil
 }
 
 // DesiredLoadBalancer is the complete set of virtual IPs the gateway's
@@ -101,6 +163,7 @@ type DesiredConfigState struct {
 const (
 	SectionLoadBalancer = "load_balancer"
 	SectionNAT          = "nat"
+	SectionVPN          = "vpn"
 )
 
 // DecodeDesiredConfig parses the JSON document the control plane served.
@@ -134,6 +197,7 @@ var knownDesiredSections = map[string]bool{
 	"version":       true,
 	"load_balancer": true,
 	"nat":           true,
+	"vpn":           true,
 }
 
 // Validate checks every address and identity the document carries, so a
@@ -171,6 +235,11 @@ func (d *DesiredConfig) Validate() error {
 				return &ErrDesiredConfigInvalid{Field: dnatField(i, "external"), Reason: "duplicate DNAT " + key}
 			}
 			seen[key] = true
+		}
+	}
+	if d.VPN != nil {
+		if err := d.VPN.validate(); err != nil {
+			return err
 		}
 	}
 	return nil

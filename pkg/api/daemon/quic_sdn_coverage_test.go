@@ -218,12 +218,12 @@ func TestHandleSDNOperation_UnknownOpcode(t *testing.T) {
 	// Since we can't mock the client easily, let's verify the routing behavior
 	// by ensuring the HandleRequest method routes SDN operations correctly
 	req := &quicwire.Request{
-		Opcode:  0x52, // Not a valid SDN opcode; reserved for NTP growth
+		Opcode:  0x53, // Not a valid SDN opcode; reserved
 		Payload: []byte{},
 	}
 	resp := handler.HandleRequest(ctx, req)
-	// 0x52 is still unallocated (0x50 is the NTP category, 0x51 the IAM
-	// category), so the authorization guard refuses it as unclassified before dispatch.
+	// 0x53 is still unallocated (0x50 is the NTP category, 0x51 the IAM
+	// category, 0x52 the VPN category), so the authorization guard refuses it as unclassified before dispatch.
 	assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
 }
 

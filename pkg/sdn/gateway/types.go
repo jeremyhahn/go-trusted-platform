@@ -29,6 +29,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/loadbalancer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/nat64"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/vpn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/tunnel"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/vxlan"
 )
@@ -1284,9 +1285,9 @@ type GatewayConfig struct {
 	// service for point-to-point link management on the transit VLAN.
 	Transit *TransitServiceConfig `yaml:"transit,omitempty" json:"transit,omitempty" mapstructure:"transit"`
 
-	// ManagementVPN is the WireGuard admin VPN service configuration.
-	// When present and enabled, the gateway exposes the WireGuard endpoint
-	// for authenticated operator access to management zone endpoints.
+	// ManagementVPN is the remote-access VPN service configuration. When
+	// present and enabled, the gateway admits enrolled, attested operator
+	// devices to the management zone endpoints (docs/vpn/).
 	ManagementVPN *ManagementVPNServiceConfig `yaml:"management_vpn,omitempty" json:"management_vpn,omitempty" mapstructure:"management_vpn"`
 
 	// Tunnels are the GRE, IPsec and WireGuard tunnel configurations.
@@ -1518,26 +1519,30 @@ func (c *TransitServiceConfig) Validate() error {
 	return nil
 }
 
-// ManagementVPNServiceConfig holds the WireGuard admin VPN gateway service
-// configuration. The platform WireGuard endpoint exposes access to management
-// zone endpoints only; operator workstations authenticate through this tunnel
-// and are never dual-homed onto a data zone.
+// ManagementVPNServiceConfig holds the remote-access VPN gateway service
+// configuration (docs/vpn/engineering.md §5). Operator workstations reach
+// the management zone endpoints named in allow-to only; they are never
+// dual-homed onto a data zone.
 //
-// The runtime-undefined aspects (WireGuard key management, peer enrollment,
-// IP assignment within the admin subnet) are handled by go-xkms WireGuard
-// support reached via the quicbaas SDK; this struct holds only the gateway
-// service activation flag.
-//
-// Doc reference: docs/architecture/reference-network.md §Management access
+// The service settings are the VPN core's own Config, inlined so the keys sit
+// directly under gateway.management_vpn. The data planes, attestation,
+// posture and person-factor verification are injected through
+// GatewayRuntime.VPN; the enrolled peers and tenant posture policies arrive
+// in the control plane's desired configuration.
 type ManagementVPNServiceConfig struct {
 	// Enabled controls whether the management VPN service is active.
-	// Gateways SHOULD expose this by default.
 	Enabled bool `yaml:"enabled" json:"enabled" mapstructure:"enabled"`
+
+	vpn.Config `yaml:",inline" mapstructure:",squash"`
 }
 
-// Validate checks the management VPN service configuration.
+// Validate checks the service settings of an enabled VPN; a disabled section
+// is not read.
 func (c *ManagementVPNServiceConfig) Validate() error {
-	return nil
+	if !c.Enabled {
+		return nil
+	}
+	return c.Config.WithDefaults().Validate()
 }
 
 // GatewayStatus represents the current status of a gateway.

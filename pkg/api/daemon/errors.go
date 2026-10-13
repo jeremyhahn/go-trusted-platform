@@ -1588,6 +1588,22 @@ func (e ErrGatewayOperationNotImplemented) Error() string {
 	return fmt.Sprintf("gateway operation not implemented: %s", e.Operation)
 }
 
+// ErrBGPAttributeUnsupported is returned when a prefix announcement asks
+// for a BGP path attribute the gateway service does not announce with.
+type ErrBGPAttributeUnsupported struct {
+	Attribute string
+}
+
+func (e ErrBGPAttributeUnsupported) Error() string {
+	return fmt.Sprintf("BGP path attribute not supported on announce: %s", e.Attribute)
+}
+
+// GRPCStatus classifies the refused attribute as an invalid argument, so
+// the QUIC handler answers it as one.
+func (e ErrBGPAttributeUnsupported) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // =============================================================================
 // TPM Service Errors
 // =============================================================================

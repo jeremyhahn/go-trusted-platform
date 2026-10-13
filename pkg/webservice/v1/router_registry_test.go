@@ -105,6 +105,7 @@ type testHandlerRegistry struct {
 	dnsService            dns.DNSService
 	eabService            platformv1.EABServiceServer
 	ntpService            platformv1.NTPServiceServer
+	vpnService            platformv1.VPNServiceServer
 	overlayService        platformv1.OverlayServiceServer
 	switchService         device.SwitchServiceProvider
 	gatewayService        platformv1.GatewayServiceServer
@@ -271,6 +272,10 @@ func (r *testHandlerRegistry) PXEServiceServer() platformv1.PXEServiceServer {
 
 func (r *testHandlerRegistry) NTPServiceServer() platformv1.NTPServiceServer {
 	return r.ntpService
+}
+
+func (r *testHandlerRegistry) VPNServiceServer() platformv1.VPNServiceServer {
+	return r.vpnService
 }
 
 func (r *testHandlerRegistry) TenantServiceServer() platformv1.TenantServiceServer {

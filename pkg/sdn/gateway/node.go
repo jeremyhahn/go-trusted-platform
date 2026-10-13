@@ -27,6 +27,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/loadbalancer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/nat64"
+	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 )
 
 // Service name constants used as keys in the service handler registry.
@@ -46,8 +47,8 @@ const (
 	ServiceProxy   = "proxy"
 	// ServiceHostFW is the nftables host packet filter (#569).
 	ServiceHostFW = "hostfw"
-	// ServiceManagementVPN is the attested remote-access VPN; a design
-	// (docs/vpn/) with no implementation, so enabling it is refused.
+	// ServiceManagementVPN is the attested remote-access VPN (docs/vpn/).
+	// It runs over the assembly's VPNRuntime; without one it is refused.
 	ServiceManagementVPN = "management-vpn"
 )
 
@@ -80,6 +81,14 @@ type Gateway struct {
 	// Its zero value is usable so a Gateway built as a struct literal
 	// reconciles without initialisation.
 	desired desiredState
+
+	// vpnMu guards desiredVPN and vpn. desiredVPN is the last vpn
+	// desired-config section received; vpn is the running VPN backend. The
+	// backend applies desiredVPN when it starts, so a section that arrives
+	// before or while the service comes up is not lost (vpn_service.go).
+	vpnMu      sync.Mutex
+	desiredVPN *gwstate.DesiredVPN
+	vpn        *vpnBackend
 }
 
 // NewGateway creates a new gateway with the given configuration.

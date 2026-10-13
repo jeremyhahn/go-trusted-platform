@@ -31,6 +31,24 @@ const (
 	gatewayMaxLimit     int32 = 1000
 )
 
+// gatewayPage returns the page of at most limit entries starting at offset,
+// with the number of entries in all. A limit of zero or less is the default
+// page, one above gatewayMaxLimit is capped to it, and an offset past the
+// end is an empty page.
+func gatewayPage[T any](items []T, offset, limit int32) ([]T, int32, error) {
+	if offset < 0 {
+		return nil, 0, ErrGatewayNegativeOffset
+	}
+	if limit <= 0 {
+		limit = gatewayDefaultLimit
+	} else if limit > gatewayMaxLimit {
+		limit = gatewayMaxLimit
+	}
+	start := min(int(offset), len(items))
+	end := min(start+int(limit), len(items))
+	return items[start:end], int32(len(items)), nil
+}
+
 // Gateway sentinel errors
 var (
 	// ErrGatewayServiceNotAvailable is returned when the gateway service is not
@@ -149,6 +167,10 @@ var (
 	// QUIC delegates bridge it, and is never a retryable StatusUnavailable
 	// or a daemon-fault StatusInternalError.
 	ErrGatewayPreconditionFailed = errors.New("gateway precondition failed")
+
+	// ErrGatewayNegativeOffset is returned when a paged list request starts
+	// before the first entry.
+	ErrGatewayNegativeOffset = errors.New("list offset must not be negative")
 )
 
 // GatewayServiceInterface defines the interface for gateway operations.
@@ -389,51 +411,13 @@ type SnapshotOverlayNDCounterInfo struct {
 	FellThrough  uint64 `codec:"fell_through"`
 }
 
-// BGPStatusInfo contains BGP status information
-type BGPStatusInfo struct {
-	Enabled           bool   `codec:"enabled"`
-	RouterID          string `codec:"router_id"`
-	LocalAS           uint32 `codec:"local_as"`
-	HoldTime          int    `codec:"hold_time"`
-	KeepaliveInterval int    `codec:"keepalive_interval"`
-	PeerCount         int    `codec:"peer_count"`
-	EstablishedCount  int    `codec:"established_count"`
-	PrefixesReceived  int    `codec:"prefixes_received"`
-	PrefixesSent      int    `codec:"prefixes_sent"`
-	Uptime            int64  `codec:"uptime"`
-	LastError         string `codec:"last_error,omitempty"`
-}
-
-// BGPPeerInfo contains BGP peer information
-type BGPPeerInfo struct {
-	Address          string   `codec:"address"`
-	RemoteAS         uint32   `codec:"remote_as"`
-	LocalAS          uint32   `codec:"local_as"`
-	State            string   `codec:"state"`
-	Description      string   `codec:"description,omitempty"`
-	HoldTime         int      `codec:"hold_time"`
-	KeepaliveTime    int      `codec:"keepalive_time"`
-	PrefixesReceived int      `codec:"prefixes_received"`
-	PrefixesSent     int      `codec:"prefixes_sent"`
-	Uptime           int64    `codec:"uptime"`
-	LastError        string   `codec:"last_error,omitempty"`
-	Capabilities     []string `codec:"capabilities,omitempty"`
-	RouteReflector   bool     `codec:"route_reflector"`
-}
-
-// PrefixInfo contains announced prefix information
-type PrefixInfo struct {
-	Prefix      string            `codec:"prefix"`
-	NextHop     string            `codec:"next_hop,omitempty"`
-	Origin      string            `codec:"origin"`
-	ASPath      []uint32          `codec:"as_path,omitempty"`
-	LocalPref   uint32            `codec:"local_pref,omitempty"`
-	MED         uint32            `codec:"med,omitempty"`
-	Communities []string          `codec:"communities,omitempty"`
-	Status      string            `codec:"status"`
-	AnnouncedAt int64             `codec:"announced_at"`
-	Labels      map[string]string `codec:"labels,omitempty"`
-}
+// BGP wire shapes live in quicwire so the SDK adapter decodes the same
+// structs this handler encodes.
+type (
+	BGPStatusInfo = quicwire.BGPStatusInfo
+	BGPPeerInfo   = quicwire.BGPPeerInfo
+	PrefixInfo    = quicwire.PrefixInfo
+)
 
 // AnnouncePrefixOptions contains options for announcing a prefix
 type AnnouncePrefixOptions struct {
@@ -746,64 +730,17 @@ type GatewayListSnapshotsResponse struct {
 // GatewayBGPStatusRequest represents a BGP status request
 type GatewayBGPStatusRequest struct{}
 
-// GatewayBGPStatusResponse represents a BGP status response
-type GatewayBGPStatusResponse struct {
-	Status    *BGPStatusInfo `codec:"status"`
-	Timestamp int64          `codec:"timestamp"`
-}
-
-// GatewayBGPPeersRequest represents a BGP peers list request
-type GatewayBGPPeersRequest struct {
-	Limit int32 `codec:"limit,omitempty"`
-}
-
-// GatewayBGPPeersResponse represents a BGP peers list response
-type GatewayBGPPeersResponse struct {
-	Peers     []*BGPPeerInfo `codec:"peers"`
-	Count     int32          `codec:"count"`
-	Timestamp int64          `codec:"timestamp"`
-}
-
-// GatewayAnnouncePrefixRequest represents a prefix announce request
-type GatewayAnnouncePrefixRequest struct {
-	Prefix      string            `codec:"prefix"`
-	NextHop     string            `codec:"next_hop,omitempty"`
-	LocalPref   uint32            `codec:"local_pref,omitempty"`
-	MED         uint32            `codec:"med,omitempty"`
-	Communities []string          `codec:"communities,omitempty"`
-	Labels      map[string]string `codec:"labels,omitempty"`
-}
-
-// GatewayAnnouncePrefixResponse represents a prefix announce response
-type GatewayAnnouncePrefixResponse struct {
-	Prefix    string `codec:"prefix"`
-	Success   bool   `codec:"success"`
-	Timestamp int64  `codec:"timestamp"`
-}
-
-// GatewayWithdrawPrefixRequest represents a prefix withdraw request
-type GatewayWithdrawPrefixRequest struct {
-	Prefix string `codec:"prefix"`
-}
-
-// GatewayWithdrawPrefixResponse represents a prefix withdraw response
-type GatewayWithdrawPrefixResponse struct {
-	Prefix    string `codec:"prefix"`
-	Success   bool   `codec:"success"`
-	Timestamp int64  `codec:"timestamp"`
-}
-
-// GatewayListPrefixesRequest represents a prefixes list request
-type GatewayListPrefixesRequest struct {
-	Limit int32 `codec:"limit,omitempty"`
-}
-
-// GatewayListPrefixesResponse represents a prefixes list response
-type GatewayListPrefixesResponse struct {
-	Prefixes  []*PrefixInfo `codec:"prefixes"`
-	Count     int32         `codec:"count"`
-	Timestamp int64         `codec:"timestamp"`
-}
+type (
+	GatewayBGPStatusResponse      = quicwire.GatewayBGPStatusResponse
+	GatewayBGPPeersRequest        = quicwire.GatewayBGPPeersRequest
+	GatewayBGPPeersResponse       = quicwire.GatewayBGPPeersResponse
+	GatewayAnnouncePrefixRequest  = quicwire.GatewayAnnouncePrefixRequest
+	GatewayAnnouncePrefixResponse = quicwire.GatewayAnnouncePrefixResponse
+	GatewayWithdrawPrefixRequest  = quicwire.GatewayWithdrawPrefixRequest
+	GatewayWithdrawPrefixResponse = quicwire.GatewayWithdrawPrefixResponse
+	GatewayListPrefixesRequest    = quicwire.GatewayListPrefixesRequest
+	GatewayListPrefixesResponse   = quicwire.GatewayListPrefixesResponse
+)
 
 // IPAM wire shapes live in quicwire.
 type (
@@ -1037,21 +974,15 @@ func (h *GatewayHandler) handleBGPPeers(ctx context.Context, req *quicwire.Reque
 		return h.gatewayErrorResponse(err)
 	}
 
-	// Apply limit
-	limit := listReq.Limit
-	if limit <= 0 {
-		limit = gatewayDefaultLimit
-	} else if limit > gatewayMaxLimit {
-		limit = gatewayMaxLimit
-	}
-
-	if int32(len(peers)) > limit {
-		peers = peers[:limit]
+	page, total, err := gatewayPage(peers, listReq.Offset, listReq.Limit)
+	if err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, err)
 	}
 
 	resp := &GatewayBGPPeersResponse{
-		Peers:     peers,
-		Count:     int32(len(peers)),
+		Peers:     page,
+		Count:     int32(len(page)),
+		Total:     total,
 		Timestamp: time.Now().Unix(),
 	}
 
@@ -1177,21 +1108,15 @@ func (h *GatewayHandler) handleListPrefixes(ctx context.Context, req *quicwire.R
 		return h.gatewayErrorResponse(err)
 	}
 
-	// Apply limit
-	limit := listReq.Limit
-	if limit <= 0 {
-		limit = gatewayDefaultLimit
-	} else if limit > gatewayMaxLimit {
-		limit = gatewayMaxLimit
-	}
-
-	if int32(len(prefixes)) > limit {
-		prefixes = prefixes[:limit]
+	page, total, err := gatewayPage(prefixes, listReq.Offset, listReq.Limit)
+	if err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, err)
 	}
 
 	resp := &GatewayListPrefixesResponse{
-		Prefixes:  prefixes,
-		Count:     int32(len(prefixes)),
+		Prefixes:  page,
+		Count:     int32(len(page)),
+		Total:     total,
 		Timestamp: time.Now().Unix(),
 	}
 

@@ -156,8 +156,10 @@ gateway is reporting.
 
 An enabled section reports **active** only while its backend is running:
 `overlay`, `firewall`, `nat`, `nat64`, `load-balancer`, `hostfw`, `tunnels`,
-`transit` (or a `bgp:` section) and `proxy` have backends today. Enabling
-`edge`, `dhcp`, `pxe` or `management-vpn` stops the daemon at startup with
+`transit` (or a `bgp:` section), `proxy` and `management-vpn` have backends
+today; `management-vpn` also needs the assembly's VPN runtime, which gatewayd
+does not supply yet ([../vpn/user.md](../vpn/user.md)). Enabling
+`edge`, `dhcp` or `pxe` stops the daemon at startup with
 `gateway service "<name>" is enabled but cannot run: <reason>` — those sections
 have no implementation behind them yet and the gateway refuses to claim
 otherwise. When `overlay` is enabled, gatewayd admits only VTEPs backed by IPAM
@@ -784,8 +786,10 @@ Check the spelling in configuration. `load-balancer` and `management-vpn` are
 hyphenated; the other section names are single words.
 
 **Startup fails with `is enabled but cannot run`.**
-The section names a service with no implementation (`edge`, `dhcp`, `pxe`,
-`management-vpn`) or an enabled service is missing its runtime dependencies. The
+The section names a service with no implementation (`edge`, `dhcp`, `pxe`)
+or an enabled service is missing its runtime dependencies (`management-vpn`
+without a VPN runtime fails with `enabled without injected runtime
+dependencies`). The
 message carries the blocker and the tracking issue when one exists. Disable the
 section or supply the missing runtime wiring. The gateway will not start a
 service it cannot back.

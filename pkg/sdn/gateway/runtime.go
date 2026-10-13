@@ -84,6 +84,10 @@ type GatewayRuntime struct {
 	// OverlayPlatform is the SDK connection backing overlay admission reads.
 	OverlayPlatform interface{ Close() error }
 
+	// VPN carries what the management VPN service needs from the assembly.
+	// Nil refuses the service with ErrRuntimeMissing.
+	VPN *VPNRuntime
+
 	// Logger receives service lifecycle logs.
 	Logger *slog.Logger
 

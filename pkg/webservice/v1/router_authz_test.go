@@ -141,6 +141,10 @@ type stubNTPServer struct {
 	platformv1.UnimplementedNTPServiceServer
 }
 
+type stubVPNServer struct {
+	platformv1.UnimplementedVPNServiceServer
+}
+
 type stubOverlayServer struct {
 	platformv1.UnimplementedOverlayServiceServer
 }
@@ -299,6 +303,7 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.dnsService = &stubDNSService{}
 	registry.eabService = &stubEABServer{}
 	registry.ntpService = &stubNTPServer{}
+	registry.vpnService = &stubVPNServer{}
 	registry.overlayService = &stubOverlayServer{}
 	registry.switchService = &stubSwitchService{}
 	registry.sdnService = &stubSDNServer{}

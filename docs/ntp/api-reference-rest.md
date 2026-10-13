@@ -12,7 +12,9 @@ in-process `platform.v1.NTPService` implementation, so a client sees the
 same responses regardless of which REST server it reaches. The
 webservice wraps payloads in the standard
 `{"code","success","error","payload"}` envelope; the daemon listener
-returns the bare message. The SDK REST adapter handles both.
+returns the bare message. The SDK REST adapter handles both. The daemon
+listener enforces the scope below on every route (401 without a credential,
+403 without the scope); see [api.md](api.md) §6.
 
 ## Endpoints
 

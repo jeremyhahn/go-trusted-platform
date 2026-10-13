@@ -53,6 +53,7 @@ import (
 	switchcmd "github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/switch"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/tpm"
+	vpncmd "github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/vpn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/vtpm"
 )
 
@@ -199,6 +200,7 @@ func init() {
 	rootCmd.AddCommand(switchcmd.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(tenant.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(tpm.NewCommand(getCommonFlags))
+	rootCmd.AddCommand(vpncmd.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(vtpm.NewCommand(getCommonFlags))
 
 	// Set version

@@ -47,6 +47,7 @@ import (
 	switchapi "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/switch"
 	resttenant "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/tenant"
 	resttpm "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/tpm"
+	restvpn "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/vpn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/router"
 )
@@ -184,6 +185,7 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.kmsRoutes()
 	v1Router.overlayRoutes()
 	v1Router.ntpRoutes()
+	v1Router.vpnRoutes()
 	v1Router.pxeRoutes()
 	v1Router.sdnRoutes()
 	v1Router.switchRoutes()
@@ -793,6 +795,26 @@ func (v1Router *Router) ntpRoutes() {
 	// wrong fails attestation, ACME issuance and token validation without
 	// any of those failures naming the clock (docs/ntp/user.md), which
 	// makes an anonymous stepper a denial-of-service primitive.
+	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+}
+
+func (v1Router *Router) vpnRoutes() {
+	server := v1Router.restHandlerRegistry.VPNServiceServer()
+	if server == nil {
+		v1Router.logger.Debug("VPN service server is nil - VPN routes not registered")
+		return
+	}
+	r := restvpn.NewVPNRouter(
+		v1Router.logger,
+		server,
+		v1Router.responseWriter)
+	if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+		r.SetScopeAuthorizer(scoped)
+	}
+	// Enrolling or revoking a peer decides which devices reach the
+	// management network, and a posture policy decides which of them stay
+	// there: operator work behind the admin gate, then vpn:read, vpn:write
+	// or vpn:admin per route, as on gRPC, QUIC and MCP.
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 

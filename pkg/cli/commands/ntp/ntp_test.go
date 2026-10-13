@@ -14,6 +14,7 @@
 package ntp
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -142,6 +143,41 @@ func TestNTPCommandsRenderTables(t *testing.T) {
 			t.Fatalf("call = %s, want Step", fake.lastCall)
 		}
 	})
+}
+
+func TestNTPCommandsRenderTablesNotYAML(t *testing.T) {
+	fake := &fakeCLIClient{}
+	lastOutput := withFakeClient(t, fake)
+	flags := &cli.CommonFlags{OutputFormat: cli.OutputFormatTable, NoColor: true}
+
+	for command, header := range map[string]string{"status": "FIELD", "sources": "ADDRESS", "step": "FIELD"} {
+		if err := executeWithFlags(t, flags, command); err != nil {
+			t.Fatalf("%s: %v", command, err)
+		}
+		var buf bytes.Buffer
+		if err := render(&buf, flags, *lastOutput); err != nil {
+			t.Fatalf("%s: render: %v", command, err)
+		}
+		if !strings.HasPrefix(strings.TrimSpace(buf.String()), header) {
+			t.Fatalf("%s rendered %q, want a table starting with %s", command, buf.String(), header)
+		}
+		if strings.Contains(buf.String(), "headers:") {
+			t.Fatalf("%s rendered YAML, want a table:\n%s", command, buf.String())
+		}
+	}
+}
+
+func TestRenderRefusesAnUnknownOutputFormat(t *testing.T) {
+	var buf bytes.Buffer
+	err := render(&buf, &cli.CommonFlags{OutputFormat: "xml"}, cli.NewTableData("FIELD", "VALUE"))
+
+	var want cli.ErrInvalidOutputFormat
+	if !errors.As(err, &want) {
+		t.Fatalf("render error = %v, want cli.ErrInvalidOutputFormat", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("render wrote %q for a refused format", buf.String())
+	}
 }
 
 func TestNTPCommandsEmitRawMessagesForStructuredOutput(t *testing.T) {

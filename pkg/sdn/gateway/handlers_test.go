@@ -264,7 +264,7 @@ func TestEnabledServices_EveryEntryIsBuiltOrRefused(t *testing.T) {
 		Edge:          &EdgeConfig{Enabled: true},
 		DHCP:          &DHCPServiceConfig{Enabled: true},
 		PXE:           &PXEServiceConfig{Enabled: true, HTTPPort: 8069},
-		ManagementVPN: &ManagementVPNServiceConfig{Enabled: true},
+		ManagementVPN: validVPNServiceConfig(),
 		NAT64: &NAT64Config{
 			Enabled:        true,
 			TranslatorPort: "nat640",
@@ -280,7 +280,7 @@ func TestEnabledServices_EveryEntryIsBuiltOrRefused(t *testing.T) {
 	assert.Equal(t, []string{
 		ServiceFirewall, ServiceNAT, ServiceLoadBalancer, ServiceNAT64, ServiceHostFW, ServiceTunnels, ServiceTransit,
 		ServiceOverlay, ServiceEdge, ServiceDHCP, ServicePXE, ServiceManagementVPN,
-	}, names, "datapath services first, then host services, then refused sections")
+	}, names, "datapath services first, then host services, then the edge sections")
 
 	built := map[string]bool{}
 	refused := map[string]bool{}
@@ -294,8 +294,8 @@ func TestEnabledServices_EveryEntryIsBuiltOrRefused(t *testing.T) {
 			refused[name] = true
 		}
 	}
-	assert.Equal(t, map[string]bool{ServiceFirewall: true, ServiceNAT: true, ServiceLoadBalancer: true, ServiceNAT64: true, ServiceHostFW: true, ServiceTunnels: true, ServiceTransit: true, ServiceOverlay: true}, built)
-	assert.Equal(t, map[string]bool{ServiceEdge: true, ServiceDHCP: true, ServicePXE: true, ServiceManagementVPN: true}, refused)
+	assert.Equal(t, map[string]bool{ServiceFirewall: true, ServiceNAT: true, ServiceLoadBalancer: true, ServiceNAT64: true, ServiceHostFW: true, ServiceTunnels: true, ServiceTransit: true, ServiceOverlay: true, ServiceManagementVPN: true}, built)
+	assert.Equal(t, map[string]bool{ServiceEdge: true, ServiceDHCP: true, ServicePXE: true}, refused)
 	for name := range refused {
 		reason := serviceRefusals[name]
 		assert.NotEmpty(t, reason, "refusal for %s names no blocker", name)
@@ -337,10 +337,9 @@ func TestNewGateway_RegistersHandlersInDeclaredOrder(t *testing.T) {
 // no pipeline behind.
 func TestGatewayStart_RefusedSectionIsATypedStartError(t *testing.T) {
 	sections := map[string]func(*GatewayConfig){
-		ServiceEdge:          func(c *GatewayConfig) { c.Edge = &EdgeConfig{Enabled: true, MaxDevices: 100, MaxServices: 50} },
-		ServiceDHCP:          func(c *GatewayConfig) { c.DHCP = &DHCPServiceConfig{Enabled: true, Interface: "eth0"} },
-		ServicePXE:           func(c *GatewayConfig) { c.PXE = &PXEServiceConfig{Enabled: true, HTTPPort: 8069} },
-		ServiceManagementVPN: func(c *GatewayConfig) { c.ManagementVPN = &ManagementVPNServiceConfig{Enabled: true} },
+		ServiceEdge: func(c *GatewayConfig) { c.Edge = &EdgeConfig{Enabled: true, MaxDevices: 100, MaxServices: 50} },
+		ServiceDHCP: func(c *GatewayConfig) { c.DHCP = &DHCPServiceConfig{Enabled: true, Interface: "eth0"} },
+		ServicePXE:  func(c *GatewayConfig) { c.PXE = &PXEServiceConfig{Enabled: true, HTTPPort: 8069} },
 	}
 	for name, enable := range sections {
 		t.Run(name, func(t *testing.T) {

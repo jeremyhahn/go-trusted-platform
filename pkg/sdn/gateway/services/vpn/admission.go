@@ -52,6 +52,11 @@ func (s *Service) Admit(ctx context.Context, req *AdmissionRequest) (*Lease, err
 	if !decision.Admitted {
 		return nil, s.refuse(ctx, req.DeviceID, &ErrPeerRefused{Reason: decision.Reason})
 	}
+	// An admitted identity is a peer only when the control plane enrolled
+	// it, and only for the zones the enrolment grants.
+	if err := s.enrolled(req.TenantID, req.DeviceID, req.RequestedZones); err != nil {
+		return nil, s.refuse(ctx, req.DeviceID, err)
+	}
 
 	// 2. Attestation.
 	summary, err := s.attest(ctx, req.DeviceID, req.Nonce, req.Attestation)
@@ -60,12 +65,23 @@ func (s *Service) Admit(ctx context.Context, req *AdmissionRequest) (*Lease, err
 	}
 
 	// 3. Posture.
-	if err := s.posture(ctx, req.Posture, summary); err != nil {
+	if err := s.posture(ctx, req.TenantID, req.Posture, summary); err != nil {
 		return nil, s.refuse(ctx, req.DeviceID, err)
 	}
 
 	// 4. Person factor.
 	if err := s.personFactor(ctx, req.TenantID, req.DeviceID, req.Nonce, req.PersonFactor, s.cfg.RequirePersonFactor.OnAdmit); err != nil {
+		return nil, s.refuse(ctx, req.DeviceID, err)
+	}
+
+	// The control plane may have withdrawn the peer while attestation and
+	// the factor check ran. Authorize again under the enrolment gate and
+	// keep it to the lease write: the commit then lands either before
+	// SetEnrolments publishes a set, so its sweep sees the lease, or after
+	// the sweep, where this check sees the withdrawal.
+	s.enrolGate.RLock()
+	defer s.enrolGate.RUnlock()
+	if err := s.enrolled(req.TenantID, req.DeviceID, req.RequestedZones); err != nil {
 		return nil, s.refuse(ctx, req.DeviceID, err)
 	}
 
@@ -165,6 +181,13 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 	if opensAt := lease.ExpiresAt.Add(-s.cfg.RenewWindow); now.Before(opensAt) {
 		return nil, s.refuse(ctx, lease.DeviceID, &ErrRenewalNotOpen{LeaseID: id, OpensAt: opensAt})
 	}
+	if err := s.enrolled(lease.TenantID, lease.DeviceID, lease.Zones); err != nil {
+		if rErr := s.revoke(ctx, lease, RevokeOperator); rErr != nil {
+			s.logger.Warn("vpn.renew: revoking an unenrolled lease failed",
+				slog.String("lease", string(lease.ID)), slog.Any("error", rErr))
+		}
+		return nil, s.refuse(ctx, lease.DeviceID, err)
+	}
 	if !s.consumeNonce(ev.Nonce) {
 		return nil, s.refuse(ctx, lease.DeviceID, &ErrNonceUnknown{})
 	}
@@ -173,7 +196,7 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 		_ = s.revoke(ctx, lease, RevokeAttestation)
 		return nil, s.refuse(ctx, lease.DeviceID, err)
 	}
-	if err := s.posture(ctx, ev.Posture, summary); err != nil {
+	if err := s.posture(ctx, lease.TenantID, ev.Posture, summary); err != nil {
 		_ = s.revoke(ctx, lease, RevokePosture)
 		return nil, s.refuse(ctx, lease.DeviceID, err)
 	}
@@ -329,7 +352,7 @@ func postureInput(report *PostureReport, v *VerdictSummary) (map[string]interfac
 	return input, nil
 }
 
-func (s *Service) posture(ctx context.Context, report *PostureReport, v *VerdictSummary) error {
+func (s *Service) posture(ctx context.Context, tenantID string, report *PostureReport, v *VerdictSummary) error {
 	if report == nil {
 		return &ErrPostureViolation{Violations: []string{"posture-missing"}}
 	}
@@ -337,13 +360,19 @@ func (s *Service) posture(ctx context.Context, report *PostureReport, v *Verdict
 	if err != nil {
 		return &ErrPostureUnavailable{Cause: err}
 	}
-	result, err := s.deps.Posture.Evaluate(ctx, s.cfg.PosturePolicy, input)
+	evaluator, policyName, err := s.postureFor(tenantID)
+	if err != nil {
+		// A tenant policy that failed to compile refuses; it never falls
+		// back to the default.
+		return &ErrPostureUnavailable{Cause: err}
+	}
+	result, err := evaluator.Evaluate(ctx, policyName, input)
 	if err != nil {
 		// Every engine failure is a refusal: no policy never means allow.
 		return &ErrPostureUnavailable{Cause: err}
 	}
 	if result == nil {
-		return &ErrPostureUnavailable{Cause: &opa.ErrEvaluationFailed{PolicyName: s.cfg.PosturePolicy, Reason: "no result"}}
+		return &ErrPostureUnavailable{Cause: &opa.ErrEvaluationFailed{PolicyName: policyName, Reason: "no result"}}
 	}
 	if len(result.Violations) > 0 || !result.Allowed {
 		names := make([]string, 0, len(result.Violations))

@@ -59,14 +59,15 @@ type serviceBuilder func(g *Gateway) (backedService, error)
 // GatewayConfig but absent here is refused at Start with the reason in
 // serviceRefusals — never silently reported running.
 var serviceBuilders = map[string]serviceBuilder{
-	ServiceFirewall:     buildFirewall,
-	ServiceLoadBalancer: buildLoadBalancer,
-	ServiceNAT:          buildNAT,
-	ServiceNAT64:        buildNAT64,
-	ServiceHostFW:       buildHostFW,
-	ServiceTunnels:      buildTunnels,
-	ServiceOverlay:      buildOverlay,
-	ServiceTransit:      buildTransit,
+	ServiceFirewall:      buildFirewall,
+	ServiceLoadBalancer:  buildLoadBalancer,
+	ServiceNAT:           buildNAT,
+	ServiceNAT64:         buildNAT64,
+	ServiceHostFW:        buildHostFW,
+	ServiceTunnels:       buildTunnels,
+	ServiceOverlay:       buildOverlay,
+	ServiceTransit:       buildTransit,
+	ServiceManagementVPN: buildManagementVPN,
 }
 
 // serviceRefusals names, per unbuildable section, the blocker that stands
@@ -80,8 +81,6 @@ var serviceRefusals = map[string]string{
 		"have (GatewayRuntime carries none)",
 	ServicePXE: "the gateway PXE service is planned, not implemented; provisioning is served by platformd's " +
 		"iPXE server today",
-	ServiceManagementVPN: "the management VPN is planned, not implemented (design in docs/vpn/); " +
-		"WireGuard is non-FIPS and the MASQUE data plane is unbuilt",
 }
 
 // backedServiceHandler is the one ServiceHandler shape for every

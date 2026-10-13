@@ -83,6 +83,9 @@ func (r *ToolRegistry) registerTools() {
 	// Register NTP (time synchronization) tools
 	r.registerNTPTools()
 
+	// Register VPN control-plane tools
+	r.registerVPNTools()
+
 	// Register Health tools
 	r.registerHealthTools()
 
@@ -1804,6 +1807,11 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		// NTP tool dispatch (ntp_*) uses a map-based dispatcher for
 		// O(1) routing per project conventions.
 		if result, handled, err := r.dispatchNTPTool(ctx, name); handled {
+			return result, err
+		}
+		// VPN tool dispatch (vpn_*) uses a map-based dispatcher for O(1)
+		// routing per project conventions.
+		if result, handled, err := r.dispatchVPNTool(ctx, name, args); handled {
 			return result, err
 		}
 		// BMC tool dispatch (platform_bmc_*) uses a map-based dispatcher

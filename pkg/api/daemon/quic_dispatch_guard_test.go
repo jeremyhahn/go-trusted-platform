@@ -48,7 +48,8 @@ import (
 //	0x40-0x4F sdn               0xA9-0xAD iam users
 //	0x50      ntp category      0xAE-0xAF container
 //	0x51      iam category
-//	0x52-0x55 reserved (ntp)
+//	0x52      vpn category
+//	0x53-0x55 reserved
 //	0x56-0x5F tpm2 (idevid)     0xB0-0xB4 sdn extended
 //	0x60-0x6A vm (0x69=ext cat) 0xB5-0xBF iam roles/groups
 //	0x6B-0x6E tpm2 (iak ext)    0xC0-0xCB kms keys
@@ -129,6 +130,7 @@ var quicDispatchFamilies = map[string]dispatchFamilySpec{
 	"secrets":        {status: quicwire.StatusUnavailable, body: "QUIC service unavailable: secrets"},
 	"configdelivery": {payload: []byte{quicwire.ProvisioningSubGetNonce}, status: quicwire.StatusUnavailable, body: "config delivery service is not available"},
 	"ntp":            {payload: []byte{quicwire.NTPSubGetStatus}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: ntp"},
+	"vpn":            {payload: []byte{quicwire.VPNSubGetStatus}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: vpn"},
 	"pxe":            {status: quicwire.StatusUnavailable, body: "QUIC service unavailable: pxe"},
 }
 
@@ -188,7 +190,8 @@ var quicWireOwners = []struct {
 	{0x40, 0x4F, "sdn"},
 	{0x50, 0x50, "ntp"},
 	{0x51, 0x51, "iam"},
-	{0x52, 0x55, "reserved"},
+	{0x52, 0x52, "vpn"},
+	{0x53, 0x55, "reserved"},
 	{0x56, 0x5F, "tpm2"},
 	{0x60, 0x6A, "vm"},
 	{0x6B, 0x6E, "tpm2"},
@@ -364,6 +367,7 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpSDNGetPort":                {value: quicwire.OpSDNGetPort, mode: wireDirect, family: "sdn"},
 	"OpNTPCategory":               {value: quicwire.OpNTPCategory, mode: wireDirect, family: "ntp"},
 	"OpIAMCategory":               {value: quicwire.OpIAMCategory, mode: wireDirect, family: "iam"},
+	"OpVPNCategory":               {value: quicwire.OpVPNCategory, mode: wireDirect, family: "vpn"},
 	"OpIDevIDGenerate":            {value: quicwire.OpIDevIDGenerate, mode: wireDirect, family: "tpm2"},
 	"OpIDevIDInfo":                {value: quicwire.OpIDevIDInfo, mode: wireDirect, family: "tpm2"},
 	"OpIDevIDDelete":              {value: quicwire.OpIDevIDDelete, mode: wireDirect, family: "tpm2"},

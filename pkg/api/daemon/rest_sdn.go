@@ -59,6 +59,20 @@ func (s *RESTServer) SetGatewaySnapshotService(reader GatewaySnapshotReader) {
 	s.logger.Info("Gateway overlay admission REST service wired into gateway handlers")
 }
 
+// SetGatewayBGPService wires the gateway gRPC service the REST BGP routes
+// answer from, so REST reports BGP not configured exactly when gRPC does
+// (#65).
+func (s *RESTServer) SetGatewayBGPService(controller GatewayBGPController) {
+	if controller == nil {
+		return
+	}
+	if s.gatewayService == nil {
+		s.SetGatewayIPAMService(nil, nil)
+	}
+	s.gatewayService.SetGatewayBGPController(controller)
+	s.logger.Info("Gateway BGP REST service wired into gateway handlers")
+}
+
 // SetGatewayPerfService wires the perf backend into the gateway REST
 // handlers. Must be called after SetGatewayIPAMService; a nil backend
 // leaves the perf routes returning 503.

@@ -55,6 +55,8 @@ DELETE /api/v1/tpm/ak
 DELETE /api/v1/tpm/ek
 DELETE /api/v1/tpm/nvram/{index}
 DELETE /api/v1/tpm/srk
+DELETE /api/v1/vpn/peers/{device_id}
+DELETE /api/v1/vpn/posture-policies/{name}
 DELETE /api/v1/vtpm/bundles/{id}
 DELETE /api/v1/vtpm/templates/{id}
 GET /api/v1
@@ -283,6 +285,11 @@ GET /api/v1/tpm/nvram/{index}
 GET /api/v1/tpm/pcrs
 GET /api/v1/tpm/srk
 GET /api/v1/users/{id}/factors
+GET /api/v1/vpn
+GET /api/v1/vpn/peers
+GET /api/v1/vpn/posture-policies
+GET /api/v1/vpn/posture-policies/{name}
+GET /api/v1/vpn/status
 GET /api/v1/vtpm
 GET /api/v1/vtpm/bundles
 GET /api/v1/vtpm/bundles/{id}
@@ -483,6 +490,7 @@ POST /api/v1/tpm/random
 POST /api/v1/tpm/seal
 POST /api/v1/tpm/srk
 POST /api/v1/tpm/unseal
+POST /api/v1/vpn/peers
 POST /api/v1/vtpm/bundles
 POST /api/v1/vtpm/bundles/import
 POST /api/v1/vtpm/bundles/{id}/validate
@@ -515,3 +523,4 @@ PUT /api/v1/sdn/zones/{name}
 PUT /api/v1/tenants/{id}
 PUT /api/v1/tenants/{id}/quotas
 PUT /api/v1/tpm/nvram/{index}
+PUT /api/v1/vpn/posture-policies/{name}

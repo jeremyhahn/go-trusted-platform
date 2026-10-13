@@ -265,8 +265,14 @@ Both catalogs are default-deny ([`docs/daemon/api.md`](../daemon/api.md) §5),
 and both cover every NTP operation, so no NTP call is refused for want of a
 classification.
 
-QUIC enforcement goes through `AuthorizeRequest` on the same `scp` claims. REST
-inherits whatever the listener's middleware chain applies to `/api/v1`.
+QUIC enforcement goes through `AuthorizeRequest` on the same `scp` claims. The
+daemon REST listener checks the same scope per route through
+`restapi.ScopeGuard` (#584): `ntp:read` on status and sources, `ntp:write` on
+step, from a platform token's `scp` or from the verified mTLS client
+certificate admitted as the operator (`*:*`). No credential is 401, a missing
+scope 403, and handlers built without a guard refuse every route
+([`docs/daemon/api.md`](../daemon/api.md)). The webservice applies its own
+middleware chain to `/api/v1`, below.
 
 `ntp:write` gates exactly one operation — `Step` — because it is the only one
 that mutates the system clock. The scope split is the reason `Step` is a

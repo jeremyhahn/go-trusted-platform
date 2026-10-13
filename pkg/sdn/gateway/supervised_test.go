@@ -113,7 +113,7 @@ func supervisedConfig(sup ServiceSupervisor) *GatewayConfig {
 	cfg := baseGatewayConfig("supervised-gw")
 	cfg.Firewall = &FirewallConfig{Enabled: true, DefaultPolicy: "deny"}
 	cfg.NAT = &NATConfig{Enabled: true, ExternalIP: "203.0.113.10", PortRangeStart: 1024, PortRangeEnd: 65535, MaxSessions: 1000, InternalCIDR: "10.0.100.0/24"}
-	cfg.ManagementVPN = &ManagementVPNServiceConfig{Enabled: true}
+	cfg.ManagementVPN = validVPNServiceConfig()
 	cfg.Supervisor = sup
 	return cfg
 }
@@ -199,13 +199,16 @@ func TestSupervisedSnapshot_AnUnsupervisedSpeakerIsReadInProcess(t *testing.T) {
 	assert.Equal(t, uint32(64512), snap.BGP.LocalASN)
 }
 
-func TestSupervisor_UnsupervisedRefusedSectionKeepsItsOwnRefusal(t *testing.T) {
+func TestSupervisor_UnsupervisedSectionKeepsItsInProcessHandler(t *testing.T) {
 	sup := newFakeSupervisor()
 	sup.unsupervised[ServiceManagementVPN] = true
 	gw := newSupervisedGateway(t, sup)
 
-	assert.IsType(t, &refusedServiceHandler{}, gw.serviceHandlers[ServiceManagementVPN])
-	require.Error(t, gw.Start(context.Background()))
+	assert.IsType(t, &backedServiceHandler{}, gw.serviceHandlers[ServiceManagementVPN])
+	err := gw.Start(context.Background())
+	var missing *ErrRuntimeMissing
+	require.True(t, errors.As(err, &missing), "the in-process builder refuses on its own authority, got %v", err)
+	assert.Equal(t, ServiceManagementVPN, missing.Service)
 	assert.NotContains(t, sup.started, ServiceManagementVPN, "the supervisor is never asked for a service it does not own")
 }
 

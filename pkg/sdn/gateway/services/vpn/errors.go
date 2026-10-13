@@ -220,6 +220,42 @@ func (e *ErrZoneNotAllowed) Error() string {
 	return fmt.Sprintf("vpn: zone %q is not reachable through this service", e.Zone)
 }
 
+// ErrPeerNotEnrolled is returned when an identity the caller-admission
+// policy accepted has no operator enrolment for the tenant: an enrolment is
+// what turns a known device into a VPN peer, and its absence is a refusal.
+type ErrPeerNotEnrolled struct {
+	TenantID string
+	DeviceID string
+}
+
+func (e *ErrPeerNotEnrolled) Error() string {
+	return fmt.Sprintf("vpn: device %q is not an enrolled peer of tenant %q", e.DeviceID, e.TenantID)
+}
+
+// ErrInvalidEnrolment is returned when an enrolment set handed to the
+// service is malformed; the previous set stays in force.
+type ErrInvalidEnrolment struct {
+	Index  int
+	Reason string
+}
+
+func (e *ErrInvalidEnrolment) Error() string {
+	return fmt.Sprintf("vpn: enrolment %d: %s", e.Index, e.Reason)
+}
+
+// ErrPosturePolicyInvalid is returned when a tenant posture policy does not
+// parse, does not compile, or declares a package other than the posture
+// package. The service refuses that tenant's admissions until it is fixed.
+type ErrPosturePolicyInvalid struct {
+	TenantID string
+	Name     string
+	Reason   string
+}
+
+func (e *ErrPosturePolicyInvalid) Error() string {
+	return fmt.Sprintf("vpn: posture policy %q of tenant %q is invalid: %s", e.Name, e.TenantID, e.Reason)
+}
+
 // ErrDepsMissing is returned by New when a required dependency is nil.
 type ErrDepsMissing struct {
 	Dep string

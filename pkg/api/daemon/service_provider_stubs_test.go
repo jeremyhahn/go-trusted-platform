@@ -204,9 +204,10 @@ func TestPlatformServiceProvider_OverlayStubs(t *testing.T) {
 	}
 }
 
-// TestPlatformServiceProvider_GatewayBGPStubs pins the BGP operations as
-// unimplemented: platformd constructs no BGP speaker (gatewayd owns it).
-func TestPlatformServiceProvider_GatewayBGPStubs(t *testing.T) {
+// TestPlatformServiceProvider_GatewayBGPUnwired pins the BGP tools on a
+// provider with no gateway service wired: each answers that the gateway
+// service is not available, not that it is unimplemented (#65).
+func TestPlatformServiceProvider_GatewayBGPUnwired(t *testing.T) {
 	ctx := context.Background()
 	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
 
@@ -224,8 +225,8 @@ func TestPlatformServiceProvider_GatewayBGPStubs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.fn()
-			if _, ok := err.(ErrGatewayOperationNotImplemented); !ok {
-				t.Errorf("expected ErrGatewayOperationNotImplemented, got %T: %v", err, err)
+			if err != (ErrServiceNotAvailable{Service: "gateway"}) {
+				t.Errorf("expected ErrServiceNotAvailable{gateway}, got %T: %v", err, err)
 			}
 		})
 	}

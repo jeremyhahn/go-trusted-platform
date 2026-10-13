@@ -95,6 +95,12 @@ func (p *Printer) printTable(data interface{}) error {
 	switch v := data.(type) {
 	case TableData:
 		return p.printTableData(v)
+	case *TableData:
+		// NewTableData returns a pointer; it is a table, not a YAML document.
+		if v == nil {
+			return nil
+		}
+		return p.printTableData(*v)
 	default:
 		// Fall back to YAML for unknown types
 		return p.printYAML(data)

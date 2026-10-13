@@ -67,6 +67,7 @@ func serviceClientContracts() map[string]reflect.Type {
 		"SwitchService":         reflect.TypeOf((*platformv1.SwitchServiceClient)(nil)).Elem(),
 		"TPMService":            reflect.TypeOf((*platformv1.TPMServiceClient)(nil)).Elem(),
 		"TenantService":         reflect.TypeOf((*platformv1.TenantServiceClient)(nil)).Elem(),
+		"VPNService":            reflect.TypeOf((*platformv1.VPNServiceClient)(nil)).Elem(),
 		"VTPMService":           reflect.TypeOf((*platformv1.VTPMServiceClient)(nil)).Elem(),
 	}
 }

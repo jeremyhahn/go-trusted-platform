@@ -331,6 +331,34 @@ func TestMockStorage_List_Pagination(t *testing.T) {
 	// Second page
 	entities2, _, err := mock.List(context.Background(), "TestEntity", 5, nextToken, 0)
 	require.NoError(t, err)
-	assert.LessOrEqual(t, len(entities2), 5)
-	// Note: Due to map iteration order, the exact results may vary
+	assert.Equal(t, 5, len(entities2))
+}
+
+// Paging through more entities than one page returns each exactly once, in
+// ascending ID order, however the map happens to iterate.
+func TestMockStorage_List_PagesVisitEveryEntityOnce(t *testing.T) {
+	ctx := context.Background()
+	mock := NewMockStorage()
+	require.NoError(t, mock.Start(ctx))
+	const total = 250
+	for i := uint64(1); i <= total; i++ {
+		require.NoError(t, mock.Put(ctx, "TestEntity", i*7919, []byte("data"), 0))
+	}
+
+	var ids []uint64
+	token := ""
+	for {
+		page, next, err := mock.List(ctx, "TestEntity", 100, token, 0)
+		require.NoError(t, err)
+		for _, e := range page {
+			ids = append(ids, e.ID)
+		}
+		if next == "" {
+			break
+		}
+		token = next
+	}
+
+	require.Len(t, ids, total)
+	assert.IsIncreasing(t, ids, "every entity once, in ID order")
 }

@@ -239,6 +239,8 @@ type mockServiceProvider struct {
 	perfErr            error
 	ntpErr             error
 	ntpStepCalls       int
+	vpnErr             error
+	vpnCalls           []mockVPNCall
 	perfFlowsCalls     []perfFlowsCall
 	perfConntrackZones []int
 }
@@ -2250,6 +2252,78 @@ func (m *mockServiceProvider) NTPStep(ctx context.Context) (interface{}, error) 
 		return nil, m.ntpErr
 	}
 	return map[string]interface{}{"synced": true, "stratum": 3}, nil
+}
+
+// mockVPNCall records one VPN provider call for the dispatch tests.
+type mockVPNCall struct {
+	op   string
+	args []interface{}
+}
+
+// VPN control-plane operations. Each call records the operation and its
+// arguments so the dispatch tests can assert the routing.
+
+func (m *mockServiceProvider) recordVPNCall(op string, args ...interface{}) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.vpnCalls = append(m.vpnCalls, mockVPNCall{op: op, args: args})
+	return m.vpnErr
+}
+
+func (m *mockServiceProvider) VPNEnrolPeer(ctx context.Context, tenantID, deviceID string, zones []string) (interface{}, error) {
+	if err := m.recordVPNCall("enrol", tenantID, deviceID, zones); err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"peer": map[string]interface{}{"tenantId": tenantID, "deviceId": deviceID}}, nil
+}
+
+func (m *mockServiceProvider) VPNListPeers(ctx context.Context, tenantID string) (interface{}, error) {
+	if err := m.recordVPNCall("list-peers", tenantID); err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"peers": []interface{}{}}, nil
+}
+
+func (m *mockServiceProvider) VPNRevokePeer(ctx context.Context, tenantID, deviceID string) (interface{}, error) {
+	if err := m.recordVPNCall("revoke", tenantID, deviceID); err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{}, nil
+}
+
+func (m *mockServiceProvider) VPNStatus(ctx context.Context, gatewayID string) (interface{}, error) {
+	if err := m.recordVPNCall("status", gatewayID); err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"gateways": []interface{}{}}, nil
+}
+
+func (m *mockServiceProvider) VPNPosturePolicyGet(ctx context.Context, tenantID, name string) (interface{}, error) {
+	if err := m.recordVPNCall("policy-get", tenantID, name); err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"policy": map[string]interface{}{"name": name}}, nil
+}
+
+func (m *mockServiceProvider) VPNPosturePolicySet(ctx context.Context, tenantID, name, module string) (interface{}, error) {
+	if err := m.recordVPNCall("policy-set", tenantID, name, module); err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"policy": map[string]interface{}{"name": name}}, nil
+}
+
+func (m *mockServiceProvider) VPNPosturePolicyDelete(ctx context.Context, tenantID, name string) (interface{}, error) {
+	if err := m.recordVPNCall("policy-delete", tenantID, name); err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{}, nil
+}
+
+func (m *mockServiceProvider) VPNPosturePolicyList(ctx context.Context, tenantID string) (interface{}, error) {
+	if err := m.recordVPNCall("policy-list", tenantID); err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"policies": []interface{}{}}, nil
 }
 
 // Gateway IPAM operations

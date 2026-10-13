@@ -236,12 +236,15 @@ func TestGRPCMethodPermissions_WellFormed(t *testing.T) {
 		"vm": true, "provisioning": true, "eab": true, "fido2": true,
 		"idevid": true, "invitation": true, "luks": true, "pxe": true,
 		"registry": true, "switch": true, "tpm": true, "tenant": true,
+		"vpn": true,
 	}
 	platformActions := map[string]bool{"read": true, "write": true, "delete": true}
-	// BMC and the daemon carry the extra verbs; no other resource may.
+	// BMC, the daemon and the VPN posture policies carry the extra verbs; no
+	// other resource may.
 	extraActions := map[string]map[string]bool{
 		"bmc":      {"power": true, "media": true, "admin": true},
 		"platform": {"admin": true},
+		"vpn":      {"admin": true},
 	}
 
 	for method, scope := range buildGRPCMethodPermissions() {

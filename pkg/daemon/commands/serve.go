@@ -996,6 +996,15 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		if svc := platformDaemon.GatewayGRPCService(); svc != nil {
 			svc.SetGatewaySnapshotStore(gwControl.Store)
 		}
+		// VPN session status reads the vpn section of the same reports.
+		// The enrolment set and the posture policies reach the gateways as
+		// the vpn section of their desired configuration.
+		if vpnControl := platformDaemon.VPNControlPlane(); vpnControl != nil {
+			vpnControl.SetGatewaySnapshotStore(gwControl.Store)
+			if gwControl.DesiredCfg != nil {
+				gwControl.DesiredCfg.SetVPNSource(vpnControl)
+			}
+		}
 	}
 
 	// Plug snapshot store into the daemon Service so reload captures
@@ -1276,6 +1285,9 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			}
 			if svc := platformDaemon.NTPGRPCServiceServer(); svc != nil {
 				params.NTPServiceServer = svc
+			}
+			if svc := platformDaemon.VPNGRPCServiceServer(); svc != nil {
+				params.VPNServiceServer = svc
 			}
 			if svc := platformDaemon.TenantGRPCServer(); svc != nil {
 				params.TenantServiceServer = svc

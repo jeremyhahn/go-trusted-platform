@@ -13,7 +13,10 @@
 
 package vpn
 
-import "sync"
+import (
+	"cmp"
+	"sync"
+)
 
 // keyLock serialises the multi-step lease operations for one
 // (tenant, device): admit's find-replace-allocate-install-put sequence,
@@ -23,7 +26,7 @@ import "sync"
 // so the map does not grow with every device ever seen.
 type keyLock struct {
 	mu    sync.Mutex
-	locks map[string]*keyLockEntry
+	locks map[peerKey]*keyLockEntry
 }
 
 type keyLockEntry struct {
@@ -32,11 +35,11 @@ type keyLockEntry struct {
 }
 
 func newKeyLock() *keyLock {
-	return &keyLock{locks: make(map[string]*keyLockEntry)}
+	return &keyLock{locks: make(map[peerKey]*keyLockEntry)}
 }
 
 // lock acquires the entry for key and returns its unlock function.
-func (k *keyLock) lock(key string) func() {
+func (k *keyLock) lock(key peerKey) func() {
 	k.mu.Lock()
 	e, ok := k.locks[key]
 	if !ok {
@@ -58,6 +61,19 @@ func (k *keyLock) lock(key string) func() {
 	}
 }
 
-func deviceKey(tenantID, deviceID string) string {
-	return tenantID + "/" + deviceID
+// peerKey identifies one peer, a (tenant, device) pair. The fields stay
+// separate so no choice of IDs can make two peers share a key, as a joined
+// string would: ("a/b", "c") and ("a", "b/c") both join to "a/b/c".
+type peerKey struct {
+	tenantID string
+	deviceID string
+}
+
+func deviceKey(tenantID, deviceID string) peerKey {
+	return peerKey{tenantID: tenantID, deviceID: deviceID}
+}
+
+// compare orders keys by tenant, then device.
+func (k peerKey) compare(other peerKey) int {
+	return cmp.Or(cmp.Compare(k.tenantID, other.tenantID), cmp.Compare(k.deviceID, other.deviceID))
 }

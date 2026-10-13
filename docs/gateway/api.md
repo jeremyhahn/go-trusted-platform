@@ -101,17 +101,40 @@ callable, not because it is the way to configure a gateway — see
 | Announce prefix | `POST /api/v1/gateway/bgp/prefixes` | `AnnouncePrefix` | `OpGatewayAnnouncePrefix` (`0x05`) | `gateway_bgp_announce` | ✅ |
 | Withdraw prefix | `DELETE /api/v1/gateway/bgp/prefixes` | `WithdrawPrefix` | `OpGatewayWithdrawPrefix` (`0x06`) | `gateway_bgp_withdraw` | ✅ |
 
-> **Production status: routed, not backed.** The BGP speaker runs in
-> `gatewayd`; `platformd` never hands one to the gateway service
-> (`GatewayService.SetBGPSpeaker` has no production caller). gRPC, Unix,
-> REST, QUIC and the embedded SDK therefore answer "not configured", and the
-> MCP `gateway_bgp_*` tools answer "not implemented". Backing them needs the
-> same control-plane link to gatewayd-resident services as §5a.
+> **Production status: routed on every transport, not backed.** All six
+> transports reach the one `GatewayService` instance `platformd` builds at
+> start (#65): gRPC and Unix directly, REST through both route families
+> below, QUIC through the daemon's BGP adapter, MCP through the
+> `gateway_bgp_*` tools, and the embedded SDK through its dispatch table. The
+> BGP speaker runs in `gatewayd`, and `platformd` never hands one to that
+> service (`GatewayService.SetBGPSpeaker` has no production caller), so every
+> transport answers the same typed "not configured": REST 503, QUIC
+> `StatusUnavailable`, gRPC, Unix, MCP and embedded `Unavailable` (§11).
+> Backing them needs the same control-plane link to gatewayd-resident services
+> as §5a, which awaits a design decision.
 
 Announce and withdraw share
 the `/bgp/prefixes` path and are distinguished by method; the prefix travels in
 the body, which is why withdraw is a `DELETE` with a payload rather than a path
-parameter.
+parameter. The daemon's own REST listener serves the same operations under
+`/api/v1/sdn/gateway/bgp/{status,peers,prefixes}`; there withdraw is
+`DELETE /api/v1/sdn/gateway/bgp/prefixes/{prefix}`, and the path variable spans
+the rest of the path because a prefix carries a `/`
+(`.../prefixes/203.0.113.0/24`).
+
+QUIC `OpGatewayAnnouncePrefix` accepts `local_pref`, `med`, `communities` and
+`labels`, but `AnnouncePrefixRequest` carries only the prefix and next hop, so
+a request that sets any of them is refused with `StatusInvalidArgument` naming
+the attribute (`ErrBGPAttributeUnsupported`) rather than announced without
+it.
+
+QUIC `OpGatewayBGPPeers` and `OpGatewayListPrefixes` serve one page per reply:
+`limit` entries (100 when unset, capped at 1000) from `offset`, with the
+list's `total`; a negative offset is `StatusInvalidRequest`. The SDK's QUIC
+client pages until it holds `total` entries, so `ListBGPPeers` and
+`ListAnnouncedPrefixes` return the whole list on every transport. The pages
+are separate reads, so a list that changes during paging can repeat or miss
+an entry that moved; a gRPC call reads it once.
 
 ---
 
@@ -425,8 +448,10 @@ On MCP, the `gateway_ipam_*`, `gateway_lb_*`, `gateway_nat64_status`,
 `gateway_mode_set` tools carry the same `sdn:*` permissions as their gRPC twins:
 `gateway_status` needs `sdn:read` like `GetGatewayStatus`, and
 `gateway_mode_set` needs `sdn:write` like `SetGatewayMode` (#65). The
-`gateway_bgp_*` tools are not classified, so `AuthorizeTool` refuses them for
-every caller.
+`gateway_bgp_*` tools do the same: `gateway_bgp_status`, `gateway_bgp_peers`
+and `gateway_bgp_prefixes` need `sdn:read`, and `gateway_bgp_announce` and
+`gateway_bgp_withdraw` need `sdn:write`, because changing what the fabric
+advertises is a write (#65).
 
 `TestGRPCMethodCatalog_CoversEveryRegisteredMethod` enumerates `GatewayService`
 from its registered descriptor, so an RPC added to `gateway.proto` without a

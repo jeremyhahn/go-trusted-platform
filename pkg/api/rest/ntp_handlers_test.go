@@ -30,7 +30,7 @@ import (
 // newNTPRouter mounts the handlers on a fresh router.
 func newNTPRouter(server platformv1.NTPServiceServer) *mux.Router {
 	router := mux.NewRouter()
-	NewNTPHandlers(server, nil).RegisterRoutes(router)
+	NewNTPHandlers(server, operatorGuard(), nil).RegisterRoutes(router)
 	return router
 }
 
@@ -89,7 +89,7 @@ func TestNTPRESTHandlersServeStatusSourcesAndStep(t *testing.T) {
 
 	t.Run("status", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/ntp/status", nil))
+		router.ServeHTTP(rec, operatorRequest(http.MethodGet, "/api/v1/ntp/status", nil))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("code = %d, body %s", rec.Code, rec.Body)
 		}
@@ -110,7 +110,7 @@ func TestNTPRESTHandlersServeStatusSourcesAndStep(t *testing.T) {
 
 	t.Run("sources", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/ntp/sources", nil))
+		router.ServeHTTP(rec, operatorRequest(http.MethodGet, "/api/v1/ntp/sources", nil))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("code = %d, body %s", rec.Code, rec.Body)
 		}
@@ -130,7 +130,7 @@ func TestNTPRESTHandlersServeStatusSourcesAndStep(t *testing.T) {
 
 	t.Run("step", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/ntp/step", nil))
+		router.ServeHTTP(rec, operatorRequest(http.MethodPost, "/api/v1/ntp/step", nil))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("code = %d, body %s", rec.Code, rec.Body)
 		}
@@ -171,7 +171,7 @@ func TestNTPRESTHandlersMapServiceFailuresToHTTPStatus(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			router := newNTPRouter(&scriptedNTPServer{statusErr: tc.err, stepErr: tc.err})
 			rec := httptest.NewRecorder()
-			router.ServeHTTP(rec, httptest.NewRequest(tc.verb, tc.path, nil))
+			router.ServeHTTP(rec, operatorRequest(tc.verb, tc.path, nil))
 			if rec.Code != tc.want {
 				t.Fatalf("code = %d, want %d (body %s)", rec.Code, tc.want, rec.Body)
 			}
@@ -198,7 +198,7 @@ func TestNTPRESTHandlersReport503WithoutAService(t *testing.T) {
 		{http.MethodPost, "/api/v1/ntp/step"},
 	} {
 		rec := httptest.NewRecorder()
-		router.ServeHTTP(rec, httptest.NewRequest(probe.verb, probe.path, nil))
+		router.ServeHTTP(rec, operatorRequest(probe.verb, probe.path, nil))
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Fatalf("%s %s code = %d, want 503", probe.verb, probe.path, rec.Code)
 		}

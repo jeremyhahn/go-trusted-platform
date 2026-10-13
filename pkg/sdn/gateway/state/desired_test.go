@@ -30,7 +30,9 @@ const validDesiredJSON = `{
      "backends": [{"address": "10.0.100.11", "port": 8443, "weight": 2}, {"address": "10.0.100.12", "port": 8443}]}
   ]},
   "nat": {"snat_internal_cidr": "10.0.100.0/24",
-          "dnat": [{"protocol": "tcp", "external": "203.0.113.10:2222", "internal": "10.0.100.5:22"}]}
+          "dnat": [{"protocol": "tcp", "external": "203.0.113.10:2222", "internal": "10.0.100.5:22"}]},
+  "vpn": {"peers": [{"tenant_id": "tenant-a", "device_id": "laptop-1", "zones": ["management"]}],
+          "posture_policies": [{"tenant_id": "tenant-a", "name": "vpn_posture", "module": "package vpn.posture"}]}
 }`
 
 func TestDecodeDesiredConfig_RoundTrip(t *testing.T) {
@@ -43,6 +45,9 @@ func TestDecodeDesiredConfig_RoundTrip(t *testing.T) {
 	assert.Equal(t, "tcp/10.0.200.10:443", cfg.LoadBalancer.VIPs[0].Key())
 	require.NotNil(t, cfg.NAT)
 	assert.Equal(t, "tcp/203.0.113.10:2222", cfg.NAT.DNAT[0].Key())
+	require.NotNil(t, cfg.VPN)
+	assert.Equal(t, []DesiredVPNPeer{{TenantID: "tenant-a", DeviceID: "laptop-1", Zones: []string{"management"}}}, cfg.VPN.Peers)
+	require.Len(t, cfg.VPN.PosturePolicies, 1)
 
 	out, err := json.Marshal(cfg)
 	require.NoError(t, err)
@@ -94,11 +99,20 @@ func TestDesiredConfig_Validate(t *testing.T) {
 		"duplicate vip": {func(c *DesiredConfig) {
 			c.LoadBalancer.VIPs = append(c.LoadBalancer.VIPs, c.LoadBalancer.VIPs[0])
 		}, "load_balancer.vips[1].address"},
-		"bad snat":          {func(c *DesiredConfig) { c.NAT.SNATInternalCIDR = "10.0.0.0" }, "nat.snat_internal_cidr"},
-		"bad dnat protocol": {func(c *DesiredConfig) { c.NAT.DNAT[0].Protocol = "icmp" }, "nat.dnat[0].protocol"},
-		"bad dnat external": {func(c *DesiredConfig) { c.NAT.DNAT[0].External = "203.0.113.10" }, "nat.dnat[0].external"},
-		"bad dnat internal": {func(c *DesiredConfig) { c.NAT.DNAT[0].Internal = ":22" }, "nat.dnat[0].internal"},
-		"duplicate dnat":    {func(c *DesiredConfig) { c.NAT.DNAT = append(c.NAT.DNAT, c.NAT.DNAT[0]) }, "nat.dnat[1].external"},
+		"bad snat":           {func(c *DesiredConfig) { c.NAT.SNATInternalCIDR = "10.0.0.0" }, "nat.snat_internal_cidr"},
+		"bad dnat protocol":  {func(c *DesiredConfig) { c.NAT.DNAT[0].Protocol = "icmp" }, "nat.dnat[0].protocol"},
+		"bad dnat external":  {func(c *DesiredConfig) { c.NAT.DNAT[0].External = "203.0.113.10" }, "nat.dnat[0].external"},
+		"bad dnat internal":  {func(c *DesiredConfig) { c.NAT.DNAT[0].Internal = ":22" }, "nat.dnat[0].internal"},
+		"duplicate dnat":     {func(c *DesiredConfig) { c.NAT.DNAT = append(c.NAT.DNAT, c.NAT.DNAT[0]) }, "nat.dnat[1].external"},
+		"vpn peer no tenant": {func(c *DesiredConfig) { c.VPN.Peers[0].TenantID = "" }, "vpn.peers[0].tenant_id"},
+		"vpn peer no device": {func(c *DesiredConfig) { c.VPN.Peers[0].DeviceID = "" }, "vpn.peers[0].device_id"},
+		"duplicate vpn peer": {func(c *DesiredConfig) { c.VPN.Peers = append(c.VPN.Peers, c.VPN.Peers[0]) }, "vpn.peers[1]"},
+		"policy no tenant":   {func(c *DesiredConfig) { c.VPN.PosturePolicies[0].TenantID = "" }, "vpn.posture_policies[0].tenant_id"},
+		"policy no name":     {func(c *DesiredConfig) { c.VPN.PosturePolicies[0].Name = "" }, "vpn.posture_policies[0].name"},
+		"policy no module":   {func(c *DesiredConfig) { c.VPN.PosturePolicies[0].Module = "" }, "vpn.posture_policies[0].module"},
+		"duplicate policy": {func(c *DesiredConfig) {
+			c.VPN.PosturePolicies = append(c.VPN.PosturePolicies, c.VPN.PosturePolicies[0])
+		}, "vpn.posture_policies[1]"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -113,6 +127,22 @@ func TestDesiredConfig_Validate(t *testing.T) {
 	var nilCfg *DesiredConfig
 	assert.Error(t, nilCfg.Validate())
 	assert.NoError(t, (&DesiredConfig{}).Validate(), "an empty document is valid")
+}
+
+func TestDesiredVPN_SeparatorInAnIDIsNotADuplicate(t *testing.T) {
+	vpn := &DesiredVPN{
+		Peers: []DesiredVPNPeer{{TenantID: "a/b", DeviceID: "c"}, {TenantID: "a", DeviceID: "b/c"}},
+		PosturePolicies: []DesiredVPNPosturePolicy{
+			{TenantID: "a/b", Name: "c", Module: "package vpn.posture"},
+			{TenantID: "a", Name: "b/c", Module: "package vpn.posture"},
+		},
+	}
+	require.NoError(t, vpn.validate(), "distinct peers and policies are not duplicates")
+
+	vpn.Peers = append(vpn.Peers, DesiredVPNPeer{TenantID: "a", DeviceID: "b/c"})
+	var invalid *ErrDesiredConfigInvalid
+	require.True(t, errors.As(vpn.validate(), &invalid))
+	assert.Equal(t, "vpn.peers[2]", invalid.Field, "a true duplicate is still refused")
 }
 
 func TestDesiredConfig_Versions(t *testing.T) {

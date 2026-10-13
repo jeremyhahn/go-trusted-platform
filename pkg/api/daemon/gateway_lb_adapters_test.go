@@ -170,7 +170,7 @@ func TestRESTGatewayLBAdapterErrors(t *testing.T) {
 // =============================================================================
 
 func TestQUICGatewayLBAdapter(t *testing.T) {
-	adapter := newFullGatewayQUICAdapter(nil, nil, nil, nil)
+	adapter := newFullGatewayQUICAdapter(nil, nil, nil, nil, nil)
 	adapter.SetLoadBalancer(newFakeGatewayLB())
 	ctx := context.Background()
 
@@ -217,14 +217,14 @@ func TestQUICGatewayLBAdapterErrors(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("not configured", func(t *testing.T) {
-		adapter := newFullGatewayQUICAdapter(nil, nil, nil, nil)
+		adapter := newFullGatewayQUICAdapter(nil, nil, nil, nil, nil)
 		if _, err := adapter.LBStatus(ctx); !errors.Is(err, quic.ErrGatewayFeatureNotConfigured) {
 			t.Errorf("LBStatus = %v", err)
 		}
 	})
 
 	t.Run("error mapping", func(t *testing.T) {
-		adapter := newFullGatewayQUICAdapter(nil, nil, nil, nil)
+		adapter := newFullGatewayQUICAdapter(nil, nil, nil, nil, nil)
 		adapter.SetLoadBalancer(newFakeGatewayLB())
 
 		if _, err := adapter.GetVIP(ctx, "tcp", "10.9.9.9", 1); !errors.Is(err, quic.ErrGatewayVIPNotFound) {

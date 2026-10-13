@@ -119,6 +119,7 @@ func buildGRPCMethodPermissions() map[string]string {
 		ca     = "ca"
 		prox   = "proxy"
 		ntp    = "ntp"
+		vpn    = "vpn"
 
 		platform     = "platform"
 		attestation  = "attestation"
@@ -232,6 +233,20 @@ func buildGRPCMethodPermissions() map[string]string {
 		"/platform.v1.NTPService/GetStatus":   scope(ntp, read),
 		"/platform.v1.NTPService/ListSources": scope(ntp, read),
 		"/platform.v1.NTPService/Step":        scope(ntp, write),
+
+		// ---------------------------------------------------------------------
+		// VPN (VPNService) — peer enrolment, session status and tenant
+		// posture policies. A posture policy decides who reaches a zone, so
+		// every policy operation requires vpn:admin (docs/vpn/api.md).
+		// ---------------------------------------------------------------------
+		"/platform.v1.VPNService/EnrolPeer":           scope(vpn, write),
+		"/platform.v1.VPNService/ListPeers":           scope(vpn, read),
+		"/platform.v1.VPNService/RevokePeer":          scope(vpn, write),
+		"/platform.v1.VPNService/GetStatus":           scope(vpn, read),
+		"/platform.v1.VPNService/GetPosturePolicy":    scope(vpn, admin),
+		"/platform.v1.VPNService/SetPosturePolicy":    scope(vpn, admin),
+		"/platform.v1.VPNService/DeletePosturePolicy": scope(vpn, admin),
+		"/platform.v1.VPNService/ListPosturePolicies": scope(vpn, admin),
 
 		// ---------------------------------------------------------------------
 		// Proxy (ProxyService) — reverse-proxy route/pool source of truth

@@ -48,6 +48,9 @@ type zoneGatewayAdapter struct {
 	// gatewayStatusQUICAdapter serves status and mode; with no controller
 	// it reports the gateway as not configured.
 	gatewayStatusQUICAdapter
+	// gatewayBGPQUICAdapter serves BGP; with no controller it reports BGP
+	// as not configured.
+	gatewayBGPQUICAdapter
 }
 
 // Compile-time check: zoneGatewayAdapter implements quic.GatewayServiceInterface.
@@ -61,26 +64,6 @@ func newZoneGatewayAdapter(svc gateway.ZoneService) *zoneGatewayAdapter {
 // =============================================================================
 // Non-zone methods — return "not configured" so QUIC handler emits Unavailable
 // =============================================================================
-
-func (a *zoneGatewayAdapter) BGPStatus(_ context.Context) (*quic.BGPStatusInfo, error) {
-	return nil, errGatewayFeatureNotConfigured
-}
-
-func (a *zoneGatewayAdapter) ListBGPPeers(_ context.Context) ([]*quic.BGPPeerInfo, error) {
-	return nil, errGatewayFeatureNotConfigured
-}
-
-func (a *zoneGatewayAdapter) AnnouncePrefix(_ context.Context, _ string, _ *quic.AnnouncePrefixOptions) error {
-	return errGatewayFeatureNotConfigured
-}
-
-func (a *zoneGatewayAdapter) WithdrawPrefix(_ context.Context, _ string) error {
-	return errGatewayFeatureNotConfigured
-}
-
-func (a *zoneGatewayAdapter) ListPrefixes(_ context.Context) ([]*quic.PrefixInfo, error) {
-	return nil, errGatewayFeatureNotConfigured
-}
 
 func (a *zoneGatewayAdapter) ListIPAMPools(_ context.Context, _ string) ([]*quic.IPAMPoolInfo, error) {
 	return nil, errGatewayFeatureNotConfigured
@@ -345,6 +328,9 @@ type fullGatewayQUICAdapter struct {
 	// gatewayStatusQUICAdapter serves the status and mode sub-opcodes from
 	// the gateway gRPC service (#65).
 	gatewayStatusQUICAdapter
+	// gatewayBGPQUICAdapter serves the BGP sub-opcodes from the gateway
+	// gRPC service (#65).
+	gatewayBGPQUICAdapter
 }
 
 // Compile-time check: fullGatewayQUICAdapter implements quic.GatewayServiceInterface.
@@ -353,37 +339,14 @@ var _ quic.GatewayServiceInterface = (*fullGatewayQUICAdapter)(nil)
 // newFullGatewayQUICAdapter creates a fullGatewayQUICAdapter.
 // ipamAlloc must be non-nil; zoneSvc may be nil (zone methods will return
 // errGatewayFeatureNotConfigured in that case).
-func newFullGatewayQUICAdapter(ipamAlloc ipam.Allocator, zoneSvc gateway.ZoneService, snapshots GatewaySnapshotReader, status GatewayStatusController) *fullGatewayQUICAdapter {
+func newFullGatewayQUICAdapter(ipamAlloc ipam.Allocator, zoneSvc gateway.ZoneService, snapshots GatewaySnapshotReader, status GatewayStatusController, bgp GatewayBGPController) *fullGatewayQUICAdapter {
 	return &fullGatewayQUICAdapter{
 		ipamAlloc:                  ipamAlloc,
 		zoneSvc:                    zoneSvc,
 		gatewaySnapshotQUICAdapter: gatewaySnapshotQUICAdapter{reader: snapshots},
 		gatewayStatusQUICAdapter:   gatewayStatusQUICAdapter{controller: status},
+		gatewayBGPQUICAdapter:      gatewayBGPQUICAdapter{controller: bgp},
 	}
-}
-
-// =============================================================================
-// BGP stubs: platformd constructs no BGP speaker (gatewayd owns it)
-// =============================================================================
-
-func (a *fullGatewayQUICAdapter) BGPStatus(_ context.Context) (*quic.BGPStatusInfo, error) {
-	return nil, errGatewayFeatureNotConfigured
-}
-
-func (a *fullGatewayQUICAdapter) ListBGPPeers(_ context.Context) ([]*quic.BGPPeerInfo, error) {
-	return nil, errGatewayFeatureNotConfigured
-}
-
-func (a *fullGatewayQUICAdapter) AnnouncePrefix(_ context.Context, _ string, _ *quic.AnnouncePrefixOptions) error {
-	return errGatewayFeatureNotConfigured
-}
-
-func (a *fullGatewayQUICAdapter) WithdrawPrefix(_ context.Context, _ string) error {
-	return errGatewayFeatureNotConfigured
-}
-
-func (a *fullGatewayQUICAdapter) ListPrefixes(_ context.Context) ([]*quic.PrefixInfo, error) {
-	return nil, errGatewayFeatureNotConfigured
 }
 
 // AllocateIP allocates an address from poolID through the daemon's IPAM

@@ -336,8 +336,8 @@ func TestBuildProxyStore_InMemoryWithoutAFactory(t *testing.T) {
 	store, err = buildProxyStore(&Config{}, logger)
 	require.NoError(t, err)
 	assert.Nil(t, store.persist)
-	assert.Nil(t, proxyStorage(nil))
-	assert.Nil(t, proxyStorage(&Config{}))
+	assert.Nil(t, platformStorage(nil))
+	assert.Nil(t, platformStorage(&Config{}))
 }
 
 func TestBuildProxyStore_SeedsFromTheAppSection(t *testing.T) {

@@ -1841,6 +1841,49 @@ coverage-ntp:
 integration-test-ntp: build-devcontainer
 	$(call run-integration-suite,ntp)
 
+# VPN (management-VPN control plane) Tests
+#
+# These use the fully assembled $(BUILD_TAGS), never a literal list, so every
+# QUIC codec the transports need is present.
+
+## test-vpn: Run management-VPN unit tests across every transport
+.PHONY: test-vpn
+test-vpn:
+	@echo "Running VPN control-plane unit tests..."
+	go test -count=1 -timeout 120s -tags '$(BUILD_TAGS)' \
+		./pkg/vpn/... \
+		./pkg/cli/commands/vpn/... \
+		./pkg/webservice/v1/rest/vpn/...
+	go test -count=1 -timeout 120s -tags '$(BUILD_TAGS)' -run 'VPN' \
+		./pkg/api/daemon/... \
+		./pkg/api/rest/... \
+		./pkg/api/mcp/...
+	cd sdk/go && go test -count=1 -timeout 120s -tags '$(BUILD_TAGS)' ./services/vpn/... && \
+		go test -count=1 -timeout 120s -tags '$(BUILD_TAGS)' -run 'VPN' ./transport/...
+
+## coverage-vpn: Management-VPN coverage report
+.PHONY: coverage-vpn
+coverage-vpn:
+	@mkdir -p build/coverage
+	go test -count=1 -timeout 120s -tags '$(BUILD_TAGS)' \
+		-coverprofile=/tmp/vpn.cover \
+		./pkg/vpn/... ./pkg/cli/commands/vpn/... ./pkg/webservice/v1/rest/vpn/...
+	go tool cover -func=/tmp/vpn.cover | tail -1
+	@go tool cover -html=/tmp/vpn.cover -o build/coverage/vpn.html
+	@echo "Coverage report: build/coverage/vpn.html"
+
+## bench-vpn: Benchmark the VPN desired-config render and the gateway's enrolment apply
+.PHONY: bench-vpn
+bench-vpn:
+	go test -tags '$(BUILD_TAGS)' -bench=. -benchmem -run=^$$ \
+		./pkg/vpn/... \
+		./pkg/sdn/gateway/services/vpn/...
+
+## integration-test-vpn: Run VPN multi-protocol integration tests in devcontainer
+.PHONY: integration-test-vpn
+integration-test-vpn: build-devcontainer
+	$(call run-integration-suite,vpn)
+
 ## integration-test-installer: Run the installer suite (real dnsmasq forwards the internal zone) in devcontainer
 .PHONY: integration-test-installer
 integration-test-installer: build-devcontainer

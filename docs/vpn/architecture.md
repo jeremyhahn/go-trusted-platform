@@ -1,6 +1,6 @@
 # Remote-Access VPN Architecture
 
-> **Status: PARTIAL — the admission control plane and both data planes exist (#584 PR 1, PR 2); the multi-protocol surface, CLI and client agent are planned.** · Scope: `pkg/sdn/gateway/services/vpn`, `gatewayd` · Last verified: 2026-09-08
+> **Status: PARTIAL — the admission core and both data planes (#584 PR 1, PR 2), the gateway service and the operator control plane on every transport with `platformctl vpn` (#584 PR 3) exist; left for PR 4: the web page, the JS SDK and `platformctl vpn connect`.** · Scope: `pkg/sdn/gateway/services/vpn`, `pkg/vpn`, `gatewayd` · Last verified: 2026-10-13
 > `pkg/sdn/gateway/services/vpn` ships the lease model, the five-step
 > admission pipeline behind `Deps` interfaces, the typed error vocabulary, the
 > config schema with its FIPS refusal, the in-memory lease store and the
@@ -65,6 +65,7 @@ or an expired lease revokes the peer immediately.
 
 | Piece | Package | Status | Owner / capability row |
 |---|---|---|---|
+| Operator control plane | `pkg/vpn` — `Service` (peers and posture policies as tenant-scoped records, session status from gateway telemetry, `DesiredVPN` for the desired config); `VPNService` on REST, gRPC, QUIC `0x52`, MCP and Unix; `sdk/go/services/vpn`; `platformctl vpn` | exists (#584 PR 3) | go-trusted-platform — daemon |
 | Admission service | `pkg/sdn/gateway/services/vpn` — `Service`, `New`, `Admit`, `Renew`, `Revoke`, `Challenge`, `Sweep`, `Deps`, `Config`, `Lease`, `MemoryLeaseStore` | exists (#584 PR 1); the datapath process client and the admission listener are *(planned)* | go-trusted-platform — "Edge gateway" (docs/00 §R) |
 | Device identity | `pkg/attestation/calleradmission` — `Policy`, `New`, `Evaluate`, `PeerFromTLS`, `Decision`, `AttestedPeers`, `Auditor` | exists | go-trusted-platform — attestation |
 | Attestation verdict | `pkg/attestation/service` — `Service.VerifyQuote`, `Service.GetQuote`, `Service.CollectHostAttestation`; `pkg/attestation/verdict` — `DeviceVerdict`, `Sink` | exists | go-trusted-platform — attestation |
@@ -76,7 +77,7 @@ or an expired lease revokes the peer immediately.
 | Peer install | WireGuard via netlink and `golang.zx2c4.com/wireguard/wgctrl`; MASQUE CONNECT-IP sessions in-process on `github.com/quic-go/connect-ip-go` over the repository's quic-go. The `datapath` process that will host them is *(planned, gateway process model #557)* | `pkg/sdn/gateway/services/vpn`, `pkg/sdn/tunnel` | go-trusted-platform — edge gateway |
 | Keys at rest | quicbaas SDK `Security().KMS()` (`KMSClient`) | exists | go-xkms via quicbaas |
 | Audit | `calleradmission.Auditor` (exists) and the SDK audit surface | exists | go-quicbaas |
-| Configuration | `pkg/sdn/gateway/types.go` `ManagementVPNServiceConfig` (`management_vpn`, today only `Enabled`) and `pkg/sdn/config.go` `ManagementVPNConfig` (`Enabled`, `Type`, `AllowTo`) | exist, to be extended | go-trusted-platform |
+| Configuration | `pkg/sdn/gateway/types.go` `ManagementVPNServiceConfig` (`management_vpn`: `enabled` plus the core `vpn.Config`) and `pkg/sdn/config.go` `ManagementVPNConfig` (`Enabled`, `Type`, `AllowTo`) | exist; the `wireguard.*` and `masque.*` keys are *(planned)* | go-trusted-platform |
 
 The SDK edge is the only way down: the service never imports go-xkms, go-qrdb
 or go-luks2 directly; `pkg/arch/layerguard_test.go` enforces it and gatewayd's

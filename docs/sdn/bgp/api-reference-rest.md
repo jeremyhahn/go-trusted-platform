@@ -26,8 +26,8 @@ Content-Type: application/json
 }
 ```
 
-`next_hop` is optional. Withdraw uses the URL-encoded prefix as the
-path parameter.
+`next_hop` is optional. Withdraw takes the prefix as the path parameter;
+its `/` may be written as is or URL-encoded.
 
 Peer configuration is YAML-driven (see [Configuration](configuration.md));
 there are no peer-management endpoints.

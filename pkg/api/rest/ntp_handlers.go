@@ -33,9 +33,9 @@ import (
 // the same URLs regardless of which REST listener it reaches.
 const ntpBasePath = "/api/v1/ntp"
 
-// ntpMarshalOptions renders proto messages with the same conventions the
+// webserviceMarshalOptions renders proto messages with the same conventions the
 // webservice uses, so both REST listeners emit byte-identical payloads.
-var ntpMarshalOptions = protojson.MarshalOptions{
+var webserviceMarshalOptions = protojson.MarshalOptions{
 	UseProtoNames:   false,
 	EmitUnpopulated: true,
 }
@@ -54,27 +54,36 @@ func (ErrNTPUnavailable) Error() string {
 // NTPServiceServer that also backs gRPC, QUIC, MCP, and the Unix socket.
 type NTPHandlers struct {
 	server platformv1.NTPServiceServer
+	guard  *ScopeGuard
 	logger *slog.Logger
 }
 
-// NewNTPHandlers creates the time-synchronization REST handlers. A nil server
-// leaves every route returning 503.
-func NewNTPHandlers(server platformv1.NTPServiceServer, logger *slog.Logger) *NTPHandlers {
+// NewNTPHandlers creates the time-synchronization REST handlers. Each route
+// requires the scope its RPC requires on gRPC; a nil guard refuses every
+// route with 403. A nil server leaves every authorized route returning 503.
+func NewNTPHandlers(server platformv1.NTPServiceServer, guard *ScopeGuard, logger *slog.Logger) *NTPHandlers {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &NTPHandlers{server: server, logger: logger}
+	return &NTPHandlers{server: server, guard: guard, logger: logger}
 }
+
+// NTP route scopes; they match the NTPService entries in the gRPC method
+// catalog (pkg/api/grpc/method_permissions.go).
+const (
+	scopeNTPRead  = "ntp:read"
+	scopeNTPWrite = "ntp:write"
+)
 
 // RegisterRoutes mounts the time-synchronization routes.
 //
-//	GET  /api/v1/ntp/status   - GetStatus
-//	GET  /api/v1/ntp/sources  - ListSources
+//	GET  /api/v1/ntp/status   - GetStatus (ntp:read)
+//	GET  /api/v1/ntp/sources  - ListSources (ntp:read)
 //	POST /api/v1/ntp/step     - Step (operator recovery, ntp:write)
 func (h *NTPHandlers) RegisterRoutes(router *mux.Router) {
-	router.HandleFunc(ntpBasePath+"/status", h.handleGetStatus).Methods(http.MethodGet)
-	router.HandleFunc(ntpBasePath+"/sources", h.handleListSources).Methods(http.MethodGet)
-	router.HandleFunc(ntpBasePath+"/step", h.handleStep).Methods(http.MethodPost)
+	router.HandleFunc(ntpBasePath+"/status", h.guard.Require(scopeNTPRead, h.handleGetStatus)).Methods(http.MethodGet)
+	router.HandleFunc(ntpBasePath+"/sources", h.guard.Require(scopeNTPRead, h.handleListSources)).Methods(http.MethodGet)
+	router.HandleFunc(ntpBasePath+"/step", h.guard.Require(scopeNTPWrite, h.handleStep)).Methods(http.MethodPost)
 }
 
 // handleGetStatus handles GET /api/v1/ntp/status.
@@ -120,10 +129,10 @@ func (h *NTPHandlers) handleStep(w http.ResponseWriter, r *http.Request) {
 	h.writeProto(w, http.StatusOK, resp)
 }
 
-// ntpGRPCToHTTPStatus maps the service's gRPC codes onto HTTP status codes
+// protorestHTTPStatus maps the service's gRPC codes onto HTTP status codes
 // (map-based for O(1) lookup). It mirrors the webservice's protorest mapping
 // so both REST listeners answer identically.
-var ntpGRPCToHTTPStatus = map[codes.Code]int{
+var protorestHTTPStatus = map[codes.Code]int{
 	codes.OK:                 http.StatusOK,
 	codes.InvalidArgument:    http.StatusBadRequest,
 	codes.FailedPrecondition: http.StatusBadRequest,
@@ -140,7 +149,7 @@ var ntpGRPCToHTTPStatus = map[codes.Code]int{
 // writeStatusError maps a gRPC status error onto its HTTP equivalent.
 func (h *NTPHandlers) writeStatusError(w http.ResponseWriter, err error) {
 	code := http.StatusInternalServerError
-	if mapped, ok := ntpGRPCToHTTPStatus[status.Code(err)]; ok {
+	if mapped, ok := protorestHTTPStatus[status.Code(err)]; ok {
 		code = mapped
 	}
 	h.logger.Error("NTP request failed", "error", err, "http_status", code)
@@ -149,7 +158,7 @@ func (h *NTPHandlers) writeStatusError(w http.ResponseWriter, err error) {
 
 // writeProto writes a protojson-encoded response body.
 func (h *NTPHandlers) writeProto(w http.ResponseWriter, statusCode int, msg proto.Message) {
-	payload, err := ntpMarshalOptions.Marshal(msg)
+	payload, err := webserviceMarshalOptions.Marshal(msg)
 	if err != nil {
 		h.logger.Error("Failed to encode NTP response", "error", err)
 		h.writeError(w, http.StatusInternalServerError, err)

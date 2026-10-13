@@ -527,7 +527,9 @@ func (h *GatewayHandlers) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/v1/sdn/gateway/bgp/status", h.handleGetBGPStatus).Methods(http.MethodGet)
 	router.HandleFunc("/api/v1/sdn/gateway/bgp/peers", h.handleListBGPPeers).Methods(http.MethodGet)
 	router.HandleFunc("/api/v1/sdn/gateway/bgp/prefixes", h.handleAnnouncePrefix).Methods(http.MethodPost)
-	router.HandleFunc("/api/v1/sdn/gateway/bgp/prefixes/{prefix}", h.handleWithdrawPrefix).Methods(http.MethodDelete)
+	// A prefix carries a "/" (203.0.113.0/24), and the router matches the
+	// decoded path, so the variable spans the rest of the path.
+	router.HandleFunc("/api/v1/sdn/gateway/bgp/prefixes/{prefix:.+}", h.handleWithdrawPrefix).Methods(http.MethodDelete)
 	router.HandleFunc("/api/v1/sdn/gateway/bgp/prefixes", h.handleListAnnouncedPrefixes).Methods(http.MethodGet)
 
 	// IPAM pool CRUD — pools collection

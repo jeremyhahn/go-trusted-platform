@@ -25,6 +25,7 @@ import (
 
 	grpccreds "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -228,7 +229,7 @@ func selectQUICAuth(config *Config, shared *platformTokenValidator, clientCAPool
 const mtlsOperatorScope = "*:*"
 
 // mtlsPeerAuthenticator turns the verified client certificate of a QUIC
-// connection into the principal its requests act as, through the same
+// connection or REST request into the principal it acts as, through the same
 // certificate authenticator the gRPC mTLS interceptor uses.
 type mtlsPeerAuthenticator struct {
 	authenticator auth.Authenticator
@@ -249,6 +250,32 @@ func (a mtlsPeerAuthenticator) AuthenticatePeer(ctx context.Context, chain []*x5
 		TenantID: identity.TenantID,
 		Scopes:   []string{mtlsOperatorScope},
 	}, nil
+}
+
+// newRESTScopeGuard builds the guard that checks each daemon REST route's
+// scope. It accepts the same credentials as QUIC: a platform token through
+// the shared validator, else a client certificate verified against the mTLS
+// client CA pool, admitted as the operator. A credential with no verifier
+// configured is refused, so the guard never admits by default.
+func newRESTScopeGuard(config *Config, shared *platformTokenValidator, logger *logging.Logger) (*restapi.ScopeGuard, error) {
+	var tokens restapi.TokenAuthorizer
+	// A nil *platformTokenValidator must not become a non-nil interface.
+	if shared != nil {
+		tokens = shared
+	}
+	var peers restapi.PeerAuthenticator
+	clientCAPool, err := resolveMTLSClientCAPool(config, transportREST)
+	if err != nil {
+		return nil, err
+	}
+	if clientCAPool != nil {
+		mtlsAuth, authErr := auth.NewMTLSAdapterFromRoots(logger, clientCAPool)
+		if authErr != nil {
+			return nil, ErrTLSConfigFailed{Reason: "REST mTLS auth: " + authErr.Error()}
+		}
+		peers = mtlsPeerAuthenticator{authenticator: mtlsAuth}
+	}
+	return restapi.NewScopeGuard(tokens, peers, logger.Slog()), nil
 }
 
 // buildLocalTokenValidator builds the per-transport token validator from the

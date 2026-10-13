@@ -48,6 +48,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/vpn"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -222,7 +223,11 @@ type Daemon struct {
 	overlayIPsec   *overlayIPsecRun
 	pxeGRPCService *PXEGRPCService
 	ntpGRPCService *NTPGRPCService
-	healthRegistry health.Registry
+	vpnGRPCService *VPNGRPCService
+	// vpnControlPlane is the store behind vpnGRPCService, or nil when the
+	// daemon runs without a platform store.
+	vpnControlPlane *vpn.Service
+	healthRegistry  health.Registry
 
 	// healthGRPCService serves grpc.health.v1.Health. Held so the daemon can
 	// flip it to NOT_SERVING on shutdown, draining load balancers before the
@@ -982,6 +987,22 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 	logger.Info("NTP gRPC service registered")
 
+	// Create the VPN control-plane gRPC service. It is backed by the
+	// platform store; without one every RPC answers the typed
+	// not-configured status on every transport.
+	vpnControlPlane := buildVPNControlPlane(config, logger)
+	vpnGRPCService := NewVPNGRPCService(logger, nil)
+	if vpnControlPlane != nil {
+		vpnGRPCService = NewVPNGRPCService(logger, vpnControlPlane)
+	}
+	if grpcServer != nil {
+		platformv1.RegisterVPNServiceServer(grpcServer, vpnGRPCService)
+	}
+	if grpcUDSServer != nil {
+		platformv1.RegisterVPNServiceServer(grpcUDSServer, vpnGRPCService)
+	}
+	logger.Info("VPN gRPC service registered")
+
 	// Create Switch gRPC service - stub returning Unimplemented
 	// Full implementation wired when switch service is available
 	switchGRPCService := NewSwitchGRPCService(logger, nil)
@@ -1097,6 +1118,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		// Time synchronization: the same NTPGRPCService instance backs
 		// REST, gRPC, MCP, and the Unix socket.
 		quicHandler.SetNTPService(ntpGRPCService)
+		quicHandler.SetVPNService(vpnGRPCService)
 		quicHandler.SetIDevIDService(idevidService)
 
 		// Set CA handler if available
@@ -1205,7 +1227,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		// 0x08, 0x0C-0x0F) and zone operations (0x10-0x14) are both served over QUIC.
 		// defaultIPAM is the in-memory allocator created above. zoneSvcInstance may
 		// be nil — zone methods degrade to StatusUnavailable in that case.
-		quicGatewaySvc := newFullGatewayQUICAdapter(defaultIPAM, zoneSvcInstance, gatewayService, gatewayService)
+		quicGatewaySvc := newFullGatewayQUICAdapter(defaultIPAM, zoneSvcInstance, gatewayService, gatewayService, gatewayService)
 		gatewayQUICHandler := quic.NewGatewayHandler(quicLogger, quicGatewaySvc)
 		// Wire the perf backend so the perf sub-opcodes (0x36-0x38) are
 		// served over QUIC by the same shared perf service as the other
@@ -1340,6 +1362,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		overlayIPsec:                 overlayIPsecSvc,
 		pxeGRPCService:               pxeGRPCService,
 		ntpGRPCService:               ntpGRPCService,
+		vpnGRPCService:               vpnGRPCService,
+		vpnControlPlane:              vpnControlPlane,
 		healthRegistry:               healthRegistry,
 		verdictFeed:                  verdictFeed,
 		zoneSvc:                      zoneSvcInstance,
@@ -1395,11 +1419,22 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Info("vTPM service wired into REST server")
 	}
 
-	// Wire the time-synchronization REST handlers. Without this
-	// /api/v1/ntp/* would not be served on the daemon's own REST listener
-	// and `platformctl --protocol rest ntp status` would 404.
-	if daemon.concreteRestServer != nil && ntpGRPCService != nil {
-		daemon.concreteRestServer.SetNTPHandlers(ntpGRPCService)
+	// Wire the time-synchronization and VPN control-plane REST handlers onto
+	// the daemon's own REST listener. Without them /api/v1/ntp/* and
+	// /api/v1/vpn/* would 404 there. Each route requires the scope its RPC
+	// requires on gRPC, checked by one guard: a platform token, else the
+	// verified client certificate.
+	if daemon.concreteRestServer != nil {
+		restGuard, guardErr := newRESTScopeGuard(config, platformTokenValidatorShared, logger)
+		if guardErr != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: guardErr}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
+		if ntpGRPCService != nil {
+			daemon.concreteRestServer.SetNTPHandlers(ntpGRPCService, restGuard)
+		}
+		daemon.concreteRestServer.SetVPNHandlers(vpnGRPCService, restGuard)
 	}
 
 	// Wire device + profile REST handlers if the services are available.
@@ -1491,6 +1526,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	if daemon.concreteRestServer != nil && daemon.gatewayGRPCService != nil {
 		daemon.concreteRestServer.SetGatewayIPAMService(daemon.gatewayGRPCService.IPAMAllocator(), daemon.gatewayGRPCService)
 		daemon.concreteRestServer.SetGatewaySnapshotService(daemon.gatewayGRPCService)
+		daemon.concreteRestServer.SetGatewayBGPService(daemon.gatewayGRPCService)
 		daemon.concreteRestServer.SetGatewayPerfService(daemon.gatewayPerfService)
 		logger.Info("Gateway IPAM REST service wired into REST server")
 	}
@@ -1848,6 +1884,7 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		GatewayPerf:           d.gatewayPerfService,
 		GatewaySnapshots:      d.gatewayGRPCService,
 		GatewayStatus:         d.gatewayGRPCService,
+		GatewayBGP:            d.gatewayGRPCService,
 		ConfigDeliveryService: d.configDeliveryService,
 		ProxyService:          d.proxyGRPCService,
 	})
@@ -1861,6 +1898,12 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 	// NTPGRPCService instance that backs REST, gRPC, QUIC, and Unix.
 	if d.ntpGRPCService != nil {
 		serviceProvider.SetNTPService(d.ntpGRPCService)
+	}
+
+	// Wire the VPN control plane so the vpn_* tools delegate to the same
+	// VPNGRPCService instance that backs REST, gRPC, QUIC, and Unix.
+	if d.vpnGRPCService != nil {
+		serviceProvider.SetVPNService(d.vpnGRPCService)
 	}
 
 	// Wire the QuicBaaS KMS / Crypto / Secrets service layer into the MCP
@@ -2941,6 +2984,17 @@ func (d *Daemon) PXEGRPCServiceServer() *PXEGRPCService {
 // Returns nil if not configured.
 func (d *Daemon) NTPGRPCServiceServer() *NTPGRPCService {
 	return d.ntpGRPCService
+}
+
+// VPNGRPCServiceServer returns the VPN gRPC service backing /api/v1/vpn.
+func (d *Daemon) VPNGRPCServiceServer() *VPNGRPCService {
+	return d.vpnGRPCService
+}
+
+// VPNControlPlane returns the control-plane VPN service, or nil when the
+// daemon runs without a platform store.
+func (d *Daemon) VPNControlPlane() *vpn.Service {
+	return d.vpnControlPlane
 }
 
 // TenantGRPCServer returns the Tenant gRPC server backing /api/v1/tenants.

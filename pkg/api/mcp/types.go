@@ -578,6 +578,18 @@ type ServiceProvider interface {
 	NTPSources(ctx context.Context) (interface{}, error)
 	NTPStep(ctx context.Context) (interface{}, error)
 
+	// VPN control-plane operations: peer enrolment, session status from
+	// gateway telemetry, and tenant posture policies. An empty tenantID or
+	// gatewayID on a list or status call means every tenant or gateway.
+	VPNEnrolPeer(ctx context.Context, tenantID, deviceID string, zones []string) (interface{}, error)
+	VPNListPeers(ctx context.Context, tenantID string) (interface{}, error)
+	VPNRevokePeer(ctx context.Context, tenantID, deviceID string) (interface{}, error)
+	VPNStatus(ctx context.Context, gatewayID string) (interface{}, error)
+	VPNPosturePolicyGet(ctx context.Context, tenantID, name string) (interface{}, error)
+	VPNPosturePolicySet(ctx context.Context, tenantID, name, module string) (interface{}, error)
+	VPNPosturePolicyDelete(ctx context.Context, tenantID, name string) (interface{}, error)
+	VPNPosturePolicyList(ctx context.Context, tenantID string) (interface{}, error)
+
 	// Health operations
 	Health(ctx context.Context) (interface{}, error)
 	Liveness(ctx context.Context) (interface{}, error)

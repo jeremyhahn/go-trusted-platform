@@ -117,6 +117,9 @@ type MCPServiceProviderConfig struct {
 	// GatewayStatus serves the gateway_status and gateway_mode_set tools;
 	// nil answers that the gateway service is not available.
 	GatewayStatus GatewayStatusController
+	// GatewayBGP serves the gateway_bgp_* tools; nil answers that the
+	// gateway service is not available.
+	GatewayBGP GatewayBGPController
 
 	// GatewayPerf serves gateway performance verification tools
 	// (gateway_perf_*).
@@ -166,9 +169,12 @@ type MCPServiceProvider struct {
 	gatewaySnapshotTools
 	// gatewayStatusTools serves the gateway status and mode tools (#65).
 	gatewayStatusTools
+	// gatewayBGPTools serves the gateway BGP tools (#65).
+	gatewayBGPTools
 	// gatewayIPAMTools serves the gateway IPAM tools.
 	gatewayIPAMTools
 	ntpService    platformv1.NTPServiceServer
+	vpnService    platformv1.VPNServiceServer
 	logger        *slog.Logger
 	idevidService *IDevIDGRPCService
 }
@@ -217,6 +223,7 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		gatewayPerf:           config.GatewayPerf,
 		gatewaySnapshotTools:  gatewaySnapshotTools{reader: config.GatewaySnapshots},
 		gatewayStatusTools:    gatewayStatusTools{controller: config.GatewayStatus},
+		gatewayBGPTools:       gatewayBGPTools{controller: config.GatewayBGP},
 		logger:                logger,
 	}
 }
@@ -3661,34 +3668,9 @@ func (m *MCPServiceProvider) OverlayMACForget(ctx context.Context, mac string, v
 // =============================================================================
 
 // GatewayStatus and GatewayModeSet come from the embedded gatewayStatusTools
-// (gateway_status_bindings.go) and the IPAM tools from the embedded
-// gatewayIPAMTools (gateway_ipam_tools.go). The BGP operations below stay unimplemented:
-// platformd constructs no BGP speaker (gatewayd owns it).
-
-// GatewayBGPStatus returns the BGP status of the gateway.
-func (m *MCPServiceProvider) GatewayBGPStatus(ctx context.Context) (interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayBGPStatus"}
-}
-
-// GatewayBGPPeers lists all BGP peers.
-func (m *MCPServiceProvider) GatewayBGPPeers(ctx context.Context) ([]interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayBGPPeers"}
-}
-
-// GatewayBGPAnnounce announces a prefix via BGP.
-func (m *MCPServiceProvider) GatewayBGPAnnounce(ctx context.Context, prefix string, nextHop string) error {
-	return ErrGatewayOperationNotImplemented{Operation: "GatewayBGPAnnounce"}
-}
-
-// GatewayBGPWithdraw withdraws a prefix from BGP.
-func (m *MCPServiceProvider) GatewayBGPWithdraw(ctx context.Context, prefix string) error {
-	return ErrGatewayOperationNotImplemented{Operation: "GatewayBGPWithdraw"}
-}
-
-// GatewayBGPPrefixes lists all announced BGP prefixes.
-func (m *MCPServiceProvider) GatewayBGPPrefixes(ctx context.Context) ([]interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayBGPPrefixes"}
-}
+// (gateway_status_bindings.go), the BGP tools from the embedded
+// gatewayBGPTools (gateway_bgp_bindings.go) and the IPAM tools from the
+// embedded gatewayIPAMTools (gateway_ipam_tools.go).
 
 // =============================================================================
 // Network Zone Operations

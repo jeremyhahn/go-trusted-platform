@@ -81,7 +81,8 @@ before the request is sent. It is retained for compatibility.
 **`gateway status` and `gateway mode set` answer "not configured" from
 `platformd`.** They read the gateway in the daemon's own process, and the
 control plane runs none (`gatewayd` does). The `gateway bgp` verbs answer
-the same way: `platformd` has no BGP speaker. See [api.md](api.md) §2 and §3. Configure a gateway by its service sections, not with this verb —
+the same way, and identically on every `--transport`: `platformd` has no BGP
+speaker. See [api.md](api.md) §2 and §3. Configure a gateway by its service sections, not with this verb —
 see [architecture.md](architecture.md).
 
 **`gateway bgp announce`**: `--prefix` (required), `--next-hop` (optional).

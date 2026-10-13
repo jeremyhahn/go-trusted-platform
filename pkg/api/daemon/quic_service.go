@@ -120,6 +120,9 @@ type QUICServiceHandler struct {
 	// (quicwire.OpNTPCategory, 0x50) with sub-opcode dispatch in payload[0].
 	// It is the same NTPGRPCService instance the other transports use.
 	ntpService platformv1.NTPServiceServer
+	// vpnService serves the VPN category opcode (quicwire.OpVPNCategory,
+	// 0x52). It is the same VPNGRPCService instance the other transports use.
+	vpnService platformv1.VPNServiceServer
 	// Phase 3.5 handlers - wired via Set*Service on the daemon.
 	ceremonyQUIC *ceremonyQUICHandlers
 	pivQUIC      *pivQUICHandlers
@@ -593,6 +596,11 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 	// sub-operations, kept apart from the platform tenancy opcodes.
 	case req.Opcode == quicwire.OpIAMCategory:
 		return h.handleIAMCategory(ctx, req)
+
+	// VPN Category Opcode (0x52) - peer enrolment, session status and
+	// posture-policy sub-operations.
+	case req.Opcode == quicwire.OpVPNCategory:
+		return h.handleVPNCategory(ctx, req)
 
 	// Device Operations (0x30-0x3F)
 	case req.Opcode >= quicwire.OpDeviceRegister && req.Opcode <= quicwire.OpDeviceGetMetrics:

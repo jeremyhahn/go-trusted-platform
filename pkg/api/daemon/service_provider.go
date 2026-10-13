@@ -47,9 +47,12 @@ type PlatformServiceProvider struct {
 	gatewaySnapshotTools
 	// gatewayStatusTools serves the gateway status and mode tools (#65).
 	gatewayStatusTools
+	// gatewayBGPTools serves the gateway BGP tools (#65).
+	gatewayBGPTools
 	// gatewayIPAMTools serves the gateway IPAM tools (#65).
 	gatewayIPAMTools
 	ntpService     platformv1.NTPServiceServer
+	vpnService     platformv1.VPNServiceServer
 	vtpmService    vtpm.VTPMService
 	dnsService     dns.DNSService
 	deviceService  device.DeviceService
@@ -1782,35 +1785,9 @@ func (p *PlatformServiceProvider) OverlayMACForget(ctx context.Context, mac stri
 // Gateway Operations - Stub implementations pending gateway service integration
 // =============================================================================
 
-// GatewayStatus and GatewayModeSet come from the embedded gatewayStatusTools
-// and the IPAM tools from the embedded gatewayIPAMTools. The BGP operations
-// below stay unimplemented: platformd constructs no BGP speaker (gatewayd
-// owns it).
-
-// GatewayBGPStatus returns the BGP status of the gateway.
-func (p *PlatformServiceProvider) GatewayBGPStatus(ctx context.Context) (interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayBGPStatus"}
-}
-
-// GatewayBGPPeers lists all BGP peers.
-func (p *PlatformServiceProvider) GatewayBGPPeers(ctx context.Context) ([]interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayBGPPeers"}
-}
-
-// GatewayBGPAnnounce announces a prefix via BGP.
-func (p *PlatformServiceProvider) GatewayBGPAnnounce(ctx context.Context, prefix string, nextHop string) error {
-	return ErrGatewayOperationNotImplemented{Operation: "GatewayBGPAnnounce"}
-}
-
-// GatewayBGPWithdraw withdraws a prefix from BGP.
-func (p *PlatformServiceProvider) GatewayBGPWithdraw(ctx context.Context, prefix string) error {
-	return ErrGatewayOperationNotImplemented{Operation: "GatewayBGPWithdraw"}
-}
-
-// GatewayBGPPrefixes lists all announced BGP prefixes.
-func (p *PlatformServiceProvider) GatewayBGPPrefixes(ctx context.Context) ([]interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayBGPPrefixes"}
-}
+// GatewayStatus and GatewayModeSet come from the embedded gatewayStatusTools,
+// the BGP tools from the embedded gatewayBGPTools and the IPAM tools from the
+// embedded gatewayIPAMTools.
 
 // =============================================================================
 // Gateway Network Zone Operations

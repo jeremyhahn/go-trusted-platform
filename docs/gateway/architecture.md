@@ -38,7 +38,7 @@ Its capabilities are **independently enabled service sections**
 | `ServiceTunnels` | `tunnels` | Tunnel management |
 | `ServiceProxy` | `proxy` | The trusted authenticating reverse proxy |
 | `ServiceHostFW` | `hostfw` | The nftables host packet filter |
-| `ServiceManagementVPN` | `management-vpn` | The attested remote-access VPN (design only; refused) |
+| `ServiceManagementVPN` | `management-vpn` | The attested remote-access VPN ([../vpn/](../vpn/)) |
 
 **Note the value spelling: `load-balancer` and `management-vpn`, hyphenated**,
 while the others are single words. Configuration that writes `loadbalancer`
@@ -308,7 +308,7 @@ the refusal table. There is no third kind.
 | `edge` | — | device onboarding verifies the TPM EK, quote and IDevID through the platform SDK; until it does, gatewayd admits no device (#553) |
 | `dhcp` | — | gatewayd has no IPAM allocator (#553) |
 | `pxe` | — | a gateway PXE service is planned; platformd's iPXE server provisions today (#553) |
-| `management-vpn` | — | a design (`docs/vpn/`, #558) with no implementation |
+| `management-vpn` | `services/vpn` admission service over the planes and collaborators `GatewayRuntime.VPN` carries; enrolments and tenant posture policies arrive as the desired-config `vpn` section | the gatewayd assembly supplies no `VPNRuntime` yet: the person-factor verifier has no SDK verb ([../vpn/engineering.md §1](../vpn/engineering.md)), so the service fails `ErrRuntimeMissing` |
 
 A `backedServiceHandler` builds its backend on `Start` and drops it on `Stop`,
 so `IsActive` is true exactly while a backend exists and `Health` is the

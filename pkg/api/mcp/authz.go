@@ -121,6 +121,13 @@ func toolPermissionCatalog() map[string]string {
 	// reconfigures the gateway's services, so it is a write.
 	permissions["gateway_status"] = "sdn:read"
 	permissions["gateway_mode_set"] = "sdn:write"
+	// BGP carries the scopes of its gRPC twins: announcing or withdrawing a
+	// prefix changes what the fabric advertises, so both are writes (#65).
+	permissions["gateway_bgp_status"] = "sdn:read"
+	permissions["gateway_bgp_peers"] = "sdn:read"
+	permissions["gateway_bgp_prefixes"] = "sdn:read"
+	permissions["gateway_bgp_announce"] = "sdn:write"
+	permissions["gateway_bgp_withdraw"] = "sdn:write"
 	// Admitted overlay VTEPs are read from the same snapshot.
 	permissions["gateway_admitted_vtep"] = "sdn:read"
 	permissions["gateway_admitted_vteps"] = "sdn:read"
@@ -187,6 +194,18 @@ func toolPermissionCatalog() map[string]string {
 	permissions["ntp_status"] = "ntp:read"
 	permissions["ntp_sources"] = "ntp:read"
 	permissions["ntp_step"] = "ntp:write"
+
+	// VPN control-plane tools. Enrolment changes are vpn:write and the
+	// readings vpn:read; posture policies decide who is admitted, so every
+	// posture-policy tool is vpn:admin (docs/vpn/api.md).
+	permissions["vpn_peer_enrol"] = "vpn:write"
+	permissions["vpn_peer_list"] = "vpn:read"
+	permissions["vpn_peer_revoke"] = "vpn:write"
+	permissions["vpn_status"] = "vpn:read"
+	permissions["vpn_posture_policy_get"] = "vpn:admin"
+	permissions["vpn_posture_policy_set"] = "vpn:admin"
+	permissions["vpn_posture_policy_delete"] = "vpn:admin"
+	permissions["vpn_posture_policy_list"] = "vpn:admin"
 
 	// PIV tools. Generate, Import, Sign and Reset change key material or use a
 	// private key, so they require piv:write; the rest are reads.

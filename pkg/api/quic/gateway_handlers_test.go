@@ -1301,6 +1301,106 @@ func TestGatewayHandleListPrefixes(t *testing.T) {
 	})
 }
 
+func TestGatewayPage(t *testing.T) {
+	t.Parallel()
+	items := make([]int, 2500)
+	for i := range items {
+		items[i] = i
+	}
+
+	cases := []struct {
+		name          string
+		offset, limit int32
+		wantFirst     int
+		wantLen       int
+	}{
+		{name: "no limit is the default page", offset: 0, limit: 0, wantFirst: 0, wantLen: int(gatewayDefaultLimit)},
+		{name: "a limit above the cap is capped", offset: 0, limit: 5000, wantFirst: 0, wantLen: int(gatewayMaxLimit)},
+		{name: "an offset starts the page", offset: 2000, limit: 1000, wantFirst: 2000, wantLen: 500},
+		{name: "an offset at the end is an empty page", offset: 2500, limit: 10, wantLen: 0},
+		{name: "an offset past the end is an empty page", offset: 9000, limit: 10, wantLen: 0},
+	}
+	for _, tc := range cases {
+		page, total, err := gatewayPage(items, tc.offset, tc.limit)
+		require.NoError(t, err, tc.name)
+		assert.Equal(t, int32(2500), total, tc.name)
+		require.Len(t, page, tc.wantLen, tc.name)
+		if tc.wantLen > 0 {
+			assert.Equal(t, tc.wantFirst, page[0], tc.name)
+		}
+	}
+
+	_, _, err := gatewayPage(items, -1, 10)
+	assert.ErrorIs(t, err, ErrGatewayNegativeOffset)
+}
+
+// gatewayListCall sends one list request to the handler.
+func gatewayListCall(t *testing.T, handler *GatewayHandler, opcode byte, req interface{}) *quicwire.Response {
+	t.Helper()
+	payload, err := quicwire.EncodePayload(req)
+	require.NoError(t, err)
+	return handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: opcode, Payload: payload})
+}
+
+// TestGatewayBGPListsPageByOffset proves a client walking the offsets
+// receives all of more peers and prefixes than the daemon's 1000 cap, with
+// the total on every page, and that a negative offset is refused.
+func TestGatewayBGPListsPageByOffset(t *testing.T) {
+	t.Parallel()
+	const entries = 2500
+	handler, service := createTestGatewayHandler()
+	service.bgpPeersResp = make([]*BGPPeerInfo, entries)
+	service.prefixesResp = make([]*PrefixInfo, entries)
+	for i := range entries {
+		service.bgpPeersResp[i] = &BGPPeerInfo{RemoteAS: uint32(i)}
+		service.prefixesResp[i] = &PrefixInfo{AnnouncedAt: int64(i)}
+	}
+
+	var peers []*BGPPeerInfo
+	for offset := int32(0); ; {
+		resp := gatewayListCall(t, handler, quicwire.OpGatewayBGPPeers,
+			&GatewayBGPPeersRequest{Limit: gatewayMaxLimit, Offset: offset})
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		var page GatewayBGPPeersResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &page))
+		assert.Equal(t, int32(entries), page.Total)
+		assert.Equal(t, int32(len(page.Peers)), page.Count)
+		if len(page.Peers) == 0 {
+			break
+		}
+		peers = append(peers, page.Peers...)
+		offset += page.Count
+	}
+	require.Len(t, peers, entries)
+	for i, peer := range peers {
+		require.Equal(t, uint32(i), peer.RemoteAS, "peer %d out of order", i)
+	}
+
+	var prefixes []*PrefixInfo
+	for offset := int32(0); ; {
+		resp := gatewayListCall(t, handler, quicwire.OpGatewayListPrefixes,
+			&GatewayListPrefixesRequest{Limit: gatewayMaxLimit, Offset: offset})
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		var page GatewayListPrefixesResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &page))
+		assert.Equal(t, int32(entries), page.Total)
+		if len(page.Prefixes) == 0 {
+			break
+		}
+		prefixes = append(prefixes, page.Prefixes...)
+		offset += page.Count
+	}
+	require.Len(t, prefixes, entries)
+	for i, prefix := range prefixes {
+		require.Equal(t, int64(i), prefix.AnnouncedAt, "prefix %d out of order", i)
+	}
+
+	resp := gatewayListCall(t, handler, quicwire.OpGatewayBGPPeers, &GatewayBGPPeersRequest{Offset: -1})
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
+	resp = gatewayListCall(t, handler, quicwire.OpGatewayListPrefixes, &GatewayListPrefixesRequest{Offset: -1})
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
+}
+
 // =============================================================================
 // Test: handleListIPAMPools
 // =============================================================================

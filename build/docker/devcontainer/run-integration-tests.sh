@@ -13,7 +13,7 @@
 #                bootstrap, ca, ceremony, piv, luks, fido2, provision,
 #                secureboot, device, tpm, cold-start, barrier-gate,
 #                restroutes, sdn, proxy, ntp, tenant, iam, attestation, lb,
-#                nat64, diskimage, netboot, ipsec, installer.
+#                nat64, diskimage, netboot, ipsec, installer, vpn.
 #                If the first argument is not a known target, it is treated
 #                as BUILD_TAGS (backward-compatible with the prior 1-arg form).
 #                Default: all
@@ -57,6 +57,7 @@ declare -A TARGET_PACKAGES=(
     [sdn]="./test/integration/sdn/..."
     [proxy]="./test/integration/proxy/..."
     [ntp]="./test/integration/ntp/..."
+    [vpn]="./test/integration/vpn/..."
     [tenant]="./test/integration/tenant/..."
     [iam]="./test/integration/iam/..."
     [attestation]="./test/integration/attestation/..."
