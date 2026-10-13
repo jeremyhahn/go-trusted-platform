@@ -1,65 +1,94 @@
 # go-trusted-platform roadmap
 
-> **Status: REFERENCE** · Owner: Software Department · Last verified: 2026-10-11
-> The one roadmap of this repository. Per handbook `software/conventions/roadmap.md`: the issue tracker is the backlog, this file orders it. Shipped work is documented in its `docs/<feature>/` folder; older plans are in `docs/archive/`.
+> **Status: REFERENCE** · Owner: Software Department · Last verified: 2026-10-13
+> The one roadmap of this repository. [docs/SPEC.md](docs/SPEC.md) specifies the features; this file orders them and names each by its SPEC table name. The issue tracker is the backlog. Older plans are in `docs/archive/`.
 
 ## Mission
 
-The trusted-computing platform product and control plane: provisioning, node and workload attestation (Attester and Relying Party), SDN, the `gatewayd` edge gateway, attestation-gated OCI registry, DNS, tenancy and fleet ops. Imports `go-quicbaas/sdk/go` only and re-exports the composed stack (handbook `docs/00` L1, L5).
+The trusted-computing platform product and control plane: provisioning, node and workload attestation (Attester and Relying Party), SDN, the `gatewayd` edge gateway, attestation-gated OCI registry, DNS, tenancy and fleet ops. Imports `go-quicbaas/sdk/go` only and re-exports the composed stack.
 
-## Current milestone
+## Milestones
 
-[Release candidate](../../milestone/16) — target kind: RC — projected date: set by the department plan. It is the only open milestone.
+- [Release candidate](../../milestone/16), due 2026-11-23, 77 open / 107 closed: public release (R4); the version is confirmed at the owner's publish approval. It closes when [SPEC §5](docs/SPEC.md#5-release-criteria) holds; the v0.2.0-alpha gate is #724.
+- Issues off any milestone are post-RC.
+- Waiting on the release candidate: the go-recountly deployment, the automatethethings.com launch, the P1 staging run.
+
+## Complete
+
+- **barrier** — v0.1.0-alpha; feature folder #788 and init-only gate #823 (PR #822)
+- **bmc** — v0.1.0-alpha; #104, #105
+- **ca** — v0.1.0-alpha
+- **cluster** — v0.1.0-alpha
+- **compute** — v0.1.0-alpha
+- **device** — v0.1.0-alpha; heartbeat liveness #150; enable/disable #250; one device contract #484
+- **dns** — v0.1.0-alpha; DNS64 #615
+- **eab** — v0.1.0-alpha
+- **health** — v0.1.0-alpha; #221
+- **iam** — v0.1.0-alpha; #151, #159, #401
+- **ima** — v0.1.0-alpha
+- **kms** — v0.1.0-alpha; #784
+- **ntp** — v0.1.0-alpha; #514
+- **provisioning** — v0.1.0-alpha
+- **proxy** — v0.1.0-alpha; YAML configuration and a persistent store #570
+- **registry** — v0.1.0-alpha; #549
+- **sdn** — v0.1.0-alpha; reference network #708 (PR #729); EVPN control plane and VXLAN data plane (PR #754)
+- **secrets** — v0.1.0-alpha; #699
+- **security** — v0.1.0-alpha
+- **switch** — v0.1.0-alpha
+- **tpm** — v0.1.0-alpha; #471
+- **trust** — v0.1.0-alpha; platform anchor and resolver #653 (PR #698)
+- **vtpm** — v0.1.0-alpha
+- **web** — v0.1.0-alpha; #428
+- **avr-attestation** — the AVR attestation provider (PR #700), on trusted-firmware sdk/go v0.3.0-alpha (train #874)
+- **sdk-javascript** — v0.1.0-alpha; #211, #231
+
+### Closed issues on features still in progress
+
+- **daemon** — per-operation QUIC authorization #767 (PR #769); default-deny gRPC authorization #768 (PR #770); its open work is in Next
+- **factory-image** — diskless squashfs + dm-verity root #690 (PR #764); its open work is in Now
 
 ## Now
 
-- [#720](../../issues/720) — adopt the go-quicbaas v0.2.0 upstream tags ([PR #755](../../pulls/755), [PR #766](../../pulls/766)) — [docs/tenant/](docs/tenant/) — blocked: owner hold, go-xkms#1442/#1443
-- [#767](../../issues/767), [#768](../../issues/768) — per-operation QUIC and default-deny gRPC authorization ([PR #769](../../pulls/769), [PR #770](../../pulls/770)) — [docs/daemon/](docs/daemon/) — blocked: go-quicbaas#1150
-- [#709](../../issues/709) — EVPN/VXLAN overlay: ND suppression, IPsec control plane, gatewayd overlay service ([PR #759](../../pulls/759), [PR #762](../../pulls/762), [PR #765](../../pulls/765)) — `docs/overlay/` (to add, [#782](../../issues/782)) — in review
-- [#742](../../issues/742) — deterministic EVPN session and gateway restart tests ([PR #811](../../pulls/811)) — [docs/sdn/](docs/sdn/) — in review
-- [#802](../../issues/802) — Pi image assembles LUKS natively on a foreign-arch host ([PR #808](../../pulls/808)) — [docs/factory-image/](docs/factory-image/) — in review
-- [#690](../../issues/690) — diskless squashfs + dm-verity root ([PR #764](../../pulls/764)) — [docs/factory-image/](docs/factory-image/) — in review
-- [#691](../../issues/691) — Pi HTTP boot: the signed pipeline with a KMS-signed `boot.img`/`boot.sig`; hardware validation of the OTP burn and the EEPROM's acceptance remains, [runbook](docs/factory-image/user.md#provision-a-fleet-signed-http-boot) ([PR #761](../../pulls/761)) — [docs/ipxe/](docs/ipxe/) — blocked: owner decision pending
-- [#685](../../issues/685) — Raspberry Pi network boot and bootstrap epic — [docs/ipxe/](docs/ipxe/) — open
-- [#696](../../issues/696), [#771](../../issues/771) — AVR trusted firmware on trusted-firmware — [docs/firmware/](docs/firmware/) — open
-- [#772](../../issues/772) — enroll a DICE AVR end to end — [docs/firmware/](docs/firmware/) — blocked: go-xkms#1441
+- **ipxe** — Raspberry Pi netboot on real hardware #685: Phase 2 per-node bootstrap.yaml fields and orchestrator #688, Phase 3 diskless NBD-over-TLS #689, Phase 5 hardware validation (OTP burn, EEPROM acceptance), Phase 6 hardware runbook #692 (Phases 0, 1 and 2A landed, PR #719; Phase 4 PR #764; Phase 5 software PR #761); install-completion webhook authentication #238
+- **gateway** — the network edge replaces the edge routers #553: EVPN/VXLAN overlay #709 (gatewayd overlay service landed, PR #765); process model #557, #657; gateway ops #65; load-balancer, perf and NAT64 wiring #660; secret-store identity and scheme #658, #659
+- **factory-image** — Raspberry Pi factory image #667 (PR #680)
+- **firmware** — AVR support on trusted-firmware #771 (provider landed, PR #700; trusted-firmware sdk/go migration merged in train #874)
+- **device-enrollment** — AVR enrollment, device registry and gateway relay #696; DICE AVR end to end #772
+- **sdk** — full composed go-quicbaas re-export #704 (agentic re-exports merged in trains #876 and #878); SDK and server routes agree #452
+- **vpn** — attested remote-access VPN #584: admission control plane and both data planes landed (PR #611); the multi-protocol surface, CLI and client agent remain
 
 ## Next
 
-- [#688](../../issues/688) — bootstrap.yaml platform/model/architecture fields — [docs/bootstrap/](docs/bootstrap/) — blocked: #720
-- [#647](../../issues/647) — LUKS service with a real backend — `docs/luks/` (to add, [#785](../../issues/785)) — blocked: #720
-- [#682](../../issues/682) — x86 TPM multi-protocol suite green and in CI — [docs/tpm/](docs/tpm/) — blocked: #720
-- [#666](../../issues/666) — go-xkms canonical attestation verifier and DevID validator — [docs/attestation/](docs/attestation/) — blocked: #720
-- [#175](../../issues/175), [#232](../../issues/232), [#412](../../issues/412) — one authenticated REST and MCP surface — [docs/daemon/](docs/daemon/) — blocked: go-quicbaas#1150
-- [#721](../../issues/721) — tenant VRFs and the platform-services VRF — [docs/tenant/](docs/tenant/) — blocked: #709
-- [#722](../../issues/722) — service layer: VIPs, placement, discovery, identity, policy — `docs/service/` (to add, in #722's own scope) — blocked: #721
-- [#723](../../issues/723) — backup/restore, hitless upgrades, metrics, audit — `docs/ops/` (to add, [#834](../../issues/834)) — blocked: #722
-- [#724](../../issues/724) — v0.2.0-alpha release gate: E2E, benchmarks, hardware acceptance — [docs/testing/](docs/testing/) — blocked: #723
-- [#781](../../issues/781), [#783](../../issues/783), [#784](../../issues/784), [#785](../../issues/785), [#788](../../issues/788) — trust, daemon CLI, kms CLI, luks, barrier docs ([PR #806](../../pulls/806), [PR #816](../../pulls/816), [PR #812](../../pulls/812), [PR #827](../../pulls/827), [PR #822](../../pulls/822)) — [docs/daemon/](docs/daemon/), [docs/kms/](docs/kms/), `docs/trust/`, `docs/luks/`, `docs/barrier/` (to add) — in review
-- [#789](../../issues/789)–[#796](../../issues/796) — feature folders for sdk, desktop-gui, gateway, bgp, platform-config, device-templates, fips, sdk-javascript — [docs/gateway/](docs/gateway/), `docs/<name>/` (to add) — open
-- [#782](../../issues/782) — overlay feature folder — `docs/overlay/` (to add) — blocked: #709
-- [#786](../../issues/786), [#787](../../issues/787) — security-keys and ceremony feature folders — `docs/security-keys/`, `docs/ceremony/` (to add) — blocked: PR #766
-- [#756](../../issues/756), [#797](../../issues/797)–[#801](../../issues/801) — banners, feature indexes, retire `docs/cli/`, publication scrub — [docs/](docs/) — open
-- [#833](../../issues/833) — spec-review scrub of `docs/` for the release candidate — [docs/](docs/) — blocked: department go (pilot verdict, slot 5)
+- **attestation** — go-xkms canonical verifier #666 and the upstream attested-peer primitive #482; admission status source #715; parity and production wiring #545, #498, #386
+- **auth** — one user store on go-quicbaas IAM #644; login, logout, mTLS sign-in and backbone sessions #640, #213, #199, #662; hardware enrollment check #281
+- **bootstrap** — FIPS Noise bootstrap listener #518; seeder over mTLS #176
+- **daemon** — ops: backup/restore, hitless upgrades, metrics/SLOs, audit, switch render #723 (blocked by #722); one authenticated REST surface #175, #232 and MCP permissions #412, #304, #538; identity renewal #36; dead transport handlers #317; `--setuid` #349; FailedPrecondition mapping #665
+- **installer** — signed ISO kernel and initrd #354; required build inputs #351
+- **luks** — real backend #647; go-luks2 v1.0.0-rc.2 #746; FIPS activation restrictions #26
+- **tenant** — tenant VRFs and the platform-services VRF #721 (blocked by #709); owner-invitation route #299
+- **gateway** — service layer: VIPs, placement, discovery, identity, policy #722 (blocked by #721); the second gateway #596, then HA state sync #710
 
 ## Later
 
-- [#710](../../issues/710) — gateway HA state sync — blocked: the second gateway (#596)
-- [#644](../../issues/644) — one user store on go-quicbaas IAM — open
-- Issues off any milestone are post-RC: filter the tracker by "no milestone".
-- DHT / P2P network: design only, see [docs/dht/](docs/dht/). Firmware (Android, OTA): design only, see [docs/firmware/](docs/firmware/).
-- Hosted control plane: not started.
+- **volume** — go-blockstore adapter #90; qrdb-backed coordinator #91; volume-mount attestation gate, container volumes, live migration and NFS root #92
+- **remote-deploy** — remote agent deploy over QUIC, replacing SSH #54
+- **pi-node-roles** — control-plane, compute and gateway templates for raspberrypi: rpi4 first, rpi5 experimental, the 3B+ as standalone compute only if its 1 GB proves enough
+- **ha-raft-template** — the three-node control plane that [configs/platform/templates/README.md](configs/platform/templates/README.md) lists as Planned
+
+## Future
+
+- **dht** — trusted DHT for the public peer-to-peer hosting platform; design only, see [docs/dht/](docs/dht/)
+- **android-ota** — Android and secure OTA updates; design only, see [docs/firmware/android.md](docs/firmware/android.md)
+- **hosted-control-plane** — hosted control plane; not started
+- **hsm-device-lifecycle** — provisioning, enrollment, attestation and the zero-trust operations for HSM devices, the NXP FRDM-IMX95-PRO first #884; not started
+- **jetson-orin-node** — NVIDIA Jetson Orin as a robotics compute node, provisioned and attested through UEFI Secure Boot and the firmware TPM, the Raspberry Pi node lifecycle; not started, waits for a borrowed unit
 
 ## Dependencies
 
-- Blocker chain A: [go-qrdb#624](../../../go-qrdb/issues/624) → a go-quicbaas release → [go-quicbaas#1171](../../../go-quicbaas/issues/1171) re-exports → #720 / PR #755 → #688, #647, #682, #666.
-- Sequence: #709 → #721 → #722 → #723 → #724.
-- Blocker chain B: [go-quicbaas#1150](../../../go-quicbaas/issues/1150) (auth chain) → #767/#768 (PRs #769/#770), #175, #232, #412.
-- Blocker chain C: [go-xkms#1442](../../../go-xkms/issues/1442), [go-xkms#1443](../../../go-xkms/issues/1443) → #755.
-- Blocker chain D: [go-xkms#1441](../../../go-xkms/issues/1441) → #772.
-- Down: go-recountly deployment, automatethethings.com launch, the P1 staging run.
-
-## Non-goals
-
-- Re-implementing go-quicbaas surfaces: see handbook `docs/00` §R.
-- The P2P network beyond design.
+- **tpm** — [go-quicbaas#1171](../../../go-quicbaas/issues/1171) re-exports in a go-quicbaas release, plus [go-xkms#1442](../../../go-xkms/issues/1442) and [go-xkms#1443](../../../go-xkms/issues/1443) → #720 → #682. [go-quicbaas#1171](../../../go-quicbaas/issues/1171) → **ipxe** #688.
+- **pi-node-roles** — a go-qrdb arm64 release → Pi control-plane nodes.
+- **daemon** — [go-quicbaas#1150](../../../go-quicbaas/issues/1150) → one authenticated REST and MCP surface #175, #232, #412.
+- **gateway** #709 → **tenant** #721 → **gateway** #722 → **daemon** #723 → the v0.2.0-alpha gate #724.
+- **gateway** — the second gateway #596 → HA state sync #710.
+- **avr-attestation** — consumes trusted-firmware sdk/go v0.3.0-alpha.
+- **device-enrollment** — consumes the trusted-firmware xkms adapter by blank import; no version is consumed yet. Registration waits on [trusted-firmware#28](../../../trusted-firmware/issues/28) (phases B and C) and the go-xkms hook tag → #771 → #772. go-xkms verifies the DICE evidence.
