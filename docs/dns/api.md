@@ -86,35 +86,29 @@ Twenty DNS tool names exist for roughly ten capabilities, in two families:
 `dns_zone_create`, `dns_record_create`, `dns_zone_update`, `dns_record_update`,
 `dns_lookup` and `dns_reverse_lookup` are **absent**.
 
-`AuthorizeTool` (`pkg/api/mcp/authz.go:157`) returns no error when a tool is
-absent from the map — the comment reads *"Unknown tool - let the tool registry
-handle the error"* — so the tool proceeds once the token validates.
+`AuthorizeTool` is default-deny (#300): a tool absent from the map is refused
+with `AuthErrorToolNotClassified` whatever scopes the token holds.
 
-**Net effect: `dns_create_zone` requires `dns:write`, and `dns_zone_create`
-requires nothing.** Same operation, two names, two authorization outcomes, and
-the unguarded one is the newer name a client is more likely to discover.
+**Net effect: `dns_create_zone` requires `dns:write`, and `dns_zone_create` is
+refused for every caller.** Same operation, two names; the newer name a client
+is more likely to discover does not work until it is classified.
 
-This is raised as an owner question in the migration report — which family is
-canonical, whether the other is removed or aliased, and whether the map should
-default to deny rather than allow.
+Which family is canonical, and whether the other is removed or aliased, is
+still open.
 
 ---
 
 ## 4. Authorization
 
-Platform tokens carry an `scp` claim as `"<resource>:<action>"`.
-**`DNSService` is in the gRPC scope catalog** with 13 methods mapped, resource
-`dns`, actions `read`/`write`/`delete` — one of only eleven services in the
-catalog.
+Platform tokens carry an `scp` claim as `"<resource>:<action>"`. Both catalogs
+are **default-deny** ([`docs/auth/architecture.md`](../auth/architecture.md)).
 
-On MCP the picture is different and much weaker: **71 of the 449 declared tool
-names carry a required permission**; the remaining 378 are allowed once the
-token validates. Eight of the 71 are DNS tools, and §3 explains which eight.
+**`DNSService` is fully scoped on gRPC** with 13 methods mapped, resource
+`dns`, actions `read`/`write`/`delete`.
 
-The asymmetry is structural, not DNS-specific: gRPC's catalog covers 185 of 461
-RPCs, and MCP's covers 71 of 449 tools. Both default to allow. **Whether the
-default should invert is an owner decision** and is the single largest
-authorization question this migration surfaced.
+On MCP, the eight older-family tools in §3 carry a permission; the twelve
+newer-family names are refused. Platform-wide catalog totals are in
+[`docs/daemon/api.md`](../daemon/api.md) §5.
 
 ### REST is gated on the `admin` role (#165)
 

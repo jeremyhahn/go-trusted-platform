@@ -176,14 +176,13 @@ here. This repository is service and transport code with no `pkg/kms` at all.
 ## One thing to be aware of
 
 Every `KeyManagementService` gRPC method requires a `kms` scope. **No KMS MCP
-tool requires anything** beyond a valid token — including `kms_decrypt`,
-`kms_sign`, `kms_generate_key`, `kms_delete_key`, `kms_generate_data_key` and
-`secret_get`.
+tool can be called yet** — including `kms_decrypt`, `kms_sign`,
+`kms_generate_key`, `kms_delete_key`, `kms_generate_data_key` and `secret_get`.
 
-That is the highest-severity instance of the MCP authorization map's
-default-allow behaviour on the platform: an MCP client with a valid token can
-decrypt and sign with any key. Recorded in [api.md](api.md) §6 and raised for
-the owner.
+The MCP authorization map is default-deny, and none of the `kms_*` or
+`secret_*` tools is classified, so each is refused with
+`AuthErrorToolNotClassified` however broad your token is. Use gRPC or REST for
+KMS work. Recorded in [api.md](api.md) §6.
 
 ---
 

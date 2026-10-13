@@ -124,9 +124,9 @@ For reference when the work is authorised, not as a present obligation:
   is not available.**
 - Tier 1 capabilities must appear on all six transports.
 - Every operation needs an `scp` permission and an entry in the gRPC and MCP
-  authorization catalogs. Both catalogs are currently default-allow, which is
-  itself an open owner question ([`docs/daemon/api.md`](../daemon/api.md) §5) —
-  a new service should not add to the untracked set.
+  authorization catalogs. Both catalogs are default-deny
+  ([`docs/daemon/api.md`](../daemon/api.md) §5): an operation without an entry
+  is refused, and the gRPC catalog's contract test fails the build.
 
 ## 6. Related
 

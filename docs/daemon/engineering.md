@@ -143,25 +143,27 @@ it is REST-only.
 
 ## 6. Authorization
 
-`pkg/api/grpc/method_permissions.go` maps **185 methods across eleven
-services** — `CAService`, `DeviceService`, `DNSService`, `GatewayService`,
-`KeyManagementService`, `NTPService`, `PlatformIAMService`, `ProxyService`,
-`SDNService`, `VTPMService`, and **one daemon method**.
+`pkg/api/grpc/method_permissions.go` is **default-deny** (#768). Its own doc
+comment states the rule: *"Every method the daemon registers on its gRPC server
+must appear either here, with the scope it requires, or in preAuthMethods
+below. The interceptor refuses any other method with codes.PermissionDenied
+before it looks at a token."* `TestGRPCMethodCatalog_*` derives the method list
+from the generated service descriptors and fails on any gap, so a new RPC
+cannot ship unclassified.
 
-Its own doc comment states the default: *"A method that is absent from the map
-carries no required scope: the interceptor allows it once the token is
-validated."*
+**All 17 `PlatformDaemon` RPCs are scoped.** The observers (`GetHealth`,
+`GetStatus`, `GetVersion`, `GetConfig`, `GetServiceStatus`, `ListServices`,
+`ListEntityTypes` and the three `Stream*` calls) need `platform:read`.
+`UpdateConfig`, `ReloadConfig`, `StartService`, `StopService` and
+`RestartService` need `platform:write`. `Shutdown` and `DumpEntityType` need
+`platform:admin`.
 
-**`PlatformDaemon` therefore has 16 of its 17 RPCs unscoped — including
-`Shutdown`, `UpdateConfig` and `StopService`.** The same default applies on MCP,
-where 71 of 449 declared tool names carry a permission; the eleven
-`platform_daemon_*` / `platform_health` / `platform_liveness` /
-`platform_readiness` tools are not among them.
+MCP is default-deny too (#300). The eight `platform_daemon_*` tools are
+unclassified, so every caller is refused with `AuthErrorToolNotClassified`. The
+`platform_health`, `platform_liveness` and `platform_readiness` tools are
+explicitly open.
 
-This is the general form of the finding that recurs in every feature folder in
-this migration: **both authorization catalogs default to allow.** Whether that
-default should invert is the single largest question the migration surfaced, and
-it is raised for the owner rather than decided here.
+The catalog totals and the pre-auth list are in [api.md](api.md) §5.
 
 ## 7. Daemon TLS identity: reuse, supersede, upgrade
 

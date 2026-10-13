@@ -15,7 +15,7 @@ over a Unix domain socket**, so gRPC and Unix share a column.
 `ServiceRegistry.Gateway` and `ServiceRegistry.Proxy` carry both services
 in-process.
 
-Two gRPC services: `GatewayService` (26 RPCs, `gateway.proto`) and
+Two gRPC services: `GatewayService` (29 RPCs, `gateway.proto`) and
 `ProxyService` (14 RPCs, `proxy.proto`).
 
 **MCP is served over stdio / HTTPS on port 9445.** The tool definitions are in
@@ -411,17 +411,26 @@ configured twice.
 ## 10. Authorization
 
 Platform tokens carry an `scp` claim as `"<resource>:<action>"`.
-**`GatewayService` (9 methods) and `ProxyService` (14 methods) are both in the
-gRPC scope catalog** (`pkg/api/grpc/method_permissions.go`), so gateway and
-proxy operations do require a scope — unlike registry, attestation, overlay and
-switch, which are absent from the catalog and therefore require only a validated
-token.
+The gRPC scope catalog (`pkg/api/grpc/method_permissions.go`) is
+**default-deny**: a method absent from it is refused with `PermissionDenied`.
 
-Nine of `GatewayService`'s 24 RPCs are mapped. The unmapped fifteen — which
-include the IPAM pool CRUD and the LB VIP operations — carry no required scope,
-because a method absent from the map is allowed once the token validates. That
-asymmetry within a single service is raised as an owner question in the
-migration report.
+**`GatewayService` is fully scoped** under resource `sdn`: the VIP, snapshot,
+perf, IPAM, BGP, status and mode RPCs all carry `sdn:read`, `sdn:write` or
+`sdn:delete`. `GetPerfFlows` needs `sdn:write` because it installs and removes
+ephemeral flows. **`ProxyService` is fully scoped** under `proxy`
+([`docs/proxy/api.md`](../proxy/api.md) §7).
+
+On MCP, the `gateway_ipam_*`, `gateway_lb_*`, `gateway_nat64_status`,
+`gateway_zone_*`, `gateway_snapshot*`, `gateway_perf_*`, `gateway_status` and
+`gateway_mode_set` tools carry the same `sdn:*` permissions as their gRPC twins:
+`gateway_status` needs `sdn:read` like `GetGatewayStatus`, and
+`gateway_mode_set` needs `sdn:write` like `SetGatewayMode` (#65). The
+`gateway_bgp_*` tools are not classified, so `AuthorizeTool` refuses them for
+every caller.
+
+`TestGRPCMethodCatalog_CoversEveryRegisteredMethod` enumerates `GatewayService`
+from its registered descriptor, so an RPC added to `gateway.proto` without a
+catalog entry fails `make test`.
 
 The admitted-VTEP reads (`GetGatewayAdmittedVTEP`, `ListGatewayAdmittedVTEPs`
 and the `gateway_admitted_vtep(s)` MCP tools) require `sdn:read`, the same

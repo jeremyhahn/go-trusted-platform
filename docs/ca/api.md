@@ -104,8 +104,8 @@ with the gRPC service's own reply. The SDK's MCP adapter flattens
 `IssueCertificate` (`sdk/go/transport/mcp/ca.go`). An `algorithm` the tool
 does not know is refused, never issued as the default. One difference
 remains: `ca_issue` defaults an unset `valid_days` to 365 where gRPC passes
-0 (the CA's default). Both tools need the scope gRPC needs, `ca:write` and
-`ca:read` (§4).
+0 (the CA's default). Both tools need the scope gRPC needs, from the `certs`
+family (§4).
 
 `TestCACertificateParity` (`pkg/api/daemon/ca_transport_parity_test.go`)
 issues and reads one fully populated certificate over every transport. It
@@ -182,22 +182,36 @@ hosts the server.
 
 ## 4. Authorization
 
-**`CAService` is in the gRPC scope catalog** with all 13 methods mapped —
-resource `ca`, actions `read`/`write`/`delete`, and `sign-csr` for `SignCSR`.
-It is one of only eleven services in the catalog, and one of the few with
-complete coverage.
+**`CAService` is in the gRPC scope catalog** with all 13 methods mapped onto
+permissions go-qrdb registers (#768). A permission outside go-qrdb's registry
+cannot be held by any role, so these are the only names that can authorize:
+
+| Methods | Permission |
+|---------|------------|
+| `InitCA` | `ca:create` |
+| `SignCSR` | `ca:sign-csr` (wildcard-only: no role holds it by name, so only `ca:*` or `*:*` covers it) |
+| `GetCAInfo`, `GetCABundle`, `GetCRL` | `ca:read` |
+| `IssueCertificate`, `RenewCertificate` | `certs:generate` |
+| `RevokeCertificate` | `certs:revoke` |
+| `GetCertificate`, `VerifyCertificate` | `certs:read` |
+| `ListCertificates` | `certs:list` |
+| `InstallCACertificates`, `UninstallCACertificates` | `trust:write` (they change the system trust store) |
 
 **Every `ca_*` MCP tool needs the scope of its gRPC twin** (#304):
 
 | MCP tool | Scope | gRPC twin |
 |---|---|---|
-| `ca_issue`, `ca_renew`, `ca_revoke` | `ca:write` | `IssueCertificate`, `RenewCertificate`, `RevokeCertificate` |
-| `ca_get`, `ca_list`, `ca_verify`, `ca_info`, `ca_crl`, `ca_bundle` | `ca:read` | `GetCertificate`, `ListCertificates`, `VerifyCertificate`, `GetCAInfo`, `GetCRL`, `GetCABundle` |
+| `ca_issue`, `ca_renew` | `certs:generate` | `IssueCertificate`, `RenewCertificate` |
+| `ca_revoke` | `certs:revoke` | `RevokeCertificate` |
+| `ca_get`, `ca_verify` | `certs:read` | `GetCertificate`, `VerifyCertificate` |
+| `ca_list` | `certs:list` | `ListCertificates` |
+| `ca_info`, `ca_crl`, `ca_bundle` | `ca:read` | `GetCAInfo`, `GetCRL`, `GetCABundle` |
 | `ca_sign_csr` | `ca:sign-csr` | `SignCSR` (below) |
 
-QUIC's opcode table (`pkg/api/quic/auth.go`) requires the same scopes for the
-operations it maps. Revocation is `ca:write`, not `ca:delete`, on every
-scoped transport. A token without the scope is refused with
+QUIC's operation catalog (`pkg/api/quic/opcode_permissions.go`) requires the
+same scopes for the operations it maps, and
+`TestQUICAuthzContract_ScopesMatchGRPC` pins the parity. No transport uses
+`ca:write`: go-qrdb does not register it, so no role could hold it. A token without the scope is refused with
 `AuthErrorPermissionDenied`. The map is in `AuthorizationChecker`
 (`pkg/api/mcp/authz.go`); a tool absent from it is denied
 (`AuthErrorToolNotClassified`, since #300).
@@ -213,7 +227,7 @@ than by platform tokens.
 
 A code-signing certificate for a KMS key is what every netbooted device's
 boot chain trusts, so Sign CSR has an admin-level scope of its own,
-`ca:sign-csr`. **`ca:write` does not grant it, and neither does `*:write`**;
+`ca:sign-csr`. **`certs:generate` does not grant it, and neither does `*:generate`**;
 `ca:sign-csr`, `ca:*` and `*:*` do. Grant it to the platform admin only —
 and remember that `ca:*` and `*:*` carry it.
 

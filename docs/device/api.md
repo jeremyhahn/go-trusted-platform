@@ -1294,9 +1294,9 @@ without an executor, so an advertised-but-dead tool cannot return unnoticed.
 
 Platform tokens carry an `scp` claim in the qrdb-canonical
 `"<resource>:<action>"` form. Enforcement is per operation: gRPC
-`RequireScope`, QUIC `AuthorizeOperation`, MCP `AuthorizeTool`, webservice
-REST `RequireScope` on the routes noted below. The catalogs and their
-default-allow behaviour are described in
+`RequireScope`, QUIC `AuthorizeRequest`, MCP `AuthorizeTool`, webservice
+REST `RequireScope` on the routes noted below. The gRPC, QUIC and MCP catalogs
+and their default-deny behaviour are described in
 [`docs/daemon/api.md`](../daemon/api.md) §5.
 
 **QUIC enforces two catalogs.** `opcodePermissions` maps every top-level
@@ -1326,13 +1326,15 @@ opcode tables are in [`api-reference-quic.md`](api-reference-quic.md).
 | `device:write` | `CreateDevice`, `UpdateDevice`, `ActivateDevice`, `AssignProfileToDevice`, `UnassignProfileFromDevice`, `CreateProfile`, `CreateProfileFromTemplate`, `CreateTemplate`, `UpdateProfile`, `AttestDevice`, `RecordAttestationCertificate`, `DisableDevice`, `EnableDevice` |
 | `device:delete` | `DeleteDevice`, `DeleteProfile` |
 
-Until #250 the catalog stopped at 21: `AttestDevice` and
-`RecordAttestationCertificate` were unscoped on gRPC while QUIC and MCP checked
-them, and the lifecycle RPCs would have joined them. An unlisted method is
-default-allow, so the gap was an authorization hole, not a missing label.
-`TestScopeForMethod_EveryDeviceServiceMethodIsScoped` now walks
-`DeviceService_ServiceDesc` and fails on any method without a scope other than
-`BootCertificate` and `BootDelivery`, and pins the write methods above.
+The catalog is default-deny, so every `DeviceService` RPC is in it:
+`TestGRPCMethodCatalog_CoversEveryRegisteredMethod` fails on any registered RPC
+with neither a scope nor a pre-auth entry, and
+`TestScopeForMethod_EveryDeviceServiceMethodIsScoped` walks
+`DeviceService_ServiceDesc`, keeps `BootCertificate` and `BootDelivery`
+unscoped and pins the write methods above. Until #250 the catalog stopped at
+21: `AttestDevice` and `RecordAttestationCertificate` were unscoped on gRPC
+while QUIC and MCP checked them, because an unlisted method was then allowed
+for any validated token.
 
 **Attestation is a write.** `AttestDevice` persists: the first fully verified
 quote seeds the profile's PCR baseline (§4.4), and a cryptographic failure
@@ -1349,11 +1351,15 @@ behind the platform-token middleware; under the legacy JWT handler, which
 carries no scopes, the routes keep only their admin role gate. The daemon REST
 server (`pkg/api/rest`) is mTLS-only and has no scope check.
 
-`DeviceService` is one of only eleven services in that catalog. The two
-template operations require `device:write` on MCP as well
+The two template operations require `device:write` on MCP as well
 (`device_template_create`, `profile_create_from_template` in
-`pkg/api/mcp/authz.go`). The other template routes are REST-only and have no
-scope-catalog entry.
+`pkg/api/mcp/authz.go`). Template create requires it on the webservice REST
+route `POST /api/v1/device/templates` too, behind the platform-token middleware
+like the attestation routes: before #770 that route kept only its admin role
+gate, so a `device:read` token could create a template over REST that every
+other transport refused. The create-profile route and the other template routes
+(get, update, delete, list) still keep only the role gate; get, update, delete
+and list are REST-only and have no gRPC catalog entry.
 
 On MCP, all 20 device-related tool names carry a permission — see §6.
 

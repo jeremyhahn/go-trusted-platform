@@ -291,14 +291,19 @@ in §3. A client is identified by a MAC address it asserts, and
 `installer.yaml`. The control is the network segment; see
 [architecture.md](architecture.md) §6.
 
-**None on the control plane either.** `PXEService` is not in the gRPC scope
-catalog (`pkg/api/grpc/method_permissions.go` covers 185 methods across eleven
-services; `PXEService` is not among them), and no `pxe_*` tool is in the MCP
-authorization map. A method absent from the catalog *"carries no required scope:
-the interceptor allows it once the token is validated"*. So **any validated
-token can authorize or quarantine a PXE device.** Recorded, with the same
-framing, in [`docs/provisioning/api.md`](../provisioning/api.md) §6 — that is
-the folder that owns the question.
+**The control plane is scoped on gRPC.** Both catalogs are default-deny
+([`docs/auth/architecture.md`](../auth/architecture.md)), and every `PXEService`
+RPC is in the gRPC scope catalog (`pkg/api/grpc/method_permissions.go`):
+
+| Permission | RPCs |
+|---|---|
+| `pxe:read` | `GetDevice`, `GetDeviceByMAC`, `GetEvents`, `GetStatus`, `ListDevices` |
+| `pxe:write` | `Authorize`, `Quarantine`, `RegisterDevice`, `Retry`, `SetDeviceEnrolled`, `StartService`, `StopService`, `UpdateState`, `WebhookComplete` |
+| `pxe:delete` | `RemoveDevice` |
+
+Authorizing or quarantining a PXE device therefore needs `pxe:write`. No `pxe_*`
+MCP tool is registered. [`docs/provisioning/api.md`](../provisioning/api.md) §6
+covers the provisioning half of the control plane.
 
 ---
 

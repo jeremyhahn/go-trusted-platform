@@ -25,10 +25,12 @@ import (
 	"strings"
 	"testing"
 
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
@@ -36,6 +38,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
@@ -46,9 +49,26 @@ import (
 // SkipIAMValidation off, no authentication backend means no server, and the
 // refusal is a typed error rather than a Warn.
 
-type alwaysValidJWTVerifier struct{}
+// alwaysValidJWTVerifier accepts every token and reports claims as its
+// verified principal.
+type alwaysValidJWTVerifier struct {
+	claims jwt.TokenClaims
+}
 
-func (alwaysValidJWTVerifier) VerifyToken(string) (bool, error) { return true, nil }
+func (v alwaysValidJWTVerifier) VerifyTokenClaims(string) (*jwt.TokenClaims, error) {
+	claims := v.claims
+	return &claims, nil
+}
+
+// pepAllowing is an IAM PEP double that allows exactly one subject to perform
+// one action on one resource, and records the last request it decided.
+func pepAllowing(subject, resource, action string, last **sdkiam.CheckRequest) *mockSDKPEPClient {
+	return &mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+		*last = req
+		allowed := req.Subject.ID == subject && req.Resource == resource && req.Action == action
+		return &sdkiam.CheckResponse{Allowed: allowed}, nil
+	}}
+}
 
 func failClosedConfig() *Config {
 	config := DefaultConfig()
@@ -70,7 +90,7 @@ func TestSelectGRPCTCPAuth_NoBackend_ReturnsTypedError(t *testing.T) {
 	}
 	for name, config := range cases {
 		t.Run(name, func(t *testing.T) {
-			sel, err := selectGRPCTCPAuth(config, nil, logging.DefaultLogger(), nil)
+			sel, err := selectGRPCTCPAuth(config, nil, nil, logging.DefaultLogger(), nil)
 			require.Error(t, err)
 			var want ErrTransportAuthRequired
 			require.True(t, errors.As(err, &want), "error is %T, want ErrTransportAuthRequired", err)
@@ -89,7 +109,7 @@ func TestSelectGRPCTCPAuth_MTLSWithoutCAService_ReturnsTypedError(t *testing.T) 
 	config.App = &app.App{}
 	config.PlatformJWTVerifier = alwaysValidJWTVerifier{}
 
-	_, err := selectGRPCTCPAuth(config, nil, logging.DefaultLogger(), nil)
+	_, err := selectGRPCTCPAuth(config, nil, nil, logging.DefaultLogger(), nil)
 	require.Error(t, err)
 	var want ErrTransportAuthRequired
 	require.True(t, errors.As(err, &want), "error is %T", err)
@@ -103,11 +123,116 @@ func TestSelectGRPCTCPAuth_JWTVerifier_BuildsRequiredAuth(t *testing.T) {
 	config.App = &app.App{}
 	config.PlatformJWTVerifier = alwaysValidJWTVerifier{}
 
-	sel, err := selectGRPCTCPAuth(config, nil, logging.DefaultLogger(), nil)
+	sel, err := selectGRPCTCPAuth(config, nil, &mockSDKPEPClient{}, logging.DefaultLogger(), nil)
 	require.NoError(t, err)
 	require.Len(t, sel.options(), 2, "unary and stream interceptors")
 	require.NotNil(t, sel.validator, "the local validator is retained for SetPlatformJWTVerifier")
 	assert.True(t, sel.required, "authentication is always required when a backend exists")
+}
+
+// Platform tokens off (the default): the local validator's tokens carry no
+// scopes, so without the IAM PEP to authorize them the transport must not
+// start — otherwise any valid token would reach every method, Shutdown and
+// the BMC power RPCs included (#768).
+func TestSelectGRPCTCPAuth_LocalValidatorWithoutPEP_ReturnsTypedError(t *testing.T) {
+	t.Parallel()
+	config := failClosedConfig()
+	config.App = &app.App{}
+	config.PlatformJWTVerifier = alwaysValidJWTVerifier{}
+
+	sel, err := selectGRPCTCPAuth(config, nil, nil, logging.DefaultLogger(), nil)
+	var want ErrTransportAuthRequired
+	require.True(t, errors.As(err, &want), "error is %T, want ErrTransportAuthRequired", err)
+	assert.Equal(t, transportGRPCTCP, want.Transport)
+	assert.Contains(t, want.Reason, "IAM policy enforcement point")
+	assert.Nil(t, sel.unary)
+	assert.Nil(t, sel.stream)
+	assert.Nil(t, sel.validator)
+}
+
+func TestSelectGRPCTCPAuth_LocalValidator_AuthorizesEachMethodThroughIAM(t *testing.T) {
+	t.Parallel()
+	config := failClosedConfig()
+	config.App = &app.App{}
+	config.PlatformJWTVerifier = alwaysValidJWTVerifier{claims: jwt.TokenClaims{
+		UserIDStr: "42", TenantID: "acme", Roles: []string{"operator"},
+	}}
+	var last *sdkiam.CheckRequest
+	pep := pepAllowing("42", "platform", "read", &last)
+
+	sel, err := selectGRPCTCPAuth(config, nil, pep, logging.DefaultLogger(), nil)
+	require.NoError(t, err)
+	require.NotNil(t, sel.unary)
+
+	call := func(method string) (bool, error) {
+		reached := false
+		ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer jwt"))
+		_, err := sel.unary(ctx, struct{}{}, &grpc.UnaryServerInfo{FullMethod: method},
+			func(context.Context, interface{}) (interface{}, error) {
+				reached = true
+				return nil, nil
+			})
+		return reached, err
+	}
+
+	// The principal holds platform:read: GetStatus is allowed...
+	reached, err := call("/platform.v1.PlatformDaemon/GetStatus")
+	require.NoError(t, err)
+	assert.True(t, reached)
+	require.NotNil(t, last)
+	assert.Equal(t, sdkiam.CheckSubject{ID: "42", TenantID: "acme", Roles: []string{"operator"}}, last.Subject)
+
+	// ...but the same valid token cannot shut the daemon down.
+	reached, err = call("/platform.v1.PlatformDaemon/Shutdown")
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.False(t, reached, "a token without platform:admin must never reach Shutdown")
+	assert.Equal(t, "admin", last.Action)
+}
+
+// Only the unary Health/Check probe is served without a token. GetHealth names
+// every component with its failure message and Health/Watch holds a stream
+// open, so the daemon's own skip list must not reopen what the interceptor's
+// catalog scopes (#768).
+func TestSelectGRPCTCPAuth_OnlyHealthCheckIsAnonymous(t *testing.T) {
+	t.Parallel()
+	config := failClosedConfig()
+	config.App = &app.App{}
+	config.PlatformJWTVerifier = alwaysValidJWTVerifier{}
+
+	sel, err := selectGRPCTCPAuth(config, nil, &mockSDKPEPClient{}, logging.DefaultLogger(), grpcTCPSkipMethods)
+	require.NoError(t, err)
+	require.NotNil(t, sel.unary)
+	require.NotNil(t, sel.stream)
+
+	reached := false
+	_, err = sel.unary(context.Background(), struct{}{},
+		&grpc.UnaryServerInfo{FullMethod: "/grpc.health.v1.Health/Check"},
+		func(context.Context, interface{}) (interface{}, error) {
+			reached = true
+			return nil, nil
+		})
+	require.NoError(t, err)
+	assert.True(t, reached, "the health probe must answer without a token")
+
+	reached = false
+	_, err = sel.unary(context.Background(), struct{}{},
+		&grpc.UnaryServerInfo{FullMethod: "/platform.v1.PlatformDaemon/GetHealth"},
+		func(context.Context, interface{}) (interface{}, error) {
+			reached = true
+			return nil, nil
+		})
+	assert.Equal(t, codes.Unauthenticated, status.Code(err))
+	assert.False(t, reached, "the component health report must not answer anonymously")
+
+	reached = false
+	err = sel.stream(nil, &mockServerStream{ctx: context.Background()},
+		&grpc.StreamServerInfo{FullMethod: "/grpc.health.v1.Health/Watch"},
+		func(interface{}, grpc.ServerStream) error {
+			reached = true
+			return nil
+		})
+	assert.Equal(t, codes.Unauthenticated, status.Code(err))
+	assert.False(t, reached, "the health Watch stream must not answer anonymously")
 }
 
 func TestSelectGRPCTCPAuth_SharedValidator_BuildsRequiredAuth(t *testing.T) {
@@ -115,7 +240,7 @@ func TestSelectGRPCTCPAuth_SharedValidator_BuildsRequiredAuth(t *testing.T) {
 	config := failClosedConfig()
 	shared := &platformTokenValidator{}
 
-	sel, err := selectGRPCTCPAuth(config, shared, logging.DefaultLogger(), nil)
+	sel, err := selectGRPCTCPAuth(config, shared, nil, logging.DefaultLogger(), nil)
 	require.NoError(t, err)
 	require.Len(t, sel.options(), 2)
 	assert.Nil(t, sel.validator, "the shared validator is not a local one")
@@ -127,7 +252,7 @@ func TestSelectGRPCTCPAuth_SkipIAMValidation_IsTheOnlyOptOut(t *testing.T) {
 	config := DefaultConfig()
 	config.SkipIAMValidation = true
 
-	sel, err := selectGRPCTCPAuth(config, nil, logging.DefaultLogger(), nil)
+	sel, err := selectGRPCTCPAuth(config, nil, nil, logging.DefaultLogger(), nil)
 	require.NoError(t, err)
 	assert.Empty(t, sel.options(), "the testing opt-out installs no token interceptor at all")
 	assert.False(t, sel.required)
@@ -408,7 +533,7 @@ func TestNew_GRPCTCPWithJWTVerifier_RejectsAnonymousCalls(t *testing.T) {
 	config := failClosedConfig()
 	config.App = &app.App{}
 	config.PlatformJWTVerifier = alwaysValidJWTVerifier{}
-	sel, err := selectGRPCTCPAuth(config, nil, logging.DefaultLogger(), nil)
+	sel, err := selectGRPCTCPAuth(config, nil, &mockSDKPEPClient{}, logging.DefaultLogger(), nil)
 	require.NoError(t, err)
 
 	unary := sel.unary

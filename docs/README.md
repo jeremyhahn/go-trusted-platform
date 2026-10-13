@@ -134,7 +134,7 @@ Configuration options:
 sudo ./platformd
 
 # Start the platform (web services auto-start if configured)
-./platformd serve
+./platformd serve --enable-mtls
 
 # Navigate to OpenAPI docs
 xdg-open https://localhost:8443/swagger/

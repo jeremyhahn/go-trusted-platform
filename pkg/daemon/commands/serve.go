@@ -599,10 +599,15 @@ The daemon provides:
 When webservices are configured in the platform config, the full webservice
 stack is started with ACME, WebAuthn, and JWT authentication support.
 
+gRPC TCP needs --enable-mtls unless platform tokens are enabled (webservice
+jwt.platform-token) or quicbaas runs remotely: the embedded SDK cannot answer
+the IAM policy checks plain tokens rely on, so the daemon refuses to start.
+
 Example:
-  platformd serve
-  platformd serve --socket-path=/run/platformd.sock --rest-port=8443
-  platformd serve --enable-quic=false --enable-mcp=false
+  platformd serve --enable-mtls
+  platformd serve --enable-mtls --socket-path=/run/platformd.sock --rest-port=8443
+  platformd serve --enable-mtls --enable-quic=false --enable-mcp=false
+  platformd serve --enable-grpc=false --enable-rest=false
 `,
 	// A startup failure is not a usage error. Without this, cobra prints the
 	// full usage block after the error, which buries the actual cause in a

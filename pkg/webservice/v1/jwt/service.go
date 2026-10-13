@@ -255,23 +255,38 @@ func (service *Service) Verify(token *jwt.Token) error {
 
 // VerifyToken parses and validates a token string. Returns true when the
 // token is valid (signature checks out and claims pass validation),
-// false otherwise. Satisfies the daemon's PlatformJWTVerifier interface
-// so gRPC/QUIC/MCP transports can accept platform-issued JWTs.
+// false otherwise.
 func (service *Service) VerifyToken(tokenString string) (bool, error) {
+	if _, err := service.VerifyTokenClaims(tokenString); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// VerifyTokenClaims parses and validates a token string exactly as
+// VerifyToken does and returns its verified claims, so a transport can
+// authorize the principal the token names (user, tenant, roles). Satisfies
+// the daemon's PlatformJWTVerifier interface so gRPC/QUIC/MCP transports can
+// accept platform-issued JWTs.
+func (service *Service) VerifyTokenClaims(tokenString string) (*TokenClaims, error) {
 	if service == nil {
-		return false, ErrInvalidToken
+		return nil, ErrInvalidToken
 	}
 	tokenString = strings.TrimPrefix(tokenString, "Bearer ")
 	tokenString = strings.TrimSpace(tokenString)
 	if tokenString == "" {
-		return false, ErrInvalidToken
+		return nil, ErrInvalidToken
 	}
 	token, err := service.ParseTokenString(tokenString)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	if err := service.Verify(token); err != nil {
-		return false, err
+		return nil, err
 	}
-	return true, nil
+	claims, ok := token.Claims.(*TokenClaims)
+	if !ok {
+		return nil, ErrInvalidToken
+	}
+	return claims, nil
 }

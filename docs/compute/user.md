@@ -205,11 +205,10 @@ It already defaults to true, as does `--stderr`. To suppress one, pass
 
 ## One thing to be aware of
 
-Compute operations — including **`ExecContainer`, arbitrary command execution
-inside a workload** — currently require only a validated token, not a specific
-scope, on gRPC, Unix, MCP and embedded. Treat any credential that reaches the
-compute API as equivalent to shell access on every workload it can name. It is
-recorded in [api.md](api.md) §7 and raised for the owner.
+**`ExecContainer` runs an arbitrary command inside a workload.** On gRPC and
+Unix it needs `container:write`; treat that grant as shell access on every
+container the caller can name. MCP refuses the `vm_*` and `container_*` tools
+until they are classified. See [api.md](api.md) §7.
 
 ---
 

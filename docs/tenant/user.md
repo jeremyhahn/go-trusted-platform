@@ -178,12 +178,10 @@ The tenant service is not wired into the daemon.
 
 ## One thing to be aware of
 
-Tenant operations — including **init, seal and unseal of a per-tenant barrier** —
-currently require only a validated token, not a specific scope, on gRPC, Unix,
-MCP and embedded. Barrier operations are key-custody operations. Until that is
-resolved, treat any credential that can reach the tenant API as a
-tenancy-administrator credential. It is recorded in [api.md](api.md) §7 and
-raised for the owner.
+**Init, seal and unseal of a per-tenant barrier** are key-custody operations. On
+gRPC and Unix they need `tenant:write`, the same grant as tenant create and
+update, so treat a `tenant:write` holder as a tenancy administrator. MCP
+refuses every tenant tool until they are classified. See [api.md](api.md) §7.
 
 ---
 

@@ -77,6 +77,40 @@ serves REST and the daemon's own REST listener stays off, so `--enable-rest`
 and `daemon.rest` apply only in daemon-only mode. The Unix socket is created
 with mode `0660` and no group change.
 
+### gRPC TCP needs mTLS or platform tokens under embedded quicbaas
+
+A token without scope claims is authorized on gRPC TCP by the IAM policy
+enforcement point (`IAMService.PEP().Check`). The embedded quicbaas SDK does
+not implement that check — every call answers `ServiceNotConfigured` — so such
+a daemon would serve gRPC and fail every scoped call with `Unavailable`.
+`daemon.New` refuses the combination at startup instead, with
+`ErrEmbeddedPEPUnavailable`:
+
+| Condition | Refused when all hold |
+|---|---|
+| `--enable-grpc` | `true` (the default) |
+| `--enable-mtls` | `false` (the default) |
+| Platform tokens | off: no webservice `jwt.platform-token.enabled: true` |
+| `--skip-iam-validation` | `false` |
+| `quicbaas.transport` | `embedded`, unset, or no `quicbaas:` section |
+
+Any one of these makes the daemon start:
+
+- `--enable-mtls`: gRPC authorizes by client certificate. Every shipped
+  launcher (systemd and OpenRC units, the installer, the compose files and the
+  devcontainer) passes it.
+- `jwt.platform-token.enabled: true` on the primary webservice: platform tokens
+  carry their own scope claims. This applies only in webservices mode; daemon-only
+  mode bridges no platform-token config, so there mTLS is the only option.
+- `--enable-grpc=false`: no gRPC TCP listener (gRPC still serves the Unix
+  socket).
+- A remote `quicbaas.transport` (`unix`, `grpc`, `rest`, `quic`): the remote
+  SDK answers the check.
+
+The gap is upstream, in go-quicbaas `sdk/go/transport/embedded/handlers_iam.go`
+`handleIAMPEPCheck`. The platform builds no local policy engine to replace it
+and never falls back to allow. See [auth architecture](../auth/architecture.md).
+
 ## TLS
 
 The network transports carry the daemon TLS identity, provisioned at startup
@@ -131,7 +165,11 @@ The bootstrap seeder fills the key from `platform.internal_domain` (see
 ### Development (loopback, the defaults)
 
 No `daemon:` section is needed; every transport binds `127.0.0.1` on its
-canonical port.
+canonical port. gRPC TCP still needs mTLS under embedded quicbaas (see above):
+
+```sh
+platformd serve --enable-mtls
+```
 
 ### Production (gRPC and QUIC on every interface)
 

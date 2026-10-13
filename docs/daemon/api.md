@@ -84,10 +84,10 @@ so it is never bound off-host, and the gate client refuses any endpoint that is
 not `unix://<path>` or a loopback `host:port`. `platformctl init` uses the Unix
 socket unless `--loopback-http` is passed: only there can a lost `/init`
 response be replayed ([`docs/bootstrap/cli.md`](../bootstrap/cli.md) §1a).
-`CeremonyService/Init` on the
-six transports reaches the same ceremony backend, but it is only reachable after
-unseal, so it cannot bootstrap a fresh platform — `platformctl init` does not use
-it.
+`CeremonyService/Init` on the six transports reaches the same ceremony backend,
+but it is only reachable after unseal and carries the `ceremony` scope on every
+token-gated listener, so it cannot bootstrap a fresh platform — `platformctl
+init` does not use it.
 
 ### Error classes on MCP (#505)
 
@@ -307,14 +307,21 @@ permissions. Enforcement is per operation: gRPC `RequireScope`, QUIC
 and FIDO2 categories also run `AuthorizeSubOpcode`, which requires a principal
 (#720, below).
 
-Three catalogs with **different defaults** — gRPC allows an unlisted entry, MCP
-(since #300) and QUIC (since #767) deny one:
+All three catalogs **deny an unlisted entry** — MCP since #300, QUIC since
+#767, gRPC since #768:
 
 | Catalog | Coverage | Default for an unlisted entry |
 |---|---|---|
-| gRPC (`pkg/api/grpc/method_permissions.go`) | **213 of 473 RPCs**, across 13 of 31 services | *"carries no required scope: the interceptor allows it once the token is validated"* |
-| MCP (`pkg/api/mcp/authz.go`) | **151 of 430 registered tools** (7 of them explicitly open with `""`) | **denied**: `AuthorizeTool` refuses a tool with no map entry (`AuthErrorToolNotClassified`, reported on the wire as `-32603`); the 279 unmapped tools are enumerated in `knownUnclassified` (`authz_completeness_test.go`), a list that may only shrink (#304) |
+| gRPC (`pkg/api/grpc/method_permissions.go`) | **every registered RPC**, unary and streaming, across every `platform.v1` service, the four quicbaas KMS services and `grpc.health.v1.Health`; a contract test keeps it that way | **denied**: the OIDC interceptor answers `PermissionDenied` (`ErrMethodNotClassified`) before it reads a token, unless the method is on the documented pre-auth list |
+| MCP (`pkg/api/mcp/authz.go`) | **156 of 433 registered tools** (7 of them explicitly open with `""`) | **denied**: `AuthorizeTool` refuses a tool with no map entry (`AuthErrorToolNotClassified`, reported on the wire as `-32603`); the 277 unmapped tools are enumerated in `knownUnclassified` (`authz_completeness_test.go`), a list that may only shrink (#304) |
 | QUIC (`pkg/api/quic/opcode_permissions.go`) | **every routable opcode and sub-opcode** — pinned by `pkg/api/daemon/quic_authz_contract_test.go` | **denied**: `StatusPermissionDenied`, payload `QUIC operation not classified for authorization: …` (`ErrOperationNotClassified`) |
+
+Per-service scopes are listed in each feature folder. A new RPC must carry the
+permission its twins on the other transports require: the `DeviceService`
+operator writes `DisableDevice`, `EnableDevice` and `CreateTemplate` (#873)
+take `device:write`, as QUIC sub-opcodes `0x25`–`0x27`, MCP `device_disable`,
+`device_enable` and `device_template_create`, and the webservice REST routes do
+([`docs/device/api.md`](../device/api.md) §7).
 
 **gRPC TCP, QUIC and REST fail closed without an authentication backend
 (#550, #312).** With `SkipIAMValidation` off, a daemon configuration under
@@ -353,7 +360,7 @@ operation, whatever its `scp`. `HandleRequest` now runs
    `"<resource>:<action>"` is enforced by `RequireScope` (wildcards apply);
    otherwise a configured `AuthorizationChecker` decides. A scope-less
    credential with no checker (a peer certificate admitted without a
-   principal, the legacy bool-only token validator) authorizes every *classified* operation, as on gRPC —
+   principal, the legacy bool-only token validator) authorizes every *classified* operation —
    except the ceremony, PIV and FIDO2 categories, which need a principal
    (below).
 
@@ -388,16 +395,16 @@ verifier) and `SkipIAMValidation` attach none, so on those daemons the three
 categories are refused over QUIC. The Unix socket and the embedded transport
 dispatch through gRPC and never reach this check.
 
-**gRPC TCP refuses the same three services to a bool-only validator (#720).**
+**gRPC TCP never serves a bool-only token on its validity alone (#720, #768).**
 Without the platform-token validator the gRPC TCP interceptor falls back to
 the legacy bool-only validator, which proves a token valid but yields no
 scopes. That path used to call the handler once the token validated, so any
 valid token reached `CeremonyService/Init`, `PIVService/Sign` and
-`FIDO2Service/Register` whatever its scope. The interceptor now refuses every
-`CeremonyService`, `PIVService` and `FIDO2Service` method on that path with
-`PermissionDenied` (`ErrScopeRequiresClaims`; the resource set is
-`claimsOnlyResources` in `pkg/api/grpc/method_permissions.go`). Other methods
-keep the bool-only behaviour. Under `EnableMTLS` the verified client
+`FIDO2Service/Register` whatever its scope. The interceptor now asks the
+`AuthorizationChecker` (the IAM PEP, `iamTokenAuthorizer`) for the method's
+catalog permission on that path, for every method, these three services
+included. Without a checker the call is `PermissionDenied`
+(`ErrAuthorizationCheckerRequired`). Under `EnableMTLS` the verified client
 certificate is the operator principal and the interceptor is not involved.
 
 **MCP fails closed without an authorization backend (#440).** With neither the
@@ -427,17 +434,94 @@ when MCP over HTTP is the only network transport. The stdio transport binds no
 listener and needs no certificate. Before #844 the listener served plaintext
 HTTP and bearer tokens crossed the network in the clear.
 
-Services **in** the gRPC catalog: `CAService` (12), `DeviceService` (21),
-`DNSService` (13), `GatewayService` (11 of 26), `KeyManagementService` (23),
-`NTPService` (3), `PlatformIAMService` (41), `ProxyService` (14),
-`SDNService` (25), `VTPMService` (23), and one daemon method.
+**The gRPC catalog maps every method.** `buildGRPCMethodPermissions` gives each
+RPC a `"<resource>:<action>"` scope using the same resource names as the QUIC
+opcode table and MCP `authz.go`. For the platform's own resources the actions
+are `read`, `write` and `delete`; `bmc` adds `power`, `media` and `admin`, and
+`platform` adds `admin` for `Shutdown` and `DumpEntityType`. These resources
+are:
 
-Services **not** in it include `PlatformDaemon` (16 of 17 RPCs, among them
-`Shutdown`, `UpdateConfig` and `StopService`), `ComputeService`,
-`AttestationService`, `RegistryService`, `TenantService`, `ClusterService`,
-`PXEService`, `ConfigDeliveryService`, `BMCService`, `OverlayService`,
-`SwitchService`, `TPMService`, `IDevIDService`, `EABService` and
-`InvitationService`.
+- `vtpm`, `dns`, `ntp`, `proxy`, `device`, `sdn`, `kms` and `iam`
+- `platform` (`PlatformDaemon`, including `StreamEvents`, `StreamLogs` and
+  `StreamMetrics`)
+- `attestation`, `bmc`, `cluster`, `container`, `vm`, `provisioning`, `eab`,
+  `fido2`, `idevid`, `invitation`, `luks`, `pxe`, `registry`, `switch`, `tpm`
+  and `tenant`
+
+**Resource families go-qrdb owns use go-qrdb's registered actions (#768).**
+The broker can mint only a permission go-qrdb registers, so any other action in
+these families could never be held. They are `ca`, `certs`, `ceremony`, `piv`,
+`seal`, `secrets` and `trust`:
+
+| Service | Mapping |
+|---|---|
+| `CAService` | `InitCA` `ca:create`; `SignCSR` `ca:sign-csr`; CA info, bundle and CRL `ca:read`; issue and renew `certs:generate`; revoke `certs:revoke`; get and verify `certs:read`; list `certs:list`; install and uninstall CA certificates `trust:write` |
+| `BarrierService` | `seal:status`, `seal:bootstrap` (`Init`, single-key and Shamir), `seal:unseal`, `seal:seal`, `seal:rekey` |
+| `CeremonyService` | claim-cert begin and complete `ceremony:claim_cert`; `ceremony:claim_share_begin`, `ceremony:claim_share_complete`, `ceremony:sign_csr` |
+| `PIVService` | `Sign` is `piv:use`; the rest use `piv:read`, `piv:write` or `piv:delete` |
+| `SecretsManagement` | listing is `secrets:list`; the rest use `secrets:read`, `secrets:write` or `secrets:delete` |
+
+`TestGRPCMethodPermissions_WellFormed` pins go-qrdb's vocabulary for these
+families and fails on any action outside it.
+
+**The platform's own families cannot be granted action by action yet.** Neither
+go-qrdb nor go-quicbaas registers `vtpm`, `dns`, `bmc`, `platform` or any other
+family in the list above, and no built-in role holds them. A custom role may
+name only a registered permission or a whole-segment wildcard (go-qrdb
+`role.validatePermissions`). The token check `AuthorizedContext.HasScope`
+matches `<resource>:*` and `*:*`. On the platform-token path, these RPCs are
+therefore reachable only through a role that grants the whole family, such as
+`bmc:*`. A role holding `bmc:read` but not `bmc:power` cannot be created.
+Least-privilege grants need an SDK surface that registers the platform's
+permission vocabulary (go-qrdb `permission.Register` and `RegisterRoleGrant`,
+reached through go-quicbaas). The SDK does not expose one today. This is a
+missing capability, not a hole: an unregistered scope is never held, so it can
+deny but never allow.
+
+`OverlayService` and all of `GatewayService` (status, mode, VIP, snapshot,
+admitted VTEP, perf, IPAM and BGP) map to `sdn`. The
+quicbaas `KeyManagement`, `Crypto` and `DEKManagement` services map to `kms`, and
+`SecretsManagement` maps to `secrets`. `ProvisioningGateway` is generated but not
+registered by platformd; it is mapped anyway so that registering it cannot open
+a hole.
+
+`method_permissions_test.go` builds the list of registered methods from the
+service descriptors: `protoregistry` for `platform.v1`, plus the quicbaas and
+health `ServiceDesc`s. Three tests guard the catalog:
+
+- `TestGRPCMethodCatalog_CoversEveryRegisteredMethod` fails when a method has
+  neither a scope nor a pre-auth entry.
+- `TestGRPCMethodCatalog_NoStaleEntries` fails when an entry names a method
+  that does not exist.
+- `TestGRPCMethodCatalog_PreAuthIsNotScoped` fails when a method is on both
+  lists.
+
+So a new RPC cannot ship without a decision.
+
+**The gRPC pre-auth list** (`preAuthMethods`) is the only set of methods the
+OIDC interceptor serves without a token. Each entry is commented in source with
+its reason:
+
+| Methods | Why they are pre-auth |
+|---|---|
+| `grpc.health.v1.Health/Check` | The liveness and readiness probe: it answers one aggregate SERVING status, and orchestrators call it without credentials |
+| `CeremonyService/{Init,Status}` | First-boot ceremony: `Init` enrolls the first custodians, so no principal exists yet to hold a token; `Status` lets them follow it |
+| `InvitationService/{GetInvitationByToken,AcceptInvitation}` | The invitation token in the request is the credential; the invitee has no platform session yet (matches the ungated REST invitee routes and MCP tools) |
+| `ConfigDeliveryService/{GetNonce,FetchConfig,SignDigest,PollSession}` | Pre-enrollment config delivery: the machine authenticates inside the request (single-use nonce, EAB HMAC, EK-certificate binding) and the session ID is the poll capability (matches the ungated REST `/provisioning` routes); the operator half — `ListSessions`, `GetSession`, `FulfillSession` — is scoped `provisioning` |
+| `DeviceService/{BootCertificate,BootDelivery}` | Diskless boot: the node holds no platform token and, for `BootCertificate`, no certificate yet; the boot service verifies the node's proof, or its chain and quote, bound to the connection. They are on the TCP skip list too, so the mTLS interceptor passes them as well |
+
+The rest of the health surface is scoped `platform:read` (#768).
+`PlatformDaemon/GetHealth` names every component with its failure message, the
+same reconnaissance the REST `/api/v1/platform/health` route gates.
+`Health/List` enumerates the registered services, and `Health/Watch` holds a
+stream open for as long as the caller likes.
+
+`PlatformIAMService` has no login method, so IAM contributes no pre-auth entry. The
+daemon's own skip list, `grpcTCPSkipMethods` in `transport_auth.go`, is handed
+to both the mTLS and the OIDC interceptor. It holds only `Health/Check`, so it
+widens neither path. Under mTLS, the gRPC TCP transport authenticates the client
+certificate and does not apply the per-method scope catalog. The UDS server
+authorizes by peer credentials.
 
 MCP's 94 mapped tools are the vtpm, dns, device, profile, gateway-lb,
 gateway-perf, sdn, proxy, ntp, bmc and invitation families. The 334 unmapped
@@ -464,9 +548,25 @@ server publishes the RFC 9728 protected-resource metadata that header would
 point at. Whether discovery should require the same principal as REST's
 listings is raised for the owner on #412 and is not decided here.
 
-**Whether the gRPC catalog should default to deny is still open** and raised
-for the owner in the migration report; the MCP half of that question was
-answered by #300.
+**The gRPC catalog defaults to deny (#768).** Before #768, about 345 RPCs had no
+entry and were served to any caller with a valid token whatever its scopes. That
+included `PlatformDaemon/Shutdown`, `UpdateConfig` and `StopService`, and every
+BMC power and media method. The MCP half of that gap was closed by #300.
+
+**A token without scope claims is authorized by the IAM PEP (#768).** The
+catalog is enforced against the token's `scp` claim only on the platform-token
+path (`PlatformToken.Enabled`). With platform tokens off — the default — the
+daemon's local validator (`grpcTokenValidator`) reports only that a token is
+valid, so `selectGRPCTCPAuth` pairs it with `iamTokenAuthorizer`
+(`WithAuthorizationChecker`): the token's verified subject, tenant and roles go
+to the IAM PEP, which decides the method's `"<resource>:<action>"`, exactly as
+on QUIC (#767). A token naming no tenant is denied. Without a PEP the gRPC TCP
+transport is refused with `ErrTransportAuthRequired`, and the OIDC interceptor
+answers `PermissionDenied` (`ErrAuthorizationCheckerRequired`) for any token
+from a claim-less validator that has no checker; a PEP error is `Unavailable`
+(`ErrAuthorizationCheckFailed`). Before this, the default configuration let
+any valid token call every classified method, `Shutdown` and the BMC power RPCs
+included.
 
 ### Certificate-bound routes
 

@@ -64,7 +64,7 @@ func newWiredHealthService(t *testing.T, components ...*stubRegistryComponent) *
 // TestHealthGRPCService_IsNotEnumerable is a SECURITY assertion, not a
 // behavioural one.
 //
-// "/grpc.health.v1.Health/Check" is in the gRPC server's skipMethods list,
+// "/grpc.health.v1.Health/Check" is in grpcTCPSkipMethods,
 // so on the TCP listener this RPC answers unauthenticated callers. Check
 // distinguishes a registered name (returns a status) from an unregistered
 // one (returns NOT_FOUND), which means any name that is registered becomes

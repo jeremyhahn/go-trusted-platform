@@ -484,9 +484,10 @@ vocabulary for callers; do not assume `Authenticate` produces them.
 4. **`ValidateIDevID` failure inside `Authenticate` does not fail
    authentication.** Deliberate (not every client certificate is a device
    certificate) and consequential: enforce it yourself where it matters.
-5. **`ParseStatus`-style permissiveness elsewhere in the transport layer**: an
-   RPC or MCP tool absent from its scope catalog is allowed once the token
-   validates ([`docs/daemon/api.md`](../daemon/api.md) §5).
+5. **The scope catalogs are default-deny**: an RPC or MCP tool absent from its
+   scope catalog is refused whatever the token holds — gRPC `PermissionDenied`,
+   MCP `AuthErrorToolNotClassified` ([`docs/daemon/api.md`](../daemon/api.md)
+   §5). The QUIC opcode catalog is narrower and is tracked separately.
 
 ## 5. Transport-layer contracts
 
@@ -525,6 +526,7 @@ func OIDCUnaryInterceptor(opts ...OIDCInterceptorOption) grpc.UnaryServerInterce
 func OIDCStreamInterceptor(opts ...OIDCInterceptorOption) grpc.StreamServerInterceptor
 
 func WithTokenValidator(v TokenValidator) OIDCInterceptorOption
+func WithAuthorizationChecker(c AuthorizationChecker) OIDCInterceptorOption
 func WithSkipMethods(methods ...string) OIDCInterceptorOption
 func WithRequireAuth(require bool) OIDCInterceptorOption
 
@@ -535,12 +537,29 @@ func AddBearerToken(ctx context.Context, token string) context.Context
 
 Errors: `ErrTokenValidatorNotConfigured`, `ErrMissingAuthorizationHeader`,
 `ErrInvalidAuthorizationHeader`, `ErrTokenValidationFailed`, `ErrScopeDenied`,
-`ErrScopeRequiresClaims`.
+`ErrAuthorizationCheckerRequired`, `ErrAuthorizationCheckFailed`.
 
-A validator that is not a `ClaimsTokenValidator` yields no scopes. On that
-path the interceptor refuses any method whose scope resource is `ceremony`,
-`piv` or `fido2` with `PermissionDenied` (`ErrScopeRequiresClaims`), mirroring
-QUIC `AuthorizeSubOpcode`; see `docs/daemon/api.md` §5.
+A validator that is a `ClaimsTokenValidator` authorizes the method's catalog
+scope itself (`AuthorizeToken`). A validator that only reports validity cannot,
+so the interceptor asks the `AuthorizationChecker` with the method's
+`resource`/`action`: no checker is `PermissionDenied`
+(`ErrAuthorizationCheckerRequired`), a checker error is `Unavailable`
+(`ErrAuthorizationCheckFailed`), and a refusal is `PermissionDenied`
+(`ErrScopeDenied`). An invalid token is `Unauthenticated` before the checker is
+asked. With platform tokens off the daemon's `selectGRPCTCPAuth` installs its
+local validator with `iamTokenAuthorizer`, the IAM-PEP checker QUIC uses, and
+refuses the transport without a PEP (#768).
+
+Under embedded quicbaas that PEP exists but cannot decide: `handleIAMPEPCheck`
+in go-quicbaas `sdk/go/transport/embedded/handlers_iam.go` returns
+`ServiceNotConfigured` for every request (sdk/go v0.12.0-alpha), and
+`handleIAMAdminCheckPermission` answers a different question — whether an admin
+holds an admin-role permission, not whether a token may perform a
+resource/action. `daemon.New` therefore runs `Config.validateGRPCAuthorization`
+and returns `ErrEmbeddedPEPUnavailable` (`pkg/api/daemon/errors.go`) when gRPC
+TCP is on, mTLS is off, platform tokens are off, IAM validation is on and
+quicbaas is embedded or unset (#770). `NewService` does not run the check: it
+serves no listener.
 
 ### Unix `SO_PEERCRED` (`pkg/util/peercred/peercred.go`)
 

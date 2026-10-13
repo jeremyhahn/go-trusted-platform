@@ -331,12 +331,13 @@ the daemon will not help. See [cli.md](cli.md) §6 for what to use instead.
 
 ## Two things to be aware of
 
-**Nothing in the TPM surface is scope-checked.** Neither the gRPC `TPMService`
-and `IDevIDService`, nor the 48 TPM/device-identity MCP tools, nor the QUIC
-TPM2 opcodes appear in the platform's authorization catalogs, and both catalogs
-are default-allow. Any valid platform token reaches `Clear`, `Unseal`,
-`DeleteEK` and `DeleteIDevID`. Treat token issuance for a node with a TPM as the
-actual access control until this is fixed — [api.md](api.md) §9.
+**The QUIC TPM2 opcodes are not scope-checked.** The gRPC `TPMService` and
+`IDevIDService` carry `tpm:*` and `idevid:*` scopes — `Clear` and `DeleteEK`
+need `tpm:delete`, `DeleteIDevID` needs `idevid:delete`. The TPM and
+device-identity MCP tools are not classified yet, so MCP refuses them for every
+caller. On QUIC, any valid platform token reaches the TPM2 category; treat
+token issuance for a node with a TPM as the access control on that path —
+[api.md](api.md) §9.
 
 **The same key has two names depending on transport.** What gRPC and REST call
 the AK (`CreateAK`, `/api/v1/tpm/ak`), QUIC and MCP call the IAK

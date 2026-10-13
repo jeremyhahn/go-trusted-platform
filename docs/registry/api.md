@@ -140,14 +140,14 @@ subject's resolved permissions. Each transport enforces it per operation: gRPC
 through the interceptor's `RequireScope`, QUIC through `AuthorizeRequest`, MCP
 through `AuthorizeTool`.
 
-**No registry method carries a required scope.** The gRPC catalog
-(`pkg/api/grpc/method_permissions.go`) maps 185 methods across 11 services —
-`CAService`, `DeviceService`, `DNSService`, `GatewayService`,
-`KeyManagementService`, `NTPService`, `PlatformIAMService`, `ProxyService`,
-`SDNService`, `VTPMService` and one daemon method. `RegistryService` is not
-among them, and the catalog's own doc comment states that **a method absent from
-the map carries no required scope**: the interceptor allows it once the token is
-validated.
+Both catalogs are **default-deny**
+([`docs/auth/architecture.md`](../auth/architecture.md)). **Every
+`RegistryService` RPC carries a required scope** in the gRPC catalog
+(`pkg/api/grpc/method_permissions.go`): `Inspect`, `List`, `Status` and `Pull`
+need `registry:read`, `Push` needs `registry:write`, and `Delete` needs
+`registry:delete`. The four `platform_registry_*` MCP tools are not in the MCP
+permission map, so every caller is refused with `AuthErrorToolNotClassified`
+until they are classified.
 
 `VerifyClient` ([engineering.md](engineering.md) §2) is the platform-curated
 API's attestation control. It does **not** run on the `/v2` path: the
@@ -156,9 +156,7 @@ checks, and until #549 nothing on that path verified anything — the earlier
 revision of this section, which said `/v2` "authenticates by TPM attestation",
 was wrong. Scope-based authorization and attestation are different controls,
 and a reader must not assume the `scp` claim constrains what an attested client
-may do to the registry. **Whether `RegistryService` should join the scope
-catalog is an open question for the owner**, recorded in the migration report;
-it is not decided here.
+may do to the registry.
 
 ### The two surfaces are gated differently, and deliberately (#165, #549)
 

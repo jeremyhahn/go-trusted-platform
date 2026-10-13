@@ -286,16 +286,14 @@ Within this repo's half:
    `membershipManager.Join` rejects only the empty string. **There is no
    allow-list, no identity check and no attestation gate on a join address in
    this layer.**
-3. **The cluster API is not in the authorization catalog.** `ClusterService` is
-   **absent** from the gRPC scope catalog (`pkg/api/grpc/method_permissions.go`),
-   and the `platform_cluster_*` tools are **absent** from the MCP permission map
-   (`pkg/api/mcp/authz.go`). MCP refuses an unclassified tool (#300), but the
-   gRPC catalog is default-allow, so **any validated token could call
-   Bootstrap, Join and Leave over gRPC** if the service were wired.
-   Today it is not, so the exposure is latent rather than live — but wiring the
-   coordinator without adding scopes would make cluster lifecycle
-   scope-unchecked. Recorded in [api.md](api.md) §6 and in the platform-wide
-   question in [`docs/daemon/api.md`](../daemon/api.md) §5.
+3. **Cluster lifecycle is scoped on gRPC and refused on MCP.** Both catalogs
+   are default-deny. The gRPC scope catalog
+   (`pkg/api/grpc/method_permissions.go`) gives `GetStatus` and `ListNodes`
+   `cluster:read`, and `Bootstrap`, `Join` and `Leave` `cluster:write`, so a
+   read-only token cannot change membership. The `platform_cluster_*` tools are
+   not in the MCP permission map (`pkg/api/mcp/authz.go`), so every caller is
+   refused with `AuthErrorToolNotClassified` until they are classified.
+   Recorded in [api.md](api.md) §7.
 4. **`ClusterStatus` and the node list are operational disclosure**: node ids,
    addresses, leader identity, term, quorum state. Not secret, but not
    nothing — a reader learns the topology and which node to attack to lose

@@ -179,17 +179,16 @@ unconfigured (`requireDelivery`) while the credential service is fine.
 
 ## 5. Authorization
 
-**`EABService` is not in the gRPC scope catalog.** `pkg/api/grpc/method_permissions.go`
-covers 208 of 468 RPCs across 13 of 31 services, and `EABService` is one of the
-services **not** covered ([`docs/daemon/api.md`](../daemon/api.md) §5). The
-interceptor's documented behaviour for an uncatalogued method is that it
-*"carries no required scope: the interceptor allows it once the token is
-validated."*
+Both catalogs are **default-deny**
+([`docs/auth/architecture.md`](../auth/architecture.md)).
 
-**No `platform_eab_*` tool is in the MCP authorization map.**
-`toolPermissionCatalog` (`pkg/api/mcp/authz.go`) has no EAB
-entries, and since #300 `AuthorizeTool` refuses a tool absent from the map, so
-every EAB tool is refused on MCP.
+**`EABService` is fully scoped on gRPC** (`pkg/api/grpc/method_permissions.go`):
+
+| Permission | RPCs |
+|---|---|
+| `eab:read` | `GetCredential`, `GetCredentialByKeyID`, `GetCredentialQRCode`, `GetEnrollmentURL`, `ListCredentials`, `ValidateCredential` |
+| `eab:write` | `CreateCredential`, `MarkCredentialUsed`, `RevokeCredential`, `CleanupExpiredCredentials` |
+| `eab:delete` | `DeleteCredential` |
 
 **QUIC requires the `eab` scopes (#767).** The EAB sub-opcodes of
 `OpProvisioningCategory` (`0xCF`) are classified in
@@ -201,15 +200,13 @@ every EAB tool is refused on MCP.
 | `eab:write` | `EABSubCreateCredential`, `EABSubRevokeCredential`, `EABSubMarkCredentialUsed` |
 | `eab:delete` | `EABSubDeleteCredential`, `EABSubCleanupExpiredCredentials` |
 
-Net effect: **any principal holding a valid platform token can create, read,
-revoke and delete EAB credentials on gRPC and Unix.** A create response contains a fresh HMAC key. Whether both catalogs should
-default to deny is the platform-wide open question recorded in
-[`docs/daemon/api.md`](../daemon/api.md) §5; this row is one of its sharper
-consequences and is raised for the owner rather than decided here.
+**Every `platform_eab_*` MCP tool is refused.** None is in the MCP permission
+map (`pkg/api/mcp/authz.go`), so `AuthorizeTool` answers
+`AuthErrorToolNotClassified` for every caller until they are classified.
 
-The `hmac_key` suppression on read paths is therefore the **only** thing
-standing between a token holder and an existing credential's secret — and it
-holds: `eabCredentialToPb(..., false)` on every path but create.
+The `hmac_key` suppression on read paths is a separate control from the scope
+check, so an `eab:read` holder still never sees an existing credential's secret.
+It holds: `eabCredentialToPb(..., false)` on every path but create.
 
 ### REST is gated on the `admin` role (#165)
 

@@ -42,7 +42,7 @@ sleep 2
 # Check if we were successfully initialized
 if [ -d /opt/trusted-platform/trusted-data/platform ]; then
     # Run without --init flag
-    exec /usr/local/bin/platformd serve
+    exec /usr/local/bin/platformd serve --enable-mtls
 else
     echo "Platform not properly initialized. Keeping container running for debugging..."
     # Keep container running

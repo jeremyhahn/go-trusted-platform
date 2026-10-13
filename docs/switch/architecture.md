@@ -212,15 +212,14 @@ no local state. The switch is the source of truth for every read.
    session running a single command per `Execute` and by the switch CLI not
    being a shell, but a port name is untrusted input reaching a device CLI.
    Treat `port_name` as privileged input and constrain it at your edge.
-5. **Switch operations on gRPC are unauthenticated at the scope layer.**
-   `SwitchService` is **not** in the gRPC scope catalog, which is
-   default-allow, so a validated token with **no** switch scope can disable a
-   port over gRPC or Unix. QUIC requires `switch:read` / `switch:write` (#767),
-   and MCP refuses the unclassified `switch_*` tools (#300). This is the most
-   consequential gap in the feature and is recorded in [api.md](api.md) §7.
+5. **Switch operations are scoped on gRPC and QUIC and refused on MCP.** All
+   three catalogs are default-deny. `SwitchService` reads need `switch:read` and the three
+   mutators need `switch:write` in the gRPC scope catalog; the `switch_*` MCP
+   tools are not in the MCP permission map, so every caller is refused until
+   they are classified. QUIC requires `switch:read` / `switch:write` (#767).
+   Recorded in [api.md](api.md) §7.
 6. **Disabling a port is a denial-of-service primitive.** `DisablePort` issues
-   `shutdown`. Combined with §5 that is a validated-token-only operation on
-   gRPC and Unix.
+   `shutdown`. Treat `switch:write` as a grant over the physical fabric.
 7. **The bootstrap path writes NVRAM.** `Configure` persists with
    `copy running-config startup-config`. A wrong bootstrap config is not undone
    by rebooting the switch.

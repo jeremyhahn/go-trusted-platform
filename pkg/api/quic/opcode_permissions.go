@@ -45,6 +45,12 @@ const (
 	actionDelete  = "delete"
 	actionAdmin   = "admin"
 	actionSignCSR = "sign-csr"
+
+	// go-qrdb registers the certificate family with its own verbs; ca:write
+	// is not a permission any role can hold.
+	actionGenerate = "generate"
+	actionRevoke   = "revoke"
+	actionList     = "list"
 )
 
 // ErrOperationNotClassified is returned for an opcode, or a category
@@ -183,8 +189,12 @@ var (
 	attestationRead  = OpcodePermission{Resource: "attestation", Action: actionRead}
 	attestationWrite = OpcodePermission{Resource: "attestation", Action: actionWrite}
 
-	caRead  = OpcodePermission{Resource: "ca", Action: actionRead}
-	caWrite = OpcodePermission{Resource: "ca", Action: actionWrite}
+	caRead = OpcodePermission{Resource: "ca", Action: actionRead}
+
+	certsGenerate = OpcodePermission{Resource: "certs", Action: actionGenerate}
+	certsRevoke   = OpcodePermission{Resource: "certs", Action: actionRevoke}
+	certsRead     = OpcodePermission{Resource: "certs", Action: actionRead}
+	certsList     = OpcodePermission{Resource: "certs", Action: actionList}
 
 	daemonRead  = OpcodePermission{Resource: "daemon", Action: actionRead}
 	daemonWrite = OpcodePermission{Resource: "daemon", Action: actionWrite}
@@ -385,23 +395,24 @@ var opcodePermissions = map[byte]OpcodePermission{
 	quicwire.OpAttestHost:           attestationWrite,
 	quicwire.OpAttestVMWorkload:     attestationWrite,
 
-	// Certificates and the CA (gRPC CAService)
-	quicwire.OpCertIssue:    caWrite,
-	quicwire.OpCertRevoke:   caWrite,
-	quicwire.OpCertRenew:    caWrite,
-	quicwire.OpCertGet:      caRead,
-	quicwire.OpCertList:     caRead,
-	quicwire.OpCertVerify:   caRead,
-	quicwire.OpCertGetChain: caRead,
+	// Certificates and the CA (gRPC CAService). Certificates are the go-qrdb
+	// certs family; the CA's own metadata, bundle and CRL are ca:read.
+	quicwire.OpCertIssue:    certsGenerate,
+	quicwire.OpCertRevoke:   certsRevoke,
+	quicwire.OpCertRenew:    certsGenerate,
+	quicwire.OpCertGet:      certsRead,
+	quicwire.OpCertList:     certsList,
+	quicwire.OpCertVerify:   certsRead,
+	quicwire.OpCertGetChain: certsRead,
 	quicwire.OpCertGetCRL:   caRead,
 	quicwire.OpCertGetOCSP:  caRead,
 	quicwire.OpCAInfo:       caRead,
-	quicwire.OpCAIssue:      caWrite,
-	quicwire.OpCARevoke:     caWrite,
-	quicwire.OpCARenew:      caWrite,
-	quicwire.OpCAGet:        caRead,
-	quicwire.OpCAList:       caRead,
-	quicwire.OpCAVerify:     caRead,
+	quicwire.OpCAIssue:      certsGenerate,
+	quicwire.OpCARevoke:     certsRevoke,
+	quicwire.OpCARenew:      certsGenerate,
+	quicwire.OpCAGet:        certsRead,
+	quicwire.OpCAList:       certsList,
+	quicwire.OpCAVerify:     certsRead,
 	quicwire.OpCACRL:        caRead,
 	quicwire.OpCABundle:     caRead,
 

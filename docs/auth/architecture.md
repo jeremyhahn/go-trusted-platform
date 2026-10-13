@@ -331,12 +331,28 @@ GID}` land on the context. `RequireRoot` / `RequireUID` / `RequireGID` /
    reflection endpoints are the intended contents. Anything else added there is
    unauthenticated.
 
-7. **Token validation is per transport, and only the gRPC scope catalog
-   defaults to allow.** gRPC covers 208 of 468 RPCs, and a method absent from
-   its catalog is permitted once the token validates. MCP (since #300) and
-   QUIC (since #767) deny an operation absent from their catalogs
-   ([`docs/daemon/api.md`](../daemon/api.md) §5). On gRPC, authentication is
-   enforced everywhere but *authorization* only where a catalog entry exists.
+7. **Token validation is per transport, and the scope catalogs default to
+   deny.** The gRPC catalog maps every registered RPC (#768), and the OIDC
+   interceptor answers `PermissionDenied` for any method that has no entry.
+   The only exception is the commented pre-auth list in
+   `pkg/api/grpc/method_permissions.go`: the health probe,
+   invitation redemption, pre-enrollment config delivery and
+   the diskless boot calls (`DeviceService/BootCertificate`, `BootDelivery`).
+   MCP (since #300) and QUIC (since #767) refuse an unmapped operation too. A contract test generated from the
+   service descriptors fails when a new RPC ships without an entry
+   ([`docs/daemon/api.md`](../daemon/api.md) §5). A token without scope
+   claims (platform tokens off, the default) is authorized against the same
+   catalog by the IAM PEP; without a PEP the gRPC TCP transport does not start.
+   The embedded quicbaas SDK has a PEP client that answers every `Check` with
+   `ServiceNotConfigured` (go-quicbaas `sdk/go/transport/embedded/handlers_iam.go`,
+   `handleIAMPEPCheck`), so `daemon.New` refuses gRPC TCP with
+   `ErrEmbeddedPEPUnavailable` when that is the only decision path — embedded
+   quicbaas, mTLS off, platform tokens off (#770). The operator enables mTLS
+   or platform tokens instead
+   ([daemon configuration](../daemon/configuration.md#grpc-tcp-needs-mtls-or-platform-tokens-under-embedded-quicbaas)).
+   There is no local policy engine and no fallback to allow.
+   The mTLS path authenticates the client certificate and does not apply the
+   per-method scope catalog.
 
 8. **QUIC authorizes every frame before dispatch, and fails closed (#767).**
    `QUICServiceHandler` cannot be built without an `AuthMiddleware`

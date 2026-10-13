@@ -115,10 +115,12 @@ registration's mirror failed with `iam.role: not_found`.
 
 ## Trust boundaries
 
-1. **Caller → IAM.** Crossed by a scoped platform token on gRPC (41 methods,
-   all scoped). **Not crossed by any scope check on MCP** — no `iam_*` tool is in
-   the authorization map, so `iam_create_token` and `iam_assign_role` are
-   reachable with any valid token ([api.md](api.md) §8).
+1. **Caller → IAM.** On gRPC, all 41 methods are scoped. A platform token is
+   checked against its `scp` claim. A token without scope claims is checked
+   by the IAM PEP ([`docs/daemon/api.md`](../daemon/api.md) §5). **Closed on
+   MCP**: no `iam_*` tool is in the authorization map, and the default-deny
+   `AuthorizeTool` refuses every one of them, `iam_create_token` and
+   `iam_assign_role` included, for every caller ([api.md](api.md) §8).
 2. **Platform → stack IAM.** The platform adapts and forwards; it does not
    decide.
 3. **The mirror.** Two stores, one synchronisation point.

@@ -210,8 +210,8 @@ sudo platformctl ca sign-csr fleet.csr --out fleet.pem
 ```
 
 `ca sign-csr` is a platform-admin operation: run it as root on the platformd
-host, or with a platform token granting `ca:sign-csr` (`ca:write` is not
-enough). The certificate it issues is for **code signing only** — extended
+host, or with a platform token granting `ca:sign-csr` (`certs:generate` is
+not enough). The certificate it issues is for **code signing only** — extended
 key usage `codeSigning`, key usage `digitalSignature`, subject `CN=rpi/fleet`
 and nothing else — so it can sign boot artifacts but never act as a TLS
 identity. The CA refuses a CSR with any other subject field or a SAN.

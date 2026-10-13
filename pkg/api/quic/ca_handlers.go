@@ -49,8 +49,8 @@ type CAHandler struct {
 }
 
 // CASignCSRPermission is the permission SignCSR needs. It is its own
-// admin-level action: ca:write, which issues ordinary certificates, does
-// not confer it.
+// admin-level action: certs:generate, which issues ordinary certificates,
+// does not confer it.
 var CASignCSRPermission = OpcodePermission{Resource: "ca", Action: actionSignCSR}
 
 // NewCAHandler creates a new CA handler.

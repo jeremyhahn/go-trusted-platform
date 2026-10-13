@@ -123,20 +123,27 @@ workload attestation. A quote is the TPM-DoS and measured-state disclosure
 surface §5.1 describes, so an `attestation:read` token is refused it with
 `StatusPermissionDenied`.
 
-**`AttestationService` is not in the gRPC scope catalog.**
-`pkg/api/grpc/method_permissions.go` maps 185 methods across eleven services —
-`CAService`, `DeviceService`, `DNSService`, `GatewayService`,
-`KeyManagementService`, `NTPService`, `PlatformIAMService`, `ProxyService`,
-`SDNService`, `VTPMService`, and one daemon method. Attestation is absent, and
-the catalog's own doc comment states that a method absent from the map carries
-no required scope: the interceptor allows it once the token is validated.
+Both catalogs are **default-deny**
+([`docs/auth/architecture.md`](../auth/architecture.md)).
 
-That means **any validated token can build, verify and delete attestation
-manifests over gRPC.** Given that attestation is the authentication method for
-the OCI registry ([`docs/registry/`](../registry/)) and gates workload
-admission, whether `AttestationService` should join the scope catalog is a
-security question for the owner. It is raised in the migration report and is not
-decided here.
+**`AttestationService` is fully scoped on gRPC** (`pkg/api/grpc/method_permissions.go`):
+
+| Permission | RPCs |
+|---|---|
+| `attestation:read` | `GetDeviceReport`, `ListDeviceReports`, `DescribeCallerPolicy`, `GetAttestationQuote`, `VerifyAttestationQuote`, `GetManifest`, `ListManifests`, `VerifyManifest` |
+| `attestation:write` | `RefreshDeviceReport`, `BuildManifest`, `CollectHostAttestation`, `CollectVMAttestation`, `CollectContainerAttestation` |
+| `attestation:delete` | `DeleteManifest` |
+
+Attestation gates workload admission and the OCI registry
+([`docs/registry/`](../registry/)), so `attestation:write` and
+`attestation:delete` — building and deleting manifests — are the grants to
+guard.
+
+On MCP, `attestation_device_report`, `attestation_device_reports` and
+`attestation_caller_policy` need `attestation:read`, and
+`attestation_device_refresh` needs `attestation:write`. The other
+`attestation_*` tools are not in the permission map, so every caller is refused
+with `AuthErrorToolNotClassified` until they are classified.
 
 ### 5.1 REST `/api/v1/attestation/*` requires the admin role (#387)
 

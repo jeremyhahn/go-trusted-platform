@@ -198,16 +198,16 @@ encoding fails.
 |---|---|
 | REST `/health`, `/api/v1/health` | None on the daemon's own listener. **Note these exist only there** — the webservice serves neither, so a client dialling the webservice port for them reaches no handler (#235) |
 | REST `/api/v1/platform/health` | **Authenticated caller holding `admin`** (#165). The whole `/api/v1/platform/**` subtree is gated; the component breakdown names which subsystem is degraded, which is reconnaissance |
-| gRPC `PlatformDaemon/GetHealth` | **`PlatformDaemon` is not in the gRPC scope catalog** (`pkg/api/grpc/method_permissions.go`). The interceptor is default-allow: any validated token passes |
+| gRPC `PlatformDaemon/GetHealth` | **Authenticated caller holding `platform:read`** (#768), in the gRPC scope catalog (`pkg/api/grpc/method_permissions.go`). The catalog is default-deny. `grpc.health.v1.Health/List` and `/Watch` need the same permission; only `grpc.health.v1.Health/Check`, the aggregate probe, is served without a token |
 | QUIC `OpHealth`/`OpLiveness`/`OpReadiness` | Governed by `AuthorizeRequest`; no `scp` scope is defined for health |
 | MCP | `platform_health`, `platform_liveness`, `platform_readiness` are mapped to the **empty permission string** in `pkg/api/mcp/authz.go` — explicitly "no auth required", and commented as such |
 | Embedded | In-process; no token |
 
-The MCP empty-string mapping is a **deliberate exemption**, not the
-default-allow gap that affects unlisted tools. The three tools are in the
-permission map with an empty requirement, which is a different statement from
-being absent from it. See [`docs/daemon/api.md`](../daemon/api.md) §5 for the
-platform-wide default-allow question.
+The MCP empty-string mapping is a **deliberate exemption**. The three tools are
+in the permission map with an empty requirement, which is a different
+statement from being absent from it: the map is default-deny, so an absent tool
+is refused. See [`docs/daemon/api.md`](../daemon/api.md) §5 for the
+platform-wide catalogs.
 
 Unauthenticated probes are the reason [architecture.md](architecture.md) §5
 forbids secrets in `ComponentHealth.Details`. That constraint still binds:

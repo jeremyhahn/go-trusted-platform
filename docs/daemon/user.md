@@ -181,6 +181,13 @@ It should not — panicking handlers are recovered into an internal-error respon
 on both QUIC and gRPC specifically so a client never sees a bare EOF. A genuine
 bare EOF is a different problem.
 
+**`platformd serve` refuses to start: "tokens without scope claims are authorized by the IAM policy enforcement point".**
+gRPC TCP is on with neither mTLS nor platform tokens, and quicbaas is embedded.
+The embedded SDK cannot answer the policy check that plain tokens need, so
+every gRPC call would fail. Start with `--enable-mtls` (the shipped units do),
+or, with webservices configured, set `jwt.platform-token.enabled: true`. See
+[configuration.md](configuration.md#grpc-tcp-needs-mtls-or-platform-tokens-under-embedded-quicbaas).
+
 **Configuration changed and something broke.**
 Roll back to a snapshot. If you did not take one, that is the lesson.
 
@@ -188,15 +195,16 @@ Roll back to a snapshot. If you did not take one, that is the lesson.
 
 ## One thing to be aware of
 
-`PlatformDaemon` has 17 RPCs and **16 of them carry no required scope** —
-including `Shutdown`, `UpdateConfig` and `StopService`. The gRPC scope catalog
-covers 208 of 468 RPCs and the MCP authorization map covers 144 of 434 tools, and
-**both default to allow** for anything unlisted.
+Both scope catalogs **refuse anything unlisted**. Every gRPC RPC carries a
+required scope: the `PlatformDaemon` observers need `platform:read`,
+`UpdateConfig`, `ReloadConfig` and the service start/stop/restart calls need
+`platform:write`, and `Shutdown` and `DumpEntityType` need `platform:admin`.
+Only `grpc.health.v1.Health/Check` answers without a token.
 
-In practice that means a valid token is close to an administrative credential on
-several surfaces. Treat token issuance accordingly until the default is
-revisited. The full picture is in [api.md](api.md) §5, and it is raised for the
-owner as the largest single question this documentation migration surfaced.
+On MCP only 144 of 434 tools are classified, and the rest — including every
+`platform_daemon_*` tool — are refused with `AuthErrorToolNotClassified`
+however broad the token is. If an MCP call fails that way, use gRPC or REST
+for it. The full picture is in [api.md](api.md) §5.
 
 ---
 

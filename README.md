@@ -145,7 +145,7 @@ Generate a configuration and start the platform:
 ./platformd config gen --init --domain=example.test --platform-dir trusted-data
 
 # Start the platform daemon (all protocol servers auto-start)
-sudo ./platformd serve --config config.yaml
+sudo ./platformd serve --config config.yaml --enable-mtls
 
 # Use the CLI to manage the platform
 platformctl daemon status
@@ -160,7 +160,7 @@ Alternatively, use an existing configuration:
 
 ```bash
 cp configs/platform/config.prod.yaml config.yaml
-sudo ./platformd serve --config config.yaml
+sudo ./platformd serve --config config.yaml --enable-mtls
 ```
 
 

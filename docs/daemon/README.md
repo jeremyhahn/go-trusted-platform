@@ -48,8 +48,10 @@ platformctl status
 # Via REST API
 curl -k https://localhost:8443/api/v1/status
 
-# Via gRPC
-grpcurl -insecure localhost:9443 platform.v1.PlatformDaemon/GetHealth
+# Via gRPC (needs a token holding platform:read)
+grpcurl -cacert /etc/trusted-platform/certs/ca-bundle.pem \
+  -H "authorization: Bearer $TOKEN" localhost:9443 \
+  platform.v1.PlatformDaemon/GetHealth
 ```
 
 ### Manage Services
@@ -141,8 +143,10 @@ All protocols expose health check endpoints:
 # REST
 curl https://localhost:8443/api/v1/health
 
-# gRPC (uses standard health protocol)
-grpcurl localhost:9443 platform.v1.PlatformDaemon/GetHealth
+# gRPC: the standard health protocol is the only anonymous RPC;
+# PlatformDaemon/GetHealth needs a token holding platform:read
+grpcurl -cacert /etc/trusted-platform/certs/ca-bundle.pem localhost:9443 \
+  grpc.health.v1.Health/Check
 
 # QUIC
 # Uses OpHealth (0x00) opcode

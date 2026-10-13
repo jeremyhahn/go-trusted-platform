@@ -246,7 +246,7 @@ After=network.target openvswitch.target
 
 [Service]
 Type=notify
-ExecStart=/usr/bin/platformd serve
+ExecStart=/usr/bin/platformd serve --enable-mtls
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5

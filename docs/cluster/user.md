@@ -223,11 +223,10 @@ may see the same snapshot twice.
 **Status refreshes on a five-second ticker** as well as on demand, so a cluster
 that loses quorum is noticed within about five seconds even if nobody asks.
 
-**Cluster membership is not scope-checked.** No `cluster:*` permission exists in
-this repository, and neither the gRPC nor the MCP authorization catalog lists
-the cluster operations — both default to allow. If you are planning to expose
-these routes, treat that as a gate on the work, not a detail
-([api.md](api.md) §7).
+**Cluster membership needs `cluster:write`.** On gRPC, `Bootstrap`, `Join` and
+`Leave` need `cluster:write`, and status and the node list need
+`cluster:read`. The `platform_cluster_*` MCP tools are not classified yet, so
+MCP refuses them for every caller ([api.md](api.md) §7).
 
 ---
 

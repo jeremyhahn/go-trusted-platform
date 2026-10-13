@@ -170,18 +170,27 @@ The full category-opcode table is in
 
 Platform tokens carry an `scp` claim as `"<resource>:<action>"`.
 
-**`ComputeService` is not in the gRPC scope catalog.**
-`pkg/api/grpc/method_permissions.go` maps 185 methods across eleven services;
-compute is not among them, and a method absent from the map carries no required
-scope.
+Both catalogs are **default-deny**
+([`docs/auth/architecture.md`](../auth/architecture.md)).
 
-**No VM or container MCP tool is in the MCP authorization map either** — 71 of
-449 declared tool names carry a permission, and none of the 33 compute tools do.
+**`ComputeService` is fully scoped on gRPC** (`pkg/api/grpc/method_permissions.go`)
+under two resources:
 
-So **any validated token can create, delete, migrate and exec into workloads**
-on gRPC, Unix, MCP and embedded. `ExecContainer` in particular is arbitrary
-command execution inside a workload. Raised as an owner question in the
-migration report.
+| Permission | RPCs |
+|---|---|
+| `container:read` | `GetContainer`, `ListContainers`, `GetContainerLogs`, `GetContainerMetrics`, `AttestContainer` |
+| `container:write` | `CreateContainer`, `StartContainer`, `StopContainer`, `ExecContainer`, `AttachContainer` |
+| `container:delete` | `DeleteContainer` |
+| `vm:read` | `GetVM`, `ListVMs`, `GetVMLogs`, `GetVMMetrics`, `ListSnapshots`, `AttestVM`, `VerifyVMAttestation` |
+| `vm:write` | `CreateVM`, `StartVM`, `StopVM`, `RebootVM`, `AttachDisk`, `DetachDisk`, `ResizeDisk`, `CreateSnapshot`, `RestoreSnapshot`, `MigrateVM`, `PrepareMigration`, `FinalizeMigration`, `AttachVMConsole`, `SendVMConsoleInput` |
+| `vm:delete` | `DeleteVM`, `DeleteSnapshot` |
+
+`ExecContainer` is arbitrary command execution inside a workload, so
+`container:write` is the scope to guard.
+
+**Every `vm_*` and `container_*` MCP tool is refused.** None is in the MCP
+permission map (`pkg/api/mcp/authz.go`), so `AuthorizeTool` answers
+`AuthErrorToolNotClassified` for every caller until they are classified.
 
 ### REST is gated on the `admin` role (#165)
 
@@ -194,11 +203,8 @@ inside a workload and previously answered a caller with no token at all.
 Reads are gated with the writes: the VM and container inventory is the map of
 what runs on this node and for whom.
 
-This closes the REST half only. **The gRPC, Unix, MCP and embedded positions
-above are unchanged** — `ComputeService` still carries no required scope on
-those transports, so a validated token remains sufficient there, and that is
-still the owner question. See
-[`docs/auth/architecture.md`](../auth/architecture.md) §6c.
+The REST gate is role-based; the gRPC and MCP positions are the scope catalogs
+above. See [`docs/auth/architecture.md`](../auth/architecture.md) §6c.
 
 ---
 

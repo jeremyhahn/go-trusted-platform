@@ -482,6 +482,37 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// validateGRPCAuthorization refuses a gRPC TCP listener that could authorize
+// nothing: one that would send every scoped call to the IAM policy
+// enforcement point while that point is the embedded quicbaas SDK, which
+// answers every Check ServiceNotConfigured. daemon.New runs it at startup;
+// NewService does not, because it serves no listener.
+func (c *Config) validateGRPCAuthorization() error {
+	if c.grpcAuthorizesThroughPEP() && c.quicbaasEmbedded() {
+		return ErrEmbeddedPEPUnavailable{Transport: transportGRPCTCP}
+	}
+	return nil
+}
+
+// grpcAuthorizesThroughPEP reports whether the gRPC TCP listener will hand
+// every scoped call to the IAM policy enforcement point. That is the
+// selectGRPCTCPAuth path left when neither mTLS, platform tokens nor the
+// testing-only SkipIAMValidation opt-out is in force.
+func (c *Config) grpcAuthorizesThroughPEP() bool {
+	return c.EnableGRPCTCP && !c.EnableMTLS && !c.SkipIAMValidation && !c.PlatformToken.Enabled
+}
+
+// quicbaasEmbedded reports whether the IAM service, and so its policy
+// enforcement point, runs on the embedded quicbaas SDK. An absent quicbaas
+// section is the embedded default. Without an App there is no IAM service at
+// all, which selectGRPCTCPAuth refuses on its own.
+func (c *Config) quicbaasEmbedded() bool {
+	if c.App == nil {
+		return false
+	}
+	return c.App.QuicBaaSConfig == nil || c.App.QuicBaaSConfig.IsEmbedded()
+}
+
 // MCPServesHTTP reports whether the MCP server is enabled on its HTTP
 // transport. That transport binds a network listener and serves TLS 1.3
 // only, so it needs the daemon TLS identity just as REST and gRPC do

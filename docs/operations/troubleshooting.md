@@ -33,7 +33,7 @@ sudo journalctl -u platformd -n 50 -p err
 ./platformd config validate --config config.yaml
 
 # Run with debug output
-sudo ./platformd serve --config config.yaml --log-level debug 2>&1 | head -100
+sudo ./platformd serve --config config.yaml --enable-mtls --log-level debug 2>&1 | head -100
 ```
 
 **Common Causes and Fixes:**
@@ -61,7 +61,7 @@ mkdir -p /var/lib/trusted-platform/{log,quicbaas,ca}
 mkdir -p /etc/trusted-platform
 
 # 4. Start with debug logging
-sudo ./platformd serve --config config.yaml --log-level debug &
+sudo ./platformd serve --config config.yaml --enable-mtls --log-level debug &
 sleep 5
 kill %1
 

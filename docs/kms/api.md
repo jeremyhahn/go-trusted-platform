@@ -140,15 +140,12 @@ question in the migration report.
 mapped — resource `kms`, actions `read`/`write`/`delete`. Complete coverage.
 
 **None of the 20 `kms_*` or 6 `secret_*` MCP tools is in the MCP authorization
-map.** Of 449 declared tool names, 71 carry a permission; no KMS tool is among
-them, and `AuthorizeTool` allows a tool absent from the map once the token
-validates.
+map**, and the map is default-deny (#300): `AuthorizeTool` refuses each of them
+with `AuthErrorToolNotClassified`, whatever scopes the token holds.
 
-So `Decrypt` over gRPC requires a `kms` scope, while `kms_decrypt` over MCP
-requires nothing beyond a valid token — as do `kms_sign`, `kms_generate_key`,
-`kms_delete_key`, `kms_generate_data_key` and `secret_get`. **This is the
-highest-severity instance of the map's default-allow behaviour** in the whole
-platform. Raised as an owner question in the migration report.
+So `Decrypt` over gRPC requires a `kms` scope, while `kms_decrypt`, `kms_sign`,
+`kms_generate_key`, `kms_delete_key`, `kms_generate_data_key` and `secret_get`
+over MCP cannot be called at all until they are classified.
 
 ### REST is gated on the `admin` role (#165)
 
@@ -161,8 +158,8 @@ Until #165 the whole surface answered callers with no token at all. The gate
 is `v1Router.gated(common.ROLE_ADMIN)` in `pkg/webservice/v1/router.go`;
 [`docs/auth/architecture.md`](../auth/architecture.md) §6c has the mechanism
 and [`docs/api/rest-routers.md`](../api/rest-routers.md) the router-level
-picture. **This does not change the gRPC or MCP positions above** — the MCP
-default-allow finding stands exactly as written.
+picture. The REST gate is role-based; the gRPC and MCP positions are the scope
+catalogs above.
 
 ---
 

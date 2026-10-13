@@ -163,14 +163,16 @@ matrix is not silently incomplete; `docs/bmc/` remains unconverted.
 
 Platform tokens carry an `scp` claim as `"<resource>:<action>"`.
 
-**None of `PXEService`, `ConfigDeliveryService`, `ProvisioningGateway` or
-`BMCService` is in the gRPC scope catalog.** `pkg/api/grpc/method_permissions.go`
-maps 185 methods across eleven services; none of these four is among them, and a
-method absent from the map carries no required scope.
+Both catalogs are **default-deny**
+([`docs/auth/architecture.md`](../auth/architecture.md)). Every RPC of the four
+services is classified in the gRPC catalog (`pkg/api/grpc/method_permissions.go`):
 
-**No provisioning MCP tool is in the MCP authorization map** — none of the 22
-`pxe_*`/`provision_*` tools carries a permission, so since #300 MCP refuses
-them all as unclassified.
+| Service | Requirement |
+|---|---|
+| `PXEService` | `pxe:read` for the five reads; `pxe:write` for `Authorize`, `Quarantine` and the other mutators; `pxe:delete` for `RemoveDevice` ([`docs/ipxe/api.md`](../ipxe/api.md) §5) |
+| `ConfigDeliveryService` | `ListSessions` and `GetSession` need `provisioning:read`; `FulfillSession` needs `provisioning:write`. `GetNonce`, `FetchConfig`, `SignDigest` and `PollSession` are **pre-auth**: the machine authenticates inside the request (single-use nonce, EAB HMAC, EK-certificate binding) before it holds any platform credential |
+| `ProvisioningGateway` | `GetBootConfig` needs `provisioning:read`; `RegisterPXEDevice`, `ReportDeviceState` and `NotifyInstallComplete` need `provisioning:write` |
+| `BMCService` | `bmc:read` / `bmc:write` / `bmc:power` / `bmc:media` / `bmc:admin` ([`docs/bmc/api.md`](../bmc/api.md) §8) |
 
 **QUIC requires per-operation scopes (#767)**
 (`pkg/api/quic/opcode_permissions.go`):
@@ -188,16 +190,17 @@ The EAB sub-opcodes of the same category carry the `eab` scopes
 ([`docs/eab/api.md`](../eab/api.md) §5); BMC enrollment carries `bmc:admin`
 ([`docs/bmc/api.md`](../bmc/api.md) §8).
 
-So on gRPC and Unix **any validated token can authorize a PXE device,
-quarantine one, fulfil a provisioning session, or ask the platform to sign a
-Secure Boot digest.**
 `FulfillSession` is the authorisation gate for bringing a new machine onto the
-platform, and `SignDigest` produces a Secure Boot signature. Raised as an owner
-question in the migration report.
+platform, so `provisioning:write` is the grant to guard.
+
+On MCP, the 16 BMC tools are mapped ([`docs/bmc/api.md`](../bmc/api.md) §8).
+The `provision_*` tools are not in the permission map, so every caller is
+refused with `AuthErrorToolNotClassified` until they are classified.
 
 Note that the config-delivery path is *separately* protected: a device presents
 an EAB credential and a nonce, and `RateLimitConfig` bounds the endpoint. That
-protects against unidentified machines; it does not scope an operator's token.
+protects against unidentified machines; the operator half is the scoped
+`ListSessions` / `GetSession` / `FulfillSession` above.
 
 ---
 

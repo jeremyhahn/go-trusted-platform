@@ -19,6 +19,7 @@ import (
 	"crypto/x509"
 	"os"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"google.golang.org/grpc"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // Transport names used in fail-closed authentication errors.
@@ -67,7 +69,28 @@ func (s grpcAuthSelection) options() []grpc.ServerOption {
 // configuration under which no backend exists refuses the transport with
 // ErrTransportAuthRequired instead. SkipIAMValidation remains the explicit,
 // testing-only opt-out, mirroring the MCP precedent (#440).
-func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, logger *logging.Logger, skipMethods []string) (grpcAuthSelection, error) {
+//
+// The local validator's tokens carry no scope claims, so each method's catalog
+// permission is decided by the IAM policy enforcement point (pep): without one
+// the transport is refused rather than letting any valid token reach every
+// method, Shutdown and BMC power included (#768).
+// grpcTCPSkipMethods are the gRPC methods the TCP transport serves without a
+// credential, under both the mTLS and the OIDC interceptor. The unary health
+// probe is here, but not PlatformDaemon/GetHealth: it names every component
+// with its failure message, so it needs a credential like the REST
+// /api/v1/platform/health route (#768). The diskless boot calls are here
+// because a diskless node holds no platform token and, for BootCertificate,
+// no certificate yet; the boot service authenticates both itself, verifying
+// the node's proof or its chain and quote, bound to the connection. The OIDC
+// interceptor adds its own documented pre-auth list (method_permissions.go)
+// and refuses every method absent from its scope catalog.
+var grpcTCPSkipMethods = []string{
+	"/grpc.health.v1.Health/Check",
+	platformv1.DeviceService_BootCertificate_FullMethodName,
+	platformv1.DeviceService_BootDelivery_FullMethodName,
+}
+
+func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicbaassdk.IAMPEPClient, logger *logging.Logger, skipMethods []string) (grpcAuthSelection, error) {
 	if config.EnableMTLS {
 		if config.CAService == nil {
 			return grpcAuthSelection{}, ErrTransportAuthRequired{
@@ -101,12 +124,15 @@ func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, logger *l
 		return grpcAuthSelection{}, nil
 	}
 
-	var tokenValidator grpccreds.TokenValidator
 	var local *grpcTokenValidator
+	opts := []grpccreds.OIDCInterceptorOption{
+		grpccreds.WithSkipMethods(skipMethods...),
+		grpccreds.WithRequireAuth(true),
+	}
 	if shared != nil {
 		// Preferred path: validate broker platform tokens and project
 		// scp -> RBAC / tenant_id -> RLS into the request context.
-		tokenValidator = shared
+		opts = append(opts, grpccreds.WithTokenValidator(shared))
 		logger.Info("gRPC TCP server: platform-token validation enabled")
 	} else {
 		local = buildLocalTokenValidator(config, logger, transportGRPCTCP)
@@ -116,20 +142,22 @@ func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, logger *l
 				Reason:    "neither the platform-token validator, the QuicBaaS service nor a platform JWT verifier is available",
 			}
 		}
-		tokenValidator = local
+		authorizer, err := newIAMTokenAuthorizer(local, pep)
+		if err != nil {
+			return grpcAuthSelection{}, ErrTransportAuthRequired{
+				Transport: transportGRPCTCP,
+				Reason:    "tokens without scope claims need the IAM policy enforcement point to be authorized: " + err.Error(),
+			}
+		}
+		opts = append(opts,
+			grpccreds.WithTokenValidator(local),
+			grpccreds.WithAuthorizationChecker(authorizer),
+		)
 	}
 
 	return grpcAuthSelection{
-		unary: grpccreds.OIDCUnaryInterceptor(
-			grpccreds.WithTokenValidator(tokenValidator),
-			grpccreds.WithSkipMethods(skipMethods...),
-			grpccreds.WithRequireAuth(true),
-		),
-		stream: grpccreds.OIDCStreamInterceptor(
-			grpccreds.WithTokenValidator(tokenValidator),
-			grpccreds.WithSkipMethods(skipMethods...),
-			grpccreds.WithRequireAuth(true),
-		),
+		unary:     grpccreds.OIDCUnaryInterceptor(opts...),
+		stream:    grpccreds.OIDCStreamInterceptor(opts...),
 		validator: local,
 		required:  true,
 	}, nil

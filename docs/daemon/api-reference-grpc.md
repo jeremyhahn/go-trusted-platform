@@ -275,8 +275,14 @@ accepts `-plaintext`.
 # List methods
 grpcurl -cacert /etc/trusted-platform/certs/ca-bundle.pem localhost:9443 list
 
-# Health check
+# Health probe (the only RPC served without a token)
 grpcurl -cacert /etc/trusted-platform/certs/ca-bundle.pem localhost:9443 \
+  grpc.health.v1.Health/Check
+
+# Component health: needs a token holding platform:read. Every TCP call
+# below needs the same authorization header.
+grpcurl -cacert /etc/trusted-platform/certs/ca-bundle.pem \
+  -H "authorization: Bearer $TOKEN" localhost:9443 \
   platform.v1.PlatformDaemon/GetHealth
 
 # Get status

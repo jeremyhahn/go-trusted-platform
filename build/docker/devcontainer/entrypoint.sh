@@ -296,6 +296,7 @@ start_platformd() {
         --quic-port="${PLATFORM_QUIC_PORT:-9444}" \
         --mcp-bind-host="${PLATFORM_BIND_HOST:-0.0.0.0}" \
         --mcp-port="${PLATFORM_MCP_PORT:-9445}" \
+        --enable-mtls \
         &
 
     PLATFORMD_PID=$!

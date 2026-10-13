@@ -182,39 +182,29 @@ port lists.
 
 ---
 
-## 7. Authorization — the gap
+## 7. Authorization
 
 Platform tokens carry an `scp` claim as `"<resource>:<action>"`. Enforcement is
 per operation: gRPC `RequireScope`, QUIC `AuthMiddleware.GuardRequest`, MCP
-`AuthorizeTool`. gRPC is **default-allow** for a method it does not list; MCP
-(since #300) and QUIC (since #767) **deny** one
-([`docs/daemon/api.md`](../daemon/api.md) §5).
+`AuthorizeTool`. All three catalogs are **default-deny** for entries they do not
+list ([`docs/daemon/api.md`](../daemon/api.md) §5).
 
-**`SwitchService` is not in the gRPC scope catalog**
-(`pkg/api/grpc/method_permissions.go` — grepped 2026-08-18; the catalog covers
-`CAService`, `DeviceService`, `DNSService`, `GatewayService`,
-`KeyManagementService`, `NTPService`, `PlatformIAMService`, `ProxyService`,
-`SDNService`, `VTPMService` and one daemon method).
+**`SwitchService` is fully scoped on gRPC**
+(`pkg/api/grpc/method_permissions.go`): `GetPortStatus` and `ListPorts` need
+`switch:read`; `EnablePort`, `DisablePort` and `SetPortVLAN` need
+`switch:write`. Disabling a physical uplink therefore needs the same class of
+grant as the virtual-datapath `SDNService.SetPortState` (`sdn:write`), under its
+own resource.
 
-**No `switch_*` tool is in the MCP permission map** (`pkg/api/mcp/authz.go`),
-so since #300 MCP refuses every switch tool as unclassified.
+**Every `switch_*` MCP tool is refused.** None is in the MCP permission map
+(`pkg/api/mcp/authz.go`), so `AuthorizeTool` answers
+`AuthErrorToolNotClassified` for every caller until they are classified.
 
 **QUIC requires the `switch` scopes (#767).** Under `OpSwitchCategory`
 (`0xCC`), `SwitchSubListPorts` and `SwitchSubGetPortStatus` need
 `switch:read`; `SwitchSubSetPortVLAN`, `SwitchSubEnablePort` and
 `SwitchSubDisablePort` need `switch:write`
 (`pkg/api/quic/opcode_permissions.go`).
-
-So on gRPC and Unix, **`DisablePort` requires only a validated token**, with
-no `switch:*` or `sdn:*` scope. The equivalent virtual-datapath
-operation, `SDNService.SetPortState`, requires `sdn:write`. Disabling a
-physical uplink is at least as consequential as changing a virtual port's
-state.
-
-This is the same asymmetry recorded from the SDN side
-([`docs/sdn/api.md`](../sdn/api.md) §9), and it is raised as an owner question
-rather than resolved here: **whether both catalogs should default to deny is
-not this document's decision to make.**
 
 REST is not covered by either catalog; its protection is whatever middleware
 the daemon mounts in front of `/api/v1`.
@@ -226,11 +216,10 @@ listing and status, VLAN assignment, and port enable/disable.
 
 Moving a port between VLANs moves a physical machine between network zones,
 which is why the read is gated with the writes: the port-to-VLAN map is the
-fabric's segmentation. Note this closes the REST hole only and does **not**
-close the gap this section describes.
+fabric's segmentation.
 
-This changes the REST position only. The gRPC, Unix, MCP and embedded
-positions described above are unchanged. See
+The REST gate is role-based; the gRPC and MCP positions are the scope catalogs
+above. See
 [`docs/auth/architecture.md`](../auth/architecture.md) §6c.
 
 ---

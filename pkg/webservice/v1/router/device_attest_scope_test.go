@@ -82,12 +82,14 @@ func newAttestMux(t *testing.T, scopes ...string) http.Handler {
 }
 
 // attestRoutes are the device writes the webservice scope-checks: the two
-// attestation routes and the two lifecycle transitions (#250).
+// attestation routes, the two lifecycle transitions (#250) and template
+// create, which needs device:write on every other transport (#873).
 var attestRoutes = map[string]string{
 	"AttestDevice":          "/devices/7/attest",
 	"RecordAttestationCert": "/devices/7/attest-cert/record",
 	"DisableDevice":         "/devices/7/disable",
 	"EnableDevice":          "/devices/7/enable",
+	"CreateTemplate":        "/device/templates",
 }
 
 func postAttest(handler http.Handler, path string) int {

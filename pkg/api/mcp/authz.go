@@ -218,8 +218,8 @@ func toolPermissionCatalog() map[string]string {
 
 	// CA: signing a CSR certifies a KMS key for code signing, which is what
 	// the boot chain of every netbooted device trusts. It needs its own
-	// admin-level scope; ca:write, which issues ordinary certificates, does
-	// not confer it (#691).
+	// admin-level scope; certs:generate, which issues ordinary certificates,
+	// does not confer it (#691).
 	permissions["ca_sign_csr"] = "ca:sign-csr"
 
 	// The other CA tools carry exactly the scope of their gRPC CAService
@@ -227,13 +227,14 @@ func toolPermissionCatalog() map[string]string {
 	// (pkg/api/quic/auth.go) agrees wherever it maps the operation. REST's
 	// split is not a scope and cannot be copied here: issue, get, list and
 	// revoke sit behind the admin role, and info, crl and bundle are public
-	// (docs/ca/api.md §4). Revocation is ca:write, as on gRPC, not ca:delete.
-	permissions["ca_issue"] = "ca:write"
-	permissions["ca_renew"] = "ca:write"
-	permissions["ca_revoke"] = "ca:write"
-	permissions["ca_get"] = "ca:read"
-	permissions["ca_list"] = "ca:read"
-	permissions["ca_verify"] = "ca:read"
+	// (docs/ca/api.md §4). Certificates are go-qrdb's certs family; the CA's
+	// own metadata, CRL and bundle are ca:read.
+	permissions["ca_issue"] = "certs:generate"
+	permissions["ca_renew"] = "certs:generate"
+	permissions["ca_revoke"] = "certs:revoke"
+	permissions["ca_get"] = "certs:read"
+	permissions["ca_list"] = "certs:list"
+	permissions["ca_verify"] = "certs:read"
 	permissions["ca_info"] = "ca:read"
 	permissions["ca_crl"] = "ca:read"
 	permissions["ca_bundle"] = "ca:read"

@@ -234,7 +234,7 @@ Single-node deployment with embedded QuicBaaS.
 ./platformd config gen --init --domain=example.test --platform-dir trusted-data
 
 # 2. Start platform (requires root for TPM access)
-sudo ./platformd serve --config config.yaml
+sudo ./platformd serve --config config.yaml --enable-mtls
 
 # 3. Verify startup
 sleep 5
@@ -259,7 +259,7 @@ Wants=network-online.target
 Type=notify
 User=root
 Group=root
-ExecStart=/usr/local/bin/platformd serve --config /etc/trusted-platform/config.yaml
+ExecStart=/usr/local/bin/platformd serve --config /etc/trusted-platform/config.yaml --enable-mtls
 Restart=on-failure
 RestartSec=10
 
@@ -324,7 +324,7 @@ tpm:
 Start the bootstrap node:
 
 ```bash
-sudo ./platformd serve --config server1.yaml
+sudo ./platformd serve --config server1.yaml --enable-mtls
 ```
 
 ### Follower Nodes (Node 2+)
@@ -350,7 +350,7 @@ quicbaas:
 Start follower nodes:
 
 ```bash
-sudo ./platformd serve --config server2.yaml
+sudo ./platformd serve --config server2.yaml --enable-mtls
 ```
 
 ### Verify Cluster
@@ -618,7 +618,7 @@ platformctl backup status
 ./platformd config validate --config config.yaml
 
 # Run with debug logging
-./platformd serve --config config.yaml --log-level debug
+./platformd serve --config config.yaml --enable-mtls --log-level debug
 
 # Check systemd logs
 journalctl -u platformd -n 50

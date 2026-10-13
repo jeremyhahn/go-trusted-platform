@@ -685,7 +685,8 @@ run:
 		--log-dir trusted-data/log \
 		--ca-dir trusted-data/ca \
 		--raw-so-pin 123456 \
-		--raw-pin 123456
+		--raw-pin 123456 \
+		--enable-mtls
 
 
 # Prepare web embed directory when WITH_WEB is set
@@ -1258,7 +1259,7 @@ clean:
 # Platform Web Services
 .PHONY: webservice
 webservice: build-debug config
-	./$(PLATFORMD) --init serve
+	./$(PLATFORMD) --init serve --enable-mtls
 
 .PHONY: webservice-verify-tls
 webservice-verify-tls:

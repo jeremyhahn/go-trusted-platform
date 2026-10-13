@@ -136,19 +136,24 @@ question in the migration report. See [`docs/iam/`](../iam/).
 
 Platform tokens carry an `scp` claim as `"<resource>:<action>"`.
 
-**`TenantService` is not in the gRPC scope catalog.**
-`pkg/api/grpc/method_permissions.go` maps 185 methods across eleven services;
-tenancy is not among them, and a method absent from the map carries no required
-scope — the interceptor allows it once the token is validated.
+Both catalogs are **default-deny**
+([`docs/auth/architecture.md`](../auth/architecture.md)).
 
-**No tenant MCP tool is in the authorization map either.** Of the 449 declared
-tool names, 71 carry a required permission; none of the 21 tenant tools do.
+**`TenantService` is fully scoped on gRPC** (`pkg/api/grpc/method_permissions.go`):
 
-So **any validated token can create, suspend, delete and re-quota a tenant, and
-init, seal or unseal a per-tenant barrier**, on gRPC, Unix, MCP and embedded
-(QUIC is gated below).
-Barrier operations in particular are key-custody operations. This is raised as
-an owner question in the migration report and is not decided here.
+| Permission | RPCs |
+|---|---|
+| `tenant:read` | `GetTenant`, `GetTenantByName`, `ListTenants`, `GetQuotas`, `CheckQuota`, `GetUsage`, `GetTenantBarrierStatus`, `GetTenantDEKStatus` |
+| `tenant:write` | `CreateTenant`, `UpdateTenant`, `UpdateQuotas`, `SuspendTenant`, `ResumeTenant`, `Sync`, `InitTenantBarrier`, `SealTenantBarrier`, `UnsealTenantBarrier`, `RotateTenantDEK` |
+| `tenant:delete` | `DeleteTenant` |
+
+The barrier and DEK calls are key-custody operations, so `tenant:write` is the
+grant to guard.
+
+**Every tenant MCP tool is refused.** None of the `tenant_*` or
+`platform_tenant_barrier_*` tools is in the MCP permission map, so
+`AuthorizeTool` answers `AuthErrorToolNotClassified` for every caller until
+they are classified.
 
 ### QUIC requires the tenant scopes (#767)
 
@@ -176,10 +181,8 @@ operations and an IAM tenant call reached `TenantService`.
 covers tenant create, delete, suspend and resume, quota updates, `POST
 /{id}/dek/rotate`, and `POST /{id}/barrier/{init,unseal,seal}`.
 
-This closes the REST half of the exposure described above, and only the REST
-half: **the gRPC, Unix, MCP and embedded transports still carry no required
-scope for `TenantService`**, so a validated token remains sufficient there.
-That is the owner question, unchanged.
+The REST gate is role-based; the gRPC and MCP positions are the scope catalogs
+above.
 
 Note the two tenant surfaces are different things. `/api/v1/tenants` is the
 tenancy data plane gated here; `/api/v1/iam/tenants` is the tenant *record*

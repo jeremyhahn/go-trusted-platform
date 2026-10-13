@@ -115,7 +115,9 @@ the plural `/devices/`; no path is served under both (#266,
 `config` is bytes, so it travels as **base64** in both directions. `name` is
 required; an omitted id is assigned by the server. The reply is `201` with the
 stored template in the `{code, success, payload}` envelope, `payload.id` a
-JSON string.
+JSON string. Behind the platform-token middleware the route requires
+`device:write`, as `CreateTemplate` does on gRPC, QUIC and MCP; a token without
+it gets `403` ([api.md §7](api.md#7-authorization)).
 
 ### POST `/device/templates/{id}/create-profile`
 

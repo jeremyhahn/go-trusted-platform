@@ -105,8 +105,8 @@ usage `codeSigning` only. There are no usage flags.
 
 **Only the platform admin may run it**: root on the platformd host (over the
 Unix socket, or with `--transport embedded`, which hosts platformd inside
-platformctl), or a caller whose platform token grants `ca:sign-csr`. `ca:write`
-does not grant it. See `api.md` §4.
+platformctl), or a caller whose platform token grants `ca:sign-csr`.
+`certs:generate` does not grant it. See `api.md` §4.
 
 The desktop GUI offers the same operation as `CABinding.SignCSR`: it makes
 the same SDK call, is held to the same rule, and returns the object

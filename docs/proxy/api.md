@@ -159,19 +159,18 @@ permissions. Enforcement is per operation: gRPC `RequireScope`, QUIC
 `AuthorizeRequest`, MCP `AuthorizeTool`. Platform-wide picture:
 [`docs/daemon/api.md`](../daemon/api.md) §5.
 
-**`ProxyService` is fully covered in both catalogs — one of the few surfaces
-where that is true.**
+**`ProxyService` is fully covered in both catalogs.**
 
 - gRPC (`pkg/api/grpc/method_permissions.go`): **all 14 RPCs mapped**, resource
-  `proxy`, actions `read` / `write` / `delete`. `GatewayService`, by contrast,
-  has 9 of its 24 mapped.
+  `proxy`, actions `read` / `write` / `delete`.
 - MCP (`pkg/api/mcp/authz.go`): **all 14 tool names mapped**, same resource and
   actions. There is no duplicated tool family here, so none of the
   authorization asymmetry that affects the dns and vtpm surfaces
   ([`docs/vtpm/api.md`](../vtpm/api.md) §5).
 
-The gRPC catalog is default-allow for unlisted entries (MCP and QUIC deny
-them); that does not bite this feature because nothing is unlisted.
+The gRPC, MCP and QUIC catalogs are all default-deny for unlisted entries;
+nothing in this feature is unlisted, so no proxy call is refused for want of a
+classification.
 
 The `scp` column in §3–5 is the required scope per capability.
 

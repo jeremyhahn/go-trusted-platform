@@ -460,20 +460,22 @@ reaches the client as a message, not as a distinguishable code.
 
 ## 7. Authorization
 
-Authentication is enforced on every transport. Authorization is enforced per
-operation against a scope catalog, and **only gRPC allows an unlisted entry**:
+Authentication is enforced on every transport. All three scope catalogs are
+**default-deny** ([architecture.md](architecture.md)): an operation with no
+catalog entry is refused, not allowed.
 
 | Catalog | Coverage | Default for an unlisted entry |
 |---|---|---|
-| gRPC `pkg/api/grpc/method_permissions.go` | 208 of 468 RPCs, 13 of 31 services | Allowed once the token validates |
-| MCP `pkg/api/mcp/authz.go` | 144 of 434 registered tools | Denied (`AuthErrorToolNotClassified`, #300) |
+| gRPC `pkg/api/grpc/method_permissions.go` | Every registered RPC; a contract test keeps it that way | Refused with `PermissionDenied` (`ErrMethodNotClassified`) before the token is read, unless the method is on the documented pre-auth list |
+| MCP `pkg/api/mcp/authz.go` | 156 of 433 registered tools | `AuthorizeTool` refuses it with `AuthErrorToolNotClassified` |
 | QUIC `pkg/api/quic/opcode_permissions.go` | every routable opcode and sub-opcode | Denied (`StatusPermissionDenied`, #767) |
 
-Detail, service lists and the standing owner question are in
+Detail, the pre-auth list and the unclassified MCP tools are in
 [`docs/daemon/api.md`](../daemon/api.md) §5. They are not restated here.
 
-Three MCP tools are explicitly public (empty required permission):
-`platform_health`, `platform_liveness`, `platform_readiness`.
+Five MCP tools are explicitly public (empty required permission):
+`platform_health`, `platform_liveness`, `platform_readiness`,
+`platform_invitation_get_by_token` and `platform_invitation_accept`.
 On QUIC, `OpHealth`, `OpLiveness`, `OpReadiness` and `OpIAMAuthenticate`
 are the pre-auth list of the operation catalog
 (`pkg/api/quic/opcode_permissions.go`). Every other QUIC operation is

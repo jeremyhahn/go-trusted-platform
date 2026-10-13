@@ -58,6 +58,23 @@ func (e ErrTransportAuthRequired) Error() string {
 	return msg + "; refusing to start the transport without one"
 }
 
+// ErrEmbeddedPEPUnavailable is returned by New when gRPC TCP
+// would authorize every scoped call through the IAM policy enforcement point
+// and that point is the embedded quicbaas SDK, which does not implement it:
+// go-quicbaas sdk/go transport/embedded handleIAMPEPCheck answers every Check
+// with ServiceNotConfigured. The listener would start and then answer every
+// scoped call Unavailable. Platform tokens carry their own scope claims and
+// mTLS authorizes by certificate, so either one keeps the PEP off the path.
+type ErrEmbeddedPEPUnavailable struct {
+	Transport string
+}
+
+func (e ErrEmbeddedPEPUnavailable) Error() string {
+	return e.Transport + ": tokens without scope claims are authorized by the IAM policy enforcement point, " +
+		"which the embedded quicbaas SDK does not implement (IAM.PEP Check is not configured); " +
+		"enable platform tokens (webservice jwt.platform-token.enabled) or enable mTLS (--enable-mtls)"
+}
+
 // ErrTransportConstructionFailed is returned by New when an enabled transport
 // (QUIC, REST or MCP) cannot be constructed. Until #444 New logged a Warn and
 // continued, so a daemon reported healthy without a transport its
@@ -1487,6 +1504,20 @@ func (e ErrTokenValidationFailed) Error() string {
 }
 
 func (e ErrTokenValidationFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrIAMPermissionCheckFailed is returned when the IAM policy enforcement
+// point cannot decide a transport's permission check.
+type ErrIAMPermissionCheckFailed struct {
+	Cause error
+}
+
+func (e ErrIAMPermissionCheckFailed) Error() string {
+	return fmt.Sprintf("IAM permission check failed: %v", e.Cause)
+}
+
+func (e ErrIAMPermissionCheckFailed) Unwrap() error {
 	return e.Cause
 }
 

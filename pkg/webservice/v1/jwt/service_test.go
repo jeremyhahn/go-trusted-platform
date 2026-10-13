@@ -181,6 +181,54 @@ func TestParseToken_MissingAuthHeader(t *testing.T) {
 	assert.Nil(t, claims)
 }
 
+func TestVerifyTokenClaims_ReturnsVerifiedPrincipal(t *testing.T) {
+	params, ks := testServiceParamsWithXKMS()
+	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
+	require.NoError(t, err)
+	service, err := NewService(context.Background(), params)
+	require.NoError(t, err)
+
+	user := entities.NewUser("test@localhost")
+	user.ID = 12345
+	user.TenantID = "acme"
+	user.Roles = []*entities.Role{{Name: "operator"}}
+	tokenString, err := service.GenerateToken(user)
+	require.NoError(t, err)
+
+	claims, err := service.VerifyTokenClaims("Bearer " + tokenString)
+	require.NoError(t, err)
+	assert.Equal(t, "12345", claims.UserIDStr)
+	assert.Equal(t, "acme", claims.TenantID)
+	assert.Equal(t, []string{"operator"}, claims.Roles)
+}
+
+func TestVerifyTokenClaims_RejectsInvalidTokens(t *testing.T) {
+	params, ks := testServiceParamsWithXKMS()
+	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
+	require.NoError(t, err)
+	service, err := NewService(context.Background(), params)
+	require.NoError(t, err)
+
+	for name, token := range map[string]string{
+		"empty":        "",
+		"bearer only":  "Bearer ",
+		"not a jwt":    "not-a-jwt",
+		"wrong format": "a.b.c",
+	} {
+		t.Run(name, func(t *testing.T) {
+			claims, err := service.VerifyTokenClaims(token)
+			assert.Error(t, err)
+			assert.Nil(t, claims)
+		})
+	}
+
+	var nilService *Service
+	_, err = nilService.VerifyTokenClaims("x")
+	assert.ErrorIs(t, err, ErrInvalidToken)
+}
+
 func TestParseToken_InvalidToken(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS

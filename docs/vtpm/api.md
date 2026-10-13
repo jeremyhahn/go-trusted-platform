@@ -103,24 +103,26 @@ key operations.
 | `vtpm_start` → `vtpm:write`, `vtpm_stop` → `vtpm:write` | — |
 | — | all `vtpm_template_*`, `vtpm_export`, `vtpm_import`, `vtpm_validate`, `vtpm_get*`, `vtpm_is_running` |
 
-`AuthorizeTool` (`pkg/api/mcp/authz.go:157`) allows any tool absent from the map
-once the token validates. **`vtpm_seal` requires `vtpm:write`;
-`vtpm_bundle_seal` requires nothing. `vtpm_unseal` requires `vtpm:read`;
-`vtpm_bundle_unseal` requires nothing.**
+`AuthorizeTool` (`pkg/api/mcp/authz.go`) is default-deny (#300): a tool absent
+from the map is refused with `AuthErrorToolNotClassified` whatever scopes the
+token holds. **`vtpm_seal` requires `vtpm:write`; `vtpm_bundle_seal` is refused
+for every caller. `vtpm_unseal` requires `vtpm:read`; `vtpm_bundle_unseal` is
+refused likewise.**
 
-Seal and unseal are key operations. This is the same defect as DNS and is raised
-as one owner question in the migration report covering both.
+The newer names do not work over MCP until they are classified. Which family is
+canonical is the same open question as DNS.
 
 ---
 
 ## 6. Authorization
 
-**`VTPMService` is in the gRPC scope catalog** with 23 methods mapped —
-resource `vtpm`, actions `read`/`write`/`delete`. It is one of only eleven
-services in the catalog and, unusually, its coverage is complete.
+Both catalogs are **default-deny**
+([`docs/auth/architecture.md`](../auth/architecture.md)).
 
-On MCP, ten of the 32 vTPM tool names carry a permission; the other 22 do not.
-See §5.
+**`VTPMService` is fully scoped on gRPC** with 23 methods mapped — resource
+`vtpm`, actions `read`/`write`/`delete`. `UnsealVTPM` sits in the read tier.
+
+On MCP, ten vTPM tool names carry a permission; the rest are refused. See §5.
 
 ### REST is gated on the `admin` role (#165)
 

@@ -510,15 +510,18 @@ Recorded here so they are debts with a location, not discoveries:
    document flags in their long help (`--so-pin`, `--lockout-password`,
    `--confirm`, `--parent`, `--password`, `--ca`, `--tls`, `--hmac`, …) that are
    not registered, and all return `ErrDaemonConnectionRequired`.
-3. **The physical-TPM QUIC surface is not scope-checked.**
-   `HandleRequest` enforces the QUIC scope catalog (`pkg/api/quic/auth.go`,
-   `AuthorizeOperation`), but the `0x99` category has no entry in it and an
-   unlisted opcode is allowed. A validated token reaches `SubOpTPM2Clear` and
-   `SubOpTPM2Unseal`.
-4. **`TPMService` and `IDevIDService` are absent from the gRPC scope catalog**
-   (`pkg/api/grpc/method_permissions.go`), which is default-allow. Likewise all
-   31 `platform_tpm_*` and all 17 `idevid_*` / `iak_*` MCP tools are absent from
-   `pkg/api/mcp/authz.go`, which is also default-allow.
+3. **QUIC and gRPC scope the device-identity operations differently.** The
+   QUIC catalog (`pkg/api/quic/opcode_permissions.go`, fail-closed) scopes
+   every `0x99` sub-opcode and every IDevID / IAK opcode, but the IDevID / IAK
+   opcodes take `tpm:read` / `tpm:write` / `tpm:delete` where gRPC
+   `IDevIDService` takes `idevid:*`, so one grant does not cover the same
+   operation on both transports.
+4. **`TPMService` and `IDevIDService` are scoped on gRPC; their MCP tools are
+   refused.** Every RPC of both services is in the default-deny gRPC scope
+   catalog (`pkg/api/grpc/method_permissions.go`) under `tpm:*` and
+   `idevid:*`. The `platform_tpm_*`, `idevid_*` and `iak_*` MCP tools are absent
+   from `pkg/api/mcp/authz.go`, which is also default-deny, so every caller is
+   refused until they are classified ([api.md](api.md) §9).
 5. **AK and IAK are the same key under two names.** gRPC and REST call it `ak`
    (`CreateAK`, `/api/v1/tpm/ak`); QUIC and MCP call it IAK (`SubOpTPM2CreateIAK`,
    `platform_tpm_iak_create`). A client author reading one transport will not

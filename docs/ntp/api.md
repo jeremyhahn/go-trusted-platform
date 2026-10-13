@@ -244,9 +244,8 @@ listeners. Note that `pkg/webservice/v1/rest/ntp/router.go`'s doc comment says
 
 ## 6. Authorization
 
-**NTPService is one of the eleven services in the gRPC scope catalog**
-(`pkg/api/grpc/method_permissions.go`), and its coverage is complete — all
-three RPCs are mapped:
+**NTPService is fully scoped in the default-deny gRPC scope catalog**
+(`pkg/api/grpc/method_permissions.go`) — all three RPCs are mapped:
 
 | Method | Scope |
 |---|---|
@@ -262,10 +261,9 @@ three RPCs are mapped:
 | `ntp_sources` | `ntp:read` |
 | `ntp_step` | **`ntp:write`** |
 
-NTP is one of the few surfaces where the gRPC and MCP catalogs both cover every
-operation, so the platform-wide default-allow question
-([`docs/daemon/api.md`](../daemon/api.md) §5) does not apply here — an unlisted
-NTP operation does not exist.
+Both catalogs are default-deny ([`docs/daemon/api.md`](../daemon/api.md) §5),
+and both cover every NTP operation, so no NTP call is refused for want of a
+classification.
 
 QUIC enforcement goes through `AuthorizeRequest` on the same `scp` claims. REST
 inherits whatever the listener's middleware chain applies to `/api/v1`.

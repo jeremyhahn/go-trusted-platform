@@ -572,7 +572,7 @@ Persistent flags:
 | Flag | Type | Default | Meaning |
 |---|---|---|---|
 | `--socket-path` | string | `/run/platformd.sock` | Unix socket |
-| `--enable-grpc` | bool | `true` | gRPC listener |
+| `--enable-grpc` | bool | `true` | gRPC listener. Under embedded quicbaas it requires `--enable-mtls` or platform tokens and is refused otherwise ([configuration](configuration.md#grpc-tcp-needs-mtls-or-platform-tokens-under-embedded-quicbaas)) |
 | `--grpc-bind-host` / `--grpc-port` | string / int | `127.0.0.1` / `10443` | |
 | `--enable-rest` | bool | `true` | REST listener. In daemon-only mode it requires `--enable-mtls` — its only authentication — and is refused otherwise |
 | `--rest-bind-host` / `--rest-port` | string / int | `127.0.0.1` / `8443` | |
@@ -591,7 +591,7 @@ production transports bind after the barrier is unsealed
 `platformctl init --barrier-strategy` (§4.7), not by a `platformd` flag.
 
 ```bash
-platformd serve
+platformd serve --enable-mtls
 platformd serve --enable-mtls --rest-bind-host 0.0.0.0 --grpc-bind-host 0.0.0.0
 platformd version
 ```

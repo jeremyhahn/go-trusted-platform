@@ -85,7 +85,8 @@ registry). Only REST-only consumers belong to `runWithWebservices` alone.
 2. **Token → authorization.** The platform **validates** tokens; it does not run
    a token-authorization engine. RBAC decisions belong to the stack.
 3. **Scope enforcement.** Per operation on gRPC, QUIC and MCP — and **both
-   catalogs default to allow** ([api.md](api.md) §5).
+   catalogs default to deny**: an unclassified gRPC method or MCP tool is
+   refused ([api.md](api.md) §5).
 4. **Embedded mode has no transport boundary at all.** In-process callers are
    inside the trust boundary by construction; that is what makes embedded mode
    fast and what makes it unsuitable for anything untrusted.

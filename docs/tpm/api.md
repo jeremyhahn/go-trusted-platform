@@ -287,31 +287,24 @@ Two asymmetries worth naming:
 
 Platform tokens carry an `scp` claim in the qrdb-canonical
 `"<resource>:<action>"` form. Enforcement is per operation — gRPC
-`RequireScope`, QUIC `AuthorizeRequest`, MCP `AuthorizeTool` — and **both
-catalogs are default-allow** ([`docs/daemon/api.md`](../daemon/api.md) §5).
-
-For this feature, the catalogs are empty:
+`RequireScope`, QUIC `AuthorizeRequest`, MCP `AuthorizeTool` — and **all three
+catalogs are default-deny** ([`docs/daemon/api.md`](../daemon/api.md) §5).
 
 | Surface | Coverage |
 |---|---|
-| gRPC `TPMService` (27 RPCs) | **not in** `pkg/api/grpc/method_permissions.go` |
-| gRPC `IDevIDService` (20 RPCs) | **not in** `pkg/api/grpc/method_permissions.go` |
-| MCP — 31 `platform_tpm_*` tools | **not in** `pkg/api/mcp/authz.go` |
-| MCP — 17 `idevid_*` / `iak_*` tools | **not in** `pkg/api/mcp/authz.go` |
-| QUIC `0x99` category | **not in** `pkg/api/quic/auth.go`. `HandleRequest` enforces that catalog (`AuthorizeOperation`), which allows an unlisted opcode once the token validates |
-| QUIC device-identity opcodes | likewise not in the catalog |
+| gRPC `TPMService` | **every RPC scoped** in `pkg/api/grpc/method_permissions.go`: `tpm:read` for the observers plus `Quote`, `VerifyQuote`, `ReadNVRAM`, `Unseal` and `MakeCredential`; `tpm:write` for `ActivateCredential`, the `Create*` calls, `DefineNVRAM`, `WriteNVRAM`, `ImportEKCertificate`, `Provision` and `Seal`; `tpm:delete` for `DeleteAK`, `DeleteEK`, `DeleteSRK`, `UndefineNVRAM` and `Clear` |
+| gRPC `IDevIDService` | **every RPC scoped**: `idevid:read` for the `Get*` / `Has*` calls; `idevid:write` for CSR, generate, install, `CreateLDevID`, `ActivateCredential` and `FlushTransientContexts`; `idevid:delete` for the four `Delete*` calls |
+| MCP — `platform_tpm_*` tools | **refused**: not in `pkg/api/mcp/authz.go`, so `AuthorizeTool` answers `AuthErrorToolNotClassified` for every caller |
+| MCP — `idevid_*` / `iak_*` tools | **refused**, likewise |
+| QUIC `0x99` category | **every sub-opcode scoped** in `pkg/api/quic/opcode_permissions.go`, which is fail-closed: `tpm:read` for the observers plus `Quote`, `VerifyQuote`, `Unseal`, `MakeCred` and the NV reads; `tpm:write` for `Provision`, the `Create*` calls, `ImportEKCert`, `ExtendPCR`, `Seal`, `NVWrite`, the IDevID / LDevID CSRs and `ActivateCred`; `tpm:delete` for `Clear`, the `Delete*` calls and `NVDelete` |
+| QUIC device-identity opcodes | **scoped under `tpm:*`**, not `idevid:*` as on gRPC: `tpm:read` for info and get-cert, `tpm:write` for generate, CSR and install-cert, `tpm:delete` for the deletes ([engineering.md](engineering.md) §13) |
 | REST | route-level middleware only; no per-operation TPM scope |
 
-**Concretely: a caller holding any valid platform token can reach `Clear`,
-`Unseal`, `DeleteEK` and `DeleteIDevID`.** For comparison, the vTPM service *is*
-in the gRPC catalog with all 23 methods mapped
-([`docs/vtpm/api.md`](../vtpm/api.md) §6) — the physical TPM, which is the
-stronger root of trust, is the one without coverage.
-
-This is stated as a defect, not a design. Whether the catalogs should default to
-deny is an open owner question recorded in
-[`docs/daemon/api.md`](../daemon/api.md) §5; **the absence of TPM entries is a
-separate and narrower question that can be answered without settling that one.**
+**Concretely: on gRPC, `Clear` and `DeleteEK` need `tpm:delete`, `Unseal`
+needs `tpm:read`, and `DeleteIDevID` needs `idevid:delete`.** Note that
+`Unseal` sits in the read tier. On MCP none of the TPM or device-identity tools
+can be called until they are classified. On QUIC, `SubOpTPM2Clear` needs
+`tpm:delete` and `SubOpTPM2Unseal` `tpm:read`, matching gRPC.
 
 ### REST is gated on the `admin` role (#165)
 

@@ -57,8 +57,8 @@ type CAHandlers struct {
 	kms        issuance.KMS
 }
 
-// SignCSRScope is the scope that authorizes certifying a CSR. ca:write,
-// which issues ordinary certificates, does not grant it.
+// SignCSRScope is the scope that authorizes certifying a CSR.
+// certs:generate, which issues ordinary certificates, does not grant it.
 const SignCSRScope = issuance.SignCSRScope
 
 // NewCAHandlers creates a new CAHandlers instance.

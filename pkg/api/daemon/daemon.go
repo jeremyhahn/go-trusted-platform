@@ -49,6 +49,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
@@ -279,6 +280,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
+	if err := config.validateGRPCAuthorization(); err != nil {
+		return nil, err
+	}
 
 	// Set up logger
 	logger := config.Logger
@@ -309,6 +313,25 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		platformTokenValidatorShared = ptv
 		logger.Info("Shared platform-token validator enabled for gRPC/QUIC/MCP",
 			"issuer", config.PlatformToken.Issuer)
+	}
+
+	// Create the IAM service - MANDATORY for the platform (unless
+	// SkipIAMValidation is set for testing). It is built before the transports
+	// because the gRPC and QUIC token validators authorize tokens without scope
+	// claims through its policy enforcement point (#767, #768). Its gRPC handler
+	// is registered once the servers exist; a missing App is refused there.
+	var iamService *IAMService
+	if !config.SkipIAMValidation && config.App != nil {
+		var iamErr error
+		iamService, iamErr = NewIAMService(config.App, logger.Slog())
+		if iamErr != nil {
+			return nil, ErrInvalidConfig{Reason: "IAM service is mandatory: " + iamErr.Error()}
+		}
+		logger.Info("IAM service initialized (using QuicBaaS SDK clients)")
+	}
+	var iamPEP iamsdk.PEPClient
+	if iamService != nil {
+		iamPEP = iamService.PEP()
 	}
 
 	// Fail closed (#550, #312): the daemon REST server authenticates by mTLS
@@ -350,21 +373,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		grpcOpts = append(grpcOpts, tlsOpts...)
 		grpcTLSCredsAttached = config.grpcTLSMaterialPresent()
 
-		// Skip health check methods from authentication
-		skipMethods := []string{
-			"/platform.v1.PlatformDaemon/HealthCheck",
-			"/grpc.health.v1.Health/Check",
-			// A diskless node holds no platform token and, for
-			// BootCertificate, no certificate yet. Both calls authenticate
-			// themselves: the boot service verifies the node's proof or its
-			// chain and quote, bound to the connection.
-			platformv1.DeviceService_BootCertificate_FullMethodName,
-			platformv1.DeviceService_BootDelivery_FullMethodName,
-		}
-
 		// Configure authentication interceptors. Fails closed (#550): with
 		// SkipIAMValidation off, no authentication backend means no server.
-		authSel, authErr := selectGRPCTCPAuth(config, platformTokenValidatorShared, logger, skipMethods)
+		authSel, authErr := selectGRPCTCPAuth(config, platformTokenValidatorShared, iamPEP, logger, grpcTCPSkipMethods)
 		if authErr != nil {
 			return nil, authErr
 		}
@@ -399,7 +410,6 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	// Initialize optional services based on available backends
 	var sdnService *SDNService
-	var iamService *IAMService
 	var iamGRPCService *IAMGRPCService
 	var tenantService *TenantService
 
@@ -623,19 +633,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Info("KMS service not available (QuicBaaS backend not configured)")
 	}
 
-	// Create IAM service - MANDATORY for the platform (unless SkipIAMValidation is set for testing)
-	// IAM provides authentication, authorization, tenant management, and policy enforcement
+	// Register the IAM service built above, before the transports.
 	if !config.SkipIAMValidation {
-		if config.App != nil {
-			var iamErr error
-			iamService, iamErr = NewIAMService(config.App, logger.Slog())
-			if iamErr != nil {
-				// IAM is mandatory - fail if it cannot be initialized
-				return nil, ErrInvalidConfig{Reason: "IAM service is mandatory: " + iamErr.Error()}
-			}
-
-			logger.Info("IAM service initialized (using QuicBaaS SDK clients)")
-
+		if iamService != nil {
 			// Wire the PlatformIAMService gRPC handler so platformctl --transport
 			// {unix,grpc,quic} iam … reaches IAM operations. Without this the
 			// gRPC servers report "unknown service platform.v1.PlatformIAMService"
@@ -1750,7 +1750,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// it nowhere.
 	//
 	// SECURITY: this activates an exemption that was already in the tree.
-	// "/grpc.health.v1.Health/Check" is in skipMethods above, so from this
+	// "/grpc.health.v1.Health/Check" is in grpcTCPSkipMethods, so from this
 	// point it answers UNAUTHENTICATED callers on the TCP listener. Only an
 	// aggregate SERVING/NOT_SERVING is exposed: no service names are
 	// registered, so Check returns NOT_FOUND for every name and the service
@@ -2137,43 +2137,51 @@ func newGRPCTokenValidator(service quicbaas.ServiceInterface, logger *logging.Lo
 // At least one verifier must be configured or every call returns an
 // "authentication service not configured" error.
 func (v *grpcTokenValidator) ValidateToken(ctx context.Context, token string) (bool, error) {
-	// Try every registered platform JWT verifier (one per webservice).
-	// Multiple webservices may each mint tokens with their own signing
-	// key; we accept the token if ANY verifier validates it.
-	for idx, vf := range v.jwtVerifiers {
+	if _, ok := v.platformJWTClaims(token); ok {
+		return true, nil
+	}
+	resp, err := v.validateWithQuicBaaS(ctx, token)
+	if err != nil {
+		return false, err
+	}
+	return resp.Valid, nil
+}
+
+// platformJWTClaims returns the claims of the first platform JWT verifier
+// that accepts token. Multiple webservices may each mint tokens with their
+// own signing key; the token is accepted if ANY verifier validates it.
+func (v *grpcTokenValidator) platformJWTClaims(token string) (*jwt.TokenClaims, bool) {
+	verifiers := v.jwtVerifiers
+	if len(verifiers) == 0 && v.jwtVerifier != nil {
+		verifiers = []PlatformJWTVerifier{v.jwtVerifier}
+	}
+	for idx, vf := range verifiers {
 		if vf == nil {
 			continue
 		}
-		ok, err := vf.VerifyToken(token)
-		if err == nil && ok {
-			return true, nil
+		claims, err := vf.VerifyTokenClaims(token)
+		if err == nil && claims != nil {
+			return claims, true
 		}
 		if v.logger != nil {
 			v.logger.Debug("Platform JWT verifier rejected token",
 				"verifier_index", idx,
-				"verifier_count", len(v.jwtVerifiers),
-				"ok", ok,
+				"verifier_count", len(verifiers),
 				"err", err)
 		}
 	}
-	if v.jwtVerifier != nil && len(v.jwtVerifiers) == 0 {
-		ok, err := v.jwtVerifier.VerifyToken(token)
-		if err == nil && ok {
-			return true, nil
-		}
-		if v.logger != nil {
-			v.logger.Debug("Platform JWT verification rejected token, trying QuicBaaS",
-				"ok", ok, "err", err)
-		}
-	}
+	return nil, false
+}
 
+// validateWithQuicBaaS validates a token minted by the QuicBaaS auth
+// provider — the fallback when no platform JWT verifier accepts it.
+func (v *grpcTokenValidator) validateWithQuicBaaS(ctx context.Context, token string) (*quicbaas.ValidateTokenResponse, error) {
 	if v.service == nil {
 		if v.logger != nil {
 			v.logger.Debug("Token validation failed: QuicBaaS service not available")
 		}
-		return false, ErrQuicBaaSServiceUnavailable{}
+		return nil, ErrQuicBaaSServiceUnavailable{}
 	}
-
 	resp, err := v.service.ValidateToken(ctx, &quicbaas.ValidateTokenRequest{
 		AccessToken: token,
 	})
@@ -2181,17 +2189,16 @@ func (v *grpcTokenValidator) ValidateToken(ctx context.Context, token string) (b
 		if v.logger != nil {
 			v.logger.Debug("Token validation failed", "error", err)
 		}
-		return false, ErrTokenValidationFailed{Cause: err}
+		return nil, ErrTokenValidationFailed{Cause: err}
 	}
-
-	return resp.Valid, nil
+	return resp, nil
 }
 
 // PlatformJWTVerifier is the minimal surface needed by grpcTokenValidator
-// to verify a platform-issued JWT. The webserver's jwt.Service satisfies
-// this via a thin adapter (see pkg/api/daemon/jwt_verifier.go).
+// to verify a platform-issued JWT and read the principal it names. The
+// webserver's jwt.Service satisfies it.
 type PlatformJWTVerifier interface {
-	VerifyToken(tokenString string) (bool, error)
+	VerifyTokenClaims(tokenString string) (*jwt.TokenClaims, error)
 }
 
 // SetPlatformJWTVerifier wires a platform JWT verifier into the daemon's

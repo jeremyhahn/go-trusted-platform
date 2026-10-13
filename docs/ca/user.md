@@ -206,15 +206,15 @@ repository contains adapters and transport frontage — no certificate logic.
 
 ## Two things to be aware of
 
-Over MCP each `ca_*` tool needs the scope its gRPC method needs: `ca:write`
-to issue, renew or revoke, `ca:read` for everything else, including
-`ca_info`, `ca_crl` and `ca_bundle`, whose REST routes are public. Recorded in
-[api.md](api.md) §4.
+Every transport asks for the same scope per operation: `certs:generate` to
+issue or renew, `certs:revoke` to revoke, `certs:read` and `certs:list` to read
+certificates, and `ca:read` for the CA's info, CRL and bundle, including over
+MCP where their REST routes are public. Recorded in [api.md](api.md) §4.
 
 `ca sign-csr` certifies a KMS key for code signing — the fleet key every
 netbooted device's boot chain trusts. **Only the platform admin may run it**:
 root on the platformd host, or a platform token granting `ca:sign-csr`, which
-`ca:write` does not include. The CSR must name the KMS key and nothing else.
+`certs:generate` does not include. The CSR must name the KMS key and nothing else.
 See [cli.md](cli.md).
 
 ---

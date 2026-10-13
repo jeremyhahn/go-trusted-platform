@@ -328,8 +328,10 @@ func (r *DeviceRouter) registerProfileCRUD(router *mux.Router) {
 // registerTemplateCRUD registers device template CRUD endpoints.
 func (r *DeviceRouter) registerTemplateCRUD(router *mux.Router) {
 	// Template CRUD operations
-	// POST /api/v1/device/templates - Create template
-	router.HandleFunc("/device/templates", r.templateHandler.CreateTemplate).Methods("POST")
+	// POST /api/v1/device/templates - Create template. device:write, as
+	// CreateTemplate takes on gRPC, QUIC and MCP (#873).
+	router.Handle("/device/templates",
+		r.requireScope(deviceWriteScope, r.templateHandler.CreateTemplate)).Methods("POST")
 
 	// GET /api/v1/device/templates - List templates
 	router.HandleFunc("/device/templates", r.templateHandler.ListTemplates).Methods("GET")

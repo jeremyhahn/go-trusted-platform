@@ -90,10 +90,10 @@ owned abstractions rather than coding protected memory directly.
    is supplied. The unseal key is the highest-value secret in the feature and
    passes through the CLI as `--key-hex` / `--key-base64` — see
    [cli.md](cli.md) §5.
-4. **Tenant administration.** Currently reachable with any validated token on
-   gRPC, Unix, MCP and embedded, with no required scope — including barrier
-   init, seal and unseal. Recorded in [api.md](api.md) §7 and raised for the
-   owner.
+4. **Tenant administration.** Scoped on gRPC and Unix: reads need
+   `tenant:read`; lifecycle, quota, DEK and barrier init/seal/unseal need
+   `tenant:write`; delete needs `tenant:delete`. MCP refuses the tenant tools
+   until they are classified ([api.md](api.md) §7).
 
 ## What this feature deliberately does not do
 

@@ -12,7 +12,7 @@ sudo systemctl start platformd
 sudo systemctl status platformd
 
 # Or manually
-sudo ./platformd serve --config config.yaml
+sudo ./platformd serve --config config.yaml --enable-mtls
 
 # Monitor startup
 sleep 10
@@ -556,7 +556,7 @@ quicbaas:
     - "10.0.1.1:63000"  # Existing member
 
 # Start node (automatically joins)
-sudo ./platformd serve --config config.yaml
+sudo ./platformd serve --config config.yaml --enable-mtls
 
 # Verify joined
 platformctl cluster members
@@ -661,7 +661,7 @@ platformctl backup schedule --disable
 ./platformd config validate --config config.yaml
 
 # Run with debug logging
-sudo ./platformd serve --config config.yaml --log-level debug 2>&1 | head -50
+sudo ./platformd serve --config config.yaml --enable-mtls --log-level debug 2>&1 | head -50
 
 # Check systemd service
 sudo systemctl status platformd -l
@@ -813,7 +813,7 @@ services:
 
 ```bash
 # Increase Go runtime memory limit
-GOMEMLIMIT=4GiB sudo ./platformd serve --config config.yaml
+GOMEMLIMIT=4GiB sudo ./platformd serve --config config.yaml --enable-mtls
 ```
 
 ### Resource Limits

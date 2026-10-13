@@ -99,8 +99,8 @@ type CSR struct {
 }
 
 // SignCSRScope is the platform-token scope that certifies a KMS key from a
-// CSR. It is an admin scope of its own: ca:write, which issues ordinary
-// certificates, does not grant it.
+// CSR. It is an admin scope of its own: certs:generate, which issues
+// ordinary certificates, does not grant it.
 const SignCSRScope = "ca:sign-csr"
 
 // AuthorizeSignCSR requires that authCtx, the caller's validated platform

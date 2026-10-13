@@ -263,22 +263,18 @@ Not applicable: no cluster opcode.
 
 | Transport | Requirement |
 |---|---|
-| gRPC / Unix | **`ClusterService` is absent from the gRPC scope catalog** (`pkg/api/grpc/method_permissions.go`). The interceptor is default-allow: *"carries no required scope: the interceptor allows it once the token is validated"* |
-| MCP | **All five `platform_cluster_*` tools are absent from the permission map** (`pkg/api/mcp/authz.go`). `AuthorizeTool` returns no error for an unmapped tool |
+| gRPC / Unix | `GetStatus`, `ListNodes`: `cluster:read`. `Bootstrap`, `Join`, `Leave`: `cluster:write` (`pkg/api/grpc/method_permissions.go`). A caller without the scope gets `PermissionDenied` |
+| MCP | **All five `platform_cluster_*` tools are refused for every caller.** They are not in the permission map (`pkg/api/mcp/authz.go`), so the default-deny `AuthorizeTool` returns `AuthErrorToolNotClassified` until each is classified |
 | REST | Whatever the daemon REST listener's middleware chain applies to `/api/v1` |
 | QUIC | n/a |
 | Embedded | In-process; no token |
 
-**No `cluster:*` scope is defined anywhere in this repository.** That means
-`Bootstrap`, `Join` and `Leave` — operations that would change cluster
-membership — are **scope-unchecked on both catalogs that have a default-allow
-policy**. Today the exposure is latent because the service is a stub. Wiring the
-coordinator without first defining and enforcing `cluster:read` / `cluster:write`
-would make cluster lifecycle callable by any validated token.
-
-This is recorded here as a gate on the wiring work, and it sits inside the
-platform-wide default-allow question raised in
-[`docs/daemon/api.md`](../daemon/api.md) §5.
+Both catalogs are **default-deny**
+([`docs/auth/architecture.md`](../auth/architecture.md)). On gRPC, membership
+changes (`Bootstrap`, `Join`, `Leave`) need `cluster:write`, separate from the
+read-only status calls. On MCP the lifecycle tools cannot be called at all until
+someone maps them. The platform-wide catalog totals
+are in [`docs/daemon/api.md`](../daemon/api.md) §5.
 
 ## 8. Versioning and deprecation
 

@@ -200,7 +200,10 @@ func TestLookupOperationPermission_VMDirectOpcodesStayDirect(t *testing.T) {
 }
 
 func TestOperationCatalog_EntriesAreWellFormed(t *testing.T) {
-	actions := map[string]bool{actionRead: true, actionWrite: true, actionDelete: true, actionAdmin: true, actionSignCSR: true}
+	actions := map[string]bool{
+		actionRead: true, actionWrite: true, actionDelete: true, actionAdmin: true, actionSignCSR: true,
+		actionGenerate: true, actionRevoke: true, actionList: true,
+	}
 	check := func(where string, perm OpcodePermission) {
 		if perm.Resource == "" || !actions[perm.Action] {
 			t.Errorf("%s: malformed permission %+v", where, perm)

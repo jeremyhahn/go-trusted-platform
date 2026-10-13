@@ -362,9 +362,12 @@ Check three things in order:
 All three are documented in [architecture.md](architecture.md) §6.
 
 **A token works on one transport and not another.**
-Authorization coverage is uneven: 185 of 461 gRPC RPCs and 71 of 449 MCP tools
-carry a required scope, and anything uncatalogued is allowed once the token
-validates. A call that "works" may simply be uncatalogued.
+Each transport has its own scope catalog, and both the gRPC and MCP catalogs
+refuse anything uncatalogued. Every gRPC RPC carries a required scope, but only
+94 of 428 MCP tools are classified; an unclassified tool fails with
+`AuthErrorToolNotClassified` whatever scopes the token holds. A tool that fails
+that way needs classifying, not a broader token. The catalogs are listed in
+[`docs/daemon/api.md`](../daemon/api.md) §5.
 
 **You lost your session token.**
 Log in again. There is no recovery path and no token store to read from.

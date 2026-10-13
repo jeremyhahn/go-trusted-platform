@@ -247,30 +247,41 @@ by status code; read the `error` string.
 
 ## 8. Authorization
 
-BMC is **not enforced on gRPC**, which is default-allow. MCP and QUIC deny
-what they do not classify.
+The gRPC and MCP catalogs are **default-deny** ([`docs/auth/architecture.md`](../auth/architecture.md)),
+and every BMC entry point on them carries a required scope. One vocabulary
+serves both:
 
-| Catalog | BMC coverage | Effect |
-|---|---|---|
-| gRPC (`pkg/api/grpc/method_permissions.go`) | **`BMCService` is absent entirely.** Zero of 23 RPCs carry a required scope | The interceptor allows every BMC RPC once the token validates |
-| MCP (`pkg/api/mcp/authz.go`) | `platform_bmc_enroll` and `platform_bmc_cert_restore` require `bmc:admin` | Every other BMC tool is unclassified, and `AuthorizeTool` refuses it (#300) |
-| QUIC (`pkg/api/quic/opcode_permissions.go`) | `OpBMCCategory` (`0x9F`) subs `BMCSubEnroll` and `BMCSubRestore` require `bmc:admin` (#767) | QUIC carries no other BMC operation; an unclassified sub-opcode is refused |
+| Permission | Meaning | gRPC `BMCService` RPCs | MCP `platform_bmc_*` tools |
+|---|---|---|---|
+| `bmc:read` | observation | `PowerStatus`, `GetBootDevice`, `VirtualMediaStatus`, `GetSensors`, `GetSystemInfo`, `ListUsers`, `GetWebCertificate`, `ProvisionStatus` | `power_status`, `get_boot_device`, `virtual_media_status`, `get_sensors`, `get_system_info`, `list_users`, `get_web_certificate` |
+| `bmc:write` | recoverable state change | `PowerOn`, `SetBootDevice` | `power_on`, `set_boot_device` |
+| `bmc:power` | interrupts a running node | `PowerOff`, `PowerReset`, `PowerCycle` | `power_off`, `power_reset`, `power_cycle` |
+| `bmc:media` | chooses what the machine boots | `MountISO`, `UnmountISO` | `mount_iso`, `unmount_iso` |
+| `bmc:admin` | changes which credentials the BMC trusts | `EnrollBMC`, `RestoreFactoryCert`, `ReplaceWebCertificate`, `CreateUser`, `DeleteUser`, `SetUserPassword`, `SetUserPrivilege`, `Provision` | `enroll`, `cert_restore` |
 
-Consequences, stated plainly because they are not obvious from the code:
+QUIC carries only two BMC operations: `OpBMCCategory` (`0x9F`) subs
+`BMCSubEnroll` and `BMCSubRestore`, which require `bmc:admin` in
+`pkg/api/quic/opcode_permissions.go`. Any other BMC sub-opcode is
+unclassified, and QUIC refuses it (#767).
 
-- **Any principal with a valid platform token can power off any node over gRPC
-  or Unix**, set its boot device, mount an installer ISO, replace or restore
+`Provision` takes `bmc:admin` because it composes boot device, virtual media and
+power in one call: neither `bmc:media` nor `bmc:power` alone may confer the
+whole sequence. A caller without the scope is refused with `PermissionDenied`
+(gRPC) or `AuthErrorPermissionDenied` (MCP).
+
+The catalogs do not cover REST. Consequences, stated plainly because
+they are not obvious from the code:
+
+- **On REST, any principal with a valid platform token can power off
+  any node**, set its boot device, mount an installer ISO, replace or restore
   its BMC certificate, and create a BMC administrator account. No `scp` claim
-  is checked on any of it there.
+  is checked on that path.
 - Because all four power mutators share `POST .../power` with the verb in the
   body, even a path-based gateway policy in front of REST cannot separate
   "status" from "power off" beyond method.
 
-[`docs/daemon/api.md`](../daemon/api.md) §5 records the platform-wide picture:
-185 of 461 gRPC RPCs across 11 of 31 services carry scopes, and 71 of 449 MCP
-tools do. `BMCService` is named there among the services not in the catalog.
-**Whether both catalogs should default to deny is an open owner question**, not
-settled by this document.
+[`docs/daemon/api.md`](../daemon/api.md) §5 records the platform-wide picture
+and the catalog totals.
 
 ## 9. The SDK's REST transport reaches only part of the surface
 
@@ -330,6 +341,6 @@ table are in [`docs/daemon/api.md`](../daemon/api.md) §4.
 | Password rotation and credential-store CRUD have no transport | 2 |
 | SDK REST adapter maps 14 of 23 RPCs | 9 |
 | `BMCRouter` omits enroll and cert-restore | 2 |
-| Neither authorization catalog covers BMC | all 23 RPCs, all 16 tools |
+| REST and QUIC carry no BMC scope check (§8) | every REST route, both QUIC ceremonies |
 
 All are recorded as `docs/13 G7` debt, not as design.

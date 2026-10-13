@@ -15,7 +15,7 @@ chmod +x platformd
 ./platformd config gen --init --domain=example.test --platform-dir trusted-data
 
 # 3. Start platform (requires root for TPM access)
-sudo ./platformd serve --config config.yaml
+sudo ./platformd serve --config config.yaml --enable-mtls
 
 # 4. Verify running
 sleep 5
@@ -293,7 +293,7 @@ Wants=network-online.target
 Type=notify
 User=root
 Group=root
-ExecStart=/usr/local/bin/platformd serve --config /etc/trusted-platform/config.yaml
+ExecStart=/usr/local/bin/platformd serve --config /etc/trusted-platform/config.yaml --enable-mtls
 Restart=on-failure
 RestartSec=10
 
@@ -395,7 +395,7 @@ MemoryMax=8G
 Or via environment:
 
 ```bash
-GOMEMLIMIT=4GiB sudo ./platformd serve --config config.yaml
+GOMEMLIMIT=4GiB sudo ./platformd serve --config config.yaml --enable-mtls
 ```
 
 ## Compliance

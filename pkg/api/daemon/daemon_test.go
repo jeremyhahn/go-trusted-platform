@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -359,7 +360,14 @@ func TestDaemon_ManagedServices(t *testing.T) {
 		"test2": {Enabled: true, AutoStart: true, Timeout: 5 * time.Second},
 	}
 
-	d, err := New(config)
+	// Daemon.Start launches the auto-start pass on its own goroutine. Observe
+	// its completion so the manual Start/Stop below cannot interleave with it
+	// and have a service restarted behind the test's back.
+	autoStarted := make(chan struct{})
+	var autoStartOnce sync.Once
+	d, err := New(config, withAutoStartObserver(func() {
+		autoStartOnce.Do(func() { close(autoStarted) })
+	}))
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
@@ -380,11 +388,34 @@ func TestDaemon_ManagedServices(t *testing.T) {
 	ctx := context.Background()
 
 	if err := d.Start(ctx); err != nil {
-		t.Errorf("Start() error: %v", err)
+		t.Fatalf("Start() error: %v", err)
 	}
 
-	// Note: Managed services must be started manually - daemon Start() only starts core servers
-	// The AutoStart config is a hint for the service manager, not enforced by the daemon
+	// Wait for the whole auto-start pass, not for one service.
+	select {
+	case <-autoStarted:
+	case <-time.After(daemonTestDeadline):
+		t.Fatalf("auto-start pass did not complete within %s", daemonTestDeadline)
+	}
+
+	if !svc1.IsRunning() {
+		t.Error("svc1 should be running after auto-start")
+	}
+	if !svc2.IsRunning() {
+		t.Error("svc2 should be running after auto-start")
+	}
+
+	// Stop the auto-started services by hand, then start them by hand again.
+	if err := svc1.Stop(ctx); err != nil {
+		t.Errorf("svc1.Stop() after auto-start error: %v", err)
+	}
+	if err := svc2.Stop(ctx); err != nil {
+		t.Errorf("svc2.Stop() after auto-start error: %v", err)
+	}
+	if svc1.IsRunning() || svc2.IsRunning() {
+		t.Error("services should not be running after the first manual Stop()")
+	}
+
 	if err := svc1.Start(ctx); err != nil {
 		t.Errorf("svc1.Start() error: %v", err)
 	}

@@ -3367,7 +3367,10 @@ func (i *installer) installPlatformdService(ctx context.Context) error {
 	initdDir := filepath.Join(mountPoint, "etc", "init.d")
 
 	// Build base command args
-	baseArgs := "--platform-dir=/var/lib/trusted-platform --config-dir=/etc/trusted-platform --log-dir=/var/log/trusted-platform"
+	// --enable-mtls: gRPC TCP token authorization needs the IAM policy
+	// enforcement point, which the embedded quicbaas SDK does not implement,
+	// so daemon.New refuses gRPC without mTLS or platform tokens (#770).
+	baseArgs := "--platform-dir=/var/lib/trusted-platform --config-dir=/etc/trusted-platform --log-dir=/var/log/trusted-platform --enable-mtls"
 	if i.config.Environment != "" {
 		baseArgs += " --env " + i.config.Environment
 		i.logger.Info("[PLATFORMD] Using environment", "env", i.config.Environment)

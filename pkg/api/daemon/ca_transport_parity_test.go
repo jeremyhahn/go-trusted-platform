@@ -215,8 +215,10 @@ func (f *caParityFixture) restClient(t *testing.T) platformv1.CAServiceClient {
 }
 
 func (f *caParityFixture) quicClient(t *testing.T) platformv1.CAServiceClient {
+	// The CA's certificates are go-qrdb's certs family; its metadata,
+	// bundle and CRL are ca.
 	auth := quic.NewAuthMiddleware(
-		quic.WithQUICTokenValidator(scopedTokenValidator{scopes: []string{"ca:*"}}),
+		quic.WithQUICTokenValidator(scopedTokenValidator{scopes: []string{"ca:*", "certs:*"}}),
 		quic.WithQUICRequireAuth(true),
 	)
 	handler, err := NewQUICServiceHandler(logging.DefaultLogger(), WithQUICAuthMiddleware(auth))

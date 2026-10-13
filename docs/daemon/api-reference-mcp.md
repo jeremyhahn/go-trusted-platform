@@ -35,7 +35,8 @@ GET /.well-known/oauth-protected-resource
   "scopes_supported": [
     "attestation:read", "attestation:write",
     "bmc:admin", "bmc:media", "bmc:power", "bmc:read", "bmc:write",
-    "ca:read", "ca:sign-csr", "ca:write",
+    "ca:read", "ca:sign-csr",
+    "certs:generate", "certs:list", "certs:read", "certs:revoke",
     "ceremony:read", "ceremony:write",
     "device:delete", "device:read", "device:write",
     "..."
@@ -78,7 +79,7 @@ curl --tlsv1.3 --cacert platform-ca.pem -X POST https://127.0.0.1:9445/mcp \
 | dns_* tools | dns:read, dns:write, or dns:delete |
 | device_* tools | device:read, device:write, or device:delete |
 | sdn_* tools | sdn:read, sdn:write, or sdn:delete |
-| ca_* tools | ca:read, ca:write, or ca:sign-csr (`ca_sign_csr` only); see docs/ca/api.md §4 |
+| ca_* tools | certs:generate, certs:revoke, certs:read, certs:list, ca:read, or ca:sign-csr (`ca_sign_csr` only); see docs/ca/api.md §4 |
 | platform_health | No scope required (public) |
 
 ### Authentication Errors
@@ -279,7 +280,7 @@ Get Certificate Authority information.
 #### ca_sign_csr
 
 Certify an existing KMS key for code signing from a CSR the KMS signed.
-Requires a platform token granting `ca:sign-csr` (`ca:write` does not). The
+Requires a platform token granting `ca:sign-csr` (`certs:generate` does not). The
 CSR's subject must be one common name naming a KMS key, with that key's
 public key and no SANs; the certificate's extended key usage is
 `codeSigning` only. See `docs/ca/api.md`.

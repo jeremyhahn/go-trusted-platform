@@ -247,20 +247,18 @@ indirection.
 
 ## 9. Authorization
 
-Platform tokens carry an `scp` claim as `"<resource>:<action>"`. **`SDNService`
-is one of the eleven services in the gRPC scope catalog**
-(`pkg/api/grpc/method_permissions.go`), with 25 of its methods mapped —
-resource `sdn`, actions `read`, `write`, `delete`. QUIC projects the same
-mapping through its operation catalog (`pkg/api/quic/opcode_permissions.go`);
-MCP through `AuthorizeTool`.
+Platform tokens carry an `scp` claim as `"<resource>:<action>"`. The gRPC scope
+catalog (`pkg/api/grpc/method_permissions.go`) is **default-deny**: a method
+absent from it is refused with `PermissionDenied`.
 
-`OverlayService` and `SwitchService` are **not** in the gRPC catalog, and the
-catalog's doc comment states that a method absent from the map carries no
-required scope. So on gRPC, overlay and switch operations require only a
-validated token, while the equivalent SDN operations require `sdn:write`. QUIC
-classifies every operation (#767): overlay sub-opcodes need `sdn:*` and switch
-sub-opcodes `switch:read` / `switch:write`. That asymmetry
-is raised as an owner question in the migration report.
+**`SDNService` and `OverlayService` are fully scoped** under resource `sdn`,
+actions `read`, `write`, `delete`. `SwitchService` is scoped under its own
+resource, `switch` ([`docs/switch/api.md`](../switch/api.md) §7). On MCP, the bridge, port-state and policy
+`sdn_*` tools carry `sdn:*` permissions. The flow, VLAN, port-stats and
+port-auth `sdn_*` tools, and every `overlay_*` and `switch_*` tool, are not
+classified, so `AuthorizeTool` refuses them for every caller. QUIC classifies
+every operation (#767) in `pkg/api/quic/opcode_permissions.go`: overlay
+sub-opcodes need `sdn:*` and switch sub-opcodes `switch:read` / `switch:write`.
 
 ### REST is gated on the `admin` role (#165)
 
