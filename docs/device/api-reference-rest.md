@@ -1,5 +1,8 @@
 # Device REST API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The device, profile, template and diskless-boot REST routes, their scopes and bodies.
+
 Base URL: `https://localhost:8443/api/v1`
 
 ## Device Endpoints
@@ -567,13 +570,18 @@ identity fields cleared).
 
 ## Error Responses
 
+Errors use the platform response envelope (`restwire.WebServiceResponse`):
+
 ```json
 {
-  "error": {
-    "code": "DEVICE_NOT_FOUND",
-    "message": "Device with ID 999 not found"
-  }
+  "code": 404,
+  "error": "<service error text>",
+  "success": false,
+  "payload": null
 }
 ```
 
-See [api-reference.md](api-reference.md) for complete error code list.
+The CRUD handlers (`handleServiceError` in
+`pkg/webservice/v1/device/rest_handlers.go`) answer `400` for an invalid id
+or a profile whose networks share a VLAN, `409` for a duplicate serial, `404`
+when the device or profile is not found, and `500` otherwise.

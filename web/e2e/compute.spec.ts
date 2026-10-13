@@ -20,38 +20,53 @@ import { mockTenantApi, ApiError } from './fixtures/api-mock';
 // SDK-Compatible Compute Types and Mock Data
 // ============================================================================
 
-// SDK VMState enum (uppercase)
+// SDK VMState enum: the proto names the daemon sends (protojson)
 export type VMState =
-  | 'UNSPECIFIED'
-  | 'STOPPED'
-  | 'STARTING'
-  | 'RUNNING'
-  | 'PAUSED'
-  | 'STOPPING'
-  | 'REBOOTING'
-  | 'MIGRATING'
-  | 'ERROR';
+  | 'VM_STATE_UNSPECIFIED'
+  | 'VM_STATE_STOPPED'
+  | 'VM_STATE_STARTING'
+  | 'VM_STATE_RUNNING'
+  | 'VM_STATE_PAUSED'
+  | 'VM_STATE_STOPPING'
+  | 'VM_STATE_REBOOTING'
+  | 'VM_STATE_MIGRATING'
+  | 'VM_STATE_ERROR';
 
-// SDK ContainerState enum (uppercase)
+// SDK ContainerState enum: the proto names the daemon sends (protojson)
 export type ContainerState =
-  | 'UNSPECIFIED'
-  | 'CREATED'
-  | 'STARTING'
-  | 'RUNNING'
-  | 'PAUSED'
-  | 'STOPPING'
-  | 'STOPPED'
-  | 'EXITED'
-  | 'ERROR';
+  | 'CONTAINER_STATE_UNSPECIFIED'
+  | 'CONTAINER_STATE_CREATED'
+  | 'CONTAINER_STATE_STARTING'
+  | 'CONTAINER_STATE_RUNNING'
+  | 'CONTAINER_STATE_PAUSED'
+  | 'CONTAINER_STATE_STOPPING'
+  | 'CONTAINER_STATE_STOPPED'
+  | 'CONTAINER_STATE_EXITED'
+  | 'CONTAINER_STATE_ERROR';
 
 // SDK DiskType
-export type DiskType = 'UNSPECIFIED' | 'RAW' | 'QCOW2' | 'VDI' | 'VMDK';
+export type DiskType =
+  | 'DISK_TYPE_UNSPECIFIED'
+  | 'DISK_TYPE_RAW'
+  | 'DISK_TYPE_QCOW2'
+  | 'DISK_TYPE_VDI'
+  | 'DISK_TYPE_VMDK';
 
 // SDK DiskBus
-export type DiskBus = 'UNSPECIFIED' | 'IDE' | 'SATA' | 'SCSI' | 'VIRTIO' | 'NVME';
+export type DiskBus =
+  | 'DISK_BUS_UNSPECIFIED'
+  | 'DISK_BUS_IDE'
+  | 'DISK_BUS_SATA'
+  | 'DISK_BUS_SCSI'
+  | 'DISK_BUS_VIRTIO'
+  | 'DISK_BUS_NVME';
 
 // SDK NetworkModel
-export type NetworkModel = 'UNSPECIFIED' | 'E1000' | 'VIRTIO' | 'RTL8139';
+export type NetworkModel =
+  | 'NETWORK_MODEL_UNSPECIFIED'
+  | 'NETWORK_MODEL_E1000'
+  | 'NETWORK_MODEL_VIRTIO'
+  | 'NETWORK_MODEL_RTL8139';
 
 // SDK-compatible CPU configuration
 export interface CPUConfig {
@@ -281,7 +296,7 @@ export function createMockVM(params: CreateMockVMParams = {}): VM {
 
   const name = params.name || `VM-${id}`;
   const description = params.description || 'Test virtual machine';
-  const state = params.state || 'RUNNING';
+  const state = params.state || 'VM_STATE_RUNNING';
   const vcpus = params.vcpus ?? 2;
   const memoryMB = params.memoryMB ?? 4096;
   const diskGB = params.diskGB ?? 50;
@@ -303,8 +318,8 @@ export function createMockVM(params: CreateMockVMParams = {}): VM {
         {
           id: `${id}-disk-0`,
           path: `/var/lib/libvirt/images/${id}-root.qcow2`,
-          type: 'QCOW2',
-          bus: 'VIRTIO',
+          type: 'DISK_TYPE_QCOW2',
+          bus: 'DISK_BUS_VIRTIO',
           sizeGb: diskGB,
           bootable: true,
         },
@@ -314,7 +329,7 @@ export function createMockVM(params: CreateMockVMParams = {}): VM {
           id: `${id}-nic-0`,
           bridge: 'virbr0',
           macAddress: `52:54:00:${Math.floor(Math.random() * 256).toString(16).padStart(2, '0')}:${Math.floor(Math.random() * 256).toString(16).padStart(2, '0')}:${Math.floor(Math.random() * 256).toString(16).padStart(2, '0')}`,
-          model: 'VIRTIO',
+          model: 'NETWORK_MODEL_VIRTIO',
         },
       ],
       labels: params.tags ? { tags: params.tags.join(',') } : undefined,
@@ -340,9 +355,9 @@ export function createMockContainer(params: CreateMockContainerParams = {}): Con
         { hostPort: 443, containerPort: 443, protocol: 'tcp' },
       ],
     },
-    state: params.state || 'RUNNING',
+    state: params.state || 'CONTAINER_STATE_RUNNING',
     createdAt: now.toISOString(),
-    startedAt: params.state === 'RUNNING' ? now.toISOString() : undefined,
+    startedAt: params.state === 'CONTAINER_STATE_RUNNING' ? now.toISOString() : undefined,
   };
 }
 
@@ -361,7 +376,7 @@ export function createMockSnapshot(params: CreateMockSnapshotParams = {}): Snaps
     },
     createdAt: now.toISOString(),
     sizeBytes: params.sizeBytes || 25 * 1024 * 1024 * 1024, // 25 GB in bytes
-    vmState: params.vmState || 'STOPPED',
+    vmState: params.vmState || 'VM_STATE_STOPPED',
   };
 }
 
@@ -510,7 +525,7 @@ export async function mockComputeApi(
           vcpus: vmConfig.cpu?.cores || 2,
           memoryMB: vmConfig.memory?.sizeMb || 4096,
           diskGB: vmConfig.disks?.[0]?.sizeGb || 50,
-          state: 'STARTING',
+          state: 'VM_STATE_STARTING',
         });
 
         state.vms.unshift(newVM);
@@ -568,11 +583,11 @@ export async function mockComputeApi(
       }
 
       if (action === 'start') {
-        state.vms[vmIndex].state = 'RUNNING';
+        state.vms[vmIndex].state = 'VM_STATE_RUNNING';
       } else if (action === 'stop') {
-        state.vms[vmIndex].state = 'STOPPED';
+        state.vms[vmIndex].state = 'VM_STATE_STOPPED';
       } else if (action === 'reboot') {
-        state.vms[vmIndex].state = 'RUNNING';
+        state.vms[vmIndex].state = 'VM_STATE_RUNNING';
       }
 
       state.vms[vmIndex].updatedAt = new Date().toISOString();
@@ -749,7 +764,7 @@ export async function mockComputeApi(
           image: containerConfig.image,
           ports: containerConfig.ports,
           command: containerConfig.command,
-          state: 'STARTING',
+          state: 'CONTAINER_STATE_STARTING',
         });
 
         state.containers.unshift(newContainer);
@@ -806,10 +821,10 @@ export async function mockComputeApi(
       }
 
       if (action === 'start') {
-        state.containers[containerIndex].state = 'RUNNING';
+        state.containers[containerIndex].state = 'CONTAINER_STATE_RUNNING';
         state.containers[containerIndex].startedAt = new Date().toISOString();
       } else if (action === 'stop') {
-        state.containers[containerIndex].state = 'STOPPED';
+        state.containers[containerIndex].state = 'CONTAINER_STATE_STOPPED';
       }
 
       // SDK expects { status: ComputeStatus } format
@@ -922,7 +937,7 @@ export async function mockComputeApi(
           name: snapshotConfig.name,
           description: snapshotConfig.description,
           vmId: vmId || 'vm-1',
-          vmState: vm?.state || 'STOPPED',
+          vmState: vm?.state || 'VM_STATE_STOPPED',
         });
 
         state.snapshots.unshift(newSnapshot);
@@ -1073,8 +1088,8 @@ test.describe('Compute Management', () => {
 
     test('should display VM table with columns', async ({ page }) => {
       const vms = [
-        createMockVM({ id: 'vm-1', name: 'Web-Server', state: 'RUNNING', vcpus: 4, memoryMB: 8192 }),
-        createMockVM({ id: 'vm-2', name: 'Database', state: 'STOPPED', vcpus: 2, memoryMB: 4096 }),
+        createMockVM({ id: 'vm-1', name: 'Web-Server', state: 'VM_STATE_RUNNING', vcpus: 4, memoryMB: 8192 }),
+        createMockVM({ id: 'vm-2', name: 'Database', state: 'VM_STATE_STOPPED', vcpus: 2, memoryMB: 4096 }),
       ];
 
       await mockComputeApi(page, { initialVMs: vms });
@@ -1099,9 +1114,9 @@ test.describe('Compute Management', () => {
 
     test('should display VM status badges correctly', async ({ page }) => {
       const vms = [
-        createMockVM({ id: 'vm-1', name: 'Running-VM', state: 'RUNNING' }),
-        createMockVM({ id: 'vm-2', name: 'Stopped-VM', state: 'STOPPED' }),
-        createMockVM({ id: 'vm-3', name: 'Paused-VM', state: 'PAUSED' }),
+        createMockVM({ id: 'vm-1', name: 'Running-VM', state: 'VM_STATE_RUNNING' }),
+        createMockVM({ id: 'vm-2', name: 'Stopped-VM', state: 'VM_STATE_STOPPED' }),
+        createMockVM({ id: 'vm-3', name: 'Paused-VM', state: 'VM_STATE_PAUSED' }),
       ];
 
       await mockComputeApi(page, { initialVMs: vms });
@@ -1222,9 +1237,9 @@ test.describe('Compute Management', () => {
 
     test('should filter VMs by status dropdown', async ({ page }) => {
       const vms = [
-        createMockVM({ id: 'vm-1', name: 'Production-Web', state: 'RUNNING' }),
-        createMockVM({ id: 'vm-2', name: 'Development-Web', state: 'RUNNING' }),
-        createMockVM({ id: 'vm-3', name: 'Test-Database', state: 'STOPPED' }),
+        createMockVM({ id: 'vm-1', name: 'Production-Web', state: 'VM_STATE_RUNNING' }),
+        createMockVM({ id: 'vm-2', name: 'Development-Web', state: 'VM_STATE_RUNNING' }),
+        createMockVM({ id: 'vm-3', name: 'Test-Database', state: 'VM_STATE_STOPPED' }),
       ];
 
       await mockComputeApi(page, { initialVMs: vms });
@@ -1338,7 +1353,7 @@ test.describe('Compute Management', () => {
     });
 
     test('should start a stopped VM', async ({ page }) => {
-      const vm = createMockVM({ id: 'vm-1', name: 'Stopped-VM', state: 'STOPPED' });
+      const vm = createMockVM({ id: 'vm-1', name: 'Stopped-VM', state: 'VM_STATE_STOPPED' });
 
       await mockComputeApi(page, { initialVMs: [vm] });
       await mockTenantApi(page);
@@ -1359,7 +1374,7 @@ test.describe('Compute Management', () => {
     });
 
     test('should stop a running VM', async ({ page }) => {
-      const vm = createMockVM({ id: 'vm-1', name: 'Running-VM', state: 'RUNNING' });
+      const vm = createMockVM({ id: 'vm-1', name: 'Running-VM', state: 'VM_STATE_RUNNING' });
 
       await mockComputeApi(page, { initialVMs: [vm] });
       await mockTenantApi(page);
@@ -1380,7 +1395,7 @@ test.describe('Compute Management', () => {
     });
 
     test('should reboot a VM', async ({ page }) => {
-      const vm = createMockVM({ id: 'vm-1', name: 'Reboot-VM', state: 'RUNNING' });
+      const vm = createMockVM({ id: 'vm-1', name: 'Reboot-VM', state: 'VM_STATE_RUNNING' });
 
       await mockComputeApi(page, { initialVMs: [vm] });
       await mockTenantApi(page);
@@ -1403,7 +1418,7 @@ test.describe('Compute Management', () => {
     });
 
     test('should delete a VM with confirmation', async ({ page }) => {
-      const vm = createMockVM({ id: 'vm-1', name: 'Delete-Me-VM', state: 'STOPPED' });
+      const vm = createMockVM({ id: 'vm-1', name: 'Delete-Me-VM', state: 'VM_STATE_STOPPED' });
 
       const mockApi = await mockComputeApi(page, { initialVMs: [vm] });
       await mockTenantApi(page);
@@ -1462,8 +1477,8 @@ test.describe('Compute Management', () => {
 
     test('should display container list', async ({ page }) => {
       const containers = [
-        createMockContainer({ id: 'c-1', name: 'nginx-proxy', image: 'nginx:latest', state: 'RUNNING' }),
-        createMockContainer({ id: 'c-2', name: 'redis-cache', image: 'redis:7', state: 'STOPPED' }),
+        createMockContainer({ id: 'c-1', name: 'nginx-proxy', image: 'nginx:latest', state: 'CONTAINER_STATE_RUNNING' }),
+        createMockContainer({ id: 'c-2', name: 'redis-cache', image: 'redis:7', state: 'CONTAINER_STATE_STOPPED' }),
       ];
 
       await mockComputeApi(page, { initialContainers: containers });
@@ -1481,8 +1496,8 @@ test.describe('Compute Management', () => {
 
     test('should display container status badges', async ({ page }) => {
       const containers = [
-        createMockContainer({ id: 'c-1', name: 'Running-Container', state: 'RUNNING' }),
-        createMockContainer({ id: 'c-2', name: 'Stopped-Container', state: 'STOPPED' }),
+        createMockContainer({ id: 'c-1', name: 'Running-Container', state: 'CONTAINER_STATE_RUNNING' }),
+        createMockContainer({ id: 'c-2', name: 'Stopped-Container', state: 'CONTAINER_STATE_STOPPED' }),
       ];
 
       await mockComputeApi(page, { initialContainers: containers });
@@ -1513,7 +1528,7 @@ test.describe('Compute Management', () => {
     });
 
     test('should start a stopped container', async ({ page }) => {
-      const container = createMockContainer({ id: 'c-1', name: 'Start-Container', state: 'STOPPED' });
+      const container = createMockContainer({ id: 'c-1', name: 'Start-Container', state: 'CONTAINER_STATE_STOPPED' });
 
       await mockComputeApi(page, { initialContainers: [container] });
       await mockTenantApi(page);
@@ -1534,7 +1549,7 @@ test.describe('Compute Management', () => {
     });
 
     test('should stop a running container', async ({ page }) => {
-      const container = createMockContainer({ id: 'c-1', name: 'Stop-Container', state: 'RUNNING' });
+      const container = createMockContainer({ id: 'c-1', name: 'Stop-Container', state: 'CONTAINER_STATE_RUNNING' });
 
       await mockComputeApi(page, { initialContainers: [container] });
       await mockTenantApi(page);
@@ -1555,7 +1570,7 @@ test.describe('Compute Management', () => {
     });
 
     test('should delete a container', async ({ page }) => {
-      const container = createMockContainer({ id: 'c-1', name: 'Delete-Container', state: 'STOPPED' });
+      const container = createMockContainer({ id: 'c-1', name: 'Delete-Container', state: 'CONTAINER_STATE_STOPPED' });
 
       const mockApi = await mockComputeApi(page, { initialContainers: [container] });
       await mockTenantApi(page);
@@ -1611,7 +1626,7 @@ test.describe('Compute Management', () => {
     });
 
     test('should display snapshot list', async ({ page }) => {
-      const vm = createMockVM({ id: 'vm-1', name: 'Web-Server', state: 'RUNNING' });
+      const vm = createMockVM({ id: 'vm-1', name: 'Web-Server', state: 'VM_STATE_RUNNING' });
       const snapshots = [
         createMockSnapshot({ id: 'snap-1', name: 'Before-Upgrade', vmId: 'vm-1', sizeBytes: 50 * 1024 * 1024 * 1024 }),
         createMockSnapshot({ id: 'snap-2', name: 'Daily-Backup', vmId: 'vm-1', sizeBytes: 100 * 1024 * 1024 * 1024 }),
@@ -1641,7 +1656,7 @@ test.describe('Compute Management', () => {
     });
 
     test('should show message when no snapshots exist', async ({ page }) => {
-      const vm = createMockVM({ id: 'vm-1', name: 'Test-VM', state: 'RUNNING' });
+      const vm = createMockVM({ id: 'vm-1', name: 'Test-VM', state: 'VM_STATE_RUNNING' });
 
       await mockComputeApi(page, { initialVMs: [vm], initialSnapshots: [] });
       await mockTenantApi(page);
@@ -1653,12 +1668,12 @@ test.describe('Compute Management', () => {
     });
 
     test('should restore from snapshot', async ({ page }) => {
-      const vm = createMockVM({ id: 'vm-1', name: 'Test-VM', state: 'STOPPED' });
+      const vm = createMockVM({ id: 'vm-1', name: 'Test-VM', state: 'VM_STATE_STOPPED' });
       const snapshot = createMockSnapshot({
         id: 'snap-1',
         name: 'Restore-Snapshot',
         vmId: 'vm-1',
-        vmState: 'STOPPED',
+        vmState: 'VM_STATE_STOPPED',
       });
 
       await mockComputeApi(page, { initialVMs: [vm], initialSnapshots: [snapshot] });
@@ -1683,7 +1698,7 @@ test.describe('Compute Management', () => {
     });
 
     test('should delete snapshot', async ({ page }) => {
-      const vm = createMockVM({ id: 'vm-1', name: 'Test-VM', state: 'RUNNING' });
+      const vm = createMockVM({ id: 'vm-1', name: 'Test-VM', state: 'VM_STATE_RUNNING' });
       const snapshot = createMockSnapshot({ id: 'snap-1', name: 'Delete-Snapshot', vmId: 'vm-1' });
 
       const mockApi = await mockComputeApi(page, { initialVMs: [vm], initialSnapshots: [snapshot] });
@@ -1755,7 +1770,7 @@ test.describe('Compute Management', () => {
     });
 
     test('should handle VM operation error', async ({ page }) => {
-      const vm = createMockVM({ id: 'vm-1', name: 'Error-VM', state: 'STOPPED' });
+      const vm = createMockVM({ id: 'vm-1', name: 'Error-VM', state: 'VM_STATE_STOPPED' });
 
       await mockComputeApi(page, {
         initialVMs: [vm],
@@ -1800,7 +1815,7 @@ test.describe('Compute Management', () => {
     });
 
     test('should handle container operation error', async ({ page }) => {
-      const container = createMockContainer({ id: 'c-1', name: 'Error-Container', state: 'STOPPED' });
+      const container = createMockContainer({ id: 'c-1', name: 'Error-Container', state: 'CONTAINER_STATE_STOPPED' });
 
       await mockComputeApi(page, {
         initialContainers: [container],
@@ -1852,7 +1867,7 @@ test.describe('Compute Management', () => {
     test('should allow tenant members to view VMs', async ({ page }) => {
       await createTenantMemberSession(page.context());
 
-      const vms = [createMockVM({ id: 'vm-1', name: 'Visible-VM', state: 'RUNNING' })];
+      const vms = [createMockVM({ id: 'vm-1', name: 'Visible-VM', state: 'VM_STATE_RUNNING' })];
 
       await mockComputeApi(page, { initialVMs: vms });
       await mockTenantApi(page);

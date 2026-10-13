@@ -1,5 +1,8 @@
 # EAB gRPC API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `platform.v1.EABService` RPCs and the typed-error to gRPC code mapping.
+
 | Property | Value |
 |----------|-------|
 | Service | `platform.v1.EABService` |

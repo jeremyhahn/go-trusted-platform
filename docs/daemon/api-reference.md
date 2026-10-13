@@ -1,5 +1,8 @@
 # Daemon API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md), the canonical six-transport reference and QUIC category-opcode table. The flat opcodes and the gRPC port 9443 below are stale.
+
 Multi-protocol API documentation for the Trusted Platform daemon.
 
 ## Supported Protocols

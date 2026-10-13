@@ -1,5 +1,8 @@
 # vTPM REST API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md) §2-§4 and §6, which also carries the REST authorization rule this file omits.
+
 Base URL: `https://localhost:8443/api/v1/vtpm`
 
 ## Bundle Endpoints

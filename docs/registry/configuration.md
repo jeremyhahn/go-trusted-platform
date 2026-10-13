@@ -1,5 +1,8 @@
 # Trusted Registry Configuration
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [engineering.md](engineering.md) §4. `pkg/registry/config.go` keys are snake_case (`listen_addr`, `require_attestation`, `quicbaas_addr`, `encrypt_by_default`), not kebab-case; there are no session, logging, `evidence-header` or `max-connections` keys; `../quicbaas/` does not exist.
+
 ## Overview
 
 This document provides the complete configuration reference for the Trusted Registry.

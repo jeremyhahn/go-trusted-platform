@@ -1,5 +1,8 @@
 # Embedded Podman Runtime
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> Deep dive on `pkg/compute/podman`, the embedded OCI runtime under the container orchestrator.
+
 Direct OCI container runtime for trusted computing without external daemon dependencies.
 
 ## Overview
@@ -120,9 +123,15 @@ type PodmanConfig struct {
     // Events logger (file, journald, none)
     EventsLogger string   // Default: file
 
+    Namespace          string
+    NetworkConfigDir   string  // Default: /etc/cni/net.d
+    DefaultNetworkMode string  // Default: bridge
+    DefaultImage       string
+    Debug              bool
+
     // Timeouts
     Timeout     time.Duration  // Default: 30s
-    StopTimeout int            // Default: 10s
+    StopTimeout int            // Default: 10 (seconds)
 
     // Limits
     MaxContainers int  // Default: 100
@@ -238,42 +247,44 @@ if err := manager.StartContainer(ctx, id); err != nil {
 
 ```go
 type ContainerConfig struct {
-    Name         string              // Container name (required)
-    Image        string              // Image reference (required)
-    Command      []string            // Override entrypoint
-    Args         []string            // Command arguments
-    Environment  map[string]string   // Environment variables
-    WorkingDir   string              // Working directory
-    User         string              // User to run as (uid:gid)
-    Mounts       []Mount             // Volume/bind mounts
-    Ports        []PortMapping       // Port mappings
-    Devices      []DeviceMapping     // Device mappings
-    NetworkMode  string              // Network mode
-    Hostname     string              // Container hostname
-    Labels       map[string]string   // Container labels
-    StopTimeout  int                 // Stop timeout (seconds)
-    StopSignal   string              // Stop signal
-    Privileged   bool                // Privileged mode
-    ReadOnly     bool                // Read-only root filesystem
-    TPMAccess    bool                // TPM device access
-    Capabilities *Capabilities       // Linux capabilities
-    Resources    *ResourceConfig     // Resource limits
+    Name        string              // Container name (required, unique)
+    Image       string              // Image reference (required)
+    Command     []string            // Command to run
+    Entrypoint  []string            // Override image entrypoint
+    Environment map[string]string   // Environment variables
+    Labels      map[string]string   // Container labels
+    Mounts      []Mount             // Volume/bind mounts
+    Ports       []PortMapping       // Port mappings
+    Resources   *ResourceLimits     // Resource limits
+    TPMAccess   bool                // TPM device access
+    NetworkMode string              // bridge, host, none, slirp4netns
+    User        string              // User to run as (uid or username)
+    WorkDir     string              // Working directory
+    Hostname    string              // Container hostname
+    Privileged  bool                // Privileged mode
+    ReadOnly    bool                // Read-only root filesystem
+    AutoRemove  bool                // Remove on exit
+    StopTimeout *int                // Stop timeout (seconds)
+    CapAdd      []string            // Linux capabilities to add
+    CapDrop     []string            // Linux capabilities to drop
+    SecurityOpt []string            // Security options
+    DNS         []string            // DNS servers
+    DNSSearch   []string            // DNS search domains
 }
 ```
 
 ### Resource Limits
 
 ```go
-type ResourceConfig struct {
-    MemoryLimit    int64   // Memory limit in bytes
-    MemorySwap     int64   // Memory+swap limit
-    CPUShares      int64   // CPU shares (relative weight)
-    CPUQuota       int64   // CPU quota (microseconds)
-    CPUPeriod      int64   // CPU period (microseconds)
-    CPUSetCPUs     string  // CPUs to use (e.g., "0-3")
-    CPUSetMems     string  // Memory nodes to use
-    PidsLimit      int64   // Process limit
-    BlkioWeight    uint16  // Block I/O weight
+type ResourceLimits struct {
+    MemoryLimit       int64    // Memory limit in bytes
+    MemoryReservation int64    // Memory soft limit in bytes
+    MemorySwap        int64    // Memory+swap limit in bytes
+    CPUQuota          int64    // CPU quota (microseconds per period)
+    CPUPeriod         int64    // CPU CFS period (microseconds)
+    CPUShares         int64    // CPU shares (relative weight)
+    CPUs              float64  // Number of CPUs, e.g. 1.5
+    PidsLimit         int64    // Process limit
 }
 ```
 
@@ -285,7 +296,7 @@ Enable container access to host TPM:
 config := &podman.ContainerConfig{
     Name:      "tpm-aware-container",
     Image:     "my-app:latest",
-    TPMAccess: true,  // Mounts /dev/tpm0 and /dev/tpmrm0
+    TPMAccess: true,  // Adds the /dev/tpm0 device (char 10:224)
 }
 ```
 
@@ -295,16 +306,16 @@ config := &podman.ContainerConfig{
 pkg/compute/podman/
 ├── config.go           # Configuration types (PodmanConfig, ManagerConfig)
 ├── manager.go          # PodmanManager implementation
+├── manager_ops.go      # PodmanManager operations
 ├── runtime.go          # Embedded OCI runtime (crun/runc invocation)
 ├── types.go            # Container, Image, and related types
 ├── attestation.go      # ContainerAttestor interface and types
+├── attach.go           # Container attach
+├── exec.go             # Container exec
+├── metrics.go          # Container metrics
+├── pty_linux.go        # PTY support (pty_other.go elsewhere)
 ├── errors.go           # Typed error definitions
-├── config_test.go      # Configuration tests
-├── manager_test.go     # Manager tests
-├── runtime_test.go     # Runtime tests
-├── types_test.go       # Type tests
-├── attestation_test.go # Attestation tests
-└── errors_test.go      # Error tests
+└── *_test.go           # Unit tests
 ```
 
 ## Error Handling
@@ -317,8 +328,8 @@ var (
     ErrImageNotFound            = errors.New("image not found")
     ErrContainerNotFound        = errors.New("container not found")
     ErrContainerAlreadyExists   = errors.New("container already exists")
-    ErrContainerNotRunning      = errors.New("container not running")
-    ErrContainerAlreadyRunning  = errors.New("container already running")
+    ErrContainerNotRunning      = errors.New("container is not running")
+    ErrContainerAlreadyRunning  = errors.New("container is already running")
     ErrInvalidContainerConfig   = errors.New("invalid container configuration")
 )
 

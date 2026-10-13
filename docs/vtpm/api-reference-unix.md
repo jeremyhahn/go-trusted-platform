@@ -1,5 +1,8 @@
 # vTPM Unix Socket API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md) (Unix is gRPC over the socket and shares the gRPC column) and [cli.md](cli.md). `platformctl vtpm bundle socket-path` does not exist; there is no `vtpm bundle` group.
+
 Socket Path: `/run/platformd.sock`
 Protocol: gRPC over Unix domain socket
 

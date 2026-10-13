@@ -1,5 +1,8 @@
 # Attestation CLI Usage
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [cli.md](cli.md).
+
 ## Overview
 
 The Attestation CLI provides commands for platform attestation operations, TPM management, and container image signing via the `platformctl` command-line interface. These commands enable hardware-backed trust verification, integrity measurement, and secure workload deployment.

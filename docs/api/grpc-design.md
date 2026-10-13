@@ -1,5 +1,8 @@
 # gRPC API Design - Platform Daemon Internal API
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [daemon/api.md](../daemon/api.md) and each feature's `api.md`.
+
 ## 1. Executive Summary
 
 This document presents the comprehensive gRPC API design for the `platformd` daemon, providing a unified interface for privileged platform operations. The design acknowledges that go-trusted-platform is evolving from a standalone certificate authority and TPM management tool into a full-featured trusted computing platform with SDN, compute orchestration, and remote attestation capabilities.

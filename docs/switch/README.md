@@ -1,5 +1,8 @@
 # Physical Switch Management
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [user.md](user.md) and [architecture.md](architecture.md). `cli-reference.md` does not exist (see [cli.md](cli.md)); password auth and `kms://` resolution are not implemented; SSH vendors need `ssh_key` and `known_hosts_path`.
+
 go-trusted-platform includes native switch management for automating physical network port configuration during device provisioning. This feature enables seamless network integration of devices across VLANs without manual switch configuration.
 
 ## Overview

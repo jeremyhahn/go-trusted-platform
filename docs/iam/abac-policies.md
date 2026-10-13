@@ -1,5 +1,8 @@
 # ABAC Policy Syntax Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and [api.md](api.md). RBAC is decided upstream; the REST adapter forwards only `spec.rules[]` name, effect, priority, actions and resources, dropping `when`, `unless`, subjects and variables. No `apiVersion` is read.
+
 Complete reference for Trusted Platform IAM's Attribute-Based Access Control policy language.
 
 ## Policy Document Structure

@@ -126,6 +126,7 @@ pin before planning a partial rollout. The platform moved from 0.2.0-alpha to
 | Template/profile seeding to the control plane | `pkg/bootstrap/seeder.go` | this repo |
 | Node-identity injection into merged device config | `pkg/bootstrap/config_inheritance.go` | this repo |
 | Bootstrap container manifest and deployment | `pkg/bootstrap/container/`, `pkg/bootstrap/deployer/`, `deployer_adapter.go` | this repo |
+| NBD-over-TLS export server for `diskless-nbd` roots | `pkg/bootstrap/nbd/` | this repo |
 | **DANE TLSA publication and RFC 7671 rollover** | `pkg/bootstrap/dane_publisher.go`, `rollover.go` | this repo |
 | TLS certificate hot-reload | `pkg/bootstrap/cert_reloader.go` | this repo |
 | CA-bundle provider for the Noise listener | `pkg/bootstrap/bundle_provider.go` | this repo |
@@ -176,6 +177,50 @@ bind-mounted at `/data`. It serves DHCP, TFTP, HTTP (`:8080`) and, for
 virtual-media installs, an SMB share. `redeploy_mode` decides whether an
 existing container is reused (`if-stale`, the default), always replaced
 (`always`), or treated as an error (`never`).
+
+### NBD export server (`diskless-nbd`)
+
+A `diskless-nbd` node (#689) has no local disk. Its root is a per-device block
+device that the boot server exports over NBD. When the manifest holds at least
+one `diskless-nbd` entry, the container runs the export server
+(`pkg/bootstrap/nbd`) beside DHCP, TFTP and HTTP. It listens on the boot
+server's provisioning address, TCP `10809` by default (the IANA NBD port). That
+address is on the Pi netboot segment, prod VLAN 405, `192.0.2.0/24`, pure L2. The
+other model, `diskless`, is unchanged.
+
+- **Handshake.** Fixed newstyle only. TLS is mandatory: before
+  `NBD_OPT_STARTTLS`, every option except `NBD_OPT_ABORT` is refused, so no
+  export is named or served in plaintext. TLS 1.3 only.
+- **Client authentication.** The node presents its IDevID. The chain must
+  verify against the **platform anchor** (`trust.Anchor`) for client
+  authentication. The anchor is read from the configured platform CA file on
+  every handshake, the same model gatewayd uses
+  ([trust](../trust/architecture.md#21-platform-anchor)). An anchor that is
+  not yet there fails closed.
+- **Export selection.** The identity is the certificate's subject CN, which is
+  the enrollment hostname. It must belong to a `diskless-nbd` entry in the
+  manifest. That identity is the node's only export. An empty export name
+  means that export, and the node's own identity names it too. Any other name
+  is refused (`NBD_REP_ERR_POLICY`).
+- **Volumes.** One file per device, `<volume-dir>/<identity>.img`. It is
+  created sparse at the configured size on first attach, and kept at its size
+  afterwards. The node LUKS-encrypts it (#685), so the server holds ciphertext
+  only.
+- **Commands.** `READ`, `WRITE` (with `FUA`), `FLUSH`, `TRIM` and `DISC`.
+  A command that fails is answered with an NBD error code. Only a malformed
+  request (a bad magic or a truncated payload) closes the connection.
+
+The node side (the attach in `platform-initrd` and the installer's `nbd` target)
+is **Planned**; see [installer architecture](../installer/architecture.md#2-the-shape-chosen).
+The container's listen address, volume directory, volume size, platform CA
+bundle and server certificate come from its configuration (pxeboot flags,
+`BOOTSTRAP_NBD_*` in the container), required only when the manifest has a
+`diskless-nbd` entry ([engineering](engineering.md#nbd-export-server-pkgbootstrapnbd)).
+The listener binds before the device-script port, so the deploy gate's
+readiness probe covers it.
+`bootstrap.yaml` does not yet accept `boot_model: diskless-nbd`, so for now
+the server starts only for a manifest that names that model directly. The
+server lives as long as the container does, so the Phase 7 teardown stops it.
 
 ### Phase 3 · Control plane
 
@@ -411,6 +456,14 @@ platform is first drawn here.
    store. Both are explicit choices made by installer configuration. There is no
    third behaviour where a recovery passphrase quietly persists somewhere nobody
    audits.
+
+10. **Node → NBD export server.** The only channel in the bootstrap container
+    that serves per-device data, and the only one authenticated by the node's
+    identity. No export is reachable without TLS 1.3 and an IDevID that
+    chains to the platform anchor. The IDevID selects exactly one export,
+    whatever the client asks for. The server never sees plaintext: the node
+    encrypts its root with LUKS and seals the key to its own TPM. So a
+    compromised boot server can deny service but cannot read a root.
 
 ## What this feature deliberately does not do
 

@@ -1,5 +1,8 @@
 # LUKS Unlock Strategies
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and [engineering.md](engineering.md). The seal files are `seal-platform.pub`/`.priv`, FIDO2 priority is 3, the Keyfile (80) and TPMNoPCR (5) strategies are missing below, and there is no `strategy_firstboot_seal.go`.
+
 This document describes the unlock strategies available in the Trusted Platform initramfs.
 
 ## Strategy Architecture

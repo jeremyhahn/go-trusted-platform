@@ -1,5 +1,8 @@
 # iPXE Configuration Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [engineering.md](engineering.md) §4. `ServerConfig` is flat (`EnableDHCP` default `false`, `DHCPRangeStart`/`DHCPRangeEnd` required with it, `DHCPLeaseTime` a `time.Duration`, `LocalFilesDir` default `/var/lib/ipxe`); `DHCPConfig` is the DHCP server's internal `net.IP` struct, not a field. The Bind address section is current.
+
 ## ServerConfig
 
 Main configuration structure for the PXE server.

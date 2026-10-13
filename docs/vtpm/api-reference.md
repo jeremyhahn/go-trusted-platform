@@ -1,5 +1,8 @@
 # vTPM API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md), one row per capability across all six transports. The gRPC TCP port is 10443, not 9443.
+
 The vTPM service exposes bundle and template management operations via multiple protocols for maximum interoperability.
 
 ## Supported Protocols

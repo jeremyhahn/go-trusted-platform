@@ -1,5 +1,8 @@
 # Provisioning Secrets
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md), [user.md](user.md) and [config-secret-schemes.md](config-secret-schemes.md). The `auto-generate`/`migrate-to-kms`/`update-config-file` keys do not exist, `autogen://` is a go-quicbaas scheme (generation is `kms://…?ensure=true`), and gRPC listens on 10443, not 9443.
+
 This document describes how secrets are provisioned to nodes in go-trusted-platform.
 
 ## Overview

@@ -20,6 +20,14 @@
 #   BOOTSTRAP_TFTP_DIR    Raspberry Pi boot tree to serve over TFTP (optional)
 #   BOOTSTRAP_ARM64_IPXE  db-signed arm64 iPXE served as snponly-aarch64.efi (optional)
 #   BOOTSTRAP_PROXY_DHCP  "true": proxy DHCP, the segment's own server leases (optional)
+#
+# NBD export server, read only when the manifest has a diskless-nbd node:
+#   BOOTSTRAP_NBD_LISTEN       listen address (default BOOTSTRAP_SERVER_IP:10809)
+#   BOOTSTRAP_NBD_VOLUME_DIR   per-node root volumes (default <data dir>/nbd)
+#   BOOTSTRAP_NBD_VOLUME_SIZE  bytes of a new root volume, a multiple of 512
+#   BOOTSTRAP_NBD_CA_FILE      platform CA bundle that verifies client IDevIDs
+#   BOOTSTRAP_NBD_CERT         server TLS certificate
+#   BOOTSTRAP_NBD_KEY          server TLS private key
 
 set -eu
 
@@ -62,6 +70,24 @@ case "${BOOTSTRAP_PROXY_DHCP:-false}" in
     false) ;;
     *) echo "BOOTSTRAP_PROXY_DHCP must be true or false, got $BOOTSTRAP_PROXY_DHCP" >&2; exit 2 ;;
 esac
+if [ -n "${BOOTSTRAP_NBD_LISTEN:-}" ]; then
+    BOOTSTRAP_PXEBOOT_ARGS="$BOOTSTRAP_PXEBOOT_ARGS --nbd-listen $BOOTSTRAP_NBD_LISTEN"
+fi
+if [ -n "${BOOTSTRAP_NBD_VOLUME_DIR:-}" ]; then
+    BOOTSTRAP_PXEBOOT_ARGS="$BOOTSTRAP_PXEBOOT_ARGS --nbd-volume-dir $BOOTSTRAP_NBD_VOLUME_DIR"
+fi
+if [ -n "${BOOTSTRAP_NBD_VOLUME_SIZE:-}" ]; then
+    BOOTSTRAP_PXEBOOT_ARGS="$BOOTSTRAP_PXEBOOT_ARGS --nbd-volume-size $BOOTSTRAP_NBD_VOLUME_SIZE"
+fi
+if [ -n "${BOOTSTRAP_NBD_CA_FILE:-}" ]; then
+    BOOTSTRAP_PXEBOOT_ARGS="$BOOTSTRAP_PXEBOOT_ARGS --nbd-ca-file $BOOTSTRAP_NBD_CA_FILE"
+fi
+if [ -n "${BOOTSTRAP_NBD_CERT:-}" ]; then
+    BOOTSTRAP_PXEBOOT_ARGS="$BOOTSTRAP_PXEBOOT_ARGS --nbd-cert $BOOTSTRAP_NBD_CERT"
+fi
+if [ -n "${BOOTSTRAP_NBD_KEY:-}" ]; then
+    BOOTSTRAP_PXEBOOT_ARGS="$BOOTSTRAP_PXEBOOT_ARGS --nbd-key $BOOTSTRAP_NBD_KEY"
+fi
 
 export BOOTSTRAP_INTERFACE BOOTSTRAP_HTTP_PORT BOOTSTRAP_SERVER_IP \
        BOOTSTRAP_DHCP_START BOOTSTRAP_DHCP_END BOOTSTRAP_GATEWAY BOOTSTRAP_DNS \

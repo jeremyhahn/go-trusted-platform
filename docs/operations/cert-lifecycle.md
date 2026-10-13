@@ -1,5 +1,8 @@
 # Certificate Lifecycle -- Operator Runbook
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> How platformd issues, registers and renews its managed TLS certificates (`pkg/app` cert targets and the renewal job).
+
 How the platform issues, deploys, and renews TLS certificates for
 its managed identities (webservices + BMCs), and how operators
 intervene when the automatic flow needs a nudge.
@@ -24,10 +27,11 @@ intervene when the automatic flow needs a nudge.
 | Kind | Where configured | Issuance trigger |
 |---|---|---|
 | `CertKindWebservice` | `WebServices` list in platform YAML | `App.InitWebServer()` at boot |
-| `CertKindBMC` | `bmc:` block in platform YAML | `App.InitBMCCertManagement()` at boot |
+| `CertKindBMC` | `bmc:` block in platform YAML | `initBMCCertManagement`, called from `App.InitCertManagement()` at boot |
+| `CertKindNTS` | `ntp.serve.nts` in platform YAML | `App.RegisterNTSCertTarget()` at boot (`pkg/daemon/commands/cert_renewal_wiring.go`) |
 
-Future kinds: Kubernetes ingress, SDN switch mgmt, etc. The
-registry is kind-agnostic.
+A new kind is added to `validCertKinds` in `pkg/app/cert_targets.go`;
+the sweep itself treats every kind the same.
 
 ## The renewal job
 
@@ -262,7 +266,7 @@ platformctl bmc cert replace \
 ### Rotate all certs on a node
 
 Kill the platformd process -- on next boot `InitWebServer` +
-`InitBMCCertManagement` re-issue every managed cert from scratch.
+`InitCertManagement` re-issue every managed cert from scratch.
 Existing certs with time remaining aren't touched, but any near-
 expiry certs will be renewed.
 
@@ -283,8 +287,8 @@ Fix: either
 2. Pin to `bmc.backend: smc-cgi` (opt into the CGI path for this
    BMC; bypasses the gate), or
 3. Run the X10 hardware validation procedure at
-   `docs/operations/x10-smc-cgi-validation.md` and flip the gate
-   platform-wide.
+   `docs/operations/x10-smc-cgi-validation.md` and set
+   `bmc.allow_cgi_fallback: true` for the validated BMC.
 
 ### `ErrRotationReverted` / `ErrRotationCatastrophic` in logs
 
@@ -301,7 +305,7 @@ Inspect the JSON payload for per-target errors. Common causes:
 - ACME rate limit hit -- wait, then trigger manually
 - BMC unreachable -- network issue; next tick will retry
 - Local CA unavailable -- platform CA service not ready; check
-  `platformctl ca status`
+  `platformctl ca info`
 
 ### Renewal job exists but never fires
 

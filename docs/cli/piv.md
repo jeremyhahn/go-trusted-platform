@@ -1,5 +1,8 @@
 # `platformctl piv`
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `platformctl piv` command reference, wire mapping and scopes.
+
 PIV (Personal Identity Verification, NIST SP 800-73-4) smartcard operations.
 
 Routes through `platform.Client.PIV()` and the platform SDK PIV service
@@ -14,8 +17,8 @@ store constructor and its registration (`NewPIVFileBackend`,
 `RegisterPIVStore`) are not re-exported under `go-quicbaas/sdk/go/xkms`
 (v0.12, nor v0.14). Building a local store would reimplement an SDK
 capability, so the gap closes upstream: once quicbaas re-exports them,
-`wireSDKBackends` (`pkg/daemon/commands/serve_sdk_backends.go`) wires PIV
-beside the ceremony and FIDO2 backends.
+`WireSDKBackends` (`pkg/app/backends/sdk_wiring.go`) wires PIV
+beside the ceremony backend.
 
 The subcommands honor the global flags `--config`, `--context`,
 `--transport`, `--server`, `--output`.
@@ -129,7 +132,7 @@ through the PIV service client exposed by `platform.Client.PIV()`.
 |------------|------|----------|
 | `piv list-devices` | `GET /api/v1/piv/devices` | `platform_piv_list_devices` |
 | `piv list-slots` | `GET /api/v1/piv/devices/{device}/slots` | `platform_piv_list_slots` |
-| `piv slot-info` | `GET /api/v1/piv/slots/{slot}` | `platform_piv_slot_info` |
+| `piv info` | `GET /api/v1/piv/slots/{slot}` | `platform_piv_slot_info` |
 | `piv generate` | `POST /api/v1/piv/slots/{slot}/generate` | `platform_piv_generate` |
 | `piv import` | `POST /api/v1/piv/slots/{slot}/import` | `platform_piv_import` |
 | `piv sign` | `POST /api/v1/piv/slots/{slot}/sign` | `platform_piv_sign` |
@@ -151,7 +154,7 @@ The embedded transport dispatches every RPC in-process through
 |------------|----------------------------------------|-----------------|-------|
 | `piv list-devices` | `ListDevices` | `0x01` | `piv:read` |
 | `piv list-slots` | `ListSlots` | `0x02` | `piv:read` |
-| `piv slot-info` | `SlotInfo` | `0x03` | `piv:read` |
+| `piv info` | `SlotInfo` | `0x03` | `piv:read` |
 | `piv generate` | `Generate` | `0x04` | `piv:write` |
 | `piv import` | `Import` | `0x05` | `piv:write` |
 | `piv sign` | `Sign` | `0x06` | `piv:write` |

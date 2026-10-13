@@ -29,6 +29,7 @@
 | `seeder.go` | `Seeder`, template upload, profile creation |
 | `config_inheritance.go` | `ApplyNetworkIdentity`, `ApplyNodeIdentity`, `DeviceIdentity` |
 | `container/` | `Manifest`, `ManifestEntry`, `BuildManifest`, `LoadManifest`, the container-side `Server` |
+| `nbd/` | The NBD-over-TLS export server for `diskless-nbd` roots (§2) |
 | `deployer/` | `Deployer`, `DeployConfig`, `DeployResult`, the Linux backend, pinned SSH, netboot media staging |
 | `deployer_adapter.go` | `NewLinuxDeployerAdapter` — the only translation from platform config to `deployer.DeployConfig` |
 | `dane_publisher.go` | `DANEPublisher`, `DANEDNSService` |
@@ -250,6 +251,119 @@ bootstrap calls (`CeremonyInitialize`, `CeremonyStatus`, `BeginClaimCert`,
 seal-strategy constants are documented in
 [`docs/barrier/engineering.md` §2](../barrier/engineering.md#2-barriermanager)
 and [§3](../barrier/engineering.md#3-configuration).
+
+### NBD export server (`pkg/bootstrap/nbd`)
+
+This is the boot-server half of `boot_model: diskless-nbd` (#689). The design
+is in [architecture.md](architecture.md#nbd-export-server-diskless-nbd).
+
+```go
+const BootModel = "diskless-nbd"
+const DefaultPort = 10809
+
+func NewServer(cfg Config) (*Server, error)
+func (s *Server) Serve(ctx context.Context, ln net.Listener) error
+func (s *Server) Close() error
+```
+
+`Config` holds the following fields:
+
+- `Certificate`: the server's TLS certificate.
+- `Anchor`: a `*trust.Anchor`, the platform anchor.
+- `Identities`: the hostnames of the manifest's `diskless-nbd` entries.
+- `VolumeDir` and `VolumeSize`: where volumes live and the size each is
+  created at.
+- `HandshakeTimeout`: default 30 s. It bounds the whole negotiation, the TLS
+  handshake included; transmission has no deadline.
+- `Logger`.
+
+`Serve` returns `nil` when its context is cancelled or `Close` is called. In
+either case it first closes the listener and every open connection, then
+waits for their goroutines.
+
+**Negotiation.** Only fixed newstyle is accepted. The server greets with
+`NBD_FLAG_FIXED_NEWSTYLE | NBD_FLAG_NO_ZEROES`. A client whose flags lack
+`NBD_FLAG_C_FIXED_NEWSTYLE`, or carry an unknown bit, is disconnected. The
+options are:
+
+| Option | Before TLS | After TLS |
+|---|---|---|
+| `NBD_OPT_STARTTLS` | `ACK`, then the TLS 1.3 handshake | `NBD_REP_ERR_INVALID` |
+| `NBD_OPT_GO`, `NBD_OPT_INFO` | `NBD_REP_ERR_TLS_REQD` | `NBD_INFO_EXPORT` (plus `NBD_INFO_NAME`, `NBD_INFO_BLOCK_SIZE` when asked), then `ACK`; `GO` enters transmission |
+| `NBD_OPT_EXPORT_NAME` | connection closed (this option has no error reply) | export size and flags, then transmission |
+| `NBD_OPT_ABORT` | `ACK`, close | `ACK`, close |
+| any other | `NBD_REP_ERR_TLS_REQD` | `NBD_REP_ERR_UNSUP` |
+
+**Client verification.** The TLS configuration asks for a client certificate
+and verifies it in `VerifyConnection`. That callback reads `Anchor.CAPool` for
+this handshake and calls `x509.Certificate.Verify` with `ExtKeyUsageClientAuth`
+and the presented intermediates. This is the same check attestation caller
+admission makes, and there is no second trust store. A CA rotation on disk
+applies to the next handshake.
+
+**Refusals.** Each one ends the connection, or refuses the option, with the
+typed error that `serveConn` returns and `Serve` logs:
+
+| Condition | On the wire | Typed error |
+|---|---|---|
+| client flags lack fixed newstyle or carry unknown bits | closed after the flags | `ErrUnsupportedClientFlags` |
+| an option before `STARTTLS` | `NBD_REP_ERR_TLS_REQD`; `EXPORT_NAME` closes | `ErrTLSRequired` |
+| no client certificate | TLS alert | `ErrClientCertificateRequired` |
+| chain does not verify against the anchor | TLS alert | `ErrClientCertificateUntrusted` |
+| anchor unreadable or empty | TLS alert | `ErrTrustAnchor` (wraps `trust.ErrAnchorUnavailable` / `ErrAnchorEmpty`) |
+| verified identity not a `diskless-nbd` node | TLS alert | `ErrUnknownIdentity` |
+| export name neither empty nor the identity | `NBD_REP_ERR_POLICY`; `EXPORT_NAME` closes | `ErrExportNotPermitted` |
+| volume cannot be created or opened | `NBD_REP_ERR_PLATFORM`; `EXPORT_NAME` closes | `ErrVolume` |
+| bad magic, oversized option, truncated message, `HandshakeTimeout` passed | closed | `ErrProtocol` |
+| any other handshake failure | closed | `ErrTLSHandshake` |
+
+**Transmission.** Requests are served in order on each connection, and every
+reply is a simple reply. The export flags are `HAS_FLAGS | SEND_FLUSH |
+SEND_FUA | SEND_TRIM`. The largest payload is 32 MiB.
+
+| Command | Behaviour | Error codes |
+|---|---|---|
+| `READ` | reads the range | `EINVAL` out of range, over 32 MiB or unknown flags; `EIO` on a read failure |
+| `WRITE` | writes the payload; with `FUA`, fsyncs before replying | `ENOSPC` past the end; `EINVAL` over 32 MiB (payload discarded) or unknown flags; `EIO` |
+| `FLUSH` | fsyncs the volume | `EIO` |
+| `TRIM` | punches a hole (`FALLOC_FL_PUNCH_HOLE`), or writes zeros where the filesystem cannot, so a trimmed range reads back as zeros | `EINVAL` out of range; `EIO` |
+| `DISC` | fsyncs, closes the volume and the connection; no reply | — (a failed fsync ends the session with `ErrVolume`) |
+| any other | — | `EINVAL` |
+
+**Volumes.** A volume lives at `<VolumeDir>/<identity>.img`. The directory is
+`0700` and each file `0600`. It is created with `O_EXCL` and truncated to
+`VolumeSize` on the first attach. After that it keeps its own size, so changing
+`VolumeSize` affects only new devices. Creation is serialised so that two first
+attaches cannot race. `VolumeSize` must be positive and a multiple of 512. An
+identity is accepted only as a DNS hostname (letters, digits, `-` and `.`), so
+it can never name a path outside `VolumeDir`.
+
+**Container wiring.** `container.NewServer` builds the export server only when
+the manifest has a `diskless-nbd` entry; the identities are those entries'
+hostnames, each once. Its settings are `ServerConfig.NBD`
+(`container.NBDConfig`), set from pxeboot flags, which the entrypoint sets
+from `BOOTSTRAP_NBD_*`:
+
+| `NBDConfig` field | pxeboot flag | Entrypoint variable | Default | Required |
+|---|---|---|---|---|
+| `ListenAddr` | `--nbd-listen` | `BOOTSTRAP_NBD_LISTEN` | `<dhcp-server-ip>:10809` | — |
+| `VolumeDir` | `--nbd-volume-dir` | `BOOTSTRAP_NBD_VOLUME_DIR` | `<data-dir>/nbd` | — |
+| `VolumeSize` | `--nbd-volume-size` | `BOOTSTRAP_NBD_VOLUME_SIZE` | none | yes, bytes, a multiple of 512 |
+| `CAFile` | `--nbd-ca-file` | `BOOTSTRAP_NBD_CA_FILE` | none | yes, the platform CA bundle |
+| `CertFile` | `--nbd-cert` | `BOOTSTRAP_NBD_CERT` | none | yes |
+| `KeyFile` | `--nbd-key` | `BOOTSTRAP_NBD_KEY` | none | yes |
+
+A manifest with no `diskless-nbd` entry needs none of them, and no NBD port
+opens. With one, a missing or malformed field fails `NewServer` with
+`ErrInvalidServerConfig` (`nbd.listen_addr`, `nbd.volume_size`, `nbd.ca_file`,
+`nbd.cert_file`, `nbd.key_file`), an unreadable or mismatched certificate and
+key with `ErrNBDCredentials`, and a value the export server refuses with
+`nbd.ErrInvalidConfig`. `Start` binds the NBD listener after the iPXE
+listeners and before the device-script port, so the port the deploy gate
+probes answers only once a `diskless-nbd` root is reachable; a failed bind is
+`ErrServerStartFailed` and the device-script port never opens. `Stop` closes
+the export server. The deployer does not set these variables yet:
+`bootstrap.yaml` does not accept `boot_model: diskless-nbd`.
 
 ## 3. Invariants
 
@@ -825,7 +939,9 @@ and — for a netboot media build — `BOOTSTRAP_TFTP_DIR`, `BOOTSTRAP_ARM64_IPX
 and `BOOTSTRAP_PROXY_DHCP`, all set from the deployer block (the optional four
 are assembled into one
 `BOOTSTRAP_PXEBOOT_ARGS`, since an unset supervisord `%(ENV_*)s` would leave a
-bare flag). An
+bare flag). The NBD export server's `BOOTSTRAP_NBD_*` variables join
+`BOOTSTRAP_PXEBOOT_ARGS` the same way; the deployer does not set them yet
+(§2, *NBD export server*). An
 unset port is omitted from the `docker run` command entirely so the entrypoint's
 own default applies, and `BOOTSTRAP_DEVICE_SCRIPT_PORT` defaults to
 `BOOTSTRAP_HTTP_PORT + 1` there, matching the offset pxeboot applies when its

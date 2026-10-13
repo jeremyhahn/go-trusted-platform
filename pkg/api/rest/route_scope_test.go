@@ -88,12 +88,48 @@ var ntpRouteScopes = []guardedRoute{
 	{http.MethodPost, "/api/v1/ntp/step", "ntp:write"},
 }
 
-// guardedRouter mounts the VPN and NTP routes with no service behind them,
-// so a request the guard admits answers 503.
+// computeRouteScopes is every compute route with the scope of its gRPC twin.
+var computeRouteScopes = []guardedRoute{
+	{http.MethodPost, "/api/v1/compute/vms", "vm:write"},
+	{http.MethodGet, "/api/v1/compute/vms", "vm:read"},
+	{http.MethodGet, "/api/v1/compute/vms/vm-1", "vm:read"},
+	{http.MethodDelete, "/api/v1/compute/vms/vm-1", "vm:delete"},
+	{http.MethodPost, "/api/v1/compute/vms/vm-1/start", "vm:write"},
+	{http.MethodPost, "/api/v1/compute/vms/vm-1/stop", "vm:write"},
+	{http.MethodPost, "/api/v1/compute/vms/vm-1/reboot", "vm:write"},
+	{http.MethodGet, "/api/v1/compute/vms/vm-1/metrics", "vm:read"},
+	{http.MethodPost, "/api/v1/compute/vms/vm-1/migrate", "vm:write"},
+	{http.MethodPost, "/api/v1/compute/vms/vm-1/disks", "vm:write"},
+	{http.MethodDelete, "/api/v1/compute/vms/vm-1/disks/disk-1", "vm:write"},
+	{http.MethodPatch, "/api/v1/compute/vms/vm-1/disks/disk-1", "vm:write"},
+	{http.MethodPost, "/api/v1/compute/vms/vm-1/snapshots", "vm:write"},
+	{http.MethodGet, "/api/v1/compute/vms/vm-1/snapshots", "vm:read"},
+	{http.MethodDelete, "/api/v1/compute/vms/vm-1/snapshots/snap-1", "vm:delete"},
+	{http.MethodPost, "/api/v1/compute/vms/vm-1/snapshots/snap-1/restore", "vm:write"},
+	{http.MethodPost, "/api/v1/compute/vms/vm-1/attest", "vm:read"},
+	{http.MethodPost, "/api/v1/compute/vms/vm-1/attest/verify", "vm:read"},
+	{http.MethodPost, "/api/v1/compute/containers", "container:write"},
+	{http.MethodGet, "/api/v1/compute/containers", "container:read"},
+	{http.MethodDelete, "/api/v1/compute/containers", "container:delete"},
+	{http.MethodPost, "/api/v1/compute/containers/start", "container:write"},
+	{http.MethodPost, "/api/v1/compute/containers/stop", "container:write"},
+	{http.MethodPost, "/api/v1/compute/containers/attest", "container:read"},
+	{http.MethodGet, "/api/v1/compute/containers/ctr-1", "container:read"},
+	{http.MethodDelete, "/api/v1/compute/containers/ctr-1", "container:delete"},
+	{http.MethodPost, "/api/v1/compute/containers/ctr-1/start", "container:write"},
+	{http.MethodPost, "/api/v1/compute/containers/ctr-1/stop", "container:write"},
+	{http.MethodPost, "/api/v1/compute/containers/ctr-1/exec", "container:write"},
+	{http.MethodPost, "/api/v1/compute/containers/ctr-1/attest", "container:read"},
+	{http.MethodGet, "/api/v1/compute/containers/ctr-1/metrics", "container:read"},
+}
+
+// guardedRouter mounts the VPN, NTP and compute routes with no service behind
+// them, so a request the guard admits answers 503.
 func guardedRouter(guard *ScopeGuard) *mux.Router {
 	router := mux.NewRouter()
 	NewVPNHandlers(nil, guard, nil).RegisterRoutes(router)
 	NewNTPHandlers(nil, guard, nil).RegisterRoutes(router)
+	NewComputeHandlers(nil, guard, nil).RegisterRoutes(router)
 	return router
 }
 
@@ -115,6 +151,7 @@ func TestScopeGuard_EachRouteAdmitsItsScopeAndRefusesOthers(t *testing.T) {
 	}{
 		{"vpn", vpnRouteScopes, "ntp:read"},
 		{"ntp", ntpRouteScopes, "vpn:read"},
+		{"compute", computeRouteScopes, "ntp:read"},
 	} {
 		t.Run(group.name, func(t *testing.T) {
 			for _, route := range group.routes {
@@ -142,9 +179,9 @@ func TestScopeGuard_EachRouteAdmitsItsScopeAndRefusesOthers(t *testing.T) {
 
 func TestScopeGuard_ReadScopeDoesNotOpenWriteOrAdminRoutes(t *testing.T) {
 	router := guardedRouter(NewScopeGuard(&scopedAuthorizer{scopes: map[string][]string{
-		"reader": {"vpn:read", "ntp:read"},
+		"reader": {"vpn:read", "ntp:read", "vm:read", "container:read"},
 	}}, nil, nil))
-	for _, route := range slices.Concat(vpnRouteScopes, ntpRouteScopes) {
+	for _, route := range slices.Concat(vpnRouteScopes, ntpRouteScopes, computeRouteScopes) {
 		recorder := serveWithToken(router, route, "reader")
 		if strings.HasSuffix(route.scope, ":read") {
 			assert.Equal(t, http.StatusServiceUnavailable, recorder.Code, "%s %s", route.method, route.path)
@@ -156,7 +193,7 @@ func TestScopeGuard_ReadScopeDoesNotOpenWriteOrAdminRoutes(t *testing.T) {
 
 func TestScopeGuard_NilGuardRefusesEveryRoute(t *testing.T) {
 	router := guardedRouter(nil)
-	for _, route := range slices.Concat(vpnRouteScopes, ntpRouteScopes) {
+	for _, route := range slices.Concat(vpnRouteScopes, ntpRouteScopes, computeRouteScopes) {
 		recorder := serveWithToken(router, route, operatorToken)
 		assert.Equal(t, http.StatusForbidden, recorder.Code, "%s %s", route.method, route.path)
 
@@ -200,7 +237,7 @@ func certificateRequest(method, target, cn string) *http.Request {
 
 func TestScopeGuard_VerifiedClientCertificateIsTheCredential(t *testing.T) {
 	router := guardedRouter(NewScopeGuard(nil, grantingPeers{scopes: []string{"*:*"}}, nil))
-	for _, route := range slices.Concat(vpnRouteScopes, ntpRouteScopes) {
+	for _, route := range slices.Concat(vpnRouteScopes, ntpRouteScopes, computeRouteScopes) {
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, certificateRequest(route.method, route.path, "operator"))
 		assert.Equal(t, http.StatusServiceUnavailable, recorder.Code, "%s %s", route.method, route.path)

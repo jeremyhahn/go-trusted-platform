@@ -1,5 +1,8 @@
 # Host Manifest
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `pkg/attestation/manifest` builder, signer and verifier API; [architecture.md](architecture.md) is normative.
+
 The host manifest aggregates attestations from a host's physical TPM, VMs, and containers into a single signed document. A Merkle tree provides efficient integrity verification of all components.
 
 ## Overview

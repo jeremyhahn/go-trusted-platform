@@ -1,5 +1,8 @@
 # Invitation API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [../auth/invitation-flow.md](../auth/invitation-flow.md) and [api.md](api.md). gRPC is 10443, not 9443.
+
 Complete API reference for invitation management in go-trusted-platform. The Invitation API enables tenant owners to invite new users to join their tenant with pre-assigned roles.
 
 ## Protocol Overview

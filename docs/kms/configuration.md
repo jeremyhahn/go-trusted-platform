@@ -1,5 +1,8 @@
 # KMS Configuration
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [engineering.md](engineering.md) §6. The platform config has no top-level `keystores:` block and no cloud-backend sections; platformd reads `tpm.platform-srk:` (`tpm.keystore:` is only a firstboot fallback); nothing reads `KMS_SRK_AUTH` or `PKCS11_PIN`; cloud backends are built in with `WITH_*` variables ([build-tags.md](../configuration/build-tags.md)), not `go build -tags`.
+
 ## Overview
 
 Key management in the Trusted Platform is configured through several configuration sections rather than a standalone `kms:` block. Keys are managed through:

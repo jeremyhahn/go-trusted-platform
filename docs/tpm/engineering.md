@@ -533,16 +533,18 @@ Recorded here so they are debts with a location, not discoveries:
    find the other.
 6. **The daemon REST listener's TPM routes are a thin protojson front for
    `TPMService`.** Each `TPMHandlers` route decodes the RPC's request message
-   (body, then query and path parameters through `decodeTPMParams`), calls the
+   (body, then query and path parameters through `decodeProtoParams`, the
+   decoder the compute routes share in `pkg/api/rest/protorest.go`), calls the
    RPC on the same `TPMGRPCService` gRPC serves, and writes the response
    message; it holds no TPM logic. A field the message does not have is `400`,
    never ignored, so a client and server that disagree on a name fail loudly
-   instead of running with a default ([api.md](api.md) §1). The LDevID CSR and
-   `ActivateCredential` are not `TPMHandlers` routes.
+   instead of running with a default ([api.md](api.md) §1). The LDevID CSR is
+   not a `TPMHandlers` route; `POST /tpm/activate-credential` is, calling
+   `TPMService.ActivateCredential` under `tpm:write`.
 7. **The daemon REST listener's device-identity routes carry no scope.**
-   `/api/v1/tpm/idevid*`, `/tpm/iak*` and
-   `/tpm/activate-credential` (`pkg/api/daemon/rest_idevid.go`) rely on mTLS
-   alone, where `TPMHandlers` routes need a scoped platform token.
+   `/api/v1/tpm/idevid*`, `/tpm/iak*` and `/tpm/device/attributes`
+   (`pkg/api/daemon/rest_idevid.go`) rely on mTLS alone, where `TPMHandlers`
+   routes need a scoped platform token.
 
 ## 14. Related
 

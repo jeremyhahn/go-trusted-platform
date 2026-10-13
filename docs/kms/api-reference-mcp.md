@@ -1,5 +1,8 @@
 # KMS MCP API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md). It documents 18 of the 26 tools; `kms_export_public_key`, `kms_sign`, `kms_verify`, `kms_encrypt`, `kms_decrypt`, `kms_random`, `kms_generate_data_key` and `kms_generate_wrapped_data_key` are missing.
+
 Model Context Protocol (MCP) tools for KMS operations.
 
 | Property | Value |

@@ -1,5 +1,8 @@
 # Cluster API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and its siblings; describes an API surface and a `platformctl cluster` CLI that do not exist.
+
 ## Overview
 
 The Cluster API provides management operations for go-trusted-platform cluster deployments, including cluster formation, membership management, and status monitoring.
@@ -493,4 +496,4 @@ Cluster management operations are rate limited:
 - [CLI Usage](cli-usage.md) - Command-line interface
 - [Configuration](configuration.md) - Cluster configuration
 - [Architecture](architecture.md) - Cluster architecture
-- [Roadmap](ROADMAP.md) - Development roadmap
+- [Roadmap](../ROADMAP.md) - Development roadmap

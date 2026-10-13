@@ -1,5 +1,8 @@
 # Platform Authentication
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [../auth/](../auth/architecture.md). The `../../libs/configs/` path below does not exist.
+
 Trusted Platform Security Officer's log in via the Security Officer PIN.
 
 Trusted Platform Administrators and/or Users perform authentication via

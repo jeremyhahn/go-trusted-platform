@@ -18,8 +18,6 @@ package compute_test
 import (
 	"context"
 	"fmt"
-	"net"
-	"strings"
 
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
@@ -80,14 +78,7 @@ func NewUnixAdapter() *UnixAdapter {
 
 // Setup creates a gRPC connection over the Unix domain socket.
 func (a *UnixAdapter) Setup(ctx context.Context) error {
-	conn, err := grpc.DialContext(ctx, "unix://"+a.socketPath,
-		helpers.GRPCUnixCredentials(),
-		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-			socketAddr := strings.TrimPrefix(addr, "unix://")
-			var d net.Dialer
-			return d.DialContext(ctx, "unix", socketAddr)
-		}),
-	)
+	conn, err := grpc.NewClient("unix://"+a.socketPath, helpers.GRPCUnixCredentials())
 	if err != nil {
 		return ErrUnixConnectionFailed{
 			Path: a.socketPath,
@@ -189,7 +180,7 @@ func (a *UnixAdapter) GetVM(ctx context.Context, opts GetVMOptions) (*GetVMResul
 	if vm == nil {
 		return nil, ErrUnixRPCFailed{
 			Method: "GetVM",
-			Err:    ErrVMNotFound{VMID: opts.VMID},
+			Err:    ErrVMNotFound(opts),
 		}
 	}
 

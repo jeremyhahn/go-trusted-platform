@@ -1,5 +1,8 @@
 # BMC integration testing
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md), [engineering.md](engineering.md), [api.md](api.md), [cli.md](cli.md) and [user.md](user.md).
+
 Integration tests for BMC cert management and power control run against
 a real containerized vBMC responder -- per project rules, **never
 against mocks or httptest** at the integration level.

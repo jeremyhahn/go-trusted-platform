@@ -1,5 +1,8 @@
 # IMA API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md). There is no `WithTPMSysPath` option; `GetStatus` leaves most `Status` fields zero, and `UnexpectedFiles` is never populated ([architecture.md §9](architecture.md)).
+
 Go package API for reading and verifying IMA measurements.
 
 **Package:** `github.com/jeremyhahn/go-trusted-platform/pkg/ima`

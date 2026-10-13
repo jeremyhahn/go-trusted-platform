@@ -1,5 +1,8 @@
 # Cloud Compute Providers
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> Deep dive on the cloud compute providers, their build tags and the vTPM target resolution.
+
 The compute module launches and manages TPM-enabled instances across local
 and cloud backends behind a single `Orchestrator` interface. Cloud providers
 are conditionally compiled behind build tags so the default binary stays lean

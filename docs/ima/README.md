@@ -1,5 +1,8 @@
 # Linux IMA (Integrity Measurement Architecture)
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and [user.md](user.md). IMA is configured under `os.ima.*`, not a top-level `ima:`; `EventLog.ViolationCount` is always 0 ([architecture.md §9](architecture.md)).
+
 Linux IMA provides runtime file integrity monitoring by measuring files at access time and recording those measurements in PCR 10 of the TPM.
 
 ```

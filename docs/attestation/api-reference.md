@@ -1,5 +1,8 @@
 # Attestation API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md).
+
 ## Overview
 
 The Attestation API provides comprehensive functionality for hardware-based attestation operations using TPM 2.0 and related trusted computing technologies. This API enables generation and verification of attestation quotes, management of host manifests, policy evaluation, and multi-tenant attestation across hosts, virtual machines, and containers.

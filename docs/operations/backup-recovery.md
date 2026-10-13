@@ -1,5 +1,8 @@
 # Backup and Recovery Guide
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [../daemon/cli.md](../daemon/cli.md) (`platformctl db dump`; there is no import command) and [../barrier/user.md](../barrier/user.md). `platformctl backup`, `restore`, `daemon`, `cluster`, `dns` and `storage` are not registered commands.
+
 Data protection and disaster recovery procedures for go-trusted-platform.
 
 ## Overview

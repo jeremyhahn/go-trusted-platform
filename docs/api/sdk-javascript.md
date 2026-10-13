@@ -1,5 +1,8 @@
 # JavaScript SDK Guide
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> Using the `trusted-platform-sdk` JavaScript/TypeScript SDK in `sdk/javascript`.
+
 The JavaScript SDK provides a TypeScript-first client for the Trusted Platform, designed for browser and Node.js environments with built-in React integration.
 
 ## Installation
@@ -281,7 +284,7 @@ const embeddingResult = await client.embedding.generate({
 });
 
 // Batch embedding
-const batchResult = await client.embedding.batchGenerate({
+const batchResult = await client.embedding.generateBatch({
   inputs: ['text 1', 'text 2', 'text 3'],
   provider: 'voyage',
 });
@@ -367,49 +370,49 @@ const readiness = await client.health.readiness();
 
 ```typescript
 // Create a scheduled job
-const job = await client.scheduler.create({
+const job = await client.scheduler.createJob({
   name: 'daily-backup',
   schedule: '0 2 * * *',
   payload: JSON.stringify({ type: 'backup', target: 'all' }),
 });
 
 // List jobs
-const jobs = await client.scheduler.list();
+const jobs = await client.scheduler.listJobs();
 
 // Delete a job
-await client.scheduler.delete({ jobId: job.data!.id });
+await client.scheduler.deleteJob({ jobId: job.data!.id });
 ```
 
 ### Data IAM
 
 ```typescript
 // Create a user
-const user = await client.dataIam.users.create({
-  tenantId: 'default',
+const user = await client.dataIam.createUser({
+  username: 'jdoe',
   email: 'user@example.com',
-  name: 'John Doe',
+  displayName: 'John Doe',
 });
 
-// Create a role
-const role = await client.dataIam.roles.create({
-  tenantId: 'default',
-  name: 'operator',
-  permissions: ['read:*', 'write:secrets'],
+// Create a group and add the user to it
+const group = await client.dataIam.createGroup({ name: 'operators' });
+await client.dataIam.addUserToGroup({
+  groupId: group.data!.group.id,
+  userId: user.data!.user.id,
 });
 
-// Assign role to user
-await client.dataIam.roles.assign({
-  userId: user.data!.id,
-  roleId: role.data!.id,
-});
-
-// Create a policy
-const policy = await client.dataIam.policies.create({
-  tenantId: 'default',
+// Create a policy and attach it to the group
+const policy = await client.dataIam.createPolicy({
   name: 'secrets-access',
-  effect: 'allow',
-  actions: ['read', 'write'],
-  resources: ['secrets/*'],
+  document: JSON.stringify({
+    effect: 'allow',
+    actions: ['read', 'write'],
+    resources: ['secrets/*'],
+  }),
+});
+await client.dataIam.attachPolicy({
+  policyId: policy.data!.policy.id,
+  targetType: 'group',
+  targetId: group.data!.group.id,
 });
 ```
 
@@ -419,21 +422,21 @@ The SDK provides React hooks for commonly used platform services:
 
 ```tsx
 import {
-  useKV,
-  useVector,
-  useEmbedding,
-  useSecrets,
-  useCache,
-  useHealth,
+  useQuicBaaSKV,
+  useQuicBaaSVector,
+  useQuicBaaSEmbedding,
+  useQuicBaaSSecrets,
+  useQuicBaaSCache,
+  useQuicBaaSHealth,
 } from 'trusted-platform-sdk/react';
 
 function DataManager() {
-  const kv = useKV();
-  const vector = useVector();
-  const embeddingSvc = useEmbedding();
-  const secrets = useSecrets();
-  const cache = useCache();
-  const healthSvc = useHealth();
+  const kv = useQuicBaaSKV();
+  const vector = useQuicBaaSVector();
+  const embeddingSvc = useQuicBaaSEmbedding();
+  const secrets = useQuicBaaSSecrets();
+  const cache = useQuicBaaSCache();
+  const healthSvc = useQuicBaaSHealth();
 
   // Use with useApi for data fetching
   const { data: healthStatus } = useApi(
@@ -465,18 +468,18 @@ function DataManager() {
 ### Vector Search with Embedding Generation
 
 ```tsx
-import { useVector, useEmbedding, useApi, useMutation } from 'trusted-platform-sdk/react';
+import { useQuicBaaSVector, useQuicBaaSEmbedding, useApi, useMutation } from 'trusted-platform-sdk/react';
 
 function SemanticSearch() {
-  const vector = useVector();
-  const embeddingSvc = useEmbedding();
+  const vector = useQuicBaaSVector();
+  const embeddingSvc = useQuicBaaSEmbedding();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
 
   const search = useMutation(
     async (searchQuery: string) => {
       // Generate embedding for query
-      const embResult = await embedding.generate({
+      const embResult = await embeddingSvc.generate({
         input: searchQuery,
         provider: 'voyage',
       });
@@ -520,8 +523,8 @@ const version = await client.platform.getVersion();
 // Check health with service details
 const health = await client.platform.getHealth({ includeServices: true });
 
-// Get platform status
-const status = await client.platform.getStatus();
+// Get system information
+const system = await client.platform.getSystemInfo();
 ```
 
 ### Certificate Authority
@@ -595,15 +598,15 @@ const bundle = await client.vtpm.createBundle({
   },
 });
 
-// List vTPM instances
-const vtpms = await client.vtpm.listInstances();
+// List vTPM bundles
+const bundles = await client.vtpm.listBundles();
 
-// Start/Stop vTPM
-await client.vtpm.start({ id: vtpmId });
-await client.vtpm.stop({ id: vtpmId });
+// Get and validate a bundle
+const fetched = await client.vtpm.getBundle(bundleId);
+const validation = await client.vtpm.validateBundle(bundleId);
 
-// Get vTPM state
-const state = await client.vtpm.getState({ id: vtpmId });
+// Delete a bundle
+await client.vtpm.deleteBundle(bundleId);
 ```
 
 ### IAM Service
@@ -641,10 +644,9 @@ await client.iam.assignRole({
 
 ```typescript
 // Create encryption key
-const key = await client.kms.createKey({
-  keyId: 'my-encryption-key',
-  algorithm: 'AES256',
-  usage: ['encrypt', 'decrypt'],
+const key = await client.kms.generateKey({
+  name: 'my-encryption-key',
+  keySpec: { algorithm: 'AES_256', usage: ['ENCRYPT', 'DECRYPT'] },
 });
 
 // Encrypt data
@@ -660,7 +662,7 @@ const decrypted = await client.kms.decrypt({
 });
 
 // Generate random bytes
-const random = await client.kms.generateRandom({ length: 32 });
+const random = await client.kms.generateRandom({ numBytes: 32 });
 ```
 
 ## Authentication
@@ -689,7 +691,7 @@ const loginResponse = await client.iam.authenticate({
   username: 'admin',
   password: 'password',
 });
-authToken = loginResponse.data!.token;
+authToken = loginResponse.data!.accessToken;
 
 // Subsequent requests include the token automatically
 ```
@@ -709,13 +711,13 @@ async function getToken(): Promise<string> {
   // Check if token is expired
   if (Date.now() >= tokenData.expiresAt - 60000) {
     // Refresh token
-    const response = await client.iam.refreshToken({
+    const response = await client.auth.refreshToken({
       refreshToken: tokenData.refreshToken,
     });
     tokenData = {
-      accessToken: response.data!.accessToken,
-      refreshToken: response.data!.refreshToken,
-      expiresAt: Date.now() + response.data!.expiresIn * 1000,
+      accessToken: response.data!.accessToken!,
+      refreshToken: response.data!.refreshToken ?? tokenData.refreshToken,
+      expiresAt: response.data!.expiresAt! * 1000,
     };
   }
   return tokenData.accessToken;

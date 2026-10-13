@@ -1,5 +1,8 @@
 # NTP Unix Socket API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md) (§8).
+
 | Property | Value |
 |----------|-------|
 | Socket | `/run/platformd.sock` |

@@ -1,5 +1,8 @@
 # KMS REST API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md). REST KMS routes also require the admin role, not only mTLS or a bearer token.
+
 REST API endpoints for the KMS service via HTTPS.
 
 | Property | Value |

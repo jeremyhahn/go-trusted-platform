@@ -1,5 +1,8 @@
 # Device Configuration Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [engineering.md](engineering.md) (configuration section). The `DEVICE_*` environment variables below do not exist.
+
 ## Overview
 
 Configuration options for the device package, including QuicBaaS storage settings,

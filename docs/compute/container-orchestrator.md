@@ -1,5 +1,8 @@
 # Container Orchestrator
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> Deep dive on `pkg/compute/container`: the attested container engine, OPA policy, SDN networking and service modes.
+
 Container lifecycle management with TPM-based attestation and policy enforcement.
 
 ## Overview
@@ -12,7 +15,7 @@ The Container Orchestrator provides:
 - OPA policy enforcement with built-in and custom policies
 - Image signing/verification with Platform CA
 - Event-log based attestation (PCR 14 aggregate + per-container measurement log)
-- Full SDN/OVS/OpenFlow/VLAN integration via Device Profiles
+- Full SDN/OVS/OpenFlow/VLAN integration via the container network configuration
 
 ## Architecture
 
@@ -78,7 +81,7 @@ Key wiring facts:
   registers `pkg/storage/quicbaas.ContainerAttestorAdapter` through
   `WithContainerAttestor` when it starts. `wireAttestationOnConfig` then
   installs the fleet attestor into that adapter
-  (`pkg/daemon/commands/container_attestor_init.go`).
+  (`pkg/daemon/commands/attestation_init.go`).
 
   The attestor is installed only when this node has:
   - its own device record (`attestation.reporting.enabled`);
@@ -125,7 +128,7 @@ operations use.
 // ContainerOrchestrator manages container lifecycle with attestation
 type ContainerOrchestrator interface {
     // Lifecycle
-    Create(ctx context.Context, spec *ContainerSpec) (*Container, error)
+    Create(ctx context.Context, spec *OrchestratorContainerSpec) (*Container, error)
     Start(ctx context.Context, id string) error
     Stop(ctx context.Context, id string, timeout time.Duration) error
     Remove(ctx context.Context, id string, force bool) error
@@ -140,42 +143,45 @@ type ContainerOrchestrator interface {
     VerifyAttestation(ctx context.Context, id string, evidence []byte) error
 
     // Policy
-    EvaluatePolicy(ctx context.Context, spec *ContainerSpec) (*PolicyDecision, error)
+    EvaluatePolicy(ctx context.Context, spec *OrchestratorContainerSpec) (*PolicyDecision, error)
 
     // Image
     PullImage(ctx context.Context, ref string, opts PullOptions) error
     VerifyImage(ctx context.Context, ref string) (*ImageVerification, error)
+
+    Close() error
 }
 ```
 
-### ContainerSpec
+### OrchestratorContainerSpec
+
+Excerpt; `pkg/compute/container/config.go` has the full field list.
 
 ```go
-type ContainerSpec struct {
-    Name        string
-    Image       string
-    Command     []string
-    Args        []string
-    Environment map[string]string
-    Volumes     []VolumeMount
-    Ports       []PortMapping
-    Resources   ResourceConfig
-    Network     NetworkConfig
-    Service     ServiceConfig
-    Labels      map[string]string
+type OrchestratorContainerSpec struct {
+    Name         string
+    Image        string
+    Command      []string
+    Args         []string
+    Env          map[string]string
+    Mounts       []MountConfig
+    Resources    ResourceConfig
+    Network      ContainerNetworkConfig
+    Service      ServiceConfig
+    Labels       map[string]string
+    Privileged   bool
+    Capabilities CapabilityConfig
+    Ports        []PortMapping
+    TPMAccess    bool
 }
 
 type ResourceConfig struct {
-    Memory     string  // e.g., "2G"
-    CPUs       string  // e.g., "2.0"
-    MemorySwap string
-    CPUShares  int64
-}
-
-type NetworkConfig struct {
-    Mode           NetworkMode  // sdn, bridge, host, none
-    SDN            *SDNConfig
-    SecurityGroups []string
+    CPULimit          string  // e.g., "2" or "0.5"
+    CPUShares         int64
+    MemoryLimit       string  // e.g., "2G"
+    MemorySwap        string
+    MemoryReservation string
+    PidsLimit         int64
 }
 
 type ServiceConfig struct {
@@ -183,6 +189,9 @@ type ServiceConfig struct {
     Standalone *StandaloneConfig
 }
 ```
+
+`ContainerNetworkConfig` and `SDNConfig` are under
+[Network Configuration](#network-configuration).
 
 ## Lifecycle Management
 
@@ -214,15 +223,16 @@ type ServiceConfig struct {
 
 ```go
 // Create container
-spec := &ContainerSpec{
+spec := &OrchestratorContainerSpec{
     Name:  "web-api",
     Image: "registry.example.com/api:v1.2",
-    Network: NetworkConfig{
+    Network: ContainerNetworkConfig{
         Mode: NetworkModeSDN,
         SDN: &SDNConfig{
-            VLANID: 100,
+            Bridge:         "br-platform",
+            VLANID:         100,
+            SecurityGroups: []string{"web-frontend"},
         },
-        SecurityGroups: []string{"web-frontend"},
     },
 }
 
@@ -287,20 +297,22 @@ type MeasurementLog struct {
 
 type MeasurementEntry struct {
     ContainerID    string
+    ContainerName  string
     Timestamp      time.Time
     EventType      MeasurementEventType
     Image          string  // Image reference the container was created from
     ImageDigest    string  // Canonical OCI content digest, "sha256:<64 hex>"
     ConfigDigest   string  // orchestration.ContainerConfigDigest, same form
     CumulativeHash []byte  // Hash extended to PCR 14
+    Description    string
 }
 
-// Measurement event types
+// Measurement event types (also EventContainerExec, EventConfigChange)
 const (
-    EventContainerCreate MeasurementEventType = iota
-    EventContainerStart
-    EventContainerStop
-    EventContainerRemove
+    EventContainerCreate MeasurementEventType = "container_create"
+    EventContainerStart  MeasurementEventType = "container_start"
+    EventContainerStop   MeasurementEventType = "container_stop"
+    EventContainerRemove MeasurementEventType = "container_remove"
 )
 ```
 
@@ -449,28 +461,28 @@ type PolicyConfig struct {
 
 type PolicyDecisionMode string
 const (
-    PolicyEnforce  PolicyDecisionMode = "enforce"   // Block on deny
-    PolicyAudit    PolicyDecisionMode = "audit"     // Log but allow
-    PolicyDisabled PolicyDecisionMode = "disabled"  // Skip evaluation
+    PolicyModeEnforce  PolicyDecisionMode = "enforce"   // Block on deny
+    PolicyModeAudit    PolicyDecisionMode = "audit"     // Log but allow
+    PolicyModeDisabled PolicyDecisionMode = "disabled"  // Skip evaluation
 )
 ```
 
 ### Built-in Policies
 
+The built-in policies are `pkg/compute/container/policies/*.rego`
+(`image_signature`, `privileged`, `resource_limits`). OPA v1 is linked, so
+policies use Rego v1 syntax. Excerpt:
+
 ```rego
-# Image signature required
-package container.builtin
+package container.builtin.privileged
 
-deny[msg] {
-    not input.image.signature.verified
-    msg := "Container image must be signed"
-}
+import rego.v1
 
-# Block privileged containers without approval
-deny[msg] {
+# deny privileged containers without explicit approval
+deny contains msg if {
     input.container.privileged == true
-    not input.container.allow_privileged
-    msg := "Privileged containers not allowed without explicit approval"
+    not privileged_allowed
+    msg := "privileged containers not allowed without explicit approval"
 }
 ```
 
@@ -480,8 +492,10 @@ deny[msg] {
 # /etc/platformd/policies/container/custom.rego
 package container.custom
 
+import rego.v1
+
 # Restrict to specific registries
-deny[msg] {
+deny contains msg if {
     registry := input.image.registry
     allowed := {"registry.example.com", "docker.io"}
     not allowed[registry]
@@ -489,13 +503,13 @@ deny[msg] {
 }
 
 # Block 'latest' tag
-deny[msg] {
+deny contains msg if {
     input.image.tag == "latest"
     msg := "Tag 'latest' is not allowed in production"
 }
 
-# Enforce resource limits
-deny[msg] {
+# Enforce resource limits (memory_limit is in bytes)
+deny contains msg if {
     input.container.resources.memory_limit > 8589934592  # 8GB
     msg := "Container memory limit exceeds 8GB maximum"
 }
@@ -503,28 +517,25 @@ deny[msg] {
 
 ### Policy Input Schema
 
-```go
-type PolicyInput struct {
-    Container     ContainerSpec
-    Image         ImageInfo
-    Signature     *SignatureInfo
-    Network       NetworkConfig
-    Attestation   *AttestationState
-    DeviceProfile *DeviceProfile
+The document Rego sees as `input` (`pkg/compute/container/policy.go`):
 
-    // User context for RBAC policies
-    User      string
-    Groups    []string
-    Namespace string
+```go
+type OPAPolicyInput struct {
+    Container     ContainerPolicySpec  // input.container
+    Image         OPAImageInfo         // input.image
+    Network       NetworkPolicyInfo    // input.network
+    DeviceProfile *DeviceProfileInfo   // input.device_profile
+    User          *UserContext         // input.user, for RBAC policies
+    Namespace     string
 }
 
-type ImageInfo struct {
+type OPAImageInfo struct {
     Registry   string
     Repository string
     Tag        string
     Digest     string
     Labels     map[string]string
-    Signature  SignatureInfo
+    Signature  *OPASignatureInfo
 }
 ```
 
@@ -580,90 +591,55 @@ graph TB
 
 ```go
 type ContainerNetworkConfig struct {
-    Mode          NetworkMode  // bridge, host, none, sdn
-    SDN           *SDNConfig
-    OpenFlowRules []OpenFlowRule
+    Mode       NetworkMode  // bridge, host, none, sdn
+    SDN        *SDNConfig   // used only when Mode is sdn
+    DNSServers []string
+    DNSSearch  []string
+    Hostname   string
+    ExtraHosts []string     // hostname:ip
 }
 
 type SDNConfig struct {
     Bridge         string   // OVS bridge name
     VLANID         uint16   // VLAN assignment
-    OVSPort        string   // OVS port name
+    OVSPort        string   // OVS port name (auto-generated if empty)
     FlowTable      int
     FlowPriority   int
     SecurityGroups []string
+    OpenFlowRules  []OpenFlowRule
+    IPAddress      string
+    MACAddress     string
 }
 ```
 
-### Device Profile Network Example
+### Container Network Example
+
+Network settings belong to each container specification; the device profile
+has no container or network block. The YAML keys are those of
+`OrchestratorContainerSpec`:
 
 ```yaml
-device_profile:
-  name: "production-web-tier"
-
-  network:
-    ovs_bridge: "br-platform"
-    default_vlan: 100
-
-    openflow:
-      controller: "tcp:127.0.0.1:6653"
-      version: "1.3"
-
-    security_groups:
-      - name: "web-frontend"
-        rules:
-          - direction: ingress
-            protocol: tcp
-            port: 443
-            action: allow
-          - direction: egress
-            protocol: tcp
-            port: 5432
-            action: allow
-
-      - name: "backend-services"
-        rules:
-          - direction: ingress
-            protocol: tcp
-            port_range: "8080-8090"
-            action: allow
-
-    # Physical NICs under OVS control
-    physical_interfaces:
-      - name: "eth0"
-        bridge: "br-platform"
-        vlan: 1
-        trunk: false
-      - name: "eth1"
-        bridge: "br-platform"
-        trunk: true
-        trunk_vlans: [100, 200, 300]
-
-  vms:
-    - name: "db-server"
-      vlan: 406
-      security_groups: ["backend-services"]
-
-  containers:
-    - name: "web-api"
-      image: "registry.example.com/api:v1.2"
-      network:
-        mode: sdn
-        vlan: 100
-        security_groups: ["web-frontend"]
-
-    - name: "worker"
-      image: "registry.example.com/worker:v1.0"
-      network:
-        mode: sdn
-        vlan: 100
-        security_groups: ["backend-services"]
+name: "web-api"
+image: "registry.example.com/api:v1.2"
+network:
+  mode: sdn
+  sdn:
+    bridge: "br-platform"
+    vlan_id: 100
+    security_groups: ["web-frontend"]
 ```
+
+Security groups are registered by name with the `SecurityGroupManager`
+(`DefaultSecurityGroupManager.RegisterSecurityGroup`) and turned into flows by
+`SecurityGroupToFlows`.
 
 ### Network Setup Flow
 
+A sketch of `SDNNetworkManager.SetupContainerNetwork` and the
+`setupSDNNetwork` step it validates and hands off to:
+
 ```go
-func (n *NetworkManager) SetupContainerNetwork(ctx context.Context,
+func (n *SDNNetworkManager) SetupContainerNetwork(ctx context.Context,
     containerID string, cfg *ContainerNetworkConfig) error {
 
     if cfg.Mode != NetworkModeSDN {
@@ -682,7 +658,7 @@ func (n *NetworkManager) SetupContainerNetwork(ctx context.Context,
     }
 
     // 3. Install OpenFlow rules
-    for _, rule := range cfg.OpenFlowRules {
+    for _, rule := range cfg.SDN.OpenFlowRules {
         if err := n.openflow.AddFlow(rule); err != nil {
             return err
         }
@@ -741,27 +717,28 @@ type StandaloneConfig struct {
 
 ### Init System Auto-Detection
 
-The init system is auto-detected from the Device Profile OS configuration:
+`InitSystemDetector.Detect` maps an OS name to an init system. The device
+profile has no OS field, so `DetectFromDeviceProfile` passes the profile's
+`model`:
 
 ```go
-var osInitSystemDefaults = map[string]string{
+var osInitSystemDefaults = map[string]InitSystem{
     // OpenRC-based
-    "alpine":  "rc",
-    "gentoo":  "rc",
-    "artix":   "rc",
+    "alpine": InitSystemRC,
+    "gentoo": InitSystemRC,
+    "artix":  InitSystemRC,
 
     // systemd-based
-    "debian":  "systemd",
-    "ubuntu":  "systemd",
-    "fedora":  "systemd",
-    "centos":  "systemd",
-    "rhel":    "systemd",
-    "rocky":   "systemd",
-    "alma":    "systemd",
-    "arch":    "systemd",
-    "opensuse":"systemd",
-
-    "default": "systemd",
+    "debian":   InitSystemSystemd,
+    "ubuntu":   InitSystemSystemd,
+    "fedora":   InitSystemSystemd,
+    "centos":   InitSystemSystemd,
+    "rhel":     InitSystemSystemd,
+    "rocky":    InitSystemSystemd,
+    "alma":     InitSystemSystemd,
+    "arch":     InitSystemSystemd,
+    "opensuse": InitSystemSystemd,
+    "suse":     InitSystemSystemd,
 }
 ```
 
@@ -772,7 +749,7 @@ var osInitSystemDefaults = map[string]string{
 2. Check if init_system override is set
    - If set -> use that
    - If not set -> continue to auto-detect
-3. Look up os.name in osInitSystemDefaults map
+3. Look up the lowercased OS name in osInitSystemDefaults
    - "alpine" -> "rc"
    - "debian" -> "systemd"
 4. If OS not in map, try pattern matching
@@ -826,43 +803,57 @@ stop() {
 
 ```
 pkg/compute/container/
-├── orchestrator.go        # ContainerOrchestrator interface + types
+├── orchestrator.go         # ContainerOrchestrator interface + types
 ├── compute_orchestrator.go # Consolidated compute.Orchestrator view (OVS, port auth)
-├── tpm_provider.go        # HostTPMProvider (xkms TPM -> SDK orchestration.HostTPM)
-├── sdk_trust.go           # SDK trust stack + service.ContainerAttestor seam fill
-├── fleet_attestor.go      # Fleet policy around the seam (registry, golden PCRs, drift quarantine)
-├── sdk_logger.go          # *slog.Logger -> SDK orchestration.Logger adapter
-├── podman_adapter.go      # Embedded Podman runtime adapter (PodmanBackend)
-├── config.go             # Configuration types and validation
-├── lifecycle.go          # Rich Orchestrator engine (lifecycle, logs, attest)
-├── attestation.go        # Event-log attestation (PCR 14 aggregate)
-├── measurement_log.go    # Per-container measurement tracking
-├── policy.go             # OPA policy evaluation
-├── policy_loader.go      # Multi-source policy loading
-├── image.go              # Image signing/verification
-├── network.go            # SDN/OVS/OpenFlow/VLAN integration
-├── service.go            # Service file generation
-├── init_detector.go      # OS-based init system auto-detection
-├── errors.go             # Typed error definitions
-└── *_test.go             # Unit tests
+├── compute_orchestrator_ops.go # Capability verbs forwarded to the engine
+├── register.go             # Registers the container orchestrator factory
+├── tpm_provider.go         # HostTPMProvider (xkms TPM -> SDK orchestration.HostTPM)
+├── sdk_trust.go            # SDK trust stack + service.ContainerAttestor seam fill
+├── fleet_attestor.go       # Fleet policy around the seam (registry, golden PCRs, drift quarantine)
+├── sdk_logger.go           # *slog.Logger -> SDK orchestration.Logger adapter
+├── podman_adapter.go       # Embedded Podman runtime adapter (PodmanBackend)
+├── podman_adapter_ops.go   # Podman adapter operations
+├── config.go               # Configuration types and validation
+├── launch_config.go        # Effective launch configuration (newLaunchConfig)
+├── launch_command.go       # podman run arguments (podmanRunArgs)
+├── lifecycle.go            # Rich Orchestrator engine (lifecycle, logs, attest)
+├── exec.go                 # Container exec
+├── attestation.go          # Event-log attestation (PCR 14 aggregate)
+├── measurement_log.go      # Per-container measurement tracking
+├── policy.go               # OPA policy evaluation
+├── opa_engine.go           # OPA engine
+├── policy_loader.go        # Multi-source policy loading
+├── policies/               # Built-in .rego policies
+├── image.go                # Image signing/verification
+├── network.go              # SDN/OVS/OpenFlow/VLAN integration
+├── service.go              # Service file generation
+├── systemd_generator.go    # systemd unit generator
+├── rc_generator.go         # OpenRC script generator
+├── init_detector.go        # OS-based init system auto-detection
+├── errors.go               # Typed error definitions
+└── *_test.go               # Unit tests
 ```
 
 ## Error Handling
 
+Excerpt; `pkg/compute/container/errors.go` has the full list.
+
 ```go
 var (
-    ErrContainerNotFound     = errors.New("container not found")
-    ErrContainerExists       = errors.New("container already exists")
-    ErrContainerNotRunning   = errors.New("container not running")
-    ErrContainerRunning      = errors.New("container already running")
-    ErrInvalidSpec           = errors.New("invalid container spec")
-    ErrPolicyDenied          = errors.New("policy denied container creation")
+    ErrContainerNotFound       = errors.New("container not found")
+    ErrContainerExists         = errors.New("container already exists")
+    ErrContainerRunning        = errors.New("container is running")
+    ErrContainerStopped        = errors.New("container is stopped")
+    ErrInvalidSpec             = errors.New("invalid container specification")
+    ErrPolicyDenied            = errors.New("policy denied operation")
     ErrImageVerificationFailed = errors.New("image verification failed")
-    ErrAttestationFailed     = errors.New("attestation failed")
-    ErrPCRMismatch           = errors.New("PCR value mismatch")
-    ErrNetworkSetupFailed    = errors.New("network setup failed")
-    ErrServiceSetupFailed    = errors.New("service setup failed")
-    ErrUnsupportedInitSystem = errors.New("unsupported init system")
+    ErrAttestationFailed       = errors.New("attestation failed")
+    ErrPCRMismatch             = errors.New("PCR value mismatch")
+    ErrQuoteVerificationFailed = errors.New("quote verification failed")
+    ErrNetworkSetupFailed      = errors.New("network setup failed")
+    ErrServiceFileGeneration   = errors.New("service file generation failed")
+    ErrUnsupportedInitSystem   = errors.New("unsupported init system")
+    ErrImageManagerUnavailable = errors.New("image manager unavailable")
 )
 ```
 
@@ -870,6 +861,6 @@ var (
 
 - [Architecture](architecture.md) - Compute orchestrator architecture
 - [Embedded Podman Runtime](embedded-podman.md) - Direct OCI runtime package documentation
-- [Configuration](configuration.md) - Container configuration reference
-- [API Reference](api-reference.md) - API documentation
+- [Engineering](engineering.md) - Configuration and invariants
+- [API](api.md) - API documentation
 - [SDN Architecture](../sdn/architecture.md) - SDN/OVS/OpenFlow details

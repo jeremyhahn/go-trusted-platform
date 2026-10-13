@@ -1,5 +1,8 @@
 # Protected Memory
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The protected-memory mandate, the `MemoryEnclave` primitive in `pkg/memguard`, and the register of paths that do not yet meet it.
+
 **The mandate.** Every key, password, passphrase, token, share, private key
 and credential this process holds in memory lives in protected storage for
 its whole lifetime and is zeroized on release — never a plain `[]byte` or
@@ -24,10 +27,10 @@ implementation. **No file in this module imports `awnumar/memguard`**, and
 `pkg/arch/layerguard_test.go` fails the build with a `file:line` report if
 one ever does.
 
-What `pkg/memguard` adds is the platform API the two-identifier re-export
-does not carry: the live zero-length enclave, the scoped `Open` borrow,
-`IsAlive`, constant-time comparison, and the redacting marshalers. Those
-belong upstream — see [Known gaps](#the-sanctioned-sdk-enclave-re-export-is-two-identifiers)
+What `pkg/memguard` adds is the platform API the re-export does not carry:
+the live zero-length enclave, the scoped `Open` borrow, `IsAlive`,
+constant-time comparison, and the redacting marshalers. Those belong
+upstream — see [Known gaps](#the-sanctioned-sdk-enclave-re-export-lacks-the-enclave-api)
 — and the shape is held here so callers do not change when the SDK grows
 them.
 
@@ -148,10 +151,10 @@ enclave is a copy and the original cannot be scrubbed:
 
 | Site | Plaintext holder |
 |---|---|
-| `pkg/bmc/service_user.go:50,74` | `CreateUser` / `SetUserPassword` take `password string` |
-| `pkg/cli/commands/bmc/user.go:586,671` | `passwordStr` from the terminal prompt, enclaved at 594 / 684 |
-| `pkg/bmc/config.go:27` | `cfg.Password` decoded from YAML/JSON |
-| `pkg/bmc/credentials.go:157,169,193` | `credentialRecord.Password` on both the marshal and unmarshal side |
+| `pkg/bmc/service_user.go:49,73` | `CreateUser` / `SetUserPassword` take `password string` |
+| `pkg/cli/commands/bmc/user.go:585,670` | `passwordStr` from the terminal prompt, enclaved at 593 / 683 |
+| `pkg/bmc/config.go:26` | `cfg.Password` decoded from YAML/JSON |
+| `pkg/bmc/credentials.go:156,168,196` | `credentialRecord.Password` on both the marshal and unmarshal side |
 
 Converting one of those strings to `[]byte` creates a wipeable *copy*; it
 cannot scrub the string's backing array. Protection therefore begins at the
@@ -206,11 +209,12 @@ string at that call (see rule 3). The enclave bounds the copy's lifetime to
 the call; it does not remove it. Same upstream issue
 (go-quicbaas#29).
 
-### The sanctioned SDK enclave re-export is two identifiers
+### The sanctioned SDK enclave re-export lacks the enclave API
 
-`quicbaas/sdk/go/xkms/secure` exposes only `Buffer` and
-`NewBufferFromBytes` (checked at `sdk/go/v0.2.1-alpha` and
-`v0.2.3-alpha`). Even the full upstream `go-qrdb/pkg/secure` surface lacks
+`quicbaas/sdk/go/xkms/secure` (at the pinned `sdk/go` v0.12.0-alpha) exposes
+`Buffer`, `NewBuffer`, `NewBufferFromBytes`, `Secret`, `Wipe`, `Purge` and
+the passphrase providers. `pkg/memguard` uses only `Buffer` and
+`NewBufferFromBytes`. Even the full upstream `go-qrdb/pkg/secure` surface lacks
 the scoped borrow, the liveness check, constant-time comparison, and the
 empty-value contract that this repo's callers depend on. The locked region
 comes from that re-export either way, but `MemoryEnclave` cannot become a
@@ -220,23 +224,23 @@ fails construction where callers require a live, zero-length value. Filed
 upstream
 (go-quicbaas#29).
 
-`NewBufferFromBytes` is not merely the only constructor re-exported — it is
-structurally incapable of allocate-then-fill. It calls memguard's
+`NewBufferFromBytes`, the constructor `pkg/memguard` uses, is structurally
+incapable of allocate-then-fill. It calls memguard's
 `NewBuffer`, moves the source in, and then **`Freeze()`s** the region
 (`awnumar/memguard@v0.23.0/buffer.go:48`), so the returned buffer is
 read-only: writing into `Buffer.Bytes()` faults with `SEGV_ACCERR`. The
-mutable allocator is `secure.NewBuffer(size)`, which go-qrdb and go-xkms
-both re-export and go-quicbaas does not. Seeding a zero-filled buffer and
-filling it in place therefore does not work either — it was tried and
-segfaults.
+mutable allocator is `secure.NewBuffer(size)`, which the go-quicbaas
+re-export now carries; `pkg/memguard` does not use it yet. Seeding a
+zero-filled buffer from `NewBufferFromBytes` and filling it in place does
+not work — it was tried and segfaults.
 
 Two consequences are visible today:
 
 - `NewRandomMemoryEnclave` draws into an ordinary heap slice and wipes it as
   `NewBufferFromBytes` copies it into the locked region. The draw is briefly
   unlocked, and its failure paths clear the slice with the `clear` builtin
-  rather than an optimization-resistant wipe, which the re-export also does
-  not carry. Nothing outside this package's own tests calls it.
+  rather than an optimization-resistant wipe; the re-export now carries
+  `secure.Wipe`, which this package does not call yet. Nothing outside this package's own tests calls it.
 - `NewMemoryEnclaveFromFile` — the protected read path for credential files
   on disk — passes the content through exactly ONE ordinary heap slice,
   allocated at the file's measured size so the read never reallocates, and
@@ -244,7 +248,7 @@ Two consequences are visible today:
   by append (a file whose size changes leaves earlier copies of the secret
   unreachable and unwiped) and leaves the whole plaintext behind when a
   downstream construction fails. It is not zero copies, and cannot be until
-  the allocate-then-fill constructor is re-exported.
+  it moves to the re-exported `NewBuffer`.
 
 Callers **must** use `NewMemoryEnclaveFromFile` rather than
 `os.ReadFile` + `NewMemoryEnclave` for private keys, passphrases and tokens.
@@ -263,12 +267,12 @@ coordinated wave, not that the site is acceptable.
 | PIV PIN + private key material (`pkg/api/daemon/piv_*.go`, `pkg/app/backends/piv.go`) | Enclave from the service layer inward; plain fields deprecated. **Not end to end** — see [Known gaps](#known-gaps) |
 | Daemon mTLS server private key (`pkg/daemon/commands/provision_identity.go`) | **Keystore-held (#33).** Generated and kept in the platform CA keystore; the listeners hold only its `crypto.Signer`. No key bytes are marshalled or written, and the daemon writes no admin key either (the one-shot `/init` reply is the admin credential) — see [`docs/daemon/architecture.md`](../daemon/architecture.md) §Daemon TLS identity and key custody |
 | NTS server private key — provisioning and renewal (`pkg/app/nts_provision.go`, `pkg/ntp/service.go`) | Enclave from marshalling inward: `enclaveNTSKey` marshals straight into the enclave and clears the intermediate DER and PEM, and rotation carries the enclave rather than a plain field. **Not end to end** — generation, the startup path and the KMS write are covered below |
-| ~57 `secret:"true"`-tagged DTO fields across 19 packages | **Deferred** — see below |
+| 61 `secret:"true"`-tagged fields across 25 packages | **Deferred** — see below |
 | Untagged plaintext credentials on service-layer and config types | **Deferred** — see below |
 
 ### The `secret:"true"` tag delivers no protection today
 
-`SecretStructTag` (`pkg/bootstrap/secrets.go:46`) marks fields whose value
+`SecretStructTag` (`pkg/bootstrap/secrets.go:47`) marks fields whose value
 may be a secret *reference URI* for the bootstrap secret resolver. Its one
 reader is `bootstrap.PlaintextSecretFields`, which the diskless image build
 uses to refuse a platform config holding a tagged field as plaintext
@@ -278,7 +282,7 @@ as a redaction marker overstates it.
 
 Giving the tag real enforcement — a reflective redactor on log/marshal
 paths, and/or enclave typing for the fields — is a platform-wide API change
-across ~57 DTOs on shipped REST/gRPC/QUIC/MCP/Unix surfaces. That is an
+across 61 fields on shipped REST/gRPC/QUIC/MCP/Unix surfaces. That is an
 owner decision and part of the coordinated wave.
 
 ### Untagged plaintext credentials found by this audit
@@ -289,17 +293,17 @@ sweep:
 
 | Site | Material |
 |---|---|
-| `pkg/storage/luks/types.go:272` | LUKS format passphrase |
-| `pkg/api/daemon/ceremony_service.go:166` | Shamir share (claim-share result) |
-| `pkg/api/quic/phase35_types.go:99` | Shamir share (QUIC wire) |
-| `pkg/api/rest/init_handlers.go:120,122` | barrier root secret + Shamir share |
-| `pkg/api/rest/tpm_handlers.go:161,171,185` | TPM auth secrets |
-| `pkg/api/quic/tpm_handlers.go:246,255,267` | TPM auth secrets |
-| `pkg/api/rest/tenant_handlers.go:173` | tenant key material |
-| `pkg/api/rest/dns_handlers.go:250`, `pkg/api/quic/dns_handlers.go:265` | TSIG key |
-| `pkg/api/grpc/iam_types.go:331,336` | IAM tokens |
-| `pkg/attestation/push/types.go:117,123` | push token + password |
-| `pkg/sdn/bgp/types.go:587` | BGP MD5 session password |
+| `pkg/storage/luks/types.go:271` | LUKS format passphrase |
+| `pkg/api/daemon/ceremony_service.go:182` | Shamir share (claim-share result) |
+| `sdk/go/wire/quicwire/phase35_types.go:101` | Shamir share (QUIC wire) |
+| `pkg/api/rest/init_handlers.go:145,147` | barrier root secret + Shamir share |
+| `pkg/api/rest/tpm_handlers.go:176,186,200` | TPM auth secrets |
+| `pkg/api/quic/tpm_handlers.go:218,227,239` | TPM auth secrets |
+| `pkg/api/rest/tenant_handlers.go:160` | tenant key material |
+| `pkg/api/rest/dns_handlers.go:249`, `pkg/api/quic/dns_handlers.go:265` | TSIG key |
+| `pkg/api/grpc/iam_types.go:330,335` | IAM tokens |
+| `pkg/attestation/push/types.go:116,122` | push token + password |
+| `pkg/sdn/bgp/types.go:734` | BGP MD5 session secret (`AuthKey`, resolved at runtime) |
 
 All are wire DTOs or service-layer request/result types whose signatures
 ship to consumers, so each is a breaking change and belongs to the

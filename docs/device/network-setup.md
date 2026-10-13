@@ -1,5 +1,8 @@
 # Client-Side Network Setup for Device Profile Activation
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md) and [user.md](user.md). The self-service profile carries `admittedNetwork` and `provisioningNetwork`, not `production_network`.
+
 ## Overview
 
 The `trusted-platform-network` service provides automated, client-side network configuration during system boot. It fetches the device profile from the platform API using mTLS (IDevID certificate), applies network configuration, and triggers device activation on the platform.

@@ -1,5 +1,8 @@
 # Bootstrap Secrets
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and [cli.md](cli.md). `bootstrap.NewSecretManager`, `MigrationResult`, `MigratedSecret` and the `auto-generate`/`migrate-to-kms`/`update-config-file` keys do not exist; the walker is go-quicbaas's `ConfigProcessor` (`pkg/app/secrets.go`).
+
 This document describes secret resolution and migration during platform bootstrap.
 
 ## Overview

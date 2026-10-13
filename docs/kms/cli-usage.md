@@ -1,5 +1,8 @@
 # KMS CLI Usage
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [cli.md](cli.md). Every `kms dek` and `kms secrets` leaf, and `kms key import`, `export`, `unwrap`, `versions`, `status` and `backend-test`, return a not-implemented error; `kms key safety` is in no build.
+
 ## Overview
 
 The KMS CLI provides complete access to key management, cryptographic operations, DEK management, and secrets storage through `platformctl`.

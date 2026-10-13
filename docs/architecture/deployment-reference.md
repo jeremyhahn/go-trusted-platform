@@ -1,5 +1,8 @@
 # Deployment Reference Architecture
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> Deployment topologies, node roles and sizing; [../daemon/](../daemon/) and [../bootstrap/](../bootstrap/) are normative.
+
 This document defines how to physically deploy the go-trusted-platform across different scales and environments. It complements the existing architecture docs which describe the platform's design (see [reference.md](reference.md), [reference-network.md](reference-network.md), [binary-separation.md](binary-separation.md), and [platform-modes.md](platform-modes.md)).
 
 This guide covers:

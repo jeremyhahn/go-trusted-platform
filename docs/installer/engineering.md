@@ -672,6 +672,27 @@ override the per-node `network.conf`. After mounting the overlay, and before
 interface (static or DHCP) and resolver into the tmpfs upper layer, replacing
 any symlink; the shared root is never written.
 
+**`diskless-nbd` node side — Planned (#689).** The NBD export server is built
+(`pkg/bootstrap/nbd`, [bootstrap engineering](../bootstrap/engineering.md#nbd-export-server-pkgbootstrapnbd)).
+The node half below is the contract the later slices must meet:
+
+- The boot server's NBD address comes from the **signed** UKI `.cmdline`,
+  under the same rule as the diskless root parameters: nothing on the live
+  command line can name the root.
+- `platform-initrd` sends the client flag `NBD_FLAG_C_FIXED_NEWSTYLE`. Its
+  first option is `NBD_OPT_STARTTLS`, and it requires TLS 1.3. It presents
+  the IDevID certificate, whose key stays in the TPM. It verifies the server
+  certificate against the platform CA carried in the image.
+- It then sends `NBD_OPT_GO` with an empty export name, or its own IDevID
+  identity.
+- A refusal is final. These include `NBD_REP_ERR_TLS_REQD`,
+  `NBD_REP_ERR_POLICY`, `NBD_REP_ERR_UNKNOWN`, a failed handshake, or a
+  closed connection. The node never retries in plaintext and never asks for
+  another export. The boot fails closed into the recovery path.
+- The installer target `nbd` runs Phase A against the attached export instead
+  of a local disk: it LUKS2-formats the export and installs onto it. The key
+  is sealed to the node's TPM, as on a disk install.
+
 Inside the container while it is mounted at `/mnt/installer`:
 `luks-key.bin` (the only path `KeyfileStrategy` looks at),
 `recovery-key.txt`, `etc/trusted-platform/config.yaml`.

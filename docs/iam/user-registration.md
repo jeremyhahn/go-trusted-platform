@@ -1,5 +1,8 @@
 # User Registration
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [../auth/api.md](../auth/api.md) §Registration model and §WebAuthn REST browser contract. Uninvited registration is off by default (`quicbaas.self-service-registration.enabled`), and the SDK, not the platform, holds the ceremony session.
+
 This document describes the user registration process in the Trusted Platform, including WebAuthn-based passwordless registration, tenant association, and JWT token generation.
 
 ## Table of Contents

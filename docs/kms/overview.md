@@ -1,5 +1,8 @@
 # Key Management Service (KMS)
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and [cli.md](cli.md). `kms crypto encrypt` and `decrypt` take `--key-id` and `--input`, not `--key`, `--data` or `--ciphertext`; every `kms secrets` and `kms dek` leaf returns a not-implemented error.
+
 The KMS package provides unified key management for the Trusted Platform, supporting both software-based keys (QuicBaaS) and hardware-backed keys (TPM).
 
 ## Architecture

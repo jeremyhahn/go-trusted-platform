@@ -1,5 +1,8 @@
 # Certificate Authority
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md), [api.md](api.md), [cli.md](cli.md) and [user.md](user.md).
+
 The Certificate Authority (CA) provides a full-featured, TPM and Attestation-aware
 x509 certificate management system for the go-trusted-platform.
 
@@ -68,7 +71,7 @@ The integrated ACME server supports:
 
 ```bash
 # Initialize the Certificate Authority
-platformctl ca init --so-pin
+platformctl ca init
 
 # Verify initialization
 platformctl ca info
@@ -86,7 +89,7 @@ platformctl ca issue server.example.com software rsa2048 \
 
 ```bash
 # Install CA certificates to system trust store
-platformctl ca install
+platformctl ca install-ca-certificates
 
 # Export CA bundle
 platformctl ca bundle > ca-bundle.crt

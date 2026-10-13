@@ -1,5 +1,8 @@
 # Web Frontend Configuration
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [engineering.md](engineering.md) §8.3 and §9. `dev`/`build` are `next dev --webpack`/`next build --webpack`; the package manager is npm; Playwright runs `workers: 1` against `npm run dev:webpack`.
+
 Complete configuration reference for the Trusted Platform Web Frontend.
 
 ## Environment Variables

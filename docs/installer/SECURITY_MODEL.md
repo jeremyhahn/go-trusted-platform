@@ -1,5 +1,8 @@
 # LUKS Key Security Model
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and [engineering.md](engineering.md). The installer password is forensic protection only, and the first-boot seal files are `seal-platform.pub`/`.priv`.
+
 This document describes the TPM-based security model for LUKS full-disk encryption in the Trusted Platform installer.
 
 ## Overview

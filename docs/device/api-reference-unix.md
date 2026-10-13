@@ -1,5 +1,8 @@
 # Device Unix Socket API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md) and [cli.md](cli.md). platformd does not use systemd socket activation, the `api/v1/device` import path does not exist, and `--output quiet` is not a format.
+
 Socket Path: `/run/platformd.sock`
 
 ## Overview

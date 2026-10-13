@@ -1,5 +1,8 @@
 # KMS API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md). The transports are not at full parity, and MCP serves 26 tools (20 `kms_*`, 6 `secret_*`), not 32.
+
 ## Overview
 
 The KMS API provides cryptographic key management, secrets storage, and cryptographic operations. The API is available via REST, gRPC, QUIC, MCP, CLI, and Unix socket interfaces with 100% feature parity.

@@ -1,5 +1,8 @@
 # Authentication Architecture
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and [api.md](api.md).
+
 This document provides an overview of the authentication and authorization architecture for go-trusted-platform.
 
 ## Overview
@@ -27,7 +30,7 @@ go-trusted-platform implements a secure authentication architecture based on:
 | REST | HTTP/HTTPS | 8443/9443 | Web clients (public/internal) |
 | gRPC | TCP | 10443 | High-performance service-to-service |
 | QUIC | UDP | 9444 | Low-latency, mobile clients |
-| MCP | HTTP | 8000 | AI/LLM integration (OAuth 2.1) |
+| MCP | HTTPS | 9445 | AI/LLM integration (OAuth 2.1) |
 | Unix | gRPC UDS | /run/platformd.sock | Local IPC, CLI (SO_PEERCRED) |
 
 ## Key Components
@@ -110,15 +113,15 @@ Local IPC via Unix domain sockets uses kernel-verified credentials:
 |------|-------------|
 | `pkg/api/mcp/oauth_metadata.go` | MCP Protected Resource Metadata endpoint |
 | `pkg/api/mcp/authz.go` | MCP authorization checker |
-| `pkg/api/mcp/quicbaas_auth.go` | MCP QuicBaaS adapter |
+| `pkg/api/mcp/dragondb_auth.go` | MCP QuicBaaS adapter |
 | `pkg/api/grpc/oidc_interceptor.go` | gRPC OIDC token validation interceptors |
 | `pkg/util/peercred/peercred.go` | Unix socket SO_PEERCRED authentication |
 | `pkg/api/quic/auth.go` | QUIC authentication middleware |
 
 ## Related Documentation
 
-- [MCP API Reference](../api/mcp/)
-- [QuicBaaS Integration](../datastore/)
+- [MCP API Reference](../daemon/api-reference-mcp.md)
+- [QuicBaaS Integration](../architecture/quicbaas-integration.md)
 - [Platform Daemon](../daemon/)
 - [OAuth 2.1 Architecture](oauth2-architecture.md)
 - [QuicBaaS IAM Integration](quicbaas-iam.md)

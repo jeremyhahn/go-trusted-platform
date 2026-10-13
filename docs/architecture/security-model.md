@@ -1,5 +1,8 @@
 # Zero-Trust Security Architecture
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [../security/architecture.md](../security/architecture.md) and [../trust/architecture.md](../trust/architecture.md).
+
 This document describes the zero-trust security architecture for go-trusted-platform, explaining how cryptographic identity and layered verification provide stronger security than traditional perimeter-based models.
 
 > **Status.** This document describes the target security model. Where the

@@ -1,5 +1,8 @@
 # Request Lifecycle
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [daemon/api.md](../../daemon/api.md) and each feature's `api.md`.
+
 This document describes the complete lifecycle of a request from client to server and back, including protocol-specific handling.
 
 ## Overview

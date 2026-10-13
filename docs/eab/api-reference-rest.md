@@ -1,5 +1,8 @@
 # EAB REST API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `/api/v1/eab` routes and list filters.
+
 | Property | Value |
 |----------|-------|
 | Base path | `/api/v1/eab` (webservice, port 8443) |

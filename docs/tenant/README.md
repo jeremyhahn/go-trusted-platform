@@ -1,5 +1,8 @@
 # Multi-Tenancy Overview
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and [user.md](user.md). The entity is `TenantEntity` (`pkg/tenant/entity.go:27`); the flag is `--max-bandwidth-mbps`, not `--max-bandwidth-gbps`; `platformd serve` turns per-tenant DEKs off; `../sdn/ARCHITECTURE.md` and `../compute-orchestrator-architecture.md` do not exist.
+
 The Trusted Platform provides comprehensive multi-tenancy support through per-tenant resource isolation, enabling secure and efficient sharing of platform resources across multiple organizational units.
 
 ## Key Features

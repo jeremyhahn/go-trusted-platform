@@ -1,5 +1,8 @@
 # IAM Authorization
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and [engineering.md](engineering.md). ABAC is not the primary model: RBAC is decided upstream, and the platform only validates broker tokens.
+
 ## Overview
 
 Trusted Platform IAM uses Attribute-Based Access Control (ABAC) for fine-grained authorization. ABAC evaluates access requests based on attributes of subjects, resources, actions, and environmental conditions.

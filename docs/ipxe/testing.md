@@ -1,5 +1,8 @@
 # iPXE Testing Guide
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [cli.md](cli.md) §3 and [engineering.md](engineering.md). Flag defaults are `--memory 4096`, `--work-dir work-pxe`, `--secure-boot false`; the TAP is `tap-pxe-client`; `testenv.DefaultNetworkConfig()` is `tp-br` on a `/28`, not the PXE network; the firmware cache follows `$XDG_CACHE_HOME`; no `pkg/ipxe` test is skipped for want of root.
+
 ## CLI Test Command
 
 The `platformctl iso test pxe` command provides a complete PXE boot test environment.

@@ -1,5 +1,8 @@
 # User-Tenant Relationship
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and [IAM](../iam/architecture.md). There is no Owner/Admin/Member/Viewer hierarchy (the built-in roles are `so`, `admin`, `operator`, `user`, `auditor`, `custodian`); `Role` has only `ID` and `Name` (`pkg/store/datastore/entities/role.go:17`); `User` has no `Credentials`.
+
 This document describes the user-tenant association model in the Trusted Platform, including ownership, roles, and multi-tenancy isolation principles.
 
 ## Table of Contents

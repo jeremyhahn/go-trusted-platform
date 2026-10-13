@@ -1,12 +1,15 @@
 # `platformctl ceremony`
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `platformctl ceremony` command reference, wire mapping and scopes.
+
 Ceremony operations for barrier initialization and officer enrollment.
 
 Routes through `platform.Client.Ceremony()` and the platform SDK ceremony
 service adapter, which terminates at the canonical ceremony backend. The
-platform repo provides the CLI binding and a thin server-side configurator
-(`pkg/storage/quicbaas/bootstrap_ceremony.go`) that injects runtime SO-PIN /
-User-PIN / hostname / SANs into the ceremony config before delegating.
+platform repo provides the CLI binding and a thin server-side backend
+(`CeremonyBackend`, `pkg/app/backends/ceremony.go`) that delegates every call
+to the SDK's barrier ceremony service and mints the admin bundle on Init.
 
 `platformd serve` wires the production ceremony backend (the QuicBaaS SDK
 ceremony service, plus the platform CA as the admin bundle issuer) into

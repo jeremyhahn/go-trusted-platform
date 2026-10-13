@@ -1,5 +1,8 @@
 # Unix Socket API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [daemon/api.md](../../daemon/api.md) and each feature's `api.md`.
+
 The Unix Socket API provides the fastest possible access to platform services through gRPC over Unix Domain Sockets, designed for local CLI tools and system services.
 
 ## Connection Configuration

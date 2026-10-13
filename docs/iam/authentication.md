@@ -1,5 +1,8 @@
 # IAM Authentication
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [../auth/](../auth/architecture.md) and its [api.md](../auth/api.md).
+
 ## Overview
 
 Trusted Platform IAM supports multiple authentication methods, with emphasis on passwordless and hardware-backed credentials.

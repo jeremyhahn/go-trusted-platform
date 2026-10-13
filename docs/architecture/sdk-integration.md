@@ -1,5 +1,8 @@
 # Unified SDK Integration Architecture
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [../sdk/architecture.md](../sdk/architecture.md).
+
 This document describes the SDK integration architecture for
 go-trusted-platform after the Phase 6 / Phase 7 / Phase 8 refactors that
 established quicbaas as the **only** consumer-facing surface for the

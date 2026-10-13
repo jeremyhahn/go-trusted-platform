@@ -1,5 +1,8 @@
 # EAB (External Account Binding) API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The EAB transport map, service resolution and security invariants.
+
 EAB credentials (RFC 8555 §7.3.4) pre-authorize ACME device enrollment:
 each credential is a `(KeyID, HMAC key)` pair bound to a device profile
 and tenant. The pre-enrollment config delivery flow consumes them to

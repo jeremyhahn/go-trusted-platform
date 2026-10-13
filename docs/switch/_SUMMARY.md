@@ -1,5 +1,8 @@
 # Physical Switch Management Documentation - Summary
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · A record of the legacy file set, replaced by [architecture.md](architecture.md), [engineering.md](engineering.md), [cli.md](cli.md), [api.md](api.md) and [user.md](user.md). The "planned" gRPC and CLI surfaces ship today.
+
 ## Overview
 
 Comprehensive documentation has been created for the physical switch management feature in go-trusted-platform. This feature enables automatic VLAN configuration on network switches during device provisioning.

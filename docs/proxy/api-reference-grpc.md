@@ -1,5 +1,8 @@
 # Proxy gRPC API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md).
+
 gRPC service definition for the reverse-proxy configuration service.
 
 | Property | Value |

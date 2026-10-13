@@ -1,5 +1,8 @@
 # Platform API Overview
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [daemon/api.md](../daemon/api.md) and each feature's `api.md`.
+
 The Trusted Platform exposes APIs through multiple protocols with 100% feature parity.
 
 ## SDKs

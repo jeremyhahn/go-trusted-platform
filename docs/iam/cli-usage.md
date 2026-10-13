@@ -1,5 +1,8 @@
 # IAM CLI Usage Guide
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [cli.md](cli.md). List commands page with `--page` and `--page-size`, not `--limit`/`--offset`; `user list` has no `--email`, `--role` or `--group` filters; `group add-member` and `remove-member` are not implemented.
+
 This guide covers the `platformctl iam` command group for managing Identity and Access Management resources.
 
 ## Overview

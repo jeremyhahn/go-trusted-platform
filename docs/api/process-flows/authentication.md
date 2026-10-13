@@ -1,5 +1,8 @@
 # Authentication Flows
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [daemon/api.md](../../daemon/api.md) and each feature's `api.md`.
+
 This document describes the authentication mechanisms supported by the Trusted Platform SDKs.
 
 ## Overview

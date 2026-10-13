@@ -1,5 +1,8 @@
 # vTPM CLI Usage
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [cli.md](cli.md). The verbs are `platformctl vtpm`, not `platformd vtpm`; there is no `--json` flag (use the global `-o json`); `create` requires `--bundle-id`; `start`, `stop`, `is-running`, `quote`, `seal`, `unseal` and `pcr` are missing here.
+
 ## Command Structure
 
 ```

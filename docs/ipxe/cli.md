@@ -62,6 +62,15 @@ short forms and no subcommands.
 | `--tftp-dir` | string | `""` | no | Raspberry Pi boot tree served over TFTP beside the iPXE firmware |
 | `--firmware-override` | name=path | — | no | Serve a prebuilt firmware file in place of the upstream download; repeatable (the db-signed arm64 iPXE as `snponly-aarch64.efi`) |
 | `--dhcp-proxy` | bool | `false` | no | Proxy DHCP: boot options, no lease — the segment has its own DHCP server |
+| `--nbd-listen` | string | `""` | no | NBD-over-TLS export server address; empty is `--dhcp-server-ip`:10809 |
+| `--nbd-volume-dir` | string | `""` | no | One NBD root volume per `diskless-nbd` node; empty is `--data-dir`/nbd |
+| `--nbd-volume-size` | int64 | `0` | with a `diskless-nbd` node | Bytes of a new NBD root volume, a multiple of 512 |
+| `--nbd-ca-file` | string | `""` | with a `diskless-nbd` node | Platform CA bundle that verifies NBD client IDevIDs |
+| `--nbd-cert` | string | `""` | with a `diskless-nbd` node | NBD server TLS certificate |
+| `--nbd-key` | string | `""` | with a `diskless-nbd` node | NBD server TLS private key |
+
+The `--nbd-*` flags are read only when the manifest has a `boot_model:
+diskless-nbd` entry; see [bootstrap engineering](../bootstrap/engineering.md#nbd-export-server-pkgbootstrapnbd).
 
 **Media sets.** Every installer pxeboot serves is a media set from a netboot
 media build (`platformctl diskimage netboot`, `make netboot-media`); nothing is

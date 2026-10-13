@@ -1,5 +1,8 @@
 # EAB QUIC API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The EAB sub-opcodes under `0xCF`, the wire format and the QUIC status bytes.
+
 | Property | Value |
 |----------|-------|
 | Endpoint | `host:9444` (UDP, QUIC + TLS 1.3) |
@@ -56,11 +59,11 @@ configured) → `StatusUnavailable`, everything else →
 ## SDK Usage
 
 ```go
-client, err := platform.NewClient(ctx,
-    platform.WithOnlyProtocol(platform.ProtocolQUIC),
+opts := platform.NewOptions(
     platform.WithQUICAddr("localhost:9444"),
     platform.WithTLSConfig(tlsConfig))
-eabClient, err := eab.NewClient(client.Transport())
+conn, err := quic.Connect(ctx, opts) // sdk/go/transport/quic
+eabClient, err := eab.NewClient(conn)
 cred, err := eabClient.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{
     ProfileId: 7, TenantId: "tenant-1", ExpiresInSeconds: 86400,
 })

@@ -1,5 +1,8 @@
 # Security Architecture
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [../trust/architecture.md](../trust/architecture.md) and [../security/architecture.md](../security/architecture.md).
+
 Comprehensive security design for go-trusted-platform, covering cryptographic trust, threat models, and operational security.
 
 ## Executive Summary

@@ -1,5 +1,8 @@
 # Integrated Security Architecture - Engineering Design
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [../security/architecture.md](../security/architecture.md).
+
 > **Last Updated**: 2026-01-18
 > **Specification Version**: 1.0
 > **TCG Compliance**: TPM 2.0 Keys for Device Identity and Attestation v1.10r9

@@ -1,5 +1,8 @@
 # vTPM MCP API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md) §2-§5. `vtpm_bundle_validate`, `vtpm_bundle_export` and `vtpm_bundle_import` do not exist (the tools are `vtpm_validate`, `vtpm_export`, `vtpm_import`, `pkg/api/mcp/tools.go:308-332`), and every `vtpm_bundle_*` tool is refused by the default-deny `AuthorizeTool` (`pkg/api/mcp/authz.go:50-59`).
+
 Port: `9445` (HTTPS) or stdio
 Protocol: Model Context Protocol (MCP) via JSON-RPC 2.0
 

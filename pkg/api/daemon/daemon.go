@@ -1419,11 +1419,12 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Info("vTPM service wired into REST server")
 	}
 
-	// Wire the time-synchronization and VPN control-plane REST handlers onto
-	// the daemon's own REST listener. Without them /api/v1/ntp/* and
-	// /api/v1/vpn/* would 404 there. Each route requires the scope its RPC
-	// requires on gRPC, checked by one guard: a platform token, else the
-	// verified client certificate.
+	// Wire the time-synchronization, VPN control-plane and compute REST
+	// handlers onto the daemon's own REST listener. Without them
+	// /api/v1/ntp/*, /api/v1/vpn/* and /api/v1/compute/* would 404 there.
+	// Each route requires the scope its RPC requires on gRPC, checked by one
+	// guard: a platform token, else the verified client certificate. The
+	// compute routes run the same ComputeGRPCService gRPC and QUIC serve.
 	if daemon.concreteRestServer != nil {
 		restGuard, guardErr := newRESTScopeGuard(config, platformTokenValidatorShared, logger)
 		if guardErr != nil {
@@ -1435,6 +1436,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			daemon.concreteRestServer.SetNTPHandlers(ntpGRPCService, restGuard)
 		}
 		daemon.concreteRestServer.SetVPNHandlers(vpnGRPCService, restGuard)
+		if computeService != nil {
+			daemon.concreteRestServer.SetComputeHandlers(computeService, restGuard)
+		}
 	}
 
 	// Wire device + profile REST handlers if the services are available.
@@ -1499,13 +1503,6 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 				logger.Info("Platform tenant manager wired into QUIC handler")
 			}
 		}
-	}
-
-	// Wire the compute orchestrator into REST handlers so /api/v1/compute/*
-	// (VM lifecycle + metrics/disks/logs/migrate) is served at parity with
-	// gRPC/QUIC/MCP. No-op when the orchestrator is not VM-capable.
-	if daemon.concreteRestServer != nil && config.ComputeOrchestrator != nil {
-		daemon.concreteRestServer.SetComputeHandlers(config.ComputeOrchestrator)
 	}
 
 	// Wire SDN service into REST server if both are available

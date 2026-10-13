@@ -209,17 +209,6 @@ type DeviceAttributesRESTResponse struct {
 	PlatformSerial       string `json:"platform_serial"`
 }
 
-// ActivateCredentialRESTRequest represents an activate credential request.
-type ActivateCredentialRESTRequest struct {
-	CredentialBlob string `json:"credential_blob"`
-	Secret         string `json:"secret" secret:"true"`
-}
-
-// ActivateCredentialRESTResponse represents an activate credential response.
-type ActivateCredentialRESTResponse struct {
-	Decrypted string `json:"decrypted"`
-}
-
 // =============================================================================
 // IDevID REST Route Registration
 // =============================================================================
@@ -248,9 +237,9 @@ func (s *RESTServer) registerIDevIDRoutes() {
 	api.HandleFunc("/tpm/iak/install", s.handleIAKInstallCert).Methods(http.MethodPost)
 	api.HandleFunc("/tpm/iak/cert", s.handleIAKDeleteCert).Methods(http.MethodDelete)
 
-	// Device attributes and credential activation
+	// Device attributes. POST /tpm/activate-credential is the TPMService
+	// route in pkg/api/rest/tpm_handlers.go.
 	api.HandleFunc("/tpm/device/attributes", s.handleDeviceAttributes).Methods(http.MethodGet)
-	api.HandleFunc("/tpm/activate-credential", s.handleActivateCredential).Methods(http.MethodPost)
 
 	s.logger.Info("IDevID/IAK REST routes registered")
 
@@ -809,55 +798,5 @@ func (s *RESTServer) handleDeviceAttributes(w http.ResponseWriter, r *http.Reque
 		PlatformSerial:       platformAttrs.Serial,
 	}
 
-	s.writeJSON(w, http.StatusOK, resp)
-}
-
-// handleActivateCredential handles POST /api/v1/tpm/activate-credential
-func (s *RESTServer) handleActivateCredential(w http.ResponseWriter, r *http.Request) {
-	if s.tpm2Service == nil {
-		s.writeError(w, http.StatusServiceUnavailable, ErrTPM2ServiceNotAvailable{})
-		return
-	}
-
-	var req ActivateCredentialRESTRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
-		return
-	}
-
-	if req.CredentialBlob == "" {
-		s.writeError(w, http.StatusBadRequest, ErrMissingRequiredField{Field: "credential_blob"})
-		return
-	}
-	if req.Secret == "" {
-		s.writeError(w, http.StatusBadRequest, ErrMissingRequiredField{Field: "secret"})
-		return
-	}
-
-	// Decode base64 credential blob and secret
-	credentialBlob, err := base64.StdEncoding.DecodeString(req.CredentialBlob)
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: "invalid base64 credential_blob"})
-		return
-	}
-
-	secret, err := base64.StdEncoding.DecodeString(req.Secret)
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: "invalid base64 secret"})
-		return
-	}
-
-	decrypted, err := activateCredential(s.tpm2Service, credentialBlob, secret)
-	if err != nil {
-		s.logger.Error("Failed to activate credential", "error", err)
-		s.writeError(w, http.StatusInternalServerError, ErrTPM2OperationFailed{Operation: "ActivateCredential", Cause: err})
-		return
-	}
-
-	resp := &ActivateCredentialRESTResponse{
-		Decrypted: base64.StdEncoding.EncodeToString(decrypted),
-	}
-
-	s.logger.Info("Credential activated successfully")
 	s.writeJSON(w, http.StatusOK, resp)
 }

@@ -1,5 +1,8 @@
 # New Packages Test Report
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · A dated review record (2026-04-14). `pkg/sdn/firewall`, `pkg/cli/commands/encrypt`, `test/integration/switch/`, `test/integration/cli/switch/`, `test/integration/sdn/gateway/` and `test/integration/sdn/tunnel/` no longer exist.
+
 **Date:** 2026-04-14
 **Reviewer:** QA Expert (Claude)
 **Scope:** Packages implemented in the current development session

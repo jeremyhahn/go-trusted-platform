@@ -1,5 +1,8 @@
 # QuicBaaS IAM Integration
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and [api.md](api.md).
+
 This document details how go-trusted-platform integrates with QuicBaaS's IAM (Identity and Access Management) services for authentication and authorization.
 
 ## Overview
@@ -160,8 +163,7 @@ quicbaas:
 
 ## Implementation Files
 
-- `pkg/api/mcp/quicbaas_auth.go` - Auth adapter implementation
-- `pkg/api/mcp/interfaces.go` - QuicBaaS service interfaces
+- `pkg/api/mcp/dragondb_auth.go` - Auth adapter implementation and QuicBaaS service interfaces
 - `pkg/api/daemon/daemon.go` - Wiring QuicBaaS auth into MCP server
 - `pkg/storage/quicbaas/interfaces.go` - Client and factory interfaces
 

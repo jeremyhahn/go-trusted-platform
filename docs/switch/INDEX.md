@@ -1,5 +1,8 @@
 # Switch Management Documentation Index
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md), [engineering.md](engineering.md), [cli.md](cli.md), [api.md](api.md) and [user.md](user.md). The CLI and gRPC surfaces ship today; the runtime switch service is not wired into the daemon; `kms://` passwords are not resolved; password auth is not implemented.
+
 Complete documentation for the physical switch management feature in go-trusted-platform.
 
 ## Documentation Map

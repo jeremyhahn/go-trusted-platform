@@ -1,5 +1,8 @@
 # NTP MCP API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md) (§8). The three tools and their scopes below still match `pkg/api/mcp/authz.go`.
+
 | Property | Value |
 |----------|-------|
 | Endpoint | `host:9445` (HTTPS) or stdio |

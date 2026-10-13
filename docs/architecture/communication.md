@@ -1,5 +1,8 @@
 # Inter-Service Communication
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [../daemon/api.md](../daemon/api.md).
+
 This document describes the communication protocols and patterns used between go-trusted-platform components.
 
 ## Communication Overview

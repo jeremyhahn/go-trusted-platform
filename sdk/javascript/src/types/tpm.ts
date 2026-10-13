@@ -118,8 +118,8 @@ export interface EventLogEntry {
 export interface PCRValue {
   /** PCR index (0-23) */
   index: number;
-  /** PCR bank */
-  bank: PCRBank;
+  /** PCR bank, by the proto name the server writes and reads (`PCR_BANK_SHA256`) */
+  bank: PCRBankName;
   /** PCR value (base64) */
   value: string;
 }

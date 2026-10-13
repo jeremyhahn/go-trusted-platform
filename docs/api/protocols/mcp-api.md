@@ -1,5 +1,8 @@
 # MCP API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [daemon/api.md](../../daemon/api.md) and each feature's `api.md`.
+
 The MCP (Model Context Protocol) API enables AI assistants like Claude and GPT to interact with the Trusted Platform through tool-based invocation using JSON-RPC 2.0.
 
 ## Connection Configuration

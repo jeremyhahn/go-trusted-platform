@@ -1,5 +1,8 @@
 # QUIC API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [daemon/api.md](../../daemon/api.md) and each feature's `api.md`.
+
 The QUIC API provides low-latency, connection-resilient access to platform services over UDP with mandatory TLS 1.3 encryption.
 
 ## Connection Configuration

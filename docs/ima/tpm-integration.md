@@ -1,5 +1,8 @@
 # IMA TPM Integration
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md). There is no `platformctl ima` group and no `tpm pcr` verb, and the attestation manifest carries no IMA data ([architecture.md §9](architecture.md)).
+
 IMA extends file measurements to PCR 10 of the TPM, enabling hardware-backed integrity verification.
 
 ## PCR 10 Overview

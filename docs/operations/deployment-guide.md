@@ -1,5 +1,8 @@
 # Deployment Guide
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [../daemon/user.md](../daemon/user.md), [../installer/user.md](../installer/user.md) and [../cluster/user.md](../cluster/user.md). `platformctl backup`, `cluster`, `daemon`, `dns` and `tls` are not registered commands, and `platformd` has only `serve` and `version` (no `config`).
+
 Comprehensive guide for deploying go-trusted-platform in various environments.
 
 ## Prerequisites

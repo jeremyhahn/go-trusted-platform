@@ -1,5 +1,8 @@
 # Bootstrap Config Delivery
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md), [engineering.md](engineering.md), [api.md](api.md), [cli.md](cli.md) and [user.md](user.md); corrections in engineering.md §12.
+
 Covers **bootstrap-time** device-config delivery — how the bootstrap
 orchestrator gets per-node config onto a freshly-installing machine
 before `platformd` is up.

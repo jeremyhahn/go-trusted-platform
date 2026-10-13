@@ -1,5 +1,8 @@
 # SWTPM Integration with QEMU Orchestrator
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> Deep dive on how `pkg/compute` (QEMU orchestrator) provisions and runs a `pkg/swtpm` instance per VM.
+
 This document describes the automatic TPM provisioning via swtpm in the QEMU compute orchestrator.
 
 ## Overview
@@ -13,6 +16,15 @@ The QEMU orchestrator now automatically provisions and manages software TPM (swt
 1. **QEMUOrchestrator**: Main orchestrator managing VM instances
 2. **qemuInstance**: Extended to include swtpm reference
 3. **swtpm.SWTPM**: Software TPM implementation from `pkg/swtpm`
+
+`Create` sources the swtpm in `provisionVTPM` (`pkg/compute/qemu.go`):
+
+- **vTPM generator configured**: the VM gets the profile's `pkg/vtpm` bundle
+  (looked up, or generated on first use), with a CA-issued EK. State lives in
+  `{bundle StoragePath}/tpm/` and the socket is the bundle's `SocketPath`.
+- **No generator**: the VM gets an anonymous swtpm in `{workDir}/tpm/` with no
+  EK identity, and a warning is logged. A profile that carries `EKCert` or
+  `EKSerial` fails with `ErrVTPMIdentityRequired` instead.
 
 ### Lifecycle Flow
 
@@ -39,7 +51,7 @@ Delete VM → Cleanup swtpm → Remove TPM State
 
 ### TPM Configuration
 
-Default swtpm configuration:
+Default swtpm configuration (anonymous swtpm; a vTPM bundle uses its own paths):
 - **TPM Version**: TPM 2.0
 - **PCR Banks**: SHA-256 (default)
 - **Socket Mode**: QEMU mode (--ctrl socket)
@@ -61,7 +73,7 @@ Default swtpm configuration:
 #### Shutdown
 - Automatically stops swtpm when VM exits
 - Preserves TPM state for next boot
-- Copies state files back from temp directories (Docker compatibility)
+- Copies the `tpm2-*` and `.lock` files back from the temp directory, if one was used (see Docker Compatibility)
 
 #### Deletion
 - Ensures swtpm is stopped
@@ -106,12 +118,10 @@ tpmSocket := instance.Metadata["tpm_socket"]
 
 ### Disabling TPM
 
-To create a VM without TPM, modify the instance config:
-
-```go
-// After Create(), before Start()
-instance.Config.TPMEnabled = false
-```
+There is no per-instance switch. `Create` sets `TPMEnabled: true` and
+provisions the TPM before it returns. `Start` launches swtpm whenever the
+instance holds one, so setting `instance.Config.TPMEnabled = false` after
+`Create` has no effect.
 
 ## Implementation Details
 
@@ -206,6 +216,10 @@ qemu-system-x86_64 \
   ...
 ```
 
+On aarch64 the front-end is `-device tpm-tis-device` (`pkg/qemu/arch.go`).
+`pkg/qemu` adds these arguments only if the socket exists when QEMU starts.
+Otherwise the guest boots without a TPM.
+
 This creates a TPM 2.0 device at `/dev/tpm0` inside the guest VM.
 
 ## State Persistence
@@ -218,19 +232,32 @@ TPM state is stored in `{workDir}/tpm/`:
 - `swtpm.sock` - Unix socket (ephemeral)
 - `swtpm.log` - swtpm daemon logs
 
+The socket and the log are written beside each other, so both move to the temp
+directory when one is in use.
+
 ### Docker Compatibility
 
-For Docker volume mounts that don't support Unix sockets:
-- State files are copied to `/tmp/swtpm-run-*`
-- swtpm runs from temp directory
-- State files are copied back on shutdown
+`swtpm.Start` (`pkg/swtpm/swtpm.go`) runs swtpm from a temp directory when the
+state directory is outside `/tmp/` and `/var/run/`, or when the socket path is
+too long for a Unix socket. The default compute work directory,
+`/var/lib/trusted-platform/compute`, is outside both, so this is the default
+case:
+- State files are copied to `$TMPDIR/swtpm-*`
+- swtpm runs there, with its socket and log
+- On `Stop`, the `tpm2-*` and `.lock` files are copied back (mode 0640), and the temp directory is removed
+
+`swtpm_setup` also runs in its own `swtpm-init-*` temp directory, and its
+output is copied into the state directory.
+
+The relocated socket path is not handed to QEMU. `Create` stores the original
+path in the QEMU config and in `Metadata["tpm_socket"]`.
 
 ## Security Considerations
 
 ### Isolation
 - Each VM has isolated TPM state
 - Unique socket per instance
-- State directory permissions: 0755 (owner rwx)
+- State directory permissions: 0755 (world-readable, owner-writable)
 
 ### State Protection
 - TPM state survives VM restarts
@@ -246,11 +273,11 @@ For Docker volume mounts that don't support Unix sockets:
 
 ### swtpm not starting
 - Check if swtpm is installed: `which swtpm`
-- Check logs: `{workDir}/tpm/swtpm.log`
+- Check logs: `swtpm.log` beside the socket (`$TMPDIR/swtpm-*/` when relocated, else `{workDir}/tpm/`)
 - Verify state directory permissions
 
 ### Socket not ready
-- Check socket file exists: `ls -la {workDir}/tpm/swtpm.sock`
+- Check socket file exists: `swtpm.sock` in the same directory as the log
 - Verify swtpm process is running: `ps aux | grep swtpm`
 - Check for SELinux/AppArmor denials
 

@@ -1,5 +1,8 @@
 # Device gRPC API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md) and `pkg/api/grpc/proto/device.proto`. There is one `DeviceService` (`CreateDevice`, not `RegisterDevice`; no separate `ProfileService`), served on port 10443, not 9443.
+
 Endpoint: `localhost:9443`
 
 ## Service Definitions

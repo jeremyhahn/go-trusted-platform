@@ -1,6 +1,6 @@
 # Compute — API
 
-> **Status: NORMATIVE** · Scope: VM and container routes on every transport · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: VM and container routes on every transport · Last verified: 2026-10-13
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING`, never omitted.
@@ -16,8 +16,10 @@ over a Unix domain socket**, so gRPC and Unix share a column.
 
 gRPC: `ComputeService`, 34 RPCs (`pkg/api/grpc/proto/compute.proto`) — the
 largest service in the platform after IAM.
-REST: base path `/api/v1/compute` (`pkg/webservice/v1/rest/compute/router.go`).
-On nodes where the compute orchestrator is not configured (e.g. a control
+REST: base path `/api/v1/compute` — web service
+(`pkg/webservice/v1/rest/compute/router.go`) and platformd's REST listener
+(`pkg/api/rest/compute_handlers.go`, mounted by `RESTServer.SetComputeHandlers`).
+On web-service nodes where the compute orchestrator is not configured (e.g. a control
 plane without a container runtime), the surface registers through the
 service registry loud-failure policy: every `/api/v1/compute/*` request
 answers a structured 503, and the dark surface is listed on
@@ -44,6 +46,42 @@ change at any time — clients MUST NOT match on it. The TypeScript SDK lifts
 `isServiceNotConfigured(err)`, which additionally requires status 503.
 QUIC: top-level VM opcodes `0x60`–`0x6A`, extended lifecycle `0xB6`–`0xBF`, and
 a **VM extended category opcode `0x69`** for the operational sub-opcodes — §6.
+
+**Two REST servers serve `/api/v1/compute`.** The web service mounts its router
+(the 503 above and the `admin` gate of §7 are its behaviour); platformd's own
+REST listener mounts `restapi.ComputeHandlers`. **Every daemon-listener route
+calls one RPC of the daemon's `ComputeService`** — the same
+`ComputeGRPCService` that gRPC and Unix call, with no compute logic of its own
+— behind the scope that RPC requires on gRPC (§7), granted by a platform bearer
+token or the verified client certificate. A daemon with no compute service
+mounts none of these routes. Each route speaks the SDK wire contract
+(`TestComputeRoutesServeTheSDKContract`, `pkg/api/rest/compute_handlers_test.go`;
+the route list is in [api-reference.md](api-reference.md#rest-api)):
+
+- The request is the RPC's request message. The body is protojson, with either
+  the camelCase JSON name (the SDKs) or the proto name of each field. An enum
+  is its proto name (`VM_STATE_RUNNING`, `PCR_BANK_SHA256`) or number; the
+  short `RUNNING` is refused. The JavaScript SDK types every compute enum by
+  its proto name, the spelling every response carries too, and prefixes only
+  the short PCR bank (`SHA256`) its TPM types share before sending. An empty
+  body is the empty request.
+- Query parameters and path parameters set fields of the same message, by
+  either name: a field of a nested message by dotted path
+  (`pagination.pageSize=20`), a string-map entry as `field.key`
+  (`selector.matchLabels.tier=web`), and one parameter per element of a
+  repeated field (`?states=VM_STATE_RUNNING&states=VM_STATE_STOPPED`). A path
+  parameter wins over a query parameter of the same name.
+- **A field the message does not have is `400`, never a silent default** — in
+  the body (`ErrInvalidRequestBody`, `unknown field "x"`) or as a parameter
+  (`ErrInvalidQueryParameter`). So is a parameter that does not parse, or a
+  single-valued field given twice. The compute service is not called.
+- The reply is the bare protojson response message, with camelCase keys and
+  every field present. An RPC error is the standard error envelope, its status
+  mapped from the gRPC code as on the TPM routes.
+
+The daemon listener has no suspend, resume, restart, console or logs route:
+suspend and resume have no `ComputeService` RPC, and console and logs are
+streams (§5).
 
 ---
 
@@ -124,7 +162,7 @@ Containers are the most evenly covered capability set in this feature.
 |---|---|---|---|---|---|
 | Attest VM | `POST /api/v1/compute/vms/{id}/attest` | `AttestVM` | `OpVMAttest` (`0xB9`) | `vm_attest` | ✅ |
 | Verify VM attestation | `POST /api/v1/compute/vms/{id}/attest/verify` | `VerifyVMAttestation` | `OpVMVerifyAttest` (`0xBF`) | `vm_attest_verify` | ✅ |
-| Attest container | `MISSING — docs/13 G7` | `AttestContainer` | `OpContainerAttest` (`0xEC`) | `container_attest` | ✅ |
+| Attest container | `POST /api/v1/compute/containers/{id}/attest` (daemon listener only) | `AttestContainer` | `OpContainerAttest` (`0xEC`) | `container_attest` | ✅ |
 
 `platformctl container attest` is the only attestation CLI verb in the whole
 platform — see [`docs/attestation/cli.md`](../attestation/cli.md).
@@ -208,9 +246,9 @@ under two resources:
 permission map (`pkg/api/mcp/authz.go`), so `AuthorizeTool` answers
 `AuthErrorToolNotClassified` for every caller until they are classified.
 
-### REST is gated on the `admin` role (#165)
+### The web-service REST surface is gated on the `admin` role (#165)
 
-`/api/v1/compute/**` requires an authenticated caller holding `admin`. That
+On the web service, `/api/v1/compute/**` requires an authenticated caller holding `admin`. That
 covers VM create/delete/start/stop/reboot/migrate, snapshot create and restore,
 disk attach/detach/resize, and container create/delete/start/stop — including
 `POST /compute/containers/{id}/exec`, which is arbitrary command execution
@@ -219,8 +257,10 @@ inside a workload and previously answered a caller with no token at all.
 Reads are gated with the writes: the VM and container inventory is the map of
 what runs on this node and for whom.
 
-The REST gate is role-based; the gRPC and MCP positions are the scope catalogs
-above. See [`docs/auth/architecture.md`](../auth/architecture.md) §6c.
+The web-service gate is role-based. platformd's REST listener checks the gRPC
+scope catalog above, route by route: each route requires exactly the
+permission of the RPC it calls (`computeRouteScopes`,
+`pkg/api/rest/route_scope_test.go`). The MCP position is its own catalog. See [`docs/auth/architecture.md`](../auth/architecture.md) §6c.
 
 ---
 

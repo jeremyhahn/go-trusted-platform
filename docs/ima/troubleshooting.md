@@ -1,5 +1,8 @@
 # IMA Troubleshooting
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [user.md](user.md). There is no `platformctl ima` command group, so `ima policy generate` does not exist ([architecture.md §9](architecture.md)).
+
 Common issues and solutions for Linux IMA.
 
 ## Checking IMA Status

@@ -1,5 +1,8 @@
 # Compute API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md), the compute API contract for every transport.
+
 This document provides the API reference for compute orchestration operations.
 
 ## Status: 100% Complete
@@ -636,23 +639,55 @@ enum DiskType {
 
 ## REST API
 
-The REST API provides HTTP access to compute operations.
+platformd's REST listener serves `/api/v1/compute` from
+`restapi.ComputeHandlers` (`pkg/api/rest/compute_handlers.go`). Every route
+calls one `ComputeService` RPC — the same service gRPC serves — over protobuf
+JSON, behind the scope that RPC requires on gRPC. The wire contract (field
+names, enums, query parameters, unknown-field refusal, error mapping) is in
+[api.md §1](api.md#1-the-six-transports).
 
 ### Endpoints
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/v1/compute/vms | Create VM |
-| GET | /api/v1/compute/vms | List VMs |
-| GET | /api/v1/compute/vms/{id} | Get VM |
-| DELETE | /api/v1/compute/vms/{id} | Delete VM |
-| POST | /api/v1/compute/vms/{id}/start | Start VM |
-| POST | /api/v1/compute/vms/{id}/stop | Stop VM |
-| POST | /api/v1/compute/vms/{id}/reboot | Reboot VM |
-| POST | /api/v1/compute/containers | Create Container |
-| GET | /api/v1/compute/containers | List Containers |
-| GET | /api/v1/compute/containers/{id} | Get Container |
-| DELETE | /api/v1/compute/containers/{id} | Delete Container |
+| Method | Endpoint | RPC | Scope |
+|--------|----------|-----|-------|
+| POST | /api/v1/compute/vms | `CreateVM` | `vm:write` |
+| GET | /api/v1/compute/vms | `ListVMs` | `vm:read` |
+| GET | /api/v1/compute/vms/{id} | `GetVM` | `vm:read` |
+| DELETE | /api/v1/compute/vms/{id} | `DeleteVM` | `vm:delete` |
+| POST | /api/v1/compute/vms/{id}/start | `StartVM` | `vm:write` |
+| POST | /api/v1/compute/vms/{id}/stop | `StopVM` | `vm:write` |
+| POST | /api/v1/compute/vms/{id}/reboot | `RebootVM` | `vm:write` |
+| GET | /api/v1/compute/vms/{id}/metrics | `GetVMMetrics` | `vm:read` |
+| POST | /api/v1/compute/vms/{vmId}/migrate | `MigrateVM` | `vm:write` |
+| POST | /api/v1/compute/vms/{vmId}/disks | `AttachDisk` | `vm:write` |
+| DELETE | /api/v1/compute/vms/{vmId}/disks/{diskId} | `DetachDisk` | `vm:write` |
+| PATCH | /api/v1/compute/vms/{vmId}/disks/{diskId} | `ResizeDisk` | `vm:write` |
+| POST | /api/v1/compute/vms/{vmId}/snapshots | `CreateSnapshot` | `vm:write` |
+| GET | /api/v1/compute/vms/{vmId}/snapshots | `ListSnapshots` | `vm:read` |
+| DELETE | /api/v1/compute/vms/{vmId}/snapshots/{snapshotId} | `DeleteSnapshot` | `vm:delete` |
+| POST | /api/v1/compute/vms/{vmId}/snapshots/{snapshotId}/restore | `RestoreSnapshot` | `vm:write` |
+| POST | /api/v1/compute/vms/{vmId}/attest | `AttestVM` | `vm:read` |
+| POST | /api/v1/compute/vms/{vmId}/attest/verify | `VerifyVMAttestation` | `vm:read` |
+| POST | /api/v1/compute/containers | `CreateContainer` | `container:write` |
+| GET | /api/v1/compute/containers | `ListContainers` | `container:read` |
+| GET | /api/v1/compute/containers/{id} | `GetContainer` | `container:read` |
+| DELETE | /api/v1/compute/containers/{id} | `DeleteContainer` | `container:delete` |
+| POST | /api/v1/compute/containers/{id}/start | `StartContainer` | `container:write` |
+| POST | /api/v1/compute/containers/{id}/stop | `StopContainer` | `container:write` |
+| POST | /api/v1/compute/containers/{id}/exec | `ExecContainer` | `container:write` |
+| POST | /api/v1/compute/containers/{id}/attest | `AttestContainer` | `container:read` |
+| GET | /api/v1/compute/containers/{id}/metrics | `GetContainerMetrics` | `container:read` |
+| DELETE | /api/v1/compute/containers | `DeleteContainer` | `container:delete` |
+| POST | /api/v1/compute/containers/start | `StartContainer` | `container:write` |
+| POST | /api/v1/compute/containers/stop | `StopContainer` | `container:write` |
+| POST | /api/v1/compute/containers/attest | `AttestContainer` | `container:read` |
+
+The last four are the forms the Go SDK sends, with the container `id` in the
+body; the JavaScript SDK puts it in the path. A path parameter fills the
+request field of the same name, so `{vmId}` is `vmId` and `{id}` is `id`.
+
+Suspend, resume, restart, console and logs have no route: suspend and resume
+have no `ComputeService` RPC, and console and logs are gRPC streams.
 
 ### Request/Response Examples
 
@@ -661,6 +696,7 @@ The REST API provides HTTP access to compute operations.
 **Request:**
 ```http
 POST /api/v1/compute/vms HTTP/1.1
+Authorization: Bearer <token with vm:write>
 Content-Type: application/json
 
 {
@@ -670,13 +706,13 @@ Content-Type: application/json
       "cores": 4
     },
     "memory": {
-      "size_mb": 4096
+      "sizeMb": 4096
     },
     "disks": [
       {
         "path": "/var/lib/compute/web-server-001/disk.qcow2",
         "type": "DISK_TYPE_QCOW2",
-        "size_gb": 20,
+        "sizeGb": 20,
         "bootable": true
       }
     ],
@@ -691,7 +727,7 @@ Content-Type: application/json
       "version": "TPM_VERSION_2_0",
       "emulated": true
     },
-    "secure_boot": true
+    "secureBoot": true
   },
   "start": true
 }
@@ -699,7 +735,7 @@ Content-Type: application/json
 
 **Response:**
 ```http
-HTTP/1.1 201 Created
+HTTP/1.1 200 OK
 Content-Type: application/json
 
 {
@@ -711,7 +747,7 @@ Content-Type: application/json
     "id": "abc123",
     "config": { ... },
     "state": "VM_STATE_RUNNING",
-    "created_at": "2025-01-15T10:30:00Z"
+    "createdAt": "2025-01-15T10:30:00Z"
   }
 }
 ```
@@ -720,7 +756,8 @@ Content-Type: application/json
 
 **Request:**
 ```http
-GET /api/v1/compute/vms?states=VM_STATE_RUNNING HTTP/1.1
+GET /api/v1/compute/vms?states=VM_STATE_RUNNING&pagination.pageSize=20&selector.matchLabels.tier=web HTTP/1.1
+Authorization: Bearer <token with vm:read>
 ```
 
 **Response:**
@@ -739,10 +776,30 @@ Content-Type: application/json
     }
   ],
   "pagination": {
-    "total": 1
+    "page": 0,
+    "pageSize": 20,
+    "totalPages": 1,
+    "totalItems": "1"
   }
 }
 ```
+
+`totalItems` is a `uint64`, which protobuf JSON writes as a string.
+
+#### A refused request
+
+```http
+POST /api/v1/compute/vms/abc123/stop HTTP/1.1
+Authorization: Bearer <token with vm:write>
+Content-Type: application/json
+
+{"force": true, "timeout": 30}
+```
+
+answers `400` with `ErrInvalidRequestBody` (`unknown field "timeout"`; the
+field is `timeoutSeconds`), and `GET /api/v1/compute/vms?state=RUNNING`
+answers `400` with `ErrInvalidQueryParameter`. Neither reaches the compute
+service.
 
 ---
 
@@ -804,7 +861,7 @@ capability interface:
 | gRPC / Unix | `ComputeService` `CreateSnapshot` / `RestoreSnapshot` / `DeleteSnapshot` / `ListSnapshots` / `AttestVM` / `VerifyVMAttestation` |
 | QUIC | Extended VM operations are multiplexed as sub-opcodes in `payload[0]` under `OpVMExtendedCategory` (0x69, inside the VM opcode range) because the direct extended opcodes 0xB6-0xBF collide with the IAM role/group ranges at the top level. Sub-opcodes: `OpVMSnapshot`, `OpVMSnapshotRestore`, `OpVMSnapshotDelete`, `OpVMSnapshotList`, `OpVMAttest`, `OpVMVerifyAttest` |
 | MCP | `vm_snapshot_create`, `vm_snapshot_get`, `vm_snapshot_list`, `vm_snapshot_delete`, `vm_snapshot_restore`, `vm_attest`, `vm_attest_verify` (optional `VMProvider` capability on the service provider) |
-| REST | `POST /api/v1/compute/vms/{id}/attest` and `POST /api/v1/compute/vms/{id}/attest/verify` handlers exist in `pkg/api/rest` but the compute REST router is not yet mounted (operator decision pending); no REST snapshot routes exist yet |
+| REST | platformd's REST listener: `POST`/`GET /api/v1/compute/vms/{vmId}/snapshots`, `DELETE .../snapshots/{snapshotId}`, `POST .../snapshots/{snapshotId}/restore`, `POST /api/v1/compute/vms/{vmId}/attest` and `POST .../attest/verify`, each calling the `ComputeService` RPC above ([REST API](#rest-api)) |
 
 Suspend / resume / restart / console remain honestly unimplemented: no
 production orchestrator provides the `VMExtendedLifecycle` capability yet,
@@ -859,4 +916,4 @@ so those operations return typed not-supported errors on every surface.
 - [Configuration](configuration.md) - Configuration reference
 - [CLI Usage](cli-usage.md) - Command-line interface
 - [Architecture](architecture.md) - System design
-- [Quick Reference](QUICK_REFERENCE.md) - Common patterns
+- [api.md](api.md) - The current compute API contract

@@ -1,5 +1,8 @@
 # TPM Factory Reset on First Boot
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `factory-reset-on-firstboot` and `recovery-key-strategy` installer settings: what each does to the TPM and the recovery passphrase.
+
 ## What it is
 
 `disk.encryption.tpm.factory-reset-on-firstboot` is an installer-config flag

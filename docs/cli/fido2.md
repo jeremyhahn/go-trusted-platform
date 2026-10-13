@@ -1,5 +1,8 @@
 # `platformctl fido2`
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `platformctl fido2` command reference, wire mapping and scopes.
+
 FIDO2 authenticator device operations and WebAuthn register / authenticate.
 
 All subcommands route through `platform.Client.FIDO2()` and the platform SDK
@@ -84,12 +87,9 @@ platformctl fido2 register \
 ceremony role (`so`, `admin`, `user`) for later use by `ceremony
 claim-cert`.
 
-The command prints the new credential's hex-encoded id. platformd records the
-credential (id, relying party, user, AAGUID, public key, sign count) in the
-SDK KV store under the `platform_fido2_credentials` entity type, so it
-survives a platformd restart. A registration that cannot be recorded fails;
-the authenticator still holds the key, but platformd does not report a
-credential it cannot authenticate later.
+The command prints the new credential's hex-encoded id. platformd stores no
+FIDO2 credential: with the backend unwired (above), `platformd serve` answers
+`fido2: backend not configured`.
 
 ### `fido2 authenticate`
 
@@ -99,9 +99,9 @@ Test an authentication ceremony against a registered credential.
 platformctl fido2 authenticate --credential-id <hex credID from register>
 ```
 
-platformd looks the credential up in the SDK KV store and asks the attached
-authenticator for an assertion against it. An id that is not hex is rejected;
-an id that was never registered is reported as not registered.
+The id is the hex string `fido2 register` printed. Like every FIDO2 call,
+`platformd serve` answers it with `fido2: backend not configured` until the
+backend is wired.
 
 ## Exit codes
 

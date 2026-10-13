@@ -1,5 +1,8 @@
 # DANE (DNS-based Authentication of Named Entities)
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md), [engineering.md](engineering.md), [api.md](api.md), [cli.md](cli.md) and [user.md](user.md); corrections in engineering.md §12.
+
 DANE uses DNSSEC-authenticated TLSA DNS records to verify TLS certificate chains without requiring a certificate authority to be pre-trusted. The platform implements RFC 6698 (DANE) and RFC 7671 (DANE certificate usage rollover).
 
 ## TLSA Record Types

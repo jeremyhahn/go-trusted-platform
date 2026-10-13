@@ -1,5 +1,8 @@
 # CA API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md), [api.md](api.md), [cli.md](cli.md) and [user.md](user.md).
+
 This document provides the API reference for Certificate Authority operations
 including ACME endpoints and certificate management.
 

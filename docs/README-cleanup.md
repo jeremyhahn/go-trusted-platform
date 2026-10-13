@@ -1,5 +1,8 @@
 # TODO/FIXME Cleanup Checklist
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by the issue tracker and [ROADMAP.md](../ROADMAP.md).
+
 This document tracks the cleanup of TODO/FIXME comments throughout the codebase.
 
 **Total Items: ~124**

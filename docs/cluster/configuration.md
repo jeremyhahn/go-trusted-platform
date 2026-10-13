@@ -1,5 +1,8 @@
 # Cluster Configuration
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and its siblings; describes an API surface and a `platformctl cluster` CLI that do not exist.
+
 This document provides the complete configuration reference for go-trusted-platform cluster deployments.
 
 ## Configuration Overview
@@ -344,6 +347,6 @@ The configuration is validated at startup. Common validation errors:
 ## Related Documentation
 
 - [Architecture](architecture.md) - Cluster architecture overview
-- [Bootstrap](bootstrap.md) - Cluster setup procedures
-- [Operations](operations.md) - Operational procedures
+- [Bootstrap](user.md) - Cluster setup procedures
+- [Operations](user.md) - Operational procedures
 - [QuicBaaS Integration](../architecture/quicbaas-integration.md) - Service layer details

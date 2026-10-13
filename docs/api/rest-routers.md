@@ -1,5 +1,8 @@
 # REST Router Layer (`/api/v1`)
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> How the `pkg/webservice/v1` REST routers are wired, gated and added.
+
 This document describes how the platformd REST surface is wired together,
 the conventions every router follows, and how to add a new service.
 

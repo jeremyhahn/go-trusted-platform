@@ -1,5 +1,8 @@
 # REST API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [daemon/api.md](../daemon/api.md) and each feature's `api.md`.
+
 Base URL: `https://<host>:8443/api/v1`
 
 ## Authentication

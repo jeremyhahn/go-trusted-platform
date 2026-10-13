@@ -1,5 +1,8 @@
 # Device Package
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and [user.md](user.md).
+
 Device profile and provisioning management for the Trusted Platform.
 
 ## Overview

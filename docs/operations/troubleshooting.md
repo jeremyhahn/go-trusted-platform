@@ -1,5 +1,8 @@
 # Troubleshooting Guide
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by the Troubleshooting sections of [../daemon/user.md](../daemon/user.md) and each feature folder's `user.md`. `platformctl cluster`, `daemon`, `diag`, `restore` and `storage` are not registered commands, and `platformd` has no `config` subcommand.
+
 Diagnosis and resolution procedures for common go-trusted-platform issues.
 
 ## Quick Diagnostics

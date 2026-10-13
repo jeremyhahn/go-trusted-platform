@@ -1,5 +1,8 @@
 # NTP gRPC API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md) (§8). The methods and scopes below still match the code.
+
 | Property | Value |
 |----------|-------|
 | Endpoint | `host:10443` (TCP, TLS 1.3) |

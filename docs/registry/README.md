@@ -1,5 +1,8 @@
 # Trusted Registry
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md), [engineering.md](engineering.md), [cli.md](cli.md), [api.md](api.md) and [user.md](user.md). There is no `registry.NewClient`, `registry.ClientConfig` or `handlers.go`; config keys are snake_case (`listen_addr`, `quicbaas_addr`); `../quicbaas/` does not exist.
+
 Attestation-gated container registry with hardware-backed encryption.
 
 ## Overview

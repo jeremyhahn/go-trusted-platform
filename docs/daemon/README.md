@@ -1,5 +1,8 @@
 # Trusted Platform Daemon
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md), [user.md](user.md) and [configuration.md](configuration.md). The gRPC TCP port is 10443, not the 9443 shown below.
+
 Multi-protocol system daemon providing unified access to platform services.
 
 ## Overview

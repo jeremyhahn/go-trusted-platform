@@ -1,5 +1,8 @@
 # platform-initrd Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `platform-initrd` early-boot binary's commands and flags.
+
 `platform-initrd` is the minimal boot binary for initramfs operations. It handles TPM-sealed LUKS disk unlocking during the early boot phase.
 
 **Note**: This binary is NOT user-facing. It is called automatically by dracut hooks and systemd services during the boot process.
@@ -12,7 +15,8 @@ platform-initrd [command] [options]
 
 ## Binary Size
 
-`platform-initrd` is optimized for initramfs use at ~22MB binary size.
+`platform-initrd` is a static, stripped binary built with `make platform-initrd`
+(about 94 MB on amd64).
 Firstboot functionality has been moved to `platformctl firstboot` which runs after switch_root.
 
 ## Commands
@@ -26,15 +30,18 @@ platform-initrd boot --device /dev/sda2
 ```
 
 **Options:**
-- `--device, -d`: LUKS device path (required)
+- `--device, -d`: LUKS device path (required unless `--diskless`)
 - `--name, -n`: LUKS mapping name (default: cryptroot)
+- `--diskless`: Mount the diskless dm-verity root described by the signed kernel command line instead of unlocking `--device`
+- `--root-mount`: Root mount point for diskless boot (default: /sysroot)
+- `--diskless-work-dir`: Tmpfs work directory for diskless root material (default: /run/platform/diskless-root)
 - `--timeout`: Unlock timeout in seconds (default: 30)
 - `--pcrs`: PCR banks to verify (reads from config if not specified)
 - `--fallback`: Enable fallback unlock methods (default: true)
 - `--emergency`: Drop to emergency shell on failure
 - `--tpm-path`: TPM device path (default: /dev/tpmrm0)
 - `--efi-path`: EFI partition mount point (default: /boot/efi)
-- `--xkms-dir`: XKMS storage directory
+- `--xkms-dir`: XKMS storage directory (default: /etc/trusted-platform/xkms)
 - `--fips`: Enable FIPS mode
 - `--verbose, -v`: Enable verbose logging
 - `--debug`: Enable debug logging
@@ -55,9 +62,14 @@ platform-initrd recovery --device /dev/sda2
 - `--interactive`: Interactive recovery menu
 - `--tpm-path`: TPM device path (default: /dev/tpmrm0)
 - `--efi-path`: EFI partition mount point (default: /boot/efi)
+- `--xkms-dir`: XKMS storage directory (default: /etc/trusted-platform/xkms)
 - `--fips`: Enable FIPS mode
 - `--verbose, -v`: Enable verbose logging
 - `--debug`: Enable debug logging
+
+### version
+
+Print the binary's version.
 
 ## Boot Flow
 

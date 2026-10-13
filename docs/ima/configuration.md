@@ -1,5 +1,8 @@
 # IMA Configuration
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [user.md](user.md) and [engineering.md](engineering.md). The section is `os.ima.*`, not a top-level `ima:`; the default monitored paths are never applied (`DefaultIMAMonitorPaths` has no caller).
+
 Complete configuration reference for Linux Integrity Measurement Architecture.
 
 ## Configuration Structure

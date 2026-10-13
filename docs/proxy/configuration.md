@@ -1,5 +1,8 @@
 # Proxy Configuration
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [engineering.md](engineering.md) §8. The schema below omits the `proxy.audit` section (`proxysvc.AuditConfig`).
+
 Two `proxy:` sections exist, one per daemon (#570, ruling R4):
 
 - **platformd** (`/etc/trusted-platform/config.yaml`, schema

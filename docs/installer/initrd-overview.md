@@ -1,5 +1,8 @@
 # Platform-Initrd: Secure Boot Orchestration System
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and [engineering.md](engineering.md). `pkg/luks` is really `pkg/storage/luks`, the strategy list omits Keyfile (80) and TPMNoPCR (5), and `build/iso/alpine/` does not exist.
+
 ## Overview
 
 Platform-initrd is a comprehensive boot-time orchestration system that provides secure disk encryption using TPM 2.0, FIDO2 hardware security keys, and LUKS2 full disk encryption. It replaces traditional bash scripts and external tools with a single, statically-linked Go binary designed for initramfs deployment.

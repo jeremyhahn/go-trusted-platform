@@ -1,5 +1,8 @@
 # Invitation Flow
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [iam/api-reference-invitations.md](../iam/api-reference-invitations.md).
+
 This document describes the complete invitation lifecycle for adding users to existing tenants in the Trusted Platform.
 
 ## Table of Contents

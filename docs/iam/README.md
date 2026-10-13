@@ -1,5 +1,8 @@
 # Trusted Platform IAM
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and [user.md](user.md). gRPC is 10443, not 9443; MCP is HTTPS-only; `iam user create` takes `--roles`, and `iam policy create` takes `--tenant --name --file`.
+
 Enterprise-grade Identity and Access Management integrated with the Trusted Platform.
 
 ## Overview

@@ -1,5 +1,8 @@
 # Deployment Modes
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [../cluster/user.md](../cluster/user.md) and [../daemon/user.md](../daemon/user.md). The platform config (`pkg/app/app.go`) has no top-level `backends:` or `services:` keys, so the Mixed and Dedicated Cluster modes below do not exist.
+
 This document describes the deployment modes supported by go-trusted-platform, including architecture diagrams and configuration examples.
 
 ## Overview

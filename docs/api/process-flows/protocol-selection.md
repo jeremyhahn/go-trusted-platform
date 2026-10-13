@@ -1,5 +1,8 @@
 # Protocol Selection Guide
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [daemon/api.md](../../daemon/api.md) and each feature's `api.md`.
+
 This guide helps you choose the right protocol for your use case and configure the SDK appropriately.
 
 ## Decision Flowchart

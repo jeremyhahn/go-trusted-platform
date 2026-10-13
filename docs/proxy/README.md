@@ -1,5 +1,8 @@
 # Trusted Authenticating Reverse Proxy
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md), [engineering.md](engineering.md), [api.md](api.md), [cli.md](cli.md) and [user.md](user.md). The Documents table lists only the pre-migration files.
+
 The platform's flagship gatewayd service: an L7 reverse proxy that puts
 legacy applications behind trusted-computing authentication without
 changing a line of their code.

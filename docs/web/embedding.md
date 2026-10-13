@@ -1,5 +1,8 @@
 # Web Frontend Embedding
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) §5.1 and [engineering.md](engineering.md) §8. The embed is `//go:embed all:dist` in `pkg/webserver/embed/embed_web.go` (`WITH_WEB=1`, tag `platform_web`); builds use npm, not yarn.
+
 Documentation for embedding the web frontend into the Trusted Platform Go binary.
 
 ## Overview

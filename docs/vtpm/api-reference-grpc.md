@@ -1,5 +1,8 @@
 # vTPM gRPC API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md); the service is `VTPMService` in `pkg/api/grpc/proto/vtpm.proto`. The gRPC TCP port is 10443, not 9443.
+
 Package: `platform.v1`
 Service: `VTPMService`
 Port: `9443`

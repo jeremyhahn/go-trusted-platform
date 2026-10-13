@@ -1,5 +1,9 @@
 # Device Templates
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> Device templates, overrides and secret URIs as built. Upstream SDK identifiers
+> belong to go-quicbaas.
+
 ## Overview
 
 The Device Template system provides reusable reference architecture configurations
@@ -203,18 +207,18 @@ instead. They remain valid in standalone ISO override files
 
 ## Custom Templates Directory
 
-Use `--templates-dir` to point at your own templates directory:
+`--platform-config` takes any template path, so your own templates directory
+needs no extra flag:
 
 ```bash
 platformctl iso create \
-  --templates-dir /path/to/my-templates \
   --platform-config my-templates/vendor/model/role.yaml \
   --overrides site-overrides.yaml
 ```
 
-On `platformd --init`, templates from the configured directory are imported
-into QuicBaaS, making them available through the API and web UI for
-profile creation and management.
+During bootstrap, the orchestrator's seeder (`pkg/bootstrap/seeder.go`) uploads
+the templates to the control plane, making them available through the API and
+web UI for profile creation and management.
 
 ## Secret URI Schemes
 

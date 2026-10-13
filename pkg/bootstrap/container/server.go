@@ -26,6 +26,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/nbd"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/disklessroot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -51,6 +52,10 @@ type Server struct {
 	sets      map[string]MediaSet
 	defaults  map[string]MediaSet
 	scriptGen *ipxe.ScriptGenerator
+
+	// nbdServer exports the diskless-nbd nodes' roots; nil when the
+	// manifest has none.
+	nbdServer *nbd.Server
 }
 
 // alpineRepoBranch derives the Alpine repository branch path component
@@ -106,6 +111,10 @@ func NewServer(config *ServerConfig, logger *slog.Logger) (*Server, error) {
 	if err := manifest.checkMediaSets(byName, defaults); err != nil {
 		return nil, err
 	}
+	nbdServer, err := newNBDServer(config, manifest, logger)
+	if err != nil {
+		return nil, err
+	}
 
 	// Build the underlying ipxe.ServerConfig for the iPXE server.
 	ipxeConfig := &ipxe.ServerConfig{
@@ -159,6 +168,7 @@ func NewServer(config *ServerConfig, logger *slog.Logger) (*Server, error) {
 		sets:       byName,
 		defaults:   defaults,
 		scriptGen:  ipxe.NewScriptGenerator(serverBaseURL(config), logger),
+		nbdServer:  nbdServer,
 	}
 	// /boot.ipxe chains the per-device route first: a node in the
 	// manifest boots its media set, with its role and hostname.
@@ -205,7 +215,9 @@ func (s *Server) Start(ctx context.Context) error {
 	s.running.Store(true)
 	s.mu.Unlock()
 
-	errCh := make(chan error, 2)
+	// One slot per goroutine that can fail: iPXE, the device-script
+	// server and the NBD export server each send at most once.
+	errCh := make(chan error, 3)
 
 	// An internal context, cancelled on every return path. Without it
 	// the device-script goroutine parks on Ready() — which deliberately
@@ -241,6 +253,22 @@ func (s *Server) Start(ctx context.Context) error {
 		case <-s.ipxeServer.Ready():
 		case <-runCtx.Done():
 			return
+		}
+
+		// The NBD export server binds before the device-script port for
+		// the same reason: a diskless-nbd node's root must be reachable
+		// before the gate reports the container ready.
+		if s.nbdServer != nil {
+			nbdLn, err := net.Listen("tcp", s.config.NBD.ListenAddr)
+			if err != nil {
+				errCh <- ErrServerStartFailed{Cause: err}
+				return
+			}
+			running.Go(func() {
+				if err := s.nbdServer.Serve(runCtx, nbdLn); err != nil {
+					errCh <- ErrServerStartFailed{Cause: err}
+				}
+			})
 		}
 
 		ln, err := net.Listen("tcp", addr)
@@ -287,6 +315,12 @@ func (s *Server) Stop() error {
 
 	if err := s.ipxeServer.Stop(); err != nil && firstErr == nil {
 		firstErr = err
+	}
+
+	if s.nbdServer != nil {
+		if err := s.nbdServer.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 
 	return firstErr

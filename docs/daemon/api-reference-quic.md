@@ -1,5 +1,8 @@
 # QUIC API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md), the canonical six-transport reference and QUIC category-opcode table. The flat opcodes below are stale: QUIC uses category opcodes with the sub-opcode in `payload[0]`.
+
 QUIC protocol API documentation for the Trusted Platform daemon.
 
 ## Connection

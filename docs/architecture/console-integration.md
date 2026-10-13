@@ -1,5 +1,8 @@
 # Native Serial Console Integration
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [../bmc/cli.md](../bmc/cli.md) (`platformctl bmc console`).
+
 ## Overview
 
 Built-in serial console capability for go-trusted-platform, enabling direct console access to managed servers without BMC/IPMI dependency. Provides bootstrap debugging, operational monitoring, and a native web-based terminal.

@@ -1,5 +1,8 @@
 # System Architecture
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [../daemon/architecture.md](../daemon/architecture.md) and the index [../README.md](../README.md).
+
 This section documents the overall architecture of go-trusted-platform, including the binary architecture, privilege separation model, inter-service communication, security boundaries, and integration with QuicBaaS.
 
 ## Overview

@@ -1,5 +1,8 @@
 # Device CLI Usage
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [cli.md](cli.md). There are no `device create` or `device update` verbs; a device is added with `device register`.
+
 ## Overview
 
 The `platformctl device` and `platformctl profile` command groups provide management operations for device identity and profile management in go-trusted-platform.

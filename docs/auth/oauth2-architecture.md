@@ -1,5 +1,8 @@
 # MCP OAuth 2.1 Architecture
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md) §4-§6.
+
 This document details the OAuth 2.1 implementation for the MCP (Model Context Protocol) server in go-trusted-platform.
 
 ## Overview
@@ -60,7 +63,7 @@ When authentication fails, the server returns:
 
 ```http
 HTTP/1.1 401 Unauthorized
-WWW-Authenticate: Bearer realm="platformd", error="invalid_token", error_description="Token validation failed"
+WWW-Authenticate: Bearer realm="Trusted Platform MCP", error="invalid_token", error_description="Token validation failed"
 ```
 
 ## Scope Mapping
@@ -79,18 +82,20 @@ MCP tools are mapped to platform scopes:
 
 - `pkg/api/mcp/oauth_metadata.go` - Protected Resource Metadata endpoint
 - `pkg/api/mcp/authz.go` - Authorization checker
-- `pkg/api/mcp/quicbaas_auth.go` - QuicBaaS integration adapter
+- `pkg/api/mcp/dragondb_auth.go` - QuicBaaS integration adapter
 - `pkg/api/mcp/types.go` - Auth error types
 
 ## Configuration
 
 ```yaml
-mcp:
-  address: ":9445"
-  oauth:
-    authorization_server: "https://auth.example.com"
-    required: true
+daemon:
+  mcp:
+    bind-host: 127.0.0.1
+    port: 9445
 ```
+
+There is no `oauth:` key. `platformd` never sets `mcp.Config.OAuthMetadata`,
+so the handler serves the empty default ([api.md §5](api.md#5-oauth-21-protected-resource-metadata)).
 
 ## Error Codes
 

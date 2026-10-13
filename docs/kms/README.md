@@ -1,5 +1,8 @@
 # Trusted Platform Key Management Service
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md), [user.md](user.md) and [cli.md](cli.md). There is no `--location` flag; encryption is `kms crypto encrypt --key-id`; platformd reads the TPM SRK from `tpm.platform-srk`, not `tpm.keystore`; MCP serves 26 KMS tools, not 32.
+
 Unified key management with multi-backend support, hardware security integration, and QuicBaaS distributed storage.
 
 ## Overview

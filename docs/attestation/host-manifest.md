@@ -1,5 +1,8 @@
 # Host Manifest
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [manifest.md](manifest.md) and [api.md](api.md).
+
 ## Overview
 
 Host manifests provide hierarchical attestation reports covering bare metal hosts, VMs, and containers in a single signed document. A host manifest captures the complete trust state of a physical server and all workloads running on it, enabling remote verifiers to assess the integrity of the entire compute stack through a single cryptographically signed artifact.

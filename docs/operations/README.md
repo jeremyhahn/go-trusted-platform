@@ -1,5 +1,8 @@
 # Operations Documentation
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [../daemon/user.md](../daemon/user.md). `platformctl daemon`, `backup`, `restore` and `cluster` are not registered commands, `platformd` has only `serve` and `version` (no `config`), and `../../CONTRIBUTING.md` does not exist.
+
 Complete guide to deploying, running, and maintaining go-trusted-platform in production.
 
 ## Quick Start

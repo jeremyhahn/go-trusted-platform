@@ -13,12 +13,12 @@ scope ([api.md](api.md) §9):
 | Scope | Routes |
 |-------|--------|
 | `tpm:read` | every `GET`, plus `POST pcrs`, `quote`, `quote/verify`, `make-credential`, `random`, `unseal` |
-| `tpm:write` | `POST provision`, `ek`, `ek/certificate`, `srk`, `ak`, `nvram`, `seal`; `PUT nvram` |
+| `tpm:write` | `POST provision`, `ek`, `ek/certificate`, `srk`, `ak`, `activate-credential`, `nvram`, `seal`; `PUT nvram` |
 | `tpm:delete` | `POST clear`, every `DELETE` |
 
-`GET`/`DELETE /iak` and `GET /idevid` are the listener's device-identity routes
-(`pkg/api/daemon/rest_idevid.go`); they take no token and are not described
-here.
+`GET`/`DELETE /iak`, `GET /idevid` and `GET /device/attributes` are the
+listener's device-identity routes (`pkg/api/daemon/rest_idevid.go`); they take
+no token and are not described here.
 
 ## Wire contract
 
@@ -37,7 +37,7 @@ Unix and embedded call — and speaks that RPC's messages
   element (`?indices=0&indices=7`). A path parameter wins over a query
   parameter of the same name. Bytes and message fields travel only in the body.
 - **Refusals.** A field the message does not have is `400`, in the body
-  (`unknown field "x"`) or as a parameter (`ErrTPMInvalidQueryParameter`), and
+  (`unknown field "x"`) or as a parameter (`ErrInvalidQueryParameter`), and
   so is a parameter that does not parse or a single-valued field given twice.
   The TPM is not touched.
 - **Response.** The bare protojson response message, camelCase keys, every
@@ -62,6 +62,7 @@ Unix and embedded call — and speaks that RPC's messages
 | `POST /ak` | `CreateAK` | `attributes`, `persistent`, `parentHandle`, `parentPassword` |
 | `DELETE /ak`, `DELETE /ak/{handle}` | `DeleteAK` | `handle`, `algorithm`, `password` |
 | `POST /make-credential` | `MakeCredential` | `akName`, `secret`, `ekCert`, `iakPub` |
+| `POST /activate-credential` | `ActivateCredential` | `credentialBlob`, `encryptedSecret` |
 | `POST /quote` | `Quote` | `akHandle`, `akPassword`, `pcrIndices`, `pcrBank`, `nonce` |
 | `POST /quote/verify` | `VerifyQuote` | `quote`, `signature`, `signatureAlgorithm`, `akPublic`, `nonce`, `expectedPcrs`, `channelBinding`, … |
 | `GET /pcrs`, `POST /pcrs` | `GetPCRs` | `indices`, `bank` (`GET`: `?indices=0&indices=7&bank=PCR_BANK_SHA256`) |
@@ -130,7 +131,7 @@ A refused request, or an RPC error, is the standard error body:
 
 | Status | Cause |
 |--------|-------|
-| `400 Bad Request` | A malformed or unknown body field (`ErrInvalidRequestBody`) or URL parameter (`ErrTPMInvalidQueryParameter`); the RPC's `InvalidArgument` or `FailedPrecondition` |
+| `400 Bad Request` | A malformed or unknown body field (`ErrInvalidRequestBody`) or URL parameter (`ErrInvalidQueryParameter`); the RPC's `InvalidArgument` or `FailedPrecondition` |
 | `401 Unauthorized` | No bearer token (`ErrTPMTokenRequired`) |
 | `403 Forbidden` | The token is rejected or lacks the route's scope, or no token validator is configured (`ErrTPMForbidden`); the RPC's `PermissionDenied` |
 | `404 Not Found` | The RPC's `NotFound` |

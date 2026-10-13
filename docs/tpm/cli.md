@@ -408,7 +408,7 @@ is the only LDevID verb.
 | Attestation key (AK/IAK) create, get, delete on the *TPMService* surface | gRPC `CreateAK`/`GetAK`/`DeleteAK`, REST `/api/v1/tpm/ak`, QUIC `0x0C`–`0x0E` (named IAK), MCP `platform_tpm_iak*` |
 | Import an EK certificate | gRPC `ImportEKCertificate`, REST `POST /api/v1/tpm/ek/certificate`, QUIC `0x08`, MCP `platform_tpm_ek_import_cert` |
 | Get random bytes from the TPM | gRPC `GetRandom`, REST `POST /api/v1/tpm/random`, QUIC `0x14`, MCP `platform_tpm_random` |
-| MakeCredential / ActivateCredential | gRPC, QUIC `0x20`/`0x21`, MCP; MakeCredential also on the daemon REST listener's `POST /api/v1/tpm/make-credential` ([api.md](api.md) §1) |
+| MakeCredential / ActivateCredential | gRPC, QUIC `0x20`/`0x21`, MCP; also the daemon REST listener's `POST /api/v1/tpm/make-credential` and `POST /api/v1/tpm/activate-credential` ([api.md](api.md) §1) |
 | TPM capabilities, NV index listing, platform attributes, certify | QUIC and MCP only |
 | Virtual TPMs | `platformctl vtpm` — [`docs/vtpm/cli.md`](../vtpm/cli.md) |
 

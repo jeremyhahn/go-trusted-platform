@@ -1,5 +1,8 @@
 # PXE Boot and Provisioning
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [`docs/ipxe/`](../ipxe/) (`pkg/ipxe`, whose engineering.md §9 lists this file's defects) and [`docs/sdn/`](../sdn/) for VLAN placement; the fixed VLANs 1/998/100+ below were retired by the reference network.
+
 ## Overview
 
 The iPXE server (`pkg/ipxe`) provides network boot infrastructure for device provisioning. It implements DHCP, TFTP, and HTTP servers that work together to boot devices from the network into the trusted platform enrollment flow.

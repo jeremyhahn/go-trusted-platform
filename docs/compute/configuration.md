@@ -1,5 +1,8 @@
 # Compute Configuration Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [engineering.md](engineering.md) and [architecture.md](architecture.md). Only §Migration listen address is current; the env vars and the `device_profile` container/network schema below do not exist.
+
 This document provides a comprehensive reference for configuring the compute orchestrator.
 
 ## Status: 100% Complete

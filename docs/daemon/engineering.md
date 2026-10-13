@@ -305,6 +305,7 @@ wire a load balancer to the wrong one.
 - [`docs/cluster/`](../cluster/) — control-plane cluster and node state (not
   converted in this pass)
 - [`docs/provisioning/`](../provisioning/) — `pxeboot` and `platform-initrd` in context
-- Deep dives carried over and not re-verified in this pass:
+- [configuration.md](configuration.md) — the listen-address keys and
+  `platformd serve` flags, checked against the code 2026-10-13. The older
   [api-reference.md](api-reference.md) and the five per-transport
-  `api-reference-*.md` files, [configuration.md](configuration.md)
+  `api-reference-*.md` files are ARCHIVE; [api.md](api.md) replaces them.

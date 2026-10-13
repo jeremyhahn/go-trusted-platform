@@ -1,5 +1,8 @@
 # Proxy Security Model
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) §6 and [engineering.md](engineering.md) §4 and §5.5.
+
 ## Threat model
 
 | Threat | Defense |

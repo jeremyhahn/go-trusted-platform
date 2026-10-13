@@ -1,5 +1,8 @@
 # Adding New Switch Vendors
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [engineering.md](engineering.md) §7. This guide omits the separate `configuratorRegistry` (`pkg/switch/factory.go:21`), uses `fmt.Errorf` instead of typed errors, and writes an Arista driver where `newSSHManager` already serves the dialect.
+
 This guide shows how to add support for a new switch vendor (e.g., Arista EOS, Juniper, etc.) to the switch management system.
 
 ## Overview

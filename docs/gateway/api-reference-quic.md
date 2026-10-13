@@ -1,5 +1,8 @@
 # Gateway QUIC API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md). Covers only status, mode, snapshots, admitted VTEPs and BGP; IPAM, load balancer, NAT64, perf statistics and network zones are missing here.
+
 Gateway QUIC commands use category `0x2F`.
 
 | Opcode | Name | Description |

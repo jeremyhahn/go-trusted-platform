@@ -1,5 +1,8 @@
 # IMA Policies
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and [user.md](user.md). Custom `monitor-paths` emit `obj_type=<path>` rules, which match SELinux types, not paths ([architecture.md §9](architecture.md)).
+
 IMA policies define what files are measured and/or appraised.
 
 ## Policy Rule Syntax

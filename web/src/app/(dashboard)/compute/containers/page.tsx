@@ -23,6 +23,7 @@ import { ServiceUnavailableState } from '@/components/features/platform';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { useCompute, useApi, useToast } from '@/hooks';
 import type { Container } from '@/types/infrastructure';
+import { containerStatus } from '@/lib/compute-state';
 
 export default function ContainersPage() {
   const { toast } = useToast();
@@ -65,7 +66,7 @@ export default function ContainersPage() {
       id: container.id,
       name: container.config?.name || container.id,
       image: container.config?.image || '',
-      status: (container.state?.toLowerCase() || 'creating') as Container['status'],
+      status: containerStatus(container.state),
       createdAt: container.createdAt || new Date().toISOString(),
       ports: container.config?.ports?.map((p) => ({
         container: p.containerPort,

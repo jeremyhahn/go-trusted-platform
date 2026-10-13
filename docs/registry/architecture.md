@@ -476,4 +476,4 @@ var (
 - [Configuration Reference](configuration.md)
 - [Container Orchestrator](../compute/container-orchestrator.md)
 - [TPM Documentation](../tpm/README.md)
-- [QuicBaaS Documentation](../quicbaas/README.md)
+- [SDK Documentation](../sdk/architecture.md)

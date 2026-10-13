@@ -1,5 +1,8 @@
 # Gateway API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md). Covers only status, mode, snapshots, admitted VTEPs and BGP; IPAM, load balancer, NAT64, perf statistics and network zones are missing here.
+
 The gateway API is a platform-owned Tier 1 surface. The canonical transport
 matrix and behavior notes live in [api.md](api.md); this reference links the
 protocol-specific forms.

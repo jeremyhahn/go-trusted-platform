@@ -1,5 +1,8 @@
 # Platform Operational Modes
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [../../ROADMAP.md](../../ROADMAP.md) and [../dht/architecture.md](../dht/architecture.md).
+
 go-trusted-platform supports three operational modes for control plane functionality. A deployment operates in ONE mode. P2P mode supports optional federation where nodes can run local services while participating in the network.
 
 ## Mode Overview

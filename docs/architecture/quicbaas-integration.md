@@ -1,5 +1,8 @@
 # QuicBaaS Integration
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [../sdk/architecture.md](../sdk/architecture.md) and [../kms/architecture.md](../kms/architecture.md).
+
 This document describes how go-trusted-platform integrates with go-quicbaas for distributed database services and Backend-as-a-Service features such as KMS, Secrets, IAM, and storage.
 
 ## Overview
@@ -50,13 +53,13 @@ quicbaas:
   address: "localhost:10443"
 
   # Unix socket path (for unix transport)
-  unix_socket: "/var/run/quicbaas.sock"
+  unix-socket: "/var/run/quicbaas.sock"
 
   # Embedded mode settings (existing)
-  storage_backend: pebble
-  data_dir: /var/lib/platform/quicbaas
-  cache_size: 134217728  # 128MB
-  sync_writes: true
+  storage-backend: pebble
+  data-dir: /var/lib/platform/quicbaas
+  cache-size: 134217728  # 128MB
+  sync-writes: true
 ```
 
 ## Architecture
@@ -170,7 +173,7 @@ implementations:
 
 ### Configuration
 
-> The gRPC API exposes KeyManagement, SecretsManagement, Crypto, and DEKManagement services. REST API and CLI are pending. See [kms/ROADMAP.md](../kms/ROADMAP.md) for details.
+> The gRPC API exposes KeyManagement, SecretsManagement, Crypto, and DEKManagement services. REST and the `platformctl kms` CLI expose them too. See [kms/api.md](../kms/api.md) and [kms/cli.md](../kms/cli.md).
 
 Key management is configured through the `certificate-authority` section's identity keys:
 

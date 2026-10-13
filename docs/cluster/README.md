@@ -1,5 +1,8 @@
 # Cluster Overview
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and its siblings; describes an API surface and a `platformctl cluster` CLI that do not exist.
+
 The Trusted Platform supports both standalone and clustered deployment modes, with QuicBaaS Raft consensus providing distributed state replication across cluster nodes.
 
 ## Key Features
@@ -161,9 +164,9 @@ platformctl cluster status
 |----------|-------------|
 | [Architecture](architecture.md) | Complete cluster architecture with diagrams |
 | [Configuration](configuration.md) | Cluster and node configuration reference |
-| [Bootstrap](bootstrap.md) | Initial cluster setup and node addition |
-| [Operations](operations.md) | Operational procedures and maintenance |
-| [Cluster-Aware Services](cluster-aware-services.md) | SDN, CA, DNS clustering details |
+| [Bootstrap](user.md) | Initial cluster setup and node addition |
+| [Operations](user.md) | Operational procedures and maintenance |
+| [Cluster-Aware Services](architecture.md) | SDN, CA, DNS clustering details |
 | [API Reference](api-reference.md) | Cluster management API |
 | [CLI Usage](cli-usage.md) | platformctl cluster commands |
 | [Roadmap](../../ROADMAP.md) | Development roadmap and progress tracker |
@@ -254,13 +257,13 @@ The following services are cluster-aware and replicate state:
 ## Related Documentation
 
 - [Tenant Architecture](../tenant/architecture.md) - Multi-tenancy with clustering
-- [SDN Architecture](../sdn/ARCHITECTURE.md) - SDN clustering details
-- [gRPC API Design](../GRPC_API_DESIGN.md) - Platform API design
+- [SDN Architecture](../sdn/architecture.md) - SDN clustering details
+- [Daemon API](../daemon/api.md) - Platform API design
 - [QuicBaaS Client](../../pkg/storage/quicbaas/) - QuicBaaS integration
 
 ## Next Steps
 
 1. Review the [Architecture](architecture.md) documentation
 2. Plan deployment with [Configuration](configuration.md) reference
-3. Bootstrap cluster using [Bootstrap](bootstrap.md) guide
-4. Set up monitoring per [Operations](operations.md) guide
+3. Bootstrap cluster using [Bootstrap](user.md) guide
+4. Set up monitoring per [Operations](user.md) guide

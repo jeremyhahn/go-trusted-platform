@@ -1,5 +1,8 @@
 # IAM API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md). gRPC is 10443, not 9443.
+
 ## Overview
 
 The go-trusted-platform IAM (Identity and Access Management) system provides comprehensive multi-protocol API support for managing tenants, users, groups, roles, policies, and applications. All IAM operations are exposed via five protocols to ensure maximum interoperability.

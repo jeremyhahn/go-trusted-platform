@@ -1,5 +1,8 @@
 # Device QUIC API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The device QUIC opcodes, the `0xCF` sub-opcodes, their scopes and status mapping.
+
 Endpoint: `localhost:9444` (UDP, TLS 1.3, ALPN `platform-quic`)
 
 ## Overview
@@ -59,7 +62,7 @@ Union opcodes:
   returns the full list response with `pagination.total_items`
   populated, and the SDK projects `Count*Response.count` from it.
 
-Profile messages are the pb `DeviceProfile` (`docs/device/api-reference-grpc.md`),
+Profile messages are the pb `DeviceProfile` (`pkg/api/grpc/proto/device.proto`),
 so `0x35`–`0x38` carry `tls_server_name` (writable) and the read-only
 `pcr_baseline` exactly as gRPC does: a `0x36` / `0x38` payload that names
 `pcr_baseline` is ignored, and one that omits `tls_server_name` keeps the
@@ -202,4 +205,4 @@ device service:
 | `StatusInvalidRequest` | `FAILED_PRECONDITION` / payload decode failure |
 | `StatusInternalError` | `INTERNAL` |
 
-See [api-reference.md](api-reference.md) for the transport overview.
+See [api.md](api.md) for the transport overview.

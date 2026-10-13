@@ -229,7 +229,7 @@ surface, not through compute.
 - [`docs/sdn/`](../sdn/) — the port authentication a VNIC goes through
 - [`docs/tenant/`](../tenant/) — the quota a VM is admitted against
 - [`docs/registry/`](../registry/) — where container images come from
-- Deep dives carried over and not re-verified in this pass:
+- Deep dives, checked against the code 2026-10-13 (pxe-provisioning.md is ARCHIVE):
   [container-orchestrator.md](container-orchestrator.md),
   [embedded-podman.md](embedded-podman.md),
   [swtpm-integration.md](swtpm-integration.md),

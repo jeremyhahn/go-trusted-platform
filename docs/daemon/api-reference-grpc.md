@@ -1,5 +1,8 @@
 # gRPC API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md), the canonical six-transport reference and QUIC category-opcode table. The gRPC TCP port is 10443, not the 9443 shown below.
+
 gRPC API documentation for the Trusted Platform daemon.
 
 ## Connection

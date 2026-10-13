@@ -1,5 +1,8 @@
 # Bootstrap Flow — End-to-End Architecture
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The end-to-end bootstrap path across BMC, installer, firstboot and daemon; [../bootstrap/](../bootstrap/) is normative.
+
 Master reference for how `platformctl bootstrap run` produces a working
 Trusted Platform deployment — from BMC discovery through
 virtual-media install to `platformd` serving requests.
@@ -33,34 +36,34 @@ processes even when collocated on a single box.
 │  │  platformd           │      │  gatewayd              │       │
 │  │  (control plane)     │      │  (data plane)          │       │
 │  │                      │      │                        │       │
-│  │  Master (root):      │◀─────│  BGP, DHCP server      │       │
-│  │   • OVS master       │ IPC  │  Firewall, NAT         │       │
-│  │   • TPM/vTPM         │ via  │  Load-balancer         │       │
-│  │   • QEMU/KVM         │ unix │  Tunnels (GRE/VXLAN)   │       │
-│  │   • LUKS             │ sock │  Edge onboarding       │       │
-│  │                      │      │  Overlay (EVPN)        │       │
-│  │  Workers:            │      │                        │       │
-│  │   • CA, ACME         │      │  CAP_NET_ADMIN         │       │
-│  │   • DNS authoritative│      │  CAP_NET_BIND_SERVICE  │       │
+│  │  Host services:      │      │  BGP, DHCP server      │       │
+│  │   • TPM/vTPM         │      │  Firewall, NAT         │       │
+│  │   • QEMU/KVM         │      │  Load-balancer         │       │
+│  │   • LUKS             │      │  Tunnels (GRE/VXLAN)   │       │
+│  │                      │      │  Edge onboarding       │       │
+│  │  Services:           │      │  Overlay (EVPN)        │       │
+│  │   • CA, ACME         │      │  OVS bridge (own       │       │
+│  │   • DNS authoritative│      │   OVSDB connection)    │       │
 │  │   • IAM, KMS         │      │                        │       │
-│  │   • QuicBaaS         │      │  8080 REST             │       │
-│  │   • REST 8443/9443   │      │  10444 gRPC            │       │
+│  │   • QuicBaaS         │      │  metrics               │       │
+│  │   • REST 8443        │      │   127.0.0.1:9169       │       │
 │  │   • gRPC 10443       │      │                        │       │
 │  │   • QUIC 9444        │      │                        │       │
-│  │   • MCP 8000         │      │                        │       │
+│  │   • MCP 9445         │      │                        │       │
 │  │   • Unix /run/       │      │                        │       │
 │  │     platformd.sock   │      │                        │       │
 │  └──────────────────────┘      └────────────────────────┘       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Privilege boundary**: `platformd master` holds root for TPM + OVS +
-KVM ops. `gatewayd` holds only `CAP_NET_ADMIN` and
-`CAP_NET_BIND_SERVICE`. When `gatewayd` needs an OVS bridge or flow
-installed, it calls `platformd`'s master over the Unix socket — it
-never directly manipulates OVS.
+**Privilege boundary**: `platformd` is one process; after start-up it
+can drop to the user named by `--setuid` (`pkg/app/privileges.go`).
+`gatewayd` owns its OVS bridge through its own OVSDB connection, and can
+run sections in privilege-dropped child processes
+(`gatewayd service run <process>`, `pkg/sdn/gateway/process/`).
 
-See `architecture/binary-separation.md` for the full privilege model.
+See [`../daemon/`](../daemon/) and [`../gateway/architecture.md`](../gateway/architecture.md)
+for the full process model.
 
 ### Why not one process?
 
@@ -215,7 +218,7 @@ AND its per-node hostname, both keyed by MAC.
 ### The factory image is the baked mode without a live installer
 
 `platformctl diskimage create` (`pkg/diskimage`, [docs/factory-image/](../factory-image/))
-stages the same media `iso create` does (`pkg/iso.StageMedia`: prefetched
+stages the same media `iso create` does (`(*iso.Customizer).StageMedia` in `pkg/iso`: prefetched
 apks for the target architecture, the platform binaries, the merged
 platform config, Secure Boot keys, CA bundle) and then runs Phase A itself,
 on the build host, inside an arm64 container against a loop-mounted image
@@ -431,7 +434,7 @@ name but are otherwise independent code paths. Do not confuse them.
 | Concern | File | Doc |
 |---------|------|-----|
 | Orchestrator phases | `pkg/bootstrap/orchestrator.go` | `docs/bootstrap/pxe-bootstrap.md` |
-| Template merge | `pkg/config/DeepMergeYAMLFiles` | `docs/device-templates.md` |
+| Template merge | `pkg/config.DeepMergeYAMLFiles` | `docs/device-templates.md` |
 | Per-MAC publishing | `pkg/bootstrap/virtual_media.go::stagePerMACConfig` | `docs/bootstrap/config-delivery.md` |
 | HTTP config server | `pkg/ipxe/http_server.go` | `docs/ipxe/architecture.md` |
 | ISO build (baked mode) | `pkg/iso/customize.go`, `pkg/cli/commands/iso/create.go` | `docs/installer/iso-building.md` |

@@ -1,5 +1,8 @@
 # NTP (Time Synchronization) API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md) (§8). The opcodes `0x50`/`0x01`-`0x03`, the MCP tool names and the `ntp:read`/`ntp:write` scopes below still match the code.
+
 Time is a trust primitive on this platform. TPM attestation freshness,
 ACME (RFC 8555) issuance, DANE/DNSSEC signature windows, and JWT
 `exp`/`nbf` are all meaningless against a wrong clock — a node that

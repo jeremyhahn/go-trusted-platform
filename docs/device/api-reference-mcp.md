@@ -1,6 +1,9 @@
 # Device MCP API Reference
 
-Endpoint: `localhost:9445` (HTTPS) or `stdio`
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The device MCP tools, resources and error codes.
+
+Endpoint: `https://localhost:9445/mcp`
 
 ## Overview
 
@@ -568,71 +571,23 @@ these arguments have no place for them ([api.md §4](api.md#4-device-templates))
 
 ## Resources
 
-### device://inventory
+Two read-only device resources are registered (`pkg/api/mcp/resources.go`).
+There is no profiles resource.
 
-Read-only access to device inventory.
-
-```json
-{
-  "uri": "device://inventory",
-  "name": "Device Inventory",
-  "description": "Complete device inventory with status",
-  "mimeType": "application/json"
-}
-```
-
-### device://profiles
-
-Read-only access to device profiles.
-
-```json
-{
-  "uri": "device://profiles",
-  "name": "Device Profiles",
-  "description": "All configured device profiles",
-  "mimeType": "application/json"
-}
-```
-
-### device://{id}
-
-Individual device resource.
-
-```json
-{
-  "uri": "device://{id}",
-  "name": "Device Details",
-  "description": "Device details by ID",
-  "mimeType": "application/json"
-}
-```
+| URI | Name | Content |
+|-----|------|---------|
+| `platform://device/list` | Device List | Every registered device |
+| `platform://device/{id}` | Device Details | One device by id |
 
 ## Usage Examples
 
-### stdio Mode
-
-```bash
-# Start MCP server
-platformctl mcp serve --transport stdio
-
-# Example tool call (sent via stdin)
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "method": "tools/call",
-  "params": {
-    "name": "device_list",
-    "arguments": {"page": 1, "page_size": 10}
-  }
-}
-```
+platformd serves MCP over HTTPS only. `MCPConfig.Transport`
+(`pkg/api/daemon/config.go`) defaults to `http`, and no configuration key or
+flag selects `stdio`.
 
 ### HTTP Mode
 
 ```bash
-# Start MCP server
-platformctl mcp serve --transport http --port 9445
-
 # Tool call over HTTPS (TLS 1.3 only; trust the platform CA)
 curl --tlsv1.3 --cacert platform-ca.pem -X POST https://localhost:9445/mcp \
   -H "Content-Type: application/json" \
@@ -643,7 +598,7 @@ curl --tlsv1.3 --cacert platform-ca.pem -X POST https://localhost:9445/mcp \
     "method": "tools/call",
     "params": {
       "name": "device_get",
-      "arguments": {"id": 1234567890}
+      "arguments": {"device_id": "1234567890"}
     }
   }'
 ```
@@ -697,4 +652,4 @@ error class (#505); the message is the error text and `data` names the tool:
 
 The classification rules are in [`docs/daemon/api.md`](../daemon/api.md) §1.
 
-See [api-reference.md](api-reference.md) for complete error code mapping.
+See [api.md](api.md) for the device transport matrix.

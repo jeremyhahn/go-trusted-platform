@@ -1,14 +1,20 @@
 # Build Docs
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> Building the go-trusted-platform binaries and the installer ISO from source.
+
 ## Binary Architecture
 
-go-trusted-platform uses a three-binary architecture for separation of concerns:
+go-trusted-platform builds six binaries, one per directory under `cmd/`:
 
-| Binary | Purpose | Size | Commands |
-|--------|---------|------|----------|
-| `platformd` | Daemon server | ~65MB | serve, version |
-| `platformctl` | CLI operations | ~52MB | firstboot + all operational commands |
-| `platform-initrd` | Initramfs boot | ~22MB | boot, recovery |
+| Binary | Purpose | Commands |
+|--------|---------|----------|
+| `platformd` | Daemon server | serve, version |
+| `gatewayd` | Edge daemon | serve, service, version |
+| `platformctl` | CLI operations | firstboot + all operational commands |
+| `platform-initrd` | Initramfs boot | boot, recovery, version |
+| `pxeboot` | Network boot server | — |
+| `deployer-pin` | Deployer pin management | — |
 
 **Note**: `firstboot` runs via `platformctl` after switch_root (when the real filesystem is mounted), not in platform-initrd. This keeps platform-initrd minimal for initramfs size constraints.
 
@@ -39,11 +45,11 @@ The `Makefile` provides targets for performing optimized and debug builds that p
 
 #### Dynamic Builds
 
-The [trusted-platform-builder](/build/docker/trusted-platform-builder) container provides a [Debian](https://www.debian.org/).
+The [trusted-platform-builder](../build/docker/trusted-platform-builder) container provides a [Debian](https://www.debian.org/).
 
 #### Static Builds
 
-The [trusted-platform-builder](/build/docker/trusted-platform-builder) container provides an [Alpine Linux](https://www.alpinelinux.org/) `(Dockerfile-alpine)` build environment based on [musl libc](https://musl.libc.org/) to facilitate static builds.
+The [trusted-platform-builder](../build/docker/trusted-platform-builder) container provides an [Alpine Linux](https://www.alpinelinux.org/) `(Dockerfile-alpine)` build environment based on [musl libc](https://musl.libc.org/) to facilitate static builds.
 
 
 The following libraries require dynamic linking:
@@ -59,10 +65,10 @@ To perform a container build, use the Makefile `docker-builder-load` and `releas
 
 | Target | Description |
 |--------|-------------|
-| `make build` | Build platformd and platformctl |
-| `make platform-initrd` | Build platform-initrd (~22MB, boot/recovery only) |
+| `make build` | Build platformd, platformctl, gatewayd and deployer-pin |
+| `make platform-initrd` | Build platform-initrd (boot/recovery only) |
 | `make platform-initrd-static` | Build static platform-initrd |
-| `make binaries` | Build all binaries |
+| `make binaries` | Build the `make build` binaries plus platform-initrd |
 | `make build-static` | Build all static binaries |
 
 ### Build All Binaries
@@ -74,11 +80,6 @@ make binaries
 # Build all binaries (static)
 make binaries-static
 
-# Build with size info
-make binaries
-#   platformd: 65M (daemon)
-#   platformctl: 52M (CLI)
-#   platform-initrd: 44M (initramfs)
 ```
 
 ## Install

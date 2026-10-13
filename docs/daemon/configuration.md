@@ -1,5 +1,8 @@
 # Daemon Configuration
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `daemon:` listen-address keys, the `platformd serve` flags and environment, and the keys required at load.
+
 Configuration reference for the Trusted Platform daemon (`platformd serve`).
 
 ## Configuration Structure
@@ -192,5 +195,5 @@ platformd serve --enable-rest=false --enable-grpc=false --enable-quic=false --en
 ## See Also
 
 - [Architecture](architecture.md)
-- [API Reference](api-reference.md)
-- [README](README.md)
+- [API](api.md)
+- [User guide](user.md)

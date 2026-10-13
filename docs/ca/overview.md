@@ -1,5 +1,8 @@
 # Certificate Authority
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md), [api.md](api.md), [cli.md](cli.md) and [user.md](user.md).
+
 The Certificate Authority (CA) provides a full-featured "TPM and Attestation Aware" x509 certificate management system providing TLS certificates, device certificates, signing, encryption, and compliance with TCG certificate attributes and data structures.
 
 When the server starts for the first time, Root and Intermediate Certificate Authorities are created with RSA, ECDSA, and Ed25519 private keys and x509 certifiates per the platform configuration file. A TLS certificate is issued for the embedded web server using the algorithm specified in the configuration file.

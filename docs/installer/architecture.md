@@ -1,6 +1,6 @@
 # Installer — Architecture
 
-> **Status: NORMATIVE** · Scope: `pkg/installer/`, `pkg/initrd/`, `pkg/iso/`, `pkg/qemu/`, `cmd/platform-initrd` · Last verified: 2026-09-16
+> **Status: NORMATIVE** · Scope: `pkg/installer/`, `pkg/initrd/`, `pkg/iso/`, `pkg/qemu/`, `cmd/platform-initrd` · Last verified: 2026-10-13
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 
@@ -92,6 +92,29 @@ mount under the pinned parameters, then overlays the read-only root with tmpfs
 at `/sysroot`. This path does not unlock local LUKS root storage; mutable state
 lives in platform services after `switch_root`.
 
+**Diskless over NBD (`boot_model: diskless-nbd`, #689).** A second diskless
+model, separate from `diskless` and leaving it unchanged: the node has no local
+disk, and its root is a **persistent, per-device block device** that the boot
+server exports over NBD on the provisioning segment (VLAN 405, `192.0.2.0/24`,
+pure L2 with no gateway — [sdn configuration](../sdn/configuration.md)). Per the
+#685 rulings the root is NBD + LUKS + TPM: the node LUKS2-encrypts its export
+and seals the key to its own TPM, so the boot server stores ciphertext only.
+NFS was ruled out. The export is reached only over TLS 1.3 after
+`NBD_OPT_STARTTLS`, and the node authenticates with its IDevID certificate,
+which chains to the platform anchor. The server picks the export from that
+verified identity and from nothing the client names. The server side is built
+([bootstrap architecture](../bootstrap/architecture.md#nbd-export-server-diskless-nbd)).
+The node side is **Planned**:
+
+- **Planned:** the bootstrap server puts `platform_boot_model=diskless-nbd` on
+  that node's command line, and `bootstrap.yaml` accepts the value. Until the
+  node side exists the value is rejected, because a node that asked for it
+  would boot the wrong path.
+- **Planned:** the installer target `nbd` runs Phase A against the attached
+  export instead of a local disk.
+- **Planned:** `platform-initrd` attaches the export before the unlock chain
+  runs, then unlocks it like a local LUKS root.
+
 ## 3. Rejected alternatives
 
 | Alternative | Why it was rejected |
@@ -131,6 +154,7 @@ lives in platform services after `switch_root`.
 | **FIDO2 / CTAP2** | reached through `go-quicbaas/sdk/go/xkms/fido2` | **not this repo** |
 | **Vendor quirks** (serial console, earlycon, kernel modules) | `pkg/quirks` | this repo, separate feature |
 | **Network boot / PXE** | `pkg/ipxe/` — [`docs/ipxe/`](../ipxe/) | this repo, separate feature |
+| **NBD export server for `diskless-nbd` roots** | `pkg/bootstrap/nbd/` — [`docs/bootstrap/`](../bootstrap/) | this repo, separate feature |
 | **Provisioning state machine, config delivery, remote digest signing service** | `pkg/compute/pxe/`, config-delivery — [`docs/provisioning/`](../provisioning/) | this repo, separate feature |
 
 **SDK edge.** Every cryptographic operation the installer performs against a
@@ -238,6 +262,14 @@ the TPM-resident IDevID and an IAK quote bound to that connection
 carries the control plane's address (`acme.client.directory-url`) and, unless
 the OS trust store already anchors it, its CA as `ca-bundle.pem`.
 
+A `diskless-nbd` node (**Planned**) also takes neither path. Before the unlock
+chain runs, `platform-initrd` reaches the boot server's NBD listener on the
+provisioning segment and negotiates fixed newstyle. Its first option is
+`NBD_OPT_STARTTLS`; it completes TLS 1.3 with its TPM-resident IDevID as the
+client certificate and verifies the server against the platform anchor. It then
+asks for the default export with `NBD_OPT_GO` and attaches the result as a
+block device. From there the unlock chain treats the device as the LUKS root.
+
 ### Steady state
 
 ```
@@ -262,7 +294,7 @@ returns as a signature.
 ## 6. Trust boundaries
 
 The installer is where a machine decides what it will trust for the rest of its
-life. Five boundaries, in the order they are crossed.
+life. Six boundaries, in the order they are crossed.
 
 1. **Install media → machine.** The ISO carries the platform binary, the
    platform config, the Secure Boot keys or key references, and the autoinstall
@@ -295,6 +327,14 @@ life. Five boundaries, in the order they are crossed.
    at `tenants/{tenant}/nodes/{node}/secrets/luks/recovery`, where an ACL
    governs it; `destroy` removes the keyslot and makes the TPM seal the only
    unlock path. Choosing `destroy` is choosing to have no break-glass.
+6. **The NBD root (`diskless-nbd`).** The root's ciphertext lives on the boot
+   server and crosses the provisioning segment on every read and write. TLS
+   protects it on the wire. The IDevID decides which export a node can open:
+   with no certificate, an untrusted one, or a request for another device's
+   export, the server refuses before any data is served. LUKS, with its key
+   sealed to the node's TPM, protects it at rest from the boot server itself.
+   Whoever holds the boot server holds every node's ciphertext and can deny
+   service, but cannot read a root.
 
 ## 7. What this feature deliberately does not do
 

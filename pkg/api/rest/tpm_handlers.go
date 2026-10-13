@@ -15,42 +15,19 @@ package rest
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gorilla/mux"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // =============================================================================
 // TPM REST Handler Errors
 // =============================================================================
-
-// ErrTPMInvalidQueryParameter is returned when a TPM request's query string
-// names a parameter the request message does not have, or carries a value
-// that does not parse as that field's type.
-type ErrTPMInvalidQueryParameter struct {
-	Name   string
-	Value  string
-	Reason string
-}
-
-func (e ErrTPMInvalidQueryParameter) Error() string {
-	return fmt.Sprintf("invalid query parameter %s=%q: %s", e.Name, e.Value, e.Reason)
-}
 
 // ErrTPMServiceNotAvailable is returned when the physical TPM service is not
 // configured or unavailable.
@@ -81,20 +58,6 @@ func (e ErrTPMForbidden) Error() string {
 	return "this TPM operation requires " + e.Scope + ": " + e.Reason
 }
 
-// ErrTPMOperationFailed is returned when a TPM operation fails.
-type ErrTPMOperationFailed struct {
-	Operation string
-	Cause     error
-}
-
-func (e ErrTPMOperationFailed) Error() string {
-	return fmt.Sprintf("TPM operation %s failed: %v", e.Operation, e.Cause)
-}
-
-func (e ErrTPMOperationFailed) Unwrap() error {
-	return e.Cause
-}
-
 // =============================================================================
 // TPM Routes
 // =============================================================================
@@ -113,9 +76,9 @@ const (
 // REST call is the one gRPC, QUIC, MCP and Unix serve. Every route requires a
 // platform bearer token granting its scope.
 type TPMHandlers struct {
+	protoResponder
 	tpm    platformv1.TPMServiceServer
 	tokens TokenAuthorizer
-	logger *slog.Logger
 }
 
 // tpmRoute is one TPM REST route and the scope it requires.
@@ -132,7 +95,7 @@ func NewTPMHandlers(logger *slog.Logger) *TPMHandlers {
 		logger = slog.Default()
 	}
 	return &TPMHandlers{
-		logger: logger,
+		protoResponder: protoResponder{logger: logger},
 	}
 }
 
@@ -163,9 +126,8 @@ func (h *TPMHandlers) RegisterRoutes(router *mux.Router) {
 // transports map TPMService onto, each running that RPC under the scope the
 // gRPC method catalog gives it. The Go SDK carries a key handle or NVRAM
 // index in the body; the JavaScript SDK puts it in the path ({handle},
-// {index}), so both forms are mounted. The device-identity routes (IDevID, IAK info
-// and delete, activate-credential) are the daemon's own, in
-// pkg/api/daemon/rest_idevid.go.
+// {index}), so both forms are mounted. The device-identity routes (IDevID and
+// IAK info and delete) are the daemon's own, in pkg/api/daemon/rest_idevid.go.
 func (h *TPMHandlers) routes() []tpmRoute {
 	return []tpmRoute{
 		// TPM info and management
@@ -193,8 +155,9 @@ func (h *TPMHandlers) routes() []tpmRoute {
 		{http.MethodDelete, "/api/v1/tpm/ak", tpmScopeDelete, tpmRPC(h, platformv1.TPMServiceServer.DeleteAK)},
 		{http.MethodDelete, "/api/v1/tpm/ak/{handle}", tpmScopeDelete, tpmRPC(h, platformv1.TPMServiceServer.DeleteAK)},
 
-		// Credential activation (TPM2_MakeCredential)
+		// Credential activation (TPM2_MakeCredential, TPM2_ActivateCredential)
 		{http.MethodPost, "/api/v1/tpm/make-credential", tpmScopeRead, tpmRPC(h, platformv1.TPMServiceServer.MakeCredential)},
+		{http.MethodPost, "/api/v1/tpm/activate-credential", tpmScopeWrite, tpmRPC(h, platformv1.TPMServiceServer.ActivateCredential)},
 
 		// Quote and attestation
 		{http.MethodPost, "/api/v1/tpm/quote", tpmScopeRead, tpmRPC(h, platformv1.TPMServiceServer.Quote)},
@@ -260,197 +223,19 @@ func (h *TPMHandlers) authorize(r *http.Request, scope string) (int, error) {
 // TPMService RPC Handlers
 // =============================================================================
 
-// tpmRPC serves one TPMService RPC. The request message is read from the
-// protobuf JSON body, then from the path variables and the query string; a
-// field the message does not have is refused, never dropped. The RPC runs
-// with the TLS state of the connection the request arrived on, which a quote
-// binds to (#482).
+// tpmRPC serves one TPMService RPC over protobuf JSON (protoRPC).
 func tpmRPC[Req any, PReq interface {
 	*Req
 	proto.Message
 }, Resp proto.Message](h *TPMHandlers, rpc func(platformv1.TPMServiceServer, context.Context, PReq) (Resp, error)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if h.tpm == nil {
-			h.writeError(w, http.StatusServiceUnavailable, ErrTPMServiceNotAvailable{})
-			return
-		}
-		req := PReq(new(Req))
-		if !h.decodeProto(w, r, req) {
-			return
-		}
-		params := r.URL.Query()
-		for name, value := range mux.Vars(r) {
-			params.Set(name, value)
-		}
-		if err := decodeTPMParams(params, req.ProtoReflect()); err != nil {
-			h.writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		ctx := channelbind.WithConnectionTLS(r.Context(), channelbind.TransportREST, r.TLS)
-		resp, err := rpc(h.tpm, ctx, req)
-		if err != nil {
-			h.writeStatusError(w, err)
-			return
-		}
-		h.writeProto(w, http.StatusOK, resp)
-	}
+	return protoRPC(h.protoResponder, h.tpmService, rpc)
 }
 
-// decodeTPMParams sets the request fields that URL parameters name. A
-// parameter is a scalar field's proto name or JSON name (num_bytes or
-// numBytes); a repeated field takes the parameter once per element.
-func decodeTPMParams(params url.Values, msg protoreflect.Message) error {
-	fields := msg.Descriptor().Fields()
-	for name, values := range params {
-		field := fields.ByName(protoreflect.Name(name))
-		if field == nil {
-			field = fields.ByJSONName(name)
-		}
-		if field == nil || field.IsMap() {
-			return ErrTPMInvalidQueryParameter{Name: name, Value: strings.Join(values, ","), Reason: "not a field of " + string(msg.Descriptor().FullName())}
-		}
-		if !field.IsList() && len(values) > 1 {
-			return ErrTPMInvalidQueryParameter{Name: name, Value: strings.Join(values, ","), Reason: "given more than once"}
-		}
-		parse, ok := tpmParamParsers[field.Kind()]
-		if !ok {
-			return ErrTPMInvalidQueryParameter{Name: name, Value: strings.Join(values, ","), Reason: "a " + field.Kind().String() + " field cannot be a URL parameter"}
-		}
-		for _, raw := range values {
-			value, ok := parse(field, raw)
-			if !ok {
-				return ErrTPMInvalidQueryParameter{Name: name, Value: raw, Reason: "not a valid " + field.Kind().String()}
-			}
-			if field.IsList() {
-				msg.Mutable(field).List().Append(value)
-			} else {
-				msg.Set(field, value)
-			}
-		}
+// tpmService returns the TPM service every route delegates to, or
+// ErrTPMServiceNotAvailable when none is configured.
+func (h *TPMHandlers) tpmService() (platformv1.TPMServiceServer, error) {
+	if h.tpm == nil {
+		return nil, ErrTPMServiceNotAvailable{}
 	}
-	return nil
-}
-
-// tpmParamParser parses one URL parameter value as a value of field.
-type tpmParamParser func(field protoreflect.FieldDescriptor, raw string) (protoreflect.Value, bool)
-
-// tpmParamParsers parses each scalar kind a TPM request field has. A
-// uint32 takes any Go literal base, so ?handle=0x81000002 works; an enum
-// takes its name or its number.
-var tpmParamParsers = map[protoreflect.Kind]tpmParamParser{
-	protoreflect.BoolKind:   parseBoolParam,
-	protoreflect.StringKind: parseStringParam,
-	protoreflect.EnumKind:   parseEnumParam,
-	protoreflect.Uint32Kind: parseUint32Param,
-}
-
-func parseBoolParam(_ protoreflect.FieldDescriptor, raw string) (protoreflect.Value, bool) {
-	b, err := strconv.ParseBool(raw)
-	if err != nil {
-		return protoreflect.Value{}, false
-	}
-	return protoreflect.ValueOfBool(b), true
-}
-
-func parseStringParam(_ protoreflect.FieldDescriptor, raw string) (protoreflect.Value, bool) {
-	return protoreflect.ValueOfString(raw), true
-}
-
-func parseEnumParam(field protoreflect.FieldDescriptor, raw string) (protoreflect.Value, bool) {
-	values := field.Enum().Values()
-	if value := values.ByName(protoreflect.Name(raw)); value != nil {
-		return protoreflect.ValueOfEnum(value.Number()), true
-	}
-	n, err := strconv.ParseInt(raw, 0, 32)
-	if err != nil || values.ByNumber(protoreflect.EnumNumber(n)) == nil {
-		return protoreflect.Value{}, false
-	}
-	return protoreflect.ValueOfEnum(protoreflect.EnumNumber(n)), true
-}
-
-func parseUint32Param(_ protoreflect.FieldDescriptor, raw string) (protoreflect.Value, bool) {
-	n, err := strconv.ParseUint(raw, 0, 32)
-	if err != nil {
-		return protoreflect.Value{}, false
-	}
-	return protoreflect.ValueOfUint32(uint32(n)), true
-}
-
-// =============================================================================
-// Helper Methods
-// =============================================================================
-
-// writeJSON writes a JSON response with the given status code.
-func (h *TPMHandlers) writeJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(data); err != nil {
-		h.logger.Error("Failed to encode JSON response", "error", err)
-	}
-}
-
-// writeError writes an error response with the given status code.
-func (h *TPMHandlers) writeError(w http.ResponseWriter, status int, err error) {
-	h.writeJSON(w, status, ErrorResponse{
-		Error:     err.Error(),
-		Code:      status,
-		Timestamp: time.Now().UTC(),
-	})
-}
-
-// tpmMarshalOptions encodes the TPM service's protobuf responses the way the
-// web service's /api/v1/tpm routes do, so the SDK decodes either listener.
-var tpmMarshalOptions = protojson.MarshalOptions{
-	EmitUnpopulated: true,
-}
-
-// tpmUnmarshalOptions decodes protobuf TPM request bodies. An unknown field
-// is an error: a misspelled field must never become a silent default.
-var tpmUnmarshalOptions = protojson.UnmarshalOptions{
-	DiscardUnknown: false,
-}
-
-// decodeProto reads a protojson request body into msg. An empty body leaves
-// msg at its zero value. It writes a 400 and reports false when the body
-// cannot be read or decoded.
-func (h *TPMHandlers) decodeProto(w http.ResponseWriter, r *http.Request, msg proto.Message) bool {
-	data, err := io.ReadAll(r.Body)
-	if err != nil {
-		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
-		return false
-	}
-	if len(data) == 0 {
-		return true
-	}
-	if err := tpmUnmarshalOptions.Unmarshal(data, msg); err != nil {
-		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
-		return false
-	}
-	return true
-}
-
-// writeProto writes msg as protojson with the given HTTP status.
-func (h *TPMHandlers) writeProto(w http.ResponseWriter, statusCode int, msg proto.Message) {
-	payload, err := tpmMarshalOptions.Marshal(msg)
-	if err != nil {
-		h.logger.Error("Failed to encode TPM response", "error", err)
-		h.writeError(w, http.StatusInternalServerError, ErrTPMOperationFailed{Operation: "encode_response", Cause: err})
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	if _, err := w.Write(payload); err != nil {
-		h.logger.Error("Failed to write TPM response", "error", err)
-	}
-}
-
-// writeStatusError answers with the HTTP equivalent of the TPM service's gRPC
-// status error.
-func (h *TPMHandlers) writeStatusError(w http.ResponseWriter, err error) {
-	code, ok := protorestHTTPStatus[status.Code(err)]
-	if !ok {
-		code = http.StatusInternalServerError
-	}
-	h.logger.Error("TPM request failed", "error", err, "http_status", code)
-	h.writeError(w, code, err)
+	return h.tpm, nil
 }

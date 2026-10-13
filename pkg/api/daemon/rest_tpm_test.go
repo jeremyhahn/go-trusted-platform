@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -59,7 +60,12 @@ func newTPMTestRESTServer(t *testing.T) *RESTServer {
 // serveTPMRoute sends one request to server's router, with bearer as its
 // platform token when it is set.
 func serveTPMRoute(server *RESTServer, method, path, bearer string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(method, path, nil)
+	return serveTPMBody(server, method, path, bearer, "")
+}
+
+// serveTPMBody is serveTPMRoute with a JSON request body.
+func serveTPMBody(server *RESTServer, method, path, bearer, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
@@ -113,6 +119,89 @@ func TestRESTServer_SetTPMHandlers_ServesAScopedToken(t *testing.T) {
 
 	t.Run("no token is refused", func(t *testing.T) {
 		assert.Equal(t, http.StatusUnauthorized, serveTPMRoute(server, http.MethodPost, "/api/v1/tpm/quote/verify", "").Code)
+	})
+}
+
+// errCredentialMismatch is what activatingTPM fails with when told to.
+type errCredentialMismatch struct{}
+
+func (errCredentialMismatch) Error() string { return "the credential was not made for this key" }
+
+// activatingTPM activates every credential to the same secret, or fails,
+// and records what it was given.
+type activatingTPM struct {
+	infoOnlyTPM
+
+	fail            bool
+	credentialBlob  []byte
+	encryptedSecret []byte
+}
+
+func (t *activatingTPM) ActivateCredential(credentialBlob, encryptedSecret []byte) ([]byte, error) {
+	t.credentialBlob, t.encryptedSecret = credentialBlob, encryptedSecret
+	if t.fail {
+		return nil, errCredentialMismatch{}
+	}
+	return []byte("activated"), nil
+}
+
+// POST /api/v1/tpm/activate-credential runs TPMService.ActivateCredential on
+// the SDK's camelCase body, under tpm:write like its gRPC twin. The old
+// {credential_blob, secret} body is refused, never half-read.
+func TestRESTServer_SetTPMHandlers_ActivatesCredentials(t *testing.T) {
+	t.Parallel()
+	key := newPTIssuerKey(t)
+	validator := newSharedValidator(t, key.jwksHandler(t).URL, true)
+	reader := key.sign(t, "operator", "", []string{"tpm:read"})
+	writer := key.sign(t, "installer", "", []string{"tpm:write"})
+	const path = "/api/v1/tpm/activate-credential"
+	const body = `{"credentialBlob":"YmxvYg==","encryptedSecret":"c2VjcmV0"}`
+
+	mount := func(tpm *activatingTPM) *RESTServer {
+		server := newTPMTestRESTServer(t)
+		service := NewTPMGRPCService(logging.NewLogger(0, nil))
+		service.SetTPM2Service(tpm)
+		server.SetTPMHandlers(service, validator)
+		return server
+	}
+
+	t.Run("a tpm:write token activates the credential", func(t *testing.T) {
+		tpm := &activatingTPM{}
+		w := serveTPMBody(mount(tpm), http.MethodPost, path, writer, body)
+
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		assert.JSONEq(t, `{"secret":"YWN0aXZhdGVk"}`, w.Body.String())
+		assert.Equal(t, []byte("blob"), tpm.credentialBlob)
+		assert.Equal(t, []byte("secret"), tpm.encryptedSecret)
+	})
+
+	t.Run("a tpm:read token is refused", func(t *testing.T) {
+		tpm := &activatingTPM{}
+		assert.Equal(t, http.StatusForbidden, serveTPMBody(mount(tpm), http.MethodPost, path, reader, body).Code)
+		assert.Nil(t, tpm.credentialBlob)
+	})
+
+	t.Run("the old IDevID-shaped body is refused", func(t *testing.T) {
+		tpm := &activatingTPM{}
+		w := serveTPMBody(mount(tpm), http.MethodPost, path, writer, `{"credential_blob":"YmxvYg==","secret":"c2VjcmV0"}`)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+		assert.Contains(t, w.Body.String(), `unknown field \"secret\"`)
+		assert.Nil(t, tpm.credentialBlob)
+	})
+
+	t.Run("a missing encrypted secret is a bad request", func(t *testing.T) {
+		tpm := &activatingTPM{}
+		w := serveTPMBody(mount(tpm), http.MethodPost, path, writer, `{"credentialBlob":"YmxvYg=="}`)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+		assert.Nil(t, tpm.credentialBlob)
+	})
+
+	t.Run("a TPM that cannot activate is an internal error", func(t *testing.T) {
+		w := serveTPMBody(mount(&activatingTPM{fail: true}), http.MethodPost, path, writer, body)
+
+		assert.Equal(t, http.StatusInternalServerError, w.Code, w.Body.String())
 	})
 }
 

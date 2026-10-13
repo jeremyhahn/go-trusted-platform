@@ -1,5 +1,8 @@
 # Proxy API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md). platformctl has no global `--protocol` / `--endpoint` flags; they are `--transport` and `--server`.
+
 Multi-protocol API documentation for the reverse-proxy configuration
 service. platformd is the source of truth for proxy routes and backend
 pools; gatewayd instances sync this configuration (via the SDK client)

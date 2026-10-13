@@ -1,5 +1,8 @@
 # Tenant CLI Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [cli.md](cli.md). There are no `update` or `verify` verbs and no `--description` or `--contact-*` flags; the `barrier` verb is missing here.
+
 > Subordinate to [cli.md](cli.md), which is normative. A tenant has no VLAN
 > range and no OVS bridge (retired by #708): the `vlan` and `bridge` verbs and
 > the `--vlan-start` / `--vlan-end` flags no longer exist, and network

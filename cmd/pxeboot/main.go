@@ -64,6 +64,14 @@ func main() {
 	overrides := firmwareOverrides{}
 	flag.Var(overrides, "firmware-override", "serve a prebuilt firmware file in place of the upstream download, as name=path (repeatable), e.g. snponly-aarch64.efi=/data/firmware/snponly-aarch64.efi")
 	proxyDHCP := flag.Bool("dhcp-proxy", false, "answer PXE clients with boot options and no lease (the segment has its own DHCP server)")
+	// The NBD export server runs only when the manifest names a
+	// diskless-nbd node; these flags are ignored otherwise.
+	nbdListen := flag.String("nbd-listen", "", "NBD-over-TLS listen address (default: dhcp-server-ip:10809)")
+	nbdVolumeDir := flag.String("nbd-volume-dir", "", "directory holding one NBD root volume per diskless-nbd node (default: data-dir/nbd)")
+	nbdVolumeSize := flag.Int64("nbd-volume-size", 0, "size in bytes of a new NBD root volume, a multiple of 512 (required for diskless-nbd nodes)")
+	nbdCAFile := flag.String("nbd-ca-file", "", "platform CA bundle that verifies NBD client IDevIDs (required for diskless-nbd nodes)")
+	nbdCert := flag.String("nbd-cert", "", "NBD server TLS certificate (required for diskless-nbd nodes)")
+	nbdKey := flag.String("nbd-key", "", "NBD server TLS private key (required for diskless-nbd nodes)")
 
 	flag.Parse()
 
@@ -110,6 +118,14 @@ func main() {
 			RangeEnd:   *dhcpRangeEnd,
 			Gateway:    *dhcpGateway,
 			DNS:        dnsServers,
+		},
+		NBD: container.NBDConfig{
+			ListenAddr: *nbdListen,
+			VolumeDir:  *nbdVolumeDir,
+			VolumeSize: *nbdVolumeSize,
+			CAFile:     *nbdCAFile,
+			CertFile:   *nbdCert,
+			KeyFile:    *nbdKey,
 		},
 	}
 

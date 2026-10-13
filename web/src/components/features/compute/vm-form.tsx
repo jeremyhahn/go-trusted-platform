@@ -78,7 +78,7 @@ export function VMForm({ open, onOpenChange, onSuccess }: VMFormProps) {
         memory: { sizeMb: values.memoryMB },
         disks: [{
           path: `/data/${values.name}.qcow2`,
-          type: 'QCOW2' as const,
+          type: 'DISK_TYPE_QCOW2' as const,
           sizeGb: Math.ceil(values.storageMB / 1024),
         }],
         networks: values.networkId ? [{ bridge: values.networkId }] : [],

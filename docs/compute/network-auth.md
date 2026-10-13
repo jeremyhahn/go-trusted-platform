@@ -1,5 +1,8 @@
 # Network Authentication Service
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> Deep dive on `pkg/compute/network`: certificate port authentication, OPA evaluation and VLAN flow rules.
+
 ## Overview
 
 The network authentication service (`pkg/compute/network`) provides x509 certificate-based port authentication with VLAN transitions, TPM attestation integration, and OPA policy evaluation. It enables devices to securely transition from quarantine networks to production environments based on cryptographic identity and platform integrity.
@@ -30,14 +33,14 @@ The network authentication service (`pkg/compute/network`) provides x509 certifi
 
 ### State Transitions
 
-```
-quarantine --> enrolling --> authorized
-    |              |             |
-    +-------> revoked <----------+
-                  |
-                  v
-             quarantine (re-enrollment)
-```
+`AuthState.CanTransitionTo` allows exactly these transitions:
+
+| From | To |
+|------|----|
+| `quarantine` | `enrolling`, `authorized`, `revoked` |
+| `enrolling` | `authorized`, `quarantine`, `revoked` |
+| `authorized` | `quarantine`, `revoked` |
+| `revoked` | `quarantine` (re-enrollment) |
 
 ## Configuration
 
@@ -56,8 +59,8 @@ config := &network.AuthConfig{
     SessionTimeout:          24 * time.Hour,
     TrustedCAs:              []*x509.Certificate{caCert},
     RequiredOIDs:            []asn1.ObjectIdentifier{
-        network.OIDNetworkAccess,
-        network.OIDProductionAccess,
+        networkAccessOID,    // deployment-defined; the package ships none
+        productionAccessOID,
     },
     Reattest: &network.ReattestConfig{
         Enabled:             true,
@@ -135,14 +138,14 @@ type AuthResult struct {
 
 The service extracts policy OIDs from x509 certificate extensions to determine access levels:
 
-### Standard OIDs
+### Policy OIDs
 
-| OID | Name | Purpose |
-|-----|------|---------|
-| `2.5.29.32` | Certificate Policies | Standard policy extension |
-| `1.3.6.1.4.1.99999.1.1` | Device Attestation | Indicates TPM attestation capability |
-| `1.3.6.1.4.1.99999.1.2` | Network Access | Grants basic network access |
-| `1.3.6.1.4.1.99999.1.3` | Production Access | Grants production VLAN access |
+The package defines only the standard extension OIDs (`OIDCertificatePolicies`
+`2.5.29.32`, `OIDSubjectAltName` `2.5.29.17`, `OIDExtendedKeyUsage`
+`2.5.29.37`). The access-granting policy OIDs belong to the deployment: they
+are passed in through `AuthConfig.RequiredOIDs` and matched by the OPA policy.
+The placeholder arc `1.3.6.1.4.1.99999` is forbidden in production code
+(`pkg/sdn/zone/guards_test.go`); the examples below use it only as a placeholder.
 
 ### Policy Extraction
 
@@ -163,7 +166,7 @@ for _, oid := range info.OIDs {
 
 // Validate required OIDs
 requiredOIDs := []asn1.ObjectIdentifier{
-    network.OIDNetworkAccess,
+    networkAccessOID,
 }
 if err := extractor.ValidateRequiredOIDs(ctx, cert, requiredOIDs); err != nil {
     // Missing required OID
@@ -191,7 +194,9 @@ type PolicyInfo struct {
 
 ## OPA Policy Evaluation
 
-Access decisions are delegated to Open Policy Agent for flexible, declarative authorization:
+Access decisions are delegated to an Open Policy Agent server: the evaluator
+POSTs `{"input": ...}` to `<OPAEndpoint>/v1/data/<OPAPolicyPath>` and reads
+`allow` and `assigned_vlan` from the result. A missing result is a deny.
 
 ### OPA Input
 
@@ -213,31 +218,33 @@ Access decisions are delegated to Open Policy Agent for flexible, declarative au
 ```rego
 package network.authz
 
-default allow = false
+import rego.v1
+
+default allow := false
 
 # Allow production access for attested devices with correct OIDs
-allow {
+allow if {
     input.attestation_verified
     has_network_access_oid
     has_production_access_oid
 }
 
 # Assign VLAN based on policy OIDs
-assigned_vlan = 100 {
+assigned_vlan := 100 if {
     has_production_access_oid
 }
 
-assigned_vlan = 50 {
+assigned_vlan := 50 if {
     has_network_access_oid
     not has_production_access_oid
 }
 
-has_network_access_oid {
-    input.policy_oids[_] == "1.3.6.1.4.1.99999.1.2"
+has_network_access_oid if {
+    "1.3.6.1.4.1.99999.1.2" in input.policy_oids
 }
 
-has_production_access_oid {
-    input.policy_oids[_] == "1.3.6.1.4.1.99999.1.3"
+has_production_access_oid if {
+    "1.3.6.1.4.1.99999.1.3" in input.policy_oids
 }
 ```
 
@@ -245,11 +252,11 @@ has_production_access_oid {
 
 ```go
 type OPAResult struct {
-    Allow           bool     `json:"allow"`
-    AssignedVLAN    uint16   `json:"assigned_vlan,omitempty"`
-    Reasons         []string `json:"reasons,omitempty"`
-    RequiredActions []string `json:"required_actions,omitempty"`
-    EvaluatedAt     time.Time
+    Allow           bool      `json:"allow"`
+    AssignedVLAN    uint16    `json:"assigned_vlan,omitempty"`
+    Reasons         []string  `json:"reasons,omitempty"`
+    RequiredActions []string  `json:"required_actions,omitempty"`
+    EvaluatedAt     time.Time `json:"evaluated_at"`
 }
 ```
 
@@ -261,12 +268,16 @@ The flow manager installs and removes OpenFlow rules for VLAN isolation:
 
 | Type | Priority | Purpose |
 |------|----------|---------|
-| `quarantine` | 200 | Restrict traffic to enrollment services |
-| `production` | 300 | Full network access with VLAN tagging |
-| `drop` | 100 | Block all traffic |
-| `redirect` | 250 | Redirect to captive portal |
-| `rate_limit` | 150 | Apply rate limiting |
-| `monitor` | 50 | Mirror traffic for monitoring |
+| `quarantine` | `QuarantinePriority` (default 200) | Restrict traffic to enrollment services |
+| `production` | `ProductionPriority` (default 300) | Full network access with VLAN tagging |
+| `drop` | caller-set | Block all traffic |
+| `redirect` | caller-set | Redirect to captive portal |
+| `rate_limit` | caller-set | Apply rate limiting |
+| `monitor` | caller-set | Mirror traffic for monitoring |
+
+Only `InstallQuarantineRules` and `InstallProductionRules` build rules
+themselves; the other types are installed through `InstallRule` with the
+priority the caller sets. `DefaultPriority` defaults to 100.
 
 ### Flow Manager API
 
@@ -312,6 +323,7 @@ err := flowManager.RemoveRules(ctx, "port-1")
 | `drop` | Silently drop packet |
 | `set_vlan` | Set VLAN ID |
 | `strip_vlan` | Remove VLAN tag |
+| `set_field` | Set a header field |
 | `controller` | Send to controller for inspection |
 | `flood` | Send to all ports |
 
@@ -319,11 +331,14 @@ err := flowManager.RemoveRules(ctx, "port-1")
 
 ### Transition Flow
 
-1. **Remove existing rules** (if any)
-2. **Install new rules** (make-before-break pattern)
-3. **Update OVSDB port VLAN tag**
-4. **Update state machine**
-5. **Audit log transition**
+`Authenticate` moves a port by removing its rules, installing the production
+rules (which also set the OVSDB port VLAN tag), and falling back to the
+quarantine rules if that install fails; it then records the port state.
+`Revoke` does the same with the quarantine rules.
+
+`FlowManager.TransitionVLAN` is make-before-break instead: it installs the
+rules for the new VLAN first, then removes the rules on the old VLAN, and keeps
+the new rules even if a removal fails.
 
 ### Transition Structure
 
@@ -363,9 +378,9 @@ if state.NeedsReattest(config.Reattest.Interval) {
 
 ### Failure Handling
 
-- **Grace Period**: Network access continues during re-attestation attempt
-- **Failure Count**: Track consecutive failures
-- **Automatic Quarantine**: Move to quarantine after `MaxFailures` exceeded
+- **Access during re-attestation**: rules are not touched while a re-attestation runs
+- **Failure Count**: `PortState.FailureCount` tracks consecutive failures
+- **Automatic Quarantine**: with `QuarantineOnFailure` set, the port moves to quarantine once `FailureCount` reaches `MaxFailures`
 
 ## Revocation
 
@@ -392,14 +407,19 @@ if err != nil {
 | `ErrOIDMissing` | Required OID not in certificate |
 | `ErrPortNotFound` | Port not registered |
 | `ErrStateTransition` | Invalid state transition |
+| `ErrSessionExpired` | Authentication session expired |
+| `ErrReattestRequired` | Re-attestation is due |
+| `ErrInvalidConfig` | Invalid configuration or argument |
+| `ErrContextCanceled` | Context canceled before the operation |
+| `ErrServiceNotInitialized` | Service not initialized or already closed |
 
 ## Thread Safety
 
 All operations are thread-safe:
 
-- Atomic state transitions using `sync/atomic`
-- Lock-free port state management using `sync.Map`
-- Lock-free rule list management using CAS operations
+- Service lifecycle flags are `atomic.Bool`
+- Port state is held in a `sync.Map`
+- Per-port rule lists are swapped with `sync.Map.CompareAndSwap`
 
 ## Related Documentation
 

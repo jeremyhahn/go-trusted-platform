@@ -1,5 +1,8 @@
 # iPXE Package
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and [user.md](user.md). `ServerConfig` has no nested `DHCP` struct: the fields are flat (`EnableDHCP`, default `false`; `DHCPRangeStart`, `DHCPServerIP`, ...; [engineering.md](engineering.md) §4), so the example below does not compile.
+
 The `pkg/ipxe` package provides a complete PXE boot server implementation for network booting QEMU instances within the trusted platform test environment.
 
 ## Overview

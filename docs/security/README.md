@@ -1,5 +1,8 @@
 # Security Package
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md), [engineering.md](engineering.md), [cli.md](cli.md), [api.md](api.md) and [user.md](user.md); architecture.md §8 lists what is stale here. `pkg/security/audit` does not exist; `pkg/security` holds only `ratelimit` and `validation`.
+
 Security utilities for rate limiting, audit logging, and input validation.
 
 ## Overview

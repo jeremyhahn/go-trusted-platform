@@ -1,5 +1,8 @@
 # Trusted Platform Web Frontend
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [user.md](user.md) and [architecture.md](architecture.md). The package manager is npm, not yarn; `dev` and `build` run webpack, not Turbopack; links to `../webservices/` and `../configuration/README.md` are dead.
+
 Modern, secure web frontend for the Trusted Platform using Next.js 16, React 19, and WebAuthn passwordless authentication.
 
 ## Overview

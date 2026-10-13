@@ -1,5 +1,8 @@
 # Virtual TPM Bundle Management
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [user.md](user.md), [architecture.md](architecture.md) and [cli.md](cli.md). The verbs are `platformctl vtpm`, not `platformd vtpm` (platformd has no `vtpm` command), and `create` requires `--bundle-id`.
+
 Manage vTPM bundles for VM provisioning with CA-issued EK certificates and UEFI Secure Boot.
 
 ## Overview

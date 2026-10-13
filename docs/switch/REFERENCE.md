@@ -1,5 +1,8 @@
 # Switch Management Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [engineering.md](engineering.md). `transitionSwitchPort` and the `serve.go` switch wiring do not exist (the service is not wired); `test/integration/switch/` and `docs/webservice/` do not exist; `platformctl switch` ships; the schema lacks `known_hosts_path`.
+
 Quick reference guide for the switch management system.
 
 ## File Organization

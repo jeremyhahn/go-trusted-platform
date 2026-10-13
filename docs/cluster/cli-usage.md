@@ -1,5 +1,8 @@
 # Cluster CLI Usage
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and its siblings; describes an API surface and a `platformctl cluster` CLI that do not exist.
+
 ## Overview
 
 The `platformctl cluster` command group provides management operations for go-trusted-platform cluster deployments.
@@ -484,5 +487,5 @@ echo "Node $NODE_ID ready for maintenance"
 
 - [API Reference](api-reference.md) - REST and gRPC API
 - [Configuration](configuration.md) - Cluster configuration
-- [Bootstrap](bootstrap.md) - Detailed setup procedures
-- [Operations](operations.md) - Operational runbooks
+- [Bootstrap](user.md) - Detailed setup procedures
+- [Operations](user.md) - Operational runbooks

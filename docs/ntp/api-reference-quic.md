@@ -1,5 +1,8 @@
 # NTP QUIC API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md) (§8). The category `0x50` and sub-opcodes `0x01`-`0x03` below still match `sdk/go/wire/quicwire/ntp_opcodes.go`.
+
 | Property | Value |
 |----------|-------|
 | Endpoint | `host:9444` (UDP, QUIC + TLS 1.3) |

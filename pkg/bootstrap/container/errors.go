@@ -165,6 +165,20 @@ func (e ErrDisklessUnavailable) Error() string {
 	return "bootstrap container: " + e.MAC + " boots diskless and media set " + e.MediaSet + " has no diskless root (rebuild the netboot media with --diskless)"
 }
 
+// ErrNBDCredentials is an NBD export server certificate or key that cannot
+// be loaded. Without them no diskless-nbd node can attach its root.
+type ErrNBDCredentials struct {
+	CertFile string
+	KeyFile  string
+	Err      error
+}
+
+func (e ErrNBDCredentials) Error() string {
+	return "bootstrap container: nbd certificate " + e.CertFile + " and key " + e.KeyFile + ": " + e.Err.Error()
+}
+
+func (e ErrNBDCredentials) Unwrap() error { return e.Err }
+
 // ErrNetbootMedia is a netboot media build whose index is unreadable or
 // names something the build does not hold.
 type ErrNetbootMedia struct {

@@ -1,5 +1,8 @@
 # EAB MCP API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `platform_eab_*` MCP tools, their arguments and wire conventions.
+
 | Property | Value |
 |----------|-------|
 | Tools | `platform_eab_*` (`pkg/api/mcp/eab_tools.go`) |
@@ -15,7 +18,7 @@
 | `platform_eab_get_credential_by_key_id` | `key_id` (required) |
 | `platform_eab_list_credentials` | `tenant_id`, `profile_id`, `active_only`, `status`, `page`, `page_size` — all optional; empty tenant + zero profile lists the full store (same cascade as gRPC) |
 | `platform_eab_revoke_credential` | `credential_id` (required), `revoker_id` |
-| `platform_eab_validate_credential` | `key_id`, `hmac_key` (base64url; raw/padded, std/url variants accepted) |
+| `platform_eab_validate_credential` | `key_id` (required), `hmac_key` (required; base64url; raw/padded, std/url variants accepted) |
 | `platform_eab_delete_credential` | `credential_id` (required) |
 | `platform_eab_mark_credential_used` | `credential_id` (required) |
 | `platform_eab_cleanup_expired_credentials` | `tenant_id` (optional; empty = all tenants) |

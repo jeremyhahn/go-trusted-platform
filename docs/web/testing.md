@@ -1,5 +1,8 @@
 # Web Frontend Testing
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [engineering.md](engineering.md) §9. Commands are `npm run`, not yarn; `e2e/fixtures/auth-fixture.ts` does not exist (the fixtures are `auth-setup.ts`, `api-mock.ts` and siblings).
+
 Comprehensive testing guide for the Trusted Platform Web Frontend using Playwright.
 
 ## Overview

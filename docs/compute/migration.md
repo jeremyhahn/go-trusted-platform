@@ -1,5 +1,8 @@
 # VM Migration
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> Deep dive on cold and live VM migration: modes, transport security and the inter-daemon handshake.
+
 Live and cold VM migration move a running guest from one `platformd` (the
 **source**) to a peer `platformd` (the **destination**) over a mutually
 authenticated, CA-secured channel. Migration is available only on the local
@@ -183,6 +186,6 @@ the optional `shared_storage` block and `migration_listen_address`.
 
 ## See Also
 
-- [API Reference](api-reference.md) — full ComputeService surface
-- [Configuration](configuration.md) — `compute:` and `shared_storage:`
+- [API](api.md) — full ComputeService surface
+- [Engineering](engineering.md) — `compute.shared_storage` and the migration invariants
 - [Architecture](architecture.md) — orchestrator internals

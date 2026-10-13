@@ -1,5 +1,8 @@
 # Control Panel UI
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and [engineering.md](engineering.md) §1.3. There is no `src/lib/api/` layer (pages use `trusted-platform-sdk` hooks); `(dashboard)/` also holds `tpm`, `storage`, `provisioning` and `account`.
+
 Professional control panel for go-trusted-platform exposing all 15 SDK services.
 
 ## Technology Stack

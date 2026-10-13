@@ -81,7 +81,7 @@ func NewGRPCAdapter() *GRPCAdapter {
 func (a *GRPCAdapter) Setup(ctx context.Context) error {
 	tlsConfig := helpers.TLSConfigOrInsecure()
 
-	conn, err := grpc.DialContext(ctx, a.endpoint,
+	conn, err := grpc.NewClient(a.endpoint,
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
 	)
 	if err != nil {
@@ -185,7 +185,7 @@ func (a *GRPCAdapter) GetVM(ctx context.Context, opts GetVMOptions) (*GetVMResul
 	if vm == nil {
 		return nil, ErrGRPCCallFailed{
 			Method: "GetVM",
-			Err:    ErrVMNotFound{VMID: opts.VMID},
+			Err:    ErrVMNotFound(opts),
 		}
 	}
 

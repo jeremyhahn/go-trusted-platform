@@ -1,5 +1,8 @@
 # Integrated Security Implementation Checklist
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [../security/architecture.md](../security/architecture.md).
+
 > **Focus**: IDevID-only, single client-server provisioning
 > **Goal**: Get `platformctl iso test client-server` working with integrated security architecture
 > **Scope**: go-trusted-platform only (no go-xkms/go-quicbaas changes unless critical)

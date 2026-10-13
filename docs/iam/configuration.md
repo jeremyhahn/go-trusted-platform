@@ -1,5 +1,8 @@
 # IAM Configuration
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `quicbaas:` storage keys IAM data lives in, the mTLS adapter options and the IAM gRPC request shapes.
+
 ## Overview
 
 IAM (Identity and Access Management) in Trusted Platform is powered by go-quicbaas's IAM subsystem. The platform wraps QuicBaaS's IAMServiceClient to provide tenant management, user/group/role management, ABAC policy enforcement, and OIDC federation.
@@ -25,7 +28,8 @@ quicbaas:
   # - "memory": In-memory storage, no persistence (testing/ephemeral)
   # - "file": Simple file-based storage (development/debugging)
   # - "pebble": PebbleDB for high-performance local storage (default)
-  # - "raft": Raft consensus with PebbleDB (distributed, HA)
+  # Any other value fails validation. Clustering is not a backend: a pebble
+  # node joins peers through raft-address and join-addresses.
   storage-backend: pebble
 
   # Data directory for QuicBaaS files
@@ -34,33 +38,39 @@ quicbaas:
   # Write-ahead log directory (defaults to data-dir/wal)
   wal-dir: trusted-data/quicbaas/wal
 
-  # Unique node identifier (required for raft backend)
+  # Node identifier, unique within a cluster
   node-id: 1
 
-  # In-memory cache size in bytes (default: 64MB)
-  cache-size: 67108864
+  # In-memory cache size in bytes (default: 128MB)
+  cache-size: 134217728
 
   # Logging verbosity: debug, info, warn, error
   log-level: warn
 
-  # Read consistency: linearizable, strong, eventual
+  # Read consistency: linearizable (default), strong, eventual.
+  # An unrecognized value silently falls back to linearizable.
   consistency-level: linearizable
 
-  # Raft address for cluster communication (raft backend only)
-  raft-address: "127.0.0.1:63000"
+  # Raft address advertised to peers (cluster members only)
+  raft-address: "192.168.1.12:63000"
 
-    # Peer addresses for multi-node clusters (raft backend only)
-    join-addresses:
-      - "192.168.1.10:63000"
-      - "192.168.1.11:63000"
+  # Peer addresses for multi-node clusters. When set, raft-address must be
+  # routable: a loopback address fails validation.
+  join-addresses:
+    - "192.168.1.10:63000"
+    - "192.168.1.11:63000"
 ```
 
 ## IAM Service Configuration
 
-The IAM service is enabled when QuicBaaS is built with the `iam` build tag:
+The IAM service needs the `iam` build tag. It is always in the Makefile's
+`BUILD_TAGS` (see [Build Tags](../configuration/build-tags.md)), so a plain
+build includes it:
 
 ```bash
-go build -tags iam ./cmd/platformd
+make build
+# Outside make, never type the tag list by hand:
+go build -tags "$(make -s print-build-tags)" ./cmd/platformd
 ```
 
 ### Build Requirements
@@ -290,7 +300,7 @@ argon2:
 
 ### QuicBaaS Security
 
-- Use `raft` storage backend for production (Raft consensus, HA)
+- Run a multi-node cluster (`join-addresses`) for HA in production
 - Configure strong consistency (`linearizable`) for IAM operations
 - Encrypt data-at-rest using QuicBaaS KMS integration
 - Restrict network access to Raft ports
@@ -311,22 +321,26 @@ argon2:
 
 ## Validation
 
-Configuration is validated at startup:
+The embedded `quicbaas:` configuration is validated at startup:
 
 | Field | Validation |
 |-------|------------|
-| `quicbaas.data-dir` | Required, must be writable |
-| `quicbaas.node-id` | Required for raft backend, must be > 0 |
-| `quicbaas.raft-address` | Required for raft backend |
-| `quicbaas.consistency-level` | Must be linearizable, strong, or eventual |
+| `quicbaas.storage-backend` | Must be `memory`, `file` or `pebble`; empty means `pebble` |
+| `quicbaas.data-dir` | Required for `file` and `pebble` |
+| `quicbaas.wal-dir` | Required for `pebble`; defaults to `data-dir/wal` |
+| `quicbaas.cache-size` | Must not be negative; zero means 128MB |
+| `quicbaas.raft-address` | Must be routable when `join-addresses` is set |
+| `quicbaas.spiffe-trust-domain` | Required: first-boot IAM seeding needs it |
 | `mTLS.TrustedRoots` | Recommended for production |
+
+`node-id` and `consistency-level` are not validated.
 
 ## Troubleshooting
 
 ### IAM service not available
 
 ```
-Check: Build with -tags iam
+Check: The build includes the iam tag (make -s print-build-tags)
 Check: QuicBaaS backend configured
 Check: QuicBaaS client started
 Check: IAM components initialized
@@ -356,5 +370,5 @@ Check: Tenant context is correct
 Check: data-dir and wal-dir are writable
 Check: raft-address is accessible
 Check: node-id is unique in cluster
-Check: join-addresses are reachable (raft backend)
+Check: join-addresses are reachable
 ```

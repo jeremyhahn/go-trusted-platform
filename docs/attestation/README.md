@@ -1,5 +1,8 @@
 # Attestation Module
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md).
+
 The attestation module provides comprehensive TPM-based attestation capabilities for physical hosts, virtual machines, and containers in the go-trusted-platform.
 
 ## Overview

@@ -1,5 +1,8 @@
 # ACME Server
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> Deep dive on the stack's ACME server and the `webservices[].acme` configuration; the challenge handlers are go-xkms's ([architecture.md](architecture.md)).
+
 This document describes the ACME (Automated Certificate Management Environment)
 server implementation, including the enroll-01 challenge for TPM attestation.
 

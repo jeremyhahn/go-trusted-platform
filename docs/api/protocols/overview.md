@@ -1,5 +1,8 @@
 # Multi-Protocol Architecture
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [daemon/api.md](../../daemon/api.md) and each feature's `api.md`.
+
 The Trusted Platform daemon exposes all services via five protocols, providing maximum interoperability for different use cases and environments.
 
 ## Protocol Comparison

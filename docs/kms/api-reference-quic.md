@@ -1,5 +1,8 @@
 # KMS QUIC API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md). The status bytes below are wrong: InvalidRequest `0x01`, NotFound `0x02`, Unauthorized `0x03`, InternalError `0x04`, AlreadyExists `0x06`, PermissionDenied `0x07`, Unavailable `0x0A`, NotImplemented `0x0B`. The `0xCD` table also omits SignCSR `0x07`.
+
 Low-latency QUIC transport for KMS operations.
 
 | Property | Value |

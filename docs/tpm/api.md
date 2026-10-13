@@ -41,10 +41,11 @@ against it (`TestTPMRoutesServeTheSDKContract`,
   either name: a `uint32` handle or index in decimal or `0x` hex, an enum by
   name or number, a bool, a string, and one parameter per element of a
   repeated field (`?indices=0&indices=7`). A path parameter wins over a query
-  parameter of the same name. Bytes and message fields travel only in the body.
+  parameter of the same name. A field of a nested message takes a dotted path
+  (`a.b`); bytes and whole messages travel only in the body.
 - **A field the message does not have is `400`, never a silent default** — in
   the body (`ErrInvalidRequestBody`, `unknown field "x"`) or as a parameter
-  (`ErrTPMInvalidQueryParameter`). So is a parameter that does not parse, or a
+  (`ErrInvalidQueryParameter`). So is a parameter that does not parse, or a
   single-valued field given twice. The TPM service is not called.
 - The reply is the bare protojson response message, with camelCase keys and
   every field present. An RPC error is the standard error envelope, its status
@@ -55,11 +56,14 @@ The path-parameter forms the JavaScript SDK calls are
 the Go SDK sends the same requests to `DELETE /tpm/{ek,srk,ak}` and
 `GET`/`PUT`/`DELETE /tpm/nvram` with the fields in the body, and `POST
 /tpm/nvram` defines an index. `GET /tpm/pcrs` (parameters) and `POST /tpm/pcrs`
-(body) both call `GetPCRs`. No `TPMHandlers` route calls the
-`ActivateCredential` RPC. The routes with no `TPMService` RPC behind them —
+(body) both call `GetPCRs`. `POST /tpm/activate-credential` calls
+`TPMService.ActivateCredential` (`credentialBlob`, `encryptedSecret` →
+`secret`) under `tpm:write`, its gRPC twin's scope; the IDevID-shaped body it
+used to take (`credential_blob`, `secret` → `decrypted`) is now a `400`. The
+routes with no `TPMService` RPC behind them —
 `certify`, `capabilities`, `platform`, `pcrs/extend`, `csr/idevid` and
-`POST /tpm/iak` — are not served by the daemon listener. The daemon listener's `/tpm/idevid*`, `/tpm/iak*`,
-`/tpm/device/attributes` and `/tpm/activate-credential`
+`POST /tpm/iak` — are not served by the daemon listener. The daemon listener's
+`/tpm/idevid*`, `/tpm/iak*` and `/tpm/device/attributes`
 routes are its device-identity routes (`pkg/api/daemon/rest_idevid.go`), not
 `TPMHandlers`, and carry no TPM scope. The cells in §3–§8 name the web service
 routes.
@@ -317,9 +321,13 @@ attributes select AUTHREAD / OWNERREAD / PPREAD.
 | ActivateCredential (IDevIDService) | `POST /api/v1/idevid/activate-credential` | `IDevIDService.ActivateCredential` | `0x6E` (`OpActivateCredential`) | `MISSING — docs/13 G7` | ✅ |
 
 **The MakeCredential/ActivateCredential pair is the proof-of-possession step in
-device enrollment**, and it is **absent from REST on the TPMService surface**.
-The IDevID surface carries its own ActivateCredential, which is the one REST
-clients can reach.
+device enrollment**. On REST the TPMService pair is served only by the daemon
+listener (`POST /api/v1/tpm/make-credential` and
+`POST /api/v1/tpm/activate-credential`, §1); the web service has neither. The
+IDevID surface carries its own ActivateCredential, the one the web service
+serves. Neither SDK has a REST client path for the TPMService pair: the
+JavaScript SDK reaches only the IDevID one, and the Go SDK's REST adapter maps
+neither RPC.
 
 `TPM2MakeCredentialRequest` (QUIC) takes `ak_name`, `secret`, `ek_cert`,
 `iak_pub`: with `ek_cert` and `iak_pub` present the **verifier** path runs;
@@ -383,7 +391,7 @@ catalogs are default-deny** ([`docs/daemon/api.md`](../daemon/api.md) §5).
 | QUIC `0x99` category | **every sub-opcode scoped** in `pkg/api/quic/opcode_permissions.go`, which is fail-closed: `tpm:read` for the observers plus `Quote`, `VerifyQuote`, `Unseal`, `MakeCred` and the NV reads; `tpm:write` for `Provision`, the `Create*` calls, `ImportEKCert`, `ExtendPCR`, `Seal`, `NVWrite`, the IDevID / LDevID CSRs and `ActivateCred`; `tpm:delete` for `Clear`, the `Delete*` calls and `NVDelete` |
 | QUIC device-identity opcodes | **scoped under `tpm:*`**, not `idevid:*` as on gRPC: `tpm:read` for info and get-cert, `tpm:write` for generate, CSR and install-cert, `tpm:delete` for the deletes ([engineering.md](engineering.md) §13) |
 | REST — web service | route-level middleware only; no per-operation TPM scope (below) |
-| REST — daemon listener, `TPMHandlers` | **every route scoped** in `TPMHandlers.routes` (`pkg/api/rest/tpm_handlers.go`), on the gRPC tiers: `tpm:read` for the `GET` routes plus `POST pcrs`, `quote`, `quote/verify`, `make-credential`, `random` and `unseal`; `tpm:write` for `provision`, `POST ek`, `POST ek/certificate`, `POST srk`, `POST ak`, `POST`/`PUT nvram` and `seal`; `tpm:delete` for `clear` and every `DELETE` (`ek`, `srk`, `ak`, `nvram`, with or without the path parameter). The bearer token is checked by the shared platform-token validator: no token is `401` (`ErrTPMTokenRequired`), a token without the scope or no validator configured is `403` (`ErrTPMForbidden`) |
+| REST — daemon listener, `TPMHandlers` | **every route scoped** in `TPMHandlers.routes` (`pkg/api/rest/tpm_handlers.go`), on the gRPC tiers: `tpm:read` for the `GET` routes plus `POST pcrs`, `quote`, `quote/verify`, `make-credential`, `random` and `unseal`; `tpm:write` for `provision`, `POST ek`, `POST ek/certificate`, `POST srk`, `POST ak`, `POST`/`PUT nvram`, `seal` and `activate-credential`; `tpm:delete` for `clear` and every `DELETE` (`ek`, `srk`, `ak`, `nvram`, with or without the path parameter). The bearer token is checked by the shared platform-token validator: no token is `401` (`ErrTPMTokenRequired`), a token without the scope or no validator configured is `403` (`ErrTPMForbidden`) |
 | REST — daemon listener, `rest_idevid.go` | no per-operation scope; mTLS only |
 
 **Concretely: on gRPC, `Clear` and `DeleteEK` need `tpm:delete`, `Unseal`

@@ -1,5 +1,8 @@
 # Operational Runbook
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [../daemon/user.md](../daemon/user.md) and each feature folder's `user.md`. `platformctl backup`, `restore`, `cluster`, `daemon`, `dns` and `storage` are not registered commands, and `platformd` has no `config` subcommand.
+
 Day-to-day operational procedures for running go-trusted-platform.
 
 ## Quick Reference

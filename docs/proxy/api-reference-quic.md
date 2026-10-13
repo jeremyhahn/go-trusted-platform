@@ -1,5 +1,8 @@
 # Proxy QUIC API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md). The SDK has no `platform.WithProtocol`; the option is `WithOnlyProtocol`.
+
 QUIC wire protocol for the reverse-proxy configuration service.
 
 | Property | Value |

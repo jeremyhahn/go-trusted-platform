@@ -1,5 +1,8 @@
 # NTP REST API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md) (§8). The two listeners do not return the same response body: the webservice wraps the message in an envelope and the daemon listener does not ([api.md](api.md) §2).
+
 | Property | Value |
 |----------|-------|
 | Endpoint | `https://host:8443` (webservice) |

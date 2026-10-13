@@ -1,5 +1,8 @@
 # Trusted Platform Installer
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and [user.md](user.md). There is no `strategy_firstboot_seal.go` (`FirstbootSealStrategy` is in `pkg/firstboot/strategy.go`), no plaintext key on the EFI partition, and no PIN seals.
+
 This directory contains documentation for the Trusted Platform installer and boot system.
 
 ## Documentation Index

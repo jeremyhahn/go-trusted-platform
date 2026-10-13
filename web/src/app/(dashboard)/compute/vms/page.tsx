@@ -23,6 +23,7 @@ import { ServiceUnavailableState } from '@/components/features/platform';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { useCompute, useApi, useToast } from '@/hooks';
 import type { VM } from '@/types/infrastructure';
+import { vmStatus } from '@/lib/compute-state';
 
 export default function VMsPage() {
   const { toast } = useToast();
@@ -64,7 +65,7 @@ export default function VMsPage() {
     return vmsData.vms.map((vm) => ({
       id: vm.id,
       name: vm.config?.name || vm.id,
-      status: (vm.state?.toLowerCase() || 'creating') as VM['status'],
+      status: vmStatus(vm.state),
       vcpus: vm.config?.cpu?.cores || 0,
       memoryMB: vm.config?.memory?.sizeMb || 0,
       storageMB: (vm.config?.disks?.[0]?.sizeGb || 0) * 1024, // Convert GB to MB

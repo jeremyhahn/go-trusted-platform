@@ -1,5 +1,8 @@
 # Reference Network Architecture
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The approved reference network: zones, VLANs, subnets, port classes and overlays (#708).
+
 This is the reference network for go-trusted-platform: how a deployment lays out its VLANs, subnets,
 switch ports and overlays. The same model applies to every topology, from a single box to an HA
 cluster.

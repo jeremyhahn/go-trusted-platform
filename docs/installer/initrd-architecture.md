@@ -1,5 +1,8 @@
 # Platform-Initrd Architecture Design
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and [engineering.md](engineering.md). This was a design note: `pkg/luks`, `pkg/fido2` and `pkg/initrd/strategies/` are really `pkg/storage/luks`, the `sdk/go/xkms/fido2` re-export and `pkg/initrd/strategy_*.go`, and there are no PIN seals.
+
 ## Executive Summary
 
 The platform-initrd binary provides a production-grade early boot environment for secure disk encryption using TPM2, LUKS, and FIDO2. This architecture leverages the existing go-trusted-platform codebase while introducing minimal new components for LUKS and offline FIDO2 support.

@@ -1,5 +1,8 @@
 # Proxy Unix Socket API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md). There is no `--protocol` flag (it is `--transport unix`) and no `platform.WithProtocol` (it is `WithOnlyProtocol`).
+
 Unix domain socket access to the reverse-proxy configuration service.
 
 | Property | Value |

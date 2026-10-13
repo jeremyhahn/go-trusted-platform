@@ -1,5 +1,8 @@
 # Integration Testing Strategy
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> How the multi-protocol suites in `test/integration/` are built and run: the Makefile's `run-integration-suite` and `build/docker/devcontainer/run-integration-tests.sh`.
+
 Integration tests validate the full stack through public protocols only. Unit tests cover service layer logic; integration tests verify that all protocols expose consistent behavior to users.
 
 ## Core Principles
@@ -154,10 +157,10 @@ func TestKMSMultiProtocol(t *testing.T) {
     protocols := []kmsProtocol{
         &cliAdapter{binaryPath: "/usr/local/bin/platformctl"},
         &restAdapter{baseURL: "https://localhost:8443"},
-        &grpcAdapter{endpoint: "localhost:8444"},
-        &quicAdapter{endpoint: "localhost:8445"},
-        &mcpAdapter{endpoint: "localhost:8446"},
-        &socketAdapter{path: "/run/platformd/platformd.sock"},
+        &grpcAdapter{endpoint: "localhost:10443"},
+        &quicAdapter{endpoint: "localhost:9444"},
+        &mcpAdapter{endpoint: "https://localhost:9445"},
+        &socketAdapter{path: "/run/platformd.sock"},
     }
 
     gate := helpers.NewAdapterGate(t, "kms", helpers.AdapterNames(protocols)...)
@@ -264,17 +267,15 @@ The following test packages have multi-protocol adapters implemented:
 | `ca` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `vtpm` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `tpm` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `kms` | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ |
+| `kms` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `secrets` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `iam` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `sdn` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `dns` | ✓ | ✓ | ✗ | ✓ | ✓ | ✗ |
+| `dns` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `attestation` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `pxe` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `tenant` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `device` | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
-
-Packages without full protocol coverage are still being implemented. Pull requests welcome for missing adapters.
+| `device` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 ## Directory Structure
 
@@ -291,30 +292,31 @@ test/integration/
 │   ├── unix_adapter.go       # Unix socket adapter (gRPC over UDS)
 │   ├── multiprotocol_test.go # Protocol parity tests
 │   └── PACKAGE_X_test.go     # Package-specific edge cases
-├── e2e/
-│   ├── config.go             # E2E test configuration
-│   ├── setup.go              # Environment setup
-│   ├── cleanup.go            # Resource cleanup
-│   └── e2e_provisioning_test.go
-└── testenv/
-    └── docker-compose.yml    # Test infrastructure
+└── e2e/
+    ├── config.go             # E2E test configuration
+    ├── setup.go              # Environment setup
+    ├── cleanup.go            # Resource cleanup
+    └── e2e_provisioning_test.go
 ```
 
 ## Test Execution
 
 ### Build Tags
 
-Integration tests require codec support for QUIC protocol testing. Always include the following build tags:
+The targets build with `TEST_BUILD_TAGS` (Makefile:340): `integration`,
+`INTEGRATION_CODEC_TAGS` (`codec_msgpack codec_json codec_cbor`) and the full
+`BUILD_TAGS` list.
+`integration` marks a file as needing the devcontainer; the codecs carry the
+QUIC wire protocol and the REST/MCP bodies.
 
-```
--tags 'integration codec_msgpack codec_json codec_cbor'
+Never type the tag list by hand. Outside `make`, derive it:
+
+```bash
+go vet -tags "integration $(make -s print-build-tags)" ./test/integration/...
 ```
 
-These tags enable:
-- `integration` - Marks tests requiring infrastructure (skipped without flag)
-- `codec_msgpack` - MessagePack codec for QUIC wire protocol
-- `codec_json` - JSON codec for REST/MCP testing
-- `codec_cbor` - CBOR codec for compact encoding
+A hand-written list drops codecs, and the suite then fails with
+`no codec available for encoding`.
 
 ### Makefile Targets
 
@@ -374,9 +376,7 @@ and otherwise from the mount point's own ownership.
 | `PLATFORM_QUIC_ENDPOINT` | `localhost:9444` | QUIC protocol endpoint |
 | `PLATFORM_MCP_ENDPOINT` | `https://localhost:9445` | MCP protocol endpoint (TLS 1.3 only, #844) |
 | `PLATFORM_SOCKET_PATH` | `/run/platformd.sock` | Unix socket path for local IPC |
-| `PLATFORMCTL_PATH` | `/usr/local/bin/platformctl` | CLI binary path |
-| `PLATFORMD_CONFIG` | `test/integration/config.yaml` | Configuration file path |
-| `SKIP_IAM_VALIDATION` | (unset) | Set to `1` to skip IAM token validation in tests |
+| `PLATFORMCTL_PATH` | `platformctl` (on `PATH`) | CLI binary path |
 | `RAFT_CLUSTER_TEST` | (unset) | Set to `1` to enable cluster replication tests |
 
 The endpoint variables are the ones the shared helpers in
@@ -406,13 +406,10 @@ make integration-test
 make integration-test-ca
 make integration-test-daemon
 make integration-test-vtpm
-
-# Run with additional output
-make integration-test VERBOSE=1
-
-# Run specific test within a package
-make integration-test-ca TEST=TestCAMultiProtocol
 ```
+
+The Makefile reads no `VERBOSE` or `TEST` variable. The runner chooses the
+`-run` filter per target from its `TARGET_RUN` map.
 
 The Makefile automatically handles:
 - Building the platformd binary
@@ -441,6 +438,11 @@ passive thing to host: it `chmod 666`s `/dev/net/tun` and `/dev/kvm`,
 `modprobe`s `tun` and `openvswitch`, and `pkill -9`s any running `swtpm socket`
 and `ovsdb-server` — including ones it did not start. Fifteen targets did
 exactly that until #492.
+
+`integration-test-kms`, `integration-test-secrets` and
+`integration-test-webservice` do not follow this yet: each hand-writes a
+`docker run` of the builder image that calls `go test` directly, so the runner
+starts no `platformd` for them.
 
 No target hand-writes its own `docker run` of the runner either, including
 `make integration-test`, which calls the define with the runner's `all`

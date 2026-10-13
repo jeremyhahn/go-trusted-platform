@@ -1,5 +1,8 @@
 # Bootstrap Container Deployer
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md), [engineering.md](engineering.md), [api.md](api.md), [cli.md](cli.md) and [user.md](user.md); corrections in engineering.md §12.
+
 The bootstrap container provides PXE, DHCP, and TFTP services needed to network-boot bare metal servers. The deployer subsystem handles deploying this container to a target host via SSH.
 
 ## Deployer Host

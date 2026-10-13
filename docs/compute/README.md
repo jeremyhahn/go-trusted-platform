@@ -1,5 +1,8 @@
 # Compute Orchestrator
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md), [engineering.md](engineering.md) and [user.md](user.md). The status and coverage tables below are not measurements.
+
 Virtual machine and container orchestration for the Trusted Platform.
 
 ## Status

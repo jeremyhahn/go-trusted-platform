@@ -11,6 +11,8 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
+//go:build codec_msgpack
+
 package quic
 
 import (

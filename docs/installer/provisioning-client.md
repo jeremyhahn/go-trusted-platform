@@ -1,5 +1,8 @@
 # Device Provisioning Client
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `pkg/provisioning` mTLS client: profile fetch and activation after IDevID enrollment.
+
 ## Overview
 
 The provisioning client provides mTLS-authenticated device enrollment and network transition capabilities. After a device completes ACME enrollment and receives its IDevID certificate, this client enables:
@@ -52,7 +55,7 @@ The provisioning client provides mTLS-authenticated device enrollment and networ
 │  ┌───────────────────────────────────┐  │
 │  │  mTLS Transport                   │  │
 │  │  - IDevID Certificate             │  │
-│  │  - TLS 1.2+ Minimum               │  │
+│  │  - TLS 1.3 Minimum                │  │
 │  │  - Server Certificate Validation  │  │
 │  └───────────────────────────────────┘  │
 │                                         │
@@ -121,8 +124,8 @@ if err != nil {
 }
 
 log.Printf("Device profile: VLAN=%d, DHCP=%v",
-    profile.ProductionNetwork.VLAN,
-    profile.ProductionNetwork.UseDHCP)
+    profile.AdmittedNetwork.VLAN,
+    profile.AdmittedNetwork.UseDHCP)
 
 // Signal activation readiness
 activateResp, err := client.Activate(ctx)
@@ -146,7 +149,7 @@ if err != nil {
 }
 
 // Profile contains network configuration
-networkConfig := profile.ProductionNetwork
+networkConfig := profile.AdmittedNetwork
 
 // Apply network configuration
 if networkConfig.UseDHCP {
@@ -223,12 +226,14 @@ type ClientConfig struct {
     // CACertPool contains trusted CA certificates for server verification
     CACertPool *x509.CertPool
 
+    // TLSCertificate optionally supplies the complete client certificate
+    // chain (leaf plus intermediates) with its private key. When set it
+    // is presented verbatim; Certificate/PrivateKey are then used only
+    // for identity metadata.
+    TLSCertificate *tls.Certificate
+
     // Timeout is the HTTP client timeout (default: 30s)
     Timeout time.Duration
-
-    // CACertPool contains trusted CA certificates for server verification.
-    // TLS 1.3 is required and server certificates are always validated.
-    CACertPool *x509.CertPool
 }
 ```
 
@@ -262,10 +267,11 @@ func (c *Client) FetchProfile(ctx context.Context) (*ProfileResponse, error)
 **Response Structure:**
 ```go
 type ProfileResponse struct {
-    SerialNumber      string
-    ProductionNetwork NetworkConfig
-    ACLs              []ACLConfig
-    RateLimit         *RateLimitConfig
+    SerialNumber        string
+    AdmittedNetwork     NetworkConfig
+    ProvisioningNetwork *NetworkConfig
+    ACLs                []ACLConfig
+    RateLimit           *RateLimitConfig
 }
 
 type NetworkConfig struct {
@@ -352,7 +358,7 @@ Returned when the activation API request fails.
 
 The client performs strict certificate validation:
 - Verifies server certificate against CA pool
-- Requires minimum TLS 1.2
+- Requires TLS 1.3
 - Validates certificate chain
 - Checks certificate expiration
 
@@ -397,7 +403,7 @@ make integration-test-provision
 
 ### Test Coverage
 
-Current test coverage: **94.2%**
+Unit test coverage: **92.4%** (`make test-pkg PKG=./pkg/provisioning/ TESTFLAGS=-cover`)
 
 Coverage includes:
 - Client initialization with various configurations
@@ -495,7 +501,7 @@ if err != nil {
 
 logger.Info("Profile fetched successfully",
     "serial", profile.SerialNumber,
-    "vlan", profile.ProductionNetwork.VLAN)
+    "vlan", profile.AdmittedNetwork.VLAN)
 ```
 
 ## Troubleshooting
@@ -580,7 +586,7 @@ defer client.Close() // Closes idle connections
 
 ## See Also
 
-- [ACME Enrollment](CA-ACME.md)
-- [Network Setup](network-setup.md)
-- [Device Management](feature/device-management.md)
+- [ACME Enrollment](../ca/acme.md)
+- [Network Setup](../device/network-setup.md)
+- [Device Management](../device/architecture.md)
 - [mTLS Authentication](../iam/auth-methods.md)

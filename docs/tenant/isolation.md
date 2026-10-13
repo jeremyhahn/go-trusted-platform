@@ -1,5 +1,8 @@
 # Tenant Isolation Mechanisms
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md). `platformd serve` builds the tenant manager with `EnableDEKIsolation` off (`pkg/daemon/commands/serve_tenant.go:67`), so no per-tenant DEK is created on that path.
+
 This document describes the tenant isolation mechanisms of the Trusted Platform across storage, cryptographic and policy boundaries.
 
 > **Network isolation is not provided by this feature.** The per-tenant OVS

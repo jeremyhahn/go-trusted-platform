@@ -1,5 +1,8 @@
 # Device API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md). The gRPC TCP port is 10443, not 9443, and the `*_NOT_FOUND` codes below are MCP tool error codes, not REST or gRPC ones.
+
 ## Overview
 
 The Device API provides management operations for device identity and profile management in go-trusted-platform, including device registration, profile creation, and profile matching.

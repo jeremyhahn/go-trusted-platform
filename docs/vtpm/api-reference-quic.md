@@ -1,5 +1,8 @@
 # vTPM QUIC API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md). The `0x20`–`0x2E` opcodes below are stale: vTPM uses `0x03`–`0x0F` for templates and bundles and `0x10`–`0x1F` for runtime operations (`sdk/go/wire/quicwire/protocol.go:76-91`).
+
 Port: `9444` (UDP)
 Protocol: QUIC with TLS 1.3
 

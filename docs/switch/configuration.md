@@ -1,5 +1,8 @@
 # Switch Configuration Guide
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [engineering.md](engineering.md) §9. Password auth and `kms://` resolution are not implemented, `known_hosts_path` is required and missing here, and VLAN ranges are not validated by the framework.
+
 ## Platform Configuration
 
 The switch management feature is configured via the platform daemon's main config file. Add a `switches:` section to your platform config YAML.

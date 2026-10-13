@@ -1,5 +1,8 @@
 # Secrets Framework
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md), [engineering.md](engineering.md), [cli.md](cli.md), [api.md](api.md) and [user.md](user.md); architecture.md §8 lists what is stale here (`NewSecretManager`, `MigrationResult`, the `auto-generate`/`migrate-to-kms`/`update-config-file` keys).
+
 The secrets framework provides secure resolution and migration of secrets in go-trusted-platform. It enables configuration values to reference secrets from multiple sources using URI schemes, automatically resolving them at runtime and optionally migrating them to a unified local KMS for consistent access.
 
 ## Overview

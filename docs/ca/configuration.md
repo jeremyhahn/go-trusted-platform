@@ -1,5 +1,8 @@
 # CA Configuration
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `certificate-authority:` configuration block (`trustedca.CAConfig`, re-exported from the stack).
+
 This document provides the complete configuration reference for the
 Certificate Authority component.
 
@@ -649,13 +652,9 @@ certificate-authority:
 
 ## Configuration Validation
 
-```bash
-# Validate configuration
-platformctl ca validate-config --config /etc/trusted-platform/config.yaml
-
-# Test CA initialization (dry run)
-platformctl ca init --dry-run --config /etc/trusted-platform/config.yaml
-```
+There is no `platformctl ca validate-config` and `ca init` has no `--dry-run`.
+`platformctl ca init` initializes the CA from the loaded configuration
+(`--force` re-initializes); see [cli.md](cli.md).
 
 ## Related Documentation
 

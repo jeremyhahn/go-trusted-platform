@@ -1,11 +1,14 @@
 # go-trusted-platform Documentation
 
+> **Status: NORMATIVE** · Scope: go-trusted-platform `docs/` index · Last verified: 2026-10-13
+> Conflicts with this document are defects. Fix them here first.
+
 > Complete documentation for the Zero-Trust Trusted Computing Platform
 
 ## Feature folders — start here
 
-Documentation is migrating to the five-file feature-folder layout defined by
-`../handbook/software/conventions/feature-docs.md` (ratified 2026-08-19). Each converted
+Documentation uses the five-file feature-folder layout defined by
+`../handbook/software/conventions/feature-docs.md` (ratified 2026-08-19). Each
 feature has:
 
 ```
@@ -101,55 +104,40 @@ is maintained.
 
 ### Platform Initialization
 
-Generate a configuration file and initialize the platform:
+Initialize the platform on first start:
 
 ```bash
-# Generate default config and initialize the platform
-./platformd config gen \
-    --init \
-    --debug \
-    --fips=false \
-    --domain=example.test \
-    --platform-dir trusted-data
-
-# Or copy an existing config
-cp configs/platform/config.prod.yaml config.yaml
+# Initialize and provision the platform, then keep running
+sudo ./platformd --init --debug --platform-dir trusted-data
 ```
 
-Configuration options:
+Configuration options (persistent flags of `platformd`, `pkg/daemon/commands/root.go`):
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--domain` | `example.com` | Domain name |
-| `--platform-dir` | `trusted-data` | Platform data directory |
-| `--fips` | `true` | Enable FIPS mode |
-| `--acme-directory-url` | `https://example.com/api/v1/acme/directory` | ACME Directory URL |
-| `--type` | `server` | Configuration type (server or client) |
+| `--init` | `false` | Initialize and provision the platform |
+| `--platform-dir` | `<working dir>/trusted-data` | Platform data directory |
+| `--config-dir` | `/etc/trusted-platform` | Configuration file directory |
+| `--config`, `-c` | — | Path to a specific config file (overrides `--config-dir`) |
+| `--env`, `-e` | `dev` | Runtime environment (dev, staging, prod) |
+| `--debug`, `-d` | `false` | Enable debug mode |
 
 ### Starting Services
 
 ```bash
-# Start the platform daemon (root privileges required)
-# Runs as master (root) + worker (deprivileged) processes
-sudo ./platformd
+# Serve every transport, with mutual TLS on REST
+sudo ./platformd serve --enable-mtls
 
-# Start the platform (web services auto-start if configured)
-./platformd serve --enable-mtls
-
-# Navigate to OpenAPI docs
-xdg-open https://localhost:8443/swagger/
+# Check the daemon from the CLI
+platformctl status
 ```
 
-### Quick Example: VM with Network Access
+### Quick Example: VM with a vTPM
 
 ```bash
-# Create and start a VM
-platformctl vm create --name test-vm --cpus 2 --memory 4096 --disk test.qcow2
-platformctl vm start --name test-vm
-
-# Device enrollment via ACME
-platformctl device enroll --bridge br0 --port tap0
-platformctl device activate --port tap0
+# Create a VM with a virtual TPM on a bridge and start it
+platformctl compute create --name test-vm --cpus 2 --memory 4096 --tpm --network-bridge br0 --start
+platformctl compute get test-vm
 ```
 
 ---
@@ -173,7 +161,7 @@ platformctl device activate --port tap0
 |-----------|-------------|
 | [SDN Controller](sdn/) | OVS, OpenFlow, 802.1X port authentication |
 | [DNS Server](dns/) | Authoritative DNS with DNSSEC and DANE |
-| [Security](security/) | Protected memory (`MemoryEnclave`), rate limiting, audit logging, input validation |
+| [Security](security/) | Protected memory (`MemoryEnclave`), rate limiting, input validation, embedded OPA policy |
 
 ### Compute & Orchestration
 
@@ -181,7 +169,7 @@ platformctl device activate --port tap0
 |-----------|-------------|
 | [Compute](compute/) | VM orchestration with QEMU/KVM and vTPM |
 | [Attestation](attestation/) | Workload attestation from bare metal to containers |
-| [Firmware](firmware/) | *Planned* - AVR, Raspberry Pi, Android firmware and OTA |
+| [Firmware](firmware/) | UEFI Secure Boot, UKI, Authenticode, module signing, AVR attestation |
 | [Virtual TPM](vtpm/) | Software TPM for development and testing |
 
 ### Infrastructure
@@ -228,7 +216,7 @@ platformctl device activate --port tap0
 
 ## Key Documents
 
-- [Binary Separation](architecture/binary-separation.md) - Three-binary architecture (platform-initrd, platformd, platformctl)
+- [Binary Separation](architecture/binary-separation.md) - Privilege separation; the six binaries are listed in [daemon/user.md](daemon/user.md)
 - [Security Model](architecture/security-model.md) - Privilege separation and threat model
 - [QuicBaaS Integration](architecture/quicbaas-integration.md) - Service layer architecture
 - [802.1X Authentication](sdn/802.1x.md) - Certificate-based network access
@@ -238,7 +226,8 @@ platformctl device activate --port tap0
 
 ## Documentation Structure
 
-Each component has its own directory under `docs/` with a consistent structure:
+Each feature has its own directory under `docs/` with the five files shown in
+[Feature folders](#feature-folders--start-here):
 
 ```
 docs/
@@ -246,12 +235,12 @@ docs/
 ├── ROADMAP.md             # Pointer to the root ROADMAP.md
 ├── BUILD.md               # Build instructions
 │
-├── {component}/           # Component documentation
-│   ├── README.md          # Component overview and quick start
-│   ├── architecture.md    # System design and data flows
-│   ├── configuration.md   # Configuration reference
-│   ├── api-reference.md   # REST/gRPC API documentation
-│   ├── cli-usage.md       # Command-line interface
+├── {feature}/             # Feature documentation
+│   ├── architecture.md    # Design, boundaries, rejected alternatives
+│   ├── engineering.md     # The implementation contract
+│   ├── cli.md             # Every verb and flag
+│   ├── api.md             # Every capability on all six transports
+│   └── user.md            # Task-oriented usage
 ```
 
 ### Documentation Conventions
@@ -260,21 +249,10 @@ All documentation follows these conventions:
 
 | Convention | Description |
 |------------|-------------|
-| **README.md** | Entry point with overview, quick start, and links to detailed docs |
 | **Tables** | Used for feature lists, configuration options, and API references |
 | **Code blocks** | YAML for config, bash for CLI, Go for API examples |
-| **Status banners** | Planned features marked with `> **STATUS: PLANNED FEATURE**` |
+| **Status banners** | Every document opens with a `NORMATIVE`, `REFERENCE` or `ARCHIVE` banner and a `Last verified:` stamp (handbook `software/conventions/documentation.md` §1-§3) |
 | **Cross-references** | Relative links between related documentation |
-
-### File Naming
-
-| File | Purpose |
-|------|---------|
-| `README.md` | Component overview and navigation |
-| `architecture.md` | Design decisions, diagrams, data flows |
-| `configuration.md` | Complete YAML configuration reference |
-| `api-reference.md` | REST and gRPC endpoint documentation |
-| `cli-usage.md` | Command-line examples and options |
 
 ---
 
@@ -299,7 +277,7 @@ Local mode is the only mode with shipping code, and it is roughly 85% complete �
 | Tenant | Complete | [tenant/](tenant/) |
 | TPM | Complete | [tpm/](tpm/) |
 | **DHT** | Not Started (design only, no `pkg/dht`) | [dht/](dht/) |
-| **Firmware** | Not Started (design only, no `pkg/firmware`) | [firmware/](firmware/) |
+| Firmware | Partial (UEFI Secure Boot, UKI, module signing, `pkg/firmware/avr/attestation`; no OTA) | [firmware/](firmware/) |
 
 See [ROADMAP.md](../ROADMAP.md) for the full picture.
 

@@ -1,5 +1,8 @@
 # Service Endpoints Configuration
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [`docs/daemon/`](../daemon/) for daemon configuration and listen addresses, and [`docs/secrets/`](../secrets/) for secret URI schemes. The top-level `backends:` and `services:` sections below do not exist in the platformd config, so there is no per-service remote mode.
+
 This document describes how to configure service endpoints in go-trusted-platform, including backend definitions, transport modes, TLS configuration, and secrets resolution.
 
 ## Overview

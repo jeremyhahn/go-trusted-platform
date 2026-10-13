@@ -1,5 +1,8 @@
 # Binary Architecture & Privilege Separation
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [../daemon/architecture.md](../daemon/architecture.md) and [../gateway/architecture.md](../gateway/architecture.md).
+
 go-trusted-platform uses a three-binary architecture with nginx/apache-style privilege separation, providing security isolation while maintaining operational flexibility.
 
 ## Overview

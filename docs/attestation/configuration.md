@@ -1,10 +1,13 @@
 # Attestation Configuration
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [engineering.md §5](engineering.md#5-configuration).
+
 > **STATUS: Configuration Schema Implemented (Phase M)**
 >
-> The attestation configuration schema is implemented in `pkg/config/attestation.go`. The configuration structure is ready for use. The attestation runtime services are planned for Phase M.
+> The attestation configuration schema is implemented in `pkg/config/attestation.go`. The attestation runtime services are implemented under `pkg/attestation/`.
 >
-> Platform configuration is defined in `configs/platform/config.*.yaml` files.
+> Platform configuration is defined in the `configs/platform/templates/` profiles and the `configs/platform/standalone/` examples.
 
 ## Overview
 
@@ -108,15 +111,15 @@ Controls the behavior of the attestor service and enrollment policies.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `allow_attestor_self_ca` | bool | `false` | Allow self-signed CA for attestor certificates |
-| `allow_open_enrollment` | bool | `false` | Allow enrollment without prior authorization |
-| `allowed_verifiers` | []string | `[]` | List of allowed verifier endpoints |
+| `allow-attestor-self-ca` | bool | `false` | Allow self-signed CA for attestor certificates |
+| `allow-open-enrollment` | bool | `false` | Allow enrollment without prior authorization |
+| `allowed-verifiers` | []string | `[]` | List of allowed verifier endpoints |
 
 **Security Considerations:**
 
-- Setting `allow_attestor_self_ca: true` reduces security and should only be used in development
-- Setting `allow_open_enrollment: true` allows any device to enroll without pre-authorization
-- Production deployments should explicitly list trusted verifiers in `allowed_verifiers`
+- Setting `allow-attestor-self-ca: true` reduces security and should only be used in development
+- Setting `allow-open-enrollment: true` allows any device to enroll without pre-authorization
+- Production deployments should explicitly list trusted verifiers in `allowed-verifiers`
 
 ### Network Settings
 
@@ -124,8 +127,8 @@ Configures network ports and TLS behavior for the attestation service.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `insecure_port` | int | `0` | HTTP port (0 = disabled) |
-| `tls_port` | int | `8443` | HTTPS port for secure connections |
+| `insecure-port` | int | `0` | HTTP port (0 = disabled) |
+| `tls-port` | int | `8443` | HTTPS port for secure connections |
 
 **Port Configuration:**
 
@@ -139,7 +142,7 @@ Controls which Platform Configuration Registers (PCRs) are included in attestati
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `quote_pcrs` | []int | `[0,1,2,7]` | PCRs to include in attestation quotes |
+| `quote-pcrs` | []int | `[0,1,2,7]` | PCRs to include in attestation quotes |
 
 **PCR Reference:**
 
@@ -197,11 +200,11 @@ Controls attestation manifest generation and distribution.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `include_vms` | bool | `true` | Include VM attestations in manifest |
-| `include_containers` | bool | `true` | Include container attestations in manifest |
-| `push_enabled` | bool | `false` | Enable automatic manifest push to targets |
-| `push_interval` | duration | `5m` | Interval between manifest pushes |
-| `push_targets` | []string | `[]` | URLs to push manifests to |
+| `include-vms` | bool | `true` | Include VM attestations in manifest |
+| `include-containers` | bool | `true` | Include container attestations in manifest |
+| `push-enabled` | bool | `false` | Enable automatic manifest push to targets |
+| `push-interval` | duration | `5m` | Interval between manifest pushes |
+| `push-targets` | []string | `[]` | URLs to push manifests to |
 
 **Manifest Distribution:**
 
@@ -216,8 +219,8 @@ Configures the policy engine for attestation decisions.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `engine` | string | `opa` | Policy engine (currently only `opa` supported) |
-| `policy_dir` | string | `/etc/trusted-platform/policies` | Directory containing policy files |
-| `default_action` | string | `deny` | Default action when no policy matches |
+| `policy-dir` | string | `/etc/trusted-platform/policies` | Directory containing policy files |
+| `default-action` | string | `deny` | Default action when no policy matches |
 
 **Policy Engine:**
 
@@ -234,7 +237,7 @@ Configures the policy engine for attestation decisions.
 | `ATTESTATION_QUOTE_PCRS` | `attestation.quote_pcrs` | PCRs for quotes (comma-separated) |
 | `ATTESTATION_POLICY_DIR` | `attestation.policy.policy_dir` | Policy files directory |
 | `ATTESTATION_POLICY_ENGINE` | `attestation.policy.engine` | Policy engine type |
-| `ATTESTATION_ALLOW_OPEN_ENROLLMENT` | `attestation.allow_open_enrollment` | Allow open enrollment |
+| `ATTESTATION_ALLOW_OPEN_ENROLLMENT` | `attestation.allow-open-enrollment` | Allow open enrollment |
 | `ATTESTATION_WORKLOAD_ENABLED` | `attestation.workload.enabled` | Enable workload attestation |
 | `ATTESTATION_WORKLOAD_PCR` | `attestation.workload.pcr` | PCR for workload measurements |
 
@@ -277,9 +280,9 @@ debug-secrets: true
 platform-dir: trusted-data
 
 attestation:
-  allow_attestor_self_ca: true
-  allow_open_enrollment: true
-  allowed_verifiers: []
+  allow-attestor-self-ca: true
+  allow-open-enrollment: true
+  allowed-verifiers: []
 
   insecure_port: 8080
   tls_port: 8443
@@ -317,9 +320,9 @@ debug: false
 platform-dir: /var/lib/trusted-platform
 
 attestation:
-  allow_attestor_self_ca: false
-  allow_open_enrollment: false
-  allowed_verifiers:
+  allow-attestor-self-ca: false
+  allow-open-enrollment: false
+  allowed-verifiers:
     - "verifier.prod.example.com"
     - "verifier-backup.prod.example.com"
 
@@ -378,9 +381,9 @@ tpm:
   platform-pcr-bank: sha256
 
 attestation:
-  allow_attestor_self_ca: false
-  allow_open_enrollment: false
-  allowed_verifiers:
+  allow-attestor-self-ca: false
+  allow-open-enrollment: false
+  allowed-verifiers:
     - "verifier.secure.example.com"
 
   insecure_port: 0
@@ -431,9 +434,9 @@ debug: false
 platform-dir: /var/lib/trusted-platform
 
 attestation:
-  allow_attestor_self_ca: false
-  allow_open_enrollment: false
-  allowed_verifiers:
+  allow-attestor-self-ca: false
+  allow-open-enrollment: false
+  allowed-verifiers:
     - "fleet-verifier-1.example.com"
     - "fleet-verifier-2.example.com"
     - "fleet-verifier-3.example.com"
@@ -523,8 +526,8 @@ Check: User has permission to access TPM device
 
 **Enrollment rejected:**
 ```
-Check: allow_open_enrollment is true, or device is pre-authorized
-Check: Verifier endpoint is in allowed_verifiers list
+Check: allow-open-enrollment is true, or device is pre-authorized
+Check: Verifier endpoint is in allowed-verifiers list
 Check: TLS certificates are valid and trusted
 ```
 

@@ -1,5 +1,8 @@
 # Proxy MCP API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md). There is no `internal` pool trust class; the classes are `platform` and `bmc`.
+
 MCP (Model Context Protocol) tools for the reverse-proxy configuration
 service.
 

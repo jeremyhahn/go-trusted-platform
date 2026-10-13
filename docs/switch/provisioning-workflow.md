@@ -1,5 +1,8 @@
 # Device Provisioning Workflow with Switch Integration
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [switch-management](../bootstrap/switch-management.md) and the [reference network](../architecture/reference-network.md#switch-port-model) (#708).
+
 This document describes the complete PXE provisioning workflow with physical switch management.
 
 > **Superseded (#708).** The VLAN numbers and the `provisioning_vlan` /

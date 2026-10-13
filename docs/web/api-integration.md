@@ -1,5 +1,8 @@
 # Web Frontend API Integration
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) §5.3 and [api.md](api.md). There is no `/api/v1/tenant` route (tenants are `/api/v1/tenants`); invitation revoke is `POST /invitations/{id}/revoke`; `apiRequest` is local to `web/src/app/auth/webauthn/page.tsx`, and other pages use the SDK hooks.
+
 API integration guide for the Trusted Platform Web Frontend, covering WebAuthn flows, invitation system, and REST API patterns.
 
 ## API Overview

@@ -1,5 +1,8 @@
 # Tenant API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md). The gRPC TCP port is 10443, not 9443.
+
 Complete API reference for tenant management in go-trusted-platform. The Tenant API provides 15 operations for multi-tenant lifecycle management: quota enforcement, DEK management and state synchronization, plus the per-tenant barrier operations.
 
 > Subordinate to [api.md](api.md), which is normative. The per-tenant VLAN range and OVS bridge were retired by #708, and with them the `ValidateVLAN` and `GetBridgeName` operations on every transport.

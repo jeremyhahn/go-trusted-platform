@@ -1,5 +1,8 @@
 # Compute CLI Usage
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [cli.md](cli.md), the `platformctl` compute command reference.
+
 This document describes the command-line interface for compute orchestration.
 
 ## Status: 100% Complete

@@ -1,5 +1,8 @@
 # Attestation Policy Engine
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [architecture.md](architecture.md) and [engineering.md](engineering.md).
+
 ## Overview
 
 The policy engine uses Open Policy Agent (OPA) to evaluate attestation data against configurable rules, enabling fine-grained access control based on hardware trust. By leveraging OPA's Rego policy language, administrators can define custom attestation requirements for hosts, virtual machines, containers, and container images without modifying application code.

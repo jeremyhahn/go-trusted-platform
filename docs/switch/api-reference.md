@@ -1,5 +1,8 @@
 # Switch Management API Reference
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Last verified: 2026-10-13 · Replaced by [api.md](api.md). The CLI and gRPC surfaces ship today; the path is `POST /api/v1/device/activate`; the switch service is not wired, so activation moves no port ([user.md](user.md) Task 6).
+
 The switch management feature exposes runtime port operations through the Device REST API. The implementation is designed as a library that can be exposed through multiple protocol layers (REST, gRPC, QUIC, CLI).
 
 ## Current Implementation Status

@@ -1054,110 +1054,6 @@ func TestRESTDeviceAttributes_FixedPropsError(t *testing.T) {
 	assert.Empty(t, resp.TPMManufacturer)
 }
 
-func TestRESTActivateCredential_Success(t *testing.T) {
-	mockTPM := &mockTPM2RESTService{}
-	server := createTestRESTServer(t, mockTPM)
-
-	body := ActivateCredentialRESTRequest{
-		CredentialBlob: "dGVzdC1jcmVkZW50aWFsLWJsb2I=", // "test-credential-blob" base64
-		Secret:         "dGVzdC1zZWNyZXQ=",             // "test-secret" base64
-	}
-
-	rr := executeRESTRequest(t, server, http.MethodPost, "/api/v1/tpm/activate-credential", body)
-
-	assert.Equal(t, http.StatusOK, rr.Code)
-
-	var resp ActivateCredentialRESTResponse
-	err := json.Unmarshal(rr.Body.Bytes(), &resp)
-	require.NoError(t, err)
-	assert.NotEmpty(t, resp.Decrypted)
-}
-
-func TestRESTActivateCredential_ServiceNotAvailable(t *testing.T) {
-	server := createTestRESTServer(t, nil)
-
-	body := ActivateCredentialRESTRequest{
-		CredentialBlob: "dGVzdC1jcmVkZW50aWFs",
-		Secret:         "dGVzdC1zZWNyZXQ=",
-	}
-
-	rr := executeRESTRequest(t, server, http.MethodPost, "/api/v1/tpm/activate-credential", body)
-
-	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
-}
-
-func TestRESTActivateCredential_MissingCredentialBlob(t *testing.T) {
-	mockTPM := &mockTPM2RESTService{}
-	server := createTestRESTServer(t, mockTPM)
-
-	body := ActivateCredentialRESTRequest{
-		CredentialBlob: "",
-		Secret:         "dGVzdC1zZWNyZXQ=",
-	}
-
-	rr := executeRESTRequest(t, server, http.MethodPost, "/api/v1/tpm/activate-credential", body)
-
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
-}
-
-func TestRESTActivateCredential_MissingSecret(t *testing.T) {
-	mockTPM := &mockTPM2RESTService{}
-	server := createTestRESTServer(t, mockTPM)
-
-	body := ActivateCredentialRESTRequest{
-		CredentialBlob: "dGVzdC1jcmVkZW50aWFsLWJsb2I=",
-		Secret:         "",
-	}
-
-	rr := executeRESTRequest(t, server, http.MethodPost, "/api/v1/tpm/activate-credential", body)
-
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
-}
-
-func TestRESTActivateCredential_InvalidBase64Credential(t *testing.T) {
-	mockTPM := &mockTPM2RESTService{}
-	server := createTestRESTServer(t, mockTPM)
-
-	body := ActivateCredentialRESTRequest{
-		CredentialBlob: "not-valid-base64!!!",
-		Secret:         "dGVzdC1zZWNyZXQ=",
-	}
-
-	rr := executeRESTRequest(t, server, http.MethodPost, "/api/v1/tpm/activate-credential", body)
-
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
-}
-
-func TestRESTActivateCredential_InvalidBase64Secret(t *testing.T) {
-	mockTPM := &mockTPM2RESTService{}
-	server := createTestRESTServer(t, mockTPM)
-
-	body := ActivateCredentialRESTRequest{
-		CredentialBlob: "dGVzdC1jcmVkZW50aWFsLWJsb2I=",
-		Secret:         "not-valid-base64!!!",
-	}
-
-	rr := executeRESTRequest(t, server, http.MethodPost, "/api/v1/tpm/activate-credential", body)
-
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
-}
-
-func TestRESTActivateCredential_TPMError(t *testing.T) {
-	mockTPM := &mockTPM2RESTService{
-		activateCredentialErr: errors.New("TPM activation failed"),
-	}
-	server := createTestRESTServer(t, mockTPM)
-
-	body := ActivateCredentialRESTRequest{
-		CredentialBlob: "dGVzdC1jcmVkZW50aWFsLWJsb2I=",
-		Secret:         "dGVzdC1zZWNyZXQ=",
-	}
-
-	rr := executeRESTRequest(t, server, http.MethodPost, "/api/v1/tpm/activate-credential", body)
-
-	assert.Equal(t, http.StatusInternalServerError, rr.Code)
-}
-
 // =============================================================================
 // Route Registration Test
 // =============================================================================
@@ -1188,7 +1084,6 @@ func TestRESTIDevIDRouteRegistration(t *testing.T) {
 		{http.MethodPost, "/api/v1/tpm/iak/install"},
 		{http.MethodDelete, "/api/v1/tpm/iak/cert"},
 		{http.MethodGet, "/api/v1/tpm/device/attributes"},
-		{http.MethodPost, "/api/v1/tpm/activate-credential"},
 	}
 
 	for _, route := range routes {

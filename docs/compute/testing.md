@@ -1,5 +1,8 @@
 # Cloud Compute Testing — the layered model
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> How the cloud compute orchestrators are tested: faked-client unit tests, the Floci emulator and real-cloud runs.
+
 The cloud compute orchestrators (`pkg/compute/aws`, `pkg/compute/gcp`,
 `pkg/compute/azure`) are validated in **three deliberately layered tiers**.
 Each tier trades coverage for fidelity. No single tier is sufficient on its own,
@@ -22,10 +25,13 @@ create/restore/list/delete, NitroTPM / Shielded VM / Trusted Launch endorsement-
 key retrieval and verification, and the honestly-rejected capabilities
 (`ErrCapabilityNotSupported`). They are the coverage backbone.
 
+The provider tags are off by default (`WITH_*_COMPUTE ?= 0`). Turn one on
+rather than typing a `-tags` list, which drops the codec tags:
+
 ```
-go test -tags awscompute   ./pkg/compute/aws/...
-go test -tags gcpcompute   ./pkg/compute/gcp/...
-go test -tags azurecompute ./pkg/compute/azure/...
+make test-pkg PKG=./pkg/compute/aws/   WITH_AWS_COMPUTE=1
+make test-pkg PKG=./pkg/compute/gcp/   WITH_GCP_COMPUTE=1
+make test-pkg PKG=./pkg/compute/azure/ WITH_AZURE_COMPUTE=1
 ```
 
 ## Tier 2 — Floci emulator (AWS EC2 lifecycle, no creds)

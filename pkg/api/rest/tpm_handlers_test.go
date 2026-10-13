@@ -19,7 +19,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -151,6 +150,10 @@ func (f *fakeTPMService) GetPCRs(ctx context.Context, req *platformv1.GetPCRsReq
 
 func (f *fakeTPMService) MakeCredential(ctx context.Context, req *platformv1.MakeCredentialRequest) (*platformv1.MakeCredentialResponse, error) {
 	return tpmAnswer(f, ctx, req, &platformv1.MakeCredentialResponse{})
+}
+
+func (f *fakeTPMService) ActivateCredential(ctx context.Context, req *platformv1.TPMActivateCredentialRequest) (*platformv1.TPMActivateCredentialResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.TPMActivateCredentialResponse{})
 }
 
 func (f *fakeTPMService) DefineNVRAM(ctx context.Context, req *platformv1.DefineNVRAMRequest) (*platformv1.DefineNVRAMResponse, error) {
@@ -357,6 +360,12 @@ func tpmRouteCases() []tpmRouteCase {
 			resp: &platformv1.MakeCredentialResponse{CredentialBlob: []byte("blob")}, key: "encryptedSecret",
 		},
 		{
+			route: "POST /api/v1/tpm/activate-credential", method: http.MethodPost, target: "/api/v1/tpm/activate-credential",
+			body: `{"credentialBlob":"YmxvYg==","encryptedSecret":"c2VjcmV0"}`,
+			want: &platformv1.TPMActivateCredentialRequest{CredentialBlob: []byte("blob"), EncryptedSecret: []byte("secret")},
+			resp: &platformv1.TPMActivateCredentialResponse{Secret: []byte("activated")}, key: "secret",
+		},
+		{
 			route: "POST /api/v1/tpm/quote", method: http.MethodPost, target: "/api/v1/tpm/quote",
 			body: `{"akHandle":` + akHandleDec + `,"pcrIndices":[0,7],"pcrBank":"PCR_BANK_SHA256","nonce":"bm9uY2U="}`,
 			want: &platformv1.QuoteRequest{AkHandle: akHandle, PcrIndices: []uint32{0, 7}, PcrBank: sha256, Nonce: []byte("nonce")},
@@ -511,7 +520,7 @@ func TestTPMRoutesRefuseMalformedRequests(t *testing.T) {
 			rec := serveTPM(router, newTPMRequest(tc.method, tc.target+separator+"notAField=1", ""), tpmAdminToken)
 
 			require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
-			want := ErrTPMInvalidQueryParameter{
+			want := ErrInvalidQueryParameter{
 				Name:   "notAField",
 				Value:  "1",
 				Reason: "not a field of " + string(tc.want.ProtoReflect().Descriptor().FullName()),
@@ -538,7 +547,7 @@ func TestTPMRoutesRefuseMalformedRequests(t *testing.T) {
 		rec := serveTPM(router, newTPMRequest(http.MethodDelete, "/api/v1/tpm/ak/persistent", ""), tpmAdminToken)
 
 		require.Equal(t, http.StatusBadRequest, rec.Code)
-		want := ErrTPMInvalidQueryParameter{Name: "handle", Value: "persistent", Reason: "not a valid uint32"}
+		want := ErrInvalidQueryParameter{Name: "handle", Value: "persistent", Reason: "not a valid uint32"}
 		assert.Equal(t, want.Error(), decodeTPMError(t, rec).Error)
 		assert.Nil(t, tpm.req)
 	})
@@ -783,104 +792,9 @@ func TestTPMRPC(t *testing.T) {
 	}
 }
 
-func TestDecodeTPMParams(t *testing.T) {
-	p256 := platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256
-	accepts := []struct {
-		name   string
-		params url.Values
-		msg    proto.Message
-		want   proto.Message
-	}{
-		{"a hex handle", url.Values{"handle": {"0x81000002"}}, &platformv1.GetSRKRequest{}, &platformv1.GetSRKRequest{Handle: srkHandle}},
-		{"a decimal handle", url.Values{"handle": {srkHandleJS}}, &platformv1.GetSRKRequest{}, &platformv1.GetSRKRequest{Handle: srkHandle}},
-		{"an enum by name", url.Values{"algorithm": {"KEY_ALGORITHM_ECDSA_P256"}}, &platformv1.GetEKRequest{}, &platformv1.GetEKRequest{Algorithm: p256}},
-		{"an enum by number", url.Values{"algorithm": {"4"}}, &platformv1.GetEKRequest{}, &platformv1.GetEKRequest{Algorithm: p256}},
-		{"a repeated field once per element", url.Values{"indices": {"0", "7"}}, &platformv1.GetPCRsRequest{}, &platformv1.GetPCRsRequest{Indices: []uint32{0, 7}}},
-		{"a field's JSON name", url.Values{"numBytes": {"32"}}, &platformv1.GetRandomRequest{}, &platformv1.GetRandomRequest{NumBytes: 32}},
-		{"a field's proto name", url.Values{"num_bytes": {"32"}}, &platformv1.GetRandomRequest{}, &platformv1.GetRandomRequest{NumBytes: 32}},
-		{"a bool", url.Values{"confirm": {"true"}}, &platformv1.TPMClearRequest{}, &platformv1.TPMClearRequest{Confirm: true}},
-		{"a string", url.Values{"format": {"json"}}, &platformv1.GetEventLogRequest{}, &platformv1.GetEventLogRequest{Format: "json"}},
-		{"no parameters", url.Values{}, &platformv1.GetEKRequest{}, &platformv1.GetEKRequest{}},
-	}
-	for _, tc := range accepts {
-		t.Run("accepts "+tc.name, func(t *testing.T) {
-			require.NoError(t, decodeTPMParams(tc.params, tc.msg.ProtoReflect()))
-			assert.True(t, proto.Equal(tc.want, tc.msg), "want %v, got %v", tc.want, tc.msg)
-		})
-	}
-
-	refusals := []struct {
-		name   string
-		params url.Values
-		msg    proto.Message
-		want   ErrTPMInvalidQueryParameter
-	}{
-		{
-			name: "an unknown parameter", params: url.Values{"colour": {"red"}}, msg: &platformv1.GetEKRequest{},
-			want: ErrTPMInvalidQueryParameter{Name: "colour", Value: "red", Reason: "not a field of platform.v1.GetEKRequest"},
-		},
-		{
-			name: "a map field", params: url.Values{"properties": {"a"}}, msg: &platformv1.TPMInfoResponse{},
-			want: ErrTPMInvalidQueryParameter{Name: "properties", Value: "a", Reason: "not a field of platform.v1.TPMInfoResponse"},
-		},
-		{
-			name: "a scalar given twice", params: url.Values{"handle": {"1", "2"}}, msg: &platformv1.GetEKRequest{},
-			want: ErrTPMInvalidQueryParameter{Name: "handle", Value: "1,2", Reason: "given more than once"},
-		},
-		{
-			name: "a message field", params: url.Values{"attributes": {"x"}}, msg: &platformv1.CreateEKRequest{},
-			want: ErrTPMInvalidQueryParameter{Name: "attributes", Value: "x", Reason: "a message field cannot be a URL parameter"},
-		},
-		{
-			name: "a bytes field", params: url.Values{"data": {"x"}}, msg: &platformv1.SealRequest{},
-			want: ErrTPMInvalidQueryParameter{Name: "data", Value: "x", Reason: "a bytes field cannot be a URL parameter"},
-		},
-		{
-			name: "a negative handle", params: url.Values{"handle": {"-1"}}, msg: &platformv1.GetSRKRequest{},
-			want: ErrTPMInvalidQueryParameter{Name: "handle", Value: "-1", Reason: "not a valid uint32"},
-		},
-		{
-			name: "a handle wider than 32 bits", params: url.Values{"handle": {"0x100000000"}}, msg: &platformv1.GetSRKRequest{},
-			want: ErrTPMInvalidQueryParameter{Name: "handle", Value: "0x100000000", Reason: "not a valid uint32"},
-		},
-		{
-			name: "an unknown enum name", params: url.Values{"algorithm": {"KEY_ALGORITHM_ROT13"}}, msg: &platformv1.GetEKRequest{},
-			want: ErrTPMInvalidQueryParameter{Name: "algorithm", Value: "KEY_ALGORITHM_ROT13", Reason: "not a valid enum"},
-		},
-		{
-			name: "an enum number with no value", params: url.Values{"algorithm": {"99"}}, msg: &platformv1.GetEKRequest{},
-			want: ErrTPMInvalidQueryParameter{Name: "algorithm", Value: "99", Reason: "not a valid enum"},
-		},
-		{
-			name: "a bool that is not one", params: url.Values{"confirm": {"maybe"}}, msg: &platformv1.TPMClearRequest{},
-			want: ErrTPMInvalidQueryParameter{Name: "confirm", Value: "maybe", Reason: "not a valid bool"},
-		},
-		{
-			name: "a bad element of a repeated field", params: url.Values{"indices": {"0", "seven"}}, msg: &platformv1.GetPCRsRequest{},
-			want: ErrTPMInvalidQueryParameter{Name: "indices", Value: "seven", Reason: "not a valid uint32"},
-		},
-	}
-	for _, tc := range refusals {
-		t.Run("refuses "+tc.name, func(t *testing.T) {
-			err := decodeTPMParams(tc.params, tc.msg.ProtoReflect())
-
-			var got ErrTPMInvalidQueryParameter
-			require.ErrorAs(t, err, &got)
-			assert.Equal(t, tc.want, got)
-		})
-	}
-}
-
 func TestTPMHandlerErrors(t *testing.T) {
 	t.Run("ErrTPMServiceNotAvailable", func(t *testing.T) {
 		assert.Equal(t, "TPM service not available", ErrTPMServiceNotAvailable{}.Error())
-	})
-
-	t.Run("ErrTPMOperationFailed", func(t *testing.T) {
-		cause := errors.New("underlying error")
-		err := ErrTPMOperationFailed{Operation: "seal", Cause: cause}
-		assert.Equal(t, "TPM operation seal failed: underlying error", err.Error())
-		assert.Equal(t, cause, err.Unwrap())
 	})
 
 	t.Run("ErrTPMTokenRequired", func(t *testing.T) {
@@ -891,46 +805,5 @@ func TestTPMHandlerErrors(t *testing.T) {
 	t.Run("ErrTPMForbidden", func(t *testing.T) {
 		err := ErrTPMForbidden{Scope: tpmScopeWrite, Reason: "token invalid"}
 		assert.Equal(t, "this TPM operation requires tpm:write: token invalid", err.Error())
-	})
-
-	t.Run("ErrTPMInvalidQueryParameter", func(t *testing.T) {
-		err := ErrTPMInvalidQueryParameter{Name: "handle", Value: "-1", Reason: "not a valid uint32"}
-		assert.Equal(t, `invalid query parameter handle="-1": not a valid uint32`, err.Error())
-	})
-}
-
-func TestTPMWriteJSON(t *testing.T) {
-	t.Run("writes a JSON response", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-
-		NewTPMHandlers(nil).writeJSON(rec, http.StatusOK, map[string]string{"key": "value"})
-
-		assert.Equal(t, http.StatusOK, rec.Code)
-		assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
-		var body map[string]string
-		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-		assert.Equal(t, "value", body["key"])
-	})
-
-	t.Run("a value that cannot be encoded still sends the status", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-
-		NewTPMHandlers(nil).writeJSON(rec, http.StatusAccepted, make(chan int))
-
-		assert.Equal(t, http.StatusAccepted, rec.Code)
-		assert.Empty(t, rec.Body.String())
-	})
-}
-
-func TestTPMWriteError(t *testing.T) {
-	t.Run("writes an error response", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-
-		NewTPMHandlers(nil).writeError(rec, http.StatusServiceUnavailable, ErrTPMServiceNotAvailable{})
-
-		assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-		body := decodeTPMError(t, rec)
-		assert.Equal(t, "TPM service not available", body.Error)
-		assert.Equal(t, http.StatusServiceUnavailable, body.Code)
 	})
 }
