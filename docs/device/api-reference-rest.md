@@ -4,23 +4,25 @@ Base URL: `https://localhost:8443/api/v1`
 
 ## Device Endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/devices` | Register a new device |
-| GET | `/devices/{id}` | Get device by ID |
-| PUT | `/devices/{id}` | Update device |
-| DELETE | `/devices/{id}` | Delete device |
-| GET | `/devices` | List devices |
-| GET | `/devices/serial/{serial}` | Find by serial |
-| POST | `/devices/{id}/attest` | Verify submitted quote evidence (see below) |
-| POST | `/devices/{id}/attest-cert/record` | Record the device's attestation certificate without re-enrolling (admin; fail-closed on `tcg-cap-verifiedTPMRestricted`; body `{"reissue": bool, "clear_on_refusal": bool}` optional; `409` when a clear loses its compare-and-clear) — [api.md §4.5](api.md#45-recording-the-attestation-certificate-without-re-enrolling-473) |
-| POST | `/devices/{id}/disable` | Block the device's switch port and record it `suspended` (admin; body `{"reason": "<text>"}` optional, at most 256 bytes; `400` when nothing can enforce it) — [api.md §4.7](api.md#47-operator-disable-and-enable-250) |
-| POST | `/devices/{id}/enable` | Re-admit a `suspended` device to the quarantine zone and request re-attestation (admin; no body; `400` when the device is not suspended) — [api.md §4.7](api.md#47-operator-disable-and-enable-250) |
+| Method | Path | Scope | Description |
+|--------|------|-------|-------------|
+| POST | `/devices` | `device:write` | Register a new device |
+| GET | `/devices/{id}` | `device:read` | Get device by ID |
+| PUT | `/devices/{id}` | `device:write` | Update device |
+| DELETE | `/devices/{id}` | `device:delete` | Delete device |
+| GET | `/devices` | `device:read` | List devices |
+| GET | `/devices/count` | `device:read` | Count devices |
+| GET | `/devices/serial/{serial}` | `device:read` | Find by serial |
+| POST | `/devices/{id}/attest` | `device:write` | Verify submitted quote evidence (see below) |
+| POST | `/devices/{id}/attest-cert/record` | `device:write` | Record the device's attestation certificate without re-enrolling (admin; fail-closed on `tcg-cap-verifiedTPMRestricted`; body `{"reissue": bool, "clear_on_refusal": bool}` optional; `409` when a clear loses its compare-and-clear) — [api.md §4.5](api.md#45-recording-the-attestation-certificate-without-re-enrolling-473) |
+| POST | `/devices/{id}/disable` | `device:write` | Block the device's switch port and record it `suspended` (admin; body `{"reason": "<text>"}` optional, at most 256 bytes; `400` when nothing can enforce it) — [api.md §4.7](api.md#47-operator-disable-and-enable-250) |
+| POST | `/devices/{id}/enable` | `device:write` | Re-admit a `suspended` device to the quarantine zone and request re-attestation (admin; no body; `400` when the device is not suspended) — [api.md §4.7](api.md#47-operator-disable-and-enable-250) |
 
-Both attestation routes are device writes: behind the platform-token
-middleware they require `device:write` on top of the admin role gate, and a
-token without it gets `403`. The legacy JWT handler carries no scopes, so there
-the role gate alone applies ([api.md §7](api.md#7-authorization)).
+Every operator route on this page takes the scope in its table, which is the
+scope its gRPC twin takes: behind the platform-token middleware it is required
+on top of the admin role gate, and a token without it gets `403`. The legacy JWT
+handler carries no scopes, so there the role gate alone applies
+([api.md §7](api.md#7-authorization)).
 
 ### POST `/devices/{id}/attest`
 
@@ -78,27 +80,33 @@ Profiles live under the singular `/device/` prefix and device records under
 the plural `/devices/`; no path is served under both (#266,
 [api.md §3.1](api.md#31-one-name-per-resource)).
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/device/profiles` | Create profile |
-| GET | `/device/profiles/{id}` | Get profile by ID |
-| PUT | `/device/profiles/{id}` | Update profile |
-| DELETE | `/device/profiles/{id}` | Delete profile |
-| GET | `/device/profiles` | List profiles |
-| GET | `/device/profiles/count` | Count profiles |
-| POST | `/device/profiles/match` | Find matching profile |
-| GET | `/device/profiles/mac/{mac}` | Find by MAC address |
-| GET | `/device/profiles/serial/{serial}` | Find by serial |
-| GET | `/device/profiles/find-config` | Find the config for a device (EK serial / MAC) |
-| POST | `/device/profiles/{id}/assign` | Bind profile to a device identity (EK serial / MAC), optionally prestaging the EK certificate |
-| POST | `/device/profiles/{id}/unassign` | Clear a profile's device binding |
+| Method | Path | Scope | Description |
+|--------|------|-------|-------------|
+| POST | `/device/profiles` | `device:write` | Create profile |
+| GET | `/device/profiles/{id}` | `device:read` | Get profile by ID |
+| PUT | `/device/profiles/{id}` | `device:write` | Update profile |
+| DELETE | `/device/profiles/{id}` | `device:delete` | Delete profile |
+| GET | `/device/profiles` | `device:read` | List profiles |
+| GET | `/device/profiles/count` | `device:read` | Count profiles |
+| POST | `/device/profiles/match` | `device:read` | Find matching profile |
+| GET | `/device/profiles/mac/{mac}` | `device:read` | Find by MAC address |
+| GET | `/device/profiles/serial/{serial}` | `device:read` | Find by serial |
+| GET | `/device/profiles/find-config` | `device:read` | Find the config for a device (EK serial / MAC) |
+| POST | `/device/activate-json` | `device:write` | Activate a device (JSON body) |
+| POST | `/device/profiles/{id}/assign` | `device:write` | Bind profile to a device identity (EK serial / MAC), optionally prestaging the EK certificate |
+| POST | `/device/profiles/{id}/unassign` | `device:write` | Clear a profile's device binding |
 
 ## Template Endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/device/templates` | Create a device template (singular path only — the plural `POST` is the bootstrap seeder's, [api.md §4.1](api.md#41-post-apiv1devicestemplates-belongs-to-the-bootstrap-seeder)) |
-| POST | `/device/templates/{id}/create-profile` | Build and save a profile from a stored template |
+| Method | Path | Scope | Description |
+|--------|------|-------|-------------|
+| GET | `/device/templates` | `device:read` | List templates |
+| GET | `/device/templates/{id}` | `device:read` | Get template by ID |
+| GET | `/device/templates/name/{name}` | `device:read` | Find template by name |
+| PUT | `/device/templates/{id}` | `device:write` | Update template |
+| DELETE | `/device/templates/{id}` | `device:delete` | Delete template |
+| POST | `/device/templates` | `device:write` | Create a device template (singular path only — the plural `POST` is the bootstrap seeder's, [api.md §4.1](api.md#41-post-apiv1devicestemplates-belongs-to-the-bootstrap-seeder)) |
+| POST | `/device/templates/{id}/create-profile` | `device:write` | Build and save a profile from a stored template |
 
 ### POST `/device/templates`
 

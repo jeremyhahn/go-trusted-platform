@@ -16,23 +16,15 @@ package metrics
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNewCollector_Success(t *testing.T) {
-	// Create new registry to avoid conflicts
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
 	config := DefaultConfig()
 	config.Port = 19090 // Use different port to avoid conflicts
 
@@ -44,13 +36,6 @@ func TestNewCollector_Success(t *testing.T) {
 }
 
 func TestNewCollector_NilConfig(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
 	collector, err := NewCollector(nil)
 	require.NoError(t, err)
 	require.NotNil(t, collector)
@@ -79,13 +64,6 @@ func TestNewCollector_InvalidConfig(t *testing.T) {
 }
 
 func TestCollector_StartStop(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
 	config := DefaultConfig()
 	config.Port = 19091
 	config.CollectInterval = 1 * time.Second // Use valid interval
@@ -113,13 +91,6 @@ func TestCollector_StartStop(t *testing.T) {
 }
 
 func TestCollector_StartTwice(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
 	config := DefaultConfig()
 	config.Port = 19092
 
@@ -143,13 +114,6 @@ func TestCollector_StartTwice(t *testing.T) {
 }
 
 func TestCollector_StopBeforeStart(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
 	config := DefaultConfig()
 	config.Port = 19093
 
@@ -164,13 +128,6 @@ func TestCollector_StopBeforeStart(t *testing.T) {
 }
 
 func TestCollector_MetricsEndpoint(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
 	config := DefaultConfig()
 	config.Port = 19094
 
@@ -204,13 +161,6 @@ func TestCollector_MetricsEndpoint(t *testing.T) {
 }
 
 func TestCollector_HealthEndpoint(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
 	config := DefaultConfig()
 	config.Port = 19095
 
@@ -243,13 +193,6 @@ func TestCollector_HealthEndpoint(t *testing.T) {
 }
 
 func TestCollector_Metrics(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
 	config := DefaultConfig()
 	config.Port = 19096
 
@@ -263,31 +206,28 @@ func TestCollector_Metrics(t *testing.T) {
 }
 
 func TestCollector_Handler(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
-	config := DefaultConfig()
-	config.Port = 19097
-
-	collector, err := NewCollector(config)
+	configA := DefaultConfig()
+	configA.Namespace = "instance_a"
+	collectorA, err := NewCollector(configA)
 	require.NoError(t, err)
 
-	handler := collector.Handler()
-	assert.NotNil(t, handler)
+	configB := DefaultConfig()
+	configB.Namespace = "instance_b"
+	collectorB, err := NewCollector(configB)
+	require.NoError(t, err)
+
+	recorder := httptest.NewRecorder()
+	collectorA.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, configA.Path, nil))
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	body := recorder.Body.String()
+	assert.Contains(t, body, "instance_a_")
+	assert.Contains(t, body, "go_goroutines")
+	assert.NotContains(t, body, "instance_b_")
+	assert.NotNil(t, collectorB.Handler())
 }
 
 func TestCollector_Address(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
 	config := DefaultConfig()
 	config.Host = "127.0.0.1"
 	config.Port = 19098
@@ -300,13 +240,6 @@ func TestCollector_Address(t *testing.T) {
 }
 
 func TestCollector_RuntimeMetricsCollection(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
 	config := DefaultConfig()
 	config.Port = 19099
 	config.CollectInterval = 1 * time.Second // Use valid interval
@@ -333,13 +266,6 @@ func TestCollector_RuntimeMetricsCollection(t *testing.T) {
 }
 
 func TestCollector_DisabledRuntimeMetrics(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
 	config := DefaultConfig()
 	config.Port = 19100
 	config.EnableRuntimeMetrics = false
@@ -363,13 +289,6 @@ func TestCollector_DisabledRuntimeMetrics(t *testing.T) {
 }
 
 func TestCollector_CollectMetrics(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
 	config := DefaultConfig()
 	config.Port = 19101
 
@@ -384,13 +303,6 @@ func TestCollector_CollectMetrics(t *testing.T) {
 }
 
 func TestCollector_CollectRuntimeMetrics(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
 	config := DefaultConfig()
 	config.Port = 19102
 
@@ -404,98 +316,7 @@ func TestCollector_CollectRuntimeMetrics(t *testing.T) {
 	// Verification would require scraping the registry
 }
 
-func TestCollector_RegisterRuntimeCollector(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
-	config := DefaultConfig()
-	config.Port = 19103
-	config.EnableRuntimeMetrics = true
-
-	collector, err := NewCollector(config)
-	require.NoError(t, err)
-
-	err = collector.RegisterRuntimeCollector()
-	require.NoError(t, err)
-
-	// Registering again should not error (already registered is handled)
-	err = collector.RegisterRuntimeCollector()
-	require.NoError(t, err)
-}
-
-func TestCollector_RegisterRuntimeCollector_Disabled(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
-	config := DefaultConfig()
-	config.Port = 19104
-	config.EnableRuntimeMetrics = false
-
-	collector, err := NewCollector(config)
-	require.NoError(t, err)
-
-	err = collector.RegisterRuntimeCollector()
-	assert.NoError(t, err) // Should return nil when disabled
-}
-
-func TestCollector_RegisterProcessCollector(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
-	config := DefaultConfig()
-	config.Port = 19105
-	config.EnableProcessMetrics = true
-
-	collector, err := NewCollector(config)
-	require.NoError(t, err)
-
-	err = collector.RegisterProcessCollector()
-	require.NoError(t, err)
-
-	// Registering again should not error
-	err = collector.RegisterProcessCollector()
-	require.NoError(t, err)
-}
-
-func TestCollector_RegisterProcessCollector_Disabled(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
-	config := DefaultConfig()
-	config.Port = 19106
-	config.EnableProcessMetrics = false
-
-	collector, err := NewCollector(config)
-	require.NoError(t, err)
-
-	err = collector.RegisterProcessCollector()
-	assert.NoError(t, err) // Should return nil when disabled
-}
-
 func TestCollector_StopTimeout(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
 	config := DefaultConfig()
 	config.Port = 19107
 

@@ -154,9 +154,17 @@ gRPC, Unix, QUIC and embedded.
 **Create assigns the device id; a caller does not have to supply one.** Every
 create verb in the table above reaches `DeviceService.Create`, which mints the
 id through `device.NewID()` when the request carries none. A request that does
-carry a non-zero id is honoured, so create behaves as an upsert on that path —
-it does not assert the id is unused. Responses always carry the assigned id
-(encoded per §1a), and the device is readable under it immediately.
+carry a non-zero id is honoured; create does not assert the id is unused.
+Responses always carry the assigned id (encoded per §1a), and the device is
+readable under it immediately.
+
+**Create holds one device per serial.** `DeviceService.Create` refuses a serial
+another device already carries with `ErrDeviceSerialExists`, which every
+transport maps: `409 Conflict` on both REST listeners, `AlreadyExists` on gRPC /
+Unix, `StatusAlreadyExists` on QUIC, and the error text on MCP. Creates are serialised in-process so
+two concurrent creates of one serial cannot both pass the check. A created
+device starts in `registered` with both timestamps set unless the caller
+supplied them, whichever transport created it (#484).
 
 Until #525 the create verbs called `DeviceService.Save`, which requires a
 non-zero id because it doubles as the update primitive, so a caller creating a
@@ -240,64 +248,76 @@ non-numeric id 404s before reaching a handler. `/devices/count` and
 `/devices/serial/{serial}` are registered before `/devices/{id}` so they are
 not swallowed.
 
-### 2.2 `POST /api/v1/devices` has two handlers, and they take different bodies
+### 2.2 `POST /api/v1/devices` — one contract on both REST listeners
 
-Two packages register a handler for this method and path. Which one answers
-depends on which server is listening, and their request contracts are not the
-same. Read this before assuming what a body does.
+Two servers mount this method and path: the webservice
+(`device.CRUDHandler.CreateDevice`, `pkg/webservice/v1/device/rest_handlers.go`)
+and the daemon REST listener (`restapi.DeviceHandlers.handleRegisterDevice`,
+`pkg/api/rest/device_handlers.go`). The console reaches the webservice — its
+SDK `baseUrl` is `/api` (`web/src/app/providers.tsx`) and `DeviceService`
+appends `/v1/devices`. Both handlers decode the body with the one shared
+`device.DecodeCreateRequest` (`pkg/device/request.go`), so the same body gets
+the same status and persists the same device on either listener (#484):
 
-| Server | Handler | Body it accepts |
-|---|---|---|
-| Webservice (`baseURI` `/api/v1`, `pkg/webservice/webserver_v1.go:203`) | `device.CRUDHandler.CreateDevice` (`pkg/webservice/v1/device/rest_handlers.go:91`) | `DeviceRequest` — flat fields **and** the nested `{device: {…}}` envelope, plus UI-only keys |
-| Daemon REST (`pkg/api/daemon/rest_service.go:365`) | `restapi.DeviceHandlers.handleRegisterDevice` (`pkg/api/rest/device_handlers.go:538`) | `DeviceRegisterRequest` — **flat only**, no envelope, and an empty `serial` is a `400` |
+| Body | Status on both listeners |
+|---|---|
+| Flat fields: `{"serial":"SN-1","model":"R640"}` | `201`, device created |
+| Proto / SDK envelope: `{"device":{"serial":"SN-1"}}` | `201`, the same device |
+| Fields split between flat and envelope, or repeated with equal values | `201`, the same device |
+| A field set flat and in the envelope to different values | `400` — `ErrDeviceRequestConflict` names the field |
+| No serial: `{}`, `{"serial":""}`, `{"device":{}}`, a name-only body | `400` — `ErrDeviceSerialRequired` |
+| Empty body, invalid JSON, a field of the wrong type, a negative id | `400` — `ErrDeviceRequestBody` |
+| A serial another device already carries | `409` — `ErrDeviceSerialExists` |
 
-**The console reaches the webservice handler.** Its SDK `baseUrl` is `/api`
-(`web/src/app/providers.tsx:27`), same-origin with the server that serves the
-console, and `DeviceService` appends `/v1/devices`.
+**The serial is required.** It is the key enrollment and `RecordHeartbeat`
+match a TPM against (`pkg/device/service.go`), so a device created without one
+could never be claimed. The webservice used to synthesise `dev-<id>` for an
+empty serial, which made `{}` a `201` there and a `400` on the daemon; that
+fallback is gone. The console's register form requires the serial, and the JS
+SDK's `CreateDeviceRequest` and the console's `RegisterDeviceInput` type it as
+required.
 
-**The webservice handler accepts either shape, envelope wins.** `DeviceRequest`
-carries the flat fields and a `device` object; `requestToDevice` starts from the
-flat fields and overlays any non-zero field from the envelope. So the proto and
-SDK shape (`CreateDeviceRequest { Device device = 1; }`, mirrored by the JS
-SDK's `{device: Partial<Device>}`) and the flat REST shape both work, and a
-client sending both gets the envelope's values.
+**A conflict is refused, not resolved.** The flat shape and the proto envelope
+(`CreateDeviceRequest { Device device = 1; }`, mirrored by the JS SDK's
+`{device: {...}}` and sent by the Go SDK REST transport) are both accepted. A
+field present in both places with different values has no right answer, so the
+request is a `400` instead of quietly taking one side.
 
-**It also accepts UI-only keys, and almost all of them go nowhere.** `name`,
-`type`, `device_type`, `description`, `manufacturer`, `version`,
-`tpm_manufacturer`, `tpm_version` and `tpm_firmware_version` decode into
-`DeviceRequest`, but `entities.Device` has fields for none of them. Exactly one
-has any effect: `manufacturer` becomes the `Model` when no `model` is supplied.
-
-**`name` is deliberately not mapped to anything.** `requestToDevice` used to
-reuse it as the **`Serial`** when no serial was supplied, at either nesting
-level. The console's serial field is optional and its name is required, so the
-ordinary registration wrote a display string into the serial number: a row that
-can never match a TPM serial at enrollment, and that `RecordHeartbeat` cannot
-resolve, because it matches the mTLS identity against `Serial` or `Hostname`
-(`pkg/device/service.go:322`).
-
-On `PUT` it was worse. `UpdateDevice` shares `requestToDevice` and has no
-synthesis fallback, and the service layer preserves an existing serial only when
-the incoming one is empty (`pkg/device/service.go:214`). The coercion made it
-non-empty, so a `PUT` carrying just a name **overwrote a real TPM serial with
-the display name** — the identity-erasure class of #252.
-
-A name-only `POST` now falls through to the synthesis below, and a name-only
-`PUT` leaves the serial empty so the service layer restores the existing one.
-Pinned by `TestCreateDeviceDoesNotStoreTheNameAsTheSerial`,
-`TestCreateDeviceDoesNotStoreTheFlatNameAsTheSerial` and
+**Keys the device has no column for are ignored.** The console sends `name`,
+`type`, `device_type`, `description`, `version`, `tpm_manufacturer`,
+`tpm_version` and `tpm_firmware_version`; `entities.Device` stores none of
+them and `device.Request` does not declare them, so both listeners drop them.
+`manufacturer` is the one key with an effect: it becomes the `model` when no
+`model` is supplied. `name` is deliberately never the serial — reusing it as one
+once wrote a display string where a TPM serial belongs, and on `PUT` overwrote
+a real serial with it (#252). Pinned by
+`TestCreateDeviceDoesNotStoreTheNameAsTheSerial` and
 `TestUpdateDeviceDoesNotOverwriteASerialWithAName`.
 
-**A device has no name.** The proto `Device` (`device.proto:82`) and
-`entities.Device` have no name field, so no transport persists one. The
-console's `web/src/types/device.ts` declares its own `Device` and
-`RegisterDeviceInput` that *do* carry `name`, `type`, `description`, `tags` and
-`tpmInfo`; those are console-local types describing no server state. Whether a
-device should gain a first-class display name is open on #455.
+**A device has no name.** The proto `Device` and `entities.Device` have no name
+field, so no transport persists one. The console's `web/src/types/device.ts`
+declares its own `Device` and `RegisterDeviceInput` with `name`, `type`,
+`description`, `tags` and `tpmInfo`; those are console-local types describing no
+server state. Whether a device should gain a first-class display name is open
+on #455.
 
-**An empty body is accepted.** `CreateDevice` allocates an id when none is
-given and falls back to a synthesised `dev-<id>` serial, so `{}` yields a `201`
-and a saved device. The daemon REST handler rejects the same body with `400`.
+**The two listeners still differ on `PUT /api/v1/devices/{id}`.** Both decode
+the body with `device.DecodeRequest`, agree on every status, and leave the
+server-owned fields to `device.Service.Update` (§3.3). They differ on the two
+fields outside that set: the daemon patches the stored device, so an omitted
+`switch_name` or `switch_port` is kept, while the webservice builds the entity
+from the request alone, so an omitted one is cleared.
+
+**Authorization is per listener, not per body.** Behind the platform-token
+middleware the webservice route requires `device:write`, as `CreateDevice` does
+on gRPC, QUIC and MCP, and answers a `device:read` token `403` before the body
+is read; the daemon REST listener is mTLS-only (§7).
+
+`pkg/webservice/v1/router/device_listener_contract_test.go` pins the
+contract: it posts the bodies above to both listeners and asserts equal
+statuses and equal persisted devices, and it walks both routers and fails when
+any `POST`, `PUT` or `PATCH` route both register answers the same body with
+different statuses.
 
 ---
 
@@ -1302,7 +1322,7 @@ without an executor, so an advertised-but-dead tool cannot return unnoticed.
 Platform tokens carry an `scp` claim in the qrdb-canonical
 `"<resource>:<action>"` form. Enforcement is per operation: gRPC
 `RequireScope`, QUIC `AuthorizeRequest`, MCP `AuthorizeTool`, webservice
-REST `RequireScope` on the routes noted below. The gRPC, QUIC and MCP catalogs
+REST `RequireScope` on every operator route (table below). The gRPC, QUIC and MCP catalogs
 and their default-deny behaviour are described in
 [`docs/daemon/api.md`](../daemon/api.md) §5.
 
@@ -1354,20 +1374,45 @@ the device. Both require `device:write` on every scoped transport — gRPC, QUIC
 `POST /api/v1/devices/{id}/attest-cert/record` — so a `device:read` token can
 look at devices but cannot change their trust state. The lifecycle routes
 `POST /api/v1/devices/{id}/disable` and `POST /api/v1/devices/{id}/enable`
-require `device:write` the same way. On the webservice the scope check applies
-behind the platform-token middleware; under the legacy JWT handler, which
-carries no scopes, the routes keep only their admin role gate. The daemon REST
-server (`pkg/api/rest`) is mTLS-only and has no scope check.
+require `device:write` the same way.
 
-The two template operations require `device:write` on MCP as well
-(`device_template_create`, `profile_create_from_template` in
-`pkg/api/mcp/authz.go`). Template create requires it on the webservice REST
-route `POST /api/v1/device/templates` too, behind the platform-token middleware
-like the attestation routes: before #770 that route kept only its admin role
-gate, so a `device:read` token could create a template over REST that every
-other transport refused. The create-profile route and the other template routes
-(get, update, delete, list) still keep only the role gate; get, update, delete
-and list are REST-only and have no gRPC catalog entry.
+**Every webservice operator route takes its gRPC twin's scope (#484).** Behind
+the platform-token middleware, `pkg/webservice/v1/router/device.go` wraps each
+device, profile, template and provisioning-session route in `RequireScope` on
+top of the admin role gate, with the scope the twin RPC takes in the catalog
+above (and QUIC and MCP take for the same operation). A token without it gets
+`403` before the handler runs. Under the legacy JWT handler, which carries no
+scopes, the role gate alone applies; the daemon REST server (`pkg/api/rest`) is
+mTLS-only and has no scope check.
+
+| Scope | Webservice routes (under `/api/v1`) | gRPC twin |
+|---|---|---|
+| `device:read` | `GET /devices`, `GET /devices/count`, `GET /devices/serial/{serial}`, `GET /devices/{id}` | `ListDevices`, `CountDevices`, `FindDeviceBySerial`, `GetDevice` |
+| `device:read` | `GET /device/profiles`, `GET /device/profiles/count`, `POST /device/profiles/match`, `GET /device/profiles/serial/{serial}`, `GET /device/profiles/mac/{mac}`, `GET /device/profiles/{id}`, `GET /device/profiles/find-config` | `ListProfiles`, `CountProfiles`, `FindMatchingProfile`, `FindProfileBySerial`, `FindProfileByMACAddress`, `GetProfile`, `FindConfigForDevice` |
+| `device:write` | `POST /devices`, `PUT /devices/{id}`, `POST /device/activate-json` | `CreateDevice`, `UpdateDevice`, `ActivateDevice` |
+| `device:write` | `POST /device/profiles`, `PUT /device/profiles/{id}`, `POST /device/profiles/{id}/assign`, `POST /device/profiles/{id}/unassign` | `CreateProfile`, `UpdateProfile`, `AssignProfileToDevice`, `UnassignProfileFromDevice` |
+| `device:write` | `POST /device/templates`, `POST /device/templates/{id}/create-profile` | `CreateTemplate`, `CreateProfileFromTemplate` |
+| `device:write` | `POST /devices/{id}/attest`, `POST /devices/{id}/attest-cert/record`, `POST /devices/{id}/disable`, `POST /devices/{id}/enable` | `AttestDevice`, `RecordAttestationCertificate`, `DisableDevice`, `EnableDevice` |
+| `device:delete` | `DELETE /devices/{id}`, `DELETE /device/profiles/{id}` | `DeleteDevice`, `DeleteProfile` |
+| `provisioning:read` | `GET /provisioning/sessions`, `GET /provisioning/sessions/{sessionID}` | `ConfigDeliveryService/ListSessions`, `GetSession` |
+| `provisioning:write` | `POST /provisioning/sessions/{sessionID}/fulfill` | `ConfigDeliveryService/FulfillSession` |
+
+The template routes `GET /device/templates`, `GET /device/templates/name/{name}`
+and `GET /device/templates/{id}` take `device:read`, `PUT /device/templates/{id}`
+`device:write` and `DELETE /device/templates/{id}` `device:delete`. They are
+REST-only, with no gRPC catalog entry, and take the device resource's action
+so that a token which cannot create a template cannot rewrite or remove one
+either. The machine-facing routes (`/device/{profile,activate,heartbeat}`,
+`/device/boot*`, the EAB provisioning routes and the session poll) are on the
+ungated router and take no scope (§4.6, §5).
+
+Before #484 only create, the attestation routes, the lifecycle routes and
+template create were scoped on the webservice; every other route kept only the
+role gate, so a `device:read` token could update or delete a device over REST
+that every other transport refused. `TestDeviceRouter_OperatorRoutes_*` in
+`pkg/webservice/v1/router/device_attest_scope_test.go` sends each route the
+scope above, every other device and provisioning scope, and no scope
+authorizer at all.
 
 On MCP, all 20 device-related tool names carry a permission — see §6.
 
@@ -1382,7 +1427,7 @@ On MCP, all 20 device-related tool names carry a permission — see §6.
 | `0x02` | `StatusNotFound` | 404 | Unknown device, profile or template; `ErrNoMatchingConfig`; `ErrProfileNotFound` |
 | `0x03` | `StatusUnauthorized` | 401 | Token invalid; missing or unverified mTLS client certificate |
 | `0x04` | `StatusInternalError` | 500 | Storage failure (`*WrappedError`); `ErrARPLookupFailed`; `ErrPortTransitionFailed`; switch VLAN transition failure |
-| `0x06` | `StatusAlreadyExists` | 409 | **No device path produces this today.** `ErrDuplicateTemplateName` is declared in `pkg/device/errors.go` and never returned; no handler under `pkg/webservice/v1/device/` emits 409 (grepped 2026-08-18). Creating a second template with an existing name succeeds. |
+| `0x06` | `StatusAlreadyExists` | 409 | `ErrDeviceSerialExists` — creating a device with a serial another device carries (§2). `ErrDuplicateTemplateName` is declared in `pkg/device/errors.go` and never returned: creating a second template with an existing name succeeds. |
 | `0x07` | `StatusPermissionDenied` | 403 | Missing `device:*` scope |
 | `0x09` | `StatusInvalidArgument` | 400 | `ErrInvalidDeviceID`, `ErrInvalidProfileID`, `ErrInvalidTemplateID`, `ErrDeviceIdentityRequired`, `ErrEKCertNotPEM`, `ErrEKCertInvalid`, `ErrInvalidTransition`, `ErrMissingSerial`, `ErrQUICMissingField{Field:"id"}`, `ErrProfileVLANsNotDistinct` |
 | `0x0A` | `StatusUnavailable` | 503 | `ErrDeviceProfileServiceNotAvailable` — the profile service is not wired into the daemon |

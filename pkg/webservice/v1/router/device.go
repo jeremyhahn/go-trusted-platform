@@ -55,12 +55,18 @@ func (r *DeviceRouter) SetBootHandler(handler device.BootHandler) {
 	r.bootHandler = handler
 }
 
-// deviceWriteScope is the scope every device write requires on the
-// transports that carry scopes (gRPC, QUIC, MCP, and REST behind the platform
-// token middleware).
-const deviceWriteScope = "device:write"
+// The scopes the operator routes require on the transports that carry scopes
+// (gRPC, QUIC, MCP, and REST behind the platform token middleware). Each route
+// takes the scope its gRPC twin takes in pkg/api/grpc/method_permissions.go.
+const (
+	deviceReadScope        = "device:read"
+	deviceWriteScope       = "device:write"
+	deviceDeleteScope      = "device:delete"
+	provisioningReadScope  = "provisioning:read"
+	provisioningWriteScope = "provisioning:write"
+)
 
-// SetScopeAuthorizer supplies the scope check the attestation routes take on
+// SetScopeAuthorizer supplies the scope check every operator route takes on
 // top of the admin gate. Nil leaves them on the role gate alone, which is the
 // case under the legacy JWT handler: its sessions carry roles, not scopes.
 func (r *DeviceRouter) SetScopeAuthorizer(authorizer middleware.ScopeAuthorizer) {
@@ -262,27 +268,35 @@ func (r *DeviceRouter) heartbeat(router *mux.Router) {
 
 // registerDeviceCRUD registers device CRUD endpoints.
 func (r *DeviceRouter) registerDeviceCRUD(router *mux.Router) {
-	// Device CRUD operations
+	// Device CRUD operations. Each takes the scope of its gRPC twin
+	// (CreateDevice, ListDevices, ...) as on QUIC and MCP (#484).
 	// POST /api/v1/devices - Create device
-	router.HandleFunc("/devices", r.crudHandler.CreateDevice).Methods("POST")
+	router.Handle("/devices",
+		r.requireScope(deviceWriteScope, r.crudHandler.CreateDevice)).Methods("POST")
 
 	// GET /api/v1/devices - List devices
-	router.HandleFunc("/devices", r.crudHandler.ListDevices).Methods("GET")
+	router.Handle("/devices",
+		r.requireScope(deviceReadScope, r.crudHandler.ListDevices)).Methods("GET")
 
 	// GET /api/v1/devices/count - Count devices
-	router.HandleFunc("/devices/count", r.crudHandler.CountDevices).Methods("GET")
+	router.Handle("/devices/count",
+		r.requireScope(deviceReadScope, r.crudHandler.CountDevices)).Methods("GET")
 
 	// GET /api/v1/devices/serial/{serial} - Find device by serial
-	router.HandleFunc("/devices/serial/{serial}", r.crudHandler.FindDeviceBySerial).Methods("GET")
+	router.Handle("/devices/serial/{serial}",
+		r.requireScope(deviceReadScope, r.crudHandler.FindDeviceBySerial)).Methods("GET")
 
 	// GET /api/v1/devices/{id} - Get device
-	router.HandleFunc("/devices/{id:[0-9]+}", r.crudHandler.GetDevice).Methods("GET")
+	router.Handle("/devices/{id:[0-9]+}",
+		r.requireScope(deviceReadScope, r.crudHandler.GetDevice)).Methods("GET")
 
 	// PUT /api/v1/devices/{id} - Update device
-	router.HandleFunc("/devices/{id:[0-9]+}", r.crudHandler.UpdateDevice).Methods("PUT")
+	router.Handle("/devices/{id:[0-9]+}",
+		r.requireScope(deviceWriteScope, r.crudHandler.UpdateDevice)).Methods("PUT")
 
 	// DELETE /api/v1/devices/{id} - Delete device
-	router.HandleFunc("/devices/{id:[0-9]+}", r.crudHandler.DeleteDevice).Methods("DELETE")
+	router.Handle("/devices/{id:[0-9]+}",
+		r.requireScope(deviceDeleteScope, r.crudHandler.DeleteDevice)).Methods("DELETE")
 }
 
 // registerProfileCRUD registers device profile CRUD endpoints.
@@ -293,76 +307,99 @@ func (r *DeviceRouter) registerDeviceCRUD(router *mux.Router) {
 // TestDeviceRoutesHaveOneName fails if either prefix gains a path the other
 // already serves.
 func (r *DeviceRouter) registerProfileCRUD(router *mux.Router) {
-	// Profile CRUD operations
+	// Profile CRUD operations, scoped like their gRPC twins (#484).
 	// POST /api/v1/device/profiles - Create profile
-	router.HandleFunc("/device/profiles", r.crudHandler.CreateProfile).Methods("POST")
+	router.Handle("/device/profiles",
+		r.requireScope(deviceWriteScope, r.crudHandler.CreateProfile)).Methods("POST")
 
 	// GET /api/v1/device/profiles - List profiles
-	router.HandleFunc("/device/profiles", r.crudHandler.ListProfiles).Methods("GET")
+	router.Handle("/device/profiles",
+		r.requireScope(deviceReadScope, r.crudHandler.ListProfiles)).Methods("GET")
 
 	// GET /api/v1/device/profiles/count - Count profiles
-	router.HandleFunc("/device/profiles/count", r.crudHandler.CountProfiles).Methods("GET")
+	router.Handle("/device/profiles/count",
+		r.requireScope(deviceReadScope, r.crudHandler.CountProfiles)).Methods("GET")
 
-	// POST /api/v1/device/profiles/match - Find matching profile
-	router.HandleFunc("/device/profiles/match", r.crudHandler.FindMatchingProfile).Methods("POST")
+	// POST /api/v1/device/profiles/match - Find matching profile. A read,
+	// although the criteria travel in a POST body.
+	router.Handle("/device/profiles/match",
+		r.requireScope(deviceReadScope, r.crudHandler.FindMatchingProfile)).Methods("POST")
 
 	// GET /api/v1/device/profiles/serial/{serial} - Find profile by serial
-	router.HandleFunc("/device/profiles/serial/{serial}", r.crudHandler.FindProfileBySerial).Methods("GET")
+	router.Handle("/device/profiles/serial/{serial}",
+		r.requireScope(deviceReadScope, r.crudHandler.FindProfileBySerial)).Methods("GET")
 
 	// GET /api/v1/device/profiles/mac/{mac} - Find profile by MAC
-	router.HandleFunc("/device/profiles/mac/{mac}", r.crudHandler.FindProfileByMAC).Methods("GET")
+	router.Handle("/device/profiles/mac/{mac}",
+		r.requireScope(deviceReadScope, r.crudHandler.FindProfileByMAC)).Methods("GET")
 
 	// GET /api/v1/device/profiles/{id} - Get profile
-	router.HandleFunc("/device/profiles/{id:[0-9]+}", r.crudHandler.GetProfileByID).Methods("GET")
+	router.Handle("/device/profiles/{id:[0-9]+}",
+		r.requireScope(deviceReadScope, r.crudHandler.GetProfileByID)).Methods("GET")
 
 	// PUT /api/v1/device/profiles/{id} - Update profile
-	router.HandleFunc("/device/profiles/{id:[0-9]+}", r.crudHandler.UpdateProfile).Methods("PUT")
+	router.Handle("/device/profiles/{id:[0-9]+}",
+		r.requireScope(deviceWriteScope, r.crudHandler.UpdateProfile)).Methods("PUT")
 
 	// DELETE /api/v1/device/profiles/{id} - Delete profile
-	router.HandleFunc("/device/profiles/{id:[0-9]+}", r.crudHandler.DeleteProfile).Methods("DELETE")
+	router.Handle("/device/profiles/{id:[0-9]+}",
+		r.requireScope(deviceDeleteScope, r.crudHandler.DeleteProfile)).Methods("DELETE")
 
 	// POST /api/v1/device/activate-json - Alternative activation endpoint with JSON body
-	router.HandleFunc("/device/activate-json", r.crudHandler.ActivateDevice).Methods("POST")
+	router.Handle("/device/activate-json",
+		r.requireScope(deviceWriteScope, r.crudHandler.ActivateDevice)).Methods("POST")
 }
 
 // registerTemplateCRUD registers device template CRUD endpoints.
 func (r *DeviceRouter) registerTemplateCRUD(router *mux.Router) {
-	// Template CRUD operations
-	// POST /api/v1/device/templates - Create template. device:write, as
-	// CreateTemplate takes on gRPC, QUIC and MCP (#873).
+	// Template CRUD operations. Create and create-profile take device:write,
+	// as CreateTemplate and CreateProfileFromTemplate do on gRPC, QUIC and
+	// MCP (#873). Get, update, delete and list are REST-only; they take the
+	// device resource's read, write and delete scopes so that a token which
+	// cannot create a template cannot rewrite or remove one either (#484).
+	// POST /api/v1/device/templates - Create template
 	router.Handle("/device/templates",
 		r.requireScope(deviceWriteScope, r.templateHandler.CreateTemplate)).Methods("POST")
 
 	// GET /api/v1/device/templates - List templates
-	router.HandleFunc("/device/templates", r.templateHandler.ListTemplates).Methods("GET")
+	router.Handle("/device/templates",
+		r.requireScope(deviceReadScope, r.templateHandler.ListTemplates)).Methods("GET")
 
 	// GET /api/v1/device/templates/name/{name} - Find template by name
-	router.HandleFunc("/device/templates/name/{name}", r.templateHandler.FindTemplateByName).Methods("GET")
+	router.Handle("/device/templates/name/{name}",
+		r.requireScope(deviceReadScope, r.templateHandler.FindTemplateByName)).Methods("GET")
 
 	// GET /api/v1/device/templates/{id} - Get template
-	router.HandleFunc("/device/templates/{id:[0-9]+}", r.templateHandler.GetTemplate).Methods("GET")
+	router.Handle("/device/templates/{id:[0-9]+}",
+		r.requireScope(deviceReadScope, r.templateHandler.GetTemplate)).Methods("GET")
 
 	// PUT /api/v1/device/templates/{id} - Update template
-	router.HandleFunc("/device/templates/{id:[0-9]+}", r.templateHandler.UpdateTemplate).Methods("PUT")
+	router.Handle("/device/templates/{id:[0-9]+}",
+		r.requireScope(deviceWriteScope, r.templateHandler.UpdateTemplate)).Methods("PUT")
 
 	// DELETE /api/v1/device/templates/{id} - Delete template
-	router.HandleFunc("/device/templates/{id:[0-9]+}", r.templateHandler.DeleteTemplate).Methods("DELETE")
+	router.Handle("/device/templates/{id:[0-9]+}",
+		r.requireScope(deviceDeleteScope, r.templateHandler.DeleteTemplate)).Methods("DELETE")
 
 	// POST /api/v1/device/templates/{id}/create-profile - Create profile from template
-	router.HandleFunc("/device/templates/{id:[0-9]+}/create-profile", r.templateHandler.CreateProfileFromTemplate).Methods("POST")
+	router.Handle("/device/templates/{id:[0-9]+}/create-profile",
+		r.requireScope(deviceWriteScope, r.templateHandler.CreateProfileFromTemplate)).Methods("POST")
 }
 
 // registerConfigDeliveryRoutes registers config delivery endpoints for profile
 // lookup and assignment. These routes require authentication (mTLS).
 func (r *DeviceRouter) registerConfigDeliveryRoutes(router *mux.Router) {
 	// GET /api/v1/device/profiles/find-config - Find config for device by identity
-	router.HandleFunc("/device/profiles/find-config", r.templateHandler.FindConfigForDevice).Methods("GET")
+	router.Handle("/device/profiles/find-config",
+		r.requireScope(deviceReadScope, r.templateHandler.FindConfigForDevice)).Methods("GET")
 
 	// POST /api/v1/device/profiles/{id}/assign - Assign profile to device
-	router.HandleFunc("/device/profiles/{id:[0-9]+}/assign", r.templateHandler.AssignProfileToDevice).Methods("POST")
+	router.Handle("/device/profiles/{id:[0-9]+}/assign",
+		r.requireScope(deviceWriteScope, r.templateHandler.AssignProfileToDevice)).Methods("POST")
 
 	// POST /api/v1/device/profiles/{id}/unassign - Clear profile's device binding
-	router.HandleFunc("/device/profiles/{id:[0-9]+}/unassign", r.templateHandler.UnassignProfileFromDevice).Methods("POST")
+	router.Handle("/device/profiles/{id:[0-9]+}/unassign",
+		r.requireScope(deviceWriteScope, r.templateHandler.UnassignProfileFromDevice)).Methods("POST")
 }
 
 // registerProvisioningDeviceRoutes registers the config-delivery endpoints a
@@ -392,12 +429,17 @@ func (r *DeviceRouter) registerProvisioningDeviceRoutes(router *mux.Router) {
 // for one, which decides what configuration that machine boots with. Before
 // #165 an anonymous caller could choose that for any pending session.
 func (r *DeviceRouter) registerProvisioningOperatorRoutes(router *mux.Router) {
+	// The session views take the provisioning scopes, as ListSessions,
+	// GetSession and FulfillSession do on gRPC (#484).
 	// POST /api/v1/provisioning/sessions/{sessionID}/fulfill - Fulfill pending session
-	router.HandleFunc("/provisioning/sessions/{sessionID}/fulfill", r.configDeliveryHandler.FulfillSession).Methods("POST")
+	router.Handle("/provisioning/sessions/{sessionID}/fulfill",
+		r.requireScope(provisioningWriteScope, r.configDeliveryHandler.FulfillSession)).Methods("POST")
 
 	// GET /api/v1/provisioning/sessions - List active sessions
-	router.HandleFunc("/provisioning/sessions", r.configDeliveryHandler.ListSessions).Methods("GET")
+	router.Handle("/provisioning/sessions",
+		r.requireScope(provisioningReadScope, r.configDeliveryHandler.ListSessions)).Methods("GET")
 
 	// GET /api/v1/provisioning/sessions/{sessionID} - Get session by ID
-	router.HandleFunc("/provisioning/sessions/{sessionID}", r.configDeliveryHandler.GetSession).Methods("GET")
+	router.Handle("/provisioning/sessions/{sessionID}",
+		r.requireScope(provisioningReadScope, r.configDeliveryHandler.GetSession)).Methods("GET")
 }

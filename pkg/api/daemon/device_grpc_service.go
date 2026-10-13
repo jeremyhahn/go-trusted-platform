@@ -1094,6 +1094,10 @@ func deviceStatusError(err error) error {
 	if errors.As(err, &noConfig) {
 		return status.Error(codes.NotFound, errStr)
 	}
+	var serialTaken device.ErrDeviceSerialExists
+	if errors.As(err, &serialTaken) {
+		return status.Error(codes.AlreadyExists, errStr)
+	}
 	// A daemon started without the template or profile service cannot
 	// serve the template RPCs, as errTemplateServiceUnavailable answers.
 	var templateDependency device.ErrTemplateProfileDependency

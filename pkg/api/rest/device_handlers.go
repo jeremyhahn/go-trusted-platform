@@ -99,22 +99,6 @@ func (e ErrProfileNotFound) Error() string {
 	return fmt.Sprintf("profile not found with ID: %d", e.ID)
 }
 
-// ErrDeviceSerialRequired is returned when device serial is required but not provided.
-type ErrDeviceSerialRequired struct{}
-
-func (e ErrDeviceSerialRequired) Error() string {
-	return "device serial is required"
-}
-
-// ErrDeviceAlreadyExists is returned when a device already exists.
-type ErrDeviceAlreadyExists struct {
-	Serial string
-}
-
-func (e ErrDeviceAlreadyExists) Error() string {
-	return fmt.Sprintf("device already exists with serial: %s", e.Serial)
-}
-
 // ErrDeviceOperationFailed is returned when a device operation fails.
 type ErrDeviceOperationFailed struct {
 	Operation string
@@ -200,30 +184,6 @@ func (e ErrMissingAttestationData) Error() string {
 // =============================================================================
 // Request/Response Types
 // =============================================================================
-
-// DeviceRegisterRequest represents a device registration request.
-type DeviceRegisterRequest struct {
-	Serial     string `json:"serial"`
-	Model      string `json:"model,omitempty"`
-	AttestPub  string `json:"attest_pub,omitempty"`
-	AttestCert string `json:"attest_cert,omitempty"`
-	SigningPub string `json:"signing_pub,omitempty"`
-	EKCert     string `json:"ek_cert,omitempty"`
-	EventLog   []byte `json:"event_log,omitempty"`
-	HashAlgoID uint32 `json:"hash_algo_id,omitempty"`
-}
-
-// DeviceUpdateRequest represents a device update request.
-type DeviceUpdateRequest struct {
-	Serial     string `json:"serial,omitempty"`
-	Model      string `json:"model,omitempty"`
-	AttestPub  string `json:"attest_pub,omitempty"`
-	AttestCert string `json:"attest_cert,omitempty"`
-	SigningPub string `json:"signing_pub,omitempty"`
-	EKCert     string `json:"ek_cert,omitempty"`
-	EventLog   []byte `json:"event_log,omitempty"`
-	HashAlgoID uint32 `json:"hash_algo_id,omitempty"`
-}
 
 // DeviceResponse represents a device in API responses.
 type DeviceResponse struct {
@@ -492,6 +452,7 @@ type ProfileListResponse struct {
 
 // DeviceServiceInterface defines the interface for device operations.
 type DeviceServiceInterface interface {
+	Create(ctx context.Context, device *entities.Device) error
 	Save(ctx context.Context, device *entities.Device) error
 	Get(ctx context.Context, id uint64) (*entities.Device, error)
 	Delete(ctx context.Context, device *entities.Device) error
@@ -631,44 +592,22 @@ func (h *DeviceHandlers) handleRegisterDevice(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	var req DeviceRegisterRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
+	// The webservice listener serves this route with the same decoder and
+	// validator (#484), so a body is accepted or refused alike on both.
+	newDevice, err := device.DecodeCreateRequest(r.Body)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, err)
 		return
 	}
 
-	if req.Serial == "" {
-		h.writeError(w, http.StatusBadRequest, ErrDeviceSerialRequired{})
-		return
-	}
-
-	// Generate device ID from serial
-	deviceID := generateDeviceID(req.Serial)
-	now := time.Now()
-
-	device := &entities.Device{
-		ID:         deviceID,
-		Serial:     req.Serial,
-		Model:      req.Model,
-		AttestPub:  req.AttestPub,
-		AttestCert: req.AttestCert,
-		SigningPub: req.SigningPub,
-		EKCert:     req.EKCert,
-		EventLog:   req.EventLog,
-		HashAlgoId: req.HashAlgoID,
-		State:      entities.DeviceStateRegistered,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-	}
-
-	if err := h.deviceService.Save(ctx, device); err != nil {
-		h.logger.Error("Failed to register device", "serial", req.Serial, "error", err)
+	if err := h.deviceService.Create(ctx, newDevice); err != nil {
+		h.logger.Error("Failed to register device", "serial", newDevice.Serial, "error", err)
 		h.writeDeviceError(w, "register", err)
 		return
 	}
 
-	resp := h.deviceToResponse(device)
-	h.logger.Info("Device registered", "id", device.ID, "serial", device.Serial)
+	resp := h.deviceToResponse(newDevice)
+	h.logger.Info("Device registered", "id", newDevice.ID, "serial", newDevice.Serial)
 	h.writeJSON(w, http.StatusCreated, resp)
 }
 
@@ -765,9 +704,11 @@ func (h *DeviceHandlers) handleUpdateDevice(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	var req DeviceUpdateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
+	// The same decoder the create path and the webservice listener use
+	// (#484). This listener patches: only the fields the body sets change.
+	req, err := device.DecodeRequest(r.Body)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -779,31 +720,7 @@ func (h *DeviceHandlers) handleUpdateDevice(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Apply updates
-	if req.Serial != "" {
-		existing.Serial = req.Serial
-	}
-	if req.Model != "" {
-		existing.Model = req.Model
-	}
-	if req.AttestPub != "" {
-		existing.AttestPub = req.AttestPub
-	}
-	if req.AttestCert != "" {
-		existing.AttestCert = req.AttestCert
-	}
-	if req.SigningPub != "" {
-		existing.SigningPub = req.SigningPub
-	}
-	if req.EKCert != "" {
-		existing.EKCert = req.EKCert
-	}
-	if req.EventLog != nil {
-		existing.EventLog = req.EventLog
-	}
-	if req.HashAlgoID != 0 {
-		existing.HashAlgoId = req.HashAlgoID
-	}
+	applyDevicePatch(existing, req)
 	existing.UpdatedAt = time.Now()
 
 	if err := h.deviceService.Update(ctx, existing); err != nil {
@@ -1140,7 +1057,7 @@ func (h *DeviceHandlers) handleGetDeviceBySerial(w http.ResponseWriter, r *http.
 	vars := mux.Vars(r)
 	serial := vars["serial"]
 	if serial == "" {
-		h.writeError(w, http.StatusBadRequest, ErrDeviceSerialRequired{})
+		h.writeError(w, http.StatusBadRequest, device.ErrDeviceSerialRequired{})
 		return
 	}
 
@@ -1658,22 +1575,39 @@ func (h *DeviceHandlers) writeProfileError(w http.ResponseWriter, operation stri
 // Utility Functions
 // =============================================================================
 
-// generateDeviceID generates a deterministic device ID from serial number.
-// Uses FNV-1a hash for deterministic ID generation.
-func generateDeviceID(serial string) uint64 {
-	if serial == "" {
-		return 0
+// applyDevicePatch copies onto existing every field the update request set,
+// leaving the rest as stored.
+func applyDevicePatch(existing, patch *entities.Device) {
+	if patch.Serial != "" {
+		existing.Serial = patch.Serial
 	}
-	const (
-		fnvPrime  uint64 = 1099511628211
-		fnvOffset uint64 = 14695981039346656037
-	)
-	hash := fnvOffset
-	for i := 0; i < len(serial); i++ {
-		hash ^= uint64(serial[i])
-		hash *= fnvPrime
+	if patch.Model != "" {
+		existing.Model = patch.Model
 	}
-	return hash
+	if patch.AttestPub != "" {
+		existing.AttestPub = patch.AttestPub
+	}
+	if patch.AttestCert != "" {
+		existing.AttestCert = patch.AttestCert
+	}
+	if patch.SigningPub != "" {
+		existing.SigningPub = patch.SigningPub
+	}
+	if patch.EKCert != "" {
+		existing.EKCert = patch.EKCert
+	}
+	if patch.EventLog != nil {
+		existing.EventLog = patch.EventLog
+	}
+	if patch.HashAlgoId != 0 {
+		existing.HashAlgoId = patch.HashAlgoId
+	}
+	if patch.SwitchName != "" {
+		existing.SwitchName = patch.SwitchName
+	}
+	if patch.SwitchPort != "" {
+		existing.SwitchPort = patch.SwitchPort
+	}
 }
 
 // generateProfileID generates a deterministic profile ID from name.
@@ -1719,6 +1653,10 @@ func isNotFoundError(err error) bool {
 func isAlreadyExistsError(err error) bool {
 	if err == nil {
 		return false
+	}
+	var serialTaken device.ErrDeviceSerialExists
+	if errors.As(err, &serialTaken) {
+		return true
 	}
 	errStr := err.Error()
 	return contains(errStr, "already exists") || contains(errStr, "duplicate")

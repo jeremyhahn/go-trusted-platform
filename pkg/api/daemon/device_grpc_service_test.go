@@ -2192,6 +2192,12 @@ func TestDeviceGRPCService_toGRPCError(t *testing.T) {
 		assert.Equal(t, codes.AlreadyExists, st.Code())
 	})
 
+	t.Run("taken serial", func(t *testing.T) {
+		err := &device.WrappedError{Msg: "create", Err: device.ErrDeviceSerialExists{Serial: "SN1"}}
+		result := svc.toGRPCError(err)
+		assert.Equal(t, codes.AlreadyExists, status.Code(result))
+	})
+
 	t.Run("generic error", func(t *testing.T) {
 		err := errors.New("some internal error")
 		result := svc.toGRPCError(err)

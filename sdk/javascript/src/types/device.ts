@@ -362,8 +362,8 @@ function selectorOrDefault(value: string | undefined, fallback: string): string 
  * Create device request
  */
 export interface CreateDeviceRequest {
-  /** Device to create */
-  device: Partial<Device>;
+  /** Device to create. The serial is required; the server refuses an empty one. */
+  device: Partial<Device> & Pick<Device, 'serial'>;
 }
 
 /**

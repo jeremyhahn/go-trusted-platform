@@ -468,6 +468,52 @@ func (e ErrRegistrationEKIdentityUnbound) Error() string {
 // Unwrap returns the underlying cause.
 func (e ErrRegistrationEKIdentityUnbound) Unwrap() error { return e.Cause }
 
+// ErrDeviceSerialRequired reports a device create request without a serial.
+// Every REST listener refuses it with HTTP 400 (#484).
+type ErrDeviceSerialRequired struct{}
+
+// Error returns the error message.
+func (ErrDeviceSerialRequired) Error() string {
+	return "device serial is required"
+}
+
+// ErrDeviceSerialExists is returned when a create names a serial another
+// device already holds. The serial is the identity enrollment matches a TPM
+// against, so two rows holding it would make that match ambiguous.
+type ErrDeviceSerialExists struct {
+	Serial string
+}
+
+// Error returns the error message.
+func (e ErrDeviceSerialExists) Error() string {
+	return fmt.Sprintf("device already exists with serial: %s", e.Serial)
+}
+
+// ErrDeviceRequestConflict reports a device request that sets the same field
+// flat and inside the {device:{...}} envelope to different values.
+type ErrDeviceRequestConflict struct {
+	Field string
+}
+
+// Error returns the error message.
+func (e ErrDeviceRequestConflict) Error() string {
+	return fmt.Sprintf("device request sets %q flat and in the device envelope to different values", e.Field)
+}
+
+// ErrDeviceRequestBody reports a device request body that is not valid JSON
+// for the device request shape.
+type ErrDeviceRequestBody struct {
+	Cause error
+}
+
+// Error returns the error message.
+func (e ErrDeviceRequestBody) Error() string {
+	return fmt.Sprintf("invalid device request body: %v", e.Cause)
+}
+
+// Unwrap returns the decoding error.
+func (e ErrDeviceRequestBody) Unwrap() error { return e.Cause }
+
 // ErrRegistrationSaveFailed reports a new device record that could not be
 // written.
 type ErrRegistrationSaveFailed struct {

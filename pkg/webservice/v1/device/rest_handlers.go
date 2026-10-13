@@ -16,7 +16,6 @@ package device
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -29,6 +28,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 const (
@@ -94,29 +94,15 @@ func (h *CRUDHandler) CreateDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req DeviceRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.responseWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+	// One decoder and one validator serve this listener and the daemon's
+	// (#484): the same body is accepted or refused, and persists the same
+	// entity, on both. A create without a serial is refused; nothing invents
+	// one. Identity assignment lives in DeviceService.Create (#525), which
+	// honours a non-zero id the caller supplies.
+	deviceEntity, err := device.DecodeCreateRequest(r.Body)
+	if err != nil {
+		h.responseWriter.Error400(w, r, err)
 		return
-	}
-
-	deviceEntity := h.requestToDevice(&req)
-	// Identity assignment lives in DeviceService.Create now, not here
-	// (#525): this handler minted its own ID because Save rejects a zero
-	// one, and every other transport's create verb did not, so every one
-	// of them was refused. Callers that supply an explicit ID still win —
-	// Create honours a non-zero ID exactly as this code did.
-	if deviceEntity.Serial == "" {
-		// The device service does not require a serial, but the dashboard
-		// list page can't render rows without one. Default to the
-		// generated ID so the row is identifiable until the user updates
-		// it. That needs the ID before the write, so this one branch
-		// assigns it ahead of Create, from the same NewID() allocator
-		// Create would have used.
-		if deviceEntity.ID == 0 {
-			deviceEntity.ID = device.NewID()
-		}
-		deviceEntity.Serial = fmt.Sprintf("dev-%d", deviceEntity.ID)
 	}
 
 	if err := h.deviceService.Create(r.Context(), deviceEntity); err != nil {
@@ -164,14 +150,13 @@ func (h *CRUDHandler) UpdateDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req DeviceRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.responseWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+	deviceEntity, err := device.DecodeRequest(r.Body)
+	if err != nil {
+		h.responseWriter.Error400(w, r, err)
 		return
 	}
-
-	req.ID = ID(id)
-	deviceEntity := h.requestToDevice(&req)
+	// The path names the device; an id in the body never redirects the write.
+	deviceEntity.ID = id
 
 	if err := h.deviceService.Update(r.Context(), deviceEntity); err != nil {
 		h.logger.Errorf("failed to update device: id=%d error=%v", id, err)
@@ -671,6 +656,15 @@ func (h *CRUDHandler) handleServiceError(w http.ResponseWriter, r *http.Request,
 		h.responseWriter.Error400(w, r, err)
 		return
 	}
+	var serialTaken device.ErrDeviceSerialExists
+	if errors.As(err, &serialTaken) {
+		h.responseWriter.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{
+			Code:    http.StatusConflict,
+			Error:   err.Error(),
+			Success: false,
+		})
+		return
+	}
 
 	errStr := err.Error()
 
@@ -682,76 +676,6 @@ func (h *CRUDHandler) handleServiceError(w http.ResponseWriter, r *http.Request,
 	default:
 		h.responseWriter.Error500(w, r, err)
 	}
-}
-
-func (h *CRUDHandler) requestToDevice(req *DeviceRequest) *entities.Device {
-	// Start with the flat fields and overlay anything carried in the
-	// nested {device: {...}} envelope so callers using either contract
-	// reach the same entity.
-	d := &entities.Device{
-		ID:         uint64(req.ID),
-		AttestPub:  req.AttestPub,
-		AttestCert: req.AttestCert,
-		EKCert:     req.EKCert,
-		EventLog:   req.EventLog,
-		HashAlgoId: req.HashAlgoID,
-		Model:      req.Model,
-		Serial:     req.Serial,
-		SigningPub: req.SigningPub,
-		SwitchName: req.SwitchName,
-		SwitchPort: req.SwitchPort,
-	}
-	if req.Device != nil {
-		if req.Device.ID != 0 {
-			d.ID = uint64(req.Device.ID)
-		}
-		if req.Device.AttestPub != "" {
-			d.AttestPub = req.Device.AttestPub
-		}
-		if req.Device.AttestCert != "" {
-			d.AttestCert = req.Device.AttestCert
-		}
-		if req.Device.EKCert != "" {
-			d.EKCert = req.Device.EKCert
-		}
-		if len(req.Device.EventLog) > 0 {
-			d.EventLog = req.Device.EventLog
-		}
-		if req.Device.HashAlgoID != 0 {
-			d.HashAlgoId = req.Device.HashAlgoID
-		}
-		if req.Device.Model != "" {
-			d.Model = req.Device.Model
-		}
-		if req.Device.Serial != "" {
-			d.Serial = req.Device.Serial
-		}
-		if req.Device.SigningPub != "" {
-			d.SigningPub = req.Device.SigningPub
-		}
-		if req.Device.SwitchName != "" {
-			d.SwitchName = req.Device.SwitchName
-		}
-		if req.Device.SwitchPort != "" {
-			d.SwitchPort = req.Device.SwitchPort
-		}
-	}
-	if d.Model == "" && req.Manufacturer != "" {
-		d.Model = req.Manufacturer
-	}
-	// req.Name is deliberately not mapped. entities.Device has no name,
-	// and this function used to reuse the name as the Serial when none
-	// was supplied. The console's serial field is optional and its name
-	// is required, so the ordinary registration wrote a display string
-	// into the serial: a row that can never match a TPM serial at
-	// enrollment, and that RecordHeartbeat cannot resolve because it
-	// matches on Serial or Hostname. On the update path it was worse —
-	// the service layer preserves an existing serial only when the
-	// incoming one is empty, so a PUT carrying just a name overwrote a
-	// real serial. CreateDevice synthesises a visibly-synthetic
-	// "dev-<id>" instead. Whether a device gains a real display name is
-	// open on #455.
-	return d
 }
 
 func (h *CRUDHandler) deviceToResponse(d *entities.Device) *DeviceResponse {

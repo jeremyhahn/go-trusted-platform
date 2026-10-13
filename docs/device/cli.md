@@ -127,11 +127,10 @@ connecting. A server rejection fails with
 `device register: failed to create device "<serial>": <cause>` and prints
 nothing.
 
-**Over a REST context it does not reach the daemon REST server today.** The
-SDK REST transport posts the proto shape `{"device": {…}}` to
-`POST /api/v1/devices`; the daemon REST handler accepts only the flat body and
-answers `400` for the missing serial ([api.md](api.md) §2.2). Use a `local`
-(Unix), gRPC or QUIC context.
+It works over every context, REST included: the SDK REST transport posts the
+proto shape `{"device": {…}}`, which both REST listeners accept
+([api.md](api.md) §2.2). A serial another device already carries fails with
+`AlreadyExists` on every transport.
 
 ```bash
 platformctl device register --serial SN-0001 --model r640

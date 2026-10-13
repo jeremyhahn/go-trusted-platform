@@ -15,6 +15,7 @@ package device
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 )
 
@@ -58,7 +60,7 @@ func postConsoleBody(t *testing.T, body string) (*httptest.ResponseRecorder, *mo
 	return w, deviceSvc
 }
 
-// putConsoleBody exercises the other requestToDevice caller. UpdateDevice
+// putConsoleBody exercises the other device.DecodeRequest caller. UpdateDevice
 // reads the id from the route, so the request needs mux vars.
 func putConsoleBody(t *testing.T, id uint64, existing *entities.Device, body string) (*httptest.ResponseRecorder, *mockDeviceService) {
 	t.Helper()
@@ -78,7 +80,7 @@ func putConsoleBody(t *testing.T, id uint64, existing *entities.Device, body str
 // =============================================================================
 
 // TestCreateDeviceDoesNotStoreTheNameAsTheSerial is the regression for
-// the coercion removed from requestToDevice. It previously read:
+// the coercion removed from the former requestToDevice. It previously read:
 //
 //	if d.Serial == "" && req.Device.Name != "" { d.Serial = req.Device.Name }
 //
@@ -90,17 +92,12 @@ func putConsoleBody(t *testing.T, id uint64, existing *entities.Device, body str
 // device by Serial or Hostname against the mTLS identity, so the machine
 // could not heartbeat either.
 //
-// The request now falls through to CreateDevice's existing synthesis,
-// which is visibly synthetic rather than a plausible-looking lie.
+// A name-only request is now refused: a serial is required (#484), and
+// nothing — neither the name nor a synthesised "dev-<id>" — stands in for it.
 func TestCreateDeviceDoesNotStoreTheNameAsTheSerial(t *testing.T) {
 	w, deviceSvc := postConsoleBody(t, `{"device":{"name":"rack-3 node"}}`)
 
-	require.Equal(t, http.StatusCreated, w.Code)
-	saved := savedDevice(t, deviceSvc)
-	assert.NotEqual(t, "rack-3 node", saved.Serial,
-		"a display name must never be written into the serial")
-	assert.Regexp(t, `^dev-\d+$`, saved.Serial,
-		"a name-only request falls through to the synthesised serial")
+	assertSerialRequired(t, w, deviceSvc)
 }
 
 // TestCreateDeviceDoesNotStoreTheFlatNameAsTheSerial covers the second
@@ -110,15 +107,30 @@ func TestCreateDeviceDoesNotStoreTheNameAsTheSerial(t *testing.T) {
 func TestCreateDeviceDoesNotStoreTheFlatNameAsTheSerial(t *testing.T) {
 	w, deviceSvc := postConsoleBody(t, `{"name":"rack-3 node"}`)
 
-	require.Equal(t, http.StatusCreated, w.Code)
-	saved := savedDevice(t, deviceSvc)
-	assert.NotEqual(t, "rack-3 node", saved.Serial,
-		"the flat name must never be written into the serial either")
-	assert.Regexp(t, `^dev-\d+$`, saved.Serial)
+	assertSerialRequired(t, w, deviceSvc)
+}
+
+// assertSerialRequired checks a create was refused for want of a serial and
+// wrote nothing.
+func assertSerialRequired(t *testing.T, w *httptest.ResponseRecorder, deviceSvc *mockDeviceService) {
+	t.Helper()
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, device.ErrDeviceSerialRequired{}.Error(), responseError(t, w))
+	assert.Empty(t, deviceSvc.devices, "a refused create must not write a device")
+}
+
+// responseError returns the message of a {"error":"..."} response body.
+func responseError(t *testing.T, w *httptest.ResponseRecorder) string {
+	t.Helper()
+	var body struct {
+		Error string `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	return body.Error
 }
 
 // TestUpdateDeviceDoesNotOverwriteASerialWithAName is the sharper half.
-// UpdateDevice shares requestToDevice but has no synthesis fallback, and
+// UpdateDevice decodes with device.DecodeRequest and requires no serial, and
 // the service layer preserves an existing serial only when the incoming
 // one is empty (pkg/device/service.go:214). The coercion made it
 // non-empty, so a PUT carrying a name and no serial replaced a real TPM
@@ -147,7 +159,7 @@ func TestUpdateDeviceDoesNotOverwriteASerialWithAName(t *testing.T) {
 
 // TestCreateDeviceAcceptsTheConsoleEnvelope asserts the serial inside
 // the `{device: {...}}` envelope reaches the saved entity. The envelope
-// is the proto and JS SDK shape, and requestToDevice overlays it onto
+// is the proto and JS SDK shape, and device.DecodeRequest merges it with
 // the flat fields, so a serial the operator typed is not lost.
 func TestCreateDeviceAcceptsTheConsoleEnvelope(t *testing.T) {
 	w, deviceSvc := postConsoleBody(t,
@@ -181,7 +193,8 @@ func TestCreateDeviceDiscardsTheName(t *testing.T) {
 // TestCreateDeviceIgnoresTheFormsTPMFields pins the fields the form
 // collects and the wire type declares, but which reach no persisted
 // field: `type`, `description`, `tpm_version` and `tpm_firmware_version`
-// decode into DeviceRequest and are then discarded.
+// are not declared on device.Request, so the decoder ignores them on both
+// REST listeners.
 //
 // PINS A DEFECT: four more fields the console collects and the platform
 // cannot store, the same #455 question as the name. Note the form does
@@ -214,36 +227,32 @@ func TestCreateDeviceMapsManufacturerToModel(t *testing.T) {
 	require.Equal(t, http.StatusCreated, w.Code)
 	saved := savedDevice(t, deviceSvc)
 	assert.Equal(t, "Infineon", saved.Model,
-		"requestToDevice falls back to manufacturer for an empty model")
+		"device.DecodeRequest falls back to manufacturer for an empty model")
 }
 
-// TestCreateDeviceEnvelopeOverridesFlatFields pins the precedence
-// requestToDevice documents: the nested envelope wins over the flat
-// fields, so a client that sends both is not silently served the flat
-// value.
-func TestCreateDeviceEnvelopeOverridesFlatFields(t *testing.T) {
+// TestCreateDeviceRefusesConflictingFlatAndEnvelopeFields pins the merge
+// rule (#484): a field set flat and in the envelope to different values is
+// refused, so neither listener silently picks one. Agreeing values are fine.
+func TestCreateDeviceRefusesConflictingFlatAndEnvelopeFields(t *testing.T) {
 	w, deviceSvc := postConsoleBody(t,
-		`{"serial":"FLAT","model":"FlatModel","device":{"serial":"NESTED","model":"NestedModel"}}`)
+		`{"serial":"FLAT","device":{"serial":"NESTED"}}`)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, device.ErrDeviceRequestConflict{Field: "serial"}.Error(), responseError(t, w))
+	assert.Empty(t, deviceSvc.devices)
+
+	w, deviceSvc = postConsoleBody(t, `{"serial":"SAME","device":{"serial":"SAME","model":"NestedModel"}}`)
 
 	require.Equal(t, http.StatusCreated, w.Code)
 	saved := savedDevice(t, deviceSvc)
-	assert.Equal(t, "NESTED", saved.Serial)
+	assert.Equal(t, "SAME", saved.Serial)
 	assert.Equal(t, "NestedModel", saved.Model)
 }
 
-// TestCreateDeviceWithNoIdentifierAtAll pins the synthesis: an empty
-// body yields a 201 and a saved device whose serial is "dev-<id>".
-//
-// PINS A DEFECT: the daemon REST handler rejects the identical body with
-// 400 (pkg/api/rest/device_handlers.go:538), so the two handlers for
-// this route disagree on whether a serial is required. Tracked in
-// docs/device/api.md §2.1; reconciling them removes this test.
+// TestCreateDeviceWithNoIdentifierAtAll: an empty object is refused with
+// 400 on this listener exactly as on the daemon's (#484).
 func TestCreateDeviceWithNoIdentifierAtAll(t *testing.T) {
 	w, deviceSvc := postConsoleBody(t, `{}`)
 
-	require.Equal(t, http.StatusCreated, w.Code)
-	saved := savedDevice(t, deviceSvc)
-	assert.NotZero(t, saved.ID)
-	assert.Regexp(t, `^dev-\d+$`, saved.Serial,
-		"an empty request is accepted with a synthesised serial, not rejected")
+	assertSerialRequired(t, w, deviceSvc)
 }

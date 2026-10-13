@@ -208,8 +208,8 @@ over here.
    `EKCert` and `AttestPub` are what let an attested machine prove it is the
    same machine — with no error and no audit trail.
 
-   `TenantID` was the sharpest case: `DeviceRequest` has **no tenant field at
-   all**, so `requestToDevice` cannot populate it and *every* update erased it,
+   `TenantID` was the sharpest case: `device.Request` has **no tenant field at
+   all**, so a REST update cannot populate it and *every* update erased it,
    not merely the partial ones.
 
    Merging does not freeze a field — a caller sending a new value still wins,
@@ -222,11 +222,9 @@ over here.
    it so the wire format stays consistent.
 
    Two callers mint a device id: `Service.Create` and `Register`. Transport
-   adapters do not mint their own. The single exception is the REST create
-   handler, which assigns ahead of `Create` only when the request carries no
-   serial, because the `dev-<id>` placeholder it substitutes needs the id
-   before the write. Profiles and templates mint at their own create sites
-   and are unaffected.
+   adapters do not mint their own; the webservice create handler did, for the
+   `dev-<id>` serial it synthesised, until #484 made the serial required.
+   Profiles and templates mint at their own create sites and are unaffected.
 6. **Template timestamps are service-managed.** `TemplateService.Save` sets
    `CreatedAt` if zero and always sets `UpdatedAt`; `Update` sets `UpdatedAt`.
    The device and profile services do **not** manage timestamps — `Device`

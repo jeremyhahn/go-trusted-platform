@@ -175,8 +175,9 @@ id `device profile assign --device` takes (Task 2).
 
 - **It creates a device, not a profile.** Use `device profile create` (Task 1)
   for a profile.
-- **Use a Unix, gRPC or QUIC context.** Over REST it fails today: the daemon's
-  REST handler does not accept the shape the SDK sends ([cli.md](cli.md) §2.4).
+- **The serial is required and must be unused.** A second device with the same
+  serial is refused, on every transport, rather than written beside the first
+  ([api.md](api.md) §2).
 
 ---
 

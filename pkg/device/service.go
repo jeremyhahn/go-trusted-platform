@@ -53,6 +53,9 @@ type Service struct {
 	// Writers that bypass the service and use the DAO directly are NOT
 	// covered — the service is the platform's device write path.
 	writeLocks [writeLockStripes]sync.Mutex
+	// createLock serializes creates so two racing for one serial cannot
+	// both pass the uniqueness check.
+	createLock sync.Mutex
 }
 
 // writeLock returns the stripe lock for a device ID.
@@ -100,8 +103,45 @@ func (s *Service) Create(ctx context.Context, device *entities.Device) error {
 	if device.ID == 0 {
 		device.ID = NewID()
 	}
+	// A created device starts registered with both timestamps set, whichever
+	// transport created it, so the same request persists the same entity on
+	// every listener (#484).
+	if device.State == "" {
+		device.State = entities.DeviceStateRegistered
+	}
+	if device.CreatedAt.IsZero() {
+		device.CreatedAt = time.Now()
+	}
+	if device.UpdatedAt.IsZero() {
+		device.UpdatedAt = device.CreatedAt
+	}
 
+	s.createLock.Lock()
+	defer s.createLock.Unlock()
+	if err := s.refuseTakenSerial(ctx, device.Serial); err != nil {
+		return err
+	}
 	return s.Save(ctx, device)
+}
+
+// refuseTakenSerial fails with ErrDeviceSerialExists when another device
+// already holds serial. An empty serial is not checked: no device is
+// matched by it.
+func (s *Service) refuseTakenSerial(ctx context.Context, serial string) error {
+	if serial == "" {
+		return nil
+	}
+	existing, err := s.deviceDAO.FindBySerial(ctx, serial)
+	if err != nil {
+		if isLookupMiss(err) {
+			return nil
+		}
+		return &WrappedError{Msg: "failed to check device serial", Err: err}
+	}
+	if existing != nil && existing.Serial == serial {
+		return ErrDeviceSerialExists{Serial: serial}
+	}
+	return nil
 }
 
 func (s *Service) Save(ctx context.Context, device *entities.Device) error {
@@ -223,8 +263,8 @@ func (s *Service) Update(ctx context.Context, device *entities.Device) error {
 	// error and no audit trail. A machine that had been attested could no
 	// longer prove it, and nothing said so (issue #252).
 	//
-	// TenantID is the sharpest case. DeviceRequest has no tenant field at
-	// all, so requestToDevice CANNOT populate it — every update erased it,
+	// TenantID is the sharpest case. device.Request has no tenant field at
+	// all, so a REST update CANNOT populate it — every update erased it,
 	// not merely the partial ones, detaching the device from its tenant.
 	if device.TenantID == "" {
 		device.TenantID = existing.TenantID

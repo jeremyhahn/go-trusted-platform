@@ -71,9 +71,6 @@ func newDeviceSDKServer(t *testing.T) *deviceSDKServer {
 
 	writer := response.NewResponseWriter(logger, nil)
 	root := mux.NewRouter()
-	root.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
 	v1 := root.PathPrefix("/api/v1").Subrouter()
 	deviceRouter, err := NewDeviceRouter(&MockMTLSMiddleware{}, nil,
 		wsdevice.NewCRUDHandler(logger, writer, devices, profiles),
@@ -82,6 +79,22 @@ func newDeviceSDKServer(t *testing.T) *deviceSDKServer {
 	deviceRouter.RegisterRoutes(v1)
 	restdevice.NewDeviceRouter(logger, writer, templates, profiles).RegisterRoutes(v1)
 
+	return &deviceSDKServer{
+		client:    connectDeviceSDK(t, root),
+		devices:   devices,
+		profiles:  profiles,
+		templates: templates,
+	}
+}
+
+// connectDeviceSDK serves root over TLS, adds the health route the SDK REST
+// transport probes on connect, and returns the SDK device client bound to it.
+func connectDeviceSDK(t *testing.T, root *mux.Router) platformv1.DeviceServiceClient {
+	t.Helper()
+
+	root.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 	server := httptest.NewTLSServer(root)
 	t.Cleanup(server.Close)
 
@@ -91,12 +104,7 @@ func newDeviceSDKServer(t *testing.T) *deviceSDKServer {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, adapter.Close()) })
 
-	return &deviceSDKServer{
-		client:    platformv1.NewDeviceServiceClient(adapter.Connection()),
-		devices:   devices,
-		profiles:  profiles,
-		templates: templates,
-	}
+	return platformv1.NewDeviceServiceClient(adapter.Connection())
 }
 
 // sdkProfile is a profile with every field the REST profile handlers store.

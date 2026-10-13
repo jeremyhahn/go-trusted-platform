@@ -14,6 +14,7 @@
 package metrics
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -89,18 +90,109 @@ func TestNew_Success(t *testing.T) {
 }
 
 func TestNew_NilConfig(t *testing.T) {
-	// Create new registry to avoid conflicts
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
 	m, err := New(nil)
 	require.NoError(t, err)
 	require.NotNil(t, m)
 	assert.NotNil(t, m.config)
+}
+
+// gatheredNames returns the names of the metric families the registry exposes.
+func gatheredNames(t *testing.T, registry *prometheus.Registry) map[string]bool {
+	t.Helper()
+
+	families, err := registry.Gather()
+	require.NoError(t, err)
+
+	names := make(map[string]bool, len(families))
+	for _, family := range families {
+		names[family.GetName()] = true
+	}
+	return names
+}
+
+// hasPrefix reports whether any gathered metric name starts with prefix.
+func hasPrefix(names map[string]bool, prefix string) bool {
+	for name := range names {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestNew_TwoInstancesInOneProcess(t *testing.T) {
+	first, err := New(DefaultConfig())
+	require.NoError(t, err)
+
+	second, err := New(DefaultConfig())
+	require.NoError(t, err)
+
+	require.NotSame(t, first.Registry(), second.Registry())
+
+	first.SDNActivePorts.Set(7)
+	second.SDNActivePorts.Set(3)
+
+	families, err := first.Registry().Gather()
+	require.NoError(t, err)
+
+	var activePorts float64
+	for _, family := range families {
+		if family.GetName() == first.MetricName("sdn", "active_ports") {
+			activePorts = family.GetMetric()[0].GetGauge().GetValue()
+		}
+	}
+	assert.Equal(t, float64(7), activePorts)
+}
+
+func TestNew_RegistersRuntimeAndProcessCollectors(t *testing.T) {
+	m, err := New(DefaultConfig())
+	require.NoError(t, err)
+
+	names := gatheredNames(t, m.Registry())
+	assert.True(t, names["go_goroutines"])
+	assert.True(t, hasPrefix(names, "process_"))
+}
+
+func TestNew_RuntimeAndProcessCollectorsDisabled(t *testing.T) {
+	config := DefaultConfig()
+	config.EnableRuntimeMetrics = false
+	config.EnableProcessMetrics = false
+
+	m, err := New(config)
+	require.NoError(t, err)
+
+	names := gatheredNames(t, m.Registry())
+	assert.False(t, hasPrefix(names, "go_"))
+	assert.False(t, hasPrefix(names, "process_"))
+}
+
+func TestRegisterRuntimeCollectors_AlreadyRegistered(t *testing.T) {
+	tests := []struct {
+		name          string
+		enableRuntime bool
+		enableProcess bool
+		wantCollector string
+	}{
+		{name: "go collector", enableRuntime: true, enableProcess: true, wantCollector: "go_collector"},
+		{name: "process collector", enableRuntime: false, enableProcess: true, wantCollector: "process_collector"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := DefaultConfig()
+			config.EnableRuntimeMetrics = tt.enableRuntime
+			config.EnableProcessMetrics = tt.enableProcess
+
+			m, err := New(config)
+			require.NoError(t, err)
+
+			err = m.registerRuntimeCollectors()
+
+			var registrationErr ErrCollectorRegistration
+			require.ErrorAs(t, err, &registrationErr)
+			assert.Equal(t, tt.wantCollector, registrationErr.Name)
+		})
+	}
 }
 
 func TestNew_DisabledMetrics(t *testing.T) {
@@ -125,14 +217,6 @@ func TestNew_InvalidConfig(t *testing.T) {
 }
 
 func TestSDNMetrics_Recording(t *testing.T) {
-	// Create new registry to avoid conflicts
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
 	config := DefaultConfig()
 	config.Namespace = "test_sdn"
 
@@ -163,13 +247,6 @@ func TestSDNMetrics_Recording(t *testing.T) {
 }
 
 func TestCertificateMetrics_Recording(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
 	config := DefaultConfig()
 	config.Namespace = "test_cert"
 
@@ -210,13 +287,6 @@ func TestCertificateMetrics_Recording(t *testing.T) {
 }
 
 func TestAPIMetrics_Recording(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
 	config := DefaultConfig()
 	config.Namespace = "test_api"
 
@@ -253,13 +323,6 @@ func TestAPIMetrics_Recording(t *testing.T) {
 }
 
 func TestSystemMetrics_Recording(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
 	config := DefaultConfig()
 	config.Namespace = "test_system"
 
@@ -293,13 +356,6 @@ func TestSystemMetrics_Recording(t *testing.T) {
 }
 
 func TestTPMMetrics_Recording(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
 	config := DefaultConfig()
 	config.Namespace = "test_tpm"
 
@@ -324,13 +380,6 @@ func TestTPMMetrics_Recording(t *testing.T) {
 }
 
 func TestStorageMetrics_Recording(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	oldDefault := prometheus.DefaultRegisterer
-	prometheus.DefaultRegisterer = registry
-	defer func() {
-		prometheus.DefaultRegisterer = oldDefault
-	}()
-
 	config := DefaultConfig()
 	config.Namespace = "test_storage"
 

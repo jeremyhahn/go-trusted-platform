@@ -87,7 +87,7 @@ routes were registered and the web console was calling them, so the table
 was corrected against the router (#418). The four device-facing routes carry
 no role gate — a machine at boot has no certificate or session — and
 authenticate by EAB (SignDigest also by the EK); the three operator routes
-sit behind the gated router.
+sit behind the gated router and take the gRPC scopes (§6).
 
 `FulfillSession` is the **authorisation step**: a provisioning session stays
 pending until something with authority links a device profile to it. There is no
@@ -192,6 +192,14 @@ The EAB sub-opcodes of the same category carry the `eab` scopes
 
 `FulfillSession` is the authorisation gate for bringing a new machine onto the
 platform, so `provisioning:write` is the grant to guard.
+
+**The webservice REST operator routes take the same scopes (#484).** Behind the
+platform-token middleware, `GET /api/v1/provisioning/sessions` and
+`GET /api/v1/provisioning/sessions/{sessionID}` require `provisioning:read`
+and `POST /api/v1/provisioning/sessions/{sessionID}/fulfill` requires
+`provisioning:write`, on top of the admin role gate; a token without the scope
+gets `403`. Under the legacy JWT handler the role gate alone applies. The
+device-facing routes take no scope (§3).
 
 On MCP, the 16 BMC tools are mapped ([`docs/bmc/api.md`](../bmc/api.md) §8).
 The `provision_*` tools are not in the permission map, so every caller is

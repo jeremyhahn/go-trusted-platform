@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
@@ -25,6 +26,10 @@ import (
 type Metrics struct {
 	config *Config
 	mu     sync.RWMutex
+
+	// registry holds every collector of this instance. It is private to the
+	// instance, so a process can create more than one Metrics.
+	registry *prometheus.Registry
 
 	// SDN Operation Metrics
 	SDNPortStateChanges  *prometheus.CounterVec
@@ -85,7 +90,9 @@ type Metrics struct {
 	StorageLatency    *prometheus.HistogramVec
 }
 
-// New creates a new Metrics instance with all metrics registered
+// New creates a new Metrics instance with all metrics registered on a
+// registry of its own (see Registry); it never touches the process-global
+// Prometheus registry, so New may be called any number of times.
 func New(config *Config) (*Metrics, error) {
 	if config == nil {
 		config = DefaultConfig()
@@ -100,7 +107,8 @@ func New(config *Config) (*Metrics, error) {
 	}
 
 	m := &Metrics{
-		config: config,
+		config:   config,
+		registry: prometheus.NewRegistry(),
 	}
 
 	// Register all metrics
@@ -128,12 +136,18 @@ func New(config *Config) (*Metrics, error) {
 		return nil, err
 	}
 
+	if err := m.registerRuntimeCollectors(); err != nil {
+		return nil, err
+	}
+
 	return m, nil
 }
 
 // registerSDNMetrics registers SDN-related metrics
 func (m *Metrics) registerSDNMetrics() error {
-	m.SDNPortStateChanges = promauto.NewCounterVec(
+	factory := promauto.With(m.registry)
+
+	m.SDNPortStateChanges = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "sdn",
@@ -144,7 +158,7 @@ func (m *Metrics) registerSDNMetrics() error {
 		[]string{"port_id", "from_state", "to_state", "bridge"},
 	)
 
-	m.SDNFlowInstallations = promauto.NewCounterVec(
+	m.SDNFlowInstallations = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "sdn",
@@ -155,7 +169,7 @@ func (m *Metrics) registerSDNMetrics() error {
 		[]string{"bridge", "table", "priority", "status"},
 	)
 
-	m.SDNFlowDeletions = promauto.NewCounterVec(
+	m.SDNFlowDeletions = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "sdn",
@@ -166,7 +180,7 @@ func (m *Metrics) registerSDNMetrics() error {
 		[]string{"bridge", "table", "status"},
 	)
 
-	m.SDNFlowErrors = promauto.NewCounterVec(
+	m.SDNFlowErrors = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "sdn",
@@ -177,7 +191,7 @@ func (m *Metrics) registerSDNMetrics() error {
 		[]string{"operation", "error_type", "bridge"},
 	)
 
-	m.SDNFlowDuration = promauto.NewHistogramVec(
+	m.SDNFlowDuration = factory.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "sdn",
@@ -189,7 +203,7 @@ func (m *Metrics) registerSDNMetrics() error {
 		[]string{"operation", "bridge"},
 	)
 
-	m.SDNActivePorts = promauto.NewGauge(
+	m.SDNActivePorts = factory.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "sdn",
@@ -199,7 +213,7 @@ func (m *Metrics) registerSDNMetrics() error {
 		},
 	)
 
-	m.SDNActiveFlows = promauto.NewGauge(
+	m.SDNActiveFlows = factory.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "sdn",
@@ -209,7 +223,7 @@ func (m *Metrics) registerSDNMetrics() error {
 		},
 	)
 
-	m.SDNPolicyEvaluations = promauto.NewCounterVec(
+	m.SDNPolicyEvaluations = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "sdn",
@@ -220,7 +234,7 @@ func (m *Metrics) registerSDNMetrics() error {
 		[]string{"port_id", "result", "reason"},
 	)
 
-	m.SDNAuthAttempts = promauto.NewCounterVec(
+	m.SDNAuthAttempts = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "sdn",
@@ -231,7 +245,7 @@ func (m *Metrics) registerSDNMetrics() error {
 		[]string{"port_id", "result", "method"},
 	)
 
-	m.SDNQuarantinedPorts = promauto.NewGauge(
+	m.SDNQuarantinedPorts = factory.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "sdn",
@@ -246,7 +260,9 @@ func (m *Metrics) registerSDNMetrics() error {
 
 // registerCertificateMetrics registers certificate operation metrics
 func (m *Metrics) registerCertificateMetrics() error {
-	m.CertEnrollments = promauto.NewCounterVec(
+	factory := promauto.With(m.registry)
+
+	m.CertEnrollments = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "certificate",
@@ -257,7 +273,7 @@ func (m *Metrics) registerCertificateMetrics() error {
 		[]string{"ca", "type", "status"},
 	)
 
-	m.CertRevocations = promauto.NewCounterVec(
+	m.CertRevocations = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "certificate",
@@ -268,7 +284,7 @@ func (m *Metrics) registerCertificateMetrics() error {
 		[]string{"ca", "reason"},
 	)
 
-	m.CertRenewals = promauto.NewCounterVec(
+	m.CertRenewals = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "certificate",
@@ -279,7 +295,7 @@ func (m *Metrics) registerCertificateMetrics() error {
 		[]string{"ca", "status"},
 	)
 
-	m.CertValidations = promauto.NewCounterVec(
+	m.CertValidations = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "certificate",
@@ -290,7 +306,7 @@ func (m *Metrics) registerCertificateMetrics() error {
 		[]string{"ca", "result"},
 	)
 
-	m.CertOperationDuration = promauto.NewHistogramVec(
+	m.CertOperationDuration = factory.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "certificate",
@@ -302,7 +318,7 @@ func (m *Metrics) registerCertificateMetrics() error {
 		[]string{"operation", "ca"},
 	)
 
-	m.CertExpirations = promauto.NewGauge(
+	m.CertExpirations = factory.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "certificate",
@@ -312,7 +328,7 @@ func (m *Metrics) registerCertificateMetrics() error {
 		},
 	)
 
-	m.CertActiveCount = promauto.NewGaugeVec(
+	m.CertActiveCount = factory.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "certificate",
@@ -323,7 +339,7 @@ func (m *Metrics) registerCertificateMetrics() error {
 		[]string{"ca", "type"},
 	)
 
-	m.CertIssuanceErrors = promauto.NewCounterVec(
+	m.CertIssuanceErrors = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "certificate",
@@ -334,7 +350,7 @@ func (m *Metrics) registerCertificateMetrics() error {
 		[]string{"ca", "error_type"},
 	)
 
-	m.CertChainDepth = promauto.NewHistogramVec(
+	m.CertChainDepth = factory.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "certificate",
@@ -351,7 +367,9 @@ func (m *Metrics) registerCertificateMetrics() error {
 
 // registerAPIMetrics registers API request metrics
 func (m *Metrics) registerAPIMetrics() error {
-	m.HTTPRequests = promauto.NewCounterVec(
+	factory := promauto.With(m.registry)
+
+	m.HTTPRequests = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "http",
@@ -362,7 +380,7 @@ func (m *Metrics) registerAPIMetrics() error {
 		[]string{"method", "path", "status"},
 	)
 
-	m.HTTPRequestDuration = promauto.NewHistogramVec(
+	m.HTTPRequestDuration = factory.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "http",
@@ -374,7 +392,7 @@ func (m *Metrics) registerAPIMetrics() error {
 		[]string{"method", "path"},
 	)
 
-	m.HTTPRequestSize = promauto.NewHistogramVec(
+	m.HTTPRequestSize = factory.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "http",
@@ -386,7 +404,7 @@ func (m *Metrics) registerAPIMetrics() error {
 		[]string{"method", "path"},
 	)
 
-	m.HTTPResponseSize = promauto.NewHistogramVec(
+	m.HTTPResponseSize = factory.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "http",
@@ -398,7 +416,7 @@ func (m *Metrics) registerAPIMetrics() error {
 		[]string{"method", "path"},
 	)
 
-	m.HTTPActiveRequests = promauto.NewGauge(
+	m.HTTPActiveRequests = factory.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "http",
@@ -408,7 +426,7 @@ func (m *Metrics) registerAPIMetrics() error {
 		},
 	)
 
-	m.HTTPErrors = promauto.NewCounterVec(
+	m.HTTPErrors = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "http",
@@ -419,7 +437,7 @@ func (m *Metrics) registerAPIMetrics() error {
 		[]string{"method", "path", "error_type"},
 	)
 
-	m.GRPCRequests = promauto.NewCounterVec(
+	m.GRPCRequests = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "grpc",
@@ -430,7 +448,7 @@ func (m *Metrics) registerAPIMetrics() error {
 		[]string{"service", "method", "status"},
 	)
 
-	m.GRPCRequestDuration = promauto.NewHistogramVec(
+	m.GRPCRequestDuration = factory.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "grpc",
@@ -442,7 +460,7 @@ func (m *Metrics) registerAPIMetrics() error {
 		[]string{"service", "method"},
 	)
 
-	m.GRPCStreamMessages = promauto.NewCounterVec(
+	m.GRPCStreamMessages = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "grpc",
@@ -453,7 +471,7 @@ func (m *Metrics) registerAPIMetrics() error {
 		[]string{"service", "method", "direction"},
 	)
 
-	m.GRPCActiveStreams = promauto.NewGauge(
+	m.GRPCActiveStreams = factory.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "grpc",
@@ -468,7 +486,9 @@ func (m *Metrics) registerAPIMetrics() error {
 
 // registerSystemMetrics registers system health metrics
 func (m *Metrics) registerSystemMetrics() error {
-	m.DaemonUptime = promauto.NewGauge(
+	factory := promauto.With(m.registry)
+
+	m.DaemonUptime = factory.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "system",
@@ -478,7 +498,7 @@ func (m *Metrics) registerSystemMetrics() error {
 		},
 	)
 
-	m.DaemonStartTime = promauto.NewGauge(
+	m.DaemonStartTime = factory.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "system",
@@ -488,7 +508,7 @@ func (m *Metrics) registerSystemMetrics() error {
 		},
 	)
 
-	m.ServiceStatus = promauto.NewGaugeVec(
+	m.ServiceStatus = factory.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "system",
@@ -499,7 +519,7 @@ func (m *Metrics) registerSystemMetrics() error {
 		[]string{"service"},
 	)
 
-	m.GoroutineCount = promauto.NewGauge(
+	m.GoroutineCount = factory.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "system",
@@ -509,7 +529,7 @@ func (m *Metrics) registerSystemMetrics() error {
 		},
 	)
 
-	m.MemoryUsage = promauto.NewGaugeVec(
+	m.MemoryUsage = factory.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "system",
@@ -520,7 +540,7 @@ func (m *Metrics) registerSystemMetrics() error {
 		[]string{"type"},
 	)
 
-	m.CPUUsage = promauto.NewGauge(
+	m.CPUUsage = factory.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "system",
@@ -530,7 +550,7 @@ func (m *Metrics) registerSystemMetrics() error {
 		},
 	)
 
-	m.OpenFileDescriptors = promauto.NewGauge(
+	m.OpenFileDescriptors = factory.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "system",
@@ -540,7 +560,7 @@ func (m *Metrics) registerSystemMetrics() error {
 		},
 	)
 
-	m.DatabaseConnections = promauto.NewGaugeVec(
+	m.DatabaseConnections = factory.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "system",
@@ -551,7 +571,7 @@ func (m *Metrics) registerSystemMetrics() error {
 		[]string{"database", "state"},
 	)
 
-	m.CacheHitRate = promauto.NewCounterVec(
+	m.CacheHitRate = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "system",
@@ -562,7 +582,7 @@ func (m *Metrics) registerSystemMetrics() error {
 		[]string{"cache", "result"},
 	)
 
-	m.ErrorRate = promauto.NewCounterVec(
+	m.ErrorRate = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "system",
@@ -578,7 +598,9 @@ func (m *Metrics) registerSystemMetrics() error {
 
 // registerTPMMetrics registers TPM operation metrics
 func (m *Metrics) registerTPMMetrics() error {
-	m.TPMOperations = promauto.NewCounterVec(
+	factory := promauto.With(m.registry)
+
+	m.TPMOperations = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "tpm",
@@ -589,7 +611,7 @@ func (m *Metrics) registerTPMMetrics() error {
 		[]string{"operation", "status"},
 	)
 
-	m.TPMOperationDuration = promauto.NewHistogramVec(
+	m.TPMOperationDuration = factory.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "tpm",
@@ -601,7 +623,7 @@ func (m *Metrics) registerTPMMetrics() error {
 		[]string{"operation"},
 	)
 
-	m.TPMErrors = promauto.NewCounterVec(
+	m.TPMErrors = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "tpm",
@@ -612,7 +634,7 @@ func (m *Metrics) registerTPMMetrics() error {
 		[]string{"operation", "error_type"},
 	)
 
-	m.TPMQuoteVerifications = promauto.NewCounterVec(
+	m.TPMQuoteVerifications = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "tpm",
@@ -628,7 +650,9 @@ func (m *Metrics) registerTPMMetrics() error {
 
 // registerStorageMetrics registers storage operation metrics
 func (m *Metrics) registerStorageMetrics() error {
-	m.StorageOperations = promauto.NewCounterVec(
+	factory := promauto.With(m.registry)
+
+	m.StorageOperations = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "storage",
@@ -639,7 +663,7 @@ func (m *Metrics) registerStorageMetrics() error {
 		[]string{"backend", "operation", "status"},
 	)
 
-	m.StorageSize = promauto.NewGaugeVec(
+	m.StorageSize = factory.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "storage",
@@ -650,7 +674,7 @@ func (m *Metrics) registerStorageMetrics() error {
 		[]string{"backend", "type"},
 	)
 
-	m.StorageLatency = promauto.NewHistogramVec(
+	m.StorageLatency = factory.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace:   m.config.Namespace,
 			Subsystem:   "storage",
@@ -663,6 +687,31 @@ func (m *Metrics) registerStorageMetrics() error {
 	)
 
 	return nil
+}
+
+// registerRuntimeCollectors registers the Go runtime and process collectors
+// (go_* and process_* series) when the configuration enables them.
+func (m *Metrics) registerRuntimeCollectors() error {
+	if m.config.EnableRuntimeMetrics {
+		if err := m.registry.Register(collectors.NewGoCollector()); err != nil {
+			return ErrCollectorRegistration{Name: "go_collector", Err: err}
+		}
+	}
+
+	if m.config.EnableProcessMetrics {
+		processCollector := collectors.NewProcessCollector(collectors.ProcessCollectorOpts{})
+		if err := m.registry.Register(processCollector); err != nil {
+			return ErrCollectorRegistration{Name: "process_collector", Err: err}
+		}
+	}
+
+	return nil
+}
+
+// Registry returns the registry holding this instance's collectors. Serve it
+// with promhttp.HandlerFor, or register further collectors on it.
+func (m *Metrics) Registry() *prometheus.Registry {
+	return m.registry
 }
 
 // Config returns the metrics configuration

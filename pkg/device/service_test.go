@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -1235,6 +1236,43 @@ func TestService_Create_HonoursCallerSuppliedID(t *testing.T) {
 	assert.Equal(t, "SN-CREATE-002", stored.Serial)
 }
 
+// Every transport creates through Service.Create, so the defaults it fills
+// in are what makes the same body persist the same entity on each (#484).
+func TestService_Create_DefaultsStateAndTimestamps(t *testing.T) {
+	service, err := NewService(testServiceDatastore(t))
+	require.NoError(t, err)
+
+	device := &entities.Device{Serial: "SN-CREATE-DEFAULTS"}
+	require.NoError(t, service.Create(context.Background(), device))
+
+	stored, err := service.Get(context.Background(), device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, entities.DeviceStateRegistered, stored.State)
+	assert.False(t, stored.CreatedAt.IsZero(), "CreatedAt must be stamped")
+	assert.True(t, stored.UpdatedAt.Equal(stored.CreatedAt), "a new device was last updated when it was created")
+}
+
+func TestService_Create_KeepsCallerStateAndTimestamps(t *testing.T) {
+	service, err := NewService(testServiceDatastore(t))
+	require.NoError(t, err)
+
+	created := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	updated := created.Add(time.Hour)
+	device := &entities.Device{
+		Serial:    "SN-CREATE-CALLER",
+		State:     entities.DeviceStateActivated,
+		CreatedAt: created,
+		UpdatedAt: updated,
+	}
+	require.NoError(t, service.Create(context.Background(), device))
+
+	stored, err := service.Get(context.Background(), device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, entities.DeviceStateActivated, stored.State)
+	assert.True(t, stored.CreatedAt.Equal(created))
+	assert.True(t, stored.UpdatedAt.Equal(updated))
+}
+
 // TestService_Create_MintsDistinctIdentities guards the one thing a
 // minted ID must do: two creates must not collide, or the second
 // silently overwrites the first.
@@ -1286,6 +1324,41 @@ func TestService_Create_DAOError(t *testing.T) {
 	err = service.Create(context.Background(), device)
 	assert.Error(t, err)
 	assert.NotZero(t, device.ID, "the ID is assigned before the write is attempted")
+}
+
+func TestService_Create_RefusesATakenSerial(t *testing.T) {
+	service, err := NewService(testServiceDatastore(t))
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	first := &entities.Device{Serial: "SN-TAKEN", Model: "first"}
+	require.NoError(t, service.Create(ctx, first))
+
+	err = service.Create(ctx, &entities.Device{Serial: "SN-TAKEN", Model: "second"})
+	assert.Equal(t, ErrDeviceSerialExists{Serial: "SN-TAKEN"}, err)
+	assert.Equal(t, "device already exists with serial: SN-TAKEN", err.Error())
+
+	count, err := service.Count(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "the refused create must not write a second row")
+	stored, err := service.Get(ctx, first.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "first", stored.Model)
+}
+
+func TestService_Create_SerialCheckStorageFaultIsNotADuplicate(t *testing.T) {
+	ds, mockStorage := testServiceDatastoreWithMock(t)
+	service, err := NewService(ds)
+	require.NoError(t, err)
+
+	// Stop the backend so the serial lookup fails operationally, not as a miss.
+	require.NoError(t, mockStorage.Stop(context.Background()))
+
+	err = service.Create(context.Background(), &entities.Device{Serial: "SN-FAULT"})
+	require.Error(t, err)
+	assert.False(t, errors.As(err, &ErrDeviceSerialExists{}), "a storage fault is not a taken serial: %v", err)
+	var wrapped *WrappedError
+	assert.ErrorAs(t, err, &wrapped)
 }
 
 // TestService_Save_NilDevice pins the nil guard Save gained alongside

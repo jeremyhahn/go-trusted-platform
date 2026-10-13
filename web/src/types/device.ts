@@ -85,7 +85,8 @@ export interface DeviceDetail extends Device {
 export interface RegisterDeviceInput {
   name: string;
   type: DeviceType;
-  serial?: string;
+  /** Required: POST /api/v1/devices refuses a device without a serial. */
+  serial: string;
   description?: string;
   tags?: string[];
   tpmInfo?: {

@@ -22,8 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -81,7 +79,7 @@ func (c *Collector) Start(ctx context.Context) error {
 
 	// Create HTTP server for metrics endpoint
 	mux := http.NewServeMux()
-	mux.Handle(c.config.Path, promhttp.Handler())
+	mux.Handle(c.config.Path, c.Handler())
 
 	// Add health check endpoint
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -228,41 +226,10 @@ func (c *Collector) collectProcessMetrics() {
 	// to track CPU time deltas
 }
 
-// RegisterRuntimeCollector registers the collector with the default registry
-func (c *Collector) RegisterRuntimeCollector() error {
-	if !c.config.EnableRuntimeMetrics {
-		return nil
-	}
-
-	collector := collectors.NewGoCollector()
-	if err := prometheus.Register(collector); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			return ErrCollectorRegistration{Name: "go_collector", Err: err}
-		}
-	}
-
-	return nil
-}
-
-// RegisterProcessCollector registers the process collector
-func (c *Collector) RegisterProcessCollector() error {
-	if !c.config.EnableProcessMetrics {
-		return nil
-	}
-
-	collector := collectors.NewProcessCollector(collectors.ProcessCollectorOpts{})
-	if err := prometheus.Register(collector); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			return ErrCollectorRegistration{Name: "process_collector", Err: err}
-		}
-	}
-
-	return nil
-}
-
-// Handler returns the HTTP handler for the metrics endpoint
+// Handler returns the HTTP handler for the metrics endpoint. It serves only
+// this collector's registry, never the process-global one.
 func (c *Collector) Handler() http.Handler {
-	return promhttp.Handler()
+	return promhttp.HandlerFor(c.metrics.Registry(), promhttp.HandlerOpts{})
 }
 
 // Address returns the metrics server address
