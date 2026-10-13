@@ -267,6 +267,29 @@ func (c *Client) CountProfiles(ctx context.Context) (int32, error) {
 	return resp.Count, nil
 }
 
+// CreateTemplate stores a device template and returns it with its
+// assigned ID.
+func (c *Client) CreateTemplate(ctx context.Context, template *platformv1.DeviceTemplate) (*platformv1.DeviceTemplate, error) {
+	resp, err := c.grpc.CreateTemplate(ctx, &platformv1.DeviceTemplateCreateRequest{Template: template})
+	if err != nil {
+		return nil, &ErrCreateTemplateFailed{Cause: err}
+	}
+	return resp.Template, nil
+}
+
+// CreateProfileFromTemplate derives a device profile from a template,
+// applying the set fields of overrides on top of the template's values.
+func (c *Client) CreateProfileFromTemplate(ctx context.Context, templateID uint64, overrides *platformv1.DeviceProfile) (*platformv1.DeviceProfile, error) {
+	resp, err := c.grpc.CreateProfileFromTemplate(ctx, &platformv1.CreateProfileFromTemplateRequest{
+		TemplateId: templateID,
+		Overrides:  overrides,
+	})
+	if err != nil {
+		return nil, &ErrCreateProfileFromTemplateFailed{TemplateID: templateID, Cause: err}
+	}
+	return resp.Profile, nil
+}
+
 // Activate activates a device.
 func (c *Client) Activate(ctx context.Context, serial, macAddress string) (*platformv1.ActivateDeviceResponse, error) {
 	resp, err := c.grpc.ActivateDevice(ctx, &platformv1.ActivateDeviceRequest{
@@ -312,6 +335,20 @@ func (c *Client) RecordAttestationCertificate(ctx context.Context, id uint64, op
 	return resp, nil
 }
 
+// Disable is the operator Disable Device: the control plane blocks the
+// device's switch port and records it suspended, reason as its state
+// reason. An empty reason is recorded as "disabled".
+func (c *Client) Disable(ctx context.Context, id uint64, reason string) (*platformv1.DeviceLifecycleResponse, error) {
+	resp, err := c.grpc.DisableDevice(ctx, &platformv1.DisableDeviceRequest{
+		DeviceId: strconv.FormatUint(id, 10),
+		Reason:   reason,
+	})
+	if err != nil {
+		return nil, &ErrDisableFailed{ID: id, Cause: err}
+	}
+	return resp, nil
+}
+
 // BootProofFunc computes a diskless node's boot proof over binding, the
 // channel binding of the connection the call travels on
 // (provisioning.BootChannelNonce of that TLS 1.3 connection). The SDK calls
@@ -344,6 +381,19 @@ func (c *Client) BootCertificate(ctx context.Context, identity string, sign Boot
 	resp, err := c.grpc.BootCertificate(ctx, req, bind)
 	if err != nil {
 		return nil, &ErrBootCertificateFailed{Identity: identity, Cause: err}
+	}
+	return resp, nil
+}
+
+// Enable is the operator Enable of a disabled device. The control plane
+// re-admits it to the quarantine zone and requests a re-attestation; the
+// response state is "quarantined" until a passing verdict restores it.
+func (c *Client) Enable(ctx context.Context, id uint64) (*platformv1.DeviceLifecycleResponse, error) {
+	resp, err := c.grpc.EnableDevice(ctx, &platformv1.EnableDeviceRequest{
+		DeviceId: strconv.FormatUint(id, 10),
+	})
+	if err != nil {
+		return nil, &ErrEnableFailed{ID: id, Cause: err}
 	}
 	return resp, nil
 }

@@ -15,6 +15,8 @@ Commands:
   list         List all devices
   update       Update device properties
   delete       Delete a device
+  disable      Cut a device off the fabric
+  enable       Re-admit a disabled device, pending re-attestation
   find-serial  Find device by serial number
 
 Flags:
@@ -283,6 +285,38 @@ platformctl device delete 1234567890 --yes
 Are you sure you want to delete device 1234567890? [y/N] y
 
 Device 1234567890 deleted successfully.
+```
+
+## Device Disable / Enable
+
+`disable` blocks the device's switch port and records it `suspended`.
+`enable` re-admits a `suspended` device to the quarantine zone and requests
+re-attestation; only a passing verdict restores it. Both are refused when the
+daemon has no SDN policy engine or the device has no switch port
+([cli.md §2.8](cli.md)).
+
+### Usage
+
+```bash
+platformctl device disable <id> [--reason <text>]
+platformctl device enable <id>
+```
+
+### Examples
+
+```bash
+platformctl device disable 1234567890 --reason "decommissioning rack 3"
+platformctl device enable 1234567890 --output json
+```
+
+### Output
+
+```
+Device enabled; it stays quarantined until it re-attests
+ID: 1234567890
+State: quarantined
+Previous State: suspended
+Re-attestation Requested: true
 ```
 
 ## Device Find-Serial

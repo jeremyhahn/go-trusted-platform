@@ -871,6 +871,14 @@ var templatedRouteTable = map[string]templatedRoute{
 	// {"reissue": bool}.
 	"/platform.v1.DeviceService/RecordAttestationCertificate": itemRoute("/api/v1/devices/{id:[0-9]+}/attest-cert/record", http.MethodPost, "{id:[0-9]+}", "device_id"),
 
+	// POST /api/v1/devices/{id}/disable and /enable -- the operator
+	// Enable/Disable Device flow (#250), registered in
+	// pkg/webservice/v1/router/device.go::RegisterRoutes (admin gate). The
+	// device_id request field fills the path; a disable body is
+	// {"reason": string}.
+	"/platform.v1.DeviceService/DisableDevice": itemRoute("/api/v1/devices/{id:[0-9]+}/disable", http.MethodPost, "{id:[0-9]+}", "device_id"),
+	"/platform.v1.DeviceService/EnableDevice":  itemRoute("/api/v1/devices/{id:[0-9]+}/enable", http.MethodPost, "{id:[0-9]+}", "device_id"),
+
 	// GET /api/v1/device/profiles/{id:[0-9]+} -- note the singular "device"
 	// prefix: profiles live under /api/v1/device and device records under
 	// /api/v1/devices, and no path is served under both (#266).
@@ -986,6 +994,19 @@ var templatedRouteTable = map[string]templatedRoute{
 		pathParam{placeholder: "{id}", field: "user_id"}, pathParam{placeholder: "{role}", field: "role_id"}),
 	"/platform.v1.PlatformIAMService/AddGroupMember": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}/members/{user}", http.MethodPost,
 		pathParam{placeholder: "{id}", field: "group_id"}, pathParam{placeholder: "{user}", field: "user_id"}),
+
+	// The four updates are a PUT on the item (router.go). With no row here
+	// they fell back to POST /api/v1/platformiam/update<item>, which the
+	// server does not serve, so none of them worked over REST (#401). The
+	// identifiers travel in the path; the remaining fields are the body,
+	// whose JSON names match the server's Update<Item>Request.
+	"/platform.v1.PlatformIAMService/UpdateUser": tenantItemRoute("/api/v1/iam/tenants/{tenant}/users/{id}", http.MethodPut,
+		pathParam{placeholder: "{id}", field: "user_id"}),
+	"/platform.v1.PlatformIAMService/UpdateRole": tenantItemRoute("/api/v1/iam/tenants/{tenant}/roles/{id}", http.MethodPut,
+		pathParam{placeholder: "{id}", field: "role_id"}),
+	"/platform.v1.PlatformIAMService/UpdateGroup": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}", http.MethodPut,
+		pathParam{placeholder: "{id}", field: "group_id"}),
+	"/platform.v1.PlatformIAMService/UpdateTenant": itemRoute("/api/v1/iam/tenants/{tenant}", http.MethodPut, "{tenant}", "tenant_id"),
 }
 
 // itemRoute constructs a templated route for a singular accessor: the

@@ -59,6 +59,8 @@ in-process and is the only way to use them with no daemon listening.
 | `find-serial` | `<serial>` | Find a device by serial number |
 | `register` | — | Create a device record (`CreateDevice`) |
 | `delete` | `<id>` | Delete a device by id |
+| `disable` | `<id>` | Block the device's switch port and record it suspended, §2.7 |
+| `enable` | `<id>` | Re-admit a disabled device to quarantine pending re-attestation, §2.7 |
 | `profile` | — | Sub-group, §3 |
 
 ### 2.1 `device list`
@@ -230,6 +232,38 @@ nothing fails the command with its stderr (`ErrBootQuoteCommandFailed`).
 those transports carry no TLS connection to bind to. A refusal from the
 control plane exits non-zero with its reason. A diskless node makes the real
 requests itself; the commands exist to exercise the same path by hand.
+
+### 2.8 `device disable <id> [--reason]` and `device enable <id>`
+
+The operator's two lifecycle transitions (#250,
+[architecture.md §4.6](architecture.md#46-operator-disable-and-enable-250)).
+Each is its own control-plane call — `DisableDevice` / `EnableDevice` — and
+never a device update.
+
+| Flag | Verb | Type | Default | Meaning |
+|---|---|---|---|---|
+| `--reason` | `disable` | string | — | Why the device is disabled; stored as `operator: <reason>` (at most 256 bytes) |
+
+`disable` blocks the device's switch port and records it `suspended`. `enable`
+re-admits the port to the quarantine zone, records the device `quarantined` and
+asks the attestation collector to quote it now; only a passing verdict restores
+its previous state. `enable` asks for no confirmation; neither does `disable`
+— the console confirms, the CLI does not.
+
+```bash
+platformctl device disable 4398046511105 --reason "decommissioning rack 3"
+platformctl device enable 4398046511105 -o json
+```
+
+Table output leads with `Device disabled` or `Device enabled; it stays
+quarantined until it re-attests`, then ID, State, Previous State, Reason (when
+set) and, for `enable`, Re-attestation Requested. JSON output is
+`{id, state, previous_state, state_reason, reattestation_requested}` with `id`
+a number. A refusal exits non-zero with `device <id> not disabled: <control
+plane message>` (or `not enabled`); the control plane refuses on a daemon with
+no SDN policy engine, for a device with no switch port, and for a transition
+the lifecycle does not allow — the refusals are tabled in [user.md](user.md)
+and [api.md §4.7](api.md#47-operator-disable-and-enable-250).
 
 ---
 
@@ -425,7 +459,10 @@ Use `platformctl device profile get|list` for reads and
 matching and the by-MAC / by-serial lookups remain REST/gRPC/QUIC/MCP only
 ([api.md](api.md) §3) until the group is implemented (#460).
 
-**No CLI verb covers**: device update, profile delete, template CRUD, device activation, or
+**No CLI verb covers**: device update (a lifecycle state is changed only by
+`disable`/`enable`, §2.7), profile delete, template CRUD (including template
+create and create-profile-from-template, which every transport and the Go SDK
+`device.Client` serve — [api.md](api.md) §4), device activation, or
 `find-config`. Reach those through the transports in [api.md](api.md).
 
 **Parity gap.** `conventions/feature-docs.md` §4 requires every verb here to

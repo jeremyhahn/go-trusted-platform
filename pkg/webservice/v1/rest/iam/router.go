@@ -34,7 +34,8 @@ const (
 
 // RequestedTenant returns the tenant a request names: the URL's {tenant}
 // variable on the tenant-scoped routes, otherwise the tenant_id query
-// parameter. It is empty when the request names no tenant.
+// parameter. It is empty when the request names no tenant. A scoped route's
+// query never overrides its path: tenantScoped refuses a conflicting one.
 //
 // It is the extractor the daemon hands to RequireOwnTenant, so a request
 // naming a tenant other than the caller's is refused with 403 on either
@@ -197,7 +198,9 @@ func (r *IAMRouter) registerFlatRoutes(router *mux.Router) {
 // would let a tenant administrator reach any other tenant by naming it.
 // Every flat route needs it too: there a request names its tenant with the
 // tenant_id query parameter, and a foreign one must be refused rather than
-// silently answered from the session's tenant (#401).
+// silently answered from the session's tenant (#401). A scoped route whose
+// tenant_id query names a tenant other than the path's is refused too
+// (consistentTenant), rather than served from the path's tenant.
 //
 // It is applied per route rather than on the subtree because the tenant
 // RECORD routes (/tenants/{tenant}) share the same variable but are a
@@ -205,7 +208,7 @@ func (r *IAMRouter) registerFlatRoutes(router *mux.Router) {
 // carry systemOnly instead. TestRegisterRoutes_EveryTenantScopedRouteIsGuarded
 // keeps a newly added route from missing this.
 func (r *IAMRouter) tenantScoped(h http.HandlerFunc) http.Handler {
-	return r.authz.RequireOwnTenant(h)
+	return r.authz.RequireOwnTenant(r.handlers.consistentTenant(h))
 }
 
 // systemOnly wraps a handler in the system-tenant guard. It is applied per

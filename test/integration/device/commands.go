@@ -4,8 +4,10 @@ package device
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // DeviceCommands defines the interface for device operations across all protocols
@@ -105,6 +107,48 @@ type DeviceCommands interface {
 
 	// AssignProfileToDevice assigns a profile to a device identity
 	AssignProfileToDevice(ctx context.Context, opts AssignProfileToDeviceOptions) (*AssignProfileToDeviceResult, error)
+
+	// Operator Lifecycle (#250)
+
+	// DisableDevice blocks the device's switch port and records it suspended
+	DisableDevice(ctx context.Context, opts DisableDeviceOptions) (*DeviceLifecycleResult, error)
+
+	// EnableDevice re-admits a suspended device to quarantine pending re-attestation
+	EnableDevice(ctx context.Context, opts EnableDeviceOptions) (*DeviceLifecycleResult, error)
+}
+
+// DisableDeviceOptions contains options for the operator Disable Device.
+type DisableDeviceOptions struct {
+	DeviceID string `json:"device_id"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+// EnableDeviceOptions contains options for the operator Enable Device.
+type EnableDeviceOptions struct {
+	DeviceID string `json:"device_id"`
+}
+
+// DeviceLifecycleResult is the answer to a disable or enable: the state the
+// transition recorded and the state the device left. Every adapter
+// normalizes its transport's encoding of the id into DeviceID.
+type DeviceLifecycleResult struct {
+	DeviceID               string
+	State                  string
+	PreviousState          string
+	StateReason            string
+	ReattestationRequested bool
+}
+
+// lifecycleResultFromProto converts the platform.v1 answer the gRPC, Unix,
+// QUIC and MCP transports carry.
+func lifecycleResultFromProto(resp *pb.DeviceLifecycleResponse) *DeviceLifecycleResult {
+	return &DeviceLifecycleResult{
+		DeviceID:               strconv.FormatUint(resp.GetDeviceId(), 10),
+		State:                  resp.GetState(),
+		PreviousState:          resp.GetPreviousState(),
+		StateReason:            resp.GetStateReason(),
+		ReattestationRequested: resp.GetReattestationRequested(),
+	}
 }
 
 // ============================================================================

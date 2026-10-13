@@ -256,11 +256,14 @@ var deviceServiceHandlers = map[string]string{
 	"ActivateDevice":               "ActivateDevice",
 	"AttestDevice":                 "HandleAttestDevice",
 	"RecordAttestationCertificate": "HandleRecordAttestCert",
+	"CreateTemplate":               "CreateTemplate",
 	"CreateProfileFromTemplate":    "CreateProfileFromTemplate",
 	"FindConfigForDevice":          "FindConfigForDevice",
 	"AssignProfileToDevice":        "AssignProfileToDevice",
 	"UnassignProfileFromDevice":    "UnassignProfileFromDevice",
 	"BootCertificate":              "HandleBootCertificate",
+	"DisableDevice":                "HandleDisable",
+	"EnableDevice":                 "HandleEnable",
 }
 
 // deviceServiceWrappedRoutes lists the DeviceService claims whose route sits

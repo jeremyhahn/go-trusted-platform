@@ -19,14 +19,15 @@ appears here.
 - **Unix is gRPC over a Unix domain socket**, so gRPC and Unix share a column.
 - **Embedded** is `ServiceRegistry.Device`
   (`sdk/go/transport/embedded/adapter.go:37`), dispatched by gRPC method string
-  through `registerDeviceHandlers` (`sdk/go/transport/embedded/dispatch.go:336`).
-- gRPC: `DeviceService`, **23 RPCs** (`pkg/api/grpc/proto/device.proto`).
+  through `registerDeviceHandlers` (`sdk/go/transport/embedded/dispatch.go:340`).
+- gRPC: `DeviceService`, **28 RPCs** (`pkg/api/grpc/proto/device.proto`).
 - REST: `/api/v1/devices/*`, `/api/v1/device/*`
   (`pkg/webservice/v1/router/device.go`, `pkg/webservice/v1/rest/device/router.go`).
 - QUIC: top-level opcodes **`0x30`–`0x3E`**, dispatched by
   `req.Opcode >= OpDeviceRegister && req.Opcode <= OpDeviceGetMetrics`
   (`pkg/api/daemon/quic_service.go:489`). No category indirection.
-- MCP: one device tool family plus one profile family — see §6.
+- MCP: one device tool family, one profile family and two template tools —
+  see §6.
 - Go SDK: `sdk/go/services/device` — `NewClient(transport.Adapter)` or
   `NewClientFromGRPC(platformv1.DeviceServiceClient)`. Over REST the SDK sends
   every RPC to the exact route in §2, verb and id constraint included (#321).
@@ -37,11 +38,14 @@ appears here.
   (`pkg/webservice/v1`) fail on any drift. The body it sends and the reply it
   decodes are the handlers' own shapes, not the gRPC messages — see §1b.
 
-**Four DeviceService RPCs have no embedded route.**
-`CreateProfileFromTemplate`, `FindConfigForDevice`, `AssignProfileToDevice` and
-`UnassignProfileFromDevice` are absent from `registerDeviceHandlers`
-(grepped 2026-08-18), so `--transport embedded` cannot reach them even though
-gRPC, Unix and REST can. They are marked in the tables below.
+**Every DeviceService RPC has an embedded route** (#250), except the two
+channel-bound diskless boot RPCs (§4.6), which need a TLS connection the
+embedded transport does not have. The embedded
+transport hands the call to the same `DeviceServiceServer` gRPC and Unix
+serve, so a server-side refusal (including its own `Unimplemented`) reaches
+the caller unchanged. `TestDispatch_DeviceAttestationAndProfileAssignment`
+(`sdk/go/transport/embedded`) drives the attestation, template and
+profile-assignment RPCs through the generated client over the embedded conn.
 
 ---
 
@@ -141,6 +145,8 @@ gRPC, Unix, QUIC and embedded.
 | Device heartbeat (mTLS, identity from client cert) | `POST /api/v1/device/heartbeat` | machine-facing REST only — see note | machine-facing REST only | machine-facing REST only | in-process Go only: `(*device.Service).RecordHeartbeat` |
 | Get device lifecycle state | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceGetState` (`0x3D`) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Attest device (verify submitted quote evidence) | `POST /api/v1/devices/{id}/attest` | `AttestDevice` | `OpDeviceAttest` (`0x3A`) | `device_attest` | ✅ |
+| Disable device (block its port, record `suspended`) | `POST /api/v1/devices/{id}/disable` | `DisableDevice` | `OpProvisioningCategory` (`0xCF`) sub `DeviceSubDisable` (`0x25`) | `device_disable` | ✅ |
+| Enable device (re-admit to quarantine, request re-attestation) | `POST /api/v1/devices/{id}/enable` | `EnableDevice` | `OpProvisioningCategory` (`0xCF`) sub `DeviceSubEnable` (`0x26`) | `device_enable` | ✅ |
 | Deactivate device | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceDeactivate` (`0x3C`) — **returns `StatusNotImplemented`** | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Device metrics | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceGetMetrics` (`0x3E`) — **returns `StatusNotImplemented`** | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Provision device with a profile | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `device_provision` | `MISSING — docs/13 G7` |
@@ -308,9 +314,9 @@ and a saved device. The daemon REST handler rejects the same body with `400`.
 | Find profile by MAC | `GET /api/v1/device/profiles/mac/{mac}` | `FindProfileByMACAddress` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Find profile by serial | `GET /api/v1/device/profiles/serial/{serial}` | `FindProfileBySerial` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Find matching profile | `POST /api/v1/device/profiles/match` | `FindMatchingProfile` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
-| Find config for a device (EK serial / MAC) | `GET /api/v1/device/profiles/find-config` | `FindConfigForDevice` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Assign profile to a device identity (explicit `ek_serial`/`mac_address`, or `device_id` of a registered device — the server derives the EK serial from its stored EK certificate, #463) | `POST /api/v1/device/profiles/{id}/assign` | `AssignProfileToDevice` | `OpProvisioningCategory` (`0xCF`) sub `0x20` — see §3.7 | `profile_assign_to_device` | `MISSING — docs/13 G7` |
-| Unassign profile | `POST /api/v1/device/profiles/{id}/unassign` | `UnassignProfileFromDevice` | `MISSING — docs/13 G7` | `profile_unassign_from_device` | `MISSING — docs/13 G7` |
+| Find config for a device (EK serial / MAC) | `GET /api/v1/device/profiles/find-config` | `FindConfigForDevice` — no identity `InvalidArgument`, unknown identity `NotFound` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+| Assign profile to a device identity (explicit `ek_serial`/`mac_address`, or `device_id` of a registered device — the server derives the EK serial from its stored EK certificate, #463) | `POST /api/v1/device/profiles/{id}/assign` | `AssignProfileToDevice` | `OpProvisioningCategory` (`0xCF`) sub `0x20` — see §3.7 | `profile_assign_to_device` | ✅ |
+| Unassign profile | `POST /api/v1/device/profiles/{id}/unassign` | `UnassignProfileFromDevice` | `MISSING — docs/13 G7` | `profile_unassign_from_device` | ✅ |
 | Get profile over mTLS (device self-service) | `GET /api/v1/device/profile` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 
 ### 3.1 One name per resource
@@ -600,9 +606,14 @@ falls through to the config-delivery handler, the same multiplexing precedent
 the EAB sub-range uses.
 
 `DeviceSubRecordAttestCert` (`0x22`) shares that same sub-range and the same
-dispatcher; §2's attestation-certificate section records it. The device
-integration suite's QUIC adapter reaches all three through the category
-opcode rather than a top-level one.
+dispatcher; §4.5 records it. So do `DeviceSubBootCertificate` (`0x23`) and
+`DeviceSubBootDelivery` (`0x24`), the diskless boot requests of §4.6,
+`DeviceSubDisable` (`0x25`) and `DeviceSubEnable` (`0x26`), the operator
+lifecycle transitions of §4.7, and `DeviceSubTemplateCreate` (`0x27`) and
+`DeviceSubProfileFromTemplate` (`0x28`), which carry `CreateTemplate` and
+`CreateProfileFromTemplate` (§4). The device integration suite's QUIC adapter
+reaches the profile, attestation-certificate, lifecycle and template
+sub-opcodes through the category opcode rather than a top-level one.
 
 The transport table above read `MISSING` for this row until #480, while
 [`api-reference-quic.md`](api-reference-quic.md) had documented the sub-opcode
@@ -617,28 +628,71 @@ accepted gap rather than an untested one.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Create template | `POST /api/v1/device/templates` (the plural `POST` is the seeder's, §4.1) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Create template | `POST /api/v1/device/templates` (the plural `POST` is the seeder's, §4.1) → `201` envelope, `payload.id` string | `CreateTemplate` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubTemplateCreate` (`0x27`) | `device_template_create` | ✅ |
 | Get template | `GET /api/v1/device/templates/{id}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Update template | `PUT /api/v1/device/templates/{id}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Delete template | `DELETE /api/v1/device/templates/{id}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | List templates | `GET /api/v1/device/templates` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Find template by name | `GET /api/v1/device/templates/name/{name}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Create profile from template | `POST /api/v1/device/templates/{id}/create-profile`; the seeder's own `POST /api/v1/devices/templates/{id}/create-profile` → `201` envelope, `payload.id` string (§4.3) | `CreateProfileFromTemplate` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Create profile from template | `POST /api/v1/device/templates/{id}/create-profile`; the seeder's own `POST /api/v1/devices/templates/{id}/create-profile` → `201` envelope, `payload.id` string (§4.3) | `CreateProfileFromTemplate` — unset override fields (an unspecified role included) keep the template's value; unknown template `NotFound`, a daemon without a template or profile service `Unavailable` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubProfileFromTemplate` (`0x28`) | `profile_create_from_template` | ✅ |
 
-**Device templates are REST-only, and that is deliberate — with a stated
-reason.** `device.proto` carries a comment where the RPCs used to be:
+**Creating a template, and building a profile from one, is served on every
+transport (#497).** Every column of those two rows reaches the same code: the
+gRPC and Unix `DeviceService.CreateTemplate` / `CreateProfileFromTemplate`
+(`pkg/api/daemon/device_grpc_template.go`) store through the template service
+the REST handlers use, and QUIC, MCP and embedded call those two methods rather
+than a copy of them. REST and gRPC build the profile through the one
+`device.CreateProfileFromTemplate` (`pkg/device/template_service.go`). A zero
+template id is assigned by the server, as on REST. A daemon started without the
+template or the profile service answers `Unavailable` on every transport (REST
+`503`).
 
-> *"Device-template CRUD lives on the REST surface only … The
-> Create/Get/Update/Delete/List/FindByName Template RPCs that used to be
-> declared here collided with vtpm.proto's identically-named messages, never
-> got generated into device.pb.go, and were not referenced from any Go code.
-> They have been removed; if a gRPC device-template service is needed in the
-> future, define it with `DeviceTemplate…` message prefixes so the names cannot
-> collide with vtpm."*
+| Operation | REST | gRPC / Unix | QUIC | MCP | Embedded | Go SDK |
+|---|---|---|---|---|---|---|
+| CreateTemplate | yes | yes | yes | yes | yes | `device.Client.CreateTemplate` |
+| CreateProfileFromTemplate | yes | yes | yes | yes | yes | `device.Client.CreateProfileFromTemplate` |
 
-This is the one row set in this document where `MISSING` is a recorded design
-decision rather than an untracked hole. The prefix requirement is binding on
-whoever adds it back.
+The messages carry the `DeviceTemplate…` prefix (`DeviceTemplate`,
+`DeviceTemplateCreateRequest`, `DeviceTemplateCreateResponse`) that the
+removal note in `device.proto` required, so they cannot collide with
+`vtpm.proto`'s `CreateTemplateRequest`. A vTPM template
+(`VTPMService.CreateTemplate`, the `vtpm_*` tools) is a different object.
+Get, update, delete, list and find-by-name remain REST-only; those rows are
+untracked gaps.
+
+**Wire shapes.**
+
+- **QUIC**: `payload[0]` is the sub-opcode; the rest is
+  `DeviceTemplateCreateRequest` or `CreateProfileFromTemplateRequest` in the
+  build's payload codec (`quicwire.EncodePayload`); the reply is the matching
+  response message. Sub-opcodes `0x23` and `0x24` share
+  the §3.7 sub-range and dispatcher.
+- **MCP**: `device_template_create` takes `tenant_id`, `name` (required),
+  `description`, `role` (the §4.2 string), `config` (YAML **text**) and
+  `match_rules`; `profile_create_from_template` takes `template_id` (required)
+  and `overrides`, using the `profile_create` argument names. Both return the
+  domain JSON with `id` as a string; a template's `config` comes back as text.
+- **REST**: `config` is bytes, so it is **base64** in both directions. The
+  `create-profile` body is `{"overrides": ProfileRequest}` with the template id
+  in the path only. A body that does not decode is a **`400`**
+  (`ErrInvalidRequestBody`) and nothing is stored; an empty body means "no
+  overrides".
+
+**Fields the REST and MCP SDK paths refuse.** The Go SDK translates the pb
+messages into the domain JSON those two transports take. Three pb fields have
+no place in that shape, and the SDK refuses them before anything is sent
+(`provision.ErrFieldNotSupported`; MCP reports it as
+`mcp.ErrFieldNotSupported`, REST as `InvalidArgument`) rather than dropping
+them with a `2xx`:
+
+| Field | Why |
+|---|---|
+| template `bmc` | the REST and MCP template shapes carry no BMC block |
+| `overrides.tenant_id` | the profile takes the template's tenant |
+| `overrides.networks`, `overrides.platformd_config` | not part of the MCP override arguments; refused on both paths so they agree |
+
+gRPC, Unix, QUIC and embedded carry the pb message directly and are not
+limited this way.
 
 **The template routes always have a handler (#320).** `router.NewDeviceRouter`
 (`pkg/webservice/v1/router/device.go`) requires the device CRUD handler and the
@@ -941,7 +995,8 @@ that.
 serve `DeviceService.RecordAttestationCertificate`; QUIC multiplexes it as
 sub-opcode `0x22` under `OpProvisioningCategory` (0xCF), the device
 sub-range the profile-assignment verbs use; MCP's `device_record_attest_cert`
-(`device:write`) and REST delegate to the same in-process gRPC service; the
+(`device:write`), REST and the embedded transport delegate to the same
+in-process gRPC service; the
 Go SDK exposes `device.Client.RecordAttestationCertificate`; the CLI is
 `platformctl device attest-cert record <id> [--reissue] [--clear-on-refusal]`.
 The JavaScript SDK exposes `DeviceService.recordAttestCert(id, {reissue})` over
@@ -1124,6 +1179,56 @@ without calling the function or sending anything. The CLI is
 `platformctl device boot delivery --quote-command <program>`
 ([cli.md §2.7](cli.md#27-device-boot-certificate-and-device-boot-delivery)).
 
+### 4.7 Operator Disable and Enable (#250)
+
+`POST /api/v1/devices/{id}/disable` and `POST /api/v1/devices/{id}/enable`
+(admin gate) are the operator's lifecycle transitions. They are dedicated
+verbs, not a `PUT` of the `state` field: each programs the device's switch port
+through the SDN policy engine **before** it records the state, so a recorded
+state is always an enforced one
+([architecture.md §4.6](architecture.md#46-operator-disable-and-enable-250)).
+
+- **Disable** blocks the port and records `suspended` with
+  `state_reason` `operator: <reason>` (`operator: disabled` without one).
+  Request body is optional: `{"reason": "<text>"}`, at most 256 bytes.
+- **Enable** takes no body. It moves a `suspended` device to `quarantined`,
+  re-admits its port to the zone carrying lifecycle role `quarantine` and asks
+  the attestation collector to quote the device now. Only a passing verdict
+  restores the state and placement it had before the disable.
+
+Both answer in the standard envelope with the `DeviceLifecycleResponse`
+fields under proto names:
+
+```json
+{"device_id":"42","state":"quarantined","previous_state":"suspended",
+ "state_reason":"","reattestation_requested":true}
+```
+
+`reattestation_requested` is `false` on Disable, and on Enable when no
+collector took the request; the device then waits for the next scheduled
+attestation cycle.
+
+**The transitions fail closed.** Every refusal leaves the record and the port
+as they were:
+
+| Cause | Error | gRPC / Unix / MCP | QUIC | REST |
+|---|---|---|---|---|
+| The daemon has no SDN policy engine (not SDN-OVS, or no attestation quarantine observer) | `ErrLifecycleUnenforced` | `FAILED_PRECONDITION` | `0x01` | 400 |
+| The device has no `network_port_id` | `ErrDeviceNotOnFabric` | `FAILED_PRECONDITION` | `0x01` | 400 |
+| Disable from `suspended` or `revoked` | `entities.ErrInvalidTransition` | `FAILED_PRECONDITION` | `0x01` | 400 |
+| Enable from anything but `suspended`; no zone with lifecycle role `quarantine`; the engine knows no port for the device | `policy.ErrDeviceNotSuspended`, `ErrNoQuarantineZone`, `ErrUnknownDevicePort` | `FAILED_PRECONDITION` | `0x01` | 400 |
+| `reason` longer than 256 bytes; id missing or `0` | `ErrLifecycleReasonTooLong`; `ErrInvalidDeviceID` | `INVALID_ARGUMENT` | `0x09` | 400 |
+| Unknown device | — | `NOT_FOUND` | `0x02` | 404 |
+
+**One service behind all transports.** gRPC and Unix serve
+`DeviceService.DisableDevice` / `EnableDevice`; QUIC multiplexes them as
+sub-opcodes `0x25` / `0x26` under `OpProvisioningCategory` (§3.7); MCP's
+`device_disable` / `device_enable` (`device:write`) and REST delegate to the
+same in-process gRPC service; the Go SDK exposes `device.Client.Disable` /
+`Enable`, the JS SDK `DeviceService.disableDevice` / `enableDevice`,
+and the CLI `platformctl device disable <id> [--reason]` /
+`device enable <id>` ([cli.md §2.8](cli.md)).
+
 ## 5. Adjacent routes on the same router
 
 `pkg/webservice/v1/router/device.go` also registers the config-delivery
@@ -1146,15 +1251,21 @@ authenticate at the application layer via EAB and EK binding instead.
 
 ---
 
-## 6. The MCP surface: one device family, one profile family
+## 6. The MCP surface: one device family, one profile family, two template tools
 
-Two families of device-related MCP tools exist, and every tool in them is
-dispatched and scope-checked.
+Two families of device-related MCP tools exist, plus the two template tools,
+and every tool in them is dispatched and scope-checked.
 
 | Family | Registered by | Executor | In the authorization map |
 |---|---|---|---|
-| `device_register`, `device_get`, `device_find_by_serial`, `device_list`, `device_delete`, `device_update`, `device_attest`, `device_record_attest_cert`, `device_provision` | `registerDeviceTools` (`tools.go:556`) | `ExecuteTool` (`tools.go:1274`) | **yes** — `device:write` / `device:read` / `device:delete` |
-| `profile_create`, `profile_get_by_id`, `profile_list_all`, `profile_update_by_id`, `profile_delete_by_id`, `profile_assign_to_device`, `profile_unassign_from_device` | `registerDeviceToolsV2` (`device_tools.go:91`) | `deviceProfileToolDispatch` | **yes** — all seven mapped to `device:*` |
+| `device_register`, `device_get`, `device_find_by_serial`, `device_list`, `device_delete`, `device_update`, `device_attest`, `device_record_attest_cert`, `device_provision`, `device_disable`, `device_enable` | `registerDeviceTools` (`tools.go:557`) | `ExecuteTool` (`tools.go:1325`) | **yes** — `device:write` / `device:read` / `device:delete` |
+| `profile_create`, `profile_get_by_id`, `profile_list_all`, `profile_update_by_id`, `profile_delete_by_id`, `profile_assign_to_device`, `profile_unassign_from_device` | `registerDeviceToolsV2` (`device_tools.go:99`) | `deviceProfileToolDispatch` | **yes** — all seven mapped to `device:*` |
+| `device_template_create`, `profile_create_from_template` (§4) | `registerDeviceTemplateTools` (`device_template_tools.go:157`) | `deviceProfileToolDispatch` | **yes** — both `device:write` |
+
+The two template tools are not the `vtpm_*_template_*` tools, which create
+vTPM templates. A template tool called on a daemon without the template or
+profile service answers a typed JSON-RPC error, as every MCP device tool does.
+
 
 **Arguments are named after the device fields.** `device_register` takes
 `serial` (required), `model`, `ek_cert`, `attest_pub`, `attest_cert`,
@@ -1183,24 +1294,68 @@ without an executor, so an advertised-but-dead tool cannot return unnoticed.
 
 Platform tokens carry an `scp` claim in the qrdb-canonical
 `"<resource>:<action>"` form. Enforcement is per operation: gRPC
-`RequireScope`, QUIC `AuthorizeRequest`, MCP `AuthorizeTool`. The catalogs and
-their default-allow behaviour are described in
+`RequireScope`, QUIC `AuthorizeOperation`, MCP `AuthorizeTool`, webservice
+REST `RequireScope` on the routes noted below. The catalogs and their
+default-allow behaviour are described in
 [`docs/daemon/api.md`](../daemon/api.md) §5.
 
+**QUIC enforces two catalogs.** `opcodePermissions` maps every top-level
+device opcode (`0x30`–`0x3E`) and `categoryPermissions` maps the device
+sub-opcodes under `OpProvisioningCategory` (`0xCF`, keyed by `payload[0]`):
+`0x20`/`0x21` assign and unassign, `0x22` record attestation certificate,
+`0x25`/`0x26` disable and enable, `0x27` create template, `0x28` create profile
+from template — all `device:write`. The diskless boot sub-opcodes `0x23`/`0x24`
+are pre-auth (§4.6). Both catalogs are in `pkg/api/quic/opcode_permissions.go`;
+an operation absent from them is refused, so a new sub-opcode without an entry
+fails closed. `pkg/api/daemon/quic_device_authz_test.go` sends every device
+write through the daemon's QUIC handler with a read-only, a write and a missing
+token. The other `0xCF` sub-ranges are unscoped by design: config delivery
+(`0x01`–`0x07`) is machine bootstrap without a platform token, and EAB
+(`0x10`–`0x1A`) is unscoped on gRPC and MCP too
+([`docs/eab/api.md`](../eab/api.md) §5). Under mTLS-only QUIC or skipped IAM
+validation no token middleware is installed and nothing is enforced. The
+opcode tables are in [`api-reference-quic.md`](api-reference-quic.md).
+
 **`DeviceService` is in the gRPC scope catalog, and its coverage is complete**
-— all 21 RPCs are mapped in `pkg/api/grpc/method_permissions.go:147-167`,
-resource `device`:
+— all 28 RPCs but the two token-exempt boot RPCs (§4.6) are mapped in
+`pkg/api/grpc/method_permissions.go`, resource `device`:
 
 | Action | RPCs |
 |---|---|
 | `device:read` | `GetDevice`, `ListDevices`, `CountDevices`, `FindDeviceBySerial`, `GetProfile`, `ListProfiles`, `CountProfiles`, `FindMatchingProfile`, `FindProfileByMACAddress`, `FindProfileBySerial`, `FindConfigForDevice` |
-| `device:write` | `CreateDevice`, `UpdateDevice`, `ActivateDevice`, `AssignProfileToDevice`, `UnassignProfileFromDevice`, `CreateProfile`, `CreateProfileFromTemplate`, `UpdateProfile` |
+| `device:write` | `CreateDevice`, `UpdateDevice`, `ActivateDevice`, `AssignProfileToDevice`, `UnassignProfileFromDevice`, `CreateProfile`, `CreateProfileFromTemplate`, `CreateTemplate`, `UpdateProfile`, `AttestDevice`, `RecordAttestationCertificate`, `DisableDevice`, `EnableDevice` |
 | `device:delete` | `DeleteDevice`, `DeleteProfile` |
 
-`DeviceService` is one of only eleven services in that catalog. Device
-templates, being REST-only, have no scope-catalog entry at all.
+Until #250 the catalog stopped at 21: `AttestDevice` and
+`RecordAttestationCertificate` were unscoped on gRPC while QUIC and MCP checked
+them, and the lifecycle RPCs would have joined them. An unlisted method is
+default-allow, so the gap was an authorization hole, not a missing label.
+`TestScopeForMethod_EveryDeviceServiceMethodIsScoped` now walks
+`DeviceService_ServiceDesc` and fails on any method without a scope other than
+`BootCertificate` and `BootDelivery`, and pins the write methods above.
 
-On MCP, all 16 device-related tool names carry a permission — see §6.
+**Attestation is a write.** `AttestDevice` persists: the first fully verified
+quote seeds the profile's PCR baseline (§4.4), and a cryptographic failure
+quarantines the device. `RecordAttestationCertificate` stores a certificate on
+the device. Both require `device:write` on every scoped transport — gRPC, QUIC
+`OpDeviceAttest` (`0x3A`) and sub-opcode `0x22`, MCP `device_attest` /
+`device_record_attest_cert`, and the webservice REST routes
+`POST /api/v1/devices/{id}/attest` and
+`POST /api/v1/devices/{id}/attest-cert/record` — so a `device:read` token can
+look at devices but cannot change their trust state. The lifecycle routes
+`POST /api/v1/devices/{id}/disable` and `POST /api/v1/devices/{id}/enable`
+require `device:write` the same way. On the webservice the scope check applies
+behind the platform-token middleware; under the legacy JWT handler, which
+carries no scopes, the routes keep only their admin role gate. The daemon REST
+server (`pkg/api/rest`) is mTLS-only and has no scope check.
+
+`DeviceService` is one of only eleven services in that catalog. The two
+template operations require `device:write` on MCP as well
+(`device_template_create`, `profile_create_from_template` in
+`pkg/api/mcp/authz.go`). The other template routes are REST-only and have no
+scope-catalog entry.
+
+On MCP, all 20 device-related tool names carry a permission — see §6.
 
 ---
 
@@ -1209,7 +1364,7 @@ On MCP, all 16 device-related tool names carry a permission — see §6.
 | QUIC byte | Name | REST | Device cause |
 |---|---|---|---|
 | `0x00` | `StatusOK` | 200 | — |
-| `0x01` | `StatusInvalidRequest` | 400 | Payload failed to decode (`ErrQUICDecodingFailed`) |
+| `0x01` | `StatusInvalidRequest` | 400 | Payload failed to decode (`ErrQUICDecodingFailed`); a refused operator Disable/Enable (`FAILED_PRECONDITION`, §4.7) |
 | `0x02` | `StatusNotFound` | 404 | Unknown device, profile or template; `ErrNoMatchingConfig`; `ErrProfileNotFound` |
 | `0x03` | `StatusUnauthorized` | 401 | Token invalid; missing or unverified mTLS client certificate |
 | `0x04` | `StatusInternalError` | 500 | Storage failure (`*WrappedError`); `ErrARPLookupFailed`; `ErrPortTransitionFailed`; switch VLAN transition failure |

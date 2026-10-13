@@ -1805,6 +1805,11 @@ coverage-ntp:
 integration-test-ntp: build-devcontainer
 	$(call run-integration-suite,ntp)
 
+## integration-test-installer: Run the installer suite (real dnsmasq forwards the internal zone) in devcontainer
+.PHONY: integration-test-installer
+integration-test-installer: build-devcontainer
+	$(call run-integration-suite,installer)
+
 ## bench-ntp: Run time-synchronization benchmarks
 .PHONY: bench-ntp
 bench-ntp:

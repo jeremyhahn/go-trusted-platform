@@ -14,6 +14,13 @@ Base URL: `https://localhost:8443/api/v1`
 | GET | `/devices/serial/{serial}` | Find by serial |
 | POST | `/devices/{id}/attest` | Verify submitted quote evidence (see below) |
 | POST | `/devices/{id}/attest-cert/record` | Record the device's attestation certificate without re-enrolling (admin; fail-closed on `tcg-cap-verifiedTPMRestricted`; body `{"reissue": bool, "clear_on_refusal": bool}` optional; `409` when a clear loses its compare-and-clear) — [api.md §4.5](api.md#45-recording-the-attestation-certificate-without-re-enrolling-473) |
+| POST | `/devices/{id}/disable` | Block the device's switch port and record it `suspended` (admin; body `{"reason": "<text>"}` optional, at most 256 bytes; `400` when nothing can enforce it) — [api.md §4.7](api.md#47-operator-disable-and-enable-250) |
+| POST | `/devices/{id}/enable` | Re-admit a `suspended` device to the quarantine zone and request re-attestation (admin; no body; `400` when the device is not suspended) — [api.md §4.7](api.md#47-operator-disable-and-enable-250) |
+
+Both attestation routes are device writes: behind the platform-token
+middleware they require `device:write` on top of the admin role gate, and a
+token without it gets `403`. The legacy JWT handler carries no scopes, so there
+the role gate alone applies ([api.md §7](api.md#7-authorization)).
 
 ### POST `/devices/{id}/attest`
 
@@ -85,6 +92,48 @@ the plural `/devices/`; no path is served under both (#266,
 | GET | `/device/profiles/find-config` | Find the config for a device (EK serial / MAC) |
 | POST | `/device/profiles/{id}/assign` | Bind profile to a device identity (EK serial / MAC), optionally prestaging the EK certificate |
 | POST | `/device/profiles/{id}/unassign` | Clear a profile's device binding |
+
+## Template Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/device/templates` | Create a device template (singular path only — the plural `POST` is the bootstrap seeder's, [api.md §4.1](api.md#41-post-apiv1devicestemplates-belongs-to-the-bootstrap-seeder)) |
+| POST | `/device/templates/{id}/create-profile` | Build and save a profile from a stored template |
+
+### POST `/device/templates`
+
+```json
+{
+  "tenant_id": "acme",
+  "name": "edge",
+  "role": "load-balancer",
+  "config": "aG9zdG5hbWU6IGVkZ2UtMDEK",
+  "match_rules": {"mac_prefix": "00:25:90"}
+}
+```
+
+`config` is bytes, so it travels as **base64** in both directions. `name` is
+required; an omitted id is assigned by the server. The reply is `201` with the
+stored template in the `{code, success, payload}` envelope, `payload.id` a
+JSON string.
+
+### POST `/device/templates/{id}/create-profile`
+
+```json
+{"overrides": {"name": "gw-01", "ek_serial": "1234567890"}}
+```
+
+`overrides` is a full profile request
+([api.md §3](api.md)); the template id comes from the path. An empty body
+means no overrides; a body that does not decode is `400`
+(`ErrInvalidRequestBody`) and nothing is stored. The reply is `201` with the
+saved profile in the envelope.
+
+The Go SDK reaches both routes as `DeviceService/CreateTemplate` and
+`DeviceService/CreateProfileFromTemplate` through the REST adapter
+(`sdk/go/transport/rest/device_template.go`), which renders the pb messages
+in this shape and refuses the fields it has no place for
+([api.md §4](api.md#4-device-templates)).
 
 ## Device Operations
 

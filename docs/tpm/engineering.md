@@ -511,9 +511,10 @@ Recorded here so they are debts with a location, not discoveries:
    `--confirm`, `--parent`, `--password`, `--ca`, `--tls`, `--hmac`, …) that are
    not registered, and all return `ErrDaemonConnectionRequired`.
 3. **The physical-TPM QUIC surface is not scope-checked.**
-   `QUICServiceHandler.handleTPM2Category` calls `AuthorizeRequest` nowhere;
-   `pkg/api/daemon/quic_pxe.go` is the only QUIC handler that does. A validated
-   token reaches `SubOpTPM2Clear` and `SubOpTPM2Unseal`.
+   `HandleRequest` enforces the QUIC scope catalog (`pkg/api/quic/auth.go`,
+   `AuthorizeOperation`), but the `0x99` category has no entry in it and an
+   unlisted opcode is allowed. A validated token reaches `SubOpTPM2Clear` and
+   `SubOpTPM2Unseal`.
 4. **`TPMService` and `IDevIDService` are absent from the gRPC scope catalog**
    (`pkg/api/grpc/method_permissions.go`), which is default-allow. Likewise all
    31 `platform_tpm_*` and all 17 `idevid_*` / `iak_*` MCP tools are absent from

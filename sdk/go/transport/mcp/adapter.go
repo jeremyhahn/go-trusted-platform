@@ -369,6 +369,12 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.DeviceService/BootCertificate": "device_boot_certificate",
 	"/platform.v1.DeviceService/BootDelivery":    "device_boot_delivery",
 
+	// Operator Enable/Disable Device (#250). Server tools:
+	// pkg/api/mcp/tools.go device_disable / device_enable; the result is a
+	// DeviceLifecycleResponse with proto field names.
+	"/platform.v1.DeviceService/DisableDevice": "device_disable",
+	"/platform.v1.DeviceService/EnableDevice":  "device_enable",
+
 	// SDN — proto: pkg/api/grpc/proto/sdn.proto
 	"/platform.v1.SDNService/CreateBridge": "sdn_create_bridge",
 	"/platform.v1.SDNService/DeleteBridge": "sdn_delete_bridge",

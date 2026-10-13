@@ -324,12 +324,8 @@ var knownUnclassified = []string{
 	"vtpm_is_running",
 	"vtpm_template_clone",
 	"vtpm_template_create",
-	"vtpm_template_create",
-	"vtpm_template_delete",
 	"vtpm_template_delete",
 	"vtpm_template_get",
-	"vtpm_template_get",
-	"vtpm_template_list",
 	"vtpm_template_list",
 	"vtpm_validate",
 }
@@ -380,8 +376,13 @@ func TestKnownUnclassifiedHasNoStaleEntries(t *testing.T) {
 		registered[tool.Name] = true
 	}
 
-	var nowClassified, noLongerRegistered []string
+	listed := make(map[string]bool, len(knownUnclassified))
+	var nowClassified, noLongerRegistered, listedTwice []string
 	for _, name := range knownUnclassified {
+		if listed[name] {
+			listedTwice = append(listedTwice, name)
+		}
+		listed[name] = true
 		if _, ok := checker.toolPermissions[name]; ok {
 			nowClassified = append(nowClassified, name)
 		}
@@ -398,6 +399,8 @@ func TestKnownUnclassifiedHasNoStaleEntries(t *testing.T) {
 	assert.Empty(t, noLongerRegistered,
 		"these tools are no longer registered — delete their lines from "+
 			"knownUnclassified")
+	assert.Empty(t, listedTwice,
+		"these tools appear more than once in knownUnclassified — keep one line each")
 }
 
 // TestInvitationToolsAreClassified pins the #300 fix specifically: the seven

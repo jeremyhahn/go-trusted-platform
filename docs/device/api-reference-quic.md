@@ -71,7 +71,7 @@ register index and a Unix `recorded_at`); its `ProfileUpdateRequest` carries
 `tls_server_name` as a pointer, so an omitted name keeps the stored one and
 an explicit `""` clears it.
 
-## Profile Assignment and Attestation Certificate (sub-opcodes under 0xCF)
+## Profile Assignment, Attestation Certificate and Templates (sub-opcodes under 0xCF)
 
 The single-byte opcode space is fully allocated, so profile assignment
 is multiplexed under the provisioning category opcode `0xCF` (same
@@ -85,6 +85,10 @@ precedent as the EAB sub-range): `payload[0]` is the sub-opcode and
 | `0x22` | Record the device's attestation certificate without re-enrolling ([api.md §4.5](api.md#45-recording-the-attestation-certificate-without-re-enrolling-473)); a refusal is status `0x01` with the reason, and a `clear_on_refusal` clear that lost its compare-and-clear is `0x06` | `RecordAttestationCertificateRequest` | `RecordAttestationCertificateResponse` |
 | `0x23` | Boot certificate: a diskless node's proof-of-possession request for its recorded IDevID chain ([api.md §4.6](api.md#46-diskless-boot-delivery-690)) | `BootCertificateRequest` | `BootCertificateResponse` |
 | `0x24` | Boot delivery: attestation evidence in, network profile and CA bundle out ([api.md §4.6](api.md#46-diskless-boot-delivery-690)) | `BootDeliveryRequest` | `BootDeliveryResponse` |
+| `0x25` | Disable the device: block its port, record it `suspended` ([api.md §4.7](api.md#47-operator-disable-and-enable-250)); a refusal is status `0x01` | `DisableDeviceRequest` | `DeviceLifecycleResponse` |
+| `0x26` | Enable a `suspended` device into quarantine and request re-attestation; a refusal is status `0x01` | `EnableDeviceRequest` | `DeviceLifecycleResponse` |
+| `0x27` | Create a device template ([api.md §4](api.md#4-device-templates)); not a vTPM template | `DeviceTemplateCreateRequest` | `DeviceTemplateCreateResponse` |
+| `0x28` | Build and save a profile from a stored device template | `CreateProfileFromTemplateRequest` | `CreateProfileResponse` |
 
 Sub-opcodes `0x23` and `0x24` are exempt from token authentication: a
 diskless node holds no token, and the service authenticates every request
@@ -93,6 +97,9 @@ QUIC connection's TLS 1.3 session, so input computed for another connection
 is refused. A refusal of the request is status `0x09` (invalid argument) or
 `0x07` (permission denied); a service that is not configured is `Unavailable`.
 
+The template sub-opcodes answer `Unavailable` when the daemon runs without
+the template or the profile service, as gRPC and REST do.
+
 `AssignProfileToDeviceRequest` binds the profile to a device identity
 (`ek_serial` and/or `mac_address`) and may prestage the device's
 PEM-encoded EK certificate in `ek_cert` (source-agnostic: swtpm-backed
@@ -100,8 +107,48 @@ vTPM or physical hardware TPM). Unassign clears the EK serial, MAC
 address, prestaged EK certificate, and assignment state.
 
 The SDK adapter emits this framing automatically for
-`DeviceService/AssignProfileToDevice` and
-`DeviceService/UnassignProfileFromDevice`.
+`DeviceService/AssignProfileToDevice`,
+`DeviceService/UnassignProfileFromDevice`,
+`DeviceService/RecordAttestationCertificate`,
+`DeviceService/BootCertificate`,
+`DeviceService/BootDelivery`,
+`DeviceService/DisableDevice`,
+`DeviceService/EnableDevice`,
+`DeviceService/CreateTemplate` and
+`DeviceService/CreateProfileFromTemplate`.
+
+## Authorization
+
+Behind the platform-token middleware every device opcode and sub-opcode
+requires a `device:*` scope, the same scope its gRPC method takes. The
+catalogs are `opcodePermissions` (top-level opcodes) and
+`categoryPermissions` (sub-opcodes under `0xCF`, keyed by `payload[0]`) in
+`pkg/api/quic/opcode_permissions.go`; `AuthMiddleware.GuardRequest`
+resolves them through `LookupOperationPermission` after the token
+validates. A token without the scope gets `StatusPermissionDenied`; a
+request without a token gets `StatusUnauthorized`; an operation absent from
+the catalogs is refused, so a new sub-opcode without an entry fails closed.
+
+| Scope | Opcodes |
+|-------|---------|
+| `device:read` | `0x32`, `0x33`, `0x35`, `0x37`, `0x3D`, `0x3E` |
+| `device:write` | `0x30`, `0x34`, `0x36`, `0x38`, `0x3A`, `0x3B`, `0x3C`; sub-opcodes `0x20`–`0x22`, `0x25`–`0x28` |
+| `device:delete` | `0x31`, `0x39` |
+
+The boot sub-opcodes `0x23` and `0x24` are pre-auth (above), and the other
+`0xCF` sub-ranges carry no scope. Config delivery (`0x01`–`0x07`)
+is machine bootstrap: the device has no platform token, which is why its
+gRPC `ConfigDeliveryService` is not in the scope catalog either. EAB
+credential management (`0x10`–`0x1A`) is unscoped on gRPC and MCP as well;
+see [`docs/eab/api.md`](../eab/api.md) §5.
+
+Under mTLS-only QUIC, or with IAM validation skipped, the daemon installs
+no token middleware (`selectQUICAuth`), so these scopes are not enforced.
+
+`pkg/api/daemon/quic_device_authz_test.go` sends every device write
+opcode and sub-opcode through the daemon's QUIC handler and asserts that a
+`device:read` token and a missing token are refused while `device:write`
+reaches the handler.
 
 ## Go Client Example
 

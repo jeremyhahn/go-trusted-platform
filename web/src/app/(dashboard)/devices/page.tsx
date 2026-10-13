@@ -104,6 +104,7 @@ export default function DevicesPage() {
         // Status derives from lifecycle state + heartbeat freshness so
         // the status FILTER agrees with what the table renders.
         status: deriveDeviceStatus(anyDev.state ?? '', anyDev.last_heartbeat_at),
+        state: anyDev.state || undefined,
         serial: device.serial || undefined,
         model: device.model || undefined,
         // Liveness comes exclusively from the heartbeat timestamp the

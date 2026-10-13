@@ -133,7 +133,7 @@ func wireAttestationOnConfig(ctx context.Context, logger *logging.Logger, a *app
 	// available, failed attestations move devices to the quarantine zone and
 	// successful re-attestations restore them. No-op when either subsystem is
 	// absent so boot behavior is unchanged on nodes without OVS.
-	wireQuarantineObserver(svcs, w.SDNPolicy, cfg.DeviceService, logger)
+	quarantine := wireQuarantineObserver(svcs, w.SDNPolicy, cfg.DeviceService, logger)
 
 	// Attestation reporting (#226): the collector on a control plane, and
 	// on every node the caller policy for the quote routes. The policy is
@@ -158,6 +158,10 @@ func wireAttestationOnConfig(ctx context.Context, logger *logging.Logger, a *app
 	} else if w.ReportingRest != nil && w.ReportingRest.Policy != nil {
 		cfg.AttestationReporting = &daemon.ReportingHandles{Policy: w.ReportingRest.Policy}
 	}
+
+	// Operator Enable/Disable Device (#250) enforces through the quarantine
+	// manager and re-attests through the collector, so it is wired last.
+	wireDeviceLifecycle(cfg, quarantine, reportingRefresher(cfg), logger.Slog())
 	return w
 }
 

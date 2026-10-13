@@ -13,7 +13,7 @@
 #                bootstrap, ca, ceremony, piv, luks, fido2, provision,
 #                secureboot, device, tpm, cold-start, barrier-gate,
 #                restroutes, sdn, proxy, ntp, tenant, iam, attestation, lb,
-#                nat64, diskimage, netboot, ipsec.
+#                nat64, diskimage, netboot, ipsec, installer.
 #                If the first argument is not a known target, it is treated
 #                as BUILD_TAGS (backward-compatible with the prior 1-arg form).
 #                Default: all
@@ -65,6 +65,7 @@ declare -A TARGET_PACKAGES=(
     [lb]="./test/integration/sdn/"
     [nat64]="./test/integration/nat64"
     [ipsec]="./test/integration/ipsec"
+    [installer]="./test/integration/installer"
 )
 
 # Per-target -run filter, for a target that is one test of a larger
@@ -806,6 +807,10 @@ elif [ "$RUN_TARGET" = "bmc" ]; then
 elif [ "$RUN_TARGET" = "lb" ]; then
     # The load balancer test drives OVS directly and needs no daemon.
     echo "=== lb target: skipping shared platformd ==="
+elif [ "$RUN_TARGET" = "installer" ]; then
+    # The installer suite runs a real dnsmasq on the installer's rendered
+    # dnsmasq.conf against a stub upstream it starts itself; no daemon.
+    echo "=== installer target: skipping shared platformd ==="
 elif [ "$RUN_TARGET" = "diskimage" ]; then
     # The factory-image suite boots the image itself: the guest is a
     # single-node platform and is its own control plane, so no shared

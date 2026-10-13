@@ -75,7 +75,59 @@ func TestDeviceMultiProtocol(t *testing.T) {
 			t.Run("ProfileAssignment", func(t *testing.T) {
 				testProfileAssignment(t, ctx, adapter)
 			})
+			t.Run("OperatorLifecycle", func(t *testing.T) {
+				testOperatorLifecycle(t, ctx, adapter)
+			})
 		})
+	}
+}
+
+// lifecycleRefusal prefixes every refusal the device lifecycle service
+// answers for a device it cannot enforce: no SDN policy engine on this
+// control plane, or no switch port on record for the device.
+const lifecycleRefusal = "device lifecycle:"
+
+// testOperatorLifecycle drives the operator Disable/Enable Device (#250) on
+// this transport. A freshly registered device has no switch port on record,
+// so the control plane cannot cut it off and must refuse the disable, and it
+// must refuse the enable of a device that was never disabled. The refusal is
+// asserted by its text so a missing route or opcode cannot pass for one, and
+// the stored device must be left exactly as it was.
+func testOperatorLifecycle(t *testing.T, ctx context.Context, adapter DeviceCommands) {
+	tenantID := DefaultTenantID()
+	registered, err := adapter.RegisterDevice(ctx, RegisterDeviceOptions{
+		TenantID: tenantID,
+		Serial:   GenerateTestSerial(uuid.New().String()[:8] + "-lifecycle"),
+		Model:    "test-model-lifecycle",
+	})
+	if err != nil {
+		t.Fatalf("RegisterDevice failed: %v", err)
+	}
+	deviceID := fmt.Sprintf("%d", registered.Device.ID)
+
+	disabled, err := adapter.DisableDevice(ctx, DisableDeviceOptions{DeviceID: deviceID, Reason: "integration"})
+	if err == nil {
+		t.Fatalf("DisableDevice of a device with no switch port succeeded: %+v", disabled)
+	}
+	if !strings.Contains(err.Error(), lifecycleRefusal) {
+		t.Fatalf("DisableDevice failed without reaching the lifecycle service: %v", err)
+	}
+
+	enabled, err := adapter.EnableDevice(ctx, EnableDeviceOptions{DeviceID: deviceID})
+	if err == nil {
+		t.Fatalf("EnableDevice of a device that was never disabled succeeded: %+v", enabled)
+	}
+	if !strings.Contains(err.Error(), lifecycleRefusal) {
+		t.Fatalf("EnableDevice failed without reaching the lifecycle service: %v", err)
+	}
+
+	after, err := adapter.GetDevice(ctx, GetDeviceOptions{TenantID: tenantID, DeviceID: deviceID})
+	if err != nil {
+		t.Fatalf("GetDevice failed: %v", err)
+	}
+	if after.Device.State != registered.Device.State || after.Device.StateReason != registered.Device.StateReason {
+		t.Errorf("a refused transition changed the device: state %q (%q), want %q (%q)",
+			after.Device.State, after.Device.StateReason, registered.Device.State, registered.Device.StateReason)
 	}
 }
 

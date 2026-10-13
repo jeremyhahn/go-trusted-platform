@@ -316,6 +316,28 @@ func (e ErrRecordAttestCertFailed) Error() string {
 	return fmt.Sprintf("attestation certificate not recorded for device %d: %s", e.ID, e.Reason)
 }
 
+// ErrDisableDeviceFailed is returned when the control plane refuses or fails
+// an operator disable.
+type ErrDisableDeviceFailed struct {
+	ID     uint64
+	Reason string
+}
+
+func (e ErrDisableDeviceFailed) Error() string {
+	return fmt.Sprintf("device %d not disabled: %s", e.ID, e.Reason)
+}
+
+// ErrEnableDeviceFailed is returned when the control plane refuses or fails
+// an operator enable.
+type ErrEnableDeviceFailed struct {
+	ID     uint64
+	Reason string
+}
+
+func (e ErrEnableDeviceFailed) Error() string {
+	return fmt.Sprintf("device %d not enabled: %s", e.ID, e.Reason)
+}
+
 // ErrBootKeyUnreadable is returned when the --key file cannot be read or
 // holds no PEM private key that can sign.
 type ErrBootKeyUnreadable struct {

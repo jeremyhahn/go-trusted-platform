@@ -506,6 +506,32 @@ export interface DeviceAttestRequest {
 }
 
 /**
+ * Disable device request (`POST /api/v1/devices/{id}/disable`,
+ * docs/device/api.md). The device id travels in the path only.
+ */
+export interface DisableDeviceRequest {
+  /** Why the device is disabled; recorded as `operator: <reason>` */
+  reason?: string;
+}
+
+/**
+ * Result of an operator disable or enable
+ * (`pkg/webservice/v1/device/lifecycle_handler.go`, `DeviceLifecycleResponse`).
+ */
+export interface DeviceLifecycleResponse {
+  /** Device ID, a decimal string so 64-bit IDs survive JSON */
+  device_id: string;
+  /** State after the transition: `suspended` on disable, `quarantined` on enable */
+  state: string;
+  /** State the device held before the transition */
+  previous_state: string;
+  /** Recorded reason, present when one was given */
+  state_reason?: string;
+  /** True when an enable queued an immediate re-attestation */
+  reattestation_requested: boolean;
+}
+
+/**
  * Activate device request
  */
 export interface ActivateDeviceRequest {

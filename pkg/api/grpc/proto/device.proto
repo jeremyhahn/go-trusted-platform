@@ -61,6 +61,19 @@ service DeviceService {
   // denied service. Without it a refusal writes nothing.
   rpc RecordAttestationCertificate(RecordAttestationCertificateRequest) returns (RecordAttestationCertificateResponse);
 
+  // DisableDevice is the operator Disable: it cuts the device's switch port
+  // and records the device suspended, reason as its state reason. It fails
+  // FAILED_PRECONDITION when no SDN policy engine runs, when the device has
+  // no switch port, or when its state cannot move to suspended.
+  rpc DisableDevice(DisableDeviceRequest) returns (DeviceLifecycleResponse);
+
+  // EnableDevice is the operator Enable of a disabled device. It never
+  // vouches for the device: the port is re-admitted to the quarantine zone,
+  // the device recorded quarantined and a re-attestation requested; only a
+  // passing verdict restores the state and placement held before the
+  // disable. It fails FAILED_PRECONDITION when the device is not suspended.
+  rpc EnableDevice(EnableDeviceRequest) returns (DeviceLifecycleResponse);
+
   // Diskless boot. A diskless node holds its IDevID key in the TPM and has no
   // local disk, so each boot it asks the control plane for its recorded IDevID
   // chain (BootCertificate) and then for its profile and CA bundle
@@ -80,16 +93,14 @@ service DeviceService {
   // connection's exporter value, verified by the same verifier as AttestDevice.
   rpc BootDelivery(BootDeliveryRequest) returns (BootDeliveryResponse);
 
-  // Device-template CRUD lives on the REST surface only (see
-  // pkg/webservice/v1/device/template_handlers.go). The Create/Get/Update/
-  // Delete/List/FindByName Template RPCs that used to be declared here
-  // collided with vtpm.proto's identically-named messages, never got
-  // generated into device.pb.go, and were not referenced from any Go code.
-  // They have been removed; if a gRPC device-template service is needed
-  // in the future, define it with `DeviceTemplate…` message prefixes so
-  // the names cannot collide with vtpm.
-
-  // Template operations
+  // Template operations. CreateTemplate stores a device template — the
+  // blueprint CreateProfileFromTemplate turns into a profile. It is not a
+  // vTPM template (VTPMService.CreateTemplate). The remaining template
+  // reads and writes (get, update, delete, list) stay on the REST surface
+  // (pkg/webservice/v1/device/template_handlers.go). Device-template
+  // messages carry a `DeviceTemplate…` prefix so their names cannot
+  // collide with vtpm.proto's template messages.
+  rpc CreateTemplate(DeviceTemplateCreateRequest) returns (DeviceTemplateCreateResponse);
   rpc CreateProfileFromTemplate(CreateProfileFromTemplateRequest) returns (CreateProfileResponse);
 
   // Profile lookup by device identity
@@ -566,13 +577,49 @@ message RecordAttestationCertificateResponse {
   string refusal = 14;
 }
 
-// Template CRUD messages were removed from this proto to resolve a
-// fully-qualified-name collision with vtpm.proto. Device-template CRUD is
-// served from the REST surface only — see pkg/webservice/v1/device/
-// template_handlers.go. The DeviceTemplate message itself (used as a
-// nested field on other RPCs) remains defined below.
+// DisableDeviceRequest names the device to disable and why. reason is
+// trimmed, at most 256 bytes, and defaults to "disabled".
+message DisableDeviceRequest {
+  string device_id = 1;
+  string reason = 2;
+}
 
-// Template operation messages
+// EnableDeviceRequest names the disabled device to re-enable.
+message EnableDeviceRequest {
+  string device_id = 1;
+}
+
+// DeviceLifecycleResponse reports the state an operator Enable or Disable
+// left the device in.
+message DeviceLifecycleResponse {
+  Status status = 1;
+  uint64 device_id = 2;
+  // state is the device's state after the call: "suspended" after a
+  // disable, "quarantined" after an enable.
+  string state = 3;
+  string previous_state = 4;
+  string state_reason = 5;
+  // reattestation_requested is true when an enable queued an immediate
+  // re-attestation; otherwise the collector's scheduled cycle re-attests
+  // the device.
+  bool reattestation_requested = 6;
+}
+
+// Template operation messages. Device-template messages use the
+// `DeviceTemplate…` prefix: vtpm.proto already owns CreateTemplateRequest
+// and its siblings in this package.
+
+// DeviceTemplateCreateRequest carries the template to store. A zero id is
+// assigned by the server; name is required.
+message DeviceTemplateCreateRequest {
+  DeviceTemplate template = 1;
+}
+
+message DeviceTemplateCreateResponse {
+  Status status = 1;
+  DeviceTemplate template = 2;
+}
+
 
 message CreateProfileFromTemplateRequest {
   uint64 template_id = 1;

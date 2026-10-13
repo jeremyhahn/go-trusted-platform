@@ -551,6 +551,17 @@ var categorySubOpcodeMap = map[string]byte{
 	"/platform.v1.DeviceService/BootCertificate": quicwire.DeviceSubBootCertificate,
 	"/platform.v1.DeviceService/BootDelivery":    quicwire.DeviceSubBootDelivery,
 
+	// Operator Enable/Disable Device (#250): sub-opcodes 0x25 and 0x26 of
+	// the same category. Server dispatcher: handleDeviceProfileCategorySub
+	// -> handleDeviceDisable / handleDeviceEnable.
+	"/platform.v1.DeviceService/DisableDevice": quicwire.DeviceSubDisable,
+	"/platform.v1.DeviceService/EnableDevice":  quicwire.DeviceSubEnable,
+
+	// Device templates: handleDeviceTemplateCreate and
+	// handleDeviceProfileFromTemplate.
+	"/platform.v1.DeviceService/CreateTemplate":            quicwire.DeviceSubTemplateCreate,
+	"/platform.v1.DeviceService/CreateProfileFromTemplate": quicwire.DeviceSubProfileFromTemplate,
+
 	// Proxy Service — multiplexed under OpGatewayCategory (0x2F),
 	// sub-range 0x20-0x2D (the single-byte opcode space is fully
 	// allocated). Server dispatcher:
@@ -731,6 +742,10 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.DeviceService/RecordAttestationCertificate": quicwire.OpProvisioningCategory,
 	"/platform.v1.DeviceService/BootCertificate":              quicwire.OpProvisioningCategory,
 	"/platform.v1.DeviceService/BootDelivery":                 quicwire.OpProvisioningCategory,
+	"/platform.v1.DeviceService/DisableDevice":                quicwire.OpProvisioningCategory,
+	"/platform.v1.DeviceService/EnableDevice":                 quicwire.OpProvisioningCategory,
+	"/platform.v1.DeviceService/CreateTemplate":               quicwire.OpProvisioningCategory,
+	"/platform.v1.DeviceService/CreateProfileFromTemplate":    quicwire.OpProvisioningCategory,
 
 	// SDN Service — proto: pkg/api/grpc/proto/sdn.proto
 	"/platform.v1.SDNService/CreateBridge": quicwire.OpSDNCreateBridge,

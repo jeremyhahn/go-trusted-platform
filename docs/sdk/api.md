@@ -17,7 +17,7 @@ when their adapter maps it:
 
 | Transport | Where the mapping lives |
 |---|---|
-| REST | `transport/rest/adapter.go` (`grpcMethodToRESTMap`, `templatedRouteTable`), plus `ldevid.go`, `provisioning.go`, `attestation_reports.go` |
+| REST | `transport/rest/adapter.go` (`grpcMethodToRESTMap`, `templatedRouteTable`), plus `ldevid.go`, `provisioning.go`, `attestation_reports.go`, `iam.go` (single IAM resources onto the reply's resource field) |
 | QUIC | `transport/quic/adapter.go` (`grpcMethodToOpcodeMap`, `categorySubOpcodeMap`), plus `aaa_ldevid.go`, `aab_ntp.go`, `device.go`, `dns.go`, `gateway_nat64.go`, `provisioning.go` |
 | MCP | `transport/mcp/adapter.go` (`grpcMethodToMCPToolMap`), plus `attestation_reports.go`, `eab.go`, `ldevid.go`, `provisioning.go` |
 | Embedded | `transport/embedded/adapter.go` (`ServiceRegistry`), `dispatch.go` (`register<Service>Handlers`) |

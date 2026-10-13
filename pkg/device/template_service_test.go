@@ -130,6 +130,25 @@ func TestTemplateService_Save_NilTemplate(t *testing.T) {
 	assert.IsType(t, ErrNilTemplate{}, err)
 }
 
+// TestTemplateService_Save_NameRequired pins that an unnamed template is
+// rejected before it reaches storage: a template is found by name
+// (FindByName, `platformctl device register --template`), so an unnamed
+// one could never be used.
+func TestTemplateService_Save_NameRequired(t *testing.T) {
+	ds := testTemplateServiceDatastore(t)
+	ctx := context.Background()
+
+	service, err := NewTemplateService(ds)
+	require.NoError(t, err)
+
+	err = service.Save(ctx, &entities.DeviceTemplate{ID: 1})
+	assert.IsType(t, ErrTemplateNameRequired{}, err)
+
+	count, err := service.Count(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, count)
+}
+
 func TestTemplateService_Save_DAOError(t *testing.T) {
 	ds, mockStorage := testTemplateServiceDatastoreWithMock(t)
 	ctx := context.Background()
@@ -654,6 +673,54 @@ func TestTemplateService_ToProfile_NilOverrides(t *testing.T) {
 	assert.NotNil(t, profile.Config)
 }
 
+// TestTemplateService_ToProfile_UnknownRoleKeepsTemplateRole pins #497:
+// REST, gRPC, QUIC and MCP all decode an absent override role as
+// DeviceRoleUnknown, which used to replace the template's role. A known
+// override role still wins.
+func TestTemplateService_ToProfile_UnknownRoleKeepsTemplateRole(t *testing.T) {
+	ds := testTemplateServiceDatastore(t)
+	ctx := context.Background()
+
+	service, err := NewTemplateService(ds)
+	require.NoError(t, err)
+
+	template := &entities.DeviceTemplate{ID: 1, Name: "gateway", Role: entities.DeviceRoleGateway}
+	require.NoError(t, service.Save(ctx, template))
+
+	kept, err := service.ToProfile(ctx, template.ID, &entities.DeviceProfile{
+		Name: "gw-01",
+		Role: entities.DeviceRoleUnknown,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, entities.DeviceRoleGateway, kept.Role)
+
+	replaced, err := service.ToProfile(ctx, template.ID, &entities.DeviceProfile{Role: entities.DeviceRoleEdge})
+	require.NoError(t, err)
+	assert.Equal(t, entities.DeviceRoleEdge, replaced.Role)
+}
+
+// A prestaged EK certificate override travels with the EK serial and MAC
+// it binds; dropping it left the profile unable to match the hardware EK.
+func TestTemplateService_ToProfile_CarriesEKCertOverride(t *testing.T) {
+	ds := testTemplateServiceDatastore(t)
+	ctx := context.Background()
+
+	service, err := NewTemplateService(ds)
+	require.NoError(t, err)
+
+	template := &entities.DeviceTemplate{ID: 1, Name: "edge", Role: entities.DeviceRoleEdge}
+	require.NoError(t, service.Save(ctx, template))
+
+	const ekCert = "-----BEGIN CERTIFICATE-----\nprestaged\n-----END CERTIFICATE-----\n"
+	profile, err := service.ToProfile(ctx, template.ID, &entities.DeviceProfile{EKSerial: "EK-1", EKCert: ekCert})
+	require.NoError(t, err)
+	assert.Equal(t, ekCert, profile.EKCert)
+
+	bare, err := service.ToProfile(ctx, template.ID, &entities.DeviceProfile{EKSerial: "EK-2"})
+	require.NoError(t, err)
+	assert.Empty(t, bare.EKCert, "no override leaves no prestaged certificate")
+}
+
 func TestTemplateService_ToProfile_NoConfig(t *testing.T) {
 	ds := testTemplateServiceDatastore(t)
 	ctx := context.Background()
@@ -969,6 +1036,51 @@ func TestTemplateService_ToProfileWithConfigOverrides_InvalidID(t *testing.T) {
 	_, err = service.ToProfileWithConfigOverrides(ctx, 0, nil, nil)
 	assert.Error(t, err)
 	assert.IsType(t, ErrInvalidTemplateID{}, err)
+}
+
+// TestCreateProfileFromTemplate stores the derived profile under a fresh ID,
+// so every transport that calls it creates rather than merely converts.
+func TestCreateProfileFromTemplate(t *testing.T) {
+	ds := testTemplateServiceDatastore(t)
+	ctx := context.Background()
+	templates, err := NewTemplateService(ds)
+	require.NoError(t, err)
+	profiles, err := NewProfileService(ds)
+	require.NoError(t, err)
+	require.NoError(t, templates.Save(ctx, &entities.DeviceTemplate{ID: 2510, Name: "edge", Role: entities.DeviceRoleWorker}))
+
+	profile, err := CreateProfileFromTemplate(ctx, templates, profiles, 2510, &entities.DeviceProfile{Name: "edge-01"})
+	require.NoError(t, err)
+	require.NotZero(t, profile.ID)
+
+	stored, err := profiles.Get(ctx, profile.ID)
+	require.NoError(t, err, "the derived profile is saved")
+	assert.Equal(t, "edge-01", stored.Name)
+	assert.Equal(t, entities.DeviceRoleWorker, stored.Role)
+}
+
+// TestCreateProfileFromTemplate_Errors names the missing dependency and
+// passes the template service's typed errors through unchanged.
+func TestCreateProfileFromTemplate_Errors(t *testing.T) {
+	ds := testTemplateServiceDatastore(t)
+	ctx := context.Background()
+	templates, err := NewTemplateService(ds)
+	require.NoError(t, err)
+	profiles, err := NewProfileService(ds)
+	require.NoError(t, err)
+
+	_, err = CreateProfileFromTemplate(ctx, nil, profiles, 2510, nil)
+	assert.ErrorIs(t, err, ErrTemplateProfileDependency{Name: "template service"})
+	_, err = CreateProfileFromTemplate(ctx, templates, nil, 2510, nil)
+	assert.ErrorIs(t, err, ErrTemplateProfileDependency{Name: "profile service"})
+	_, err = CreateProfileFromTemplate(ctx, templates, profiles, 0, nil)
+	assert.ErrorAs(t, err, &ErrInvalidTemplateID{})
+	_, err = CreateProfileFromTemplate(ctx, templates, profiles, 404, nil)
+	assert.Error(t, err, "an unknown template")
+
+	count, err := profiles.Count(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, count, "a failed create stores no profile")
 }
 
 // TestNewRoleTemplate verifies the seeder's role-keyed template carries the

@@ -463,6 +463,12 @@ type ServiceProvider interface {
 	// the stored certificate when every candidate is refused, so the
 	// device reads as absent instead of quarantined.
 	DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue, clearOnRefusal bool) (interface{}, error)
+	// DeviceDisable blocks the device's switch port and records it
+	// suspended (see device.LifecycleService).
+	DeviceDisable(ctx context.Context, deviceID, reason string) (interface{}, error)
+	// DeviceEnable re-admits a disabled device to the quarantine zone
+	// pending a re-attestation.
+	DeviceEnable(ctx context.Context, deviceID string) (interface{}, error)
 	// DeviceBootCertificate and DeviceBootDelivery serve a diskless node's
 	// boot requests through the shared boot service, which enforces the
 	// proof of possession and the channel binding. A transport with no TLS

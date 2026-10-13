@@ -78,10 +78,11 @@ func resolvedZonesWithoutQuarantine() []zone.ZoneConfig {
 // ---- mock policy engine ----
 
 type mockPolicyEngine struct {
-	blockedPorts map[string]bool
-	portStates   map[string]PortState
-	blockPortErr error
-	setStateErr  error
+	blockedPorts   map[string]bool
+	portStates     map[string]PortState
+	blockPortErr   error
+	unblockPortErr error
+	setStateErr    error
 }
 
 func newMockPolicyEngine() *mockPolicyEngine {
@@ -131,6 +132,9 @@ func (m *mockPolicyEngine) BlockPort(portID string) error {
 }
 
 func (m *mockPolicyEngine) UnblockPort(portID string) error {
+	if m.unblockPortErr != nil {
+		return m.unblockPortErr
+	}
 	delete(m.blockedPorts, portID)
 	return nil
 }

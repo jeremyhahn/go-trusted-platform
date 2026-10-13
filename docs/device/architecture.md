@@ -355,6 +355,57 @@ Rejected alternatives:
 | **A nonce endpoint** | It adds a round trip, and the nonce still has to be tied to one connection; the exporter already is, with no server state to keep. |
 | **Serving boot over Unix or MCP with some other nonce** | Neither transport has a TLS session, so there is nothing to bind to. Refusing explicitly, with a typed error on both sides, is preferable to a weaker binding that looks equivalent. |
 
+### 4.6 Operator Disable and Enable (#250)
+
+An operator can cut a machine off and let it back on, but only through two
+dedicated verbs — never by writing `state` through the generic update, which
+refuses a lifecycle state for the reason §5 item 7 gives. Both verbs are
+served by one `device.LifecycleService` behind every transport, and both
+program the switch port **before** the record changes:
+
+```
+Disable(id, reason)                     Enable(id)
+  device has a NetworkPortID? ─ no ⇒      device has a NetworkPortID? ─ no ⇒
+    ErrDeviceNotOnFabric                    ErrDeviceNotOnFabric
+  CanTransitionTo(suspended)? ─ no ⇒      state == suspended? ─ no ⇒
+    ErrInvalidTransition                    ErrDeviceNotSuspended
+  BlockPort (admin-down, DROP all)        quarantine-role zone? ─ no ⇒
+  state = suspended                         ErrNoQuarantineZone
+  reason = "operator: <reason>"           UnblockPort + quarantine zone flows
+                                          state = quarantined
+                                          reason = "operator: re-enabled;
+                                                    awaiting re-attestation"
+                                          collector.Refresh(id)  (best effort)
+```
+
+The SDN half is `PortEnforcer`, implemented by `policy.QuarantineManager`
+(`OperatorSuspend`, `OperatorReadmit`); the device package only orchestrates.
+Three rulings shape it:
+
+1. **Disable is enforced or refused.** It reuses the severe-violation path:
+   the port is blocked and the device recorded `suspended`. On a control plane
+   with no SDN policy engine, or for a device with no `network_port_id`, the
+   call is refused (`ErrLifecycleUnenforced`, `ErrDeviceNotOnFabric`) rather
+   than recording a state nothing enforces.
+2. **Enable never vouches for the machine.** It re-admits the port to the
+   quarantine zone and records `quarantined`; only a passing re-attestation
+   restores the `PriorState`/`PriorZone` recorded at suspension, through the
+   same `HandleRestoreAttestation` that lifts any quarantine. If anything fails
+   after the port is unblocked, the port is blocked again. The re-attestation
+   request is best effort: a failed `Refresh` is logged, the response reports
+   `reattestation_requested: false`, and the collector's scheduled cycle
+   re-attests the machine.
+3. **An operator disable shares `suspended`** with a severe violation. There is
+   no separate `disabled` state; the `operator: ` prefix on `StateReason` is
+   what tells the two apart, and the console's *Disabled* badge reads the
+   state, not the prefix.
+
+The daemon configures the service only when the attestation quarantine
+observer runs on SDN-OVS (`wireDeviceLifecycle`,
+`pkg/daemon/commands/device_lifecycle_init.go`), because that observer's
+manager is the one that restores a re-enabled device after it re-attests. On
+any other control plane every transport answers `ErrLifecycleUnenforced`.
+
 ## 5. Trust boundaries
 
 **Device identity is a trust boundary.** Specifically:
@@ -397,7 +448,10 @@ Rejected alternatives:
    port admin-down and the device in `suspended`; `ViolationSeverityWarning`
    moves it to the quarantine zone in `quarantined`. `ViolationEvent.Validate`
    rejects an unrecognised severity or source rather than defaulting to the
-   lenient branch.
+   lenient branch. An operator's Disable takes the severe branch and Enable
+   only the quarantine one (§4.6); no path writes a lifecycle state the port
+   does not already enforce, which is why the generic device update refuses
+   `state`.
 
 ## 6. Failure posture
 
@@ -410,6 +464,10 @@ Rejected alternatives:
 - Lifecycle transitions **fail closed on the table**: `CanTransitionTo` returns
   `ErrInvalidTransition` for any pair not in `allowedTransitions`, and
   `revoked` is terminal with no outgoing edges.
+- Operator Disable and Enable **fail closed on enforcement**: with no SDN
+  policy engine or no switch port they are refused, and a refused call leaves
+  both the record and the port untouched. An Enable that fails after
+  unblocking the port blocks it again.
 - The activation switch move **fails the request**, not just the log: a
   non-nil error from `prepareSwitchTransition` produces a 500 before the SDN
   policy step runs, and a non-nil error from `commitSwitchTransition` (which
@@ -424,7 +482,9 @@ Rejected alternatives:
   a network controller. The device package contains **no implementation** of
   that interface. Bridges, ports, flows, VLANs and 802.1X port authentication
   are [`docs/sdn/`](../sdn/); physical switch ports are
-  [`docs/switch/`](../switch/).
+  [`docs/switch/`](../switch/). The operator lifecycle (§4.6) reaches the
+  network only through the `PortEnforcer` interface the SDN policy package
+  implements.
 - **It does not verify attestation.** It stores `AttestPub`, `AttestCert`,
   `EKCert` and `EventLog` and it consumes a `ViolationEvent`. Deciding whether a quote is
   acceptable is [`docs/attestation/`](../attestation/).

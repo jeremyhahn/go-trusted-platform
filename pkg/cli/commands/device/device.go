@@ -34,6 +34,7 @@ The device subsystem provides device management capabilities:
   - Find devices by serial number
   - Register new devices with the control plane
   - Delete devices
+  - Disable a device (cut its switch port) and enable it again
 
 Examples:
   # List all devices
@@ -58,7 +59,11 @@ Examples:
   platformctl device delete 123
 
   # Record a device's attestation certificate without re-enrolling it
-  platformctl device attest-cert record 123`,
+  platformctl device attest-cert record 123
+
+  # Disable a device, then re-admit it pending re-attestation
+  platformctl device disable 123 --reason "RMA pending"
+  platformctl device enable 123`,
 	}
 
 	// Add subcommands
@@ -69,6 +74,8 @@ Examples:
 	cmd.AddCommand(newDeleteCommand(getFlags))
 	cmd.AddCommand(newProfileCommand(getFlags))
 	cmd.AddCommand(newAttestCertCommand(getFlags))
+	cmd.AddCommand(newDisableCommand(getFlags))
+	cmd.AddCommand(newEnableCommand(getFlags))
 	cmd.AddCommand(newBootCommand(getFlags))
 
 	return cmd

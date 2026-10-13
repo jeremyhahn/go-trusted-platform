@@ -85,6 +85,8 @@ type mockServiceProvider struct {
 	deviceBootCertificateFunc  func(ctx context.Context, identity string, signature []byte) (interface{}, error)
 	deviceBootDeliveryFunc     func(ctx context.Context, evidence []byte) (interface{}, error)
 	deviceProvisionFunc        func(ctx context.Context, deviceID, profile string) error
+	deviceDisableFunc          func(ctx context.Context, deviceID, reason string) (interface{}, error)
+	deviceEnableFunc           func(ctx context.Context, deviceID string) (interface{}, error)
 
 	// SDN Bridge
 	sdnGetPortStateFunc     func(ctx context.Context, bridgeName, portName string) (interface{}, error)
@@ -1131,9 +1133,23 @@ func (m *mockServiceProvider) DeviceRecordAttestCert(ctx context.Context, device
 	return nil, nil
 }
 
+func (m *mockServiceProvider) DeviceDisable(ctx context.Context, deviceID, reason string) (interface{}, error) {
+	if m.deviceDisableFunc != nil {
+		return m.deviceDisableFunc(ctx, deviceID, reason)
+	}
+	return nil, nil
+}
+
 func (m *mockServiceProvider) DeviceBootCertificate(ctx context.Context, identity string, signature []byte) (interface{}, error) {
 	if m.deviceBootCertificateFunc != nil {
 		return m.deviceBootCertificateFunc(ctx, identity, signature)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) DeviceEnable(ctx context.Context, deviceID string) (interface{}, error) {
+	if m.deviceEnableFunc != nil {
+		return m.deviceEnableFunc(ctx, deviceID)
 	}
 	return nil, nil
 }

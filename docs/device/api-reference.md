@@ -27,6 +27,8 @@ The Device API provides management operations for device identity and profile ma
 | ListDevices | List devices with pagination |
 | FindBySerial | Find device by serial number |
 | AttestDevice | Perform TPM-based attestation |
+| DisableDevice | Block the device's switch port and record it suspended ([api.md §4.7](api.md#47-operator-disable-and-enable-250)) |
+| EnableDevice | Re-admit a suspended device to quarantine pending re-attestation |
 | BootCertificate | A diskless node's recorded IDevID chain, for a channel-bound proof of the key |
 | BootDelivery | A diskless node's profile and CA bundle, for channel-bound attestation evidence |
 
@@ -48,6 +50,16 @@ transport and enforce the same checks through one service; see
 | FindProfileByMACAddress | Find profile by MAC prefix |
 | FindProfileBySerial | Find profile by serial prefix |
 | FindMatchingProfile | Find profile matching device attributes |
+
+### Template Operations
+
+Device templates, not vTPM templates. Both operations are served on every
+transport; the matrix and wire shapes are in [api.md §4](api.md#4-device-templates).
+
+| Operation | REST | gRPC / Unix | QUIC (`0xCF` sub-op) | MCP | Embedded |
+|-----------|------|-------------|----------------------|-----|----------|
+| CreateTemplate | yes | yes | yes (`0x27`) | yes (`device_template_create`) | yes |
+| CreateProfileFromTemplate | yes | yes | yes (`0x28`) | yes (`profile_create_from_template`) | yes |
 
 ## Error Codes
 

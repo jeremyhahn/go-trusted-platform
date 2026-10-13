@@ -825,6 +825,10 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			daemonConfig.DeviceProfileService = profileSvc
 			logger.Info("device profile service wired for daemon gRPC")
 		}
+		if templateSvc := reg.TemplateService(); templateSvc != nil {
+			daemonConfig.DeviceTemplateService = templateSvc
+			logger.Info("device template service wired for daemon gRPC")
+		}
 		if App.CA != nil {
 			daemonConfig.CAService = App.CA
 			logger.Info("CA service wired for daemon gRPC")
@@ -1556,6 +1560,10 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 		if profileSvc := reg.ProfileService(); profileSvc != nil {
 			config.DeviceProfileService = profileSvc
 			logger.Info("device profile service wired for daemon gRPC")
+		}
+		if templateSvc := reg.TemplateService(); templateSvc != nil {
+			config.DeviceTemplateService = templateSvc
+			logger.Info("device template service wired for daemon gRPC")
 		}
 	}
 

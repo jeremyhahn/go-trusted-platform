@@ -122,7 +122,9 @@ func (h *QUICServiceHandler) rebuildDeviceGRPC() {
 		WithDeviceAKTrust(h.akTrust),
 		WithDeviceVerdictSink(h.deviceVerdicts),
 		WithDeviceAttestCertRecorder(h.attestCertRecorder),
+		WithDeviceLifecycle(h.lifecycle),
 		WithDeviceBootCA(h.bootCA),
+		WithDeviceTemplateService(h.templateService),
 	)
 }
 
@@ -431,21 +433,31 @@ func (h *QUICServiceHandler) handleDeviceProfileCategorySub(ctx context.Context,
 	if len(req.Payload) == 0 {
 		return nil, false
 	}
-
-	switch req.Payload[0] {
-	case quicwire.DeviceProfileSubAssign:
-		return h.handleDeviceProfileAssign(ctx, req.Payload[1:]), true
-	case quicwire.DeviceProfileSubUnassign:
-		return h.handleDeviceProfileUnassign(ctx, req.Payload[1:]), true
-	case quicwire.DeviceSubRecordAttestCert:
-		return h.handleDeviceRecordAttestCert(ctx, req.Payload[1:]), true
-	case quicwire.DeviceSubBootCertificate:
-		return h.handleDeviceBootCertificate(ctx, req.Payload[1:]), true
-	case quicwire.DeviceSubBootDelivery:
-		return h.handleDeviceBootDelivery(ctx, req.Payload[1:]), true
-	default:
+	fn, ok := deviceQUICDispatch[req.Payload[0]]
+	if !ok {
 		return nil, false
 	}
+	return fn(h, ctx, req.Payload[1:]), true
+}
+
+// deviceQUICHandler serves one device sub-opcode; payload excludes the
+// sub-opcode byte.
+type deviceQUICHandler func(h *QUICServiceHandler, ctx context.Context, payload []byte) *quicwire.Response
+
+// deviceQUICDispatch routes the device sub-opcodes under
+// quicwire.OpProvisioningCategory with O(1) lookup. Every entry needs a
+// scope in the quic sub-opcode catalog, or a pre-auth entry for the two
+// diskless boot calls; a test walks this map to hold that.
+var deviceQUICDispatch = map[byte]deviceQUICHandler{
+	quicwire.DeviceProfileSubAssign:       (*QUICServiceHandler).handleDeviceProfileAssign,
+	quicwire.DeviceProfileSubUnassign:     (*QUICServiceHandler).handleDeviceProfileUnassign,
+	quicwire.DeviceSubRecordAttestCert:    (*QUICServiceHandler).handleDeviceRecordAttestCert,
+	quicwire.DeviceSubBootCertificate:     (*QUICServiceHandler).handleDeviceBootCertificate,
+	quicwire.DeviceSubBootDelivery:        (*QUICServiceHandler).handleDeviceBootDelivery,
+	quicwire.DeviceSubDisable:             (*QUICServiceHandler).handleDeviceDisable,
+	quicwire.DeviceSubEnable:              (*QUICServiceHandler).handleDeviceEnable,
+	quicwire.DeviceSubTemplateCreate:      (*QUICServiceHandler).handleDeviceTemplateCreate,
+	quicwire.DeviceSubProfileFromTemplate: (*QUICServiceHandler).handleDeviceProfileFromTemplate,
 }
 
 // handleDeviceRecordAttestCert records a device's attestation certificate
@@ -464,6 +476,39 @@ func (h *QUICServiceHandler) handleDeviceRecordAttestCert(ctx context.Context, p
 	resp, err := h.deviceGRPC.RecordAttestationCertificate(ctx, &recordReq)
 	if err != nil {
 		return h.deviceGRPCErrorToQUIC("DeviceRecordAttestCert", err)
+	}
+	return h.encodeDeviceQUICResponse(resp)
+}
+
+// handleDeviceDisable serves DeviceSubDisable through the shared gRPC
+// service, so QUIC answers exactly what gRPC and Unix do.
+func (h *QUICServiceHandler) handleDeviceDisable(ctx context.Context, payload []byte) *quicwire.Response {
+	if h.deviceService == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrServiceNotAvailable{Service: "device"})
+	}
+	var disableReq platformv1.DisableDeviceRequest
+	if err := quicwire.DecodePayload(payload, &disableReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+	resp, err := h.deviceGRPC.DisableDevice(ctx, &disableReq)
+	if err != nil {
+		return h.deviceGRPCErrorToQUIC("DeviceDisable", err)
+	}
+	return h.encodeDeviceQUICResponse(resp)
+}
+
+// handleDeviceEnable serves DeviceSubEnable through the shared gRPC service.
+func (h *QUICServiceHandler) handleDeviceEnable(ctx context.Context, payload []byte) *quicwire.Response {
+	if h.deviceService == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrServiceNotAvailable{Service: "device"})
+	}
+	var enableReq platformv1.EnableDeviceRequest
+	if err := quicwire.DecodePayload(payload, &enableReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+	resp, err := h.deviceGRPC.EnableDevice(ctx, &enableReq)
+	if err != nil {
+		return h.deviceGRPCErrorToQUIC("DeviceEnable", err)
 	}
 	return h.encodeDeviceQUICResponse(resp)
 }
@@ -496,6 +541,47 @@ func (h *QUICServiceHandler) handleDeviceBootDelivery(ctx context.Context, paylo
 	resp, err := h.deviceGRPC.BootDelivery(ctx, &bootReq)
 	if err != nil {
 		return h.deviceGRPCErrorToQUIC("DeviceBootDelivery", err)
+	}
+	return h.encodeDeviceQUICResponse(resp)
+}
+
+// handleDeviceTemplateCreate serves DeviceSubTemplateCreate by delegating
+// to the shared DeviceGRPCService.CreateTemplate.
+func (h *QUICServiceHandler) handleDeviceTemplateCreate(ctx context.Context, payload []byte) *quicwire.Response {
+	if h.templateService == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrServiceNotAvailable{Service: "device template"})
+	}
+
+	var createReq platformv1.DeviceTemplateCreateRequest
+	if err := quicwire.DecodePayload(payload, &createReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	resp, err := h.deviceGRPC.CreateTemplate(ctx, &createReq)
+	if err != nil {
+		return h.deviceGRPCErrorToQUIC("DeviceTemplateCreate", err)
+	}
+	return h.encodeDeviceQUICResponse(resp)
+}
+
+// handleDeviceProfileFromTemplate serves DeviceSubProfileFromTemplate by
+// delegating to the shared DeviceGRPCService.CreateProfileFromTemplate.
+func (h *QUICServiceHandler) handleDeviceProfileFromTemplate(ctx context.Context, payload []byte) *quicwire.Response {
+	if h.templateService == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrServiceNotAvailable{Service: "device template"})
+	}
+	if h.profileService == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDeviceProfileServiceNotAvailable{})
+	}
+
+	var fromReq platformv1.CreateProfileFromTemplateRequest
+	if err := quicwire.DecodePayload(payload, &fromReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	resp, err := h.deviceGRPC.CreateProfileFromTemplate(ctx, &fromReq)
+	if err != nil {
+		return h.deviceGRPCErrorToQUIC("DeviceProfileFromTemplate", err)
 	}
 	return h.encodeDeviceQUICResponse(resp)
 }

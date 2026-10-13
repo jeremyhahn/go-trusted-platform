@@ -547,6 +547,29 @@ func (a *QUICAdapter) AssignProfileToDevice(ctx context.Context, opts AssignProf
 	return &AssignProfileToDeviceResult{Profile: protoToProfile(resp.GetProfile())}, nil
 }
 
+// DisableDevice sends DeviceSubDisable under OpProvisioningCategory; the
+// single-byte opcode space is fully allocated.
+func (a *QUICAdapter) DisableDevice(ctx context.Context, opts DisableDeviceOptions) (*DeviceLifecycleResult, error) {
+	req := &pb.DisableDeviceRequest{DeviceId: opts.DeviceID, Reason: opts.Reason}
+	var resp pb.DeviceLifecycleResponse
+	if err := a.callCategory(ctx, "DisableDevice",
+		quicwire.OpProvisioningCategory, quicwire.DeviceSubDisable, req, &resp); err != nil {
+		return nil, err
+	}
+	return lifecycleResultFromProto(&resp), nil
+}
+
+// EnableDevice sends DeviceSubEnable under OpProvisioningCategory.
+func (a *QUICAdapter) EnableDevice(ctx context.Context, opts EnableDeviceOptions) (*DeviceLifecycleResult, error) {
+	req := &pb.EnableDeviceRequest{DeviceId: opts.DeviceID}
+	var resp pb.DeviceLifecycleResponse
+	if err := a.callCategory(ctx, "EnableDevice",
+		quicwire.OpProvisioningCategory, quicwire.DeviceSubEnable, req, &resp); err != nil {
+		return nil, err
+	}
+	return lifecycleResultFromProto(&resp), nil
+}
+
 // =============================================================================
 // Operations with no QUIC opcode
 //
@@ -572,8 +595,15 @@ func (a *QUICAdapter) FindConfigForDevice(ctx context.Context, opts FindConfigFo
 	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "FindConfigForDevice", Reason: "docs/device/api.md §3 records QUIC as MISSING for config lookup"}
 }
 
+// CreateTemplate stores a template through OpProvisioningCategory +
+// DeviceSubTemplateCreate, served by the shared gRPC service.
 func (a *QUICAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOptions) (*CreateTemplateResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "CreateTemplate", Reason: templateNoSurfaceReason}
+	var resp pb.DeviceTemplateCreateResponse
+	if err := a.callCategory(ctx, "CreateTemplate",
+		quicwire.OpProvisioningCategory, quicwire.DeviceSubTemplateCreate, templateCreateRequest(opts), &resp); err != nil {
+		return nil, err
+	}
+	return &CreateTemplateResult{Template: protoToTemplate(resp.GetTemplate())}, nil
 }
 
 func (a *QUICAdapter) GetTemplate(ctx context.Context, opts GetTemplateOptions) (*GetTemplateResult, error) {
@@ -592,12 +622,31 @@ func (a *QUICAdapter) ListTemplates(ctx context.Context, opts ListTemplatesOptio
 	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "ListTemplates", Reason: templateNoSurfaceReason}
 }
 
+// CreateProfileFromTemplate builds a profile through OpProvisioningCategory
+// + DeviceSubProfileFromTemplate, served by the shared gRPC service.
 func (a *QUICAdapter) CreateProfileFromTemplate(ctx context.Context, opts CreateProfileFromTemplateOptions) (*CreateProfileResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "CreateProfileFromTemplate", Reason: templateNoSurfaceReason}
+	id, err := parseID("CreateProfileFromTemplate", "template", opts.TemplateID)
+	if err != nil {
+		return nil, err
+	}
+	req := &pb.CreateProfileFromTemplateRequest{
+		TemplateId: id,
+		Overrides: &pb.DeviceProfile{
+			Name:       opts.Name,
+			EkSerial:   opts.EKSerial,
+			MacAddress: opts.MACAddress,
+		},
+	}
+	var resp pb.CreateProfileResponse
+	if err := a.callCategory(ctx, "CreateProfileFromTemplate",
+		quicwire.OpProvisioningCategory, quicwire.DeviceSubProfileFromTemplate, req, &resp); err != nil {
+		return nil, err
+	}
+	return &CreateProfileResult{Profile: protoToProfile(resp.GetProfile())}, nil
 }
 
 // templateNoSurfaceReason cites the recorded decision rather than treating
-// the absence as an oversight: docs/device/api.md §4 states device templates
-// are REST-only, and that whoever adds them to the wire must use
-// DeviceTemplate… message prefixes so the names cannot collide with vtpm.
-const templateNoSurfaceReason = "docs/device/api.md §4 records device templates as REST-only by design"
+// the absence as an oversight: docs/device/api.md §4 states that template
+// read, update, delete and list are REST-only; only CreateTemplate and
+// CreateProfileFromTemplate are on the wire.
+const templateNoSurfaceReason = "docs/device/api.md §4 records template read/update/delete/list as REST-only"

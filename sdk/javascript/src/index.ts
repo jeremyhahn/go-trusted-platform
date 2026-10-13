@@ -440,6 +440,8 @@ export type {
   ActivateDeviceRequest,
   DeviceAttestRequest,
   DeviceAttestResponse,
+  DisableDeviceRequest,
+  DeviceLifecycleResponse,
   AttestCertSource,
   RecordAttestCertRequest,
   RecordAttestCertResponse,

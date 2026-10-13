@@ -39,12 +39,22 @@ type DeviceGRPCService struct {
 
 	deviceService  device.DeviceService
 	profileService device.DeviceProfileService
-	akTrust        AKTrustAnchor
-	verdictSink    verdict.Sink
-	verifier       *DeviceQuoteVerifier
+	// templateService backs CreateTemplate and CreateProfileFromTemplate;
+	// nil answers Unavailable.
+	templateService device.DeviceTemplateService
+	// configFinder backs FindConfigForDevice. It is the profile service when
+	// that implements device.ConfigForDeviceFinder; nil answers
+	// FailedPrecondition.
+	configFinder device.ConfigForDeviceFinder
+	akTrust      AKTrustAnchor
+	verdictSink  verdict.Sink
+	verifier     *DeviceQuoteVerifier
 	// attestCertRecorder backs RecordAttestationCertificate; nil answers
 	// Unavailable.
 	attestCertRecorder AttestCertRecorder
+	// lifecycle backs DisableDevice and EnableDevice; nil answers
+	// FailedPrecondition.
+	lifecycle DeviceLifecycle
 	// bootCA is the CA bundle source for BootDelivery; boot is built from it
 	// once the service exists (it is its own quote verifier). A nil boot
 	// answers Unavailable.
@@ -85,6 +95,9 @@ func NewDeviceGRPCService(
 	}
 	for _, opt := range opts {
 		opt(s)
+	}
+	if finder, ok := profileService.(device.ConfigForDeviceFinder); ok {
+		s.configFinder = finder
 	}
 	s.verifier = NewDeviceQuoteVerifier(deviceService, profileService, s.akTrust, s.verdictSink, logger)
 	s.boot = newDeviceBootProvider(s)
@@ -629,6 +642,27 @@ func (s *DeviceGRPCService) UnassignProfileFromDevice(
 	}, nil
 }
 
+// FindConfigForDevice resolves the profile a booting machine receives from
+// its EK serial or MAC address, through the same ProfileService method the
+// REST route calls.
+func (s *DeviceGRPCService) FindConfigForDevice(
+	ctx context.Context,
+	req *platformv1.FindConfigForDeviceRequest,
+) (*platformv1.FindConfigForDeviceResponse, error) {
+	if s.configFinder == nil {
+		return nil, status.Error(codes.FailedPrecondition, ErrDeviceConfigFinderUnavailable{}.Error())
+	}
+
+	profile, err := s.configFinder.FindConfigForDevice(ctx, req.GetEkSerial(), req.GetMacAddress())
+	if err != nil {
+		return nil, s.toGRPCError(err)
+	}
+
+	return &platformv1.FindConfigForDeviceResponse{
+		Profile: s.profileToPb(profile),
+	}, nil
+}
+
 // Conversion helpers
 
 func (s *DeviceGRPCService) pbToDevice(pb *platformv1.Device) *entities.Device {
@@ -1036,13 +1070,28 @@ func (s *DeviceGRPCService) toGRPCError(err error) error {
 	errStr := err.Error()
 
 	// Typed validation failures from the service layer are client errors.
-	var vlans device.ErrProfileVLANsNotDistinct
-	if errors.As(err, &vlans) {
+	var (
+		vlans            device.ErrProfileVLANsNotDistinct
+		tlsClear         device.ErrTLSServerNameClearConflict
+		identityRequired device.ErrDeviceIdentityRequired
+		templateID       device.ErrInvalidTemplateID
+		templateName     device.ErrTemplateNameRequired
+		templateAbsent   device.ErrNilTemplate
+	)
+	if errors.As(err, &vlans) || errors.As(err, &tlsClear) ||
+		errors.As(err, &identityRequired) || errors.As(err, &templateID) ||
+		errors.As(err, &templateName) || errors.As(err, &templateAbsent) {
 		return status.Error(codes.InvalidArgument, errStr)
 	}
-	var tlsClear device.ErrTLSServerNameClearConflict
-	if errors.As(err, &tlsClear) {
-		return status.Error(codes.InvalidArgument, errStr)
+	var noConfig device.ErrNoMatchingConfig
+	if errors.As(err, &noConfig) {
+		return status.Error(codes.NotFound, errStr)
+	}
+	// A daemon started without the template or profile service cannot
+	// serve the template RPCs, as errTemplateServiceUnavailable answers.
+	var templateDependency device.ErrTemplateProfileDependency
+	if errors.As(err, &templateDependency) {
+		return status.Error(codes.Unavailable, errStr)
 	}
 
 	// Check for common error patterns

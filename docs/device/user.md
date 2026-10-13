@@ -281,23 +281,59 @@ unknown → registered → installing → installed → activated → attested
   step.
 - `quarantined` means a non-severe compliance failure: the machine is on the
   quarantine network, the port is still up, and re-attestation restores it.
-- `suspended` means a severe failure or a revoked certificate: the port is set
-  admin-down. Only an operator restores it.
+- `suspended` means a severe failure, a revoked certificate or an operator's
+  Disable: the port is set admin-down. Only an operator's Enable lifts it, and
+  only as far as quarantine.
 - **`revoked` is terminal.** There is no transition out of it. Plan for that
   before you revoke.
 
 Quarantine and suspension record where the device came from (`prior_state`,
 `prior_zone`) so remediation puts it back where it was rather than guessing.
 
-**These transitions are driven by the platform, not by hand.** Quarantine and
-suspension come from the SDN quarantine loop reacting to a violation, and the
-restore comes from a successful re-attestation — both program the port as well
-as the record. There is no operator "disable this device" verb: the generic
-device update deliberately refuses to carry a lifecycle state, because a
-transition that changed the record without programming the port would report a
-machine as cut off while it was still on the network. The console's
-Enable/Disable Device control is disabled and says so for that reason; it is
-tracked in issue #250.
+**Most transitions are driven by the platform.** Quarantine and suspension
+come from the SDN quarantine loop reacting to a violation, and the restore
+comes from a successful re-attestation — both program the port as well as the
+record. The generic device update deliberately refuses to carry a lifecycle
+state, because a transition that changed the record without programming the
+port would report a machine as cut off while it was still on the network.
+
+**Disable and Enable are the operator's two transitions (#250).** Each is its
+own verb, and each programs the switch port before it records anything:
+
+```bash
+platformctl device disable 42 --reason "decommissioning rack 3"
+platformctl device enable 42
+```
+
+In the console, the device table's row menu and the device page carry the
+same control. A `suspended` device offers **Enable**; a `revoked` device offers
+nothing (revocation is terminal); every other state offers **Disable**, and the
+control plane decides whether the transition is allowed.
+
+- **Disable** blocks the machine's switch port and records the device
+  `suspended`, with the state reason `operator: <your reason>` (or
+  `operator: disabled` when you give none). The badge reads *Disabled*.
+- **Enable does not put the machine back in service.** It re-admits the port
+  to the quarantine zone, records the device `quarantined` and asks the
+  attestation collector to quote it now. Only a passing verdict restores the
+  state and network placement it had before it was disabled. A machine that
+  fails attestation stays quarantined. The response's
+  `reattestation_requested: false` means no collector took the request, and
+  the machine waits for the next scheduled attestation cycle.
+
+The control plane refuses rather than record a state nothing enforces, and the
+console shows the refusal as an error toast:
+
+| Refusal | Cause |
+|---|---|
+| `device lifecycle: this control plane has no SDN policy engine ...` | The daemon runs without the attestation quarantine observer on SDN-OVS. No transport can disable or enable a device on it. |
+| `device lifecycle: device 42 has no switch port on the SDN fabric to enforce` | The record has no `network_port_id`, so there is no port to block. |
+| `device: invalid state transition suspended → suspended` | Disable on a device that is already suspended or revoked. |
+| `... device 42 is not suspended (state=attested); only a disabled device can be re-enabled` | Enable on a device that is not suspended. |
+| `... no zone carries lifecycle role quarantine` | Enable needs a zone with the quarantine role to re-admit the port into. |
+
+Each refusal is a `400` on REST and `FAILED_PRECONDITION` on gRPC and the Unix
+socket. Nothing is recorded and the port is not touched.
 
 ---
 
@@ -326,7 +362,7 @@ enrol the machine so the certificate is recorded, or pass `--ek-serial` /
 
 **"invalid state transition X → Y".**
 The lifecycle table refused it. `revoked` has no exits; `suspended` can only go
-to `attested` or `revoked`.
+to `attested`, `revoked`, or — through an operator's Enable — `quarantined`.
 
 **A profile write returns 503.**
 The daemon has no profile service wired. That is a deployment problem, not a

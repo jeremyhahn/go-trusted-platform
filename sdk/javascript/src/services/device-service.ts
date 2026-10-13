@@ -20,6 +20,8 @@ import type {
   ActivateDeviceRequest,
   DeviceAttestRequest,
   DeviceAttestResponse,
+  DisableDeviceRequest,
+  DeviceLifecycleResponse,
   RecordAttestCertRequest,
   RecordAttestCertResponse,
   CreateDeviceResponse,
@@ -154,6 +156,35 @@ export class DeviceService extends BaseService {
     request: DeviceAttestRequest
   ): Promise<ApiResponse<DeviceAttestResponse>> {
     return this.client.post<DeviceAttestResponse>(this.buildUrl(`/${id}/attest`), request);
+  }
+
+  /**
+   * Disable a device: the control plane blocks its switch port and records it
+   * `suspended` (docs/device/api.md). The control plane refuses the
+   * transition, with an error rather than a 200, when it runs no SDN engine,
+   * the device has no switch port on record, or its state cannot be suspended.
+   *
+   * @param id - Device ID
+   * @param request - Optional reason recorded on the device
+   * @returns The device's state before and after
+   */
+  async disableDevice(
+    id: number | string,
+    request: DisableDeviceRequest = {}
+  ): Promise<ApiResponse<DeviceLifecycleResponse>> {
+    return this.client.post<DeviceLifecycleResponse>(this.buildUrl(`/${id}/disable`), request);
+  }
+
+  /**
+   * Enable a disabled device: the control plane re-admits its switch port to
+   * the quarantine zone and records it `quarantined`. A passing re-attestation
+   * then restores the state it held before the disable (docs/device/api.md).
+   *
+   * @param id - Device ID
+   * @returns The device's state before and after
+   */
+  async enableDevice(id: number | string): Promise<ApiResponse<DeviceLifecycleResponse>> {
+    return this.client.post<DeviceLifecycleResponse>(this.buildUrl(`/${id}/enable`), {});
   }
 
   /**

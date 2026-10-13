@@ -106,9 +106,12 @@ var allowedTransitions = map[DeviceState]map[DeviceState]struct{}{
 		DeviceStateRevoked:   {},
 	},
 	DeviceStateSuspended: {
-		// Manual operator restore only; can also be revoked.
-		DeviceStateAttested: {},
-		DeviceStateRevoked:  {},
+		// Manual operator restore only; can also be revoked. An operator
+		// re-enable re-admits the device to quarantine, where only a passing
+		// re-attestation lifts it (issue #250).
+		DeviceStateAttested:    {},
+		DeviceStateQuarantined: {},
+		DeviceStateRevoked:     {},
 	},
 	DeviceStateRevoked: {
 		// Terminal state — no further transitions allowed.
@@ -217,8 +220,9 @@ type Device struct {
 	UpdatedAt         time.Time `yaml:"updated_at" json:"updated_at"`
 
 	// PriorState records the state the device held immediately before being
-	// quarantined. It is used by the remediation restore path to return the
-	// device to the correct lifecycle state when re-attestation succeeds.
+	// quarantined or suspended. It is used by the remediation restore path to
+	// return the device to the correct lifecycle state when re-attestation
+	// succeeds.
 	PriorState DeviceState `yaml:"prior_state,omitempty" json:"prior_state,omitempty"`
 
 	// PriorZone records the zone name the device was assigned to before

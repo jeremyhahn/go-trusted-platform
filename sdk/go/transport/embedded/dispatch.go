@@ -394,8 +394,35 @@ func registerDeviceHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.DeviceService_CountProfiles_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.CountProfiles(ctx, req.(*platformv1.CountProfilesRequest))
 	}
+	m[platformv1.DeviceService_CreateTemplate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CreateTemplate(ctx, req.(*platformv1.DeviceTemplateCreateRequest))
+	}
+	m[platformv1.DeviceService_CreateProfileFromTemplate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CreateProfileFromTemplate(ctx, req.(*platformv1.CreateProfileFromTemplateRequest))
+	}
 	m[platformv1.DeviceService_ActivateDevice_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.ActivateDevice(ctx, req.(*platformv1.ActivateDeviceRequest))
+	}
+	m[platformv1.DeviceService_AttestDevice_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.AttestDevice(ctx, req.(*platformv1.AttestDeviceRequest))
+	}
+	m[platformv1.DeviceService_RecordAttestationCertificate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.RecordAttestationCertificate(ctx, req.(*platformv1.RecordAttestationCertificateRequest))
+	}
+	m[platformv1.DeviceService_DisableDevice_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DisableDevice(ctx, req.(*platformv1.DisableDeviceRequest))
+	}
+	m[platformv1.DeviceService_EnableDevice_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.EnableDevice(ctx, req.(*platformv1.EnableDeviceRequest))
+	}
+	m[platformv1.DeviceService_FindConfigForDevice_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.FindConfigForDevice(ctx, req.(*platformv1.FindConfigForDeviceRequest))
+	}
+	m[platformv1.DeviceService_AssignProfileToDevice_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.AssignProfileToDevice(ctx, req.(*platformv1.AssignProfileToDeviceRequest))
+	}
+	m[platformv1.DeviceService_UnassignProfileFromDevice_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.UnassignProfileFromDevice(ctx, req.(*platformv1.UnassignProfileFromDeviceRequest))
 	}
 }
 

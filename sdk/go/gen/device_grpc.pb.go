@@ -38,8 +38,11 @@ const (
 	DeviceService_ActivateDevice_FullMethodName               = "/platform.v1.DeviceService/ActivateDevice"
 	DeviceService_AttestDevice_FullMethodName                 = "/platform.v1.DeviceService/AttestDevice"
 	DeviceService_RecordAttestationCertificate_FullMethodName = "/platform.v1.DeviceService/RecordAttestationCertificate"
+	DeviceService_DisableDevice_FullMethodName                = "/platform.v1.DeviceService/DisableDevice"
+	DeviceService_EnableDevice_FullMethodName                 = "/platform.v1.DeviceService/EnableDevice"
 	DeviceService_BootCertificate_FullMethodName              = "/platform.v1.DeviceService/BootCertificate"
 	DeviceService_BootDelivery_FullMethodName                 = "/platform.v1.DeviceService/BootDelivery"
+	DeviceService_CreateTemplate_FullMethodName               = "/platform.v1.DeviceService/CreateTemplate"
 	DeviceService_CreateProfileFromTemplate_FullMethodName    = "/platform.v1.DeviceService/CreateProfileFromTemplate"
 	DeviceService_FindConfigForDevice_FullMethodName          = "/platform.v1.DeviceService/FindConfigForDevice"
 	DeviceService_AssignProfileToDevice_FullMethodName        = "/platform.v1.DeviceService/AssignProfileToDevice"
@@ -97,6 +100,17 @@ type DeviceServiceClient interface {
 	// the response reports cleared, moving the device from quarantine to
 	// denied service. Without it a refusal writes nothing.
 	RecordAttestationCertificate(ctx context.Context, in *RecordAttestationCertificateRequest, opts ...grpc.CallOption) (*RecordAttestationCertificateResponse, error)
+	// DisableDevice is the operator Disable: it cuts the device's switch port
+	// and records the device suspended, reason as its state reason. It fails
+	// FAILED_PRECONDITION when no SDN policy engine runs, when the device has
+	// no switch port, or when its state cannot move to suspended.
+	DisableDevice(ctx context.Context, in *DisableDeviceRequest, opts ...grpc.CallOption) (*DeviceLifecycleResponse, error)
+	// EnableDevice is the operator Enable of a disabled device. It never
+	// vouches for the device: the port is re-admitted to the quarantine zone,
+	// the device recorded quarantined and a re-attestation requested; only a
+	// passing verdict restores the state and placement held before the
+	// disable. It fails FAILED_PRECONDITION when the device is not suspended.
+	EnableDevice(ctx context.Context, in *EnableDeviceRequest, opts ...grpc.CallOption) (*DeviceLifecycleResponse, error)
 	// Diskless boot. A diskless node holds its IDevID key in the TPM and has no
 	// local disk, so each boot it asks the control plane for its recorded IDevID
 	// chain (BootCertificate) and then for its profile and CA bundle
@@ -114,7 +128,14 @@ type DeviceServiceClient interface {
 	// identity is taken from it. The evidence is quote evidence made over the
 	// connection's exporter value, verified by the same verifier as AttestDevice.
 	BootDelivery(ctx context.Context, in *BootDeliveryRequest, opts ...grpc.CallOption) (*BootDeliveryResponse, error)
-	// Template operations
+	// Template operations. CreateTemplate stores a device template — the
+	// blueprint CreateProfileFromTemplate turns into a profile. It is not a
+	// vTPM template (VTPMService.CreateTemplate). The remaining template
+	// reads and writes (get, update, delete, list) stay on the REST surface
+	// (pkg/webservice/v1/device/template_handlers.go). Device-template
+	// messages carry a `DeviceTemplate…` prefix so their names cannot
+	// collide with vtpm.proto's template messages.
+	CreateTemplate(ctx context.Context, in *DeviceTemplateCreateRequest, opts ...grpc.CallOption) (*DeviceTemplateCreateResponse, error)
 	CreateProfileFromTemplate(ctx context.Context, in *CreateProfileFromTemplateRequest, opts ...grpc.CallOption) (*CreateProfileResponse, error)
 	// Profile lookup by device identity
 	FindConfigForDevice(ctx context.Context, in *FindConfigForDeviceRequest, opts ...grpc.CallOption) (*FindConfigForDeviceResponse, error)
@@ -321,6 +342,26 @@ func (c *deviceServiceClient) RecordAttestationCertificate(ctx context.Context, 
 	return out, nil
 }
 
+func (c *deviceServiceClient) DisableDevice(ctx context.Context, in *DisableDeviceRequest, opts ...grpc.CallOption) (*DeviceLifecycleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeviceLifecycleResponse)
+	err := c.cc.Invoke(ctx, DeviceService_DisableDevice_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *deviceServiceClient) EnableDevice(ctx context.Context, in *EnableDeviceRequest, opts ...grpc.CallOption) (*DeviceLifecycleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeviceLifecycleResponse)
+	err := c.cc.Invoke(ctx, DeviceService_EnableDevice_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *deviceServiceClient) BootCertificate(ctx context.Context, in *BootCertificateRequest, opts ...grpc.CallOption) (*BootCertificateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(BootCertificateResponse)
@@ -335,6 +376,16 @@ func (c *deviceServiceClient) BootDelivery(ctx context.Context, in *BootDelivery
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(BootDeliveryResponse)
 	err := c.cc.Invoke(ctx, DeviceService_BootDelivery_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *deviceServiceClient) CreateTemplate(ctx context.Context, in *DeviceTemplateCreateRequest, opts ...grpc.CallOption) (*DeviceTemplateCreateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeviceTemplateCreateResponse)
+	err := c.cc.Invoke(ctx, DeviceService_CreateTemplate_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -432,6 +483,17 @@ type DeviceServiceServer interface {
 	// the response reports cleared, moving the device from quarantine to
 	// denied service. Without it a refusal writes nothing.
 	RecordAttestationCertificate(context.Context, *RecordAttestationCertificateRequest) (*RecordAttestationCertificateResponse, error)
+	// DisableDevice is the operator Disable: it cuts the device's switch port
+	// and records the device suspended, reason as its state reason. It fails
+	// FAILED_PRECONDITION when no SDN policy engine runs, when the device has
+	// no switch port, or when its state cannot move to suspended.
+	DisableDevice(context.Context, *DisableDeviceRequest) (*DeviceLifecycleResponse, error)
+	// EnableDevice is the operator Enable of a disabled device. It never
+	// vouches for the device: the port is re-admitted to the quarantine zone,
+	// the device recorded quarantined and a re-attestation requested; only a
+	// passing verdict restores the state and placement held before the
+	// disable. It fails FAILED_PRECONDITION when the device is not suspended.
+	EnableDevice(context.Context, *EnableDeviceRequest) (*DeviceLifecycleResponse, error)
 	// Diskless boot. A diskless node holds its IDevID key in the TPM and has no
 	// local disk, so each boot it asks the control plane for its recorded IDevID
 	// chain (BootCertificate) and then for its profile and CA bundle
@@ -449,7 +511,14 @@ type DeviceServiceServer interface {
 	// identity is taken from it. The evidence is quote evidence made over the
 	// connection's exporter value, verified by the same verifier as AttestDevice.
 	BootDelivery(context.Context, *BootDeliveryRequest) (*BootDeliveryResponse, error)
-	// Template operations
+	// Template operations. CreateTemplate stores a device template — the
+	// blueprint CreateProfileFromTemplate turns into a profile. It is not a
+	// vTPM template (VTPMService.CreateTemplate). The remaining template
+	// reads and writes (get, update, delete, list) stay on the REST surface
+	// (pkg/webservice/v1/device/template_handlers.go). Device-template
+	// messages carry a `DeviceTemplate…` prefix so their names cannot
+	// collide with vtpm.proto's template messages.
+	CreateTemplate(context.Context, *DeviceTemplateCreateRequest) (*DeviceTemplateCreateResponse, error)
 	CreateProfileFromTemplate(context.Context, *CreateProfileFromTemplateRequest) (*CreateProfileResponse, error)
 	// Profile lookup by device identity
 	FindConfigForDevice(context.Context, *FindConfigForDeviceRequest) (*FindConfigForDeviceResponse, error)
@@ -523,11 +592,20 @@ func (UnimplementedDeviceServiceServer) AttestDevice(context.Context, *AttestDev
 func (UnimplementedDeviceServiceServer) RecordAttestationCertificate(context.Context, *RecordAttestationCertificateRequest) (*RecordAttestationCertificateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RecordAttestationCertificate not implemented")
 }
+func (UnimplementedDeviceServiceServer) DisableDevice(context.Context, *DisableDeviceRequest) (*DeviceLifecycleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DisableDevice not implemented")
+}
+func (UnimplementedDeviceServiceServer) EnableDevice(context.Context, *EnableDeviceRequest) (*DeviceLifecycleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method EnableDevice not implemented")
+}
 func (UnimplementedDeviceServiceServer) BootCertificate(context.Context, *BootCertificateRequest) (*BootCertificateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method BootCertificate not implemented")
 }
 func (UnimplementedDeviceServiceServer) BootDelivery(context.Context, *BootDeliveryRequest) (*BootDeliveryResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method BootDelivery not implemented")
+}
+func (UnimplementedDeviceServiceServer) CreateTemplate(context.Context, *DeviceTemplateCreateRequest) (*DeviceTemplateCreateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateTemplate not implemented")
 }
 func (UnimplementedDeviceServiceServer) CreateProfileFromTemplate(context.Context, *CreateProfileFromTemplateRequest) (*CreateProfileResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateProfileFromTemplate not implemented")
@@ -904,6 +982,42 @@ func _DeviceService_RecordAttestationCertificate_Handler(srv interface{}, ctx co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DeviceService_DisableDevice_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DisableDeviceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeviceServiceServer).DisableDevice(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeviceService_DisableDevice_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeviceServiceServer).DisableDevice(ctx, req.(*DisableDeviceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DeviceService_EnableDevice_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EnableDeviceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeviceServiceServer).EnableDevice(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeviceService_EnableDevice_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeviceServiceServer).EnableDevice(ctx, req.(*EnableDeviceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _DeviceService_BootCertificate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(BootCertificateRequest)
 	if err := dec(in); err != nil {
@@ -936,6 +1050,24 @@ func _DeviceService_BootDelivery_Handler(srv interface{}, ctx context.Context, d
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(DeviceServiceServer).BootDelivery(ctx, req.(*BootDeliveryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DeviceService_CreateTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeviceTemplateCreateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeviceServiceServer).CreateTemplate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeviceService_CreateTemplate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeviceServiceServer).CreateTemplate(ctx, req.(*DeviceTemplateCreateRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1096,12 +1228,24 @@ var DeviceService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _DeviceService_RecordAttestationCertificate_Handler,
 		},
 		{
+			MethodName: "DisableDevice",
+			Handler:    _DeviceService_DisableDevice_Handler,
+		},
+		{
+			MethodName: "EnableDevice",
+			Handler:    _DeviceService_EnableDevice_Handler,
+		},
+		{
 			MethodName: "BootCertificate",
 			Handler:    _DeviceService_BootCertificate_Handler,
 		},
 		{
 			MethodName: "BootDelivery",
 			Handler:    _DeviceService_BootDelivery_Handler,
+		},
+		{
+			MethodName: "CreateTemplate",
+			Handler:    _DeviceService_CreateTemplate_Handler,
 		},
 		{
 			MethodName: "CreateProfileFromTemplate",

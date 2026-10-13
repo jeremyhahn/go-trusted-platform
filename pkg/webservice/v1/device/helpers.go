@@ -66,7 +66,8 @@ func parsePaginationQuery(r *http.Request) datastore.PageQuery {
 func handleServiceErr(responseWriter response.HttpWriter, w http.ResponseWriter, r *http.Request, err error) {
 	// Typed validation failures from the service layer are client errors.
 	var vlans device.ErrProfileVLANsNotDistinct
-	if errors.As(err, &vlans) {
+	var templateName device.ErrTemplateNameRequired
+	if errors.As(err, &vlans) || errors.As(err, &templateName) {
 		responseWriter.Error400(w, r, err)
 		return
 	}

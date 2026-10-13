@@ -105,6 +105,43 @@ func TestQUICAuthorizeRequest_ClaimsPath_EnforcesScope(t *testing.T) {
 	}
 }
 
+// TestLookupOperationPermission_DeviceWritesNeedWrite pins the #497 ruling:
+// attestation and the template operations persist state, so a device:read
+// grant never reaches them.
+func TestLookupOperationPermission_DeviceWritesNeedWrite(t *testing.T) {
+	tests := map[string]*quicwire.Request{
+		"AttestDevice":              {Opcode: quicwire.OpDeviceAttest},
+		"RecordAttestationCert":     {Opcode: quicwire.OpProvisioningCategory, Payload: []byte{quicwire.DeviceSubRecordAttestCert}},
+		"CreateTemplate":            {Opcode: quicwire.OpProvisioningCategory, Payload: []byte{quicwire.DeviceSubTemplateCreate, 0x01}},
+		"CreateProfileFromTemplate": {Opcode: quicwire.OpProvisioningCategory, Payload: []byte{quicwire.DeviceSubProfileFromTemplate}},
+	}
+	want := OpcodePermission{Resource: "device", Action: "write"}
+	for name, req := range tests {
+		t.Run(name, func(t *testing.T) {
+			got, preAuth, err := LookupOperationPermission(req.Opcode, req.Payload)
+			if err != nil || preAuth || got != want {
+				t.Errorf("LookupOperationPermission = %+v, preAuth=%v, err=%v; want %+v", got, preAuth, err, want)
+			}
+		})
+	}
+}
+
+func TestQUICGuardRequest_EnforcesTheSubOpcodeScope(t *testing.T) {
+	mw := NewAuthMiddleware(WithQUICTokenValidator(
+		&claimsValidatorStub{authCtx: &platformtoken.AuthorizedContext{Scopes: []string{"device:read"}}}),
+		WithQUICRequireAuth(true))
+
+	write := &quicwire.Request{Opcode: quicwire.OpProvisioningCategory, Payload: []byte{quicwire.DeviceSubRecordAttestCert}, Token: "tok"}
+	if _, resp := mw.GuardRequest(context.Background(), write); resp == nil || resp.Status != quicwire.StatusPermissionDenied {
+		t.Fatalf("a device:read token reached a device write: %+v", resp)
+	}
+
+	read := &quicwire.Request{Opcode: quicwire.OpDeviceGet, Token: "tok"}
+	if _, resp := mw.GuardRequest(context.Background(), read); resp != nil {
+		t.Errorf("a device:read token was refused a device read: status=%d", resp.Status)
+	}
+}
+
 func TestQUICAuthenticateRequest_ClaimsPath_InvalidTokenRejected(t *testing.T) {
 	stub := &claimsValidatorStub{err: &platformtoken.ExpiredTokenError{}}
 	mw := NewAuthMiddleware(WithQUICTokenValidator(stub), WithQUICRequireAuth(true))

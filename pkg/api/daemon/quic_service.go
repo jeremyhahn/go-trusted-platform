@@ -49,6 +49,9 @@ type QUICServiceHandler struct {
 	vtpmService    vtpm.VTPMService
 	deviceService  device.DeviceService
 	profileService device.DeviceProfileService
+	// templateService backs the device template sub-opcodes through
+	// deviceGRPC.
+	templateService device.DeviceTemplateService
 	// deviceGRPC is the shared DeviceGRPCService the device QUIC handlers
 	// delegate to so the QUIC transport has identical semantics to gRPC.
 	// It is (re)built by the device service setters (rebuildDeviceGRPC).
@@ -59,6 +62,8 @@ type QUICServiceHandler struct {
 	deviceVerdicts verdict.Sink
 	// attestCertRecorder backs the DeviceSubRecordAttestCert sub-opcode.
 	attestCertRecorder AttestCertRecorder
+	// lifecycle backs the DeviceSubDisable and DeviceSubEnable sub-opcodes.
+	lifecycle DeviceLifecycle
 	// bootCA backs the DeviceSubBootDelivery sub-opcode.
 	bootCA BootCABundle
 	// requireClientCert makes every request but the boot-certificate one need
@@ -169,6 +174,15 @@ func WithQUICDeviceService(svc device.DeviceService) QUICServiceHandlerOption {
 func WithQUICDeviceProfileService(svc device.DeviceProfileService) QUICServiceHandlerOption {
 	return func(h *QUICServiceHandler) {
 		h.profileService = svc
+		h.rebuildDeviceGRPC()
+	}
+}
+
+// WithQUICDeviceTemplateService sets the device template service behind
+// the template-create and profile-from-template sub-opcodes.
+func WithQUICDeviceTemplateService(svc device.DeviceTemplateService) QUICServiceHandlerOption {
+	return func(h *QUICServiceHandler) {
+		h.templateService = svc
 		h.rebuildDeviceGRPC()
 	}
 }
@@ -338,6 +352,13 @@ func (h *QUICServiceHandler) SetDeviceAttestCertRecorder(recorder AttestCertReco
 	h.rebuildDeviceGRPC()
 }
 
+// SetDeviceLifecycle sets the operator Enable/Disable flow behind
+// DeviceSubDisable and DeviceSubEnable after construction.
+func (h *QUICServiceHandler) SetDeviceLifecycle(lifecycle DeviceLifecycle) {
+	h.lifecycle = lifecycle
+	h.rebuildDeviceGRPC()
+}
+
 // SetDeviceBootCA sets the CA bundle source behind the diskless boot
 // sub-opcodes (DeviceSubBootCertificate, DeviceSubBootDelivery) after
 // construction.
@@ -369,6 +390,13 @@ func (h *QUICServiceHandler) SetDeviceService(svc device.DeviceService) {
 // Required for the QUIC profile sub-opcodes (OpDeviceGetProfile, OpDeviceListProfiles, etc.).
 func (h *QUICServiceHandler) SetDeviceProfileService(svc device.DeviceProfileService) {
 	h.profileService = svc
+	h.rebuildDeviceGRPC()
+}
+
+// SetDeviceTemplateService sets the device template service after
+// construction.
+func (h *QUICServiceHandler) SetDeviceTemplateService(svc device.DeviceTemplateService) {
+	h.templateService = svc
 	h.rebuildDeviceGRPC()
 }
 

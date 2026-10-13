@@ -187,3 +187,16 @@ type ErrForeignBodyTenant struct {
 func (e ErrForeignBodyTenant) Error() string {
 	return fmt.Sprintf("rest/iam: request body names a tenant other than %q", e.Tenant)
 }
+
+// ErrConflictingQueryTenant is returned when a tenant-scoped route's
+// tenant_id query names a tenant other than the path's {tenant}. The request
+// is ambiguous, so it is refused with 403 rather than served from the path's
+// tenant (#401).
+type ErrConflictingQueryTenant struct {
+	Path  string
+	Query string
+}
+
+func (e ErrConflictingQueryTenant) Error() string {
+	return fmt.Sprintf("rest/iam: tenant_id query %q conflicts with path tenant %q", e.Query, e.Path)
+}

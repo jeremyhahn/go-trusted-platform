@@ -26,6 +26,12 @@ defer conn.Close()
 client := pb.NewDeviceServiceClient(conn)
 ```
 
+The socket serves the whole `DeviceService`, including `CreateTemplate`
+and `CreateProfileFromTemplate` ([api-reference-grpc.md](api-reference-grpc.md#device-templates)).
+`platformctl` has no device template verb, so reach those two through the
+Go SDK (`device.Client.CreateTemplate`,
+`device.Client.CreateProfileFromTemplate`) or a gRPC client on this socket.
+
 ## CLI Usage
 
 The `platformctl` CLI uses the Unix socket by default for local operations.
@@ -59,11 +65,17 @@ platformctl device attest-cert record 1234567890
 # Clear a refused (non-compliant) certificate so the device is denied
 # rather than quarantined until a compliant one is recorded
 platformctl device attest-cert record 1234567890 --clear-on-refusal
+
+# Disable a device: block its switch port, record it suspended
+platformctl device disable 1234567890 --reason "decommissioning rack 3"
+
+# Re-admit it to quarantine; it is restored only once it re-attests
+platformctl device enable 1234567890
 ```
 
 `platformctl` has **no `device attest` verb** — `pkg/cli/commands/device`
-registers `list`, `get`, `find-serial`, `register`, `delete`, `profile` and
-`attest-cert` only. Device attestation is reached over gRPC / Unix
+registers `list`, `get`, `find-serial`, `register`, `delete`, `disable`,
+`enable`, `profile` and `attest-cert` only. Device attestation is reached over gRPC / Unix
 (`AttestDevice`), REST (`POST /api/v1/devices/{id}/attest`), QUIC (`0x3A`)
 and MCP (`device_attest`); see [`api.md`](api.md) §2.
 

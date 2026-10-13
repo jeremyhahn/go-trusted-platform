@@ -187,14 +187,17 @@ They are the only part of bootstrap that crosses a network boundary as an API.
 | Fetch a device's config by identity | `GET /api/v1/devices/config` | `DeviceService.FindConfigForDevice` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Enroll a node's BMC | `POST /api/v1/bmc/{profileID}/enroll` | see [`docs/bmc/`](../bmc/) | see [`docs/bmc/`](../bmc/) | see [`docs/bmc/`](../bmc/) | see [`docs/bmc/`](../bmc/) |
 
-⁷ Device-template CRUD was **removed** from `device.proto` — the comment in place
-records that the `Template` RPCs collided with the vTPM messages of the same
-name, were never generated, and were referenced by nothing. Template CRUD is
-REST-only until someone defines it with `DeviceTemplate…` message prefixes.
+⁷ The seeder's `{"role", "template"}` upload has no equivalent on the other
+transports. Storing a template in the CRUD shape does: `DeviceService.CreateTemplate`
+on gRPC/Unix, QUIC sub-op `0x23` under `0xCF`, the MCP tool
+`device_template_create` and embedded (#497) — see
+[`docs/device/api.md`](../device/api.md) §4.
 
 ⁸ `OpDeviceCreateProfile` (`0x38`) creates a profile directly; it is **not** the
 create-from-template path. The MCP `profile_create` tool is likewise the direct
-path.
+path. Building a profile from a template in the CRUD shape (`overrides` only, no
+seeder `mac`/`hostname`/`config`) is QUIC sub-op `0x24` under `0xCF` and the MCP
+tool `profile_create_from_template` (#497).
 
 ### Request and response shapes
 

@@ -182,7 +182,7 @@ them all as unclassified.
 | `pxe:delete` | `OpPXERemoveDevice` |
 | `provisioning:read` | `OpProvisioningCategory` (`0xCF`) subs `GetNonce`, `FetchConfig`, `PollSession`, `ListSessions`, `GetSession` |
 | `provisioning:write` | subs `SignDigest`, `FulfillSession` |
-| `device:write` | subs `DeviceProfileSubAssign`, `DeviceProfileSubUnassign`, `DeviceSubRecordAttestCert` |
+| `device:write` | subs `DeviceProfileSubAssign`, `DeviceProfileSubUnassign`, `DeviceSubRecordAttestCert`, `DeviceSubDisable`, `DeviceSubEnable` |
 
 The EAB sub-opcodes of the same category carry the `eab` scopes
 ([`docs/eab/api.md`](../eab/api.md) §5); BMC enrollment carries `bmc:admin`

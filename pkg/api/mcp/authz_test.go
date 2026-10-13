@@ -133,10 +133,12 @@ func TestToolPermissionCatalog(t *testing.T) {
 		// Device tools
 		{"device_register", "device:write"},
 		{"device_get", "device:read"},
+		{"device_disable", "device:write"},
+		{"device_enable", "device:write"},
 		{"device_list", "device:read"},
 		{"device_delete", "device:delete"},
 		{"device_update", "device:write"},
-		{"device_attest", "device:read"},
+		{"device_attest", "device:write"},
 		{"device_record_attest_cert", "device:write"},
 		{"device_provision", "device:write"},
 
@@ -438,6 +440,8 @@ func TestAuthorizationChecker_PermissionParsing(t *testing.T) {
 			{"device_register", "device", "write"},
 			{"device_delete", "device", "delete"},
 			{"device_get", "device", "read"},
+			{"device_disable", "device", "write"},
+			{"device_enable", "device", "write"},
 			{"sdn_create_bridge", "sdn", "write"},
 			{"sdn_delete_bridge", "sdn", "delete"},
 			{"sdn_list_bridges", "sdn", "read"},

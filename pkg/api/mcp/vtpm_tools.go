@@ -202,34 +202,35 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 		},
 	})
 
-	// Template operations
+	// Template operations. Each schema names the arguments its executor in
+	// vtpm_tools_exec.go reads.
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_template_create",
 		Description: "Create a reusable vTPM template (identity assigned at clone time)",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"template_id": map[string]interface{}{
+				"id": map[string]interface{}{
 					"type":        "string",
-					"description": "Unique template identifier (required)",
+					"description": "Unique template identifier",
 				},
 				"description": map[string]interface{}{
 					"type":        "string",
 					"description": "Template description",
 				},
-				"ek_algorithm": map[string]interface{}{
+				"algorithm": map[string]interface{}{
 					"type":        "string",
-					"description": "EK algorithm (RSA or ECC, default: RSA)",
+					"description": "EK algorithm (RSA or ECC)",
 					"enum":        []string{"RSA", "ECC"},
 					"default":     "RSA",
 				},
-				"secure_boot_enabled": map[string]interface{}{
+				"secure_boot": map[string]interface{}{
 					"type":        "boolean",
-					"description": "Enable Secure Boot key generation and enrollment",
+					"description": "Enable Secure Boot",
 					"default":     false,
 				},
 			},
-			"required": []string{"template_id"},
+			"required": []string{"id"},
 		},
 	})
 
@@ -239,12 +240,12 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"template_id": map[string]interface{}{
+				"id": map[string]interface{}{
 					"type":        "string",
 					"description": "Template ID",
 				},
 			},
-			"required": []string{"template_id"},
+			"required": []string{"id"},
 		},
 	})
 
@@ -263,12 +264,35 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"template_id": map[string]interface{}{
+				"id": map[string]interface{}{
 					"type":        "string",
 					"description": "Template ID to delete",
 				},
 			},
-			"required": []string{"template_id"},
+			"required": []string{"id"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "vtpm_template_clone",
+		Description: "Clone a template to create a new bundle with identity",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"template_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Template ID to clone",
+				},
+				"hostname": map[string]interface{}{
+					"type":        "string",
+					"description": "Hostname for the new bundle",
+				},
+				"labels": map[string]interface{}{
+					"type":        "object",
+					"description": "Custom metadata labels",
+				},
+			},
+			"required": []string{"template_id", "hostname"},
 		},
 	})
 

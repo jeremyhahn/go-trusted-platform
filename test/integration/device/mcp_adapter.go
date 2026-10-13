@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
@@ -501,8 +502,35 @@ func (a *MCPAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions)
 // ============================================================================
 
 // CreateTemplate creates a new device template via MCP.
+//
+// The device_template_create tool takes and returns the config as YAML
+// text, while the entity carries it as bytes.
 func (a *MCPAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOptions) (*CreateTemplateResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "CreateTemplate"}
+	args := map[string]interface{}{
+		"tenant_id":   opts.TenantID,
+		"name":        opts.Name,
+		"description": opts.Description,
+		"role":        string(opts.Role),
+		"config":      string(opts.Config),
+	}
+	if opts.MatchRules != nil {
+		args["match_rules"] = opts.MatchRules
+	}
+	result, err := a.callTool(ctx, "device_template_create", args)
+	if err != nil {
+		return nil, err
+	}
+
+	var template entities.DeviceTemplate
+	configAsBytes := func(obj map[string]interface{}) {
+		if config, ok := obj["config"].(string); ok {
+			obj["config"] = base64.StdEncoding.EncodeToString([]byte(config))
+		}
+	}
+	if err := decodeToolEntity("CreateTemplate", result, &template, configAsBytes); err != nil {
+		return nil, err
+	}
+	return &CreateTemplateResult{Template: &template}, nil
 }
 
 // GetTemplate retrieves a template by ID via MCP.
@@ -526,8 +554,62 @@ func (a *MCPAdapter) ListTemplates(ctx context.Context, opts ListTemplatesOption
 }
 
 // CreateProfileFromTemplate creates a profile from a template via MCP.
+//
+// The profile inherits the template's tenant: the tool's overrides cannot
+// move a profile to another tenant, so opts.TenantID is not sent.
 func (a *MCPAdapter) CreateProfileFromTemplate(ctx context.Context, opts CreateProfileFromTemplateOptions) (*CreateProfileResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "CreateProfileFromTemplate"}
+	overrides := map[string]interface{}{
+		"name":        opts.Name,
+		"ek_serial":   opts.EKSerial,
+		"mac_address": opts.MACAddress,
+	}
+	result, err := a.callTool(ctx, "profile_create_from_template", map[string]interface{}{
+		"template_id": opts.TemplateID,
+		"overrides":   overrides,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var profile entities.DeviceProfile
+	if err := decodeToolEntity("CreateProfileFromTemplate", result, &profile, nil); err != nil {
+		return nil, err
+	}
+	return &CreateProfileResult{Profile: &profile}, nil
+}
+
+// decodeToolEntity decodes a device tool result into entity; fixup, when
+// set, adjusts any field the tool renders differently from the entity.
+func decodeToolEntity(operation string, result json.RawMessage, entity any, fixup func(map[string]interface{})) error {
+	if err := decodeDomainEntity(result, entity, fixup); err != nil {
+		return &MCPAdapterError{Operation: operation, Message: "failed to parse response: " + err.Error()}
+	}
+	return nil
+}
+
+// decodeDomainEntity decodes a device entity in the domain JSON shape the
+// REST handlers and MCP tools return. Both send a uint64 id as a decimal
+// string, which the entity's numeric id cannot take, so the id becomes a
+// JSON number first.
+func decodeDomainEntity(data []byte, entity any, fixup func(map[string]interface{})) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var obj map[string]interface{}
+	if err := decoder.Decode(&obj); err != nil {
+		return err
+	}
+	if id, ok := obj["id"].(string); ok {
+		obj["id"] = json.Number(id)
+	}
+	if fixup != nil {
+		fixup(obj)
+	}
+
+	normalized, err := json.Marshal(obj)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(normalized, entity)
 }
 
 // FindConfigForDevice finds the config for a device via MCP.
@@ -556,6 +638,39 @@ func (a *MCPAdapter) AssignProfileToDevice(ctx context.Context, opts AssignProfi
 	}
 
 	return &AssignProfileToDeviceResult{Profile: &profile}, nil
+}
+
+// DisableDevice calls the device_disable tool.
+func (a *MCPAdapter) DisableDevice(ctx context.Context, opts DisableDeviceOptions) (*DeviceLifecycleResult, error) {
+	return a.deviceLifecycle(ctx, "DisableDevice", "device_disable", map[string]interface{}{
+		"device_id": opts.DeviceID,
+		"reason":    opts.Reason,
+	})
+}
+
+// EnableDevice calls the device_enable tool.
+func (a *MCPAdapter) EnableDevice(ctx context.Context, opts EnableDeviceOptions) (*DeviceLifecycleResult, error) {
+	return a.deviceLifecycle(ctx, "EnableDevice", "device_enable", map[string]interface{}{
+		"device_id": opts.DeviceID,
+	})
+}
+
+// deviceLifecycle calls a lifecycle tool, whose result is the
+// platform.v1 DeviceLifecycleResponse marshalled as JSON.
+func (a *MCPAdapter) deviceLifecycle(ctx context.Context, op, tool string, args map[string]interface{}) (*DeviceLifecycleResult, error) {
+	result, err := a.callTool(ctx, tool, args)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp pb.DeviceLifecycleResponse
+	if err := json.Unmarshal(result, &resp); err != nil {
+		return nil, &MCPAdapterError{
+			Operation: op,
+			Message:   "failed to parse response: " + err.Error(),
+		}
+	}
+	return lifecycleResultFromProto(&resp), nil
 }
 
 // Verify MCPAdapter implements DeviceCommands

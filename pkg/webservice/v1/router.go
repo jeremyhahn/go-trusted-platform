@@ -451,6 +451,13 @@ func (v1Router *Router) deviceRoutes() {
 		v1Router.restHandlerRegistry.ResponseWriter(),
 		v1Router.restHandlerRegistry.DeviceServiceServer(),
 	)
+	// Operator Enable/Disable Device (#250) delegates to the same in-process
+	// DeviceService, so REST enforces what every other transport enforces.
+	lifecycleHandler := device.NewLifecycleHandler(
+		v1Router.logger,
+		v1Router.restHandlerRegistry.ResponseWriter(),
+		v1Router.restHandlerRegistry.DeviceServiceServer(),
+	)
 
 	// A diskless node's per-boot delivery (#690) runs the same verifier as
 	// attestHandler, behind the node's IDevID instead of an operator role.
@@ -476,7 +483,11 @@ func (v1Router *Router) deviceRoutes() {
 		return
 	}
 	deviceRouter.SetAttestCertHandler(attestCertHandler)
+	deviceRouter.SetLifecycleHandler(lifecycleHandler)
 	deviceRouter.SetBootHandler(bootHandler)
+	if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+		deviceRouter.SetScopeAuthorizer(scoped)
+	}
 	// Split by principal. Device and profile CRUD, templates, profile
 	// assignment and the provisioning SESSION surface are operator work and
 	// take the admin gate. The machine-facing half — the mTLS-verified

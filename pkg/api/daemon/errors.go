@@ -611,6 +611,14 @@ func (e ErrDeviceOperationNotImplemented) Error() string {
 	return fmt.Sprintf("device operation not implemented: %s", e.Operation)
 }
 
+// ErrDeviceConfigFinderUnavailable is returned by FindConfigForDevice when the
+// daemon's profile service cannot resolve a booting machine's config.
+type ErrDeviceConfigFinderUnavailable struct{}
+
+func (ErrDeviceConfigFinderUnavailable) Error() string {
+	return "device config lookup is not available: the profile service does not resolve configs by EK serial or MAC"
+}
+
 // ErrInvalidDeviceID is returned when a device ID is invalid
 type ErrInvalidDeviceID struct {
 	ID string

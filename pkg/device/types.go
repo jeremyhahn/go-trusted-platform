@@ -109,6 +109,14 @@ type DeviceProfileService interface {
 	UnassignFromDevice(ctx context.Context, profileID uint64) error
 }
 
+// ConfigForDeviceFinder resolves the profile a booting machine should receive
+// from its EK serial or MAC address. *ProfileService implements it; it is
+// kept off DeviceProfileService, so a transport holding that interface
+// asserts this one (see ProfileService.FindConfigForDevice for the order).
+type ConfigForDeviceFinder interface {
+	FindConfigForDevice(ctx context.Context, ekSerial, mac string) (*entities.DeviceProfile, error)
+}
+
 // DeviceTemplateService provides device template management operations.
 // This interface abstracts the concrete TemplateService implementation for
 // dependency injection and testing purposes.

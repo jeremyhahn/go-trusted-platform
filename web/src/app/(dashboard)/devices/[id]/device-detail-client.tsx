@@ -28,7 +28,13 @@ import { DeviceReportCard } from '@/components/features/attestation/device-repor
 import { AttestCertCard } from '@/components/features/attestation/attest-cert-card';
 import { useToast } from '@/hooks/use-toast';
 import { useDevice, useMutation } from '@/hooks';
-import { DEVICE_TOGGLE_UNAVAILABLE } from '@/lib/device-lifecycle';
+import { useDeviceToggle } from '@/hooks/use-device-toggle';
+import {
+  DEVICE_REVOKED_NO_TOGGLE,
+  deviceDisableConfirmation,
+  deviceToggle,
+  type DeviceToggle,
+} from '@/lib/device-lifecycle';
 import type { DeviceDetail, AttestationRecord, DeviceCertificate } from '@/types/device';
 
 export default function DeviceDetailPage() {
@@ -104,6 +110,7 @@ export default function DeviceDetailPage() {
       // heartbeat freshness with the same five-minute threshold as the
       // list page: never-seen → unknown, fresh → online, stale → offline.
       status: deriveDeviceStatus(lifecycleState, lastHeartbeatAt),
+      state: lifecycleState || undefined,
       // Liveness is the node's last mTLS heartbeat, never updated_at.
       lastSeen: lastHeartbeatAt || undefined,
       registeredAt: createdAt || new Date().toISOString(),
@@ -148,13 +155,18 @@ export default function DeviceDetailPage() {
   // DeviceReportCard below with its age; "Refresh attestation" there enqueues
   // a collection (202) and never returns a quote (#226, #428).
 
-  // Enable / Disable is not wired to anything real yet either. The handler
-  // this replaces only raised an "Info" toast saying the toggle was not
-  // implemented, and the updateMutation beside it was dead code that would
-  // have PUT a device stripped of its model, EK certificate and attestation
-  // keys had anything ever called it (#252). There is no server-side
-  // operator lifecycle transition to call — see #250 — so the control is
-  // disabled.
+  // Enable / Disable call the control plane's dedicated lifecycle
+  // transitions (#250), never the generic PUT (#252). The re-read after a
+  // transition moves the badge to the state the control plane recorded.
+  const toggleMutation = useDeviceToggle(fetchDevice);
+
+  const handleToggle = (toggle: DeviceToggle) => {
+    if (!device) return;
+    if (toggle === 'disable' && !confirm(deviceDisableConfirmation(device.name))) {
+      return;
+    }
+    toggleMutation.mutate({ id: device.id, toggle });
+  };
 
   const deleteMutation = useMutation(
     async (_: void) => {
@@ -244,6 +256,8 @@ export default function DeviceDetailPage() {
     );
   }
 
+  const toggle = deviceToggle(device.state);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -259,18 +273,19 @@ export default function DeviceDetailPage() {
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
-            disabled
-            title={DEVICE_TOGGLE_UNAVAILABLE}
+            disabled={toggle === null || toggleMutation.isLoading}
+            title={toggle === null ? DEVICE_REVOKED_NO_TOGGLE : undefined}
+            onClick={() => toggle && handleToggle(toggle)}
           >
-            {device.status === 'disabled' ? (
+            {toggle === 'enable' ? (
               <>
                 <Power className="mr-2 h-4 w-4" />
-                Enable (unavailable)
+                Enable
               </>
             ) : (
               <>
                 <BanIcon className="mr-2 h-4 w-4" />
-                Disable (unavailable)
+                Disable
               </>
             )}
           </Button>

@@ -60,12 +60,19 @@ type MCPServiceProviderConfig struct {
 	VTPMService          vtpm.VTPMService
 	DeviceService        device.DeviceService
 	DeviceProfileService device.DeviceProfileService
+	// DeviceTemplateService backs device_template_create and
+	// profile_create_from_template; nil answers that no template service
+	// is configured.
+	DeviceTemplateService device.DeviceTemplateService
 	// VerdictSink receives device quote verdicts (event log + quarantine
 	// observers); nil means verdicts are only logged.
 	VerdictSink verdict.Sink
 	// AttestCertRecorder backs device_record_attest_cert; nil means the
 	// tool answers that no certificate authority is configured.
 	AttestCertRecorder AttestCertRecorder
+	// DeviceLifecycle backs device_disable and device_enable; nil means
+	// the tools answer that no SDN policy engine enforces them.
+	DeviceLifecycle DeviceLifecycle
 	// AttestationReporting carries the reporting service's report view,
 	// refresh trigger and caller policy for the MCP report tools (#226).
 	AttestationReporting *ReportingHandles
@@ -122,8 +129,10 @@ type MCPServiceProvider struct {
 	vtpmService           vtpm.VTPMService
 	deviceService         device.DeviceService
 	deviceProfileService  device.DeviceProfileService
+	deviceTemplateService device.DeviceTemplateService
 	deviceVerdicts        verdict.Sink
 	attestCertRecorder    AttestCertRecorder
+	lifecycle             DeviceLifecycle
 	attestationReporting  *ReportingHandles
 	attestationServer     *AttestationServiceServer
 	dnsService            dns.DNSService
@@ -175,8 +184,10 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		vtpmService:           config.VTPMService,
 		deviceService:         config.DeviceService,
 		deviceProfileService:  config.DeviceProfileService,
+		deviceTemplateService: config.DeviceTemplateService,
 		deviceVerdicts:        config.VerdictSink,
 		attestCertRecorder:    config.AttestCertRecorder,
+		lifecycle:             config.DeviceLifecycle,
 		attestationReporting:  config.AttestationReporting,
 		attestationServer:     config.AttestationServer,
 		dnsService:            config.DNSService,
@@ -832,6 +843,16 @@ func (p *MCPServiceProvider) DeviceAttest(ctx context.Context, deviceID string, 
 // same refusal as gRPC, Unix, QUIC and REST.
 func (p *MCPServiceProvider) DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue, clearOnRefusal bool) (interface{}, error) {
 	return recordAttestCertForMCP(ctx, p.attestCertRecorder, deviceID, reissue, clearOnRefusal, p.logger)
+}
+
+// DeviceDisable serves the MCP device_disable tool with the gRPC answer.
+func (p *MCPServiceProvider) DeviceDisable(ctx context.Context, deviceID, reason string) (interface{}, error) {
+	return deviceLifecycleForMCP(ctx, p.lifecycle, deviceID, reason, false, p.logger)
+}
+
+// DeviceEnable serves the MCP device_enable tool with the gRPC answer.
+func (p *MCPServiceProvider) DeviceEnable(ctx context.Context, deviceID string) (interface{}, error) {
+	return deviceLifecycleForMCP(ctx, p.lifecycle, deviceID, "", true, p.logger)
 }
 
 // DeviceBootCertificate refuses a diskless node's boot-certificate request:

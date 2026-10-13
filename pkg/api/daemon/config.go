@@ -101,9 +101,21 @@ type Config struct {
 	// When set, the daemon will register the device gRPC service.
 	DeviceService device.DeviceService
 
+	// DeviceLifecycle is the operator Enable/Disable Device flow (#250).
+	// Nil on a control plane without an SDN policy engine: DisableDevice and
+	// EnableDevice then answer FailedPrecondition on every transport, since
+	// nothing would enforce the state they record.
+	DeviceLifecycle DeviceLifecycle
+
 	// DeviceProfileService is the device profile service implementation.
 	// Used for device provisioning and profile management.
 	DeviceProfileService device.DeviceProfileService
+
+	// DeviceTemplateService is the device template service the REST
+	// template handlers use. It backs DeviceService.CreateTemplate and
+	// CreateProfileFromTemplate on gRPC, Unix, QUIC and MCP; nil answers
+	// Unavailable.
+	DeviceTemplateService device.DeviceTemplateService
 
 	// PlatformToken configures the shared broker platform-token validator used
 	// across the gRPC, QUIC, and MCP inbound transports. When Enabled, those

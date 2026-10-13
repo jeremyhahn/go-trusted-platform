@@ -159,29 +159,37 @@ func (h *attestCertHandler) HandleRecordAttestCert(w http.ResponseWriter, r *htt
 // refusal is FailedPrecondition on the wire and a 400 here, carrying every
 // candidate and the reason it was refused; the writer has no 412.
 func (h *attestCertHandler) writeRecordError(w http.ResponseWriter, r *http.Request, err error) {
+	writeGRPCStatusError(h.responseWriter, w, r, err)
+}
+
+// writeGRPCStatusError maps a status from the in-process DeviceService onto
+// the HTTP surface, so REST answers with the code every other transport
+// does. FailedPrecondition is a 400 carrying the reason; the writer has no
+// 412.
+func writeGRPCStatusError(rw response.HttpWriter, w http.ResponseWriter, r *http.Request, err error) {
 	st, ok := status.FromError(err)
 	if !ok {
-		handleServiceErr(h.responseWriter, w, r, err)
+		handleServiceErr(rw, w, r, err)
 		return
 	}
 	wrapped := errors.New(st.Message())
 	switch st.Code() {
 	case codes.InvalidArgument, codes.FailedPrecondition:
-		h.responseWriter.Error400(w, r, wrapped)
+		rw.Error400(w, r, wrapped)
 	case codes.NotFound:
-		h.responseWriter.Error404(w, r, wrapped)
+		rw.Error404(w, r, wrapped)
 	case codes.Aborted:
 		// The certificate changed between the refusal and the clear.
-		h.responseWriter.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{
+		rw.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{
 			Code:    http.StatusConflict,
 			Error:   wrapped.Error(),
 			Success: false,
 		})
 	case codes.PermissionDenied:
-		h.responseWriter.Error403(w, r, wrapped, nil)
+		rw.Error403(w, r, wrapped, nil)
 	case codes.Unauthenticated:
-		h.responseWriter.Error401(w, r, wrapped)
+		rw.Error401(w, r, wrapped)
 	default:
-		h.responseWriter.Error500(w, r, wrapped)
+		rw.Error500(w, r, wrapped)
 	}
 }

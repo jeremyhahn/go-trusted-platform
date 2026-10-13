@@ -277,6 +277,23 @@ func (h *IAMHandlers) ownBodyTenant(w http.ResponseWriter, r *http.Request, tena
 	return true
 }
 
+// consistentTenant refuses a tenant-scoped request whose tenant_id query
+// names a tenant other than the path's {tenant}, with 403 and before next
+// runs. The handler acts on the path's tenant, so a conflicting query was
+// silently ignored; the request is ambiguous and is refused instead (#401).
+// The same tenant in both, or no query, is served.
+func (h *IAMHandlers) consistentTenant(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		pathTenant := mux.Vars(r)["tenant"]
+		queryTenant := r.URL.Query().Get(tenantQueryParam)
+		if pathTenant != "" && queryTenant != "" && queryTenant != pathTenant {
+			h.respWriter.Error403(w, r, ErrConflictingQueryTenant{Path: pathTenant, Query: queryTenant}, nil)
+			return
+		}
+		next(w, r)
+	}
+}
+
 func (h *IAMHandlers) handleError(w http.ResponseWriter, r *http.Request, err error) {
 	errStr := err.Error()
 	switch {

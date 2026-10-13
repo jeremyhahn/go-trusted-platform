@@ -246,7 +246,7 @@ distinct values, eighteen names:
 | `0xCC` | `OpSwitchCategory` | Physical switch; sub-opcodes `SwitchSub*` `0x01`–`0x05` |
 | `0xCD` | `OpKMSExtendedCategory` | KMS key-lifecycle verbs; `KMSSubSignCSR` (`0x07`) is CA Sign CSR, which requires `ca:sign-csr` (`docs/ca/api.md` §4) |
 | `0xCE` | `OpSecretsCategory` | Secrets |
-| `0xCF` | `OpProvisioningCategory` | Provisioning / config delivery |
+| `0xCF` | `OpProvisioningCategory` | Provisioning / config delivery. Device sub-opcodes `0x20`–`0x28` (profile assign/unassign, attestation certificate, diskless boot certificate and delivery, disable/enable, template create, profile from template) are routed first — [`docs/device/api.md`](../device/api.md) §3.7 |
 
 **This is why opcode values repeat.** `OpOverlayStatus`, `OpGatewayStatus` and
 `OpLiveness` are all `0x01`: the first two are sub-opcodes inside their category,
@@ -312,8 +312,8 @@ Three catalogs with **different defaults** — gRPC allows an unlisted entry, MC
 
 | Catalog | Coverage | Default for an unlisted entry |
 |---|---|---|
-| gRPC (`pkg/api/grpc/method_permissions.go`) | **208 of 468 RPCs**, across 13 of 31 services | *"carries no required scope: the interceptor allows it once the token is validated"* |
-| MCP (`pkg/api/mcp/authz.go`) | **144 of 434 registered tools** (5 of them explicitly open with `""`) | **denied**: `AuthorizeTool` refuses a tool with no map entry (`AuthErrorToolNotClassified`, reported on the wire as `-32603`); the 290 unmapped tools are enumerated in `knownUnclassified` (`authz_completeness_test.go`), a list that may only shrink (#304) |
+| gRPC (`pkg/api/grpc/method_permissions.go`) | **213 of 473 RPCs**, across 13 of 31 services | *"carries no required scope: the interceptor allows it once the token is validated"* |
+| MCP (`pkg/api/mcp/authz.go`) | **151 of 430 registered tools** (7 of them explicitly open with `""`) | **denied**: `AuthorizeTool` refuses a tool with no map entry (`AuthErrorToolNotClassified`, reported on the wire as `-32603`); the 279 unmapped tools are enumerated in `knownUnclassified` (`authz_completeness_test.go`), a list that may only shrink (#304) |
 | QUIC (`pkg/api/quic/opcode_permissions.go`) | **every routable opcode and sub-opcode** — pinned by `pkg/api/daemon/quic_authz_contract_test.go` | **denied**: `StatusPermissionDenied`, payload `QUIC operation not classified for authorization: …` (`ErrOperationNotClassified`) |
 
 **gRPC TCP, QUIC and REST fail closed without an authentication backend

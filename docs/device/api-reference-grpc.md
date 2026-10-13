@@ -177,6 +177,33 @@ message RecordAttestationCertificateResponse {
                                     // subject..not_after describe it
   string refusal = 14;              // why it was refused, on a clear
 }
+
+// DisableDevice blocks the device's switch port and records it suspended
+// with state_reason "operator: <reason>". EnableDevice moves a suspended
+// device to quarantined, re-admits its port to the quarantine zone and
+// requests re-attestation. Both enforce before they record, and refuse
+// with FAILED_PRECONDITION when nothing can enforce the change. Scope
+// device:write. See docs/device/api.md §4.7.
+rpc DisableDevice(DisableDeviceRequest) returns (DeviceLifecycleResponse);
+rpc EnableDevice(EnableDeviceRequest) returns (DeviceLifecycleResponse);
+
+message DisableDeviceRequest {
+  string device_id = 1;
+  string reason = 2;                // at most 256 bytes
+}
+
+message EnableDeviceRequest {
+  string device_id = 1;
+}
+
+message DeviceLifecycleResponse {
+  Status status = 1;
+  uint64 device_id = 2;
+  string state = 3;                 // "suspended" | "quarantined"
+  string previous_state = 4;
+  string state_reason = 5;
+  bool reattestation_requested = 6; // enable queued an immediate re-attestation
+}
 ```
 
 ## Profile Messages
@@ -386,6 +413,53 @@ unconfigured service is `Unavailable`. With mutual TLS enabled the listener
 verifies a client certificate only if given; `BootCertificate` may arrive
 without one, `BootDelivery` and every other method need a verified one
 (`Unauthenticated`). A listener without mutual TLS cannot serve `BootDelivery`.
+
+## Device Templates
+
+`platform.v1.DeviceService` creates device templates and builds profiles
+from them ([api.md §4](api.md#4-device-templates)). These are device
+templates, not vTPM templates (`VTPMService.CreateTemplate`); the messages
+carry the `DeviceTemplate…` prefix so the two cannot collide.
+
+```protobuf
+rpc CreateTemplate(DeviceTemplateCreateRequest) returns (DeviceTemplateCreateResponse);
+rpc CreateProfileFromTemplate(CreateProfileFromTemplateRequest) returns (CreateProfileResponse);
+
+message DeviceTemplate {
+  uint64 id = 1;
+  string tenant_id = 2;
+  string name = 3;
+  string description = 4;
+  DeviceRole role = 5;
+  bytes config = 6;
+  ProfileMatchRules match_rules = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+  BMCConfig bmc = 10;
+}
+
+message DeviceTemplateCreateRequest {
+  DeviceTemplate template = 1;
+}
+
+message DeviceTemplateCreateResponse {
+  Status status = 1;
+  DeviceTemplate template = 2;
+}
+
+message CreateProfileFromTemplateRequest {
+  uint64 template_id = 1;
+  DeviceProfile overrides = 2;
+}
+```
+
+`CreateTemplate` assigns an id when the template carries none and refuses
+an empty `name` (`InvalidArgument`). `CreateProfileFromTemplate` requires a
+non-zero `template_id`; an unknown one is `NotFound`. The profile takes the
+template's tenant, role, config and match rules, the non-empty `overrides`
+fields replace them (`DEVICE_ROLE_UNSPECIFIED` keeps the template's role),
+and the saved profile is returned. A daemon started without the template or
+the profile service answers `Unavailable`. Both RPCs require `device:write`.
 
 ## Usage Examples
 

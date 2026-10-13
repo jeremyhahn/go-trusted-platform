@@ -76,8 +76,10 @@ func toolPermissionCatalog() map[string]string {
 	permissions["device_list"] = "device:read"
 	permissions["device_delete"] = "device:delete"
 	permissions["device_update"] = "device:write"
-	permissions["device_attest"] = "device:read"
+	permissions["device_attest"] = "device:write"
 	permissions["device_record_attest_cert"] = "device:write"
+	permissions["device_disable"] = "device:write"
+	permissions["device_enable"] = "device:write"
 	// Diskless boot: a node holds no token. These tools are explicitly open
 	// ("") because the boot service authenticates the caller itself --
 	// proof of possession of the IDevID key bound to the connection, and the
@@ -105,6 +107,8 @@ func toolPermissionCatalog() map[string]string {
 	permissions["profile_delete_by_id"] = "device:delete"
 	permissions["profile_assign_to_device"] = "device:write"
 	permissions["profile_unassign_from_device"] = "device:write"
+	permissions["device_template_create"] = "device:write"
+	permissions["profile_create_from_template"] = "device:write"
 
 	// SDN tools
 	// Gateway load balancer tools

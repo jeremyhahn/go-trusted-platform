@@ -377,6 +377,18 @@ func (r *ToolRegistry) executeDeviceRecordAttestCert(ctx context.Context, args m
 	return marshalResult(result)
 }
 
+func (r *ToolRegistry) executeDeviceDisable(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	deviceID := getString(args, "device_id")
+	if deviceID == "" {
+		return nil, ErrDeviceIDRequired
+	}
+	result, err := r.service.DeviceDisable(ctx, deviceID, getString(args, "reason"))
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
 func (r *ToolRegistry) executeDeviceBootCertificate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	signature, err := base64.StdEncoding.DecodeString(getString(args, "signature"))
 	if err != nil {
@@ -384,6 +396,18 @@ func (r *ToolRegistry) executeDeviceBootCertificate(ctx context.Context, args ma
 	}
 
 	result, err := r.service.DeviceBootCertificate(ctx, getString(args, "identity"), signature)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeDeviceEnable(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	deviceID := getString(args, "device_id")
+	if deviceID == "" {
+		return nil, ErrDeviceIDRequired
+	}
+	result, err := r.service.DeviceEnable(ctx, deviceID)
 	if err != nil {
 		return nil, err
 	}

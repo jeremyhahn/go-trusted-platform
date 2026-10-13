@@ -145,6 +145,21 @@ var deviceServerRoutes = map[protoreflect.Name]deviceServerRoute{
 		req:      &platformv1.RecordAttestationCertificateRequest{DeviceId: "9"},
 		wire:     "POST /api/v1/devices/9/attest-cert/record",
 	},
+	"DisableDevice": {
+		template: "POST /api/v1/devices/{id:[0-9]+}/disable",
+		req:      &platformv1.DisableDeviceRequest{DeviceId: "11", Reason: "decommissioned"},
+		wire:     "POST /api/v1/devices/11/disable",
+	},
+	"EnableDevice": {
+		template: "POST /api/v1/devices/{id:[0-9]+}/enable",
+		req:      &platformv1.EnableDeviceRequest{DeviceId: "11"},
+		wire:     "POST /api/v1/devices/11/enable",
+	},
+	"CreateTemplate": {
+		template: "POST /api/v1/device/templates",
+		req:      &platformv1.DeviceTemplateCreateRequest{Template: &platformv1.DeviceTemplate{Name: "edge"}},
+		wire:     "POST /api/v1/device/templates",
+	},
 	"CreateProfileFromTemplate": {
 		template: "POST /api/v1/device/templates/{id:[0-9]+}/create-profile",
 		req:      &platformv1.CreateProfileFromTemplateRequest{TemplateId: 5},

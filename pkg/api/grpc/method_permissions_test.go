@@ -19,11 +19,10 @@ import (
 	"testing"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // =============================================================================
@@ -127,6 +126,60 @@ func TestScopeForMethod_UnknownMethodIsUnscoped(t *testing.T) {
 	}
 }
 
+// TestScopeForMethod_EveryDeviceServiceMethodIsScoped walks the generated
+// DeviceService descriptor so an RPC added to device.proto cannot ship
+// unscoped: a method absent from the catalog is allowed for any validated
+// token. DisableDevice and EnableDevice (#250) cut a device off the fabric
+// and re-admit it, and AttestDevice / RecordAttestationCertificate shipped
+// without entries before this check existed.
+func TestScopeForMethod_EveryDeviceServiceMethodIsScoped(t *testing.T) {
+	want := map[string]string{
+		"AttestDevice":                 "device:write",
+		"RecordAttestationCertificate": "device:write",
+		"DisableDevice":                "device:write",
+		"EnableDevice":                 "device:write",
+		"CreateTemplate":               "device:write",
+		"CreateProfileFromTemplate":    "device:write",
+		"FindConfigForDevice":          "device:read",
+	}
+	// A diskless node's per-boot calls carry no token: the daemon lists them
+	// in its gRPC skipMethods (pkg/api/daemon/daemon.go) and the boot service
+	// authenticates the node's proof bound to the connection. A scope here
+	// would never be checked, so they must stay unscoped.
+	tokenExempt := map[string]bool{
+		"BootCertificate": true,
+		"BootDelivery":    true,
+	}
+	desc := platformv1.DeviceService_ServiceDesc
+	names := make([]string, 0, len(desc.Methods)+len(desc.Streams))
+	for _, m := range desc.Methods {
+		names = append(names, m.MethodName)
+	}
+	for _, s := range desc.Streams {
+		names = append(names, s.StreamName)
+	}
+	if len(names) == 0 {
+		t.Fatal("DeviceService descriptor lists no RPCs")
+	}
+	for _, name := range names {
+		method := "/" + desc.ServiceName + "/" + name
+		got := ScopeForMethod(method)
+		if tokenExempt[name] {
+			if got != "" {
+				t.Errorf("ScopeForMethod(%s) = %q, want no scope for a token-exempt boot call", method, got)
+			}
+			continue
+		}
+		if got == "" {
+			t.Errorf("%s has no scope; any validated token may call it", method)
+			continue
+		}
+		if scope, pinned := want[name]; pinned && got != scope {
+			t.Errorf("ScopeForMethod(%s) = %q, want %q", method, got, scope)
+		}
+	}
+}
+
 // TestGRPCMethodPermissions_WellFormed asserts every catalog entry is a
 // well-formed colon "resource:action" scope with a known resource and action.
 func TestGRPCMethodPermissions_WellFormed(t *testing.T) {
@@ -152,6 +205,19 @@ func TestGRPCMethodPermissions_WellFormed(t *testing.T) {
 		}
 		if !strings.HasPrefix(method, "/platform.v1.") {
 			t.Errorf("method key %q is not a platform.v1 FullMethod", method)
+		}
+	}
+}
+
+// TestGRPCMethodPermissions_AttestationIsAWrite pins that the two
+// attestation RPCs persist state and so are not grantable by device:read.
+func TestGRPCMethodPermissions_AttestationIsAWrite(t *testing.T) {
+	for _, method := range []string{
+		"/platform.v1.DeviceService/AttestDevice",
+		"/platform.v1.DeviceService/RecordAttestationCertificate",
+	} {
+		if got := ScopeForMethod(method); got != "device:write" {
+			t.Errorf("ScopeForMethod(%q) = %q, want device:write", method, got)
 		}
 	}
 }

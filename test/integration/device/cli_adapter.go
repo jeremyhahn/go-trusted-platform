@@ -551,5 +551,51 @@ func (a *CLIAdapter) AssignProfileToDevice(ctx context.Context, opts AssignProfi
 	return &AssignProfileToDeviceResult{Profile: profile}, nil
 }
 
+// cliLifecycleOutput is the JSON platformctl device disable/enable prints.
+type cliLifecycleOutput struct {
+	ID                     uint64 `json:"id"`
+	State                  string `json:"state"`
+	PreviousState          string `json:"previous_state"`
+	StateReason            string `json:"state_reason"`
+	ReattestationRequested bool   `json:"reattestation_requested"`
+}
+
+// DisableDevice runs platformctl device disable.
+func (a *CLIAdapter) DisableDevice(ctx context.Context, opts DisableDeviceOptions) (*DeviceLifecycleResult, error) {
+	args := []string{"device", "disable", opts.DeviceID, "--output", "json"}
+	if opts.Reason != "" {
+		args = append(args, "--reason", opts.Reason)
+	}
+	return a.deviceLifecycle(ctx, "DisableDevice", args)
+}
+
+// EnableDevice runs platformctl device enable.
+func (a *CLIAdapter) EnableDevice(ctx context.Context, opts EnableDeviceOptions) (*DeviceLifecycleResult, error) {
+	return a.deviceLifecycle(ctx, "EnableDevice", []string{"device", "enable", opts.DeviceID, "--output", "json"})
+}
+
+func (a *CLIAdapter) deviceLifecycle(ctx context.Context, op string, args []string) (*DeviceLifecycleResult, error) {
+	output, err := a.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var out cliLifecycleOutput
+	if err := json.Unmarshal(output, &out); err != nil {
+		return nil, &CLIAdapterError{
+			Operation: op,
+			Message:   "failed to parse response",
+			Output:    string(output),
+		}
+	}
+	return &DeviceLifecycleResult{
+		DeviceID:               strconv.FormatUint(out.ID, 10),
+		State:                  out.State,
+		PreviousState:          out.PreviousState,
+		StateReason:            out.StateReason,
+		ReattestationRequested: out.ReattestationRequested,
+	}, nil
+}
+
 // Verify CLIAdapter implements DeviceCommands
 var _ DeviceCommands = (*CLIAdapter)(nil)

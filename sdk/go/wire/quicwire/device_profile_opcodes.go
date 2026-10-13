@@ -56,4 +56,25 @@ const (
 	// carries no token; the node's client certificate and quote, both bound
 	// to this connection, are its credential.
 	DeviceSubBootDelivery byte = 0x24
+
+	// DeviceSubDisable is the operator Disable Device:
+	// DeviceService.DisableDevice. Payload after the sub-opcode byte is the
+	// encoded DisableDeviceRequest; the response is DeviceLifecycleResponse.
+	DeviceSubDisable byte = 0x25
+
+	// DeviceSubEnable is the operator Enable Device:
+	// DeviceService.EnableDevice. Payload after the sub-opcode byte is the
+	// encoded EnableDeviceRequest; the response is DeviceLifecycleResponse.
+	DeviceSubEnable byte = 0x26
+
+	// DeviceSubTemplateCreate stores a device template:
+	// DeviceService.CreateTemplate. Request/response: platform.v1
+	// DeviceTemplateCreateRequest/Response.
+	DeviceSubTemplateCreate byte = 0x27
+
+	// DeviceSubProfileFromTemplate builds and saves a profile from a stored
+	// device template: DeviceService.CreateProfileFromTemplate.
+	// Request/response: platform.v1 CreateProfileFromTemplateRequest/
+	// CreateProfileResponse.
+	DeviceSubProfileFromTemplate byte = 0x28
 )

@@ -306,6 +306,9 @@ func templateEntity(t *wsdevice.TemplateResponse) *entities.DeviceTemplate {
 	}
 }
 
+// decodeEnvelopedEntity unwraps the standard {code, success, payload}
+// envelope the device handlers answer with and decodes the payload, a
+// domain entity with a string id, into entity.
 // ============================================================================
 // Device CRUD Operations
 // ============================================================================
@@ -705,9 +708,21 @@ func (a *RESTAdapter) ListTemplates(ctx context.Context, opts ListTemplatesOptio
 
 // CreateProfileFromTemplate creates a profile from a template
 func (a *RESTAdapter) CreateProfileFromTemplate(ctx context.Context, opts CreateProfileFromTemplateOptions) (*CreateProfileResult, error) {
+	// The template id travels in the path; the profile inherits the
+	// template's tenant, so only the overrides go in the body.
 	path := fmt.Sprintf("/api/v1/device/templates/%s/create-profile", opts.TemplateID)
+	overrides := map[string]string{}
+	for key, value := range map[string]string{
+		"name":        opts.Name,
+		"ek_serial":   opts.EKSerial,
+		"mac_address": opts.MACAddress,
+	} {
+		if value != "" {
+			overrides[key] = value
+		}
+	}
 
-	body, err := a.doRequest(ctx, http.MethodPost, path, opts)
+	body, err := a.doRequest(ctx, http.MethodPost, path, map[string]interface{}{"overrides": overrides})
 	if err != nil {
 		return nil, err
 	}
@@ -761,6 +776,54 @@ func (a *RESTAdapter) AssignProfileToDevice(ctx context.Context, opts AssignProf
 		return nil, err
 	}
 	return &AssignProfileToDeviceResult{Profile: profile}, nil
+}
+
+// restLifecycleEnvelope is the success envelope around a disable or enable
+// answer; the handler sends the uint64 device id as a string.
+type restLifecycleEnvelope struct {
+	Payload struct {
+		DeviceID               string `json:"device_id"`
+		State                  string `json:"state"`
+		PreviousState          string `json:"previous_state"`
+		StateReason            string `json:"state_reason"`
+		ReattestationRequested bool   `json:"reattestation_requested"`
+	} `json:"payload"`
+}
+
+// DisableDevice sends POST /api/v1/devices/{id}/disable.
+func (a *RESTAdapter) DisableDevice(ctx context.Context, opts DisableDeviceOptions) (*DeviceLifecycleResult, error) {
+	path := fmt.Sprintf("/api/v1/devices/%s/disable", opts.DeviceID)
+	return a.deviceLifecycle(ctx, "DisableDevice", path, map[string]string{"reason": opts.Reason})
+}
+
+// EnableDevice sends POST /api/v1/devices/{id}/enable.
+func (a *RESTAdapter) EnableDevice(ctx context.Context, opts EnableDeviceOptions) (*DeviceLifecycleResult, error) {
+	path := fmt.Sprintf("/api/v1/devices/%s/enable", opts.DeviceID)
+	return a.deviceLifecycle(ctx, "EnableDevice", path, nil)
+}
+
+func (a *RESTAdapter) deviceLifecycle(ctx context.Context, op, path string, reqBody interface{}) (*DeviceLifecycleResult, error) {
+	body, err := a.doRequest(ctx, http.MethodPost, path, reqBody)
+	if err != nil {
+		return nil, err
+	}
+
+	var envelope restLifecycleEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, &RESTAdapterError{
+			Operation: op,
+			Message:   "failed to parse response: " + err.Error(),
+			Body:      string(body),
+		}
+	}
+	p := envelope.Payload
+	return &DeviceLifecycleResult{
+		DeviceID:               p.DeviceID,
+		State:                  p.State,
+		PreviousState:          p.PreviousState,
+		StateReason:            p.StateReason,
+		ReattestationRequested: p.ReattestationRequested,
+	}, nil
 }
 
 // Verify RESTAdapter implements DeviceCommands

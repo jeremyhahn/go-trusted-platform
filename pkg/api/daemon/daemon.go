@@ -710,6 +710,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			WithDeviceAKTrust(deviceAKTrust(config)),
 			WithDeviceVerdictSink(deviceVerdictSink(config)),
 			WithDeviceAttestCertRecorder(newDeviceAttestCertRecorder(config, logger.Slog())),
+			WithDeviceLifecycle(config.DeviceLifecycle),
+			WithDeviceTemplateService(config.DeviceTemplateService),
 			WithDeviceBootCA(config.CAService),
 		)
 
@@ -1124,8 +1126,12 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			quicHandler.SetDeviceProfileService(config.DeviceProfileService)
 			quicHandler.SetDeviceVerdictSink(deviceVerdictSink(config))
 		}
+		if config.DeviceTemplateService != nil {
+			quicHandler.SetDeviceTemplateService(config.DeviceTemplateService)
+		}
 		if config.DeviceService != nil {
 			quicHandler.SetDeviceAttestCertRecorder(newDeviceAttestCertRecorder(config, quicLogger.Slog()))
+			quicHandler.SetDeviceLifecycle(config.DeviceLifecycle)
 			if config.CAService != nil {
 				quicHandler.SetDeviceBootCA(config.CAService)
 			}
@@ -1820,8 +1826,10 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		VTPMService:           d.config.VTPMService,
 		DeviceService:         d.config.DeviceService,
 		DeviceProfileService:  d.config.DeviceProfileService,
+		DeviceTemplateService: d.config.DeviceTemplateService,
 		VerdictSink:           deviceVerdictSink(d.config),
 		AttestCertRecorder:    newDeviceAttestCertRecorder(d.config, d.logger.Slog()),
+		DeviceLifecycle:       d.config.DeviceLifecycle,
 		AttestationReporting:  d.config.AttestationReporting,
 		AttestationServer:     d.attestationService,
 		SDNService:            d.sdnService,

@@ -57,10 +57,12 @@ type PlatformServiceProvider struct {
 	quoteVerifier  *DeviceQuoteVerifier
 	// attestCertRecorder backs the device_record_attest_cert tool.
 	attestCertRecorder AttestCertRecorder
-	sdnService         *SDNService
-	zoneService        gateway.ZoneService
-	healthService      *Service
-	logger             *slog.Logger
+	// lifecycle backs the device_disable and device_enable tools.
+	lifecycle     DeviceLifecycle
+	sdnService    *SDNService
+	zoneService   gateway.ZoneService
+	healthService *Service
+	logger        *slog.Logger
 }
 
 // PlatformServiceProviderConfig holds configuration for creating a PlatformServiceProvider.
@@ -78,11 +80,14 @@ type PlatformServiceProviderConfig struct {
 	// AttestCertRecorder backs device_record_attest_cert; nil means the
 	// tool answers that no certificate authority is configured.
 	AttestCertRecorder AttestCertRecorder
-	SDNService         *SDNService
-	ZoneService        gateway.ZoneService
-	HealthService      *Service
-	NTPService         platformv1.NTPServiceServer
-	Logger             *slog.Logger
+	// DeviceLifecycle backs device_disable and device_enable; nil means
+	// the tools answer that no SDN policy engine enforces them.
+	DeviceLifecycle DeviceLifecycle
+	SDNService      *SDNService
+	ZoneService     gateway.ZoneService
+	HealthService   *Service
+	NTPService      platformv1.NTPServiceServer
+	Logger          *slog.Logger
 }
 
 // NewPlatformServiceProvider creates a new PlatformServiceProvider.
@@ -105,6 +110,7 @@ func NewPlatformServiceProvider(config *PlatformServiceProviderConfig) *Platform
 			logger,
 		),
 		attestCertRecorder: config.AttestCertRecorder,
+		lifecycle:          config.DeviceLifecycle,
 		sdnService:         config.SDNService,
 		zoneService:        config.ZoneService,
 		healthService:      config.HealthService,
@@ -644,6 +650,16 @@ func (p *PlatformServiceProvider) DeviceAttest(ctx context.Context, deviceID str
 // answer: the same fail-closed preflight and the same refusal.
 func (p *PlatformServiceProvider) DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue, clearOnRefusal bool) (interface{}, error) {
 	return recordAttestCertForMCP(ctx, p.attestCertRecorder, deviceID, reissue, clearOnRefusal, p.logger)
+}
+
+// DeviceDisable serves the MCP device_disable tool with the gRPC answer.
+func (p *PlatformServiceProvider) DeviceDisable(ctx context.Context, deviceID, reason string) (interface{}, error) {
+	return deviceLifecycleForMCP(ctx, p.lifecycle, deviceID, reason, false, p.logger)
+}
+
+// DeviceEnable serves the MCP device_enable tool with the gRPC answer.
+func (p *PlatformServiceProvider) DeviceEnable(ctx context.Context, deviceID string) (interface{}, error) {
+	return deviceLifecycleForMCP(ctx, p.lifecycle, deviceID, "", true, p.logger)
 }
 
 // DeviceBootCertificate refuses a diskless node's boot-certificate request:

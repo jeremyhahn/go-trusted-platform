@@ -16,7 +16,11 @@ package mcp
 import (
 	"context"
 	"errors"
+	"reflect"
+	"slices"
 	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 func TestNewToolRegistry(t *testing.T) {
@@ -80,6 +84,7 @@ func TestToolRegistry_ListTools(t *testing.T) {
 			// Device
 			"device_register", "device_get", "device_list", "device_delete",
 			"device_update", "device_attest", "device_record_attest_cert", "device_provision",
+			"device_disable", "device_enable",
 			// SDN
 			"sdn_get_port_state", "sdn_set_port_state", "sdn_list_bridges",
 			"sdn_create_bridge", "sdn_delete_bridge", "sdn_add_port", "sdn_delete_port",
@@ -130,6 +135,89 @@ func TestToolRegistry_ListTools(t *testing.T) {
 			}
 		}
 	})
+}
+
+// duplicateToolNames returns each tool name that appears more than once in
+// tools, once, in the order its second registration appears.
+func duplicateToolNames(tools []mcpwire.ToolDefinition) []string {
+	seen := make(map[string]int, len(tools))
+	var duplicates []string
+	for _, tool := range tools {
+		seen[tool.Name]++
+		if seen[tool.Name] == 2 {
+			duplicates = append(duplicates, tool.Name)
+		}
+	}
+	return duplicates
+}
+
+// TestToolRegistry_EachToolNameRegisteredOnce is the #250 regression: the
+// vtpm_template_{create,get,list,delete} tools were registered twice, once
+// with the schema their executor reads and once with argument names it
+// ignores, and tools/list advertised both.
+func TestToolRegistry_EachToolNameRegisteredOnce(t *testing.T) {
+	registry := NewToolRegistry(newMockServiceProvider(), newTestLogger())
+
+	if duplicates := duplicateToolNames(registry.ListTools()); len(duplicates) > 0 {
+		t.Errorf("tools registered more than once: %v", duplicates)
+	}
+}
+
+func TestDuplicateToolNames_ReportsReRegisteredTool(t *testing.T) {
+	registry := NewToolRegistry(newMockServiceProvider(), newTestLogger())
+	first := registry.ListTools()[0]
+	registry.addTool(first)
+	registry.addTool(first)
+
+	duplicates := duplicateToolNames(registry.ListTools())
+	if len(duplicates) != 1 || duplicates[0] != first.Name {
+		t.Errorf("duplicateToolNames = %v, want [%s] reported once", duplicates, first.Name)
+	}
+}
+
+// toolProperty returns the named input-schema property of the named tool,
+// or nil when the tool or the property is absent.
+func toolProperty(tools []mcpwire.ToolDefinition, toolName, property string) map[string]interface{} {
+	for _, tool := range tools {
+		if tool.Name != toolName {
+			continue
+		}
+		properties, _ := tool.InputSchema["properties"].(map[string]interface{})
+		prop, _ := properties[property].(map[string]interface{})
+		return prop
+	}
+	return nil
+}
+
+// TestVTPMTemplateCreate_AlgorithmEnum is the #401 regression: the
+// vtpm_template_create schema advertised a free-form algorithm, while
+// VTPMCreateTemplate understands only RSA and ECC and reads anything else
+// as RSA.
+func TestVTPMTemplateCreate_AlgorithmEnum(t *testing.T) {
+	registry := NewToolRegistry(newMockServiceProvider(), newTestLogger())
+
+	algorithm := toolProperty(registry.ListTools(), "vtpm_template_create", "algorithm")
+	if algorithm == nil {
+		t.Fatal("vtpm_template_create has no algorithm property")
+	}
+	enum, _ := algorithm["enum"].([]string)
+	if !reflect.DeepEqual(enum, []string{"RSA", "ECC"}) {
+		t.Errorf("algorithm enum = %v, want [RSA ECC]", algorithm["enum"])
+	}
+	if !slices.Contains(enum, algorithm["default"].(string)) {
+		t.Errorf("algorithm default %v is not in enum %v", algorithm["default"], enum)
+	}
+}
+
+func TestToolProperty_MissingToolOrProperty(t *testing.T) {
+	tools := NewToolRegistry(newMockServiceProvider(), newTestLogger()).ListTools()
+
+	if prop := toolProperty(tools, "no_such_tool", "algorithm"); prop != nil {
+		t.Errorf("toolProperty(no_such_tool) = %v, want nil", prop)
+	}
+	if prop := toolProperty(tools, "vtpm_template_create", "no_such_property"); prop != nil {
+		t.Errorf("toolProperty(no_such_property) = %v, want nil", prop)
+	}
 }
 
 func TestToolRegistry_SetAuthorizationChecker(t *testing.T) {

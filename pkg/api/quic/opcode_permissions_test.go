@@ -79,6 +79,8 @@ func TestLookupOperationPermission_CategorySubOpcodes(t *testing.T) {
 		{"vm snapshot delete", quicwire.OpVMExtendedCategory, quicwire.OpVMSnapshotDelete, OpcodePermission{Resource: "vm", Action: "delete"}},
 		{"eab revoke", quicwire.OpProvisioningCategory, quicwire.EABSubRevokeCredential, OpcodePermission{Resource: "eab", Action: "write"}},
 		{"device profile assign", quicwire.OpProvisioningCategory, quicwire.DeviceProfileSubAssign, OpcodePermission{Resource: "device", Action: "write"}},
+		{"device disable", quicwire.OpProvisioningCategory, quicwire.DeviceSubDisable, OpcodePermission{Resource: "device", Action: "write"}},
+		{"device enable", quicwire.OpProvisioningCategory, quicwire.DeviceSubEnable, OpcodePermission{Resource: "device", Action: "write"}},
 		{"bmc enroll", quicwire.OpBMCCategory, quicwire.BMCSubEnroll, OpcodePermission{Resource: "bmc", Action: "admin"}},
 		{"tenant barrier unseal", quicwire.OpTenantBarrierCategory, quicwire.TenantBarrierSubUnseal, OpcodePermission{Resource: "tenant", Action: "write"}},
 		{"tenant barrier status", quicwire.OpTenantBarrierCategory, quicwire.TenantBarrierSubStatus, OpcodePermission{Resource: "tenant", Action: "read"}},

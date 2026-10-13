@@ -14,7 +14,8 @@
 package device
 
 import (
-	"context"
+	"errors"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -25,11 +26,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
-
-// ConfigForDeviceFinder provides config resolution for devices by identity.
-type ConfigForDeviceFinder interface {
-	FindConfigForDevice(ctx context.Context, ekSerial, mac string) (*entities.DeviceProfile, error)
-}
 
 // TemplateCRUDHandler provides REST handlers for device template and config delivery operations.
 type TemplateCRUDHandler interface {
@@ -272,9 +268,15 @@ func (h *TemplateHandler) CreateProfileFromTemplate(w http.ResponseWriter, r *ht
 		return
 	}
 
+	// The body is optional, but one that does not decode is refused rather
+	// than silently creating the profile without the caller's overrides.
 	var overrides *entities.DeviceProfile
 	var req CreateProfileFromTemplateRequest
-	if err := decodeJSONBody(r, &req); err == nil && req.Overrides != nil {
+	if err := decodeJSONBody(r, &req); err != nil && !errors.Is(err, io.EOF) {
+		h.responseWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+		return
+	}
+	if req.Overrides != nil {
 		overrides, err = profileRequestToEntity(req.Overrides)
 		if err != nil {
 			h.responseWriter.Error400(w, r, err)
@@ -282,20 +284,9 @@ func (h *TemplateHandler) CreateProfileFromTemplate(w http.ResponseWriter, r *ht
 		}
 	}
 
-	profile, err := h.templateService.ToProfile(r.Context(), templateID, overrides)
+	profile, err := device.CreateProfileFromTemplate(r.Context(), h.templateService, h.profileService, templateID, overrides)
 	if err != nil {
 		h.logger.Errorf("failed to create profile from template: template_id=%d error=%v", templateID, err)
-		handleServiceErr(h.responseWriter, w, r, err)
-		return
-	}
-	// The template carries no profile id; one is minted server-side unless
-	// the overrides name it, as on the other create routes.
-	if profile.ID == 0 {
-		profile.ID = device.NewID()
-	}
-
-	if err := h.profileService.Save(r.Context(), profile); err != nil {
-		h.logger.Errorf("failed to save profile from template: %v", err)
 		handleServiceErr(h.responseWriter, w, r, err)
 		return
 	}
@@ -319,7 +310,7 @@ func (h *TemplateHandler) FindConfigForDevice(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	finder, ok := h.profileService.(ConfigForDeviceFinder)
+	finder, ok := h.profileService.(device.ConfigForDeviceFinder)
 	if !ok {
 		h.responseWriter.Error500(w, r, ErrProfileServiceNotInitializedError{})
 		return

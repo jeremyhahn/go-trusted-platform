@@ -533,7 +533,14 @@ func (a *GRPCAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCer
 
 // CreateTemplate creates a new device template via gRPC.
 func (a *GRPCAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOptions) (*CreateTemplateResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "CreateTemplate"}
+	resp, err := a.client.CreateTemplate(ctx, templateCreateRequest(opts))
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "CreateTemplate", Err: err}
+	}
+	if resp.GetTemplate() == nil {
+		return nil, ErrGRPCCallFailed{Method: "CreateTemplate", Err: fmt.Errorf("daemon returned no template")}
+	}
+	return &CreateTemplateResult{Template: protoToTemplate(resp.GetTemplate())}, nil
 }
 
 // GetTemplate retrieves a template by ID via gRPC.
@@ -630,6 +637,24 @@ func (a *GRPCAdapter) AssignProfileToDevice(ctx context.Context, opts AssignProf
 	}, nil
 }
 
+// DisableDevice calls DeviceService.DisableDevice.
+func (a *GRPCAdapter) DisableDevice(ctx context.Context, opts DisableDeviceOptions) (*DeviceLifecycleResult, error) {
+	resp, err := a.client.DisableDevice(ctx, &pb.DisableDeviceRequest{DeviceId: opts.DeviceID, Reason: opts.Reason})
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "DisableDevice", Err: err}
+	}
+	return lifecycleResultFromProto(resp), nil
+}
+
+// EnableDevice calls DeviceService.EnableDevice.
+func (a *GRPCAdapter) EnableDevice(ctx context.Context, opts EnableDeviceOptions) (*DeviceLifecycleResult, error) {
+	resp, err := a.client.EnableDevice(ctx, &pb.EnableDeviceRequest{DeviceId: opts.DeviceID})
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "EnableDevice", Err: err}
+	}
+	return lifecycleResultFromProto(resp), nil
+}
+
 // =============================================================================
 // Proto Conversion Helpers
 // =============================================================================
@@ -684,6 +709,38 @@ func protoToProfile(p *pb.DeviceProfile) *entities.DeviceProfile {
 	}
 
 	return profile
+}
+
+// templateCreateRequest is the DeviceService.CreateTemplate request every
+// RPC-shaped adapter (gRPC, Unix, QUIC) sends for opts.
+func templateCreateRequest(opts CreateTemplateOptions) *pb.DeviceTemplateCreateRequest {
+	return &pb.DeviceTemplateCreateRequest{
+		Template: &pb.DeviceTemplate{
+			TenantId:    opts.TenantID,
+			Name:        opts.Name,
+			Description: opts.Description,
+			Role:        grpcapi.EntityRoleToProto(opts.Role),
+			Config:      opts.Config,
+			MatchRules:  entityMatchRulesToProto(opts.MatchRules),
+		},
+	}
+}
+
+// protoToTemplate maps the template a CreateTemplate response carries
+// onto the entity the shared subtests compare against.
+func protoToTemplate(t *pb.DeviceTemplate) *entities.DeviceTemplate {
+	if t == nil {
+		return nil
+	}
+	return &entities.DeviceTemplate{
+		ID:          t.GetId(),
+		TenantID:    t.GetTenantId(),
+		Name:        t.GetName(),
+		Description: t.GetDescription(),
+		Role:        grpcapi.ProtoRoleToEntity(t.GetRole()),
+		Config:      t.GetConfig(),
+		MatchRules:  protoMatchRulesToEntity(t.GetMatchRules()),
+	}
 }
 
 // protoMatchRulesToEntity converts proto ProfileMatchRules to entity ProfileMatchRules

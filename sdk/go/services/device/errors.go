@@ -248,6 +248,34 @@ func (e *ErrCountProfilesFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrCreateTemplateFailed is returned when creating a device template fails.
+type ErrCreateTemplateFailed struct {
+	Cause error
+}
+
+func (e *ErrCreateTemplateFailed) Error() string {
+	return fmt.Sprintf("failed to create device template: %v", e.Cause)
+}
+
+func (e *ErrCreateTemplateFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrCreateProfileFromTemplateFailed is returned when deriving a profile
+// from a device template fails.
+type ErrCreateProfileFromTemplateFailed struct {
+	TemplateID uint64
+	Cause      error
+}
+
+func (e *ErrCreateProfileFromTemplateFailed) Error() string {
+	return fmt.Sprintf("failed to create profile from template %d: %v", e.TemplateID, e.Cause)
+}
+
+func (e *ErrCreateProfileFromTemplateFailed) Unwrap() error {
+	return e.Cause
+}
+
 // ErrAssignProfileFailed is returned when assigning a profile to a device fails.
 type ErrAssignProfileFailed struct {
 	ProfileID uint64
@@ -328,5 +356,38 @@ func (e *ErrRecordAttestCertFailed) Error() string {
 }
 
 func (e *ErrRecordAttestCertFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrDisableFailed is returned when the control plane refuses or fails an
+// operator Disable. Cause carries the gRPC status: FailedPrecondition when
+// no SDN policy engine runs, the device has no switch port or its state
+// cannot move to suspended.
+type ErrDisableFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e *ErrDisableFailed) Error() string {
+	return fmt.Sprintf("failed to disable device %d: %v", e.ID, e.Cause)
+}
+
+func (e *ErrDisableFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrEnableFailed is returned when the control plane refuses or fails an
+// operator Enable. Cause carries the gRPC status: FailedPrecondition when
+// the device is not disabled.
+type ErrEnableFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e *ErrEnableFailed) Error() string {
+	return fmt.Sprintf("failed to enable device %d: %v", e.ID, e.Cause)
+}
+
+func (e *ErrEnableFailed) Unwrap() error {
 	return e.Cause
 }

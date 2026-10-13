@@ -67,9 +67,9 @@ func tenantBoundIAMServer(t *testing.T, servedTenant *string) *httptest.Server {
 			*servedTenant = tenantID
 			return &iamsdk.ListUsersResponse{}, nil
 		},
-		updateUserFn: func(_ context.Context, tenantID, userID string, _ *iamsdk.UpdateUserRequest) (*iamsdk.User, error) {
+		updateUserFn: func(_ context.Context, tenantID, userID string, req *iamsdk.UpdateUserRequest) (*iamsdk.User, error) {
 			*servedTenant = tenantID
-			return &iamsdk.User{ID: userID, TenantID: tenantID}, nil
+			return &iamsdk.User{ID: userID, TenantID: tenantID, Email: req.Email}, nil
 		},
 		createRoleFn: func(_ context.Context, tenantID string, req *iamsdk.CreateRoleRequest) (*iamsdk.Role, error) {
 			*servedTenant = tenantID
@@ -79,9 +79,9 @@ func tenantBoundIAMServer(t *testing.T, servedTenant *string) *httptest.Server {
 			*servedTenant = tenantID
 			return &iamsdk.ListRolesResponse{}, nil
 		},
-		updateRoleFn: func(_ context.Context, tenantID, roleID string, _ *iamsdk.UpdateRoleRequest) (*iamsdk.Role, error) {
+		updateRoleFn: func(_ context.Context, tenantID, roleID string, req *iamsdk.UpdateRoleRequest) (*iamsdk.Role, error) {
 			*servedTenant = tenantID
-			return &iamsdk.Role{ID: roleID, TenantID: tenantID}, nil
+			return &iamsdk.Role{ID: roleID, TenantID: tenantID, Description: req.Description}, nil
 		},
 		createGroupFn: func(_ context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error) {
 			*servedTenant = tenantID
@@ -91,9 +91,9 @@ func tenantBoundIAMServer(t *testing.T, servedTenant *string) *httptest.Server {
 			*servedTenant = tenantID
 			return &iamsdk.ListGroupsResponse{}, nil
 		},
-		updateGroupFn: func(_ context.Context, tenantID, groupID string, _ *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error) {
+		updateGroupFn: func(_ context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error) {
 			*servedTenant = tenantID
-			return &iamsdk.Group{ID: groupID, TenantID: tenantID}, nil
+			return &iamsdk.Group{ID: groupID, TenantID: tenantID, Description: req.Description}, nil
 		},
 	}
 
@@ -152,6 +152,27 @@ func TestIAMOverSDKREST_TenantBinding(t *testing.T) {
 			},
 			response: func() proto.Message { return &platformv1.IAMGroupResponse{} },
 		},
+		"UpdateUser": {
+			grpcMethod: "/platform.v1.PlatformIAMService/UpdateUser",
+			request: func(tenantID string) proto.Message {
+				return &platformv1.UpdateIAMUserRequest{TenantId: tenantID, UserId: "u-1", Email: "u1@example.test"}
+			},
+			response: func() proto.Message { return &platformv1.IAMUserResponse{} },
+		},
+		"UpdateRole": {
+			grpcMethod: "/platform.v1.PlatformIAMService/UpdateRole",
+			request: func(tenantID string) proto.Message {
+				return &platformv1.UpdateIAMRoleRequest{TenantId: tenantID, RoleId: "r-1", Description: "ops"}
+			},
+			response: func() proto.Message { return &platformv1.IAMRoleResponse{} },
+		},
+		"UpdateGroup": {
+			grpcMethod: "/platform.v1.PlatformIAMService/UpdateGroup",
+			request: func(tenantID string) proto.Message {
+				return &platformv1.UpdateIAMGroupRequest{TenantId: tenantID, GroupId: "g-1", Description: "ops"}
+			},
+			response: func() proto.Message { return &platformv1.IAMGroupResponse{} },
+		},
 	}
 
 	cases := []struct {
@@ -194,6 +215,82 @@ func TestIAMOverSDKREST_TenantBinding(t *testing.T) {
 	}
 }
 
+// TestIAMOverSDKREST_Update drives the Go SDK's three IAM updates over its
+// REST transport against the real router and handlers. They had no REST
+// route and fell back to /api/v1/platformiam/update<item>, which the server
+// does not serve (#401). Each must reach the tenant-scoped PUT route, carry
+// its changed field in the body, and come back as the updated resource on
+// the reply.
+func TestIAMOverSDKREST_Update(t *testing.T) {
+	cases := []struct {
+		name       string
+		grpcMethod string
+		request    proto.Message
+		response   proto.Message
+		changed    func(reply proto.Message) string
+		want       string
+	}{
+		{
+			name:       "UpdateUser",
+			grpcMethod: "/platform.v1.PlatformIAMService/UpdateUser",
+			request:    &platformv1.UpdateIAMUserRequest{TenantId: "tenant-a", UserId: "u-1", Email: "u1@example.test"},
+			response:   &platformv1.IAMUserResponse{},
+			changed: func(reply proto.Message) string {
+				return reply.(*platformv1.IAMUserResponse).GetUser().GetEmail()
+			},
+			want: "u1@example.test",
+		},
+		{
+			name:       "UpdateRole",
+			grpcMethod: "/platform.v1.PlatformIAMService/UpdateRole",
+			request:    &platformv1.UpdateIAMRoleRequest{TenantId: "tenant-a", RoleId: "r-1", Description: "ops"},
+			response:   &platformv1.IAMRoleResponse{},
+			changed: func(reply proto.Message) string {
+				return reply.(*platformv1.IAMRoleResponse).GetRole().GetDescription()
+			},
+			want: "ops",
+		},
+		{
+			name:       "UpdateGroup",
+			grpcMethod: "/platform.v1.PlatformIAMService/UpdateGroup",
+			request:    &platformv1.UpdateIAMGroupRequest{TenantId: "tenant-a", GroupId: "g-1", Description: "ops"},
+			response:   &platformv1.IAMGroupResponse{},
+			changed: func(reply proto.Message) string {
+				return reply.(*platformv1.IAMGroupResponse).GetGroup().GetDescription()
+			},
+			want: "ops",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var servedTenant string
+			server := tenantBoundIAMServer(t, &servedTenant)
+
+			tlsConfig := server.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+			conn, err := sdkrest.Connect(context.Background(), platform.NewOptions(
+				platform.WithRESTAddr(server.URL), platform.WithTLSConfig(tlsConfig)))
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				if err := conn.Close(); err != nil {
+					t.Errorf("Close: %v", err)
+				}
+			})
+			adapter := conn.(*sdkrest.Adapter)
+
+			if err := adapter.Connection().Invoke(context.Background(), tc.grpcMethod, tc.request, tc.response); err != nil {
+				t.Fatalf("Invoke: %v", err)
+			}
+			if servedTenant != "tenant-a" {
+				t.Fatalf("served from tenant %q, want %q", servedTenant, "tenant-a")
+			}
+			if got := tc.changed(tc.response); got != tc.want {
+				t.Fatalf("reply carries %q, want the updated %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestIAMOverRawREST_FlatRouteTenantQuery pins #401 for a raw REST client
 // on the flat routes: a tenant_id query naming another tenant is refused
 // with 403, as gRPC refuses it with PermissionDenied, and never answered
@@ -222,6 +319,52 @@ func TestIAMOverRawREST_FlatRouteTenantQuery(t *testing.T) {
 				server := tenantBoundIAMServer(t, &servedTenant)
 
 				resp, err := server.Client().Get(server.URL + path + tc.query)
+				require.NoError(t, err)
+				require.NoError(t, resp.Body.Close())
+
+				if resp.StatusCode != tc.wantStatus {
+					t.Fatalf("status = %d, want %d", resp.StatusCode, tc.wantStatus)
+				}
+				if servedTenant != tc.wantServedFor {
+					t.Fatalf("served from tenant %q, want %q", servedTenant, tc.wantServedFor)
+				}
+			})
+		}
+	}
+}
+
+// TestIAMOverRawREST_ScopedRouteTenantQuery: on a /tenants/{tenant}/ route a
+// tenant_id query naming another tenant was ignored and the path's tenant
+// served (#401). It is refused with 403 before the handler runs, whichever
+// of the two is the caller's own; the same tenant in both, or no query, is
+// served as before.
+func TestIAMOverRawREST_ScopedRouteTenantQuery(t *testing.T) {
+	items := map[string]string{
+		"GetUser":  "/users/u-1",
+		"GetRole":  "/roles/r-1",
+		"GetGroup": "/groups/g-1",
+	}
+	cases := []struct {
+		name          string
+		pathTenant    string
+		query         string
+		wantStatus    int
+		wantServedFor string
+	}{
+		{name: "no query", pathTenant: "tenant-a", query: "", wantStatus: http.StatusOK, wantServedFor: "tenant-a"},
+		{name: "query matches path", pathTenant: "tenant-a", query: "?tenant_id=tenant-a", wantStatus: http.StatusOK, wantServedFor: "tenant-a"},
+		{name: "query names another tenant", pathTenant: "tenant-a", query: "?tenant_id=tenant-b", wantStatus: http.StatusForbidden},
+		{name: "path names another tenant", pathTenant: "tenant-b", query: "?tenant_id=tenant-a", wantStatus: http.StatusForbidden},
+	}
+
+	for operation, item := range items {
+		for _, tc := range cases {
+			t.Run(operation+"/"+tc.name, func(t *testing.T) {
+				var servedTenant string
+				server := tenantBoundIAMServer(t, &servedTenant)
+
+				target := "/api/v1/iam/tenants/" + tc.pathTenant + item + tc.query
+				resp, err := server.Client().Get(server.URL + target)
 				require.NoError(t, err)
 				require.NoError(t, resp.Body.Close())
 

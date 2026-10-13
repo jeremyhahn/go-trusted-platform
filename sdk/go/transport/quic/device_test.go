@@ -52,6 +52,8 @@ func TestGRPCMethodToOpcodeMap_Device(t *testing.T) {
 		{"/platform.v1.DeviceService/DeleteProfile", quicwire.OpDeviceDeleteProfile},
 		{"/platform.v1.DeviceService/AssignProfileToDevice", quicwire.OpProvisioningCategory},
 		{"/platform.v1.DeviceService/UnassignProfileFromDevice", quicwire.OpProvisioningCategory},
+		{"/platform.v1.DeviceService/DisableDevice", quicwire.OpProvisioningCategory},
+		{"/platform.v1.DeviceService/EnableDevice", quicwire.OpProvisioningCategory},
 	}
 
 	for _, tt := range tests {
@@ -74,6 +76,10 @@ func TestGRPCMethodToOpcodeMap_Device(t *testing.T) {
 		{"/platform.v1.DeviceService/RecordAttestationCertificate", quicwire.DeviceSubRecordAttestCert},
 		{"/platform.v1.DeviceService/BootCertificate", quicwire.DeviceSubBootCertificate},
 		{"/platform.v1.DeviceService/BootDelivery", quicwire.DeviceSubBootDelivery},
+		{"/platform.v1.DeviceService/DisableDevice", quicwire.DeviceSubDisable},
+		{"/platform.v1.DeviceService/EnableDevice", quicwire.DeviceSubEnable},
+		{"/platform.v1.DeviceService/CreateTemplate", quicwire.DeviceSubTemplateCreate},
+		{"/platform.v1.DeviceService/CreateProfileFromTemplate", quicwire.DeviceSubProfileFromTemplate},
 	}
 	for _, tt := range subTests {
 		if opcode := grpcMethodToOpcodeMap[tt.method]; opcode != quicwire.OpProvisioningCategory {
@@ -206,6 +212,36 @@ func TestInvoke_DeviceUnassign_CategoryFraming(t *testing.T) {
 	}
 	if decoded.GetProfileId() != 400 {
 		t.Errorf("ProfileId = %d, want 400", decoded.GetProfileId())
+	}
+}
+
+// TestInvoke_DeviceDisable_CategoryFraming verifies the operator Disable
+// travels under OpProvisioningCategory with the DeviceSubDisable prefix and
+// carries the reason.
+func TestInvoke_DeviceDisable_CategoryFraming(t *testing.T) {
+	sender := &recordingSender{}
+	conn := newConnWithSender(t, sender)
+
+	err := conn.Invoke(context.Background(),
+		"/platform.v1.DeviceService/DisableDevice",
+		&platformv1.DisableDeviceRequest{DeviceId: "42", Reason: "rma pending"},
+		nil)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+
+	if sender.rawOpcode != quicwire.OpProvisioningCategory {
+		t.Errorf("opcode = 0x%02X, want OpProvisioningCategory", sender.rawOpcode)
+	}
+	if len(sender.rawPayload) < 2 || sender.rawPayload[0] != quicwire.DeviceSubDisable {
+		t.Fatalf("payload[0] = 0x%02X, want DeviceSubDisable", sender.rawPayload[0])
+	}
+	var decoded platformv1.DisableDeviceRequest
+	if err := quicwire.DecodePayload(sender.rawPayload[1:], &decoded); err != nil {
+		t.Fatalf("decode framed request: %v", err)
+	}
+	if decoded.GetDeviceId() != "42" || decoded.GetReason() != "rma pending" {
+		t.Errorf("decoded = %+v, want device 42 with the reason", &decoded)
 	}
 }
 

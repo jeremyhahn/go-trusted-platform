@@ -162,11 +162,17 @@ type deviceProfileToolRequest struct {
 // typed request via a JSON round trip so nested objects (networks,
 // match_rules, config) decode into their entity types.
 func decodeDeviceProfileToolRequest(args map[string]interface{}) (*deviceProfileToolRequest, error) {
+	return decodeToolArgs[deviceProfileToolRequest](args)
+}
+
+// decodeToolArgs decodes tool arguments into the typed request T through
+// a JSON round trip, so the struct's json tags define the argument names.
+func decodeToolArgs[T any](args map[string]interface{}) (*T, error) {
 	encoded, err := json.Marshal(args)
 	if err != nil {
 		return nil, ErrDeviceProfileInvalidArgs{Cause: err}
 	}
-	var req deviceProfileToolRequest
+	var req T
 	if err := json.Unmarshal(encoded, &req); err != nil {
 		return nil, ErrDeviceProfileInvalidArgs{Cause: err}
 	}
@@ -194,7 +200,13 @@ func decodeDeviceProfileEventLog(encoded string) ([]byte, error) {
 // certificate is public key material carrying no secrets, so echoing it
 // back lets operators audit which certificate is prestaged.
 func deviceProfileToolResult(profile *entities.DeviceProfile) (interface{}, error) {
-	encoded, err := json.Marshal(profile)
+	return entityToolResult(profile, profile.ID)
+}
+
+// entityToolResult renders an entity as a JSON object whose numbers keep
+// their precision and whose uint64 id is a decimal string.
+func entityToolResult(entity any, id uint64) (map[string]interface{}, error) {
+	encoded, err := json.Marshal(entity)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +216,7 @@ func deviceProfileToolResult(profile *entities.DeviceProfile) (interface{}, erro
 	if err := decoder.Decode(&result); err != nil {
 		return nil, err
 	}
-	result["id"] = formatUint64ID(profile.ID)
+	result["id"] = formatUint64ID(id)
 	return result, nil
 }
 
@@ -224,6 +236,8 @@ var deviceProfileToolDispatch = map[string]deviceProfileToolHandler{
 	"profile_delete_by_id":         (*ToolRegistry).executeDeviceProfileDelete,
 	"profile_assign_to_device":     (*ToolRegistry).executeDeviceProfileAssign,
 	"profile_unassign_from_device": (*ToolRegistry).executeDeviceProfileUnassign,
+	"device_template_create":       (*ToolRegistry).executeDeviceTemplateCreate,
+	"profile_create_from_template": (*ToolRegistry).executeDeviceProfileFromTemplate,
 }
 
 // dispatchDeviceProfileTool looks up a device profile tool and invokes it.
@@ -255,6 +269,21 @@ func (r *ToolRegistry) executeDeviceProfileCreate(ctx context.Context, args map[
 	if req.Name == "" {
 		return nil, ErrProfileNameRequired
 	}
+	profile, err := req.toEntity()
+	if err != nil {
+		return nil, err
+	}
+
+	created, err := p.DeviceProfileCreate(ctx, profile)
+	if err != nil {
+		return nil, err
+	}
+	return deviceProfileToolResult(created)
+}
+
+// toEntity maps the decoded tool arguments onto a new device profile,
+// validating the fields that cannot be stored as given.
+func (req *deviceProfileToolRequest) toEntity() (*entities.DeviceProfile, error) {
 	// A prestaged EK certificate binds config delivery and remote UKI
 	// signing to the hardware EK; an unparseable value can never match a
 	// presented certificate, so reject it at the boundary.
@@ -291,12 +320,7 @@ func (r *ToolRegistry) executeDeviceProfileCreate(ctx context.Context, args map[
 	if req.TLSServerName != nil {
 		profile.TLSServerName = *req.TLSServerName
 	}
-
-	created, err := p.DeviceProfileCreate(ctx, profile)
-	if err != nil {
-		return nil, err
-	}
-	return deviceProfileToolResult(created)
+	return profile, nil
 }
 
 func (r *ToolRegistry) executeDeviceProfileGet(ctx context.Context, args map[string]interface{}) (interface{}, error) {

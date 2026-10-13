@@ -232,16 +232,25 @@ func buildGRPCMethodPermissions() map[string]string {
 		"/platform.v1.DeviceService/UnassignProfileFromDevice": scope(device, write),
 		"/platform.v1.DeviceService/FindConfigForDevice":       scope(device, read),
 		"/platform.v1.DeviceService/FindDeviceBySerial":        scope(device, read),
-		"/platform.v1.DeviceService/CreateProfile":             scope(device, write),
-		"/platform.v1.DeviceService/CreateProfileFromTemplate": scope(device, write),
-		"/platform.v1.DeviceService/UpdateProfile":             scope(device, write),
-		"/platform.v1.DeviceService/DeleteProfile":             scope(device, del),
-		"/platform.v1.DeviceService/GetProfile":                scope(device, read),
-		"/platform.v1.DeviceService/ListProfiles":              scope(device, read),
-		"/platform.v1.DeviceService/CountProfiles":             scope(device, read),
-		"/platform.v1.DeviceService/FindMatchingProfile":       scope(device, read),
-		"/platform.v1.DeviceService/FindProfileByMACAddress":   scope(device, read),
-		"/platform.v1.DeviceService/FindProfileBySerial":       scope(device, read),
+		// Attestation persists: the first verified quote seeds the profile's
+		// PCR baseline and a failed one quarantines the device.
+		"/platform.v1.DeviceService/AttestDevice":                 scope(device, write),
+		"/platform.v1.DeviceService/RecordAttestationCertificate": scope(device, write),
+		"/platform.v1.DeviceService/CreateProfile":                scope(device, write),
+		"/platform.v1.DeviceService/CreateTemplate":               scope(device, write),
+		"/platform.v1.DeviceService/CreateProfileFromTemplate":    scope(device, write),
+		"/platform.v1.DeviceService/UpdateProfile":                scope(device, write),
+		"/platform.v1.DeviceService/DeleteProfile":                scope(device, del),
+		"/platform.v1.DeviceService/GetProfile":                   scope(device, read),
+		"/platform.v1.DeviceService/ListProfiles":                 scope(device, read),
+		"/platform.v1.DeviceService/CountProfiles":                scope(device, read),
+		"/platform.v1.DeviceService/FindMatchingProfile":          scope(device, read),
+		"/platform.v1.DeviceService/FindProfileByMACAddress":      scope(device, read),
+		"/platform.v1.DeviceService/FindProfileBySerial":          scope(device, read),
+		// The lifecycle transitions (#250) block or re-admit a switch port
+		// and are writes on every transport.
+		"/platform.v1.DeviceService/DisableDevice": scope(device, write),
+		"/platform.v1.DeviceService/EnableDevice":  scope(device, write),
 
 		// ---------------------------------------------------------------------
 		// SDN (SDNService)

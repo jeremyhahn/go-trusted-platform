@@ -300,11 +300,13 @@ var opcodePermissions = map[byte]OpcodePermission{
 	quicwire.OpDeviceListProfiles:  deviceRead,
 	quicwire.OpDeviceCreateProfile: deviceWrite,
 	quicwire.OpDeviceDeleteProfile: deviceDelete,
-	quicwire.OpDeviceAttest:        deviceRead,
-	quicwire.OpDeviceActivate:      deviceWrite,
-	quicwire.OpDeviceDeactivate:    deviceWrite,
-	quicwire.OpDeviceGetState:      deviceRead,
-	quicwire.OpDeviceGetMetrics:    deviceRead,
+	// Attestation persists: the first verified quote seeds the profile's PCR
+	// baseline and a failed one quarantines the device.
+	quicwire.OpDeviceAttest:     deviceWrite,
+	quicwire.OpDeviceActivate:   deviceWrite,
+	quicwire.OpDeviceDeactivate: deviceWrite,
+	quicwire.OpDeviceGetState:   deviceRead,
+	quicwire.OpDeviceGetMetrics: deviceRead,
 
 	// SDN (gRPC SDNService)
 	quicwire.OpSDNGetPortState: sdnRead,
@@ -763,9 +765,16 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.EABSubMarkCredentialUsed:        eabWrite,
 		quicwire.EABSubCleanupExpiredCredentials: eabDelete,
 
-		quicwire.DeviceProfileSubAssign:    deviceWrite,
-		quicwire.DeviceProfileSubUnassign:  deviceWrite,
-		quicwire.DeviceSubRecordAttestCert: deviceWrite,
+		// Device profile assignment, the attestation certificate record and
+		// the device templates. Recording the certificate changes the anchor
+		// the attestation verifier chains to.
+		quicwire.DeviceProfileSubAssign:       deviceWrite,
+		quicwire.DeviceProfileSubUnassign:     deviceWrite,
+		quicwire.DeviceSubRecordAttestCert:    deviceWrite,
+		quicwire.DeviceSubDisable:             deviceWrite,
+		quicwire.DeviceSubEnable:              deviceWrite,
+		quicwire.DeviceSubTemplateCreate:      deviceWrite,
+		quicwire.DeviceSubProfileFromTemplate: deviceWrite,
 	},
 }
 

@@ -338,69 +338,6 @@ func (r *ToolRegistry) registerVTPMTools() {
 		},
 	})
 
-	// Template operations
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "vtpm_template_create",
-		Description: "Create a reusable vTPM template",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id":          map[string]interface{}{"type": "string", "description": "Unique template identifier"},
-				"description": map[string]interface{}{"type": "string", "description": "Template description"},
-				"algorithm":   map[string]interface{}{"type": "string", "description": "EK algorithm (RSA or ECC)", "default": "RSA"},
-				"secure_boot": map[string]interface{}{"type": "boolean", "description": "Enable Secure Boot", "default": false},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "vtpm_template_get",
-		Description: "Get detailed information about a vTPM template",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{"type": "string", "description": "Template ID"},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "vtpm_template_delete",
-		Description: "Delete a vTPM template",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{"type": "string", "description": "Template ID to delete"},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "vtpm_template_list",
-		Description: "List all vTPM templates",
-		InputSchema: map[string]interface{}{
-			"type":       "object",
-			"properties": map[string]interface{}{},
-		},
-	})
-
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "vtpm_template_clone",
-		Description: "Clone a template to create a new bundle with identity",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"template_id": map[string]interface{}{"type": "string", "description": "Template ID to clone"},
-				"hostname":    map[string]interface{}{"type": "string", "description": "Hostname for the new bundle"},
-				"labels":      map[string]interface{}{"type": "object", "description": "Custom metadata labels"},
-			},
-			"required": []string{"template_id", "hostname"},
-		},
-	})
-
 	// Path operations
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_get_bundle_path",
@@ -664,6 +601,19 @@ func (r *ToolRegistry) registerDeviceTools() {
 	})
 
 	r.addTool(mcpwire.ToolDefinition{
+		Name:        "device_disable",
+		Description: "Disable a device: block its switch port so it loses network access, and record it suspended with the reason as its state reason. Refused when no SDN policy engine runs, when the device has no switch port, or when its state cannot move to suspended.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"device_id": map[string]interface{}{"type": "string", "description": "Device ID"},
+				"reason":    map[string]interface{}{"type": "string", "description": "Why the device is disabled (at most 256 bytes; default \"disabled\")"},
+			},
+			"required": []string{"device_id"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "device_boot_certificate",
 		Description: "Return a diskless node's recorded IDevID chain to the node that proves it holds the chain's key over the connection it asks on (channel-bound proof of possession). Needs no token; refused on a transport with no TLS connection.",
 		InputSchema: map[string]interface{}{
@@ -673,6 +623,18 @@ func (r *ToolRegistry) registerDeviceTools() {
 				"signature": map[string]interface{}{"type": "string", "description": "Base64-encoded proof-of-possession signature over the connection's channel nonce"},
 			},
 			"required": []string{"identity", "signature"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "device_enable",
+		Description: "Re-enable a disabled device. It is never trusted on the operator's word: its port is re-admitted to the quarantine zone, the device recorded quarantined and a re-attestation requested; only a passing verdict restores the state and placement it held before the disable.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"device_id": map[string]interface{}{"type": "string", "description": "Device ID"},
+			},
+			"required": []string{"device_id"},
 		},
 	})
 
@@ -1394,6 +1356,10 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeDeviceAttest(ctx, args)
 	case "device_record_attest_cert":
 		return r.executeDeviceRecordAttestCert(ctx, args)
+	case "device_disable":
+		return r.executeDeviceDisable(ctx, args)
+	case "device_enable":
+		return r.executeDeviceEnable(ctx, args)
 	case "device_boot_certificate":
 		return r.executeDeviceBootCertificate(ctx, args)
 	case "device_boot_delivery":

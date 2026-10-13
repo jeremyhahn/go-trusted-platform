@@ -371,4 +371,6 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 			"required": []string{"profile_id"},
 		},
 	})
+
+	r.registerDeviceTemplateTools()
 }

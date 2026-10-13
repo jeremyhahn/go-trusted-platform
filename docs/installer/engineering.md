@@ -136,6 +136,10 @@ Network (host addressing by role, §7): `NetworkConfig.Validate(*netplan.Plan)`,
 `DHCPScopeConfig` and the `NetworkConfig` subnet helpers are gone: numbering
 comes from the plan only.
 
+dnsmasq (§7): `BuildDNSMasqConf(*DNSMasqConfig) string` renders the
+`/etc/dnsmasq.conf` the installer writes; it is exported for the installer
+integration suite (§9).
+
 Other exported names: `HardReset`, `CheckHWOffloadSupport`,
 `NewPostInstallExecutor`, `DefaultIMAMonitorPaths`,
 `DefaultLUKSTPMHandle` (`0x81000001`), `InstallerPassword`
@@ -528,7 +532,7 @@ dedicated `network.dnsmasq` block (`enabled: true`), the legacy
 paths install the package inside the chroot, enable the service in the
 default runlevel, and point `resolv.conf` at `nameserver 127.0.0.1`.
 
-`buildDNSMasqConf` renders `/etc/dnsmasq.conf`: `no-resolv`,
+`BuildDNSMasqConf` renders `/etc/dnsmasq.conf`: `no-resolv`,
 `listen-address=127.0.0.1`, `bind-interfaces`, `cache-size=1000`, one
 `server=` line per `upstream-servers` entry, then — when `local-domain` is
 set — `domain=<domain>` always, plus `local=/<domain>/` **only when no
@@ -691,6 +695,7 @@ to every already-installed machine and needs a migration path in the same PR.
 | Unit | `pkg/iso/*_test.go` | Config defaults, customise steps, extract, prefetch, module injection, profile network generation |
 | Unit | `pkg/qemu/*_test.go` | Argument construction, Secure Boot enrolment, monitor, snapshot, migration |
 | Integration | `test/integration/ipxe/` and the `platformctl iso test` verbs | Real QEMU + real swtpm + real OVMF |
+| Integration | `test/integration/installer/` (`make integration-test-installer`) | A real dnsmasq on the `BuildDNSMasqConf` output, for the control-plane (loopback upstream) and worker (remote upstream) shapes, forwards a query for a name in the internal zone to a stub upstream; the same config with `local=/<domain>/` added answers NXDOMAIN and never forwards it (the #128 blackhole, #131) |
 
 **Seams for fault injection**, all package-level `var`s or interfaces so a test
 can substitute them without touching the host:

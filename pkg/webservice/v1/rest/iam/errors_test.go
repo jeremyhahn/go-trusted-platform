@@ -431,6 +431,18 @@ func TestErrMissingMember_ImplementsErrorInterface(t *testing.T) {
 	assert.Equal(t, "member ID is required", err.Error())
 }
 
+func TestErrConflictingQueryTenant_Error(t *testing.T) {
+	err := ErrConflictingQueryTenant{Path: "tenant-a", Query: "tenant-b"}
+	assert.Equal(t, `rest/iam: tenant_id query "tenant-b" conflicts with path tenant "tenant-a"`, err.Error())
+}
+
+func TestErrConflictingQueryTenant_ImplementsErrorInterface(t *testing.T) {
+	var err error = ErrConflictingQueryTenant{Path: "tenant-a", Query: "tenant-b"}
+	var conflict ErrConflictingQueryTenant
+	assert.ErrorAs(t, err, &conflict)
+	assert.Equal(t, "tenant-b", conflict.Query)
+}
+
 func TestAllErrorTypesAreDistinct(t *testing.T) {
 	errors := []error{
 		ErrMissingTenantID{},

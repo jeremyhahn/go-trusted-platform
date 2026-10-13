@@ -29,3 +29,10 @@ type AuthMiddleware interface {
 	RefreshToken(w http.ResponseWriter, req *http.Request)
 	Verify(w http.ResponseWriter, r *http.Request, next http.HandlerFunc)
 }
+
+// ScopeAuthorizer is an AuthMiddleware whose verified requests carry granted
+// scopes, so a route can require one on top of its role gate. The platform
+// token middleware is one; the legacy JWT handler carries no scopes.
+type ScopeAuthorizer interface {
+	RequireScope(scope string) func(http.Handler) http.Handler
+}

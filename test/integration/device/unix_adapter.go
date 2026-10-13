@@ -523,7 +523,14 @@ func (a *UnixAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCer
 
 // CreateTemplate creates a new device template via Unix socket.
 func (a *UnixAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOptions) (*CreateTemplateResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "CreateTemplate"}
+	resp, err := a.client.CreateTemplate(ctx, templateCreateRequest(opts))
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "CreateTemplate", Err: err}
+	}
+	if resp.GetTemplate() == nil {
+		return nil, ErrUnixRPCFailed{Method: "CreateTemplate", Err: fmt.Errorf("daemon returned no template")}
+	}
+	return &CreateTemplateResult{Template: protoToTemplate(resp.GetTemplate())}, nil
 }
 
 // GetTemplate retrieves a template by ID via Unix socket.
@@ -618,6 +625,24 @@ func (a *UnixAdapter) AssignProfileToDevice(ctx context.Context, opts AssignProf
 	return &AssignProfileToDeviceResult{
 		Profile: unixProtoToProfile(resp.GetProfile()),
 	}, nil
+}
+
+// DisableDevice calls DeviceService.DisableDevice over the Unix socket.
+func (a *UnixAdapter) DisableDevice(ctx context.Context, opts DisableDeviceOptions) (*DeviceLifecycleResult, error) {
+	resp, err := a.client.DisableDevice(ctx, &pb.DisableDeviceRequest{DeviceId: opts.DeviceID, Reason: opts.Reason})
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "DisableDevice", Err: err}
+	}
+	return lifecycleResultFromProto(resp), nil
+}
+
+// EnableDevice calls DeviceService.EnableDevice over the Unix socket.
+func (a *UnixAdapter) EnableDevice(ctx context.Context, opts EnableDeviceOptions) (*DeviceLifecycleResult, error) {
+	resp, err := a.client.EnableDevice(ctx, &pb.EnableDeviceRequest{DeviceId: opts.DeviceID})
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "EnableDevice", Err: err}
+	}
+	return lifecycleResultFromProto(resp), nil
 }
 
 // =============================================================================

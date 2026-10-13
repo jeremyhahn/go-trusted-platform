@@ -34,8 +34,18 @@ type DeviceRouter struct {
 	configDeliveryHandler configdelivery.RestHandler
 	attestHandler         device.AttestHandler
 	attestCertHandler     device.AttestCertHandler
+	lifecycleHandler      device.LifecycleHandler
 	bootHandler           device.BootHandler
+	scopeAuthorizer       middleware.ScopeAuthorizer
 	WebServiceRouter
+}
+
+// SetLifecycleHandler supplies the handler for the operator Enable/Disable
+// Device flow (#250): POST /devices/{id}/disable and /devices/{id}/enable.
+// Both are operator work on the admin gate: they cut or re-admit a switch
+// port. Nil leaves the routes unregistered.
+func (r *DeviceRouter) SetLifecycleHandler(handler device.LifecycleHandler) {
+	r.lifecycleHandler = handler
 }
 
 // SetBootHandler supplies the handler for a diskless node's per-boot routes,
@@ -43,6 +53,26 @@ type DeviceRouter struct {
 // machine-facing. Nil leaves them unregistered.
 func (r *DeviceRouter) SetBootHandler(handler device.BootHandler) {
 	r.bootHandler = handler
+}
+
+// deviceWriteScope is the scope every device write requires on the
+// transports that carry scopes (gRPC, QUIC, MCP, and REST behind the platform
+// token middleware).
+const deviceWriteScope = "device:write"
+
+// SetScopeAuthorizer supplies the scope check the attestation routes take on
+// top of the admin gate. Nil leaves them on the role gate alone, which is the
+// case under the legacy JWT handler: its sessions carry roles, not scopes.
+func (r *DeviceRouter) SetScopeAuthorizer(authorizer middleware.ScopeAuthorizer) {
+	r.scopeAuthorizer = authorizer
+}
+
+// requireScope wraps handler in the scope check when one is configured.
+func (r *DeviceRouter) requireScope(scope string, handler http.HandlerFunc) http.Handler {
+	if r.scopeAuthorizer == nil {
+		return handler
+	}
+	return r.scopeAuthorizer.RequireScope(scope)(handler)
 }
 
 // SetAttestCertHandler supplies the handler for
@@ -133,16 +163,30 @@ func (r *DeviceRouter) RegisterRoutes(router *mux.Router) {
 	// Device attestation verification. Operator work on the ADMIN gate: it
 	// reads a device's enrolled attestation key and reports a security
 	// verdict about that machine, so it does not belong on the
-	// machine-facing half.
+	// machine-facing half. Both attestation routes are device writes and
+	// require device:write wherever the authenticator carries scopes.
 	if r.attestHandler != nil {
-		router.HandleFunc("/devices/{id}/attest", r.attestHandler.HandleAttestDevice).Methods("POST")
+		router.Handle("/devices/{id}/attest",
+			r.requireScope(deviceWriteScope, r.attestHandler.HandleAttestDevice)).Methods("POST")
 	}
 
 	// Recording a device's attestation certificate without re-enrolling it
 	// (#473). Admin gate for the same reason as the verifier above: the
 	// recorded certificate is the anchor the verifier chains quotes to.
 	if r.attestCertHandler != nil {
-		router.HandleFunc("/devices/{id:[0-9]+}/attest-cert/record", r.attestCertHandler.HandleRecordAttestCert).Methods("POST")
+		router.Handle("/devices/{id:[0-9]+}/attest-cert/record",
+			r.requireScope(deviceWriteScope, r.attestCertHandler.HandleRecordAttestCert)).Methods("POST")
+	}
+
+	// Operator Enable/Disable Device (#250). A dedicated transition, never
+	// the generic PUT: disable cuts the port, enable re-admits it to the
+	// quarantine zone pending re-attestation. Both take device:write, as on
+	// every other scoped transport.
+	if r.lifecycleHandler != nil {
+		router.Handle("/devices/{id:[0-9]+}/disable",
+			r.requireScope(deviceWriteScope, r.lifecycleHandler.HandleDisable)).Methods("POST")
+		router.Handle("/devices/{id:[0-9]+}/enable",
+			r.requireScope(deviceWriteScope, r.lifecycleHandler.HandleEnable)).Methods("POST")
 	}
 }
 

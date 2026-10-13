@@ -131,3 +131,40 @@ func (p *MCPServiceProvider) DeviceProfileUnassign(ctx context.Context, profileI
 	}
 	return p.deviceProfileService.Get(ctx, profileID)
 }
+
+// DeviceTemplateCreate stores a device template through the template
+// service the REST template handlers use, assigning an ID when absent.
+func (p *MCPServiceProvider) DeviceTemplateCreate(ctx context.Context, template *deviceentities.DeviceTemplate) (*deviceentities.DeviceTemplate, error) {
+	if p.deviceTemplateService == nil {
+		return nil, ErrServiceNotAvailable{Service: "device_template"}
+	}
+	if template.ID == 0 {
+		template.ID = device.NewID()
+	}
+	if err := p.deviceTemplateService.Save(ctx, template); err != nil {
+		return nil, err
+	}
+	return template, nil
+}
+
+// DeviceProfileFromTemplate builds a profile from a stored template plus
+// the overrides and saves it, assigning a profile ID when absent.
+func (p *MCPServiceProvider) DeviceProfileFromTemplate(ctx context.Context, templateID uint64, overrides *deviceentities.DeviceProfile) (*deviceentities.DeviceProfile, error) {
+	if p.deviceTemplateService == nil {
+		return nil, ErrServiceNotAvailable{Service: "device_template"}
+	}
+	if p.deviceProfileService == nil {
+		return nil, ErrServiceNotAvailable{Service: "device_profile"}
+	}
+	profile, err := p.deviceTemplateService.ToProfile(ctx, templateID, overrides)
+	if err != nil {
+		return nil, err
+	}
+	if profile.ID == 0 {
+		profile.ID = device.NewID()
+	}
+	if err := p.deviceProfileService.Save(ctx, profile); err != nil {
+		return nil, err
+	}
+	return profile, nil
+}

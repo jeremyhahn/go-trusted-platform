@@ -123,7 +123,9 @@ by this tool.
 
 ### device_attest
 
-Verify TPM quote evidence submitted for a device.
+Verify TPM quote evidence submitted for a device. Permission `device:write`:
+a verified quote can seed the profile's PCR baseline and a failed one
+quarantines the device ([api.md §7](api.md#7-authorization)).
 
 The tool takes the whole evidence document as one base64 argument, not the
 quote fields spread across separate arguments: every transport carries the
@@ -237,6 +239,34 @@ connection, which MCP does not have, so the service refuses the request with
   }
 }
 ```
+
+### device_disable / device_enable
+
+The operator's lifecycle transitions. Permission `device:write`.
+`device_disable` blocks the device's switch port and records it `suspended`;
+`device_enable` re-admits a `suspended` device to the quarantine zone, records
+it `quarantined` and requests re-attestation. Both are refused when no SDN
+policy engine runs, when the device has no switch port, or when the
+transition is not allowed. The result carries the `DeviceLifecycleResponse`
+fields (`device_id`, `state`, `previous_state`, `state_reason`,
+`reattestation_requested`). See
+[api.md §4.7](api.md#47-operator-disable-and-enable-250).
+
+```json
+{
+  "name": "device_disable",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "device_id": {"type": "string", "description": "Device ID"},
+      "reason": {"type": "string", "description": "Why the device is disabled (at most 256 bytes; default \"disabled\")"}
+    },
+    "required": ["device_id"]
+  }
+}
+```
+
+`device_enable` takes only `device_id`.
 
 ### profile_create
 
@@ -474,6 +504,53 @@ prestaged EK certificate, and assignment state are all reset.
 ```
 
 Returns the updated (now unassigned) profile.
+
+### device_template_create
+
+Stores a device template — a reusable configuration, role and match rules
+that profiles are built from (`DeviceService.CreateTemplate`). It is not a
+vTPM template; the `vtpm_*` tools create those. `name` is required; `role`
+is the domain role string ([api.md §4.2](api.md#42-role-vocabulary)) and
+`config` is YAML **text**. Requires `device:write`.
+
+```json
+{
+  "name": "device_template_create",
+  "arguments": {
+    "tenant_id": "acme",
+    "name": "edge",
+    "role": "load-balancer",
+    "config": "hostname: edge-01\n",
+    "match_rules": {"mac_prefix": "00:25:90"}
+  }
+}
+```
+
+Returns the stored template with the server-assigned `id` as a decimal
+string and `config` as text.
+
+### profile_create_from_template
+
+Builds a profile from a stored device template and saves it
+(`DeviceService.CreateProfileFromTemplate`). `template_id` is required. The
+profile takes the template's tenant, role, config and match rules; the
+non-empty fields of `overrides`, which use the `profile_create` argument
+names, replace them. Requires `device:write`.
+
+```json
+{
+  "name": "profile_create_from_template",
+  "arguments": {
+    "template_id": 9000,
+    "overrides": {"name": "gw-01", "ek_serial": "1234567890"}
+  }
+}
+```
+
+Returns the saved profile with the uint64 `id` rendered as a decimal
+string. The Go SDK refuses template `bmc` and `overrides.tenant_id`,
+`overrides.networks` and `overrides.platformd_config` before sending, since
+these arguments have no place for them ([api.md §4](api.md#4-device-templates)).
 
 ## Resources
 

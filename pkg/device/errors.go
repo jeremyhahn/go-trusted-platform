@@ -131,6 +131,17 @@ func (e ErrTemplateConfigRequired) Error() string {
 	return "device: template config is required for profile conversion"
 }
 
+// ErrTemplateProfileDependency indicates creating a profile from a template
+// was attempted without the template or profile service it needs.
+type ErrTemplateProfileDependency struct {
+	Name string
+}
+
+// Error returns the error message.
+func (e ErrTemplateProfileDependency) Error() string {
+	return fmt.Sprintf("device: creating a profile from a template requires the %s", e.Name)
+}
+
 // MessageError is a typed error carrying a fully formatted message with no
 // underlying cause. It replaces inline formatted-error constructions that do not wrap
 // another error.
@@ -520,4 +531,49 @@ type ErrControlPlaneNoAttestationKey struct{}
 // Error returns the error message.
 func (ErrControlPlaneNoAttestationKey) Error() string {
 	return "device registration: the control plane's TPM holds no attestation key public area; provision the IAK before registering the control plane as a device"
+}
+
+// ErrLifecycleUnenforced is returned for an operator Enable or Disable on a
+// control plane with no SDN policy engine: nothing could cut or re-admit the
+// device's port, so recording a state change would claim enforcement that
+// does not exist.
+type ErrLifecycleUnenforced struct{}
+
+// Error returns the error message.
+func (ErrLifecycleUnenforced) Error() string {
+	return "device lifecycle: this control plane has no SDN policy engine to enforce a device disable or enable"
+}
+
+// ErrLifecycleDependency is returned by NewLifecycleService when a required
+// dependency is missing.
+type ErrLifecycleDependency struct {
+	Name string
+}
+
+// Error returns the error message.
+func (e ErrLifecycleDependency) Error() string {
+	return fmt.Sprintf("device lifecycle: %s is required", e.Name)
+}
+
+// ErrDeviceNotOnFabric is returned when an operator Enable or Disable targets
+// a device with no recorded switch port: it was never admitted to the SDN
+// fabric, so there is no port to cut or re-admit.
+type ErrDeviceNotOnFabric struct {
+	DeviceID uint64
+}
+
+// Error returns the error message.
+func (e ErrDeviceNotOnFabric) Error() string {
+	return fmt.Sprintf("device lifecycle: device %d has no switch port on the SDN fabric to enforce", e.DeviceID)
+}
+
+// ErrLifecycleReasonTooLong is returned when a disable reason exceeds Max
+// bytes.
+type ErrLifecycleReasonTooLong struct {
+	Max int
+}
+
+// Error returns the error message.
+func (e ErrLifecycleReasonTooLong) Error() string {
+	return fmt.Sprintf("device lifecycle: reason exceeds %d bytes", e.Max)
 }

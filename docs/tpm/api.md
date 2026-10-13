@@ -298,8 +298,8 @@ For this feature, the catalogs are empty:
 | gRPC `IDevIDService` (20 RPCs) | **not in** `pkg/api/grpc/method_permissions.go` |
 | MCP — 31 `platform_tpm_*` tools | **not in** `pkg/api/mcp/authz.go` |
 | MCP — 17 `idevid_*` / `iak_*` tools | **not in** `pkg/api/mcp/authz.go` |
-| QUIC `0x99` category | `QUICServiceHandler.handleTPM2Category` calls no `AuthorizeRequest`. `pkg/api/daemon/quic_pxe.go` is the **only** QUIC handler that authorizes at all |
-| QUIC device-identity opcodes | likewise unauthorized |
+| QUIC `0x99` category | **not in** `pkg/api/quic/auth.go`. `HandleRequest` enforces that catalog (`AuthorizeOperation`), which allows an unlisted opcode once the token validates |
+| QUIC device-identity opcodes | likewise not in the catalog |
 | REST | route-level middleware only; no per-operation TPM scope |
 
 **Concretely: a caller holding any valid platform token can reach `Clear`,
