@@ -495,10 +495,10 @@ func (s *Server) handleToolsCall(ctx context.Context, req *mcpwire.JSONRPCReques
 	// Execute tool
 	result, err := s.tools.ExecuteTool(ctx, name, arguments)
 	if err != nil {
-		// Pass through the actual error message so clients can detect
-		// specific error conditions (e.g., "not implemented" for graceful skips).
-		// The tool name is included in the data field for debugging context.
-		return s.makeErrorResponse(req.ID, mcpwire.InternalError, err.Error(), name)
+		// The code carries the error's class (NotFound, InvalidArgument, ...)
+		// so clients decode the typed error gRPC and REST return; the
+		// message is the error text and the data field names the tool.
+		return s.makeErrorResponse(req.ID, toolErrorCode(err), err.Error(), name)
 	}
 
 	return &mcpwire.JSONRPCResponse{
@@ -539,10 +539,9 @@ func (s *Server) handleResourcesRead(ctx context.Context, req *mcpwire.JSONRPCRe
 	// Read resource
 	result, err := s.resources.ReadResource(ctx, uri)
 	if err != nil {
-		// Pass through the actual error message so clients can detect
-		// specific error conditions (e.g., "not implemented" for graceful skips).
-		// The resource URI is included in the data field for debugging context.
-		return s.makeErrorResponse(req.ID, mcpwire.InternalError, err.Error(), uri)
+		// As for tools: the code carries the error's class and the data
+		// field names the resource URI.
+		return s.makeErrorResponse(req.ID, toolErrorCode(err), err.Error(), uri)
 	}
 
 	return &mcpwire.JSONRPCResponse{
@@ -561,20 +560,22 @@ func (s *Server) handlePing(ctx context.Context, req *mcpwire.JSONRPCRequest) *m
 	}
 }
 
+// authErrorCodes maps each authorization failure to its JSON-RPC code. A
+// tool with no permission mapping is absent on purpose: it is a gap in the
+// platform's configuration, not the caller's, so it answers InternalError.
+var authErrorCodes = map[AuthErrorType]int{
+	AuthErrorMissingToken:       mcpwire.AuthenticationRequired,
+	AuthErrorInvalidToken:       mcpwire.InvalidToken,
+	AuthErrorPermissionDenied:   mcpwire.PermissionDenied,
+	AuthErrorServiceUnavailable: mcpwire.ServiceUnavailable,
+}
+
 // handleAuthError converts an authorization error to a JSON-RPC error response.
 func (s *Server) handleAuthError(id interface{}, authErr *AuthorizationError) *mcpwire.JSONRPCResponse {
-	var code int
-	switch authErr.Type {
-	case AuthErrorMissingToken:
-		code = mcpwire.AuthenticationRequired
-	case AuthErrorInvalidToken:
-		code = mcpwire.InvalidToken
-	case AuthErrorPermissionDenied:
-		code = mcpwire.PermissionDenied
-	default:
+	code, ok := authErrorCodes[authErr.Type]
+	if !ok {
 		code = mcpwire.InternalError
 	}
-
 	return s.makeErrorResponse(id, code, authErr.Message, "")
 }
 

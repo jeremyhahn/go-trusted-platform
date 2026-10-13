@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
@@ -441,7 +442,7 @@ func TestMCPServiceProvider_DeviceRegister_NilServiceReturnsError(t *testing.T) 
 	ctx := context.Background()
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
 
-	_, err := provider.DeviceRegister(ctx, "device1", "server", nil)
+	_, err := provider.DeviceRegister(ctx, &mcp.DeviceRegisterRequest{Model: "device1", Serial: "server"})
 	if err == nil {
 		t.Error("expected error for nil service")
 	}
@@ -457,7 +458,7 @@ func TestMCPServiceProvider_DeviceRegister_Success(t *testing.T) {
 		DeviceService: mockSvc,
 	})
 
-	result, err := provider.DeviceRegister(ctx, "device1", "server", nil)
+	result, err := provider.DeviceRegister(ctx, &mcp.DeviceRegisterRequest{Model: "device1", Serial: "server"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -479,7 +480,7 @@ func TestMCPServiceProvider_DeviceRegister_AssignsAnID(t *testing.T) {
 		DeviceService: mockSvc,
 	})
 
-	result, err := provider.DeviceRegister(ctx, "model-525", "SN-525", nil)
+	result, err := provider.DeviceRegister(ctx, &mcp.DeviceRegisterRequest{Model: "model-525", Serial: "SN-525"})
 	if err != nil {
 		t.Fatalf("DeviceRegister returned an error: %v", err)
 	}
@@ -510,9 +511,97 @@ func TestMCPServiceProvider_DeviceRegister_SaveErrorSurfaces(t *testing.T) {
 		DeviceService: &failingDeviceCreateService{mcpMockDeviceService: newMCPMockDeviceService()},
 	})
 
-	if _, err := provider.DeviceRegister(ctx, "model-525", "SN-525", nil); err == nil {
+	if _, err := provider.DeviceRegister(ctx, &mcp.DeviceRegisterRequest{Model: "model-525", Serial: "SN-525"}); err == nil {
 		t.Fatal("expected the storage failure to surface from DeviceRegister")
 	}
+}
+
+// TestMCPServiceProvider_DeviceRegister_MapsEveryField is the #533
+// regression: device_register once stored its name argument as the model
+// and its device_type argument as the serial, so a device registered with
+// a serial could not be found by it. Every request field must land on the
+// stored device under its own name.
+func TestMCPServiceProvider_DeviceRegister_MapsEveryField(t *testing.T) {
+	ctx := context.Background()
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+		DeviceService: newMCPMockDeviceService(),
+	})
+
+	req := &mcp.DeviceRegisterRequest{
+		Serial:     "SN-533",
+		Model:      "model-533",
+		EKCert:     "ek-pem",
+		AttestPub:  "ak-pub",
+		AttestCert: "ak-cert",
+		SigningPub: "signing-pub",
+		HashAlgoID: 11,
+	}
+	result, err := provider.DeviceRegister(ctx, req)
+	if err != nil {
+		t.Fatalf("DeviceRegister: %v", err)
+	}
+
+	found, err := provider.DeviceFindBySerial(ctx, "SN-533")
+	if err != nil {
+		t.Fatalf("DeviceFindBySerial after register: %v", err)
+	}
+	dev, ok := found.(*deviceentities.Device)
+	if !ok {
+		t.Fatalf("expected *deviceentities.Device, got %T", found)
+	}
+	if dev != result {
+		t.Error("find_by_serial returned a different device than the one registered")
+	}
+
+	if dev.Serial != req.Serial || dev.Model != req.Model || dev.EKCert != req.EKCert ||
+		dev.AttestPub != req.AttestPub || dev.AttestCert != req.AttestCert ||
+		dev.SigningPub != req.SigningPub || dev.HashAlgoId != req.HashAlgoID {
+		t.Errorf("stored device = %+v, want the fields of request %+v", *dev, *req)
+	}
+}
+
+func TestMCPServiceProvider_DeviceRegister_SerialRequired(t *testing.T) {
+	ctx := context.Background()
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+		DeviceService: newMCPMockDeviceService(),
+	})
+
+	for name, req := range map[string]*mcp.DeviceRegisterRequest{
+		"nil request":  nil,
+		"empty serial": {Model: "model-only"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := provider.DeviceRegister(ctx, req)
+			var missing ErrMissingRequiredField
+			if !errors.As(err, &missing) || missing.Field != "serial" {
+				t.Fatalf("error = %v, want ErrMissingRequiredField{serial}", err)
+			}
+		})
+	}
+}
+
+func TestMCPServiceProvider_DeviceFindBySerial_Errors(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("no device service", func(t *testing.T) {
+		provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
+		_, err := provider.DeviceFindBySerial(ctx, "SN-533")
+		var notAvailable ErrServiceNotAvailable
+		if !errors.As(err, &notAvailable) {
+			t.Fatalf("error = %v, want ErrServiceNotAvailable", err)
+		}
+	})
+
+	t.Run("unknown serial", func(t *testing.T) {
+		provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+			DeviceService: newMCPMockDeviceService(),
+		})
+		_, err := provider.DeviceFindBySerial(ctx, "SN-missing")
+		var notFound ErrDeviceNotFound
+		if !errors.As(err, &notFound) {
+			t.Fatalf("error = %v, want ErrDeviceNotFound", err)
+		}
+	})
 }
 
 // failingDeviceCreateService fails only the create verb so the error
@@ -537,7 +626,9 @@ func TestMCPServiceProvider_DeviceGet_Success(t *testing.T) {
 	})
 
 	// Register a device first
-	_, _ = provider.DeviceRegister(ctx, "device1", "server", nil)
+	if _, err := provider.DeviceRegister(ctx, &mcp.DeviceRegisterRequest{Model: "device1", Serial: "server"}); err != nil {
+		t.Fatalf("register device: %v", err)
+	}
 
 	result, err := provider.DeviceGet(ctx, "1")
 	if err != nil {

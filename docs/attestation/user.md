@@ -326,6 +326,12 @@ platformctl device attest-cert record <device-id>
 platformctl device attest-cert record <device-id> --reissue
 ```
 
+In the web console the same verb is **Record certificate** on the device
+detail page's Attestation Certificate card, which says when no certificate is
+recorded. The dialog records without re-issuing unless you tick **Re-issue
+from the platform CA**; a refusal is shown in the dialog with the control
+plane's reason for every candidate.
+
 A device that already holds a certificate without `.3` (for example, one
 recorded before the preflight existed) is quarantined by every quote. If no
 compliant certificate can be recorded yet, clear the refused one:
@@ -340,6 +346,7 @@ platformctl device attest-cert record <device-id> --clear-on-refusal
 The flag is off by default, never clears a compliant certificate, and clears
 nothing on any other error. Record a compliant certificate later the usual
 way.
+The console has no counterpart to `--clear-on-refusal`; clear from the CLI.
 
 Then either wait for the collector's next sweep or enqueue one with
 `platformctl attestation reports refresh <device-id>`, and read the report

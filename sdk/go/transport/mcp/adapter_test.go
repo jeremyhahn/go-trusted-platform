@@ -18,6 +18,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -647,6 +648,26 @@ func TestTranslateMCPErrorToGRPC(t *testing.T) {
 			expectedCode: codes.Unavailable,
 		},
 		{
+			name:         "not found",
+			err:          &mcpwire.MCPError{Code: mcpwire.NotFound, Message: "not found"},
+			expectedCode: codes.NotFound,
+		},
+		{
+			name:         "already exists",
+			err:          &mcpwire.MCPError{Code: mcpwire.AlreadyExists, Message: "already exists"},
+			expectedCode: codes.AlreadyExists,
+		},
+		{
+			name:         "failed precondition",
+			err:          &mcpwire.MCPError{Code: mcpwire.FailedPrecondition, Message: "failed precondition"},
+			expectedCode: codes.FailedPrecondition,
+		},
+		{
+			name:         "wrapped MCP error",
+			err:          fmt.Errorf("call: %w", &mcpwire.MCPError{Code: mcpwire.NotFound, Message: "not found"}),
+			expectedCode: codes.NotFound,
+		},
+		{
 			name:         "unknown MCP error",
 			err:          &mcpwire.MCPError{Code: -99999, Message: "unknown"},
 			expectedCode: codes.Unknown,
@@ -880,26 +901,5 @@ func TestErrUnmarshalFailed_Unwrap(t *testing.T) {
 
 	if !errors.Is(err, innerErr) {
 		t.Error("Unwrap() should return the inner error")
-	}
-}
-
-func TestMCPErrorCodeToGRPCMap_Coverage(t *testing.T) {
-	// Verify all expected MCP error codes are mapped
-	expectedCodes := []int{
-		mcpwire.ParseError,
-		mcpwire.InvalidRequest,
-		mcpwire.MethodNotFound,
-		mcpwire.InvalidParams,
-		mcpwire.InternalError,
-		mcpwire.AuthenticationRequired,
-		mcpwire.InvalidToken,
-		mcpwire.PermissionDenied,
-		mcpwire.ServiceUnavailable,
-	}
-
-	for _, code := range expectedCodes {
-		if _, ok := mcpErrorCodeToGRPCMap[code]; !ok {
-			t.Errorf("MCP error code %d not mapped to gRPC code", code)
-		}
 	}
 }

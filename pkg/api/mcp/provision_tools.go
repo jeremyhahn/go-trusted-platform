@@ -21,6 +21,8 @@ import (
 	"strconv"
 
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -69,6 +71,11 @@ func (e ErrProvisionInvalidProfileID) Error() string {
 	return fmt.Sprintf("provision: profile_id %q is not a valid uint64: %v", e.Value, e.Cause)
 }
 
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrProvisionInvalidProfileID) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // Unwrap exposes the underlying parse error for errors.Is/As.
 func (e ErrProvisionInvalidProfileID) Unwrap() error {
 	return e.Cause
@@ -83,6 +90,11 @@ type ErrProvisionInvalidDigest struct {
 // Error returns a human-readable description of the error.
 func (e ErrProvisionInvalidDigest) Error() string {
 	return fmt.Sprintf("provision: digest must be base64 encoded: %v", e.Cause)
+}
+
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrProvisionInvalidDigest) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // Unwrap exposes the underlying decode error for errors.Is/As.

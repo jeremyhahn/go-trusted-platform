@@ -730,6 +730,55 @@ export interface DeviceAttestResponse {
 }
 
 /**
+ * Where a recorded attestation certificate came from: the certificate
+ * already on the record, the platform CA's store, or a CA re-issuance.
+ */
+export type AttestCertSource = 'device' | 'ca' | 'reissued';
+
+/**
+ * Options for recording a device's attestation certificate
+ * (`POST /api/v1/devices/{id}/attest-cert/record`, docs/device/api.md §4.5).
+ *
+ * There is deliberately no override: the server records a candidate only if
+ * it chains to the platform CA, carries tcg-cap-verifiedTPMRestricted and
+ * certifies the enrolled attestation key.
+ */
+export interface RecordAttestCertRequest {
+  /**
+   * When no existing candidate passes, ask the CA to issue a new certificate
+   * over the enrolled attestation public key. Opt-in: a re-issued certificate
+   * the server then refuses is revoked in the same call.
+   */
+  reissue?: boolean;
+}
+
+/** Response from recording a device's attestation certificate */
+export interface RecordAttestCertResponse {
+  /** Device ID */
+  device_id: string;
+  /** Serial number */
+  serial?: string;
+  /** Device model */
+  model?: string;
+  /** False when the record already held this exact certificate and nothing was written */
+  changed: boolean;
+  /** Which candidate was recorded */
+  source: AttestCertSource;
+  /** The CA store name it was found under, or the CN it was issued with */
+  source_detail?: string;
+  /** True when the CA was asked to issue a new certificate */
+  reissued: boolean;
+  /** Subject DN of the recorded certificate */
+  subject: string;
+  /** Serial number of the recorded certificate */
+  certificate_serial: string;
+  /** Expiry of the recorded certificate (RFC 3339) */
+  not_after?: string;
+  /** The recorded certificate, PEM encoded */
+  attest_cert: string;
+}
+
+/**
  * Activate device response
  */
 export interface ActivateDeviceResponse {

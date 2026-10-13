@@ -28,11 +28,16 @@ const (
 	InvalidParams  = -32602
 	InternalError  = -32603
 
-	// Custom error codes for authorization.
+	// Platform error codes, in the JSON-RPC server-error range. The first
+	// four predate the tool error classes and also answer authorization
+	// failures; errorcodes.go maps each to the platform error class.
 	AuthenticationRequired = -32001
 	InvalidToken           = -32002
 	PermissionDenied       = -32003
 	ServiceUnavailable     = -32004
+	NotFound               = -32005
+	AlreadyExists          = -32006
+	FailedPrecondition     = -32007
 )
 
 // JSONRPCRequest represents a JSON-RPC 2.0 request.

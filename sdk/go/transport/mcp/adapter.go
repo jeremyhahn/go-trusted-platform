@@ -437,32 +437,17 @@ func MethodTools() map[string]string {
 	return maps.Clone(grpcMethodToMCPToolMap)
 }
 
-// mcpErrorCodeToGRPCMap provides O(1) lookup for MCP error codes to gRPC codes.
-var mcpErrorCodeToGRPCMap = map[int]codes.Code{
-	mcpwire.ParseError:             codes.InvalidArgument,
-	mcpwire.InvalidRequest:         codes.InvalidArgument,
-	mcpwire.MethodNotFound:         codes.Unimplemented,
-	mcpwire.InvalidParams:          codes.InvalidArgument,
-	mcpwire.InternalError:          codes.Internal,
-	mcpwire.AuthenticationRequired: codes.Unauthenticated,
-	mcpwire.InvalidToken:           codes.Unauthenticated,
-	mcpwire.PermissionDenied:       codes.PermissionDenied,
-	mcpwire.ServiceUnavailable:     codes.Unavailable,
-}
-
-// translateMCPErrorToGRPC translates MCP errors to gRPC status errors.
+// translateMCPErrorToGRPC decodes an MCP error into the gRPC status error
+// the gRPC and REST transports return for the same failure, so callers
+// branch on status.Code whichever transport carried the call.
 func translateMCPErrorToGRPC(err error) error {
 	if err == nil {
 		return nil
 	}
 
-	// Check for MCP-specific errors
-	if mcpErr, ok := err.(*mcpwire.MCPError); ok {
-		code, found := mcpErrorCodeToGRPCMap[mcpErr.Code]
-		if !found {
-			code = codes.Unknown
-		}
-		return status.Error(code, mcpErr.Message)
+	var mcpErr *mcpwire.MCPError
+	if errors.As(err, &mcpErr) {
+		return status.Error(mcpwire.ClassForCode(mcpErr.Code), mcpErr.Message)
 	}
 
 	// Default to unavailable for connection issues

@@ -366,7 +366,7 @@ func TestGetReport_JSONCarriesTheWireShape(t *testing.T) {
 func TestGetReport_NeverCollected_IsItsOwnState(t *testing.T) {
 	causes := map[string]error{
 		"grpc/unix/rest NotFound": status.Error(codes.NotFound, "no report has been collected for device 9"),
-		"mcp collapsed error":     status.Error(codes.Internal, "attestation: no report has been collected for device 9"),
+		"mcp NotFound":            status.Error(codes.NotFound, "attestation: no report has been collected for device 9"),
 	}
 	for name, cause := range causes {
 		for _, format := range []cli.OutputFormat{cli.OutputFormatTable, cli.OutputFormatJSON, cli.OutputFormatYAML} {

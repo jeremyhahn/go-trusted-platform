@@ -739,8 +739,9 @@ func TestServer_handleResourcesRead(t *testing.T) {
 		if resp.Error == nil {
 			t.Error("expected error")
 		}
-		if resp.Error.Code != mcpwire.InternalError {
-			t.Errorf("error code = %d, want %d", resp.Error.Code, mcpwire.InternalError)
+		// A malformed URI is the caller's error, not the server's.
+		if resp.Error.Code != mcpwire.InvalidParams {
+			t.Errorf("error code = %d, want %d", resp.Error.Code, mcpwire.InvalidParams)
 		}
 	})
 }
@@ -806,6 +807,14 @@ func TestServer_handleAuthError(t *testing.T) {
 				Message: "Access denied",
 			},
 			expectedCode: mcpwire.PermissionDenied,
+		},
+		{
+			name: "authorization service unavailable",
+			authErr: &AuthorizationError{
+				Type:    AuthErrorServiceUnavailable,
+				Message: "IAM unavailable",
+			},
+			expectedCode: mcpwire.ServiceUnavailable,
 		},
 		{
 			name: "unknown error type",

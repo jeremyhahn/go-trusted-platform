@@ -18,6 +18,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -105,6 +106,12 @@ type ContainerError struct {
 
 func (e *ContainerError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
+
+// GRPCStatus classifies the error by its Code (codeClass), so the MCP
+// server answers it with the matching JSON-RPC code.
+func (e *ContainerError) GRPCStatus() *status.Status {
+	return codeStatus(e.Code, e.Error())
 }
 
 // =============================================================================

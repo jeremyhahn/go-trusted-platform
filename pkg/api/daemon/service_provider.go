@@ -528,20 +528,19 @@ func (p *PlatformServiceProvider) DNSListZones(ctx context.Context) ([]string, e
 // =============================================================================
 
 // DeviceRegister registers a new device.
-func (p *PlatformServiceProvider) DeviceRegister(ctx context.Context, name string, deviceType string, publicKey []byte) (interface{}, error) {
+func (p *PlatformServiceProvider) DeviceRegister(ctx context.Context, req *mcp.DeviceRegisterRequest) (interface{}, error) {
 	if p.deviceService == nil {
 		return nil, ErrServiceNotAvailable{Service: "device"}
 	}
+	return registerMCPDevice(ctx, p.deviceService, req)
+}
 
-	// Create a new device - for MCP tools, we map name/type/publicKey to model/serial
-	device := &deviceentities.Device{
-		Model:  name,
-		Serial: deviceType,
+// DeviceFindBySerial returns the device registered under the serial number.
+func (p *PlatformServiceProvider) DeviceFindBySerial(ctx context.Context, serial string) (interface{}, error) {
+	if p.deviceService == nil {
+		return nil, ErrServiceNotAvailable{Service: "device"}
 	}
-	if err := p.deviceService.Create(ctx, device); err != nil {
-		return nil, err
-	}
-	return device, nil
+	return p.deviceService.FindBySerial(ctx, serial)
 }
 
 // DeviceGet retrieves a device by ID.

@@ -8,119 +8,115 @@ The Device API is exposed via the Model Context Protocol (MCP) for AI/LLM integr
 
 ## Tools
 
+Device ids are passed as decimal **strings** (`device_id`). Every device result
+is the stored device entity as JSON (`id`, `serial`, `model`, `ek_cert`,
+`att_pub`, `attest_cert`, `signing_pub`, `hash_algo`, `state`, …), with `id` a
+JSON number.
+
 ### device_register
 
-Register a new device with TPM credentials.
+Register a new device; the server assigns its id. Each argument is stored under
+the device field of the same name, and the result is the created device.
 
 ```json
 {
   "name": "device_register",
-  "description": "Register a new device with TPM credentials",
   "inputSchema": {
     "type": "object",
     "properties": {
       "serial": {"type": "string", "description": "Device serial number"},
       "model": {"type": "string", "description": "Device model"},
-      "ek_cert": {"type": "string", "description": "PEM-encoded EK certificate"},
-      "attest_pub": {"type": "string", "description": "PEM-encoded attestation public key"},
-      "attest_cert": {"type": "string", "description": "PEM-encoded attestation (IAK/AK) certificate issued by the platform CA"},
-      "signing_pub": {"type": "string", "description": "PEM-encoded signing public key"},
-      "hash_algo_id": {"type": "integer", "description": "Hash algorithm ID (11=SHA256)"}
+      "ek_cert": {"type": "string", "description": "PEM TPM endorsement key certificate"},
+      "attest_pub": {"type": "string", "description": "Attestation public key"},
+      "attest_cert": {"type": "string", "description": "PEM attestation key certificate issued by the platform CA"},
+      "signing_pub": {"type": "string", "description": "Signing public key"},
+      "hash_algo_id": {"type": "integer", "description": "TPM hash algorithm identifier"}
     },
-    "required": ["serial", "model"]
+    "required": ["serial"]
   }
 }
 ```
 
-### device_get
+A missing `serial` is refused; a `hash_algo_id` outside the uint32 range is
+refused before it reaches the service.
 
-Get device by ID.
+### device_get
 
 ```json
 {
   "name": "device_get",
-  "description": "Get device by ID",
   "inputSchema": {
     "type": "object",
     "properties": {
-      "id": {"type": "integer", "description": "Device ID"}
+      "device_id": {"type": "string", "description": "Device ID"}
     },
-    "required": ["id"]
-  }
-}
-```
-
-### device_update
-
-Update device information.
-
-```json
-{
-  "name": "device_update",
-  "description": "Update device information",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "id": {"type": "integer", "description": "Device ID"},
-      "serial": {"type": "string"},
-      "model": {"type": "string"}
-    },
-    "required": ["id"]
-  }
-}
-```
-
-### device_delete
-
-Delete device from registry.
-
-```json
-{
-  "name": "device_delete",
-  "description": "Delete device from registry",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "id": {"type": "integer", "description": "Device ID"}
-    },
-    "required": ["id"]
-  }
-}
-```
-
-### device_list
-
-List devices with pagination.
-
-```json
-{
-  "name": "device_list",
-  "description": "List devices with pagination",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "page": {"type": "integer", "default": 1},
-      "page_size": {"type": "integer", "default": 10},
-      "sort_order": {"type": "string", "enum": ["asc", "desc"]}
-    }
+    "required": ["device_id"]
   }
 }
 ```
 
 ### device_find_by_serial
 
-Find device by serial number.
-
 ```json
 {
   "name": "device_find_by_serial",
-  "description": "Find device by serial number",
   "inputSchema": {
     "type": "object",
     "properties": {
       "serial": {"type": "string", "description": "Device serial number"}
     },
     "required": ["serial"]
+  }
+}
+```
+
+### device_update
+
+Update a device's `model` or `serial` and return the stored device; omitted
+fields are kept. The attestation fields are server-owned and are not changed
+by this tool.
+
+```json
+{
+  "name": "device_update",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "device_id": {"type": "string", "description": "Device ID"},
+      "model": {"type": "string", "description": "New device model"},
+      "serial": {"type": "string", "description": "New device serial number"}
+    },
+    "required": ["device_id"]
+  }
+}
+```
+
+### device_delete
+
+```json
+{
+  "name": "device_delete",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "device_id": {"type": "string", "description": "Device ID"}
+    },
+    "required": ["device_id"]
+  }
+}
+```
+
+### device_list
+
+```json
+{
+  "name": "device_list",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "device_type": {"type": "string", "description": "Filter by device type"},
+      "status": {"type": "string", "description": "Filter by status"}
+    }
   }
 }
 ```
@@ -203,8 +199,9 @@ A diskless node's proof-of-possession request for its recorded IDevID chain
 the service authenticates the request itself. `identity` is the claimed device
 identity and `signature` is base64 (the proof over the identity and the
 channel nonce). MCP carries no TLS connection, so the nonce is empty and the
-service refuses the request; the tool exists so every transport enforces the
-same check.
+service refuses the request with `-32007` (`FailedPrecondition`,
+`ErrBootChannelRequired`); the tool exists so every transport enforces the
+same check. A `signature` that is not base64 is `-32602`.
 
 ```json
 {
@@ -225,7 +222,8 @@ same check.
 A diskless node's attestation evidence in, network profile and CA bundle out
 ([api.md §4.6](api.md#46-diskless-boot-delivery-690)). No permission is required.
 `evidence` is base64. The node's identity is the client certificate of the
-connection, which MCP does not have, so the service refuses the request.
+connection, which MCP does not have, so the service refuses the request with
+`-32007` (`FailedPrecondition`). `evidence` that is not base64 is `-32602`.
 
 ```json
 {
@@ -578,16 +576,17 @@ curl --tlsv1.3 --cacert platform-ca.pem -X POST https://localhost:9445/mcp \
 
 ## Error Handling
 
-MCP errors follow JSON-RPC 2.0:
+MCP errors follow JSON-RPC 2.0. A failed tool call answers the code for its
+error class (#505); the message is the error text and `data` names the tool:
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": 1,
   "error": {
-    "code": -32000,
-    "message": "Device not found",
-    "data": {"device_id": 999}
+    "code": -32005,
+    "message": "DEVICE_NOT_FOUND: device not found",
+    "data": "device_get"
   }
 }
 ```
@@ -597,8 +596,14 @@ MCP errors follow JSON-RPC 2.0:
 | -32700 | Parse error |
 | -32600 | Invalid request |
 | -32601 | Method not found |
-| -32602 | Invalid params |
-| -32603 | Internal error |
-| -32000 | Application error |
+| -32602 | Invalid argument (also an unknown tool) |
+| -32001 / -32002 / -32003 | Authentication required / invalid token / permission denied |
+| -32004 | Service unavailable |
+| -32005 | Not found |
+| -32006 | Already exists |
+| -32007 | Failed precondition |
+| -32603 | Unclassified failure |
+
+The classification rules are in [`docs/daemon/api.md`](../daemon/api.md) §1.
 
 See [api-reference.md](api-reference.md) for complete error code mapping.

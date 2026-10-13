@@ -17,6 +17,7 @@ import (
 	"fmt"
 
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -31,6 +32,12 @@ type DNSError struct {
 
 func (e *DNSError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
+
+// GRPCStatus classifies the error by its Code (codeClass), so the MCP
+// server answers it with the matching JSON-RPC code.
+func (e *DNSError) GRPCStatus() *status.Status {
+	return codeStatus(e.Code, e.Error())
 }
 
 // DNS error sentinel values.

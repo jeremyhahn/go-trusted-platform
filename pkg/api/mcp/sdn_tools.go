@@ -15,6 +15,8 @@ package mcp
 
 import (
 	"fmt"
+
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -29,6 +31,12 @@ type SDNError struct {
 
 func (e *SDNError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
+
+// GRPCStatus classifies the error by its Code (codeClass), so the MCP
+// server answers it with the matching JSON-RPC code.
+func (e *SDNError) GRPCStatus() *status.Status {
+	return codeStatus(e.Code, e.Error())
 }
 
 // ErrSDNServiceUnavailable indicates the SDN service is not available.

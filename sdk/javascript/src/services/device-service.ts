@@ -20,6 +20,8 @@ import type {
   ActivateDeviceRequest,
   DeviceAttestRequest,
   DeviceAttestResponse,
+  RecordAttestCertRequest,
+  RecordAttestCertResponse,
   CreateDeviceResponse,
   GetDeviceResponse,
   UpdateDeviceResponse,
@@ -152,6 +154,28 @@ export class DeviceService extends BaseService {
     request: DeviceAttestRequest
   ): Promise<ApiResponse<DeviceAttestResponse>> {
     return this.client.post<DeviceAttestResponse>(this.buildUrl(`/${id}/attest`), request);
+  }
+
+  /**
+   * Record (or re-record) the device's attestation certificate without
+   * re-enrolling it.
+   *
+   * `POST /api/v1/devices/{id}/attest-cert/record` (docs/device/api.md §4.5).
+   * The verb fails closed and has no override: a refusal is an HTTP 400 whose
+   * message names every candidate and why it was refused, returned verbatim
+   * in `error.message`. Nothing is written on refusal.
+   *
+   * @param id - Device ID
+   * @param request - `reissue: true` lets the CA issue over the enrolled key
+   * @returns The recorded certificate and where it came from
+   */
+  async recordAttestCert(
+    id: number | string,
+    request: RecordAttestCertRequest = {}
+  ): Promise<ApiResponse<RecordAttestCertResponse>> {
+    return this.client.post<RecordAttestCertResponse>(this.buildUrl(`/${id}/attest-cert/record`), {
+      reissue: request.reissue ?? false,
+    });
   }
 
   /**

@@ -283,10 +283,10 @@ The Go SDK carries the four on `sdk/go/services/attestation.Client` as
 `DescribeCallerPolicy` (#429), with `GetDeviceReport` returning
 `*ErrNoDeviceReport` for the never-collected state. The REST adapter routes them to the paths above and
 decodes the webservice's bare `reporting.View` / `Description` payloads onto
-the pb replies; the MCP adapter maps them to the four tools. One transport
-caveat: the MCP server collapses every tool error to `InternalError`, so over
-MCP the SDK recognises never-collected by the server's message (`no report
-has been collected for device`), the text all three servers share. `platformctl
+the pb replies; the MCP adapter maps them to the four tools. Never-collected
+is `NotFound` on every transport: the MCP server answers `ErrNoDeviceReport`
+with `-32005`, and the SDK decodes it to `codes.NotFound`
+([`docs/daemon/api.md`](../daemon/api.md) §1, #505). `platformctl
 attestation reports list|get|refresh` and `platformctl attestation callers`
 ([cli.md](cli.md) §3) are thin over this client.
 

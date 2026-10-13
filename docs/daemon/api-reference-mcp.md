@@ -89,31 +89,36 @@ curl --tlsv1.3 --cacert platform-ca.pem -X POST https://127.0.0.1:9445/mcp \
 | -32003 | Permission denied (insufficient scope) |
 | -32004 | Authorization service unavailable |
 
+### Tool Errors
+
+A failed tool call answers the code for its error class. `-32004` is also a
+service the tool needs being unavailable. See [api.md](api.md) §1 for the table
+and how a failure is classified.
+
+| Code | Class |
+|------|-------|
+| -32602 | Invalid argument (also an unknown tool or a malformed resource URI) |
+| -32005 | Not found |
+| -32006 | Already exists |
+| -32007 | Failed precondition |
+| -32603 | Unclassified failure |
+
 See [Authentication Architecture](../auth/README.md) for complete details.
 
 ## Transport Modes
 
 ### HTTP Transport
 
-```yaml
-mcp:
-  enabled: true
-  transport: http
-  http_addr: "127.0.0.1:9445"
-```
-
-`transport: http` serves HTTPS, TLS 1.3 only, with the daemon certificate.
-There is no setting for a plaintext listener.
+`platformd serve` runs MCP over HTTPS, TLS 1.3 only, with the daemon
+certificate, on `daemon.mcp.bind-host` / `daemon.mcp.port` (default
+`127.0.0.1:9445`, see [Configuration](configuration.md)); `--enable-mcp=false`
+turns it off. There is no setting for a plaintext listener.
 
 ### stdio Transport
 
-```yaml
-mcp:
-  enabled: true
-  transport: stdio
-```
-
-The `stdio` transport communicates via standard input/output for direct CLI integration.
+The `stdio` transport communicates via standard input/output for direct CLI
+integration. It is a `daemon.Config` value for in-process callers;
+`platformd serve` has no key or flag that selects it.
 
 ## Available Tools
 
@@ -404,16 +409,24 @@ Get CA certificate bundle.
 
 ### Device Tools
 
+The full device and profile tool set, with schemas, is in
+[`docs/device/api-reference-mcp.md`](../device/api-reference-mcp.md).
+
 #### device_register
 
-Register a new device.
+Register a new device; the server assigns its id and the result is the created
+device.
 
 **Parameters:**
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| name | string | Yes | Device name |
-| device_type | string | Yes | Device type |
-| public_key | bytes | No | Device public key |
+| serial | string | Yes | Device serial number |
+| model | string | No | Device model |
+| ek_cert | string | No | PEM TPM endorsement key certificate |
+| attest_pub | string | No | Attestation public key |
+| attest_cert | string | No | PEM attestation key certificate issued by the platform CA |
+| signing_pub | string | No | Signing public key |
+| hash_algo_id | integer | No | TPM hash algorithm identifier |
 
 ---
 
@@ -428,6 +441,17 @@ Get device by ID.
 
 ---
 
+#### device_find_by_serial
+
+Find a device by its serial number.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| serial | string | Yes | Device serial number |
+
+---
+
 #### device_list
 
 List devices.
@@ -435,7 +459,8 @@ List devices.
 **Parameters:**
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| filter | map | No | Filter criteria |
+| device_type | string | No | Filter by device type |
+| status | string | No | Filter by status |
 
 ---
 
@@ -452,13 +477,15 @@ Delete a device.
 
 #### device_update
 
-Update device.
+Update a device's model or serial and return the stored device; omitted fields
+are kept.
 
 **Parameters:**
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | device_id | string | Yes | Device ID |
-| updates | map | Yes | Update fields |
+| model | string | No | New device model |
+| serial | string | No | New device serial number |
 
 ### SDN Tools
 

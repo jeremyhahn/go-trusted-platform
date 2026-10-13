@@ -19,6 +19,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -33,6 +34,12 @@ type PXEError struct {
 
 func (e *PXEError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
+
+// GRPCStatus classifies the error by its Code (codeClass), so the MCP
+// server answers it with the matching JSON-RPC code.
+func (e *PXEError) GRPCStatus() *status.Status {
+	return codeStatus(e.Code, e.Error())
 }
 
 // ErrPXEServiceUnavailable indicates the PXE service is not available.

@@ -19,6 +19,7 @@ import (
 	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/switchwire"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -400,4 +401,10 @@ type SwitchError struct {
 
 func (e *SwitchError) Error() string {
 	return e.Code + ": " + e.Message
+}
+
+// GRPCStatus classifies the error by its Code (codeClass), so the MCP
+// server answers it with the matching JSON-RPC code.
+func (e *SwitchError) GRPCStatus() *status.Status {
+	return codeStatus(e.Code, e.Error())
 }

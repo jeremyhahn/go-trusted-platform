@@ -29,6 +29,7 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 )
 
@@ -230,7 +231,7 @@ func TestPlatformServiceProvider_DeviceRegister_AssignsAnID(t *testing.T) {
 		DeviceService: devSvc,
 	})
 
-	result, err := provider.DeviceRegister(context.Background(), "model-525", "SN-525", nil)
+	result, err := provider.DeviceRegister(context.Background(), &mcp.DeviceRegisterRequest{Model: "model-525", Serial: "SN-525"})
 	if err != nil {
 		t.Fatalf("DeviceRegister returned an error: %v", err)
 	}
@@ -258,7 +259,7 @@ func TestPlatformServiceProvider_DeviceRegister_StorageFailureSurfaces(t *testin
 		DeviceService: devSvc,
 	})
 
-	if _, err := provider.DeviceRegister(context.Background(), "model-525", "SN-525", nil); err == nil {
+	if _, err := provider.DeviceRegister(context.Background(), &mcp.DeviceRegisterRequest{Model: "model-525", Serial: "SN-525"}); err == nil {
 		t.Fatal("expected the storage failure to surface from DeviceRegister")
 	}
 }

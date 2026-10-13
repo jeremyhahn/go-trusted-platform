@@ -15,6 +15,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -478,30 +479,29 @@ func TestToolRegistry_DeviceTools(t *testing.T) {
 
 	t.Run("device_register success", func(t *testing.T) {
 		args := map[string]interface{}{
-			"name":        "test-device",
-			"device_type": "iot",
-			"public_key":  "dGVzdC1rZXk=", // base64 "test-key"
+			"serial": "SN-533",
+			"model":  "model-533",
 		}
 
 		result, err := registry.ExecuteTool(ctx, "device_register", args)
 		if err != nil {
-			t.Errorf("unexpected error: %v", err)
+			t.Fatalf("unexpected error: %v", err)
 		}
-		if result == nil {
-			t.Error("result should not be nil")
+		resultMap, ok := result.(map[string]interface{})
+		if !ok {
+			t.Fatalf("result is %T, want a map", result)
+		}
+		if resultMap["serial"] != "SN-533" || resultMap["model"] != "model-533" {
+			t.Errorf("result = %v, want serial SN-533 and model model-533", resultMap)
 		}
 	})
 
-	t.Run("device_register with invalid base64", func(t *testing.T) {
-		args := map[string]interface{}{
-			"name":        "test-device",
-			"device_type": "iot",
-			"public_key":  "not-valid-base64!!!",
-		}
+	t.Run("device_register without serial", func(t *testing.T) {
+		args := map[string]interface{}{"model": "model-533"}
 
 		_, err := registry.ExecuteTool(ctx, "device_register", args)
-		if err == nil {
-			t.Error("expected error for invalid base64")
+		if !errors.Is(err, ErrDeviceSerialRequired) {
+			t.Errorf("err = %v, want ErrDeviceSerialRequired", err)
 		}
 	})
 
@@ -559,21 +559,19 @@ func TestToolRegistry_DeviceTools(t *testing.T) {
 	t.Run("device_update success", func(t *testing.T) {
 		args := map[string]interface{}{
 			"device_id": "device-123",
-			"updates": map[string]interface{}{
-				"status": "inactive",
-			},
+			"model":     "model-updated",
 		}
 
 		result, err := registry.ExecuteTool(ctx, "device_update", args)
 		if err != nil {
-			t.Errorf("unexpected error: %v", err)
+			t.Fatalf("unexpected error: %v", err)
 		}
 		resultMap, ok := result.(map[string]interface{})
 		if !ok {
 			t.Fatal("result is not a map")
 		}
-		if success, ok := resultMap["success"].(bool); !ok || !success {
-			t.Error("expected success: true")
+		if resultMap["id"] != "device-123" {
+			t.Errorf("result = %v, want the stored device-123", resultMap)
 		}
 	})
 

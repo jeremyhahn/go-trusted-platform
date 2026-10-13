@@ -18,6 +18,9 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strconv"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -53,6 +56,11 @@ func (e ErrVMInvalidNonce) Error() string {
 	return fmt.Sprintf("vm: nonce must be base64 encoded: %v", e.Cause)
 }
 
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrVMInvalidNonce) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // Unwrap exposes the underlying decode error for errors.Is/As.
 func (e ErrVMInvalidNonce) Unwrap() error {
 	return e.Cause
@@ -71,6 +79,11 @@ func (e ErrVMInvalidEvidence) Error() string {
 		return fmt.Sprintf("vm: invalid attestation evidence field %q: %v", e.Field, e.Cause)
 	}
 	return fmt.Sprintf("vm: attestation evidence field %q is required", e.Field)
+}
+
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrVMInvalidEvidence) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // Unwrap exposes the underlying decode error for errors.Is/As.

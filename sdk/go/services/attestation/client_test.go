@@ -133,8 +133,8 @@ func TestClient_GetDeviceReport_EmptyIDRejectedBeforeTheCall(t *testing.T) {
 // the generic failure.
 func TestClient_GetDeviceReport_NeverCollected(t *testing.T) {
 	cases := map[string]error{
-		"grpc NotFound":       status.Error(codes.NotFound, "no report has been collected for device 9"),
-		"mcp collapsed error": status.Error(codes.Internal, "attestation: no report has been collected for device 9"),
+		"grpc NotFound": status.Error(codes.NotFound, "no report has been collected for device 9"),
+		"mcp NotFound":  status.Error(codes.NotFound, "attestation: no report has been collected for device 9"),
 	}
 	for name, cause := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -165,6 +165,15 @@ func TestClient_GetDeviceReport_OtherErrorsAreFailures(t *testing.T) {
 	var never *ErrNoDeviceReport
 	if errors.As(err, &never) {
 		t.Error("a permission failure must not read as never collected")
+	}
+}
+
+// TestIsNeverCollected_IgnoresMessageText pins #505: the class decides, so
+// an internal failure whose text happens to read like never-collected is a
+// failure, not the never-collected state.
+func TestIsNeverCollected_IgnoresMessageText(t *testing.T) {
+	if isNeverCollected(status.Error(codes.Internal, "attestation: no report has been collected for device 9")) {
+		t.Error("an Internal status must not classify as never collected by its message")
 	}
 }
 

@@ -16,7 +16,6 @@ package attestation
 
 import (
 	"context"
-	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -209,22 +208,9 @@ func (c *Client) DescribeCallerPolicy(ctx context.Context) (*platformv1.CallerPo
 	return resp.GetPolicy(), nil
 }
 
-// neverCollectedMarker is the text every transport's server puts in its
-// never-collected error (pkg/api/daemon GetDeviceReport, the webservice
-// ErrNoReport and the MCP ErrNoDeviceReport share it).
-const neverCollectedMarker = "no report has been collected for device"
-
-// isNeverCollected recognises the never-collected state on every transport.
-// gRPC, Unix and REST answer NotFound. The MCP server collapses every tool
-// error to InternalError, so over MCP the server's message is the only
-// signal left, and it is matched on the shared marker text.
+// isNeverCollected recognises the never-collected state, which every
+// transport answers as NotFound (MCP since #505 decodes its NotFound code to
+// the same status).
 func isNeverCollected(err error) bool {
-	st, ok := status.FromError(err)
-	if !ok {
-		return false
-	}
-	if st.Code() == codes.NotFound {
-		return true
-	}
-	return strings.Contains(st.Message(), neverCollectedMarker)
+	return status.Code(err) == codes.NotFound
 }

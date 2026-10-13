@@ -457,7 +457,11 @@ func main() {
 
 ## CORS
 
-When CORS is enabled, the server responds to preflight requests:
+CORS and rate limiting are `daemon.Config.RESTConfig` values for in-process
+callers. `platformd serve` keeps their defaults — CORS off, rate limiting off —
+and has no key or flag that changes them (see [Configuration](configuration.md)).
+
+When an embedding caller enables CORS, the server responds to preflight requests:
 
 ```
 OPTIONS /api/v1/services HTTP/1.1
@@ -472,19 +476,12 @@ Access-Control-Max-Age: 86400
 
 ## Rate Limiting
 
-When enabled, rate limiting applies to all endpoints:
+When an embedding caller sets `RateLimitRequests` (requests per second) and
+`RateLimitBurst`, rate limiting applies to all endpoints:
 
 ```
 HTTP/1.1 429 Too Many Requests
 Retry-After: 1
-```
-
-Configure rate limiting in the daemon configuration:
-
-```yaml
-rest:
-  rate_limit_requests: 100  # requests per second
-  rate_limit_burst: 200     # burst allowance
 ```
 
 ## See Also

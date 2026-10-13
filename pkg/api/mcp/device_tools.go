@@ -17,6 +17,7 @@ import (
 	"fmt"
 
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -31,6 +32,12 @@ type DeviceError struct {
 
 func (e *DeviceError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
+
+// GRPCStatus classifies the error by its Code (codeClass), so the MCP
+// server answers it with the matching JSON-RPC code.
+func (e *DeviceError) GRPCStatus() *status.Status {
+	return codeStatus(e.Code, e.Error())
 }
 
 // ErrDeviceServiceUnavailable indicates the device service is not available.
@@ -49,6 +56,13 @@ var ErrDeviceSerialRequired = &DeviceError{
 var ErrDeviceIDRequired = &DeviceError{
 	Code:    "DEVICE_ID_REQUIRED",
 	Message: "device ID is required",
+}
+
+// ErrDeviceHashAlgoInvalid indicates a hash_algo_id outside the uint32 range
+// of a TPM algorithm identifier.
+var ErrDeviceHashAlgoInvalid = &DeviceError{
+	Code:    "DEVICE_HASH_ALGO_INVALID",
+	Message: "hash_algo_id must be a TPM algorithm identifier between 0 and 4294967295",
 }
 
 // ErrDeviceNotFound indicates a device was not found.
@@ -79,180 +93,10 @@ var ErrProfileNotFound = &DeviceError{
 // Device Tool Registration
 // =============================================================================
 
-// registerDeviceToolsV2 registers extended device and profile management MCP tools.
-// This replaces the basic device tools with comprehensive device and profile management.
+// registerDeviceToolsV2 registers the device profile management MCP tools.
+// Device records are served by the device_* family in registerDeviceTools;
+// every tool registered here routes through deviceProfileToolDispatch.
 func (r *ToolRegistry) registerDeviceToolsV2() {
-	// Device CRUD operations
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "device_create",
-		Description: "Register a new device in the system with its TPM credentials and attestation keys",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"serial": map[string]interface{}{
-					"type":        "string",
-					"description": "Device serial number (required, unique identifier)",
-				},
-				"model": map[string]interface{}{
-					"type":        "string",
-					"description": "Device model name",
-				},
-				"attest_pub": map[string]interface{}{
-					"type":        "string",
-					"description": "PEM-encoded attestation public key",
-				},
-				"attest_cert": map[string]interface{}{
-					"type":        "string",
-					"description": "PEM-encoded attestation (IAK/AK) certificate issued by the platform CA; the trust anchor for quote verification",
-				},
-				"signing_pub": map[string]interface{}{
-					"type":        "string",
-					"description": "PEM-encoded signing public key",
-				},
-				"ek_cert": map[string]interface{}{
-					"type":        "string",
-					"description": "PEM-encoded endorsement key certificate",
-				},
-				"event_log": map[string]interface{}{
-					"type":        "string",
-					"description": "Base64-encoded TPM event log",
-				},
-				"hash_algo_id": map[string]interface{}{
-					"type":        "integer",
-					"description": "Hash algorithm ID for PCR calculations",
-				},
-			},
-			"required": []string{"serial"},
-		},
-	})
-
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "device_get_by_id",
-		Description: "Get device details by numeric ID",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "integer",
-					"description": "Device ID",
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "device_get_by_serial",
-		Description: "Get device details by serial number",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"serial": map[string]interface{}{
-					"type":        "string",
-					"description": "Device serial number",
-				},
-			},
-			"required": []string{"serial"},
-		},
-	})
-
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "device_list_all",
-		Description: "List all devices with optional pagination",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"page": map[string]interface{}{
-					"type":        "integer",
-					"description": "Page number (1-based)",
-					"default":     1,
-				},
-				"page_size": map[string]interface{}{
-					"type":        "integer",
-					"description": "Number of devices per page",
-					"default":     50,
-				},
-			},
-		},
-	})
-
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "device_update_by_id",
-		Description: "Update device properties by ID",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "integer",
-					"description": "Device ID",
-				},
-				"serial": map[string]interface{}{
-					"type":        "string",
-					"description": "New device serial number",
-				},
-				"model": map[string]interface{}{
-					"type":        "string",
-					"description": "New device model name",
-				},
-				"attest_pub": map[string]interface{}{
-					"type":        "string",
-					"description": "New PEM-encoded attestation public key",
-				},
-				"attest_cert": map[string]interface{}{
-					"type":        "string",
-					"description": "New PEM-encoded attestation (IAK/AK) certificate issued by the platform CA",
-				},
-				"signing_pub": map[string]interface{}{
-					"type":        "string",
-					"description": "New PEM-encoded signing public key",
-				},
-				"ek_cert": map[string]interface{}{
-					"type":        "string",
-					"description": "New PEM-encoded endorsement key certificate",
-				},
-				"event_log": map[string]interface{}{
-					"type":        "string",
-					"description": "New base64-encoded TPM event log",
-				},
-				"hash_algo_id": map[string]interface{}{
-					"type":        "integer",
-					"description": "New hash algorithm ID",
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "device_delete_by_id",
-		Description: "Delete a device by ID",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "integer",
-					"description": "Device ID",
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "device_get_status",
-		Description: "Get the current status of a device including attestation state",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "integer",
-					"description": "Device ID",
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
-
 	// Profile CRUD operations
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "profile_create",

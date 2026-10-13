@@ -775,7 +775,7 @@ func TestPlatformServiceProvider_DeviceRegister_Success(t *testing.T) {
 		DeviceService: mockSvc,
 	})
 
-	result, err := provider.DeviceRegister(ctx, "TestDevice", "server", nil)
+	result, err := provider.DeviceRegister(ctx, &mcp.DeviceRegisterRequest{Model: "TestDevice", Serial: "server"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -802,10 +802,57 @@ func TestPlatformServiceProvider_DeviceRegister_ServiceError(t *testing.T) {
 		DeviceService: mockSvc,
 	})
 
-	_, err := provider.DeviceRegister(ctx, "TestDevice", "server", nil)
+	_, err := provider.DeviceRegister(ctx, &mcp.DeviceRegisterRequest{Model: "TestDevice", Serial: "server"})
 	if err == nil {
 		t.Error("expected error from service")
 	}
+}
+
+func TestPlatformServiceProvider_DeviceFindBySerial_ReturnsRegisteredDevice(t *testing.T) {
+	ctx := context.Background()
+	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{
+		DeviceService: newSPMockDeviceService(),
+	})
+
+	if _, err := provider.DeviceRegister(ctx, &mcp.DeviceRegisterRequest{Serial: "SN-533", Model: "m-533"}); err != nil {
+		t.Fatalf("register device: %v", err)
+	}
+
+	result, err := provider.DeviceFindBySerial(ctx, "SN-533")
+	if err != nil {
+		t.Fatalf("DeviceFindBySerial: %v", err)
+	}
+	dev, ok := result.(*deviceentities.Device)
+	if !ok {
+		t.Fatalf("expected *deviceentities.Device, got %T", result)
+	}
+	if dev.Serial != "SN-533" || dev.Model != "m-533" {
+		t.Errorf("found serial=%q model=%q, want SN-533/m-533", dev.Serial, dev.Model)
+	}
+}
+
+func TestPlatformServiceProvider_DeviceFindBySerial_Errors(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("no device service", func(t *testing.T) {
+		provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
+		_, err := provider.DeviceFindBySerial(ctx, "SN-533")
+		var notAvailable ErrServiceNotAvailable
+		if !errors.As(err, &notAvailable) {
+			t.Fatalf("error = %v, want ErrServiceNotAvailable", err)
+		}
+	})
+
+	t.Run("unknown serial", func(t *testing.T) {
+		provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{
+			DeviceService: newSPMockDeviceService(),
+		})
+		_, err := provider.DeviceFindBySerial(ctx, "SN-missing")
+		var notFound ErrDeviceNotFound
+		if !errors.As(err, &notFound) {
+			t.Fatalf("error = %v, want ErrDeviceNotFound", err)
+		}
+	})
 }
 
 // =============================================================================

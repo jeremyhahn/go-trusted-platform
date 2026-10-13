@@ -17,6 +17,7 @@ import (
 	"fmt"
 
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"google.golang.org/grpc/status"
 )
 
 // registerVMTools registers VM-related MCP tools.
@@ -427,6 +428,12 @@ type VMError struct {
 
 func (e *VMError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
+
+// GRPCStatus classifies the error by its Code (codeClass), so the MCP
+// server answers it with the matching JSON-RPC code.
+func (e *VMError) GRPCStatus() *status.Status {
+	return codeStatus(e.Code, e.Error())
 }
 
 // ErrVMServiceUnavailable indicates the VM service is not available.

@@ -93,6 +93,19 @@ type CASignCSRRequest struct {
 	ValidDays int    `json:"valid_days,omitempty"`
 }
 
+// DeviceRegisterRequest carries the device_register tool arguments. The
+// fields match the device record every other transport creates: Serial is
+// required, the server assigns the id.
+type DeviceRegisterRequest struct {
+	Serial     string `json:"serial"`
+	Model      string `json:"model,omitempty"`
+	EKCert     string `json:"ek_cert,omitempty"`
+	AttestPub  string `json:"attest_pub,omitempty"`
+	AttestCert string `json:"attest_cert,omitempty"`
+	SigningPub string `json:"signing_pub,omitempty"`
+	HashAlgoID uint32 `json:"hash_algo_id,omitempty"`
+}
+
 // IAMCreateUserRequest represents a user creation request for MCP.
 type IAMCreateUserRequest struct {
 	TenantID   string            `json:"tenant_id"`
@@ -436,8 +449,9 @@ type ServiceProvider interface {
 	DNSListZones(ctx context.Context) ([]string, error)
 
 	// Device operations
-	DeviceRegister(ctx context.Context, name string, deviceType string, publicKey []byte) (interface{}, error)
+	DeviceRegister(ctx context.Context, req *DeviceRegisterRequest) (interface{}, error)
 	DeviceGet(ctx context.Context, deviceID string) (interface{}, error)
+	DeviceFindBySerial(ctx context.Context, serial string) (interface{}, error)
 	DeviceList(ctx context.Context, filter map[string]string) ([]interface{}, error)
 	DeviceDelete(ctx context.Context, deviceID string) error
 	DeviceUpdate(ctx context.Context, deviceID string, updates map[string]interface{}) error

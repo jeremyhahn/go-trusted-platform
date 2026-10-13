@@ -72,6 +72,7 @@ func toolPermissionCatalog() map[string]string {
 	// Device tools
 	permissions["device_register"] = "device:write"
 	permissions["device_get"] = "device:read"
+	permissions["device_find_by_serial"] = "device:read"
 	permissions["device_list"] = "device:read"
 	permissions["device_delete"] = "device:delete"
 	permissions["device_update"] = "device:write"

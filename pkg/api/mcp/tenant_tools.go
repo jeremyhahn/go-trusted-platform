@@ -22,6 +22,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"google.golang.org/grpc/status"
 )
 
 // TenantError represents a tenant operation error.
@@ -32,6 +33,12 @@ type TenantError struct {
 
 func (e *TenantError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
+
+// GRPCStatus classifies the error by its Code (codeClass), so the MCP
+// server answers it with the matching JSON-RPC code.
+func (e *TenantError) GRPCStatus() *status.Status {
+	return codeStatus(e.Code, e.Error())
 }
 
 // Tenant-specific error types.

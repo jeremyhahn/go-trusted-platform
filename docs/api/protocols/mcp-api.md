@@ -430,14 +430,20 @@ Result: Device attestation successful, PCR values match expected policy
 | `-32700` | Parse Error | Invalid JSON |
 | `-32600` | Invalid Request | Invalid JSON-RPC |
 | `-32601` | Method Not Found | Unknown method |
-| `-32602` | Invalid Params | Invalid parameters |
-| `-32603` | Internal Error | Server error — also, today, the code an **unclassified** tool answers with (`tool '<name>' has no permission mapping and cannot be authorized`; see #440) |
+| `-32602` | Invalid Params | Invalid parameters, an unknown tool, or a malformed resource URI |
+| `-32603` | Internal Error | Unclassified failure. An **unclassified** tool also answers it (`tool '<name>' has no permission mapping and cannot be authorized`; see #440). |
 | `-32001` | Authentication Required | No token on a tool that requires one |
 | `-32002` | Invalid Token | Token invalid or expired |
 | `-32003` | Permission Denied | Token lacks the tool's `resource:action` scope |
 | `-32004` | Service Unavailable | Service down |
+| `-32005` | Not Found | The tool's target does not exist |
+| `-32006` | Already Exists | The tool would create a duplicate |
+| `-32007` | Failed Precondition | The target is in the wrong state (for example not running) |
 
-The four authorization codes are `sdk/go/wire/mcpwire/jsonrpc.go:31-34`; this table
+A tool failure answers the code for its error class (#505). The table and the
+classification rules are in [`docs/daemon/api.md`](../../daemon/api.md) §1.
+
+The platform codes are `sdk/go/wire/mcpwire/jsonrpc.go:33-39`; this table
 previously listed them one lower (`-32000`…`-32003`), which no client ever
 received — the code is the wire (#412).
 

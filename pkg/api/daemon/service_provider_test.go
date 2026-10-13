@@ -237,7 +237,7 @@ func TestPlatformServiceProvider_DeviceOperations_NilService(t *testing.T) {
 	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
 
 	t.Run("DeviceRegister returns error", func(t *testing.T) {
-		_, err := provider.DeviceRegister(ctx, "device1", "server", nil)
+		_, err := provider.DeviceRegister(ctx, &mcp.DeviceRegisterRequest{Model: "device1", Serial: "server"})
 		if err == nil {
 			t.Error("expected error")
 		}

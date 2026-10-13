@@ -74,8 +74,9 @@ type mockServiceProvider struct {
 	dnsListZonesFunc    func(ctx context.Context) ([]string, error)
 
 	// Device
-	deviceRegisterFunc         func(ctx context.Context, name, deviceType string, publicKey []byte) (interface{}, error)
+	deviceRegisterFunc         func(ctx context.Context, req *DeviceRegisterRequest) (interface{}, error)
 	deviceGetFunc              func(ctx context.Context, deviceID string) (interface{}, error)
+	deviceFindBySerialFunc     func(ctx context.Context, serial string) (interface{}, error)
 	deviceListFunc             func(ctx context.Context, filter map[string]string) ([]interface{}, error)
 	deviceDeleteFunc           func(ctx context.Context, deviceID string) error
 	deviceUpdateFunc           func(ctx context.Context, deviceID string, updates map[string]interface{}) error
@@ -356,8 +357,8 @@ func newMockServiceProvider() *mockServiceProvider {
 		},
 
 		// Device defaults
-		deviceRegisterFunc: func(ctx context.Context, name, deviceType string, publicKey []byte) (interface{}, error) {
-			return map[string]interface{}{"id": "device-123", "name": name, "type": deviceType}, nil
+		deviceRegisterFunc: func(ctx context.Context, req *DeviceRegisterRequest) (interface{}, error) {
+			return map[string]interface{}{"id": "device-123", "serial": req.Serial, "model": req.Model}, nil
 		},
 		deviceGetFunc: func(ctx context.Context, deviceID string) (interface{}, error) {
 			return map[string]interface{}{"id": deviceID, "name": "test-device", "status": "active"}, nil
@@ -1074,9 +1075,16 @@ func (m *mockServiceProvider) DNSListZones(ctx context.Context) ([]string, error
 }
 
 // Device implementations
-func (m *mockServiceProvider) DeviceRegister(ctx context.Context, name, deviceType string, publicKey []byte) (interface{}, error) {
+func (m *mockServiceProvider) DeviceRegister(ctx context.Context, req *DeviceRegisterRequest) (interface{}, error) {
 	if m.deviceRegisterFunc != nil {
-		return m.deviceRegisterFunc(ctx, name, deviceType, publicKey)
+		return m.deviceRegisterFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) DeviceFindBySerial(ctx context.Context, serial string) (interface{}, error) {
+	if m.deviceFindBySerialFunc != nil {
+		return m.deviceFindBySerialFunc(ctx, serial)
 	}
 	return nil, nil
 }

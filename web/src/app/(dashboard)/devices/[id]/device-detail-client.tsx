@@ -25,6 +25,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DeviceCard } from '@/components/features/devices/device-card';
 import { TPMInfo } from '@/components/features/devices/tpm-info';
 import { DeviceReportCard } from '@/components/features/attestation/device-report-card';
+import { AttestCertCard } from '@/components/features/attestation/attest-cert-card';
 import { useToast } from '@/hooks/use-toast';
 import { useDevice, useMutation } from '@/hooks';
 import { DEVICE_TOGGLE_UNAVAILABLE } from '@/lib/device-lifecycle';
@@ -323,25 +324,8 @@ export default function DeviceDetailPage() {
         </Card>
       )}
 
-      {device.attestCert && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Shield className="h-5 w-5" />
-              Attestation Certificate
-            </CardTitle>
-            <CardDescription>
-              The IAK certificate the platform CA issued at enrollment. Quotes are
-              trusted only when it chains to the platform CA and carries
-              tcg-cap-verifiedTPMRestricted.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <code className="block rounded bg-muted p-2 text-xs font-mono break-all whitespace-pre-wrap">
-              {device.attestCert}
-            </code>
-          </CardContent>
-        </Card>
+      {(device.tpm || device.attestCert) && (
+        <AttestCertCard deviceId={device.id} attestCert={device.attestCert} onRecorded={fetchDevice} />
       )}
 
       <Tabs defaultValue="attestations" className="space-y-4">

@@ -121,54 +121,17 @@ The daemon manages the following platform services:
 
 ```yaml
 daemon:
-  socket_path: /run/platformd.sock
-  socket_group: trusted-platform
-  socket_mode: 0660
-  shutdown_timeout: 30s
-  enable_metrics: true
-  enable_events: true
-
-  # Bind hosts and ports are the live keys (#552); loopback is the
-  # default — name an interface to expose a transport.
-  rest:
-    bind-host: 127.0.0.1
-    port: 8443
-    enabled: true
-    tls_cert_file: /etc/trusted-platform/certs/server.crt
-    tls_key_file: /etc/trusted-platform/certs/server.key
-    read_timeout: 30s
-    write_timeout: 30s
-    enable_cors: false
-    enable_compression: true
-
-  grpc:
-    bind-host: 127.0.0.1
-    port: 10443
-    enabled: true
-    tls_cert_file: /etc/trusted-platform/certs/server.crt
-    tls_key_file: /etc/trusted-platform/certs/server.key
-
-  quic:
-    bind-host: 127.0.0.1
-    port: 9444
-    enabled: false
-
-  mcp:
-    bind-host: 127.0.0.1
-    port: 9445
-    enabled: false
-    transport: http   # HTTPS, TLS 1.3 only, daemon certificate; no plaintext mode
-    server_name: "Trusted Platform MCP Server"
-    request_timeout: 30s
-    max_concurrent_requests: 100
-
-  services:
-    tpm:
-      enabled: true
-      auto_start: true
-      timeout: 10s
-      max_retries: 3
+  # Bind hosts and ports are the only daemon keys (#552, #565); loopback is
+  # the default — name an interface to expose a transport.
+  rest: {bind-host: 127.0.0.1, port: 8443}
+  grpc: {bind-host: 0.0.0.0, port: 10443}
+  quic: {bind-host: 127.0.0.1, port: 9444}
+  mcp:  {bind-host: 127.0.0.1, port: 9445}
 ```
+
+The socket path, which transports run and mTLS are `platformd serve` flags
+(`--socket-path`, `--enable-<transport>`, `--enable-mtls`); TLS material comes
+from the platform CA. See [Configuration](configuration.md).
 
 ## Health Checking
 

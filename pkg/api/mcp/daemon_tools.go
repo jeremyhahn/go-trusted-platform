@@ -17,6 +17,8 @@ import (
 	"context"
 
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // ErrDaemonServiceNameRequired indicates that a service name parameter is required.
@@ -24,6 +26,11 @@ type ErrDaemonServiceNameRequired struct{}
 
 func (e ErrDaemonServiceNameRequired) Error() string {
 	return "service name is required"
+}
+
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrDaemonServiceNameRequired) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // registerDaemonTools registers daemon management tools.

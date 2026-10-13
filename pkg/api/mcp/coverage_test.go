@@ -1128,26 +1128,6 @@ func TestExecuteDNSListZones_ServiceError(t *testing.T) {
 // Device Service Error Coverage Tests
 // =============================================================================
 
-func TestExecuteDeviceRegister_ServiceError(t *testing.T) {
-	ctx := context.Background()
-	svc := newMockServiceProvider()
-	svc.deviceRegisterFunc = func(ctx context.Context, name, deviceType string, publicKey []byte) (interface{}, error) {
-		return nil, ErrMockServiceError
-	}
-	registry := NewToolRegistry(svc, newTestLogger())
-
-	args := map[string]interface{}{
-		"name":        "test-device",
-		"device_type": "server",
-		"public_key":  "cHVibGljLWtleQ==", // "public-key" base64 encoded
-	}
-
-	_, err := registry.ExecuteTool(ctx, "device_register", args)
-	if err == nil {
-		t.Error("expected error from service")
-	}
-}
-
 func TestExecuteDeviceGet_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
@@ -1193,27 +1173,6 @@ func TestExecuteDeviceDelete_ServiceError(t *testing.T) {
 	}
 
 	_, err := registry.ExecuteTool(ctx, "device_delete", args)
-	if err == nil {
-		t.Error("expected error from service")
-	}
-}
-
-func TestExecuteDeviceUpdate_ServiceError(t *testing.T) {
-	ctx := context.Background()
-	svc := newMockServiceProvider()
-	svc.deviceUpdateFunc = func(ctx context.Context, deviceID string, updates map[string]interface{}) error {
-		return ErrMockServiceError
-	}
-	registry := NewToolRegistry(svc, newTestLogger())
-
-	args := map[string]interface{}{
-		"device_id": "device-123",
-		"updates": map[string]interface{}{
-			"name": "updated-device",
-		},
-	}
-
-	_, err := registry.ExecuteTool(ctx, "device_update", args)
 	if err == nil {
 		t.Error("expected error from service")
 	}

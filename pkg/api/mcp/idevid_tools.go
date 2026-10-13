@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -33,6 +34,12 @@ type IDevIDError struct {
 
 func (e *IDevIDError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
+
+// GRPCStatus classifies the error by its Code (codeClass), so the MCP
+// server answers it with the matching JSON-RPC code.
+func (e *IDevIDError) GRPCStatus() *status.Status {
+	return codeStatus(e.Code, e.Error())
 }
 
 // IDevID/IAK error instances.

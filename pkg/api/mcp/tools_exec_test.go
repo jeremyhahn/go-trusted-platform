@@ -16,6 +16,7 @@ package mcp
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"testing"
 )
 
@@ -431,20 +432,16 @@ func TestDeviceToolExecution(t *testing.T) {
 
 	t.Run("executeDeviceRegister error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.deviceRegisterFunc = func(ctx context.Context, name, deviceType string, publicKey []byte) (interface{}, error) {
+		svc.deviceRegisterFunc = func(ctx context.Context, req *DeviceRegisterRequest) (interface{}, error) {
 			return nil, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)
 
-		args := map[string]interface{}{
-			"name":        "device",
-			"device_type": "iot",
-			"public_key":  base64.StdEncoding.EncodeToString([]byte("key")),
-		}
+		args := map[string]interface{}{"serial": "SN-1"}
 
 		_, err := registry.ExecuteTool(ctx, "device_register", args)
-		if err == nil {
-			t.Error("expected error")
+		if !errors.Is(err, ErrMockServiceError) {
+			t.Errorf("err = %v, want ErrMockServiceError", err)
 		}
 	})
 
@@ -496,12 +493,12 @@ func TestDeviceToolExecution(t *testing.T) {
 
 		args := map[string]interface{}{
 			"device_id": "dev-1",
-			"updates":   map[string]interface{}{"status": "inactive"},
+			"model":     "model-updated",
 		}
 
 		_, err := registry.ExecuteTool(ctx, "device_update", args)
-		if err == nil {
-			t.Error("expected error")
+		if !errors.Is(err, ErrMockServiceError) {
+			t.Errorf("err = %v, want ErrMockServiceError", err)
 		}
 	})
 

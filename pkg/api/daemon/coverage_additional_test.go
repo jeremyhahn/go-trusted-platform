@@ -22,6 +22,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 )
 
 // =============================================================================
@@ -196,7 +198,7 @@ func TestMCPService_DeviceOperations_NoService(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("DeviceRegister without device service", func(t *testing.T) {
-		result, err := provider.DeviceRegister(ctx, "device-001", "test-device", nil)
+		result, err := provider.DeviceRegister(ctx, &mcp.DeviceRegisterRequest{Model: "device-001", Serial: "test-device"})
 		assert.Nil(t, result)
 		assert.Error(t, err)
 	})

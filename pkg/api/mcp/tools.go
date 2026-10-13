@@ -557,15 +557,19 @@ func (r *ToolRegistry) registerDNSTools() {
 func (r *ToolRegistry) registerDeviceTools() {
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "device_register",
-		Description: "Register a new device",
+		Description: "Register a new device; the server assigns its id",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"name":        map[string]interface{}{"type": "string", "description": "Device name"},
-				"device_type": map[string]interface{}{"type": "string", "description": "Device type"},
-				"public_key":  map[string]interface{}{"type": "string", "description": "Base64-encoded device public key"},
+				"serial":       map[string]interface{}{"type": "string", "description": "Device serial number"},
+				"model":        map[string]interface{}{"type": "string", "description": "Device model"},
+				"ek_cert":      map[string]interface{}{"type": "string", "description": "PEM TPM endorsement key certificate"},
+				"attest_pub":   map[string]interface{}{"type": "string", "description": "Attestation public key"},
+				"attest_cert":  map[string]interface{}{"type": "string", "description": "PEM attestation key certificate issued by the platform CA"},
+				"signing_pub":  map[string]interface{}{"type": "string", "description": "Signing public key"},
+				"hash_algo_id": map[string]interface{}{"type": "integer", "description": "TPM hash algorithm identifier"},
 			},
-			"required": []string{"name", "device_type", "public_key"},
+			"required": []string{"serial"},
 		},
 	})
 
@@ -578,6 +582,18 @@ func (r *ToolRegistry) registerDeviceTools() {
 				"device_id": map[string]interface{}{"type": "string", "description": "Device ID"},
 			},
 			"required": []string{"device_id"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "device_find_by_serial",
+		Description: "Find a device by its serial number",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"serial": map[string]interface{}{"type": "string", "description": "Device serial number"},
+			},
+			"required": []string{"serial"},
 		},
 	})
 
@@ -607,14 +623,15 @@ func (r *ToolRegistry) registerDeviceTools() {
 
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "device_update",
-		Description: "Update device properties",
+		Description: "Update a device's model or serial and return the stored device; omitted fields are kept",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"device_id": map[string]interface{}{"type": "string", "description": "Device ID"},
-				"updates":   map[string]interface{}{"type": "object", "description": "Properties to update"},
+				"model":     map[string]interface{}{"type": "string", "description": "New device model"},
+				"serial":    map[string]interface{}{"type": "string", "description": "New device serial number"},
 			},
-			"required": []string{"device_id", "updates"},
+			"required": []string{"device_id"},
 		},
 	})
 
@@ -1364,6 +1381,8 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeDeviceRegister(ctx, args)
 	case "device_get":
 		return r.executeDeviceGet(ctx, args)
+	case "device_find_by_serial":
+		return r.executeDeviceFindBySerial(ctx, args)
 	case "device_list":
 		return r.executeDeviceList(ctx, args)
 	case "device_delete":
@@ -1880,7 +1899,7 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		if result, handled, err := r.dispatchVMTool(ctx, name, args); handled {
 			return result, err
 		}
-		return nil, &mcpwire.MessageError{Msg: fmt.Sprintf("unknown tool: %s", name)}
+		return nil, ErrInvalidArgument{Msg: fmt.Sprintf("unknown tool: %s", name)}
 	}
 }
 

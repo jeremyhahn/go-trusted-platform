@@ -346,10 +346,16 @@ one, so the call is refused before anything is sent. Use `--protocol grpc`,
 `quic` or `rest` ([cli.md](cli.md) §2.7).
 
 **An MCP client says `unknown tool: device_create`.**
-That tool is advertised and has no implementation. Use `device_register`,
-`device_get`, `device_list`, `device_update`, `device_delete` — the older
-family — and the `profile_*` tools, which are all live
-([api.md](api.md) §6).
+That tool no longer exists; it was advertised without an implementation and
+was removed in #533. Use `device_register`, `device_get`,
+`device_find_by_serial`, `device_list`, `device_update`, `device_delete`, and
+the `profile_*` tools ([api.md](api.md) §6). `device_register` takes `serial`
+and `model`, not `name` and `device_type`.
+
+**An MCP client's `initialize` fails with `invalid character 'p' after top-level value`.**
+The client posted to the bare endpoint, which answers the HTTP mux's plain-text
+`404 page not found`. JSON-RPC is served only on the `/mcp` path — use
+`https://<host>:9445/mcp`.
 
 **`platformctl profile list` says "daemon connection required" no matter what.**
 That group is a stub; all four of its verbs return that error unconditionally,

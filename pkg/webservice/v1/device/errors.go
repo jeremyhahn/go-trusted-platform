@@ -13,6 +13,11 @@
 
 package device
 
+import (
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
 // ErrDeviceServiceNotInitialized indicates the device service is not initialized.
 type ErrDeviceServiceNotInitialized struct{}
 
@@ -335,6 +340,12 @@ func (e ErrBootChannelRequired) Error() string {
 }
 
 func (e ErrBootChannelRequired) Unwrap() error { return e.Cause }
+
+// GRPCStatus classifies the refusal as FailedPrecondition, the class gRPC
+// answers it with, for a transport that classifies errors by status (MCP).
+func (e ErrBootChannelRequired) GRPCStatus() *status.Status {
+	return status.New(codes.FailedPrecondition, e.Error())
+}
 
 // ErrBootCertificateRequestUnreadable reports a boot-certificate request body
 // that could not be decoded.

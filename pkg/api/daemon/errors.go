@@ -13,7 +13,12 @@
 
 package daemon
 
-import "fmt"
+import (
+	"fmt"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
 
 // ErrDaemonNotRunning is returned when attempting operations on a stopped daemon
 type ErrDaemonNotRunning struct{}
@@ -240,6 +245,12 @@ type ErrServiceNotAvailable struct {
 
 func (e ErrServiceNotAvailable) Error() string {
 	return fmt.Sprintf("service not available: %s", e.Service)
+}
+
+// GRPCStatus classifies a missing service as Unavailable, so every
+// transport (MCP included, via its JSON-RPC code) reports the same class.
+func (e ErrServiceNotAvailable) GRPCStatus() *status.Status {
+	return status.New(codes.Unavailable, e.Error())
 }
 
 // ErrServiceUnavailable is returned when a service is temporarily unavailable
@@ -607,6 +618,11 @@ type ErrInvalidDeviceID struct {
 
 func (e ErrInvalidDeviceID) Error() string {
 	return fmt.Sprintf("invalid device ID: %s", e.ID)
+}
+
+// GRPCStatus classifies a malformed device ID as InvalidArgument.
+func (e ErrInvalidDeviceID) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // ErrAttestationFailed is returned when device attestation fails

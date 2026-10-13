@@ -126,9 +126,8 @@ this control plane (platformctl attestation callers)
 
 It is never rendered as `failed` or `not verified`, and `-o json` never
 fabricates a report with `verified: false`. The transports signal the state as
-`404` / `NotFound`; over MCP, whose server collapses every tool error to
-`InternalError`, the Go SDK recognises it by the server's message
-(`no report has been collected for device`) — see [api.md](api.md) §5.3.
+`404` / `NotFound`, and over MCP as `-32005`, which the Go SDK decodes to
+`NotFound`. See [api.md](api.md) §5.3.
 
 ### 3.3 `platformctl attestation reports refresh <device-id>`
 

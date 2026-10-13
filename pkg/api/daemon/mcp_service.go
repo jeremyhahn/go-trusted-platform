@@ -685,16 +685,38 @@ func (p *MCPServiceProvider) DNSListZones(ctx context.Context) ([]string, error)
 // =============================================================================
 
 // DeviceRegister registers a new device.
-func (p *MCPServiceProvider) DeviceRegister(ctx context.Context, name string, deviceType string, publicKey []byte) (interface{}, error) {
+func (p *MCPServiceProvider) DeviceRegister(ctx context.Context, req *mcp.DeviceRegisterRequest) (interface{}, error) {
 	if p.deviceService == nil {
 		return nil, ErrServiceNotAvailable{Service: "device"}
 	}
+	return registerMCPDevice(ctx, p.deviceService, req)
+}
 
-	dev := &deviceentities.Device{
-		Model:  name,
-		Serial: deviceType,
+// DeviceFindBySerial returns the device registered under the serial number.
+func (p *MCPServiceProvider) DeviceFindBySerial(ctx context.Context, serial string) (interface{}, error) {
+	if p.deviceService == nil {
+		return nil, ErrServiceNotAvailable{Service: "device"}
 	}
-	if err := p.deviceService.Create(ctx, dev); err != nil {
+	return p.deviceService.FindBySerial(ctx, serial)
+}
+
+// registerMCPDevice stores the device described by a device_register request
+// and returns it with its server-assigned id. Both MCP service providers
+// register through it so the argument-to-field mapping lives in one place.
+func registerMCPDevice(ctx context.Context, svc device.DeviceService, req *mcp.DeviceRegisterRequest) (*deviceentities.Device, error) {
+	if req == nil || req.Serial == "" {
+		return nil, ErrMissingRequiredField{Field: "serial"}
+	}
+	dev := &deviceentities.Device{
+		Serial:     req.Serial,
+		Model:      req.Model,
+		EKCert:     req.EKCert,
+		AttestPub:  req.AttestPub,
+		AttestCert: req.AttestCert,
+		SigningPub: req.SigningPub,
+		HashAlgoId: req.HashAlgoID,
+	}
+	if err := svc.Create(ctx, dev); err != nil {
 		return nil, err
 	}
 	return dev, nil

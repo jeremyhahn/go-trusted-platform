@@ -20,6 +20,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning"
 	restdevice "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
@@ -64,4 +66,5 @@ func assertRefusedOverMCP(t *testing.T, err error) {
 	assert.Equal(t, "MCP", refused.Transport)
 	var unbound *provisioning.ErrBootChannelUnbound
 	assert.ErrorAs(t, err, &unbound, "the refusal carries why the channel is unbound")
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err), "MCP classifies the refusal as gRPC answers it")
 }

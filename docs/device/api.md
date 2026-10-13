@@ -26,7 +26,7 @@ appears here.
 - QUIC: top-level opcodes **`0x30`–`0x3E`**, dispatched by
   `req.Opcode >= OpDeviceRegister && req.Opcode <= OpDeviceGetMetrics`
   (`pkg/api/daemon/quic_service.go:489`). No category indirection.
-- MCP: two device tool families plus one profile family — see §6.
+- MCP: one device tool family plus one profile family — see §6.
 - Go SDK: `sdk/go/services/device` — `NewClient(transport.Adapter)` or
   `NewClientFromGRPC(platformv1.DeviceServiceClient)`. Over REST the SDK sends
   every RPC to the exact route in §2, verb and id constraint included (#321).
@@ -134,7 +134,7 @@ gRPC, Unix, QUIC and embedded.
 | Delete device | `DELETE /api/v1/devices/{id}` | `DeleteDevice` | `OpDeviceUnregister` (`0x31`) | `device_delete` | ✅ |
 | List devices | `GET /api/v1/devices` | `ListDevices` | `OpDeviceList` (`0x33`) | `device_list` | ✅ |
 | Count devices | `GET /api/v1/devices/count` | `CountDevices` | `OpDeviceList` (`0x33`) — total in the list reply's pagination | `MISSING — docs/13 G7` | ✅ |
-| Find device by serial | `GET /api/v1/devices/serial/{serial}` | `FindDeviceBySerial` | `OpDeviceGet` (`0x32`) — union on `Serial` | `MISSING — docs/13 G7` | ✅ |
+| Find device by serial | `GET /api/v1/devices/serial/{serial}` | `FindDeviceBySerial` | `OpDeviceGet` (`0x32`) — union on `Serial` | `device_find_by_serial` | ✅ |
 | Find device by hostname (IDevID CN) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | in-process Go only: `(*device.Service).FindByHostname` — no adapter route |
 | Activate device (mTLS, serial from client cert) | `POST /api/v1/device/activate` | `ActivateDevice` | `OpDeviceActivate` (`0x3B`) | `MISSING — docs/13 G7` | ✅ |
 | Activate device (JSON body) | `POST /api/v1/device/activate-json` | `ActivateDevice` | `OpDeviceActivate` (`0x3B`) | `MISSING — docs/13 G7` | ✅ |
@@ -164,8 +164,8 @@ anchor.** `attest_pub` is the bare attestation public key from the TCG CSR.
 at enrollment (#404); it is what the quote verifier chains and checks for
 `tcg-cap-verifiedTPMRestricted` (§4.4). Both travel on every transport that
 carries a device — REST (flat and `{device: {...}}` envelope), gRPC / Unix /
-QUIC (`Device.attest_cert = 14`), the MCP `device_create` /
-`device_update_by_id` schemas, `platformctl device get`, and the JS SDK `Device`
+QUIC (`Device.attest_cert = 14`), the MCP `device_register` schema and every
+MCP device result, `platformctl device get`, and the JS SDK `Device`
 type — and both are server-owned on update (§3.3). Neither is validated on the
 way in: a caller may register a device with any string in `attest_cert`, and
 the device is then denied at attest time when that string does not chain.
@@ -943,6 +943,14 @@ sub-range the profile-assignment verbs use; MCP's `device_record_attest_cert`
 (`device:write`) and REST delegate to the same in-process gRPC service; the
 Go SDK exposes `device.Client.RecordAttestationCertificate`; the CLI is
 `platformctl device attest-cert record <id> [--reissue] [--clear-on-refusal]`.
+The JavaScript SDK exposes `DeviceService.recordAttestCert(id, {reissue})` over
+the REST route, returning a refusal's message verbatim in `error.message`
+(`error.status` 400). The web console's device detail page carries it as
+**Record certificate** on the Attestation Certificate card (#491): re-issuance
+is an unchecked option in the confirm dialog, and a refusal is shown verbatim
+in that dialog. There is no override in either, because none exists here.
+Neither carries `clear_on_refusal` yet; clear a refused certificate through
+the CLI or any other surface above.
 
 ### 4.6 Diskless boot delivery (#690)
 
@@ -1067,7 +1075,7 @@ it, before the boot service runs — an empty nonce never reaches it:
 | REST | `400` |
 | gRPC, Unix socket | `FailedPrecondition` |
 | QUIC | `StatusInvalidRequest` |
-| MCP | tool error `ErrBootChannelRequired` (Transport `MCP`), from both MCP service providers |
+| MCP | `-32007` (`FailedPrecondition`): tool error `ErrBootChannelRequired` (Transport `MCP`), from both MCP service providers |
 
 - The Unix socket and MCP (plain HTTP or stdio) carry no TLS connection; both
   operations are refused there, by the SDK before anything is sent (below)
@@ -1135,30 +1143,36 @@ authenticate at the application layer via EAB and EK binding instead.
 
 ---
 
-## 6. The MCP surface is triplicated, and one third is dead
+## 6. The MCP surface: one device family, one profile family
 
-Three families of device-related MCP tools exist.
+Two families of device-related MCP tools exist, and every tool in them is
+dispatched and scope-checked.
 
 | Family | Registered by | Executor | In the authorization map |
 |---|---|---|---|
-| `device_register`, `device_get`, `device_list`, `device_delete`, `device_update`, `device_attest`, `device_provision` | `registerDeviceTools` (`tools.go:554`) | yes (`tools.go:1287`) | **yes** — `device:write` / `device:read` / `device:delete` |
-| `device_create`, `device_get_by_id`, `device_get_by_serial`, `device_list_all`, `device_update_by_id`, `device_delete_by_id`, `device_get_status` | `registerDeviceToolsV2` (`device_tools.go:82`) | **no** | **no** |
-| `profile_create`, `profile_get_by_id`, `profile_list_all`, `profile_update_by_id`, `profile_delete_by_id`, `profile_assign_to_device`, `profile_unassign_from_device` | `registerDeviceToolsV2` | yes (`deviceProfileToolDispatch`) | **yes** — all seven mapped to `device:*` |
+| `device_register`, `device_get`, `device_find_by_serial`, `device_list`, `device_delete`, `device_update`, `device_attest`, `device_record_attest_cert`, `device_provision` | `registerDeviceTools` (`tools.go:556`) | `ExecuteTool` (`tools.go:1274`) | **yes** — `device:write` / `device:read` / `device:delete` |
+| `profile_create`, `profile_get_by_id`, `profile_list_all`, `profile_update_by_id`, `profile_delete_by_id`, `profile_assign_to_device`, `profile_unassign_from_device` | `registerDeviceToolsV2` (`device_tools.go:91`) | `deviceProfileToolDispatch` | **yes** — all seven mapped to `device:*` |
 
-Both registration functions run (`tools.go:63` and `:66`), so all 21 tool names
-are advertised by `tools/list`.
+**Arguments are named after the device fields.** `device_register` takes
+`serial` (required), `model`, `ek_cert`, `attest_pub`, `attest_cert`,
+`signing_pub` and `hash_algo_id`, and stores each under its own name; the
+result is the created device with its assigned `id`. `device_update` takes
+`device_id` (required) plus `model` and `serial` — the attestation fields are
+server-owned (§3.3) and ignored — and returns the stored device after the
+update. `device_find_by_serial` takes `serial` and returns the device.
 
-**The seven V2 `device_*` tools have no executor.** `ExecuteTool` has no case
-for them and no `default:` dispatcher claims them (grepped 2026-08-18), so a
-call returns `unknown tool: device_create`. They are advertised and
-non-functional. Use the older family.
+Until #533 a third family — `device_create`, `device_get_by_id`,
+`device_get_by_serial`, `device_list_all`, `device_update_by_id`,
+`device_delete_by_id`, `device_get_status` — was advertised by `tools/list`
+with no executor behind it, so every call answered `unknown tool:
+device_create`. It was removed rather than wired: it duplicated the family
+above verb for verb. `device_register` also read `name` / `device_type` and
+stored them as model and serial, so the serial a caller sent was dropped; it
+now maps every argument by name.
 
-This is the same duplicated-family pattern recorded for DNS
-([`docs/dns/api.md`](../dns/api.md) §3) and vTPM
-([`docs/vtpm/api.md`](../vtpm/api.md) §5), with one difference that works in
-this feature's favour: here the **unmapped** family is also the **dead** one,
-so `AuthorizeTool`'s default-allow behaviour for unlisted tools does not open a
-live path. The seven `profile_*` tools are both live and scope-checked.
+`AuthorizeTool` denies any tool with no entry in the permission map, and
+`TestExecuteTool_EveryAdvertisedToolDispatches` fails when a tool is advertised
+without an executor, so an advertised-but-dead tool cannot return unnoticed.
 
 ---
 
@@ -1183,7 +1197,7 @@ resource `device`:
 `DeviceService` is one of only eleven services in that catalog. Device
 templates, being REST-only, have no scope-catalog entry at all.
 
-On MCP, 14 of the 21 device-related tool names carry a permission — see §6.
+On MCP, all 16 device-related tool names carry a permission — see §6.
 
 ---
 
@@ -1241,8 +1255,9 @@ always paginate.
 REST under `/api/v1`; gRPC package `platform.v1`; QUIC `ProtocolVersion`
 `0x01`. Nothing in the device surface is marked deprecated as of 2026-08-18.
 The singular/plural REST duplication was drift, not a versioning scheme, and
-#266 removed it (§3.1). The triplicated MCP families (§6) are the same kind of
-drift, and the newer spelling is not automatically the better one.
+#266 removed it (§3.1). The dead third MCP device family (§6) was the same kind
+of drift, and #533 removed it: the newer spelling is not automatically the
+better one.
 
 ---
 

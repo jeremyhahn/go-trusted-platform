@@ -24,6 +24,8 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // formatUint64ID renders a uint64 identifier as a decimal string per the
@@ -71,6 +73,11 @@ func (e ErrDeviceProfileInvalidArgs) Error() string {
 // Unwrap exposes the underlying decode error for errors.Is/As.
 func (e ErrDeviceProfileInvalidArgs) Unwrap() error {
 	return e.Cause
+}
+
+// GRPCStatus classifies undecodable tool arguments as InvalidArgument.
+func (e ErrDeviceProfileInvalidArgs) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // DeviceProfileProvider is the optional interface a ServiceProvider can

@@ -22,6 +22,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	restdevice "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 func TestExecuteDeviceBootCertificate(t *testing.T) {
@@ -59,7 +61,9 @@ func TestExecuteDeviceBootCertificate_RejectsMalformedSignature(t *testing.T) {
 		"signature": "!!not base64!!",
 	})
 
-	require.Error(t, err)
+	var invalid ErrInvalidArgument
+	require.ErrorAs(t, err, &invalid)
+	assert.Equal(t, mcpwire.InvalidParams, toolErrorCode(err))
 	assert.False(t, called, "the provider must not see an undecodable proof")
 }
 
@@ -88,7 +92,38 @@ func TestExecuteDeviceBootDelivery_RejectsMalformedEvidence(t *testing.T) {
 		"evidence": "!!not base64!!",
 	})
 
-	require.Error(t, err)
+	var invalid ErrInvalidArgument
+	require.ErrorAs(t, err, &invalid)
+	assert.Equal(t, mcpwire.InvalidParams, toolErrorCode(err))
+}
+
+// Both MCP service providers refuse a boot request with ErrBootChannelRequired
+// (MCP carries no TLS connection); the tool answers it as FailedPrecondition,
+// the class gRPC answers it with, not as an unclassified failure.
+func TestExecuteDeviceBoot_ChannelRefusalIsFailedPrecondition(t *testing.T) {
+	_, refusal := restdevice.BootChannel(nil, "MCP")
+	require.Error(t, refusal)
+	svc := newMockServiceProvider()
+	svc.deviceBootCertificateFunc = func(context.Context, string, []byte) (interface{}, error) {
+		return nil, refusal
+	}
+	svc.deviceBootDeliveryFunc = func(context.Context, []byte) (interface{}, error) {
+		return nil, refusal
+	}
+	registry := NewToolRegistry(svc, logging.DefaultLogger())
+	encoded := base64.StdEncoding.EncodeToString([]byte("proof"))
+
+	for tool, args := range map[string]map[string]interface{}{
+		"device_boot_certificate": {"identity": "node-1.example", "signature": encoded},
+		"device_boot_delivery":    {"evidence": encoded},
+	} {
+		t.Run(tool, func(t *testing.T) {
+			_, err := registry.ExecuteTool(context.Background(), tool, args)
+
+			require.ErrorIs(t, err, refusal)
+			assert.Equal(t, mcpwire.FailedPrecondition, toolErrorCode(err))
+		})
+	}
 }
 
 // A diskless node holds no token, so the two boot tools are explicitly open;

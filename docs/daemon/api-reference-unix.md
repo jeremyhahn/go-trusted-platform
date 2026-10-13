@@ -158,27 +158,14 @@ Refer to go-quicbaas KMS documentation for available methods.
 
 ## Socket Permissions
 
-The daemon creates the socket with configurable permissions:
-
-```yaml
-daemon:
-  socket_path: /run/platformd.sock
-  socket_group: trusted-platform
-  socket_mode: 0660
-```
-
-### Permission Model
-
-| Setting | Description |
-|---------|-------------|
-| `socket_group` | Group owner of socket file |
-| `socket_mode` | File permissions (octal) |
-
-Default permissions allow read/write for owner and group (`0660`).
+The daemon creates the socket at `--socket-path` (default
+`/run/platformd.sock`) with mode `0660`. Neither the mode nor the group is
+configurable, and platformd does not change the socket's group: it is the
+group of the platformd process.
 
 ### Access Control
 
-Users must be members of the `socket_group` to connect:
+A client must own the socket or be a member of its group to connect:
 
 ```bash
 # Add user to group

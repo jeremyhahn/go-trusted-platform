@@ -24,8 +24,8 @@ import (
 // message is the point: the next reader learns in one line that the red
 // cell is an adapter defect with an owner, not #525 regressing.
 //
-// The three below are the state of the suite as measured on 2026-09-06,
-// and none is relaxed to a skip — this repository documents a known
+// The entries below are the state of the suite as measured since 2026-09-06,
+// and neither is relaxed to a skip — this repository documents a known
 // defect with a test that fails loudly, never with one that opts out.
 //
 //   - #531 — the REST adapter addressed a tenant-scoped route family
@@ -34,13 +34,14 @@ import (
 //     a 404 now means the adapter and the router drifted apart again.
 //   - #532 — the Unix adapter dials the plaintext gRPC UDS with TLS
 //     credentials, so it fails at connect.
-//   - #533 — the MCP endpoint answers "page not found" rather than JSON,
-//     so the adapter cannot even initialize.
 //   - #493 — the CLI adapter shelled verbs and flags platformctl does not
 //     have (--tenant-id among them). Since #534 `platformctl device
 //     register` creates a device rather than a profile, so the CLI is a
 //     case here; "unknown command" or "unknown flag" means the adapter
 //     and the CLI drifted apart again.
+//
+// MCP left this list with #533: the adapter posts to the /mcp path, and
+// the device_* tools it calls all dispatch and take its argument names.
 func unreachableTransportIssue(adapter string, err error) string {
 	if err == nil {
 		return ""
@@ -49,13 +50,11 @@ func unreachableTransportIssue(adapter string, err error) string {
 	signatures := map[string][]string{
 		"REST": {"404 page not found", "status: 404"},
 		"Unix": {"does not look like a TLS handshake"},
-		"MCP":  {"failed to initialize", "after top-level value"},
 		"CLI":  {"unknown command", "unknown flag"},
 	}
 	issues := map[string]string{
 		"REST": "#531 (the adapter addresses routes the server does not serve)",
 		"Unix": "#532 (the adapter dials the plaintext UDS with TLS credentials)",
-		"MCP":  "#533 (the MCP endpoint answers \"page not found\" rather than JSON)",
 		"CLI":  "#493 (the adapter shells a verb or flag platformctl does not have)",
 	}
 	for _, sig := range signatures[adapter] {
@@ -148,10 +147,12 @@ func TestDeviceCreateThenReadAcrossTransports(t *testing.T) {
 					adapter.Name())
 			}
 			t.Cleanup(func() {
-				_, _ = adapter.DeleteDevice(context.Background(), DeleteDeviceOptions{
+				if _, err := adapter.DeleteDevice(context.Background(), DeleteDeviceOptions{
 					TenantID: DefaultTenantID(),
 					DeviceID: strconv.FormatUint(deviceID, 10),
-				})
+				}); err != nil {
+					t.Logf("cleanup: delete device %d: %v", deviceID, err)
+				}
 			})
 
 			read, err := adapter.GetDevice(ctx, GetDeviceOptions{
@@ -174,12 +175,9 @@ func TestDeviceCreateThenReadAcrossTransports(t *testing.T) {
 				t.Errorf("%s: read back device %d, want %d", adapter.Name(), read.Device.ID, deviceID)
 			}
 
-			// The MCP device_register tool takes name/device_type/public_key
-			// and the adapter sends serial/model, so nothing the caller sent
-			// reaches the record on that transport. That argument mismatch
-			// is a separate defect; the identity assertion above is what
-			// #525 is about and holds on every transport.
-			if adapter.Name() != "MCP" && read.Device.Serial != serial {
+			// What the caller sent must reach the record on every transport;
+			// MCP once stored its arguments under the wrong fields (#533).
+			if read.Device.Serial != serial {
 				t.Errorf("%s: read back serial %q, want %q",
 					adapter.Name(), read.Device.Serial, serial)
 			}
@@ -228,10 +226,12 @@ func TestDeviceCreateAssignsDistinctIdentities(t *testing.T) {
 		}
 		ids[id] = struct{}{}
 		t.Cleanup(func() {
-			_, _ = adapter.DeleteDevice(context.Background(), DeleteDeviceOptions{
+			if _, err := adapter.DeleteDevice(context.Background(), DeleteDeviceOptions{
 				TenantID: DefaultTenantID(),
 				DeviceID: strconv.FormatUint(id, 10),
-			})
+			}); err != nil {
+				t.Logf("cleanup: delete device %d: %v", id, err)
+			}
 		})
 	}
 }

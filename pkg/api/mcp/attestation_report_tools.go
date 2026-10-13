@@ -17,6 +17,8 @@ import (
 	"context"
 
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // AttestationReportProvider is the optional MCP provider for the attestation
@@ -60,6 +62,12 @@ type ErrNoDeviceReport struct {
 
 func (e ErrNoDeviceReport) Error() string {
 	return "attestation: no report has been collected for device " + e.DeviceID
+}
+
+// GRPCStatus classifies a never-collected device as NotFound, the class the
+// gRPC and REST transports answer the same state with.
+func (e ErrNoDeviceReport) GRPCStatus() *status.Status {
+	return status.New(codes.NotFound, e.Error())
 }
 
 func (r *ToolRegistry) attestationReportProvider() AttestationReportProvider {

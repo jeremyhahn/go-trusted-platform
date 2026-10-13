@@ -16,8 +16,7 @@ package mcp
 import (
 	"context"
 	"encoding/base64"
-
-	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"math"
 )
 
 // vTPM tool execution handlers
@@ -75,7 +74,7 @@ func (r *ToolRegistry) executeVTPMQuote(ctx context.Context, args map[string]int
 
 	nonce, err := base64.StdEncoding.DecodeString(nonceB64)
 	if err != nil {
-		return nil, &mcpwire.WrappedError{Msg: "invalid nonce encoding", Err: err}
+		return nil, ErrInvalidArgument{Msg: "invalid nonce encoding", Cause: err}
 	}
 
 	quote, err := r.service.VTPMQuote(ctx, name, nonce, pcrs)
@@ -92,7 +91,7 @@ func (r *ToolRegistry) executeVTPMSeal(ctx context.Context, args map[string]inte
 
 	data, err := base64.StdEncoding.DecodeString(dataB64)
 	if err != nil {
-		return nil, &mcpwire.WrappedError{Msg: "invalid data encoding", Err: err}
+		return nil, ErrInvalidArgument{Msg: "invalid data encoding", Cause: err}
 	}
 
 	sealed, err := r.service.VTPMSeal(ctx, name, data, pcrs)
@@ -110,7 +109,7 @@ func (r *ToolRegistry) executeVTPMUnseal(ctx context.Context, args map[string]in
 
 	sealed, err := base64.StdEncoding.DecodeString(sealedB64)
 	if err != nil {
-		return nil, &mcpwire.WrappedError{Msg: "invalid sealed data encoding", Err: err}
+		return nil, ErrInvalidArgument{Msg: "invalid sealed data encoding", Cause: err}
 	}
 
 	data, err := r.service.VTPMUnseal(ctx, name, sealed)
@@ -129,7 +128,7 @@ func (r *ToolRegistry) executeVTPMExtendPCR(ctx context.Context, args map[string
 
 	data, err := base64.StdEncoding.DecodeString(dataB64)
 	if err != nil {
-		return nil, &mcpwire.WrappedError{Msg: "invalid data encoding", Err: err}
+		return nil, ErrInvalidArgument{Msg: "invalid data encoding", Cause: err}
 	}
 
 	if err := r.service.VTPMExtendPCR(ctx, name, pcr, data); err != nil {
@@ -242,16 +241,24 @@ func (r *ToolRegistry) executeDNSListZones(ctx context.Context, args map[string]
 // Device tool execution handlers
 
 func (r *ToolRegistry) executeDeviceRegister(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	name := getString(args, "name")
-	deviceType := getString(args, "device_type")
-	publicKeyB64 := getString(args, "public_key")
-
-	publicKey, err := base64.StdEncoding.DecodeString(publicKeyB64)
-	if err != nil {
-		return nil, &mcpwire.WrappedError{Msg: "invalid public key encoding", Err: err}
+	req := &DeviceRegisterRequest{
+		Serial:     getString(args, "serial"),
+		Model:      getString(args, "model"),
+		EKCert:     getString(args, "ek_cert"),
+		AttestPub:  getString(args, "attest_pub"),
+		AttestCert: getString(args, "attest_cert"),
+		SigningPub: getString(args, "signing_pub"),
 	}
+	if req.Serial == "" {
+		return nil, ErrDeviceSerialRequired
+	}
+	hashAlgoID := getInt64(args, "hash_algo_id")
+	if hashAlgoID < 0 || hashAlgoID > math.MaxUint32 {
+		return nil, ErrDeviceHashAlgoInvalid
+	}
+	req.HashAlgoID = uint32(hashAlgoID)
 
-	device, err := r.service.DeviceRegister(ctx, name, deviceType, publicKey)
+	device, err := r.service.DeviceRegister(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -262,6 +269,19 @@ func (r *ToolRegistry) executeDeviceGet(ctx context.Context, args map[string]int
 	deviceID := getString(args, "device_id")
 
 	device, err := r.service.DeviceGet(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(device)
+}
+
+func (r *ToolRegistry) executeDeviceFindBySerial(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	serial := getString(args, "serial")
+	if serial == "" {
+		return nil, ErrDeviceSerialRequired
+	}
+
+	device, err := r.service.DeviceFindBySerial(ctx, serial)
 	if err != nil {
 		return nil, err
 	}
@@ -296,15 +316,35 @@ func (r *ToolRegistry) executeDeviceDelete(ctx context.Context, args map[string]
 	return map[string]interface{}{"success": true}, nil
 }
 
+// executeDeviceUpdate applies the editable fields the caller sent and answers
+// with the device as stored, like the update verb on every other transport.
 func (r *ToolRegistry) executeDeviceUpdate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	deviceID := getString(args, "device_id")
-	updates := getMap(args, "updates")
+	if deviceID == "" {
+		return nil, ErrDeviceIDRequired
+	}
+
+	updates := make(map[string]interface{}, len(deviceUpdateFields))
+	for _, field := range deviceUpdateFields {
+		if value := getString(args, field); value != "" {
+			updates[field] = value
+		}
+	}
 
 	if err := r.service.DeviceUpdate(ctx, deviceID, updates); err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	device, err := r.service.DeviceGet(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(device)
 }
+
+// deviceUpdateFields are the device_update arguments a caller may change.
+// The identity and enrollment set (ek_cert, attest_pub, attest_cert,
+// signing_pub) is server-owned on update — docs/device/api.md §3.3.
+var deviceUpdateFields = []string{"model", "serial"}
 
 func (r *ToolRegistry) executeDeviceAttest(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	deviceID := getString(args, "device_id")
@@ -312,7 +352,7 @@ func (r *ToolRegistry) executeDeviceAttest(ctx context.Context, args map[string]
 
 	evidence, err := base64.StdEncoding.DecodeString(evidenceB64)
 	if err != nil {
-		return nil, &mcpwire.WrappedError{Msg: "invalid evidence encoding", Err: err}
+		return nil, ErrInvalidArgument{Msg: "invalid evidence encoding", Cause: err}
 	}
 
 	result, err := r.service.DeviceAttest(ctx, deviceID, evidence)
@@ -340,7 +380,7 @@ func (r *ToolRegistry) executeDeviceRecordAttestCert(ctx context.Context, args m
 func (r *ToolRegistry) executeDeviceBootCertificate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	signature, err := base64.StdEncoding.DecodeString(getString(args, "signature"))
 	if err != nil {
-		return nil, &mcpwire.WrappedError{Msg: "invalid signature encoding", Err: err}
+		return nil, ErrInvalidArgument{Msg: "invalid signature encoding", Cause: err}
 	}
 
 	result, err := r.service.DeviceBootCertificate(ctx, getString(args, "identity"), signature)
@@ -353,7 +393,7 @@ func (r *ToolRegistry) executeDeviceBootCertificate(ctx context.Context, args ma
 func (r *ToolRegistry) executeDeviceBootDelivery(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	evidence, err := base64.StdEncoding.DecodeString(getString(args, "evidence"))
 	if err != nil {
-		return nil, &mcpwire.WrappedError{Msg: "invalid evidence encoding", Err: err}
+		return nil, ErrInvalidArgument{Msg: "invalid evidence encoding", Cause: err}
 	}
 
 	result, err := r.service.DeviceBootDelivery(ctx, evidence)
@@ -759,7 +799,7 @@ func (r *ToolRegistry) executeCAVerify(ctx context.Context, args map[string]inte
 		var err error
 		certificateDER, err = base64.StdEncoding.DecodeString(certificateDERB64)
 		if err != nil {
-			return nil, &mcpwire.WrappedError{Msg: "invalid certificate_der encoding", Err: err}
+			return nil, ErrInvalidArgument{Msg: "invalid certificate_der encoding", Cause: err}
 		}
 	}
 
@@ -1141,11 +1181,11 @@ func (r *ToolRegistry) executeIAMVerifyToken(ctx context.Context, args map[strin
 func (r *ToolRegistry) executeKMSSign(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	messageB64 := getString(args, "message")
 	if messageB64 == "" {
-		return nil, &mcpwire.MessageError{Msg: "message is required"}
+		return nil, ErrInvalidArgument{Msg: "message is required"}
 	}
 	message, err := base64.StdEncoding.DecodeString(messageB64)
 	if err != nil {
-		return nil, &mcpwire.WrappedError{Msg: "message must be base64 encoded", Err: err}
+		return nil, ErrInvalidArgument{Msg: "message must be base64 encoded", Cause: err}
 	}
 
 	req := &KMSSignRequest{
@@ -1156,7 +1196,7 @@ func (r *ToolRegistry) executeKMSSign(ctx context.Context, args map[string]inter
 	}
 
 	if req.KeyID == "" {
-		return nil, &mcpwire.MessageError{Msg: "key_id is required"}
+		return nil, ErrInvalidArgument{Msg: "key_id is required"}
 	}
 
 	result, err := r.service.KMSSign(ctx, req)
@@ -1192,7 +1232,7 @@ func (r *ToolRegistry) executeKMSGenerateDataKey(ctx context.Context, args map[s
 	}
 
 	if req.KeyID == "" {
-		return nil, &mcpwire.MessageError{Msg: "key_id is required"}
+		return nil, ErrInvalidArgument{Msg: "key_id is required"}
 	}
 
 	result, err := r.service.KMSGenerateDataKey(ctx, req)
@@ -1210,7 +1250,7 @@ func (r *ToolRegistry) executeKMSGenerateWrappedDataKey(ctx context.Context, arg
 	}
 
 	if req.KeyID == "" {
-		return nil, &mcpwire.MessageError{Msg: "key_id is required"}
+		return nil, ErrInvalidArgument{Msg: "key_id is required"}
 	}
 
 	result, err := r.service.KMSGenerateWrappedDataKey(ctx, req)

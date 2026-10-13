@@ -23,6 +23,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -31,6 +32,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -380,6 +383,23 @@ func TestBootChannel_RefusesAConnectionWithNoBinding(t *testing.T) {
 			assert.Equal(t, "Unix", refused.Transport)
 			var unbound *provisioning.ErrBootChannelUnbound
 			assert.ErrorAs(t, err, &unbound)
+		})
+	}
+}
+
+// A transport that classifies errors by gRPC status (MCP) answers the channel
+// refusal with the class gRPC answers it with, wrapped or not.
+func TestErrBootChannelRequired_IsFailedPrecondition(t *testing.T) {
+	_, refusal := BootChannel(nil, "MCP")
+	require.Error(t, refusal)
+
+	for name, err := range map[string]error{
+		"as returned": refusal,
+		"wrapped":     fmt.Errorf("device_boot_certificate: %w", refusal),
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+			assert.Contains(t, status.Convert(err).Message(), "this MCP request has none")
 		})
 	}
 }

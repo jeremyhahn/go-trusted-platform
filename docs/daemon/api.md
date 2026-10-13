@@ -59,6 +59,50 @@ fails startup. The rule and its errors are specified in
 
 `/api/v1/platform/protocols` reports which transports are actually serving.
 
+### Error classes on MCP (#505)
+
+The platform's error classes are the gRPC codes. gRPC and Unix carry them
+directly, REST and QUIC through the status tables in each feature's `api.md`.
+MCP carries them as JSON-RPC error codes, from one table
+(`sdk/go/wire/mcpwire/errorcodes.go`). The server encodes with `CodeForClass`,
+and the SDK MCP adapter decodes with `ClassForCode`, so an SDK caller gets the
+same `status.Code` over MCP as over gRPC:
+
+| Class | JSON-RPC code |
+|---|---|
+| `InvalidArgument` | `-32602` (Invalid params) |
+| `Unauthenticated` | `-32001` (`-32002` for an invalid token) |
+| `PermissionDenied` | `-32003` |
+| `Unavailable` | `-32004` |
+| `NotFound` | `-32005` |
+| `AlreadyExists` | `-32006` |
+| `FailedPrecondition` | `-32007` |
+| anything else | `-32603` (Internal error) |
+
+A failed `tools/call` or `resources/read` is classified in
+`pkg/api/mcp/error_class.go` (`toolErrorCode`):
+
+- An error with a gRPC status anywhere in its chain (`GRPCStatus()`) uses that
+  status's class. Every tool error type implements it.
+- The `Code`-carrying tool error types (`DeviceError`, `KMSError`, ...) take
+  their class from their `Code`: `*_NOT_FOUND`, `*_REQUIRED` / `*INVALID*` /
+  `*_DECODE*`, `*_SERVICE_UNAVAILABLE` / `*_NOT_CONFIGURED`, `*_NOT_RUNNING` /
+  `*_NOT_INITIALIZED`.
+- A malformed argument (bad base64, a missing field checked inline), an unknown
+  tool, and a malformed resource URI are `ErrInvalidArgument`, so `-32602`.
+- The package's sentinel errors are classified in one table
+  (`sentinelClasses`): `datastore.ErrRecordNotFound` is `NotFound`, as the gRPC
+  services map it; each `Err<Service>NotConfigured` is `Unavailable`; each
+  `Err...Required` is `InvalidArgument`.
+
+`TestEveryToolErrorIsClassified` (`error_class_test.go`) parses the package
+and fails on an error type without `GRPCStatus()`, a sentinel missing from
+`sentinelClasses`, or a `Code` no rule classifies, unless the test's exemption
+list names it with a reason. Only a failure none of these covers is `-32603`. An unclassified tool
+(`AuthErrorToolNotClassified`, §5) is also `-32603`, because it is a gap in the
+platform's own configuration, not a caller error. Before #505 the server
+answered every tool failure with `-32603`.
+
 ---
 
 ## 2. Daemon capabilities
