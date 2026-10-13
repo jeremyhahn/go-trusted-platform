@@ -185,8 +185,9 @@ are unaffected. For typed accessors, wrap the client with
 ### Agentic orchestration
 
 The typed wrapper routes the agentic clients: `Orchestrator()` (agents,
-sessions, tasks, jobs, workflows), `Project()` and `Account()` (the pooled
-provider accounts a session is spawned against). The container-trust types come
+sessions, tasks, jobs, workflows), `Project()`, `Account()` (the pooled
+provider accounts a session is spawned against) and `SDLC()` (forge bindings,
+onboarding, conformance and deliveries). The container-trust types come
 from `sdk/go/services/orchestration`:
 
 ```go
@@ -213,8 +214,20 @@ if errors.As(err, &violation) {
 }
 ```
 
-The request and response types of those clients are not re-exported yet
-([api.md §3](api.md#3-go-quicbaas-re-export-surface)).
+The request and response types of each client come from its sibling package,
+`sdk/go/services/{orchestrator,project,account,sdlc}`
+([api.md §3.2](api.md#32-agentic-client-types)):
+
+```go
+import "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/project"
+
+_, err = baas.Project().GrantAgentRole(ctx, &project.GrantAgentRoleRequest{
+    TenantID:  tenantID,
+    ProjectID: projectID,
+    AgentID:   agentID,
+    Role:      project.ProjectRoleWorker,
+})
+```
 
 ## 6. In-process (embedded)
 

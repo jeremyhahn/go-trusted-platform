@@ -419,11 +419,9 @@ func TestNode_GetStatus(t *testing.T) {
 		ctx := context.Background()
 		err = node.Start(ctx)
 		require.NoError(t, err)
-		defer node.Stop(ctx)
+		defer func() { assert.NoError(t, node.Stop(ctx)) }()
 
-		// Give node some time to initialize
-		time.Sleep(100 * time.Millisecond)
-
+		// Start binds the listeners and sets the host before returning.
 		status := node.GetStatus()
 		assert.NotNil(t, status)
 		assert.NotEmpty(t, status.PeerID)

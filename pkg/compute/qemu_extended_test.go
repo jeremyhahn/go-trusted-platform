@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"log/slog"
@@ -382,26 +383,21 @@ func TestQEMUOrchestrator_Delete_MoreEdgeCases(t *testing.T) {
 
 // TestLifecycleManager_WaitForState_InstanceDeleted tests WaitForState when instance is deleted
 func TestLifecycleManager_WaitForState_InstanceDeleted(t *testing.T) {
-	lm := NewLifecycleManager()
-	instanceID := "test-instance"
+	synctest.Test(t, func(t *testing.T) {
+		lm := NewLifecycleManager()
+		mustSetState(t, lm, "test-instance", StateCreating)
 
-	// Set initial state
-	err := lm.SetState(instanceID, StateCreating)
-	if err != nil {
-		t.Fatalf("Failed to set initial state: %v", err)
-	}
+		// Delete the instance while waiting
+		done := startWaitForState(lm, "test-instance", StateStopped, 200*time.Millisecond)
+		if err := lm.DeleteInstance("test-instance"); err != nil {
+			t.Fatalf("DeleteInstance() error = %v", err)
+		}
 
-	// Delete the instance while waiting
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		lm.DeleteInstance(instanceID)
-	}()
-
-	// Wait should return error because instance is deleted
-	err = lm.WaitForState(instanceID, StateStopped, 200*time.Millisecond)
-	if err != ErrInstanceNotFound {
-		t.Errorf("Expected ErrInstanceNotFound, got %v", err)
-	}
+		// Wait should return error because instance is deleted
+		if err := <-done; err != ErrInstanceNotFound {
+			t.Errorf("Expected ErrInstanceNotFound, got %v", err)
+		}
+	})
 }
 
 // TestInstanceFilter_Matches_TimeFilters tests time-based filtering

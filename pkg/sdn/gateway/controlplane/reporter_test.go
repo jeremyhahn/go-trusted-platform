@@ -248,21 +248,37 @@ func TestReporter_FetchDesiredConfigRefusesWhatItCannotApply(t *testing.T) {
 }
 
 func TestReporter_Start_StopsOnContextCancel(t *testing.T) {
+	reported := make(chan struct{}, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
+		select {
+		case reported <- struct{}{}:
+		default:
+		}
 	}))
 	defer srv.Close()
-	r, _ := NewReporter(ReporterConfig{
+	r, err := NewReporter(ReporterConfig{
 		CPBaseURL:  srv.URL,
 		GatewayID:  "gw-test",
 		Interval:   10 * time.Millisecond,
 		HTTPClient: srv.Client(),
 		Collector:  &stubCollector{snap: &gwstate.Snapshot{}},
 	})
+	if err != nil {
+		t.Fatalf("NewReporter: %v", err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- r.Start(ctx) }()
-	time.Sleep(30 * time.Millisecond)
+
+	// Cancel only once the loop is demonstrably running.
+	select {
+	case <-reported:
+	case err := <-done:
+		t.Fatalf("Start returned %v before any report", err)
+	case <-time.After(time.Second):
+		t.Fatal("no report reached the control plane")
+	}
 	cancel()
 	select {
 	case err := <-done:

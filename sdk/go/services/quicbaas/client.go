@@ -270,6 +270,12 @@ func (c *Client) Account() quicbaas.AccountClient {
 	return c.sdk.Account()
 }
 
+// SDLC returns the SDLC module client: forge bindings, project onboarding,
+// conformance checks and deliveries.
+func (c *Client) SDLC() quicbaas.SDLCClient {
+	return c.sdk.SDLC()
+}
+
 // =============================================================================
 // Transport Access
 // =============================================================================

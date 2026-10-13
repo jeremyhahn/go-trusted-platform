@@ -65,6 +65,7 @@
 //   - Orchestrator: Agent fleet management (agents, sessions, tasks, jobs, workflows)
 //   - Project: Agentic project management
 //   - Account: Pooled provider accounts an agent session is spawned against
+//   - SDLC: Forge bindings, project onboarding, conformance and deliveries
 //
 // The container-trust types of the agentic surface (TrustLevel, TrustPolicy,
 // ResolveTrustLevel, ...) are re-exported by the sibling package

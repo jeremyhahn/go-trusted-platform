@@ -17,6 +17,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -607,56 +608,53 @@ func TestRaftStateManager_WaitForState(t *testing.T) {
 	})
 
 	t.Run("waits for state transition", func(t *testing.T) {
-		sm := NewRaftStateManager()
-		ctx := context.Background()
+		synctest.Test(t, func(t *testing.T) {
+			sm := NewRaftStateManager()
+			ctx := context.Background()
 
-		done := make(chan error, 1)
-		go func() {
-			done <- sm.WaitForState(ctx, RaftStateBootstrapping)
-		}()
+			done := make(chan error, 1)
+			go func() {
+				done <- sm.WaitForState(ctx, RaftStateBootstrapping)
+			}()
 
-		// Give the waiter time to register
-		time.Sleep(10 * time.Millisecond)
+			// Wait until the waiter is registered and blocked
+			synctest.Wait()
+			select {
+			case err := <-done:
+				t.Fatalf("WaitForState() returned %v before the transition", err)
+			default:
+			}
 
-		// Transition to the target state
-		_ = sm.SetState(ctx, RaftStateBootstrapping)
+			// Transition to the target state
+			if err := sm.SetState(ctx, RaftStateBootstrapping); err != nil {
+				t.Fatalf("SetState() error = %v", err)
+			}
 
-		select {
-		case err := <-done:
-			if err != nil {
+			if err := <-done; err != nil {
 				t.Errorf("WaitForState() error = %v", err)
 			}
-		case <-time.After(1 * time.Second):
-			t.Error("WaitForState() timed out")
-		}
+		})
 	})
 
 	t.Run("returns error on context cancellation", func(t *testing.T) {
-		sm := NewRaftStateManager()
-		ctx, cancel := context.WithCancel(context.Background())
+		synctest.Test(t, func(t *testing.T) {
+			sm := NewRaftStateManager()
+			ctx, cancel := context.WithCancel(context.Background())
 
-		done := make(chan error, 1)
-		go func() {
-			done <- sm.WaitForState(ctx, RaftStateLeaderRole)
-		}()
+			done := make(chan error, 1)
+			go func() {
+				done <- sm.WaitForState(ctx, RaftStateLeaderRole)
+			}()
 
-		// Give the waiter time to register
-		time.Sleep(10 * time.Millisecond)
+			// Wait until the waiter is registered and blocked
+			synctest.Wait()
+			cancel()
 
-		cancel()
-
-		select {
-		case err := <-done:
-			if err == nil {
-				t.Error("WaitForState() expected error on cancellation")
+			err := <-done
+			if _, ok := err.(ErrContextCancelled); !ok {
+				t.Errorf("expected ErrContextCancelled, got %T (%v)", err, err)
 			}
-			_, ok := err.(ErrContextCancelled)
-			if !ok {
-				t.Errorf("expected ErrContextCancelled, got %T", err)
-			}
-		case <-time.After(1 * time.Second):
-			t.Error("WaitForState() timed out waiting for cancellation")
-		}
+		})
 	})
 }
 

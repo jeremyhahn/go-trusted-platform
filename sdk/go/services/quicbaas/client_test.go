@@ -34,6 +34,7 @@ type mockSDKClient struct {
 	orchestratorClient quicbaas.OrchestratorClient
 	projectClient      quicbaas.ProjectClient
 	accountClient      quicbaas.AccountClient
+	sdlcClient         quicbaas.SDLCClient
 }
 
 // Distinct non-nil clients for the agentic accessors. Each embeds the
@@ -42,6 +43,7 @@ type mockSDKClient struct {
 type stubOrchestratorClient struct{ quicbaas.OrchestratorClient }
 type stubProjectClient struct{ quicbaas.ProjectClient }
 type stubAccountClient struct{ quicbaas.AccountClient }
+type stubSDLCClient struct{ quicbaas.SDLCClient }
 
 func newMockSDKClient() *mockSDKClient {
 	return &mockSDKClient{}
@@ -87,7 +89,7 @@ func (m *mockSDKClient) RAG() quicbaas.RAGClient                               {
 func (m *mockSDKClient) Project() quicbaas.ProjectClient                       { return m.projectClient }
 func (m *mockSDKClient) Account() quicbaas.AccountClient                       { return m.accountClient }
 func (m *mockSDKClient) Orchestrator() quicbaas.OrchestratorClient             { return m.orchestratorClient }
-func (m *mockSDKClient) SDLC() quicbaas.SDLCClient                             { return nil }
+func (m *mockSDKClient) SDLC() quicbaas.SDLCClient                             { return m.sdlcClient }
 
 // QRDB-backed accessors (returning two values, error path always nil).
 func (m *mockSDKClient) SealStore() (quicbaas.QRDBSealStoreClient, error) {
@@ -301,10 +303,12 @@ func TestClient_AgenticAccessors(t *testing.T) {
 	orchestrator := &stubOrchestratorClient{}
 	project := &stubProjectClient{}
 	account := &stubAccountClient{}
+	sdlc := &stubSDLCClient{}
 	mockSDK := newMockSDKClient()
 	mockSDK.orchestratorClient = orchestrator
 	mockSDK.projectClient = project
 	mockSDK.accountClient = account
+	mockSDK.sdlcClient = sdlc
 
 	client, err := NewClientFromSDK(mockSDK)
 	if err != nil {
@@ -319,6 +323,9 @@ func TestClient_AgenticAccessors(t *testing.T) {
 	}
 	if got := client.Account(); got != account {
 		t.Errorf("Account() = %v, want the SDK's account client", got)
+	}
+	if got := client.SDLC(); got != sdlc {
+		t.Errorf("SDLC() = %v, want the SDK's SDLC client", got)
 	}
 }
 
@@ -339,6 +346,9 @@ func TestClient_AgenticAccessors_ServiceUnavailable(t *testing.T) {
 	}
 	if got := client.Account(); got != nil {
 		t.Errorf("Account() = %v, want nil", got)
+	}
+	if got := client.SDLC(); got != nil {
+		t.Errorf("SDLC() = %v, want nil", got)
 	}
 }
 

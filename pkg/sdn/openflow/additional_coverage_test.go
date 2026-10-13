@@ -222,9 +222,9 @@ func TestClient_Handshake_ContextCancelled(t *testing.T) {
 	server, socketPath := newMockOFServer(t)
 	defer server.close()
 
-	// Add delay to handshake
+	// Stall the server so it never answers before the deadline
 	server.mu.Lock()
-	server.delayResponse = 2 * time.Second
+	server.stallResponses = true
 	server.mu.Unlock()
 
 	socketDir := filepath.Dir(socketPath)

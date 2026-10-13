@@ -19,6 +19,7 @@ import (
 	"errors"
 	"log/slog"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
@@ -637,64 +638,32 @@ func TestLifecycleManager_WaitForState_Timeout(t *testing.T) {
 
 // TestLifecycleManager_WaitForState_EntersError tests WaitForState when instance enters error state
 func TestLifecycleManager_WaitForState_EntersError(t *testing.T) {
-	lm := NewLifecycleManager()
+	synctest.Test(t, func(t *testing.T) {
+		lm := NewLifecycleManager()
+		mustSetState(t, lm, "test-instance", StateCreating)
 
-	// Set initial state
-	err := lm.SetState("test-instance", StateCreating)
-	if err != nil {
-		t.Fatalf("Failed to set initial state: %v", err)
-	}
+		done := startWaitForState(lm, "test-instance", StateRunning, time.Second*5)
+		mustSetState(t, lm, "test-instance", StateError)
 
-	// Start waiting in goroutine
-	done := make(chan error, 1)
-	go func() {
-		done <- lm.WaitForState("test-instance", StateRunning, time.Second*5)
-	}()
-
-	// Transition to error state after a short delay
-	time.Sleep(time.Millisecond * 150)
-	lm.SetState("test-instance", StateError)
-
-	// Check result
-	select {
-	case err := <-done:
-		if err == nil {
+		if err := <-done; err == nil {
 			t.Error("Expected error when instance enters error state")
 		}
-	case <-time.After(time.Second * 2):
-		t.Error("WaitForState did not return in time")
-	}
+	})
 }
 
 // TestLifecycleManager_WaitForState_Success tests WaitForState success case
 func TestLifecycleManager_WaitForState_Success(t *testing.T) {
-	lm := NewLifecycleManager()
+	synctest.Test(t, func(t *testing.T) {
+		lm := NewLifecycleManager()
+		mustSetState(t, lm, "test-instance", StateCreating)
 
-	// Set initial state
-	err := lm.SetState("test-instance", StateCreating)
-	if err != nil {
-		t.Fatalf("Failed to set initial state: %v", err)
-	}
+		done := startWaitForState(lm, "test-instance", StateStopped, time.Second*5)
+		mustSetState(t, lm, "test-instance", StateStopped)
 
-	// Start waiting in goroutine
-	done := make(chan error, 1)
-	go func() {
-		done <- lm.WaitForState("test-instance", StateStopped, time.Second*5)
-	}()
-
-	// Transition to target state after a short delay
-	time.Sleep(time.Millisecond * 150)
-	lm.SetState("test-instance", StateStopped)
-
-	// Check result
-	select {
-	case err := <-done:
-		if err != nil {
+		if err := <-done; err != nil {
 			t.Errorf("Unexpected error: %v", err)
 		}
-	case <-time.After(time.Second * 2):
-		t.Error("WaitForState did not return in time")
-	}
+	})
 }
 
 // TestLifecycleManager_GetStateTimestamp_NotFound tests GetStateTimestamp when instance not found

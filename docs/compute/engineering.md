@@ -123,6 +123,50 @@ different concepts, one key name.
    network. Both must succeed.
 7. **`ErrNoNetworkInZone`** means placement found no network in the requested
    zone — a configuration gap in the zone graph, not a capacity problem.
+8. **The fleet container attestor fails closed.** `container.FleetContainerAttestor`
+   (`fleet_attestor.go`) serves the go-quicbaas `WithContainerAttestor` seam.
+   - **Before any quote, it refuses:**
+     - a trust level that does not use the host TPM;
+     - a device other than this host's own record;
+     - a device that is not activated or attested;
+     - a profile with no usable golden baseline;
+     - a request PCR value that contradicts the baseline.
+   - **The baseline is checked on its own first.** The upstream check reports
+     only the lowest-numbered mismatch, so a lower PCR added by the request
+     could hide drift in a baseline PCR. The attestor quotes the baseline set
+     alone, then quotes again with the request's extra PCRs only if it added
+     any.
+   - **When a quote does not match:**
+     - a baseline PCR that differs from the quote is host drift
+       (`ErrFleetHostDrift`). The attestor:
+       1. records a cryptographic failure verdict, so the SDN quarantine
+          observer isolates the host's port when SDN is wired;
+       2. moves the device record to quarantined itself, so the host is
+          contained without SDN or without a `NetworkPortID`. A device the
+          observer already contained, or one suspended or revoked, is left
+          as it is;
+       3. asks the collector to re-attest the host.
+
+       A step that fails does not stop the next one. Each failure is
+       reported on the drift error (`VerdictErr`, `QuarantineErr` as
+       `ErrFleetQuarantineFailed`, `ReattestErr`): a quarantine that did not
+       happen is never reported as done;
+     - a PCR that only the request supplied is a policy mismatch, not drift.
+   - **Missing evidence is refused, never quarantined.** Evidence is missing
+     when there is no quote, no measurement or no TPM.
+   - **A pass records nothing.** The collector's scheduled quote remains the
+     authority on the host's own verdict.
+
+   `platformd` installs the attestor only when all of these exist:
+   - `attestation.reporting.enabled`, which provides the control plane's own
+     device record;
+   - the device and profile services;
+   - the attestation service;
+   - a host TPM;
+   - a container runtime binary.
+
+   Without them, `AttestContainer` returns
+   `ErrContainerAttestorNotAvailable`.
 
 ## 6. Streaming operations are transport-limited
 

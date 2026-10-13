@@ -71,9 +71,23 @@ Key wiring facts:
   the SDK trust stack (`container.NewTrustStack`), which supplies image
   digest resolution and the Tier 1 attesting runtime. Without a TPM the
   orchestrator runs unmeasured and `Attest` returns a typed error.
-- `container.NewSDKContainerAttestor` fills the go-quicbaas
-  `service.ContainerAttestor` seam with the platform's host TPM, so an
-  embedder can register it via `quicbaas.WithContainerAttestor`.
+- `container.NewSDKContainerAttestor` builds the SDK's runtime attestor over
+  the platform's host TPM. `container.NewFleetContainerAttestor` wraps it with
+  the fleet policy: device registry lookup, the profile's golden PCRs, and
+  quarantine plus re-attestation on drift. The embedded QuicBaaS server
+  registers `pkg/storage/quicbaas.ContainerAttestorAdapter` through
+  `WithContainerAttestor` when it starts. `wireAttestationOnConfig` then
+  installs the fleet attestor into that adapter
+  (`pkg/daemon/commands/container_attestor_init.go`).
+
+  The attestor is installed only when this node has:
+  - its own device record (`attestation.reporting.enabled`);
+  - a host TPM;
+  - a container runtime binary.
+
+  Without them, `Security().Attestation().AttestContainer` returns
+  `ErrContainerAttestorNotAvailable`. The fail-closed rules are listed in
+  [`engineering.md`](engineering.md) §5, invariant 8.
 - TPM passthrough: when `PodmanConfig.EnableTPMAccess` is set, container
   specs carry `TPMAccess: true` and the engine mounts `/dev/tpm0` into the
   container. The mount is the only representation of the grant, so it is part
@@ -303,6 +317,7 @@ implements none of it:
 | Fresh quote + golden-PCR comparison | `orchestration.AttestingContainerRuntime.Attest` |
 | Measurement event log + replay | platform (`measurement_log.go`) |
 | Quote IAK signature verification | platform (`container.QuoteVerifier`) |
+| Device registry lookup, golden PCRs from the device profile, quarantine and re-attestation on drift | platform (`container.FleetContainerAttestor`) |
 
 ### Attestation Flow
 
@@ -811,6 +826,7 @@ pkg/compute/container/
 ├── compute_orchestrator.go # Consolidated compute.Orchestrator view (OVS, port auth)
 ├── tpm_provider.go        # HostTPMProvider (xkms TPM -> SDK orchestration.HostTPM)
 ├── sdk_trust.go           # SDK trust stack + service.ContainerAttestor seam fill
+├── fleet_attestor.go      # Fleet policy around the seam (registry, golden PCRs, drift quarantine)
 ├── sdk_logger.go          # *slog.Logger -> SDK orchestration.Logger adapter
 ├── podman_adapter.go      # Embedded Podman runtime adapter (PodmanBackend)
 ├── config.go             # Configuration types and validation

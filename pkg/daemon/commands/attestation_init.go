@@ -159,6 +159,11 @@ func wireAttestationOnConfig(ctx context.Context, logger *logging.Logger, a *app
 		cfg.AttestationReporting = &daemon.ReportingHandles{Policy: w.ReportingRest.Policy}
 	}
 
+	// The platform fleet container attestor (#704) answers AttestContainer
+	// for this host against its profile's golden PCRs, and quarantines and
+	// re-attests through the services above, so it is wired after them.
+	wireContainerAttestor(logger.Slog(), a, cfg, svcs, controlPlaneDevice)
+
 	// Operator Enable/Disable Device (#250) enforces through the quarantine
 	// manager and re-attests through the collector, so it is wired last.
 	wireDeviceLifecycle(cfg, quarantine, reportingRefresher(cfg), logger.Slog())

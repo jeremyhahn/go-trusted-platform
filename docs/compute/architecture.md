@@ -64,9 +64,23 @@ additions:
 The §R capability row is *"Compute — VM and container orchestration, placement,
 lifecycle"*, Tier 1, reached through `services/compute`.
 
-Container trust tiers are go-quicbaas's; this repo registers the fleet attestor
-through `WithContainerAttestor` and supplies the device registry, scheduled
-re-attestation, quarantine and golden-PCR policy.
+Container trust tiers are go-quicbaas's. This repo registers the fleet attestor
+(`container.FleetContainerAttestor`) through `WithContainerAttestor`. The fleet
+attestor adds the platform's policy around the SDK's runtime attestor:
+
+- it looks the host up in the device registry;
+- it applies the golden PCRs of the host's device profile, checked on their
+  own before any PCR the request adds;
+- on drift it records a cryptographic failure verdict, moves the device to
+  quarantine itself (SDN port isolation is added when SDN is wired), and asks
+  the attestation collector to re-attest it.
+
+The embedded server registers a lazy adapter
+(`pkg/storage/quicbaas.ContainerAttestorAdapter`) when it starts. `platformd`
+installs the fleet attestor into that adapter once the attestation services
+exist (`pkg/daemon/commands/container_attestor_init.go`). Until then, and on a
+node that lacks a prerequisite, `Security().Attestation().AttestContainer`
+refuses with a typed error.
 
 ## Data flow — creating an attestable VM
 

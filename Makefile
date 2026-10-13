@@ -462,10 +462,33 @@ GID                         := $(shell id -g)
 # Build and coverage directories
 BUILD_DIR                   := build
 COVERAGE_DIR                := $(BUILD_DIR)/coverage
-# golangci-lint: the pin lives HERE and only here. ci.yml installs it by calling
-# `make install-golangci-lint`, so the version cannot drift between CI and a
-# developer machine — a class of defect this repo has hit repeatedly with two
-# lists that must agree.
+# Pinned Go tools are built from their own tools modules under build/tools-src/
+# (one go.mod + go.sum per tool, outside the main module's graph and outside
+# `./...`), and each pin lives in that go.mod and only there. The Makefile reads
+# the version back out of it, so there is no second list to keep in step — a
+# class of defect this repo has hit repeatedly. ci.yml installs the linters by
+# calling `make install-golangci-lint` / `make lint`, so CI and a developer
+# machine cannot drift either.
+#
+# They are built with `go build -C <tools module> -mod=readonly`, NEVER with
+# `go install <pkg>@<version>` (#584): the @version form makes the go command
+# look up the module's deprecation notice, a module query that a lane's
+# GOPROXY=off refuses even when every module is already in the cache. A build
+# from a module with a committed go.sum makes no query at all, and node-prep
+# fills the cache from every tracked go.mod, so the tools' graphs reach every
+# node. pkg/arch/maketools_test.go fails on a pinned `go install` here.
+#
+# To move a pin, with network: in the tool's module run
+#   go get -tool <tool package>@<version> && go mod tidy
+# and commit go.mod + go.sum (trivy fs scans them, so keep their dependencies
+# patched as the main module's are).
+#
+# $(call tools-module-version,<tools module dir>,<module path>) is the version
+# <tools module dir>/go.mod requires of <module path>. It is read with make's
+# own $(file), so parsing the Makefile starts no process and needs no network.
+tools-module-version = $(patsubst $(2)@%,%,$(filter $(2)@%,$(subst $(2) v,$(2)@v,$(file < $(1)/go.mod))))
+
+# golangci-lint
 #
 # PINNED (devops.md §9, documented). History, because the reason changed:
 #
@@ -489,11 +512,19 @@ COVERAGE_DIR                := $(BUILD_DIR)/coverage
 #   MOVED to v2.14.0 on 2026-10-07 (#744): the CI runner image carries the
 #   upstream latest of every analysis tool and the jobs assert the baked tool
 #   matches this pin. Never pin below the latest release.
-GOLANGCI_LINT_VERSION       := v2.14.0
+#
+#   The tools module requires exactly golangci-lint's own released go.mod, so
+#   the binary links the same dependency versions `go install ...@v2.14.0` did.
+GOLANGCI_LINT_SRC           := build/tools-src/golangci-lint
+GOLANGCI_LINT_VERSION       := $(call tools-module-version,$(GOLANGCI_LINT_SRC),github.com/golangci/golangci-lint/v2)
 
 # actionlint checks .github/workflows/ and is pinned and built the same way as
 # golangci-lint. `make lint` runs it so a broken workflow fails here, not in CI.
-ACTIONLINT_VERSION          := v1.7.12
+# Its tools module is actionlint's released go.mod with golang.org/x/net raised
+# to the main module's v0.60.0 (CVE-2026-78669; the same move #775 made for gosec)
+# and golang.org/x/sys to the v0.48.0 that x/net version requires.
+ACTIONLINT_SRC              := build/tools-src/actionlint
+ACTIONLINT_VERSION          := $(call tools-module-version,$(ACTIONLINT_SRC),github.com/rhysd/actionlint)
 
 # gosec is pinned and built with THIS module's toolchain, for the same reason as
 # golangci-lint: a gosec built with an older Go cannot type-check a module that
@@ -505,11 +536,15 @@ ACTIONLINT_VERSION          := v1.7.12
 # `go install ...@$(GOSEC_VERSION)`: that resolves against gosec's own go.mod,
 # whose golang.org/x/tools is too old to read Go 1.27 export data, so every
 # package still reports type errors. The tools module requires gosec (a `tool`
-# directive) and a current x/tools (v0.51.0), and commits its go.sum. Bump
-# GOSEC_VERSION and the module's gosec requirement together; the main module's
-# go.mod is untouched.
-GOSEC_VERSION               := v2.29.0
+# directive) and a current x/tools (v0.51.0), and commits its go.sum. The
+# version is that module's gosec requirement; the main module's go.mod is
+# untouched.
 GOSEC_SRC                   := build/tools-src/gosec
+GOSEC_VERSION               := $(call tools-module-version,$(GOSEC_SRC),github.com/securego/gosec/v2)
+
+# An empty version would build into an unstamped directory and print a blank
+# pin; stop at parse time instead, naming the variable.
+$(foreach v,GOLANGCI_LINT_VERSION ACTIONLINT_VERSION GOSEC_VERSION,$(if $($(v)),,$(error $(v) is empty: its tools module's go.mod under build/tools-src does not require the tool)))
 GOSEC_DIR                   := $(BUILD_DIR)/tools/gosec-$(GOSEC_VERSION)
 GOSEC                       := $(GOSEC_DIR)/gosec
 
@@ -534,7 +569,7 @@ GOSEC                       := $(GOSEC_DIR)/gosec
 # (runs would share one cache and contend for CPU), and not a rerun policy.
 GOLANGCI_LINT_TIMEOUT       ?= 45m
 
-# Installed with `go install`, NOT downloaded prebuilt. That is the whole point:
+# Built from source with `go build`, NOT downloaded prebuilt. That is the whole point:
 # building from source uses this module's own toolchain, so the linter can never
 # be older than the Go version go.mod targets. A prebuilt release binary is built
 # with whatever Go its release used, which is how `make lint` came to fail with
@@ -3551,12 +3586,12 @@ install-golangci-lint: $(GOLANGCI_LINT)
 $(GOLANGCI_LINT):
 	@echo "$(CYAN)$(BOLD)→ Installing golangci-lint $(GOLANGCI_LINT_VERSION) (built with this module's toolchain)...$(RESET)"
 	@mkdir -p $(GOLANGCI_LINT_DIR)
-	@GOBIN=$(abspath $(GOLANGCI_LINT_DIR)) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	@go build -C $(GOLANGCI_LINT_SRC) -mod=readonly -o $(abspath $(GOLANGCI_LINT)) github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 
 $(ACTIONLINT):
 	@echo "$(CYAN)$(BOLD)→ Installing actionlint $(ACTIONLINT_VERSION) (built with this module's toolchain)...$(RESET)"
 	@mkdir -p $(ACTIONLINT_DIR)
-	@GOBIN=$(abspath $(ACTIONLINT_DIR)) go install github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
+	@go build -C $(ACTIONLINT_SRC) -mod=readonly -o $(abspath $(ACTIONLINT)) github.com/rhysd/actionlint/cmd/actionlint
 
 .PHONY: install-gocovmerge
 ## install-gocovmerge: Install gocovmerge for merging coverage files

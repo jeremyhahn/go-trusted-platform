@@ -21,6 +21,7 @@ import (
 	"net/netip"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
@@ -534,23 +535,26 @@ func TestDeviceKeyGeneration(t *testing.T) {
 
 // TestAllocationIDGeneration tests unique allocation ID generation.
 func TestAllocationIDGeneration(t *testing.T) {
-	backend := &DHTBackend{peerID: "test-peer-id"}
+	synctest.Test(t, func(t *testing.T) {
+		backend := &DHTBackend{peerID: "test-peer-id"}
 
-	ip := netip.MustParseAddr("192.168.1.100")
+		ip := netip.MustParseAddr("192.168.1.100")
 
-	id1 := backend.generateAllocationID(ip)
-	// Brief pause to ensure different timestamps
-	time.Sleep(time.Millisecond)
-	id2 := backend.generateAllocationID(ip)
+		id1 := backend.generateAllocationID(ip)
+		// The ID mixes in the nanosecond timestamp; advance the fake clock
+		// by the smallest step that changes it
+		<-time.After(time.Nanosecond)
+		id2 := backend.generateAllocationID(ip)
 
-	if id1 == id2 {
-		t.Error("generateAllocationID() should produce unique IDs")
-	}
+		if id1 == id2 {
+			t.Error("generateAllocationID() should produce unique IDs")
+		}
 
-	// IDs should be 16 hex characters (8 bytes)
-	if len(id1) != 16 {
-		t.Errorf("generateAllocationID() = %s (len %d), want 16 chars", id1, len(id1))
-	}
+		// IDs should be 16 hex characters (8 bytes)
+		if len(id1) != 16 {
+			t.Errorf("generateAllocationID() = %s (len %d), want 16 chars", id1, len(id1))
+		}
+	})
 }
 
 // TestUpdatePoolStats tests pool statistics updates.

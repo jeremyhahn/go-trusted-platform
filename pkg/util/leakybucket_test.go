@@ -56,10 +56,10 @@ func TestLeakyBucket_AllowRequest_InitiallyFull(t *testing.T) {
 func TestLeakyBucket_AllowRequest_AfterLeak(t *testing.T) {
 	capacity := 5
 	window := 100 * time.Millisecond
-	bucket := NewLeakyBucket(capacity, window)
+	bucket, clock := newTestBucket(capacity, window)
 
-	// Wait for at least one token to leak
-	time.Sleep(window/time.Duration(capacity) + 10*time.Millisecond)
+	// Let exactly one token leak
+	clock.Advance(window / time.Duration(capacity))
 
 	// After leak, request should be allowed
 	if !bucket.AllowRequest() {
@@ -67,29 +67,61 @@ func TestLeakyBucket_AllowRequest_AfterLeak(t *testing.T) {
 	}
 }
 
+func TestLeakyBucket_AllowRequest_BeforeLeakInterval(t *testing.T) {
+	capacity := 5
+	window := 100 * time.Millisecond
+	bucket, clock := newTestBucket(capacity, window)
+
+	// One nanosecond short of the leak interval, no token has leaked
+	clock.Advance(window/time.Duration(capacity) - time.Nanosecond)
+
+	if bucket.AllowRequest() {
+		t.Error("Expected request to be denied before a full leak interval elapsed")
+	}
+}
+
+func TestLeakyBucket_AllowRequest_ClockStepsBack(t *testing.T) {
+	capacity := 5
+	window := 100 * time.Millisecond
+	bucket, clock := newTestBucket(capacity, window)
+
+	// A clock that steps backwards must not leak tokens or overfill the bucket
+	clock.Advance(-window)
+
+	if bucket.AllowRequest() {
+		t.Error("Expected request to be denied when the clock stepped backwards")
+	}
+	if bucket.tokens != capacity {
+		t.Errorf("Expected tokens to stay at %d, got %d", capacity, bucket.tokens)
+	}
+}
+
 func TestLeakyBucket_AllowRequest_MultipleAfterLeak(t *testing.T) {
 	capacity := 5
 	window := 100 * time.Millisecond
-	bucket := NewLeakyBucket(capacity, window)
+	bucket, clock := newTestBucket(capacity, window)
 
-	// Wait for multiple tokens to leak
-	time.Sleep(window/time.Duration(capacity)*3 + 10*time.Millisecond)
+	// Let three tokens leak
+	clock.Advance(window / time.Duration(capacity) * 3)
 
-	// Multiple requests should be allowed
+	// Three requests should be allowed, the fourth denied
 	for i := 0; i < 3; i++ {
 		if !bucket.AllowRequest() {
 			t.Errorf("Expected request %d to be allowed after leak", i+1)
 		}
+	}
+	if bucket.AllowRequest() {
+		t.Error("Expected request 4 to be denied once the leaked tokens are used")
 	}
 }
 
 func TestLeakyBucket_AllowRequest_ExceedsCapacity(t *testing.T) {
 	capacity := 3
 	window := 100 * time.Millisecond
-	bucket := NewLeakyBucket(capacity, window)
+	bucket, clock := newTestBucket(capacity, window)
 
-	// Wait for all tokens to leak
-	time.Sleep(window + 10*time.Millisecond)
+	// Let all tokens leak
+	clock.Advance(window)
 
 	// Fill the bucket to capacity
 	for i := 0; i < capacity; i++ {
@@ -107,10 +139,10 @@ func TestLeakyBucket_AllowRequest_ExceedsCapacity(t *testing.T) {
 func TestLeakyBucket_AllowRequest_Refill(t *testing.T) {
 	capacity := 5
 	window := 100 * time.Millisecond
-	bucket := NewLeakyBucket(capacity, window)
+	bucket, clock := newTestBucket(capacity, window)
 
-	// Wait for all tokens to leak
-	time.Sleep(window + 10*time.Millisecond)
+	// Let all tokens leak
+	clock.Advance(window)
 
 	// Fill the bucket
 	for i := 0; i < capacity; i++ {
@@ -124,8 +156,8 @@ func TestLeakyBucket_AllowRequest_Refill(t *testing.T) {
 		t.Error("Expected request to be denied when bucket is full")
 	}
 
-	// Wait for tokens to leak again
-	time.Sleep(window/time.Duration(capacity) + 10*time.Millisecond)
+	// Let one token leak again
+	clock.Advance(window / time.Duration(capacity))
 
 	// Request should be allowed again
 	if !bucket.AllowRequest() {
@@ -136,13 +168,13 @@ func TestLeakyBucket_AllowRequest_Refill(t *testing.T) {
 func TestLeakyBucket_AllowRequest_GradualLeak(t *testing.T) {
 	capacity := 10
 	window := 200 * time.Millisecond
-	bucket := NewLeakyBucket(capacity, window)
+	bucket, clock := newTestBucket(capacity, window)
 
-	// Wait for half the tokens to leak
+	// Let half the tokens leak
 	halfLeakTime := (window / time.Duration(capacity)) * time.Duration(capacity/2)
-	time.Sleep(halfLeakTime + 10*time.Millisecond)
+	clock.Advance(halfLeakTime)
 
-	// Should be able to make approximately half capacity requests
+	// Exactly half capacity requests fit before the bucket is full again
 	allowed := 0
 	for i := 0; i < capacity; i++ {
 		if bucket.AllowRequest() {
@@ -150,9 +182,8 @@ func TestLeakyBucket_AllowRequest_GradualLeak(t *testing.T) {
 		}
 	}
 
-	// Should allow at least capacity/2 requests
-	if allowed < capacity/2 {
-		t.Errorf("Expected at least %d requests allowed, got %d", capacity/2, allowed)
+	if allowed != capacity/2 {
+		t.Errorf("Expected %d requests allowed, got %d", capacity/2, allowed)
 	}
 }
 
@@ -167,7 +198,6 @@ func TestLeakyBucket_Concurrent(t *testing.T) {
 		go func() {
 			for j := 0; j < 20; j++ {
 				bucket.AllowRequest()
-				time.Sleep(1 * time.Millisecond)
 			}
 			done <- true
 		}()
@@ -179,4 +209,24 @@ func TestLeakyBucket_Concurrent(t *testing.T) {
 	}
 
 	// Test passed if no race condition occurred
+}
+
+// testClock is a clock the test advances by hand, so leak timing does not
+// depend on the wall clock.
+type testClock struct {
+	now time.Time
+}
+
+func (c *testClock) Now() time.Time {
+	return c.now
+}
+
+func (c *testClock) Advance(d time.Duration) {
+	c.now = c.now.Add(d)
+}
+
+// newTestBucket returns a leaky bucket driven by a testClock.
+func newTestBucket(capacity int, window time.Duration) (*LeakyBucket, *testClock) {
+	clock := &testClock{now: time.Unix(1_700_000_000, 0)}
+	return newLeakyBucket(capacity, window, clock.Now), clock
 }

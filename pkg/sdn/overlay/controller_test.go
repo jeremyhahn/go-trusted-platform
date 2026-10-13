@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/netip"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -715,27 +716,33 @@ func TestController_GetState(t *testing.T) {
 func TestController_Uptime(t *testing.T) {
 	t.Parallel()
 
-	ctrl := newTestController(t)
-	ctx := context.Background()
+	synctest.Test(t, func(t *testing.T) {
+		ctrl := newTestController(t)
+		ctx := context.Background()
 
-	// Before start, uptime should be 0
-	if uptime := ctrl.Uptime(); uptime != 0 {
-		t.Errorf("Uptime() before start = %v, want 0", uptime)
-	}
+		// Before start, uptime should be 0
+		if uptime := ctrl.Uptime(); uptime != 0 {
+			t.Errorf("Uptime() before start = %v, want 0", uptime)
+		}
 
-	if err := ctrl.Start(ctx); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	defer ctrl.Stop(ctx)
+		if err := ctrl.Start(ctx); err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
 
-	// After start, uptime should be > 0
-	// Small delay to ensure measurable uptime
-	time.Sleep(10 * time.Millisecond)
+		// Uptime tracks the clock exactly
+		<-time.After(10 * time.Millisecond)
+		if uptime := ctrl.Uptime(); uptime != 10*time.Millisecond {
+			t.Errorf("Uptime() after start = %v, want 10ms", uptime)
+		}
 
-	uptime := ctrl.Uptime()
-	if uptime <= 0 {
-		t.Errorf("Uptime() after start = %v, want > 0", uptime)
-	}
+		// After stop, uptime is 0 again
+		if err := ctrl.Stop(ctx); err != nil {
+			t.Fatalf("Stop() error = %v", err)
+		}
+		if uptime := ctrl.Uptime(); uptime != 0 {
+			t.Errorf("Uptime() after stop = %v, want 0", uptime)
+		}
+	})
 }
 
 func TestController_OperationsWhenNotRunning(t *testing.T) {

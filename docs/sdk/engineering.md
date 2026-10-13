@@ -65,6 +65,7 @@ go test -tags "$(make -C ../.. -s print-build-tags)" ./transport/rest/ -run Test
 | `services/<name>/` | domain wrappers over the generated clients, plus `common` (pagination, shared errors) |
 | `services/quicbaas/`, `services/auth/` | typed frontage over the go-quicbaas SDK |
 | `services/orchestration/` | container-trust aliases over `go-quicbaas/sdk/go/orchestration` |
+| `services/{orchestrator,project,account,sdlc}/` | request, response and record aliases over the matching `go-quicbaas/sdk/go/client/*` package |
 | `auth/` | `Provider`, `MTLSProvider`, `TokenProvider`, `NoneProvider` |
 
 ### Service wrapper constructors
@@ -95,7 +96,10 @@ SDK serves none.
 
 Upstream types are re-exported as aliases (`type TrustLevel = quicbaasorch.TrustLevel`),
 never as copies, so `errors.As` and type assertions hold across the boundary;
-`services/orchestration` tests that through a wrap chain. Upstream functions are
+`services/orchestration` and `services/orchestrator` test that through a wrap
+chain. Each alias package also has a table test that compares every alias's
+`reflect.Type` with the upstream type, so a defined type that slips in fails the
+test. Upstream functions are
 wrapped in a function, not bound to an exported `var`, so no linked package can
 replace them.
 

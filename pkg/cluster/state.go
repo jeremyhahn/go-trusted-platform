@@ -373,8 +373,14 @@ func (sm *raftStateManager) WaitForState(ctx context.Context, target RaftCluster
 	// Create a channel to wait on
 	ch := make(chan struct{}, 1)
 
-	// Register the waiter
+	// Register the waiter. SetState notifies under sm.mu, so re-check the
+	// state under the lock: a transition between the check above and the
+	// registration would otherwise never wake this waiter.
 	sm.mu.Lock()
+	if sm.GetState() == target {
+		sm.mu.Unlock()
+		return nil
+	}
 	key := target
 	actual, loaded := sm.waiters.Load(key)
 	var waiters []chan struct{}

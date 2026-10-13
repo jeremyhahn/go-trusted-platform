@@ -118,8 +118,9 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
 
       # devops.md §9: tools installed in CI take @latest, never a pin. This one
-      # IS pinned, and the pin plus its justification live in the Makefile
-      # (GOLANGCI_LINT_VERSION) rather than here, so CI and a developer machine
+      # IS pinned: the pin lives in its tools module (build/tools-src/golangci-lint,
+      # read back as the Makefile's GOLANGCI_LINT_VERSION, whose comment carries
+      # the justification) rather than here, so CI and a developer machine
       # cannot drift apart — the two-lists-that-must-agree defect. Installing via
       # the make target is also devops.md §4: CI runs the same target a developer
       # runs, which is what makes a local `make lint` trustworthy (#297).

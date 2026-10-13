@@ -1368,7 +1368,6 @@ func TestNetworkAuthService_CertificateValidation(t *testing.T) {
 func TestGenerateSessionID(t *testing.T) {
 	t.Run("generates unique IDs", func(t *testing.T) {
 		id1 := generateSessionID("eth0")
-		time.Sleep(time.Microsecond)
 		id2 := generateSessionID("eth0")
 
 		assert.NotEmpty(t, id1)
@@ -1378,11 +1377,11 @@ func TestGenerateSessionID(t *testing.T) {
 
 	t.Run("different ports produce different IDs", func(t *testing.T) {
 		id1 := generateSessionID("eth0")
-		time.Sleep(time.Microsecond)
 		id2 := generateSessionID("eth1")
 
 		assert.NotEmpty(t, id1)
 		assert.NotEmpty(t, id2)
+		assert.NotEqual(t, id1, id2)
 	})
 }
 

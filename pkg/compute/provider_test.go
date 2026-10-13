@@ -46,8 +46,20 @@ func (fakeOrchestrator) GetState(context.Context, string) (InstanceState, error)
 }
 func (fakeOrchestrator) Close() error { return nil }
 
+// unregisterAfterTest removes kind from the global registry when the test
+// ends, so a test that registers a fake provider can run with -count > 1.
+func unregisterAfterTest(t *testing.T, kind ProviderKind) {
+	t.Helper()
+	t.Cleanup(func() {
+		registryMu.Lock()
+		defer registryMu.Unlock()
+		delete(orchestratorFactory, kind.normalize())
+	})
+}
+
 func TestRegisterAndResolve(t *testing.T) {
 	const kind ProviderKind = "test-fake-resolve"
+	unregisterAfterTest(t, kind)
 	RegisterOrchestrator(kind, func(context.Context, *OrchestratorConfig, *Deps) (Orchestrator, error) {
 		return fakeOrchestrator{}, nil
 	})
@@ -116,6 +128,7 @@ func TestRegister_DuplicatePanics(t *testing.T) {
 	factory := func(context.Context, *OrchestratorConfig, *Deps) (Orchestrator, error) {
 		return fakeOrchestrator{}, nil
 	}
+	unregisterAfterTest(t, kind)
 	RegisterOrchestrator(kind, factory)
 	defer func() {
 		if recover() == nil {

@@ -18,6 +18,7 @@ import (
 	"crypto/x509"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -167,76 +168,67 @@ func TestCertificateMonitor_RevokedCallbacks(t *testing.T) {
 	})
 }
 
-// KNOWN GAP: the sleeps in this test are not converted here, and they are not
-// exempt — go-style.md §No time.Sleep (owner ruling 2026-09-04) bans them
-// outright. This records why converting them is a bigger change than #262,
-// not a case for keeping them.
-//
-// Three separate events happen per tick and the assertions depend on the LAST
-// of them: checkCertificates sweeps, handleExpiry dispatches callbacks on their
-// own goroutines, and only then does it block the port. Synchronising on the
-// sweep is too early for the callback; synchronising on the callback is too
-// early for the port state. The monitor is also shared across these subtests,
-// so a sweep counter started in one subtest counts ticks from another.
-//
-// Three attempts at conversion each turned a test that passes 10/10 into one
-// that fails 3-8 times in 10. Converting it properly means restructuring the
-// fixture so each subtest owns its monitor, which is a larger change than a
-// sleep replacement and is not what #262 is for. Left passing and recorded
-// rather than half-converted; the restructuring belongs with the seam work
-// in #284, which faces the same problem of a production type with no
-// test-visible injection point.
 func TestCertificateMonitor_CheckExpiry(t *testing.T) {
-	engine := createTestEngine(t)
-	config := MonitorConfig{
-		CheckInterval:   50 * time.Millisecond,
-		ExpiryThreshold: 1 * time.Hour,
-	}
-	monitor := NewCertificateMonitor(engine, config)
-
+	// Three events follow each tick: the sweep, the callback goroutines, and
+	// the port block. synctest.Wait returns only once all of them have
+	// settled, so the assertions see the end state of exactly one tick.
 	t.Run("Expired certificate", func(t *testing.T) {
-		var expiryTriggered atomic.Bool
-		var revokedTriggered atomic.Bool
-
-		monitor.OnExpiry(func(portID string, cert interface{}, timeUntilExpiry time.Duration) {
-			expiryTriggered.Store(true)
-		})
-
-		// Create a port with expired certificate
-		policy := &PortPolicy{
-			TenantID:    "tenant-1",
-			VLAN:        100,
-			Certificate: createTestCertificate(t, x509.Certificate{}),
-			ExpiresAt:   time.Now().Add(-1 * time.Hour), // Expired
-		}
-		// Follow proper state machine flow: unconnected -> provisioning -> authenticating -> authorized
-		require.NoError(t, engine.stateMachine.SetState("port1", PortStateProvisioning))
-		require.NoError(t, engine.stateMachine.SetState("port1", PortStateAuthenticating))
-		require.NoError(t, engine.stateMachine.SetState("port1", PortStateAuthorized))
-		require.NoError(t, engine.stateMachine.SetPolicy("port1", policy))
-
-		// Start monitor
-		ctx := context.Background()
-		require.NoError(t, monitor.Start(ctx))
-		defer func() {
-			if err := monitor.Stop(); err != nil {
-				t.Logf("cleanup: %v", err)
+		synctest.Test(t, func(t *testing.T) {
+			engine := createTestEngine(t)
+			config := MonitorConfig{
+				CheckInterval:   50 * time.Millisecond,
+				ExpiryThreshold: 1 * time.Hour,
 			}
-		}()
+			monitor := NewCertificateMonitor(engine, config)
 
-		// Wait for processing
-		time.Sleep(200 * time.Millisecond)
+			var expiryTriggered atomic.Bool
+			var revokedTriggered atomic.Bool
+			monitor.OnExpiry(func(portID string, cert interface{}, timeUntilExpiry time.Duration) {
+				expiryTriggered.Store(true)
+			})
+			monitor.OnRevoked(func(portID string, cert interface{}) {
+				revokedTriggered.Store(true)
+			})
 
-		assert.True(t, expiryTriggered.Load())
-		assert.False(t, revokedTriggered.Load())
+			// Create a port with expired certificate
+			policy := &PortPolicy{
+				TenantID:    "tenant-1",
+				VLAN:        100,
+				Certificate: createTestCertificate(t, x509.Certificate{}),
+				ExpiresAt:   time.Now().Add(-1 * time.Hour), // Expired
+			}
+			// Follow proper state machine flow: unconnected -> provisioning -> authenticating -> authorized
+			require.NoError(t, engine.stateMachine.SetState("port1", PortStateProvisioning))
+			require.NoError(t, engine.stateMachine.SetState("port1", PortStateAuthenticating))
+			require.NoError(t, engine.stateMachine.SetState("port1", PortStateAuthorized))
+			require.NoError(t, engine.stateMachine.SetPolicy("port1", policy))
 
-		// Verify port was blocked
-		state, err := engine.GetPortState("port1")
-		require.NoError(t, err)
-		assert.Equal(t, PortStateBlocked, state)
+			require.NoError(t, monitor.Start(context.Background()))
+
+			// Nothing happens before the first tick.
+			synctest.Wait()
+			assert.False(t, expiryTriggered.Load())
+			state, err := engine.GetPortState("port1")
+			require.NoError(t, err)
+			assert.Equal(t, PortStateAuthorized, state)
+
+			<-time.After(config.CheckInterval)
+			synctest.Wait()
+
+			assert.True(t, expiryTriggered.Load())
+			assert.False(t, revokedTriggered.Load())
+
+			// Verify port was blocked
+			state, err = engine.GetPortState("port1")
+			require.NoError(t, err)
+			assert.Equal(t, PortStateBlocked, state)
+
+			require.NoError(t, monitor.Stop())
+		})
 	})
 
 	t.Run("Certificate expiring soon", func(t *testing.T) {
+		engine := createTestEngine(t)
 		var callbackTriggered atomic.Bool
 		done := make(chan bool, 1)
 
@@ -284,62 +276,77 @@ func TestCertificateMonitor_CheckExpiry(t *testing.T) {
 }
 
 func TestCertificateMonitor_ContextCancellation(t *testing.T) {
-	engine := createTestEngine(t)
-	config := MonitorConfig{
-		CheckInterval:   100 * time.Millisecond,
-		ExpiryThreshold: 1 * time.Hour,
-	}
-	monitor := NewCertificateMonitor(engine, config)
+	synctest.Test(t, func(t *testing.T) {
+		engine := createTestEngine(t)
+		config := MonitorConfig{
+			CheckInterval:   100 * time.Millisecond,
+			ExpiryThreshold: 1 * time.Hour,
+		}
+		monitor := NewCertificateMonitor(engine, config)
+		var sweeps atomic.Int32
+		monitor.onCheck = func() { sweeps.Add(1) }
 
-	ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(context.Background())
 
-	require.NoError(t, monitor.Start(ctx))
-	assert.True(t, monitor.IsRunning())
+		require.NoError(t, monitor.Start(ctx))
+		assert.True(t, monitor.IsRunning())
 
-	// Cancel context
-	cancel()
-	time.Sleep(200 * time.Millisecond)
+		<-time.After(config.CheckInterval)
+		synctest.Wait()
+		require.Equal(t, int32(1), sweeps.Load(), "loop sweeps while the context is live")
 
-	// Monitor should still be marked as running until Stop is called
-	// but the loop should have exited
-	assert.True(t, monitor.IsRunning())
+		// Cancel context, then let several intervals pass
+		cancel()
+		<-time.After(3 * config.CheckInterval)
+		synctest.Wait()
 
-	// Proper shutdown
-	require.NoError(t, monitor.Stop())
-	assert.False(t, monitor.IsRunning())
+		// The loop has exited, so no further sweeps happen, but the monitor
+		// stays marked as running until Stop is called
+		assert.Equal(t, int32(1), sweeps.Load())
+		assert.True(t, monitor.IsRunning())
+
+		// Proper shutdown
+		require.NoError(t, monitor.Stop())
+		assert.False(t, monitor.IsRunning())
+	})
 }
 
 func TestCertificateMonitor_NoPolicy(t *testing.T) {
-	engine := createTestEngine(t)
-	config := MonitorConfig{
-		CheckInterval:   50 * time.Millisecond,
-		ExpiryThreshold: 1 * time.Hour,
-	}
-	monitor := NewCertificateMonitor(engine, config)
-
-	var callbackTriggered atomic.Bool
-	monitor.OnExpiry(func(portID string, cert interface{}, timeUntilExpiry time.Duration) {
-		callbackTriggered.Store(true)
-	})
-
-	// Create port without policy
-	// Follow proper state machine flow: unconnected -> provisioning -> unauthorized
-	require.NoError(t, engine.stateMachine.SetState("port1", PortStateProvisioning))
-	require.NoError(t, engine.stateMachine.SetState("port1", PortStateUnauthorized))
-
-	ctx := context.Background()
-	require.NoError(t, monitor.Start(ctx))
-	defer func() {
-		if err := monitor.Stop(); err != nil {
-			t.Logf("cleanup: %v", err)
+	synctest.Test(t, func(t *testing.T) {
+		engine := createTestEngine(t)
+		config := MonitorConfig{
+			CheckInterval:   50 * time.Millisecond,
+			ExpiryThreshold: 1 * time.Hour,
 		}
-	}()
+		monitor := NewCertificateMonitor(engine, config)
+		var sweeps atomic.Int32
+		monitor.onCheck = func() { sweeps.Add(1) }
 
-	// Wait for several check cycles
-	time.Sleep(200 * time.Millisecond)
+		var callbackTriggered atomic.Bool
+		monitor.OnExpiry(func(portID string, cert interface{}, timeUntilExpiry time.Duration) {
+			callbackTriggered.Store(true)
+		})
 
-	// Callback should not be triggered for ports without policy
-	assert.False(t, callbackTriggered.Load())
+		// Create port without policy
+		// Follow proper state machine flow: unconnected -> provisioning -> unauthorized
+		require.NoError(t, engine.stateMachine.SetState("port1", PortStateProvisioning))
+		require.NoError(t, engine.stateMachine.SetState("port1", PortStateUnauthorized))
+
+		require.NoError(t, monitor.Start(context.Background()))
+
+		// Run several check cycles
+		<-time.After(4 * config.CheckInterval)
+		synctest.Wait()
+		require.Equal(t, int32(4), sweeps.Load())
+
+		// Callback should not be triggered for ports without policy
+		assert.False(t, callbackTriggered.Load())
+		state, err := engine.GetPortState("port1")
+		require.NoError(t, err)
+		assert.Equal(t, PortStateUnauthorized, state)
+
+		require.NoError(t, monitor.Stop())
+	})
 }
 
 func TestCertificateMonitor_IsRunning(t *testing.T) {

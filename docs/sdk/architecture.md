@@ -23,7 +23,7 @@ The SDK owns three things:
 
 It also carries connection credentials (`sdk/go/auth`) and a typed frontage
 over the go-quicbaas SDK (`sdk/go/services/quicbaas`, `sdk/go/services/auth`,
-`sdk/go/services/orchestration`).
+`sdk/go/services/orchestration` and `sdk/go/services/{orchestrator,project,account,sdlc}`).
 
 ## 2. Layering
 
@@ -139,7 +139,9 @@ it.
 `sdk/go/services/quicbaas.Client` wraps a `quicbaas.Client` with typed
 accessors. `sdk/go/services/auth` adapts `Security().Auth()` for
 `platformctl auth`. `sdk/go/services/orchestration` re-exports the container-trust
-types of the agentic surface as aliases. [api.md §3](api.md#3-go-quicbaas-re-export-surface) lists
+types of the agentic surface as aliases, and
+`sdk/go/services/{orchestrator,project,account,sdlc}` re-export the request
+and response types of the matching agentic client. [api.md §3](api.md#3-go-quicbaas-re-export-surface) lists
 which go-quicbaas groups are re-exported.
 
 A re-exported accessor is a route, not a platform service: its calls travel on

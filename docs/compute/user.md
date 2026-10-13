@@ -118,6 +118,19 @@ curl -s -X POST https://platform.example.com/api/v1/compute/vms/<id>/attest/veri
 The host must have attested first. "Host not attested" is an ordering error, not
 a failure of the VM.
 
+SDK clients of the embedded server can call
+`Security().Attestation().AttestContainer`, which checks the host against the
+golden PCRs of its device profile. A mismatch quarantines the host and triggers
+a fresh attestation, so the host shows as `quarantined` in
+`platformctl device` until it passes again. The call is answered only on a node
+that has the following:
+
+- attestation reporting enabled;
+- a host TPM;
+- a container runtime.
+
+On any other node it returns "container attestor not available".
+
 ---
 
 ## Snapshots and disks — API only

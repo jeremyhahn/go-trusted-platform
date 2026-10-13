@@ -72,7 +72,7 @@ type mockOFServer struct {
 	sendErrorOnFlowMod      bool
 	errorType               uint16
 	errorCode               uint16
-	delayResponse           time.Duration
+	stallResponses          bool
 	flowStats               []FlowStats
 	groupDescs              []GroupDesc
 	failFlowModIndexes      map[int]struct{}
@@ -289,21 +289,20 @@ func (s *mockOFServer) handleConnection() {
 func (s *mockOFServer) handleMessage(header *Header, body []byte) {
 	s.mu.Lock()
 	conn := s.conn
-	delayResponse := s.delayResponse
+	stallResponses := s.stallResponses
 	s.mu.Unlock()
 
 	if conn == nil {
 		return
 	}
 
-	// Apply response delay if configured.
-	//
-	// Deliberate: this sleep IS the simulated peer latency, not a wait for
-	// work. It is the fixture a test arms to exercise a client-side timeout
-	// (TestClient_Handshake_ContextCancelled sets 2s), so removing it would
-	// delete the condition under test. Do not replace it (#262).
-	if delayResponse > 0 {
-		time.Sleep(delayResponse)
+	// A stalled peer never answers: the handler holds the message until the
+	// server closes. That is the fixture a test arms to exercise a
+	// client-side deadline, and unlike a fixed delay it cannot answer
+	// before the deadline however slow the client is.
+	if stallResponses {
+		<-s.done
+		return
 	}
 
 	switch header.Type {

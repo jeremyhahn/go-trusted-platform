@@ -18,6 +18,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -54,6 +55,9 @@ type mockMembershipManager struct {
 	getNodesCalled   int
 	getLeaderCalled  int
 	closeCalled      int
+
+	// getNodesSignal, when set, receives a non-blocking send on every GetNodes
+	getNodesSignal chan struct{}
 }
 
 func newMockMembershipManager() *mockMembershipManager {
@@ -134,6 +138,10 @@ func (m *mockMembershipManager) GetNodes(ctx context.Context) (NodeList, error) 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.getNodesCalled++
+	select {
+	case m.getNodesSignal <- struct{}{}:
+	default: // no listener, or a signal is already pending
+	}
 	if m.getNodesError != nil {
 		return NodeList{}, m.getNodesError
 	}
@@ -760,9 +768,7 @@ func TestCoordinator_IsHealthy(t *testing.T) {
 		_ = coord.Start(ctx)
 		defer func() { _ = coord.Stop(ctx) }()
 
-		// Give time for health check to run
-		time.Sleep(50 * time.Millisecond)
-
+		// Start marks the coordinator healthy before the first health check
 		if !coord.IsHealthy() {
 			t.Error("IsHealthy() should return true after start")
 		}
@@ -997,25 +1003,71 @@ func TestCoordinator_Concurrent(t *testing.T) {
 }
 
 func TestCoordinator_HealthMonitor(t *testing.T) {
-	t.Run("health monitor updates status", func(t *testing.T) {
-		config := NewConfig()
-		membership := newMockMembershipManager()
-		logger := logging.DefaultLogger()
+	// The health monitor runs on a ticker. Inside a synctest bubble the ticker
+	// reads the bubble's fake clock, which only advances once every goroutine
+	// is blocked, so the test waits on the health check itself and never on
+	// the wall clock.
+	runHealthCheck := func(t *testing.T, membership *mockMembershipManager) *ClusterStatus {
+		t.Helper()
+		checked := make(chan struct{}, 1)
+		membership.getNodesSignal = checked
 
-		coord, _ := NewCoordinator(config, membership, logger,
+		coord, err := NewCoordinator(NewConfig(), membership, logging.DefaultLogger(),
 			WithCoordinatorHealthCheckInterval(50*time.Millisecond))
+		if err != nil {
+			t.Fatalf("NewCoordinator() error = %v", err)
+		}
 
 		ctx := context.Background()
-		_ = coord.Start(ctx)
-		defer func() { _ = coord.Stop(ctx) }()
+		if err := coord.Start(ctx); err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
+		defer func() {
+			if err := coord.Stop(ctx); err != nil {
+				t.Errorf("Stop() error = %v", err)
+			}
+		}()
 
-		// Wait for health check to run
-		time.Sleep(100 * time.Millisecond)
+		// The first tick runs the health check; wait for it to finish
+		<-checked
+		synctest.Wait()
 
-		status, _ := coord.Status(ctx)
-		// Health monitor should have updated the node count
-		// (depends on mock returning at least one node).
-		// NodeCount may be 0 if the mock doesn't return nodes.
-		_ = status.NodeCount
+		status, err := coord.Status(ctx)
+		if err != nil {
+			t.Fatalf("Status() error = %v", err)
+		}
+		return status
+	}
+
+	t.Run("health monitor updates status", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			status := runHealthCheck(t, newMockMembershipManager())
+
+			if status.NodeCount != 1 || status.HealthyCount != 1 {
+				t.Errorf("NodeCount/HealthyCount = %d/%d, want 1/1", status.NodeCount, status.HealthyCount)
+			}
+			if status.LeaderID != 1 {
+				t.Errorf("LeaderID = %d, want 1", status.LeaderID)
+			}
+			if !status.HasQuorum || status.State != ClusterStateRunning {
+				t.Errorf("HasQuorum/State = %v/%v, want true/%v", status.HasQuorum, status.State, ClusterStateRunning)
+			}
+		})
+	})
+
+	t.Run("health monitor marks the cluster degraded when nodes are unavailable", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			membership := newMockMembershipManager()
+			membership.getNodesError = ErrClusterUnavailable{Reason: "test"}
+
+			status := runHealthCheck(t, membership)
+
+			if status.State != ClusterStateDegraded {
+				t.Errorf("State = %v, want %v", status.State, ClusterStateDegraded)
+			}
+			if status.ErrorMessage == "" {
+				t.Error("ErrorMessage should describe the failed health check")
+			}
+		})
 	})
 }

@@ -749,11 +749,6 @@ func TestClient_ContextCancellation(t *testing.T) {
 	server, socketPath := newMockOFServer(t)
 	defer server.close()
 
-	// Add delay to server responses
-	server.mu.Lock()
-	server.delayResponse = 2 * time.Second
-	server.mu.Unlock()
-
 	socketDir := filepath.Dir(socketPath)
 	client, err := NewClient("test-bridge", WithSocketDir(socketDir))
 	if err != nil {
@@ -765,6 +760,12 @@ func TestClient_ContextCancellation(t *testing.T) {
 		t.Fatalf("failed to connect: %v", err)
 	}
 	defer func() { _ = client.Disconnect() }()
+
+	// Stall the server after the handshake so the flow mod is never
+	// answered before the deadline
+	server.mu.Lock()
+	server.stallResponses = true
+	server.mu.Unlock()
 
 	// Create a context that will be cancelled
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)

@@ -593,13 +593,11 @@ func TestGenerateRuleID(t *testing.T) {
 
 	t.Run("different inputs produce different IDs", func(t *testing.T) {
 		id1 := generateRuleID("eth0", "quarantine", "ingress")
-
-		// Wait a tiny bit for different timestamp
-		time.Sleep(time.Microsecond)
 		id2 := generateRuleID("eth1", "production", "egress")
 
 		assert.NotEmpty(t, id1)
 		assert.NotEmpty(t, id2)
+		assert.NotEqual(t, id1, id2)
 	})
 }
 

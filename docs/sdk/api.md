@@ -89,11 +89,11 @@ platform code and SDK consumers program against.
 | `AI()` | `RAG()` | `MISSING — docs/13 G7` |
 | `BarrierCeremonyMgmt()` | `Ceremony()`, `CustodianGroup()`, `Share()` | `MISSING — docs/13 G7` |
 | `TenantMgmtService()` | `Tenant()` | `MISSING — docs/13 G7` |
-| agentic | `Orchestrator()`, `Project()`, `Account()` | ✅ each |
-| agentic | `SDLC()` | `MISSING — docs/13 G7` |
+| agentic | `Orchestrator()`, `Project()`, `Account()`, `SDLC()` | ✅ each |
 | agentic | container-trust types from `go-quicbaas/sdk/go/orchestration` | ✅ `sdk/go/services/orchestration` (§3.1) |
-| agentic | request / response types of `client/orchestrator`, `client/project`, `client/account` | `MISSING — docs/13 G7` |
-| agentic | a platform container attestor registered into `WithContainerAttestor` | `MISSING — docs/13 G7` |
+| agentic | request / response types of `client/orchestrator`, `client/project`, `client/account`, `client/sdlc` | ✅ `sdk/go/services/{orchestrator,project,account,sdlc}` (§3.2) |
+| agentic | a platform container attestor registered into `WithContainerAttestor`: this host, device registry lookup, golden PCRs from the device profile, quarantine and re-attestation on drift | ✅ `container.FleetContainerAttestor` in the embedded server (§3.3) |
+| agentic | container attestation of a remote device, a recorded verdict on a pass, TOFU capture of a missing baseline | `MISSING — docs/13 G7` |
 | service registry | `Discovery()`, `DataStore()` | `MISSING — docs/13 G7` |
 | connection | `Transport()` | ✅ |
 | qrdb surface go-quicbaas does not route | `SQL()`, `Collections()`, `Lock()`, `Lease()` and the rest | `MISSING — docs/13 G1` |
@@ -123,8 +123,48 @@ boundary.
 server policy, and a level below the floor or one the host cannot prove is a
 `*TrustLevelViolationError`, never a downgrade.
 
+### 3.2 Agentic client types
+
+Each agentic accessor has a sibling package that re-exports the request,
+response and record types of its go-quicbaas client, so a caller never imports
+go-quicbaas. Every identifier is a type alias or a constant bound to the
+upstream value.
+
+| Accessor | Package | Replaces | Constants |
+|---|---|---|---|
+| `Orchestrator()` | `sdk/go/services/orchestrator` | `go-quicbaas/sdk/go/client/orchestrator` | `SandboxMode*`, `SessionTurnRole*`, `SpendLevel*`, `SpendPolicy*`, `WorkflowMode*`, `TurnStatusAccepted`, `SpendUnattributed` |
+| `Project()` | `sdk/go/services/project` | `go-quicbaas/sdk/go/client/project` | `ProjectRole*` |
+| `Account()` | `sdk/go/services/account` | `go-quicbaas/sdk/go/client/account` | `CredentialHealth*`, `Provider*`, `Refresh*`, `Status*` |
+| `SDLC()` | `sdk/go/services/sdlc` | `go-quicbaas/sdk/go/client/sdlc` | none |
+
+Each package also aliases the upstream `Client` interface, so a caller can name
+the accessor's return type. `orchestrator` re-exports the two prompt errors,
+`EmptyTurnError` and `MissingTurnIDError`, and `errors.As` matches them across
+the boundary. The packages leave out what only a transport implementer needs:
+the `NewClient` constructors, the orchestrator `*Wire` envelopes and the
+`NewPromptSession*` response builders, and `sdlc.SDLCCapableTransport`.
+
 `sdk/go/services/auth` is a second, purpose-built adapter over
 `Security().Auth()` for `platformctl auth`: `Login`, `AddFactor`,
 `ListFactors`, `RemoveFactor`, `RotateFactor`, `RelabelFactor`. `platformctl barrier` uses
 `QuicBaaS().Security().Barrier()` directly; `Client.Barrier()` remains for
 callers of the platform `BarrierService`.
+
+### 3.3 Platform container attestor
+
+The embedded QuicBaaS server registers
+`pkg/storage/quicbaas.ContainerAttestorAdapter` through `WithContainerAttestor`
+when it starts. `platformd` then installs `container.FleetContainerAttestor` into
+it, so `Security().Attestation().AttestContainer` on the embedded transport is
+answered by the platform. The attestor is not installed on a node without:
+
+- `attestation.reporting.enabled`, which provides the control plane's own
+  device record;
+- a host TPM;
+- a container runtime binary.
+
+On such a node the call returns `ErrContainerAttestorNotAvailable`.
+
+Only this host can be attested; a request naming another device is refused.
+The fail-closed rules are in
+[`docs/compute/engineering.md`](../compute/engineering.md) §5, invariant 8.
