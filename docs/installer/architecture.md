@@ -106,10 +106,15 @@ verified identity and from nothing the client names. The server side is built
 ([bootstrap architecture](../bootstrap/architecture.md#nbd-export-server-diskless-nbd)).
 The node side is **Planned**:
 
-- **Planned:** the bootstrap server puts `platform_boot_model=diskless-nbd` on
-  that node's command line, and `bootstrap.yaml` accepts the value. Until the
-  node side exists the value is rejected, because a node that asked for it
-  would boot the wrong path.
+- **Built:** `bootstrap.yaml` accepts `boot_model: diskless-nbd` on a
+  Raspberry Pi, and the bootstrap server puts `platform_boot_model=diskless-nbd`
+  on that node's installer command line. Until the installer target `nbd`
+  exists, the installer refuses that value as its first step, before it clears
+  the TPM or touches a local disk, because a node that asked for it would otherwise boot the wrong path.
+- **Built:** the node's half of the negotiation, `nbd.Attach`: STARTTLS
+  first, TLS 1.3 with the IDevID as the client certificate, `NBD_OPT_GO`, and a
+  refusal is final ([installer engineering](engineering.md)). Nothing calls it
+  yet.
 - **Planned:** the installer target `nbd` runs Phase A against the attached
   export instead of a local disk.
 - **Planned:** `platform-initrd` attaches the export before the unlock chain

@@ -229,7 +229,7 @@ observed, with these fields beside the manual-node ones
 | `model` | string | **Required**. `rpi4`, `rpi400`, `cm4`, `rpi3b+` or `rpi5` |
 | `architecture` | string | `aarch64` (the default for a Pi; `x86_64` is rejected) |
 | `serial` | string | The board serial, up to eight hex digits (`/proc/cpuinfo` `Serial`, low 32 bits) — what the bootloader sends in DHCP option 97 and the name of its per-device boot directory |
-| `boot_model` | string | `sd` (default): the card is installed over the network once; `diskless`: boot stateless from the media set's squashfs root plus dm-verity tree (see below) |
+| `boot_model` | string | `sd` (default): the card is installed over the network once; `diskless`: boot stateless from the media set's squashfs root plus dm-verity tree (see below); `diskless-nbd`: the root is a per-device volume the bootstrap container exports over NBD-over-TLS (see below) |
 | `bmc_address` | — | Not allowed: a Pi has no BMC, so `boot_method: virtual-media` is not possible either |
 
 ```yaml
@@ -252,6 +252,14 @@ verifies and writes into the node's signed UKI. The node's media set must
 be built with `diskimage netboot --diskless`, or its device script fails
 with `ErrDisklessUnavailable`. Every other node on the same media set, and
 any machine the manifest does not know, installs to its disk.
+
+`boot_model: diskless-nbd` is accepted on a Raspberry Pi only. The device
+script for that node's MACs adds `platform_boot_model=diskless-nbd` to the
+set's installer arguments, and the container runs the NBD export server
+([engineering](engineering.md#nbd-export-server-pkgbootstrapnbd)). The node
+side is not built yet: `bootstrap.yaml` has no field for the export server's
+volume size, certificate or CA bundle, so the container refuses to start, and
+the installer refuses the model rather than installing to the card.
 
 ### Authoritative Node Identity
 

@@ -674,7 +674,10 @@ any symlink; the shared root is never written.
 
 **`diskless-nbd` node side — Planned (#689).** The NBD export server is built
 (`pkg/bootstrap/nbd`, [bootstrap engineering](../bootstrap/engineering.md#nbd-export-server-pkgbootstrapnbd)).
-The node half below is the contract the later slices must meet:
+So is the node's negotiation, `nbd.Attach` (below), which meets the second to
+fourth points of this contract. Nothing calls it yet: `platform-initrd` does
+not attach an export, and the installer has no `nbd` target. The node half
+below is the contract the later slices must meet:
 
 - The boot server's NBD address comes from the **signed** UKI `.cmdline`,
   under the same rule as the diskless root parameters: nothing on the live
@@ -692,6 +695,26 @@ The node half below is the contract the later slices must meet:
 - The installer target `nbd` runs Phase A against the attached export instead
   of a local disk: it LUKS2-formats the export and installs onto it. The key
   is sealed to the node's TPM, as on a disk install.
+
+```go
+func Attach(ctx context.Context, conn net.Conn, cfg nbd.ClientConfig) (*nbd.Export, error)
+```
+
+`ClientConfig` carries `Certificate` (the IDevID; its `PrivateKey` is the TPM
+signer), `RootCAs` (the platform CA), `ServerName` and `HandshakeTimeout`
+(default 30 s; a context deadline that comes sooner wins). A missing field is
+`nbd.ErrInvalidConfig`, returned before anything is written. `Attach` sends
+`NBD_FLAG_C_FIXED_NEWSTYLE` (and `NO_ZEROES` when the server offers it), then
+`NBD_OPT_STARTTLS`, then a TLS 1.3-only handshake, then `NBD_OPT_GO` for the
+empty export name, asking for `NBD_INFO_BLOCK_SIZE`. It returns `Export`: the
+TLS connection, now in transmission, with the size, the transmission flags and
+the block-size constraints. It owns `conn` and closes it on every error:
+
+| Outcome | Typed error |
+|---|---|
+| any `NBD_REP_ERR_*` reply to `STARTTLS` or `GO` | `nbd.ErrServerRefused{Option, Reply}` |
+| handshake failure, including a TLS alert the server sends after a TLS 1.3 handshake has completed (client certificate rejected) | `nbd.ErrTLSHandshake` |
+| not fixed newstyle, bad magic, a reply to another option, an oversized or malformed reply, `GO` acknowledged without `NBD_INFO_EXPORT`, a closed connection, the timeout, a cancelled context | `nbd.ErrProtocol` |
 
 Inside the container while it is mounted at `/mnt/installer`:
 `luks-key.bin` (the only path `KeyfileStrategy` looks at),

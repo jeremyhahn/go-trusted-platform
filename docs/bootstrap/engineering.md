@@ -264,7 +264,13 @@ const DefaultPort = 10809
 func NewServer(cfg Config) (*Server, error)
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error
 func (s *Server) Close() error
+
+func Attach(ctx context.Context, conn net.Conn, cfg ClientConfig) (*Export, error)
 ```
+
+`Attach` is the node's side of the negotiation below. It is specified with the
+node contract in [installer engineering](../installer/engineering.md), and its
+refusals are `ErrServerRefused`, `ErrTLSHandshake` and `ErrProtocol`.
 
 `Config` holds the following fields:
 
@@ -362,8 +368,20 @@ key with `ErrNBDCredentials`, and a value the export server refuses with
 listeners and before the device-script port, so the port the deploy gate
 probes answers only once a `diskless-nbd` root is reachable; a failed bind is
 `ErrServerStartFailed` and the device-script port never opens. `Stop` closes
-the export server. The deployer does not set these variables yet:
-`bootstrap.yaml` does not accept `boot_model: diskless-nbd`.
+the export server.
+
+`bootstrap.yaml` accepts `boot_model: diskless-nbd` on a Raspberry Pi
+(`BootModelDisklessNBD`, in `validPiBootModels`); a generic node is refused
+with `ErrInvalidNodePlatform` on `boot_model`. The model reaches the
+container manifest per MAC, and `nodeBootArgs` adds
+`platform_boot_model=diskless-nbd` to the set's installer arguments. The set
+needs no diskless root. The deployer does not set the `BOOTSTRAP_NBD_*`
+variables yet: the volume size, the server certificate and the CA bundle have
+no `bootstrap.yaml` source. Until they do, a deploy whose manifest names a
+`diskless-nbd` node fails closed when the container starts, with
+`ErrInvalidServerConfig`. The installer has no `nbd` target yet either, so
+`Install` refuses `platform_boot_model=diskless-nbd` (`ErrorTypeBootModel`) as
+its first step, before it clears the TPM or touches a local disk.
 
 ## 3. Invariants
 
@@ -873,7 +891,7 @@ rather than silently ignored.
 | `nodes[].model` | string | — | **Required** for `raspberrypi`: `rpi4`, `rpi400`, `cm4`, `rpi3b+`, `rpi5` (`rpinetboot.Models`) |
 | `nodes[].architecture` | string | `aarch64` for a Pi, else `x86_64` | `x86_64` or `aarch64`; a Pi must be `aarch64` (`EffectiveArchitecture`) |
 | `nodes[].serial` | string | — | Pi only: up to eight hex digits, the bootloader's serial; names the node's per-device TFTP directory |
-| `nodes[].boot_model` | string | `sd` for a Pi, empty for a generic server | `sd` for Pi SD-card install, or `diskless` for a stateless node whose root comes from the media set's squashfs+verity artifacts; carried per MAC in the container manifest, and its device script adds `platform_boot_model=diskless` (`ErrDisklessUnavailable` when the set has no diskless root) |
+| `nodes[].boot_model` | string | `sd` for a Pi, empty for a generic server | `sd` for Pi SD-card install, or `diskless` for a stateless node whose root comes from the media set's squashfs+verity artifacts; carried per MAC in the container manifest, and its device script adds `platform_boot_model=diskless` (`ErrDisklessUnavailable` when the set has no diskless root); or, on a Pi only, `diskless-nbd` for a root exported by the boot server over NBD-over-TLS, whose device script adds `platform_boot_model=diskless-nbd` to the set's installer arguments |
 | `nodes[].interfaces` | list | — | Authoritative for `network.interfaces` |
 | `nodes[].overrides`, `nodes[].overrides_file` | map / path | — | File merged first, inline wins |
 | `nodes[].switch_port` | string | — | Recorded for operator verification. There is no post-enrollment port move: a hypervisor trunk's native VLAN is provisioning |

@@ -22,10 +22,12 @@ here; copy `rpi4/default.yaml` and change `hardware-model` and `os.hostname`.
   (Infineon Iridium 9670, LetsTrust TPM and compatibles). U-Boot and Linux
   both drive it as a GPIO bit-banged bus (`dtoverlay=tpm-soft-spi`), so the
   HAT must be on SPI0's pins (SCLK 11, MOSI 10, MISO 9, CE1 7).
-- Serial console on GPIO 14/15 at 115200 8N1 (a USB-TTL adapter): the
-  boot milestones, the first-boot provisioning log and the recovery prompts
-  are only there. Bluetooth is moved off the PL011 so the console is
-  `ttyAMA0`.
+- An HDMI display and a serial console on GPIO 14/15 at 115200 8N1 (a
+  USB-TTL adapter). Bluetooth is moved off the PL011 so the serial console
+  is `ttyAMA0` (`console=ttyAMA0,115200`); it carries the firmware log,
+  U-Boot and the kernel log. The kernel command line ends in
+  `console=tty1`, so HDMI is `/dev/console`: `platform-initrd`, firstboot
+  and `platformd` print to the display, not to the serial line.
 - Ethernet on `eth0` (DHCP by default).
 
 ## What the template changes against `single-node/default.yaml`

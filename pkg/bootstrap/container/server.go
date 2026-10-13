@@ -358,17 +358,23 @@ func (s *Server) deviceBootInfo(mac string) (*ipxe.DeviceBootInfo, error) {
 // nodeBootArgs are the set's kernel arguments for one node. A diskless node
 // also gets the boot model, which tells its installer to build a diskless UKI
 // from the set's signed manifest; the root itself — URLs, hash, salt, sizes —
-// is never on this command line, which nothing signs. A disk node, or a node
-// the manifest does not know, gets the set's arguments alone.
+// is never on this command line, which nothing signs. A diskless-nbd node gets
+// its boot model as well; its root is its NBD export, so the set needs no
+// diskless root. A disk node, or a node the manifest does not know, gets the
+// set's arguments alone.
 func nodeBootArgs(entry *ManifestEntry, set MediaSet, config *ServerConfig) (string, error) {
 	args := set.bootArgs(config)
-	if entry.BootModel != disklessroot.BootModel {
+	switch entry.BootModel {
+	case disklessroot.BootModel:
+		if !set.Diskless {
+			return "", ErrDisklessUnavailable{MAC: entry.MAC, MediaSet: set.Name}
+		}
+		return args + " " + disklessroot.ParamBootModel + "=" + disklessroot.BootModel, nil
+	case nbd.BootModel:
+		return args + " " + disklessroot.ParamBootModel + "=" + nbd.BootModel, nil
+	default:
 		return args, nil
 	}
-	if !set.Diskless {
-		return "", ErrDisklessUnavailable{MAC: entry.MAC, MediaSet: set.Name}
-	}
-	return args + " " + disklessroot.ParamBootModel + "=" + disklessroot.BootModel, nil
 }
 
 // setFor resolves the media set a manifest entry boots.

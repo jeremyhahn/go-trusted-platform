@@ -16,12 +16,15 @@
 // exported over the NBD fixed-newstyle protocol; TLS is mandatory, the
 // client authenticates with its IDevID certificate verified against the
 // platform anchor, and the export is chosen by that verified identity
-// alone. The design is in docs/bootstrap/architecture.md and the
-// contract in docs/bootstrap/engineering.md §2.
+// alone. Attach is the node's side of the same negotiation. The design is
+// in docs/bootstrap/architecture.md and the contract in
+// docs/bootstrap/engineering.md §2.
 //
 // The wire constants below are the NBD protocol's, from the upstream
 // specification (doc/proto.md in the nbd project).
 package nbd
+
+import "fmt"
 
 // BootModel is the bootstrap.yaml boot_model value for a node whose root
 // is an NBD export of this server.
@@ -69,7 +72,46 @@ const (
 	repErrInvalid         = repFlagError | 3
 	repErrPlatform        = repFlagError | 4
 	repErrTLSReqd         = repFlagError | 5
+	repErrUnknown         = repFlagError | 6
 )
+
+// optionNames and replyNames are the protocol's names, for messages.
+var (
+	optionNames = map[uint32]string{
+		optExportName: "NBD_OPT_EXPORT_NAME",
+		optAbort:      "NBD_OPT_ABORT",
+		optStartTLS:   "NBD_OPT_STARTTLS",
+		optInfo:       "NBD_OPT_INFO",
+		optGo:         "NBD_OPT_GO",
+	}
+	replyNames = map[uint32]string{
+		repAck:         "NBD_REP_ACK",
+		repInfo:        "NBD_REP_INFO",
+		repErrUnsup:    "NBD_REP_ERR_UNSUP",
+		repErrPolicy:   "NBD_REP_ERR_POLICY",
+		repErrInvalid:  "NBD_REP_ERR_INVALID",
+		repErrPlatform: "NBD_REP_ERR_PLATFORM",
+		repErrTLSReqd:  "NBD_REP_ERR_TLS_REQD",
+		repErrUnknown:  "NBD_REP_ERR_UNKNOWN",
+	}
+)
+
+// optionName names an option, or gives its number when it has no name here.
+func optionName(option uint32) string {
+	return wireName(optionNames, option)
+}
+
+// replyName names a reply type, or gives its number when it has no name here.
+func replyName(replyType uint32) string {
+	return wireName(replyNames, replyType)
+}
+
+func wireName(names map[uint32]string, value uint32) string {
+	if name, ok := names[value]; ok {
+		return name
+	}
+	return fmt.Sprintf("%#x", value)
+}
 
 // Information types in an NBD_REP_INFO reply.
 const (

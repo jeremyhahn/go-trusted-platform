@@ -20,8 +20,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/nbd"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/artifacts"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/disklessroot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
@@ -440,6 +442,21 @@ func TestDeviceBootInfo_DisklessNodeNeedsADisklessSet(t *testing.T) {
 
 	code, _ := deviceScript(t, server, "/boot/device/52:54:00:12:34:56.ipxe")
 	assert.NotEqual(t, http.StatusOK, code, "a diskless node is not sent to install onto a disk")
+}
+
+func TestNodeBootArgs_DisklessNBDNode(t *testing.T) {
+	config := &ServerConfig{DHCPConfig: DHCPConfig{ServerIP: "192.168.1.1"}, HTTPPort: 8080, APKMirror: "https://dl-cdn.alpinelinux.org/alpine", AlpineVersion: "3.22"}
+	set := piSet()
+	selector := disklessroot.ParamBootModel + "=" + nbd.BootModel
+
+	args, err := nodeBootArgs(&ManifestEntry{MAC: "dc:a6:32:01:36:c2", Hostname: "nbd-01", BootModel: nbd.BootModel}, set, config)
+	require.NoError(t, err, "an NBD root needs no diskless root in the set")
+	assert.True(t, strings.HasSuffix(args, " "+selector), "the node is told its boot model: %s", args)
+	assert.Contains(t, args, "alpine_start=autoinstall", "it boots the set's installer, which installs onto the export")
+
+	args, err = nodeBootArgs(&ManifestEntry{MAC: "dc:a6:32:01:36:c3", Hostname: "sd-01", BootModel: "sd"}, set, config)
+	require.NoError(t, err)
+	assert.NotContains(t, args, disklessroot.ParamBootModel, "an SD node gets the set's arguments alone")
 }
 
 func TestServerConfig_Validate_PathsMustBeServed(t *testing.T) {

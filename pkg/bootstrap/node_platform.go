@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/container"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/nbd"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/disklessroot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 
@@ -48,9 +49,12 @@ const (
 // 0xf21 — so an installed node never asks the boot server again).
 // BootModelDiskless boots any node from the media set's dm-verity squashfs
 // root, held in RAM under a tmpfs overlay; its identity lives in its TPM.
+// BootModelDisklessNBD boots a Raspberry Pi with no local disk from its own
+// LUKS-encrypted root, exported by the boot server over NBD-over-TLS.
 const (
-	BootModelSD       = "sd"
-	BootModelDiskless = disklessroot.BootModel
+	BootModelSD          = "sd"
+	BootModelDiskless    = disklessroot.BootModel
+	BootModelDisklessNBD = nbd.BootModel
 )
 
 // validPlatforms, validArchitectures and validPiBootModels are the accepted
@@ -58,7 +62,7 @@ const (
 var (
 	validPlatforms     = []string{PlatformRaspberryPi}
 	validArchitectures = []string{ArchitectureX86_64, ArchitectureAArch64}
-	validPiBootModels  = []string{BootModelSD, BootModelDiskless}
+	validPiBootModels  = []string{BootModelSD, BootModelDiskless, BootModelDisklessNBD}
 )
 
 // EffectiveArchitecture is the node's architecture with its default: a

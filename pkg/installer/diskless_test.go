@@ -260,6 +260,9 @@ func TestDisklessCmdlineParams_Failures(t *testing.T) {
 		setup func(f *disklessFixture)
 	}{
 		{name: "an unknown boot model", live: "platform_boot_model=nbd platform_bin_url=" + disklessSetURL},
+		// The installer has no nbd target yet: a diskless-nbd node fails
+		// closed instead of installing to whatever local disk it has.
+		{name: "a diskless-nbd node", live: "platform_boot_model=diskless-nbd platform_bin_url=" + disklessSetURL},
 		{name: "the boot model twice", live: "platform_boot_model=diskless platform_boot_model=diskless platform_bin_url=" + disklessSetURL},
 		{name: "no media set URL", live: "platform_boot_model=diskless"},
 		{name: "a media set URL that is not http", live: "platform_boot_model=diskless platform_bin_url=tftp://192.0.2.10/set"},

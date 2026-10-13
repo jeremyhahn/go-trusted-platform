@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -54,6 +55,36 @@ func (i *installer) disklessCmdlineParams(ctx context.Context, liveCmdline strin
 	}
 	i.logger.Info("[UKI] Diskless root from the signed manifest", "root_hash", params.RootHash, "rootfs_url", params.RootFSURL)
 	return params.Args(), nil
+}
+
+// liveCmdline is the kernel command line the installer was booted with: the
+// boot server's diskless selector and diagnostics sink are read from it. An
+// image target reads none, since the build host's command line describes the
+// build host, and an unreadable one selects a disk node.
+func (i *installer) liveCmdline() string {
+	if i.skip(stepHostCmdlinePropagation) {
+		return ""
+	}
+	path := i.cmdlineFile
+	if path == "" {
+		path = "/proc/cmdline"
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// checkBootModel refuses a live command line whose boot model this installer
+// cannot install. It installs a disk node and a diskless node; anything else,
+// a diskless-nbd node included, fails here, before Install clears the TPM or
+// touches a disk.
+func checkBootModel(liveCmdline string) error {
+	if _, err := disklessroot.BootModelFromCmdline(liveCmdline); err != nil {
+		return ErrBootModel("refusing to install: unsupported boot model", err)
+	}
+	return nil
 }
 
 // ukiRootCmdlineParams names the root the UKI boots. A diskless node's root is

@@ -170,6 +170,10 @@ func TestNodePlatform_ExplicitValuesAccepted(t *testing.T) {
 	require.NoError(t, disklessPi.Validate())
 
 	pi = piWorker()
+	pi.BootModel = BootModelDisklessNBD
+	require.NoError(t, piConfig(t, pi).Validate(), "an NBD root is installed by the set's installer, so the set needs no diskless root")
+
+	pi = piWorker()
 	pi.Serial = "" // the per-device directory is optional
 	require.NoError(t, piConfig(t, pi).Validate())
 
@@ -202,6 +206,7 @@ func TestNodePlatform_Rejections(t *testing.T) {
 		"generic with model":   {func(n *NodeConfig) { n.Platform = ""; n.Serial = "" }, "model"},
 		"generic with serial":  {func(n *NodeConfig) { n.Platform = ""; n.Model = "" }, "serial"},
 		"generic boot model":   {func(n *NodeConfig) { n.Platform = ""; n.Model = ""; n.Serial = ""; n.BootModel = BootModelSD }, "boot_model"},
+		"generic NBD root":     {func(n *NodeConfig) { n.Platform = ""; n.Model = ""; n.Serial = ""; n.BootModel = BootModelDisklessNBD }, "boot_model"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -28,7 +28,7 @@ For architectural context see:
 | `platform_apk_mirror` | `iso create --apk-mirror` (GRUB), bootstrap server `BOOTSTRAP_APK_MIRROR` (PXE) | `autoinstall.sh` | Install-time APK repository base for nodes with no `/media/cdrom` |
 | `alpine_repo` | Bootstrap server (PXE only) | Alpine initramfs `init` | Live-system (diskless root) repository; without it PXE installs 0 packages |
 | `modloop` | Bootstrap server (PXE only) | Alpine initramfs `init`, `run-autoinstall.sh` | Kernel-modules squashfs URL; `run-autoinstall.sh` fetches+mounts it over HTTP when no CD is present (dm-crypt/LUKS/ext4/TPM modules) |
-| `platform_boot_model` | Bootstrap server (per node, from `boot_model`) | installer, `platform-initrd` | `diskless` selects the diskless root; absent means the disk install. The installer copies it into the signed UKI `.cmdline` |
+| `platform_boot_model` | Bootstrap server (per node, from `boot_model`) | installer, `platform-initrd` | `diskless` selects the diskless root; absent means the disk install. The installer copies it into the signed UKI `.cmdline`. `diskless-nbd` marks a node whose root is an NBD export; the installer refuses it until its `nbd` target exists |
 | `platform_rootfs_url` | Installer, from the signed media-set manifest | `platform-initrd` | HTTP(S) URL of the squashfs root image for stateless boot |
 | `platform_verity_url` | Installer, from the signed media-set manifest | `platform-initrd` | HTTP(S) URL of the dm-verity hash tree for `platform_rootfs_url` |
 | `platform_roothash` | Signed UKI `.cmdline`, from the signed media-set manifest | `platform-initrd` | dm-verity SHA-256 root hash of the diskless root; Secure Boot and measured boot cover it |

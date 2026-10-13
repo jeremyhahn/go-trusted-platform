@@ -90,6 +90,10 @@ type installer struct {
 	// efivarsDir overrides the efivarfs directory the enrolled db is read
 	// from for tests; empty means uefi.EfivarsPath.
 	efivarsDir string
+
+	// cmdlineFile overrides where the live kernel command line is read for
+	// tests; empty means /proc/cmdline.
+	cmdlineFile string
 }
 
 // InstallerOption customises a newly constructed installer. The primary use is
@@ -234,6 +238,14 @@ func (i *installer) Install(ctx context.Context) (err error) {
 
 	var diskInfo *DiskInfo
 	defer func() { i.afterFailedInstall(diskInfo, err) }()
+
+	// Step 0: Refuse a boot model this installer cannot install before
+	// anything destructive runs. A diskless-nbd node's root is its NBD
+	// export, which the installer has no target for yet: without this check
+	// it would clear the TPM and install to whatever local disk the node has.
+	if err := checkBootModel(i.liveCmdline()); err != nil {
+		return err
+	}
 
 	// Step 1: Clear TPM state before provisioning.
 	//
@@ -1139,12 +1151,7 @@ func (i *installer) buildUKI(ctx context.Context, diskInfo *DiskInfo) error {
 	// The live command line comes from the boot server, so only the debug
 	// sink and the diskless selector are read from it; a diskless node's
 	// root comes from the media set's signed manifest (disklessCmdlineParams).
-	liveCmdline := ""
-	if !i.skip(stepHostCmdlinePropagation) {
-		if data, readErr := os.ReadFile("/proc/cmdline"); readErr == nil {
-			liveCmdline = string(data)
-		}
-	}
+	liveCmdline := i.liveCmdline()
 	disklessParams, err := i.disklessCmdlineParams(ctx, liveCmdline)
 	if err != nil {
 		return err

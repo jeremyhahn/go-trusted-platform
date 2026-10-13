@@ -116,12 +116,12 @@ For manual nodes, the operator must:
 3. **Power on the server** when prompted or after the bootstrap container is deployed
 4. **Ensure network connectivity** between the server and the provisioning network
 
-The bootstrap orchestrator logs a message for each manual node:
+When it provisions a manual node, the bootstrap orchestrator logs:
 
 ```
-bootstrap: manual node requires admin PXE boot
+bootstrap: provisioning unmanaged node — no board management, no hardware operations; ISO self-boots via after-install=reboot
   hostname=edge-01
-  mac=aa:bb:cc:dd:ee:ff
+  boot_method=pxe
 ```
 
 ## Timing

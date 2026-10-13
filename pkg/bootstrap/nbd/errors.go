@@ -163,3 +163,15 @@ func (e ErrProtocol) Error() string {
 func (e ErrProtocol) Unwrap() error {
 	return e.Cause
 }
+
+// ErrServerRefused is a node's attach the boot server refused with an NBD
+// error reply. A refusal is final: the node neither retries nor asks for
+// another export.
+type ErrServerRefused struct {
+	Option uint32
+	Reply  uint32
+}
+
+func (e ErrServerRefused) Error() string {
+	return fmt.Sprintf("nbd: server refused %s: %s", optionName(e.Option), replyName(e.Reply))
+}

@@ -335,10 +335,10 @@ func Preflight(ctx context.Context, run runnerFunc, containerRuntime, arch strin
 		entry, err := run(ctx, containerRuntime, "run", "--rm", "--privileged", binfmtProbeImage,
 			"sh", "-c", "mountpoint -q "+binfmtMount+" || mount -t binfmt_misc none "+binfmtMount+"; cat "+binfmtMount+"/qemu-"+arch)
 		if err != nil {
-			return &PreflightError{Check: "no binfmt handler for " + arch + " containers", Remedy: "run `make init` (registers multiarch/qemu-user-static --reset -p yes)"}
+			return &PreflightError{Check: "no binfmt handler for " + arch + " containers", Remedy: "run `make binfmt` (registers the pinned tonistiigi/binfmt handler with the F flag)"}
 		}
 		if !binfmtHasFixedBinary(string(entry)) {
-			return &PreflightError{Check: "the qemu-" + arch + " binfmt handler lacks the F flag, so chroot inside the container cannot exec", Remedy: "re-register with `docker run --rm --privileged multiarch/qemu-user-static --reset -p yes`"}
+			return &PreflightError{Check: "the qemu-" + arch + " binfmt handler lacks the F flag, so chroot inside the container cannot exec", Remedy: "re-register with `make binfmt` (the pinned tonistiigi/binfmt handler, with the F flag)"}
 		}
 	}
 	for _, module := range []string{"loop", "dm_crypt"} {

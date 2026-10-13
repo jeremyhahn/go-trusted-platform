@@ -28,6 +28,7 @@ const (
 	ErrorTypeTPM           ErrorType = "tpm"
 	ErrorTypeCompletion    ErrorType = "completion"
 	ErrorTypeDiskRelease   ErrorType = "disk_release"
+	ErrorTypeBootModel     ErrorType = "boot_model"
 )
 
 // InstallerError wraps errors with additional context
@@ -219,4 +220,11 @@ func ErrMediaKernel(message string, cause error) error {
 // still open on the build host.
 func ErrDiskRelease(message string, cause error) error {
 	return &InstallerError{Type: ErrorTypeDiskRelease, Message: message, Cause: cause}
+}
+
+// ErrBootModel reports a boot model on the live command line that this
+// installer cannot install. Install returns it before it clears the TPM or
+// touches a disk.
+func ErrBootModel(message string, cause error) error {
+	return &InstallerError{Type: ErrorTypeBootModel, Message: message, Cause: cause}
 }

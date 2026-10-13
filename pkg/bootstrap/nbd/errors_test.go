@@ -42,6 +42,8 @@ func TestErrors(t *testing.T) {
 		{ErrVolume{Identity: "node-01", Op: "sync", Cause: cause}, []string{`"node-01"`, "sync"}, true},
 		{ErrProtocol{Reason: "bad magic"}, []string{"bad magic"}, false},
 		{ErrProtocol{Reason: "read header", Cause: cause}, []string{"read header"}, true},
+		{ErrServerRefused{Option: optGo, Reply: repErrPolicy}, []string{"NBD_OPT_GO", "NBD_REP_ERR_POLICY"}, false},
+		{ErrServerRefused{Option: 99, Reply: repFlagError | 99}, []string{"0x63", "0x80000063"}, false},
 	}
 	for _, tc := range tests {
 		msg := tc.err.Error()

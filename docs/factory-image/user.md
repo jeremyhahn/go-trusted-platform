@@ -34,8 +34,8 @@ On the build host:
 
 - Docker with `buildx`, and a binfmt handler for arm64 registered with the
   `F` flag so a chroot inside an arm64 container can run. `make init`
-  installs the packages and registers the handler
-  (`multiarch/qemu-user-static --reset -p yes`).
+  installs the packages and ends in `make binfmt`, which registers the
+  pinned `tonistiigi/binfmt` handler with the `F` flag.
 - The `loop` and `dm_crypt` kernel modules loaded (`modprobe loop dm_crypt`).
 - `mtools` (`mdir`, `mcopy`) if you want to inspect images.
 - Enough disk for the pre-fetched packages, the media and a 4 GB sparse image.
@@ -44,8 +44,11 @@ The build fails early, with the remedy, if any of the first two is missing.
 
 On the device:
 
-- A Raspberry Pi 4 Model B, 400, Compute Module 4 or 3 Model B+. The Pi 5 is
-  experimental.
+- A Raspberry Pi 4 Model B with 2 GB of RAM or more, 400, Compute Module 4 or
+  3 Model B+. The Pi 5 is experimental, and its OTP is never burned
+  ([step 6](#6-burn-the-otp-hash--irreversible)).
+- The 3 Model B+ has no EEPROM, so signed HTTP boot refuses it; its network
+  boot path is not documented.
 - An Infineon SLB9670 TPM 2.0 on SPI0 chip-select 1 — the LetsTrust or
   Iridium 9670 wiring (SCLK GPIO 11, MOSI 10, MISO 9, CE1 7, optional reset
   24).
@@ -142,7 +145,12 @@ with `dd ... conv=fsync`; wait for it to return before pulling the card.
 
 ## First boot
 
-Connect the serial console, insert the card, power on. In order:
+Connect the serial console and an HDMI display, insert the card, power on.
+The serial line carries the firmware, U-Boot and the kernel log; the kernel
+command line ends in `console=tty1`, so `platform-initrd`, firstboot and
+`platformd` print to HDMI
+([kernel-cmdline.md §5](../reference/kernel-cmdline.md#5-hardware-specific-parameters)).
+In order:
 
 1. The firmware's own log (`uart_2ndstage=1`), then the **U-Boot banner** with
    the pinned version. There is a one-second autoboot delay; interrupting it
@@ -420,7 +428,7 @@ real Pi must still show — this is Phase 6 of the epic:
 | `probe rpi-http` fails with a key hash mismatch | `pubkey.bin` does not hash to `--otp-key-hash` | you gave the probe a different fleet's key or hash; take both from the build's output |
 | `probe rpi-http` fails with a 404 | the container does not serve `http-boot/` | the build was made without `--fleet-key`, or `netboot_media_dir` is stale |
 | `--fleet-key` is refused: not a `kms://` reference | | generate the key in the KMS and pass its reference |
-| `no binfmt handler` or `lacks the F flag` at build time | the host cannot run arm64 containers | `make init`, or re-register with `docker run --rm --privileged multiarch/qemu-user-static --reset -p yes` |
+| `no binfmt handler` or `lacks the F flag` at build time | the host cannot run arm64 containers | `make binfmt` (part of `make init`): it registers the pinned `tonistiigi/binfmt` handler with the `F` flag |
 | `kernel module loop is not loaded` | | `modprobe loop`; likewise `dm_crypt` |
 | `no platformd in ...` | arm64 binaries not built | `make rpi-binaries`, or pass `--binaries-dir` |
 | `missing Secure Boot certificate` from the U-Boot build | `UBOOT_KEYS_DIR` lacks `PK.crt`, `KEK.crt`, `DB.crt` | point it at the keys `iso create` or a previous build generated |
