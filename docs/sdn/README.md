@@ -60,7 +60,7 @@ pkg/sdn/
 ├── bgp/         # GoBGP integration (EVPN + Transit)
 ├── gateway/     # Unified gateway nodes (overlay/edge/transit modes)
 │   ├── commands/ # gatewayd CLI commands (serve, version)
-│   ├── modes/    # Mode implementations (overlay, edge, transit)
+│   ├── modes/    # The EVPN overlay mode handler
 │   └── p2p/      # P2P gateway functionality
 ├── overlay/     # Multi-host overlay controller
 ├── ipam/        # IP Address Management (pool-based allocation)

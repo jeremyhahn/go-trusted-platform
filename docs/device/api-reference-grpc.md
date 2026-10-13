@@ -42,6 +42,7 @@ message Device {
   bytes event_log = 7;
   uint32 hash_algo_id = 8;
   string attest_cert = 14;    // PEM IAK/AK certificate issued at enrollment; the quote trust anchor (#404)
+  string hostname = 15;       // hostname the device registered under; read-only, updates ignore it
 }
 
 message RegisterDeviceRequest {

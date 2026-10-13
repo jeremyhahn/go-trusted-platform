@@ -811,6 +811,7 @@ type RestHandlerRegistry interface {
 	OCIDistBackend() restregistry.OCIDistBackend
 	AttestationEventReader() restattestation.EventReader
 	AttestationReporting() *restattestation.Reporting
+	AttestationVerdicts() restattestation.VerdictPoller
 	GatewayControlPlane() (restgateway.GatewayStateStore, restgateway.DesiredConfigSource)
 	ResponseWriter() response.HttpWriter
 	SDNService() platformv1.SDNServiceServer
@@ -1078,6 +1079,9 @@ type RegistryParams struct {
 	// the quote-producing attestation routes (#226). Nil on a node with
 	// none, which leaves those routes operator-only.
 	AttestationReporting *restattestation.Reporting
+	// AttestationVerdicts backs /api/v1/attestation/verdicts, the device
+	// verdict long-poll (#709). When nil the route answers 503.
+	AttestationVerdicts restattestation.VerdictPoller
 	// GatewayStateStore + GatewayDesiredConfig back /api/v1/gateway/*.
 	// When both nil, control-plane routes are not registered.
 	GatewayStateStore    restgateway.GatewayStateStore
@@ -1972,6 +1976,11 @@ func (registry *HandlerRegistry) AttestationEventReader() restattestation.EventR
 // AttestationReporting returns the reporting service surface, or nil.
 func (registry *HandlerRegistry) AttestationReporting() *restattestation.Reporting {
 	return registry.params.AttestationReporting
+}
+
+// AttestationVerdicts returns the device verdict feed's poller, or nil.
+func (registry *HandlerRegistry) AttestationVerdicts() restattestation.VerdictPoller {
+	return registry.params.AttestationVerdicts
 }
 
 // GatewayControlPlane returns the gateway state store + the desired-

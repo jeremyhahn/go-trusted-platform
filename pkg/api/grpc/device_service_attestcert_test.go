@@ -46,6 +46,17 @@ func TestDeviceConversions_EmptyAttestCert(t *testing.T) {
 	}
 }
 
+// TestEntityDeviceToProto_CarriesHostname: gatewayd reports the hostname of an
+// admitted VTEP's device from this field.
+func TestEntityDeviceToProto_CarriesHostname(t *testing.T) {
+	if got := entityDeviceToProto(&entities.Device{ID: 1, Hostname: "node-1"}).GetHostname(); got != "node-1" {
+		t.Fatalf("entityDeviceToProto hostname = %q, want node-1", got)
+	}
+	if got := entityDeviceToProto(&entities.Device{ID: 1}).GetHostname(); got != "" {
+		t.Fatalf("expected empty hostname, got %q", got)
+	}
+}
+
 // TestDeviceGRPCService_AttestCert_RoundTrip registers a device with a
 // certificate, reads it back, updates without it, and reads it back again.
 // This package's service delegates preservation to the device service, so

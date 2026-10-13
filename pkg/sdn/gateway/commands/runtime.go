@@ -16,11 +16,13 @@ package commands
 import (
 	"context"
 	"log/slog"
+	"path/filepath"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ct"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/openflow"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
@@ -32,34 +34,48 @@ import (
 // signal handling is installed.
 const ovsConnectTimeout = 30 * time.Second
 
+// runs reports whether this gatewayd runs service: the shared configuration
+// enables it (on) and this process hosts it. Every decision to open OVSDB or
+// OpenFlow, or to dial platformd, for a service goes through it, so a
+// supervised child never touches what another process hosts.
+func runs(gwCfg *gateway.GatewayConfig, on bool, service string) bool {
+	return on && gwCfg.Hosts(service)
+}
+
+// runsOverlay reports whether this gatewayd runs the overlay service.
+func runsOverlay(gwCfg *gateway.GatewayConfig) bool {
+	return runs(gwCfg, gwCfg.Overlay != nil && gwCfg.Overlay.Enabled, gateway.ServiceOverlay)
+}
+
 // datapathService returns the first enabled datapath service (firewall,
-// NAT, load balancer) this gateway hosts, or "" when there is none. These are
-// the services that require the OVS runtime; when none is hosted the runtime
-// is not assembled and the sdn: section's OVS endpoint is never dialed — a
-// supervised parser child never opens OVSDB.
+// NAT, load balancer, overlay) this gateway hosts, or "" when there is none.
+// These are the services that require the OVS runtime; when none is hosted
+// the runtime is not assembled and the sdn: section's OVS endpoint is never
+// dialed — a supervised parser child never opens OVSDB.
 func datapathService(gwCfg *gateway.GatewayConfig) string {
-	enabled := func(on bool, service string) bool { return on && gwCfg.Hosts(service) }
 	switch {
-	case enabled(gwCfg.Firewall != nil && gwCfg.Firewall.Enabled, gateway.ServiceFirewall):
+	case runs(gwCfg, gwCfg.Firewall != nil && gwCfg.Firewall.Enabled, gateway.ServiceFirewall):
 		return gateway.ServiceFirewall
-	case enabled(gwCfg.NAT != nil && gwCfg.NAT.Enabled, gateway.ServiceNAT):
+	case runs(gwCfg, gwCfg.NAT != nil && gwCfg.NAT.Enabled, gateway.ServiceNAT):
 		return gateway.ServiceNAT
-	case enabled(gwCfg.LoadBalancer != nil && gwCfg.LoadBalancer.Enabled, gateway.ServiceLoadBalancer):
+	case runs(gwCfg, gwCfg.LoadBalancer != nil && gwCfg.LoadBalancer.Enabled, gateway.ServiceLoadBalancer):
 		return gateway.ServiceLoadBalancer
+	case runsOverlay(gwCfg):
+		return gateway.ServiceOverlay
 	default:
 		return ""
 	}
 }
 
-// zoneMatrixService returns the enabled service that compiles the
-// per-zone flow matrix (firewall or NAT), or "" when neither is enabled.
-// These services silently enforce nothing when the per-zone network
+// zoneMatrixService returns the enabled service this gateway hosts that
+// compiles the per-zone flow matrix (firewall or NAT), or "" when it hosts
+// neither. These services silently enforce nothing when the per-zone network
 // summaries are empty, so assembly fails closed for them instead.
 func zoneMatrixService(gwCfg *gateway.GatewayConfig) string {
 	switch {
-	case gwCfg.Firewall != nil && gwCfg.Firewall.Enabled:
+	case runs(gwCfg, gwCfg.Firewall != nil && gwCfg.Firewall.Enabled, gateway.ServiceFirewall):
 		return gateway.ServiceFirewall
-	case gwCfg.NAT != nil && gwCfg.NAT.Enabled:
+	case runs(gwCfg, gwCfg.NAT != nil && gwCfg.NAT.Enabled, gateway.ServiceNAT):
 		return gateway.ServiceNAT
 	default:
 		return ""
@@ -80,7 +96,7 @@ func zoneMatrixService(gwCfg *gateway.GatewayConfig) string {
 //
 // The returned runtime owns a live OVSDB connection; the caller is
 // responsible for runtime.Close() once the gateway no longer needs it.
-func buildGatewayRuntime(ctx context.Context, sdnCfg *sdn.Config, matrixService string, logger *slog.Logger) (*gateway.GatewayRuntime, error) {
+func buildGatewayRuntime(ctx context.Context, sdnCfg *sdn.Config, matrixService string, needsOverlay bool, logger *slog.Logger) (*gateway.GatewayRuntime, error) {
 	if sdnCfg == nil || !sdnCfg.Enabled {
 		return nil, nil
 	}
@@ -119,7 +135,7 @@ func buildGatewayRuntime(ctx context.Context, sdnCfg *sdn.Config, matrixService 
 		return nil, &ErrOVSClientInit{Socket: sdnCfg.OVS.Socket, Cause: err}
 	}
 
-	return &gateway.GatewayRuntime{
+	runtime := &gateway.GatewayRuntime{
 		Controller: controller,
 		OVS:        client,
 		Groups:     client,
@@ -128,7 +144,34 @@ func buildGatewayRuntime(ctx context.Context, sdnCfg *sdn.Config, matrixService 
 		Networks:   networksFn,
 		CTZones:    ct.NewZoneAllocator(nil),
 		Logger:     logger,
-	}, nil
+	}
+	if needsOverlay {
+		ofClient, err := buildOverlayOpenFlowClient(connectCtx, sdnCfg)
+		if err != nil {
+			closeOVSClient(client, logger)
+			return nil, err
+		}
+		runtime.OverlayOpenFlow = ofClient
+	}
+	return runtime, nil
+}
+
+func buildOverlayOpenFlowClient(ctx context.Context, sdnCfg *sdn.Config) (*openflow.Client, error) {
+	var opts []openflow.ClientOption
+	if sdnCfg.OVS.Socket != "" {
+		dir := filepath.Dir(sdnCfg.OVS.Socket)
+		if dir != "." {
+			opts = append(opts, openflow.WithSocketDir(dir))
+		}
+	}
+	client, err := openflow.NewClient(sdnCfg.OVS.Bridge, opts...)
+	if err != nil {
+		return nil, &ErrOVSClientInit{Socket: sdnCfg.OVS.Socket, Cause: err}
+	}
+	if err := client.Connect(ctx); err != nil {
+		return nil, &ErrOVSConnectFailed{Socket: sdnCfg.OVS.Socket, Cause: err}
+	}
+	return client, nil
 }
 
 // closeOVSClient closes the OVS client, logging rather than masking a

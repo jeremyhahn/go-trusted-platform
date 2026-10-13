@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -41,6 +42,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	sdkattestation "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/attestation"
+	sdkdevice "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/device"
+	sdkgateway "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/gateway"
 	sdkproxy "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/proxy"
 
 	// Register the sdk/go transports gatewayd uses to reach platformd:
@@ -253,7 +256,7 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 	// path below must release it — the deferred close runs unless
 	// assembly reaches the success return.
 	if service := datapathService(gwCfg); service != "" {
-		runtime, err := buildGatewayRuntime(ctx, cfg.SDN, zoneMatrixService(gwCfg), logger)
+		runtime, err := buildGatewayRuntime(ctx, cfg.SDN, zoneMatrixService(gwCfg), runsOverlay(gwCfg), logger)
 		if err != nil {
 			return nil, err
 		}
@@ -289,6 +292,9 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 	}
 	anchor, err := buildPlatformAnchor(cfg)
 	if err != nil {
+		return nil, err
+	}
+	if err := wireOverlayRuntime(ctx, cfg, anchor, gwCfg.Runtime); err != nil {
 		return nil, err
 	}
 
@@ -674,30 +680,76 @@ func buildAuthChain(clientCAs *x509.CertPool, matrixProvider *proxysvc.ZoneMatri
 // exclusively (see cmd/gatewayd/CLAUDE.md); connections live for the
 // process lifetime.
 func dialPlatformd(ctx context.Context, pcfg proxysvc.PlatformdConfig, anchor *trust.Anchor) (platform.Client, error) {
-	var opts []platform.Option
+	opts, err := platformdOptions(ctx, pcfg, anchor)
+	if err != nil {
+		return nil, err
+	}
+	return platform.Connect(ctx, opts)
+}
+
+// platformdOptions builds the sdk/go connection options for the configured
+// transport. Over grpc the connection verifies platformd against the
+// platform anchor and presents gatewayd's client identity, because
+// platformd's gRPC listener refuses callers without an mTLS certificate or
+// a bearer token. The identity files are read on every dial, so a rotated
+// credential is used once the connection is re-established.
+func platformdOptions(ctx context.Context, pcfg proxysvc.PlatformdConfig, anchor *trust.Anchor) (*platform.Options, error) {
 	switch pcfg.Protocol {
 	case proxysvc.PlatformdProtocolUnix:
-		opts = append(opts,
+		return platform.NewOptions(
 			platform.WithOnlyProtocol(platform.ProtocolUnix),
 			platform.WithUnixSocket(pcfg.Socket),
-		)
+		), nil
 	case proxysvc.PlatformdProtocolGRPC:
-		if anchor == nil {
-			return nil, ErrPlatformAnchorRequiredForGRPC
-		}
-		tlsCfg, err := anchor.TLSConfig(ctx)
-		if err != nil {
-			return nil, err
-		}
-		opts = append(opts,
-			platform.WithOnlyProtocol(platform.ProtocolGRPC),
-			platform.WithGRPCAddr(pcfg.GRPCAddr),
-			platform.WithTLSConfig(tlsCfg),
-		)
 	default:
 		return nil, &proxysvc.ErrConfigInvalid{Field: "platformd.protocol", Reason: "must be unix or grpc"}
 	}
-	return platform.Connect(ctx, platform.NewOptions(opts...))
+	if anchor == nil {
+		return nil, ErrPlatformAnchorRequiredForGRPC
+	}
+	anchorTLS, err := anchor.TLSConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := pcfg.Validate(); err != nil {
+		return nil, err
+	}
+	tlsCfg := anchorTLS.Clone()
+	opts := []platform.Option{
+		platform.WithOnlyProtocol(platform.ProtocolGRPC),
+		platform.WithGRPCAddr(pcfg.GRPCAddr),
+	}
+	if pcfg.CertFile != "" {
+		cert, err := tls.LoadX509KeyPair(pcfg.CertFile, pcfg.KeyFile)
+		if err != nil {
+			return nil, &proxysvc.ErrPlatformdIdentityLoadFailed{Path: pcfg.CertFile, Cause: err}
+		}
+		tlsCfg.Certificates = []tls.Certificate{cert}
+	}
+	if pcfg.TokenFile != "" {
+		token, err := readPlatformdToken(pcfg.TokenFile)
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, platform.WithBearerToken(token))
+	}
+	opts = append(opts, platform.WithTLSConfig(tlsCfg))
+	return platform.NewOptions(opts...), nil
+}
+
+// readPlatformdToken reads the bearer token gatewayd presents to platformd.
+// Surrounding whitespace, such as the trailing newline of a token written
+// by a provisioning tool, is not part of the token.
+func readPlatformdToken(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", &proxysvc.ErrPlatformdIdentityLoadFailed{Path: path, Cause: err}
+	}
+	token := strings.TrimSpace(string(raw))
+	if token == "" {
+		return "", &proxysvc.ErrPlatformdIdentityLoadFailed{Path: path}
+	}
+	return token, nil
 }
 
 // platformdDial returns the lazy dial function the sync loop uses to reach
@@ -722,6 +774,50 @@ func platformdAttestationDial(pcfg proxysvc.PlatformdConfig, anchor *trust.Ancho
 		}
 		return sdkattestation.NewClientFromGRPC(client.Attestation()), nil
 	}
+}
+
+// wireOverlayRuntime dials platformd for the overlay's admission inputs,
+// only in the gatewayd that runs the overlay: a supervised child whose
+// shared configuration enables the overlay but which hosts another service
+// dials nothing.
+func wireOverlayRuntime(ctx context.Context, cfg *ServeConfig, anchor *trust.Anchor, runtime *gateway.GatewayRuntime) error {
+	if runtime == nil || cfg == nil || cfg.Gateway == nil || !runsOverlay(cfg.Gateway) {
+		return nil
+	}
+	pcfg := overlayPlatformdConfig(cfg)
+	client, err := dialPlatformd(ctx, pcfg, anchor)
+	if err != nil {
+		return err
+	}
+	WireOverlayPlatform(runtime, client)
+	return nil
+}
+
+// WireOverlayPlatform points the overlay admission inputs of runtime at
+// platformd through client: the fabric allocations, the device records, the
+// latest device verdicts and the device verdict stream. The serve command
+// calls it with the platformd connection it dials.
+func WireOverlayPlatform(runtime *gateway.GatewayRuntime, client platform.Client) {
+	runtime.OverlayPlatform = client
+	runtime.OverlayIPAM = &overlayRuntimeIPAM{client: sdkgateway.NewClientFromGRPC(client.Gateway()), now: time.Now}
+	runtime.OverlayDevices = &overlayRuntimeDevices{client: sdkdevice.NewClientFromGRPC(client.Device())}
+	attestation := sdkattestation.NewClientFromGRPC(client.Attestation())
+	runtime.OverlayVerdicts = &overlayRuntimeVerdicts{client: attestation}
+	runtime.OverlayVerdictStream = &overlayRuntimeVerdictStream{client: attestation}
+}
+
+func overlayPlatformdConfig(cfg *ServeConfig) proxysvc.PlatformdConfig {
+	pcfg := proxysvc.PlatformdConfig{}
+	if cfg != nil && cfg.Proxy != nil {
+		pcfg = cfg.Proxy.Platformd
+	}
+	if pcfg.Protocol == "" {
+		pcfg.Protocol = proxysvc.PlatformdProtocolUnix
+	}
+	if pcfg.Protocol == proxysvc.PlatformdProtocolUnix && pcfg.Socket == "" {
+		pcfg.Socket = proxysvc.DefaultPlatformdSocket
+	}
+	return pcfg
 }
 
 // buildHostRuntime assembles the dependencies of the host-programming

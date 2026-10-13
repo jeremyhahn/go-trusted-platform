@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
@@ -211,18 +212,18 @@ func normalisePolicy(policy *calleradmission.Description) calleradmission.Descri
 
 func TestClassifyReportingText(t *testing.T) {
 	notConfigured := errors.New("ATTESTATION_REPORTING_NOT_CONFIGURED: the attestation reporting service is not configured on this node")
-	neverCollected := errors.New("attestation: no report has been collected for device 7")
+	neverCollected := errors.New("platformctl: device 7 has never been collected")
 	other := errors.New("connection refused")
 
 	t.Run("NotConfigured", func(t *testing.T) {
-		err := classifyReportingText("MCP", "GetDeviceReport", "7", mcpNeverCollected, notConfigured)
+		err := classifyReportingText("CLI", "GetDeviceReport", "7", cliNeverCollected, notConfigured)
 		var unavailable ErrReportingUnavailable
 		if !errors.As(err, &unavailable) || !errors.Is(err, notConfigured) {
 			t.Fatalf("got %v, want ErrReportingUnavailable wrapping the cause", err)
 		}
 	})
 	t.Run("NeverCollected", func(t *testing.T) {
-		err := classifyReportingText("MCP", "GetDeviceReport", "7", mcpNeverCollected, neverCollected)
+		err := classifyReportingText("CLI", "GetDeviceReport", "7", cliNeverCollected, neverCollected)
 		var notCollected ErrReportNotCollected
 		if !errors.As(err, &notCollected) || notCollected.DeviceID != "7" {
 			t.Fatalf("got %v, want ErrReportNotCollected for device 7", err)
@@ -231,12 +232,49 @@ func TestClassifyReportingText(t *testing.T) {
 	t.Run("NeverCollectedPhraseWithoutDevice", func(t *testing.T) {
 		// Only the single-device read passes a device; elsewhere the
 		// phrase is not a state the suite classifies.
-		if err := classifyReportingText("MCP", "ListDeviceReports", "", mcpNeverCollected, neverCollected); err != neverCollected {
+		if err := classifyReportingText("CLI", "ListDeviceReports", "", cliNeverCollected, neverCollected); err != neverCollected {
 			t.Fatalf("got %v, want the cause unchanged", err)
 		}
 	})
 	t.Run("Unrelated", func(t *testing.T) {
 		if err := classifyReportingText("CLI", "GetDeviceReport", "7", cliNeverCollected, other); err != other {
+			t.Fatalf("got %v, want the cause unchanged", err)
+		}
+	})
+}
+
+// TestClassifyMCPReportingError pins the MCP adapter to the JSON-RPC code:
+// never collected is NotFound (-32005) on the single-device read, whatever
+// the message says.
+func TestClassifyMCPReportingError(t *testing.T) {
+	notFound := &MCPAdapterError{Operation: "tools/call", Code: mcpwire.NotFound, Message: "device 7"}
+	notConfigured := &MCPAdapterError{Operation: "tools/call", Code: mcpwire.InternalError,
+		Message: "ATTESTATION_REPORTING_NOT_CONFIGURED: the attestation reporting service is not configured on this node"}
+	textOnly := &MCPAdapterError{Operation: "tools/call", Code: mcpwire.InternalError,
+		Message: "attestation: no report has been collected for device 7"}
+
+	t.Run("NotFoundForDevice", func(t *testing.T) {
+		err := classifyMCPReportingError("MCP", "GetDeviceReport", "7", notFound)
+		var notCollected ErrReportNotCollected
+		if !errors.As(err, &notCollected) || notCollected.DeviceID != "7" || !errors.Is(err, notFound) {
+			t.Fatalf("got %v, want ErrReportNotCollected for device 7 wrapping the cause", err)
+		}
+	})
+	t.Run("NotConfigured", func(t *testing.T) {
+		err := classifyMCPReportingError("MCP", "GetDeviceReport", "7", notConfigured)
+		var unavailable ErrReportingUnavailable
+		if !errors.As(err, &unavailable) {
+			t.Fatalf("got %v, want ErrReportingUnavailable", err)
+		}
+	})
+	t.Run("NotFoundWithoutDevice", func(t *testing.T) {
+		if err := classifyMCPReportingError("MCP", "ListDeviceReports", "", notFound); err != notFound {
+			t.Fatalf("got %v, want the cause unchanged", err)
+		}
+	})
+	t.Run("PhraseWithoutCode", func(t *testing.T) {
+		// The text alone no longer classifies: only the code does.
+		if err := classifyMCPReportingError("MCP", "GetDeviceReport", "7", textOnly); err != textOnly {
 			t.Fatalf("got %v, want the cause unchanged", err)
 		}
 	})

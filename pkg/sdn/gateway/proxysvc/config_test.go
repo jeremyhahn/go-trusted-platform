@@ -80,6 +80,23 @@ func TestConfigValidateErrors(t *testing.T) {
 			field:  "platformd.grpc-addr",
 		},
 		{
+			name: "grpc without a client identity",
+			mutate: func(c *Config) {
+				c.Platformd.Protocol = PlatformdProtocolGRPC
+				c.Platformd.GRPCAddr = "platformd:10443"
+			},
+			field: "platformd",
+		},
+		{
+			name: "grpc client cert without key",
+			mutate: func(c *Config) {
+				c.Platformd.Protocol = PlatformdProtocolGRPC
+				c.Platformd.GRPCAddr = "platformd:10443"
+				c.Platformd.CertFile = "/etc/gatewayd/platformd-client.pem"
+			},
+			field: "platformd",
+		},
+		{
 			name:   "cert without key",
 			mutate: func(c *Config) { c.TLS.CertFile = "/etc/gatewayd/server.pem" },
 			field:  "tls",
@@ -101,6 +118,30 @@ func TestConfigValidateErrors(t *testing.T) {
 			}
 			if cfgErr.Field != tc.field {
 				t.Fatalf("Field = %q, want %q", cfgErr.Field, tc.field)
+			}
+		})
+	}
+}
+
+func TestPlatformdConfigValidateAcceptsEitherGRPCIdentity(t *testing.T) {
+	tests := []struct {
+		name   string
+		config PlatformdConfig
+	}{
+		{"unix needs no identity", PlatformdConfig{Protocol: PlatformdProtocolUnix}},
+		{"grpc with a client certificate", PlatformdConfig{
+			Protocol: PlatformdProtocolGRPC, GRPCAddr: "platformd:10443",
+			CertFile: "/etc/gatewayd/platformd-client.pem", KeyFile: "/etc/gatewayd/platformd-client-key.pem",
+		}},
+		{"grpc with a token file", PlatformdConfig{
+			Protocol: PlatformdProtocolGRPC, GRPCAddr: "platformd:10443",
+			TokenFile: "/etc/gatewayd/platformd.token",
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.config.Validate(); err != nil {
+				t.Fatalf("Validate: %v", err)
 			}
 		})
 	}

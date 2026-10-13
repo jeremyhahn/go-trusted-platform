@@ -18,6 +18,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/netip"
 	"slices"
@@ -29,6 +30,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/loadbalancer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/nat64"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/tunnel"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/vxlan"
 )
 
 // Gateway requirement constants.
@@ -433,18 +435,74 @@ func (c *UplinkConfig) Validate() error {
 }
 
 // OverlayServiceConfig holds overlay gateway specific configuration.
+const (
+	// MaxOverlayVNI is the largest VXLAN Network Identifier (24 bits).
+	MaxOverlayVNI uint32 = 0xFFFFFF
+
+	// MaxOverlayVLAN is the largest access VLAN an L2VNI can be carried on.
+	MaxOverlayVLAN uint16 = 4094
+)
+
+// OverlayVNIConfig is one L2VNI the overlay joins, and the access VLAN that
+// carries it on the access port.
+type OverlayVNIConfig struct {
+	VNI  uint32 `yaml:"vni" json:"vni" mapstructure:"vni"`
+	VLAN uint16 `yaml:"vlan" json:"vlan" mapstructure:"vlan"`
+}
+
 type OverlayServiceConfig struct {
 	// Enabled indicates if the overlay service is enabled.
 	Enabled bool `yaml:"enabled" json:"enabled" mapstructure:"enabled"`
 
+	// LocalVTEP is the gateway's VTEP address on the fabric VLAN.
+	LocalVTEP netip.Addr `yaml:"local-vtep,omitempty" json:"local_vtep,omitempty" mapstructure:"local-vtep"`
+
+	// UnderlayInterface is the host interface carrying fabric VTEP traffic.
+	UnderlayInterface string `yaml:"underlay-interface,omitempty" json:"underlay_interface,omitempty" mapstructure:"underlay-interface"`
+
+	// UnderlayMTU is the MTU of the fabric underlay interface. Zero defaults
+	// to the overlay handler's minimum VXLAN-safe MTU.
+	UnderlayMTU int `yaml:"underlay-mtu,omitempty" json:"underlay_mtu,omitempty" mapstructure:"underlay-mtu"`
+
+	// AccessPort is the OVS port that carries local workload VLANs into the overlay.
+	AccessPort string `yaml:"access-port,omitempty" json:"access_port,omitempty" mapstructure:"access-port"`
+
+	// OverlayASN is the EVPN overlay ASN used for route targets and RR sessions.
+	OverlayASN uint32 `yaml:"overlay-asn,omitempty" json:"overlay_asn,omitempty" mapstructure:"overlay-asn"`
+
+	// RRPeers are route-reflector peers for the EVPN address family. The schema
+	// is the same BGP peer shape used by the gateway transit service.
+	RRPeers []bgp.NeighborConfig `yaml:"rr-peers,omitempty" json:"rr_peers,omitempty" mapstructure:"rr-peers"`
+
 	// VXLANPort is the UDP port for VXLAN encapsulation.
 	VXLANPort uint16 `yaml:"vxlan-port,omitempty" json:"vxlan_port,omitempty" mapstructure:"vxlan-port"`
 
-	// DefaultVNI is the default VXLAN Network Identifier.
+	// VNIs are the L2VNIs the gateway joins when the overlay starts, each
+	// carried on its own access VLAN. The overlay is not healthy until every
+	// one is joined.
+	VNIs []OverlayVNIConfig `yaml:"vnis,omitempty" json:"vnis,omitempty" mapstructure:"vnis"`
+
+	// DefaultVNI is the default VXLAN Network Identifier. When set it must
+	// name one of VNIs.
 	DefaultVNI uint32 `yaml:"default-vni,omitempty" json:"default_vni,omitempty" mapstructure:"default-vni"`
 
 	// MaxVNIs is the maximum number of VNIs.
 	MaxVNIs int `yaml:"max-vnis,omitempty" json:"max_vnis,omitempty" mapstructure:"max-vnis"`
+
+	// VerdictMaxAge bounds the age of the latest signed attestation verdict
+	// accepted for remote VTEP admission. Zero defaults to
+	// DefaultOverlayVerdictMaxAge.
+	VerdictMaxAge time.Duration `yaml:"verdict-max-age,omitempty" json:"verdict_max_age,omitempty" mapstructure:"verdict-max-age"`
+
+	// VerdictClockSkew bounds how far past the gateway's clock a verdict's
+	// attestation time may lie and still admit a VTEP. Zero defaults to
+	// DefaultOverlayVerdictClockSkew.
+	VerdictClockSkew time.Duration `yaml:"verdict-clock-skew,omitempty" json:"verdict_clock_skew,omitempty" mapstructure:"verdict-clock-skew"`
+
+	// AdmissionSweepInterval is how often every installed remote VTEP is
+	// re-judged against the admission policy. Zero defaults to
+	// DefaultOverlayAdmissionSweepInterval.
+	AdmissionSweepInterval time.Duration `yaml:"admission-sweep-interval,omitempty" json:"admission_sweep_interval,omitempty" mapstructure:"admission-sweep-interval"`
 }
 
 // Validate checks if the overlay service configuration is valid.
@@ -452,7 +510,102 @@ func (c *OverlayServiceConfig) Validate() error {
 	if !c.Enabled {
 		return nil
 	}
+	if !c.LocalVTEP.IsValid() || !c.LocalVTEP.Is4() || c.LocalVTEP.IsUnspecified() {
+		return &ErrOverlayConfigInvalid{Field: "local-vtep", Reason: "must be a specified IPv4 address"}
+	}
+	if c.UnderlayInterface == "" {
+		return &ErrOverlayConfigInvalid{Field: "underlay-interface", Reason: "is required"}
+	}
+	if c.UnderlayMTU == 0 {
+		c.UnderlayMTU = vxlan.MinimumUnderlayMTU
+	}
+	if c.UnderlayMTU < vxlan.MinimumUnderlayMTU {
+		return &ErrOverlayConfigInvalid{Field: "underlay-mtu", Reason: fmt.Sprintf("must be at least %d", vxlan.MinimumUnderlayMTU)}
+	}
+	if c.AccessPort == "" {
+		return &ErrOverlayConfigInvalid{Field: "access-port", Reason: "is required"}
+	}
+	// EVPN route targets carry the ASN in a 2-octet field, so only the
+	// private 2-octet range the route-target derivation accepts can run.
+	if c.OverlayASN < uint32(bgp.MinOverlayASN) || c.OverlayASN > uint32(bgp.MaxOverlayASN) {
+		return &ErrOverlayConfigInvalid{
+			Field:  "overlay-asn",
+			Reason: fmt.Sprintf("must be a private 2-octet ASN (%d-%d)", bgp.MinOverlayASN, bgp.MaxOverlayASN),
+		}
+	}
+	// The overlay speaker only dials its route reflectors (it shares the
+	// host with the transit speaker's listener), so a peer waiting to be
+	// dialled would never come up.
+	for _, peer := range c.RRPeers {
+		if peer.PassiveMode {
+			return &ErrOverlayConfigInvalid{Field: "rr-peers", Reason: fmt.Sprintf("peer %s is passive; the overlay speaker only dials", peer.Address)}
+		}
+	}
+	if c.VXLANPort == 0 {
+		return &ErrOverlayConfigInvalid{Field: "vxlan-port", Reason: "is required"}
+	}
+	if c.MaxVNIs < 0 {
+		return &ErrOverlayConfigInvalid{Field: "max-vnis", Reason: "must not be negative"}
+	}
+	if err := c.validateVNIs(); err != nil {
+		return err
+	}
+	if c.VerdictMaxAge < 0 {
+		return &ErrOverlayConfigInvalid{Field: "verdict-max-age", Reason: "must not be negative"}
+	}
+	if c.VerdictClockSkew < 0 {
+		return &ErrOverlayConfigInvalid{Field: "verdict-clock-skew", Reason: "must not be negative"}
+	}
+	if c.AdmissionSweepInterval < 0 {
+		return &ErrOverlayConfigInvalid{Field: "admission-sweep-interval", Reason: "must not be negative"}
+	}
+	if c.VerdictMaxAge == 0 {
+		c.VerdictMaxAge = DefaultOverlayVerdictMaxAge
+	}
 	return nil
+}
+
+// validateVNIs checks the VNIs the overlay joins at start: at least one, each
+// a 24-bit VNI on its own access VLAN, within max-vnis, and default-vni among
+// them. An overlay with no VNI would report running while forwarding nothing.
+func (c *OverlayServiceConfig) validateVNIs() error {
+	if len(c.VNIs) == 0 {
+		return &ErrOverlayConfigInvalid{Field: "vnis", Reason: "at least one VNI is required"}
+	}
+	if c.MaxVNIs > 0 && len(c.VNIs) > c.MaxVNIs {
+		return &ErrOverlayConfigInvalid{Field: "vnis", Reason: fmt.Sprintf("%d VNIs exceed max-vnis %d", len(c.VNIs), c.MaxVNIs)}
+	}
+	vnis := make(map[uint32]struct{}, len(c.VNIs))
+	vlans := make(map[uint16]struct{}, len(c.VNIs))
+	for _, v := range c.VNIs {
+		if v.VNI == 0 || v.VNI > MaxOverlayVNI {
+			return &ErrOverlayConfigInvalid{Field: "vnis", Reason: fmt.Sprintf("VNI %d is outside 1-%d", v.VNI, MaxOverlayVNI)}
+		}
+		if v.VLAN == 0 || v.VLAN > MaxOverlayVLAN {
+			return &ErrOverlayConfigInvalid{Field: "vnis", Reason: fmt.Sprintf("VNI %d: VLAN %d is outside 1-%d", v.VNI, v.VLAN, MaxOverlayVLAN)}
+		}
+		if _, dup := vnis[v.VNI]; dup {
+			return &ErrOverlayConfigInvalid{Field: "vnis", Reason: fmt.Sprintf("VNI %d is listed twice", v.VNI)}
+		}
+		if _, dup := vlans[v.VLAN]; dup {
+			return &ErrOverlayConfigInvalid{Field: "vnis", Reason: fmt.Sprintf("VLAN %d carries two VNIs", v.VLAN)}
+		}
+		vnis[v.VNI] = struct{}{}
+		vlans[v.VLAN] = struct{}{}
+	}
+	if _, listed := vnis[c.DefaultVNI]; c.DefaultVNI != 0 && !listed {
+		return &ErrOverlayConfigInvalid{Field: "default-vni", Reason: fmt.Sprintf("VNI %d is not one of vnis", c.DefaultVNI)}
+	}
+	return nil
+}
+
+// admissionSweepInterval is how often installed VTEPs are re-admitted: the
+// configured interval, or DefaultOverlayAdmissionSweepInterval when unset.
+func (c *OverlayServiceConfig) admissionSweepInterval() time.Duration {
+	if c.AdmissionSweepInterval <= 0 {
+		return DefaultOverlayAdmissionSweepInterval
+	}
+	return c.AdmissionSweepInterval
 }
 
 // EdgeConfig holds edge gateway specific configuration.
@@ -1198,6 +1351,9 @@ func (c *GatewayConfig) Validate() error {
 		if err := c.Overlay.Validate(); err != nil {
 			return err
 		}
+		if err := c.validateOverlayExclusive(); err != nil {
+			return err
+		}
 	}
 	if c.Edge != nil {
 		if err := c.Edge.Validate(); err != nil {
@@ -1255,30 +1411,52 @@ func (c *GatewayConfig) Validate() error {
 	return c.validateTunnels()
 }
 
+// validateOverlayExclusive refuses an enabled overlay beside the firewall,
+// NAT or load balancer. Those services lay their flows out for the NORMAL
+// terminal (NAT, for one, installs a table-10 miss to table 20), while under
+// the overlay terminal table 10 is decap authorisation, whose miss drops
+// unadmitted tunnelled frames: a service miss there would forward frames from
+// revoked VTEPs.
+func (c *GatewayConfig) validateOverlayExclusive() error {
+	if !c.Overlay.Enabled {
+		return nil
+	}
+	switch {
+	case c.Firewall != nil && c.Firewall.Enabled:
+		return &ErrOverlayServiceConflict{Service: ServiceFirewall}
+	case c.NAT != nil && c.NAT.Enabled:
+		return &ErrOverlayServiceConflict{Service: ServiceNAT}
+	case c.LoadBalancer != nil && c.LoadBalancer.Enabled:
+		return &ErrOverlayServiceConflict{Service: ServiceLoadBalancer}
+	}
+	return nil
+}
+
 // HasEnabledServices returns true if at least one service section is present and enabled.
 // needsPipeline reports whether this gateway programs the datapath and so
 // must own the base pipeline before its services start (#567). A gateway
 // with no datapath service — proxy-only, telemetry-only — installs nothing
-// and leaves the bridge exactly as it found it. The overlay service is
-// deliberately absent from this list: its handler programs no flows and
-// gates nothing out of table 10 today, so it needs no pipeline, and asking
-// for the overlay terminal would refuse a start that used to succeed. When
-// the overlay service owns egress it joins this list with TerminalOverlay.
+// and leaves the bridge exactly as it found it. When overlay is enabled the
+// pipeline records the overlay terminal, but the overlay handler owns the
+// OpenFlow table defaults itself.
 func (c *GatewayConfig) needsPipeline() bool {
 	if c.Runtime == nil {
 		return false
 	}
-	return (c.Firewall != nil && c.Firewall.Enabled) ||
+	return (c.Overlay != nil && c.Overlay.Enabled) ||
+		(c.Firewall != nil && c.Firewall.Enabled) ||
 		(c.NAT != nil && c.NAT.Enabled) ||
 		(c.NAT64 != nil && c.NAT64.Enabled) ||
 		(c.LoadBalancer != nil && c.LoadBalancer.Enabled)
 }
 
-// pipelineTerminal is the table-30 disposition this gateway asks for.
-// Today that is always NORMAL: the overlay terminal exists in the type
-// vocabulary and is refused by BasePipelineRules until gatewayd can build
-// the overlay handler (its config carries no VTEP or access port yet).
+// pipelineTerminal is the table-30 disposition this gateway asks for. The
+// overlay terminal means modes.OverlayModeHandler owns the MAC-learning and
+// downstream overlay tables, so the base pipeline installs no default flows.
 func (c *GatewayConfig) pipelineTerminal() PipelineTerminal {
+	if c.Overlay != nil && c.Overlay.Enabled {
+		return TerminalOverlay
+	}
 	return TerminalNormal
 }
 

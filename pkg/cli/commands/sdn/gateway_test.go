@@ -17,7 +17,7 @@ func TestNewGatewayCommand(t *testing.T) {
 func TestGatewayCommandSubcommands(t *testing.T) {
 	cmd := NewGatewayCommand(testGetFlags())
 
-	expectedSubs := []string{"status", "snapshot", "mode", "bgp", "lb", "nat64", "perf"}
+	expectedSubs := []string{"status", "snapshot", "overlay", "mode", "bgp", "lb", "nat64", "perf"}
 	commands := cmd.Commands()
 	if len(commands) != len(expectedSubs) {
 		t.Errorf("expected %d subcommands, got %d", len(expectedSubs), len(commands))

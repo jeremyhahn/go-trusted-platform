@@ -236,7 +236,9 @@ Two further TLS legs, both outbound and both anchored by `pkg/trust`:
   pool must be homogeneous in trust terms.
 - **gatewayd → platformd.** Unix socket by default; `platformd.protocol: grpc`
   requires `platform-ca-file:`, the platform anchor
-  (`ErrPlatformAnchorRequiredForGRPC`). Verification is never skipped.
+  (`ErrPlatformAnchorRequiredForGRPC`), and a client identity — a client
+  certificate or a token file — because platformd's gRPC listener refuses
+  unauthenticated callers. Verification is never skipped.
 
 ### 6.2 Where token validation happens — and what it is not
 

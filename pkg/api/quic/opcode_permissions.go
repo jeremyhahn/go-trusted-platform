@@ -375,7 +375,7 @@ var opcodePermissions = map[byte]OpcodePermission{
 	quicwire.OpAttestCollectHost:    attestationWrite,
 	quicwire.OpAttestGetAK:          attestationRead,
 	quicwire.OpAttestChallenge:      attestationWrite,
-	quicwire.OpAttestResponse:       attestationWrite,
+	quicwire.OpAttestPollVerdicts:   attestationRead,
 	quicwire.OpAttestGetReport:      attestationRead,
 	quicwire.OpAttestGetPCRs:        attestationRead,
 	quicwire.OpAttestBuildManifest:  attestationWrite,
@@ -548,6 +548,9 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.OpGatewayPerfDatapath:  sdnRead,
 		quicwire.OpGatewayPerfConntrack: sdnRead,
 		quicwire.OpGatewayNAT64Status:   sdnRead,
+
+		quicwire.OpGatewayAdmittedVTEP:      sdnRead,
+		quicwire.OpGatewayListAdmittedVTEPs: sdnRead,
 
 		quicwire.ProxySubRouteCreate: proxyWrite,
 		quicwire.ProxySubRouteGet:    proxyRead,

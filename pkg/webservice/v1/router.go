@@ -566,6 +566,12 @@ func (v1Router *Router) attestationRoutes() {
 	restattestation.NewReportsRouter(v1Router.logger, rep, v1Router.responseWriter).
 		RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 
+	// Device verdicts (#709): the long-poll StreamDeviceVerdicts rides on
+	// over HTTP. Admin-gated like the reports; the session's tenant decides
+	// which devices' verdicts the caller sees.
+	restattestation.NewVerdictsRouter(v1Router.restHandlerRegistry.AttestationVerdicts(), v1Router.responseWriter).
+		RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+
 	// Events surface — distinct from the proto-defined manifest /
 	// quote / collect surfaces. Wired from the platform attestation
 	// store so the WebUI's /attestation/eventlogs page renders the

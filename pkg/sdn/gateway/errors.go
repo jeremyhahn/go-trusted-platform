@@ -164,36 +164,6 @@ func (e *ErrServiceNotActive) Error() string {
 	return fmt.Sprintf("service not active: %s", e.Service)
 }
 
-// ErrReputationTooLow is returned when node reputation is below the minimum.
-type ErrReputationTooLow struct {
-	Required float64
-	Actual   float64
-}
-
-func (e *ErrReputationTooLow) Error() string {
-	return fmt.Sprintf("reputation too low: required %.2f, actual %.2f", e.Required, e.Actual)
-}
-
-// ErrAgeTooYoung is returned when node age is below the minimum.
-type ErrAgeTooYoung struct {
-	RequiredDays int
-	ActualDays   int
-}
-
-func (e *ErrAgeTooYoung) Error() string {
-	return fmt.Sprintf("node age too young: required %d days, actual %d days", e.RequiredDays, e.ActualDays)
-}
-
-// ErrUptimeTooLow is returned when node uptime is below the minimum.
-type ErrUptimeTooLow struct {
-	RequiredPct float64
-	ActualPct   float64
-}
-
-func (e *ErrUptimeTooLow) Error() string {
-	return fmt.Sprintf("uptime too low: required %.1f%%, actual %.1f%%", e.RequiredPct, e.ActualPct)
-}
-
 // ErrOnboardingFailed is returned when gateway onboarding fails.
 type ErrOnboardingFailed struct {
 	GatewayID string
@@ -463,6 +433,27 @@ type ErrTunnelConfigInvalid struct {
 
 func (e *ErrTunnelConfigInvalid) Error() string {
 	return fmt.Sprintf("invalid tunnel config %q: %s", e.TunnelName, e.Reason)
+}
+
+// ErrOverlayConfigInvalid is returned when a field of the gateway overlay
+// section fails validation. Field is the YAML key.
+type ErrOverlayConfigInvalid struct {
+	Field  string
+	Reason string
+}
+
+func (e *ErrOverlayConfigInvalid) Error() string {
+	return fmt.Sprintf("gateway: invalid overlay config %s: %s", e.Field, e.Reason)
+}
+
+// ErrOverlayServiceConflict is returned when the overlay is enabled together
+// with a service that programs the pipeline the overlay terminal owns.
+type ErrOverlayServiceConflict struct {
+	Service string
+}
+
+func (e *ErrOverlayServiceConflict) Error() string {
+	return fmt.Sprintf("gateway: overlay cannot run with %s enabled: the overlay terminal owns the pipeline tables %s programs", e.Service, e.Service)
 }
 
 // ErrNilServiceHandler is returned when a nil or unnamed service handler is

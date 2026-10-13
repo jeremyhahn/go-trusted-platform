@@ -307,6 +307,10 @@ func (r *testHandlerRegistry) AttestationReporting() *restattestation.Reporting 
 	return r.attestationReporting
 }
 
+func (r *testHandlerRegistry) AttestationVerdicts() restattestation.VerdictPoller {
+	return nil
+}
+
 func (r *testHandlerRegistry) GatewayControlPlane() (restgateway.GatewayStateStore, restgateway.DesiredConfigSource) {
 	return r.gatewayStore, nil
 }

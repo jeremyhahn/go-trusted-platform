@@ -75,6 +75,14 @@ func (s *testTransportGatewayService) Snapshot(_ context.Context, _ string) (*Ga
 func (s *testTransportGatewayService) ListSnapshots(_ context.Context) ([]*GatewaySnapshotInfo, error) {
 	return nil, ErrGatewayFeatureNotConfigured
 }
+
+func (s *testTransportGatewayService) GetAdmittedVTEP(_ context.Context, _, _ string) (*quicwire.GatewayAdmittedVTEPInfo, error) {
+	return nil, ErrGatewayFeatureNotConfigured
+}
+
+func (s *testTransportGatewayService) ListAdmittedVTEPs(_ context.Context, _ string) ([]*quicwire.GatewayAdmittedVTEPInfo, error) {
+	return nil, ErrGatewayFeatureNotConfigured
+}
 func (s *testTransportGatewayService) SetMode(_ context.Context, _ string) error {
 	return ErrGatewayFeatureNotConfigured
 }

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/modes"
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 )
 
@@ -74,6 +75,7 @@ func (g *Gateway) Snapshot() *gwstate.Snapshot {
 	snap.Firewall = g.collectFirewall()
 	snap.NAT = g.collectNAT()
 	snap.Pipeline = g.collectPipeline()
+	snap.Overlay = g.collectOverlay(ctx)
 	snap.PXE.Status = serviceStatus(g.hasActiveService(ServicePXE))
 	snap.DHCP.Status = serviceStatus(g.hasActiveService(ServiceDHCP))
 	snap.DesiredConfig = g.DesiredConfigState()
@@ -433,6 +435,79 @@ func (g *Gateway) collectPipeline() *gwstate.PipelineState {
 		Owner:     status.Owner,
 		Terminal:  string(status.Terminal),
 		FailMode:  status.FailMode,
+	}
+}
+
+type overlaySnapshotService interface {
+	Status() *modes.OverlayModeStatus
+	ListAdmittedVTEPs(ctx context.Context) ([]AdmittedVTEP, error)
+}
+
+func (g *Gateway) collectOverlay(ctx context.Context) *gwstate.OverlayState {
+	g.mu.RLock()
+	handler := g.serviceHandlers[ServiceOverlay]
+	g.mu.RUnlock()
+
+	backed, ok := handler.(*backedServiceHandler)
+	if !ok {
+		return nil
+	}
+	svc, ok := backed.service().(overlaySnapshotService)
+	if !ok || svc == nil {
+		return nil
+	}
+	status := svc.Status()
+	if status == nil {
+		return nil
+	}
+
+	out := &gwstate.OverlayState{
+		Running:                  status.Running,
+		LocalVTEP:                status.LocalVTEP.String(),
+		VNICount:                 status.VNICount,
+		RemoteVTEPCount:          status.RemoteVTEPCount,
+		LocalMACCount:            status.LocalMACCount,
+		RemoteMACCount:           status.RemoteMACCount,
+		PrefixCount:              status.PrefixCount,
+		RefusedBindings:          status.RefusedBindings,
+		L3VNI:                    status.L3VNI,
+		ARPSuppressionEnabled:    status.ARPSuppressionEnabled,
+		AnycastGatewayConfigured: status.AnycastGatewayConfigured,
+		StartedAt:                status.StartedAt,
+		Uptime:                   status.Uptime,
+		NDCounters: gwstate.OverlayNDCounterState{
+			Punted:       status.NDCounters.Punted,
+			Answered:     status.NDCounters.Answered,
+			MeterDropped: status.NDCounters.MeterDropped,
+			QueueDropped: status.NDCounters.QueueDropped,
+			FellThrough:  status.NDCounters.FellThrough,
+		},
+	}
+	vteps, err := svc.ListAdmittedVTEPs(ctx)
+	if err != nil {
+		g.logSnapshot("overlay admitted VTEPs unavailable for the snapshot", err)
+		return out
+	}
+	for _, vtep := range vteps {
+		out.AdmittedVTEPs = append(out.AdmittedVTEPs, admittedVTEPState(vtep))
+	}
+	sort.Slice(out.AdmittedVTEPs, func(i, j int) bool {
+		return out.AdmittedVTEPs[i].VTEP < out.AdmittedVTEPs[j].VTEP
+	})
+	return out
+}
+
+func admittedVTEPState(vtep AdmittedVTEP) gwstate.AdmittedVTEPState {
+	return gwstate.AdmittedVTEPState{
+		VTEP:           vtep.VTEP.String(),
+		DeviceID:       vtep.DeviceID,
+		HostID:         vtep.HostID,
+		Serial:         vtep.Serial,
+		Hostname:       vtep.Hostname,
+		AllocationID:   vtep.AllocationID,
+		BaselineSource: vtep.BaselineSource,
+		ProfileID:      vtep.ProfileID,
+		VerdictAt:      vtep.VerdictAt,
 	}
 }
 

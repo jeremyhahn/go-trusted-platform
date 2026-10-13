@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -108,6 +109,44 @@ func reportedSnapshot(id string) *gwstate.Snapshot {
 	}
 }
 
+func reportedOverlaySnapshot(id string) *gwstate.Snapshot {
+	snap := reportedSnapshot(id)
+	snap.Overlay = &gwstate.OverlayState{
+		Running:                  true,
+		LocalVTEP:                "192.0.2.10",
+		VNICount:                 1,
+		RemoteVTEPCount:          1,
+		LocalMACCount:            2,
+		RemoteMACCount:           1,
+		PrefixCount:              1,
+		RefusedBindings:          3,
+		L3VNI:                    50100,
+		ARPSuppressionEnabled:    true,
+		AnycastGatewayConfigured: true,
+		StartedAt:                time.Date(2026, 9, 8, 21, 0, 0, 0, time.UTC),
+		Uptime:                   5 * time.Minute,
+		NDCounters: gwstate.OverlayNDCounterState{
+			Punted:       11,
+			Answered:     7,
+			MeterDropped: 2,
+			QueueDropped: 1,
+			FellThrough:  3,
+		},
+		AdmittedVTEPs: []gwstate.AdmittedVTEPState{{
+			VTEP:           "198.51.100.10",
+			DeviceID:       42,
+			HostID:         "host-42",
+			Serial:         "SERIAL42",
+			Hostname:       "edge-42",
+			AllocationID:   "alloc-42",
+			BaselineSource: "golden",
+			ProfileID:      9,
+			VerdictAt:      time.Date(2026, 9, 8, 20, 55, 0, 0, time.UTC),
+		}},
+	}
+	return snap
+}
+
 func TestGetGatewaySnapshot_FromTheTelemetryStore(t *testing.T) {
 	store := &memorySnapshotStore{}
 	require.NoError(t, store.Put(reportedSnapshot("node-01-gateway")))
@@ -184,6 +223,58 @@ func TestListGatewaySnapshots(t *testing.T) {
 		_, err := svc.ListGatewaySnapshots(context.Background(), &platformv1.ListGatewaySnapshotsRequest{})
 		assert.Equal(t, codes.Internal, status.Code(err))
 	})
+}
+
+func TestGatewayAdmittedVTEPs_FromSnapshotOverlay(t *testing.T) {
+	store := &memorySnapshotStore{}
+	require.NoError(t, store.Put(reportedOverlaySnapshot("node-01-gateway")))
+	svc := NewGatewayService(WithGatewaySnapshotStore(store))
+
+	list, err := svc.ListGatewayAdmittedVTEPs(context.Background(), &platformv1.ListGatewayAdmittedVTEPsRequest{GatewayId: "node-01-gateway"})
+	require.NoError(t, err)
+	require.Len(t, list.GetVteps(), 1)
+	assert.Equal(t, "198.51.100.10", list.GetVteps()[0].GetVtep())
+	assert.Equal(t, uint64(42), list.GetVteps()[0].GetDeviceId())
+
+	get, err := svc.GetGatewayAdmittedVTEP(context.Background(), &platformv1.GetGatewayAdmittedVTEPRequest{GatewayId: "node-01-gateway", Vtep: "198.51.100.10"})
+	require.NoError(t, err)
+	assert.Equal(t, "alloc-42", get.GetVtep().GetAllocationId())
+
+	_, err = svc.GetGatewayAdmittedVTEP(context.Background(), &platformv1.GetGatewayAdmittedVTEPRequest{GatewayId: "node-01-gateway", Vtep: "198.51.100.11"})
+	assert.Equal(t, codes.NotFound, status.Code(err))
+}
+
+func TestGatewayAdmittedVTEPs_RESTMapsDisabledOverlayTo503(t *testing.T) {
+	store := &memorySnapshotStore{}
+	require.NoError(t, store.Put(reportedSnapshot("no-overlay")))
+	require.NoError(t, store.Put(reportedOverlaySnapshot("node-01-gateway")))
+	svc := newGatewayRESTService(nil, discardLogger().Slog())
+	svc.reader = NewGatewayService(WithGatewaySnapshotStore(store))
+
+	_, err := svc.ListAdmittedVTEPs(context.Background(), "no-overlay")
+	var disabled rest.ErrGatewayFeatureNotConfigured
+	require.ErrorAs(t, err, &disabled, "a gateway with no overlay is a disabled capability, answered 503")
+	_, err = svc.GetAdmittedVTEP(context.Background(), "no-overlay", "198.51.100.10")
+	require.ErrorAs(t, err, &disabled)
+
+	_, err = svc.GetAdmittedVTEP(context.Background(), "node-01-gateway", "198.51.100.11")
+	var missing rest.ErrGatewayAdmittedVTEPNotFound
+	require.ErrorAs(t, err, &missing)
+	assert.Equal(t, "198.51.100.11", missing.VTEP)
+
+	internal := status.Error(codes.Internal, "disk gone")
+	assert.Equal(t, internal, gatewayAdmissionErrToREST("", internal), "a server fault is never relabelled a disabled capability")
+}
+
+func TestGatewaySnapshotToProto_OverlayStatus(t *testing.T) {
+	proto := gatewaySnapshotToProto(reportedOverlaySnapshot("node-01-gateway"))
+	overlay := proto.GetOverlay()
+	require.NotNil(t, overlay)
+	assert.True(t, overlay.GetRunning())
+	assert.Equal(t, "192.0.2.10", overlay.GetLocalVtep())
+	assert.Equal(t, uint64(11), overlay.GetNdCounters().GetPunted())
+	require.Len(t, overlay.GetAdmittedVteps(), 1)
+	assert.Equal(t, "198.51.100.10", overlay.GetAdmittedVteps()[0].GetVtep())
 }
 
 func TestGatewaySnapshotToProto_AbsentSectionsStayNil(t *testing.T) {

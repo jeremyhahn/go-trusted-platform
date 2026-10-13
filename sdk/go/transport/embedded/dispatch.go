@@ -883,6 +883,11 @@ func registerAttestationHandlers(m map[string]handlerFunc, reg *ServiceRegistry)
 	m[platformv1.AttestationService_CollectContainerAttestation_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.CollectContainerAttestation(ctx, req.(*platformv1.CollectContainerAttestationRequest))
 	}
+	// StreamDeviceVerdicts reaches an in-process caller as long polls of this
+	// method; see embeddedClientConn.NewStream.
+	m[platformv1.AttestationService_PollDeviceVerdicts_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.PollDeviceVerdicts(ctx, req.(*platformv1.PollDeviceVerdictsRequest))
+	}
 }
 
 // registerTenantHandlers registers TenantService handlers.

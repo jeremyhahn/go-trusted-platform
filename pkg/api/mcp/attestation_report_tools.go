@@ -125,6 +125,8 @@ var attestationReportToolDispatch = map[string]attestationReportToolFunc{
 	"attestation_device_reports": (*ToolRegistry).executeAttestationDeviceReports,
 	"attestation_device_refresh": (*ToolRegistry).executeAttestationDeviceRefresh,
 	"attestation_caller_policy":  (*ToolRegistry).executeAttestationCallerPolicy,
+	// The verdict feed's tool: attestation_verdict_tools.go.
+	"attestation_device_verdicts_poll": (*ToolRegistry).executeAttestationVerdictsPoll,
 }
 
 func (r *ToolRegistry) dispatchAttestationReportTool(ctx context.Context, name string, args map[string]interface{}) (interface{}, bool, error) {

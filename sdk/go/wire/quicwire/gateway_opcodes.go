@@ -35,8 +35,10 @@ const (
 	// Telemetry snapshot operations (0x15-0x16): the whole datapath
 	// picture one gatewayd reports — sessions, BFD, tunnels, uplink policy
 	// routes, host filter, NAT and the base pipeline (#594).
-	OpGatewaySnapshot      byte = 0x15
-	OpGatewayListSnapshots byte = 0x16
+	OpGatewaySnapshot          byte = 0x15
+	OpGatewayListSnapshots     byte = 0x16
+	OpGatewayAdmittedVTEP      byte = 0x17
+	OpGatewayListAdmittedVTEPs byte = 0x18
 
 	// Network Zone Operations (0x10-0x13). 0x14 was the retired
 	// assign-network-to-zone operation (networks are zones since #708);

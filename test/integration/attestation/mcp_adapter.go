@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,6 +27,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -477,8 +479,20 @@ func (a *MCPAdapter) GetWorkloadChainStats(ctx context.Context, opts GetWorkload
 	return &resp, nil
 }
 
-// mcpNeverCollected is the MCP tool's phrase for a device with no report.
-const mcpNeverCollected = "no report has been collected for device"
+// classifyMCPReportingError maps a reporting tool's failure onto the suite's
+// typed states. The tool answers a never-collected device with the JSON-RPC
+// NotFound code (#505); an unconfigured reporting service is told by its
+// text, as on the CLI.
+func classifyMCPReportingError(transport, operation, deviceID string, err error) error {
+	if isNotConfiguredText(err) {
+		return ErrReportingUnavailable{Transport: transport, Operation: operation, Err: err}
+	}
+	var rpcErr *MCPAdapterError
+	if deviceID != "" && errors.As(err, &rpcErr) && rpcErr.Code == mcpwire.NotFound {
+		return ErrReportNotCollected{Transport: transport, DeviceID: deviceID, Err: err}
+	}
+	return err
+}
 
 // reportingTool calls one reporting tool and decodes its result into out.
 // deviceID is the tool's device_id argument and, when set, lets a
@@ -490,7 +504,7 @@ func (a *MCPAdapter) reportingTool(ctx context.Context, tool, operation, deviceI
 	}
 	result, err := a.callTool(ctx, tool, args)
 	if err != nil {
-		return classifyReportingText(a.Name(), operation, deviceID, mcpNeverCollected, err)
+		return classifyMCPReportingError(a.Name(), operation, deviceID, err)
 	}
 	if err := json.Unmarshal(result, out); err != nil {
 		return &MCPAdapterError{Operation: operation, Message: "failed to parse response: " + err.Error()}

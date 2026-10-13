@@ -124,7 +124,7 @@ packet path, the section shape and the follow-up issues are in
 | Supervisor seam | `pkg/sdn/gateway/supervised.go` | `ServiceSupervisor`, the handler that relays a section to a child process, and `ServiceReports` |
 | Supervisor IPC | `pkg/sdn/gateway/ipc/` | gRPC over a Unix socket, `SO_PEERCRED` uid policy; the contract is `ipc/proto/ipc.proto` |
 | Deprecated mode compatibility | `pkg/sdn/gateway/compat.go` | Do not build on it |
-| Mode implementations | `pkg/sdn/gateway/modes/` — `edge.go`, `edge_p2p.go`, `edge_pxe.go`, `overlay.go`, `transit.go` | |
+| Overlay mode | `pkg/sdn/gateway/modes/` — `overlay.go`, `overlay_evpn.go`, `overlay_flows.go`, `overlay_flowtable.go` | The only mode handler. `transit` runs the `pkg/sdn/bgp` speaker from `handlers.go`; `edge` and `pxe` are refused |
 | Firewall, load balancer, perf | `pkg/sdn/gateway/services/{firewall,loadbalancer,perf}` | |
 | Control-plane liaison | `pkg/sdn/gateway/controlplane/` | State reporting and desired-config fetch |
 | Gateway state | `pkg/sdn/gateway/state/` | |
@@ -268,10 +268,7 @@ media is in [`docs/installer/cli.md`](../installer/cli.md).
    trusts that the proxy did its job, which is why the auth chain fails closed.
 4. **BGP peer → gateway.** A BGP session accepts routes from an external
    speaker. Prefix filtering is the control, and it is configuration.
-   `RouteSigningKey` in `pkg/sdn/gateway/modes/transit.go` is a single
-   in-process Ed25519 key whose signature `AnnouncePrefix` computes and
-   discards — nothing is attached to an announcement — so it is
-   experimental, not a control (epic #553, ruling R11).
+   No route is signed; route signing is a design (epic #553, ruling R11).
 5. **Management VPN.** (Design for the attested remote-access service: [`docs/vpn/`](../vpn/).) `ManagementVPNConfig` exists so administrators
    reach management endpoints through an authenticated tunnel rather than being
    dual-homed onto a data zone. Gateways should expose it by default. Owner
@@ -307,10 +304,10 @@ the refusal table. There is no third kind.
 | `tunnels` | `pkg/sdn/tunnel` manager, every configured tunnel ensured, rolled back on the first failure; `ipsec` and `wireguard` keys resolved through `HostRuntime.SecretResolver` | — |
 | `transit` (or a `bgp` section) | `pkg/sdn/bgp` speaker with secrets resolved through `HostRuntime.SecretResolver`, every configured neighbour added | — |
 | `proxy` | registered by `gatewayd serve` assembly (`proxysvc`), not by the table | — |
-| `overlay` | — | the overlay handler forwards over a flow-based VXLAN port ([engineering.md §5a](engineering.md#5a-handler-libraries-in-modes)), but the gateway overlay config has no VTEP or access-port fields to build it from and VTEP admission is not yet backed. The EVPN overlay is required and planned; lighting a public address block depends on it plus gateway HA (planned) |
-| `edge` | — | the edge constructor needs an IPv6 pool, ACME toggles and a FROST pool the runtime does not inject (#553) |
+| `overlay` | `modes.NewOverlayModeHandler` with runtime OVS/OpenFlow, IPAM fabric reservations, device lookup and attestation verdict reader | the overlay handler forwards over a flow-based VXLAN port ([engineering.md §5a](engineering.md#5a-the-overlay-mode-handler-in-modes)). The config schema carries the local VTEP, underlay, access port, overlay ASN, RR peers and verdict freshness window. Admission is backed by IPAM fabric allocations plus platform attestation verdicts; revoked or failed verdicts withdraw decap. `TerminalOverlay` hands the OpenFlow table defaults to the overlay handler. The EVPN overlay is required; lighting a public address block depends on it plus gateway HA (planned) |
+| `edge` | — | device onboarding verifies the TPM EK, quote and IDevID through the platform SDK; until it does, gatewayd admits no device (#553) |
 | `dhcp` | — | gatewayd has no IPAM allocator (#553) |
-| `pxe` | — | the PXE controller needs a serving interface, address and range the section does not carry; platformd's iPXE server provisions today (#553) |
+| `pxe` | — | a gateway PXE service is planned; platformd's iPXE server provisions today (#553) |
 | `management-vpn` | — | a design (`docs/vpn/`, #558) with no implementation |
 
 A `backedServiceHandler` builds its backend on `Start` and drops it on `Stop`,
@@ -369,8 +366,10 @@ OVSDB connection and owns the bridge. Until then `Apply` forwards only when
 `nat` or `load-balancer` is supervised, so today it reconciles in-process.
 
 A child hosts only its own process's services (`GatewayConfig.HostedServices`):
-it builds no OVS runtime unless it hosts a datapath service, and no trust
-resolver or proxy handler unless it hosts the proxy.
+it builds no OVS runtime unless it hosts a datapath service (the overlay
+included), dials platformd for overlay admission only when it hosts the
+overlay, and builds no trust resolver or proxy handler unless it hosts the
+proxy.
 
 The parent's telemetry snapshot does not lose what a child holds: its `bgp`
 section comes from the routing child's own snapshot, read over the control
@@ -426,7 +425,7 @@ It is deliberately not a `ServiceHandler`.
 |---|---|
 | Flows | table 0 → `goto_table:10`, table 10 → `goto_table:30`, table 20 → `goto_table:30`, table 30 → terminal; all **priority 0**, so a platformd flow in table 0 still wins its match and a service gate or divert still outranks the default. The table-20 flow is the miss for the conntrack gate every datapath service routes into: it belongs to the pipeline so that no service can forget it (NAT and NAT64 alone once dropped every frame they did not claim) or delete it from under another (#614) |
 | Cookie | `CookiePipeline` `0xF1BE0000…` under the gateway's `0xF1BE` owner prefix |
-| Terminal | `normal` by default — identical to the bridge's behaviour before the pipeline existed for traffic no service claims. `overlay` is refused (`ErrPipelineTerminalUnavailable`) until gatewayd can build the overlay handler: the overlay config has no VTEP or access port, so nothing would install the overlay tables. Owner design decision (2026-09-26): the overlay is required (#709) |
+| Terminal | `normal` by default — identical to the bridge's behaviour before the pipeline existed for traffic no service claims. `overlay` is runnable when the overlay service is enabled and the runtime injects OVS/OpenFlow, IPAM, device lookup and verdict dependencies; gatewayd then hands the overlapping table defaults to the overlay handler. Owner design decision (2026-09-26): the overlay is required (#709) |
 | `fail_mode` | held at **`secure`** while the pipeline is installed, restored on removal — a controller loss must not fall back to `NORMAL` around the firewall. On a bridge with no configured controller, Open vSwitch **flushes every flow** when `fail_mode` changes (`connmgr_set_fail_mode`), so the mode is set *before* the pipeline is installed and only when it differs; installing first left a secure bridge with no pipeline (#614, measured on OVS 3.5). A bridge provisioned `secure` — the mode `docs/sdn/cli.md` prescribes — is never flushed by gatewayd; one provisioned `standalone` loses every flow on it, platformd's included, when gatewayd starts and again when it stops |
 | Ownership | recorded in the bridge's `external_ids` (`tp-pipeline-owner=gatewayd:<id>`, `tp-pipeline-terminal`); a bridge another gateway holds is refused (`ErrPipelineOwned`); a crashed gateway's own stale record is reclaimed |
 | When | only when a datapath service (firewall, NAT, load balancer, overlay) is enabled and a runtime is injected; a proxy-only or telemetry-only gateway leaves the bridge untouched |

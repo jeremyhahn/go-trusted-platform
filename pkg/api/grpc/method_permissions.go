@@ -93,6 +93,8 @@ func buildGRPCMethodPermissions() map[string]string {
 		piv     = "piv"
 		fido2   = "fido2"
 		cer     = "ceremony"
+
+		attestation = "attestation"
 	)
 
 	scope := func(resource, action string) string {
@@ -126,6 +128,12 @@ func buildGRPCMethodPermissions() map[string]string {
 		"/platform.v1.VTPMService/ReadVTPMPCR":      scope(vtpm, read),
 		"/platform.v1.VTPMService/SealVTPM":         scope(vtpm, write),
 		"/platform.v1.VTPMService/UnsealVTPM":       scope(vtpm, read),
+
+		// ---------------------------------------------------------------------
+		// Attestation (AttestationService)
+		// ---------------------------------------------------------------------
+		"/platform.v1.AttestationService/StreamDeviceVerdicts": scope(attestation, read),
+		"/platform.v1.AttestationService/PollDeviceVerdicts":   scope(attestation, read),
 
 		// ---------------------------------------------------------------------
 		// DNS (DNSService)
@@ -254,8 +262,10 @@ func buildGRPCMethodPermissions() map[string]string {
 		// -----------------------------------------------------------------
 		// The snapshot is a read of what the datapath programmed: sessions,
 		// tunnels, uplink policy routes, filters and the base pipeline.
-		"/platform.v1.GatewayService/GetGatewaySnapshot":   scope(sdn, read),
-		"/platform.v1.GatewayService/ListGatewaySnapshots": scope(sdn, read),
+		"/platform.v1.GatewayService/GetGatewaySnapshot":       scope(sdn, read),
+		"/platform.v1.GatewayService/ListGatewaySnapshots":     scope(sdn, read),
+		"/platform.v1.GatewayService/GetGatewayAdmittedVTEP":   scope(sdn, read),
+		"/platform.v1.GatewayService/ListGatewayAdmittedVTEPs": scope(sdn, read),
 
 		// -----------------------------------------------------------------
 		// Gateway performance verification (GatewayService)

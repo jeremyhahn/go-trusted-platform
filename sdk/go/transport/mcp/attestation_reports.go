@@ -31,6 +31,7 @@ func init() {
 		platformv1.AttestationService_ListDeviceReports_FullMethodName:    "attestation_device_reports",
 		platformv1.AttestationService_RefreshDeviceReport_FullMethodName:  "attestation_device_refresh",
 		platformv1.AttestationService_DescribeCallerPolicy_FullMethodName: "attestation_caller_policy",
+		platformv1.AttestationService_PollDeviceVerdicts_FullMethodName:   "attestation_device_verdicts_poll",
 	} {
 		grpcMethodToMCPToolMap[method] = tool
 	}
@@ -39,6 +40,7 @@ func init() {
 		platformv1.AttestationService_ListDeviceReports_FullMethodName:    decodeDeviceReportsResult,
 		platformv1.AttestationService_RefreshDeviceReport_FullMethodName:  decodeDeviceRefreshResult,
 		platformv1.AttestationService_DescribeCallerPolicy_FullMethodName: decodeCallerPolicyResult,
+		platformv1.AttestationService_PollDeviceVerdicts_FullMethodName:   decodeDeviceVerdictsResult,
 	} {
 		mcpReplyDecoders[method] = decode
 	}
@@ -117,4 +119,15 @@ func decodeCallerPolicyResult(result interface{}, reply interface{}) error {
 	out.Policy = policy
 	out.Status = &platformv1.Status{Success: true}
 	return nil
+}
+
+// decodeDeviceVerdictsResult decodes one page of the device verdict feed
+// (#709), which the server tool renders in the proto's JSON names. The
+// StreamDeviceVerdicts stream long-polls it through pollstream.
+func decodeDeviceVerdictsResult(result interface{}, reply interface{}) error {
+	out, ok := reply.(*platformv1.PollDeviceVerdictsResponse)
+	if !ok {
+		return ErrUnexpectedReplyType{Method: platformv1.AttestationService_PollDeviceVerdicts_FullMethodName}
+	}
+	return decodeReportJSON(result, out)
 }

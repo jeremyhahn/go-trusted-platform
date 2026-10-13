@@ -19,11 +19,21 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/modes"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 )
 
 // errBoom is the sentinel failure injected by the fakes.
 var errBoom = errors.New("boom")
+
+// TestFlowTableAboveThePipeline pins that the perf table stays clear of the
+// gateway pipeline: a pipeline that grows into it would let a measurement
+// run program flows production traffic reaches.
+func TestFlowTableAboveThePipeline(t *testing.T) {
+	if FlowTable <= int(modes.TableLocalDelivery) {
+		t.Fatalf("FlowTable %d is inside the gateway pipeline (last table %d)", FlowTable, modes.TableLocalDelivery)
+	}
+}
 
 // fakeFlowClient implements FlowClient with programmable behavior.
 type fakeFlowClient struct {

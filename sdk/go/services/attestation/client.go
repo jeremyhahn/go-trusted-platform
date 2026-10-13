@@ -208,6 +208,24 @@ func (c *Client) DescribeCallerPolicy(ctx context.Context) (*platformv1.CallerPo
 	return resp.GetPolicy(), nil
 }
 
+// DeviceVerdictStream receives the device verdicts platformd records, in the
+// order it records them. Recv returns an error once the stream ends.
+type DeviceVerdictStream interface {
+	Recv() (*platformv1.DeviceVerdictEvent, error)
+}
+
+// StreamDeviceVerdicts follows every device verdict platformd records from
+// now on, until ctx ends. It is how an overlay gateway learns that a device
+// failed attestation, or passed again. The caller needs attestation:read,
+// and a caller acting for a tenant receives only its own devices' verdicts.
+func (c *Client) StreamDeviceVerdicts(ctx context.Context) (DeviceVerdictStream, error) {
+	stream, err := c.grpc.StreamDeviceVerdicts(ctx, &platformv1.StreamDeviceVerdictsRequest{})
+	if err != nil {
+		return nil, &ErrStreamDeviceVerdictsFailed{Cause: err}
+	}
+	return stream, nil
+}
+
 // isNeverCollected recognises the never-collected state, which every
 // transport answers as NotFound (MCP since #505 decodes its NotFound code to
 // the same status).

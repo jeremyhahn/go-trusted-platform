@@ -43,7 +43,8 @@ The reporting verbs work over the Unix socket as root on a node (no token; the
 socket is the credential) and over REST or gRPC with a context whose token
 carries the admin role (REST) or `attestation:read` / `attestation:write`
 (MCP). **QUIC does not carry them** (#386): `--transport quic` fails with
-`Unimplemented` rather than pretending.
+`Unimplemented` rather than pretending. `verdicts follow` is the exception: it
+works on every transport, QUIC included (§3.5).
 
 ---
 
@@ -170,7 +171,36 @@ list (`Invalid entries` names the offenders), no trust anchors, or
 `any-attested` on a node with no attested-peer evidence. `-o json|yaml` print
 the wire shape (`calleradmission.Description`) unchanged.
 
-### 3.5 Errors
+### 3.5 `platformctl attestation verdicts follow`
+
+Prints every device verdict platformd records **from now on**, one per line,
+until interrupted (Ctrl-C or SIGTERM end it cleanly, exit 0) or the stream
+ends. It is the operator's view of the feed an overlay gateway follows (#709);
+read `reports` for the current state, since nothing recorded before the follow
+started is replayed.
+
+```
+2026-10-09T12:00:00Z  device 9  serial SN-9  tenant t1  verified
+2026-10-09T12:00:01Z  device 12  serial SN-12  tenant t1  failed: PCR 7 does not match the baseline
+2026-10-09T12:00:02Z  device 15  serial -  tenant -  not verified: device has no attestation certificate on record
+```
+
+The labels are the reports' (§3.1): `failed` only for a cryptographic failure,
+`not verified` for a check that could not run. `-o json` prints one JSON object
+per verdict (a concatenated stream `jq` reads as is), `-o yaml` one YAML
+document per verdict, each with `event_id`, `recorded_at`, `device_id`,
+`tenant_id`, `host_id`, `serial`, `passed`, `cryptographic` and `reason`, all
+present even when empty or false.
+
+It works on **every** transport ([api.md](api.md) §5.5): gRPC and Unix stream;
+REST, QUIC, MCP and embedded long-poll under the same SDK call. A caller acting
+for a tenant sees only its own devices' verdicts; the platform tenant, the Unix
+socket and embedded see every tenant's. A follow that falls more than 256
+verdicts behind fails with `ErrFollowVerdictsFailed` (`ResourceExhausted`, or
+`429` over REST) rather than skipping any — start it again and read `reports`
+for what was missed.
+
+### 3.6 Errors
 
 Every failure is a typed error in `pkg/cli/commands/attestation/errors.go`:
 
@@ -179,11 +209,13 @@ Every failure is a typed error in `pkg/cli/commands/attestation/errors.go`:
 | `ErrInvalidDeviceID` | the argument is not a positive decimal integer; raised before connecting |
 | `ErrNeverCollected` | `reports get` on a device with no report (`NotFound`); not a verdict |
 | `ErrListReportsFailed`, `ErrGetReportFailed`, `ErrRefreshFailed`, `ErrDescribeCallersFailed` | the transport or server refused; the message carries the server's reason (admin role required, reporting not configured on this node, collector stopped, …) |
+| `ErrFollowVerdictsFailed` | `verdicts follow` could not open the feed, or the feed broke (missed verdicts, feed closed, permission denied); an interrupt is not an error |
 
 Nothing is printed on stdout when a verb fails, so `-o json` output is either
-the wire shape or absent.
+the wire shape or absent. `verdicts follow` is the exception by nature: the
+verdicts received before a failure have already been printed.
 
-### 3.6 Go SDK
+### 3.7 Go SDK
 
 The verbs are thin: `sdk/go/services/attestation.Client` gained
 `ListDeviceReports`, `GetDeviceReport`, `RefreshDeviceReport` and
@@ -197,6 +229,12 @@ adapter (`sdk/go/transport/mcp/attestation_reports.go`) maps them to the four
 `attestation_*` tools and does the same. Consumers that want the wire shape as
 a Go value convert with the CLI's `viewFromProto` pattern (the inverse of the
 daemon's `viewToProto`).
+
+`StreamDeviceVerdicts` is one call on every transport. gRPC and Unix carry the
+server stream; the REST, QUIC, MCP and embedded connections answer
+`NewStream` for it with `sdk/go/transport/pollstream`, which long-polls
+`PollDeviceVerdicts` with the reply's cursor and hands the verdicts to `Recv`
+in order ([api.md](api.md) §5.5).
 
 ---
 
@@ -293,8 +331,8 @@ local context on the daemon's socket, beside REST, gRPC, MCP and Unix
 non-result states onto one typed error — `ErrReportingUnavailable` (gRPC
 `FailedPrecondition`/`Unavailable`, REST 503, the "reporting service is not
 configured" text on MCP and the CLI) and `ErrReportNotCollected` (gRPC
-`NotFound`, REST 404, the never-collected text) — so the suite asserts states,
-not wire formats. It checks:
+`NotFound`, REST 404, MCP `-32005` `NotFound`, the never-collected text on the
+CLI) — so the suite asserts states, not wire formats. It checks:
 
 - `callers` always answers, and never describes a policy with no strategy, no
   trust anchor or an unparseable list as admitting anyone;

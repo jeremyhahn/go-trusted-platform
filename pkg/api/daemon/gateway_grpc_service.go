@@ -809,6 +809,7 @@ func ipamAllocationToProto(a *ipam.Allocation) *platformv1.IPAllocation {
 		PoolId:      a.PoolID,
 		DeviceId:    a.DeviceID,
 		Hostname:    a.Hostname,
+		Status:      string(a.Status),
 		AllocatedAt: timestamppb.New(a.AllocatedAt),
 		ExpiresAt:   expiresAt,
 	}

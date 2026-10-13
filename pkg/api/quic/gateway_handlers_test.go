@@ -255,6 +255,14 @@ func (s *testGatewayService) ListSnapshots(ctx context.Context) ([]*GatewaySnaps
 	return s.snapshotsResp, nil
 }
 
+func (s *testGatewayService) GetAdmittedVTEP(_ context.Context, _, _ string) (*quicwire.GatewayAdmittedVTEPInfo, error) {
+	return nil, ErrGatewayFeatureNotConfigured
+}
+
+func (s *testGatewayService) ListAdmittedVTEPs(_ context.Context, _ string) ([]*quicwire.GatewayAdmittedVTEPInfo, error) {
+	return nil, ErrGatewayFeatureNotConfigured
+}
+
 func (s *testGatewayService) SetMode(ctx context.Context, mode string) error {
 	s.lastMode = mode
 	if s.setModeErr != nil {

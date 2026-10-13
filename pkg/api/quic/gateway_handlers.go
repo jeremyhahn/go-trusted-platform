@@ -169,6 +169,10 @@ type GatewayServiceInterface interface {
 	// ListSnapshots returns every reported gateway's telemetry snapshot.
 	ListSnapshots(ctx context.Context) ([]*GatewaySnapshotInfo, error)
 
+	// Admitted VTEP operations read the overlay decap admission set.
+	GetAdmittedVTEP(ctx context.Context, gatewayID, vtep string) (*quicwire.GatewayAdmittedVTEPInfo, error)
+	ListAdmittedVTEPs(ctx context.Context, gatewayID string) ([]*quicwire.GatewayAdmittedVTEPInfo, error)
+
 	// Mode operations
 	SetMode(ctx context.Context, mode string) error
 
@@ -244,6 +248,7 @@ type GatewaySnapshotInfo struct {
 	Firewall     *SnapshotFirewallInfo     `codec:"firewall,omitempty"`
 	NAT          *SnapshotNATInfo          `codec:"nat,omitempty"`
 	Pipeline     *SnapshotPipelineInfo     `codec:"pipeline,omitempty"`
+	Overlay      *SnapshotOverlayInfo      `codec:"overlay,omitempty"`
 	Annotations  map[string]string         `codec:"annotations,omitempty"`
 }
 
@@ -372,6 +377,35 @@ type SnapshotPipelineInfo struct {
 	Owner     string `codec:"owner,omitempty"`
 	Terminal  string `codec:"terminal,omitempty"`
 	FailMode  string `codec:"fail_mode,omitempty"`
+}
+
+// SnapshotOverlayInfo describes the EVPN overlay service of a gateway snapshot.
+type SnapshotOverlayInfo struct {
+	Running                  bool                               `codec:"running"`
+	LocalVTEP                string                             `codec:"local_vtep,omitempty"`
+	VNICount                 uint32                             `codec:"vni_count,omitempty"`
+	RemoteVTEPCount          uint32                             `codec:"remote_vtep_count,omitempty"`
+	LocalMACCount            uint32                             `codec:"local_mac_count,omitempty"`
+	RemoteMACCount           uint32                             `codec:"remote_mac_count,omitempty"`
+	PrefixCount              uint32                             `codec:"prefix_count,omitempty"`
+	RefusedBindings          uint64                             `codec:"refused_bindings,omitempty"`
+	L3VNI                    uint32                             `codec:"l3_vni,omitempty"`
+	ARPSuppressionEnabled    bool                               `codec:"arp_suppression_enabled,omitempty"`
+	AnycastGatewayConfigured bool                               `codec:"anycast_gateway_configured,omitempty"`
+	StartedAt                int64                              `codec:"started_at,omitempty"`
+	UptimeSeconds            int64                              `codec:"uptime_seconds,omitempty"`
+	AdmittedVTEPs            []quicwire.GatewayAdmittedVTEPInfo `codec:"admitted_vteps,omitempty"`
+	NDCounters               SnapshotOverlayNDCounterInfo       `codec:"nd_counters"`
+}
+
+// SnapshotOverlayNDCounterInfo counts the overlay's neighbor discovery punts
+// and what became of them.
+type SnapshotOverlayNDCounterInfo struct {
+	Punted       uint64 `codec:"punted"`
+	Answered     uint64 `codec:"answered"`
+	MeterDropped uint64 `codec:"meter_dropped"`
+	QueueDropped uint64 `codec:"queue_dropped"`
+	FellThrough  uint64 `codec:"fell_through"`
 }
 
 // BGPStatusInfo contains BGP status information
@@ -668,6 +702,10 @@ func (h *GatewayHandler) HandleRequest(ctx context.Context, req *quicwire.Reques
 		return h.handleSnapshot(ctx, req)
 	case quicwire.OpGatewayListSnapshots:
 		return h.handleListSnapshots(ctx, req)
+	case quicwire.OpGatewayAdmittedVTEP:
+		return h.handleAdmittedVTEP(ctx, req)
+	case quicwire.OpGatewayListAdmittedVTEPs:
+		return h.handleListAdmittedVTEPs(ctx, req)
 	case quicwire.OpGatewayBGPStatus:
 		return h.handleBGPStatus(ctx, req)
 	case quicwire.OpGatewayBGPPeers:
@@ -1031,6 +1069,53 @@ func (h *GatewayHandler) handleListSnapshots(ctx context.Context, req *quicwire.
 		Count:     int32(len(snapshots)),
 		Timestamp: time.Now().Unix(),
 	})
+	if err != nil {
+		return h.errorResponse(quicwire.StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+	}
+	return &quicwire.Response{Status: quicwire.StatusOK, Payload: payload}
+}
+
+func (h *GatewayHandler) handleAdmittedVTEP(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	if h.gatewayService == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrGatewayServiceNotAvailable)
+	}
+
+	var vtepReq quicwire.GatewayAdmittedVTEPRequest
+	if err := quicwire.DecodePayload(req.Payload, &vtepReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
+	}
+	if vtepReq.VTEP == "" {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrGatewayMissingIPAddress)
+	}
+
+	vtep, err := h.gatewayService.GetAdmittedVTEP(ctx, vtepReq.GatewayID, vtepReq.VTEP)
+	if err != nil {
+		h.logger.Error(err, "failed to get gateway admitted VTEP")
+		return h.gatewayErrorResponse(err)
+	}
+	payload, err := quicwire.EncodePayload(&quicwire.GatewayAdmittedVTEPResponse{VTEP: vtep, Timestamp: time.Now().Unix()})
+	if err != nil {
+		return h.errorResponse(quicwire.StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+	}
+	return &quicwire.Response{Status: quicwire.StatusOK, Payload: payload}
+}
+
+func (h *GatewayHandler) handleListAdmittedVTEPs(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	if h.gatewayService == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrGatewayServiceNotAvailable)
+	}
+
+	var listReq quicwire.GatewayListAdmittedVTEPsRequest
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
+	}
+
+	vteps, err := h.gatewayService.ListAdmittedVTEPs(ctx, listReq.GatewayID)
+	if err != nil {
+		h.logger.Error(err, "failed to list gateway admitted VTEPs")
+		return h.gatewayErrorResponse(err)
+	}
+	payload, err := quicwire.EncodePayload(&quicwire.GatewayListAdmittedVTEPsResponse{VTEPs: vteps, Count: int32(len(vteps)), Timestamp: time.Now().Unix()})
 	if err != nil {
 		return h.errorResponse(quicwire.StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
 	}

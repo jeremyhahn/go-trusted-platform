@@ -41,6 +41,7 @@ import (
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/pollstream"
 )
 
 func init() {
@@ -55,6 +56,7 @@ type Adapter struct {
 	closed     atomic.Bool
 	tlsConfig  *tls.Config
 	token      atomic.Value // stores auth token as string
+	timeout    time.Duration
 }
 
 // Connect establishes a REST connection to the platform daemon.
@@ -99,6 +101,7 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 		httpClient: httpClient,
 		baseURL:    baseURL,
 		tlsConfig:  tlsConfig,
+		timeout:    timeout,
 	}
 	a.connected.Store(true)
 	if opts.BearerToken != "" {
@@ -633,9 +636,10 @@ func encodePathField(v protoreflect.Value, fd protoreflect.FieldDescriptor) (str
 	}
 }
 
-// NewStream creates a new stream (not fully supported for REST).
+// NewStream serves a server-streaming method by long-polling its unary
+// twin; a method without one is Unimplemented.
 func (c *restClientConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-	return nil, status.Error(codes.Unimplemented, "streaming not supported over REST transport")
+	return pollstream.NewStream(ctx, c, method, c.adapter.timeout, opts...)
 }
 
 // pathParam describes a single placeholder substitution in a templated
@@ -703,6 +707,21 @@ var templatedRouteTable = map[string]templatedRoute{
 		path:        "/api/v1/tpm/srk",
 		method:      http.MethodGet,
 		queryParams: []queryParam{{name: "handle", field: "handle"}},
+	},
+
+	// Admitted overlay VTEPs — server registrations in
+	// pkg/api/rest/gateway_handlers.go::RegisterRoutes. An empty gateway_id
+	// is omitted, so the server answers for this node's own gateway.
+	"/platform.v1.GatewayService/ListGatewayAdmittedVTEPs": {
+		path:        "/api/v1/sdn/gateway/overlay/vteps",
+		method:      http.MethodGet,
+		queryParams: []queryParam{{name: "gateway_id", field: "gateway_id"}},
+	},
+	"/platform.v1.GatewayService/GetGatewayAdmittedVTEP": {
+		path:        "/api/v1/sdn/gateway/overlay/vteps/{vtep}",
+		method:      http.MethodGet,
+		pathParams:  []pathParam{{placeholder: "{vtep}", field: "vtep"}},
+		queryParams: []queryParam{{name: "gateway_id", field: "gateway_id"}},
 	},
 
 	"/platform.v1.GatewayService/GetPerfDatapath": {

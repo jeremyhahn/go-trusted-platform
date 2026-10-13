@@ -24,6 +24,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict/feed"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -115,6 +116,11 @@ type AttestationServiceServer struct {
 	// SetReporting is called; the report RPCs answer FailedPrecondition
 	// until then.
 	reporting atomic.Pointer[reportingHandles]
+
+	// verdicts is the feed StreamDeviceVerdicts and PollDeviceVerdicts serve
+	// from. Nil until SetVerdictFeed is called; both answer
+	// FailedPrecondition until then.
+	verdicts atomic.Pointer[feed.Feed]
 }
 
 // NewAttestationServiceServer creates a new AttestationServiceServer.

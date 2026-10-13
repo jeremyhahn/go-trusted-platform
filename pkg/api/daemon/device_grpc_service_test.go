@@ -1379,10 +1379,12 @@ func TestDeviceGRPCService_deviceToPb_WithAllFields(t *testing.T) {
 		Model:      "Model123",
 		Serial:     "Serial456",
 		SigningPub: "signing-pub",
+		Hostname:   "node-456",
 	}
 
 	result := svc.deviceToPb(device)
 	require.NotNil(t, result)
+	assert.Equal(t, "node-456", result.GetHostname())
 	assert.Equal(t, uint64(456), result.Id)
 	assert.Equal(t, "attest-pub", result.AttestPub)
 	assert.Equal(t, "ek-cert", result.EkCert)

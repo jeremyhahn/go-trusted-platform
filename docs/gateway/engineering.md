@@ -40,8 +40,20 @@ section from neither (see *Supervised handlers* below):
 
 | Table | Type | `Start` | `IsActive` / `Health` |
 |---|---|---|---|
-| `serviceBuilders` (`firewall`, `nat`, `load-balancer`, `hostfw`, `tunnels`, `transit`) | `backedServiceHandler` | builds the backend; a build or start failure returns the backend's error and leaves nothing registered | the built backend's own `Active` / `Healthy` |
-| `serviceRefusals` (`overlay`, `edge`, `dhcp`, `pxe`, `management-vpn`) | `refusedServiceHandler` | `ErrServiceUnavailable{Service, Reason}` | `false` / `ErrServiceUnavailable` |
+| `serviceBuilders` (`overlay`, `firewall`, `nat`, `load-balancer`, `hostfw`, `tunnels`, `transit`) | `backedServiceHandler` | builds the backend; a build or start failure returns the backend's error and leaves nothing registered | the built backend's own `Active` / `Healthy` |
+| `serviceRefusals` (`edge`, `dhcp`, `pxe`, `management-vpn`) | `refusedServiceHandler` | `ErrServiceUnavailable{Service, Reason}` | `false` / `ErrServiceUnavailable` |
+
+Every refusal reason says the service is **planned**, cites no issue number
+and names no constructor — the operator reads it in `ErrServiceUnavailable`
+(`TestEnabledServices_EveryEntryIsBuiltOrRefused`).
+
+**No gateway path accepts a device's TPM EK, quote or IDevID.** The `edge`
+section is refused. Its former handler (`modes.NewEdgeModeHandler`) accepted
+any non-empty EK and quote and issued no real IDevID; with no production
+caller it was deleted, along with `DDOSProtection` (a `Start`/`Stop` flag),
+`PerPeerRateLimiter`, the PXE controller and `modes.TransitModeHandler`
+(#709). Device onboarding returns as a builder that verifies through the
+platform SDK — never as a local check.
 
 `proxy` is registered by `gatewayd serve` assembly through
 `RegisterServiceHandler`, which appends to the same start order. Adding a
@@ -55,9 +67,10 @@ start before transit so BGP sessions have their interfaces; a refused section
 fails startup before any datapath service has to be rolled back for it.
 
 Owner design decision (2026-09-26): the EVPN `overlay` service is required, not
-optional; it is on the roadmap as #709, and lighting a public address block
-depends on it plus gateway HA (#596, #710). Until #709 lands it stays in
-`serviceRefusals`.
+optional. Gatewayd now builds it from `ServiceOverlay` when the host runtime
+injects OVS/OpenFlow, IPAM fabric reservations, platform device lookup and the
+attestation verdict reader. Lighting a public address block still depends on it
+plus gateway HA (#596, #710).
 
 `HostRuntime` (`runtime.go`, `GatewayConfig.Host`, never from YAML) carries what
 the builders need beyond OVS:
@@ -97,6 +110,7 @@ two consumers.
 | Errors name the reference, never the material | every error in `secrets/errors.go` |
 | The SDK session is verified against the platform anchor; a `secret-store:` without `platform-ca-file:` is `secrets.ErrTrustRequired` at assembly, not a dial failure later | `buildSecretResolver` |
 | One platform anchor and one trust resolver serve the whole daemon. The anchor verifies platform services — the store's session, platformd grpc dials, the proxy's client CAs and `trust-class: platform` backends, the control-plane reporter; the resolver verifies what the platform did not issue (`trust-class: bmc`) | `BuildGateway` → `buildPlatformAnchor`, `buildTrustResolver` |
+| Every grpc dial to platformd — proxy sync, the attestation gate, the overlay's IPAM, device, verdict and verdict-stream reads — presents a client identity, because platformd's gRPC listener refuses unauthenticated callers: `proxy.platformd.cert-file`/`key-file` for an mTLS platformd, `token-file` for a token platformd. Neither is `proxysvc.ErrConfigInvalid` at assembly; an unreadable certificate or an empty token is `proxysvc.ErrPlatformdIdentityLoadFailed`. The files are re-read on every dial | `platformdOptions`, `PlatformdConfig.Validate` |
 | gatewayd runs no CA and holds no IDevID, so its anchor is `trust.FileAnchorSource` over the top-level `platform-ca-file:` — the platform CA bundle provisioning projects onto the node, re-read at every verification | `buildPlatformAnchor` |
 | A class listing `tofu` gets a **file-backed** pin store at `<--data-dir>/trust/tofu-pins`, created 0700. tofu only means anything if the pin outlives the process, and the shipped templates say it "captures and PERSISTS the pin itself"; an in-memory store would re-trust every BMC after a restart. gatewayd deliberately does NOT reach the platform's pin store for this — BMC trust must not depend on the control plane being up | `buildTrustResolver` → `newGatewayTOFUPinStore` |
 | No `--data-dir` while a class lists `tofu` is `ErrTOFUPinDirUnset` at assembly, not a silent downgrade | `newGatewayTOFUPinStore` |
@@ -153,7 +167,7 @@ new code uses service sections.
 | Package | Key files | Role |
 |---|---|---|
 | `pkg/sdn/gateway` | `node.go`, `types.go`, `runtime.go`, `pipeline.go`, `zone_service.go` | Node model, service registry, runtime lifecycle, the base OpenFlow pipeline (`EnsurePipeline` / `RemovePipeline` / `BasePipelineRules` / `ReadPipelineOwner`, #567), zones |
-| `pkg/sdn/gateway/modes` | `edge.go`, `edge_p2p.go`, `edge_pxe.go`, `overlay.go`, `transit.go` | Handler libraries named after the deprecated modes. **No production code constructs any of them**; only tests do. See [§5a](#5a-handler-libraries-in-modes) |
+| `pkg/sdn/gateway/modes` | `overlay.go`, `overlay_evpn.go`, `overlay_flows.go`, `overlay_flowtable.go` | The EVPN overlay mode handler — the package's only handler. See [§5a](#5a-the-overlay-mode-handler-in-modes) |
 | `pkg/sdn/gateway/services` | `firewall/`, `loadbalancer/`, `perf/`, `hostfw/` | Service implementations; `hostfw` is the nftables host packet filter (`Ruleset`, `Render`, `Service`, `NetlinkApplier`, `ListenerInventory`) |
 | `pkg/sdn/gateway/controlplane` | `reporter.go`, `reconciler.go`, `config.go` | Reports state up, fetches and applies desired config down; `gatewayd serve` starts both loops when the `control-plane:` section is enabled |
 | `pkg/sdn/gateway/state` | | Local gateway state |
@@ -177,7 +191,7 @@ and `Gateway.Stop` the second as `ErrShutdownFailed{Phase: "pipeline"}`.
 
 ### Gateway errors (`pkg/sdn/gateway/errors.go`)
 
-Typed structs, twenty of them. Grouped by what they tell you:
+Typed structs, grouped by what they tell you:
 
 **Service lifecycle:** `ErrServiceStartFailed`, `ErrServiceStopFailed`,
 `ErrServiceAlreadyActive`, `ErrServiceNotActive`, `ErrServiceNotFound`,
@@ -189,10 +203,6 @@ restart budget; it unwraps to the supervisor's own error).
 `ErrIPPoolOperationFailed`, `ErrGatewayOperationFailed`, `ErrHealthCheckFailed`,
 `ErrOnboardingFailed`, `ErrRequirementsNotMet`, `ErrContextCanceled`,
 `ErrTimeout`.
-
-**Peer admission:** `ErrReputationTooLow`, `ErrAgeTooYoung`, `ErrUptimeTooLow`.
-These three are reputation-gate errors for peer admission — they belong to the
-edge/P2P path and will only fire where that is enabled.
 
 **`ErrServiceAlreadyActive` and `ErrServiceNotActive` are both real errors.**
 Starting a running service and stopping a stopped one are both bugs in the
@@ -273,6 +283,7 @@ Gateway-side, in `pkg/sdn/config.go`:
 | Type | Keys | Notes |
 |---|---|---|
 | `GatewayConfig` | `enabled` | Master switch |
+| `OverlayServiceConfig` | `enabled`, `local-vtep`, `underlay-interface`, `underlay-mtu`, `access-port`, `overlay-asn`, `rr-peers`, `vxlan-port`, `vnis`, `default-vni`, `max-vnis`, `verdict-max-age`, `verdict-clock-skew`, `admission-sweep-interval` | EVPN/VXLAN VTEP settings. `overlay-asn` must be a private 2-octet ASN (64512-65534). `vnis` (at least one, at most `max-vnis`) lists each L2VNI (1-16777215) with the access-port VLAN (1-4094) that carries it; no VNI or VLAN may repeat, and `default-vni` must be one of them. Start joins every one before the overlay counts as running, and it is healthy only while it carries all of them. The overlay's EVPN speaker is outbound-only: it dials each `rr-peers` entry from `local-vtep` and opens no listener beside the transit speaker on TCP 179, so a `passive` RR peer is refused. Peer policy is RFC 8212 reject-by-default, so an `rr-peers` entry whose `policy.import-route-targets` or `policy.export-route-targets` is empty gets, in that direction, the auto-derived route target of every configured VNI (`overlay-asn:` type 1, domain 0, VNI; RFC 8365 §5.1.2.1); an allowlist the operator wrote is kept as written. `verdict-max-age` (15m) bounds the age of the signed attestation verdict that admits a remote VTEP, `verdict-clock-skew` (30s) how far ahead of the gateway's clock that verdict may be dated, and `admission-sweep-interval` (30s) how often installed VTEPs are re-admitted; half of it bounds the platformd reads behind one sweep or one admission decision. Enabling the overlay beside the firewall, NAT or load balancer is refused ([§5a, In gatewayd](#in-gatewayd)). |
 | (transit) | none | Transit is the environment's x00 zone: its VLAN and subnet come from `sdn.environment` like every zone's, and transit point-to-point links take `/31`s from the `tunnel-p2p` IPAM range ([`../architecture/reference-network.md`](../architecture/reference-network.md)). There is no transit section |
 | `ManagementVPNConfig` | `enabled`, `type` (only `wireguard` is defined), `allow_to` | Administrators reach management endpoints through this tunnel so operator workstations are **never dual-homed onto a data zone**. Gateways should expose it by default. The section is refused today (#558, [`docs/vpn/`](../vpn/)); owner design decision (2026-09-26): IPsec in FIPS builds, WireGuard only in non-FIPS builds |
 
@@ -319,11 +330,16 @@ subnet / zone bindings that feed the per-zone network summaries).
 Groups, and — via `policy.NewOVSFlowController` — Controller dependencies),
 the zone/network provider closures, and a conntrack `ct.ZoneAllocator`,
 then injects the result as `GatewayConfig.Runtime` before `NewGateway`.
+When `overlay:` is enabled, assembly also injects the overlay OpenFlow client,
+IPAM fabric reservation reader, device lookup, attestation verdict reader and
+the platform SDK connection that owns those readers. Missing overlay injection
+fails closed as `ErrRuntimeMissing`, not as an admitted tunnel.
 The runtime is assembled **only when a datapath service is enabled** — a
 proxy-only gatewayd never dials OVSDB even with an `sdn:` section present
 — the OVSDB dial is bounded by a 30s timeout, and the runtime owns the
 OVSDB connection: `GatewayRuntime.Close` releases it on every assembly
-error path and at daemon shutdown. All five config sections decode with
+error path and at daemon shutdown, including the overlay platform and OpenFlow
+clients when they were opened. All five config sections decode with
 the TextUnmarshaler hook set, so `netip.Prefix`/`netip.Addr` fields
 (`networks[].subnet`, IPAM addresses) parse from plain YAML strings.
 
@@ -1008,7 +1024,11 @@ in-process.
 `Hosts(service)` gates handler registration, the OVS runtime (built only when
 a hosted service is a datapath service, so a parser child never opens OVSDB)
 and the trust resolver and proxy handler (built only when the proxy is
-hosted). Empty means every service, which is the supervisor's own case, so a
+hosted). The overlay is a datapath service like the others: `runs` (enabled
+in the shared configuration **and** hosted here) is the one check behind the
+runtime decision, the zone-matrix preflight, the overlay OpenFlow client and
+the platformd dial for overlay admission, so the routing child of an overlay
+gateway opens no OVSDB or OpenFlow connection and dials nothing (#765). Empty means every service, which is the supervisor's own case, so a
 child whose configuration enables none of its services stops with
 `ErrProcessHostsNothing` instead of hosting everything.
 
@@ -1359,17 +1379,19 @@ exchange through a VIP, that a backend stays reachable directly on its service
 port, a hairpin handshake in which the backend sees the VIP as its peer, and
 distribution, stickiness, prober-driven failover and fail-closed behaviour.
 
-## 5a. Handler libraries in `modes/`
+## 5a. The overlay mode handler in `modes/`
 
-`pkg/sdn/gateway/modes` holds three handlers named after the deprecated
-modes: `OverlayModeHandler`, `EdgeModeHandler` and `TransitModeHandler`.
-**None of them is constructed by production code.** The `overlay` and `edge`
-sections are refused at start ([architecture.md](architecture.md#a-service-section-is-a-running-backend-or-a-refused-start)),
-and the `transit` section is built from the `pkg/sdn/bgp` speaker, not from
-`TransitModeHandler` (`buildTransit`, `handlers.go`). They are library code
-with unit tests. They are documented here so that nobody mistakes them for
-the gateway's model, and so the overlay design survives until the `overlay`
-section is wired (planned).
+`pkg/sdn/gateway/modes` holds one handler, `OverlayModeHandler`, and gatewayd
+constructs it for the `overlay` section ([In gatewayd](#in-gatewayd)). The
+handlers named after the other deprecated modes are gone (#709):
+`EdgeModeHandler` accepted any non-empty TPM EK and quote and issued no real
+IDevID, `DDOSProtection` only flipped a running flag, and neither they, the PXE
+controller nor `TransitModeHandler` had a production caller. The `edge` and
+`pxe` sections are refused at start
+([architecture.md](architecture.md#a-service-section-is-a-running-backend-or-a-refused-start)),
+and the `transit` section is built from the `pkg/sdn/bgp` speaker
+(`buildTransit`, `handlers.go`). The P2P trusted network the edge handler
+anticipated is planned, not implemented.
 
 ### The overlay handler (`OverlayModeHandler`)
 
@@ -1407,7 +1429,7 @@ underlay MTU below `vxlan.MinimumUnderlayMTU`, the 9000-byte
 |---|---|---|
 | 0 | Ingress | everything → 10 |
 | 10 | VXLAN decap | access ingress (VLAN → VNI); decap authorisation; every other tunnelled frame dropped |
-| 20–29 | Services | firewall, NAT, load balancer (gatewayd services); miss → 30 |
+| 20–29 | Services | NAT64 (firewall, NAT and load balancer are refused beside the overlay); miss → 30 |
 | 30 | MAC | anycast MAC from the access port, or router MAC on the L3VNI → 50; anycast MAC from a VTEP → drop; known MAC → its VTEP or 70; miss → 40 |
 | 40 | ARP / ND | ARP replies in the switch; ND punts to the controller ([ND suppression](#nd-suppression)); miss → 60 |
 | 50 | L3 | host and prefix routes (symmetric IRB); miss → drop |
@@ -1434,6 +1456,15 @@ carry the VNI; a refusal leaves the route uninstalled and is returned as
 `ErrVTEPOperationFailed{Operation: "admit"}`. The admitter is required with
 EVPN: a config with `EVPNConfig` and no `Admitter` is refused with
 `ErrAdmitterNil`, so no route is ever installed unvetted.
+
+`RevokeVTEP` withdraws every route a VTEP has installed through the same
+route handlers an EVPN withdrawal uses. It also bumps the VTEP's revocation
+epoch under the handler lock; a route handler reads the epoch before it asks
+the admitter and installs only while it is unchanged. A route admitted just
+before a revocation therefore fails with `ErrVTEPRevoked` instead of
+re-installing the decap the revocation removed. A withdrawal the switch
+refuses does not stop the others: every route is tried and the failures are
+joined.
 
 A Type-2 route may not claim an address this VTEP answers for, because its ARP
 reply and host route would share a flow identity with the gateway's or a local
@@ -1685,38 +1716,272 @@ held rather than deleting the flow.
 | `L3VNI` | the IP-VRF of symmetric IRB; needs the anycast gateway and `EVPNConfig.RouterMAC` |
 | `Admitter` | vets remote VTEPs; required with `EVPNConfig` (`ErrAdmitterNil`) |
 
-#### Why gatewayd refuses `overlay` today
+#### In gatewayd
 
-gatewayd refuses `ServiceOverlay`: its `overlay:` config section has no VTEP
-or access-port fields to build the handler from, and VTEP admission is not yet
-backed by anything. Wiring it is planned. There is also a pipeline conflict to
-resolve first: the overlay's base flows (the table misses of 0, 10, 20 and 30)
-have the same table, priority and match as gatewayd's own pipeline flows, so
-installing them replaces gatewayd's and the overlay's flush then removes them.
-Running both on one bridge needs the gatewayd pipeline to hand those tables to
-the overlay first.
+The `gateway.overlay` section runs this handler in gatewayd. It carries the
+VTEP address, underlay interface/MTU, access port, overlay ASN, RR peers and
+the admission settings below. The OpenFlow table hand-off goes through
+`TerminalOverlay`: gatewayd records bridge ownership and secure fail-mode but
+installs no pipeline-cookie defaults, so the overlay handler is the only owner
+of the table-0, 10, 20, 30, 40, 50, 60 and 70 miss entries.
 
-### The edge and transit handlers
+With RR peers the overlay runs its own BGP speaker (the overlay ASN, the
+l2vpn-evpn family). It is **outbound-only** (`bgp.BGPConfig.OutboundOnly`):
+it opens no listener and dials each route reflector from `local-vtep`
+(`SessionSource`), so the route reflectors must know the gateway by that
+address and must not wait to be dialled — they are passive towards it. A
+gateway with a transit `bgp:` section already has a speaker on TCP 179, and a
+second listener on the VTEP address failed the overlay's start with "address
+in use". The two speakers cannot be one: they run different ASNs and address
+families. An RR peer marked `passive` is refused at validation
+(`ErrOverlayConfigInvalid{Field: "rr-peers"}`), since nothing would accept
+its session.
 
-`EdgeModeHandler` (`modes/edge.go`; `modes/edge_p2p.go` under the
-`platform_p2p` build tag; `modes/edge_pxe.go`) and `TransitModeHandler`
-(`modes/transit.go`) are unwired library code. Do not read their features as
-gateway capabilities:
+Each RR peer's policy is RFC 8212 reject-by-default: an l2vpn-evpn route
+crosses the session only if it carries a route target on that direction's
+allowlist. An RR peer configured with no `import-route-targets` or
+`export-route-targets` gets, in that direction, the auto-derived route
+target of every configured VNI (RFC 8365 §5.1.2.1: the overlay ASN, type 1,
+domain 0, the VNI). Without that default the session established and carried
+no Type-2 or Type-3 route at all. An allowlist the operator wrote is kept.
 
-- **Edge.** IPv6 address pool and leases, per-peer rate limiting, and — only
-  under `platform_p2p` — device onboarding and DHT bootstrap over libp2p.
-  Without the tag, `OnboardDevice` and `BootstrapDHT` return
-  `ErrP2PNotEnabled`. With it, onboarding's TPM steps are placeholders:
-  `validateTPMEK` and `verifyTPMQuote` accept any non-empty input and
-  `issueIDevID` returns no certificate. The `DDOSProtection` type only flips a
-  running flag. The `edge` section is refused at start.
-- **Transit.** Prefix announcement over a BGP manager, an RPKI validator,
-  route-flap dampening and per-route signing (`RouteSigningKey`,
-  `SignRoute` / `VerifyRouteSignature`). The `transit` section does not use
-  any of it: `buildTransit` drives the `pkg/sdn/bgp` speaker directly.
+The overlay is refused beside the firewall, NAT or load balancer
+(`ErrOverlayServiceConflict`). Those services lay their flows out for the
+NORMAL terminal (NAT, for one, installs a table-10 miss), and under this
+pipeline the table-10 miss is what drops tunnelled frames from unadmitted
+VTEPs. NAT64 hands off through tables 20-29 and may run beside it.
 
-The P2P trusted network these handlers anticipate is planned, not
-implemented.
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `overlay-asn` | required | private 2-octet ASN (64512-65534); the auto-derived route targets carry it in a 2-octet field |
+| `vnis` | required | the L2VNIs joined at start: each `vni` (1-16777215) with the access-port `vlan` (1-4094) that carries it. At least one, at most `max-vnis`; no VNI or VLAN repeats |
+| `default-vni` | none | must be one of `vnis` |
+| `verdict-max-age` | 15m | oldest attestation verdict that still admits a VTEP |
+| `verdict-clock-skew` | 30s | how far past the gateway's clock a verdict's attestation time may lie |
+| `admission-sweep-interval` | 30s | period of the re-admission sweep; half of it bounds the platformd reads of one sweep, or of one admission decision |
+
+A field that fails validation is reported as `ErrOverlayConfigInvalid`, naming
+the YAML key.
+
+Start joins every entry of `vnis` (`AddVNI`, which with RR peers also joins it
+in EVPN) before the service counts as running. A join that fails stops the
+handler and the speaker again and fails the start with the join's error, so
+nothing is left half-running. The service is healthy only while the handler
+runs and carries every configured VNI: a running handler with no VNI forwards
+nothing, and used to report healthy anyway.
+
+#### VTEP admission
+
+`gateway.VTEPAdmitter` decides whether a remote VTEP may hold decap state. In
+order:
+
+1. The VTEP address is a fabric-zone IPAM allocation, and the allocation names
+   a numeric device ID.
+2. The platform holds that device.
+3. The device's latest recorded verdict passed against a signed baseline.
+4. The verdict's attestation time is set, at most `verdict-clock-skew` ahead
+   of the gateway's clock, and at most `verdict-max-age` old. A verdict without
+   an attestation time is refused, not dated by when it was recorded.
+5. The verdict names the device's serial whenever the device record has one.
+
+A missing record (allocation, device or verdict) is a denial. Any other read
+error is an outage (`ErrOverlayAdmissionUnavailable`). The route is refused
+for now, but the error is not a judgement on the VTEP.
+
+gatewayd reads all three records from platformd over the SDK. EVPN hands
+routes to handlers one at a time, so the fabric allocations are kept in an
+index keyed by address, and a route for an indexed VTEP makes no IPAM call.
+An address missing from the index makes gatewayd list the fabric pools again.
+Concurrent misses share one listing. Each sweep refreshes the index, so a
+released allocation leaves it within one interval. A failed listing keeps the
+previous index.
+
+Each listed allocation carries its IPAM status (`IPAllocation.status`), and
+the index keeps it as listed. platformd lists only active and reserved
+allocations; an allocation that is not active is refused (`allocation is not
+active`). The status is never assumed: IPAM expiry for inactivity frees the
+address but leaves `expires_at` zero, so without the status an expired
+allocation would look live (#765). A listed allocation with a missing or
+unknown status, or an address that does not parse, fails the listing
+(`ErrOverlayIPAMAllocation`), which admission treats as an outage.
+
+The index can still hold an address that IPAM has since given to another
+device. So a route admission that would newly admit a VTEP, or admit it for a
+different device than before, refreshes the index first. It then runs
+admission again, so the address is judged by the device that holds it now. If
+that refresh fails, the route is refused as an outage. Two cases need no
+refresh: a denial (refusing on a stale allocation fails closed, and the sweep
+judges every refused VTEP again) and a route from a VTEP already admitted for
+the same device, while the latest index refresh succeeded. After a failed
+refresh that route is confirmed too, so it cannot renew the admission from
+an allocation nobody could re-validate. A VTEP that is already installed when its address moves keeps
+its decap state until the next sweep reads the new allocation. The verdict's
+attestation time is the report's `attested_at` and nothing else; when the
+report was collected or served is not used.
+
+#### Re-admission sweep
+
+Every `admission-sweep-interval` the sweep reads the handler's installed set
+(`InstalledVTEPs`: every remote VTEP with flood-list, host or prefix state)
+and runs admission again for each VTEP. Policy does not depend on the VNI, so
+one decision covers all of a VTEP's VNIs. A denial revokes the VTEP
+(`RevokeVTEP`), so a verdict that ages past `verdict-max-age` or turns failed,
+cryptographically or not, withdraws decap within one interval. An outage keeps
+the VTEP only while its last admitting verdict is still within
+`verdict-max-age`; after that the VTEP is revoked. A failed index refresh is
+an outage of the same kind, even when the device and verdict reads succeed:
+a passing verdict read against the previous index renews nothing, because
+that index may name a device that no longer holds the address. The VTEP
+keeps the expiry of its last admission made on a successful listing, for the
+same device, and is revoked when it passes, however fresh its newer verdicts
+are. The first sweep whose refresh succeeds judges it again: still owned, it
+is admitted on its new verdict; reassigned, it is judged by its new holder.
+A revocation that fails
+does not stop the sweep: every failure is joined into the sweep's error and
+logged.
+
+The sweep's platformd reads share one deadline, half of
+`admission-sweep-interval`. They are the index refresh and every allocation,
+device and verdict read, the reads of the replays below included. A platformd
+that accepts a gRPC or Unix call and never answers fails the waiting read at
+that deadline, and every later read of the sweep at once. Each is an outage,
+so the outage rules above decide every VTEP, and the sweep ends before the
+next tick. Revocation is local and does not run under the deadline: while
+platformd hangs, a VTEP whose admitting verdict has expired is still withdrawn
+within one interval. Without the bound, one unanswered read held the sweep for
+good: no later sweep ran, and installed VTEPs kept decap after their verdicts
+expired. A route admission bounds its own reads by the same amount.
+
+The sweep then runs admission for every refused VTEP (`RefusedVTEPs`: each
+remote VTEP a route was refused or revoked from that the EVPN manager still
+holds routes for) and replays the routes of each one it now admits. BGP does
+not send an unchanged route again, so a route refused before its device had a
+passing verdict is installed only by a replay. A replay installs new decap
+state, so it needs a fresh listing: a sweep whose index refresh failed
+replays nothing, and the refused VTEPs wait for a sweep that refreshes. The
+same holds for a passed verdict on the stream (below): it refreshes the index
+before it replays, and replays nothing if that fails. Without the gate, a VTEP
+both installed and refused was judged on the stale index, remembered as
+admitted, and its replayed routes then skipped the confirming refresh.
+
+`ListAdmittedVTEPs` reports this installed set, with the verdict behind each
+admission.
+
+#### Replaying refused routes
+
+The overlay handler marks a VTEP refused whenever admission refuses one of its
+routes, a revocation lands during a route's admission, or the VTEP is revoked.
+`ReplayVTEP` hands the routes the EVPN manager holds from that VTEP (its IMET
+and prefix routes, and each MAC route at the VTEP the MAC is active at) back
+through the same route handlers, which run admission again. The replay holds
+the EVPN manager's notification lock, as every route change does, so a
+withdrawal received meanwhile is never undone by a replay of the route it
+withdrew. A replay that fails leaves the VTEP refused for the next one. A
+refused VTEP whose routes have all been withdrawn is forgotten.
+
+#### Revocation on a failed verdict
+
+gatewayd does not wait for the sweep when a device's attestation fails. It
+follows platformd's device verdict stream
+(`AttestationService.StreamDeviceVerdicts`, over the same gRPC or Unix
+connection it reads the records on), which carries every verdict platformd
+records (see [Device verdict events](../attestation/engineering.md#device-verdict-events)).
+gatewayd authenticates by its Unix-socket peer or, over gRPC, by the client
+identity `proxy.platformd` configures (an mTLS certificate or a token file,
+[§1](#1-service-sections--the-configuration-model)). A Unix-socket peer or a
+certificate sees every tenant's devices; a tenant's token sees only that
+tenant's.
+A failed verdict, cryptographic or an absence of evidence, makes gatewayd
+revoke every VTEP of the device at once. The VTEPs it admitted for the device
+go first, before the follower takes the next verdict; they need no platformd
+read. The device's other fabric allocations, such as VTEPs admitted before
+gatewayd restarted, come from an IPAM listing that runs beside the follower, so
+an IPAM that is slow to answer delays no other device's withdrawal. A listing
+ends with the stream it came from; the follower waits for its listings before
+it returns, and the held failure (below) leaves anything a cut-off listing did
+not reach to the sweep. An allocation admitted again while its listing ran is
+kept only when that admission's verdict was recorded after the failure;
+anything else is withdrawn.
+`VTEPAdmitter.RevokeDevice` does both steps in order for a caller that waits,
+keeping only allocations admitted on a verdict recorded after it began. A
+passed verdict replays every refused VTEP among the device's fabric
+allocations that admission now lets in, so a device attested after its routes
+arrived is brought up without waiting for the sweep. The admitter reads the
+verdict back from platformd rather than trusting the event, so a passing event
+whose record is not yet readable replays nothing and the sweep brings the
+device up instead. The follower bounds its platformd reads like a route
+admission: a failed verdict's allocation listing, and a passed verdict's
+refresh, listing and replays together. A read past the deadline is an outage.
+The revocations never wait on it, so the VTEPs gatewayd admitted for a failed
+device are withdrawn even while platformd hangs.
+
+platformd's report cache records every verdict, from the collector or from
+`AttestDevice`, so the report gatewayd reads is the device's latest recorded
+verdict, and it is persisted
+([Device verdict events](../attestation/engineering.md#device-verdict-events)).
+platformd streams a verdict before its report cache holds it, though, so for a
+moment the report it serves can still show the device's previous pass. gatewayd therefore holds each failed event against the device,
+keyed by the event's `recorded_at` (or by the gateway's own clock if the event
+has no recording time). Route admission, replays and the sweep all deny the
+device while the hold stands. A later failure moves the hold forward. A report
+attested after the failure was recorded releases the hold, whatever its
+result. The verifier stamps `attested_at` before it records the verdict, so a
+report from that same failing verification never releases it. The sweep drops
+a hold once it is older than `verdict-max-age` plus `verdict-clock-skew`.
+By then, any report it could still shadow is too old to admit anyway.
+
+An admission that was already past the hold check when a failure arrived
+cannot slip through either (#765). Each failure takes a new epoch. An
+admission carries the epoch it was judged against, and it is published under
+the same lock that holds failures. Publication is refused if a failure was
+held after the judgement and the admission's verdict is not newer than that
+failure. The refusal is the denial `a failed verdict was streamed while the
+admission was judged`, and the route is not installed. Either the failure's
+withdrawal finds the admission and revokes it, or the admission sees the
+failure and is never published.
+
+The stream does not replay what was recorded while gatewayd was disconnected,
+and platformd cuts gatewayd off if it falls more than 64 verdicts behind.
+gatewayd follows a broken stream again after 5s, and the sweep remains the
+backstop: it re-reads the latest verdict of every installed and every refused
+VTEP, so a missed failure still withdraws decap, and a missed pass still
+admits the device, within one interval. A gatewayd that starts after a failure
+was recorded reads that failure, not an earlier pass, on its first admission.
+
+#### Trust assumptions
+
+- **IPAM writers.** Admission trusts the fabric IPAM allocation to bind a VTEP
+  address to the right device. Admission checks the device behind the
+  allocation, never the host that actually holds the address. So anyone who
+  can write fabric allocations can point an address at a healthy device and
+  get that device's verdict. That includes allocating with any `device_id`,
+  releasing a device's address and allocating it again, or creating and
+  deleting fabric pools. Admission then lets in whichever host announces from
+  that address. The serial match does not help: it compares the verdict with
+  the device record, and both belong to the healthy device. IPAM write access
+  is therefore part of the overlay's trust base, on the same footing as the
+  attestation verifier.
+
+  Who holds it today: on REST the `/gateway/ipam/**` routes require an
+  authenticated `admin`. On gRPC, `AllocateIP`, `ReleaseIP` and the IPAM pool
+  CRUD are not in the scope catalog, so any validated platform token can call
+  them (see [Gateway API — Authorization](api.md#10-authorization)).
+  A QUIC allocation can also request a specific address for any owner. Until
+  those methods carry a scope, treat every principal that can get a platform
+  token as able to write fabric allocations. On a deployment that cannot
+  accept that, keep platformd's gRPC, QUIC and MCP listeners reachable only
+  by operators and gatewayd.
+
+  Two things limit how long a rebinding goes unnoticed. A new admission is
+  judged against a fresh listing (see [VTEP admission](#vtep-admission)). An
+  installed VTEP is judged again against the new allocation on the next sweep,
+  so a rebinding withdraws or re-admits it within one
+  `admission-sweep-interval`. Neither check can tell a legitimate rebinding
+  from a malicious one: that has to be enforced where IPAM is written.
+- **Underlay source addresses.** Decap authorisation matches the outer source
+  IP. On an underlay without source validation, a host can send VXLAN under an
+  admitted VTEP's address. The control for that is the authenticated underlay
+  (the IPsec underlay), not admission.
 
 ## 6. Persistence
 
@@ -1799,6 +2064,7 @@ the service it drives says so — extends to telemetry:
 | `host_firewall` | `hostfw.Service.Health()` — installed, fingerprint, rule count, last reconcile and last error (#569) |
 | `firewall` | `firewall.Service.Health()` — flow count and conntrack zones |
 | `nat` | `firewall.NAT.Health()` — SNAT/DNAT and the per-uplink pools (#586) |
+| `overlay` | overlay backend `Status()` plus `ListAdmittedVTEPs()` — local VTEP, table ids, admitted VTEPs and ND counters (punted, answered, meter-dropped, queue-dropped, fell-through) |
 | `pipeline` | `GatewayRuntime.PipelineStatus()` — owner, terminal and the held fail mode (#567) |
 
 Two invariants make the document readable:

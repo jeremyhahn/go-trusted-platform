@@ -66,8 +66,50 @@ type Snapshot struct {
 	Firewall     *FirewallState     `json:"firewall,omitempty"`
 	NAT          *NATState          `json:"nat,omitempty"`
 	Pipeline     *PipelineState     `json:"pipeline,omitempty"`
+	Overlay      *OverlayState      `json:"overlay,omitempty"`
 	Interfaces   []Interface        `json:"interfaces,omitempty"`
 	Annotations  map[string]string  `json:"annotations,omitempty"`
+}
+
+// OverlayState reports the gatewayd overlay datapath and admission state.
+type OverlayState struct {
+	Running                  bool                  `json:"running"`
+	LocalVTEP                string                `json:"local_vtep,omitempty"`
+	VNICount                 int                   `json:"vni_count,omitempty"`
+	RemoteVTEPCount          int                   `json:"remote_vtep_count,omitempty"`
+	LocalMACCount            int                   `json:"local_mac_count,omitempty"`
+	RemoteMACCount           int                   `json:"remote_mac_count,omitempty"`
+	PrefixCount              int                   `json:"prefix_count,omitempty"`
+	RefusedBindings          uint64                `json:"refused_bindings,omitempty"`
+	L3VNI                    uint32                `json:"l3_vni,omitempty"`
+	ARPSuppressionEnabled    bool                  `json:"arp_suppression_enabled,omitempty"`
+	AnycastGatewayConfigured bool                  `json:"anycast_gateway_configured,omitempty"`
+	StartedAt                time.Time             `json:"started_at,omitempty"`
+	Uptime                   time.Duration         `json:"uptime,omitempty"`
+	AdmittedVTEPs            []AdmittedVTEPState   `json:"admitted_vteps,omitempty"`
+	NDCounters               OverlayNDCounterState `json:"nd_counters"`
+}
+
+// AdmittedVTEPState is a VTEP the overlay decap table currently admits.
+type AdmittedVTEPState struct {
+	VTEP           string    `json:"vtep"`
+	DeviceID       uint64    `json:"device_id,omitempty"`
+	HostID         string    `json:"host_id,omitempty"`
+	Serial         string    `json:"serial,omitempty"`
+	Hostname       string    `json:"hostname,omitempty"`
+	AllocationID   string    `json:"allocation_id,omitempty"`
+	BaselineSource string    `json:"baseline_source,omitempty"`
+	ProfileID      uint64    `json:"profile_id,omitempty"`
+	VerdictAt      time.Time `json:"verdict_at,omitempty"`
+}
+
+// OverlayNDCounterState reports overlay neighbour-discovery datapath counters.
+type OverlayNDCounterState struct {
+	Punted       uint64 `json:"punted"`
+	Answered     uint64 `json:"answered"`
+	MeterDropped uint64 `json:"meter_dropped"`
+	QueueDropped uint64 `json:"queue_dropped"`
+	FellThrough  uint64 `json:"fell_through"`
 }
 
 // ServiceState is one configured service section's disposition.

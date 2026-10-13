@@ -214,8 +214,8 @@ func TestNewStream_ReturnsUnimplemented(t *testing.T) {
 		t.Errorf("expected Unimplemented code, got %v", st.Code())
 	}
 
-	if !strings.Contains(st.Message(), "streaming not supported") {
-		t.Errorf("expected error message to contain 'streaming not supported', got %q", st.Message())
+	if !strings.Contains(st.Message(), "is not supported over this transport") {
+		t.Errorf("expected error message to name the unsupported stream, got %q", st.Message())
 	}
 }
 

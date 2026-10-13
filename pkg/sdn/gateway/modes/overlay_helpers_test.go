@@ -878,6 +878,27 @@ type admitAll struct{}
 
 func (admitAll) AdmitVTEP(context.Context, uint32, netip.Addr) error { return nil }
 
+// gatedAdmitter admits every VTEP, but each AdmitVTEP call reports itself on
+// entered and then waits for release, so a test can act inside an admission.
+type gatedAdmitter struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func newGatedAdmitter() *gatedAdmitter {
+	return &gatedAdmitter{entered: make(chan struct{}, 4), release: make(chan struct{})}
+}
+
+func (a *gatedAdmitter) AdmitVTEP(ctx context.Context, _ uint32, _ netip.Addr) error {
+	a.entered <- struct{}{}
+	select {
+	case <-a.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 type overlayTestError struct{ msg string }
 
 func (e *overlayTestError) Error() string { return e.msg }

@@ -24,6 +24,7 @@ import (
 
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/pollstream"
 )
 
 // handlerFunc is the signature for all unary gRPC service method handlers.
@@ -81,10 +82,13 @@ func (c *embeddedClientConn) Invoke(ctx context.Context, method string, args, re
 	return copyProtoMessage(resp, reply)
 }
 
-// NewStream implements grpc.ClientConnInterface.NewStream.
-// Server streaming is not supported over the embedded transport.
-func (c *embeddedClientConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-	return nil, status.Error(codes.Unimplemented, "embedded: streaming not supported over embedded transport")
+// NewStream implements grpc.ClientConnInterface.NewStream. The streams the
+// pollstream package knows are followed by long-polling their unary poll
+// method in process; no transport timeout bounds an in-process call, so each
+// poll waits the longest the service allows. Any other stream is
+// Unimplemented.
+func (c *embeddedClientConn) NewStream(ctx context.Context, _ *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+	return pollstream.NewStream(ctx, c, method, 0, opts...)
 }
 
 // copyProtoMessage copies a protobuf message from src to dst via marshal/unmarshal.

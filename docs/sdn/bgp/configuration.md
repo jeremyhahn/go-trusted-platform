@@ -85,6 +85,15 @@ gateway:
               values: ["no-export"]
 ```
 
+Two `BGPConfig` fields have no key: code sets them. `OutboundOnly` runs the
+speaker without a listener (GoBGP's listen port -1). The speaker then ignores
+`listen-port` and `listen-addresses`, and refuses a `passive` peer with
+`ErrPassivePeerWithoutListener`, both at validation and in `AddPeer`.
+`SessionSource` is the local address every session is dialled from. The
+gateway overlay's EVPN speaker uses both, so that it can run beside the
+transit speaker on TCP 179
+([overlay mode](../../gateway/engineering.md#in-gatewayd)).
+
 **Secrets are references, never values** (`configuration.md` §4). `auth-key-ref`
 and `master-key-ref` name a secret reference URI (`kms://`, `file://`,
 `idevid://`, …) that the daemon resolves at boot through

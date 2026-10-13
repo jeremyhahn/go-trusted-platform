@@ -103,6 +103,9 @@ proxy:
     protocol: unix          # unix (default) | grpc
     socket: /run/platformd.sock
     grpc-addr: cp.example.com:10443   # grpc protocol; TLS anchored by platform-ca-file: (the platform anchor)
+    cert-file: /etc/gatewayd/platformd-client.pem      # grpc: client identity for an mTLS platformd
+    key-file: /etc/gatewayd/platformd-client-key.pem
+    token-file: ""                    # grpc: platform bearer token for a token platformd (re-read on every dial)
 ```
 
 Two gatewayd-wide trust sources back the proxy. The top-level
@@ -159,3 +162,7 @@ sync loop retries on the next tick.
 - `platformd.protocol: grpc` without `platform-ca-file:` → typed startup
   error (`ErrPlatformAnchorRequiredForGRPC`); TLS verification is never
   skipped.
+- `platformd.protocol: grpc` without `cert-file`/`key-file` or
+  `token-file` → typed startup error (`ErrConfigInvalid`): platformd's gRPC
+  listener refuses unauthenticated callers. A certificate that does not
+  load, or an empty token file, is `ErrPlatformdIdentityLoadFailed`.

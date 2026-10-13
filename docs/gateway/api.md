@@ -38,9 +38,10 @@ REST base path `/api/v1/gateway` (`pkg/webservice/v1/rest/gateway/router.go`).
 |---|---|---|---|---|---|
 | Gateway status | `GET /api/v1/gateway/status` | `GetGatewayStatus` | `OpGatewayStatus` (`0x01`) | `gateway_status` | ✅ |
 | Set gateway mode | `POST /api/v1/gateway/mode` | `SetGatewayMode` | `OpGatewaySetMode` (`0x02`) | `gateway_mode_set` | ✅ |
-
 | Gateway telemetry snapshot | `GET /api/v1/gateway/state/{id}` | `GetGatewaySnapshot` | `OpGatewaySnapshot` (`0x15`) | `gateway_snapshot` | ✅ |
 | List reported snapshots | `GET /api/v1/gateway/state` | `ListGatewaySnapshots` | `OpGatewayListSnapshots` (`0x16`) | `gateway_snapshots` | ✅ |
+| Get admitted overlay VTEP | `GET /api/v1/sdn/gateway/overlay/vteps/{vtep}?gateway_id=<id>` | `GetGatewayAdmittedVTEP` | `OpGatewayAdmittedVTEP` (`0x17`) | `gateway_admitted_vtep` | ✅ |
+| List admitted overlay VTEPs | `GET /api/v1/sdn/gateway/overlay/vteps?gateway_id=<id>` | `ListGatewayAdmittedVTEPs` | `OpGatewayListAdmittedVTEPs` (`0x18`) | `gateway_admitted_vteps` | ✅ |
 
 **The snapshot is served from the telemetry the control plane holds** (§8),
 which is why its REST form is the `state` route rather than a second path:
@@ -51,6 +52,19 @@ gateway's live state instead. A `gateway_id` that has never reported is
 nothing. The document's sections and their provenance are in
 [`engineering.md`](engineering.md) §8; the CLI form is
 `platformctl sdn gateway snapshot [--gateway-id <id> | --all]`.
+
+The overlay section of the snapshot includes the local VTEP, underlay bridge,
+OpenFlow table ids, admitted VTEPs, and the neighbor-discovery counters the
+gatewayd overlay handler maintains: punted, answered, meter-dropped,
+queue-dropped, and fell-through. The admitted-VTEP read/list verbs are backed
+by the same service layer and are exposed on REST, gRPC, QUIC, MCP, Unix and
+the SDK/CLI; they return `NotFound` for an address that is not currently
+admitted, and `Unavailable` (REST 503) on a gateway with no overlay section.
+The Go SDK reaches them on every transport: REST uses the two `GET` routes
+above (daemon REST stack only), QUIC translates to and from the
+`Gateway*AdmittedVTEP*` wire structs (whose field names differ from the pb
+messages, with `verdict_at` as Unix seconds), and REST and MCP wrap the bare
+single-VTEP record into `GetGatewayAdmittedVTEPResponse.vtep`.
 
 **`SetGatewayMode` is the deprecated compatibility surface.** `GatewayMode`
 carries a deprecation notice in `pkg/sdn/gateway/compat.go` and maps only three
@@ -351,6 +365,14 @@ include the IPAM pool CRUD and the LB VIP operations — carry no required scope
 because a method absent from the map is allowed once the token validates. That
 asymmetry within a single service is raised as an owner question in the
 migration report.
+
+The admitted-VTEP reads (`GetGatewayAdmittedVTEP`, `ListGatewayAdmittedVTEPs`
+and the `gateway_admitted_vtep(s)` MCP tools) require `sdn:read`, the same
+scope as the snapshot they are read from. Each entry names the admitted
+device's ID, serial and hostname. `sdn:read` is a role permission that a tenant
+role can carry, and no transport except REST can yet require a system-tenant
+caller (#299), so a tenant granted `sdn:read` sees the fabric's device
+identities.
 
 ### REST is split by principal, and only the operator half is role-gated (#165)
 

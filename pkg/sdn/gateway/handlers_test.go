@@ -46,6 +46,11 @@ type fakeBGPServer struct {
 	startErr  error
 	listPeers []*api.Peer
 	listErr   error
+	// global and added are what the speaker asked GoBGP to run.
+	global *api.Global
+	added  []*api.Peer
+	// policies is the last routing policy the speaker installed.
+	policies *api.SetPoliciesRequest
 }
 
 func (f *fakeBGPServer) Start() error {
@@ -57,12 +62,18 @@ func (f *fakeBGPServer) Start() error {
 	f.started = true
 	return nil
 }
-func (f *fakeBGPServer) Stop()                                                { f.mu.Lock(); f.stopped = true; f.mu.Unlock() }
-func (f *fakeBGPServer) StartBgp(context.Context, *api.StartBgpRequest) error { return nil }
-func (f *fakeBGPServer) StopBgp(context.Context, *api.StopBgpRequest) error   { return nil }
-func (f *fakeBGPServer) AddPeer(context.Context, *api.AddPeerRequest) error {
+func (f *fakeBGPServer) Stop() { f.mu.Lock(); f.stopped = true; f.mu.Unlock() }
+func (f *fakeBGPServer) StartBgp(_ context.Context, req *api.StartBgpRequest) error {
+	f.mu.Lock()
+	f.global = req.Global
+	f.mu.Unlock()
+	return nil
+}
+func (f *fakeBGPServer) StopBgp(context.Context, *api.StopBgpRequest) error { return nil }
+func (f *fakeBGPServer) AddPeer(_ context.Context, req *api.AddPeerRequest) error {
 	f.mu.Lock()
 	f.peers++
+	f.added = append(f.added, req.Peer)
 	f.mu.Unlock()
 	return nil
 }
@@ -101,7 +112,12 @@ func (f *fakeBGPServer) WatchEvent(context.Context, *api.WatchEventRequest, func
 func (f *fakeBGPServer) AddTcpAoKeychain(context.Context, *api.AddTcpAoKeychainRequest) error {
 	return nil
 }
-func (f *fakeBGPServer) SetPolicies(context.Context, *api.SetPoliciesRequest) error { return nil }
+func (f *fakeBGPServer) SetPolicies(_ context.Context, req *api.SetPoliciesRequest) error {
+	f.mu.Lock()
+	f.policies = req
+	f.mu.Unlock()
+	return nil
+}
 func (f *fakeBGPServer) SetPolicyAssignment(context.Context, *api.SetPolicyAssignmentRequest) error {
 	return nil
 }
@@ -244,7 +260,7 @@ func TestEnabledServices_EveryEntryIsBuiltOrRefused(t *testing.T) {
 		HostFW:        &hostfw.Config{Enabled: true},
 		Tunnels:       []TunnelConfig{{Name: "gre1"}},
 		BGP:           &bgp.BGPConfig{},
-		Overlay:       &OverlayServiceConfig{Enabled: true},
+		Overlay:       validOverlayServiceConfig(),
 		Edge:          &EdgeConfig{Enabled: true},
 		DHCP:          &DHCPServiceConfig{Enabled: true},
 		PXE:           &PXEServiceConfig{Enabled: true, HTTPPort: 8069},
@@ -278,26 +294,41 @@ func TestEnabledServices_EveryEntryIsBuiltOrRefused(t *testing.T) {
 			refused[name] = true
 		}
 	}
-	assert.Equal(t, map[string]bool{ServiceFirewall: true, ServiceNAT: true, ServiceLoadBalancer: true, ServiceNAT64: true, ServiceHostFW: true, ServiceTunnels: true, ServiceTransit: true}, built)
-	assert.Equal(t, map[string]bool{ServiceOverlay: true, ServiceEdge: true, ServiceDHCP: true, ServicePXE: true, ServiceManagementVPN: true}, refused)
+	assert.Equal(t, map[string]bool{ServiceFirewall: true, ServiceNAT: true, ServiceLoadBalancer: true, ServiceNAT64: true, ServiceHostFW: true, ServiceTunnels: true, ServiceTransit: true, ServiceOverlay: true}, built)
+	assert.Equal(t, map[string]bool{ServiceEdge: true, ServiceDHCP: true, ServicePXE: true, ServiceManagementVPN: true}, refused)
 	for name := range refused {
-		assert.NotEmpty(t, serviceRefusals[name], "refusal for %s names no blocker", name)
+		reason := serviceRefusals[name]
+		assert.NotEmpty(t, reason, "refusal for %s names no blocker", name)
+		// The operator reads this text; an issue number means nothing to
+		// them, and a constructor name points at code that does not run.
+		assert.Contains(t, reason, "planned", "refusal for %s must say the service is planned", name)
+		assert.NotContains(t, reason, "#", "refusal for %s must not cite an issue number", name)
+		assert.NotContains(t, reason, "modes.", "refusal for %s must not name an unreachable constructor", name)
 	}
 	assert.True(t, cfg.HasEnabledServices())
 	assert.False(t, baseGatewayConfig("none").HasEnabledServices())
 }
 
 func TestNewGateway_RegistersHandlersInDeclaredOrder(t *testing.T) {
+	tunnels := []TunnelConfig{{Name: "gre1", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30"}}
+
 	cfg := firewallGatewayConfig()
-	cfg.Tunnels = []TunnelConfig{{Name: "gre1", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30"}}
-	cfg.Overlay = &OverlayServiceConfig{Enabled: true}
+	cfg.Tunnels = tunnels
 	gw, err := NewGateway(cfg)
 	require.NoError(t, err)
-	assert.Equal(t, []string{ServiceFirewall, ServiceTunnels, ServiceOverlay}, gw.serviceOrder)
+	assert.Equal(t, []string{ServiceFirewall, ServiceTunnels}, gw.serviceOrder)
 	_, isBacked := gw.serviceHandlers[ServiceFirewall].(*backedServiceHandler)
 	assert.True(t, isBacked)
-	_, isRefused := gw.serviceHandlers[ServiceOverlay].(*refusedServiceHandler)
-	assert.True(t, isRefused)
+
+	// The overlay excludes the firewall, so it is ordered against tunnels alone.
+	cfg = baseGatewayConfig("overlay")
+	cfg.Tunnels = tunnels
+	cfg.Overlay = validOverlayServiceConfig()
+	gw, err = NewGateway(cfg)
+	require.NoError(t, err)
+	assert.Equal(t, []string{ServiceTunnels, ServiceOverlay}, gw.serviceOrder)
+	_, isBacked = gw.serviceHandlers[ServiceOverlay].(*backedServiceHandler)
+	assert.True(t, isBacked)
 }
 
 // TestGatewayStart_RefusedSectionIsATypedStartError pins the core of #568:
@@ -306,7 +337,6 @@ func TestNewGateway_RegistersHandlersInDeclaredOrder(t *testing.T) {
 // no pipeline behind.
 func TestGatewayStart_RefusedSectionIsATypedStartError(t *testing.T) {
 	sections := map[string]func(*GatewayConfig){
-		ServiceOverlay:       func(c *GatewayConfig) { c.Overlay = &OverlayServiceConfig{Enabled: true} },
 		ServiceEdge:          func(c *GatewayConfig) { c.Edge = &EdgeConfig{Enabled: true, MaxDevices: 100, MaxServices: 50} },
 		ServiceDHCP:          func(c *GatewayConfig) { c.DHCP = &DHCPServiceConfig{Enabled: true, Interface: "eth0"} },
 		ServicePXE:           func(c *GatewayConfig) { c.PXE = &PXEServiceConfig{Enabled: true, HTTPPort: 8069} },
@@ -335,14 +365,14 @@ func TestGatewayStart_RefusedSectionIsATypedStartError(t *testing.T) {
 
 func TestGatewayStart_RefusedSectionRollsBackTheStartedOnes(t *testing.T) {
 	cfg := firewallGatewayConfig()
-	cfg.Overlay = &OverlayServiceConfig{Enabled: true}
+	cfg.Edge = &EdgeConfig{Enabled: true, MaxDevices: 100, MaxServices: 50}
 	gw, err := NewGateway(cfg)
 	require.NoError(t, err)
 	gw.SetNodeMetrics(validNodeMetrics())
 	err = gw.Start(context.Background())
 	var unavailable *ErrServiceUnavailable
 	require.True(t, errors.As(err, &unavailable), "got %v", err)
-	assert.Equal(t, ServiceOverlay, unavailable.Service)
+	assert.Equal(t, ServiceEdge, unavailable.Service)
 	assert.False(t, cfg.Runtime.PipelineInstalled(), "the pipeline installed for the firewall is rolled back")
 	_, fwRunning := gw.FirewallHealth()
 	assert.False(t, fwRunning, "the firewall started before the refusal is stopped again")
@@ -482,7 +512,7 @@ func TestRefusedServiceHandler(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBuilders_RefuseWithoutTheirRuntime(t *testing.T) {
-	for _, name := range []string{ServiceFirewall, ServiceNAT, ServiceLoadBalancer, ServiceNAT64} {
+	for _, name := range []string{ServiceFirewall, ServiceNAT, ServiceLoadBalancer, ServiceNAT64, ServiceOverlay} {
 		t.Run(name, func(t *testing.T) {
 			cfg := baseGatewayConfig("no-runtime")
 			cfg.Firewall = &FirewallConfig{Enabled: true}
@@ -497,6 +527,7 @@ func TestBuilders_RefuseWithoutTheirRuntime(t *testing.T) {
 					PortRangeEnd:   65535,
 				},
 			}
+			cfg.Overlay = validOverlayServiceConfig()
 			gw := &Gateway{config: cfg}
 			_, err := serviceBuilders[name](gw)
 			var missing *ErrRuntimeMissing

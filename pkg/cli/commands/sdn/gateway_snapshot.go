@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -211,6 +212,124 @@ func printGatewaySnapshot(w io.Writer, snap *platformv1.GatewaySnapshot) {
 		fmt.Fprintf(w, "Pipeline     bridge=%s owner=%s terminal=%s fail-mode=%s\n",
 			pipeline.GetBridge(), pipeline.GetOwner(), pipeline.GetTerminal(), pipeline.GetFailMode())
 	}
+	if overlay := snap.GetOverlay(); overlay != nil {
+		fmt.Fprintf(w, "Overlay      running=%t local=%s vnis=%d remote-vteps=%d macs=%d/%d prefixes=%d refused=%d\n",
+			overlay.GetRunning(), overlay.GetLocalVtep(), overlay.GetVniCount(), overlay.GetRemoteVtepCount(),
+			overlay.GetLocalMacCount(), overlay.GetRemoteMacCount(), overlay.GetPrefixCount(), overlay.GetRefusedBindings())
+		if counters := overlay.GetNdCounters(); counters != nil {
+			fmt.Fprintf(w, "  nd punted=%d answered=%d meter-dropped=%d queue-dropped=%d fell-through=%d\n",
+				counters.GetPunted(), counters.GetAnswered(), counters.GetMeterDropped(), counters.GetQueueDropped(), counters.GetFellThrough())
+		}
+		for _, vtep := range overlay.GetAdmittedVteps() {
+			printGatewayAdmittedVTEP(w, vtep)
+		}
+	}
+}
+
+func newGatewayOverlayCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "overlay",
+		Short: "Gateway overlay operations",
+	}
+	cmd.AddCommand(newGatewayAdmittedVTEPsCommand(getFlags))
+	return cmd
+}
+
+func newGatewayAdmittedVTEPsCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
+	var gatewayID string
+	cmd := &cobra.Command{
+		Use:   "vteps",
+		Short: "List admitted overlay VTEPs",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runGatewayAdmittedVTEPs(cmd, getFlags(), gatewayID)
+		},
+	}
+	cmd.Flags().StringVar(&gatewayID, "gateway-id", "", "Gateway id to read; omit for this node")
+	cmd.AddCommand(newGatewayAdmittedVTEPGetCommand(getFlags))
+	return cmd
+}
+
+func newGatewayAdmittedVTEPGetCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
+	var gatewayID string
+	cmd := &cobra.Command{
+		Use:   "get <vtep>",
+		Short: "Show one admitted overlay VTEP",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runGatewayAdmittedVTEPGet(cmd, getFlags(), gatewayID, args[0])
+		},
+	}
+	cmd.Flags().StringVar(&gatewayID, "gateway-id", "", "Gateway id to read; omit for this node")
+	return cmd
+}
+
+func runGatewayAdmittedVTEPs(cmd *cobra.Command, flags *cli.CommonFlags, gatewayID string) error {
+	base, err := cli.NewBaseCommand(flags)
+	if err != nil {
+		return err
+	}
+	defer base.Close()
+
+	gatewayClient := gateway.NewClientFromGRPC(base.Client().Gateway())
+	ctx, cancel := newCLIContext()
+	defer cancel()
+
+	vteps, err := gatewayClient.ListAdmittedVTEPs(ctx, gatewayID)
+	if err != nil {
+		return &WrappedError{Msg: "failed to list gateway admitted VTEPs", Err: err}
+	}
+	if isStructuredOutput(flags) {
+		return base.Output(vteps)
+	}
+	printGatewayAdmittedVTEPs(cmd.OutOrStdout(), vteps)
+	return nil
+}
+
+func runGatewayAdmittedVTEPGet(cmd *cobra.Command, flags *cli.CommonFlags, gatewayID, vtep string) error {
+	base, err := cli.NewBaseCommand(flags)
+	if err != nil {
+		return err
+	}
+	defer base.Close()
+
+	gatewayClient := gateway.NewClientFromGRPC(base.Client().Gateway())
+	ctx, cancel := newCLIContext()
+	defer cancel()
+
+	admitted, err := gatewayClient.GetAdmittedVTEP(ctx, gatewayID, vtep)
+	if err != nil {
+		return &WrappedError{Msg: "failed to get gateway admitted VTEP", Err: err}
+	}
+	if isStructuredOutput(flags) {
+		return base.Output(admitted)
+	}
+	printGatewayAdmittedVTEP(cmd.OutOrStdout(), admitted)
+	return nil
+}
+
+func printGatewayAdmittedVTEPs(w io.Writer, vteps []*platformv1.GatewayAdmittedVTEP) {
+	if len(vteps) == 0 {
+		fmt.Fprintln(w, "no admitted VTEPs")
+		return
+	}
+	fmt.Fprintln(w, "Admitted VTEPs")
+	for _, vtep := range vteps {
+		printGatewayAdmittedVTEP(w, vtep)
+	}
+}
+
+func printGatewayAdmittedVTEP(w io.Writer, vtep *platformv1.GatewayAdmittedVTEP) {
+	if vtep == nil {
+		fmt.Fprintln(w, "no admitted VTEP")
+		return
+	}
+	verdict := "-"
+	if ts := vtep.GetVerdictAt(); ts != nil {
+		verdict = ts.AsTime().Format(time.RFC3339)
+	}
+	fmt.Fprintf(w, "  %-15s device=%d host=%s serial=%s allocation=%s baseline=%s profile=%d verdict=%s\n",
+		vtep.GetVtep(), vtep.GetDeviceId(), vtep.GetHostId(), vtep.GetSerial(),
+		vtep.GetAllocationId(), vtep.GetBaselineSource(), vtep.GetProfileId(), verdict)
 }
 
 // ErrSnapshotArguments reports a snapshot command whose flags contradict.

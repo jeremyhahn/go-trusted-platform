@@ -16,22 +16,25 @@ package commands
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/proxysvc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
 func TestBuildGatewayRuntimeAbsentOrDisabled(t *testing.T) {
-	runtime, err := buildGatewayRuntime(context.Background(), nil, "", testLogger())
+	runtime, err := buildGatewayRuntime(context.Background(), nil, "", false, testLogger())
 	if err != nil || runtime != nil {
 		t.Fatalf("nil section: runtime=%v err=%v, want nil/nil", runtime, err)
 	}
-	runtime, err = buildGatewayRuntime(context.Background(), &sdn.Config{Enabled: false}, "", testLogger())
+	runtime, err = buildGatewayRuntime(context.Background(), &sdn.Config{Enabled: false}, "", false, testLogger())
 	if err != nil || runtime != nil {
 		t.Fatalf("disabled section: runtime=%v err=%v, want nil/nil", runtime, err)
 	}
@@ -39,7 +42,7 @@ func TestBuildGatewayRuntimeAbsentOrDisabled(t *testing.T) {
 
 func TestBuildGatewayRuntimeMissingOVS(t *testing.T) {
 	cfg := &sdn.Config{Enabled: true, Environment: &netplan.Environment{ID: 4}}
-	if _, err := buildGatewayRuntime(context.Background(), cfg, "", testLogger()); !errors.Is(err, ErrSDNOVSRequired) {
+	if _, err := buildGatewayRuntime(context.Background(), cfg, "", false, testLogger()); !errors.Is(err, ErrSDNOVSRequired) {
 		t.Fatalf("err = %v, want ErrSDNOVSRequired", err)
 	}
 }
@@ -52,7 +55,7 @@ func TestBuildGatewayRuntimeInvalidSection(t *testing.T) {
 		Environment: &netplan.Environment{ID: 1},
 	}
 	var sectionErr *ErrConfigSection
-	if _, err := buildGatewayRuntime(context.Background(), cfg, "", testLogger()); !errors.As(err, &sectionErr) {
+	if _, err := buildGatewayRuntime(context.Background(), cfg, "", false, testLogger()); !errors.As(err, &sectionErr) {
 		t.Fatalf("err = %v, want *ErrConfigSection", err)
 	}
 }
@@ -65,7 +68,7 @@ func TestBuildGatewayRuntimeConnectFailure(t *testing.T) {
 		Environment: &netplan.Environment{ID: 4},
 	}
 	var connectErr *ErrOVSConnectFailed
-	if _, err := buildGatewayRuntime(context.Background(), cfg, "", testLogger()); !errors.As(err, &connectErr) {
+	if _, err := buildGatewayRuntime(context.Background(), cfg, "", false, testLogger()); !errors.As(err, &connectErr) {
 		t.Fatalf("err = %v, want *ErrOVSConnectFailed", err)
 	}
 }
@@ -78,7 +81,7 @@ func TestBuildGatewayRuntimeNoEnvironment(t *testing.T) {
 		OVS:     &sdn.OVSConfig{Socket: "/nonexistent/db.sock", Bridge: "br-fabric"},
 	}
 	var sectionErr *ErrConfigSection
-	_, err := buildGatewayRuntime(context.Background(), cfg, gateway.ServiceFirewall, testLogger())
+	_, err := buildGatewayRuntime(context.Background(), cfg, gateway.ServiceFirewall, false, testLogger())
 	if !errors.As(err, &sectionErr) || !errors.As(err, new(sdn.ErrEnvironmentRequired)) {
 		t.Fatalf("err = %v, want ErrConfigSection wrapping ErrEnvironmentRequired", err)
 	}
@@ -137,6 +140,13 @@ func TestDatapathService(t *testing.T) {
 			NAT:            &gateway.NATConfig{Enabled: true},
 			HostedServices: []string{gateway.ServiceNAT},
 		}, gateway.ServiceNAT},
+		{"overlay", &gateway.GatewayConfig{Overlay: &gateway.OverlayServiceConfig{Enabled: true}}, gateway.ServiceOverlay},
+		// The routing child reads the same configuration as the datapath
+		// process; an overlay it does not host opens nothing (#765).
+		{"overlay hosted elsewhere", &gateway.GatewayConfig{
+			Overlay:        &gateway.OverlayServiceConfig{Enabled: true},
+			HostedServices: []string{gateway.ServiceTransit},
+		}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -192,5 +202,106 @@ func TestBuildGatewaySkipsRuntimeWithoutDatapathService(t *testing.T) {
 	}
 	if gw.GetConfig().Runtime != nil {
 		t.Fatal("runtime must not be assembled without a datapath service")
+	}
+}
+
+func TestRunsOverlay(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  *gateway.GatewayConfig
+		want bool
+	}{
+		{"no overlay section", &gateway.GatewayConfig{}, false},
+		{"overlay disabled", &gateway.GatewayConfig{Overlay: &gateway.OverlayServiceConfig{}}, false},
+		{"overlay hosted by the only process", &gateway.GatewayConfig{Overlay: &gateway.OverlayServiceConfig{Enabled: true}}, true},
+		{"overlay hosted here", &gateway.GatewayConfig{
+			Overlay:        &gateway.OverlayServiceConfig{Enabled: true},
+			HostedServices: []string{gateway.ServiceOverlay},
+		}, true},
+		{"overlay hosted elsewhere", &gateway.GatewayConfig{
+			Overlay:        &gateway.OverlayServiceConfig{Enabled: true},
+			HostedServices: []string{gateway.ServiceTransit},
+		}, false},
+		{"hosted but disabled", &gateway.GatewayConfig{
+			Overlay:        &gateway.OverlayServiceConfig{},
+			HostedServices: []string{gateway.ServiceOverlay},
+		}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := runsOverlay(tc.cfg); got != tc.want {
+				t.Fatalf("runsOverlay = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// overlaySharedConfig is the configuration every supervised gatewayd
+// process reads on an overlay gateway, with hosted as the process's
+// HostedServices. Its OVS socket does not exist and its platformd protocol
+// is unknown, so opening OVSDB or dialing platformd fails the build.
+func overlaySharedConfig(t *testing.T, hosted ...string) *ServeConfig {
+	t.Helper()
+	return &ServeConfig{
+		Gateway: &gateway.GatewayConfig{
+			Enabled:        true,
+			ID:             "gw-overlay",
+			HostedServices: hosted,
+			Overlay: &gateway.OverlayServiceConfig{
+				Enabled:           true,
+				LocalVTEP:         netip.MustParseAddr("10.4.100.20"),
+				UnderlayInterface: "vtep0",
+				UnderlayMTU:       9216,
+				AccessPort:        "patch-workloads",
+				OverlayASN:        65000,
+				VXLANPort:         4789,
+				VNIs:              []gateway.OverlayVNIConfig{{VNI: 40100, VLAN: 100}},
+				DefaultVNI:        40100,
+				MaxVNIs:           gateway.DefaultMaxVNIs,
+				VerdictMaxAge:     time.Minute,
+			},
+		},
+		SDN: &sdn.Config{
+			Enabled:     true,
+			OVS:         &sdn.OVSConfig{Socket: filepath.Join(t.TempDir(), "missing.sock"), Bridge: "br0"},
+			Environment: &netplan.Environment{ID: 4},
+		},
+		Proxy: &proxysvc.Config{Platformd: proxysvc.PlatformdConfig{Protocol: "carrier-pigeon"}},
+	}
+}
+
+func TestBuildGateway_RoutingChildAssemblesNoOverlay(t *testing.T) {
+	cfg := overlaySharedConfig(t, gateway.ServiceTransit)
+	gw, err := BuildGateway(context.Background(), cfg, testLogger())
+	if err != nil {
+		t.Fatalf("BuildGateway: %v (the routing child opened OVSDB or dialed platformd)", err)
+	}
+	if gw.GetConfig().Runtime != nil {
+		t.Fatal("the routing child must not assemble the overlay runtime")
+	}
+}
+
+func TestBuildGateway_OverlayHostOpensOVSDB(t *testing.T) {
+	for _, hosted := range [][]string{nil, {gateway.ServiceOverlay}} {
+		cfg := overlaySharedConfig(t, hosted...)
+		var connectErr *ErrOVSConnectFailed
+		if _, err := BuildGateway(context.Background(), cfg, testLogger()); !errors.As(err, &connectErr) {
+			t.Fatalf("hosted %v: err = %v, want *ErrOVSConnectFailed", hosted, err)
+		}
+	}
+}
+
+func TestWireOverlayRuntime_DialsOnlyInTheOverlayHost(t *testing.T) {
+	runtime := &gateway.GatewayRuntime{}
+	if err := wireOverlayRuntime(context.Background(), overlaySharedConfig(t, gateway.ServiceTransit), nil, runtime); err != nil {
+		t.Fatalf("routing child: err = %v, want no dial", err)
+	}
+	if runtime.OverlayPlatform != nil {
+		t.Fatal("routing child: the overlay platform must not be wired")
+	}
+
+	var cfgErr *proxysvc.ErrConfigInvalid
+	if err := wireOverlayRuntime(context.Background(), overlaySharedConfig(t, gateway.ServiceOverlay), nil, runtime); !errors.As(err, &cfgErr) {
+		t.Fatalf("overlay host: err = %v, want the dial's *proxysvc.ErrConfigInvalid", err)
 	}
 }

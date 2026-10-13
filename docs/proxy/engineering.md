@@ -393,6 +393,8 @@ keys, parsed by viper (`LoadServeConfig`).
 | `proxy.platformd.protocol` | `unix` \| `grpc` | `unix` | Anything else → `ErrConfigInvalid` |
 | `proxy.platformd.socket` | path | `/run/platformd.sock` (`DefaultPlatformdSocket`) | `unix` protocol |
 | `proxy.platformd.grpc-addr` | host:port | — | **Required** for `grpc`; also requires `platform-ca-file:`, the platform anchor (`ErrPlatformAnchorRequiredForGRPC`) |
+| `proxy.platformd.cert-file` / `key-file` | paths | — | `grpc`: the client certificate presented to an mTLS platformd; set together. `grpc` needs this pair or `token-file` (`ErrConfigInvalid`); unloadable → `ErrPlatformdIdentityLoadFailed` |
+| `proxy.platformd.token-file` | path | — | `grpc`: the platform bearer token presented to a token platformd, re-read on every dial; empty or unreadable → `ErrPlatformdIdentityLoadFailed` |
 | `proxy.attestation.enabled` | bool | `false` | Enables the gate |
 | `proxy.attestation.cache-ttl` | duration | `60s` | Per-device verdict reuse |
 | `proxy.attestation.negative-cache-ttl` | duration | `5s` | Failed-query reuse — the deny window |

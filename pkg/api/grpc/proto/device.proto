@@ -146,6 +146,8 @@ message Device {
   // to the platform CA and carry tcg-cap-verifiedTPMRestricted (TCG DevID v1
   // r12 §8.2). A bare attest_pub is not accepted as an anchor (#374, #404).
   string attest_cert = 14;
+  // Hostname the device registered under. Read-only: updates ignore it.
+  string hostname = 15;
 }
 
 // DHCPPoolConfig defines DHCP pool configuration

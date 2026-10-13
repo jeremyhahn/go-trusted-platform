@@ -173,7 +173,7 @@ platformctl bootstrap run --config deployments/ha-cluster/bootstrap.yaml
 - Provide DHCP scope and iPXE/TFTP for device bootstrap
 - Recursive DNS forwarder for the zones and overlays (queries forwarded to control-plane authoritative DNS)
 - Terminates the ISP handoffs on `transit` (x00) and peers BGP upstream
-- VTEP on `fabric` (x01) for the EVPN/VXLAN overlays (overlay service: #709)
+- VTEP on `fabric` (x01) for the EVPN/VXLAN overlays; gatewayd config names the local VTEP, access port, overlay ASN/RR peers and the signed-verdict freshness window (`verdict-max-age`, default 15m)
 - OVS for zone and overlay isolation
 - NAT/firewall rules for network segmentation
 - A bonded trunk to the platform switches (gateway port class); node address `.2`/`.3` on each zone it routes, the zone gateway `.1` (a VRRP address in a pair)

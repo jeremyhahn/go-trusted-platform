@@ -223,11 +223,8 @@ Works with the SDN subsystem for network provisioning:
 
 ### Gateway Integration
 
-Supports gateway edge mode for device onboarding:
-
-- IPv6 allocation for new devices
-- DHT bootstrap support
-- Certificate enrollment coordination
+None. Gateway edge onboarding is planned, not implemented: gatewayd refuses
+the `edge:` and `dhcp:` sections at start (see [`docs/gateway/`](../../gateway/)).
 
 ## CLI Commands
 

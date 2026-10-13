@@ -228,3 +228,17 @@ func (e *ErrDescribeCallerPolicyFailed) Error() string {
 func (e *ErrDescribeCallerPolicyFailed) Unwrap() error {
 	return e.Cause
 }
+
+// ErrStreamDeviceVerdictsFailed is returned when the device verdict stream
+// could not be opened.
+type ErrStreamDeviceVerdictsFailed struct {
+	Cause error
+}
+
+func (e *ErrStreamDeviceVerdictsFailed) Error() string {
+	return fmt.Sprintf("failed to stream device verdicts: %v", e.Cause)
+}
+
+func (e *ErrStreamDeviceVerdictsFailed) Unwrap() error {
+	return e.Cause
+}

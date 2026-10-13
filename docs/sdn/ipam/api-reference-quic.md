@@ -58,8 +58,12 @@ held in a different pool answers `StatusNotFound` and is not released.
 Releasing an address with no active allocation also answers `StatusNotFound`.
 
 `GatewayListAllocations` (`0x0B`) lists only allocations that still hold their
-address. The same rule applies on gRPC and REST: a released allocation is
-never listed. Before #730, REST still listed released allocations.
+address: active and reserved ones. The same rule applies on gRPC and REST: a
+released or expired allocation is never listed. Before #730, REST still listed
+released allocations; before #765, every transport listed allocations IPAM had
+expired for inactivity. Every listed allocation carries its `status` on all
+three transports (gRPC `IPAllocation.status`, REST `status`, QUIC
+`IPAllocationInfo.status`).
 
 ## Client Usage
 

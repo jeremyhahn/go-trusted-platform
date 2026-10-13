@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/store"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
@@ -75,6 +76,70 @@ func TestRecordDeviceVerdict_PassNotifiesObserversAndLogs(t *testing.T) {
 	events, _ := svc.Store().ListEvents(store.EventFilter{HostID: "node-7"})
 	if events[0].Metadata["baseline_source"] != "signed" || events[0].Metadata["profile_id"] != "3" || events[0].Metadata["cryptographic"] != "false" {
 		t.Fatalf("event metadata incomplete: %v", events[0].Metadata)
+	}
+}
+
+// recordedVerdicts collects every verdict a DeviceVerdictObserver is handed.
+type recordedVerdicts struct {
+	got []verdict.RecordedDeviceVerdict
+}
+
+func (r *recordedVerdicts) OnDeviceVerdict(_ context.Context, recorded verdict.RecordedDeviceVerdict) {
+	r.got = append(r.got, recorded)
+}
+
+func TestRecordDeviceVerdict_EveryVerdictReachesVerdictObservers(t *testing.T) {
+	svc, obs := newVerdictService(t)
+	verdicts := &recordedVerdicts{}
+	svc.RegisterDeviceVerdictObserver(verdicts)
+
+	recorded := []verdict.DeviceVerdict{
+		{DeviceID: 7, HostID: "node-7", Serial: "SN7", Passed: true},
+		{DeviceID: 7, HostID: "node-7", Serial: "SN7", Reason: "no attestation certificate enrolled"},
+		{DeviceID: 7, HostID: "node-7", Serial: "SN7", Cryptographic: true, Reason: "signature invalid"},
+	}
+	for _, v := range recorded {
+		if err := svc.RecordDeviceVerdict(context.Background(), v); err != nil {
+			t.Fatalf("RecordDeviceVerdict: %v", err)
+		}
+	}
+
+	if len(verdicts.got) != len(recorded) {
+		t.Fatalf("every recorded verdict must reach the verdict observers, got %d of %d", len(verdicts.got), len(recorded))
+	}
+	events, err := svc.Store().ListEvents(store.EventFilter{HostID: "node-7"})
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	eventTimes := make(map[string]time.Time, len(events))
+	for _, e := range events {
+		eventTimes[e.ID] = e.Timestamp
+	}
+	for i, got := range verdicts.got {
+		if got.Verdict != recorded[i] {
+			t.Fatalf("verdict %d: got %+v, want %+v", i, got.Verdict, recorded[i])
+		}
+		at, ok := eventTimes[got.EventID]
+		if !ok || !got.RecordedAt.Equal(at) {
+			t.Fatalf("verdict %d must carry its event's ID and time, got id=%q at=%s", i, got.EventID, got.RecordedAt)
+		}
+	}
+	if len(obs.failed) != 1 || obs.detail[0] != "signature invalid" {
+		t.Fatalf("only the cryptographic failure may reach the quarantine observers, got %v", obs.detail)
+	}
+}
+
+func TestRecordDeviceVerdict_UnloggedVerdictReachesNoVerdictObserver(t *testing.T) {
+	svc, _ := newVerdictService(t)
+	verdicts := &recordedVerdicts{}
+	svc.RegisterDeviceVerdictObserver(verdicts)
+
+	err := svc.RecordDeviceVerdict(context.Background(), verdict.DeviceVerdict{DeviceID: 7})
+	if !errors.As(err, new(verdict.ErrInvalidVerdict)) {
+		t.Fatalf("expected ErrInvalidVerdict, got %v", err)
+	}
+	if len(verdicts.got) != 0 {
+		t.Fatalf("a verdict that was never logged must reach no observer: %+v", verdicts.got)
 	}
 }
 

@@ -1214,6 +1214,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			// the routers register only when the server is non-nil.
 			if svc := platformDaemon.AttestationGRPCService(); svc != nil {
 				params.AttestationServiceServer = svc
+				params.AttestationVerdicts = svc
 			}
 			// Bridge the daemon's control-plane DB signer to the webservice
 			// config delivery handler (POST /api/v1/provisioning/sign).

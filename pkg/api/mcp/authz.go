@@ -92,6 +92,8 @@ func toolPermissionCatalog() map[string]string {
 	permissions["attestation_device_reports"] = "attestation:read"
 	permissions["attestation_caller_policy"] = "attestation:read"
 	permissions["attestation_device_refresh"] = "attestation:write"
+	// The device verdict feed (#709), the same scope as the gRPC stream.
+	permissions["attestation_device_verdicts_poll"] = "attestation:read"
 	permissions["device_provision"] = "device:write"
 
 	// Device profile tools (same scopes as the gRPC DeviceService profile
@@ -108,6 +110,9 @@ func toolPermissionCatalog() map[string]string {
 	// Gateway load balancer tools
 	// The telemetry snapshot is a read of what the datapath programmed.
 	permissions["gateway_snapshot"] = "sdn:read"
+	// Admitted overlay VTEPs are read from the same snapshot.
+	permissions["gateway_admitted_vtep"] = "sdn:read"
+	permissions["gateway_admitted_vteps"] = "sdn:read"
 	// Underlay zones (#708). Every change re-derives the network plan and
 	// takes effect at restart; a privileged path is audited by the service.
 	permissions["gateway_zone_list"] = "sdn:read"

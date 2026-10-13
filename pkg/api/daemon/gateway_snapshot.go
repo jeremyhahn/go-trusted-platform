@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -114,6 +115,40 @@ func (s *GatewayService) ListGatewaySnapshots(ctx context.Context, req *platform
 		out = append(out, gatewaySnapshotToProto(snap))
 	}
 	return &platformv1.ListGatewaySnapshotsResponse{Snapshots: out}, nil
+}
+
+// GetGatewayAdmittedVTEP returns one VTEP the gateway last reported as
+// admitted to its overlay, or NotFound when that report does not hold it.
+func (s *GatewayService) GetGatewayAdmittedVTEP(ctx context.Context, req *platformv1.GetGatewayAdmittedVTEPRequest) (*platformv1.GetGatewayAdmittedVTEPResponse, error) {
+	vtep := strings.TrimSpace(req.GetVtep())
+	if vtep == "" {
+		return nil, status.Error(codes.InvalidArgument, "vtep is required")
+	}
+	resp, err := s.ListGatewayAdmittedVTEPs(ctx, &platformv1.ListGatewayAdmittedVTEPsRequest{GatewayId: req.GetGatewayId()})
+	if err != nil {
+		return nil, err
+	}
+	for _, admitted := range resp.GetVteps() {
+		if admitted.GetVtep() == vtep {
+			return &platformv1.GetGatewayAdmittedVTEPResponse{Vtep: admitted}, nil
+		}
+	}
+	return nil, status.Errorf(codes.NotFound, "gateway admitted VTEP %s was not found", vtep)
+}
+
+// ListGatewayAdmittedVTEPs returns the VTEPs the gateway reported as admitted
+// in its latest telemetry snapshot. A gateway that reports no overlay section
+// answers that the overlay is not configured.
+func (s *GatewayService) ListGatewayAdmittedVTEPs(ctx context.Context, req *platformv1.ListGatewayAdmittedVTEPsRequest) (*platformv1.ListGatewayAdmittedVTEPsResponse, error) {
+	snapResp, err := s.GetGatewaySnapshot(ctx, &platformv1.GetGatewaySnapshotRequest{GatewayId: req.GetGatewayId()})
+	if err != nil {
+		return nil, err
+	}
+	overlay := snapResp.GetSnapshot().GetOverlay()
+	if overlay == nil {
+		return nil, serviceNotConfigured("gateway overlay", "overlay telemetry is not available for this gateway")
+	}
+	return &platformv1.ListGatewayAdmittedVTEPsResponse{Vteps: overlay.GetAdmittedVteps()}, nil
 }
 
 // gatewaySnapshotToProto maps the telemetry snapshot onto the wire type. A
@@ -235,6 +270,53 @@ func gatewaySnapshotToProto(snap *gwstate.Snapshot) *platformv1.GatewaySnapshot 
 			Terminal:  pipeline.Terminal,
 			FailMode:  pipeline.FailMode,
 		}
+	}
+	if overlay := snap.Overlay; overlay != nil {
+		section := &platformv1.SnapshotOverlay{
+			Running:                  overlay.Running,
+			LocalVtep:                overlay.LocalVTEP,
+			VniCount:                 uint32(overlay.VNICount),
+			RemoteVtepCount:          uint32(overlay.RemoteVTEPCount),
+			LocalMacCount:            uint32(overlay.LocalMACCount),
+			RemoteMacCount:           uint32(overlay.RemoteMACCount),
+			PrefixCount:              uint32(overlay.PrefixCount),
+			RefusedBindings:          overlay.RefusedBindings,
+			L3Vni:                    overlay.L3VNI,
+			ArpSuppressionEnabled:    overlay.ARPSuppressionEnabled,
+			AnycastGatewayConfigured: overlay.AnycastGatewayConfigured,
+			UptimeSeconds:            int64(overlay.Uptime.Seconds()),
+			NdCounters: &platformv1.SnapshotOverlayNDCounters{
+				Punted:       overlay.NDCounters.Punted,
+				Answered:     overlay.NDCounters.Answered,
+				MeterDropped: overlay.NDCounters.MeterDropped,
+				QueueDropped: overlay.NDCounters.QueueDropped,
+				FellThrough:  overlay.NDCounters.FellThrough,
+			},
+		}
+		if !overlay.StartedAt.IsZero() {
+			section.StartedAt = timestamppb.New(overlay.StartedAt)
+		}
+		for _, admitted := range overlay.AdmittedVTEPs {
+			section.AdmittedVteps = append(section.AdmittedVteps, admittedVTEPToProto(admitted))
+		}
+		out.Overlay = section
+	}
+	return out
+}
+
+func admittedVTEPToProto(vtep gwstate.AdmittedVTEPState) *platformv1.GatewayAdmittedVTEP {
+	out := &platformv1.GatewayAdmittedVTEP{
+		Vtep:           vtep.VTEP,
+		DeviceId:       vtep.DeviceID,
+		HostId:         vtep.HostID,
+		Serial:         vtep.Serial,
+		Hostname:       vtep.Hostname,
+		AllocationId:   vtep.AllocationID,
+		BaselineSource: vtep.BaselineSource,
+		ProfileId:      vtep.ProfileID,
+	}
+	if !vtep.VerdictAt.IsZero() {
+		out.VerdictAt = timestamppb.New(vtep.VerdictAt)
 	}
 	return out
 }

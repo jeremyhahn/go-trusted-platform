@@ -71,7 +71,11 @@ type MCPServiceProviderConfig struct {
 	AttestCertRecorder AttestCertRecorder
 	// AttestationReporting carries the reporting service's report view,
 	// refresh trigger and caller policy for the MCP report tools (#226).
-	AttestationReporting  *ReportingHandles
+	AttestationReporting *ReportingHandles
+	// AttestationServer serves the device verdict feed for
+	// attestation_device_verdicts_poll (#709); nil answers that no feed is
+	// configured.
+	AttestationServer     *AttestationServiceServer
 	DNSService            dns.DNSService
 	SDNService            *SDNService
 	PolicyEngine          policy.PolicyEngine
@@ -121,6 +125,7 @@ type MCPServiceProvider struct {
 	deviceVerdicts        verdict.Sink
 	attestCertRecorder    AttestCertRecorder
 	attestationReporting  *ReportingHandles
+	attestationServer     *AttestationServiceServer
 	dnsService            dns.DNSService
 	sdnService            *SDNService
 	policyEngine          policy.PolicyEngine
@@ -170,6 +175,7 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		deviceVerdicts:        config.VerdictSink,
 		attestCertRecorder:    config.AttestCertRecorder,
 		attestationReporting:  config.AttestationReporting,
+		attestationServer:     config.AttestationServer,
 		dnsService:            config.DNSService,
 		sdnService:            config.SDNService,
 		policyEngine:          config.PolicyEngine,

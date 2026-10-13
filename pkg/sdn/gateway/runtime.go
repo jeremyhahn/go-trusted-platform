@@ -14,6 +14,7 @@
 package gateway
 
 import (
+	"errors"
 	"fmt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
@@ -21,6 +22,7 @@ import (
 	"log/slog"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ct"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/modes"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
@@ -31,6 +33,11 @@ import (
 // the gateway before Start. It is never serialized; config-file loading
 // leaves it nil, and services that need it (firewall, NAT) fail Start with
 // ErrRuntimeMissing when their config section is enabled without it.
+type overlayOpenFlowClient interface {
+	modes.OverlayOpenFlowClient
+	Close() error
+}
+
 type GatewayRuntime struct {
 	// Controller installs OpenFlow rules (the shared policy flow path).
 	Controller policy.FlowController
@@ -51,12 +58,31 @@ type GatewayRuntime struct {
 	// Zones returns the current resolved zone set (hot-refreshable).
 	Zones func() []zone.ZoneConfig
 
-	// Networks returns the current zone → VLAN/subnet summary map
+	// Networks returns the current zone -> VLAN/subnet summary map
 	// (hot-refreshable).
 	Networks func() map[zone.Zone]zoneflows.NetworkSummary
 
 	// CTZones allocates conntrack zone IDs shared by all gateway services.
 	CTZones *ct.ZoneAllocator
+
+	// OverlayIPAM reads fabric reservations used to admit remote VTEPs.
+	OverlayIPAM OverlayIPAMReader
+
+	// OverlayDevices loads device records attached to fabric VTEP reservations.
+	OverlayDevices OverlayDeviceGetter
+
+	// OverlayVerdicts reads the latest attestation verdict for overlay admission.
+	OverlayVerdicts OverlayVerdictReader
+
+	// OverlayVerdictStream delivers device verdicts as platformd records
+	// them, so a failed verdict withdraws the device's VTEPs at once.
+	OverlayVerdictStream OverlayVerdictStream
+
+	// OverlayOpenFlow programs the overlay terminal's OpenFlow tables.
+	OverlayOpenFlow overlayOpenFlowClient
+
+	// OverlayPlatform is the SDK connection backing overlay admission reads.
+	OverlayPlatform interface{ Close() error }
 
 	// Logger receives service lifecycle logs.
 	Logger *slog.Logger
@@ -69,10 +95,20 @@ type GatewayRuntime struct {
 // receiver or a runtime without an OVS client; the injecting daemon owns
 // the call once the gateway no longer needs the datapath.
 func (r *GatewayRuntime) Close() error {
-	if r == nil || r.OVS == nil {
+	if r == nil {
 		return nil
 	}
-	return r.OVS.Close()
+	var errs []error
+	if r.OVS != nil {
+		errs = append(errs, r.OVS.Close())
+	}
+	if r.OverlayOpenFlow != nil {
+		errs = append(errs, r.OverlayOpenFlow.Close())
+	}
+	if r.OverlayPlatform != nil {
+		errs = append(errs, r.OverlayPlatform.Close())
+	}
+	return errors.Join(errs...)
 }
 
 // ErrRuntimeMissing is returned when a service that requires injected

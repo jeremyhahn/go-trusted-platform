@@ -29,9 +29,10 @@ import (
 
 const (
 	// FlowTable is the dedicated OpenFlow table used for ephemeral
-	// flow-programming measurements. Table 250 sits far above every
-	// pipeline table the gateway services program (tables 0-26), so
-	// perf flows never intersect production traffic.
+	// flow-programming measurements. It sits far above the last table of
+	// the gateway pipeline (modes.TableLocalDelivery), and no pipeline
+	// table resubmits to it, so perf flows never intersect production
+	// traffic.
 	FlowTable = 250
 
 	// FlowPriority is the priority of ephemeral perf flows.

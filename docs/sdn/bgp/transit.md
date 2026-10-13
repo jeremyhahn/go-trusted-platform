@@ -419,13 +419,12 @@ func (d *Dampener) ShouldReuse(prefix string) bool {
 > describes — `RouteSignature`, `SignedRoute` with a quorum, a
 > `coordinatorClient.RequestSignatures()` RPC, `ErrInsufficientSignatures`,
 > a `tpmSigner`, and signatures carried in a BGP extended community — does
-> not exist. What the code does (`pkg/sdn/gateway/modes/transit.go`):
-> `RouteSigningKey` is one in-process Ed25519 key; `SignRoute` signs
-> `sha256(prefix || hour)`; `VerifyRouteSignature` can verify only this
-> node's own signature and returns `ErrSignerNotFound` for any other signer;
-> `AnnouncePrefix` computes a signature and **discards it** — nothing is
-> attached to the announcement. Treat it as experimental and not as a
-> control (epic #553, ruling R11).
+> not exist. No route is signed: the `transit` section runs the
+> `pkg/sdn/bgp` speaker directly (`transitBackend`, `pkg/sdn/gateway/handlers.go`).
+> The former `modes.TransitModeHandler` and its in-process `RouteSigningKey`,
+> whose signature `AnnouncePrefix` computed and discarded, had no production
+> caller and were deleted (#709). Prefix filtering is the control
+> (epic #553, ruling R11).
 
 ### Overview
 

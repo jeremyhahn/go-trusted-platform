@@ -13,14 +13,19 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 )
 
-// Compile-time check: the service is the platform's verdict sink.
-var _ verdict.Sink = (*Service)(nil)
+// Compile-time checks: the service is the platform's verdict sink, and hands
+// every verdict it records to the verdict observers.
+var (
+	_ verdict.Sink             = (*Service)(nil)
+	_ verdict.ObserverRegistry = (*Service)(nil)
+)
 
 // RecordDeviceVerdict writes the verdict to the attestation event log and
 // hands it to the registered observers, which is how a failed device quote
-// reaches the SDN quarantine manager.
+// reaches the SDN quarantine manager and the overlay gateways.
 //
-// Only a cryptographic failure is reported to observers as a failure. An
+// Every logged verdict reaches the verdict observers. Only a
+// cryptographic failure is reported to AttestationObservers as a failure. An
 // absence of evidence (no attestation certificate, no profile, no trust
 // anchor) is logged and denied service by the verifier, but it is not
 // evidence of compromise and never quarantines a device. A captured
@@ -72,6 +77,11 @@ func (s *Service) RecordDeviceVerdict(ctx context.Context, v verdict.DeviceVerdi
 	if err := s.store.PutEvent(ev); err != nil {
 		return err
 	}
+	s.dispatchRecordedVerdict(ctx, verdict.RecordedDeviceVerdict{
+		Verdict:    v,
+		EventID:    ev.ID,
+		RecordedAt: ev.Timestamp,
+	})
 
 	switch {
 	case v.Passed:
@@ -80,6 +90,17 @@ func (s *Service) RecordDeviceVerdict(ctx context.Context, v verdict.DeviceVerdi
 		s.dispatchVerdict(ctx, v.DeviceID, v.HostID, false, v.Reason)
 	}
 	return nil
+}
+
+// dispatchRecordedVerdict hands a logged verdict to every verdict observer.
+func (s *Service) dispatchRecordedVerdict(ctx context.Context, recorded verdict.RecordedDeviceVerdict) {
+	s.mu.RLock()
+	obs := s.verdictObs
+	s.mu.RUnlock()
+
+	for _, o := range obs {
+		o.OnDeviceVerdict(ctx, recorded)
+	}
 }
 
 // dispatchVerdict fans one attestation outcome out to every registered

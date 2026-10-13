@@ -60,7 +60,9 @@ service account, or if the process hosts no enabled service.
 | Path | Purpose |
 |---|---|
 | `gateway status` | Gateway node status |
-| `gateway snapshot` | Telemetry snapshot: sessions, BFD, tunnels, uplinks, filters, NAT, pipeline |
+| `gateway snapshot` | Telemetry snapshot: sessions, BFD, tunnels, uplinks, filters, NAT, overlay, pipeline |
+| `gateway overlay vteps` | List overlay VTEPs admitted by gatewayd |
+| `gateway overlay vteps get` | Read one admitted overlay VTEP |
 | `gateway mode set` | **Deprecated** — set gateway modes |
 | `gateway bgp status` | BGP status |
 | `gateway bgp peers` | List BGP peers |
@@ -82,13 +84,26 @@ see [architecture.md](architecture.md).
 without it, the node's own gateway answers. `--all` lists every gateway that
 has reported. `--output json|yaml` emits the document instead of the rendered
 sections. Sections a gateway does not run are not printed — an absent Tunnels
-section means the service is not running, not that it runs with no tunnels.
+section means the service is not running, not that it runs with no tunnels. When
+the overlay service is running, the snapshot prints the local VTEP, admitted
+VTEPs, and ND counters for punted, answered, meter-dropped, queue-dropped and
+fell-through packets.
+
+**`gateway overlay vteps`** lists the VTEPs gatewayd currently admits for
+decapsulation. Use `--gateway-id <id>` to read a control-plane report for a
+specific gateway; without it, the local gateway answers.
+
+**`gateway overlay vteps get <vtep>`** reads one admitted VTEP by IP address.
+It uses the same `--gateway-id <id>` selector and returns not found when the
+address is not currently admitted.
 
 ```bash
 platformctl sdn gateway status --output json
 platformctl sdn gateway snapshot
 platformctl sdn gateway snapshot --gateway-id gw-01-gateway
 platformctl sdn gateway snapshot --all --output json
+platformctl sdn gateway overlay vteps --gateway-id gw-01-gateway
+platformctl sdn gateway overlay vteps get 10.255.0.10 --gateway-id gw-01-gateway
 platformctl sdn gateway bgp peers
 platformctl sdn gateway bgp announce --prefix 203.0.113.0/24 --next-hop 198.51.100.1
 platformctl sdn gateway bgp withdraw --prefix 203.0.113.0/24

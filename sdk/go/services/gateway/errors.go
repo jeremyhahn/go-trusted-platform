@@ -53,6 +53,31 @@ func (e *ErrListSnapshotsFailed) Error() string {
 
 func (e *ErrListSnapshotsFailed) Unwrap() error { return e.Cause }
 
+// ErrGetAdmittedVTEPFailed reports an admitted VTEP read that failed.
+type ErrGetAdmittedVTEPFailed struct {
+	GatewayID string
+	VTEP      string
+	Cause     error
+}
+
+func (e *ErrGetAdmittedVTEPFailed) Error() string {
+	return fmt.Sprintf("failed to get gateway %q admitted VTEP %q: %v", e.GatewayID, e.VTEP, e.Cause)
+}
+
+func (e *ErrGetAdmittedVTEPFailed) Unwrap() error { return e.Cause }
+
+// ErrListAdmittedVTEPsFailed reports an admitted VTEP listing that failed.
+type ErrListAdmittedVTEPsFailed struct {
+	GatewayID string
+	Cause     error
+}
+
+func (e *ErrListAdmittedVTEPsFailed) Error() string {
+	return fmt.Sprintf("failed to list gateway %q admitted VTEPs: %v", e.GatewayID, e.Cause)
+}
+
+func (e *ErrListAdmittedVTEPsFailed) Unwrap() error { return e.Cause }
+
 type ErrSetModeFailed struct {
 	Cause error
 }

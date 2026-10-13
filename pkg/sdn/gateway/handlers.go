@@ -15,19 +15,24 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
+	"net/netip"
 	"slices"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/modes"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/secrets"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/firewall"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/loadbalancer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/nat64"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/tunnel"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/vxlan"
 )
 
 // backedService is the lifecycle every real service implementation behind
@@ -60,6 +65,7 @@ var serviceBuilders = map[string]serviceBuilder{
 	ServiceNAT64:        buildNAT64,
 	ServiceHostFW:       buildHostFW,
 	ServiceTunnels:      buildTunnels,
+	ServiceOverlay:      buildOverlay,
 	ServiceTransit:      buildTransit,
 }
 
@@ -68,17 +74,13 @@ var serviceBuilders = map[string]serviceBuilder{
 // operator reads in ErrServiceUnavailable; it names the missing piece, not
 // a promise.
 var serviceRefusals = map[string]string{
-	ServiceOverlay: "the overlay handler (modes.NewOverlayModeHandler) forwards over a flow-based VXLAN port, but the " +
-		"gateway overlay section carries no VTEP or access-port fields to build it from, and nothing backs its " +
-		"VTEP admission (modes.VTEPAdmitter) yet; tracked under #709",
-	ServiceEdge: "the edge service constructor (modes.NewEdgeModeHandler) needs an IPv6 pool, ACME endorse/enroll " +
-		"toggles and a FROST pool the gateway runtime does not inject; tracked under epic #553",
-	ServiceDHCP: "the DHCP service needs an IPAM allocator gatewayd does not have (GatewayRuntime carries none, " +
-		"pkg/sdn/gateway/runtime.go); tracked under epic #553",
-	ServicePXE: "the PXE controller (modes.NewPXEController) needs a serving interface, server address and DHCP " +
-		"range the gateway PXE section does not carry; provisioning is served by platformd's iPXE server today; " +
-		"tracked under epic #553",
-	ServiceManagementVPN: "the management VPN is a design (docs/vpn/, #558) with no implementation; " +
+	ServiceEdge: "the edge service is planned, not implemented: device onboarding needs TPM EK, quote and " +
+		"IDevID verification through the platform SDK, and gatewayd admits no device without it",
+	ServiceDHCP: "the DHCP service is planned, not implemented: it needs an IPAM allocator gatewayd does not " +
+		"have (GatewayRuntime carries none)",
+	ServicePXE: "the gateway PXE service is planned, not implemented; provisioning is served by platformd's " +
+		"iPXE server today",
+	ServiceManagementVPN: "the management VPN is planned, not implemented (design in docs/vpn/); " +
 		"WireGuard is non-FIPS and the MASQUE data plane is unbuilt",
 }
 
@@ -669,6 +671,413 @@ type resolverKeyProvider struct {
 // Key implements tunnel.KeyProvider.
 func (p resolverKeyProvider) Key(ctx context.Context, ref string) ([]byte, error) {
 	return p.resolve(ctx, ref)
+}
+
+// overlayBackend adapts modes.OverlayModeHandler to the gateway service
+// lifecycle. It keeps the admitter beside the datapath it gates and sweeps
+// what that datapath has installed against the admission policy.
+type overlayBackend struct {
+	config   *OverlayServiceConfig
+	ovs      modes.OverlayOVSClient
+	of       modes.OverlayOpenFlowClient
+	ipam     OverlayIPAMReader
+	devices  OverlayDeviceGetter
+	verdicts OverlayVerdictReader
+	stream   OverlayVerdictStream
+	resolver bgp.SecretResolver
+	server   bgp.BGPServerInterface
+	logger   *slog.Logger
+	bridge   string
+
+	mu      sync.Mutex
+	handler *modes.OverlayModeHandler
+	admit   *VTEPAdmitter
+	speaker *bgp.Speaker
+	// stopLoops ends the admission sweep and the verdict follower; loopsDone
+	// closes once both have returned.
+	stopLoops context.CancelFunc
+	loopsDone chan struct{}
+}
+
+// overlayDatapath is the overlay handler's view of the remote VTEPs it holds
+// state for.
+type overlayDatapath interface {
+	InstalledVTEPs() []modes.InstalledVTEP
+}
+
+// runAdmissionSweep re-judges the datapath's installed VTEPs on every tick
+// until ctx ends.
+func runAdmissionSweep(ctx context.Context, ticks <-chan time.Time, datapath overlayDatapath, admitter *VTEPAdmitter, logger *slog.Logger) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticks:
+			if err := admitter.Sweep(ctx, datapath.InstalledVTEPs()); err != nil {
+				logger.Warn("overlay: the admission sweep did not complete", slog.Any("error", err))
+			}
+		}
+	}
+}
+
+// overlayVerdictFollowRetry is how long the verdict follower waits before
+// following a broken verdict stream again.
+const overlayVerdictFollowRetry = 5 * time.Second
+
+// runVerdictFollower follows the platform's device verdicts until ctx ends,
+// withdrawing every device whose verdict failed and replaying the refused
+// VTEPs of every device whose verdict passed. A broken stream is followed
+// again after retry; a verdict recorded while it was down is caught by the
+// admission sweep, which re-reads the latest verdict of every installed and
+// every refused VTEP. It returns only once the IPAM listings its failed
+// verdicts started have ended.
+func runVerdictFollower(ctx context.Context, stream OverlayVerdictStream, admitter *VTEPAdmitter, retry time.Duration, logger *slog.Logger) {
+	defer admitter.waitListings()
+	for {
+		err := stream.Follow(ctx, admitter.OnDeviceVerdict)
+		if ctx.Err() != nil {
+			return
+		}
+		logger.Warn("overlay: the verdict stream broke; following it again",
+			slog.Any("error", err), slog.Duration("retry", retry))
+		timer := time.NewTimer(retry)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+}
+
+// overlayVTEPControl is the overlay handler's control of remote VTEPs the
+// admitter drives.
+type overlayVTEPControl interface {
+	OverlayVTEPRevoker
+	OverlayVTEPReplayer
+}
+
+// overlayHandlerProxy hands the admitter's revocations and replays to the
+// overlay handler once it is built, and refuses them before then: the admitter
+// is built first, because the handler is configured with it.
+type overlayHandlerProxy struct {
+	mu      sync.RWMutex
+	handler overlayVTEPControl
+}
+
+func (p *overlayHandlerProxy) set(handler overlayVTEPControl) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.handler = handler
+}
+
+func (p *overlayHandlerProxy) get() (overlayVTEPControl, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.handler == nil {
+		return nil, &ErrServiceUnavailable{Service: ServiceOverlay, Reason: "overlay handler is not ready"}
+	}
+	return p.handler, nil
+}
+
+func (p *overlayHandlerProxy) RevokeVTEP(ctx context.Context, vtep netip.Addr) error {
+	handler, err := p.get()
+	if err != nil {
+		return err
+	}
+	return handler.RevokeVTEP(ctx, vtep)
+}
+
+func (p *overlayHandlerProxy) ReplayVTEP(ctx context.Context, vtep netip.Addr) error {
+	handler, err := p.get()
+	if err != nil {
+		return err
+	}
+	return handler.ReplayVTEP(ctx, vtep)
+}
+
+// RefusedVTEPs reports nothing before the handler is built: it has refused
+// nothing yet.
+func (p *overlayHandlerProxy) RefusedVTEPs() []netip.Addr {
+	handler, err := p.get()
+	if err != nil {
+		return nil
+	}
+	return handler.RefusedVTEPs()
+}
+
+func (b *overlayBackend) Start(ctx context.Context) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.handler != nil {
+		return &ErrServiceAlreadyActive{Service: ServiceOverlay}
+	}
+	logger := b.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	proxy := &overlayHandlerProxy{}
+	admitter, err := NewVTEPAdmitter(VTEPAdmissionConfig{
+		IPAM:             b.ipam,
+		Devices:          b.devices,
+		Verdicts:         b.verdicts,
+		Revoker:          proxy,
+		Replayer:         proxy,
+		MaxVerdictAge:    b.config.VerdictMaxAge,
+		VerdictClockSkew: b.config.VerdictClockSkew,
+		// Half the interval, so a sweep whose reads hang ends before the
+		// next tick and the following sweep still runs on time.
+		ReadTimeout: b.config.admissionSweepInterval() / 2,
+		Logger:      logger,
+	})
+	if err != nil {
+		return err
+	}
+	modeCfg := &modes.OverlayModeConfig{
+		VTEPConfig: &vxlan.VTEPConfig{
+			LocalIP:       b.config.LocalVTEP,
+			UnderlayIface: b.config.UnderlayInterface,
+			UnderlayMTU:   b.config.UnderlayMTU,
+			VXLANPort:     b.config.VXLANPort,
+		},
+		BridgeName: b.bridge,
+		AccessPort: b.config.AccessPort,
+		Admitter:   admitter,
+		Logger:     logger,
+	}
+
+	speaker, evpnCfg, err := b.overlayEVPN(ctx, logger)
+	if err != nil {
+		return err
+	}
+	modeCfg.EVPNConfig = evpnCfg
+	handler, err := modes.NewOverlayModeHandler(modeCfg, b.ovs, b.of)
+	if err != nil {
+		return errors.Join(err, stopOverlaySpeaker(ctx, speaker))
+	}
+	proxy.set(handler)
+	if err := handler.Start(ctx); err != nil {
+		return errors.Join(err, stopOverlaySpeaker(ctx, speaker))
+	}
+	// A running handler with no VNI forwards nothing, so the overlay is not up
+	// until every configured VNI is joined.
+	if err := joinOverlayVNIs(ctx, handler, b.config.VNIs); err != nil {
+		return errors.Join(err, handler.Stop(ctx), stopOverlaySpeaker(ctx, speaker))
+	}
+
+	// The loops outlive the request that started the service; Stop ends them.
+	loopsCtx, stopLoops := context.WithCancel(context.WithoutCancel(ctx))
+	var loops sync.WaitGroup
+	ticker := time.NewTicker(b.config.admissionSweepInterval())
+	loops.Add(2)
+	go func() {
+		defer loops.Done()
+		defer ticker.Stop()
+		runAdmissionSweep(loopsCtx, ticker.C, handler, admitter, logger)
+	}()
+	go func() {
+		defer loops.Done()
+		runVerdictFollower(loopsCtx, b.stream, admitter, overlayVerdictFollowRetry, logger)
+	}()
+	loopsDone := make(chan struct{})
+	go func() {
+		loops.Wait()
+		close(loopsDone)
+	}()
+
+	b.handler = handler
+	b.admit = admitter
+	b.speaker = speaker
+	b.stopLoops = stopLoops
+	b.loopsDone = loopsDone
+	return nil
+}
+
+// joinOverlayVNIs joins each configured L2VNI on its access VLAN. With EVPN a
+// join also advertises the VNI to the route reflectors.
+func joinOverlayVNIs(ctx context.Context, handler *modes.OverlayModeHandler, vnis []OverlayVNIConfig) error {
+	for _, v := range vnis {
+		if err := handler.AddVNI(ctx, v.VNI, v.VLAN); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func stopOverlaySpeaker(ctx context.Context, speaker *bgp.Speaker) error {
+	if speaker == nil {
+		return nil
+	}
+	return speaker.Stop(ctx)
+}
+
+func (b *overlayBackend) Stop(ctx context.Context) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.handler == nil {
+		return nil
+	}
+	b.stopLoops()
+	<-b.loopsDone
+	var errs []error
+	errs = append(errs, b.handler.Stop(ctx))
+	if b.speaker != nil {
+		errs = append(errs, b.speaker.Stop(ctx))
+	}
+	b.handler = nil
+	b.admit = nil
+	b.speaker = nil
+	b.stopLoops = nil
+	b.loopsDone = nil
+	return errors.Join(errs...)
+}
+
+func (b *overlayBackend) Active() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.handler != nil && b.handler.GetStatus().Running
+}
+
+// Healthy reports a running overlay that still carries every configured VNI.
+func (b *overlayBackend) Healthy() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.handler == nil {
+		return false
+	}
+	status := b.handler.GetStatus()
+	return status.Running && status.VNICount == len(b.config.VNIs)
+}
+
+func (b *overlayBackend) Status() *modes.OverlayModeStatus {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.handler == nil {
+		return nil
+	}
+	return b.handler.GetStatus()
+}
+
+// ListAdmittedVTEPs reports the remote VTEPs the overlay datapath has
+// installed, each with the admission that let it in.
+func (b *overlayBackend) ListAdmittedVTEPs(context.Context) ([]AdmittedVTEP, error) {
+	b.mu.Lock()
+	handler, admitter := b.handler, b.admit
+	b.mu.Unlock()
+	if handler == nil {
+		return nil, &ErrServiceUnavailable{Service: ServiceOverlay, Reason: "overlay admission is not running"}
+	}
+	return admitter.Admitted(handler.InstalledVTEPs()), nil
+}
+
+func (b *overlayBackend) overlayEVPN(ctx context.Context, logger *slog.Logger) (*bgp.Speaker, *bgp.EVPNManagerConfig, error) {
+	if len(b.config.RRPeers) == 0 {
+		return nil, nil, nil
+	}
+	if b.config.OverlayASN > 65535 {
+		return nil, nil, &ErrServiceUnavailable{Service: ServiceOverlay, Reason: "overlay EVPN route targets require a 2-byte overlay ASN"}
+	}
+	peers, err := overlayRRPeers(b.config)
+	if err != nil {
+		return nil, nil, err
+	}
+	// The overlay speaker dials its route reflectors from the VTEP address
+	// and listens for nobody: the transit speaker owns port 179, and a second
+	// listener would fail the start with "address in use".
+	speakerCfg := &bgp.BGPConfig{
+		RouterID:        b.config.LocalVTEP,
+		ASN:             b.config.OverlayASN,
+		OutboundOnly:    true,
+		SessionSource:   b.config.LocalVTEP,
+		Capabilities:    bgp.BGPCapabilities{EVPN: true},
+		EnabledFamilies: []bgp.AddressFamily{bgp.AFamilyEVPN},
+		Neighbors:       peers,
+	}
+	defer zeroizeBGPSecrets(speakerCfg)
+	if err := speakerCfg.ResolveSecrets(ctx, b.resolver); err != nil {
+		return nil, nil, err
+	}
+	var opts []bgp.SpeakerOption
+	if b.server != nil {
+		opts = append(opts, bgp.WithBGPServer(b.server))
+	}
+	speaker, err := bgp.NewSpeaker(speakerCfg, logger, opts...)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := speaker.Start(ctx); err != nil {
+		return nil, nil, err
+	}
+	for i := range speakerCfg.Neighbors {
+		if err := speaker.AddPeer(ctx, &speakerCfg.Neighbors[i]); err != nil {
+			if stopErr := speaker.Stop(ctx); stopErr != nil {
+				logger.Warn("overlay: stopping the speaker after a peer refusal failed", slog.Any("error", stopErr))
+			}
+			return nil, nil, err
+		}
+	}
+	return speaker, &bgp.EVPNManagerConfig{
+		Speaker:    speaker,
+		Logger:     logger,
+		LocalVTEP:  b.config.LocalVTEP,
+		OverlayASN: uint16(b.config.OverlayASN),
+	}, nil
+}
+
+// overlayRRPeers copies the route-reflector peers for the overlay speaker and
+// fills each empty route-target allowlist with the route targets of the
+// configured VNIs. The speaker's RFC 8212 policy rejects every EVPN route an
+// allowlist does not name, so a peer configured without one would establish
+// and then carry no Type-2 or Type-3 route in that direction. Every VTEP
+// derives the same route target for a VNI (RFC 8365 §5.1.2.1), so the
+// default is the overlay's own; an allowlist the operator wrote is kept.
+func overlayRRPeers(cfg *OverlayServiceConfig) ([]bgp.NeighborConfig, error) {
+	if len(cfg.RRPeers) == 0 {
+		return nil, nil
+	}
+	routeTargets := make([]string, 0, len(cfg.VNIs))
+	for _, v := range cfg.VNIs {
+		rt, err := bgp.AutoRouteTarget(uint16(cfg.OverlayASN), 0, v.VNI)
+		if err != nil {
+			return nil, err
+		}
+		routeTargets = append(routeTargets, rt.String())
+	}
+	peers := append([]bgp.NeighborConfig(nil), cfg.RRPeers...)
+	for i := range peers {
+		policy := &peers[i].Policy
+		if len(policy.ImportRouteTargets) == 0 {
+			policy.ImportRouteTargets = append([]string(nil), routeTargets...)
+		}
+		if len(policy.ExportRouteTargets) == 0 {
+			policy.ExportRouteTargets = append([]string(nil), routeTargets...)
+		}
+	}
+	return peers, nil
+}
+
+func buildOverlay(g *Gateway) (backedService, error) {
+	runtime := g.config.Runtime
+	if runtime == nil || runtime.OVS == nil || runtime.OverlayOpenFlow == nil || runtime.OverlayIPAM == nil || runtime.OverlayDevices == nil || runtime.OverlayVerdicts == nil || runtime.OverlayVerdictStream == nil {
+		return nil, &ErrRuntimeMissing{Service: ServiceOverlay}
+	}
+	if g.config.Overlay == nil {
+		return nil, &ErrServiceUnavailable{Service: ServiceOverlay, Reason: "the overlay service needs a gateway.overlay section"}
+	}
+	host := g.config.hostRuntime()
+	return &overlayBackend{
+		config:   g.config.Overlay,
+		ovs:      runtime.OVS,
+		of:       runtime.OverlayOpenFlow,
+		ipam:     runtime.OverlayIPAM,
+		devices:  runtime.OverlayDevices,
+		verdicts: runtime.OverlayVerdicts,
+		stream:   runtime.OverlayVerdictStream,
+		resolver: host.SecretResolver,
+		server:   host.BGPServer,
+		logger:   runtime.Logger,
+		bridge:   runtime.Bridge,
+	}, nil
 }
 
 // transitBackend runs the BGP speaker for the transit service. The speaker

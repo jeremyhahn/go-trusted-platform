@@ -146,10 +146,18 @@ func TestGatewaySnapshotOpcodesAreDistinct(t *testing.T) {
 		quicwire.OpGatewayListNetworkZones:  "zones-list",
 		quicwire.OpGatewayDeleteNetworkZone: "zones-delete",
 	}
-	for op, name := range map[byte]string{quicwire.OpGatewaySnapshot: "snapshot", quicwire.OpGatewayListSnapshots: "snapshots"} {
+	for op, name := range map[byte]string{
+		quicwire.OpGatewaySnapshot:          "snapshot",
+		quicwire.OpGatewayListSnapshots:     "snapshots",
+		quicwire.OpGatewayAdmittedVTEP:      "admitted-vtep",
+		quicwire.OpGatewayListAdmittedVTEPs: "admitted-vteps",
+	} {
 		existing, clash := seen[op]
 		assert.False(t, clash, "%s collides with %s", name, existing)
+		seen[op] = name
 	}
 	assert.Equal(t, byte(0x15), quicwire.OpGatewaySnapshot)
 	assert.Equal(t, byte(0x16), quicwire.OpGatewayListSnapshots)
+	assert.Equal(t, byte(0x17), quicwire.OpGatewayAdmittedVTEP)
+	assert.Equal(t, byte(0x18), quicwire.OpGatewayListAdmittedVTEPs)
 }

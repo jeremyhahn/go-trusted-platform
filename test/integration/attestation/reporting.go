@@ -95,19 +95,24 @@ func (e ErrReportNotCollected) Error() string {
 
 func (e ErrReportNotCollected) Unwrap() error { return e.Err }
 
-// classifyReportingText maps a failure whose only signal is its text (MCP,
+// classifyReportingText maps a failure whose only signal is its text (the
 // CLI) onto the typed reporting errors. neverCollected is the transport's
 // phrase for a device with no report; it is only consulted when deviceID is
 // set. Any other failure is returned unchanged.
 func classifyReportingText(transport, operation, deviceID, neverCollected string, err error) error {
-	text := err.Error()
-	if strings.Contains(text, reasonNotConfigured) {
+	if isNotConfiguredText(err) {
 		return ErrReportingUnavailable{Transport: transport, Operation: operation, Err: err}
 	}
-	if deviceID != "" && strings.Contains(text, neverCollected) {
+	if deviceID != "" && strings.Contains(err.Error(), neverCollected) {
 		return ErrReportNotCollected{Transport: transport, DeviceID: deviceID, Err: err}
 	}
 	return err
+}
+
+// isNotConfiguredText reports whether err is the daemon's refusal on a node
+// without a reporting service, which MCP and the CLI carry only as text.
+func isNotConfiguredText(err error) bool {
+	return strings.Contains(err.Error(), reasonNotConfigured)
 }
 
 // reportingRPC runs the reporting RPCs over an AttestationService client.

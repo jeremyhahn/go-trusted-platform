@@ -531,6 +531,26 @@ func (a *OverlayUnixAdapter) GatewayStatus(ctx context.Context) (*GatewayStatusR
 	}, nil
 }
 
+func (a *OverlayUnixAdapter) GatewayAdmittedVTEPList(ctx context.Context, gatewayID string) (*GatewayAdmittedVTEPListResult, error) {
+	resp, err := a.gateway.ListGatewayAdmittedVTEPs(ctx, &platformv1.ListGatewayAdmittedVTEPsRequest{GatewayId: gatewayID})
+	if err != nil {
+		return nil, ErrOverlayUnixRPCFailed{Method: "ListGatewayAdmittedVTEPs", Err: err}
+	}
+	vteps := make([]GatewayAdmittedVTEPInfo, 0, len(resp.GetVteps()))
+	for _, vtep := range resp.GetVteps() {
+		vteps = append(vteps, grpcGatewayAdmittedVTEPInfo(vtep))
+	}
+	return &GatewayAdmittedVTEPListResult{VTEPs: vteps, Count: len(vteps)}, nil
+}
+
+func (a *OverlayUnixAdapter) GatewayAdmittedVTEPGet(ctx context.Context, gatewayID, vtep string) (*GatewayAdmittedVTEPGetResult, error) {
+	resp, err := a.gateway.GetGatewayAdmittedVTEP(ctx, &platformv1.GetGatewayAdmittedVTEPRequest{GatewayId: gatewayID, Vtep: vtep})
+	if err != nil {
+		return nil, ErrOverlayUnixRPCFailed{Method: "GetGatewayAdmittedVTEP", Err: err}
+	}
+	return &GatewayAdmittedVTEPGetResult{VTEP: grpcGatewayAdmittedVTEPInfo(resp.GetVtep())}, nil
+}
+
 // GatewaySetMode sets gateway mode via Unix socket.
 func (a *OverlayUnixAdapter) GatewaySetMode(ctx context.Context, opts GatewayModeOptions) (*GatewayModeResult, error) {
 	modesBitmask := overlayUnixGatewayModesToBitmask(opts.Modes)

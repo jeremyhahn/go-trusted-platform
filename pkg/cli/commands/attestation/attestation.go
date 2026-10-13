@@ -13,7 +13,8 @@
 //
 // Package attestation provides the platformctl verbs for the attestation
 // reporting surface: the control plane's cached device verdicts, the
-// out-of-cycle refresh trigger, and a node's caller-admission policy.
+// out-of-cycle refresh trigger, the live verdict feed, and a node's
+// caller-admission policy.
 package attestation
 
 import (
@@ -53,11 +54,15 @@ Examples:
   # Which control planes this node lets collect its quotes
   platformctl attestation callers
 
+  # Print every device verdict platformd records from now on
+  platformctl attestation verdicts follow
+
   # Machine-readable output carries the wire shape unchanged
   platformctl attestation reports get 123 -o json`,
 	}
 	cmd.AddCommand(newReportsCommand(getFlags))
 	cmd.AddCommand(newCallersCommand(getFlags))
+	cmd.AddCommand(newVerdictsCommand(getFlags))
 	return cmd
 }
 

@@ -85,6 +85,7 @@ GET /api/v1/attestation/manifests
 GET /api/v1/attestation/manifests/{id}
 GET /api/v1/attestation/reports
 GET /api/v1/attestation/reports/{device_id}
+GET /api/v1/attestation/verdicts
 GET /api/v1/ca
 GET /api/v1/ca/bootstrap
 GET /api/v1/ca/bundle

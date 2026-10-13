@@ -807,7 +807,7 @@ func TestOpcodeToString(t *testing.T) {
 		{OpAttestCollectHost, "AttestCollectHost"},
 		{OpAttestGetAK, "AttestGetAK"},
 		{OpAttestChallenge, "AttestChallenge"},
-		{OpAttestResponse, "AttestResponse"},
+		{OpAttestPollVerdicts, "AttestPollVerdicts"},
 		{OpAttestGetReport, "AttestGetReport"},
 		{OpAttestGetPCRs, "AttestGetPCRs"},
 

@@ -31,6 +31,7 @@ import (
 
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/pollstream"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
@@ -44,6 +45,8 @@ type Adapter struct {
 	connected atomic.Bool
 	closed    atomic.Bool
 	address   string
+	// timeout bounds each tool call; a polled stream waits half of it.
+	timeout time.Duration
 }
 
 // Connect establishes an MCP connection to the platform daemon.
@@ -114,6 +117,7 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 	a := &Adapter{
 		client:  client,
 		address: opts.MCPAddr,
+		timeout: clientConfig.Timeout,
 	}
 	a.connected.Store(true)
 
@@ -243,9 +247,11 @@ func (c *mcpClientConn) Invoke(ctx context.Context, method string, args interfac
 	return nil
 }
 
-// NewStream creates a new stream (not supported for MCP).
-func (c *mcpClientConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-	return nil, status.Error(codes.Unimplemented, "streaming not supported over MCP transport")
+// NewStream opens a server-streaming RPC by long-polling its unary twin; MCP
+// carries no streams of its own. A method with no unary twin is
+// Unimplemented.
+func (c *mcpClientConn) NewStream(ctx context.Context, _ *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+	return pollstream.NewStream(ctx, c, method, c.adapter.timeout, opts...)
 }
 
 // grpcMethodToMCPToolMap provides O(1) lookup for gRPC method to MCP tool mapping.
@@ -262,6 +268,11 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.GatewayService/GetPerfDatapath":  "gateway_perf_datapath",
 	"/platform.v1.GatewayService/GetPerfConntrack": "gateway_perf_conntrack",
 	"/platform.v1.GatewayService/GetNAT64Status":   "gateway_nat64_status",
+
+	// Admitted overlay VTEPs — tools in pkg/api/mcp/gateway_tools.go. The
+	// single-VTEP tool returns the bare record; see gateway_admitted_vtep.go.
+	"/platform.v1.GatewayService/GetGatewayAdmittedVTEP":   "gateway_admitted_vtep",
+	"/platform.v1.GatewayService/ListGatewayAdmittedVTEPs": "gateway_admitted_vteps",
 
 	// Daemon / Health — proto: pkg/api/grpc/proto/daemon.proto
 	"/platform.v1.PlatformDaemon/GetHealth":        "platform_health",

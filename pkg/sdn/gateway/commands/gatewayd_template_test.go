@@ -164,6 +164,35 @@ func TestLoadServeConfig_ShippedGatewaydTemplateDecodes(t *testing.T) {
 	assert.NotEmpty(t, cfg.ControlPlane.CertFile)
 }
 
+// TestShippedGatewaydTemplate_OverlayExampleValidates: the README tells an
+// operator to enable the disabled overlay example, so enabled it must pass
+// the overlay's own validation, VNIs included.
+func TestShippedGatewaydTemplate_OverlayExampleValidates(t *testing.T) {
+	path := filepath.Join("..", "..", "..", "..", "configs", "platform", "templates",
+		"dedicated", "supermicro", "x10", "gatewayd.yaml")
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err, "template must exist at %s", path)
+
+	v := viper.New()
+	v.SetConfigType("yaml")
+	require.NoError(t, v.ReadConfig(bytes.NewReader(raw)))
+	cfg, err := LoadServeConfig(v)
+	require.NoError(t, err)
+
+	require.NotNil(t, cfg.Gateway)
+	overlay := cfg.Gateway.Overlay
+	require.NotNil(t, overlay, "the template carries an overlay example")
+	require.False(t, overlay.Enabled, "the example ships disabled")
+	require.NotEmpty(t, overlay.VNIs, "the overlay joins its VNIs at start")
+	// The combination that failed with "address in use": the transit speaker
+	// holds TCP 179 and the overlay speaker dials its route reflectors.
+	require.NotNil(t, cfg.Gateway.BGP, "the template runs a transit speaker")
+	require.NotEmpty(t, overlay.RRPeers, "the overlay runs its own EVPN speaker")
+
+	overlay.Enabled = true
+	require.NoError(t, overlay.Validate())
+}
+
 // TestShippedGatewaydTemplate_CarriesNoSecrets: every credential in the
 // template is a reference the key store resolves at start. A literal key
 // committed here would be a secret in git history, which is a rotation, not

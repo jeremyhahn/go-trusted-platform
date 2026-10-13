@@ -28,6 +28,7 @@ import (
 
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/pollstream"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
@@ -41,6 +42,7 @@ type Adapter struct {
 	connected atomic.Bool
 	closed    atomic.Bool
 	address   string
+	timeout   time.Duration
 }
 
 // Connect establishes a QUIC connection to the platform daemon.
@@ -88,6 +90,7 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 	a := &Adapter{
 		client:  client,
 		address: opts.QUICAddr,
+		timeout: timeout,
 	}
 	a.connected.Store(true)
 
@@ -579,6 +582,12 @@ var categorySubOpcodeMap = map[string]byte{
 	// range. Server dispatcher: pkg/api/quic/gateway_nat64_handlers.go.
 	"/platform.v1.GatewayService/GetNAT64Status": quicwire.OpGatewayNAT64Status,
 
+	// Admitted overlay VTEPs — read from the gateway telemetry snapshot.
+	// Server dispatcher: pkg/api/quic/gateway_handlers.go; requests and
+	// responses are translated in gateway_admitted_vtep.go.
+	"/platform.v1.GatewayService/GetGatewayAdmittedVTEP":   quicwire.OpGatewayAdmittedVTEP,
+	"/platform.v1.GatewayService/ListGatewayAdmittedVTEPs": quicwire.OpGatewayListAdmittedVTEPs,
+
 	// CA CSR signing — multiplexed under OpKMSExtendedCategory (0xCD),
 	// because it certifies an existing KMS key and the opcode space is
 	// fully allocated. Server dispatcher:
@@ -734,6 +743,7 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.AttestationService/GetAttestationQuote":    quicwire.OpAttestQuote,
 	"/platform.v1.AttestationService/VerifyAttestationQuote": quicwire.OpAttestVerify,
 	"/platform.v1.AttestationService/CollectHostAttestation": quicwire.OpAttestCollectHost,
+	"/platform.v1.AttestationService/PollDeviceVerdicts":     quicwire.OpAttestPollVerdicts,
 
 	// IDevID Service — proto: pkg/api/grpc/proto/idevid.proto
 	"/platform.v1.IDevIDService/GetIDevID":                quicwire.OpIDevIDInfo,
@@ -810,6 +820,9 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.GatewayService/GetPerfDatapath":  quicwire.OpGatewayCategory,
 	"/platform.v1.GatewayService/GetPerfConntrack": quicwire.OpGatewayCategory,
 	"/platform.v1.GatewayService/GetNAT64Status":   quicwire.OpGatewayCategory,
+
+	"/platform.v1.GatewayService/GetGatewayAdmittedVTEP":   quicwire.OpGatewayCategory,
+	"/platform.v1.GatewayService/ListGatewayAdmittedVTEPs": quicwire.OpGatewayCategory,
 
 	"/platform.v1.EABService/CreateCredential":          quicwire.OpProvisioningCategory,
 	"/platform.v1.EABService/GetCredential":             quicwire.OpProvisioningCategory,
@@ -891,9 +904,10 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.PlatformDaemon/RestartService":   quicwire.OpDaemonRestartService,
 }
 
-// NewStream creates a new stream (not fully supported for QUIC in this adapter).
+// NewStream serves a server-streaming method by long-polling its unary
+// twin; a method without one is Unimplemented.
 func (c *quicClientConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-	return nil, status.Error(codes.Unimplemented, "streaming not supported over QUIC transport adapter")
+	return pollstream.NewStream(ctx, c, method, c.adapter.timeout, opts...)
 }
 
 // quicStatusToGRPCMap provides O(1) lookup for QUIC status to gRPC code mapping.

@@ -16,6 +16,7 @@ package attestation
 import (
 	"context"
 	"errors"
+	"io"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -45,6 +46,60 @@ type fakeAttestationServiceClient struct {
 
 	describeResp *platformv1.DescribeCallerPolicyResponse
 	describeErr  error
+
+	verdictStream grpc.ServerStreamingClient[platformv1.DeviceVerdictEvent]
+	verdictErr    error
+}
+
+func (f *fakeAttestationServiceClient) StreamDeviceVerdicts(context.Context, *platformv1.StreamDeviceVerdictsRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[platformv1.DeviceVerdictEvent], error) {
+	return f.verdictStream, f.verdictErr
+}
+
+// fakeVerdictStream hands out its events, then ends.
+type fakeVerdictStream struct {
+	grpc.ServerStreamingClient[platformv1.DeviceVerdictEvent]
+	events []*platformv1.DeviceVerdictEvent
+}
+
+func (s *fakeVerdictStream) Recv() (*platformv1.DeviceVerdictEvent, error) {
+	if len(s.events) == 0 {
+		return nil, io.EOF
+	}
+	event := s.events[0]
+	s.events = s.events[1:]
+	return event, nil
+}
+
+func TestClient_StreamDeviceVerdicts(t *testing.T) {
+	fake := &fakeAttestationServiceClient{
+		verdictStream: &fakeVerdictStream{events: []*platformv1.DeviceVerdictEvent{{DeviceId: 7, Reason: "signature invalid"}}},
+	}
+	stream, err := NewClientFromGRPC(fake).StreamDeviceVerdicts(context.Background())
+	if err != nil {
+		t.Fatalf("StreamDeviceVerdicts: %v", err)
+	}
+	event, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv: %v", err)
+	}
+	if event.GetDeviceId() != 7 || event.GetReason() != "signature invalid" {
+		t.Errorf("event = %+v, want device 7's failed verdict", event)
+	}
+	if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
+		t.Errorf("Recv after the last verdict = %v, want the stream's end", err)
+	}
+}
+
+func TestClient_StreamDeviceVerdicts_Error(t *testing.T) {
+	fake := &fakeAttestationServiceClient{verdictErr: status.Error(codes.PermissionDenied, "attestation:read required")}
+	_, err := NewClientFromGRPC(fake).StreamDeviceVerdicts(context.Background())
+	var typed *ErrStreamDeviceVerdictsFailed
+	if !errors.As(err, &typed) {
+		t.Fatalf("err = %v, want *ErrStreamDeviceVerdictsFailed", err)
+	}
+	if status.Code(errors.Unwrap(err)) != codes.PermissionDenied {
+		t.Errorf("cause = %v, want the transport status preserved", errors.Unwrap(err))
+	}
 }
 
 func (f *fakeAttestationServiceClient) ListDeviceReports(context.Context, *platformv1.ListDeviceReportsRequest, ...grpc.CallOption) (*platformv1.ListDeviceReportsResponse, error) {

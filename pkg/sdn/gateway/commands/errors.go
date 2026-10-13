@@ -16,6 +16,8 @@ package commands
 import (
 	"errors"
 	"strconv"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 )
 
 var (
@@ -239,6 +241,53 @@ func (e *ErrTOFUPinDirUnusable) Error() string {
 }
 
 func (e *ErrTOFUPinDirUnusable) Unwrap() error { return e.Cause }
+
+// ErrOverlayPlatformRecordMissing reports that platformd holds no record an
+// overlay admission asked for. It matches gateway.ErrOverlayRecordNotFound, so
+// the admitter denies the VTEP instead of treating the miss as an outage.
+type ErrOverlayPlatformRecordMissing struct {
+	// Record names what was looked up, such as "device 42".
+	Record string
+	// Cause is the platformd NotFound error.
+	Cause error
+}
+
+// Error implements the error interface.
+func (e *ErrOverlayPlatformRecordMissing) Error() string {
+	return "gatewayd: platformd has no " + e.Record + ": " + e.Cause.Error()
+}
+
+// Unwrap returns gateway.ErrOverlayRecordNotFound and the platformd error.
+func (e *ErrOverlayPlatformRecordMissing) Unwrap() []error {
+	return []error{gateway.ErrOverlayRecordNotFound, e.Cause}
+}
+
+// ErrOverlayIPAMAllocation reports a fabric allocation platformd listed that
+// overlay admission cannot index: its address does not parse or its status is
+// missing or unknown. The status is never assumed active, because an
+// allocation IPAM expired for inactivity is told apart only by it.
+type ErrOverlayIPAMAllocation struct {
+	// IP is the allocation address as platformd listed it.
+	IP string
+	// Reason says what is wrong with the allocation.
+	Reason string
+	// Cause is the underlying parse error, if any.
+	Cause error
+}
+
+// Error implements the error interface.
+func (e *ErrOverlayIPAMAllocation) Error() string {
+	msg := "gatewayd: platformd listed fabric allocation " + strconv.Quote(e.IP) + ": " + e.Reason
+	if e.Cause != nil {
+		msg += ": " + e.Cause.Error()
+	}
+	return msg
+}
+
+// Unwrap returns the underlying parse error.
+func (e *ErrOverlayIPAMAllocation) Unwrap() error {
+	return e.Cause
+}
 
 // ErrServiceConfigUnreadable is returned when a supervised child cannot read
 // the gatewayd configuration as its service account. The child reads it only

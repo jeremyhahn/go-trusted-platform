@@ -620,6 +620,223 @@ func TestOverlayModeHandler_PrefixRoute(t *testing.T) {
 	})
 }
 
+func TestOverlayModeHandler_RevokeVTEP(t *testing.T) {
+	t.Run("withdraws flood MAC and prefix routes through the route handlers", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)))
+		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPC)))
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPB, "10.44.0.0/24")))
+		require.NotEmpty(t, f.sw.matching("10.0.0.2"), "precondition: B has installed reachability")
+		require.NotEmpty(t, f.sw.matching("10.0.0.3"), "precondition: C remains as another remote VTEP")
+
+		require.NoError(t, f.handler.RevokeVTEP(context.Background(), ovlVTEPB))
+
+		assert.Empty(t, f.sw.matching("10.0.0.2"), "the revoked VTEP keeps no decap or reachability flows")
+		assert.NotEmpty(t, f.sw.matching("10.0.0.3"), "unrelated VTEPs stay installed")
+		_, err := f.handler.LookupMAC(ovlL2VNI, ovlRemoteMAC)
+		assert.ErrorIs(t, err, ErrMACNotFound)
+	})
+
+	t.Run("a refused withdrawal does not stop the others", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)))
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+		f.sw.fail(errSwitchDown)
+
+		err := f.handler.RevokeVTEP(context.Background(), ovlVTEPB)
+		f.sw.fail(nil)
+
+		var vtepErr *ErrVTEPOperationFailed
+		var macErr *ErrMACOperationFailed
+		assert.ErrorAs(t, err, &vtepErr, "the flood-list withdrawal failure is reported")
+		assert.ErrorAs(t, err, &macErr, "the MAC withdrawal was still tried")
+	})
+
+	t.Run("rejects an invalid VTEP address", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+
+		err := f.handler.RevokeVTEP(context.Background(), netip.Addr{})
+
+		vtepErr := assertVTEPFailed(t, err, "revoke")
+		assert.ErrorIs(t, vtepErr, ErrInvalidVTEPIP)
+	})
+}
+
+// TestOverlayModeHandler_RevokeDuringAdmission orders a revocation inside a
+// route's admission: the admitter has said yes, the route is not yet
+// installed, and the VTEP is revoked. The route must not install afterwards.
+func TestOverlayModeHandler_RevokeDuringAdmission(t *testing.T) {
+	routes := map[string]*bgp.EVPNRouteData{
+		"Type-3": imet(ovlL2VNI, ovlVTEPB),
+		"Type-2": macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP),
+		"Type-5": prefixRoute(ovlVTEPB, "10.44.0.0/24"),
+	}
+	for name, route := range routes {
+		t.Run(name, func(t *testing.T) {
+			admitter := newGatedAdmitter()
+			f := newOverlayFixture(t, func(c *OverlayModeConfig) { c.Admitter = admitter }).withVNI(t)
+			routed := make(chan error, 1)
+			go func() { routed <- f.route(t, route) }()
+
+			<-admitter.entered
+			require.NoError(t, f.handler.RevokeVTEP(context.Background(), ovlVTEPB))
+			close(admitter.release)
+
+			err := <-routed
+			vtepErr := assertVTEPFailed(t, err, "admit")
+			assert.ErrorIs(t, vtepErr, ErrVTEPRevoked)
+			assert.Empty(t, f.sw.matching("10.0.0.2"), "a route admitted before its VTEP was revoked installs nothing")
+		})
+	}
+
+	t.Run("a route admitted after the revocation installs", func(t *testing.T) {
+		admitter := newGatedAdmitter()
+		close(admitter.release)
+		f := newOverlayFixture(t, func(c *OverlayModeConfig) { c.Admitter = admitter }).withVNI(t)
+		require.NoError(t, f.handler.RevokeVTEP(context.Background(), ovlVTEPB))
+
+		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)))
+
+		assert.NotEmpty(t, f.sw.matching("10.0.0.2"))
+	})
+}
+
+// TestOverlayModeHandler_InstalledVTEPs pins the set the admission sweep
+// re-evaluates and the admitted-VTEP listing reports: every remote VTEP the
+// datapath holds state for, in the VNIs that state is in, and nothing a
+// revocation withdrew.
+func TestOverlayModeHandler_InstalledVTEPs(t *testing.T) {
+	f := newOverlayFixture(t, nil).withVNI(t)
+	assert.Empty(t, f.handler.InstalledVTEPs())
+
+	require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)))
+	require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+	require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "10.44.0.0/24")))
+
+	assert.Equal(t, []InstalledVTEP{
+		{VTEP: ovlVTEPB, VNIs: []uint32{ovlL2VNI, ovlL3VNI}},
+		{VTEP: ovlVTEPC, VNIs: []uint32{ovlL3VNI}},
+	}, f.handler.InstalledVTEPs())
+
+	require.NoError(t, f.handler.RevokeVTEP(context.Background(), ovlVTEPB))
+
+	assert.Equal(t, []InstalledVTEP{{VTEP: ovlVTEPC, VNIs: []uint32{ovlL3VNI}}}, f.handler.InstalledVTEPs())
+}
+
+// TestOverlayModeHandler_ReplayVTEP drives the bring-up order a device
+// takes when it is attested after its routes arrive: the routes are refused,
+// the verdict passes, and the VTEP is installed from the routes the EVPN
+// manager already holds. BGP does not send them again.
+func TestOverlayModeHandler_ReplayVTEP(t *testing.T) {
+	ctx := context.Background()
+	refusing := func(t *testing.T) (*overlayFixture, *recordingAdmitter) {
+		t.Helper()
+		admitter := &recordingAdmitter{refused: map[netip.Addr]bool{ovlVTEPB: true}}
+		f := newOverlayFixture(t, func(c *OverlayModeConfig) { c.Admitter = admitter }).withVNI(t)
+		return f, admitter
+	}
+	// receive hands the speaker B's routes and then a new prefix route of
+	// C, whose flows reaching the switch show B's routes were handled first.
+	var probes byte
+	receive := func(t *testing.T, f *overlayFixture, routes ...*bgp.EVPNRouteData) {
+		t.Helper()
+		f.sw.drainSends()
+		for _, route := range routes {
+			f.speaker.events <- &bgp.Event{Path: &bgp.Path{EVPN: route}}
+		}
+		probes++
+		probe := netip.PrefixFrom(netip.AddrFrom4([4]byte{10, 200, probes, 0}), 24)
+		f.speaker.events <- &bgp.Event{Path: &bgp.Path{EVPN: importable(t, prefixRoute(ovlVTEPC, probe.String()), ovlL3VNI)}}
+		f.sw.awaitSend(t)
+	}
+	admit := func(admitter *recordingAdmitter) {
+		admitter.mu.Lock()
+		defer admitter.mu.Unlock()
+		admitter.refused[ovlVTEPB] = false
+	}
+
+	t.Run("route, refused, verdict passes, admitted without the route again", func(t *testing.T) {
+		f, admitter := refusing(t)
+		receive(t, f,
+			importable(t, imet(ovlL2VNI, ovlVTEPB), ovlL2VNI),
+			importable(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP), ovlL2VNI, ovlL3VNI),
+			importable(t, prefixRoute(ovlVTEPB, "10.44.0.0/24"), ovlL3VNI))
+		require.Equal(t, "drop", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL2VNI, ovlVTEPB)...))
+		require.Equal(t, []netip.Addr{ovlVTEPB}, f.handler.RefusedVTEPs())
+
+		admit(admitter)
+		require.NoError(t, f.handler.ReplayVTEP(ctx, ovlVTEPB))
+
+		assert.Equal(t, "goto:20", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL2VNI, ovlVTEPB)...))
+		assert.Equal(t, "goto:20", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPB)...))
+		assert.Equal(t, "set:tun_dst=10.0.0.2,output:7",
+			f.sw.lookup(t, TableMACLearning, "tun_id=10100", "eth_dst=02:00:00:00:02:20"))
+		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.44.0.7"), "tun_dst=10.0.0.2")
+		assert.Empty(t, f.handler.RefusedVTEPs())
+	})
+
+	t.Run("a revoked VTEP is reinstalled once admitted again", func(t *testing.T) {
+		f, admitter := refusing(t)
+		admit(admitter)
+		receive(t, f, importable(t, imet(ovlL2VNI, ovlVTEPB), ovlL2VNI))
+		require.NoError(t, f.handler.RevokeVTEP(ctx, ovlVTEPB))
+		require.Equal(t, "drop", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL2VNI, ovlVTEPB)...))
+		require.Equal(t, []netip.Addr{ovlVTEPB}, f.handler.RefusedVTEPs())
+
+		require.NoError(t, f.handler.ReplayVTEP(ctx, ovlVTEPB))
+
+		assert.Equal(t, "goto:20", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL2VNI, ovlVTEPB)...))
+	})
+
+	t.Run("a replay still refused leaves the VTEP refused", func(t *testing.T) {
+		f, _ := refusing(t)
+		receive(t, f, importable(t, imet(ovlL2VNI, ovlVTEPB), ovlL2VNI))
+
+		err := f.handler.ReplayVTEP(ctx, ovlVTEPB)
+
+		vtepErr := assertVTEPFailed(t, err, "replay")
+		assert.ErrorIs(t, vtepErr, errAdmissionRefused)
+		assert.Equal(t, "drop", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL2VNI, ovlVTEPB)...))
+		assert.Equal(t, []netip.Addr{ovlVTEPB}, f.handler.RefusedVTEPs())
+	})
+
+	t.Run("a VTEP not refused replays nothing", func(t *testing.T) {
+		f, admitter := refusing(t)
+		receive(t, f)
+		admitter.mu.Lock()
+		asked := len(admitter.asked)
+		admitter.mu.Unlock()
+
+		require.NoError(t, f.handler.ReplayVTEP(ctx, ovlVTEPC))
+
+		admitter.mu.Lock()
+		defer admitter.mu.Unlock()
+		assert.Len(t, admitter.asked, asked, "C was admitted and is not asked again")
+	})
+
+	t.Run("a refused VTEP whose routes are withdrawn is forgotten", func(t *testing.T) {
+		f, _ := refusing(t)
+		route := importable(t, imet(ovlL2VNI, ovlVTEPB), ovlL2VNI)
+		receive(t, f, route)
+		require.Equal(t, []netip.Addr{ovlVTEPB}, f.handler.RefusedVTEPs())
+
+		receive(t, f, withdraw(route))
+
+		assert.Empty(t, f.handler.RefusedVTEPs())
+		assert.NoError(t, f.handler.ReplayVTEP(ctx, ovlVTEPB))
+	})
+
+	t.Run("a stopped handler replays nothing", func(t *testing.T) {
+		f, admitter := refusing(t)
+		receive(t, f, importable(t, imet(ovlL2VNI, ovlVTEPB), ovlL2VNI))
+		admit(admitter)
+		require.NoError(t, f.handler.Stop(ctx))
+
+		assert.NoError(t, f.handler.ReplayVTEP(ctx, ovlVTEPB))
+	})
+}
+
 // TestOverlayModeHandler_EVPNEvents drives the overlay the way a fabric
 // does: routes received from the BGP speaker, through the EVPN manager.
 func TestOverlayModeHandler_EVPNEvents(t *testing.T) {

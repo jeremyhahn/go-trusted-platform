@@ -46,6 +46,7 @@ func TestDeviceQuoteVerifier_FirstQuoteCapturesTOFUBaselineAndVerifies(t *testin
 	assert.True(t, dv.BaselineCaptured)
 	assert.Equal(t, f.profile.ID, dv.ProfileID)
 	assert.Equal(t, f.device.Hostname, dv.HostID)
+	assert.Equal(t, "tenant-a", dv.TenantID, "the verdict names the device's tenant, which decides who may stream it")
 }
 
 func TestDeviceQuoteVerifier_SecondQuoteMatchesTheCapturedBaseline(t *testing.T) {

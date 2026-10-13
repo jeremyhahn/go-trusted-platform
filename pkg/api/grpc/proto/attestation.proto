@@ -83,6 +83,24 @@ service AttestationService {
   // DescribeCallerPolicy reports the node's compiled caller-admission
   // policy — what is enforced, not what was configured.
   rpc DescribeCallerPolicy(DescribeCallerPolicyRequest) returns (DescribeCallerPolicyResponse);
+
+  // StreamDeviceVerdicts streams every device verdict platformd records,
+  // passed or failed, from the moment the stream opens; verdicts recorded
+  // while no one follows are not replayed. It requires attestation:read, and
+  // a caller acting for a tenant receives only the verdicts of that tenant's
+  // devices. This is how the overlay gateways learn that a device's
+  // attestation failed or recovered.
+  rpc StreamDeviceVerdicts(StreamDeviceVerdictsRequest) returns (stream DeviceVerdictEvent);
+
+  // PollDeviceVerdicts follows the same verdicts by long-poll, for the
+  // transports that carry no server stream (REST, QUIC, MCP). A request with
+  // no cursor answers at once with the cursor to follow from; every later
+  // request returns the verdicts recorded after its cursor, waiting up to
+  // wait_ms (at most 20 seconds) for one. A cursor that missed verdicts —
+  // older than the verdicts platformd keeps, or from an earlier platformd
+  // run — fails with RESOURCE_EXHAUSTED, as a stream that falls behind does.
+  // Same scope and tenant filter as StreamDeviceVerdicts.
+  rpc PollDeviceVerdicts(PollDeviceVerdictsRequest) returns (PollDeviceVerdictsResponse);
 }
 
 // =============================================================================
@@ -686,4 +704,43 @@ message CallerPolicyDescription {
 message DescribeCallerPolicyResponse {
   Status status = 1;
   CallerPolicyDescription policy = 2;
+}
+
+message StreamDeviceVerdictsRequest {}
+
+message PollDeviceVerdictsRequest {
+  // Cursor is the cursor the previous response returned; empty to start
+  // following from now.
+  string cursor = 1;
+  // WaitMs is how long to wait for a verdict when none is ready; 0 answers
+  // at once. Values above 20000 are capped.
+  uint32 wait_ms = 2;
+}
+
+message PollDeviceVerdictsResponse {
+  // Cursor is where the next poll continues from.
+  string cursor = 1;
+  // Verdicts are the verdicts recorded after the request's cursor that the
+  // caller may see, in the order platformd recorded them.
+  repeated DeviceVerdictEvent verdicts = 2;
+}
+
+// DeviceVerdictEvent is one device verdict as platformd recorded it in the
+// attestation event log.
+message DeviceVerdictEvent {
+  // EventId is the attestation event log entry that made the verdict durable.
+  string event_id = 1;
+  // RecordedAt is when the verdict was logged.
+  google.protobuf.Timestamp recorded_at = 2;
+  uint64 device_id = 3;
+  // TenantId is the tenant the device belongs to.
+  string tenant_id = 4;
+  string host_id = 5;
+  string serial = 6;
+  bool passed = 7;
+  // Cryptographic is true when a failed verdict was evidence of compromise
+  // rather than an absence of evidence. Meaningless when passed.
+  bool cryptographic = 8;
+  // Reason is the failure detail; empty when passed.
+  string reason = 9;
 }

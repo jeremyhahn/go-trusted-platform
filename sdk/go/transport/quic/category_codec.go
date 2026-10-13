@@ -17,10 +17,12 @@ package quic
 // structs.
 //
 // The payload codec keys on exact Go field names, and the daemon wire structs
-// (pkg/api/quic/phase35_types.go) do not share the pb names (CredentialID vs
-// CredentialId, RPID vs RpId) and carry enums as strings and times as
-// time.Time. A by-name decode would drop fields silently, so methods whose
-// shapes differ translate in both directions through the maps below.
+// (pkg/api/quic/phase35_types.go, sdk/go/wire/quicwire) do not share the pb
+// names (CredentialID vs CredentialId, RPID vs RpId, GatewayID vs GatewayId,
+// VTEP vs Vtep) and carry enums as strings and times as time.Time or Unix
+// seconds. A by-name decode would drop fields silently, leaving zero values,
+// so methods whose shapes differ translate their request into the wire struct
+// and their response back onto the pb reply through the maps below.
 
 import (
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
@@ -33,7 +35,8 @@ type categoryRequestEncoder func(args interface{}) (interface{}, error)
 
 // categoryRequestEncoders routes category-opcode methods whose requests need
 // translating before encoding. Methods absent from this map encode the pb
-// request directly.
+// request directly. Entries are registered by the init of the file that
+// owns each method's wire translation.
 var categoryRequestEncoders = map[string]categoryRequestEncoder{}
 
 // requestEncoder builds a categoryRequestEncoder that type-checks the pb

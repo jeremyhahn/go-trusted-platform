@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict/feed"
 
 	"google.golang.org/grpc"
 
@@ -226,7 +227,12 @@ type Daemon struct {
 	// flip it to NOT_SERVING on shutdown, draining load balancers before the
 	// listeners go away.
 	healthGRPCService *HealthGRPCService
-	zoneSvc           gateway.ZoneService
+	// verdictFeed serves StreamDeviceVerdicts and PollDeviceVerdicts on
+	// every transport; nil when the attestation service cannot hand out its
+	// verdicts. Closed on shutdown so the open streams and polls end before
+	// the servers stop gracefully.
+	verdictFeed *feed.Feed
+	zoneSvc     gateway.ZoneService
 
 	// Concrete server references for accessor methods (set only for real servers)
 	concreteRestServer    *RESTServer
@@ -758,6 +764,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// 404 from a missing route.
 	attestationService := NewAttestationServiceServer(config.AttestationService, logger.Slog())
 	attestationService.SetReporting(config.AttestationReporting)
+	// Serve every recorded device verdict on StreamDeviceVerdicts, so the
+	// overlay gateways withdraw a device whose quote fails (#709).
+	verdictFeed := streamDeviceVerdicts(attestationService, config.AttestationService)
 	if grpcServer != nil {
 		platformv1.RegisterAttestationServiceServer(grpcServer, attestationService)
 	}
@@ -1326,6 +1335,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		pxeGRPCService:               pxeGRPCService,
 		ntpGRPCService:               ntpGRPCService,
 		healthRegistry:               healthRegistry,
+		verdictFeed:                  verdictFeed,
 		zoneSvc:                      zoneSvcInstance,
 	}
 
@@ -1474,6 +1484,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// used by the gRPC service so REST and gRPC share the same state.
 	if daemon.concreteRestServer != nil && daemon.gatewayGRPCService != nil {
 		daemon.concreteRestServer.SetGatewayIPAMService(daemon.gatewayGRPCService.IPAMAllocator())
+		daemon.concreteRestServer.SetGatewaySnapshotService(daemon.gatewayGRPCService)
 		daemon.concreteRestServer.SetGatewayPerfService(daemon.gatewayPerfService)
 		logger.Info("Gateway IPAM REST service wired into REST server")
 	}
@@ -1812,6 +1823,7 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		VerdictSink:           deviceVerdictSink(d.config),
 		AttestCertRecorder:    newDeviceAttestCertRecorder(d.config, d.logger.Slog()),
 		AttestationReporting:  d.config.AttestationReporting,
+		AttestationServer:     d.attestationService,
 		SDNService:            d.sdnService,
 		HealthService:         d.service,
 		Logger:                d.logger.Slog(),
@@ -2528,6 +2540,9 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	// requests fail against a listener that is on its way out.
 	if d.healthGRPCService != nil {
 		d.healthGRPCService.Shutdown()
+	}
+	if d.verdictFeed != nil {
+		d.verdictFeed.Close()
 	}
 
 	d.mu.Lock()

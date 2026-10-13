@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
@@ -38,6 +39,11 @@ import (
 //       OpAttestQuote       (0x70) -> GetAttestationQuote
 //       OpAttestVerify      (0x71) -> VerifyAttestationQuote
 //       OpAttestCollectHost (0x72) -> CollectHostAttestation
+//       OpAttestPollVerdicts (0x75) -> PollDeviceVerdicts
+//
+//     PollDeviceVerdicts is how a QUIC client follows device verdicts: QUIC
+//     requests are unary, so the gRPC server stream StreamDeviceVerdicts is
+//     served as a cursor long-poll instead.
 //
 //     CollectHostAttestation was moved off the OpAttestQuote opcode onto its
 //     own OpAttestCollectHost (0x72): the SDK adapter previously mapped both
@@ -67,6 +73,8 @@ func (h *QUICServiceHandler) handleAttestationOperation(ctx context.Context, req
 		return h.handleAttestationVerifyQuote(ctx, req)
 	case quicwire.OpAttestCollectHost:
 		return h.handleAttestationCollectHost(ctx, req)
+	case quicwire.OpAttestPollVerdicts:
+		return h.handleAttestationPollVerdicts(ctx, req)
 	default:
 		if h.attestationHandler == nil {
 			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "attestation"})
@@ -128,6 +136,33 @@ func (h *QUICServiceHandler) handleAttestationCollectHost(ctx context.Context, r
 	resp, err := h.attestGRPC.CollectHostAttestation(ctx, &collectReq)
 	if err != nil {
 		return h.grpcStatusToQUICResponse("AttestCollectHost", err)
+	}
+	return h.encodeQUICOK(resp)
+}
+
+// handleAttestationPollVerdicts decodes PollDeviceVerdictsRequest and answers
+// one long-poll of the device verdicts the caller's platform token may see.
+// The daemon does not authorize QUIC requests centrally, so a request without
+// a token holding attestation:read is refused here.
+func (h *QUICServiceHandler) handleAttestationPollVerdicts(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	if h.attestGRPC == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "attestation"})
+	}
+
+	var pollReq platformv1.PollDeviceVerdictsRequest
+	if err := quicwire.DecodePayload(req.Payload, &pollReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	authCtx, _ := quic.AuthorizedContextFromContext(ctx)
+	audience, err := verdictAudienceOfToken(authCtx)
+	if err != nil {
+		return h.grpcDelegateErrorToQUIC("AttestPollVerdicts", verdictStatus(err))
+	}
+
+	resp, err := h.attestGRPC.PollDeviceVerdictsFor(ctx, audience, &pollReq)
+	if err != nil {
+		return h.grpcDelegateErrorToQUIC("AttestPollVerdicts", err)
 	}
 	return h.encodeQUICOK(resp)
 }

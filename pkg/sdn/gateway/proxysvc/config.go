@@ -162,6 +162,45 @@ type PlatformdConfig struct {
 
 	// GRPCAddr is the platformd gRPC address (grpc protocol).
 	GRPCAddr string `yaml:"grpc-addr,omitempty" json:"grpc_addr,omitempty" mapstructure:"grpc-addr"`
+
+	// CertFile and KeyFile are the client certificate gatewayd presents to
+	// a platformd that authenticates its gRPC callers by mTLS (grpc
+	// protocol). They are set together.
+	CertFile string `yaml:"cert-file,omitempty" json:"cert_file,omitempty" mapstructure:"cert-file"`
+	KeyFile  string `yaml:"key-file,omitempty" json:"key_file,omitempty" mapstructure:"key-file"`
+
+	// TokenFile holds the platform bearer token gatewayd presents to a
+	// platformd that authenticates its gRPC callers by token (grpc
+	// protocol). It is read on every dial, so a rotated token is picked up
+	// when the connection is re-established.
+	TokenFile string `yaml:"token-file,omitempty" json:"token_file,omitempty" mapstructure:"token-file"`
+}
+
+// Validate checks the platformd connection settings. The grpc protocol
+// needs an address and a client identity, because platformd's gRPC
+// listener refuses unauthenticated callers: a client certificate, a token
+// file, or both.
+func (p PlatformdConfig) Validate() error {
+	switch p.Protocol {
+	case PlatformdProtocolUnix:
+		return nil
+	case PlatformdProtocolGRPC:
+	default:
+		return &ErrConfigInvalid{Field: "platformd.protocol", Reason: "must be unix or grpc"}
+	}
+	if p.GRPCAddr == "" {
+		return &ErrConfigInvalid{Field: "platformd.grpc-addr", Reason: "required for the grpc protocol"}
+	}
+	if (p.CertFile == "") != (p.KeyFile == "") {
+		return &ErrConfigInvalid{Field: "platformd", Reason: "cert-file and key-file must be set together"}
+	}
+	if p.CertFile == "" && p.TokenFile == "" {
+		return &ErrConfigInvalid{
+			Field:  "platformd",
+			Reason: "the grpc protocol requires a client identity: cert-file and key-file, or token-file",
+		}
+	}
+	return nil
 }
 
 // Normalize fills defaulted fields in place.
@@ -185,13 +224,8 @@ func (c *Config) Validate() error {
 		return nil
 	}
 	c.Normalize()
-	switch c.Platformd.Protocol {
-	case PlatformdProtocolUnix, PlatformdProtocolGRPC:
-	default:
-		return &ErrConfigInvalid{Field: "platformd.protocol", Reason: "must be unix or grpc"}
-	}
-	if c.Platformd.Protocol == PlatformdProtocolGRPC && c.Platformd.GRPCAddr == "" {
-		return &ErrConfigInvalid{Field: "platformd.grpc-addr", Reason: "required for the grpc protocol"}
+	if err := c.Platformd.Validate(); err != nil {
+		return err
 	}
 	if (c.TLS.CertFile == "") != (c.TLS.KeyFile == "") {
 		return &ErrConfigInvalid{Field: "tls", Reason: "cert-file and key-file must be set together"}

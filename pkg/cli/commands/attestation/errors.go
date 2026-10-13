@@ -77,3 +77,13 @@ type ErrDescribeCallersFailed struct {
 func (e ErrDescribeCallersFailed) Error() string {
 	return "failed to describe the attestation caller policy: " + e.Reason
 }
+
+// ErrFollowVerdictsFailed reports a verdict follow that could not start or
+// whose stream broke. A follow the operator stopped is not an error.
+type ErrFollowVerdictsFailed struct {
+	Reason string
+}
+
+func (e ErrFollowVerdictsFailed) Error() string {
+	return "failed to follow device verdicts: " + e.Reason
+}

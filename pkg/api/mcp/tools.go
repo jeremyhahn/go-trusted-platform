@@ -113,6 +113,7 @@ func (r *ToolRegistry) registerTools() {
 	// Register Attestation tools
 	r.registerAttestationTools()
 	r.registerAttestationReportTools()
+	r.registerAttestationVerdictTools()
 
 	// Register IDevID/IAK tools (IEEE 802.1AR device identity)
 	r.registerIDevIDTools()
@@ -1471,6 +1472,10 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeGatewaySnapshot(ctx, args)
 	case "gateway_snapshots":
 		return r.executeGatewaySnapshots(ctx, args)
+	case "gateway_admitted_vtep":
+		return r.executeGatewayAdmittedVTEP(ctx, args)
+	case "gateway_admitted_vteps":
+		return r.executeGatewayAdmittedVTEPs(ctx, args)
 	case "gateway_mode_set":
 		return r.executeGatewayModeSet(ctx, args)
 	case "gateway_bgp_status":

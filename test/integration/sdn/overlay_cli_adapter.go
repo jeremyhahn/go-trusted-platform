@@ -621,6 +621,65 @@ func (c *OverlayCLIAdapter) GatewayStatus(ctx context.Context) (*GatewayStatusRe
 	}, nil
 }
 
+func (c *OverlayCLIAdapter) GatewayAdmittedVTEPList(ctx context.Context, gatewayID string) (*GatewayAdmittedVTEPListResult, error) {
+	args := []string{"sdn", "gateway", "overlay", "vteps"}
+	if gatewayID != "" {
+		args = append(args, "--gateway-id", gatewayID)
+	}
+	output, err := c.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var vteps []*platformv1.GatewayAdmittedVTEP
+	if err := c.parseJSONOutput(output, &vteps); err != nil {
+		return nil, err
+	}
+	out := make([]GatewayAdmittedVTEPInfo, 0, len(vteps))
+	for _, vtep := range vteps {
+		out = append(out, cliGatewayAdmittedVTEPInfo(vtep))
+	}
+	return &GatewayAdmittedVTEPListResult{VTEPs: out, Count: len(out)}, nil
+}
+
+func (c *OverlayCLIAdapter) GatewayAdmittedVTEPGet(ctx context.Context, gatewayID, vtep string) (*GatewayAdmittedVTEPGetResult, error) {
+	args := []string{"sdn", "gateway", "overlay", "vteps", "get", vtep}
+	if gatewayID != "" {
+		args = append(args, "--gateway-id", gatewayID)
+	}
+	output, err := c.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var admitted platformv1.GatewayAdmittedVTEP
+	if err := c.parseJSONOutput(output, &admitted); err != nil {
+		return nil, err
+	}
+	return &GatewayAdmittedVTEPGetResult{VTEP: cliGatewayAdmittedVTEPInfo(&admitted)}, nil
+}
+
+func cliGatewayAdmittedVTEPInfo(vtep *platformv1.GatewayAdmittedVTEP) GatewayAdmittedVTEPInfo {
+	if vtep == nil {
+		return GatewayAdmittedVTEPInfo{}
+	}
+	var verdictAt time.Time
+	if vtep.GetVerdictAt() != nil {
+		verdictAt = vtep.GetVerdictAt().AsTime()
+	}
+	return GatewayAdmittedVTEPInfo{
+		VTEP:           vtep.GetVtep(),
+		DeviceID:       vtep.GetDeviceId(),
+		HostID:         vtep.GetHostId(),
+		Serial:         vtep.GetSerial(),
+		Hostname:       vtep.GetHostname(),
+		AllocationID:   vtep.GetAllocationId(),
+		BaselineSource: vtep.GetBaselineSource(),
+		ProfileID:      vtep.GetProfileId(),
+		VerdictAt:      verdictAt,
+	}
+}
+
 // GatewaySetMode sets gateway modes.
 func (c *OverlayCLIAdapter) GatewaySetMode(ctx context.Context, opts GatewayModeOptions) (*GatewayModeResult, error) {
 	args := []string{"sdn", "gateway", "mode", "set",

@@ -365,6 +365,7 @@ func TestBuildProxyHandlerGRPCRequiresTrust(t *testing.T) {
 	cfg.Sync.Enabled = true
 	cfg.Platformd.Protocol = proxysvc.PlatformdProtocolGRPC
 	cfg.Platformd.GRPCAddr = "127.0.0.1:10443"
+	cfg.Platformd.TokenFile = filepath.Join(t.TempDir(), "platformd.token")
 	if _, err := BuildProxyHandler(cfg, nil, nil, testLogger()); !errors.Is(err, ErrPlatformAnchorRequiredForGRPC) {
 		t.Fatalf("err = %v, want ErrPlatformAnchorRequiredForGRPC", err)
 	}
@@ -563,9 +564,12 @@ func TestPlatformdDialGRPCWithPlatformAnchor(t *testing.T) {
 		// gRPC connections are lazy: construction succeeds and connection
 		// failures surface on the first RPC, where the sync loop's lazy
 		// client retries them.
+		certFile, keyFile, _ := writeTLSFixtures(t)
 		dial := platformdDial(proxysvc.PlatformdConfig{
 			Protocol: proxysvc.PlatformdProtocolGRPC,
 			GRPCAddr: "127.0.0.1:1",
+			CertFile: certFile,
+			KeyFile:  keyFile,
 		}, fileAnchor(t, testutil.GenerateTestTLSBundle(t).CACertPEM))
 		dialCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -578,6 +582,89 @@ func TestPlatformdDialGRPCWithPlatformAnchor(t *testing.T) {
 		}
 		if _, err := client.Config(dialCtx); err == nil {
 			t.Fatal("RPC to unreachable platformd must fail")
+		}
+	})
+}
+
+// TestPlatformdGRPCPresentsAClientIdentity pins that every gRPC connection
+// gatewayd opens to platformd authenticates: platformd's gRPC listener
+// requires an mTLS client certificate or a bearer token, so a connection
+// carrying only the platform anchor's server roots is refused at assembly
+// rather than failing every RPC with Unauthenticated.
+func TestPlatformdGRPCPresentsAClientIdentity(t *testing.T) {
+	anchor := fileAnchor(t, testutil.GenerateTestTLSBundle(t).CACertPEM)
+	grpcConfig := func() proxysvc.PlatformdConfig {
+		return proxysvc.PlatformdConfig{Protocol: proxysvc.PlatformdProtocolGRPC, GRPCAddr: "127.0.0.1:1"}
+	}
+
+	t.Run("no identity refused", func(t *testing.T) {
+		var cfgErr *proxysvc.ErrConfigInvalid
+		if _, err := platformdOptions(context.Background(), grpcConfig(), anchor); !errors.As(err, &cfgErr) {
+			t.Fatalf("err = %v, want *proxysvc.ErrConfigInvalid", err)
+		}
+	})
+
+	t.Run("client certificate presented", func(t *testing.T) {
+		certFile, keyFile, _ := writeTLSFixtures(t)
+		pcfg := grpcConfig()
+		pcfg.CertFile, pcfg.KeyFile = certFile, keyFile
+		opts, err := platformdOptions(context.Background(), pcfg, anchor)
+		if err != nil {
+			t.Fatalf("platformdOptions: %v", err)
+		}
+		if opts.TLSConfig == nil || len(opts.TLSConfig.Certificates) != 1 {
+			t.Fatal("the connection must present the configured client certificate")
+		}
+		if opts.TLSConfig.RootCAs == nil {
+			t.Fatal("the connection must still verify platformd against the platform anchor")
+		}
+	})
+
+	t.Run("bearer token presented", func(t *testing.T) {
+		pcfg := grpcConfig()
+		pcfg.TokenFile = filepath.Join(t.TempDir(), "platformd.token")
+		if err := os.WriteFile(pcfg.TokenFile, []byte("platform-token\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		opts, err := platformdOptions(context.Background(), pcfg, anchor)
+		if err != nil {
+			t.Fatalf("platformdOptions: %v", err)
+		}
+		if opts.BearerToken != "platform-token" {
+			t.Fatalf("BearerToken = %q, want the token file's trimmed content", opts.BearerToken)
+		}
+	})
+
+	t.Run("unreadable certificate refused", func(t *testing.T) {
+		pcfg := grpcConfig()
+		pcfg.CertFile = filepath.Join(t.TempDir(), "absent.pem")
+		pcfg.KeyFile = filepath.Join(t.TempDir(), "absent.key")
+		var loadErr *proxysvc.ErrPlatformdIdentityLoadFailed
+		if _, err := platformdOptions(context.Background(), pcfg, anchor); !errors.As(err, &loadErr) {
+			t.Fatalf("err = %v, want *proxysvc.ErrPlatformdIdentityLoadFailed", err)
+		}
+	})
+
+	t.Run("empty token refused", func(t *testing.T) {
+		pcfg := grpcConfig()
+		pcfg.TokenFile = filepath.Join(t.TempDir(), "platformd.token")
+		if err := os.WriteFile(pcfg.TokenFile, []byte(" \n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var loadErr *proxysvc.ErrPlatformdIdentityLoadFailed
+		if _, err := platformdOptions(context.Background(), pcfg, anchor); !errors.As(err, &loadErr) {
+			t.Fatalf("err = %v, want *proxysvc.ErrPlatformdIdentityLoadFailed", err)
+		}
+	})
+
+	t.Run("overlay dial refused without identity", func(t *testing.T) {
+		cfg := &ServeConfig{
+			Proxy:   &proxysvc.Config{Platformd: grpcConfig()},
+			Gateway: &gateway.GatewayConfig{Overlay: &gateway.OverlayServiceConfig{Enabled: true}},
+		}
+		var cfgErr *proxysvc.ErrConfigInvalid
+		if err := wireOverlayRuntime(context.Background(), cfg, anchor, &gateway.GatewayRuntime{}); !errors.As(err, &cfgErr) {
+			t.Fatalf("err = %v, want *proxysvc.ErrConfigInvalid", err)
 		}
 	})
 }

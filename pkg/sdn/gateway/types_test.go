@@ -14,12 +14,31 @@
 package gateway
 
 import (
+	"errors"
 	"net"
+	"net/netip"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/vxlan"
 )
+
+func validOverlayServiceConfig() *OverlayServiceConfig {
+	return &OverlayServiceConfig{
+		Enabled:           true,
+		LocalVTEP:         netip.MustParseAddr("10.4.100.20"),
+		UnderlayInterface: "vtep0",
+		UnderlayMTU:       9216,
+		AccessPort:        "patch-workloads",
+		OverlayASN:        65000,
+		VXLANPort:         4789,
+		VNIs:              []OverlayVNIConfig{{VNI: 40100, VLAN: 100}, {VNI: 40200, VLAN: 200}},
+		DefaultVNI:        40100,
+		MaxVNIs:           DefaultMaxVNIs,
+		VerdictMaxAge:     time.Minute,
+	}
+}
 
 func TestPortState_String(t *testing.T) {
 	tests := []struct {
@@ -835,7 +854,7 @@ func TestGatewayConfig_Validate(t *testing.T) {
 				MinReputation: MinReputation,
 				MinAgeDays:    MinAgeDays,
 				MinUptimePct:  MinUptimePct,
-				Overlay:       &OverlayServiceConfig{Enabled: true},
+				Overlay:       validOverlayServiceConfig(),
 			},
 			expectError: false,
 		},
@@ -850,7 +869,7 @@ func TestGatewayConfig_Validate(t *testing.T) {
 			name: "empty ID",
 			config: &GatewayConfig{
 				Enabled: true, ID: "",
-				Overlay: &OverlayServiceConfig{Enabled: true},
+				Overlay: validOverlayServiceConfig(),
 			},
 			expectError: true,
 		},
@@ -924,7 +943,7 @@ func TestGatewayConfig_HasEnabledServices(t *testing.T) {
 	}{
 		{
 			name:     "overlay enabled",
-			config:   &GatewayConfig{Overlay: &OverlayServiceConfig{Enabled: true}},
+			config:   &GatewayConfig{Overlay: validOverlayServiceConfig()},
 			expected: true,
 		},
 		{
@@ -1117,31 +1136,143 @@ func TestDHCPServiceConfig_Validate(t *testing.T) {
 
 func TestOverlayServiceConfig_Validate(t *testing.T) {
 	tests := []struct {
-		name        string
-		config      OverlayServiceConfig
-		expectError bool
+		name string
+		edit func(*OverlayServiceConfig)
+		// field is the overlay field the typed error must name; empty means
+		// the config is valid.
+		field string
 	}{
-		{
-			name:        "valid enabled config",
-			config:      OverlayServiceConfig{Enabled: true},
-			expectError: false,
-		},
-		{
-			name:        "disabled skips validation",
-			config:      OverlayServiceConfig{Enabled: false},
-			expectError: false,
-		},
+		{name: "valid enabled config", edit: func(*OverlayServiceConfig) {}},
+		{name: "requires local VTEP", edit: func(c *OverlayServiceConfig) { c.LocalVTEP = netip.Addr{} }, field: "local-vtep"},
+		{name: "requires underlay interface", edit: func(c *OverlayServiceConfig) { c.UnderlayInterface = "" }, field: "underlay-interface"},
+		{name: "requires underlay MTU at VXLAN minimum", edit: func(c *OverlayServiceConfig) { c.UnderlayMTU = 1500 }, field: "underlay-mtu"},
+		{name: "requires access port", edit: func(c *OverlayServiceConfig) { c.AccessPort = "" }, field: "access-port"},
+		{name: "requires overlay ASN", edit: func(c *OverlayServiceConfig) { c.OverlayASN = 0 }, field: "overlay-asn"},
+		{name: "rejects public 2-byte overlay ASN", edit: func(c *OverlayServiceConfig) { c.OverlayASN = 64511 }, field: "overlay-asn"},
+		{name: "rejects four byte overlay ASN", edit: func(c *OverlayServiceConfig) { c.OverlayASN = 65536 }, field: "overlay-asn"},
+		{name: "accepts top private overlay ASN", edit: func(c *OverlayServiceConfig) { c.OverlayASN = 65534 }},
+		{name: "requires VXLAN port", edit: func(c *OverlayServiceConfig) { c.VXLANPort = 0 }, field: "vxlan-port"},
+		{name: "rejects a passive route reflector peer", edit: func(c *OverlayServiceConfig) {
+			c.RRPeers = []bgp.NeighborConfig{{Address: netip.MustParseAddr("10.4.100.10"), ASN: 65000, PassiveMode: true}}
+		}, field: "rr-peers"},
+		{name: "rejects negative max VNIs", edit: func(c *OverlayServiceConfig) { c.MaxVNIs = -1 }, field: "max-vnis"},
+		{name: "requires a VNI to join", edit: func(c *OverlayServiceConfig) { c.VNIs = nil; c.DefaultVNI = 0 }, field: "vnis"},
+		{name: "rejects more VNIs than max VNIs", edit: func(c *OverlayServiceConfig) { c.MaxVNIs = 1 }, field: "vnis"},
+		{name: "rejects VNI zero", edit: func(c *OverlayServiceConfig) { c.VNIs[1].VNI = 0 }, field: "vnis"},
+		{name: "rejects VNI wider than 24 bits", edit: func(c *OverlayServiceConfig) { c.VNIs[1].VNI = MaxOverlayVNI + 1 }, field: "vnis"},
+		{name: "accepts the top 24-bit VNI", edit: func(c *OverlayServiceConfig) { c.VNIs[1].VNI = MaxOverlayVNI }},
+		{name: "rejects VLAN zero", edit: func(c *OverlayServiceConfig) { c.VNIs[1].VLAN = 0 }, field: "vnis"},
+		{name: "rejects VLAN above 4094", edit: func(c *OverlayServiceConfig) { c.VNIs[1].VLAN = MaxOverlayVLAN + 1 }, field: "vnis"},
+		{name: "rejects a VNI listed twice", edit: func(c *OverlayServiceConfig) { c.VNIs[1].VNI = c.VNIs[0].VNI }, field: "vnis"},
+		{name: "rejects a VLAN carrying two VNIs", edit: func(c *OverlayServiceConfig) { c.VNIs[1].VLAN = c.VNIs[0].VLAN }, field: "vnis"},
+		{name: "rejects a default VNI the overlay does not join", edit: func(c *OverlayServiceConfig) { c.DefaultVNI = 40300 }, field: "default-vni"},
+		{name: "accepts no default VNI", edit: func(c *OverlayServiceConfig) { c.DefaultVNI = 0 }},
+		{name: "rejects negative verdict age", edit: func(c *OverlayServiceConfig) { c.VerdictMaxAge = -time.Second }, field: "verdict-max-age"},
+		{name: "rejects negative verdict clock skew", edit: func(c *OverlayServiceConfig) { c.VerdictClockSkew = -time.Second }, field: "verdict-clock-skew"},
+		{name: "rejects negative sweep interval", edit: func(c *OverlayServiceConfig) { c.AdmissionSweepInterval = -time.Second }, field: "admission-sweep-interval"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.config.Validate()
-			if tt.expectError && err == nil {
-				t.Error("OverlayServiceConfig.Validate() expected error, got nil")
+			cfg := validOverlayServiceConfig()
+			tt.edit(cfg)
+			err := cfg.Validate()
+			if tt.field == "" {
+				if err != nil {
+					t.Fatalf("Validate() unexpected error: %v", err)
+				}
+				return
 			}
-			if !tt.expectError && err != nil {
-				t.Errorf("OverlayServiceConfig.Validate() unexpected error: %v", err)
+			var invalid *ErrOverlayConfigInvalid
+			if !errors.As(err, &invalid) {
+				t.Fatalf("Validate() = %v, want *ErrOverlayConfigInvalid", err)
+			}
+			if invalid.Field != tt.field {
+				t.Errorf("Field = %q, want %q", invalid.Field, tt.field)
 			}
 		})
 	}
+}
+
+func TestOverlayServiceConfig_ValidateDisabledSkipsChecks(t *testing.T) {
+	cfg := &OverlayServiceConfig{Enabled: false, OverlayASN: 70000}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() on a disabled overlay = %v, want nil", err)
+	}
+}
+
+func TestOverlayServiceConfig_ValidateDefaults(t *testing.T) {
+	cfg := validOverlayServiceConfig()
+	cfg.UnderlayMTU = 0
+	cfg.VerdictMaxAge = 0
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v", err)
+	}
+	if cfg.UnderlayMTU != vxlan.MinimumUnderlayMTU {
+		t.Errorf("UnderlayMTU default = %d, want %d", cfg.UnderlayMTU, vxlan.MinimumUnderlayMTU)
+	}
+	if cfg.VerdictMaxAge != DefaultOverlayVerdictMaxAge {
+		t.Errorf("VerdictMaxAge default = %s, want %s", cfg.VerdictMaxAge, DefaultOverlayVerdictMaxAge)
+	}
+	if got := cfg.admissionSweepInterval(); got != DefaultOverlayAdmissionSweepInterval {
+		t.Errorf("admissionSweepInterval() = %s, want %s", got, DefaultOverlayAdmissionSweepInterval)
+	}
+	cfg.AdmissionSweepInterval = time.Minute
+	if got := cfg.admissionSweepInterval(); got != time.Minute {
+		t.Errorf("admissionSweepInterval() = %s, want the configured 1m", got)
+	}
+}
+
+func TestGatewayConfig_ValidateOverlayExcludesEdgeServices(t *testing.T) {
+	base := func() *GatewayConfig {
+		return &GatewayConfig{Enabled: true, ID: "gw-overlay", Overlay: validOverlayServiceConfig()}
+	}
+	tests := []struct {
+		name    string
+		edit    func(*GatewayConfig)
+		service string
+	}{
+		{
+			name:    "firewall",
+			edit:    func(c *GatewayConfig) { c.Firewall = &FirewallConfig{Enabled: true, DefaultPolicy: "deny"} },
+			service: ServiceFirewall,
+		},
+		{
+			name: "nat",
+			edit: func(c *GatewayConfig) {
+				c.NAT = &NATConfig{Enabled: true, ExternalIP: "192.0.2.1", PortRangeStart: 1024, PortRangeEnd: 65535, MaxSessions: 10}
+			},
+			service: ServiceNAT,
+		},
+		{
+			name: "load balancer",
+			edit: func(c *GatewayConfig) {
+				c.LoadBalancer = &LoadBalancerConfig{Enabled: true, Algorithm: "round-robin", HealthCheckInterval: 30 * time.Second, HealthCheckTimeout: 5 * time.Second, MaxBackends: 10}
+			},
+			service: ServiceLoadBalancer,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := base()
+			tt.edit(cfg)
+			var conflict *ErrOverlayServiceConflict
+			if err := cfg.Validate(); !errors.As(err, &conflict) {
+				t.Fatalf("Validate() = %v, want *ErrOverlayServiceConflict", err)
+			}
+			if conflict.Service != tt.service {
+				t.Errorf("Service = %q, want %q", conflict.Service, tt.service)
+			}
+		})
+	}
+
+	t.Run("disabled sections do not conflict", func(t *testing.T) {
+		cfg := base()
+		cfg.Firewall = &FirewallConfig{Enabled: false}
+		cfg.NAT = &NATConfig{Enabled: false}
+		cfg.LoadBalancer = &LoadBalancerConfig{Enabled: false}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() = %v, want nil", err)
+		}
+	})
 }

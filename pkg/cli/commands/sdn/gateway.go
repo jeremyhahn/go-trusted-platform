@@ -51,6 +51,7 @@ Examples:
 
 	cmd.AddCommand(newGatewayStatusCommand(getFlags))
 	cmd.AddCommand(newGatewaySnapshotCommand(getFlags))
+	cmd.AddCommand(newGatewayOverlayCommand(getFlags))
 	cmd.AddCommand(newGatewayModeCommand(getFlags))
 	cmd.AddCommand(newGatewayBGPCommand(getFlags))
 	cmd.AddCommand(newGatewayLBCommand(getFlags))

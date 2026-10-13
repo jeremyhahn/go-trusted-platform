@@ -22,9 +22,10 @@ two share a column below. `ServiceRegistry.Attestation`
 
 ## 2. Capability matrix
 
-gRPC: `AttestationService` in `pkg/api/grpc/proto/attestation.proto` — ten RPCs.
+gRPC: `AttestationService` in `pkg/api/grpc/proto/attestation.proto` — sixteen RPCs.
 REST: `pkg/webservice/v1/rest/attestation/` (`server_router.go`,
-`events_router.go`, `reports_router.go`, `clock_router.go` — see §3).
+`events_router.go`, `reports_router.go`, `clock_router.go`, `verdicts_router.go`
+— see §3).
 QUIC: `pkg/api/quic/attestation_handlers.go` plus the base range in
 `sdk/go/wire/quicwire/protocol.go`, routed by the daemon for opcodes `0x70`–`0x77`
 (`pkg/api/daemon/quic_service.go:522`).
@@ -52,7 +53,8 @@ MCP: fifteen `attestation_*` tools.
 | Device report (cached verdict + age) | `GET /api/v1/attestation/reports/{device_id}` | `GetDeviceReport` | `MISSING — #386` | `attestation_device_report` | ✅ |
 | Device reports (fleet) | `GET /api/v1/attestation/reports` | `ListDeviceReports` | `MISSING — #386` | `attestation_device_reports` | ✅ |
 | Refresh a device report (enqueue) | `POST /api/v1/attestation/reports/{device_id}/refresh` | `RefreshDeviceReport` | `MISSING — #386` | `attestation_device_refresh` | ✅ |
-| Challenge / response | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestChallenge` (`0x74`), `OpAttestResponse` (`0x75`) | `MISSING — docs/13 G7` | — |
+| Device verdict feed (`attestation:read`, tenant-filtered — §5.5, [engineering §9](engineering.md#device-verdict-events)) | `GET /api/v1/attestation/verdicts?cursor=&wait_ms=` (long-poll) | `StreamDeviceVerdicts` (server stream), `PollDeviceVerdicts` | `OpAttestPollVerdicts` (`0x75`, long-poll) | `attestation_device_verdicts_poll` (long-poll) | ✅ (long-poll) |
+| Challenge / response | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestChallenge` (`0x74`); the never-implemented `OpAttestResponse` value `0x75` now carries `OpAttestPollVerdicts` | `MISSING — docs/13 G7` | — |
 | Get AK | `MISSING` — served by the TPM surface, [`docs/tpm/`](../tpm/) | — | `OpAttestGetAK` (`0x73`) | — | — |
 
 **Reading the gaps.** The rows are lopsided in a consistent direction: manifests
@@ -328,6 +330,52 @@ evidence carries a digest and a PCR value and **no signature**, so no
 cryptographic verification is defined for it; those responses are always
 `not_evaluated`, never a pass. Both transports call one implementation
 (`pkg/attestation/verdict`), so they cannot drift.
+
+### 5.5 Device verdict feed (#709)
+
+Every transport follows the same feed of recorded device verdicts
+([engineering §9](engineering.md#device-verdict-events)): the last 256, from a
+cursor. gRPC and Unix carry `StreamDeviceVerdicts` as a server stream. The
+others carry no server stream, so they long-poll one RPC,
+`PollDeviceVerdicts(cursor, wait_ms) → (cursor, verdicts)`:
+
+| Transport | Poll | Who it admits |
+|---|---|---|
+| REST | `GET /api/v1/attestation/verdicts?cursor=&wait_ms=`, behind the admin-role gate (§5.1) | the verified session's tenant; `system` sees every tenant; no tenant → `403` |
+| gRPC / Unix | `PollDeviceVerdicts` | the stream's rules (engineering §9 table) |
+| QUIC | `OpAttestPollVerdicts` (`0x75`), a `PollDeviceVerdictsRequest` in the connection's codec | a platform token with `attestation:read`; none → `StatusPermissionDenied` |
+| MCP | tool `attestation_device_verdicts_poll` (`cursor`, `wait_ms`), permission `attestation:read` | a platform token with `attestation:read`; none → refused |
+| Embedded | `PollDeviceVerdicts` in process | the local caller, every tenant |
+
+An empty cursor answers at once with the current position and no verdicts —
+that is how a follow starts "from now on". Each later poll passes the cursor the
+previous reply returned and waits up to `wait_ms` (clamped to 20 s) for a
+verdict it may see before answering an empty page. Always pass the returned
+cursor on: it moves past verdicts of tenants the caller may not see, even on
+an empty page. The reply is the
+pb `PollDeviceVerdictsResponse` on every transport: protojson in the REST
+envelope's `payload`, proto field names over MCP.
+
+| Condition | gRPC | REST | QUIC |
+|---|---|---|---|
+| Fell behind the ring, or a cursor from an earlier platformd run | `RESOURCE_EXHAUSTED` | `429` | `StatusResourceExhausted` |
+| Cursor the feed never issued; malformed `wait_ms` | `INVALID_ARGUMENT` | `400` | `StatusInvalidArgument` |
+| Caller not admitted | `PERMISSION_DENIED` | `403` | `StatusPermissionDenied` |
+| platformd shutting down | `UNAVAILABLE` | `503` | `StatusUnavailable` |
+| No feed on this node (attestation service cannot hand out verdicts) | `FAILED_PRECONDITION` | `400`; `503` when the route has no poller at all | `StatusInvalidRequest`; `StatusUnavailable` with no attestation service |
+
+The Go SDK (`sdk/go/transport/pollstream`) answers `StreamDeviceVerdicts` on
+the REST, QUIC, MCP and embedded connections by running these polls: one head
+poll with an empty cursor, then polls that each wait half the transport
+timeout (at most 20 s; the full 20 s embedded, where no timeout applies),
+handing the verdicts to `Recv` in order and ending the stream with the first
+poll error. A caller therefore writes one follow loop for every transport.
+**Two MCP caveats:** MCP carries the other conditions above with their gRPC
+code, but JSON-RPC has no code for `RESOURCE_EXHAUSTED`, so over MCP a stream
+that fell behind ends `Internal` carrying the daemon's message; and the MCP
+client retries a failed call (three times, one
+second apart) before the stream sees the error. `platformctl attestation
+verdicts follow` ([cli.md](cli.md) §3.5) is thin over this call.
 
 ---
 

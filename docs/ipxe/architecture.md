@@ -92,7 +92,7 @@ platform's PXE service), and `pkg/cli/commands/iso` (`platformctl iso test pxe`)
 | Isolated network test harness | `pkg/ipxe/testenv.go` — `TestEnv`, `TestEnvConfig` | this repo |
 | **Manifest-driven container server** | `pkg/bootstrap/container` — wraps `ipxe.Server`; the binary is `cmd/pxeboot` | this repo, separate feature |
 | **PXE device lifecycle and state machine** | `pkg/compute/pxe/` — `PXEService`, 15 RPCs | this repo — [`docs/provisioning/`](../provisioning/) |
-| **Gateway edge PXE mode** | `pkg/sdn/gateway/modes/edge_pxe.go` | this repo — [`docs/gateway/`](../gateway/) |
+| **Gateway PXE section** | planned, not implemented — gatewayd refuses `pxe:` at start | this repo — [`docs/gateway/`](../gateway/) |
 | **DHCP wire protocol** | `github.com/insomniacslk/dhcp` | **not this repo** |
 | **TFTP wire protocol** | `github.com/pin/tftp/v3` | **not this repo** |
 | **iPXE firmware binaries** | downloaded from `boot.ipxe.org` | **not this repo** |

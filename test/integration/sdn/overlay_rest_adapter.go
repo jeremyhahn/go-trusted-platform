@@ -613,6 +613,77 @@ func (r *OverlayRESTAdapter) GatewayStatus(ctx context.Context) (*GatewayStatusR
 	}, nil
 }
 
+func (r *OverlayRESTAdapter) GatewayAdmittedVTEPList(ctx context.Context, gatewayID string) (*GatewayAdmittedVTEPListResult, error) {
+	path := "/api/v1/sdn/gateway/overlay/vteps"
+	if gatewayID != "" {
+		path += "?gateway_id=" + url.QueryEscape(gatewayID)
+	}
+	respBody, err := r.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		VTEPs []restGatewayAdmittedVTEP `json:"vteps"`
+		Count int                       `json:"count"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, ErrOverlayRESTDecodeFailed{Operation: "gateway_admitted_vteps", Err: err}
+	}
+	vteps := make([]GatewayAdmittedVTEPInfo, 0, len(result.VTEPs))
+	for _, vtep := range result.VTEPs {
+		vteps = append(vteps, vtep.gatewayAdmittedVTEPInfo())
+	}
+	return &GatewayAdmittedVTEPListResult{VTEPs: vteps, Count: result.Count}, nil
+}
+
+func (r *OverlayRESTAdapter) GatewayAdmittedVTEPGet(ctx context.Context, gatewayID, vtep string) (*GatewayAdmittedVTEPGetResult, error) {
+	path := "/api/v1/sdn/gateway/overlay/vteps/" + url.PathEscape(vtep)
+	if gatewayID != "" {
+		path += "?gateway_id=" + url.QueryEscape(gatewayID)
+	}
+	respBody, err := r.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result restGatewayAdmittedVTEP
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, ErrOverlayRESTDecodeFailed{Operation: "gateway_admitted_vtep", Err: err}
+	}
+	return &GatewayAdmittedVTEPGetResult{VTEP: result.gatewayAdmittedVTEPInfo()}, nil
+}
+
+type restGatewayAdmittedVTEP struct {
+	VTEP           string     `json:"vtep"`
+	DeviceID       uint64     `json:"device_id"`
+	HostID         string     `json:"host_id"`
+	Serial         string     `json:"serial"`
+	Hostname       string     `json:"hostname"`
+	AllocationID   string     `json:"allocation_id"`
+	BaselineSource string     `json:"baseline_source"`
+	ProfileID      uint64     `json:"profile_id"`
+	VerdictAt      *time.Time `json:"verdict_at"`
+}
+
+func (v restGatewayAdmittedVTEP) gatewayAdmittedVTEPInfo() GatewayAdmittedVTEPInfo {
+	var verdictAt time.Time
+	if v.VerdictAt != nil {
+		verdictAt = *v.VerdictAt
+	}
+	return GatewayAdmittedVTEPInfo{
+		VTEP:           v.VTEP,
+		DeviceID:       v.DeviceID,
+		HostID:         v.HostID,
+		Serial:         v.Serial,
+		Hostname:       v.Hostname,
+		AllocationID:   v.AllocationID,
+		BaselineSource: v.BaselineSource,
+		ProfileID:      v.ProfileID,
+		VerdictAt:      verdictAt,
+	}
+}
+
 // GatewaySetMode sets gateway mode via REST API.
 func (r *OverlayRESTAdapter) GatewaySetMode(ctx context.Context, opts GatewayModeOptions) (*GatewayModeResult, error) {
 	// Convert modes to bitmask

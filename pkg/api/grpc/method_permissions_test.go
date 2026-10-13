@@ -133,7 +133,7 @@ func TestGRPCMethodPermissions_WellFormed(t *testing.T) {
 	validResources := map[string]bool{
 		"vtpm": true, "dns": true, "device": true,
 		"sdn": true, "kms": true, "iam": true, "ca": true,
-		"proxy": true, "ntp": true,
+		"proxy": true, "ntp": true, "attestation": true,
 		"piv": true, "fido2": true, "ceremony": true,
 	}
 	validActions := map[string]bool{"read": true, "write": true, "delete": true, "sign-csr": true}

@@ -93,13 +93,15 @@ const (
 // pkg/api/quic/gateway_handlers.go and are sent as the first byte
 // of the category opcode's payload.
 const (
-	SubOpGatewayStatus         byte = 0x01
-	SubOpGatewaySetMode        byte = 0x02
-	SubOpGatewayBGPStatus      byte = 0x03
-	SubOpGatewayBGPPeers       byte = 0x04
-	SubOpGatewayAnnouncePrefix byte = 0x05
-	SubOpGatewayWithdrawPrefix byte = 0x06
-	SubOpGatewayListPrefixes   byte = 0x07
+	SubOpGatewayStatus            byte = 0x01
+	SubOpGatewaySetMode           byte = 0x02
+	SubOpGatewayBGPStatus         byte = 0x03
+	SubOpGatewayBGPPeers          byte = 0x04
+	SubOpGatewayAnnouncePrefix    byte = 0x05
+	SubOpGatewayWithdrawPrefix    byte = 0x06
+	SubOpGatewayListPrefixes      byte = 0x07
+	SubOpGatewayAdmittedVTEP      byte = 0x17
+	SubOpGatewayListAdmittedVTEPs byte = 0x18
 )
 
 // IPAM sub-opcodes - these match the IPAM-related sub-opcodes defined in
@@ -428,6 +430,59 @@ type gatewayStatusResponse struct {
 	BGPEnabled     bool     `codec:"bgp_enabled"`
 	EVPNEnabled    bool     `codec:"evpn_enabled"`
 	TransitEnabled bool     `codec:"transit_enabled"`
+}
+
+type gatewayAdmittedVTEPRequest struct {
+	GatewayID string `codec:"gateway_id,omitempty"`
+	VTEP      string `codec:"vtep"`
+}
+
+type gatewayAdmittedVTEPResponse struct {
+	VTEP      *gatewayAdmittedVTEPInfo `codec:"vtep"`
+	Timestamp int64                    `codec:"timestamp"`
+}
+
+type gatewayListAdmittedVTEPsRequest struct {
+	GatewayID string `codec:"gateway_id,omitempty"`
+}
+
+type gatewayListAdmittedVTEPsResponse struct {
+	VTEPs     []*gatewayAdmittedVTEPInfo `codec:"vteps"`
+	Count     int32                      `codec:"count"`
+	Timestamp int64                      `codec:"timestamp"`
+}
+
+type gatewayAdmittedVTEPInfo struct {
+	VTEP           string `codec:"vtep"`
+	DeviceID       uint64 `codec:"device_id,omitempty"`
+	HostID         string `codec:"host_id,omitempty"`
+	Serial         string `codec:"serial,omitempty"`
+	Hostname       string `codec:"hostname,omitempty"`
+	AllocationID   string `codec:"allocation_id,omitempty"`
+	BaselineSource string `codec:"baseline_source,omitempty"`
+	ProfileID      uint64 `codec:"profile_id,omitempty"`
+	VerdictAt      int64  `codec:"verdict_at,omitempty"`
+}
+
+func (v *gatewayAdmittedVTEPInfo) gatewayAdmittedVTEPInfo() GatewayAdmittedVTEPInfo {
+	if v == nil {
+		return GatewayAdmittedVTEPInfo{}
+	}
+	var verdictAt time.Time
+	if v.VerdictAt != 0 {
+		verdictAt = time.Unix(v.VerdictAt, 0).UTC()
+	}
+	return GatewayAdmittedVTEPInfo{
+		VTEP:           v.VTEP,
+		DeviceID:       v.DeviceID,
+		HostID:         v.HostID,
+		Serial:         v.Serial,
+		Hostname:       v.Hostname,
+		AllocationID:   v.AllocationID,
+		BaselineSource: v.BaselineSource,
+		ProfileID:      v.ProfileID,
+		VerdictAt:      verdictAt,
+	}
 }
 
 // gatewaySetModeRequest represents a gateway set mode request.
@@ -778,6 +833,10 @@ func overlaySubOpcodeToString(category byte, subOpcode byte) string {
 			return "BGPWithdraw"
 		case SubOpGatewayListPrefixes:
 			return "BGPPrefixes"
+		case SubOpGatewayAdmittedVTEP:
+			return "GatewayAdmittedVTEP"
+		case SubOpGatewayListAdmittedVTEPs:
+			return "GatewayAdmittedVTEPs"
 		}
 	case OpCategoryIPAM:
 		switch subOpcode {
@@ -1119,6 +1178,38 @@ func (q *OverlayQUICAdapter) GatewayStatus(ctx context.Context) (*GatewayStatusR
 		EVPNEnabled:    wireResp.EVPNEnabled,
 		TransitEnabled: wireResp.TransitEnabled,
 	}, nil
+}
+
+func (q *OverlayQUICAdapter) GatewayAdmittedVTEPList(ctx context.Context, gatewayID string) (*GatewayAdmittedVTEPListResult, error) {
+	req := &gatewayListAdmittedVTEPsRequest{GatewayID: gatewayID}
+	resp, err := q.sendCategoryRequest(ctx, OpCategoryGateway, SubOpGatewayListAdmittedVTEPs, "GatewayAdmittedVTEPs", req)
+	if err != nil {
+		return nil, err
+	}
+
+	var wireResp gatewayListAdmittedVTEPsResponse
+	if err := decodeSDNPayload(resp.Payload, &wireResp); err != nil {
+		return nil, ErrQUICOverlayDecodeFailed{Operation: "GatewayAdmittedVTEPs", Err: err}
+	}
+	vteps := make([]GatewayAdmittedVTEPInfo, 0, len(wireResp.VTEPs))
+	for _, vtep := range wireResp.VTEPs {
+		vteps = append(vteps, vtep.gatewayAdmittedVTEPInfo())
+	}
+	return &GatewayAdmittedVTEPListResult{VTEPs: vteps, Count: int(wireResp.Count)}, nil
+}
+
+func (q *OverlayQUICAdapter) GatewayAdmittedVTEPGet(ctx context.Context, gatewayID, vtep string) (*GatewayAdmittedVTEPGetResult, error) {
+	req := &gatewayAdmittedVTEPRequest{GatewayID: gatewayID, VTEP: vtep}
+	resp, err := q.sendCategoryRequest(ctx, OpCategoryGateway, SubOpGatewayAdmittedVTEP, "GatewayAdmittedVTEP", req)
+	if err != nil {
+		return nil, err
+	}
+
+	var wireResp gatewayAdmittedVTEPResponse
+	if err := decodeSDNPayload(resp.Payload, &wireResp); err != nil {
+		return nil, ErrQUICOverlayDecodeFailed{Operation: "GatewayAdmittedVTEP", Err: err}
+	}
+	return &GatewayAdmittedVTEPGetResult{VTEP: wireResp.VTEP.gatewayAdmittedVTEPInfo()}, nil
 }
 
 // GatewaySetMode sets the gateway modes via QUIC.

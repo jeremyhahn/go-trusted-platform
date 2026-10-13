@@ -61,6 +61,15 @@ func cliSnapshot() *platformv1.GatewaySnapshot {
 			{Name: "isp-a", IsDefault: true, PoolAddresses: 8, Ports: 64512, StaticTranslations: 1},
 		}},
 		Pipeline: &platformv1.SnapshotPipeline{Installed: true, Bridge: "br-fabric", Owner: "node-01-gateway", Terminal: "normal", FailMode: "secure"},
+		Overlay: &platformv1.SnapshotOverlay{
+			Running: true, LocalVtep: "192.0.2.10", VniCount: 1, RemoteVtepCount: 1,
+			LocalMacCount: 2, RemoteMacCount: 1, PrefixCount: 1, RefusedBindings: 3,
+			NdCounters: &platformv1.SnapshotOverlayNDCounters{Punted: 11, Answered: 7, MeterDropped: 2, QueueDropped: 1, FellThrough: 3},
+			AdmittedVteps: []*platformv1.GatewayAdmittedVTEP{{
+				Vtep: "198.51.100.10", DeviceId: 42, HostId: "host-42", Serial: "SERIAL42",
+				AllocationId: "alloc-42", BaselineSource: "golden", ProfileId: 9,
+			}},
+		},
 	}
 }
 
@@ -84,6 +93,9 @@ func TestPrintGatewaySnapshot_RendersEverySection(t *testing.T) {
 		"Firewall     active=true flows=26",
 		"NAT          snat=true dnat=2",
 		"Pipeline     bridge=br-fabric owner=node-01-gateway terminal=normal fail-mode=secure",
+		"Overlay      running=true local=192.0.2.10 vnis=1 remote-vteps=1 macs=2/1 prefixes=1 refused=3",
+		"nd punted=11 answered=7 meter-dropped=2 queue-dropped=1 fell-through=3",
+		"198.51.100.10   device=42 host=host-42 serial=SERIAL42 allocation=alloc-42 baseline=golden profile=9",
 	} {
 		assert.Contains(t, text, want)
 	}

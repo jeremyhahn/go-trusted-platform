@@ -142,6 +142,18 @@ type OverlayModeStatus struct {
 
 	// Uptime is the duration the overlay mode has been running.
 	Uptime time.Duration
+
+	// NDCounters reports overlay neighbour-discovery handler counters.
+	NDCounters OverlayNDCounters
+}
+
+// OverlayNDCounters reports overlay neighbour-discovery datapath counters.
+type OverlayNDCounters struct {
+	Punted       uint64
+	Answered     uint64
+	MeterDropped uint64
+	QueueDropped uint64
+	FellThrough  uint64
 }
 
 // NDSuppressionStatus reports ND suppression and counts the neighbor
@@ -408,6 +420,17 @@ type OverlayModeHandler struct {
 	vlans    map[uint16]uint32
 	hosts    map[hostKey]*overlayHost
 	prefixes map[netip.Prefix]*overlayPrefix
+	// revocations counts each remote VTEP's revocations. A route handler
+	// reads the count before it asks the admitter and installs only while
+	// it is unchanged, so a revocation landing inside an admission is never
+	// undone by the route that admission let through.
+	revocations map[netip.Addr]uint64
+	// refused holds each remote VTEP a route was refused or revoked from,
+	// with the refusal count when it was last marked. BGP does not send an
+	// unchanged route again, so ReplayVTEP hands the EVPN manager's routes
+	// back through the handlers once the VTEP may be admitted.
+	refused  map[netip.Addr]uint64
+	refusals uint64
 
 	// refusedBindings counts the remote bindings refused or held back for
 	// a conflict.
@@ -473,6 +496,8 @@ func NewOverlayModeHandler(
 		vlans:       make(map[uint16]uint32),
 		hosts:       make(map[hostKey]*overlayHost),
 		prefixes:    make(map[netip.Prefix]*overlayPrefix),
+		revocations: make(map[netip.Addr]uint64),
+		refused:     make(map[netip.Addr]uint64),
 		ndOwners:    make(map[ndKey][]hostKey),
 	}
 

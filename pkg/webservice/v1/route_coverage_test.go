@@ -150,9 +150,10 @@ var unservedPrefixes = map[string]string{
 // like; it is not a suppression list. Nothing may be added without a route
 // having genuinely gone missing, which is the failure this test reports.
 //
-// The four GatewayService entries are one group with one cause: NAT64 status
-// (#601) and the three perf verbs are registered on the DAEMON REST stack
-// (pkg/api/rest/), and this router builds nothing for them. NAT64 is recorded
+// The six GatewayService entries are one group with one cause: NAT64 status
+// (#601), the three perf verbs and the two admitted-VTEP reads (#709) are
+// registered on the DAEMON REST stack (pkg/api/rest/), and this router builds
+// nothing for them. NAT64 is recorded
 // alongside its neighbours rather than registered here because #660 leaves no
 // production backend wired to any gatewayd-resident gateway surface — a route
 // added here would resolve and then return unavailable — and because #154/#656
@@ -185,10 +186,12 @@ var unroutedClaims = map[string]string{
 	"/platform.v1.EABService/GetEnrollmentURL":                 "GET /api/v1/eab/credentials/{id}/url",
 	"/platform.v1.EABService/MarkCredentialUsed":               "POST /api/v1/eab/credentials/{id}/used",
 	"/platform.v1.EABService/RevokeCredential":                 "POST /api/v1/eab/credentials/{id}/revoke",
+	"/platform.v1.GatewayService/GetGatewayAdmittedVTEP":       "GET /api/v1/sdn/gateway/overlay/vteps/{vtep}",
 	"/platform.v1.GatewayService/GetNAT64Status":               "GET /api/v1/sdn/gateway/nat64/status",
 	"/platform.v1.GatewayService/GetPerfConntrack":             "GET /api/v1/sdn/gateway/perf/conntrack",
 	"/platform.v1.GatewayService/GetPerfDatapath":              "GET /api/v1/sdn/gateway/perf/datapath",
 	"/platform.v1.GatewayService/GetPerfFlows":                 "POST /api/v1/sdn/gateway/perf/flows",
+	"/platform.v1.GatewayService/ListGatewayAdmittedVTEPs":     "GET /api/v1/sdn/gateway/overlay/vteps",
 	"/platform.v1.IDevIDService/CreateLDevID":                  "POST /api/v1/idevid/ldevid",
 	"/platform.v1.IDevIDService/Generate":                      "POST /api/v1/idevid",
 	"/platform.v1.IDevIDService/GetCSR":                        "GET /api/v1/idevid/csr",

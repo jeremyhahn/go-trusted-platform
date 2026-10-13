@@ -50,6 +50,7 @@ verification against **PCR 10**.
 | `TPMDevice` / `VTPMDevice` / `TPMDeviceFactory` | `workload` | Abstracts the TPM; `SoftwareTPM` satisfies it for tests |
 | `DeviceResolver` | `push` | Resolves a device identity for a push target |
 | `AttestationObserver` | `service` | Receives attestation events |
+| `Observer` / `ObserverRegistry` | `verdict` | Hands every recorded device verdict, failed or passed, to relying parties |
 
 Every one of these is a fault-injection point. `SoftwareTPM` +
 `NewSoftwareTPMFactory` is how the suite runs without hardware.
@@ -297,6 +298,72 @@ attestation events; the REST surface exposes them at
 `GET /api/v1/attestation/events`. Quotes, nonces and raw evidence are **not**
 logged — a log is not an evidence store, and a logged nonce is a replay
 primitive.
+
+### Device verdict events
+
+`AttestationObserver` sees only passed verdicts and cryptographic failures, so
+an absence of evidence never quarantines a device. Relying parties that deny
+service on *any* failed verdict register a `verdict.Observer` instead
+(`Service.RegisterDeviceVerdictObserver`). It is handed every verdict once it
+is in the event log, with that event's ID and time.
+
+platformd registers one at start-up (`streamDeviceVerdicts`,
+`pkg/api/daemon/attestation_verdict_stream.go`) that records every verdict in
+a `feed.Feed` (`pkg/attestation/verdict/feed`), which every transport follows
+(#709). gRPC over TCP and over the Unix socket serve
+`AttestationService.StreamDeviceVerdicts` as a server stream; REST, QUIC, MCP
+and embedded carry no server stream, so they long-poll the same feed through
+`PollDeviceVerdicts` ([api.md](api.md) §5.5), and the Go SDK turns those polls
+back into the one `StreamDeviceVerdicts` call. Each `DeviceVerdictEvent` carries the event-log entry's `event_id` and
+`recorded_at`, and the verdict's `device_id`, `tenant_id`, `host_id`,
+`serial`, `passed`, `cryptographic` and `reason`. The verifier stamps
+`tenant_id` from the device record; it is empty for a device the platform
+itself owns.
+
+When the reporting collector runs, platformd also registers its report cache
+(`reporting.Cache.OnDeviceVerdict`, wired by `reportEveryVerdict` in
+`pkg/daemon/commands/attestation_reporting.go`). Every recorded verdict then
+becomes the device's report, whichever path verified it: the collector, or a
+device submitting its own quote through `AttestDevice` on any transport. A
+failed `AttestDevice` therefore replaces a collected pass in `GetDeviceReport`
+and in the persisted report, instead of leaving it to be served until it
+expires (#765). A verdict carries no per-check breakdown, so its report sets
+every check on a pass and none on a failure, whose `message` explains it. The
+cache never lets an older verification replace a newer one: the verifier
+stamps the verdict with its `attested_at`, and the collector's full report of
+the same verification, which carries the same time, replaces the verdict's.
+
+Who sees which verdicts:
+
+| Caller | Admitted | Sees |
+|---|---|---|
+| Platform token | holds `attestation:read` and names a tenant | its tenant's devices; the `system` tenant sees every device |
+| Bearer token the daemon can only check for validity | never | — |
+| mTLS certificate | always | its certificate's tenant; a certificate naming no tenant, or `system`, sees every device |
+| No credential (Unix socket peer, embedded in-process caller, or a listener run without authentication) | always | every device |
+
+That table is gRPC's. QUIC and MCP have no peer identity to fall back on, so
+they admit only a platform token, by its first row, and refuse a call without
+one. REST takes the tenant of the verified IAM session behind the admin-role
+gate (`system` sees every device; a session naming no tenant is refused `403`).
+
+A verdict on a device with no tenant reaches only callers that see every
+device. The gRPC method catalog maps both RPCs to `attestation:read`, so the
+token interceptor refuses a token without it before the handler runs; the MCP
+tool carries the same permission.
+
+The feed keeps the last 256 verdicts. A follow starts at subscription (an
+empty cursor means "from now on") and does not replay. Each poll answers the
+verdicts after its cursor and the cursor to pass next; it waits at most 20 s
+(`feed.MaxWait`, under the 30 s request timeouts of the REST, QUIC and MCP
+servers) for one to arrive. A cursor older than the ring, or from an earlier
+platformd run, is refused `RESOURCE_EXHAUSTED` rather than losing a verdict
+silently; one the feed never issued is `INVALID_ARGUMENT`. The feed closes when
+platformd shuts down, before its graceful gRPC stop, so every stream and poll
+ends `UNAVAILABLE` and the stop does not wait on followers. A consumer follows
+again after either and keeps a backstop for what it missed. The overlay
+gateways use the stream to withdraw a failed device's VTEPs
+([overlay mode](../gateway/engineering.md#revocation-on-a-failed-verdict)).
 
 ## 10. Related
 

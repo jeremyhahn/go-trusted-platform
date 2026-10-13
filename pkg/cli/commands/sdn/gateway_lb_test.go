@@ -48,6 +48,44 @@ func TestNewGatewayLBCommand(t *testing.T) {
 	}
 }
 
+func TestRequireFlag(t *testing.T) {
+	t.Run("marks a registered flag required", func(t *testing.T) {
+		cmd := &cobra.Command{Use: "vip"}
+		cmd.Flags().String("address", "", "")
+		requireFlag(cmd, "address")
+		if got := cmd.Flags().Lookup("address").Annotations[cobra.BashCompOneRequiredFlag]; len(got) != 1 || got[0] != "true" {
+			t.Fatalf("address annotations = %v, want required", got)
+		}
+	})
+
+	t.Run("panics on an unregistered flag", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("requireFlag must panic when the flag does not exist")
+			}
+		}()
+		requireFlag(&cobra.Command{Use: "vip"}, "no-such-flag")
+	})
+}
+
+func TestGatewayLBVIPCommandsRequireTheirTargets(t *testing.T) {
+	vip := newGatewayLBVIPCommand(testGetFlags())
+	required := map[string][]string{
+		"add":          {"address", "port", "backend"},
+		"remove":       {"address", "port"},
+		"get":          {"address", "port"},
+		"set-backends": {"address", "port", "backend"},
+	}
+	for _, sub := range vip.Commands() {
+		for _, name := range required[sub.Name()] {
+			flag := sub.Flags().Lookup(name)
+			if flag == nil || len(flag.Annotations[cobra.BashCompOneRequiredFlag]) == 0 {
+				t.Errorf("vip %s --%s must be required", sub.Name(), name)
+			}
+		}
+	}
+}
+
 func TestGatewayLBVIPCommandTree(t *testing.T) {
 	cmd := newGatewayLBVIPCommand(testGetFlags())
 	if cmd.Use != "vip" {

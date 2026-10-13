@@ -23,9 +23,13 @@ import (
 // pool poolID or, when poolID is empty, in every pool. The gRPC, QUIC and
 // REST gateway services all list allocations through it.
 //
-// Released allocations are excluded: the memory backend keeps them for audit,
-// but their address is free again. gRPC and QUIC filtered them and REST did
-// not, so an address released over REST was still listed as allocated (#730).
+// Only active and reserved allocations are listed. Released allocations are
+// excluded: the memory backend keeps them for audit, but their address is free
+// again. gRPC and QUIC filtered them and REST did not, so an address released
+// over REST was still listed as allocated (#730). Expired allocations are
+// excluded for the same reason: IPAM expiry for inactivity frees the address
+// but keeps a zero ExpiresAt, so only the status tells the gateway's VTEP
+// admission it no longer belongs to the device (#765).
 // A pool that cannot be read while listing every pool is skipped, as all three
 // services did before.
 func activeAllocations(ctx context.Context, alloc ipam.Allocator, poolID string) ([]*ipam.Allocation, error) {
@@ -51,7 +55,7 @@ func activeAllocations(ctx context.Context, alloc ipam.Allocator, poolID string)
 	}
 	active := make([]*ipam.Allocation, 0, len(all))
 	for _, a := range all {
-		if a.Status != ipam.AllocationStatusReleased {
+		if a.Status == ipam.AllocationStatusActive || a.Status == ipam.AllocationStatusReserved {
 			active = append(active, a)
 		}
 	}
