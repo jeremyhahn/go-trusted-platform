@@ -241,7 +241,7 @@ build tag) provides:
 - `GetStats(ctx, flavor)` -- reads the vBMC's `/debug/stats` for
   before/after counter diffs
 
-See `docs/bmc/testing.md` for runbook.
+See `docs/bmc/engineering.md` §11 for runbook.
 
 ## File map
 

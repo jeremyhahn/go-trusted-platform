@@ -205,7 +205,7 @@ Template upload takes `{"role": <string>, "template": <object>}` and returns the
 new template's `id` inside the standard `{code, success, payload}` envelope.
 The template is sent as **JSON**, converted from the role YAML, because YAML
 comments are not valid JSON. `role` is one of the node roles of
-[`config-reference.md`](config-reference.md) — `control-plane`, `gateway`,
+[`engineering.md`](engineering.md) — `control-plane`, `gateway`,
 `worker` — and is stored verbatim as the template's `name` **and** `role`, so
 `GET /api/v1/device/templates` lists the three seeded roles by name. The
 template id is `util.NewID(role)`, so re-seeding a role is idempotent. A role

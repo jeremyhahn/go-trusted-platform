@@ -315,14 +315,14 @@ Recorded per `conventions/feature-docs.md` §7 — the code wins.
 
 | Stale statement | Where | Reality (2026-08-18) |
 |---|---|---|
-| A `pkg/security/audit/` package with `AuditEvent`, `AuditLogger`, `logger.go`, `middleware.go`, `audit.NewLogger(...)`, `audit.NewEvent()...Build()` | legacy `docs/security/README.md` | **`pkg/security/audit` does not exist.** `pkg/security` contains exactly two subpackages: `ratelimit` and `validation`. The audit package appears in a stale build coverage log; the source is gone. |
-| `ratelimit.NewTokenBucket(1000, 100)` | legacy `docs/security/README.md` | The constructor is `NewTokenBucketLimiter(config LimitConfig) (*TokenBucketLimiter, error)`. |
-| `ratelimit.NewSlidingWindow(100, time.Minute)` | legacy `docs/security/README.md` | The constructor is `NewSlidingWindowLimiter(config SlidingWindowConfig) (*SlidingWindowLimiter, error)`. |
-| `validation.StripXSS(html)` | legacy `docs/security/README.md` | No such function. The XSS surface is `StripHTML(input string, allowedTags []string) string` and `NewXSSValidator(field string) *XSSValidator`. |
-| `validation.ValidateEmail(email)` | legacy `docs/security/README.md` | No such function. The email surface is `NewEmailValidator(field string) *EmailValidator` implementing `Validator`. |
-| `safe := validation.SanitizePath(input)` (single return) | legacy `docs/security/README.md` | `SanitizePath(path string) (string, error)` returns two values. There is also a method form, `(*PathSanitizer).SanitizePath(input string) (string, error)`. |
-| Coverage "Rate limiting 82%+, Audit 69%+, Validation 86%+" | legacy `docs/security/README.md` | Current build log: ratelimit 95.6%, validation 98.7%, `pkg/policy/opa` 92.1%. Audit is not measured because it does not exist. |
-| The README does not mention `pkg/policy/opa` at all | legacy `docs/security/README.md` | It is the only part of this section with a production consumer. |
+| A `pkg/security/audit/` package with `AuditEvent`, `AuditLogger`, `logger.go`, `middleware.go`, `audit.NewLogger(...)`, `audit.NewEvent()...Build()` | deleted legacy `docs/security/README.md` | **`pkg/security/audit` does not exist.** `pkg/security` contains exactly two subpackages: `ratelimit` and `validation`. The audit package appears in a stale build coverage log; the source is gone. |
+| `ratelimit.NewTokenBucket(1000, 100)` | deleted legacy `docs/security/README.md` | The constructor is `NewTokenBucketLimiter(config LimitConfig) (*TokenBucketLimiter, error)`. |
+| `ratelimit.NewSlidingWindow(100, time.Minute)` | deleted legacy `docs/security/README.md` | The constructor is `NewSlidingWindowLimiter(config SlidingWindowConfig) (*SlidingWindowLimiter, error)`. |
+| `validation.StripXSS(html)` | deleted legacy `docs/security/README.md` | No such function. The XSS surface is `StripHTML(input string, allowedTags []string) string` and `NewXSSValidator(field string) *XSSValidator`. |
+| `validation.ValidateEmail(email)` | deleted legacy `docs/security/README.md` | No such function. The email surface is `NewEmailValidator(field string) *EmailValidator` implementing `Validator`. |
+| `safe := validation.SanitizePath(input)` (single return) | deleted legacy `docs/security/README.md` | `SanitizePath(path string) (string, error)` returns two values. There is also a method form, `(*PathSanitizer).SanitizePath(input string) (string, error)`. |
+| Coverage "Rate limiting 82%+, Audit 69%+, Validation 86%+" | deleted legacy `docs/security/README.md` | Current build log: ratelimit 95.6%, validation 98.7%, `pkg/policy/opa` 92.1%. Audit is not measured because it does not exist. |
+| The README does not mention `pkg/policy/opa` at all | deleted legacy `docs/security/README.md` | It is the only part of this section with a production consumer. |
 
 ---
 

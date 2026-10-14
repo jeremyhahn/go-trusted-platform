@@ -425,4 +425,4 @@ All operations are thread-safe:
 
 - [802.1X Network Attachment](802.1X-network-attachment.md)
 - [Compute Architecture](architecture.md)
-- [PXE Provisioning](pxe-provisioning.md)
+- [PXE Provisioning](../ipxe/architecture.md)

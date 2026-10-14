@@ -394,8 +394,8 @@ The primary field is **`admittedNetwork`**, with an optional
 (used server-side as the fail-closed revert target for the physical switch
 move during activation). There is no snake_case `production_network`,
 `provisioning_network` or `quarantine_network` in this response, and no such
-fields exist on `entities.DeviceProfile` either. The legacy
-`docs/device/network-setup.md` documents `production_network`; the code wins
+fields exist on `entities.DeviceProfile` either. The deleted legacy
+`docs/device/network-setup.md` documented `production_network`; the code wins
 and the correction is recorded here.
 
 The JavaScript SDK models this body as `DeviceSelfServiceProfile`
@@ -765,7 +765,7 @@ are `control-plane`, `gateway`, `worker`, `server`, `client`, `workstation`,
 `edge`, `iot`, `load-balancer` and `unknown`; `loadbalancer` is accepted as an
 alias of `load-balancer`, and matching is case-insensitive. The first three are
 the bootstrap configuration's node roles
-([`docs/bootstrap/config-reference.md`](../bootstrap/config-reference.md)) and
+([`docs/bootstrap/engineering.md`](../bootstrap/engineering.md)) and
 round-trip verbatim. Every REST create/update path resolves the string through
 `entities.ParseDeviceRole`: an omitted `role` is `unknown`; any other string
 outside the vocabulary is a **`400`** carrying `device: unknown role "<value>"`

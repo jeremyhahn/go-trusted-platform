@@ -165,7 +165,7 @@ The destination's receiver binds `compute.migration_listen_address` (`LISTEN`
 and `PORT` in the flow above). By default that is `0.0.0.0:0`: every address,
 with an ephemeral port per receiver. Set it to the migration network's address
 to keep the stream on that network, and give it a fixed port when a firewall
-needs one ([Configuration](configuration.md#migration-listen-address)).
+needs one ([Configuration](engineering.md#4-configuration)).
 
 ## Error semantics
 

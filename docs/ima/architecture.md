@@ -325,7 +325,7 @@ runlevel by the Alpine installer (`defaultServices` in
 - [`docs/installer/`](../installer/) — where `os.ima.*` is consumed
 - [`docs/daemon/api.md`](../daemon/api.md) — the transport model this feature
   is absent from
-- Legacy notes retained in this folder: [README.md](README.md),
-  [policies.md](policies.md), [configuration.md](configuration.md),
-  [tpm-integration.md](tpm-integration.md), [api-reference.md](api-reference.md),
-  [troubleshooting.md](troubleshooting.md)
+- The legacy notes this folder held — README.md,
+  policies.md, configuration.md,
+  tpm-integration.md, api-reference.md,
+  troubleshooting.md — are deleted. These five files hold their content.

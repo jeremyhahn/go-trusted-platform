@@ -728,6 +728,6 @@ QUICBAAS_COLLECTION=firmware_devices
 - [README.md](README.md) - Overview and quick start
 - [Architecture](architecture.md) - System design
 - [API Reference](api-reference.md) - CLI commands
-- [AVR Details](avr.md) - AVR-specific information
+- [AVR Details](avr-attestation.md) - AVR-specific information
 - [RPi Details](rpi.md) - Raspberry Pi and swtpm
 - [Android Details](android.md) - GrapheneOS support

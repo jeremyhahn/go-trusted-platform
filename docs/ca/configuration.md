@@ -658,8 +658,8 @@ There is no `platformctl ca validate-config` and `ca init` has no `--dry-run`.
 
 ## Related Documentation
 
-- [README](README.md) - CA overview
+- [README](architecture.md) - CA overview
 - [Architecture](architecture.md) - CA design
 - [ACME](acme.md) - ACME server configuration
-- [API Reference](api-reference.md) - API documentation
-- [CLI Usage](cli-usage.md) - Command-line reference
+- [API Reference](api.md) - API documentation
+- [CLI Usage](cli.md) - Command-line reference

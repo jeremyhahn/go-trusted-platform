@@ -414,8 +414,8 @@ func buildISOBuildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 	// preferred default because it is vendor-neutral and produces a
 	// working, bootable ISO with no flags required.
 	//
-	// See docs/bootstrap/config-delivery.md §2 and
-	// docs/installer/iso-building.md §Config Delivery Modes.
+	// See docs/installer/iso-building.md §Config Delivery Modes
+	// (1. Default baked).
 	if flags.platformConfig != "" {
 		config.PlatformConfigFile = flags.platformConfig
 	} else {

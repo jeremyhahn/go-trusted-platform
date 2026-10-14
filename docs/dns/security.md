@@ -700,7 +700,7 @@ The platform provides audit-ready documentation:
 | [Key Rollover](dnssec-rollover.md) | KSK and ZSK rollover procedures |
 | [Dynamic DNS](dynamic-dns.md) | DDNS and TSIG authentication |
 | [Architecture](architecture.md) | DNS system architecture |
-| [IAM Authorization](../iam/authorization.md) | Access control policies |
+| [IAM Authorization](../iam/architecture.md#authorization-flow) | Access control policies |
 | [TPM Documentation](../tpm/README.md) | TPM integration details |
 
 ## See Also

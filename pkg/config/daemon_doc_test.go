@@ -36,10 +36,10 @@ const daemonConfigurationDoc = "../../docs/daemon/configuration.md"
 // context file.
 var daemonConfigDocs = []string{
 	daemonConfigurationDoc,
-	"../../docs/daemon/README.md",
-	"../../docs/daemon/api-reference-mcp.md",
-	"../../docs/daemon/api-reference-rest.md",
-	"../../docs/daemon/api-reference-unix.md",
+	"../../docs/daemon/architecture.md",
+	"../../docs/daemon/engineering.md",
+	"../../docs/daemon/api.md",
+	"../../docs/daemon/user.md",
 }
 
 var yamlFence = regexp.MustCompile("(?s)```yaml\n(.*?)```")

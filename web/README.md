@@ -159,8 +159,8 @@ make web-lint
 
 ## Related Documentation
 
-- [User Registration](../docs/iam/user-registration.md)
-- [Invitation Flow](../docs/auth/invitation-flow.md)
+- [User Registration](../docs/auth/api.md)
+- [Invitation Flow](../docs/tenant/architecture.md)
 - [Tenant Architecture](../docs/tenant/architecture.md)
 - [Testing Guide](docs/testing.md)
 

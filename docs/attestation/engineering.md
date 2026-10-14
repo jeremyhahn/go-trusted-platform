@@ -475,11 +475,11 @@ gateways use the stream to withdraw a failed device's VTEPs
 
 - [architecture.md](architecture.md) · [api.md](api.md) · [cli.md](cli.md) · [user.md](user.md)
 - Deep dives carried over from before the migration, not re-verified in this
-  pass: [host-manifest.md](host-manifest.md), [manifest.md](manifest.md),
-  [policy-engine.md](policy-engine.md), [push.md](push.md),
+  pass: [manifest.md](manifest.md), [push.md](push.md),
   [vm-attestation.md](vm-attestation.md),
-  [workload-attestation.md](workload-attestation.md),
-  [configuration.md](configuration.md)
+  [workload-attestation.md](workload-attestation.md). The legacy
+  host-manifest.md, policy-engine.md and configuration.md are deleted; these
+  five files hold their content.
 - Adjacent features: [`docs/vtpm/`](../vtpm/), [`docs/tpm/`](../tpm/),
   [`docs/ima/`](../ima/), [`docs/registry/`](../registry/) (attestation is the
   registry's only authentication method)

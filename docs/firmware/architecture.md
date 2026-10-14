@@ -296,8 +296,8 @@ what it is.
   OTP boot, no Android/AVB, no OTA, no ISP flashing, no `platformctl firmware`
   command group. `pkg/firmware`, `pkg/ota`, `pkg/avr`, `pkg/rpi` and
   `pkg/android` **do not exist** (grepped 2026-08-18). Everything in this
-  folder's `README.md`, `avr.md`, `rpi.md`, `android.md`, `configuration.md` and
-  `ROADMAP.md` describing those platforms is **PLANNED**, not shipped — see §9.
+  folder's `README.md`, `rpi.md`, `android.md` and `configuration.md`
+  describing those platforms is **PLANNED**, not shipped — see §9.
 
 ## 9. Where the code contradicts the legacy documents
 
@@ -335,5 +335,5 @@ exactly that certificate — the same binding `uefi.VerifySignedUKI` enforces.
 - Legacy notes retained in this folder: [secure-boot.md](secure-boot.md),
   [uefi.md](uefi.md), [uefi-secure-boot.md](uefi-secure-boot.md),
   [uki.md](uki.md), [authenticode.md](authenticode.md), [bios.md](bios.md),
-  [ROADMAP.md](ROADMAP.md), and the PLANNED device notes
-  [avr.md](avr.md), [rpi.md](rpi.md), [android.md](android.md)
+  and the PLANNED device notes [rpi.md](rpi.md), [android.md](android.md).
+  The legacy ROADMAP.md and avr.md are deleted.

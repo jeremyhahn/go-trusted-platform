@@ -435,5 +435,5 @@ if err != nil {
 - [UEFI Secure Boot](uefi-secure-boot.md) - UEFI Secure Boot concepts
 - [Firmware Architecture](architecture.md) - Overall firmware architecture
 - [API Reference](api-reference.md) - Firmware CLI commands
-- [KMS API Reference](/docs/kms/api-reference.md) - Key management integration
+- [KMS API Reference](../kms/api.md) - Key management integration
 - [TPM CLI Usage](/docs/tpm/cli-usage.md) - TPM key operations

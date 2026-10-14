@@ -606,7 +606,7 @@ openssl x509 -in cert.pem -pubkey -noout | \
 | [Security](security.md) | DNS security model |
 | [Configuration](configuration.md) | Complete configuration reference |
 | [Records](records.md) | DNS record types |
-| [CA Documentation](../ca/README.md) | Certificate Authority overview |
+| [CA Documentation](../ca/architecture.md) | Certificate Authority overview |
 
 ## See Also
 

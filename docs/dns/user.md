@@ -18,9 +18,8 @@ state rather than hand-maintained.
 ## Before anything else: there is no `platformctl dns`
 
 Every task below is an API call. The CLI group does not exist
-([cli.md](cli.md)), and a document in this folder
-([cli-reference.md](cli-reference.md)) describes one that was never built — it is
-fenced with an archive banner. Use REST or gRPC.
+([cli.md](cli.md)), and a deleted document
+(cli-reference.md) described one that was never built. Use REST or gRPC.
 
 ---
 

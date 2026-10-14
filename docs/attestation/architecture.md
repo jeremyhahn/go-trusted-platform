@@ -1319,9 +1319,9 @@ Remote verifiers can validate container attestation by:
 ## Related Documentation
 
 - [TPM Integration](../tpm/README.md) - TPM 2.0 device interaction and key management
-- [Certificate Authority](../ca/README.md) - IDevID/IAK certificate issuance
+- [Certificate Authority](../ca/architecture.md) - IDevID/IAK certificate issuance
 - [Policy Engine](../policy/README.md) - OPA-based attestation policies
 - [Workload Management](../workloads/README.md) - Container and VM lifecycle
 - [Workload Attestation](workload-attestation.md) - Container measurement log details
-- [Security Model](../security/README.md) - Platform security architecture
+- [Security Model](../security/architecture.md) - Platform security architecture
 - [API Reference](../api/attestation.md) - Attestation API endpoints

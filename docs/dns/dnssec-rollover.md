@@ -550,4 +550,4 @@ Key rollover events are logged with structured fields:
 - [Dynamic DNS](dynamic-dns.md) - RFC 2136 dynamic updates
 - [Architecture](architecture.md) - DNS system architecture
 - [TPM Documentation](../tpm/README.md) - TPM integration details
-- [KMS Documentation](../kms/README.md) - Key management service
+- [KMS Documentation](../kms/architecture.md) - Key management service

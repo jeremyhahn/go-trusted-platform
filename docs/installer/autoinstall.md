@@ -15,7 +15,7 @@ Do not edit `autoinstall.sh` in isolation — edit the heredoc in
 
 For the bootstrap-level context in which autoinstall runs, see
 `docs/architecture/bootstrap-flow.md` and
-`docs/bootstrap/config-delivery.md`.
+`docs/bootstrap/architecture.md` (Phase 3 · Control plane).
 
 ---
 
@@ -210,7 +210,7 @@ First boot kills keyslot 0.
   (`FirstbootSealStrategy` in `pkg/firstboot/strategy.go`, files
   `seal-platform.pub` / `seal-platform.priv`; PCRs in `docs/tpm/pcrs.md`).
 - Unseal at runtime lives in `platform-initrd` — see
-  `docs/installer/initrd-overview.md`.
+  `docs/installer/architecture.md` §5 (Phase B — first production boot).
 
 ---
 
@@ -264,8 +264,8 @@ generic hardware to watch over BMC serial-over-LAN.
 ## 10. See Also
 
 - `docs/architecture/bootstrap-flow.md` — overall bootstrap architecture
-- `docs/bootstrap/config-delivery.md` — orchestrator side of config delivery
-- `docs/installer/initrd-overview.md` — post-reboot boot path
+- `docs/bootstrap/architecture.md` (Phase 3 · Control plane) — orchestrator side of config delivery
+- `docs/installer/architecture.md` §5 (Phase B) — post-reboot boot path
 - `docs/installer/iso-building.md` — how the ISO was built
 - `docs/reference/kernel-cmdline.md` — all recognized cmdline params
 - `docs/tpm/pcrs.md` — PCR policy used by LUKS seal

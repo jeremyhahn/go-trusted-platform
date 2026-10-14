@@ -108,5 +108,5 @@ Print the binary's version.
 ## See Also
 
 - [daemon/cli.md](../daemon/cli.md) - platformctl root verbs (wipe, etc.) and the platformd daemon
-- [../installer/README.md](../installer/README.md) - Installation architecture
-- [../installer/UNLOCK_STRATEGIES.md](../installer/UNLOCK_STRATEGIES.md) - Unlock strategies
+- [../installer/architecture.md](../installer/architecture.md) - Installation architecture
+- [../installer/engineering.md](../installer/engineering.md) - Unlock strategies

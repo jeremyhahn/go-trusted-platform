@@ -51,8 +51,8 @@ MaxRetries:   3
 
 **`NodeAffinity` is mandatory** for correctness. Without it, in a
 3-node cluster the scheduler would fire the job on all three nodes
-simultaneously (see `docs/architecture/quicbaas-integration.md`
-Scheduler Clustering).
+simultaneously (see `docs/architecture/bmc-tls.md`
+Cluster scheduling).
 
 ## Boot wiring
 
@@ -339,7 +339,7 @@ Code paths:
 ## Related docs
 
 - `docs/architecture/bmc-tls.md` -- overall architecture
-- `docs/architecture/quicbaas-integration.md` -- scheduler clustering semantics
-- `docs/bmc/configuration.md` -- BMC YAML schema
-- `docs/bmc/operations.md` -- BMC admin tasks
+- `docs/architecture/bmc-tls.md` Cluster scheduling -- scheduler clustering semantics
+- `docs/bmc/engineering.md` §3 -- BMC YAML schema
+- `docs/bmc/user.md` -- BMC admin tasks
 - `docs/operations/x10-smc-cgi-validation.md` -- X10 hardware cert path runbook

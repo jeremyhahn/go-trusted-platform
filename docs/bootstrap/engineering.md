@@ -868,7 +868,7 @@ rather than silently ignored.
 | `deployer.redeploy_mode` | string | `if-stale` | `always`, `if-stale`, `never`; unrecognised values normalise to `if-stale` |
 | `deployer.smb_host` | string | `deployer.host` | The address the BMC uses for the SMB share; also preferred for the install-log base URL |
 | `deployer.bootstrap_interface` | string | container default `eth0` | Sets `BOOTSTRAP_INTERFACE` |
-| `deployer.bootstrap_bind_host` | string | every interface | Sets `BOOTSTRAP_BIND_HOST` (pxeboot `--bind-host`): the address the container's HTTP and TFTP servers bind. Must be an IP address (`ErrInvalidConfig` at load). DHCP never binds it — see [`docs/ipxe/configuration.md`](../ipxe/configuration.md#bind-address) |
+| `deployer.bootstrap_bind_host` | string | every interface | Sets `BOOTSTRAP_BIND_HOST` (pxeboot `--bind-host`): the address the container's HTTP and TFTP servers bind. Must be an IP address (`ErrInvalidConfig` at load). DHCP never binds it — see [`docs/ipxe/engineering.md`](../ipxe/engineering.md) |
 | `deployer.bootstrap_server_ip` | string | container default | Sets `BOOTSTRAP_SERVER_IP`: the address advertised as DHCP server and next server, and the one the device-script listener binds; must be an address the deployer host already holds on a first bootstrap |
 | `deployer.bootstrap_http_port` | int | `8080` | Sets `BOOTSTRAP_HTTP_PORT`. The container's HTTP service — per-MAC config endpoint, install-log sink, `/health` — and the port the orchestrator builds its own URLs against (`installLogBaseURL`) |
 | `deployer.bootstrap_device_script_port` | int | `bootstrap_http_port` + 1 | Sets `BOOTSTRAP_DEVICE_SCRIPT_PORT`. The container's second listener, `/boot/device/{mac}.ipxe`. Set it when something else on the deployer already owns the derived port |
@@ -953,7 +953,7 @@ a warning and the daemon continues without it.
 Trust configuration (`trust.bootstrap` / `trust.bmc`, and the unconfigured
 platform anchor) and DANE
 publication (`dns.dane.*`) are owned elsewhere — see
-[configuration.md](configuration.md) for the full key list and
+[`docs/trust/engineering.md`](../trust/engineering.md#4-configuration) for the full key list and
 [`docs/dns/dane.md`](../dns/dane.md) for the record semantics. The keys this
 feature depends on are `strategies`, `server-url`, `hostname`, `bundle-path`,
 `per-method-timeout`, `install-to-system-trust`, and the `dane`/`noise`/`spki`
@@ -1226,21 +1226,21 @@ never reconfigured underneath a probe.
 - [`docs/dns/dane.md`](../dns/dane.md) — TLSA record semantics
 - [`docs/daemon/api.md`](../daemon/api.md) — transports, opcodes, status bytes, authorization
 - [`docs/barrier/`](../barrier/) — the barrier lifecycle, the gate and `platformctl barrier`
-- Legacy narrative kept in place: [overview.md](overview.md), [pxe-bootstrap.md](pxe-bootstrap.md), [config-reference.md](config-reference.md), [config-delivery.md](config-delivery.md), [deployer.md](deployer.md), [dane.md](dane.md), [configuration.md](configuration.md), [day-zero.md](day-zero.md), [manual-nodes.md](manual-nodes.md), [switch-management.md](switch-management.md), [api-reference-rest.md](api-reference-rest.md)
+- The legacy files this folder held (overview.md, pxe-bootstrap.md, config-reference.md, config-delivery.md, deployer.md, dane.md, configuration.md, day-zero.md, manual-nodes.md, switch-management.md, api-reference-rest.md, README.md) are deleted. These five files hold their content.
 
 ## 12. Corrections to the legacy documents in this folder
 
-Recorded rather than silently fixed, so a reader who has the old page open knows
-which statement to distrust.
+The legacy files are deleted. This table records what they got wrong, so a
+reader who has an old copy open knows which statement to distrust.
 
 | Legacy statement | Code says |
 |---|---|
-| [configuration.md](configuration.md), [overview.md](overview.md): the Noise server listens on `:9446` | `bootstrap.DefaultConfig()` sets `listen-addr: ":9999"`. In the Go code `9446` is the barrier gate's loopback port (`apidaemon.DefaultInitOnlyHTTPAddr`), not the Noise server's. |
-| [day-zero.md](day-zero.md) (before #708): the provisioning network is configured under a `provisioning_network:` key | `BootstrapConfig` has no such field (day-zero.md now shows `environment:`). The provisioning zone is derived from the top-level `environment:` (offset 5), and `Validate` fails without an environment. |
-| [day-zero.md](day-zero.md): "Add new entries and re-run. Existing nodes are skipped." | Nothing skips an already-installed node automatically. `skip_install: true` is the explicit opt-out; without it the node is reprovisioned. |
-| [pxe-bootstrap.md](pxe-bootstrap.md): phases numbered 0–7 with "Watch" as phase 6 | The phase constants are `discovery`, `switch`, `deploy`, `control-plane`, `seed`, `remaining-nodes`, `bmc-enroll`, `health-gate`, `teardown`. Install-log watching is part of per-node provisioning, not a separate phase. |
-| [pxe-bootstrap.md](pxe-bootstrap.md): per-MAC staging publishes `hostname` and `installer.yaml` | Client (non-control-plane) nodes additionally receive `ca-bundle.pem` and `bootstrap-spki-pin`. |
-| [api-reference-rest.md](api-reference-rest.md): the bootstrap endpoint's errors are 404 and 500 | The handler also returns **503** when the CA is not initialised, and **400** for an unparseable `algorithm` value. |
-| [README.md](README.md), [overview.md](overview.md): four strategies (DANE, Noise, SPKI, Embedded) | The `bootstrap` class allows five — `dane`, `noise`, `spki`, `embedded`, `tofu` — and the `bmc` class allows `dane`, `spki`, `ca-file`, `tofu` (`tofu` was removed from `bmc` in #83 and restored after go-xkms#139 made it endpoint pinning). |
-| [overview.md](overview.md): "Rollover Manager: orchestrates RFC 7671 pre-publication rollover" | Implemented, but with no production caller (§7.2). The live path calls the publisher directly. |
-| [config-reference.md](config-reference.md) and others: examples use RFC 1918 addresses and site-specific hosts | Replace with `example.com` / `<install-dir>` placeholders when editing. The five files in this folder use placeholders only. |
+| configuration.md, overview.md: the Noise server listens on `:9446` | `bootstrap.DefaultConfig()` sets `listen-addr: ":9999"`. In the Go code `9446` is the barrier gate's loopback port (`apidaemon.DefaultInitOnlyHTTPAddr`), not the Noise server's. |
+| day-zero.md (before #708): the provisioning network is configured under a `provisioning_network:` key | `BootstrapConfig` has no such field (day-zero.md later showed `environment:`). The provisioning zone is derived from the top-level `environment:` (offset 5), and `Validate` fails without an environment. |
+| day-zero.md: "Add new entries and re-run. Existing nodes are skipped." | Nothing skips an already-installed node automatically. `skip_install: true` is the explicit opt-out; without it the node is reprovisioned. |
+| pxe-bootstrap.md: phases numbered 0–7 with "Watch" as phase 6 | The phase constants are `discovery`, `switch`, `deploy`, `control-plane`, `seed`, `remaining-nodes`, `bmc-enroll`, `health-gate`, `teardown`. Install-log watching is part of per-node provisioning, not a separate phase. |
+| pxe-bootstrap.md: per-MAC staging publishes `hostname` and `installer.yaml` | Client (non-control-plane) nodes additionally receive `ca-bundle.pem` and `bootstrap-spki-pin`. |
+| api-reference-rest.md: the bootstrap endpoint's errors are 404 and 500 | The handler also returns **503** when the CA is not initialised, and **400** for an unparseable `algorithm` value. |
+| README.md, overview.md: four strategies (DANE, Noise, SPKI, Embedded) | The `bootstrap` class allows five — `dane`, `noise`, `spki`, `embedded`, `tofu` — and the `bmc` class allows `dane`, `spki`, `ca-file`, `tofu` (`tofu` was removed from `bmc` in #83 and restored after go-xkms#139 made it endpoint pinning). |
+| overview.md: "Rollover Manager: orchestrates RFC 7671 pre-publication rollover" | Implemented, but with no production caller (§7.2). The live path calls the publisher directly. |
+| config-reference.md and others: examples use RFC 1918 addresses and site-specific hosts | The five files in this folder use `example.com` / `<install-dir>` placeholders only. |

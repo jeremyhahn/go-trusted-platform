@@ -187,5 +187,5 @@ never holds it.
 - [`docs/eab/`](../eab/) — ACME External Account Binding credentials
 - [`docs/dns/`](../dns/) — DNS-01 challenge records
 - Deep dives carried over and not re-verified in this pass:
-  [acme.md](acme.md), [asn1.md](asn1.md), [configuration.md](configuration.md),
-  [overview.md](overview.md)
+  [acme.md](acme.md), [asn1.md](asn1.md), [configuration.md](configuration.md).
+  The legacy overview.md is deleted; these five files hold its content.

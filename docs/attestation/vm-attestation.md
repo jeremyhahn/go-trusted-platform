@@ -320,4 +320,4 @@ type VerifierConfig struct {
 
 - [Workload Attestation](workload-attestation.md) - WorkloadPCR workload chain
 - [Manifest](manifest.md) - Aggregating attestations
-- [API Reference](api-reference.md) - REST/gRPC APIs
+- [API Reference](api.md) - REST/gRPC APIs

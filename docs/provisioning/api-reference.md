@@ -92,5 +92,5 @@ MCP surfaces the typed error text verbatim in the JSON-RPC tool error.
 
 - [config-delivery.md](config-delivery.md) — post-bootstrap config delivery flow, trust model, CLI usage
 - [interactive.md](interactive.md) — interactive QR provisioning
-- [../bootstrap/config-delivery.md](../bootstrap/config-delivery.md) — bootstrap-time (deployer network) config delivery
+- [`docs/architecture/bootstrap-flow.md`](../architecture/bootstrap-flow.md) — bootstrap-time (deployer network) config delivery
 - [../firmware/secure-boot.md](../firmware/secure-boot.md) — remote Secure Boot resign (`SignDigest`)

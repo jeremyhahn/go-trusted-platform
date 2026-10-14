@@ -660,4 +660,4 @@ The Container Orchestrator (`pkg/compute/container/`) provides:
 - [Architecture](architecture.md) - Attestation architecture overview
 - [VM Attestation](vm-attestation.md) - vTPM quote generation for VMs
 - [Manifest](manifest.md) - Aggregating attestations
-- [API Reference](api-reference.md) - REST/gRPC APIs
+- [API Reference](api.md) - REST/gRPC APIs

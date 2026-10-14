@@ -308,5 +308,5 @@ storage client to force `ErrBlobNotFound` and `ErrOperationTimeout`.
 - [api.md](api.md) — the capability × transport matrix
 - [cli.md](cli.md) — `platformctl registry`
 - [user.md](user.md) — task-oriented usage
-- [configuration.md](configuration.md) — long-form configuration reference
-  (pre-migration document; not re-verified against code in this pass)
+- The pre-migration configuration.md is deleted; §4 holds the configuration
+  reference

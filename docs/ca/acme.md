@@ -400,7 +400,7 @@ acme:
 
 ## Related Documentation
 
-- [README](README.md) - CA module overview
+- [README](user.md) - CA module overview
 - [Architecture](architecture.md) - CA hierarchy
 - [Configuration](configuration.md) - Full configuration reference
 - [TPM Attestation](../tpm/attestation.md) - Attestation details

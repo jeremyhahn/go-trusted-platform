@@ -4,15 +4,14 @@
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
-> **Scope note.** The legacy files in this folder — [overview.md](overview.md),
-> [day-zero.md](day-zero.md), [dane.md](dane.md), [deployer.md](deployer.md),
-> [config-delivery.md](config-delivery.md), [config-reference.md](config-reference.md),
-> [pxe-bootstrap.md](pxe-bootstrap.md), [manual-nodes.md](manual-nodes.md),
-> [switch-management.md](switch-management.md), [configuration.md](configuration.md),
-> [api-reference-rest.md](api-reference-rest.md), [README.md](README.md) — predate
-> this convention. They remain in place and still carry useful narrative. Where
-> they disagree with these five files, these five win, and the corrections are
-> listed in [engineering.md](engineering.md) §12.
+> **Scope note.** The legacy files this folder held — overview.md,
+> day-zero.md, dane.md, deployer.md,
+> config-delivery.md, config-reference.md,
+> pxe-bootstrap.md, manual-nodes.md,
+> switch-management.md, configuration.md,
+> api-reference-rest.md, README.md — are deleted. These five files hold their
+> content. The statements in them that the code contradicted are listed in
+> [engineering.md](engineering.md) §12.
 
 ---
 
@@ -140,7 +139,7 @@ pin before planning a partial rollout. The platform moved from 0.2.0-alpha to
 | **CA issuance and the authenticated bundle route** | [`docs/ca/`](../ca/) | this repo, separate feature |
 | **iPXE/HTTP boot server, ISO build, installer** | [`docs/provisioning/`](../provisioning/) | this repo, separate feature |
 | **BMC protocol, vendor quirks, enrollment ceremony** | [`docs/bmc/`](../bmc/) | this repo, separate feature |
-| **Physical switch configuration** | `pkg/switch/` — see [switch-management.md](switch-management.md) | this repo, separate feature |
+| **Physical switch configuration** | `pkg/switch/` — see [`docs/switch/`](../switch/architecture.md) | this repo, separate feature |
 | **DNS zones and DNSSEC signing** | [`docs/dns/`](../dns/) | this repo, separate feature |
 
 The ownership-register (`docs/00` §R) rows this feature touches are the

@@ -430,8 +430,9 @@ There are **no metrics** for resolution counts, latency or failures.
 ## 12. Related
 
 - [architecture.md](architecture.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md)
-- Legacy in this folder, still useful and partly superseded:
-  `config-secret-schemes.md` (scheme reference, accurate),
-  `bootstrap-secrets.md` and `provisioning-secrets.md` (see
-  [architecture.md](architecture.md) §8), `README.md` (superseded)
+- Legacy in this folder, still useful:
+  `config-secret-schemes.md` (scheme reference, accurate). The legacy
+  `bootstrap-secrets.md`, `provisioning-secrets.md` and `README.md` are
+  deleted; these five files hold their content, and
+  [architecture.md](architecture.md) §8 lists what they got wrong.
 - [`docs/kms/`](../kms/) · [`docs/tpm/`](../tpm/) · [`docs/provisioning/`](../provisioning/) · [`docs/bootstrap/`](../bootstrap/)

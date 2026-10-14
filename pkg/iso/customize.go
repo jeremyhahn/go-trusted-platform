@@ -3977,7 +3977,8 @@ if [ -n "$PLATFORM_CONFIG_URL" ]; then
     # EVERY MAC it knows about (YAML + BMC-discovered), so we try each
     # local MAC against the config server and the first 2xx wins.
     #
-    # See docs/bootstrap/config-delivery.md §3 for the URL shape and
+    # See docs/installer/iso-building.md §Config Delivery Modes
+    # (3. Dynamic fetch) for the URL shape and
     # docs/architecture/bootstrap-flow.md §6 for the per-MAC keying
     # rationale.
     CA_BUNDLE="/media/cdrom/configs/ca-bundle.pem"

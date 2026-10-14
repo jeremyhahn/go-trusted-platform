@@ -229,7 +229,7 @@ The DNS subsystem supports dynamic macro expansion in zone configurations:
 | [Zone Transfer](zone-transfer.md) | AXFR/IXFR zone transfer (planned) |
 | [ACME Integration](acme-integration.md) | DNS-01 challenge support |
 | [Configuration](configuration.md) | Complete configuration reference |
-| [CLI Reference](cli-reference.md) | Command-line interface |
+| [CLI Reference](cli.md) | Command-line interface |
 | [Security](security.md) | Security model and best practices |
 | [Operations](operations.md) | Operations, monitoring, and capacity planning |
 | [API Reference](api-reference.md) | REST and gRPC API documentation |
@@ -295,8 +295,8 @@ Security events include:
 
 ## See Also
 
-- [KMS Documentation](../kms/README.md)
+- [KMS Documentation](../kms/architecture.md)
 - [TPM Documentation](../tpm/README.md)
-- [IAM Documentation](../iam/README.md)
+- [IAM Documentation](../iam/architecture.md)
 - [ACME Documentation](../ca/acme.md)
-- [Platform Architecture](../architecture/README.md)
+- [Platform Architecture](../daemon/architecture.md)

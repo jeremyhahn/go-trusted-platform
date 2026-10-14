@@ -8,7 +8,7 @@
 > For **bootstrap-time config delivery** (during `platformctl bootstrap run`,
 > before the target has any TLS trust store, uses plain HTTP on a private
 > deployer network, keyed by MAC address), see
-> [`docs/bootstrap/config-delivery.md`](../bootstrap/config-delivery.md).
+> [`docs/architecture/bootstrap-flow.md`](../architecture/bootstrap-flow.md).
 >
 > For the architectural overview that ties both flows together, see
 > [`docs/architecture/bootstrap-flow.md`](../architecture/bootstrap-flow.md).

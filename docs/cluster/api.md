@@ -95,7 +95,7 @@ response — but there is no operation that returns the quorum **verdict**
 
 ## 4. What does not exist, despite the legacy documentation
 
-[`api-reference.md`](api-reference.md) in this folder documents an eight-RPC
+The deleted legacy `api-reference.md` documented an eight-RPC
 service. The proto declares five. **These do not exist anywhere in the code:**
 
 | Legacy claim | Reality |
@@ -293,8 +293,8 @@ not one to settle here.
 - [cli.md](cli.md) — the unregistered command tree
 - [`docs/daemon/api.md`](../daemon/api.md) — transports, QUIC opcodes, the
   platform-wide authorization picture
-- Legacy [`api-reference.md`](api-reference.md) — superseded; §4 lists what it
-  claims that does not exist
+- Legacy `api-reference.md` — deleted; §4 lists what it
+  claimed that does not exist
 - **go-qrdb** and **go-quicbaas** document the other half of this feature —
   cluster formation, peer discovery and the SDK edge. This repository does not
   document their APIs.

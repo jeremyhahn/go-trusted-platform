@@ -513,4 +513,4 @@ curl -X GET https://platform.example.com/api/v1/acme/challenge/chall_abc123 \
 - [Records](records.md) - DNS record types
 - [Troubleshooting](troubleshooting.md) - Common issues and solutions
 - [ACME Server](../ca/acme.md) - Platform ACME server documentation
-- [CA Documentation](../ca/README.md) - Certificate Authority overview
+- [CA Documentation](../ca/architecture.md) - Certificate Authority overview

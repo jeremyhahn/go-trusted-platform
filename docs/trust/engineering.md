@@ -109,7 +109,7 @@ platform-ca-file: /etc/gatewayd/cp-ca.pem      # gatewayd only: the anchor's sou
 |---|---|
 | `strategies` | required per configured scope |
 | `server-url` | used by bundle-fetch strategies (`noise`, `tofu`, and the `dane`/`spki` bundle path). Not consulted when `dane`/`spki` verify a caller-supplied endpoint on the TLS path |
-| `dane.dns-server` | highest priority DANE resolver; else `dns.resolver.servers[0]`; else server IP on port 8053. See [`docs/bootstrap/configuration.md`](../bootstrap/configuration.md) for the `dns.*` and server-side keys |
+| `dane.dns-server` | highest priority DANE resolver; else `dns.resolver.servers[0]`; else server IP on port 8053. See [`docs/bootstrap/engineering.md`](../bootstrap/engineering.md#5-configuration) for the `dns.*` and server-side keys |
 | `spki.pin` / `spki.pin-file` | pin wins; the file is read at validation. A scope with neither is valid when a `PinStore` supplies per-endpoint pins |
 | `platform-ca-file` | top-level key, **not** under `trust:`; required for gatewayd's gRPC platformd dial, secret store and `trust-class: platform` |
 

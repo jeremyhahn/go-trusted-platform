@@ -111,7 +111,7 @@ is this" so downstream authorization has one input.
 | **Identity model, users, groups, roles, policies, the single RBAC PDP** | go-qrdb, composed by go-quicbaas | **not this repo** — [`docs/iam/`](../iam/) |
 | **N-factor enrolment and login** | go-quicbaas `Security().Auth().Factors()` (M10) over go-qrdb's User N-AuthFactor service (M14) | **not this repo** |
 | **Platform token minting** | The broker | **not this repo** |
-| **Invitations** | `InvitationService` — [`docs/iam/api-reference-invitations.md`](../iam/api-reference-invitations.md) | this repo, **different feature** |
+| **Invitations** | `InvitationService` — [`docs/tenant/architecture.md`](../tenant/architecture.md) | this repo, **different feature** |
 
 The §R capability row is part of *"Re-export frontage of the composed stack (CA,
 KMS, IAM, FIDO2/PIV, barrier, ceremony, LUKS, auth, data services)"*, Tier 1 —
@@ -1137,9 +1137,9 @@ this section as a claim that the platform is fully gated.
   one — an unscoped call fails closed in the SDK with `tenant is required`.
 - **It does not manage invitations** despite invitations being an
   authentication-adjacent flow — see
-  [`docs/iam/api-reference-invitations.md`](../iam/api-reference-invitations.md).
-  The legacy `docs/auth/invitation-flow.md` in this folder predates the IAM
-  conversion and is superseded by it.
+  [`docs/tenant/architecture.md`](../tenant/architecture.md).
+  The legacy `invitation-flow.md` this folder held predated the IAM
+  conversion and is deleted; the tenant architecture holds the flow.
 - **It does not enforce IDevID inside `Authenticate`.** See §6.3.
 - **It has no API surface of its own.** `pkg/auth` is a library; there is no
   `AuthService` on any transport. [api.md](api.md).
@@ -1151,9 +1151,9 @@ Recorded per `conventions/feature-docs.md` §7 — the code wins.
 | Stale statement | Where | Reality (2026-08-18) |
 |---|---|---|
 | *"designed to work with the go-trusted-ca `CertificateAuthority` interface"* | `pkg/auth/doc.go` | `NewMTLSAdapter` takes `quicbaasca.CACertificateAuthority` from `go-quicbaas/sdk/go/xkms/ca`. `go-trusted-ca` was decommissioned; its CA rolled into go-xkms. |
-| *"IAM Module (`pkg/iam/`)"* with a tenant manager, identity store, WebAuthn and an ABAC engine | legacy `docs/auth/README.md` diagram (and `docs/iam/architecture.md`, which already flags it) | **There is no `pkg/iam` in this repository.** Those components live in go-qrdb / go-quicbaas. |
-| *"QuicBaaS IAM — ABAC for all permission decisions"* as this repo's design | legacy `docs/auth/README.md` | Correct as a *statement about the stack*; it is not a description of `pkg/auth`, which makes no permission decisions. |
-| Port table (`8443/9443`, `10443`, `9444`, `8000`) presented as configuration | legacy `docs/auth/README.md` | Those are defaults in deployment examples, not constants in `pkg/auth`. Ports are configured per deployment; do not treat the table as normative. |
+| *"IAM Module (`pkg/iam/`)"* with a tenant manager, identity store, WebAuthn and an ABAC engine | deleted legacy `docs/auth/README.md` diagram (and `docs/iam/architecture.md`, which already flags it) | **There is no `pkg/iam` in this repository.** Those components live in go-qrdb / go-quicbaas. |
+| *"QuicBaaS IAM — ABAC for all permission decisions"* as this repo's design | deleted legacy `docs/auth/README.md` | Correct as a *statement about the stack*; it is not a description of `pkg/auth`, which makes no permission decisions. |
+| Port table (`8443/9443`, `10443`, `9444`, `8000`) presented as configuration | deleted legacy `docs/auth/README.md` | Those are defaults in deployment examples, not constants in `pkg/auth`. Ports are configured per deployment; do not treat the table as normative. |
 
 ## 9. Related
 

@@ -63,7 +63,7 @@ Common overrides: `os.hostname`, `domain`, `network.interfaces[].name`,
 | `trusted-platform.target` | (target) | Bundles both services |
 
 Both daemons run on the same host with a Unix-socket IPC boundary
-between them. See `docs/architecture/binary-separation.md` and
+between them. See `docs/gateway/architecture.md` (Component boundaries) and
 `docs/architecture/bootstrap-flow.md` §1 for the architectural
 rationale.
 
@@ -86,7 +86,7 @@ chrony is installed as a mandatory package and managed by platformd;
 removing the `ntp:` section entirely makes platformd leave it alone.
 
 Full schema: `docs/device-templates.md` (Time Synchronization).
-API surface: `docs/ntp/api-reference.md`.
+API surface: `docs/ntp/api.md`.
 
 ## BMC Trust Chain (trust.bmc)
 

@@ -2406,7 +2406,8 @@ func (i *installer) findPlatformConfig() ([]byte, error) {
 	// debug:false and a generic hostname — wiping out the override file
 	// contents the operator put in bootstrap.yaml.
 	//
-	// See docs/bootstrap/config-delivery.md §3 (dynamic mode) and
+	// See docs/installer/iso-building.md §Config Delivery Modes
+	// (3. Dynamic fetch) and
 	// docs/installer/autoinstall.md for the fetch flow that writes
 	// /tmp/platform-config.yaml.
 	for _, dynPath := range []string{"/tmp/platform-config.yaml"} {

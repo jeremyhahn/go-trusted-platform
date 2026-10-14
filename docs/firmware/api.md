@@ -217,7 +217,7 @@ must be able to tell "not exposed" from "not built".
 | A `firmware:` configuration section | **Not implemented** |
 
 All PLANNED. See [architecture.md](architecture.md) §8–§9 and the legacy
-[ROADMAP.md](ROADMAP.md).
+ROADMAP.md.
 
 ---
 

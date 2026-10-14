@@ -473,4 +473,4 @@ cfg := manifest.DefaultManifestConfig()
 - [Workload Attestation](workload-attestation.md) - PCR 14 container chain
 - [VM Attestation](vm-attestation.md) - vTPM quote generation
 - [Push](push.md) - Distributing manifests
-- [API Reference](api-reference.md) - REST/gRPC APIs
+- [API Reference](api.md) - REST/gRPC APIs

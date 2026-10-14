@@ -635,7 +635,7 @@ curl -H "accept: application/dns-json" \
 | [DANE](dane.md) | DANE/TLSA integration |
 | [Configuration](configuration.md) | Complete configuration reference |
 | [Architecture](architecture.md) | DNS system architecture |
-| [CA Documentation](../ca/README.md) | Certificate Authority overview |
+| [CA Documentation](../ca/architecture.md) | Certificate Authority overview |
 
 ## See Also
 

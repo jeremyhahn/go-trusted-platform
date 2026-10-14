@@ -309,8 +309,8 @@ Within this repo's half:
 - **It does not discover peers or form clusters.** go-qrdb does, reached through
   `go-quicbaas/sdk/go`.
 - **It does not replicate application state.** Which platform data is replicated
-  and under what consistency level is a go-qrdb question. The legacy
-  `README.md` and `architecture.md` in this folder describe SDN, CA, DNS,
+  and under what consistency level is a go-qrdb question. The deleted legacy
+  `README.md` and the previous revision of this file described SDN, CA, DNS,
   device-profile and tenant replication as if this package performed it; it does
   not.
 - **It does not persist anything.** `DataDir` is validated and unused here.
@@ -319,7 +319,7 @@ Within this repo's half:
   `quicbaas:` section, not the cluster's.
 - **It does not remove a remote node from the API.** `MembershipManager.AddNode`
   and `RemoveNode` exist as Go calls; no transport exposes them
-  ([api.md](api.md) §3). The legacy `api-reference.md` documents `GetNode`,
+  ([api.md](api.md) §3). The deleted legacy `api-reference.md` documented `GetNode`,
   `RemoveNode` and `TransferLeadership` RPCs. **None of them exists** — the
   proto declares five RPCs, and that is the whole service.
 - **It does not transfer leadership.** No `TransferLeadership` anywhere.
@@ -335,9 +335,10 @@ Within this repo's half:
 - [`docs/health/`](../health/) — the platform health registry. **There is no
   `cluster` health component**; `Coordinator.HealthCheck` is a Go call, not a
   registered checker
-- Legacy files in this folder, superseded by this document where they conflict:
-  `README.md`, `configuration.md`, `cli-usage.md`, `api-reference.md`. They
-  document the lower layers' internals and an API surface that does not exist.
+- The legacy files this folder held — `README.md`, `configuration.md`,
+  `cli-usage.md`, `api-reference.md` — are deleted. These five files hold their
+  content. They documented the lower layers' internals and an API surface that
+  does not exist.
 - The other half of this feature is documented by **go-qrdb** (cluster
   formation, peer discovery, replication) and **go-quicbaas** (the SDK edge this
   repo consumes). This repository does not document their code.

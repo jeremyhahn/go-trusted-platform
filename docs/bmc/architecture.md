@@ -5,10 +5,10 @@
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
 > **Verification scope.** Every package, type, constant, route, opcode and flag
-> below was read out of the tree on 2026-08-18. Where the legacy files in this
-> folder (`README.md`, `configuration.md`, `operations.md`, `sdk.md`,
-> `testing.md`) disagree with the code, the code wins and the correction is
-> stated in §9.
+> below was read out of the tree on 2026-08-18. The legacy files this folder held
+> (`README.md`, `configuration.md`, `operations.md`, `sdk.md`, `testing.md`) are
+> deleted; these five files hold their content. Where they disagreed with the
+> code, the correction is stated in §9.
 
 ---
 

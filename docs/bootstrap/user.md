@@ -288,6 +288,15 @@ reboots it into the installed system on its own, and the tooling watches the
 install log. Asking for `virtual-media` on such a machine is a configuration
 error, because there is nothing to mount the media with.
 
+When it provisions such a machine, the orchestrator logs, at info, with the
+node's `hostname` and `boot_method` (`pxe` unless set):
+
+```
+bootstrap: provisioning unmanaged node — no board management, no hardware operations; ISO self-boots via after-install=reboot
+  hostname=edge-01
+  boot_method=pxe
+```
+
 ---
 
 ## Choosing how to trust a management controller
@@ -419,4 +428,4 @@ holding the disk. Resolve a failed seal; do not live with one.
 - [`docs/provisioning/`](../provisioning/) — the ISO, the network boot server and the installer this drives
 - [`docs/bmc/`](../bmc/) — management controllers and enrollment
 - [`docs/ca/`](../ca/) · [`docs/dns/dane.md`](../dns/dane.md) — where the trust material comes from
-- Older narrative kept in place: [day-zero.md](day-zero.md), [pxe-bootstrap.md](pxe-bootstrap.md), [config-reference.md](config-reference.md), [manual-nodes.md](manual-nodes.md), [switch-management.md](switch-management.md)
+- The older narrative files (day-zero.md, pxe-bootstrap.md, config-reference.md, manual-nodes.md, switch-management.md) are deleted. These five files hold their content; the `bootstrap.yaml` reference is [engineering.md](engineering.md) §5.

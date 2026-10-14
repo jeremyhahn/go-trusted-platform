@@ -313,8 +313,7 @@ opcode values repeat across categories.
   only NTP signal that reaches an unauthenticated probe
 - [`docs/daemon/api.md`](../daemon/api.md) — transports, QUIC frame format,
   status bytes, platform-wide authorization
-- The legacy per-transport files in this folder — `api-reference.md`,
+- The legacy per-transport files this folder held — `api-reference.md`,
   `api-reference-rest.md`, `api-reference-grpc.md`, `api-reference-quic.md`,
-  `api-reference-mcp.md`, `api-reference-unix.md` — predate this convention.
-  **This file supersedes them**; where they disagree, this file is verified
-  against code and they are not.
+  `api-reference-mcp.md`, `api-reference-unix.md` — are deleted. This file
+  holds their content, verified against the code.

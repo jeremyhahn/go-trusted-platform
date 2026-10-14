@@ -560,4 +560,4 @@ schedCfg := push.DefaultSchedulerConfig()
 - [Manifest](manifest.md) - Building manifests to push
 - [Workload Attestation](workload-attestation.md) - Container attestation
 - [VM Attestation](vm-attestation.md) - VM attestation
-- [API Reference](api-reference.md) - REST/gRPC APIs
+- [API Reference](api.md) - REST/gRPC APIs

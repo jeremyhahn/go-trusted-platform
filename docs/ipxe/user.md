@@ -258,13 +258,13 @@ BOOT_ORDER=0xf21          # nibbles read right to left: 1 = SD card, 2 = network
 A bootable card wins, so start with a blank card.
 
 `bootstrap.yaml` names the Pi as a node
-([Raspberry Pi Node](../bootstrap/config-reference.md#raspberry-pi-node)). The
+([`bootstrap.yaml` node fields](../bootstrap/engineering.md#bootstrapyaml--the-day-zero-fleet-description)). The
 `serial` is the low 32 bits of `/proc/cpuinfo` `Serial`; the MAC is
 `cat /sys/class/net/eth0/address` on the Pi:
 
 ```yaml
 deployer:
-  # host, user, ssh_key, known_hosts_path as in config-reference.md
+  # host, user, ssh_key, known_hosts_path as in ../bootstrap/engineering.md §5
   netboot_media_dir: bin/netboot-media    # relative to this file
   proxy_dhcp: false        # true when the segment already has a DHCP server
 nodes:
@@ -519,8 +519,6 @@ After a good boot PCRs 0, 4, 7 and 9 are all non-zero
   plane actually lives
 - [architecture.md](architecture.md) — the two-stage chainload and its trust
   boundaries
-- [configuration.md](configuration.md) · [testing.md](testing.md) —
-  pre-convention worked examples
 - [`docs/installer/`](../installer/) — what happens once the kernel boots
 - [`docs/provisioning/`](../provisioning/) — authorising a machine, and the API
   for everything the CLI does not cover

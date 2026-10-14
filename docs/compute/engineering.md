@@ -113,7 +113,7 @@ different concepts, one key name.
    `compute.migration_listen_address` (defaults layer `0.0.0.0:0`, port 0 =
    ephemeral per receiver). An empty or non-`IP:port` value refuses the
    receiver with `MigrationListenAddressError` (`FAILED_PRECONDITION`); no
-   address is assumed ([Configuration](configuration.md#migration-listen-address)).
+   address is assumed ([Configuration](#4-configuration)).
 5. **Live migration requires shared storage.** The CLI says so on `--live`; the
    backend cannot copy a disk it does not share. `compute.shared_storage`
    reaches the orchestrator through `applyLocalQEMUSettings`
@@ -229,11 +229,11 @@ surface, not through compute.
 - [`docs/sdn/`](../sdn/) — the port authentication a VNIC goes through
 - [`docs/tenant/`](../tenant/) — the quota a VM is admitted against
 - [`docs/registry/`](../registry/) — where container images come from
-- Deep dives, checked against the code 2026-10-13 (pxe-provisioning.md is ARCHIVE):
+- Deep dives, checked against the code 2026-10-13 (the ARCHIVE pxe-provisioning.md is deleted):
   [container-orchestrator.md](container-orchestrator.md),
   [embedded-podman.md](embedded-podman.md),
   [swtpm-integration.md](swtpm-integration.md),
   [cloud-providers.md](cloud-providers.md), [migration.md](migration.md),
   [network-auth.md](network-auth.md),
   [802.1X-network-attachment.md](802.1X-network-attachment.md),
-  [pxe-provisioning.md](pxe-provisioning.md), [testing.md](testing.md)
+  [testing.md](testing.md)

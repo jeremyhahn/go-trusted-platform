@@ -18,7 +18,7 @@ transport, and as `platformctl luks`.
 
 It is the **runtime** half. Unlocking the volume at boot is the initramfs's job
 and is documented in
-[`docs/installer/UNLOCK_STRATEGIES.md`](../installer/UNLOCK_STRATEGIES.md); the
+[`docs/installer/engineering.md` §5](../installer/engineering.md); the
 keyslots enrolled here are the ones those strategies consume.
 
 ---

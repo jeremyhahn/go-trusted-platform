@@ -552,9 +552,9 @@ abstracts all backend operations:
 
 ## Related Documentation
 
-- [README](README.md) - CA module overview
+- [README](user.md) - CA module overview
 - [ACME](acme.md) - ACME server documentation
 - [Configuration](configuration.md) - Configuration reference
-- [API Reference](api-reference.md) - Certificate management API
+- [API Reference](api.md) - Certificate management API
 - [TPM Architecture](../tpm/architecture.md) - TPM key storage
 - [KMS Architecture](../kms/architecture.md) - Key management service

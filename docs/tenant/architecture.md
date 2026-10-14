@@ -784,12 +784,12 @@ The tenant middleware reads `uid` as a decimal string
 
 ## Related Documentation
 
-- [User-Tenant Relationship](user-relationship.md) - Detailed user-tenant model
-- [User Registration](../iam/user-registration.md) - Registration and tenant creation
-- [Invitation Flow](../auth/invitation-flow.md) - User invitation lifecycle
-- [Invitation API Reference](../iam/api-reference-invitations.md) - Invitation REST API endpoints
+- [User-Tenant Relationship](../iam/architecture.md) - Detailed user-tenant model
+- [User Registration](../auth/api.md) - Registration and tenant creation
+- Invitation Flow - User invitation lifecycle
+- Invitation API Reference - Invitation REST API endpoints
 - [Configuration Reference](configuration.md) - Tenant configuration options
-- [Isolation Mechanisms](isolation.md) - Detailed isolation implementation
-- [API Reference](api-reference.md) - Programmatic tenant management
+- Isolation Mechanisms - Detailed isolation implementation
+- [API Reference](api.md) - Programmatic tenant management
 - [Cluster Architecture](../cluster/architecture.md) - Multi-node tenancy
 - [Barrier](../barrier/architecture.md#two-barriers) - Per-tenant barrier versus the platform barrier

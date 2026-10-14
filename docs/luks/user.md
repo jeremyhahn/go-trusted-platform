@@ -18,7 +18,7 @@
 - Passphrases are command-line arguments. Clear your shell history afterwards.
 
 How the initramfs uses these keyslots at boot is in
-[`docs/installer/UNLOCK_STRATEGIES.md`](../installer/UNLOCK_STRATEGIES.md).
+[`docs/installer/engineering.md` §5](../installer/engineering.md).
 
 ---
 

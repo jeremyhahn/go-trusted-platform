@@ -14,7 +14,7 @@ For greenfield deployments (no existing infrastructure), use the PXE bootstrap s
 platformctl bootstrap run --config bootstrap.yaml
 ```
 
-See the [Bootstrap Documentation](../bootstrap/pxe-bootstrap.md) for the complete guide.
+See the [Bootstrap Documentation](../bootstrap/user.md) for the complete guide.
 
 ## Full Provisioning Lifecycle
 
@@ -59,7 +59,7 @@ ISO Boot --> Trust Bootstrap --> Fetch Config --> Install OS
 | **Provisioning Client** | mTLS client for profile fetch & activation | [client.md](client.md) |
 | **Bare Metal** | IPMI-based bare metal provisioning | [bare-metal.md](bare-metal.md) |
 | **BMC Management** | Power, boot, virtual media, sensors | [../bmc/](../bmc/) |
-| **PXE Bootstrap** | Single-command greenfield deployment | [../bootstrap/pxe-bootstrap.md](../bootstrap/pxe-bootstrap.md) |
+| **PXE Bootstrap** | Single-command greenfield deployment | [../bootstrap/user.md](../bootstrap/user.md) |
 
 ## Quick Start
 
@@ -114,4 +114,4 @@ device:
 - [Compute Orchestration](../compute/) - VM/container management
 - [Certificate Authority](../ca/) - Certificate issuance
 - [ACME](../ca/acme.md) - Automated certificate enrollment
-- [PXE Bootstrap](../bootstrap/pxe-bootstrap.md) - Greenfield deployment
+- [PXE Bootstrap](../bootstrap/user.md) - Greenfield deployment

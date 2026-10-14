@@ -125,8 +125,8 @@ openssl pkeyutl -encrypt \
 ```
 
 Provisioning servers encrypt secrets to each node's enrolled IDevID
-certificate before embedding them in the device profile (see
-[provisioning-secrets.md](provisioning-secrets.md)).
+certificate before embedding them in the device profile (see the
+`idevid://` scheme in [api.md](api.md)).
 
 Characteristics:
 
@@ -180,7 +180,7 @@ secrets:
 
 ## See Also
 
-- [Secrets Framework](./README.md) — overview of the secrets system
-- [Bootstrap Secrets](./bootstrap-secrets.md) — resolution during bootstrap
-- [Provisioning Secrets](./provisioning-secrets.md) — node provisioning workflow
+- [Secrets Framework](./architecture.md) — overview of the secrets system
+- [Bootstrap Secrets](./engineering.md) — resolution during bootstrap
+- Provisioning Secrets — node provisioning workflow
 - [IDevID Design](../tpm/device-identity-design.md) — device identity architecture

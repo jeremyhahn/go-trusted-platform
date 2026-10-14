@@ -68,7 +68,7 @@ sdn:
 
 The fabric manager is a library: `platformd` validates `sdn.fabric` at startup but does not yet drive
 the switches from it. Day-zero switch configuration is done by the bootstrap switch phase
-(`bootstrap.yaml` `switch:`, [switch management](../../bootstrap/switch-management.md)), which uses the
+(`bootstrap.yaml` `switch:`, [switch management](../../switch/user.md)), which uses the
 same port classes from the same plan.
 
 ## Documents

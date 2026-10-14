@@ -82,8 +82,8 @@ func TestClientDeclaresTheWireNames(t *testing.T) {
 					"  Each one decodes to undefined at runtime and type-checks perfectly.\n"+
 					"  %s\n"+
 					"  Fix the TypeScript declaration to the wire name; do not add a converter — the\n"+
-					"  device surface has two documented conventions (docs/device/api.md:140-151 for the\n"+
-					"  mTLS device-facing shape, docs/device/configuration.md:170 for this one).",
+					"  device surface has two documented conventions (docs/device/api.md §3.2 for the\n"+
+					"  mTLS device-facing shape, docs/device/api.md §3.5 for this one).",
 					iface, len(mismatched), strings.Join(mismatched, "\n  "))
 			}
 		})

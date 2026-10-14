@@ -9,9 +9,9 @@ installer and `platform-initrd`.
 
 For architectural context see:
 - `docs/architecture/bootstrap-flow.md`
-- `docs/bootstrap/config-delivery.md`
+- `docs/bootstrap/architecture.md` (Phase 3 · Control plane)
 - `docs/installer/autoinstall.md`
-- `docs/installer/initrd-overview.md`
+- `docs/installer/architecture.md` §5
 
 ---
 
@@ -86,7 +86,9 @@ Full URL constructed at install time:
 http://deployer.lan:8080/config/mac/aa-bb-cc-dd-ee-ff/installer.yaml
 ```
 
-See `docs/bootstrap/config-delivery.md` §3 for the full dynamic flow.
+See `docs/installer/iso-building.md` (Config Delivery Modes) for the dynamic
+mode and `docs/bootstrap/architecture.md` (Phase 3 · Control plane) for what the
+orchestrator publishes.
 
 ### `platform_bin_url=<URL>`
 
@@ -332,7 +334,7 @@ Consumed by `platform-initrd` in the initramfs context before
 ### `console=`
 
 Inherited from kernel. `platform-initrd` writes progress messages
-to the configured console. See `docs/installer/initrd-overview.md`.
+to the configured console. See `docs/installer/architecture.md` §5.
 
 ### `rd.luks.uuid=<uuid>`
 
@@ -346,7 +348,7 @@ hook that `iso create` writes reads `rd.luks.name=` first and falls back to
 Selects the `platform-initrd` boot mode (`detectModeFromCmdline`,
 `pkg/initrd/initrd.go:234-240`); absent means normal boot. There is no
 `rd.trusted.strategy` parameter: the unlock order is the registered
-strategies' priorities. See `docs/installer/UNLOCK_STRATEGIES.md`.
+strategies' priorities. See `docs/installer/engineering.md` §5.
 
 ### Diskless root parameters
 
@@ -481,7 +483,7 @@ When adding a new kernel cmdline parameter:
 4. Update the code that reads it (usually `pkg/iso/customize.go`
    embedded shell or `pkg/initrd/`).
 5. Update the doc that describes the containing flow
-   (`docs/installer/autoinstall.md`, `docs/installer/initrd-overview.md`,
+   (`docs/installer/autoinstall.md`, `docs/installer/architecture.md` §5,
    or `docs/provisioning/config-delivery.md`).
 
 Parameters without doc coverage are considered broken and may be

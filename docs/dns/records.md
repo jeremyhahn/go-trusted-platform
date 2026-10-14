@@ -763,4 +763,4 @@ platformctl dns record add \
 
 - [DNS Zones](zones.md) - Zone management guide
 - [Platform Configuration](../configuration.md) - Full configuration reference
-- [Security Documentation](../security/README.md) - Security model and DNSSEC
+- [Security Documentation](../security/architecture.md) - Security model and DNSSEC

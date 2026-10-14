@@ -1200,7 +1200,7 @@ func installLogBaseURL(dep *DeployerConfig) (string, error) {
 // This implements the orchestrator side of the dynamic config-delivery
 // architecture documented in:
 //   - docs/architecture/bootstrap-flow.md §6 (per-MAC keying)
-//   - docs/bootstrap/config-delivery.md §5 (what the orchestrator publishes)
+//   - docs/bootstrap/architecture.md Phase 3 (what the orchestrator publishes)
 //   - docs/ipxe/architecture.md (HTTP endpoint contract)
 //
 // For each MAC in union(node.MACs, BMC-discovered MACs):

@@ -36,7 +36,7 @@ and the platform-wide authorization catalogs are defined once in
 | Looking for | Go to |
 |---|---|
 | Users, groups, roles, policies, applications, tokens | [`docs/iam/api.md`](../iam/api.md) |
-| Invitations | [`docs/iam/api-reference-invitations.md`](../iam/api-reference-invitations.md) |
+| Invitations | [`docs/tenant/architecture.md`](../tenant/architecture.md) |
 | Certificate issuance, revocation, CRL | [`docs/ca/`](../ca/) |
 | Transport model, opcodes, status bytes, scope catalogs | [`docs/daemon/api.md`](../daemon/api.md) |
 | Edge-gateway authorization chain | [`docs/proxy/`](../proxy/) |
@@ -488,7 +488,7 @@ classified there or refused (#767).
 REST under `/api/v1`; the metadata endpoint is at the HTTP root per RFC 9728 and
 is not versioned by the platform.
 
-Deprecated and **removed**, per the legacy `docs/auth/README.md` security
+Deprecated and **removed**, per the deleted legacy `docs/auth/README.md` security
 principles and confirmed absent from the code: **API-key authentication** and
 **password authentication** on the platform API. Authentication is
 certificate-based (mTLS, IDevID), WebAuthn/FIDO2/PIV, or bearer token.

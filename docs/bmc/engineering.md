@@ -722,4 +722,4 @@ containing secret material.
 - [`docs/architecture/vendor-quirks.md`](../architecture/vendor-quirks.md) — the quirk registry design note
 - [`docs/device/`](../device/) — device templates and profiles
 - [`docs/bootstrap/`](../bootstrap/) — the orchestrator that enrolls at phase 5a
-- Legacy, superseded by this folder but retained: [`README.md`](README.md), [`configuration.md`](configuration.md), [`operations.md`](operations.md), [`sdk.md`](sdk.md), [`testing.md`](testing.md). Corrections are listed in [architecture.md](architecture.md) §9.
+- Legacy, deleted; these five files hold their content: `README.md`, `configuration.md`, `operations.md`, `sdk.md`, `testing.md`. Corrections are listed in [architecture.md](architecture.md) §9.

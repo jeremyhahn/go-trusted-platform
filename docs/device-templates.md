@@ -115,7 +115,7 @@ In this mode the ISO carries only a kernel cmdline pointer to the
 pxeboot HTTP config server. Per-node merged configs are published
 by the bootstrap orchestrator keyed by MAC address. A single ISO
 installs CP, GW, and compute correctly. See
-`docs/bootstrap/config-delivery.md` for the full flow.
+`docs/bootstrap/architecture.md` (Phase 3 · Control plane) for the full flow.
 
 ### Hybrid (dynamic preferred, baked as fallback)
 
@@ -359,7 +359,7 @@ platformd does **not** implement NTP. chrony is installed as a mandatory
 package (`pkg/installer/alpine.go`, prefetched for offline installs) and
 runs as an OpenRC service; platformd renders `/etc/chrony/chrony.conf`,
 manages the service, polls chrony's control socket, and exposes the state
-over REST/gRPC/QUIC/MCP/Unix (see `docs/ntp/api-reference.md`).
+over REST/gRPC/QUIC/MCP/Unix (see `docs/ntp/api.md`).
 
 Following the platform's explicit-configuration convention, removing the
 `ntp:` section entirely makes platformd leave chrony alone.
@@ -655,13 +655,13 @@ Repeating the identity keys (`os.hostname`, `network.interfaces`,
 `bmc.address`, `bmc.username`, `bmc.password`, `bmc.protocol`) inside an
 `overrides:` block or `overrides_file` fails validation with
 `ErrForbiddenOverrideKey` (reported with file:line). See the
-[bootstrap config reference](bootstrap/config-reference.md#authoritative-node-identity).
+[bootstrap config reference](bootstrap/engineering.md#3-invariants).
 
 When a `bootstrap.yaml` includes a `switch:` section for physical-switch
 auto-configuration, that switch's SSH access is **host-key pinned and
 fail-closed**: set `known_hosts_path` to the directory holding the
 switch's pinned host-key envelope or Phase 1 refuses to connect (there is
-no trust-on-first-use). See [Switch Management](bootstrap/switch-management.md)
+no trust-on-first-use). See [Switch Management](switch/user.md)
 for the field reference and the pin-provisioning workflow.
 
 ## Automation

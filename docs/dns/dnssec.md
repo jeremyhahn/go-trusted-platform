@@ -604,5 +604,5 @@ delv @ns1.example.com example.com
 - [RFC 4035 - Protocol Modifications for DNSSEC](https://datatracker.ietf.org/doc/html/rfc4035)
 - [RFC 5155 - NSEC3](https://datatracker.ietf.org/doc/html/rfc5155)
 - [RFC 9276 - NSEC3 Guidance](https://datatracker.ietf.org/doc/html/rfc9276)
-- [KMS Documentation](../kms/README.md)
+- [KMS Documentation](../kms/architecture.md)
 - [TPM Documentation](../tpm/README.md)

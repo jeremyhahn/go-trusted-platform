@@ -190,14 +190,11 @@ platformctl compute get test-vm
 | Component | Description |
 |-----------|-------------|
 | [DHT](dht/) | *Planned* - Distributed hash table, cryptocurrency, content sharing |
-| [Datastore](architecture/quicbaas-integration.md) | QuicBaaS embedded database and service layer (KMS, IAM, secrets, storage) |
 
 ### Developer Resources
 
 | Component | Description |
 |-----------|-------------|
-| [SDK Overview](api/sdk-overview.md) | SDK architecture and design |
-| [Go SDK](api/sdk-go.md) | Go SDK for `platformctl` and service integration |
 | [JavaScript SDK](api/sdk-javascript.md) | TypeScript SDK for web applications |
 | [API Reference](api/) | Multi-protocol API docs: REST, gRPC, QUIC, MCP, Unix Socket |
 | [CLI Reference](daemon/cli.md) | `platformctl` global flags and command tree; the six binaries |
@@ -216,9 +213,6 @@ platformctl compute get test-vm
 
 ## Key Documents
 
-- [Binary Separation](architecture/binary-separation.md) - Privilege separation; the six binaries are listed in [daemon/user.md](daemon/user.md)
-- [Security Model](architecture/security-model.md) - Privilege separation and threat model
-- [QuicBaaS Integration](architecture/quicbaas-integration.md) - Service layer architecture
 - [802.1X Authentication](sdn/802.1x.md) - Certificate-based network access
 - [Reference Architecture](architecture/reference.md) - IoT hybrid cloud reference architecture
 
@@ -232,7 +226,6 @@ Each feature has its own directory under `docs/` with the five files shown in
 ```
 docs/
 ├── README.md              # This file - main documentation index
-├── ROADMAP.md             # Pointer to the root ROADMAP.md
 ├── BUILD.md               # Build instructions
 │
 ├── {feature}/             # Feature documentation
@@ -260,7 +253,7 @@ All documentation follows these conventions:
 
 ### Component Status
 
-Local mode is the only mode with shipping code, and it is roughly 85% complete — see [architecture/platform-modes.md](architecture/platform-modes.md). The per-component statuses below mean the component's core is in place and usable; they do not mean the platform as a whole is finished. What is complete and what remains to the release candidate is in the repository [ROADMAP.md](../ROADMAP.md), the one roadmap.
+Local mode is the only mode with shipping code, and it is roughly 85% complete — see [ROADMAP.md](../ROADMAP.md). The per-component statuses below mean the component's core is in place and usable; they do not mean the platform as a whole is finished. What is complete and what remains to the release candidate is in the repository [ROADMAP.md](../ROADMAP.md), the one roadmap.
 
 | Component | Status | Documentation |
 |-----------|--------|---------------|
@@ -269,7 +262,7 @@ Local mode is the only mode with shipping code, and it is roughly 85% complete �
 | CA | Complete | [ca/](ca/) |
 | Cluster | Complete | [cluster/](cluster/) |
 | Compute | Complete | [compute/](compute/) |
-| Datastore | Complete | [architecture/quicbaas-integration.md](architecture/quicbaas-integration.md) |
+| Datastore | Complete | [sdk/](sdk/) |
 | Device | Complete | [device/](device/) |
 | IAM | Complete | [iam/](iam/) |
 | KMS | Complete | [kms/](kms/) |

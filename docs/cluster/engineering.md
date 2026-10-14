@@ -195,7 +195,7 @@ fails before any data is wiped. Tests whose subject is the server or client
 lifecycle still boot their own server. Tests on the shared server must not
 call `t.Parallel`.
 
-**Correction to `docs/cluster/configuration.md`:** that file documents
+**Correction to the deleted legacy `docs/cluster/configuration.md`:** that file documented
 `storage-backend: raft` as the way to enable clustering. It is not.
 `validateEmbeddedConfig` rejects anything but `memory`, `file` and `pebble` with
 *"invalid storage backend: must be 'memory', 'file', or 'pebble'"*, and the code

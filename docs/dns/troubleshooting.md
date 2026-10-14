@@ -683,5 +683,5 @@ journalctl -u platform-dns --since "1 hour ago" > dns-logs.txt
 |----------|-------------|
 | [README](README.md) | DNS overview |
 | [Configuration](../configuration.md) | Platform configuration |
-| [KMS](../kms/README.md) | Key management |
+| [KMS](../kms/architecture.md) | Key management |
 | [TPM](../tpm/README.md) | TPM integration |

@@ -298,7 +298,7 @@ spec:
 ### Platform & Architecture
 - [Architecture](architecture.md) - System design and architecture decisions
 - [Configuration](configuration.md) - Configuration reference and examples
-- [Roadmap](ROADMAP.md) - Development roadmap and progress tracker
+- [Roadmap](../../ROADMAP.md) - Development roadmap and progress tracker
 - [API Reference](api-reference.md) - CLI commands and API documentation
 
 ### Secure Boot Pipeline
@@ -307,7 +307,7 @@ spec:
 - [UEFI](uefi.md) - UEFI NVRAM and Secure Boot key enrollment
 
 ### Device Support
-- [AVR Support](avr.md) - AVR microcontroller implementation details
+- [AVR Support](avr-attestation.md) - AVR microcontroller implementation details
 - [AVR Attestation](avr-attestation.md) - `pkg/firmware/avr/attestation`, the AVR attestation provider
 - [Raspberry Pi](rpi.md) - Raspberry Pi secure boot and swtpm
 - [Android](android.md) - Android/GrapheneOS support
@@ -430,7 +430,7 @@ platformctl firmware rpi test-qemu \
 
 ## Contributing
 
-See [Roadmap](ROADMAP.md) for current status and development progress.
+See [Roadmap](../../ROADMAP.md) for current status and development progress.
 
 ## Related Documentation
 

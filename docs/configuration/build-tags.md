@@ -216,6 +216,6 @@ docker build --build-arg WITH_WEB=true -f build/docker/trusted-platform-builder/
 
 ## Related Documentation
 
-- [Service Endpoints Configuration](service-endpoints.md) - Configure service connections
-- [Deployment Modes](../operations/deployment-modes.md) - Standalone, cluster, and mixed deployments
-- [SDK Integration](../architecture/sdk-integration.md) - Multi-transport support
+- [Service Endpoints Configuration](../daemon/configuration.md) - Configure service connections
+- [Deployment Modes](../cluster/user.md) - Standalone, cluster, and mixed deployments
+- [SDK Integration](../sdk/architecture.md) - Multi-transport support

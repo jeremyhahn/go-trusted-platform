@@ -23,7 +23,7 @@ or to record the omission deliberately.
 
 ### A prior document described this CLI as if it existed
 
-[cli-reference.md](cli-reference.md) in this folder is a full reference for a
+The deleted cli-reference.md was a full reference for a
 `platformctl dns` tree — `zone`, `record`, `dnssec`, `dane`, `update`, `delete`,
 `server` subcommand categories, with flags and examples. **None of it exists.**
 That file has been fenced with an ARCHIVE banner rather than deleted, because it

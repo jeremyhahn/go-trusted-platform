@@ -257,8 +257,8 @@ QEMU supports [Direct Kernel Boot](https://qemu-project.gitlab.io/qemu/system/li
 ## Config Delivery Modes
 
 `platformctl iso create` supports four config-delivery modes. Pick based
-on your deployment topology. See `docs/bootstrap/config-delivery.md`
-for the full architecture.
+on your deployment topology. What the orchestrator publishes per MAC is
+`docs/bootstrap/architecture.md` (Phase 3 · Control plane).
 
 ### 1. Default baked (no flags)
 

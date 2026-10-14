@@ -376,12 +376,13 @@ life. Six boundaries, in the order they are crossed.
 - [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md)
 - [factory-reset.md](factory-reset.md) — the `TPM2_Clear` and recovery-key
   decision, with the full wire path. Verified accurate against code.
-- [SECURITY_MODEL.md](SECURITY_MODEL.md), [UNLOCK_STRATEGIES.md](UNLOCK_STRATEGIES.md),
-  [initrd-overview.md](initrd-overview.md), [initrd-architecture.md](initrd-architecture.md),
-  [autoinstall.md](autoinstall.md), [iso-building.md](iso-building.md),
-  [provisioning-client.md](provisioning-client.md), [qemu-testing.md](qemu-testing.md),
-  [README.md](README.md) — pre-convention documents kept for their detail.
+- [autoinstall.md](autoinstall.md), [iso-building.md](iso-building.md),
+  [provisioning-client.md](provisioning-client.md), [qemu-testing.md](qemu-testing.md)
+  — pre-convention documents kept for their detail.
   **Where they disagree with the five files, the five files win**; the specific
   corrections are listed in [engineering.md](engineering.md) §10.
+- SECURITY_MODEL.md, UNLOCK_STRATEGIES.md, initrd-overview.md,
+  initrd-architecture.md and README.md are deleted. These five files hold their
+  content.
 - [`docs/ipxe/`](../ipxe/) · [`docs/provisioning/`](../provisioning/) ·
   [`docs/daemon/api.md`](../daemon/api.md)

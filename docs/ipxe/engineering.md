@@ -432,7 +432,7 @@ opcodes as `0xFC`–`0xFF`. `sdk/go/wire/quicwire/protocol.go` also defines
 ## 10. Related
 
 - [architecture.md](architecture.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md)
-- [configuration.md](configuration.md) · [testing.md](testing.md) · [README.md](README.md) — pre-convention detail
+- configuration.md · testing.md · README.md — pre-convention detail, now deleted; these five files hold it
 - [`docs/provisioning/`](../provisioning/) — the PXE control plane and its transport matrix
 - [`docs/installer/`](../installer/) — what the booted kernel does next
 - [`docs/daemon/api.md`](../daemon/api.md) — the platform transport model

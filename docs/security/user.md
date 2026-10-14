@@ -197,7 +197,7 @@ assume the platform rate-limits an endpoint or sanitizes an input because those
 packages exist. Whatever protection a given surface has, it has for its own
 reasons. [architecture.md](architecture.md) §3.
 
-The legacy `README.md` in this folder also documents a `pkg/security/audit`
+The deleted legacy `README.md` also documented a `pkg/security/audit`
 package with an async audit logger and HTTP/gRPC middleware. **That package does
 not exist.** Do not plan against it. [architecture.md](architecture.md) §8.
 

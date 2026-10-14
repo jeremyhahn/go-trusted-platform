@@ -98,7 +98,7 @@ other members in `join-addresses`.
 enabled by the server mode plus `raft-address` and `join-addresses`, **not** by
 the storage backend — clustered nodes still use `pebble` for storage.
 
-The legacy [`configuration.md`](configuration.md) in this folder says otherwise.
+The deleted legacy `configuration.md` said otherwise.
 It is wrong; the validator is right.
 
 **`node-id` must be unique and must never be reused.** If you replace a node,

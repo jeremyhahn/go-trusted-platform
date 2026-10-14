@@ -56,7 +56,7 @@ calls one RPC of the daemon's `ComputeService`** — the same
 token or the verified client certificate. A daemon with no compute service
 mounts none of these routes. Each route speaks the SDK wire contract
 (`TestComputeRoutesServeTheSDKContract`, `pkg/api/rest/compute_handlers_test.go`;
-the route list is in [api-reference.md](api-reference.md#rest-api)):
+§2–§5 list the routes):
 
 - The request is the RPC's request message. The body is protojson, with either
   the camelCase JSON name (the SDKs) or the proto name of each field. An enum

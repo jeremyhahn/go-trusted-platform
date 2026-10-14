@@ -49,7 +49,7 @@ short forms and no subcommands.
 | `--dhcp-range-end` | string | `""` | **yes** | Last allocatable address |
 | `--config-dir` | string | `/data/configs` | no | Directory of per-device configs |
 | `--interface` | string | `eth0` | no | Network interface to bind |
-| `--bind-host` | string | `""` | no | Address the HTTP and TFTP servers bind; empty is every interface. DHCP stays on the unspecified address, scoped to `--interface` ([configuration.md](configuration.md#bind-address)). The container sets it from `BOOTSTRAP_BIND_HOST` |
+| `--bind-host` | string | `""` | no | Address the HTTP and TFTP servers bind; empty is every interface. DHCP stays on the unspecified address, scoped to `--interface` ([engineering.md](engineering.md)). The container sets it from `BOOTSTRAP_BIND_HOST` |
 | `--http-port` | int | `8080` | no | HTTP server port |
 | `--device-script-port` | int | `0` | no | Per-device boot script server port (`/boot/device/{mac}.ipxe`), a second listener. Zero derives `--http-port` + 1 |
 | `--tftp-port` | int | `69` | no | TFTP server port |

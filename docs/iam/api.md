@@ -169,7 +169,7 @@ authenticated caller holding the `admin` role, and the tenant-lifecycle routes
 tenant. Denials are `401` (no session) and `403` (wrong role or wrong tenant).
 The router refuses to build without those guards, so the surface is either
 gated or absent. Details and rationale:
-[authorization.md §Route-level RBAC](authorization.md) and
+[architecture.md §Authorization Flow](architecture.md#authorization-flow) and
 [`docs/auth/architecture.md` §6c](../auth/architecture.md).
 
 That gate is REST-only; the gRPC, QUIC and MCP pictures follow.

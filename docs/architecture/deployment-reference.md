@@ -3,7 +3,7 @@
 > **Status: REFERENCE** · Last verified: 2026-10-13
 > Deployment topologies, node roles and sizing; [../daemon/](../daemon/) and [../bootstrap/](../bootstrap/) are normative.
 
-This document defines how to physically deploy the go-trusted-platform across different scales and environments. It complements the existing architecture docs which describe the platform's design (see [reference.md](reference.md), [reference-network.md](reference-network.md), [binary-separation.md](binary-separation.md), and [platform-modes.md](platform-modes.md)).
+This document defines how to physically deploy the go-trusted-platform across different scales and environments. It complements the existing architecture docs which describe the platform's design (see [reference.md](reference.md), [reference-network.md](reference-network.md), [daemon/architecture.md](../daemon/architecture.md), and [dht/architecture.md](../dht/architecture.md)).
 
 This guide covers:
 - Topology patterns for different deployment sizes
@@ -470,7 +470,7 @@ Process:
    • Network comes live with redundancy
 ```
 
-See [bootstrap/pxe-bootstrap.md](../bootstrap/pxe-bootstrap.md) and [bootstrap/deployer.md](../bootstrap/deployer.md).
+See [bootstrap/architecture.md](../bootstrap/architecture.md) and [bootstrap/user.md](../bootstrap/user.md).
 
 ---
 
@@ -807,9 +807,9 @@ Hardware TPM availability determines the security tier of a deployment. Map tier
 
 - [Reference Architecture](reference.md) - IoT reference use case and system requirements
 - [Reference Network Architecture](reference-network.md) - VLAN design and network segmentation
-- [Binary Separation](binary-separation.md) - Three-binary architecture and privilege model
-- [Platform Modes](platform-modes.md) - Local, P2P, and Hosted control plane modes
-- [Bootstrap Overview](../bootstrap/overview.md) - Trust bootstrap strategies
-- [PXE Bootstrap](../bootstrap/pxe-bootstrap.md) - Automated network bootstrap
-- [Manual Nodes](../bootstrap/manual-nodes.md) - Manual node enrollment
-- [Day Zero Configuration](../bootstrap/day-zero.md) - Initial platform setup
+- [Binary Separation](../daemon/architecture.md) - Three-binary architecture and privilege model
+- [Platform Modes](../dht/architecture.md) - Local, P2P, and Hosted control plane modes
+- [Bootstrap Overview](../bootstrap/architecture.md) - Trust bootstrap strategies
+- [PXE Bootstrap](../bootstrap/user.md) - Automated network bootstrap
+- [Manual Nodes](../bootstrap/user.md) - Manual node enrollment
+- [Day Zero Configuration](../bootstrap/user.md) - Initial platform setup

@@ -163,4 +163,4 @@ platformctl firmware test \
 
 - [README.md](README.md) - Overview
 - [Configuration](configuration.md) - Config examples
-- [Roadmap](ROADMAP.md) - Development roadmap
+- [Roadmap](../../ROADMAP.md) - Development roadmap

@@ -348,7 +348,7 @@ certificate, the platform CA bundle and its profile
 ```
 
 Phase numbering matches `pkg/bootstrap/orchestrator.go` internal states
-and `docs/bootstrap/pxe-bootstrap.md`.
+and `docs/bootstrap/architecture.md` (Data flow — day zero through first boot).
 
 ---
 
@@ -433,15 +433,15 @@ name but are otherwise independent code paths. Do not confuse them.
 
 | Concern | File | Doc |
 |---------|------|-----|
-| Orchestrator phases | `pkg/bootstrap/orchestrator.go` | `docs/bootstrap/pxe-bootstrap.md` |
+| Orchestrator phases | `pkg/bootstrap/orchestrator.go` | `docs/bootstrap/architecture.md` (Data flow) |
 | Template merge | `pkg/config.DeepMergeYAMLFiles` | `docs/device-templates.md` |
-| Per-MAC publishing | `pkg/bootstrap/virtual_media.go::stagePerMACConfig` | `docs/bootstrap/config-delivery.md` |
+| Per-MAC publishing | `pkg/bootstrap/virtual_media.go::stagePerMACConfig` | `docs/bootstrap/architecture.md` (Phase 3 · Control plane) |
 | HTTP config server | `pkg/ipxe/http_server.go` | `docs/ipxe/architecture.md` |
 | ISO build (baked mode) | `pkg/iso/customize.go`, `pkg/cli/commands/iso/create.go` | `docs/installer/iso-building.md` |
 | autoinstall priority chain | `pkg/iso/customize.go` (embedded shell) | `docs/installer/autoinstall.md` |
 | Kernel cmdline params | `pkg/iso/customize.go::buildDynamicConfigParams` | `docs/reference/kernel-cmdline.md` |
 | cmdline → trust: YAML mapping | `pkg/trust/config.go`, `pkg/iso/customize.go` lines 3342-3351 | `docs/reference/kernel-cmdline.md` §3a |
-| BMC enroll phase (Phase 5a) | `pkg/bootstrap/orchestrator.go` | `docs/bmc/configuration.md` |
+| BMC enroll phase (Phase 5a) | `pkg/bootstrap/orchestrator.go` | `docs/bmc/engineering.md` §3.3 |
 | Single-node template | `configs/platform/templates/single-node/default.yaml` | `configs/platform/templates/single-node/README.md`, `docs/device-templates.md` |
 | Dedicated templates | `configs/platform/templates/dedicated/<vendor>/<model>/` | `configs/platform/templates/dedicated/README.md`, `docs/device-templates.md` |
 | OVS bond creation (native OVSDB) | `pkg/app/sdn.go::initOVSBonds`, `pkg/sdn/ovs/port.go::AddBond` | `configs/platform/templates/dedicated/README.md` §Network Architecture |

@@ -652,8 +652,8 @@ provisions all three pin stores, which differ only in `--owner`:
 
 | Surface | `--owner` | Guide |
 |---------|-----------|-------|
-| deployer | omitted (defaults to `--host`) | [`bootstrap/deployer.md`](../bootstrap/deployer.md#provisioning-the-pin) |
-| physical switch | the switch `name` (omit when it has none) | [`bootstrap/switch-management.md`](../bootstrap/switch-management.md#provisioning-the-pin) |
+| deployer | omitted (defaults to `--host`) | [`bootstrap/user.md`](../bootstrap/user.md) |
+| physical switch | the switch `name` (omit when it has none) | [`switch/user.md`](../switch/user.md) |
 | EVPN fabric (Nexus) | the fabric switch `id` | [`sdn/fabric/configuration.md`](../sdn/fabric/configuration.md#provisioning-the-host-key-pin) |
 
 ```

@@ -44,7 +44,7 @@ Pure Go implementation of SDN components for the Trusted Platform.
 | IPAM | IP Address Management with pool-based allocation | Complete |
 | DHCP | Integrated DHCP server for overlay networks | Complete |
 
-See [ROADMAP-BGP.md](../archive/ROADMAP-BGP.md) for full implementation details.
+See [ROADMAP.md](../../ROADMAP.md) for full implementation details.
 
 ## Package Structure
 
@@ -123,11 +123,11 @@ The stdlib-only property covers those two packages, not the whole SDN subsystem.
 
 ### Multi-Host Networking
 - [BGP](bgp/README.md) - BGP service (EVPN + Transit)
-- [Gateway](gateway/README.md) - Multi-mode gateway nodes
+- [Gateway](../gateway/architecture.md) - Multi-mode gateway nodes
 - [Overlay](overlay/README.md) - VXLAN overlay controller
 - [IPAM](ipam/README.md) - IP Address Management
 - [DHCP](dhcp/README.md) - DHCP server for overlay networks
-- [Multi-Host Roadmap](../archive/ROADMAP-BGP.md) - Implementation roadmap
+- [Multi-Host Roadmap](../../ROADMAP.md) - Implementation roadmap
 
 ## Quick Start
 

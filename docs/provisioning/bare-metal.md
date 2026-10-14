@@ -18,7 +18,7 @@ For greenfield deployments or large-scale rollouts, the PXE bootstrap system pro
 platformctl bootstrap run --config bootstrap.yaml
 ```
 
-See [PXE Bootstrap Documentation](../bootstrap/pxe-bootstrap.md) for the complete guide. PXE bootstrap supports both BMC-managed and [manual nodes](../bootstrap/manual-nodes.md).
+See [PXE Bootstrap Documentation](../bootstrap/user.md) for the complete guide. PXE bootstrap supports both BMC-managed and [manual nodes](../bootstrap/user.md).
 
 ## ISO-Based Provisioning Workflow
 
@@ -188,8 +188,8 @@ The installation ISO must:
 
 ## Related Documentation
 
-- [BMC Configuration](../bmc/configuration.md) - BMC connection setup
-- [BMC Operations](../bmc/operations.md) - Individual BMC operations
+- [BMC Configuration](../bmc/engineering.md) - BMC connection setup
+- [BMC Operations](../bmc/user.md) - Individual BMC operations
 - [Device Templates](templates.md) - Template configuration
 - [Config Delivery](config-delivery.md) - Post-install configuration
-- [PXE Bootstrap](../bootstrap/pxe-bootstrap.md) - PXE-based greenfield deployment
+- [PXE Bootstrap](../bootstrap/user.md) - PXE-based greenfield deployment

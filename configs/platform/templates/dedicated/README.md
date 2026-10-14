@@ -200,7 +200,7 @@ orchestrator:
    the per-MAC config via the `platform_config=` kernel cmdline URL
    (baked by `platformctl iso create --config-server`), and installs.
 
-See [`docs/bootstrap/config-delivery.md`](../../../../docs/bootstrap/config-delivery.md)
+See [`docs/architecture/bootstrap-flow.md`](../../../../docs/architecture/bootstrap-flow.md)
 for the full flow and [`docs/architecture/bootstrap-flow.md`](../../../../docs/architecture/bootstrap-flow.md)
 for orchestrator phase diagrams.
 
@@ -395,7 +395,7 @@ what makes the handshake verify with no extra anchor to distribute.
 domain differs; change the edge-router address when yours differs.
 
 Full schema: `docs/device-templates.md` (Time Synchronization).
-API surface: `docs/ntp/api-reference.md`.
+API surface: `docs/ntp/api.md`.
 
 ### `os.kernel-modules`
 
@@ -513,9 +513,9 @@ install flow:
 | Concern | Primary doc |
 |---------|-------------|
 | Bootstrap phases + orchestrator flow | [`docs/architecture/bootstrap-flow.md`](../../../../docs/architecture/bootstrap-flow.md) |
-| Dynamic config delivery (per-MAC staging) | [`docs/bootstrap/config-delivery.md`](../../../../docs/bootstrap/config-delivery.md) |
+| Dynamic config delivery (per-MAC staging) | [`docs/architecture/bootstrap-flow.md`](../../../../docs/architecture/bootstrap-flow.md) |
 | ISO build flags + modes | [`docs/installer/iso-building.md`](../../../../docs/installer/iso-building.md) |
 | autoinstall.sh priority chain | [`docs/installer/autoinstall.md`](../../../../docs/installer/autoinstall.md) |
 | Kernel cmdline parameter reference | [`docs/reference/kernel-cmdline.md`](../../../../docs/reference/kernel-cmdline.md) |
 | Templates + overrides | [`docs/device-templates.md`](../../../../docs/device-templates.md) |
-| Binary separation (platformd/gatewayd/platform-initrd) | [`docs/architecture/binary-separation.md`](../../../../docs/architecture/binary-separation.md) |
+| Binary separation (platformd/gatewayd/platform-initrd) | [`docs/daemon/architecture.md`](../../../../docs/daemon/architecture.md) |

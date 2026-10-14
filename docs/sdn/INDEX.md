@@ -10,7 +10,7 @@ Complete documentation for the Software-Defined Networking (SDN) components in g
 |-----------|---------|-----------------|
 | **Physical Fabric** | Unified switch management (VLAN/EVPN) | [fabric/README.md](./fabric/README.md) |
 | **Stateful Firewall** | Zone-based packet filtering + NAT | [firewall/README.md](./firewall/README.md) |
-| **Gateway Node** | Multi-service overlay, edge, transit node | [gateway/README.md](./gateway/README.md) |
+| **Gateway Node** | Multi-service overlay, edge, transit node | [gateway/architecture.md](../gateway/architecture.md) |
 | **BGP** | Border Gateway Protocol for route announcement | [bgp/README.md](./bgp/README.md) |
 | **DHCP** | Dynamic IP allocation | [dhcp/README.md](./dhcp/README.md) |
 | **IPAM** | IP address pool management | [ipam/README.md](./ipam/README.md) |
@@ -356,8 +356,8 @@ All services support mutual TLS for inter-node communication.
 
 - [Configuration Guide](../daemon/configuration.md#configuration-structure) — Top-level config structure
 - [Security Architecture](../security/architecture.md) — Overall security design
-- [Secrets Framework](../secrets/README.md) — Secret management
-- [Bootstrap Process](../bootstrap/README.md) — Node initialization
+- [Secrets Framework](../secrets/architecture.md) — Secret management
+- [Bootstrap Process](../bootstrap/architecture.md) — Node initialization
 - [TPM/Device Identity](../tpm/device-identity-design.md) — IDevID design
 
 ## Contributing

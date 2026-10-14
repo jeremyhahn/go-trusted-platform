@@ -303,13 +303,12 @@ Six boundaries.
 ## 8. Related
 
 - [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md)
-- [configuration.md](configuration.md), [testing.md](testing.md),
-  [README.md](README.md) — pre-convention documents kept for their worked
-  examples. Where they disagree with the five files, the five files win; the
-  corrections are in [engineering.md](engineering.md) §9.
+- configuration.md, testing.md,
+  README.md — pre-convention documents, now deleted. These five files hold
+  their content; the corrections to them are in [engineering.md](engineering.md) §9.
 - [`docs/provisioning/`](../provisioning/) — device lifecycle, config delivery,
   the `PXEService` transport matrix
 - [`docs/installer/`](../installer/) — what the booted kernel does next
-- [`docs/bootstrap/config-delivery.md`](../bootstrap/config-delivery.md) — the
+- [`docs/architecture/bootstrap-flow.md`](../architecture/bootstrap-flow.md) — the
   orchestrator side of `/config/mac/*`
 - [`docs/daemon/api.md`](../daemon/api.md) — the platform transport model

@@ -307,5 +307,5 @@ wire a load balancer to the wrong one.
 - [`docs/provisioning/`](../provisioning/) — `pxeboot` and `platform-initrd` in context
 - [configuration.md](configuration.md) — the listen-address keys and
   `platformd serve` flags, checked against the code 2026-10-13. The older
-  [api-reference.md](api-reference.md) and the five per-transport
-  `api-reference-*.md` files are ARCHIVE; [api.md](api.md) replaces them.
+  api-reference.md and the five per-transport
+  `api-reference-*.md` files are deleted; [api.md](api.md) holds their content.

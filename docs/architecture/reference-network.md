@@ -407,5 +407,5 @@ See [SDN configuration](../sdn/configuration.md) for every key, and the profile 
 
 - [Deployment Reference](deployment-reference.md): topologies, node roles, bootstrap
 - [Gateway](../gateway/architecture.md): gateway services, HA, overlay status
-- [Security Model](security-model.md): trust boundaries and threat model
+- [Security Model](../security/architecture.md): trust boundaries and threat model
 - [SDN](../sdn/README.md): bridges, ports, flows, port authentication

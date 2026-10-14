@@ -67,10 +67,10 @@ bin/deployer-pin \
 
 Omitting `--owner` keys the pin by `--host`, and the driver, which looks it up by `id`, will not find it.
 Idempotence, rotation and the fail-closed checks are the same as for the deployer; see
-[Provisioning the pin in `bootstrap/deployer.md`](../../bootstrap/deployer.md#provisioning-the-pin) and
+[`bootstrap/user.md`](../../bootstrap/user.md) and
 [`deployer-pin`](../../daemon/cli.md#73-deployer-pin). The physical-switch bootstrap path pins the same
 way with `--owner` set to the switch `name`
-([`bootstrap/switch-management.md`](../../bootstrap/switch-management.md#provisioning-the-pin)).
+([`switch/user.md`](../../switch/user.md)).
 
 ## `peers[]`
 

@@ -413,4 +413,4 @@ platformctl dns register \
 
 - [DNS Records](records.md) - Record type reference
 - [Platform Configuration](../configuration.md) - Full configuration reference
-- [KMS Documentation](../kms/README.md) - Key management integration
+- [KMS Documentation](../kms/architecture.md) - Key management integration
