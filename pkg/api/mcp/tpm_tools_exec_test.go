@@ -468,37 +468,6 @@ func TestTPMToolExecution(t *testing.T) {
 		}
 	})
 
-	t.Run("executeTPMExtendPCR invalid pcr index too high", func(t *testing.T) {
-		svc := newMockServiceProvider()
-		registry := NewToolRegistry(svc, log)
-
-		_, err := registry.ExecuteTool(ctx, "platform_tpm_pcr_extend", map[string]interface{}{
-			"pcr_index": float64(24),
-			"data":      base64.StdEncoding.EncodeToString([]byte("data")),
-		})
-		if err == nil {
-			t.Fatal("expected error for invalid PCR index")
-		}
-		if err != ErrTPMInvalidPCRIndex {
-			t.Fatalf("expected ErrTPMInvalidPCRIndex, got %v", err)
-		}
-	})
-
-	t.Run("executeTPMExtendPCR missing data", func(t *testing.T) {
-		svc := newMockServiceProvider()
-		registry := NewToolRegistry(svc, log)
-
-		_, err := registry.ExecuteTool(ctx, "platform_tpm_pcr_extend", map[string]interface{}{
-			"pcr_index": float64(7),
-		})
-		if err == nil {
-			t.Fatal("expected error for missing data")
-		}
-		if err != ErrTPMDataRequired {
-			t.Fatalf("expected ErrTPMDataRequired, got %v", err)
-		}
-	})
-
 	t.Run("executeTPMExtendPCR invalid data base64", func(t *testing.T) {
 		svc := newMockServiceProvider()
 		registry := NewToolRegistry(svc, log)
@@ -718,21 +687,6 @@ func TestTPMToolExecution(t *testing.T) {
 		}
 		if result == nil {
 			t.Fatal("result should not be nil")
-		}
-	})
-
-	t.Run("executeTPMNVWrite missing data", func(t *testing.T) {
-		svc := newMockServiceProvider()
-		registry := NewToolRegistry(svc, log)
-
-		_, err := registry.ExecuteTool(ctx, "platform_tpm_nv_write", map[string]interface{}{
-			"index": float64(0x01500000),
-		})
-		if err == nil {
-			t.Fatal("expected error for missing data")
-		}
-		if err != ErrTPMDataRequired {
-			t.Fatalf("expected ErrTPMDataRequired, got %v", err)
 		}
 	})
 

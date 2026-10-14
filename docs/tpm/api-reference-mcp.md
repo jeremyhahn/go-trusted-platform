@@ -74,6 +74,7 @@ The MCP interface exposes TPM operations as tools for AI/LLM integration. All to
 
 | Tool | Description |
 |------|-------------|
+| `platform_tpm_nv_list` | List defined NVRAM indexes |
 | `platform_tpm_nv_read` | Read NVRAM index |
 | `platform_tpm_nv_write` | Write NVRAM index |
 | `platform_tpm_nv_delete` | Delete NVRAM index |
@@ -387,6 +388,10 @@ Extend a PCR with measurement data (hash is computed by the TPM).
     "data": {
       "type": "string",
       "description": "Base64-encoded data to extend into the PCR"
+    },
+    "hash_alg": {
+      "type": "string",
+      "description": "PCR bank to extend: sha1, sha256, sha384 or sha512 (default sha256)"
     }
   },
   "required": ["pcr_index", "data"]
@@ -500,9 +505,24 @@ Create Local DevID Certificate Signing Request.
 }
 ```
 
+### platform_tpm_nv_list
+
+List the defined NVRAM indexes. The result is `{"indexes": [{"handle",
+"type", "size", "auth_read", "auth_write"}]}`, read from the TPM's fixed
+properties.
+
+**Input Schema:**
+```json
+{
+  "type": "object",
+  "properties": {}
+}
+```
+
 ### platform_tpm_nv_read
 
-Read NVRAM index data.
+Read data from an NVRAM index. The result is `{"index", "data", "size"}` with
+`data` base64-encoded.
 
 **Input Schema:**
 ```json
@@ -511,20 +531,28 @@ Read NVRAM index data.
   "properties": {
     "index": {
       "type": "integer",
-      "description": "NVRAM index to read"
+      "description": "NVRAM index to read from"
     },
-    "data_size": {
+    "size": {
       "type": "integer",
-      "description": "Number of bytes to read"
+      "description": "Number of bytes to read (optional, reads entire index if omitted)"
+    },
+    "offset": {
+      "type": "integer",
+      "description": "Byte offset to read from (default 0)"
+    },
+    "password": {
+      "type": "string",
+      "description": "Authorization password for the index or hierarchy its attributes select (optional)"
     }
   },
-  "required": ["index", "data_size"]
+  "required": ["index"]
 }
 ```
 
 ### platform_tpm_nv_write
 
-Write data to NVRAM index.
+Write data to an NVRAM index.
 
 **Input Schema:**
 ```json
@@ -538,6 +566,14 @@ Write data to NVRAM index.
     "data": {
       "type": "string",
       "description": "Base64-encoded data to write"
+    },
+    "offset": {
+      "type": "integer",
+      "description": "Byte offset to write at (default 0)"
+    },
+    "password": {
+      "type": "string",
+      "description": "Authorization password for the index or hierarchy its attributes select (optional)"
     }
   },
   "required": ["index", "data"]
@@ -546,7 +582,7 @@ Write data to NVRAM index.
 
 ### platform_tpm_nv_delete
 
-Delete NVRAM index.
+Undefine (delete) an NVRAM index.
 
 **Input Schema:**
 ```json
@@ -555,12 +591,20 @@ Delete NVRAM index.
   "properties": {
     "index": {
       "type": "integer",
-      "description": "NVRAM index to delete"
+      "description": "NVRAM index to undefine"
+    },
+    "parent_password": {
+      "type": "string",
+      "description": "Owner hierarchy password (optional)"
     }
   },
   "required": ["index"]
 }
 ```
+
+`index` must fit in 32 bits, and `size` and `offset` in 16 bits. The values
+are whole decimal numbers; anything else is refused with `-32602` (invalid params)
+before the TPM is touched. Index 0 and empty `data` are refused the same way.
 
 ## JSON-RPC Examples
 

@@ -761,9 +761,7 @@ func TestOpcodeToString(t *testing.T) {
 		{OpDeviceDeleteProfile, "DeviceDeleteProfile"},
 		{OpDeviceAttest, "DeviceAttest"},
 		{OpDeviceActivate, "DeviceActivate"},
-		{OpDeviceDeactivate, "DeviceDeactivate"},
 		{OpDeviceGetState, "DeviceGetState"},
-		{OpDeviceGetMetrics, "DeviceGetMetrics"},
 
 		// SDN Operations
 		{OpSDNGetPortState, "SDNGetPortState"},

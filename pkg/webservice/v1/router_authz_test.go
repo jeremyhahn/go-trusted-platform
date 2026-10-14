@@ -834,6 +834,14 @@ var gatedProbes = []struct {
 	{"idevid delete", http.MethodDelete, "/api/v1/idevid"},
 	{"vtpm bundle export", http.MethodGet, "/api/v1/vtpm/bundles/b1/export"},
 	{"vtpm bundle delete", http.MethodDelete, "/api/v1/vtpm/bundles/b1"},
+	{"vtpm start", http.MethodPost, "/api/v1/vtpm/bundles/b1/start"},
+	{"vtpm stop", http.MethodPost, "/api/v1/vtpm/bundles/b1/stop"},
+	{"vtpm state", http.MethodGet, "/api/v1/vtpm/bundles/b1/state"},
+	{"vtpm quote", http.MethodPost, "/api/v1/vtpm/bundles/b1/quote"},
+	{"vtpm seal", http.MethodPost, "/api/v1/vtpm/bundles/b1/seal"},
+	{"vtpm unseal", http.MethodPost, "/api/v1/vtpm/bundles/b1/unseal"},
+	{"vtpm pcr read", http.MethodGet, "/api/v1/vtpm/bundles/b1/pcrs"},
+	{"vtpm pcr extend", http.MethodPost, "/api/v1/vtpm/bundles/b1/pcrs/extend"},
 }
 
 // TestGatedRoutes_RejectAnonymousCallers is the authentication half of the

@@ -377,15 +377,6 @@ func TestErrVTPMOperationNotImplemented(t *testing.T) {
 	}
 }
 
-func TestErrDeviceOperationNotImplemented(t *testing.T) {
-	t.Parallel()
-	err := ErrDeviceOperationNotImplemented{Operation: "provision"}
-	expected := "device operation not implemented: provision"
-	if got := err.Error(); got != expected {
-		t.Errorf("Error() = %q, want %q", got, expected)
-	}
-}
-
 func TestErrSDNOperationNotImplemented(t *testing.T) {
 	t.Parallel()
 	err := ErrSDNOperationNotImplemented{Operation: "apply_policy"}

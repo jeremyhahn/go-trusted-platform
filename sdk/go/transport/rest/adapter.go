@@ -1172,21 +1172,6 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.KeyManagementService/GenerateDataKey":        {"/api/v1/kms/data-keys", http.MethodPost},
 	"/platform.v1.KeyManagementService/GenerateWrappedDataKey": {"/api/v1/kms/data-keys/wrapped", http.MethodPost},
 
-	// VTPM Service — proto: pkg/api/grpc/proto/vtpm.proto
-	// The SDK test suite exercises instance lifecycle through the
-	// /platform.v1.VTPMService/* path forms below.
-	"/platform.v1.VTPMService/Create":        {"/api/v1/vtpm/instances", http.MethodPost},
-	"/platform.v1.VTPMService/Delete":        {"/api/v1/vtpm/instances", http.MethodDelete},
-	"/platform.v1.VTPMService/Start":         {"/api/v1/vtpm/instances/start", http.MethodPost},
-	"/platform.v1.VTPMService/Stop":          {"/api/v1/vtpm/instances/stop", http.MethodPost},
-	"/platform.v1.VTPMService/List":          {"/api/v1/vtpm/instances", http.MethodGet},
-	"/platform.v1.VTPMService/GetState":      {"/api/v1/vtpm/instances/state", http.MethodGet},
-	"/platform.v1.VTPMService/QuoteVTPM":     {"/api/v1/vtpm/quote", http.MethodPost},
-	"/platform.v1.VTPMService/SealVTPM":      {"/api/v1/vtpm/seal", http.MethodPost},
-	"/platform.v1.VTPMService/UnsealVTPM":    {"/api/v1/vtpm/unseal", http.MethodPost},
-	"/platform.v1.VTPMService/ExtendVTPMPCR": {"/api/v1/vtpm/pcrs/extend", http.MethodPost},
-	"/platform.v1.VTPMService/ReadVTPMPCR":   {"/api/v1/vtpm/pcrs", http.MethodGet},
-
 	// Physical TPM Service — proto: pkg/api/grpc/proto/tpm.proto
 	// Server registrations live in pkg/webservice/v1/rest/tpm/router.go
 	// (RegisterRoutes). Keep this map in lockstep with that file or

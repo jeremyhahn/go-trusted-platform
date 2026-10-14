@@ -52,6 +52,14 @@ type mockVTPMService struct {
 	getBundlePathFn  func(id string) string
 	getTPMSocketFn   func(id string) string
 	getNVRAMPathFn   func(id string) string
+	startFn          func(ctx context.Context, bundleID string) error
+	stopFn           func(ctx context.Context, bundleID string) error
+	isRunningFn      func(bundleID string) bool
+	quoteFn          func(ctx context.Context, bundleID string, nonce []byte, pcrs []int) (*vtpm.QuoteResult, error)
+	sealFn           func(ctx context.Context, bundleID string, data []byte, opts *vtpm.SealOptions) ([]byte, error)
+	unsealFn         func(ctx context.Context, bundleID string, sealedData []byte, authValue string) ([]byte, error)
+	extendPCRFn      func(ctx context.Context, bundleID string, pcrIndex int, data []byte) error
+	readPCRFn        func(ctx context.Context, bundleID string, pcrIndex int) ([]byte, error)
 }
 
 func (m *mockVTPMService) CreateBundle(ctx context.Context, opts *vtpm.CreateBundleOptions) (*vtpm.Bundle, error) {
@@ -165,34 +173,58 @@ func (m *mockVTPMService) Close() error {
 
 // Runtime TPM operations (required for VTPMService interface)
 func (m *mockVTPMService) Start(ctx context.Context, bundleID string) error {
+	if m.startFn != nil {
+		return m.startFn(ctx, bundleID)
+	}
 	return errors.New("not implemented")
 }
 
 func (m *mockVTPMService) Stop(ctx context.Context, bundleID string) error {
+	if m.stopFn != nil {
+		return m.stopFn(ctx, bundleID)
+	}
 	return errors.New("not implemented")
 }
 
 func (m *mockVTPMService) IsRunning(bundleID string) bool {
+	if m.isRunningFn != nil {
+		return m.isRunningFn(bundleID)
+	}
 	return false
 }
 
 func (m *mockVTPMService) Quote(ctx context.Context, bundleID string, nonce []byte, pcrs []int) (*vtpm.QuoteResult, error) {
+	if m.quoteFn != nil {
+		return m.quoteFn(ctx, bundleID, nonce, pcrs)
+	}
 	return nil, errors.New("not implemented")
 }
 
 func (m *mockVTPMService) Seal(ctx context.Context, bundleID string, data []byte, opts *vtpm.SealOptions) ([]byte, error) {
+	if m.sealFn != nil {
+		return m.sealFn(ctx, bundleID, data, opts)
+	}
 	return nil, errors.New("not implemented")
 }
 
 func (m *mockVTPMService) Unseal(ctx context.Context, bundleID string, sealedData []byte, authValue string) ([]byte, error) {
+	if m.unsealFn != nil {
+		return m.unsealFn(ctx, bundleID, sealedData, authValue)
+	}
 	return nil, errors.New("not implemented")
 }
 
 func (m *mockVTPMService) ExtendPCR(ctx context.Context, bundleID string, pcrIndex int, data []byte) error {
+	if m.extendPCRFn != nil {
+		return m.extendPCRFn(ctx, bundleID, pcrIndex, data)
+	}
 	return errors.New("not implemented")
 }
 
 func (m *mockVTPMService) ReadPCR(ctx context.Context, bundleID string, pcrIndex int) ([]byte, error) {
+	if m.readPCRFn != nil {
+		return m.readPCRFn(ctx, bundleID, pcrIndex)
+	}
 	return nil, errors.New("not implemented")
 }
 
@@ -420,6 +452,30 @@ func TestCreateBundle_Success(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "test-bundle-123", payload.ID)
 	assert.Equal(t, "pre-assigned", payload.Mode)
+}
+
+func TestCreateBundle_ForwardsDeviceProfileAndTemplate(t *testing.T) {
+	service := &mockVTPMService{
+		createBundleFn: func(ctx context.Context, opts *vtpm.CreateBundleOptions) (*vtpm.Bundle, error) {
+			assert.Equal(t, vtpm.BundleModeTemplate, opts.Mode)
+			assert.Equal(t, uint64(9), opts.DeviceProfileID)
+			return createTestBundle("profiled"), nil
+		},
+	}
+
+	handlers, writer := newTestHandlers(service)
+
+	body := CreateBundleRequest{
+		Mode:            "BUNDLE_MODE_TEMPLATE",
+		Hostname:        "profiled-host",
+		DeviceProfileID: 9,
+	}
+	req := createRequestWithVars(http.MethodPost, "/api/v1/vtpm/bundles", body, nil)
+	rec := httptest.NewRecorder()
+
+	handlers.CreateBundle(rec, req)
+
+	assert.Equal(t, http.StatusOK, writer.lastStatus)
 }
 
 func TestCreateBundle_InvalidRequestBody(t *testing.T) {
@@ -746,6 +802,60 @@ func TestListBundles_WithModeFilter(t *testing.T) {
 	handlers.ListBundles(rec, req)
 
 	assert.Equal(t, http.StatusOK, writer.lastStatus)
+}
+
+func TestListBundles_WithLabelAndProfileFilters(t *testing.T) {
+	service := &mockVTPMService{
+		listBundlesFn: func(ctx context.Context, opts *vtpm.ListOptions) ([]*vtpm.Bundle, error) {
+			assert.Equal(t, vtpm.BundleModePreAssigned, opts.Mode)
+			assert.Equal(t, map[string]string{"env": "prod", "rack": "a=1"}, opts.Labels)
+			assert.Equal(t, uint64(7), opts.DeviceProfileID)
+			return []*vtpm.Bundle{}, nil
+		},
+	}
+
+	handlers, writer := newTestHandlers(service)
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/vtpm/bundles?mode=BUNDLE_MODE_PRE_ASSIGNED&labels=env%3Dprod&labels=rack%3Da%3D1&device_profile_id=7", nil)
+	rec := httptest.NewRecorder()
+
+	handlers.ListBundles(rec, req)
+
+	assert.Equal(t, http.StatusOK, writer.lastStatus)
+}
+
+func TestListBundles_InvalidFilterRejected(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		want  error
+	}{
+		{"label without equals", "labels=env", ErrInvalidLabelQuery{Value: "env"}},
+		{"label with empty key", "labels=%3Dprod", ErrInvalidLabelQuery{Value: "=prod"}},
+		{"profile id not a number", "device_profile_id=abc", ErrInvalidDeviceProfileIDQuery{Value: "abc"}},
+		{"profile id negative", "device_profile_id=-1", ErrInvalidDeviceProfileIDQuery{Value: "-1"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &mockVTPMService{
+				listBundlesFn: func(ctx context.Context, opts *vtpm.ListOptions) ([]*vtpm.Bundle, error) {
+					t.Fatal("service must not be called for an invalid filter")
+					return nil, nil
+				},
+			}
+			handlers, writer := newTestHandlers(service)
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/vtpm/bundles?"+tt.query, nil)
+			rec := httptest.NewRecorder()
+
+			handlers.ListBundles(rec, req)
+
+			assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+			assert.Equal(t, tt.want, writer.lastError)
+		})
+	}
 }
 
 func TestListBundles_EmptyList(t *testing.T) {
@@ -1508,6 +1618,9 @@ func TestParseBundleMode(t *testing.T) {
 		{"preassigned", vtpm.BundleModePreAssigned},
 		{"pre_assigned", vtpm.BundleModePreAssigned},
 		{"PRE-ASSIGNED", vtpm.BundleModePreAssigned},
+		{"BUNDLE_MODE_TEMPLATE", vtpm.BundleModeTemplate},
+		{"BUNDLE_MODE_PRE_ASSIGNED", vtpm.BundleModePreAssigned},
+		{"BUNDLE_MODE_UNSPECIFIED", vtpm.BundleMode("")},
 		{"invalid", vtpm.BundleMode("")},
 		{"", vtpm.BundleMode("")},
 	}
@@ -1788,9 +1901,10 @@ func TestManifestToResponse_FullManifest(t *testing.T) {
 			DBFingerprint:  "sha256:db123",
 			OwnerGUID:      "12345678-1234-1234-1234-123456789012",
 		},
-		Checksums:  map[string]string{"file1": "sha256:hash1"},
-		Labels:     map[string]string{"env": "test"},
-		ClonedFrom: "parent-template",
+		Checksums:       map[string]string{"file1": "sha256:hash1"},
+		Labels:          map[string]string{"env": "test"},
+		ClonedFrom:      "parent-template",
+		DeviceProfileID: 42,
 	}
 
 	resp := handlers.manifestToResponse(manifest)
@@ -1804,6 +1918,7 @@ func TestManifestToResponse_FullManifest(t *testing.T) {
 	assert.Equal(t, uint32(0x01C00002), resp.EKHandle)
 	assert.True(t, resp.SecureBootEnabled)
 	assert.Equal(t, "parent-template", resp.ClonedFrom)
+	assert.Equal(t, uint64(42), resp.DeviceProfileID)
 	assert.NotNil(t, resp.CreatedAt)
 	assert.NotNil(t, resp.EKCertificate)
 	assert.NotNil(t, resp.SecureBootKeys)

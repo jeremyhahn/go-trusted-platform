@@ -163,12 +163,6 @@ func TestRouteMaps_DeclareNoMethodThatDoesNotExist(t *testing.T) {
 		"/platform.v1.IDevIDService/InstallCert": true,
 		"/platform.v1.PlatformDaemon/Liveness":   true,
 		"/platform.v1.PlatformDaemon/Readiness":  true,
-		"/platform.v1.VTPMService/Create":        true,
-		"/platform.v1.VTPMService/Delete":        true,
-		"/platform.v1.VTPMService/GetState":      true,
-		"/platform.v1.VTPMService/List":          true,
-		"/platform.v1.VTPMService/Start":         true,
-		"/platform.v1.VTPMService/Stop":          true,
 	}
 
 	var unexpected []string

@@ -102,7 +102,6 @@ func TestAllErrorTypes_ErrorMethod(t *testing.T) {
 		{"ErrVTPMOperationNotImplemented", ErrVTPMOperationNotImplemented{Operation: "seal"}, "vTPM operation not implemented: seal"},
 
 		// Device errors
-		{"ErrDeviceOperationNotImplemented", ErrDeviceOperationNotImplemented{Operation: "provision"}, "device operation not implemented: provision"},
 		{"ErrInvalidDeviceID", ErrInvalidDeviceID{ID: "bad-id"}, "invalid device ID: bad-id"},
 		{"ErrAttestationFailed", ErrAttestationFailed{Reason: "quote verification failed"}, "attestation failed: quote verification failed"},
 		{"ErrDeviceNotFound", ErrDeviceNotFound{DeviceID: "device-123"}, "device not found: device-123"},
@@ -319,7 +318,6 @@ func TestErrorsImplementErrorInterface(t *testing.T) {
 	var _ error = ErrMCPServerStopFailed{}
 	var _ error = ErrMCPServerNotConfigured{}
 	var _ error = ErrVTPMOperationNotImplemented{}
-	var _ error = ErrDeviceOperationNotImplemented{}
 	var _ error = ErrInvalidDeviceID{}
 	var _ error = ErrAttestationFailed{}
 	var _ error = ErrDeviceNotFound{}

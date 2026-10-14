@@ -130,7 +130,7 @@ var unservedPrefixes = map[string]string{
 	"version": "daemon REST server, rest_service.go:handleVersion",
 }
 
-// unroutedClaims are the 98 claims where the server DOES serve the prefix but
+// unroutedClaims are the 87 claims where the server DOES serve the prefix but
 // the client asks for a path that does not resolve. This is #321's shape at
 // scale, and it is the actionable half of this test's findings.
 //
@@ -231,17 +231,6 @@ var unroutedClaims = map[string]string{
 	"/platform.v1.TenantService/ResumeTenant":                  "POST /api/v1/tenants/resume",
 	"/platform.v1.TenantService/SuspendTenant":                 "POST /api/v1/tenants/suspend",
 	"/platform.v1.TenantService/UpdateTenant":                  "PUT /api/v1/tenants",
-	"/platform.v1.VTPMService/Create":                          "POST /api/v1/vtpm/instances",
-	"/platform.v1.VTPMService/Delete":                          "DELETE /api/v1/vtpm/instances",
-	"/platform.v1.VTPMService/ExtendVTPMPCR":                   "POST /api/v1/vtpm/pcrs/extend",
-	"/platform.v1.VTPMService/GetState":                        "GET /api/v1/vtpm/instances/state",
-	"/platform.v1.VTPMService/List":                            "GET /api/v1/vtpm/instances",
-	"/platform.v1.VTPMService/QuoteVTPM":                       "POST /api/v1/vtpm/quote",
-	"/platform.v1.VTPMService/ReadVTPMPCR":                     "GET /api/v1/vtpm/pcrs",
-	"/platform.v1.VTPMService/SealVTPM":                        "POST /api/v1/vtpm/seal",
-	"/platform.v1.VTPMService/Start":                           "POST /api/v1/vtpm/instances/start",
-	"/platform.v1.VTPMService/Stop":                            "POST /api/v1/vtpm/instances/stop",
-	"/platform.v1.VTPMService/UnsealVTPM":                      "POST /api/v1/vtpm/unseal",
 
 	// The IAM rows sit after the alphabetical run above, in their own block,
 	// so that adding them did not re-align every row beneath them and turn a

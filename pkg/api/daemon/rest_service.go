@@ -1179,7 +1179,7 @@ func (s *RESTServer) SetFIDO2Service(svc *FIDO2Service) {
 // and mounts /api/v1/cluster routes. The handlers fall through to the
 // gRPC implementation, so REST and gRPC report identical state when the
 // underlying coordinator is missing (HTTP 503 + Unavailable code).
-func (s *RESTServer) SetClusterService(svc *ClusterGRPCService) {
+func (s *RESTServer) SetClusterService(svc platformv1.ClusterServiceServer) {
 	h := newClusterRESTHandlers(svc)
 	api := s.router.PathPrefix(restBasePath).Subrouter()
 	h.registerClusterRoutes(api)

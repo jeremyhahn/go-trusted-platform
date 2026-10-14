@@ -296,22 +296,12 @@ func (r *ToolRegistry) executeTPMReadPCRs(ctx context.Context, args map[string]i
 
 // executeTPMExtendPCR extends a PCR with measurement data.
 func (r *ToolRegistry) executeTPMExtendPCR(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	pcrIndex := getInt(args, "pcr_index")
-	dataB64 := getString(args, "data")
-
-	if pcrIndex < 0 || pcrIndex > 23 {
-		return nil, ErrTPMInvalidPCRIndex
-	}
-
-	if dataB64 == "" {
-		return nil, ErrTPMDataRequired
-	}
-	data, err := base64.StdEncoding.DecodeString(dataB64)
+	data, err := base64.StdEncoding.DecodeString(getString(args, "data"))
 	if err != nil {
 		return nil, ErrTPMInvalidData
 	}
 
-	result, err := r.service.TPMExtendPCR(ctx, pcrIndex, data)
+	result, err := r.service.TPMExtendPCR(ctx, getInt(args, "pcr_index"), getString(args, "hash_alg"), data)
 	if err != nil {
 		return nil, err
 	}
@@ -411,10 +401,16 @@ func (r *ToolRegistry) executeTPMNVList(ctx context.Context, args map[string]int
 
 // executeTPMNVRead reads data from an NVRAM index.
 func (r *ToolRegistry) executeTPMNVRead(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	index := getInt(args, "index")
-	size := getInt(args, "size")
+	index, offset, err := nvIndexArgs(args)
+	if err != nil {
+		return nil, err
+	}
+	size, err := uintArgUpTo(args, "size", math.MaxUint16)
+	if err != nil {
+		return nil, err
+	}
 
-	data, err := r.service.TPMNVRead(ctx, index, size)
+	data, err := r.service.TPMNVRead(ctx, index, uint16(size), offset, getString(args, "password"))
 	if err != nil {
 		return nil, err
 	}
@@ -427,18 +423,16 @@ func (r *ToolRegistry) executeTPMNVRead(ctx context.Context, args map[string]int
 
 // executeTPMNVWrite writes data to an NVRAM index.
 func (r *ToolRegistry) executeTPMNVWrite(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	index := getInt(args, "index")
-	dataB64 := getString(args, "data")
-
-	if dataB64 == "" {
-		return nil, ErrTPMDataRequired
+	index, offset, err := nvIndexArgs(args)
+	if err != nil {
+		return nil, err
 	}
-	data, err := base64.StdEncoding.DecodeString(dataB64)
+	data, err := base64.StdEncoding.DecodeString(getString(args, "data"))
 	if err != nil {
 		return nil, ErrTPMInvalidData
 	}
 
-	result, err := r.service.TPMNVWrite(ctx, index, data)
+	result, err := r.service.TPMNVWrite(ctx, index, data, offset, getString(args, "password"))
 	if err != nil {
 		return nil, err
 	}
@@ -447,12 +441,43 @@ func (r *ToolRegistry) executeTPMNVWrite(ctx context.Context, args map[string]in
 
 // executeTPMNVDelete undefines an NVRAM index.
 func (r *ToolRegistry) executeTPMNVDelete(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	index := getInt(args, "index")
-	result, err := r.service.TPMNVDelete(ctx, index)
+	index, err := uintArgUpTo(args, "index", math.MaxUint32)
+	if err != nil {
+		return nil, err
+	}
+	result, err := r.service.TPMNVDelete(ctx, uint32(index), getString(args, "parent_password"))
 	if err != nil {
 		return nil, err
 	}
 	return marshalResult(result)
+}
+
+// nvIndexArgs reads the NV index and byte offset the NV data tools take.
+// Whether the index is set is the shared tpmnv layer's check, so a missing
+// index reaches the service as 0.
+func nvIndexArgs(args map[string]interface{}) (uint32, uint16, error) {
+	index, err := uintArgUpTo(args, "index", math.MaxUint32)
+	if err != nil {
+		return 0, 0, err
+	}
+	offset, err := uintArgUpTo(args, "offset", math.MaxUint16)
+	if err != nil {
+		return 0, 0, err
+	}
+	return uint32(index), uint16(offset), nil
+}
+
+// uintArgUpTo reads an optional non-negative integer argument and rejects
+// a value above limit.
+func uintArgUpTo(args map[string]interface{}, key string, limit uint64) (uint64, error) {
+	value, err := optionalUint64Arg(args, key)
+	if err != nil {
+		return 0, err
+	}
+	if value > limit {
+		return 0, ErrInvalidArgument{Msg: key + " must be at most " + strconv.FormatUint(limit, 10)}
+	}
+	return value, nil
 }
 
 // executeTPMPlatform retrieves platform-level TPM attributes.

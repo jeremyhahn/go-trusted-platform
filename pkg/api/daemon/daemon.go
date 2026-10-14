@@ -208,6 +208,7 @@ type Daemon struct {
 	eabGRPCService               *EABGRPCService
 	eabDelivery                  EABDeliveryServicer
 	clusterService               ClusterServicer
+	clusterBackend               *clusterGRPCBackend
 	invitationService            platformservice.InvitationServicer
 	invitationGRPCService        *InvitationGRPCService
 	gatewayGRPCService           *GatewayService
@@ -938,20 +939,13 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 	logger.Info("Invitation gRPC service registered (stub)")
 
-	// Create Cluster gRPC service. This stub answers every RPC with
-	// codes.Unimplemented, and it is what gets registered in EVERY build:
-	// this file carries no build tag, the two registrations below are
-	// unconditional, and no tagged file registers an alternative. Building
-	// with -tags cluster compiles more cluster code but does not change
-	// which implementation serves the RPCs. See #334.
-	clusterGRPCService := NewClusterGRPCService(logger)
-	if grpcServer != nil {
-		platformv1.RegisterClusterServiceServer(grpcServer, clusterGRPCService)
-	}
-	if grpcUDSServer != nil {
-		platformv1.RegisterClusterServiceServer(grpcUDSServer, clusterGRPCService)
-	}
-	logger.Info("Cluster gRPC service registered (stub)")
+	// Register the Cluster gRPC service on the TCP listener and the Unix
+	// socket. It is the pkg/api/grpc implementation over the daemon's
+	// ClusterServicer — the same servicer the MCP cluster tools use, set
+	// through Daemon.SetClusterService. Until one is set every RPC returns
+	// Unavailable.
+	clusterGRPCService, clusterBackend := registerClusterGRPCService(logger, grpcServer, grpcUDSServer)
+	logger.Info("Cluster gRPC service registered")
 
 	// Create DNS gRPC service - stub returning Unimplemented
 	// Full implementation wired when DNS service is available
@@ -1348,6 +1342,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		grpcServer:                   grpcServerIntf,
 		grpcTLSCredsAttached:         grpcTLSCredsAttached,
 		grpcUDSServer:                grpcUDSServerIntf,
+		clusterBackend:               clusterBackend,
 		concreteGrpcUDSServer:        grpcUDSServer,
 		quicServer:                   quicServerIntf,
 		quicHandler:                  quicHandler,
@@ -3088,19 +3083,24 @@ func (d *Daemon) MCPServiceProvider() *MCPServiceProvider {
 	return d.mcpProvider
 }
 
-// SetClusterService injects the platform cluster servicer used by the
-// MCP cluster tools.
+// SetClusterService injects the platform cluster servicer behind every
+// cluster transport: the registered gRPC ClusterService (TCP and Unix
+// socket), the REST /cluster routes over it, and the MCP cluster tools.
+// A nil svc clears it.
 //
 // NOTHING CALLS THIS IN PRODUCTION, in any build. There is no tagged
-// wiring that constructs a *ClusterService and injects it here, so
-// d.clusterService is always nil and every MCP cluster tool returns
-// ErrClusterNotConfigured — with -tags cluster exactly as without it.
-// Do not read the build tag as the difference. See #334.
+// wiring that constructs a *ClusterService and injects it here, so every
+// cluster operation reports the service as not configured — with -tags
+// cluster exactly as without it. Do not read the build tag as the
+// difference. See #334.
 func (d *Daemon) SetClusterService(svc ClusterServicer) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	d.clusterService = svc
+	if d.clusterBackend != nil {
+		d.clusterBackend.set(svc)
+	}
 	if d.mcpProvider != nil {
 		d.mcpProvider.SetClusterService(svc)
 	}

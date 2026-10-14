@@ -19,6 +19,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"log/slog"
+	"math"
 	"sync"
 
 	tpmgo "github.com/google/go-tpm/tpm2"
@@ -41,6 +42,7 @@ import (
 	// name (UnsealRequest, KeyInfo, PIVSignRequest, …).
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
 )
 
@@ -1349,13 +1351,12 @@ func buildNVAttributes(names []string) tpmgo.TPMANV {
 	return a
 }
 
-// WriteNVRAM writes a payload to a defined NV index. Auth
-// dispatch mirrors ReadNVRAM: AUTHWRITE → index-self auth,
-// OWNERWRITE → owner hierarchy, PPWRITE → platform hierarchy.
-// Writes are chunked at 512-byte boundaries to stay below
-// TPM_PT_NV_BUFFER_MAX on every supported device (Infineon
-// SLB9665 reports 7 bytes; the conservative cap matches
-// xkms/EK-cert / tpm2-tools default behavior).
+// WriteNVRAM writes a payload to a defined NV index through
+// tpmnv.Write, the path QUIC and MCP share. Auth dispatch mirrors
+// ReadNVRAM: AUTHWRITE → index-self auth, OWNERWRITE → owner
+// hierarchy, PPWRITE → platform hierarchy. Writes are chunked at
+// 512-byte boundaries to stay below TPM_PT_NV_BUFFER_MAX on every
+// supported device.
 func (s *TPMGRPCService) WriteNVRAM(
 	ctx context.Context,
 	req *platformv1.WriteNVRAMRequest,
@@ -1368,95 +1369,37 @@ func (s *TPMGRPCService) WriteNVRAM(
 	if tpm == nil {
 		return nil, status.Error(codes.Unavailable, "TPM service not available")
 	}
-	if req.GetIndex() == 0 {
-		return nil, status.Error(codes.InvalidArgument, "index is required")
-	}
-
-	tr := tpm.Transport()
-	if tr == nil {
-		return nil, status.Error(codes.Unavailable, "TPM transport not available")
+	offset, err := nvOffset(req.GetOffset())
+	if err != nil {
+		return nil, err
 	}
 
 	s.logger.Debug("TPM WriteNVRAM request received",
 		slog.Uint64("index", uint64(req.GetIndex())),
 		slog.Int("data_bytes", len(req.GetData())),
-		slog.Uint64("offset", uint64(req.GetOffset())))
+		slog.Uint64("offset", uint64(offset)))
 
-	nvHandle := tpmgo.TPMHandle(req.GetIndex())
-	pubRsp, err := tpmgo.NVReadPublic{NVIndex: nvHandle}.Execute(tr)
+	err = tpmnv.Write(tpm.Transport(), req.GetIndex(), req.GetData(), offset, tpmnv.Password(req.GetPassword()))
 	if err != nil {
+		s.logger.Slog().Error("TPM NVWrite failed",
+			slog.Uint64("index", uint64(req.GetIndex())),
+			slog.String("error", err.Error()))
 		return nil, s.mapError(err)
 	}
-	pub, err := pubRsp.NVPublic.Contents()
-	if err != nil {
-		return nil, status.Error(codes.Internal, "decode NVPublic: "+err.Error())
-	}
 
-	var pwd []byte
-	if p := req.GetPassword(); p != "" {
-		pwd = []byte(p)
-	}
-	authHandle := tpmgo.AuthHandle{
-		Handle: nvHandle,
-		Name:   pubRsp.NVName,
-		Auth:   tpmgo.PasswordAuth(pwd),
-	}
-	if pub.Attributes.OwnerWrite && !pub.Attributes.AuthWrite {
-		authHandle = tpmgo.AuthHandle{
-			Handle: tpmgo.TPMRHOwner,
-			Auth:   tpmgo.PasswordAuth(pwd),
-		}
-	} else if pub.Attributes.PPWrite {
-		authHandle = tpmgo.AuthHandle{
-			Handle: tpmgo.TPMRHPlatform,
-			Auth:   tpmgo.PasswordAuth(pwd),
-		}
-	}
-
-	const maxNVChunk = 512
-	data := req.GetData()
-	startOffset := uint16(req.GetOffset())
-	for i := 0; i < len(data); {
-		end := i + maxNVChunk
-		if end > len(data) {
-			end = len(data)
-		}
-		chunk := data[i:end]
-		_, err := tpmgo.NVWrite{
-			AuthHandle: authHandle,
-			NVIndex: tpmgo.AuthHandle{
-				Handle: nvHandle,
-				Name:   pubRsp.NVName,
-				Auth:   tpmgo.PasswordAuth(pwd),
-			},
-			Data:   tpmgo.TPM2BMaxNVBuffer{Buffer: chunk},
-			Offset: startOffset + uint16(i),
-		}.Execute(tr)
-		if err != nil {
-			s.logger.Slog().Error("TPM NVWrite chunk failed",
-				slog.Uint64("index", uint64(req.GetIndex())),
-				slog.Int("offset", i),
-				slog.Int("chunk_size", len(chunk)),
-				slog.String("error", err.Error()))
-			return nil, s.mapError(err)
-		}
-		i = end
-	}
-
-	s.logger.Debug("TPM NVWrite completed", slog.Int("bytes", len(data)))
+	s.logger.Debug("TPM NVWrite completed", slog.Int("bytes", len(req.GetData())))
 	return &platformv1.WriteNVRAMResponse{}, nil
 }
 
-// ReadNVRAM reads payload bytes from a defined NV index.
+// ReadNVRAM reads payload bytes from a defined NV index through
+// tpmnv.Read, the path QUIC and MCP share.
 //
-// Implementation issues TPM2_NVReadPublic to learn the index's
-// hash algorithm + auth-hierarchy attributes, then issues
-// TPM2_NVRead with the operator-supplied password (empty for
+// tpmnv issues TPM2_NVReadPublic to learn the index's size and
+// auth-hierarchy attributes, then TPM2_NVRead in 512-byte chunks
+// with the operator-supplied password (empty for
 // AuthRead-without-password indices like the TCG-reserved EK
-// certificate at 0x1c00002). Reads are chunked at the device's
-// NV buffer max size when the requested size exceeds it; this
-// page calls in already with size <= NVBufferMax so the chunking
-// path is rare in practice.
+// certificate at 0x1c00002). A size of 0, or one past the end of
+// the index, reads to the end.
 func (s *TPMGRPCService) ReadNVRAM(
 	ctx context.Context,
 	req *platformv1.ReadNVRAMRequest,
@@ -1469,104 +1412,25 @@ func (s *TPMGRPCService) ReadNVRAM(
 	if tpm == nil {
 		return nil, status.Error(codes.Unavailable, "TPM service not available")
 	}
-
-	if req.GetIndex() == 0 {
-		return nil, status.Error(codes.InvalidArgument, "index is required")
+	offset, err := nvOffset(req.GetOffset())
+	if err != nil {
+		return nil, err
 	}
 
 	s.logger.Debug("TPM ReadNVRAM request received",
 		slog.Uint64("index", uint64(req.GetIndex())),
 		slog.Uint64("size", uint64(req.GetSize())),
-		slog.Uint64("offset", uint64(req.GetOffset())))
+		slog.Uint64("offset", uint64(offset)))
 
-	tr := tpm.Transport()
-	if tr == nil {
-		return nil, status.Error(codes.Unavailable, "TPM transport not available")
-	}
-
-	nvHandle := tpmgo.TPMHandle(req.GetIndex())
-	pubRsp, err := tpmgo.NVReadPublic{NVIndex: nvHandle}.Execute(tr)
+	// No NV index exceeds 65535 bytes, so a larger size reads the whole
+	// index, as any size past the index's DataSize does.
+	size := uint16(min(req.GetSize(), math.MaxUint16))
+	out, err := tpmnv.Read(tpm.Transport(), req.GetIndex(), size, offset, tpmnv.Password(req.GetPassword()))
 	if err != nil {
-		s.logger.Slog().Error("TPM NVReadPublic failed",
+		s.logger.Slog().Error("TPM NVRead failed",
 			slog.Uint64("index", uint64(req.GetIndex())),
 			slog.String("error", err.Error()))
 		return nil, s.mapError(err)
-	}
-	pub, err := pubRsp.NVPublic.Contents()
-	if err != nil {
-		return nil, status.Error(codes.Internal, "decode NVPublic: "+err.Error())
-	}
-	dataSize := uint16(pub.DataSize)
-	if req.GetSize() > 0 && req.GetSize() < uint32(dataSize) {
-		dataSize = uint16(req.GetSize())
-	}
-
-	// Build the auth value. nil (vs empty []byte) is meaningful
-	// in go-tpm: nil PasswordAuth omits the auth value from the
-	// command frame; an empty []byte sends a zero-length value
-	// that some TPMs reject with TPM_RC_SIZE.
-	var pwd []byte
-	if p := req.GetPassword(); p != "" {
-		pwd = []byte(p)
-	}
-
-	// Choose the auth-handle hierarchy based on the NV public
-	// attributes. AUTHREAD authorizes against the index's own
-	// AuthValue; OWNERREAD/PPREAD route through the owner /
-	// platform hierarchy with their respective auth values. The
-	// vast majority of indices on the WebUI's path (TCG-reserved
-	// EK cert at 0x1c00002, user-defined ordinary indices) are
-	// AUTHREAD with empty password.
-	authHandle := tpmgo.AuthHandle{
-		Handle: nvHandle,
-		Name:   pubRsp.NVName,
-		Auth:   tpmgo.PasswordAuth(pwd),
-	}
-	if pub.Attributes.OwnerRead && !pub.Attributes.AuthRead {
-		authHandle = tpmgo.AuthHandle{
-			Handle: tpmgo.TPMRHOwner,
-			Auth:   tpmgo.PasswordAuth(pwd),
-		}
-	} else if pub.Attributes.PPRead {
-		authHandle = tpmgo.AuthHandle{
-			Handle: tpmgo.TPMRHPlatform,
-			Auth:   tpmgo.PasswordAuth(pwd),
-		}
-	}
-
-	// Chunk the read. TPM_PT_NV_BUFFER_MAX varies wildly between
-	// vendors (Infineon SLB9665 reports 7 in one mode, 1024 in
-	// another); a conservative 512-byte cap is what xkms's own
-	// EKCertificate path uses and what tpm2-tools defaults to.
-	const maxNVChunk uint16 = 512
-	startOffset := uint16(req.GetOffset())
-	out := make([]byte, 0, dataSize)
-	for offset := startOffset; offset-startOffset < dataSize; {
-		remaining := dataSize - (offset - startOffset)
-		chunk := remaining
-		if chunk > maxNVChunk {
-			chunk = maxNVChunk
-		}
-		readRsp, err := tpmgo.NVRead{
-			AuthHandle: authHandle,
-			NVIndex: tpmgo.AuthHandle{
-				Handle: nvHandle,
-				Name:   pubRsp.NVName,
-				Auth:   tpmgo.PasswordAuth(pwd),
-			},
-			Size:   chunk,
-			Offset: offset,
-		}.Execute(tr)
-		if err != nil {
-			s.logger.Slog().Error("TPM NVRead chunk failed",
-				slog.Uint64("index", uint64(req.GetIndex())),
-				slog.Uint64("offset", uint64(offset)),
-				slog.Uint64("chunk_size", uint64(chunk)),
-				slog.String("error", err.Error()))
-			return nil, s.mapError(err)
-		}
-		out = append(out, readRsp.Data.Buffer...)
-		offset += chunk
 	}
 
 	s.logger.Debug("TPM NVRead completed",
@@ -1594,38 +1458,11 @@ func (s *TPMGRPCService) UndefineNVRAM(
 	if tpm == nil {
 		return nil, status.Error(codes.Unavailable, "TPM service not available")
 	}
-	if req.GetIndex() == 0 {
-		return nil, status.Error(codes.InvalidArgument, "index is required")
-	}
-
-	tr := tpm.Transport()
-	if tr == nil {
-		return nil, status.Error(codes.Unavailable, "TPM transport not available")
-	}
 
 	s.logger.Debug("TPM UndefineNVRAM request received",
 		slog.Uint64("index", uint64(req.GetIndex())))
 
-	nvHandle := tpmgo.TPMHandle(req.GetIndex())
-	pubRsp, err := tpmgo.NVReadPublic{NVIndex: nvHandle}.Execute(tr)
-	if err != nil {
-		return nil, s.mapError(err)
-	}
-
-	var ownerAuth []byte
-	if p := req.GetParentPassword(); p != "" {
-		ownerAuth = []byte(p)
-	}
-	if _, err := (tpmgo.NVUndefineSpace{
-		AuthHandle: tpmgo.AuthHandle{
-			Handle: tpmgo.TPMRHOwner,
-			Auth:   tpmgo.PasswordAuth(ownerAuth),
-		},
-		NVIndex: tpmgo.NamedHandle{
-			Handle: nvHandle,
-			Name:   pubRsp.NVName,
-		},
-	}.Execute(tr)); err != nil {
+	if err := tpmnv.Undefine(tpm.Transport(), req.GetIndex(), tpmnv.Password(req.GetParentPassword())); err != nil {
 		s.logger.Slog().Error("TPM NVUndefineSpace failed",
 			slog.Uint64("index", uint64(req.GetIndex())),
 			slog.String("error", err.Error()))
@@ -1775,10 +1612,25 @@ func activateCredential(
 	return tpm.ActivateCredential(credentialBlob, encryptedSecret)
 }
 
+// nvOffset narrows a proto NV offset to the 16 bits the TPM command
+// carries, rejecting one that does not fit.
+func nvOffset(offset uint32) (uint16, error) {
+	if offset > math.MaxUint16 {
+		return 0, ErrNVOffsetOutOfRange{Offset: offset}
+	}
+	return uint16(offset), nil
+}
+
 // mapError converts service errors to gRPC status errors.
 func (s *TPMGRPCService) mapError(err error) error {
 	if err == nil {
 		return nil
+	}
+
+	// A typed error that already carries its gRPC class (the shared
+	// tpmnv / tpmpcr validation errors) keeps it.
+	if st, ok := status.FromError(err); ok && st.Code() != codes.Unknown {
+		return st.Err()
 	}
 
 	errMsg := err.Error()

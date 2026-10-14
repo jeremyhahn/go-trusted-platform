@@ -49,6 +49,10 @@ unreachable daemon. Reference the constant rather than repeating the string.
 | `0x3B` | Activate device | `ActivateDeviceRequest` | `ActivateDeviceResponse` |
 | `0x3D` | Get device state | `{Id}` | daemon-native `DeviceStateResponse` (domain-only state field, no pb counterpart) |
 
+`0x3C` and `0x3E` (formerly Deactivate and GetMetrics, never implemented) are
+retired: the guard refuses them as unclassified with `StatusPermissionDenied`
+([api.md §2](api.md#2-devices)).
+
 Profile assignment has no opcode of its own; it is multiplexed under
 `OpProvisioningCategory` (`0xCF`) and documented under *Profile Assignment*
 below.
@@ -136,8 +140,8 @@ the catalogs is refused, so a new sub-opcode without an entry fails closed.
 
 | Scope | Opcodes |
 |-------|---------|
-| `device:read` | `0x32`, `0x33`, `0x35`, `0x37`, `0x3D`, `0x3E`; sub-opcode `0x29` |
-| `device:write` | `0x30`, `0x34`, `0x36`, `0x38`, `0x3A`, `0x3B`, `0x3C`; sub-opcodes `0x20`–`0x22`, `0x25`–`0x28` |
+| `device:read` | `0x32`, `0x33`, `0x35`, `0x37`, `0x3D`; sub-opcode `0x29` |
+| `device:write` | `0x30`, `0x34`, `0x36`, `0x38`, `0x3A`, `0x3B`; sub-opcodes `0x20`–`0x22`, `0x25`–`0x28` |
 | `device:delete` | `0x31`, `0x39` |
 
 The boot sub-opcodes `0x23` and `0x24` are pre-auth (above), and the other

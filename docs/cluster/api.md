@@ -1,6 +1,6 @@
 # Cluster — API
 
-> **Status: NORMATIVE** · Scope: cluster capabilities on every transport · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: cluster capabilities on every transport · Last verified: 2026-10-14
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
@@ -11,11 +11,14 @@
 
 ## 1. Read this before the tables
 
-**Every cluster capability on every transport is currently non-functional.**
-The gRPC service the daemon registers is
-`daemon.ClusterGRPCService`, whose every method returns `codes.Unimplemented`;
-the REST handlers wrap that same stub; the MCP tools return
-`ErrClusterNotConfigured` because no provider is ever wired. There is no QUIC
+**The five operations are implemented, but nothing in production feeds them a
+cluster yet.** The gRPC service the daemon registers is
+`pkg/api/grpc.ClusterGRPCService`, backed by the daemon adapter
+`clusterGRPCBackend` (`pkg/api/daemon/cluster_grpc_backend.go`) over the same
+`ClusterServicer` the MCP tools use. REST calls that registered service. Both
+answer from whatever servicer `Daemon.SetClusterService` sets — and nothing
+calls it in production (#334), so today gRPC/Unix return `Unavailable`, REST
+returns 503 and MCP returns `ErrClusterNotConfigured`. There is no QUIC
 opcode, and the embedded registry's `Cluster` field is never populated.
 
 The tables below therefore document **two different things**, kept separate on
@@ -45,11 +48,12 @@ For cluster:
 
 - **gRPC**: `platform.v1.ClusterService`, **5 RPCs** — `Bootstrap`, `Join`,
   `Leave`, `GetStatus`, `ListNodes` (`pkg/api/grpc/proto/cluster.proto`).
-  Registered on the TCP server (`daemon.go:885`) and the Unix-socket server
-  (`:888`).
+  `registerClusterGRPCService` registers it on the TCP server and the
+  Unix-socket server (`daemon.go:946`).
 - **REST**: `/api/v1/cluster/*`, registered by
   `RESTServer.SetClusterService` → `clusterRESTHandlers.registerClusterRoutes`
-  under `restBasePath` = `/api/v1`.
+  under `restBasePath` = `/api/v1`. The daemon passes it the registered gRPC
+  service (`daemon.go:1577`), so REST and gRPC run the same code.
 - **QUIC**: **no opcode.** Grepping `pkg/api/quic/` for `Cluster` returns
   nothing.
 - **MCP**: five `platform_cluster_*` tools (`pkg/api/mcp/cluster_tools.go`).
@@ -70,10 +74,25 @@ For cluster:
 | **Cluster status** | ditto | `ClusterService/GetStatus` | `GET /api/v1/cluster/status` | `ClusterService/GetStatus` | `MISSING — docs/13 G7` | `platform_cluster_status` |
 | **List nodes** | ditto | `ClusterService/ListNodes` | `GET /api/v1/cluster/nodes` | `ClusterService/ListNodes` | `MISSING — docs/13 G7` | `platform_cluster_list_nodes` |
 
-**Behaviour today, for every row above:** gRPC and Unix return
-`codes.Unimplemented` with `"cluster: <Method> not implemented"`; REST maps that
-to **503** (`clusterErrorToHTTP`); MCP returns `ErrClusterNotConfigured`
-(`"cluster: service provider not configured"`).
+**Behaviour, for every row above:**
+
+- **No servicer set (production today):** gRPC and Unix return
+  `codes.Unavailable` with `"cluster service not configured"`
+  (`ErrClusterServiceUnavailable`); REST maps that to **503**
+  (`clusterErrorToHTTP`); MCP returns `ErrClusterNotConfigured`
+  (`"cluster: service provider not configured"`).
+- **Servicer set:** gRPC, Unix and REST return the servicer's result, projected
+  as in §5; MCP returns its own JSON projection of the same servicer.
+
+What each RPC does with the servicer:
+
+| RPC | Servicer calls | Notes |
+|---|---|---|
+| `Bootstrap` | `Bootstrap`, then `Status` | `cluster.name` echoes `cluster_name`; `node` is the serving node. Bind/advertise addresses, labels and metadata are not applied — the node's own configuration decides them |
+| `Join` | `Join(seed_addresses)`, then `Status` | `node` is the serving node; the same request fields are not applied |
+| `Leave` | `Leave` | Removes the **serving** node. A non-empty `node_id` naming another node is refused (`ErrLeaveNodeNotLocal`, `InvalidArgument`). `timeout_seconds > 0` bounds the call; running out is `ErrLeaveTimeout`. `force` is not applied |
+| `GetStatus` | `Status`, plus `Nodes` when `include_nodes` | `local_node` is the serving node — its full record when nodes are included; `leader_address` is filled only then |
+| `ListNodes` | `Nodes` | Filters by `roles`, `states` and `selector.match_labels` (matched against node metadata), sorts by `id` or `address`, then pages (§5) |
 
 ### Everything else is a Go call with no wire form
 
@@ -168,11 +187,20 @@ Response: `{status: {success, message}}`.
 `{roles: []NodeRole, states: []NodeState, selector: {match_labels}, pagination: {page, page_size, sort_by, ascending}}`.
 Response: `{nodes: []ClusterNode, total, pagination: {page, page_size, total_pages, total_items}}`.
 
-**This is the only paginated cluster operation**, and the pagination fields are
-carried through to `ClusterListNodesRequest` by the unwired full service
-(`pkg/api/grpc/cluster_service.go`). The registered stub reads none of them, and
-the REST handler passes an empty `ListClusterNodesRequest`, so no filter or page
-selector reaches anything today.
+**This is the only paginated cluster operation.** Over gRPC and Unix every
+field is applied:
+
+- `roles`, `states` and `selector.match_labels` must all match; an empty list
+  or map matches every node.
+- `sort_by` is `id` or `address`; empty keeps the servicer's order. Anything
+  else is `ErrUnsupportedNodeSortField` (`InvalidArgument`). `ascending`
+  false sorts descending.
+- `page` is 1-based (0 means 1). `page_size` 0 returns every node on one page.
+  A page past the end is empty, not an error.
+- `total` and `total_items` count the nodes after filtering.
+
+The REST handler passes an empty `ListClusterNodesRequest`, so over REST no
+filter, sort or page selector applies.
 
 ### `ClusterInfo`
 
@@ -186,11 +214,30 @@ selector reaches anything today.
 `state` (`NodeState`), `health` (`HealthStatus`), `version`, `joined_at`,
 `last_heartbeat`, `labels`, `metadata`.
 
-**Note the type mismatch across layers:** `cluster.Node.ID` and
-`cluster.Config.NodeID` are `uint64` in the domain, and `ClusterNode.id` is a
-`string` on the wire. The bridge that would convert them —
-`mcp_cluster_adapter.go` — keeps `uint64`; the unwired
-`pkg/api/grpc/ClusterNodeInfo` uses `string`. Any wiring work has to pick one.
+**Projection from the servicer.** Node IDs are `uint64` in the domain and
+`ClusterServicer`; the adapter writes them as decimal strings (`7` → `"7"`).
+A node's `address` is the host and `port` the port of its `host:port` address
+(an address that does not split is kept whole, with port 0). `role` is
+`LEADER` or `FOLLOWER`. `ClusterInfo.leader_address` is the leader's full
+`host:port`. `created_at` is the coordinator's start time; `id` and
+`last_election` are not populated. A status error message is carried as
+`metadata["error_message"]`.
+
+| Coordinator state | `ClusterState` |
+|---|---|
+| `bootstrapping`, `joining` | `INITIALIZING` |
+| `running` | `HEALTHY` |
+| `degraded` | `DEGRADED` |
+| `uninitialized`, `leaving`, `stopped` | `UNAVAILABLE` |
+| anything else | `UNSPECIFIED` |
+
+| Node state | `NodeState` | `HealthStatus` |
+|---|---|---|
+| `healthy` | `ACTIVE` | `HEALTHY` |
+| `suspect` | `UNREACHABLE` | `DEGRADED` |
+| `unhealthy` | `FAILED` | `UNHEALTHY` |
+| `leaving` | `LEAVING` | `UNSPECIFIED` |
+| anything else | `UNSPECIFIED` | `UNSPECIFIED` |
 
 ### MCP tool inputs
 
@@ -227,19 +274,25 @@ is_leader, timestamp}` plus `nodes` and `leader` when `include_nodes` is true.
 | `AlreadyExists` | 409 |
 | anything else | 500 |
 
-**Today every cluster REST call returns 503**, because the underlying stub
-returns `Unimplemented`. The handlers also return **400** for a request body
-that will not decode.
+**Today every cluster REST call returns 503**, because no servicer is set and
+the registered service returns `Unavailable`. With a servicer set, REST returns
+200 with the gRPC response as JSON, or the status above for its error. The
+handlers also return **400** for a request body that will not decode.
 
 A nil service short-circuits before the call with
 `{"error": "cluster service not configured"}` and 503.
 
-### gRPC — when the full service is wired
+### gRPC and Unix
 
-`pkg/api/grpc/cluster_service.go`'s `mapError`:
+Request validation in `pkg/api/grpc/cluster_service.go` returns
+`InvalidArgument` for `ErrMissingClusterName`, `ErrMissingNodeName` and
+`ErrMissingSeedAddresses` before the servicer is reached. Every other error
+goes through `mapError`:
 
 | Error | Code |
 |---|---|
+| `ErrClusterServiceUnavailable` (no servicer set) | `Unavailable` |
+| `ErrLeaveNodeNotLocal`, `ErrUnsupportedNodeSortField` | `InvalidArgument` |
 | `ErrNilClusterService` | `FailedPrecondition` |
 | `ErrClusterNotInitialized`, `ErrCannotLeaveAsLeader` | `FailedPrecondition` |
 | `ErrClusterAlreadyInitialized`, `ErrNodeAlreadyInCluster` | `AlreadyExists` |
@@ -252,8 +305,9 @@ A nil service short-circuits before the call with
 **The domain error set in `pkg/cluster/errors.go` is not mapped by anything.**
 `ErrQuorumLost`, `ErrNodeNotLeader`, `ErrNoLeader`, `ErrAlreadyJoined`,
 `ErrNotJoined`, `ErrBootstrapFailed`, `ErrJoinFailed`, `ErrLeaveFailed` and the
-rest have no transport projection at all. Wiring the coordinator requires
-writing that mapping — it does not exist to be reused.
+rest have no transport projection of their own: a servicer error reaches
+gRPC as `Internal` and REST as 500. Giving them codes means writing that
+mapping — it does not exist to be reused.
 
 ### QUIC
 
@@ -279,12 +333,9 @@ are in [`docs/daemon/api.md`](../daemon/api.md) §5.
 ## 8. Versioning and deprecation
 
 REST under `/api/v1`; gRPC package `platform.v1`. Nothing here is marked
-deprecated — but note that `pkg/api/grpc/cluster_service.go` and
-`pkg/api/daemon/cluster_grpc_service.go` implement the **same** `platform.v1`
-service with different completeness, and the richer request model
-(labels, selectors, pagination) already exists in the proto. Any future wiring
-decides which implementation the version means, and that is an owner decision,
-not one to settle here.
+deprecated. `platform.v1.ClusterService` has one implementation,
+`pkg/api/grpc/cluster_service.go`; the daemon stub that once answered every
+RPC with `Unimplemented` was deleted (#317).
 
 ## 9. Related
 

@@ -98,3 +98,33 @@ type ErrMissingHostname struct{}
 func (e ErrMissingHostname) Error() string {
 	return "hostname is required for pre-assigned bundles"
 }
+
+// ErrInvalidPCRIndexQuery is returned when the pcr_index query parameter is
+// not an integer.
+type ErrInvalidPCRIndexQuery struct {
+	Value string
+}
+
+func (e ErrInvalidPCRIndexQuery) Error() string {
+	return fmt.Sprintf("invalid pcr_index query parameter: %q", e.Value)
+}
+
+// ErrInvalidLabelQuery is returned when a labels query parameter is not
+// key=value.
+type ErrInvalidLabelQuery struct {
+	Value string
+}
+
+func (e ErrInvalidLabelQuery) Error() string {
+	return fmt.Sprintf("invalid labels query parameter %q: want key=value", e.Value)
+}
+
+// ErrInvalidDeviceProfileIDQuery is returned when the device_profile_id
+// query parameter is not an unsigned integer.
+type ErrInvalidDeviceProfileIDQuery struct {
+	Value string
+}
+
+func (e ErrInvalidDeviceProfileIDQuery) Error() string {
+	return fmt.Sprintf("invalid device_profile_id query parameter: %q", e.Value)
+}

@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"fmt"
+	"math"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -636,15 +637,6 @@ func (e ErrVTPMOperationNotImplemented) Error() string {
 // =============================================================================
 // Device Service Errors
 // =============================================================================
-
-// ErrDeviceOperationNotImplemented is returned when a device operation is not yet implemented
-type ErrDeviceOperationNotImplemented struct {
-	Operation string
-}
-
-func (e ErrDeviceOperationNotImplemented) Error() string {
-	return fmt.Sprintf("device operation not implemented: %s", e.Operation)
-}
 
 // ErrDeviceConfigFinderUnavailable is returned by FindConfigForDevice when the
 // daemon's profile service cannot resolve a booting machine's config.
@@ -1632,6 +1624,21 @@ type ErrTPMInvalidSize struct {
 
 func (e ErrTPMInvalidSize) Error() string {
 	return fmt.Sprintf("requested size %d exceeds maximum %d bytes", e.Requested, e.Max)
+}
+
+// ErrNVOffsetOutOfRange is returned when an NV request's offset exceeds
+// the 16-bit offset TPM2_NV_Read / TPM2_NV_Write carry.
+type ErrNVOffsetOutOfRange struct {
+	Offset uint32
+}
+
+func (e ErrNVOffsetOutOfRange) Error() string {
+	return fmt.Sprintf("NV offset %d exceeds maximum %d", e.Offset, math.MaxUint16)
+}
+
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrNVOffsetOutOfRange) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // ErrTenantDEKProvision is returned when DEK provisioning fails during tenant creation.

@@ -23,9 +23,10 @@ appears here.
 - gRPC: `DeviceService`, **28 RPCs** (`pkg/api/grpc/proto/device.proto`).
 - REST: `/api/v1/devices/*`, `/api/v1/device/*`
   (`pkg/webservice/v1/router/device.go`, `pkg/webservice/v1/rest/device/router.go`).
-- QUIC: top-level opcodes **`0x30`–`0x3E`**, dispatched by
-  `req.Opcode >= OpDeviceRegister && req.Opcode <= OpDeviceGetMetrics`
-  (`pkg/api/daemon/quic_service.go:489`). No category indirection.
+- QUIC: top-level opcodes **`0x30`–`0x3D`**, dispatched by
+  `req.Opcode >= OpDeviceRegister && req.Opcode <= OpDeviceGetState`
+  (`pkg/api/daemon/quic_service.go:617`). No category indirection. `0x3C` and
+  `0x3E` are retired (see below).
 - MCP: one device tool family, one profile family and two template tools —
   see §6.
 - Go SDK: `sdk/go/services/device` — `NewClient(transport.Adapter)` or
@@ -147,8 +148,6 @@ gRPC, Unix, QUIC and embedded.
 | Attest device (verify submitted quote evidence) | `POST /api/v1/devices/{id}/attest` | `AttestDevice` | `OpDeviceAttest` (`0x3A`) | `device_attest` | ✅ |
 | Disable device (block its port, record `suspended`) | `POST /api/v1/devices/{id}/disable` | `DisableDevice` | `OpProvisioningCategory` (`0xCF`) sub `DeviceSubDisable` (`0x25`) | `device_disable` | ✅ |
 | Enable device (re-admit to quarantine, request re-attestation) | `POST /api/v1/devices/{id}/enable` | `EnableDevice` | `OpProvisioningCategory` (`0xCF`) sub `DeviceSubEnable` (`0x26`) | `device_enable` | ✅ |
-| Deactivate device | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceDeactivate` (`0x3C`) — **returns `StatusNotImplemented`** | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Device metrics | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceGetMetrics` (`0x3E`) — **returns `StatusNotImplemented`** | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Provision device with a profile | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `device_provision` | `MISSING — docs/13 G7` |
 
 **Create assigns the device id; a caller does not have to supply one.** Every
@@ -185,18 +184,22 @@ way in: a caller may register a device with any string in `attest_cert`, and
 the device is then denied at attest time when that string does not chain.
 Nothing is trusted because it was stored.
 
-**Two QUIC opcodes are allocated, named and dispatched to an explicit
-`StatusNotImplemented`**: `OpDeviceDeactivate` and `OpDeviceGetMetrics`, each
-with `ErrDeviceOperationNotImplemented{Operation:…}`
-(`pkg/api/daemon/quic_device_handlers.go`). A third,
-`OpDeviceAttributes` (`0x6D`), is *also* routed by the device handler to
-`StatusNotImplemented` — but the same opcode is separately handled by the
-IDevID/TPM2 path in `pkg/api/daemon/quic_idevid.go:315`, where it does real
-work. `0x6D` falls outside the `0x30`–`0x3E` device range, so the device
-handler's case for it is unreachable from `quic_service.go` dispatch. Treat
-`OpDeviceAttributes` as the IDevID feature's, not this one's.
+**There is no device deactivate and no device metrics operation.** QUIC
+once allocated `OpDeviceDeactivate` (`0x3C`) and `OpDeviceGetMetrics`
+(`0x3E`) and answered both with `StatusNotImplemented`, but no transport,
+service method or go-quicbaas SDK call ever carried either operation, and the
+device state model has no `deactivated` state: taking a device out of service
+is **Disable** (`suspended`, above). #317 retired both bytes: the constants are
+gone, the bytes have no entry in the QUIC permission catalog, and the guard
+refuses them as unclassified (`StatusPermissionDenied`,
+`ErrOperationNotClassified`). Do not reuse them.
 
-`OpDeviceAttest` was a third until #226. It answered `StatusNotImplemented`
+`OpDeviceAttributes` (`0x6D`) is the IDevID/TPM2 feature's
+(`pkg/api/daemon/quic_idevid.go`, [`docs/tpm/api.md`](../tpm/api.md)). The
+device dispatcher carried an unreachable `StatusNotImplemented` case for it
+(`0x6D` is outside the device range) until #317 removed it.
+
+`OpDeviceAttest` answered `StatusNotImplemented` too, until #226: it did so
 on the live dispatcher while a `handleAttest` sat in
 `pkg/api/quic/device_handlers.go` — a package whose `NewDeviceHandler` has no
 non-test caller (#291). So the operation read as implemented in one package
@@ -1327,7 +1330,7 @@ and their default-deny behaviour are described in
 [`docs/daemon/api.md`](../daemon/api.md) §5.
 
 **QUIC enforces two catalogs.** `opcodePermissions` maps every top-level
-device opcode (`0x30`–`0x3E`) and `categoryPermissions` maps the device
+device opcode (`0x30`–`0x3D`, less the retired `0x3C`) and `categoryPermissions` maps the device
 sub-opcodes under `OpProvisioningCategory` (`0xCF`, keyed by `payload[0]`):
 `0x20`/`0x21` assign and unassign, `0x22` record attestation certificate,
 `0x25`/`0x26` disable and enable, `0x27` create template, `0x28` create profile
@@ -1431,7 +1434,7 @@ On MCP, all 20 device-related tool names carry a permission — see §6.
 | `0x07` | `StatusPermissionDenied` | 403 | Missing `device:*` scope |
 | `0x09` | `StatusInvalidArgument` | 400 | `ErrInvalidDeviceID`, `ErrInvalidProfileID`, `ErrInvalidTemplateID`, `ErrDeviceIdentityRequired`, `ErrEKCertNotPEM`, `ErrEKCertInvalid`, `ErrInvalidTransition`, `ErrMissingSerial`, `ErrQUICMissingField{Field:"id"}`, `ErrProfileVLANsNotDistinct` |
 | `0x0A` | `StatusUnavailable` | 503 | `ErrDeviceProfileServiceNotAvailable` — the profile service is not wired into the daemon |
-| `0x0B` | `StatusNotImplemented` | 501 | `ErrDeviceOperationNotImplemented` on `deactivate`, `get_metrics`, `attributes`. `attest` was on this list until #226 wired the live QUIC dispatcher to the shared verifier |
+| `0x0B` | `StatusNotImplemented` | 501 | None from a device operation. `attest` answered it until #226 wired the live QUIC dispatcher to the shared verifier; `deactivate`, `get_metrics` and `attributes` until #317 retired the first two and left `0x6D` to IDevID (§2) |
 
 `ErrProfileVLANsNotDistinct` is mapped **by type** on every transport, with
 `errors.As` so a wrapped instance maps identically: gRPC

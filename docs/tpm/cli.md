@@ -317,7 +317,7 @@ Two consequences worth stating plainly:
 - **The platform PCR cannot be extended from the CLI.** `tpm extend` is the verb
   for it and it does not work. The extension happens automatically in
   `App.OpenTPM` on every boot; on QUIC it is `SubOpTPM2ExtendPCR`, and on MCP it
-  is `platform_tpm_pcr_extend`.
+  is `platform_tpm_pcr_extend` — both through `pkg/api/tpmpcr` ([api.md](api.md) §5).
 - **ACME device enrollment cannot be driven from `platformctl tpm`.** Build the
   CSR with `tpm idevid csr` / `tpm iak csr` and complete enrollment through the
   CA surface.
@@ -409,7 +409,8 @@ is the only LDevID verb.
 | Import an EK certificate | gRPC `ImportEKCertificate`, REST `POST /api/v1/tpm/ek/certificate`, QUIC `0x08`, MCP `platform_tpm_ek_import_cert` |
 | Get random bytes from the TPM | gRPC `GetRandom`, REST `POST /api/v1/tpm/random`, QUIC `0x14`, MCP `platform_tpm_random` |
 | MakeCredential / ActivateCredential | gRPC, QUIC `0x20`/`0x21`, MCP; also the daemon REST listener's `POST /api/v1/tpm/make-credential` and `POST /api/v1/tpm/activate-credential` ([api.md](api.md) §1) |
-| TPM capabilities, NV index listing, platform attributes, certify | QUIC and MCP only |
+| TPM capabilities, NV index listing, platform attributes | QUIC and MCP only (NV listing: QUIC `0x1B`, MCP `platform_tpm_nv_list`) |
+| Certify a key | **No transport serves it yet**; MCP `platform_tpm_certify` is registered but unwired ([api.md](api.md) §5) |
 | Virtual TPMs | `platformctl vtpm` — [`docs/vtpm/cli.md`](../vtpm/cli.md) |
 
 ---

@@ -614,8 +614,8 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 	case appQUICCategories[req.Opcode].handlers != nil:
 		return h.handleAppServiceCategory(ctx, req)
 
-	// Device Operations (0x30-0x3F)
-	case req.Opcode >= quicwire.OpDeviceRegister && req.Opcode <= quicwire.OpDeviceGetMetrics:
+	// Device Operations (0x30-0x3D)
+	case req.Opcode >= quicwire.OpDeviceRegister && req.Opcode <= quicwire.OpDeviceGetState:
 		return h.handleDevice(ctx, req)
 
 	// IPAM Category Opcode (0x3F) - multiplexes IPAM sub-operations

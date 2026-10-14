@@ -82,22 +82,10 @@ var ErrTPMInvalidSealedData = &TPMError{
 	Message: "invalid sealed_data encoding",
 }
 
-// ErrTPMInvalidPCRIndex indicates an invalid PCR index was provided.
-var ErrTPMInvalidPCRIndex = &TPMError{
-	Code:    "TPM_INVALID_PCR_INDEX",
-	Message: "invalid PCR index (must be 0-23)",
-}
-
 // ErrTPMCNRequired indicates a common name is required.
 var ErrTPMCNRequired = &TPMError{
 	Code:    "TPM_CN_REQUIRED",
 	Message: "common name (cn) is required",
-}
-
-// ErrTPMNVIndexRequired indicates an NV index is required.
-var ErrTPMNVIndexRequired = &TPMError{
-	Code:    "TPM_NV_INDEX_REQUIRED",
-	Message: "NV index is required",
 }
 
 // ErrTPMCertificateRequired indicates a certificate is required.
@@ -395,6 +383,10 @@ func (r *ToolRegistry) registerTPMTools() {
 					"type":        "string",
 					"description": "Base64-encoded data to extend into the PCR",
 				},
+				"hash_alg": map[string]interface{}{
+					"type":        "string",
+					"description": "PCR bank to extend: sha1, sha256, sha384 or sha512 (default sha256)",
+				},
 			},
 			"required": []string{"pcr_index", "data"},
 		},
@@ -514,6 +506,14 @@ func (r *ToolRegistry) registerTPMTools() {
 					"type":        "integer",
 					"description": "Number of bytes to read (optional, reads entire index if omitted)",
 				},
+				"offset": map[string]interface{}{
+					"type":        "integer",
+					"description": "Byte offset to read from (default 0)",
+				},
+				"password": map[string]interface{}{
+					"type":        "string",
+					"description": "Authorization password for the index or hierarchy its attributes select (optional)",
+				},
 			},
 			"required": []string{"index"},
 		},
@@ -534,6 +534,14 @@ func (r *ToolRegistry) registerTPMTools() {
 					"type":        "string",
 					"description": "Base64-encoded data to write",
 				},
+				"offset": map[string]interface{}{
+					"type":        "integer",
+					"description": "Byte offset to write at (default 0)",
+				},
+				"password": map[string]interface{}{
+					"type":        "string",
+					"description": "Authorization password for the index or hierarchy its attributes select (optional)",
+				},
 			},
 			"required": []string{"index", "data"},
 		},
@@ -549,6 +557,10 @@ func (r *ToolRegistry) registerTPMTools() {
 				"index": map[string]interface{}{
 					"type":        "integer",
 					"description": "NVRAM index to undefine",
+				},
+				"parent_password": map[string]interface{}{
+					"type":        "string",
+					"description": "Owner hierarchy password (optional)",
 				},
 			},
 			"required": []string{"index"},

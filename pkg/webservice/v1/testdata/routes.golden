@@ -311,6 +311,8 @@ GET /api/v1/vtpm/bundles/{id}
 GET /api/v1/vtpm/bundles/{id}/export
 GET /api/v1/vtpm/bundles/{id}/nvram
 GET /api/v1/vtpm/bundles/{id}/path
+GET /api/v1/vtpm/bundles/{id}/pcrs
+GET /api/v1/vtpm/bundles/{id}/state
 GET /api/v1/vtpm/bundles/{id}/tpm-socket
 GET /api/v1/vtpm/templates
 GET /api/v1/vtpm/templates/{id}
@@ -517,6 +519,12 @@ POST /api/v1/tpm/unseal
 POST /api/v1/vpn/peers
 POST /api/v1/vtpm/bundles
 POST /api/v1/vtpm/bundles/import
+POST /api/v1/vtpm/bundles/{id}/pcrs/extend
+POST /api/v1/vtpm/bundles/{id}/quote
+POST /api/v1/vtpm/bundles/{id}/seal
+POST /api/v1/vtpm/bundles/{id}/start
+POST /api/v1/vtpm/bundles/{id}/stop
+POST /api/v1/vtpm/bundles/{id}/unseal
 POST /api/v1/vtpm/bundles/{id}/validate
 POST /api/v1/vtpm/templates
 POST /api/v1/vtpm/templates/{id}/clone

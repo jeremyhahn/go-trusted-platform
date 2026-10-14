@@ -213,7 +213,7 @@ The QUIC server (`quic_service.go`) provides low-latency UDP transport:
 | 0x00-0x02 | Health operations |
 | 0x10-0x1F | vTPM operations |
 | 0x20-0x2F | DNS operations |
-| 0x30-0x3F | Device operations |
+| 0x30-0x3D | Device operations (0x3C retired) |
 | 0x80-0x8F | Certificate operations |
 | 0xA0-0xAF | CA operations |
 

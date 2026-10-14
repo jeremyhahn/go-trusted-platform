@@ -127,27 +127,25 @@ Verified by grep on 2026-08-18:
 | `daemon.NewClusterService` | **none** |
 | `daemon.Daemon.SetClusterService` | **none** |
 
-The gRPC service the daemon actually registers is
-`daemon.ClusterGRPCService` (`pkg/api/daemon/cluster_grpc_service.go`), whose
-own doc comment says *"This stub returns Unimplemented for all methods until the
-full cluster coordinator is wired in."* It does. The REST handlers wrap that
-same stub, and MCP's `platform_cluster_*` tools return
-`ErrClusterNotConfigured` because no provider is ever set.
+The gRPC service the daemon registers, on the TCP listener and the Unix
+socket, is the full `ClusterGRPCService` in `pkg/api/grpc/cluster_service.go`.
+Its `grpc.ClusterService` dependency is the daemon adapter
+`clusterGRPCBackend` (`pkg/api/daemon/cluster_grpc_backend.go`), which
+answers from the same `ClusterServicer` the MCP `platform_cluster_*` tools use.
+The REST handlers call that registered service. `Daemon.SetClusterService`
+sets the servicer for all of them — and nothing calls it.
 
 **So today: the interfaces, the coordinator implementation, the state machine,
 the node registry, the transports and the CLI package all exist, and no shipped
 code path connects them to a consensus engine.** Every cluster call on every
-transport returns "unimplemented" or "not configured". That is the honest state
+transport returns "unavailable" or "not configured". That is the honest state
 of this feature, it is recorded here rather than in a footnote, and
 [api.md](api.md) shows it per capability.
 
-A second, fully-implemented `ClusterGRPCService` exists at
-`pkg/api/grpc/cluster_service.go`, delegating to a `grpc.ClusterService`
-interface with a richer request shape (cluster names, labels, selectors,
-pagination). **It has no implementor and is not registered anywhere.** Two
-service types with the same name in two packages, one stubbed and registered,
-one complete and unregistered, is the single most confusing thing in this
-feature — [engineering.md](engineering.md) §8.
+The daemon once registered a second, stubbed `ClusterGRPCService` of its own
+whose every RPC returned `Unimplemented`, while the complete one went
+unregistered. That stub was deleted (#317); [engineering.md](engineering.md) §8
+describes the adapter that replaced it.
 
 ### Alternatives rejected
 
@@ -176,10 +174,10 @@ feature — [engineering.md](engineering.md) §8.
 | `ExtendedNode`, `ExtendedNodeList`, `ExtendedNodeRegistry` | `pkg/cluster/node.go` | this repo |
 | 37 typed errors | `pkg/cluster/errors.go` | this repo |
 | Daemon service (build tag `cluster`) | `pkg/api/daemon/cluster_service.go` | this repo |
-| Registered gRPC service (**a stub**) | `pkg/api/daemon/cluster_grpc_service.go` | this repo |
-| REST adapter over that stub | `pkg/api/daemon/cluster_rest.go` | this repo |
+| Registration and the adapter over `ClusterServicer` | `pkg/api/daemon/cluster_grpc_backend.go` | this repo |
+| REST adapter over the registered service | `pkg/api/daemon/cluster_rest.go` | this repo |
 | MCP tools and the tag-agnostic bridge | `pkg/api/mcp/cluster_tools.go`, `pkg/api/daemon/mcp_cluster.go`, `mcp_cluster_adapter.go` | this repo |
-| Unregistered full gRPC service | `pkg/api/grpc/cluster_service.go`, `cluster_types.go` | this repo |
+| Registered gRPC service | `pkg/api/grpc/cluster_service.go`, `cluster_types.go` | this repo |
 | CLI package (**not registered on any root command**) | `pkg/cli/commands/cluster/` | this repo |
 | SDK client | `sdk/go/services/cluster/` | this repo |
 | **Raft consensus, elections, log replication, snapshots** | **go-quicraft** | **not this repo** |

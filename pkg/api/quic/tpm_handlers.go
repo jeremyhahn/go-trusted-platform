@@ -22,10 +22,12 @@ import (
 	"time"
 
 	tpmgo "github.com/google/go-tpm/tpm2"
+	"google.golang.org/grpc/status"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmpcr"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 	attestvm "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
@@ -58,9 +60,6 @@ var (
 
 	// ErrTPM2InvalidNumBytes is returned when the requested random byte count is invalid.
 	ErrTPM2InvalidNumBytes = errors.New("invalid number of bytes (maximum 1024)")
-
-	// ErrTPM2InvalidPCRIndex is returned when a PCR index is out of range.
-	ErrTPM2InvalidPCRIndex = errors.New("invalid PCR index (must be 0-23)")
 )
 
 // TPM2HandlerFunc is the function signature for TPM2 sub-opcode handlers.
@@ -939,20 +938,7 @@ func (h *TPM2Handler) handleExtendPCR(ctx context.Context, payload []byte) *quic
 		return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
 	}
 
-	if req.PCRIndex < 0 || req.PCRIndex > 23 {
-		return h.errorResponse(quicwire.StatusInvalidArgument, ErrTPM2InvalidPCRIndex)
-	}
-
-	if len(req.Data) == 0 {
-		return h.errorResponse(quicwire.StatusInvalidArgument, ErrTPM2MissingData)
-	}
-
-	hashAlg := req.HashAlg
-	if hashAlg == "" {
-		hashAlg = "sha256"
-	}
-
-	if err := h.tpm.ExtendPCR(req.PCRIndex, hashAlg, req.Data); err != nil {
+	if err := tpmpcr.Extend(h.tpm, req.PCRIndex, req.HashAlg, req.Data); err != nil {
 		return h.tpmErrorResponse(err)
 	}
 
@@ -1095,15 +1081,7 @@ func (h *TPM2Handler) handleNVRead(ctx context.Context, payload []byte) *quicwir
 	if err := quicwire.DecodePayload(payload, &req); err != nil {
 		return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
 	}
-	if req.Index == 0 {
-		return h.errorResponse(quicwire.StatusInvalidArgument, errors.New("index is required"))
-	}
-	tr := h.tpm.Transport()
-	if tr == nil {
-		return h.errorResponse(quicwire.StatusUnavailable, errors.New("TPM transport not available"))
-	}
-
-	data, err := tpmnv.Read(tr, req.Index, req.Size, req.Offset, passwordBytes(req.Password))
+	data, err := tpmnv.Read(h.tpm.Transport(), req.Index, req.Size, req.Offset, tpmnv.Password(req.Password))
 	if err != nil {
 		return h.tpmErrorResponse(ErrTPM2OperationFailed{Operation: "NVRead", Cause: err})
 	}
@@ -1122,18 +1100,7 @@ func (h *TPM2Handler) handleNVWrite(ctx context.Context, payload []byte) *quicwi
 	if err := quicwire.DecodePayload(payload, &req); err != nil {
 		return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
 	}
-	if req.Index == 0 {
-		return h.errorResponse(quicwire.StatusInvalidArgument, errors.New("index is required"))
-	}
-	if len(req.Data) == 0 {
-		return h.errorResponse(quicwire.StatusInvalidArgument, ErrTPM2MissingData)
-	}
-	tr := h.tpm.Transport()
-	if tr == nil {
-		return h.errorResponse(quicwire.StatusUnavailable, errors.New("TPM transport not available"))
-	}
-
-	if err := tpmnv.Write(tr, req.Index, req.Data, req.Offset, passwordBytes(req.Password)); err != nil {
+	if err := tpmnv.Write(h.tpm.Transport(), req.Index, req.Data, req.Offset, tpmnv.Password(req.Password)); err != nil {
 		return h.tpmErrorResponse(ErrTPM2OperationFailed{Operation: "NVWrite", Cause: err})
 	}
 
@@ -1151,15 +1118,7 @@ func (h *TPM2Handler) handleNVDelete(ctx context.Context, payload []byte) *quicw
 	if err := quicwire.DecodePayload(payload, &req); err != nil {
 		return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
 	}
-	if req.Index == 0 {
-		return h.errorResponse(quicwire.StatusInvalidArgument, errors.New("index is required"))
-	}
-	tr := h.tpm.Transport()
-	if tr == nil {
-		return h.errorResponse(quicwire.StatusUnavailable, errors.New("TPM transport not available"))
-	}
-
-	if err := tpmnv.Undefine(tr, req.Index, passwordBytes(req.ParentPassword)); err != nil {
+	if err := tpmnv.Undefine(h.tpm.Transport(), req.Index, tpmnv.Password(req.ParentPassword)); err != nil {
 		return h.tpmErrorResponse(ErrTPM2OperationFailed{Operation: "NVDelete", Cause: err})
 	}
 
@@ -1195,18 +1154,6 @@ func (h *TPM2Handler) handleNVList(ctx context.Context, payload []byte) *quicwir
 		Indexes:   indexes,
 		Timestamp: time.Now().Unix(),
 	})
-}
-
-// passwordBytes converts an optional password string to the []byte auth
-// value go-tpm expects, returning nil (not an empty slice) for the empty
-// string. nil vs empty is meaningful: a nil PasswordAuth omits the auth
-// value from the command frame, whereas an empty []byte sends a
-// zero-length value that some TPMs reject with TPM_RC_SIZE.
-func passwordBytes(s string) []byte {
-	if s == "" {
-		return nil
-	}
-	return []byte(s)
 }
 
 // handleCreateIDevIDCSR creates an IDevID Certificate Signing Request.
@@ -1340,6 +1287,11 @@ func (h *TPM2Handler) errorResponse(status byte, err error) *quicwire.Response {
 
 // tpmErrorResponse maps TPM errors to appropriate QUIC status codes.
 func (h *TPM2Handler) tpmErrorResponse(err error) *quicwire.Response {
+	// The shared TPM layer (tpmnv, tpmpcr) classifies its own errors.
+	if mapped, ok := grpcCodeToQUICStatus[status.Code(err)]; ok {
+		return h.errorResponse(mapped, err)
+	}
+
 	errMsg := err.Error()
 
 	var status byte

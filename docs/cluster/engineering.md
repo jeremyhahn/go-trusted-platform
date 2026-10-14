@@ -406,19 +406,30 @@ Declared and never returned by any code path:
 
 ## 8. The daemon and API layers
 
-### Two `ClusterGRPCService` types
+### The registered `ClusterGRPCService`
 
-| | `pkg/api/daemon/cluster_grpc_service.go` | `pkg/api/grpc/cluster_service.go` |
-|---|---|---|
-| Behaviour | **Every RPC returns `codes.Unimplemented`** | Full implementation |
-| Delegates to | nothing | `grpc.ClusterService` interface |
-| Constructor | `NewClusterGRPCService(logger)` | `NewClusterGRPCService(logger, service)` |
-| **Registered by the daemon** | **yes** — `daemon.go:885` (TCP) and `:888` (UDS) | **no** |
-| Backs the REST routes | yes (`cluster_rest.go`) | no |
-| Implementors of its service interface | — | **none in this repository** |
+The daemon registers `pkg/api/grpc`'s `ClusterGRPCService` on the TCP server
+and the Unix-socket server through `registerClusterGRPCService`
+(`pkg/api/daemon/cluster_grpc_backend.go`, called at `daemon.go:946`), and
+passes the same service to the REST routes (`daemon.go:1577`). The stub that
+used to be registered in its place was deleted (#317).
 
-The registered one is the stub. The complete one is unreachable. It carries a
-much richer request model — `ClusterBootstrapRequest{ClusterName, NodeName,
+Its `grpc.ClusterService` is `clusterGRPCBackend`, the daemon adapter over
+`ClusterServicer`:
+
+- The servicer is late-bound: `Daemon.SetClusterService` stores it in an
+  `atomic.Pointer`, and the same call feeds the MCP provider. Unset, every
+  method returns `ErrClusterServiceUnavailable` (`Unavailable`).
+- `ClusterServicer` acts on the serving node only, so `Leave` with another
+  node's ID is `ErrLeaveNodeNotLocal`, and the bind/advertise fields of
+  `Bootstrap` and `Join` and `Leave`'s `force` are not applied.
+- `ListNodes` filters, sorts (`id`, `address`; anything else is
+  `ErrUnsupportedNodeSortField`) and pages in the adapter, because the
+  servicer returns the whole membership.
+- [api.md](api.md) §3 and §5 give the per-RPC behaviour and the state
+  projections.
+
+The service carries a much richer request model — `ClusterBootstrapRequest{ClusterName, NodeName,
 BindAddress, BindPort, AdvertiseAddress, AdvertisePort, Labels, Metadata}`,
 `ClusterListNodesRequest{Roles, States, MatchLabels, Page, PageSize, SortBy,
 Ascending}` — plus its own vocabularies (`ClusterStateType`, `NodeRoleType`,
@@ -428,10 +439,12 @@ Ascending}` — plus its own vocabularies (`ClusterStateType`, `NodeRoleType`,
 `ErrCannotLeaveAsLeader`, `ErrNoSeedReachable`, `ErrJoinTimeout`,
 `ErrLeaveTimeout`, `ErrClusterOperationFailed`).
 
-Its `mapError` is the intended gRPC mapping when it is wired:
+Its `mapError`:
 
 | Error | Code |
 |---|---|
+| `ErrClusterServiceUnavailable` | `Unavailable` |
+| `ErrLeaveNodeNotLocal`, `ErrUnsupportedNodeSortField` | `InvalidArgument` |
 | `ErrClusterNotInitialized`, `ErrCannotLeaveAsLeader` | `FailedPrecondition` |
 | `ErrClusterAlreadyInitialized`, `ErrNodeAlreadyInCluster` | `AlreadyExists` |
 | `ErrNodeNotInCluster` | `NotFound` |

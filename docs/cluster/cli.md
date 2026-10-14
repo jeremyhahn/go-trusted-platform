@@ -254,9 +254,10 @@ Where they disagree, the code is right and the legacy file is the defect.
 `ErrClusterStatusFailed`, `ErrClusterNodesFailed`, each carrying the underlying
 error.
 
-Because the daemon's cluster service is an `Unimplemented` stub
-([architecture.md](architecture.md) §3), every one of these verbs would fail
-against a shipped daemon even if the command tree were registered.
+Because no cluster servicer is wired into the daemon
+([architecture.md](architecture.md) §3), its cluster service answers
+`Unavailable`, so every one of these verbs would fail against a shipped daemon
+even if the command tree were registered.
 
 `--output json` is the form to parse; the `table` renderer is for humans and its
 columns are not a stable interface.

@@ -218,7 +218,18 @@ Key algorithms across all transports: `RSA-2048`, `RSA-3072`, `RSA-4096`,
 because the JavaScript SDK sends the index list and bank selection in a body.
 Both dispatch to the same handler.
 
-**Certify has no gRPC method behind it.** It is served by MCP only.
+**Certify is not served on any transport yet.** `platform_tpm_certify` is
+registered but returns `ErrTPMOperationNotImplemented`
+(`pkg/api/daemon/mcp_service.go`). The pinned SDK has the call —
+`TrustedPlatformModule.CertifyKey`, re-exported in `sdk/go/xkms` — but no
+`TPMService` RPC carries it, so wiring it means a new proto method plus REST,
+QUIC, MCP, Unix and CLI handlers together.
+
+**PCR extend has one validator (`pkg/api/tpmpcr`).** QUIC `0x12` and MCP
+`platform_tpm_pcr_extend` both call `tpmpcr.Extend`: the index must be 0–23
+and the data non-empty (both `InvalidArgument`), and the bank defaults to
+`sha256`. MCP takes the bank as `hash_alg`, QUIC as
+`TPM2ExtendPCRRequest.hash_alg`.
 
 **A quote is bound to the connection it is requested over (#482).** The node
 never quotes the nonce as sent: it derives the TLS exporter binding of the
@@ -306,9 +317,17 @@ for it through REST, gRPC or embedded. Conversely **only QUIC and MCP can list**
 the defined indexes — though `Info`'s structured `NVIndex` list gives gRPC/REST
 callers the same information indirectly.
 
-All four NV operations share one wire implementation (`pkg/api/tpmnv`), so the
-auth-hierarchy behaviour is identical on every transport: the index's own public
-attributes select AUTHREAD / OWNERREAD / PPREAD.
+Read, write and undefine share one implementation (`pkg/api/tpmnv`) on gRPC,
+REST (through the gRPC service), QUIC and MCP, so validation and the
+auth-hierarchy behaviour are identical on every transport: the index's own
+public attributes select AUTHREAD / OWNERREAD / PPREAD. Index 0 and empty
+write data are `InvalidArgument`, a TPM with no transport is `Unavailable`,
+a read `size` of 0 reads the whole index, and a `size` past the end of the
+index stops at the end. Offsets are 16-bit: gRPC and REST refuse an `offset`
+above 65535 with `InvalidArgument` (`ErrNVOffsetOutOfRange`).
+The MCP tools take `index`, `size`, `offset` and `password` (read), `index`,
+`data`, `offset` and `password` (write), and `index` and `parent_password`
+(delete) — the same fields as the proto and the QUIC structs.
 
 ---
 

@@ -43,7 +43,7 @@ import (
 //	0x20-0x2D dns               0x99      TPM2 category
 //	0x2E      overlay category  0x9A-0x9D ceremony/piv/luks/fido2
 //	0x2F      gateway category  0x9E      tenant barrier category
-//	0x30-0x3E device            0x9F      bmc category
+//	0x30-0x3D device            0x9F      bmc category
 //	0x3F      ipam category     0xA0-0xA8 ca
 //	0x40-0x4F sdn               0xA9-0xAD iam users
 //	0x50      ntp category      0xAE-0xAF container
@@ -190,7 +190,10 @@ var quicWireOwners = []struct {
 	{0x20, 0x2D, "dns"},
 	{0x2E, 0x2E, "overlay"},
 	{0x2F, 0x2F, "gateway"},
-	{0x30, 0x3E, "device"},
+	{0x30, 0x3B, "device"},
+	{0x3C, 0x3C, "reserved"}, // retired device Deactivate (#317), unclassified
+	{0x3D, 0x3D, "device"},
+	{0x3E, 0x3E, "reserved"}, // retired device GetMetrics (#317), unclassified
 	{0x3F, 0x3F, "ipam"},
 	{0x40, 0x4F, "sdn"},
 	{0x50, 0x50, "ntp"},
@@ -353,9 +356,7 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpDeviceDeleteProfile":       {value: quicwire.OpDeviceDeleteProfile, mode: wireDirect, family: "device"},
 	"OpDeviceAttest":              {value: quicwire.OpDeviceAttest, mode: wireDirect, family: "device"},
 	"OpDeviceActivate":            {value: quicwire.OpDeviceActivate, mode: wireDirect, family: "device"},
-	"OpDeviceDeactivate":          {value: quicwire.OpDeviceDeactivate, mode: wireDirect, family: "device"},
 	"OpDeviceGetState":            {value: quicwire.OpDeviceGetState, mode: wireDirect, family: "device"},
-	"OpDeviceGetMetrics":          {value: quicwire.OpDeviceGetMetrics, mode: wireDirect, family: "device"},
 	"OpIPAMCategory":              {value: quicwire.OpIPAMCategory, mode: wireDirect, family: "ipam"},
 	"OpSDNGetPortState":           {value: quicwire.OpSDNGetPortState, mode: wireDirect, family: "sdn"},
 	"OpSDNSetPortState":           {value: quicwire.OpSDNSetPortState, mode: wireDirect, family: "sdn"},

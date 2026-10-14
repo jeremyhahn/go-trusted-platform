@@ -140,3 +140,38 @@ func TestQUICDeviceAttest_IsNoLongerNotImplemented(t *testing.T) {
 	assert.True(t, decoded.GetVerified(), "QUIC must reach the same verdict as gRPC over the same verifier")
 	assert.True(t, decoded.GetAkCertificateVerified())
 }
+
+// TestQUICDeviceDispatcher_RetiredOpcodesAreUnknown pins #317: the device
+// dispatcher has no stub for Deactivate (0x3C) or GetMetrics (0x3E), which
+// no transport ever implemented and which are retired, nor for 0x6D, which
+// the IDevID handler owns. Each answers the generic unknown-opcode error.
+func TestQUICDeviceDispatcher_RetiredOpcodesAreUnknown(t *testing.T) {
+	h := &QUICServiceHandler{logger: logging.DefaultLogger()}
+
+	for _, opcode := range []byte{0x3C, 0x3E, quicwire.OpDeviceAttributes} {
+		resp := h.handleDeviceOperation(context.Background(), &quicwire.Request{Opcode: opcode})
+
+		require.NotNil(t, resp)
+		assert.Equal(t, quicwire.StatusNotImplemented, resp.Status, "opcode 0x%02X", opcode)
+		assert.Equal(t, ErrQUICUnknownOpcode{Opcode: opcode}.Error(), string(resp.Payload), "opcode 0x%02X", opcode)
+	}
+}
+
+// TestQUICDeviceDispatcher_LiveOpcodeReachesItsHandler is the counterpart:
+// OpDeviceGetState, the device range's last opcode, still reaches its
+// handler, which refuses a request without a device id.
+func TestQUICDeviceDispatcher_LiveOpcodeReachesItsHandler(t *testing.T) {
+	h := &QUICServiceHandler{logger: logging.DefaultLogger()}
+
+	payload, err := quicwire.EncodePayload(&deviceGetWireRequest{})
+	require.NoError(t, err)
+
+	resp := h.handleDeviceOperation(context.Background(), &quicwire.Request{
+		Opcode:  quicwire.OpDeviceGetState,
+		Payload: payload,
+	})
+
+	require.NotNil(t, resp)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, ErrQUICMissingField{Field: "id"}.Error(), string(resp.Payload))
+}

@@ -84,6 +84,16 @@ func (r *VTPMRouter) registerBundleRoutes(router *mux.Router) {
 	router.HandleFunc("/bundles/{id}/path", r.handlers.GetBundlePath).Methods("GET")
 	router.HandleFunc("/bundles/{id}/tpm-socket", r.handlers.GetTPMSocketPath).Methods("GET")
 	router.HandleFunc("/bundles/{id}/nvram", r.handlers.GetNVRAMPath).Methods("GET")
+
+	// Bundle runtime routes
+	router.HandleFunc("/bundles/{id}/start", r.handlers.StartVTPM).Methods("POST")
+	router.HandleFunc("/bundles/{id}/stop", r.handlers.StopVTPM).Methods("POST")
+	router.HandleFunc("/bundles/{id}/state", r.handlers.GetVTPMState).Methods("GET")
+	router.HandleFunc("/bundles/{id}/quote", r.handlers.QuoteVTPM).Methods("POST")
+	router.HandleFunc("/bundles/{id}/seal", r.handlers.SealVTPM).Methods("POST")
+	router.HandleFunc("/bundles/{id}/unseal", r.handlers.UnsealVTPM).Methods("POST")
+	router.HandleFunc("/bundles/{id}/pcrs", r.handlers.ReadVTPMPCR).Methods("GET")
+	router.HandleFunc("/bundles/{id}/pcrs/extend", r.handlers.ExtendVTPMPCR).Methods("POST")
 }
 
 // registerTemplateRoutes registers template management endpoints.

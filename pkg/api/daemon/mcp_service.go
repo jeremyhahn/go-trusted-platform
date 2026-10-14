@@ -37,6 +37,8 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmpcr"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
@@ -3892,17 +3894,21 @@ func (p *MCPServiceProvider) TPMReadPCRs(ctx context.Context, indices []int) (in
 	}, nil
 }
 
-// TPMExtendPCR extends a PCR with measurement data.
-func (p *MCPServiceProvider) TPMExtendPCR(ctx context.Context, pcrIndex int, data []byte) (interface{}, error) {
+// TPMExtendPCR extends a PCR in the hashAlg bank (sha256 when empty)
+// through the shared tpmpcr layer the QUIC handler uses.
+func (p *MCPServiceProvider) TPMExtendPCR(ctx context.Context, pcrIndex int, hashAlg string, data []byte) (interface{}, error) {
 	if p.tpm2Service == nil {
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	// PCR extension is typically done through the measurement log
-	// The TPM interface extends via Quote or direct PCR manipulation
-	// For now, return not implemented as the underlying API requires
-	// more context (hash algorithm selection, etc.)
-	return nil, ErrTPMOperationNotImplemented{Operation: "ExtendPCR"}
+	if err := tpmpcr.Extend(p.tpm2Service, pcrIndex, hashAlg, data); err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("PCR %d extended", pcrIndex),
+	}, nil
 }
 
 // TPMEventLog retrieves the TPM event log.
@@ -4011,40 +4017,74 @@ func (p *MCPServiceProvider) TPMCertify(ctx context.Context, keyHandle int) (int
 	return nil, ErrTPMOperationNotImplemented{Operation: "Certify"}
 }
 
-// TPMNVList lists NVRAM indices.
+// TPMNVList lists the NV indexes defined on the TPM, from the same
+// FixedProperties inventory the QUIC and gRPC transports report.
 func (p *MCPServiceProvider) TPMNVList(ctx context.Context) (interface{}, error) {
 	if p.tpm2Service == nil {
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	return nil, ErrTPMOperationNotImplemented{Operation: "NVList"}
+	props, err := p.tpm2Service.FixedProperties()
+	if err != nil {
+		return nil, err
+	}
+
+	indexes := make([]map[string]interface{}, 0, len(props.NVIndexes))
+	for _, ix := range props.NVIndexes {
+		indexes = append(indexes, map[string]interface{}{
+			"handle":     uint32(ix.Handle),
+			"type":       ix.Type,
+			"size":       uint32(ix.Size),
+			"auth_read":  ix.AuthRead,
+			"auth_write": ix.AuthWrite,
+		})
+	}
+
+	return map[string]interface{}{"indexes": indexes}, nil
 }
 
-// TPMNVRead reads data from an NVRAM index.
-func (p *MCPServiceProvider) TPMNVRead(ctx context.Context, index int, size int) ([]byte, error) {
+// TPMNVRead reads size bytes (the whole index when 0) at offset from an
+// NV index through the shared tpmnv layer.
+func (p *MCPServiceProvider) TPMNVRead(ctx context.Context, index uint32, size, offset uint16, password string) ([]byte, error) {
 	if p.tpm2Service == nil {
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	return nil, ErrTPMOperationNotImplemented{Operation: "NVRead"}
+	return tpmnv.Read(p.tpm2Service.Transport(), index, size, offset, tpmnv.Password(password))
 }
 
-// TPMNVWrite writes data to an NVRAM index.
-func (p *MCPServiceProvider) TPMNVWrite(ctx context.Context, index int, data []byte) (interface{}, error) {
+// TPMNVWrite writes data at offset to an NV index through the shared
+// tpmnv layer.
+func (p *MCPServiceProvider) TPMNVWrite(ctx context.Context, index uint32, data []byte, offset uint16, password string) (interface{}, error) {
 	if p.tpm2Service == nil {
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	return nil, ErrTPMOperationNotImplemented{Operation: "NVWrite"}
+	if err := tpmnv.Write(p.tpm2Service.Transport(), index, data, offset, tpmnv.Password(password)); err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("wrote %d bytes to NV index 0x%08X", len(data), index),
+	}, nil
 }
 
-// TPMNVDelete undefines an NVRAM index.
-func (p *MCPServiceProvider) TPMNVDelete(ctx context.Context, index int) (interface{}, error) {
+// TPMNVDelete undefines an NV index under the owner hierarchy, which
+// parentPassword authorizes, through the shared tpmnv layer.
+func (p *MCPServiceProvider) TPMNVDelete(ctx context.Context, index uint32, parentPassword string) (interface{}, error) {
 	if p.tpm2Service == nil {
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	return nil, ErrTPMOperationNotImplemented{Operation: "NVDelete"}
+	if err := tpmnv.Undefine(p.tpm2Service.Transport(), index, tpmnv.Password(parentPassword)); err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("NV index 0x%08X undefined", index),
+	}, nil
 }
 
 // TPMPlatform retrieves platform-level TPM attributes.

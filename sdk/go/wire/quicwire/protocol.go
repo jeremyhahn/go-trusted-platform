@@ -141,9 +141,10 @@ const (
 	OpDeviceDeleteProfile byte = 0x39
 	OpDeviceAttest        byte = 0x3A
 	OpDeviceActivate      byte = 0x3B
-	OpDeviceDeactivate    byte = 0x3C
-	OpDeviceGetState      byte = 0x3D
-	OpDeviceGetMetrics    byte = 0x3E
+	// 0x3C (Deactivate) and 0x3E (GetMetrics) were retired unimplemented:
+	// no transport or service ever carried either operation (#317). Device
+	// suspension is DeviceSubDisable; do not reuse them.
+	OpDeviceGetState byte = 0x3D
 
 	// SDN IPAM Category Opcode (0x3F)
 	// Category opcode that multiplexes IPAM sub-operations.
@@ -826,9 +827,7 @@ var opcodeNames = map[byte]string{
 	OpDeviceDeleteProfile: "DeviceDeleteProfile",
 	OpDeviceAttest:        "DeviceAttest",
 	OpDeviceActivate:      "DeviceActivate",
-	OpDeviceDeactivate:    "DeviceDeactivate",
 	OpDeviceGetState:      "DeviceGetState",
-	OpDeviceGetMetrics:    "DeviceGetMetrics",
 	OpIPAMCategory:        "IPAMCategory",
 
 	// SDN

@@ -328,11 +328,9 @@ var opcodePermissions = map[byte]OpcodePermission{
 	quicwire.OpDeviceDeleteProfile: deviceDelete,
 	// Attestation persists: the first verified quote seeds the profile's PCR
 	// baseline and a failed one quarantines the device.
-	quicwire.OpDeviceAttest:     deviceWrite,
-	quicwire.OpDeviceActivate:   deviceWrite,
-	quicwire.OpDeviceDeactivate: deviceWrite,
-	quicwire.OpDeviceGetState:   deviceRead,
-	quicwire.OpDeviceGetMetrics: deviceRead,
+	quicwire.OpDeviceAttest:   deviceWrite,
+	quicwire.OpDeviceActivate: deviceWrite,
+	quicwire.OpDeviceGetState: deviceRead,
 
 	// SDN (gRPC SDNService)
 	quicwire.OpSDNGetPortState: sdnRead,

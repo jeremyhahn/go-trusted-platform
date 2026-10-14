@@ -695,7 +695,6 @@ func TestMapGRPCMethodToREST_KnownMethods(t *testing.T) {
 		{"/platform.v1.CAService/IssueCertificate", "/api/v1/ca/certificates", http.MethodPost},
 		{"/platform.v1.CAService/SignCSR", "/api/v1/ca/sign-csr", http.MethodPost},
 		{"/platform.v1.KeyManagementService/Encrypt", "/api/v1/kms/encrypt", http.MethodPost},
-		{"/platform.v1.VTPMService/Create", "/api/v1/vtpm/instances", http.MethodPost},
 	}
 
 	for _, tt := range tests {

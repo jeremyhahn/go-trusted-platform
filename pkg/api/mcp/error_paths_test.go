@@ -274,18 +274,18 @@ func (e *errorServiceProvider) TPMNVList(ctx context.Context) (interface{}, erro
 	return e.mockServiceProvider.TPMNVList(ctx)
 }
 
-func (e *errorServiceProvider) TPMNVRead(ctx context.Context, index int, size int) ([]byte, error) {
+func (e *errorServiceProvider) TPMNVRead(ctx context.Context, index uint32, size, offset uint16, password string) ([]byte, error) {
 	if e.shouldFail("TPMNVRead") {
 		return nil, ErrMockServiceError
 	}
-	return e.mockServiceProvider.TPMNVRead(ctx, index, size)
+	return e.mockServiceProvider.TPMNVRead(ctx, index, size, offset, password)
 }
 
-func (e *errorServiceProvider) TPMNVDelete(ctx context.Context, index int) (interface{}, error) {
+func (e *errorServiceProvider) TPMNVDelete(ctx context.Context, index uint32, parentPassword string) (interface{}, error) {
 	if e.shouldFail("TPMNVDelete") {
 		return nil, ErrMockServiceError
 	}
-	return e.mockServiceProvider.TPMNVDelete(ctx, index)
+	return e.mockServiceProvider.TPMNVDelete(ctx, index, parentPassword)
 }
 
 func (e *errorServiceProvider) TPMPlatform(ctx context.Context) (interface{}, error) {

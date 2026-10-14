@@ -49,6 +49,9 @@ type mockServiceProvider struct {
 	vtpmExtendPCRFunc func(ctx context.Context, name string, pcr int, data []byte) error
 	vtpmReadPCRFunc   func(ctx context.Context, name string, pcr int) ([]byte, error)
 
+	// tpmCall records the arguments of the last TPM PCR extend or NV call.
+	tpmCall tpmCall
+
 	// vTPM extended operations
 	vtpmGetFunc              func(ctx context.Context, name string) (interface{}, error)
 	vtpmValidateFunc         func(ctx context.Context, name string) (interface{}, error)
@@ -2485,7 +2488,19 @@ func (m *mockServiceProvider) TPMReadPCRs(ctx context.Context, indices []int) (i
 	return map[string]interface{}{"banks": []interface{}{}}, nil
 }
 
-func (m *mockServiceProvider) TPMExtendPCR(ctx context.Context, pcrIndex int, data []byte) (interface{}, error) {
+// tpmCall is the argument set a TPM PCR extend or NV call received.
+type tpmCall struct {
+	pcr      int
+	hashAlg  string
+	index    uint32
+	size     uint16
+	offset   uint16
+	data     []byte
+	password string
+}
+
+func (m *mockServiceProvider) TPMExtendPCR(ctx context.Context, pcrIndex int, hashAlg string, data []byte) (interface{}, error) {
+	m.tpmCall = tpmCall{pcr: pcrIndex, hashAlg: hashAlg, data: data}
 	return map[string]interface{}{"success": true}, nil
 }
 
@@ -2517,15 +2532,18 @@ func (m *mockServiceProvider) TPMNVList(ctx context.Context) (interface{}, error
 	return map[string]interface{}{"indices": []interface{}{}}, nil
 }
 
-func (m *mockServiceProvider) TPMNVRead(ctx context.Context, index int, size int) ([]byte, error) {
+func (m *mockServiceProvider) TPMNVRead(ctx context.Context, index uint32, size, offset uint16, password string) ([]byte, error) {
+	m.tpmCall = tpmCall{index: index, size: size, offset: offset, password: password}
 	return []byte("nvdata"), nil
 }
 
-func (m *mockServiceProvider) TPMNVWrite(ctx context.Context, index int, data []byte) (interface{}, error) {
+func (m *mockServiceProvider) TPMNVWrite(ctx context.Context, index uint32, data []byte, offset uint16, password string) (interface{}, error) {
+	m.tpmCall = tpmCall{index: index, data: data, offset: offset, password: password}
 	return map[string]interface{}{"success": true}, nil
 }
 
-func (m *mockServiceProvider) TPMNVDelete(ctx context.Context, index int) (interface{}, error) {
+func (m *mockServiceProvider) TPMNVDelete(ctx context.Context, index uint32, parentPassword string) (interface{}, error) {
+	m.tpmCall = tpmCall{index: index, password: parentPassword}
 	return map[string]interface{}{"success": true}, nil
 }
 

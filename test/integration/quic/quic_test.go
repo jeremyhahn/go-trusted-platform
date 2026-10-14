@@ -929,19 +929,12 @@ func TestQUICDevice(t *testing.T) {
 		assert.NotNil(t, resp.GetPagination(), "Pagination should be set")
 	})
 
-	t.Run("Device GetMetrics is not implemented", func(t *testing.T) {
-		resp, err := client.SendExpectStatus(ctx, quicwire.OpDeviceGetMetrics, nil, quicwire.StatusNotImplemented)
-		if err != nil {
-			var unexpectedStatus ErrUnexpectedStatus
-			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("Device service not available")
-				}
-			}
-		}
-		if resp != nil {
-			assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
-		}
+	// 0x3E was OpDeviceGetMetrics, retired unimplemented (#317): the byte has
+	// no permission entry, so the guard refuses it before any dispatch.
+	t.Run("Retired device byte 0x3E is refused as unclassified", func(t *testing.T) {
+		resp, err := client.SendExpectStatus(ctx, 0x3E, nil, quicwire.StatusPermissionDenied)
+		require.NoError(t, err)
+		assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
 	})
 
 	t.Run("Device Register without device returns error", func(t *testing.T) {

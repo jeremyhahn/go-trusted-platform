@@ -233,6 +233,37 @@ func (e ErrNilClusterService) Error() string {
 	return "cluster service is nil"
 }
 
+// ErrClusterServiceUnavailable is returned when no cluster coordinator is
+// wired behind the service, so no cluster operation can run on this node.
+type ErrClusterServiceUnavailable struct{}
+
+func (e ErrClusterServiceUnavailable) Error() string {
+	return "cluster service not configured"
+}
+
+// ErrLeaveNodeNotLocal is returned when a leave request names a node other
+// than the one serving it. A node only removes itself; the named node must
+// be asked directly.
+type ErrLeaveNodeNotLocal struct {
+	NodeID      string
+	LocalNodeID string
+}
+
+func (e ErrLeaveNodeNotLocal) Error() string {
+	return "leave removes the serving node " + e.LocalNodeID + ", not node " + e.NodeID +
+		"; send the leave request to node " + e.NodeID
+}
+
+// ErrUnsupportedNodeSortField is returned when a list request sorts by a
+// field the node listing does not support.
+type ErrUnsupportedNodeSortField struct {
+	Field string
+}
+
+func (e ErrUnsupportedNodeSortField) Error() string {
+	return "unsupported node sort field: " + e.Field
+}
+
 // ErrClusterNotInitialized is returned when the cluster is not initialized.
 type ErrClusterNotInitialized struct{}
 

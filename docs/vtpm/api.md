@@ -54,33 +54,58 @@ Note the REST import route is `POST /api/v1/vtpm/bundles/import` and is
 registered **before** the `{id}` routes, so `import` is not swallowed as a
 bundle id.
 
+`GET /api/v1/vtpm/bundles` filters on the query parameters `mode`, `labels`
+(repeated, each `key=value`), `limit`, `offset` and `device_profile_id`. `mode`
+takes `template` or `pre-assigned`, or the gRPC enum names
+`BUNDLE_MODE_TEMPLATE` and `BUNDLE_MODE_PRE_ASSIGNED` that the SDK sends; the
+create body's `mode` accepts the same. A `labels` value without `=` or an
+empty key, or a `device_profile_id` that is not an unsigned integer, is 400.
+Create takes `device_profile_id`, and every manifest returns it.
+
 ---
 
 ## 4. Runtime operations
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Start vTPM | `MISSING — docs/13 G7` | `StartVTPM` | `OpVTPMStart` (`0x12`) | `vtpm_start` | ✅ |
-| Stop vTPM | `MISSING — docs/13 G7` | `StopVTPM` | `OpVTPMStop` (`0x13`) | `vtpm_stop` | ✅ |
-| Is running | `MISSING — docs/13 G7` | `IsVTPMRunning` | `OpVTPMIsRunning` (`0x0F`) | `vtpm_is_running` | ✅ |
+| Start vTPM | `POST /api/v1/vtpm/bundles/{id}/start` | `StartVTPM` | `OpVTPMStart` (`0x12`) | `vtpm_start` | ✅ |
+| Stop vTPM | `POST /api/v1/vtpm/bundles/{id}/stop` | `StopVTPM` | `OpVTPMStop` (`0x13`) | `vtpm_stop` | ✅ |
+| Is running | `GET /api/v1/vtpm/bundles/{id}/state` | `IsVTPMRunning` | `OpVTPMIsRunning` (`0x0F`) | `vtpm_is_running` | ✅ |
 | Get state | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpVTPMGetState` (`0x14`) | `MISSING — docs/13 G7` | — |
-| Quote | `MISSING — docs/13 G7` | `QuoteVTPM` | `OpVTPMQuote` (`0x19`) | `vtpm_bundle_quote`, `vtpm_quote` | ✅ |
+| Quote | `POST /api/v1/vtpm/bundles/{id}/quote` | `QuoteVTPM` | `OpVTPMQuote` (`0x19`) | `vtpm_bundle_quote`, `vtpm_quote` | ✅ |
 | Verify quote | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpVTPMVerifyQuote` (`0x1A`) | `MISSING — docs/13 G7` | — |
-| Seal | `MISSING — docs/13 G7` | `SealVTPM` | `OpVTPMSeal` (`0x1D`) | `vtpm_bundle_seal`, `vtpm_seal` | ✅ |
-| Unseal | `MISSING — docs/13 G7` | `UnsealVTPM` | `OpVTPMUnseal` (`0x1E`) | `vtpm_bundle_unseal`, `vtpm_unseal` | ✅ |
-| Extend PCR | `MISSING — docs/13 G7` | `ExtendVTPMPCR` | `OpVTPMExtendPCR` (`0x1B`) | `vtpm_bundle_pcr_extend`, `vtpm_extend_pcr` | ✅ |
-| Read PCR | `MISSING — docs/13 G7` | `ReadVTPMPCR` | `OpVTPMReadPCR` (`0x1C`) | `vtpm_bundle_pcr_read`, `vtpm_read_pcr` | ✅ |
+| Seal | `POST /api/v1/vtpm/bundles/{id}/seal` | `SealVTPM` | `OpVTPMSeal` (`0x1D`) | `vtpm_bundle_seal`, `vtpm_seal` | ✅ |
+| Unseal | `POST /api/v1/vtpm/bundles/{id}/unseal` | `UnsealVTPM` | `OpVTPMUnseal` (`0x1E`) | `vtpm_bundle_unseal`, `vtpm_unseal` | ✅ |
+| Extend PCR | `POST /api/v1/vtpm/bundles/{id}/pcrs/extend` | `ExtendVTPMPCR` | `OpVTPMExtendPCR` (`0x1B`) | `vtpm_bundle_pcr_extend`, `vtpm_extend_pcr` | ✅ |
+| Read PCR | `GET /api/v1/vtpm/bundles/{id}/pcrs?pcr_index=N` | `ReadVTPMPCR` | `OpVTPMReadPCR` (`0x1C`) | `vtpm_bundle_pcr_read`, `vtpm_read_pcr` | ✅ |
 | Get EK | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpVTPMGetEK` (`0x16`) | `MISSING — docs/13 G7` | — |
 | Get AK | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpVTPMGetAK` (`0x17`) | `MISSING — docs/13 G7` | — |
 | Create AK | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpVTPMCreateAK` (`0x18`) | `MISSING — docs/13 G7` | — |
 | Get random | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpVTPMGetRandom` (`0x1F`) | `MISSING — docs/13 G7` | — |
 
-**Not one runtime operation is on REST.** REST carries the whole
-template/bundle *management* surface and none of the *runtime* surface — no
-start, no stop, no quote, no seal, no PCR. An operator on REST can create a
-vTPM bundle and cannot start it.
+**REST carries every runtime operation gRPC carries.** The bundle id is the
+`{id}` path segment and never appears in the body. Request and reply bodies use
+the gRPC message field names in snake_case, with bytes base64-encoded, so the
+SDK REST transport sends and decodes the `platform.v1` messages unchanged:
 
-Five operations (get state, verify quote, get EK, get AK, create AK, get random)
+| Route | Body | Reply payload |
+|---|---|---|
+| `POST …/{id}/start` | — | `status`, `bundle_id`, `running`, `socket_path` |
+| `POST …/{id}/stop` | — | `status`, `bundle_id`, `stopped` |
+| `GET …/{id}/state` | — | `bundle_id`, `running`, `socket_path`; 404 for an unknown bundle |
+| `POST …/{id}/quote` | `nonce`, `pcrs` | `status`, `bundle_id`, `quote`, `signature`, `pcr_values`, `hash_algorithm` |
+| `POST …/{id}/seal` | `data`, `pcrs`, `auth_value` | `status`, `bundle_id`, `sealed_data` |
+| `POST …/{id}/unseal` | `sealed_data`, `auth_value` | `status`, `bundle_id`, `data` |
+| `POST …/{id}/pcrs/extend` | `pcr_index`, `data` | `status`, `bundle_id`, `pcr_index`, `extended` |
+| `GET …/{id}/pcrs?pcr_index=N` | — | `status`, `bundle_id`, `pcr_index`, `value` |
+
+Read PCR names the index in the query, not the path, because PCR 0 is a valid
+index and the SDK leaves a zero value out of the request; an absent
+`pcr_index` reads PCR 0. The handlers are in
+`pkg/webservice/v1/rest/vtpm/runtime.go` and call the same `vtpm.VTPMService`
+as gRPC and QUIC.
+
+Six operations (get state, verify quote, get EK, get AK, create AK, get random)
 are **QUIC-only** — no gRPC, no REST, no MCP.
 
 ---
@@ -129,7 +154,12 @@ On MCP, ten vTPM tool names carry a permission; the rest are refused. See §5.
 `/api/v1/vtpm/**` requires an authenticated caller holding `admin`. A vTPM
 bundle carries the sealed state of a guest's virtual TPM, so create, import,
 export, validate and delete are all privileged, as are the NVRAM and
-tpm-socket reads on a bundle.
+tpm-socket reads on a bundle. The runtime routes in §4 sit behind the same
+gate: no vTPM route is reachable without `admin`.
+
+**REST has no read/write tiers.** The gRPC and MCP tiers (unseal in `read`,
+seal in `write`) do not apply on REST. `admin` is the only gate, so reading a
+PCR and sealing under a bundle need the same role.
 
 Until #165 the surface answered callers with no token at all. See
 [`docs/auth/architecture.md`](../auth/architecture.md) §6c. **This does not
@@ -162,6 +192,14 @@ an unrecognized value silently became RSA.
 
 **503 on a runtime operation usually means the swtpm daemon is not running**
 (`ErrSwtpmSocketUnavailable`) — start the bundle before quoting it.
+
+The REST runtime routes (§4) also return:
+
+- 404 for `ErrBundleNotFound`.
+- 409 for `ErrVTPMNotRunning` or `ErrVTPMAlreadyRunning`: the bundle is not in
+  the state the operation needs.
+- 400 for `ErrInvalidNonce`, `ErrInvalidPCRIndex`, or a `pcr_index` query value
+  that is not an integer.
 
 QUIC payloads are capped at `MaxPayloadSize` (16 MiB), which is why bundle
 export and import are streaming on gRPC.

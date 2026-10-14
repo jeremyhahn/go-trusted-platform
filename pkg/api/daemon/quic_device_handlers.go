@@ -157,12 +157,6 @@ func (h *QUICServiceHandler) handleDeviceOperation(ctx context.Context, req *qui
 		return h.handleDeviceGetState(ctx, req)
 	case quicwire.OpDeviceAttest:
 		return h.handleDeviceAttest(ctx, req)
-	case quicwire.OpDeviceDeactivate:
-		return h.errorResponse(quicwire.StatusNotImplemented, ErrDeviceOperationNotImplemented{Operation: "deactivate"})
-	case quicwire.OpDeviceGetMetrics:
-		return h.errorResponse(quicwire.StatusNotImplemented, ErrDeviceOperationNotImplemented{Operation: "get_metrics"})
-	case quicwire.OpDeviceAttributes:
-		return h.errorResponse(quicwire.StatusNotImplemented, ErrDeviceOperationNotImplemented{Operation: "attributes"})
 	default:
 		return h.errorResponse(quicwire.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: req.Opcode})
 	}

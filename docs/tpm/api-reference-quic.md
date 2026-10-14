@@ -312,9 +312,9 @@ type TPM2ReadPCRsResponse struct {
 **Request Payload:**
 ```go
 type TPM2ExtendPCRRequest struct {
-    Index  uint32 `codec:"index"`
-    Data   []byte `codec:"data"`
-    HashAlg string `codec:"hash_alg"`
+    PCRIndex int    `codec:"pcr_index"` // 0-23
+    HashAlg  string `codec:"hash_alg"`  // default sha256
+    Data     []byte `codec:"data"`      // required
 }
 ```
 
@@ -373,13 +373,16 @@ type TPM2UnsealResponse struct {
 ```go
 type TPM2NVReadRequest struct {
     Index    uint32 `codec:"index"`
-    DataSize uint16 `codec:"data_size"`
+    Size     uint16 `codec:"size"`     // 0 reads the whole index
+    Offset   uint16 `codec:"offset"`
+    Password string `codec:"password"`
 }
 ```
 
 **Response Payload:**
 ```go
 type TPM2NVReadResponse struct {
+    Index     uint32 `codec:"index"`
     Data      []byte `codec:"data"`
     Timestamp int64  `codec:"timestamp"`
 }
@@ -392,19 +395,49 @@ type TPM2NVReadResponse struct {
 type TPM2NVWriteRequest struct {
     Index    uint32 `codec:"index"`
     Data     []byte `codec:"data"`
+    Offset   uint16 `codec:"offset"`
     Password string `codec:"password"`
-    Offset   uint32 `codec:"offset"`
 }
 ```
 
-**Response Payload:**
+**Response Payload:** `TPM2StatusResponse`.
+
+### NVDelete (0x1A)
+
+**Request Payload:**
 ```go
-type TPM2StatusResponse struct {
-    Success   bool   `codec:"success"`
-    Message   string `codec:"message"`
-    Timestamp int64  `codec:"timestamp"`
+type TPM2NVDeleteRequest struct {
+    Index          uint32 `codec:"index"`
+    ParentPassword string `codec:"parent_password"` // owner hierarchy
 }
 ```
+
+**Response Payload:** `TPM2StatusResponse`.
+
+### NVList (0x1B)
+
+No request payload.
+
+**Response Payload:**
+```go
+type TPM2NVListResponse struct {
+    Indexes   []*TPM2NVIndex `codec:"indexes"`
+    Timestamp int64          `codec:"timestamp"`
+}
+
+type TPM2NVIndex struct {
+    Handle    uint32 `codec:"handle"`
+    Type      string `codec:"type"`
+    Size      uint32 `codec:"size"`
+    AuthRead  bool   `codec:"auth_read"`
+    AuthWrite bool   `codec:"auth_write"`
+}
+```
+
+Index 0, empty write data and a PCR index outside 0–23 are refused with
+`InvalidArgument` before the TPM is touched. The NV checks are shared with
+gRPC, REST and MCP (`pkg/api/tpmnv`), the PCR checks with MCP
+(`pkg/api/tpmpcr`).
 
 ## Connection Example
 

@@ -314,6 +314,12 @@ func (s *ClusterGRPCService) mapError(operation string, err error) error {
 
 	// Check for specific cluster error types
 	switch e := err.(type) {
+	case ErrClusterServiceUnavailable:
+		return status.Error(codes.Unavailable, e.Error())
+	case ErrLeaveNodeNotLocal:
+		return status.Error(codes.InvalidArgument, e.Error())
+	case ErrUnsupportedNodeSortField:
+		return status.Error(codes.InvalidArgument, e.Error())
 	case ErrClusterNotInitialized:
 		return status.Error(codes.FailedPrecondition, e.Error())
 	case ErrClusterAlreadyInitialized:

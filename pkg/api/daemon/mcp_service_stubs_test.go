@@ -368,7 +368,7 @@ func TestMCPServiceProvider_TPMStubs(t *testing.T) {
 			return err
 		}},
 		{"TPMReadPCRs", func() error { _, err := p.TPMReadPCRs(ctx, []int{0}); return err }},
-		{"TPMExtendPCR", func() error { _, err := p.TPMExtendPCR(ctx, 0, []byte("d")); return err }},
+		{"TPMExtendPCR", func() error { _, err := p.TPMExtendPCR(ctx, 0, "", []byte("d")); return err }},
 		{"TPMEventLog", func() error { _, err := p.TPMEventLog(ctx); return err }},
 		{"TPMCapabilities", func() error { _, err := p.TPMCapabilities(ctx); return err }},
 		{"TPMRandom", func() error { _, err := p.TPMRandom(ctx, 32); return err }},
@@ -376,9 +376,9 @@ func TestMCPServiceProvider_TPMStubs(t *testing.T) {
 		{"TPMUnseal", func() error { _, err := p.TPMUnseal(ctx, "cn"); return err }},
 		{"TPMCertify", func() error { _, err := p.TPMCertify(ctx, 1); return err }},
 		{"TPMNVList", func() error { _, err := p.TPMNVList(ctx); return err }},
-		{"TPMNVRead", func() error { _, err := p.TPMNVRead(ctx, 1, 32); return err }},
-		{"TPMNVWrite", func() error { _, err := p.TPMNVWrite(ctx, 1, []byte("d")); return err }},
-		{"TPMNVDelete", func() error { _, err := p.TPMNVDelete(ctx, 1); return err }},
+		{"TPMNVRead", func() error { _, err := p.TPMNVRead(ctx, 1, 32, 0, ""); return err }},
+		{"TPMNVWrite", func() error { _, err := p.TPMNVWrite(ctx, 1, []byte("d"), 0, ""); return err }},
+		{"TPMNVDelete", func() error { _, err := p.TPMNVDelete(ctx, 1, ""); return err }},
 		{"TPMPlatform", func() error { _, err := p.TPMPlatform(ctx); return err }},
 	}
 

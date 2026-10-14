@@ -159,6 +159,7 @@ func (h *VTPMHandlers) CreateBundle(w http.ResponseWriter, r *http.Request) {
 		SecureBootEnabled: req.SecureBootEnabled,
 		Labels:            req.Labels,
 		TemplateID:        req.TemplateID,
+		DeviceProfileID:   req.DeviceProfileID,
 	}
 
 	bundle, err := h.service.CreateBundle(ctx, opts)
@@ -223,13 +224,27 @@ func (h *VTPMHandlers) ListBundles(w http.ResponseWriter, r *http.Request) {
 		mode = h.parseBundleMode(modeStr)
 	}
 
+	labels, err := parseLabelsQuery(r)
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+
+	profileID, err := parseDeviceProfileIDQuery(r)
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+
 	ctx, cancel := h.createContext()
 	defer cancel()
 
 	opts := &vtpm.ListOptions{
-		Mode:   mode,
-		Limit:  limit,
-		Offset: offset,
+		Mode:            mode,
+		Labels:          labels,
+		Limit:           limit,
+		Offset:          offset,
+		DeviceProfileID: profileID,
 	}
 
 	bundles, err := h.service.ListBundles(ctx, opts)
@@ -505,13 +520,45 @@ func (h *VTPMHandlers) GetNVRAMPath(w http.ResponseWriter, r *http.Request) {
 
 func (h *VTPMHandlers) parseBundleMode(mode string) vtpm.BundleMode {
 	switch strings.ToLower(mode) {
-	case "template":
+	case "template", "bundle_mode_template":
 		return vtpm.BundleModeTemplate
-	case "pre-assigned", "preassigned", "pre_assigned":
+	case "pre-assigned", "preassigned", "pre_assigned", "bundle_mode_pre_assigned":
 		return vtpm.BundleModePreAssigned
 	default:
 		return ""
 	}
+}
+
+// parseLabelsQuery reads the repeated labels=key=value query parameter the
+// ListBundles filter takes; nil when absent.
+func parseLabelsQuery(r *http.Request) (map[string]string, error) {
+	values := r.URL.Query()["labels"]
+	if len(values) == 0 {
+		return nil, nil
+	}
+	labels := make(map[string]string, len(values))
+	for _, value := range values {
+		key, val, ok := strings.Cut(value, "=")
+		if !ok || key == "" {
+			return nil, ErrInvalidLabelQuery{Value: value}
+		}
+		labels[key] = val
+	}
+	return labels, nil
+}
+
+// parseDeviceProfileIDQuery reads the device_profile_id query parameter, 0
+// (no filter) when absent.
+func parseDeviceProfileIDQuery(r *http.Request) (uint64, error) {
+	raw := r.URL.Query().Get("device_profile_id")
+	if raw == "" {
+		return 0, nil
+	}
+	id, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0, ErrInvalidDeviceProfileIDQuery{Value: raw}
+	}
+	return id, nil
 }
 
 func (h *VTPMHandlers) bundleToResponse(bundle *vtpm.Bundle) BundleResponse {
@@ -578,6 +625,7 @@ func (h *VTPMHandlers) manifestToResponse(manifest *vtpm.Manifest) *ManifestResp
 		Checksums:         manifest.Checksums,
 		Labels:            manifest.Labels,
 		ClonedFrom:        manifest.ClonedFrom,
+		DeviceProfileID:   manifest.DeviceProfileID,
 	}
 
 	if !manifest.CreatedAt.IsZero() {

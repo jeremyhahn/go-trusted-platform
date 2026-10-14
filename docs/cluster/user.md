@@ -239,8 +239,9 @@ file.
 **Every cluster REST call returns 503 with "cluster service not configured".**
 Expected. No coordinator is wired into the daemon.
 
-**Cluster gRPC calls return "cluster: Bootstrap not implemented".**
-Expected — that is the registered stub answering.
+**Cluster gRPC calls return `Unavailable` with "cluster service not
+configured".**
+Expected, same cause: the registered service has no cluster servicer behind it.
 
 **MCP `platform_cluster_status` returns "cluster: service provider not
 configured".**
