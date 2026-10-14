@@ -80,7 +80,7 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **dht** — trusted DHT for the public peer-to-peer hosting platform; design only, see [docs/dht/](docs/dht/)
 - **android-ota** — Android and secure OTA updates; design only, see [docs/firmware/android.md](docs/firmware/android.md)
 - **hosted-control-plane** — hosted control plane; not started
-- **hsm-device-lifecycle** — provisioning, enrollment, attestation and the zero-trust operations for HSM devices, the NXP FRDM-IMX95-PRO first #884; not started
+- **hsm-device-lifecycle** — provisioning and attestation of HSM devices, the NXP FRDM-IMX95-PRO first #884; the board's Linux image is built by trusted-imx95, not here; not started
 - **jetson-orin-node** — NVIDIA Jetson Orin as a robotics compute node, provisioned and attested through UEFI Secure Boot and the firmware TPM, the Raspberry Pi node lifecycle; not started, waits for a borrowed unit
 
 ## Dependencies

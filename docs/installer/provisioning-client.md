@@ -587,6 +587,6 @@ defer client.Close() // Closes idle connections
 ## See Also
 
 - [ACME Enrollment](../ca/acme.md)
-- [Network Setup](../device/user.md)
+- [Device activation](../device/architecture.md#44-activation-identity-becomes-network-access)
 - [Device Management](../device/architecture.md)
 - [mTLS Authentication](../auth/architecture.md)

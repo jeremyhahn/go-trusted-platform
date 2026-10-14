@@ -248,5 +248,11 @@ func (t *xkmsTPM) IDevIDSigner() (crypto.Signer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return platform.NewTPMSigner(t.TrustedPlatformModule, attrs, nil), nil
+	// No key backend: Sign addresses an IDevID by its persistent handle and
+	// authorizes it without one, and the agent opens the TPM without one.
+	signer, err := platform.NewTPMSigner(t.TrustedPlatformModule, attrs, nil)
+	if err != nil {
+		return nil, err
+	}
+	return signer, nil
 }

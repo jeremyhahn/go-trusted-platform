@@ -132,6 +132,11 @@ jobs:
       - name: gofmt
         run: make fmt-check
 
+      # go vet compiles test files, cgo included: the TPM simulator pkg/app's
+      # IDevID mTLS tests use needs the OpenSSL headers (#149).
+      - name: Install OpenSSL headers for the TPM simulator
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+
       - name: go vet
         run: make vet
 
@@ -313,6 +318,11 @@ jobs:
       - name: Install cpio for the netboot media tests
         run: sudo apt-get update && sudo apt-get install -y cpio
 
+      # libssl-dev: pkg/app's IDevID mTLS tests run go-tpm-tools' simulator,
+      # which compiles the reference TPM with cgo against OpenSSL (#149).
+      - name: Install OpenSSL headers for the TPM simulator
+        run: sudo apt-get install -y libssl-dev
+
       - name: Unit tests
         run: make test
 
@@ -360,6 +370,11 @@ jobs:
       # has no cpio, so install it rather than exclude the package.
       - name: Install cpio for the netboot media tests
         run: sudo apt-get update && sudo apt-get install -y cpio
+
+      # libssl-dev: pkg/app's IDevID mTLS tests run go-tpm-tools' simulator,
+      # which compiles the reference TPM with cgo against OpenSSL (#149).
+      - name: Install OpenSSL headers for the TPM simulator
+        run: sudo apt-get install -y libssl-dev
 
       - name: Unit tests (race detector)
         run: make test-race
@@ -609,6 +624,11 @@ jobs:
       # has no cpio, so install it rather than exclude the package.
       - name: Install cpio for the netboot media tests
         run: sudo apt-get update && sudo apt-get install -y cpio
+
+      # libssl-dev: pkg/app's IDevID mTLS tests run go-tpm-tools' simulator,
+      # which compiles the reference TPM with cgo against OpenSSL (#149).
+      - name: Install OpenSSL headers for the TPM simulator
+        run: sudo apt-get install -y libssl-dev
 
       - name: FIPS build and unit tests
         run: make test-fips

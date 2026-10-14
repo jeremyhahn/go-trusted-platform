@@ -179,6 +179,11 @@ jobs:
       - name: Install cpio for the netboot media tests
         run: sudo apt-get update && sudo apt-get install -y cpio
 
+      # libssl-dev: pkg/app's IDevID mTLS tests run go-tpm-tools' simulator,
+      # which compiles the reference TPM with cgo against OpenSSL (#149).
+      - name: Install OpenSSL headers for the TPM simulator
+        run: sudo apt-get install -y libssl-dev
+
       # `make test-fips` mirrors the Test job's `make test` — same tags, same
       # package scope, same exclusions — with ONLY the FIPS build tag and
       # environment added (template v1.4.1). The Makefile carries the why.

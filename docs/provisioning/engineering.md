@@ -81,6 +81,21 @@ remotely, so the signing key stays on the platform rather than being placed on
 the machine being provisioned. `pkg/provisioning/configdelivery/sign.go` and
 `pkg/installer/remote_sign_client.go` are the two ends.
 
+**The boot-time config fetch is a different route.**
+`GET /api/v1/devices/config?mac=…|serial=…` (`pkg/webservice/v1/rest/device`)
+carries no EAB, no nonce and no session. It returns the matching profile's
+config as YAML to any caller. That is safe only where the caller is a machine
+on the provisioning VLAN. So only a webservice with `surface: provisioning`
+mounts it, and startup refuses that listener unless its `bind-host` is inside
+the provisioning zone (#177; [`docs/web/engineering.md`](../web/engineering.md)
+§`surface`, [`docs/device/architecture.md`](../device/architecture.md) §4.2).
+
+### Planned
+
+| Item | Status | Requirement |
+|---|---|---|
+| EK-bound challenge on `GET /api/v1/devices/config` (#177 follow-up) | PLANNED | The provisioning listener releases a profile's config only to the machine whose EK that profile names. The caller answers a challenge that only the TPM holding that EK can answer. Until this lands, the provisioning VLAN is the only boundary: a host on that VLAN that knows or guesses a MAC or serial reads that profile's config. |
+
 ## 4. The installer
 
 `pkg/installer/` is a full OS installer, not a script wrapper:

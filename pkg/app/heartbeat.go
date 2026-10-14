@@ -198,8 +198,11 @@ func (app *App) idevidSigner(idevidPub crypto.PublicKey) (crypto.Signer, error) 
 	// the persistent handle alone and cannot sign (observed live:
 	// "invalid parent key attributes", then a blob lookup for a
 	// TPM-persistent key).
-	if app.TPMConfig.IDevID == nil || app.PlatformKS == nil {
+	if app.TPM == nil || app.TPMConfig.IDevID == nil || app.PlatformKS == nil {
 		return nil, provisioning.ErrMissingCertificate
+	}
+	if idevidPub == nil {
+		return nil, ErrIDevIDPublicKeyMissing{}
 	}
 	// Retained as a precondition though the digest is no longer passed to
 	// the attribute builder (go-xkms #355): a TPM that cannot produce it
@@ -219,10 +222,33 @@ func (app *App) idevidSigner(idevidPub crypto.PublicKey) (crypto.Signer, error) 
 	// required" from the control plane. The caller supplies the public
 	// half: the IDevID certificate's key, or the key read from its
 	// persistent handle before the certificate is known.
-	return certSigner{
-		Signer: platform.NewTPMSigner(app.TPM, idevidAttrs, app.PlatformKS.Backend()),
-		pub:    idevidPub,
-	}, nil
+	tpmSigner, err := platform.NewTPMSigner(app.TPM, idevidAttrs, app.PlatformKS.Backend())
+	if err != nil {
+		return nil, err
+	}
+	return certSigner{Signer: tpmSigner, pub: idevidPub}, nil
+}
+
+// newIDevIDClient builds the control-plane client a device uses for the calls
+// that need its identity — activation and the heartbeat: mTLS with the IDevID
+// certificate, signed in the TPM by the IDevID key. caPool verifies the
+// server.
+func (app *App) newIDevIDClient(
+	serverURL string,
+	idevidCert *x509.Certificate,
+	caPool *x509.CertPool,
+) (*provisioning.Client, error) {
+	tpmSigner, err := app.idevidSigner(idevidCert.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+	return provisioning.NewClient(&provisioning.ClientConfig{
+		ServerURL:   serverURL,
+		Certificate: idevidCert,
+		PrivateKey:  tpmSigner,
+		CACertPool:  caPool,
+		Timeout:     30 * time.Second,
+	}, app.Logger)
 }
 
 // heartbeatServerPool resolves the CA pool for verifying the control
@@ -262,21 +288,11 @@ func (app *App) newHeartbeatClient(serverURL string) (*provisioning.Client, erro
 	if err != nil {
 		return nil, &WrappedError{Msg: "heartbeat: IDevID certificate unavailable", Err: err}
 	}
-	tpmSigner, err := app.idevidSigner(idevidCert.PublicKey)
-	if err != nil {
-		return nil, err
-	}
 	caPool, err := app.heartbeatServerPool(idevidCert)
 	if err != nil {
 		return nil, err
 	}
-	return provisioning.NewClient(&provisioning.ClientConfig{
-		ServerURL:   serverURL,
-		Certificate: idevidCert,
-		PrivateKey:  tpmSigner,
-		CACertPool:  caPool,
-		Timeout:     30 * time.Second,
-	}, app.Logger)
+	return app.newIDevIDClient(serverURL, idevidCert, caPool)
 }
 
 // newFileHeartbeatClient builds the reporter's mTLS client from the

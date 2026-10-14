@@ -33,4 +33,8 @@ type RootRouter interface {
 	// from the API (the ACME group under baseURI) and reports whether it
 	// mounted anything.
 	RegisterEdgeRoutes(root *mux.Router, baseURI string) bool
+	// RegisterProvisioningRoutes mounts only the boot-time config fetch
+	// (GET baseURI/devices/config) a provisioning listener carries, and
+	// reports whether it mounted it (#177).
+	RegisterProvisioningRoutes(root *mux.Router, baseURI string) bool
 }

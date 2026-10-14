@@ -250,10 +250,19 @@ Resolution is priority-ordered:
 
 The first hit wins. Nothing after it is consulted.
 
+Ask the same question the machine will, as an operator:
+
 ```bash
-curl 'https://cp.example.com:8443/api/v1/devices/config?ek_serial=1234567890'
-curl 'https://cp.example.com:8443/api/v1/devices/config?mac=00:25:90:ff:aa:02'
+curl 'https://cp.example.com:8443/api/v1/device/profiles/find-config?ek_serial=1234567890'
+curl 'https://cp.example.com:8443/api/v1/device/profiles/find-config?mac=00:25:90:ff:aa:02'
 ```
+
+The booting machine itself fetches `GET /api/v1/devices/config?mac=…` (or
+`?serial=…`) and gets the config back as YAML. That route needs no credentials,
+so **only the provisioning listener serves it**: a webservice with
+`surface: provisioning`, bound to an address in the provisioning VLAN. Every
+other listener answers it with a 404 (#177). See
+[`docs/web/user.md`](../web/user.md) to configure that listener.
 
 If nothing matches, you get an error, **not a default profile**. A machine with
 no record gets nothing — that is the point.

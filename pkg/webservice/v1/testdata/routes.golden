@@ -128,7 +128,6 @@ GET /api/v1/device/templates
 GET /api/v1/device/templates/name/{name}
 GET /api/v1/device/templates/{id:[0-9]+}
 GET /api/v1/devices
-GET /api/v1/devices/config
 GET /api/v1/devices/count
 GET /api/v1/devices/serial/{serial}
 GET /api/v1/devices/{id:[0-9]+}

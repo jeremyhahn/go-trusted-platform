@@ -1198,8 +1198,11 @@ func (server *WebServerV1) buildRoutes() {
 	// registration order, and a virtual host owns its Host entirely — a
 	// request for it never falls through to this server's own API or
 	// console (#571). Their matcher is an allowlist of configured names
-	// with one-label wildcards, not a template.
-	server.registerVirtualHosts(muxRouter)
+	// with one-label wildcards, not a template. The provisioning listener
+	// carries none: it serves one route to the provisioning zone (#177).
+	if server.surface != v1.SurfaceProvisioning {
+		server.registerVirtualHosts(muxRouter)
+	}
 
 	// There is deliberately no route inventory at the root. /endpoints used
 	// to walk the mux and hand any caller every registered template,
@@ -1228,6 +1231,16 @@ func (server *WebServerV1) buildRoutes() {
 			server.logger.FatalError(&ErrEdgeSurfaceEmpty{Name: server.config.Name})
 		}
 		muxRouter.PathPrefix("/").HandlerFunc(server.misdirectedUnlessServed())
+	case v1.SurfaceProvisioning:
+		// The provisioning listener carries the unauthenticated boot-time
+		// GET /api/v1/devices/config and nothing else (#177). Every other
+		// path is the same 404 an unknown route gets on any listener, and
+		// no other surface mounts the route, so a general listener answers
+		// it with that 404 too.
+		if !v1Router.RegisterProvisioningRoutes(muxRouter, server.baseURI) {
+			server.logger.FatalError(&ErrProvisioningSurfaceEmpty{Name: server.config.Name})
+		}
+		muxRouter.PathPrefix("/").HandlerFunc(writeJSONNotFound)
 	default:
 		// The OCI Distribution-spec surface lives at /v2 on the ROOT router —
 		// the spec mandates "/v2/" at the host root; under /api/v1 `crane pull

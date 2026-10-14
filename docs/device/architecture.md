@@ -119,19 +119,42 @@ Nothing here touches the machine. The profile is durable operator intent.
 ### 4.2 Boot: the machine asks who it is
 
 ```
-booting machine ──▶ GET /api/v1/devices/config?mac=…&ek_serial=…
-                       │
-                       └─ ProfileService.FindConfigForDevice
-                            1. FindByEKSerial   (EqualFold, exact)
-                            2. FindByExactMAC   (EqualFold, exact)
-                            3. FindMatchingProfile (prefix rules, MAC only)
-                            └─ miss ⇒ ErrNoMatchingConfig
+booting machine ──▶ provisioning listener (bind-host in the provisioning zone)
+  on the           GET /api/v1/devices/config?mac=…  or  ?serial=…
+  provisioning        │
+  VLAN                └─ HandleGetConfig
+                           1. FindByMACAddress
+                           2. FindBySerial
+                           3. FindMatchingProfile (prefix / model rules)
+                           └─ hit ⇒ the profile's config as YAML; miss ⇒ 404
 ```
 
-The resolver searches **across all tenants** — a machine at boot does not know
-its tenant, which is stated in the `FindConfigForDevice` doc comment. That is a
-deliberate widening and it is why EK-serial precedence matters: the first
-lookup is the one that cannot be spoofed.
+The operator's query for the same answer is `FindConfigForDevice`
+(`DeviceService.FindConfigForDevice` on gRPC/QUIC/MCP/Unix/embedded,
+`GET /api/v1/device/profiles/find-config` on REST): scope-gated
+`device:read`, EK serial first, then exact MAC, then the prefix rules. Both
+resolvers search **across all tenants** — a machine at boot does not know its
+tenant, which is stated in the `FindConfigForDevice` doc comment. That is a
+deliberate widening and it is why EK-serial precedence matters in the operator
+query: the first lookup is the one that cannot be spoofed.
+
+**The boot fetch is unauthenticated by design, and its listener is its trust
+boundary (#177).** Its caller is a machine still booting, with no credential
+yet. So the route is mounted only on a webservice whose `surface` is
+`provisioning` — never on the `full` or `edge` surface, and on no other
+transport. A general listener answers it with the same 404 as a route that
+does not exist. The provisioning listener refuses to start unless its
+`bind-host` is a literal address inside the provisioning zone that
+`sdn.environment` numbers (`ValidateProvisioningSurface`), so the only
+machines that can reach it are on the isolated provisioning VLAN, where the
+provisioning-zone flows admit them. Binding an address is not by itself
+isolation — Linux answers for a local address on any interface — so the
+zone's flows are the other half of the boundary. Whoever is on that VLAN can
+still read any profile's config by MAC or serial; binding the fetch to the
+caller's EK with a challenge is planned
+([`docs/provisioning/engineering.md`](../provisioning/engineering.md) §3,
+*Planned*), not shipped. The listener's configuration is in
+[`docs/web/user.md`](../web/user.md).
 
 ### 4.3 Enrollment: the device record appears
 
@@ -187,6 +210,25 @@ See [`docs/attestation/architecture.md`](../attestation/architecture.md),
 
 `POST /api/v1/device/activate` is mTLS-authenticated; the device serial comes
 from the client certificate, never from the body.
+
+The device side is platformd's `FetchProfileAndActivate`: it presents the
+node's IDevID certificate and signs the TLS 1.3 handshake with the IDevID key
+inside the TPM — the same client the heartbeat uses (`App.newIDevIDClient`,
+[api.md](api.md) §Device heartbeat). No device private key leaves the TPM.
+platformd calls it once enrollment has stored the IDevID certificate in the
+TPM (`pkg/app/app.go`, the ACME enrollment path), trusting the control plane
+through the platform anchor. It is the only activation an installed image
+performs: the ISO's `trusted-platform-network` script, which repeated it with
+curl and a PEM IDevID key file nothing writes, was removed (#149), and
+`TestImageConfigsLeaveDeviceIdentityToPlatformd` (`pkg/arch`) fails if a
+`configs/os` file calls the activation or heartbeat endpoint again.
+
+`TestDeviceActivation_IDevIDOverMTLS` drives a simulator IDevID through this
+whole chain and asserts the port moves from enrolled to authorized.
+`TestFetchProfileAndActivate_IDevIDOverMTLS` drives the same chain through
+`App.FetchProfileAndActivate` — profile fetch, then activation — and asserts a
+control plane whose certificate the platform anchor does not cover is refused
+with the port left enrolled.
 
 ```
 POST /api/v1/device/activate  (mTLS, serial from client cert)
@@ -429,8 +471,9 @@ any other control plane every transport answers `ErrLifecycleUnenforced`.
    A caller that cannot present an IDevID cannot reach either route. IDevID
    issuance itself is a separate feature.
 4. **Boot-time config lookup is cross-tenant by design.** `FindConfigForDevice`
-   searches every tenant. Tenant isolation for this one path is provided by the
-   uniqueness of the EK serial / MAC, not by a tenant filter.
+   and the boot fetch (`GET /api/v1/devices/config`) search every tenant.
+   Tenant isolation for this one path is provided by the uniqueness of the
+   EK serial / MAC, not by a tenant filter.
 5. **The provisioning config-fetch routes are unauthenticated at the transport
    layer.** `pkg/webservice/v1/router/device.go` registers
    `/api/v1/provisioning/*` with the comment *"These routes are UNPROTECTED (no
@@ -438,7 +481,10 @@ any other control plane every transport answers `ErrLifecycleUnenforced`.
    EK-authenticated at the application layer instead. Those routes belong to
    the config-delivery feature; they are named here because they sit on the
    same router and an operator reading firewall rules will see them adjacent to
-   device routes.
+   device routes. The device feature's own unauthenticated route,
+   `GET /api/v1/devices/config`, is not on that router at all: only the
+   provisioning listener serves it (§4.2, #177), and its only authentication
+   is where that listener is reachable from.
 6. **BMC credentials live inside the profile.** `DeviceProfile.BMC` carries
    `Username` and `Password`; the password field is tagged `secret:"true"` and
    the config-snapshot redactor (`pkg/config/snapshot.go`) hides keys

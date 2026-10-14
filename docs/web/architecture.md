@@ -201,6 +201,16 @@ and vendors Swagger UI into `public_html/swagger/`; the embed path
    host would mount nothing and refuses to start (`ErrEdgeSurfaceEmpty`); an
    unknown `surface` value refuses to start (`ErrUnknownSurface`).
 
+   **`surface: provisioning`** (#177) mounts only the unauthenticated
+   boot-time `GET /api/v1/devices/config` and the plaintext redirect. Every
+   other path gets the unknown-route `404`, and no other surface mounts that
+   route. Its address is its trust boundary. Startup refuses the listener
+   unless `bind-host` is an IP literal inside the provisioning zone that
+   `sdn.environment` numbers (`ErrProvisioningBindHostOutsideZone` and its
+   siblings in `pkg/webservice/provisioning.go`). It takes the edge limits and
+   registers no virtual hosts. Without a device-profile service it would mount
+   nothing, and it refuses to start (`ErrProvisioningSurfaceEmpty`).
+
 Static serving resolves in this order: rewrite rules → exact file → directory
 index → non-SPA exclusion (JSON or plain 404) → `__placeholder__` fallback →
 SPA index → 404.

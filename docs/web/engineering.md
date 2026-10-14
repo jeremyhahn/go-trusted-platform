@@ -254,7 +254,7 @@ The schema is `pkg/webservice/v1.Config`. It is bound to **two** platform keys
 | `tls-port` | int | `8443` | `0` disables HTTPS and HTTP/3; follows `bind-host` |
 | `certificate` | `common.Identity` | `www.example.com`, 365 days, SANs `www.example.com` / `localhost` / `localhost.localdomain` / `127.0.0.1` | Server identity |
 | `certificate.acme.cross-sign.directory` | URL | — | Enables `TLSConfigWithXSigner`; must parse as an FQDN |
-| `key` | `common.KeyConfig` | per profile | `DefaultConfigRSA`: RSA-2048, SHA-256, PSS, `StoreTPM2`, platform policy. `DefaultConfigECDSA`: P-256, SHA-256, `StoreTPM2`. `DefaultConfigEd25519`: Ed25519, **software store** |
+| `key` | `common.KeyConfig` | per profile | `DefaultConfigRSA`: RSA-2048, SHA-256, PSS, `StoreTPM2`, platform policy. `DefaultConfigECDSA`: P-256, SHA-256, `StoreTPM2`. `DefaultConfigEd25519`: Ed25519, **software store**. A YAML entry without `key` gets none, and startup refuses it with `app.ErrWebServiceKeyRequired` unless its certificate CN equals `tpm.idevid.cn` and the TPM IDevID is provisioned |
 | `jwt.expiration` | int | `60` | **Minutes** (`time.Minute * Duration(Expiration)`) |
 | `jwt.issuer` | string | — | |
 | `jwt.platform-token.enabled` | bool | `false` | Broker platform-token validator |
@@ -271,11 +271,11 @@ The schema is `pkg/webservice/v1.Config`. It is bound to **two** platform keys
 | `acme.enabled` / `.directory` / `.terms-of-service` / `.challenges` / `.external-account-required` | — | — | Per-webservice ACME server |
 | `cors.allowed-origins` / `.allowed-methods` / `.allowed-headers` / `.allow-credentials` | lists / bool | — | Global CORS |
 | `rewrite[].pattern` / `.target` | regexp / path | — | First match wins |
-| `surface` | `full` \| `edge` | `full` | What the listener mounts (#571). `edge`: virtual hosts, ACME when an ACME server exists, the TLS redirect; nothing else; unknown Host is 421. Any other value refuses to start |
-| `max-header-bytes` | int | Go default (1 MiB); `65536` on `edge` | Request header cap on both listeners |
+| `surface` | `full` \| `edge` \| `provisioning` | `full` | What the listener mounts (#571). `edge`: virtual hosts, ACME when an ACME server exists, the TLS redirect; nothing else; unknown Host is 421. `provisioning` (#177): `GET /api/v1/devices/config` and the TLS redirect; nothing else, and no other surface mounts that route. Startup (`webservice.ValidateProvisioningSurface`, wrapped in `app.ErrWebServiceValidation`) refuses it unless `bind-host` is an IP literal inside the provisioning zone of the node's network plan, `tls-port` is set and `virtual-hosts` is empty. Any other value refuses to start |
+| `max-header-bytes` | int | Go default (1 MiB); `65536` on `edge` and `provisioning` | Request header cap on both listeners |
 | `read-timeout` / `write-timeout` / `idle-timeout` | duration | `5s` / `30s` / `120s` | Per-listener `http.Server` timeouts |
-| `max-connections` | int | unlimited; `4096` on `edge` | Concurrent TCP connections per listener (`netutil.LimitListener`; HTTP/3 over UDP is not counted) |
-| `rate-limit.requests-per-second` / `.burst` | float / int | none; `50` / `100` on `edge` | Per-source token bucket (`pkg/security/ratelimit`, idle buckets evicted after 5 min); `0` disables |
+| `max-connections` | int | unlimited; `4096` on `edge` and `provisioning` | Concurrent TCP connections per listener (`netutil.LimitListener`; HTTP/3 over UDP is not counted) |
+| `rate-limit.requests-per-second` / `.burst` | float / int | none; `50` / `100` on `edge` and `provisioning` | Per-source token bucket (`pkg/security/ratelimit`, idle buckets evicted after 5 min); `0` disables |
 | `virtual-hosts[].hosts` | list | — | `Host` names this virtual host owns: exact, or `*.suffix` matching exactly one extra label. Virtual hosts match before every path route (#571) |
 | `virtual-hosts[].home` | path | — | Joined onto the top-level `home` |
 | `virtual-hosts[].index` | string | falls back to top-level `index` | |

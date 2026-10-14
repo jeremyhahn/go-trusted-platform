@@ -145,6 +145,28 @@ func (v1Router *Router) RegisterEdgeRoutes(root *mux.Router, baseURI string) boo
 	return true
 }
 
+// RegisterProvisioningRoutes mounts on root the one route a provisioning
+// listener carries: GET {baseURI}/devices/config, the boot-time config fetch
+// (#177). The route is unauthenticated by design — its caller is a machine
+// still booting with no credential — so it is served only from a listener
+// bound inside the isolated provisioning zone, and no other surface mounts
+// it. It reports whether the route was mounted: without the device profile
+// service there is nothing to deliver.
+func (v1Router *Router) RegisterProvisioningRoutes(root *mux.Router, baseURI string) bool {
+	profileService := v1Router.restHandlerRegistry.DeviceProfileService()
+	if profileService == nil {
+		v1Router.logger.Debug("Device profile service is nil - provisioning surface carries no route")
+		return false
+	}
+	restdevice.NewDeviceRouter(
+		v1Router.logger,
+		v1Router.restHandlerRegistry.ResponseWriter(),
+		nil,
+		profileService,
+	).RegisterConfigRoute(root.PathPrefix(baseURI).Subrouter())
+	return true
+}
+
 // callerGate builds the machine-caller gate from the node's caller-admission
 // policy. With no policy configured the gate hands every request to the
 // operator chain; the policy can only narrow who else gets in.
@@ -504,6 +526,8 @@ func (v1Router *Router) deviceRoutes() {
 
 	// Register bootstrap seeder routes at /devices/templates.
 	// These use a simplified request format consumed by the bootstrap seeder.
+	// Its GET /devices/config is not mounted here: only the provisioning
+	// surface carries it (RegisterProvisioningRoutes, #177).
 	if templateService != nil && profileService != nil {
 		seederRouter := restdevice.NewDeviceRouter(
 			v1Router.logger,

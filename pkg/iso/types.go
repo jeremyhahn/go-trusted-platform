@@ -170,12 +170,11 @@ type AlpineConfig struct {
 
 // DirectoryConfig holds directory paths for the build process
 type DirectoryConfig struct {
-	Work       string `yaml:"work" json:"work"`
-	ISO        string `yaml:"iso" json:"iso"`
-	Overlay    string `yaml:"overlay" json:"overlay"`
-	Keys       string `yaml:"keys" json:"keys"`
-	NVRAM      string `yaml:"nvram" json:"nvram"`
-	ConfigsDir string `yaml:"configs_dir" json:"configs_dir"` // Base directory for configs/os files
+	Work    string `yaml:"work" json:"work"`
+	ISO     string `yaml:"iso" json:"iso"`
+	Overlay string `yaml:"overlay" json:"overlay"`
+	Keys    string `yaml:"keys" json:"keys"`
+	NVRAM   string `yaml:"nvram" json:"nvram"`
 }
 
 // PlatformConfig holds platform binary and version configuration

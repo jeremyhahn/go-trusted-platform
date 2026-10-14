@@ -679,6 +679,12 @@ func (app *App) Init(ctx context.Context, initParams *AppInitParams) (*App, erro
 		return nil, err
 	}
 
+	// A provisioning listener outside the provisioning zone would expose
+	// the unauthenticated config fetch beyond it (#177): fatal here too.
+	if err := app.validateWebServices(); err != nil {
+		return nil, err
+	}
+
 	// Initialize the SDN controller (OVS bridge, IPAM pools)
 	// Non-fatal: SDN may not be available during early boot or on non-controller nodes
 	if err := app.initSDN(context.Background()); err != nil {
@@ -1355,6 +1361,26 @@ func (app *App) validateHostNetwork() error {
 	}
 	if err := app.NetworkConfig.Validate(plan); err != nil {
 		return ErrHostNetworkValidation{Cause: err}
+	}
+	return nil
+}
+
+// validateWebServices refuses, at startup, a provisioning-surface webservice
+// that is not bound inside the provisioning zone (#177). That listener
+// serves the unauthenticated boot-time config fetch, so its address is its
+// trust boundary; the zone's addressing comes from the network plan alone.
+func (app *App) validateWebServices() error {
+	for _, ws := range app.WebServices {
+		if ws == nil || ws.Surface != v1.SurfaceProvisioning {
+			continue
+		}
+		plan, err := app.NetworkPlan()
+		if err != nil {
+			return err
+		}
+		if err := webservice.ValidateProvisioningSurface(ws, plan); err != nil {
+			return ErrWebServiceValidation{Name: ws.Name, Cause: err}
+		}
 	}
 	return nil
 }
@@ -3003,19 +3029,6 @@ func (app *App) FetchProfileAndActivate(
 		slog.String("server", serverURL),
 		slog.String("idevid_cn", idevidCert.Subject.CommonName))
 
-	// Get IDevID key attributes for TPM signing
-	idevidAttrs, err := app.TPM.IDevIDAttributes()
-	if err != nil {
-		return nil, nil, &WrappedError{Msg: "failed to get IDevID key attributes", Err: err}
-	}
-
-	// Create TPM signer for IDevID key
-	tpmSigner := platform.NewTPMSigner(
-		app.TPM,
-		idevidAttrs,
-		app.PlatformKS.Backend(),
-	)
-
 	// The provisioning server is a platform service, so it is verified
 	// against the platform anchor. TLS verification is mandatory — the
 	// platform cannot provision securely without it.
@@ -3028,17 +3041,9 @@ func (app *App) FetchProfileAndActivate(
 		return nil, nil, &WrappedError{Msg: "failed to resolve the platform anchor for provisioning", Err: err}
 	}
 
-	// Create provisioning client config
-	provConfig := &provisioning.ClientConfig{
-		ServerURL:   serverURL,
-		Certificate: idevidCert,
-		PrivateKey:  tpmSigner, // crypto.Signer is compatible with crypto.PrivateKey
-		CACertPool:  caPool,
-		Timeout:     30 * time.Second,
-	}
-
-	// Create provisioning client
-	provClient, err := provisioning.NewClient(provConfig, app.Logger)
+	// Activation presents the device's IDevID, signed in the TPM — the same
+	// client identity the heartbeat uses.
+	provClient, err := app.newIDevIDClient(serverURL, idevidCert, caPool)
 	if err != nil {
 		return nil, nil, &WrappedError{Msg: "failed to create provisioning client", Err: err}
 	}
@@ -3664,6 +3669,9 @@ func (app *App) initWebServiceKeyAttributes(ctx context.Context, wsConfig *v1.Co
 	}
 	if keyAttrs == nil {
 		app.Logger.Info("using dedicated web server certificate for TLS", "webservice", wsName)
+		if wsConfig.Key == nil {
+			return ErrWebServiceKeyRequired{Name: wsName}
+		}
 		serverKeyAttrs, err := wsConfig.Key.ToKeyAttributes()
 		if err != nil {
 			return err

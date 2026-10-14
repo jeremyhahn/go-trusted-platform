@@ -94,6 +94,56 @@ host it does not serve with `421`. Edge listeners default to 64 KiB request
 headers, 4096 connections per listener and 50 requests/s per source (burst
 100); `max-header-bytes`, `max-connections` and `rate-limit` override them.
 
+**Booting machines fetch their config from a provisioning listener.**
+`GET /api/v1/devices/config` needs no credentials, so no full or edge listener
+serves it (#177). Add a second webservice with `surface: provisioning` bound to
+an address in the provisioning VLAN. Usually that is the provisioning zone's
+gateway: `192.0.2.1` with environment 4 (`platformctl sdn zone list` shows it).
+The provisioning zone's flows admit HTTPS on 443, 8443 and 9443 only. Choose
+one that no wildcard listener on the node already holds:
+
+```yaml
+webservices:
+  - name: provisioning
+    surface: provisioning
+    bind-host: 192.0.2.1     # the provisioning zone's gateway, environment 4
+    port: 0
+    tls-port: 9443
+    key:                    # this listener's own TLS key
+      algorithm: ECDSA
+      ecc:
+        curve: P-256
+      signature-algorithm: ECDSA-SHA256
+      hash: SHA-256
+      store: software
+      password: "kms://webservices/provisioning/key/password?ensure=true&len=32&enc=raw"
+      platform-policy: true
+    certificate:
+      subject:
+        cn: cp-provisioning.example.internal   # the host config-server-url names
+        organization: Trusted Platform
+        country: US
+```
+
+Like every listener it needs its own `key` and `certificate`: copy the
+general listener's `key` block with its own password reference, and give the
+certificate the host name that `config-server-url` dials. A listener with no
+`key` refuses to start (`ErrWebServiceKeyRequired`), unless its certificate CN
+equals `tpm.idevid.cn` and the TPM IDevID is already provisioned, in which
+case it serves the IDevID.
+
+It serves that one route and nothing else. It takes the edge limits above and
+registers no virtual hosts. `platformd` refuses to start when any of these
+hold:
+
+- the node has no `sdn` section;
+- `bind-host` is empty, a hostname or a wildcard (`0.0.0.0`, `::`);
+- `bind-host` is outside the provisioning zone;
+- `tls-port` is `0`;
+- `virtual-hosts` is set.
+
+Point the templates' `config-server-url` at this listener.
+
 **The plain HTTP port only redirects.** `http://console.example.com:8080/…`
 answers with a permanent redirect to the TLS port and nothing else; set
 `port: 0` to open no plaintext port at all. A webservice with a plaintext port

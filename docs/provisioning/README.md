@@ -55,7 +55,6 @@ ISO Boot --> Trust Bootstrap --> Fetch Config --> Install OS
 | **Config Delivery API** | Multi-protocol API reference (REST/gRPC/QUIC/MCP/Unix/CLI) | [api-reference.md](api-reference.md) |
 | **Interactive QR** | Operator-at-console provisioning via QR code | [interactive.md](interactive.md) |
 | **ISO Configuration** | Building ISOs with embedded or server-fetched config | [iso.md](iso.md) |
-| **Network Setup** | systemd service for network configuration | [network-setup.md](network-setup.md) |
 | **Provisioning Client** | mTLS client for profile fetch & activation | [client.md](client.md) |
 | **Bare Metal** | IPMI-based bare metal provisioning | [bare-metal.md](bare-metal.md) |
 | **BMC Management** | Power, boot, virtual media, sensors | [../bmc/](../bmc/) |
@@ -65,19 +64,11 @@ ISO Boot --> Trust Bootstrap --> Fetch Config --> Install OS
 
 ### Client-Side Setup
 
-1. Ensure IDevID certificate is present:
-```bash
-/etc/trusted-platform/certs/idevidcert.pem
-/etc/trusted-platform/certs/idevidkey.pem
-/etc/trusted-platform/certs/ca.pem
-```
-
-2. Enable the network setup service:
-```bash
-systemctl enable trusted-platform-network.service
-```
-
-3. Reboot - the service runs automatically on boot
+Nothing to install. Once ACME enrollment stores the IDevID certificate in the
+TPM, platformd fetches the device profile and activates the device over mTLS,
+presenting the TPM-resident IDevID; the IDevID private key never leaves the
+TPM and no key file is involved
+([device architecture §4.4](../device/architecture.md#44-activation-identity-becomes-network-access)).
 
 ### Server-Side Configuration
 

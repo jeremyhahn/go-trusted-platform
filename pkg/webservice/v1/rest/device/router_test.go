@@ -49,17 +49,33 @@ func TestRouterRegistration(t *testing.T) {
 	req = httptest.NewRequest(http.MethodPost, "/devices/templates/12345/create-profile", nil)
 	assert.True(t, r.Match(req, &match), "POST /devices/templates/{id}/create-profile should match a route")
 
-	// Verify GET /devices/config is routed.
-	req = httptest.NewRequest(http.MethodGet, "/devices/config?mac=aa:bb:cc:dd:ee:ff", nil)
-	assert.True(t, r.Match(req, &match), "GET /devices/config should match a route")
-
 	// Verify GET /devices/templates is NOT routed (only POST is registered).
 	req = httptest.NewRequest(http.MethodGet, "/devices/templates", nil)
 	assert.False(t, r.Match(req, &match), "GET /devices/templates should not match")
 
-	// Verify POST /devices/config is NOT routed (only GET is registered).
+	// GET /devices/config belongs to the provisioning surface alone (#177):
+	// the seeder routes must not carry it.
+	req = httptest.NewRequest(http.MethodGet, "/devices/config?mac=aa:bb:cc:dd:ee:ff", nil)
+	assert.False(t, r.Match(req, &match), "GET /devices/config must not ride the seeder routes")
+}
+
+// TestRegisterConfigRoute mounts GET /devices/config and nothing else: not
+// another method on it, and none of the seeder's template routes.
+func TestRegisterConfigRoute(t *testing.T) {
+	router := NewDeviceRouter(testLogger(), testResponseWriter(), nil, &mockProfileService{})
+
+	r := mux.NewRouter()
+	router.RegisterConfigRoute(r)
+
+	var match mux.RouteMatch
+	req := httptest.NewRequest(http.MethodGet, "/devices/config?mac=aa:bb:cc:dd:ee:ff", nil)
+	assert.True(t, r.Match(req, &match), "GET /devices/config should match")
+
 	req = httptest.NewRequest(http.MethodPost, "/devices/config", nil)
 	assert.False(t, r.Match(req, &match), "POST /devices/config should not match")
+
+	req = httptest.NewRequest(http.MethodPost, "/devices/templates", nil)
+	assert.False(t, r.Match(req, &match), "the config route must not bring the seeder routes")
 }
 
 // TestRouterEndToEnd_UploadTemplate verifies the full request flow through the
@@ -140,7 +156,7 @@ func TestRouterEndToEnd_GetConfig(t *testing.T) {
 	deviceRouter := NewDeviceRouter(testLogger(), testResponseWriter(), nil, profSvc)
 
 	r := mux.NewRouter()
-	deviceRouter.RegisterRoutes(r)
+	deviceRouter.RegisterConfigRoute(r)
 
 	req := httptest.NewRequest(http.MethodGet, "/devices/config?mac=aa:bb:cc:dd:ee:ff", nil)
 	rr := httptest.NewRecorder()

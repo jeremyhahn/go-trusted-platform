@@ -196,11 +196,13 @@ Device mTLS authenticates with the **IDevID**, per TCG: IAK and LAK are
 (TCG *TPM 2.0 Keys for Device Identity and Attestation* v1.10 r9). No device
 private key exists outside a TPM.
 
-This depends on go-xkms#274: the IDevID sign path currently routes through the
-restricted hash-ticket flow and signs `H(digest)` instead of `digest`, which no
-TLS `CertificateVerify` can satisfy. The file-based client certificates
-introduced in #147 are a **workaround for that defect**, not the design, and are
-retired when #274 lands.
+The pinned go-xkms (v0.17.0-alpha) creates the IDevID with `Restricted` clear
+and signs the caller's digest directly (`pkg/tpm2/tpm.go`, the go-xkms#274
+fix), and the platform's TPM signer forwards the RSA-PSS options a TLS 1.3
+`CertificateVerify` needs (#149). Activation and the heartbeat therefore present
+the IDevID by default — [device/api.md](../device/api.md) §Device heartbeat. The
+file-based client certificates introduced in #147 (`heartbeat.cert-file` /
+`key-file`) remain as an explicit operator override; nothing depends on them.
 
 ### Baselines: signed manifest, TOFU fallback per profile
 

@@ -48,8 +48,11 @@ type Config struct {
 	// canonical root routes and the virtual hosts. SurfaceEdge is a public
 	// listener that carries only the ACME routes, the virtual hosts and the
 	// HTTPS redirect — no console, no API, no registry — and answers an
-	// unknown Host with 421 rather than the SPA. Any other value refuses to
-	// start.
+	// unknown Host with 421 rather than the SPA. SurfaceProvisioning is the
+	// listener on the isolated provisioning zone and carries only the
+	// unauthenticated boot-time GET /api/v1/devices/config (#177); its
+	// bind-host must be an address inside the provisioning zone's subnet.
+	// Any other value refuses to start.
 	Surface string `yaml:"surface" json:"surface" mapstructure:"surface"`
 
 	// Listener limits. Zero takes the surface's default (see
@@ -75,6 +78,9 @@ const (
 	SurfaceFull = "full"
 	// SurfaceEdge mounts only ACME, the virtual hosts and the TLS redirect.
 	SurfaceEdge = "edge"
+	// SurfaceProvisioning mounts only GET /api/v1/devices/config and the TLS
+	// redirect, on an address inside the provisioning zone (#177).
+	SurfaceProvisioning = "provisioning"
 )
 
 // RateLimitConfig is a per-source token bucket: RequestsPerSecond sustained,

@@ -357,11 +357,12 @@ request now gets `404`.
 
 `TestDeviceRoutesHaveOneName` (`pkg/webservice/v1/device_route_names_test.go`)
 walks the router platformd builds and fails if any path below one prefix is
-also registered below the other. The bootstrap seeder's three plural routes are
-the only exemption. They are `GET /devices/config`, `POST /devices/templates`
-and `POST /devices/templates/{id}/create-profile` (§4.1, §4.3), and the
-exemption is keyed by method and path, so a CRUD alias on one of those paths is
-still caught.
+also registered below the other. The bootstrap seeder's two plural routes on
+that router are the only exemption. They are `POST /devices/templates` and
+`POST /devices/templates/{id}/create-profile` (§4.1, §4.3), and the exemption
+is keyed by method and path, so a CRUD alias on one of those paths is still
+caught. The seeder's third route, `GET /devices/config`, is not on that router:
+only the provisioning listener serves it (§5, #177).
 
 The justification once quoted for the aliases did not hold: the dashboard
 never called `/api/v1/devices/profiles`. Every `/devices/...` string under
@@ -397,9 +398,10 @@ The primary field is **`admittedNetwork`**, with an optional
 (used server-side as the fail-closed revert target for the physical switch
 move during activation). There is no snake_case `production_network`,
 `provisioning_network` or `quarantine_network` in this response, and no such
-fields exist on `entities.DeviceProfile` either. The deleted legacy
-`docs/device/network-setup.md` documented `production_network`; the code wins
-and the correction is recorded here.
+fields exist on `entities.DeviceProfile` either. The removed
+`trusted-platform-network` script and the deleted legacy
+`docs/device/network-setup.md` read `production_network`; neither exists any
+more (#149). The code wins and the correction is recorded here.
 
 The JavaScript SDK models this body as `DeviceSelfServiceProfile`
 (`sdk/javascript/src/types/device-self-service.ts`, read via
@@ -425,15 +427,27 @@ Like the gateway control-plane routes, this deliberately has no
 gRPC/QUIC/MCP variants: it is not an operator API; the reporting client
 is platformd itself (`heartbeat:` config section, `pkg/app/heartbeat.go`)
 using the node's TPM-backed IDevID identity — the same identity and
-client (`pkg/provisioning`) that performs post-enrollment activation.
+client (`pkg/provisioning`) that performs post-enrollment activation. Both
+are built by `App.newIDevIDClient`: the IDevID certificate, its
+`CertificateVerify` signed inside the TPM by the IDevID key over TLS 1.3
+(RSA-PSS for an RSA IDevID; the platform `TPMSigner` passes the PSS
+options through). The IDevID key is unrestricted, so the TPM signs the
+handshake digest as given. These are the only activation and heartbeat an
+installed image performs; no key file is involved (#149).
+
+The client fails at construction, never at the handshake, when it cannot
+sign: no TPM, IDevID config or platform key store ⇒
+`provisioning.ErrMissingCertificate`; no IDevID public key ⇒
+`app.ErrIDevIDPublicKeyMissing`; key attributes carrying public-key bytes
+that do not parse ⇒ `platform.ErrTPMSignerPublicKey`. (A signer with no
+public key would make `crypto/tls` silently send no certificate, which the
+server reports as 401 "client certificate required".)
 
 The section optionally takes `cert-file` / `key-file` (and `ca-file`) to
 select a file-based mTLS identity instead, mirroring the gatewayd
-control-plane reporter. This exists because a **restricted** IDevID
-signing key cannot produce a TLS `CertificateVerify` signature — the TPM
-ticket-hashes the digest before signing — so fleets whose IDevID keys
-are restricted enroll a dedicated client certificate (CN = the device
-serial) from the control plane CA. Server verification is anchored to
+control-plane reporter (#147): a dedicated client certificate (CN = the
+device serial) from the control plane CA. It is an override; the IDevID
+is the default. Server verification is anchored to
 `ca-file` when set, else the platform CA store, else the OS trust store
 (where the installer bakes the control-plane root); it is never skipped.
 
@@ -757,9 +771,10 @@ interpreted by guessing its shape; `pkg/webservice/v1/router/device_templates_te
 pins which handler answers the plural `POST`.
 
 The seeder's other two routes do not collide either. `GET /api/v1/devices/config`
-is unique to it. Its `POST /api/v1/devices/templates/{id}/create-profile` sits
-beside the singular CRUD `create-profile` under the other prefix, with a
-different body (§4.3).
+is unique to it and is not on this router at all: only the provisioning
+listener mounts it (§5, #177). Its
+`POST /api/v1/devices/templates/{id}/create-profile` sits beside the singular
+CRUD `create-profile` under the other prefix, with a different body (§4.3).
 
 ### 4.2 Role vocabulary
 
@@ -1278,6 +1293,19 @@ only so an operator reading firewall or proxy rules recognises them:
 They are registered **without mTLS**, with the source comment *"These routes
 are UNPROTECTED (no mTLS) since devices at boot have no client cert"* — they
 authenticate at the application layer via EAB and EK binding instead.
+
+**`GET /api/v1/devices/config` is on no general listener (#177).** The
+boot-time config fetch is unauthenticated by design: a candidate asks with
+`?mac=` or `?serial=` and gets its profile's config back as YAML. It is mounted
+only on a webservice whose `surface` is `provisioning`, and that listener serves
+nothing else. Startup refuses that listener unless its `bind-host` is an
+address inside the provisioning zone. A full or edge listener answers the same
+request with the 404 it gives an unknown route. Only REST carries the route.
+`DeviceService.FindConfigForDevice` on gRPC, QUIC, MCP, Unix and embedded is
+the `device:read` operator query (REST: `GET /api/v1/device/profiles/find-config`),
+not the boot fetch. The trust boundary is in
+[architecture.md §4.2](architecture.md); the listener configuration is in
+[`docs/web/`](../web/).
 
 ---
 

@@ -818,7 +818,11 @@ gateway:
     tftp-port: 69
     kernel-path: /var/lib/trusted-platform/pxe/vmlinuz
     initrd-path: /var/lib/trusted-platform/pxe/initramfs
-    config-server-url: "https://cp.example.internal:8443/api/v1/devices/config"
+    # The control plane's provisioning listener (a webservice with
+    # surface: provisioning, bind-host in the provisioning zone), not its
+    # general :8443 listener: only that listener serves
+    # /api/v1/devices/config (#177, docs/web/user.md).
+    config-server-url: "https://cp-provisioning.example.internal:9443/api/v1/devices/config"
 
   # NAT gateway
   nat:

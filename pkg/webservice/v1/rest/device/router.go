@@ -60,13 +60,27 @@ func NewDeviceRouter(
 //
 // Routes:
 //
-//	GET  /api/v1/devices/config                        - Get device config by MAC or serial
 //	POST /api/v1/devices/templates                     - Upload a device template
 //	POST /api/v1/devices/templates/{id}/create-profile - Create a profile from a template
+//
+// GET /api/v1/devices/config is not among them: it is mounted only on the
+// provisioning surface, by RegisterConfigRoute (#177).
 func (r *DeviceRouter) RegisterRoutes(router *mux.Router) {
 	deviceRouter := router.PathPrefix(basePath).Subrouter()
 
-	deviceRouter.HandleFunc("/config", r.handlers.HandleGetConfig).Methods("GET")
 	deviceRouter.HandleFunc("/templates", r.handlers.HandleUploadTemplate).Methods("POST")
 	deviceRouter.HandleFunc("/templates/{id:[0-9]+}/create-profile", r.handlers.HandleCreateProfile).Methods("POST")
+}
+
+// RegisterConfigRoute registers the boot-time config fetch on the provided
+// /api/v1 subrouter:
+//
+//	GET /api/v1/devices/config - Get device config by MAC or serial
+//
+// The route is unauthenticated by design: its caller is a machine that is
+// still booting and holds no credential. It is therefore mounted only on a
+// webservice whose surface is "provisioning", a listener bound inside the
+// isolated provisioning zone (#177). No other listener or transport routes it.
+func (r *DeviceRouter) RegisterConfigRoute(router *mux.Router) {
+	router.HandleFunc(basePath+"/config", r.handlers.HandleGetConfig).Methods("GET")
 }

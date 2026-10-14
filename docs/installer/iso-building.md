@@ -363,17 +363,20 @@ correct vehicle).
 ### `TP_NETWORK_ZONE`
 
 `TP_NETWORK_ZONE` is set to the admitted phase's zone name in
-`/etc/platformd/network/network.env`. `configs/os/trusted-platform-network.sh`
-(run by `trusted-platform-network.service`) sources it as the fallback when
-the API is unreachable. The value is the SDN zone
+`/etc/platformd/network/network.env`. The value is the SDN zone
 the device operates in after successful enrollment (e.g. `"control-plane"`).
+Nothing on the image reads the file today: its one reader,
+`configs/os/trusted-platform-network.sh`, was removed with #149, because it
+repeated platformd's post-enrollment activation with a PEM IDevID key file
+nothing writes. platformd fetches the profile and activates with the
+TPM-resident IDevID ([device architecture §4.4](../device/architecture.md#44-activation-identity-becomes-network-access)).
 
 `TP_NETWORK_ZONE` is NOT a kernel cmdline parameter — it does not appear
 in the kernel cmdline and is not listed in `docs/reference/kernel-cmdline.md`.
 It reaches the running OS exclusively through the baked artifact and through
 the live API response (`zone` field in the `admittedNetwork` object of
-`GET /api/v1/device/profile`) fetched
-by `configs/os/trusted-platform-network.sh`.
+`GET /api/v1/device/profile`) that platformd fetches over mTLS with the
+TPM-resident IDevID.
 
 ### Missing zone semantics
 

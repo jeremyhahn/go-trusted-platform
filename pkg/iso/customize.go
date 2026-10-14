@@ -243,16 +243,9 @@ func (c *Customizer) StageMedia(ctx context.Context) error {
 }
 
 // customizeLiveISO is the Alpine-live-ISO-specific half of CustomizeAll:
-// the network setup service, the initramfs surgery that boots straight into
-// the autoinstaller, the standalone autoinstall script and the GRUB/EFI
-// bootloader rewrite.
+// the initramfs surgery that boots straight into the autoinstaller, the
+// standalone autoinstall script and the GRUB/EFI bootloader rewrite.
 func (c *Customizer) customizeLiveISO(ctx context.Context) error {
-	// Copy network setup script and service file to overlay
-	c.logger.Info("Copying network setup script to overlay")
-	if err := c.CopyNetworkSetupFiles(ctx); err != nil {
-		return &WrappedError{Msg: "failed to copy network setup files", Err: err}
-	}
-
 	// Modify initramfs:
 	//   - Inject the platformd dracut module (existing behavior)
 	//   - Create the autoinstall overlay (inittab + autoinstall.sh +
@@ -1564,74 +1557,6 @@ func (c *Customizer) ensureSecureBootKeysExist(ctx context.Context, keysDir stri
 	}
 
 	c.logger.Info("Secure Boot keys generated successfully", "path", keysDir)
-	return nil
-}
-
-// CopyNetworkSetupFiles copies the network setup script and systemd service file to the overlay
-// for the installed system. This enables client-side network configuration on boot.
-func (c *Customizer) CopyNetworkSetupFiles(ctx context.Context) error {
-	c.logger.Info("Copying network setup files to overlay for installed system")
-
-	// Determine base directory (configs/os should be in project root or current working directory)
-	configsDir := c.config.Directories.ConfigsDir
-	if configsDir == "" {
-		// Fallback to configs/os relative to project root or CWD
-		configsDir = "configs/os"
-	}
-
-	// Network setup script
-	scriptSrc := filepath.Join(configsDir, "trusted-platform-network.sh")
-	if _, err := os.Stat(scriptSrc); os.IsNotExist(err) {
-		c.logger.Warn("Network setup script not found, skipping", "path", scriptSrc)
-		return nil
-	}
-
-	// Destination for script in overlay (usr/local/bin)
-	overlayBinDir := filepath.Join(c.overlayDir, "usr", "local", "bin")
-	if err := os.MkdirAll(overlayBinDir, 0755); err != nil {
-		return &WrappedError{Msg: "failed to create overlay bin directory", Err: err}
-	}
-
-	// Copy script to overlay
-	scriptDest := filepath.Join(overlayBinDir, "trusted-platform-network.sh")
-	if err := copyFile(scriptSrc, scriptDest); err != nil {
-		return &WrappedError{Msg: "failed to copy network setup script", Err: err}
-	}
-
-	// Make script executable
-	if err := os.Chmod(scriptDest, 0755); err != nil {
-		return &WrappedError{Msg: "failed to set executable permissions on script", Err: err}
-	}
-
-	c.logger.Debug("Network setup script copied to overlay", "destination", scriptDest)
-
-	// Systemd service file
-	serviceSrc := filepath.Join(configsDir, "trusted-platform-network.service")
-	if _, err := os.Stat(serviceSrc); os.IsNotExist(err) {
-		c.logger.Warn("Network service file not found, skipping", "path", serviceSrc)
-		return nil
-	}
-
-	// Destination for service in overlay (lib/systemd/system)
-	overlayServiceDir := filepath.Join(c.overlayDir, "lib", "systemd", "system")
-	if err := os.MkdirAll(overlayServiceDir, 0755); err != nil {
-		return &WrappedError{Msg: "failed to create overlay systemd directory", Err: err}
-	}
-
-	// Copy service file to overlay
-	serviceDest := filepath.Join(overlayServiceDir, "trusted-platform-network.service")
-	if err := copyFile(serviceSrc, serviceDest); err != nil {
-		return &WrappedError{Msg: "failed to copy network service file", Err: err}
-	}
-
-	// Set restrictive permissions on service file
-	if err := os.Chmod(serviceDest, 0644); err != nil {
-		return &WrappedError{Msg: "failed to set permissions on service file", Err: err}
-	}
-
-	c.logger.Debug("Network service file copied to overlay", "destination", serviceDest)
-
-	c.logger.Info("Network setup files copied successfully to overlay")
 	return nil
 }
 

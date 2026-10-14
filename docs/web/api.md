@@ -187,6 +187,15 @@ on an unknown host. `TestEdgeSurface_RouteSetIsAWhitelist` pins the edge
 route set, so a route added to the platform later cannot appear on a public
 listener without failing the build.
 
+`provisioning` (#177) mounts only `GET /api/v1/devices/config`, the
+unauthenticated boot-time config fetch, and the plaintext→TLS redirect. Every
+other path is the JSON `404` an unknown route gets. No other surface mounts the
+route, so a `full` or `edge` listener answers it with that same `404`.
+`TestProvisioningSurface_RouteSetIsTheConfigRouteAlone` pins the route set and
+`TestFullSurface_ConfigRouteIsAnUnknownRoute` pins the refusal on a general
+listener. The route's contract is in
+[`docs/device/api.md`](../device/api.md) §5.
+
 ## 7. Mounted, not owned
 
 | Surface | Where | Documented in |

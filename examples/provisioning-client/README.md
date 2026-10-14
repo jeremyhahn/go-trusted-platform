@@ -175,4 +175,4 @@ fi
 
 - [Provisioning Client Documentation](../../docs/PROVISIONING_CLIENT.md)
 - [ACME Enrollment](../../docs/CA-ACME.md)
-- [Network Setup](../../docs/network-setup.md)
+- [Device activation](../../docs/device/architecture.md#44-activation-identity-becomes-network-access)

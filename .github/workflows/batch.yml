@@ -219,6 +219,11 @@ jobs:
       - name: Install cpio for the netboot media tests
         run: sudo apt-get update && sudo apt-get install -y cpio
 
+      # libssl-dev: pkg/app's IDevID mTLS tests run go-tpm-tools' simulator,
+      # which compiles the reference TPM with cgo against OpenSSL (#149).
+      - name: Install OpenSSL headers for the TPM simulator
+        run: sudo apt-get install -y libssl-dev
+
       - name: Resolve RACE_TAGS, RACE_SKIP and RACE_PKGS from the Makefile
         run: |
           set -e

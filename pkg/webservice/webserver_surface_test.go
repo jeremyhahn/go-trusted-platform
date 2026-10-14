@@ -95,7 +95,7 @@ func get(router http.Handler, host, path string) *httptest.ResponseRecorder {
 }
 
 func TestResolveSurface(t *testing.T) {
-	for in, want := range map[string]string{"": v1.SurfaceFull, "full": v1.SurfaceFull, "edge": v1.SurfaceEdge} {
+	for in, want := range map[string]string{"": v1.SurfaceFull, "full": v1.SurfaceFull, "edge": v1.SurfaceEdge, "provisioning": v1.SurfaceProvisioning} {
 		got, err := resolveSurface(&v1.Config{Surface: in})
 		require.NoError(t, err)
 		assert.Equal(t, want, got)

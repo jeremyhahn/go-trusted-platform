@@ -43,6 +43,7 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/go-tpm v0.9.8
+	github.com/google/go-tpm-tools v0.4.9
 	github.com/google/logger v1.1.1
 	github.com/google/nftables v0.3.0
 	github.com/google/uuid v1.6.0
@@ -208,7 +209,6 @@ require (
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/go-tpm-tools v0.4.9 // indirect
 	github.com/google/gopacket v1.1.19 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.21 // indirect

@@ -1116,15 +1116,23 @@ a different carrier.
 ### What is NOT gated yet, and why
 
 Measured from the built route table on 2026-09-05 (#165, #420) rather than
-from this section's earlier prose, which had gone stale twice: **eight routes
-answer a request carrying no credential**, and every one is either blocked on
+from this section's earlier prose, which had gone stale twice: **seven routes
+answer a request carrying no credential** (eight until #177 took
+`GET /devices/config` off the table), and every one is either blocked on
 a decision that is not a lane's or authenticated in its handler by design.
 
 | Routes | Why they are open | Blocker / mechanism |
 |---|---|---|
-| `GET /devices/config`, `POST /devices/templates`, `POST /devices/templates/{id}/create-profile` | bootstrap seeder (`pkg/webservice/v1/rest/device`); ruled to present `admin@system` over **mTLS** (#121/#176) | go-quicbaas#376 → #28 (SDK bump), then #176 |
+| `POST /devices/templates`, `POST /devices/templates/{id}/create-profile` | bootstrap seeder (`pkg/webservice/v1/rest/device`); ruled to present `admin@system` over **mTLS** (#121/#176) | go-quicbaas#376 → #28 (SDK bump), then #176 |
 | `POST /pxe/webhook/complete` | authenticates nobody; identifies the device by a MAC from the request body | #238 — what a booting node presents is an architecture decision |
 | `POST /provisioning/config`, `GET /provisioning/config/nonce`, `POST /provisioning/sign`, `GET /provisioning/sessions/{sessionID}/poll` | a machine at boot has no operator session; EAB + single-use nonce (+ EK for signing) are verified **in the handler** (`configdelivery/service.go` `verifyNonceAndEAB`, `verifyEKBinding`; `sign.go`) | by design; what is missing is a direct assertion that the handler refuses without a valid EAB, which the deny audit cannot see |
+
+`GET /devices/config` is not in this table because no general listener mounts
+it. It is the unauthenticated boot-time config fetch. Only a webservice with
+`surface: provisioning`, bound inside the provisioning zone, serves it (#177,
+ruled 2026-10-14). That listener serves nothing else. An EK-bound challenge is
+the planned follow-up ([`docs/device/architecture.md`](../device/architecture.md)
+§4.2).
 
 **`/api/v1/attestation` is gated (#387).** The earlier hold here — "the split
 axis depends on what a node presents" — was resolved by the #226 design:

@@ -33,12 +33,12 @@ const (
 // (pkg/webservice/v1/rest/device). They are the only plural routes allowed to
 // share a path with a singular one. The seeder alone owns them (#123/#124):
 // its `{role, template}` body is a different contract from the CRUD create,
-// and pkg/bootstrap/seeder.go and the gateway templates' config-server-url
-// call them by these names. The exemption is keyed by method AND path, so a
-// new CRUD alias on one of these paths, such as GET /devices/templates, is
-// still reported.
+// and pkg/bootstrap/seeder.go calls them by these names. The exemption is
+// keyed by method AND path, so a new CRUD alias on one of these paths, such
+// as GET /devices/templates, is still reported. The seeder's GET
+// /devices/config, which the templates' config-server-url names, is not in
+// this table: only the provisioning surface mounts it (#177).
 var seederPluralRoutes = map[string]bool{
-	"GET /api/v1/devices/config":                                true,
 	"POST /api/v1/devices/templates":                            true,
 	"POST /api/v1/devices/templates/{id:[0-9]+}/create-profile": true,
 }

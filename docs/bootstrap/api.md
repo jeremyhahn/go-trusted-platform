@@ -184,7 +184,7 @@ They are the only part of bootstrap that crosses a network boundary as an API.
 |---|---|---|---|---|---|
 | Upload a device template (seeder shape) | `POST /api/v1/devices/templates` | `MISSING — docs/13 G7` ⁷ | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ via the template service |
 | Create a profile from a template (seeder shape) | `POST /api/v1/devices/templates/{id}/create-profile` → `201` envelope, `payload.id` string (below) | `DeviceService.CreateProfileFromTemplate` | `MISSING — docs/13 G7` ⁸ | `MISSING — docs/13 G7` | ✅ |
-| Fetch a device's config by identity | `GET /api/v1/devices/config` | `DeviceService.FindConfigForDevice` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+| Fetch a device's config at boot (`?mac=` / `?serial=`) | `GET /api/v1/devices/config`, **provisioning listener only** (#177) | REST-only ⁹ | REST-only ⁹ | REST-only ⁹ | REST-only ⁹ |
 | Enroll a node's BMC | `POST /api/v1/bmc/{profileID}/enroll` | see [`docs/bmc/`](../bmc/) | see [`docs/bmc/`](../bmc/) | see [`docs/bmc/`](../bmc/) | see [`docs/bmc/`](../bmc/) |
 
 ⁷ The seeder's `{"role", "template"}` upload has no equivalent on the other
@@ -198,6 +198,15 @@ create-from-template path. The MCP `profile_create` tool is likewise the direct
 path. Building a profile from a template in the CRUD shape (`overrides` only, no
 seeder `mac`/`hostname`/`config`) is QUIC sub-op `0x24` under `0xCF` and the MCP
 tool `profile_create_from_template` (#497).
+
+⁹ The boot fetch is REST-only by design. Its caller is a machine still booting,
+with no credential, so it is served only by a webservice with
+`surface: provisioning` bound inside the provisioning zone. Every other listener
+answers it with the unknown-route `404` (#177; see *Authorization* below).
+`DeviceService.FindConfigForDevice` on gRPC, Unix, QUIC, MCP and embedded is a
+different operation: the scope-gated `device:read` operator query, whose REST
+equivalent is `GET /api/v1/device/profiles/find-config`
+([`docs/device/api.md`](../device/api.md) §3).
 
 ### Request and response shapes
 
@@ -218,7 +227,8 @@ Profile creation takes `{"mac", "hostname", "role", "config", "ek_cert"}` where
 `config` is the fully merged device configuration. The control plane stores
 `config` on the profile **verbatim** (it is authoritative — the handler does
 not merge it onto the template again, so keys the seeder replaced stay
-replaced) and delivers it unchanged from `GET /api/v1/devices/config`. A
+replaced) and delivers it unchanged from `GET /api/v1/devices/config` on the
+provisioning listener. A
 `config` that is not a JSON object (an explicit `null` included) is a `400`.
 **`ek_cert` is refused with `400` on this route**: the route carries no caller
 credential today (see *Authorization — ruled, pending an upstream capability*
@@ -252,8 +262,8 @@ router-wide authentication middleware is applied to `/api/v1` (only CORS, and
 rate limiting on the ACME subtree), and the seeder's own HTTP client presents no
 bearer token and no client certificate — it verifies the *server*, not itself.
 
-**These routes are reachable without a credential on every running platformd.**
-That was measured, not inferred, and the chain is:
+**The two POST routes are reachable without a credential on every running
+platformd.** That was measured, not inferred, and the chain is:
 
 1. `pkg/app/app.go` constructs the profile and template services
    unconditionally, failing fatally if either cannot be built. So the
@@ -267,9 +277,10 @@ That was measured, not inferred, and the chain is:
 3. `pkg/webservice/webserver_v1.go` mounts that `/api/v1` subrouter with only
    the CORS middleware. There is no router-wide authentication seam behind it.
 
-The consequences are read *and* write. `GET /api/v1/devices/config` returns any
-node's full merged configuration as YAML to an unauthenticated caller. More
-seriously, `POST /api/v1/devices/templates/{id}/create-profile` derives the
+Until #177, `GET /api/v1/devices/config` sat on the same subrouter and returned
+any node's full merged configuration as YAML to an unauthenticated caller on
+every listener. It no longer does (below). The write is the more serious
+exposure: `POST /api/v1/devices/templates/{id}/create-profile` derives the
 profile id as `util.NewID(hostname)` and saves over whatever is there, so an
 unauthenticated caller who knows or guesses a hostname can **replace that node's
 profile, including the `config` the control plane delivers to it on first
@@ -286,6 +297,24 @@ affordance. The parent record is issue #121; the two POST routes are #176 and
 `GET /api/v1/devices/config` is #177, which cannot take the same treatment —
 its caller is a machine that is still booting and holds no credential, so
 locking it to admin mTLS would break PXE provisioning.
+
+**#177 was ruled on 2026-10-14 and is implemented: the config fetch is served
+only on the isolated provisioning VLAN.** Only a webservice with
+`surface: provisioning` mounts it, and that listener mounts nothing else.
+Startup refuses the listener unless its `bind-host` is an IP literal inside
+the provisioning zone of the node's network plan
+(`webservice.ValidateProvisioningSurface`). Every full and edge listener
+answers the route with the unknown-route `404`. The route stays
+unauthenticated by design, so the boundary is the address plus the
+provisioning zone's flows: a candidate on that VLAN reaches it, and nothing
+else does. Binding an address alone is not isolation, because Linux accepts a
+packet for any local address on any interface. An EK-bound challenge, so that
+only the machine a profile names can read its config, is the planned
+follow-up ([`docs/provisioning/engineering.md`](../provisioning/engineering.md)).
+The trust boundary is in [`docs/device/architecture.md`](../device/architecture.md)
+§4.2.
+
+The rest of this section concerns the two POST routes.
 
 The ruling is not yet implemented, and the reason is worth stating so the
 obvious partial fix is not mistaken for it. `MTLSMiddleware()` already exists

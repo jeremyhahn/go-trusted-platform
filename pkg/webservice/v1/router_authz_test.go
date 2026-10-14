@@ -523,12 +523,14 @@ var pendingRoutes = map[string]string{
 	// than gated, because implementing the ruled seam is that issue's work,
 	// not #165's.
 	//
-	// The third route, POST /devices/templates/{id:[0-9]+}/create-profile,
+	// The second route, POST /devices/templates/{id:[0-9]+}/create-profile,
 	// was believed not to appear in the walk. It does -- it is in the golden
 	// -- and the audit passed it only because the old probe could not reach
 	// a numeric-pattern route (#420). It is reachable, unauthenticated, and
-	// carries the same ruling as the other two.
-	"GET /api/v1/devices/config":                                "#121/#176 — bootstrap seeder; ruled to present admin@system over mTLS.",
+	// carries the same ruling as the first.
+	//
+	// The seeder's GET /devices/config is not in this table: it is mounted
+	// only on the provisioning surface, never on the full one (#177).
 	"POST /api/v1/devices/templates":                            "#121/#176 — bootstrap seeder; ruled to present admin@system over mTLS.",
 	"POST /api/v1/devices/templates/{id:[0-9]+}/create-profile": "#121/#176 — bootstrap seeder; ruled to present admin@system over mTLS. Hidden from the audit until #420 made the probe pattern-aware.",
 
