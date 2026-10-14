@@ -1051,11 +1051,19 @@ boundary 4.
 |---|---|---|
 | `<efi>/tpm2/installer.luks` | installer | Encrypted container: LUKS key, recovery key, config |
 | `<efi>/tpm2/seal-platform.pub` / `.priv` | first boot | The production seal. **Presence is the "already provisioned" marker.** |
-| `<efi>/tpm2/seal-upgrade.pub` / `.priv` | first boot | Non-PCR seal for kernel upgrades. Presence signals a re-seal is needed. |
-| `<efi>/tpm2/pcr-banks` | first boot | `seal-pcrs`, `platform-pcr`, `platform-pcr-bank`, `golden-pcrs`, `keystore-srk-handle` (the seal parent — the **Platform KeyStore SRK**, default `0x81000002`; never the SSRK, whose absence-of-platform-binding made platformd re-provision destructively, #61), `keystore-platform-policy` (HOW the seal authorized the parent SRK — the unseal replays this mode instead of assuming; absent defaults to `false`, the seal side's default), `ssrk-handle` |
+| `<efi>/tpm2/seal-upgrade.pub` / `.priv` | nothing in production | Read by the `TPM-Upgrade` strategy every boot, which declines when the files are absent (`pkg/initrd/strategy_tpm_upgrade.go:117-118`). The only writer, `writeUpgradeSealedObjects` (`pkg/firstboot/executor.go:763-774`), is reached only from `Executor.Run`, which nothing calls; first boot deletes any it finds (`pkg/firstboot/strategy.go:1361`). No device has one today. |
+| `<efi>/tpm2/pcr-banks` | first boot | `seal-pcrs` (recorded only, `pkg/firstboot/strategy.go:1335`; never applied to the seal, which uses the platform policy, `strategy.go:1302`), `platform-pcr`, `platform-pcr-bank`, `golden-pcrs`, `keystore-srk-handle` (the seal parent — the **Platform KeyStore SRK**, default `0x81000002`; never the SSRK, whose absence-of-platform-binding made platformd re-provision destructively, #61), `keystore-platform-policy` (HOW the seal authorized the parent SRK — the unseal replays this mode instead of assuming; absent defaults to `false`, the seal side's default), `ssrk-handle` |
 | `<efi>/tpm2/pcr-seal-values.txt` | first boot | PCR values at seal time, for debugging |
 | `<efi>/tpm2/swtpm-state/` | first boot | Software-TPM state, when a software TPM is in use |
 | `<efi>/tpm2/ppi-clear-attempted` | first boot | Loop guard for firmware-level TPM clear escalation |
+
+So a kernel or firmware change that moves the bound PCRs ends at the
+`Password` prompt, then `ErrTPMSealPolicyDrift` from platformd — see
+[architecture.md](architecture.md) trust boundary 5. *Planned, not
+implemented (go-xkms #1443):* `TPM-Upgrade` stays; upgraded images are built
+and signed centrally and staged, not rebuilt on the device; the bound PCR set
+becomes configurable per board, default 7 and 11; the upgrade seal gets a
+named policy approved for the predicted PCR values.
 
 Seal blobs are written `0600`; the metadata files are `0644`. On the root
 filesystem, `/var/lib/trusted-platform/.initialized` is the platform-initialized
