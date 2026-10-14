@@ -510,7 +510,7 @@ ioctl is what tells the firmware to release them. Leave it on.
 
 ```
 platform-initrd boot        Unlock the encrypted root filesystem
-platform-initrd recovery    Recovery mode with fallback and reseal
+platform-initrd recovery    Recovery mode with fallback unlock
 platform-initrd version     Print version information
 ```
 
@@ -546,7 +546,7 @@ platform-initrd boot --diskless --root-mount /sysroot
 |---|---|---|---|---|
 | `--device` | `-d` | string | — (**required**) | LUKS device path |
 | `--name` | `-n` | string | `cryptroot` | LUKS mapping name |
-| `--reseal-pcrs` | | bool | **`true`** | Reseal to current PCRs after unlock |
+| `--reseal-pcrs` | | bool | `true` | Recorded but not read; recovery does not reseal (below) |
 | `--fido2` | | bool | **`true`** | Enable FIDO2 authenticator unlock |
 | `--interactive` | | bool | `false` | Interactive recovery menu |
 | `--tpm-path` | | string | `/dev/tpmrm0` | TPM device |
@@ -563,8 +563,14 @@ platform-initrd recovery --device /dev/sda2 --interactive
 
 **Recovery hard-codes its PCR selection to `0,1,2,3,7`** and its timeout to 300
 seconds with 5 retries (`pkg/boot/commands/recovery.go`). It does **not** honour
-a `--pcrs` flag — there isn't one. If your seal uses a different PCR set,
-recovery's automatic reseal will produce a seal against `0,1,2,3,7`.
+a `--pcrs` flag — there isn't one.
+
+**Recovery does not reseal.** The TPM-PCR unlock reads its seal from
+`tpm2/seal-platform.pub` / `.priv` on the ESP, which only first boot writes; the
+initrd has no writer for them. Option 4 of the `--interactive` menu ("Attempt to
+reseal TPM keys") therefore refuses with *"the resealed data cannot be stored"*,
+naming the TPM-PCR slot, before it unseals anything. It never reports success.
+Unlock, boot, and reseal from the running system.
 
 ---
 
