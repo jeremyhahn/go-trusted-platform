@@ -95,7 +95,7 @@ Security tags enable advanced cryptographic features.
 | `WITH_PKCS11` | 0 | PKCS#11 HSM support (`pkcs11`, requires CGO) |
 | `WITH_QUANTUM` | 0 | Post-quantum cryptography algorithms (`quantum`) |
 | `WITH_FROST` | 1 | FROST threshold signatures, RFC 9591 (`frost`) |
-| `WITH_FIPS` | 0 | FIPS 140-3 crypto implementations (`fips`; pair with `GODEBUG=fips140=only`) |
+| `WITH_FIPS` | 0 | FIPS 140-3 crypto implementations (`fips`; pair with `GODEBUG=fips140=only`). See [FIPS mode](../fips/engineering.md) |
 
 ## Messaging Protocol Tags
 

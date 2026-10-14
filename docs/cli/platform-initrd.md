@@ -42,7 +42,7 @@ platform-initrd boot --device /dev/sda2
 - `--tpm-path`: TPM device path (default: /dev/tpmrm0)
 - `--efi-path`: EFI partition mount point (default: /boot/efi)
 - `--xkms-dir`: XKMS storage directory (default: /etc/trusted-platform/xkms)
-- `--fips`: Enable FIPS mode
+- `--fips`: Recorded but not read; the kernel's FIPS mode selects the keyslot KDF ([FIPS mode](../fips/cli.md))
 - `--verbose, -v`: Enable verbose logging
 - `--debug`: Enable debug logging
 
@@ -63,7 +63,7 @@ platform-initrd recovery --device /dev/sda2
 - `--tpm-path`: TPM device path (default: /dev/tpmrm0)
 - `--efi-path`: EFI partition mount point (default: /boot/efi)
 - `--xkms-dir`: XKMS storage directory (default: /etc/trusted-platform/xkms)
-- `--fips`: Enable FIPS mode
+- `--fips`: Recorded but not read; the kernel's FIPS mode selects the keyslot KDF ([FIPS mode](../fips/cli.md))
 - `--verbose, -v`: Enable verbose logging
 - `--debug`: Enable debug logging
 

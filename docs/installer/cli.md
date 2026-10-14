@@ -532,7 +532,7 @@ platform-initrd version     Print version information
 | `--xkms-dir` | | string | `/etc/trusted-platform/xkms` | XKMS storage directory |
 | `--verbose` | `-v` | bool | `false` | Verbose logging |
 | `--debug` | | bool | `false` | Debug logging |
-| `--fips` | | bool | `false` | FIPS mode (PBKDF2 instead of Argon2id) |
+| `--fips` | | bool | `false` | Recorded but not read; the kernel's FIPS mode selects the keyslot KDF ([FIPS mode](../fips/cli.md)) |
 
 ```bash
 platform-initrd boot --device /dev/sda2
@@ -554,7 +554,7 @@ platform-initrd boot --diskless --root-mount /sysroot
 | `--xkms-dir` | | string | `/etc/trusted-platform/xkms` | XKMS storage directory |
 | `--verbose` | `-v` | bool | `false` | Verbose logging |
 | `--debug` | | bool | `false` | Debug logging |
-| `--fips` | | bool | `false` | FIPS mode |
+| `--fips` | | bool | `false` | Recorded but not read; the kernel's FIPS mode selects the keyslot KDF ([FIPS mode](../fips/cli.md)) |
 
 ```bash
 platform-initrd recovery --device /dev/sda2

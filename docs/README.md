@@ -49,6 +49,7 @@ code, and change it in the same PR as the behavior.
 | [eab/](eab/) | ACME External Account Binding |
 | [factory-image/](factory-image/) | Factory disk images — Raspberry Pi, QEMU virt, U-Boot (`platformctl diskimage`) |
 | [firmware/](firmware/) | UEFI, Secure Boot, UKI, Authenticode, module signing |
+| [fips/](fips/) | FIPS 140-3 mode — the `fips` build tag, `fips140=only`, the kernel indicator, and what a FIPS build refuses |
 | [gateway/](gateway/) | `gatewayd` edge services and the trusted reverse proxy |
 | [health/](health/) | Liveness, readiness and component health |
 | [iam/](iam/) | Identity and access management (re-export frontage) |
@@ -307,7 +308,7 @@ Priorities are in [ROADMAP.md](../ROADMAP.md).
 
 ## Standards Compliance
 
-This project aims to be FIPS compliant and follows best practices and guidance issued by the TCG and NIST.
+This project aims to be FIPS compliant and follows best practices and guidance issued by the TCG and NIST. What FIPS mode does today is in [fips/](fips/).
 
 ### TCG (Trusted Computing Group)
 

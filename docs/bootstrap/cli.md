@@ -583,7 +583,7 @@ normally invoked by a service unit, not by hand.
 | `--efi-mount` | string | `/boot/efi` | EFI partition mount point |
 | `--pcrs` | uint slice | `nil` | PCRs to seal against; read from configuration when unset |
 | `--config` | string | `""` | Platform configuration file |
-| `--fips` | bool | `false` | Enable FIPS mode |
+| `--fips` | bool | `false` | Parsed but not read ([FIPS mode](../fips/cli.md)) |
 | `--verbose` | `-v` | `false` | Verbose logging |
 | `--debug` | bool | `false` | Debug logging |
 | `--platform-dir` | string | `/var/lib/trusted-platform` | Platform data directory |
@@ -653,7 +653,7 @@ platform-initrd version    Print version information
 | `--xkms-dir` | | string | `/etc/trusted-platform/xkms` | Key-management storage directory |
 | `--verbose` | `-v` | bool | `false` | Verbose logging |
 | `--debug` | | bool | `false` | Debug logging |
-| `--fips` | | bool | `false` | FIPS mode — PBKDF2 instead of Argon2id |
+| `--fips` | | bool | `false` | Recorded but not read; the kernel's FIPS mode selects the keyslot KDF ([FIPS mode](../fips/cli.md)) |
 
 **`recovery`** takes the same connection flags (`--device`, `--name`,
 `--tpm-path`, `--efi-path`, `--xkms-dir`, `--verbose`, `--debug`, `--fips`) plus:

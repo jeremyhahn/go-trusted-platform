@@ -267,9 +267,9 @@ NSEC3 uses hashed names to prevent zone enumeration:
 #### NSEC3 is unavailable under FIPS activation
 
 **Plan for this before designing a zone, not after.** A node started with
-`GODEBUG=fips140=only` (or with the kernel in FIPS mode, per the standard
-activation trigger) and `nsec-mode: nsec3` **fails to start**, with
-`ErrFIPSNSEC3Unsupported`.
+`GODEBUG=fips140=only` and `nsec-mode: nsec3` **fails to start**, with
+`ErrFIPSNSEC3Unsupported`. The kernel's FIPS mode alone does not set
+`GODEBUG` ([FIPS mode](../fips/architecture.md)), so it does not trigger this.
 
 This is a property of the protocol, not a gap in this implementation. RFC 5155
 registers exactly one NSEC3 hash algorithm — 1, SHA-1 — so there is nothing

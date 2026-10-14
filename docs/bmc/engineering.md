@@ -358,12 +358,10 @@ socket is dialled, with a typed error.
 Two properties of that check are deliberate and easy to get wrong:
 
 - **It is a runtime check, not a build-tag one**, unlike this package's
-  algorithm tables. Those use `//go:build fips` so MD5 and SHA-1 are absent from
-  the binary; nothing needs removing here, and `crypto/hmac`'s own enforcement
-  keys on `GODEBUG`. Doc 04 ruling 1 makes FIPS activation a *deployment*
-  decision — one artifact serves both markets — so a binary built without the
-  tag can still be run under `fips140=only`, and a build-tag check would let it
-  panic exactly as before.
+  algorithm tables (`//go:build fips`, so MD5 and SHA-1 are absent from the
+  binary): `crypto/hmac` enforces on `GODEBUG`, which an untagged binary can
+  also run under. Why the two switches differ is in
+  [FIPS mode](../fips/architecture.md).
 - **Non-FIPS behaviour is unchanged.** A short password is accepted as it always
   was. A FIPS-capable build is not a FIPS-activated one.
 

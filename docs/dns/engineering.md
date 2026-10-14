@@ -156,8 +156,7 @@ again from each `NewDNSSECService*` constructor for a config that reaches the
 service by another route. It refuses `nsec-mode: nsec3` under FIPS activation
 with `ErrFIPSNSEC3Unsupported` — RFC 5155 defines only a SHA-1 NSEC3 hash, which
 `crypto/sha1` refuses by panicking under `fips140=only`. The check is a runtime
-one, not build-tagged: doc 04 ruling 1 makes activation a deployment decision,
-so an untagged binary can still be run under `fips140=only`. `validateForMode`
+one, not build-tagged ([FIPS mode](../fips/architecture.md)). `validateForMode`
 takes the mode as a parameter so both states are testable from one binary —
 GODEBUG is fixed before `main`. See [dnssec.md](dnssec.md) for the operator-facing
 consequence.
