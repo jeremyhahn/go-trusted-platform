@@ -3219,11 +3219,12 @@ func (app *App) ImportEndorsementKeyCertificate(ctx context.Context) (*x509.Cert
 				return app.TPM.ProvisionEKCert(hierarchyAuth, ekCert.Raw)
 			}
 			var provisionErr error
-			if app.TPMConfig.EK.HierarchyAuth != nil {
+			switch {
+			case app.TPMConfig.EK.HierarchyAuth != nil:
 				provisionErr = app.TPMConfig.EK.HierarchyAuth.WithBytes(provisionEKCert)
-			} else if ekAttrs.TPMAttributes != nil && ekAttrs.TPMAttributes.HierarchyAuth != nil {
+			case ekAttrs.TPMAttributes != nil && ekAttrs.TPMAttributes.HierarchyAuth != nil:
 				provisionErr = provisionEKCert(ekAttrs.TPMAttributes.HierarchyAuth.Bytes())
-			} else {
+			default:
 				provisionErr = provisionEKCert(nil)
 			}
 
