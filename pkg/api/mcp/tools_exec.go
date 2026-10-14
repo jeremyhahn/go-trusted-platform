@@ -18,6 +18,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"math"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // vTPM tool execution handlers
@@ -579,14 +582,26 @@ func (r *ToolRegistry) executeSDNDeletePolicy(ctx context.Context, args map[stri
 
 // SDN Flow execution handlers
 
+// sdnAddFlowCallArgs are the sdn_add_flow arguments outside the flow body:
+// the bridge, and the token the server authorizes the call with. Every other
+// argument is a FlowConfig field, and the service decodes the body strictly,
+// so an argument FlowConfig does not declare is refused rather than dropped.
+var sdnAddFlowCallArgs = map[string]bool{"bridge_name": true, "_token": true, "accessToken": true}
+
 func (r *ToolRegistry) executeSDNAddFlow(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	bridgeName := getString(args, "bridge_name")
-	flow := getMap(args, "flow")
+	flow := make(map[string]interface{}, len(args))
+	for field, value := range args {
+		if !sdnAddFlowCallArgs[field] {
+			flow[field] = value
+		}
+	}
 
-	if err := r.service.SDNAddFlow(ctx, bridgeName, flow); err != nil {
+	added, err := r.service.SDNAddFlow(ctx, bridgeName, flow)
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return map[string]interface{}{"success": true, "flow": added}, nil
 }
 
 func (r *ToolRegistry) executeSDNDeleteFlow(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -612,10 +627,11 @@ func (r *ToolRegistry) executeSDNListFlows(ctx context.Context, args map[string]
 func (r *ToolRegistry) executeSDNFlushFlows(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	bridgeName := getString(args, "bridge_name")
 
-	if err := r.service.SDNFlushFlows(ctx, bridgeName); err != nil {
+	deleted, err := r.service.SDNFlushFlows(ctx, bridgeName)
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return map[string]interface{}{"success": true, "deleted_count": deleted}, nil
 }
 
 // SDN VLAN execution handlers
@@ -625,10 +641,11 @@ func (r *ToolRegistry) executeSDNCreateVLAN(ctx context.Context, args map[string
 	vlanID := getInt(args, "vlan_id")
 	name := getString(args, "name")
 
-	if err := r.service.SDNCreateVLAN(ctx, bridgeName, vlanID, name); err != nil {
+	vlan, err := r.service.SDNCreateVLAN(ctx, bridgeName, vlanID, name)
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return map[string]interface{}{"success": true, "vlan": vlan}, nil
 }
 
 func (r *ToolRegistry) executeSDNDeleteVLAN(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -653,25 +670,30 @@ func (r *ToolRegistry) executeSDNListVLANs(ctx context.Context, args map[string]
 
 // SDN Port authentication execution handlers
 
-func (r *ToolRegistry) executeSDNAuthenticatePort(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	bridgeName := getString(args, "bridge_name")
-	portName := getString(args, "port_name")
-	credentials := getStringMap(args, "credentials")
-
-	if err := r.service.SDNAuthenticatePort(ctx, bridgeName, portName, credentials); err != nil {
-		return nil, err
-	}
-	return map[string]interface{}{"success": true}, nil
+// ErrPortAuthNotEnforced refuses the port-authentication tools. The service
+// behind them checks only a certificate's validity window and records the
+// port in a map nothing reads: the switch never admits or blocks the port, so
+// answering "authenticated" or "revoked" would be a false security claim
+// (#304). It is FailedPrecondition on every transport.
+type ErrPortAuthNotEnforced struct {
+	Tool string
 }
 
-func (r *ToolRegistry) executeSDNRevokePortAuth(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	bridgeName := getString(args, "bridge_name")
-	portName := getString(args, "port_name")
+func (e ErrPortAuthNotEnforced) Error() string {
+	return "mcp: " + e.Tool + " is refused: port authentication is not enforced on the switch"
+}
 
-	if err := r.service.SDNRevokePortAuth(ctx, bridgeName, portName); err != nil {
-		return nil, err
-	}
-	return map[string]interface{}{"success": true}, nil
+// GRPCStatus classes the error FailedPrecondition.
+func (e ErrPortAuthNotEnforced) GRPCStatus() *status.Status {
+	return status.New(codes.FailedPrecondition, e.Error())
+}
+
+func (r *ToolRegistry) executeSDNAuthenticatePort(_ context.Context, _ map[string]interface{}) (interface{}, error) {
+	return nil, ErrPortAuthNotEnforced{Tool: "sdn_authenticate_port"}
+}
+
+func (r *ToolRegistry) executeSDNRevokePortAuth(_ context.Context, _ map[string]interface{}) (interface{}, error) {
+	return nil, ErrPortAuthNotEnforced{Tool: "sdn_revoke_port_auth"}
 }
 
 // SDN Statistics execution handlers
@@ -689,8 +711,9 @@ func (r *ToolRegistry) executeSDNGetPortStats(ctx context.Context, args map[stri
 
 func (r *ToolRegistry) executeSDNGetFlowStats(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	bridgeName := getString(args, "bridge_name")
+	flowID := getString(args, "flow_id")
 
-	stats, err := r.service.SDNGetFlowStats(ctx, bridgeName)
+	stats, err := r.service.SDNGetFlowStats(ctx, bridgeName, flowID)
 	if err != nil {
 		return nil, err
 	}

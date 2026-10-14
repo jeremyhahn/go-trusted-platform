@@ -655,23 +655,6 @@ func TestMCPServiceProvider_SDNListVLANs_NilServiceReturnsError(t *testing.T) {
 }
 
 // =============================================================================
-// SDNAuthenticatePort Coverage Tests
-// =============================================================================
-
-func TestMCPServiceProvider_SDNAuthenticatePort_NilServiceReturnsError(t *testing.T) {
-	ctx := context.Background()
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-
-	err := provider.SDNAuthenticatePort(ctx, "br0", "port1", nil)
-	if err == nil {
-		t.Error("expected error for nil SDN service")
-	}
-	if _, ok := err.(ErrServiceNotAvailable); !ok {
-		t.Errorf("expected ErrServiceNotAvailable, got %T", err)
-	}
-}
-
-// =============================================================================
 // SDNGetPortState Coverage Tests
 // =============================================================================
 
@@ -713,7 +696,7 @@ func TestMCPServiceProvider_SDNGetFlowStats_NilServiceReturnsError(t *testing.T)
 	ctx := context.Background()
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
 
-	_, err := provider.SDNGetFlowStats(ctx, "br0")
+	_, err := provider.SDNGetFlowStats(ctx, "br0", "0x1")
 	if err == nil {
 		t.Error("expected error for nil SDN service")
 	}

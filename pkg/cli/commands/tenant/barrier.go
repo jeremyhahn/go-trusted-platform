@@ -51,7 +51,8 @@ explicit lifecycle control:
 
   - init     Explicitly initialize a tenant barrier (idempotent if already
              initialized; required only when DEK isolation is enabled but
-             auto-init was skipped or for Shamir-based init).
+             auto-init was skipped). The barrier initializes with its
+             deterministic credential; Shamir sharing is refused.
   - unseal   Unseal a sealed barrier with the supplied key bytes. Empty key
              falls back to the deterministic init credential.
   - seal     Seal a previously initialized barrier. Subsequent reads/writes
@@ -59,11 +60,8 @@ explicit lifecycle control:
   - status   Report sealed/initialized state and active strategy metadata.
 
 Examples:
-  # Initialize a tenant barrier (default deterministic init)
+  # Initialize a tenant barrier (deterministic init)
   platformctl tenant barrier init my-tenant
-
-  # Initialize with Shamir 3-of-5 secret sharing
-  platformctl tenant barrier init my-tenant --threshold 3 --shares 5
 
   # Unseal a sealed tenant barrier with a hex-encoded key
   platformctl tenant barrier unseal my-tenant --key-hex deadbeef...
@@ -95,18 +93,18 @@ func newBarrierInitCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		Short: "Initialize a per-tenant barrier",
 		Long: `Initialize a per-tenant cryptographic barrier.
 
-When --threshold and --shares are both zero (default), the barrier uses a
-deterministic non-Shamir init derived from the tenant ID. Set both to non-zero
-values to enable Shamir secret sharing on the per-tenant root key; the
-returned shares must be distributed to custodians.`,
+The barrier initializes with a deterministic credential derived from the
+tenant ID, and the init returns no shares. Shamir sharing is not supported:
+--threshold and --shares must stay 0 (the default), and the daemon refuses any
+other value with InvalidArgument.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runBarrierInit(getFlags(), args[0], threshold, shares)
 		},
 	}
 
-	cmd.Flags().Int32Var(&threshold, "threshold", 0, "Shamir threshold (M of N); 0 = deterministic init")
-	cmd.Flags().Int32Var(&shares, "shares", 0, "Shamir total shares (N); 0 = deterministic init")
+	cmd.Flags().Int32Var(&threshold, "threshold", 0, "Shamir threshold; must be 0, any other value is refused")
+	cmd.Flags().Int32Var(&shares, "shares", 0, "Shamir total shares; must be 0, any other value is refused")
 
 	return cmd
 }
@@ -143,9 +141,6 @@ func runBarrierInit(flags *cli.CommonFlags, tenantName string, threshold, shares
 		})
 	case cli.OutputFormatTable:
 		printer.PrintSuccess(fmt.Sprintf("Tenant barrier initialized for %s", tenantName))
-		if threshold > 0 && shares > 0 {
-			printer.PrintInfo(fmt.Sprintf("Shamir scheme: %d-of-%d", threshold, shares))
-		}
 		return nil
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}

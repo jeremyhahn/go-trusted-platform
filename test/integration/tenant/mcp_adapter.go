@@ -344,7 +344,7 @@ func (a *MCPAdapter) ResumeTenant(ctx context.Context, opts ResumeTenantOptions)
 
 // GetQuotas retrieves tenant quotas
 func (a *MCPAdapter) GetQuotas(ctx context.Context, opts GetQuotasOptions) (*GetQuotasResult, error) {
-	result, err := a.callTool(ctx, "tenant_quotas_get", opts)
+	result, err := a.callTool(ctx, "tenant_get_quotas", opts)
 	if err != nil {
 		return nil, err
 	}
@@ -362,7 +362,7 @@ func (a *MCPAdapter) GetQuotas(ctx context.Context, opts GetQuotasOptions) (*Get
 
 // UpdateQuotas updates tenant quotas
 func (a *MCPAdapter) UpdateQuotas(ctx context.Context, opts UpdateQuotasOptions) (*UpdateQuotasResult, error) {
-	result, err := a.callTool(ctx, "tenant_quotas_update", opts)
+	result, err := a.callTool(ctx, "tenant_update_quotas", opts)
 	if err != nil {
 		return nil, err
 	}
@@ -380,7 +380,7 @@ func (a *MCPAdapter) UpdateQuotas(ctx context.Context, opts UpdateQuotasOptions)
 
 // GetUsage retrieves tenant resource usage
 func (a *MCPAdapter) GetUsage(ctx context.Context, opts GetUsageOptions) (*GetUsageResult, error) {
-	result, err := a.callTool(ctx, "tenant_usage_get", opts)
+	result, err := a.callTool(ctx, "tenant_get_usage", opts)
 	if err != nil {
 		return nil, err
 	}
@@ -398,7 +398,7 @@ func (a *MCPAdapter) GetUsage(ctx context.Context, opts GetUsageOptions) (*GetUs
 
 // CheckQuota checks if a resource request can be fulfilled
 func (a *MCPAdapter) CheckQuota(ctx context.Context, opts CheckQuotaOptions) (*CheckQuotaResult, error) {
-	result, err := a.callTool(ctx, "tenant_quota_check", opts)
+	result, err := a.callTool(ctx, "tenant_check_quota", opts)
 	if err != nil {
 		return &CheckQuotaResult{
 			TenantID: opts.TenantID,

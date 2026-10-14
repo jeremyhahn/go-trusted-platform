@@ -290,6 +290,12 @@ var appResultJSON = protojson.MarshalOptions{UseProtoNames: true}
 // decodeAppToolArgs decodes the tool arguments into the RPC request with the
 // proto3 JSON mapping. An argument the request does not declare is refused.
 func decodeAppToolArgs(args map[string]interface{}, request proto.Message) error {
+	// A token sent in the arguments authorized the call; it is not a field
+	// of the request, so the strict decode below must not see it.
+	args = maps.Clone(args)
+	for _, key := range tokenArgumentKeys {
+		delete(args, key)
+	}
 	if len(args) == 0 {
 		return nil
 	}

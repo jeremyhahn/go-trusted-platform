@@ -855,10 +855,14 @@ func (r *ToolRegistry) registerSDNTools() {
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"bridge_name": map[string]interface{}{"type": "string", "description": "Bridge name"},
-				"priority":    map[string]interface{}{"type": "integer", "description": "Flow priority"},
-				"match":       map[string]interface{}{"type": "object", "description": "Match criteria for the flow"},
-				"actions":     map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Actions to perform on matching packets"},
+				"bridge_name":  map[string]interface{}{"type": "string", "description": "Bridge name"},
+				"table":        map[string]interface{}{"type": "string", "description": "Flow table: FLOW_TABLE_0..FLOW_TABLE_3 or FLOW_TABLE_DROP"},
+				"priority":     map[string]interface{}{"type": "integer", "description": "Flow priority"},
+				"match":        map[string]interface{}{"type": "object", "description": "Match criteria, as gRPC FlowMatch: in_port, vlan_id, eth_src, eth_dst, eth_type, ip_src, ip_dst, ip_proto, tcp_src, tcp_dst, udp_src, udp_dst"},
+				"actions":      map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "object"}, "description": "Actions, as gRPC FlowAction: {type: FLOW_ACTION_OUTPUT|DROP|SET_VLAN|STRIP_VLAN|..., port, vlan_id, field, value, table_id}"},
+				"idle_timeout": map[string]interface{}{"type": "integer", "description": "Idle timeout in seconds"},
+				"hard_timeout": map[string]interface{}{"type": "integer", "description": "Hard timeout in seconds"},
+				"metadata":     map[string]interface{}{"type": "object", "description": "Flow metadata (string values)"},
 			},
 			"required": []string{"bridge_name"},
 		},
@@ -944,7 +948,7 @@ func (r *ToolRegistry) registerSDNTools() {
 	// Port authentication tools
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_authenticate_port",
-		Description: "Authenticate a port (802.1X style)",
+		Description: "Refused: port authentication is not enforced on the switch",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -958,7 +962,7 @@ func (r *ToolRegistry) registerSDNTools() {
 
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_revoke_port_auth",
-		Description: "Revoke port authentication",
+		Description: "Refused: port authentication is not enforced on the switch",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -985,13 +989,14 @@ func (r *ToolRegistry) registerSDNTools() {
 
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_get_flow_stats",
-		Description: "Get flow statistics for a bridge",
+		Description: "Get the statistics of one flow on a bridge",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"bridge_name": map[string]interface{}{"type": "string", "description": "Bridge name"},
+				"flow_id":     map[string]interface{}{"type": "string", "description": "Flow ID, as sdn_add_flow or sdn_list_flows returns it"},
 			},
-			"required": []string{"bridge_name"},
+			"required": []string{"bridge_name", "flow_id"},
 		},
 	})
 }
@@ -1881,6 +1886,11 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		if result, handled, err := r.dispatchAppServiceTool(ctx, name, args); handled {
 			return result, err
 		}
+		// DNS tool dispatch (dns_zone_*, dns_record_*, dns_lookup) calls
+		// the gRPC DNSService servicer through the dnsTools table.
+		if result, handled, err := r.dispatchDNSTool(ctx, name, args); handled {
+			return result, err
+		}
 		// BMC tool dispatch (platform_bmc_*) uses a map-based dispatcher
 		// for O(1) routing per project conventions.
 		if result, handled, err := r.dispatchBMCTool(ctx, name, args); handled {
@@ -1929,6 +1939,9 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		// Device profile CRUD tool dispatch (profile_*) uses a map-based
 		// dispatcher for O(1) routing per project conventions.
 		if result, handled, err := r.dispatchAttestationReportTool(ctx, name, args); handled {
+			return result, err
+		}
+		if result, handled, err := r.dispatchAttestationManifestTool(ctx, name, args); handled {
 			return result, err
 		}
 		if result, handled, err := r.dispatchDeviceProfileTool(ctx, name, args); handled {

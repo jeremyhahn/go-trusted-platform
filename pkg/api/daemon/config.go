@@ -146,6 +146,12 @@ type Config struct {
 	// Unix — shares the same tenant manager instance.
 	PlatformTenantManager *tenant.Manager
 
+	// PlatformTenantID is the platform's operating (system) tenant: the one
+	// tenant the TenantService lets act on other tenants and call its
+	// cross-tenant methods, as the REST tenant guards do. Empty admits no
+	// tenant-bound caller as the system tenant.
+	PlatformTenantID string
+
 	// DNSService is the DNS service implementation.
 	// When set, the daemon will register DNS operations on QUIC and MCP.
 	DNSService DNSService

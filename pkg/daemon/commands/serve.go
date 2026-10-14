@@ -897,6 +897,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	// dashboard's GET /api/v1/tenants/{id}, which otherwise renders 400
 	// "tenant manager not initialized" on every page load).
 	daemonConfig.PlatformTenantManager = platformTenantManager(logger, App)
+	daemonConfig.PlatformTenantID = platformTenantID(App)
 
 	// Provision daemon mTLS identity for the gRPC TCP / QUIC listeners. In
 	// webservices mode this used to be skipped, leaving the gRPC TCP server
@@ -1600,6 +1601,7 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 	// The same platform tenant.Manager the webservices path wires: without
 	// it a daemon-only node registers TenantService but cannot serve it.
 	config.PlatformTenantManager = platformTenantManager(logger, App)
+	config.PlatformTenantID = platformTenantID(App)
 
 	if App != nil && App.DNSService != nil {
 		config.DNSService = App.DNSService

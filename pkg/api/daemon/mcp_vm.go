@@ -124,7 +124,7 @@ func (m *MCPServiceProvider) VMSnapshotCreate(ctx context.Context, vmID, name st
 	}
 	snapshot, err := snapshotter.CreateSnapshot(ctx, vmID, name)
 	if err != nil {
-		return nil, err
+		return nil, classifyComputeErr(err, vmSnapshotErrToStatus)
 	}
 	return vmSnapshotToMap(snapshot), nil
 }
@@ -137,7 +137,7 @@ func (m *MCPServiceProvider) VMSnapshotGet(ctx context.Context, vmID, snapshotID
 	}
 	snapshots, err := snapshotter.ListSnapshots(ctx, vmID)
 	if err != nil {
-		return nil, err
+		return nil, classifyComputeErr(err, vmSnapshotErrToStatus)
 	}
 	for _, snapshot := range snapshots {
 		if snapshot.Name == snapshotID {
@@ -155,7 +155,7 @@ func (m *MCPServiceProvider) VMSnapshotList(ctx context.Context, vmID string) (i
 	}
 	snapshots, err := snapshotter.ListSnapshots(ctx, vmID)
 	if err != nil {
-		return nil, err
+		return nil, classifyComputeErr(err, vmSnapshotErrToStatus)
 	}
 	results := make([]interface{}, 0, len(snapshots))
 	for _, snapshot := range snapshots {
@@ -174,7 +174,7 @@ func (m *MCPServiceProvider) VMSnapshotDelete(ctx context.Context, vmID, snapsho
 	if err != nil {
 		return err
 	}
-	return snapshotter.DeleteSnapshot(ctx, vmID, snapshotID)
+	return classifyComputeErr(snapshotter.DeleteSnapshot(ctx, vmID, snapshotID), vmSnapshotErrToStatus)
 }
 
 // VMSnapshotRestore restores a VM from a snapshot.
@@ -183,7 +183,7 @@ func (m *MCPServiceProvider) VMSnapshotRestore(ctx context.Context, vmID, snapsh
 	if err != nil {
 		return err
 	}
-	return snapshotter.RestoreSnapshot(ctx, vmID, snapshotID)
+	return classifyComputeErr(snapshotter.RestoreSnapshot(ctx, vmID, snapshotID), vmSnapshotErrToStatus)
 }
 
 // VMAttest generates a vTPM quote for a running VM.
@@ -192,9 +192,14 @@ func (m *MCPServiceProvider) VMAttest(ctx context.Context, vmID string, nonce []
 	if err != nil {
 		return nil, err
 	}
+	for _, idx := range pcrs {
+		if err := validateVMPCRIndex(idx); err != nil {
+			return nil, err
+		}
+	}
 	report, err := attester.AttestVM(ctx, vmID, nonce, pcrs)
 	if err != nil {
-		return nil, err
+		return nil, classifyComputeErr(err, vmSnapshotErrToStatus)
 	}
 
 	pcrValues := make(map[string]string, len(report.PCRValues))
@@ -236,7 +241,7 @@ func (m *MCPServiceProvider) VMAttestVerify(ctx context.Context, vmID string, re
 		ExpectedPCRs:       req.ExpectedPCRs,
 	})
 	if err != nil {
-		return nil, err
+		return nil, classifyComputeErr(err, vmSnapshotErrToStatus)
 	}
 
 	actualPCRs := make(map[string]string, len(result.ActualPCRs))

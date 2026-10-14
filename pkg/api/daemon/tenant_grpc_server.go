@@ -34,6 +34,10 @@ type TenantGRPCServer struct {
 
 	manager *tenant.Manager
 	logger  *slog.Logger
+
+	// systemTenantID is the platform's operating tenant, the one tenant
+	// that may act on every other (tenant_grpc_authz.go).
+	systemTenantID string
 }
 
 // TenantGRPCServerOption is a functional option for configuring TenantGRPCServer.
@@ -82,6 +86,9 @@ func (s *TenantGRPCServer) ListTenants(
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
 	}
+	if err := s.authorizeSystemTenant(ctx, "ListTenants"); err != nil {
+		return nil, err
+	}
 
 	limit := int(req.GetLimit())
 	if limit <= 0 {
@@ -122,6 +129,9 @@ func (s *TenantGRPCServer) GetTenant(
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
+	if err := s.authorizeTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, err
+	}
 
 	entity, err := s.manager.GetTenant(ctx, req.GetTenantId())
 	if err != nil {
@@ -141,6 +151,9 @@ func (s *TenantGRPCServer) GetTenantByName(
 ) (*platformv1.GetTenantByNameResponse, error) {
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
+	}
+	if err := s.authorizeSystemTenant(ctx, "GetTenantByName"); err != nil {
+		return nil, err
 	}
 
 	if req.GetName() == "" {
@@ -165,6 +178,9 @@ func (s *TenantGRPCServer) CreateTenant(
 ) (*platformv1.CreateTenantResponse, error) {
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
+	}
+	if err := s.authorizeSystemTenant(ctx, "CreateTenant"); err != nil {
+		return nil, err
 	}
 
 	if req.GetName() == "" {
@@ -232,6 +248,9 @@ func (s *TenantGRPCServer) UpdateTenant(
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
+	if err := s.authorizeTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, err
+	}
 
 	updateReq := &tenant.UpdateTenantRequest{
 		Labels:      req.GetLabels(),
@@ -272,6 +291,9 @@ func (s *TenantGRPCServer) DeleteTenant(
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
+	if err := s.authorizeTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, err
+	}
 
 	err := s.manager.DeleteTenant(ctx, req.GetTenantId())
 	if err != nil {
@@ -305,6 +327,9 @@ func (s *TenantGRPCServer) SuspendTenant(
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
+	if err := s.authorizeTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, err
+	}
 
 	err := s.manager.SuspendTenant(ctx, req.GetTenantId())
 	if err != nil {
@@ -333,6 +358,9 @@ func (s *TenantGRPCServer) ResumeTenant(
 
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	if err := s.authorizeTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, err
 	}
 
 	err := s.manager.ResumeTenant(ctx, req.GetTenantId())
@@ -366,6 +394,9 @@ func (s *TenantGRPCServer) GetQuotas(
 
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	if err := s.authorizeTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, err
 	}
 
 	quotas, err := s.manager.GetQuotas(ctx, req.GetTenantId())
@@ -405,6 +436,9 @@ func (s *TenantGRPCServer) UpdateQuotas(
 
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	if err := s.authorizeTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, err
 	}
 
 	quotas := &tenant.TenantQuotas{}
@@ -461,6 +495,9 @@ func (s *TenantGRPCServer) GetUsage(
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
+	if err := s.authorizeTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, err
+	}
 
 	usage, err := s.manager.GetUsage(ctx, req.GetTenantId())
 	if err != nil {
@@ -497,6 +534,9 @@ func (s *TenantGRPCServer) CheckQuota(
 
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	if err := s.authorizeTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, err
 	}
 
 	if req.GetResource() == "" {
@@ -543,6 +583,9 @@ func (s *TenantGRPCServer) Sync(
 	if s.manager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
 	}
+	if err := s.authorizeSystemTenant(ctx, "Sync"); err != nil {
+		return nil, err
+	}
 
 	err := s.manager.Sync(ctx)
 	if err != nil {
@@ -579,6 +622,9 @@ func (s *TenantGRPCServer) RotateTenantDEK(
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
+	if err := s.authorizeTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, err
+	}
 
 	result, err := s.manager.RotateTenantDEKWithOptions(ctx, req.GetTenantId(), req.GetBackground())
 	if err != nil {
@@ -607,6 +653,9 @@ func (s *TenantGRPCServer) GetTenantDEKStatus(
 
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	if err := s.authorizeTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, err
 	}
 
 	dekStatus, err := s.manager.GetTenantDEKStatus(ctx, req.GetTenantId())
@@ -653,9 +702,10 @@ func (s *TenantGRPCServer) GetTenantDEKStatus(
 // Per-Tenant Barrier Operations (added 2026-04-28)
 // =============================================================================
 
-// InitTenantBarrier explicitly initializes a per-tenant barrier. The optional
-// threshold/shares parameters configure Shamir secret sharing; both zero
-// means deterministic non-Shamir init. The tenant must already exist.
+// InitTenantBarrier explicitly initializes a per-tenant barrier with the
+// deterministic init credential. The tenant must already exist. A request
+// for Shamir sharing (non-zero threshold or shares) is refused: the manager
+// cannot apply it and no share would come back to the caller.
 func (s *TenantGRPCServer) InitTenantBarrier(
 	ctx context.Context,
 	req *platformv1.InitTenantBarrierRequest,
@@ -665,6 +715,13 @@ func (s *TenantGRPCServer) InitTenantBarrier(
 	}
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	if err := s.authorizeTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, err
+	}
+	if req.GetThreshold() != 0 || req.GetShares() != 0 {
+		shamir := ErrTenantBarrierShamirUnsupported{Threshold: req.GetThreshold(), Shares: req.GetShares()}
+		return nil, status.Error(codes.InvalidArgument, shamir.Error())
 	}
 
 	if err := s.manager.InitTenantBarrier(ctx, req.GetTenantId()); err != nil {
@@ -680,7 +737,7 @@ func (s *TenantGRPCServer) InitTenantBarrier(
 }
 
 // UnsealTenantBarrier unseals a per-tenant barrier with the provided key
-// material. An empty key falls back to the deterministic init credential.
+// material. An empty key is refused (InvalidArgument).
 func (s *TenantGRPCServer) UnsealTenantBarrier(
 	ctx context.Context,
 	req *platformv1.UnsealTenantBarrierRequest,
@@ -690,6 +747,9 @@ func (s *TenantGRPCServer) UnsealTenantBarrier(
 	}
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	if err := s.authorizeTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, err
 	}
 
 	if err := s.manager.UnsealTenantBarrier(ctx, req.GetTenantId(), req.GetKey()); err != nil {
@@ -716,6 +776,9 @@ func (s *TenantGRPCServer) SealTenantBarrier(
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
+	if err := s.authorizeTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, err
+	}
 
 	if err := s.manager.SealTenantBarrier(ctx, req.GetTenantId()); err != nil {
 		s.logger.Error("failed to seal tenant barrier", "tenant_id", req.GetTenantId(), "error", err)
@@ -741,6 +804,9 @@ func (s *TenantGRPCServer) GetTenantBarrierStatus(
 	}
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	if err := s.authorizeTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, err
 	}
 
 	st, err := s.manager.TenantBarrierStatus(ctx, req.GetTenantId())

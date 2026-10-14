@@ -581,11 +581,11 @@ func TestMCPServiceProvider_SDNAddFlow_Success(t *testing.T) {
 
 	flow := map[string]interface{}{
 		"priority": 100,
-		"match":    "in_port=1",
-		"actions":  "output:2",
+		"match":    map[string]interface{}{"in_port": "1"},
+		"actions":  []interface{}{map[string]interface{}{"type": "FLOW_ACTION_OUTPUT", "port": "2"}},
 	}
 
-	err := provider.SDNAddFlow(ctx, "br0", flow)
+	_, err := provider.SDNAddFlow(ctx, "br0", flow)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -607,7 +607,7 @@ func TestMCPServiceProvider_SDNAddFlow_ServiceError(t *testing.T) {
 		Logger:     slog.Default(),
 	})
 
-	err := provider.SDNAddFlow(ctx, "br0", map[string]interface{}{"priority": 100})
+	_, err := provider.SDNAddFlow(ctx, "br0", map[string]interface{}{"priority": 100})
 	if err == nil {
 		t.Fatal("expected error but got nil")
 	}
@@ -965,7 +965,8 @@ func TestMCPServiceProvider_SDN_ErrorTypes(t *testing.T) {
 		{
 			name: "SDNAddFlow_nil_service",
 			callFunc: func() error {
-				return provider.SDNAddFlow(ctx, "br0", nil)
+				_, err := provider.SDNAddFlow(ctx, "br0", nil)
+				return err
 			},
 			expectedErr: ErrServiceNotAvailable{},
 		},
@@ -1020,7 +1021,9 @@ func TestMCPServiceProvider_SDN_MethodCallVerification(t *testing.T) {
 		t.Errorf("expected ListFlows to be called once, got %d", mockOVS.GetCallCount("ListFlows"))
 	}
 
-	_ = provider.SDNAddFlow(ctx, "br0", map[string]interface{}{"priority": 100})
+	if _, err := provider.SDNAddFlow(ctx, "br0", map[string]interface{}{"priority": 100}); err != nil {
+		t.Fatalf("SDNAddFlow: %v", err)
+	}
 	if mockOVS.GetCallCount("AddFlow") != 1 {
 		t.Errorf("expected AddFlow to be called once, got %d", mockOVS.GetCallCount("AddFlow"))
 	}
@@ -1122,10 +1125,10 @@ func TestMCPServiceProvider_SDN_IntegrationFlow(t *testing.T) {
 	// 4. Add a flow
 	flow := map[string]interface{}{
 		"priority": 100,
-		"match":    "in_port=1",
-		"actions":  "output:2",
+		"match":    map[string]interface{}{"in_port": "1"},
+		"actions":  []interface{}{map[string]interface{}{"type": "FLOW_ACTION_OUTPUT", "port": "2"}},
 	}
-	err = provider.SDNAddFlow(ctx, "test-br", flow)
+	_, err = provider.SDNAddFlow(ctx, "test-br", flow)
 	if err != nil {
 		t.Fatalf("failed to add flow: %v", err)
 	}
@@ -1259,7 +1262,8 @@ func TestMCPServiceProvider_SDN_TableDrivenScenarios(t *testing.T) {
 			},
 			setupPorts: func(s *SDNService) {},
 			operation: func(p *MCPServiceProvider, ctx context.Context) error {
-				return p.SDNAddFlow(ctx, "br0", map[string]interface{}{"priority": 100})
+				_, err := p.SDNAddFlow(ctx, "br0", map[string]interface{}{"priority": 100})
+				return err
 			},
 			expectError: false,
 		},

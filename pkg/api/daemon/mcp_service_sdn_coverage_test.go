@@ -212,11 +212,11 @@ func TestMCPServiceProvider_SDNAddFlow_NilServiceTableDriven(t *testing.T) {
 			name:       "nil_sdn_service_with_complex_flow",
 			bridgeName: "test-bridge",
 			flow: map[string]interface{}{
-				"priority":  200,
-				"match":     "in_port=1",
-				"actions":   "output:2",
-				"table_id":  0,
-				"idle_time": 300,
+				"priority":     200,
+				"match":        map[string]interface{}{"in_port": "1"},
+				"actions":      []interface{}{map[string]interface{}{"type": "FLOW_ACTION_OUTPUT", "port": "2"}},
+				"table":        "FLOW_TABLE_0",
+				"idle_timeout": 300,
 			},
 			expectedErrSvc: "sdn",
 		},
@@ -230,7 +230,7 @@ func TestMCPServiceProvider_SDNAddFlow_NilServiceTableDriven(t *testing.T) {
 				Logger:     slog.Default(),
 			})
 
-			err := provider.SDNAddFlow(ctx, tc.bridgeName, tc.flow)
+			_, err := provider.SDNAddFlow(ctx, tc.bridgeName, tc.flow)
 			if err == nil {
 				t.Fatal("expected error for nil SDN service")
 			}
@@ -606,7 +606,8 @@ func TestMCPServiceProvider_SDN_NilService_ErrorMessages(t *testing.T) {
 			name:      "SDNAddFlow_error_message",
 			operation: "SDNAddFlow",
 			callFunc: func() error {
-				return provider.SDNAddFlow(ctx, "br0", nil)
+				_, err := provider.SDNAddFlow(ctx, "br0", nil)
+				return err
 			},
 			expectedMsg: "service not available: sdn",
 		},
@@ -710,7 +711,8 @@ func TestMCPServiceProvider_SDN_NilService_WithCancelledContext(t *testing.T) {
 		{
 			name: "SDNAddFlow_with_cancelled_context",
 			callFunc: func() error {
-				return provider.SDNAddFlow(ctx, "br0", nil)
+				_, err := provider.SDNAddFlow(ctx, "br0", nil)
+				return err
 			},
 		},
 		{

@@ -168,7 +168,7 @@ func TestMCPServiceProvider_SDNAddFlow_NilService(t *testing.T) {
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
 
 	t.Run("returns error when SDN service is nil", func(t *testing.T) {
-		err := provider.SDNAddFlow(ctx, "br0", map[string]interface{}{"priority": 100})
+		_, err := provider.SDNAddFlow(ctx, "br0", map[string]interface{}{"priority": 100})
 		if err == nil {
 			t.Fatal("expected error for nil SDN service")
 		}
@@ -213,7 +213,7 @@ func TestMCPServiceProvider_SDNFlushFlows_NilService(t *testing.T) {
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
 
 	t.Run("returns error when SDN service is nil", func(t *testing.T) {
-		err := provider.SDNFlushFlows(ctx, "br0")
+		_, err := provider.SDNFlushFlows(ctx, "br0")
 		if err == nil {
 			t.Fatal("expected error for nil SDN service")
 		}
@@ -228,7 +228,7 @@ func TestMCPServiceProvider_SDNCreateVLAN_NilService(t *testing.T) {
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
 
 	t.Run("returns error when SDN service is nil", func(t *testing.T) {
-		err := provider.SDNCreateVLAN(ctx, "br0", 100, "guest")
+		_, err := provider.SDNCreateVLAN(ctx, "br0", 100, "guest")
 		if err == nil {
 			t.Fatal("expected error for nil SDN service")
 		}
@@ -268,36 +268,6 @@ func TestMCPServiceProvider_SDNListVLANs_NilService(t *testing.T) {
 	})
 }
 
-func TestMCPServiceProvider_SDNAuthenticatePort_NilService(t *testing.T) {
-	ctx := context.Background()
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-
-	t.Run("returns error when SDN service is nil", func(t *testing.T) {
-		err := provider.SDNAuthenticatePort(ctx, "br0", "eth0", map[string]string{"certificate": "cert"})
-		if err == nil {
-			t.Fatal("expected error for nil SDN service")
-		}
-		if _, ok := err.(ErrServiceNotAvailable); !ok {
-			t.Errorf("expected ErrServiceNotAvailable, got %T: %v", err, err)
-		}
-	})
-}
-
-func TestMCPServiceProvider_SDNRevokePortAuth_NilService(t *testing.T) {
-	ctx := context.Background()
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-
-	t.Run("returns error when SDN service is nil", func(t *testing.T) {
-		err := provider.SDNRevokePortAuth(ctx, "br0", "eth0")
-		if err == nil {
-			t.Fatal("expected error for nil SDN service")
-		}
-		if _, ok := err.(ErrServiceNotAvailable); !ok {
-			t.Errorf("expected ErrServiceNotAvailable, got %T: %v", err, err)
-		}
-	})
-}
-
 func TestMCPServiceProvider_SDNGetPortStats_NilService(t *testing.T) {
 	ctx := context.Background()
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
@@ -318,7 +288,7 @@ func TestMCPServiceProvider_SDNGetFlowStats_NilService(t *testing.T) {
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
 
 	t.Run("returns error when SDN service is nil", func(t *testing.T) {
-		_, err := provider.SDNGetFlowStats(ctx, "br0")
+		_, err := provider.SDNGetFlowStats(ctx, "br0", "0x1")
 		if err == nil {
 			t.Fatal("expected error for nil SDN service")
 		}

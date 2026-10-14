@@ -132,7 +132,7 @@ barrier has its own verbs, `platformctl barrier`
 
 | Verb | Positional | Flags |
 |---|---|---|
-| `init` | `<tenant-name>` | `--threshold`, `--shares` (Shamir M-of-N; `0` means deterministic init) |
+| `init` | `<tenant-name>` | `--threshold`, `--shares` — leave both `0` (deterministic init); the service refuses a non-zero value with `InvalidArgument`, since it cannot split the barrier into shares |
 | `unseal` | `<tenant-name>` | `--key-hex`, `--key-base64` |
 | `seal` | `<tenant-name>` | — |
 | `status` | `<tenant-name>` | — |

@@ -785,8 +785,8 @@ func TestSDNFlowToolExecution(t *testing.T) {
 
 	t.Run("executeSDNAddFlow error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.sdnAddFlowFunc = func(ctx context.Context, bridgeName string, flow map[string]interface{}) error {
-			return ErrMockServiceError
+		svc.sdnAddFlowFunc = func(ctx context.Context, bridgeName string, flow map[string]interface{}) (interface{}, error) {
+			return nil, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)
 
@@ -829,8 +829,8 @@ func TestSDNFlowToolExecution(t *testing.T) {
 
 	t.Run("executeSDNFlushFlows error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.sdnFlushFlowsFunc = func(ctx context.Context, bridgeName string) error {
-			return ErrMockServiceError
+		svc.sdnFlushFlowsFunc = func(ctx context.Context, bridgeName string) (uint32, error) {
+			return 0, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)
 
@@ -847,8 +847,8 @@ func TestSDNVLANToolExecution(t *testing.T) {
 
 	t.Run("executeSDNCreateVLAN error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.sdnCreateVLANFunc = func(ctx context.Context, bridgeName string, vlanID int, name string) error {
-			return ErrMockServiceError
+		svc.sdnCreateVLANFunc = func(ctx context.Context, bridgeName string, vlanID int, name string) (interface{}, error) {
+			return nil, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)
 
@@ -895,47 +895,6 @@ func TestSDNVLANToolExecution(t *testing.T) {
 	})
 }
 
-func TestSDNPortAuthToolExecution(t *testing.T) {
-	ctx := context.Background()
-	log := newTestLogger()
-
-	t.Run("executeSDNAuthenticatePort error", func(t *testing.T) {
-		svc := newMockServiceProvider()
-		svc.sdnAuthenticatePortFunc = func(ctx context.Context, bridgeName, portName string, credentials map[string]string) error {
-			return ErrMockServiceError
-		}
-		registry := NewToolRegistry(svc, log)
-
-		args := map[string]interface{}{
-			"bridge_name": "br0",
-			"port_name":   "eth0",
-		}
-
-		_, err := registry.ExecuteTool(ctx, "sdn_authenticate_port", args)
-		if err == nil {
-			t.Error("expected error")
-		}
-	})
-
-	t.Run("executeSDNRevokePortAuth error", func(t *testing.T) {
-		svc := newMockServiceProvider()
-		svc.sdnRevokePortAuthFunc = func(ctx context.Context, bridgeName, portName string) error {
-			return ErrMockServiceError
-		}
-		registry := NewToolRegistry(svc, log)
-
-		args := map[string]interface{}{
-			"bridge_name": "br0",
-			"port_name":   "eth0",
-		}
-
-		_, err := registry.ExecuteTool(ctx, "sdn_revoke_port_auth", args)
-		if err == nil {
-			t.Error("expected error")
-		}
-	})
-}
-
 func TestSDNStatsToolExecution(t *testing.T) {
 	ctx := context.Background()
 	log := newTestLogger()
@@ -960,7 +919,7 @@ func TestSDNStatsToolExecution(t *testing.T) {
 
 	t.Run("executeSDNGetFlowStats error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.sdnGetFlowStatsFunc = func(ctx context.Context, bridgeName string) (interface{}, error) {
+		svc.sdnGetFlowStatsFunc = func(ctx context.Context, bridgeName, flowID string) (interface{}, error) {
 			return nil, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)

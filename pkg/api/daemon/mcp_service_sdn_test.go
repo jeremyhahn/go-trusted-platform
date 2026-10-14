@@ -14,9 +14,7 @@
 package daemon
 
 import (
-	"context"
 	"errors"
-	"log/slog"
 	"testing"
 )
 
@@ -31,57 +29,6 @@ import (
 // =============================================================================
 // SDNListPolicies Extended Tests
 // =============================================================================
-
-// =============================================================================
-// SDNAuthenticatePort Extended Tests
-// =============================================================================
-
-func TestMCPServiceProvider_SDNAuthenticatePort_DefaultsFormatToPEM(t *testing.T) {
-	ctx := context.Background()
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		Logger: slog.Default(),
-	})
-
-	// Test with empty format - should default to PEM internally
-	// but still fail due to nil SDN service
-	err := provider.SDNAuthenticatePort(ctx, "br0", "port1", map[string]string{
-		"certificate": "test-cert",
-		// format is intentionally missing
-	})
-	if err == nil {
-		t.Fatal("expected error for nil SDN service")
-	}
-
-	// Verify we get service not available (meaning format defaulting worked)
-	svcErr, ok := err.(ErrServiceNotAvailable)
-	if !ok {
-		t.Fatalf("expected ErrServiceNotAvailable, got %T: %v", err, err)
-	}
-	if svcErr.Service != "sdn" {
-		t.Errorf("expected service='sdn', got %q", svcErr.Service)
-	}
-}
-
-func TestMCPServiceProvider_SDNAuthenticatePort_ExplicitFormatDER(t *testing.T) {
-	ctx := context.Background()
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		Logger: slog.Default(),
-	})
-
-	// Test with explicit DER format
-	err := provider.SDNAuthenticatePort(ctx, "br0", "port1", map[string]string{
-		"certificate": "test-cert-data",
-		"format":      "DER",
-	})
-	if err == nil {
-		t.Fatal("expected error for nil SDN service")
-	}
-
-	// Should still get service not available error
-	if _, ok := err.(ErrServiceNotAvailable); !ok {
-		t.Fatalf("expected ErrServiceNotAvailable, got %T: %v", err, err)
-	}
-}
 
 // =============================================================================
 // SDNGetPolicy Extended Tests

@@ -213,7 +213,7 @@ func (r *ToolRegistry) registerAttestationTools() {
 
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_verify_manifest",
-		Description: "Verify an attestation manifest including signature and Merkle root",
+		Description: "Verify a stored attestation manifest's nonce, PCR values and freshness",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -227,7 +227,7 @@ func (r *ToolRegistry) registerAttestationTools() {
 				},
 				"public_key_pem": map[string]interface{}{
 					"type":        "string",
-					"description": "PEM-encoded public key for signature verification",
+					"description": "PEM-encoded public key; refused (FailedPrecondition): the service cannot check a manifest signature against it",
 				},
 				"expected_pcrs": map[string]interface{}{
 					"type":        "object",

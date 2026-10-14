@@ -552,23 +552,19 @@ type ServiceProvider interface {
 	SDNDeletePolicy(ctx context.Context, policyID string) error
 
 	// SDN Flow operations
-	SDNAddFlow(ctx context.Context, bridgeName string, flow map[string]interface{}) error
+	SDNAddFlow(ctx context.Context, bridgeName string, flow map[string]interface{}) (interface{}, error)
 	SDNDeleteFlow(ctx context.Context, bridgeName string, flowID string) error
 	SDNListFlows(ctx context.Context, bridgeName string) ([]interface{}, error)
-	SDNFlushFlows(ctx context.Context, bridgeName string) error
+	SDNFlushFlows(ctx context.Context, bridgeName string) (uint32, error)
 
 	// SDN VLAN operations
-	SDNCreateVLAN(ctx context.Context, bridgeName string, vlanID int, name string) error
+	SDNCreateVLAN(ctx context.Context, bridgeName string, vlanID int, name string) (interface{}, error)
 	SDNDeleteVLAN(ctx context.Context, bridgeName string, vlanID int) error
 	SDNListVLANs(ctx context.Context, bridgeName string) ([]interface{}, error)
 
-	// SDN Port authentication
-	SDNAuthenticatePort(ctx context.Context, bridgeName string, portName string, credentials map[string]string) error
-	SDNRevokePortAuth(ctx context.Context, bridgeName string, portName string) error
-
 	// SDN Statistics
 	SDNGetPortStats(ctx context.Context, bridgeName string, portName string) (interface{}, error)
-	SDNGetFlowStats(ctx context.Context, bridgeName string) (interface{}, error)
+	SDNGetFlowStats(ctx context.Context, bridgeName string, flowID string) (interface{}, error)
 
 	// Overlay network operations
 	OverlayStatus(ctx context.Context) (interface{}, error)

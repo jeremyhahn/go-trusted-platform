@@ -299,8 +299,14 @@ On gRPC, QUIC and MCP the check is `authorizeIAMTenant`
 answer through the same `IAMGRPCService` methods. It covers every user, role,
 group, policy and application RPC, `CheckPermission`, and `GetTenant`,
 `UpdateTenant` and `DeleteTenant`. It does not cover `CreateTenant`,
-`ListTenants` or the token RPCs. A daemon run with `SkipIAMValidation`
+`ListTenants` or the token RPCs. The platform `TenantService` lifecycle RPCs have their own binding,
+`authorizeTenant` (`pkg/api/daemon/tenant_grpc_authz.go`,
+[`docs/tenant/api.md`](../tenant/api.md) §7). A daemon run with `SkipIAMValidation`
 has no caller identity and serves the named tenant.
+
+Both read the caller's tenant through `callerTenant`, which also reads the
+validated MCP token (#304), so a tool that reaches these services binds its
+caller as gRPC does.
 
 Through the Go SDK's REST transport, an item operation reaches the scoped form
 (§2). The `403` surfaces as `PermissionDenied` and a missing tenant as
@@ -339,7 +345,11 @@ method (`iam_verify_token` calls `IAMTokenService.Verify`, as gRPC does), and `I
 
 Since #300 `AuthorizeTool` **denies** a tool absent from the map
 (`AuthErrorToolNotClassified`, `-32603` on the wire) rather than allowing it.
-Three tools stay out of it on purpose and are enumerated in
+Of 469 registered tools, 363 carry a `resource:action` permission, 7 are
+classified open (`""`), and the other 99 are absent from the map and refused
+(measured from `NewToolRegistry(...).ListTools()` against
+`toolPermissionCatalog`). Since #304 the classified tools include 22 VM and
+container tools ([`docs/compute/api.md`](../compute/api.md) §7). Three IAM tools stay out of it on purpose and are enumerated in
 `knownUnclassified` (`pkg/api/mcp/authz_completeness_test.go`):
 `iam_create_token`, `iam_revoke_token` and `iam_authenticate`. They refuse on
 every transport (§6), and `iam_authenticate` has no gRPC method to take a
@@ -351,6 +361,10 @@ anything (#412).
 `iam_create_tenant` and `iam_list_tenants` are not tenant-bound (above): an
 `iam:write` or `iam:read` caller of any tenant can create or list tenant
 records over MCP, as over gRPC and QUIC.
+
+The platform tenant tools (`tenant_*`, `platform_tenant_barrier_*`) are
+classified, with the tenant binding behind them
+([`docs/tenant/api.md`](../tenant/api.md) §7).
 
 **The TPM and vTPM tools are #304's first tranche.** Each classified tool
 carries the scope of its gRPC method, and its errors carry the same gRPC class
@@ -395,6 +409,89 @@ runs:
 material, so they reach only a holder of their scope; no handler logs it. The
 `kms:*` and `secrets:*` scopes are advertised in the MCP OAuth metadata, which
 lists the scopes the authorization map consults.
+
+#304's attestation tranche classified the five manifest tools with their gRPC
+methods' scopes: `attestation_get_manifest`, `attestation_list_manifests` and
+`attestation_verify_manifest` need `attestation:read`,
+`attestation_create_manifest` needs `attestation:write`, and
+`attestation_delete_manifest` needs `attestation:delete`. The ten other
+attestation tools in `knownUnclassified` have no backend and stay refused
+([`docs/attestation/api.md`](../attestation/api.md) §5).
+
+**#304 DNS tranche: the DNS tools bound to `DNSService` require their gRPC
+method's scope.** Each tool calls the gRPC servicer over the daemon's DNS
+service (`dnsTools`, `pkg/api/mcp/dns_tools.go`), so it answers and fails as
+gRPC does; [`docs/dns/api.md`](../dns/api.md) §3 has the detail.
+
+| MCP tool | gRPC method | Scope |
+|---|---|---|
+| `dns_zone_create` | `CreateZone` | `dns:write` |
+| `dns_zone_get` | `GetZone` | `dns:read` |
+| `dns_zone_list` | `ListZones` | `dns:read` |
+| `dns_zone_update` | `UpdateZone` | `dns:write` |
+| `dns_zone_delete` | `DeleteZone` | `dns:delete` |
+| `dns_record_create` | `AddRecord` | `dns:write` |
+| `dns_record_get` | none; served from `ListRecords` | `dns:read` |
+| `dns_record_list` | `ListRecords` | `dns:read` |
+| `dns_record_update` | `UpdateRecord` | `dns:write` |
+| `dns_record_delete` | `DeleteRecord` | `dns:delete` |
+| `dns_lookup` | `Resolve` | `dns:read` |
+| `dns_reverse_lookup` | none; no backend | unclassified, refused |
+
+`DNSService` carries no caller tenant on gRPC: the DNS service acts in the
+tenant the daemon configured it with, and a zone of another tenant is
+`NotFound`. The MCP tools inherit exactly that; they add no tenant binding of
+their own.
+
+**EAB tools answer under the scope of their gRPC twin (#304).** The eleven
+`platform_eab_*` tools are classified in `toolPermissionCatalog`
+(`pkg/api/mcp/authz.go`) with exactly the pair `EABService` carries in
+`pkg/api/grpc/method_permissions.go`; a caller without it gets
+`AuthErrorPermissionDenied` and the tool never runs.
+
+| Scope | MCP tool | gRPC method |
+|---|---|---|
+| `eab:write` | `platform_eab_create_credential` | `CreateCredential` |
+| `eab:write` | `platform_eab_revoke_credential` | `RevokeCredential` |
+| `eab:write` | `platform_eab_mark_credential_used` | `MarkCredentialUsed` |
+| `eab:write` | `platform_eab_cleanup_expired_credentials` | `CleanupExpiredCredentials` |
+| `eab:read` | `platform_eab_get_credential` | `GetCredential` |
+| `eab:read` | `platform_eab_get_credential_by_key_id` | `GetCredentialByKeyID` |
+| `eab:read` | `platform_eab_list_credentials` | `ListCredentials` |
+| `eab:read` | `platform_eab_validate_credential` | `ValidateCredential` |
+| `eab:read` | `platform_eab_get_credential_qr_code` | `GetCredentialQRCode` |
+| `eab:read` | `platform_eab_get_enrollment_url` | `GetEnrollmentURL` |
+| `eab:delete` | `platform_eab_delete_credential` | `DeleteCredential` |
+
+EAB carries no caller-tenant binding on any transport: gRPC and MCP serve the
+`tenant_id` the request names, so `eab:*` is store-wide. Details:
+[`docs/eab/api.md` §5](../eab/api.md).
+
+**SDN tranche of #304: nine SDN tools carry their gRPC scope.** Each has the
+`resource:action` of its `SDNService` twin in
+`pkg/api/grpc/method_permissions.go`, beside the bridge, port, port-state and
+policy tools that already had one:
+
+| MCP tool | Scope | gRPC twin |
+|---|---|---|
+| `sdn_add_flow` | `sdn:write` | `AddFlow` |
+| `sdn_delete_flow` | `sdn:delete` | `DeleteFlow` |
+| `sdn_flush_flows` | `sdn:write` | `FlushFlows` |
+| `sdn_list_flows` | `sdn:read` | `ListFlows` |
+| `sdn_get_flow_stats` | `sdn:read` | `GetFlowStats` |
+| `sdn_create_vlan` | `sdn:write` | `CreateVLAN` |
+| `sdn_delete_vlan` | `sdn:delete` | `DeleteVLAN` |
+| `sdn_list_vlans` | `sdn:read` | `ListVLANs` |
+| `sdn_get_port_stats` | `sdn:read` | `GetPortStats` |
+
+`FlushFlows` takes `sdn:write`, not the `delete` the verb rule would give it:
+where gRPC and the verb rule differ, gRPC wins. `sdn_authenticate_port` and
+`sdn_revoke_port_auth` stay in `knownUnclassified` and are refused, although
+gRPC scopes both `sdn:write`: the service behind them records a map entry no
+code reads and never reaches the switch, and their handlers return
+`ErrPortAuthNotEnforced` (`FailedPrecondition`) even if reached
+([`docs/sdn/api-reference-mcp.md`](../sdn/api-reference-mcp.md)). SDN
+objects carry no tenant on gRPC or MCP, so the scope is the whole check.
 
 ---
 

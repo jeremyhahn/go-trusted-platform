@@ -908,16 +908,37 @@ func TestToolRegistry_SDNFlowTools(t *testing.T) {
 	registry := NewToolRegistry(svc, log)
 
 	t.Run("sdn_add_flow success", func(t *testing.T) {
+		var gotBridge string
+		var gotFlow map[string]interface{}
+		flowSvc := newMockServiceProvider()
+		flowSvc.sdnAddFlowFunc = func(_ context.Context, bridgeName string, flow map[string]interface{}) (interface{}, error) {
+			gotBridge, gotFlow = bridgeName, flow
+			return flow, nil
+		}
 		args := map[string]interface{}{
 			"bridge_name": "br0",
-			"flow": map[string]interface{}{
-				"priority": 100,
-				"match":    map[string]interface{}{"in_port": 1},
-				"actions":  []string{"output:2"},
-			},
+			"_token":      "token",
+			"priority":    100,
+			"match":       map[string]interface{}{"in_port": "1"},
+			"actions":     []interface{}{map[string]interface{}{"type": "FLOW_ACTION_OUTPUT", "port": "2"}},
+			"mtch":        "typo",
 		}
 
-		result, err := registry.ExecuteTool(ctx, "sdn_add_flow", args)
+		result, err := NewToolRegistry(flowSvc, log).ExecuteTool(ctx, "sdn_add_flow", args)
+		if gotBridge != "br0" {
+			t.Errorf("bridge = %q, want br0", gotBridge)
+		}
+		// The body is every argument but the bridge and the token, so the
+		// service's strict decode sees the typo instead of a flow without it.
+		wantFlow := map[string]interface{}{
+			"priority": 100,
+			"match":    args["match"],
+			"actions":  args["actions"],
+			"mtch":     "typo",
+		}
+		if !reflect.DeepEqual(gotFlow, wantFlow) {
+			t.Errorf("flow body = %v, want %v", gotFlow, wantFlow)
+		}
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -1046,55 +1067,6 @@ func TestToolRegistry_SDNVLANTools(t *testing.T) {
 		}
 		if _, ok := resultMap["vlans"]; !ok {
 			t.Error("expected 'vlans' key in result")
-		}
-	})
-}
-
-func TestToolRegistry_SDNPortAuthTools(t *testing.T) {
-	ctx := context.Background()
-	svc := newMockServiceProvider()
-	log := newTestLogger()
-	registry := NewToolRegistry(svc, log)
-
-	t.Run("sdn_authenticate_port success", func(t *testing.T) {
-		args := map[string]interface{}{
-			"bridge_name": "br0",
-			"port_name":   "eth0",
-			"credentials": map[string]interface{}{
-				"username": "user",
-				"password": "pass",
-			},
-		}
-
-		result, err := registry.ExecuteTool(ctx, "sdn_authenticate_port", args)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
-		resultMap, ok := result.(map[string]interface{})
-		if !ok {
-			t.Fatal("result is not a map")
-		}
-		if success, ok := resultMap["success"].(bool); !ok || !success {
-			t.Error("expected success: true")
-		}
-	})
-
-	t.Run("sdn_revoke_port_auth success", func(t *testing.T) {
-		args := map[string]interface{}{
-			"bridge_name": "br0",
-			"port_name":   "eth0",
-		}
-
-		result, err := registry.ExecuteTool(ctx, "sdn_revoke_port_auth", args)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
-		resultMap, ok := result.(map[string]interface{})
-		if !ok {
-			t.Fatal("result is not a map")
-		}
-		if success, ok := resultMap["success"].(bool); !ok || !success {
-			t.Error("expected success: true")
 		}
 	})
 }

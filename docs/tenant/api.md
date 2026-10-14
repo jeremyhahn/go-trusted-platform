@@ -150,10 +150,43 @@ Both catalogs are **default-deny**
 The barrier and DEK calls are key-custody operations, so `tenant:write` is the
 grant to guard.
 
-**Every tenant MCP tool is refused.** None of the `tenant_*` or
-`platform_tenant_barrier_*` tools is in the MCP permission map, so
-`AuthorizeTool` answers `AuthErrorToolNotClassified` for every caller until
-they are classified.
+**MCP carries the same scopes (#304).** Each tenant tool requires the scope of
+its `TenantService` method (`toolPermissionCatalog`, `pkg/api/mcp/authz.go`):
+
+| Permission | Tools |
+|---|---|
+| `tenant:read` | `tenant_get`, `tenant_get_by_name`, `tenant_list`, `tenant_get_quotas`, `tenant_check_quota`, `tenant_get_usage`, `platform_tenant_barrier_status`, `tenant_get_dek_status` |
+| `tenant:write` | `tenant_create`, `tenant_update`, `tenant_update_quotas`, `tenant_suspend`, `tenant_resume`, `tenant_sync`, `platform_tenant_barrier_init`, `platform_tenant_barrier_seal`, `platform_tenant_barrier_unseal`, `tenant_rotate_dek` |
+| `tenant:delete` | `tenant_delete` |
+
+Every tool calls the daemon's shared `TenantGRPCServer`, so an MCP call gets
+the answer and the error code its gRPC method gives for the same input. A tool
+refuses a caller whose token carried no tenant binding — the legacy
+bool-validation auth path — with `PermissionDenied`
+(`ErrTenantCallerUnbound`), before the server is reached.
+
+### The tenant binding (#304)
+
+The scope is necessary, not sufficient. `TenantService` keeps a tenant-bound
+caller to its own tenant (`pkg/api/daemon/tenant_grpc_authz.go`), on gRPC, QUIC
+and MCP alike — the rule the REST guards apply:
+
+| Request | Admitted | Otherwise |
+|---|---|---|
+| names a tenant (get, update, delete, quotas, usage, suspend, resume, DEK, barrier) | the caller's own tenant, or the system tenant | `PermissionDenied`, `ErrTenantForbidden` |
+| acts across tenants (`ListTenants`, `GetTenantByName`, `CreateTenant`, `Sync`) | the system tenant | `PermissionDenied`, `ErrTenantSystemOnly` |
+
+The caller's tenant is the token's `tenant_id` claim, or the mTLS certificate.
+The system tenant is the platform's operating tenant (`App.TenantID`); with none
+set, no tenant-bound caller acts across tenants. A caller with no tenant-bound
+identity — the Unix-socket operator, or a daemon run with `SkipIAMValidation` —
+is served. The check runs after `tenant_id` is validated and before the manager
+is called, so a refused request touches no DEK and no barrier.
+
+`InitTenantBarrier` refuses a non-zero `threshold` or `shares` with
+`InvalidArgument` (`ErrTenantBarrierShamirUnsupported`). The barrier is
+initialized with the deterministic init credential and returns no shares, so a
+Shamir request was previously ignored while the call reported success.
 
 ### QUIC requires the tenant scopes (#767)
 
@@ -181,8 +214,8 @@ operations and an IAM tenant call reached `TenantService`.
 covers tenant create, delete, suspend and resume, quota updates, `POST
 /{id}/dek/rotate`, and `POST /{id}/barrier/{init,unseal,seal}`.
 
-The REST gate is role-based; the gRPC and MCP positions are the scope catalogs
-above.
+The REST gate is role-based; the gRPC, QUIC and MCP positions are the scope
+catalogs above, with the tenant binding behind them.
 
 Note the two tenant surfaces are different things. `/api/v1/tenants` is the
 tenancy data plane gated here; `/api/v1/iam/tenants` is the tenant *record*

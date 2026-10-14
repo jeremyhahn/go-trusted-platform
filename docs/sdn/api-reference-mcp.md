@@ -2,10 +2,11 @@
 
 Transport: MCP (stdio / HTTPS, port 9445).
 
-Tool definitions live in `pkg/api/mcp/tools.go`. OAuth scopes
-(`sdn:read`, `sdn:write`, `sdn:delete`) are mapped per tool in
-`pkg/api/mcp/authz.go` for the bridge, port-state, port, and policy
-tools; tools without a mapping defer to the tool registry.
+Tool definitions live in `pkg/api/mcp/tools.go`. Each tool's OAuth scope
+(`sdn:read`, `sdn:write` or `sdn:delete`) is mapped in `pkg/api/mcp/authz.go`
+and is the scope of its gRPC twin (`pkg/api/grpc/method_permissions.go`). A
+tool with no mapping is refused before it runs (`AuthErrorToolNotClassified`);
+the two port-authentication tools are refused this way (see below).
 
 ## Tools
 
@@ -25,27 +26,54 @@ tools; tools without a mapping defer to the tool registry.
 | `sdn_delete_port` | Delete a port from an OVS bridge |
 | `sdn_get_port_state` | Get the state of an OVS port |
 | `sdn_set_port_state` | Set a port's admin state (`up`/`down`) and optional ingress policing (`ingress_rate` bps, `ingress_burst` bits) and egress shaping (`egress_rate` bps, `egress_burst` bits) |
-| `sdn_get_port_stats` | Get statistics for a port |
-| `sdn_authenticate_port` | Authenticate a port (802.1X style) |
-| `sdn_revoke_port_auth` | Revoke port authentication |
+| `sdn_get_port_stats` | Get statistics for a port (`port_name`); scope `sdn:read` |
+| `sdn_authenticate_port` | Refused: unclassified, see below |
+| `sdn_revoke_port_auth` | Refused: unclassified, see below |
+
+The port-authentication tools are refused because the service behind them
+enforces nothing: `SDNService.AuthenticatePort` checks only the certificate's
+validity window and records the port in a map no other code reads, so the
+switch never admits or blocks the port. Answering "authenticated" would be a
+false security claim; the tools stay refused until the service enforces it.
+Should a mapping ever be added, the handlers still refuse: both return
+`ErrPortAuthNotEnforced` (`FailedPrecondition`) without calling the service.
 
 ### Flows
 
-| Tool | Description |
-|------|-------------|
-| `sdn_add_flow` | Add a flow rule to a bridge |
-| `sdn_delete_flow` | Delete a flow rule from a bridge |
-| `sdn_list_flows` | List all flows on a bridge |
-| `sdn_flush_flows` | Delete all flows on a bridge |
-| `sdn_get_flow_stats` | Get flow statistics for a bridge |
+| Tool | Scope | Description |
+|------|-------|-------------|
+| `sdn_add_flow` | `sdn:write` | Add a flow rule to a bridge; answers `{"success": true, "flow": <Flow>}` |
+| `sdn_delete_flow` | `sdn:delete` | Delete a flow rule (`flow_id`) from a bridge |
+| `sdn_list_flows` | `sdn:read` | List all flows on a bridge |
+| `sdn_flush_flows` | `sdn:write` | Delete all flows on a bridge; answers `deleted_count` |
+| `sdn_get_flow_stats` | `sdn:read` | Get the statistics of one flow (`bridge_name`, `flow_id`) |
+
+`sdn_add_flow` takes the gRPC `FlowConfig` fields as its arguments, under
+their proto names: `table`, `priority`, `match`, `actions`, `idle_timeout`,
+`hard_timeout` and `metadata`, with the bridge as `bridge_name`. Enums are
+given by name (`FLOW_TABLE_0`, `FLOW_ACTION_OUTPUT`) or number. The body is
+decoded strictly: an unknown field, a wrong type or an unknown enum name is
+refused with `InvalidArgument` before anything reaches the switch, and so is
+an argument outside `FlowConfig` other than `bridge_name` and the token (a
+misspelt `mtch`, or a `flow` wrapper). Until #304
+the tool read a `flow` argument its schema never declared, so every MCP flow
+reached the switch with no match and no actions while the tool answered
+success, and `sdn_get_flow_stats` took no `flow_id` and always failed.
 
 ### VLANs
 
-| Tool | Description |
-|------|-------------|
-| `sdn_create_vlan` | Create a VLAN on a bridge |
-| `sdn_delete_vlan` | Delete a VLAN from a bridge |
-| `sdn_list_vlans` | List all VLANs on a bridge |
+| Tool | Scope | Description |
+|------|-------|-------------|
+| `sdn_create_vlan` | `sdn:write` | Create a VLAN on a bridge; answers `{"success": true, "vlan": <VLAN>}` |
+| `sdn_delete_vlan` | `sdn:delete` | Delete a VLAN from a bridge |
+| `sdn_list_vlans` | `sdn:read` | List all VLANs on a bridge |
+
+The flow, VLAN and port-statistics tools call the same `SDNService` as gRPC,
+so they answer what gRPC answers and fail with its error class: `NotFound`
+for an unknown bridge, port, flow or VLAN, `InvalidArgument` for a missing
+bridge or a VLAN ID outside 1–4095. SDN objects carry no tenant on any
+transport: every caller holding the scope sees and changes every bridge's
+flows and VLANs.
 
 ### Policies
 
