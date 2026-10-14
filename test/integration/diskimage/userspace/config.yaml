@@ -61,7 +61,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "123456"
-          platform-policy: true
+          tpm-policy: platform
           debug: true
 
         - algorithm: ECDSA
@@ -71,7 +71,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "123456"
-          platform-policy: true
+          tpm-policy: platform
           debug: true
 
       valid: 50
@@ -104,7 +104,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "123456"
-          platform-policy: true
+          tpm-policy: platform
           debug: true
 
         - algorithm: ECDSA
@@ -114,7 +114,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "123456"
-          platform-policy: true
+          tpm-policy: platform
           debug: true
 
       valid: 10
@@ -136,7 +136,7 @@ certificate-authority:
 # =============================================================================
 # TPM 2.0 CONFIGURATION
 # =============================================================================
-# Required for CA identities that set platform-policy: true. The platform
+# Required for CA identities whose keys set tpm-policy: platform. The platform
 # PCR + bank are needed when the CA is configured to use TPM-bound platform
 # policy. Integration tests run against swtpm started by the test harness.
 

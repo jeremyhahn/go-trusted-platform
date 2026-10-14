@@ -35,6 +35,16 @@ const (
 	examplesRoot   = "../../examples"
 )
 
+// integrationConfigs are the platformd configs the integration suites, the
+// vTPM image and the webservice tests load.
+var integrationConfigs = []string{
+	"../../test/integration/config.yaml",
+	"../../test/integration/diskimage/userspace/config.yaml",
+	"../../test/integration/barrier_gate/config.yaml",
+	"../../build/integration/vtpm/platform.yaml",
+	"../../pkg/webservice/v1/test/trusted-data/etc/config.yaml",
+}
+
 const (
 	// retiredPolicyKey is the boolean key-config field go-quicbaas v0.14
 	// replaced with tpm-policy. The TPM sections (tpm.platform-srk, the
@@ -44,7 +54,8 @@ const (
 )
 
 // TestShippedConfigs_KeyConfigsUseTPMPolicy pins the tpm-policy migration
-// (#720) in every shipped template and example: no key config carries
+// (#720) in every shipped template and example and in the integration
+// configs: no key config carries
 // platform-policy, and every tpm-policy sits in a key config. A key config
 // that still carries platform-policy has it silently ignored, which leaves
 // TPMPolicy empty and turns off the password-sealing path of the key.
@@ -53,6 +64,7 @@ func TestShippedConfigs_KeyConfigsUseTPMPolicy(t *testing.T) {
 	for _, root := range []string{templateRoot, standaloneRoot, clusterRoot, examplesRoot} {
 		paths = append(paths, platformConfigsUnder(t, root)...)
 	}
+	paths = append(paths, integrationConfigs...)
 	schema := reflect.TypeOf(App{})
 	for _, path := range paths {
 		raw, err := os.ReadFile(path)
