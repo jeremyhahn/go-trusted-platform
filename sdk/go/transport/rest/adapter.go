@@ -26,6 +26,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -454,12 +455,12 @@ func buildTemplatedRequest(route templatedRoute, args interface{}) (path string,
 	// "absent" and "no filter" coincide with the server defaults.
 	values := url.Values{}
 	for _, qp := range route.queryParams {
-		encoded, ok, qErr := encodeQueryField(rm, qp.field)
+		encoded, qErr := encodeQueryField(rm, qp.field)
 		if qErr != nil {
 			return "", nil, qErr
 		}
-		if ok {
-			values.Set(qp.name, encoded)
+		for _, value := range encoded {
+			values.Add(qp.name, value)
 		}
 	}
 
@@ -482,21 +483,22 @@ func buildTemplatedRequest(route templatedRoute, args interface{}) (path string,
 }
 
 // encodeQueryField resolves a dot-separated proto field path on a
-// request message and renders it as a query parameter value. Returns
-// ok=false when the field (or any parent message) is zero-valued so the
+// request message and renders it as query parameter values. Returns no
+// values when the field (or any parent message) is zero-valued so the
 // parameter is omitted. Enum fields render as the proto enum value name
-// (the servers accept both the full enum name and the short form).
-func encodeQueryField(rm protoreflect.Message, fieldPath string) (string, bool, error) {
+// (the servers accept both the full enum name and the short form); a map
+// field renders one "key=value" value per entry.
+func encodeQueryField(rm protoreflect.Message, fieldPath string) ([]string, error) {
 	segments := strings.Split(fieldPath, ".")
 	current := rm
 	for _, segment := range segments[:len(segments)-1] {
 		fd := current.Descriptor().Fields().ByName(protoreflect.Name(segment))
 		if fd == nil || fd.Kind() != protoreflect.MessageKind {
-			return "", false, status.Errorf(codes.Internal,
+			return nil, status.Errorf(codes.Internal,
 				"REST adapter: query field path %q invalid on %s", fieldPath, rm.Descriptor().FullName())
 		}
 		if !current.Has(fd) {
-			return "", false, nil
+			return nil, nil
 		}
 		current = current.Get(fd).Message()
 	}
@@ -504,35 +506,50 @@ func encodeQueryField(rm protoreflect.Message, fieldPath string) (string, bool, 
 	leaf := segments[len(segments)-1]
 	fd := current.Descriptor().Fields().ByName(protoreflect.Name(leaf))
 	if fd == nil {
-		return "", false, status.Errorf(codes.Internal,
+		return nil, status.Errorf(codes.Internal,
 			"REST adapter: query field %q missing on %s", fieldPath, current.Descriptor().FullName())
 	}
 
 	v := current.Get(fd)
+	if fd.IsMap() {
+		return encodeQueryMap(v.Map()), nil
+	}
 	switch fd.Kind() {
 	case protoreflect.BoolKind:
 		if !v.Bool() {
-			return "", false, nil
+			return nil, nil
 		}
-		return "true", true, nil
+		return []string{"true"}, nil
 	case protoreflect.EnumKind:
 		n := v.Enum()
 		if n == 0 {
-			return "", false, nil
+			return nil, nil
 		}
 		if desc := fd.Enum().Values().ByNumber(n); desc != nil {
-			return string(desc.Name()), true, nil
+			return []string{string(desc.Name())}, nil
 		}
-		return strconv.FormatInt(int64(n), 10), true, nil
+		return []string{strconv.FormatInt(int64(n), 10)}, nil
 	default:
 		// Use the RAW value: url.Values.Encode() applies query escaping,
 		// so pre-escaped path encoding would double-escape.
 		raw, _, ok := encodePathField(v, fd)
 		if !ok {
-			return "", false, nil
+			return nil, nil
 		}
-		return raw, true, nil
+		return []string{raw}, nil
 	}
+}
+
+// encodeQueryMap renders a map field as one "key=value" query value per
+// entry, sorted by key so the request is deterministic.
+func encodeQueryMap(m protoreflect.Map) []string {
+	entries := make([]string, 0, m.Len())
+	m.Range(func(k protoreflect.MapKey, v protoreflect.Value) bool {
+		entries = append(entries, k.String()+"="+fmt.Sprint(v.Interface()))
+		return true
+	})
+	sort.Strings(entries)
+	return entries
 }
 
 // clearProtoFieldPath clears a dot-separated proto field path on a
@@ -1368,17 +1385,16 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.InvitationService/DeleteInvitation":     {"/api/v1/invitations", http.MethodDelete},
 
 	// LUKS Service — proto: pkg/api/grpc/proto/luks.proto
-	// Server registrations live in pkg/api/daemon/luks_rest_handlers.go.
-	"/platform.v1.LUKSService/Status":           {"/api/v1/luks/status", http.MethodGet},
-	"/platform.v1.LUKSService/ListSlots":        {"/api/v1/luks/slots", http.MethodGet},
-	"/platform.v1.LUKSService/Info":             {"/api/v1/luks/info", http.MethodGet},
+	// Server registrations live in pkg/api/daemon/luks_rest.go. Status,
+	// ListSlots and Info carry ?device= and live in templatedRouteTable
+	// (luks.go).
 	"/platform.v1.LUKSService/EnrollPassphrase": {"/api/v1/luks/enroll/passphrase", http.MethodPost},
 	"/platform.v1.LUKSService/EnrollFIDO2":      {"/api/v1/luks/enroll/fido2", http.MethodPost},
 	"/platform.v1.LUKSService/EnrollTPM":        {"/api/v1/luks/enroll/tpm", http.MethodPost},
 	"/platform.v1.LUKSService/EnrollRecovery":   {"/api/v1/luks/enroll/recovery", http.MethodPost},
-	"/platform.v1.LUKSService/RemoveKey":        {"/api/v1/luks/slots", http.MethodDelete},
-	"/platform.v1.LUKSService/TestUnlock":       {"/api/v1/luks/test-unlock", http.MethodPost},
-	"/platform.v1.LUKSService/ChangePassphrase": {"/api/v1/luks/passphrase", http.MethodPut},
+	"/platform.v1.LUKSService/RemoveKey":        {"/api/v1/luks/keys/remove", http.MethodPost},
+	"/platform.v1.LUKSService/TestUnlock":       {"/api/v1/luks/keys/test-unlock", http.MethodPost},
+	"/platform.v1.LUKSService/ChangePassphrase": {"/api/v1/luks/passphrase/change", http.MethodPost},
 
 	// Overlay Service — proto: pkg/api/grpc/proto/overlay.proto
 	// Server registrations live in pkg/webservice/v1/rest/overlay/.
@@ -1493,7 +1509,7 @@ func translateErrorToGRPC(err error) error {
 		if !ok {
 			code = codes.Unknown
 		}
-		return status.Error(code, e.Body)
+		return status.Error(code, restErrorMessage(e.Body))
 
 	case ErrClientClosed:
 		return status.Error(codes.Unavailable, e.Error())
@@ -1510,6 +1526,20 @@ func translateErrorToGRPC(err error) error {
 	default:
 		return status.Error(codes.Unknown, err.Error())
 	}
+}
+
+// restErrorMessage returns the message a REST error body carries. platformd
+// handlers answer a failure as {"error":"<message>"}; the status message is
+// that bare message, the same one the QUIC and MCP transports return. A body
+// of any other shape is returned unchanged.
+func restErrorMessage(body string) string {
+	var payload struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil || payload.Error == "" {
+		return body
+	}
+	return payload.Error
 }
 
 // Ensure Adapter implements transport.Adapter interface.

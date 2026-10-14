@@ -1,6 +1,6 @@
 # LUKS Key-Slot Management — Architecture
 
-> **Status: NORMATIVE** · Scope: runtime LUKS2 key-slot management on a running host · Last verified: 2026-10-11
+> **Status: NORMATIVE** · Scope: runtime LUKS2 key-slot management on a running host · Last verified: 2026-10-13
 > Conflicts with this document are defects. Fix them here first.
 
 ---
@@ -69,14 +69,12 @@ sdk/go/services/luks  (Service)          pkg/api/daemon transport adapters
   and applies the platform FIPS keyslot policy. FIDO2 and TPM enrollment go
   through pluggable handlers built on the go-xkms re-exports.
 
-**As shipped, the chain is not connected at either end** (see
-[engineering.md](engineering.md) §6):
-
-- the platformd startup path injects neither the go-luks2 backend nor a root
-  checker, so every server transport answers *backend not configured* or
-  *root required*;
-- `platformctl luks` uses the SDK's default `Client`, a stub that returns
-  `not yet wired` for every operation.
+**As shipped, the chain is not connected at the server end** (see
+[engineering.md](engineering.md) §6): the platformd startup path injects
+neither the go-luks2 backend nor a root checker, so every server transport
+answers *backend not configured* or *root required*. `platformctl luks` builds
+the SDK's `GRPCClient` from `platform.Client.LUKS()` and reaches that refusal
+over whichever transport is active.
 
 ---
 

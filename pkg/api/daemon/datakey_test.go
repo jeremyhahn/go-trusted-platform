@@ -156,35 +156,3 @@ func TestErrKMSDataKeyGenerationFailed(t *testing.T) {
 		t.Errorf("expected Unwrap to return cause, got %v", unwrapped)
 	}
 }
-
-func TestPlatformServiceProvider_KMSGenerateDataKey(t *testing.T) {
-	ctx := context.Background()
-	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
-
-	_, err := provider.KMSGenerateDataKey(ctx, &mcp.KMSGenerateDataKeyRequest{
-		KeyID: "test-key",
-	})
-
-	if err == nil {
-		t.Error("expected error for nil services")
-	}
-	if _, ok := err.(ErrServiceNotAvailable); !ok {
-		t.Errorf("expected ErrServiceNotAvailable, got %T", err)
-	}
-}
-
-func TestPlatformServiceProvider_KMSGenerateWrappedDataKey(t *testing.T) {
-	ctx := context.Background()
-	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
-
-	_, err := provider.KMSGenerateWrappedDataKey(ctx, &mcp.KMSGenerateWrappedDataKeyRequest{
-		KeyID: "test-key",
-	})
-
-	if err == nil {
-		t.Error("expected error for nil services")
-	}
-	if _, ok := err.(ErrServiceNotAvailable); !ok {
-		t.Errorf("expected ErrServiceNotAvailable, got %T", err)
-	}
-}

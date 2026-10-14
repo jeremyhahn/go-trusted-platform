@@ -748,7 +748,7 @@ gated. In every case the giveaway was reading the **handler**, not the prefix.
 | Surface | The half a prefix gate would have broken | What that caller actually presents |
 |---|---|---|
 | `/ca` | `/ca/bootstrap`, `/ca/crl` | Nothing, by design — a client that does not trust the platform yet, and a relying party fetching a CRL |
-| `/gateway` | `/gateway/telemetry`, `/gateway/desired-config/{id}` | A **verified mTLS client certificate**, bound to `gateway_id` |
+| `/gateway` | `/gateway/telemetry`, `/gateway/desired-config/{id}`, `/gateway/vpn-leases/**` | A **verified mTLS client certificate**, bound to `gateway_id` |
 | `/provisioning` | `/provisioning/{config,config/nonce,sign}` | **EAB**, plus the EK for the signing route |
 | `/invitations` | `/invitations/{accept,token/{token}}` | The **invitation token itself** — an invitee has no session by construction |
 | `/pxe` | `/pxe/webhook/complete` | **Nothing, and nothing is checked** — see #238 |
@@ -894,11 +894,11 @@ bearer token when its context carries one.
 |---|---|---|
 | `GatewayService` — `/gateway/{status,mode}`, `/gateway/bgp/**`, `/gateway/ipam/**` | **gated**, `admin` | Operator controls over routing and addressing. An anonymous BGP announce is a route hijack. |
 | Control plane, operator — `GET /gateway/state`, `GET\|DELETE /gateway/state/{id}` | **gated**, `admin` | The fleet-wide read and admin surface. Not cert-bound on purpose: a fleet-wide list is exactly what no single gateway's certificate should authorise. |
-| Control plane, gatewayd-facing — `POST /gateway/telemetry`, `GET /gateway/desired-config/{id}` | **not role-gated — already authenticated** | Requires a **verified mTLS client certificate** and binds the request's `gateway_id` to its Common Name: 401 without a certificate, 403 when the id names another gateway (`ControlPlane.authenticatedGateway`). |
+| Control plane, gatewayd-facing — `POST /gateway/telemetry`, `GET /gateway/desired-config/{id}`, `PUT /gateway/vpn-leases/{id}`, `DELETE /gateway/vpn-leases/{id}/{tenant}/{lease}` | **not role-gated — already authenticated** | Requires a **verified mTLS client certificate** and binds the request's `gateway_id` to its Common Name: 401 without a certificate, 403 when the id names another gateway (`ControlPlane.authenticatedGateway`). |
 
 The last row is the point of #165 scope item 2, and the reading that matters is
 **"authenticates differently", not "unauthenticated"**. gatewayd's credential is
-a certificate; a role guard in front of those two routes would demand a bearer
+a certificate; a role guard in front of those routes would demand a bearer
 token from it and stop every gateway in the fleet reporting. The split is
 `ControlPlane.RegisterRoutes` versus `ControlPlane.RegisterGatewayFacingRoutes`,
 asserted exactly and for disjointness.

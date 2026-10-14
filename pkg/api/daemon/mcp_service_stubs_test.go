@@ -270,8 +270,10 @@ func TestMCPServiceProvider_DaemonOps_NilService(t *testing.T) {
 	}
 }
 
-// TestMCPServiceProvider_OverlayStubs verifies overlay stub methods.
-func TestMCPServiceProvider_OverlayStubs(t *testing.T) {
+// TestMCPServiceProvider_OverlayWithoutController verifies every overlay
+// verb answers that the overlay service is unavailable when no overlay
+// controller is wired.
+func TestMCPServiceProvider_OverlayWithoutController(t *testing.T) {
 	ctx := context.Background()
 	p := newMCPProvider()
 
@@ -293,8 +295,8 @@ func TestMCPServiceProvider_OverlayStubs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.fn()
-			if err == nil {
-				t.Fatal("expected error")
+			if !errors.Is(err, mcp.ErrOverlayServiceUnavailable) {
+				t.Fatalf("err = %v, want %v", err, mcp.ErrOverlayServiceUnavailable)
 			}
 		})
 	}

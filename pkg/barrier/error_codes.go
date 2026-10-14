@@ -94,11 +94,23 @@ func Code(err error) codes.Code {
 			return code
 		}
 	}
-	var qbErr *sdkerrors.QBError
-	if errors.As(err, &qbErr) {
-		if code, ok := quicbaasCodes[qbErr.Code]; ok {
-			return code
-		}
+	if code, ok := SDKCode(err); ok {
+		return code
 	}
 	return codes.Internal
+}
+
+// SDKCode classifies a quicbaas SDK error anywhere in err's chain by
+// quicbaasCodes. It reports false when the chain holds no SDK error, or
+// one whose code quicbaasCodes does not list.
+func SDKCode(err error) (codes.Code, bool) {
+	var qbErr *sdkerrors.QBError
+	if !errors.As(err, &qbErr) {
+		return codes.Unknown, false
+	}
+	code, ok := quicbaasCodes[qbErr.Code]
+	if !ok {
+		return codes.Unknown, false
+	}
+	return code, true
 }

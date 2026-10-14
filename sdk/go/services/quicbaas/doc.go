@@ -71,6 +71,10 @@
 // ResolveTrustLevel, ...) are re-exported by the sibling package
 // sdk/go/services/orchestration.
 //
+// The request, response and value types of Cache, Vector, TimeSeries,
+// ObjectStorage, Scheduler and Messaging are re-exported by the sibling
+// packages sdk/go/services/{cache,vector,timeseries,objectstorage,scheduler,messaging}.
+//
 // # Usage
 //
 // The QuicBaaS client is typically accessed through the platform Client:

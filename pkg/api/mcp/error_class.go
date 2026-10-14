@@ -32,6 +32,7 @@ var codeClassRules = []struct {
 	class  codes.Code
 }{
 	{"_NOT_FOUND", codes.NotFound},
+	{"_ALREADY_EXISTS", codes.AlreadyExists},
 	{"_REQUIRED", codes.InvalidArgument},
 	{"INVALID", codes.InvalidArgument},
 	{"_DECODE", codes.InvalidArgument},

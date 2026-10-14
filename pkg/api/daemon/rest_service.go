@@ -369,6 +369,18 @@ func (s *RESTServer) SetVPNHandlers(server platformv1.VPNServiceServer, guard *r
 	s.logger.Info("VPN REST routes registered")
 }
 
+// SetAppServiceHandlers wires the Cache, Scheduler and Messaging REST
+// handlers onto the daemon's REST router so /api/v1/cache/*,
+// /api/v1/scheduler/* and /api/v1/messaging/* are served by the same
+// in-process servers that back gRPC, QUIC, MCP, and the Unix socket. A nil
+// server answers its routes with 503. guard checks each route's scope; nil
+// refuses every route.
+func (s *RESTServer) SetAppServiceHandlers(servers restapi.AppServiceServers, guard *restapi.ScopeGuard) {
+	handlers := restapi.NewAppServiceHandlers(servers, guard, s.logger)
+	handlers.RegisterRoutes(s.router)
+	s.logger.Info("Application service REST routes registered")
+}
+
 // SetDeviceHandlers wires the device REST handlers (CRUD + profiles) onto
 // the daemon's REST router. The handlers reuse the device service +
 // profile service that the gRPC and QUIC adapters share, so REST clients

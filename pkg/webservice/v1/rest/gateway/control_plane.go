@@ -14,6 +14,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/vpn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
@@ -35,7 +37,23 @@ type ControlPlane struct {
 	logger     *logging.Logger
 	store      gwstate.Store
 	cfgSource  DesiredConfigSource
+	vpnLeases  VPNLeaseSink
 	respWriter response.HttpWriter
+}
+
+// VPNLeaseSink records the management VPN leases a gateway admits, renews
+// and revokes, so the gateway can rebuild them after a restart from its
+// desired configuration (pkg/vpn.Service).
+type VPNLeaseSink interface {
+	RecordGatewayLease(ctx context.Context, gatewayID string, lease *gwstate.DesiredVPNLease) error
+	// ReleaseGatewayLease succeeds for a lease already released.
+	ReleaseGatewayLease(ctx context.Context, gatewayID, tenantID, leaseID string) error
+}
+
+// SetVPNLeaseSink makes sink the record of the gateways' VPN leases.
+// Without one the lease routes answer 500 ErrGatewayControlNotConfigured.
+func (c *ControlPlane) SetVPNLeaseSink(sink VPNLeaseSink) {
+	c.vpnLeases = sink
 }
 
 // DesiredConfigSource produces the CP-side intended configuration
@@ -114,6 +132,8 @@ func (c *ControlPlane) RegisterGatewayFacingRoutes(parent *mux.Router) {
 	sr := parent.PathPrefix("/gateway").Subrouter()
 	sr.HandleFunc("/telemetry", c.postTelemetry).Methods("POST")
 	sr.HandleFunc("/desired-config/{id}", c.getDesiredConfig).Methods("GET")
+	sr.HandleFunc("/vpn-leases/{id}", c.putVPNLease).Methods("PUT")
+	sr.HandleFunc("/vpn-leases/{id}/{tenant}/{lease}", c.deleteVPNLease).Methods("DELETE")
 }
 
 func (c *ControlPlane) listState(w http.ResponseWriter, r *http.Request) {
@@ -279,6 +299,89 @@ func (c *ControlPlane) getDesiredConfig(w http.ResponseWriter, r *http.Request) 
 		"gateway_id": id,
 		"config":     cfg,
 	})
+}
+
+// putVPNLease handles PUT /gateway/vpn-leases/{id}: gateway {id} records a
+// VPN lease it admitted or renewed. Only the gateway itself may write its
+// leases.
+func (c *ControlPlane) putVPNLease(w http.ResponseWriter, r *http.Request) {
+	id, ok := c.vpnLeaseGateway(w, r)
+	if !ok {
+		return
+	}
+	var lease gwstate.DesiredVPNLease
+	if err := json.NewDecoder(r.Body).Decode(&lease); err != nil {
+		c.respWriter.Error400(w, r, err)
+		return
+	}
+	if err := c.vpnLeases.RecordGatewayLease(r.Context(), id, &lease); err != nil {
+		c.writeVPNLeaseError(w, r, err)
+		return
+	}
+	c.respWriter.Success200(w, r, map[string]interface{}{
+		"recorded":   true,
+		"gateway_id": id,
+		"lease_id":   lease.ID,
+	})
+}
+
+// deleteVPNLease handles DELETE /gateway/vpn-leases/{id}/{tenant}/{lease}:
+// gateway {id} releases a lease it revoked. Releasing a lease already gone
+// succeeds, so the gateway may retry.
+func (c *ControlPlane) deleteVPNLease(w http.ResponseWriter, r *http.Request) {
+	id, ok := c.vpnLeaseGateway(w, r)
+	if !ok {
+		return
+	}
+	vars := mux.Vars(r)
+	if err := c.vpnLeases.ReleaseGatewayLease(r.Context(), id, vars["tenant"], vars["lease"]); err != nil {
+		c.writeVPNLeaseError(w, r, err)
+		return
+	}
+	c.respWriter.Success200(w, r, map[string]interface{}{
+		"released":   true,
+		"gateway_id": id,
+		"lease_id":   vars["lease"],
+	})
+}
+
+// vpnLeaseGateway authenticates the calling gateway and authorizes it to
+// write the leases of gateway {id}; it answers the request itself when not.
+func (c *ControlPlane) vpnLeaseGateway(w http.ResponseWriter, r *http.Request) (string, bool) {
+	principal, ok := c.authenticatedGateway(w, r)
+	if !ok {
+		return "", false
+	}
+	if c.vpnLeases == nil {
+		c.respWriter.Error500(w, r, ErrGatewayControlNotConfigured{})
+		return "", false
+	}
+	id := mux.Vars(r)["id"]
+	if id == "" {
+		c.respWriter.Error400(w, r, ErrGatewayIDRequired{})
+		return "", false
+	}
+	if !c.authorizeGatewayID(w, r, principal, id) {
+		return "", false
+	}
+	return id, true
+}
+
+// writeVPNLeaseError answers a lease write the sink refused.
+func (c *ControlPlane) writeVPNLeaseError(w http.ResponseWriter, r *http.Request, err error) {
+	var (
+		invalid *vpn.ErrInvalidArgument
+		owned   *vpn.ErrLeaseOwnedByOtherGateway
+	)
+	switch {
+	case errors.As(err, &invalid):
+		c.respWriter.Error400(w, r, err)
+	case errors.As(err, &owned):
+		c.logger.Warn(err.Error())
+		c.respWriter.Error403(w, r, err, nil)
+	default:
+		c.respWriter.Error500(w, r, err)
+	}
 }
 
 // ErrGatewayControlNotConfigured signals that the control-plane

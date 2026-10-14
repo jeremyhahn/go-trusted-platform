@@ -71,7 +71,10 @@ func runTestUnlock(commonFlags *cli.CommonFlags, f *testUnlockFlags) error {
 	}
 	defer base.Close()
 
-	client := lukssvc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.TestUnlock(base.Context(), &lukssvc.TestUnlockRequest{
 		Device: device,
 		Slot:   f.slot,

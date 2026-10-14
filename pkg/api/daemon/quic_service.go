@@ -123,6 +123,13 @@ type QUICServiceHandler struct {
 	// vpnService serves the VPN category opcode (quicwire.OpVPNCategory,
 	// 0x52). It is the same VPNGRPCService instance the other transports use.
 	vpnService platformv1.VPNServiceServer
+	// cacheService, schedulerService and messagingService serve the
+	// application service category opcodes (quicwire.OpCacheCategory,
+	// OpSchedulerCategory and OpMessagingCategory). They are the same
+	// instances the other transports use.
+	cacheService     platformv1.CacheServiceServer
+	schedulerService platformv1.SchedulerServiceServer
+	messagingService platformv1.MessagingServiceServer
 	// Phase 3.5 handlers - wired via Set*Service on the daemon.
 	ceremonyQUIC *ceremonyQUICHandlers
 	pivQUIC      *pivQUICHandlers
@@ -601,6 +608,11 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 	// posture-policy sub-operations.
 	case req.Opcode == quicwire.OpVPNCategory:
 		return h.handleVPNCategory(ctx, req)
+
+	// Application Service Category Opcodes (0x53-0x55) - cache, scheduler
+	// and messaging through the composed go-quicbaas SDK.
+	case appQUICCategories[req.Opcode].handlers != nil:
+		return h.handleAppServiceCategory(ctx, req)
 
 	// Device Operations (0x30-0x3F)
 	case req.Opcode >= quicwire.OpDeviceRegister && req.Opcode <= quicwire.OpDeviceGetMetrics:

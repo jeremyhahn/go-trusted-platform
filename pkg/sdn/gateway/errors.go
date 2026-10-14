@@ -129,6 +129,22 @@ func (e *ErrServiceStartFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrRevocationJournal is a management VPN revocation journal that could not
+// be read, parsed or written.
+type ErrRevocationJournal struct {
+	Path  string
+	Op    string
+	Cause error
+}
+
+func (e *ErrRevocationJournal) Error() string {
+	return fmt.Sprintf("vpn revocation journal %s: %s: %v", e.Path, e.Op, e.Cause)
+}
+
+func (e *ErrRevocationJournal) Unwrap() error {
+	return e.Cause
+}
+
 // ErrServiceStopFailed is returned when a service handler fails to stop.
 type ErrServiceStopFailed struct {
 	Service string

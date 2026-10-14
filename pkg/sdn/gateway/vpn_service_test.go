@@ -15,9 +15,13 @@ package gateway
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"log/slog"
+	"net"
+	"net/http"
 	"net/netip"
+	"strconv"
 	"testing"
 	"time"
 
@@ -31,6 +35,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/vpn"
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 )
 
 // validVPNServiceConfig is the smallest enabled management VPN the core
@@ -129,6 +134,7 @@ type vpnRig struct {
 	builds int
 	events []string
 	leases *listFailingLeaseStore
+	pki    *testutil.TestTLSBundle
 }
 
 func newVPNRuntime(r *vpnRig) *VPNRuntime {
@@ -146,16 +152,34 @@ func newVPNRuntime(r *vpnRig) *VPNRuntime {
 				return r.plane, nil
 			},
 		},
-		Leases: r.leases,
-		Audit:  stubVPNIdentity{},
+		Leases:   r.leases,
+		Audit:    stubVPNIdentity{},
+		Listener: vpn.ListenerDeps{Certificate: r.pki.ServerCert, ClientCAs: staticVPNAnchor{pool: r.pki.CAPool}},
 	}
+}
+
+// staticVPNAnchor is the device-identity anchor the rig's listener trusts.
+type staticVPNAnchor struct{ pool *x509.CertPool }
+
+func (a staticVPNAnchor) CAPool(context.Context) (*x509.CertPool, error) { return a.pool, nil }
+
+// freeLoopbackPort returns a loopback port nothing listens on; the listener
+// config refuses port 0, so the rig cannot let the kernel pick at bind.
+func freeLoopbackPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := ln.Addr().(*net.TCPAddr).Port
+	require.NoError(t, ln.Close())
+	return port
 }
 
 func newVPNRig(t *testing.T) *vpnRig {
 	t.Helper()
-	r := &vpnRig{}
+	r := &vpnRig{pki: testutil.GenerateTestTLSBundle(t)}
 	cfg := baseGatewayConfig("vpn-gw")
 	cfg.ManagementVPN = validVPNServiceConfig()
+	cfg.ManagementVPN.Listener = vpn.ListenerConfig{BindHost: "127.0.0.1", Port: freeLoopbackPort(t)}
 	cfg.HostedServices = []string{ServiceManagementVPN}
 	cfg.Runtime = &GatewayRuntime{VPN: newVPNRuntime(r)}
 	gw, err := NewGateway(cfg)
@@ -247,6 +271,54 @@ func TestBuildManagementVPN_ARefusedServiceStopsThePlanesItBuilt(t *testing.T) {
 	var deps *vpn.ErrDepsMissing
 	require.True(t, errors.As(err, &deps), "got %v", err)
 	assert.Equal(t, []string{"stop masque"}, r.events)
+}
+
+func TestBuildManagementVPN_RefusesWithoutListenerTLS(t *testing.T) {
+	r := newVPNRig(t)
+	r.gw.config.Runtime.VPN.Listener = vpn.ListenerDeps{}
+
+	_, err := buildManagementVPN(r.gw)
+	var failed *ErrServiceStartFailed
+	require.True(t, errors.As(err, &failed), "got %v", err)
+	var deps *vpn.ErrDepsMissing
+	require.True(t, errors.As(err, &deps), "got %v", err)
+	assert.Equal(t, "listener certificate", deps.Dep)
+	assert.Equal(t, []string{"stop masque"}, r.events)
+}
+
+func TestVPNBackend_ServesTheAdmissionListenerUntilStop(t *testing.T) {
+	ctx := context.Background()
+	r := newVPNRig(t)
+	require.NoError(t, r.handler().Start(ctx))
+	addr := r.gw.vpn.listener.Addr()
+	require.NotNil(t, addr)
+
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: r.pki.ClientTLSConfig()}}
+	defer client.CloseIdleConnections()
+	resp, err := client.Post("https://"+addr.String()+vpn.PathChallenges, "application/json", nil)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	require.NoError(t, r.handler().Stop(ctx))
+	ln, err := net.Listen("tcp", addr.String())
+	require.NoError(t, err, "stop releases the listener's port")
+	require.NoError(t, ln.Close())
+}
+
+func TestVPNBackend_ATakenListenerPortRollsBack(t *testing.T) {
+	ctx := context.Background()
+	r := newVPNRig(t)
+	listen := r.gw.config.ManagementVPN.Listener
+	taken, err := net.Listen("tcp", net.JoinHostPort(listen.BindHost, strconv.Itoa(listen.Port)))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, taken.Close()) }()
+
+	err = r.handler().Start(ctx)
+	var bind *vpn.ErrListenerBind
+	require.True(t, errors.As(err, &bind), "got %v", err)
+	assert.Equal(t, []string{"start masque", "stop masque"}, r.events)
+	assert.Nil(t, r.gw.vpn)
 }
 
 // TestVPNService_ARestartBuildsFreshPlanes: a stopped MASQUE plane cannot be

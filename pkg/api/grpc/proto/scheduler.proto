@@ -1,0 +1,281 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platformv1";
+
+// SchedulerService manages the jobs of the composed go-quicbaas scheduler
+// (docs/sdk/api.md §3.5). platformd serves it through the SDK's Scheduler
+// group; a daemon whose SDK does not serve the group answers every call
+// Unavailable.
+//
+// Job and execution IDs are decimal strings: the scheduler issues 64-bit IDs,
+// and a JSON number does not carry them exactly.
+service SchedulerService {
+  // CreateJob schedules a job. Requires scheduler:write.
+  rpc CreateJob(CreateSchedulerJobRequest) returns (CreateSchedulerJobResponse);
+
+  // GetJob returns one job. Requires scheduler:read.
+  rpc GetJob(GetSchedulerJobRequest) returns (GetSchedulerJobResponse);
+
+  // UpdateJob changes the fields of a job that are set. Requires
+  // scheduler:write.
+  rpc UpdateJob(UpdateSchedulerJobRequest) returns (UpdateSchedulerJobResponse);
+
+  // DeleteJob removes a job. Requires scheduler:delete.
+  rpc DeleteJob(DeleteSchedulerJobRequest) returns (DeleteSchedulerJobResponse);
+
+  // ListJobs lists the jobs that match every filter that is set. Requires
+  // scheduler:read.
+  rpc ListJobs(ListSchedulerJobsRequest) returns (ListSchedulerJobsResponse);
+
+  // TriggerJob runs a job now. Requires scheduler:write.
+  rpc TriggerJob(TriggerSchedulerJobRequest) returns (TriggerSchedulerJobResponse);
+
+  // PauseJob stops a job from running until it is resumed. Requires
+  // scheduler:write.
+  rpc PauseJob(PauseSchedulerJobRequest) returns (PauseSchedulerJobResponse);
+
+  // ResumeJob schedules a paused job again. Requires scheduler:write.
+  rpc ResumeJob(ResumeSchedulerJobRequest) returns (ResumeSchedulerJobResponse);
+
+  // CancelJob cancels a job for good. Requires scheduler:write.
+  rpc CancelJob(CancelSchedulerJobRequest) returns (CancelSchedulerJobResponse);
+
+  // GetJobHistory returns the executions of a job. Requires scheduler:read.
+  rpc GetJobHistory(GetSchedulerJobHistoryRequest) returns (GetSchedulerJobHistoryResponse);
+
+  // GetStatus returns the scheduler's health and counters. Requires
+  // scheduler:read.
+  rpc GetStatus(GetSchedulerStatusRequest) returns (GetSchedulerStatusResponse);
+}
+
+// SchedulerJobType is how a job is scheduled.
+enum SchedulerJobType {
+  SCHEDULER_JOB_TYPE_UNSPECIFIED = 0;
+  // SCHEDULER_JOB_TYPE_ONE_SHOT runs once, at execute_at_unix_ms or now.
+  SCHEDULER_JOB_TYPE_ONE_SHOT = 1;
+  // SCHEDULER_JOB_TYPE_RECURRING runs on the cron schedule.
+  SCHEDULER_JOB_TYPE_RECURRING = 2;
+  // SCHEDULER_JOB_TYPE_DELAYED runs once, delay_ms after it is created.
+  SCHEDULER_JOB_TYPE_DELAYED = 3;
+}
+
+// SchedulerJobStatus is the state of a job or of one execution.
+enum SchedulerJobStatus {
+  SCHEDULER_JOB_STATUS_UNSPECIFIED = 0;
+  SCHEDULER_JOB_STATUS_PENDING = 1;
+  SCHEDULER_JOB_STATUS_RUNNING = 2;
+  SCHEDULER_JOB_STATUS_COMPLETED = 3;
+  SCHEDULER_JOB_STATUS_FAILED = 4;
+  SCHEDULER_JOB_STATUS_PAUSED = 5;
+  SCHEDULER_JOB_STATUS_CANCELED = 6;
+}
+
+// SchedulerOwnerType is the kind of principal a job belongs to.
+enum SchedulerOwnerType {
+  SCHEDULER_OWNER_TYPE_UNSPECIFIED = 0;
+  SCHEDULER_OWNER_TYPE_SYSTEM = 1;
+  SCHEDULER_OWNER_TYPE_TENANT = 2;
+  SCHEDULER_OWNER_TYPE_DELEGATED = 3;
+}
+
+// SchedulerJob is a scheduled job. Times are Unix milliseconds; zero means
+// never.
+message SchedulerJob {
+  string job_id = 1;
+  string name = 2;
+  string description = 3;
+  SchedulerJobType job_type = 4;
+  SchedulerJobStatus status = 5;
+  string schedule = 6;
+  int64 delay_ms = 7;
+  bytes payload = 8;
+  SchedulerOwnerType owner_type = 9;
+  string owner_id = 10;
+  int32 max_retries = 11;
+  int32 retry_count = 12;
+  int64 timeout_ms = 13;
+  int64 next_run_at_unix_ms = 14;
+  int64 last_run_at_unix_ms = 15;
+  int64 created_at_unix_ms = 16;
+  int64 updated_at_unix_ms = 17;
+  uint64 execution_count = 18;
+  uint64 failure_count = 19;
+  map<string, string> tags = 20;
+}
+
+// SchedulerJobExecution is one run of a job.
+message SchedulerJobExecution {
+  string execution_id = 1;
+  string job_id = 2;
+  SchedulerJobStatus status = 3;
+  int64 started_at_unix_ms = 4;
+  int64 completed_at_unix_ms = 5;
+  int64 duration_ms = 6;
+  int32 retry_count = 7;
+  string error = 8;
+  bytes result = 9;
+}
+
+message CreateSchedulerJobRequest {
+  string name = 1;
+  string description = 2;
+
+  // job_type is required.
+  SchedulerJobType job_type = 3;
+
+  // handler names the registered handler that runs the job.
+  string handler = 4;
+
+  // schedule is the cron expression of a recurring job.
+  string schedule = 5;
+
+  // execute_at_unix_ms is when a one-shot job runs. Zero runs it now.
+  int64 execute_at_unix_ms = 6;
+  int64 delay_ms = 7;
+  bytes payload = 8;
+
+  // owner_type defaults to system.
+  SchedulerOwnerType owner_type = 9;
+  string owner_id = 10;
+  int32 max_retries = 11;
+  int64 timeout_ms = 12;
+  map<string, string> tags = 13;
+
+  // node_affinity pins execution to one node. Empty runs the job on the
+  // Raft leader.
+  string node_affinity = 14;
+}
+
+message CreateSchedulerJobResponse {
+  string job_id = 1;
+  int64 next_run_at_unix_ms = 2;
+}
+
+message GetSchedulerJobRequest {
+  string job_id = 1;
+}
+
+message GetSchedulerJobResponse {
+  SchedulerJob job = 1;
+}
+
+message UpdateSchedulerJobRequest {
+  string job_id = 1;
+
+  // The remaining fields change only when set to a non-zero value.
+  string name = 2;
+  string description = 3;
+  string schedule = 4;
+  int64 delay_ms = 5;
+  bytes payload = 6;
+  int32 max_retries = 7;
+  int64 timeout_ms = 8;
+  map<string, string> tags = 9;
+}
+
+message UpdateSchedulerJobResponse {
+  SchedulerJob job = 1;
+}
+
+message DeleteSchedulerJobRequest {
+  string job_id = 1;
+}
+
+message DeleteSchedulerJobResponse {}
+
+message ListSchedulerJobsRequest {
+  // Each filter applies only when it is set.
+  SchedulerOwnerType owner_type = 1;
+  string owner_id = 2;
+  SchedulerJobStatus status = 3;
+  SchedulerJobType job_type = 4;
+  map<string, string> tags = 5;
+  int32 limit = 6;
+  int32 offset = 7;
+}
+
+message ListSchedulerJobsResponse {
+  repeated SchedulerJob jobs = 1;
+  int32 total_count = 2;
+  bool has_more = 3;
+}
+
+message TriggerSchedulerJobRequest {
+  string job_id = 1;
+}
+
+message TriggerSchedulerJobResponse {
+  string job_id = 1;
+  string execution_id = 2;
+  int64 started_at_unix_ms = 3;
+}
+
+message PauseSchedulerJobRequest {
+  string job_id = 1;
+}
+
+message PauseSchedulerJobResponse {
+  string job_id = 1;
+  int64 paused_at_unix_ms = 2;
+}
+
+message ResumeSchedulerJobRequest {
+  string job_id = 1;
+}
+
+message ResumeSchedulerJobResponse {
+  string job_id = 1;
+  int64 resumed_at_unix_ms = 2;
+  int64 next_run_at_unix_ms = 3;
+}
+
+message CancelSchedulerJobRequest {
+  string job_id = 1;
+  string reason = 2;
+}
+
+message CancelSchedulerJobResponse {
+  string job_id = 1;
+  int64 canceled_at_unix_ms = 2;
+  string reason = 3;
+}
+
+message GetSchedulerJobHistoryRequest {
+  string job_id = 1;
+  int32 limit = 2;
+  int32 offset = 3;
+
+  // The time and status filters apply only when set.
+  int64 start_time_unix_ms = 4;
+  int64 end_time_unix_ms = 5;
+  SchedulerJobStatus status = 6;
+}
+
+message GetSchedulerJobHistoryResponse {
+  string job_id = 1;
+  repeated SchedulerJobExecution executions = 2;
+  int32 total_count = 3;
+  bool has_more = 4;
+}
+
+message GetSchedulerStatusRequest {}
+
+message GetSchedulerStatusResponse {
+  bool healthy = 1;
+  uint64 total_jobs = 2;
+  uint64 pending_jobs = 3;
+  uint64 running_jobs = 4;
+  uint64 completed_jobs = 5;
+  uint64 failed_jobs = 6;
+  uint64 paused_jobs = 7;
+  uint64 canceled_jobs = 8;
+  uint64 executions_today = 9;
+  uint64 failures_today = 10;
+  int64 average_latency_ms = 11;
+  int32 worker_count = 12;
+  int32 queue_depth = 13;
+  int64 last_heartbeat_unix_ms = 14;
+  int64 uptime_ms = 15;
+}

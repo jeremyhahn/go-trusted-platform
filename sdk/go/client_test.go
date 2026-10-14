@@ -435,8 +435,39 @@ func TestPlatformClient_ServiceClients(t *testing.T) {
 	if c.Ceremony() != nil {
 		t.Error("Ceremony() should return nil with nil services")
 	}
+	if c.LUKS() != nil {
+		t.Error("LUKS() should return nil with nil services")
+	}
 	if c.ConfigDelivery() != nil {
 		t.Error("ConfigDelivery() should return nil with nil services")
+	}
+	if c.Cache() != nil || c.Scheduler() != nil || c.Messaging() != nil {
+		t.Error("the application service clients should be nil with nil services")
+	}
+}
+
+// connAdapter is a mockAdapter with a live connection.
+type connAdapter struct {
+	mockAdapter
+	conn grpc.ClientConnInterface
+}
+
+func (a *connAdapter) Connection() grpc.ClientConnInterface { return a.conn }
+
+type fakeClientConn struct {
+	grpc.ClientConnInterface
+}
+
+func TestPlatformClient_AppServiceClientsAreBuiltOnTheConnection(t *testing.T) {
+	c := newClientFromAdapter(&connAdapter{conn: fakeClientConn{}}, ProtocolGRPC, nil)
+	if c.Cache() == nil || c.Scheduler() == nil || c.Messaging() == nil {
+		t.Fatalf("Cache, Scheduler and Messaging must be built on the adapter connection")
+	}
+
+	// Without a connection no service client is built.
+	c = newClientFromAdapter(&connAdapter{}, ProtocolGRPC, nil)
+	if c.Cache() != nil || c.Scheduler() != nil || c.Messaging() != nil {
+		t.Error("the application service clients must be nil without a connection")
 	}
 }
 
@@ -450,6 +481,10 @@ type fakeFIDO2Client struct {
 
 type fakeCeremonyClient struct {
 	platformv1.CeremonyServiceClient
+}
+
+type fakeLUKSClient struct {
+	platformv1.LUKSServiceClient
 }
 
 func TestPlatformClient_PIVReturnsTheConfiguredServiceClient(t *testing.T) {
@@ -476,6 +511,15 @@ func TestPlatformClient_CeremonyReturnsTheConfiguredServiceClient(t *testing.T) 
 
 	if got := c.Ceremony(); got != platformv1.CeremonyServiceClient(want) {
 		t.Errorf("Ceremony() = %v, want the client held by ServiceClients", got)
+	}
+}
+
+func TestPlatformClient_LUKSReturnsTheConfiguredServiceClient(t *testing.T) {
+	want := &fakeLUKSClient{}
+	c := &platformClient{services: &ServiceClients{LUKS: want}}
+
+	if got := c.LUKS(); got != platformv1.LUKSServiceClient(want) {
+		t.Errorf("LUKS() = %v, want the client held by ServiceClients", got)
 	}
 }
 

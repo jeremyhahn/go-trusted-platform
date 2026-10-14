@@ -16,11 +16,13 @@ package vpn
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/netip"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/policy/opa"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
@@ -217,9 +219,10 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 	return &cp, nil
 }
 
-// Revoke ends a lease: the peer is removed, then the address released, then
-// the lease deleted. It is idempotent: an unknown lease is ErrLeaseNotFound
-// and nothing else happens.
+// Revoke ends a lease: the lease is deleted, then the peer removed, then the
+// address released. It is idempotent: an unknown lease is ErrLeaseNotFound
+// and nothing else happens. A revocation the store could not record is
+// ErrRevocationNotRecorded and leaves the lease served; retry it.
 func (s *Service) Revoke(ctx context.Context, id LeaseID, reason RevokeReason) error {
 	if !s.Active() {
 		return &ErrNotStarted{}
@@ -247,11 +250,45 @@ func (s *Service) Lease(ctx context.Context, id LeaseID) (*Lease, error) {
 	return s.deps.Leases.Get(ctx, id)
 }
 
-// revoke tears a lease down in order: peer, address, record. The record is
-// deleted even when the peer removal failed, because a lease past its
-// authority is dead whether or not the datapath answered; the removal error
+// OwnLease returns the lease named by id only when peer presents the device
+// certificate the lease was admitted with: a device renews and disconnects
+// its own lease and no other. A lease bound to another certificate is
+// reported as not found, so a caller cannot probe for other devices' leases.
+func (s *Service) OwnLease(ctx context.Context, id LeaseID, peer *calleradmission.Peer) (*Lease, error) {
+	if peer == nil || peer.Leaf == nil {
+		return nil, &ErrPeerRefused{Reason: calleradmission.ReasonNoIdentity}
+	}
+	lease, err := s.deps.Leases.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(peer.Leaf.Raw)
+	if subtle.ConstantTimeCompare(sum[:], lease.Keys.ClientCertificateSHA256) != 1 {
+		return nil, &ErrLeaseNotFound{LeaseID: id}
+	}
+	return lease, nil
+}
+
+// revoke ends a lease in order: record, peer, address. A store that could
+// record the revocation nowhere (ErrRevocationNotRecorded) keeps the lease,
+// and revoke then tears nothing down: a peer removed or an address released
+// under a lease a restart restores would be a session the gateway and its
+// next start disagree on. Any other store error still tears the lease down,
+// because a lease past its authority is dead whether or not its record went;
+// the peer is removed even when that error is returned, and a removal error
 // is returned so the caller retries the peer.
 func (s *Service) revoke(ctx context.Context, lease *Lease, reason RevokeReason) error {
+	var storeErr error
+	if err := s.deps.Leases.Delete(ctx, lease.ID); err != nil {
+		var nf *ErrLeaseNotFound
+		var unrecorded *ErrRevocationNotRecorded
+		if errors.As(err, &unrecorded) {
+			return err
+		}
+		if !errors.As(err, &nf) {
+			storeErr = err
+		}
+	}
 	var planeErr error
 	if plane, ok := s.deps.DataPlanes[lease.DataPlane]; ok {
 		if err := plane.RemovePeer(ctx, lease.ID); err != nil {
@@ -259,14 +296,8 @@ func (s *Service) revoke(ctx context.Context, lease *Lease, reason RevokeReason)
 		}
 	}
 	s.releaseAddress(ctx, lease.Address)
-	if err := s.deps.Leases.Delete(ctx, lease.ID); err != nil {
-		var nf *ErrLeaseNotFound
-		if !errors.As(err, &nf) {
-			return err
-		}
-	}
 	s.logger.Info("vpn.revoke", slog.String("lease", string(lease.ID)), slog.String("device", lease.DeviceID), slog.String("reason", string(reason)))
-	return planeErr
+	return errors.Join(storeErr, planeErr)
 }
 
 func (s *Service) releaseAddress(ctx context.Context, addr netip.Prefix) {
@@ -407,17 +438,11 @@ func (s *Service) personFactor(ctx context.Context, tenantID, deviceID string, n
 }
 
 func (s *Service) allocate(ctx context.Context, req *AdmissionRequest) (netip.Prefix, error) {
-	pool, err := s.deps.IPAM.GetPoolByName(ctx, s.cfg.Pool)
+	areq, err := s.allocationRequest(ctx, req.TenantID, req.DeviceID)
 	if err != nil {
-		return netip.Prefix{}, &ErrPoolExhausted{Pool: s.cfg.Pool, Cause: err}
+		return netip.Prefix{}, err
 	}
-	alloc, err := s.deps.IPAM.Allocate(ctx, &ipam.AllocationRequest{
-		PoolID:        pool.ID,
-		DeviceID:      req.DeviceID,
-		Description:   "vpn lease",
-		Tags:          []string{"vpn", "tenant:" + req.TenantID},
-		LeaseDuration: s.cfg.LeaseTTL,
-	})
+	alloc, err := s.deps.IPAM.Allocate(ctx, areq)
 	if err != nil {
 		return netip.Prefix{}, &ErrPoolExhausted{Pool: s.cfg.Pool, Cause: err}
 	}
@@ -425,6 +450,22 @@ func (s *Service) allocate(ctx context.Context, req *AdmissionRequest) (netip.Pr
 		return netip.Prefix{}, &ErrPoolExhausted{Pool: s.cfg.Pool}
 	}
 	return netip.PrefixFrom(alloc.IP, alloc.IP.BitLen()), nil
+}
+
+// allocationRequest is the IPAM request for an address of the tenant's
+// device from the VPN pool.
+func (s *Service) allocationRequest(ctx context.Context, tenantID, deviceID string) (*ipam.AllocationRequest, error) {
+	pool, err := s.deps.IPAM.GetPoolByName(ctx, s.cfg.Pool)
+	if err != nil {
+		return nil, &ErrPoolExhausted{Pool: s.cfg.Pool, Cause: err}
+	}
+	return &ipam.AllocationRequest{
+		PoolID:        pool.ID,
+		DeviceID:      deviceID,
+		Description:   "vpn lease",
+		Tags:          []string{"vpn", "tenant:" + tenantID},
+		LeaseDuration: s.cfg.LeaseTTL,
+	}, nil
 }
 
 // zonesAllowed is exported for the daemon's authorization layer: the lease's

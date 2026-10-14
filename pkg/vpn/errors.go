@@ -132,3 +132,17 @@ type ErrGatewayNotFound struct {
 func (e *ErrGatewayNotFound) Error() string {
 	return "vpn: gateway " + e.GatewayID + " has not reported"
 }
+
+// ErrLeaseOwnedByOtherGateway reports a lease write or delete from a gateway
+// that did not issue the lease. Only the gateway that admitted a lease writes
+// it through, so the write is refused rather than moving the lease.
+type ErrLeaseOwnedByOtherGateway struct {
+	TenantID  string
+	LeaseID   string
+	GatewayID string
+}
+
+// Error implements the error interface.
+func (e *ErrLeaseOwnedByOtherGateway) Error() string {
+	return "vpn: lease " + e.LeaseID + " of tenant " + e.TenantID + " was not issued by gateway " + e.GatewayID
+}

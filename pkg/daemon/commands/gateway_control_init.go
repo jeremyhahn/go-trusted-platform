@@ -79,10 +79,10 @@ type viperDesiredConfigSource struct {
 	vpn desiredVPNSource
 }
 
-// desiredVPNSource produces the vpn section of the desired configuration
-// (pkg/vpn.Service).
+// desiredVPNSource produces the vpn section of a gateway's desired
+// configuration (pkg/vpn.Service).
 type desiredVPNSource interface {
-	DesiredVPN(ctx context.Context) (*gwstate.DesiredVPN, error)
+	DesiredVPN(ctx context.Context, gatewayID string) (*gwstate.DesiredVPN, error)
 }
 
 // SetVPNSource makes source the author of the vpn section.
@@ -131,7 +131,7 @@ func (v *viperDesiredConfigSource) overlayVPN(desired *gwstate.DesiredConfig) er
 	if desired.VPN != nil {
 		return &ErrDesiredVPNConfigured{Key: desiredVPNKey}
 	}
-	section, err := v.vpn.DesiredVPN(context.Background())
+	section, err := v.vpn.DesiredVPN(context.Background(), desired.GatewayID)
 	if err != nil {
 		return err
 	}

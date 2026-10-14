@@ -61,11 +61,18 @@ type Client interface {
 	PIV() platformv1.PIVServiceClient
 	FIDO2() platformv1.FIDO2ServiceClient
 	Ceremony() platformv1.CeremonyServiceClient
+	LUKS() platformv1.LUKSServiceClient
 
 	// ConfigDelivery returns the config-delivery provisioning client
 	// (nonce issuance, pre-enrollment config fetch, remote Secure Boot
 	// digest signing, provisioning session management).
 	ConfigDelivery() platformv1.ConfigDeliveryServiceClient
+
+	// Cache, Scheduler and Messaging return the clients of the application
+	// services platformd serves over the composed go-quicbaas SDK.
+	Cache() platformv1.CacheServiceClient
+	Scheduler() platformv1.SchedulerServiceClient
+	Messaging() platformv1.MessagingServiceClient
 
 	// Security Platform Services
 	IAM() platformv1.PlatformIAMServiceClient
@@ -116,9 +123,15 @@ type ServiceClients struct {
 	PIV         platformv1.PIVServiceClient
 	FIDO2       platformv1.FIDO2ServiceClient
 	Ceremony    platformv1.CeremonyServiceClient
+	LUKS        platformv1.LUKSServiceClient
 
 	// ConfigDelivery is the config-delivery provisioning service client.
 	ConfigDelivery platformv1.ConfigDeliveryServiceClient
+
+	// Application services served over the composed go-quicbaas SDK.
+	Cache     platformv1.CacheServiceClient
+	Scheduler platformv1.SchedulerServiceClient
+	Messaging platformv1.MessagingServiceClient
 }
 
 // ConnectFunc is a function type for protocol-specific connection establishment.
@@ -352,8 +365,13 @@ func (c *platformClient) initServiceClients() {
 		PIV:         platformv1.NewPIVServiceClient(conn),
 		FIDO2:       platformv1.NewFIDO2ServiceClient(conn),
 		Ceremony:    platformv1.NewCeremonyServiceClient(conn),
+		LUKS:        platformv1.NewLUKSServiceClient(conn),
 
 		ConfigDelivery: platformv1.NewConfigDeliveryServiceClient(conn),
+
+		Cache:     platformv1.NewCacheServiceClient(conn),
+		Scheduler: platformv1.NewSchedulerServiceClient(conn),
+		Messaging: platformv1.NewMessagingServiceClient(conn),
 	}
 }
 
@@ -624,12 +642,44 @@ func (c *platformClient) Ceremony() platformv1.CeremonyServiceClient {
 	return c.services.Ceremony
 }
 
+// LUKS returns the LUKS volume service client.
+func (c *platformClient) LUKS() platformv1.LUKSServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.LUKS
+}
+
 // ConfigDelivery returns the config-delivery provisioning service client.
 func (c *platformClient) ConfigDelivery() platformv1.ConfigDeliveryServiceClient {
 	if c.services == nil {
 		return nil
 	}
 	return c.services.ConfigDelivery
+}
+
+// Cache returns the cache service client.
+func (c *platformClient) Cache() platformv1.CacheServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.Cache
+}
+
+// Scheduler returns the scheduler service client.
+func (c *platformClient) Scheduler() platformv1.SchedulerServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.Scheduler
+}
+
+// Messaging returns the messaging service client.
+func (c *platformClient) Messaging() platformv1.MessagingServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.Messaging
 }
 
 // QuicBaaS returns the QuicBaaS SDK client used to reach quicbaasd.

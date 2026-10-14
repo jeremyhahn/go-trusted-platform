@@ -159,9 +159,6 @@ func TestMCPZoneProviders(t *testing.T) {
 		"mcp": func(zs gateway.ZoneService) provider {
 			return NewMCPServiceProvider(&MCPServiceProviderConfig{ZoneService: zs})
 		},
-		"platform": func(zs gateway.ZoneService) provider {
-			return NewPlatformServiceProvider(&PlatformServiceProviderConfig{ZoneService: zs})
-		},
 	}
 	for name, newProvider := range mk {
 		t.Run(name, func(t *testing.T) {

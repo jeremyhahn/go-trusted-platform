@@ -167,6 +167,18 @@ func toolPermissionCatalog() map[string]string {
 	permissions["gateway_perf_flows"] = "sdn:write"
 	permissions["gateway_perf_datapath"] = "sdn:read"
 	permissions["gateway_perf_conntrack"] = "sdn:read"
+	// Overlay tools carry the scopes of their gRPC OverlayService twins and
+	// of the QUIC overlay sub-opcodes (#709).
+	permissions["overlay_status"] = "sdn:read"
+	permissions["overlay_vtep_list"] = "sdn:read"
+	permissions["overlay_vtep_get"] = "sdn:read"
+	permissions["overlay_vni_list"] = "sdn:read"
+	permissions["overlay_vni_create"] = "sdn:write"
+	permissions["overlay_vni_delete"] = "sdn:delete"
+	permissions["overlay_tunnel_list"] = "sdn:read"
+	permissions["overlay_tunnel_stats"] = "sdn:read"
+	permissions["overlay_mac_list"] = "sdn:read"
+	permissions["overlay_mac_forget"] = "sdn:write"
 
 	permissions["sdn_get_port_state"] = "sdn:read"
 	permissions["sdn_set_port_state"] = "sdn:write"
@@ -355,6 +367,12 @@ func toolPermissionCatalog() map[string]string {
 
 	permissions["platform_bmc_enroll"] = "bmc:admin"
 	permissions["platform_bmc_cert_restore"] = "bmc:admin"
+
+	// Application service tools (#704) require the scope of their gRPC
+	// method; the tool table carries it.
+	for name, tool := range appServiceTools {
+		permissions[name] = tool.scope
+	}
 
 	return permissions
 }

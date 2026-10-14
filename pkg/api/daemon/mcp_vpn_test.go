@@ -39,18 +39,15 @@ type vpnMCPProvider interface {
 	VPNPosturePolicyList(ctx context.Context, tenantID string) (interface{}, error)
 }
 
-// vpnProviders builds both providers over the same server; a nil server
-// leaves them unwired.
+// vpnProviders builds the MCP provider over the server; a nil server
+// leaves it unwired.
 func vpnProviders(server platformv1.VPNServiceServer) map[string]vpnMCPProvider {
 	mcpProvider := &MCPServiceProvider{}
-	platformProvider := &PlatformServiceProvider{}
 	if server != nil {
 		mcpProvider.SetVPNService(server)
-		platformProvider.SetVPNService(server)
 	}
 	return map[string]vpnMCPProvider{
-		"MCPServiceProvider":      mcpProvider,
-		"PlatformServiceProvider": platformProvider,
+		"MCPServiceProvider": mcpProvider,
 	}
 }
 

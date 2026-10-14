@@ -95,6 +95,45 @@ var ErrOverlayInvalidMAC = &OverlayError{
 	Message: "invalid MAC address",
 }
 
+// maxOverlayVLAN is the highest VLAN ID a VNI may map to.
+const maxOverlayVLAN = 4094
+
+// ErrOverlayInvalidVLAN indicates a VLAN ID outside 0-4094.
+var ErrOverlayInvalidVLAN = &OverlayError{
+	Code:    "OVERLAY_INVALID_VLAN",
+	Message: "invalid VLAN ID",
+}
+
+// ErrOverlayVNIAlreadyExists indicates the VNI is already configured.
+var ErrOverlayVNIAlreadyExists = &OverlayError{
+	Code:    "OVERLAY_VNI_ALREADY_EXISTS",
+	Message: "VNI already exists",
+}
+
+// ErrOverlayMACNotFound indicates the MAC address is not in the forwarding table.
+var ErrOverlayMACNotFound = &OverlayError{
+	Code:    "OVERLAY_MAC_NOT_FOUND",
+	Message: "MAC address not found",
+}
+
+// ErrOverlayTunnelNotFound indicates no tunnel matches the remote VTEP and VNI.
+var ErrOverlayTunnelNotFound = &OverlayError{
+	Code:    "OVERLAY_TUNNEL_NOT_FOUND",
+	Message: "tunnel not found",
+}
+
+// ErrOverlayRemoteVTEPRequired indicates a remote VTEP address is required.
+var ErrOverlayRemoteVTEPRequired = &OverlayError{
+	Code:    "OVERLAY_REMOTE_VTEP_REQUIRED",
+	Message: "remote VTEP address is required",
+}
+
+// ErrOverlayInvalidRemoteVTEP indicates the remote VTEP is not an IP address.
+var ErrOverlayInvalidRemoteVTEP = &OverlayError{
+	Code:    "OVERLAY_INVALID_REMOTE_VTEP",
+	Message: "invalid remote VTEP address",
+}
+
 // =============================================================================
 // Overlay Tool Registration
 // =============================================================================
@@ -162,7 +201,7 @@ func (r *ToolRegistry) registerOverlayTools() {
 				},
 				"name": map[string]interface{}{
 					"type":        "string",
-					"description": "Optional human-readable name for the VNI",
+					"description": "Optional human-readable name for the VNI; accepted but not stored",
 				},
 			},
 			"required": []string{"vni"},
@@ -196,6 +235,25 @@ func (r *ToolRegistry) registerOverlayTools() {
 					"description": "Optional VNI to filter tunnels by",
 				},
 			},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "overlay_tunnel_stats",
+		Description: "Get the traffic counters of the VXLAN tunnel to a remote VTEP, optionally for one VNI",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"remote_vtep": map[string]interface{}{
+					"type":        "string",
+					"description": "The remote VTEP IP address",
+				},
+				"vni": map[string]interface{}{
+					"type":        "integer",
+					"description": "Optional VNI; 0 or omitted selects the first tunnel to the remote VTEP",
+				},
+			},
+			"required": []string{"remote_vtep"},
 		},
 	})
 
@@ -282,6 +340,9 @@ func (r *ToolRegistry) executeOverlayVNICreate(ctx context.Context, args map[str
 	}
 
 	vlan := getInt(args, "vlan")
+	if vlan < 0 || vlan > maxOverlayVLAN {
+		return nil, ErrOverlayInvalidVLAN
+	}
 	name := getString(args, "name")
 
 	result, err := r.service.OverlayVNICreate(ctx, uint32(vni), uint16(vlan), name)
@@ -311,6 +372,24 @@ func (r *ToolRegistry) executeOverlayTunnelList(ctx context.Context, args map[st
 		return nil, err
 	}
 	return map[string]interface{}{"tunnels": tunnels}, nil
+}
+
+func (r *ToolRegistry) executeOverlayTunnelStats(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	remoteVTEP := getString(args, "remote_vtep")
+	if remoteVTEP == "" {
+		return nil, ErrOverlayRemoteVTEPRequired
+	}
+
+	vni := getInt(args, "vni")
+	if vni < 0 {
+		return nil, ErrOverlayInvalidVNI
+	}
+
+	tunnel, err := r.service.OverlayTunnelStats(ctx, remoteVTEP, uint32(vni))
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"tunnel": tunnel}, nil
 }
 
 func (r *ToolRegistry) executeOverlayMACList(ctx context.Context, args map[string]interface{}) (interface{}, error) {

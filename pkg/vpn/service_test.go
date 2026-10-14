@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	vpncore "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/vpn"
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 )
@@ -384,7 +385,7 @@ func TestDesiredVPN_CarriesEveryPeerAndPolicy(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 
-	empty, err := svc.DesiredVPN(ctx)
+	empty, err := svc.DesiredVPN(ctx, "gw-1")
 	require.NoError(t, err)
 	require.NotNil(t, empty, "an empty set is still delivered, so the last revocation reaches the gateways")
 	assert.Empty(t, empty.Peers)
@@ -394,7 +395,7 @@ func TestDesiredVPN_CarriesEveryPeerAndPolicy(t *testing.T) {
 	_, err = svc.SetPosturePolicy(ctx, PosturePolicy{TenantID: "t", Name: "vpn_posture", Module: testPolicy})
 	require.NoError(t, err)
 
-	section, err := svc.DesiredVPN(ctx)
+	section, err := svc.DesiredVPN(ctx, "gw-1")
 	require.NoError(t, err)
 	assert.Equal(t, []gwstate.DesiredVPNPeer{{TenantID: "t", DeviceID: "d", Zones: []string{"management"}}}, section.Peers)
 	assert.Equal(t, []gwstate.DesiredVPNPosturePolicy{{TenantID: "t", Name: "vpn_posture", Module: testPolicy}}, section.PosturePolicies)
@@ -404,9 +405,102 @@ func TestDesiredVPN_CarriesEveryPeerAndPolicy(t *testing.T) {
 func TestDesiredVPN_ReportsStoreFailures(t *testing.T) {
 	svc, storage := newTestService(t)
 	storage.ListError = errors.New("raft unavailable")
-	_, err := svc.DesiredVPN(context.Background())
-	var unavailable *ErrStoreUnavailable
-	require.True(t, errors.As(err, &unavailable), "got %v", err)
+	_, err := svc.DesiredVPN(context.Background(), "gw-1")
+	var unavailable *vpncore.ErrLeaseStoreUnavailable
+	require.True(t, errors.As(err, &unavailable), "the lease sweep fails first, got %v", err)
+}
+
+func TestDesiredVPN_CarriesTheGatewaysLiveLeases(t *testing.T) {
+	svc, _ := newTestService(t)
+	svc.leases.now = func() time.Time { return testNow }
+	ctx := context.Background()
+	own := testLease("t", "lease-1")
+	other := testLease("t", "lease-2")
+	other.GatewayID = "gw-2"
+	expired := testLease("t", "lease-3")
+	expired.ExpiresAt = testNow
+	for _, l := range []Lease{own, other, expired} {
+		_, err := svc.leases.Put(ctx, l)
+		require.NoError(t, err)
+	}
+
+	section, err := svc.DesiredVPN(ctx, "gw-1")
+
+	require.NoError(t, err)
+	require.Len(t, section.Leases, 1, "only gw-1's live lease is served to gw-1")
+	assert.Equal(t, desiredLease(&own), section.Leases[0])
+	_, err = svc.leases.Get(ctx, "t", "lease-3")
+	var nf *vpncore.ErrLeaseNotFound
+	assert.True(t, errors.As(err, &nf), "the expired lease is swept, got %v", err)
+	require.NoError(t, (&gwstate.DesiredConfig{VPN: section}).Validate(), "the leases are a valid desired-config section")
+}
+
+func TestDesiredVPN_RefusesAnInvalidGatewayID(t *testing.T) {
+	svc, _ := newTestService(t)
+	_, err := svc.DesiredVPN(context.Background(), "")
+	var invalid *ErrInvalidArgument
+	require.True(t, errors.As(err, &invalid), "got %v", err)
+}
+
+func TestRecordGatewayLease_RoundTripsThroughDesiredVPN(t *testing.T) {
+	svc, _ := newTestService(t)
+	svc.leases.now = func() time.Time { return testNow }
+	ctx := context.Background()
+	want := testLease("t", "lease-1")
+	record := desiredLease(&want)
+
+	require.NoError(t, svc.RecordGatewayLease(ctx, "gw-1", &record))
+
+	section, err := svc.DesiredVPN(ctx, "gw-1")
+	require.NoError(t, err)
+	assert.Equal(t, []gwstate.DesiredVPNLease{record}, section.Leases)
+}
+
+func TestRecordGatewayLease_Refusals(t *testing.T) {
+	ctx := context.Background()
+	lease := testLease("t", "lease-1")
+	t.Run("no lease", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		var invalid *ErrInvalidArgument
+		require.True(t, errors.As(svc.RecordGatewayLease(ctx, "gw-1", nil), &invalid))
+		assert.Equal(t, "lease", invalid.Field)
+	})
+	t.Run("bad address", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		record := desiredLease(&lease)
+		record.Address = "not-an-address"
+		var invalid *ErrInvalidArgument
+		require.True(t, errors.As(svc.RecordGatewayLease(ctx, "gw-1", &record), &invalid))
+		assert.Equal(t, "address", invalid.Field)
+	})
+	t.Run("another gateway's lease", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		record := desiredLease(&lease)
+		require.NoError(t, svc.RecordGatewayLease(ctx, "gw-1", &record))
+		var owned *ErrLeaseOwnedByOtherGateway
+		require.True(t, errors.As(svc.RecordGatewayLease(ctx, "gw-2", &record), &owned))
+	})
+}
+
+func TestReleaseGatewayLease(t *testing.T) {
+	ctx := context.Background()
+	lease := testLease("t", "lease-1")
+	record := desiredLease(&lease)
+	t.Run("releases the lease and tolerates a retry", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		require.NoError(t, svc.RecordGatewayLease(ctx, "gw-1", &record))
+		require.NoError(t, svc.ReleaseGatewayLease(ctx, "gw-1", "t", "lease-1"))
+		require.NoError(t, svc.ReleaseGatewayLease(ctx, "gw-1", "t", "lease-1"), "a retried release succeeds")
+		_, err := svc.leases.Get(ctx, "t", "lease-1")
+		var nf *vpncore.ErrLeaseNotFound
+		assert.True(t, errors.As(err, &nf), "got %v", err)
+	})
+	t.Run("another gateway's lease", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		require.NoError(t, svc.RecordGatewayLease(ctx, "gw-1", &record))
+		var owned *ErrLeaseOwnedByOtherGateway
+		require.True(t, errors.As(svc.ReleaseGatewayLease(ctx, "gw-2", "t", "lease-1"), &owned))
+	})
 }
 
 func TestRecordID_SeparatesKeysAndIsNeverZero(t *testing.T) {

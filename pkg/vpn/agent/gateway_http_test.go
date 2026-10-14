@@ -123,8 +123,8 @@ func TestHTTPGateway_RunsTheAdmissionRoutesWithTheDeviceCertificate(t *testing.T
 		case "POST " + gwvpn.PathChallenges:
 			return writeJSON(w, gwvpn.ChallengeWire{Nonce: []byte("nonce-1"), DataPlanes: []gwvpn.DataPlaneKind{gwvpn.DataPlaneMASQUE}})
 		case "POST " + gwvpn.PathAdmissions:
-			if err := json.NewDecoder(r.Body).Decode(&admitted); err != nil {
-				return &gwvpn.ErrInvalidRequest{Field: "body", Reason: err.Error()}
+			if err := gwvpn.DecodeRequest(r.Body, &admitted); err != nil {
+				return err
 			}
 			return writeJSON(w, gwvpn.LeaseWire{ID: "l-1", DataPlane: gwvpn.DataPlaneMASQUE, Address: "10.8.0.2/32"})
 		case "DELETE " + gwvpn.LeasePath("l-1"):
@@ -143,9 +143,10 @@ func TestHTTPGateway_RunsTheAdmissionRoutesWithTheDeviceCertificate(t *testing.T
 	assert.Equal(t, []byte("nonce-1"), challenge.Nonce)
 	assert.Equal(t, []gwvpn.DataPlaneKind{gwvpn.DataPlaneMASQUE}, challenge.DataPlanes)
 
-	lease, err := gw.Admit(ctx, &gwvpn.AdmissionRequestWire{DeviceID: "laptop-1", Nonce: challenge.Nonce, DataPlane: gwvpn.DataPlaneMASQUE})
+	lease, err := gw.Admit(ctx, &gwvpn.AdmissionRequestWire{TenantID: "acme", DeviceID: "laptop-1", Nonce: challenge.Nonce, DataPlane: gwvpn.DataPlaneMASQUE})
 	require.NoError(t, err)
 	assert.Equal(t, gwvpn.LeaseID("l-1"), lease.ID)
+	assert.Equal(t, "acme", admitted.TenantID)
 	assert.Equal(t, "laptop-1", admitted.DeviceID)
 	assert.Equal(t, []byte("nonce-1"), admitted.Nonce)
 
@@ -170,19 +171,18 @@ func TestHTTPGateway_DecodesTheGatewaysRefusal(t *testing.T) {
 }
 
 func TestHTTPGateway_RenewPostsTheEvidenceToTheLeasesRoute(t *testing.T) {
-	var renewal gwvpn.AdmissionRequestWire
+	var renewal gwvpn.RenewalRequestWire
 	l := newAdmissionListener(t, func(w http.ResponseWriter, r *http.Request) error {
 		if r.Method+" "+r.URL.EscapedPath() != "POST "+gwvpn.LeaseRenewPath("l-1") {
 			return &gwvpn.ErrLeaseNotFound{}
 		}
-		if err := json.NewDecoder(r.Body).Decode(&renewal); err != nil {
-			return &gwvpn.ErrInvalidRequest{Field: "body", Reason: err.Error()}
+		if err := gwvpn.DecodeRequest(r.Body, &renewal); err != nil {
+			return err
 		}
 		return writeJSON(w, gwvpn.LeaseWire{ID: "l-1", DataPlane: gwvpn.DataPlaneMASQUE, Renewals: 1})
 	})
 
-	lease, err := l.gateway(t).Renew(context.Background(), "l-1",
-		&gwvpn.AdmissionRequestWire{DeviceID: "laptop-1", Nonce: []byte("nonce-2")})
+	lease, err := l.gateway(t).Renew(context.Background(), "l-1", &gwvpn.RenewalRequestWire{Nonce: []byte("nonce-2")})
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, lease.Renewals)
@@ -195,7 +195,7 @@ func TestHTTPGateway_RenewDecodesTheRefusal(t *testing.T) {
 		return &gwvpn.ErrRenewalNotOpen{LeaseID: "l-1", OpensAt: time.Unix(1760325200, 0)}
 	})
 
-	_, err := l.gateway(t).Renew(context.Background(), "l-1", &gwvpn.AdmissionRequestWire{})
+	_, err := l.gateway(t).Renew(context.Background(), "l-1", &gwvpn.RenewalRequestWire{})
 
 	var refused *RefusedError
 	require.ErrorAs(t, err, &refused)

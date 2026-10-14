@@ -97,7 +97,7 @@ not to platformd.
 
 Examples:
   # Connect this device, then show its lease
-  platformctl vpn connect --gateway gw.example.com:4433 --factor fido2
+  platformctl vpn connect --gateway gw.example.com:4433 --tenant acme --device-id laptop-1 --factor fido2
   platformctl vpn lease
 
   # Enrol a device, limited to the management zone

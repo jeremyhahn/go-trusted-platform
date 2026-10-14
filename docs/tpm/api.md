@@ -261,8 +261,8 @@ required `signature_algorithm` and an optional `channel_binding`.
 the attestation key's PKIX DER — the `ak_public` proto field on REST and
 gRPC/Unix (`akPublic` in the protojson body), raw bytes in QUIC
 `TPM2VerifyQuoteRequest.ak_public`, and the base64 `platform_tpm_verify_quote`
-argument `ak_public` on MCP. Left empty, the platform IAK verifies. Both MCP
-service providers (`MCPServiceProvider` and `PlatformServiceProvider`) serve
+argument `ak_public` on MCP. Left empty, the platform IAK verifies. The MCP
+service provider (`MCPServiceProvider`) serves
 the quote tools on the same `TPMGRPCService` as gRPC, so there is one quote
 path and one verifier (`pkg/api/daemon/tpm_quote_tools.go`).
 

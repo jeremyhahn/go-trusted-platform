@@ -18,10 +18,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -294,6 +297,94 @@ func TestReporter_Start_StopsOnContextCancel(t *testing.T) {
 // is escaped into the path rather than interpolated raw. A configured ID
 // containing '/' would otherwise re-target the request at a different
 // control-plane route entirely.
+// leaseRequest is what the lease server received.
+type leaseRequest struct {
+	method, path string
+	body         []byte
+}
+
+// leaseServer answers every request with status and hands each request it
+// got to the returned channel.
+func leaseServer(t *testing.T, status int) (*Reporter, <-chan leaseRequest) {
+	t.Helper()
+	got := make(chan leaseRequest, 2)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		got <- leaseRequest{method: r.Method, path: r.URL.EscapedPath(), body: body}
+		w.WriteHeader(status)
+		_, _ = fmt.Fprint(w, `{"error":"lease refused"}`)
+	}))
+	t.Cleanup(srv.Close)
+	r, err := NewReporter(ReporterConfig{
+		CPBaseURL:  srv.URL,
+		GatewayID:  "gw/1",
+		HTTPClient: srv.Client(),
+		Collector:  &stubCollector{snap: &gwstate.Snapshot{}},
+	})
+	if err != nil {
+		t.Fatalf("NewReporter: %v", err)
+	}
+	return r, got
+}
+
+func TestReporter_PutVPNLease(t *testing.T) {
+	r, requests := leaseServer(t, http.StatusOK)
+	lease := &gwstate.DesiredVPNLease{
+		ID: "lease-1", TenantID: "tenant-a", DeviceID: "laptop-1", Address: "100.64.0.2/32",
+		DataPlane: "masque", ClientCertificateSHA256: []byte{1, 2, 3},
+		IssuedAt:  time.Date(2026, 10, 13, 10, 0, 0, 0, time.UTC),
+		ExpiresAt: time.Date(2026, 10, 13, 11, 0, 0, 0, time.UTC),
+	}
+	if err := r.PutVPNLease(context.Background(), lease); err != nil {
+		t.Fatalf("PutVPNLease: %v", err)
+	}
+	got := <-requests
+	if got.method != http.MethodPut || got.path != "/api/v1/gateway/vpn-leases/gw%2F1" {
+		t.Fatalf("request = %s %s, want PUT to the gateway's escaped lease collection", got.method, got.path)
+	}
+	var sent gwstate.DesiredVPNLease
+	if err := json.Unmarshal(got.body, &sent); err != nil {
+		t.Fatalf("body is not a lease: %v", err)
+	}
+	if sent.ID != lease.ID || sent.Address != lease.Address || !sent.ExpiresAt.Equal(lease.ExpiresAt) {
+		t.Fatalf("sent %+v, want %+v", sent, lease)
+	}
+}
+
+func TestReporter_DeleteVPNLease(t *testing.T) {
+	r, requests := leaseServer(t, http.StatusOK)
+	if err := r.DeleteVPNLease(context.Background(), "tenant/a", "lease?1"); err != nil {
+		t.Fatalf("DeleteVPNLease: %v", err)
+	}
+	got := <-requests
+	want := "/api/v1/gateway/vpn-leases/gw%2F1/tenant%2Fa/lease%3F1"
+	if got.method != http.MethodDelete || got.path != want {
+		t.Fatalf("request = %s %s, want DELETE %s", got.method, got.path, want)
+	}
+}
+
+func TestReporter_VPNLeaseWritesReportTheRefusal(t *testing.T) {
+	r, _ := leaseServer(t, http.StatusServiceUnavailable)
+	lease := &gwstate.DesiredVPNLease{ID: "lease-1"}
+	for name, write := range map[string]func() error{
+		"put":    func() error { return r.PutVPNLease(context.Background(), lease) },
+		"delete": func() error { return r.DeleteVPNLease(context.Background(), "tenant-a", "lease-1") },
+	} {
+		err := write()
+		var refused *MessageError
+		if !errors.As(err, &refused) || !strings.Contains(refused.Msg, "503") {
+			t.Fatalf("%s: got %v, want the CP's 503 as a MessageError", name, err)
+		}
+	}
+	var missing ErrMissingField
+	if err := r.PutVPNLease(context.Background(), nil); !errors.As(err, &missing) {
+		t.Fatalf("nil lease: got %v, want ErrMissingField", err)
+	}
+}
+
 func TestReporter_FetchDesiredConfigEscapesGatewayID(t *testing.T) {
 	const trickyID = "gw/../state"
 	var gotPath string

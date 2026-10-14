@@ -173,6 +173,18 @@ func TestBuildGatewayNilConfig(t *testing.T) {
 	}
 }
 
+func TestVPNRevocationJournal(t *testing.T) {
+	dataDir := t.TempDir()
+	got := vpnRevocationJournal(dataDir)
+	want := gateway.NewRevocationJournal(filepath.Join(dataDir, "vpn", "pending-revocations.json"))
+	if got == nil || *got != *want {
+		t.Fatalf("journal = %+v, want %+v under --data-dir", got, want)
+	}
+	if journal := vpnRevocationJournal(""); journal != nil {
+		t.Fatalf("journal = %+v without a data directory, want nil so the VPN refuses to build", journal)
+	}
+}
+
 func TestBuildGatewayNothingEnabled(t *testing.T) {
 	cfg := &ServeConfig{Gateway: &gateway.GatewayConfig{Enabled: false}}
 	if _, err := BuildGateway(context.Background(), cfg, testLogger()); !errors.Is(err, ErrNothingEnabled) {

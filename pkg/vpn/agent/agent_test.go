@@ -138,7 +138,7 @@ type fakeGateway struct {
 	// without a refusal, as an unreachable gateway does.
 	renewQueue []renewal
 	renewedIDs []gwvpn.LeaseID
-	renewReqs  []*gwvpn.AdmissionRequestWire
+	renewReqs  []*gwvpn.RenewalRequestWire
 }
 
 type renewal struct {
@@ -173,7 +173,7 @@ func (g *fakeGateway) Admit(_ context.Context, req *gwvpn.AdmissionRequestWire) 
 	return &gwvpn.LeaseWire{ID: "l-1", DeviceID: req.DeviceID, Address: "10.8.0.2/32", DataPlane: req.DataPlane}, nil
 }
 
-func (g *fakeGateway) Renew(_ context.Context, id gwvpn.LeaseID, req *gwvpn.AdmissionRequestWire) (*gwvpn.LeaseWire, error) {
+func (g *fakeGateway) Renew(_ context.Context, id gwvpn.LeaseID, req *gwvpn.RenewalRequestWire) (*gwvpn.LeaseWire, error) {
 	g.renewedIDs = append(g.renewedIDs, id)
 	g.renewReqs = append(g.renewReqs, req)
 	if len(g.renewQueue) == 0 {
@@ -284,7 +284,7 @@ func (f *fixture) after(d time.Duration) <-chan time.Time {
 	return fired
 }
 
-var connectOpts = ConnectOptions{Gateway: "gw.example:4433", Factor: gwvpn.PersonFactorFIDO2, Zones: []string{"management"}}
+var connectOpts = ConnectOptions{Gateway: "gw.example:4433", TenantID: "acme", Factor: gwvpn.PersonFactorFIDO2, Zones: []string{"management"}}
 
 func TestConnect_AdmitsWithEvidenceBoundToTheNonceAndBringsThePlaneUp(t *testing.T) {
 	f := newFixture(t)
@@ -293,6 +293,7 @@ func TestConnect_AdmitsWithEvidenceBoundToTheNonceAndBringsThePlaneUp(t *testing
 
 	require.NoError(t, err)
 	req := f.gateway.admitted
+	assert.Equal(t, "acme", req.TenantID)
 	assert.Equal(t, "laptop-1", req.DeviceID)
 	assert.Equal(t, []byte("nonce-1"), req.Nonce)
 	assert.Equal(t, []byte("quote:nonce-1"), req.Attestation.Quote, "the quote's qualifying data is the gateway's nonce")
@@ -315,7 +316,7 @@ func TestConnect_AdmitsWithEvidenceBoundToTheNonceAndBringsThePlaneUp(t *testing
 func TestConnect_WithoutAFactorPresentsNone(t *testing.T) {
 	f := newFixture(t)
 
-	_, err := f.agent(t).Connect(context.Background(), ConnectOptions{Gateway: "gw.example:4433"})
+	_, err := f.agent(t).Connect(context.Background(), ConnectOptions{Gateway: "gw.example:4433", TenantID: "acme"})
 
 	require.NoError(t, err)
 	assert.Nil(t, f.gateway.admitted.PersonFactor)
@@ -326,7 +327,7 @@ func TestConnect_PicksTheGatewaysFirstPlaneThisBuildHas(t *testing.T) {
 	f := newFixture(t)
 	f.gateway.offered = []gwvpn.DataPlaneKind{"quic-datagram", "wireguard", gwvpn.DataPlaneMASQUE}
 
-	_, err := f.agent(t).Connect(context.Background(), ConnectOptions{Gateway: "gw.example:4433"})
+	_, err := f.agent(t).Connect(context.Background(), ConnectOptions{Gateway: "gw.example:4433", TenantID: "acme"})
 
 	require.NoError(t, err)
 	assert.Equal(t, gwvpn.DataPlaneKind("wireguard"), f.gateway.admitted.DataPlane)
@@ -338,7 +339,7 @@ func TestConnect_ARequestedPlaneOverridesTheGatewaysPreference(t *testing.T) {
 	f := newFixture(t)
 	f.gateway.offered = []gwvpn.DataPlaneKind{"wireguard", gwvpn.DataPlaneMASQUE}
 
-	_, err := f.agent(t).Connect(context.Background(), ConnectOptions{Gateway: "gw.example:4433", DataPlane: gwvpn.DataPlaneMASQUE})
+	_, err := f.agent(t).Connect(context.Background(), ConnectOptions{Gateway: "gw.example:4433", TenantID: "acme", DataPlane: gwvpn.DataPlaneMASQUE})
 
 	require.NoError(t, err)
 	assert.Equal(t, gwvpn.DataPlaneMASQUE, f.gateway.admitted.DataPlane)
@@ -349,17 +350,17 @@ func TestConnect_RefusesAPlaneThisBuildDoesNotHave(t *testing.T) {
 	f.gateway.offered = []gwvpn.DataPlaneKind{"quic-datagram"}
 	a := f.agent(t)
 
-	_, err := a.Connect(context.Background(), ConnectOptions{Gateway: "gw.example:4433", DataPlane: "ipsec"})
+	_, err := a.Connect(context.Background(), ConnectOptions{Gateway: "gw.example:4433", TenantID: "acme", DataPlane: "ipsec"})
 	var unsupported *ErrDataPlaneUnsupported
 	require.ErrorAs(t, err, &unsupported)
 	assert.Equal(t, gwvpn.DataPlaneKind("ipsec"), unsupported.Kind)
 
-	_, err = a.Connect(context.Background(), ConnectOptions{Gateway: "gw.example:4433"})
+	_, err = a.Connect(context.Background(), ConnectOptions{Gateway: "gw.example:4433", TenantID: "acme"})
 	require.ErrorAs(t, err, &unsupported)
 	assert.Equal(t, "data plane quic-datagram not available", err.Error())
 
 	f.gateway.offered = nil
-	_, err = a.Connect(context.Background(), ConnectOptions{Gateway: "gw.example:4433"})
+	_, err = a.Connect(context.Background(), ConnectOptions{Gateway: "gw.example:4433", TenantID: "acme"})
 	var invalid *ErrInvalidResponse
 	require.ErrorAs(t, err, &invalid)
 	assert.Nil(t, f.gateway.admitted, "nothing is presented without a plane")
@@ -372,8 +373,9 @@ func TestConnect_RefusesBadOptionsBeforeContactingTheGateway(t *testing.T) {
 		field string
 	}{
 		{"no gateway", ConnectOptions{}, "gateway"},
-		{"unknown factor", ConnectOptions{Gateway: "gw:1", Factor: "totp"}, "factor"},
-		{"no device id", ConnectOptions{Gateway: "gw:1"}, "device id"},
+		{"no tenant", ConnectOptions{Gateway: "gw:1"}, "tenant"},
+		{"unknown factor", ConnectOptions{Gateway: "gw:1", TenantID: "acme", Factor: "totp"}, "factor"},
+		{"no device id", ConnectOptions{Gateway: "gw:1", TenantID: "acme"}, "device id"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -748,7 +750,6 @@ func TestRenew_PresentsFreshEvidenceForTheHeldLease(t *testing.T) {
 	f := newFixture(t)
 	f.state.st = testState()
 	f.state.st.Factor = gwvpn.PersonFactorFIDO2
-	f.state.st.Lease.Zones = []string{"management"}
 	f.gateway.renewQueue = []renewal{{lease: renewedLease(1)}}
 
 	st, err := f.agent(t).Renew(context.Background())
@@ -756,12 +757,10 @@ func TestRenew_PresentsFreshEvidenceForTheHeldLease(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []gwvpn.LeaseID{"l-1"}, f.gateway.renewedIDs)
 	req := f.gateway.renewReqs[0]
-	assert.Equal(t, "laptop-1", req.DeviceID)
+	assert.Equal(t, []byte("nonce-1"), req.Nonce)
 	assert.Equal(t, []byte("quote:nonce-1"), req.Attestation.Quote, "a fresh quote over the renewal's nonce")
 	assert.True(t, req.Posture.FDE.RootEncrypted)
 	assert.Equal(t, gwvpn.PersonFactorFIDO2, req.PersonFactor.Kind, "the factor connect presented signs again")
-	assert.Equal(t, gwvpn.DataPlaneMASQUE, req.DataPlane)
-	assert.Equal(t, []string{"management"}, req.Zones)
 	assert.Equal(t, 1, st.Lease.Renewals)
 	assert.Equal(t, renewedLease(1).ExpiresAtUnix, f.state.st.Lease.ExpiresAtUnix, "the renewed lease is saved")
 	assert.Empty(t, f.masque.down)
@@ -1024,7 +1023,7 @@ func TestConnect_WithoutDeviceRefusesBeforeContactingTheGateway(t *testing.T) {
 		Dial: func(string, tls.Certificate) (Gateway, error) { dialed = true; return f.gateway, nil }})
 	require.NoError(t, err)
 
-	_, err = a.Connect(context.Background(), ConnectOptions{Gateway: "gw.example:4433"})
+	_, err = a.Connect(context.Background(), ConnectOptions{Gateway: "gw.example:4433", TenantID: "acme"})
 	var noDevice *ErrNoDevice
 	require.ErrorAs(t, err, &noDevice)
 	assert.False(t, dialed, "no gateway is dialled without a device identity")

@@ -254,11 +254,6 @@ func lifecycleProviders(lifecycle DeviceLifecycle) map[string]lifecycleProvider 
 			DeviceLifecycle: lifecycle,
 			Logger:          slog.Default(),
 		}),
-		"platform": NewPlatformServiceProvider(&PlatformServiceProviderConfig{
-			DeviceService:   newMockDeviceService(),
-			ProfileService:  newMockProfileService(),
-			DeviceLifecycle: lifecycle,
-		}),
 	}
 }
 

@@ -525,3 +525,42 @@ func TestDeviceQuoteVerifier_NilSinkOnlyLogs(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.Verified)
 }
+
+func TestParseDeviceID(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    uint64
+		wantErr bool
+	}{
+		{name: "valid ID", input: "123", want: 123},
+		{name: "zero", input: "0", want: 0},
+		{name: "max uint64 value", input: "18446744073709551615", want: 18446744073709551615},
+		// Sscanf parses the leading digits and ignores trailing characters.
+		{name: "mixed alphanumeric parses leading digits", input: "123abc", want: 123},
+		{name: "float stops at the decimal point", input: "1.5", want: 1},
+		{name: "leading whitespace is skipped", input: " 123", want: 123},
+		{name: "invalid string", input: "abc", wantErr: true},
+		{name: "empty string", input: "", wantErr: true},
+		{name: "negative number", input: "-1", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseDeviceID(tt.input)
+			if tt.wantErr {
+				var msgErr *MessageError
+				if !errors.As(err, &msgErr) {
+					t.Errorf("parseDeviceID(%q) error = %v, want a MessageError", tt.input, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseDeviceID(%q): %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Errorf("parseDeviceID(%q) = %d, want %d", tt.input, got, tt.want)
+			}
+		})
+	}
+}

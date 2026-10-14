@@ -43,6 +43,10 @@ type VPNRuntime struct {
 	// Leases is the lease store; nil keeps leases in memory.
 	Leases vpn.LeaseStore
 	Audit  calleradmission.Auditor
+	// Listener is the admission listener's TLS: the gateway's server
+	// certificate and the device-identity anchor a client certificate must
+	// chain to. A nil Logger uses the gateway's.
+	Listener vpn.ListenerDeps
 }
 
 // VPNDataPlaneFactory builds a data plane. Every service start builds its
@@ -69,6 +73,15 @@ func buildManagementVPN(g *Gateway) (backedService, error) {
 	leases := rt.Leases
 	if leases == nil {
 		leases = vpn.NewMemoryLeaseStore()
+	}
+	var projection *projectedLeaseStore
+	if control, journal := g.vpnLeaseControlSet(); control != nil {
+		if journal == nil {
+			return nil, &ErrServiceUnavailable{Service: ServiceManagementVPN,
+				Reason: "a lease control plane needs a revocation journal, or a restart could reinstate a revoked lease"}
+		}
+		projection = &projectedLeaseStore{local: leases, control: control, journal: journal}
+		leases = projection
 	}
 
 	// A kind with no factory is left out; vpn.New refuses the gap by name.
@@ -102,22 +115,47 @@ func buildManagementVPN(g *Gateway) (backedService, error) {
 		return nil, &ErrServiceStartFailed{Service: ServiceManagementVPN,
 			Cause: errors.Join(err, stopPlanes(context.Background(), managed))}
 	}
-	return &vpnBackend{gateway: g, svc: svc, planes: managed, logger: logger}, nil
+	listen := rt.Listener
+	if listen.Logger == nil {
+		listen.Logger = logger
+	}
+	listener, err := vpn.NewAdmissionListener(svc, listen)
+	if err != nil {
+		return nil, &ErrServiceStartFailed{Service: ServiceManagementVPN,
+			Cause: errors.Join(err, stopPlanes(context.Background(), managed))}
+	}
+	return &vpnBackend{gateway: g, svc: svc, listener: listener, planes: managed,
+		projection: projection, logger: logger}, nil
 }
 
 // vpnBackend runs the VPN service and the data planes it admits onto.
 type vpnBackend struct {
-	gateway *Gateway
-	svc     *vpn.Service
-	planes  []vpn.ManagedDataPlane
-	logger  *slog.Logger
+	gateway  *Gateway
+	svc      *vpn.Service
+	listener *vpn.AdmissionListener
+	// stopListener cancels the listener's context; set once it serves.
+	stopListener context.CancelFunc
+	planes       []vpn.ManagedDataPlane
+	// projection is the lease store the control plane keeps the record
+	// of; nil when the leases live in memory only.
+	projection *projectedLeaseStore
+	logger     *slog.Logger
 }
 
-// Start brings the planes up, then the service, then applies the last vpn
-// desired-config section. Until a section is applied nobody is enrolled, so
-// the service admits nobody. A section that does not apply cleanly does not
-// fail the start: the peers and tenants it refuses stay refused.
+// Start rebuilds the leases from the control plane when it keeps their
+// record, brings the planes up, then the service, reinstates the rebuilt
+// leases, applies the last vpn desired-config section and opens the admission
+// listener last, so no client reaches a service that has not yet heard its
+// enrolments. Until a section is applied nobody is enrolled, so the service
+// admits nobody. A section that does not apply cleanly does not fail the
+// start: the peers and tenants it refuses stay refused. A control plane that
+// cannot be read at start fails it with ErrLeaseStoreUnavailable: starting
+// empty would forget every client admitted before the restart. The listener
+// outlives ctx; Stop cancels it.
 func (b *vpnBackend) Start(ctx context.Context) error {
+	if err := b.rebuild(ctx); err != nil {
+		return err
+	}
 	for i, plane := range b.planes {
 		if err := plane.Start(ctx); err != nil {
 			return errors.Join(err, stopPlanes(ctx, b.planes[:i]))
@@ -126,6 +164,11 @@ func (b *vpnBackend) Start(ctx context.Context) error {
 	if err := b.svc.Start(ctx); err != nil {
 		return errors.Join(err, stopPlanes(ctx, b.planes))
 	}
+	if b.projection != nil {
+		if err := b.svc.Restore(ctx); err != nil {
+			b.logger.Warn("vpn: some recorded leases were not reinstated", slog.Any("error", err))
+		}
+	}
 
 	g := b.gateway
 	g.vpnMu.Lock()
@@ -133,12 +176,22 @@ func (b *vpnBackend) Start(ctx context.Context) error {
 	if err := b.apply(ctx, g.desiredVPN); err != nil {
 		b.logger.Warn("vpn: the desired configuration did not apply cleanly", slog.Any("error", err))
 	}
+	listenCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	if err := b.listener.Start(listenCtx); err != nil {
+		cancel()
+		return errors.Join(err, b.svc.Stop(ctx), stopPlanes(ctx, b.planes))
+	}
+	b.stopListener = cancel
 	g.vpn = b
 	return nil
 }
 
-// Stop revokes every lease, so the addresses return to the pool, then stops
-// the service and the planes in reverse order.
+// Stop closes the admission listener and waits for its port, so no
+// admission races the revocations; then it stops the service and the planes
+// in reverse order. Leases that live in memory only are revoked before the
+// service stops, so their addresses return to the pool; leases the control
+// plane keeps the record of are left recorded, so the next Start reinstates
+// them.
 func (b *vpnBackend) Stop(ctx context.Context) error {
 	g := b.gateway
 	g.vpnMu.Lock()
@@ -148,19 +201,64 @@ func (b *vpnBackend) Stop(ctx context.Context) error {
 	g.vpnMu.Unlock()
 
 	var errs []error
-	leases, err := b.svc.Leases(ctx)
-	if err != nil {
-		errs = append(errs, err)
-	}
-	for _, l := range leases {
-		if err := b.svc.Revoke(ctx, l.ID, vpn.RevokeOperator); err != nil {
-			errs = append(errs, err)
+	if b.stopListener != nil {
+		b.stopListener()
+		select {
+		case <-b.listener.Done():
+		case <-ctx.Done():
+			errs = append(errs, ctx.Err())
 		}
+	}
+	if b.projection == nil {
+		errs = append(errs, b.revokeAll(ctx))
 	}
 	if err := b.svc.Stop(ctx); err != nil {
 		errs = append(errs, err)
 	}
 	errs = append(errs, stopPlanes(ctx, b.planes))
+	return errors.Join(errs...)
+}
+
+// rebuild loads the leases the control plane recorded for this gateway into
+// the projection, and takes the vpn section of the same pull as the one to
+// apply, so the leases and the enrolments that judge them come from one
+// read. It does nothing when the leases live in memory only.
+func (b *vpnBackend) rebuild(ctx context.Context) error {
+	if b.projection == nil {
+		return nil
+	}
+	desired, err := b.projection.control.FetchDesiredConfig(ctx)
+	if err != nil {
+		return &vpn.ErrLeaseStoreUnavailable{Cause: err}
+	}
+	var section *gwstate.DesiredVPN
+	if desired != nil {
+		section = desired.VPN
+	}
+	if err := b.projection.rebuild(ctx, section); err != nil {
+		return &vpn.ErrLeaseStoreUnavailable{Cause: err}
+	}
+	if section != nil {
+		g := b.gateway
+		g.vpnMu.Lock()
+		g.desiredVPN = section
+		g.vpnMu.Unlock()
+	}
+	return nil
+}
+
+// revokeAll revokes every lease, so the addresses return to the pool.
+func (b *vpnBackend) revokeAll(ctx context.Context) error {
+	leases, err := b.svc.Leases(ctx)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, l := range leases {
+		if err := b.svc.Revoke(ctx, l.ID, vpn.RevokeOperator); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	return errors.Join(errs...)
 }
 

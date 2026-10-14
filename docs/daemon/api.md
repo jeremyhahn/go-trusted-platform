@@ -224,8 +224,8 @@ changing, validate before applying, roll back if wrong.
 
 The opcode is a **single byte** with a **two-level extension**: certain values
 are *category* opcodes whose sub-opcode is carried in the payload, and the daemon
-routes them to a dedicated handler (`pkg/api/daemon/quic_service.go`). Eighteen
-distinct values, nineteen names:
+routes them to a dedicated handler (`pkg/api/daemon/quic_service.go`). Twenty-one
+distinct values, twenty-two names:
 
 | Opcode | Category | Notes |
 |---|---|---|
@@ -236,6 +236,9 @@ distinct values, nineteen names:
 | `0x50` | `OpNTPCategory` | Time synchronisation |
 | `0x51` | `OpIAMCategory` | IAM tenant records; sub-opcodes `IAMSub*` `0x01`–`0x05`. Not the platform tenancy opcodes `0xDB`–`0xEB` |
 | `0x52` | `OpVPNCategory` | VPN control plane; sub-opcodes `VPNSub*` `0x01`–`0x08`, scopes `vpn:read`/`vpn:write`/`vpn:admin` ([docs/vpn/api.md](../vpn/api.md)) |
+| `0x53` | `OpCacheCategory` | Cache through the composed go-quicbaas SDK; sub-opcodes `CacheSub*` `0x01`–`0x04`, scopes `cache:read`/`cache:write`/`cache:delete` ([docs/sdk/api.md](../sdk/api.md) §3.5) |
+| `0x54` | `OpSchedulerCategory` | Scheduler through the composed go-quicbaas SDK; sub-opcodes `SchedulerSub*` `0x01`–`0x0B`, scopes `scheduler:read`/`scheduler:write`/`scheduler:delete` ([docs/sdk/api.md](../sdk/api.md) §3.5) |
+| `0x55` | `OpMessagingCategory` | Messaging through the composed go-quicbaas SDK; sub-opcodes `MessagingSub*` `0x01`–`0x08`, scopes `messaging:read`/`messaging:write`/`messaging:delete` ([docs/sdk/api.md](../sdk/api.md) §3.5) |
 | `0x69` | `OpVMExtendedCategory` | VM operational sub-opcodes (`0xCC`–`0xD0`) |
 | `0x99` | `OpTPM2Category` | Physical TPM |
 | `0x9A` | `OpCeremonyCategory` | Bootstrap ceremony; per-sub-opcode scopes in [`docs/cli/ceremony.md`](../cli/ceremony.md) |
@@ -314,7 +317,7 @@ All three catalogs **deny an unlisted entry** — MCP since #300, QUIC since
 | Catalog | Coverage | Default for an unlisted entry |
 |---|---|---|
 | gRPC (`pkg/api/grpc/method_permissions.go`) | **every registered RPC**, unary and streaming, across every `platform.v1` service, the four quicbaas KMS services and `grpc.health.v1.Health`; a contract test keeps it that way | **denied**: the OIDC interceptor answers `PermissionDenied` (`ErrMethodNotClassified`) before it reads a token, unless the method is on the documented pre-auth list |
-| MCP (`pkg/api/mcp/authz.go`) | **156 of 433 registered tools** (7 of them explicitly open with `""`) | **denied**: `AuthorizeTool` refuses a tool with no map entry (`AuthErrorToolNotClassified`, reported on the wire as `-32603`); the 277 unmapped tools are enumerated in `knownUnclassified` (`authz_completeness_test.go`), a list that may only shrink (#304) |
+| MCP (`pkg/api/mcp/authz.go`) | **184 of 445 registered tools** (7 of them explicitly open with `""`) | **denied**: `AuthorizeTool` refuses a tool with no map entry (`AuthErrorToolNotClassified`, reported on the wire as `-32603`); the 261 unmapped tools are enumerated in `knownUnclassified` (`authz_completeness_test.go`), a list that may only shrink (#304) |
 | QUIC (`pkg/api/quic/opcode_permissions.go`) | **every routable opcode and sub-opcode** — pinned by `pkg/api/daemon/quic_authz_contract_test.go` | **denied**: `StatusPermissionDenied`, payload `QUIC operation not classified for authorization: …` (`ErrOperationNotClassified`) |
 
 Per-service scopes are listed in each feature folder. A new RPC must carry the
@@ -336,12 +339,14 @@ only, so `EnableREST` requires `EnableMTLS`. Before #550 the interceptors were
 installed with `WithRequireAuth(tokenValidator != nil)`, so the misconfigured
 state served the whole daemon API anonymously.
 
-**The daemon REST VPN and NTP routes check the RPC's scope (#584).** mTLS at
-the handshake is not authorization: each `/api/v1/vpn/*` and `/api/v1/ntp/*`
-route on the daemon listener runs through `restapi.ScopeGuard`
-(`pkg/api/rest/route_scope.go`) and requires the scope the gRPC catalog gives
-its RPC (`vpn:read|write|admin`, `ntp:read` for status and sources, `ntp:write`
-for step). The guard takes the credentials QUIC takes, in the same order:
+**The daemon REST VPN, NTP and application service routes check the RPC's
+scope (#584, #704).** mTLS at the handshake is not authorization: each
+`/api/v1/vpn/*`, `/api/v1/ntp/*`, `/api/v1/cache/*`, `/api/v1/scheduler/*` and
+`/api/v1/messaging/*` route on the daemon listener runs through
+`restapi.ScopeGuard` (`pkg/api/rest/route_scope.go`) and requires the scope the
+gRPC catalog gives its RPC (`vpn:read|write|admin`, `ntp:read` for status and
+sources, `ntp:write` for step, and `cache`, `scheduler` and `messaging` as in
+[docs/sdk/api.md](../sdk/api.md) §3.5). The guard takes the credentials QUIC takes, in the same order:
 
 - a `Bearer` platform token (with its `DPoP` proof), validated by the shared
   platform-token validator; its `scp` is the scope set;
@@ -462,6 +467,8 @@ are:
 
 - `vtpm`, `dns`, `ntp`, `proxy`, `device`, `sdn`, `kms` and `iam`
 - `vpn`, whose actions are `read`, `write` and `admin` (posture policies)
+- `cache`, `scheduler` and `messaging`, the services platformd serves over
+  the composed go-quicbaas SDK ([docs/sdk/api.md](../sdk/api.md) §3.5)
 - `platform` (`PlatformDaemon`, including `StreamEvents`, `StreamLogs` and
   `StreamMetrics`)
 - `attestation`, `bmc`, `cluster`, `container`, `vm`, `provisioning`, `eab`,
@@ -545,7 +552,9 @@ authorizes by peer credentials.
 
 MCP's 94 mapped tools are the vtpm, dns, device, profile, gateway-lb,
 gateway-perf, sdn, proxy, ntp, bmc and invitation families. The eight `vpn_*`
-tools (#584) are mapped as well. The 334 unmapped
+tools (#584) are mapped as well, and so are the 23 `cache_*`, `scheduler_*` and
+`messaging_*` tools (#704), each with its RPC's scope
+([docs/sdk/api.md](../sdk/api.md) §3.5). The 334 unmapped
 tools are **refused, not served** — measured from the built registry on
 2026-09-05 (#412): `platform_tpm` 31, `vtpm` 26, `iam` 25, `vm` 23, `kms` 20,
 `gateway` 20, `tenant` 17, `attestation` 15, `dns` 12, `sdn` 11, `platform_eab`
@@ -605,6 +614,7 @@ never from `PeerCertificates`.
 |---|---|---|
 | `POST /api/v1/gateway/telemetry` | body `gateway_id` == client certificate CN | 401 unverified · 403 mismatch |
 | `GET /api/v1/gateway/desired-config/{id}` | `{id}` == client certificate CN | 401 unverified · 403 mismatch |
+| `PUT /api/v1/gateway/vpn-leases/{id}`, `DELETE /api/v1/gateway/vpn-leases/{id}/{tenant}/{lease}` | `{id}` == client certificate CN; a lease another gateway issued is refused | 401 unverified · 403 mismatch or another gateway's lease |
 | device enrollment routes (`pkg/webservice/v1/router/device.go`) | `MTLSMiddleware` chain verification | 401 |
 
 The Subject Common Name is the platform's machine-principal field throughout —

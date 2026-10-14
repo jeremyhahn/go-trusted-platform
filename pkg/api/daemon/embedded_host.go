@@ -156,6 +156,18 @@ func (d *Daemon) embeddedServices() *embedded.ServiceRegistry {
 		registry.CA = svc
 	}
 
+	// New always builds Cache, Scheduler and Messaging: a node whose SDK
+	// does not serve them answers Unavailable, as on every other transport.
+	if d.appServices.cache != nil {
+		registry.Cache = d.appServices.cache
+	}
+	if d.appServices.scheduler != nil {
+		registry.Scheduler = d.appServices.scheduler
+	}
+	if d.appServices.messaging != nil {
+		registry.Messaging = d.appServices.messaging
+	}
+
 	// Any other unconfigured service stays a nil interface, never a typed nil.
 	if svc := d.TPMGRPCService(); svc != nil {
 		registry.TPM = svc

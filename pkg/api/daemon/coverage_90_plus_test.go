@@ -248,125 +248,6 @@ func TestQUICServiceHandlerOptions(t *testing.T) {
 // Service Provider IDevID/IAK Method Tests
 // =============================================================================
 
-func TestPlatformServiceProvider_IDevIDMethods(t *testing.T) {
-	provider := &PlatformServiceProvider{}
-	ctx := context.Background()
-
-	t.Run("IDevIDGenerate_NotAvailable", func(t *testing.T) {
-		result, err := provider.IDevIDGenerate(ctx, &mcp.IDevIDGenerateMCPRequest{})
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IDevIDInfo_NotAvailable", func(t *testing.T) {
-		result, err := provider.IDevIDInfo(ctx)
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IDevIDDelete_NotAvailable", func(t *testing.T) {
-		err := provider.IDevIDDelete(ctx)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IDevIDCSR_NotAvailable", func(t *testing.T) {
-		result, err := provider.IDevIDCSR(ctx, &mcp.IDevIDCSRMCPRequest{})
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IDevIDInstallCert_NotAvailable", func(t *testing.T) {
-		result, err := provider.IDevIDInstallCert(ctx, "-----BEGIN CERTIFICATE-----")
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IDevIDGetCert_NotAvailable", func(t *testing.T) {
-		result, err := provider.IDevIDGetCert(ctx, true)
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IDevIDDeleteCert_NotAvailable", func(t *testing.T) {
-		err := provider.IDevIDDeleteCert(ctx)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IDevIDExists_NotAvailable", func(t *testing.T) {
-		exists, err := provider.IDevIDExists(ctx)
-		assert.False(t, exists)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-}
-
-func TestPlatformServiceProvider_IAKMethods(t *testing.T) {
-	provider := &PlatformServiceProvider{}
-	ctx := context.Background()
-
-	t.Run("IAKGenerate_NotAvailable", func(t *testing.T) {
-		result, err := provider.IAKGenerate(ctx, &mcp.IDevIDGenerateMCPRequest{})
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IAKInfo_NotAvailable", func(t *testing.T) {
-		result, err := provider.IAKInfo(ctx)
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IAKDelete_NotAvailable", func(t *testing.T) {
-		err := provider.IAKDelete(ctx)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IAKCSR_NotAvailable", func(t *testing.T) {
-		result, err := provider.IAKCSR(ctx, &mcp.IDevIDCSRMCPRequest{})
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IAKInstallCert_NotAvailable", func(t *testing.T) {
-		result, err := provider.IAKInstallCert(ctx, "-----BEGIN CERTIFICATE-----")
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IAKGetCert_NotAvailable", func(t *testing.T) {
-		result, err := provider.IAKGetCert(ctx, true)
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IAKDeleteCert_NotAvailable", func(t *testing.T) {
-		err := provider.IAKDeleteCert(ctx)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IAKExists_NotAvailable", func(t *testing.T) {
-		exists, err := provider.IAKExists(ctx)
-		assert.False(t, exists)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-}
-
-func TestPlatformServiceProvider_DeviceAttributeMethods(t *testing.T) {
-	provider := &PlatformServiceProvider{}
-	ctx := context.Background()
-
-	t.Run("DeviceAttributes_NotAvailable", func(t *testing.T) {
-		result, err := provider.DeviceAttributes(ctx)
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("ActivateCredential_NotAvailable", func(t *testing.T) {
-		result, err := provider.ActivateCredential(ctx, []byte("blob"), []byte("secret"))
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-}
-
 // =============================================================================
 // Tenant gRPC Server Tests
 // =============================================================================
@@ -1110,7 +991,7 @@ func TestQUICServiceHandler_HandleRequest_Unknown(t *testing.T) {
 	t.Run("Unknown opcode", func(t *testing.T) {
 		// An unallocated opcode is unclassified: the authorization guard
 		// refuses it before dispatch.
-		req := &quicwire.Request{Opcode: 0x55}
+		req := &quicwire.Request{Opcode: 0x90}
 		resp := handler.HandleRequest(ctx, req)
 		assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
 	})

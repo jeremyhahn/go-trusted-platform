@@ -23,7 +23,8 @@ The SDK owns three things:
 
 It also carries connection credentials (`sdk/go/auth`) and a typed frontage
 over the go-quicbaas SDK (`sdk/go/services/quicbaas`, `sdk/go/services/auth`,
-`sdk/go/services/orchestration` and `sdk/go/services/{orchestrator,project,account,sdlc}`).
+`sdk/go/services/orchestration`, `sdk/go/services/{orchestrator,project,account,sdlc}`
+and `sdk/go/services/{cache,vector,timeseries,objectstorage,scheduler,messaging}`).
 
 ## 2. Layering
 
@@ -141,14 +142,21 @@ accessors. `sdk/go/services/auth` adapts `Security().Auth()` for
 `platformctl auth`. `sdk/go/services/orchestration` re-exports the container-trust
 types of the agentic surface as aliases, and
 `sdk/go/services/{orchestrator,project,account,sdlc}` re-export the request
-and response types of the matching agentic client. [api.md §3](api.md#3-go-quicbaas-re-export-surface) lists
+and response types of the matching agentic client.
+`sdk/go/services/{cache,vector,timeseries,objectstorage,scheduler,messaging}`
+do the same for the application and search clients. [api.md §3](api.md#3-go-quicbaas-re-export-surface) lists
 which go-quicbaas groups are re-exported.
 
 A re-exported accessor is a route, not a platform service: its calls travel on
 the side-client's own transport (`QuicBaaSTransport`) straight to quicbaasd.
 platformd serves none of them and `platformctl` has no command group for them,
 except where the platform adds its own behaviour (`platformctl auth`,
-`platformctl barrier`, `platformctl kms`).
+`platformctl barrier`, `platformctl kms`) and for Cache, Scheduler and
+Messaging. platformd serves those three itself through the composed SDK on
+REST, gRPC, QUIC, MCP and the Unix socket ([api.md §3.5](api.md#35-cache-scheduler-and-messaging-on-platformd)),
+`platform.Client` reaches them with `Cache()`, `Scheduler()` and `Messaging()`,
+and platformctl has a group for each ([cli.md](cli.md)). Vector, time-series and
+object storage stay side-client routes.
 
 ## 6. Invariants
 

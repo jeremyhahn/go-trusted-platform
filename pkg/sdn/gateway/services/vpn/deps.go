@@ -75,11 +75,24 @@ type ManagedDataPlane interface {
 type LeaseStore interface {
 	Put(ctx context.Context, lease *Lease) error
 	Get(ctx context.Context, id LeaseID) (*Lease, error)
+	// Delete removes the lease. A store that can make the removal durable
+	// nowhere keeps the lease and returns ErrRevocationNotRecorded; the
+	// service then leaves the lease's peer and address in place.
 	Delete(ctx context.Context, id LeaseID) error
 	// List returns every lease, ordered by IssuedAt.
 	List(ctx context.Context) ([]*Lease, error)
 	// FindByDevice returns the tenant's lease for the device, if any.
 	FindByDevice(ctx context.Context, tenantID, deviceID string) (*Lease, bool, error)
+}
+
+// PendingDeleteStore is a LeaseStore whose Delete can drop a lease while the
+// removal of its backing record is still pending. Sweep calls
+// RetryPendingDeletes on every pass so that removal completes once the backing
+// store recovers. Retrying it does not repeat the teardown: the peer and
+// address went with the first Delete.
+type PendingDeleteStore interface {
+	LeaseStore
+	RetryPendingDeletes(ctx context.Context) error
 }
 
 // Clock is the time source; tests inject one.

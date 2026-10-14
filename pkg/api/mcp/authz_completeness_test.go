@@ -152,15 +152,6 @@ var knownUnclassified = []string{
 	"kms_supported_algorithms",
 	"kms_update_key_metadata",
 	"kms_verify",
-	"overlay_mac_forget",
-	"overlay_mac_list",
-	"overlay_status",
-	"overlay_tunnel_list",
-	"overlay_vni_create",
-	"overlay_vni_delete",
-	"overlay_vni_list",
-	"overlay_vtep_get",
-	"overlay_vtep_list",
 	"platform_cluster_bootstrap",
 	"platform_cluster_join",
 	"platform_cluster_leave",
@@ -519,6 +510,49 @@ func TestTPMQuoteToolsAreClassified(t *testing.T) {
 		require.True(t, ok, "%s must have an explicit permission entry", tool)
 		assert.Equal(t, "tpm:read", got, "%s", tool)
 	}
+}
+
+// TestOverlayToolsAreClassified pins each overlay tool to the scope its gRPC
+// OverlayService twin requires (pkg/api/grpc/method_permissions.go).
+func TestOverlayToolsAreClassified(t *testing.T) {
+	checker := NewAuthorizationChecker(nil, nil)
+
+	want := map[string]string{
+		"overlay_status":       "sdn:read",
+		"overlay_vtep_list":    "sdn:read",
+		"overlay_vtep_get":     "sdn:read",
+		"overlay_vni_list":     "sdn:read",
+		"overlay_vni_create":   "sdn:write",
+		"overlay_vni_delete":   "sdn:delete",
+		"overlay_tunnel_list":  "sdn:read",
+		"overlay_tunnel_stats": "sdn:read",
+		"overlay_mac_list":     "sdn:read",
+		"overlay_mac_forget":   "sdn:write",
+	}
+	for tool, scope := range want {
+		got, ok := checker.toolPermissions[tool]
+		require.True(t, ok, "%s must have an explicit permission entry", tool)
+		assert.Equal(t, scope, got, "%s", tool)
+	}
+}
+
+// TestOverlayToolsAuthorizeByScope shows the overlay entries decide access: a
+// caller holding only sdn:read reaches overlay_tunnel_stats and is refused
+// overlay_vni_delete, which needs sdn:delete.
+func TestOverlayToolsAuthorizeByScope(t *testing.T) {
+	readOnly := &mockAuthorizationService{
+		checkFunc: func(_ context.Context, _, resource, action string) (bool, error) {
+			return resource == "sdn" && action == "read", nil
+		},
+	}
+	checker := NewAuthorizationChecker(readOnly, nil)
+
+	assert.Nil(t, checker.CheckToolAuthorization(context.Background(), "overlay_tunnel_stats", "token"))
+
+	err := checker.CheckToolAuthorization(context.Background(), "overlay_vni_delete", "token")
+	require.NotNil(t, err, "overlay_vni_delete needs sdn:delete")
+	assert.Equal(t, AuthErrorPermissionDenied, err.Type)
+	assert.Equal(t, "delete", readOnly.lastAction)
 }
 
 // TestNoBMCToolIsUnauthenticated is the one that matters if someone later adds

@@ -9,11 +9,12 @@
 ## 1. Read this before anything else
 
 **Every `platformctl luks` verb fails today.** Each verb runs its local checks
-(root, flags, device detection) and then calls `sdk/go/services/luks.NewClient()`,
-a stub that returns `not yet wired` for every operation. The server side is
-registered on every transport but is not connected to a backend either
-([engineering.md](engineering.md) §6). This page documents the verbs as
-declared, so the contract is fixed before the wiring lands.
+(root, flags, device detection) and then calls the daemon through
+`platform.Client.LUKS()` on the selected transport. The server side is
+registered on every transport but is not connected to a backend
+([engineering.md](engineering.md) §6), so it refuses each call. This page
+documents the verbs as declared, so the contract is fixed before the backend
+wiring lands.
 
 ---
 

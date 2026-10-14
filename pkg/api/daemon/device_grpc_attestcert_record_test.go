@@ -331,15 +331,3 @@ func TestMCPServiceProvider_DeviceRecordAttestCert_UnavailableWithoutRecorder(t 
 	_, err := p.DeviceRecordAttestCert(context.Background(), "42", false, false)
 	assert.Equal(t, codes.Unavailable, status.Code(err))
 }
-
-func TestPlatformServiceProvider_DeviceRecordAttestCert(t *testing.T) {
-	stub := &stubAttestCertRecorder{err: device.ErrAttestCertNoAttestPub{DeviceID: 42}}
-	p := NewPlatformServiceProvider(&PlatformServiceProviderConfig{
-		DeviceService:      newMockDeviceService(),
-		ProfileService:     newMockProfileService(),
-		AttestCertRecorder: stub,
-	})
-	_, err := p.DeviceRecordAttestCert(context.Background(), "42", false, false)
-	assert.Equal(t, codes.FailedPrecondition, status.Code(err), "%v", err)
-	assert.Equal(t, uint64(42), stub.gotID)
-}

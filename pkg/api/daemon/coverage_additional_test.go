@@ -67,40 +67,7 @@ func TestErrorTypes_KMSDataKeyErrors(t *testing.T) {
 }
 
 // =============================================================================
-// Platform Service Provider SDN Operations Tests - service_provider.go coverage
-// =============================================================================
-
-func TestPlatformServiceProvider_SDNOperations(t *testing.T) {
-	provider := &PlatformServiceProvider{}
-	ctx := context.Background()
-
-	t.Run("SDNCreateBridge without SDN service", func(t *testing.T) {
-		err := provider.SDNCreateBridge(ctx, "br0")
-		var notAvailableErr ErrServiceNotAvailable
-		assert.ErrorAs(t, err, &notAvailableErr)
-	})
-
-	t.Run("SDNDeleteBridge without SDN service", func(t *testing.T) {
-		err := provider.SDNDeleteBridge(ctx, "br0")
-		var notAvailableErr ErrServiceNotAvailable
-		assert.ErrorAs(t, err, &notAvailableErr)
-	})
-
-	t.Run("SDNAddPort without SDN service", func(t *testing.T) {
-		err := provider.SDNAddPort(ctx, "br0", "eth0", "internal")
-		var notAvailableErr ErrServiceNotAvailable
-		assert.ErrorAs(t, err, &notAvailableErr)
-	})
-
-	t.Run("SDNDeletePort without SDN service", func(t *testing.T) {
-		err := provider.SDNDeletePort(ctx, "br0", "eth0")
-		var notAvailableErr ErrServiceNotAvailable
-		assert.ErrorAs(t, err, &notAvailableErr)
-	})
-}
-
-// =============================================================================
-// MCP Service Provider Health Operations Tests - service_provider.go coverage
+// MCP Service Provider Health Operations Tests
 // =============================================================================
 
 func TestMCPServiceProvider_HealthOperations(t *testing.T) {
@@ -121,39 +88,6 @@ func TestMCPServiceProvider_HealthOperations(t *testing.T) {
 
 	t.Run("Readiness without daemon", func(t *testing.T) {
 		result, err := provider.Readiness(ctx)
-		assert.Nil(t, result)
-		assert.Error(t, err)
-	})
-}
-
-// =============================================================================
-// Platform Service Provider Health Operations Tests - service_provider.go coverage
-// =============================================================================
-
-func TestPlatformServiceProvider_HealthOperations(t *testing.T) {
-	provider := &PlatformServiceProvider{}
-	ctx := context.Background()
-
-	t.Run("Health without daemon", func(t *testing.T) {
-		result, err := provider.Health(ctx)
-		assert.Nil(t, result)
-		assert.Error(t, err)
-	})
-
-	t.Run("Liveness without daemon", func(t *testing.T) {
-		result, err := provider.Liveness(ctx)
-		assert.Nil(t, result)
-		assert.Error(t, err)
-	})
-
-	t.Run("Readiness without daemon", func(t *testing.T) {
-		result, err := provider.Readiness(ctx)
-		assert.Nil(t, result)
-		assert.Error(t, err)
-	})
-
-	t.Run("SDNGetFlowStats without SDN service", func(t *testing.T) {
-		result, err := provider.SDNGetFlowStats(ctx, "br0")
 		assert.Nil(t, result)
 		assert.Error(t, err)
 	})

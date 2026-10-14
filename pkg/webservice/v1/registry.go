@@ -64,6 +64,7 @@ import (
 	dnsentities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -808,12 +809,14 @@ type RestHandlerRegistry interface {
 	PXEServiceServer() platformv1.PXEServiceServer
 	NTPServiceServer() platformv1.NTPServiceServer
 	VPNServiceServer() platformv1.VPNServiceServer
+	AppServiceServers() restapi.AppServiceServers
 	RegistryService() grpcapi.RegistryService
 	OCIDistBackend() restregistry.OCIDistBackend
 	AttestationEventReader() restattestation.EventReader
 	AttestationReporting() *restattestation.Reporting
 	AttestationVerdicts() restattestation.VerdictPoller
 	GatewayControlPlane() (restgateway.GatewayStateStore, restgateway.DesiredConfigSource)
+	GatewayVPNLeases() restgateway.VPNLeaseSink
 	ResponseWriter() response.HttpWriter
 	SDNService() platformv1.SDNServiceServer
 	TenantServiceServer() platformv1.TenantServiceServer
@@ -1025,7 +1028,10 @@ type RegistryParams struct {
 	PXEServiceServer         platformv1.PXEServiceServer
 	NTPServiceServer         platformv1.NTPServiceServer
 	VPNServiceServer         platformv1.VPNServiceServer
-	SDNEnrollmentHook        *policy.SDNEnrollmentHook
+	// AppServiceServers are the daemon's Cache, Scheduler and Messaging
+	// servers, the instances behind every other transport.
+	AppServiceServers restapi.AppServiceServers
+	SDNEnrollmentHook *policy.SDNEnrollmentHook
 	// SDNIdentityConfig is sourced from app.SDNConfig.Identity. When present and
 	// encode_zone_in_cert is true, the ACME pre-sign hook embeds the device's
 	// network zone into every issued DEVICE certificate via OIDTPNetworkZone.
@@ -1088,6 +1094,9 @@ type RegistryParams struct {
 	// When both nil, control-plane routes are not registered.
 	GatewayStateStore    restgateway.GatewayStateStore
 	GatewayDesiredConfig restgateway.DesiredConfigSource
+	// GatewayVPNLeases backs /api/v1/gateway/vpn-leases/*. When nil those
+	// routes answer 500 ErrGatewayControlNotConfigured.
+	GatewayVPNLeases restgateway.VPNLeaseSink
 	// OCIDistBackend wires the spec-compliant /v2/ distribution
 	// surface so `crane` / `skopeo` / `oras` can push and pull
 	// against the registry directly. Set by the daemon boot path
@@ -1993,6 +2002,11 @@ func (registry *HandlerRegistry) GatewayControlPlane() (restgateway.GatewayState
 	return registry.params.GatewayStateStore, registry.params.GatewayDesiredConfig
 }
 
+// GatewayVPNLeases returns the record of the gateways' VPN leases, or nil.
+func (registry *HandlerRegistry) GatewayVPNLeases() restgateway.VPNLeaseSink {
+	return registry.params.GatewayVPNLeases
+}
+
 // EABServiceServer returns the in-process EABService gRPC implementation, or nil.
 func (registry *HandlerRegistry) EABServiceServer() platformv1.EABServiceServer {
 	return registry.params.EABServiceServer
@@ -2031,6 +2045,12 @@ func (registry *HandlerRegistry) NTPServiceServer() platformv1.NTPServiceServer 
 // VPNServiceServer returns the in-process VPNService gRPC implementation, or nil.
 func (registry *HandlerRegistry) VPNServiceServer() platformv1.VPNServiceServer {
 	return registry.params.VPNServiceServer
+}
+
+// AppServiceServers returns the daemon's Cache, Scheduler and Messaging
+// servers; a service the daemon does not wire is a nil interface.
+func (registry *HandlerRegistry) AppServiceServers() restapi.AppServiceServers {
+	return registry.params.AppServiceServers
 }
 
 // TenantServiceServer returns the in-process TenantService gRPC implementation, or nil.

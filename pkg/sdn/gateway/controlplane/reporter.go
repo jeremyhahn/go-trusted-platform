@@ -237,24 +237,69 @@ func (r *Reporter) pushOnce(ctx context.Context) error {
 	if err != nil {
 		return &WrappedError{Msg: "marshal", Err: err}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		r.baseURL+"/api/v1/gateway/telemetry",
-		bytes.NewReader(body))
+	status, err := r.send(ctx, http.MethodPost, "/api/v1/gateway/telemetry", body)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	r.logInfo("telemetry posted", "gateway_id", snap.GatewayID, "status", status)
+	return nil
+}
+
+// PutVPNLease records a VPN lease this gateway issued, admitted or renewed,
+// with the control plane, so a restarted gateway rebuilds it.
+func (r *Reporter) PutVPNLease(ctx context.Context, lease *gwstate.DesiredVPNLease) error {
+	if lease == nil {
+		return ErrMissingField{Field: "lease"}
+	}
+	body, err := json.Marshal(lease)
+	if err != nil {
+		return &WrappedError{Msg: "marshal", Err: err}
+	}
+	_, err = r.send(ctx, http.MethodPut, r.vpnLeasesPath(), body)
+	return err
+}
+
+// DeleteVPNLease removes a VPN lease this gateway revoked from the control
+// plane. A lease the control plane no longer holds is not an error.
+func (r *Reporter) DeleteVPNLease(ctx context.Context, tenantID, leaseID string) error {
+	_, err := r.send(ctx, http.MethodDelete,
+		r.vpnLeasesPath()+"/"+url.PathEscape(tenantID)+"/"+url.PathEscape(leaseID), nil)
+	return err
+}
+
+// vpnLeasesPath is this gateway's lease collection on the control plane.
+// PathEscape keeps every ID inside its own path segment.
+func (r *Reporter) vpnLeasesPath() string {
+	return "/api/v1/gateway/vpn-leases/" + url.PathEscape(r.cfg.GatewayID)
+}
+
+// send makes one request to the control plane and returns the status. A
+// status of 400 or above is a MessageError carrying the CP's answer.
+func (r *Reporter) send(ctx context.Context, method, path string, body []byte) (int, error) {
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, r.baseURL+path, reader)
+	if err != nil {
+		return 0, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := r.cfg.HTTPClient.Do(req)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return &MessageError{Msg: fmt.Sprintf("CP returned %d: %s", resp.StatusCode, string(respBody))}
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return resp.StatusCode, &WrappedError{Msg: fmt.Sprintf("CP returned %d", resp.StatusCode), Err: err}
+		}
+		return resp.StatusCode, &MessageError{Msg: fmt.Sprintf("CP returned %d: %s", resp.StatusCode, string(respBody))}
 	}
-	r.logInfo("telemetry posted", "gateway_id", snap.GatewayID, "status", resp.StatusCode)
-	return nil
+	return resp.StatusCode, nil
 }
 
 // FetchDesiredConfig pulls the control plane's intended configuration

@@ -1301,7 +1301,7 @@ func TestGatewayHandleListPrefixes(t *testing.T) {
 	})
 }
 
-func TestGatewayPage(t *testing.T) {
+func TestListPage(t *testing.T) {
 	t.Parallel()
 	items := make([]int, 2500)
 	for i := range items {
@@ -1321,7 +1321,7 @@ func TestGatewayPage(t *testing.T) {
 		{name: "an offset past the end is an empty page", offset: 9000, limit: 10, wantLen: 0},
 	}
 	for _, tc := range cases {
-		page, total, err := gatewayPage(items, tc.offset, tc.limit)
+		page, total, err := listPage(items, tc.offset, tc.limit)
 		require.NoError(t, err, tc.name)
 		assert.Equal(t, int32(2500), total, tc.name)
 		require.Len(t, page, tc.wantLen, tc.name)
@@ -1330,7 +1330,7 @@ func TestGatewayPage(t *testing.T) {
 		}
 	}
 
-	_, _, err := gatewayPage(items, -1, 10)
+	_, _, err := listPage(items, -1, 10)
 	assert.ErrorIs(t, err, ErrGatewayNegativeOffset)
 }
 

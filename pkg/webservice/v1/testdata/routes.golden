@@ -1,5 +1,6 @@
 DELETE /api/v1/attestation/manifests/{id}
 DELETE /api/v1/ca/certificates/{serial}
+DELETE /api/v1/cache/entries
 DELETE /api/v1/compute/containers/{id}
 DELETE /api/v1/compute/images/{repository:.+}
 DELETE /api/v1/compute/vms/{id}
@@ -14,6 +15,7 @@ DELETE /api/v1/eab/credentials/{id:[0-9]+}
 DELETE /api/v1/gateway/bgp/prefixes
 DELETE /api/v1/gateway/ipam/allocations
 DELETE /api/v1/gateway/state/{id}
+DELETE /api/v1/gateway/vpn-leases/{id}/{tenant}/{lease}
 DELETE /api/v1/iam/apps/{id}
 DELETE /api/v1/iam/groups/{id}
 DELETE /api/v1/iam/groups/{id}/members/{user}
@@ -37,6 +39,7 @@ DELETE /api/v1/invitations/{id:[0-9]+}
 DELETE /api/v1/kms/deks/{path:.+}
 DELETE /api/v1/kms/keys/{name}
 DELETE /api/v1/kms/secrets/{name}
+DELETE /api/v1/messaging/channels/{name}
 DELETE /api/v1/overlay/macs
 DELETE /api/v1/overlay/vnis/{vni:[0-9]+}
 DELETE /api/v1/platform/config/snapshots/{id}
@@ -44,6 +47,7 @@ DELETE /api/v1/pxe/devices/{id}
 DELETE /api/v1/quicbaas/kv/{key}
 DELETE /api/v1/quicbaas/storage/buckets/{name}
 DELETE /api/v1/quicbaas/storage/buckets/{name}/objects/{object:.*}
+DELETE /api/v1/scheduler/jobs/{job_id}
 DELETE /api/v1/sdn/bridges/{name}
 DELETE /api/v1/sdn/bridges/{name}/ports/{port}
 DELETE /api/v1/sdn/flows
@@ -97,6 +101,8 @@ GET /api/v1/ca/crl
 GET /api/v1/ca/info
 GET /api/v1/ca/intermediate
 GET /api/v1/ca/root
+GET /api/v1/cache/config
+GET /api/v1/cache/stats
 GET /api/v1/certificate
 GET /api/v1/compute
 GET /api/v1/compute/containers
@@ -201,6 +207,11 @@ GET /api/v1/kms/secrets/{name}/versions
 GET /api/v1/kms/secrets/{name}/versions/{version}
 GET /api/v1/login
 GET /api/v1/login/refresh
+GET /api/v1/messaging/channels
+GET /api/v1/messaging/channels/{channel}/stats
+GET /api/v1/messaging/channels/{name}
+GET /api/v1/messaging/dedup-stats
+GET /api/v1/messaging/stats
 GET /api/v1/ntp
 GET /api/v1/ntp/sources
 GET /api/v1/ntp/status
@@ -247,6 +258,10 @@ GET /api/v1/quicbaas/storage/buckets/{name}/objects
 GET /api/v1/quicbaas/timeseries/metrics
 GET /api/v1/quicbaas/vector/collections
 GET /api/v1/quicbaas/vector/namespaces
+GET /api/v1/scheduler/jobs
+GET /api/v1/scheduler/jobs/{job_id}
+GET /api/v1/scheduler/jobs/{job_id}/history
+GET /api/v1/scheduler/status
 GET /api/v1/sdn
 GET /api/v1/sdn/bridges
 GET /api/v1/sdn/bridges/{bridge_id}/vlans
@@ -306,7 +321,9 @@ GET /api/v1/webauthn/registration/begin
 GET /api/v1/webauthn/registration/finish
 GET /api/v1/webauthn/registration/status
 HEAD /api/v1/acme/new-nonce
+PATCH /api/v1/cache/config
 PATCH /api/v1/compute/vms/{id}/disks/{diskId}
+PATCH /api/v1/scheduler/jobs/{job_id}
 POST /api/v1/acme/account/{id}
 POST /api/v1/acme/authz/{id}
 POST /api/v1/acme/cert/{id}
@@ -428,6 +445,8 @@ POST /api/v1/kms/secrets/{name}/rollback
 POST /api/v1/kms/secrets/{name}/rotate
 POST /api/v1/kms/sign/{name}
 POST /api/v1/kms/verify/{name}
+POST /api/v1/messaging/channels
+POST /api/v1/messaging/channels/{channel}/messages
 POST /api/v1/ntp/step
 POST /api/v1/overlay/vnis
 POST /api/v1/platform/config/reload
@@ -455,6 +474,11 @@ POST /api/v1/quicbaas/storage/buckets
 POST /api/v1/quicbaas/timeseries/metrics
 POST /api/v1/quicbaas/vector/collections
 POST /api/v1/quicbaas/vector/namespaces
+POST /api/v1/scheduler/jobs
+POST /api/v1/scheduler/jobs/{job_id}/cancel
+POST /api/v1/scheduler/jobs/{job_id}/pause
+POST /api/v1/scheduler/jobs/{job_id}/resume
+POST /api/v1/scheduler/jobs/{job_id}/trigger
 POST /api/v1/sdn/bridges
 POST /api/v1/sdn/bridges/{bridge_id}/vlans
 POST /api/v1/sdn/bridges/{name}/flows
@@ -500,6 +524,7 @@ PUT /api/v1/device/profiles/{id:[0-9]+}
 PUT /api/v1/device/templates/{id:[0-9]+}
 PUT /api/v1/devices/{id:[0-9]+}
 PUT /api/v1/dns/zones/{zone}
+PUT /api/v1/gateway/vpn-leases/{id}
 PUT /api/v1/iam/apps/{id}
 PUT /api/v1/iam/groups/{id}
 PUT /api/v1/iam/policies/{id}

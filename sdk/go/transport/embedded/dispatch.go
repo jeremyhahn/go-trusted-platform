@@ -50,6 +50,9 @@ func buildHandlerMap(reg *ServiceRegistry) map[string]handlerFunc {
 	registerCeremonyHandlers(m, reg)
 	registerPIVHandlers(m, reg)
 	registerFIDO2Handlers(m, reg)
+	registerCacheHandlers(m, reg)
+	registerSchedulerHandlers(m, reg)
+	registerMessagingHandlers(m, reg)
 
 	return m
 }
@@ -1446,5 +1449,101 @@ func registerProxyHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	}
 	m[platformv1.ProxyService_GetZoneMatrix_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.GetZoneMatrix(ctx, req.(*platformv1.GetProxyZoneMatrixRequest))
+	}
+}
+
+// registerCacheHandlers registers CacheService handlers.
+func registerCacheHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.Cache == nil {
+		return
+	}
+	svc := reg.Cache
+
+	m[platformv1.CacheService_GetStats_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetStats(ctx, req.(*platformv1.GetCacheStatsRequest))
+	}
+	m[platformv1.CacheService_Clear_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Clear(ctx, req.(*platformv1.ClearCacheRequest))
+	}
+	m[platformv1.CacheService_GetConfig_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetConfig(ctx, req.(*platformv1.GetCacheConfigRequest))
+	}
+	m[platformv1.CacheService_UpdateConfig_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.UpdateConfig(ctx, req.(*platformv1.UpdateCacheConfigRequest))
+	}
+}
+
+// registerSchedulerHandlers registers SchedulerService handlers.
+func registerSchedulerHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.Scheduler == nil {
+		return
+	}
+	svc := reg.Scheduler
+
+	m[platformv1.SchedulerService_CreateJob_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CreateJob(ctx, req.(*platformv1.CreateSchedulerJobRequest))
+	}
+	m[platformv1.SchedulerService_GetJob_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetJob(ctx, req.(*platformv1.GetSchedulerJobRequest))
+	}
+	m[platformv1.SchedulerService_UpdateJob_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.UpdateJob(ctx, req.(*platformv1.UpdateSchedulerJobRequest))
+	}
+	m[platformv1.SchedulerService_DeleteJob_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DeleteJob(ctx, req.(*platformv1.DeleteSchedulerJobRequest))
+	}
+	m[platformv1.SchedulerService_ListJobs_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListJobs(ctx, req.(*platformv1.ListSchedulerJobsRequest))
+	}
+	m[platformv1.SchedulerService_TriggerJob_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.TriggerJob(ctx, req.(*platformv1.TriggerSchedulerJobRequest))
+	}
+	m[platformv1.SchedulerService_PauseJob_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.PauseJob(ctx, req.(*platformv1.PauseSchedulerJobRequest))
+	}
+	m[platformv1.SchedulerService_ResumeJob_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ResumeJob(ctx, req.(*platformv1.ResumeSchedulerJobRequest))
+	}
+	m[platformv1.SchedulerService_CancelJob_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CancelJob(ctx, req.(*platformv1.CancelSchedulerJobRequest))
+	}
+	m[platformv1.SchedulerService_GetJobHistory_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetJobHistory(ctx, req.(*platformv1.GetSchedulerJobHistoryRequest))
+	}
+	m[platformv1.SchedulerService_GetStatus_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetStatus(ctx, req.(*platformv1.GetSchedulerStatusRequest))
+	}
+}
+
+// registerMessagingHandlers registers MessagingService handlers.
+func registerMessagingHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.Messaging == nil {
+		return
+	}
+	svc := reg.Messaging
+
+	m[platformv1.MessagingService_CreateChannel_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CreateChannel(ctx, req.(*platformv1.CreateMessagingChannelRequest))
+	}
+	m[platformv1.MessagingService_DeleteChannel_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DeleteChannel(ctx, req.(*platformv1.DeleteMessagingChannelRequest))
+	}
+	m[platformv1.MessagingService_GetChannel_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetChannel(ctx, req.(*platformv1.GetMessagingChannelRequest))
+	}
+	m[platformv1.MessagingService_ListChannels_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListChannels(ctx, req.(*platformv1.ListMessagingChannelsRequest))
+	}
+	m[platformv1.MessagingService_Publish_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Publish(ctx, req.(*platformv1.PublishMessageRequest))
+	}
+	m[platformv1.MessagingService_GetStats_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetStats(ctx, req.(*platformv1.GetMessagingStatsRequest))
+	}
+	m[platformv1.MessagingService_GetDedupStats_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetDedupStats(ctx, req.(*platformv1.GetMessagingDedupStatsRequest))
+	}
+	m[platformv1.MessagingService_GetChannelStats_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetChannelStats(ctx, req.(*platformv1.GetMessagingChannelStatsRequest))
 	}
 }

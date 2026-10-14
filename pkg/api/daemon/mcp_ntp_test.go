@@ -30,19 +30,15 @@ type ntpMCPProvider interface {
 	NTPStep(ctx context.Context) (interface{}, error)
 }
 
-// ntpProviders builds both providers over the same backend.
+// ntpProviders builds the MCP provider over the backend.
 func ntpProviders(backend NTPBackend) map[string]ntpMCPProvider {
 	server := NewNTPGRPCService(nil, backend)
 
 	mcpProvider := &MCPServiceProvider{}
 	mcpProvider.SetNTPService(server)
 
-	platformProvider := &PlatformServiceProvider{}
-	platformProvider.SetNTPService(server)
-
 	return map[string]ntpMCPProvider{
-		"MCPServiceProvider":      mcpProvider,
-		"PlatformServiceProvider": platformProvider,
+		"MCPServiceProvider": mcpProvider,
 	}
 }
 
@@ -94,8 +90,7 @@ func TestMCPProvidersReturnTheProtoResponseShapes(t *testing.T) {
 
 func TestMCPProvidersReportUnavailableWithoutABackend(t *testing.T) {
 	providers := map[string]ntpMCPProvider{
-		"MCPServiceProvider":      &MCPServiceProvider{},
-		"PlatformServiceProvider": &PlatformServiceProvider{},
+		"MCPServiceProvider": &MCPServiceProvider{},
 	}
 
 	for name, provider := range providers {

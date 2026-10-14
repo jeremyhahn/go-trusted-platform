@@ -76,9 +76,6 @@ var quoteProviders = map[string]func(tpm xkmssdk.TrustedPlatformModule) tpmQuote
 	"MCPServiceProvider": func(tpm xkmssdk.TrustedPlatformModule) tpmQuoteProvider {
 		return &MCPServiceProvider{logger: slog.Default(), tpm2Service: tpm}
 	},
-	"PlatformServiceProvider": func(tpm xkmssdk.TrustedPlatformModule) tpmQuoteProvider {
-		return NewPlatformServiceProvider(&PlatformServiceProviderConfig{TPM2Service: tpm})
-	},
 }
 
 // providerQuote is a quote as a provider returns it, decoded from base64.

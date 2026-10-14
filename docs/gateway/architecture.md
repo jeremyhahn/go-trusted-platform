@@ -308,7 +308,7 @@ the refusal table. There is no third kind.
 | `edge` | — | device onboarding verifies the TPM EK, quote and IDevID through the platform SDK; until it does, gatewayd admits no device (#553) |
 | `dhcp` | — | gatewayd has no IPAM allocator (#553) |
 | `pxe` | — | a gateway PXE service is planned; platformd's iPXE server provisions today (#553) |
-| `management-vpn` | `services/vpn` admission service over the planes and collaborators `GatewayRuntime.VPN` carries; enrolments and tenant posture policies arrive as the desired-config `vpn` section | the gatewayd assembly supplies no `VPNRuntime` yet: the person-factor verifier has no SDK verb ([../vpn/engineering.md §1](../vpn/engineering.md)), so the service fails `ErrRuntimeMissing` |
+| `management-vpn` | `services/vpn` admission service over the planes and collaborators `GatewayRuntime.VPN` carries, and its mTLS admission listener on `management_vpn.listener`, opened after the service starts and closed first on stop, in the process that runs the service (`gatewayd serve`; the VPN is not a supervised child); enrolments and tenant posture policies arrive as the desired-config `vpn` section | the gatewayd assembly supplies no `VPNRuntime` yet: the person-factor verifier has no SDK verb ([../vpn/engineering.md §1](../vpn/engineering.md)), so the service fails `ErrRuntimeMissing` |
 
 A `backedServiceHandler` builds its backend on `Start` and drops it on `Stop`,
 so `IsActive` is true exactly while a backend exists and `Health` is the

@@ -44,6 +44,7 @@ type stubOverlayController struct {
 	vni          *overlay.VNIInfo
 	vniErr       error
 	addVNIErr    error
+	addedVNI     *overlay.VNIConfig
 	removeVNIErr error
 	macs         []overlay.RemoteMACEntry
 	macsErr      error
@@ -60,7 +61,8 @@ func (s *stubOverlayController) ListVTEPs(_ context.Context) ([]overlay.VTEPInfo
 func (s *stubOverlayController) GetVTEP(_ context.Context, _ netip.Addr) (*overlay.VTEPInfo, error) {
 	return s.vtep, s.vtepErr
 }
-func (s *stubOverlayController) AddVNI(_ context.Context, _ *overlay.VNIConfig) error {
+func (s *stubOverlayController) AddVNI(_ context.Context, cfg *overlay.VNIConfig) error {
+	s.addedVNI = cfg
 	return s.addVNIErr
 }
 func (s *stubOverlayController) RemoveVNI(_ context.Context, _ uint32) error {
@@ -274,6 +276,32 @@ func TestOverlayQUICAdapter_CreateVNI(t *testing.T) {
 		if info.VNI != 500 {
 			t.Errorf("expected VNI=500, got %d", info.VNI)
 		}
+		if info.VLAN != 5 {
+			t.Errorf("expected VLAN=5, got %d", info.VLAN)
+		}
+	})
+
+	t.Run("vlan reaches the controller VNIConfig", func(t *testing.T) {
+		ctrl := &stubOverlayController{running: true, vni: &overlay.VNIInfo{VNI: 600, VLAN: 100}}
+		a := newOverlayControllerQUICAdapter(ctrl)
+		if _, err := a.CreateVNI(context.Background(), 600, &quic.VNICreateOptions{VLAN: 100}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ctrl.addedVNI == nil || ctrl.addedVNI.VLAN != 100 {
+			t.Fatalf("expected VNIConfig.VLAN=100, got %+v", ctrl.addedVNI)
+		}
+	})
+
+	t.Run("vlan above 4094 returns ErrOverlayInvalidVLAN without touching the controller", func(t *testing.T) {
+		ctrl := &stubOverlayController{running: true}
+		a := newOverlayControllerQUICAdapter(ctrl)
+		_, err := a.CreateVNI(context.Background(), 600, &quic.VNICreateOptions{VLAN: 65636})
+		if !errors.Is(err, quic.ErrOverlayInvalidVLAN) {
+			t.Errorf("expected ErrOverlayInvalidVLAN, got %v", err)
+		}
+		if ctrl.addedVNI != nil {
+			t.Errorf("controller must not see an out-of-range VLAN, got %+v", ctrl.addedVNI)
+		}
 	})
 
 	t.Run("invalid vni 0 returns ErrOverlayInvalidVNI", func(t *testing.T) {
@@ -403,6 +431,73 @@ func TestOverlayQUICAdapter_ListTunnels(t *testing.T) {
 			t.Errorf("expected ErrOverlayServiceNotAvailable, got %v", err)
 		}
 	})
+}
+
+func TestOverlayQUICAdapter_TunnelStats(t *testing.T) {
+	newCtrl := func() *stubOverlayController {
+		return &stubOverlayController{
+			running: true,
+			state: &overlay.State{
+				Tunnels: []overlay.TunnelInfo{
+					{ID: "tun-100", LocalVTEP: netip.MustParseAddr("10.0.0.1"), RemoteVTEP: netip.MustParseAddr("10.0.0.2"), VNI: 100, BytesTx: 10, BytesRx: 20},
+					{ID: "tun-200", LocalVTEP: netip.MustParseAddr("10.0.0.1"), RemoteVTEP: netip.MustParseAddr("10.0.0.2"), VNI: 200, BytesTx: 30, BytesRx: 40},
+					{ID: "tun-300", LocalVTEP: netip.MustParseAddr("10.0.0.1"), RemoteVTEP: netip.MustParseAddr("10.0.0.3"), VNI: 300, BytesTx: 50, BytesRx: 60},
+				},
+			},
+		}
+	}
+
+	selections := []struct {
+		name   string
+		remote string
+		vni    uint32
+		wantID string
+		wantTx int64
+		wantRx int64
+	}{
+		{"remote and VNI select one tunnel", "10.0.0.2", 200, "tun-200", 30, 40},
+		{"VNI 0 selects the first tunnel to the remote", "10.0.0.2", 0, "tun-100", 10, 20},
+		{"another remote", "10.0.0.3", 300, "tun-300", 50, 60},
+	}
+	for _, tc := range selections {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newOverlayControllerQUICAdapter(newCtrl())
+			tunnel, err := a.TunnelStats(context.Background(), tc.remote, tc.vni)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tunnel.ID != tc.wantID || tunnel.TxBytes != tc.wantTx || tunnel.RxBytes != tc.wantRx {
+				t.Errorf("got %s tx=%d rx=%d, want %s tx=%d rx=%d",
+					tunnel.ID, tunnel.TxBytes, tunnel.RxBytes, tc.wantID, tc.wantTx, tc.wantRx)
+			}
+			if tunnel.RemoteVTEP != tc.remote {
+				t.Errorf("expected RemoteVTEP=%s, got %s", tc.remote, tunnel.RemoteVTEP)
+			}
+		})
+	}
+
+	failures := []struct {
+		name    string
+		ctrl    *stubOverlayController
+		remote  string
+		vni     uint32
+		wantErr error
+	}{
+		{"not running", &stubOverlayController{running: false}, "10.0.0.2", 0, quic.ErrOverlayServiceNotAvailable},
+		{"remote is not an address", newCtrl(), "vtep-b", 0, quic.ErrOverlayInvalidRemoteVTEP},
+		{"no tunnel to the remote", newCtrl(), "10.0.0.9", 0, quic.ErrOverlayTunnelNotFound},
+		{"remote does not carry the VNI", newCtrl(), "10.0.0.3", 100, quic.ErrOverlayTunnelNotFound},
+		{"no state", &stubOverlayController{running: true}, "10.0.0.2", 0, quic.ErrOverlayTunnelNotFound},
+	}
+	for _, tc := range failures {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newOverlayControllerQUICAdapter(tc.ctrl)
+			_, err := a.TunnelStats(context.Background(), tc.remote, tc.vni)
+			if !errors.Is(err, tc.wantErr) {
+				t.Errorf("expected %v, got %v", tc.wantErr, err)
+			}
+		})
+	}
 }
 
 // =============================================================================

@@ -26,13 +26,6 @@ type gatewaySnapshotTools struct {
 	reader GatewaySnapshotReader
 }
 
-// SetGatewaySnapshotReader wires the snapshot surface after construction,
-// which is what the PlatformServiceProvider needs: the gateway service is
-// built after the provider.
-func (t *gatewaySnapshotTools) SetGatewaySnapshotReader(reader GatewaySnapshotReader) {
-	t.reader = reader
-}
-
 // GatewaySnapshot returns one gateway's telemetry snapshot.
 func (t gatewaySnapshotTools) GatewaySnapshot(ctx context.Context, gatewayID string) (interface{}, error) {
 	if t.reader == nil {

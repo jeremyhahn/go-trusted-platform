@@ -16,174 +16,147 @@
 package luks
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
 	"os"
-	"time"
 
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	lukssdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/luks"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+
+	// The REST transport registers itself with the platform SDK.
+	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/rest"
 )
 
-const defaultRESTTimeout = 30 * time.Second
-
-// RESTAdapter drives LUKS operations over HTTPS REST.
+// RESTAdapter implements LUKSCommands through the platform SDK over REST, so
+// every call travels the SDK's REST route map and wire decoders exactly as a
+// production client's does.
 type RESTAdapter struct {
-	baseURL    string
-	httpClient *http.Client
+	endpoint string
+	platform platform.Client
+	client   *lukssdk.GRPCClient
 }
 
-// NewRESTAdapter returns an unconfigured REST adapter.
-func NewRESTAdapter() *RESTAdapter { return &RESTAdapter{} }
-
-// Name returns "REST".
-func (r *RESTAdapter) Name() string { return "REST" }
-
-// Setup constructs the HTTPS client.
-func (r *RESTAdapter) Setup(ctx context.Context) error {
+// NewRESTAdapter creates a new REST protocol adapter instance.
+func NewRESTAdapter() *RESTAdapter {
 	endpoint := os.Getenv(EnvPlatformRESTEndpoint)
 	if endpoint == "" {
 		endpoint = GetServiceEndpoints().PlatformREST
 	}
-	r.baseURL = endpoint
-	r.httpClient = helpers.NewHTTPClient(defaultRESTTimeout)
+	return &RESTAdapter{endpoint: endpoint}
+}
+
+// Name returns "REST".
+func (r *RESTAdapter) Name() string { return "REST" }
+
+// Setup connects the platform SDK client over REST.
+func (r *RESTAdapter) Setup(ctx context.Context) error {
+	client, err := platform.Connect(ctx, platform.NewOptions(
+		platform.WithOnlyProtocol(platform.ProtocolREST),
+		platform.WithRESTAddr(r.endpoint),
+		platform.WithTLSConfig(helpers.TLSConfigOrInsecure()),
+	))
+	if err != nil {
+		return ErrConnectionFailed{Protocol: "REST", Endpoint: r.endpoint, Err: err}
+	}
+	r.platform = client
+	r.client = lukssdk.NewGRPCClientFromClient(client.LUKS())
 	return nil
 }
 
-// Teardown releases idle connections.
+// Teardown closes the SDK client.
 func (r *RESTAdapter) Teardown() error {
-	if r.httpClient != nil {
-		r.httpClient.CloseIdleConnections()
+	if r.platform != nil {
+		return r.platform.Close()
 	}
 	return nil
 }
 
-// doJSON sends an HTTP request and unmarshals the JSON response.
-func (r *RESTAdapter) doJSON(ctx context.Context, method, path string, body interface{}, out interface{}) error {
-	var reader io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		reader = bytes.NewReader(b)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, r.baseURL+path, reader)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "application/json")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := r.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("REST %s %s failed: status %d body %s", method, path, resp.StatusCode, string(respBody))
-	}
-	if out != nil && len(respBody) > 0 {
-		return json.Unmarshal(respBody, out)
-	}
-	return nil
-}
-
-// Status calls GET /api/v1/luks/status.
+// Status reports the volume status via the SDK client over REST.
 func (r *RESTAdapter) Status(ctx context.Context, req *lukssdk.StatusRequest) (*lukssdk.StatusResponse, error) {
-	resp := &lukssdk.StatusResponse{}
-	if err := r.doJSON(ctx, http.MethodPost, "/api/v1/luks/status", req, resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: "POST /api/v1/luks/status", Err: err}
+	resp, err := r.client.Status(ctx, req)
+	if err != nil {
+		return nil, ErrCallFailed{Protocol: "REST", Method: "Status", Err: err}
 	}
 	return resp, nil
 }
 
-// ListSlots calls POST /api/v1/luks/list-slots.
+// ListSlots lists the keyslots via the SDK client over REST.
 func (r *RESTAdapter) ListSlots(ctx context.Context, req *lukssdk.ListSlotsRequest) (*lukssdk.ListSlotsResponse, error) {
-	resp := &lukssdk.ListSlotsResponse{}
-	if err := r.doJSON(ctx, http.MethodPost, "/api/v1/luks/list-slots", req, resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: "POST /api/v1/luks/list-slots", Err: err}
+	resp, err := r.client.ListSlots(ctx, req)
+	if err != nil {
+		return nil, ErrCallFailed{Protocol: "REST", Method: "ListSlots", Err: err}
 	}
 	return resp, nil
 }
 
-// Info calls POST /api/v1/luks/info.
+// Info reads the header info via the SDK client over REST.
 func (r *RESTAdapter) Info(ctx context.Context, req *lukssdk.InfoRequest) (*lukssdk.InfoResponse, error) {
-	resp := &lukssdk.InfoResponse{}
-	if err := r.doJSON(ctx, http.MethodPost, "/api/v1/luks/info", req, resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: "POST /api/v1/luks/info", Err: err}
+	resp, err := r.client.Info(ctx, req)
+	if err != nil {
+		return nil, ErrCallFailed{Protocol: "REST", Method: "Info", Err: err}
 	}
 	return resp, nil
 }
 
-// EnrollPassphrase calls POST /api/v1/luks/enroll-passphrase.
+// EnrollPassphrase enrolls a passphrase via the SDK client over REST.
 func (r *RESTAdapter) EnrollPassphrase(ctx context.Context, req *lukssdk.EnrollPassphraseRequest) (*lukssdk.EnrollPassphraseResponse, error) {
-	resp := &lukssdk.EnrollPassphraseResponse{}
-	if err := r.doJSON(ctx, http.MethodPost, "/api/v1/luks/enroll-passphrase", req, resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: "POST /api/v1/luks/enroll-passphrase", Err: err}
+	resp, err := r.client.EnrollPassphrase(ctx, req)
+	if err != nil {
+		return nil, ErrCallFailed{Protocol: "REST", Method: "EnrollPassphrase", Err: err}
 	}
 	return resp, nil
 }
 
-// EnrollFIDO2 calls POST /api/v1/luks/enroll-fido2.
+// EnrollFIDO2 enrolls a FIDO2 keyslot via the SDK client over REST.
 func (r *RESTAdapter) EnrollFIDO2(ctx context.Context, req *lukssdk.EnrollFIDO2Request) (*lukssdk.EnrollFIDO2Response, error) {
-	resp := &lukssdk.EnrollFIDO2Response{}
-	if err := r.doJSON(ctx, http.MethodPost, "/api/v1/luks/enroll-fido2", req, resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: "POST /api/v1/luks/enroll-fido2", Err: err}
+	resp, err := r.client.EnrollFIDO2(ctx, req)
+	if err != nil {
+		return nil, ErrCallFailed{Protocol: "REST", Method: "EnrollFIDO2", Err: err}
 	}
 	return resp, nil
 }
 
-// EnrollTPM calls POST /api/v1/luks/enroll-tpm.
+// EnrollTPM enrolls a TPM keyslot via the SDK client over REST.
 func (r *RESTAdapter) EnrollTPM(ctx context.Context, req *lukssdk.EnrollTPMRequest) (*lukssdk.EnrollTPMResponse, error) {
-	resp := &lukssdk.EnrollTPMResponse{}
-	if err := r.doJSON(ctx, http.MethodPost, "/api/v1/luks/enroll-tpm", req, resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: "POST /api/v1/luks/enroll-tpm", Err: err}
+	resp, err := r.client.EnrollTPM(ctx, req)
+	if err != nil {
+		return nil, ErrCallFailed{Protocol: "REST", Method: "EnrollTPM", Err: err}
 	}
 	return resp, nil
 }
 
-// EnrollRecovery calls POST /api/v1/luks/enroll-recovery.
+// EnrollRecovery enrolls a recovery key via the SDK client over REST.
 func (r *RESTAdapter) EnrollRecovery(ctx context.Context, req *lukssdk.EnrollRecoveryRequest) (*lukssdk.EnrollRecoveryResponse, error) {
-	resp := &lukssdk.EnrollRecoveryResponse{}
-	if err := r.doJSON(ctx, http.MethodPost, "/api/v1/luks/enroll-recovery", req, resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: "POST /api/v1/luks/enroll-recovery", Err: err}
+	resp, err := r.client.EnrollRecovery(ctx, req)
+	if err != nil {
+		return nil, ErrCallFailed{Protocol: "REST", Method: "EnrollRecovery", Err: err}
 	}
 	return resp, nil
 }
 
-// RemoveKey calls POST /api/v1/luks/remove-key.
+// RemoveKey removes a keyslot via the SDK client over REST.
 func (r *RESTAdapter) RemoveKey(ctx context.Context, req *lukssdk.RemoveKeyRequest) (*lukssdk.RemoveKeyResponse, error) {
-	resp := &lukssdk.RemoveKeyResponse{}
-	if err := r.doJSON(ctx, http.MethodPost, "/api/v1/luks/remove-key", req, resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: "POST /api/v1/luks/remove-key", Err: err}
+	resp, err := r.client.RemoveKey(ctx, req)
+	if err != nil {
+		return nil, ErrCallFailed{Protocol: "REST", Method: "RemoveKey", Err: err}
 	}
 	return resp, nil
 }
 
-// TestUnlock calls POST /api/v1/luks/test-unlock.
+// TestUnlock tests a keyslot via the SDK client over REST.
 func (r *RESTAdapter) TestUnlock(ctx context.Context, req *lukssdk.TestUnlockRequest) (*lukssdk.TestUnlockResponse, error) {
-	resp := &lukssdk.TestUnlockResponse{}
-	if err := r.doJSON(ctx, http.MethodPost, "/api/v1/luks/test-unlock", req, resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: "POST /api/v1/luks/test-unlock", Err: err}
+	resp, err := r.client.TestUnlock(ctx, req)
+	if err != nil {
+		return nil, ErrCallFailed{Protocol: "REST", Method: "TestUnlock", Err: err}
 	}
 	return resp, nil
 }
 
-// ChangePassphrase calls POST /api/v1/luks/change-passphrase.
+// ChangePassphrase changes a passphrase via the SDK client over REST.
 func (r *RESTAdapter) ChangePassphrase(ctx context.Context, req *lukssdk.ChangePassphraseRequest) (*lukssdk.ChangePassphraseResponse, error) {
-	resp := &lukssdk.ChangePassphraseResponse{}
-	if err := r.doJSON(ctx, http.MethodPost, "/api/v1/luks/change-passphrase", req, resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: "POST /api/v1/luks/change-passphrase", Err: err}
+	resp, err := r.client.ChangePassphrase(ctx, req)
+	if err != nil {
+		return nil, ErrCallFailed{Protocol: "REST", Method: "ChangePassphrase", Err: err}
 	}
 	return resp, nil
 }

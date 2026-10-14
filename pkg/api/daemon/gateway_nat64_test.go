@@ -232,28 +232,8 @@ func TestNAT64RESTAdapter_RefusesWhenUnwired(t *testing.T) {
 	assert.Contains(t, err.Error(), "not configured")
 }
 
-func TestNAT64MCPProviders_ReportTheSameSnapshot(t *testing.T) {
-	// Both providers route through one shared path so the two cannot
-	// report the translator differently.
-	backend := &fakeGatewayNAT64{health: nat64TestHealth()}
-
-	mcpProvider := &MCPServiceProvider{}
-	mcpProvider.SetGatewayNAT64(backend)
-	fromMCP, err := mcpProvider.GatewayNAT64Status(context.Background())
-	require.NoError(t, err)
-
-	platformProvider := &PlatformServiceProvider{}
-	platformProvider.SetGatewayNAT64(backend)
-	fromPlatform, err := platformProvider.GatewayNAT64Status(context.Background())
-	require.NoError(t, err)
-
-	assert.Equal(t, fromMCP, fromPlatform)
-}
-
 func TestNAT64MCPProviders_RefuseWhenUnwired(t *testing.T) {
 	_, err := (&MCPServiceProvider{}).GatewayNAT64Status(context.Background())
-	require.Error(t, err)
-	_, err = (&PlatformServiceProvider{}).GatewayNAT64Status(context.Background())
 	require.Error(t, err)
 }
 

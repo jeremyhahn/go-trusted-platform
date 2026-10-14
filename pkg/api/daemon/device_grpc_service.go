@@ -1141,9 +1141,8 @@ func containsSubstring(s, substr string) bool {
 
 // AttestDevice verifies a TPM quote submitted for a device.
 //
-// It delegates to verifyDeviceQuote — the same implementation
-// PlatformServiceProvider.DeviceAttest uses, which is what QUIC and the MCP
-// device_attest tool reach. Adding a transport must not add a second
+// It delegates to verifyDeviceQuote — the same implementation QUIC and the
+// MCP device_attest tool reach. Adding a transport must not add a second
 // verifier: two implementations of "did this device attest" is how two
 // transports come to disagree about a security verdict.
 //

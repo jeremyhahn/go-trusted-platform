@@ -218,6 +218,9 @@ type Daemon struct {
 	// backing the gRPC, REST, QUIC and MCP proxy transports.
 	proxyGRPCService   *grpccreds.ProxyGRPCService
 	overlayGRPCService *OverlayService
+	// overlayCtrl is the overlay controller every overlay transport answers
+	// from; nil when the overlay is disabled.
+	overlayCtrl OverlayControllerInterface
 	// overlayIPsec runs overlay IPsec between Start and Stop; its floor was
 	// installed by New. nil when overlay.ipsec is disabled.
 	overlayIPsec   *overlayIPsecRun
@@ -227,7 +230,9 @@ type Daemon struct {
 	// vpnControlPlane is the store behind vpnGRPCService, or nil when the
 	// daemon runs without a platform store.
 	vpnControlPlane *vpn.Service
-	healthRegistry  health.Registry
+	// appServices are the SDK-served Cache, Scheduler and Messaging services.
+	appServices    appServiceServers
+	healthRegistry health.Registry
 
 	// healthGRPCService serves grpc.health.v1.Health. Held so the daemon can
 	// flip it to NOT_SERVING on shutdown, draining load balancers before the
@@ -1003,6 +1008,19 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 	logger.Info("VPN gRPC service registered")
 
+	// Cache, Scheduler and Messaging are served by the composed go-quicbaas
+	// SDK; one instance of each backs every transport.
+	appServices := newAppServiceServers(config, logger)
+	for _, server := range []*grpc.Server{grpcServer, grpcUDSServer} {
+		if server == nil {
+			continue
+		}
+		platformv1.RegisterCacheServiceServer(server, appServices.cache)
+		platformv1.RegisterSchedulerServiceServer(server, appServices.scheduler)
+		platformv1.RegisterMessagingServiceServer(server, appServices.messaging)
+	}
+	logger.Info("Cache, Scheduler and Messaging gRPC services registered")
+
 	// Create Switch gRPC service - stub returning Unimplemented
 	// Full implementation wired when switch service is available
 	switchGRPCService := NewSwitchGRPCService(logger, nil)
@@ -1119,6 +1137,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		// REST, gRPC, MCP, and the Unix socket.
 		quicHandler.SetNTPService(ntpGRPCService)
 		quicHandler.SetVPNService(vpnGRPCService)
+		quicHandler.SetAppServices(appServices)
 		quicHandler.SetIDevIDService(idevidService)
 
 		// Set CA handler if available
@@ -1359,11 +1378,13 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		gatewayPerfService:           gatewayPerf,
 		proxyGRPCService:             proxyService,
 		overlayGRPCService:           overlayService,
+		overlayCtrl:                  overlayCtrl,
 		overlayIPsec:                 overlayIPsecSvc,
 		pxeGRPCService:               pxeGRPCService,
 		ntpGRPCService:               ntpGRPCService,
 		vpnGRPCService:               vpnGRPCService,
 		vpnControlPlane:              vpnControlPlane,
+		appServices:                  appServices,
 		healthRegistry:               healthRegistry,
 		verdictFeed:                  verdictFeed,
 		zoneSvc:                      zoneSvcInstance,
@@ -1436,6 +1457,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			daemon.concreteRestServer.SetNTPHandlers(ntpGRPCService, restGuard)
 		}
 		daemon.concreteRestServer.SetVPNHandlers(vpnGRPCService, restGuard)
+		daemon.concreteRestServer.SetAppServiceHandlers(appServices.restServers(), restGuard)
 		if computeService != nil {
 			daemon.concreteRestServer.SetComputeHandlers(computeService, restGuard)
 		}
@@ -1889,6 +1911,7 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		GatewaySnapshots:      d.gatewayGRPCService,
 		GatewayStatus:         d.gatewayGRPCService,
 		GatewayBGP:            d.gatewayGRPCService,
+		Overlay:               d.overlayCtrl,
 		ConfigDeliveryService: d.configDeliveryService,
 		ProxyService:          d.proxyGRPCService,
 	})
@@ -1909,6 +1932,10 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 	if d.vpnGRPCService != nil {
 		serviceProvider.SetVPNService(d.vpnGRPCService)
 	}
+
+	// Wire Cache, Scheduler and Messaging so their tools delegate to the
+	// same servers that back REST, gRPC, QUIC, and Unix.
+	serviceProvider.SetAppServiceServers(d.appServices.mcpServers())
 
 	// Wire the QuicBaaS KMS / Crypto / Secrets service layer into the MCP
 	// provider so the kms_* and secret_* tools delegate to the same

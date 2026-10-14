@@ -121,6 +121,10 @@ func buildGRPCMethodPermissions() map[string]string {
 		ntp    = "ntp"
 		vpn    = "vpn"
 
+		cacheRes     = "cache"
+		schedulerRes = "scheduler"
+		messagingRes = "messaging"
+
 		platform     = "platform"
 		attestation  = "attestation"
 		bmc          = "bmc"
@@ -247,6 +251,34 @@ func buildGRPCMethodPermissions() map[string]string {
 		"/platform.v1.VPNService/SetPosturePolicy":    scope(vpn, admin),
 		"/platform.v1.VPNService/DeletePosturePolicy": scope(vpn, admin),
 		"/platform.v1.VPNService/ListPosturePolicies": scope(vpn, admin),
+
+		// Cache, Scheduler, Messaging — the application services the
+		// composed go-quicbaas SDK serves (docs/sdk/api.md §3.5).
+		"/platform.v1.CacheService/GetStats":     scope(cacheRes, read),
+		"/platform.v1.CacheService/GetConfig":    scope(cacheRes, read),
+		"/platform.v1.CacheService/UpdateConfig": scope(cacheRes, write),
+		"/platform.v1.CacheService/Clear":        scope(cacheRes, del),
+
+		"/platform.v1.SchedulerService/CreateJob":     scope(schedulerRes, write),
+		"/platform.v1.SchedulerService/GetJob":        scope(schedulerRes, read),
+		"/platform.v1.SchedulerService/UpdateJob":     scope(schedulerRes, write),
+		"/platform.v1.SchedulerService/DeleteJob":     scope(schedulerRes, del),
+		"/platform.v1.SchedulerService/ListJobs":      scope(schedulerRes, read),
+		"/platform.v1.SchedulerService/TriggerJob":    scope(schedulerRes, write),
+		"/platform.v1.SchedulerService/PauseJob":      scope(schedulerRes, write),
+		"/platform.v1.SchedulerService/ResumeJob":     scope(schedulerRes, write),
+		"/platform.v1.SchedulerService/CancelJob":     scope(schedulerRes, write),
+		"/platform.v1.SchedulerService/GetJobHistory": scope(schedulerRes, read),
+		"/platform.v1.SchedulerService/GetStatus":     scope(schedulerRes, read),
+
+		"/platform.v1.MessagingService/CreateChannel":   scope(messagingRes, write),
+		"/platform.v1.MessagingService/DeleteChannel":   scope(messagingRes, del),
+		"/platform.v1.MessagingService/GetChannel":      scope(messagingRes, read),
+		"/platform.v1.MessagingService/ListChannels":    scope(messagingRes, read),
+		"/platform.v1.MessagingService/Publish":         scope(messagingRes, write),
+		"/platform.v1.MessagingService/GetStats":        scope(messagingRes, read),
+		"/platform.v1.MessagingService/GetDedupStats":   scope(messagingRes, read),
+		"/platform.v1.MessagingService/GetChannelStats": scope(messagingRes, read),
 
 		// ---------------------------------------------------------------------
 		// Proxy (ProxyService) — reverse-proxy route/pool source of truth

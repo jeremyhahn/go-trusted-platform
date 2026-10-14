@@ -69,6 +69,9 @@ func TestRootCommandHasSubcommands(t *testing.T) {
 		"config",
 		"context",
 		"completion",
+		"cache",
+		"scheduler",
+		"messaging",
 	}
 
 	commands := rootCmd.Commands()

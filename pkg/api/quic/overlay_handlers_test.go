@@ -18,6 +18,7 @@ package quic
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -51,15 +52,18 @@ type testOverlayService struct {
 	createVNIErr   error
 	deleteVNIErr   error
 	listTunnelsErr error
+	tunnelStatsErr error
 	listMACsErr    error
 	forgetMACErr   error
 
 	// Capture last request for validation
-	lastVTEPID  string
-	lastVNI     uint32
-	lastVNIOpts *VNICreateOptions
-	lastMACVNI  uint32
-	lastMAC     string
+	lastVTEPID     string
+	lastVNI        uint32
+	lastVNIOpts    *VNICreateOptions
+	lastMACVNI     uint32
+	lastMAC        string
+	lastRemoteVTEP string
+	lastTunnelVNI  uint32
 }
 
 func newTestOverlayService() *testOverlayService {
@@ -242,6 +246,15 @@ func (s *testOverlayService) ListTunnels(ctx context.Context) ([]*TunnelInfo, er
 		return nil, s.listTunnelsErr
 	}
 	return s.tunnelsResp, nil
+}
+
+func (s *testOverlayService) TunnelStats(ctx context.Context, remoteVTEP string, vni uint32) (*TunnelInfo, error) {
+	s.lastRemoteVTEP = remoteVTEP
+	s.lastTunnelVNI = vni
+	if s.tunnelStatsErr != nil {
+		return nil, s.tunnelStatsErr
+	}
+	return s.tunnelsResp[0], nil
 }
 
 func (s *testOverlayService) ListMACs(ctx context.Context, vni uint32) ([]*MACEntry, error) {
@@ -803,6 +816,42 @@ func TestOverlayHandleCreateVNI(t *testing.T) {
 		assert.NotNil(t, createResp.VNI)
 	})
 
+	t.Run("passes the VLAN to the service", func(t *testing.T) {
+		t.Parallel()
+		handler, service := createTestOverlayHandler()
+
+		payload, err := quicwire.EncodePayload(&OverlayCreateVNIRequest{VNI: 1000100, VLAN: 4094})
+		require.NoError(t, err)
+
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpOverlayCreateVNI,
+			Payload: payload,
+		})
+
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		require.NotNil(t, service.lastVNIOpts)
+		assert.Equal(t, uint32(4094), service.lastVNIOpts.VLAN)
+	})
+
+	for _, vlan := range []uint32{4095, 70000} {
+		t.Run(fmt.Sprintf("refuses VLAN %d as an invalid argument", vlan), func(t *testing.T) {
+			t.Parallel()
+			handler, service := createTestOverlayHandler()
+
+			payload, err := quicwire.EncodePayload(&OverlayCreateVNIRequest{VNI: 500, VLAN: vlan})
+			require.NoError(t, err)
+
+			resp := handler.HandleRequest(ctx, &quicwire.Request{
+				Opcode:  quicwire.OpOverlayCreateVNI,
+				Payload: payload,
+			})
+
+			assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+			assert.Contains(t, string(resp.Payload), ErrOverlayInvalidVLAN.Error())
+			assert.Zero(t, service.lastVNI, "an invalid VLAN must not reach the service")
+		})
+	}
+
 	t.Run("returns error when service unavailable", func(t *testing.T) {
 		t.Parallel()
 		handler := NewOverlayHandler(newOverlayTestLogger(), nil)
@@ -1153,6 +1202,102 @@ func TestOverlayHandleListTunnels(t *testing.T) {
 	})
 }
 
+func TestOverlayHandleTunnelStats(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	encode := func(t *testing.T, req *OverlayTunnelStatsRequest) []byte {
+		t.Helper()
+		payload, err := quicwire.EncodePayload(req)
+		require.NoError(t, err)
+		return payload
+	}
+
+	t.Run("returns the selected tunnel", func(t *testing.T) {
+		t.Parallel()
+		handler, service := createTestOverlayHandler()
+
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpOverlayTunnelStats,
+			Payload: encode(t, &OverlayTunnelStatsRequest{RemoteVTEP: "10.0.0.2", VNI: 100}),
+		})
+
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		var statsResp OverlayTunnelStatsResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &statsResp))
+		require.NotNil(t, statsResp.Tunnel)
+		assert.Equal(t, "10.0.0.2", statsResp.Tunnel.RemoteVTEP)
+		assert.Equal(t, int64(1024000), statsResp.Tunnel.TxBytes)
+		assert.Equal(t, int64(512000), statsResp.Tunnel.RxBytes)
+		assert.Equal(t, "10.0.0.2", service.lastRemoteVTEP)
+		assert.Equal(t, uint32(100), service.lastTunnelVNI)
+	})
+
+	t.Run("returns error when service unavailable", func(t *testing.T) {
+		t.Parallel()
+		handler := NewOverlayHandler(newOverlayTestLogger(), nil)
+
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpOverlayTunnelStats,
+			Payload: encode(t, &OverlayTunnelStatsRequest{RemoteVTEP: "10.0.0.2"}),
+		})
+
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
+	})
+
+	t.Run("returns error for invalid payload", func(t *testing.T) {
+		t.Parallel()
+		handler, _ := createTestOverlayHandler()
+
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpOverlayTunnelStats,
+			Payload: []byte("invalid payload"),
+		})
+
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
+	})
+
+	t.Run("requires a remote VTEP", func(t *testing.T) {
+		t.Parallel()
+		handler, service := createTestOverlayHandler()
+
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpOverlayTunnelStats,
+			Payload: encode(t, &OverlayTunnelStatsRequest{VNI: 100}),
+		})
+
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+		assert.Contains(t, string(resp.Payload), ErrOverlayMissingRemoteVTEP.Error())
+		assert.Empty(t, service.lastRemoteVTEP, "the service must not be called")
+	})
+
+	serviceErrors := []struct {
+		name   string
+		err    error
+		status byte
+	}{
+		{"tunnel not found", ErrOverlayTunnelNotFound, quicwire.StatusNotFound},
+		{"invalid remote VTEP", ErrOverlayInvalidRemoteVTEP, quicwire.StatusInvalidArgument},
+		{"controller not running", ErrOverlayServiceNotAvailable, quicwire.StatusUnavailable},
+		{"untyped failure", errors.New("backend failed"), quicwire.StatusInternalError},
+	}
+	for _, tc := range serviceErrors {
+		t.Run("maps "+tc.name, func(t *testing.T) {
+			t.Parallel()
+			handler, service := createTestOverlayHandler()
+			service.tunnelStatsErr = tc.err
+
+			resp := handler.HandleRequest(ctx, &quicwire.Request{
+				Opcode:  quicwire.OpOverlayTunnelStats,
+				Payload: encode(t, &OverlayTunnelStatsRequest{RemoteVTEP: "10.0.0.9"}),
+			})
+
+			assert.Equal(t, tc.status, resp.Status)
+			assert.Contains(t, string(resp.Payload), tc.err.Error())
+		})
+	}
+}
+
 // =============================================================================
 // Test: handleListMACs
 // =============================================================================
@@ -1298,6 +1443,150 @@ func TestOverlayHandleListMACs(t *testing.T) {
 
 		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
+}
+
+// TestOverlayListPaging proves every overlay list pages by offset and reports
+// the full total, so a client can fetch the entries past the first page.
+func TestOverlayListPaging(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	type page struct {
+		first string
+		count int32
+		total int32
+	}
+	tests := []struct {
+		name    string
+		opcode  byte
+		request func(offset int32) interface{}
+		decode  func(t *testing.T, payload []byte) page
+	}{
+		{
+			name:   "vteps",
+			opcode: quicwire.OpOverlayListVTEPs,
+			request: func(offset int32) interface{} {
+				return &OverlayListVTEPsRequest{Limit: 1, Offset: offset}
+			},
+			decode: func(t *testing.T, payload []byte) page {
+				var resp OverlayListVTEPsResponse
+				require.NoError(t, quicwire.DecodePayload(payload, &resp))
+				require.Len(t, resp.VTEPs, 1)
+				return page{first: resp.VTEPs[0].ID, count: resp.Count, total: resp.Total}
+			},
+		},
+		{
+			name:   "vnis",
+			opcode: quicwire.OpOverlayListVNIs,
+			request: func(offset int32) interface{} {
+				return &OverlayListVNIsRequest{Limit: 1, Offset: offset}
+			},
+			decode: func(t *testing.T, payload []byte) page {
+				var resp OverlayListVNIsResponse
+				require.NoError(t, quicwire.DecodePayload(payload, &resp))
+				require.Len(t, resp.VNIs, 1)
+				return page{first: resp.VNIs[0].Name, count: resp.Count, total: resp.Total}
+			},
+		},
+		{
+			name:   "tunnels",
+			opcode: quicwire.OpOverlayListTunns,
+			request: func(offset int32) interface{} {
+				return &OverlayListTunnelsRequest{Limit: 1, Offset: offset}
+			},
+			decode: func(t *testing.T, payload []byte) page {
+				var resp OverlayListTunnelsResponse
+				require.NoError(t, quicwire.DecodePayload(payload, &resp))
+				require.Len(t, resp.Tunnels, 1)
+				return page{first: resp.Tunnels[0].ID, count: resp.Count, total: resp.Total}
+			},
+		},
+		{
+			name:   "macs",
+			opcode: quicwire.OpOverlayListMACs,
+			request: func(offset int32) interface{} {
+				return &OverlayListMACsRequest{VNI: 100, Limit: 1, Offset: offset}
+			},
+			decode: func(t *testing.T, payload []byte) page {
+				var resp OverlayListMACsResponse
+				require.NoError(t, quicwire.DecodePayload(payload, &resp))
+				require.Len(t, resp.MACs, 1)
+				return page{first: resp.MACs[0].MAC, count: resp.Count, total: resp.Total}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+" offset returns the second page", func(t *testing.T) {
+			t.Parallel()
+			handler, _ := createTestOverlayHandler()
+
+			first := handler.HandleRequest(ctx, overlayListRequest(t, tt.opcode, tt.request(0)))
+			require.Equal(t, quicwire.StatusOK, first.Status)
+			second := handler.HandleRequest(ctx, overlayListRequest(t, tt.opcode, tt.request(1)))
+			require.Equal(t, quicwire.StatusOK, second.Status)
+
+			firstPage := tt.decode(t, first.Payload)
+			secondPage := tt.decode(t, second.Payload)
+			assert.NotEqual(t, firstPage.first, secondPage.first)
+			assert.Equal(t, int32(1), secondPage.count)
+			assert.Equal(t, int32(2), secondPage.total)
+		})
+
+		t.Run(tt.name+" negative offset is an invalid request", func(t *testing.T) {
+			t.Parallel()
+			handler, _ := createTestOverlayHandler()
+
+			resp := handler.HandleRequest(ctx, overlayListRequest(t, tt.opcode, tt.request(-1)))
+
+			assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
+		})
+	}
+}
+
+// TestOverlayListTunnelsFiltersByVNI proves a non-zero VNI narrows the tunnel
+// list and its total, as gRPC ListTunnels does.
+func TestOverlayListTunnelsFiltersByVNI(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("returns only the tunnels carrying the VNI", func(t *testing.T) {
+		t.Parallel()
+		handler, service := createTestOverlayHandler()
+		service.tunnelsResp[1].VNI = 200
+
+		resp := handler.HandleRequest(ctx, overlayListRequest(t, quicwire.OpOverlayListTunns,
+			&OverlayListTunnelsRequest{VNI: 200}))
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+
+		var listResp OverlayListTunnelsResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &listResp))
+		require.Len(t, listResp.Tunnels, 1)
+		assert.Equal(t, "tunnel-2", listResp.Tunnels[0].ID)
+		assert.Equal(t, int32(1), listResp.Total)
+	})
+
+	t.Run("a VNI no tunnel carries returns an empty list", func(t *testing.T) {
+		t.Parallel()
+		handler, _ := createTestOverlayHandler()
+
+		resp := handler.HandleRequest(ctx, overlayListRequest(t, quicwire.OpOverlayListTunns,
+			&OverlayListTunnelsRequest{VNI: 999}))
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+
+		var listResp OverlayListTunnelsResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &listResp))
+		assert.Empty(t, listResp.Tunnels)
+		assert.Equal(t, int32(0), listResp.Total)
+	})
+}
+
+// overlayListRequest encodes payload into a request for opcode.
+func overlayListRequest(t *testing.T, opcode byte, payload interface{}) *quicwire.Request {
+	t.Helper()
+	encoded, err := quicwire.EncodePayload(payload)
+	require.NoError(t, err)
+	return &quicwire.Request{Opcode: opcode, Payload: encoded}
 }
 
 // =============================================================================

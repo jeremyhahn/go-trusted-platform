@@ -300,26 +300,3 @@ func TestMCPServiceProviderGatewayPerfUnavailable(t *testing.T) {
 		t.Fatal("expected ErrServiceNotAvailable")
 	}
 }
-
-func TestPlatformServiceProviderGatewayPerf(t *testing.T) {
-	provider := &PlatformServiceProvider{}
-	provider.SetGatewayPerf(&fakeGatewayPerf{})
-
-	if _, err := provider.GatewayPerfFlows(context.Background(), "", 5, false); err != nil {
-		t.Fatalf("GatewayPerfFlows: %v", err)
-	}
-	if _, err := provider.GatewayPerfDatapath(context.Background(), ""); err != nil {
-		t.Fatalf("GatewayPerfDatapath: %v", err)
-	}
-	if _, err := provider.GatewayPerfConntrack(context.Background(), 3); err != nil {
-		t.Fatalf("GatewayPerfConntrack: %v", err)
-	}
-}
-
-func TestPlatformServiceProviderGatewayPerfUnavailable(t *testing.T) {
-	provider := &PlatformServiceProvider{}
-
-	if _, err := provider.GatewayPerfFlows(context.Background(), "", 5, false); err == nil {
-		t.Fatal("expected ErrServiceNotAvailable")
-	}
-}

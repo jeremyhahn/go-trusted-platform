@@ -41,8 +41,9 @@ func TestPhase35MethodsAreMapped(t *testing.T) {
 		{platformv1.CeremonyService_ServiceDesc, quicwire.OpCeremonyCategory},
 		{platformv1.PIVService_ServiceDesc, quicwire.OpPIVCategory},
 		{platformv1.FIDO2Service_ServiceDesc, quicwire.OpFIDO2Category},
+		{platformv1.LUKSService_ServiceDesc, quicwire.OpLUKSCategory},
 	}
-	wantMethods := map[string]int{"CeremonyService": 7, "PIVService": 8, "FIDO2Service": 5}
+	wantMethods := map[string]int{"CeremonyService": 7, "PIVService": 8, "FIDO2Service": 5, "LUKSService": 10}
 
 	for _, svc := range services {
 		short := svc.desc.ServiceName[len("platform.v1."):]
@@ -67,6 +68,7 @@ func TestPhase35SubOpcodesAreUniquePerCategory(t *testing.T) {
 	seen := map[[2]byte]string{}
 	for _, desc := range []grpc.ServiceDesc{
 		platformv1.CeremonyService_ServiceDesc, platformv1.PIVService_ServiceDesc, platformv1.FIDO2Service_ServiceDesc,
+		platformv1.LUKSService_ServiceDesc,
 	} {
 		for _, m := range desc.Methods {
 			method := "/" + desc.ServiceName + "/" + m.MethodName
@@ -367,9 +369,9 @@ func phase35Cases() []phase35Case {
 // Invoke and asserts the opcode, the sub-opcode, the wire struct the daemon
 // would decode, and the pb reply built from the daemon's response.
 func TestPhase35InvokeTranslatesBothDirections(t *testing.T) {
-	cases := phase35Cases()
-	if len(cases) != 20 {
-		t.Fatalf("table covers %d methods, want all 20", len(cases))
+	cases := append(phase35Cases(), luksCases()...)
+	if len(cases) != 30 {
+		t.Fatalf("table covers %d methods, want all 30", len(cases))
 	}
 	for _, tc := range cases {
 		t.Run(tc.method, func(t *testing.T) {
@@ -422,6 +424,14 @@ func TestPhase35InvokeRejectsBadMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
+	unknownKeyslot, err := quicwire.EncodePayload(&quicwire.LUKSListSlotsResp{Slots: []quicwire.LUKSKeyslot{{Slot: 1, Type: "smartcard"}}})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	unknownInfoKeyslot, err := quicwire.EncodePayload(&quicwire.LUKSInfoResp{Slots: []quicwire.LUKSKeyslot{{Slot: 1, Type: "smartcard"}}})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
 
 	tests := []struct {
 		name     string
@@ -440,6 +450,9 @@ func TestPhase35InvokeRejectsBadMessages(t *testing.T) {
 		{"reply of wrong type", platformv1.PIVService_Reset_FullMethodName, &platformv1.PIVResetRequest{}, &platformv1.PIVSignResponse{}, []byte{0x80}, true},
 		{"unknown slot algorithm in response", platformv1.PIVService_ListSlots_FullMethodName, &platformv1.PIVListSlotsRequest{}, &platformv1.PIVListSlotsResponse{}, unknownSlot, true},
 		{"unknown ceremony state in response", platformv1.CeremonyService_Status_FullMethodName, &platformv1.CeremonyStatusRequest{}, &platformv1.CeremonyStatusResponse{}, unknownState, true},
+		{"luks request of wrong type", platformv1.LUKSService_EnrollTPM_FullMethodName, &platformv1.LUKSEnrollFIDO2Request{}, &platformv1.LUKSEnrollTPMResponse{}, nil, false},
+		{"unknown keyslot type in list slots response", platformv1.LUKSService_ListSlots_FullMethodName, &platformv1.LUKSListSlotsRequest{}, &platformv1.LUKSListSlotsResponse{}, unknownKeyslot, true},
+		{"unknown keyslot type in info response", platformv1.LUKSService_Info_FullMethodName, &platformv1.LUKSInfoRequest{}, &platformv1.LUKSInfoResponse{}, unknownInfoKeyslot, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

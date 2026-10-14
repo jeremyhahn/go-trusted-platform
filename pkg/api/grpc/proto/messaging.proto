@@ -1,0 +1,143 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platformv1";
+
+// MessagingService manages the channels of the composed go-quicbaas push
+// service and publishes to them (docs/sdk/api.md §3.5). platformd serves it
+// through the SDK's Messaging group; a daemon whose SDK does not serve the
+// group answers every call Unavailable.
+//
+// Subscribing is not part of this service: a subscription delivers to the
+// SDK session that opened it, so a subscriber holds its own SDK client.
+service MessagingService {
+  // CreateChannel creates a channel. Requires messaging:write.
+  rpc CreateChannel(CreateMessagingChannelRequest) returns (CreateMessagingChannelResponse);
+
+  // DeleteChannel deletes a channel. Requires messaging:delete.
+  rpc DeleteChannel(DeleteMessagingChannelRequest) returns (DeleteMessagingChannelResponse);
+
+  // GetChannel returns one channel. Requires messaging:read.
+  rpc GetChannel(GetMessagingChannelRequest) returns (GetMessagingChannelResponse);
+
+  // ListChannels lists every channel. Requires messaging:read.
+  rpc ListChannels(ListMessagingChannelsRequest) returns (ListMessagingChannelsResponse);
+
+  // Publish publishes one message to a channel. Requires messaging:write.
+  rpc Publish(PublishMessageRequest) returns (PublishMessageResponse);
+
+  // GetStats returns the push service counters. Requires messaging:read.
+  rpc GetStats(GetMessagingStatsRequest) returns (GetMessagingStatsResponse);
+
+  // GetDedupStats returns the deduplication counters. Requires
+  // messaging:read.
+  rpc GetDedupStats(GetMessagingDedupStatsRequest) returns (GetMessagingDedupStatsResponse);
+
+  // GetChannelStats returns the counters of one channel. Requires
+  // messaging:read.
+  rpc GetChannelStats(GetMessagingChannelStatsRequest) returns (GetMessagingChannelStatsResponse);
+}
+
+// MessagingChannel is a push channel.
+message MessagingChannel {
+  string name = 1;
+
+  // codec is the default codec of the channel's messages: json, msgpack or
+  // protobuf.
+  string codec = 2;
+  int64 created_at_unix_ms = 3;
+  int64 subscribers = 4;
+  bool persistent = 5;
+
+  // max_history is how many messages are kept for replay. Zero keeps none.
+  int32 max_history = 6;
+  int32 buffer_size = 7;
+  int64 ttl_ms = 8;
+}
+
+message CreateMessagingChannelRequest {
+  string name = 1;
+  string codec = 2;
+  bool persistent = 3;
+  int32 max_history = 4;
+  int32 buffer_size = 5;
+  int32 max_subscribers = 6;
+  int64 ttl_ms = 7;
+}
+
+message CreateMessagingChannelResponse {
+  MessagingChannel channel = 1;
+}
+
+message DeleteMessagingChannelRequest {
+  string name = 1;
+}
+
+message DeleteMessagingChannelResponse {}
+
+message GetMessagingChannelRequest {
+  string name = 1;
+}
+
+message GetMessagingChannelResponse {
+  MessagingChannel channel = 1;
+}
+
+message ListMessagingChannelsRequest {}
+
+message ListMessagingChannelsResponse {
+  repeated MessagingChannel channels = 1;
+}
+
+message PublishMessageRequest {
+  string channel = 1;
+  bytes payload = 2;
+
+  // message_id identifies the message. Empty lets the service assign one.
+  string message_id = 3;
+
+  // dedup_key collapses repeats of one message within the dedup window.
+  string dedup_key = 4;
+
+  // codec overrides the channel's default codec for this message.
+  string codec = 5;
+  map<string, string> metadata = 6;
+}
+
+message PublishMessageResponse {}
+
+message GetMessagingStatsRequest {}
+
+message GetMessagingStatsResponse {
+  int64 total_channels = 1;
+  int64 total_subscriptions = 2;
+  int64 messages_published = 3;
+  int64 messages_delivered = 4;
+  int64 dedup_hits = 5;
+  int64 dropped_messages = 6;
+
+  // buffer_utilization is the buffer usage, 0.0 to 1.0.
+  double buffer_utilization = 7;
+}
+
+message GetMessagingDedupStatsRequest {}
+
+message GetMessagingDedupStatsResponse {
+  int64 total_checks = 1;
+  int64 duplicates_detected = 2;
+  int64 unique_messages = 3;
+  int64 cache_size = 4;
+  int64 window_ms = 5;
+}
+
+message GetMessagingChannelStatsRequest {
+  string channel = 1;
+}
+
+message GetMessagingChannelStatsResponse {
+  string name = 1;
+  int64 subscribers = 2;
+  int64 messages_published = 3;
+  int32 messages_in_history = 4;
+}

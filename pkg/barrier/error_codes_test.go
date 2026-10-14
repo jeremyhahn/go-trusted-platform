@@ -152,3 +152,22 @@ func TestCode_UnclassifiedIsInternal(t *testing.T) {
 		})
 	}
 }
+
+func TestSDKCode(t *testing.T) {
+	code, ok := SDKCode(fmt.Errorf("get job: %w", sdkerrors.NewNotFound("GetJob", "no job 7")))
+	if !ok || code != codes.NotFound {
+		t.Errorf("SDKCode(wrapped NotFound) = %v, %v; want NotFound, true", code, ok)
+	}
+
+	unclassified := map[string]error{
+		"no sdk error":    errors.New("disk on fire"),
+		"grpc status":     status.Error(codes.NotFound, "gone"),
+		"unlisted code":   &sdkerrors.QBError{Code: sdkerrors.ErrorCode(-1), Message: "?"},
+		"nil error chain": nil,
+	}
+	for name, err := range unclassified {
+		if code, ok := SDKCode(err); ok {
+			t.Errorf("%s: SDKCode = %v, true; want false", name, code)
+		}
+	}
+}

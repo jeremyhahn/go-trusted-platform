@@ -231,6 +231,7 @@ func (s *Service) sweepLoop(ctx context.Context, done chan struct{}) {
 
 // Sweep revokes every lease past its expiry and forgets expired nonces. It
 // is exported so a caller with its own schedule (and tests) can drive it.
+// A store with pending deletions (PendingDeleteStore) retries them first.
 func (s *Service) Sweep(ctx context.Context) {
 	now := s.deps.Clock.Now()
 	s.mu.Lock()
@@ -241,6 +242,11 @@ func (s *Service) Sweep(ctx context.Context) {
 	}
 	s.mu.Unlock()
 
+	if pending, ok := s.deps.Leases.(PendingDeleteStore); ok {
+		if err := pending.RetryPendingDeletes(ctx); err != nil {
+			s.logger.Warn("vpn lease sweep: a pending lease deletion failed again", slog.Any("error", err))
+		}
+	}
 	leases, err := s.deps.Leases.List(ctx)
 	if err != nil {
 		s.logger.Warn("vpn lease sweep: listing leases failed", slog.Any("error", err))

@@ -33,15 +33,11 @@ type bootOverMCP interface {
 	DeviceBootDelivery(ctx context.Context, evidence []byte) (interface{}, error)
 }
 
-// MCP carries no TLS connection, so both providers refuse both boot tools
+// MCP carries no TLS connection, so the MCP provider refuses both boot tools
 // with the typed channel refusal, whatever the request holds.
 func TestMCPProviders_DeviceBootIsRefusedWithoutAChannel(t *testing.T) {
 	providers := map[string]bootOverMCP{
 		"MCPServiceProvider": NewMCPServiceProvider(&MCPServiceProviderConfig{
-			DeviceService: newMockDeviceService(),
-			Logger:        slog.Default(),
-		}),
-		"PlatformServiceProvider": NewPlatformServiceProvider(&PlatformServiceProviderConfig{
 			DeviceService: newMockDeviceService(),
 			Logger:        slog.Default(),
 		}),

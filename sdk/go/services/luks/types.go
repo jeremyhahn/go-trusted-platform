@@ -13,9 +13,6 @@
 
 // Package luks provides SDK types and a client for the platform LUKS2 volume
 // management service.
-//
-// The Phase 3 implementation is a scaffolding-only SDK: all client methods
-// return ErrNotYetWired until the server-side LUKS handlers land in Phase 3.5.
 package luks
 
 // KeyType enumerates the keyslot backends the service supports.

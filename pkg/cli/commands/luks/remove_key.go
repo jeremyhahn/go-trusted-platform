@@ -71,7 +71,10 @@ func runRemoveKey(commonFlags *cli.CommonFlags, f *removeKeyFlags) error {
 	}
 	defer base.Close()
 
-	client := lukssvc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.RemoveKey(base.Context(), &lukssvc.RemoveKeyRequest{
 		Device: device,
 		Slot:   f.slot,

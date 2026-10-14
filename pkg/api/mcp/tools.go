@@ -88,6 +88,9 @@ func (r *ToolRegistry) registerTools() {
 	// Register VPN control-plane tools
 	r.registerVPNTools()
 
+	// Register the Cache, Scheduler and Messaging application service tools
+	r.registerAppServiceTools()
+
 	// Register Health tools
 	r.registerHealthTools()
 
@@ -1486,6 +1489,8 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeOverlayVNIDelete(ctx, args)
 	case "overlay_tunnel_list":
 		return r.executeOverlayTunnelList(ctx, args)
+	case "overlay_tunnel_stats":
+		return r.executeOverlayTunnelStats(ctx, args)
 	case "overlay_mac_list":
 		return r.executeOverlayMACList(ctx, args)
 	case "overlay_mac_forget":
@@ -1869,6 +1874,11 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		// VPN tool dispatch (vpn_*) uses a map-based dispatcher for O(1)
 		// routing per project conventions.
 		if result, handled, err := r.dispatchVPNTool(ctx, name, args); handled {
+			return result, err
+		}
+		// Application service tool dispatch (cache_*, scheduler_*,
+		// messaging_*) uses a map-based dispatcher for O(1) routing.
+		if result, handled, err := r.dispatchAppServiceTool(ctx, name, args); handled {
 			return result, err
 		}
 		// BMC tool dispatch (platform_bmc_*) uses a map-based dispatcher

@@ -52,6 +52,9 @@ var quicSubOpcodePrefixes = map[string]byte{
 	"BMCSub":           quicwire.OpBMCCategory,
 	"KMSSub":           quicwire.OpKMSExtendedCategory,
 	"SecretsSub":       quicwire.OpSecretsCategory,
+	"CacheSub":         quicwire.OpCacheCategory,
+	"SchedulerSub":     quicwire.OpSchedulerCategory,
+	"MessagingSub":     quicwire.OpMessagingCategory,
 }
 
 // assertOperationClassified fails unless the operation is in the catalog or
@@ -153,6 +156,29 @@ func TestQUICAuthzContract_ScopesMatchGRPC(t *testing.T) {
 		{"/platform.v1.ProxyService/ListRoutes", quicwire.OpGatewayCategory, []byte{quicwire.ProxySubRouteList}},
 		{"/platform.v1.GatewayService/RemoveVIP", quicwire.OpGatewayCategory, []byte{quicwire.OpGatewayLBRemoveVIP}},
 		{"/platform.v1.GatewayService/GetPerfFlows", quicwire.OpGatewayCategory, []byte{quicwire.OpGatewayPerfFlows}},
+		{"/platform.v1.CacheService/GetStats", quicwire.OpCacheCategory, []byte{quicwire.CacheSubGetStats}},
+		{"/platform.v1.CacheService/Clear", quicwire.OpCacheCategory, []byte{quicwire.CacheSubClear}},
+		{"/platform.v1.CacheService/GetConfig", quicwire.OpCacheCategory, []byte{quicwire.CacheSubGetConfig}},
+		{"/platform.v1.CacheService/UpdateConfig", quicwire.OpCacheCategory, []byte{quicwire.CacheSubUpdateConfig}},
+		{"/platform.v1.SchedulerService/CreateJob", quicwire.OpSchedulerCategory, []byte{quicwire.SchedulerSubCreateJob}},
+		{"/platform.v1.SchedulerService/GetJob", quicwire.OpSchedulerCategory, []byte{quicwire.SchedulerSubGetJob}},
+		{"/platform.v1.SchedulerService/UpdateJob", quicwire.OpSchedulerCategory, []byte{quicwire.SchedulerSubUpdateJob}},
+		{"/platform.v1.SchedulerService/DeleteJob", quicwire.OpSchedulerCategory, []byte{quicwire.SchedulerSubDeleteJob}},
+		{"/platform.v1.SchedulerService/ListJobs", quicwire.OpSchedulerCategory, []byte{quicwire.SchedulerSubListJobs}},
+		{"/platform.v1.SchedulerService/TriggerJob", quicwire.OpSchedulerCategory, []byte{quicwire.SchedulerSubTriggerJob}},
+		{"/platform.v1.SchedulerService/PauseJob", quicwire.OpSchedulerCategory, []byte{quicwire.SchedulerSubPauseJob}},
+		{"/platform.v1.SchedulerService/ResumeJob", quicwire.OpSchedulerCategory, []byte{quicwire.SchedulerSubResumeJob}},
+		{"/platform.v1.SchedulerService/CancelJob", quicwire.OpSchedulerCategory, []byte{quicwire.SchedulerSubCancelJob}},
+		{"/platform.v1.SchedulerService/GetJobHistory", quicwire.OpSchedulerCategory, []byte{quicwire.SchedulerSubGetJobHistory}},
+		{"/platform.v1.SchedulerService/GetStatus", quicwire.OpSchedulerCategory, []byte{quicwire.SchedulerSubGetStatus}},
+		{"/platform.v1.MessagingService/CreateChannel", quicwire.OpMessagingCategory, []byte{quicwire.MessagingSubCreateChannel}},
+		{"/platform.v1.MessagingService/DeleteChannel", quicwire.OpMessagingCategory, []byte{quicwire.MessagingSubDeleteChannel}},
+		{"/platform.v1.MessagingService/GetChannel", quicwire.OpMessagingCategory, []byte{quicwire.MessagingSubGetChannel}},
+		{"/platform.v1.MessagingService/ListChannels", quicwire.OpMessagingCategory, []byte{quicwire.MessagingSubListChannels}},
+		{"/platform.v1.MessagingService/Publish", quicwire.OpMessagingCategory, []byte{quicwire.MessagingSubPublish}},
+		{"/platform.v1.MessagingService/GetStats", quicwire.OpMessagingCategory, []byte{quicwire.MessagingSubGetStats}},
+		{"/platform.v1.MessagingService/GetDedupStats", quicwire.OpMessagingCategory, []byte{quicwire.MessagingSubGetDedupStats}},
+		{"/platform.v1.MessagingService/GetChannelStats", quicwire.OpMessagingCategory, []byte{quicwire.MessagingSubGetChannelStats}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.grpcMethod, func(t *testing.T) {

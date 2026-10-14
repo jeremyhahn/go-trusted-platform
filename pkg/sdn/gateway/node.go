@@ -86,9 +86,14 @@ type Gateway struct {
 	// desired-config section received; vpn is the running VPN backend. The
 	// backend applies desiredVPN when it starts, so a section that arrives
 	// before or while the service comes up is not lost (vpn_service.go).
-	vpnMu      sync.Mutex
-	desiredVPN *gwstate.DesiredVPN
-	vpn        *vpnBackend
+	// vpnLeaseControl, when set, is the control plane the VPN's leases are
+	// projected from and written through to, and vpnRevocations the journal
+	// of the revocations it has not yet taken (vpn_leases.go).
+	vpnMu           sync.Mutex
+	desiredVPN      *gwstate.DesiredVPN
+	vpn             *vpnBackend
+	vpnLeaseControl VPNLeaseControl
+	vpnRevocations  *RevocationJournal
 }
 
 // NewGateway creates a new gateway with the given configuration.

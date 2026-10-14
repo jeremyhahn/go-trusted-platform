@@ -33,10 +33,8 @@ import (
 // each wired to svc, so one test proves both reach the shared SDNService.
 func mcpPortStateSetters(svc *SDNService) map[string]func(ctx context.Context, bridge, port, state string, rates mcp.PortRates) (interface{}, error) {
 	mcpProvider := NewMCPServiceProvider(&MCPServiceProviderConfig{SDNService: svc})
-	platformProvider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{SDNService: svc})
 	return map[string]func(ctx context.Context, bridge, port, state string, rates mcp.PortRates) (interface{}, error){
-		"MCPServiceProvider":      mcpProvider.SDNSetPortState,
-		"PlatformServiceProvider": platformProvider.SDNSetPortState,
+		"MCPServiceProvider": mcpProvider.SDNSetPortState,
 	}
 }
 

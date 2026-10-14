@@ -28,7 +28,8 @@ package quicwire
 // dispatcher lives at pkg/api/daemon/quic_ntp.go::handleNTPCategory.
 //
 // 0x51 is OpIAMCategory (iam_opcodes.go), 0x52 is OpVPNCategory
-// (vpn_opcodes.go); 0x53-0x55 remain reserved.
+// (vpn_opcodes.go), and 0x53-0x55 are the cache, scheduler and messaging
+// categories (appservice_opcodes.go).
 const (
 	// OpNTPCategory multiplexes the time-synchronization sub-operations.
 	OpNTPCategory byte = 0x50

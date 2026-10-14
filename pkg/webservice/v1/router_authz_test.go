@@ -39,6 +39,7 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
@@ -304,6 +305,13 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.eabService = &stubEABServer{}
 	registry.ntpService = &stubNTPServer{}
 	registry.vpnService = &stubVPNServer{}
+	if registry.appServices == (restapi.AppServiceServers{}) {
+		registry.appServices = restapi.AppServiceServers{
+			Cache:     &countingCacheServer{},
+			Scheduler: &countingSchedulerServer{},
+			Messaging: &countingMessagingServer{},
+		}
+	}
 	registry.overlayService = &stubOverlayServer{}
 	registry.switchService = &stubSwitchService{}
 	registry.sdnService = &stubSDNServer{}

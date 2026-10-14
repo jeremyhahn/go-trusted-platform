@@ -93,7 +93,7 @@ type admissionListener struct {
 	mu       sync.Mutex
 	admitted *gwvpn.AdmissionRequestWire
 	revoked  []string
-	renewals []gwvpn.AdmissionRequestWire
+	renewals []gwvpn.RenewalRequestWire
 }
 
 func (l *admissionListener) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -103,7 +103,7 @@ func (l *admissionListener) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, gwvpn.ChallengeWire{Nonce: []byte("nonce-1"), DataPlanes: []gwvpn.DataPlaneKind{gwvpn.DataPlaneMASQUE}})
 	case r.Method == http.MethodPost && r.URL.Path == gwvpn.PathAdmissions:
 		var req gwvpn.AdmissionRequestWire
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := gwvpn.DecodeRequest(r.Body, &req); err != nil {
 			writeJSON(w, http.StatusBadRequest, gwvpn.RefusalWire{Reason: gwvpn.RefusalInvalidRequest})
 			return
 		}
@@ -125,8 +125,8 @@ func (l *admissionListener) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodPost && r.URL.Path == gwvpn.LeaseRenewPath("lease-1"):
-		var req gwvpn.AdmissionRequestWire
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var req gwvpn.RenewalRequestWire
+		if err := gwvpn.DecodeRequest(r.Body, &req); err != nil {
 			writeJSON(w, http.StatusBadRequest, gwvpn.RefusalWire{Reason: gwvpn.RefusalInvalidRequest})
 			return
 		}
@@ -269,12 +269,13 @@ func clientCertificate(t *testing.T) tls.Certificate {
 func TestConnect_AdmitsAndRecordsTheLease(t *testing.T) {
 	h := newClientHarness(t)
 
-	err := execute(t, "connect", "--gateway", h.gateway, "--device-id", "laptop-1", "--ca-file", h.caFile,
+	err := execute(t, "connect", "--gateway", h.gateway, "--tenant", "acme", "--device-id", "laptop-1", "--ca-file", h.caFile,
 		"--zones", "management,ops")
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, cli.ExitCode(err))
 	require.NotNil(t, h.listener.admitted)
+	assert.Equal(t, "acme", h.listener.admitted.TenantID)
 	assert.Equal(t, "laptop-1", h.listener.admitted.DeviceID)
 	assert.Equal(t, []string{"management", "ops"}, h.listener.admitted.Zones)
 	assert.Equal(t, gwvpn.DataPlaneMASQUE, h.listener.admitted.DataPlane)
@@ -311,7 +312,7 @@ func TestConnect_RefusalsMapToTheirExitCodes(t *testing.T) {
 			h.listener.refuseStatus = tt.status
 			h.listener.refusal = tt.refusal
 
-			err := execute(t, "connect", "--gateway", h.gateway, "--device-id", "laptop-1", "--ca-file", h.caFile)
+			err := execute(t, "connect", "--gateway", h.gateway, "--tenant", "acme", "--device-id", "laptop-1", "--ca-file", h.caFile)
 
 			require.Error(t, err)
 			assert.Equal(t, tt.want, cli.ExitCode(err))
@@ -350,7 +351,7 @@ func TestConnect_GenericFailuresExitOne(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := execute(t, append([]string{"connect", "--gateway", h.gateway, "--device-id", "laptop-1"}, tt.args...)...)
+			err := execute(t, append([]string{"connect", "--gateway", h.gateway, "--tenant", "acme", "--device-id", "laptop-1"}, tt.args...)...)
 
 			require.Error(t, err)
 			assert.Equal(t, cli.ExitGenericFailure, cli.ExitCode(err))
@@ -372,17 +373,28 @@ func TestConnect_RequiresGateway(t *testing.T) {
 func TestConnect_RequiresDeviceID(t *testing.T) {
 	h := newClientHarness(t)
 
-	err := execute(t, "connect", "--gateway", h.gateway)
+	err := execute(t, "connect", "--gateway", h.gateway, "--tenant", "acme")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "device-id")
 	assert.Empty(t, h.opened, "the TPM is not opened")
 }
 
+func TestConnect_RequiresTenant(t *testing.T) {
+	h := newClientHarness(t)
+
+	err := execute(t, "connect", "--gateway", h.gateway, "--device-id", "laptop-1")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tenant")
+	assert.Empty(t, h.opened, "the TPM is not opened")
+	assert.Nil(t, h.listener.admitted, "nothing reaches the gateway")
+}
+
 func TestConnect_PresentsTheHostDeviceAndClosesIt(t *testing.T) {
 	h := newClientHarness(t)
 
-	err := execute(t, "connect", "--gateway", h.gateway, "--device-id", "laptop-7",
+	err := execute(t, "connect", "--gateway", h.gateway, "--tenant", "acme", "--device-id", "laptop-7",
 		"--idevid-cert", "/etc/idevid.pem", "--ca-file", h.caFile)
 
 	require.NoError(t, err)
@@ -395,7 +407,7 @@ func TestConnect_WithoutATPMExitsOne(t *testing.T) {
 	h := newClientHarness(t)
 	h.openErr = &agent.ErrNoDevice{Reason: "no platform configuration found"}
 
-	err := execute(t, "connect", "--gateway", h.gateway, "--device-id", "laptop-1", "--ca-file", h.caFile)
+	err := execute(t, "connect", "--gateway", h.gateway, "--tenant", "acme", "--device-id", "laptop-1", "--ca-file", h.caFile)
 
 	var none *agent.ErrNoDevice
 	require.ErrorAs(t, err, &none)
@@ -407,7 +419,7 @@ func TestConnect_ACloseFailureIsReported(t *testing.T) {
 	h := newClientHarness(t)
 	h.device.closeErr = &agent.ErrDeviceClose{Cause: errors.New("transport closed")}
 
-	err := execute(t, "connect", "--gateway", h.gateway, "--device-id", "laptop-1", "--ca-file", h.caFile)
+	err := execute(t, "connect", "--gateway", h.gateway, "--tenant", "acme", "--device-id", "laptop-1", "--ca-file", h.caFile)
 
 	assert.ErrorIs(t, err, h.device.closeErr)
 	assert.Equal(t, cli.ExitGenericFailure, cli.ExitCode(err))
@@ -498,12 +510,11 @@ func TestConnect_ForegroundRenewsUntilInterruptedThenDisconnects(t *testing.T) {
 	h := newClientHarness(t)
 	h.foreground()
 
-	err := execute(t, "connect", "--gateway", h.gateway, "--device-id", "laptop-1", "--ca-file", h.caFile, "--foreground")
+	err := execute(t, "connect", "--gateway", h.gateway, "--tenant", "acme", "--device-id", "laptop-1", "--ca-file", h.caFile, "--foreground")
 
 	require.NoError(t, err)
 	require.Len(t, h.listener.renewals, 1)
 	renewal := h.listener.renewals[0]
-	assert.Equal(t, "laptop-1", renewal.DeviceID)
 	assert.Equal(t, []byte("nonce-1"), renewal.Nonce)
 	assert.NotNil(t, renewal.Attestation, "a fresh quote")
 	assert.NotNil(t, renewal.Posture, "a fresh posture report")
@@ -518,7 +529,7 @@ func TestConnect_ForegroundRefusalTearsDownAndExitsWithItsCode(t *testing.T) {
 	h.listener.renewStatus = http.StatusForbidden
 	h.listener.renewRefusal = gwvpn.RefusalWire{Reason: gwvpn.RefusalPostureViolation, Rules: []string{"fde"}}
 
-	err := execute(t, "connect", "--gateway", h.gateway, "--device-id", "laptop-1", "--ca-file", h.caFile, "--foreground")
+	err := execute(t, "connect", "--gateway", h.gateway, "--tenant", "acme", "--device-id", "laptop-1", "--ca-file", h.caFile, "--foreground")
 
 	require.Error(t, err)
 	assert.Equal(t, agent.ExitPostureViolation, cli.ExitCode(err))
@@ -537,7 +548,7 @@ func TestRenew_RenewsAndRecordsTheLease(t *testing.T) {
 	assert.Equal(t, []agent.HostDeviceOptions{{CertFile: "/etc/idevid.pem"}}, h.opened)
 	assert.True(t, h.device.closed)
 	require.Len(t, h.listener.renewals, 1)
-	assert.Equal(t, "laptop-1", h.listener.renewals[0].DeviceID, "the lease's device id")
+	assert.Equal(t, []byte("nonce-1"), h.listener.renewals[0].Nonce, "fresh evidence over the renewal's nonce")
 	st, err := agent.NewFileStateStore(h.statePath).Load()
 	require.NoError(t, err)
 	assert.Equal(t, 1, st.Lease.Renewals)
@@ -701,7 +712,7 @@ func TestClientAgent_FactoryFailureIsWrapped(t *testing.T) {
 func TestConnect_MASQUEWithoutForegroundIsRefused(t *testing.T) {
 	h := newClientHarness(t)
 
-	err := execute(t, "connect", "--gateway", h.gateway, "--device-id", "laptop-1", "--ca-file", h.caFile, "--data-plane", "masque")
+	err := execute(t, "connect", "--gateway", h.gateway, "--tenant", "acme", "--device-id", "laptop-1", "--ca-file", h.caFile, "--data-plane", "masque")
 
 	var foreground *ErrForegroundRequired
 	require.ErrorAs(t, err, &foreground)
@@ -714,7 +725,7 @@ func TestConnect_MASQUEInTheForegroundIsAdmitted(t *testing.T) {
 	h := newClientHarness(t)
 	h.foreground()
 
-	err := execute(t, "connect", "--gateway", h.gateway, "--device-id", "laptop-1", "--ca-file", h.caFile, "--data-plane", "masque", "--foreground")
+	err := execute(t, "connect", "--gateway", h.gateway, "--tenant", "acme", "--device-id", "laptop-1", "--ca-file", h.caFile, "--data-plane", "masque", "--foreground")
 
 	require.NoError(t, err)
 	require.NotNil(t, h.listener.admitted)
@@ -726,12 +737,12 @@ func TestClientVerbs_OfferMASQUEOnlyWhereATunnelCanBeHeldOrEnded(t *testing.T) {
 	h := newClientHarness(t)
 	h.foreground()
 
-	require.NoError(t, execute(t, "connect", "--gateway", h.gateway, "--device-id", "laptop-1", "--ca-file", h.caFile))
+	require.NoError(t, execute(t, "connect", "--gateway", h.gateway, "--tenant", "acme", "--device-id", "laptop-1", "--ca-file", h.caFile))
 	require.NoError(t, execute(t, "renew", "--ca-file", h.caFile))
 	require.NoError(t, execute(t, "lease"))
 	require.NoError(t, execute(t, "posture"))
 	require.NoError(t, execute(t, "disconnect", "--ca-file", h.caFile))
-	require.NoError(t, execute(t, "connect", "--gateway", h.gateway, "--device-id", "laptop-1", "--ca-file", h.caFile, "--foreground"))
+	require.NoError(t, execute(t, "connect", "--gateway", h.gateway, "--tenant", "acme", "--device-id", "laptop-1", "--ca-file", h.caFile, "--foreground"))
 
 	require.Len(t, h.offered, 6)
 	masque := func(kinds []gwvpn.DataPlaneKind) bool { return slices.Contains(kinds, gwvpn.DataPlaneMASQUE) }

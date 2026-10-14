@@ -63,6 +63,12 @@ type ServiceRegistry struct {
 	PIV      platformv1.PIVServiceServer
 	FIDO2    platformv1.FIDO2ServiceServer
 
+	// Cache, Scheduler and Messaging back the application services the
+	// composed go-quicbaas SDK serves (docs/sdk/api.md §3.5).
+	Cache     platformv1.CacheServiceServer
+	Scheduler platformv1.SchedulerServiceServer
+	Messaging platformv1.MessagingServiceServer
+
 	// CallerContext attaches the in-process caller's identity to every
 	// call, as a network transport's authentication interceptors do; the
 	// embedded transport runs none. The embedder sets it: the services

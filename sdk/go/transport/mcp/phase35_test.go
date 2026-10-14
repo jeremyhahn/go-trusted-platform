@@ -49,6 +49,16 @@ var phase35Methods = map[string]string{
 	"/platform.v1.FIDO2Service/Info":                  "platform_fido2_info",
 	"/platform.v1.FIDO2Service/Register":              "platform_fido2_register",
 	"/platform.v1.FIDO2Service/Authenticate":          "platform_fido2_authenticate",
+	"/platform.v1.LUKSService/Status":                 "platform_luks_status",
+	"/platform.v1.LUKSService/ListSlots":              "platform_luks_list_slots",
+	"/platform.v1.LUKSService/Info":                   "platform_luks_info",
+	"/platform.v1.LUKSService/EnrollPassphrase":       "platform_luks_enroll_passphrase",
+	"/platform.v1.LUKSService/EnrollFIDO2":            "platform_luks_enroll_fido2",
+	"/platform.v1.LUKSService/EnrollTPM":              "platform_luks_enroll_tpm",
+	"/platform.v1.LUKSService/EnrollRecovery":         "platform_luks_enroll_recovery",
+	"/platform.v1.LUKSService/RemoveKey":              "platform_luks_remove_key",
+	"/platform.v1.LUKSService/TestUnlock":             "platform_luks_test_unlock",
+	"/platform.v1.LUKSService/ChangePassphrase":       "platform_luks_change_passphrase",
 }
 
 // TestPhase35MCP_EveryMethodMapsToARegisteredTool pins each method to the
@@ -67,7 +77,7 @@ func TestPhase35MCP_EveryMethodMapsToItsTool(t *testing.T) {
 // TestPhase35MCP_NoUnexpectedMethodsMapped fails when a method is mapped for
 // one of the three services without being listed above.
 func TestPhase35MCP_NoUnexpectedMethodsMapped(t *testing.T) {
-	prefixes := []string{"/platform.v1.CeremonyService/", "/platform.v1.PIVService/", "/platform.v1.FIDO2Service/"}
+	prefixes := []string{"/platform.v1.CeremonyService/", "/platform.v1.PIVService/", "/platform.v1.FIDO2Service/", "/platform.v1.LUKSService/"}
 	for method := range grpcMethodToMCPToolMap {
 		for _, prefix := range prefixes {
 			if !strings.HasPrefix(method, prefix) {

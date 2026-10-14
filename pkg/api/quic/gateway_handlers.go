@@ -31,11 +31,11 @@ const (
 	gatewayMaxLimit     int32 = 1000
 )
 
-// gatewayPage returns the page of at most limit entries starting at offset,
+// listPage returns the page of at most limit entries starting at offset,
 // with the number of entries in all. A limit of zero or less is the default
 // page, one above gatewayMaxLimit is capped to it, and an offset past the
-// end is an empty page.
-func gatewayPage[T any](items []T, offset, limit int32) ([]T, int32, error) {
+// end is an empty page. The gateway and overlay lists both page with it.
+func listPage[T any](items []T, offset, limit int32) ([]T, int32, error) {
 	if offset < 0 {
 		return nil, 0, ErrGatewayNegativeOffset
 	}
@@ -974,7 +974,7 @@ func (h *GatewayHandler) handleBGPPeers(ctx context.Context, req *quicwire.Reque
 		return h.gatewayErrorResponse(err)
 	}
 
-	page, total, err := gatewayPage(peers, listReq.Offset, listReq.Limit)
+	page, total, err := listPage(peers, listReq.Offset, listReq.Limit)
 	if err != nil {
 		return h.errorResponse(quicwire.StatusInvalidRequest, err)
 	}
@@ -1108,7 +1108,7 @@ func (h *GatewayHandler) handleListPrefixes(ctx context.Context, req *quicwire.R
 		return h.gatewayErrorResponse(err)
 	}
 
-	page, total, err := gatewayPage(prefixes, listReq.Offset, listReq.Limit)
+	page, total, err := listPage(prefixes, listReq.Offset, listReq.Limit)
 	if err != nil {
 		return h.errorResponse(quicwire.StatusInvalidRequest, err)
 	}

@@ -16,7 +16,7 @@
 | `LUKSBackend` | Interface the service delegates to: `Status`, `ListSlots`, `Info`, `EnrollPassphrase`, `EnrollFIDO2`, `EnrollTPM`, `EnrollRecovery`, `RemoveKey`, `TestUnlock`, `ChangePassphrase`. |
 | `RootChecker`, `RootCheckerFunc` | `IsRoot() bool`, consulted by mutating operations. |
 | `LUKSKeyType` | `""`, `passphrase`, `fido2`, `tpm`, `recovery`. |
-| `LUKSKeyslot`, `LUKSStatus`, `LUKSListSlotsResult`, `LUKSInfo` and the `LUKS<Op>Request` / `LUKS<Op>Result` structs | Request and response types. They carry **no JSON tags**. |
+| `LUKSKeyslot`, `LUKSStatus`, `LUKSListSlotsResult`, `LUKSInfo` and the `LUKS<Op>Request` / `LUKS<Op>Result` structs | Request and response types. The `LUKS<Op>Request` structs carry snake_case JSON tags, matching the pb field names every SDK transport sends; the result structs carry **no JSON tags**, so their JSON keys are the Go field names. |
 | `(*Daemon).SetLUKSBackend`, `SetLUKSRootChecker` (`daemon.go`) | Inject the backend and root checker into the running service. |
 
 ### Backend — `pkg/app/backends/luks.go`
@@ -34,8 +34,8 @@
 | Symbol | Purpose |
 |---|---|
 | `Service` | The ten operations, transport-neutral. |
-| `Client`, `NewClient()` | **Stub.** Every method returns `ErrNotYetWired` wrapped in its `Err<Op>Failed`. |
-| `GRPCClient`, `NewGRPCClient(conn)`, `NewGRPCClientFromClient` | Working gRPC (and Unix) client. |
+| `GRPCClient`, `NewGRPCClient(conn)`, `NewGRPCClientFromClient` | The client. `NewGRPCClientFromClient(c.LUKS())` dispatches over whichever transport `platform.Client` selected. |
+| `KeyTypeFromWire`, `KeyslotFromWire`, `Decode<Op>JSON` | Map the daemon's string keyslot type and untagged JSON replies onto the pb types for the QUIC and MCP adapters; an unknown type is `ErrUnknownWireValue`. |
 | `KeyType`, `Keyslot`, `<Op>Request` / `<Op>Response` | SDK types. |
 
 ### CLI — `pkg/cli/commands/luks`
@@ -136,8 +136,9 @@ surfaces as 500 / `Internal`.
 
 ### SDK and CLI
 
-`sdk/go/services/luks/errors.go`: `ErrNotYetWired` and one
-`Err<Op>Failed{Cause}` per operation, each with `Unwrap`.
+`sdk/go/services/luks/errors.go`: one `Err<Op>Failed{Cause}` per operation,
+each with `Unwrap`, plus `ErrUnknownWireValue` and `ErrWireDecode` for a reply
+the wire decoders cannot map.
 `pkg/cli/commands/luks/errors.go`: the validation errors listed in
 [cli.md](cli.md) §4.
 
@@ -164,8 +165,9 @@ REST, gRPC (TCP and Unix), QUIC and MCP. **No production code calls
   non-root), before the backend is ever consulted;
 - `status`, `list-slots`, `info` and `test-unlock` return `ErrLUKSNotConfigured`.
 
-On the client side, every `platformctl luks` verb calls `luks.NewClient()`, the
-stub, so it fails with `not yet wired` after its local checks.
+On the client side, every `platformctl luks` verb reaches the server through
+`platform.Client.LUKS()`, so after its local checks it returns the server's
+refusal above.
 
 The working pieces are the backend (exercised by its loopback tests) and the
 server-side transport adapters (exercised against a stub backend).
@@ -187,9 +189,18 @@ server-side transport adapters (exercised against a stub backend).
 | `pkg/cli/commands/luks/luks_test.go` | verb tree and flag declarations |
 | `test/integration/luks/` (`make integration-test-luks`) | CLI, REST, gRPC, QUIC, MCP and Unix adapters; needs `cryptsetup` and root for the loopback volume |
 
-The integration suite accepts *not configured*, *root required*, *not yet wired*
-and any `luks: ` error as a pass, so today it proves wire reachability only. It
-has no embedded adapter.
+The integration suite accepts a typed not-implemented declaration, *not
+configured* and *root required* as a pass, so today it proves wire reachability
+only. Its REST adapter runs through the SDK REST transport. It has no embedded
+adapter.
+
+`pkg/api/daemon/luks_rest_sdk_test.go` runs the SDK REST transport against the
+daemon's real REST router, backed by an in-memory `LUKSBackend`, for all ten
+operations. It checks the request fields the backend receives, the decoded
+reply, and that the device-required, not-configured and root-required refusals
+reach the caller as the typed SDK error with the same gRPC code and bare
+message QUIC and MCP return. It also checks that a malformed body never echoes
+the passphrase.
 
 ---
 

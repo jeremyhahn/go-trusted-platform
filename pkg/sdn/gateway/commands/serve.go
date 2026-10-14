@@ -142,6 +142,13 @@ func runServe(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// The control plane keeps the record of the management VPN's leases,
+	// so a restart reinstates the clients admitted before it; the journal
+	// under --data-dir keeps a revocation it has not yet taken from being
+	// reinstated too.
+	if reporter != nil {
+		gw.SetVPNLeaseControl(reporter, vpnRevocationJournal(cfg.DataDir))
+	}
 
 	// The metrics endpoint is prepared before the datapath starts so a
 	// port the operator asked for and cannot have fails the boot rather

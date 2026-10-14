@@ -22,6 +22,7 @@ package vpn
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -68,6 +69,7 @@ type snapshotSource struct {
 type Service struct {
 	peers     *quicbaas.GenericDAO[*Peer]
 	policies  *quicbaas.GenericDAO[*PosturePolicy]
+	leases    *LeaseStore
 	snapshots atomic.Pointer[snapshotSource]
 	now       func() time.Time
 }
@@ -81,12 +83,17 @@ func NewService(storage quicbaas.Storage, logger *logging.Logger) (*Service, err
 	if logger == nil {
 		logger = logging.DefaultLogger()
 	}
+	leases, err := NewLeaseStore(storage, logger)
+	if err != nil {
+		return nil, err
+	}
 	return &Service{
 		peers: quicbaas.NewGenericDAO[*Peer](storage, entityTypePeer,
 			func() *Peer { return &Peer{} }, logger),
 		policies: quicbaas.NewGenericDAO[*PosturePolicy](storage, entityTypePosturePolicy,
 			func() *PosturePolicy { return &PosturePolicy{} }, logger),
-		now: time.Now,
+		leases: leases,
+		now:    time.Now,
 	}, nil
 }
 
@@ -286,10 +293,19 @@ func (s *Service) Status(ctx context.Context, gatewayID string) ([]GatewayStatus
 	return out, nil
 }
 
-// DesiredVPN is the vpn section of every gateway's desired configuration:
-// the whole enrolment set and every tenant posture policy. It is never nil —
-// an empty set is how a revocation of the last peer reaches the gateways.
-func (s *Service) DesiredVPN(ctx context.Context) (*gwstate.DesiredVPN, error) {
+// DesiredVPN is the vpn section of gatewayID's desired configuration: the
+// whole enrolment set, every tenant posture policy, and the live leases
+// gatewayID recorded, which it rebuilds its lease projection from on start.
+// Expired leases are swept first, so none is served. It is never nil — an
+// empty set is how a revocation of the last peer reaches the gateways.
+func (s *Service) DesiredVPN(ctx context.Context, gatewayID string) (*gwstate.DesiredVPN, error) {
+	if _, err := s.leases.Sweep(ctx); err != nil {
+		return nil, err
+	}
+	leases, err := s.leases.ListByGateway(ctx, gatewayID)
+	if err != nil {
+		return nil, err
+	}
 	peers, err := s.ListPeers(ctx, "")
 	if err != nil {
 		return nil, err
@@ -312,7 +328,78 @@ func (s *Service) DesiredVPN(ctx context.Context) (*gwstate.DesiredVPN, error) {
 			TenantID: p.TenantID, Name: p.Name, Module: p.Module,
 		})
 	}
+	for _, l := range leases {
+		section.Leases = append(section.Leases, desiredLease(l))
+	}
 	return section, nil
+}
+
+// RecordGatewayLease records a lease gatewayID admitted or renewed, so the
+// gateway can rebuild it after a restart. A lease another gateway issued is
+// refused with ErrLeaseOwnedByOtherGateway.
+func (s *Service) RecordGatewayLease(ctx context.Context, gatewayID string, lease *gwstate.DesiredVPNLease) error {
+	if lease == nil {
+		return &ErrInvalidArgument{Field: "lease", Reason: "required"}
+	}
+	address, err := netip.ParsePrefix(lease.Address)
+	if err != nil {
+		return &ErrInvalidArgument{Field: "address", Reason: err.Error()}
+	}
+	_, err = s.leases.Put(ctx, Lease{
+		LeaseID:                 lease.ID,
+		GatewayID:               gatewayID,
+		TenantID:                lease.TenantID,
+		DeviceID:                lease.DeviceID,
+		Address:                 address,
+		Zones:                   lease.Zones,
+		DataPlane:               vpncore.DataPlaneKind(lease.DataPlane),
+		WireGuardPublicKey:      lease.WireGuardPublicKey,
+		ClientCertificateSHA256: lease.ClientCertificateSHA256,
+		IssuedAt:                lease.IssuedAt,
+		ExpiresAt:               lease.ExpiresAt,
+		Renewals:                lease.Renewals,
+		Verdict: vpncore.VerdictSummary{
+			Passed:        lease.Verdict.Passed,
+			Cryptographic: lease.Verdict.Cryptographic,
+			ProfileID:     lease.Verdict.ProfileID,
+		},
+	})
+	return err
+}
+
+// ReleaseGatewayLease forgets the tenant's lease leaseID that gatewayID
+// revoked. A lease already gone is released, so a retried release succeeds;
+// a lease another gateway issued is refused with ErrLeaseOwnedByOtherGateway.
+func (s *Service) ReleaseGatewayLease(ctx context.Context, gatewayID, tenantID, leaseID string) error {
+	err := s.leases.Delete(ctx, gatewayID, tenantID, leaseID)
+	var notFound *vpncore.ErrLeaseNotFound
+	if errors.As(err, &notFound) {
+		return nil
+	}
+	return err
+}
+
+// desiredLease is a recorded lease as the gateway's desired configuration
+// carries it.
+func desiredLease(l *Lease) gwstate.DesiredVPNLease {
+	return gwstate.DesiredVPNLease{
+		ID:                      l.LeaseID,
+		TenantID:                l.TenantID,
+		DeviceID:                l.DeviceID,
+		Address:                 l.Address.String(),
+		Zones:                   slices.Clone(l.Zones),
+		DataPlane:               string(l.DataPlane),
+		WireGuardPublicKey:      slices.Clone(l.WireGuardPublicKey),
+		ClientCertificateSHA256: slices.Clone(l.ClientCertificateSHA256),
+		IssuedAt:                l.IssuedAt,
+		ExpiresAt:               l.ExpiresAt,
+		Renewals:                l.Renewals,
+		Verdict: gwstate.DesiredVPNVerdict{
+			Passed:        l.Verdict.Passed,
+			Cryptographic: l.Verdict.Cryptographic,
+			ProfileID:     l.Verdict.ProfileID,
+		},
+	}
 }
 
 // peer reads the record the probe's ID names: nil when there is none, and a

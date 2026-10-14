@@ -55,6 +55,8 @@ func (f *fakeSDNGatewayRegistry) GatewayControlPlane() (restgateway.GatewayState
 	return nil, nil
 }
 
+func (f *fakeSDNGatewayRegistry) GatewayVPNLeases() restgateway.VPNLeaseSink { return nil }
+
 // JSONWebTokenHandler and PlatformTokenMiddleware are declared because
 // gating /sdn and /sdn/gateway gave those routes a real dependency on the
 // inbound authentication seam: v1Router.gated() resolves it at

@@ -56,6 +56,9 @@ See [api-reference.md](api-reference.md) for the shared data types
 (`VTEPInfo`, `VNIConfig`, `VNI`, `TunnelInfo`, `RemoteMACEntry`,
 `OverlayStatus`).
 
+`CreateVNI` answers `InvalidArgument` for a missing config, a VNI outside
+1-16777215, or a `vlan` above 4094 (0 maps no VLAN).
+
 ## Example (grpcurl)
 
 ```bash

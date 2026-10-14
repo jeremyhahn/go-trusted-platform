@@ -526,6 +526,14 @@ version changes and an enrolment or a revocation does not change what the
 operator wrote. A failing enrolment store fails the whole document: serving
 it without the section would revoke every peer.
 
+The section is also the one per-gateway part of the document: it carries the
+management VPN leases the requesting gateway recorded
+(`DesiredVPN(ctx, gatewayID)`, expired ones swept first), which the gateway
+rebuilds its lease table from when the service starts. Leases do not enter the
+content version — a running gateway already holds them, and only a start reads
+them. The gateway writes each admission, renewal and revocation back through
+`PUT` / `DELETE /api/v1/gateway/vpn-leases/…` ([docs/vpn/engineering.md](../vpn/engineering.md) §6).
+
 ### IPv6-only clients — NAT64 packet path (`nat64:`)
 
 Decision and trade-off table: [architecture.md](architecture.md) "IPv6-only
@@ -2041,7 +2049,9 @@ Gateway state is reported to the control plane
 (`POST /api/v1/gateway/telemetry`) by the `controlplane.Reporter`, started
 from `gatewayd serve` when the `control-plane:` section is enabled, and
 desired configuration is fetched from it
-(`GET /api/v1/gateway/desired-config/{id}`). **The control plane is the
+(`GET /api/v1/gateway/desired-config/{id}`). The same reporter writes the
+management VPN's leases through to it (`PUT` / `DELETE
+/api/v1/gateway/vpn-leases/…`). **The control plane is the
 author.** A gateway that writes its own desired configuration has inverted the
 model.
 

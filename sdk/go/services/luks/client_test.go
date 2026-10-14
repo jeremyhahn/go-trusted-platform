@@ -14,52 +14,9 @@
 package luks
 
 import (
-	"context"
 	"errors"
 	"testing"
 )
-
-func TestNewClient_NotNil(t *testing.T) {
-	if NewClient() == nil {
-		t.Fatal("expected non-nil client")
-	}
-}
-
-func TestClient_AllMethodsReturnNotYetWired(t *testing.T) {
-	ctx := context.Background()
-	c := NewClient()
-
-	if _, err := c.Status(ctx, &StatusRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("Status: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.ListSlots(ctx, &ListSlotsRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("ListSlots: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.Info(ctx, &InfoRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("Info: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.EnrollPassphrase(ctx, &EnrollPassphraseRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("EnrollPassphrase: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.EnrollFIDO2(ctx, &EnrollFIDO2Request{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("EnrollFIDO2: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.EnrollTPM(ctx, &EnrollTPMRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("EnrollTPM: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.EnrollRecovery(ctx, &EnrollRecoveryRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("EnrollRecovery: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.RemoveKey(ctx, &RemoveKeyRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("RemoveKey: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.TestUnlock(ctx, &TestUnlockRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("TestUnlock: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.ChangePassphrase(ctx, &ChangePassphraseRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("ChangePassphrase: expected ErrNotYetWired, got %v", err)
-	}
-}
 
 func TestErrors_UnwrapToCause(t *testing.T) {
 	cause := errors.New("underlying")
@@ -90,8 +47,4 @@ func TestErrors_UnwrapToCause(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestClientImplementsService(t *testing.T) {
-	var _ Service = (*Client)(nil)
 }

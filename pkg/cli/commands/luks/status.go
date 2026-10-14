@@ -59,7 +59,10 @@ func runStatus(commonFlags *cli.CommonFlags, f *statusFlags) error {
 	}
 	defer base.Close()
 
-	client := lukssvc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.Status(base.Context(), &lukssvc.StatusRequest{Device: device})
 	if err != nil {
 		return err

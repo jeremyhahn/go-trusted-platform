@@ -2125,6 +2125,10 @@ func (m *mockServiceProvider) OverlayTunnelList(ctx context.Context, vni uint32)
 	return []interface{}{}, nil
 }
 
+func (m *mockServiceProvider) OverlayTunnelStats(ctx context.Context, remoteVTEP string, vni uint32) (interface{}, error) {
+	return map[string]interface{}{"remote_vtep": remoteVTEP, "vni": vni, "bytes_sent": uint64(10), "bytes_recv": uint64(20)}, nil
+}
+
 func (m *mockServiceProvider) OverlayMACList(ctx context.Context, vni uint32) ([]interface{}, error) {
 	return []interface{}{}, nil
 }

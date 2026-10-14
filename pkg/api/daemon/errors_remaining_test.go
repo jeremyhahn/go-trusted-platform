@@ -216,14 +216,6 @@ func TestErrOverlayServiceNotAvailable(t *testing.T) {
 	}
 }
 
-func TestErrOverlayOperationNotImplemented(t *testing.T) {
-	err := ErrOverlayOperationNotImplemented{Operation: "OverlayStatus"}
-	expected := "overlay operation not implemented: OverlayStatus"
-	if got := err.Error(); got != expected {
-		t.Errorf("Error() = %q, want %q", got, expected)
-	}
-}
-
 func TestErrGatewayServiceNotAvailable(t *testing.T) {
 	err := ErrGatewayServiceNotAvailable{}
 	expected := "gateway service not available"

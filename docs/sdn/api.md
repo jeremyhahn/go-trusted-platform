@@ -247,12 +247,12 @@ gRPC `OverlayService`. QUIC overlay operations are sub-opcodes under the
 | Create VNI | `POST /api/v1/overlay/vnis` | `CreateVNI` | `OpOverlayCreateVNI` (`0x05`) | `overlay_vni_create` | ✅ |
 | Delete VNI | `DELETE /api/v1/overlay/vnis/{vni}` | `DeleteVNI` | `OpOverlayDeleteVNI` (`0x06`) | `overlay_vni_delete` | ✅ |
 | List tunnels | `GET /api/v1/overlay/tunnels` | `ListTunnels` | `OpOverlayListTunns` (`0x07`) | `overlay_tunnel_list` | ✅ |
-| Tunnel statistics | `GET /api/v1/overlay/tunnels/stats` | `GetTunnelStats` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+| Tunnel statistics | `GET /api/v1/overlay/tunnels/stats` | `GetTunnelStats` | `OpOverlayTunnelStats` (`0x0A`) | `overlay_tunnel_stats` | ✅ |
 | List remote MACs | `GET /api/v1/overlay/macs` | `ListRemoteMACs` | `OpOverlayListMACs` (`0x08`) | `overlay_mac_list` | ✅ |
 | Forget MAC | `DELETE /api/v1/overlay/macs` | `ForgetMAC` | `OpOverlayForgetMAC` (`0x09`) | `overlay_mac_forget` | ✅ |
 
-The overlay is the most complete surface in this feature: only tunnel statistics
-is missing on QUIC and MCP, and everything else is present on five transports.
+The overlay is served on every transport: every capability is present on all
+six, each answering from the one overlay controller.
 
 `{vni:[0-9]+}` is numerically constrained in the route; a non-numeric VNI 404s
 rather than reaching the handler.

@@ -68,9 +68,10 @@ type DataPlane interface {
 type Gateway interface {
 	Challenge(ctx context.Context) (*gwvpn.ChallengeWire, error)
 	Admit(ctx context.Context, req *gwvpn.AdmissionRequestWire) (*gwvpn.LeaseWire, error)
-	// Renew presents fresh evidence for lease id. The request carries the
-	// evidence fields of an admission; the lease keeps its plane and zones.
-	Renew(ctx context.Context, id gwvpn.LeaseID, req *gwvpn.AdmissionRequestWire) (*gwvpn.LeaseWire, error)
+	// Renew presents fresh evidence for lease id. The request carries only
+	// the evidence; the gateway takes the device, plane and zones from the
+	// lease.
+	Renew(ctx context.Context, id gwvpn.LeaseID, req *gwvpn.RenewalRequestWire) (*gwvpn.LeaseWire, error)
 	Revoke(ctx context.Context, id gwvpn.LeaseID) error
 }
 
@@ -103,6 +104,8 @@ type Deps struct {
 type ConnectOptions struct {
 	// Gateway is the admission listener, host:port.
 	Gateway string
+	// TenantID is the tenant the device is enrolled in.
+	TenantID string
 	// DataPlane is the plane to request; empty takes the gateway's
 	// preference among the planes this build has.
 	DataPlane gwvpn.DataPlaneKind
@@ -167,6 +170,9 @@ func New(deps Deps) (*Agent, error) {
 func (a *Agent) Connect(ctx context.Context, opts ConnectOptions) (*State, error) {
 	if opts.Gateway == "" {
 		return nil, &ErrInvalidOptions{Field: "gateway", Reason: "required"}
+	}
+	if opts.TenantID == "" {
+		return nil, &ErrInvalidOptions{Field: "tenant", Reason: "required"}
 	}
 	if opts.Factor != "" && !knownFactors[opts.Factor] {
 		return nil, &ErrInvalidOptions{Field: "factor", Reason: "want fido2 or piv, got " + string(opts.Factor)}
@@ -271,9 +277,6 @@ func (a *Agent) renewLease(ctx context.Context, st *State) (*gwvpn.LeaseWire, er
 	if err != nil {
 		return nil, err
 	}
-	req.DeviceID = st.Lease.DeviceID
-	req.DataPlane = st.Lease.DataPlane
-	req.Zones = st.Lease.Zones
 	lease, err := gw.Renew(ctx, st.Lease.ID, req)
 	if err != nil {
 		return nil, err
@@ -423,7 +426,7 @@ func (a *Agent) pickPlane(opts ConnectOptions, offered []gwvpn.DataPlaneKind) (D
 // admissionRequest collects the evidence, each piece bound to nonce where the
 // gateway verifies a binding.
 func (a *Agent) admissionRequest(ctx context.Context, opts ConnectOptions, nonce []byte, plane DataPlane) (*gwvpn.AdmissionRequestWire, error) {
-	req, err := a.evidence(ctx, opts.Factor, nonce)
+	ev, err := a.evidence(ctx, opts.Factor, nonce)
 	if err != nil {
 		return nil, err
 	}
@@ -431,16 +434,23 @@ func (a *Agent) admissionRequest(ctx context.Context, opts ConnectOptions, nonce
 	if err != nil {
 		return nil, &ErrDataPlane{Op: "prepare", Kind: plane.Kind(), Cause: err}
 	}
-	req.DataPlane = plane.Kind()
-	req.Peer = peer
-	req.Zones = opts.Zones
-	return req, nil
+	return &gwvpn.AdmissionRequestWire{
+		TenantID:     opts.TenantID,
+		DeviceID:     a.deps.Device.ID(),
+		Nonce:        ev.Nonce,
+		Attestation:  ev.Attestation,
+		Posture:      ev.Posture,
+		PersonFactor: ev.PersonFactor,
+		DataPlane:    plane.Kind(),
+		Peer:         peer,
+		Zones:        opts.Zones,
+	}, nil
 }
 
 // evidence collects what an admission and a renewal both present over the
 // gateway's nonce: the device's quote, the posture report and, when factor
 // is set, the person factor's signature.
-func (a *Agent) evidence(ctx context.Context, factor gwvpn.PersonFactorKind, nonce []byte) (*gwvpn.AdmissionRequestWire, error) {
+func (a *Agent) evidence(ctx context.Context, factor gwvpn.PersonFactorKind, nonce []byte) (*gwvpn.RenewalRequestWire, error) {
 	att, err := a.deps.Device.Quote(ctx, nonce)
 	if err != nil {
 		return nil, &ErrEvidence{Step: "quote", Cause: err}
@@ -458,8 +468,7 @@ func (a *Agent) evidence(ctx context.Context, factor gwvpn.PersonFactorKind, non
 			return nil, &ErrEvidence{Step: "person factor", Cause: err}
 		}
 	}
-	return &gwvpn.AdmissionRequestWire{
-		DeviceID:     a.deps.Device.ID(),
+	return &gwvpn.RenewalRequestWire{
 		Nonce:        nonce,
 		Attestation:  gwvpn.AttestationFromHost(att),
 		Posture:      posture,

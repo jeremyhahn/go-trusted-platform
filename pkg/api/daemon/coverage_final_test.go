@@ -68,7 +68,6 @@ func TestCoverageFinalUncoveredErrors(t *testing.T) {
 
 		// Overlay/Gateway errors
 		{"ErrOverlayServiceNotAvailable", ErrOverlayServiceNotAvailable{}, "overlay network service not available"},
-		{"ErrOverlayOperationNotImplemented", ErrOverlayOperationNotImplemented{Operation: "create"}, "overlay operation not implemented: create"},
 		{"ErrGatewayServiceNotAvailable", ErrGatewayServiceNotAvailable{}, "gateway service not available"},
 		{"ErrGatewayOperationNotImplemented", ErrGatewayOperationNotImplemented{Operation: "delete"}, "gateway operation not implemented: delete"},
 

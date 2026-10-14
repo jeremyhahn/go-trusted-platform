@@ -76,7 +76,10 @@ func runEnrollFIDO2(commonFlags *cli.CommonFlags, f *enrollFIDO2Flags) error {
 	}
 	defer base.Close()
 
-	client := lukssvc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.EnrollFIDO2(base.Context(), &lukssvc.EnrollFIDO2Request{
 		Device:             device,
 		ExistingPassphrase: f.existingPassphrase,

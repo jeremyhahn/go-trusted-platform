@@ -44,6 +44,11 @@ var ErrLUKSSlotRequired = errors.New("luks: slot index is required")
 // ErrLUKSRootRequired indicates the operation requires root privileges.
 var ErrLUKSRootRequired = errors.New("luks: operation requires root privileges")
 
+// ErrLUKSMalformedBody indicates a REST request body that is not valid JSON
+// for the operation. It carries no decoder detail, because a JSON syntax
+// error quotes the offending input and the body may hold a passphrase.
+var ErrLUKSMalformedBody = errors.New("luks: malformed request body")
+
 // LUKSKeyType enumerates the LUKS2 keyslot backends.
 type LUKSKeyType string
 
@@ -98,11 +103,12 @@ type LUKSInfo struct {
 	MetadataJSON string
 }
 
-// LUKSEnrollPassphraseRequest adds a passphrase slot.
+// LUKSEnrollPassphraseRequest adds a passphrase slot. The request structs'
+// JSON tags are the REST body keys: the snake_case names QUIC and MCP use.
 type LUKSEnrollPassphraseRequest struct {
-	Device             string
-	ExistingPassphrase string
-	NewPassphrase      string
+	Device             string `json:"device"`
+	ExistingPassphrase string `json:"existing_passphrase"`
+	NewPassphrase      string `json:"new_passphrase"`
 }
 
 // LUKSEnrollPassphraseResult is returned by EnrollPassphrase.
@@ -112,11 +118,11 @@ type LUKSEnrollPassphraseResult struct {
 
 // LUKSEnrollFIDO2Request adds a FIDO2 slot.
 type LUKSEnrollFIDO2Request struct {
-	Device             string
-	ExistingPassphrase string
-	CredentialID       string
-	RequirePIN         bool
-	RequireUV          bool
+	Device             string `json:"device"`
+	ExistingPassphrase string `json:"existing_passphrase"`
+	CredentialID       string `json:"credential_id"`
+	RequirePIN         bool   `json:"require_pin"`
+	RequireUV          bool   `json:"require_uv"`
 }
 
 // LUKSEnrollFIDO2Result is returned by EnrollFIDO2.
@@ -127,10 +133,10 @@ type LUKSEnrollFIDO2Result struct {
 
 // LUKSEnrollTPMRequest adds a TPM2-sealed slot.
 type LUKSEnrollTPMRequest struct {
-	Device             string
-	ExistingPassphrase string
-	PCRs               []int32
-	Handle             string
+	Device             string  `json:"device"`
+	ExistingPassphrase string  `json:"existing_passphrase"`
+	PCRs               []int32 `json:"pcrs"`
+	Handle             string  `json:"handle"`
 }
 
 // LUKSEnrollTPMResult is returned by EnrollTPM.
@@ -141,8 +147,8 @@ type LUKSEnrollTPMResult struct {
 
 // LUKSEnrollRecoveryRequest adds a recovery-key slot.
 type LUKSEnrollRecoveryRequest struct {
-	Device             string
-	ExistingPassphrase string
+	Device             string `json:"device"`
+	ExistingPassphrase string `json:"existing_passphrase"`
 }
 
 // LUKSEnrollRecoveryResult is returned by EnrollRecovery.
@@ -153,22 +159,22 @@ type LUKSEnrollRecoveryResult struct {
 
 // LUKSRemoveKeyRequest removes a keyslot.
 type LUKSRemoveKeyRequest struct {
-	Device string
-	Slot   int32
+	Device string `json:"device"`
+	Slot   int32  `json:"slot"`
 }
 
 // LUKSTestUnlockRequest tests a keyslot.
 type LUKSTestUnlockRequest struct {
-	Device string
-	Slot   int32
+	Device string `json:"device"`
+	Slot   int32  `json:"slot"`
 }
 
 // LUKSChangePassphraseRequest changes a passphrase slot.
 type LUKSChangePassphraseRequest struct {
-	Device        string
-	Slot          int32
-	OldPassphrase string
-	NewPassphrase string
+	Device        string `json:"device"`
+	Slot          int32  `json:"slot"`
+	OldPassphrase string `json:"old_passphrase"`
+	NewPassphrase string `json:"new_passphrase"`
 }
 
 // LUKSBackend abstracts the upstream LUKS2 implementation.

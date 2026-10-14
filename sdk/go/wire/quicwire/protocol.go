@@ -175,7 +175,8 @@ const (
 	// provisioning surface ships under OpProvisioningCategory (0xCF). The
 	// head of that dead range is reclaimed for the time-synchronization
 	// category (see ntp_opcodes.go); 0x51 and 0x52 now carry the IAM and VPN
-	// categories, and 0x53-0x55 stay reserved.
+	// categories, and 0x53-0x55 the cache, scheduler and messaging categories
+	// (appservice_opcodes.go).
 
 	// IDevID/IAK Device Identity Operations (0x56-0x5F)
 	OpIDevIDGenerate    byte = 0x56
@@ -858,6 +859,14 @@ var opcodeNames = map[byte]string{
 
 	// IAM tenant records
 	OpIAMCategory: "IAMCategory",
+
+	// VPN control plane
+	OpVPNCategory: "VPNCategory",
+
+	// Application services served over the composed go-quicbaas SDK
+	OpCacheCategory:     "CacheCategory",
+	OpSchedulerCategory: "SchedulerCategory",
+	OpMessagingCategory: "MessagingCategory",
 
 	// IDevID/IAK Device Identity
 	OpIDevIDGenerate:     "IDevIDGenerate",

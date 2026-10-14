@@ -50,6 +50,13 @@ func newPhase35MCPClient(t *testing.T, svcs Phase35Services) *sdkmcp.Adapter {
 	t.Helper()
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
 	provider.SetPhase35Services(svcs)
+	return serveMCPProvider(t, provider)
+}
+
+// serveMCPProvider serves a daemon MCP provider through the MCP server's
+// HTTP routes and connects the SDK's MCP adapter to it.
+func serveMCPProvider(t *testing.T, provider *MCPServiceProvider) *sdkmcp.Adapter {
+	t.Helper()
 	config := mcp.DefaultConfig()
 	config.AuthorizationService = tokenGrantAuthz{}
 

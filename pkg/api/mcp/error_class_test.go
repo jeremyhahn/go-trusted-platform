@@ -46,6 +46,7 @@ func TestCodeClass_Rules(t *testing.T) {
 		{"DNS_SERVICE_UNAVAILABLE", codes.Unavailable},
 		{"ATTESTATION_REPORTING_NOT_CONFIGURED", codes.Unavailable},
 		{"VM_NOT_RUNNING", codes.FailedPrecondition},
+		{"OVERLAY_VNI_ALREADY_EXISTS", codes.AlreadyExists},
 		{"TPM_NOT_INITIALIZED", codes.FailedPrecondition},
 	}
 	for _, tt := range tests {

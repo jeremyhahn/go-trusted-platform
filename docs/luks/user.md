@@ -1,16 +1,17 @@
 # LUKS Key-Slot Management — User Guide
 
-> **Status: NORMATIVE** · Scope: managing who and what can open a host's LUKS2 volume · Last verified: 2026-10-11
+> **Status: NORMATIVE** · Scope: managing who and what can open a host's LUKS2 volume · Last verified: 2026-10-13
 > Conflicts with this document are defects. Fix them here first.
 
 ---
 
 ## Before you start
 
-- **The verbs below do not work yet.** `platformctl luks` is declared and
-  validates its input, but its SDK client is a stub, and platformd has no LUKS
-  backend wired. Every verb ends with a `not yet wired` error. The tasks show
-  the intended use. [cli.md](cli.md) §1 has the details.
+- **The verbs below do not work yet.** `platformctl luks` validates its input
+  and reaches platformd over the active transport, but platformd has no LUKS
+  backend wired, so every verb ends with a *backend not configured* or *root
+  required* error. The tasks show the intended use. [cli.md](cli.md) §1 has the
+  details.
 - Run as root, on the host that holds the volume. The CLI checks root and
   auto-detects the device on the host it runs on.
 - Pass `--device /dev/<device>` explicitly unless the volume is on one of the

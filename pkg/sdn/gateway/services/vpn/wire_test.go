@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -135,12 +136,15 @@ func TestRefusalOf_MapsEveryErrorToItsClassAndStatus(t *testing.T) {
 		{"posture unavailable", &ErrPostureUnavailable{Cause: &ErrPosturePolicyInvalid{Name: "corp"}}, RefusalPostureUnavailable, http.StatusServiceUnavailable, nil},
 		{"pool", &ErrPoolExhausted{Pool: "acme"}, RefusalPoolExhausted, http.StatusServiceUnavailable, nil},
 		{"data plane", &ErrDataPlaneUnavailable{Kind: DataPlaneMASQUE, Cause: &ErrPeerKeyInvalid{Kind: DataPlaneMASQUE}}, RefusalDataPlaneUnavailable, http.StatusServiceUnavailable, nil},
+		{"data plane down", &ErrDataPlaneNotStarted{}, RefusalDataPlaneUnavailable, http.StatusServiceUnavailable, nil},
 		{"lease store", &ErrLeaseStoreUnavailable{Cause: &ErrNotStarted{}}, RefusalLeaseStoreUnavailable, http.StatusServiceUnavailable, nil},
 		{"not started", &ErrNotStarted{}, RefusalNotStarted, http.StatusServiceUnavailable, nil},
 		{"expired", &ErrLeaseExpired{LeaseID: "l"}, RefusalLeaseExpired, http.StatusGone, nil},
 		{"not found", &ErrLeaseNotFound{LeaseID: "l"}, RefusalLeaseNotFound, http.StatusNotFound, nil},
 		{"renewal early", &ErrRenewalNotOpen{LeaseID: "l"}, RefusalRenewalNotOpen, http.StatusConflict, nil},
+		{"peer conflict", &ErrPeerConflict{}, RefusalPeerConflict, http.StatusConflict, nil},
 		{"invalid", &ErrInvalidRequest{Field: "nonce", Reason: "empty"}, RefusalInvalidRequest, http.StatusBadRequest, nil},
+		{"invalid peer key", &ErrPeerKeyInvalid{Kind: DataPlaneWireGuard}, RefusalInvalidRequest, http.StatusBadRequest, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -162,4 +166,34 @@ func TestRefusalWire_PostureRulesOnlyWhenPresent(t *testing.T) {
 	raw, err := json.Marshal(RefusalWire{Reason: RefusalPoolExhausted})
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"reason":"pool-exhausted"}`, string(raw))
+}
+
+func TestDecodeRequest_ReadsTheRoutesOwnBody(t *testing.T) {
+	raw, err := json.Marshal(RenewalRequestWire{Nonce: []byte("n"), Attestation: &AttestationWire{Quote: []byte("q")}})
+	require.NoError(t, err)
+
+	var renewal RenewalRequestWire
+	require.NoError(t, DecodeRequest(strings.NewReader(string(raw)), &renewal))
+	assert.Equal(t, []byte("n"), renewal.Nonce)
+	assert.Equal(t, []byte("q"), renewal.Attestation.Quote)
+}
+
+func TestDecodeRequest_RefusesAnotherRoutesBodyAndTrailingData(t *testing.T) {
+	admission, err := json.Marshal(AdmissionRequestWire{TenantID: "tenant-a", DeviceID: "mini-99", Nonce: []byte("n")})
+	require.NoError(t, err)
+
+	cases := map[string]string{
+		"an admission body on the renewal route": string(admission),
+		"trailing data":                          `{}{}`,
+		"not JSON":                               `[`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			var renewal RenewalRequestWire
+			err := DecodeRequest(strings.NewReader(body), &renewal)
+			var invalid *ErrInvalidRequest
+			require.ErrorAs(t, err, &invalid)
+			assert.Equal(t, "body", invalid.Field)
+		})
+	}
 }

@@ -41,7 +41,7 @@ func BenchmarkDesiredVPN(b *testing.B) {
 
 			b.ReportAllocs()
 			for b.Loop() {
-				section, err := svc.DesiredVPN(ctx)
+				section, err := svc.DesiredVPN(ctx, "gw-1")
 				if err != nil {
 					b.Fatal(err)
 				}

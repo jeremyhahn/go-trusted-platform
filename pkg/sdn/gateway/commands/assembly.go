@@ -911,6 +911,21 @@ func buildSecretResolver(cfg *ServeConfig, anchor *trust.Anchor, logger *slog.Lo
 // --data-dir.
 const gatewayTOFUPinDir = "trust/tofu-pins"
 
+// gatewayVPNRevocationJournal is where gatewayd journals the management
+// VPN's revocations the control plane has not yet taken, relative to
+// --data-dir.
+const gatewayVPNRevocationJournal = "vpn/pending-revocations.json"
+
+// vpnRevocationJournal is the revocation journal under dataDir. Without a
+// data directory it is nil, and a gateway hosting the management VPN refuses
+// to build it rather than run without one.
+func vpnRevocationJournal(dataDir string) *gateway.RevocationJournal {
+	if dataDir == "" {
+		return nil
+	}
+	return gateway.NewRevocationJournal(filepath.Join(dataDir, gatewayVPNRevocationJournal))
+}
+
 // tofuScopes reports whether any configured class lists the tofu strategy.
 // The resolver refuses to construct when one does and no pin store was
 // injected, so this decides whether the store has to exist at all.

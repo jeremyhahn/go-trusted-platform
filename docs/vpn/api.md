@@ -1,9 +1,9 @@
 # Remote-Access VPN — API
 
-> **Status: PARTIAL — the operator control plane ships on every transport (#584 PR 3) and in the JS SDK and the web console (#584 PR 4); the client admission routes are planned on the gateway; their wire contract is fixed and the client speaks it (§5).** · Last verified: 2026-10-13
-> §1–§4 describe `VPNService` as it is routed today. §5 is still a requirement:
-> the client verbs terminate on the gateway's admission listener, which waits on
-> the gateway process model (#557).
+> **Status: PARTIAL — the operator control plane ships on every transport (#584 PR 3) and in the JS SDK and the web console (#584 PR 4), and the gateway lease record (§6) is served; the gateway's admission listener serves the client verbs over HTTPS (#557), and the client in `pkg/vpn/agent` speaks them (§5).** · Last verified: 2026-10-14
+> §1–§4 describe `VPNService` as it is routed today. §5 is the gateway's
+> admission listener: routed, but `gatewayd` does not yet assemble the VPN
+> runtime that opens it (see [engineering.md](engineering.md) §1).
 > Feature folder: [architecture.md](architecture.md) · [engineering.md](engineering.md) ·
 > [cli.md](cli.md) · api (this file) · [user.md](user.md).
 
@@ -113,35 +113,46 @@ telemetry store.
 The list RPCs are not paginated: they return the full set for the tenant.
 Routes are unversioned beyond the `/api/v1` prefix.
 
-## 5. Client admission *(planned)*
+## 5. Client admission
 
-These verbs terminate on the **gateway's admission listener** (mTLS, device
-identity, no bearer token), not on the control plane. Nothing below is routed
-yet: the wire contract (routes, bodies, refusal classes) is fixed in
-`pkg/sdn/gateway/services/vpn/wire.go`, and the client in `pkg/vpn/agent`
-already speaks all four routes, tested against an `httptest` stand-in for the
-listener (#557).
+These verbs terminate on the **gateway's admission listener**
+(`vpn.AdmissionListener`, bound to `management_vpn.listener`), not on the
+control plane. The listener speaks HTTPS with TLS 1.3 and requires a client
+certificate that chains to the device-identity anchor, read on every
+handshake; a connection without one, with an expired one or one from another
+CA fails the handshake and reaches no handler. There is no bearer token. The
+wire contract (routes, bodies, refusal classes) is
+`pkg/sdn/gateway/services/vpn/wire.go`, shared by the listener and the client
+in `pkg/vpn/agent`. The client speaks all four routes and decodes every
+body it sends with the listener's own decoder (`vpn.DecodeRequest`) in its
+tests.
 
-| Capability | REST | gRPC | `scp` |
+| Capability | REST (admission listener) | gRPC | Success |
 |---|---|---|---|
-| Challenge | `POST /api/v1/vpn/challenges` | `VPNService.Challenge` | device identity (mTLS), no token |
-| Admit | `POST /api/v1/vpn/admissions` | `VPNService.Admit` | device identity (mTLS), no token |
-| Renew | `POST /api/v1/vpn/leases/{id}/renew` | `VPNService.Renew` | device identity |
-| Disconnect | `DELETE /api/v1/vpn/leases/{id}` (own lease) | `VPNService.Revoke` | device identity |
+| Challenge | `POST /api/v1/vpn/challenges` | *(planned)* `VPNService.Challenge` | 200, the challenge |
+| Admit | `POST /api/v1/vpn/admissions` | *(planned)* `VPNService.Admit` | 201, the lease |
+| Renew | `POST /api/v1/vpn/leases/{id}/renew` | *(planned)* `VPNService.Renew` | 200, the lease |
+| Disconnect | `DELETE /api/v1/vpn/leases/{id}` | *(planned)* `VPNService.Revoke` | 204 |
+
+Renew and disconnect act only on the lease admitted with the presented
+certificate; another device's lease answers `lease-not-found`. A re-issued
+device certificate therefore has to admit again.
 
 The challenge answers a single-use nonce and the data planes this gateway
-serves, in its order of preference:
+serves (`management_vpn.data-planes`), in its order of preference:
 
 ```json
 { "nonce": "<base64>", "data_planes": ["masque", "wireguard"] }
 ```
 
-`AdmissionRequest`:
+`AdmissionRequest` (unknown fields, trailing data, a PCR value that is not hex
+and bodies over 1 MiB are refused with `invalid-request`):
 
 ```json
 {
+  "tenant_id": "…",
   "device_id": "…",
-  "nonce": "<base64, echoed from the challenge>",
+  "nonce": "<base64, from the challenge>",
   "attestation": { "quote": "<base64>", "signature": "<base64>", "pcrs": [{"index": 7, "value": "<hex>"}], "ak_public_key": "<base64>", "idevid_certificate": "<base64 DER>" },
   "posture": { "secure_boot": {"enabled": true, "setup_mode": false}, "ima": {"available": true, "enabled": true, "policy_loaded": true, "log_digest": "<hex>"}, "fde": {"root_encrypted": true}, "agent_version": "…", "os_release": "…", "kernel_release": "…", "collected_at": "<RFC 3339>" },
   "person_factor": { "kind": "fido2|piv", "assertion": "<base64>", "credential_id": "…" },
@@ -151,9 +162,13 @@ serves, in its order of preference:
 }
 ```
 
+`RenewalRequest` carries fresh evidence: `nonce`, `attestation`, `posture` and
+`person_factor`, shaped as above.
+
 The response is the lease (the `VPNLease` fields above, plus the data plane's
 endpoint and the verdict), with `renew_at_unix` — when the renewal window
-opens — so the client knows its next re-attestation:
+(`management_vpn.renew-window`) opens — so the client knows its next
+re-attestation:
 
 ```json
 {
@@ -165,20 +180,23 @@ opens — so the client knows its next re-attestation:
 ```
 
 A WireGuard lease carries `endpoint.wireguard` (`public_key`, `endpoint`,
-`routes`) instead.
+`routes`) instead. The listener sends `endpoint` empty today: neither plane
+exposes its client-facing endpoint to it yet.
 
-A renewal fetches a fresh challenge and posts an `AdmissionRequest` body to the
-lease's `renew` route. Its evidence is fresh — a quote over the new nonce, a new
-posture report and, when the admission carried one, the same kind of person
-factor signed over the new nonce. `device_id`, `data_plane` and `zones` repeat
-the lease's, and `peer` is empty: the lease keeps the peer it was admitted
-with. The response is the renewed lease, the same `id` with new
-`expires_at_unix` and `renew_at_unix`. A `renewal-not-open` or `nonce-unknown`
-refusal, or a 503, leaves the lease standing; every other refusal ends it.
+A renewal fetches a fresh challenge and posts a `RenewalRequest` body to the
+lease's `renew` route. Its evidence is fresh — a quote over the new nonce, a
+new posture report and, when the admission carried one, the same kind of
+person factor signed over the new nonce. The body carries no `device_id`,
+`data_plane`, `zones` or `peer`: the lease keeps the device, plane, zones and
+peer it was admitted with, and an `AdmissionRequest` body on this route is
+refused with `invalid-request`. The response is the renewed lease, the same
+`id` with new `expires_at_unix` and `renew_at_unix`. A `renewal-not-open` or
+`nonce-unknown` refusal, or a 503, leaves the lease standing; every other
+refusal ends it.
 
 A refusal carries only `reason` (the class from [engineering.md](engineering.md)
 §3) and, for a posture violation, `rules` — the rule names, never the policy
-text or the identity list:
+text or the identity list; the full error stays in the gateway's log:
 
 ```json
 { "reason": "posture-violation", "rules": ["secure_boot", "fde"] }
@@ -189,9 +207,42 @@ text or the identity list:
 | 400 | `invalid-request` |
 | 401 | `untrusted-issuer`, `no-identity`, `nonce-unknown`, `person-factor-required`, `person-factor-invalid` |
 | 403 | the other identity refusals (`not-listed`, `not-attested`, …), `attestation-failed`, `posture-violation`, `peer-not-enrolled`, `zone-not-allowed` |
-| 404 / 409 / 410 | `lease-not-found` / `renewal-not-open` / `lease-expired` |
+| 404 / 410 | `lease-not-found` / `lease-expired` |
+| 409 | `renewal-not-open`, `peer-conflict` |
 | 503 | `posture-unavailable`, `pool-exhausted`, `data-plane-unavailable`, `lease-store-unavailable`, `not-started` |
 | 500 | `internal` |
 
 The client verbs are not offered on MCP: an LLM client is not a device with a
 TPM, and there is no honest way for it to attest.
+
+## 6. Gateway lease record
+
+A gateway writes each lease it admits, renews or revokes through to the
+control plane, which keeps it under `tenant/<id>/vpn/lease/<lease-id>`
+([engineering.md](engineering.md) §6). The routes are on the gateway-facing
+half of the gateway control plane (`pkg/webservice/v1/rest/gateway`), beside
+telemetry and the desired-config pull, and authenticate the same way: a
+verified mTLS client certificate whose Common Name is `{id}`, with no token
+and no scope ([docs/gateway/api.md](../gateway/api.md)). Like that pair they
+are REST only — their one caller is gatewayd's `controlplane.Reporter`.
+
+| Route | Body | Effect |
+|---|---|---|
+| `PUT /api/v1/gateway/vpn-leases/{id}` | `DesiredVPNLease` | Records the lease as gateway `{id}`'s, replacing an earlier write of it |
+| `DELETE /api/v1/gateway/vpn-leases/{id}/{tenant}/{lease}` | — | Releases the lease; one already gone is a success, so a retry is safe |
+
+```json
+// DesiredVPNLease
+{ "id": "…", "tenant_id": "acme", "device_id": "laptop-1", "address": "10.8.0.2/32",
+  "zones": ["management"], "data_plane": "masque", "wireguard_public_key": "<base64>",
+  "client_certificate_sha256": "<base64>", "issued_at": "<RFC 3339>",
+  "expires_at": "<RFC 3339>", "renewals": 0,
+  "verdict": { "passed": true, "cryptographic": true, "profile_id": 7 } }
+```
+
+401 without a verified certificate; 403 when `{id}` names another gateway or
+the lease was issued by another one (`ErrLeaseOwnedByOtherGateway`); 400 for
+a malformed body or lease (`ErrInvalidArgument`); 500 when the store cannot
+complete the write, or when the daemon has no VPN control plane. The gateway
+reads its leases back as `leases` in the `vpn` section of its desired config,
+expired ones already swept.

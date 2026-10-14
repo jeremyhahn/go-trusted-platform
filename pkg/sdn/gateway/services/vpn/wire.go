@@ -15,12 +15,15 @@ package vpn
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
 )
 
@@ -158,6 +161,7 @@ type PeerWire struct {
 
 // AdmissionRequestWire is the body of POST PathAdmissions.
 type AdmissionRequestWire struct {
+	TenantID     string            `json:"tenant_id"`
 	DeviceID     string            `json:"device_id"`
 	Nonce        []byte            `json:"nonce"`
 	Attestation  *AttestationWire  `json:"attestation"`
@@ -166,6 +170,65 @@ type AdmissionRequestWire struct {
 	DataPlane    DataPlaneKind     `json:"data_plane"`
 	Peer         PeerWire          `json:"peer"`
 	Zones        []string          `json:"zones,omitempty"`
+}
+
+// DecodeRequest decodes one request body into into the way the admission
+// listener does: a single JSON object with no field the body type does not
+// declare, so a client that sends another route's body is refused rather
+// than half-read.
+func DecodeRequest(r io.Reader, into any) error {
+	dec := json.NewDecoder(r)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(into); err != nil {
+		return &ErrInvalidRequest{Field: "body", Reason: err.Error()}
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return &ErrInvalidRequest{Field: "body", Reason: "trailing data after the JSON object"}
+	}
+	return nil
+}
+
+// RenewalRequestWire is the body of POST LeaseRenewPath: fresh evidence over
+// a fresh nonce.
+type RenewalRequestWire struct {
+	Nonce        []byte            `json:"nonce"`
+	Attestation  *AttestationWire  `json:"attestation"`
+	Posture      *PostureReport    `json:"posture"`
+	PersonFactor *PersonFactorWire `json:"person_factor,omitempty"`
+}
+
+// request binds the body to the mTLS peer that sent it.
+func (w *AdmissionRequestWire) request(peer *calleradmission.Peer) (*AdmissionRequest, error) {
+	att, err := w.Attestation.HostAttestation(w.Nonce)
+	if err != nil {
+		return nil, err
+	}
+	return &AdmissionRequest{
+		Peer:           peer,
+		DeviceID:       w.DeviceID,
+		TenantID:       w.TenantID,
+		Nonce:          w.Nonce,
+		Attestation:    att,
+		Posture:        w.Posture,
+		PersonFactor:   w.PersonFactor.PersonFactor(),
+		DataPlane:      w.DataPlane,
+		Keys:           PeerKeys{WireGuardPublicKey: w.Peer.WireGuardPublicKey},
+		RequestedZones: w.Zones,
+	}, nil
+}
+
+// evidence converts the body to the service's renewal evidence.
+func (w *RenewalRequestWire) evidence() (*Evidence, error) {
+	att, err := w.Attestation.HostAttestation(w.Nonce)
+	if err != nil {
+		return nil, err
+	}
+	return &Evidence{
+		Nonce:        w.Nonce,
+		Attestation:  att,
+		Posture:      w.Posture,
+		PersonFactor: w.PersonFactor.PersonFactor(),
+	}, nil
 }
 
 // WireGuardEndpointWire is what a WireGuard client needs to reach the
@@ -245,6 +308,7 @@ const (
 	RefusalLeaseNotFound         RefusalClass = "lease-not-found"
 	RefusalPeerNotEnrolled       RefusalClass = "peer-not-enrolled"
 	RefusalRenewalNotOpen        RefusalClass = "renewal-not-open"
+	RefusalPeerConflict          RefusalClass = "peer-conflict"
 	RefusalNonceUnknown          RefusalClass = "nonce-unknown"
 	RefusalZoneNotAllowed        RefusalClass = "zone-not-allowed"
 	RefusalInvalidRequest        RefusalClass = "invalid-request"
@@ -291,12 +355,15 @@ var refusalRules = []refusalRule{
 	classify[ErrPostureUnavailable](RefusalPostureUnavailable, http.StatusServiceUnavailable),
 	classify[ErrPoolExhausted](RefusalPoolExhausted, http.StatusServiceUnavailable),
 	classify[ErrDataPlaneUnavailable](RefusalDataPlaneUnavailable, http.StatusServiceUnavailable),
+	classify[ErrDataPlaneNotStarted](RefusalDataPlaneUnavailable, http.StatusServiceUnavailable),
 	classify[ErrLeaseStoreUnavailable](RefusalLeaseStoreUnavailable, http.StatusServiceUnavailable),
 	classify[ErrNotStarted](RefusalNotStarted, http.StatusServiceUnavailable),
 	classify[ErrLeaseExpired](RefusalLeaseExpired, http.StatusGone),
 	classify[ErrLeaseNotFound](RefusalLeaseNotFound, http.StatusNotFound),
 	classify[ErrRenewalNotOpen](RefusalRenewalNotOpen, http.StatusConflict),
+	classify[ErrPeerConflict](RefusalPeerConflict, http.StatusConflict),
 	classify[ErrInvalidRequest](RefusalInvalidRequest, http.StatusBadRequest),
+	classify[ErrPeerKeyInvalid](RefusalInvalidRequest, http.StatusBadRequest),
 }
 
 // classify builds the rule for an error type whose refusal has no detail.

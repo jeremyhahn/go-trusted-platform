@@ -22,6 +22,7 @@ import (
 	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -186,6 +187,7 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.overlayRoutes()
 	v1Router.ntpRoutes()
 	v1Router.vpnRoutes()
+	v1Router.appServiceRoutes()
 	v1Router.pxeRoutes()
 	v1Router.sdnRoutes()
 	v1Router.switchRoutes()
@@ -718,6 +720,7 @@ func (v1Router *Router) gatewayRoutes() {
 			store,
 			cfgSource,
 			v1Router.responseWriter)
+		cp.SetVPNLeaseSink(v1Router.restHandlerRegistry.GatewayVPNLeases())
 		// The control plane is split by PRINCIPAL, not by verb. The
 		// operator half (the fleet-wide /gateway/state surface) takes the
 		// admin gate; the gatewayd-facing half authenticates itself with a
@@ -816,6 +819,40 @@ func (v1Router *Router) vpnRoutes() {
 	// there: operator work behind the admin gate, then vpn:read, vpn:write
 	// or vpn:admin per route, as on gRPC, QUIC and MCP.
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+}
+
+// appServiceRoutes mounts /cache, /scheduler and /messaging over the
+// daemon's Cache, Scheduler and Messaging servers, with the route table the
+// daemon REST listener serves. Like the VPN routes they are operator work
+// behind the admin gate, then each route's cache:, scheduler: or messaging:
+// scope, as on gRPC, QUIC and MCP.
+func (v1Router *Router) appServiceRoutes() {
+	servers := v1Router.restHandlerRegistry.AppServiceServers()
+	if servers.Cache == nil && servers.Scheduler == nil && servers.Messaging == nil {
+		v1Router.logger.Debug("Application service servers are nil - cache, scheduler and messaging routes not registered")
+		return
+	}
+	guard := scopeRouteGuard{}
+	if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+		guard.authorizer = scoped
+	}
+	restapi.NewAppServiceHandlers(servers, guard, v1Router.logger.Slog()).
+		RegisterVersionedRoutes(v1Router.gated(common.ROLE_ADMIN))
+}
+
+// scopeRouteGuard checks an application service route's scope with the
+// platform token middleware. Without one the routes stay on the role gate
+// alone, as the VPN routes do under the legacy JWT handler: its sessions
+// carry roles, not scopes.
+type scopeRouteGuard struct {
+	authorizer middleware.ScopeAuthorizer
+}
+
+func (g scopeRouteGuard) Require(scope string, next http.HandlerFunc) http.HandlerFunc {
+	if g.authorizer == nil {
+		return next
+	}
+	return g.authorizer.RequireScope(scope)(next).ServeHTTP
 }
 
 func (v1Router *Router) pxeRoutes() {

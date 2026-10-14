@@ -73,7 +73,10 @@ func runEnrollRecovery(commonFlags *cli.CommonFlags, f *enrollRecoveryFlags) err
 	}
 	defer base.Close()
 
-	client := lukssvc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.EnrollRecovery(base.Context(), &lukssvc.EnrollRecoveryRequest{
 		Device:             device,
 		ExistingPassphrase: f.existingPassphrase,

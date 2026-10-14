@@ -90,6 +90,13 @@ func (e *errorServiceProvider) OverlayTunnelList(ctx context.Context, vni uint32
 	return e.mockServiceProvider.OverlayTunnelList(ctx, vni)
 }
 
+func (e *errorServiceProvider) OverlayTunnelStats(ctx context.Context, remoteVTEP string, vni uint32) (interface{}, error) {
+	if e.shouldFail("OverlayTunnelStats") {
+		return nil, ErrMockServiceError
+	}
+	return e.mockServiceProvider.OverlayTunnelStats(ctx, remoteVTEP, vni)
+}
+
 func (e *errorServiceProvider) OverlayMACList(ctx context.Context, vni uint32) ([]interface{}, error) {
 	if e.shouldFail("OverlayMACList") {
 		return nil, ErrMockServiceError
@@ -320,6 +327,7 @@ func TestServiceErrorPaths(t *testing.T) {
 		{"overlay_vni_create error", "overlay_vni_create", map[string]interface{}{"vni": float64(100)}, "OverlayVNICreate"},
 		{"overlay_vni_delete error", "overlay_vni_delete", map[string]interface{}{"vni": float64(100)}, "OverlayVNIDelete"},
 		{"overlay_tunnel_list error", "overlay_tunnel_list", map[string]interface{}{"vni": float64(100)}, "OverlayTunnelList"},
+		{"overlay_tunnel_stats error", "overlay_tunnel_stats", map[string]interface{}{"remote_vtep": "10.0.0.2"}, "OverlayTunnelStats"},
 		{"overlay_mac_list error", "overlay_mac_list", map[string]interface{}{"vni": float64(100)}, "OverlayMACList"},
 		{"overlay_mac_forget error", "overlay_mac_forget", map[string]interface{}{"mac": "aa:bb:cc:dd:ee:ff", "vni": float64(100)}, "OverlayMACForget"},
 

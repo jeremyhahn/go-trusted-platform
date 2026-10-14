@@ -229,6 +229,30 @@ _, err = baas.Project().GrantAgentRole(ctx, &project.GrantAgentRoleRequest{
 })
 ```
 
+### Application and search services
+
+The same wrapper routes `Cache()`, `Vector()`, `TimeSeries()`,
+`ObjectStorage()`, `Scheduler()` and `Messaging()`. Their types come from
+`sdk/go/services/{cache,vector,timeseries,objectstorage,scheduler,messaging}`
+([api.md §3.4](api.md#34-application-and-search-client-types)):
+
+```go
+import "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vector"
+
+resp, err := baas.Vector().SearchSimilar(ctx, &vector.SearchSimilarRequest{
+    Namespace:   "embeddings",
+    QueryVector: embedding,
+    K:           10,
+})
+```
+
+An accessor returns nil when quicbaasd does not serve that service. Vector,
+TimeSeries and ObjectStorage are reached only through the side-client.
+platformd serves Cache, Scheduler and Messaging itself: `platform.Client`'s
+`Cache()`, `Scheduler()` and `Messaging()` reach them on the platform
+transport, and `platformctl cache`, `scheduler` and `messaging` drive them
+([cli.md](cli.md)).
+
 ## 6. In-process (embedded)
 
 A Go program that links the platform services can call them without a socket:

@@ -66,6 +66,7 @@ go test -tags "$(make -C ../.. -s print-build-tags)" ./transport/rest/ -run Test
 | `services/quicbaas/`, `services/auth/` | typed frontage over the go-quicbaas SDK |
 | `services/orchestration/` | container-trust aliases over `go-quicbaas/sdk/go/orchestration` |
 | `services/{orchestrator,project,account,sdlc}/` | request, response and record aliases over the matching `go-quicbaas/sdk/go/client/*` package |
+| `services/{cache,vector,timeseries,objectstorage,scheduler,messaging}/` | request, response and value aliases over the matching `go-quicbaas/sdk/go/client/*` package |
 | `auth/` | `Provider`, `MTLSProvider`, `TokenProvider`, `NoneProvider` |
 
 ### Service wrapper constructors
@@ -79,9 +80,8 @@ Most wrappers have two constructors:
 
 `fido2`, `piv`, `luks` and `ceremony` are different. They expose
 `NewGRPCClient(*grpc.ClientConn)` and
-`NewGRPCClientFromClient(platformv1.<Service>Client)`. Each package's
-`NewClient()` returns a `Client` whose every method fails with
-`ErrNotYetWired`.
+`NewGRPCClientFromClient(platformv1.<Service>Client)`, which wraps the
+matching accessor (e.g. `luks.NewGRPCClientFromClient(c.LUKS())`).
 
 `switch` (package `switchsdk`) is HTTP-only: `NewClient(baseURL, *http.Client)`.
 `invitation` and `tenant` (user client) have both REST and gRPC constructors.
@@ -93,6 +93,12 @@ A go-quicbaas client is re-exported by a one-line accessor on
 plus a row flipped to ✅ in [api.md §3](api.md#3-go-quicbaas-re-export-surface).
 Its tests prove the accessor returns the SDK's own client and returns nil when the
 SDK serves none.
+
+A QRDB-backed upstream accessor (`Security().Barrier()`, `Discovery()`, ...) also
+returns an error, because go-quicbaas opens its QRDB transport lazily on the first
+call. The wrapper returns `(client, error)` too and wraps the upstream error in
+`ErrServiceUnavailable{Service, Cause}` from `services/quicbaas/errors.go`, which
+unwraps to the cause. Its tests also prove that failure path.
 
 Upstream types are re-exported as aliases (`type TrustLevel = quicbaasorch.TrustLevel`),
 never as copies, so `errors.As` and type assertions hold across the boundary;

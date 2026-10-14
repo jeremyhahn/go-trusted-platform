@@ -26,6 +26,7 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	attestationstore "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/store"
 	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
@@ -106,6 +107,7 @@ type testHandlerRegistry struct {
 	eabService            platformv1.EABServiceServer
 	ntpService            platformv1.NTPServiceServer
 	vpnService            platformv1.VPNServiceServer
+	appServices           restapi.AppServiceServers
 	overlayService        platformv1.OverlayServiceServer
 	switchService         device.SwitchServiceProvider
 	gatewayService        platformv1.GatewayServiceServer
@@ -278,6 +280,10 @@ func (r *testHandlerRegistry) VPNServiceServer() platformv1.VPNServiceServer {
 	return r.vpnService
 }
 
+func (r *testHandlerRegistry) AppServiceServers() restapi.AppServiceServers {
+	return r.appServices
+}
+
 func (r *testHandlerRegistry) TenantServiceServer() platformv1.TenantServiceServer {
 	return r.tenantService
 }
@@ -319,6 +325,8 @@ func (r *testHandlerRegistry) AttestationVerdicts() restattestation.VerdictPolle
 func (r *testHandlerRegistry) GatewayControlPlane() (restgateway.GatewayStateStore, restgateway.DesiredConfigSource) {
 	return r.gatewayStore, nil
 }
+
+func (r *testHandlerRegistry) GatewayVPNLeases() restgateway.VPNLeaseSink { return nil }
 
 // Tests
 

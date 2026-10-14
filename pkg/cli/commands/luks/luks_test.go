@@ -14,12 +14,18 @@
 package luks
 
 import (
+	"context"
 	"errors"
 	"os"
 	"strings"
 	"testing"
 
+	"google.golang.org/grpc"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	lukssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/luks"
 )
 
 func testFlags() func() *cli.CommonFlags {
@@ -224,6 +230,54 @@ func TestValidateSlot(t *testing.T) {
 		if !tc.wantErr && err != nil {
 			t.Errorf("validateSlot(%d): unexpected error %v", tc.slot, err)
 		}
+	}
+}
+
+type luksOnlyClient struct {
+	platform.Client
+	rpc platformv1.LUKSServiceClient
+}
+
+func (c luksOnlyClient) LUKS() platformv1.LUKSServiceClient { return c.rpc }
+
+type statusRPC struct {
+	platformv1.LUKSServiceClient
+	device string
+}
+
+func (s *statusRPC) Status(_ context.Context, req *platformv1.LUKSStatusRequest, _ ...grpc.CallOption) (*platformv1.LUKSStatusResponse, error) {
+	s.device = req.GetDevice()
+	return &platformv1.LUKSStatusResponse{Device: req.GetDevice(), IsLuks: true}, nil
+}
+
+func TestNewService_DispatchesOverTheSDKClient(t *testing.T) {
+	rpc := &statusRPC{}
+
+	svc, err := newService(luksOnlyClient{rpc: rpc})
+	if err != nil {
+		t.Fatalf("newService() error = %v", err)
+	}
+	resp, err := svc.Status(context.Background(), &lukssvc.StatusRequest{Device: "/dev/sda2"})
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if rpc.device != "/dev/sda2" || !resp.IsLUKS {
+		t.Errorf("Status() reached device %q with IsLUKS %v; want /dev/sda2 and true", rpc.device, resp.IsLUKS)
+	}
+}
+
+func TestNewService_RefusesAClientWithoutTheLUKSService(t *testing.T) {
+	svc, err := newService(luksOnlyClient{})
+	if svc != nil {
+		t.Errorf("expected no service, got %v", svc)
+	}
+
+	var unavailable platform.ErrServiceUnavailable
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("expected platform.ErrServiceUnavailable, got %v", err)
+	}
+	if unavailable.Service != lukssvcName {
+		t.Errorf("ErrServiceUnavailable.Service = %q, want %q", unavailable.Service, lukssvcName)
 	}
 }
 

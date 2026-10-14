@@ -81,6 +81,7 @@ func (d unopenedDevice) Close() error { return nil }
 // connectOptions are the flags of vpn connect.
 type connectOptions struct {
 	gateway    string
+	tenant     string
 	deviceID   string
 	idevidCert string
 	dataPlane  string
@@ -123,10 +124,10 @@ violation (the failed rules are listed); 1 any other failure, including a
 host with no TPM device identity.
 
 Examples:
-  platformctl vpn connect --gateway gw.example.com:4433 --device-id laptop-1 --factor fido2
-  platformctl vpn connect --gateway gw.example.com:4433 --device-id laptop-1 --idevid-cert idevid.pem --ca-file gw-ca.pem --zones management
-  platformctl vpn connect --gateway gw.example.com:4433 --device-id laptop-1 --idevid-cert idevid.pem --foreground
-  platformctl vpn connect --gateway gw.example.com:4433 --device-id laptop-1 --data-plane masque --foreground`,
+  platformctl vpn connect --gateway gw.example.com:4433 --tenant acme --device-id laptop-1 --factor fido2
+  platformctl vpn connect --gateway gw.example.com:4433 --tenant acme --device-id laptop-1 --idevid-cert idevid.pem --ca-file gw-ca.pem --zones management
+  platformctl vpn connect --gateway gw.example.com:4433 --tenant acme --device-id laptop-1 --idevid-cert idevid.pem --foreground
+  platformctl vpn connect --gateway gw.example.com:4433 --tenant acme --device-id laptop-1 --data-plane masque --foreground`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -134,6 +135,7 @@ Examples:
 		},
 	}
 	cmd.Flags().StringVar(&opts.gateway, "gateway", "", "admission listener of the gateway, host:port (required)")
+	cmd.Flags().StringVar(&opts.tenant, "tenant", "", "tenant the device is enrolled in (required)")
 	cmd.Flags().StringVar(&opts.deviceID, "device-id", "", "this device's id in the gateway's device registry (required)")
 	cmd.Flags().StringVar(&opts.idevidCert, "idevid-cert", "", idevidCertUsage)
 	cmd.Flags().StringVar(&opts.dataPlane, "data-plane", "", "wireguard or masque; masque needs --foreground (default: the gateway's preference)")
@@ -142,6 +144,7 @@ Examples:
 	cmd.Flags().StringVar(&opts.caFile, "ca-file", "", "PEM roots the gateway's certificate chains to (default: the system pool)")
 	cmd.Flags().BoolVar(&opts.foreground, "foreground", false, "stay running and renew the lease until interrupted")
 	markRequired(cmd, "gateway")
+	markRequired(cmd, "tenant")
 	markRequired(cmd, "device-id")
 	return cmd
 }
@@ -239,6 +242,7 @@ func runConnect(flags *cli.CommonFlags, opts connectOptions) (err error) {
 	defer cancel()
 	st, err := a.Connect(ctx, agent.ConnectOptions{
 		Gateway:   opts.gateway,
+		TenantID:  opts.tenant,
 		DataPlane: gwvpn.DataPlaneKind(opts.dataPlane),
 		Factor:    gwvpn.PersonFactorKind(opts.factor),
 		Zones:     opts.zones,

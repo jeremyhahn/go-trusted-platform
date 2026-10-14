@@ -178,6 +178,18 @@ var (
 	vpnWrite = OpcodePermission{Resource: "vpn", Action: actionWrite}
 	vpnAdmin = OpcodePermission{Resource: "vpn", Action: actionAdmin}
 
+	cacheRead   = OpcodePermission{Resource: "cache", Action: actionRead}
+	cacheWrite  = OpcodePermission{Resource: "cache", Action: actionWrite}
+	cacheDelete = OpcodePermission{Resource: "cache", Action: actionDelete}
+
+	schedulerRead   = OpcodePermission{Resource: "scheduler", Action: actionRead}
+	schedulerWrite  = OpcodePermission{Resource: "scheduler", Action: actionWrite}
+	schedulerDelete = OpcodePermission{Resource: "scheduler", Action: actionDelete}
+
+	messagingRead   = OpcodePermission{Resource: "messaging", Action: actionRead}
+	messagingWrite  = OpcodePermission{Resource: "messaging", Action: actionWrite}
+	messagingDelete = OpcodePermission{Resource: "messaging", Action: actionDelete}
+
 	tpmRead   = OpcodePermission{Resource: "tpm", Action: actionRead}
 	tpmWrite  = OpcodePermission{Resource: "tpm", Action: actionWrite}
 	tpmDelete = OpcodePermission{Resource: "tpm", Action: actionDelete}
@@ -527,15 +539,16 @@ var ipamSubPermissions = map[byte]OpcodePermission{
 // has its own table.
 var categoryPermissions = map[byte]map[byte]OpcodePermission{
 	quicwire.OpOverlayCategory: {
-		quicwire.OpOverlayStatus:    sdnRead,
-		quicwire.OpOverlayListVTEPs: sdnRead,
-		quicwire.OpOverlayGetVTEP:   sdnRead,
-		quicwire.OpOverlayListVNIs:  sdnRead,
-		quicwire.OpOverlayCreateVNI: sdnWrite,
-		quicwire.OpOverlayDeleteVNI: sdnDelete,
-		quicwire.OpOverlayListTunns: sdnRead,
-		quicwire.OpOverlayListMACs:  sdnRead,
-		quicwire.OpOverlayForgetMAC: sdnWrite,
+		quicwire.OpOverlayStatus:      sdnRead,
+		quicwire.OpOverlayListVTEPs:   sdnRead,
+		quicwire.OpOverlayGetVTEP:     sdnRead,
+		quicwire.OpOverlayListVNIs:    sdnRead,
+		quicwire.OpOverlayCreateVNI:   sdnWrite,
+		quicwire.OpOverlayDeleteVNI:   sdnDelete,
+		quicwire.OpOverlayListTunns:   sdnRead,
+		quicwire.OpOverlayListMACs:    sdnRead,
+		quicwire.OpOverlayForgetMAC:   sdnWrite,
+		quicwire.OpOverlayTunnelStats: sdnRead,
 	},
 
 	// Gateway (gRPC GatewayService and MCP gateway_* tools) plus the proxy
@@ -605,6 +618,37 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.VPNSubSetPosturePolicy:    vpnAdmin,
 		quicwire.VPNSubDeletePosturePolicy: vpnAdmin,
 		quicwire.VPNSubListPosturePolicies: vpnAdmin,
+	},
+	// Application services reached through the composed go-quicbaas SDK.
+	// The scopes match the gRPC method catalog.
+	quicwire.OpCacheCategory: {
+		quicwire.CacheSubGetStats:     cacheRead,
+		quicwire.CacheSubClear:        cacheDelete,
+		quicwire.CacheSubGetConfig:    cacheRead,
+		quicwire.CacheSubUpdateConfig: cacheWrite,
+	},
+	quicwire.OpSchedulerCategory: {
+		quicwire.SchedulerSubCreateJob:     schedulerWrite,
+		quicwire.SchedulerSubGetJob:        schedulerRead,
+		quicwire.SchedulerSubUpdateJob:     schedulerWrite,
+		quicwire.SchedulerSubDeleteJob:     schedulerDelete,
+		quicwire.SchedulerSubListJobs:      schedulerRead,
+		quicwire.SchedulerSubTriggerJob:    schedulerWrite,
+		quicwire.SchedulerSubPauseJob:      schedulerWrite,
+		quicwire.SchedulerSubResumeJob:     schedulerWrite,
+		quicwire.SchedulerSubCancelJob:     schedulerWrite,
+		quicwire.SchedulerSubGetJobHistory: schedulerRead,
+		quicwire.SchedulerSubGetStatus:     schedulerRead,
+	},
+	quicwire.OpMessagingCategory: {
+		quicwire.MessagingSubCreateChannel:   messagingWrite,
+		quicwire.MessagingSubDeleteChannel:   messagingDelete,
+		quicwire.MessagingSubGetChannel:      messagingRead,
+		quicwire.MessagingSubListChannels:    messagingRead,
+		quicwire.MessagingSubPublish:         messagingWrite,
+		quicwire.MessagingSubGetStats:        messagingRead,
+		quicwire.MessagingSubGetDedupStats:   messagingRead,
+		quicwire.MessagingSubGetChannelStats: messagingRead,
 	},
 
 	// IAM tenant records (gRPC PlatformIAMService tenant methods)

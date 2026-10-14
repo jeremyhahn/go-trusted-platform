@@ -44,7 +44,7 @@ contract: protobuf request/response messages, decoded from JSON with
 | Devices | `/api/v1/devices`, `/api/v1/device/*` | `device.DeviceService` + `DeviceProfileService` | `admin` for CRUD/templates/assignment and the provisioning session surface; `/device/{profile,activate,heartbeat}` verify mTLS instead, and `/provisioning/{config,config/nonce,sign}` authenticate by EAB (+EK) |
 | DNS | `/api/v1/dns` | `dns.DNSService` | `admin` |
 | EAB | `/api/v1/eab` | `platformv1.EABServiceServer` | `admin` |
-| Gateway | `/api/v1/gateway` | `platformv1.GatewayServiceServer` | `admin` for the operator half; `/gateway/{telemetry,desired-config/{id}}` authenticate by verified mTLS client certificate instead |
+| Gateway | `/api/v1/gateway` | `platformv1.GatewayServiceServer` | `admin` for the operator half; `/gateway/{telemetry,desired-config/{id},vpn-leases/**}` authenticate by verified mTLS client certificate instead |
 | IAM | `/api/v1/iam` | `restiam.IAMClient` | `admin` (+ tenant guards) |
 | IDevID | `/api/v1/idevid` | `platformv1.IDevIDServiceServer` | `admin` |
 | Invitations | `/api/v1/invitations` | `platformv1.InvitationServiceServer` | `admin`; `/invitations/{accept,token/{token}}` stay open — the invitation token is the credential |

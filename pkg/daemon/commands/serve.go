@@ -1289,6 +1289,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			if svc := platformDaemon.VPNGRPCServiceServer(); svc != nil {
 				params.VPNServiceServer = svc
 			}
+			params.AppServiceServers = platformDaemon.AppServiceRESTServers()
 			if svc := platformDaemon.TenantGRPCServer(); svc != nil {
 				params.TenantServiceServer = svc
 			}
@@ -1393,6 +1394,11 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			}
 			if gwControl.DesiredCfg != nil {
 				params.GatewayDesiredConfig = gwControl.DesiredCfg
+			}
+			// The gateways write their VPN leases through to the same
+			// service that renders them back in the desired configuration.
+			if vpnControl := platformDaemon.VPNControlPlane(); vpnControl != nil {
+				params.GatewayVPNLeases = vpnControl
 			}
 		}
 		restHandlerRegistry := v1.NewHandlerRegistry(ctx, params)

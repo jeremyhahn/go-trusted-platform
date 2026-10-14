@@ -787,6 +787,10 @@ func TestOpcodeToString(t *testing.T) {
 
 		// IAM tenant-record category opcode
 		{OpIAMCategory, "IAMCategory"},
+		{OpVPNCategory, "VPNCategory"},
+		{OpCacheCategory, "CacheCategory"},
+		{OpSchedulerCategory, "SchedulerCategory"},
+		{OpMessagingCategory, "MessagingCategory"},
 
 		// VM Operations
 		{OpVMCreate, "VMCreate"},

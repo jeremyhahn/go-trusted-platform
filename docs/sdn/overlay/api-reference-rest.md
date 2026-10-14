@@ -57,7 +57,9 @@ Content-Type: application/json
 }
 ```
 
-Creates a VNI. `vni` is required; returns `201` with the created VNI.
+Creates a VNI. `vni` is required (1-16777215); `vlan` is optional (0-4094,
+0 maps no VLAN). Returns `201` with the created VNI, or `400` for a VNI or
+VLAN out of range.
 
 ```http
 DELETE /api/v1/sdn/overlay/vnis/{vni}
@@ -99,7 +101,7 @@ Errors use the standard platform error envelope. Notable statuses:
 
 | Status | Meaning |
 |--------|---------|
-| 400 | Invalid VNI / MAC / node ID, missing required field |
+| 400 | Invalid VNI / VLAN / MAC / node ID, missing required field |
 | 404 | VTEP, VNI, or MAC not found |
 | 503 | Overlay service not available |
 

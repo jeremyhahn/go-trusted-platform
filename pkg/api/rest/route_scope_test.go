@@ -88,6 +88,34 @@ var ntpRouteScopes = []guardedRoute{
 	{http.MethodPost, "/api/v1/ntp/step", "ntp:write"},
 }
 
+// appServiceRouteScopes is the Cache, Scheduler and Messaging route table of
+// the gRPC method catalog.
+var appServiceRouteScopes = []guardedRoute{
+	{http.MethodGet, "/api/v1/cache/stats", "cache:read"},
+	{http.MethodGet, "/api/v1/cache/config", "cache:read"},
+	{http.MethodPatch, "/api/v1/cache/config", "cache:write"},
+	{http.MethodDelete, "/api/v1/cache/entries", "cache:delete"},
+	{http.MethodPost, "/api/v1/scheduler/jobs", "scheduler:write"},
+	{http.MethodGet, "/api/v1/scheduler/jobs", "scheduler:read"},
+	{http.MethodGet, "/api/v1/scheduler/jobs/j1", "scheduler:read"},
+	{http.MethodPatch, "/api/v1/scheduler/jobs/j1", "scheduler:write"},
+	{http.MethodDelete, "/api/v1/scheduler/jobs/j1", "scheduler:delete"},
+	{http.MethodPost, "/api/v1/scheduler/jobs/j1/trigger", "scheduler:write"},
+	{http.MethodPost, "/api/v1/scheduler/jobs/j1/pause", "scheduler:write"},
+	{http.MethodPost, "/api/v1/scheduler/jobs/j1/resume", "scheduler:write"},
+	{http.MethodPost, "/api/v1/scheduler/jobs/j1/cancel", "scheduler:write"},
+	{http.MethodGet, "/api/v1/scheduler/jobs/j1/history", "scheduler:read"},
+	{http.MethodGet, "/api/v1/scheduler/status", "scheduler:read"},
+	{http.MethodPost, "/api/v1/messaging/channels", "messaging:write"},
+	{http.MethodGet, "/api/v1/messaging/channels", "messaging:read"},
+	{http.MethodGet, "/api/v1/messaging/channels/events", "messaging:read"},
+	{http.MethodDelete, "/api/v1/messaging/channels/events", "messaging:delete"},
+	{http.MethodPost, "/api/v1/messaging/channels/events/messages", "messaging:write"},
+	{http.MethodGet, "/api/v1/messaging/channels/events/stats", "messaging:read"},
+	{http.MethodGet, "/api/v1/messaging/stats", "messaging:read"},
+	{http.MethodGet, "/api/v1/messaging/dedup-stats", "messaging:read"},
+}
+
 // computeRouteScopes is every compute route with the scope of its gRPC twin.
 var computeRouteScopes = []guardedRoute{
 	{http.MethodPost, "/api/v1/compute/vms", "vm:write"},
@@ -123,12 +151,13 @@ var computeRouteScopes = []guardedRoute{
 	{http.MethodGet, "/api/v1/compute/containers/ctr-1/metrics", "container:read"},
 }
 
-// guardedRouter mounts the VPN, NTP and compute routes with no service behind
-// them, so a request the guard admits answers 503.
+// guardedRouter mounts the VPN, NTP, application service and compute routes
+// with no service behind them, so a request the guard admits answers 503.
 func guardedRouter(guard *ScopeGuard) *mux.Router {
 	router := mux.NewRouter()
 	NewVPNHandlers(nil, guard, nil).RegisterRoutes(router)
 	NewNTPHandlers(nil, guard, nil).RegisterRoutes(router)
+	NewAppServiceHandlers(AppServiceServers{}, guard, nil).RegisterRoutes(router)
 	NewComputeHandlers(nil, guard, nil).RegisterRoutes(router)
 	return router
 }
@@ -151,6 +180,7 @@ func TestScopeGuard_EachRouteAdmitsItsScopeAndRefusesOthers(t *testing.T) {
 	}{
 		{"vpn", vpnRouteScopes, "ntp:read"},
 		{"ntp", ntpRouteScopes, "vpn:read"},
+		{"app services", appServiceRouteScopes, "vpn:read"},
 		{"compute", computeRouteScopes, "ntp:read"},
 	} {
 		t.Run(group.name, func(t *testing.T) {
@@ -179,9 +209,9 @@ func TestScopeGuard_EachRouteAdmitsItsScopeAndRefusesOthers(t *testing.T) {
 
 func TestScopeGuard_ReadScopeDoesNotOpenWriteOrAdminRoutes(t *testing.T) {
 	router := guardedRouter(NewScopeGuard(&scopedAuthorizer{scopes: map[string][]string{
-		"reader": {"vpn:read", "ntp:read", "vm:read", "container:read"},
+		"reader": {"vpn:read", "ntp:read", "cache:read", "scheduler:read", "messaging:read", "vm:read", "container:read"},
 	}}, nil, nil))
-	for _, route := range slices.Concat(vpnRouteScopes, ntpRouteScopes, computeRouteScopes) {
+	for _, route := range slices.Concat(vpnRouteScopes, ntpRouteScopes, appServiceRouteScopes, computeRouteScopes) {
 		recorder := serveWithToken(router, route, "reader")
 		if strings.HasSuffix(route.scope, ":read") {
 			assert.Equal(t, http.StatusServiceUnavailable, recorder.Code, "%s %s", route.method, route.path)
@@ -193,7 +223,7 @@ func TestScopeGuard_ReadScopeDoesNotOpenWriteOrAdminRoutes(t *testing.T) {
 
 func TestScopeGuard_NilGuardRefusesEveryRoute(t *testing.T) {
 	router := guardedRouter(nil)
-	for _, route := range slices.Concat(vpnRouteScopes, ntpRouteScopes, computeRouteScopes) {
+	for _, route := range slices.Concat(vpnRouteScopes, ntpRouteScopes, appServiceRouteScopes, computeRouteScopes) {
 		recorder := serveWithToken(router, route, operatorToken)
 		assert.Equal(t, http.StatusForbidden, recorder.Code, "%s %s", route.method, route.path)
 

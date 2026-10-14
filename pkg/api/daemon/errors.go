@@ -1557,15 +1557,6 @@ func (e ErrOverlayServiceNotAvailable) Error() string {
 	return "overlay network service not available"
 }
 
-// ErrOverlayOperationNotImplemented is returned when an overlay operation is not yet implemented
-type ErrOverlayOperationNotImplemented struct {
-	Operation string
-}
-
-func (e ErrOverlayOperationNotImplemented) Error() string {
-	return fmt.Sprintf("overlay operation not implemented: %s", e.Operation)
-}
-
 // =============================================================================
 // Gateway Service Errors
 // =============================================================================

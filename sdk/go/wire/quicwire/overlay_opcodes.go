@@ -25,4 +25,6 @@ const (
 	OpOverlayListTunns byte = 0x07
 	OpOverlayListMACs  byte = 0x08
 	OpOverlayForgetMAC byte = 0x09
+	// OpOverlayTunnelStats returns one tunnel's counters (gRPC GetTunnelStats).
+	OpOverlayTunnelStats byte = 0x0A
 )

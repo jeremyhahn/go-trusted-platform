@@ -354,6 +354,8 @@ consumed by gateways:
 | DELETE | `/api/v1/gateway/state/{id}` | Forget a gateway's state | operator surface (see below) |
 | POST | `/api/v1/gateway/telemetry` | Gateway pushes telemetry | body `gateway_id` **must equal** the client certificate CN |
 | GET | `/api/v1/gateway/desired-config/{id}` | Gateway fetches its desired configuration | `{id}` **must equal** the client certificate CN |
+| PUT | `/api/v1/gateway/vpn-leases/{id}` | Gateway records a management VPN lease it admitted or renewed ([docs/vpn/api.md](../vpn/api.md) §6) | `{id}` **must equal** the client certificate CN |
+| DELETE | `/api/v1/gateway/vpn-leases/{id}/{tenant}/{lease}` | Gateway releases a lease it revoked | `{id}` **must equal** the client certificate CN |
 
 `desired-config` is the direction of authority made explicit: the control plane
 decides, the gateway fetches. A gateway does not author its own configuration.
@@ -474,8 +476,9 @@ surface (`/gateway/status`, `/gateway/mode`, `/gateway/bgp/**`,
 announce is a route hijack; an anonymous IPAM allocation is address exhaustion.
 
 **gatewayd-facing half — NOT role-gated, because it is already
-authenticated:** `POST /gateway/telemetry` and `GET
-/gateway/desired-config/{id}` require a **verified mTLS client certificate**
+authenticated:** `POST /gateway/telemetry`, `GET
+/gateway/desired-config/{id}`, `PUT /gateway/vpn-leases/{id}` and `DELETE
+/gateway/vpn-leases/{id}/{tenant}/{lease}` require a **verified mTLS client certificate**
 and bind the request's `gateway_id` to that certificate's Common Name — 401
 without a certificate, 403 when the id names another gateway
 (`ControlPlane.authenticatedGateway`). Their caller is gatewayd, whose

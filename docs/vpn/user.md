@@ -1,13 +1,14 @@
 # Remote-Access VPN — User Guide
 
-> **Status: PARTIAL — operators can manage enrolment, posture policies and session status today, from the CLI (#584 PR 3) and the web console (#584 PR 4); the client verbs and both tunnels exist, but a machine cannot connect yet.** · Last verified: 2026-10-13
+> **Status: PARTIAL — operators can manage enrolment, posture policies and session status today, from the CLI (#584 PR 3) and the web console (#584 PR 4); the client verbs, both tunnels and the gateway's admission listener exist, but a machine cannot connect yet.** · Last verified: 2026-10-14
 > "Operator tasks" below works now, and so does `platformctl vpn posture`.
 > `platformctl vpn connect` (with `--foreground` to keep the lease renewed),
 > `renew`, `lease` and `disconnect` exist, present the machine's TPM identity
 > and bring the WireGuard or MASQUE tunnel up, but `connect` cannot finish
-> until the client's security key and smart card support lands, and no
-> gateway serves admissions yet. Until then the interim administrative VPN on
-> the site firewall remains the way in.
+> until the client's security key and smart card support lands. The gateway
+> end it connects to, the admission listener, exists (#557), but `gatewayd`
+> does not open it on a deployed gateway yet. Until both land the interim
+> administrative VPN on the site firewall remains the way in.
 > Feature folder: [architecture.md](architecture.md) · [engineering.md](engineering.md) ·
 > [cli.md](cli.md) · [api.md](api.md) · user (this file).
 
@@ -49,8 +50,15 @@ Bringing a tunnel up needs root.
 ## First connection
 
 ```sh
-platformctl vpn connect --gateway gw.letstrust.com:4433 --factor fido2
+platformctl vpn connect --gateway gw.letstrust.com:4433 --tenant acme --device-id laptop-1 --factor fido2
 ```
+
+`--gateway` is the gateway's admission listener (`management_vpn.listener`,
+port 4433 by default). It accepts only a connection presenting your device's
+certificate; a machine without one is turned away before anything is asked of
+it. `--tenant` and `--device-id` are the tenant and id your device was
+enrolled under (`platformctl vpn peer enrol <device-id> --tenant <t>`); both
+are required.
 
 You will be asked to touch the key (or enter the card PIN). On success the
 command prints the lease: your address, the zones you may reach and when the
@@ -120,7 +128,7 @@ stays open. Enrolling a peer and deleting a policy remain CLI tasks.
 
 | Symptom | Meaning | What to do |
 |---|---|---|
-| `refused: untrusted issuer` | Your device certificate does not chain to the platform's anchors | Re-enroll the device; check the gateway's trust bundle |
+| `refused: untrusted issuer`, or the TLS handshake fails | Your device certificate is missing, expired, or does not chain to the platform's anchors | Re-enroll the device; check the gateway's trust bundle |
 | `refused: attestation failed` | Your boot measurements no longer match the enrolled ones | A firmware or kernel update changed them; an operator refreshes the device's baseline after confirming the change is legitimate |
 | `refused: posture violation: secure_boot` (or `fde`, `ima`) | The named rule failed | Fix the setting on the machine; `platformctl vpn posture` shows the current facts |
 | `this host has no TPM device identity for the VPN client: <reason>` | The machine's TPM could not be opened or holds no IDevID; the reason says which | Check `/etc/trusted-platform/config.yaml` has a `tpm` section with `idevid`; when the reason asks for `--idevid-cert`, export the certificate with `platformctl tpm idevid certificate -o json` and pass it |

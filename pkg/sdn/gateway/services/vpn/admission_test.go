@@ -15,6 +15,7 @@ package vpn
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"testing"
 	"time"
@@ -452,6 +453,44 @@ func TestSweep_ExpiredLeasesAreRevoked(t *testing.T) {
 	assert.Equal(t, 0, h.ipam.allocatedCount())
 }
 
+// pendingStore is a PendingDeleteStore that counts the sweep's retries.
+type pendingStore struct {
+	LeaseStore
+	retryErr error
+	retries  int
+}
+
+func (p *pendingStore) RetryPendingDeletes(context.Context) error {
+	p.retries++
+	return p.retryErr
+}
+
+func TestSweep_RetriesPendingDeletes(t *testing.T) {
+	h := newHarness(t, testConfig())
+	store := &pendingStore{LeaseStore: h.store}
+	h.svc.deps.Leases = store
+
+	h.svc.Sweep(context.Background())
+	h.svc.Sweep(context.Background())
+	assert.Equal(t, 2, store.retries, "every pass retries")
+}
+
+func TestSweep_AFailedRetryStillSweeps(t *testing.T) {
+	h := newHarness(t, testConfig())
+	lease, err := h.svc.Admit(context.Background(), h.request(t))
+	require.NoError(t, err)
+	store := &pendingStore{LeaseStore: h.store, retryErr: &ErrLeaseStoreUnavailable{Cause: errors.New("store down")}}
+	h.svc.deps.Leases = store
+
+	h.clock.Advance(DefaultLeaseTTL + time.Minute)
+	h.svc.Sweep(context.Background())
+	assert.Equal(t, 1, store.retries)
+	leases, err := h.svc.Leases(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, leases, "a failed retry does not stop the expiry sweep")
+	assert.Contains(t, h.plane.removed, lease.ID)
+}
+
 func TestSweep_RunsFromTheTicker(t *testing.T) {
 	h := newHarness(t, testConfig())
 	lease, err := h.svc.Admit(context.Background(), h.request(t))
@@ -459,13 +498,10 @@ func TestSweep_RunsFromTheTicker(t *testing.T) {
 	h.clock.Advance(DefaultLeaseTTL + time.Second)
 	h.clock.tick <- h.clock.Now()
 	// The sweep runs on the service goroutine; wait for its effect through
-	// the store rather than sleeping.
+	// the data plane rather than sleeping. The record goes before the peer,
+	// so an emptied store does not yet mean the peer is gone.
 	deadline := time.After(5 * time.Second)
-	for {
-		leases, _ := h.svc.Leases(context.Background())
-		if len(leases) == 0 {
-			break
-		}
+	for h.plane.count() != 0 {
 		select {
 		case <-deadline:
 			t.Fatalf("lease %s was not swept by the ticker", lease.ID)
@@ -473,6 +509,9 @@ func TestSweep_RunsFromTheTicker(t *testing.T) {
 		}
 	}
 	assert.Contains(t, h.plane.removed, lease.ID)
+	leases, err := h.svc.Leases(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, leases)
 }
 
 func TestZonesAllowed(t *testing.T) {
@@ -480,6 +519,40 @@ func TestZonesAllowed(t *testing.T) {
 	assert.True(t, h.svc.ZonesAllowed([]string{"management"}))
 	assert.False(t, h.svc.ZonesAllowed([]string{"management", "control-plane"}))
 	assert.False(t, h.svc.ZonesAllowed(nil))
+}
+
+func TestOwnLease(t *testing.T) {
+	h := newHarness(t, testConfig())
+	req := h.request(t)
+	req.Peer.Leaf = &x509.Certificate{Raw: []byte("device certificate")}
+	lease, err := h.svc.Admit(context.Background(), req)
+	require.NoError(t, err)
+
+	t.Run("the admitting certificate owns the lease", func(t *testing.T) {
+		got, err := h.svc.OwnLease(context.Background(), lease.ID, &calleradmission.Peer{Leaf: &x509.Certificate{Raw: []byte("device certificate")}})
+		require.NoError(t, err)
+		assert.Equal(t, lease.ID, got.ID)
+	})
+
+	t.Run("refusals", func(t *testing.T) {
+		cases := map[string]struct {
+			id   LeaseID
+			peer *calleradmission.Peer
+			want any
+		}{
+			"no peer":             {lease.ID, nil, &ErrPeerRefused{}},
+			"no leaf":             {lease.ID, &calleradmission.Peer{}, &ErrPeerRefused{}},
+			"another certificate": {lease.ID, &calleradmission.Peer{Leaf: &x509.Certificate{Raw: []byte("other device")}}, &ErrLeaseNotFound{}},
+			"unknown lease":       {"lease-unknown", &calleradmission.Peer{Leaf: &x509.Certificate{Raw: []byte("device certificate")}}, &ErrLeaseNotFound{}},
+		}
+		for name, tc := range cases {
+			t.Run(name, func(t *testing.T) {
+				_, err := h.svc.OwnLease(context.Background(), tc.id, tc.peer)
+				require.Error(t, err)
+				assert.IsType(t, tc.want, err)
+			})
+		}
+	})
 }
 
 // intoRenewWindow advances the harness clock to one minute inside the

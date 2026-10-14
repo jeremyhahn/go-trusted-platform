@@ -69,7 +69,10 @@ func runEnrollPassphrase(commonFlags *cli.CommonFlags, f *enrollPassphraseFlags)
 	}
 	defer base.Close()
 
-	client := lukssvc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.EnrollPassphrase(base.Context(), &lukssvc.EnrollPassphraseRequest{
 		Device:             device,
 		ExistingPassphrase: f.existingPassphrase,

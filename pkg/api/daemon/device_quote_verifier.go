@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -386,4 +387,14 @@ func copyPCRValues(in map[int][]byte) map[int][]byte {
 		out[idx] = cp
 	}
 	return out
+}
+
+// parseDeviceID reads the numeric device ID the device store keys on.
+func parseDeviceID(id string) (uint64, error) {
+	var deviceID uint64
+	_, err := fmt.Sscanf(id, "%d", &deviceID)
+	if err != nil {
+		return 0, &MessageError{Msg: fmt.Sprintf("invalid device ID: %s", id)}
+	}
+	return deviceID, nil
 }

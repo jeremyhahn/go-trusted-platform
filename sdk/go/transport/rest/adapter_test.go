@@ -819,6 +819,38 @@ func TestTranslateErrorToGRPC(t *testing.T) {
 	}
 }
 
+// TestTranslateErrorToGRPC_Message pins the status message: the bare "error"
+// string of a platformd {"error":"..."} body, the same message QUIC and MCP
+// return, and the body unchanged when it has no such string.
+func TestTranslateErrorToGRPC_Message(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "error envelope", body: `{"error":"luks: device path is required"}`, want: "luks: device path is required"},
+		{name: "error beside other keys", body: `{"code":400,"error":"bad slot","success":false}`, want: "bad slot"},
+		{name: "plain text", body: "upstream unavailable", want: "upstream unavailable"},
+		{name: "empty error string", body: `{"error":""}`, want: `{"error":""}`},
+		{name: "error is an object", body: `{"error":{"code":7}}`, want: `{"error":{"code":7}}`},
+		{name: "empty body", body: "", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st, ok := status.FromError(translateErrorToGRPC(ErrHTTPStatus{StatusCode: http.StatusBadRequest, Body: tt.body}))
+			if !ok {
+				t.Fatal("expected a gRPC status error")
+			}
+			if st.Code() != codes.InvalidArgument {
+				t.Errorf("code = %v, want %v", st.Code(), codes.InvalidArgument)
+			}
+			if st.Message() != tt.want {
+				t.Errorf("message = %q, want %q", st.Message(), tt.want)
+			}
+		})
+	}
+}
+
 func TestErrHTTPStatus_Error(t *testing.T) {
 	tests := []struct {
 		name     string

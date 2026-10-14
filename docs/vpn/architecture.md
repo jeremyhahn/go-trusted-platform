@@ -1,9 +1,10 @@
 # Remote-Access VPN Architecture
 
-> **Status: PARTIAL — the admission core and both data planes (#584 PR 1, PR 2), the gateway service and the operator control plane on every transport with `platformctl vpn` (#584 PR 3) exist, as do the admission wire contract, the client agent core (`pkg/vpn/agent`) and `platformctl vpn connect [--foreground]|disconnect|lease|posture|renew` with their exit codes, presenting the host's TPM device identity, renewing the lease with fresh evidence and bringing up the leased client data plane (WireGuard, absent under FIPS, or MASQUE CONNECT-IP); the JS SDK client and the web page (#584 PR 4) exist; left for PR 4: the client's factor signers. The gateway's admission listener is planned (#557).** · Scope: `pkg/sdn/gateway/services/vpn`, `pkg/vpn`, `gatewayd` · Last verified: 2026-10-13
+> **Status: PARTIAL — the admission core and both data planes (#584 PR 1, PR 2), the gateway service and the operator control plane on every transport with `platformctl vpn` (#584 PR 3) exist; the gateway's mTLS admission listener (#557) and its wire contract exist, as do the client agent core (`pkg/vpn/agent`) and `platformctl vpn connect [--foreground]|disconnect|lease|posture|renew` with their exit codes, presenting the host's TPM device identity, renewing the lease with fresh evidence and bringing up the leased client data plane (WireGuard, absent under FIPS, or MASQUE CONNECT-IP); the JS SDK client and the web page (#584 PR 4) exist; left for PR 4: the client's factor signers.** · Scope: `pkg/sdn/gateway/services/vpn`, `pkg/vpn`, `gatewayd` · Last verified: 2026-10-14
 > `pkg/sdn/gateway/services/vpn` ships the lease model, the five-step
 > admission pipeline behind `Deps` interfaces, the typed error vocabulary, the
-> config schema with its FIPS refusal, the in-memory lease store and the
+> config schema with its FIPS refusal, the lease store (in memory, or a
+> projection of the control plane's lease record) and the
 > `vpn_posture` OPA policy. Everything marked *(planned)* below is still a
 > requirement, not a claim. Conflicts between this folder and the code are
 > resolved by fixing the code to this contract or amending this contract in
@@ -31,7 +32,7 @@ A **zero-trust remote-access service** on the gateway with **one admission
 control plane and a pluggable data plane**:
 
 ```
-client agent ──mTLS (IDevID)──▶ vpn-admission (vpn.Service; its own process is planned)
+client agent ──mTLS (IDevID)──▶ AdmissionListener → vpn.Service (its own process is planned)
                                    │ 1. identity      calleradmission.Policy.Evaluate
                                    │ 2. attestation   attestation Service.VerifyQuote → verdict.DeviceVerdict
                                    │ 3. posture       opa.OPAEngine.Evaluate("vpn-posture", report)
@@ -65,8 +66,8 @@ or an expired lease revokes the peer immediately.
 
 | Piece | Package | Status | Owner / capability row |
 |---|---|---|---|
-| Operator control plane | `pkg/vpn` — `Service` (peers and posture policies as tenant-scoped records, session status from gateway telemetry, `DesiredVPN` for the desired config); `VPNService` on REST, gRPC, QUIC `0x52`, MCP and Unix; `sdk/go/services/vpn`; `platformctl vpn` | exists (#584 PR 3) | go-trusted-platform — daemon |
-| Admission service | `pkg/sdn/gateway/services/vpn` — `Service`, `New`, `Admit`, `Renew`, `Revoke`, `Challenge`, `Sweep`, `Deps`, `Config`, `Lease`, `MemoryLeaseStore` | exists (#584 PR 1); the datapath process client and the admission listener are *(planned)* | go-trusted-platform — "Edge gateway" (docs/00 §R) |
+| Operator control plane | `pkg/vpn` — `Service` (peers, posture policies and the gateways' leases as tenant-scoped records, session status from gateway telemetry, `DesiredVPN` for the desired config); `VPNService` on REST, gRPC, QUIC `0x52`, MCP and Unix; `sdk/go/services/vpn`; `platformctl vpn` | exists (#584 PR 3) | go-trusted-platform — daemon |
+| Admission service | `pkg/sdn/gateway/services/vpn` — `Service`, `New`, `Admit`, `Renew`, `Revoke`, `Challenge`, `Sweep`, `Deps`, `Config`, `Lease`, `MemoryLeaseStore`, `Restore`, `AdmissionListener`; the gateway's lease projection of the control-plane record (`pkg/sdn/gateway` — `SetVPNLeaseControl`) | exists (#584 PR 1, the projection #584); the mTLS admission listener (`AdmissionListener`) exists (#557); the datapath process client is *(planned)* | go-trusted-platform — "Edge gateway" (docs/00 §R) |
 | Device identity | `pkg/attestation/calleradmission` — `Policy`, `New`, `Evaluate`, `PeerFromTLS`, `Decision`, `AttestedPeers`, `Auditor` | exists | go-trusted-platform — attestation |
 | Attestation verdict | `pkg/attestation/service` — `Service.VerifyQuote`, `Service.GetQuote`, `Service.CollectHostAttestation`; `pkg/attestation/verdict` — `DeviceVerdict`, `Sink` | exists | go-trusted-platform — attestation |
 | Scheduled re-attestation | `pkg/attestation/reporting` — `Collector`, `Cache`, `NewDeviceAddressResolver` | exists | go-trusted-platform — attestation |
@@ -129,8 +130,16 @@ What crosses a boundary: the mTLS session and the data-plane session cross the
 internet; the admission → datapath request crosses a process boundary on the
 gateway (gRPC over a Unix socket in the planned process model); the verdict,
 posture policy and factors are read from the control plane through the SDK.
-Nothing about the client is persisted on the gateway beyond the lease table;
+Nothing about the client is persisted on the gateway beyond the lease table and
+the lease and tenant IDs of revocations the control plane has not yet taken;
 leases and posture policies are tenant-scoped entities on the control plane.
+The gateway's lease table is a projection of the control plane's record: it is
+rebuilt from the desired-config pull on start, so a restart keeps the admitted
+sessions, and every admission, renewal and revocation is written to the control
+plane first. A gateway that cannot reach the control plane at start does not
+start. A revocation the control plane refuses is journaled under gatewayd's
+`--data-dir` until its DELETE lands, so a restart does not reinstate the
+revoked device either.
 
 ## Trust boundaries
 

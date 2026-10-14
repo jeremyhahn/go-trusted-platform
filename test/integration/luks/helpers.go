@@ -26,7 +26,6 @@ import (
 
 	daemonpkg "github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	mcpapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
-	lukssdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/luks"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
@@ -69,7 +68,6 @@ func isBackendUnavailable(err error) bool {
 	return surface.IsNotImplemented(err) || surface.IsDeclaredRefusal(err,
 		daemonpkg.ErrLUKSNotConfigured,
 		daemonpkg.ErrLUKSRootRequired,
-		lukssdk.ErrNotYetWired,
 		mcpapi.ErrPhase35NotConfigured,
 	)
 }

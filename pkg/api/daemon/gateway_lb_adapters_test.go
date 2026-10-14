@@ -348,21 +348,4 @@ func TestMCPGatewayLBProviderErrors(t *testing.T) {
 			t.Errorf("GatewayLBVIPAdd bad backend = %v", err)
 		}
 	})
-
-	t.Run("platform provider not configured", func(t *testing.T) {
-		provider := &PlatformServiceProvider{}
-		var unavailable ErrServiceNotAvailable
-		if _, err := provider.GatewayLBStatus(ctx); !errors.As(err, &unavailable) {
-			t.Errorf("GatewayLBStatus = %v", err)
-		}
-	})
-
-	t.Run("platform provider configured", func(t *testing.T) {
-		provider := &PlatformServiceProvider{}
-		provider.SetGatewayLoadBalancer(seededLB(t))
-		vips, err := provider.GatewayLBVIPList(ctx)
-		if err != nil || len(vips) != 1 {
-			t.Errorf("GatewayLBVIPList = %v (%v)", vips, err)
-		}
-	})
 }

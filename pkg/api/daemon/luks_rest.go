@@ -55,16 +55,33 @@ func luksErrorToHTTP(err error) int {
 		errors.Is(err, ErrLUKSPassphraseRequired),
 		errors.Is(err, ErrLUKSNewPassphraseRequired),
 		errors.Is(err, ErrLUKSCredentialIDRequired),
-		errors.Is(err, ErrLUKSSlotRequired):
+		errors.Is(err, ErrLUKSSlotRequired),
+		errors.Is(err, ErrLUKSMalformedBody):
 		return http.StatusBadRequest
 	}
 	return http.StatusInternalServerError
 }
 
+// writeLUKSError answers err as {"error": message} with its mapped status.
+func writeLUKSError(w http.ResponseWriter, err error) {
+	writeRESTJSON(w, luksErrorToHTTP(err), map[string]string{"error": err.Error()})
+}
+
+// decodeLUKSBody decodes the request body into out. A body that does not
+// decode is answered with ErrLUKSMalformedBody, never the decoder's error,
+// which can quote the body's passphrase.
+func decodeLUKSBody(w http.ResponseWriter, r *http.Request, out interface{}) bool {
+	if err := decodeRESTBody(r, out); err != nil {
+		writeLUKSError(w, ErrLUKSMalformedBody)
+		return false
+	}
+	return true
+}
+
 func (h *luksRESTHandlers) status(w http.ResponseWriter, r *http.Request) {
 	out, err := h.service.Status(r.Context(), r.URL.Query().Get("device"))
 	if err != nil {
-		writeRESTJSON(w, luksErrorToHTTP(err), map[string]string{"error": err.Error()})
+		writeLUKSError(w, err)
 		return
 	}
 	writeRESTJSON(w, http.StatusOK, out)
@@ -73,7 +90,7 @@ func (h *luksRESTHandlers) status(w http.ResponseWriter, r *http.Request) {
 func (h *luksRESTHandlers) listSlots(w http.ResponseWriter, r *http.Request) {
 	out, err := h.service.ListSlots(r.Context(), r.URL.Query().Get("device"))
 	if err != nil {
-		writeRESTJSON(w, luksErrorToHTTP(err), map[string]string{"error": err.Error()})
+		writeLUKSError(w, err)
 		return
 	}
 	writeRESTJSON(w, http.StatusOK, out)
@@ -82,7 +99,7 @@ func (h *luksRESTHandlers) listSlots(w http.ResponseWriter, r *http.Request) {
 func (h *luksRESTHandlers) info(w http.ResponseWriter, r *http.Request) {
 	out, err := h.service.Info(r.Context(), r.URL.Query().Get("device"))
 	if err != nil {
-		writeRESTJSON(w, luksErrorToHTTP(err), map[string]string{"error": err.Error()})
+		writeLUKSError(w, err)
 		return
 	}
 	writeRESTJSON(w, http.StatusOK, out)
@@ -90,13 +107,12 @@ func (h *luksRESTHandlers) info(w http.ResponseWriter, r *http.Request) {
 
 func (h *luksRESTHandlers) enrollPassphrase(w http.ResponseWriter, r *http.Request) {
 	var in LUKSEnrollPassphraseRequest
-	if err := decodeRESTBody(r, &in); err != nil {
-		writeRESTJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeLUKSBody(w, r, &in) {
 		return
 	}
 	out, err := h.service.EnrollPassphrase(r.Context(), &in)
 	if err != nil {
-		writeRESTJSON(w, luksErrorToHTTP(err), map[string]string{"error": err.Error()})
+		writeLUKSError(w, err)
 		return
 	}
 	writeRESTJSON(w, http.StatusOK, out)
@@ -104,13 +120,12 @@ func (h *luksRESTHandlers) enrollPassphrase(w http.ResponseWriter, r *http.Reque
 
 func (h *luksRESTHandlers) enrollFIDO2(w http.ResponseWriter, r *http.Request) {
 	var in LUKSEnrollFIDO2Request
-	if err := decodeRESTBody(r, &in); err != nil {
-		writeRESTJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeLUKSBody(w, r, &in) {
 		return
 	}
 	out, err := h.service.EnrollFIDO2(r.Context(), &in)
 	if err != nil {
-		writeRESTJSON(w, luksErrorToHTTP(err), map[string]string{"error": err.Error()})
+		writeLUKSError(w, err)
 		return
 	}
 	writeRESTJSON(w, http.StatusOK, out)
@@ -118,13 +133,12 @@ func (h *luksRESTHandlers) enrollFIDO2(w http.ResponseWriter, r *http.Request) {
 
 func (h *luksRESTHandlers) enrollTPM(w http.ResponseWriter, r *http.Request) {
 	var in LUKSEnrollTPMRequest
-	if err := decodeRESTBody(r, &in); err != nil {
-		writeRESTJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeLUKSBody(w, r, &in) {
 		return
 	}
 	out, err := h.service.EnrollTPM(r.Context(), &in)
 	if err != nil {
-		writeRESTJSON(w, luksErrorToHTTP(err), map[string]string{"error": err.Error()})
+		writeLUKSError(w, err)
 		return
 	}
 	writeRESTJSON(w, http.StatusOK, out)
@@ -132,13 +146,12 @@ func (h *luksRESTHandlers) enrollTPM(w http.ResponseWriter, r *http.Request) {
 
 func (h *luksRESTHandlers) enrollRecovery(w http.ResponseWriter, r *http.Request) {
 	var in LUKSEnrollRecoveryRequest
-	if err := decodeRESTBody(r, &in); err != nil {
-		writeRESTJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeLUKSBody(w, r, &in) {
 		return
 	}
 	out, err := h.service.EnrollRecovery(r.Context(), &in)
 	if err != nil {
-		writeRESTJSON(w, luksErrorToHTTP(err), map[string]string{"error": err.Error()})
+		writeLUKSError(w, err)
 		return
 	}
 	writeRESTJSON(w, http.StatusOK, out)
@@ -146,12 +159,11 @@ func (h *luksRESTHandlers) enrollRecovery(w http.ResponseWriter, r *http.Request
 
 func (h *luksRESTHandlers) removeKey(w http.ResponseWriter, r *http.Request) {
 	var in LUKSRemoveKeyRequest
-	if err := decodeRESTBody(r, &in); err != nil {
-		writeRESTJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeLUKSBody(w, r, &in) {
 		return
 	}
 	if err := h.service.RemoveKey(r.Context(), &in); err != nil {
-		writeRESTJSON(w, luksErrorToHTTP(err), map[string]string{"error": err.Error()})
+		writeLUKSError(w, err)
 		return
 	}
 	writeRESTJSON(w, http.StatusOK, map[string]bool{"removed": true})
@@ -159,13 +171,12 @@ func (h *luksRESTHandlers) removeKey(w http.ResponseWriter, r *http.Request) {
 
 func (h *luksRESTHandlers) testUnlock(w http.ResponseWriter, r *http.Request) {
 	var in LUKSTestUnlockRequest
-	if err := decodeRESTBody(r, &in); err != nil {
-		writeRESTJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeLUKSBody(w, r, &in) {
 		return
 	}
 	ok, err := h.service.TestUnlock(r.Context(), &in)
 	if err != nil {
-		writeRESTJSON(w, luksErrorToHTTP(err), map[string]string{"error": err.Error()})
+		writeLUKSError(w, err)
 		return
 	}
 	writeRESTJSON(w, http.StatusOK, map[string]bool{"unlocked": ok})
@@ -173,12 +184,11 @@ func (h *luksRESTHandlers) testUnlock(w http.ResponseWriter, r *http.Request) {
 
 func (h *luksRESTHandlers) changePassphrase(w http.ResponseWriter, r *http.Request) {
 	var in LUKSChangePassphraseRequest
-	if err := decodeRESTBody(r, &in); err != nil {
-		writeRESTJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeLUKSBody(w, r, &in) {
 		return
 	}
 	if err := h.service.ChangePassphrase(r.Context(), &in); err != nil {
-		writeRESTJSON(w, luksErrorToHTTP(err), map[string]string{"error": err.Error()})
+		writeLUKSError(w, err)
 		return
 	}
 	writeRESTJSON(w, http.StatusOK, map[string]bool{"changed": true})

@@ -49,7 +49,9 @@ import (
 //	0x50      ntp category      0xAE-0xAF container
 //	0x51      iam category
 //	0x52      vpn category
-//	0x53-0x55 reserved
+//	0x53      cache category
+//	0x54      scheduler category
+//	0x55      messaging category
 //	0x56-0x5F tpm2 (idevid)     0xB0-0xB4 sdn extended
 //	0x60-0x6A vm (0x69=ext cat) 0xB5-0xBF iam roles/groups
 //	0x6B-0x6E tpm2 (iak ext)    0xC0-0xCB kms keys
@@ -131,6 +133,9 @@ var quicDispatchFamilies = map[string]dispatchFamilySpec{
 	"configdelivery": {payload: []byte{quicwire.ProvisioningSubGetNonce}, status: quicwire.StatusUnavailable, body: "config delivery service is not available"},
 	"ntp":            {payload: []byte{quicwire.NTPSubGetStatus}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: ntp"},
 	"vpn":            {payload: []byte{quicwire.VPNSubGetStatus}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: vpn"},
+	"cache":          {payload: []byte{quicwire.CacheSubGetStats}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: cache"},
+	"scheduler":      {payload: []byte{quicwire.SchedulerSubGetStatus}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: scheduler"},
+	"messaging":      {payload: []byte{quicwire.MessagingSubGetStats}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: messaging"},
 	"pxe":            {status: quicwire.StatusUnavailable, body: "QUIC service unavailable: pxe"},
 }
 
@@ -191,7 +196,9 @@ var quicWireOwners = []struct {
 	{0x50, 0x50, "ntp"},
 	{0x51, 0x51, "iam"},
 	{0x52, 0x52, "vpn"},
-	{0x53, 0x55, "reserved"},
+	{0x53, 0x53, "cache"},
+	{0x54, 0x54, "scheduler"},
+	{0x55, 0x55, "messaging"},
 	{0x56, 0x5F, "tpm2"},
 	{0x60, 0x6A, "vm"},
 	{0x6B, 0x6E, "tpm2"},
@@ -270,6 +277,7 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpVTPMExportBundle":          {value: quicwire.OpVTPMExportBundle, mode: wireDirect, family: "vtpm"},
 	"OpGatewayAllocateIP":         {value: quicwire.OpGatewayAllocateIP, mode: categorySub, family: "gateway", category: quicwire.OpGatewayCategory},
 	"OpOverlayForgetMAC":          {value: quicwire.OpOverlayForgetMAC, mode: categorySub, family: "overlay", category: quicwire.OpOverlayCategory},
+	"OpOverlayTunnelStats":        {value: quicwire.OpOverlayTunnelStats, mode: categorySub, family: "overlay", category: quicwire.OpOverlayCategory},
 	"OpVTPMImportBundle":          {value: quicwire.OpVTPMImportBundle, mode: wireDirect, family: "vtpm"},
 	"OpGatewayReleaseIP":          {value: quicwire.OpGatewayReleaseIP, mode: categorySub, family: "gateway", category: quicwire.OpGatewayCategory},
 	"OpVTPMValidateBundle":        {value: quicwire.OpVTPMValidateBundle, mode: wireDirect, family: "vtpm"},
@@ -368,6 +376,9 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpNTPCategory":               {value: quicwire.OpNTPCategory, mode: wireDirect, family: "ntp"},
 	"OpIAMCategory":               {value: quicwire.OpIAMCategory, mode: wireDirect, family: "iam"},
 	"OpVPNCategory":               {value: quicwire.OpVPNCategory, mode: wireDirect, family: "vpn"},
+	"OpCacheCategory":             {value: quicwire.OpCacheCategory, mode: wireDirect, family: "cache"},
+	"OpSchedulerCategory":         {value: quicwire.OpSchedulerCategory, mode: wireDirect, family: "scheduler"},
+	"OpMessagingCategory":         {value: quicwire.OpMessagingCategory, mode: wireDirect, family: "messaging"},
 	"OpIDevIDGenerate":            {value: quicwire.OpIDevIDGenerate, mode: wireDirect, family: "tpm2"},
 	"OpIDevIDInfo":                {value: quicwire.OpIDevIDInfo, mode: wireDirect, family: "tpm2"},
 	"OpIDevIDDelete":              {value: quicwire.OpIDevIDDelete, mode: wireDirect, family: "tpm2"},

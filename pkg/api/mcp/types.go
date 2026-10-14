@@ -547,6 +547,7 @@ type ServiceProvider interface {
 	OverlayVNICreate(ctx context.Context, vni uint32, vlan uint16, name string) (interface{}, error)
 	OverlayVNIDelete(ctx context.Context, vni uint32) error
 	OverlayTunnelList(ctx context.Context, vni uint32) ([]interface{}, error)
+	OverlayTunnelStats(ctx context.Context, remoteVTEP string, vni uint32) (interface{}, error)
 	OverlayMACList(ctx context.Context, vni uint32) ([]interface{}, error)
 	OverlayMACForget(ctx context.Context, mac string, vni uint32) error
 

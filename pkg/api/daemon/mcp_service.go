@@ -118,6 +118,10 @@ type MCPServiceProviderConfig struct {
 	// GatewayBGP serves the gateway_bgp_* tools; nil answers that the
 	// gateway service is not available.
 	GatewayBGP GatewayBGPController
+	// Overlay serves the overlay_* tools from the overlay controller the
+	// gRPC, REST and QUIC overlay services use; nil answers that the
+	// overlay service is not available.
+	Overlay OverlayControllerInterface
 
 	// GatewayPerf serves gateway performance verification tools
 	// (gateway_perf_*).
@@ -170,10 +174,14 @@ type MCPServiceProvider struct {
 	gatewayBGPTools
 	// gatewayIPAMTools serves the gateway IPAM tools.
 	gatewayIPAMTools
+	// overlayTools serves the overlay_* tools (#709).
+	overlayTools
 	ntpService    platformv1.NTPServiceServer
 	vpnService    platformv1.VPNServiceServer
 	logger        *slog.Logger
 	idevidService *IDevIDGRPCService
+	// appServices serves the cache_*, scheduler_* and messaging_* tools.
+	appServices mcp.AppServiceServers
 }
 
 // NewMCPServiceProvider creates a new MCPServiceProvider.
@@ -220,6 +228,7 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		gatewaySnapshotTools:  gatewaySnapshotTools{reader: config.GatewaySnapshots},
 		gatewayStatusTools:    gatewayStatusTools{controller: config.GatewayStatus},
 		gatewayBGPTools:       gatewayBGPTools{controller: config.GatewayBGP},
+		overlayTools:          overlayTools{ctrl: config.Overlay},
 		logger:                logger,
 	}
 }
@@ -3417,54 +3426,8 @@ func (m *MCPServiceProvider) SetComputeOrchestrator(orchestrator compute.Orchest
 	m.computeOrchestrator = orchestrator
 }
 
-// =============================================================================
-// Overlay Network Operations - Stub implementations pending overlay service integration
-// =============================================================================
-
-// OverlayStatus returns the status of the overlay network.
-func (m *MCPServiceProvider) OverlayStatus(ctx context.Context) (interface{}, error) {
-	return nil, ErrOverlayOperationNotImplemented{Operation: "OverlayStatus"}
-}
-
-// OverlayVTEPList lists all VXLAN Tunnel Endpoints.
-func (m *MCPServiceProvider) OverlayVTEPList(ctx context.Context) ([]interface{}, error) {
-	return nil, ErrOverlayOperationNotImplemented{Operation: "OverlayVTEPList"}
-}
-
-// OverlayVTEPGet retrieves a specific VTEP by node ID.
-func (m *MCPServiceProvider) OverlayVTEPGet(ctx context.Context, nodeID string) (interface{}, error) {
-	return nil, ErrOverlayOperationNotImplemented{Operation: "OverlayVTEPGet"}
-}
-
-// OverlayVNIList lists all Virtual Network Identifiers.
-func (m *MCPServiceProvider) OverlayVNIList(ctx context.Context) ([]interface{}, error) {
-	return nil, ErrOverlayOperationNotImplemented{Operation: "OverlayVNIList"}
-}
-
-// OverlayVNICreate creates a new VNI.
-func (m *MCPServiceProvider) OverlayVNICreate(ctx context.Context, vni uint32, vlan uint16, name string) (interface{}, error) {
-	return nil, ErrOverlayOperationNotImplemented{Operation: "OverlayVNICreate"}
-}
-
-// OverlayVNIDelete deletes a VNI.
-func (m *MCPServiceProvider) OverlayVNIDelete(ctx context.Context, vni uint32) error {
-	return ErrOverlayOperationNotImplemented{Operation: "OverlayVNIDelete"}
-}
-
-// OverlayTunnelList lists all overlay tunnels for a VNI.
-func (m *MCPServiceProvider) OverlayTunnelList(ctx context.Context, vni uint32) ([]interface{}, error) {
-	return nil, ErrOverlayOperationNotImplemented{Operation: "OverlayTunnelList"}
-}
-
-// OverlayMACList lists all MAC addresses in the overlay network.
-func (m *MCPServiceProvider) OverlayMACList(ctx context.Context, vni uint32) ([]interface{}, error) {
-	return nil, ErrOverlayOperationNotImplemented{Operation: "OverlayMACList"}
-}
-
-// OverlayMACForget removes a MAC address entry from the overlay network.
-func (m *MCPServiceProvider) OverlayMACForget(ctx context.Context, mac string, vni uint32) error {
-	return ErrOverlayOperationNotImplemented{Operation: "OverlayMACForget"}
-}
+// The overlay network operations are served by the embedded overlayTools
+// (overlay_mcp_bindings.go).
 
 // =============================================================================
 // Gateway Operations - Stub implementations pending gateway service integration

@@ -71,7 +71,7 @@ Protocol servers live in `pkg/api/`: `grpc/`, `rest/`, `quic/`, `mcp/`, `noise/`
 | `oidc_interceptor.go` (in `pkg/api/grpc/`) | OIDC |
 | `pkg/util/peercred/peercred.go` | Unix socket peer credentials (leaf, shared with gatewayd IPC) |
 | `health_checker.go`, `iam_health_checker.go`, `ntp_health_checker.go` | Health |
-| `managed_service.go`, `service.go`, `service_provider.go` | Service lifecycle |
+| `managed_service.go`, `service.go` | Service lifecycle |
 | `config_reload.go` | Configuration reload |
 
 `recovery_interceptor.go` matters: the QUIC server also converts a panicking

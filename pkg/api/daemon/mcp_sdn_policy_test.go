@@ -210,8 +210,8 @@ func TestNamePolicyNotFound(t *testing.T) {
 	})
 }
 
-// policyTransports reaches one SDNService over the MCP tools of both service
-// providers, the REST routes and the gRPC service methods, the way the daemon
+// policyTransports reaches one SDNService over the MCP tools of the service
+// provider, the REST routes and the gRPC service methods, the way the daemon
 // wires them.
 type policyTransports struct {
 	svc      *SDNService
@@ -235,9 +235,6 @@ func newPolicyTransports(t *testing.T) policyTransports {
 			"MCPServiceProvider": mcp.NewToolRegistry(NewMCPServiceProvider(&MCPServiceProviderConfig{
 				SDNService: svc,
 				Logger:     slog.Default(),
-			}), logging.DefaultLogger()),
-			"PlatformServiceProvider": mcp.NewToolRegistry(NewPlatformServiceProvider(&PlatformServiceProviderConfig{
-				SDNService: svc,
 			}), logging.DefaultLogger()),
 		},
 		rest: router,

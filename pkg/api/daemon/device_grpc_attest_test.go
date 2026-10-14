@@ -107,33 +107,6 @@ func TestDeviceGRPCService_AttestDevice_RejectsIncompleteRequests(t *testing.T) 
 	}
 }
 
-func TestDeviceGRPCService_AttestDevice_MatchesTheProviderVerdict(t *testing.T) {
-	f := newQuoteFixture(t)
-	evidence := f.evidence(t, []byte("fresh-nonce-000003"), goldenPCRs())
-
-	grpcSvc := f.grpcService(t)
-	provider, providerID := enrolledDeviceProvider(t, f)
-
-	grpcResp, err := grpcSvc.AttestDevice(context.Background(), &platformv1.AttestDeviceRequest{
-		DeviceId: itoa(f.device.ID),
-		Evidence: evidence,
-	})
-	require.NoError(t, err)
-
-	raw, err := provider.DeviceAttest(context.Background(), itoa(providerID), evidence)
-	require.NoError(t, err)
-	providerResult, ok := raw.(*DeviceAttestationResult)
-	require.True(t, ok)
-
-	assert.Equal(t, providerResult.Verified, grpcResp.GetVerified())
-	assert.Equal(t, providerResult.AKCertificateVerified, grpcResp.GetAkCertificateVerified())
-	assert.Equal(t, providerResult.SignatureValid, grpcResp.GetSignatureValid())
-	assert.Equal(t, providerResult.NonceValid, grpcResp.GetNonceValid())
-	assert.Equal(t, providerResult.PCRsValid, grpcResp.GetPcrsValid())
-	assert.Equal(t, providerResult.PCRBaselineSource, grpcResp.GetPcrBaselineSource())
-	assert.Equal(t, providerResult.Status, grpcResp.GetAttestationStatus())
-}
-
 func TestQUICDeviceAttest_IsNoLongerNotImplemented(t *testing.T) {
 	f := newQuoteFixture(t)
 

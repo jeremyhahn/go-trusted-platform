@@ -513,6 +513,19 @@ var categorySubOpcodeMap = map[string]byte{
 	"/platform.v1.PIVService/Attest":      quicwire.PIVSubAttest,
 	"/platform.v1.PIVService/Reset":       quicwire.PIVSubReset,
 
+	// LUKS Service — OpLUKSCategory (0x9C)
+	// Server dispatcher: pkg/api/daemon/phase35_quic.go::luksQUICDispatch
+	"/platform.v1.LUKSService/Status":           quicwire.LUKSSubStatus,
+	"/platform.v1.LUKSService/ListSlots":        quicwire.LUKSSubListSlots,
+	"/platform.v1.LUKSService/Info":             quicwire.LUKSSubInfo,
+	"/platform.v1.LUKSService/EnrollPassphrase": quicwire.LUKSSubEnrollPassphrase,
+	"/platform.v1.LUKSService/EnrollFIDO2":      quicwire.LUKSSubEnrollFIDO2,
+	"/platform.v1.LUKSService/EnrollTPM":        quicwire.LUKSSubEnrollTPM,
+	"/platform.v1.LUKSService/EnrollRecovery":   quicwire.LUKSSubEnrollRecovery,
+	"/platform.v1.LUKSService/RemoveKey":        quicwire.LUKSSubRemoveKey,
+	"/platform.v1.LUKSService/TestUnlock":       quicwire.LUKSSubTestUnlock,
+	"/platform.v1.LUKSService/ChangePassphrase": quicwire.LUKSSubChangePassphrase,
+
 	// FIDO2 Service — OpFIDO2Category (0x9D)
 	// Server dispatcher: pkg/api/daemon/phase35_quic.go::fido2QUICDispatch
 	"/platform.v1.FIDO2Service/ListDevices":  quicwire.FIDO2SubListDevices,
@@ -988,6 +1001,20 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.PIVService/Sign":        quicwire.OpPIVCategory,
 	"/platform.v1.PIVService/Attest":      quicwire.OpPIVCategory,
 	"/platform.v1.PIVService/Reset":       quicwire.OpPIVCategory,
+
+	// LUKS Service — proto: pkg/api/grpc/proto/luks.proto
+	// All LUKSService methods route to OpLUKSCategory (0x9C). Translated in
+	// luks.go.
+	"/platform.v1.LUKSService/Status":           quicwire.OpLUKSCategory,
+	"/platform.v1.LUKSService/ListSlots":        quicwire.OpLUKSCategory,
+	"/platform.v1.LUKSService/Info":             quicwire.OpLUKSCategory,
+	"/platform.v1.LUKSService/EnrollPassphrase": quicwire.OpLUKSCategory,
+	"/platform.v1.LUKSService/EnrollFIDO2":      quicwire.OpLUKSCategory,
+	"/platform.v1.LUKSService/EnrollTPM":        quicwire.OpLUKSCategory,
+	"/platform.v1.LUKSService/EnrollRecovery":   quicwire.OpLUKSCategory,
+	"/platform.v1.LUKSService/RemoveKey":        quicwire.OpLUKSCategory,
+	"/platform.v1.LUKSService/TestUnlock":       quicwire.OpLUKSCategory,
+	"/platform.v1.LUKSService/ChangePassphrase": quicwire.OpLUKSCategory,
 
 	// FIDO2 Service — proto: pkg/api/grpc/proto/fido2.proto
 	// All FIDO2Service methods route to OpFIDO2Category (0x9D). Translated

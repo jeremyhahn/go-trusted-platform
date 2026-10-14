@@ -23,6 +23,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/acme"
 	admincmd "github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/admin"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/appsvc"
 	attestationcmd "github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/attestation"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/authenticode"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/barrier"
@@ -175,6 +176,7 @@ func init() {
 	rootCmd.AddCommand(barrier.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(bmc.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(bootstrap.NewCommand(getCommonFlags))
+	rootCmd.AddCommand(appsvc.NewCacheCommand(getCommonFlags))
 	rootCmd.AddCommand(ca.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(ceremony.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(compute.NewCommand(getCommonFlags))
@@ -189,12 +191,14 @@ func init() {
 	rootCmd.AddCommand(diskimage.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(kms.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(luks.NewCommand(getCommonFlags))
+	rootCmd.AddCommand(appsvc.NewMessagingCommand(getCommonFlags))
 	rootCmd.AddCommand(ntpcmd.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(piv.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(profile.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(provision.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(proxycmd.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(registry.NewCommand(getCommonFlags))
+	rootCmd.AddCommand(appsvc.NewSchedulerCommand(getCommonFlags))
 	rootCmd.AddCommand(sdn.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(securebootcmd.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(switchcmd.NewCommand(getCommonFlags))

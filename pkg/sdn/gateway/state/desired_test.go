@@ -32,7 +32,11 @@ const validDesiredJSON = `{
   "nat": {"snat_internal_cidr": "10.0.100.0/24",
           "dnat": [{"protocol": "tcp", "external": "203.0.113.10:2222", "internal": "10.0.100.5:22"}]},
   "vpn": {"peers": [{"tenant_id": "tenant-a", "device_id": "laptop-1", "zones": ["management"]}],
-          "posture_policies": [{"tenant_id": "tenant-a", "name": "vpn_posture", "module": "package vpn.posture"}]}
+          "posture_policies": [{"tenant_id": "tenant-a", "name": "vpn_posture", "module": "package vpn.posture"}],
+          "leases": [{"id": "lease-1", "tenant_id": "tenant-a", "device_id": "laptop-1", "address": "100.64.0.2/32",
+                      "zones": ["management"], "data_plane": "wireguard",
+                      "issued_at": "2026-10-13T10:00:00Z", "expires_at": "2026-10-13T11:00:00Z",
+                      "verdict": {"passed": true, "cryptographic": true, "profile_id": 7}}]}
 }`
 
 func TestDecodeDesiredConfig_RoundTrip(t *testing.T) {
@@ -113,6 +117,15 @@ func TestDesiredConfig_Validate(t *testing.T) {
 		"duplicate policy": {func(c *DesiredConfig) {
 			c.VPN.PosturePolicies = append(c.VPN.PosturePolicies, c.VPN.PosturePolicies[0])
 		}, "vpn.posture_policies[1]"},
+		"lease no id":         {func(c *DesiredConfig) { c.VPN.Leases[0].ID = "" }, "vpn.leases[0].id"},
+		"lease no tenant":     {func(c *DesiredConfig) { c.VPN.Leases[0].TenantID = "" }, "vpn.leases[0].tenant_id"},
+		"lease no device":     {func(c *DesiredConfig) { c.VPN.Leases[0].DeviceID = "" }, "vpn.leases[0].device_id"},
+		"lease no data plane": {func(c *DesiredConfig) { c.VPN.Leases[0].DataPlane = "" }, "vpn.leases[0].data_plane"},
+		"lease bad address":   {func(c *DesiredConfig) { c.VPN.Leases[0].Address = "100.64.0.2" }, "vpn.leases[0].address"},
+		"lease expiry not after issue": {func(c *DesiredConfig) {
+			c.VPN.Leases[0].ExpiresAt = c.VPN.Leases[0].IssuedAt
+		}, "vpn.leases[0].expires_at"},
+		"duplicate lease": {func(c *DesiredConfig) { c.VPN.Leases = append(c.VPN.Leases, c.VPN.Leases[0]) }, "vpn.leases[1]"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -162,6 +175,20 @@ func TestDesiredConfig_Versions(t *testing.T) {
 
 	other.NAT.SNATInternalCIDR = ""
 	assert.NotEqual(t, content, other.ContentVersion(), "content changes change the version")
+}
+
+func TestDesiredConfig_ContentVersionLeavesOutLeases(t *testing.T) {
+	cfg, err := DecodeDesiredConfig([]byte(validDesiredJSON))
+	require.NoError(t, err)
+	content := cfg.ContentVersion()
+
+	cfg.VPN.Leases = append(cfg.VPN.Leases, cfg.VPN.Leases[0])
+	cfg.VPN.Leases[1].ID = "lease-2"
+	assert.Equal(t, content, cfg.ContentVersion(), "a gateway's lease write-through is not a config change")
+	assert.Len(t, cfg.VPN.Leases, 2, "hashing must not drop the caller's leases")
+
+	cfg.VPN.Peers = nil
+	assert.NotEqual(t, content, cfg.ContentVersion(), "the rest of the VPN section still versions the config")
 }
 
 func TestDesiredConfigErrors_Messages(t *testing.T) {

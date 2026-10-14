@@ -94,9 +94,12 @@ func TestViperDesiredConfigSource_NilTreeUsesTheGlobal(t *testing.T) {
 type fixedVPNSource struct {
 	section *gwstate.DesiredVPN
 	err     error
+	// askedFor is the gateway the last section was rendered for.
+	askedFor string
 }
 
-func (f *fixedVPNSource) DesiredVPN(context.Context) (*gwstate.DesiredVPN, error) {
+func (f *fixedVPNSource) DesiredVPN(_ context.Context, gatewayID string) (*gwstate.DesiredVPN, error) {
+	f.askedFor = gatewayID
 	return f.section, f.err
 }
 
@@ -110,11 +113,13 @@ func TestViperDesiredConfigSource_VPNSectionComesFromTheVPNSource(t *testing.T) 
 		Peers: []gwstate.DesiredVPNPeer{{TenantID: "acme", DeviceID: "laptop-1", Zones: []string{"management"}}},
 	}
 	src := sourceFor(t, "sdn:\n  enabled: true\n")
-	src.SetVPNSource(&fixedVPNSource{section: section})
+	vpn := &fixedVPNSource{section: section}
+	src.SetVPNSource(vpn)
 
 	cfg, err := src.DesiredConfig("gw-1")
 	require.NoError(t, err)
 	assert.Equal(t, "gw-1", cfg.GatewayID)
+	assert.Equal(t, "gw-1", vpn.askedFor, "the section carries the asking gateway's leases")
 	assert.Equal(t, section, cfg.VPN)
 	assert.Empty(t, cfg.Version, "without an operator version the gateway derives one from the content")
 }
