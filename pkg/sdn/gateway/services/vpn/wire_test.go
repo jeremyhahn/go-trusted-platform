@@ -144,7 +144,7 @@ func TestRefusalOf_MapsEveryErrorToItsClassAndStatus(t *testing.T) {
 		{"renewal early", &ErrRenewalNotOpen{LeaseID: "l"}, RefusalRenewalNotOpen, http.StatusConflict, nil},
 		{"peer conflict", &ErrPeerConflict{}, RefusalPeerConflict, http.StatusConflict, nil},
 		{"invalid", &ErrInvalidRequest{Field: "nonce", Reason: "empty"}, RefusalInvalidRequest, http.StatusBadRequest, nil},
-		{"invalid peer key", &ErrPeerKeyInvalid{Kind: DataPlaneWireGuard}, RefusalInvalidRequest, http.StatusBadRequest, nil},
+		{"invalid peer key", &ErrPeerKeyInvalid{Kind: DataPlaneMASQUE}, RefusalInvalidRequest, http.StatusBadRequest, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

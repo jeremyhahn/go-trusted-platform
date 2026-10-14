@@ -167,7 +167,7 @@ func TestRestore_DropsLeasesItCannotReinstate(t *testing.T) {
 			require.NoError(t, h.store.Put(context.Background(), l))
 		}, "expired"},
 		"data plane not offered": {func(t *testing.T, h *restoreHarness, l *Lease) {
-			l.DataPlane = DataPlaneWireGuard
+			l.DataPlane = DataPlaneKind("carrier-pigeon")
 			require.NoError(t, h.store.Put(context.Background(), l))
 		}, "data plane not offered"},
 		"zone withdrawn from the gateway": {func(t *testing.T, h *restoreHarness, l *Lease) {
@@ -183,24 +183,32 @@ func TestRestore_DropsLeasesItCannotReinstate(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			h := newRestoreHarness(t)
-			lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
-			c.prepare(t, h, lease)
-			h.start(t)
-
-			err := h.svc.Restore(context.Background())
-
-			var dropped *ErrLeaseNotRestored
-			require.True(t, errors.As(err, &dropped), "got %v", err)
-			assert.Equal(t, lease.ID, dropped.LeaseID)
-			assert.Equal(t, c.reason, dropped.Reason)
-			assert.Zero(t, h.plane.count(), "a dropped lease has no peer")
-			_, err = h.store.Get(context.Background(), lease.ID)
-			var nf *ErrLeaseNotFound
-			assert.True(t, errors.As(err, &nf), "a dropped lease leaves the store, got %v", err)
-			assert.NotEqual(t, "mini-1", h.holder(t, lease.Address), "a dropped lease holds no address")
+			requireRestoreDrops(t, c.prepare, c.reason)
 		})
 	}
+}
+
+// requireRestoreDrops seeds one lease, lets prepare make it unrestorable,
+// and asserts Restore drops it for reason: no peer, no stored lease, no
+// address held.
+func requireRestoreDrops(t *testing.T, prepare func(*testing.T, *restoreHarness, *Lease), reason string) {
+	t.Helper()
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	prepare(t, h, lease)
+	h.start(t)
+
+	err := h.svc.Restore(context.Background())
+
+	var dropped *ErrLeaseNotRestored
+	require.True(t, errors.As(err, &dropped), "got %v", err)
+	assert.Equal(t, lease.ID, dropped.LeaseID)
+	assert.Equal(t, reason, dropped.Reason)
+	assert.Zero(t, h.plane.count(), "a dropped lease has no peer")
+	_, err = h.store.Get(context.Background(), lease.ID)
+	var nf *ErrLeaseNotFound
+	assert.True(t, errors.As(err, &nf), "a dropped lease leaves the store, got %v", err)
+	assert.NotEqual(t, "mini-1", h.holder(t, lease.Address), "a dropped lease holds no address")
 }
 
 func TestRestore_LeavesAnotherDevicesAddressAlone(t *testing.T) {

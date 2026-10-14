@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"net/netip"
 	"sync"
 	"testing"
@@ -197,4 +198,26 @@ func TestWireGuardPlaneExistsOutsideFIPS(t *testing.T) {
 	plane, err := NewWireGuardPlane(newFakeHub(), nil)
 	require.NoError(t, err)
 	assert.Equal(t, DataPlaneWireGuard, plane.Kind())
+}
+
+// TestWireGuardPlane_BadKeyIsAnInvalidRequest: the plane's refusal of a
+// malformed client key reaches the caller as an invalid request, not as an
+// unavailable data plane.
+func TestWireGuardPlane_BadKeyIsAnInvalidRequest(t *testing.T) {
+	plane, _ := newWireGuardPlaneForTest(t)
+	err := plane.InstallPeer(context.Background(), wgLease("l1", "10.9.0.23/32", []byte("short")))
+
+	refusal, status := RefusalOf(err)
+	assert.Equal(t, RefusalInvalidRequest, refusal.Reason)
+	assert.Equal(t, http.StatusBadRequest, status)
+}
+
+// TestRestore_DropsAWireGuardLeaseTheGatewayDoesNotOffer: a recorded
+// WireGuard lease on a gateway that offers only MASQUE is dropped
+// (restore.go:58-59).
+func TestRestore_DropsAWireGuardLeaseTheGatewayDoesNotOffer(t *testing.T) {
+	requireRestoreDrops(t, func(t *testing.T, h *restoreHarness, l *Lease) {
+		l.DataPlane = DataPlaneWireGuard
+		require.NoError(t, h.store.Put(context.Background(), l))
+	}, "data plane not offered")
 }

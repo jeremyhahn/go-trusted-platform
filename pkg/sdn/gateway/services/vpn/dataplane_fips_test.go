@@ -16,6 +16,7 @@
 package vpn
 
 import (
+	"context"
 	"errors"
 	"net/netip"
 	"testing"
@@ -52,4 +53,14 @@ func TestMASQUEPlaneIsTheFIPSPlane(t *testing.T) {
 	}, newFakeDevice(), nil)
 	require.NoError(t, err)
 	assert.Equal(t, DataPlaneMASQUE, plane.Kind())
+}
+
+// TestRestore_DropsAWireGuardLeaseUnderFIPS: a lease recorded by a non-FIPS
+// gateway names "wireguard"; a FIPS build has no plane of that kind, so
+// Restore drops it rather than reinstating it (restore.go:58-59).
+func TestRestore_DropsAWireGuardLeaseUnderFIPS(t *testing.T) {
+	requireRestoreDrops(t, func(t *testing.T, h *restoreHarness, l *Lease) {
+		l.DataPlane = DataPlaneKind("wireguard")
+		require.NoError(t, h.store.Put(context.Background(), l))
+	}, "data plane not offered")
 }
