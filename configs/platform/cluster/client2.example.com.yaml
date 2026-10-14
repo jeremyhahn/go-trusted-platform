@@ -158,7 +158,7 @@ acme:
         debug: true
         hash: SHA-256
         password: 123456
-        platform-policy: true
+        tpm-policy: platform
         rsa:
           size: 2048
         signature-algorithm: SHA256-RSAPSS
@@ -273,7 +273,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: 123456
-          platform-policy: true
+          tpm-policy: platform
           debug: true
 
         # TPM 2.0 RSA
@@ -284,7 +284,7 @@ certificate-authority:
           hash: SHA-256
           store: tpm2
           password: 123456
-          platform-policy: true
+          tpm-policy: platform
           debug: true
 
         # PKCS #8 ECDSA
@@ -295,7 +295,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: 123456
-          platform-policy: true
+          tpm-policy: platform
           debug: true
 
         # TPM 2.0 ECDSA
@@ -306,7 +306,7 @@ certificate-authority:
           hash: SHA-256
           store: tpm2
           password: 123456
-          platform-policy: true
+          tpm-policy: platform
           debug: true
 
         # PKCS #8 Ed25519
@@ -317,7 +317,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: 123456
-          platform-policy: true
+          tpm-policy: platform
           debug: true
 
       valid: 50
@@ -355,7 +355,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: 123456
-          platform-policy: true
+          tpm-policy: platform
           debug: true
 
         # TPM 2.0 RSA
@@ -366,7 +366,7 @@ certificate-authority:
           hash: SHA-256
           store: tpm2
           password: 123456
-          platform-policy: true
+          tpm-policy: platform
           debug: true
 
         # PKCS #8 ECDSA
@@ -377,7 +377,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: 123456
-          platform-policy: true
+          tpm-policy: platform
           debug: true
 
         # TPM 2.0 ECDSA
@@ -388,7 +388,7 @@ certificate-authority:
           hash: SHA-256
           store: tpm2
           password: 123456
-          platform-policy: true
+          tpm-policy: platform
           debug: true
 
         # PKCS #8 Ed25519
@@ -399,7 +399,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: 123456
-          platform-policy: true
+          tpm-policy: platform
           debug: true
       valid: 10
       subject:
@@ -451,7 +451,7 @@ webservice:
     hash: SHA-256
     store: software
     password: 123456
-    platform-policy: true
+    tpm-policy: platform
     debug: true
   certificate:
     subject:

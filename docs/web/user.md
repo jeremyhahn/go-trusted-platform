@@ -117,7 +117,7 @@ webservices:
       hash: SHA-256
       store: software
       password: "kms://webservices/provisioning/key/password?ensure=true&len=32&enc=raw"
-      platform-policy: true
+      tpm-policy: platform
     certificate:
       subject:
         cn: cp-provisioning.example.internal   # the host config-server-url names

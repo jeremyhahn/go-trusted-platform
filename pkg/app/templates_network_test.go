@@ -37,8 +37,15 @@ const templateRoot = "../../configs/platform/templates"
 // config file is checked in pkg/sdn/gateway/commands).
 func shippedPlatformTemplates(t *testing.T) []string {
 	t.Helper()
+	return platformConfigsUnder(t, templateRoot)
+}
+
+// platformConfigsUnder lists the platform config documents under root:
+// every .yaml file except the gateway daemon's gatewayd.yaml.
+func platformConfigsUnder(t *testing.T, root string) []string {
+	t.Helper()
 	var out []string
-	err := filepath.WalkDir(templateRoot, func(path string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -49,7 +56,7 @@ func shippedPlatformTemplates(t *testing.T) []string {
 		return nil
 	})
 	require.NoError(t, err)
-	require.NotEmpty(t, out, "the shipped templates must be present")
+	require.NotEmpty(t, out, "the shipped configs under %s must be present", root)
 	return out
 }
 

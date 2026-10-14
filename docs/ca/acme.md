@@ -286,7 +286,7 @@ webservices:
       hash: SHA-256
       store: software
       password: "123456"
-      platform-policy: true
+      tpm-policy: platform
 
     # TLS certificate configuration
     certificate:
@@ -380,7 +380,7 @@ acme:
         debug: true
         hash: SHA-256
         password: "123456"
-        platform-policy: true
+        tpm-policy: platform
         ecc:
           curve: P-256
         signature-algorithm: ECDSA-SHA256
@@ -390,7 +390,7 @@ acme:
         # cn: acme-account
         # hash: SHA-256
         # password: "123456"
-        # platform-policy: true
+        # tpm-policy: platform
         # rsa:
         #   size: 2048
         # signature-algorithm: SHA256-RSA

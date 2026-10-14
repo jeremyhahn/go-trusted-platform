@@ -91,13 +91,13 @@ value:
 
 | Field | Why |
 |---|---|
-| `webservice(s)[*].key.password` | `platform-policy: true` seals it into a TPM keyed-hash object |
+| `webservice(s)[*].key.password` | `tpm-policy: platform` seals it into a TPM keyed-hash object |
 | `acme.client.account.key.password` | same, plus the `TPM2_Create` auth when `store: tpm2` |
 | `tpm.platform-srk.srk-auth` | Platform SRK authorization value |
 | `certificate-authority.identity[*].keystores.tpm2.srk-auth` | CA TPM keystore SRK auth |
 
-**The trigger is `platform-policy: true`, not `store:`.** A key with
-`store: software` and `platform-policy: true` still gets sealed, so the cap
+**The trigger is `tpm-policy: platform`, not `store:`.** A key with
+`store: software` and `tpm-policy: platform` still gets sealed, so the cap
 still applies.
 
 Everything else keeps `enc=base64` — notably every

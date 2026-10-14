@@ -255,7 +255,7 @@ semantics via `SecretsService.EnsureSecret` and a distributed lock:
   overflows it with `TPM_RC_SIZE`. Templates therefore use
   `?ensure=true&len=32&enc=raw` for every `srk-auth`, for
   `webservice(s)[*].key.password`, and for `acme.client.account.key.password`
-  -- any key with `platform-policy: true` has its password sealed into a TPM
+  -- any key with `tpm-policy: platform` has its password sealed into a TPM
   keyed-hash object regardless of its `store:` setting. CA
   `keys[*].password` (PKCS#8 encryption) and `bmc.password` (an IPMI account
   credential) are not TPM auth values and keep `enc=base64`. See

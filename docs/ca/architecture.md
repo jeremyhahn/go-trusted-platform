@@ -300,7 +300,7 @@ certificate-authority:
           hash: SHA-384
           store: tpm2
           password: "123456"
-          platform-policy: true
+          tpm-policy: platform
       valid: 20
       subject:
         cn: root-ca.example.com
@@ -329,7 +329,7 @@ certificate-authority:
           hash: SHA-256
           store: pkcs11
           password: "123456"
-          platform-policy: true
+          tpm-policy: platform
       valid: 10
       subject:
         cn: tls-ca.example.com
@@ -356,7 +356,7 @@ certificate-authority:
           hash: SHA-256
           store: tpm2
           password: "123456"
-          platform-policy: true
+          tpm-policy: platform
       valid: 10
       subject:
         cn: device-ca.example.com

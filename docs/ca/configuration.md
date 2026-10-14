@@ -59,7 +59,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "123456"
-          platform-policy: true
+          tpm-policy: platform
       valid: 50                     # Validity in years
       subject:
         cn: root-ca.example.com
@@ -94,7 +94,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "123456"
-          platform-policy: true
+          tpm-policy: platform
       valid: 10
       subject:
         cn: ca01.example.com
@@ -167,7 +167,7 @@ identity:
         hash: SHA-256
         store: software             # software, tpm2, pkcs11
         password: "123456"
-        platform-policy: true
+        tpm-policy: platform
         debug: true
 
       # TPM 2.0 RSA
@@ -178,7 +178,7 @@ identity:
         hash: SHA-256
         store: tpm2
         password: "123456"
-        platform-policy: true
+        tpm-policy: platform
 
       # PKCS#8 ECDSA
       - algorithm: ECDSA
@@ -188,7 +188,7 @@ identity:
         hash: SHA-256
         store: software
         password: "123456"
-        platform-policy: true
+        tpm-policy: platform
 
       # TPM 2.0 ECDSA
       - algorithm: ECDSA
@@ -198,7 +198,7 @@ identity:
         hash: SHA-256
         store: tpm2
         password: "123456"
-        platform-policy: true
+        tpm-policy: platform
 
       # PKCS#8 Ed25519
       - algorithm: Ed25519
@@ -208,7 +208,7 @@ identity:
         hash: SHA-256
         store: software
         password: "123456"
-        platform-policy: true
+        tpm-policy: platform
 
     valid: 50                       # Certificate validity in years
     subject:
@@ -255,7 +255,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "123456"
-          platform-policy: true
+          tpm-policy: platform
         - algorithm: ECDSA
           ecc:
             curve: P-256
@@ -263,7 +263,7 @@ certificate-authority:
           hash: SHA-256
           store: tpm2
           password: "123456"
-          platform-policy: true
+          tpm-policy: platform
       valid: 10
       subject:
         cn: ca01.example.com
@@ -343,7 +343,7 @@ webservices:
       hash: SHA-256
       store: software
       password: "123456"
-      platform-policy: true
+      tpm-policy: platform
 
     # TLS certificate configuration
     certificate:
@@ -530,7 +530,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "dev-password"
-          platform-policy: true
+          tpm-policy: platform
       valid: 5
       subject:
         cn: dev-root-ca.local
@@ -555,7 +555,7 @@ certificate-authority:
           hash: SHA-256
           store: software
           password: "dev-password"
-          platform-policy: true
+          tpm-policy: platform
       valid: 2
       subject:
         cn: dev-ca.local
@@ -595,7 +595,7 @@ certificate-authority:
           hash: SHA-384
           store: tpm2
           password: "${CA_KEY_PASSWORD}"
-          platform-policy: true
+          tpm-policy: platform
         - algorithm: ECDSA
           ecc:
             curve: P-384
@@ -603,7 +603,7 @@ certificate-authority:
           hash: SHA-384
           store: tpm2
           password: "${CA_KEY_PASSWORD}"
-          platform-policy: true
+          tpm-policy: platform
       valid: 20
       subject:
         cn: root-ca.enterprise.com
@@ -634,7 +634,7 @@ certificate-authority:
           hash: SHA-256
           store: tpm2
           password: "${CA_KEY_PASSWORD}"
-          platform-policy: true
+          tpm-policy: platform
       valid: 10
       subject:
         cn: ca.enterprise.com

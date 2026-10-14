@@ -201,8 +201,8 @@ that does not use the registry at all:
    `sizeof(TPMU_HA)` — one digest, 32 bytes on a SHA-256 TPM. Every config field
    whose value becomes a TPM auth value must use `enc=raw`, not `enc=base64`
    (which yields 43 characters for `len=32` and is rejected with `TPM_RC_SIZE`).
-   The trigger is `platform-policy: true`, **not** `store:` — a software-stored
-   key with `platform-policy: true` still has its password sealed into a TPM
+   The trigger is `tpm-policy: platform`, **not** `store:` — a software-stored
+   key with `tpm-policy: platform` still has its password sealed into a TPM
    keyed-hash object. Fields that are not TPM auth values keep `enc=base64`.
 
 8. **Short `kms://` paths are namespaced at resolution time.**

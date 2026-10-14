@@ -106,7 +106,7 @@ All `dedicated/` templates assume:
 - **TPM auth encoding**: fields whose value becomes a TPM `TPM2B_AUTH` use
   `len=32&enc=raw` (32 random bytes, exactly the SHA-256 digest cap). These are
   every `srk-auth`, `webservice(s)[*].key.password`, and
-  `acme.client.account.key.password` — any key with `platform-policy: true` has
+  `acme.client.account.key.password` — any key with `tpm-policy: platform` has
   its password sealed into a TPM keyed-hash object whose `UserAuth` is that
   value, regardless of `store:`. A `len=32&enc=base64` value is 43 characters
   and the TPM rejects it with `TPM_RC_SIZE`. Non-TPM secrets keep `enc=base64`:
