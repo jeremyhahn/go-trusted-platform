@@ -78,8 +78,10 @@
 // This package appraises what it can read without decoding DICE: the nonce
 // echo in the evidence frame, the golden FWHash, the vendor, the certificate
 // issuer, and the gateway's relay age. It does NOT decode the UCCS claims set
-// in the alias certificate and does not verify a DICE chain — go-xkms owns
-// the DICE profile and the verifier, and a second implementation of what DICE
+// in the alias certificate and does not verify a DICE chain — that goes
+// through the go-quicbaas SDK's DICE evidence verification (not yet
+// published), which delegates to go-xkms, the owner of the DICE profile and
+// the verifier, and a second implementation of what DICE
 // evidence means is exactly the duplication the layer rules exist to prevent.
 // Consequently [bmcattestation.Policy.RequireNonceEcho] FAILS on alias
 // certificate evidence rather than silently passing: this package will not

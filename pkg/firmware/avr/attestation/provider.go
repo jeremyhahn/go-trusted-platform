@@ -29,7 +29,8 @@ var (
 
 // oidUCCSEvidence is tcg-dice-UCCS-evidence, TCG DICE Attestation
 // Architecture r23 §6.1.4. Its PRESENCE is all this package reads; the claims
-// set inside it is go-xkms's to decode.
+// set inside it is decoded by go-xkms, reached through the go-quicbaas SDK
+// (not yet published).
 var oidUCCSEvidence = asn1.ObjectIdentifier{2, 23, 133, 5, 4, 6}
 
 // CertAttester is implemented by a backend that can mint an enrolment-time
@@ -268,7 +269,8 @@ func (b *Backend) GetInfo(ctx context.Context, ev *bmcattestation.Evidence) (*bm
 // a comparison that flagged them would report every device as drifted.
 //
 // Only evidence frames compare. An alias certificate's comparable content is
-// its UCCS claims set, and decoding that belongs to go-xkms.
+// its UCCS claims set, and decoding that goes through the go-quicbaas SDK
+// (not yet published), which delegates to go-xkms.
 func (b *Backend) Compare(ctx context.Context, live, ref *bmcattestation.Evidence) (*bmcattestation.CompareResult, error) {
 	if live == nil || ref == nil {
 		return nil, bmcattestation.ErrInvalidEvidence{Reason: "compare requires both live and reference evidence"}
@@ -330,7 +332,8 @@ func (b *Backend) measureFrame(ev *bmcattestation.Evidence) (*bmcattestation.Mea
 // NonceEcho is left nil. The challenge is inside the UCCS claims set, this
 // package does not decode that, and reporting a nonce it had not read would
 // be reporting a check it had not performed. Nonce verification on this path
-// is dice.Verify's, through go-xkms.
+// is go-xkms's dice.Verify, reached through the go-quicbaas SDK (not yet
+// published).
 func (b *Backend) measureCertificate(ev *bmcattestation.Evidence) (*bmcattestation.Measurement, error) {
 	leaf, err := x509.ParseCertificate(ev.Raw)
 	if err != nil {
