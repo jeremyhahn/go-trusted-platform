@@ -114,14 +114,13 @@ route tree** under `/api/v1/iam`:
 /api/v1/iam/tenants
 /api/v1/iam/tenants/{tenant}
 /api/v1/iam/tenants/{tenant}/users
-/api/v1/iam/tenants/{tenant}/groups
 /api/v1/iam/tenants/{tenant}/roles
 /api/v1/iam/tenants/{tenant}/policies
 /api/v1/iam/tenants/{tenant}/apps
 ```
 
 Those are **IAM's tenant scoping**, not platform tenancy: they scope users,
-groups, roles, policies and applications to a tenant. Creating a tenant at
+roles, policies and applications to a tenant. Creating a tenant at
 `POST /api/v1/iam/tenants` is not the same operation as
 `POST /api/v1/tenants`, which creates the platform tenant with its quotas, DEK
 and per-tenant barrier.
