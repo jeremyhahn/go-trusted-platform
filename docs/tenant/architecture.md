@@ -782,6 +782,23 @@ The tenant middleware reads `uid` as a decimal string
 (`strconv.ParseUint`) and refuses a missing, zero or non-decimal value with
 401; see [`docs/auth/api.md`](../auth/api.md#platform-session-token-claims).
 
+### Which tenant a browser login lands in
+
+A browser (WebAuthn) login lands in the **user's own workspace** — the tenant
+in the user's `TenantID`, the one registration created or an invitation joined —
+never in the operating or system tenant the ceremony runs in (#662).
+`TenantUserService.Workspace` resolves it by the backbone subject's email and
+confirms the tenant still exists. A principal with no workspace is refused 403
+rather than signed in to the operating tenant; see
+[`docs/auth/architecture.md`](../auth/architecture.md#which-tenant-a-login-lands-in).
+
+A login session differs from the example above in two ways. It carries no
+`uid`: the identity comes from the backbone, not the platform user store. And
+its `is_tenant_owner` is `false` whatever `User.IsTenantOwner` says, because
+ownership must come from the go-qrdb identity hydrator behind the SDK, which
+carries no ownership attribute yet; the platform does not read its user store
+to fill it (#645).
+
 ## Related Documentation
 
 - [User-Tenant Relationship](../iam/architecture.md) - Detailed user-tenant model

@@ -143,7 +143,7 @@ func TestApplyDaemonTLSIdentity_UDSOnlySkips(t *testing.T) {
 	if err := applyDaemonTLSIdentity(context.Background(), newTestLogger(), &app.App{}, cfg, false); err != nil {
 		t.Fatalf("UDS-only mode must not require a TLS identity, got %v", err)
 	}
-	if cfg.TLSCertificate != nil {
+	if cfg.TLSIdentity != nil {
 		t.Error("UDS-only mode must not install TLS material")
 	}
 }
@@ -187,11 +187,15 @@ func TestApplyDaemonTLSIdentity_ServesKeystoreHeldIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyDaemonTLSIdentity: %v", err)
 	}
-	signer := ca.serverSigner()
+	served := cfg.TLSIdentity.Current()
+	if served == nil || served.Leaf == nil {
+		t.Fatal("the daemon serves no identity")
+	}
+	signer := ca.signerOf(served.Leaf)
 	if signer == nil {
 		t.Fatal("the keystore holds no daemon server key")
 	}
-	if cfg.TLSCertificate == nil || cfg.TLSCertificate.PrivateKey != crypto.PrivateKey(signer) {
+	if served == nil || served.PrivateKey != crypto.PrivateKey(signer) {
 		t.Fatal("the listener certificate is not backed by the keystore signer")
 	}
 	assertNoServerKeyOnDisk(t, platformDir, signer.Public())
@@ -202,8 +206,8 @@ func TestApplyDaemonTLSIdentity_ServesKeystoreHeldIdentity(t *testing.T) {
 		t.Error("requireClientCert must enable mTLS")
 	}
 
-	leaf := handshakeServerLeaf(t, *cfg.TLSCertificate, ca.root.pool())
-	if !leaf.Equal(ca.certs[daemonServerCN]) {
+	leaf := handshakeServerLeaf(t, *served, ca.root.pool())
+	if !leaf.Equal(ca.certs[served.Leaf.Subject.CommonName]) {
 		t.Error("the listener presented a certificate other than the keystore-held one")
 	}
 }
@@ -222,7 +226,7 @@ func TestApplyDaemonTLSIdentity_KeystoreUnavailableFailsClosed(t *testing.T) {
 	if !errors.As(err, &typed) {
 		t.Fatalf("expected ErrTLSIdentityKeystore, got %T (%v)", err, err)
 	}
-	if cfg.TLSCertificate != nil || cfg.MTLSClientCAPool != nil {
+	if cfg.TLSIdentity != nil || cfg.MTLSClientCAPool != nil {
 		t.Error("a keystore failure must install no TLS material")
 	}
 	entries, readErr := os.ReadDir(filepath.Join(platformDir, "tls"))
@@ -241,7 +245,7 @@ func TestApplyDaemonTLSIdentity_RequiresPlatformDir(t *testing.T) {
 	if !errors.As(err, &typed) {
 		t.Fatalf("expected ErrTLSIdentityRequiresPlatformDir, got %T (%v)", err, err)
 	}
-	if cfg.TLSCertificate != nil {
+	if cfg.TLSIdentity != nil {
 		t.Error("no TLS material may be installed without a platform directory")
 	}
 }

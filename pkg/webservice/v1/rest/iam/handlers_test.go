@@ -46,6 +46,7 @@ type mockIAMClient struct {
 	createUserFn func(ctx context.Context, tenantID string, req *iamsdk.CreateUserRequest) (*iamsdk.User, error)
 	listUsersFn  func(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error)
 	getUserFn    func(ctx context.Context, tenantID, userID string) (*iamsdk.User, error)
+	getByEmailFn func(ctx context.Context, tenantID, email string) (*iamsdk.User, error)
 	updateUserFn func(ctx context.Context, tenantID, userID string, req *iamsdk.UpdateUserRequest) (*iamsdk.User, error)
 	deleteUserFn func(ctx context.Context, tenantID, userID string) error
 	assignRoleFn func(ctx context.Context, tenantID, userID, roleID string) error
@@ -109,6 +110,13 @@ func (m *mockIAMClient) ListUsers(ctx context.Context, tenantID string, req *iam
 func (m *mockIAMClient) GetUser(ctx context.Context, tenantID, userID string) (*iamsdk.User, error) {
 	if m.getUserFn != nil {
 		return m.getUserFn(ctx, tenantID, userID)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockIAMClient) GetUserByEmail(ctx context.Context, tenantID, email string) (*iamsdk.User, error) {
+	if m.getByEmailFn != nil {
+		return m.getByEmailFn(ctx, tenantID, email)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }

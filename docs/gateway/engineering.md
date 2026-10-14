@@ -1042,7 +1042,7 @@ been reaped. Every path that ends a child goes through the same
 graceful-then-kill `terminate`, so none of them can wait on a wedged child
 forever.
 
-**Processes move one at a time — `routing`, then `proxy`.**
+**Processes move one at a time — `routing`, then `proxy`, then `provisioning`.**
 `Definition.Supervised` marks the processes that have left `gatewayd serve`;
 `Supervisor.Supervises` answers from it, and the gateway (`handlers.go`)
 registers a supervised handler only for those services. Every other service
@@ -1054,9 +1054,29 @@ exposed untrusted parser gatewayd runs. `proxy` moved second: the same one
 capability, and it terminates TLS from the internet. Its section is not a
 gateway section, so `BuildGateway` registers its relay itself
 (`RegisterSupervisedService`) and builds neither the trust resolver nor the
-proxy handler in the parent; a disabled proxy is relayed to no one. Every
-supervised process is a parser class and runs unprivileged
-(`TestSupervises_OnlyTheMovedProcessIsSupervised`).
+proxy handler in the parent; a disabled proxy is relayed to no one.
+`provisioning` (`edge`, `dhcp`, `pxe`) moved third. Its sections are gateway
+sections, so the registration walk relays them like `transit` and nothing in
+`BuildGateway` changed. Its capability set is `CAP_NET_BIND_SERVICE` alone,
+for the privileged ports the services answer on: DHCP on 67, TFTP on 69 and
+PXE over HTTP on 80. It gets no `CAP_NET_RAW`: binding to the DHCP
+`interface:` with `SO_BINDTODEVICE` needs no capability since Linux 5.7, and
+a DHCP backend that has to reach an unaddressed client through a raw or
+packet socket adds the capability to the class table in its own change,
+saying why. It gets no `CAP_NET_ADMIN`: no provisioning service programs the
+kernel. `edge` adds nothing to the set: its device verification reaches the
+platform over an outbound connection
+(`TestClassTable_ProvisioningKeepsOnlyNetBindService`). None of the three has
+a backend yet, so the child registers the refusals and fails its start; the
+reason reaches the parent as `ErrServiceNotActiveInProcess` with the child's
+start error as its detail, and the daemon stops exactly as it does with the
+model off (`TestProvisioning_TheParentRelaysEverySectionToItsChild`,
+`TestProvisioning_WithoutTheModelTheSectionsAreRefusedInProcess`). The
+snapshot's `pxe` and `dhcp` status lines read the relay's `IsActive`, which is
+the child's verdict, so no snapshot section needs `ServiceSnapshot`; the
+`refused_reason` of a supervised section is empty, and its reason is in the
+service's health instead. Every supervised process is a parser class and runs
+unprivileged (`TestSupervises_OnlyTheMovedProcessIsSupervised`).
 `Gateway.Apply` forwards the desired document to the supervisor only once
 `nat` or `load-balancer` is supervised; until `datapath` moves, it is applied
 in-process.
@@ -1113,7 +1133,7 @@ configured `local_asn` and `router_id`, rather than presenting a speaker with
 no peers.
 
 **Still pending:** the next processes, in this order:
-`provisioning` (`dhcp`/`pxe`/`edge`), `vpn` once it has a backend (the
+`vpn` once it has a backend (the
 management VPN is a refused section today, #558), and `datapath` last —
 moving it changes where `Apply` and the rest of the snapshot come from. Each
 move must route the snapshot sections its services own through

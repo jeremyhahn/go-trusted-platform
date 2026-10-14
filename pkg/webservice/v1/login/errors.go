@@ -145,6 +145,61 @@ func (e *SessionIssueError) Unwrap() error {
 	return e.Cause
 }
 
+// NoWorkspaceError reports that the backbone authenticated a principal
+// that has no workspace of its own to land the session in. The login is
+// refused: falling back to the tenant the ceremony ran in would hand the
+// principal the operating tenant's scope (#662).
+type NoWorkspaceError struct {
+	// Subject is the principal the backbone authenticated.
+	Subject string
+
+	// Cause is the resolver's failure, or nil when the resolver answered
+	// with no workspace or with the operating tenant.
+	Cause error
+}
+
+// Error implements error.
+func (e *NoWorkspaceError) Error() string {
+	message := "login: principal " + e.Subject + " has no workspace to sign in to"
+	if e.Cause == nil {
+		return message
+	}
+	return message + ": " + e.Cause.Error()
+}
+
+// Unwrap exposes the resolver's failure to errors.Is / errors.As.
+func (e *NoWorkspaceError) Unwrap() error {
+	return e.Cause
+}
+
+// WorkspaceRolesError reports that the roles of an authenticated principal
+// in the workspace its session lands in could not be resolved. The session
+// is refused rather than issued with the operating tenant's roles (#662).
+type WorkspaceRolesError struct {
+	// TenantID is the workspace the session was to land in.
+	TenantID string
+
+	// Subject is the principal the backbone authenticated.
+	Subject string
+
+	// Cause is the resolver's failure.
+	Cause error
+}
+
+// Error implements error.
+func (e *WorkspaceRolesError) Error() string {
+	message := "login: the roles of " + e.Subject + " in workspace " + e.TenantID + " could not be resolved"
+	if e.Cause == nil {
+		return message
+	}
+	return message + ": " + e.Cause.Error()
+}
+
+// Unwrap exposes the resolver's failure to errors.Is / errors.As.
+func (e *WorkspaceRolesError) Unwrap() error {
+	return e.Cause
+}
+
 // FactorUnavailableError reports that a factor's ceremony cannot be run
 // safely on this deployment, so the platform declines to open it at all.
 //

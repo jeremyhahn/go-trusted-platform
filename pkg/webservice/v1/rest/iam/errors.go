@@ -176,6 +176,14 @@ func (e ErrMirrorClientMissing) Error() string {
 	return "rest/iam: user mirror has no IAM client"
 }
 
+// ErrRoleResolverClientMissing is returned when a workspace role resolver is
+// built without an IAM client to read the workspace's users through.
+type ErrRoleResolverClientMissing struct{}
+
+func (e ErrRoleResolverClientMissing) Error() string {
+	return "rest/iam: workspace role resolver has no IAM client"
+}
+
 // ErrForeignBodyTenant is returned when a request body names a tenant other
 // than the one the route acts on: the path's {tenant}, otherwise the
 // session's. It is refused with 403, as the own-tenant guard refuses the same

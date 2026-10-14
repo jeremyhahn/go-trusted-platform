@@ -442,7 +442,9 @@ TLS file on disk is `ca-bundle.crt`, the public CA trust bundle (`0644`), in
 (`pkg/daemon/commands/provision_identity.go`) reuses the keystore identity
 across restarts while the server certificate verifies, covers the required
 SANs and is more than 30 days from expiry, and otherwise issues a new one
-(§Daemon TLS identity and key custody). A daemon with no platform directory
+(§Daemon TLS identity and key custody). A running daemon renews the same
+identity in the platform renewal sweep (§Daemon TLS identity renewal while
+running). A daemon with no platform directory
 refuses to start (`ErrTLSIdentityRequiresPlatformDir`). Provisioning issues
 **no** admin client certificate: the one-shot `/init` bundle is the platform's
 only admin credential ([`../bootstrap/cli.md`](../bootstrap/cli.md) §1a).
@@ -475,20 +477,22 @@ transport is unaffected: peer-credential authentication is unconditional.
 
 | Material | Where it lives | Notes |
 |----------|----------------|-------|
-| Server key (`platformd.localhost`, ECDSA P-256) | Platform CA keystore | Never written to disk. The listeners get a `tls.Certificate` whose `PrivateKey` is the keystore's `crypto.Signer`, from `CA.TLSCertificate` via the `sdk/go/xkms/ca` re-export. |
+| Server key (slot `platformd.localhost` or `platformd-alt.localhost`, ECDSA P-256) | Platform CA keystore | Never written to disk. The listeners get a `tls.Certificate` whose `PrivateKey` is the keystore's `crypto.Signer`, from `CA.TLSCertificate` via the `sdk/go/xkms/ca` re-export. |
 | Server certificate | Platform CA certificate store | Issued by `CA.IssueCertificate` with `KeyAttributes`, so the CA generates the key in its keystore. |
 | Admin client credential | Not on disk | The one-shot `/init` reply. See below. |
 | CA bundle | `<platform-dir>/tls/ca-bundle.crt`, mode 0644 | Public. Rewritten from `CA.CABundle()` on every boot. |
 
-On each boot the server identity is loaded from the keystore. It is reused
+The identity occupies one of two keystore slots, `platformd.localhost` and
+`platformd-alt.localhost`, with the same DNS SANs. On each boot both slots are
+loaded from the keystore and the latest one is the held identity. It is reused
 when it chains to the CA, covers the required DNS SANs and is outside the
-30-day renewal window. Otherwise it is superseded: the stored certificate is
-looked up on its own (`CA.Certificate`, which does not need the key),
-`RevokeCert` with `DeleteKeys` revokes it and destroys any old key, and a fresh
-key and certificate are issued. The certificate lookup is what lets an
-installation upgrade from the pre-#33 PEM-backed identity, whose certificate is
-in the CA store but whose key never was in the keystore
-([engineering.md](engineering.md) §7).
+30-day renewal window. Otherwise a fresh key and certificate are issued into
+the other slot, under their own key ID. Only after that identity is loaded is
+the old slot retired: its certificate is looked up on its own (`CA.Certificate`,
+which does not need the key), revoked, and its key and certificate deleted. The
+certificate lookup is what lets an installation upgrade from the pre-#33
+PEM-backed identity, whose certificate is in the CA store but whose key never
+was in the keystore ([engineering.md](engineering.md) §7).
 
 **No admin key on disk.** The daemon mints no admin client certificate. The
 operator's first credential is the one-shot `/init` reply
@@ -498,12 +502,71 @@ for the devcontainer harness (`harnessAdminBundle`).
 
 **Fail closed.** The server identity is resolved before any file is written:
 
-- A keystore that cannot issue, load or supersede the key returns
-  `ErrTLSIdentityKeystore{Op}`. `Op` is `issue`, `load` or `supersede`.
+- A keystore that cannot clear the slot being issued into, issue or load the
+  key returns `ErrTLSIdentityKeystore{Op}`. `Op` is `retire`, `issue` or `load`.
 - With no platform directory, `ErrTLSIdentityRequiresPlatformDir` is returned.
 
 In both cases no TLS material is installed in the daemon config, so no TLS
 listener starts.
+
+### Daemon TLS identity renewal while running (#36)
+
+The boot-time check above renews an identity only when the daemon restarts.
+A long-running daemon renews it in the platform certificate-renewal sweep
+([`../operations/cert-lifecycle.md`](../operations/cert-lifecycle.md)). The
+daemon does not run a sweep of its own.
+
+**When it renews.** `applyDaemonTLSIdentity` registers a cert target named
+`daemon.platformd`, of kind `daemon` (`daemonIdentityCertTarget`,
+`pkg/daemon/commands/daemon_identity_renewal.go`). The node's
+`platform.cert-renewal.<nodeID>` job runs daily at 02:00. It reissues the
+target once the served certificate is within 30 days of `NotAfter`.
+Reissue takes the same keystore path as boot (`issueDaemonServerIdentity`):
+
+1. Clear any leftover in the slot that is not serving.
+2. `CA.IssueCertificate` into that slot, under its own key ID.
+3. `CA.TLSCertificate`.
+4. Swap the served identity (`ServingCertificate.Store`).
+5. Retire the old slot: revoke its certificate, then delete its key and
+   certificate.
+
+The key stays in the CA keystore, and nothing is written to disk.
+
+**How the listeners pick it up.** The served identity is a
+`daemon.ServingCertificate` (`pkg/api/daemon/serving_certificate.go`): an
+`atomic.Pointer[tls.Certificate]` set through `Config.TLSIdentity`.
+
+- gRPC TCP, REST, MCP over HTTP and QUIC build their `tls.Config` with
+  `Certificates` empty and `GetCertificate` reading that pointer.
+- A successful reissue swaps the pointer, so the next handshake presents the
+  new certificate. No listener restarts, and the handshake path takes no lock.
+- Connections already open keep the certificate they negotiated.
+- The Unix socket carries no TLS and is unaffected.
+- `Certificates` must stay empty. A handshake without SNI (a dial by IP
+  address) takes `Certificates[0]` ahead of `GetCertificate`.
+
+**Client role.** The daemon identity is a single certificate carrying both
+the ServerAuth and ClientAuth EKUs (`daemonServerCertRequest`). Renewing it
+renews the client role too, so the client role has no separate target.
+
+**Failure.**
+
+- A reissue that fails before the swap returns `ErrTLSIdentityKeystore{Op}` to
+  the sweep. The old certificate and key keep serving, untouched. The sweep
+  records the target `failed` and logs it, then retries at its next run.
+- `ServingCertificate.Store` refuses an unusable certificate
+  (`ErrUnusableServingCertificate`). The current certificate keeps serving, and
+  the next sweep's `Current` retires the slot that was not swapped in.
+- A failure to retire the old slot after the swap is logged as a warning. The
+  new identity serves, and every sweep's `Current` retries the retirement of
+  the slot that is not serving.
+- If the target cannot be registered, boot does not fail. The identity
+  serves and renews at the next restart.
+
+The renewal never deletes a key that is serving. `IssueCertificate` refuses an
+existing common name and no CA call replaces a certificate atomically, so the
+new identity is issued under the other slot's common name and key ID, and the
+old one is deleted only after the swap ([engineering.md](engineering.md) §7).
 
 ## Configuration Files
 

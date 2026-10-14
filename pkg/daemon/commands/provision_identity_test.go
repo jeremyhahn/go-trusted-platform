@@ -36,7 +36,9 @@ import (
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasacme "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	xkmsbackend "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/backend"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	xkmscertstore "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/certstore"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -124,16 +126,23 @@ type fakeKeystoreCA struct {
 	keys  map[string]*keystoreSigner
 	certs map[string]*x509.Certificate
 
-	unavailable bool  // every keystore operation fails
-	loadErr     error // TLSCertificate fails
-	lookupErr   error // Certificate fails
-	revokeErr   error // RevokeCert fails
-	poolErr     error // CABundleCertPool fails
-	bundleErr   error // CABundle fails
+	unavailable  bool  // every keystore operation fails
+	issueErr     error // IssueCertificate fails
+	loadErr      error // TLSCertificate fails
+	lookupErr    error // Certificate fails
+	revokeErr    error // RevokeCert fails
+	deleteKeyErr error // KeyStore().DeleteKey fails
+	poolErr      error // CABundleCertPool fails
+	bundleErr    error // CABundle fails
+
+	// onDeleteKey, when set, runs as KeyStore().DeleteKey removes the key
+	// of a slot, so a test can see what was serving at that moment.
+	onDeleteKey func(cn string)
 
 	issueCalls  int
 	revokeCalls int
 	revoked     []*big.Int // serials passed to a successful RevokeCert
+	deletedKeys []string   // slots whose key KeyStore().DeleteKey removed
 	nextSerial  int64
 }
 
@@ -174,6 +183,9 @@ func (f *fakeKeystoreCA) IssueCertificate(_ context.Context, req *quicbaasca.CAC
 	f.issueCalls++
 	if f.unavailable {
 		return nil, errFake{op: "keystore issue"}
+	}
+	if f.issueErr != nil {
+		return nil, f.issueErr
 	}
 	cn := req.KeyAttributes.CN
 	if _, exists := f.certs[cn]; exists {
@@ -228,17 +240,99 @@ func (f *fakeKeystoreCA) TLSCertificate(_ context.Context, attrs *xkmssdk.KeyAtt
 	return tls.Certificate{Certificate: [][]byte{cert.Raw}, PrivateKey: signer}, nil
 }
 
-// RevokeCert drops the CN's certificate and, with DeleteKeys, its key.
-func (f *fakeKeystoreCA) RevokeCert(_ context.Context, cert *x509.Certificate, opts quicbaasca.RevokeOptions) error {
+// RevokeCert records the revocation. Like the CA it refuses a serial it
+// already recorded, and without DeleteKeys it deletes nothing; the daemon
+// identity path never asks it to.
+func (f *fakeKeystoreCA) RevokeCert(_ context.Context, cert *x509.Certificate, _ quicbaasca.RevokeOptions) error {
 	f.revokeCalls++
 	if f.revokeErr != nil {
 		return f.revokeErr
 	}
-	f.revoked = append(f.revoked, cert.SerialNumber)
-	delete(f.certs, cert.Subject.CommonName)
-	if opts.DeleteKeys {
-		delete(f.keys, cert.Subject.CommonName)
+	if f.isRevoked(cert.SerialNumber) {
+		return errFake{op: "already revoked"}
 	}
+	f.revoked = append(f.revoked, cert.SerialNumber)
+	return nil
+}
+
+func (f *fakeKeystoreCA) IsRevoked(serial *big.Int) (bool, error) {
+	return f.isRevoked(serial), nil
+}
+
+func (f *fakeKeystoreCA) isRevoked(serial *big.Int) bool {
+	for _, revoked := range f.revoked {
+		if revoked.Cmp(serial) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *fakeKeystoreCA) KeyStore() xkmsbackend.Backend { return &fakeKeyBackend{ca: f} }
+
+func (f *fakeKeystoreCA) CertStore() xkmscertstore.CertStore { return &fakeCertStore{ca: f} }
+
+// fakeKeyBackend is the fake CA's keystore as KeyStore exposes it. Only the
+// calls a slot retirement makes are implemented. Like a real keystore it
+// finds a key only under the attributes it was generated with, so a delete
+// that names the key by CN alone finds nothing.
+type fakeKeyBackend struct {
+	xkmsbackend.Backend
+	ca *fakeKeystoreCA
+}
+
+func (b *fakeKeyBackend) GetKey(_ context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+	signer, ok := b.ca.keys[attrs.CN]
+	if !ok || attrs.KeyType != xkmssdk.KeyTypeTLS || attrs.StoreType != xkmssdk.StoreSoftware {
+		return nil, errFake{op: "key not found"}
+	}
+	return signer, nil
+}
+
+func (b *fakeKeyBackend) DeleteKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error {
+	if b.ca.deleteKeyErr != nil {
+		return b.ca.deleteKeyErr
+	}
+	if _, err := b.GetKey(ctx, attrs); err != nil {
+		return err
+	}
+	if b.ca.onDeleteKey != nil {
+		b.ca.onDeleteKey(attrs.CN)
+	}
+	delete(b.ca.keys, attrs.CN)
+	b.ca.deletedKeys = append(b.ca.deletedKeys, attrs.CN)
+	return nil
+}
+
+// GetCert and DeleteCert find nothing: the fake keystore keeps no
+// certificates of its own, as a keystore that left them to the cert store.
+func (b *fakeKeyBackend) GetCert(context.Context, string) (*x509.Certificate, error) {
+	return nil, errFake{op: "keystore certificate not found"}
+}
+
+func (b *fakeKeyBackend) DeleteCert(context.Context, string) error {
+	return errFake{op: "keystore certificate not found"}
+}
+
+// fakeCertStore is the fake CA's cert store as CertStore exposes it.
+type fakeCertStore struct {
+	xkmscertstore.CertStore
+	ca *fakeKeystoreCA
+}
+
+func (s *fakeCertStore) GetCertificate(cn string) (*x509.Certificate, error) {
+	cert, ok := s.ca.certs[cn]
+	if !ok {
+		return nil, errFake{op: "certificate not found"}
+	}
+	return cert, nil
+}
+
+func (s *fakeCertStore) DeleteCertificate(cn string) error {
+	if _, ok := s.ca.certs[cn]; !ok {
+		return errFake{op: "certificate not found"}
+	}
+	delete(s.ca.certs, cn)
 	return nil
 }
 
@@ -285,9 +379,10 @@ func (f *fakeKeystoreCA) Certificate(_ context.Context, attrs *xkmssdk.KeyAttrib
 	return cert, nil
 }
 
-// serverSigner returns the keystore signer currently held for the daemon
-// server CN.
-func (f *fakeKeystoreCA) serverSigner() *keystoreSigner { return f.keys[daemonServerCN] }
+// signerOf returns the keystore signer held for the slot leaf names.
+func (f *fakeKeystoreCA) signerOf(leaf *x509.Certificate) *keystoreSigner {
+	return f.keys[leaf.Subject.CommonName]
+}
 
 // =============================================================================
 // Helpers
@@ -381,15 +476,18 @@ func TestProvisionDaemonIdentity_ServerKeyStaysInKeystore(t *testing.T) {
 	if id.Reused {
 		t.Error("expected Reused=false for fresh issuance")
 	}
-	signer := p.ca.serverSigner()
+	if id.ServerCert.Leaf == nil {
+		t.Fatal("expected a server leaf")
+	}
+	if cn := id.ServerCert.Leaf.Subject.CommonName; cn != daemonServerCN && cn != daemonServerAltCN {
+		t.Fatalf("server leaf CN %q names no keystore slot", cn)
+	}
+	signer := p.ca.signerOf(id.ServerCert.Leaf)
 	if signer == nil {
 		t.Fatal("keystore holds no daemon server key after issuance")
 	}
 	if id.ServerCert.PrivateKey != crypto.PrivateKey(signer) {
 		t.Errorf("server certificate key is %T, want the keystore signer", id.ServerCert.PrivateKey)
-	}
-	if id.ServerCert.Leaf == nil || id.ServerCert.Leaf.Subject.CommonName != daemonServerCN {
-		t.Fatalf("expected server leaf with CN %q, got %+v", daemonServerCN, id.ServerCert.Leaf)
 	}
 	if !certCoversDNSNames(id.ServerCert.Leaf, []string{"localhost", daemonServerCN, "unit-test.example"}) {
 		t.Errorf("server leaf DNS SANs = %v", id.ServerCert.Leaf.DNSNames)
@@ -436,14 +534,15 @@ func TestProvisionDaemonIdentity_ReusesKeystoreIdentity(t *testing.T) {
 	}
 }
 
-func TestProvisionDaemonIdentity_SupersedesNearExpiry(t *testing.T) {
+func TestProvisionDaemonIdentity_RenewsNearExpiryIntoTheOtherSlot(t *testing.T) {
 	p := newProvisionFixture(t)
 	p.ca.notAfterOff = 10 * 24 * time.Hour // inside the 30-day renewal window
 
-	if _, err := p.provision(t); err != nil {
+	first, err := p.provision(t)
+	if err != nil {
 		t.Fatalf("first provision: %v", err)
 	}
-	staleSigner := p.ca.serverSigner()
+	staleCN := first.ServerCert.Leaf.Subject.CommonName
 	p.ca.notAfterOff = 365 * 24 * time.Hour
 
 	second, err := p.provision(t)
@@ -453,13 +552,20 @@ func TestProvisionDaemonIdentity_SupersedesNearExpiry(t *testing.T) {
 	if second.Reused {
 		t.Error("expected Reused=false when the held cert is near expiry")
 	}
+	if second.ServerCert.Leaf.Subject.CommonName != otherDaemonServerSlot(staleCN) {
+		t.Errorf("renewed into slot %q, want the other slot %q",
+			second.ServerCert.Leaf.Subject.CommonName, otherDaemonServerSlot(staleCN))
+	}
 	if p.ca.revokeCalls != 1 || p.ca.issueCalls != 2 {
 		t.Errorf("revoke %d / issue %d calls, want 1 / 2", p.ca.revokeCalls, p.ca.issueCalls)
 	}
-	if p.ca.serverSigner() == staleSigner {
-		t.Error("superseding must delete the old key so a fresh one is generated")
+	if !p.ca.isRevoked(first.ServerCert.Leaf.SerialNumber) {
+		t.Error("the stale certificate was not revoked")
 	}
-	if second.ServerCert.PrivateKey != crypto.PrivateKey(p.ca.serverSigner()) {
+	if p.ca.keys[staleCN] != nil || p.ca.certs[staleCN] != nil {
+		t.Error("the stale slot must be emptied: its key and certificate deleted")
+	}
+	if second.ServerCert.PrivateKey != crypto.PrivateKey(p.ca.signerOf(second.ServerCert.Leaf)) {
 		t.Error("re-issued certificate does not use the keystore signer")
 	}
 }
@@ -551,18 +657,42 @@ func TestProvisionDaemonIdentity_KeystoreLoadFails(t *testing.T) {
 	}
 }
 
-func TestProvisionDaemonIdentity_SupersedeFails(t *testing.T) {
+// TestProvisionDaemonIdentity_RetireFailureServesTheNewIdentity asserts a
+// stale slot that cannot be retired does not fail boot: the new identity is
+// already issued, and the next provision retires the stale slot.
+func TestProvisionDaemonIdentity_RetireFailureServesTheNewIdentity(t *testing.T) {
 	p := newProvisionFixture(t)
 	p.ca.notAfterOff = 10 * 24 * time.Hour
-	if _, err := p.provision(t); err != nil {
+	first, err := p.provision(t)
+	if err != nil {
 		t.Fatalf("first provision: %v", err)
 	}
+	staleCN := first.ServerCert.Leaf.Subject.CommonName
+	staleSigner := p.ca.signerOf(first.ServerCert.Leaf)
+	p.ca.notAfterOff = 365 * 24 * time.Hour
 	p.ca.revokeErr = errFake{op: "revoke"}
 
-	_, err := p.provision(t)
-	var typed ErrTLSIdentityKeystore
-	if !errors.As(err, &typed) || typed.Op != "supersede" {
-		t.Fatalf("expected ErrTLSIdentityKeystore{Op: supersede}, got %T (%v)", err, err)
+	second, err := p.provision(t)
+	if err != nil {
+		t.Fatalf("a stale slot that cannot be retired must not fail boot: %v", err)
+	}
+	if second.ServerCert.Leaf.Subject.CommonName == staleCN {
+		t.Fatal("the stale identity was served instead of the new one")
+	}
+	if p.ca.keys[staleCN] != staleSigner {
+		t.Error("a failed retirement must leave the stale key in place")
+	}
+
+	p.ca.revokeErr = nil
+	third, err := p.provision(t)
+	if err != nil {
+		t.Fatalf("third provision: %v", err)
+	}
+	if !third.Reused {
+		t.Error("expected the new identity to be reused")
+	}
+	if p.ca.keys[staleCN] != nil || p.ca.certs[staleCN] != nil {
+		t.Error("the next provision must retire the stale slot")
 	}
 }
 
@@ -608,7 +738,7 @@ func TestProvisionDaemonIdentity_MigratesLegacyPEMIdentity(t *testing.T) {
 	if len(p.ca.revoked) != 1 || p.ca.revoked[0].Cmp(legacy.SerialNumber) != 0 {
 		t.Errorf("revoked serials = %v, want the legacy serial %v", p.ca.revoked, legacy.SerialNumber)
 	}
-	signer := p.ca.serverSigner()
+	signer := p.ca.signerOf(id.ServerCert.Leaf)
 	if signer == nil {
 		t.Fatal("keystore holds no daemon server key after migration")
 	}
@@ -634,34 +764,32 @@ func TestProvisionDaemonIdentity_MigratesLegacyPEMIdentity(t *testing.T) {
 	}
 }
 
-func TestProvisionDaemonIdentity_LegacySupersedeFails(t *testing.T) {
+func TestProvisionDaemonIdentity_LegacyRetireFailureServesTheNewIdentity(t *testing.T) {
 	p := newProvisionFixture(t)
 	legacy := seedLegacyIdentity(t, p.ca)
 	p.ca.revokeErr = errFake{op: "revoke"}
 
 	id, err := p.provision(t)
-	var typed ErrTLSIdentityKeystore
-	if !errors.As(err, &typed) || typed.Op != "supersede" {
-		t.Fatalf("expected ErrTLSIdentityKeystore{Op: supersede}, got %T (%v)", err, err)
+	if err != nil {
+		t.Fatalf("a legacy certificate that cannot be retired must not fail boot: %v", err)
 	}
-	if !errors.Is(err, p.ca.revokeErr) {
-		t.Error("ErrTLSIdentityKeystore must unwrap to the revocation cause")
+	if id.ServerCert.Leaf.SerialNumber.Cmp(legacy.SerialNumber) == 0 {
+		t.Fatal("the legacy certificate was served instead of a fresh one")
 	}
-	if id != nil {
-		t.Error("expected no identity when the legacy certificate cannot be superseded")
-	}
-	if p.ca.issueCalls != 0 || p.ca.serverSigner() != nil {
-		t.Errorf("a failed supersede must issue nothing: issue=%d key=%v", p.ca.issueCalls, p.ca.serverSigner() != nil)
+	if id.ServerCert.PrivateKey != crypto.PrivateKey(p.ca.signerOf(id.ServerCert.Leaf)) {
+		t.Error("the fresh identity does not use the keystore signer")
 	}
 	if p.ca.certs[daemonServerCN] != legacy {
-		t.Error("a failed supersede must leave the legacy certificate in place")
+		t.Error("a failed retirement must leave the legacy certificate in place")
 	}
-	entries, readErr := os.ReadDir(p.dir)
-	if readErr != nil {
-		t.Fatalf("read dir: %v", readErr)
+
+	p.ca.revokeErr = nil
+	again, err := p.provision(t)
+	if err != nil {
+		t.Fatalf("provision after the failed retirement: %v", err)
 	}
-	if len(entries) != 0 {
-		t.Errorf("a failed supersede must write nothing, found %d files", len(entries))
+	if !again.Reused || p.ca.certs[daemonServerCN] != nil {
+		t.Errorf("the next provision must reuse the fresh identity and retire the legacy one: reused=%v", again.Reused)
 	}
 }
 
@@ -671,8 +799,8 @@ func TestProvisionDaemonIdentity_CertificateLookupFails(t *testing.T) {
 
 	_, err := p.provision(t)
 	var typed ErrTLSIdentityKeystore
-	if !errors.As(err, &typed) || typed.Op != "supersede" {
-		t.Fatalf("expected ErrTLSIdentityKeystore{Op: supersede}, got %T (%v)", err, err)
+	if !errors.As(err, &typed) || typed.Op != "retire" {
+		t.Fatalf("expected ErrTLSIdentityKeystore{Op: retire}, got %T (%v)", err, err)
 	}
 	if !errors.Is(err, p.ca.lookupErr) {
 		t.Error("ErrTLSIdentityKeystore must unwrap to the lookup cause")
@@ -732,7 +860,7 @@ func TestProvisionDaemonIdentity_PersistFailureSurfaced(t *testing.T) {
 // =============================================================================
 
 func TestDaemonServerCertRequest_KeyGeneratedInKeystore(t *testing.T) {
-	req := daemonServerCertRequest([]string{"a.example"}, []string{"10.0.0.1"})
+	req := daemonServerCertRequest(daemonServerCN, []string{"a.example"}, []string{"10.0.0.1"})
 	if req.KeyAttributes == nil {
 		t.Fatal("the request must carry KeyAttributes so the CA generates the key in its keystore")
 	}
@@ -747,6 +875,86 @@ func TestDaemonServerCertRequest_KeyGeneratedInKeystore(t *testing.T) {
 	}
 	if len(req.SANS.IPs) != 1 || req.SANS.IPs[0] != "10.0.0.1" {
 		t.Errorf("IP SANs = %v", req.SANS.IPs)
+	}
+}
+
+// provisionedSlot provisions a fresh identity and returns the slot it is in.
+func provisionedSlot(t *testing.T, p *provisionFixture) (string, *x509.Certificate) {
+	t.Helper()
+	id, err := p.provision(t)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	return id.ServerCert.Leaf.Subject.CommonName, id.ServerCert.Leaf
+}
+
+func TestRetireDaemonServerSlot_RevokesAndDeletesTheKeyUnderItsOwnID(t *testing.T) {
+	p := newProvisionFixture(t)
+	cn, leaf := provisionedSlot(t, p)
+
+	if err := retireDaemonServerSlot(context.Background(), newTestLogger(), p.ca, cn); err != nil {
+		t.Fatalf("retire: %v", err)
+	}
+	if !p.ca.isRevoked(leaf.SerialNumber) {
+		t.Error("the retired certificate was not revoked")
+	}
+	// The fake keystore finds the key only under the attributes it was
+	// generated with, as RevokeCert's DeleteKeys does not name it.
+	if p.ca.keys[cn] != nil || len(p.ca.deletedKeys) != 1 || p.ca.deletedKeys[0] != cn {
+		t.Errorf("the slot key was not deleted under its own ID: deleted %v", p.ca.deletedKeys)
+	}
+	if p.ca.certs[cn] != nil {
+		t.Error("the retired certificate is still in the cert store")
+	}
+	if err := retireDaemonServerSlot(context.Background(), newTestLogger(), p.ca, cn); err != nil {
+		t.Errorf("retiring an empty slot must succeed: %v", err)
+	}
+}
+
+func TestRetireDaemonServerSlot_FinishesARetirementAlreadyRevoked(t *testing.T) {
+	p := newProvisionFixture(t)
+	cn, leaf := provisionedSlot(t, p)
+	p.ca.revoked = append(p.ca.revoked, leaf.SerialNumber)
+
+	if err := retireDaemonServerSlot(context.Background(), newTestLogger(), p.ca, cn); err != nil {
+		t.Fatalf("a slot revoked by an earlier attempt must still be emptied: %v", err)
+	}
+	if p.ca.revokeCalls != 0 {
+		t.Errorf("a recorded revocation must not be recorded again, revoke calls = %d", p.ca.revokeCalls)
+	}
+	if p.ca.keys[cn] != nil || p.ca.certs[cn] != nil {
+		t.Error("the slot was not emptied")
+	}
+}
+
+func TestRetireDaemonServerSlot_KeyDeleteFailureKeepsTheSlotForTheRetry(t *testing.T) {
+	p := newProvisionFixture(t)
+	cn, _ := provisionedSlot(t, p)
+	p.ca.deleteKeyErr = errFake{op: "delete key"}
+
+	err := retireDaemonServerSlot(context.Background(), newTestLogger(), p.ca, cn)
+	var typed ErrTLSIdentityKeystore
+	if !errors.As(err, &typed) || typed.Op != "retire" || !errors.Is(err, p.ca.deleteKeyErr) {
+		t.Fatalf("expected ErrTLSIdentityKeystore{Op: retire} wrapping the delete failure, got %v", err)
+	}
+	if p.ca.certs[cn] == nil {
+		t.Error("the cert-store entry must stay so the next attempt finds the slot")
+	}
+}
+
+func TestRemoveSlotItem(t *testing.T) {
+	failure := errFake{op: "remove"}
+	present := func() error { return nil }
+	absent := func() error { return errFake{op: "not found"} }
+
+	if err := removeSlotItem(func() error { return nil }, present); err != nil {
+		t.Errorf("a successful remove must succeed: %v", err)
+	}
+	if err := removeSlotItem(func() error { return failure }, absent); err != nil {
+		t.Errorf("a failed remove of an absent item is done: %v", err)
+	}
+	if err := removeSlotItem(func() error { return failure }, present); !errors.Is(err, failure) {
+		t.Errorf("a failed remove of an item still present must fail, got %v", err)
 	}
 }
 

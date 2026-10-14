@@ -17,6 +17,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 
@@ -300,4 +302,40 @@ func TestLoginDriver_BuiltOnTheDefaultSeam(t *testing.T) {
 
 	assert.NotNil(t, registry.LoginDriver(),
 		"the default seam validates exactly what a login issues")
+}
+
+// beginFIDO2Status opens a browser login on the driver and returns the
+// status: a 500 means no FIDO2 binder was wired, anything else means the
+// ceremony reached the (stub) backbone.
+func beginFIDO2Status(t *testing.T, registry *HandlerRegistry) int {
+	t.Helper()
+	driver := registry.LoginDriver()
+	require.NotNil(t, driver)
+	recorder := httptest.NewRecorder()
+	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login/begin", nil), quicbaassdk.FactorTypeFIDO2)
+	return recorder.Code
+}
+
+// TestLoginDriver_OffersFIDO2WithAWorkspaceResolver proves the login
+// driver builds the tenant user service itself, so the browser login can
+// land in the user's workspace even when the WebAuthn routes have not
+// been built yet (#662).
+func TestLoginDriver_OffersFIDO2WithAWorkspaceResolver(t *testing.T) {
+	registry, svcReg := newWiringRegistry(t, newWiringTenantManager(t), &jwt.Service{})
+	require.Nil(t, svcReg.TenantUserService(), "precondition: registry starts without a tenant user service")
+
+	assert.NotEqual(t, http.StatusInternalServerError, beginFIDO2Status(t, registry),
+		"the fido2 factor must be offered")
+	assert.NotNil(t, svcReg.TenantUserService(),
+		"the workspace resolver is the shared tenant user service")
+}
+
+// TestLoginDriver_WithholdsFIDO2WithoutAWorkspaceResolver proves a
+// deployment that cannot resolve workspaces does not offer a browser
+// login, which could otherwise only land in the operating tenant.
+func TestLoginDriver_WithholdsFIDO2WithoutAWorkspaceResolver(t *testing.T) {
+	registry, _ := newWiringRegistry(t, nil, &jwt.Service{})
+
+	assert.Equal(t, http.StatusInternalServerError, beginFIDO2Status(t, registry),
+		"without a workspace resolver the fido2 factor must not be offered")
 }

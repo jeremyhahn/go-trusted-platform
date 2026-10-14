@@ -457,6 +457,27 @@ func TestServeProcess_TheProxyProcessRefusesADisabledProxy(t *testing.T) {
 	assert.Nil(t, run.built, "an empty host list would host every service")
 }
 
+func TestServeProcess_TheProvisioningProcessHostsOnlyItsSections(t *testing.T) {
+	run := newServiceRun()
+	run.handler = &fakeServiceHandler{name: gateway.ServiceDHCP}
+	run.loaded.Gateway.PXE = &gateway.PXEServiceConfig{Enabled: true, HTTPPort: 8080}
+	opts := serviceTestOptions(t)
+
+	cancel, done := startServiceProcess(t, "provisioning", run, opts)
+	require.Eventually(t, func() bool {
+		_, active, ok := processStatus(t, opts.socket)
+		return ok && active[gateway.ServiceDHCP]
+	}, 5*time.Second, 10*time.Millisecond, "the supervisor must see DHCP active")
+
+	cancel()
+	require.NoError(t, <-done)
+	require.Len(t, run.hardened, 1)
+	assert.Equal(t, "provisioning", run.hardened[0].Name)
+	assert.Equal(t, []string{gateway.ServiceDHCP, gateway.ServicePXE}, run.built.Gateway.HostedServices,
+		"transit is enabled but belongs to the routing process; edge is not enabled")
+	assert.Nil(t, run.built.Gateway.Supervisor, "a child supervises nothing")
+}
+
 func TestServeProcess_AStartFailureReachesTheSupervisor(t *testing.T) {
 	run := newServiceRun()
 	run.handler.startErr = &gateway.ErrNilServiceHandler{}

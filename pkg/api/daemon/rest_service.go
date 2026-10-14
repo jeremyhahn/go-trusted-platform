@@ -146,10 +146,11 @@ func (s *RESTServer) Start() error {
 	// files. tlsCertificateUsable treats a structurally empty certificate
 	// as absent (#32): binding with it would report a healthy TLS
 	// transport whose every handshake fails.
-	if tlsCertificateUsable(s.config.TLSCertificate) || (s.config.RESTTLSCertFile != "" && s.config.RESTTLSKeyFile != "") {
+	inMemory := s.config.inMemoryCertificate()
+	if tlsCertificateUsable(inMemory) || (s.config.RESTTLSCertFile != "" && s.config.RESTTLSKeyFile != "") {
 		var cert tls.Certificate
-		if tlsCertificateUsable(s.config.TLSCertificate) {
-			cert = *s.config.TLSCertificate
+		if tlsCertificateUsable(inMemory) {
+			cert = *inMemory
 		} else {
 			var err error
 			cert, err = tls.LoadX509KeyPair(s.config.RESTTLSCertFile, s.config.RESTTLSKeyFile)

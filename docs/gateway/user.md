@@ -348,10 +348,13 @@ On an internet edge, the parsers that face the internet should not share a
 process with the datapath. The `process:` section turns on the supervised
 model (#557): `gatewayd serve` starts each supervised process as a child,
 dropped to its own privilege class, and restarts it with backoff if it dies.
-Today two processes move: `routing` (`transit`, the BGP speaker) and `proxy`
-(the authenticating reverse proxy, when `proxy:` enables it). Each runs as the
-service account and holds `CAP_NET_BIND_SERVICE` alone. Every other service
-stays in the main process.
+Today three processes move: `routing` (`transit`, the BGP speaker), `proxy`
+(the authenticating reverse proxy, when `proxy:` enables it) and
+`provisioning` (`edge`, `dhcp`, `pxe`). Each runs as the service account and
+holds `CAP_NET_BIND_SERVICE` alone. Every other service stays in the main
+process. The provisioning sections have no backend yet, so enabling one still
+stops the daemon with the section's reason, which now comes from the
+`provisioning` child.
 
 ```yaml
 process:

@@ -55,6 +55,12 @@ type Config struct {
 	// When set, the daemon uses this directly instead of loading from disk.
 	TLSCertificate *tls.Certificate
 
+	// TLSIdentity is a renewable in-memory certificate and takes precedence
+	// over TLSCertificate. Listeners present whatever it holds at handshake
+	// time, so storing a renewed certificate reaches gRPC, QUIC, REST and
+	// MCP-HTTP without a restart (#36).
+	TLSIdentity *ServingCertificate
+
 	// gRPC Unix Domain Socket configuration
 	EnableGRPCUDS  bool   `yaml:"enable_grpc_uds"`
 	GRPCSocketPath string `yaml:"grpc_socket_path"`
@@ -396,7 +402,16 @@ func tlsCertificateUsable(cert *tls.Certificate) bool {
 // (#32) — both sides of the fail-closed contract share one definition of
 // "material present".
 func (c *Config) grpcTLSMaterialPresent() bool {
-	return tlsCertificateUsable(c.TLSCertificate) || (c.GRPCTLSCertFile != "" && c.GRPCTLSKeyFile != "")
+	return tlsCertificateUsable(c.inMemoryCertificate()) || (c.GRPCTLSCertFile != "" && c.GRPCTLSKeyFile != "")
+}
+
+// inMemoryCertificate returns the in-memory certificate the listeners serve:
+// the one TLSIdentity currently holds when it is set, else TLSCertificate.
+func (c *Config) inMemoryCertificate() *tls.Certificate {
+	if c.TLSIdentity != nil {
+		return c.TLSIdentity.Current()
+	}
+	return c.TLSCertificate
 }
 
 // quicTLSMaterialPresent reports whether the QUIC transport has a TLS

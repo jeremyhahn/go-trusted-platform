@@ -344,6 +344,13 @@ func newServerTLSConfig(config *Config, transport string, cert tls.Certificate) 
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS12,
 	}
+	// A renewable identity is read per handshake. Certificates must stay
+	// empty: crypto/tls prefers Certificates[0] over GetCertificate when a
+	// client sends no SNI, which would pin the boot-time certificate (#36).
+	if config.TLSIdentity.Current() != nil {
+		tlsConfig.Certificates = nil
+		tlsConfig.GetCertificate = config.TLSIdentity.GetCertificate
+	}
 
 	clientCAPool, err := resolveMTLSClientCAPool(config, transport)
 	if err != nil {

@@ -18,6 +18,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"testing"
+	"time"
 )
 
 func stubCurrent(context.Context) (*x509.Certificate, error) { return &x509.Certificate{}, nil }
@@ -41,6 +42,7 @@ func TestCertKind_IsValid(t *testing.T) {
 	}{
 		{CertKindWebservice, true},
 		{CertKindBMC, true},
+		{CertKindDaemon, true},
 		{CertKind(""), false},
 		{CertKind("other"), false},
 	}
@@ -167,6 +169,33 @@ func TestRegistry_Replace_AddsIfMissing(t *testing.T) {
 func TestRegistry_Replace_Invalid(t *testing.T) {
 	r := NewCertTargetRegistry()
 	err := r.Replace(&CertTarget{Name: "x"}) // missing kind/current/reissue
+	var want ErrInvalidCertTarget
+	if !errors.As(err, &want) {
+		t.Errorf("err = %v, want ErrInvalidCertTarget", err)
+	}
+}
+
+func TestApp_RegisterCertTarget_JoinsTheSweepRegistry(t *testing.T) {
+	a := &App{}
+	target := (&stubTarget{name: "daemon.platformd", notAfter: time.Now()}).buildTarget()
+	target.Kind = CertKindDaemon
+	if err := a.RegisterCertTarget(target); err != nil {
+		t.Fatalf("RegisterCertTarget: %v", err)
+	}
+	// A second registration under the same name replaces, not fails: a
+	// re-provisioned identity re-registers on every boot.
+	if err := a.RegisterCertTarget(target); err != nil {
+		t.Fatalf("RegisterCertTarget (again): %v", err)
+	}
+	snap := a.CertTargets.Snapshot()
+	if len(snap) != 1 || snap[0].Name != "daemon.platformd" || snap[0].Kind != CertKindDaemon {
+		t.Errorf("registry = %+v, want the one daemon target", snap)
+	}
+}
+
+func TestApp_RegisterCertTarget_RejectsInvalidTarget(t *testing.T) {
+	a := &App{}
+	err := a.RegisterCertTarget(&CertTarget{Name: "daemon.platformd"})
 	var want ErrInvalidCertTarget
 	if !errors.As(err, &want) {
 		t.Errorf("err = %v, want ErrInvalidCertTarget", err)

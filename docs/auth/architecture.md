@@ -246,13 +246,23 @@ backbone returned a bearer (the evidence the ceremony succeeded) *and* an
 identity (who it succeeded for); a bearer with no identity is refused 401
 rather than minted into an anonymous session, and a mint that fails is a 500 —
 a platform fault — never a rejected login. The claims are a projection of the
-backbone's identity: `sub`/`user_id`/`email` from its subject, `tenant_id` and
-`roles` from its tenant and roles. `uid` is deliberately omitted: it keys the
-platform user store and the backbone's subject keys a different one, so copying
-one into the other could resolve an unrelated platform user on a numeric
-collision. The routes that re-read the platform user from it (`/login/refresh`)
-therefore refuse a backbone-issued session, which is the correct fail-closed
-answer until the two stores converge.
+backbone's identity: `sub`/`user_id`/`email` from its subject and `roles` from
+its roles; `tenant_id` is the tenant the factor's binder names, which for a
+browser login is the user's workspace (below). `uid` is deliberately omitted:
+it keys the platform user store and the backbone's subject keys a different
+one, so copying one into the other could resolve an unrelated platform user on
+a numeric collision. Every site that needs the platform user id therefore
+refuses a backbone-issued session — the correct fail-closed answer until the
+two stores converge (phase 3 of #644):
+
+| Site | Backbone-issued session |
+|------|-------------------------|
+| `/login/refresh` — `jwt.RestHandler.RefreshToken` | `401 ErrInvalidToken`; the user store is not consulted. A refresh mints from the *current* authorization, and copying the old token's roles and tenant forward would roll a revoked privilege forward, so the client renews by running the login ceremony again. Test: `TestHandlerRefreshToken_RefusesABackboneSession` |
+| Session creation — `jwt.RestHandler.CreateSession` | `400 ErrInvalidUserClaim`, no session. Test: `TestCreateSession_RefusesABackboneSession` |
+| `POST /api/v1/invitations` — `rest/invitation` `resolveUserID` | Resolves no inviter (0) when the body names none; `InvitationService.Create` refuses it (`ErrInvalidInvitation`, "inviter ID is required") rather than recording an invitation from nobody. The tenant is the session's, which is now the workspace |
+| Tenant middleware — `middleware/tenant` `ExtractTenantContext` | `401 ErrMissingUserClaim`. Nothing constructs it (`NewMiddleware`) outside its tests today |
+| Legacy invitation handler — `webservice/v1/invitation` | `401` "missing user context". Nothing outside its tests imports the package today |
+| `InvitationService.Accept`, MCP `platform_invitation_accept` | Not session-derived: the redeemer's platform user id comes from registration (`RegisterInvitedUser`) or the tool's `user_id` argument, and 0 is refused |
 
 No renewal credential reaches the client while this holds. The backbone mints
 one alongside its own bearer, but it renews the backbone's session, and the
@@ -276,7 +286,68 @@ Neither seam is taught to accept both token types; converging them is #202.
 
 One driver serves every factor because there is one ceremony. A factor
 contributes a *binder* — the translation between its HTTP shape and the two
-ceremony requests — never a second copy of the Begin/Finish sequence.
+ceremony requests, and the tenant its session lands in — never a second copy of
+the Begin/Finish sequence.
+
+#### Which tenant a login lands in
+
+A browser login authenticates into the **user's own workspace**, never into the
+operating or system tenant (#662). The workspace is the tenant registration
+created for the user (`TenantUserService.RegisterNewUser`) or an invitation
+joined them to (`RegisterInvitedUser`); on the daemon both are go-quicbaas IAM
+tenants.
+
+The WebAuthn ceremony itself has to run in the operating tenant — that is where
+the relying party and the enrolled credential live — so the identity the
+backbone returns names the operating tenant. The driver therefore asks the
+binder (`Binder.Tenant`) which tenant the session is for before it mints:
+
+| Factor | `tenant_id` in the session |
+|--------|----------------------------|
+| `fido2` (browser) | The principal's workspace, from `TenantUserService.Workspace`: the platform user with the backbone subject's email, its `TenantID`, confirmed to still exist through the tenant manager. |
+| `mtls` | None: the factor declines every verb until go-quicbaas#857, and which tenant a certificate login lands in is decided then. |
+
+A browser login whose principal has **no workspace** — no platform user, a user
+in no tenant, a deleted workspace, or a workspace that resolves to the operating
+tenant itself — is refused `403` with `login.NoWorkspaceError`. There is no
+fallback to the operating tenant: the proof was good, but there is nowhere of
+the principal's own to land. An operator whose only tenant is the operating one
+signs in to that tenant through the admin claim, not the browser login.
+
+Without a tenant user service (no tenant manager wired) the registry does not
+offer the `fido2` factor at all, since the only tenant left for its sessions
+would be the operating one.
+
+**Ownership.** `is_tenant_owner` in a login session is always `false`. Ownership
+has to come from the identity the backbone resolves, and the pinned SDK does not
+carry it: `quicbaas.Identity` is go-qrdb's `transport.Identity` (`Subject`,
+`TenantID`, `Roles`, `Metadata`), filled by go-qrdb's
+`transport/embedded.defaultIdentityHydrator`, which copies the principal's
+username, tenant and roles and sets only `factor_id` and `factor_type` in
+`Metadata`. The platform does not fill the claim from its own user store — #645
+removed that coupling. The claim is mapped once the hydrator emits an ownership
+attribute (for example a `tenant_owner` metadata entry).
+
+**Roles.** The backbone's `roles` are the principal's roles in the ceremony's
+tenant, the operating one, so a session moved into a workspace never carries
+them: an admin of the operating tenant who is a plain member of their workspace
+would otherwise be an admin there. Before minting, the driver asks its
+`login.RoleResolver` for the principal's roles in the workspace and the session
+carries those, and only those. On the daemon the resolver is
+`restiam.WorkspaceRoleResolver`, which reads the workspace's go-quicbaas IAM user
+by the backbone subject's email through the SDK
+(`IAM().User().GetByEmail(ctx, workspace, email)`) and takes its `Roles`, the
+names the user mirror and IAM role assignments store and the session guards
+check.
+
+| Lookup | Session roles |
+|--------|---------------|
+| The workspace holds the user | That user's roles in the workspace |
+| The workspace does not hold the user (`NotFound`: an invited member is mirrored only by the startup reconcile) | None |
+| No IAM client wired, so no resolver | None |
+| Any other failure | No session: `500` with `login.WorkspaceRolesError`, nothing is minted |
+
+A session that stays in the ceremony's tenant keeps the backbone's roles.
 
 ### A local CLI over the Unix socket
 

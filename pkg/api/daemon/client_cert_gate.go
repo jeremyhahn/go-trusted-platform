@@ -96,8 +96,8 @@ func grpcTCPServerTLS(config *Config, logger *logging.Logger) ([]grpc.ServerOpti
 	// attach a structurally empty in-memory certificate even when a valid
 	// file pair is configured (#32).
 	var cert tls.Certificate
-	if tlsCertificateUsable(config.TLSCertificate) {
-		cert = *config.TLSCertificate
+	if inMemory := config.inMemoryCertificate(); tlsCertificateUsable(inMemory) {
+		cert = *inMemory
 	} else {
 		var err error
 		cert, err = tls.LoadX509KeyPair(config.GRPCTLSCertFile, config.GRPCTLSKeyFile)

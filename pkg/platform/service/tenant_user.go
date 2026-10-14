@@ -47,6 +47,10 @@ type TenantUserServicer interface {
 	// GetUserTenant returns the tenant for a user.
 	GetUserTenant(ctx context.Context, userID uint64) (*tenant.TenantEntity, error)
 
+	// Workspace returns the ID of the workspace the user with the given
+	// email owns or joined. A browser login's session lands there.
+	Workspace(ctx context.Context, email string) (string, error)
+
 	// IsTenantOwner checks if user owns the tenant.
 	IsTenantOwner(ctx context.Context, userID uint64) (bool, error)
 
@@ -445,6 +449,32 @@ func (s *TenantUserService) GetUserTenant(ctx context.Context, userID uint64) (*
 	}
 
 	return tenantEntity, nil
+}
+
+// Workspace returns the ID of the user's workspace: the tenant
+// RegisterNewUser created for them or RegisterInvitedUser joined them to.
+// A browser login lands its session there (#662).
+//
+// The user is found by email because that is what the backbone names an
+// authenticated principal by. The workspace must still exist in the
+// tenant manager (the go-quicbaas IAM tenant service on the daemon), so a
+// deleted workspace is refused rather than handed to a session.
+func (s *TenantUserService) Workspace(ctx context.Context, email string) (string, error) {
+	if email == "" {
+		return "", ErrInvalidEmail{Email: email}
+	}
+	user, err := s.userService.GetByEmail(ctx, email)
+	if err != nil || user == nil {
+		return "", ErrUserNotFound{Email: email}
+	}
+	if user.TenantID == "" {
+		return "", ErrUserNotInTenant{UserID: user.ID}
+	}
+	workspace, err := s.tenantManager.GetTenant(ctx, user.TenantID)
+	if err != nil || workspace == nil {
+		return "", ErrTenantNotFound{ID: user.TenantID}
+	}
+	return workspace.ID, nil
 }
 
 // IsTenantOwner checks if a user owns the tenant.

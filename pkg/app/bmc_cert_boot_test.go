@@ -738,7 +738,7 @@ func TestCertRenewalHandler_CancelledBeforeTheFirstTargetIsNotSuccess(t *testing
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	handler := buildCertRenewalHandler(reg, DefaultCertRenewalThreshold, nil)
+	handler := buildCertRenewalHandler(reg, DefaultCertRenewalThreshold, time.Now, nil)
 	res, err := handler(ctx, nil)
 
 	if err == nil {
@@ -775,7 +775,7 @@ func TestCertRenewalHandler_CancelledBetweenTargetsIsNotSuccess(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	handler := buildCertRenewalHandler(reg, DefaultCertRenewalThreshold, nil)
+	handler := buildCertRenewalHandler(reg, DefaultCertRenewalThreshold, time.Now, nil)
 	res, err := handler(ctx, nil)
 
 	if err == nil {
@@ -800,7 +800,7 @@ func TestCertRenewalHandler_CompleteSweepStillReportsSuccess(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	handler := buildCertRenewalHandler(reg, DefaultCertRenewalThreshold, nil)
+	handler := buildCertRenewalHandler(reg, DefaultCertRenewalThreshold, time.Now, nil)
 	res, err := handler(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("a complete sweep must not error: %v", err)

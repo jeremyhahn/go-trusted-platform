@@ -1203,18 +1203,33 @@ func (registry *HandlerRegistry) LoginDriver() *login.Driver {
 	// The WebAuthn binder is tenant-scoped: an assertion is only valid
 	// against the relying party of the tenant owning the credential, so
 	// without an operating tenant the fido2 factor is simply not offered
-	// rather than offered and broken.
-	if registry.params.TenantID != "" {
-		fido2, err := login.NewFIDO2Binder(registry.params.TenantID)
+	// rather than offered and broken. Its session lands in the user's own
+	// workspace, which the tenant user service resolves (#662); without
+	// that service the only tenant left is the operating one, which a
+	// browser login never lands in, so the factor is not offered either.
+	if tus := registry.tenantUserService(); registry.params.TenantID != "" && tus != nil {
+		fido2, err := login.NewFIDO2Binder(registry.params.TenantID, tus)
 		if err != nil {
 			registry.params.Logger.FatalError(err)
 		}
 		binders = append(binders, fido2)
 	}
+	// A session landed in a workspace carries the principal's roles in
+	// that workspace, read from its IAM tenant. Without an IAM client it
+	// carries none (#662).
+	var roles login.RoleResolver
+	if registry.params.IAMClient != nil {
+		resolver, err := restiam.NewWorkspaceRoleResolver(registry.params.IAMClient)
+		if err != nil {
+			registry.params.Logger.FatalError(err)
+		}
+		roles = resolver
+	}
 	driver, err := login.NewDriver(login.DriverParams{
 		Client:         registry.params.AuthSDKClient,
 		Binders:        binders,
 		SessionIssuer:  registry.jwtService,
+		Roles:          roles,
 		Logger:         registry.params.Logger,
 		ResponseWriter: registry.params.HTTPWriter,
 	})
@@ -1223,6 +1238,42 @@ func (registry *HandlerRegistry) LoginDriver() *login.Driver {
 	}
 	registry.loginDriver = driver
 	return driver
+}
+
+// tenantUserService returns the platform's tenant user service, building
+// it on first use.
+//
+// The platform service registry is built before the tenant manager exists
+// (NewRegistry passes TenantManager: nil), so on the daemon path the
+// registry holds none even though tenant orchestration is fully available.
+// It is materialized here: the JWT service signs the tenant-scoped token
+// through the UserTokenIssuer adapter, and the service is pushed back into
+// the platform registry so every other consumer observes the same
+// instance. It returns nil when a dependency is missing.
+func (registry *HandlerRegistry) tenantUserService() service.TenantUserServicer {
+	tus := registry.params.ServiceRegistry.TenantUserService()
+	if tus != nil || registry.params.TenantManager == nil {
+		return tus
+	}
+	userSvc := registry.params.ServiceRegistry.UserService()
+	invitationSvc := registry.params.ServiceRegistry.InvitationService()
+	if userSvc == nil || invitationSvc == nil || registry.jwtService == nil {
+		return nil
+	}
+	issuer, err := jwt.NewUserTokenIssuer(userSvc, registry.jwtService)
+	if err != nil {
+		registry.params.Logger.FatalError(err)
+	}
+	tus = service.NewTenantUserService(&service.TenantUserServiceConfig{
+		Logger:            registry.params.Logger,
+		UserService:       userSvc,
+		InvitationService: invitationSvc,
+		TenantManager:     registry.params.TenantManager,
+		TokenIssuer:       issuer,
+	})
+	registry.params.ServiceRegistry.SetTenantUserService(tus)
+	registry.params.Logger.Info("tenant user service wired for WebAuthn registration and login")
+	return tus
 }
 
 // JWTService returns the underlying JWT service so callers (notably the
@@ -1391,33 +1442,7 @@ func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 		registry.params.Logger.Warn("unified login driver not wired, WebAuthn routes will not be registered")
 		return nil
 	}
-	tus := registry.params.ServiceRegistry.TenantUserService()
-	// The platform service registry is built before the tenant manager
-	// exists (NewRegistry passes TenantManager: nil), so on the daemon
-	// path tus is nil here even though tenant orchestration is fully
-	// available. Materialize it now: the JWT service signs the
-	// tenant-scoped token through the UserTokenIssuer adapter, and the
-	// service is pushed back into the platform registry so every other
-	// consumer observes the same instance.
-	if tus == nil && registry.params.TenantManager != nil {
-		userSvc := registry.params.ServiceRegistry.UserService()
-		invitationSvc := registry.params.ServiceRegistry.InvitationService()
-		if userSvc != nil && invitationSvc != nil && registry.jwtService != nil {
-			issuer, err := jwt.NewUserTokenIssuer(userSvc, registry.jwtService)
-			if err != nil {
-				registry.params.Logger.FatalError(err)
-			}
-			tus = service.NewTenantUserService(&service.TenantUserServiceConfig{
-				Logger:            registry.params.Logger,
-				UserService:       userSvc,
-				InvitationService: invitationSvc,
-				TenantManager:     registry.params.TenantManager,
-				TokenIssuer:       issuer,
-			})
-			registry.params.ServiceRegistry.SetTenantUserService(tus)
-			registry.params.Logger.Info("tenant user service wired for WebAuthn registration")
-		}
-	}
+	tus := registry.tenantUserService()
 	// Wire the QuicBaaS IAM mirror so RegisterNewUser surfaces the
 	// freshly-registered user into /api/v1/iam/users. The mirror is
 	// constructed lazily here because TenantUserService is built at

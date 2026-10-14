@@ -533,7 +533,8 @@ func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.
 	if mkErr := os.MkdirAll(tlsDir, 0700); mkErr != nil {
 		return ErrProvisionPersist{Path: tlsDir, Cause: mkErr}
 	}
-	identity, mtlsErr := provisionDaemonIdentity(ctx, logger, a.CA, tlsDir, daemonServerSANs(a))
+	sans := daemonServerSANs(a)
+	identity, mtlsErr := provisionDaemonIdentity(ctx, logger, a.CA, tlsDir, sans)
 	if mtlsErr != nil {
 		return mtlsErr
 	}
@@ -551,15 +552,33 @@ func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.
 			return harnessErr
 		}
 	}
-	cfg.TLSCertificate = &identity.ServerCert
+	// Every TLS listener reads the identity through serving at handshake
+	// time, so the renewal sweep can replace it while they run (#36).
+	serving, servingErr := daemon.NewServingCertificate(identity.ServerCert)
+	if servingErr != nil {
+		return ErrProvisionIssue{Role: "server", Cause: servingErr}
+	}
+	cfg.TLSIdentity = serving
 	cfg.MTLSClientCAPool = identity.AdminTrustPool
 	cfg.MTLSClientCAFile = identity.CABundlePath
 	if cfg.QUICConfig != nil && cfg.QUICConfig.TLSConfig != nil {
-		cfg.QUICConfig.TLSConfig.Certificates = []tls.Certificate{identity.ServerCert}
+		// Certificates stays empty: crypto/tls prefers it over
+		// GetCertificate when a client sends no SNI.
+		cfg.QUICConfig.TLSConfig.Certificates = nil
+		cfg.QUICConfig.TLSConfig.GetCertificate = serving.GetCertificate
 	}
 	cfg.EnableMTLS = requireClientCert
+	dnsNames, ipStrings := daemonCertSANs(sans)
+	target := daemonIdentityCertTarget(logger, a.CA, serving, dnsNames, ipStrings)
+	if regErr := a.RegisterCertTarget(target); regErr != nil {
+		// Not fatal: the identity serves; it just renews at the next
+		// restart instead of while running.
+		logger.Warn("cert renewal: cannot register the daemon TLS identity cert target; "+
+			"it will not renew while running, only at the next restart",
+			"target", daemonIdentityCertTargetName, "error", regErr.Error())
+	}
 	logger.Info("Daemon TLS identity provisioned",
-		"server_key", "ca-keystore:"+daemonServerCN,
+		"server_key", "ca-keystore:"+identity.ServerCert.Leaf.Subject.CommonName,
 		"ca_bundle", identity.CABundlePath,
 		"client_cert_required", requireClientCert,
 		"reused", identity.Reused,

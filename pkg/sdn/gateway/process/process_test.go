@@ -68,7 +68,10 @@ func TestSupervises_OnlyTheMovedProcessIsSupervised(t *testing.T) {
 
 	assert.True(t, sup.Supervises(gateway.ServiceTransit), "routing is the first process moved out (#557)")
 	assert.True(t, sup.Supervises(gateway.ServiceProxy), "proxy is the second process moved out (#557)")
-	for _, service := range []string{gateway.ServiceFirewall, gateway.ServiceNAT, gateway.ServiceDHCP, gateway.ServiceManagementVPN} {
+	for _, service := range []string{gateway.ServiceDHCP, gateway.ServicePXE, gateway.ServiceEdge} {
+		assert.Truef(t, sup.Supervises(service), "%s: provisioning is the third process moved out (#557)", service)
+	}
+	for _, service := range []string{gateway.ServiceFirewall, gateway.ServiceNAT, gateway.ServiceManagementVPN} {
 		assert.Falsef(t, sup.Supervises(service), "%s has not moved yet", service)
 	}
 	// Only a parser moves first: the kernel class stays with the parent
@@ -998,6 +1001,149 @@ func TestCrashLoop_StopsAtTheRestartBudget(t *testing.T) {
 	assert.Equal(t, "routing", exhausted.Process)
 	assert.Contains(t, exhausted.Error(), "restart budget")
 	assert.Equal(t, 3, launcher.launchCount(), "no fourth launch after the budget is gone")
+}
+
+// provisioningConfig enables the three sections the provisioning process
+// hosts. None of them has a backend yet, so in process each one is a
+// refusal; sup is nil for a gateway with the process model off.
+func provisioningConfig(sup gateway.ServiceSupervisor) *gateway.GatewayConfig {
+	return &gateway.GatewayConfig{
+		Enabled:    true,
+		ID:         "gw-provisioning",
+		Edge:       &gateway.EdgeConfig{Enabled: true, MaxDevices: 16, MaxServices: 16},
+		DHCP:       &gateway.DHCPServiceConfig{Enabled: true, Interface: "eth1"},
+		PXE:        &gateway.PXEServiceConfig{Enabled: true, HTTPPort: 8080},
+		Supervisor: sup,
+	}
+}
+
+func newProvisioningGateway(t *testing.T, cfg *gateway.GatewayConfig) *gateway.Gateway {
+	t.Helper()
+	gw, err := gateway.NewGateway(cfg)
+	require.NoError(t, err)
+	// Admit the node at its own minimums, as BuildGateway does.
+	gwCfg := gw.GetConfig()
+	gw.SetNodeMetrics(gwCfg.MinReputation, time.Duration(gwCfg.MinAgeDays)*24*time.Hour, gwCfg.MinUptimePct)
+	return gw
+}
+
+func TestClassTable_ProvisioningKeepsOnlyNetBindService(t *testing.T) {
+	// DHCP (67), TFTP (69) and PXE over HTTP (80) are privileged ports;
+	// nothing the provisioning services do programs the kernel or needs a
+	// raw socket, so a capability beyond the bind is one a parser of
+	// untrusted devices' requests must not hold.
+	def, err := DefinitionByName("provisioning")
+	require.NoError(t, err)
+	assert.Equal(t, []uintptr{unix.CAP_NET_BIND_SERVICE}, def.Capabilities)
+	assert.Equal(t, ClassParser, def.Class)
+	assert.True(t, def.Unprivileged)
+	assert.True(t, def.Supervised)
+}
+
+func TestProvisioning_TheParentRelaysEverySectionToItsChild(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, nil)
+	ctx := testContext(t)
+	gw := newProvisioningGateway(t, provisioningConfig(supervisor))
+
+	// In process every provisioning section is a refusal that fails the
+	// start, so a start that succeeds is one no in-process handler took
+	// part in: the parent only relays.
+	require.NoError(t, gw.Start(ctx))
+
+	launcher.mu.Lock()
+	launched := make([]string, 0, len(launcher.launches))
+	for _, spec := range launcher.launches {
+		launched = append(launched, spec.Definition.Name)
+	}
+	launcher.mu.Unlock()
+	assert.Equal(t, []string{"provisioning"}, launched, "one child hosts all three sections")
+
+	reports := gw.ServiceReports()
+	require.Len(t, reports, 3)
+	for _, report := range reports {
+		assert.Truef(t, report.Active, "%s: active is the child's verdict", report.Name)
+		assert.NoErrorf(t, report.Health, "%s", report.Name)
+	}
+
+	require.NoError(t, gw.Stop(ctx))
+	assert.False(t, supervisor.ServiceActive(gateway.ServiceDHCP), "the child stops with its last service")
+}
+
+func TestProvisioning_WithoutTheModelTheSectionsAreRefusedInProcess(t *testing.T) {
+	gw := newProvisioningGateway(t, provisioningConfig(nil))
+
+	err := gw.Start(testContext(t))
+
+	var unavailable *gateway.ErrServiceUnavailable
+	require.ErrorAs(t, err, &unavailable, "with the model off the in-process refusal stops the start, as before")
+	assert.Equal(t, gateway.ServiceEdge, unavailable.Service, "the first provisioning section the walk reaches")
+	assert.NotEmpty(t, unavailable.Reason)
+}
+
+func TestProvisioning_ADeadChildIsUnhealthyAndRestartedUntilTheBudgetIsSpent(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.RestartBudget = 2
+	})
+	ctx := testContext(t)
+	gw := newProvisioningGateway(t, provisioningConfig(supervisor))
+	require.NoError(t, gw.Start(ctx))
+
+	// Hold the relaunch at the launcher, so the window between the crash
+	// and its replacement can be observed rather than raced.
+	launcher.mu.Lock()
+	launcher.gate = make(chan struct{})
+	launcher.launched = make(chan struct{})
+	gate, launched := launcher.gate, launcher.launched
+	launcher.mu.Unlock()
+
+	launcher.lastChild().exit(errors.New("signal: killed"))
+	select {
+	case <-launched:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the dead child was never relaunched")
+	}
+	for _, report := range gw.ServiceReports() {
+		assert.Falsef(t, report.Active, "%s: its child is dead", report.Name)
+		var unhealthy *gateway.ErrServiceUnhealthy
+		require.ErrorAsf(t, report.Health, &unhealthy, "%s", report.Name)
+		var down *ErrProcessDown
+		require.ErrorAsf(t, report.Health, &down, "%s", report.Name)
+		assert.Equal(t, "provisioning", down.Process)
+	}
+
+	launcher.mu.Lock()
+	launcher.gate, launcher.launched = nil, nil
+	launcher.mu.Unlock()
+	close(gate)
+	child := awaitRelaunch(t, supervisor, launcher, "provisioning", 2)
+	require.Eventually(t, func() bool {
+		for _, report := range gw.ServiceReports() {
+			if !report.Active || report.Health != nil {
+				return false
+			}
+		}
+		return true
+	}, 20*time.Second, 10*time.Millisecond, "the restarted child serves the same sections")
+
+	// Two more crashes inside the window: the second is the third against
+	// a budget of two, and the supervisor stops relaunching.
+	child.exit(errors.New("signal: killed"))
+	child = awaitRelaunch(t, supervisor, launcher, "provisioning", 3)
+	child.exit(errors.New("signal: killed"))
+
+	var exhausted *ErrRestartBudgetExhausted
+	require.Eventually(t, func() bool {
+		for _, report := range gw.ServiceReports() {
+			if !errors.As(report.Health, &exhausted) {
+				return false
+			}
+		}
+		return true
+	}, 20*time.Second, 10*time.Millisecond, "every provisioning section reports the spent budget")
+	assert.Equal(t, "provisioning", exhausted.Process)
+	assert.Equal(t, 3, launcher.launchCount(), "no launch after the budget is gone")
+	require.NoError(t, gw.Stop(ctx), "a process over its budget still stops cleanly")
 }
 
 func TestLongUptime_ClearsTheCrashHistory(t *testing.T) {

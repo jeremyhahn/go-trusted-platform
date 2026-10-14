@@ -232,6 +232,14 @@ func (i *fakeSessionIssuer) IssueSession(identity *quicbaassdk.Identity) (string
 	return "platform-session-for-" + identity.Subject, time.Unix(1700003600, 0).UTC(), nil
 }
 
+// fixedWorkspace resolves every principal to one workspace, standing in for
+// the tenant user service the registry hands the FIDO2 binder.
+type fixedWorkspace string
+
+func (w fixedWorkspace) Workspace(context.Context, string) (string, error) {
+	return string(w), nil
+}
+
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	logger := logging.NewLogger(slog.LevelDebug, os.Stderr)
@@ -241,7 +249,7 @@ func newHarness(t *testing.T) *harness {
 	sdk := new(mockFIDO2Client)
 	unified := new(fakeUnifiedLoginClient)
 	issuer := new(fakeSessionIssuer)
-	fido2Binder, err := login.NewFIDO2Binder(testTenantID)
+	fido2Binder, err := login.NewFIDO2Binder(testTenantID, fixedWorkspace("workspace-1"))
 	require.NoError(t, err)
 	driver, err := login.NewDriver(login.DriverParams{
 		Client:         unified,
@@ -1073,6 +1081,11 @@ func (m *mockTenantUserService) GetUserTenant(ctx context.Context, userID uint64
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*tenantEntity), args.Error(1)
+}
+
+func (m *mockTenantUserService) Workspace(ctx context.Context, email string) (string, error) {
+	args := m.Called(ctx, email)
+	return args.String(0), args.Error(1)
 }
 func (m *mockTenantUserService) IsTenantOwner(ctx context.Context, userID uint64) (bool, error) {
 	args := m.Called(ctx, userID)

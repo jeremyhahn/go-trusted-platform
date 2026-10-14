@@ -87,6 +87,11 @@ type CertRenewalRegistration struct {
 
 	// Logger receives structured renewal events. May be nil.
 	Logger *slog.Logger
+
+	// Now is the clock each sweep measures time-to-expiry against: time.Now
+	// in production; tests replace it to move a certificate into or out of
+	// the renewal window without sleeping (#284). Nil falls back to time.Now.
+	Now func() time.Time
 }
 
 // renewalJobName composes the per-node cert-renewal job name. The
@@ -131,11 +136,15 @@ func RegisterCertRenewal(ctx context.Context, opts CertRenewalRegistration) erro
 	if maxRetries <= 0 {
 		maxRetries = 3
 	}
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
 
 	// 1. Register the handler. If it's already registered (e.g., a
 	// re-run of boot logic in tests), we accept the duplicate-handler
 	// error as benign.
-	handler := buildCertRenewalHandler(opts.Registry, threshold, opts.Logger)
+	handler := buildCertRenewalHandler(opts.Registry, threshold, now, opts.Logger)
 	if err := opts.Scheduler.RegisterHandler(CertRenewalHandlerName, handler); err != nil {
 		if !isAlreadyRegistered(err) {
 			return ErrCertRenewalRegisterHandler{Cause: err}
@@ -211,9 +220,9 @@ func RegisterCertRenewal(ctx context.Context, opts CertRenewalRegistration) erro
 // JobResult for audit. The job-level error is non-nil only when
 // the handler itself cannot run at all (e.g., the registry was
 // destroyed mid-sweep).
-func buildCertRenewalHandler(reg *CertTargetRegistry, threshold time.Duration, logger *slog.Logger) quicbaas.JobHandler {
+func buildCertRenewalHandler(reg *CertTargetRegistry, threshold time.Duration, now func() time.Time, logger *slog.Logger) quicbaas.JobHandler {
 	return func(ctx context.Context, job *quicbaas.Job) (*quicbaas.JobResult, error) {
-		results, sweepErr := runCertRenewalSweep(ctx, reg, threshold, time.Now(), logger)
+		results, sweepErr := runCertRenewalSweep(ctx, reg, threshold, now(), logger)
 		payload, _ := json.Marshal(results)
 		ok := true
 		for _, r := range results {

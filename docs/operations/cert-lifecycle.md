@@ -29,6 +29,7 @@ intervene when the automatic flow needs a nudge.
 | `CertKindWebservice` | `WebServices` list in platform YAML | `App.InitWebServer()` at boot |
 | `CertKindBMC` | `bmc:` block in platform YAML | `initBMCCertManagement`, called from `App.InitCertManagement()` at boot |
 | `CertKindNTS` | `ntp.serve.nts` in platform YAML | `App.RegisterNTSCertTarget()` at boot (`pkg/daemon/commands/cert_renewal_wiring.go`) |
+| `CertKindDaemon` | Always, when a TLS transport is enabled (target `daemon.platformd`) | `applyDaemonTLSIdentity` via `App.RegisterCertTarget()` at boot (`pkg/daemon/commands/serve.go`); see [`../daemon/architecture.md`](../daemon/architecture.md) §Daemon TLS identity renewal while running |
 
 A new kind is added to `validCertKinds` in `pkg/app/cert_targets.go`;
 the sweep itself treats every kind the same.

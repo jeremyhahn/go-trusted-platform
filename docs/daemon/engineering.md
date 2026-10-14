@@ -198,39 +198,95 @@ explicitly open.
 
 The catalog totals and the pre-auth list are in [api.md](api.md) §5.
 
-## 7. Daemon TLS identity: reuse, supersede, upgrade
+## 7. Daemon TLS identity: two slots, reuse, renew, upgrade
 
 `daemonServerIdentity` (`pkg/daemon/commands/provision_identity.go`) resolves
-the `platformd.localhost` server identity on every boot. Key custody is in
+the server identity on every boot. Key custody is in
 [architecture.md](architecture.md) §Daemon TLS identity and key custody.
 
-1. **Reuse.** `CA.TLSCertificate` loads the keystore signer and its
-   certificate. If the certificate chains to the CA, covers the required DNS
-   SANs and is outside the 30-day renewal window, it is served as is. Nothing
-   is issued or revoked, so a restart causes no churn.
-2. **Supersede.** In every other case the certificate the CA store holds for
-   the CN is looked up with `CA.Certificate`, which reads the certificate
-   store and never needs the key. If there is one, `RevokeCert` with
-   `DeleteKeys` revokes it and removes the cert-store entry and any keystore
-   key.
-3. **Issue.** `CA.IssueCertificate` with `KeyAttributes` generates a fresh key
-   in the keystore and issues its certificate.
+The identity lives in one of two keystore slots, the common names
+`platformd.localhost` and `platformd-alt.localhost` (`daemonServerSlots`). Both
+certificates carry the `localhost` and `platformd.localhost` DNS SANs, so a
+client cannot tell them apart. There are two slots because `CA.IssueCertificate`
+refuses a common name the CA store already holds and no CA call replaces a
+certificate atomically. The new key needs its own key ID while the old key is
+still serving.
+
+1. **Reuse.** `CA.TLSCertificate` loads each slot. The slot with the latest
+   `NotAfter` is the held identity. If it chains to the CA, covers the required
+   DNS SANs and is outside the 30-day renewal window, it is served as is and
+   the other slot is retired. Nothing is issued, so a restart causes no churn.
+2. **Issue into the other slot.** Anything left in the slot that is not
+   serving is retired first; a renewal that failed after its issue leaves such
+   a leftover. `CA.IssueCertificate` with that slot's `KeyAttributes` then
+   generates a fresh key under its own ID, and `CA.TLSCertificate` loads it.
+3. **Swap.** At boot the listeners start on the new identity. While running,
+   `ServingCertificate.Store` swaps it in.
+4. **Retire the old slot** (`retireDaemonServerSlot`). `CA.Certificate` finds
+   the stored certificate without needing the key. `RevokeCert` revokes it
+   unless `IsRevoked` says it already is. The keystore key, the keystore
+   certificate and the certificate-store entry are then deleted under the
+   slot's own key attributes, and each deletion is confirmed by looking the
+   item up again.
+
+The platform does the deletes itself through the CA's `KeyStore()` and
+`CertStore()`, not with `RevokeOptions.DeleteKeys`. go-xkms `CA.RevokeCert`
+with `DeleteKeys` deletes under key attributes that lack the key type and
+store, discards every delete error, and on a second call stops at
+`ErrAlreadyRevoked`, so a failed delete would never be retried.
 
 **Upgrade from the PEM-backed identity (before #33).** The old provisioner
 signed an externally generated CSR for `platformd.localhost`. `SignCSR` stored
 the certificate in the CA certificate store, but the key existed only in the
 PEM bundle under `/tmp/platformd-integration/tls`. On the first boot after the
-upgrade, `TLSCertificate` fails because the keystore has no key. Step 2 still
-finds the certificate, because the lookup does not go through the key, and
-revokes it. Without that step, `IssueCertificate` would reject the CN with
-`ErrCertificateAlreadyExists` and the daemon would not start. The old PEM
+upgrade neither slot loads, because the keystore has no key. The new identity
+is issued into `platformd-alt.localhost`, and the legacy certificate in
+`platformd.localhost` is then revoked and removed from the store. The old PEM
 bundle is not read and not migrated: its key is not imported into the keystore.
 
-**Failure leaves nothing half-provisioned.** A lookup that fails with anything
-other than `ErrCertificateNotFound`, or a failed revocation, returns
-`ErrTLSIdentityKeystore{Op: "supersede"}` before anything is issued or written.
-The stored certificate stays in place, no TLS listener starts, and the next
-boot retries.
+**A failure before the swap touches nothing that serves.** A failure to clear
+the other slot, to issue or to load returns `ErrTLSIdentityKeystore{Op}`, with
+`Op` set to `retire`, `issue` or `load`. The old slot's certificate and key stay
+in place. At boot no TLS listener starts and the next boot retries. While
+running, the old identity keeps serving and the next sweep retries.
+
+**A failure after the swap never takes serving down.** If the old slot cannot
+be retired, the new identity still serves. The failure is logged as a warning,
+and the next sweep retries the retirement.
+
+**Renewal while running (#36).** The `daemon.platformd` cert target
+(`daemonIdentityCertTarget`, `pkg/daemon/commands/daemon_identity_renewal.go`)
+runs steps 2 to 4 from the platform renewal sweep. `Current` returns the leaf
+currently served, and on every sweep it also retires the slot that is not
+serving, which finishes any retirement that failed before. `Reissue` issues into
+the other slot, stores the new certificate in the `ServingCertificate` that
+every TLS listener reads through `GetCertificate`, and only then retires the old
+slot. Design and caveats are in [architecture.md](architecture.md) §Daemon TLS
+identity renewal while running.
+
+What an operator sees:
+
+| Signal | Meaning |
+|---|---|
+| `daemon TLS identity: issued keystore-held server identity` with `cn`, `serial`, `not_after` | A new identity was issued into slot `cn`, at boot or by the sweep |
+| `daemon TLS identity: retired server identity slot` with `cn`, `serial` | The replaced identity was revoked and its key and certificate deleted |
+| `daemon TLS identity: the replaced server identity could not be retired; the next renewal sweep retries` with `cn`, `error` | Warning. The new identity serves, and the old slot is retried on the next sweep |
+| `cert-renewal: renewed` with `target=daemon.platformd` | The sweep renewed it. The next handshake presents the new serial |
+| `cert-renewal: reissue failed` with `target=daemon.platformd` | Renewal failed. The current certificate and key still serve, and the next sweep retries |
+| `cert renewal: cannot register the daemon TLS identity cert target` | Boot-time warning. The identity renews only at restart |
+| `platform.cert-renewal.<nodeID>` job result: `cert-renewal sweep: N renewed, N skipped, N failed (of N targets)` | The sweep summary in job history |
+
+The unit tests drive the real sweep on an injected clock (#284) against a
+`127.0.0.1:0` TLS listener (`pkg/daemon/commands/daemon_identity_renewal_test.go`).
+They cover these cases:
+
+- a certificate inside the window is renewed and presented on the next handshake;
+- an issue failure, and a load failure, keep the old certificate and key
+  serving and untouched; the failure is typed and logged, and is retried;
+- the old key is deleted only after the new identity is serving;
+- a failed retirement keeps the new identity serving and is retried on the
+  next sweep;
+- a certificate outside the window is left alone.
 
 ## 8. Test strategy
 

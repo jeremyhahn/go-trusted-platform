@@ -48,6 +48,7 @@ type IAMClient interface {
 	// User operations
 	CreateUser(ctx context.Context, tenantID string, req *iamsdk.CreateUserRequest) (*iamsdk.User, error)
 	GetUser(ctx context.Context, tenantID, userID string) (*iamsdk.User, error)
+	GetUserByEmail(ctx context.Context, tenantID, email string) (*iamsdk.User, error)
 	ListUsers(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error)
 	UpdateUser(ctx context.Context, tenantID, userID string, req *iamsdk.UpdateUserRequest) (*iamsdk.User, error)
 	DeleteUser(ctx context.Context, tenantID, userID string) error

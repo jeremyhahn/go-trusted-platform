@@ -73,9 +73,10 @@ var (
 //     backbone's subject is a key in a DIFFERENT store; copying one into
 //     the other would let a numeric collision resolve some unrelated
 //     platform user. The routes that re-read the platform user from it
-//     (/jwt/refresh) therefore refuse a backbone-issued session, which is
-//     the correct fail-closed answer until the two stores converge in
-//     phase 3 of #644.
+//     (/login/refresh and session creation) therefore refuse a
+//     backbone-issued session, which is the correct fail-closed answer
+//     until the two stores converge in phase 3 of #644. The client renews
+//     by logging in again (docs/auth/architecture.md lists every site).
 //   - "sub" and "user_id" carry the backbone's subject verbatim, which is
 //     the identifier the seam republishes as the session principal.
 //   - "email" carries that same subject. The backbone's identity hydrator

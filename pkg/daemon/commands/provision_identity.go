@@ -27,25 +27,42 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"math/big"
 	"os"
 	"path/filepath"
 	"time"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasacme "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	xkmsbackend "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/backend"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	xkmscertstore "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/certstore"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
-// daemonServerCN is the subject CN of the daemon's TLS server certificate
-// and the keystore ID of its private key.
-const daemonServerCN = "platformd.localhost"
+// The daemon's server identity lives in one of two keystore slots. The CA
+// keys a certificate and its keystore key by the subject CN and refuses to
+// issue for a CN that already holds one, so a renewal issues into the slot
+// that is not serving and the serving slot stays untouched until the new
+// identity is presented. Both slots carry the same DNS SANs; the CN only
+// names the slot.
+const (
+	// daemonServerCN is the first slot, and the DNS SAN every daemon server
+	// certificate carries.
+	daemonServerCN = "platformd.localhost"
+	// daemonServerAltCN is the second slot.
+	daemonServerAltCN = "platformd-alt.localhost"
+)
+
+// daemonServerSlots lists the two slots in the order boot looks them up.
+var daemonServerSlots = [2]string{daemonServerCN, daemonServerAltCN}
 
 // daemonIdentityCA is the CA surface the daemon TLS identity needs. The
 // server key is generated in the CA keystore by IssueCertificate and is
 // only ever reached through TLSCertificate, which returns the keystore's
-// crypto.Signer — never key bytes. App.CA satisfies it.
+// crypto.Signer — never key bytes. KeyStore and CertStore are used only to
+// delete a retired slot. App.CA satisfies it.
 type daemonIdentityCA interface {
 	caTrustPoolProvider
 	intermediateProvider
@@ -54,6 +71,9 @@ type daemonIdentityCA interface {
 	TLSCertificate(ctx context.Context, attrs *xkmssdk.KeyAttributes) (tls.Certificate, error)
 	Certificate(ctx context.Context, attrs *xkmssdk.KeyAttributes) (*x509.Certificate, error)
 	RevokeCert(ctx context.Context, cert *x509.Certificate, opts quicbaasca.RevokeOptions) error
+	IsRevoked(serial *big.Int) (bool, error)
+	KeyStore() xkmsbackend.Backend
+	CertStore() xkmscertstore.CertStore
 }
 
 // intermediateProvider is the CA surface that names the platform
@@ -63,16 +83,17 @@ type intermediateProvider interface {
 }
 
 // provisionDaemonIdentity returns the daemon's TLS material:
-//   - the server certificate, held in the CA keystore under daemonServerCN.
-//     A current certificate is reused; a stale one is superseded (its key
-//     deleted) and re-issued. The key is never encoded or written.
+//   - the server certificate, held in one of the two CA keystore slots. A
+//     current certificate is reused; a stale one is re-issued into the other
+//     slot, and only then is the stale slot revoked and its key deleted. The
+//     key is never encoded or written.
 //   - <dir>/ca-bundle.crt, the public CA trust bundle (mode 0644).
 //
 // It issues no admin client certificate: the one-shot /init bundle is the
 // only admin credential (docs/bootstrap/cli.md §1a). The server identity is
 // provisioned first, so a keystore failure writes nothing. The daemon caller
-// wires ServerCert into config.TLSCertificate /
-// QUICConfig.TLSConfig.Certificates and AdminTrustPool into
+// wires ServerCert into config.TLSIdentity (and the QUIC GetCertificate hook),
+// registers it with the renewal sweep (#36), and wires AdminTrustPool into
 // config.MTLSClientCAPool.
 func provisionDaemonIdentity(
 	ctx context.Context,
@@ -115,13 +136,13 @@ func provisionDaemonIdentity(
 	}, nil
 }
 
-// daemonServerKeyAttributes identifies the daemon's server key in the CA
-// keystore. The software store is the CA keystore's default leaf store,
-// the same one the CA renewal handlers use, so it exists on nodes without
-// a TPM.
-func daemonServerKeyAttributes() *xkmssdk.KeyAttributes {
+// daemonServerKeyAttributes identifies the daemon's server key in slot cn
+// of the CA keystore. The software store is the CA keystore's default leaf
+// store, the same one the CA renewal handlers use, so it exists on nodes
+// without a TPM.
+func daemonServerKeyAttributes(cn string) *xkmssdk.KeyAttributes {
 	return &xkmssdk.KeyAttributes{
-		CN:            daemonServerCN,
+		CN:            cn,
 		KeyAlgorithm:  x509.ECDSA,
 		KeyType:       xkmssdk.KeyTypeTLS,
 		StoreType:     xkmssdk.StoreSoftware,
@@ -130,13 +151,21 @@ func daemonServerKeyAttributes() *xkmssdk.KeyAttributes {
 	}
 }
 
+// otherDaemonServerSlot returns the slot that is not cn.
+func otherDaemonServerSlot(cn string) string {
+	if cn == daemonServerCN {
+		return daemonServerAltCN
+	}
+	return daemonServerCN
+}
+
 // daemonServerCertRequest is the CA request for the daemon's server
-// certificate. Its KeyAttributes make the CA generate the key in its
-// keystore rather than return it.
-func daemonServerCertRequest(dnsNames, ipStrings []string) *quicbaasca.CACertificateRequest {
+// certificate in slot cn. Its KeyAttributes make the CA generate the key in
+// its keystore rather than return it.
+func daemonServerCertRequest(cn string, dnsNames, ipStrings []string) *quicbaasca.CACertificateRequest {
 	return &quicbaasca.CACertificateRequest{
 		Subject: quicbaasca.CASubject{
-			CommonName:   daemonServerCN,
+			CommonName:   cn,
 			Organization: "Trusted Platform",
 		},
 		SANS: &quicbaasca.CASubjectAlternativeNames{
@@ -146,7 +175,7 @@ func daemonServerCertRequest(dnsNames, ipStrings []string) *quicbaasca.CACertifi
 		Valid:         365,
 		KeyUsage:      x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:   []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
-		KeyAttributes: daemonServerKeyAttributes(),
+		KeyAttributes: daemonServerKeyAttributes(cn),
 	}
 }
 
@@ -160,10 +189,12 @@ func daemonCertSANs(extra daemonSANs) (dnsNames []string, ipStrings []string) {
 	return
 }
 
-// daemonServerIdentity returns the keystore-held server certificate,
-// issuing it when the keystore holds none and superseding it when it is
-// expiring, no longer covers dnsNames, or no longer chains to trustPool.
-// The bool reports reuse. Any keystore failure is an ErrTLSIdentityKeystore.
+// daemonServerIdentity returns the keystore-held server certificate. The
+// latest identity either slot holds is reused while it is current. When it
+// is expiring, no longer covers dnsNames or no longer chains to trustPool,
+// or when neither slot holds one, a fresh identity is issued into the other
+// slot and only then is the stale slot retired. The bool reports reuse. Any
+// keystore failure is an ErrTLSIdentityKeystore.
 func daemonServerIdentity(
 	ctx context.Context,
 	logger *logging.Logger,
@@ -172,73 +203,187 @@ func daemonServerIdentity(
 	dnsNames, ipStrings []string,
 ) (tls.Certificate, bool, error) {
 
-	attrs := daemonServerKeyAttributes()
-
-	held, err := ca.TLSCertificate(ctx, attrs)
-	if err != nil {
-		logger.Debug("provisionDaemonIdentity: keystore holds no server identity, will issue",
-			"cn", daemonServerCN, "error", err.Error())
-	} else {
-		leaf := tlsCertificateLeaf(held)
-		if daemonServerCertCurrent(logger, leaf, trustPool, dnsNames) {
-			held.Leaf = leaf
-			logger.Info("provisionDaemonIdentity: reusing keystore-held server identity",
-				"cn", daemonServerCN,
-				"not_after", leaf.NotAfter.Format(time.RFC3339))
-			return appendTrustedIntermediate(ca, held), true, nil
-		}
+	active, held, found := heldDaemonServerIdentity(ctx, logger, ca)
+	if found && daemonServerCertCurrent(logger, held.Leaf, trustPool, dnsNames) {
+		logger.Info("provisionDaemonIdentity: reusing keystore-held server identity",
+			"cn", active,
+			"not_after", held.Leaf.NotAfter.Format(time.RFC3339))
+		// A renewal that swapped identities but could not retire the old
+		// slot left it behind; boot retires it, as the next sweep would.
+		retireReplacedDaemonServerSlot(ctx, logger, ca, otherDaemonServerSlot(active))
+		return appendTrustedIntermediate(ca, held), true, nil
 	}
 
-	if err := supersedeDaemonServerCert(ctx, logger, ca, attrs); err != nil {
+	issued, err := issueDaemonServerIdentity(ctx, logger, ca, active, dnsNames, ipStrings)
+	if err != nil {
 		return tls.Certificate{}, false, err
 	}
+	retireReplacedDaemonServerSlot(ctx, logger, ca, active)
+	return issued, false, nil
+}
 
-	if _, err := ca.IssueCertificate(ctx, daemonServerCertRequest(dnsNames, ipStrings)); err != nil {
-		return tls.Certificate{}, false, ErrTLSIdentityKeystore{Op: "issue", Cause: err}
+// heldDaemonServerIdentity returns the slot holding the latest keystore-held
+// server identity, that identity with its Leaf set, and whether one was
+// found. With none found it returns the first slot, where a pre-#33
+// certificate without a keystore key lives, so issuance goes to the other
+// slot and that certificate is retired after it.
+func heldDaemonServerIdentity(ctx context.Context, logger *logging.Logger, ca daemonIdentityCA) (string, tls.Certificate, bool) {
+	active, found := daemonServerCN, false
+	var held tls.Certificate
+	for _, cn := range daemonServerSlots {
+		cert, err := ca.TLSCertificate(ctx, daemonServerKeyAttributes(cn))
+		if err != nil {
+			logger.Debug("provisionDaemonIdentity: keystore holds no server identity in this slot",
+				"cn", cn, "error", err.Error())
+			continue
+		}
+		leaf := tlsCertificateLeaf(cert)
+		if leaf == nil {
+			logger.Debug("provisionDaemonIdentity: server identity in this slot has no parseable leaf",
+				"cn", cn)
+			continue
+		}
+		if found && !leaf.NotAfter.After(held.Leaf.NotAfter) {
+			continue
+		}
+		cert.Leaf = leaf
+		active, held, found = cn, cert, true
+	}
+	return active, held, found
+}
+
+// issueDaemonServerIdentity issues a fresh daemon server certificate into
+// the slot that is not active, with a key the CA's keystore generates and
+// holds, and returns it with the trusted intermediate appended. Boot
+// provisioning and the running renewal (#36) both issue through it, so the
+// two paths cannot drift apart.
+//
+// The active slot is never touched here: if anything fails, the identity it
+// holds keeps serving, and the error is returned. The caller retires the
+// active slot only after the new identity has replaced it.
+func issueDaemonServerIdentity(
+	ctx context.Context,
+	logger *logging.Logger,
+	ca daemonIdentityCA,
+	active string,
+	dnsNames, ipStrings []string,
+) (tls.Certificate, error) {
+
+	next := otherDaemonServerSlot(active)
+	// The next slot is normally empty. A renewal that failed before its
+	// swap, or a retirement not yet done, can leave an identity there that
+	// nothing serves, and the CA will not issue over it.
+	if err := retireDaemonServerSlot(ctx, logger, ca, next); err != nil {
+		return tls.Certificate{}, err
 	}
 
-	issued, err := ca.TLSCertificate(ctx, attrs)
+	if _, err := ca.IssueCertificate(ctx, daemonServerCertRequest(next, dnsNames, ipStrings)); err != nil {
+		return tls.Certificate{}, ErrTLSIdentityKeystore{Op: "issue", Cause: err}
+	}
+
+	issued, err := ca.TLSCertificate(ctx, daemonServerKeyAttributes(next))
 	if err != nil {
-		return tls.Certificate{}, false, ErrTLSIdentityKeystore{Op: "load", Cause: err}
+		return tls.Certificate{}, ErrTLSIdentityKeystore{Op: "load", Cause: err}
 	}
 	issued.Leaf = tlsCertificateLeaf(issued)
 	if issued.Leaf == nil {
-		return tls.Certificate{}, false, ErrTLSIdentityKeystore{Op: "load", Cause: ErrTLSIdentityNotProvisioned{}}
+		return tls.Certificate{}, ErrTLSIdentityKeystore{Op: "load", Cause: ErrTLSIdentityNotProvisioned{}}
 	}
 
-	logger.Info("provisionDaemonIdentity: issued keystore-held server identity",
-		"cn", daemonServerCN,
+	logger.Info("daemon TLS identity: issued keystore-held server identity",
+		"cn", next,
 		"serial", issued.Leaf.SerialNumber.String(),
 		"not_after", issued.Leaf.NotAfter.Format(time.RFC3339))
 
-	return appendTrustedIntermediate(ca, issued), false, nil
+	return appendTrustedIntermediate(ca, issued), nil
 }
 
-// supersedeDaemonServerCert revokes the certificate the CA store holds for
-// the daemon CN, if any, so IssueCertificate can mint a fresh keystore key
-// instead of failing with ErrCertificateAlreadyExists. DeleteKeys removes
-// the cert-store entry and any keystore key.
+// retireDaemonServerSlot revokes the certificate slot cn holds and deletes
+// it and its key, leaving the slot empty for the next issuance. An empty
+// slot is already retired, and every step is safe to repeat: a revocation
+// already recorded is not recorded again, and a deletion is done once the
+// item is gone.
 //
-// The certificate is looked up on its own, not through TLSCertificate. The
-// pre-#33 provisioner signed an external CSR for the daemon CN: SignCSR
-// stored the certificate, but its key lived only in a PEM bundle, so the
-// keystore has no signer for it and TLSCertificate fails. That stale or
-// legacy certificate still has to be superseded.
-func supersedeDaemonServerCert(ctx context.Context, logger *logging.Logger, ca daemonIdentityCA, attrs *xkmssdk.KeyAttributes) error {
+// The deletions are made here, not through RevokeCert's DeleteKeys:
+// RevokeCert names the key by CN and algorithm alone, which is not the ID
+// the slot's key is stored under, and discards every deletion error, so the
+// slot could stay filled with nothing reported. The cert-store entry goes
+// last: while it remains the slot is not retired, and the next attempt
+// finds it and finishes.
+//
+// The certificate is looked up on its own, not through TLSCertificate: a
+// pre-#33 certificate was stored by SignCSR with its key in a PEM bundle,
+// so the keystore has no signer for it, and it still has to be retired.
+func retireDaemonServerSlot(ctx context.Context, logger *logging.Logger, ca daemonIdentityCA, cn string) error {
+	attrs := daemonServerKeyAttributes(cn)
 	stored, err := ca.Certificate(ctx, attrs)
 	if errors.Is(err, quicbaasacme.CAErrCertificateNotFound) {
 		return nil
 	}
 	if err != nil {
-		return ErrTLSIdentityKeystore{Op: "supersede", Cause: err}
+		return ErrTLSIdentityKeystore{Op: "retire", Cause: err}
 	}
-	if err := ca.RevokeCert(ctx, stored, quicbaasca.RevokeOptions{DeleteKeys: true}); err != nil {
-		return ErrTLSIdentityKeystore{Op: "supersede", Cause: err}
+
+	revoked, err := ca.IsRevoked(stored.SerialNumber)
+	if err != nil {
+		return ErrTLSIdentityKeystore{Op: "retire", Cause: err}
 	}
-	logger.Info("provisionDaemonIdentity: superseded stored server certificate",
-		"cn", daemonServerCN,
+	if !revoked {
+		if err := ca.RevokeCert(ctx, stored, quicbaasca.RevokeOptions{}); err != nil {
+			return ErrTLSIdentityKeystore{Op: "retire", Cause: err}
+		}
+	}
+
+	if keys := ca.KeyStore(); keys != nil {
+		err := removeSlotItem(
+			func() error { return keys.DeleteKey(ctx, attrs) },
+			func() error { _, lookupErr := keys.GetKey(ctx, attrs); return lookupErr })
+		if err != nil {
+			return ErrTLSIdentityKeystore{Op: "retire", Cause: err}
+		}
+		err = removeSlotItem(
+			func() error { return keys.DeleteCert(ctx, cn) },
+			func() error { _, lookupErr := keys.GetCert(ctx, cn); return lookupErr })
+		if err != nil {
+			return ErrTLSIdentityKeystore{Op: "retire", Cause: err}
+		}
+	}
+	if certs := ca.CertStore(); certs != nil {
+		err := removeSlotItem(
+			func() error { return certs.DeleteCertificate(cn) },
+			func() error { _, lookupErr := certs.GetCertificate(cn); return lookupErr })
+		if err != nil {
+			return ErrTLSIdentityKeystore{Op: "retire", Cause: err}
+		}
+	}
+
+	logger.Info("daemon TLS identity: retired server identity slot",
+		"cn", cn,
 		"serial", stored.SerialNumber.String())
 	return nil
+}
+
+// removeSlotItem runs remove and returns its failure only while lookup still
+// finds the item. The SDK re-exports no not-found error for keystore
+// deletions, and an absent item is normal (a pre-#33 certificate never had
+// a keystore key), so a failed delete is told apart from a deleted item by
+// looking it up again.
+func removeSlotItem(remove, lookup func() error) error {
+	removeErr := remove()
+	if removeErr == nil || lookup() != nil {
+		return nil
+	}
+	return removeErr
+}
+
+// retireReplacedDaemonServerSlot retires slot cn after the identity it held
+// has been replaced. A failure is logged, never returned: the new identity
+// is already serving, and the next renewal sweep retries the retirement.
+func retireReplacedDaemonServerSlot(ctx context.Context, logger *logging.Logger, ca daemonIdentityCA, cn string) {
+	if err := retireDaemonServerSlot(ctx, logger, ca, cn); err != nil {
+		logger.Warn("daemon TLS identity: the replaced server identity could not be retired; the next renewal sweep retries",
+			"cn", cn, "error", err.Error())
+	}
 }
 
 // daemonServerCertCurrent reports whether a keystore-held server

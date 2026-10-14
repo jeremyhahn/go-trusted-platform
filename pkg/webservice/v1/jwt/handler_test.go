@@ -1116,7 +1116,7 @@ func completeLogin(t *testing.T, driver *loginpkg.Driver) string {
 func TestGenerateTokenDeclinesTheUnbindableMTLSFactor(t *testing.T) {
 	handler := newHandlerForLoginTest(t)
 	client := &stubLoginClient{bearer: "broker.issued.bearer"}
-	handler.SetLoginDriver(newLoginDriverForTest(t, client, handler.jwtService))
+	handler.SetLoginDriver(newLoginDriverForTest(t, client, handler.jwtService, nil))
 
 	body, err := json.Marshal(service.UserCredential{Email: "admin@system", Password: "x"})
 	require.NoError(t, err)
@@ -1157,7 +1157,7 @@ func TestLoginSessionIsAcceptedByTheDefaultProtectedRouteSeam(t *testing.T) {
 			TenantID: "tenant-a",
 			Roles:    []string{"admin"},
 		},
-	}, handler.jwtService)
+	}, handler.jwtService, staticRoles{"owner"})
 	handler.SetLoginDriver(driver)
 
 	bearer := completeLogin(t, driver)
@@ -1177,13 +1177,62 @@ func TestLoginSessionIsAcceptedByTheDefaultProtectedRouteSeam(t *testing.T) {
 		assert.Equal(t, "operator@platform", session.UserID(),
 			"the session principal is the identity the backbone resolved")
 		assert.Equal(t, "operator@platform", session.Email())
-		assert.Equal(t, "tenant-a", session.TenantID())
-		assert.Equal(t, []string{"admin"}, session.Roles())
+		// The ceremony ran in the operating tenant ("tenant-a"); the
+		// session lands in the principal's own workspace (#662), with the
+		// roles the principal holds THERE, not the operating tenant's.
+		assert.Equal(t, "workspace-a", session.TenantID())
+		assert.Equal(t, []string{"owner"}, session.Roles())
 	})
 
 	assert.True(t, reached,
 		"a completed login must produce a credential the protected routes accept")
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// TestLoginWorkspaceSessionOfAnOperatingAdminIsRefusedByTheAdminGuard is the
+// #662 regression: an admin of the operating tenant who is a plain member of
+// their workspace must not carry "admin" into the workspace session, so the
+// IAM router's admin guard refuses them there.
+func TestLoginWorkspaceSessionOfAnOperatingAdminIsRefusedByTheAdminGuard(t *testing.T) {
+	handler := newHandlerForLoginTest(t)
+	driver := newLoginDriverForTest(t, &stubLoginClient{
+		bearer: "broker.issued.bearer",
+		identity: &logintest.Identity{
+			Subject:  "operator@platform",
+			TenantID: "tenant-a",
+			Roles:    []string{"admin"},
+		},
+	}, handler.jwtService, staticRoles{"member"})
+	handler.SetLoginDriver(driver)
+
+	bearer := completeLogin(t, driver)
+
+	logger := logging.NewLogger(slog.LevelError, os.Stderr)
+	guard, err := iammw.NewSessionGuard(logger, response.NewResponseWriter(logger, nil))
+	require.NoError(t, err)
+	requireAdmin := guard.RequireRoles("admin")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/iam/users", nil)
+	req.Header.Set("Authorization", "Bearer "+bearer)
+	req.Header.Set("Accept", "application/json")
+	w := httptest.NewRecorder()
+
+	reachedAdmin := false
+	var roles []string
+	handler.Verify(w, req, func(w http.ResponseWriter, r *http.Request) {
+		if session, ok := iammw.GetSessionFromContext(r.Context()); ok {
+			roles = session.Roles()
+		}
+		requireAdmin(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			reachedAdmin = true
+		})).ServeHTTP(w, r)
+	})
+
+	assert.Equal(t, []string{"member"}, roles,
+		"the workspace session carries the workspace roles only")
+	assert.False(t, reachedAdmin,
+		"an operating-tenant admin must not pass the admin guard in a workspace they only belong to")
+	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
 // TestLoginRefusesWhenTheCeremonyNamesNobody is the negative half: the
@@ -1194,7 +1243,7 @@ func TestLoginSessionIsAcceptedByTheDefaultProtectedRouteSeam(t *testing.T) {
 func TestLoginRefusesWhenTheCeremonyNamesNobody(t *testing.T) {
 	handler := newHandlerForLoginTest(t)
 	driver := newLoginDriverForTest(t,
-		&stubLoginClient{bearer: "broker.issued.bearer"}, handler.jwtService)
+		&stubLoginClient{bearer: "broker.issued.bearer"}, handler.jwtService, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/webauthn/login/finish",
 		bytes.NewBufferString(`{"id":"Q1JFRC1JRA","type":"public-key","response":{}}`))
@@ -1303,23 +1352,41 @@ func TestHandlerVerify_UnauthenticatedRequestIsToldSo(t *testing.T) {
 // the REAL jwt.Service as its session issuer, so the seam test exercises
 // the whole path — ceremony, mint, verification — rather than a stand-in
 // on either end of it.
+// staticWorkspace resolves every principal to one workspace, standing in
+// for the platform's tenant user service.
+type staticWorkspace string
+
+func (w staticWorkspace) Workspace(context.Context, string) (string, error) {
+	return string(w), nil
+}
+
 func newLoginDriverForTest(
-	t *testing.T, client loginpkg.UnifiedLoginClient, issuer loginpkg.SessionIssuer) *loginpkg.Driver {
+	t *testing.T, client loginpkg.UnifiedLoginClient, issuer loginpkg.SessionIssuer,
+	roles loginpkg.RoleResolver) *loginpkg.Driver {
 
 	t.Helper()
 	logger := logging.NewLogger(slog.LevelError, os.Stderr)
 	// Both factors: mtls is the one /login drives (and declines), fido2 the
 	// one that completes, so a single driver serves the route test and the
 	// end-to-end seam test without either needing its own fixture.
-	fido2, err := loginpkg.NewFIDO2Binder("tenant-a")
+	fido2, err := loginpkg.NewFIDO2Binder("tenant-a", staticWorkspace("workspace-a"))
 	require.NoError(t, err)
 	driver, err := loginpkg.NewDriver(loginpkg.DriverParams{
 		Client:         client,
 		Binders:        []loginpkg.Binder{loginpkg.NewMTLSBinder(), fido2},
 		SessionIssuer:  issuer,
+		Roles:          roles,
 		Logger:         logger,
 		ResponseWriter: response.NewResponseWriter(logger, nil),
 	})
 	require.NoError(t, err)
 	return driver
+}
+
+// staticRoles answers one role list for every principal in every tenant,
+// standing in for the IAM-backed restiam.WorkspaceRoleResolver.
+type staticRoles []string
+
+func (r staticRoles) Roles(context.Context, string, string) ([]string, error) {
+	return r, nil
 }

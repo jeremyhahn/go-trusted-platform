@@ -1437,6 +1437,96 @@ func TestTenantUserService_GetUserTenant_TenantNotFound(t *testing.T) {
 	mockTenantManager.AssertExpectations(t)
 }
 
+// newWorkspaceTestService builds the service the workspace tests share.
+func newWorkspaceTestService() (TenantUserServicer, *MockUserServicer, *MockTenantManager) {
+	users := new(MockUserServicer)
+	tenants := new(MockTenantManager)
+	service := NewTenantUserService(&TenantUserServiceConfig{
+		Logger:            newTestLogger(),
+		UserService:       users,
+		InvitationService: new(MockInvitationServicer),
+		TenantManager:     tenants,
+	})
+	return service, users, tenants
+}
+
+// TestTenantUserService_Workspace_ReturnsTheUsersOwnTenant proves the
+// workspace a browser login lands in is the tenant the user registered
+// or was invited into, confirmed by the tenant manager (#662).
+func TestTenantUserService_Workspace_ReturnsTheUsersOwnTenant(t *testing.T) {
+	service, users, tenants := newWorkspaceTestService()
+	ctx := context.Background()
+
+	users.On("GetByEmail", ctx, "ann@example.com").
+		Return(&entities.User{ID: 7, Email: "ann@example.com", TenantID: "workspace-ann"}, nil)
+	tenants.On("GetTenant", ctx, "workspace-ann").
+		Return(&tenant.TenantEntity{ID: "workspace-ann", Name: "workspace-ann"}, nil)
+
+	workspace, err := service.Workspace(ctx, "ann@example.com")
+
+	require.NoError(t, err)
+	assert.Equal(t, "workspace-ann", workspace)
+	users.AssertExpectations(t)
+	tenants.AssertExpectations(t)
+}
+
+// TestTenantUserService_Workspace_RefusesAPrincipalWithNoWorkspace covers
+// every way a principal can have nowhere to land: none of them may answer
+// with a tenant.
+func TestTenantUserService_Workspace_RefusesAPrincipalWithNoWorkspace(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("no email", func(t *testing.T) {
+		service, users, _ := newWorkspaceTestService()
+
+		workspace, err := service.Workspace(ctx, "")
+
+		var invalid ErrInvalidEmail
+		require.ErrorAs(t, err, &invalid)
+		assert.Empty(t, workspace)
+		users.AssertNotCalled(t, "GetByEmail", mock.Anything, mock.Anything)
+	})
+
+	t.Run("unknown user", func(t *testing.T) {
+		service, users, _ := newWorkspaceTestService()
+		users.On("GetByEmail", ctx, "ghost@example.com").Return(nil, errors.New("not found"))
+
+		workspace, err := service.Workspace(ctx, "ghost@example.com")
+
+		var notFound ErrUserNotFound
+		require.ErrorAs(t, err, &notFound)
+		assert.Equal(t, "ghost@example.com", notFound.Email)
+		assert.Empty(t, workspace)
+	})
+
+	t.Run("user in no tenant", func(t *testing.T) {
+		service, users, tenants := newWorkspaceTestService()
+		users.On("GetByEmail", ctx, "ann@example.com").
+			Return(&entities.User{ID: 7, Email: "ann@example.com"}, nil)
+
+		workspace, err := service.Workspace(ctx, "ann@example.com")
+
+		var notInTenant ErrUserNotInTenant
+		require.ErrorAs(t, err, &notInTenant)
+		assert.Empty(t, workspace)
+		tenants.AssertNotCalled(t, "GetTenant", mock.Anything, mock.Anything)
+	})
+
+	t.Run("workspace deleted", func(t *testing.T) {
+		service, users, tenants := newWorkspaceTestService()
+		users.On("GetByEmail", ctx, "ann@example.com").
+			Return(&entities.User{ID: 7, Email: "ann@example.com", TenantID: "workspace-gone"}, nil)
+		tenants.On("GetTenant", ctx, "workspace-gone").Return(nil, errors.New("not found"))
+
+		workspace, err := service.Workspace(ctx, "ann@example.com")
+
+		var notFound ErrTenantNotFound
+		require.ErrorAs(t, err, &notFound)
+		assert.Equal(t, "workspace-gone", notFound.ID)
+		assert.Empty(t, workspace)
+	})
+}
+
 // TestTenantUserService_IsTenantOwner_Success verifies successful owner check
 func TestTenantUserService_IsTenantOwner_Success(t *testing.T) {
 	logger := newTestLogger()

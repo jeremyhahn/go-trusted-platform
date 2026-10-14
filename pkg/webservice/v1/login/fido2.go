@@ -14,6 +14,7 @@
 package login
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -54,14 +55,40 @@ type FIDO2Binder struct {
 	// against the relying party of the tenant that owns the credential,
 	// so the backbone requires it and refuses to guess.
 	tenantID string
+
+	// workspaces names the tenant the session lands in. The ceremony
+	// tenant is the operating tenant, which a browser login never lands
+	// in (#662).
+	workspaces WorkspaceResolver
 }
 
-// NewFIDO2Binder constructs the WebAuthn binder for a ceremony tenant.
-func NewFIDO2Binder(tenantID string) (*FIDO2Binder, error) {
+// NewFIDO2Binder constructs the WebAuthn binder for a ceremony tenant and
+// the resolver of the workspace each login lands in.
+func NewFIDO2Binder(tenantID string, workspaces WorkspaceResolver) (*FIDO2Binder, error) {
 	if tenantID == "" {
 		return nil, &DriverConfigError{Field: "FIDO2Binder tenant"}
 	}
-	return &FIDO2Binder{tenantID: tenantID}, nil
+	if workspaces == nil {
+		return nil, &DriverConfigError{Field: "FIDO2Binder workspaces"}
+	}
+	return &FIDO2Binder{tenantID: tenantID, workspaces: workspaces}, nil
+}
+
+// Tenant returns the principal's own workspace. The ceremony ran in the
+// operating tenant, so the backbone's identity names that tenant; a
+// session there would hand a browser user the operating tenant's scope.
+// A principal with no workspace — or whose workspace resolves to the
+// operating tenant itself — is refused, never landed in the operating
+// tenant.
+func (b *FIDO2Binder) Tenant(ctx context.Context, identity *quicbaas.Identity) (string, error) {
+	workspace, err := b.workspaces.Workspace(ctx, identity.Subject)
+	if err != nil {
+		return "", &NoWorkspaceError{Subject: identity.Subject, Cause: err}
+	}
+	if workspace == "" || workspace == b.tenantID {
+		return "", &NoWorkspaceError{Subject: identity.Subject}
+	}
+	return workspace, nil
 }
 
 // Type returns the FIDO2 factor type.

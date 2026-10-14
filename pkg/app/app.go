@@ -4104,6 +4104,15 @@ func (app *App) certTargets() *CertTargetRegistry {
 	return app.CertTargets
 }
 
+// RegisterCertTarget adds target to the platform's renewal registry, or
+// replaces the target already registered under its name, so the renewal
+// sweep evaluates it on every tick. It is how a certificate owned outside
+// this package -- platformd's own TLS identity (#36) -- joins the one sweep
+// instead of running a second one.
+func (app *App) RegisterCertTarget(target *CertTarget) error {
+	return app.certTargets().Replace(target)
+}
+
 // webServiceVerifyRoots returns the roots the renewal sweep verifies this
 // webservice's served certificate against, following the ISSUANCE mode.
 //

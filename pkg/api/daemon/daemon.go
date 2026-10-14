@@ -2004,10 +2004,11 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 	// without a usable certificate the server is not created, and
 	// tlsPreflight refuses Start for the same configuration.
 	if mcpCfg.Transport == "http" {
-		if !tlsCertificateUsable(d.config.TLSCertificate) {
+		inMemory := d.config.inMemoryCertificate()
+		if !tlsCertificateUsable(inMemory) {
 			return nil, ErrTLSConfigFailed{Reason: "MCP: no usable TLS certificate for the HTTP transport on " + mcpCfg.HTTPAddr}
 		}
-		tlsConfig, err := newServerTLSConfig(d.config, transportMCP, *d.config.TLSCertificate)
+		tlsConfig, err := newServerTLSConfig(d.config, transportMCP, *inMemory)
 		if err != nil {
 			return nil, err
 		}
@@ -2364,7 +2365,7 @@ func (d *Daemon) tlsPreflight() error {
 	// MCP over HTTP serves TLS 1.3 only with the daemon certificate (#844).
 	// Without one New refuses to build the daemon (#444); this check covers
 	// a certificate removed from the shared config after New.
-	if d.config.MCPServesHTTP() && !d.mcpServerReplaced && !tlsCertificateUsable(d.config.TLSCertificate) {
+	if d.config.MCPServesHTTP() && !d.mcpServerReplaced && !tlsCertificateUsable(d.config.inMemoryCertificate()) {
 		return ErrTLSConfigFailed{
 			Reason: "MCP: TLS material absent (no usable in-memory certificate): refusing to start the HTTP transport on " + d.config.effectiveMCPConfig().HTTPAddr,
 		}

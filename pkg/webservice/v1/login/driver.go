@@ -14,6 +14,7 @@
 package login
 
 import (
+	"context"
 	"net/http"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
@@ -38,6 +39,12 @@ type DriverParams struct {
 	// rejects, so construction fails instead.
 	SessionIssuer SessionIssuer
 
+	// Roles resolves the principal's roles in the workspace a session is
+	// landed in. Nil is legal: such a session then carries no roles at
+	// all, so the guards see an ordinary member, never the operating
+	// tenant's admin.
+	Roles RoleResolver
+
 	Logger         *logging.Logger
 	ResponseWriter response.HttpWriter
 }
@@ -49,6 +56,7 @@ type Driver struct {
 	client  UnifiedLoginClient
 	binders binders
 	issuer  SessionIssuer
+	roles   RoleResolver
 	logger  *logging.Logger
 	writer  response.HttpWriter
 }
@@ -85,6 +93,7 @@ func NewDriver(params DriverParams) (*Driver, error) {
 		client:  params.Client,
 		binders: registry,
 		issuer:  params.SessionIssuer,
+		roles:   params.Roles,
 		logger:  params.Logger,
 		writer:  params.ResponseWriter,
 	}, nil
@@ -189,12 +198,50 @@ func (d *Driver) finish(w http.ResponseWriter, r *http.Request, binder Binder, s
 		d.fail(w, r, &NoIdentityError{})
 		return
 	}
-	bearer, expiresAt, err := d.issuer.IssueSession(finish.Identity)
+	// The session lands in the tenant the binder names, not the one the
+	// ceremony ran in: a browser login authenticates into the user's own
+	// workspace (#662). The identity is copied so the backbone's answer is
+	// never edited in place.
+	tenantID, err := binder.Tenant(r.Context(), finish.Identity)
+	if err != nil {
+		d.fail(w, r, err)
+		return
+	}
+	identity := *finish.Identity
+	if tenantID != identity.TenantID {
+		// The backbone's roles are the operating tenant's. Carried into
+		// the workspace they would make an operating-tenant admin an admin
+		// of a workspace they are only a member of, so the session takes
+		// the workspace's roles instead, or none.
+		roles, err := d.workspaceRoles(r.Context(), tenantID, identity.Subject)
+		if err != nil {
+			d.fail(w, r, err)
+			return
+		}
+		identity.Roles = roles
+	}
+	identity.TenantID = tenantID
+	bearer, expiresAt, err := d.issuer.IssueSession(&identity)
 	if err != nil {
 		d.fail(w, r, &SessionIssueError{Cause: err})
 		return
 	}
 	d.writer.Success200(w, r, newSession(bearer, expiresAt))
+}
+
+// workspaceRoles returns the roles subject holds in the workspace tenantID.
+// With no resolver wired the answer is no roles. A resolver that fails
+// refuses the session: issuing it with no roles would hide the fault, and
+// issuing it with the backbone's would be the escalation this guards.
+func (d *Driver) workspaceRoles(ctx context.Context, tenantID, subject string) ([]string, error) {
+	if d.roles == nil {
+		return nil, nil
+	}
+	roles, err := d.roles.Roles(ctx, tenantID, subject)
+	if err != nil {
+		return nil, &WorkspaceRolesError{TenantID: tenantID, Subject: subject, Cause: err}
+	}
+	return roles, nil
 }
 
 // binder resolves the binder for a factor type.
@@ -210,7 +257,8 @@ func (d *Driver) binder(factorType quicbaas.FactorType) (Binder, error) {
 //
 // The mapping is deliberate: a client that sent a bad proof gets 400, a
 // client whose proof did not authenticate gets 401, a deployment with no
-// login backbone gets 403 (the surface exists but is closed), and a
+// login backbone gets 403 (the surface exists but is closed), as does a
+// principal with no workspace to land in, and a
 // platform wiring defect gets 500 — never a status that reads as a
 // client error when the platform is at fault.
 func (d *Driver) fail(w http.ResponseWriter, r *http.Request, err error) {
@@ -226,6 +274,14 @@ func (d *Driver) fail(w http.ResponseWriter, r *http.Request, err error) {
 	case *SessionIssueError:
 		d.logger.Error(err, "the platform could not issue the session credential")
 		d.writer.Error500(w, r, err)
+	case *WorkspaceRolesError:
+		d.logger.Error(err, "the principal's workspace roles could not be resolved")
+		d.writer.Error500(w, r, err)
+	case *NoWorkspaceError:
+		// The principal authenticated but has nowhere of its own to land.
+		// 403, not 401: the proof was good, the session is what is denied.
+		d.logger.Error(err, "authenticated principal has no workspace")
+		d.writer.Error403(w, r, err, nil)
 	case *UnavailableError:
 		d.logger.Error(err, "unified login client not configured")
 		d.writer.Error403(w, r, err, nil)

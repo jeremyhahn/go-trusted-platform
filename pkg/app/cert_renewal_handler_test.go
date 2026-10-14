@@ -437,7 +437,7 @@ func TestBuildHandler_OK(t *testing.T) {
 	due := &stubTarget{name: "x", notAfter: now.Add(5 * 24 * time.Hour)}
 	_ = r.Register(due.buildTarget())
 
-	h := buildCertRenewalHandler(r, 30*24*time.Hour, nil)
+	h := buildCertRenewalHandler(r, 30*24*time.Hour, time.Now, nil)
 	res, err := h(context.Background(), &quicbaas.Job{Name: "j"})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -458,6 +458,54 @@ func TestBuildHandler_OK(t *testing.T) {
 	}
 }
 
+// TestRegisterCertRenewal_NowSeamMovesTheWindow pins the #284 clock seam: the
+// registered handler measures expiry against opts.Now, not the wall clock, so
+// a certificate a year from expiry is left alone today and renewed once the
+// injected clock reaches its window.
+func TestRegisterCertRenewal_NowSeamMovesTheWindow(t *testing.T) {
+	wall := time.Now()
+	target := &stubTarget{name: "x", notAfter: wall.Add(365 * 24 * time.Hour)}
+	reg := NewCertTargetRegistry()
+	if err := reg.Register(target.buildTarget()); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	clock := wall
+	sched := newFakeScheduler()
+	err := RegisterCertRenewal(context.Background(), CertRenewalRegistration{
+		Scheduler: sched,
+		Registry:  reg,
+		NodeID:    "node-A",
+		Now:       func() time.Time { return clock },
+	})
+	if err != nil {
+		t.Fatalf("RegisterCertRenewal: %v", err)
+	}
+	handler := sched.handlers[CertRenewalHandlerName]
+	if handler == nil {
+		t.Fatal("handler not registered")
+	}
+
+	if _, err := handler(context.Background(), &quicbaas.Job{Name: "j"}); err != nil {
+		t.Fatalf("handler (today): %v", err)
+	}
+	if target.reissueCalls != 0 {
+		t.Fatalf("reissueCalls = %d before the window, want 0", target.reissueCalls)
+	}
+
+	clock = wall.Add(340 * 24 * time.Hour)
+	res, err := handler(context.Background(), &quicbaas.Job{Name: "j"})
+	if err != nil {
+		t.Fatalf("handler (in window): %v", err)
+	}
+	if target.reissueCalls != 1 {
+		t.Errorf("reissueCalls = %d inside the window, want 1", target.reissueCalls)
+	}
+	if !strings.Contains(res.Message, "1 renewed") {
+		t.Errorf("message = %q", res.Message)
+	}
+}
+
 func TestBuildHandler_FailureSurfacedAsSuccessFalse(t *testing.T) {
 	r := NewCertTargetRegistry()
 	now := time.Now()
@@ -467,7 +515,7 @@ func TestBuildHandler_FailureSurfacedAsSuccessFalse(t *testing.T) {
 		reissueErr: errors.New("nope"),
 	}
 	_ = r.Register(bad.buildTarget())
-	h := buildCertRenewalHandler(r, 30*24*time.Hour, nil)
+	h := buildCertRenewalHandler(r, 30*24*time.Hour, time.Now, nil)
 	res, err := h(context.Background(), &quicbaas.Job{})
 	if err != nil {
 		t.Fatalf("handler returned err: %v", err)
@@ -479,7 +527,7 @@ func TestBuildHandler_FailureSurfacedAsSuccessFalse(t *testing.T) {
 
 func TestBuildHandler_EmptyRegistryBenign(t *testing.T) {
 	r := NewCertTargetRegistry()
-	h := buildCertRenewalHandler(r, time.Hour, nil)
+	h := buildCertRenewalHandler(r, time.Hour, time.Now, nil)
 	res, err := h(context.Background(), &quicbaas.Job{})
 	if err != nil {
 		t.Fatalf("handler err: %v", err)

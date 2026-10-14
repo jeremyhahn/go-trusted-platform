@@ -39,6 +39,10 @@ const (
 	// CertKindNTS identifies the NTS-KE server certificate chrony serves
 	// for RFC 8915 Network Time Security.
 	CertKindNTS CertKind = "nts"
+
+	// CertKindDaemon identifies platformd's own TLS identity, the
+	// certificate its gRPC, QUIC, REST and MCP listeners present (#36).
+	CertKindDaemon CertKind = "daemon"
 )
 
 // validCertKinds is a lookup table for valid CertKind values, used
@@ -47,6 +51,7 @@ var validCertKinds = map[CertKind]struct{}{
 	CertKindWebservice: {},
 	CertKindBMC:        {},
 	CertKindNTS:        {},
+	CertKindDaemon:     {},
 }
 
 // IsValid reports whether k is a recognized CertKind.

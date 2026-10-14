@@ -294,6 +294,24 @@ func (e ErrTLSConfigFailed) Error() string {
 	return "tls config failed: " + e.Reason
 }
 
+// ErrUnusableServingCertificate is returned when a certificate offered to a
+// ServingCertificate could not complete a handshake: no chain or no private
+// key. The certificate already being served stays in place (#36).
+type ErrUnusableServingCertificate struct{}
+
+func (e ErrUnusableServingCertificate) Error() string {
+	return "serving certificate unusable: it needs a certificate chain and a private key"
+}
+
+// ErrNoServingCertificate is returned by ServingCertificate.GetCertificate
+// when no certificate has been stored, so the handshake fails instead of
+// presenting nothing.
+type ErrNoServingCertificate struct{}
+
+func (e ErrNoServingCertificate) Error() string {
+	return "no serving certificate stored"
+}
+
 // =============================================================================
 // gRPC Server Errors
 // =============================================================================

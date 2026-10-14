@@ -128,6 +128,10 @@ var definitions = []Definition{
 		MemoryMax:    256 << 20,
 		CPUMax:       "100000 100000",
 		Unprivileged: true,
+		// Third to move: one capability, for the privileged ports it
+		// answers on (DHCP 67, TFTP 69, PXE over HTTP 80), and every
+		// request it parses comes from a device not yet trusted.
+		Supervised: true,
 	},
 	{
 		Name:         "vpn",

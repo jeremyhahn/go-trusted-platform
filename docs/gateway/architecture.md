@@ -354,10 +354,14 @@ moved first: the smallest privilege set of the processes with a backend
 (`CAP_NET_BIND_SERVICE` alone) and the most exposed parser. `proxy` followed:
 the same one capability, and it terminates TLS from the internet. Its
 `proxy:` section is gatewayd's own, not a gateway section, so `BuildGateway`
-registers its relay directly (`RegisterSupervisedService`). Every other
-section keeps its in-process handler, exactly as with the model off. The order
-still to come is `provisioning`, `vpn` once it has a backend, and `datapath`
-last;
+registers its relay directly (`RegisterSupervisedService`). `provisioning`
+(`edge`, `dhcp`, `pxe`) moved third: the same one capability, for the
+privileged ports it answers on, and every request it parses comes from a
+device not yet trusted. None of its sections has a backend yet, so its child
+hosts the refusals and the parent relays them; a backend that lands later
+lands in the child. Every other section keeps its in-process handler, exactly
+as with the model off. The order still to come is `vpn` once it has a backend,
+and `datapath` last;
 [`engineering.md`](engineering.md) §The process model carries the state.
 
 Once `datapath` moves, two consequences are deliberate. `Gateway.Apply`
