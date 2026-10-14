@@ -1,6 +1,6 @@
 # Remote-Access VPN — API
 
-> **Status: PARTIAL — the operator control plane ships on every transport (#584 PR 3) and in the JS SDK and the web console (#584 PR 4); the client admission verbs are planned; their wire contract is fixed (§5).** · Last verified: 2026-10-13
+> **Status: PARTIAL — the operator control plane ships on every transport (#584 PR 3) and in the JS SDK and the web console (#584 PR 4); the client admission routes are planned on the gateway; their wire contract is fixed and the client speaks it (§5).** · Last verified: 2026-10-13
 > §1–§4 describe `VPNService` as it is routed today. §5 is still a requirement:
 > the client verbs terminate on the gateway's admission listener, which waits on
 > the gateway process model (#557).
@@ -119,7 +119,8 @@ These verbs terminate on the **gateway's admission listener** (mTLS, device
 identity, no bearer token), not on the control plane. Nothing below is routed
 yet: the wire contract (routes, bodies, refusal classes) is fixed in
 `pkg/sdn/gateway/services/vpn/wire.go`, and the client in `pkg/vpn/agent`
-already speaks it.
+already speaks all four routes, tested against an `httptest` stand-in for the
+listener (#557).
 
 | Capability | REST | gRPC | `scp` |
 |---|---|---|---|
@@ -165,6 +166,15 @@ opens — so the client knows its next re-attestation:
 
 A WireGuard lease carries `endpoint.wireguard` (`public_key`, `endpoint`,
 `routes`) instead.
+
+A renewal fetches a fresh challenge and posts an `AdmissionRequest` body to the
+lease's `renew` route. Its evidence is fresh — a quote over the new nonce, a new
+posture report and, when the admission carried one, the same kind of person
+factor signed over the new nonce. `device_id`, `data_plane` and `zones` repeat
+the lease's, and `peer` is empty: the lease keeps the peer it was admitted
+with. The response is the renewed lease, the same `id` with new
+`expires_at_unix` and `renew_at_unix`. A `renewal-not-open` or `nonce-unknown`
+refusal, or a 503, leaves the lease standing; every other refusal ends it.
 
 A refusal carries only `reason` (the class from [engineering.md](engineering.md)
 §3) and, for a posture violation, `rules` — the rule names, never the policy

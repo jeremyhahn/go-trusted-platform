@@ -16,6 +16,7 @@ package agent
 import (
 	"fmt"
 	"net/http"
+	"net/netip"
 	"strings"
 
 	gwvpn "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/vpn"
@@ -54,6 +55,75 @@ func (e *RefusedError) Error() string {
 type ErrNotConnected struct{}
 
 func (e *ErrNotConnected) Error() string { return "not connected" }
+
+// ErrNoDevice is returned when the host has no TPM identity to present to a
+// gateway: Connect and Disconnect on an agent built without a Device, and
+// OpenHostDevice on a host with no TPM, no tpm configuration or no IDevID.
+type ErrNoDevice struct {
+	Reason string
+	Cause  error
+}
+
+func (e *ErrNoDevice) Error() string {
+	msg := "this host has no TPM device identity for the VPN client"
+	if e.Reason != "" {
+		msg += ": " + e.Reason
+	}
+	if e.Cause != nil {
+		msg += ": " + e.Cause.Error()
+	}
+	return msg
+}
+
+func (e *ErrNoDevice) Unwrap() error { return e.Cause }
+
+// ErrNoIDevIDConfig is returned when the TPM configuration names no IDevID.
+type ErrNoIDevIDConfig struct{}
+
+func (e *ErrNoIDevIDConfig) Error() string { return "the tpm configuration has no idevid section" }
+
+// ErrPlatformConfig is returned when a platform configuration file exists
+// but cannot be read or decoded.
+type ErrPlatformConfig struct {
+	Path  string
+	Cause error
+}
+
+func (e *ErrPlatformConfig) Error() string {
+	return fmt.Sprintf("platform configuration %s: %v", e.Path, e.Cause)
+}
+
+func (e *ErrPlatformConfig) Unwrap() error { return e.Cause }
+
+// ErrIDevIDCertificate is returned when the IDevID certificate chain could
+// not be read: from Path when one was given, otherwise from the TPM.
+type ErrIDevIDCertificate struct {
+	Path  string
+	Cause error
+}
+
+func (e *ErrIDevIDCertificate) Error() string {
+	if e.Path == "" {
+		return fmt.Sprintf("IDevID certificate unavailable from the TPM (pass --idevid-cert): %v", e.Cause)
+	}
+	return fmt.Sprintf("IDevID certificate %s: %v", e.Path, e.Cause)
+}
+
+func (e *ErrIDevIDCertificate) Unwrap() error { return e.Cause }
+
+// ErrNoCertificate is returned when a PEM file holds no certificate.
+type ErrNoCertificate struct{}
+
+func (e *ErrNoCertificate) Error() string { return "no CERTIFICATE block" }
+
+// ErrDeviceClose is returned when the TPM could not be closed.
+type ErrDeviceClose struct {
+	Cause error
+}
+
+func (e *ErrDeviceClose) Error() string { return fmt.Sprintf("close TPM: %v", e.Cause) }
+
+func (e *ErrDeviceClose) Unwrap() error { return e.Cause }
 
 // ErrAlreadyConnected is returned by Connect while a lease is held.
 type ErrAlreadyConnected struct {
@@ -160,6 +230,58 @@ func (e *ErrDataPlane) Error() string {
 
 func (e *ErrDataPlane) Unwrap() error { return e.Cause }
 
+// ErrLeaseUnusable is returned when the lease the gateway answered cannot set
+// up the data plane it names: no endpoint, or a key, endpoint, address or
+// route the client cannot use. The agent revokes such a lease.
+type ErrLeaseUnusable struct {
+	Kind   gwvpn.DataPlaneKind
+	Reason string
+	Cause  error
+}
+
+func (e *ErrLeaseUnusable) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("data plane %s: unusable lease: %s: %v", e.Kind, e.Reason, e.Cause)
+	}
+	return fmt.Sprintf("data plane %s: unusable lease: %s", e.Kind, e.Reason)
+}
+
+func (e *ErrLeaseUnusable) Unwrap() error { return e.Cause }
+
+// ErrNotPrepared is returned when a data plane is brought up without the key
+// Prepare made for the admission, or a second time with the same key.
+type ErrNotPrepared struct {
+	Kind gwvpn.DataPlaneKind
+}
+
+func (e *ErrNotPrepared) Error() string {
+	return fmt.Sprintf("data plane %s: no client key was prepared for this lease", e.Kind)
+}
+
+// ErrSessionRefused is returned when the gateway answered the CONNECT-IP
+// request with a status other than success: it holds no lease for the
+// certificate presented, or the request was not one it serves.
+type ErrSessionRefused struct {
+	Gateway string
+	Status  int
+}
+
+func (e *ErrSessionRefused) Error() string {
+	return fmt.Sprintf("gateway %s refused the MASQUE session: HTTP %d", e.Gateway, e.Status)
+}
+
+// ErrAddressNotAssigned is returned when the session's assigned addresses do
+// not include the address the lease names.
+type ErrAddressNotAssigned struct {
+	Kind     gwvpn.DataPlaneKind
+	Lease    netip.Prefix
+	Assigned []netip.Prefix
+}
+
+func (e *ErrAddressNotAssigned) Error() string {
+	return fmt.Sprintf("data plane %s: the gateway assigned %v, not the lease address %s", e.Kind, e.Assigned, e.Lease)
+}
+
 // ErrStateStore is returned when the lease state file could not be read,
 // written or removed.
 type ErrStateStore struct {
@@ -174,9 +296,23 @@ func (e *ErrStateStore) Error() string {
 
 func (e *ErrStateStore) Unwrap() error { return e.Cause }
 
-// ErrRollback is returned when Connect failed after admission and undoing
-// the admission failed too. It unwraps to the failure only, so the exit code
-// reflects what went wrong rather than the cleanup.
+// ErrLeaseLapsed is returned by KeepAlive when the lease expired before any
+// renewal succeeded; Cause is the last renewal's failure.
+type ErrLeaseLapsed struct {
+	LeaseID gwvpn.LeaseID
+	Cause   error
+}
+
+func (e *ErrLeaseLapsed) Error() string {
+	return fmt.Sprintf("lease %s expired before it could be renewed: %v", e.LeaseID, e.Cause)
+}
+
+func (e *ErrLeaseLapsed) Unwrap() error { return e.Cause }
+
+// ErrRollback is returned when Connect failed after admission, or a renewal
+// ended the lease, and undoing the admission or tearing the lease down failed
+// too. It unwraps to the failure only, so the exit code reflects what went
+// wrong rather than the cleanup.
 type ErrRollback struct {
 	Cause    error
 	Rollback error

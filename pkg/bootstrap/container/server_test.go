@@ -446,17 +446,68 @@ func TestDeviceBootInfo_DisklessNodeNeedsADisklessSet(t *testing.T) {
 
 func TestNodeBootArgs_DisklessNBDNode(t *testing.T) {
 	config := &ServerConfig{DHCPConfig: DHCPConfig{ServerIP: "192.168.1.1"}, HTTPPort: 8080, APKMirror: "https://dl-cdn.alpinelinux.org/alpine", AlpineVersion: "3.22"}
+	config.ApplyDefaults()
 	set := piSet()
 	selector := disklessroot.ParamBootModel + "=" + nbd.BootModel
+	server := nbd.ParamServer + "=192.168.1.1:10809"
 
 	args, err := nodeBootArgs(&ManifestEntry{MAC: "dc:a6:32:01:36:c2", Hostname: "nbd-01", BootModel: nbd.BootModel}, set, config)
 	require.NoError(t, err, "an NBD root needs no diskless root in the set")
-	assert.True(t, strings.HasSuffix(args, " "+selector), "the node is told its boot model: %s", args)
+	assert.True(t, strings.HasSuffix(args, " "+selector+" "+server), "the node is told its boot model and the export server's listener: %s", args)
 	assert.Contains(t, args, "alpine_start=autoinstall", "it boots the set's installer, which installs onto the export")
 
+	// No other boot model is told an NBD server.
+	disklessSet := set
+	disklessSet.Diskless = true
+	for _, entry := range []ManifestEntry{
+		{MAC: "dc:a6:32:01:36:c3", Hostname: "sd-01", BootModel: "sd"},
+		{MAC: "dc:a6:32:01:36:c4", Hostname: "disk-01"},
+		{MAC: "dc:a6:32:01:36:c5", Hostname: "diskless-01", BootModel: disklessroot.BootModel},
+	} {
+		args, err = nodeBootArgs(&entry, disklessSet, config)
+		require.NoError(t, err)
+		assert.NotContains(t, args, nbd.ParamServer, "a %q node attaches no export", entry.BootModel)
+		assert.NotContains(t, args, selector)
+	}
 	args, err = nodeBootArgs(&ManifestEntry{MAC: "dc:a6:32:01:36:c3", Hostname: "sd-01", BootModel: "sd"}, set, config)
 	require.NoError(t, err)
 	assert.NotContains(t, args, disklessroot.ParamBootModel, "an SD node gets the set's arguments alone")
+}
+
+func TestNodeBootArgs_NBDServerAddress(t *testing.T) {
+	entry := &ManifestEntry{MAC: "dc:a6:32:01:36:c2", Hostname: "nbd-01", BootModel: nbd.BootModel}
+	tests := []struct {
+		listenAddr string
+		want       string
+	}{
+		{"192.0.2.1:10809", "192.0.2.1:10809"},
+		{":10811", "192.168.1.1:10811"},
+		{"0.0.0.0:10809", "192.168.1.1:10809"},
+		{"[::]:10809", "192.168.1.1:10809"},
+		{"[fd00:405::1]:10809", "[fd00:405::1]:10809"},
+	}
+	for _, tc := range tests {
+		config := &ServerConfig{DHCPConfig: DHCPConfig{ServerIP: "192.168.1.1"}, NBD: NBDConfig{ListenAddr: tc.listenAddr}}
+		args, err := nodeBootArgs(entry, piSet(), config)
+		require.NoError(t, err, tc.listenAddr)
+		assert.True(t, strings.HasSuffix(args, " "+nbd.ParamServer+"="+tc.want), "listen %s: %s", tc.listenAddr, args)
+	}
+}
+
+func TestNodeBootArgs_NBDServerAddressUnknown(t *testing.T) {
+	entry := &ManifestEntry{MAC: "dc:a6:32:01:36:c2", Hostname: "nbd-01", BootModel: nbd.BootModel}
+	for _, config := range []*ServerConfig{
+		{},                                     // no listener and no provisioning address
+		{NBD: NBDConfig{ListenAddr: ":10809"}}, // a wildcard bind and no provisioning address
+		{NBD: NBDConfig{ListenAddr: "192.0.2.1"}},
+		{NBD: NBDConfig{ListenAddr: "192.0.2.1:0"}},
+	} {
+		_, err := nodeBootArgs(entry, piSet(), config)
+		var unknown ErrNBDServerAddress
+		require.ErrorAs(t, err, &unknown, "listen %q", config.NBD.ListenAddr)
+		assert.Equal(t, config.NBD.ListenAddr, unknown.ListenAddr)
+		assert.Contains(t, unknown.Error(), "nbd.listen_addr")
+	}
 }
 
 func TestServerConfig_Validate_PathsMustBeServed(t *testing.T) {

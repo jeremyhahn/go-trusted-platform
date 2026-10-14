@@ -104,7 +104,7 @@ NFS was ruled out. The export is reached only over TLS 1.3 after
 which chains to the platform anchor. The server picks the export from that
 verified identity and from nothing the client names. The server side is built
 ([bootstrap architecture](../bootstrap/architecture.md#nbd-export-server-diskless-nbd)).
-The node side is **Planned**:
+The node side is partly built; the attach and the install are **Planned**:
 
 - **Built:** `bootstrap.yaml` accepts `boot_model: diskless-nbd` on a
   Raspberry Pi, and the bootstrap server puts `platform_boot_model=diskless-nbd`
@@ -115,6 +115,15 @@ The node side is **Planned**:
   first, TLS 1.3 with the IDevID as the client certificate, `NBD_OPT_GO`, and a
   refusal is final ([installer engineering](engineering.md)). Nothing calls it
   yet.
+- **Built:** the bootstrap server puts `platform_nbd_server`, the export
+  server's address on the provisioning segment, on that node's installer
+  command line. The node reads the address only from the signed UKI
+  `.cmdline` (`nbd.ServerFromCmdline`), and builds its client configuration
+  from it, the platform anchor and its IDevID (`nbd.NewClientConfig`). Nothing
+  calls either yet.
+- **Planned:** where the node takes the platform anchor and its IDevID from
+  before the export is attached; the image's CA bundle lives on the root
+  filesystem, which for this model is the export.
 - **Planned:** the installer target `nbd` runs Phase A against the attached
   export instead of a local disk.
 - **Planned:** `platform-initrd` attaches the export before the unlock chain

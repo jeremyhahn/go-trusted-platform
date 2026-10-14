@@ -16,6 +16,7 @@ package container
 import (
 	"crypto/tls"
 	"log/slog"
+	"net"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/nbd"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
@@ -68,4 +69,23 @@ func newNBDServer(config *ServerConfig, manifest *Manifest, logger *slog.Logger)
 		VolumeSize:  config.NBD.VolumeSize,
 		Logger:      logger,
 	})
+}
+
+// nbdServerAddr is the address a diskless-nbd node attaches its root from:
+// the export server's listener. A listener bound to every address names the
+// provisioning address, DHCPConfig.ServerIP, in its place.
+func nbdServerAddr(config *ServerConfig) (nbd.ServerAddr, error) {
+	listenAddr := config.NBD.ListenAddr
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return nbd.ServerAddr{}, ErrNBDServerAddress{ListenAddr: listenAddr, Err: err}
+	}
+	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
+		host = config.DHCPConfig.ServerIP
+	}
+	addr, err := nbd.ParseServerAddr(net.JoinHostPort(host, port))
+	if err != nil {
+		return nbd.ServerAddr{}, ErrNBDServerAddress{ListenAddr: listenAddr, Err: err}
+	}
+	return addr, nil
 }

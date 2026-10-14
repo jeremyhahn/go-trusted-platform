@@ -359,8 +359,10 @@ func (s *Server) deviceBootInfo(mac string) (*ipxe.DeviceBootInfo, error) {
 // also gets the boot model, which tells its installer to build a diskless UKI
 // from the set's signed manifest; the root itself — URLs, hash, salt, sizes —
 // is never on this command line, which nothing signs. A diskless-nbd node gets
-// its boot model as well; its root is its NBD export, so the set needs no
-// diskless root. A disk node, or a node the manifest does not know, gets the
+// its boot model as well, and platform_nbd_server, the export server's
+// address; its root is its NBD export, so the set needs no diskless root. The
+// export's identity is not on this line either: the server picks it from the
+// node's verified IDevID. A disk node, or a node the manifest does not know, gets the
 // set's arguments alone.
 func nodeBootArgs(entry *ManifestEntry, set MediaSet, config *ServerConfig) (string, error) {
 	args := set.bootArgs(config)
@@ -371,7 +373,11 @@ func nodeBootArgs(entry *ManifestEntry, set MediaSet, config *ServerConfig) (str
 		}
 		return args + " " + disklessroot.ParamBootModel + "=" + disklessroot.BootModel, nil
 	case nbd.BootModel:
-		return args + " " + disklessroot.ParamBootModel + "=" + nbd.BootModel, nil
+		server, err := nbdServerAddr(config)
+		if err != nil {
+			return "", err
+		}
+		return args + " " + disklessroot.ParamBootModel + "=" + nbd.BootModel + " " + server.Arg(), nil
 	default:
 		return args, nil
 	}

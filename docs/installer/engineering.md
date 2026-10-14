@@ -672,16 +672,22 @@ override the per-node `network.conf`. After mounting the overlay, and before
 interface (static or DHCP) and resolver into the tmpfs upper layer, replacing
 any symlink; the shared root is never written.
 
-**`diskless-nbd` node side — Planned (#689).** The NBD export server is built
+**`diskless-nbd` node side — partly built, attach and install Planned (#689).** The NBD export server is built
 (`pkg/bootstrap/nbd`, [bootstrap engineering](../bootstrap/engineering.md#nbd-export-server-pkgbootstrapnbd)).
-So is the node's negotiation, `nbd.Attach` (below), which meets the second to
-fourth points of this contract. Nothing calls it yet: `platform-initrd` does
-not attach an export, and the installer has no `nbd` target. The node half
-below is the contract the later slices must meet:
+So are three pieces of the node half: the `platform_nbd_server` reader
+`nbd.ServerFromCmdline`
+([kernel-cmdline §4](../reference/kernel-cmdline.md#nbd-root-parameter)), the
+client configuration builder `nbd.NewClientConfig`, and the negotiation
+`nbd.Attach` (below), which meets the second to fourth points of this
+contract. Nothing calls any of them yet: `platform-initrd` does not attach an
+export, and the installer has no `nbd` target. The node half below is the
+contract the later slices must meet:
 
 - The boot server's NBD address comes from the **signed** UKI `.cmdline`,
   under the same rule as the diskless root parameters: nothing on the live
-  command line can name the root.
+  command line can name the root. Built: the installer copies no live-line
+  parameter into the UKI but the debug sink (`hostUKICmdlineParams`), so a
+  live `platform_nbd_server` never reaches it.
 - `platform-initrd` sends the client flag `NBD_FLAG_C_FIXED_NEWSTYLE`. Its
   first option is `NBD_OPT_STARTTLS`, and it requires TLS 1.3. It presents
   the IDevID certificate, whose key stays in the TPM. It verifies the server
@@ -715,6 +721,26 @@ the block-size constraints. It owns `conn` and closes it on every error:
 | any `NBD_REP_ERR_*` reply to `STARTTLS` or `GO` | `nbd.ErrServerRefused{Option, Reply}` |
 | handshake failure, including a TLS alert the server sends after a TLS 1.3 handshake has completed (client certificate rejected) | `nbd.ErrTLSHandshake` |
 | not fixed newstyle, bad magic, a reply to another option, an oversized or malformed reply, `GO` acknowledged without `NBD_INFO_EXPORT`, a closed connection, the timeout, a cancelled context | `nbd.ErrProtocol` |
+
+```go
+func NewClientConfig(ctx context.Context, server nbd.ServerAddr, anchor *trust.Anchor, idevid tls.Certificate) (nbd.ClientConfig, error)
+```
+
+`NewClientConfig` builds `Attach`'s configuration from the signed parameters.
+`server` is the address `ServerFromCmdline` read; its host becomes
+`ServerName`, so the boot server's certificate must carry it. `RootCAs` is the
+platform anchor's CA pool. `HandshakeTimeout` is the default. `idevid` is a
+parameter because the IDevID's source on a `diskless-nbd` node is not decided
+(**Planned**, #883 Q2). `anchor` is a parameter too: no early-boot path reads a
+CA bundle today. The image's bundle is on the root filesystem, which for this
+model is the export itself. Nothing calls `NewClientConfig` yet.
+
+| Input | Typed error |
+|---|---|
+| an address with no valid host or a zero port | `nbd.ErrCmdline` |
+| no anchor | `nbd.ErrInvalidConfig` (`RootCAs`) |
+| an anchor whose bundle is unreadable or holds no CA | `nbd.ErrTrustAnchor`, wrapping `trust.ErrAnchorUnavailable` or `trust.ErrAnchorEmpty` |
+| an IDevID with no certificate or no key | `nbd.ErrInvalidConfig` (`Certificate`), from `ClientConfig.Validate` |
 
 Inside the container while it is mounted at `/mnt/installer`:
 `luks-key.bin` (the only path `KeyfileStrategy` looks at),

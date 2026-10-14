@@ -1,9 +1,13 @@
 # Remote-Access VPN — User Guide
 
-> **Status: PARTIAL — operators can manage enrolment, posture policies and session status today, from the CLI (#584 PR 3) and the web console (#584 PR 4); connecting a machine is planned.** · Last verified: 2026-10-13
-> "Operator tasks" below works now. "First connection" and the client tasks
-> describe `platformctl vpn connect`, which has not shipped: until it does, the
-> interim administrative VPN on the site firewall remains the way in.
+> **Status: PARTIAL — operators can manage enrolment, posture policies and session status today, from the CLI (#584 PR 3) and the web console (#584 PR 4); the client verbs and both tunnels exist, but a machine cannot connect yet.** · Last verified: 2026-10-13
+> "Operator tasks" below works now, and so does `platformctl vpn posture`.
+> `platformctl vpn connect` (with `--foreground` to keep the lease renewed),
+> `renew`, `lease` and `disconnect` exist, present the machine's TPM identity
+> and bring the WireGuard or MASQUE tunnel up, but `connect` cannot finish
+> until the client's security key and smart card support lands, and no
+> gateway serves admissions yet. Until then the interim administrative VPN on
+> the site firewall remains the way in.
 > Feature folder: [architecture.md](architecture.md) · [engineering.md](engineering.md) ·
 > [cli.md](cli.md) · [api.md](api.md) · user (this file).
 
@@ -19,7 +23,14 @@ that; a lost laptop's lease dies on its own.
 
 Two ways to carry the traffic: **WireGuard** (fast, kernel-native, available on
 non-FIPS builds) and **MASQUE** (an HTTP/3 tunnel using the same TLS the
-platform uses everywhere; the only option on FIPS builds).
+platform uses everywhere; the only option on FIPS builds). The gateway says
+which it offers; `--data-plane wireguard|masque` asks for one.
+
+A WireGuard tunnel (`vpn-wg0`) stays up after `connect` returns. A MASQUE
+tunnel (`vpn-masque0`) lives inside the `connect` command, so it needs
+`--foreground` and comes down when that command ends; without `--foreground`,
+`connect` never picks MASQUE, and `--data-plane masque` alone is refused.
+Bringing a tunnel up needs root.
 
 ## Prerequisites
 
@@ -35,7 +46,7 @@ platform uses everywhere; the only option on FIPS builds).
 - An operator has enrolled your device as a VPN peer of your tenant
   (`platformctl vpn peer enrol`).
 
-## First connection *(planned)*
+## First connection
 
 ```sh
 platformctl vpn connect --gateway gw.letstrust.com:4433 --factor fido2
@@ -43,8 +54,20 @@ platformctl vpn connect --gateway gw.letstrust.com:4433 --factor fido2
 
 You will be asked to touch the key (or enter the card PIN). On success the
 command prints the lease: your address, the zones you may reach and when the
-lease expires. The agent keeps the lease alive by re-attesting in the
-background; you do nothing.
+lease expires. Add `--ca-file <pem>` when the gateway's certificate does not
+chain to the machine's system roots.
+
+The exit code tells a script what happened: 0 connected, 4 refused (the
+reason is printed), 5 a posture rule failed (the rules are listed), 1 anything
+else.
+
+Add `--foreground` to keep the lease alive: the command stays running and,
+each time the lease is due for renewal, proves the machine's state again with
+a fresh attestation and posture report. If the machine stops passing (a
+posture rule fails, the boot measurements change), the tunnel comes down and
+the command exits with the refusal's code. Ctrl-C disconnects. Without
+`--foreground` the lease lasts until it expires; `platformctl vpn renew`
+renews it by hand.
 
 ## Operator tasks
 
@@ -77,13 +100,21 @@ stays open. Enrolling a peer and deleting a policy remain CLI tasks.
   whose policy a gateway could not load.
 - **Review policies**: `platformctl vpn posture-policy list|get|delete`.
 
-## Client tasks *(planned)*
+## Client tasks
 
-- **Check the connection**: `platformctl vpn lease`.
-- **See what the gateway will judge**: `platformctl vpn posture -o json` shows
-  the exact report before you connect — the fastest way to see why a posture
-  rule will fail.
-- **Disconnect**: `platformctl vpn disconnect`.
+- **Check the connection**: `platformctl vpn lease` (exit 6 when not
+  connected). It reads the machine's own record and contacts no gateway.
+- **Renew now**: `platformctl vpn renew`. Exit 0 renewed, 4 refused, 5 a
+  posture rule failed, 6 not connected. A refusal that ends the lease brings
+  the tunnel down; `refused: renewal not open` only means it is too early and
+  the lease is kept.
+- **Disconnect**: `platformctl vpn disconnect`. The local lease is dropped and
+  the tunnel brought down even if the gateway cannot be reached; the gateway
+  then lets the lease expire. A MASQUE tunnel belongs to the
+  `connect --foreground` command: Ctrl-C there brings it down.
+- **See what the gateway will judge**: `platformctl vpn posture -o json`
+  shows the exact report before you connect — the fastest way to see why a
+  posture rule will fail. It contacts no gateway.
 
 ## Troubleshooting
 
@@ -92,13 +123,20 @@ stays open. Enrolling a peer and deleting a policy remain CLI tasks.
 | `refused: untrusted issuer` | Your device certificate does not chain to the platform's anchors | Re-enroll the device; check the gateway's trust bundle |
 | `refused: attestation failed` | Your boot measurements no longer match the enrolled ones | A firmware or kernel update changed them; an operator refreshes the device's baseline after confirming the change is legitimate |
 | `refused: posture violation: secure_boot` (or `fde`, `ima`) | The named rule failed | Fix the setting on the machine; `platformctl vpn posture` shows the current facts |
+| `this host has no TPM device identity for the VPN client: <reason>` | The machine's TPM could not be opened or holds no IDevID; the reason says which | Check `/etc/trusted-platform/config.yaml` has a `tpm` section with `idevid`; when the reason asks for `--idevid-cert`, export the certificate with `platformctl tpm idevid certificate -o json` and pass it |
+| `not connected` (exit 6) | `lease`, `renew` or `disconnect` found no lease on this machine | `platformctl vpn connect` |
+| `refused: renewal not open` | `renew` ran before the lease's renewal time (`platformctl vpn lease` shows it); the lease is kept | Wait for the renewal time, or run `connect --foreground` |
+| `lease … expired before it could be renewed` | `connect --foreground` could not renew before the lease expired, usually because the gateway was unreachable; the tunnel is down | Check the network path to the gateway and connect again |
 | `refused: person factor required/invalid` | No key touch, wrong key, or a factor not enrolled for you | Enroll or use the right factor |
 | `unavailable: posture policy` | The tenant's policy could not be loaded — this is a refusal, not a bypass | Operator: fix or restore the policy |
 | `unavailable: pool exhausted` | No free addresses in the tenant pool | Operator: grow the pool or revoke stale leases |
 | `refused: peer not enrolled` | The device passed identity checks but no operator enrolled it for the tenant | Operator: `platformctl vpn peer enrol` |
 | Every `platformctl vpn` operator verb says the service is unavailable | This node runs no VPN control plane; it refuses every call rather than answering with empty lists | Point the CLI at the control-plane node |
 | Connected, but a service is unreachable | The zone is not in your lease | Ask for the zone (`--zones`) if your role allows it; otherwise it is by design |
-| `data plane wireguard not available` | FIPS build | Use `--data-plane masque` |
+| `data plane wireguard not available` | FIPS build | Use `--data-plane masque --foreground` |
+| `data plane masque not available` | The gateway offers only MASQUE and `connect` ran without `--foreground` | Add `--foreground` |
+| `the masque data plane lives only as long as the command: add --foreground` | `--data-plane masque` without `--foreground` | Add `--foreground` |
+| `gateway … refused the MASQUE session: HTTP 403` | The gateway holds no lease bound to this machine's certificate for the session | Connect again; an operator checks the lease in `platformctl vpn status` |
 
 ## What it does not do
 

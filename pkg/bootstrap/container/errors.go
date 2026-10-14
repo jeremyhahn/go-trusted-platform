@@ -15,6 +15,7 @@ package container
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 )
@@ -178,6 +179,20 @@ func (e ErrNBDCredentials) Error() string {
 }
 
 func (e ErrNBDCredentials) Unwrap() error { return e.Err }
+
+// ErrNBDServerAddress is an NBD listener address from which no address a
+// diskless-nbd node can dial follows, so that node cannot be told where its
+// root is.
+type ErrNBDServerAddress struct {
+	ListenAddr string
+	Err        error
+}
+
+func (e ErrNBDServerAddress) Error() string {
+	return "bootstrap container: nbd.listen_addr " + strconv.Quote(e.ListenAddr) + " names no address a diskless-nbd node can dial: " + e.Err.Error()
+}
+
+func (e ErrNBDServerAddress) Unwrap() error { return e.Err }
 
 // ErrNetbootMedia is a netboot media build whose index is unreadable or
 // names something the build does not hold.

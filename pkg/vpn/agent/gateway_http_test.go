@@ -40,6 +40,13 @@ import (
 // deviceCertificate is a self-signed stand-in for the IDevID.
 func deviceCertificate(t *testing.T, cn string) tls.Certificate {
 	t.Helper()
+	return selfSignedCertificate(t, cn, x509.ExtKeyUsageClientAuth)
+}
+
+// selfSignedCertificate is a self-signed leaf for usage; a pool holding the
+// leaf trusts it.
+func selfSignedCertificate(t *testing.T, cn string, usage x509.ExtKeyUsage, dnsNames ...string) tls.Certificate {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	tmpl := &x509.Certificate{
@@ -48,7 +55,8 @@ func deviceCertificate(t *testing.T, cn string) tls.Certificate {
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		ExtKeyUsage:  []x509.ExtKeyUsage{usage},
+		DNSNames:     dnsNames,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	require.NoError(t, err)
@@ -159,6 +167,40 @@ func TestHTTPGateway_DecodesTheGatewaysRefusal(t *testing.T) {
 	assert.Equal(t, gwvpn.RefusalPostureViolation, refused.Class)
 	assert.Equal(t, []string{"secure_boot", "fde"}, refused.Rules)
 	assert.Equal(t, ExitPostureViolation, ExitCode(err))
+}
+
+func TestHTTPGateway_RenewPostsTheEvidenceToTheLeasesRoute(t *testing.T) {
+	var renewal gwvpn.AdmissionRequestWire
+	l := newAdmissionListener(t, func(w http.ResponseWriter, r *http.Request) error {
+		if r.Method+" "+r.URL.EscapedPath() != "POST "+gwvpn.LeaseRenewPath("l-1") {
+			return &gwvpn.ErrLeaseNotFound{}
+		}
+		if err := json.NewDecoder(r.Body).Decode(&renewal); err != nil {
+			return &gwvpn.ErrInvalidRequest{Field: "body", Reason: err.Error()}
+		}
+		return writeJSON(w, gwvpn.LeaseWire{ID: "l-1", DataPlane: gwvpn.DataPlaneMASQUE, Renewals: 1})
+	})
+
+	lease, err := l.gateway(t).Renew(context.Background(), "l-1",
+		&gwvpn.AdmissionRequestWire{DeviceID: "laptop-1", Nonce: []byte("nonce-2")})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, lease.Renewals)
+	assert.Equal(t, []byte("nonce-2"), renewal.Nonce)
+	assert.Equal(t, []string{"laptop-1"}, l.seen())
+}
+
+func TestHTTPGateway_RenewDecodesTheRefusal(t *testing.T) {
+	l := newAdmissionListener(t, func(http.ResponseWriter, *http.Request) error {
+		return &gwvpn.ErrRenewalNotOpen{LeaseID: "l-1", OpensAt: time.Unix(1760325200, 0)}
+	})
+
+	_, err := l.gateway(t).Renew(context.Background(), "l-1", &gwvpn.AdmissionRequestWire{})
+
+	var refused *RefusedError
+	require.ErrorAs(t, err, &refused)
+	assert.Equal(t, gwvpn.RefusalRenewalNotOpen, refused.Class)
+	assert.Equal(t, ExitRefused, ExitCode(err))
 }
 
 func TestHTTPGateway_AnErrorPageIsNotARefusal(t *testing.T) {

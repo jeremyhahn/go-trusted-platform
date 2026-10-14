@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
 // nodeConfig is the attach configuration of the bundle's client: its
@@ -228,6 +229,107 @@ func TestClientConfig_TLSConfig(t *testing.T) {
 	}
 	if len(got.Certificates) != 1 || got.RootCAs != bundle.CAPool || got.ServerName != "localhost" {
 		t.Fatalf("tls.Config does not carry the node's certificate, roots and server name")
+	}
+}
+
+// fileAnchor is a platform anchor read from a CA bundle file holding pem.
+func fileAnchor(t *testing.T, pem []byte) *trust.Anchor {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ca-bundle.crt")
+	if err := os.WriteFile(path, pem, 0o600); err != nil {
+		t.Fatalf("write CA bundle: %v", err)
+	}
+	anchor, err := trust.NewAnchor(trust.NewFileAnchorSource(path))
+	if err != nil {
+		t.Fatalf("NewAnchor: %v", err)
+	}
+	return anchor
+}
+
+func TestNewClientConfig(t *testing.T) {
+	bundle := testutil.GenerateTestTLSBundle(t)
+	server := ServerAddr{Host: "localhost", Port: DefaultPort}
+
+	cfg, err := NewClientConfig(t.Context(), server, fileAnchor(t, bundle.CACertPEM), bundle.ClientCert)
+	if err != nil {
+		t.Fatalf("NewClientConfig: %v", err)
+	}
+	if cfg.ServerName != server.Host || cfg.HandshakeTimeout != DefaultHandshakeTimeout {
+		t.Fatalf("ServerName %q, HandshakeTimeout %v; want %q, %v", cfg.ServerName, cfg.HandshakeTimeout, server.Host, DefaultHandshakeTimeout)
+	}
+	if len(cfg.Certificate.Certificate) == 0 || &cfg.Certificate.Certificate[0][0] != &bundle.ClientCert.Certificate[0][0] {
+		t.Fatalf("Certificate is not the IDevID passed in")
+	}
+
+	// The roots come from the bundle: the node attaches to a server whose
+	// certificate the platform CA issued.
+	addr, result := startSession(t, newTestServer(t, testConfig(t, bundle)))
+	export, err := attachTo(t, addr, cfg)
+	if err != nil {
+		t.Fatalf("Attach with the built config: %v", err)
+	}
+	c := &testClient{t: t, conn: export.Conn}
+	c.request(cmdDisc, 0, 1, 0, 0, nil)
+	if err := awaitResult(t, result); err != nil {
+		t.Fatalf("session ended with %v", err)
+	}
+}
+
+func TestNewClientConfig_Refused(t *testing.T) {
+	bundle := testutil.GenerateTestTLSBundle(t)
+	server := ServerAddr{Host: "localhost", Port: DefaultPort}
+	good := fileAnchor(t, bundle.CACertPEM)
+	missing, err := trust.NewAnchor(trust.NewFileAnchorSource(filepath.Join(t.TempDir(), "absent.crt")))
+	if err != nil {
+		t.Fatalf("NewAnchor: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		server ServerAddr
+		anchor *trust.Anchor
+		idevid tls.Certificate
+		check  func(error) bool
+	}{
+		{
+			name: "no anchor", server: server, anchor: nil, idevid: bundle.ClientCert,
+			check: func(err error) bool { var e ErrInvalidConfig; return errors.As(err, &e) && e.Field == "RootCAs" },
+		},
+		{
+			name: "missing CA bundle", server: server, anchor: missing, idevid: bundle.ClientCert,
+			check: func(err error) bool {
+				return errors.As(err, new(ErrTrustAnchor)) && errors.As(err, new(*trust.ErrAnchorUnavailable))
+			},
+		},
+		{
+			name: "empty CA bundle", server: server, anchor: fileAnchor(t, nil), idevid: bundle.ClientCert,
+			check: func(err error) bool {
+				return errors.As(err, new(ErrTrustAnchor)) && errors.As(err, new(trust.ErrAnchorEmpty))
+			},
+		},
+		{
+			name: "bad address", server: ServerAddr{Host: "boot_01", Port: DefaultPort}, anchor: good, idevid: bundle.ClientCert,
+			check: func(err error) bool { var e ErrCmdline; return errors.As(err, &e) && e.Param == ParamServer },
+		},
+		{
+			name: "no port", server: ServerAddr{Host: "localhost"}, anchor: good, idevid: bundle.ClientCert,
+			check: func(err error) bool { var e ErrCmdline; return errors.As(err, &e) && e.Param == ParamServer },
+		},
+		{
+			name: "missing certificate", server: server, anchor: good, idevid: tls.Certificate{},
+			check: func(err error) bool { var e ErrInvalidConfig; return errors.As(err, &e) && e.Field == "Certificate" },
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := NewClientConfig(t.Context(), tc.server, tc.anchor, tc.idevid)
+			if !tc.check(err) {
+				t.Fatalf("err = %v, not the refusal expected", err)
+			}
+			if cfg.RootCAs != nil || cfg.ServerName != "" {
+				t.Fatalf("a refused build returned %+v, want the zero config", cfg)
+			}
+		})
 	}
 }
 

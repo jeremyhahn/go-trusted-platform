@@ -84,15 +84,22 @@ func render(w io.Writer, flags *cli.CommonFlags, v any) error {
 func NewCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "vpn",
-		Short: "Management VPN peers, posture policies and session status",
-		Long: `Administer the management VPN that platform gateways serve.
+		Short: "Management VPN: connect this device, or administer peers, posture policies and sessions",
+		Long: `Connect this device to the management VPN that platform gateways serve, or
+administer it.
 
 A device reaches the management network only after it is enrolled as a peer
 of its tenant, passes the tenant's posture policies, and presents a valid
 platform credential. Enrolment and posture policies are stored by platformd
-and reach every gateway in its desired configuration.
+and reach every gateway in its desired configuration. connect, disconnect
+and lease are the client verbs: they talk to a gateway's admission listener,
+not to platformd.
 
 Examples:
+  # Connect this device, then show its lease
+  platformctl vpn connect --gateway gw.example.com:4433 --factor fido2
+  platformctl vpn lease
+
   # Enrol a device, limited to the management zone
   platformctl vpn peer enrol laptop-1 --tenant acme --zone management
 
@@ -110,6 +117,11 @@ Examples:
 	cmd.AddCommand(newPeerCommand(getFlags))
 	cmd.AddCommand(newStatusCommand(getFlags))
 	cmd.AddCommand(newPosturePolicyCommand(getFlags))
+	cmd.AddCommand(newConnectCommand(getFlags))
+	cmd.AddCommand(newDisconnectCommand(getFlags))
+	cmd.AddCommand(newLeaseCommand(getFlags))
+	cmd.AddCommand(newPostureCommand(getFlags))
+	cmd.AddCommand(newRenewCommand(getFlags))
 
 	return cmd
 }

@@ -36,10 +36,13 @@ type Session struct {
 // State is the lease the agent holds and the data plane that carries it. It
 // holds no secret: the WireGuard private key lives only in the kernel.
 type State struct {
-	Gateway     string          `json:"gateway"`
-	Lease       gwvpn.LeaseWire `json:"lease"`
-	Session     Session         `json:"session"`
-	ConnectedAt time.Time       `json:"connected_at"`
+	Gateway string          `json:"gateway"`
+	Lease   gwvpn.LeaseWire `json:"lease"`
+	Session Session         `json:"session"`
+	// Factor is the person factor connect presented; a renewal presents
+	// it again.
+	Factor      gwvpn.PersonFactorKind `json:"factor,omitempty"`
+	ConnectedAt time.Time              `json:"connected_at"`
 }
 
 // FileStateStore keeps the State in one JSON file, replaced atomically.

@@ -254,10 +254,12 @@ with `ErrDisklessUnavailable`. Every other node on the same media set, and
 any machine the manifest does not know, installs to its disk.
 
 `boot_model: diskless-nbd` is accepted on a Raspberry Pi only. The device
-script for that node's MACs adds `platform_boot_model=diskless-nbd` to the
-set's installer arguments, and the container runs the NBD export server
-([engineering](engineering.md#nbd-export-server-pkgbootstrapnbd)). The node
-side is not built yet: `bootstrap.yaml` has no field for the export server's
+script for that node's MACs adds `platform_boot_model=diskless-nbd` and
+`platform_nbd_server=<host>:<port>` (the export server's listen address, a
+wildcard host replaced by the DHCP server IP) to the set's installer
+arguments, and the container runs the NBD export server
+([engineering](engineering.md#nbd-export-server-pkgbootstrapnbd)). The node's
+attach is not built yet: `bootstrap.yaml` has no field for the export server's
 volume size, certificate or CA bundle, so the container refuses to start, and
 the installer refuses the model rather than installing to the card.
 

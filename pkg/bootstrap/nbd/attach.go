@@ -22,6 +22,8 @@ import (
 	"io"
 	"net"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
 // remoteAlertOp is the net.OpError operation crypto/tls reports for an alert
@@ -59,6 +61,33 @@ func (c *ClientConfig) Validate() error {
 		return ErrInvalidConfig{Field: "HandshakeTimeout", Reason: "must not be negative"}
 	}
 	return nil
+}
+
+// NewClientConfig builds a diskless-nbd node's ClientConfig from the server
+// address on its signed command line, the platform anchor the image carries
+// and its IDevID certificate. The server's certificate must carry the
+// address's host; the handshake timeout is the default.
+func NewClientConfig(ctx context.Context, server ServerAddr, anchor *trust.Anchor, idevid tls.Certificate) (ClientConfig, error) {
+	if err := server.Validate(); err != nil {
+		return ClientConfig{}, err
+	}
+	if anchor == nil {
+		return ClientConfig{}, ErrInvalidConfig{Field: "RootCAs", Reason: "the platform anchor is required"}
+	}
+	roots, err := anchor.CAPool(ctx)
+	if err != nil {
+		return ClientConfig{}, ErrTrustAnchor{Cause: err}
+	}
+	cfg := ClientConfig{
+		Certificate:      idevid,
+		RootCAs:          roots,
+		ServerName:       server.Host,
+		HandshakeTimeout: DefaultHandshakeTimeout,
+	}
+	if err := cfg.Validate(); err != nil {
+		return ClientConfig{}, err
+	}
+	return cfg, nil
 }
 
 // tlsConfig is TLS 1.3 only, presenting the IDevID and verifying the server

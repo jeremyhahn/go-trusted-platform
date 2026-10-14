@@ -26,3 +26,14 @@ func (e *WrappedError) Error() string {
 
 // Unwrap returns the underlying error.
 func (e *WrappedError) Unwrap() error { return e.Err }
+
+// ErrForegroundRequired is returned when connect asks for a data plane whose
+// tunnel lives only as long as the command, without --foreground.
+type ErrForegroundRequired struct {
+	DataPlane string
+}
+
+// Error implements the error interface.
+func (e *ErrForegroundRequired) Error() string {
+	return "the " + e.DataPlane + " data plane lives only as long as the command: add --foreground"
+}

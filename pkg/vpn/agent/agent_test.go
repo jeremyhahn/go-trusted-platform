@@ -34,12 +34,13 @@ type errFake struct{ what string }
 func (e *errFake) Error() string { return e.what + " failed" }
 
 type fakeDevice struct {
+	id       string
 	cert     tls.Certificate
 	certErr  error
 	quoteErr error
 }
 
-func (d *fakeDevice) ID() string { return "laptop-1" }
+func (d *fakeDevice) ID() string { return d.id }
 
 func (d *fakeDevice) Certificate() (tls.Certificate, error) { return d.cert, d.certErr }
 
@@ -133,6 +134,25 @@ type fakeGateway struct {
 	// revokeDeadline records the last revoke's context deadline; zero when it
 	// had none.
 	revokeDeadline time.Time
+	// renewQueue answers renewals in order; once empty a renewal fails
+	// without a refusal, as an unreachable gateway does.
+	renewQueue []renewal
+	renewedIDs []gwvpn.LeaseID
+	renewReqs  []*gwvpn.AdmissionRequestWire
+}
+
+type renewal struct {
+	lease *gwvpn.LeaseWire
+	err   error
+}
+
+// renewedLease is testState's lease after n renewals, an hour apart.
+func renewedLease(n int64) *gwvpn.LeaseWire {
+	lease := testState().Lease
+	lease.RenewAtUnix += n * 3600
+	lease.ExpiresAtUnix += n * 3600
+	lease.Renewals = int(n)
+	return &lease
 }
 
 func (g *fakeGateway) Challenge(context.Context) (*gwvpn.ChallengeWire, error) {
@@ -151,6 +171,17 @@ func (g *fakeGateway) Admit(_ context.Context, req *gwvpn.AdmissionRequestWire) 
 		return g.lease, nil
 	}
 	return &gwvpn.LeaseWire{ID: "l-1", DeviceID: req.DeviceID, Address: "10.8.0.2/32", DataPlane: req.DataPlane}, nil
+}
+
+func (g *fakeGateway) Renew(_ context.Context, id gwvpn.LeaseID, req *gwvpn.AdmissionRequestWire) (*gwvpn.LeaseWire, error) {
+	g.renewedIDs = append(g.renewedIDs, id)
+	g.renewReqs = append(g.renewReqs, req)
+	if len(g.renewQueue) == 0 {
+		return nil, &ErrGatewayUnreachable{Gateway: "gw.example:4433", Cause: &errFake{"dial"}}
+	}
+	next := g.renewQueue[0]
+	g.renewQueue = g.renewQueue[1:]
+	return next.lease, next.err
 }
 
 func (g *fakeGateway) Revoke(ctx context.Context, id gwvpn.LeaseID) error {
@@ -201,11 +232,17 @@ type fixture struct {
 	state   *memState
 	dialErr error
 	dialed  []string
+	now     time.Time
+	waits   []time.Duration
+	// onWait runs at each wait KeepAlive starts, numbered from 1; when it
+	// returns false the wait never fires.
+	onWait func(n int) bool
 }
 
 func newFixture(t *testing.T) *fixture {
 	return &fixture{
-		device:  &fakeDevice{cert: deviceCertificate(t, "laptop-1")},
+		now:     time.Unix(1760300000, 0),
+		device:  &fakeDevice{id: "laptop-1", cert: deviceCertificate(t, "laptop-1")},
 		posture: &fakePosture{},
 		factors: &fakeFactors{},
 		masque:  &fakePlane{kind: gwvpn.DataPlaneMASQUE},
@@ -227,10 +264,24 @@ func (f *fixture) agent(t *testing.T) *Agent {
 			f.dialed = append(f.dialed, addr+" as "+cert.Leaf.Subject.CommonName)
 			return f.gateway, f.dialErr
 		},
-		Now: func() time.Time { return time.Unix(1760300000, 0) },
+		Now:   func() time.Time { return f.now },
+		After: f.after,
 	})
 	require.NoError(t, err)
 	return a
+}
+
+// after moves the fixture's clock on by d and fires at once, so KeepAlive
+// runs its whole schedule without waiting.
+func (f *fixture) after(d time.Duration) <-chan time.Time {
+	f.waits = append(f.waits, d)
+	if f.onWait != nil && !f.onWait(len(f.waits)) {
+		return nil
+	}
+	f.now = f.now.Add(d)
+	fired := make(chan time.Time, 1)
+	fired <- f.now
+	return fired
 }
 
 var connectOpts = ConnectOptions{Gateway: "gw.example:4433", Factor: gwvpn.PersonFactorFIDO2, Zones: []string{"management"}}
@@ -322,10 +373,14 @@ func TestConnect_RefusesBadOptionsBeforeContactingTheGateway(t *testing.T) {
 	}{
 		{"no gateway", ConnectOptions{}, "gateway"},
 		{"unknown factor", ConnectOptions{Gateway: "gw:1", Factor: "totp"}, "factor"},
+		{"no device id", ConnectOptions{Gateway: "gw:1"}, "device id"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newFixture(t)
+			if tt.field == "device id" {
+				f.device.id = ""
+			}
 			_, err := f.agent(t).Connect(context.Background(), tt.opts)
 			var invalid *ErrInvalidOptions
 			require.ErrorAs(t, err, &invalid)
@@ -666,6 +721,264 @@ func TestLease_WithoutALeaseIsNotConnected(t *testing.T) {
 	assert.Equal(t, ExitNotConnected, ExitCode(err))
 }
 
+func TestPosture_ReturnsTheReportConnectSends(t *testing.T) {
+	f := newFixture(t)
+
+	report, err := f.agent(t).Posture(context.Background())
+
+	require.NoError(t, err)
+	assert.True(t, report.FDE.RootEncrypted)
+	assert.Equal(t, "test", report.AgentVersion)
+	assert.Empty(t, f.dialed)
+}
+
+func TestPosture_CollectionFailureIsEvidence(t *testing.T) {
+	f := newFixture(t)
+	f.posture.err = &errFake{"posture"}
+
+	_, err := f.agent(t).Posture(context.Background())
+
+	var evidence *ErrEvidence
+	require.ErrorAs(t, err, &evidence)
+	assert.Equal(t, "posture", evidence.Step)
+	assert.Equal(t, ExitFailure, ExitCode(err))
+}
+
+func TestRenew_PresentsFreshEvidenceForTheHeldLease(t *testing.T) {
+	f := newFixture(t)
+	f.state.st = testState()
+	f.state.st.Factor = gwvpn.PersonFactorFIDO2
+	f.state.st.Lease.Zones = []string{"management"}
+	f.gateway.renewQueue = []renewal{{lease: renewedLease(1)}}
+
+	st, err := f.agent(t).Renew(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, []gwvpn.LeaseID{"l-1"}, f.gateway.renewedIDs)
+	req := f.gateway.renewReqs[0]
+	assert.Equal(t, "laptop-1", req.DeviceID)
+	assert.Equal(t, []byte("quote:nonce-1"), req.Attestation.Quote, "a fresh quote over the renewal's nonce")
+	assert.True(t, req.Posture.FDE.RootEncrypted)
+	assert.Equal(t, gwvpn.PersonFactorFIDO2, req.PersonFactor.Kind, "the factor connect presented signs again")
+	assert.Equal(t, gwvpn.DataPlaneMASQUE, req.DataPlane)
+	assert.Equal(t, []string{"management"}, req.Zones)
+	assert.Equal(t, 1, st.Lease.Renewals)
+	assert.Equal(t, renewedLease(1).ExpiresAtUnix, f.state.st.Lease.ExpiresAtUnix, "the renewed lease is saved")
+	assert.Empty(t, f.masque.down)
+}
+
+func TestRenew_WithoutALeaseIsNotConnected(t *testing.T) {
+	_, err := newFixture(t).agent(t).Renew(context.Background())
+	assert.Equal(t, ExitNotConnected, ExitCode(err))
+}
+
+func TestRenew_ARefusalThatEndsTheLeaseTearsItDown(t *testing.T) {
+	f := newFixture(t)
+	f.state.st = testState()
+	f.gateway.renewQueue = []renewal{{err: &RefusedError{Status: http.StatusForbidden, Class: gwvpn.RefusalPostureViolation, Rules: []string{"fde"}}}}
+
+	_, err := f.agent(t).Renew(context.Background())
+
+	assert.Equal(t, ExitPostureViolation, ExitCode(err))
+	assert.Equal(t, []Session{{Interface: "vpn0"}}, f.masque.down)
+	assert.Equal(t, []gwvpn.LeaseID{"l-1"}, f.gateway.revoked)
+	assert.Nil(t, f.state.st)
+}
+
+func TestRenew_ARefusalThatKeepsTheLeaseLeavesItUp(t *testing.T) {
+	for name, refusal := range map[string]*RefusedError{
+		"renewal-not-open": {Status: http.StatusConflict, Class: gwvpn.RefusalRenewalNotOpen},
+		"nonce-unknown":    {Status: http.StatusForbidden, Class: gwvpn.RefusalNonceUnknown},
+		"unavailable":      {Status: http.StatusServiceUnavailable, Class: gwvpn.RefusalLeaseStoreUnavailable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			f.state.st = testState()
+			f.gateway.renewQueue = []renewal{{err: refusal}}
+
+			_, err := f.agent(t).Renew(context.Background())
+
+			assert.Equal(t, ExitRefused, ExitCode(err))
+			assert.Empty(t, f.masque.down)
+			assert.Empty(t, f.gateway.revoked)
+			assert.Equal(t, testState(), f.state.st)
+		})
+	}
+}
+
+func TestRenew_ReportsAFailedTeardownWithTheRefusalsCode(t *testing.T) {
+	f := newFixture(t)
+	f.state.st = testState()
+	f.masque.downErr = &errFake{"ip link del"}
+	f.gateway.renewQueue = []renewal{{err: &RefusedError{Status: http.StatusForbidden, Class: gwvpn.RefusalPostureViolation}}}
+
+	_, err := f.agent(t).Renew(context.Background())
+
+	var rollback *ErrRollback
+	require.ErrorAs(t, err, &rollback)
+	assert.Equal(t, ExitPostureViolation, ExitCode(err))
+}
+
+func TestRenew_RejectsARenewalOfAnotherLease(t *testing.T) {
+	f := newFixture(t)
+	f.state.st = testState()
+	other := renewedLease(1)
+	other.ID = "l-2"
+	f.gateway.renewQueue = []renewal{{lease: other}}
+
+	_, err := f.agent(t).Renew(context.Background())
+
+	var invalid *ErrInvalidResponse
+	require.ErrorAs(t, err, &invalid)
+	assert.Equal(t, testState(), f.state.st, "the held lease is kept")
+}
+
+func TestRenew_KeepsTheLeaseWhenTheEvidenceFails(t *testing.T) {
+	f := newFixture(t)
+	f.state.st = testState()
+	f.device.quoteErr = &errFake{"tpm2_quote"}
+
+	_, err := f.agent(t).Renew(context.Background())
+
+	var evidence *ErrEvidence
+	require.ErrorAs(t, err, &evidence)
+	assert.Equal(t, "quote", evidence.Step)
+	assert.Empty(t, f.gateway.renewedIDs)
+	assert.NotNil(t, f.state.st)
+}
+
+func TestRenew_ReportsARenewalThatCannotBeSaved(t *testing.T) {
+	f := newFixture(t)
+	f.state.st = testState()
+	f.state.saveErr = &ErrStateStore{Op: "save", Cause: &errFake{"write"}}
+	f.gateway.renewQueue = []renewal{{lease: renewedLease(1)}}
+
+	_, err := f.agent(t).Renew(context.Background())
+
+	assert.ErrorIs(t, err, f.state.saveErr)
+}
+
+func TestEndsLease_OnlyARefusalThatCannotBeRetried(t *testing.T) {
+	cases := map[string]struct {
+		err  error
+		ends bool
+	}{
+		"posture violation": {&RefusedError{Status: http.StatusForbidden, Class: gwvpn.RefusalPostureViolation}, true},
+		"lease expired":     {&RefusedError{Status: http.StatusGone, Class: gwvpn.RefusalLeaseExpired}, true},
+		"renewal not open":  {&RefusedError{Status: http.StatusConflict, Class: gwvpn.RefusalRenewalNotOpen}, false},
+		"unavailable":       {&RefusedError{Status: http.StatusServiceUnavailable, Class: gwvpn.RefusalPostureUnavailable}, false},
+		"unreachable":       {&ErrGatewayUnreachable{Gateway: "gw", Cause: &errFake{"dial"}}, false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.ends, endsLease(tc.err))
+		})
+	}
+}
+
+func TestKeepAlive_RenewsEachTimeTheWindowOpensUntilCancelled(t *testing.T) {
+	f := newFixture(t)
+	f.state.st = testState()
+	f.gateway.renewQueue = []renewal{{lease: renewedLease(1)}, {lease: renewedLease(2)}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.onWait = func(n int) bool {
+		if n == 3 {
+			cancel()
+			return false
+		}
+		return true
+	}
+
+	err := f.agent(t).KeepAlive(ctx)
+
+	require.NoError(t, err)
+	assert.Equal(t, []time.Duration{25200 * time.Second, time.Hour, time.Hour}, f.waits, "each wait ends when the lease's renewal opens")
+	assert.Equal(t, []gwvpn.LeaseID{"l-1", "l-1"}, f.gateway.renewedIDs)
+	assert.Equal(t, 2, f.state.st.Lease.Renewals)
+	assert.Empty(t, f.masque.down)
+}
+
+func TestKeepAlive_ARefusalTearsDownAndReturnsItsCode(t *testing.T) {
+	f := newFixture(t)
+	f.state.st = testState()
+	f.gateway.renewQueue = []renewal{{err: &RefusedError{Status: http.StatusForbidden, Class: gwvpn.RefusalPostureViolation, Rules: []string{"ima"}}}}
+
+	err := f.agent(t).KeepAlive(context.Background())
+
+	assert.Equal(t, ExitPostureViolation, ExitCode(err))
+	assert.Len(t, f.masque.down, 1)
+	assert.Nil(t, f.state.st)
+}
+
+func TestKeepAlive_RetriesAFailedRenewal(t *testing.T) {
+	f := newFixture(t)
+	f.state.st = testState()
+	f.gateway.renewQueue = []renewal{
+		{err: &RefusedError{Status: http.StatusServiceUnavailable, Class: gwvpn.RefusalLeaseStoreUnavailable}},
+		{lease: renewedLease(1)},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.onWait = func(n int) bool {
+		if n == 3 {
+			cancel()
+			return false
+		}
+		return true
+	}
+
+	err := f.agent(t).KeepAlive(ctx)
+
+	require.NoError(t, err)
+	require.Len(t, f.waits, 3)
+	assert.Equal(t, renewRetry, f.waits[1])
+	assert.Equal(t, 1, f.state.st.Lease.Renewals)
+}
+
+func TestKeepAlive_ALeaseThatExpiresUnrenewedLapses(t *testing.T) {
+	f := newFixture(t)
+	f.state.st = testState()
+	f.state.st.Lease.ExpiresAtUnix = f.state.st.Lease.RenewAtUnix + 45
+
+	err := f.agent(t).KeepAlive(context.Background())
+
+	var lapsed *ErrLeaseLapsed
+	require.ErrorAs(t, err, &lapsed)
+	assert.Equal(t, gwvpn.LeaseID("l-1"), lapsed.LeaseID)
+	assert.Equal(t, ExitFailure, ExitCode(err))
+	assert.Equal(t, []time.Duration{25200 * time.Second, renewRetry, 15 * time.Second}, f.waits, "the last retry waits only until expiry")
+	assert.Len(t, f.masque.down, 1)
+	assert.Nil(t, f.state.st)
+}
+
+func TestKeepAlive_StopsWhenTheLeaseIsForgotten(t *testing.T) {
+	f := newFixture(t)
+	f.state.st = testState()
+	f.onWait = func(int) bool {
+		f.state.st = nil
+		return true
+	}
+
+	err := f.agent(t).KeepAlive(context.Background())
+
+	assert.Equal(t, ExitNotConnected, ExitCode(err))
+	assert.Empty(t, f.gateway.renewedIDs)
+}
+
+func TestKeepAlive_WithoutALeaseIsNotConnected(t *testing.T) {
+	err := newFixture(t).agent(t).KeepAlive(context.Background())
+	assert.Equal(t, ExitNotConnected, ExitCode(err))
+}
+
+func TestErrLeaseLapsed_NamesTheLeaseAndUnwrapsToTheCause(t *testing.T) {
+	cause := &errFake{"dial"}
+	err := &ErrLeaseLapsed{LeaseID: "l-1", Cause: cause}
+
+	assert.Equal(t, "lease l-1 expired before it could be renewed: dial failed", err.Error())
+	assert.ErrorIs(t, err, cause)
+}
+
 func TestNew_RequiresEveryCollaborator(t *testing.T) {
 	f := newFixture(t)
 	full := Deps{Device: f.device, Posture: f.posture, DataPlanes: []DataPlane{f.masque}, State: f.state,
@@ -674,11 +987,9 @@ func TestNew_RequiresEveryCollaborator(t *testing.T) {
 		field string
 		strip func(d *Deps)
 	}{
-		{"device", func(d *Deps) { d.Device = nil }},
 		{"posture source", func(d *Deps) { d.Posture = nil }},
 		{"state store", func(d *Deps) { d.State = nil }},
 		{"gateway dialer", func(d *Deps) { d.Dial = nil }},
-		{"data planes", func(d *Deps) { d.DataPlanes = nil }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.field, func(t *testing.T) {
@@ -692,4 +1003,31 @@ func TestNew_RequiresEveryCollaborator(t *testing.T) {
 	}
 	_, err := New(full)
 	assert.NoError(t, err, "Factors and Now are optional")
+}
+
+func TestNew_WithoutDeviceOrDataPlanesStillReadsTheLease(t *testing.T) {
+	f := newFixture(t)
+	f.state.st = testState()
+	a, err := New(Deps{Posture: f.posture, State: f.state,
+		Dial: func(string, tls.Certificate) (Gateway, error) { return f.gateway, nil }})
+	require.NoError(t, err)
+
+	st, err := a.Lease()
+	require.NoError(t, err)
+	assert.Equal(t, testState().Lease.ID, st.Lease.ID)
+}
+
+func TestConnect_WithoutDeviceRefusesBeforeContactingTheGateway(t *testing.T) {
+	f := newFixture(t)
+	dialed := false
+	a, err := New(Deps{Posture: f.posture, State: f.state, DataPlanes: []DataPlane{f.masque},
+		Dial: func(string, tls.Certificate) (Gateway, error) { dialed = true; return f.gateway, nil }})
+	require.NoError(t, err)
+
+	_, err = a.Connect(context.Background(), ConnectOptions{Gateway: "gw.example:4433"})
+	var noDevice *ErrNoDevice
+	require.ErrorAs(t, err, &noDevice)
+	assert.False(t, dialed, "no gateway is dialled without a device identity")
+	assert.Nil(t, f.state.st, "nothing is saved")
+	assert.Equal(t, ExitFailure, ExitCode(err))
 }

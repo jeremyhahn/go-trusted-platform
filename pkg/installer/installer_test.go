@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/nbd"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/disklessroot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -751,4 +753,19 @@ func TestHostUKICmdlineParamsCarriesOnlyTheDebugSink(t *testing.T) {
 		"the live command line never names a root")
 	assert.Empty(t, hostUKICmdlineParams(live, false))
 	assert.Equal(t, []string{"platform_debug=1"}, hostUKICmdlineParams("BOOT_IMAGE=/vmlinuz-lts", true))
+}
+
+// A diskless-nbd node's NBD server address reaches the signed UKI only as a
+// signed value, never from the live command line the boot server wrote.
+func TestHostUKICmdlineParamsDropsTheNBDServer(t *testing.T) {
+	live := strings.Join([]string{
+		"BOOT_IMAGE=/vmlinuz-lts",
+		"platform_debug_sink=192.0.2.10:514",
+		disklessroot.ParamBootModel + "=" + nbd.BootModel,
+		nbd.ParamServer + "=192.0.2.66:10809",
+	}, " ")
+
+	assert.Equal(t, []string{"platform_debug=1", "platform_debug_sink=192.0.2.10:514"}, hostUKICmdlineParams(live, true),
+		"the live command line never names the NBD server")
+	assert.Empty(t, hostUKICmdlineParams(live, false))
 }

@@ -210,7 +210,9 @@ other model, `diskless`, is unchanged.
   A command that fails is answered with an NBD error code. Only a malformed
   request (a bad magic or a truncated payload) closes the connection.
 
-The node's negotiation is built in the same package (`nbd.Attach`). Its use
+The node's negotiation (`nbd.Attach`), its `platform_nbd_server` reader
+(`nbd.ServerFromCmdline`) and its client configuration (`nbd.NewClientConfig`)
+are built in the same package. Their use
 (the attach in `platform-initrd` and the installer's `nbd` target) is
 **Planned**; see [installer architecture](../installer/architecture.md#2-the-shape-chosen).
 The container's listen address, volume directory, volume size, platform CA
@@ -220,7 +222,9 @@ bundle and server certificate come from its configuration (pxeboot flags,
 The listener binds before the device-script port, so the deploy gate's
 readiness probe covers it.
 `bootstrap.yaml` accepts `boot_model: diskless-nbd` on a Raspberry Pi, and the
-node's device script then carries `platform_boot_model=diskless-nbd`. The
+node's device script then carries `platform_boot_model=diskless-nbd` and
+`platform_nbd_server`, the export server's address on the provisioning
+segment. The
 deployer does not yet give the container the export server's settings, so a
 deploy that names such a node fails closed when the container starts. The
 server lives as long as the container does, so the Phase 7 teardown stops it.

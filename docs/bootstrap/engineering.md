@@ -266,11 +266,17 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error
 func (s *Server) Close() error
 
 func Attach(ctx context.Context, conn net.Conn, cfg ClientConfig) (*Export, error)
+func ServerFromCmdline(cmdline string) (ServerAddr, bool, error)
+func NewClientConfig(ctx context.Context, server ServerAddr, anchor *trust.Anchor, idevid tls.Certificate) (ClientConfig, error)
 ```
 
 `Attach` is the node's side of the negotiation below. It is specified with the
 node contract in [installer engineering](../installer/engineering.md), and its
 refusals are `ErrServerRefused`, `ErrTLSHandshake` and `ErrProtocol`.
+`ServerFromCmdline` reads `platform_nbd_server`
+([kernel-cmdline §4](../reference/kernel-cmdline.md#nbd-root-parameter)) and
+refuses with `ErrCmdline`; `NewClientConfig` builds `Attach`'s configuration
+from it. Nothing calls either yet.
 
 `Config` holds the following fields:
 
@@ -374,8 +380,13 @@ the export server.
 (`BootModelDisklessNBD`, in `validPiBootModels`); a generic node is refused
 with `ErrInvalidNodePlatform` on `boot_model`. The model reaches the
 container manifest per MAC, and `nodeBootArgs` adds
-`platform_boot_model=diskless-nbd` to the set's installer arguments. The set
-needs no diskless root. The deployer does not set the `BOOTSTRAP_NBD_*`
+`platform_boot_model=diskless-nbd` and `platform_nbd_server=<host>:<port>` to
+the set's installer arguments. The address is `NBDConfig.ListenAddr`; an empty
+or wildcard host (`:10809`, `0.0.0.0`, `::`) becomes the DHCP server IP, the
+container's address on the provisioning segment. When no dialable address
+follows, the node's device script fails with `ErrNBDServerAddress`. The
+export's identity is not on the line: the server takes it from the verified
+IDevID. The set needs no diskless root. The deployer does not set the `BOOTSTRAP_NBD_*`
 variables yet: the volume size, the server certificate and the CA bundle have
 no `bootstrap.yaml` source. Until they do, a deploy whose manifest names a
 `diskless-nbd` node fails closed when the container starts, with
@@ -891,7 +902,7 @@ rather than silently ignored.
 | `nodes[].model` | string | — | **Required** for `raspberrypi`: `rpi4`, `rpi400`, `cm4`, `rpi3b+`, `rpi5` (`rpinetboot.Models`) |
 | `nodes[].architecture` | string | `aarch64` for a Pi, else `x86_64` | `x86_64` or `aarch64`; a Pi must be `aarch64` (`EffectiveArchitecture`) |
 | `nodes[].serial` | string | — | Pi only: up to eight hex digits, the bootloader's serial; names the node's per-device TFTP directory |
-| `nodes[].boot_model` | string | `sd` for a Pi, empty for a generic server | `sd` for Pi SD-card install, or `diskless` for a stateless node whose root comes from the media set's squashfs+verity artifacts; carried per MAC in the container manifest, and its device script adds `platform_boot_model=diskless` (`ErrDisklessUnavailable` when the set has no diskless root); or, on a Pi only, `diskless-nbd` for a root exported by the boot server over NBD-over-TLS, whose device script adds `platform_boot_model=diskless-nbd` to the set's installer arguments |
+| `nodes[].boot_model` | string | `sd` for a Pi, empty for a generic server | `sd` for Pi SD-card install, or `diskless` for a stateless node whose root comes from the media set's squashfs+verity artifacts; carried per MAC in the container manifest, and its device script adds `platform_boot_model=diskless` (`ErrDisklessUnavailable` when the set has no diskless root); or, on a Pi only, `diskless-nbd` for a root exported by the boot server over NBD-over-TLS, whose device script adds `platform_boot_model=diskless-nbd` and `platform_nbd_server` (the export server's address; `ErrNBDServerAddress` when none is dialable) to the set's installer arguments |
 | `nodes[].interfaces` | list | — | Authoritative for `network.interfaces` |
 | `nodes[].overrides`, `nodes[].overrides_file` | map / path | — | File merged first, inline wins |
 | `nodes[].switch_port` | string | — | Recorded for operator verification. There is no post-enrollment port move: a hypervisor trunk's native VLAN is provisioning |

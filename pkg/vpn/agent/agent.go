@@ -24,6 +24,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"net/http"
 	"slices"
 	"time"
 
@@ -67,6 +68,9 @@ type DataPlane interface {
 type Gateway interface {
 	Challenge(ctx context.Context) (*gwvpn.ChallengeWire, error)
 	Admit(ctx context.Context, req *gwvpn.AdmissionRequestWire) (*gwvpn.LeaseWire, error)
+	// Renew presents fresh evidence for lease id. The request carries the
+	// evidence fields of an admission; the lease keeps its plane and zones.
+	Renew(ctx context.Context, id gwvpn.LeaseID, req *gwvpn.AdmissionRequestWire) (*gwvpn.LeaseWire, error)
 	Revoke(ctx context.Context, id gwvpn.LeaseID) error
 }
 
@@ -91,6 +95,8 @@ type Deps struct {
 	State      StateStore
 	Dial       GatewayDialer
 	Now        func() time.Time
+	// After is the timer KeepAlive waits on; nil is time.After.
+	After func(d time.Duration) <-chan time.Time
 }
 
 // ConnectOptions are the connect verb's flags.
@@ -123,17 +129,18 @@ var knownFactors = map[gwvpn.PersonFactorKind]bool{
 	gwvpn.PersonFactorPIV:   true,
 }
 
-// New returns an agent over deps.
+// New returns an agent over deps. Device and DataPlanes are optional so a
+// host without them can still read its lease: Connect and Disconnect then
+// fail with ErrNoDevice, and a lease on a missing data plane with
+// ErrDataPlaneUnsupported.
 func New(deps Deps) (*Agent, error) {
 	required := []struct {
 		name    string
 		missing bool
 	}{
-		{"device", deps.Device == nil},
 		{"posture source", deps.Posture == nil},
 		{"state store", deps.State == nil},
 		{"gateway dialer", deps.Dial == nil},
-		{"data planes", len(deps.DataPlanes) == 0},
 	}
 	for _, r := range required {
 		if r.missing {
@@ -142,6 +149,9 @@ func New(deps Deps) (*Agent, error) {
 	}
 	if deps.Now == nil {
 		deps.Now = time.Now
+	}
+	if deps.After == nil {
+		deps.After = time.After
 	}
 	planes := make(map[gwvpn.DataPlaneKind]DataPlane, len(deps.DataPlanes))
 	for _, p := range deps.DataPlanes {
@@ -166,6 +176,9 @@ func (a *Agent) Connect(ctx context.Context, opts ConnectOptions) (*State, error
 	}
 	if err := a.ensureDisconnected(); err != nil {
 		return nil, err
+	}
+	if a.deps.Device != nil && a.deps.Device.ID() == "" {
+		return nil, &ErrInvalidOptions{Field: "device id", Reason: "required to connect"}
 	}
 	gw, err := a.dial(opts.Gateway)
 	if err != nil {
@@ -195,7 +208,7 @@ func (a *Agent) Connect(ctx context.Context, opts ConnectOptions) (*State, error
 	if err != nil {
 		return nil, a.revokeAfter(ctx, gw, lease.ID, &ErrDataPlane{Op: "up", Kind: plane.Kind(), Cause: err}, nil)
 	}
-	st := &State{Gateway: opts.Gateway, Lease: *lease, Session: session, ConnectedAt: a.deps.Now().UTC()}
+	st := &State{Gateway: opts.Gateway, Lease: *lease, Session: session, Factor: opts.Factor, ConnectedAt: a.deps.Now().UTC()}
 	if err := a.deps.State.Save(st); err != nil {
 		teardown := func(undoCtx context.Context) error { return down(undoCtx, plane, session) }
 		return nil, a.revokeAfter(ctx, gw, lease.ID, err, teardown)
@@ -212,26 +225,153 @@ func (a *Agent) Disconnect(ctx context.Context) (*State, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := a.endLease(ctx, st); err != nil {
+		return nil, err
+	}
+	return st, nil
+}
+
+// Renew presents fresh evidence for the held lease now and saves the renewed
+// lease. A refusal that ends the lease tears the data plane down and forgets
+// the lease; a refusal that leaves it standing (renewal-not-open,
+// nonce-unknown, or the gateway unavailable) and every other failure keep it.
+func (a *Agent) Renew(ctx context.Context) (*State, error) {
+	st, err := a.deps.State.Load()
+	if err != nil {
+		return nil, err
+	}
+	lease, err := a.renewLease(ctx, st)
+	if endsLease(err) {
+		if teardown := a.endLease(ctx, st); teardown != nil {
+			return nil, &ErrRollback{Cause: err, Rollback: teardown}
+		}
+		return nil, err
+	}
+	if err != nil {
+		return nil, err
+	}
+	st.Lease = *lease
+	if err := a.deps.State.Save(st); err != nil {
+		return nil, err
+	}
+	return st, nil
+}
+
+// renewLease asks st's gateway to renew its lease over a fresh challenge.
+func (a *Agent) renewLease(ctx context.Context, st *State) (*gwvpn.LeaseWire, error) {
+	gw, err := a.dial(st.Gateway)
+	if err != nil {
+		return nil, err
+	}
+	challenge, err := gw.Challenge(ctx)
+	if err != nil {
+		return nil, err
+	}
+	req, err := a.evidence(ctx, st.Factor, challenge.Nonce)
+	if err != nil {
+		return nil, err
+	}
+	req.DeviceID = st.Lease.DeviceID
+	req.DataPlane = st.Lease.DataPlane
+	req.Zones = st.Lease.Zones
+	lease, err := gw.Renew(ctx, st.Lease.ID, req)
+	if err != nil {
+		return nil, err
+	}
+	if lease.ID != st.Lease.ID || lease.DataPlane != st.Lease.DataPlane {
+		return nil, &ErrInvalidResponse{Gateway: st.Gateway, Reason: "renewal returned another lease or data plane"}
+	}
+	return lease, nil
+}
+
+// renewRetry is how long KeepAlive waits after a renewal that failed without
+// ending the lease, unless the lease expires first.
+const renewRetry = 30 * time.Second
+
+// KeepAlive renews the held lease each time its renewal opens until ctx is
+// cancelled, which returns nil. A refusal that ends the lease returns with the
+// data plane down and the lease forgotten, as Renew does; any other failed
+// renewal is retried until the lease expires, which ends it with
+// ErrLeaseLapsed.
+func (a *Agent) KeepAlive(ctx context.Context) error {
+	st, err := a.deps.State.Load()
+	if err != nil {
+		return err
+	}
+	next := time.Unix(st.Lease.RenewAtUnix, 0)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-a.deps.After(next.Sub(a.deps.Now())):
+		}
+		renewed, err := a.Renew(ctx)
+		switch {
+		case ctx.Err() != nil:
+			return nil
+		case err == nil:
+			st = renewed
+			next = time.Unix(st.Lease.RenewAtUnix, 0)
+		case endsLease(err), errors.As(err, new(*ErrNotConnected)):
+			return err
+		default:
+			if next, err = a.retryAt(ctx, st, err); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// retryAt schedules another renewal after one failed with cause, or ends the
+// lease with ErrLeaseLapsed once it has expired.
+func (a *Agent) retryAt(ctx context.Context, st *State, cause error) (time.Time, error) {
+	expires := time.Unix(st.Lease.ExpiresAtUnix, 0)
+	now := a.deps.Now()
+	if !now.Before(expires) {
+		lapsed := &ErrLeaseLapsed{LeaseID: st.Lease.ID, Cause: cause}
+		if teardown := a.endLease(ctx, st); teardown != nil {
+			return time.Time{}, &ErrRollback{Cause: lapsed, Rollback: teardown}
+		}
+		return time.Time{}, lapsed
+	}
+	retry := now.Add(renewRetry)
+	if retry.After(expires) {
+		retry = expires
+	}
+	return retry, nil
+}
+
+// endLease revokes st's lease, brings its data plane down and forgets it. The
+// data plane comes down and the lease is forgotten even when the revocation
+// fails.
+func (a *Agent) endLease(ctx context.Context, st *State) error {
 	revokeErr := a.revoke(ctx, st)
 	plane, ok := a.planes[st.Lease.DataPlane]
 	if !ok {
-		return nil, errors.Join(revokeErr, &ErrDataPlaneUnsupported{Kind: st.Lease.DataPlane})
+		return errors.Join(revokeErr, &ErrDataPlaneUnsupported{Kind: st.Lease.DataPlane})
 	}
 	if err := down(ctx, plane, st.Session); err != nil {
-		return nil, errors.Join(revokeErr, err)
+		return errors.Join(revokeErr, err)
 	}
 	if err := a.deps.State.Remove(); err != nil {
-		return nil, errors.Join(revokeErr, err)
+		return errors.Join(revokeErr, err)
 	}
-	if revokeErr != nil {
-		return nil, revokeErr
-	}
-	return st, nil
+	return revokeErr
 }
 
 // Lease returns the held lease, or ErrNotConnected.
 func (a *Agent) Lease() (*State, error) {
 	return a.deps.State.Load()
+}
+
+// Posture collects the posture report Connect would send, without
+// contacting a gateway.
+func (a *Agent) Posture(ctx context.Context) (*gwvpn.PostureReport, error) {
+	report, err := a.deps.Posture.Collect(ctx)
+	if err != nil {
+		return nil, &ErrEvidence{Step: "posture", Cause: err}
+	}
+	return report, nil
 }
 
 // ensureDisconnected refuses a second connect while a lease is recorded.
@@ -250,6 +390,9 @@ func (a *Agent) ensureDisconnected() error {
 
 // dial opens the admission listener with the device's IDevID.
 func (a *Agent) dial(addr string) (Gateway, error) {
+	if a.deps.Device == nil {
+		return nil, &ErrNoDevice{}
+	}
 	cert, err := a.deps.Device.Certificate()
 	if err != nil {
 		return nil, &ErrEvidence{Step: "device certificate", Cause: err}
@@ -280,6 +423,24 @@ func (a *Agent) pickPlane(opts ConnectOptions, offered []gwvpn.DataPlaneKind) (D
 // admissionRequest collects the evidence, each piece bound to nonce where the
 // gateway verifies a binding.
 func (a *Agent) admissionRequest(ctx context.Context, opts ConnectOptions, nonce []byte, plane DataPlane) (*gwvpn.AdmissionRequestWire, error) {
+	req, err := a.evidence(ctx, opts.Factor, nonce)
+	if err != nil {
+		return nil, err
+	}
+	peer, err := plane.Prepare(ctx)
+	if err != nil {
+		return nil, &ErrDataPlane{Op: "prepare", Kind: plane.Kind(), Cause: err}
+	}
+	req.DataPlane = plane.Kind()
+	req.Peer = peer
+	req.Zones = opts.Zones
+	return req, nil
+}
+
+// evidence collects what an admission and a renewal both present over the
+// gateway's nonce: the device's quote, the posture report and, when factor
+// is set, the person factor's signature.
+func (a *Agent) evidence(ctx context.Context, factor gwvpn.PersonFactorKind, nonce []byte) (*gwvpn.AdmissionRequestWire, error) {
 	att, err := a.deps.Device.Quote(ctx, nonce)
 	if err != nil {
 		return nil, &ErrEvidence{Step: "quote", Cause: err}
@@ -288,25 +449,21 @@ func (a *Agent) admissionRequest(ctx context.Context, opts ConnectOptions, nonce
 	if err != nil {
 		return nil, &ErrEvidence{Step: "posture", Cause: err}
 	}
-	var factor *gwvpn.PersonFactor
-	if opts.Factor != "" {
-		if factor, err = a.deps.Factors.Sign(ctx, opts.Factor, nonce); err != nil {
+	var signed *gwvpn.PersonFactor
+	if factor != "" {
+		if a.deps.Factors == nil {
+			return nil, &ErrInvalidOptions{Field: "factor", Reason: "this host has no person factor signer"}
+		}
+		if signed, err = a.deps.Factors.Sign(ctx, factor, nonce); err != nil {
 			return nil, &ErrEvidence{Step: "person factor", Cause: err}
 		}
-	}
-	peer, err := plane.Prepare(ctx)
-	if err != nil {
-		return nil, &ErrDataPlane{Op: "prepare", Kind: plane.Kind(), Cause: err}
 	}
 	return &gwvpn.AdmissionRequestWire{
 		DeviceID:     a.deps.Device.ID(),
 		Nonce:        nonce,
 		Attestation:  gwvpn.AttestationFromHost(att),
 		Posture:      posture,
-		PersonFactor: gwvpn.PersonFactorToWire(factor),
-		DataPlane:    plane.Kind(),
-		Peer:         peer,
-		Zones:        opts.Zones,
+		PersonFactor: gwvpn.PersonFactorToWire(signed),
 	}, nil
 }
 
@@ -355,6 +512,24 @@ func down(ctx context.Context, plane DataPlane, session Session) error {
 var goneClasses = map[gwvpn.RefusalClass]bool{
 	gwvpn.RefusalLeaseNotFound: true,
 	gwvpn.RefusalLeaseExpired:  true,
+}
+
+// keptClasses are the renewal refusals that leave the lease standing: the
+// renewal window has not opened yet, or the gateway lost the nonce. A later
+// renewal can still succeed.
+var keptClasses = map[gwvpn.RefusalClass]bool{
+	gwvpn.RefusalRenewalNotOpen: true,
+	gwvpn.RefusalNonceUnknown:   true,
+}
+
+// endsLease reports whether err is a renewal refusal that ends the lease: any
+// refusal but a kept class or the gateway being unavailable.
+func endsLease(err error) bool {
+	var refused *RefusedError
+	if !errors.As(err, &refused) {
+		return false
+	}
+	return refused.Status != http.StatusServiceUnavailable && !keptClasses[refused.Class]
 }
 
 // revoke ends the held lease at its gateway, treating a lease the gateway no

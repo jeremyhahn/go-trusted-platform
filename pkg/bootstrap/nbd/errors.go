@@ -26,6 +26,17 @@ func (e ErrInvalidConfig) Error() string {
 	return fmt.Sprintf("nbd: invalid config %s: %s", e.Field, e.Reason)
 }
 
+// ErrCmdline refuses a kernel command line whose NBD parameter is missing,
+// repeated or malformed.
+type ErrCmdline struct {
+	Param  string
+	Reason string
+}
+
+func (e ErrCmdline) Error() string {
+	return fmt.Sprintf("nbd: kernel command line %s: %s", e.Param, e.Reason)
+}
+
 // ErrServeFailed is returned by Serve when the listener fails for a reason
 // other than shutdown.
 type ErrServeFailed struct {

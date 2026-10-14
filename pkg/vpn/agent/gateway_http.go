@@ -97,6 +97,15 @@ func (g *HTTPGateway) Admit(ctx context.Context, req *gwvpn.AdmissionRequestWire
 	return &lease, nil
 }
 
+// Renew presents fresh evidence for lease id and returns the renewed lease.
+func (g *HTTPGateway) Renew(ctx context.Context, id gwvpn.LeaseID, req *gwvpn.AdmissionRequestWire) (*gwvpn.LeaseWire, error) {
+	var lease gwvpn.LeaseWire
+	if err := g.do(ctx, http.MethodPost, gwvpn.LeaseRenewPath(id), req, &lease); err != nil {
+		return nil, err
+	}
+	return &lease, nil
+}
+
 // Revoke ends lease id.
 func (g *HTTPGateway) Revoke(ctx context.Context, id gwvpn.LeaseID) error {
 	return g.do(ctx, http.MethodDelete, gwvpn.LeasePath(id), nil, nil)

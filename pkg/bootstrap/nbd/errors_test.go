@@ -30,6 +30,7 @@ func TestErrors(t *testing.T) {
 		wrapsCause bool
 	}{
 		{ErrInvalidConfig{Field: "VolumeSize", Reason: "too small"}, []string{"VolumeSize", "too small"}, false},
+		{ErrCmdline{Param: ParamServer, Reason: "must be host:port"}, []string{ParamServer, "host:port"}, false},
 		{ErrServeFailed{Cause: cause}, []string{"serve failed"}, true},
 		{ErrUnsupportedClientFlags{Flags: 0x80}, []string{"0x80"}, false},
 		{ErrTLSRequired{Option: optGo}, []string{"option 7", "TLS is required"}, false},

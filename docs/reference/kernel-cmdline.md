@@ -33,6 +33,7 @@ For architectural context see:
 | `platform_verity_url` | Installer, from the signed media-set manifest | `platform-initrd` | HTTP(S) URL of the dm-verity hash tree for `platform_rootfs_url` |
 | `platform_roothash` | Signed UKI `.cmdline`, from the signed media-set manifest | `platform-initrd` | dm-verity SHA-256 root hash of the diskless root; Secure Boot and measured boot cover it |
 | `platform_verity_salt`, `platform_rootfs_size`, `platform_verity_size` | Signed UKI `.cmdline`, from the signed media-set manifest | `platform-initrd` | Pinned dm-verity salt and the exact byte sizes fetched; nothing is read from a superblock |
+| `platform_nbd_server` | Bootstrap server, on a `diskless-nbd` node's installer line; the node reads it from the signed UKI `.cmdline` only (§4, NBD root parameter) | `nbd.ServerFromCmdline`; nothing calls it yet | `host:port` of the boot server's NBD listener a `diskless-nbd` node attaches its root from |
 | `platform_autoinstall_debug` | Operator (manual) | `autoinstall.sh` | Enable `set -x` for verbose install trace |
 | `platform_server` | Nothing | Nothing | Server URL for interactive QR mode; no code sets or reads it (§3) |
 | `bootstrap_strategy` | `iso create --bootstrap-strategy`, iPXE script generator | Nothing (§3) | `dane`, `noise`, `spki`, or `auto` |
@@ -373,6 +374,30 @@ rejects a command line that names any of these keys twice.
 The names carry the `platform_` prefix because systemd's
 `systemd-veritysetup-generator` claims `roothash=` and would try to open a
 verity root of its own.
+
+### NBD root parameter
+
+`diskless-nbd` boot only. The node reads it from the **signed UKI
+`.cmdline`**, never from a live command line or an iPXE script.
+
+| Parameter | Meaning |
+|-----------|---------|
+| `platform_nbd_server=<host>:<port>` | The boot server's NBD listener on the provisioning segment. `host` is an IP address (IPv6 in brackets) or a DNS name, and is also the name the server's certificate must carry. The port is required: there is no default |
+
+`nbd.ServerFromCmdline` (`pkg/bootstrap/nbd/cmdline.go`) reads it only when
+`platform_boot_model=diskless-nbd`, and ignores it on any other line. On a
+`diskless-nbd` line it is required, may appear once, and a malformed value is
+refused with `nbd.ErrCmdline`; `platform_boot_model` may appear once on any
+line. Nothing calls the reader yet: `platform-initrd` does not attach an export
+(**Planned**, #689).
+
+The bootstrap server puts the address on the installer's command line for a
+`diskless-nbd` node (`nodeBootArgs`): the NBD listen address, with an empty or
+wildcard host replaced by the DHCP server IP. That line is the installer's
+input only. Writing the value into the signed UKI `.cmdline` is the installer's
+`nbd` target (**Planned**, #689); the installer's UKI command line carries no
+live-line parameter but the debug sink (`hostUKICmdlineParams`), so a live
+`platform_nbd_server` never reaches the node's boot.
 
 ---
 
