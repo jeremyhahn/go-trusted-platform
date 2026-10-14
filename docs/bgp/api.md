@@ -44,7 +44,13 @@ Request fields (`gateway.proto:407-417`):
 
 - `AnnouncePrefix`: `prefix` (required) and `next_hop` (optional). The MCP tool
   takes the same two arguments (`gateway_tools.go:271`).
-- `WithdrawPrefix`: `prefix` (required).
+- `WithdrawPrefix`: `prefix` (required). Over the webservice REST listener it
+  travels as the URL-encoded `prefix` query parameter
+  (`DELETE /api/v1/gateway/bgp/prefixes?prefix=203.0.113.0%2F24`): the SDK's
+  REST adapter puts it there (`sdk/go/transport/rest/adapter.go:752`) and the
+  handler reads only the query (`pkg/webservice/v1/rest/gateway/router.go:170`),
+  so a `DELETE` body is ignored. A missing or malformed prefix answers 400 with
+  the reason gRPC gives (§2).
 - The list requests are empty. QUIC alone pages the two lists with
   `offset` / `limit`: the default limit is 100 and the cap is 1000
   (`pkg/api/quic/gateway_handlers.go:29-30`, used at 977 and 1111). The SDK's
@@ -77,21 +83,7 @@ not running" (336, 376).
 Until then, a gateway's BGP state is read through the gateway snapshot
 ([cli.md §2](cli.md#2-platformctl-sdn-gateway-snapshot)).
 
-## 3. Known defect: REST withdraw
-
-The SDK's REST adapter maps `WithdrawPrefix` to
-`DELETE /api/v1/gateway/bgp/prefixes` (`sdk/go/transport/rest/adapter.go:1339`).
-It sends the request as a JSON body: there is no query-parameter encoder for
-it, and the body is marshalled at `adapter.go:212-215`. The webservice handler
-reads only `?prefix=` (`pkg/webservice/v1/rest/gateway/router.go:170`). It
-sees an empty prefix and answers InvalidArgument "prefix is required" before
-anything else.
-
-The result: `platformctl … bgp withdraw --transport rest` fails on every
-input. The other transports carry the field. This was found by reading the
-code, not by a run. It is recorded here and not fixed in this change.
-
-## 4. What the API does not cover
+## 3. What the API does not cover
 
 - The overlay EVPN speaker: no method reads its sessions or routes.
 - Peer management: there is no add, delete, reset, enable or disable.

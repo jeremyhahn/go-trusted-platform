@@ -88,7 +88,7 @@ the same way, because `platformd` has no BGP speaker. Configure a gateway by
 its service sections, not with this verb — see
 [architecture.md](architecture.md).
 
-**`gateway bgp`** verbs, flags and the REST withdraw defect:
+**`gateway bgp`** verbs and flags:
 [BGP CLI](../bgp/cli.md).
 
 **`gateway snapshot`** prints what a gateway's services actually programmed.

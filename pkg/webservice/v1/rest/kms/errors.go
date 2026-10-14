@@ -47,3 +47,26 @@ type ErrUnknownAlgorithm struct {
 func (e *ErrUnknownAlgorithm) Error() string {
 	return fmt.Sprintf("unknown kms algorithm: %q", e.Algorithm)
 }
+
+// ErrKeyVersionUnsupported is returned when a decrypt request names a key
+// version. The SDK crypto DecryptRequest has no version field, so the
+// request cannot be honoured; it is refused rather than decrypted under
+// whatever version the service picks.
+type ErrKeyVersionUnsupported struct {
+	Version int
+}
+
+func (e *ErrKeyVersionUnsupported) Error() string {
+	return fmt.Sprintf("invalid kms request: version: decrypt under a named key version (%d) is not supported", e.Version)
+}
+
+// ErrDataKeySizeNotCarried is returned when a data-key request resolves to
+// a size other than 256 bits: the SDK GenerateDataKey call carries no key
+// size or algorithm, so REST cannot mint any other size.
+type ErrDataKeySizeNotCarried struct {
+	Bits int32
+}
+
+func (e *ErrDataKeySizeNotCarried) Error() string {
+	return fmt.Sprintf("invalid kms request: key_size: a %d-bit data key is not supported over REST, which mints only 256-bit data keys", e.Bits)
+}

@@ -1117,14 +1117,16 @@ a different carrier.
 
 Measured from the built route table on 2026-09-05 (#165, #420) rather than
 from this section's earlier prose, which had gone stale twice: **seven routes
-answer a request carrying no credential** (eight until #177 took
-`GET /devices/config` off the table), and every one is either blocked on
-a decision that is not a lane's or authenticated in its handler by design.
+answer a request carrying no credential** when every optional route is mounted
+(eight until #177 took `GET /devices/config` off the table), and six by
+default, because the PXE webhook is mounted only when enabled (#238). Every
+one is either blocked on a decision that is not a lane's or authenticated in
+its handler by design.
 
 | Routes | Why they are open | Blocker / mechanism |
 |---|---|---|
 | `POST /devices/templates`, `POST /devices/templates/{id}/create-profile` | bootstrap seeder (`pkg/webservice/v1/rest/device`); ruled to present `admin@system` over **mTLS** (#121/#176) | go-quicbaas#376 → #28 (SDK bump), then #176 |
-| `POST /pxe/webhook/complete` | authenticates nobody; identifies the device by a MAC from the request body | #238 — what a booting node presents is an architecture decision |
+| `POST /pxe/webhook/complete` | authenticates nobody; identifies the device by a MAC from the request body; registered only when `pxe.ServiceConfig.WebhookEnabled` is true (default false) | #238 — what a booting node presents is an architecture decision |
 | `POST /provisioning/config`, `GET /provisioning/config/nonce`, `POST /provisioning/sign`, `GET /provisioning/sessions/{sessionID}/poll` | a machine at boot has no operator session; EAB + single-use nonce (+ EK for signing) are verified **in the handler** (`configdelivery/service.go` `verifyNonceAndEAB`, `verifyEKBinding`; `sign.go`) | by design; what is missing is a direct assertion that the handler refuses without a valid EAB, which the deny audit cannot see |
 
 `GET /devices/config` is not in this table because no general listener mounts

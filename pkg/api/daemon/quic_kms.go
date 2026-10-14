@@ -16,11 +16,13 @@ package daemon
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"strings"
 	"time"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	kmssdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
@@ -2234,26 +2236,28 @@ func (h *QUICServiceHandler) handleKMSGenerateWrappedDataKey(ctx context.Context
 }
 
 // buildDataKeySpecForQUIC builds a pb KeySpec for data key generation from a
-// platform.v1 KMSKeyAlgorithm value. Only symmetric AEAD algorithms are valid
-// for data keys; KMS_KEY_ALGORITHM_UNSPECIFIED defaults to AES-256-GCM.
+// platform.v1 KMSKeyAlgorithm value and a key_size in bits, resolved by
+// kmssdk.ResolveDataKey: an unspecified algorithm is the AES-GCM variant of
+// key_size, AES-256-GCM when key_size is 0.
 func buildDataKeySpecForQUIC(algorithm, keySize int32) (*pb.KeySpec, error) {
-	spec := &pb.KeySpec{KeySize: keySize}
-
-	switch platformv1.KMSKeyAlgorithm(algorithm) {
-	case platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED,
-		platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256:
-		spec.Algorithm = pb.KeyAlgorithm_KEY_ALG_AES_256_GCM
-	case platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_192:
-		spec.Algorithm = pb.KeyAlgorithm_KEY_ALG_AES_192_GCM
-	case platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128:
-		spec.Algorithm = pb.KeyAlgorithm_KEY_ALG_AES_128_GCM
-	case platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_CHACHA20_POLY1305:
-		spec.Algorithm = pb.KeyAlgorithm_KEY_ALG_CHACHA20_POLY1305
-	default:
-		return nil, ErrKMSInvalidAlgorithm{Algorithm: platformv1.KMSKeyAlgorithm(algorithm).String()}
+	resolved, bits, err := kmssdk.ResolveDataKey(platformv1.KMSKeyAlgorithm(algorithm), keySize)
+	var algErr *kmssdk.ErrUnsupportedDataKeyAlgorithm
+	if errors.As(err, &algErr) {
+		return nil, ErrKMSInvalidAlgorithm{Algorithm: algErr.Algorithm.String()}
 	}
+	if err != nil {
+		return nil, err
+	}
+	return &pb.KeySpec{Algorithm: quicDataKeyAlgorithms[resolved], KeySize: bits}, nil
+}
 
-	return spec, nil
+// quicDataKeyAlgorithms maps each data-key algorithm ResolveDataKey returns
+// to its quicbaas AEAD.
+var quicDataKeyAlgorithms = map[platformv1.KMSKeyAlgorithm]pb.KeyAlgorithm{
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128:           pb.KeyAlgorithm_KEY_ALG_AES_128_GCM,
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_192:           pb.KeyAlgorithm_KEY_ALG_AES_192_GCM,
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256:           pb.KeyAlgorithm_KEY_ALG_AES_256_GCM,
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_CHACHA20_POLY1305: pb.KeyAlgorithm_KEY_ALG_CHACHA20_POLY1305,
 }
 
 // =============================================================================

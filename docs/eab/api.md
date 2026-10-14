@@ -1,6 +1,6 @@
 # ACME External Account Binding — API
 
-> **Status: NORMATIVE** · Scope: `pkg/eab/` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `pkg/eab/` · Last verified: 2026-10-14
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
@@ -53,18 +53,24 @@ there is no `platformctl eab` group.
 | Get credential by ID | `EABService_GetCredential_FullMethodName` | `GetCredential` | `GetCredential` | `GET /api/v1/eab/credentials/{id:[0-9]+}` | `EABSubGetCredential` (`0x11`) | `platform_eab_get_credential` |
 | Get credential by KeyID | `EABService_GetCredentialByKeyID_FullMethodName` | `GetCredentialByKeyID` | `GetCredentialByKeyID` | `GET /api/v1/eab/credentials/key/{key}` | `EABSubGetCredentialByKeyID` (`0x12`) | `platform_eab_get_credential_by_key_id` |
 | List credentials | `EABService_ListCredentials_FullMethodName` | `ListCredentials` | `ListCredentials` | `GET /api/v1/eab/credentials` | `EABSubListCredentials` (`0x13`) | `platform_eab_list_credentials` |
-| Revoke credential | `EABService_RevokeCredential_FullMethodName` | `RevokeCredential` | `RevokeCredential` | `POST /api/v1/eab/credentials/{id}/revoke` | `EABSubRevokeCredential` (`0x14`) | `platform_eab_revoke_credential` |
+| Revoke credential | `EABService_RevokeCredential_FullMethodName` | `RevokeCredential` | `RevokeCredential` | `POST /api/v1/eab/credentials/{id:[0-9]+}/revoke` | `EABSubRevokeCredential` (`0x14`) | `platform_eab_revoke_credential` |
 | Validate credential | `EABService_ValidateCredential_FullMethodName` | `ValidateCredential` | `ValidateCredential` | `POST /api/v1/eab/credentials/validate` | `EABSubValidateCredential` (`0x15`) | `platform_eab_validate_credential` |
-| Delete credential | `EABService_DeleteCredential_FullMethodName` | `DeleteCredential` | `DeleteCredential` | `DELETE /api/v1/eab/credentials/{id}` | `EABSubDeleteCredential` (`0x16`) | `platform_eab_delete_credential` |
-| Render QR code | `EABService_GetCredentialQRCode_FullMethodName` | `GetCredentialQRCode` | `GetCredentialQRCode` | `GET /api/v1/eab/credentials/{id}/qrcode` | `EABSubGetCredentialQRCode` (`0x17`) | `platform_eab_get_credential_qr_code` |
-| Render enrollment URL | `EABService_GetEnrollmentURL_FullMethodName` | `GetEnrollmentURL` | `GetEnrollmentURL` | `GET /api/v1/eab/credentials/{id}/url` | `EABSubGetEnrollmentURL` (`0x18`) | `platform_eab_get_enrollment_url` |
-| Mark credential used | `EABService_MarkCredentialUsed_FullMethodName` | `MarkCredentialUsed` | `MarkCredentialUsed` | `POST /api/v1/eab/credentials/{id}/used` | `EABSubMarkCredentialUsed` (`0x19`) | `platform_eab_mark_credential_used` |
+| Delete credential | `EABService_DeleteCredential_FullMethodName` | `DeleteCredential` | `DeleteCredential` | `DELETE /api/v1/eab/credentials/{id:[0-9]+}` | `EABSubDeleteCredential` (`0x16`) | `platform_eab_delete_credential` |
+| Render QR code | `EABService_GetCredentialQRCode_FullMethodName` | `GetCredentialQRCode` | `GetCredentialQRCode` | `GET /api/v1/eab/credentials/{id:[0-9]+}/qrcode` | `EABSubGetCredentialQRCode` (`0x17`) | `platform_eab_get_credential_qr_code` |
+| Render enrollment URL | `EABService_GetEnrollmentURL_FullMethodName` | `GetEnrollmentURL` | `GetEnrollmentURL` | `GET /api/v1/eab/credentials/{id:[0-9]+}/url` | `EABSubGetEnrollmentURL` (`0x18`) | `platform_eab_get_enrollment_url` |
+| Mark credential used | `EABService_MarkCredentialUsed_FullMethodName` | `MarkCredentialUsed` | `MarkCredentialUsed` | `POST /api/v1/eab/credentials/{id:[0-9]+}/used` | `EABSubMarkCredentialUsed` (`0x19`) | `platform_eab_mark_credential_used` |
 | Cleanup expired | `EABService_CleanupExpiredCredentials_FullMethodName` | `CleanupExpiredCredentials` | `CleanupExpiredCredentials` | `POST /api/v1/eab/credentials/cleanup` | `EABSubCleanupExpiredCredentials` (`0x1A`) | `platform_eab_cleanup_expired_credentials` |
 
 REST route ordering matters and is handled: `/credentials/cleanup`,
 `/credentials/validate` and `/credentials/key/{key}` are registered **before**
 `/credentials/{id:[0-9]+}`, and the `{id}` pattern is digits-only, so no literal
-path segment is swallowed as an id.
+path segment is swallowed as an id. A non-numeric id matches no route and is
+answered 404 before any handler runs.
+
+The Go SDK's REST transport carries `credential_id` in the path, never the body
+(`eabCredentialRoute`, `sdk/go/transport/rest/adapter.go`). On revoke the
+handler takes the id from the path and the rest of the request, `revoker_id`,
+from the body.
 
 An ergonomic Go wrapper over the same eleven is
 `sdk/go/services/eab.Client` — note two names differ from the RPC:

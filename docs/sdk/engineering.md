@@ -122,7 +122,11 @@ change set:
    `initServiceClients`. Add a domain wrapper under `services/<name>/` when
    callers need more than raw protobuf.
 3. **REST.** Add the method to `grpcMethodToRESTMap`. Use `templatedRouteTable`
-   when the route has path parameters. When the handler's request type is not
+   when the route has path parameters, or query parameters — a handler that
+   reads `r.URL.Query()` never sees a field sent in the body, and BGP withdraw
+   and overlay MAC forget once failed every REST call that way
+   ([../bgp/api.md](../bgp/api.md#1-the-six-transports) §1,
+   [../sdn/api.md](../sdn/api.md) §6). When the handler's request type is not
    the gRPC message, register a `restRequestEncoders` entry that builds the
    body it decodes; when its reply is not the gRPC reply, a
    `restResponseDecoders` entry. Prove both against the real handler, not a

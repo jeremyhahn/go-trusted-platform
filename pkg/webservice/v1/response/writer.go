@@ -38,6 +38,7 @@ type HttpWriter interface {
 	Error404(w http.ResponseWriter, r *http.Request, err error)
 	Error403(w http.ResponseWriter, r *http.Request, err error, payload interface{})
 	Error500(w http.ResponseWriter, r *http.Request, err error)
+	Error503(w http.ResponseWriter, r *http.Request, err error)
 }
 
 type ResponseWriter struct {
@@ -193,6 +194,17 @@ func (writer *ResponseWriter) Error500(w http.ResponseWriter, r *http.Request, e
 	writer.logError(r, err)
 	writer.Write(w, r, http.StatusInternalServerError, restwire.WebServiceResponse{
 		Code:    http.StatusInternalServerError,
+		Error:   err.Error(),
+		Success: false,
+		Payload: nil})
+}
+
+// Error503 answers a request whose backing service is not wired into the
+// daemon. The caller may retry once the service is configured.
+func (writer *ResponseWriter) Error503(w http.ResponseWriter, r *http.Request, err error) {
+	writer.logError(r, err)
+	writer.Write(w, r, http.StatusServiceUnavailable, restwire.WebServiceResponse{
+		Code:    http.StatusServiceUnavailable,
 		Error:   err.Error(),
 		Success: false,
 		Payload: nil})

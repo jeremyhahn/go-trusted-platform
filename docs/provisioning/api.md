@@ -62,7 +62,10 @@ isolated state rather than being left in an ambiguous one. `Retry` is how it
 comes back.
 
 **`WebhookComplete` is an input, not a truth.** It is the machine reporting that
-installation finished; the state machine decides what that means.
+installation finished; the state machine decides what that means. Its REST route
+is registered only when `pxe.ServiceConfig.WebhookEnabled` is true (default
+false), and is then unauthenticated — see [`docs/ipxe/api.md`](../ipxe/api.md)
+§4 and #238.
 
 ---
 

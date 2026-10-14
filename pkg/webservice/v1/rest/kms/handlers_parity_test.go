@@ -550,8 +550,8 @@ func TestBackendStatus_Unavailable(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.BackendStatus(w, httptest.NewRequest(http.MethodGet, "/api/v1/kms/backend/status", nil))
 
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (body: %s)", w.Code, w.Body.String())
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body: %s)", w.Code, w.Body.String())
 	}
 }
 

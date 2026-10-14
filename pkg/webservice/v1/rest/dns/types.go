@@ -289,6 +289,31 @@ type RecordResponse struct {
 	TLSA  *TLSAResponse  `json:"tlsa,omitempty"`
 }
 
+// Name returns the owner name of whichever record the response carries.
+func (r RecordResponse) Name() string {
+	switch {
+	case r.A != nil:
+		return r.A.Name
+	case r.AAAA != nil:
+		return r.AAAA.Name
+	case r.CNAME != nil:
+		return r.CNAME.Name
+	case r.MX != nil:
+		return r.MX.Name
+	case r.NS != nil:
+		return r.NS.Name
+	case r.TXT != nil:
+		return r.TXT.Name
+	case r.SRV != nil:
+		return r.SRV.Name
+	case r.CAA != nil:
+		return r.CAA.Name
+	case r.TLSA != nil:
+		return r.TLSA.Name
+	}
+	return ""
+}
+
 // ListRecordsResponse is the response for listing records
 type ListRecordsResponse struct {
 	Records []RecordResponse `json:"records"`

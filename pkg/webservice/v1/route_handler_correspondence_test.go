@@ -87,13 +87,12 @@ var getListCollisions = map[string]bool{
 	// path existed on no generated client and could never be produced. The
 	// collision did not get fixed; the claims making it stopped existing.
 	//
-	// One remains, because the server serves NO singular route for it and
-	// there is nothing to point at: platform_dns.proto has no GetRecord rpc
-	// and records live only under /dns/zones/{zone}/records.
+	// The sixteenth -- GET /api/v1/dns/records, GetRecord against
+	// ListRecords -- went with #452, which moved the DNS claims to the
+	// zone-scoped item routes the server serves and deleted the GetRecord
+	// claim: platform_dns.proto declares no GetRecord rpc.
 	//
-	// It shrinks when that route exists, not before -- repointing it at a path
-	// that 404s would turn a wrong answer into a failure that reads as fixed.
-	"GET /api/v1/dns/records": true,
+	// The list is empty and stays that way: any new pair fails the test above.
 }
 
 // minimumResolvedHandlers is a vacuity floor.

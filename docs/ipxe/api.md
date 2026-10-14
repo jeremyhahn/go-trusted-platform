@@ -259,6 +259,13 @@ who arrived here can find them:
 | Install-complete webhook | `POST /api/v1/pxe/webhook/complete` | `WebhookComplete` | as above | `pxe_webhook_complete` |
 | Gateway-side provisioning | — | `ProvisioningGateway` (4 RPCs) | — | — |
 
+**The install-complete webhook route exists only when the operator sets
+`pxe.ServiceConfig.WebhookEnabled`** (default `false`). Disabled, the path is
+not registered and answers 404 like any unknown path. Enabled, it is
+**unauthenticated**: the caller is a booting node that presents no credential,
+and the device is identified by the MAC in the request body. What a booting
+node should present is #238; `WebhookSecret` is reserved for it and unused.
+
 **The `REST base` column is a locator, not the contract.** It gives the prefix a
 route hangs under; it does not give the route. The normative per-route path
 **and HTTP method** for all fifteen are the first column of

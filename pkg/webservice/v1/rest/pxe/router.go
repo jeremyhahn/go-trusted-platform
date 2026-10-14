@@ -33,6 +33,9 @@ type PXERouter struct {
 	logger     *logging.Logger
 	server     platformv1.PXEServiceServer
 	respWriter response.HttpWriter
+	// webhookEnabled is pxe.ServiceConfig.WebhookEnabled: whether the
+	// install-completion webhook is mounted at all.
+	webhookEnabled bool
 	router.WebServiceRouter
 }
 
@@ -41,8 +44,14 @@ func NewPXERouter(
 	logger *logging.Logger,
 	server platformv1.PXEServiceServer,
 	respWriter response.HttpWriter,
+	webhookEnabled bool,
 ) *PXERouter {
-	return &PXERouter{logger: logger, server: server, respWriter: respWriter}
+	return &PXERouter{
+		logger:         logger,
+		server:         server,
+		respWriter:     respWriter,
+		webhookEnabled: webhookEnabled,
+	}
 }
 
 // RegisterRoutes mounts PXE routes.
@@ -61,7 +70,7 @@ func NewPXERouter(
 //	POST   /api/v1/pxe/devices/{id}/quarantine    - Quarantine
 //	POST   /api/v1/pxe/devices/{id}/retry         - Retry
 //	GET    /api/v1/pxe/devices/{id}/events        - GetEvents
-//	POST   /api/v1/pxe/webhook/complete           - WebhookComplete
+//	POST   /api/v1/pxe/webhook/complete           - WebhookComplete (only when enabled)
 //
 // RegisterRoutes registers the OPERATOR half of the PXE surface on the
 // provided router, which the caller must have gated: the service controls
@@ -93,6 +102,11 @@ func (r *PXERouter) RegisterRoutes(parent *mux.Router) {
 //
 //	POST /api/v1/pxe/webhook/complete
 //
+// It registers nothing unless the operator enabled the webhook
+// (pxe.ServiceConfig.WebhookEnabled, false by default): a disabled webhook is
+// an unknown path, answered 404, and the service's WebhookComplete is never
+// reached. Off is the default because of what follows.
+//
 // It is ungated because its caller is a booting node with no operator
 // session — and, unlike the gateway's telemetry pair or the EAB-authenticated
 // provisioning routes, **it presents no credential and the server checks
@@ -111,6 +125,9 @@ func (r *PXERouter) RegisterRoutes(parent *mux.Router) {
 // close, drawn explicitly so the route is not mistaken for one this campaign
 // has certified.
 func (r *PXERouter) RegisterMachineFacingRoutes(parent *mux.Router) {
+	if !r.webhookEnabled {
+		return
+	}
 	sr := parent.PathPrefix(basePath).Subrouter()
 	sr.HandleFunc("/webhook/complete", r.webhookComplete).Methods("POST")
 }

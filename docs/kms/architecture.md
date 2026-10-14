@@ -219,6 +219,7 @@ The REST layer provides HTTP endpoints:
 |--------|---------------|
 | `/api/v1/kms/keys` | Key management |
 | `/api/v1/kms/encrypt`, `/decrypt`, etc. | Crypto operations |
+| `/api/v1/kms/data-keys` | Data keys: minted and returned, never stored |
 | `/api/v1/kms/deks` | DEK management |
 | `/api/v1/kms/secrets` | Secrets management |
 | `/api/v1/kms/backend` | Backend operations |

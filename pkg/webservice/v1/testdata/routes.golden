@@ -50,6 +50,7 @@ DELETE /api/v1/quicbaas/storage/buckets/{name}/objects/{object:.*}
 DELETE /api/v1/scheduler/jobs/{job_id}
 DELETE /api/v1/sdn/bridges/{name}
 DELETE /api/v1/sdn/bridges/{name}/ports/{port}
+DELETE /api/v1/sdn/bridges/{name}/ports/{port}/auth
 DELETE /api/v1/sdn/flows
 DELETE /api/v1/sdn/gateway/ipam/allocations/{ip}
 DELETE /api/v1/sdn/gateway/ipam/pools/{id}
@@ -132,10 +133,12 @@ GET /api/v1/devices/count
 GET /api/v1/devices/serial/{serial}
 GET /api/v1/devices/{id:[0-9]+}
 GET /api/v1/dns
+GET /api/v1/dns/resolve
 GET /api/v1/dns/zones
 GET /api/v1/dns/zones/{zone}
 GET /api/v1/dns/zones/{zone}/dnssec
 GET /api/v1/dns/zones/{zone}/records
+GET /api/v1/dns/zones/{zone}/records/{type}/{name}
 GET /api/v1/eab
 GET /api/v1/eab/credentials
 GET /api/v1/eab/credentials/key/{key}
@@ -429,6 +432,8 @@ POST /api/v1/idevid/iak/generate
 POST /api/v1/invitations
 POST /api/v1/invitations/accept
 POST /api/v1/invitations/{id:[0-9]+}/revoke
+POST /api/v1/kms/data-keys
+POST /api/v1/kms/data-keys/wrapped
 POST /api/v1/kms/decrypt/{name}
 POST /api/v1/kms/deks
 POST /api/v1/kms/deks/{path:.+}/rotate
@@ -484,6 +489,7 @@ POST /api/v1/sdn/bridges
 POST /api/v1/sdn/bridges/{bridge_id}/vlans
 POST /api/v1/sdn/bridges/{name}/flows
 POST /api/v1/sdn/bridges/{name}/ports
+POST /api/v1/sdn/bridges/{name}/ports/{port}/auth
 POST /api/v1/sdn/flows
 POST /api/v1/sdn/gateway/ipam/allocations
 POST /api/v1/sdn/gateway/ipam/pools

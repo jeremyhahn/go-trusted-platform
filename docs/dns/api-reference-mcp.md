@@ -228,13 +228,16 @@ Add a TLSA record for DANE.
 
 ### dns_resolve
 
-Resolve a DNS query.
+Resolve a name from the managed zones: the longest managed zone suffix of
+`name` answers with only the records `name` owns
+([resolution.md](resolution.md#api-resolve)). A name with no such records is an
+error ("no records found").
 
 **Parameters:**
 ```json
 {
   "name": "string (required) - FQDN to resolve",
-  "type": "string (required) - Record type (A, AAAA, CNAME, MX, etc.)"
+  "record_type": "string (optional, default A) - A, AAAA, CNAME, MX, NS or TXT"
 }
 ```
 
@@ -246,7 +249,7 @@ Resolve a DNS query.
     "name": "dns_resolve",
     "arguments": {
       "name": "ns1.example.internal.",
-      "type": "A"
+      "record_type": "A"
     }
   }
 }
@@ -364,7 +367,7 @@ result = call_mcp_tool("dns_add_record", {
 # Resolve
 result = call_mcp_tool("dns_resolve", {
     "name": "server01.myzone.internal.",
-    "type": "A"
+    "record_type": "A"
 })
 ```
 

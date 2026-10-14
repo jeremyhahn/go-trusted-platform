@@ -49,6 +49,11 @@ func TestErrInvalidRecordType_Error(t *testing.T) {
 	assert.Equal(t, "invalid record type: UNKNOWN", err.Error())
 }
 
+func TestErrRecordNotFound_Error(t *testing.T) {
+	err := ErrRecordNotFound{Type: "A", Name: "www"}
+	assert.Equal(t, "record not found: A www", err.Error())
+}
+
 func TestErrInvalidRecordType_Error_Empty(t *testing.T) {
 	err := ErrInvalidRecordType{}
 	assert.Equal(t, "invalid record type: ", err.Error())
@@ -71,6 +76,7 @@ func TestErrorsImplementErrorInterface(t *testing.T) {
 	var _ error = ErrMissingRecordType{}
 	var _ error = ErrInvalidRequestBody{}
 	var _ error = ErrInvalidRecordType{}
+	var _ error = ErrRecordNotFound{}
 	var _ error = ErrMissingFQDN{}
 	var _ error = ErrMissingIP{}
 }

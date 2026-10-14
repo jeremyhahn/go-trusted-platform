@@ -166,6 +166,10 @@ func (m *mockHttpWriter) Error500(w http.ResponseWriter, r *http.Request, err er
 	m.Called(w, r, err)
 }
 
+func (m *mockHttpWriter) Error503(w http.ResponseWriter, r *http.Request, err error) {
+	m.Called(w, r, err)
+}
+
 // Test helper functions
 
 func createTestCertificate(t *testing.T) *x509.Certificate {

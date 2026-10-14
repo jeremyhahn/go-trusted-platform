@@ -54,6 +54,16 @@ func (e ErrInvalidRecordType) Error() string {
 	return fmt.Sprintf("invalid record type: %s", e.Type)
 }
 
+// ErrRecordNotFound is returned when a zone holds no record of the given type and name
+type ErrRecordNotFound struct {
+	Type string
+	Name string
+}
+
+func (e ErrRecordNotFound) Error() string {
+	return fmt.Sprintf("record not found: %s %s", e.Type, e.Name)
+}
+
 // ErrMissingFQDN is returned when FQDN is required but not provided
 type ErrMissingFQDN struct{}
 

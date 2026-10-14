@@ -2141,7 +2141,7 @@ func TestKMSGRPCService_GenerateDataKey_Success(t *testing.T) {
 
 	req := &platformv1.GenerateDataKeyRequest{
 		KeyId:   "test-key-id",
-		KeySize: 32,
+		KeySize: 256,
 	}
 
 	resp, err := service.GenerateDataKey(ctx, req)
@@ -2163,7 +2163,7 @@ func TestKMSGRPCService_GenerateDataKey_MissingKeyID(t *testing.T) {
 	ctx := context.Background()
 
 	req := &platformv1.GenerateDataKeyRequest{
-		KeySize: 32,
+		KeySize: 256,
 	}
 
 	_, err := service.GenerateDataKey(ctx, req)
@@ -2216,7 +2216,7 @@ func TestKMSGRPCService_GenerateWrappedDataKey_Success(t *testing.T) {
 
 	req := &platformv1.GenerateWrappedDataKeyRequest{
 		WrappingKeyId: "wrapping-key-id",
-		KeySize:       32,
+		KeySize:       256,
 	}
 
 	resp, err := service.GenerateWrappedDataKey(ctx, req)
@@ -2234,7 +2234,7 @@ func TestKMSGRPCService_GenerateWrappedDataKey_MissingWrappingKeyID(t *testing.T
 	ctx := context.Background()
 
 	req := &platformv1.GenerateWrappedDataKeyRequest{
-		KeySize: 32,
+		KeySize: 256,
 	}
 
 	_, err := service.GenerateWrappedDataKey(ctx, req)

@@ -114,6 +114,7 @@ type testHandlerRegistry struct {
 	gatewayStore          restgateway.GatewayStateStore
 	configDelivery        configdelivery.RestHandler
 	pxeService            platformv1.PXEServiceServer
+	pxeWebhookEnabled     bool
 	attestationService    platformv1.AttestationServiceServer
 	attestationReporting  *restattestation.Reporting
 	ociDistBackend        restregistry.OCIDistBackend
@@ -270,6 +271,10 @@ func (r *testHandlerRegistry) OverlayServiceServer() platformv1.OverlayServiceSe
 
 func (r *testHandlerRegistry) PXEServiceServer() platformv1.PXEServiceServer {
 	return r.pxeService
+}
+
+func (r *testHandlerRegistry) PXEWebhookEnabled() bool {
+	return r.pxeWebhookEnabled
 }
 
 func (r *testHandlerRegistry) NTPServiceServer() platformv1.NTPServiceServer {

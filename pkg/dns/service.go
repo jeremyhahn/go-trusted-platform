@@ -1291,56 +1291,17 @@ func (s *Service) ListRecords(ctx context.Context, zoneName string) ([]interface
 
 // Resolve resolves a DNS name to its values using the local zone data.
 func (s *Service) Resolve(ctx context.Context, name string, recordType string) ([]string, error) {
-	zoneName := extractZoneName(name)
-
-	zone, err := s.Zone(ctx, zoneName)
-	if err != nil {
-		return nil, &WrappedError{Msg: "failed to get zone for resolution", Err: err}
-	}
-
-	var results []string
-
-	switch recordType {
-	case "A":
-		for _, rec := range zone.RecordSet.ARecords {
-			if rec.Name == name {
-				results = append(results, rec.Value)
-			}
-		}
-	case "AAAA":
-		for _, rec := range zone.RecordSet.AAAARecords {
-			if rec.Name == name {
-				results = append(results, rec.Value)
-			}
-		}
-	case "CNAME":
-		for _, rec := range zone.RecordSet.CNAMERecords {
-			if rec.Name == name {
-				results = append(results, rec.Value)
-			}
-		}
-	case "TXT":
-		for _, rec := range zone.RecordSet.TXTRecords {
-			if rec.Name == name {
-				results = append(results, rec.Value)
-			}
-		}
-	case "MX":
-		for _, rec := range zone.RecordSet.MXRecords {
-			if rec.Name == name {
-				results = append(results, rec.Value)
-			}
-		}
-	case "NS":
-		for _, rec := range zone.RecordSet.NSRecords {
-			if rec.Name == name {
-				results = append(results, rec.Value)
-			}
-		}
-	default:
+	values, ok := resolvedValues[recordType]
+	if !ok {
 		return nil, &MessageError{Msg: fmt.Sprintf("unsupported record type: %s", recordType)}
 	}
 
+	resolution, err := ResolveName(ctx, s, name, recordType)
+	if err != nil {
+		return nil, err
+	}
+
+	results := values(&resolution.Records)
 	if len(results) == 0 {
 		return nil, &MessageError{Msg: fmt.Sprintf("no records found for %s %s", name, recordType)}
 	}

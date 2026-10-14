@@ -217,6 +217,47 @@ authoritative for the zones it serves; referrals clear it. Query types outside `
 plugin rather than answered negatively — that is `ErrRecordTypeNotSupported`
 behaviour, unchanged.
 
+## API resolve
+
+The resolve API (`GET /api/v1/dns/resolve`, gRPC `Resolve`, and the QUIC, MCP
+and Unix tools) answers from the managed zones without going over the DNS wire.
+Every transport calls one function, `dns.ResolveName` (`pkg/dns/resolve.go`):
+
+1. **Zone.** The managed zone with the longest suffix of the queried name
+   answers, so `host.sub.example.com.` is answered by `sub.example.com.` when
+   both it and `example.com.` are managed. Each suffix is looked up lower-cased,
+   then as written.
+2. **Owner.** Only records whose owner IS the queried name come back, matched
+   as in [Name matching](#name-matching). One extra stored form is accepted
+   here: an absolute owner without its trailing dot (`www.example.com` in
+   `example.com.`), which is the shape a record added through the API can
+   carry. The DNS wire plugin reads that form as relative.
+3. **Type.** `type` filters by mnemonic, in any case; without it every type
+   below is returned.
+4. **Names** compare case-insensitively, and the trailing dot is optional.
+
+| Case | Answer |
+|---|---|
+| Name under no managed zone | No records, `authoritative: false` |
+| Name inside a zone, with records of the type | Those records, `authoritative: true` |
+| Name inside a zone, with no such records | No records, `authoritative: true` — the zone is authoritative for the name and holds nothing for it |
+| Longest zone is one the caller may not read | No records, `authoritative: false`; a shorter zone the caller does own does not answer instead |
+| `type` outside A, AAAA, CNAME, MX, NS, TXT, SRV, CAA, TLSA | Refused: REST 400, gRPC `InvalidArgument` (`ErrRecordTypeNotSupported`) |
+
+The API answer is the zone's stored data. It does not chase CNAMEs, refer at
+delegations or synthesise SOA authority the way the wire plugin does.
+
+`Service.Resolve`, the value-list form that the MCP `dns_resolve` tool and the
+`pkg/api/quic` and `pkg/api/rest` handlers call (the daemon's QUIC and Unix
+resolve go through gRPC `Resolve`), returns the record values and serves A, AAAA, CNAME,
+MX, NS and TXT; an empty answer is an error there ("no records found").
+
+> **Changed 2026-10-14 (#452).** The resolve API used to look up the queried
+> name as a zone and return every record of the type in it, whatever its
+> owner: `www.example.com.` found no zone and returned nothing, and
+> `example.com.` returned the `www` records with the apex ones. An unserved
+> `type` used to be an empty answer.
+
 ## Internal vs Public Resolution
 
 The platform runs two separate DNS server instances differentiated by port:

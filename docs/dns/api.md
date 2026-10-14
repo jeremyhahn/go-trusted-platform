@@ -1,6 +1,6 @@
 # DNS — API
 
-> **Status: NORMATIVE** · Scope: DNS routes on every transport · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: DNS routes on every transport · Last verified: 2026-10-14
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING`, never omitted.
@@ -32,12 +32,12 @@ MCP: **two parallel tool families** — see §3.
 | Delete zone | `DELETE /api/v1/dns/zones/{zone}` | `DeleteZone` | `OpDNSDeleteZone` (`0x26`) | `dns_delete_zone`, `dns_zone_delete` | ✅ |
 | Add record | `POST /api/v1/dns/zones/{zone}/records` | `AddRecord` | `OpDNSAddRecord` (`0x20`) | `dns_add_record`, `dns_record_create` | ✅ |
 | List records | `GET /api/v1/dns/zones/{zone}/records` | `ListRecords` | `OpDNSListRecords` (`0x24`) | `dns_list_records`, `dns_record_list` | ✅ |
-| Get record | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDNSGetRecord` (`0x23`) | `dns_get_record`, `dns_record_get` | — |
+| Get record | `GET /api/v1/dns/zones/{zone}/records/{type}/{name}` | `MISSING — docs/13 G7` | `OpDNSGetRecord` (`0x23`) | `dns_get_record`, `dns_record_get` | — |
 | Update record | `MISSING — docs/13 G7` | `UpdateRecord` | `OpDNSUpdateRecord` (`0x22`) | `dns_record_update` | ✅ |
 | Delete record | `DELETE /api/v1/dns/zones/{zone}/records/{type}/{name}` | `DeleteRecord` | `OpDNSDeleteRecord` (`0x21`) | `dns_delete_record`, `dns_record_delete` | ✅ |
 | Sign zone | `POST /api/v1/dns/zones/{zone}/sign` | `SignZone` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | DNSSEC status | `GET /api/v1/dns/zones/{zone}/dnssec` | `GetDNSSECStatus` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
-| Resolve | `MISSING — docs/13 G7` | `Resolve` | `OpDNSResolve` (`0x29`) | `dns_resolve`, `dns_lookup` | ✅ |
+| Resolve | `GET /api/v1/dns/resolve?fqdn={fqdn}&type={type}` | `Resolve` | `OpDNSResolve` (`0x29`) | `dns_resolve`, `dns_lookup` | ✅ |
 | Reverse lookup | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `dns_reverse_lookup` | — |
 | Register | `POST /api/v1/dns/register` | `Register` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Get DNS config | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDNSGetConfig` (`0x2A`) | `MISSING — docs/13 G7` | — |
@@ -56,7 +56,25 @@ Two shapes stand out:
 
 `DELETE /api/v1/dns/zones/{zone}/records/{type}/{name}` keys a record by type
 and name in the path, so a record with the same name in two types is deleted
-independently — that is the intended granularity.
+independently — that is the intended granularity. `GET` on the same path
+returns that one record (404 when the zone holds no record of that type and
+name); `GET /api/v1/dns/zones/{zone}/records` lists the zone, optionally
+filtered by `?type=`. The two are distinct routes with distinct answers.
+
+The SDK REST client (`sdk/go/transport/rest/dns.go`) calls these routes with
+the zone, record type and record name in the path, never in the body; the type
+travels as its mnemonic (`A`, `AAAA`, `MX`), and a record call without a type
+is refused before it is sent. Get record is served on REST only: the SDK
+cannot call it because `DNSService` declares no `GetRecord` rpc (docs/13 G7).
+
+`GET /api/v1/dns/resolve` answers from managed zones only, exactly as gRPC
+`Resolve` does — both call `dns.ResolveName`: `fqdn` is required (400 without
+it) and the longest managed zone suffix answers with only the records the name
+owns, filtered by `type`. A name with no managed zone is a 200 with no records
+and `authoritative: false`; a name inside one with no such records is a 200
+with no records and `authoritative: true`. A `type` resolution does not serve
+is a 400 (gRPC `InvalidArgument`). See
+[resolution.md](resolution.md#api-resolve).
 
 ---
 

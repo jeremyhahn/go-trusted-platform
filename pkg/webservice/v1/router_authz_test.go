@@ -43,6 +43,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
+	dnsentities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
@@ -130,6 +131,13 @@ type stubComputeServer struct {
 type stubRegistryService struct{ grpcapi.RegistryService }
 
 type stubDNSService struct{ dns.DNSService }
+
+// Zone serves no zone, so an admitted DNS probe answers from its handler
+// instead of reaching the nil embedded service.
+func (s *stubDNSService) Zone(context.Context, string) (*dnsentities.Zone, error) {
+	return nil, dns.ErrZoneNotFound
+}
+
 type stubSwitchService struct {
 	webdevice.SwitchServiceProvider
 }
@@ -319,6 +327,9 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.gatewayStore = &stubGatewayStore{}
 	registry.configDelivery = &stubConfigDelivery{}
 	registry.pxeService = &stubPXEServer{}
+	// The audit covers every route the platform can serve, so it mounts
+	// the install-completion webhook too; operators turn it on (#238).
+	registry.pxeWebhookEnabled = true
 	registry.attestationService = &stubAttestationServer{}
 	registry.deviceGRPCService = &stubDeviceGRPCServer{}
 	registry.deviceTemplateService = &stubDeviceTemplateService{}
@@ -540,7 +551,8 @@ var pendingRoutes = map[string]string{
 	// campaign left open it presents NO credential and the server checks
 	// none: the device is identified by a MAC address taken from the request
 	// body. Choosing what a booting node should present is an architecture
-	// decision, so #165 could not close it. See #238.
+	// decision, so #165 could not close it. See #238. Until then it is
+	// mounted only when the operator sets pxe.ServiceConfig.WebhookEnabled.
 	"POST /api/v1/pxe/webhook/complete": "#238 — authenticates nobody; identifies the device by an attacker-supplied MAC.",
 
 	// /provisioning was split by principal in slice 3: the session views and
@@ -830,6 +842,8 @@ var gatedProbes = []struct {
 	{"kms sign", http.MethodPost, "/api/v1/kms/sign/k1"},
 	{"kms secret read", http.MethodGet, "/api/v1/kms/secrets/s1"},
 	{"kms key delete", http.MethodDelete, "/api/v1/kms/keys/k1"},
+	{"kms generate data key", http.MethodPost, "/api/v1/kms/data-keys"},
+	{"kms generate wrapped data key", http.MethodPost, "/api/v1/kms/data-keys/wrapped"},
 	{"ca issue certificate", http.MethodPost, "/api/v1/ca/certificates"},
 	{"ca revoke certificate", http.MethodDelete, "/api/v1/ca/certificates/abc"},
 	{"idevid generate", http.MethodPost, "/api/v1/idevid/generate"},
@@ -844,6 +858,8 @@ var gatedProbes = []struct {
 	{"vtpm unseal", http.MethodPost, "/api/v1/vtpm/bundles/b1/unseal"},
 	{"vtpm pcr read", http.MethodGet, "/api/v1/vtpm/bundles/b1/pcrs"},
 	{"vtpm pcr extend", http.MethodPost, "/api/v1/vtpm/bundles/b1/pcrs/extend"},
+	{"dns record get", http.MethodGet, "/api/v1/dns/zones/example.com./records/A/www"},
+	{"dns resolve", http.MethodGet, "/api/v1/dns/resolve?fqdn=www.example.com.&type=A"},
 }
 
 // TestGatedRoutes_RejectAnonymousCallers is the authentication half of the
@@ -1434,6 +1450,9 @@ var networkProbes = []struct {
 	{"sdn add flow", http.MethodPost, "/api/v1/sdn/bridges/br0/flows"},
 	{"sdn delete bridge", http.MethodDelete, "/api/v1/sdn/bridges/br0"},
 	{"sdn delete port", http.MethodDelete, "/api/v1/sdn/bridges/br0/ports/p1"},
+	{"sdn add port", http.MethodPost, "/api/v1/sdn/bridges/br0/ports"},
+	{"sdn authenticate port", http.MethodPost, "/api/v1/sdn/bridges/br0/ports/p1/auth"},
+	{"sdn revoke port auth", http.MethodDelete, "/api/v1/sdn/bridges/br0/ports/p1/auth"},
 	{"switch set port vlan", http.MethodPost, "/api/v1/switches/sw1/ports/1/vlan"},
 	{"switch disable port", http.MethodPost, "/api/v1/switches/sw1/ports/1/disable"},
 	{"overlay create vni", http.MethodPost, "/api/v1/overlay/vnis"},
@@ -1456,6 +1475,8 @@ func TestNetworkRoutes_AreRegisteredAndGated(t *testing.T) {
 	}
 	for _, want := range []string{
 		"DELETE /api/v1/sdn/bridges/{name}",
+		"POST /api/v1/sdn/bridges/{name}/ports/{port}/auth",
+		"DELETE /api/v1/sdn/bridges/{name}/ports/{port}/auth",
 		"POST /api/v1/switches/{switch}/ports/{port}/vlan",
 		"POST /api/v1/overlay/vnis",
 		"POST /api/v1/ntp/step",

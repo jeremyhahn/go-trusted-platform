@@ -23,6 +23,7 @@ import (
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	kmssdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1115,4 +1116,26 @@ func TestBuildDataKeySpecForQUIC_KeySize(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, pb.KeyAlgorithm_KEY_ALG_AES_128_GCM, spec.Algorithm)
 	assert.Equal(t, int32(128), spec.KeySize)
+}
+
+// TestBuildDataKeySpecForQUIC_KeySizeIsBits: before, an unspecified
+// algorithm with key_size 128 asked quicbaas for AES-256-GCM, and a byte
+// count or a size contradicting the algorithm went through unchecked.
+func TestBuildDataKeySpecForQUIC_KeySizeIsBits(t *testing.T) {
+	spec, err := buildDataKeySpecForQUIC(int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED), 128)
+	require.NoError(t, err)
+	assert.Equal(t, pb.KeyAlgorithm_KEY_ALG_AES_128_GCM, spec.Algorithm)
+	assert.Equal(t, int32(128), spec.KeySize)
+
+	for _, tc := range []struct {
+		algorithm platformv1.KMSKeyAlgorithm
+		keySize   int32
+	}{
+		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED, 32},
+		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128, 256},
+	} {
+		_, err := buildDataKeySpecForQUIC(int32(tc.algorithm), tc.keySize)
+		var sizeErr *kmssdk.ErrInvalidDataKeySize
+		assert.True(t, errors.As(err, &sizeErr), "%s with %d bits: err = %v", tc.algorithm, tc.keySize, err)
+	}
 }

@@ -361,6 +361,98 @@ func (h *SDNHandlers) DeletePort(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// AuthenticatePort authenticates a port with a client certificate
+func (h *SDNHandlers) AuthenticatePort(w http.ResponseWriter, r *http.Request) {
+	bridgeName := h.getBridgeName(r)
+	portName := h.getPortName(r)
+
+	if bridgeName == "" {
+		h.respWriter.Error400(w, r, ErrMissingBridgeName{})
+		return
+	}
+	if portName == "" {
+		h.respWriter.Error400(w, r, ErrMissingPortName{})
+		return
+	}
+
+	var req AuthenticatePortRequest
+	if err := h.decodeJSON(r, &req); err != nil {
+		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+		return
+	}
+
+	ctx, cancel := h.createContext()
+	defer cancel()
+
+	grpcReq := &platformv1.AuthenticatePortRequest{
+		BridgeId:    bridgeName,
+		PortId:      portName,
+		Certificate: req.Certificate,
+		Format:      req.Format,
+	}
+
+	resp, err := h.sdnService.AuthenticatePort(ctx, grpcReq)
+	if err != nil {
+		h.handleGRPCError(w, r, err)
+		return
+	}
+
+	h.respWriter.Success200(w, r, portAuthToResponse(bridgeName, portName, resp.Auth))
+}
+
+// RevokePortAuth revokes a port's certificate authentication
+func (h *SDNHandlers) RevokePortAuth(w http.ResponseWriter, r *http.Request) {
+	bridgeName := h.getBridgeName(r)
+	portName := h.getPortName(r)
+
+	if bridgeName == "" {
+		h.respWriter.Error400(w, r, ErrMissingBridgeName{})
+		return
+	}
+	if portName == "" {
+		h.respWriter.Error400(w, r, ErrMissingPortName{})
+		return
+	}
+
+	ctx, cancel := h.createContext()
+	defer cancel()
+
+	grpcReq := &platformv1.RevokePortAuthRequest{
+		BridgeId: bridgeName,
+		PortId:   portName,
+	}
+
+	resp, err := h.sdnService.RevokePortAuth(ctx, grpcReq)
+	if err != nil {
+		h.handleGRPCError(w, r, err)
+		return
+	}
+
+	h.respWriter.Success200(w, r, SuccessResponse{
+		Success: resp.Status.Success,
+		Message: resp.Status.Message,
+	})
+}
+
+// portAuthToResponse converts a port's gRPC authentication state to its REST
+// answer. A nil auth answers an unauthenticated port.
+func portAuthToResponse(bridgeName, portName string, auth *platformv1.PortAuth) PortAuthResponse {
+	resp := PortAuthResponse{BridgeID: bridgeName, PortID: portName}
+	if auth == nil {
+		return resp
+	}
+	resp.Authenticated = auth.Authenticated
+	resp.CertificateCN = auth.CertificateCn
+	resp.AuthorizedVLANs = auth.AuthorizedVlans
+	if auth.AuthenticatedAt != nil {
+		resp.AuthenticatedAt = timeFromTimestamp(auth.AuthenticatedAt)
+	}
+	if auth.ExpiresAt != nil {
+		resp.ExpiresAt = timeFromTimestamp(auth.ExpiresAt)
+	}
+	return resp
+}
+
 // GetPortState handles GET /api/v1/sdn/bridges/{name}/ports/{port}/state
 func (h *SDNHandlers) GetPortState(w http.ResponseWriter, r *http.Request) {
 	bridgeName := h.getBridgeName(r)

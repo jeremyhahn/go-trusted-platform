@@ -321,6 +321,14 @@ func (m *mockHttpWriter) Error500(w http.ResponseWriter, r *http.Request, err er
 	json.NewEncoder(w).Encode(resp)
 }
 
+func (m *mockHttpWriter) Error503(w http.ResponseWriter, r *http.Request, err error) {
+	m.lastStatus = http.StatusServiceUnavailable
+	m.lastError = err
+	w.WriteHeader(http.StatusServiceUnavailable)
+	resp := restwire.WebServiceResponse{Code: 503, Success: false, Error: err.Error()}
+	json.NewEncoder(w).Encode(resp)
+}
+
 // Helper functions for tests
 
 func newTestLogger() *logging.Logger {

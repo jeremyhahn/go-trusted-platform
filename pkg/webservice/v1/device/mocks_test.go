@@ -141,6 +141,10 @@ func (m *MockHttpWriter) Error500(w http.ResponseWriter, r *http.Request, err er
 	m.Called(w, r, err)
 }
 
+func (m *MockHttpWriter) Error503(w http.ResponseWriter, r *http.Request, err error) {
+	m.Called(w, r, err)
+}
+
 // MockSwitchService is a mock implementation of SwitchServiceProvider
 type MockSwitchService struct {
 	mock.Mock

@@ -194,7 +194,7 @@ curl --unix-socket /run/platformd.sock \
 
 ```bash
 curl --unix-socket /run/platformd.sock \
-  "http://localhost/api/v1/dns/resolve?name=ns1.example.internal.&type=A"
+  "http://localhost/api/v1/dns/resolve?fqdn=ns1.example.internal.&type=A"
 ```
 
 ## Go Client Examples
@@ -263,7 +263,7 @@ func (c *DNSClient) AddRecord(zoneName string, record Record) error {
 }
 
 func (c *DNSClient) Resolve(name, recordType string) ([]string, error) {
-    url := fmt.Sprintf("http://localhost/api/v1/dns/resolve?name=%s&type=%s", name, recordType)
+    url := fmt.Sprintf("http://localhost/api/v1/dns/resolve?fqdn=%s&type=%s", name, recordType)
     resp, err := c.client.Get(url)
     if err != nil {
         return nil, err
@@ -275,9 +275,13 @@ func (c *DNSClient) Resolve(name, recordType string) ([]string, error) {
         return nil, err
     }
 
+    // Only the records name owns, from its longest managed zone; see
+    // resolution.md#api-resolve.
     var values []string
-    for _, a := range result.Answers {
-        values = append(values, a.Value)
+    for _, r := range result.Records {
+        if r.A != nil {
+            values = append(values, r.A.Value)
+        }
     }
     return values, nil
 }

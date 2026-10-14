@@ -19,6 +19,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	kmssdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -923,13 +924,13 @@ func (s *KMSGRPCService) GenerateDataKey(
 
 	// For GenerateDataKey, we use Encrypt to wrap a generated key
 	// First generate random bytes for the data key
-	keySize := req.GetKeySize()
-	if keySize <= 0 {
-		keySize = 32 // Default to 256-bit key
+	keyBytes, err := dataKeyBytes(req.GetAlgorithm(), req.GetKeySize())
+	if err != nil {
+		return nil, err
 	}
 
 	randomReq := &KMSGenerateRandomRequest{
-		NumBytes: keySize,
+		NumBytes: keyBytes,
 	}
 
 	randomResp, err := s.service.GenerateRandom(ctx, randomReq)
@@ -973,13 +974,13 @@ func (s *KMSGRPCService) GenerateWrappedDataKey(
 	}
 
 	// Generate random bytes for the data key
-	keySize := req.GetKeySize()
-	if keySize <= 0 {
-		keySize = 32 // Default to 256-bit key
+	keyBytes, err := dataKeyBytes(req.GetKeyAlgorithm(), req.GetKeySize())
+	if err != nil {
+		return nil, err
 	}
 
 	randomReq := &KMSGenerateRandomRequest{
-		NumBytes: keySize,
+		NumBytes: keyBytes,
 	}
 
 	randomResp, err := s.service.GenerateRandom(ctx, randomReq)
@@ -1006,6 +1007,16 @@ func (s *KMSGRPCService) GenerateWrappedDataKey(
 		WrappingAlgorithm: req.GetWrappingAlgorithm(),
 		Timestamp:         time.Now().UTC().Unix(),
 	}, nil
+}
+
+// dataKeyBytes resolves a data-key request's algorithm and key_size, which
+// is in bits, to the length in bytes of the key to mint.
+func dataKeyBytes(algorithm platformv1.KMSKeyAlgorithm, keySizeBits int32) (int32, error) {
+	_, bits, err := kmssdk.ResolveDataKey(algorithm, keySizeBits)
+	if err != nil {
+		return 0, status.Error(codes.InvalidArgument, err.Error())
+	}
+	return bits / 8, nil
 }
 
 // BackendStatus returns the status of the KMS backend.

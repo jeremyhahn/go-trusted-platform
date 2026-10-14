@@ -135,8 +135,8 @@ spellings.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Authenticate port | `MISSING — docs/13 G7` | `AuthenticatePort` | `MISSING — docs/13 G7` | `sdn_authenticate_port` | ✅ |
-| Revoke port auth | `MISSING — docs/13 G7` | `RevokePortAuth` | `MISSING — docs/13 G7` | `sdn_revoke_port_auth` | ✅ |
+| Authenticate port | `POST /api/v1/sdn/bridges/{name}/ports/{port}/auth` (webservice only) | `AuthenticatePort` | `MISSING — docs/13 G7` | `sdn_authenticate_port` | ✅ |
+| Revoke port auth | `DELETE /api/v1/sdn/bridges/{name}/ports/{port}/auth` (webservice only) | `RevokePortAuth` | `MISSING — docs/13 G7` | `sdn_revoke_port_auth` | ✅ |
 | Apply policy | `POST /api/v1/sdn/policies` | `ApplyPolicy` | `OpSDNApplyPolicy` (`0x47`) | `sdn_apply_policy` | ✅ |
 | List policies | `GET /api/v1/sdn/policies` | `ListPolicies` | `OpSDNListPolicies` (`0x49`) | `sdn_list_policies` | ✅ |
 | Get policy | `GET /api/v1/sdn/policies/{id}` | `GetPolicy` | `OpSDNGetPolicy` (`0x48`) | `sdn_get_policy` | ✅ |
@@ -160,10 +160,27 @@ policy created over MCP is seen over REST and gRPC and the other way round.
 Until #730 the MCP tools kept their own policy-engine path and their own
 argument shape.
 
-**Port authentication has no REST and no QUIC route.** It is reachable over
-gRPC, Unix, MCP and embedded only. Given that port authentication is the SDN
-feature's security core — see [engineering.md](engineering.md) §2 — this is the
-most consequential hole in the matrix.
+**Port authentication is on the webservice REST router, not on QUIC or the
+daemon's standalone REST server.** `POST` and `DELETE` on
+`/api/v1/sdn/bridges/{name}/ports/{port}/auth` call `SDNService.AuthenticatePort`
+and `RevokePortAuth` behind the webservice's admin gate. Authenticate takes
+`{"certificate": <base64 PEM or DER>, "format": "DER"}` (`format` defaults to
+PEM) and answers the port's authentication state; a missing bridge, port or
+certificate, or a certificate that does not parse or is not valid now, is `400`; an unknown bridge or port, or a
+revoke on a port that is not authenticated, is `404`. Given that port
+authentication is the SDN feature's security core — see
+[engineering.md](engineering.md) §2 — the missing QUIC route is the most
+consequential hole left in the matrix.
+
+**The SDK's REST transport puts every bridge and port ID in the path.**
+`DeleteBridge`, `AddPort`, `DeletePort`, `AuthenticatePort` and
+`RevokePortAuth` call the templated routes in the tables above
+(`sdk/go/transport/rest/sdn.go`); the body carries only the remaining fields,
+and an empty bridge or port ID is refused before the call (`InvalidArgument`).
+`AddPort` sends the REST port document (`type` as the short type name) and
+refuses a port type it does not know. Until #452 these five calls went to flat
+routes no server registers. `ApplyPolicy` still claims
+`POST /api/v1/sdn/policies/apply`, which no server registers.
 
 **This is IDevID-certificate authentication, not EAP/RADIUS.** `AuthenticatePort`
 validates a device certificate; there is no RADIUS exchange behind it.
@@ -249,13 +266,17 @@ gRPC `OverlayService`. QUIC overlay operations are sub-opcodes under the
 | List tunnels | `GET /api/v1/overlay/tunnels` | `ListTunnels` | `OpOverlayListTunns` (`0x07`) | `overlay_tunnel_list` | ✅ |
 | Tunnel statistics | `GET /api/v1/overlay/tunnels/stats` | `GetTunnelStats` | `OpOverlayTunnelStats` (`0x0A`) | `overlay_tunnel_stats` | ✅ |
 | List remote MACs | `GET /api/v1/overlay/macs` | `ListRemoteMACs` | `OpOverlayListMACs` (`0x08`) | `overlay_mac_list` | ✅ |
-| Forget MAC | `DELETE /api/v1/overlay/macs` | `ForgetMAC` | `OpOverlayForgetMAC` (`0x09`) | `overlay_mac_forget` | ✅ |
+| Forget MAC | `DELETE /api/v1/overlay/macs?mac=<mac>&vni=<vni>` | `ForgetMAC` | `OpOverlayForgetMAC` (`0x09`) | `overlay_mac_forget` | ✅ |
 
 The overlay is served on every transport: every capability is present on all
 six, each answering from the one overlay controller.
 
 `{vni:[0-9]+}` is numerically constrained in the route; a non-numeric VNI 404s
 rather than reaching the handler.
+
+Forget MAC reads the MAC and VNI from the query only; a `DELETE` body is
+ignored. A missing MAC, a zero VNI or a malformed MAC is refused with 400 and
+the same reason gRPC returns.
 
 ---
 

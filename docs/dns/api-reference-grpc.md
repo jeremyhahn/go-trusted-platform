@@ -270,27 +270,28 @@ tlsa, err := client.AddTLSARecord(ctx, &dns.AddTLSARecordRequest{
 
 ```protobuf
 message ResolveRequest {
-  string name = 1;
-  string type = 2;
+  string fqdn = 1;
+  RecordType type = 2;
 }
 
 message ResolveResponse {
-  string name = 1;
-  string type = 2;
-  uint32 ttl = 3;
-  repeated Answer answers = 4;
-}
-
-message Answer {
-  string value = 1;
+  repeated Record records = 1;
+  bool authoritative = 2;
 }
 ```
 
+`fqdn` is required (`InvalidArgument` without it); `RECORD_TYPE_UNSPECIFIED`
+returns every type. The longest managed zone suffix of `fqdn` answers with
+only the records `fqdn` owns ([resolution.md](resolution.md#api-resolve)).
+With no records, `authoritative` is `true` inside a managed zone and `false`
+outside every one. A type resolution does not serve (SOA, the DNSSEC types) is
+`InvalidArgument`.
+
 **Go Example:**
 ```go
-resp, err := client.Resolve(ctx, &dns.ResolveRequest{
-    Name: "ns1.example.internal.",
-    Type: "A",
+resp, err := client.Resolve(ctx, &platformv1.ResolveRequest{
+    Fqdn: "ns1.example.internal.",
+    Type: platformv1.RecordType_RECORD_TYPE_A,
 })
 ```
 

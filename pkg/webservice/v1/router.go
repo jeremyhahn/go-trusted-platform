@@ -888,12 +888,13 @@ func (v1Router *Router) pxeRoutes() {
 	r := restpxe.NewPXERouter(
 		v1Router.logger,
 		server,
-		v1Router.responseWriter)
+		v1Router.responseWriter,
+		v1Router.restHandlerRegistry.PXEWebhookEnabled())
 	// Split by principal. Service controls and the device lifecycle —
 	// authorize, quarantine, retry, state — are operator work and take the
 	// admin gate. The install-completion webhook stays off it because its
-	// caller is a booting node; it is NOT certified by this campaign, and
-	// the fact that it presents and checks no credential at all is #238.
+	// caller is a booting node; it presents and checks no credential at
+	// all (#238), so it is mounted only when the operator enabled it.
 	r.RegisterMachineFacingRoutes(v1Router.router)
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }

@@ -143,6 +143,10 @@ func (m *MockHttpWriter) Error500(w http.ResponseWriter, r *http.Request, err er
 	m.Called(w, r, err)
 }
 
+func (m *MockHttpWriter) Error503(w http.ResponseWriter, r *http.Request, err error) {
+	m.Called(w, r, err)
+}
+
 // createTestInvitation creates a test invitation with specified parameters.
 func createTestInvitation(id uint64, tenantID, email, role string, status entities.InvitationStatus) *entities.Invitation {
 	now := time.Now().UTC()

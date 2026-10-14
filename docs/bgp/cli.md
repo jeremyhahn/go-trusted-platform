@@ -37,9 +37,9 @@ platformctl sdn gateway bgp withdraw --prefix 203.0.113.0/24
 platformctl sdn gateway bgp routes
 ```
 
-Over REST, `withdraw` fails with "prefix is required" because of an SDK
-defect ([api.md §3](api.md#3-known-defect-rest-withdraw)). Use another
-transport.
+`withdraw` works on every transport. Over REST the SDK sends the prefix as
+the `prefix` query parameter, which is where the handler reads it
+([api.md §1](api.md#1-the-six-transports)).
 
 ## 2. `platformctl sdn gateway snapshot`
 

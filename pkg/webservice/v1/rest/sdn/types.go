@@ -70,6 +70,25 @@ type PortResponse struct {
 	Labels    map[string]string `json:"labels,omitempty"`
 }
 
+// AuthenticatePortRequest is the request body for authenticating a port with
+// a client certificate. The certificate travels base64-encoded; format is
+// "PEM" (the default) or "DER".
+type AuthenticatePortRequest struct {
+	Certificate []byte `json:"certificate"`
+	Format      string `json:"format,omitempty"`
+}
+
+// PortAuthResponse is the authentication state of a port.
+type PortAuthResponse struct {
+	BridgeID        string     `json:"bridge_id"`
+	PortID          string     `json:"port_id"`
+	Authenticated   bool       `json:"authenticated"`
+	CertificateCN   string     `json:"certificate_cn,omitempty"`
+	AuthenticatedAt *time.Time `json:"authenticated_at,omitempty"`
+	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
+	AuthorizedVLANs []uint32   `json:"authorized_vlans,omitempty"`
+}
+
 // ListPortsResponse is the response for listing ports
 type ListPortsResponse struct {
 	Ports []PortResponse `json:"ports"`

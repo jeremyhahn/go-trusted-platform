@@ -96,7 +96,7 @@ req, _ := http.NewRequest("POST", "https://platform.example.com:9444/api/v1/dns/
 ### Resolution
 
 ```go
-req, _ := http.NewRequest("GET", "https://platform.example.com:9444/api/v1/dns/resolve?name=ns1.example.internal.&type=A", nil)
+req, _ := http.NewRequest("GET", "https://platform.example.com:9444/api/v1/dns/resolve?fqdn=ns1.example.internal.&type=A", nil)
 resp, err := client.Do(req)
 ```
 
@@ -168,23 +168,14 @@ Same JSON format as REST API:
 }
 ```
 
-**Resolve Request:**
+**Resolve Response** (`GET /api/v1/dns/resolve?fqdn=ns1.example.internal.&type=A`;
+semantics in [resolution.md](resolution.md#api-resolve)):
 ```json
 {
-  "name": "ns1.example.internal.",
-  "type": "A"
-}
-```
-
-**Resolve Response:**
-```json
-{
-  "name": "ns1.example.internal.",
-  "type": "A",
-  "ttl": 3600,
-  "answers": [
-    {"value": "192.168.1.10"}
-  ]
+  "records": [
+    {"type": "A", "a": {"name": "ns1", "value": "192.168.1.10", "ttl": 3600}}
+  ],
+  "authoritative": true
 }
 ```
 

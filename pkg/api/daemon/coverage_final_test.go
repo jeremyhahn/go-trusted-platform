@@ -412,18 +412,19 @@ func TestCoverageFinalBuildDataKeySpecForQUIC(t *testing.T) {
 		name      string
 		algorithm platformv1.KMSKeyAlgorithm
 		expected  pb.KeyAlgorithm
+		bits      int32
 	}{
-		{"unspecified_defaults_aes256", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED, pb.KeyAlgorithm_KEY_ALG_AES_256_GCM},
-		{"aes128", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128, pb.KeyAlgorithm_KEY_ALG_AES_128_GCM},
-		{"aes192", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_192, pb.KeyAlgorithm_KEY_ALG_AES_192_GCM},
-		{"aes256", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256, pb.KeyAlgorithm_KEY_ALG_AES_256_GCM},
-		{"chacha20", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_CHACHA20_POLY1305, pb.KeyAlgorithm_KEY_ALG_CHACHA20_POLY1305},
+		{"unspecified_defaults_aes256", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED, pb.KeyAlgorithm_KEY_ALG_AES_256_GCM, 256},
+		{"aes128", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128, pb.KeyAlgorithm_KEY_ALG_AES_128_GCM, 128},
+		{"aes192", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_192, pb.KeyAlgorithm_KEY_ALG_AES_192_GCM, 192},
+		{"aes256", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256, pb.KeyAlgorithm_KEY_ALG_AES_256_GCM, 256},
+		{"chacha20", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_CHACHA20_POLY1305, pb.KeyAlgorithm_KEY_ALG_CHACHA20_POLY1305, 256},
 	}
 
 	for _, tc := range valid {
 		t.Run("valid_"+tc.name, func(t *testing.T) {
 			t.Parallel()
-			spec, err := buildDataKeySpecForQUIC(int32(tc.algorithm), 256)
+			spec, err := buildDataKeySpecForQUIC(int32(tc.algorithm), 0)
 			if err != nil {
 				t.Fatalf("buildDataKeySpecForQUIC(%v) error: %v", tc.algorithm, err)
 			}
@@ -433,8 +434,8 @@ func TestCoverageFinalBuildDataKeySpecForQUIC(t *testing.T) {
 			if spec.Algorithm != tc.expected {
 				t.Errorf("Algorithm = %v, want %v", spec.Algorithm, tc.expected)
 			}
-			if spec.KeySize != 256 {
-				t.Errorf("KeySize = %d, want 256", spec.KeySize)
+			if spec.KeySize != tc.bits {
+				t.Errorf("KeySize = %d, want %d", spec.KeySize, tc.bits)
 			}
 		})
 	}

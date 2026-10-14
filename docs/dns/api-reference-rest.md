@@ -255,23 +255,27 @@ Content-Type: application/json
 ### Resolve
 
 ```http
-GET /api/v1/dns/resolve?name={fqdn}&type={type}
+GET /api/v1/dns/resolve?fqdn={fqdn}&type={type}
 ```
+
+`fqdn` is required (400 without it); `type` is optional and filters. The
+longest managed zone suffix of `fqdn` answers with only the records `fqdn`
+owns ([resolution.md](resolution.md#api-resolve)). `records` is `[]` when
+nothing matches: `authoritative` is then `true` inside a managed zone and
+`false` outside every one. A `type` resolution does not serve is a 400.
 
 **Example:**
 ```http
-GET /api/v1/dns/resolve?name=ns1.example.internal.&type=A
+GET /api/v1/dns/resolve?fqdn=ns1.example.internal.&type=A
 ```
 
 **Response:**
 ```json
 {
-  "name": "ns1.example.internal.",
-  "type": "A",
-  "ttl": 3600,
-  "answers": [
-    {"value": "192.168.1.10"}
-  ]
+  "records": [
+    {"type": "A", "a": {"name": "ns1", "value": "192.168.1.10", "ttl": 3600}}
+  ],
+  "authoritative": true
 }
 ```
 
@@ -330,6 +334,6 @@ curl -X POST https://platform.example.com/api/v1/dns/zones/myzone.internal./reco
   -d '{"type":"A","name":"server01","value":"192.168.1.100","ttl":3600}'
 
 # Resolve
-curl -X GET "https://platform.example.com/api/v1/dns/resolve?name=ns1.example.internal.&type=A" \
+curl -X GET "https://platform.example.com/api/v1/dns/resolve?fqdn=ns1.example.internal.&type=A" \
   -H "Authorization: Bearer $TOKEN"
 ```

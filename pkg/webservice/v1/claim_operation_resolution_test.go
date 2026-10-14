@@ -56,6 +56,7 @@ var claimsResolvingToASiblingRoute = map[string]string{
 // TestSDKRouteClaims_ResolveToTheirOwnOperation is the fourth ratchet (#415).
 func TestSDKRouteClaims_ResolveToTheirOwnOperation(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
+	built := walkRoutes(t, router)
 
 	claims := sdkrest.RouteClaims()
 	require.GreaterOrEqualf(t, len(claims), 280,
@@ -78,7 +79,7 @@ func TestSDKRouteClaims_ResolveToTheirOwnOperation(t *testing.T) {
 			continue
 		}
 
-		req := httptest.NewRequest(c.Method, concreteFor(c.Path), nil)
+		req := httptest.NewRequest(c.Method, concreteClaim(c.Method, c.Path, built), nil)
 		var match mux.RouteMatch
 		if !router.Match(req, &match) || match.MatchErr != nil || match.Route == nil {
 			continue
@@ -123,6 +124,7 @@ func TestSDKRouteClaims_SiblingExemptionsAreStillReal(t *testing.T) {
 		return
 	}
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
+	built := walkRoutes(t, router)
 
 	live := map[string]sdkrest.RouteClaim{}
 	for _, c := range sdkrest.RouteClaims() {
@@ -136,7 +138,7 @@ func TestSDKRouteClaims_SiblingExemptionsAreStillReal(t *testing.T) {
 			stale = append(stale, method+" (no longer a claim at all)")
 			continue
 		}
-		req := httptest.NewRequest(c.Method, concreteFor(c.Path), nil)
+		req := httptest.NewRequest(c.Method, concreteClaim(c.Method, c.Path, built), nil)
 		var match mux.RouteMatch
 		if !router.Match(req, &match) || match.MatchErr != nil || match.Route == nil {
 			stale = append(stale, method+" (now resolves to no route -- that is unroutedClaims' finding)")

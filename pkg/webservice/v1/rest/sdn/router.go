@@ -78,6 +78,8 @@ func (r *SDNRouter) registerBridgeRoutes(router *mux.Router) {
 // GET    /api/v1/sdn/bridges/{name}/ports/{port}/state       - Get port state
 // PUT    /api/v1/sdn/bridges/{name}/ports/{port}/state       - Set port state
 // GET    /api/v1/sdn/bridges/{name}/ports/{port}/stats       - Get port statistics
+// POST   /api/v1/sdn/bridges/{name}/ports/{port}/auth        - Authenticate port
+// DELETE /api/v1/sdn/bridges/{name}/ports/{port}/auth        - Revoke port authentication
 func (r *SDNRouter) registerPortRoutes(router *mux.Router) {
 	// Port management routes
 	router.HandleFunc("/bridges/{name}/ports", r.handlers.AddPort).Methods("POST")
@@ -90,6 +92,10 @@ func (r *SDNRouter) registerPortRoutes(router *mux.Router) {
 
 	// Port statistics routes
 	router.HandleFunc("/bridges/{name}/ports/{port}/stats", r.handlers.GetPortStats).Methods("GET")
+
+	// Port authentication routes
+	router.HandleFunc("/bridges/{name}/ports/{port}/auth", r.handlers.AuthenticatePort).Methods("POST")
+	router.HandleFunc("/bridges/{name}/ports/{port}/auth", r.handlers.RevokePortAuth).Methods("DELETE")
 }
 
 // registerFlowRoutes registers flow management endpoints

@@ -537,6 +537,23 @@ func TestError500(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), `"error":"internal server error"`)
 }
 
+func TestError503(t *testing.T) {
+	logger := logging.NewLogger(slog.LevelInfo, os.Stdout)
+	writer := NewResponseWriter(logger, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("accept", "application/json")
+	rec := httptest.NewRecorder()
+
+	err := errors.New("kms crypto service is not available")
+	writer.Error503(rec, req, err)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"success":false`)
+	assert.Contains(t, rec.Body.String(), `"code":503`)
+	assert.Contains(t, rec.Body.String(), `"error":"kms crypto service is not available"`)
+}
+
 func TestResponseWriterWithSession(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelInfo, os.Stdout)
 	session := &mockSession{}

@@ -139,6 +139,10 @@ func (m *mockResponseWriter) Error500(w http.ResponseWriter, r *http.Request, er
 	m.Called(w, r, err)
 }
 
+func (m *mockResponseWriter) Error503(w http.ResponseWriter, r *http.Request, err error) {
+	m.Called(w, r, err)
+}
+
 // mockFIDO2Client implements the SDK FIDO2Client interface — the single
 // canonical WebAuthn/FIDO2 ceremony surface the handler proxies to.
 type mockFIDO2Client struct{ mock.Mock }

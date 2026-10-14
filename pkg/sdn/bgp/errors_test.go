@@ -525,6 +525,20 @@ func TestErrPeerExists(t *testing.T) {
 	assert.Contains(t, err.Error(), "already exists")
 }
 
+// TestErrAuthTypeUnavailableInFIPS_NamesWhatWorks pins the operator hint to
+// auth-type none: a tcp-ao peer is refused at start
+// (ErrTCPAOSessionBindingUnsupported), so "use tcp-ao" would send the operator
+// from one refusal to another.
+func TestErrAuthTypeUnavailableInFIPS_NamesWhatWorks(t *testing.T) {
+	err := ErrAuthTypeUnavailableInFIPS{Peer: "10.0.0.2", AuthType: AuthTypeMD5}
+
+	msg := err.Error()
+	assert.Contains(t, msg, "10.0.0.2")
+	assert.Contains(t, msg, "auth-type md5 is not available in a FIPS build")
+	assert.Contains(t, msg, "use auth-type none")
+	assert.NotContains(t, msg, "use tcp-ao")
+}
+
 // Test ErrDampeningOperationFailed error type
 func TestErrDampeningOperationFailed(t *testing.T) {
 	cause := errors.New("internal error")

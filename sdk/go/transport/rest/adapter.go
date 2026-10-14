@@ -438,7 +438,7 @@ func buildTemplatedRequest(route templatedRoute, args interface{}) (path string,
 			return "", nil, status.Errorf(codes.Internal,
 				"REST adapter: proto field %q missing on %s", p.field, rm.Descriptor().FullName())
 		}
-		_, encoded, ok := encodePathField(v, fd)
+		encoded, ok := p.render(v, fd)
 		if !ok {
 			return "", nil, status.Errorf(codes.InvalidArgument,
 				"%s requires non-zero %s for templated REST route", rm.Descriptor().FullName(), p.field)
@@ -455,7 +455,7 @@ func buildTemplatedRequest(route templatedRoute, args interface{}) (path string,
 	// "absent" and "no filter" coincide with the server defaults.
 	values := url.Values{}
 	for _, qp := range route.queryParams {
-		encoded, qErr := encodeQueryField(rm, qp.field)
+		encoded, qErr := qp.render(rm)
 		if qErr != nil {
 			return "", nil, qErr
 		}
@@ -664,10 +664,29 @@ func (c *restClientConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, m
 // template (e.g. "{profileID}") and field is the proto field name in
 // the request message (snake_case, as protoreflect surfaces it). field
 // may be a dotted path ("device.id") into a singular nested message, for
-// update requests that carry the identifier inside the resource.
+// update requests that carry the identifier inside the resource. encode,
+// when set, replaces the default rendering for a server that spells the
+// value differently.
 type pathParam struct {
 	placeholder string
 	field       string
+	encode      fieldEncoder
+}
+
+// fieldEncoder renders a request field's value as the server spells it in
+// the URL, unescaped. An empty result means the field is unset: a path
+// parameter refuses it and a query parameter is omitted.
+type fieldEncoder func(protoreflect.Value) string
+
+// render returns the escaped path segment for the parameter's value and
+// whether the value is set.
+func (p pathParam) render(v protoreflect.Value, fd protoreflect.FieldDescriptor) (string, bool) {
+	if p.encode == nil {
+		_, encoded, ok := encodePathField(v, fd)
+		return encoded, ok
+	}
+	raw := p.encode(v)
+	return url.PathEscape(raw), raw != ""
 }
 
 // queryParam describes a single query-string parameter derived from a
@@ -675,9 +694,27 @@ type pathParam struct {
 // dot-separated proto field path on the request message (snake_case, as
 // protoreflect surfaces it — e.g. "pagination.page"). Zero-valued
 // fields are omitted from the URL so "absent" and "no filter" coincide.
+// encode, when set, replaces the default rendering of a single value.
 type queryParam struct {
-	name  string
-	field string
+	name   string
+	field  string
+	encode fieldEncoder
+}
+
+// render returns the parameter's raw query values; none when it is unset.
+func (q queryParam) render(rm protoreflect.Message) ([]string, error) {
+	if q.encode == nil {
+		return encodeQueryField(rm, q.field)
+	}
+	v, _, ok := fieldPathValue(rm, q.field)
+	if !ok {
+		return nil, status.Errorf(codes.Internal,
+			"REST adapter: query field %q missing on %s", q.field, rm.Descriptor().FullName())
+	}
+	if raw := q.encode(v); raw != "" {
+		return []string{raw}, nil
+	}
+	return nil, nil
 }
 
 // templatedRoute describes a REST route whose URL is derived from the
@@ -739,6 +776,31 @@ var templatedRouteTable = map[string]templatedRoute{
 		method:      http.MethodGet,
 		pathParams:  []pathParam{{placeholder: "{vtep}", field: "vtep"}},
 		queryParams: []queryParam{{name: "gateway_id", field: "gateway_id"}},
+	},
+
+	// BGP withdraw — server registration in
+	// pkg/webservice/v1/rest/gateway/router.go::RegisterRoutes. The server
+	// reads the prefix from ?prefix= only; sent in the DELETE body it was
+	// never seen, so every REST withdraw failed with "prefix is required".
+	// An empty prefix is omitted and refused by the server, as on gRPC.
+	"/platform.v1.GatewayService/WithdrawPrefix": {
+		path:        "/api/v1/gateway/bgp/prefixes",
+		method:      http.MethodDelete,
+		queryParams: []queryParam{{name: "prefix", field: "prefix"}},
+	},
+	// Overlay MAC forget — server registration in
+	// pkg/webservice/v1/rest/overlay/router.go::RegisterRoutes. The server
+	// reads the MAC and VNI from ?mac= and ?vni= only; sent in the DELETE
+	// body they were never seen, so every REST forget failed with "mac is
+	// required". Empty values are omitted and refused by the server, as on
+	// gRPC.
+	"/platform.v1.OverlayService/ForgetMAC": {
+		path:   "/api/v1/overlay/macs",
+		method: http.MethodDelete,
+		queryParams: []queryParam{
+			{name: "mac", field: "mac"},
+			{name: "vni", field: "vni"},
+		},
 	},
 
 	"/platform.v1.GatewayService/GetPerfDatapath": {
@@ -837,15 +899,14 @@ var templatedRouteTable = map[string]templatedRoute{
 	// server route each one now targets is listed beside it; all ten are in
 	// pkg/webservice/v1/testdata/routes.golden.
 	//
-	// Two singular accessors are NOT here, because the server serves no route
-	// for them at all: DNSService/GetRecord (records live only under
-	// /api/v1/dns/zones/{zone}/records, and platform_dns.proto has no GetRecord
-	// rpc) and PlatformIAMService/GetPermission (the IAM router registers
-	// /policies, never /permissions, and iam.proto has only CheckPermission).
-	// Inventing a path for either would replace a wrong answer with a 404 that
-	// reads as fixed, so they stay in the flat table and are recorded as
-	// exemptions in
+	// One singular accessor is NOT here, because the server serves no route
+	// for it at all: PlatformIAMService/GetPermission (the IAM router
+	// registers /policies, never /permissions, and iam.proto has only
+	// CheckPermission). Inventing a path for it would replace a wrong answer
+	// with a 404 that reads as fixed, so it stays in the flat table and is
+	// recorded as an exemption in
 	// TestRouteClaims_NoSingularAccessorSharesACollectionPathWithItsList.
+	// The DNS record and zone routes live in dns.go.
 	//
 	// The four IAM getters below ARE here even though
 	// pkg/webservice/v1/testdata/routes.golden contains no /api/v1/iam route.
@@ -942,6 +1003,15 @@ var templatedRouteTable = map[string]templatedRoute{
 	// GET /api/v1/kms/keys/{name} -- the server names the segment {name}; the
 	// proto field is key_id. The two names describe the same value.
 	"/platform.v1.KeyManagementService/GetKey": itemRoute("/api/v1/kms/keys/{name}", http.MethodGet, "{name}", "key_id"),
+
+	// The KMS key and crypto operations name the key the same way; their
+	// bodies are reshaped to the server's wire names in kms.go.
+	"/platform.v1.KeyManagementService/DeleteKey": itemRoute("/api/v1/kms/keys/{name}", http.MethodDelete, "{name}", "key_id"),
+	"/platform.v1.KeyManagementService/RotateKey": itemRoute("/api/v1/kms/keys/{name}/rotate", http.MethodPost, "{name}", "key_id"),
+	"/platform.v1.KeyManagementService/Encrypt":   itemRoute("/api/v1/kms/encrypt/{name}", http.MethodPost, "{name}", "key_id"),
+	"/platform.v1.KeyManagementService/Decrypt":   itemRoute("/api/v1/kms/decrypt/{name}", http.MethodPost, "{name}", "key_id"),
+	"/platform.v1.KeyManagementService/Sign":      itemRoute("/api/v1/kms/sign/{name}", http.MethodPost, "{name}", "key_id"),
+	"/platform.v1.KeyManagementService/Verify":    itemRoute("/api/v1/kms/verify/{name}", http.MethodPost, "{name}", "key_id"),
 
 	// GET /api/v1/overlay/vteps/{nodeId}
 	"/platform.v1.OverlayService/GetVTEP": itemRoute("/api/v1/overlay/vteps/{nodeId}", http.MethodGet, "{nodeId}", "node_id"),
@@ -1161,13 +1231,7 @@ var grpcMethodToRESTMap = map[string]struct {
 
 	// KMS Service
 	"/platform.v1.KeyManagementService/GenerateKey":            {"/api/v1/kms/keys", http.MethodPost},
-	"/platform.v1.KeyManagementService/DeleteKey":              {"/api/v1/kms/keys", http.MethodDelete},
 	"/platform.v1.KeyManagementService/ListKeys":               {"/api/v1/kms/keys", http.MethodGet},
-	"/platform.v1.KeyManagementService/RotateKey":              {"/api/v1/kms/keys/rotate", http.MethodPost},
-	"/platform.v1.KeyManagementService/Encrypt":                {"/api/v1/kms/encrypt", http.MethodPost},
-	"/platform.v1.KeyManagementService/Decrypt":                {"/api/v1/kms/decrypt", http.MethodPost},
-	"/platform.v1.KeyManagementService/Sign":                   {"/api/v1/kms/sign", http.MethodPost},
-	"/platform.v1.KeyManagementService/Verify":                 {"/api/v1/kms/verify", http.MethodPost},
 	"/platform.v1.KeyManagementService/GenerateRandom":         {"/api/v1/kms/random", http.MethodPost},
 	"/platform.v1.KeyManagementService/GenerateDataKey":        {"/api/v1/kms/data-keys", http.MethodPost},
 	"/platform.v1.KeyManagementService/GenerateWrappedDataKey": {"/api/v1/kms/data-keys/wrapped", http.MethodPost},
@@ -1221,28 +1285,18 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.DeviceService/BootDelivery":    {"/api/v1/device/boot", http.MethodPost},
 
 	// SDN Service
-	"/platform.v1.SDNService/CreateBridge":     {"/api/v1/sdn/bridges", http.MethodPost},
-	"/platform.v1.SDNService/DeleteBridge":     {"/api/v1/sdn/bridges", http.MethodDelete},
-	"/platform.v1.SDNService/ListBridges":      {"/api/v1/sdn/bridges", http.MethodGet},
-	"/platform.v1.SDNService/AddPort":          {"/api/v1/sdn/ports", http.MethodPost},
-	"/platform.v1.SDNService/DeletePort":       {"/api/v1/sdn/ports", http.MethodDelete},
-	"/platform.v1.SDNService/AddFlow":          {"/api/v1/sdn/flows", http.MethodPost},
-	"/platform.v1.SDNService/DeleteFlow":       {"/api/v1/sdn/flows", http.MethodDelete},
-	"/platform.v1.SDNService/ListFlows":        {"/api/v1/sdn/flows", http.MethodGet},
-	"/platform.v1.SDNService/ApplyPolicy":      {"/api/v1/sdn/policies/apply", http.MethodPost},
-	"/platform.v1.SDNService/ListPolicies":     {"/api/v1/sdn/policies", http.MethodGet},
-	"/platform.v1.SDNService/AuthenticatePort": {"/api/v1/sdn/ports/auth", http.MethodPost},
-	"/platform.v1.SDNService/RevokePortAuth":   {"/api/v1/sdn/ports/auth", http.MethodDelete},
+	"/platform.v1.SDNService/CreateBridge": {"/api/v1/sdn/bridges", http.MethodPost},
+	"/platform.v1.SDNService/ListBridges":  {"/api/v1/sdn/bridges", http.MethodGet},
+	"/platform.v1.SDNService/AddFlow":      {"/api/v1/sdn/flows", http.MethodPost},
+	"/platform.v1.SDNService/DeleteFlow":   {"/api/v1/sdn/flows", http.MethodDelete},
+	"/platform.v1.SDNService/ListFlows":    {"/api/v1/sdn/flows", http.MethodGet},
+	"/platform.v1.SDNService/ApplyPolicy":  {"/api/v1/sdn/policies/apply", http.MethodPost},
+	"/platform.v1.SDNService/ListPolicies": {"/api/v1/sdn/policies", http.MethodGet},
 
-	// DNS Service
-	"/platform.v1.DNSService/AddRecord":    {"/api/v1/dns/records", http.MethodPost},
-	"/platform.v1.DNSService/DeleteRecord": {"/api/v1/dns/records", http.MethodDelete},
-	"/platform.v1.DNSService/GetRecord":    {"/api/v1/dns/records", http.MethodGet},
-	"/platform.v1.DNSService/ListRecords":  {"/api/v1/dns/records", http.MethodGet},
-	"/platform.v1.DNSService/Resolve":      {"/api/v1/dns/resolve", http.MethodGet},
-	"/platform.v1.DNSService/CreateZone":   {"/api/v1/dns/zones", http.MethodPost},
-	"/platform.v1.DNSService/DeleteZone":   {"/api/v1/dns/zones", http.MethodDelete},
-	"/platform.v1.DNSService/ListZones":    {"/api/v1/dns/zones", http.MethodGet},
+	// DNS Service. The record, resolve and zone-delete routes are templated
+	// in dns.go.
+	"/platform.v1.DNSService/CreateZone": {"/api/v1/dns/zones", http.MethodPost},
+	"/platform.v1.DNSService/ListZones":  {"/api/v1/dns/zones", http.MethodGet},
 
 	// Attestation Service. The keys are the rpcs attestation.proto declares;
 	// the routes are pkg/webservice/v1/rest/attestation/server_router.go's.
@@ -1338,7 +1392,6 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.GatewayService/GetBGPStatus":          {"/api/v1/gateway/bgp/status", http.MethodGet},
 	"/platform.v1.GatewayService/ListBGPPeers":          {"/api/v1/gateway/bgp/peers", http.MethodGet},
 	"/platform.v1.GatewayService/AnnouncePrefix":        {"/api/v1/gateway/bgp/prefixes", http.MethodPost},
-	"/platform.v1.GatewayService/WithdrawPrefix":        {"/api/v1/gateway/bgp/prefixes", http.MethodDelete},
 	"/platform.v1.GatewayService/ListAnnouncedPrefixes": {"/api/v1/gateway/bgp/prefixes", http.MethodGet},
 	// The IPAM verbs route to the full /sdn/gateway/ipam surface; see
 	// gateway_ipam.go.
@@ -1390,7 +1443,6 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.OverlayService/ListTunnels":      {"/api/v1/overlay/tunnels", http.MethodGet},
 	"/platform.v1.OverlayService/GetTunnelStats":   {"/api/v1/overlay/tunnels/stats", http.MethodGet},
 	"/platform.v1.OverlayService/ListRemoteMACs":   {"/api/v1/overlay/macs", http.MethodGet},
-	"/platform.v1.OverlayService/ForgetMAC":        {"/api/v1/overlay/macs", http.MethodDelete},
 	"/platform.v1.OverlayService/GetOverlayStatus": {"/api/v1/overlay/status", http.MethodGet},
 
 	// PIV Service — proto: pkg/api/grpc/proto/piv.proto

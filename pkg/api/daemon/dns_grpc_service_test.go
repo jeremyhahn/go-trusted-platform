@@ -18,6 +18,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1365,6 +1366,100 @@ func TestDNSServiceServer_Resolve_MissingFQDN(t *testing.T) {
 	assert.Equal(t, codes.InvalidArgument, st.Code())
 }
 
+// resolveTestZones holds example.com. and the nested sub.example.com.; the
+// parent's "host.sub" is shadowed by the nested zone.
+func resolveTestZones() map[string]*entities.Zone {
+	return map[string]*entities.Zone{
+		"example.com.": {
+			Name: "example.com.",
+			RecordSet: entities.RecordSet{
+				ARecords: []*entities.ARecord{
+					{Name: "@", Value: "10.0.0.1"},
+					{Name: "www", Value: "10.0.0.2"},
+					{Name: "host.sub", Value: "10.0.0.99"},
+				},
+				AAAARecords: []*entities.AAAARecord{{Name: "www.example.com.", Value: "fd00::2"}},
+				MXRecords:   []*entities.MXRecord{{Name: "", Value: "mail.example.com."}},
+			},
+		},
+		"sub.example.com.": {
+			Name:      "sub.example.com.",
+			RecordSet: entities.RecordSet{ARecords: []*entities.ARecord{{Name: "host", Value: "10.0.1.2"}}},
+		},
+	}
+}
+
+// TestDNSServiceServer_Resolve_AnswersOnlyTheQueriedOwner: gRPC Resolve (and
+// QUIC and Unix, which reach it) answers through dns.ResolveName — the
+// longest managed zone suffix, the queried owner's records only, filtered by
+// type (docs/dns/resolution.md, "API resolve").
+func TestDNSServiceServer_Resolve_AnswersOnlyTheQueriedOwner(t *testing.T) {
+	cases := []struct {
+		name          string
+		fqdn          string
+		recordType    platformv1.RecordType
+		authoritative bool
+		want          []string
+	}{
+		{"OwnerInsideZone", "www.example.com.", platformv1.RecordType_RECORD_TYPE_UNSPECIFIED, true,
+			[]string{"A 10.0.0.2", "AAAA fd00::2"}},
+		{"ApexOnlyApexRecords", "example.com.", platformv1.RecordType_RECORD_TYPE_UNSPECIFIED, true,
+			[]string{"A 10.0.0.1", "MX mail.example.com."}},
+		{"TypeFilter", "www.example.com.", platformv1.RecordType_RECORD_TYPE_AAAA, true, []string{"AAAA fd00::2"}},
+		{"UnknownOwnerInsideZone", "nope.example.com.", platformv1.RecordType_RECORD_TYPE_A, true, []string{}},
+		{"OutsideEveryZone", "www.example.org.", platformv1.RecordType_RECORD_TYPE_A, false, []string{}},
+		{"CaseAndNoTrailingDot", "WWW.Example.COM", platformv1.RecordType_RECORD_TYPE_A, true, []string{"A 10.0.0.2"}},
+		{"NestedZoneLongestMatch", "host.sub.example.com.", platformv1.RecordType_RECORD_TYPE_A, true,
+			[]string{"A 10.0.1.2"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newMockDNSService()
+			mock.zones = resolveTestZones()
+			server := NewDNSServiceServer(mock, testLogger())
+
+			resp, err := server.Resolve(context.Background(), &platformv1.ResolveRequest{Fqdn: tc.fqdn, Type: tc.recordType})
+			require.NoError(t, err)
+			assert.Equal(t, tc.authoritative, resp.GetAuthoritative())
+			assert.Equal(t, tc.want, protoRecordValues(resp.GetRecords()))
+		})
+	}
+}
+
+// TestDNSServiceServer_Resolve_UnservedRecordType: a type resolution does not
+// answer is InvalidArgument, not an empty answer.
+func TestDNSServiceServer_Resolve_UnservedRecordType(t *testing.T) {
+	mock := newMockDNSService()
+	mock.zones = resolveTestZones()
+	server := NewDNSServiceServer(mock, testLogger())
+
+	_, err := server.Resolve(context.Background(), &platformv1.ResolveRequest{
+		Fqdn: "example.com.",
+		Type: platformv1.RecordType_RECORD_TYPE_SOA,
+	})
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+}
+
+// protoRecordValues flattens resolved records to sorted "TYPE value" lines.
+func protoRecordValues(records []*platformv1.Record) []string {
+	values := []string{}
+	for _, r := range records {
+		switch {
+		case r.GetA() != nil:
+			values = append(values, "A "+r.GetA().GetValue())
+		case r.GetAaaa() != nil:
+			values = append(values, "AAAA "+r.GetAaaa().GetValue())
+		case r.GetMx() != nil:
+			values = append(values, "MX "+r.GetMx().GetValue())
+		default:
+			values = append(values, r.GetType().String())
+		}
+	}
+	sort.Strings(values)
+	return values
+}
+
 // Helper function tests
 
 func TestDNSServiceServer_ZoneToProto_NilZone(t *testing.T) {
@@ -1472,7 +1567,7 @@ func TestDNSServiceServer_ExtractRecords_ByType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			records := server.extractRecords(zone, tt.recordType)
+			records := server.extractRecords(&zone.RecordSet, tt.recordType)
 			assert.Len(t, records, tt.expected)
 		})
 	}

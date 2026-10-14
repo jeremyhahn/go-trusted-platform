@@ -52,6 +52,7 @@ func (r *DNSRouter) RegisterRoutes(router *mux.Router) {
 	// Register all route groups
 	r.registerZoneRoutes(dnsRouter)
 	r.registerRecordRoutes(dnsRouter)
+	r.registerResolutionRoutes(dnsRouter)
 	r.registerDNSSECRoutes(dnsRouter)
 	r.registerRegistrationRoutes(dnsRouter)
 }
@@ -76,11 +77,19 @@ func (r *DNSRouter) registerZoneRoutes(router *mux.Router) {
 // registerRecordRoutes registers record management endpoints
 // POST   /api/v1/dns/zones/{zone}/records              - Add record
 // GET    /api/v1/dns/zones/{zone}/records              - List records
+// GET    /api/v1/dns/zones/{zone}/records/{type}/{name} - Get record
 // DELETE /api/v1/dns/zones/{zone}/records/{type}/{name} - Delete record
 func (r *DNSRouter) registerRecordRoutes(router *mux.Router) {
 	router.HandleFunc("/zones/{zone}/records", r.handlers.AddRecord).Methods("POST")
 	router.HandleFunc("/zones/{zone}/records", r.handlers.ListRecords).Methods("GET")
+	router.HandleFunc("/zones/{zone}/records/{type}/{name}", r.handlers.GetRecord).Methods("GET")
 	router.HandleFunc("/zones/{zone}/records/{type}/{name}", r.handlers.DeleteRecord).Methods("DELETE")
+}
+
+// registerResolutionRoutes registers name resolution endpoints
+// GET /api/v1/dns/resolve?fqdn={fqdn}&type={type} - Resolve from managed zones
+func (r *DNSRouter) registerResolutionRoutes(router *mux.Router) {
+	router.HandleFunc("/resolve", r.handlers.Resolve).Methods("GET")
 }
 
 // registerDNSSECRoutes registers DNSSEC management endpoints

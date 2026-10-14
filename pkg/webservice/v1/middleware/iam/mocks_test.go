@@ -232,6 +232,10 @@ func (m *mockHttpWriter) Error500(w http.ResponseWriter, r *http.Request, err er
 	w.WriteHeader(http.StatusInternalServerError)
 }
 
+func (m *mockHttpWriter) Error503(w http.ResponseWriter, r *http.Request, err error) {
+	w.WriteHeader(http.StatusServiceUnavailable)
+}
+
 // Helper methods for mock assertions
 
 func (m *mockHttpWriter) getError401Count() int {

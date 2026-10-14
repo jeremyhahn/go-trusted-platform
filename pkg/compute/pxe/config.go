@@ -34,9 +34,6 @@ const (
 	// DefaultEnrollmentTimeout is the default timeout for device enrollment.
 	DefaultEnrollmentTimeout = 5 * time.Minute
 
-	// DefaultWebhookPath is the default path for install completion webhooks.
-	DefaultWebhookPath = "/api/v1/pxe/webhook/complete"
-
 	// DefaultISORef is the default ISO registry reference.
 	DefaultISORef = "iso/platform:latest"
 
@@ -102,11 +99,11 @@ type ServiceConfig struct {
 	// EnableAutoQuarantine enables automatic quarantine on security events (default: true).
 	EnableAutoQuarantine bool
 
-	// WebhookEnabled enables the install completion webhook endpoint.
+	// WebhookEnabled mounts the install-completion webhook,
+	// POST /api/v1/pxe/webhook/complete (default: false). When false the
+	// route is not served at all. When true it is served WITHOUT
+	// authentication -- see WebhookSecret and #238.
 	WebhookEnabled bool
-
-	// WebhookPath is the URL path for install completion webhooks (default: "/api/v1/pxe/webhook/complete").
-	WebhookPath string
 
 	// WebhookSecret is reserved for authenticating install-completion
 	// webhooks. It is NOT CURRENTLY USED.
@@ -172,7 +169,6 @@ func NewServiceConfig(plan *netplan.Plan) (*ServiceConfig, error) {
 		EnrollmentTimeout:    DefaultEnrollmentTimeout,
 		EnableAutoQuarantine: true,
 		WebhookEnabled:       false,
-		WebhookPath:          DefaultWebhookPath,
 		WebhookSecret:        "",
 	}, nil
 }

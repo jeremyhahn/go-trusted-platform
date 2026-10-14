@@ -348,6 +348,11 @@ func (m *mockResponseWriter) Error500(w http.ResponseWriter, r *http.Request, er
 	json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 }
 
+func (m *mockResponseWriter) Error503(w http.ResponseWriter, r *http.Request, err error) {
+	w.WriteHeader(http.StatusServiceUnavailable)
+	json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+}
+
 func (m *mockResponseWriter) Write(w http.ResponseWriter, r *http.Request, status int, resp interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

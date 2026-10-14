@@ -807,6 +807,7 @@ type RestHandlerRegistry interface {
 	OverlayServiceServer() platformv1.OverlayServiceServer
 	PlatformRestRouter() *platform.PlatformRouter
 	PXEServiceServer() platformv1.PXEServiceServer
+	PXEWebhookEnabled() bool
 	NTPServiceServer() platformv1.NTPServiceServer
 	VPNServiceServer() platformv1.VPNServiceServer
 	AppServiceServers() restapi.AppServiceServers
@@ -1026,8 +1027,12 @@ type RegistryParams struct {
 	InvitationServiceServer  platformv1.InvitationServiceServer
 	OverlayServiceServer     platformv1.OverlayServiceServer
 	PXEServiceServer         platformv1.PXEServiceServer
-	NTPServiceServer         platformv1.NTPServiceServer
-	VPNServiceServer         platformv1.VPNServiceServer
+	// PXEWebhookEnabled is pxe.ServiceConfig.WebhookEnabled: it mounts the
+	// unauthenticated POST /pxe/webhook/complete (#238). Nothing in the
+	// daemon sets it today, so the route is not served.
+	PXEWebhookEnabled bool
+	NTPServiceServer  platformv1.NTPServiceServer
+	VPNServiceServer  platformv1.VPNServiceServer
 	// AppServiceServers are the daemon's Cache, Scheduler and Messaging
 	// servers, the instances behind every other transport.
 	AppServiceServers restapi.AppServiceServers
@@ -2060,6 +2065,12 @@ func (registry *HandlerRegistry) OverlayServiceServer() platformv1.OverlayServic
 // PXEServiceServer returns the in-process PXEService gRPC implementation, or nil.
 func (registry *HandlerRegistry) PXEServiceServer() platformv1.PXEServiceServer {
 	return registry.params.PXEServiceServer
+}
+
+// PXEWebhookEnabled reports whether the operator enabled the PXE
+// install-completion webhook (pxe.ServiceConfig.WebhookEnabled).
+func (registry *HandlerRegistry) PXEWebhookEnabled() bool {
+	return registry.params.PXEWebhookEnabled
 }
 
 // NTPServiceServer returns the in-process NTPService gRPC implementation, or nil.

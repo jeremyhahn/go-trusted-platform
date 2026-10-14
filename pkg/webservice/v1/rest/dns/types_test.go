@@ -712,6 +712,32 @@ func TestRecordResponse_AllTypes(t *testing.T) {
 	require.NotNil(t, decoded.TLSA)
 }
 
+func TestRecordResponse_Name(t *testing.T) {
+	tests := []struct {
+		record RecordResponse
+		want   string
+	}{
+		{RecordResponse{Type: "A", A: &AResponse{Name: "a"}}, "a"},
+		{RecordResponse{Type: "AAAA", AAAA: &AAAAResponse{Name: "aaaa"}}, "aaaa"},
+		{RecordResponse{Type: "CNAME", CNAME: &CNAMEResponse{Name: "cname"}}, "cname"},
+		{RecordResponse{Type: "MX", MX: &MXResponse{Name: "mx"}}, "mx"},
+		{RecordResponse{Type: "NS", NS: &NSResponse{Name: "ns"}}, "ns"},
+		{RecordResponse{Type: "TXT", TXT: &TXTResponse{Name: "txt"}}, "txt"},
+		{RecordResponse{Type: "SRV", SRV: &SRVResponse{Name: "srv"}}, "srv"},
+		{RecordResponse{Type: "CAA", CAA: &CAAResponse{Name: "caa"}}, "caa"},
+		{RecordResponse{Type: "TLSA", TLSA: &TLSAResponse{Name: "tlsa"}}, "tlsa"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.record.Type, func(t *testing.T) {
+			assert.Equal(t, tc.want, tc.record.Name())
+		})
+	}
+}
+
+func TestRecordResponse_Name_NoRecordData(t *testing.T) {
+	assert.Empty(t, RecordResponse{Type: "A"}.Name())
+}
+
 func TestListRecordsResponse_JSON(t *testing.T) {
 	resp := ListRecordsResponse{
 		Records: []RecordResponse{

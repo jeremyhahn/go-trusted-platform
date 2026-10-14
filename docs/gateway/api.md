@@ -96,9 +96,12 @@ callable, not because it is the way to configure a gateway — see
 The five BGP methods (status, peers, announce, withdraw, announced prefixes)
 are routed on every transport but not backed: `platformd` holds no BGP
 speaker, so each answers the typed "not configured" (§11). Backing them needs
-the same control-plane link to gatewayd-resident services as §5a. The
-per-transport table, the validation order and a known REST withdraw defect are
-in [BGP API](../bgp/api.md).
+the same control-plane link to gatewayd-resident services as §5a.
+REST withdraw carries the prefix as the `prefix` query parameter, URL-encoded
+(`DELETE /api/v1/gateway/bgp/prefixes?prefix=203.0.113.0%2F24`), and a
+`DELETE` body is ignored. A missing or malformed prefix is refused with 400
+and the same reason gRPC returns (`prefix is required`, `invalid prefix`). The
+per-transport table and the validation order are in [BGP API](../bgp/api.md).
 
 ---
 

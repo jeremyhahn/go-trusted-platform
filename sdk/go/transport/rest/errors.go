@@ -120,6 +120,17 @@ func (e ErrUnexpectedRequestType) Error() string {
 	return fmt.Sprintf("unexpected request message type for gRPC method %s", e.Method)
 }
 
+// ErrUnknownPortType indicates an SDN port type outside the pb PortType enum,
+// which has no REST name to send.
+type ErrUnknownPortType struct {
+	Type int32
+}
+
+// Error implements the error interface.
+func (e ErrUnknownPortType) Error() string {
+	return fmt.Sprintf("unknown SDN port type %d", e.Type)
+}
+
 // ErrDurationClearNotSupported indicates an UpdateIPAMPool request asked to
 // set a pool duration to zero. The REST pool update keeps any duration it
 // is not given a positive value for, so the request cannot be carried.
@@ -142,6 +153,55 @@ func (e ErrProfileConfigNotJSON) Error() string {
 	return "device profile config is not valid JSON; the REST transport sends it as a JSON value"
 }
 
+// ErrHashAlgorithmNotSupported indicates a KMS Sign or Verify request names a
+// hash the REST routes cannot carry. They accept SHA-256, SHA-384 and SHA-512
+// only and read any other name as SHA-256, so sending it would sign with the
+// wrong digest.
+type ErrHashAlgorithmNotSupported struct {
+	Algorithm string
+}
+
+// Error implements the error interface.
+func (e ErrHashAlgorithmNotSupported) Error() string {
+	return fmt.Sprintf("hash algorithm %s is not supported by the KMS REST routes (SHA-256, SHA-384 and SHA-512 only)", e.Algorithm)
+}
+
+// ErrKeyAlgorithmNotSupported indicates a KMS key-generation request names a
+// key algorithm the REST route cannot carry: one GenerateKey's route does not
+// mint, or a value outside the proto enum, which has no name to send.
+type ErrKeyAlgorithmNotSupported struct {
+	Algorithm string
+}
+
+// Error implements the error interface.
+func (e ErrKeyAlgorithmNotSupported) Error() string {
+	return fmt.Sprintf("key algorithm %s is not supported by the KMS REST routes", e.Algorithm)
+}
+
+// ErrKeyUsageNotSupported indicates a KMS GenerateKey request names a key
+// usage the REST route does not accept (it takes ENCRYPT, DECRYPT, SIGN,
+// VERIFY, WRAP and UNWRAP only).
+type ErrKeyUsageNotSupported struct {
+	Usage string
+}
+
+// Error implements the error interface.
+func (e ErrKeyUsageNotSupported) Error() string {
+	return fmt.Sprintf("key usage %s is not supported by the KMS REST routes", e.Usage)
+}
+
+// ErrWrappingAlgorithmNotSupported indicates a KMS GenerateWrappedDataKey
+// request names a wrapping algorithm. The REST route takes none and wraps with
+// the KEK's own algorithm, so sending the request would ignore the choice.
+type ErrWrappingAlgorithmNotSupported struct {
+	Algorithm string
+}
+
+// Error implements the error interface.
+func (e ErrWrappingAlgorithmNotSupported) Error() string {
+	return fmt.Sprintf("wrapping algorithm %s cannot be chosen over the KMS REST routes; the KEK's own algorithm applies", e.Algorithm)
+}
+
 // ErrPCRDigestNotHex indicates a profile's PCR baseline carried a digest
 // that is not hex, the encoding the device webservice uses for it.
 type ErrPCRDigestNotHex struct {
@@ -157,4 +217,14 @@ func (e ErrPCRDigestNotHex) Error() string {
 // Unwrap returns the underlying error.
 func (e ErrPCRDigestNotHex) Unwrap() error {
 	return e.Err
+}
+
+// ErrDNSRecordTypeRequired indicates an AddRecord request carried no record
+// type. The DNS REST route dispatches on the type, so a record without one
+// cannot be added.
+type ErrDNSRecordTypeRequired struct{}
+
+// Error implements the error interface.
+func (e ErrDNSRecordTypeRequired) Error() string {
+	return "DNS record type is required"
 }

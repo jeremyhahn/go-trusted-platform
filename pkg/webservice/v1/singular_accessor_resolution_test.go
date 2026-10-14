@@ -54,6 +54,7 @@ import (
 // the body. Sharing is only a defect when one side of it is a List.
 func TestSDKRouteClaims_SingularAccessorDoesNotLandOnItsCollectionRoute(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
+	built := walkRoutes(t, router)
 
 	claims := sdkrest.RouteClaims()
 	// 280, lowered from 300 by #333: deleting 20 ghost route-map entries took
@@ -73,7 +74,7 @@ func TestSDKRouteClaims_SingularAccessorDoesNotLandOnItsCollectionRoute(t *testi
 	for _, c := range claims {
 		service, method := splitClaimMethod(t, c.GRPCMethod)
 
-		req := httptest.NewRequest(c.Method, concreteFor(c.Path), nil)
+		req := httptest.NewRequest(c.Method, concreteClaim(c.Method, c.Path, built), nil)
 		var match mux.RouteMatch
 		if !router.Match(req, &match) || match.MatchErr != nil || match.Route == nil {
 			// Unresolvable claims are TestSDKRouteClaims_ResolveAgainstBuiltRoutes'

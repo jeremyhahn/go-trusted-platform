@@ -107,7 +107,9 @@ func TestDNSRouter_RecordRoutes(t *testing.T) {
 	}{
 		{"AddRecord", http.MethodPost, "/api/v1/dns/zones/example.com./records"},
 		{"ListRecords", http.MethodGet, "/api/v1/dns/zones/example.com./records"},
+		{"GetRecord", http.MethodGet, "/api/v1/dns/zones/example.com./records/A/www"},
 		{"DeleteRecord", http.MethodDelete, "/api/v1/dns/zones/example.com./records/A/www"},
+		{"Resolve", http.MethodGet, "/api/v1/dns/resolve?fqdn=www.example.com.&type=A"},
 	}
 
 	for _, tc := range tests {
@@ -119,6 +121,27 @@ func TestDNSRouter_RecordRoutes(t *testing.T) {
 			assert.True(t, matched, "Route should match: %s %s", tc.method, tc.path)
 		})
 	}
+}
+
+// TestDNSRouter_GetAndListRecordsAnswerDistinctly serves both record reads
+// through the router: one record by type and name, and the zone's list.
+func TestDNSRouter_GetAndListRecordsAnswerDistinctly(t *testing.T) {
+	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
+	service := newMockDNSService()
+	service.zones["example.com."] = recordLookupZone()
+	writer := &mockHttpWriter{}
+	router := mux.NewRouter()
+	NewDNSRouter(logger, service, writer).RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
+
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/dns/zones/example.com./records/A/api", nil))
+	require.Equal(t, http.StatusOK, writer.lastStatus)
+	assert.Equal(t, RecordResponse{Type: "A", A: &AResponse{Name: "api", Value: "192.168.1.9", TTL: 300}}, writer.lastPayload)
+
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/dns/zones/example.com./records", nil))
+	require.Equal(t, http.StatusOK, writer.lastStatus)
+	list, ok := writer.lastPayload.(ListRecordsResponse)
+	require.True(t, ok, "the collection route answered %T", writer.lastPayload)
+	assert.Len(t, list.Records, 4)
 }
 
 func TestDNSRouter_DNSSECRoutes(t *testing.T) {
@@ -185,6 +208,8 @@ func TestDNSRouter_MethodNotAllowed(t *testing.T) {
 		{"DELETE_zones", http.MethodDelete, "/api/v1/dns/zones"},
 		{"POST_zone", http.MethodPost, "/api/v1/dns/zones/example.com."},
 		{"GET_register", http.MethodGet, "/api/v1/dns/register"},
+		{"POST_resolve", http.MethodPost, "/api/v1/dns/resolve"},
+		{"PUT_record", http.MethodPut, "/api/v1/dns/zones/example.com./records/A/www"},
 	}
 
 	for _, tc := range tests {

@@ -80,6 +80,61 @@ func concreteFor(template string) string {
 	})
 }
 
+// concreteClaim is concreteFor for a client claim, given the routes the server
+// built.
+//
+// A claim's placeholder carries no pattern; the server's may. The SDK writes
+// /api/v1/eab/credentials/{id} and the server serves {id:[0-9]+}, so
+// concreteFor alone sends "x" there, a value the client never sends:
+// credential_id is a uint64. When a built route names the claim position by
+// position, its template is the one made concrete, so the server's pattern
+// picks the value. Routing still decides which route answers, so a shadowing
+// route is still caught.
+func concreteClaim(method, path string, built []string) string {
+	for _, route := range built {
+		if claimAlignsWith(method+" "+path, route) {
+			_, template, _ := strings.Cut(route, " ")
+			return concreteFor(template)
+		}
+	}
+	return concreteFor(path)
+}
+
+// claimAlignsWith reports whether a claim and a built route, each written
+// "METHOD /template", name the same route: the same method, the same number
+// of segments, every literal segment equal, and every placeholder facing a
+// placeholder whatever its pattern.
+func claimAlignsWith(claim, route string) bool {
+	claimMethod, claimPath, ok := strings.Cut(claim, " ")
+	if !ok {
+		return false
+	}
+	routeMethod, routePath, ok := strings.Cut(route, " ")
+	if !ok || claimMethod != routeMethod {
+		return false
+	}
+	claimSegments := strings.Split(claimPath, "/")
+	routeSegments := strings.Split(routePath, "/")
+	if len(claimSegments) != len(routeSegments) {
+		return false
+	}
+	for i, claimSegment := range claimSegments {
+		claimVar, routeVar := isPlaceholder(claimSegment), isPlaceholder(routeSegments[i])
+		if claimVar != routeVar {
+			return false
+		}
+		if !claimVar && claimSegment != routeSegments[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// isPlaceholder reports whether a whole path segment is one mux variable.
+func isPlaceholder(segment string) bool {
+	return segment != "" && placeholder.FindString(segment) == segment
+}
+
 // serverRoutes returns every route the fixture's router actually built, as
 // "METHOD /template". It reads the built mux table via walkRoutes — the same
 // enumerator router_authz_test.go uses, so both tests read one list and there
@@ -130,23 +185,26 @@ var unservedPrefixes = map[string]string{
 	"version": "daemon REST server, rest_service.go:handleVersion",
 }
 
-// unroutedClaims are the 87 claims where the server DOES serve the prefix but
+// unroutedClaims are the 49 claims where the server DOES serve the prefix but
 // the client asks for a path that does not resolve. This is #321's shape at
 // scale, and it is the actionable half of this test's findings.
 //
 // The dominant pattern is an item operation claiming a collection path:
 //
-//	DELETE /api/v1/dns/zones      (client)   vs   /api/v1/dns/zones/{zone}   (server)
-//	DELETE /api/v1/iam/users      (client)   vs   an item path
+//	DELETE /api/v1/compute/containers (client)   vs   /api/v1/compute/containers/{id} (server)
+//	DELETE /api/v1/iam/users          (client)   vs   an item path
 //
 // The flat route table's path is passed to DoRequest VERBATIM — no identifier is
 // appended, it travels in the body — so these are the paths actually sent.
 //
-// Keyed by gRPC method, because the route is NOT unique: 94 methods claim 93
-// distinct routes. GET /api/v1/dns/records is claimed by both GetRecord and
-// ListRecords — a get-one and a list-many on the same collection path, which is
-// #266's shape ("answers four operations and 404s on three") showing up in the
-// client table rather than the server one. This map shrinking is what progress looks
+// Keyed by gRPC method, because a route need not be unique: today 49 methods
+// claim 49 distinct routes, but until #452 GET /api/v1/dns/records was claimed
+// by both GetRecord and ListRecords — a get-one and a list-many on the same
+// collection path, which is #266's shape ("answers four operations and 404s on
+// three") showing up in the client table rather than the server one. #452 moved
+// the DNS claims to the zone-scoped item routes the server serves and deleted
+// the GetRecord claim, which named an rpc platform_dns.proto does not declare.
+// This map shrinking is what progress looks
 // like; it is not a suppression list. Nothing may be added without a route
 // having genuinely gone missing, which is the failure this test reports.
 //
@@ -161,76 +219,51 @@ var unservedPrefixes = map[string]string{
 // describe the intended surface correctly; this router's half is what is
 // missing.
 var unroutedClaims = map[string]string{
-	"/platform.v1.CAService/RenewCertificate":                  "POST /api/v1/ca/certificates/renew",
-	"/platform.v1.CAService/RevokeCertificate":                 "POST /api/v1/ca/certificates/revoke",
-	"/platform.v1.CAService/VerifyCertificate":                 "POST /api/v1/ca/certificates/verify",
-	"/platform.v1.ComputeService/AttestContainer":              "POST /api/v1/compute/containers/attest",
-	"/platform.v1.ComputeService/DeleteContainer":              "DELETE /api/v1/compute/containers",
-	"/platform.v1.ComputeService/StartContainer":               "POST /api/v1/compute/containers/start",
-	"/platform.v1.ComputeService/StopContainer":                "POST /api/v1/compute/containers/stop",
-	"/platform.v1.DNSService/AddRecord":                        "POST /api/v1/dns/records",
-	"/platform.v1.DNSService/DeleteRecord":                     "DELETE /api/v1/dns/records",
-	"/platform.v1.DNSService/DeleteZone":                       "DELETE /api/v1/dns/zones",
-	"/platform.v1.DNSService/GetRecord":                        "GET /api/v1/dns/records",
-	"/platform.v1.DNSService/ListRecords":                      "GET /api/v1/dns/records",
-	"/platform.v1.DNSService/Resolve":                          "GET /api/v1/dns/resolve",
-	"/platform.v1.EABService/DeleteCredential":                 "DELETE /api/v1/eab/credentials/{id}",
-	"/platform.v1.EABService/GetCredential":                    "GET /api/v1/eab/credentials/{id}",
-	"/platform.v1.EABService/GetCredentialQRCode":              "GET /api/v1/eab/credentials/{id}/qrcode",
-	"/platform.v1.EABService/GetEnrollmentURL":                 "GET /api/v1/eab/credentials/{id}/url",
-	"/platform.v1.EABService/MarkCredentialUsed":               "POST /api/v1/eab/credentials/{id}/used",
-	"/platform.v1.EABService/RevokeCredential":                 "POST /api/v1/eab/credentials/{id}/revoke",
-	"/platform.v1.GatewayService/GetGatewayAdmittedVTEP":       "GET /api/v1/sdn/gateway/overlay/vteps/{vtep}",
-	"/platform.v1.GatewayService/GetNAT64Status":               "GET /api/v1/sdn/gateway/nat64/status",
-	"/platform.v1.GatewayService/GetPerfConntrack":             "GET /api/v1/sdn/gateway/perf/conntrack",
-	"/platform.v1.GatewayService/GetPerfDatapath":              "GET /api/v1/sdn/gateway/perf/datapath",
-	"/platform.v1.GatewayService/GetPerfFlows":                 "POST /api/v1/sdn/gateway/perf/flows",
-	"/platform.v1.GatewayService/ListGatewayAdmittedVTEPs":     "GET /api/v1/sdn/gateway/overlay/vteps",
-	"/platform.v1.IDevIDService/CreateLDevID":                  "POST /api/v1/idevid/ldevid",
-	"/platform.v1.IDevIDService/Generate":                      "POST /api/v1/idevid",
-	"/platform.v1.IDevIDService/GetCSR":                        "GET /api/v1/idevid/csr",
-	"/platform.v1.IDevIDService/GetCert":                       "GET /api/v1/idevid/cert",
-	"/platform.v1.IDevIDService/InstallCert":                   "POST /api/v1/idevid/cert",
-	"/platform.v1.InvitationService/DeleteInvitation":          "DELETE /api/v1/invitations",
-	"/platform.v1.InvitationService/GetInvitationByToken":      "GET /api/v1/invitations/by-token",
-	"/platform.v1.InvitationService/RevokeInvitation":          "POST /api/v1/invitations/revoke",
-	"/platform.v1.KeyManagementService/Decrypt":                "POST /api/v1/kms/decrypt",
-	"/platform.v1.KeyManagementService/DeleteKey":              "DELETE /api/v1/kms/keys",
-	"/platform.v1.KeyManagementService/Encrypt":                "POST /api/v1/kms/encrypt",
-	"/platform.v1.KeyManagementService/GenerateDataKey":        "POST /api/v1/kms/data-keys",
-	"/platform.v1.KeyManagementService/GenerateWrappedDataKey": "POST /api/v1/kms/data-keys/wrapped",
-	"/platform.v1.KeyManagementService/RotateKey":              "POST /api/v1/kms/keys/rotate",
-	"/platform.v1.KeyManagementService/Sign":                   "POST /api/v1/kms/sign",
-	"/platform.v1.KeyManagementService/Verify":                 "POST /api/v1/kms/verify",
-	"/platform.v1.OverlayService/DeleteVNI":                    "DELETE /api/v1/overlay/vnis",
-	"/platform.v1.PXEService/Authorize":                        "POST /api/v1/pxe/devices/authorize",
-	"/platform.v1.PXEService/Quarantine":                       "POST /api/v1/pxe/devices/quarantine",
-	"/platform.v1.PXEService/UpdateState":                      "PUT /api/v1/pxe/devices/state",
-	"/platform.v1.PlatformDaemon/GetHealth":                    "GET /health",
-	"/platform.v1.PlatformDaemon/Liveness":                     "GET /health/live",
-	"/platform.v1.PlatformDaemon/Readiness":                    "GET /health/ready",
-	"/platform.v1.ProvisioningGateway/GetBootConfig":           "GET /api/v1/provisioning/boot-config",
-	"/platform.v1.ProvisioningGateway/NotifyInstallComplete":   "POST /api/v1/provisioning/devices/install-complete",
-	"/platform.v1.ProvisioningGateway/RegisterPXEDevice":       "POST /api/v1/provisioning/pxe/register",
-	"/platform.v1.ProvisioningGateway/ReportDeviceState":       "POST /api/v1/provisioning/devices/state",
-	"/platform.v1.SDNService/AddPort":                          "POST /api/v1/sdn/ports",
-	"/platform.v1.SDNService/ApplyPolicy":                      "POST /api/v1/sdn/policies/apply",
-	"/platform.v1.SDNService/AuthenticatePort":                 "POST /api/v1/sdn/ports/auth",
-	"/platform.v1.SDNService/DeleteBridge":                     "DELETE /api/v1/sdn/bridges",
-	"/platform.v1.SDNService/DeletePort":                       "DELETE /api/v1/sdn/ports",
-	"/platform.v1.SDNService/RevokePortAuth":                   "DELETE /api/v1/sdn/ports/auth",
-	"/platform.v1.SwitchService/DisablePort":                   "POST /api/v1/switches/ports/disable",
-	"/platform.v1.SwitchService/EnablePort":                    "POST /api/v1/switches/ports/enable",
-	"/platform.v1.SwitchService/GetPortStatus":                 "GET /api/v1/switches/ports/status",
-	"/platform.v1.SwitchService/ListPorts":                     "GET /api/v1/switches/ports",
-	"/platform.v1.SwitchService/SetPortVLAN":                   "POST /api/v1/switches/ports/vlan",
-	"/platform.v1.TPMService/ReadNVRAM":                        "GET /api/v1/tpm/nvram",
-	"/platform.v1.TPMService/UndefineNVRAM":                    "DELETE /api/v1/tpm/nvram",
-	"/platform.v1.TPMService/WriteNVRAM":                       "PUT /api/v1/tpm/nvram",
-	"/platform.v1.TenantService/DeleteTenant":                  "DELETE /api/v1/tenants",
-	"/platform.v1.TenantService/ResumeTenant":                  "POST /api/v1/tenants/resume",
-	"/platform.v1.TenantService/SuspendTenant":                 "POST /api/v1/tenants/suspend",
-	"/platform.v1.TenantService/UpdateTenant":                  "PUT /api/v1/tenants",
+	"/platform.v1.CAService/RenewCertificate":                "POST /api/v1/ca/certificates/renew",
+	"/platform.v1.CAService/RevokeCertificate":               "POST /api/v1/ca/certificates/revoke",
+	"/platform.v1.CAService/VerifyCertificate":               "POST /api/v1/ca/certificates/verify",
+	"/platform.v1.ComputeService/AttestContainer":            "POST /api/v1/compute/containers/attest",
+	"/platform.v1.ComputeService/DeleteContainer":            "DELETE /api/v1/compute/containers",
+	"/platform.v1.ComputeService/StartContainer":             "POST /api/v1/compute/containers/start",
+	"/platform.v1.ComputeService/StopContainer":              "POST /api/v1/compute/containers/stop",
+	"/platform.v1.GatewayService/GetGatewayAdmittedVTEP":     "GET /api/v1/sdn/gateway/overlay/vteps/{vtep}",
+	"/platform.v1.GatewayService/GetNAT64Status":             "GET /api/v1/sdn/gateway/nat64/status",
+	"/platform.v1.GatewayService/GetPerfConntrack":           "GET /api/v1/sdn/gateway/perf/conntrack",
+	"/platform.v1.GatewayService/GetPerfDatapath":            "GET /api/v1/sdn/gateway/perf/datapath",
+	"/platform.v1.GatewayService/GetPerfFlows":               "POST /api/v1/sdn/gateway/perf/flows",
+	"/platform.v1.GatewayService/ListGatewayAdmittedVTEPs":   "GET /api/v1/sdn/gateway/overlay/vteps",
+	"/platform.v1.IDevIDService/CreateLDevID":                "POST /api/v1/idevid/ldevid",
+	"/platform.v1.IDevIDService/Generate":                    "POST /api/v1/idevid",
+	"/platform.v1.IDevIDService/GetCSR":                      "GET /api/v1/idevid/csr",
+	"/platform.v1.IDevIDService/GetCert":                     "GET /api/v1/idevid/cert",
+	"/platform.v1.IDevIDService/InstallCert":                 "POST /api/v1/idevid/cert",
+	"/platform.v1.InvitationService/DeleteInvitation":        "DELETE /api/v1/invitations",
+	"/platform.v1.InvitationService/GetInvitationByToken":    "GET /api/v1/invitations/by-token",
+	"/platform.v1.InvitationService/RevokeInvitation":        "POST /api/v1/invitations/revoke",
+	"/platform.v1.OverlayService/DeleteVNI":                  "DELETE /api/v1/overlay/vnis",
+	"/platform.v1.PXEService/Authorize":                      "POST /api/v1/pxe/devices/authorize",
+	"/platform.v1.PXEService/Quarantine":                     "POST /api/v1/pxe/devices/quarantine",
+	"/platform.v1.PXEService/UpdateState":                    "PUT /api/v1/pxe/devices/state",
+	"/platform.v1.PlatformDaemon/GetHealth":                  "GET /health",
+	"/platform.v1.PlatformDaemon/Liveness":                   "GET /health/live",
+	"/platform.v1.PlatformDaemon/Readiness":                  "GET /health/ready",
+	"/platform.v1.ProvisioningGateway/GetBootConfig":         "GET /api/v1/provisioning/boot-config",
+	"/platform.v1.ProvisioningGateway/NotifyInstallComplete": "POST /api/v1/provisioning/devices/install-complete",
+	"/platform.v1.ProvisioningGateway/RegisterPXEDevice":     "POST /api/v1/provisioning/pxe/register",
+	"/platform.v1.ProvisioningGateway/ReportDeviceState":     "POST /api/v1/provisioning/devices/state",
+	"/platform.v1.SDNService/ApplyPolicy":                    "POST /api/v1/sdn/policies/apply",
+	"/platform.v1.SwitchService/DisablePort":                 "POST /api/v1/switches/ports/disable",
+	"/platform.v1.SwitchService/EnablePort":                  "POST /api/v1/switches/ports/enable",
+	"/platform.v1.SwitchService/GetPortStatus":               "GET /api/v1/switches/ports/status",
+	"/platform.v1.SwitchService/ListPorts":                   "GET /api/v1/switches/ports",
+	"/platform.v1.SwitchService/SetPortVLAN":                 "POST /api/v1/switches/ports/vlan",
+	"/platform.v1.TPMService/ReadNVRAM":                      "GET /api/v1/tpm/nvram",
+	"/platform.v1.TPMService/UndefineNVRAM":                  "DELETE /api/v1/tpm/nvram",
+	"/platform.v1.TPMService/WriteNVRAM":                     "PUT /api/v1/tpm/nvram",
+	"/platform.v1.TenantService/DeleteTenant":                "DELETE /api/v1/tenants",
+	"/platform.v1.TenantService/ResumeTenant":                "POST /api/v1/tenants/resume",
+	"/platform.v1.TenantService/SuspendTenant":               "POST /api/v1/tenants/suspend",
+	"/platform.v1.TenantService/UpdateTenant":                "PUT /api/v1/tenants",
 
 	// The IAM rows sit after the alphabetical run above, in their own block,
 	// so that adding them did not re-align every row beneath them and turn a
@@ -293,7 +326,7 @@ func TestSDKRouteClaims_ResolveAgainstBuiltRoutes(t *testing.T) {
 			continue
 		}
 
-		req := httptest.NewRequest(c.Method, concreteFor(c.Path), nil)
+		req := httptest.NewRequest(c.Method, concreteClaim(c.Method, c.Path, built), nil)
 		var match mux.RouteMatch
 		if router.Match(req, &match) && match.MatchErr == nil {
 			continue
@@ -330,4 +363,71 @@ func TestSDKRouteClaims_ServerMayServeMore(t *testing.T) {
 			"demonstrate the asymmetry it exists to pin. That is not a failure of the server; "+
 			"re-read the comment at the top of this file before changing anything.")
 	t.Logf("%d built routes have no Go SDK claim — expected: the server may serve more than any one client calls", unclaimed)
+}
+
+func TestClaimAlignsWith(t *testing.T) {
+	cases := []struct {
+		name         string
+		claim, route string
+		want         bool
+	}{
+		{"pattern placeholder faces plain one", "GET /api/v1/eab/credentials/{id}", "GET /api/v1/eab/credentials/{id:[0-9]+}", true},
+		{"placeholders differ only in name", "POST /api/v1/eab/credentials/{cid}/revoke", "POST /api/v1/eab/credentials/{id:[0-9]+}/revoke", true},
+		{"identical literal route", "POST /api/v1/eab/credentials/validate", "POST /api/v1/eab/credentials/validate", true},
+		{"different literal segment", "POST /api/v1/eab/credentials/{id}/revoke", "POST /api/v1/eab/credentials/{id:[0-9]+}/used", false},
+		{"different method", "DELETE /api/v1/eab/credentials/{id}", "GET /api/v1/eab/credentials/{id:[0-9]+}", false},
+		{"different segment count", "GET /api/v1/eab/credentials/{id}", "GET /api/v1/eab/credentials/{id:[0-9]+}/url", false},
+		{"placeholder faces literal", "POST /api/v1/eab/credentials/{id}", "POST /api/v1/eab/credentials/validate", false},
+		{"literal faces placeholder", "GET /api/v1/eab/credentials/abc", "GET /api/v1/eab/credentials/{id:[0-9]+}", false},
+		{"claim without method", "/api/v1/eab/credentials", "GET /api/v1/eab/credentials", false},
+		{"route without method", "GET /api/v1/eab/credentials", "/api/v1/eab/credentials", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, claimAlignsWith(tc.claim, tc.route))
+		})
+	}
+}
+
+func TestConcreteClaim(t *testing.T) {
+	built := []string{
+		"GET /api/v1/eab/credentials/key/{key}",
+		"GET /api/v1/eab/credentials/{id:[0-9]+}",
+	}
+
+	require.Equal(t, "/api/v1/eab/credentials/1",
+		concreteClaim("GET", "/api/v1/eab/credentials/{id}", built),
+		"an aligned server route's pattern must pick the value")
+	require.Equal(t, "/api/v1/eab/credentials/x",
+		concreteClaim("DELETE", "/api/v1/eab/credentials/{id}", built),
+		"with no aligned route the claim's own template is made concrete")
+	require.Equal(t, "/api/v1/eab/credentials/key/x",
+		concreteClaim("GET", "/api/v1/eab/credentials/key/{key}", built))
+}
+
+// TestUnroutedClaims_EveryEntryStillFailsToResolve keeps the ledger honest in
+// the other direction from TestUnroutedClaims_EveryEntryIsStillAClaim: an entry
+// whose claim now routes records a defect that is gone, and hides the claim
+// from the walks that check where it lands.
+func TestUnroutedClaims_EveryEntryStillFailsToResolve(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
+	built := walkRoutes(t, router)
+
+	var resolving []string
+	for _, c := range sdkrest.RouteClaims() {
+		if _, ok := unroutedClaims[c.GRPCMethod]; !ok {
+			continue
+		}
+		req := httptest.NewRequest(c.Method, concreteClaim(c.Method, c.Path, built), nil)
+		var match mux.RouteMatch
+		if router.Match(req, &match) && match.MatchErr == nil {
+			resolving = append(resolving, c.GRPCMethod+"   ("+c.Method+" "+c.Path+")")
+		}
+	}
+	sort.Strings(resolving)
+
+	require.Emptyf(t, resolving,
+		"%d unroutedClaims entr(ies) now resolve to a server route:\n  %s\n\n"+
+			"Delete them and fix the count above unroutedClaims.",
+		len(resolving), strings.Join(resolving, "\n  "))
 }

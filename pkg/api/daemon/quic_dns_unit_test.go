@@ -19,6 +19,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
@@ -266,8 +267,18 @@ func TestDNSResolve_Delegated(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("success returns authoritative records", func(t *testing.T) {
-		handler := createDNSUnitTestHandler(NewMockDNSService())
-		req := createDNSUnitTestRequest(t, quicwire.OpDNSResolve, &platformv1.ResolveRequest{Fqdn: "example.com.", Type: platformv1.RecordType_RECORD_TYPE_A})
+		svc := NewMockDNSService()
+		svc.ZoneFunc = func(ctx context.Context, zoneName string) (*entities.Zone, error) {
+			if zoneName != "example.com." {
+				return nil, dns.ErrZoneNotFound
+			}
+			return &entities.Zone{Name: zoneName, RecordSet: entities.RecordSet{ARecords: []*entities.ARecord{
+				{Name: "@", Value: "192.168.1.2"},
+				{Name: "test", Value: "192.168.1.1"},
+			}}}, nil
+		}
+		handler := createDNSUnitTestHandler(svc)
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSResolve, &platformv1.ResolveRequest{Fqdn: "test.example.com.", Type: platformv1.RecordType_RECORD_TYPE_A})
 		resp := handler.HandleRequest(ctx, req)
 		require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
 
@@ -275,7 +286,7 @@ func TestDNSResolve_Delegated(t *testing.T) {
 		require.NoError(t, quicwire.DecodePayload(resp.Payload, &result))
 		assert.True(t, result.Authoritative)
 		require.Len(t, result.Records, 1)
-		assert.Equal(t, platformv1.RecordType_RECORD_TYPE_A, result.Records[0].toProto().GetType())
+		assert.Equal(t, "192.168.1.1", result.Records[0].toProto().GetA().GetValue())
 	})
 
 	t.Run("missing fqdn", func(t *testing.T) {

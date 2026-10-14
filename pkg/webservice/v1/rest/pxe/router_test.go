@@ -32,7 +32,7 @@ import (
 // production hands to the gated router is asserted by the split tests below.
 func newRouter() (*PXERouter, *mux.Router) {
 	w := response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil)
-	r := NewPXERouter(logging.NewLogger(slog.LevelError, io.Discard), nil, w)
+	r := NewPXERouter(logging.NewLogger(slog.LevelError, io.Discard), nil, w, true)
 	parent := mux.NewRouter()
 	sub := parent.PathPrefix("/api/v1").Subrouter()
 	r.RegisterMachineFacingRoutes(sub)
@@ -72,18 +72,28 @@ func registeredPXEPaths(register func(*mux.Router)) map[string]bool {
 // published to anonymous callers with no issue tracking it.
 func TestRegisterMachineFacingRoutes_IsOnlyTheWebhook(t *testing.T) {
 	w := response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil)
-	r := NewPXERouter(logging.NewLogger(slog.LevelError, io.Discard), nil, w)
+	r := NewPXERouter(logging.NewLogger(slog.LevelError, io.Discard), nil, w, true)
 
 	assert.Equal(t, map[string]bool{
 		"POST /api/v1/pxe/webhook/complete": true,
 	}, registeredPXEPaths(r.RegisterMachineFacingRoutes))
 }
 
+// TestRegisterMachineFacingRoutes_DisabledRegistersNothing pins #238: the
+// webhook is unauthenticated, so unless the operator enabled it there is
+// no route for a caller to reach.
+func TestRegisterMachineFacingRoutes_DisabledRegistersNothing(t *testing.T) {
+	w := response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil)
+	r := NewPXERouter(logging.NewLogger(slog.LevelError, io.Discard), nil, w, false)
+
+	assert.Empty(t, registeredPXEPaths(r.RegisterMachineFacingRoutes))
+}
+
 // TestRegisterRoutes_CarriesTheOperatorLifecycle asserts the gated half holds
 // the routes that decide whether a machine is admitted to the fleet.
 func TestRegisterRoutes_CarriesTheOperatorLifecycle(t *testing.T) {
 	w := response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil)
-	r := NewPXERouter(logging.NewLogger(slog.LevelError, io.Discard), nil, w)
+	r := NewPXERouter(logging.NewLogger(slog.LevelError, io.Discard), nil, w, true)
 
 	operator := registeredPXEPaths(r.RegisterRoutes)
 

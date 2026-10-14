@@ -342,3 +342,11 @@ Run them with `make test-pkg PKG=./pkg/sdn/bgp/`.
 | `attributes_test.go`, `announce_test.go`, `bfd_state_test.go` | Attribute actions, `announce` defaults, BFD state |
 | `evpn_test.go`, `evpn_rt_test.go`, `evpn_mobility_test.go` | EVPN manager, route-target derivation, MAC mobility |
 | `dampening_test.go`, `rpki_test.go`, `transit_test.go` | The library-only managers (§1) |
+
+The transport side is proved in `pkg/api/daemon`.
+`gateway_bgp_withdraw_rest_sdk_test.go` drives the SDK's REST client against
+the webservice gateway router and a `GatewayService` holding a recording
+speaker: an IPv4 and an IPv6 withdraw reach the speaker
+(`TestGatewayBGPWithdraw_RESTSDKReachesServer`), and a bad prefix is refused
+with gRPC's reason (`TestGatewayBGPWithdraw_RESTSDKRefusesBadPrefixLikeGRPC`).
+Run it with `make test-pkg PKG=./pkg/api/daemon/ TESTFLAGS='-run BGPWithdraw'`.

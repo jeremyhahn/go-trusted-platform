@@ -50,6 +50,16 @@ before assuming what crosses the boundary.
 
 Key **metadata and policy** are REST and MCP only — no gRPC RPC.
 
+`POST /api/v1/kms/keys` reads a flat body: `name`, `algorithm` as a name
+(`AES-256-GCM`, `CHACHA20-POLY1305`, `RSA-2048`, `RSA-4096`, `ECDSA-P256`,
+`ECDSA-P384`, `ED25519`; underscores are accepted for dashes) and `usage` as
+names (`ENCRYPT`, `DECRYPT`, `SIGN`, `VERIFY`, `WRAP`, `UNWRAP`). It answers
+`key_id`, `version` and `algorithm` under the same names. The SDK REST client
+(`sdk/go/transport/rest/kms_keys.go`) flattens the gRPC `key_spec` onto those
+fields and decodes the reply into `key` and `metadata`. It refuses an algorithm
+or usage outside those lists as InvalidArgument before sending, because the
+route would answer 400.
+
 ---
 
 ## 3. Cryptographic operations
@@ -72,6 +82,12 @@ Key **metadata and policy** are REST and MCP only — no gRPC RPC.
 them as interchangeable: an unkeyed digest where an HMAC is required is a real
 authentication failure.
 
+**REST Decrypt refuses a named key version.** The body's `version` field is
+accepted only as 0 or absent; any other value answers 400. The go-quicbaas
+SDK's `crypto.DecryptRequest` (v0.12.0-alpha) has no version field, so the
+route cannot decrypt under the version a caller names, and it refuses rather
+than decrypting under whichever version the service picks.
+
 **Batch encrypt/decrypt and rewrap are gRPC-only.** Rewrap is the operation that
 makes key rotation cheap, and it is unreachable from REST and MCP.
 
@@ -81,8 +97,9 @@ makes key rotation cheap, and it is unreachable from REST and MCP.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Create DEK | `POST /api/v1/kms/deks` | `GenerateDataKey` | `0xF0`–`0xF5` | `kms_generate_data_key` | ✅ |
-| Generate wrapped DEK | `MISSING — docs/13 G7` | `GenerateWrappedDataKey` | as above | `kms_generate_wrapped_data_key` | ✅ |
+| Generate data key | `POST /api/v1/kms/data-keys` | `GenerateDataKey` | `0xF0`–`0xF5` | `kms_generate_data_key` | ✅ |
+| Generate wrapped data key | `POST /api/v1/kms/data-keys/wrapped` | `GenerateWrappedDataKey` | as above | `kms_generate_wrapped_data_key` | ✅ |
+| Create DEK | `POST /api/v1/kms/deks` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
 | List DEKs | `GET /api/v1/kms/deks` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
 | Get DEK | `GET /api/v1/kms/deks/{path}` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
 | DEK status | `GET /api/v1/kms/deks/{path}/status` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
@@ -112,6 +129,39 @@ and `kms dek` subtrees are stubs that return typed
 `ErrSecretsNotImplemented` / `ErrDEKNotImplemented` errors. See
 [engineering.md](engineering.md) §2 and [cli.md](cli.md) §7–§8. (`kms crypto
 datakey`, which mints a wrapped DEK, does work.)
+
+**Generating a data key and creating a DEK are different operations.**
+`/data-keys` mints a key under the KEK named by `key_id` (`wrapping_key_id` on
+`/data-keys/wrapped`) and returns it without storing anything: the plaintext and
+the KEK-encrypted copy, or only the encrypted copy from the wrapped route.
+`/deks` stores a named DEK at `path` and returns its version, never key
+material.
+
+`key_size` is in bits on every transport (gRPC, Unix, REST, QUIC and the CLI's
+`--key-size`). `algorithm` (`key_algorithm` on the wrapped route) is a proto
+`KMSKeyAlgorithm` name; REST also takes it without the `KMS_KEY_ALGORITHM_`
+prefix. A data key is AES-128, AES-192, AES-256 or ChaCha20-Poly1305. A named
+algorithm fixes the size, and a non-zero `key_size` must match it. With no
+algorithm, `key_size` picks the AES variant (128, 192 or 256), and 0 means 256.
+The MCP tools take no `key_size`; their `algorithm` (`aes-128-gcm` …
+`chacha20-poly1305`, default `aes-256-gcm`) sets the size.
+
+REST mints only 256-bit keys (AES-256 or ChaCha20-Poly1305). The quicbaas SDK
+crypto client it calls (`GenerateDataKey` / `GenerateWrappedDataKey` in
+`go-quicbaas/sdk/go/client/crypto`, v0.12.0-alpha) sends neither size nor
+algorithm, so REST answers 400 rather than return a key of another size.
+
+The SDK REST client sends the algorithm by its proto name
+(`KMS_KEY_ALGORITHM_AES_256`), never by its enum number, and omits it when it is
+unspecified. It refuses two requests before sending them, as InvalidArgument: a
+value outside the `KMSKeyAlgorithm` enum, and a `wrapping_algorithm` on the
+wrapped route. The route takes no wrapping algorithm — the KEK's own applies —
+and would otherwise ignore the choice; QUIC refuses it too.
+
+The data-key and DEK routes answer 400 for a missing key name or a malformed
+body, and 404 for an unknown KEK. The data-key routes also answer 400 for a
+`key_size` the algorithm does not mint or an algorithm that is not a data-key
+cipher.
 
 `{path:.+}` on the DEK routes is a catch-all because DEK paths contain slashes.
 Note the ordering: `/deks/{path}/status` and `/deks/{path}/rotate` are registered
@@ -149,8 +199,8 @@ over MCP cannot be called at all until they are classified.
 
 ### REST is gated on the `admin` role (#165)
 
-`/api/v1/kms/**` — keys, DEKs, secrets, and the crypto operations that use
-them (`encrypt`, `decrypt`, `sign`, `hmac`) — requires an authenticated
+`/api/v1/kms/**` — keys, DEKs, data keys, secrets, and the crypto operations
+that use them (`encrypt`, `decrypt`, `sign`, `hmac`) — requires an authenticated
 caller holding `admin`. Reads are gated with the writes: a key's metadata,
 policy and version list, and the secret inventory, are all disclosure.
 

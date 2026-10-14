@@ -51,7 +51,7 @@ contract: protobuf request/response messages, decoded from JSON with
 | KMS | `/api/v1/kms` | `proto.KeyManagementClient` | `admin` |
 | Overlay | `/api/v1/overlay` | `platformv1.OverlayServiceServer` | `admin` |
 | Platform | `/api/v1/platform` | `platform.ServicesManager` | `admin`; `/platform/service-registry` stays public |
-| PXE | `/api/v1/pxe` | `platformv1.PXEServiceServer` | `admin`; `POST /pxe/webhook/complete` stays open and authenticates nobody (#238) |
+| PXE | `/api/v1/pxe` | `platformv1.PXEServiceServer` | `admin`; `POST /pxe/webhook/complete` is registered only when `pxe.ServiceConfig.WebhookEnabled` is true (default false, so 404) and is then **unauthenticated** — it sits off the gate and checks no credential; #238 owns what a booting node presents |
 | SDN | `/api/v1/sdn` | `platformv1.SDNServiceServer` | `admin` |
 | Switches | `/api/v1/switches` | `device.SwitchServiceProvider` | `admin` |
 | Tenants | `/api/v1/tenants` | `platformv1.TenantServiceServer` | `admin`, plus a within-tenant boundary: `/{id}/**` requires the caller's own tenant **or** the system tenant; list/create/sync/by-name are system-tenant only (#234) |

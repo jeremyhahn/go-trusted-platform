@@ -290,6 +290,12 @@ func (m *mockResponseWriter) Error500(w http.ResponseWriter, r *http.Request, er
 	w.WriteHeader(http.StatusInternalServerError)
 }
 
+func (m *mockResponseWriter) Error503(w http.ResponseWriter, r *http.Request, err error) {
+	m.lastStatus = http.StatusServiceUnavailable
+	m.lastErr = err
+	w.WriteHeader(http.StatusServiceUnavailable)
+}
+
 // newTestRouter creates a mux router with the given handler registered at the
 // specified method and path.
 func newTestRouter(method, path string, handlerFunc http.HandlerFunc) *mux.Router {
