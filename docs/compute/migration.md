@@ -83,6 +83,7 @@ message VMMigrationSpec {
   bool   tpm_enabled  = 7;
   string network_mode = 8;
   string mac_address  = 9;
+  string arch         = 10;  // source guest arch: "x86_64" | "aarch64"; empty = x86_64
 }
 
 message PrepareMigrationRequest {
@@ -116,7 +117,8 @@ Source platformd                         Destination platformd
 ----------------                         ---------------------
 MigrateVM(vm, dest:port, {live?})
   │
-  ├── PrepareMigration (mTLS gRPC) ─────▶ materialize server tls-creds (CA)
+  ├── PrepareMigration (mTLS gRPC) ─────▶ refuse spec.arch ≠ this host's guest arch
+  │                                       materialize server tls-creds (CA)
   │                                       launch receiver QEMU:
   │                                         -incoming defer
   │                                         -object tls-creds-x509,endpoint=server
@@ -135,6 +137,13 @@ MigrateVM(vm, dest:port, {live?})
   │
   └── quit source QEMU, drop local bookkeeping
 ```
+
+The source names its guest's architecture in `spec.arch` (`compute.arch`, the
+guest every VM on that host runs). The destination builds its receiver from its
+own `compute.arch`, and QEMU cannot load an x86_64 guest into an aarch64
+machine or the reverse, so a destination of another architecture refuses the
+spec before it issues credentials or starts a receiver. An empty `arch` is
+`x86_64`, the guest a configuration without an arch builds.
 
 On any failure the source calls `FinalizeMigration{commit=false}`, the
 destination tears the idle receiver down and releases its TLS material, and the
@@ -173,6 +182,7 @@ needs one ([Configuration](engineering.md#4-configuration)).
 |-----------|-------------|
 | Live migration without shared storage | `FAILED_PRECONDITION` |
 | Migration coordinator / TLS provider not wired (no CA) | `FAILED_PRECONDITION` |
+| Source guest arch differs from the destination's (`MigrationArchMismatchError`) | `FAILED_PRECONDITION` |
 | Empty destination / VM id / receiver id / spec | `INVALID_ARGUMENT` |
 | Orchestrator does not support VM migration | `FAILED_PRECONDITION` |
 | Unknown receiver on finalize | `NOT_FOUND` |

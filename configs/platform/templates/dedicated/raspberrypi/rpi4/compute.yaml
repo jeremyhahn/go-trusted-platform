@@ -116,6 +116,14 @@ os:
     - wget
     - htop
     - lsblk
+    # Compute VMs: aarch64 guests under KVM, booted UEFI from the AAVMF
+    # firmware (/usr/share/AAVMF), each with an swtpm vTPM. qemu-img makes
+    # the instance disks; swtpm-tools carries swtpm_setup.
+    - qemu-system-aarch64
+    - qemu-img
+    - swtpm
+    - swtpm-tools
+    - aavmf
     - parted
     - e2fsprogs
     - lvm2

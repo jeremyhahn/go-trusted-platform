@@ -28,6 +28,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -101,6 +102,7 @@ func createTestOrchestrator(t *testing.T, workDir string) *compute.QEMUOrchestra
 		EnableKVM:       isKVMAvailable(),
 		NetworkBridge:   testBridgeName,
 		OVSSocketPath:   ovsSocketPath,
+		Arch:            qemu.ArchX86_64,
 		QEMUBinary:      qemuBinary,
 		OVMFCode:        ovmfCodePath,
 		OVMFCodeSecure:  "/usr/share/OVMF/OVMF_CODE_4M.secboot.fd",

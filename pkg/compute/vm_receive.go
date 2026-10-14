@@ -138,6 +138,20 @@ func (e *MigrationListenAddressError) Error() string {
 
 // parseMigrationListenAddress resolves compute.migration_listen_address into
 // the address a receiving QEMU binds. Port 0 asks for an ephemeral port.
+// MigrationArchMismatchError refuses a receiver for a guest whose architecture
+// differs from the one this host runs: QEMU cannot load an x86_64 guest's state
+// into an aarch64 machine or the reverse. Both values are resolved, so an empty
+// source arch reads as x86_64.
+type MigrationArchMismatchError struct {
+	Source      qemu.Arch
+	Destination qemu.Arch
+}
+
+func (e *MigrationArchMismatchError) Error() string {
+	return "compute: migration source guest arch " + strconv.Quote(string(e.Source)) +
+		" does not match this host's guest arch " + strconv.Quote(string(e.Destination))
+}
+
 func parseMigrationListenAddress(address string) (netip.AddrPort, error) {
 	if address == "" {
 		return netip.AddrPort{}, &MigrationListenAddressError{}
@@ -238,6 +252,12 @@ func (r *receiverRegistry) take(id string) (*trackedReceiver, bool) {
 func (o *QEMUOrchestrator) ReceiveIncoming(ctx context.Context, spec MigrationSpec) (*ReceiverHandle, error) {
 	if spec.Config == nil {
 		return nil, ErrMigrationSpecRequired
+	}
+
+	// The receiver is built from this host's arch profile; refuse a guest it
+	// cannot run before any credential is issued or QEMU started.
+	if source, destination := spec.Arch.OrDefault(), o.config.Arch.OrDefault(); source != destination {
+		return nil, &MigrationArchMismatchError{Source: source, Destination: destination}
 	}
 
 	serverTLS, ok := o.config.MigrationTLS.(MigrationServerTLSProvider)
@@ -366,25 +386,16 @@ func defaultNewIncomingReceiver(ctx context.Context, p *incomingReceiverParams) 
 		networkMode = "bridge"
 	}
 
-	qcfg := &qemu.Config{
-		QEMUBinary:     o.config.QEMUBinary,
-		DiskPath:       filepath.Join(workDir, "disk.qcow2"),
-		DiskSize:       diskSize,
-		Memory:         memory,
-		CPUs:           cpus,
-		WorkDir:        workDir,
-		SecureBoot:     p.spec.Config.SecureBoot,
-		Debug:          o.config.Debug,
-		OVMFCode:       o.config.OVMFCode,
-		OVMFCodeSecure: o.config.OVMFCodeSecure,
-		OVMFVars:       o.config.OVMFVars,
-		EnableKVM:      p.spec.Config.EnableKVM,
-		NoGraphic:      true,
-		BootOrder:      "c",
-		NetworkMode:    networkMode,
-		BridgeName:     o.config.NetworkBridge,
-		MACAddress:     p.spec.Config.MACAddress,
-	}
+	qcfg := o.config.qemuBase()
+	qcfg.DiskPath = filepath.Join(workDir, "disk.qcow2")
+	qcfg.DiskSize = diskSize
+	qcfg.Memory = memory
+	qcfg.CPUs = cpus
+	qcfg.WorkDir = workDir
+	qcfg.SecureBoot = p.spec.Config.SecureBoot
+	qcfg.EnableKVM = p.spec.Config.EnableKVM
+	qcfg.NetworkMode = networkMode
+	qcfg.MACAddress = p.spec.Config.MACAddress
 
 	vm, err := qemu.NewVM(qcfg, o.logger)
 	if err != nil {

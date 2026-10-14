@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -31,6 +32,17 @@ const KernelPackage = "linux-rpi"
 // start*.elf and fixup*.dat, and bootcode.bin for the boards whose boot ROM
 // still needs it.
 var bootloaderPackages = []string{"raspberrypi-bootloader", "raspberrypi-bootloader-common"}
+
+// tokenPackages are the smart-card stack every Pi carries so a YubiKey or a
+// Nitrokey HSM answers PKCS#11 on the node: pcsc-lite's pcscd daemon and its
+// OpenRC script, the USB CCID reader driver both tokens speak through, OpenSC
+// (opensc-pkcs11.so, the Nitrokey HSM / SmartCard-HSM module) and Yubico's
+// libykcs11.so (the YubiKey PIV module).
+var tokenPackages = []string{"pcsc-lite", "pcsc-lite-openrc", "ccid", "opensc", "yubico-piv-tool-libs"}
+
+// tokenServices are the OpenRC services of the token stack the installed Pi
+// starts at boot: pcscd, whose init script pcsc-lite-openrc ships.
+var tokenServices = []string{"pcscd"}
 
 // Model describes one board.
 type Model struct {
@@ -115,8 +127,10 @@ func (t *Target) Architecture() uki.Architecture { return uki.ArchAArch64 }
 func (t *Target) KernelPackage() string { return KernelPackage }
 
 // ExtraPackages implements diskimage.Target: the firmware packages the boot
-// partition is populated from.
-func (t *Target) ExtraPackages() []string { return append([]string(nil), bootloaderPackages...) }
+// partition is populated from, then the smart-card token stack.
+func (t *Target) ExtraPackages() []string {
+	return slices.Concat(bootloaderPackages, tokenPackages)
+}
 
 // UBootBoard implements diskimage.Target.
 func (t *Target) UBootBoard() uboot.Board { return uboot.BoardRPiArm64 }
@@ -130,13 +144,15 @@ func (t *Target) BuiltKernel() bool { return false }
 func (t *Target) StageKernel(context.Context, string, *virtkernel.Artifacts) error { return nil }
 
 // InstallerOverrides implements diskimage.Target: an MBR SD card, the Pi
-// kernel, U-Boot as the boot firmware and the Raspberry Pi quirk entry.
+// kernel, U-Boot as the boot firmware, pcscd started at boot and the
+// Raspberry Pi quirk entry.
 func (t *Target) InstallerOverrides() iso.InstallerOverrides {
 	return iso.InstallerOverrides{
 		Device:               "/dev/mmcblk0",
 		PartitionTable:       "mbr",
 		KernelPackage:        KernelPackage,
 		ExtraPackages:        t.ExtraPackages(),
+		ExtraServices:        slices.Clone(tokenServices),
 		HardwareManufacturer: "Raspberry Pi",
 		HardwareModel:        t.Model.Description,
 		Target:               "image",

@@ -174,12 +174,12 @@ func TestBuildQEMUCommand_X86Golden(t *testing.T) {
 
 func TestBuildQEMUCommand_AArch64Boot(t *testing.T) {
 	f := newArchFixture(t)
-	cpu := "cortex-a72"
+	machine, cpu := "virt,gic-version=3", "cortex-a72"
 	if runtime.GOARCH == "arm64" {
-		cpu = "host"
+		machine, cpu = "virt,gic-version=host", "host"
 	}
 	want := concat([]string{"qemu-system-aarch64"}, withKVM("arm64",
-		"-machine", "virt,gic-version=3",
+		"-machine", machine,
 		"-cpu", cpu,
 		"-smp", "cores=2,threads=1",
 		"-m", "2048",
@@ -194,11 +194,10 @@ func TestBuildQEMUCommand_AArch64Boot(t *testing.T) {
 }
 
 func TestBuildQEMUCommand_AArch64NeverAsksForKVMOnAForeignHost(t *testing.T) {
-	if runtime.GOARCH == "arm64" {
-		t.Skip("the host can KVM-accelerate an aarch64 guest; the TCG branch is covered on other hosts")
-	}
 	f := newArchFixture(t)
-	args := buildArgs(t, f.aarch64Config(), BootModeBoot)
+	cfg := f.aarch64Config()
+	cfg.HostArch = "amd64"
+	args := buildArgs(t, cfg, BootModeBoot)
 	assert.NotContains(t, args, "-enable-kvm")
 	assert.NotContains(t, args, "-L")
 }
@@ -320,4 +319,128 @@ func TestConfigQEMUBinaryDefaultsPerArch(t *testing.T) {
 	assert.Equal(t, "qemu-system-aarch64", arm.qemuBinary(armp))
 	arm.QEMUBinary = "/opt/qemu/bin/qemu-system-aarch64"
 	assert.Equal(t, "/opt/qemu/bin/qemu-system-aarch64", arm.qemuBinary(armp))
+}
+
+// aarch64UEFIConfig is an aarch64 compute VM on an arm64 host booting UEFI
+// (AAVMF) from pflash: the firmware paths are set and no -bios image is.
+func (f archFixture) aarch64UEFIConfig() *Config {
+	cfg := f.aarch64Config()
+	cfg.Firmware = ""
+	cfg.OVMFCode = f.path("OVMF_CODE.fd")
+	cfg.OVMFCodeSecure = f.path("OVMF_CODE.secboot.fd")
+	cfg.OVMFVars = f.path("OVMF_VARS.fd")
+	cfg.HostArch = "arm64"
+	return cfg
+}
+
+func TestBuildQEMUCommand_AArch64UEFIOnArm64Host(t *testing.T) {
+	f := newArchFixture(t)
+	want := concat([]string{"qemu-system-aarch64",
+		"-enable-kvm",
+		"-machine", "virt,gic-version=host",
+		"-cpu", "host",
+		"-smp", "cores=2,threads=1",
+		"-m", "2048",
+		"-drive", "file=" + f.path("disk.img") + ",if=none,format=raw,cache=writethrough,id=hd0",
+		"-device", "virtio-blk-pci,drive=hd0",
+		"-netdev", "user,id=net0",
+		"-device", "virtio-net-pci,netdev=net0",
+		"-drive", "if=pflash,unit=0,format=raw,readonly=on,file=" + f.path("OVMF_CODE.fd"),
+		"-drive", "if=pflash,unit=1,format=raw,file=" + f.path("nvram/OVMF_VARS.fd"),
+	}, f.commonTail("tpm-tis-device", "file:"+f.path("serial.log")))
+
+	assert.Equal(t, want, buildArgs(t, f.aarch64UEFIConfig(), BootModeBoot))
+}
+
+func TestBuildQEMUCommand_AArch64UEFISecureBootUsesSecureCode(t *testing.T) {
+	f := newArchFixture(t)
+	cfg := f.aarch64UEFIConfig()
+	cfg.SecureBoot = true
+
+	args := buildArgs(t, cfg, BootModeBoot)
+	assert.Contains(t, args, "if=pflash,unit=0,format=raw,readonly=on,file="+f.path("OVMF_CODE.secboot.fd"))
+	assert.NotContains(t, args, "driver=cfi.pflash01,property=secure,value=on",
+		"the SMM-protected varstore is an x86 q35 feature; the virt machine has no SMM")
+}
+
+func TestBuildQEMUCommand_AArch64UEFIOnForeignHostUsesTCG(t *testing.T) {
+	f := newArchFixture(t)
+	cfg := f.aarch64UEFIConfig()
+	cfg.HostArch = "amd64"
+
+	args := buildArgs(t, cfg, BootModeBoot)
+	assert.NotContains(t, args, "-enable-kvm")
+	assert.Equal(t, "virt,gic-version=3", argAfter(t, args, "-machine"))
+	assert.Equal(t, "cortex-a72", argAfter(t, args, "-cpu"))
+}
+
+// An arm64 host with KVM turned off runs TCG, which cannot take
+// gic-version=host: the fixed GICv3 stays, whatever the host's GIC is.
+func TestBuildQEMUCommand_AArch64KVMDisabledKeepsTheFixedGIC(t *testing.T) {
+	f := newArchFixture(t)
+	cfg := f.aarch64UEFIConfig()
+	cfg.EnableKVM = false
+
+	args := buildArgs(t, cfg, BootModeBoot)
+	assert.NotContains(t, args, "-enable-kvm")
+	assert.Equal(t, "virt,gic-version=3", argAfter(t, args, "-machine"))
+	assert.Equal(t, "cortex-a72", argAfter(t, args, "-cpu"))
+}
+
+func TestConfigValidate_AArch64UEFIRequiresTheVarsTemplate(t *testing.T) {
+	f := newArchFixture(t)
+	cfg := f.aarch64UEFIConfig()
+	cfg.OVMFVars = f.path("no-such-VARS.fd")
+
+	assert.ErrorIs(t, cfg.Validate(), ErrOVMFNotFound)
+}
+
+func TestInitializeNVRAM_AArch64UEFICopiesTheVarsPerInstance(t *testing.T) {
+	f := newArchFixture(t)
+	cfg := f.aarch64UEFIConfig()
+	cfg.WorkDir = filepath.Join(f.dir, "aarch64-work")
+	template := []byte("AAVMF vars template")
+	require.NoError(t, os.WriteFile(cfg.OVMFVars, template, 0o644))
+	vm, err := NewVM(cfg, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, vm.initializeNVRAM())
+
+	got, err := os.ReadFile(cfg.GetNVRAMPath())
+	require.NoError(t, err)
+	assert.Equal(t, template, got)
+	assert.NotEqual(t, cfg.OVMFVars, cfg.GetNVRAMPath(), "the template itself is never written")
+}
+
+func TestConfigKVM_FollowsTheInjectedHostArch(t *testing.T) {
+	cases := []struct {
+		arch     Arch
+		hostArch string
+		want     bool
+	}{
+		{ArchX86_64, "amd64", true},
+		{ArchX86_64, "arm64", false},
+		{ArchAArch64, "arm64", true},
+		{ArchAArch64, "amd64", false},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.arch)+"-on-"+tc.hostArch, func(t *testing.T) {
+			cfg := &Config{Arch: tc.arch, HostArch: tc.hostArch, EnableKVM: true}
+			p, err := cfg.profile()
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, cfg.kvm(p))
+		})
+	}
+}
+
+// argAfter returns the value that follows flag in args.
+func argAfter(t *testing.T, args []string, flag string) string {
+	t.Helper()
+	for i, a := range args[:len(args)-1] {
+		if a == flag {
+			return args[i+1]
+		}
+	}
+	t.Fatalf("%s not in %v", flag, args)
+	return ""
 }

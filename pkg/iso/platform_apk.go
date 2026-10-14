@@ -84,17 +84,6 @@ func (c *ISOBuildConfig) ValidatePlatformAPKDir() error {
 	return nil
 }
 
-// installPackages returns the packages the installer installs beyond its own
-// set: the configured extras and, when the media carries the platform-built
-// apks, the overlay IPsec packages.
-func (o InstallerOverrides) installPackages() []string {
-	packages := append([]string(nil), o.ExtraPackages...)
-	if o.PlatformAPKDir != "" {
-		packages = append(packages, PlatformPackages()...)
-	}
-	return packages
-}
-
 // ErrPlatformAPKMissing reports a platform-built apk the media must carry that
 // the builder output does not provide. The media build fails rather than
 // producing media that installs without charon: a node whose overlay cannot

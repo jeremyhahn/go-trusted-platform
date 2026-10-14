@@ -129,7 +129,7 @@ the profile supplies the rest:
 | | `x86_64` (default) | `aarch64` |
 |---|---|---|
 | binary | `qemu-system-x86_64` | `qemu-system-aarch64` |
-| machine / CPU | `q35` (`smm=on` with Secure Boot) / `host` | `virt,gic-version=3` / `cortex-a72` (`host` under KVM) |
+| machine / CPU | `q35` (`smm=on` with Secure Boot) / `host` | `virt,gic-version=3` / `cortex-a72`; under KVM `virt,gic-version=host` / `host`, so a GICv2-only host such as the Raspberry Pi 4 boots |
 | firmware | OVMF in two pflash drives, NVRAM copied from `OVMFVars` | `Firmware` (U-Boot `u-boot.bin`) as `-bios`; no NVRAM file |
 | disk | AHCI (`ide-hd`), `qcow2` | `virtio-blk-pci`, `raw` |
 | TPM front-end | `tpm-tis` | `tpm-tis-device` |

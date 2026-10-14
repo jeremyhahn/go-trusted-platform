@@ -279,7 +279,23 @@ is what the integration suite reads — with `tty1` last, everything after
 quirk entry (`pkg/quirks`: `console=ttyAMA0,115200 console=tty1 rootwait
 loglevel=7`, no earlycon), because the virt machine's PL011 is `ttyAMA0` too.
 The `rpi` target adds `raspberrypi-bootloader` and
-`raspberrypi-bootloader-common` to the prefetch.
+`raspberrypi-bootloader-common` to the prefetch, then the smart-card token
+stack every Pi image carries, for every model and role: `pcsc-lite`,
+`pcsc-lite-openrc`, `ccid`, `opensc` and `yubico-piv-tool-libs`. Those are
+the PC/SC daemon and its init script, the USB CCID reader driver, and the two
+PKCS#11 modules, `opensc-pkcs11.so` (Nitrokey HSM) and `libykcs11.so`
+(YubiKey PIV). The lists live in `pkg/diskimage/rpi/target.go`
+(`bootloaderPackages`, `tokenPackages`, `tokenServices`) and reach the media
+as `InstallerOverrides.ExtraPackages` and `ExtraServices`. Staging bakes them
+into the media's `configs/installer.yaml`, the file the installer installs
+from: every package the media prefetches for the installed system
+(`PreFetchConfig.installedPackages`, `pkg/iso/prefetch.go`) is appended to
+`os.packages` and every `ExtraServices` entry to `os.services`, after the
+template's own entries and without repeating one (`applyInstallerOverrides`,
+`pkg/iso/customize.go`). So the installed Pi carries the bootloader packages
+and the token stack, and starts pcscd in the default runlevel. The
+installer's own service list does not name pcscd, so x86 and `qemu-virt`
+images do not start it.
 
 `seal-pcrs` comes from the template (`[0, 7, 9]` in the single-node default).
 On the Pi, PCR 0 is only U-Boot's version string, so `[0, 4, 7, 9]` — adding

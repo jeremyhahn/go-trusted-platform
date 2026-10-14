@@ -1,0 +1,22 @@
+# Overrides for a Raspberry Pi 4 compute node on a flat DHCP network (an
+# access port, such as the office VLAN 101), merged onto
+# configs/platform/templates/dedicated/raspberrypi/rpi4/compute.yaml:
+#
+#   platformctl diskimage create --target rpi --model rpi4 --role compute \
+#     --overrides rpi4-flat-dhcp.yaml
+#
+# A null deletes the template's key and a list given here replaces the
+# template's list (docs/device-templates.md, "Overrides").
+os:
+  hostname: pi4-01
+network:
+  # The resolver comes from DHCP: with no dns and no dnsmasq section the
+  # installer leaves resolv.conf to the DHCP client.
+  dns: null
+  dnsmasq: null
+  # No platform VRF and no zone VLANs: eth0 is an access port, not a trunk.
+  platform-vrf: null
+  vlans: []
+  interfaces:
+    - name: eth0
+      type: dhcp

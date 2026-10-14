@@ -106,6 +106,10 @@ platformctl iso create \
   --overrides /path/to/my-overrides.yaml
 ```
 
+The override is deep-merged onto the template by the rules in
+[Merge Rules](#merge-rules): a `null` deletes a template key and a list
+replaces the template's list unless its entries merge by name.
+
 ### Shared ISO with dynamic per-node config (multi-node bootstrap)
 
 ```bash
@@ -185,6 +189,59 @@ tpm:
   idevid:
     serial: MY-SERIAL-001
 ```
+
+### Merge Rules
+
+`platformctl diskimage create --overrides`, `platformctl iso create
+--overrides` and device-profile overrides all merge with `pkg/config`
+(`DeepMergeYAML`, `DeepMergeMaps`), which follows JSON Merge Patch
+(RFC 7386 §2) and adds keyed list merging:
+
+| Override value | Result |
+|---|---|
+| a key the override does not name | the template's value is kept |
+| a scalar | replaces the template's value |
+| a map | merges key by key into the template's map |
+| `null` (or `~`, or an empty value) | **deletes** the key, at any depth; a `null` for a key the template lacks changes nothing |
+| a list of maps that share `name`, `id` or `role` with the template's list | merges entry by entry: matching entries merge, new entries are appended, template entries the override does not name are kept |
+| any other list, including `[]` | **replaces** the template's list; `[]` empties it |
+
+To remove a template section, set it to `null`; to remove every VLAN or
+bond, set the list to `[]`. A keyed list cannot lose one entry by merge;
+give the whole file with `--platform-config` instead.
+
+### Example: Raspberry Pi 4 on a Flat DHCP Network
+
+The rpi4 compute template is a rack node: `eth0` is a trunk carrying the
+zone VLANs, with a platform VRF and a local dnsmasq forwarding to the
+control plane at `10.4.6.10`. On a flat network — an access port with a
+DHCP server, such as an office VLAN — the same template builds a DHCP node
+with this override:
+
+```yaml
+os:
+  hostname: pi4-01
+network:
+  dns: null            # no resolv.conf is rendered: the DHCP client writes it
+  dnsmasq: null
+  platform-vrf: null
+  vlans: []
+  interfaces:
+    - name: eth0
+      type: dhcp
+```
+
+```bash
+platformctl diskimage create --target rpi --model rpi4 --role compute \
+  --overrides rpi4-flat-dhcp.yaml
+```
+
+The rendered `/etc/network/interfaces` has `iface eth0 inet dhcp` and no
+802.1Q or VRF device. The file is
+`pkg/cli/commands/diskimage/testdata/rpi4-flat-dhcp.yaml`, and
+`TestRPi4FlatDHCPOverridesRenderAnAccessPort` renders it. It changes only
+`network:`; the template's other control-plane references (`dns.resolver`,
+`trust.bmc`, `ntp`, `acme`) still name the rack and need the site's values.
 
 ### Common Override Fields
 

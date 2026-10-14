@@ -390,6 +390,11 @@ type OSConfig struct {
 	// Additional packages to install
 	Packages []string `yaml:"packages" json:"packages"`
 
+	// Services are OpenRC services the installed system starts in the
+	// default runlevel beyond the installer's own set (the Raspberry Pi's
+	// pcscd). Each is enabled only if a package installed its init script.
+	Services []string `yaml:"services,omitempty" json:"services,omitempty"`
+
 	// Inline post-install script (embedded in YAML as multiline string)
 	PostInstall string `yaml:"post-install,omitempty" json:"post_install,omitempty" mapstructure:"post-install"`
 

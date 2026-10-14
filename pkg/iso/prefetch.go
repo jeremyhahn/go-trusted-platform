@@ -364,22 +364,28 @@ func CollectRequiredPackages(config *PreFetchConfig) []string {
 		}
 	}
 
-	// Add the overlay's IPsec transport when the media carries it
-	if config.PlatformAPKDir != "" {
+	return append(packages, config.installedPackages()...)
+}
+
+// installedPackages are the packages the media carries for the installed
+// system beyond the base set the installer installs on its own: the
+// overlay's IPsec transport, a gateway's Jool translator and the target's
+// extra packages. The prefetch fetches exactly this list and the installer
+// configuration the media bakes installs exactly this list, so a package
+// cannot be fetched and then left out of the install (#689, #603).
+func (c *PreFetchConfig) installedPackages() []string {
+	var packages []string
+	// The overlay's IPsec transport, when the media carries it.
+	if c.PlatformAPKDir != "" {
 		packages = append(packages, PlatformPackages()...)
 	}
-
 	// A gateway's Jool translator (#603). jool-modules-lts depends on one
-	// exact linux-lts build, so it is prefetched only alongside that kernel;
+	// exact linux-lts build, so it is carried only alongside that kernel;
 	// with any other kernel it would drag linux-lts onto the node.
-	if config.GatewayRole && !config.FIPS && !config.SkipKernel && config.kernelPackage() == defaultKernelPackage {
+	if c.GatewayRole && !c.FIPS && !c.SkipKernel && c.kernelPackage() == defaultKernelPackage {
 		packages = append(packages, tpconfig.GatewaydPackages...)
 	}
-
-	// Add user-specified extra packages
-	packages = append(packages, config.ExtraPackages...)
-
-	return packages
+	return append(packages, c.ExtraPackages...)
 }
 
 // BuildLocalRepository downloads all packages and creates a local APK repository in the ISO.

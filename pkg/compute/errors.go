@@ -31,6 +31,10 @@ var (
 	// ErrInvalidConfiguration is returned when the configuration is invalid
 	ErrInvalidConfiguration = errors.New("invalid configuration")
 
+	// ErrUnsupportedHostArch is returned when the local QEMU defaults are
+	// derived from a host architecture with no compute VM guest mapping
+	ErrUnsupportedHostArch = errors.New("unsupported host architecture for compute VMs")
+
 	// ErrInvalidInstanceID is returned when an instance ID is invalid
 	ErrInvalidInstanceID = errors.New("invalid instance ID")
 

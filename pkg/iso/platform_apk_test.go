@@ -237,14 +237,14 @@ func TestCollectRequiredPackages_PlatformPackagesAreOptIn(t *testing.T) {
 }
 
 func TestPlatformPackages_ArePresentOnlyWhenTheMediaCarriesThem(t *testing.T) {
-	plain := InstallerOverrides{ExtraPackages: []string{"nginx"}}
-	assert.Equal(t, []string{"nginx"}, plain.installPackages())
+	plain := &PreFetchConfig{ExtraPackages: []string{"nginx"}}
+	assert.Equal(t, []string{"nginx"}, plain.installedPackages())
 
-	carried := InstallerOverrides{ExtraPackages: []string{"nginx"}, PlatformAPKDir: "/builder/output"}
-	assert.Equal(t, append([]string{"nginx"}, PlatformPackages()...), carried.installPackages())
+	carried := &PreFetchConfig{ExtraPackages: []string{"nginx"}, PlatformAPKDir: "/builder/output"}
+	assert.Equal(t, append(PlatformPackages(), "nginx"), carried.installedPackages())
 
 	// The result is a copy: changing it leaves the configuration alone.
-	packages := plain.installPackages()
+	packages := plain.installedPackages()
 	packages[0] = "changed"
 	assert.Equal(t, []string{"nginx"}, plain.ExtraPackages)
 }

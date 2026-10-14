@@ -23,6 +23,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 )
 
@@ -110,6 +111,7 @@ func TestOrchestratorConfig_Validate_PortAuth(t *testing.T) {
 				DefaultCPUs:     2,
 				DefaultDiskSize: "10G",
 				MaxInstances:    10,
+				Arch:            qemu.ArchX86_64,
 				QEMUBinary:      "qemu-system-x86_64",
 				OVMFCode:        "/path/to/ovmf",
 				OVMFVars:        "/path/to/vars",
@@ -127,6 +129,7 @@ func TestOrchestratorConfig_Validate_PortAuth(t *testing.T) {
 				DefaultCPUs:     2,
 				DefaultDiskSize: "10G",
 				MaxInstances:    10,
+				Arch:            qemu.ArchX86_64,
 				QEMUBinary:      "qemu-system-x86_64",
 				OVMFCode:        "/path/to/ovmf",
 				OVMFVars:        "/path/to/vars",
@@ -144,6 +147,7 @@ func TestOrchestratorConfig_Validate_PortAuth(t *testing.T) {
 				DefaultCPUs:     2,
 				DefaultDiskSize: "10G",
 				MaxInstances:    10,
+				Arch:            qemu.ArchX86_64,
 				QEMUBinary:      "qemu-system-x86_64",
 				OVMFCode:        "/path/to/ovmf",
 				OVMFVars:        "/path/to/vars",
@@ -840,6 +844,7 @@ func TestOrchestratorConfig_Validate_Comprehensive(t *testing.T) {
 				DefaultCPUs:     2,
 				DefaultDiskSize: "10G",
 				MaxInstances:    10,
+				Arch:            qemu.ArchX86_64,
 				QEMUBinary:      "qemu-system-x86_64",
 				OVMFCode:        "/path/to/ovmf",
 				OVMFVars:        "/path/to/vars",
@@ -855,6 +860,7 @@ func TestOrchestratorConfig_Validate_Comprehensive(t *testing.T) {
 				DefaultCPUs:     -1,
 				DefaultDiskSize: "10G",
 				MaxInstances:    10,
+				Arch:            qemu.ArchX86_64,
 				QEMUBinary:      "qemu-system-x86_64",
 				OVMFCode:        "/path/to/ovmf",
 				OVMFVars:        "/path/to/vars",
@@ -870,6 +876,7 @@ func TestOrchestratorConfig_Validate_Comprehensive(t *testing.T) {
 				DefaultCPUs:     2,
 				DefaultDiskSize: "10G",
 				MaxInstances:    -1,
+				Arch:            qemu.ArchX86_64,
 				QEMUBinary:      "qemu-system-x86_64",
 				OVMFCode:        "/path/to/ovmf",
 				OVMFVars:        "/path/to/vars",

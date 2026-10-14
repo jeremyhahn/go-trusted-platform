@@ -97,6 +97,9 @@ config := compute.DefaultOrchestratorConfig(compute.ComputeTypeVM)
 // MaxInstances:    100
 // EnableKVM:       true
 // NetworkBridge:   br-int
+// Arch:            x86_64 on an amd64 host, aarch64 on an arm64 host
+// QEMUBinary, OVMFCode, OVMFCodeSecure, OVMFVars: the defaults for Arch
+//                  (OVMF on x86_64, AAVMF on aarch64)
 ```
 
 ### Custom Configuration
@@ -112,6 +115,7 @@ config := &compute.OrchestratorConfig{
     EnableKVM:       true,
     NetworkBridge:   "br0",
     OVSSocketPath:   "/var/run/openvswitch/db.sock",
+    Arch:            qemu.ArchX86_64,
     QEMUBinary:      "qemu-system-x86_64",
     OVMFCode:        "/usr/share/OVMF/OVMF_CODE_4M.fd",
     OVMFVars:        "/usr/share/OVMF/OVMF_VARS_4M.fd",

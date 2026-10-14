@@ -401,30 +401,197 @@ nested:
 	}
 }
 
-func TestDeepMergeYAML_NilOverrideValuePreservesBase(t *testing.T) {
-	base := []byte(`
-keep_this: important
-also_keep: critical
-`)
-	overrides := []byte(`
-keep_this:
-`)
-
-	merged, err := DeepMergeYAML(base, overrides)
+// mustMerge merges overrides onto base and returns the result as a map.
+func mustMerge(t *testing.T, base, overrides string) map[string]interface{} {
+	t.Helper()
+	merged, err := DeepMergeYAML([]byte(base), []byte(overrides))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	var result map[string]interface{}
-	if err := yaml.Unmarshal(merged, &result); err != nil {
+	var raw map[interface{}]interface{}
+	if err := yaml.Unmarshal(merged, &raw); err != nil {
 		t.Fatalf("failed to unmarshal merged result: %v", err)
 	}
-
-	if result["keep_this"] != "important" {
-		t.Errorf("expected keep_this=important, got %v", result["keep_this"])
+	result, ok := toStringMap(raw)
+	if !ok {
+		t.Fatalf("merged result is not a string-keyed map: %v", raw)
 	}
-	if result["also_keep"] != "critical" {
-		t.Errorf("expected also_keep=critical, got %v", result["also_keep"])
+	return result
+}
+
+// TestDeepMergeYAML_NullDeletesKey covers RFC 7386 §2: an explicit null in
+// the override, in any of its YAML spellings, deletes the key.
+func TestDeepMergeYAML_NullDeletesKey(t *testing.T) {
+	for _, null := range []string{"", " null", " ~"} {
+		t.Run("null="+null, func(t *testing.T) {
+			result := mustMerge(t, "drop_this: gone\nalso_keep: critical\n", "drop_this:"+null+"\n")
+
+			if _, exists := result["drop_this"]; exists {
+				t.Errorf("expected drop_this deleted, got %v", result["drop_this"])
+			}
+			if result["also_keep"] != "critical" {
+				t.Errorf("expected also_keep=critical, got %v", result["also_keep"])
+			}
+		})
+	}
+}
+
+// TestDeepMergeYAML_NullDeletesAtEveryDepth deletes a nested key, a whole
+// subtree, and a key inside an identity-keyed list element.
+func TestDeepMergeYAML_NullDeletesAtEveryDepth(t *testing.T) {
+	base := `
+network:
+  dnsmasq:
+    enabled: true
+  platform-vrf:
+    address: 10.4.144.20/32
+    table: 10
+  interfaces:
+    - name: eth0
+      type: static
+      ipv4-address: 10.4.1.20/24
+`
+	overrides := `
+network:
+  dnsmasq: null
+  platform-vrf:
+    table: null
+  interfaces:
+    - name: eth0
+      type: dhcp
+      ipv4-address: null
+`
+	network, ok := toStringMap(mustMerge(t, base, overrides)["network"])
+	if !ok {
+		t.Fatal("expected network to be a map")
+	}
+	if _, exists := network["dnsmasq"]; exists {
+		t.Errorf("expected dnsmasq deleted, got %v", network["dnsmasq"])
+	}
+	vrf, ok := toStringMap(network["platform-vrf"])
+	if !ok {
+		t.Fatal("expected platform-vrf to be a map")
+	}
+	if _, exists := vrf["table"]; exists {
+		t.Errorf("expected platform-vrf.table deleted, got %v", vrf["table"])
+	}
+	if vrf["address"] != "10.4.144.20/32" {
+		t.Errorf("expected platform-vrf.address kept, got %v", vrf["address"])
+	}
+	ifaces, ok := network["interfaces"].([]interface{})
+	if !ok || len(ifaces) != 1 {
+		t.Fatalf("expected one interface, got %v", network["interfaces"])
+	}
+	eth0, ok := toStringMap(ifaces[0])
+	if !ok {
+		t.Fatal("expected interface to be a map")
+	}
+	if eth0["type"] != "dhcp" {
+		t.Errorf("expected eth0 type=dhcp, got %v", eth0["type"])
+	}
+	if _, exists := eth0["ipv4-address"]; exists {
+		t.Errorf("expected eth0 ipv4-address deleted, got %v", eth0["ipv4-address"])
+	}
+}
+
+// TestDeepMergeYAML_NullForAbsentKeyIsNoOp: deleting what the base lacks
+// adds nothing, at the top level or inside a subtree the override adds.
+func TestDeepMergeYAML_NullForAbsentKeyIsNoOp(t *testing.T) {
+	result := mustMerge(t, "keep: me\n", "missing: null\nadded:\n  value: 1\n  missing: null\n")
+
+	if _, exists := result["missing"]; exists {
+		t.Errorf("expected no missing key, got %v", result["missing"])
+	}
+	added, ok := toStringMap(result["added"])
+	if !ok {
+		t.Fatalf("expected added to be a map, got %v", result["added"])
+	}
+	if _, exists := added["missing"]; exists {
+		t.Errorf("expected the null dropped from the added subtree, got %v", added)
+	}
+	if added["value"] != 1 || result["keep"] != "me" {
+		t.Errorf("expected added.value=1 and keep=me, got %v", result)
+	}
+}
+
+// TestDeepMergeYAML_MapReplacesScalar: a map over a base scalar becomes the
+// value, with its own nulls dropped.
+func TestDeepMergeYAML_MapReplacesScalar(t *testing.T) {
+	result := mustMerge(t, "dns: 10.4.6.10\n", "dns:\n  server: 192.0.2.53\n  port: null\n")
+
+	dns, ok := toStringMap(result["dns"])
+	if !ok {
+		t.Fatalf("expected dns to be a map, got %v", result["dns"])
+	}
+	if dns["server"] != "192.0.2.53" || len(dns) != 1 {
+		t.Errorf("expected dns={server: 192.0.2.53}, got %v", dns)
+	}
+}
+
+// TestDeepMergeYAML_EmptyListReplaces: [] empties a scalar list and a list
+// of objects alike.
+func TestDeepMergeYAML_EmptyListReplaces(t *testing.T) {
+	base := `
+nameservers: [10.4.6.10]
+vlans:
+  - name: zone401
+    id: 401
+`
+	result := mustMerge(t, base, "nameservers: []\nvlans: []\n")
+
+	for _, key := range []string{"nameservers", "vlans"} {
+		list, ok := result[key].([]interface{})
+		if !ok || len(list) != 0 {
+			t.Errorf("expected %s to be [], got %v", key, result[key])
+		}
+	}
+}
+
+// TestDeepMergeMaps_NullDeletesAndListReplaces applies the same rules to
+// already-parsed maps, as a JSON override with null and [] decodes.
+func TestDeepMergeMaps_NullDeletesAndListReplaces(t *testing.T) {
+	dst := map[string]interface{}{
+		"hostname": "compute",
+		"network": map[string]interface{}{
+			"dnsmasq": map[string]interface{}{"enabled": true},
+			"vlans":   []interface{}{map[string]interface{}{"name": "zone401"}},
+			"role":    "compute",
+		},
+	}
+	src := map[string]interface{}{
+		"hostname": "pi4-01",
+		"network": map[string]interface{}{
+			"dnsmasq": nil,
+			"vlans":   []interface{}{},
+		},
+	}
+
+	DeepMergeMaps(dst, src)
+
+	network, ok := toStringMap(dst["network"])
+	if !ok {
+		t.Fatal("expected network to be a map")
+	}
+	if _, exists := network["dnsmasq"]; exists {
+		t.Errorf("expected dnsmasq deleted, got %v", network["dnsmasq"])
+	}
+	if vlans, ok := network["vlans"].([]interface{}); !ok || len(vlans) != 0 {
+		t.Errorf("expected vlans replaced by [], got %v", network["vlans"])
+	}
+	if network["role"] != "compute" || dst["hostname"] != "pi4-01" {
+		t.Errorf("expected role kept and hostname replaced, got %v", dst)
+	}
+}
+
+// TestDeepMergeMaps_NilSourceChangesNothing: a nil override map is no
+// override, not a request to delete anything.
+func TestDeepMergeMaps_NilSourceChangesNothing(t *testing.T) {
+	dst := map[string]interface{}{"hostname": "compute"}
+
+	DeepMergeMaps(dst, nil)
+
+	if len(dst) != 1 || dst["hostname"] != "compute" {
+		t.Errorf("expected dst unchanged, got %v", dst)
 	}
 }
 
@@ -820,9 +987,9 @@ network:
 		t.Fatal("expected interfaces to be a slice")
 	}
 
-	// Empty override slice: base preserved.
-	if len(ifaces) != 1 {
-		t.Fatalf("expected 1 interface preserved from base, got %d", len(ifaces))
+	// Empty override slice: replaces the base list.
+	if len(ifaces) != 0 {
+		t.Fatalf("expected the base interfaces replaced by [], got %v", ifaces)
 	}
 }
 

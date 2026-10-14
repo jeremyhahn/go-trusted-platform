@@ -540,6 +540,7 @@ message VMMigrationSpec {
   bool   tpm_enabled  = 7;
   string network_mode = 8;
   string mac_address  = 9;
+  string arch         = 10;  // source guest arch: "x86_64" | "aarch64"; empty = x86_64. A mismatched destination refuses.
 }
 
 message PrepareMigrationRequest {

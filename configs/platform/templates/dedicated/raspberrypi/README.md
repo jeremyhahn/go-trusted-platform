@@ -39,6 +39,7 @@ prerequisites (SLB9670 TPM HAT, serial console) are those of
 | `hardware-manufacturer` / `hardware-model` | unset | `Raspberry Pi` / `Raspberry Pi 4 Model B` | the `pkg/quirks` console line |
 | `seal-pcrs` | `[7, 9]` | `[0, 4, 7, 9]` | U-Boot's TCG2 measures 0, 4, 7; the EFI stub measures 9 |
 | `tpm.idevid` model / serial | `SuperMicro X10` / `sm-compute-01` | `Raspberry Pi 4 Model B` / `rpi4-compute-01` | override the serial with the Pi's `/proc/cpuinfo` serial |
+| `os.packages` | no VM packages | adds `qemu-system-aarch64`, `qemu-img`, `swtpm`, `swtpm-tools`, `aavmf` after `lsblk` | the aarch64 compute VMs ([below](#compute-vms)) |
 
 Everything else — `network.role: compute`, `ip-forward: false`, the
 `platform-vrf` address, `trust.bmc`, NTS from the control plane, ACME
@@ -46,12 +47,73 @@ Everything else — `network.role: compute`, `ip-forward: false`, the
 x10 compute role unchanged. The `bmc` block is kept as the single-node rpi4
 template keeps it; the Pi has no BMC.
 
+## A Pi on a flat DHCP network
+
+`rpi4/compute.yaml` assumes the rack: `eth0` is a trunk with the zone VLANs.
+A Pi on a flat network instead, such as an access port on the office VLAN 101
+with its own DHCP server, is built from the same template with an override
+that deletes the rack's network sections and makes `eth0` a DHCP client:
+
+```yaml
+os:
+  hostname: pi4-01
+network:
+  dns: null            # the DHCP client writes resolv.conf
+  dnsmasq: null
+  platform-vrf: null
+  vlans: []
+  interfaces:
+    - name: eth0
+      type: dhcp
+```
+
+```sh
+platformctl diskimage create --target rpi --model rpi4 --role compute \
+  --overrides rpi4-flat-dhcp.yaml
+```
+
+A `null` deletes the template's key and `[]` replaces its list
+([docs/device-templates.md, "Merge Rules"](../../../../../docs/device-templates.md#merge-rules)).
+The template file is not changed. The override is
+`pkg/cli/commands/diskimage/testdata/rpi4-flat-dhcp.yaml`; its test renders
+`iface eth0 inet dhcp` with no 802.1Q or VRF device and no `10.4.x` address.
+It changes only `network:` — `dns.resolver`, `trust.bmc`, `ntp` and `acme`
+still point at the rack's control plane and need the site's values.
+
+## Smart-card tokens
+
+Every Pi image carries the token stack, whatever the model and role: the image
+target adds it, not this template's `os.packages`
+([docs/factory-image/engineering.md](../../../../../docs/factory-image/engineering.md)).
+The target's lists (`pkg/diskimage/rpi/target.go`: `pcsc-lite`,
+`pcsc-lite-openrc`, `ccid`, `opensc`, `yubico-piv-tool-libs`, and the `pcscd`
+service) are appended to `os.packages` and `os.services` of the
+`configs/installer.yaml` the image bakes from this template, so the installer
+installs them and enables pcscd. pcscd starts at boot, and a YubiKey or a
+Nitrokey HSM on a USB port answers
+PKCS#11 through `libykcs11.so` (YubiKey PIV) or `opensc-pkcs11.so` (Nitrokey
+HSM).
+
+## Compute VMs
+
+The Pi 4 runs **aarch64** compute VMs. On an arm64 host the compute `arch`
+defaults to `aarch64`, so the template needs no compute keys for it. Each VM:
+
+- runs under KVM with `-cpu host` on the `virt` machine;
+- boots UEFI from the AAVMF firmware in `/usr/share/AAVMF`, from the `aavmf`
+  package;
+- gets an swtpm vTPM as `tpm-tis-device`.
+
+Every default can be overridden under `compute:`. The keys and defaults are in
+[docs/compute/engineering.md §4](../../../../../docs/compute/engineering.md#4-configuration).
+The package names have not yet been checked against an Alpine 3.22 APKINDEX.
+
 ## Raspberry Pi 5 (experimental)
 
 `rpi5/compute.yaml` is `rpi4/compute.yaml` with the Pi 5's name in
 `hardware-model` and `tpm.idevid.model`, the serial `rpi5-compute-01`, and
-comments on what is unvalidated. Everything the x10 table above lists is the
-same. The image builder knows the board (`pkg/diskimage/rpi`, model `rpi5`:
+comments on what is unvalidated. It does not carry the compute VM packages.
+Every other row of the x10 table above is the same. The image builder knows the board (`pkg/diskimage/rpi`, model `rpi5`:
 `bcm2712-rpi-5-b.dtb`, `Experimental`).
 
 What the Pi 5 has, as built:
