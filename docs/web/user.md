@@ -194,7 +194,7 @@ than a placeholder. Roughly seventy pages across:
 | Area | Covers |
 |---|---|
 | Dashboard | Overview |
-| IAM | Users, groups, roles, permissions, policies, tokens, OAuth apps |
+| IAM | Users, roles, permissions, policies, tokens, OAuth apps |
 | Tenant | Workspace, members, quotas, invitations |
 | CA | Certificates, requests, CRL, trust bundle |
 | KMS | Keys, encrypt/decrypt |

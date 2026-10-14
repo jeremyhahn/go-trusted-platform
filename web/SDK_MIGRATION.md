@@ -79,7 +79,6 @@ export {
 | Certificates Page | `useCA` | Done |
 | IAM Users | `useIAM` | Done |
 | IAM Roles | `useIAM` | Done |
-| IAM Groups | `useIAM` | Done |
 | IAM Policies | `useIAM` | Done |
 | IAM Apps | `useIAM` | Done |
 | IAM Tokens | `useIAM` | Done |

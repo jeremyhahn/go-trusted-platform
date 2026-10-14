@@ -1,12 +1,11 @@
 'use client';
 
 /**
- * Permissions / Groups / Policies Page
+ * Permissions / Policies Page
  *
- * Displays groups and policies for permission management.
- * The backend uses groups for permission grouping and policies for access control.
+ * Displays policies and the permissions the tenant's roles grant.
+ * The backend uses policies for access control.
  * Connects to:
- * - /api/v1/iam/tenants/{tenant}/groups
  * - /api/v1/iam/tenants/{tenant}/policies
  * - /api/v1/iam/tenants/{tenant}/roles (for extracting permission strings)
  */
@@ -15,7 +14,7 @@ import React, { useState, useMemo } from 'react';
 import { ColumnDef } from '@tanstack/react-table';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIAM, useApi } from '@/hooks';
-import type { Group, Policy, Role, Permission } from '@/types/iam';
+import type { Policy, Role, Permission } from '@/types/iam';
 import { DataTable } from '@/components/ui/data-table';
 import { DataTableColumnHeader } from '@/components/ui/data-table-column-header';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -23,7 +22,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Shield, Key, FileText, AlertCircle, Loader2, Users } from 'lucide-react';
+import { Shield, Key, FileText, AlertCircle, Loader2 } from 'lucide-react';
 
 /**
  * Permissions list page component
@@ -31,16 +30,6 @@ import { Shield, Key, FileText, AlertCircle, Loader2, Users } from 'lucide-react
 export default function PermissionsPage() {
   const { user: authUser, tenantId, isLoading: authLoading } = useAuth();
   const iam = useIAM();
-
-
-  // Fetch groups using SDK
-  const { data: groupsData, isLoading: groupsLoading, error: groupsError } = useApi(
-    () => {
-      if (!tenantId) return Promise.reject(new Error('No tenant ID'));
-      return iam.listGroups({ tenantId });
-    },
-    [tenantId]
-  );
 
   // Fetch policies using SDK
   const { data: policiesData, isLoading: policiesLoading, error: policiesError } = useApi(
@@ -62,17 +51,6 @@ export default function PermissionsPage() {
 
   // Convert SDK types to legacy types
   // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-  const groups: Group[] = (groupsData?.groups || []).map((g: any) => ({
-    id: g.id,
-    name: g.name,
-    description: g.description,
-    members: g.members || [],
-    tenant_id: g.tenantId,
-    created_at: g.createdAt,
-    updated_at: g.updatedAt
-  }));
-
-  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
   const policies: Policy[] = (policiesData?.policies || []).map((p: any) => ({
     name: p.name,
     description: p.description,
@@ -82,8 +60,8 @@ export default function PermissionsPage() {
   }));
 
   const roles = rolesData?.roles || [];
-  const loading = groupsLoading || policiesLoading || rolesLoading;
-  const error = groupsError || policiesError || rolesError;
+  const loading = policiesLoading || rolesLoading;
+  const error = policiesError || rolesError;
 
   // Extract unique permissions from roles — derived, not stored: a setState
   // inside useMemo re-renders on every recompute.
@@ -115,51 +93,6 @@ export default function PermissionsPage() {
     });
     return groups;
   }, [permissions]);
-
-  // Groups table columns
-  const groupColumns: ColumnDef<Group>[] = [
-    {
-      accessorKey: 'id',
-      header: ({ column }) => (
-        <DataTableColumnHeader column={column} title="Group ID" />
-      ),
-      cell: ({ row }) => (
-        <div className="flex items-center gap-2">
-          <Users className="h-4 w-4 text-muted-foreground" />
-          <span className="font-medium">{row.original.id}</span>
-        </div>
-      ),
-    },
-    {
-      accessorKey: 'name',
-      header: ({ column }) => (
-        <DataTableColumnHeader column={column} title="Name" />
-      ),
-      cell: ({ row }) => (
-        <span className="font-medium">{row.original.name || row.original.id}</span>
-      ),
-    },
-    {
-      accessorKey: 'description',
-      header: 'Description',
-      cell: ({ row }) => (
-        <span className="text-sm text-muted-foreground">
-          {row.original.description || '-'}
-        </span>
-      ),
-    },
-    {
-      accessorKey: 'members',
-      header: ({ column }) => (
-        <DataTableColumnHeader column={column} title="Members" />
-      ),
-      cell: ({ row }) => (
-        <Badge variant="secondary">
-          {row.original.members?.length || 0} members
-        </Badge>
-      ),
-    },
-  ];
 
   // Policies table columns
   const policyColumns: ColumnDef<Policy>[] = [
@@ -309,21 +242,12 @@ export default function PermissionsPage() {
       <div className="space-y-1">
         <h1 className="text-3xl font-bold tracking-tight">Access Control</h1>
         <p className="text-muted-foreground">
-          Manage groups, policies, and view available permissions
+          Manage policies and view available permissions
         </p>
       </div>
 
       {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Groups</CardTitle>
-            <Users className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{groups.length}</div>
-          </CardContent>
-        </Card>
+      <div className="grid gap-4 md:grid-cols-3">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Policies</CardTitle>
@@ -355,35 +279,12 @@ export default function PermissionsPage() {
         </Card>
       </div>
 
-      {/* Tabs for Groups, Policies, and Permissions */}
-      <Tabs defaultValue="groups" className="space-y-4">
+      {/* Tabs for Policies and Permissions */}
+      <Tabs defaultValue="policies" className="space-y-4">
         <TabsList>
-          <TabsTrigger value="groups">Groups ({groups.length})</TabsTrigger>
           <TabsTrigger value="policies">Policies ({policies.length})</TabsTrigger>
           <TabsTrigger value="permissions">Permissions ({permissions.length})</TabsTrigger>
         </TabsList>
-
-        <TabsContent value="groups" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Groups</CardTitle>
-              <p className="text-sm text-muted-foreground">
-                Groups organize users for permission management
-              </p>
-            </CardHeader>
-            <CardContent>
-              <DataTable
-                columns={groupColumns}
-                data={groups}
-                searchKey="name"
-                searchPlaceholder="Search groups..."
-                loading={loading}
-                pagination
-                pageSize={25}
-              />
-            </CardContent>
-          </Card>
-        </TabsContent>
 
         <TabsContent value="policies" className="space-y-4">
           <Card>

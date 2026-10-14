@@ -138,7 +138,6 @@ export interface User {
   display_name?: string;
   status: 'active' | 'disabled' | 'pending' | 'locked';
   roles: string[];
-  groups: string[];
   mfa_enabled: boolean;
   last_login?: string;
   created_at: string;
@@ -160,20 +159,6 @@ export interface Role {
 
 export interface RoleListResponse extends PaginatedResponse<Role> {
   roles: Role[];
-}
-
-export interface Group {
-  id: string;
-  name: string;
-  description?: string;
-  member_count: number;
-  roles: string[];
-  created_at: string;
-  updated_at: string;
-}
-
-export interface GroupListResponse extends PaginatedResponse<Group> {
-  groups: Group[];
 }
 
 // ============================================================================
@@ -348,7 +333,6 @@ let certificateIdCounter = 1;
 let keyIdCounter = 1;
 let userIdCounter = 1;
 let roleIdCounter = 1;
-let groupIdCounter = 1;
 let backupIdCounter = 1;
 let manifestIdCounter = 1;
 
@@ -361,7 +345,6 @@ export function resetIdCounters(): void {
   keyIdCounter = 1;
   userIdCounter = 1;
   roleIdCounter = 1;
-  groupIdCounter = 1;
   backupIdCounter = 1;
   manifestIdCounter = 1;
 }
@@ -455,7 +438,6 @@ export function createMockUser(overrides: Partial<User> = {}): User {
     display_name: `Test User ${userIdCounter}`,
     status: 'active',
     roles: ['member'],
-    groups: [],
     mfa_enabled: false,
     last_login: now.toISOString(),
     created_at: now.toISOString(),
@@ -476,25 +458,6 @@ export function createMockRole(overrides: Partial<Role> = {}): Role {
     name: `Role ${id}`,
     description: 'Test role for E2E testing',
     permissions: ['read', 'write'],
-    created_at: now.toISOString(),
-    updated_at: now.toISOString(),
-    ...overrides,
-  };
-}
-
-/**
- * Generate a mock group object.
- */
-export function createMockGroup(overrides: Partial<Group> = {}): Group {
-  const id = overrides.id || `group-${groupIdCounter++}`;
-  const now = new Date();
-
-  return {
-    id,
-    name: `Group ${id}`,
-    description: 'Test group for E2E testing',
-    member_count: 5,
-    roles: ['member'],
     created_at: now.toISOString(),
     updated_at: now.toISOString(),
     ...overrides,
@@ -678,14 +641,12 @@ export interface KMSApiMockConfig {
 export interface IAMApiMockConfig {
   initialUsers?: User[];
   initialRoles?: Role[];
-  initialGroups?: Group[];
   userListError?: ApiError | null;
   userGetError?: ApiError | null;
   userCreateError?: ApiError | null;
   userUpdateError?: ApiError | null;
   userDeleteError?: ApiError | null;
   roleListError?: ApiError | null;
-  groupListError?: ApiError | null;
 }
 
 export interface PlatformApiMockConfig {
@@ -748,7 +709,6 @@ interface KMSApiState {
 interface IAMApiState {
   users: User[];
   roles: Role[];
-  groups: Group[];
   config: IAMApiMockConfig;
 }
 
@@ -1420,7 +1380,6 @@ export async function mockKMSApi(
  * - PUT /api/v1/iam/users/:id - Update user
  * - DELETE /api/v1/iam/users/:id - Delete user
  * - GET /api/v1/iam/roles - List roles
- * - GET /api/v1/iam/groups - List groups
  */
 export async function mockIAMApi(
   page: Page,
@@ -1428,22 +1387,19 @@ export async function mockIAMApi(
 ): Promise<{
   getUsers: () => User[];
   getRoles: () => Role[];
-  getGroups: () => Group[];
   addUser: (user: User) => void;
   updateUser: (id: string, updates: Partial<User>) => void;
   removeUser: (id: string) => void;
   addRole: (role: Role) => void;
-  addGroup: (group: Group) => void;
   clearAll: () => void;
   setError: (
-    endpoint: 'userList' | 'userGet' | 'userCreate' | 'userUpdate' | 'userDelete' | 'roleList' | 'groupList',
+    endpoint: 'userList' | 'userGet' | 'userCreate' | 'userUpdate' | 'userDelete' | 'roleList',
     error: ApiError | null
   ) => void;
 }> {
   const state: IAMApiState = {
     users: config.initialUsers || [],
     roles: config.initialRoles || [],
-    groups: config.initialGroups || [],
     config: {
       userListError: null,
       userGetError: null,
@@ -1451,7 +1407,6 @@ export async function mockIAMApi(
       userUpdateError: null,
       userDeleteError: null,
       roleListError: null,
-      groupListError: null,
       ...config,
     },
   };
@@ -1489,7 +1444,6 @@ export async function mockIAMApi(
           username: body.username,
           display_name: body.display_name,
           roles: body.roles,
-          groups: body.groups,
         });
 
         state.users.unshift(newUser);
@@ -1592,31 +1546,9 @@ export async function mockIAMApi(
     });
   });
 
-  // List groups
-  await page.route('**/api/v1/iam/groups', async (route: Route, request: Request) => {
-    if (request.method() !== 'GET') {
-      await route.continue();
-      return;
-    }
-
-    if (state.config.groupListError) {
-      await fulfillError(route, state.config.groupListError);
-      return;
-    }
-
-    await fulfillJSON(route, 200, {
-      groups: state.groups,
-      items: state.groups,
-      total: state.groups.length,
-      page: 1,
-      page_size: 50,
-    });
-  });
-
   return {
     getUsers: () => [...state.users],
     getRoles: () => [...state.roles],
-    getGroups: () => [...state.groups],
     addUser: (user: User) => {
       state.users.unshift(user);
     },
@@ -1635,13 +1567,9 @@ export async function mockIAMApi(
     addRole: (role: Role) => {
       state.roles.unshift(role);
     },
-    addGroup: (group: Group) => {
-      state.groups.unshift(group);
-    },
     clearAll: () => {
       state.users = [];
       state.roles = [];
-      state.groups = [];
     },
     setError: (endpoint, error) => {
       switch (endpoint) {
@@ -1662,9 +1590,6 @@ export async function mockIAMApi(
           break;
         case 'roleList':
           state.config.roleListError = error;
-          break;
-        case 'groupList':
-          state.config.groupListError = error;
           break;
       }
     },
@@ -2409,11 +2334,6 @@ export async function mockDashboardWithTestData(page: Page): Promise<DashboardAp
     createMockRole({ id: 'role-viewer', name: 'Viewer', permissions: ['read'] }),
   ];
 
-  const groups = [
-    createMockGroup({ id: 'group-1', name: 'Engineering', member_count: 10, roles: ['developer'] }),
-    createMockGroup({ id: 'group-2', name: 'Operations', member_count: 5, roles: ['admin'] }),
-  ];
-
   const kvEntries = [
     createMockKVEntry('config/app', '{"debug": false}'),
     createMockKVEntry('secrets/api-key', 'sk-***'),
@@ -2444,7 +2364,7 @@ export async function mockDashboardWithTestData(page: Page): Promise<DashboardAp
     device: { initialDevices: devices },
     certificate: { initialCertificates: certificates },
     kms: { initialKeys: keys },
-    iam: { initialUsers: users, initialRoles: roles, initialGroups: groups },
+    iam: { initialUsers: users, initialRoles: roles },
     storage: { initialKVEntries: kvEntries, initialBuckets: buckets, initialBackups: backups },
     tpm: { initialKeys: tpmKeys },
     attestation: { initialManifests: manifests },

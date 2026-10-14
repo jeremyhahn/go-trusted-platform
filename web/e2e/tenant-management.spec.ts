@@ -35,7 +35,6 @@ function createMockIAMUser(overrides: Partial<IAMUser> = {}): IAMUser {
     email: overrides.email || `user${userIdCounter}@example.com`,
     name: overrides.name || `User ${userIdCounter}`,
     roles: overrides.roles || ['member'],
-    groups: overrides.groups || [],
     mfaVerified: overrides.mfaVerified ?? false,
     createdAt: created.toISOString(),
     updatedAt: now.toISOString(),

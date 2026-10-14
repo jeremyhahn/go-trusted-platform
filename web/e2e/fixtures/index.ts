@@ -69,7 +69,6 @@ export {
   createMockKMSKey,
   createMockUser,
   createMockRole,
-  createMockGroup,
   createMockKVEntry,
   createMockBucket,
   createMockStorageObject,
@@ -118,8 +117,6 @@ export type {
   UserListResponse,
   Role,
   RoleListResponse,
-  Group,
-  GroupListResponse,
   IAMApiMockConfig,
   // Platform types
   PlatformHealth,

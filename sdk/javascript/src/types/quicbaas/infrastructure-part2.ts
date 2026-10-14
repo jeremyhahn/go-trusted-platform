@@ -958,8 +958,6 @@ export interface QuicBaaSUser {
   displayName?: string;
   /** User status */
   status: 'active' | 'inactive' | 'suspended';
-  /** Assigned groups */
-  groups: string[];
   /** Assigned policies */
   policies: string[];
   /** API keys count */
@@ -968,26 +966,6 @@ export interface QuicBaaSUser {
   attributes?: Record<string, string>;
   /** Last login (ISO 8601) */
   lastLogin?: string;
-  /** Created at (ISO 8601) */
-  createdAt: string;
-  /** Updated at (ISO 8601) */
-  updatedAt: string;
-}
-
-/**
- * QuicBaaS IAM group
- */
-export interface QuicBaaSGroup {
-  /** Group ID */
-  id: string;
-  /** Group name */
-  name: string;
-  /** Description */
-  description?: string;
-  /** Member user IDs */
-  members: string[];
-  /** Attached policy IDs */
-  policies: string[];
   /** Created at (ISO 8601) */
   createdAt: string;
   /** Updated at (ISO 8601) */
@@ -1012,8 +990,6 @@ export interface QuicBaaSPolicy {
   isDefault: boolean;
   /** Attached users count */
   attachedUsersCount: number;
-  /** Attached groups count */
-  attachedGroupsCount: number;
   /** Created at (ISO 8601) */
   createdAt: string;
   /** Updated at (ISO 8601) */
@@ -1030,8 +1006,6 @@ export interface CreateQuicBaaSUserRequest {
   email?: string;
   /** Display name */
   displayName?: string;
-  /** Initial groups */
-  groups?: string[];
   /** Initial policies */
   policies?: string[];
   /** User attributes */
@@ -1121,8 +1095,6 @@ export interface DeleteQuicBaaSUserResponse {
 export interface ListQuicBaaSUsersRequest extends QuicBaaSPaginationParams {
   /** Filter by status */
   status?: 'active' | 'inactive' | 'suspended';
-  /** Filter by group */
-  groupId?: string;
 }
 
 /**
@@ -1135,70 +1107,6 @@ export interface ListQuicBaaSUsersResponse {
   pagination?: QuicBaaSPaginationMeta;
   /** Total count */
   total: number;
-  /** Response timestamp */
-  timestamp: string;
-}
-
-/**
- * Create QuicBaaS group request
- */
-export interface CreateQuicBaaSGroupRequest {
-  /** Group name */
-  name: string;
-  /** Description */
-  description?: string;
-  /** Initial member user IDs */
-  members?: string[];
-  /** Initial policy IDs */
-  policies?: string[];
-}
-
-/**
- * Create QuicBaaS group response
- */
-export interface CreateQuicBaaSGroupResponse {
-  /** Created group */
-  group: QuicBaaSGroup;
-  /** Response timestamp */
-  timestamp: string;
-}
-
-/**
- * Add user to group request
- */
-export interface AddUserToGroupRequest {
-  /** Group ID */
-  groupId: string;
-  /** User ID */
-  userId: string;
-}
-
-/**
- * Add user to group response
- */
-export interface AddUserToGroupResponse {
-  /** Operation status */
-  status: QuicBaaSOperationResult;
-  /** Response timestamp */
-  timestamp: string;
-}
-
-/**
- * Remove user from group request
- */
-export interface RemoveUserFromGroupRequest {
-  /** Group ID */
-  groupId: string;
-  /** User ID */
-  userId: string;
-}
-
-/**
- * Remove user from group response
- */
-export interface RemoveUserFromGroupResponse {
-  /** Operation status */
-  status: QuicBaaSOperationResult;
   /** Response timestamp */
   timestamp: string;
 }
@@ -1232,8 +1140,8 @@ export interface AttachPolicyRequest {
   /** Policy ID */
   policyId: string;
   /** Target type */
-  targetType: 'user' | 'group';
-  /** Target ID (user ID or group ID) */
+  targetType: 'user';
+  /** Target user ID */
   targetId: string;
 }
 
@@ -1254,8 +1162,8 @@ export interface DetachPolicyRequest {
   /** Policy ID */
   policyId: string;
   /** Target type */
-  targetType: 'user' | 'group';
-  /** Target ID (user ID or group ID) */
+  targetType: 'user';
+  /** Target user ID */
   targetId: string;
 }
 
