@@ -1617,7 +1617,6 @@ func (p *MCPServiceProvider) IAMCreateUser(ctx context.Context, req *mcp.IAMCrea
 		Email:      req.Email,
 		Name:       req.Name,
 		Roles:      req.Roles,
-		Groups:     req.Groups,
 		Attributes: req.Attributes,
 	})
 }
@@ -1639,7 +1638,6 @@ func (p *MCPServiceProvider) IAMListUsers(ctx context.Context, req *mcp.IAMListU
 		Pagination:  iamPaginationRequest(req.Pagination),
 		EmailFilter: req.EmailFilter,
 		RoleFilter:  req.RoleFilter,
-		GroupFilter: req.GroupFilter,
 	})
 }
 
@@ -1703,44 +1701,6 @@ func (p *MCPServiceProvider) IAMCheckPermission(ctx context.Context, req *mcp.IA
 // issue the platform token.
 func (p *MCPServiceProvider) IAMAuthenticate(ctx context.Context, req *mcp.IAMAuthenticateRequest) (interface{}, error) {
 	return nil, ErrIAMAuthenticationViaOIDC{}
-}
-
-// IAMCreateGroup creates an IAM group, as gRPC CreateGroup.
-func (p *MCPServiceProvider) IAMCreateGroup(ctx context.Context, req *mcp.IAMCreateGroupRequest) (interface{}, error) {
-	return p.iam.CreateGroup(ctx, &platformv1.CreateIAMGroupRequest{
-		TenantId:    req.TenantID,
-		Id:          req.ID,
-		Name:        req.Name,
-		Description: req.Description,
-	})
-}
-
-// IAMDeleteGroup deletes an IAM group, as gRPC DeleteGroup.
-func (p *MCPServiceProvider) IAMDeleteGroup(ctx context.Context, tenantID string, groupID string) (interface{}, error) {
-	return p.iam.DeleteGroup(ctx, &platformv1.DeleteIAMGroupRequest{TenantId: tenantID, GroupId: groupID})
-}
-
-// IAMGetGroup returns an IAM group, as gRPC GetGroup.
-func (p *MCPServiceProvider) IAMGetGroup(ctx context.Context, tenantID string, groupID string) (interface{}, error) {
-	return p.iam.GetGroup(ctx, &platformv1.GetIAMGroupRequest{TenantId: tenantID, GroupId: groupID})
-}
-
-// IAMListGroups lists a tenant's IAM groups, as gRPC ListGroups.
-func (p *MCPServiceProvider) IAMListGroups(ctx context.Context, tenantID string, page mcp.IAMPagination) (interface{}, error) {
-	return p.iam.ListGroups(ctx, &platformv1.ListIAMGroupsRequest{
-		TenantId:   tenantID,
-		Pagination: iamPaginationRequest(page),
-	})
-}
-
-// IAMAddGroupMember adds a user to a group, as gRPC AddGroupMember.
-func (p *MCPServiceProvider) IAMAddGroupMember(ctx context.Context, tenantID string, groupID string, userID string) (interface{}, error) {
-	return p.iam.AddGroupMember(ctx, &platformv1.AddGroupMemberRequest{TenantId: tenantID, GroupId: groupID, UserId: userID})
-}
-
-// IAMRemoveGroupMember removes a user from a group, as gRPC RemoveGroupMember.
-func (p *MCPServiceProvider) IAMRemoveGroupMember(ctx context.Context, tenantID string, groupID string, userID string) (interface{}, error) {
-	return p.iam.RemoveGroupMember(ctx, &platformv1.RemoveGroupMemberRequest{TenantId: tenantID, GroupId: groupID, UserId: userID})
 }
 
 // IAMCreateTenant creates a tenant, as gRPC CreateTenant.

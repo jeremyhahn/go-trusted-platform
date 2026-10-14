@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -28,6 +29,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 	attestvm "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
@@ -706,7 +708,10 @@ func (s *TPMGRPCService) Seal(
 		slog.Int("pcr_count", len(req.GetPcrIndices())),
 		slog.String("pcr_bank", req.GetPcrBank().String()))
 
-	opts, err := buildSealOptions(tpm, req.GetCn(), req.GetPassword(), req.GetPcrIndices(), req.GetPcrBank())
+	opts, err := buildSealOptions(tpm, req.GetCn(), req.GetPassword(), req.GetPcrIndices())
+	if errors.As(err, &common.ErrPCRBoundSealUnavailable{}) {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "build seal options: "+err.Error())
 	}
@@ -743,14 +748,21 @@ func (s *TPMGRPCService) Seal(
 // from the live PlatformPolicyDigest; using PSRK as the parent
 // for ad-hoc seals fails with TPM_RC_AUTH_FAIL whenever a measured
 // PCR (kernel/initrd at PCR 9, IMA at 10, etc.) has drifted since
-// provisioning. PCR-binding the *sealed object* (via TPMPolicy
-// below) still works and is what an operator wants when they tick
-// "seal to PCRs 7,9" in the UI.
+// provisioning.
+//
+// A request naming PCRs is refused with ErrPCRBoundSealUnavailable:
+// go-xkms ignores a PCR selection that comes without a policy
+// digest, and the policy primitives that would bind it are not
+// re-exported by go-quicbaas yet (go-quicbaas #1171).
 //
 // When everything is empty we still go through the SSRK path so
 // fresh-from-the-WebUI seal calls succeed without the operator
 // having to provide a CN.
-func buildSealOptions(tpm quicbaassdk.TrustedPlatformModule, cn, password string, pcrIndices []uint32, bank platformv1.PCRBank) (*quicbaassdk.SealOptions, error) {
+func buildSealOptions(tpm quicbaassdk.TrustedPlatformModule, cn, password string, pcrIndices []uint32) (*quicbaassdk.SealOptions, error) {
+	if len(pcrIndices) > 0 {
+		return nil, common.ErrPCRBoundSealUnavailable{}
+	}
+
 	ssrkAttrs, err := tpm.SSRKAttributes()
 	if err != nil {
 		return nil, &WrappedError{Msg: "read SSRK attributes", Err: err}
@@ -770,54 +782,9 @@ func buildSealOptions(tpm quicbaassdk.TrustedPlatformModule, cn, password string
 		}
 		keyAttrs.Password = held
 	}
-	opts := &quicbaassdk.SealOptions{
+	return &quicbaassdk.SealOptions{
 		KeyAttributes: keyAttrs,
-	}
-
-	if len(pcrIndices) > 0 {
-		hashAlg := pcrBankToTPMAlg(bank)
-		pcrUints := make([]uint, len(pcrIndices))
-		for i, p := range pcrIndices {
-			pcrUints[i] = uint(p)
-		}
-		opts.TPMPolicy = &quicbaassdk.TPMSealPolicy{
-			PCRSelection: tpmgo.TPMLPCRSelection{
-				PCRSelections: []tpmgo.TPMSPCRSelection{
-					{
-						Hash:      hashAlg,
-						PCRSelect: tpmgo.PCClientCompatible.PCRs(pcrUints...),
-					},
-				},
-			},
-			HashAlg: hashAlg,
-		}
-		if password != "" {
-			held, err := quicbaassdk.NewPassword([]byte(password))
-			if err != nil {
-				return nil, &WrappedError{Msg: "hold the sealing policy password", Err: err}
-			}
-			opts.Password = held
-		}
-	}
-
-	return opts, nil
-}
-
-// pcrBankToTPMAlg translates the proto PCRBank enum into the go-tpm
-// TPMIAlgHash that xkms expects. Defaults to SHA-256, which is the
-// canonical TPM 2.0 bank present on every device the platform
-// supports.
-func pcrBankToTPMAlg(bank platformv1.PCRBank) tpmgo.TPMAlgID {
-	switch bank {
-	case platformv1.PCRBank_PCR_BANK_SHA1:
-		return tpmgo.TPMAlgSHA1
-	case platformv1.PCRBank_PCR_BANK_SHA384:
-		return tpmgo.TPMAlgSHA384
-	case platformv1.PCRBank_PCR_BANK_SHA512:
-		return tpmgo.TPMAlgSHA512
-	default:
-		return tpmgo.TPMAlgSHA256
-	}
+	}, nil
 }
 
 // encodeSealedData serializes the TPM2B_PUBLIC + TPM2B_PRIVATE pair

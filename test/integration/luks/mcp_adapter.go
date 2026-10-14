@@ -284,7 +284,6 @@ func (m *MCPAdapter) EnrollTPM(ctx context.Context, req *lukssdk.EnrollTPMReques
 		"device":              req.Device,
 		"existing_passphrase": req.ExistingPassphrase,
 		"pcrs":                pcrs,
-		"handle":              req.Handle,
 	}
 	resp := &lukssdk.EnrollTPMResponse{}
 	if err := m.callTool(ctx, mcpToolEnrollTPM, args, resp); err != nil {

@@ -5,8 +5,8 @@ go 1.27.2
 require (
 	github.com/google/go-tpm v0.9.8
 	github.com/jeremyhahn/go-codec v1.4.0
-	github.com/jeremyhahn/go-quicbaas/sdk/go v0.12.0-alpha
-	github.com/quic-go/quic-go v0.62.0
+	github.com/jeremyhahn/go-quicbaas/sdk/go v0.14.0-alpha
+	github.com/quic-go/quic-go v0.63.0
 	github.com/stretchr/testify v1.12.1
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
@@ -42,6 +42,7 @@ require (
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.59.0 // indirect
 	github.com/RaduBerinde/axisds v0.1.0 // indirect
 	github.com/RaduBerinde/btreemap v0.0.0-20260105202824-d3184786f603 // indirect
+	github.com/anatol/devmapper.go v0.0.0-20250316020617-2671eefd35d7 // indirect
 	github.com/awnumar/memcall v0.5.0 // indirect
 	github.com/awnumar/memguard v0.23.0 // indirect
 	github.com/aws/aws-sdk-go v1.55.8 // indirect
@@ -84,6 +85,7 @@ require (
 	github.com/cockroachdb/redact v1.1.8 // indirect
 	github.com/cockroachdb/swiss v0.0.0-20260820225851-333444432258 // indirect
 	github.com/cockroachdb/tokenbucket v0.0.0-20250429170803-42689b6311bb // indirect
+	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2 // indirect
 	github.com/dolthub/go-icu-regex v0.0.0-20260610153742-72563bc7ca83 // indirect
@@ -140,17 +142,19 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/jackc/pgx/v5 v5.10.0 // indirect
+	github.com/jeremyhahn/arduino-generic/sdk/go v0.7.0-alpha // indirect
 	github.com/jeremyhahn/go-auth v0.2.0-alpha // indirect
-	github.com/jeremyhahn/go-enclave v0.5.0-alpha // indirect
+	github.com/jeremyhahn/go-enclave v0.6.1-alpha // indirect
 	github.com/jeremyhahn/go-frost v0.3.0-alpha // indirect
+	github.com/jeremyhahn/go-luks2 v0.2.0-alpha // indirect
 	github.com/jeremyhahn/go-objstore v0.3.0-alpha // indirect
-	github.com/jeremyhahn/go-qrdb v0.19.0-alpha // indirect
-	github.com/jeremyhahn/go-qrdb/sdk/go v0.19.0-alpha // indirect
-	github.com/jeremyhahn/go-quicbaas v0.12.0-alpha // indirect
-	github.com/jeremyhahn/go-quicraft v0.13.1-alpha // indirect
+	github.com/jeremyhahn/go-qrdb v0.30.1-alpha // indirect
+	github.com/jeremyhahn/go-qrdb/sdk/go v0.30.1-alpha // indirect
+	github.com/jeremyhahn/go-quicbaas v0.14.0-alpha // indirect
+	github.com/jeremyhahn/go-quicraft v0.15.0-alpha // indirect
 	github.com/jeremyhahn/go-truststrap v0.4.0-alpha // indirect
-	github.com/jeremyhahn/go-xkms v0.17.0-alpha // indirect
-	github.com/jeremyhahn/go-xkms/sdk/go v0.17.0-alpha // indirect
+	github.com/jeremyhahn/go-xkms v0.49.0-alpha // indirect
+	github.com/jeremyhahn/go-xkms/sdk/go v0.49.0-alpha // indirect
 	github.com/jeroenrinzema/psql-wire v0.18.0 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
@@ -162,6 +166,12 @@ require (
 	github.com/kr/text v0.2.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/leodido/go-urn v1.5.0 // indirect
+	github.com/lestrrat-go/blackmagic v1.0.4 // indirect
+	github.com/lestrrat-go/httpcc v1.0.1 // indirect
+	github.com/lestrrat-go/httprc v1.0.6 // indirect
+	github.com/lestrrat-go/iter v1.0.2 // indirect
+	github.com/lestrrat-go/jwx/v2 v2.1.7 // indirect
+	github.com/lestrrat-go/option v1.0.1 // indirect
 	github.com/lestrrat-go/strftime v1.2.0 // indirect
 	github.com/mailru/easyjson v0.9.2 // indirect
 	github.com/mark3labs/mcp-go v0.45.0 // indirect
@@ -193,6 +203,7 @@ require (
 	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	github.com/ryanuber/go-glob v1.0.0 // indirect
 	github.com/sagikazarmark/locafero v0.12.0 // indirect
+	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/sirupsen/logrus v1.10.1 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
@@ -200,15 +211,21 @@ require (
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/spf13/viper v1.21.0 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.8.1 // indirect
+	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/tidwall/btree v1.8.1 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.2 // indirect
+	github.com/veraison/corim v1.1.2 // indirect
+	github.com/veraison/eat v0.0.0-20210331113810-3da8a4dd42ff // indirect
+	github.com/veraison/go-cose v1.3.0 // indirect
+	github.com/veraison/swid v1.1.1-0.20230911094910-8ffdd07a22ca // indirect
 	github.com/viterin/partial v1.1.0 // indirect
 	github.com/viterin/vek v0.4.3 // indirect
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
+	github.com/weppos/publicsuffix-go v0.50.3 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect

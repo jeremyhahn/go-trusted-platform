@@ -25,6 +25,8 @@ import (
 	"sync/atomic"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 )
 
 // Compile-time interface check.
@@ -335,7 +337,8 @@ func (p *PlatformKeyStore) PlatformPolicyEnabled() bool {
 // When PlatformPolicy=true in config, the SRK is created with a PCR auth policy.
 // This means any operation using this SRK as parent requires a PCR policy session
 // (via PlatformPolicySession) to satisfy the auth policy. The go-xkms's
-// CreateSession() function handles this automatically when Parent.PlatformPolicy=true.
+// CreateSession() function handles this automatically when Parent.TPMPolicy is
+// "platform".
 func (p *PlatformKeyStore) buildSRKAttributes() (*xkmssdk.KeyAttributes, error) {
 	srkHandle := xkmssdk.TPMHandle(p.config.SRKHandle)
 
@@ -347,20 +350,22 @@ func (p *PlatformKeyStore) buildSRKAttributes() (*xkmssdk.KeyAttributes, error) 
 	// Apply PCR auth policy to the SRK template when PlatformPolicy=true
 	// This binds the SRK to the platform PCR state - any use of this SRK
 	// requires a PCR policy session to authorize access
+	srkPolicy := ""
 	if p.config.PlatformPolicy {
 		digest, err := p.tpm.PlatformPolicyDigest()
 		if err != nil {
 			return nil, ErrPlatformPolicyFailed{Cause: err}
 		}
 		srkTemplate.AuthPolicy = digest
+		srkPolicy = common.TPMPolicyPlatform
 	}
 
 	return &xkmssdk.KeyAttributes{
-		CN:             p.config.CN,
-		KeyAlgorithm:   x509.RSA,
-		KeyType:        xkmssdk.KeyTypeStorage,
-		PlatformPolicy: p.config.PlatformPolicy,
-		StoreType:      xkmssdk.StoreTPM2,
+		CN:           p.config.CN,
+		KeyAlgorithm: x509.RSA,
+		KeyType:      xkmssdk.KeyTypeStorage,
+		TPMPolicy:    srkPolicy,
+		StoreType:    xkmssdk.StoreTPM2,
 		TPMAttributes: &xkmssdk.TPMAttributes{
 			Handle:     srkHandle,
 			HandleType: xkmssdk.TPMHTPersistent,
@@ -692,8 +697,8 @@ func (kc *XKMS) TPM() xkmssdk.TrustedPlatformModule {
 }
 
 // GenerateKey generates a new key using the appropriate backend.
-// If PlatformPolicy is true and the key has a password, the password
-// is sealed to TPM before generating the key.
+// If the key is bound to the platform TPM policy and has a password, the
+// password is sealed to TPM before generating the key.
 func (kc *XKMS) GenerateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
 	backend, ok := kc.backends[attrs.StoreType]
 	if !ok {
@@ -701,7 +706,7 @@ func (kc *XKMS) GenerateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (
 	}
 
 	// For keys with platform policy, seal the password to TPM before generating
-	if attrs.PlatformPolicy && attrs.Password != nil && kc.tpm != nil && kc.platformKS != nil {
+	if attrs.TPMPolicy == common.TPMPolicyPlatform && attrs.Password != nil && kc.tpm != nil && kc.platformKS != nil {
 		// Ensure parent SRK attributes are set
 		if attrs.Parent == nil {
 			attrs.Parent = kc.platformKS.SRKAttributes()

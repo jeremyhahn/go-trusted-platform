@@ -17,14 +17,10 @@ DELETE /api/v1/gateway/ipam/allocations
 DELETE /api/v1/gateway/state/{id}
 DELETE /api/v1/gateway/vpn-leases/{id}/{tenant}/{lease}
 DELETE /api/v1/iam/apps/{id}
-DELETE /api/v1/iam/groups/{id}
-DELETE /api/v1/iam/groups/{id}/members/{user}
 DELETE /api/v1/iam/policies/{id}
 DELETE /api/v1/iam/roles/{id}
 DELETE /api/v1/iam/tenants/{tenant}
 DELETE /api/v1/iam/tenants/{tenant}/apps/{id}
-DELETE /api/v1/iam/tenants/{tenant}/groups/{id}
-DELETE /api/v1/iam/tenants/{tenant}/groups/{id}/members/{user}
 DELETE /api/v1/iam/tenants/{tenant}/policies/{id}
 DELETE /api/v1/iam/tenants/{tenant}/roles/{id}
 DELETE /api/v1/iam/tenants/{tenant}/users/{id}
@@ -159,8 +155,6 @@ GET /api/v1/gateway/status
 GET /api/v1/iam
 GET /api/v1/iam/apps
 GET /api/v1/iam/apps/{id}
-GET /api/v1/iam/groups
-GET /api/v1/iam/groups/{id}
 GET /api/v1/iam/policies
 GET /api/v1/iam/policies/{id}
 GET /api/v1/iam/roles
@@ -169,8 +163,6 @@ GET /api/v1/iam/tenants
 GET /api/v1/iam/tenants/{tenant}
 GET /api/v1/iam/tenants/{tenant}/apps
 GET /api/v1/iam/tenants/{tenant}/apps/{id}
-GET /api/v1/iam/tenants/{tenant}/groups
-GET /api/v1/iam/tenants/{tenant}/groups/{id}
 GET /api/v1/iam/tenants/{tenant}/policies
 GET /api/v1/iam/tenants/{tenant}/policies/{id}
 GET /api/v1/iam/tenants/{tenant}/roles
@@ -402,8 +394,6 @@ POST /api/v1/gateway/mode
 POST /api/v1/gateway/telemetry
 POST /api/v1/iam/apps
 POST /api/v1/iam/apps/{id}/rotate
-POST /api/v1/iam/groups
-POST /api/v1/iam/groups/{id}/members/{user}
 POST /api/v1/iam/policies
 POST /api/v1/iam/policies/test
 POST /api/v1/iam/policies/validate
@@ -411,8 +401,6 @@ POST /api/v1/iam/roles
 POST /api/v1/iam/tenants
 POST /api/v1/iam/tenants/{tenant}/apps
 POST /api/v1/iam/tenants/{tenant}/apps/{id}/rotate
-POST /api/v1/iam/tenants/{tenant}/groups
-POST /api/v1/iam/tenants/{tenant}/groups/{id}/members/{user}
 POST /api/v1/iam/tenants/{tenant}/policies
 POST /api/v1/iam/tenants/{tenant}/policies/test
 POST /api/v1/iam/tenants/{tenant}/policies/validate
@@ -539,12 +527,10 @@ PUT /api/v1/devices/{id:[0-9]+}
 PUT /api/v1/dns/zones/{zone}
 PUT /api/v1/gateway/vpn-leases/{id}
 PUT /api/v1/iam/apps/{id}
-PUT /api/v1/iam/groups/{id}
 PUT /api/v1/iam/policies/{id}
 PUT /api/v1/iam/roles/{id}
 PUT /api/v1/iam/tenants/{tenant}
 PUT /api/v1/iam/tenants/{tenant}/apps/{id}
-PUT /api/v1/iam/tenants/{tenant}/groups/{id}
 PUT /api/v1/iam/tenants/{tenant}/policies/{id}
 PUT /api/v1/iam/tenants/{tenant}/roles/{id}
 PUT /api/v1/iam/tenants/{tenant}/users/{id}

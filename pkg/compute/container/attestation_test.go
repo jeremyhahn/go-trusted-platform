@@ -834,8 +834,11 @@ func TestContainerAttestor_Attest_QuoteBinding(t *testing.T) {
 		if !errors.As(err, &mismatch) {
 			t.Fatalf("error = %T (%v), want *orchestration.QuotedPCRDigestMismatchError", err, err)
 		}
-		if bytes.Equal(mismatch.Signed, mismatch.Recomputed) {
-			t.Error("the mismatch must report a signed digest that differs from the recomputed one")
+		if len(mismatch.Signed) == 0 {
+			t.Error("the mismatch must report the digest the signed quote commits to")
+		}
+		if mismatch.Cause == nil {
+			t.Error("the mismatch must carry the evidence check that failed")
 		}
 		if !errors.Is(err, orchestration.ErrQuotedPCRDigestMismatch) {
 			t.Errorf("error %v must match the SDK digest-mismatch sentinel", err)

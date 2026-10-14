@@ -1835,13 +1835,13 @@ func TestRegisterRoutes_DeviceAttestIsRegisteredAndGated(t *testing.T) {
 // matching only it answers 404).
 //
 // It requires the count rather than merely the presence: rest/iam/router.go
-// registers each capability twice (docs/iam/api.md §2) — 32 flat routes and
-// 37 tenant-scoped ones — and a fixture that silently lost one tree would
+// registers each capability twice (docs/iam/api.md §2) — 25 flat routes and
+// 30 tenant-scoped ones — and a fixture that silently lost one tree would
 // otherwise pass the per-route assertions over the other.
 func iamRoutesUnderAudit(t *testing.T, router *mux.Router) []string {
 	t.Helper()
 
-	const wantIAMRoutes = 69
+	const wantIAMRoutes = 55
 	var routes []string
 	for _, route := range walkRoutes(t, router) {
 		_, template := splitRoute(route)
@@ -1922,8 +1922,8 @@ func TestIAMRoutes_TenantGuardsAreWiredToThePlatformSession(t *testing.T) {
 		assert.NotEqualf(t, http.StatusUnauthorized, code, "%s refused the admin authentication", route)
 		assert.NotEqualf(t, http.StatusForbidden, code, "%s refused the admin authorization", route)
 	}
-	require.Equal(t, 37, tenantGuarded, "tenant-record plus tenant-scoped routes")
-	require.Equal(t, 32, flat, "flat routes")
+	require.Equal(t, 30, tenantGuarded, "tenant-record plus tenant-scoped routes")
+	require.Equal(t, 25, flat, "flat routes")
 }
 
 // TestIAMRoutes_SystemTenantAdminReachesTenantLifecycle is the other half of

@@ -55,15 +55,6 @@ type IAMClient interface {
 	AssignRole(ctx context.Context, tenantID, userID, roleID string) error
 	RevokeRole(ctx context.Context, tenantID, userID, roleID string) error
 
-	// Group operations
-	CreateGroup(ctx context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error)
-	GetGroup(ctx context.Context, tenantID, groupID string) (*iamsdk.Group, error)
-	ListGroups(ctx context.Context, tenantID string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error)
-	UpdateGroup(ctx context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error)
-	DeleteGroup(ctx context.Context, tenantID, groupID string) error
-	AddGroupMember(ctx context.Context, tenantID, groupID, userID string) error
-	RemoveGroupMember(ctx context.Context, tenantID, groupID, userID string) error
-
 	// Role operations
 	CreateRole(ctx context.Context, tenantID string, req *iamsdk.CreateRoleRequest) (*iamsdk.Role, error)
 	GetRole(ctx context.Context, tenantID, roleID string) (*iamsdk.Role, error)
@@ -168,10 +159,6 @@ func (h *IAMHandlers) getUserID(r *http.Request) string {
 	return mux.Vars(r)["id"]
 }
 
-func (h *IAMHandlers) getGroupID(r *http.Request) string {
-	return mux.Vars(r)["id"]
-}
-
 func (h *IAMHandlers) getRoleID(r *http.Request) string {
 	return mux.Vars(r)["id"]
 }
@@ -186,10 +173,6 @@ func (h *IAMHandlers) getAppID(r *http.Request) string {
 
 func (h *IAMHandlers) getRoleName(r *http.Request) string {
 	return mux.Vars(r)["role"]
-}
-
-func (h *IAMHandlers) getMemberID(r *http.Request) string {
-	return mux.Vars(r)["user"]
 }
 
 func (h *IAMHandlers) getPaginationParams(r *http.Request) (int32, int32) {
@@ -373,7 +356,6 @@ func (h *IAMHandlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 		Email:       req.Email,
 		DisplayName: req.Name,
 		Roles:       req.Roles,
-		Groups:      req.Groups,
 		Metadata:    req.Attributes,
 	}
 
@@ -406,7 +388,6 @@ func (h *IAMHandlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 		PageSize: int(limit),
 		Filter:   r.URL.Query().Get("email"),
 		RoleID:   r.URL.Query().Get("role"),
-		GroupID:  r.URL.Query().Get("group"),
 	}
 
 	resp, err := h.iamClient.ListUsers(ctx, tenantID, sdkReq)
@@ -597,7 +578,6 @@ func userToResponse(u *iamsdk.User) UserResponse {
 		Email:      u.Email,
 		Name:       u.DisplayName,
 		Roles:      u.Roles,
-		Groups:     u.Groups,
 		Attributes: u.Metadata,
 		// quicbaas v0.8.0 removed iam.User.MFAEnabled and models the account's
 		// authentication policy as AuthMethods instead — the methods the account
@@ -621,257 +601,6 @@ func userToResponse(u *iamsdk.User) UserResponse {
 	}
 	if u.LastLoginAt != nil && !u.LastLoginAt.IsZero() {
 		resp.LastAuth = u.LastLoginAt
-	}
-	return resp
-}
-
-// Group Handlers
-
-// CreateGroup handles POST /api/v1/iam/tenants/{tenant}/groups
-func (h *IAMHandlers) CreateGroup(w http.ResponseWriter, r *http.Request) {
-	tenantID := h.getTenantID(r)
-	if tenantID == "" {
-		h.respWriter.Error400(w, r, ErrMissingTenantID{})
-		return
-	}
-
-	var req CreateGroupRequest
-	if !h.decodeTenantBody(w, r, tenantID, &req) {
-		return
-	}
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	sdkReq := &iamsdk.CreateGroupRequest{
-		ID:          req.ID,
-		Name:        req.Name,
-		Description: req.Description,
-	}
-
-	group, err := h.iamClient.CreateGroup(ctx, tenantID, sdkReq)
-	if err != nil {
-		h.handleError(w, r, err)
-		return
-	}
-
-	h.respWriter.Success200(w, r, groupToResponse(group))
-}
-
-// ListGroups handles GET /api/v1/iam/tenants/{tenant}/groups
-func (h *IAMHandlers) ListGroups(w http.ResponseWriter, r *http.Request) {
-	tenantID := h.getTenantID(r)
-	if tenantID == "" {
-		h.respWriter.Error400(w, r, ErrMissingTenantID{})
-		return
-	}
-	if !h.decodeListBodyTenant(w, r, tenantID) {
-		return
-	}
-
-	limit, offset := h.getPaginationParams(r)
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	sdkReq := &iamsdk.ListGroupsRequest{
-		PageSize: int(limit),
-	}
-
-	resp, err := h.iamClient.ListGroups(ctx, tenantID, sdkReq)
-	if err != nil {
-		h.handleError(w, r, err)
-		return
-	}
-
-	groups := make([]GroupResponse, 0, len(resp.Groups))
-	for i := range resp.Groups {
-		groups = append(groups, groupToResponse(&resp.Groups[i]))
-	}
-
-	h.respWriter.Success200(w, r, ListGroupsResponse{
-		PaginatedResponse: PaginatedResponse{
-			Total:  int64(resp.Pagination.TotalCount),
-			Limit:  limit,
-			Offset: offset,
-		},
-		Groups: groups,
-	})
-}
-
-// GetGroup handles GET /api/v1/iam/tenants/{tenant}/groups/{id}
-func (h *IAMHandlers) GetGroup(w http.ResponseWriter, r *http.Request) {
-	tenantID := h.getTenantID(r)
-	groupID := h.getGroupID(r)
-
-	if tenantID == "" {
-		h.respWriter.Error400(w, r, ErrMissingTenantID{})
-		return
-	}
-	if groupID == "" {
-		h.respWriter.Error400(w, r, ErrMissingGroupID{})
-		return
-	}
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	group, err := h.iamClient.GetGroup(ctx, tenantID, groupID)
-	if err != nil {
-		h.handleError(w, r, err)
-		return
-	}
-
-	h.respWriter.Success200(w, r, groupToResponse(group))
-}
-
-// UpdateGroup handles PUT /api/v1/iam/tenants/{tenant}/groups/{id}
-func (h *IAMHandlers) UpdateGroup(w http.ResponseWriter, r *http.Request) {
-	tenantID := h.getTenantID(r)
-	groupID := h.getGroupID(r)
-
-	if tenantID == "" {
-		h.respWriter.Error400(w, r, ErrMissingTenantID{})
-		return
-	}
-	if groupID == "" {
-		h.respWriter.Error400(w, r, ErrMissingGroupID{})
-		return
-	}
-
-	var req UpdateGroupRequest
-	if !h.decodeTenantBody(w, r, tenantID, &req) {
-		return
-	}
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	sdkReq := &iamsdk.UpdateGroupRequest{
-		Name:        req.Name,
-		Description: req.Description,
-	}
-
-	group, err := h.iamClient.UpdateGroup(ctx, tenantID, groupID, sdkReq)
-	if err != nil {
-		h.handleError(w, r, err)
-		return
-	}
-
-	h.respWriter.Success200(w, r, groupToResponse(group))
-}
-
-// DeleteGroup handles DELETE /api/v1/iam/tenants/{tenant}/groups/{id}
-func (h *IAMHandlers) DeleteGroup(w http.ResponseWriter, r *http.Request) {
-	tenantID := h.getTenantID(r)
-	groupID := h.getGroupID(r)
-
-	if tenantID == "" {
-		h.respWriter.Error400(w, r, ErrMissingTenantID{})
-		return
-	}
-	if groupID == "" {
-		h.respWriter.Error400(w, r, ErrMissingGroupID{})
-		return
-	}
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	err := h.iamClient.DeleteGroup(ctx, tenantID, groupID)
-	if err != nil {
-		h.handleError(w, r, err)
-		return
-	}
-
-	h.respWriter.Success200(w, r, SuccessResponse{
-		Success: true,
-		Message: "group deleted successfully",
-	})
-}
-
-// AddGroupMember handles POST /api/v1/iam/tenants/{tenant}/groups/{id}/members/{user}
-func (h *IAMHandlers) AddGroupMember(w http.ResponseWriter, r *http.Request) {
-	tenantID := h.getTenantID(r)
-	groupID := h.getGroupID(r)
-	userID := h.getMemberID(r)
-
-	if tenantID == "" {
-		h.respWriter.Error400(w, r, ErrMissingTenantID{})
-		return
-	}
-	if groupID == "" {
-		h.respWriter.Error400(w, r, ErrMissingGroupID{})
-		return
-	}
-	if userID == "" {
-		h.respWriter.Error400(w, r, ErrMissingMember{})
-		return
-	}
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	err := h.iamClient.AddGroupMember(ctx, tenantID, groupID, userID)
-	if err != nil {
-		h.handleError(w, r, err)
-		return
-	}
-
-	h.respWriter.Success200(w, r, SuccessResponse{
-		Success: true,
-		Message: "member added successfully",
-	})
-}
-
-// RemoveGroupMember handles DELETE /api/v1/iam/tenants/{tenant}/groups/{id}/members/{user}
-func (h *IAMHandlers) RemoveGroupMember(w http.ResponseWriter, r *http.Request) {
-	tenantID := h.getTenantID(r)
-	groupID := h.getGroupID(r)
-	userID := h.getMemberID(r)
-
-	if tenantID == "" {
-		h.respWriter.Error400(w, r, ErrMissingTenantID{})
-		return
-	}
-	if groupID == "" {
-		h.respWriter.Error400(w, r, ErrMissingGroupID{})
-		return
-	}
-	if userID == "" {
-		h.respWriter.Error400(w, r, ErrMissingMember{})
-		return
-	}
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	err := h.iamClient.RemoveGroupMember(ctx, tenantID, groupID, userID)
-	if err != nil {
-		h.handleError(w, r, err)
-		return
-	}
-
-	h.respWriter.Success200(w, r, SuccessResponse{
-		Success: true,
-		Message: "member removed successfully",
-	})
-}
-
-func groupToResponse(g *iamsdk.Group) GroupResponse {
-	resp := GroupResponse{
-		ID:          g.ID,
-		TenantID:    g.TenantID,
-		Name:        g.Name,
-		Description: g.Description,
-	}
-	if !g.CreatedAt.IsZero() {
-		t := g.CreatedAt
-		resp.CreatedAt = &t
-	}
-	if !g.UpdatedAt.IsZero() {
-		t := g.UpdatedAt
-		resp.UpdatedAt = &t
 	}
 	return resp
 }

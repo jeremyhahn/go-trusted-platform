@@ -269,6 +269,7 @@ The schema is `pkg/webservice/v1.Config`. It is bound to **two** platform keys
 | `jwt.platform-token.liveness-cache-ttl-seconds` | int | `15` | Hybrid positive cache |
 | `webauthn.display-name` / `.id` / `.origins` | string / string / list | — | Relying-party parameters |
 | `acme.enabled` / `.directory` / `.terms-of-service` / `.challenges` / `.external-account-required` | — | — | Per-webservice ACME server |
+| `acme.allow-private-targets` | bool | `false` | Lets http-01 / enroll-01 validation reach loopback, private and link-local addresses. Off, the go-xkms challenge client refuses them (SSRF guard); turn it on only where devices enroll from a private network |
 | `cors.allowed-origins` / `.allowed-methods` / `.allowed-headers` / `.allow-credentials` | lists / bool | — | Global CORS |
 | `rewrite[].pattern` / `.target` | regexp / path | — | First match wins |
 | `surface` | `full` \| `edge` \| `provisioning` | `full` | What the listener mounts (#571). `edge`: virtual hosts, ACME when an ACME server exists, the TLS redirect; nothing else; unknown Host is 421. `provisioning` (#177): `GET /api/v1/devices/config` and the TLS redirect; nothing else, and no other surface mounts that route. Startup (`webservice.ValidateProvisioningSurface`, wrapped in `app.ErrWebServiceValidation`) refuses it unless `bind-host` is an IP literal inside the provisioning zone of the node's network plan, `tls-port` is set and `virtual-hosts` is empty. Any other value refuses to start |

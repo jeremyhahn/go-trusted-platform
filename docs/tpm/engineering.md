@@ -265,6 +265,37 @@ func (s *TPMGRPCService) SetTPM2Service(tpm quicbaassdk.TrustedPlatformModule)
   and do not build client control flow on the distinction between
   `FailedPrecondition` and `Internal`.
 
+### Sealing fails closed on PCRs
+
+`Seal` builds its options in `buildSealOptions`, which refuses a request that
+names `pcr_indices` with `common.ErrPCRBoundSealUnavailable` before anything
+reaches the TPM. `Seal` matches it with `errors.As`, ahead of `mapError`, and
+returns `codes.FailedPrecondition`; the message names go-quicbaas #1171.
+
+The reason: go-xkms seals a PCR selection that carries no policy digest as a
+password-only object, which unseals whatever the PCRs hold. Binding it needs the
+PolicyPCR digest or a named `TPMPolicy`. go-quicbaas does not re-export either
+yet (go-quicbaas #1171), and building TPM policy locally is forbidden. The
+platform refuses rather than return an object that looks PCR-bound and is not.
+When the re-export lands, `buildSealOptions` sets the policy and the refusal goes.
+
+The seal surfaces that bound PCRs carry the same refusal. Unseal is unchanged on
+all of them.
+
+| Surface | Entry point | What the caller sees |
+|---|---|---|
+| gRPC, Unix, REST `POST /api/v1/tpm/seal` (proxies gRPC) | `TPMGRPCService.Seal` | `FailedPrecondition` |
+| MCP `platform_tpm_seal` | `MCPServiceProvider.TPMSeal` → `TPMGRPCService.Seal` | `FailedPrecondition` |
+| vTPM gRPC | `vtpm.TPMOperations.Seal` → `VTPMServiceServer.mapError` | `FailedPrecondition` |
+| vTPM QUIC | `vtpm.TPMOperations.Seal` → `mapVTPMError` | `StatusInvalidRequest` (QUIC has no precondition status) |
+| vTPM MCP `vtpm_seal` | `vtpm.TPMOperations.Seal` | the typed error, wrapped in `ErrTPMSealFailed` |
+
+A seal without PCRs still works when it carries `--password`, its only
+protection, which sits under the SSRK. A seal with neither PCRs nor a password
+is refused by go-xkms (`ErrSealUnprotected`, go-xkms v0.49): such an object
+would unseal for anyone able to load it. The SDK does not re-export that error,
+so the daemon passes it through unmapped.
+
 ## 7. QUIC handler — `TPM2Handler`
 
 Category opcode `OpTPM2Category = 0x99`; the **first payload byte is the
@@ -545,6 +576,9 @@ Recorded here so they are debts with a location, not discoveries:
    `/api/v1/tpm/idevid*`, `/tpm/iak*` and `/tpm/device/attributes`
    (`pkg/api/daemon/rest_idevid.go`) rely on mTLS alone, where `TPMHandlers`
    routes need a scoped platform token.
+8. **PCR-bound sealing is unavailable** (§6, "Sealing fails closed on PCRs").
+   Every gRPC, Unix, REST, MCP and vTPM seal that names PCRs is refused until
+   go-quicbaas re-exports the PolicyPCR primitives (go-quicbaas #1171).
 
 ## 14. Related
 

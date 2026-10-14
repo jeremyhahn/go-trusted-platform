@@ -16,12 +16,14 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
@@ -226,6 +228,10 @@ func (m *quicMockVTPMService) Quote(ctx context.Context, bundleID string, nonce 
 func (m *quicMockVTPMService) Seal(ctx context.Context, bundleID string, data []byte, opts *vtpm.SealOptions) ([]byte, error) {
 	if !m.running[bundleID] {
 		return nil, vtpm.ErrVTPMNotRunning{BundleID: bundleID}
+	}
+	// Mirrors vtpm.Service.Seal: a PCR-bound seal is refused.
+	if opts != nil && len(opts.PCRs) > 0 {
+		return nil, vtpm.ErrTPMSealFailed{BundleID: bundleID, Cause: common.ErrPCRBoundSealUnavailable{}}
 	}
 	return []byte("sealed-" + string(data)), nil
 }
@@ -719,7 +725,6 @@ func TestVTPMSeal_Success(t *testing.T) {
 	sealReq := VTPMSealRequest{
 		BundleID:  "test-001",
 		Data:      []byte("secret-data"),
-		PCRs:      []int{7},
 		AuthValue: "password",
 	}
 	payload, err := quicwire.EncodePayload(&sealReq)
@@ -735,6 +740,34 @@ func TestVTPMSeal_Success(t *testing.T) {
 	resp := handler.HandleRequest(ctx, req)
 	if resp.Status != quicwire.StatusOK {
 		t.Errorf("expected status OK, got %s", quicwire.StatusToString(resp.Status))
+	}
+}
+
+func TestVTPMSeal_RefusesPCRBoundSeal(t *testing.T) {
+	handler, mockSvc := createQUICTestHandler()
+	ctx := context.Background()
+
+	mockSvc.bundles["test-001"] = &vtpm.Bundle{ID: "test-001"}
+	mockSvc.running["test-001"] = true
+
+	sealReq := VTPMSealRequest{
+		BundleID:  "test-001",
+		Data:      []byte("secret-data"),
+		PCRs:      []int{7},
+		AuthValue: "password",
+	}
+	payload, err := quicwire.EncodePayload(&sealReq)
+	if err != nil {
+		t.Fatalf("failed to encode payload: %v", err)
+	}
+
+	resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpVTPMSeal, Payload: payload})
+
+	if resp.Status != quicwire.StatusInvalidRequest {
+		t.Errorf("expected status InvalidRequest, got %s", quicwire.StatusToString(resp.Status))
+	}
+	if !bytes.Contains(resp.Payload, []byte("go-quicbaas #1171")) {
+		t.Errorf("the refusal must name the missing upstream capability, got %q", resp.Payload)
 	}
 }
 

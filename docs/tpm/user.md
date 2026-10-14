@@ -9,8 +9,8 @@
 ## What this is
 
 Every trust claim the platform makes about a node comes out of that node's
-TPM 2.0: its identity, its measured boot state, and any secret sealed to that
-state. This page is about the **physical** TPM in the machine.
+TPM 2.0: its identity, its measured boot state, and the secrets it seals. This
+page is about the **physical** TPM in the machine.
 
 Two things it is *not*:
 
@@ -198,8 +198,8 @@ Replacing an IDevID replaces the device's identity. There is no undo.
 ## Sealing secrets to platform state
 
 ```bash
-platformctl tpm seal   --cn db-master --data "$SECRET" --pcrs 7,9
-platformctl tpm unseal --cn db-master > /run/db-master
+platformctl tpm seal   --cn db-master --data "$SECRET" --password "$SEAL_PW"
+platformctl tpm unseal --cn db-master --password "$SEAL_PW" > /run/db-master
 ```
 
 Four things to know:
@@ -207,19 +207,25 @@ Four things to know:
 **`--data` is a raw string here, not base64.** (`platformctl vtpm seal --data`
 *is* base64. The two commands differ.)
 
-**`--pcrs` binds the object to those PCR values.** It unseals only while they
-still match. That is the security property, and it is also why an unseal that
-worked yesterday fails after a firmware or bootloader update. Sealing to PCRs is
-a deliberate fragility.
+**PCR-bound sealing is unavailable — `--pcrs` is refused.** The go-xkms release
+the platform builds against seals an object with a PCR selection but no policy
+digest as a password-only object, which unseals whatever the PCRs hold. Binding
+it to the PCRs needs the PolicyPCR digest or a named TPM policy, and go-quicbaas
+does not re-export either yet (go-quicbaas #1171). Until it does, a seal that
+names PCRs fails with `FailedPrecondition` and the message names #1171. The
+platform never quietly seals it as an object that ignores the PCRs. Unsealing
+blobs that already exist is unchanged.
 
 **`unseal` writes the secret to stdout.** Redirect it. Do not let it sit in a
 terminal scrollback or a CI log.
 
 **`--password` and `--parent-password` are secrets on your command line.** A
-shell with history will record them. Pass them from the environment.
+shell with history will record them. Pass them from the environment. The
+password is the only thing protecting a sealed object today, so choose a real
+one.
 
-PCR binding is `--pcrs` (with `--pcr-bank`); there is no separate policy
-switch. `--policy` was accepted and ignored until #681 removed it.
+There is no policy switch. `--policy` was accepted and ignored until #681
+removed it.
 
 ---
 
@@ -314,8 +320,14 @@ Transient handles are exhausted. `platformctl tpm flush`.
 
 **An unseal that worked yesterday fails today.**
 The PCRs it was sealed to have changed — firmware update, bootloader change,
-kernel change. Re-seal against the new state. If it fails only after a *reboot*
-and nothing else changed, check whether PCR 10 crept into `golden-pcrs`.
+kernel change. The secret cannot be re-sealed to PCRs until go-quicbaas #1171
+(below). If it fails only after a *reboot* and nothing else changed, check
+whether PCR 10 crept into `golden-pcrs`.
+
+**`tpm seal --pcrs` fails with "PCR-bound sealing is unavailable".**
+That is deliberate. The SDK cannot bind an object to PCRs yet (go-quicbaas
+#1171), so the daemon refuses rather than produce an object the PCRs do not
+protect. Seal with a password and no `--pcrs`.
 
 **A quote verifies but attestation still rejects the node.**
 Verification and policy are different steps. The quote being signature-valid

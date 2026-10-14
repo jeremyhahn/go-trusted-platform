@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 )
 
 // TestFormatPCRBanksContent asserts the authoritative pcr-banks content
@@ -55,22 +56,23 @@ func TestFormatPCRBanksContent_PolicyTrue(t *testing.T) {
 }
 
 // TestPlatformKeystoreSealAttrs_TwoAxes asserts the two independent
-// PlatformPolicy axes (#52): the CHILD (sealed object) is ALWAYS
+// TPMPolicy axes (#52): the CHILD (sealed object) is ALWAYS
 // PCR-bound regardless of the parent's authorization mode, while the
 // PARENT mode is what pcr-banks records for the initrd to replay during
 // load.
 func TestPlatformKeystoreSealAttrs_TwoAxes(t *testing.T) {
 	for _, parentMode := range []bool{true, false} {
-		parent := &xkmssdk.KeyAttributes{CN: "srk"}
-		parent.PlatformPolicy = parentMode
+		parentPolicy := common.PlatformTPMPolicy(parentMode)
+		parent := &xkmssdk.KeyAttributes{CN: "srk", TPMPolicy: parentPolicy}
 
 		attrs := platformKeystoreSealAttrs(parent)
-		if !attrs.PlatformPolicy {
-			t.Errorf("parent mode %v: sealed object must ALWAYS be PCR-bound", parentMode)
+		if attrs.TPMPolicy != common.TPMPolicyPlatform {
+			t.Errorf("parent mode %v: sealed object must ALWAYS be PCR-bound, got TPMPolicy %q",
+				parentMode, attrs.TPMPolicy)
 		}
-		if attrs.Parent.PlatformPolicy != parentMode {
-			t.Errorf("parent mode %v: parent attrs mutated to %v",
-				parentMode, attrs.Parent.PlatformPolicy)
+		if attrs.Parent.TPMPolicy != parentPolicy {
+			t.Errorf("parent mode %v: parent attrs mutated to %q",
+				parentMode, attrs.Parent.TPMPolicy)
 		}
 		// pcr-banks records the PARENT mode — the load-session contract.
 		content := formatPCRBanksContent("0,7,9", "7,9", 23, "sha256", 0x81000001, parentMode, 0x81000001)

@@ -106,16 +106,6 @@ func GenerateTestRoleID(testID string) string {
 	return "test-role-" + testID
 }
 
-// GenerateTestGroupName generates a unique group name for testing
-func GenerateTestGroupName(testID string) string {
-	return "test-group-" + testID
-}
-
-// GenerateTestGroupID generates a unique group ID for testing
-func GenerateTestGroupID(testID string) string {
-	return "test-group-" + testID
-}
-
 // GenerateTestPolicyName generates a unique policy name for testing
 func GenerateTestPolicyName(testID string) string {
 	return "test-policy-" + testID

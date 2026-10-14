@@ -67,7 +67,6 @@ func TestNewCommand_HasAllSubcommands(t *testing.T) {
 
 	expectedSubcommands := []string{
 		"user",
-		"group",
 		"role",
 		"tenant",
 		"policy",
@@ -104,8 +103,8 @@ func TestNewCommand_SubcommandCount(t *testing.T) {
 	cmd := NewCommand(getFlags)
 	subcommands := cmd.Commands()
 
-	// We expect exactly 6 subcommands: user, group, role, tenant, policy, app
-	expectedCount := 6
+	// We expect exactly 5 subcommands: user, role, tenant, policy, app
+	expectedCount := 5
 	if len(subcommands) != expectedCount {
 		t.Errorf("expected exactly %d subcommands, got %d", expectedCount, len(subcommands))
 		for _, subcmd := range subcommands {
@@ -128,10 +127,6 @@ func TestNewCommand_SubcommandDetails(t *testing.T) {
 		{
 			name:          "user",
 			expectedShort: "Manage users",
-		},
-		{
-			name:          "group",
-			expectedShort: "Manage groups",
 		},
 		{
 			name:          "role",
@@ -190,8 +185,8 @@ func TestNewCommand_NilGetFlagsHandling(t *testing.T) {
 	}
 
 	// Verify subcommands are still attached
-	if len(cmd.Commands()) != 6 {
-		t.Errorf("expected 6 subcommands, got %d", len(cmd.Commands()))
+	if len(cmd.Commands()) != 5 {
+		t.Errorf("expected 5 subcommands, got %d", len(cmd.Commands()))
 	}
 }
 
@@ -341,9 +336,9 @@ func TestUserCreateCommand_Flags(t *testing.T) {
 				t.Error("--roles flag not found")
 			}
 
-			groupsFlag := subcmd.Flags().Lookup("groups")
-			if groupsFlag == nil {
-				t.Error("--groups flag not found")
+			// IAM groups were removed upstream; users carry roles only.
+			if subcmd.Flags().Lookup("groups") != nil {
+				t.Error("--groups flag must not exist on user create")
 			}
 
 			attributesFlag := subcmd.Flags().Lookup("attributes")
@@ -432,165 +427,6 @@ func TestUserSubcommands_HaveRunE(t *testing.T) {
 	}
 
 	cmd := NewUserCommand(getFlags)
-
-	for _, subcmd := range cmd.Commands() {
-		t.Run(subcmd.Name(), func(t *testing.T) {
-			if subcmd.RunE == nil {
-				t.Errorf("subcommand %q should have RunE set", subcmd.Name())
-			}
-		})
-	}
-}
-
-// Group Command Tests
-
-func TestNewGroupCommand(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{
-			OutputFormat: cli.OutputFormatTable,
-		}
-	}
-
-	cmd := NewGroupCommand(getFlags)
-
-	if cmd == nil {
-		t.Fatal("NewGroupCommand returned nil")
-	}
-
-	if cmd.Use != "group" {
-		t.Errorf("expected Use to be 'group', got %q", cmd.Use)
-	}
-
-	if cmd.Short != "Manage groups" {
-		t.Errorf("unexpected Short description: %q", cmd.Short)
-	}
-}
-
-func TestNewGroupCommand_HasSubcommands(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := NewGroupCommand(getFlags)
-
-	expectedSubcommands := []string{
-		"create",
-		"get",
-		"list",
-		"update",
-		"delete",
-		"add-member",
-		"remove-member",
-	}
-
-	subcommands := cmd.Commands()
-
-	if len(subcommands) != len(expectedSubcommands) {
-		t.Errorf("expected %d subcommands, got %d", len(expectedSubcommands), len(subcommands))
-	}
-
-	for _, expected := range expectedSubcommands {
-		found := false
-		for _, subcmd := range subcommands {
-			if subcmd.Name() == expected {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("expected subcommand %q not found", expected)
-		}
-	}
-}
-
-func TestGroupCreateCommand_Flags(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := NewGroupCommand(getFlags)
-
-	for _, subcmd := range cmd.Commands() {
-		if subcmd.Name() == "create" {
-			tenantFlag := subcmd.Flags().Lookup("tenant")
-			if tenantFlag == nil {
-				t.Error("--tenant flag not found")
-			} else if tenantFlag.Shorthand != "t" {
-				t.Errorf("tenant flag shorthand: got %q, want %q", tenantFlag.Shorthand, "t")
-			}
-
-			nameFlag := subcmd.Flags().Lookup("name")
-			if nameFlag == nil {
-				t.Error("--name flag not found")
-			} else if nameFlag.Shorthand != "n" {
-				t.Errorf("name flag shorthand: got %q, want %q", nameFlag.Shorthand, "n")
-			}
-
-			descFlag := subcmd.Flags().Lookup("description")
-			if descFlag == nil {
-				t.Error("--description flag not found")
-			} else if descFlag.Shorthand != "d" {
-				t.Errorf("description flag shorthand: got %q, want %q", descFlag.Shorthand, "d")
-			}
-			return
-		}
-	}
-
-	t.Fatal("create subcommand not found")
-}
-
-func TestGroupListCommand_Flags(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := NewGroupCommand(getFlags)
-
-	for _, subcmd := range cmd.Commands() {
-		if subcmd.Name() == "list" {
-			tenantFlag := subcmd.Flags().Lookup("tenant")
-			if tenantFlag == nil {
-				t.Error("--tenant flag not found")
-			} else if tenantFlag.Shorthand != "t" {
-				t.Errorf("tenant flag shorthand: got %q, want %q", tenantFlag.Shorthand, "t")
-			}
-
-			pageFlag := subcmd.Flags().Lookup("page")
-			if pageFlag == nil {
-				t.Error("--page flag not found")
-			} else {
-				if pageFlag.Shorthand != "p" {
-					t.Errorf("page flag shorthand: got %q, want %q", pageFlag.Shorthand, "p")
-				}
-				if pageFlag.DefValue != "1" {
-					t.Errorf("page default value: got %q, want %q", pageFlag.DefValue, "1")
-				}
-			}
-
-			pageSizeFlag := subcmd.Flags().Lookup("page-size")
-			if pageSizeFlag == nil {
-				t.Error("--page-size flag not found")
-			} else {
-				if pageSizeFlag.Shorthand != "s" {
-					t.Errorf("page-size flag shorthand: got %q, want %q", pageSizeFlag.Shorthand, "s")
-				}
-				if pageSizeFlag.DefValue != "50" {
-					t.Errorf("page-size default value: got %q, want %q", pageSizeFlag.DefValue, "50")
-				}
-			}
-			return
-		}
-	}
-
-	t.Fatal("list subcommand not found")
-}
-
-func TestGroupSubcommands_HaveRunE(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := NewGroupCommand(getFlags)
 
 	for _, subcmd := range cmd.Commands() {
 		t.Run(subcmd.Name(), func(t *testing.T) {

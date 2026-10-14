@@ -93,9 +93,9 @@ func parsePolicyRulesFromYAML(specYAML string) []iamsdk.Rule {
 // interface the REST handlers expect.
 //
 // Tenant, Policy and Application requests are translated between the
-// REST layer's local DTOs and the QuicBaaS SDK message types. User,
-// Group and Role types are re-exported by the iamsdk package the REST
-// router already imports, so those calls pass through as plain
+// REST layer's local DTOs and the QuicBaaS SDK message types. User
+// and Role types are re-exported by the iamsdk package the REST router
+// already imports, so those calls pass through as plain
 // delegation.
 type QuicBaaSIAMAdapter struct {
 	client iamsdk.Client
@@ -149,38 +149,6 @@ func (a *QuicBaaSIAMAdapter) AssignRole(ctx context.Context, tenantID, userID, r
 // RevokeRole delegates to iamsdk.UserClient.RevokeRole.
 func (a *QuicBaaSIAMAdapter) RevokeRole(ctx context.Context, tenantID, userID, roleID string) error {
 	return a.client.User().RevokeRole(ctx, tenantID, userID, roleID)
-}
-
-// -----------------------------------------------------------------------------
-// Group operations.
-// -----------------------------------------------------------------------------
-
-func (a *QuicBaaSIAMAdapter) CreateGroup(ctx context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error) {
-	return a.client.Group().Create(ctx, tenantID, req)
-}
-
-func (a *QuicBaaSIAMAdapter) GetGroup(ctx context.Context, tenantID, groupID string) (*iamsdk.Group, error) {
-	return a.client.Group().Get(ctx, tenantID, groupID)
-}
-
-func (a *QuicBaaSIAMAdapter) ListGroups(ctx context.Context, tenantID string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error) {
-	return a.client.Group().List(ctx, tenantID, req)
-}
-
-func (a *QuicBaaSIAMAdapter) UpdateGroup(ctx context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error) {
-	return a.client.Group().Update(ctx, tenantID, groupID, req)
-}
-
-func (a *QuicBaaSIAMAdapter) DeleteGroup(ctx context.Context, tenantID, groupID string) error {
-	return a.client.Group().Delete(ctx, tenantID, groupID)
-}
-
-func (a *QuicBaaSIAMAdapter) AddGroupMember(ctx context.Context, tenantID, groupID, userID string) error {
-	return a.client.Group().AddMember(ctx, tenantID, groupID, userID)
-}
-
-func (a *QuicBaaSIAMAdapter) RemoveGroupMember(ctx context.Context, tenantID, groupID, userID string) error {
-	return a.client.Group().RemoveMember(ctx, tenantID, groupID, userID)
 }
 
 // -----------------------------------------------------------------------------

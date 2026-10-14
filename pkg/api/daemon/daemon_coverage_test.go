@@ -639,11 +639,6 @@ func TestQUICIAM_ServiceNotAvailable(t *testing.T) {
 		{"ListRoles", quicwire.OpIAMRoleList},
 		{"AssignRole", quicwire.OpIAMRoleAssign},
 		{"RevokeRole", quicwire.OpIAMRoleRevoke},
-		{"CreateGroup", quicwire.OpIAMGroupCreate},
-		{"DeleteGroup", quicwire.OpIAMGroupDelete},
-		{"GetGroup", quicwire.OpIAMGroupGet},
-		{"ListGroups", quicwire.OpIAMGroupList},
-		{"AddGroupMember", quicwire.OpIAMGroupAddMember},
 	}
 
 	for _, tc := range testCases {

@@ -73,11 +73,10 @@ What keeps the two stores in step (#641; the why is in
 ## 3. Two tenant route trees
 
 `pkg/webservice/v1/rest/iam/router.go` registers a **complete second copy** of
-the user, group, role, policy and application surface under a tenant path:
+the user, role, policy and application surface under a tenant path:
 
 ```
 /api/v1/iam/users                       /api/v1/iam/tenants/{tenant}/users
-/api/v1/iam/groups                      /api/v1/iam/tenants/{tenant}/groups
 /api/v1/iam/roles                       /api/v1/iam/tenants/{tenant}/roles
 /api/v1/iam/policies                    /api/v1/iam/tenants/{tenant}/policies
 /api/v1/iam/apps                        /api/v1/iam/tenants/{tenant}/apps
@@ -98,28 +97,23 @@ meanings. Raised as an owner question.
 
 ## 4. Exported surface
 
-- **gRPC** `PlatformIAMService` — **41 RPCs**, the largest service in the
+- **gRPC** `PlatformIAMService` — **34 RPCs**, the largest service in the
   platform (`pkg/api/grpc/proto/iam.proto`).
-- **REST** — the two trees above, ~44 routes.
-- **QUIC** — user `0xA9`–`0xAD`, role `0xB5`–`0xBA`, group `0xBB`–`0xBF`,
-  extended `0xF6`–`0xFB`.
-- **MCP** — 25 `iam_*` tools.
-- **CLI** — `platformctl iam` with `user`, `group`, `role`, `policy`, `app`.
+- **REST** — the two trees above.
+- **QUIC** — user `0xA9`–`0xAD`, role `0xB5`–`0xBA`, extended `0xF7`–`0xFB`.
+- **MCP** — 19 `iam_*` tools.
+- **CLI** — `platformctl iam` with `user`, `role`, `policy`, `app`.
 - **SDK** — `sdk/go/services/iam`.
 
-## 5. Two unimplemented CLI verbs
+## 5. No groups
 
-`pkg/cli/commands/iam/group*.go` marks two verbs "(not yet implemented)":
-
-- `platformctl iam group add-member <tenant-id> <group-id> <user-id>`
-- `platformctl iam group remove-member <tenant-id> <group-id> <user-id>`
-
-**Group membership cannot be changed from the CLI.** The REST routes exist
-(`POST`/`DELETE /api/v1/iam/groups/{id}/members/{user}` and the tenant-scoped
-form), as do `iam_add_group_member` and `iam_remove_group_member` on MCP. Use
-those.
-
-Every other IAM CLI verb is implemented.
+go-quicbaas v0.13 removed IAM groups, and the platform removed them from every
+transport rather than keep a surface the SDK cannot serve. The group RPCs and
+message fields are `reserved` in `iam.proto`; QUIC opcodes `0xBB`–`0xBF` and
+`0xF6` stay reserved so an old client gets "unknown opcode" instead of a
+different operation. Grant access through roles. The `groups` a
+`CheckPermission` / `TestPolicy` subject carries remain, because the SDK
+policy subject still evaluates them in ABAC conditions.
 
 ## 6. Invariants
 

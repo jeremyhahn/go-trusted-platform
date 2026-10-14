@@ -16,8 +16,10 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"errors"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
@@ -1214,6 +1216,12 @@ func (h *QUICServiceHandler) bundleToQUICResponse(bundle *vtpm.Bundle) *VTPMGetB
 func (h *QUICServiceHandler) mapVTPMError(err error) *quicwire.Response {
 	if err == nil {
 		return nil
+	}
+
+	// A refused PCR-bound seal is a precondition failure, which QUIC
+	// reports as an invalid request, as the gRPC delegates map it.
+	if errors.As(err, &common.ErrPCRBoundSealUnavailable{}) {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICOperationFailed{Op: "vTPM", Cause: err})
 	}
 
 	errMsg := err.Error()

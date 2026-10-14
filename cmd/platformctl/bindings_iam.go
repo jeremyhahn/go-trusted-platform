@@ -41,7 +41,7 @@ func (b *IAMBinding) getClient() (platform.Client, error) {
 }
 
 // CreateUser creates a new IAM user.
-func (b *IAMBinding) CreateUser(tenantID, email, name string, roles, groups []string) (map[string]interface{}, error) {
+func (b *IAMBinding) CreateUser(tenantID, email, name string, roles []string) (map[string]interface{}, error) {
 	cl, err := b.getClient()
 	if err != nil {
 		return nil, err
@@ -52,7 +52,6 @@ func (b *IAMBinding) CreateUser(tenantID, email, name string, roles, groups []st
 		Email:    email,
 		Name:     name,
 		Roles:    roles,
-		Groups:   groups,
 	})
 	if err != nil {
 		return nil, err

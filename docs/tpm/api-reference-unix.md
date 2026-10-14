@@ -79,7 +79,7 @@ All methods from the [gRPC API](api-reference-grpc.md) are available via Unix so
 
 | Method | Description |
 |--------|-------------|
-| `Seal` | Seal data with optional PCR policy |
+| `Seal` | Seal data under a password (PCR binding refused until go-quicbaas #1171) |
 | `Unseal` | Unseal TPM-sealed data |
 
 ### NVRAM Operations
@@ -179,8 +179,7 @@ resp, err := client.Seal(ctx, &platformv1.SealRequest{
     Data:         []byte("my-secret-data"),
     Cn:           "app-secret",
     ParentHandle: 0x81000002,
-    PcrIndices:   []uint32{7, 8, 9},
-    PcrBank:      platformv1.PCRBank_PCR_BANK_SHA256,
+    Password:     sealPassword,
 })
 if err != nil {
     return err
@@ -189,14 +188,17 @@ if err != nil {
 fmt.Printf("Sealed data length: %d bytes\n", len(resp.SealedData))
 ```
 
+Setting `PcrIndices` fails with `FailedPrecondition`. PCR-bound sealing is
+unavailable until go-quicbaas re-exports the TPM PolicyPCR primitives
+(go-quicbaas #1171).
+
 ### Unseal Data
 
 ```go
 resp, err := client.Unseal(ctx, &platformv1.UnsealRequest{
     Cn:           "app-secret",
     ParentHandle: 0x81000002,
-    PcrIndices:   []uint32{7, 8, 9},
-    PcrBank:      platformv1.PCRBank_PCR_BANK_SHA256,
+    Password:     sealPassword,
 })
 if err != nil {
     return err
@@ -287,11 +289,11 @@ platformctl tpm quote \
 # Get random bytes
 platformctl tpm random --num-bytes 32
 
-# Seal data
-platformctl tpm seal --data "plaintext-data" --pcr-indices 7,8,9
+# Seal data (--pcrs is refused until go-quicbaas #1171)
+platformctl tpm seal --cn app-secret --data "plaintext-data" --password "$PW"
 
 # Unseal data
-platformctl tpm unseal --cn app-secret --pcr-indices 7,8,9
+platformctl tpm unseal --cn app-secret --password "$PW"
 ```
 
 ### Unix Socket Configuration

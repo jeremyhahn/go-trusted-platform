@@ -106,8 +106,8 @@ func luksCases() []phase35Case {
 		},
 		{
 			method: platformv1.LUKSService_EnrollTPM_FullMethodName, opcode: quicwire.OpLUKSCategory, subOp: quicwire.LUKSSubEnrollTPM,
-			request:  &platformv1.LUKSEnrollTPMRequest{Device: "/dev/sda2", ExistingPassphrase: "old", Pcrs: []int32{0, 7}, Handle: "0x81000001"},
-			wantWire: &quicwire.LUKSEnrollTPMReq{Device: "/dev/sda2", ExistingPassphrase: "old", PCRs: []int32{0, 7}, Handle: "0x81000001"},
+			request:  &platformv1.LUKSEnrollTPMRequest{Device: "/dev/sda2", ExistingPassphrase: "old", Pcrs: []int32{0, 7}},
+			wantWire: &quicwire.LUKSEnrollTPMReq{Device: "/dev/sda2", ExistingPassphrase: "old", PCRs: []int32{0, 7}},
 			wireResp: &quicwire.LUKSEnrollTPMResp{Slot: 5, TokenID: "tok-t"},
 			reply:    &platformv1.LUKSEnrollTPMResponse{},
 			check: func(t *testing.T, r interface{}) {

@@ -1128,9 +1128,6 @@ func TestBoost_IAMServiceStub_AllAccessorsReturnNil(t *testing.T) {
 	if stub.User() != nil {
 		t.Fatal("expected nil User()")
 	}
-	if stub.Group() != nil {
-		t.Fatal("expected nil Group()")
-	}
 	if stub.Role() != nil {
 		t.Fatal("expected nil Role()")
 	}

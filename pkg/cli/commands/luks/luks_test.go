@@ -122,7 +122,7 @@ func TestEnrollTPM_Flags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("could not find enroll-tpm: %v", err)
 	}
-	for _, n := range []string{"device", "existing-passphrase", "pcrs", "handle"} {
+	for _, n := range []string{"device", "existing-passphrase", "pcrs"} {
 		if sub.Flags().Lookup(n) == nil {
 			t.Errorf("enroll-tpm: missing --%s", n)
 		}

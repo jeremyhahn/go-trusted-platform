@@ -36,15 +36,6 @@ type IAMService interface {
 	AssignRoleToUser(ctx context.Context, req *IAMRoleAssignmentRequest) error
 	RevokeRoleFromUser(ctx context.Context, req *IAMRoleAssignmentRequest) error
 
-	// Group operations
-	CreateGroup(ctx context.Context, req *IAMCreateGroupRequest) (*IAMGroupResponse, error)
-	GetGroup(ctx context.Context, req *IAMGetGroupRequest) (*IAMGroupResponse, error)
-	ListGroups(ctx context.Context, req *IAMListRequest) (*IAMListGroupsResponse, error)
-	UpdateGroup(ctx context.Context, req *IAMUpdateGroupRequest) (*IAMGroupResponse, error)
-	DeleteGroup(ctx context.Context, req *IAMDeleteGroupRequest) error
-	AddGroupMember(ctx context.Context, req *IAMGroupMemberRequest) error
-	RemoveGroupMember(ctx context.Context, req *IAMGroupMemberRequest) error
-
 	// Policy operations
 	CreatePolicy(ctx context.Context, req *IAMCreatePolicyRequest) (*IAMPolicyResponse, error)
 	GetPolicy(ctx context.Context, req *IAMGetPolicyRequest) (*IAMPolicyResponse, error)
@@ -88,7 +79,6 @@ type IAMUserResponse struct {
 	Email      string
 	Name       string
 	Roles      []string
-	Groups     []string
 	Attributes map[string]string
 	CreatedAt  int64
 	UpdatedAt  int64
@@ -107,7 +97,6 @@ type IAMUpdateUserRequest struct {
 	Email      string
 	Name       string
 	Roles      []string
-	Groups     []string
 	Attributes map[string]string
 }
 
@@ -173,62 +162,6 @@ type IAMRoleAssignmentRequest struct {
 	TenantID string
 	UserID   string
 	RoleID   string
-}
-
-// =============================================================================
-// Group Request/Response Types
-// =============================================================================
-
-// IAMCreateGroupRequest represents a request to create a group.
-type IAMCreateGroupRequest struct {
-	TenantID    string
-	GroupID     string
-	Name        string
-	Description string
-}
-
-// IAMGetGroupRequest represents a request to get a group.
-type IAMGetGroupRequest struct {
-	TenantID string
-	GroupID  string
-}
-
-// IAMGroupResponse represents a group response.
-type IAMGroupResponse struct {
-	ID          string
-	TenantID    string
-	Name        string
-	Description string
-	Members     []string
-	CreatedAt   int64
-	UpdatedAt   int64
-}
-
-// IAMListGroupsResponse represents a list of groups response.
-type IAMListGroupsResponse struct {
-	Groups []*IAMGroupResponse
-	Total  int
-}
-
-// IAMUpdateGroupRequest represents a request to update a group.
-type IAMUpdateGroupRequest struct {
-	TenantID    string
-	GroupID     string
-	Name        string
-	Description string
-}
-
-// IAMDeleteGroupRequest represents a request to delete a group.
-type IAMDeleteGroupRequest struct {
-	TenantID string
-	GroupID  string
-}
-
-// IAMGroupMemberRequest represents a request to add/remove a group member.
-type IAMGroupMemberRequest struct {
-	TenantID string
-	GroupID  string
-	UserID   string
 }
 
 // =============================================================================
@@ -341,13 +274,6 @@ type ErrIAMRoleIDRequired struct{}
 
 func (e ErrIAMRoleIDRequired) Error() string {
 	return "role ID is required"
-}
-
-// ErrIAMGroupIDRequired is returned when group ID is required.
-type ErrIAMGroupIDRequired struct{}
-
-func (e ErrIAMGroupIDRequired) Error() string {
-	return "group ID is required"
 }
 
 // ErrIAMNameRequired is returned when name is required.

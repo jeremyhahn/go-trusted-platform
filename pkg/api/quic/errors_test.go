@@ -1103,32 +1103,6 @@ func TestErrIAMRoleNotFound(t *testing.T) {
 	}
 }
 
-func TestErrIAMGroupNotFound(t *testing.T) {
-	t.Parallel()
-	err := ErrIAMGroupNotFound{}
-
-	// Test Error()
-	expected := "group not found"
-	if err.Error() != expected {
-		t.Errorf("expected '%s', got '%s'", expected, err.Error())
-	}
-
-	// Test Is() - same type
-	if !err.Is(ErrIAMGroupNotFound{}) {
-		t.Error("expected Is() to return true for same type")
-	}
-
-	// Test Is() - different type
-	if err.Is(ErrIAMUserNotFound{}) {
-		t.Error("expected Is() to return false for different type")
-	}
-
-	// Test errors.Is with same type
-	if !errors.Is(err, ErrIAMGroupNotFound{}) {
-		t.Error("expected errors.Is to find ErrIAMGroupNotFound")
-	}
-}
-
 func TestErrIAMUserAlreadyExists(t *testing.T) {
 	t.Parallel()
 	err := ErrIAMUserAlreadyExists{}
@@ -1181,32 +1155,6 @@ func TestErrIAMRoleAlreadyExists(t *testing.T) {
 	}
 }
 
-func TestErrIAMGroupAlreadyExists(t *testing.T) {
-	t.Parallel()
-	err := ErrIAMGroupAlreadyExists{}
-
-	// Test Error()
-	expected := "group already exists"
-	if err.Error() != expected {
-		t.Errorf("expected '%s', got '%s'", expected, err.Error())
-	}
-
-	// Test Is() - same type
-	if !err.Is(ErrIAMGroupAlreadyExists{}) {
-		t.Error("expected Is() to return true for same type")
-	}
-
-	// Test Is() - different type
-	if err.Is(ErrIAMUserAlreadyExists{}) {
-		t.Error("expected Is() to return false for different type")
-	}
-
-	// Test errors.Is with same type
-	if !errors.Is(err, ErrIAMGroupAlreadyExists{}) {
-		t.Error("expected errors.Is to find ErrIAMGroupAlreadyExists")
-	}
-}
-
 func TestErrIAMPermissionDenied(t *testing.T) {
 	t.Parallel()
 	err := ErrIAMPermissionDenied{}
@@ -1238,10 +1186,8 @@ func TestIAMErrorTypesInterface(t *testing.T) {
 	// Verify all IAM error types implement error interface
 	var _ error = ErrIAMUserNotFound{}
 	var _ error = ErrIAMRoleNotFound{}
-	var _ error = ErrIAMGroupNotFound{}
 	var _ error = ErrIAMUserAlreadyExists{}
 	var _ error = ErrIAMRoleAlreadyExists{}
-	var _ error = ErrIAMGroupAlreadyExists{}
 	var _ error = ErrIAMPermissionDenied{}
 }
 
@@ -1264,11 +1210,6 @@ func TestIAMErrorIsMethodsWithNonMatchingTypes(t *testing.T) {
 			target: errors.New("some error"),
 		},
 		{
-			name:   "GroupNotFound vs generic error",
-			err:    ErrIAMGroupNotFound{},
-			target: errors.New("some error"),
-		},
-		{
 			name:   "UserAlreadyExists vs generic error",
 			err:    ErrIAMUserAlreadyExists{},
 			target: errors.New("some error"),
@@ -1276,11 +1217,6 @@ func TestIAMErrorIsMethodsWithNonMatchingTypes(t *testing.T) {
 		{
 			name:   "RoleAlreadyExists vs generic error",
 			err:    ErrIAMRoleAlreadyExists{},
-			target: errors.New("some error"),
-		},
-		{
-			name:   "GroupAlreadyExists vs generic error",
-			err:    ErrIAMGroupAlreadyExists{},
 			target: errors.New("some error"),
 		},
 		{
@@ -1303,19 +1239,11 @@ func TestIAMErrorIsMethodsWithNonMatchingTypes(t *testing.T) {
 				if e.Is(tt.target) {
 					t.Error("expected Is() to return false for non-matching type")
 				}
-			case ErrIAMGroupNotFound:
-				if e.Is(tt.target) {
-					t.Error("expected Is() to return false for non-matching type")
-				}
 			case ErrIAMUserAlreadyExists:
 				if e.Is(tt.target) {
 					t.Error("expected Is() to return false for non-matching type")
 				}
 			case ErrIAMRoleAlreadyExists:
-				if e.Is(tt.target) {
-					t.Error("expected Is() to return false for non-matching type")
-				}
-			case ErrIAMGroupAlreadyExists:
 				if e.Is(tt.target) {
 					t.Error("expected Is() to return false for non-matching type")
 				}

@@ -398,14 +398,11 @@ func (c *Client) Tenant() (quicbaas.QRDBTenantClient, error) {
 // Service Registry
 // =============================================================================
 
-// Discovery returns the service-discovery registry: register, renew,
-// deregister, resolve and watch, built on QRDB leases, watches and KV.
-func (c *Client) Discovery() (*quicbaas.DiscoveryRegistry, error) {
-	discovery, err := c.sdk.Discovery()
-	if err != nil {
-		return nil, ErrServiceUnavailable{Service: "discovery", Cause: err}
-	}
-	return discovery, nil
+// Registry returns the service registry client: lease-based
+// service-instance endpoints (register, renew, deregister, resolve and
+// watch), scoped to the caller's authenticated tenant.
+func (c *Client) Registry() quicbaas.RegistryClient {
+	return c.sdk.Registry()
 }
 
 // DataStore returns a QRDB key-value store suitable for constructing DAOs.

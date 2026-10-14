@@ -42,3 +42,17 @@ func (e *WrappedError) Error() string {
 func (e *WrappedError) Unwrap() error {
 	return e.Err
 }
+
+// ErrPCRBoundSealUnavailable refuses a seal request that names PCRs. The
+// go-xkms release the platform builds against ignores a PCR selection that
+// comes without a policy digest: the object would be protected by its
+// password alone and unseal whatever the PCRs hold. Binding the object to the
+// PCRs needs the PolicyPCR digest or a named TPMPolicy, which go-quicbaas does
+// not re-export yet (go-quicbaas #1171). Until it does, the seal fails closed.
+type ErrPCRBoundSealUnavailable struct{}
+
+// Error implements the error interface.
+func (ErrPCRBoundSealUnavailable) Error() string {
+	return "PCR-bound sealing is unavailable until go-quicbaas re-exports the TPM PolicyPCR primitives (go-quicbaas #1171): " +
+		"the seal was refused rather than produce an object that is not bound to the PCRs"
+}

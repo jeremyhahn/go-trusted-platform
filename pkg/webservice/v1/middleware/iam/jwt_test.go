@@ -894,10 +894,12 @@ func TestJWTMiddleware_ExtractClaims(t *testing.T) {
 		}
 	})
 
-	t.Run("extracts_roles_and_groups", func(t *testing.T) {
+	// The OIDC "groups" claim carries role names; roles are read from "roles"
+	// and "groups" is a known claim, never surfaced as a custom one.
+	t.Run("extracts_roles_and_ignores_groups_claim", func(t *testing.T) {
 		claims := validClaims()
 		claims["roles"] = []interface{}{"admin", "user"}
-		claims["groups"] = []interface{}{"developers", "ops"}
+		claims["groups"] = []interface{}{"admin", "user"}
 		token := createRSAToken(claims, privateKey)
 
 		jwtClaims, err := middleware.validateToken(token)
@@ -911,8 +913,8 @@ func TestJWTMiddleware_ExtractClaims(t *testing.T) {
 		if jwtClaims.Roles[0] != "admin" || jwtClaims.Roles[1] != "user" {
 			t.Errorf("unexpected roles: %v", jwtClaims.Roles)
 		}
-		if len(jwtClaims.Groups) != 2 {
-			t.Errorf("expected 2 groups, got %d", len(jwtClaims.Groups))
+		if _, ok := jwtClaims.Custom["groups"]; ok {
+			t.Error("expected the groups claim not to be surfaced as a custom claim")
 		}
 	})
 

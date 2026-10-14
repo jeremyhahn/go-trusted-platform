@@ -166,7 +166,6 @@ func (s *LUKSGRPCService) EnrollTPM(ctx context.Context, req *platformv1.LUKSEnr
 		Device:             req.GetDevice(),
 		ExistingPassphrase: req.GetExistingPassphrase(),
 		PCRs:               req.GetPcrs(),
-		Handle:             req.GetHandle(),
 	}
 	out, err := s.service.EnrollTPM(ctx, in)
 	if err != nil {

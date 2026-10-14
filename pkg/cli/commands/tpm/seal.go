@@ -32,23 +32,18 @@ func newSealCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "seal",
 		Short: "Seal data to the TPM",
-		Long: `Seal data to the TPM as a keyed hash object.
+		Long: `Seal data to the TPM as a keyed hash object, protected by its password.
 
-The sealed data can only be unsealed when the TPM is in the same state
-(PCR values match) as when the data was sealed.
+PCR-bound sealing is unavailable: the daemon refuses a request with --pcrs
+until go-quicbaas re-exports the TPM policy primitives (go-quicbaas #1171).
+It never seals such a request as an object that ignores the PCRs.
 
 Examples:
-  # Seal a secret with a common name
-  platformctl tpm seal --cn my-secret --data "secret data"
-
   # Seal with password protection
   platformctl tpm seal --cn my-secret --data "secret" --password mypassword
 
-  # Seal with PCR policy (PCRs 0 and 7)
-  platformctl tpm seal --cn my-secret --data "secret" --pcrs 0,7
-
   # Overwrite existing sealed data
-  platformctl tpm seal --cn my-secret --data "new secret" --overwrite`,
+  platformctl tpm seal --cn my-secret --data "new secret" --password mypassword --overwrite`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := getFlags()
 			opts := &sealOptions{
@@ -70,7 +65,7 @@ Examples:
 	cmd.Flags().StringVar(&password, "password", "", "password for the sealed object")
 	cmd.Flags().Uint32Var(&parentHandle, "parent", 0x81000001, "parent SRK handle")
 	cmd.Flags().StringVar(&parentPassword, "parent-password", "", "parent key password")
-	cmd.Flags().IntSliceVar(&pcrIndices, "pcrs", nil, "PCR indices to bind to (comma-separated)")
+	cmd.Flags().IntSliceVar(&pcrIndices, "pcrs", nil, "PCR indices to bind to (comma-separated); refused until go-quicbaas #1171")
 	cmd.Flags().StringVar(&pcrBank, "pcr-bank", "sha256", "PCR bank algorithm (sha1, sha256, sha384, sha512)")
 	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "overwrite existing sealed data")
 

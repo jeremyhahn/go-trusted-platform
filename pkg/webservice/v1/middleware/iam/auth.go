@@ -356,7 +356,6 @@ func (m *AuthMiddleware) createSessionFromClaims(claims *JWTClaims, tenantID str
 		Email:       claims.Email,
 		DisplayName: claims.Name,
 		Roles:       claims.Roles,
-		Groups:      claims.Groups,
 	}
 
 	return NewIAMSessionWithMFA(user, claims.MFAVerified, claims.MFATimestamp)
@@ -386,36 +385,6 @@ func (m *AuthMiddleware) CreateSession(w http.ResponseWriter, r *http.Request) (
 
 // RequireRoles (ANY-of), RequireAllRoles (ALL-of) and RequireTenant are
 // promoted from the embedded *SessionGuard — see guard.go.
-
-// RequireGroups returns a middleware that requires membership in specific groups.
-func (m *AuthMiddleware) RequireGroups(groups ...string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			session, ok := GetSessionFromContext(r.Context())
-			if !ok {
-				m.responseWriter.Error401(w, r, ErrUnauthorized{Reason: "session required"})
-				return
-			}
-
-			hasGroup := false
-			for _, group := range groups {
-				if session.HasGroup(group) {
-					hasGroup = true
-					break
-				}
-			}
-
-			if !hasGroup {
-				m.responseWriter.Error403(w, r, ErrForbidden{
-					Reason: "required group membership not present",
-				}, nil)
-				return
-			}
-
-			next.ServeHTTP(w, r)
-		})
-	}
-}
 
 // RequireMFA returns a middleware that requires MFA verification.
 func (m *AuthMiddleware) RequireMFA() func(http.Handler) http.Handler {

@@ -53,7 +53,8 @@ import (
 //	0x54      scheduler category
 //	0x55      messaging category
 //	0x56-0x5F tpm2 (idevid)     0xB0-0xB4 sdn extended
-//	0x60-0x6A vm (0x69=ext cat) 0xB5-0xBF iam roles/groups
+//	0x60-0x6A vm (0x69=ext cat) 0xB5-0xBA iam roles
+//	                            0xBB-0xBF reserved (iam groups, removed)
 //	0x6B-0x6E tpm2 (iak ext)    0xC0-0xCB kms keys
 //	0x6F      container         0xCC-0xCF switch/kms-ext/secrets/prov cats
 //	0x70-0x7F attestation       0xD0-0xDA kms crypto
@@ -61,7 +62,8 @@ import (
 //	0x80-0x88 ca (certs)          (0xE7-0xE8 retired, reserved)
 //	                            0xEC-0xEF pxe
 //	0x89-0x8F daemon            0xF0-0xF5 reserved (DEK, unwired)
-//	                            0xF6-0xFB iam extended
+//	                            0xF6      reserved (iam groups, removed)
+//	                            0xF7-0xFB iam extended
 //	                            0xFC-0xFF pxe extended
 //
 // Constants whose byte is owned by another family at the top level
@@ -224,7 +226,8 @@ var quicWireOwners = []struct {
 	{0xA9, 0xAD, "iam"},
 	{0xAE, 0xAF, "container"},
 	{0xB0, 0xB4, "sdn"},
-	{0xB5, 0xBF, "iam"},
+	{0xB5, 0xBA, "iam"},
+	{0xBB, 0xBF, "reserved"},
 	{0xC0, 0xCB, "kms"},
 	{0xCC, 0xCC, "switch"},
 	{0xCD, 0xCD, "kms"},
@@ -236,7 +239,8 @@ var quicWireOwners = []struct {
 	{0xE9, 0xEB, "tenant"},
 	{0xEC, 0xEF, "pxe"},
 	{0xF0, 0xF5, "reserved"},
-	{0xF6, 0xFB, "iam"},
+	{0xF6, 0xF6, "reserved"},
+	{0xF7, 0xFB, "iam"},
 	{0xFC, 0xFF, "pxe"},
 }
 
@@ -490,15 +494,10 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpVMAttest":                  {value: quicwire.OpVMAttest, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
 	"OpIAMRoleRevoke":             {value: quicwire.OpIAMRoleRevoke, mode: wireDirect, family: "iam"},
 	"OpVMConsole":                 {value: quicwire.OpVMConsole, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
-	"OpIAMGroupCreate":            {value: quicwire.OpIAMGroupCreate, mode: wireDirect, family: "iam"},
 	"OpVMSnapshot":                {value: quicwire.OpVMSnapshot, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
-	"OpIAMGroupDelete":            {value: quicwire.OpIAMGroupDelete, mode: wireDirect, family: "iam"},
 	"OpVMSnapshotRestore":         {value: quicwire.OpVMSnapshotRestore, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
-	"OpIAMGroupGet":               {value: quicwire.OpIAMGroupGet, mode: wireDirect, family: "iam"},
 	"OpVMSnapshotDelete":          {value: quicwire.OpVMSnapshotDelete, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
-	"OpIAMGroupList":              {value: quicwire.OpIAMGroupList, mode: wireDirect, family: "iam"},
 	"OpVMSnapshotList":            {value: quicwire.OpVMSnapshotList, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
-	"OpIAMGroupAddMember":         {value: quicwire.OpIAMGroupAddMember, mode: wireDirect, family: "iam"},
 	"OpVMVerifyAttest":            {value: quicwire.OpVMVerifyAttest, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
 	"OpKMSGenerateKey":            {value: quicwire.OpKMSGenerateKey, mode: wireDirect, family: "kms"},
 	"OpKMSImportKey":              {value: quicwire.OpKMSImportKey, mode: wireDirect, family: "kms"},
@@ -556,7 +555,6 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpDEKDelete":                 {value: quicwire.OpDEKDelete, mode: reservedByte, family: "reserved"},
 	"OpDEKRotate":                 {value: quicwire.OpDEKRotate, mode: reservedByte, family: "reserved"},
 	"OpDEKGetStatus":              {value: quicwire.OpDEKGetStatus, mode: reservedByte, family: "reserved"},
-	"OpIAMGroupRemoveMember":      {value: quicwire.OpIAMGroupRemoveMember, mode: wireDirect, family: "iam"},
 	"OpIAMCheckPermission":        {value: quicwire.OpIAMCheckPermission, mode: wireDirect, family: "iam"},
 	"OpIAMAuthenticate":           {value: quicwire.OpIAMAuthenticate, mode: wireDirect, family: "iam"},
 	"OpIAMTokenCreate":            {value: quicwire.OpIAMTokenCreate, mode: wireDirect, family: "iam"},

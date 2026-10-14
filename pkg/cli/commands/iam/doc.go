@@ -14,7 +14,7 @@
 // Package iam provides CLI commands for Identity and Access Management operations.
 //
 // This package implements the platformctl CLI interface for the IAM subsystem,
-// providing comprehensive commands for managing users, groups, roles, tenants,
+// providing comprehensive commands for managing users, roles, tenants,
 // policies, and applications. Commands communicate with the platformd daemon
 // via the configured protocol (Unix socket, gRPC, REST, or QUIC).
 //
@@ -26,8 +26,7 @@
 //
 // Available resources:
 //
-//   - user: Manage users and their role/group assignments
-//   - group: Manage groups and membership
+//   - user: Manage users and their role assignments
 //   - role: Manage roles and permissions
 //   - tenant: Manage tenants (organizations)
 //   - policy: Manage authorization policies
@@ -44,18 +43,6 @@
 //	platformctl iam user delete <tenant> <user-id>
 //	platformctl iam user assign-role <tenant> <user-id> <role-id>
 //	platformctl iam user revoke-role <tenant> <user-id> <role-id>
-//
-// # Group Commands
-//
-// Group management operations:
-//
-//	platformctl iam group create --tenant <id> --name <name> [--description <desc>]
-//	platformctl iam group get <tenant> <group-id>
-//	platformctl iam group list --tenant <id>
-//	platformctl iam group update <tenant> <group-id> [--name <name>] [--description <desc>]
-//	platformctl iam group delete <tenant> <group-id>
-//	platformctl iam group add-member <tenant> <group-id> <user-id>
-//	platformctl iam group remove-member <tenant> <group-id> <user-id>
 //
 // # Role Commands
 //
@@ -139,7 +126,7 @@
 //
 //	# Create an admin role
 //	platformctl iam role create --tenant acme-corp --name admin \
-//	    --permissions "users:*,groups:*,roles:read"
+//	    --permissions "users:*,roles:read"
 //
 //	# Create a user and assign the admin role
 //	platformctl iam user create --tenant acme-corp --email admin@acme.com --name "Admin"

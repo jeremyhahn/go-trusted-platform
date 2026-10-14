@@ -979,26 +979,6 @@ func (e ErrIAMRoleAlreadyExists) Error() string {
 	return fmt.Sprintf("IAM role already exists: %s in tenant %s", e.RoleID, e.TenantID)
 }
 
-// ErrIAMGroupNotFound is returned when a group is not found
-type ErrIAMGroupNotFound struct {
-	TenantID string
-	GroupID  string
-}
-
-func (e ErrIAMGroupNotFound) Error() string {
-	return fmt.Sprintf("IAM group not found: %s in tenant %s", e.GroupID, e.TenantID)
-}
-
-// ErrIAMGroupAlreadyExists is returned when attempting to create a group that already exists
-type ErrIAMGroupAlreadyExists struct {
-	TenantID string
-	GroupID  string
-}
-
-func (e ErrIAMGroupAlreadyExists) Error() string {
-	return fmt.Sprintf("IAM group already exists: %s in tenant %s", e.GroupID, e.TenantID)
-}
-
 // ErrIAMTenantNotFound is returned when a tenant is not found
 type ErrIAMTenantNotFound struct {
 	TenantID string
@@ -1131,17 +1111,6 @@ type ErrIAMRoleRevocationFailed struct {
 
 func (e ErrIAMRoleRevocationFailed) Error() string {
 	return fmt.Sprintf("IAM failed to revoke role %s from user %s: %s", e.RoleID, e.UserID, e.Reason)
-}
-
-// ErrIAMGroupMembershipFailed is returned when group membership operation fails
-type ErrIAMGroupMembershipFailed struct {
-	GroupID string
-	UserID  string
-	Reason  string
-}
-
-func (e ErrIAMGroupMembershipFailed) Error() string {
-	return fmt.Sprintf("IAM group membership operation failed for user %s in group %s: %s", e.UserID, e.GroupID, e.Reason)
 }
 
 // ErrIAMTokenNotFound is returned when a token is not found

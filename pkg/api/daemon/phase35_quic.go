@@ -516,7 +516,7 @@ func (h *luksQUICHandlers) enrollTPM(ctx context.Context, payload []byte) *quicw
 		return &quicwire.Response{Status: quicwire.StatusInvalidRequest}
 	}
 	out, err := h.service.EnrollTPM(ctx, &LUKSEnrollTPMRequest{
-		Device: in.Device, ExistingPassphrase: in.ExistingPassphrase, PCRs: in.PCRs, Handle: in.Handle,
+		Device: in.Device, ExistingPassphrase: in.ExistingPassphrase, PCRs: in.PCRs,
 	})
 	if err != nil {
 		return errResponseFrom(err)

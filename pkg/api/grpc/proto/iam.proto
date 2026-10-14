@@ -27,15 +27,6 @@ service PlatformIAMService {
   rpc AssignRole(AssignIAMRoleRequest) returns (AssignIAMRoleResponse);
   rpc RevokeRole(RevokeIAMRoleRequest) returns (RevokeIAMRoleResponse);
 
-  // Group operations
-  rpc CreateGroup(CreateIAMGroupRequest) returns (IAMGroupResponse);
-  rpc GetGroup(GetIAMGroupRequest) returns (IAMGroupResponse);
-  rpc ListGroups(ListIAMGroupsRequest) returns (ListIAMGroupsResponse);
-  rpc UpdateGroup(UpdateIAMGroupRequest) returns (IAMGroupResponse);
-  rpc DeleteGroup(DeleteIAMGroupRequest) returns (DeleteIAMGroupResponse);
-  rpc AddGroupMember(AddGroupMemberRequest) returns (AddGroupMemberResponse);
-  rpc RemoveGroupMember(RemoveGroupMemberRequest) returns (RemoveGroupMemberResponse);
-
   // Authorization operations (passwordless - uses tokens/certificates)
   rpc CheckPermission(CheckIAMPermissionRequest) returns (CheckIAMPermissionResponse);
   rpc CreateToken(CreateIAMTokenRequest) returns (CreateIAMTokenResponse);
@@ -78,7 +69,9 @@ message IAMUser {
   string email = 3;
   string name = 4;
   repeated string roles = 5;
-  repeated string groups = 6;
+  // Groups were removed with quicbaas IAM groups; a role binding is the grouping.
+  reserved 6;
+  reserved "groups";
   map<string, string> attributes = 7;
   bool mfa_verified = 8;
   google.protobuf.Timestamp created_at = 9;
@@ -91,7 +84,8 @@ message CreateIAMUserRequest {
   string email = 2;
   string name = 3;
   repeated string roles = 4;
-  repeated string groups = 5;
+  reserved 5;
+  reserved "groups";
   map<string, string> attributes = 6;
 }
 
@@ -105,7 +99,8 @@ message ListIAMUsersRequest {
   PaginationRequest pagination = 2;
   string email_filter = 3;
   string role_filter = 4;
-  string group_filter = 5;
+  reserved 5;
+  reserved "group_filter";
 }
 
 message UpdateIAMUserRequest {
@@ -114,7 +109,8 @@ message UpdateIAMUserRequest {
   string email = 3;
   string name = 4;
   repeated string roles = 5;
-  repeated string groups = 6;
+  reserved 6;
+  reserved "groups";
   map<string, string> attributes = 7;
 }
 
@@ -221,89 +217,6 @@ message AssignIAMRoleResponse {
 }
 
 message RevokeIAMRoleResponse {
-  Status status = 1;
-  google.protobuf.Timestamp timestamp = 2;
-}
-
-// =============================================================================
-// Group Messages
-// =============================================================================
-
-// IAMGroup represents a group in the IAM system
-message IAMGroup {
-  string id = 1;
-  string tenant_id = 2;
-  string name = 3;
-  string description = 4;
-  repeated string members = 5;
-  google.protobuf.Timestamp created_at = 6;
-  google.protobuf.Timestamp updated_at = 7;
-}
-
-message CreateIAMGroupRequest {
-  string tenant_id = 1;
-  string id = 2;
-  string name = 3;
-  string description = 4;
-}
-
-message GetIAMGroupRequest {
-  string tenant_id = 1;
-  string group_id = 2;
-}
-
-message ListIAMGroupsRequest {
-  string tenant_id = 1;
-  PaginationRequest pagination = 2;
-}
-
-message UpdateIAMGroupRequest {
-  string tenant_id = 1;
-  string group_id = 2;
-  string name = 3;
-  string description = 4;
-}
-
-message DeleteIAMGroupRequest {
-  string tenant_id = 1;
-  string group_id = 2;
-}
-
-message AddGroupMemberRequest {
-  string tenant_id = 1;
-  string group_id = 2;
-  string user_id = 3;
-}
-
-message RemoveGroupMemberRequest {
-  string tenant_id = 1;
-  string group_id = 2;
-  string user_id = 3;
-}
-
-message IAMGroupResponse {
-  IAMGroup group = 1;
-  google.protobuf.Timestamp timestamp = 2;
-}
-
-message ListIAMGroupsResponse {
-  repeated IAMGroup groups = 1;
-  PaginationResponse pagination = 2;
-  int64 total = 3;
-  google.protobuf.Timestamp timestamp = 4;
-}
-
-message DeleteIAMGroupResponse {
-  Status status = 1;
-  google.protobuf.Timestamp timestamp = 2;
-}
-
-message AddGroupMemberResponse {
-  Status status = 1;
-  google.protobuf.Timestamp timestamp = 2;
-}
-
-message RemoveGroupMemberResponse {
   Status status = 1;
   google.protobuf.Timestamp timestamp = 2;
 }

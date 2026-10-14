@@ -289,6 +289,12 @@ JSON names. Over Unix, MCP and embedded the SDK refuses `Quote` with
 not touched; `VerifyQuote` works there. The
 cross-transport tests are `pkg/api/daemon/tpm_quote_transport_parity_test.go`.
 
+**Seal refuses `pcr_indices` on REST, gRPC, Unix and MCP.** PCR-bound sealing is
+unavailable until go-quicbaas re-exports the TPM PolicyPCR primitives
+(go-quicbaas #1171). Without them go-xkms would seal an object the PCRs do not
+protect, so `Seal` returns `FailedPrecondition`. Unseal is unchanged. The
+contract is in [engineering.md](engineering.md) §6.
+
 **There is no `platform_policy` field on `SealRequest` on any transport.**
 Sealing under the platform PCR policy is a server-side property of how the
 parent key was created, not a per-request option. The CLI's `--policy` flag has

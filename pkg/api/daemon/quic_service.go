@@ -698,10 +698,6 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 	case req.Opcode >= quicwire.OpIAMRoleCreate && req.Opcode <= quicwire.OpIAMRoleRevoke:
 		return h.handleIAMOperation(ctx, req)
 
-	// IAM Group Operations (0xBB-0xBF)
-	case req.Opcode >= quicwire.OpIAMGroupCreate && req.Opcode <= quicwire.OpIAMGroupAddMember:
-		return h.handleIAMOperation(ctx, req)
-
 	// Switch Management Category Opcode (0xCC)
 	case req.Opcode == quicwire.OpSwitchCategory:
 		return h.handleSwitchCategory(ctx, req)
@@ -767,8 +763,8 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 	case req.Opcode >= OpPXEListDevices && req.Opcode <= OpPXEUpdateState:
 		return h.handlePXEOperation(ctx, req)
 
-	// IAM Extended Operations (0xF6-0xFB) - GroupRemoveMember through TokenVerify
-	case req.Opcode >= quicwire.OpIAMGroupRemoveMember && req.Opcode <= quicwire.OpIAMTokenVerify:
+	// IAM Extended Operations (0xF7-0xFB) - CheckPermission through TokenVerify
+	case req.Opcode >= quicwire.OpIAMCheckPermission && req.Opcode <= quicwire.OpIAMTokenVerify:
 		return h.handleIAMOperation(ctx, req)
 
 	// PXE Extended Operations (0xFC-0xFF) - Authorize, Quarantine, Retry, RemoveDevice

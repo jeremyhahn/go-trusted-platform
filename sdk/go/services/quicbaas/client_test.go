@@ -38,7 +38,7 @@ type mockSDKClient struct {
 	sdlcClient         quicbaas.SDLCClient
 
 	ragClient quicbaas.RAGClient
-	discovery *quicbaas.DiscoveryRegistry
+	registry  quicbaas.RegistryClient
 	dataStore quicbaas.QRDBKVStore
 	qrdbErr   error
 
@@ -89,17 +89,16 @@ func (m *mockSDKClient) BarrierCeremonyMgmt() quicbaas.BarrierCeremonyService {
 func (m *mockSDKClient) TenantMgmtService() quicbaas.TenantService { return &m.tenantMgmt }
 
 // Backward-compatible service accessors.
-func (m *mockSDKClient) KV() quicbaas.KVClient                   { return m.kvClient }
-func (m *mockSDKClient) Batch() quicbaas.BatchClient             { return m.batchClient }
-func (m *mockSDKClient) Transaction() quicbaas.TransactionClient { return nil }
-func (m *mockSDKClient) Query() quicbaas.QueryClient             { return nil }
-func (m *mockSDKClient) Cluster() quicbaas.ClusterClient         { return nil }
-func (m *mockSDKClient) Health() quicbaas.HealthClient           { return nil }
-func (m *mockSDKClient) Operations() quicbaas.OperationsClient   { return nil }
-func (m *mockSDKClient) Cache() quicbaas.CacheClient             { return m.cacheClient }
-func (m *mockSDKClient) Discovery() (*quicbaas.DiscoveryRegistry, error) {
-	return m.discovery, m.qrdbErr
-}
+func (m *mockSDKClient) KV() quicbaas.KVClient                                 { return m.kvClient }
+func (m *mockSDKClient) Batch() quicbaas.BatchClient                           { return m.batchClient }
+func (m *mockSDKClient) Transaction() quicbaas.TransactionClient               { return nil }
+func (m *mockSDKClient) Query() quicbaas.QueryClient                           { return nil }
+func (m *mockSDKClient) Cluster() quicbaas.ClusterClient                       { return nil }
+func (m *mockSDKClient) Health() quicbaas.HealthClient                         { return nil }
+func (m *mockSDKClient) Operations() quicbaas.OperationsClient                 { return nil }
+func (m *mockSDKClient) Cache() quicbaas.CacheClient                           { return m.cacheClient }
+func (m *mockSDKClient) Agents() quicbaas.AgentsClient                         { return nil }
+func (m *mockSDKClient) Registry() quicbaas.RegistryClient                     { return m.registry }
 func (m *mockSDKClient) IAM() quicbaas.IAMClient                               { return nil }
 func (m *mockSDKClient) Vector() quicbaas.VectorClient                         { return m.vectorClient }
 func (m *mockSDKClient) TimeSeries() quicbaas.TimeSeriesClient                 { return m.timeSeriesClient }
@@ -231,6 +230,7 @@ func (s *mockTenantService) Tenant() (quicbaas.QRDBTenantClient, error) { return
 // Distinct non-nil clients for the AI, ceremony management, tenant management
 // and service registry accessors.
 type stubRAGClient struct{ quicbaas.RAGClient }
+type stubRegistryClient struct{ quicbaas.RegistryClient }
 type stubCustodianGroupClient struct {
 	quicbaas.QRDBCustodianGroupClient
 }
@@ -679,13 +679,13 @@ func TestClient_ManagementAccessors(t *testing.T) {
 	custodianGroup := &stubCustodianGroupClient{}
 	share := &stubShareClient{}
 	tenant := &stubTenantClient{}
-	discovery := &quicbaas.DiscoveryRegistry{}
+	registry := &stubRegistryClient{}
 	dataStore := &stubKVStore{}
 	mockSDK := newMockSDKClient()
 	mockSDK.ragClient = rag
 	mockSDK.ceremonyMgmt = mockBarrierCeremonyService{custodianGroup: custodianGroup, share: share}
 	mockSDK.tenantMgmt = mockTenantService{tenant: tenant}
-	mockSDK.discovery = discovery
+	mockSDK.registry = registry
 	mockSDK.dataStore = dataStore
 
 	client, err := NewClientFromSDK(mockSDK)
@@ -708,9 +708,8 @@ func TestClient_ManagementAccessors(t *testing.T) {
 	if err != nil || gotTenant != tenant {
 		t.Errorf("Tenant() = %v, %v; want the SDK's tenant client", gotTenant, err)
 	}
-	gotDiscovery, err := client.Discovery()
-	if err != nil || gotDiscovery != discovery {
-		t.Errorf("Discovery() = %v, %v; want the SDK's discovery registry", gotDiscovery, err)
+	if got := client.Registry(); got != registry {
+		t.Errorf("Registry() = %v, want the SDK's registry client", got)
 	}
 	gotDataStore, err := client.DataStore()
 	if err != nil || gotDataStore != dataStore {
@@ -735,6 +734,9 @@ func TestClient_ManagementAccessors_ServiceUnavailable(t *testing.T) {
 	if got := client.RAG(); got != nil {
 		t.Errorf("RAG() = %v, want nil", got)
 	}
+	if got := client.Registry(); got != nil {
+		t.Errorf("Registry() = %v, want nil", got)
+	}
 
 	tests := []struct {
 		service  string
@@ -743,13 +745,6 @@ func TestClient_ManagementAccessors_ServiceUnavailable(t *testing.T) {
 		{"custodian group", func() (interface{}, error) { return client.CustodianGroup() }},
 		{"share", func() (interface{}, error) { return client.Share() }},
 		{"tenant", func() (interface{}, error) { return client.Tenant() }},
-		{"discovery", func() (interface{}, error) {
-			registry, err := client.Discovery()
-			if registry == nil {
-				return nil, err
-			}
-			return registry, err
-		}},
 		{"data store", func() (interface{}, error) { return client.DataStore() }},
 	}
 	for _, tt := range tests {

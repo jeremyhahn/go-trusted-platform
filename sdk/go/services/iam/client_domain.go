@@ -27,13 +27,12 @@ import (
 // User Domain Methods
 
 // CreateUserDomain creates a new user and returns domain types.
-func (c *Client) CreateUserDomain(ctx context.Context, tenantID, email, name string, roles, groups []string, attributes map[string]string) (*User, error) {
+func (c *Client) CreateUserDomain(ctx context.Context, tenantID, email, name string, roles []string, attributes map[string]string) (*User, error) {
 	resp, err := c.grpc.CreateUser(ctx, &platformv1.CreateIAMUserRequest{
 		TenantId:   tenantID,
 		Email:      email,
 		Name:       name,
 		Roles:      roles,
-		Groups:     groups,
 		Attributes: attributes,
 	})
 	if err != nil {
@@ -77,14 +76,13 @@ func (c *Client) ListUsersDomain(ctx context.Context, tenantID string, page, pag
 }
 
 // UpdateUserDomain updates a user and returns domain types.
-func (c *Client) UpdateUserDomain(ctx context.Context, tenantID, userID, email, name string, roles, groups []string, attributes map[string]string) (*User, error) {
+func (c *Client) UpdateUserDomain(ctx context.Context, tenantID, userID, email, name string, roles []string, attributes map[string]string) (*User, error) {
 	resp, err := c.grpc.UpdateUser(ctx, &platformv1.UpdateIAMUserRequest{
 		TenantId:   tenantID,
 		UserId:     userID,
 		Email:      email,
 		Name:       name,
 		Roles:      roles,
-		Groups:     groups,
 		Attributes: attributes,
 	})
 	if err != nil {
@@ -127,82 +125,6 @@ func (c *Client) RevokeRoleDomain(ctx context.Context, tenantID, userID, roleID 
 	})
 	if err != nil {
 		return nil, &ErrRevokeRoleFailed{UserID: userID, RoleID: roleID, Cause: err}
-	}
-	return StatusFromProto(resp.Status), nil
-}
-
-// Group Domain Methods
-
-// CreateGroupDomain creates a new group and returns domain types.
-func (c *Client) CreateGroupDomain(ctx context.Context, tenantID, groupID, name, description string) (*Group, error) {
-	resp, err := c.grpc.CreateGroup(ctx, &platformv1.CreateIAMGroupRequest{
-		TenantId:    tenantID,
-		Id:          groupID,
-		Name:        name,
-		Description: description,
-	})
-	if err != nil {
-		return nil, &ErrCreateGroupFailed{Cause: err}
-	}
-	return GroupFromProto(resp.Group), nil
-}
-
-// GetGroupDomain retrieves a group and returns domain types.
-func (c *Client) GetGroupDomain(ctx context.Context, tenantID, groupID string) (*Group, error) {
-	resp, err := c.grpc.GetGroup(ctx, &platformv1.GetIAMGroupRequest{
-		TenantId: tenantID,
-		GroupId:  groupID,
-	})
-	if err != nil {
-		return nil, &ErrGetGroupFailed{ID: groupID, Cause: err}
-	}
-	return GroupFromProto(resp.Group), nil
-}
-
-// ListGroupsDomain lists groups and returns domain types.
-func (c *Client) ListGroupsDomain(ctx context.Context, tenantID string, page, pageSize uint32) (*ListGroupsResult, error) {
-	resp, err := c.grpc.ListGroups(ctx, &platformv1.ListIAMGroupsRequest{
-		TenantId: tenantID,
-		Pagination: &platformv1.PaginationRequest{
-			Page:     page,
-			PageSize: pageSize,
-		},
-	})
-	if err != nil {
-		return nil, &ErrListGroupsFailed{Cause: err}
-	}
-	result := &ListGroupsResult{Total: uint64(resp.Total)}
-	if len(resp.Groups) > 0 {
-		result.Groups = make([]*Group, len(resp.Groups))
-		for i, g := range resp.Groups {
-			result.Groups[i] = GroupFromProto(g)
-		}
-	}
-	return result, nil
-}
-
-// UpdateGroupDomain updates a group and returns domain types.
-func (c *Client) UpdateGroupDomain(ctx context.Context, tenantID, groupID, name, description string) (*Group, error) {
-	resp, err := c.grpc.UpdateGroup(ctx, &platformv1.UpdateIAMGroupRequest{
-		TenantId:    tenantID,
-		GroupId:     groupID,
-		Name:        name,
-		Description: description,
-	})
-	if err != nil {
-		return nil, &ErrUpdateGroupFailed{ID: groupID, Cause: err}
-	}
-	return GroupFromProto(resp.Group), nil
-}
-
-// DeleteGroupDomain deletes a group and returns the operation status.
-func (c *Client) DeleteGroupDomain(ctx context.Context, tenantID, groupID string) (*OperationStatus, error) {
-	resp, err := c.grpc.DeleteGroup(ctx, &platformv1.DeleteIAMGroupRequest{
-		TenantId: tenantID,
-		GroupId:  groupID,
-	})
-	if err != nil {
-		return nil, &ErrDeleteGroupFailed{ID: groupID, Cause: err}
 	}
 	return StatusFromProto(resp.Status), nil
 }

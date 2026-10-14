@@ -68,20 +68,6 @@ func (e ErrMissingRoleName) Error() string {
 	return "role name is required"
 }
 
-// ErrMissingGroupID is returned when group ID is required but not provided.
-type ErrMissingGroupID struct{}
-
-func (e ErrMissingGroupID) Error() string {
-	return "group ID is required"
-}
-
-// ErrMissingGroupName is returned when group name is required but not provided.
-type ErrMissingGroupName struct{}
-
-func (e ErrMissingGroupName) Error() string {
-	return "group name is required"
-}
-
 // ErrMissingSubjectID is returned when subject ID is required but not provided.
 type ErrMissingSubjectID struct{}
 
@@ -305,7 +291,6 @@ func (s *IAMGRPCService) UpdateUser(
 		Email:      req.GetEmail(),
 		Name:       req.GetName(),
 		Roles:      req.GetRoles(),
-		Groups:     req.GetGroups(),
 		Attributes: req.GetAttributes(),
 	}
 
@@ -610,265 +595,6 @@ func (s *IAMGRPCService) RevokeRole(
 
 	return &platformv1.RevokeIAMRoleResponse{
 		Status:    iamSuccessStatus("role revoked successfully"),
-		Timestamp: timestamppb.Now(),
-	}, nil
-}
-
-// =============================================================================
-// Group Operations
-// =============================================================================
-
-// CreateGroup creates a new group.
-func (s *IAMGRPCService) CreateGroup(
-	ctx context.Context,
-	req *platformv1.CreateIAMGroupRequest,
-) (*platformv1.IAMGroupResponse, error) {
-
-	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrNilIAMService{}.Error())
-	}
-
-	if req.GetTenantId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrMissingTenantID{}.Error())
-	}
-
-	if req.GetName() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrMissingGroupName{}.Error())
-	}
-
-	iamReq := &IAMCreateGroupRequest{
-		TenantID:    req.GetTenantId(),
-		GroupID:     req.GetId(),
-		Name:        req.GetName(),
-		Description: req.GetDescription(),
-	}
-
-	resp, err := s.service.CreateGroup(ctx, iamReq)
-	if err != nil {
-		return nil, s.mapError("CreateGroup", err)
-	}
-
-	return &platformv1.IAMGroupResponse{
-		Group:     iamGroupToProto(resp),
-		Timestamp: timestamppb.Now(),
-	}, nil
-}
-
-// GetGroup retrieves a group by ID.
-func (s *IAMGRPCService) GetGroup(
-	ctx context.Context,
-	req *platformv1.GetIAMGroupRequest,
-) (*platformv1.IAMGroupResponse, error) {
-
-	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrNilIAMService{}.Error())
-	}
-
-	if req.GetTenantId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrMissingTenantID{}.Error())
-	}
-
-	if req.GetGroupId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrMissingGroupID{}.Error())
-	}
-
-	iamReq := &IAMGetGroupRequest{
-		TenantID: req.GetTenantId(),
-		GroupID:  req.GetGroupId(),
-	}
-
-	resp, err := s.service.GetGroup(ctx, iamReq)
-	if err != nil {
-		return nil, s.mapError("GetGroup", err)
-	}
-
-	return &platformv1.IAMGroupResponse{
-		Group:     iamGroupToProto(resp),
-		Timestamp: timestamppb.Now(),
-	}, nil
-}
-
-// ListGroups returns a paginated list of groups.
-func (s *IAMGRPCService) ListGroups(
-	ctx context.Context,
-	req *platformv1.ListIAMGroupsRequest,
-) (*platformv1.ListIAMGroupsResponse, error) {
-
-	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrNilIAMService{}.Error())
-	}
-
-	if req.GetTenantId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrMissingTenantID{}.Error())
-	}
-
-	iamReq := &IAMListRequest{
-		TenantID: req.GetTenantId(),
-		Limit:    int(req.GetPagination().GetPageSize()),
-		Offset:   int(req.GetPagination().GetPage()) * int(req.GetPagination().GetPageSize()),
-	}
-
-	resp, err := s.service.ListGroups(ctx, iamReq)
-	if err != nil {
-		return nil, s.mapError("ListGroups", err)
-	}
-
-	groups := make([]*platformv1.IAMGroup, 0, len(resp.Groups))
-	for _, g := range resp.Groups {
-		groups = append(groups, iamGroupToProto(g))
-	}
-
-	return &platformv1.ListIAMGroupsResponse{
-		Groups: groups,
-		Pagination: &platformv1.PaginationResponse{
-			TotalItems: uint64(resp.Total),
-		},
-		Total:     int64(resp.Total),
-		Timestamp: timestamppb.Now(),
-	}, nil
-}
-
-// UpdateGroup updates an existing group.
-func (s *IAMGRPCService) UpdateGroup(
-	ctx context.Context,
-	req *platformv1.UpdateIAMGroupRequest,
-) (*platformv1.IAMGroupResponse, error) {
-
-	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrNilIAMService{}.Error())
-	}
-
-	if req.GetTenantId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrMissingTenantID{}.Error())
-	}
-
-	if req.GetGroupId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrMissingGroupID{}.Error())
-	}
-
-	iamReq := &IAMUpdateGroupRequest{
-		TenantID:    req.GetTenantId(),
-		GroupID:     req.GetGroupId(),
-		Name:        req.GetName(),
-		Description: req.GetDescription(),
-	}
-
-	resp, err := s.service.UpdateGroup(ctx, iamReq)
-	if err != nil {
-		return nil, s.mapError("UpdateGroup", err)
-	}
-
-	return &platformv1.IAMGroupResponse{
-		Group:     iamGroupToProto(resp),
-		Timestamp: timestamppb.Now(),
-	}, nil
-}
-
-// DeleteGroup deletes a group.
-func (s *IAMGRPCService) DeleteGroup(
-	ctx context.Context,
-	req *platformv1.DeleteIAMGroupRequest,
-) (*platformv1.DeleteIAMGroupResponse, error) {
-
-	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrNilIAMService{}.Error())
-	}
-
-	if req.GetTenantId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrMissingTenantID{}.Error())
-	}
-
-	if req.GetGroupId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrMissingGroupID{}.Error())
-	}
-
-	iamReq := &IAMDeleteGroupRequest{
-		TenantID: req.GetTenantId(),
-		GroupID:  req.GetGroupId(),
-	}
-
-	if err := s.service.DeleteGroup(ctx, iamReq); err != nil {
-		return nil, s.mapError("DeleteGroup", err)
-	}
-
-	return &platformv1.DeleteIAMGroupResponse{
-		Status:    iamSuccessStatus("group deleted successfully"),
-		Timestamp: timestamppb.Now(),
-	}, nil
-}
-
-// AddGroupMember adds a user to a group.
-func (s *IAMGRPCService) AddGroupMember(
-	ctx context.Context,
-	req *platformv1.AddGroupMemberRequest,
-) (*platformv1.AddGroupMemberResponse, error) {
-
-	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrNilIAMService{}.Error())
-	}
-
-	if req.GetTenantId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrMissingTenantID{}.Error())
-	}
-
-	if req.GetGroupId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrMissingGroupID{}.Error())
-	}
-
-	if req.GetUserId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrMissingUserID{}.Error())
-	}
-
-	iamReq := &IAMGroupMemberRequest{
-		TenantID: req.GetTenantId(),
-		GroupID:  req.GetGroupId(),
-		UserID:   req.GetUserId(),
-	}
-
-	if err := s.service.AddGroupMember(ctx, iamReq); err != nil {
-		return nil, s.mapError("AddGroupMember", err)
-	}
-
-	return &platformv1.AddGroupMemberResponse{
-		Status:    iamSuccessStatus("member added successfully"),
-		Timestamp: timestamppb.Now(),
-	}, nil
-}
-
-// RemoveGroupMember removes a user from a group.
-func (s *IAMGRPCService) RemoveGroupMember(
-	ctx context.Context,
-	req *platformv1.RemoveGroupMemberRequest,
-) (*platformv1.RemoveGroupMemberResponse, error) {
-
-	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrNilIAMService{}.Error())
-	}
-
-	if req.GetTenantId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrMissingTenantID{}.Error())
-	}
-
-	if req.GetGroupId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrMissingGroupID{}.Error())
-	}
-
-	if req.GetUserId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrMissingUserID{}.Error())
-	}
-
-	iamReq := &IAMGroupMemberRequest{
-		TenantID: req.GetTenantId(),
-		GroupID:  req.GetGroupId(),
-		UserID:   req.GetUserId(),
-	}
-
-	if err := s.service.RemoveGroupMember(ctx, iamReq); err != nil {
-		return nil, s.mapError("RemoveGroupMember", err)
-	}
-
-	return &platformv1.RemoveGroupMemberResponse{
-		Status:    iamSuccessStatus("member removed successfully"),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1498,7 +1224,6 @@ func iamUserToProto(user *IAMUserResponse) *platformv1.IAMUser {
 		Email:      user.Email,
 		Name:       user.Name,
 		Roles:      user.Roles,
-		Groups:     user.Groups,
 		Attributes: user.Attributes,
 		CreatedAt:  timestamppb.New(time.Unix(user.CreatedAt, 0)),
 		UpdatedAt:  timestamppb.New(time.Unix(user.UpdatedAt, 0)),
@@ -1517,21 +1242,6 @@ func iamRoleToProto(role *IAMRoleResponse) *platformv1.IAMRole {
 		Permissions: role.Permissions,
 		CreatedAt:   timestamppb.New(time.Unix(role.CreatedAt, 0)),
 		UpdatedAt:   timestamppb.New(time.Unix(role.UpdatedAt, 0)),
-	}
-}
-
-func iamGroupToProto(group *IAMGroupResponse) *platformv1.IAMGroup {
-	if group == nil {
-		return nil
-	}
-	return &platformv1.IAMGroup{
-		Id:          group.ID,
-		TenantId:    group.TenantID,
-		Name:        group.Name,
-		Description: group.Description,
-		Members:     group.Members,
-		CreatedAt:   timestamppb.New(time.Unix(group.CreatedAt, 0)),
-		UpdatedAt:   timestamppb.New(time.Unix(group.UpdatedAt, 0)),
 	}
 }
 
@@ -1556,8 +1266,6 @@ func (s *IAMGRPCService) mapError(operation string, err error) error {
 	case ErrIAMEmailRequired:
 		return status.Error(codes.InvalidArgument, e.Error())
 	case ErrIAMRoleIDRequired:
-		return status.Error(codes.InvalidArgument, e.Error())
-	case ErrIAMGroupIDRequired:
 		return status.Error(codes.InvalidArgument, e.Error())
 	case ErrIAMNameRequired:
 		return status.Error(codes.InvalidArgument, e.Error())

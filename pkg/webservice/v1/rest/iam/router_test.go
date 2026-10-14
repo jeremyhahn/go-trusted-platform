@@ -77,15 +77,6 @@ func TestRegisterRoutes(t *testing.T) {
 		{"assign role", http.MethodPost, "/api/v1/iam/tenants/tenant-1/users/user-123/roles/admin"},
 		{"revoke role", http.MethodDelete, "/api/v1/iam/tenants/tenant-1/users/user-123/roles/admin"},
 
-		// Group routes
-		{"create group", http.MethodPost, "/api/v1/iam/tenants/tenant-1/groups"},
-		{"list groups", http.MethodGet, "/api/v1/iam/tenants/tenant-1/groups"},
-		{"get group", http.MethodGet, "/api/v1/iam/tenants/tenant-1/groups/group-1"},
-		{"update group", http.MethodPut, "/api/v1/iam/tenants/tenant-1/groups/group-1"},
-		{"delete group", http.MethodDelete, "/api/v1/iam/tenants/tenant-1/groups/group-1"},
-		{"add member", http.MethodPost, "/api/v1/iam/tenants/tenant-1/groups/group-1/members/user-123"},
-		{"remove member", http.MethodDelete, "/api/v1/iam/tenants/tenant-1/groups/group-1/members/user-123"},
-
 		// Role routes
 		{"create role", http.MethodPost, "/api/v1/iam/tenants/tenant-1/roles"},
 		{"list roles", http.MethodGet, "/api/v1/iam/tenants/tenant-1/roles"},
@@ -209,7 +200,9 @@ func TestUserRoutes_Registration(t *testing.T) {
 	}
 }
 
-func TestGroupRoutes_Registration(t *testing.T) {
+// quicbaas keeps no groups (a role binding is the grouping it offers), so the
+// group routes must stay gone rather than answer with a dead handler.
+func TestGroupRoutes_NotRegistered(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
 	iamClient := &mockIAMClient{}
 	pepClient := &mockPEPClient{}
@@ -220,35 +213,22 @@ func TestGroupRoutes_Registration(t *testing.T) {
 
 	iamRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 
-	tests := []struct {
-		method       string
-		path         string
-		expectedVars map[string]string
+	paths := []struct {
+		method string
+		path   string
 	}{
-		{
-			method:       http.MethodGet,
-			path:         "/api/v1/iam/tenants/acme/groups/engineering",
-			expectedVars: map[string]string{"tenant": "acme", "id": "engineering"},
-		},
-		{
-			method:       http.MethodPost,
-			path:         "/api/v1/iam/tenants/tenant-1/groups/dev-team/members/user-123",
-			expectedVars: map[string]string{"tenant": "tenant-1", "id": "dev-team", "user": "user-123"},
-		},
+		{http.MethodGet, "/api/v1/iam/tenants/acme/groups"},
+		{http.MethodGet, "/api/v1/iam/tenants/acme/groups/engineering"},
+		{http.MethodPost, "/api/v1/iam/tenants/acme/groups/dev-team/members/user-123"},
+		{http.MethodGet, "/api/v1/iam/groups"},
+		{http.MethodPost, "/api/v1/iam/groups/dev-team/members/user-123"},
 	}
 
-	for _, tt := range tests {
+	for _, tt := range paths {
 		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
 			req := httptest.NewRequest(tt.method, tt.path, nil)
 			var match mux.RouteMatch
-			matched := router.Match(req, &match)
-			require.True(t, matched)
-
-			for key, expectedVal := range tt.expectedVars {
-				actualVal, ok := match.Vars[key]
-				assert.True(t, ok, "expected var %s to be present", key)
-				assert.Equal(t, expectedVal, actualVal)
-			}
+			assert.False(t, router.Match(req, &match), "group route %s must not be registered", tt.path)
 		})
 	}
 }
@@ -890,5 +870,5 @@ func TestRegisterRoutes_EveryTenantScopedRouteIsGuarded(t *testing.T) {
 	assert.GreaterOrEqual(t, tenantScopedSeen, 20,
 		"expected the tenant-scoped collections to be walked")
 	assert.Equal(t, 3, recordSeen, "expected the three tenant-record routes")
-	assert.GreaterOrEqual(t, flatSeen, 30, "expected the flat collections to be walked")
+	assert.GreaterOrEqual(t, flatSeen, 25, "expected the flat collections to be walked")
 }

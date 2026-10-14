@@ -472,27 +472,6 @@ func registerIAMHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.PlatformIAMService_RevokeRole_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.RevokeRole(ctx, req.(*platformv1.RevokeIAMRoleRequest))
 	}
-	m[platformv1.PlatformIAMService_CreateGroup_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
-		return svc.CreateGroup(ctx, req.(*platformv1.CreateIAMGroupRequest))
-	}
-	m[platformv1.PlatformIAMService_GetGroup_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
-		return svc.GetGroup(ctx, req.(*platformv1.GetIAMGroupRequest))
-	}
-	m[platformv1.PlatformIAMService_ListGroups_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
-		return svc.ListGroups(ctx, req.(*platformv1.ListIAMGroupsRequest))
-	}
-	m[platformv1.PlatformIAMService_UpdateGroup_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
-		return svc.UpdateGroup(ctx, req.(*platformv1.UpdateIAMGroupRequest))
-	}
-	m[platformv1.PlatformIAMService_DeleteGroup_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
-		return svc.DeleteGroup(ctx, req.(*platformv1.DeleteIAMGroupRequest))
-	}
-	m[platformv1.PlatformIAMService_AddGroupMember_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
-		return svc.AddGroupMember(ctx, req.(*platformv1.AddGroupMemberRequest))
-	}
-	m[platformv1.PlatformIAMService_RemoveGroupMember_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
-		return svc.RemoveGroupMember(ctx, req.(*platformv1.RemoveGroupMemberRequest))
-	}
 	m[platformv1.PlatformIAMService_CheckPermission_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.CheckPermission(ctx, req.(*platformv1.CheckIAMPermissionRequest))
 	}

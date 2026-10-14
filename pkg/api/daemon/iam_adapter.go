@@ -104,38 +104,6 @@ func (a *IAMServiceClientAdapter) ListUsers(ctx context.Context, in *iampb.ListU
 }
 
 // =============================================================================
-// Group Operations
-// =============================================================================
-
-func (a *IAMServiceClientAdapter) CreateGroup(ctx context.Context, in *iampb.CreateGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error) {
-	return a.server.CreateGroup(ctx, in)
-}
-
-func (a *IAMServiceClientAdapter) GetGroup(ctx context.Context, in *iampb.GetGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error) {
-	return a.server.GetGroup(ctx, in)
-}
-
-func (a *IAMServiceClientAdapter) UpdateGroup(ctx context.Context, in *iampb.UpdateGroupRequest, opts ...grpc.CallOption) (*iampb.Group, error) {
-	return a.server.UpdateGroup(ctx, in)
-}
-
-func (a *IAMServiceClientAdapter) DeleteGroup(ctx context.Context, in *iampb.DeleteGroupRequest, opts ...grpc.CallOption) (*iampb.DeleteGroupResponse, error) {
-	return a.server.DeleteGroup(ctx, in)
-}
-
-func (a *IAMServiceClientAdapter) ListGroups(ctx context.Context, in *iampb.ListGroupsRequest, opts ...grpc.CallOption) (*iampb.ListGroupsResponse, error) {
-	return a.server.ListGroups(ctx, in)
-}
-
-func (a *IAMServiceClientAdapter) AddUserToGroup(ctx context.Context, in *iampb.AddUserToGroupRequest, opts ...grpc.CallOption) (*iampb.AddUserToGroupResponse, error) {
-	return a.server.AddUserToGroup(ctx, in)
-}
-
-func (a *IAMServiceClientAdapter) RemoveUserFromGroup(ctx context.Context, in *iampb.RemoveUserFromGroupRequest, opts ...grpc.CallOption) (*iampb.RemoveUserFromGroupResponse, error) {
-	return a.server.RemoveUserFromGroup(ctx, in)
-}
-
-// =============================================================================
 // Role Operations
 // =============================================================================
 

@@ -170,8 +170,8 @@ func TestTLSConfig_Embedded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tlsCfg.MinVersion != tls.VersionTLS12 {
-		t.Errorf("expected TLS 1.2 minimum, got %d", tlsCfg.MinVersion)
+	if tlsCfg.MinVersion != tls.VersionTLS13 {
+		t.Errorf("expected TLS 1.3 minimum, got %d", tlsCfg.MinVersion)
 	}
 	if tlsCfg.RootCAs != nil {
 		t.Error("expected nil RootCAs (system trust store)")

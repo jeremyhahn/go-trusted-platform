@@ -32,7 +32,6 @@ func UserFromProto(p *platformv1.IAMUser) *User {
 		Email:       p.Email,
 		Name:        p.Name,
 		Roles:       p.Roles,
-		Groups:      p.Groups,
 		Attributes:  p.Attributes,
 		MfaVerified: p.MfaVerified,
 		CreatedAt:   timestampToTime(p.CreatedAt),
@@ -46,26 +45,6 @@ func UserFromProto(p *platformv1.IAMUser) *User {
 		u.LastAuth = &t
 	}
 	return u
-}
-
-// GroupFromProto converts a platformv1.IAMGroup to a domain Group.
-func GroupFromProto(p *platformv1.IAMGroup) *Group {
-	if p == nil {
-		return nil
-	}
-	g := &Group{
-		ID:          p.Id,
-		TenantID:    p.TenantId,
-		Name:        p.Name,
-		Description: p.Description,
-		Members:     p.Members,
-		CreatedAt:   timestampToTime(p.CreatedAt),
-	}
-	if p.UpdatedAt != nil {
-		t := p.UpdatedAt.AsTime()
-		g.UpdatedAt = &t
-	}
-	return g
 }
 
 // RoleFromProto converts a platformv1.IAMRole to a domain Role.

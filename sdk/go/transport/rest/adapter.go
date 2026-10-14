@@ -1044,45 +1044,29 @@ var templatedRouteTable = map[string]templatedRoute{
 	"/platform.v1.PlatformIAMService/GetRole": tenantItemRoute("/api/v1/iam/tenants/{tenant}/roles/{id}", http.MethodGet,
 		pathParam{placeholder: "{id}", field: "role_id"}),
 
-	// GET /api/v1/iam/tenants/{tenant}/groups/{id} -- registerGroupRoutes.
-	"/platform.v1.PlatformIAMService/GetGroup": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}", http.MethodGet,
-		pathParam{placeholder: "{id}", field: "group_id"}),
-
 	// GET /api/v1/iam/tenants/{tenant} -- router.go:208. The server names this
 	// segment {tenant}, not {id}, and the request has only tenant_id.
 	"/platform.v1.PlatformIAMService/GetTenant": itemRoute("/api/v1/iam/tenants/{tenant}", http.MethodGet, "{tenant}", "tenant_id"),
 
-	// DELETE /api/v1/iam/tenants/{tenant}/groups/{id}/members/{user}.
-	// The flat row sent DELETE /api/v1/iam/groups/members, and the server
-	// routed that to DELETE /groups/{id} with id="members": a DeleteGroup on
-	// whatever group carries that name, not a membership removal (#415).
-	// RemoveGroupMemberRequest carries tenant_id, group_id and user_id; all
-	// three travel in the path.
-	"/platform.v1.PlatformIAMService/RemoveGroupMember": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}/members/{user}", http.MethodDelete,
-		pathParam{placeholder: "{id}", field: "group_id"}, pathParam{placeholder: "{user}", field: "user_id"}),
-
-	// The seven item operations #416 repairs (#379's shape on the mutating
-	// verbs, found by #400's fixture). Each sent a collection path the server
-	// does not serve for that verb; the server's routes are the item paths
-	// below (pkg/webservice/v1/rest/iam/router.go), and the identifiers
-	// travel in the path, never the body. All but DeleteTenant are on the
-	// tenant-scoped tree for the reason given at GetUser (#401).
+	// The item operations #416 repairs (#379's shape on the mutating verbs,
+	// found by #400's fixture), less its two group rows, which left with IAM
+	// groups (removed upstream). Each sent a collection path the server does
+	// not serve for that verb; the server's routes are the item paths below
+	// (pkg/webservice/v1/rest/iam/router.go), and the identifiers travel in
+	// the path, never the body. All but DeleteTenant are on the tenant-scoped
+	// tree for the reason given at GetUser (#401).
 	"/platform.v1.PlatformIAMService/DeleteUser": tenantItemRoute("/api/v1/iam/tenants/{tenant}/users/{id}", http.MethodDelete,
 		pathParam{placeholder: "{id}", field: "user_id"}),
 	"/platform.v1.PlatformIAMService/DeleteRole": tenantItemRoute("/api/v1/iam/tenants/{tenant}/roles/{id}", http.MethodDelete,
 		pathParam{placeholder: "{id}", field: "role_id"}),
-	"/platform.v1.PlatformIAMService/DeleteGroup": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}", http.MethodDelete,
-		pathParam{placeholder: "{id}", field: "group_id"}),
 	"/platform.v1.PlatformIAMService/DeleteTenant": itemRoute("/api/v1/iam/tenants/{tenant}", http.MethodDelete, "{tenant}", "tenant_id"),
 	"/platform.v1.PlatformIAMService/AssignRole": tenantItemRoute("/api/v1/iam/tenants/{tenant}/users/{id}/roles/{role}", http.MethodPost,
 		pathParam{placeholder: "{id}", field: "user_id"}, pathParam{placeholder: "{role}", field: "role_id"}),
 	// RevokeRole changes verb as well as path: the server revokes with DELETE.
 	"/platform.v1.PlatformIAMService/RevokeRole": tenantItemRoute("/api/v1/iam/tenants/{tenant}/users/{id}/roles/{role}", http.MethodDelete,
 		pathParam{placeholder: "{id}", field: "user_id"}, pathParam{placeholder: "{role}", field: "role_id"}),
-	"/platform.v1.PlatformIAMService/AddGroupMember": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}/members/{user}", http.MethodPost,
-		pathParam{placeholder: "{id}", field: "group_id"}, pathParam{placeholder: "{user}", field: "user_id"}),
 
-	// The four updates are a PUT on the item (router.go). With no row here
+	// The three updates are a PUT on the item (router.go). With no row here
 	// they fell back to POST /api/v1/platformiam/update<item>, which the
 	// server does not serve, so none of them worked over REST (#401). The
 	// identifiers travel in the path; the remaining fields are the body,
@@ -1091,8 +1075,6 @@ var templatedRouteTable = map[string]templatedRoute{
 		pathParam{placeholder: "{id}", field: "user_id"}),
 	"/platform.v1.PlatformIAMService/UpdateRole": tenantItemRoute("/api/v1/iam/tenants/{tenant}/roles/{id}", http.MethodPut,
 		pathParam{placeholder: "{id}", field: "role_id"}),
-	"/platform.v1.PlatformIAMService/UpdateGroup": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}", http.MethodPut,
-		pathParam{placeholder: "{id}", field: "group_id"}),
 	"/platform.v1.PlatformIAMService/UpdateTenant": itemRoute("/api/v1/iam/tenants/{tenant}", http.MethodPut, "{tenant}", "tenant_id"),
 }
 
@@ -1215,9 +1197,6 @@ var grpcMethodToRESTMap = map[string]struct {
 
 	"/platform.v1.PlatformIAMService/CreateRole": {"/api/v1/iam/roles", http.MethodPost},
 	"/platform.v1.PlatformIAMService/ListRoles":  {"/api/v1/iam/roles", http.MethodGet},
-
-	"/platform.v1.PlatformIAMService/CreateGroup": {"/api/v1/iam/groups", http.MethodPost},
-	"/platform.v1.PlatformIAMService/ListGroups":  {"/api/v1/iam/groups", http.MethodGet},
 
 	"/platform.v1.PlatformIAMService/CreateTenant": {"/api/v1/iam/tenants", http.MethodPost},
 	"/platform.v1.PlatformIAMService/ListTenants":  {"/api/v1/iam/tenants", http.MethodGet},

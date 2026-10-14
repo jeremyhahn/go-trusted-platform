@@ -29,8 +29,7 @@ import (
 // IAMService provides Identity and Access Management functionality for platformd.
 // It wraps the QuicBaaS SDK's IAM client, providing access to:
 //   - Tenant management (multi-tenant architecture)
-//   - User management (CRUD, roles, groups)
-//   - Group management (user organization)
+//   - User management (CRUD, roles)
 //   - Role management (permission bundles)
 //   - Policy management (ABAC policies)
 //   - PEP (Policy Enforcement Point for authorization checks)
@@ -129,7 +128,6 @@ func (s *IAMService) Name() string {
 // This provides direct access to all IAM sub-clients:
 //   - Tenant(): Tenant management
 //   - User(): User management
-//   - Group(): Group management
 //   - Role(): Role management
 //   - Policy(): Policy management
 //   - PEP(): Policy enforcement point
@@ -163,15 +161,6 @@ func (s *IAMService) User() quicbaassdk.IAMUserClient {
 		return nil
 	}
 	return s.iamClient.User()
-}
-
-// Group returns the group management client.
-// Returns nil if the IAM client is not available.
-func (s *IAMService) Group() quicbaassdk.IAMGroupClient {
-	if s.iamClient == nil {
-		return nil
-	}
-	return s.iamClient.Group()
 }
 
 // Role returns the role management client.

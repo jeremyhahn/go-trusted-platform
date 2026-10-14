@@ -28,7 +28,6 @@ func createTestUser(opts ...func(*sdkiam.User)) *sdkiam.User {
 		Email:       "test@example.com",
 		DisplayName: "Test User",
 		Roles:       []string{"admin", "user"},
-		Groups:      []string{"developers", "ops"},
 		Metadata:    map[string]string{"department": "engineering", "level": "senior"},
 	}
 	for _, opt := range opts {
@@ -81,22 +80,6 @@ func TestNewIAMSession(t *testing.T) {
 		roles[0] = "modified"
 		if session.Roles()[0] == "modified" {
 			t.Error("expected roles to be a copy, not the same slice")
-		}
-	})
-
-	t.Run("copies_groups_correctly", func(t *testing.T) {
-		user := createTestUser()
-		session := NewIAMSession(user)
-
-		groups := session.Groups()
-		if len(groups) != len(user.Groups) {
-			t.Errorf("expected %d groups, got %d", len(user.Groups), len(groups))
-		}
-
-		// Verify the groups are a copy and not the same slice
-		groups[0] = "modified"
-		if session.Groups()[0] == "modified" {
-			t.Error("expected groups to be a copy, not the same slice")
 		}
 	})
 
@@ -266,38 +249,6 @@ func TestIAMSession_HasAnyRole(t *testing.T) {
 	})
 }
 
-// TestIAMSession_HasGroup tests the HasGroup method.
-func TestIAMSession_HasGroup(t *testing.T) {
-	user := createTestUser(func(u *sdkiam.User) {
-		u.Groups = []string{"developers", "ops", "security"}
-	})
-	session := NewIAMSession(user)
-
-	t.Run("returns_true_for_existing_group", func(t *testing.T) {
-		if !session.HasGroup("developers") {
-			t.Error("expected HasGroup('developers') to return true")
-		}
-		if !session.HasGroup("ops") {
-			t.Error("expected HasGroup('ops') to return true")
-		}
-	})
-
-	t.Run("returns_false_for_non_existing_group", func(t *testing.T) {
-		if session.HasGroup("finance") {
-			t.Error("expected HasGroup('finance') to return false")
-		}
-		if session.HasGroup("") {
-			t.Error("expected HasGroup('') to return false")
-		}
-	})
-
-	t.Run("is_case_sensitive", func(t *testing.T) {
-		if session.HasGroup("Developers") {
-			t.Error("expected HasGroup('Developers') to return false (case sensitive)")
-		}
-	})
-}
-
 // TestIAMSession_Attributes tests the Attributes and GetAttribute methods.
 func TestIAMSession_Attributes(t *testing.T) {
 	user := createTestUser(func(u *sdkiam.User) {
@@ -395,9 +346,6 @@ func TestIAMSession_ToSubject(t *testing.T) {
 		if len(subject.Roles) != len(user.Roles) {
 			t.Errorf("expected %d roles, got %d", len(user.Roles), len(subject.Roles))
 		}
-		if len(subject.Groups) != len(user.Groups) {
-			t.Errorf("expected %d groups, got %d", len(user.Groups), len(subject.Groups))
-		}
 	})
 
 	t.Run("handles_zero_mfa_timestamp", func(t *testing.T) {
@@ -448,12 +396,6 @@ func TestIAMSession_NilUserHandling(t *testing.T) {
 	t.Run("Roles_returns_nil_for_nil_user", func(t *testing.T) {
 		if session.Roles() != nil {
 			t.Error("expected nil Roles for nil user")
-		}
-	})
-
-	t.Run("Groups_returns_nil_for_nil_user", func(t *testing.T) {
-		if session.Groups() != nil {
-			t.Error("expected nil Groups for nil user")
 		}
 	})
 

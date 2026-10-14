@@ -47,18 +47,18 @@ type (
 
 // Requests and responses of the Client verbs.
 type (
-	CreateProjectRequest    = upstream.CreateProjectRequest
-	GetProjectRequest       = upstream.GetProjectRequest
-	GetProjectByNameRequest = upstream.GetProjectByNameRequest
-	UpdateProjectRequest    = upstream.UpdateProjectRequest
-	DeleteProjectRequest    = upstream.DeleteProjectRequest
-	DeleteProjectResponse   = upstream.DeleteProjectResponse
-	ListProjectsRequest     = upstream.ListProjectsRequest
-	ListProjectsResponse    = upstream.ListProjectsResponse
-	GrantAgentRoleRequest   = upstream.GrantAgentRoleRequest
-	GrantAgentRoleResponse  = upstream.GrantAgentRoleResponse
-	RevokeAgentRoleRequest  = upstream.RevokeAgentRoleRequest
-	RevokeAgentRoleResponse = upstream.RevokeAgentRoleResponse
+	CreateProjectRequest        = upstream.CreateProjectRequest
+	GetProjectRequest           = upstream.GetProjectRequest
+	GetProjectByNameRequest     = upstream.GetProjectByNameRequest
+	UpdateProjectRequest        = upstream.UpdateProjectRequest
+	DeleteProjectRequest        = upstream.DeleteProjectRequest
+	DeleteProjectResponse       = upstream.DeleteProjectResponse
+	ListProjectsRequest         = upstream.ListProjectsRequest
+	ListProjectsResponse        = upstream.ListProjectsResponse
+	GrantFleetNodeRoleRequest   = upstream.GrantFleetNodeRoleRequest
+	GrantFleetNodeRoleResponse  = upstream.GrantFleetNodeRoleResponse
+	RevokeFleetNodeRoleRequest  = upstream.RevokeFleetNodeRoleRequest
+	RevokeFleetNodeRoleResponse = upstream.RevokeFleetNodeRoleResponse
 )
 
 // Project roles. ProjectRoleDenied explicitly prohibits access.

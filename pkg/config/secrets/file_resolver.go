@@ -116,5 +116,7 @@ func (r *FileResolver) Resolve(ctx context.Context, raw string) (*quicbaassecret
 		slog.Int("length", len(data)),
 	)
 
-	return quicbaassecret.NewSecretValue(raw, data, quicbaassecret.StrategyLiteral), nil
+	// NewSecretValue seals a copy, so the read buffer is wiped either way.
+	defer clear(data)
+	return quicbaassecret.NewSecretValue(raw, data, quicbaassecret.StrategyLiteral)
 }

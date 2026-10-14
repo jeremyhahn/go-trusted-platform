@@ -51,8 +51,8 @@ require (
 	github.com/insomniacslk/dhcp v0.0.0-20251020182700-175e84fbb167
 	github.com/jeremyhahn/go-codec v1.4.0
 	github.com/jeremyhahn/go-luks2 v0.2.0-alpha
-	github.com/jeremyhahn/go-quicbaas v0.12.0-alpha
-	github.com/jeremyhahn/go-quicbaas/sdk/go v0.12.0-alpha
+	github.com/jeremyhahn/go-quicbaas v0.14.0-alpha
+	github.com/jeremyhahn/go-quicbaas/sdk/go v0.14.0-alpha
 	github.com/jeremyhahn/go-trusted-platform/sdk/go v0.1.0-alpha
 	github.com/jeremyhahn/trusted-firmware/sdk/go v0.3.0-alpha
 	github.com/klauspost/compress v1.19.1
@@ -68,7 +68,7 @@ require (
 	github.com/pin/tftp/v3 v3.1.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/quic-go/connect-ip-go v0.2.0
-	github.com/quic-go/quic-go v0.62.0
+	github.com/quic-go/quic-go v0.63.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/spf13/viper v1.21.0
@@ -165,7 +165,7 @@ require (
 	github.com/cockroachdb/tokenbucket v0.0.0-20250429170803-42689b6311bb // indirect
 	github.com/coreos/go-systemd/v22 v22.7.0 // indirect
 	github.com/davidlazar/go-crypto v0.0.0-20200604182044-b73af7476f6c // indirect
-	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
+	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 // indirect
 	github.com/dgryski/go-farm v0.0.0-20240924180020-3414d57e47da // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/digitalocean/go-libvirt v0.0.0-20220804181439-8648fbde413e // indirect
@@ -242,16 +242,17 @@ require (
 	github.com/jackpal/go-nat-pmp v1.0.2 // indirect
 	github.com/jbenet/go-temp-err-catcher v0.1.0 // indirect
 	github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 // indirect
+	github.com/jeremyhahn/arduino-generic/sdk/go v0.7.0-alpha // indirect
 	github.com/jeremyhahn/go-auth v0.2.0-alpha // indirect
-	github.com/jeremyhahn/go-enclave v0.5.0-alpha // indirect
+	github.com/jeremyhahn/go-enclave v0.6.1-alpha // indirect
 	github.com/jeremyhahn/go-frost v0.3.0-alpha // indirect
 	github.com/jeremyhahn/go-objstore v0.3.0-alpha // indirect
-	github.com/jeremyhahn/go-qrdb v0.19.0-alpha // indirect
-	github.com/jeremyhahn/go-qrdb/sdk/go v0.19.0-alpha // indirect
-	github.com/jeremyhahn/go-quicraft v0.13.1-alpha // indirect
+	github.com/jeremyhahn/go-qrdb v0.30.1-alpha // indirect
+	github.com/jeremyhahn/go-qrdb/sdk/go v0.30.1-alpha // indirect
+	github.com/jeremyhahn/go-quicraft v0.15.0-alpha // indirect
 	github.com/jeremyhahn/go-truststrap v0.4.0-alpha // indirect
-	github.com/jeremyhahn/go-xkms v0.17.0-alpha // indirect
-	github.com/jeremyhahn/go-xkms/sdk/go v0.17.0-alpha // indirect
+	github.com/jeremyhahn/go-xkms v0.49.0-alpha // indirect
+	github.com/jeremyhahn/go-xkms/sdk/go v0.49.0-alpha // indirect
 	github.com/jeroenrinzema/psql-wire v0.18.0 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/josharian/native v1.1.0 // indirect
@@ -276,7 +277,10 @@ require (
 	github.com/lestrrat-go/dsig v1.0.0 // indirect
 	github.com/lestrrat-go/dsig-secp256k1 v1.0.0 // indirect
 	github.com/lestrrat-go/httpcc v1.0.1 // indirect
+	github.com/lestrrat-go/httprc v1.0.6 // indirect
 	github.com/lestrrat-go/httprc/v3 v3.0.1 // indirect
+	github.com/lestrrat-go/iter v1.0.2 // indirect
+	github.com/lestrrat-go/jwx/v2 v2.1.7 // indirect
 	github.com/lestrrat-go/jwx/v3 v3.0.12 // indirect
 	github.com/lestrrat-go/option v1.0.1 // indirect
 	github.com/lestrrat-go/option/v2 v2.0.0 // indirect
@@ -390,12 +394,17 @@ require (
 	github.com/valyala/fastjson v1.6.4 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/vektah/gqlparser/v2 v2.5.31 // indirect
+	github.com/veraison/corim v1.1.2 // indirect
+	github.com/veraison/eat v0.0.0-20210331113810-3da8a4dd42ff // indirect
+	github.com/veraison/go-cose v1.3.0 // indirect
+	github.com/veraison/swid v1.1.1-0.20230911094910-8ffdd07a22ca // indirect
 	github.com/viterin/partial v1.1.0 // indirect
 	github.com/viterin/vek v0.4.3 // indirect
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/wailsapp/go-webview2 v1.0.23 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
+	github.com/weppos/publicsuffix-go v0.50.3 // indirect
 	github.com/whyrusleeping/go-keyspace v0.0.0-20160322163242-5b898ac5add1 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect

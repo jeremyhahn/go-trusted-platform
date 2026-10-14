@@ -8,6 +8,14 @@ sensitive data bound to specific platform states.
 TPM sealing encrypts data such that it can only be decrypted when the TPM is in a
 specific state, typically defined by PCR values. This binds secrets to boot integrity.
 
+> **Status: PCR-bound sealing is unavailable.** The gRPC, Unix, REST, MCP and
+> vTPM seal surfaces refuse any request that names PCRs
+> (`common.ErrPCRBoundSealUnavailable`, `FailedPrecondition` on gRPC). They will accept it once go-quicbaas re-exports
+> the TPM PolicyPCR primitives (go-quicbaas #1171). Today a sealed object is
+> protected by its password alone. The PCR flow below describes the design, not
+> current behaviour. The contract is in [engineering.md](engineering.md) §6, and
+> it wins wherever this page disagrees.
+
 ```
 ┌───────────────────────────────────────────────────────────────────┐
 │                      Sealing/Unsealing Flow                       │
@@ -97,7 +105,7 @@ platformctl tpm seal --cn my-secret --data "data" --password "$PW"
 | `--parent`        | Parent key handle (SRK)                        | 0x81000002   |
 | `--parent-password`| Parent key authorization                      | (empty)      |
 | `--password`      | Sealed object password                         | (empty)      |
-| `--pcrs`          | PCR indices to bind the sealed object to       | (none)       |
+| `--pcrs`          | PCR indices to bind to — refused until go-quicbaas #1171 | (none) |
 | `--pcr-bank`      | PCR bank for `--pcrs`                          | sha256       |
 | `--overwrite`     | Overwrite existing sealed object               | false        |
 
@@ -109,10 +117,9 @@ request := &platformv1.SealRequest{
     Cn:             "my-secret",
     ParentHandle:   0x81000002,
     ParentPassword: "",
-    Password:       "optional-key-password",
-    PcrIndices:     []uint32{7, 8, 9},
-    PcrBank:        platformv1.PCRBank_PCR_BANK_SHA256,
+    Password:       "key-password",
     Overwrite:      false,
+    // PcrIndices is refused with FailedPrecondition until go-quicbaas #1171.
 }
 
 response, err := client.Seal(ctx, request)

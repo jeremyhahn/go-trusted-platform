@@ -247,9 +247,6 @@ func (c *CLIAdapter) EnrollTPM(ctx context.Context, req *lukssdk.EnrollTPMReques
 		}
 		args = append(args, "--pcrs", strings.Join(pcrs, ","))
 	}
-	if req.Handle != "" {
-		args = append(args, "--handle", req.Handle)
-	}
 	out, err := c.runCommand(ctx, args...)
 	if err != nil {
 		return nil, err

@@ -478,14 +478,6 @@ func TestMCPServiceProvider_IAMOperations_NilService(t *testing.T) {
 				TenantID: "t1", SubjectID: "u1", Action: "read", Resource: "kv/a",
 			})
 		},
-		"CreateGroup": func() (interface{}, error) {
-			return provider.IAMCreateGroup(ctx, &mcp.IAMCreateGroupRequest{TenantID: "t1", ID: "g1"})
-		},
-		"DeleteGroup":       func() (interface{}, error) { return provider.IAMDeleteGroup(ctx, "t1", "g1") },
-		"GetGroup":          func() (interface{}, error) { return provider.IAMGetGroup(ctx, "t1", "g1") },
-		"ListGroups":        func() (interface{}, error) { return provider.IAMListGroups(ctx, "t1", page) },
-		"AddGroupMember":    func() (interface{}, error) { return provider.IAMAddGroupMember(ctx, "t1", "g1", "u1") },
-		"RemoveGroupMember": func() (interface{}, error) { return provider.IAMRemoveGroupMember(ctx, "t1", "g1", "u1") },
 		"CreateTenant": func() (interface{}, error) {
 			return provider.IAMCreateTenant(ctx, &mcp.IAMCreateTenantRequest{ID: "t2"})
 		},

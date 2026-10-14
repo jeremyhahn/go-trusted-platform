@@ -29,6 +29,10 @@ import (
 // fakeSchedulerClient answers every call with err when it is set, and
 // records the job ID and options it was called with.
 type fakeSchedulerClient struct {
+	// Client supplies the node and placement methods SchedulerService
+	// never calls; reaching one panics on the nil interface.
+	scheduler.Client
+
 	err        error
 	jobID      uint64
 	reason     string

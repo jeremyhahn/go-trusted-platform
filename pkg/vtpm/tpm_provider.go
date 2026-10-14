@@ -25,6 +25,7 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
@@ -491,8 +492,16 @@ func (ops *TPMOperations) Quote(nonce []byte, pcrs []int) (*QuoteResult, error) 
 	}, nil
 }
 
-// Seal encrypts data to the TPM using go-xkms's Seal method.
+// Seal encrypts data to the TPM using go-xkms's Seal method. A request
+// naming PCRs is refused with common.ErrPCRBoundSealUnavailable until
+// go-quicbaas re-exports the policy primitives (go-quicbaas #1171).
 func (ops *TPMOperations) Seal(ctx context.Context, data []byte, pcrs []int, authValue string) (*xkmssdk.SealedData, error) {
+	// go-xkms seals a PCR selection without a policy digest as an object
+	// protected only by authValue; refuse rather than pretend it is bound.
+	if len(pcrs) > 0 {
+		return nil, common.ErrPCRBoundSealUnavailable{}
+	}
+
 	// Build key attributes for sealing
 	keyAttrs := &xkmssdk.KeyAttributes{
 		CN:        "vtpm-sealed-data",
@@ -518,26 +527,8 @@ func (ops *TPMOperations) Seal(ctx context.Context, data []byte, pcrs []int, aut
 		keyAttrs.Password = password
 	}
 
-	// Build TPM policy for PCR binding
-	var tpmPolicy *xkmssdk.TPMSealPolicy
-	if len(pcrs) > 0 {
-		pcrSelection := tpm2.TPMLPCRSelection{
-			PCRSelections: []tpm2.TPMSPCRSelection{
-				{
-					Hash:      tpm2.TPMAlgSHA256,
-					PCRSelect: pcrBitmask(pcrs),
-				},
-			},
-		}
-		tpmPolicy = &xkmssdk.TPMSealPolicy{
-			PCRSelection: pcrSelection,
-			HashAlg:      tpm2.TPMAlgSHA256,
-		}
-	}
-
 	sealOpts := &xkmssdk.SealOptions{
 		KeyAttributes: keyAttrs,
-		TPMPolicy:     tpmPolicy,
 	}
 
 	return ops.tpm.Seal(ctx, data, sealOpts)
@@ -591,17 +582,6 @@ func (ops *TPMOperations) ReadPCR(pcrIndex int) ([]byte, error) {
 		return nil, err
 	}
 	return values[pcrIndex], nil
-}
-
-// pcrBitmask converts a list of PCR indices to a TPM PCR bitmask.
-func pcrBitmask(pcrs []int) []byte {
-	mask := make([]byte, 3)
-	for _, pcr := range pcrs {
-		if pcr >= 0 && pcr <= 23 {
-			mask[pcr/8] |= 1 << (pcr % 8)
-		}
-	}
-	return mask
 }
 
 // certFingerprint calculates the SHA-256 fingerprint of a certificate.

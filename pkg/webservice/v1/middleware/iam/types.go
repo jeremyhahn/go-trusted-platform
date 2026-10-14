@@ -62,14 +62,8 @@ type IAMSession interface {
 	// Roles returns the user's assigned roles.
 	Roles() []string
 
-	// Groups returns the user's group memberships.
-	Groups() []string
-
 	// HasRole checks if the user has a specific role.
 	HasRole(role string) bool
-
-	// HasGroup checks if the user is a member of a specific group.
-	HasGroup(group string) bool
 
 	// HasAnyRole checks if the user has any of the specified roles.
 	HasAnyRole(roles ...string) bool
@@ -136,9 +130,6 @@ type JWTClaims struct {
 
 	// Roles are the user's assigned roles.
 	Roles []string
-
-	// Groups are the user's group memberships.
-	Groups []string
 
 	// Audience is the intended audience (aud claim).
 	Audience []string

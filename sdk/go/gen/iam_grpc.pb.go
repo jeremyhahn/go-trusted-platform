@@ -19,47 +19,40 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PlatformIAMService_CreateUser_FullMethodName        = "/platform.v1.PlatformIAMService/CreateUser"
-	PlatformIAMService_GetUser_FullMethodName           = "/platform.v1.PlatformIAMService/GetUser"
-	PlatformIAMService_ListUsers_FullMethodName         = "/platform.v1.PlatformIAMService/ListUsers"
-	PlatformIAMService_UpdateUser_FullMethodName        = "/platform.v1.PlatformIAMService/UpdateUser"
-	PlatformIAMService_DeleteUser_FullMethodName        = "/platform.v1.PlatformIAMService/DeleteUser"
-	PlatformIAMService_CreateRole_FullMethodName        = "/platform.v1.PlatformIAMService/CreateRole"
-	PlatformIAMService_GetRole_FullMethodName           = "/platform.v1.PlatformIAMService/GetRole"
-	PlatformIAMService_ListRoles_FullMethodName         = "/platform.v1.PlatformIAMService/ListRoles"
-	PlatformIAMService_UpdateRole_FullMethodName        = "/platform.v1.PlatformIAMService/UpdateRole"
-	PlatformIAMService_DeleteRole_FullMethodName        = "/platform.v1.PlatformIAMService/DeleteRole"
-	PlatformIAMService_AssignRole_FullMethodName        = "/platform.v1.PlatformIAMService/AssignRole"
-	PlatformIAMService_RevokeRole_FullMethodName        = "/platform.v1.PlatformIAMService/RevokeRole"
-	PlatformIAMService_CreateGroup_FullMethodName       = "/platform.v1.PlatformIAMService/CreateGroup"
-	PlatformIAMService_GetGroup_FullMethodName          = "/platform.v1.PlatformIAMService/GetGroup"
-	PlatformIAMService_ListGroups_FullMethodName        = "/platform.v1.PlatformIAMService/ListGroups"
-	PlatformIAMService_UpdateGroup_FullMethodName       = "/platform.v1.PlatformIAMService/UpdateGroup"
-	PlatformIAMService_DeleteGroup_FullMethodName       = "/platform.v1.PlatformIAMService/DeleteGroup"
-	PlatformIAMService_AddGroupMember_FullMethodName    = "/platform.v1.PlatformIAMService/AddGroupMember"
-	PlatformIAMService_RemoveGroupMember_FullMethodName = "/platform.v1.PlatformIAMService/RemoveGroupMember"
-	PlatformIAMService_CheckPermission_FullMethodName   = "/platform.v1.PlatformIAMService/CheckPermission"
-	PlatformIAMService_CreateToken_FullMethodName       = "/platform.v1.PlatformIAMService/CreateToken"
-	PlatformIAMService_RevokeToken_FullMethodName       = "/platform.v1.PlatformIAMService/RevokeToken"
-	PlatformIAMService_VerifyToken_FullMethodName       = "/platform.v1.PlatformIAMService/VerifyToken"
-	PlatformIAMService_CreateTenant_FullMethodName      = "/platform.v1.PlatformIAMService/CreateTenant"
-	PlatformIAMService_GetTenant_FullMethodName         = "/platform.v1.PlatformIAMService/GetTenant"
-	PlatformIAMService_ListTenants_FullMethodName       = "/platform.v1.PlatformIAMService/ListTenants"
-	PlatformIAMService_UpdateTenant_FullMethodName      = "/platform.v1.PlatformIAMService/UpdateTenant"
-	PlatformIAMService_DeleteTenant_FullMethodName      = "/platform.v1.PlatformIAMService/DeleteTenant"
-	PlatformIAMService_CreatePolicy_FullMethodName      = "/platform.v1.PlatformIAMService/CreatePolicy"
-	PlatformIAMService_GetPolicy_FullMethodName         = "/platform.v1.PlatformIAMService/GetPolicy"
-	PlatformIAMService_ListPolicies_FullMethodName      = "/platform.v1.PlatformIAMService/ListPolicies"
-	PlatformIAMService_UpdatePolicy_FullMethodName      = "/platform.v1.PlatformIAMService/UpdatePolicy"
-	PlatformIAMService_DeletePolicy_FullMethodName      = "/platform.v1.PlatformIAMService/DeletePolicy"
-	PlatformIAMService_ValidatePolicy_FullMethodName    = "/platform.v1.PlatformIAMService/ValidatePolicy"
-	PlatformIAMService_TestPolicy_FullMethodName        = "/platform.v1.PlatformIAMService/TestPolicy"
-	PlatformIAMService_RegisterApp_FullMethodName       = "/platform.v1.PlatformIAMService/RegisterApp"
-	PlatformIAMService_GetApp_FullMethodName            = "/platform.v1.PlatformIAMService/GetApp"
-	PlatformIAMService_ListApps_FullMethodName          = "/platform.v1.PlatformIAMService/ListApps"
-	PlatformIAMService_UpdateApp_FullMethodName         = "/platform.v1.PlatformIAMService/UpdateApp"
-	PlatformIAMService_DeleteApp_FullMethodName         = "/platform.v1.PlatformIAMService/DeleteApp"
-	PlatformIAMService_RotateAppSecret_FullMethodName   = "/platform.v1.PlatformIAMService/RotateAppSecret"
+	PlatformIAMService_CreateUser_FullMethodName      = "/platform.v1.PlatformIAMService/CreateUser"
+	PlatformIAMService_GetUser_FullMethodName         = "/platform.v1.PlatformIAMService/GetUser"
+	PlatformIAMService_ListUsers_FullMethodName       = "/platform.v1.PlatformIAMService/ListUsers"
+	PlatformIAMService_UpdateUser_FullMethodName      = "/platform.v1.PlatformIAMService/UpdateUser"
+	PlatformIAMService_DeleteUser_FullMethodName      = "/platform.v1.PlatformIAMService/DeleteUser"
+	PlatformIAMService_CreateRole_FullMethodName      = "/platform.v1.PlatformIAMService/CreateRole"
+	PlatformIAMService_GetRole_FullMethodName         = "/platform.v1.PlatformIAMService/GetRole"
+	PlatformIAMService_ListRoles_FullMethodName       = "/platform.v1.PlatformIAMService/ListRoles"
+	PlatformIAMService_UpdateRole_FullMethodName      = "/platform.v1.PlatformIAMService/UpdateRole"
+	PlatformIAMService_DeleteRole_FullMethodName      = "/platform.v1.PlatformIAMService/DeleteRole"
+	PlatformIAMService_AssignRole_FullMethodName      = "/platform.v1.PlatformIAMService/AssignRole"
+	PlatformIAMService_RevokeRole_FullMethodName      = "/platform.v1.PlatformIAMService/RevokeRole"
+	PlatformIAMService_CheckPermission_FullMethodName = "/platform.v1.PlatformIAMService/CheckPermission"
+	PlatformIAMService_CreateToken_FullMethodName     = "/platform.v1.PlatformIAMService/CreateToken"
+	PlatformIAMService_RevokeToken_FullMethodName     = "/platform.v1.PlatformIAMService/RevokeToken"
+	PlatformIAMService_VerifyToken_FullMethodName     = "/platform.v1.PlatformIAMService/VerifyToken"
+	PlatformIAMService_CreateTenant_FullMethodName    = "/platform.v1.PlatformIAMService/CreateTenant"
+	PlatformIAMService_GetTenant_FullMethodName       = "/platform.v1.PlatformIAMService/GetTenant"
+	PlatformIAMService_ListTenants_FullMethodName     = "/platform.v1.PlatformIAMService/ListTenants"
+	PlatformIAMService_UpdateTenant_FullMethodName    = "/platform.v1.PlatformIAMService/UpdateTenant"
+	PlatformIAMService_DeleteTenant_FullMethodName    = "/platform.v1.PlatformIAMService/DeleteTenant"
+	PlatformIAMService_CreatePolicy_FullMethodName    = "/platform.v1.PlatformIAMService/CreatePolicy"
+	PlatformIAMService_GetPolicy_FullMethodName       = "/platform.v1.PlatformIAMService/GetPolicy"
+	PlatformIAMService_ListPolicies_FullMethodName    = "/platform.v1.PlatformIAMService/ListPolicies"
+	PlatformIAMService_UpdatePolicy_FullMethodName    = "/platform.v1.PlatformIAMService/UpdatePolicy"
+	PlatformIAMService_DeletePolicy_FullMethodName    = "/platform.v1.PlatformIAMService/DeletePolicy"
+	PlatformIAMService_ValidatePolicy_FullMethodName  = "/platform.v1.PlatformIAMService/ValidatePolicy"
+	PlatformIAMService_TestPolicy_FullMethodName      = "/platform.v1.PlatformIAMService/TestPolicy"
+	PlatformIAMService_RegisterApp_FullMethodName     = "/platform.v1.PlatformIAMService/RegisterApp"
+	PlatformIAMService_GetApp_FullMethodName          = "/platform.v1.PlatformIAMService/GetApp"
+	PlatformIAMService_ListApps_FullMethodName        = "/platform.v1.PlatformIAMService/ListApps"
+	PlatformIAMService_UpdateApp_FullMethodName       = "/platform.v1.PlatformIAMService/UpdateApp"
+	PlatformIAMService_DeleteApp_FullMethodName       = "/platform.v1.PlatformIAMService/DeleteApp"
+	PlatformIAMService_RotateAppSecret_FullMethodName = "/platform.v1.PlatformIAMService/RotateAppSecret"
 )
 
 // PlatformIAMServiceClient is the client API for PlatformIAMService service.
@@ -84,14 +77,6 @@ type PlatformIAMServiceClient interface {
 	DeleteRole(ctx context.Context, in *DeleteIAMRoleRequest, opts ...grpc.CallOption) (*DeleteIAMRoleResponse, error)
 	AssignRole(ctx context.Context, in *AssignIAMRoleRequest, opts ...grpc.CallOption) (*AssignIAMRoleResponse, error)
 	RevokeRole(ctx context.Context, in *RevokeIAMRoleRequest, opts ...grpc.CallOption) (*RevokeIAMRoleResponse, error)
-	// Group operations
-	CreateGroup(ctx context.Context, in *CreateIAMGroupRequest, opts ...grpc.CallOption) (*IAMGroupResponse, error)
-	GetGroup(ctx context.Context, in *GetIAMGroupRequest, opts ...grpc.CallOption) (*IAMGroupResponse, error)
-	ListGroups(ctx context.Context, in *ListIAMGroupsRequest, opts ...grpc.CallOption) (*ListIAMGroupsResponse, error)
-	UpdateGroup(ctx context.Context, in *UpdateIAMGroupRequest, opts ...grpc.CallOption) (*IAMGroupResponse, error)
-	DeleteGroup(ctx context.Context, in *DeleteIAMGroupRequest, opts ...grpc.CallOption) (*DeleteIAMGroupResponse, error)
-	AddGroupMember(ctx context.Context, in *AddGroupMemberRequest, opts ...grpc.CallOption) (*AddGroupMemberResponse, error)
-	RemoveGroupMember(ctx context.Context, in *RemoveGroupMemberRequest, opts ...grpc.CallOption) (*RemoveGroupMemberResponse, error)
 	// Authorization operations (passwordless - uses tokens/certificates)
 	CheckPermission(ctx context.Context, in *CheckIAMPermissionRequest, opts ...grpc.CallOption) (*CheckIAMPermissionResponse, error)
 	CreateToken(ctx context.Context, in *CreateIAMTokenRequest, opts ...grpc.CallOption) (*CreateIAMTokenResponse, error)
@@ -242,76 +227,6 @@ func (c *platformIAMServiceClient) RevokeRole(ctx context.Context, in *RevokeIAM
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RevokeIAMRoleResponse)
 	err := c.cc.Invoke(ctx, PlatformIAMService_RevokeRole_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *platformIAMServiceClient) CreateGroup(ctx context.Context, in *CreateIAMGroupRequest, opts ...grpc.CallOption) (*IAMGroupResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(IAMGroupResponse)
-	err := c.cc.Invoke(ctx, PlatformIAMService_CreateGroup_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *platformIAMServiceClient) GetGroup(ctx context.Context, in *GetIAMGroupRequest, opts ...grpc.CallOption) (*IAMGroupResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(IAMGroupResponse)
-	err := c.cc.Invoke(ctx, PlatformIAMService_GetGroup_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *platformIAMServiceClient) ListGroups(ctx context.Context, in *ListIAMGroupsRequest, opts ...grpc.CallOption) (*ListIAMGroupsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListIAMGroupsResponse)
-	err := c.cc.Invoke(ctx, PlatformIAMService_ListGroups_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *platformIAMServiceClient) UpdateGroup(ctx context.Context, in *UpdateIAMGroupRequest, opts ...grpc.CallOption) (*IAMGroupResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(IAMGroupResponse)
-	err := c.cc.Invoke(ctx, PlatformIAMService_UpdateGroup_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *platformIAMServiceClient) DeleteGroup(ctx context.Context, in *DeleteIAMGroupRequest, opts ...grpc.CallOption) (*DeleteIAMGroupResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DeleteIAMGroupResponse)
-	err := c.cc.Invoke(ctx, PlatformIAMService_DeleteGroup_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *platformIAMServiceClient) AddGroupMember(ctx context.Context, in *AddGroupMemberRequest, opts ...grpc.CallOption) (*AddGroupMemberResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(AddGroupMemberResponse)
-	err := c.cc.Invoke(ctx, PlatformIAMService_AddGroupMember_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *platformIAMServiceClient) RemoveGroupMember(ctx context.Context, in *RemoveGroupMemberRequest, opts ...grpc.CallOption) (*RemoveGroupMemberResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RemoveGroupMemberResponse)
-	err := c.cc.Invoke(ctx, PlatformIAMService_RemoveGroupMember_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -560,14 +475,6 @@ type PlatformIAMServiceServer interface {
 	DeleteRole(context.Context, *DeleteIAMRoleRequest) (*DeleteIAMRoleResponse, error)
 	AssignRole(context.Context, *AssignIAMRoleRequest) (*AssignIAMRoleResponse, error)
 	RevokeRole(context.Context, *RevokeIAMRoleRequest) (*RevokeIAMRoleResponse, error)
-	// Group operations
-	CreateGroup(context.Context, *CreateIAMGroupRequest) (*IAMGroupResponse, error)
-	GetGroup(context.Context, *GetIAMGroupRequest) (*IAMGroupResponse, error)
-	ListGroups(context.Context, *ListIAMGroupsRequest) (*ListIAMGroupsResponse, error)
-	UpdateGroup(context.Context, *UpdateIAMGroupRequest) (*IAMGroupResponse, error)
-	DeleteGroup(context.Context, *DeleteIAMGroupRequest) (*DeleteIAMGroupResponse, error)
-	AddGroupMember(context.Context, *AddGroupMemberRequest) (*AddGroupMemberResponse, error)
-	RemoveGroupMember(context.Context, *RemoveGroupMemberRequest) (*RemoveGroupMemberResponse, error)
 	// Authorization operations (passwordless - uses tokens/certificates)
 	CheckPermission(context.Context, *CheckIAMPermissionRequest) (*CheckIAMPermissionResponse, error)
 	CreateToken(context.Context, *CreateIAMTokenRequest) (*CreateIAMTokenResponse, error)
@@ -639,27 +546,6 @@ func (UnimplementedPlatformIAMServiceServer) AssignRole(context.Context, *Assign
 }
 func (UnimplementedPlatformIAMServiceServer) RevokeRole(context.Context, *RevokeIAMRoleRequest) (*RevokeIAMRoleResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RevokeRole not implemented")
-}
-func (UnimplementedPlatformIAMServiceServer) CreateGroup(context.Context, *CreateIAMGroupRequest) (*IAMGroupResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method CreateGroup not implemented")
-}
-func (UnimplementedPlatformIAMServiceServer) GetGroup(context.Context, *GetIAMGroupRequest) (*IAMGroupResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetGroup not implemented")
-}
-func (UnimplementedPlatformIAMServiceServer) ListGroups(context.Context, *ListIAMGroupsRequest) (*ListIAMGroupsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListGroups not implemented")
-}
-func (UnimplementedPlatformIAMServiceServer) UpdateGroup(context.Context, *UpdateIAMGroupRequest) (*IAMGroupResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method UpdateGroup not implemented")
-}
-func (UnimplementedPlatformIAMServiceServer) DeleteGroup(context.Context, *DeleteIAMGroupRequest) (*DeleteIAMGroupResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method DeleteGroup not implemented")
-}
-func (UnimplementedPlatformIAMServiceServer) AddGroupMember(context.Context, *AddGroupMemberRequest) (*AddGroupMemberResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method AddGroupMember not implemented")
-}
-func (UnimplementedPlatformIAMServiceServer) RemoveGroupMember(context.Context, *RemoveGroupMemberRequest) (*RemoveGroupMemberResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method RemoveGroupMember not implemented")
 }
 func (UnimplementedPlatformIAMServiceServer) CheckPermission(context.Context, *CheckIAMPermissionRequest) (*CheckIAMPermissionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CheckPermission not implemented")
@@ -960,132 +846,6 @@ func _PlatformIAMService_RevokeRole_Handler(srv interface{}, ctx context.Context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PlatformIAMServiceServer).RevokeRole(ctx, req.(*RevokeIAMRoleRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PlatformIAMService_CreateGroup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CreateIAMGroupRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PlatformIAMServiceServer).CreateGroup(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PlatformIAMService_CreateGroup_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PlatformIAMServiceServer).CreateGroup(ctx, req.(*CreateIAMGroupRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PlatformIAMService_GetGroup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetIAMGroupRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PlatformIAMServiceServer).GetGroup(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PlatformIAMService_GetGroup_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PlatformIAMServiceServer).GetGroup(ctx, req.(*GetIAMGroupRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PlatformIAMService_ListGroups_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListIAMGroupsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PlatformIAMServiceServer).ListGroups(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PlatformIAMService_ListGroups_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PlatformIAMServiceServer).ListGroups(ctx, req.(*ListIAMGroupsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PlatformIAMService_UpdateGroup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(UpdateIAMGroupRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PlatformIAMServiceServer).UpdateGroup(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PlatformIAMService_UpdateGroup_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PlatformIAMServiceServer).UpdateGroup(ctx, req.(*UpdateIAMGroupRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PlatformIAMService_DeleteGroup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DeleteIAMGroupRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PlatformIAMServiceServer).DeleteGroup(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PlatformIAMService_DeleteGroup_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PlatformIAMServiceServer).DeleteGroup(ctx, req.(*DeleteIAMGroupRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PlatformIAMService_AddGroupMember_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AddGroupMemberRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PlatformIAMServiceServer).AddGroupMember(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PlatformIAMService_AddGroupMember_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PlatformIAMServiceServer).AddGroupMember(ctx, req.(*AddGroupMemberRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PlatformIAMService_RemoveGroupMember_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RemoveGroupMemberRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PlatformIAMServiceServer).RemoveGroupMember(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PlatformIAMService_RemoveGroupMember_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PlatformIAMServiceServer).RemoveGroupMember(ctx, req.(*RemoveGroupMemberRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1540,34 +1300,6 @@ var PlatformIAMService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RevokeRole",
 			Handler:    _PlatformIAMService_RevokeRole_Handler,
-		},
-		{
-			MethodName: "CreateGroup",
-			Handler:    _PlatformIAMService_CreateGroup_Handler,
-		},
-		{
-			MethodName: "GetGroup",
-			Handler:    _PlatformIAMService_GetGroup_Handler,
-		},
-		{
-			MethodName: "ListGroups",
-			Handler:    _PlatformIAMService_ListGroups_Handler,
-		},
-		{
-			MethodName: "UpdateGroup",
-			Handler:    _PlatformIAMService_UpdateGroup_Handler,
-		},
-		{
-			MethodName: "DeleteGroup",
-			Handler:    _PlatformIAMService_DeleteGroup_Handler,
-		},
-		{
-			MethodName: "AddGroupMember",
-			Handler:    _PlatformIAMService_AddGroupMember_Handler,
-		},
-		{
-			MethodName: "RemoveGroupMember",
-			Handler:    _PlatformIAMService_RemoveGroupMember_Handler,
 		},
 		{
 			MethodName: "CheckPermission",

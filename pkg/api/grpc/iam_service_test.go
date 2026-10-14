@@ -30,48 +30,37 @@ import (
 
 // mockIAMService implements IAMService for testing.
 type mockIAMService struct {
-	createUserResp       *IAMUserResponse
-	createUserErr        error
-	getUserResp          *IAMUserResponse
-	getUserErr           error
-	updateUserResp       *IAMUserResponse
-	updateUserErr        error
-	deleteUserErr        error
-	listUsersResp        *IAMListUsersResponse
-	listUsersErr         error
-	createRoleResp       *IAMRoleResponse
-	createRoleErr        error
-	getRoleResp          *IAMRoleResponse
-	getRoleErr           error
-	updateRoleResp       *IAMRoleResponse
-	updateRoleErr        error
-	deleteRoleErr        error
-	listRolesResp        *IAMListRolesResponse
-	listRolesErr         error
-	assignRoleErr        error
-	revokeRoleErr        error
-	createGroupResp      *IAMGroupResponse
-	createGroupErr       error
-	getGroupResp         *IAMGroupResponse
-	getGroupErr          error
-	updateGroupResp      *IAMGroupResponse
-	updateGroupErr       error
-	deleteGroupErr       error
-	listGroupsResp       *IAMListGroupsResponse
-	listGroupsErr        error
-	addGroupMemberErr    error
-	removeGroupMemberErr error
-	createPolicyResp     *IAMPolicyResponse
-	createPolicyErr      error
-	getPolicyResp        *IAMPolicyResponse
-	getPolicyErr         error
-	updatePolicyResp     *IAMPolicyResponse
-	updatePolicyErr      error
-	deletePolicyErr      error
-	listPoliciesResp     *IAMListPoliciesResponse
-	listPoliciesErr      error
-	checkPermissionResp  *IAMCheckPermissionResponse
-	checkPermissionErr   error
+	createUserResp      *IAMUserResponse
+	createUserErr       error
+	getUserResp         *IAMUserResponse
+	getUserErr          error
+	updateUserResp      *IAMUserResponse
+	updateUserErr       error
+	deleteUserErr       error
+	listUsersResp       *IAMListUsersResponse
+	listUsersErr        error
+	createRoleResp      *IAMRoleResponse
+	createRoleErr       error
+	getRoleResp         *IAMRoleResponse
+	getRoleErr          error
+	updateRoleResp      *IAMRoleResponse
+	updateRoleErr       error
+	deleteRoleErr       error
+	listRolesResp       *IAMListRolesResponse
+	listRolesErr        error
+	assignRoleErr       error
+	revokeRoleErr       error
+	createPolicyResp    *IAMPolicyResponse
+	createPolicyErr     error
+	getPolicyResp       *IAMPolicyResponse
+	getPolicyErr        error
+	updatePolicyResp    *IAMPolicyResponse
+	updatePolicyErr     error
+	deletePolicyErr     error
+	listPoliciesResp    *IAMListPoliciesResponse
+	listPoliciesErr     error
+	checkPermissionResp *IAMCheckPermissionResponse
+	checkPermissionErr  error
 }
 
 func newMockIAMService() *mockIAMService {
@@ -83,7 +72,6 @@ func newMockIAMService() *mockIAMService {
 			Email:     "test@example.com",
 			Name:      "Test User",
 			Roles:     []string{"admin"},
-			Groups:    []string{"developers"},
 			CreatedAt: now,
 			UpdatedAt: now,
 		},
@@ -93,7 +81,6 @@ func newMockIAMService() *mockIAMService {
 			Email:     "test@example.com",
 			Name:      "Test User",
 			Roles:     []string{"admin"},
-			Groups:    []string{"developers"},
 			CreatedAt: now,
 			UpdatedAt: now,
 		},
@@ -103,7 +90,6 @@ func newMockIAMService() *mockIAMService {
 			Email:     "updated@example.com",
 			Name:      "Updated User",
 			Roles:     []string{"admin", "user"},
-			Groups:    []string{"developers", "admins"},
 			CreatedAt: now,
 			UpdatedAt: now,
 		},
@@ -145,40 +131,6 @@ func newMockIAMService() *mockIAMService {
 			Roles: []*IAMRoleResponse{
 				{ID: "role-1", TenantID: "tenant-1", Name: "admin"},
 				{ID: "role-2", TenantID: "tenant-1", Name: "user"},
-			},
-			Total: 2,
-		},
-		createGroupResp: &IAMGroupResponse{
-			ID:          "group-123",
-			TenantID:    "tenant-1",
-			Name:        "developers",
-			Description: "Development team",
-			Members:     []string{"user-1", "user-2"},
-			CreatedAt:   now,
-			UpdatedAt:   now,
-		},
-		getGroupResp: &IAMGroupResponse{
-			ID:          "group-123",
-			TenantID:    "tenant-1",
-			Name:        "developers",
-			Description: "Development team",
-			Members:     []string{"user-1", "user-2"},
-			CreatedAt:   now,
-			UpdatedAt:   now,
-		},
-		updateGroupResp: &IAMGroupResponse{
-			ID:          "group-123",
-			TenantID:    "tenant-1",
-			Name:        "developers",
-			Description: "Updated team",
-			Members:     []string{"user-1", "user-2", "user-3"},
-			CreatedAt:   now,
-			UpdatedAt:   now,
-		},
-		listGroupsResp: &IAMListGroupsResponse{
-			Groups: []*IAMGroupResponse{
-				{ID: "group-1", TenantID: "tenant-1", Name: "developers"},
-				{ID: "group-2", TenantID: "tenant-1", Name: "admins"},
 			},
 			Total: 2,
 		},
@@ -292,47 +244,6 @@ func (m *mockIAMService) AssignRoleToUser(ctx context.Context, req *IAMRoleAssig
 
 func (m *mockIAMService) RevokeRoleFromUser(ctx context.Context, req *IAMRoleAssignmentRequest) error {
 	return m.revokeRoleErr
-}
-
-// Group operations
-func (m *mockIAMService) CreateGroup(ctx context.Context, req *IAMCreateGroupRequest) (*IAMGroupResponse, error) {
-	if m.createGroupErr != nil {
-		return nil, m.createGroupErr
-	}
-	return m.createGroupResp, nil
-}
-
-func (m *mockIAMService) GetGroup(ctx context.Context, req *IAMGetGroupRequest) (*IAMGroupResponse, error) {
-	if m.getGroupErr != nil {
-		return nil, m.getGroupErr
-	}
-	return m.getGroupResp, nil
-}
-
-func (m *mockIAMService) UpdateGroup(ctx context.Context, req *IAMUpdateGroupRequest) (*IAMGroupResponse, error) {
-	if m.updateGroupErr != nil {
-		return nil, m.updateGroupErr
-	}
-	return m.updateGroupResp, nil
-}
-
-func (m *mockIAMService) DeleteGroup(ctx context.Context, req *IAMDeleteGroupRequest) error {
-	return m.deleteGroupErr
-}
-
-func (m *mockIAMService) ListGroups(ctx context.Context, req *IAMListRequest) (*IAMListGroupsResponse, error) {
-	if m.listGroupsErr != nil {
-		return nil, m.listGroupsErr
-	}
-	return m.listGroupsResp, nil
-}
-
-func (m *mockIAMService) AddGroupMember(ctx context.Context, req *IAMGroupMemberRequest) error {
-	return m.addGroupMemberErr
-}
-
-func (m *mockIAMService) RemoveGroupMember(ctx context.Context, req *IAMGroupMemberRequest) error {
-	return m.removeGroupMemberErr
 }
 
 // Policy operations
@@ -893,248 +804,6 @@ func TestIAMGRPCService_RevokeRole_Success(t *testing.T) {
 	resp, err := service.RevokeRole(ctx, req)
 	if err != nil {
 		t.Fatalf("RevokeRole failed: %v", err)
-	}
-
-	if !resp.GetStatus().GetSuccess() {
-		t.Error("Expected success status")
-	}
-}
-
-// =============================================================================
-// Group Operation Tests
-// =============================================================================
-
-func TestIAMGRPCService_CreateGroup_Success(t *testing.T) {
-	service, _ := newTestIAMService()
-	ctx := context.Background()
-
-	req := &platformv1.CreateIAMGroupRequest{
-		TenantId:    "tenant-1",
-		Name:        "developers",
-		Description: "Development team",
-	}
-
-	resp, err := service.CreateGroup(ctx, req)
-	if err != nil {
-		t.Fatalf("CreateGroup failed: %v", err)
-	}
-
-	if resp.GetGroup() == nil {
-		t.Fatal("Expected group in response")
-	}
-
-	if resp.GetGroup().GetName() != "developers" {
-		t.Errorf("Expected group name 'developers', got '%s'", resp.GetGroup().GetName())
-	}
-}
-
-func TestIAMGRPCService_CreateGroup_MissingName(t *testing.T) {
-	service, _ := newTestIAMService()
-	ctx := context.Background()
-
-	req := &platformv1.CreateIAMGroupRequest{
-		TenantId: "tenant-1",
-	}
-
-	_, err := service.CreateGroup(ctx, req)
-	if err == nil {
-		t.Fatal("Expected error for missing name")
-	}
-
-	st, _ := status.FromError(err)
-	if st.Code() != codes.InvalidArgument {
-		t.Errorf("Expected InvalidArgument, got %v", st.Code())
-	}
-}
-
-func TestIAMGRPCService_GetGroup_Success(t *testing.T) {
-	service, _ := newTestIAMService()
-	ctx := context.Background()
-
-	req := &platformv1.GetIAMGroupRequest{
-		TenantId: "tenant-1",
-		GroupId:  "group-123",
-	}
-
-	resp, err := service.GetGroup(ctx, req)
-	if err != nil {
-		t.Fatalf("GetGroup failed: %v", err)
-	}
-
-	if resp.GetGroup() == nil {
-		t.Error("Expected group in response")
-	}
-}
-
-func TestIAMGRPCService_GetGroup_MissingGroupID(t *testing.T) {
-	service, _ := newTestIAMService()
-	ctx := context.Background()
-
-	req := &platformv1.GetIAMGroupRequest{
-		TenantId: "tenant-1",
-	}
-
-	_, err := service.GetGroup(ctx, req)
-	if err == nil {
-		t.Fatal("Expected error for missing group ID")
-	}
-
-	st, _ := status.FromError(err)
-	if st.Code() != codes.InvalidArgument {
-		t.Errorf("Expected InvalidArgument, got %v", st.Code())
-	}
-}
-
-func TestIAMGRPCService_ListGroups_Success(t *testing.T) {
-	service, _ := newTestIAMService()
-	ctx := context.Background()
-
-	req := &platformv1.ListIAMGroupsRequest{
-		TenantId: "tenant-1",
-	}
-
-	resp, err := service.ListGroups(ctx, req)
-	if err != nil {
-		t.Fatalf("ListGroups failed: %v", err)
-	}
-
-	if len(resp.GetGroups()) != 2 {
-		t.Errorf("Expected 2 groups, got %d", len(resp.GetGroups()))
-	}
-}
-
-func TestIAMGRPCService_UpdateGroup_Success(t *testing.T) {
-	service, _ := newTestIAMService()
-	ctx := context.Background()
-
-	req := &platformv1.UpdateIAMGroupRequest{
-		TenantId:    "tenant-1",
-		GroupId:     "group-123",
-		Name:        "developers",
-		Description: "Updated team",
-	}
-
-	resp, err := service.UpdateGroup(ctx, req)
-	if err != nil {
-		t.Fatalf("UpdateGroup failed: %v", err)
-	}
-
-	if resp.GetGroup() == nil {
-		t.Error("Expected group in response")
-	}
-}
-
-func TestIAMGRPCService_UpdateGroup_MissingGroupID(t *testing.T) {
-	service, _ := newTestIAMService()
-	ctx := context.Background()
-
-	req := &platformv1.UpdateIAMGroupRequest{
-		TenantId: "tenant-1",
-		Name:     "developers",
-	}
-
-	_, err := service.UpdateGroup(ctx, req)
-	if err == nil {
-		t.Fatal("Expected error for missing group ID")
-	}
-
-	st, _ := status.FromError(err)
-	if st.Code() != codes.InvalidArgument {
-		t.Errorf("Expected InvalidArgument, got %v", st.Code())
-	}
-}
-
-func TestIAMGRPCService_DeleteGroup_Success(t *testing.T) {
-	service, _ := newTestIAMService()
-	ctx := context.Background()
-
-	req := &platformv1.DeleteIAMGroupRequest{
-		TenantId: "tenant-1",
-		GroupId:  "group-123",
-	}
-
-	resp, err := service.DeleteGroup(ctx, req)
-	if err != nil {
-		t.Fatalf("DeleteGroup failed: %v", err)
-	}
-
-	if !resp.GetStatus().GetSuccess() {
-		t.Error("Expected success status")
-	}
-}
-
-func TestIAMGRPCService_DeleteGroup_MissingGroupID(t *testing.T) {
-	service, _ := newTestIAMService()
-	ctx := context.Background()
-
-	req := &platformv1.DeleteIAMGroupRequest{
-		TenantId: "tenant-1",
-	}
-
-	_, err := service.DeleteGroup(ctx, req)
-	if err == nil {
-		t.Fatal("Expected error for missing group ID")
-	}
-
-	st, _ := status.FromError(err)
-	if st.Code() != codes.InvalidArgument {
-		t.Errorf("Expected InvalidArgument, got %v", st.Code())
-	}
-}
-
-func TestIAMGRPCService_AddGroupMember_Success(t *testing.T) {
-	service, _ := newTestIAMService()
-	ctx := context.Background()
-
-	req := &platformv1.AddGroupMemberRequest{
-		TenantId: "tenant-1",
-		GroupId:  "group-123",
-		UserId:   "user-123",
-	}
-
-	resp, err := service.AddGroupMember(ctx, req)
-	if err != nil {
-		t.Fatalf("AddGroupMember failed: %v", err)
-	}
-
-	if !resp.GetStatus().GetSuccess() {
-		t.Error("Expected success status")
-	}
-}
-
-func TestIAMGRPCService_AddGroupMember_MissingUserID(t *testing.T) {
-	service, _ := newTestIAMService()
-	ctx := context.Background()
-
-	req := &platformv1.AddGroupMemberRequest{
-		TenantId: "tenant-1",
-		GroupId:  "group-123",
-	}
-
-	_, err := service.AddGroupMember(ctx, req)
-	if err == nil {
-		t.Fatal("Expected error for missing user ID")
-	}
-
-	st, _ := status.FromError(err)
-	if st.Code() != codes.InvalidArgument {
-		t.Errorf("Expected InvalidArgument, got %v", st.Code())
-	}
-}
-
-func TestIAMGRPCService_RemoveGroupMember_Success(t *testing.T) {
-	service, _ := newTestIAMService()
-	ctx := context.Background()
-
-	req := &platformv1.RemoveGroupMemberRequest{
-		TenantId: "tenant-1",
-		GroupId:  "group-123",
-		UserId:   "user-123",
-	}
-
-	resp, err := service.RemoveGroupMember(ctx, req)
-	if err != nil {
-		t.Fatalf("RemoveGroupMember failed: %v", err)
 	}
 
 	if !resp.GetStatus().GetSuccess() {
@@ -1938,22 +1607,6 @@ func TestErrMissingRoleName_Error(t *testing.T) {
 	}
 }
 
-func TestErrMissingGroupID_Error(t *testing.T) {
-	err := ErrMissingGroupID{}
-	expected := "group ID is required"
-	if err.Error() != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, err.Error())
-	}
-}
-
-func TestErrMissingGroupName_Error(t *testing.T) {
-	err := ErrMissingGroupName{}
-	expected := "group name is required"
-	if err.Error() != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, err.Error())
-	}
-}
-
 func TestErrMissingSubjectID_Error(t *testing.T) {
 	err := ErrMissingSubjectID{}
 	expected := "subject ID is required"
@@ -2057,7 +1710,6 @@ func TestIAMGRPCService_mapError_UnixErrors(t *testing.T) {
 		{ErrIAMUserIDRequired{}, codes.InvalidArgument},
 		{ErrIAMEmailRequired{}, codes.InvalidArgument},
 		{ErrIAMRoleIDRequired{}, codes.InvalidArgument},
-		{ErrIAMGroupIDRequired{}, codes.InvalidArgument},
 		{ErrIAMNameRequired{}, codes.InvalidArgument},
 		{ErrIAMTokenRequired{}, codes.InvalidArgument},
 		{ErrIAMSubjectIDRequired{}, codes.InvalidArgument},
@@ -2119,13 +1771,6 @@ func TestUnixRoleToProto_Nil(t *testing.T) {
 	}
 }
 
-func TestUnixGroupToProto_Nil(t *testing.T) {
-	result := iamGroupToProto(nil)
-	if result != nil {
-		t.Error("Expected nil for nil input")
-	}
-}
-
 func TestIAMSuccessStatus(t *testing.T) {
 	status := iamSuccessStatus("test message")
 	if status == nil {
@@ -2175,46 +1820,6 @@ func TestIAMGRPCService_RevokeRole_MissingRoleID(t *testing.T) {
 	_, err := service.RevokeRole(ctx, req)
 	if err == nil {
 		t.Fatal("Expected error for missing role ID")
-	}
-
-	st, _ := status.FromError(err)
-	if st.Code() != codes.InvalidArgument {
-		t.Errorf("Expected InvalidArgument, got %v", st.Code())
-	}
-}
-
-func TestIAMGRPCService_RemoveGroupMember_MissingUserIDValidation(t *testing.T) {
-	service, _ := newTestIAMService()
-	ctx := context.Background()
-
-	req := &platformv1.RemoveGroupMemberRequest{
-		TenantId: "tenant-123",
-		GroupId:  "group-456",
-	}
-
-	_, err := service.RemoveGroupMember(ctx, req)
-	if err == nil {
-		t.Fatal("Expected error for missing user ID")
-	}
-
-	st, _ := status.FromError(err)
-	if st.Code() != codes.InvalidArgument {
-		t.Errorf("Expected InvalidArgument, got %v", st.Code())
-	}
-}
-
-func TestIAMGRPCService_RemoveGroupMember_MissingGroupIDValidation(t *testing.T) {
-	service, _ := newTestIAMService()
-	ctx := context.Background()
-
-	req := &platformv1.RemoveGroupMemberRequest{
-		TenantId: "tenant-123",
-		UserId:   "user-123",
-	}
-
-	_, err := service.RemoveGroupMember(ctx, req)
-	if err == nil {
-		t.Fatal("Expected error for missing group ID")
 	}
 
 	st, _ := status.FromError(err)
@@ -2312,45 +1917,5 @@ func TestIAMGRPCService_ListTenants_NilService(t *testing.T) {
 	st, _ := status.FromError(err)
 	if st.Code() != codes.FailedPrecondition {
 		t.Errorf("Expected FailedPrecondition, got %v", st.Code())
-	}
-}
-
-func TestIAMGRPCService_AddGroupMember_MissingUserIDValidation(t *testing.T) {
-	service, _ := newTestIAMService()
-	ctx := context.Background()
-
-	req := &platformv1.AddGroupMemberRequest{
-		TenantId: "tenant-123",
-		GroupId:  "group-456",
-	}
-
-	_, err := service.AddGroupMember(ctx, req)
-	if err == nil {
-		t.Fatal("Expected error for missing user ID")
-	}
-
-	st, _ := status.FromError(err)
-	if st.Code() != codes.InvalidArgument {
-		t.Errorf("Expected InvalidArgument, got %v", st.Code())
-	}
-}
-
-func TestIAMGRPCService_AddGroupMember_MissingGroupIDValidation(t *testing.T) {
-	service, _ := newTestIAMService()
-	ctx := context.Background()
-
-	req := &platformv1.AddGroupMemberRequest{
-		TenantId: "tenant-123",
-		UserId:   "user-123",
-	}
-
-	_, err := service.AddGroupMember(ctx, req)
-	if err == nil {
-		t.Fatal("Expected error for missing group ID")
-	}
-
-	st, _ := status.FromError(err)
-	if st.Code() != codes.InvalidArgument {
-		t.Errorf("Expected InvalidArgument, got %v", st.Code())
 	}
 }

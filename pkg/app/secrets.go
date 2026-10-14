@@ -292,11 +292,9 @@ func (d *tpmDecrypter) Decrypt(_ io.Reader, ciphertext []byte, _ crypto.Decrypte
 	if d.attrs == nil || d.attrs.TPMAttributes == nil {
 		return nil, ErrIDevIDNotConfigured{}
 	}
-	return d.tpm.RSADecrypt(
-		d.attrs.TPMAttributes.Handle,
-		d.attrs.TPMAttributes.Name,
-		ciphertext,
-	)
+	// A nil key backend selects the TPM's own platform backend, where the
+	// IDevID blobs live.
+	return d.tpm.RSADecrypt(d.attrs, nil, ciphertext)
 }
 
 // getIDevIDDecrypter returns a crypto.Decrypter for the IDevID key if available.

@@ -153,7 +153,6 @@ type userResponse struct {
 	Email       string            `json:"email"`
 	Name        string            `json:"name,omitempty"`
 	Roles       []string          `json:"roles,omitempty"`
-	Groups      []string          `json:"groups,omitempty"`
 	Attributes  map[string]string `json:"attributes,omitempty"`
 	MFAVerified bool              `json:"mfa_verified"`
 	CreatedAt   *time.Time        `json:"created_at,omitempty"`
@@ -168,35 +167,11 @@ func (r *userResponse) toUser() *User {
 		Email:       r.Email,
 		Name:        r.Name,
 		Roles:       r.Roles,
-		Groups:      r.Groups,
 		Attributes:  r.Attributes,
 		MFAVerified: r.MFAVerified,
 		CreatedAt:   r.CreatedAt,
 		UpdatedAt:   r.UpdatedAt,
 		LastAuth:    r.LastAuth,
-	}
-}
-
-// groupResponse represents the REST API group response structure
-type groupResponse struct {
-	ID          string     `json:"id"`
-	TenantID    string     `json:"tenant_id"`
-	Name        string     `json:"name,omitempty"`
-	Description string     `json:"description,omitempty"`
-	Members     []string   `json:"members,omitempty"`
-	CreatedAt   *time.Time `json:"created_at,omitempty"`
-	UpdatedAt   *time.Time `json:"updated_at,omitempty"`
-}
-
-func (r *groupResponse) toGroup() *Group {
-	return &Group{
-		ID:          r.ID,
-		TenantID:    r.TenantID,
-		Name:        r.Name,
-		Description: r.Description,
-		Members:     r.Members,
-		CreatedAt:   r.CreatedAt,
-		UpdatedAt:   r.UpdatedAt,
 	}
 }
 
@@ -238,7 +213,6 @@ type createUserRequest struct {
 	Email      string            `json:"email"`
 	Name       string            `json:"name,omitempty"`
 	Roles      []string          `json:"roles,omitempty"`
-	Groups     []string          `json:"groups,omitempty"`
 	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
@@ -250,7 +224,6 @@ func (a *RESTAdapter) CreateUser(ctx context.Context, opts CreateUserOptions) (*
 		Email:      opts.Email,
 		Name:       opts.Name,
 		Roles:      opts.Roles,
-		Groups:     opts.Groups,
 		Attributes: opts.Attributes,
 	}
 
@@ -297,7 +270,6 @@ type updateUserRequest struct {
 	Email      string            `json:"email,omitempty"`
 	Name       string            `json:"name,omitempty"`
 	Roles      []string          `json:"roles,omitempty"`
-	Groups     []string          `json:"groups,omitempty"`
 	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
@@ -309,7 +281,6 @@ func (a *RESTAdapter) UpdateUser(ctx context.Context, opts UpdateUserOptions) (*
 		Email:      opts.Email,
 		Name:       opts.Name,
 		Roles:      opts.Roles,
-		Groups:     opts.Groups,
 		Attributes: opts.Attributes,
 	}
 
@@ -369,9 +340,6 @@ func (a *RESTAdapter) ListUsers(ctx context.Context, opts ListUsersOptions) (*Li
 	}
 	if opts.Role != "" {
 		params += fmt.Sprintf("&role=%s", opts.Role)
-	}
-	if opts.Group != "" {
-		params += fmt.Sprintf("&group=%s", opts.Group)
 	}
 	if opts.Limit > 0 {
 		params += fmt.Sprintf("&limit=%d", opts.Limit)
@@ -465,225 +433,6 @@ func (a *RESTAdapter) RevokeRole(ctx context.Context, opts RevokeRoleOptions) (*
 	}
 
 	return &RevokeRoleResult{Success: resp.Success}, nil
-}
-
-// ============================================================================
-// Group CRUD Operations
-// ============================================================================
-
-// createGroupRequest represents the request body for creating a group
-type createGroupRequest struct {
-	ID          string `json:"id"`
-	Name        string `json:"name,omitempty"`
-	Description string `json:"description,omitempty"`
-}
-
-// CreateGroup creates a new group
-func (a *RESTAdapter) CreateGroup(ctx context.Context, opts CreateGroupOptions) (*CreateGroupResult, error) {
-	path := fmt.Sprintf("/api/v1/iam/tenants/%s/groups", opts.TenantID)
-
-	reqBody := createGroupRequest{
-		ID:          opts.ID,
-		Name:        opts.Name,
-		Description: opts.Description,
-	}
-
-	body, err := a.doRequest(ctx, http.MethodPost, path, reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp groupResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "CreateGroup",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
-	}
-
-	return &CreateGroupResult{Group: resp.toGroup()}, nil
-}
-
-// GetGroup retrieves a group by ID
-func (a *RESTAdapter) GetGroup(ctx context.Context, opts GetGroupOptions) (*GetGroupResult, error) {
-	path := fmt.Sprintf("/api/v1/iam/tenants/%s/groups/%s", opts.TenantID, opts.GroupID)
-
-	body, err := a.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp groupResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "GetGroup",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
-	}
-
-	return &GetGroupResult{Group: resp.toGroup()}, nil
-}
-
-// updateGroupRequest represents the request body for updating a group
-type updateGroupRequest struct {
-	Name        string `json:"name,omitempty"`
-	Description string `json:"description,omitempty"`
-}
-
-// UpdateGroup updates an existing group
-func (a *RESTAdapter) UpdateGroup(ctx context.Context, opts UpdateGroupOptions) (*UpdateGroupResult, error) {
-	path := fmt.Sprintf("/api/v1/iam/tenants/%s/groups/%s", opts.TenantID, opts.GroupID)
-
-	reqBody := updateGroupRequest{
-		Name:        opts.Name,
-		Description: opts.Description,
-	}
-
-	body, err := a.doRequest(ctx, http.MethodPut, path, reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp groupResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "UpdateGroup",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
-	}
-
-	return &UpdateGroupResult{Group: resp.toGroup()}, nil
-}
-
-// DeleteGroup removes a group
-func (a *RESTAdapter) DeleteGroup(ctx context.Context, opts DeleteGroupOptions) (*DeleteGroupResult, error) {
-	path := fmt.Sprintf("/api/v1/iam/tenants/%s/groups/%s", opts.TenantID, opts.GroupID)
-
-	body, err := a.doRequest(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp successResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "DeleteGroup",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
-	}
-
-	return &DeleteGroupResult{Success: resp.Success}, nil
-}
-
-// listGroupsResponse represents the response for listing groups
-type listGroupsResponse struct {
-	Total  int64           `json:"total"`
-	Limit  int32           `json:"limit"`
-	Offset int32           `json:"offset"`
-	Groups []groupResponse `json:"groups"`
-}
-
-// ListGroups lists all groups with optional filtering
-func (a *RESTAdapter) ListGroups(ctx context.Context, opts ListGroupsOptions) (*ListGroupsResult, error) {
-	path := fmt.Sprintf("/api/v1/iam/tenants/%s/groups", opts.TenantID)
-
-	params := ""
-	if opts.Limit > 0 {
-		params += fmt.Sprintf("&limit=%d", opts.Limit)
-	}
-	if opts.Offset > 0 {
-		params += fmt.Sprintf("&offset=%d", opts.Offset)
-	}
-	if params != "" {
-		path += "?" + params[1:]
-	}
-
-	body, err := a.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp listGroupsResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		var groups []groupResponse
-		if err := json.Unmarshal(body, &groups); err != nil {
-			return nil, &RESTAdapterError{
-				Operation: "ListGroups",
-				Message:   "failed to parse response: " + err.Error(),
-				Body:      string(body),
-			}
-		}
-		result := &ListGroupsResult{
-			Groups: make([]*Group, 0, len(groups)),
-			Total:  int64(len(groups)),
-		}
-		for _, g := range groups {
-			result.Groups = append(result.Groups, g.toGroup())
-		}
-		return result, nil
-	}
-
-	result := &ListGroupsResult{
-		Groups: make([]*Group, 0, len(resp.Groups)),
-		Total:  resp.Total,
-		Limit:  resp.Limit,
-		Offset: resp.Offset,
-	}
-	for _, g := range resp.Groups {
-		result.Groups = append(result.Groups, g.toGroup())
-	}
-
-	return result, nil
-}
-
-// ============================================================================
-// Group Membership Operations
-// ============================================================================
-
-// AddMember adds a user to a group
-func (a *RESTAdapter) AddMember(ctx context.Context, opts AddMemberOptions) (*AddMemberResult, error) {
-	path := fmt.Sprintf("/api/v1/iam/tenants/%s/groups/%s/members/%s", opts.TenantID, opts.GroupID, opts.UserID)
-
-	body, err := a.doRequest(ctx, http.MethodPost, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp successResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "AddMember",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
-	}
-
-	return &AddMemberResult{Success: resp.Success}, nil
-}
-
-// RemoveMember removes a user from a group
-func (a *RESTAdapter) RemoveMember(ctx context.Context, opts RemoveMemberOptions) (*RemoveMemberResult, error) {
-	path := fmt.Sprintf("/api/v1/iam/tenants/%s/groups/%s/members/%s", opts.TenantID, opts.GroupID, opts.UserID)
-
-	body, err := a.doRequest(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp successResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "RemoveMember",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
-	}
-
-	return &RemoveMemberResult{Success: resp.Success}, nil
 }
 
 // ============================================================================

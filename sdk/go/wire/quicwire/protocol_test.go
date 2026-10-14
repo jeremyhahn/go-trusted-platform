@@ -1402,13 +1402,6 @@ func TestOpcodeToStringExtended(t *testing.T) {
 		{OpIAMRoleAssign, "IAMRoleAssign"},
 		{OpIAMRoleRevoke, "IAMRoleRevoke"},
 
-		// IAM Group Operations (0xBB-0xBF)
-		{OpIAMGroupCreate, "IAMGroupCreate"},
-		{OpIAMGroupDelete, "IAMGroupDelete"},
-		{OpIAMGroupGet, "IAMGroupGet"},
-		{OpIAMGroupList, "IAMGroupList"},
-		{OpIAMGroupAddMember, "IAMGroupAddMember"},
-
 		// KMS Key Management Operations (0xC0-0xC9)
 		{OpKMSGenerateKey, "KMSGenerateKey"},
 		{OpKMSImportKey, "KMSImportKey"},
@@ -1440,8 +1433,7 @@ func TestOpcodeToStringExtended(t *testing.T) {
 		{OpDEKRotate, "DEKRotate"},
 		{OpDEKGetStatus, "DEKGetStatus"},
 
-		// IAM Extended Operations (0xF6-0xFB)
-		{OpIAMGroupRemoveMember, "IAMGroupRemoveMember"},
+		// IAM Extended Operations (0xF7-0xFB)
 		{OpIAMCheckPermission, "IAMCheckPermission"},
 		{OpIAMAuthenticate, "IAMAuthenticate"},
 		{OpIAMTokenCreate, "IAMTokenCreate"},

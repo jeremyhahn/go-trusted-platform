@@ -66,8 +66,8 @@ func RequestedTenant(r *http.Request) string {
 //     parameter (see RequestedTenant). The handlers give the path's
 //     {tenant} precedence over the session's, so the admin role alone
 //     would otherwise let a tenant administrator reach any other tenant's
-//     users, groups, roles, policies or applications by naming it in the
-//     path; on a flat route a foreign tenant_id would otherwise be answered
+//     users, roles, policies or applications by naming it in the path;
+//     on a flat route a foreign tenant_id would otherwise be answered
 //     from the session's tenant.
 //
 // All four are required. NewIAMRouter refuses to build with any of them
@@ -128,7 +128,6 @@ func (r *IAMRouter) RegisterRoutes(router *mux.Router) {
 	// Register all route groups
 	r.registerTenantRoutes(iamRouter)
 	r.registerUserRoutes(iamRouter)
-	r.registerGroupRoutes(iamRouter)
 	r.registerRoleRoutes(iamRouter)
 	r.registerPolicyRoutes(iamRouter)
 	r.registerAppRoutes(iamRouter)
@@ -155,15 +154,6 @@ func (r *IAMRouter) registerFlatRoutes(router *mux.Router) {
 	router.Handle("/users/{id}", r.tenantScoped(r.handlers.DeleteUser)).Methods("DELETE")
 	router.Handle("/users/{id}/roles/{role}", r.tenantScoped(r.handlers.AssignUserRole)).Methods("POST")
 	router.Handle("/users/{id}/roles/{role}", r.tenantScoped(r.handlers.RevokeUserRole)).Methods("DELETE")
-
-	// Groups
-	router.Handle("/groups", r.tenantScoped(r.handlers.CreateGroup)).Methods("POST")
-	router.Handle("/groups", r.tenantScoped(r.handlers.ListGroups)).Methods("GET")
-	router.Handle("/groups/{id}", r.tenantScoped(r.handlers.GetGroup)).Methods("GET")
-	router.Handle("/groups/{id}", r.tenantScoped(r.handlers.UpdateGroup)).Methods("PUT")
-	router.Handle("/groups/{id}", r.tenantScoped(r.handlers.DeleteGroup)).Methods("DELETE")
-	router.Handle("/groups/{id}/members/{user}", r.tenantScoped(r.handlers.AddGroupMember)).Methods("POST")
-	router.Handle("/groups/{id}/members/{user}", r.tenantScoped(r.handlers.RemoveGroupMember)).Methods("DELETE")
 
 	// Roles
 	router.Handle("/roles", r.tenantScoped(r.handlers.CreateRole)).Methods("POST")
@@ -213,7 +203,7 @@ func (r *IAMRouter) tenantScoped(h http.HandlerFunc) http.Handler {
 
 // systemOnly wraps a handler in the system-tenant guard. It is applied per
 // route rather than on a "/tenants" subrouter because the tenant-scoped
-// user, group, role, policy and app routes share that same path prefix; a
+// user, role, policy and app routes share that same path prefix; a
 // prefix subrouter would swallow them and answer 404.
 func (r *IAMRouter) systemOnly(h http.HandlerFunc) http.Handler {
 	return r.authz.RequireSystemTenant(h)
@@ -262,29 +252,6 @@ func (r *IAMRouter) registerUserRoutes(router *mux.Router) {
 	// User role management routes
 	router.Handle("/tenants/{tenant}/users/{id}/roles/{role}", r.tenantScoped(r.handlers.AssignUserRole)).Methods("POST")
 	router.Handle("/tenants/{tenant}/users/{id}/roles/{role}", r.tenantScoped(r.handlers.RevokeUserRole)).Methods("DELETE")
-}
-
-// registerGroupRoutes registers group management endpoints
-// POST   /api/v1/iam/tenants/{tenant}/groups                        - Create group
-// GET    /api/v1/iam/tenants/{tenant}/groups                        - List groups
-// GET    /api/v1/iam/tenants/{tenant}/groups/{id}                   - Get group
-// PUT    /api/v1/iam/tenants/{tenant}/groups/{id}                   - Update group
-// DELETE /api/v1/iam/tenants/{tenant}/groups/{id}                   - Delete group
-// POST   /api/v1/iam/tenants/{tenant}/groups/{id}/members/{user}    - Add member
-// DELETE /api/v1/iam/tenants/{tenant}/groups/{id}/members/{user}    - Remove member
-func (r *IAMRouter) registerGroupRoutes(router *mux.Router) {
-	// Group collection routes
-	router.Handle("/tenants/{tenant}/groups", r.tenantScoped(r.handlers.CreateGroup)).Methods("POST")
-	router.Handle("/tenants/{tenant}/groups", r.tenantScoped(r.handlers.ListGroups)).Methods("GET")
-
-	// Group instance routes
-	router.Handle("/tenants/{tenant}/groups/{id}", r.tenantScoped(r.handlers.GetGroup)).Methods("GET")
-	router.Handle("/tenants/{tenant}/groups/{id}", r.tenantScoped(r.handlers.UpdateGroup)).Methods("PUT")
-	router.Handle("/tenants/{tenant}/groups/{id}", r.tenantScoped(r.handlers.DeleteGroup)).Methods("DELETE")
-
-	// Group membership management routes
-	router.Handle("/tenants/{tenant}/groups/{id}/members/{user}", r.tenantScoped(r.handlers.AddGroupMember)).Methods("POST")
-	router.Handle("/tenants/{tenant}/groups/{id}/members/{user}", r.tenantScoped(r.handlers.RemoveGroupMember)).Methods("DELETE")
 }
 
 // registerRoleRoutes registers role management endpoints

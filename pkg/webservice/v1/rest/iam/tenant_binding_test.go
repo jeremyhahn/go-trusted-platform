@@ -55,10 +55,6 @@ func tenantBoundIAMServer(t *testing.T, servedTenant *string) *httptest.Server {
 			*servedTenant = tenantID
 			return &iamsdk.Role{ID: roleID, TenantID: tenantID}, nil
 		},
-		getGroupFn: func(_ context.Context, tenantID, groupID string) (*iamsdk.Group, error) {
-			*servedTenant = tenantID
-			return &iamsdk.Group{ID: groupID, TenantID: tenantID}, nil
-		},
 		createUserFn: func(_ context.Context, tenantID string, req *iamsdk.CreateUserRequest) (*iamsdk.User, error) {
 			*servedTenant = tenantID
 			return &iamsdk.User{ID: "u-new", TenantID: tenantID, Email: req.Email}, nil
@@ -82,18 +78,6 @@ func tenantBoundIAMServer(t *testing.T, servedTenant *string) *httptest.Server {
 		updateRoleFn: func(_ context.Context, tenantID, roleID string, req *iamsdk.UpdateRoleRequest) (*iamsdk.Role, error) {
 			*servedTenant = tenantID
 			return &iamsdk.Role{ID: roleID, TenantID: tenantID, Description: req.Description}, nil
-		},
-		createGroupFn: func(_ context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error) {
-			*servedTenant = tenantID
-			return &iamsdk.Group{ID: "g-new", TenantID: tenantID, Name: req.Name}, nil
-		},
-		listGroupsFn: func(_ context.Context, tenantID string, _ *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error) {
-			*servedTenant = tenantID
-			return &iamsdk.ListGroupsResponse{}, nil
-		},
-		updateGroupFn: func(_ context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error) {
-			*servedTenant = tenantID
-			return &iamsdk.Group{ID: groupID, TenantID: tenantID, Description: req.Description}, nil
 		},
 	}
 
@@ -145,13 +129,6 @@ func TestIAMOverSDKREST_TenantBinding(t *testing.T) {
 			},
 			response: func() proto.Message { return &platformv1.IAMRoleResponse{} },
 		},
-		"GetGroup": {
-			grpcMethod: "/platform.v1.PlatformIAMService/GetGroup",
-			request: func(tenantID string) proto.Message {
-				return &platformv1.GetIAMGroupRequest{TenantId: tenantID, GroupId: "g-1"}
-			},
-			response: func() proto.Message { return &platformv1.IAMGroupResponse{} },
-		},
 		"UpdateUser": {
 			grpcMethod: "/platform.v1.PlatformIAMService/UpdateUser",
 			request: func(tenantID string) proto.Message {
@@ -165,13 +142,6 @@ func TestIAMOverSDKREST_TenantBinding(t *testing.T) {
 				return &platformv1.UpdateIAMRoleRequest{TenantId: tenantID, RoleId: "r-1", Description: "ops"}
 			},
 			response: func() proto.Message { return &platformv1.IAMRoleResponse{} },
-		},
-		"UpdateGroup": {
-			grpcMethod: "/platform.v1.PlatformIAMService/UpdateGroup",
-			request: func(tenantID string) proto.Message {
-				return &platformv1.UpdateIAMGroupRequest{TenantId: tenantID, GroupId: "g-1", Description: "ops"}
-			},
-			response: func() proto.Message { return &platformv1.IAMGroupResponse{} },
 		},
 	}
 
@@ -250,16 +220,6 @@ func TestIAMOverSDKREST_Update(t *testing.T) {
 			},
 			want: "ops",
 		},
-		{
-			name:       "UpdateGroup",
-			grpcMethod: "/platform.v1.PlatformIAMService/UpdateGroup",
-			request:    &platformv1.UpdateIAMGroupRequest{TenantId: "tenant-a", GroupId: "g-1", Description: "ops"},
-			response:   &platformv1.IAMGroupResponse{},
-			changed: func(reply proto.Message) string {
-				return reply.(*platformv1.IAMGroupResponse).GetGroup().GetDescription()
-			},
-			want: "ops",
-		},
 	}
 
 	for _, tc := range cases {
@@ -297,9 +257,8 @@ func TestIAMOverSDKREST_Update(t *testing.T) {
 // with the session tenant's object under the same id.
 func TestIAMOverRawREST_FlatRouteTenantQuery(t *testing.T) {
 	items := map[string]string{
-		"GetUser":  "/api/v1/iam/users/u-1",
-		"GetRole":  "/api/v1/iam/roles/r-1",
-		"GetGroup": "/api/v1/iam/groups/g-1",
+		"GetUser": "/api/v1/iam/users/u-1",
+		"GetRole": "/api/v1/iam/roles/r-1",
 	}
 	cases := []struct {
 		name          string
@@ -340,9 +299,8 @@ func TestIAMOverRawREST_FlatRouteTenantQuery(t *testing.T) {
 // served as before.
 func TestIAMOverRawREST_ScopedRouteTenantQuery(t *testing.T) {
 	items := map[string]string{
-		"GetUser":  "/users/u-1",
-		"GetRole":  "/roles/r-1",
-		"GetGroup": "/groups/g-1",
+		"GetUser": "/users/u-1",
+		"GetRole": "/roles/r-1",
 	}
 	cases := []struct {
 		name          string
@@ -443,9 +401,6 @@ func TestIAMOverRawREST_FlatRouteBodyTenant(t *testing.T) {
 		{"CreateRole", http.MethodPost, "/api/v1/iam/roles", map[string]any{"id": "r-1", "name": "R"}},
 		{"ListRoles", http.MethodGet, "/api/v1/iam/roles", nil},
 		{"UpdateRole", http.MethodPut, "/api/v1/iam/roles/r-1", map[string]any{"name": "R"}},
-		{"CreateGroup", http.MethodPost, "/api/v1/iam/groups", map[string]any{"id": "g-1", "name": "G"}},
-		{"ListGroups", http.MethodGet, "/api/v1/iam/groups", nil},
-		{"UpdateGroup", http.MethodPut, "/api/v1/iam/groups/g-1", map[string]any{"name": "G"}},
 	}
 	cases := []struct {
 		name          string
@@ -556,13 +511,6 @@ func TestIAMOverSDKREST_BodyTenant(t *testing.T) {
 				return &platformv1.ListIAMRolesRequest{TenantId: tenantID}
 			},
 			response: func() proto.Message { return &platformv1.ListIAMRolesResponse{} },
-		},
-		"ListGroups": {
-			grpcMethod: "/platform.v1.PlatformIAMService/ListGroups",
-			request: func(tenantID string) proto.Message {
-				return &platformv1.ListIAMGroupsRequest{TenantId: tenantID}
-			},
-			response: func() proto.Message { return &platformv1.ListIAMGroupsResponse{} },
 		},
 	}
 

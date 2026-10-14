@@ -36,13 +36,6 @@ func (e ErrMissingEmail) Error() string {
 	return "email is required"
 }
 
-// ErrMissingGroupID is returned when group ID is required but not provided
-type ErrMissingGroupID struct{}
-
-func (e ErrMissingGroupID) Error() string {
-	return "group ID is required"
-}
-
 // ErrMissingRoleID is returned when role ID is required but not provided
 type ErrMissingRoleID struct{}
 
@@ -86,16 +79,6 @@ type ErrUserNotFound struct {
 
 func (e ErrUserNotFound) Error() string {
 	return fmt.Sprintf("user not found: tenant=%s, user=%s", e.TenantID, e.UserID)
-}
-
-// ErrGroupNotFound is returned when a group is not found
-type ErrGroupNotFound struct {
-	TenantID string
-	GroupID  string
-}
-
-func (e ErrGroupNotFound) Error() string {
-	return fmt.Sprintf("group not found: tenant=%s, group=%s", e.TenantID, e.GroupID)
 }
 
 // ErrRoleNotFound is returned when a role is not found

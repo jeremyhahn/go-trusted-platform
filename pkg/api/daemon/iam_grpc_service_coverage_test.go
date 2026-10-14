@@ -22,10 +22,6 @@ import (
 // =============================================================================
 
 // =============================================================================
-// RemoveGroupMember Additional Coverage Tests
-// =============================================================================
-
-// =============================================================================
 // Additional Parameter Validation Tests for Other Operations
 // =============================================================================
 
@@ -50,15 +46,6 @@ func TestIAMGRPCService_SDKRoleToPlatformRole_Nil(t *testing.T) {
 	t.Parallel()
 
 	result := sdkRoleToPlatformRole(nil)
-	if result != nil {
-		t.Error("expected nil for nil input")
-	}
-}
-
-func TestIAMGRPCService_SDKGroupToPlatformGroup_Nil(t *testing.T) {
-	t.Parallel()
-
-	result := sdkGroupToPlatformGroup(nil)
 	if result != nil {
 		t.Error("expected nil for nil input")
 	}

@@ -129,6 +129,10 @@ func (m *extSecretsClientMock) Get(ctx context.Context, path string, opts ...sec
 	return nil, errKMSLifecycleMock{method: "Get"}
 }
 
+func (m *extSecretsClientMock) GetWithBytes(ctx context.Context, path, field string, fn func([]byte) error, opts ...secrets.GetOption) error {
+	return errKMSLifecycleMock{method: "GetWithBytes"}
+}
+
 func (m *extSecretsClientMock) List(ctx context.Context, prefix string) (*secrets.ListSecretsResponse, error) {
 	return nil, errKMSLifecycleMock{method: "List"}
 }

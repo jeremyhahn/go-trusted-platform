@@ -23,6 +23,7 @@ import (
 	"time"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 	"golang.org/x/term"
 )
@@ -535,7 +536,7 @@ func (m *initrdManager) ResealKeys(ctx context.Context) error {
 		}
 
 		// Enable platform policy for reseal
-		slot.Attrs.PlatformPolicy = true
+		slot.Attrs.TPMPolicy = common.TPMPolicyPlatform
 
 		// Reseal the key with new PCR values
 		sealOpts := &xkmssdk.SealOptions{

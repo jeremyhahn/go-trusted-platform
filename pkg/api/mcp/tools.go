@@ -245,15 +245,15 @@ func (r *ToolRegistry) registerVTPMTools() {
 
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_seal",
-		Description: "Seal data to TPM PCR state",
+		Description: "Seal data to the vTPM; PCR-bound sealing is refused until go-quicbaas #1171",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"name": map[string]interface{}{"type": "string", "description": "Name of the vTPM instance"},
 				"data": map[string]interface{}{"type": "string", "description": "Base64-encoded data to seal"},
-				"pcrs": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "integer"}, "description": "PCR indices for sealing policy"},
+				"pcrs": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "integer"}, "description": "PCR indices to bind to; refused until go-quicbaas #1171"},
 			},
-			"required": []string{"name", "data", "pcrs"},
+			"required": []string{"name", "data"},
 		},
 	})
 
@@ -1623,20 +1623,6 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeIAMCheckPermission(ctx, args)
 	case "iam_authenticate":
 		return r.executeIAMAuthenticate(ctx, args)
-
-	// IAM Group Operations
-	case "iam_create_group":
-		return r.executeIAMCreateGroup(ctx, args)
-	case "iam_delete_group":
-		return r.executeIAMDeleteGroup(ctx, args)
-	case "iam_get_group":
-		return r.executeIAMGetGroup(ctx, args)
-	case "iam_list_groups":
-		return r.executeIAMListGroups(ctx, args)
-	case "iam_add_group_member":
-		return r.executeIAMAddGroupMember(ctx, args)
-	case "iam_remove_group_member":
-		return r.executeIAMRemoveGroupMember(ctx, args)
 
 	// IAM Tenant Operations
 	case "iam_create_tenant":

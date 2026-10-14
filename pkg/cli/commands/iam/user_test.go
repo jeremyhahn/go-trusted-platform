@@ -476,7 +476,6 @@ func TestUserCreateCommand_AllFlags(t *testing.T) {
 		{"email", ""},
 		{"name", ""},
 		{"roles", ""},
-		{"groups", ""},
 		{"attributes", ""},
 	}
 
@@ -538,7 +537,6 @@ func TestUserUpdateCommand_AllFlags(t *testing.T) {
 		{"email", ""},
 		{"name", ""},
 		{"roles", ""},
-		{"groups", ""},
 		{"attributes", ""},
 	}
 

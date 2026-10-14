@@ -28,6 +28,7 @@ import (
 
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"golang.org/x/sys/unix"
@@ -672,13 +673,13 @@ func (e *Executor) createPCRSealedObjects(ctx context.Context, key []byte, pcrSe
 		return nil, nil, &SentinelCauseError{Sentinel: ErrSSRKNotAccessible, Cause: &MessageError{Msg: fmt.Sprintf("SSRK (0x%08x) error: %v", ssrkHandle, err)}}
 	}
 
-	srkAttrs.PlatformPolicy = false
+	srkAttrs.TPMPolicy = ""
 
 	attrs := &xkmssdk.KeyAttributes{
-		CN:             "luks-root-pcr",
-		KeyType:        xkmssdk.KeyTypeHMAC,
-		PlatformPolicy: true,
-		Parent:         srkAttrs,
+		CN:        "luks-root-pcr",
+		KeyType:   xkmssdk.KeyTypeHMAC,
+		TPMPolicy: common.TPMPolicyPlatform,
+		Parent:    srkAttrs,
 	}
 
 	sealOpts := &xkmssdk.SealOptions{
@@ -693,7 +694,10 @@ func (e *Executor) createPCRSealedObjects(ctx context.Context, key []byte, pcrSe
 	return sealedData.TPMPublic, sealedData.TPMPrivate, nil
 }
 
-// createSealedObjects creates sealed objects WITHOUT PCR policy for upgrade scenarios
+// createSealedObjects creates sealed objects WITHOUT PCR policy for upgrade scenarios.
+// The go-xkms v0.49 TPM refuses an object with neither a policy nor a password
+// (ErrSealUnprotected), so this writer is unreached until it gets a named TPM
+// policy (go-xkms #1443). Only the uncalled Executor.Run reaches it.
 func (e *Executor) createSealedObjects(ctx context.Context, key []byte) ([]byte, []byte, error) {
 	if e.tpm == nil {
 		return nil, nil, ErrTPMNotAvailable
@@ -707,13 +711,13 @@ func (e *Executor) createSealedObjects(ctx context.Context, key []byte) ([]byte,
 		return nil, nil, &SentinelCauseError{Sentinel: ErrSSRKNotAccessible, Cause: &MessageError{Msg: fmt.Sprintf("SSRK (0x%08x) error: %v", ssrkHandle, err)}}
 	}
 
-	srkAttrs.PlatformPolicy = false
+	srkAttrs.TPMPolicy = ""
 
 	attrs := &xkmssdk.KeyAttributes{
-		CN:             "luks-upgrade-seal",
-		KeyType:        xkmssdk.KeyTypeHMAC,
-		PlatformPolicy: false,
-		Parent:         srkAttrs,
+		CN:        "luks-upgrade-seal",
+		KeyType:   xkmssdk.KeyTypeHMAC,
+		TPMPolicy: "",
+		Parent:    srkAttrs,
 	}
 
 	sealOpts := &xkmssdk.SealOptions{
@@ -738,10 +742,10 @@ func (e *Executor) createSealedObjects(ctx context.Context, key []byte) ([]byte,
 // independent of how the parent authorizes.
 func platformKeystoreSealAttrs(parent *xkmssdk.KeyAttributes) *xkmssdk.KeyAttributes {
 	return &xkmssdk.KeyAttributes{
-		CN:             "luks-root-platform",
-		KeyType:        xkmssdk.KeyTypeHMAC,
-		PlatformPolicy: true,
-		Parent:         parent,
+		CN:        "luks-root-platform",
+		KeyType:   xkmssdk.KeyTypeHMAC,
+		TPMPolicy: common.TPMPolicyPlatform,
+		Parent:    parent,
 	}
 }
 
@@ -791,7 +795,7 @@ func (e *Executor) createPlatformKeystoreSealedObjects(ctx context.Context, key 
 		return nil, nil, &SentinelCauseError{Sentinel: ErrPlatformSRKNotAccessible, Cause: &MessageError{Msg: fmt.Sprintf("handle 0x%08x error: %v", platformSRKHandle, err)}}
 	}
 
-	platformSRKAttrs.PlatformPolicy = e.getPlatformPolicy()
+	platformSRKAttrs.TPMPolicy = common.PlatformTPMPolicy(e.getPlatformPolicy())
 
 	attrs := platformKeystoreSealAttrs(platformSRKAttrs)
 
@@ -858,14 +862,14 @@ func (e *Executor) readKeyFromUpgradeSeals(ctx context.Context) ([]byte, error) 
 		return nil, &WrappedError{Msg: "failed to get SSRK attributes", Err: err}
 	}
 
-	srkAttrs.PlatformPolicy = false
+	srkAttrs.TPMPolicy = ""
 
 	upgradeAttrs := &xkmssdk.KeyAttributes{
-		CN:             "luks-upgrade-seal",
-		KeyType:        xkmssdk.KeyTypeHMAC,
-		PlatformPolicy: false,
-		Parent:         srkAttrs,
-		StoreType:      xkmssdk.StoreSoftware,
+		CN:        "luks-upgrade-seal",
+		KeyType:   xkmssdk.KeyTypeHMAC,
+		TPMPolicy: "",
+		Parent:    srkAttrs,
+		StoreType: xkmssdk.StoreSoftware,
 	}
 
 	sealedData := &xkmssdk.SealedData{
@@ -1902,7 +1906,6 @@ func initializeTPM(tpmConfig *xkmssdk.TPMConfig, logger *logging.Logger) (xkmssd
 		Backend:      backend,
 		BlobStore:    nil,
 		CertStore:    nil,
-		SignerStore:  nil,
 	}
 
 	var tpmModule xkmssdk.TrustedPlatformModule

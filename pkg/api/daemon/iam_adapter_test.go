@@ -80,41 +80,6 @@ func (m *mockIAMServiceServer) ListUsers(ctx context.Context, req *iampb.ListUse
 	return &iampb.ListUsersResponse{}, nil
 }
 
-func (m *mockIAMServiceServer) CreateGroup(ctx context.Context, req *iampb.CreateGroupRequest) (*iampb.Group, error) {
-	m.called = "CreateGroup"
-	return &iampb.Group{}, nil
-}
-
-func (m *mockIAMServiceServer) GetGroup(ctx context.Context, req *iampb.GetGroupRequest) (*iampb.Group, error) {
-	m.called = "GetGroup"
-	return &iampb.Group{}, nil
-}
-
-func (m *mockIAMServiceServer) UpdateGroup(ctx context.Context, req *iampb.UpdateGroupRequest) (*iampb.Group, error) {
-	m.called = "UpdateGroup"
-	return &iampb.Group{}, nil
-}
-
-func (m *mockIAMServiceServer) DeleteGroup(ctx context.Context, req *iampb.DeleteGroupRequest) (*iampb.DeleteGroupResponse, error) {
-	m.called = "DeleteGroup"
-	return &iampb.DeleteGroupResponse{}, nil
-}
-
-func (m *mockIAMServiceServer) ListGroups(ctx context.Context, req *iampb.ListGroupsRequest) (*iampb.ListGroupsResponse, error) {
-	m.called = "ListGroups"
-	return &iampb.ListGroupsResponse{}, nil
-}
-
-func (m *mockIAMServiceServer) AddUserToGroup(ctx context.Context, req *iampb.AddUserToGroupRequest) (*iampb.AddUserToGroupResponse, error) {
-	m.called = "AddUserToGroup"
-	return &iampb.AddUserToGroupResponse{}, nil
-}
-
-func (m *mockIAMServiceServer) RemoveUserFromGroup(ctx context.Context, req *iampb.RemoveUserFromGroupRequest) (*iampb.RemoveUserFromGroupResponse, error) {
-	m.called = "RemoveUserFromGroup"
-	return &iampb.RemoveUserFromGroupResponse{}, nil
-}
-
 func (m *mockIAMServiceServer) CreateRole(ctx context.Context, req *iampb.CreateRoleRequest) (*iampb.Role, error) {
 	m.called = "CreateRole"
 	return &iampb.Role{}, nil
@@ -323,16 +288,6 @@ func TestIAMServiceClientAdapter_AllOps(t *testing.T) {
 		{"UpdateUser", func() error { _, err := client.UpdateUser(ctx, &iampb.UpdateUserRequest{}); return err }},
 		{"DeleteUser", func() error { _, err := client.DeleteUser(ctx, &iampb.DeleteUserRequest{}); return err }},
 		{"ListUsers", func() error { _, err := client.ListUsers(ctx, &iampb.ListUsersRequest{}); return err }},
-		{"CreateGroup", func() error { _, err := client.CreateGroup(ctx, &iampb.CreateGroupRequest{}); return err }},
-		{"GetGroup", func() error { _, err := client.GetGroup(ctx, &iampb.GetGroupRequest{}); return err }},
-		{"UpdateGroup", func() error { _, err := client.UpdateGroup(ctx, &iampb.UpdateGroupRequest{}); return err }},
-		{"DeleteGroup", func() error { _, err := client.DeleteGroup(ctx, &iampb.DeleteGroupRequest{}); return err }},
-		{"ListGroups", func() error { _, err := client.ListGroups(ctx, &iampb.ListGroupsRequest{}); return err }},
-		{"AddUserToGroup", func() error { _, err := client.AddUserToGroup(ctx, &iampb.AddUserToGroupRequest{}); return err }},
-		{"RemoveUserFromGroup", func() error {
-			_, err := client.RemoveUserFromGroup(ctx, &iampb.RemoveUserFromGroupRequest{})
-			return err
-		}},
 		{"CreateRole", func() error { _, err := client.CreateRole(ctx, &iampb.CreateRoleRequest{}); return err }},
 		{"GetRole", func() error { _, err := client.GetRole(ctx, &iampb.GetRoleRequest{}); return err }},
 		{"UpdateRole", func() error { _, err := client.UpdateRole(ctx, &iampb.UpdateRoleRequest{}); return err }},

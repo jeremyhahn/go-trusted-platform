@@ -136,7 +136,6 @@ type LUKSEnrollTPMRequest struct {
 	Device             string  `json:"device"`
 	ExistingPassphrase string  `json:"existing_passphrase"`
 	PCRs               []int32 `json:"pcrs"`
-	Handle             string  `json:"handle"`
 }
 
 // LUKSEnrollTPMResult is returned by EnrollTPM.

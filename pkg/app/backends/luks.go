@@ -37,8 +37,8 @@ var ErrLUKSVolumeNotFound = errors.New("luks backend: device is not a LUKS2 volu
 // SetFIDO2Handler before EnrollFIDO2 is called.
 var ErrLUKSFIDO2NotWired = errors.New("luks backend: fido2 handler not configured")
 
-// ErrLUKSTPMNotWired indicates TPM enrollment is not yet wired. TPM sealing
-// is a separate story (see docs/architecture/groovy-fluttering-cloud Phase 2).
+// ErrLUKSTPMNotWired indicates no TPM handler is configured. The caller that
+// owns the platform TPM sets one via WithLUKSTPMHandler or SetTPMHandler.
 var ErrLUKSTPMNotWired = errors.New("luks backend: tpm handler not configured")
 
 // ErrLUKSHardwareUnavailable indicates the default handler factory ran but
@@ -110,10 +110,11 @@ type LUKSFIDO2EnrollingHandler interface {
 }
 
 // LUKSTPMHandler is the narrow surface LUKSBackend needs to seal a volume
-// key to TPM PCR state. It returns the derived passphrase used for the
-// keyslot and the token blob that must be written to the LUKS2 header.
+// key to the TPM. The result carries the passphrase used for the keyslot and
+// the token that must be written to the LUKS2 header. The seal parent (and
+// so whether pcrs may be supplied) is fixed when the handler is constructed.
 type LUKSTPMHandler interface {
-	Seal(ctx context.Context, handle string, pcrs []int32) (passphrase []byte, tokenJSON []byte, err error)
+	SealPassphrase(ctx context.Context, pcrs []int32) (*LUKSTPMSealResult, error)
 }
 
 // LUKSBackend implements daemon.LUKSBackend over go-luks2. All mutating ops
@@ -144,10 +145,14 @@ func WithLUKSTPMHandler(h LUKSTPMHandler) LUKSBackendOption {
 	return func(b *LUKSBackend) { b.tpm = h }
 }
 
-// WithDefaultLUKSHandlers attempts to build default FIDO2 and TPM handlers
-// from the host environment. Failures are non-fatal — when a handler can't
-// be constructed the backend is left unwired and the corresponding Enroll
-// method returns ErrLUKSHardwareUnavailable instead of panicking.
+// WithDefaultLUKSHandlers attempts to build the default FIDO2 handler from
+// the host environment. Failure is non-fatal — when the handler can't be
+// constructed the backend is left unwired and EnrollFIDO2 returns
+// ErrLUKSFIDO2NotWired instead of panicking.
+//
+// There is no default TPM handler: the sealer runs on the platform's open
+// TPM, so the caller that owns it wires one with WithLUKSTPMHandler and
+// NewLUKSTPMHandler.
 func WithDefaultLUKSHandlers() LUKSBackendOption {
 	return func(b *LUKSBackend) {
 		if b.fido2 == nil {
@@ -155,13 +160,6 @@ func WithDefaultLUKSHandlers() LUKSBackendOption {
 				b.fido2 = h
 			} else if b.logger != nil {
 				b.logger.Debug("default luks fido2 handler unavailable", "err", err.Error())
-			}
-		}
-		if b.tpm == nil {
-			if h, err := defaultLUKSTPMHandler(b.logger); err == nil {
-				b.tpm = h
-			} else if b.logger != nil {
-				b.logger.Debug("default luks tpm handler unavailable", "err", err.Error())
 			}
 		}
 	}
@@ -399,11 +397,15 @@ func (b *LUKSBackend) EnrollTPM(ctx context.Context, req *daemon.LUKSEnrollTPMRe
 	if b.tpm == nil {
 		return nil, ErrLUKSTPMNotWired
 	}
-	passphrase, tokenJSON, err := b.tpm.Seal(ctx, req.Handle, req.PCRs)
+	sealed, err := b.tpm.SealPassphrase(ctx, req.PCRs)
 	if err != nil {
 		return nil, err
 	}
-	defer clearBytes(passphrase)
+	defer sealed.Passphrase.Destroy()
+	tokenJSON, err := json.Marshal(sealed.Token)
+	if err != nil {
+		return nil, err
+	}
 
 	before, err := luks2.ListKeyslots(req.Device)
 	if err != nil {
@@ -413,12 +415,9 @@ func (b *LUKSBackend) EnrollTPM(ctx context.Context, req *daemon.LUKSEnrollTPMRe
 	if err != nil {
 		return nil, err
 	}
-	if err := luks2.AddKey(
-		req.Device,
-		[]byte(req.ExistingPassphrase),
-		passphrase,
-		addOpts,
-	); err != nil {
+	if err := sealed.Passphrase.WithBytes(func(passphrase []byte) error {
+		return luks2.AddKey(req.Device, []byte(req.ExistingPassphrase), passphrase, addOpts)
+	}); err != nil {
 		return nil, err
 	}
 	newSlot, err := detectNewSlot(req.Device, before)
@@ -628,15 +627,4 @@ func defaultLUKSFIDO2Handler(logger *logging.Logger) (LUKSFIDO2EnrollingHandler,
 		return nil, errors.Join(ErrLUKSHardwareUnavailable, err)
 	}
 	return NewLUKSFIDO2Handler(logger, xkmsHandler, defaultCfg.RelyingPartyID)
-}
-
-// defaultLUKSTPMHandler builds a production TPM handler bound to
-// /dev/tpmrm0. Callers inspect the returned error to decide whether to wire
-// the handler or leave it unset.
-func defaultLUKSTPMHandler(logger *logging.Logger) (LUKSTPMHandler, error) {
-	h, err := NewLUKSTPMHandler(logger, DefaultTPMOpener())
-	if err != nil {
-		return nil, errors.Join(ErrLUKSHardwareUnavailable, err)
-	}
-	return h, nil
 }

@@ -26,7 +26,8 @@ import (
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
-// iamItemOperations are the PlatformIAMService item rows #416 repairs. Each
+// iamItemOperations are the PlatformIAMService item rows #416 repairs (its
+// group rows left with IAM groups, removed upstream). Each
 // used to send a COLLECTION path (DELETE /api/v1/iam/users, POST
 // /api/v1/iam/roles/assign, ...) that the server either 404s or, worse,
 // routes to a sibling handler; the server's real route is an ITEM path with
@@ -66,16 +67,6 @@ var iamItemOperations = []struct {
 		zero:       &platformv1.DeleteIAMRoleRequest{TenantId: "acme"},
 	},
 	{
-		name:       "DeleteGroup",
-		grpcMethod: "/platform.v1.PlatformIAMService/DeleteGroup",
-		req:        &platformv1.DeleteIAMGroupRequest{TenantId: "acme", GroupId: "g-3"},
-		resp:       &platformv1.DeleteIAMGroupResponse{},
-		wantMethod: http.MethodDelete,
-		wantPath:   "/api/v1/iam/tenants/acme/groups/g-3",
-		stripped:   []string{"tenant_id", "group_id"},
-		zero:       &platformv1.DeleteIAMGroupRequest{TenantId: "acme"},
-	},
-	{
 		name:       "DeleteTenant",
 		grpcMethod: "/platform.v1.PlatformIAMService/DeleteTenant",
 		req:        &platformv1.DeleteIAMTenantRequest{TenantId: "acme-prod"},
@@ -106,16 +97,6 @@ var iamItemOperations = []struct {
 		zero:       &platformv1.RevokeIAMRoleRequest{TenantId: "acme", RoleId: "r-2"},
 	},
 	{
-		name:       "AddGroupMember",
-		grpcMethod: "/platform.v1.PlatformIAMService/AddGroupMember",
-		req:        &platformv1.AddGroupMemberRequest{TenantId: "acme", GroupId: "g-3", UserId: "u-7"},
-		resp:       &platformv1.AddGroupMemberResponse{},
-		wantMethod: http.MethodPost,
-		wantPath:   "/api/v1/iam/tenants/acme/groups/g-3/members/u-7",
-		stripped:   []string{"tenant_id", "group_id", "user_id"},
-		zero:       &platformv1.AddGroupMemberRequest{TenantId: "acme", GroupId: "g-3"},
-	},
-	{
 		name:       "UpdateUser",
 		grpcMethod: "/platform.v1.PlatformIAMService/UpdateUser",
 		req:        &platformv1.UpdateIAMUserRequest{TenantId: "acme", UserId: "u-7", Email: "u7@example.test"},
@@ -134,16 +115,6 @@ var iamItemOperations = []struct {
 		wantPath:   "/api/v1/iam/tenants/acme/roles/r-2",
 		stripped:   []string{"tenant_id", "role_id"},
 		zero:       &platformv1.UpdateIAMRoleRequest{TenantId: "acme", Description: "ops"},
-	},
-	{
-		name:       "UpdateGroup",
-		grpcMethod: "/platform.v1.PlatformIAMService/UpdateGroup",
-		req:        &platformv1.UpdateIAMGroupRequest{TenantId: "acme", GroupId: "g-3", Name: "ops"},
-		resp:       &platformv1.IAMGroupResponse{},
-		wantMethod: http.MethodPut,
-		wantPath:   "/api/v1/iam/tenants/acme/groups/g-3",
-		stripped:   []string{"tenant_id", "group_id"},
-		zero:       &platformv1.UpdateIAMGroupRequest{TenantId: "acme", Name: "ops"},
 	},
 	{
 		name:       "UpdateTenant",

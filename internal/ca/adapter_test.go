@@ -130,9 +130,6 @@ type mockTransport struct{}
 func (m *mockTransport) Request(ctx context.Context, service, method string, req interface{}) (interface{}, error) {
 	return nil, nil
 }
-func (m *mockTransport) RequestStream(ctx context.Context, service, method string, req interface{}) (transport.Stream, error) {
-	return nil, nil
-}
 func (m *mockTransport) Conn() interface{} { return nil }
 func (m *mockTransport) Close() error      { return nil }
 func (m *mockTransport) Healthy() bool     { return true }

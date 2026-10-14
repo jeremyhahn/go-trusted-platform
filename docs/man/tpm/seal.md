@@ -33,8 +33,10 @@
 
 * **\--pcrs**:
 
-    PCR indices to bind the sealed object to (comma-separated); omit for
-    password-only auth
+    PCR indices to bind the sealed object to (comma-separated). Refused:
+    PCR-bound sealing is unavailable until go-quicbaas re-exports the TPM
+    PolicyPCR primitives (go-quicbaas #1171). Omit it; the object is
+    protected by its password.
 
 
 ## References

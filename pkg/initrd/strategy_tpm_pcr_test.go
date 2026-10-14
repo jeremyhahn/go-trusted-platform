@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 )
@@ -99,24 +100,26 @@ func TestTPMPCRStrategyGetPlatformPolicyDefault(t *testing.T) {
 
 // TestSealedObjectAttrs_TwoAxes asserts the seal/unseal contract on the
 // two-axes model (#52): the CHILD (sealed object) is PCR-bound —
-// PlatformPolicy true — for BOTH parent SRK authorization modes, and the
+// TPMPolicy "platform" — for BOTH parent SRK authorization modes, and the
 // parent's configured mode travels only on the parent attributes. Install
 // and unsealPlatformKeyStore both build their attributes through this
 // helper, so this is the producer/consumer agreement test.
 func TestSealedObjectAttrs_TwoAxes(t *testing.T) {
 	for _, parentMode := range []bool{true, false} {
+		parentPolicy := common.PlatformTPMPolicy(parentMode)
 		parent := &xkmssdk.KeyAttributes{
-			CN:             "platform-keystore-srk",
-			PlatformPolicy: parentMode,
+			CN:        "platform-keystore-srk",
+			TPMPolicy: parentPolicy,
 		}
 		attrs := sealedObjectAttrs("luks-root", parent)
 
-		if !attrs.PlatformPolicy {
-			t.Errorf("parent mode %v: sealed object must ALWAYS be PCR-bound (PlatformPolicy=true)", parentMode)
+		if attrs.TPMPolicy != common.TPMPolicyPlatform {
+			t.Errorf("parent mode %v: sealed object must ALWAYS be PCR-bound, got TPMPolicy %q",
+				parentMode, attrs.TPMPolicy)
 		}
-		if attrs.Parent.PlatformPolicy != parentMode {
-			t.Errorf("parent mode %v: parent authorization mode must be preserved, got %v",
-				parentMode, attrs.Parent.PlatformPolicy)
+		if attrs.Parent.TPMPolicy != parentPolicy {
+			t.Errorf("parent mode %v: parent authorization mode must be preserved, got %q",
+				parentMode, attrs.Parent.TPMPolicy)
 		}
 		if attrs.CN != "luks-root" {
 			t.Errorf("CN = %q, want luks-root", attrs.CN)

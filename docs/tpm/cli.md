@@ -227,10 +227,10 @@ platformctl tpm srk info --handle 0x81000002        # the PlatformSRK
 |---|---|---|---|
 | `--cn` | string | | Common name for the sealed object (**required**) |
 | `--data` | string | `""` | Data to seal — **a raw string, not base64** |
-| `--password` | string | `""` | Authorization for the sealed object |
+| `--password` | string | `""` | Authorization for the sealed object — needed in practice: go-xkms refuses a seal with no password (`ErrSealUnprotected`) |
 | `--parent` | uint32 | `0x81000001` | Parent SRK handle |
 | `--parent-password` | string | `""` | Parent key password |
-| `--pcrs` | int slice | none | PCR indices to bind to, comma-separated |
+| `--pcrs` | int slice | none | PCR indices to bind to — **refused until go-quicbaas #1171**, see below |
 | `--pcr-bank` | string | `sha256` | `sha1`, `sha256`, `sha384`, `sha512` |
 | `--overwrite` | bool | `false` | Replace existing sealed data with this CN |
 | `--policy` | bool | `true` | **Parsed and discarded — see §6** |
@@ -247,7 +247,7 @@ platformctl tpm srk info --handle 0x81000002        # the PlatformSRK
 | `--pcr-bank` | string | `sha256` | Bank |
 
 ```bash
-platformctl tpm seal   --cn db-master --data "$SECRET" --pcrs 7,9 --password "$PW"
+platformctl tpm seal   --cn db-master --data "$SECRET" --password "$PW"
 platformctl tpm unseal --cn db-master --password "$PW"
 ```
 
@@ -259,9 +259,16 @@ secrets need a shell that can pass the bytes intact.
 newline, and into a `data` field in `json`/`yaml` mode. Redirect it; do not let
 it land in a terminal scrollback.
 
-**`--pcrs` binds the object to those PCR values.** It unseals only while they
-still match — that is the point, and it is also why an unseal that worked
-yesterday fails after a firmware or bootloader change.
+**`seal --pcrs` is refused.** PCR-bound sealing needs the PolicyPCR digest or a
+named TPM policy, which go-quicbaas does not re-export yet (go-quicbaas #1171).
+Without one, go-xkms would seal the object protected by `--password` alone and
+it would unseal whatever the PCRs hold. The daemon therefore fails the request
+closed: gRPC/Unix/REST return `FailedPrecondition`, and the CLI prints
+`failed to seal data: PCR-bound sealing is unavailable until go-quicbaas
+re-exports the TPM PolicyPCR primitives (go-quicbaas #1171): …`. Seal without
+`--pcrs` and with `--password`, the object's only protection: go-xkms refuses a
+seal that has neither a policy nor a password (`ErrSealUnprotected`). Unsealing
+blobs that already exist is unchanged.
 
 **`nvram`**
 
@@ -324,7 +331,8 @@ Two consequences worth stating plainly:
 
 `tpm seal --policy` used to be a seventh case of the same class — registered,
 parsed, never carried by any request — and was removed in #681 rather than
-wired: PCR binding is `--pcrs`, and the sealed object's auth is `--password`.
+wired: the sealed object's auth is `--password`, and PCR binding is `--pcrs`
+(refused until go-quicbaas #1171, see §5).
 
 ---
 

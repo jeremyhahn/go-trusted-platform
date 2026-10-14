@@ -71,7 +71,7 @@ func init() {
 	DefaultConfigRSA.Key = &common.KeyConfig{
 		Hash:               crypto.SHA256.String(),
 		KeyAlgorithm:       x509.RSA.String(),
-		PlatformPolicy:     true,
+		TPMPolicy:          common.TPMPolicyPlatform,
 		RSAConfig:          &common.RSAConfig{KeySize: 2048},
 		SignatureAlgorithm: x509.SHA256WithRSAPSS.String(),
 		StoreType:          xkmssdk.StoreTPM2.String(),
@@ -81,7 +81,7 @@ func init() {
 		ECCConfig:          &common.ECCConfig{Curve: elliptic.P256().Params().Name},
 		Hash:               crypto.SHA256.String(),
 		KeyAlgorithm:       x509.ECDSA.String(),
-		PlatformPolicy:     true,
+		TPMPolicy:          common.TPMPolicyPlatform,
 		SignatureAlgorithm: x509.ECDSAWithSHA256.String(),
 		StoreType:          xkmssdk.StoreTPM2.String(),
 	}
@@ -89,7 +89,7 @@ func init() {
 	DefaultConfigEd25519.Key = &common.KeyConfig{
 		Hash:               crypto.SHA256.String(),
 		KeyAlgorithm:       x509.PureEd25519.String(),
-		PlatformPolicy:     true,
+		TPMPolicy:          common.TPMPolicyPlatform,
 		SignatureAlgorithm: x509.Ed25519.String(),
 		StoreType:          xkmssdk.StoreSoftware.String(),
 	}

@@ -40,7 +40,7 @@ func TestKeyConfigToKeyAttributes_RSA(t *testing.T) {
 		Hash:               "SHA256",
 		KeyAlgorithm:       "RSA",
 		Password:           "test-password",
-		PlatformPolicy:     true,
+		TPMPolicy:          "platform",
 		SignatureAlgorithm: "SHA256-RSA-PSS",
 		StoreType:          "tpm2",
 		RSAConfig: &RSAConfig{
@@ -72,6 +72,10 @@ func TestKeyConfigToKeyAttributes_RSA(t *testing.T) {
 
 	if attrs.StoreType != xkmssdk.StoreTPM2 {
 		t.Errorf("Expected StoreType=tpm2, got %s", attrs.StoreType)
+	}
+
+	if attrs.TPMPolicy != "platform" {
+		t.Errorf("Expected TPMPolicy=platform, got %q", attrs.TPMPolicy)
 	}
 
 	if attrs.RSAAttributes == nil {
@@ -135,7 +139,7 @@ func TestNewKeyConfigFromAttributes(t *testing.T) {
 		Debug:              true,
 		Hash:               crypto.SHA256,
 		KeyAlgorithm:       x509.RSA,
-		PlatformPolicy:     true,
+		TPMPolicy:          "platform",
 		SignatureAlgorithm: x509.SHA256WithRSAPSS,
 		StoreType:          xkmssdk.StoreTPM2,
 		RSAAttributes: &xkmssdk.RSAAttributes{
@@ -165,6 +169,10 @@ func TestNewKeyConfigFromAttributes(t *testing.T) {
 
 	if kc.StoreType != "tpm2" {
 		t.Errorf("Expected StoreType=tpm2, got %s", kc.StoreType)
+	}
+
+	if kc.TPMPolicy != "platform" {
+		t.Errorf("Expected TPMPolicy=platform, got %q", kc.TPMPolicy)
 	}
 
 	if kc.RSAConfig == nil {
@@ -266,9 +274,9 @@ func TestDefaultPassword(t *testing.T) {
 
 func TestKeyConfigToKeyAttributes_PasswordCache(t *testing.T) {
 	kc := &KeyConfig{
-		CN:             "test-key",
-		PlatformPolicy: true,
-		StoreType:      "tpm2",
+		CN:        "test-key",
+		TPMPolicy: "platform",
+		StoreType: "tpm2",
 		PasswordCache: &PasswordCacheConfig{
 			Enabled: true,
 			TTL:     600, // 10 minutes
@@ -295,9 +303,9 @@ func TestKeyConfigToKeyAttributes_PasswordCache(t *testing.T) {
 
 func TestKeyConfigToKeyAttributes_PasswordCacheDisabled(t *testing.T) {
 	kc := &KeyConfig{
-		CN:             "test-key",
-		PlatformPolicy: true,
-		StoreType:      "tpm2",
+		CN:        "test-key",
+		TPMPolicy: "platform",
+		StoreType: "tpm2",
 		PasswordCache: &PasswordCacheConfig{
 			Enabled: false,
 			TTL:     300,
@@ -337,9 +345,9 @@ func TestKeyConfigToKeyAttributes_PasswordCacheNil(t *testing.T) {
 
 func TestNewKeyConfigFromAttributes_PasswordCache(t *testing.T) {
 	attrs := &xkmssdk.KeyAttributes{
-		CN:             "test-key",
-		PlatformPolicy: true,
-		StoreType:      xkmssdk.StoreTPM2,
+		CN:        "test-key",
+		TPMPolicy: "platform",
+		StoreType: xkmssdk.StoreTPM2,
 		PasswordCache: &xkmssdk.PasswordCacheConfig{
 			Enabled: true,
 			TTL:     900,
@@ -474,7 +482,6 @@ func TestNewKeyConfigFromAttributes_ECCAttributes(t *testing.T) {
 		Debug:              false,
 		Hash:               crypto.SHA384,
 		KeyAlgorithm:       x509.ECDSA,
-		PlatformPolicy:     false,
 		SignatureAlgorithm: x509.ECDSAWithSHA384,
 		StoreType:          xkmssdk.StoreSoftware,
 		ECCAttributes: &xkmssdk.ECCAttributes{

@@ -279,10 +279,11 @@ var unroutedClaims = map[string]string{
 	// (sdk/go/transport/rest/adapter.go, templatedRouteTable), so they resolve
 	// in the walk below and have no row here. RemoveGroupMember and
 	// GetCurrentUser, the two that resolved to the WRONG route, were fixed in
-	// #414 (#415).
+	// #414 (#415). The group operations have since gone with IAM groups
+	// (go-quicbaas v0.14).
 
 	// (b) RECORD — the rpc exists in iam.proto but rest/iam/router.go registers
-	// no route for it under any path: the REST surface is users, groups, roles,
+	// no route for it under any path: the REST surface is users, roles,
 	// policies, apps and tenants, and nothing else (docs/iam/api.md §2). This
 	// is docs/13 G7's population: the route that is missing is the one named
 	// by the claim.

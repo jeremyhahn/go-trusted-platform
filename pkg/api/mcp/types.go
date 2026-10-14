@@ -113,7 +113,6 @@ type IAMCreateUserRequest struct {
 	Email      string            `json:"email"`
 	Name       string            `json:"name,omitempty"`
 	Roles      []string          `json:"roles,omitempty"`
-	Groups     []string          `json:"groups,omitempty"`
 	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
@@ -133,14 +132,6 @@ type IAMAuthenticateRequest struct {
 	Password    string `json:"password" secret:"true"`
 	TOTPCode    string `json:"totp_code,omitempty"`
 	Certificate string `json:"certificate,omitempty"`
-}
-
-// IAMCreateGroupRequest represents a group creation request for MCP.
-type IAMCreateGroupRequest struct {
-	TenantID    string `json:"tenant_id"`
-	ID          string `json:"id"`
-	Name        string `json:"name,omitempty"`
-	Description string `json:"description,omitempty"`
 }
 
 // IAMCreateTenantRequest represents a tenant creation request for MCP.
@@ -180,7 +171,6 @@ type IAMListUsersRequest struct {
 	Pagination  IAMPagination `json:"pagination,omitempty"`
 	EmailFilter string        `json:"email_filter,omitempty"`
 	RoleFilter  string        `json:"role_filter,omitempty"`
-	GroupFilter string        `json:"group_filter,omitempty"`
 }
 
 // IAMCheckPermissionRequest represents a policy decision request for MCP,
@@ -700,14 +690,6 @@ type ServiceProvider interface {
 	// IAM Authorization operations
 	IAMCheckPermission(ctx context.Context, req *IAMCheckPermissionRequest) (interface{}, error)
 	IAMAuthenticate(ctx context.Context, req *IAMAuthenticateRequest) (interface{}, error)
-
-	// IAM Group operations
-	IAMCreateGroup(ctx context.Context, req *IAMCreateGroupRequest) (interface{}, error)
-	IAMDeleteGroup(ctx context.Context, tenantID string, groupID string) (interface{}, error)
-	IAMGetGroup(ctx context.Context, tenantID string, groupID string) (interface{}, error)
-	IAMListGroups(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error)
-	IAMAddGroupMember(ctx context.Context, tenantID string, groupID string, userID string) (interface{}, error)
-	IAMRemoveGroupMember(ctx context.Context, tenantID string, groupID string, userID string) (interface{}, error)
 
 	// IAM Tenant operations
 	IAMCreateTenant(ctx context.Context, req *IAMCreateTenantRequest) (interface{}, error)

@@ -53,18 +53,19 @@ func TestBuildHandlerMap_FullRegistry(t *testing.T) {
 	registry := fullTestRegistry()
 	m := buildHandlerMap(registry)
 
-	// All 20 services registered should yield 347 handlers (320 base +
+	// All 20 services registered should yield 340 handlers (320 base +
 	// 6 gateway load balancer VIP methods + 3 gateway perf methods +
 	// 4 IPAM pool CRUD + 4 network zone CRUD - 2 retired tenant VLAN/bridge
 	// methods, #708 + gateway.GetNAT64Status, #601 + ca.SignCSR, #691 + 6 device
 	// attestation, template and profile-assignment methods, #250 +
-	// CreateTemplate, #497 + attestation.PollDeviceVerdicts, #709).
+	// CreateTemplate, #497 + attestation.PollDeviceVerdicts, #709 - 7 IAM
+	// group methods, removed with IAM groups in go-quicbaas v0.13).
 	if len(m) < 300 {
 		t.Errorf("expected at least 300 handlers for full registry, got %d", len(m))
 	}
 
-	if len(m) != 347 {
-		t.Errorf("expected exactly 347 handlers for full registry, got %d", len(m))
+	if len(m) != 340 {
+		t.Errorf("expected exactly 340 handlers for full registry, got %d", len(m))
 	}
 }
 

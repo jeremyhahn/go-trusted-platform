@@ -33,6 +33,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 )
 
 // =============================================================================
@@ -523,7 +525,7 @@ func TestPlatformKeyStore_Initialize_WithPlatformPolicy(t *testing.T) {
 		createSRKFunc: func(attrs *xkmssdk.KeyAttributes) error {
 			createSRKCalled = true
 			// Verify platform policy is set
-			assert.True(t, attrs.PlatformPolicy)
+			assert.Equal(t, common.TPMPolicyPlatform, attrs.TPMPolicy)
 			return nil
 		},
 	}
@@ -1507,7 +1509,15 @@ func (m *mockTPM) CreateSRK(attrs *xkmssdk.KeyAttributes) error {
 func (m *mockTPM) ActivateCredential(credentialBlob, encryptedSecret []byte) ([]byte, error) {
 	return nil, nil
 }
+func (m *mockTPM) AnswerCredentialChallenge(key *xkmssdk.ActivationKey, challenge *xkmssdk.CredentialChallenge) ([]byte, error) {
+	return nil, nil
+}
 func (m *mockTPM) AKProfile() (xkmssdk.AKProfile, error) { return xkmssdk.AKProfile{}, nil }
+func (m *mockTPM) ClearForReprovision() (bool, error)    { return false, nil }
+func (m *mockTPM) CreateActivationKey() (*xkmssdk.ActivationKey, error) {
+	return nil, nil
+}
+func (m *mockTPM) State() (*xkmssdk.ProvisioningState, error) { return nil, nil }
 func (m *mockTPM) CalculateName(algID tpm2.TPMAlgID, publicArea []byte) {
 }
 func (m *mockTPM) Clear(lockoutAuth []byte) error { return nil }
@@ -1631,7 +1641,7 @@ func (m *mockTPM) ReadHandle(handle tpm2.TPMHandle) (tpm2.TPM2BName, tpm2.TPMTPu
 	return tpm2.TPM2BName{}, tpm2.TPMTPublic{}, nil
 }
 func (m *mockTPM) ReadPCRs(pcrList []uint) ([]xkmssdk.PCRBank, error) { return nil, nil }
-func (m *mockTPM) RSADecrypt(handle tpm2.TPMHandle, name tpm2.TPM2BName, blob []byte) ([]byte, error) {
+func (m *mockTPM) RSADecrypt(keyAttrs *xkmssdk.KeyAttributes, backend xkmssdk.TPMKeyBackend, blob []byte) ([]byte, error) {
 	return nil, nil
 }
 func (m *mockTPM) RSAEncrypt(handle tpm2.TPMHandle, name tpm2.TPM2BName, message []byte) ([]byte, error) {
@@ -1797,8 +1807,11 @@ func (m *mockPlatformKeyStorer) IsProvisioned() bool                            
 func (m *mockPlatformKeyStorer) IsAuthReady() bool                                     { return false }
 func (m *mockPlatformKeyStorer) SetAuthReady(ready bool)                               {}
 
-// mockKeyStore implements xkmssdk.ServiceBackend interface for testing
+// mockKeyStore implements xkmssdk.ServiceBackend interface for testing.
+// The embedded interface supplies SignerStore, whose store.SignerStorer
+// return type the SDK does not re-export; it is never called here.
 type mockKeyStore struct {
+	xkmssdk.ServiceBackend
 	closeErr error
 }
 

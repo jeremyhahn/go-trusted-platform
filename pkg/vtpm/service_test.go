@@ -1483,94 +1483,6 @@ func TestService_ReadPCR_NotRunning(t *testing.T) {
 }
 
 // =============================================================================
-// PCR Bitmask Tests
-// =============================================================================
-
-func TestPCRBitmask(t *testing.T) {
-	tests := []struct {
-		name     string
-		pcrs     []int
-		expected []byte
-	}{
-		{
-			name:     "empty PCR list",
-			pcrs:     []int{},
-			expected: []byte{0x00, 0x00, 0x00},
-		},
-		{
-			name:     "single PCR 0",
-			pcrs:     []int{0},
-			expected: []byte{0x01, 0x00, 0x00},
-		},
-		{
-			name:     "single PCR 7",
-			pcrs:     []int{7},
-			expected: []byte{0x80, 0x00, 0x00},
-		},
-		{
-			name:     "single PCR 8",
-			pcrs:     []int{8},
-			expected: []byte{0x00, 0x01, 0x00},
-		},
-		{
-			name:     "single PCR 16",
-			pcrs:     []int{16},
-			expected: []byte{0x00, 0x00, 0x01},
-		},
-		{
-			name:     "single PCR 23",
-			pcrs:     []int{23},
-			expected: []byte{0x00, 0x00, 0x80},
-		},
-		{
-			name:     "multiple PCRs in first byte",
-			pcrs:     []int{0, 1, 7},
-			expected: []byte{0x83, 0x00, 0x00},
-		},
-		{
-			name:     "PCRs across all bytes",
-			pcrs:     []int{0, 8, 16},
-			expected: []byte{0x01, 0x01, 0x01},
-		},
-		{
-			name:     "all PCRs 0-7",
-			pcrs:     []int{0, 1, 2, 3, 4, 5, 6, 7},
-			expected: []byte{0xFF, 0x00, 0x00},
-		},
-		{
-			name:     "all PCRs 0-23",
-			pcrs:     []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23},
-			expected: []byte{0xFF, 0xFF, 0xFF},
-		},
-		{
-			name:     "PCRs with negative index ignored",
-			pcrs:     []int{-1, 0, 1},
-			expected: []byte{0x03, 0x00, 0x00},
-		},
-		{
-			name:     "PCRs with out of range index ignored",
-			pcrs:     []int{0, 24, 100},
-			expected: []byte{0x01, 0x00, 0x00},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := pcrBitmask(tt.pcrs)
-			if len(result) != len(tt.expected) {
-				t.Errorf("pcrBitmask() length = %d, want %d", len(result), len(tt.expected))
-				return
-			}
-			for i, b := range result {
-				if b != tt.expected[i] {
-					t.Errorf("pcrBitmask()[%d] = 0x%02X, want 0x%02X", i, b, tt.expected[i])
-				}
-			}
-		})
-	}
-}
-
-// =============================================================================
 // Pagination Tests
 // =============================================================================
 
@@ -2390,29 +2302,6 @@ func TestService_CreateBundle_TemplateMode(t *testing.T) {
 		// Should not fail because of missing hostname in template mode
 		if strings.Contains(errStr, "Hostname") && strings.Contains(errStr, "required") {
 			t.Error("Template mode should not require hostname")
-		}
-	}
-}
-
-func TestPCRBitmask_DuplicatePCRs(t *testing.T) {
-	// Duplicate PCRs should just set the same bit twice (no effect)
-	result := pcrBitmask([]int{0, 0, 0, 1, 1})
-	expected := []byte{0x03, 0x00, 0x00}
-
-	for i, b := range result {
-		if b != expected[i] {
-			t.Errorf("pcrBitmask with duplicates[%d] = 0x%02X, want 0x%02X", i, b, expected[i])
-		}
-	}
-}
-
-func TestPCRBitmask_NilSlice(t *testing.T) {
-	result := pcrBitmask(nil)
-	expected := []byte{0x00, 0x00, 0x00}
-
-	for i, b := range result {
-		if b != expected[i] {
-			t.Errorf("pcrBitmask(nil)[%d] = 0x%02X, want 0x%02X", i, b, expected[i])
 		}
 	}
 }

@@ -94,7 +94,7 @@ plus a row flipped to ✅ in [api.md §3](api.md#3-go-quicbaas-re-export-surface
 Its tests prove the accessor returns the SDK's own client and returns nil when the
 SDK serves none.
 
-A QRDB-backed upstream accessor (`Security().Barrier()`, `Discovery()`, ...) also
+A QRDB-backed upstream accessor (`Security().Barrier()`, `DataStore()`, ...) also
 returns an error, because go-quicbaas opens its QRDB transport lazily on the first
 call. The wrapper returns `(client, error)` too and wraps the upstream error in
 `ErrServiceUnavailable{Service, Cause}` from `services/quicbaas/errors.go`, which

@@ -57,6 +57,18 @@ func TestLUKSBackend_EnrollTPM_NoHandler(t *testing.T) {
 	}
 }
 
+func TestLUKSBackend_EnrollTPM_SealErrorSurfaces(t *testing.T) {
+	b := NewLUKSBackend(logging.DefaultLogger(), WithLUKSTPMHandler(failingTPMHandler{err: ErrLUKSTPMPCRSelectionNotSupported}))
+	_, err := b.EnrollTPM(context.Background(), &daemon.LUKSEnrollTPMRequest{
+		Device:             "/tmp/nonexistent",
+		ExistingPassphrase: "old",
+		PCRs:               []int32{7},
+	})
+	if !errors.Is(err, ErrLUKSTPMPCRSelectionNotSupported) {
+		t.Fatalf("expected ErrLUKSTPMPCRSelectionNotSupported, got %v", err)
+	}
+}
+
 func TestLUKSBackend_SetHandlers(t *testing.T) {
 	b := NewLUKSBackend(logging.DefaultLogger())
 	b.SetFIDO2Handler(fakeFIDO2Handler{})
@@ -107,6 +119,13 @@ func (fakeFIDO2Handler) EnrollCredential(ctx context.Context, credentialID strin
 
 type fakeTPMHandler struct{}
 
-func (fakeTPMHandler) Seal(ctx context.Context, handle string, pcrs []int32) ([]byte, []byte, error) {
-	return make([]byte, 32), []byte(`{"type":"systemd-tpm2"}`), nil
+func (fakeTPMHandler) SealPassphrase(ctx context.Context, pcrs []int32) (*LUKSTPMSealResult, error) {
+	return &LUKSTPMSealResult{}, nil
+}
+
+// failingTPMHandler returns err from every seal.
+type failingTPMHandler struct{ err error }
+
+func (h failingTPMHandler) SealPassphrase(ctx context.Context, pcrs []int32) (*LUKSTPMSealResult, error) {
+	return nil, h.err
 }

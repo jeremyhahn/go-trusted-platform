@@ -206,13 +206,6 @@ type mockServiceProvider struct {
 	iakExistsFunc          func(ctx context.Context) (bool, error)
 	deviceAttributesFunc   func(ctx context.Context) (interface{}, error)
 	activateCredentialFunc func(ctx context.Context, credentialBlob []byte, secret []byte) ([]byte, error)
-	// IAM Group
-	iamCreateGroupFunc       func(ctx context.Context, req *IAMCreateGroupRequest) (interface{}, error)
-	iamDeleteGroupFunc       func(ctx context.Context, tenantID, groupID string) (interface{}, error)
-	iamGetGroupFunc          func(ctx context.Context, tenantID, groupID string) (interface{}, error)
-	iamListGroupsFunc        func(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error)
-	iamAddGroupMemberFunc    func(ctx context.Context, tenantID, groupID, userID string) (interface{}, error)
-	iamRemoveGroupMemberFunc func(ctx context.Context, tenantID, groupID, userID string) (interface{}, error)
 
 	// IAM Tenant
 	iamCreateTenantFunc func(ctx context.Context, req *IAMCreateTenantRequest) (interface{}, error)
@@ -1553,63 +1546,6 @@ func (m *mockServiceProvider) IAMAuthenticate(ctx context.Context, req *IAMAuthe
 		return m.iamAuthenticateFunc(ctx, req)
 	}
 	return nil, nil
-}
-
-// IAM Group implementations
-func (m *mockServiceProvider) IAMCreateGroup(ctx context.Context, req *IAMCreateGroupRequest) (interface{}, error) {
-	if m.iamCreateGroupFunc != nil {
-		return m.iamCreateGroupFunc(ctx, req)
-	}
-	return map[string]interface{}{
-		"id":          req.ID,
-		"tenant_id":   req.TenantID,
-		"name":        req.Name,
-		"description": req.Description,
-	}, nil
-}
-
-func (m *mockServiceProvider) IAMDeleteGroup(ctx context.Context, tenantID, groupID string) (interface{}, error) {
-	if m.iamDeleteGroupFunc != nil {
-		return m.iamDeleteGroupFunc(ctx, tenantID, groupID)
-	}
-	return mockIAMSuccess(), nil
-}
-
-func (m *mockServiceProvider) IAMGetGroup(ctx context.Context, tenantID, groupID string) (interface{}, error) {
-	if m.iamGetGroupFunc != nil {
-		return m.iamGetGroupFunc(ctx, tenantID, groupID)
-	}
-	return map[string]interface{}{
-		"id":        groupID,
-		"tenant_id": tenantID,
-		"name":      "test-group",
-	}, nil
-}
-
-func (m *mockServiceProvider) IAMListGroups(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error) {
-	if m.iamListGroupsFunc != nil {
-		return m.iamListGroupsFunc(ctx, tenantID, page)
-	}
-	return map[string]interface{}{
-		"groups": []map[string]interface{}{
-			{"id": "group-1", "tenant_id": tenantID, "name": "group-1"},
-		},
-		"pagination": map[string]interface{}{"total_count": 1, "page": page.Page, "page_size": page.PageSize},
-	}, nil
-}
-
-func (m *mockServiceProvider) IAMAddGroupMember(ctx context.Context, tenantID, groupID, userID string) (interface{}, error) {
-	if m.iamAddGroupMemberFunc != nil {
-		return m.iamAddGroupMemberFunc(ctx, tenantID, groupID, userID)
-	}
-	return mockIAMSuccess(), nil
-}
-
-func (m *mockServiceProvider) IAMRemoveGroupMember(ctx context.Context, tenantID, groupID, userID string) (interface{}, error) {
-	if m.iamRemoveGroupMemberFunc != nil {
-		return m.iamRemoveGroupMemberFunc(ctx, tenantID, groupID, userID)
-	}
-	return mockIAMSuccess(), nil
 }
 
 // IAM Tenant implementations

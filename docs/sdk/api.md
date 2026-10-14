@@ -99,7 +99,7 @@ platform code and SDK consumers program against.
 | agentic | request / response types of `client/orchestrator`, `client/project`, `client/account`, `client/sdlc` | ✅ `sdk/go/services/{orchestrator,project,account,sdlc}` (§3.2) |
 | agentic | a platform container attestor registered into `WithContainerAttestor`: this host, device registry lookup, golden PCRs from the device profile, quarantine and re-attestation on drift | ✅ `container.FleetContainerAttestor` in the embedded server (§3.3) |
 | agentic | container attestation of a remote device, a recorded verdict on a pass, TOFU capture of a missing baseline | `MISSING — docs/13 G7` |
-| service registry | `Discovery()`, `DataStore()` | ✅ each; an upstream failure is `ErrServiceUnavailable` |
+| service registry | `Registry()`, `DataStore()` | ✅ each; a `DataStore()` upstream failure is `ErrServiceUnavailable` |
 | connection | `Transport()` | ✅ |
 | qrdb surface go-quicbaas does not route | `SQL()`, `Collections()`, `Lock()`, `Lease()` and the rest | `MISSING — docs/13 G1` |
 

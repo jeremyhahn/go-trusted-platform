@@ -131,7 +131,10 @@ message LUKSEnrollTPMRequest {
   string device = 1;
   string existing_passphrase = 2;
   repeated int32 pcrs = 3;
-  string handle = 4;
+  // 4 carried a persistent NV handle; the go-xkms sealer seals under the
+  // Platform or Shared SRK and takes none.
+  reserved 4;
+  reserved "handle";
 }
 
 // LUKSEnrollTPMResponse returns the enrolled slot index.

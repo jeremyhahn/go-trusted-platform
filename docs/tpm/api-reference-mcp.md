@@ -76,7 +76,7 @@ gRPC twin: an unseal tool never takes a read scope on MCP.
 
 | Tool | Description |
 |------|-------------|
-| `platform_tpm_seal` | Seal data to TPM with optional PCR policy |
+| `platform_tpm_seal` | Seal data to TPM (PCR binding refused until go-quicbaas #1171) |
 | `platform_tpm_unseal` | Unseal TPM-sealed data |
 | `platform_tpm_random` | Generate random bytes from TPM RNG |
 
@@ -459,7 +459,13 @@ Generate cryptographically secure random bytes from the TPM hardware RNG.
 
 ### platform_tpm_seal
 
-Seal data to the TPM, optionally binding to PCR state.
+Seal data to the TPM.
+
+**PCR-bound sealing is unavailable.** A call that passes `pcrs` fails with
+`ErrPCRBoundSealUnavailable`, and the message names go-quicbaas #1171. Binding
+the object to PCRs needs the TPM PolicyPCR primitives, which go-quicbaas does
+not re-export yet. Without them the object would be sealed in a way the PCRs do
+not protect, so the tool refuses before the TPM is reached.
 
 **Input Schema:**
 ```json
@@ -473,7 +479,7 @@ Seal data to the TPM, optionally binding to PCR state.
     "pcrs": {
       "type": "array",
       "items": {"type": "integer"},
-      "description": "PCR indices for sealing policy (0-23)"
+      "description": "PCR indices to bind to (0-23); refused until go-quicbaas #1171"
     },
     "cn": {
       "type": "string",

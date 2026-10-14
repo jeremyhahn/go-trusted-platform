@@ -207,9 +207,6 @@ func (a *MCPAdapter) CreateUser(ctx context.Context, opts CreateUserOptions) (*C
 	if len(opts.Roles) > 0 {
 		args["roles"] = opts.Roles
 	}
-	if len(opts.Groups) > 0 {
-		args["groups"] = opts.Groups
-	}
 	if len(opts.Attributes) > 0 {
 		args["attributes"] = opts.Attributes
 	}
@@ -272,9 +269,6 @@ func (a *MCPAdapter) UpdateUser(ctx context.Context, opts UpdateUserOptions) (*U
 	if len(opts.Roles) > 0 {
 		args["roles"] = opts.Roles
 	}
-	if len(opts.Groups) > 0 {
-		args["groups"] = opts.Groups
-	}
 	if len(opts.Attributes) > 0 {
 		args["attributes"] = opts.Attributes
 	}
@@ -336,9 +330,6 @@ func (a *MCPAdapter) ListUsers(ctx context.Context, opts ListUsersOptions) (*Lis
 	if opts.Role != "" {
 		args["role"] = opts.Role
 	}
-	if opts.Group != "" {
-		args["group"] = opts.Group
-	}
 
 	result, err := a.callTool(ctx, "iam_list_users", args)
 	if err != nil {
@@ -392,185 +383,6 @@ func (a *MCPAdapter) RevokeRole(ctx context.Context, opts RevokeRoleOptions) (*R
 	}
 
 	return &RevokeRoleResult{Success: true}, nil
-}
-
-// ============================================================================
-// Group Operations
-// ============================================================================
-
-// CreateGroup creates a new group
-func (a *MCPAdapter) CreateGroup(ctx context.Context, opts CreateGroupOptions) (*CreateGroupResult, error) {
-	args := map[string]interface{}{
-		"tenant_id": opts.TenantID,
-		"id":        opts.ID,
-	}
-	if opts.Name != "" {
-		args["name"] = opts.Name
-	}
-	if opts.Description != "" {
-		args["description"] = opts.Description
-	}
-
-	result, err := a.callTool(ctx, "iam_create_group", args)
-	if err != nil {
-		return nil, err
-	}
-
-	var group Group
-	if err := json.Unmarshal(result, &group); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "CreateGroup",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &CreateGroupResult{Group: &group}, nil
-}
-
-// GetGroup retrieves a group by ID
-func (a *MCPAdapter) GetGroup(ctx context.Context, opts GetGroupOptions) (*GetGroupResult, error) {
-	args := map[string]interface{}{
-		"tenant_id": opts.TenantID,
-		"group_id":  opts.GroupID,
-	}
-
-	result, err := a.callTool(ctx, "iam_get_group", args)
-	if err != nil {
-		return nil, err
-	}
-
-	var group Group
-	if err := json.Unmarshal(result, &group); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "GetGroup",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &GetGroupResult{Group: &group}, nil
-}
-
-// UpdateGroup updates an existing group
-// Note: MCP does not have a dedicated update_group tool, so this implementation
-// falls back to returning the current group. In production, this should be
-// implemented properly once the MCP tool is available.
-func (a *MCPAdapter) UpdateGroup(ctx context.Context, opts UpdateGroupOptions) (*UpdateGroupResult, error) {
-	// Build update arguments
-	args := map[string]interface{}{
-		"tenant_id": opts.TenantID,
-		"group_id":  opts.GroupID,
-	}
-	if opts.Name != "" {
-		args["name"] = opts.Name
-	}
-	if opts.Description != "" {
-		args["description"] = opts.Description
-	}
-
-	// Try to call iam_update_group if it exists
-	result, err := a.callTool(ctx, "iam_update_group", args)
-	if err != nil {
-		// If update tool doesn't exist, fall back to get group
-		getResult, getErr := a.GetGroup(ctx, GetGroupOptions{
-			TenantID: opts.TenantID,
-			GroupID:  opts.GroupID,
-		})
-		if getErr != nil {
-			return nil, err
-		}
-		return &UpdateGroupResult{Group: getResult.Group}, nil
-	}
-
-	var group Group
-	if err := json.Unmarshal(result, &group); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "UpdateGroup",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &UpdateGroupResult{Group: &group}, nil
-}
-
-// DeleteGroup removes a group
-func (a *MCPAdapter) DeleteGroup(ctx context.Context, opts DeleteGroupOptions) (*DeleteGroupResult, error) {
-	args := map[string]interface{}{
-		"tenant_id": opts.TenantID,
-		"group_id":  opts.GroupID,
-	}
-
-	_, err := a.callTool(ctx, "iam_delete_group", args)
-	if err != nil {
-		return nil, err
-	}
-
-	return &DeleteGroupResult{Success: true}, nil
-}
-
-// ListGroups lists all groups with optional filtering
-func (a *MCPAdapter) ListGroups(ctx context.Context, opts ListGroupsOptions) (*ListGroupsResult, error) {
-	args := map[string]interface{}{
-		"tenant_id": opts.TenantID,
-	}
-	if opts.Limit > 0 {
-		args["limit"] = opts.Limit
-	}
-	if opts.Offset > 0 {
-		args["offset"] = opts.Offset
-	}
-
-	result, err := a.callTool(ctx, "iam_list_groups", args)
-	if err != nil {
-		return nil, err
-	}
-
-	var listResult ListGroupsResult
-	if err := json.Unmarshal(result, &listResult); err != nil {
-		// Try parsing as array of groups directly
-		var groups []*Group
-		if err := json.Unmarshal(result, &groups); err != nil {
-			return nil, &MCPAdapterError{
-				Operation: "ListGroups",
-				Message:   "failed to parse response: " + err.Error(),
-			}
-		}
-		listResult.Groups = groups
-		listResult.Total = int64(len(groups))
-	}
-
-	return &listResult, nil
-}
-
-// AddMember adds a user to a group
-func (a *MCPAdapter) AddMember(ctx context.Context, opts AddMemberOptions) (*AddMemberResult, error) {
-	args := map[string]interface{}{
-		"tenant_id": opts.TenantID,
-		"group_id":  opts.GroupID,
-		"user_id":   opts.UserID,
-	}
-
-	_, err := a.callTool(ctx, "iam_add_group_member", args)
-	if err != nil {
-		return nil, err
-	}
-
-	return &AddMemberResult{Success: true}, nil
-}
-
-// RemoveMember removes a user from a group
-func (a *MCPAdapter) RemoveMember(ctx context.Context, opts RemoveMemberOptions) (*RemoveMemberResult, error) {
-	args := map[string]interface{}{
-		"tenant_id": opts.TenantID,
-		"group_id":  opts.GroupID,
-		"user_id":   opts.UserID,
-	}
-
-	_, err := a.callTool(ctx, "iam_remove_group_member", args)
-	if err != nil {
-		return nil, err
-	}
-
-	return &RemoveMemberResult{Success: true}, nil
 }
 
 // ============================================================================

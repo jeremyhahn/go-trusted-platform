@@ -98,7 +98,7 @@ type TPMService interface {
 | GetEventLog | Retrieve TPM event log |
 | ReadPCRs | Read Platform Configuration Register values |
 | ExtendPCR | Extend PCR with measurement data |
-| Seal | Seal data with optional PCR policy |
+| Seal | Seal data under a password (PCR binding refused until go-quicbaas #1171) |
 | Unseal | Unseal TPM-sealed data |
 | DefineNVRAM | Create NVRAM index |
 | WriteNVRAM | Write data to NVRAM |

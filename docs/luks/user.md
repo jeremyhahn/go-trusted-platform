@@ -64,12 +64,14 @@ Add `--require-pin` to demand the authenticator PIN at unlock.
 
 ```
 platformctl luks enroll-tpm --device /dev/<device> \
-    --existing-passphrase '<existing>' --pcrs 7,9 --handle 0x81000003
+    --existing-passphrase '<existing>'
 ```
 
-Choose PCRs that change only when you want unlock to stop working; after a
-firmware or boot-chain change that moves them, the TPM slot no longer opens the
-volume and another slot must be used.
+The passphrase is sealed under the Platform SRK and bound to the platform PCR
+policy, so no PCRs are given; `--pcrs` applies only when platformd seals under
+the Shared SRK (systemd-cryptsetup), and under the Platform SRK it is refused.
+After a firmware or boot-chain change that moves the policy's PCRs, the TPM
+slot no longer opens the volume and another slot must be used.
 
 ---
 

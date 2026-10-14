@@ -902,7 +902,6 @@ func (r *ToolRegistry) executeIAMCreateUser(ctx context.Context, args map[string
 		Email:      getString(args, "email"),
 		Name:       getString(args, "name"),
 		Roles:      getStringSlice(args, "roles"),
-		Groups:     getStringSlice(args, "groups"),
 		Attributes: getStringMap(args, "attributes"),
 	}
 
@@ -935,7 +934,6 @@ func (r *ToolRegistry) executeIAMListUsers(ctx context.Context, args map[string]
 		Pagination:  getIAMPagination(args),
 		EmailFilter: getString(args, "email_filter"),
 		RoleFilter:  getString(args, "role_filter"),
-		GroupFilter: getString(args, "group_filter"),
 	}
 
 	users, err := r.service.IAMListUsers(ctx, req)
@@ -1056,65 +1054,6 @@ func (r *ToolRegistry) executeIAMAuthenticate(ctx context.Context, args map[stri
 	}
 
 	result, err := r.service.IAMAuthenticate(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	return marshalResult(result)
-}
-
-// IAM Group tool execution handlers
-
-func (r *ToolRegistry) executeIAMCreateGroup(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	req := &IAMCreateGroupRequest{
-		TenantID:    getString(args, "tenant_id"),
-		ID:          getString(args, "id"),
-		Name:        getString(args, "name"),
-		Description: getString(args, "description"),
-	}
-
-	group, err := r.service.IAMCreateGroup(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	return marshalResult(group)
-}
-
-func (r *ToolRegistry) executeIAMDeleteGroup(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	result, err := r.service.IAMDeleteGroup(ctx, getString(args, "tenant_id"), getString(args, "group_id"))
-	if err != nil {
-		return nil, err
-	}
-	return marshalResult(result)
-}
-
-func (r *ToolRegistry) executeIAMGetGroup(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	group, err := r.service.IAMGetGroup(ctx, getString(args, "tenant_id"), getString(args, "group_id"))
-	if err != nil {
-		return nil, err
-	}
-	return marshalResult(group)
-}
-
-func (r *ToolRegistry) executeIAMListGroups(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	groups, err := r.service.IAMListGroups(ctx, getString(args, "tenant_id"), getIAMPagination(args))
-	if err != nil {
-		return nil, err
-	}
-	return marshalResult(groups)
-}
-
-func (r *ToolRegistry) executeIAMAddGroupMember(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	result, err := r.service.IAMAddGroupMember(ctx,
-		getString(args, "tenant_id"), getString(args, "group_id"), getString(args, "user_id"))
-	if err != nil {
-		return nil, err
-	}
-	return marshalResult(result)
-}
-
-func (r *ToolRegistry) executeIAMRemoveGroupMember(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	result, err := r.service.IAMRemoveGroupMember(ctx,
-		getString(args, "tenant_id"), getString(args, "group_id"), getString(args, "user_id"))
 	if err != nil {
 		return nil, err
 	}

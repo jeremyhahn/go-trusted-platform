@@ -445,7 +445,7 @@ func TestFormatVolumeWithTPMSealing(t *testing.T) {
 				Enabled:   true,
 				KeySlot:   1,
 				KeyName:   "test-key",
-				PCRPolicy: true,
+				TPMPolicy: "platform",
 			},
 		},
 	}

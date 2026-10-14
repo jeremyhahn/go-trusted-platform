@@ -784,26 +784,6 @@ func TestQUICIAM(t *testing.T) {
 		assert.NotNil(t, resp.GetTimestamp(), "Timestamp should be set")
 	})
 
-	t.Run("IAM ListGroups returns group list", func(t *testing.T) {
-		req := &platformv1.ListIAMGroupsRequest{
-			TenantId:   "default",
-			Pagination: &platformv1.PaginationRequest{PageSize: 10},
-		}
-		var resp platformv1.ListIAMGroupsResponse
-		err := client.Send(ctx, quicwire.OpIAMGroupList, req, &resp)
-		if err != nil {
-			var unexpectedStatus ErrUnexpectedStatus
-			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("IAM service not available")
-				}
-			}
-			t.Fatalf("IAM ListGroups request failed: %v", err)
-		}
-		assert.NotNil(t, resp.GetPagination(), "Pagination should be set")
-		assert.NotNil(t, resp.GetTimestamp(), "Timestamp should be set")
-	})
-
 	t.Run("IAM CreateUser with missing tenant_id returns error", func(t *testing.T) {
 		req := &platformv1.CreateIAMUserRequest{
 			TenantId: "",

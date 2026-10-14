@@ -16,6 +16,8 @@ package drive
 import (
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 )
 
 // FilesystemType represents supported filesystem types
@@ -269,8 +271,10 @@ type TPMSealingConfig struct {
 	// KeySlot is the LUKS keyslot to use for TPM-sealed key (default: 1)
 	KeySlot int `yaml:"key-slot,omitempty" json:"key_slot,omitempty" mapstructure:"key-slot"`
 
-	// PCRPolicy enables PCR-based policy
-	PCRPolicy bool `yaml:"pcr-policy" json:"pcr_policy" mapstructure:"pcr-policy"`
+	// TPMPolicy names the TPM policy the sealed key is bound to: empty for
+	// none, "platform" for the platform PCR policy, or the name of an
+	// authorized TPM policy.
+	TPMPolicy string `yaml:"tpm-policy,omitempty" json:"tpm_policy,omitempty" mapstructure:"tpm-policy"`
 
 	// PCRSelection defines which PCRs to seal against
 	PCRSelection []uint `yaml:"pcr-selection,omitempty" json:"pcr_selection,omitempty" mapstructure:"pcr-selection"`
@@ -437,7 +441,7 @@ func DefaultTPMSealingConfig() *TPMSealingConfig {
 	return &TPMSealingConfig{
 		Enabled:      true,
 		KeySlot:      1,
-		PCRPolicy:    true,
+		TPMPolicy:    common.TPMPolicyPlatform,
 		PCRSelection: []uint{0, 1, 2, 3, 7, 9},
 		PCRBanks:     []string{"sha256"},
 	}

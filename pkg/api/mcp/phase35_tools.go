@@ -309,7 +309,6 @@ func (r *ToolRegistry) registerPhase35Tools() {
 	})
 	tpmProps := copyMap(luksEnrollCommon)
 	tpmProps["pcrs"] = map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "integer"}}
-	tpmProps["handle"] = map[string]interface{}{"type": "string"}
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_luks_enroll_tpm",
 		Description: "Add a TPM2-sealed LUKS keyslot",

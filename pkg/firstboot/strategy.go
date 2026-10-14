@@ -29,6 +29,7 @@ import (
 
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -1274,7 +1275,7 @@ func (s *FirstbootSealStrategy) sealKeyToTPM(ctx context.Context, key []byte, ef
 	if tpmSealCfg != nil && tpmSealCfg.Handle != 0 {
 		platformPolicy = tpmSealCfg.PlatformPolicy
 	}
-	srkAttrs.PlatformPolicy = platformPolicy
+	srkAttrs.TPMPolicy = common.PlatformTPMPolicy(platformPolicy)
 
 	// PCR selection for sealed object - resolve from installer TPM seal config first,
 	// then fall back to the firstboot executor config (single source of truth)
@@ -1297,10 +1298,10 @@ func (s *FirstbootSealStrategy) sealKeyToTPM(ctx context.Context, key []byte, ef
 	// PARENT SRK is authorized (recorded in pcr-banks, replayed by the
 	// initrd) — the two axes are independent (#52).
 	pcrAttrs := &xkmssdk.KeyAttributes{
-		CN:             "luks-root",
-		KeyType:        xkmssdk.KeyTypeHMAC,
-		PlatformPolicy: true,
-		Parent:         srkAttrs,
+		CN:        "luks-root",
+		KeyType:   xkmssdk.KeyTypeHMAC,
+		TPMPolicy: common.TPMPolicyPlatform,
+		Parent:    srkAttrs,
 	}
 
 	// Seal with PCR policy on the object

@@ -211,7 +211,6 @@ func TestJWTClaims(t *testing.T) {
 			Email:        "user@example.com",
 			Name:         "Test User",
 			Roles:        []string{"admin", "user"},
-			Groups:       []string{"developers"},
 			Audience:     []string{"api.example.com"},
 			Issuer:       "auth.example.com",
 			IssuedAt:     now,
@@ -234,9 +233,6 @@ func TestJWTClaims(t *testing.T) {
 		}
 		if len(claims.Roles) != 2 {
 			t.Error("Roles not set correctly")
-		}
-		if len(claims.Groups) != 1 {
-			t.Error("Groups not set correctly")
 		}
 		if !claims.MFAVerified {
 			t.Error("MFAVerified not set correctly")
@@ -394,9 +390,7 @@ func TestIAMSession_Interface(t *testing.T) {
 		_ = session.Email()
 		_ = session.Name()
 		_ = session.Roles()
-		_ = session.Groups()
 		_ = session.HasRole("admin")
-		_ = session.HasGroup("developers")
 		_ = session.HasAnyRole("admin", "user")
 		_ = session.HasAllRoles("admin", "user")
 		_ = session.IsMFAVerified()

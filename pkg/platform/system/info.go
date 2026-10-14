@@ -316,7 +316,7 @@ func identityToKeyConfig(identity *trustedca.CAIdentity, _ ...*trustedca.CAConfi
 		ValidYears: identity.Valid,
 
 		// Backend configuration
-		StoreType: string(identity.KeystoreType),
+		StoreType: string(identity.GetStoreType()),
 
 		// Parent CA (for intermediate CAs)
 		ParentCA: identity.ParentCA,

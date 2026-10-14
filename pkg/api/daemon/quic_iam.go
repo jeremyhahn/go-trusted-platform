@@ -30,7 +30,7 @@
 //
 // # Supported Operations
 //
-// User / Role / Group management and CheckPermission delegate to the shared
+// User / Role management and CheckPermission delegate to the shared
 // *IAMGRPCService (pb wire).
 //
 // Authentication (OpIAMAuthenticate) remains daemon-native on the QUICIAMService
@@ -171,20 +171,6 @@ func (h *QUICServiceHandler) handleIAMOperation(ctx context.Context, req *quicwi
 	case quicwire.OpIAMRoleRevoke:
 		return h.handleIAMRoleRevoke(ctx, req)
 
-	// Group operations
-	case quicwire.OpIAMGroupCreate:
-		return h.handleIAMGroupCreate(ctx, req)
-	case quicwire.OpIAMGroupDelete:
-		return h.handleIAMGroupDelete(ctx, req)
-	case quicwire.OpIAMGroupGet:
-		return h.handleIAMGroupGet(ctx, req)
-	case quicwire.OpIAMGroupList:
-		return h.handleIAMGroupList(ctx, req)
-	case quicwire.OpIAMGroupAddMember:
-		return h.handleIAMGroupAddMember(ctx, req)
-	case quicwire.OpIAMGroupRemoveMember:
-		return h.handleIAMGroupRemoveMember(ctx, req)
-
 	// Permission operations
 	case quicwire.OpIAMCheckPermission:
 		return h.handleIAMCheckPermission(ctx, req)
@@ -202,8 +188,8 @@ func (h *QUICServiceHandler) handleIAMOperation(ctx context.Context, req *quicwi
 // User Operation Handlers
 // =============================================================================
 
-// handleIAMUserCreate creates a new IAM user. The pb request carries Roles,
-// Groups and TenantId that the former flat struct dropped.
+// handleIAMUserCreate creates a new IAM user. The pb request carries Roles and
+// TenantId that the former flat struct dropped.
 func (h *QUICServiceHandler) handleIAMUserCreate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.CreateIAMUserRequest
 	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
@@ -363,97 +349,6 @@ func (h *QUICServiceHandler) handleIAMRoleRevoke(ctx context.Context, req *quicw
 	resp, err := h.iamGRPC.RevokeRole(ctx, &pbReq)
 	if err != nil {
 		return h.grpcDelegateErrorToQUIC("IAMRoleRevoke", err)
-	}
-	return h.encodeGRPCDelegateResponse(resp)
-}
-
-// =============================================================================
-// Group Operation Handlers
-// =============================================================================
-
-// handleIAMGroupCreate creates a new IAM group.
-func (h *QUICServiceHandler) handleIAMGroupCreate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	var pbReq platformv1.CreateIAMGroupRequest
-	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
-	}
-
-	resp, err := h.iamGRPC.CreateGroup(ctx, &pbReq)
-	if err != nil {
-		return h.grpcDelegateErrorToQUIC("IAMGroupCreate", err)
-	}
-	return h.encodeGRPCDelegateResponse(resp)
-}
-
-// handleIAMGroupDelete deletes an IAM group.
-func (h *QUICServiceHandler) handleIAMGroupDelete(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	var pbReq platformv1.DeleteIAMGroupRequest
-	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
-	}
-
-	resp, err := h.iamGRPC.DeleteGroup(ctx, &pbReq)
-	if err != nil {
-		return h.grpcDelegateErrorToQUIC("IAMGroupDelete", err)
-	}
-	return h.encodeGRPCDelegateResponse(resp)
-}
-
-// handleIAMGroupGet retrieves an IAM group by ID.
-func (h *QUICServiceHandler) handleIAMGroupGet(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	var pbReq platformv1.GetIAMGroupRequest
-	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
-	}
-
-	resp, err := h.iamGRPC.GetGroup(ctx, &pbReq)
-	if err != nil {
-		return h.grpcDelegateErrorToQUIC("IAMGroupGet", err)
-	}
-	return h.encodeGRPCDelegateResponse(resp)
-}
-
-// handleIAMGroupList returns a paginated list of IAM groups. The list payload is
-// optional.
-func (h *QUICServiceHandler) handleIAMGroupList(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	var pbReq platformv1.ListIAMGroupsRequest
-	if len(req.Payload) > 0 {
-		if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
-			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
-		}
-	}
-
-	resp, err := h.iamGRPC.ListGroups(ctx, &pbReq)
-	if err != nil {
-		return h.grpcDelegateErrorToQUIC("IAMGroupList", err)
-	}
-	return h.encodeGRPCDelegateResponse(resp)
-}
-
-// handleIAMGroupAddMember adds a user to a group.
-func (h *QUICServiceHandler) handleIAMGroupAddMember(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	var pbReq platformv1.AddGroupMemberRequest
-	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
-	}
-
-	resp, err := h.iamGRPC.AddGroupMember(ctx, &pbReq)
-	if err != nil {
-		return h.grpcDelegateErrorToQUIC("IAMGroupAddMember", err)
-	}
-	return h.encodeGRPCDelegateResponse(resp)
-}
-
-// handleIAMGroupRemoveMember removes a user from a group.
-func (h *QUICServiceHandler) handleIAMGroupRemoveMember(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	var pbReq platformv1.RemoveGroupMemberRequest
-	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
-	}
-
-	resp, err := h.iamGRPC.RemoveGroupMember(ctx, &pbReq)
-	if err != nil {
-		return h.grpcDelegateErrorToQUIC("IAMGroupRemoveMember", err)
 	}
 	return h.encodeGRPCDelegateResponse(resp)
 }

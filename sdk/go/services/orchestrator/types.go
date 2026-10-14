@@ -133,22 +133,22 @@ type (
 	DeleteWorkflowRequest = upstream.DeleteWorkflowRequest
 )
 
-// The agent fleet.
+// The fleet nodes (the agent fleet, renamed upstream).
 type (
-	AgentRegistration      = upstream.AgentRegistration
-	RegisterAgentRequest   = upstream.RegisterAgentRequest
-	RegisterAgentResponse  = upstream.RegisterAgentResponse
-	GetAgentRequest        = upstream.GetAgentRequest
-	ListAgentsRequest      = upstream.ListAgentsRequest
-	ListAgentsResponse     = upstream.ListAgentsResponse
-	RemoveAgentRequest     = upstream.RemoveAgentRequest
-	RemoveAgentResponse    = upstream.RemoveAgentResponse
-	AgentHeartbeatRequest  = upstream.AgentHeartbeatRequest
-	AgentHeartbeatResponse = upstream.AgentHeartbeatResponse
-	DisableAgentRequest    = upstream.DisableAgentRequest
-	DisableAgentResponse   = upstream.DisableAgentResponse
-	EnableAgentRequest     = upstream.EnableAgentRequest
-	EnableAgentResponse    = upstream.EnableAgentResponse
+	FleetNode                  = upstream.FleetNode
+	RegisterFleetNodeRequest   = upstream.RegisterFleetNodeRequest
+	RegisterFleetNodeResponse  = upstream.RegisterFleetNodeResponse
+	GetFleetNodeRequest        = upstream.GetFleetNodeRequest
+	ListFleetNodesRequest      = upstream.ListFleetNodesRequest
+	ListFleetNodesResponse     = upstream.ListFleetNodesResponse
+	RemoveFleetNodeRequest     = upstream.RemoveFleetNodeRequest
+	RemoveFleetNodeResponse    = upstream.RemoveFleetNodeResponse
+	FleetNodeHeartbeatRequest  = upstream.FleetNodeHeartbeatRequest
+	FleetNodeHeartbeatResponse = upstream.FleetNodeHeartbeatResponse
+	DisableFleetNodeRequest    = upstream.DisableFleetNodeRequest
+	DisableFleetNodeResponse   = upstream.DisableFleetNodeResponse
+	EnableFleetNodeRequest     = upstream.EnableFleetNodeRequest
+	EnableFleetNodeResponse    = upstream.EnableFleetNodeResponse
 )
 
 // Backends, stateless inference and health.

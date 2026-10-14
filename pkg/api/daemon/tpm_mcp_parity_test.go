@@ -154,8 +154,8 @@ const (
 // not name the TPM2 backend, as the SDK's TPM2 Unseal does.
 type sealStoreTPM struct {
 	xkmssdk.TrustedPlatformModule
-	blobs      map[string][]byte
-	lastPolicy *xkmssdk.TPMSealPolicy
+	blobs map[string][]byte
+	seals int
 }
 
 func newSealStoreTPM() *sealStoreTPM {
@@ -169,7 +169,7 @@ func (t *sealStoreTPM) SSRKAttributes() (*xkmssdk.KeyAttributes, error) {
 func (t *sealStoreTPM) Seal(_ context.Context, data []byte, opts *xkmssdk.SealOptions) (*xkmssdk.SealedData, error) {
 	cn := opts.KeyAttributes.CN
 	t.blobs[cn] = append([]byte(nil), data...)
-	t.lastPolicy = opts.TPMPolicy
+	t.seals++
 	return &xkmssdk.SealedData{
 		Backend:    xkmssdk.BackendTypeTPM2,
 		KeyID:      cn,
@@ -189,27 +189,33 @@ func (t *sealStoreTPM) Unseal(_ context.Context, sealed *xkmssdk.SealedData, opt
 	return data, nil
 }
 
-// TestTPMParity_Seal: MCP seal returns the payload gRPC Seal returns and binds
-// the PCRs it is given. It used to answer success with empty sealed_data and
-// drop the PCR policy.
+// TestTPMParity_Seal: MCP seal returns the payload gRPC Seal returns, and
+// refuses a PCR-bound seal as gRPC Seal does, before the TPM is reached. It
+// used to answer success with empty sealed_data and drop the PCR policy.
+// go-quicbaas v0.14 removed SealOptions.TPMPolicy, so both now fail closed
+// on PCRs until go-quicbaas #1171.
 func TestTPMParity_Seal(t *testing.T) {
 	ctx := context.Background()
 	tpm := newSealStoreTPM()
 	grpcSvc := newTPMGRPCServiceWith(tpm)
 	mcp := newMCPProviderWithTPM(tpm)
 
-	resp, err := grpcSvc.Seal(ctx, &platformv1.SealRequest{Data: []byte("secret"), PcrIndices: []uint32{0, 7}, Cn: "app-key"})
+	resp, err := grpcSvc.Seal(ctx, &platformv1.SealRequest{Data: []byte("secret"), Cn: "app-key"})
 	require.NoError(t, err)
-
-	tpm.lastPolicy = nil
-	got, err := mcp.TPMSeal(ctx, []byte("secret"), []uint32{0, 7}, "app-key", "")
+	got, err := mcp.TPMSeal(ctx, []byte("secret"), nil, "app-key", "")
 	require.NoError(t, err)
 	assert.NotEmpty(t, got)
 	assert.Equal(t, resp.GetSealedData(), got)
-	assert.NotNil(t, tpm.lastPolicy, "MCP seal dropped the PCR policy")
 
-	_, grpcErr := grpcSvc.Seal(ctx, &platformv1.SealRequest{})
-	_, mcpErr := mcp.TPMSeal(ctx, nil, nil, "", "")
+	sealsBefore := tpm.seals
+	_, grpcErr := grpcSvc.Seal(ctx, &platformv1.SealRequest{Data: []byte("secret"), PcrIndices: []uint32{0, 7}, Cn: "app-key"})
+	_, mcpErr := mcp.TPMSeal(ctx, []byte("secret"), []uint32{0, 7}, "app-key", "")
+	assert.Equal(t, codes.FailedPrecondition, status.Code(grpcErr))
+	assert.Equal(t, codes.FailedPrecondition, status.Code(mcpErr))
+	assert.Equal(t, sealsBefore, tpm.seals, "a PCR-bound seal reached the TPM")
+
+	_, grpcErr = grpcSvc.Seal(ctx, &platformv1.SealRequest{})
+	_, mcpErr = mcp.TPMSeal(ctx, nil, nil, "", "")
 	assert.Equal(t, codes.InvalidArgument, status.Code(grpcErr))
 	assert.Equal(t, codes.InvalidArgument, status.Code(mcpErr))
 }

@@ -59,7 +59,7 @@
 //   - ObjectTransfer: Peer-to-peer data transfer
 //
 // Identity Services:
-//   - IAM: Full IAM with sub-clients (Tenant, User, Group, Role, Policy, etc.)
+//   - IAM: Full IAM with sub-clients (Tenant, User, Role, Policy, etc.)
 //
 // Agentic Services:
 //   - Orchestrator: Agent fleet management (agents, sessions, tasks, jobs, workflows)

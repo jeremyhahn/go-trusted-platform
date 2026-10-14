@@ -245,14 +245,21 @@ func daemonServerSANs(a *app.App) daemonSANs {
 // challenge types. Each challenge type (e.g., "http-01", "dns-01",
 // "enroll-01") is mapped to its corresponding verifier function that
 // performs the ACME challenge validation.
-func buildChallengeMap(challenges []string, ca tcgEnrollmentCA) map[string]quicbaassdk.ACMEChallengeVerifierFunc {
+//
+// One challenge-validation client serves every verifier that contacts a
+// client-named target (http-01, enroll-01). It refuses reserved addresses
+// unless allowPrivateTargets is set.
+func buildChallengeMap(challenges []string, allowPrivateTargets bool, ca tcgEnrollmentCA) map[string]quicbaassdk.ACMEChallengeVerifierFunc {
 	challengeMap := make(map[string]quicbaassdk.ACMEChallengeVerifierFunc)
+	client := quicbaassdk.NewACMEChallengeClient(quicbaassdk.ACMEChallengeClientConfig{
+		AllowPrivateTargets: allowPrivateTargets,
+	})
 
 	for _, challengeType := range challenges {
 		switch challengeType {
 		case "http-01":
 			challengeMap["http-01"] = func(resolver *net.Resolver, caInterface quicbaassdk.ACMECertificateAuthority, authzValue, challengePort, challengeToken, expectedKeyAuth string) error {
-				return quicbaassdk.ACMEVerifyHTTP01(resolver, authzValue, challengePort, challengeToken, expectedKeyAuth)
+				return quicbaassdk.ACMEVerifyHTTP01(client, authzValue, challengePort, challengeToken, expectedKeyAuth)
 			}
 		case "dns-01":
 			challengeMap["dns-01"] = func(resolver *net.Resolver, caInterface quicbaassdk.ACMECertificateAuthority, authzValue, challengePort, challengeToken, expectedKeyAuth string) error {
@@ -260,7 +267,7 @@ func buildChallengeMap(challenges []string, ca tcgEnrollmentCA) map[string]quicb
 			}
 		case "enroll-01":
 			challengeMap["enroll-01"] = func(resolver *net.Resolver, caInterface quicbaassdk.ACMECertificateAuthority, authzValue, challengePort, challengeToken, expectedKeyAuth string) error {
-				return quicbaassdk.ACMEVerifyEnroll01(resolver, ca, authzValue, challengePort, challengeToken, expectedKeyAuth)
+				return quicbaassdk.ACMEVerifyEnroll01(client, ca, authzValue, challengePort, challengeToken, expectedKeyAuth)
 			}
 		case "endorse-01":
 			// endorse-01 is used to provision EK certificates for TPMs without manufacturer certs.
@@ -1065,7 +1072,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			baseRESTURI := strings.TrimSuffix(wsConfig.ACME.DirectoryURL, "/acme/directory")
 			logger.Info("ACME server enabled for webservice", "name", wsName, "directory", wsConfig.ACME.DirectoryURL, "baseURI", baseRESTURI)
 
-			challengeMap := buildChallengeMap(wsConfig.ACME.Challenges, App.CA)
+			challengeMap := buildChallengeMap(wsConfig.ACME.Challenges, wsConfig.ACME.AllowPrivateTargets, App.CA)
 			logger.Info("ACME challenges configured", "count", len(challengeMap), "challenges", wsConfig.ACME.Challenges)
 
 			var internalDomain string

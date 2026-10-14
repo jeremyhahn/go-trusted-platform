@@ -224,7 +224,6 @@ func createTestCAConfig() *trustedca.CAConfig {
 						RSAConfig:    &xkmssdk.KeyRSAConfig{KeySize: 2048},
 					},
 				},
-				KeystoreType: xkmssdk.StoreSoftware,
 			},
 		},
 		SelectedCA: 0,

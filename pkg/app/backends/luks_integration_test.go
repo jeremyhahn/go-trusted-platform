@@ -29,6 +29,7 @@ import (
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
 	luks "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/luks"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/secure"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -175,8 +176,6 @@ func TestLUKSBackend_EnrollTPM_StubHandler(t *testing.T) {
 	_, err := b.EnrollTPM(ctx, &daemon.LUKSEnrollTPMRequest{
 		Device:             loop,
 		ExistingPassphrase: "initialpass",
-		PCRs:               []int32{7},
-		Handle:             "0x81000001",
 	})
 	if err != nil {
 		t.Fatalf("EnrollTPM: %v", err)
@@ -324,19 +323,17 @@ type integrationStubTPM struct {
 	passphrase []byte
 }
 
-func (s *integrationStubTPM) Seal(_ context.Context, _ string, _ []int32) ([]byte, []byte, error) {
-	token := &luks.TPMToken{
-		Type:        LUKSTPMTokenType,
-		TPM2Blob:    luks.EncodeTPMSealBlobs([]byte{0x01}, []byte{0x02}),
-		TPM2PCRBank: "sha256",
-		TPM2PCRs:    []int{7},
-		TPM2Handle:  0x81000001,
-	}
-	raw, err := json.Marshal(token)
+func (s *integrationStubTPM) SealPassphrase(_ context.Context, _ []int32) (*LUKSTPMSealResult, error) {
+	passphrase, err := secure.NewBufferFromBytes(bytes.Clone(s.passphrase))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	out := make([]byte, len(s.passphrase))
-	copy(out, s.passphrase)
-	return out, raw, nil
+	return &LUKSTPMSealResult{
+		Passphrase: passphrase,
+		Token: &luks2.Token{
+			Type:          LUKSXKMSTPMTokenType,
+			TPM2Blob:      luks.EncodeTPMSealBlobs([]byte{0x01}, []byte{0x02}),
+			TPM2KeyHandle: 0x81000001,
+		},
+	}, nil
 }

@@ -14,7 +14,7 @@
 // Package iam provides REST API handlers for Identity and Access Management operations.
 //
 // This package implements the REST interface for the IAM subsystem, exposing endpoints
-// for managing users, groups, roles, tenants, policies, and applications through
+// for managing users, roles, tenants, policies, and applications through
 // a standard HTTP/HTTPS interface. It serves as a protocol adapter that translates
 // REST requests to gRPC calls against the underlying QuicBaaS IAM service.
 //
@@ -38,16 +38,6 @@
 //   - DELETE /api/v1/iam/tenants/{tenant}/users/{id}      - Delete user
 //   - POST   /api/v1/iam/tenants/{tenant}/users/{id}/roles/{role} - Assign role
 //   - DELETE /api/v1/iam/tenants/{tenant}/users/{id}/roles/{role} - Revoke role
-//
-// Group Management:
-//
-//   - POST   /api/v1/iam/tenants/{tenant}/groups          - Create group
-//   - GET    /api/v1/iam/tenants/{tenant}/groups/{id}     - Get group
-//   - GET    /api/v1/iam/tenants/{tenant}/groups          - List groups
-//   - PUT    /api/v1/iam/tenants/{tenant}/groups/{id}     - Update group
-//   - DELETE /api/v1/iam/tenants/{tenant}/groups/{id}     - Delete group
-//   - POST   /api/v1/iam/tenants/{tenant}/groups/{id}/members/{user} - Add member
-//   - DELETE /api/v1/iam/tenants/{tenant}/groups/{id}/members/{user} - Remove member
 //
 // Role Management:
 //

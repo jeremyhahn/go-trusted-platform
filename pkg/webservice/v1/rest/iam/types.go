@@ -59,7 +59,6 @@ type CreateUserRequest struct {
 	Email      string            `json:"email"`
 	Name       string            `json:"name,omitempty"`
 	Roles      []string          `json:"roles,omitempty"`
-	Groups     []string          `json:"groups,omitempty"`
 	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
@@ -70,7 +69,6 @@ type UpdateUserRequest struct {
 	Email      string            `json:"email,omitempty"`
 	Name       string            `json:"name,omitempty"`
 	Roles      []string          `json:"roles,omitempty"`
-	Groups     []string          `json:"groups,omitempty"`
 	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
@@ -81,7 +79,6 @@ type UserResponse struct {
 	Email       string            `json:"email"`
 	Name        string            `json:"name,omitempty"`
 	Roles       []string          `json:"roles,omitempty"`
-	Groups      []string          `json:"groups,omitempty"`
 	Attributes  map[string]string `json:"attributes,omitempty"`
 	MFAVerified bool              `json:"mfa_verified"`
 	CreatedAt   *time.Time        `json:"created_at,omitempty"`
@@ -93,40 +90,6 @@ type UserResponse struct {
 type ListUsersResponse struct {
 	PaginatedResponse
 	Users []UserResponse `json:"users"`
-}
-
-// CreateGroupRequest is the request body for creating a group
-type CreateGroupRequest struct {
-	BodyTenant
-
-	ID          string `json:"id"`
-	Name        string `json:"name,omitempty"`
-	Description string `json:"description,omitempty"`
-}
-
-// UpdateGroupRequest is the request body for updating a group
-type UpdateGroupRequest struct {
-	BodyTenant
-
-	Name        string `json:"name,omitempty"`
-	Description string `json:"description,omitempty"`
-}
-
-// GroupResponse is the response for group operations
-type GroupResponse struct {
-	ID          string     `json:"id"`
-	TenantID    string     `json:"tenant_id"`
-	Name        string     `json:"name,omitempty"`
-	Description string     `json:"description,omitempty"`
-	Members     []string   `json:"members,omitempty"`
-	CreatedAt   *time.Time `json:"created_at,omitempty"`
-	UpdatedAt   *time.Time `json:"updated_at,omitempty"`
-}
-
-// ListGroupsResponse is the response for listing groups
-type ListGroupsResponse struct {
-	PaginatedResponse
-	Groups []GroupResponse `json:"groups"`
 }
 
 // CreateRoleRequest is the request body for creating a role
@@ -357,9 +320,4 @@ type SuccessResponse struct {
 // AssignRoleRequest is the request body for assigning a role
 type AssignRoleRequest struct {
 	Role string `json:"role"`
-}
-
-// MembershipRequest is the request body for group membership operations
-type MembershipRequest struct {
-	UserID string `json:"user_id"`
 }
