@@ -217,21 +217,12 @@ caller, and the gateway says so rather than treating either as a no-op.
 
 ### BGP operator verbs in platformd (#65)
 
-The five BGP verbs (status, peers, announce, withdraw, prefixes) have one
-implementation, `GatewayService` in `pkg/api/daemon`, and every transport binds
-to it: gRPC and Unix directly, REST through `rest_sdn.go` and the web service,
-QUIC and MCP through `gateway_bgp_bindings.go`, and the embedded SDK through
-the service provider. The SDK clients map the same methods in
-`sdk/go/transport/{quic,mcp}/gateway_bgp.go`; the QUIC wire shapes live once in
-`sdk/go/wire/quicwire/gateway_bgp.go`, shared by server and client.
-
-`GatewayService.SetBGPSpeaker` has no production caller, so every verb answers
-the typed "not configured" error (`Unavailable`; REST 503). Backing it needs
-the platformd→gatewayd link that [api.md](api.md) §5a leaves to a design
-decision. A malformed prefix or next hop is `InvalidArgument`; an announce
-carrying `local_pref`, `med`, `communities` or `labels` is refused with
-`ErrBGPAttributeUnsupported` (`InvalidArgument`), since the speaker interface
-takes a prefix and a next hop only.
+The five BGP verbs have one implementation, `GatewayService` in
+`pkg/api/daemon`, bound on every transport. `SetBGPSpeaker` has no production
+caller, so every verb answers the typed "not configured" error. Backing it
+needs the platformd→gatewayd link that [api.md](api.md) §5a leaves to a design
+decision. The bindings, validation and error mapping are in
+[BGP API](../bgp/api.md).
 
 ## 3. Exported surface — the trusted reverse proxy
 
@@ -1481,7 +1472,7 @@ VTEPs. Everything is driven by EVPN routes:
 | Type-5 IP prefix | a prefix route through the VTEP over the L3VNI |
 
 The route formats, RD/RT derivation and MAC Mobility rules are in
-[`docs/sdn/bgp/evpn.md`](../sdn/bgp/evpn.md); the VXLAN port is described in
+[`docs/bgp/engineering.md`](../bgp/engineering.md#7-evpn); the VXLAN port is described in
 [`docs/sdn/overlay/architecture.md`](../sdn/overlay/architecture.md).
 Everything the handler does is OpenFlow on one bridge: there is no packet-in
 path, no controller-side ARP handling and no kernel VXLAN device per peer.
@@ -1800,25 +1791,12 @@ the admission settings below. The OpenFlow table hand-off goes through
 installs no pipeline-cookie defaults, so the overlay handler is the only owner
 of the table-0, 10, 20, 30, 40, 50, 60 and 70 miss entries.
 
-With RR peers the overlay runs its own BGP speaker (the overlay ASN, the
-l2vpn-evpn family). It is **outbound-only** (`bgp.BGPConfig.OutboundOnly`):
-it opens no listener and dials each route reflector from `local-vtep`
-(`SessionSource`), so the route reflectors must know the gateway by that
-address and must not wait to be dialled — they are passive towards it. A
-gateway with a transit `bgp:` section already has a speaker on TCP 179, and a
-second listener on the VTEP address failed the overlay's start with "address
-in use". The two speakers cannot be one: they run different ASNs and address
-families. An RR peer marked `passive` is refused at validation
-(`ErrOverlayConfigInvalid{Field: "rr-peers"}`), since nothing would accept
-its session.
-
-Each RR peer's policy is RFC 8212 reject-by-default: an l2vpn-evpn route
-crosses the session only if it carries a route target on that direction's
-allowlist. An RR peer configured with no `import-route-targets` or
-`export-route-targets` gets, in that direction, the auto-derived route
-target of every configured VNI (RFC 8365 §5.1.2.1: the overlay ASN, type 1,
-domain 0, the VNI). Without that default the session established and carried
-no Type-2 or Type-3 route at all. An allowlist the operator wrote is kept.
+With RR peers the overlay runs its own outbound-only BGP speaker in the
+overlay ASN, dialling each route reflector from `local-vtep`; an RR peer with
+no route-target allowlist gets the route target of every configured VNI. The
+speaker, its policy and why it cannot share the transit speaker are in
+[BGP architecture](../bgp/architecture.md) and
+[BGP engineering](../bgp/engineering.md#5-configuration).
 
 The overlay is refused beside the firewall, NAT or load balancer
 (`ErrOverlayServiceConflict`). Those services lay their flows out for the
@@ -2182,6 +2160,6 @@ instead of leaving a gateway running unscraped.
 - [architecture.md](architecture.md) · [api.md](api.md) · [cli.md](cli.md) · [user.md](user.md)
 - [`docs/sdn/`](../sdn/) — bridges, ports, flows, port authentication, overlay
 - [`docs/sdn/overlay/architecture.md`](../sdn/overlay/architecture.md) — the VXLAN port and VTEP manager
-- [`docs/sdn/bgp/evpn.md`](../sdn/bgp/evpn.md) — EVPN route formats, RD/RT derivation, MAC Mobility
+- [`docs/bgp/`](../bgp/architecture.md) — the BGP speaker: transit sessions, EVPN route formats, RD/RT derivation, MAC Mobility
 - [`docs/proxy/`](../proxy/) — additional reverse-proxy material
 - [`docs/dns/`](../dns/) — the DNS service that carries DNS64 for IPv6-only client zones (#602)

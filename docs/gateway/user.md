@@ -472,30 +472,11 @@ Standing a gateway up beside existing routers for the first time — tunnels and
 sessions against the live relays, announcing nothing — is its own procedure:
 [`docs/operations/gateway-bringup.md`](../operations/gateway-bringup.md).
 
-
-```bash
-platformctl sdn gateway bgp status
-platformctl sdn gateway bgp peers
-platformctl sdn gateway bgp announce --prefix 203.0.113.0/24 --next-hop 198.51.100.1
-platformctl sdn gateway bgp routes
-platformctl sdn gateway bgp withdraw --prefix 203.0.113.0/24
-```
-
-`--next-hop` is optional on announce; omit it to use the session's default.
-
-A BGP session accepts routes from an external speaker, which makes prefix
-filtering the control that matters. That is configuration, not a CLI flag.
-
-**Which relay carries the traffic is also configuration.** A peer's
-`policy.import` and `policy.export` blocks carry the path attributes that rank
-one session against another: `local-pref` on import decides which relay this
-gateway prefers, and `med`, `prepend` and communities on export tell the far side
-how to rank what it receives. Leave them out and the sessions still come up — but
-with more than one relay reachable, the path that wins is whichever one GoBGP's
-tie-breaks pick, which is not a choice anyone made. Anything the speaker cannot
-program is refused when the configuration loads rather than dropped silently on
-the wire. Field reference and the full refusal list:
-[`docs/sdn/bgp/configuration.md`](../sdn/bgp/configuration.md).
+The transit speaker announces nothing on main, and the `platformctl sdn
+gateway bgp` verbs answer "not configured" because `platformd` holds no
+speaker. Peering, prefix filtering, ranking one relay against another with
+`local-pref`, `med` and `prepend`, and checking session state are in the
+[BGP user guide](../bgp/user.md).
 
 ---
 

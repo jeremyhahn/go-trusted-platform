@@ -93,48 +93,12 @@ callable, not because it is the way to configure a gateway — see
 
 ## 3. BGP
 
-| Capability | REST | gRPC / Unix | QUIC (under `0x2F`) | MCP | Embedded |
-|---|---|---|---|---|---|
-| BGP status | `GET /api/v1/gateway/bgp/status` | `GetBGPStatus` | `OpGatewayBGPStatus` (`0x03`) | `gateway_bgp_status` | ✅ |
-| List peers | `GET /api/v1/gateway/bgp/peers` | `ListBGPPeers` | `OpGatewayBGPPeers` (`0x04`) | `gateway_bgp_peers` | ✅ |
-| List announced prefixes | `GET /api/v1/gateway/bgp/prefixes` | `ListAnnouncedPrefixes` | `OpGatewayListPrefixes` (`0x07`) | `gateway_bgp_prefixes` | ✅ |
-| Announce prefix | `POST /api/v1/gateway/bgp/prefixes` | `AnnouncePrefix` | `OpGatewayAnnouncePrefix` (`0x05`) | `gateway_bgp_announce` | ✅ |
-| Withdraw prefix | `DELETE /api/v1/gateway/bgp/prefixes` | `WithdrawPrefix` | `OpGatewayWithdrawPrefix` (`0x06`) | `gateway_bgp_withdraw` | ✅ |
-
-> **Production status: routed on every transport, not backed.** All six
-> transports reach the one `GatewayService` instance `platformd` builds at
-> start (#65): gRPC and Unix directly, REST through both route families
-> below, QUIC through the daemon's BGP adapter, MCP through the
-> `gateway_bgp_*` tools, and the embedded SDK through its dispatch table. The
-> BGP speaker runs in `gatewayd`, and `platformd` never hands one to that
-> service (`GatewayService.SetBGPSpeaker` has no production caller), so every
-> transport answers the same typed "not configured": REST 503, QUIC
-> `StatusUnavailable`, gRPC, Unix, MCP and embedded `Unavailable` (§11).
-> Backing them needs the same control-plane link to gatewayd-resident services
-> as §5a, which awaits a design decision.
-
-Announce and withdraw share
-the `/bgp/prefixes` path and are distinguished by method; the prefix travels in
-the body, which is why withdraw is a `DELETE` with a payload rather than a path
-parameter. The daemon's own REST listener serves the same operations under
-`/api/v1/sdn/gateway/bgp/{status,peers,prefixes}`; there withdraw is
-`DELETE /api/v1/sdn/gateway/bgp/prefixes/{prefix}`, and the path variable spans
-the rest of the path because a prefix carries a `/`
-(`.../prefixes/203.0.113.0/24`).
-
-QUIC `OpGatewayAnnouncePrefix` accepts `local_pref`, `med`, `communities` and
-`labels`, but `AnnouncePrefixRequest` carries only the prefix and next hop, so
-a request that sets any of them is refused with `StatusInvalidArgument` naming
-the attribute (`ErrBGPAttributeUnsupported`) rather than announced without
-it.
-
-QUIC `OpGatewayBGPPeers` and `OpGatewayListPrefixes` serve one page per reply:
-`limit` entries (100 when unset, capped at 1000) from `offset`, with the
-list's `total`; a negative offset is `StatusInvalidRequest`. The SDK's QUIC
-client pages until it holds `total` entries, so `ListBGPPeers` and
-`ListAnnouncedPrefixes` return the whole list on every transport. The pages
-are separate reads, so a list that changes during paging can repeat or miss
-an entry that moved; a gRPC call reads it once.
+The five BGP methods (status, peers, announce, withdraw, announced prefixes)
+are routed on every transport but not backed: `platformd` holds no BGP
+speaker, so each answers the typed "not configured" (§11). Backing them needs
+the same control-plane link to gatewayd-resident services as §5a. The
+per-transport table, the validation order and a known REST withdraw defect are
+in [BGP API](../bgp/api.md).
 
 ---
 

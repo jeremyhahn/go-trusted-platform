@@ -809,5 +809,6 @@ media and the suite.
 - [`docs/switch/`](../switch/) — physical switch detail
 - Deep dives carried over and not re-verified in this pass: [802.1x.md](802.1x.md),
   [configuration.md](configuration.md), [provisioning.md](provisioning.md),
-  [testing.md](testing.md), and the `bgp/`, `dhcp/`, `fabric/`, `firewall/`,
-  `ipam/`, `overlay/`, `performance/`, `tunnel/` subdirectories
+  [testing.md](testing.md), and the `dhcp/`, `fabric/`, `firewall/`,
+  `ipam/`, `overlay/`, `performance/`, `tunnel/` subdirectories. BGP is its
+  own feature folder, [docs/bgp/](../bgp/architecture.md)

@@ -7,7 +7,7 @@ OpenFlow on one OVS bridge forwards it. Four pieces divide the work:
 
 | Piece | Package | Owns |
 |-------|---------|------|
-| EVPN manager | `pkg/sdn/bgp` (`EVPNManager`) | Type-2/3/5 routes: origination, import, MAC Mobility. See [../bgp/evpn.md](../bgp/evpn.md) |
+| EVPN manager | `pkg/sdn/bgp` (`EVPNManager`) | Type-2/3/5 routes: origination, import, MAC Mobility. See [BGP EVPN](../../bgp/engineering.md#7-evpn) |
 | VTEP manager | `pkg/sdn/vxlan` (`VTEPManager`) | the one flow-based VXLAN port on the bridge |
 | Overlay mode handler | `pkg/sdn/gateway/modes` (`OverlayModeHandler`) | the data plane: every overlay flow, built from EVPN routes. See [the overlay handler](../../gateway/engineering.md#the-overlay-handler-overlaymodehandler) |
 | Overlay controller | `pkg/sdn/overlay` (`Controller`) | the API-facing registry of VNIs, VTEPs and remote MACs; joins a VNI's EVI to originate its Type-3 route |
@@ -558,7 +558,7 @@ has been renewed at the same mark.
 ## See Also
 
 - [Overlay handler (data plane)](../../gateway/engineering.md#the-overlay-handler-overlaymodehandler)
-- [BGP EVPN](../bgp/evpn.md)
+- [BGP EVPN](../../bgp/engineering.md#7-evpn)
 - [Configuration](configuration.md)
 - [Operations](operations.md)
 - [SDN Architecture](../architecture.md)

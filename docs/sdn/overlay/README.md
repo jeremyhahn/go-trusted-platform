@@ -15,7 +15,7 @@ single flow-based VXLAN port.
 | Feature | Description |
 |---------|-------------|
 | **VXLAN Encapsulation** | RFC 7348, 24-bit VNI, one `remote_ip=flow` port per host |
-| **EVPN Control Plane** | Type-2 MAC/IP, Type-3 IMET and Type-5 prefix routes ([../bgp/evpn.md](../bgp/evpn.md)) |
+| **EVPN Control Plane** | Type-2 MAC/IP, Type-3 IMET and Type-5 prefix routes ([BGP EVPN](../../bgp/engineering.md#7-evpn)) |
 | **Decap Authorisation** | a tunnelled frame is accepted only from a VTEP EVPN places on its VNI |
 | **BUM Handling** | ingress replication to the VTEPs of the VNI, from Type-3 routes |
 | **ARP/ND Suppression** | A flow answers ARP for known IPv4 bindings. An IPv6 NS for a known target is punted to a packet-in controller, answered with a proxy NA and not flooded (RFC 9161). Unknown targets and DAD probes flood. Fail mode: the punts expire 12 s after a crash, are removed on stop, and are withdrawn on any meter or queue drop, so the NS floods ([ND fail mode](../../gateway/engineering.md#fail-mode)) |
@@ -133,7 +133,7 @@ nc -zuv 10.0.0.2 4789
 | Issue | Check |
 |-------|-------|
 | No overlay connectivity | underlay MTU is at least 9050 on every hop |
-| Remote MAC unreachable | the remote host's Type-2 route is received (`../bgp/evpn.md`) |
+| Remote MAC unreachable | the remote host's Type-2 route is received ([BGP EVPN](../../bgp/engineering.md#7-evpn)) |
 | Frames from a VTEP dropped | its Type-3 route for the VNI is received; table 10 has a `tun_src` flow for it |
 | Dropped packets | `ovs-ofctl -O OpenFlow13 dump-flows br-int` |
 
@@ -141,4 +141,4 @@ nc -zuv 10.0.0.2 4789
 
 - [SDN Architecture](../architecture.md)
 - [SDN Configuration](../configuration.md)
-- [BGP EVPN](../bgp/evpn.md)
+- [BGP EVPN](../../bgp/engineering.md#7-evpn)

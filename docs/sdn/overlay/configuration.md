@@ -212,7 +212,7 @@ func WithStateManager(state *StateManager) Option
 
 With `EnableEVPN` and an EVPN manager (`WithEVPNManager`), `AddVNI` with
 `VNIConfig.AdvertiseIMET` joins the VNI's EVI, which originates its Type-3
-route, and `RemoveVNI` leaves it again (see [../bgp/evpn.md](../bgp/evpn.md)).
+route, and `RemoveVNI` leaves it again (see [BGP EVPN](../../bgp/engineering.md#7-evpn)).
 A failed join is logged; the VNI is still added, with `IMETAdvertised` false.
 
 ## Multi-Host Deployment

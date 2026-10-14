@@ -302,7 +302,7 @@ the refusal table. There is no third kind.
 | `load-balancer` | `services/loadbalancer` | — |
 | `hostfw` | `services/hostfw` with the listener inventory `HostRuntime` carries | — |
 | `tunnels` | `pkg/sdn/tunnel` manager, every configured tunnel ensured, rolled back on the first failure; `ipsec` and `wireguard` keys resolved through `HostRuntime.SecretResolver` | — |
-| `transit` (or a `bgp` section) | `pkg/sdn/bgp` speaker with secrets resolved through `HostRuntime.SecretResolver`, every configured neighbour added | — |
+| `transit` (or a `bgp` section) | `pkg/sdn/bgp` speaker with secrets resolved through `HostRuntime.SecretResolver`, every configured neighbour added | the speaker is in [docs/bgp/](../bgp/architecture.md) |
 | `proxy` | registered by `gatewayd serve` assembly (`proxysvc`), not by the table | — |
 | `overlay` | `modes.NewOverlayModeHandler` with runtime OVS/OpenFlow, IPAM fabric reservations, device lookup and attestation verdict reader | the overlay handler forwards over a flow-based VXLAN port ([engineering.md §5a](engineering.md#5a-the-overlay-mode-handler-in-modes)). The config schema carries the local VTEP, underlay, access port, overlay ASN, RR peers and verdict freshness window. Admission is backed by IPAM fabric allocations plus platform attestation verdicts; revoked or failed verdicts withdraw decap. `TerminalOverlay` hands the OpenFlow table defaults to the overlay handler. The EVPN overlay is required; lighting a public address block depends on it plus gateway HA (planned) |
 | `edge` | — | device onboarding verifies the TPM EK, quote and IDevID through the platform SDK; until it does, gatewayd admits no device (#553) |
@@ -488,8 +488,7 @@ re-establish; stateful conntrack sync is #710) and any
 Raft-coordinated VIP takeover. `pkg/sdn/cluster/gateway_partitions.go` still
 declares partition keys for such a design; it is referenced by nothing and is
 kept only until R8 decides whether conntrack/NAT-session replication uses it or
-replaces it. The HA models described in
-[`docs/sdn/bgp/README.md`](../sdn/bgp/README.md) are superseded by this section.
+replaces it.
 
 ## Telemetry is one document, derived from the services
 

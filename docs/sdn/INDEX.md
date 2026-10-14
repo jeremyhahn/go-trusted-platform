@@ -11,7 +11,7 @@ Complete documentation for the Software-Defined Networking (SDN) components in g
 | **Physical Fabric** | Unified switch management (VLAN/EVPN) | [fabric/README.md](./fabric/README.md) |
 | **Stateful Firewall** | Zone-based packet filtering + NAT | [firewall/README.md](./firewall/README.md) |
 | **Gateway Node** | Multi-service overlay, edge, transit node | [gateway/architecture.md](../gateway/architecture.md) |
-| **BGP** | Border Gateway Protocol for route announcement | [bgp/README.md](./bgp/README.md) |
+| **BGP** | The gateway's BGP speaker (EVPN overlay, transit peering) | [docs/bgp/](../bgp/architecture.md) |
 | **DHCP** | Dynamic IP allocation | [dhcp/README.md](./dhcp/README.md) |
 | **IPAM** | IP address pool management | [ipam/README.md](./ipam/README.md) |
 | **Tunnels** | GRE/IPIP tunnel lifecycle | [tunnel/README.md](./tunnel/README.md) |
@@ -40,10 +40,10 @@ Complete documentation for the Software-Defined Networking (SDN) components in g
 2. Configure segments in [overlay/configuration.md](./overlay/configuration.md)
 3. Check API integration in [overlay/api-reference.md](./overlay/api-reference.md)
 
-#### BGP Route Announcement
-1. Start with [bgp/README.md](./bgp/README.md)
-2. Configure BGP in [bgp/configuration.md](./bgp/configuration.md)
-3. Understand EVPN in [bgp/evpn.md](./bgp/evpn.md)
+#### BGP
+BGP is its own feature: start with
+[docs/bgp/architecture.md](../bgp/architecture.md), then
+[user.md](../bgp/user.md) to configure peers.
 
 #### Gateway Node Operations
 The gateway is its own feature: start with
@@ -93,23 +93,8 @@ a pointer to it.
 
 ### BGP Routing
 
-```
-bgp/
-├── README.md              # BGP overview, concepts
-├── configuration.md       # BGP config schema
-├── architecture.md        # Implementation design
-├── evpn.md               # EVPN overlay mode
-├── transit.md            # BGP transit design
-├── troubleshooting.md     # Common issues
-├── cli-usage.md          # CLI commands
-└── api-reference*.md     # REST, gRPC, QUIC, MCP API
-```
-
-**When to use:**
-- Configuring BGP neighbors
-- Setting up EVPN overlay
-- Announcing prefixes
-- Troubleshooting BGP issues
+Documented in the [docs/bgp/](../bgp/architecture.md) feature folder
+(architecture, engineering, cli, api, user).
 
 ### DHCP Service
 
@@ -242,7 +227,7 @@ Each service exposes APIs via multiple protocols:
 | Fabric | [ref](./fabric/api-reference.md) | N/A | N/A | N/A | N/A |
 | Firewall | No | No | No | No | No |
 | Gateway | [ref](../gateway/api.md) | [ref](../gateway/api.md) | [ref](../gateway/api.md) | [ref](../gateway/api.md) | [ref](../gateway/api.md#1-the-six-transports) |
-| BGP | [ref](./bgp/api-reference-rest.md) | [ref](./bgp/api-reference-grpc.md) | [ref](./bgp/api-reference-quic.md) | [ref](./bgp/api-reference-mcp.md) | [ref](./bgp/api-reference-unix.md) |
+| BGP | [ref](../bgp/api.md) | [ref](../bgp/api.md) | [ref](../bgp/api.md) | [ref](../bgp/api.md) | [ref](../bgp/api.md#1-the-six-transports) |
 | DHCP | No | No | No | No | No |
 | IPAM | [ref](./ipam/api-reference-rest.md) | [ref](./ipam/api-reference-grpc.md) | [ref](./ipam/api-reference-quic.md) | [ref](./ipam/api-reference-mcp.md) | [ref](./ipam/api-reference-unix.md) |
 
@@ -304,7 +289,7 @@ Packet → ConnTrack → Zone Resolver → NAT → Rules → Verdict
 |-------|-----------|----------|
 | VLAN not created on switch | [Fabric](./fabric/README.md) | Check driver, vendor config, credentials |
 | Packets dropped unexpectedly | [Firewall](./firewall/README.md) | Review rules, check zones, verify rules order |
-| BGP neighbors not coming up | [BGP](./bgp/troubleshooting.md) | Check tunnel configs, verify ASN, test reachability |
+| BGP neighbors not coming up | [BGP](../bgp/user.md#7-when-it-does-not-start) | Match the error to its cause and fix |
 | Devices not getting DHCP | [DHCP](./dhcp/architecture.md) | Verify pool config, check zone reachability |
 | Overlay segments isolated | [Overlay](./overlay/architecture.md) | Check VNI mapping, EVPN state |
 
@@ -335,7 +320,7 @@ See: [testing.md](./testing.md) for comprehensive testing guide
 - **Firewall**: stateful zone filtering in the OVS kernel datapath via conntrack (`ct()`/`ct_state`) flows; no userspace packet path (no published benchmarks yet) — See [firewall/performance.md](./firewall/performance.md)
 - **Hardware offload**: OVS tc-flower offload for 100/200/400G NICs — ConnectX/BlueField (mlx5 switchdev) and Broadcom NetXtreme-E (bnxt TruFlow) — See [performance/hw-offload.md](./performance/hw-offload.md)
 - **Lab validation runbook**: X10 hardware-offload/400G validation procedure with `platformctl sdn gateway perf` measurement steps and a measured-values-only results template — See [performance/x10-lab-validation.md](./performance/x10-lab-validation.md)
-- **BGP**: native Go BGP speaker for EVPN and transit route propagation — See [bgp/architecture.md](./bgp/architecture.md)
+- **BGP**: GoBGP-based speaker in `gatewayd` for EVPN and transit peering — See [docs/bgp/](../bgp/architecture.md)
 - **DHCP**: native Go DHCP server with IPAM-backed lease allocation — See [dhcp/architecture.md](./dhcp/architecture.md)
 
 ## Security

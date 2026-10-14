@@ -342,7 +342,7 @@ platformctl sdn ipam allocations --pool-id prod-v4
 - [SDN Architecture](../architecture.md) - SDN subsystem overview
 - [Gateway](../../gateway/architecture.md) - the edge gateway and its IPAM surface
 - [Overlay Networking](../overlay/README.md) - VXLAN overlay addressing
-- [BGP Transit](../bgp/transit.md) - IP prefix announcement
+- [BGP](../../bgp/architecture.md) - the BGP speaker; prefix announcement is Planned (#553)
 
 ## References
 

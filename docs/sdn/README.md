@@ -106,7 +106,7 @@ The stdlib-only property covers those two packages, not the whole SDN subsystem.
 
 | Package | Dependency | Why |
 |---------|------------|-----|
-| `pkg/sdn/bgp` | `osrg/gobgp/v3` | BGP speaker (EVPN + Transit); GoBGP provides the session state machine and route handling |
+| `pkg/sdn/bgp` | `osrg/gobgp/v4` | BGP speaker (EVPN + Transit); GoBGP provides the session state machine and route handling — see [docs/bgp/](../bgp/architecture.md) |
 | `pkg/sdn/netlink` | `vishvananda/netlink` | Kernel netlink socket operations |
 | `test/integration/sdn` | `ovn-org/libovsdb` | Independent OVSDB client used as a test oracle against a real switch, so the hand-rolled client is checked against a second implementation rather than against itself |
 
@@ -122,7 +122,7 @@ The stdlib-only property covers those two packages, not the whole SDN subsystem.
 - [Testing](testing.md) - Testing strategy and guidelines
 
 ### Multi-Host Networking
-- [BGP](bgp/README.md) - BGP service (EVPN + Transit)
+- [BGP](../bgp/architecture.md) - BGP speaker (EVPN + Transit)
 - [Gateway](../gateway/architecture.md) - Multi-mode gateway nodes
 - [Overlay](overlay/README.md) - VXLAN overlay controller
 - [IPAM](ipam/README.md) - IP Address Management

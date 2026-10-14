@@ -37,6 +37,7 @@ code, and change it in the same PR as the behavior.
 | [attestation/](attestation/) | TPM attestation of hosts, VMs and containers |
 | [auth/](auth/) | Platform authentication — mTLS identity extraction and the per-transport auth seams |
 | [barrier/](barrier/) | The platform barrier — init, Shamir, unseal, seal, rekey, recovery — and the `platformd` start-up gate |
+| [bgp/](bgp/) | The BGP speaker — gatewayd's transit sessions and the overlay's EVPN control plane |
 | [bmc/](bmc/) | Baseboard management — IPMI, Redfish, vendor quirks |
 | [bootstrap/](bootstrap/) | Trust bootstrap, day-zero orchestration, first boot |
 | [ca/](ca/) | Certificate authority and ACME (re-export frontage) |

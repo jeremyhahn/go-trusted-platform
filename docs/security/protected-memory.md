@@ -303,7 +303,7 @@ sweep:
 | `pkg/api/rest/dns_handlers.go:249`, `pkg/api/quic/dns_handlers.go:265` | TSIG key |
 | `pkg/api/grpc/iam_types.go:330,335` | IAM tokens |
 | `pkg/attestation/push/types.go:116,122` | push token + password |
-| `pkg/sdn/bgp/types.go:734` | BGP MD5 session secret (`AuthKey`, resolved at runtime) |
+| `pkg/sdn/bgp/types.go:735` | BGP MD5 session secret (`AuthKey`, resolved at runtime) |
 
 All are wire DTOs or service-layer request/result types whose signatures
 ship to consumers, so each is a breaking change and belongs to the
