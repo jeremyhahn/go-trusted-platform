@@ -98,31 +98,9 @@ var knownUnclassified = []string{
 	"iak_get_cert",
 	"iak_info",
 	"iak_install_cert",
-	"iam_add_group_member",
-	"iam_assign_role",
 	"iam_authenticate",
-	"iam_check_permission",
-	"iam_create_group",
-	"iam_create_role",
-	"iam_create_tenant",
 	"iam_create_token",
-	"iam_create_user",
-	"iam_delete_group",
-	"iam_delete_role",
-	"iam_delete_tenant",
-	"iam_delete_user",
-	"iam_get_group",
-	"iam_get_role",
-	"iam_get_tenant",
-	"iam_get_user",
-	"iam_list_groups",
-	"iam_list_roles",
-	"iam_list_tenants",
-	"iam_list_users",
-	"iam_remove_group_member",
-	"iam_revoke_role",
 	"iam_revoke_token",
-	"iam_verify_token",
 	"idevid_create_ldevid",
 	"idevid_csr",
 	"idevid_delete",
@@ -132,26 +110,6 @@ var knownUnclassified = []string{
 	"idevid_get_cert",
 	"idevid_info",
 	"idevid_install_cert",
-	"kms_backend_status",
-	"kms_decrypt",
-	"kms_delete_key",
-	"kms_encrypt",
-	"kms_export_public_key",
-	"kms_generate_data_key",
-	"kms_generate_key",
-	"kms_generate_wrapped_data_key",
-	"kms_get_key",
-	"kms_get_key_metadata",
-	"kms_get_key_policy",
-	"kms_list_keys",
-	"kms_random",
-	"kms_revoke_key",
-	"kms_rotate_key",
-	"kms_set_key_policy",
-	"kms_sign",
-	"kms_supported_algorithms",
-	"kms_update_key_metadata",
-	"kms_verify",
 	"platform_cluster_bootstrap",
 	"platform_cluster_join",
 	"platform_cluster_leave",
@@ -194,35 +152,14 @@ var knownUnclassified = []string{
 	"platform_tenant_barrier_seal",
 	"platform_tenant_barrier_status",
 	"platform_tenant_barrier_unseal",
-	"platform_tpm_activate_credential",
 	"platform_tpm_capabilities",
 	"platform_tpm_certify",
-	"platform_tpm_clear",
-	"platform_tpm_ek",
-	"platform_tpm_ek_cert",
-	"platform_tpm_ek_create",
 	"platform_tpm_ek_delete",
-	"platform_tpm_ek_import_cert",
-	"platform_tpm_eventlog",
-	"platform_tpm_iak",
-	"platform_tpm_iak_create",
 	"platform_tpm_iak_delete",
-	"platform_tpm_info",
-	"platform_tpm_make_credential",
-	"platform_tpm_nv_delete",
 	"platform_tpm_nv_list",
-	"platform_tpm_nv_read",
-	"platform_tpm_nv_write",
 	"platform_tpm_pcr_extend",
-	"platform_tpm_pcrs",
 	"platform_tpm_platform",
-	"platform_tpm_provision",
-	"platform_tpm_random",
-	"platform_tpm_seal",
-	"platform_tpm_srk",
-	"platform_tpm_srk_create",
 	"platform_tpm_srk_delete",
-	"platform_tpm_unseal",
 	"provision_fetch_config",
 	"provision_fulfill_session",
 	"provision_get_nonce",
@@ -241,12 +178,6 @@ var knownUnclassified = []string{
 	"sdn_list_flows",
 	"sdn_list_vlans",
 	"sdn_revoke_port_auth",
-	"secret_delete",
-	"secret_get",
-	"secret_get_rotation_policy",
-	"secret_list",
-	"secret_set_rotation_policy",
-	"secret_store",
 	"switch_disable_port",
 	"switch_enable_port",
 	"switch_list_ports",
@@ -299,19 +230,6 @@ var knownUnclassified = []string{
 	"vtpm_bundle_quote",
 	"vtpm_bundle_seal",
 	"vtpm_bundle_unseal",
-	"vtpm_export",
-	"vtpm_get",
-	"vtpm_get_bundle_path",
-	"vtpm_get_nvram_path",
-	"vtpm_get_tpm_socket_path",
-	"vtpm_import",
-	"vtpm_is_running",
-	"vtpm_template_clone",
-	"vtpm_template_create",
-	"vtpm_template_delete",
-	"vtpm_template_get",
-	"vtpm_template_list",
-	"vtpm_validate",
 }
 
 // TestEveryRegisteredToolIsClassified walks the tool registry the server
@@ -509,6 +427,72 @@ func TestTPMQuoteToolsAreClassified(t *testing.T) {
 		got, ok := checker.toolPermissions[tool]
 		require.True(t, ok, "%s must have an explicit permission entry", tool)
 		assert.Equal(t, "tpm:read", got, "%s", tool)
+	}
+}
+
+// TestIAMToolClassification pins every IAM tool to the scope of its gRPC twin,
+// while iam_create_token, iam_revoke_token and iam_authenticate stay
+// unclassified (denied) because they refuse on every transport.
+func TestIAMToolClassification(t *testing.T) {
+	checker := NewAuthorizationChecker(nil, nil)
+
+	// Each scope is the one pkg/api/grpc/method_permissions.go gives the
+	// PlatformIAMService method the tool answers through.
+	want := map[string]string{
+		"iam_create_user":         "iam:write",
+		"iam_get_user":            "iam:read",
+		"iam_list_users":          "iam:read",
+		"iam_delete_user":         "iam:delete",
+		"iam_create_role":         "iam:write",
+		"iam_get_role":            "iam:read",
+		"iam_list_roles":          "iam:read",
+		"iam_delete_role":         "iam:delete",
+		"iam_assign_role":         "iam:write",
+		"iam_revoke_role":         "iam:write",
+		"iam_create_group":        "iam:write",
+		"iam_get_group":           "iam:read",
+		"iam_list_groups":         "iam:read",
+		"iam_delete_group":        "iam:delete",
+		"iam_add_group_member":    "iam:write",
+		"iam_remove_group_member": "iam:write",
+		"iam_check_permission":    "iam:read",
+		"iam_create_tenant":       "iam:write",
+		"iam_get_tenant":          "iam:read",
+		"iam_list_tenants":        "iam:read",
+		"iam_delete_tenant":       "iam:delete",
+		"iam_verify_token":        "iam:read",
+	}
+	for tool, scope := range want {
+		got, ok := checker.toolPermissions[tool]
+		require.True(t, ok, "%s must have an explicit permission entry", tool)
+		assert.Equal(t, scope, got, "%s", tool)
+	}
+
+	// These refuse on every transport, so no scope may unlock them.
+	for _, tool := range []string{"iam_create_token", "iam_revoke_token", "iam_authenticate"} {
+		_, ok := checker.toolPermissions[tool]
+		assert.False(t, ok, "%s must stay unclassified", tool)
+	}
+}
+
+// TestIAMToolsAuthorizeByScope shows the IAM entries decide access: a caller
+// holding only iam:read reaches iam_list_users and is refused iam_create_user
+// (iam:write) and iam_delete_user (iam:delete).
+func TestIAMToolsAuthorizeByScope(t *testing.T) {
+	readOnly := &mockAuthorizationService{
+		checkFunc: func(_ context.Context, _, resource, action string) (bool, error) {
+			return resource == "iam" && action == "read", nil
+		},
+	}
+	checker := NewAuthorizationChecker(readOnly, nil)
+
+	assert.Nil(t, checker.CheckToolAuthorization(context.Background(), "iam_list_users", "token"))
+
+	for tool, action := range map[string]string{"iam_create_user": "write", "iam_delete_user": "delete"} {
+		err := checker.CheckToolAuthorization(context.Background(), tool, "token")
+		require.NotNil(t, err, "%s needs iam:%s", tool, action)
+		assert.Equal(t, AuthErrorPermissionDenied, err.Type, "%s", tool)
+		assert.Equal(t, action, readOnly.lastAction, "%s", tool)
 	}
 }
 

@@ -302,11 +302,11 @@ func (e *errorServiceProvider) TPMCertify(ctx context.Context, keyHandle int) (i
 	return e.mockServiceProvider.TPMCertify(ctx, keyHandle)
 }
 
-func (e *errorServiceProvider) TPMUnseal(ctx context.Context, cn string) ([]byte, error) {
+func (e *errorServiceProvider) TPMUnseal(ctx context.Context, cn, password string) ([]byte, error) {
 	if e.shouldFail("TPMUnseal") {
 		return nil, ErrMockServiceError
 	}
-	return e.mockServiceProvider.TPMUnseal(ctx, cn)
+	return e.mockServiceProvider.TPMUnseal(ctx, cn, password)
 }
 
 func TestServiceErrorPaths(t *testing.T) {

@@ -480,6 +480,11 @@ func translateMCPErrorToGRPC(err error) error {
 		return status.Error(mcpwire.ClassForCode(mcpErr.Code), mcpErr.Message)
 	}
 
+	var statusErr *mcpwire.HTTPStatusError
+	if errors.As(err, &statusErr) {
+		return status.Error(statusErr.Class(), statusErr.Error())
+	}
+
 	// Default to unavailable for connection issues
 	return status.Error(codes.Unavailable, err.Error())
 }

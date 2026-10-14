@@ -1538,8 +1538,8 @@ func TestExecuteIAMCreateUser_ServiceError(t *testing.T) {
 func TestExecuteIAMDeleteUser_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamDeleteUserFunc = func(ctx context.Context, tenantID, userID string) error {
-		return ErrMockServiceError
+	svc.iamDeleteUserFunc = func(ctx context.Context, tenantID, userID string) (interface{}, error) {
+		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
 
@@ -1576,7 +1576,7 @@ func TestExecuteIAMGetUser_ServiceError(t *testing.T) {
 func TestExecuteIAMListUsers_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamListUsersFunc = func(ctx context.Context, tenantID string, limit, offset int) (interface{}, error) {
+	svc.iamListUsersFunc = func(ctx context.Context, req *IAMListUsersRequest) (interface{}, error) {
 		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
@@ -1619,8 +1619,8 @@ func TestExecuteIAMCreateRole_ServiceError(t *testing.T) {
 func TestExecuteIAMDeleteRole_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamDeleteRoleFunc = func(ctx context.Context, tenantID, roleID string) error {
-		return ErrMockServiceError
+	svc.iamDeleteRoleFunc = func(ctx context.Context, tenantID, roleID string) (interface{}, error) {
+		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
 
@@ -1657,7 +1657,7 @@ func TestExecuteIAMGetRole_ServiceError(t *testing.T) {
 func TestExecuteIAMListRoles_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamListRolesFunc = func(ctx context.Context, tenantID string, limit, offset int) (interface{}, error) {
+	svc.iamListRolesFunc = func(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error) {
 		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
@@ -1675,15 +1675,15 @@ func TestExecuteIAMListRoles_ServiceError(t *testing.T) {
 func TestExecuteIAMAssignRole_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamAssignRoleFunc = func(ctx context.Context, tenantID, userID, role string) error {
-		return ErrMockServiceError
+	svc.iamAssignRoleFunc = func(ctx context.Context, tenantID, userID, roleID string) (interface{}, error) {
+		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
 
 	args := map[string]interface{}{
 		"tenant_id": "tenant-123",
 		"user_id":   "user-456",
-		"role":      "admin",
+		"role_id":   "admin",
 	}
 
 	_, err := registry.ExecuteTool(ctx, "iam_assign_role", args)
@@ -1695,15 +1695,15 @@ func TestExecuteIAMAssignRole_ServiceError(t *testing.T) {
 func TestExecuteIAMRevokeRole_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamRevokeRoleFunc = func(ctx context.Context, tenantID, userID, role string) error {
-		return ErrMockServiceError
+	svc.iamRevokeRoleFunc = func(ctx context.Context, tenantID, userID, roleID string) (interface{}, error) {
+		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
 
 	args := map[string]interface{}{
 		"tenant_id": "tenant-123",
 		"user_id":   "user-456",
-		"role":      "admin",
+		"role_id":   "admin",
 	}
 
 	_, err := registry.ExecuteTool(ctx, "iam_revoke_role", args)
@@ -1715,16 +1715,16 @@ func TestExecuteIAMRevokeRole_ServiceError(t *testing.T) {
 func TestExecuteIAMCheckPermission_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamCheckPermissionFunc = func(ctx context.Context, tenantID, userID, resource, action string) (bool, error) {
-		return false, ErrMockServiceError
+	svc.iamCheckPermissionFunc = func(ctx context.Context, req *IAMCheckPermissionRequest) (interface{}, error) {
+		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
 
 	args := map[string]interface{}{
-		"tenant_id": "tenant-123",
-		"user_id":   "user-456",
-		"resource":  "containers",
-		"action":    "create",
+		"tenant_id":  "tenant-123",
+		"subject_id": "user-456",
+		"resource":   "containers",
+		"action":     "create",
 	}
 
 	_, err := registry.ExecuteTool(ctx, "iam_check_permission", args)
@@ -2026,8 +2026,8 @@ func TestExecuteIAMCreateGroup_ServiceError(t *testing.T) {
 func TestExecuteIAMDeleteGroup_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamDeleteGroupFunc = func(ctx context.Context, tenantID, groupID string) error {
-		return ErrMockServiceError
+	svc.iamDeleteGroupFunc = func(ctx context.Context, tenantID, groupID string) (interface{}, error) {
+		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
 
@@ -2064,7 +2064,7 @@ func TestExecuteIAMGetGroup_ServiceError(t *testing.T) {
 func TestExecuteIAMListGroups_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamListGroupsFunc = func(ctx context.Context, tenantID string, limit, offset int) (interface{}, error) {
+	svc.iamListGroupsFunc = func(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error) {
 		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
@@ -2082,8 +2082,8 @@ func TestExecuteIAMListGroups_ServiceError(t *testing.T) {
 func TestExecuteIAMAddGroupMember_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamAddGroupMemberFunc = func(ctx context.Context, tenantID, groupID, userID string) error {
-		return ErrMockServiceError
+	svc.iamAddGroupMemberFunc = func(ctx context.Context, tenantID, groupID, userID string) (interface{}, error) {
+		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
 
@@ -2102,8 +2102,8 @@ func TestExecuteIAMAddGroupMember_ServiceError(t *testing.T) {
 func TestExecuteIAMRemoveGroupMember_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamRemoveGroupMemberFunc = func(ctx context.Context, tenantID, groupID, userID string) error {
-		return ErrMockServiceError
+	svc.iamRemoveGroupMemberFunc = func(ctx context.Context, tenantID, groupID, userID string) (interface{}, error) {
+		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
 
@@ -2145,8 +2145,8 @@ func TestExecuteIAMCreateTenant_ServiceError(t *testing.T) {
 func TestExecuteIAMDeleteTenant_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamDeleteTenantFunc = func(ctx context.Context, tenantID string) error {
-		return ErrMockServiceError
+	svc.iamDeleteTenantFunc = func(ctx context.Context, tenantID string) (interface{}, error) {
+		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
 
@@ -2181,7 +2181,7 @@ func TestExecuteIAMGetTenant_ServiceError(t *testing.T) {
 func TestExecuteIAMListTenants_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamListTenantsFunc = func(ctx context.Context, limit, offset int) (interface{}, error) {
+	svc.iamListTenantsFunc = func(ctx context.Context, page IAMPagination) (interface{}, error) {
 		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())

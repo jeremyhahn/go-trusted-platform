@@ -72,13 +72,6 @@ type mockIAMService struct {
 	listPoliciesErr      error
 	checkPermissionResp  *IAMCheckPermissionResponse
 	checkPermissionErr   error
-	issueTokenResp       *IAMIssueTokenResponse
-	issueTokenErr        error
-	validateTokenResp    *IAMValidateTokenResponse
-	validateTokenErr     error
-	refreshTokenResp     *IAMIssueTokenResponse
-	refreshTokenErr      error
-	revokeTokenErr       error
 }
 
 func newMockIAMService() *mockIAMService {
@@ -223,27 +216,6 @@ func newMockIAMService() *mockIAMService {
 		checkPermissionResp: &IAMCheckPermissionResponse{
 			Allowed: true,
 			Reason:  "allowed by default policy",
-		},
-		issueTokenResp: &IAMIssueTokenResponse{
-			TokenID:      "token-123",
-			AccessToken:  "new-access-token",
-			RefreshToken: "new-refresh-token",
-			ExpiresIn:    3600,
-			TokenType:    "Bearer",
-		},
-		validateTokenResp: &IAMValidateTokenResponse{
-			Valid:     true,
-			UserID:    "user-123",
-			TenantID:  "tenant-1",
-			Scopes:    []string{"read", "write"},
-			ExpiresAt: now + 3600,
-		},
-		refreshTokenResp: &IAMIssueTokenResponse{
-			TokenID:      "token-456",
-			AccessToken:  "refreshed-access-token",
-			RefreshToken: "refreshed-refresh-token",
-			ExpiresIn:    3600,
-			TokenType:    "Bearer",
 		},
 	}
 }
@@ -402,32 +374,6 @@ func (m *mockIAMService) CheckPermission(ctx context.Context, req *IAMCheckPermi
 		return nil, m.checkPermissionErr
 	}
 	return m.checkPermissionResp, nil
-}
-
-// Token operations
-func (m *mockIAMService) IssueToken(ctx context.Context, req *IAMIssueTokenRequest) (*IAMIssueTokenResponse, error) {
-	if m.issueTokenErr != nil {
-		return nil, m.issueTokenErr
-	}
-	return m.issueTokenResp, nil
-}
-
-func (m *mockIAMService) ValidateToken(ctx context.Context, req *IAMValidateTokenRequest) (*IAMValidateTokenResponse, error) {
-	if m.validateTokenErr != nil {
-		return nil, m.validateTokenErr
-	}
-	return m.validateTokenResp, nil
-}
-
-func (m *mockIAMService) RefreshToken(ctx context.Context, req *IAMRefreshTokenRequest) (*IAMIssueTokenResponse, error) {
-	if m.refreshTokenErr != nil {
-		return nil, m.refreshTokenErr
-	}
-	return m.refreshTokenResp, nil
-}
-
-func (m *mockIAMService) RevokeToken(ctx context.Context, req *IAMRevokeTokenRequest) error {
-	return m.revokeTokenErr
 }
 
 // Ensure mockIAMService implements IAMService at compile time.
@@ -1284,120 +1230,6 @@ func TestIAMGRPCService_CheckPermission_MissingResource(t *testing.T) {
 	}
 }
 
-func TestIAMGRPCService_CreateToken_Success(t *testing.T) {
-	service, _ := newTestIAMService()
-	ctx := context.Background()
-
-	req := &platformv1.CreateIAMTokenRequest{
-		TenantId:  "tenant-1",
-		UserId:    "user-123",
-		Scopes:    []string{"read", "write"},
-		ExpiresIn: 3600,
-	}
-
-	resp, err := service.CreateToken(ctx, req)
-	if err != nil {
-		t.Fatalf("CreateToken failed: %v", err)
-	}
-
-	if resp.GetAccessToken() == "" {
-		t.Error("Expected access token in response")
-	}
-}
-
-func TestIAMGRPCService_CreateToken_MissingUserID(t *testing.T) {
-	service, _ := newTestIAMService()
-	ctx := context.Background()
-
-	req := &platformv1.CreateIAMTokenRequest{
-		TenantId: "tenant-1",
-	}
-
-	_, err := service.CreateToken(ctx, req)
-	if err == nil {
-		t.Fatal("Expected error for missing user ID")
-	}
-
-	st, _ := status.FromError(err)
-	if st.Code() != codes.InvalidArgument {
-		t.Errorf("Expected InvalidArgument, got %v", st.Code())
-	}
-}
-
-func TestIAMGRPCService_RevokeToken_Success(t *testing.T) {
-	service, _ := newTestIAMService()
-	ctx := context.Background()
-
-	req := &platformv1.RevokeIAMTokenRequest{
-		TokenId: "token-123",
-	}
-
-	resp, err := service.RevokeToken(ctx, req)
-	if err != nil {
-		t.Fatalf("RevokeToken failed: %v", err)
-	}
-
-	if !resp.GetStatus().GetSuccess() {
-		t.Error("Expected success status")
-	}
-}
-
-func TestIAMGRPCService_RevokeToken_MissingToken(t *testing.T) {
-	service, _ := newTestIAMService()
-	ctx := context.Background()
-
-	req := &platformv1.RevokeIAMTokenRequest{}
-
-	_, err := service.RevokeToken(ctx, req)
-	if err == nil {
-		t.Fatal("Expected error for missing token")
-	}
-
-	st, _ := status.FromError(err)
-	if st.Code() != codes.InvalidArgument {
-		t.Errorf("Expected InvalidArgument, got %v", st.Code())
-	}
-}
-
-func TestIAMGRPCService_VerifyToken_Success(t *testing.T) {
-	service, _ := newTestIAMService()
-	ctx := context.Background()
-
-	req := &platformv1.VerifyIAMTokenRequest{
-		Token: "access-token-xyz",
-	}
-
-	resp, err := service.VerifyToken(ctx, req)
-	if err != nil {
-		t.Fatalf("VerifyToken failed: %v", err)
-	}
-
-	if !resp.GetValid() {
-		t.Error("Expected token to be valid")
-	}
-
-	if resp.GetUserId() != "user-123" {
-		t.Errorf("Expected user ID 'user-123', got '%s'", resp.GetUserId())
-	}
-}
-
-func TestIAMGRPCService_VerifyToken_MissingToken(t *testing.T) {
-	service, _ := newTestIAMService()
-	ctx := context.Background()
-
-	req := &platformv1.VerifyIAMTokenRequest{}
-
-	_, err := service.VerifyToken(ctx, req)
-	if err == nil {
-		t.Fatal("Expected error for missing token")
-	}
-
-	st, _ := status.FromError(err)
-	if st.Code() != codes.InvalidArgument {
-		t.Errorf("Expected InvalidArgument, got %v", st.Code())
-	}
-}
-
 // =============================================================================
 // Tenant Operation Tests
 // =============================================================================
@@ -2117,14 +1949,6 @@ func TestErrMissingGroupID_Error(t *testing.T) {
 func TestErrMissingGroupName_Error(t *testing.T) {
 	err := ErrMissingGroupName{}
 	expected := "group name is required"
-	if err.Error() != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, err.Error())
-	}
-}
-
-func TestErrMissingToken_Error(t *testing.T) {
-	err := ErrMissingToken{}
-	expected := "token is required"
 	if err.Error() != expected {
 		t.Errorf("Expected '%s', got '%s'", expected, err.Error())
 	}

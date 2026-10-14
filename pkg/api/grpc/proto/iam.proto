@@ -369,6 +369,10 @@ message VerifyIAMTokenResponse {
   repeated string scopes = 4;
   int64 expires_at = 5;
   google.protobuf.Timestamp timestamp = 6;
+  // reason classifies a rejected token (valid = false): malformed, expired,
+  // bad_signature, revoked, wrong_issuer, wrong_audience or rejected. Empty
+  // when the token is valid.
+  string reason = 7;
 }
 
 // =============================================================================

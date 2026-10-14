@@ -585,19 +585,19 @@ func newBareQUICDispatchHandler() *QUICServiceHandler {
 	return newTestQUICServiceHandler(logging.DefaultLogger())
 }
 
-// assertDispatchFamily drives one request through HandleRequest and
-// asserts the response carries the family signature.
 // iamTokenNotImplementedOpcodes are the IAM token operations that return
-// StatusNotImplemented by OIDC design (token issuance/verification/revocation
-// happens through OIDC, not these QUIC ops). They are still routed to and owned
-// by the iam family on the wire; they simply answer NotImplemented instead of
-// the iam-unavailable error a bare handler returns for the other iam opcodes.
+// StatusNotImplemented by OIDC design (token issuance and revocation happen
+// through OIDC, not these QUIC ops). They are still routed to and owned by the
+// iam family on the wire; they simply answer NotImplemented instead of the
+// iam-unavailable error a bare handler returns for the other iam opcodes,
+// OpIAMTokenVerify included.
 var iamTokenNotImplementedOpcodes = map[byte]bool{
 	quicwire.OpIAMTokenCreate: true,
 	quicwire.OpIAMTokenRevoke: true,
-	quicwire.OpIAMTokenVerify: true,
 }
 
+// assertDispatchFamily drives one request through HandleRequest and
+// asserts the response carries the family signature.
 func assertDispatchFamily(t *testing.T, h *QUICServiceHandler, opcode byte, payload []byte, family string) {
 	t.Helper()
 

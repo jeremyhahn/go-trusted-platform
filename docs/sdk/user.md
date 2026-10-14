@@ -312,3 +312,9 @@ rather than retrying.
 After a call reaches a service, errors are gRPC status errors on every
 transport; read them with `status.Code(err)`. REST maps HTTP statuses onto the
 same codes ([engineering.md §4](engineering.md#4-transport-contracts)).
+
+The MCP transport retries a call only when it never reached the daemon or the
+daemon asked for a retry: a dial failure, an HTTP 429, 502, 503 or 504
+(honouring `Retry-After`), or a timeout on a read-only method. A refusal, any
+other error and a cancelled context come back at once
+([engineering.md §4](engineering.md#4-transport-contracts)).

@@ -90,11 +90,13 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"google.golang.org/grpc/codes"
@@ -132,6 +134,9 @@ type IAMGRPCService struct {
 	logger    *slog.Logger
 	iamClient quicbaassdk.IAMClient
 	pepClient quicbaassdk.IAMPEPClient
+	// tokens answers the token rpcs; nil refuses verification with
+	// ErrIAMTokenVerifierNotConfigured.
+	tokens *IAMTokenService
 }
 
 // NewIAMGRPCService creates a new IAM gRPC service instance.
@@ -174,7 +179,7 @@ func NewIAMGRPCService(
 // Returns ErrIAMMissingParameter if required fields are missing.
 func (s *IAMGRPCService) CreateUser(ctx context.Context, req *platformv1.CreateIAMUserRequest) (*platformv1.IAMUserResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -218,7 +223,7 @@ func (s *IAMGRPCService) CreateUser(ctx context.Context, req *platformv1.CreateI
 // Required fields: tenant_id, user_id
 func (s *IAMGRPCService) GetUser(ctx context.Context, req *platformv1.GetIAMUserRequest) (*platformv1.IAMUserResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -256,7 +261,7 @@ func (s *IAMGRPCService) GetUser(ctx context.Context, req *platformv1.GetIAMUser
 // Optional fields: pagination, email_filter, role_filter, group_filter
 func (s *IAMGRPCService) ListUsers(ctx context.Context, req *platformv1.ListIAMUsersRequest) (*platformv1.ListIAMUsersResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -312,7 +317,7 @@ func (s *IAMGRPCService) ListUsers(ctx context.Context, req *platformv1.ListIAMU
 // Optional fields: email, name, roles, groups, attributes
 func (s *IAMGRPCService) UpdateUser(ctx context.Context, req *platformv1.UpdateIAMUserRequest) (*platformv1.IAMUserResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -354,7 +359,7 @@ func (s *IAMGRPCService) UpdateUser(ctx context.Context, req *platformv1.UpdateI
 // Required fields: tenant_id, user_id
 func (s *IAMGRPCService) DeleteUser(ctx context.Context, req *platformv1.DeleteIAMUserRequest) (*platformv1.DeleteIAMUserResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -398,7 +403,7 @@ func (s *IAMGRPCService) DeleteUser(ctx context.Context, req *platformv1.DeleteI
 // Optional fields: description, permissions
 func (s *IAMGRPCService) CreateRole(ctx context.Context, req *platformv1.CreateIAMRoleRequest) (*platformv1.IAMRoleResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -441,7 +446,7 @@ func (s *IAMGRPCService) CreateRole(ctx context.Context, req *platformv1.CreateI
 // Required fields: tenant_id, role_id
 func (s *IAMGRPCService) GetRole(ctx context.Context, req *platformv1.GetIAMRoleRequest) (*platformv1.IAMRoleResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -475,7 +480,7 @@ func (s *IAMGRPCService) GetRole(ctx context.Context, req *platformv1.GetIAMRole
 // Optional fields: pagination
 func (s *IAMGRPCService) ListRoles(ctx context.Context, req *platformv1.ListIAMRolesRequest) (*platformv1.ListIAMRolesResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -527,7 +532,7 @@ func (s *IAMGRPCService) ListRoles(ctx context.Context, req *platformv1.ListIAMR
 // Optional fields: name, description, permissions
 func (s *IAMGRPCService) UpdateRole(ctx context.Context, req *platformv1.UpdateIAMRoleRequest) (*platformv1.IAMRoleResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -569,7 +574,7 @@ func (s *IAMGRPCService) UpdateRole(ctx context.Context, req *platformv1.UpdateI
 // Required fields: tenant_id, role_id
 func (s *IAMGRPCService) DeleteRole(ctx context.Context, req *platformv1.DeleteIAMRoleRequest) (*platformv1.DeleteIAMRoleResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -607,7 +612,7 @@ func (s *IAMGRPCService) DeleteRole(ctx context.Context, req *platformv1.DeleteI
 // Required fields: tenant_id, user_id, role_id
 func (s *IAMGRPCService) AssignRole(ctx context.Context, req *platformv1.AssignIAMRoleRequest) (*platformv1.AssignIAMRoleResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -648,7 +653,7 @@ func (s *IAMGRPCService) AssignRole(ctx context.Context, req *platformv1.AssignI
 // Required fields: tenant_id, user_id, role_id
 func (s *IAMGRPCService) RevokeRole(ctx context.Context, req *platformv1.RevokeIAMRoleRequest) (*platformv1.RevokeIAMRoleResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -695,7 +700,7 @@ func (s *IAMGRPCService) RevokeRole(ctx context.Context, req *platformv1.RevokeI
 // Optional fields: description
 func (s *IAMGRPCService) CreateGroup(ctx context.Context, req *platformv1.CreateIAMGroupRequest) (*platformv1.IAMGroupResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -737,7 +742,7 @@ func (s *IAMGRPCService) CreateGroup(ctx context.Context, req *platformv1.Create
 // Required fields: tenant_id, group_id
 func (s *IAMGRPCService) GetGroup(ctx context.Context, req *platformv1.GetIAMGroupRequest) (*platformv1.IAMGroupResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -771,7 +776,7 @@ func (s *IAMGRPCService) GetGroup(ctx context.Context, req *platformv1.GetIAMGro
 // Optional fields: pagination
 func (s *IAMGRPCService) ListGroups(ctx context.Context, req *platformv1.ListIAMGroupsRequest) (*platformv1.ListIAMGroupsResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -821,7 +826,7 @@ func (s *IAMGRPCService) ListGroups(ctx context.Context, req *platformv1.ListIAM
 // Optional fields: name, description
 func (s *IAMGRPCService) UpdateGroup(ctx context.Context, req *platformv1.UpdateIAMGroupRequest) (*platformv1.IAMGroupResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -862,7 +867,7 @@ func (s *IAMGRPCService) UpdateGroup(ctx context.Context, req *platformv1.Update
 // Required fields: tenant_id, group_id
 func (s *IAMGRPCService) DeleteGroup(ctx context.Context, req *platformv1.DeleteIAMGroupRequest) (*platformv1.DeleteIAMGroupResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -901,7 +906,7 @@ func (s *IAMGRPCService) DeleteGroup(ctx context.Context, req *platformv1.Delete
 // Required fields: tenant_id, group_id, user_id
 func (s *IAMGRPCService) AddGroupMember(ctx context.Context, req *platformv1.AddGroupMemberRequest) (*platformv1.AddGroupMemberResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -943,7 +948,7 @@ func (s *IAMGRPCService) AddGroupMember(ctx context.Context, req *platformv1.Add
 // Required fields: tenant_id, group_id, user_id
 func (s *IAMGRPCService) RemoveGroupMember(ctx context.Context, req *platformv1.RemoveGroupMemberRequest) (*platformv1.RemoveGroupMemberResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -993,11 +998,14 @@ func (s *IAMGRPCService) RemoveGroupMember(ctx context.Context, req *platformv1.
 // Returns the authorization decision with details about the matched policy and rule.
 func (s *IAMGRPCService) CheckPermission(ctx context.Context, req *platformv1.CheckIAMPermissionRequest) (*platformv1.CheckIAMPermissionResponse, error) {
 	if s.pepClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
+	}
+	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, err
 	}
 	if req.GetSubjectId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "subject_id"}.Error())
@@ -1058,31 +1066,61 @@ func (s *IAMGRPCService) CheckPermission(ctx context.Context, req *platformv1.Ch
 	}, nil
 }
 
-// CreateToken creates a new access token.
-//
-// Note: This method is not implemented. Token creation is handled via OIDC
-// flows using the Federation service.
+// SetTokenService wires the token service CreateToken, RevokeToken and
+// VerifyToken delegate to. Call it before the service is registered.
+func (s *IAMGRPCService) SetTokenService(tokens *IAMTokenService) {
+	s.tokens = tokens
+}
+
+// CreateToken refuses token issuance with codes.Unimplemented: the SDK IAM
+// client cannot issue tokens; platform tokens come from the broker's OIDC flows.
 func (s *IAMGRPCService) CreateToken(ctx context.Context, req *platformv1.CreateIAMTokenRequest) (*platformv1.CreateIAMTokenResponse, error) {
-	// Token creation is handled via OIDC flows in go-quicbaas
-	return nil, status.Error(codes.Unimplemented, "token creation should be performed via OIDC flows")
+	return nil, status.Error(codes.Unimplemented, s.tokens.Create().Error())
 }
 
-// RevokeToken revokes an access token.
-//
-// Note: This method is not implemented. Token revocation is handled via OIDC
-// flows using the Federation service.
+// RevokeToken refuses token revocation with codes.Unimplemented: the SDK IAM
+// client cannot revoke tokens; platform tokens are revoked by the broker's
+// OIDC flows.
 func (s *IAMGRPCService) RevokeToken(ctx context.Context, req *platformv1.RevokeIAMTokenRequest) (*platformv1.RevokeIAMTokenResponse, error) {
-	// Token revocation is handled via OIDC flows in go-quicbaas
-	return nil, status.Error(codes.Unimplemented, "token revocation should be performed via OIDC flows")
+	return nil, status.Error(codes.Unimplemented, s.tokens.Revoke().Error())
 }
 
-// VerifyToken verifies an access token.
-//
-// Note: This method is not implemented. Token verification is handled via OIDC
-// flows using the Federation service.
+// VerifyToken verifies a token with the daemon's token validator through
+// IAMTokenService.Verify. A rejected token is answered with valid=false and
+// its reason; the token itself is never echoed. A blank token is
+// InvalidArgument; no wired validator, or a validator that cannot be reached,
+// is Unavailable.
 func (s *IAMGRPCService) VerifyToken(ctx context.Context, req *platformv1.VerifyIAMTokenRequest) (*platformv1.VerifyIAMTokenResponse, error) {
-	// Token verification is handled via OIDC flows in go-quicbaas
-	return nil, status.Error(codes.Unimplemented, "token verification should be performed via OIDC flows")
+	verification, err := s.tokens.Verify(ctx, req.GetToken())
+	if err != nil {
+		return nil, status.Error(iamTokenErrorCode(err), err.Error())
+	}
+	resp := &platformv1.VerifyIAMTokenResponse{
+		Valid:     verification.Valid,
+		Reason:    string(verification.Reason),
+		Timestamp: timestamppb.Now(),
+	}
+	if verification.Claims != nil {
+		resp.UserId = verification.Claims.Subject
+		resp.TenantId = verification.Claims.TenantID
+		resp.Scopes = verification.Claims.Scopes
+		resp.ExpiresAt = verification.Claims.ExpiresAt
+	}
+	return resp, nil
+}
+
+// iamTokenErrorCode maps an IAMTokenService.Verify error to its gRPC code.
+func iamTokenErrorCode(err error) codes.Code {
+	switch {
+	case errors.As(err, &ErrIAMMissingParameter{}):
+		return codes.InvalidArgument
+	case errors.As(err, &ErrIAMTokenVerifierNotConfigured{}),
+		errors.As(err, &ErrTokenValidationFailed{}),
+		errors.As(err, &ErrQuicBaaSServiceUnavailable{}):
+		return codes.Unavailable
+	default:
+		return codes.Internal
+	}
 }
 
 // =============================================================================
@@ -1098,7 +1136,7 @@ func (s *IAMGRPCService) VerifyToken(ctx context.Context, req *platformv1.Verify
 // Optional fields: name, settings
 func (s *IAMGRPCService) CreateTenant(ctx context.Context, req *platformv1.CreateIAMTenantRequest) (*platformv1.IAMTenantResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetId() == "" {
@@ -1142,11 +1180,14 @@ func (s *IAMGRPCService) CreateTenant(ctx context.Context, req *platformv1.Creat
 // Required fields: tenant_id
 func (s *IAMGRPCService) GetTenant(ctx context.Context, req *platformv1.GetIAMTenantRequest) (*platformv1.IAMTenantResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
+	}
+	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
@@ -1169,7 +1210,7 @@ func (s *IAMGRPCService) GetTenant(ctx context.Context, req *platformv1.GetIAMTe
 // Optional fields: pagination
 func (s *IAMGRPCService) ListTenants(ctx context.Context, req *platformv1.ListIAMTenantsRequest) (*platformv1.ListIAMTenantsResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
@@ -1212,11 +1253,14 @@ func (s *IAMGRPCService) ListTenants(ctx context.Context, req *platformv1.ListIA
 // Optional fields: name, settings
 func (s *IAMGRPCService) UpdateTenant(ctx context.Context, req *platformv1.UpdateIAMTenantRequest) (*platformv1.IAMTenantResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
+	}
+	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
@@ -1255,11 +1299,14 @@ func (s *IAMGRPCService) UpdateTenant(ctx context.Context, req *platformv1.Updat
 // Required fields: tenant_id
 func (s *IAMGRPCService) DeleteTenant(ctx context.Context, req *platformv1.DeleteIAMTenantRequest) (*platformv1.DeleteIAMTenantResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "tenant_id"}.Error())
+	}
+	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
@@ -1293,7 +1340,7 @@ func (s *IAMGRPCService) DeleteTenant(ctx context.Context, req *platformv1.Delet
 // Optional fields: description, priority, labels
 func (s *IAMGRPCService) CreatePolicy(ctx context.Context, req *platformv1.CreateIAMPolicyRequest) (*platformv1.IAMPolicyResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -1340,7 +1387,7 @@ func (s *IAMGRPCService) CreatePolicy(ctx context.Context, req *platformv1.Creat
 // Required fields: tenant_id, policy_name
 func (s *IAMGRPCService) GetPolicy(ctx context.Context, req *platformv1.GetIAMPolicyRequest) (*platformv1.IAMPolicyResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -1374,7 +1421,7 @@ func (s *IAMGRPCService) GetPolicy(ctx context.Context, req *platformv1.GetIAMPo
 // Optional fields: pagination
 func (s *IAMGRPCService) ListPolicies(ctx context.Context, req *platformv1.ListIAMPoliciesRequest) (*platformv1.ListIAMPoliciesResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -1426,7 +1473,7 @@ func (s *IAMGRPCService) ListPolicies(ctx context.Context, req *platformv1.ListI
 // Optional fields: description, priority, spec_yaml, labels
 func (s *IAMGRPCService) UpdatePolicy(ctx context.Context, req *platformv1.UpdateIAMPolicyRequest) (*platformv1.IAMPolicyResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -1471,7 +1518,7 @@ func (s *IAMGRPCService) UpdatePolicy(ctx context.Context, req *platformv1.Updat
 // Required fields: tenant_id, policy_name
 func (s *IAMGRPCService) DeletePolicy(ctx context.Context, req *platformv1.DeleteIAMPolicyRequest) (*platformv1.DeleteIAMPolicyResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -1510,7 +1557,7 @@ func (s *IAMGRPCService) DeletePolicy(ctx context.Context, req *platformv1.Delet
 // Required fields: tenant_id, spec_yaml
 func (s *IAMGRPCService) ValidatePolicy(ctx context.Context, req *platformv1.ValidateIAMPolicyRequest) (*platformv1.ValidateIAMPolicyResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -1559,7 +1606,7 @@ func (s *IAMGRPCService) ValidatePolicy(ctx context.Context, req *platformv1.Val
 // Optional fields: roles, groups, attributes, context
 func (s *IAMGRPCService) TestPolicy(ctx context.Context, req *platformv1.TestIAMPolicyRequest) (*platformv1.TestIAMPolicyResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -1654,7 +1701,7 @@ func (s *IAMGRPCService) TestPolicy(ctx context.Context, req *platformv1.TestIAM
 // Optional fields: redirect_uris, grant_types, response_types, resource_prefix
 func (s *IAMGRPCService) RegisterApp(ctx context.Context, req *platformv1.RegisterIAMAppRequest) (*platformv1.IAMAppResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -1703,7 +1750,7 @@ func (s *IAMGRPCService) RegisterApp(ctx context.Context, req *platformv1.Regist
 // Required fields: tenant_id, client_id
 func (s *IAMGRPCService) GetApp(ctx context.Context, req *platformv1.GetIAMAppRequest) (*platformv1.IAMAppResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -1737,7 +1784,7 @@ func (s *IAMGRPCService) GetApp(ctx context.Context, req *platformv1.GetIAMAppRe
 // Optional fields: pagination
 func (s *IAMGRPCService) ListApps(ctx context.Context, req *platformv1.ListIAMAppsRequest) (*platformv1.ListIAMAppsResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -1783,7 +1830,7 @@ func (s *IAMGRPCService) ListApps(ctx context.Context, req *platformv1.ListIAMAp
 // Optional fields: name, redirect_uris, grant_types, response_types, resource_prefix
 func (s *IAMGRPCService) UpdateApp(ctx context.Context, req *platformv1.UpdateIAMAppRequest) (*platformv1.IAMAppResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -1832,7 +1879,7 @@ func (s *IAMGRPCService) UpdateApp(ctx context.Context, req *platformv1.UpdateIA
 // Required fields: tenant_id, client_id
 func (s *IAMGRPCService) DeleteApp(ctx context.Context, req *platformv1.DeleteIAMAppRequest) (*platformv1.DeleteIAMAppResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -1871,7 +1918,7 @@ func (s *IAMGRPCService) DeleteApp(ctx context.Context, req *platformv1.DeleteIA
 // Required fields: tenant_id, client_id
 func (s *IAMGRPCService) RotateAppSecret(ctx context.Context, req *platformv1.RotateIAMAppSecretRequest) (*platformv1.RotateIAMAppSecretResponse, error) {
 	if s.iamClient == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrIAMServiceNotAvailable{}.Error())
+		return nil, ErrIAMServiceNotAvailable{}
 	}
 
 	if req.GetTenantId() == "" {
@@ -1927,16 +1974,40 @@ func (s *IAMGRPCService) getPagination(req *platformv1.PaginationRequest) (limit
 	return limit, offset
 }
 
+// sdkErrorCodes classifies a QuicBaaS SDK error by its category, so a
+// missing user answers NotFound and a bad request InvalidArgument rather
+// than Internal. Categories absent here (unknown, internal, configuration)
+// answer Internal.
+var sdkErrorCodes = map[sdkerrors.ErrorCode]codes.Code{
+	sdkerrors.CodeInvalidInput:       codes.InvalidArgument,
+	sdkerrors.CodeNotFound:           codes.NotFound,
+	sdkerrors.CodeAlreadyExists:      codes.AlreadyExists,
+	sdkerrors.CodeUnauthorized:       codes.Unauthenticated,
+	sdkerrors.CodeForbidden:          codes.PermissionDenied,
+	sdkerrors.CodeConflict:           codes.Aborted,
+	sdkerrors.CodePreconditionFailed: codes.FailedPrecondition,
+	sdkerrors.CodeRateLimited:        codes.ResourceExhausted,
+	sdkerrors.CodeUnavailable:        codes.Unavailable,
+	sdkerrors.CodeTimeout:            codes.DeadlineExceeded,
+	sdkerrors.CodeCanceled:           codes.Canceled,
+	sdkerrors.CodeUnimplemented:      codes.Unimplemented,
+	sdkerrors.CodeResourceExhausted:  codes.ResourceExhausted,
+	sdkerrors.CodeSealed:             codes.Unavailable,
+	sdkerrors.CodeNotInitialized:     codes.FailedPrecondition,
+}
+
 // wrapError converts errors to gRPC status errors with appropriate codes.
 //
-// If the error is already a gRPC status, it preserves the code and message.
-// Otherwise, it wraps the error as an Internal error.
+// A gRPC status keeps its code and message; a QuicBaaS SDK error takes the
+// code of its category (sdkErrorCodes); anything else is Internal.
 func (s *IAMGRPCService) wrapError(err error) error {
-	st, ok := status.FromError(err)
-	if !ok {
-		return status.Error(codes.Internal, err.Error())
+	if st, ok := status.FromError(err); ok {
+		return status.Error(st.Code(), st.Message())
 	}
-	return status.Error(st.Code(), st.Message())
+	if code, ok := sdkErrorCodes[sdkerrors.Code(err)]; ok {
+		return status.Error(code, err.Error())
+	}
+	return status.Error(codes.Internal, err.Error())
 }
 
 // =============================================================================

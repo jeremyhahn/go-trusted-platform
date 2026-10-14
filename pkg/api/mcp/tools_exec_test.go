@@ -1455,8 +1455,8 @@ func TestIAMToolExecution(t *testing.T) {
 
 	t.Run("executeIAMDeleteUser error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.iamDeleteUserFunc = func(ctx context.Context, tenantID, userID string) error {
-			return ErrMockServiceError
+		svc.iamDeleteUserFunc = func(ctx context.Context, tenantID, userID string) (interface{}, error) {
+			return nil, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)
 
@@ -1509,16 +1509,27 @@ func TestIAMToolExecution(t *testing.T) {
 
 	t.Run("executeIAMListUsers success", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.iamListUsersFunc = func(ctx context.Context, tenantID string, limit, offset int) (interface{}, error) {
-			if limit != 50 {
-				t.Errorf("limit = %d, want 50 (default)", limit)
+		svc.iamListUsersFunc = func(ctx context.Context, req *IAMListUsersRequest) (interface{}, error) {
+			want := IAMListUsersRequest{
+				TenantID:    "tenant-1",
+				Pagination:  IAMPagination{Page: 2, PageSize: 25},
+				EmailFilter: "@example.com",
+				RoleFilter:  "admin",
+				GroupFilter: "ops",
+			}
+			if *req != want {
+				t.Errorf("request = %+v, want %+v", *req, want)
 			}
 			return map[string]interface{}{"users": []interface{}{}}, nil
 		}
 		registry := NewToolRegistry(svc, log)
 
 		args := map[string]interface{}{
-			"tenant_id": "tenant-1",
+			"tenant_id":    "tenant-1",
+			"pagination":   map[string]interface{}{"page": 2, "page_size": 25},
+			"email_filter": "@example.com",
+			"role_filter":  "admin",
+			"group_filter": "ops",
 		}
 
 		result, err := registry.ExecuteTool(ctx, "iam_list_users", args)
@@ -1530,9 +1541,28 @@ func TestIAMToolExecution(t *testing.T) {
 		}
 	})
 
+	t.Run("executeIAMListUsers negative pagination reads as unset", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		svc.iamListUsersFunc = func(ctx context.Context, req *IAMListUsersRequest) (interface{}, error) {
+			if req.Pagination != (IAMPagination{}) {
+				t.Errorf("pagination = %+v, want zero so the service applies its defaults", req.Pagination)
+			}
+			return map[string]interface{}{"users": []interface{}{}}, nil
+		}
+		registry := NewToolRegistry(svc, log)
+
+		args := map[string]interface{}{
+			"tenant_id":  "tenant-1",
+			"pagination": map[string]interface{}{"page": -1, "page_size": -5},
+		}
+		if _, err := registry.ExecuteTool(ctx, "iam_list_users", args); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
 	t.Run("executeIAMListUsers error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.iamListUsersFunc = func(ctx context.Context, tenantID string, limit, offset int) (interface{}, error) {
+		svc.iamListUsersFunc = func(ctx context.Context, req *IAMListUsersRequest) (interface{}, error) {
 			return nil, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)
@@ -1616,8 +1646,8 @@ func TestIAMToolExecution(t *testing.T) {
 
 	t.Run("executeIAMDeleteRole error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.iamDeleteRoleFunc = func(ctx context.Context, tenantID, roleID string) error {
-			return ErrMockServiceError
+		svc.iamDeleteRoleFunc = func(ctx context.Context, tenantID, roleID string) (interface{}, error) {
+			return nil, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)
 
@@ -1670,16 +1700,17 @@ func TestIAMToolExecution(t *testing.T) {
 
 	t.Run("executeIAMListRoles success", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.iamListRolesFunc = func(ctx context.Context, tenantID string, limit, offset int) (interface{}, error) {
-			if limit != 50 {
-				t.Errorf("limit = %d, want 50 (default)", limit)
+		svc.iamListRolesFunc = func(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error) {
+			if page != (IAMPagination{Page: 3, PageSize: 10}) {
+				t.Errorf("pagination = %+v, want page 3 of size 10", page)
 			}
 			return map[string]interface{}{"roles": []interface{}{}}, nil
 		}
 		registry := NewToolRegistry(svc, log)
 
 		args := map[string]interface{}{
-			"tenant_id": "tenant-1",
+			"tenant_id":  "tenant-1",
+			"pagination": map[string]interface{}{"page": float64(3), "page_size": float64(10)},
 		}
 
 		result, err := registry.ExecuteTool(ctx, "iam_list_roles", args)
@@ -1693,7 +1724,7 @@ func TestIAMToolExecution(t *testing.T) {
 
 	t.Run("executeIAMListRoles error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.iamListRolesFunc = func(ctx context.Context, tenantID string, limit, offset int) (interface{}, error) {
+		svc.iamListRolesFunc = func(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error) {
 			return nil, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)
@@ -1710,12 +1741,18 @@ func TestIAMToolExecution(t *testing.T) {
 
 	t.Run("executeIAMAssignRole success", func(t *testing.T) {
 		svc := newMockServiceProvider()
+		svc.iamAssignRoleFunc = func(ctx context.Context, tenantID, userID, roleID string) (interface{}, error) {
+			if tenantID != "tenant-1" || userID != "user-123" || roleID != "admin" {
+				t.Errorf("assign(%q, %q, %q), want (tenant-1, user-123, admin)", tenantID, userID, roleID)
+			}
+			return mockIAMSuccess(), nil
+		}
 		registry := NewToolRegistry(svc, log)
 
 		args := map[string]interface{}{
 			"tenant_id": "tenant-1",
 			"user_id":   "user-123",
-			"role":      "admin",
+			"role_id":   "admin",
 		}
 
 		result, err := registry.ExecuteTool(ctx, "iam_assign_role", args)
@@ -1733,15 +1770,15 @@ func TestIAMToolExecution(t *testing.T) {
 
 	t.Run("executeIAMAssignRole error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.iamAssignRoleFunc = func(ctx context.Context, tenantID, userID, role string) error {
-			return ErrMockServiceError
+		svc.iamAssignRoleFunc = func(ctx context.Context, tenantID, userID, roleID string) (interface{}, error) {
+			return nil, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)
 
 		args := map[string]interface{}{
 			"tenant_id": "tenant-1",
 			"user_id":   "user-123",
-			"role":      "admin",
+			"role_id":   "admin",
 		}
 
 		_, err := registry.ExecuteTool(ctx, "iam_assign_role", args)
@@ -1757,7 +1794,7 @@ func TestIAMToolExecution(t *testing.T) {
 		args := map[string]interface{}{
 			"tenant_id": "tenant-1",
 			"user_id":   "user-123",
-			"role":      "admin",
+			"role_id":   "admin",
 		}
 
 		result, err := registry.ExecuteTool(ctx, "iam_revoke_role", args)
@@ -1775,15 +1812,15 @@ func TestIAMToolExecution(t *testing.T) {
 
 	t.Run("executeIAMRevokeRole error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.iamRevokeRoleFunc = func(ctx context.Context, tenantID, userID, role string) error {
-			return ErrMockServiceError
+		svc.iamRevokeRoleFunc = func(ctx context.Context, tenantID, userID, roleID string) (interface{}, error) {
+			return nil, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)
 
 		args := map[string]interface{}{
 			"tenant_id": "tenant-1",
 			"user_id":   "user-123",
-			"role":      "admin",
+			"role_id":   "admin",
 		}
 
 		_, err := registry.ExecuteTool(ctx, "iam_revoke_role", args)
@@ -1794,16 +1831,30 @@ func TestIAMToolExecution(t *testing.T) {
 
 	t.Run("executeIAMCheckPermission success", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.iamCheckPermissionFunc = func(ctx context.Context, tenantID, userID, resource, action string) (bool, error) {
-			return true, nil
+		svc.iamCheckPermissionFunc = func(ctx context.Context, req *IAMCheckPermissionRequest) (interface{}, error) {
+			if req.TenantID != "tenant-1" || req.SubjectID != "user-123" ||
+				req.Resource != "documents" || req.Action != "read" {
+				t.Errorf("request = %+v, want tenant-1/user-123 read documents", *req)
+			}
+			if len(req.Roles) != 1 || req.Roles[0] != "viewer" || len(req.Groups) != 1 || req.Groups[0] != "ops" {
+				t.Errorf("roles/groups = %v/%v, want [viewer]/[ops]", req.Roles, req.Groups)
+			}
+			if req.Context["ip"] != "10.0.0.1" || req.Attributes["dept"] != "eng" {
+				t.Errorf("context/attributes = %v/%v, want ip and dept carried", req.Context, req.Attributes)
+			}
+			return map[string]interface{}{"allowed": true}, nil
 		}
 		registry := NewToolRegistry(svc, log)
 
 		args := map[string]interface{}{
-			"tenant_id": "tenant-1",
-			"user_id":   "user-123",
-			"resource":  "documents",
-			"action":    "read",
+			"tenant_id":  "tenant-1",
+			"subject_id": "user-123",
+			"roles":      []interface{}{"viewer"},
+			"groups":     []interface{}{"ops"},
+			"resource":   "documents",
+			"action":     "read",
+			"context":    map[string]interface{}{"ip": "10.0.0.1"},
+			"attributes": map[string]interface{}{"dept": "eng"},
 		}
 
 		result, err := registry.ExecuteTool(ctx, "iam_check_permission", args)
@@ -1821,16 +1872,16 @@ func TestIAMToolExecution(t *testing.T) {
 
 	t.Run("executeIAMCheckPermission error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.iamCheckPermissionFunc = func(ctx context.Context, tenantID, userID, resource, action string) (bool, error) {
-			return false, ErrMockServiceError
+		svc.iamCheckPermissionFunc = func(ctx context.Context, req *IAMCheckPermissionRequest) (interface{}, error) {
+			return nil, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)
 
 		args := map[string]interface{}{
-			"tenant_id": "tenant-1",
-			"user_id":   "user-123",
-			"resource":  "documents",
-			"action":    "read",
+			"tenant_id":  "tenant-1",
+			"subject_id": "user-123",
+			"resource":   "documents",
+			"action":     "read",
 		}
 
 		_, err := registry.ExecuteTool(ctx, "iam_check_permission", args)
@@ -1965,14 +2016,19 @@ func TestIAMGroupToolExecution(t *testing.T) {
 		}
 	})
 
-	t.Run("executeIAMListGroups with custom limit", func(t *testing.T) {
+	t.Run("executeIAMListGroups with pagination", func(t *testing.T) {
 		svc := newMockServiceProvider()
+		svc.iamListGroupsFunc = func(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error) {
+			if tenantID != "tenant-1" || page != (IAMPagination{Page: 4, PageSize: 100}) {
+				t.Errorf("list(%q, %+v), want tenant-1 page 4 of size 100", tenantID, page)
+			}
+			return map[string]interface{}{"groups": []interface{}{}}, nil
+		}
 		registry := NewToolRegistry(svc, log)
 
 		args := map[string]interface{}{
-			"tenant_id": "tenant-1",
-			"limit":     float64(100),
-			"offset":    float64(10),
+			"tenant_id":  "tenant-1",
+			"pagination": map[string]interface{}{"page": float64(4), "page_size": float64(100)},
 		}
 
 		result, err := registry.ExecuteTool(ctx, "iam_list_groups", args)
@@ -2055,13 +2111,18 @@ func TestIAMTenantToolExecution(t *testing.T) {
 
 	t.Run("executeIAMCreateTenant with settings", func(t *testing.T) {
 		svc := newMockServiceProvider()
+		svc.iamCreateTenantFunc = func(ctx context.Context, req *IAMCreateTenantRequest) (interface{}, error) {
+			if req.Settings == nil || req.Settings.MaxUsers != 100 || !req.Settings.MFARequired {
+				t.Errorf("settings = %+v, want max_users 100 and mfa_required", req.Settings)
+			}
+			return map[string]interface{}{"id": req.ID}, nil
+		}
 		registry := NewToolRegistry(svc, log)
 
 		args := map[string]interface{}{
-			"id":           "tenant-123",
-			"name":         "Test Tenant",
-			"max_users":    float64(100),
-			"mfa_required": true,
+			"id":       "tenant-123",
+			"name":     "Test Tenant",
+			"settings": map[string]interface{}{"max_users": float64(100), "mfa_required": true},
 		}
 
 		result, err := registry.ExecuteTool(ctx, "iam_create_tenant", args)
@@ -2126,11 +2187,16 @@ func TestIAMTenantToolExecution(t *testing.T) {
 
 	t.Run("executeIAMListTenants with pagination", func(t *testing.T) {
 		svc := newMockServiceProvider()
+		svc.iamListTenantsFunc = func(ctx context.Context, page IAMPagination) (interface{}, error) {
+			if page != (IAMPagination{Page: 5, PageSize: 25}) {
+				t.Errorf("pagination = %+v, want page 5 of size 25", page)
+			}
+			return map[string]interface{}{"tenants": []interface{}{}}, nil
+		}
 		registry := NewToolRegistry(svc, log)
 
 		args := map[string]interface{}{
-			"limit":  float64(25),
-			"offset": float64(5),
+			"pagination": map[string]interface{}{"page": float64(5), "page_size": float64(25)},
 		}
 
 		result, err := registry.ExecuteTool(ctx, "iam_list_tenants", args)
@@ -2147,81 +2213,114 @@ func TestIAMTokenToolExecution(t *testing.T) {
 	ctx := context.Background()
 	log := newTestLogger()
 
-	t.Run("executeIAMCreateToken success", func(t *testing.T) {
+	// The token tools refuse issuance and revocation on every transport; the
+	// tool must surface that refusal, never a token or a "success".
+	refusals := []struct {
+		name string
+		tool string
+		args map[string]interface{}
+	}{
+		{
+			name: "executeIAMCreateToken refuses",
+			tool: "iam_create_token",
+			args: map[string]interface{}{
+				"tenant_id":   "tenant-1",
+				"user_id":     "user-123",
+				"scopes":      []interface{}{"read", "write"},
+				"description": "API access token",
+			},
+		},
+		{
+			name: "executeIAMCreateToken with expires_in refuses",
+			tool: "iam_create_token",
+			args: map[string]interface{}{
+				"tenant_id":  "tenant-1",
+				"user_id":    "user-123",
+				"scopes":     []interface{}{"read"},
+				"expires_in": float64(7200),
+			},
+		},
+		{
+			name: "executeIAMRevokeToken refuses",
+			tool: "iam_revoke_token",
+			args: map[string]interface{}{"token_id": "token-123"},
+		},
+	}
+	for _, tc := range refusals {
+		t.Run(tc.name, func(t *testing.T) {
+			registry := NewToolRegistry(newMockServiceProvider(), log)
+
+			result, err := registry.ExecuteTool(ctx, tc.tool, tc.args)
+			var refused errMockTokenRefused
+			if !errors.As(err, &refused) {
+				t.Fatalf("expected the token refusal, got %v", err)
+			}
+			if result != nil {
+				t.Errorf("a refused %s must return no result, got %v", tc.tool, result)
+			}
+		})
+	}
+
+	t.Run("executeIAMVerifyToken passes a rejection through", func(t *testing.T) {
 		svc := newMockServiceProvider()
+		svc.iamVerifyTokenFunc = func(ctx context.Context, token string) (interface{}, error) {
+			if token != "header.payload.signature" {
+				t.Errorf("tool passed token %q, want the caller's token", token)
+			}
+			return map[string]interface{}{"valid": false, "reason": "expired"}, nil
+		}
 		registry := NewToolRegistry(svc, log)
 
-		args := map[string]interface{}{
-			"tenant_id":   "tenant-1",
-			"user_id":     "user-123",
-			"scopes":      []interface{}{"read", "write"},
-			"description": "API access token",
-		}
-
-		result, err := registry.ExecuteTool(ctx, "iam_create_token", args)
+		result, err := registry.ExecuteTool(ctx, "iam_verify_token",
+			map[string]interface{}{"token": "header.payload.signature"})
 		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
-		if result == nil {
-			t.Error("result should not be nil")
-		}
-	})
-
-	t.Run("executeIAMCreateToken with expires_in", func(t *testing.T) {
-		svc := newMockServiceProvider()
-		registry := NewToolRegistry(svc, log)
-
-		args := map[string]interface{}{
-			"tenant_id":  "tenant-1",
-			"user_id":    "user-123",
-			"scopes":     []interface{}{"read"},
-			"expires_in": float64(7200),
-		}
-
-		result, err := registry.ExecuteTool(ctx, "iam_create_token", args)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
-		if result == nil {
-			t.Error("result should not be nil")
-		}
-	})
-
-	t.Run("executeIAMRevokeToken success", func(t *testing.T) {
-		svc := newMockServiceProvider()
-		registry := NewToolRegistry(svc, log)
-
-		args := map[string]interface{}{
-			"token_id": "token-123",
-		}
-
-		result, err := registry.ExecuteTool(ctx, "iam_revoke_token", args)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
+			t.Fatalf("unexpected error: %v", err)
 		}
 		resultMap, ok := result.(map[string]interface{})
 		if !ok {
-			t.Fatal("result is not a map")
+			t.Fatalf("result is %T, want a map", result)
 		}
-		if success, ok := resultMap["success"].(bool); !ok || !success {
-			t.Error("expected success: true")
+		if valid, ok := resultMap["valid"].(bool); !ok || valid {
+			t.Errorf("valid = %v, want an explicit false", resultMap["valid"])
+		}
+		if resultMap["reason"] != "expired" {
+			t.Errorf("reason = %v, want expired", resultMap["reason"])
 		}
 	})
 
-	t.Run("executeIAMVerifyToken success", func(t *testing.T) {
+	t.Run("executeIAMVerifyToken passes valid claims through", func(t *testing.T) {
 		svc := newMockServiceProvider()
+		svc.iamVerifyTokenFunc = func(ctx context.Context, token string) (interface{}, error) {
+			return map[string]interface{}{
+				"valid":      true,
+				"user_id":    "user-123",
+				"tenant_id":  "tenant-1",
+				"scopes":     []string{"iam:read"},
+				"expires_at": int64(1767225600),
+			}, nil
+		}
 		registry := NewToolRegistry(svc, log)
 
-		args := map[string]interface{}{
-			"token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-		}
-
-		result, err := registry.ExecuteTool(ctx, "iam_verify_token", args)
+		result, err := registry.ExecuteTool(ctx, "iam_verify_token",
+			map[string]interface{}{"token": "header.payload.signature"})
 		if err != nil {
-			t.Errorf("unexpected error: %v", err)
+			t.Fatalf("unexpected error: %v", err)
 		}
-		if result == nil {
-			t.Error("result should not be nil")
+		resultMap, ok := result.(map[string]interface{})
+		if !ok {
+			t.Fatalf("result is %T, want a map", result)
+		}
+		if resultMap["valid"] != true {
+			t.Errorf("valid = %v, want true", resultMap["valid"])
+		}
+		if resultMap["user_id"] != "user-123" || resultMap["tenant_id"] != "tenant-1" {
+			t.Errorf("claims = %v, want user-123 in tenant-1", resultMap)
+		}
+		if resultMap["expires_at"] != float64(1767225600) {
+			t.Errorf("expires_at = %v, want 1767225600", resultMap["expires_at"])
+		}
+		if _, echoed := resultMap["token"]; echoed {
+			t.Error("the result must never echo the token")
 		}
 	})
 }

@@ -673,6 +673,26 @@ func TestTranslateMCPErrorToGRPC(t *testing.T) {
 			expectedCode: codes.Unknown,
 		},
 		{
+			name:         "HTTP 401",
+			err:          &mcpwire.HTTPStatusError{StatusCode: http.StatusUnauthorized},
+			expectedCode: codes.Unauthenticated,
+		},
+		{
+			name:         "HTTP 403",
+			err:          &mcpwire.HTTPStatusError{StatusCode: http.StatusForbidden},
+			expectedCode: codes.PermissionDenied,
+		},
+		{
+			name:         "HTTP 503",
+			err:          &mcpwire.HTTPStatusError{StatusCode: http.StatusServiceUnavailable},
+			expectedCode: codes.Unavailable,
+		},
+		{
+			name:         "unlisted HTTP status",
+			err:          &mcpwire.HTTPStatusError{StatusCode: http.StatusTeapot},
+			expectedCode: codes.Unknown,
+		},
+		{
 			name:         "generic error",
 			err:          errors.New("generic error"),
 			expectedCode: codes.Unavailable,

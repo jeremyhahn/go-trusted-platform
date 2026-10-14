@@ -139,8 +139,11 @@ func (s *IAMService) Name() string {
 //   - GDPR(): GDPR compliance
 //   - Admin(): Delegated administration
 //
-// Returns nil if the service has not been initialized.
+// Returns nil if the service is nil or has not been initialized.
 func (s *IAMService) Client() quicbaassdk.IAMClient {
+	if s == nil {
+		return nil
+	}
 	return s.iamClient
 }
 
@@ -190,9 +193,9 @@ func (s *IAMService) Policy() quicbaassdk.IAMPolicyClient {
 }
 
 // PEP returns the Policy Enforcement Point client for authorization checks.
-// Returns nil if the IAM client is not available.
+// Returns nil if the service is nil or the IAM client is not available.
 func (s *IAMService) PEP() quicbaassdk.IAMPEPClient {
-	if s.iamClient == nil {
+	if s == nil || s.iamClient == nil {
 		return nil
 	}
 	return s.iamClient.PEP()

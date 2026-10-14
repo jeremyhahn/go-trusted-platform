@@ -402,7 +402,7 @@ returns every distinct scope the MCP tool permission catalog
 authorization checker enforces the same catalog, so the advertised list is
 exactly the enforced vocabulary — a scope cannot be required by a tool without
 being advertised, or advertised without a tool requiring it. Open tools (empty
-permission) contribute nothing. As of 2026-10-12:
+permission) contribute nothing. As of 2026-10-14:
 
 ```
 attestation:read|write,
@@ -411,6 +411,7 @@ ca:read|write|sign-csr,
 ceremony:read|write,
 device:read|write|delete, dns:read|write|delete,
 fido2:read|write,
+iam:read,
 invitation:read|write|delete,
 ntp:read|write,
 piv:read|write,
@@ -420,8 +421,9 @@ vtpm:read|write|delete
 ```
 
 Scopes no MCP tool consults — `mcp:tools`, `mcp:resources`, `platform:admin`,
-and the `kms:*`, `iam:*`, `container:*`, `tenant:*` and `ca:delete` families —
-are no longer advertised. A tool family added to the catalog is advertised by
+the `kms:*`, `container:*` and `tenant:*` families, `iam:write`, `iam:delete`
+and `ca:delete` — are no longer advertised. `iam:read` is advertised since
+`iam_verify_token` requires it (#304). A tool family added to the catalog is advertised by
 the same change; `TestOAuthMetadataHandler_getSupportedScopes` fails if the two
 ever disagree, or if a catalog permission is not a well-formed
 `resource:action` scope.

@@ -135,9 +135,8 @@ func TestAllErrorTypes_ErrorMethod(t *testing.T) {
 		{"ErrIAMPolicyValidationFailed", ErrIAMPolicyValidationFailed{Reason: "invalid statement"}, "IAM policy validation failed: invalid statement"},
 		{"ErrIAMAppNotFound", ErrIAMAppNotFound{TenantID: "tenant-1", ClientID: "client-123"}, "IAM application not found: client-123 in tenant tenant-1"},
 		{"ErrIAMAppAlreadyExists", ErrIAMAppAlreadyExists{TenantID: "tenant-1", Name: "my-app"}, "IAM application already exists: my-app in tenant tenant-1"},
-		{"ErrIAMAuthenticationFailed", ErrIAMAuthenticationFailed{Reason: "invalid password"}, "IAM authentication failed: invalid password"},
+		{"ErrIAMAuthenticationViaOIDC", ErrIAMAuthenticationViaOIDC{}, "iam authentication is handled via OIDC flows, not the IAM service"},
 		{"ErrIAMPermissionDenied", ErrIAMPermissionDenied{Subject: "user-1", Resource: "bucket/data", Action: "write"}, "IAM permission denied: subject user-1 cannot perform write on bucket/data"},
-		{"ErrIAMOperationFailed", ErrIAMOperationFailed{Operation: "create-user", Cause: errors.New("database error")}, "IAM operation create-user failed: database error"},
 		{"ErrIAMInvalidCredentials", ErrIAMInvalidCredentials{}, "IAM invalid credentials"},
 		{"ErrIAMRoleAssignmentFailed", ErrIAMRoleAssignmentFailed{UserID: "user-1", RoleID: "admin", Reason: "role limit exceeded"}, "IAM failed to assign role admin to user user-1: role limit exceeded"},
 		{"ErrIAMRoleRevocationFailed", ErrIAMRoleRevocationFailed{UserID: "user-1", RoleID: "admin", Reason: "role not assigned"}, "IAM failed to revoke role admin from user user-1: role not assigned"},
@@ -198,7 +197,6 @@ func TestErrorsWithUnwrap(t *testing.T) {
 		{"ErrDNSOperationFailed", ErrDNSOperationFailed{Operation: "test", Cause: causeErr}, causeErr},
 		{"ErrSDNSetPortStateFailed", ErrSDNSetPortStateFailed{PortID: "eth0", Cause: causeErr}, causeErr},
 		{"ErrSDNApplyPolicyFailed", ErrSDNApplyPolicyFailed{PolicyID: "pol-1", Cause: causeErr}, causeErr},
-		{"ErrIAMOperationFailed", ErrIAMOperationFailed{Operation: "test", Cause: causeErr}, causeErr},
 		{"ErrKMSOperationFailed", ErrKMSOperationFailed{Operation: "test", Cause: causeErr}, causeErr},
 		{"ErrKMSEncryptionFailed", ErrKMSEncryptionFailed{KeyID: "key-1", Cause: causeErr}, causeErr},
 		{"ErrKMSDecryptionFailed", ErrKMSDecryptionFailed{KeyID: "key-1", Cause: causeErr}, causeErr},
@@ -244,7 +242,6 @@ func TestErrorsWithNilCause(t *testing.T) {
 		{"ErrDNSOperationFailed_NilCause", ErrDNSOperationFailed{Operation: "test", Cause: nil}},
 		{"ErrSDNSetPortStateFailed_NilCause", ErrSDNSetPortStateFailed{PortID: "eth0", Cause: nil}},
 		{"ErrSDNApplyPolicyFailed_NilCause", ErrSDNApplyPolicyFailed{PolicyID: "pol-1", Cause: nil}},
-		{"ErrIAMOperationFailed_NilCause", ErrIAMOperationFailed{Operation: "test", Cause: nil}},
 		{"ErrKMSOperationFailed_NilCause", ErrKMSOperationFailed{Operation: "test", Cause: nil}},
 		{"ErrKMSEncryptionFailed_NilCause", ErrKMSEncryptionFailed{KeyID: "key-1", Cause: nil}},
 		{"ErrKMSDecryptionFailed_NilCause", ErrKMSDecryptionFailed{KeyID: "key-1", Cause: nil}},
@@ -352,9 +349,8 @@ func TestErrorsImplementErrorInterface(t *testing.T) {
 	var _ error = ErrIAMPolicyValidationFailed{}
 	var _ error = ErrIAMAppNotFound{}
 	var _ error = ErrIAMAppAlreadyExists{}
-	var _ error = ErrIAMAuthenticationFailed{}
+	var _ error = ErrIAMAuthenticationViaOIDC{}
 	var _ error = ErrIAMPermissionDenied{}
-	var _ error = ErrIAMOperationFailed{}
 	var _ error = ErrIAMInvalidCredentials{}
 	var _ error = ErrIAMRoleAssignmentFailed{}
 	var _ error = ErrIAMRoleRevocationFailed{}

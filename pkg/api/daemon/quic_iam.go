@@ -130,14 +130,13 @@ func (h *QUICServiceHandler) handleIAMOperation(ctx context.Context, req *quicwi
 	case quicwire.OpIAMAuthenticate:
 		return h.handleIAMAuthenticate(ctx, req)
 
-	// Token operations are handled via OIDC flows; the gRPC delegate returns
-	// codes.Unimplemented, so QUIC returns StatusNotImplemented for parity.
+	// Token issue and revocation are handled via OIDC flows; the gRPC delegate
+	// returns codes.Unimplemented, so QUIC returns StatusNotImplemented for
+	// parity whether or not the delegate is wired.
 	case quicwire.OpIAMTokenCreate:
-		return h.errorResponse(quicwire.StatusNotImplemented, ErrIAMTokenViaOIDC{Op: "create"})
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrIAMTokenViaOIDC{Op: iamTokenOpCreate})
 	case quicwire.OpIAMTokenRevoke:
-		return h.errorResponse(quicwire.StatusNotImplemented, ErrIAMTokenViaOIDC{Op: "revoke"})
-	case quicwire.OpIAMTokenVerify:
-		return h.errorResponse(quicwire.StatusNotImplemented, ErrIAMTokenViaOIDC{Op: "verify"})
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrIAMTokenViaOIDC{Op: iamTokenOpRevoke})
 	}
 
 	// All remaining operations delegate to the shared pb gRPC service.
@@ -189,6 +188,10 @@ func (h *QUICServiceHandler) handleIAMOperation(ctx context.Context, req *quicwi
 	// Permission operations
 	case quicwire.OpIAMCheckPermission:
 		return h.handleIAMCheckPermission(ctx, req)
+
+	// Token operations
+	case quicwire.OpIAMTokenVerify:
+		return h.handleIAMTokenVerify(ctx, req)
 
 	default:
 		return h.errorResponse(quicwire.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: req.Opcode})
@@ -469,6 +472,21 @@ func (h *QUICServiceHandler) handleIAMCheckPermission(ctx context.Context, req *
 	resp, err := h.iamGRPC.CheckPermission(ctx, &pbReq)
 	if err != nil {
 		return h.grpcDelegateErrorToQUIC("IAMCheckPermission", err)
+	}
+	return h.encodeGRPCDelegateResponse(resp)
+}
+
+// handleIAMTokenVerify delegates to IAMGRPCService.VerifyToken, so QUIC
+// answers a token exactly as gRPC does.
+func (h *QUICServiceHandler) handleIAMTokenVerify(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	var pbReq platformv1.VerifyIAMTokenRequest
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	resp, err := h.iamGRPC.VerifyToken(ctx, &pbReq)
+	if err != nil {
+		return h.grpcDelegateErrorToQUIC("IAMTokenVerify", err)
 	}
 	return h.encodeGRPCDelegateResponse(resp)
 }

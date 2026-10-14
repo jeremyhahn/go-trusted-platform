@@ -924,6 +924,12 @@ func (e ErrIAMServiceNotAvailable) Error() string {
 	return "IAM service not available"
 }
 
+// GRPCStatus classifies the error as FailedPrecondition on every transport:
+// the request is well formed, but this daemon has no IAM backend to serve it.
+func (e ErrIAMServiceNotAvailable) GRPCStatus() *status.Status {
+	return status.New(codes.FailedPrecondition, e.Error())
+}
+
 // ErrIAMMissingParameter is returned when a required IAM parameter is missing
 type ErrIAMMissingParameter struct {
 	Parameter string
@@ -1060,13 +1066,20 @@ func (e ErrIAMAppAlreadyExists) Error() string {
 	return fmt.Sprintf("IAM application already exists: %s in tenant %s", e.Name, e.TenantID)
 }
 
-// ErrIAMAuthenticationFailed is returned when authentication fails
-type ErrIAMAuthenticationFailed struct {
-	Reason string
+// ErrIAMAuthenticationViaOIDC refuses the MCP iam_authenticate tool. The IAM
+// service holds no credentials to check and the platform has no Authenticate
+// RPC: users sign in through the broker's OIDC flows, which issue the
+// platform token.
+type ErrIAMAuthenticationViaOIDC struct{}
+
+func (e ErrIAMAuthenticationViaOIDC) Error() string {
+	return "iam authentication is handled via OIDC flows, not the IAM service"
 }
 
-func (e ErrIAMAuthenticationFailed) Error() string {
-	return fmt.Sprintf("IAM authentication failed: %s", e.Reason)
+// GRPCStatus classifies the refusal as Unimplemented, the class the token
+// create and revoke refusals carry.
+func (e ErrIAMAuthenticationViaOIDC) GRPCStatus() *status.Status {
+	return status.New(codes.Unimplemented, e.Error())
 }
 
 // ErrIAMPermissionDenied is returned when a permission check fails
@@ -1089,20 +1102,6 @@ type ErrIAMTenantForbidden struct {
 
 func (e ErrIAMTenantForbidden) Error() string {
 	return fmt.Sprintf("IAM request names tenant %q: caller may not act on another tenant", e.Requested)
-}
-
-// ErrIAMOperationFailed is returned when an IAM operation fails
-type ErrIAMOperationFailed struct {
-	Operation string
-	Cause     error
-}
-
-func (e ErrIAMOperationFailed) Error() string {
-	return fmt.Sprintf("IAM operation %s failed: %v", e.Operation, e.Cause)
-}
-
-func (e ErrIAMOperationFailed) Unwrap() error {
-	return e.Cause
 }
 
 // ErrIAMInvalidCredentials is returned when credentials are invalid
@@ -1181,6 +1180,38 @@ func (e ErrIAMTokenInvalid) Error() string {
 	return fmt.Sprintf("IAM token invalid: %s", e.Reason)
 }
 
+// ErrIAMTokenVerifierNotConfigured is returned when a token is submitted for
+// verification but the daemon has no token validator wired. It is never an
+// answer about the token: without a validator no token is valid.
+type ErrIAMTokenVerifierNotConfigured struct{}
+
+func (e ErrIAMTokenVerifierNotConfigured) Error() string {
+	return "IAM token verification is not configured: no token validator is wired"
+}
+
+// ErrNoPlatformJWTVerifier is returned when a platform JWT is checked but no
+// platform JWT verifier is attached to the validator.
+type ErrNoPlatformJWTVerifier struct{}
+
+func (e ErrNoPlatformJWTVerifier) Error() string {
+	return "no platform JWT verifier is configured"
+}
+
+// ErrPlatformJWTRejected is returned when every platform JWT verifier
+// rejected a token. Cause joins each verifier's rejection so callers can
+// classify it with errors.Is.
+type ErrPlatformJWTRejected struct {
+	Cause error
+}
+
+func (e ErrPlatformJWTRejected) Error() string {
+	return "platform JWT rejected: " + e.Cause.Error()
+}
+
+func (e ErrPlatformJWTRejected) Unwrap() error {
+	return e.Cause
+}
+
 // =============================================================================
 // KMS Service Errors
 // =============================================================================
@@ -1192,6 +1223,12 @@ type ErrKMSKeyNotFound struct {
 
 func (e ErrKMSKeyNotFound) Error() string {
 	return fmt.Sprintf("KMS key not found: %s", e.KeyID)
+}
+
+// GRPCStatus classifies the error as NotFound, the code the gRPC KMS
+// adapter returns for the same lookup.
+func (e ErrKMSKeyNotFound) GRPCStatus() *status.Status {
+	return status.New(codes.NotFound, e.Error())
 }
 
 // ErrKMSKeyAlreadyExists is returned when attempting to create a key that already exists
@@ -1220,6 +1257,12 @@ type ErrKMSInvalidParameter struct {
 
 func (e ErrKMSInvalidParameter) Error() string {
 	return fmt.Sprintf("invalid KMS parameter %s: %s", e.Parameter, e.Reason)
+}
+
+// GRPCStatus classifies the error as InvalidArgument, the code the gRPC
+// KMS and secrets adapters return for the same bad input.
+func (e ErrKMSInvalidParameter) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // ErrKMSInvalidAlgorithm is returned when an unsupported algorithm is specified
@@ -1624,6 +1667,27 @@ type ErrTPMInvalidSize struct {
 
 func (e ErrTPMInvalidSize) Error() string {
 	return fmt.Sprintf("requested size %d exceeds maximum %d bytes", e.Requested, e.Max)
+}
+
+// GRPCStatus classes an oversized request as InvalidArgument, the class
+// gRPC GetRandom gives the same request.
+func (e ErrTPMInvalidSize) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
+// ErrVTPMIDRequired is returned when a vTPM call names no bundle or template.
+// Field is the name the gRPC VTPMService uses in the same refusal.
+type ErrVTPMIDRequired struct {
+	Field string
+}
+
+func (e ErrVTPMIDRequired) Error() string {
+	return e.Field + " is required"
+}
+
+// GRPCStatus classes a missing id as InvalidArgument, as gRPC VTPMService does.
+func (e ErrVTPMIDRequired) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // ErrNVOffsetOutOfRange is returned when an NV request's offset exceeds

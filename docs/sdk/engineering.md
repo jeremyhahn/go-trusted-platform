@@ -179,7 +179,17 @@ platformd serves MCP over TLS 1.3 only and has no plaintext MCP listener
 verifies the server against `ClientTLSConfig()`. The `http://` pass-through
 exists only for third-party MCP servers, and only without credentials.
 
-HTTP → gRPC status mapping (REST):
+The mcp adapter's wire client (`mcpwire.DefaultClientConfig`: 3 retries, 1 s
+apart, `Timeout` per attempt) retries only what `mcpwire.IsRetryable` accepts:
+a dial failure, an HTTP 429, 502, 503 or 504, and a timeout on a method that
+only reads (`initialize`, `ping`, `tools/list`, `resources/list`,
+`resources/read`). A `Retry-After` on a 429, 502, 503 or 504 replaces the
+delay before the next try. Everything else returns at once: a JSON-RPC error,
+a tool error result, any other HTTP status, a timeout on `tools/call`, and a
+cancelled or expired context. An answer the server gave on purpose is the same
+on every try, and a state-changing call sent twice can apply twice.
+
+HTTP → gRPC status mapping (REST, and a non-2xx answer on MCP):
 
 | HTTP | gRPC code |
 |---|---|

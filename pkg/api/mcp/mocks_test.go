@@ -145,16 +145,16 @@ type mockServiceProvider struct {
 
 	// IAM
 	iamCreateUserFunc      func(ctx context.Context, req *IAMCreateUserRequest) (interface{}, error)
-	iamDeleteUserFunc      func(ctx context.Context, tenantID, userID string) error
+	iamDeleteUserFunc      func(ctx context.Context, tenantID, userID string) (interface{}, error)
 	iamGetUserFunc         func(ctx context.Context, tenantID, userID string) (interface{}, error)
-	iamListUsersFunc       func(ctx context.Context, tenantID string, limit, offset int) (interface{}, error)
+	iamListUsersFunc       func(ctx context.Context, req *IAMListUsersRequest) (interface{}, error)
 	iamCreateRoleFunc      func(ctx context.Context, req *IAMCreateRoleRequest) (interface{}, error)
-	iamDeleteRoleFunc      func(ctx context.Context, tenantID, roleID string) error
+	iamDeleteRoleFunc      func(ctx context.Context, tenantID, roleID string) (interface{}, error)
 	iamGetRoleFunc         func(ctx context.Context, tenantID, roleID string) (interface{}, error)
-	iamListRolesFunc       func(ctx context.Context, tenantID string, limit, offset int) (interface{}, error)
-	iamAssignRoleFunc      func(ctx context.Context, tenantID, userID, role string) error
-	iamRevokeRoleFunc      func(ctx context.Context, tenantID, userID, role string) error
-	iamCheckPermissionFunc func(ctx context.Context, tenantID, userID, resource, action string) (bool, error)
+	iamListRolesFunc       func(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error)
+	iamAssignRoleFunc      func(ctx context.Context, tenantID, userID, roleID string) (interface{}, error)
+	iamRevokeRoleFunc      func(ctx context.Context, tenantID, userID, roleID string) (interface{}, error)
+	iamCheckPermissionFunc func(ctx context.Context, req *IAMCheckPermissionRequest) (interface{}, error)
 	iamAuthenticateFunc    func(ctx context.Context, req *IAMAuthenticateRequest) (interface{}, error)
 
 	// KMS
@@ -208,17 +208,17 @@ type mockServiceProvider struct {
 	activateCredentialFunc func(ctx context.Context, credentialBlob []byte, secret []byte) ([]byte, error)
 	// IAM Group
 	iamCreateGroupFunc       func(ctx context.Context, req *IAMCreateGroupRequest) (interface{}, error)
-	iamDeleteGroupFunc       func(ctx context.Context, tenantID, groupID string) error
+	iamDeleteGroupFunc       func(ctx context.Context, tenantID, groupID string) (interface{}, error)
 	iamGetGroupFunc          func(ctx context.Context, tenantID, groupID string) (interface{}, error)
-	iamListGroupsFunc        func(ctx context.Context, tenantID string, limit, offset int) (interface{}, error)
-	iamAddGroupMemberFunc    func(ctx context.Context, tenantID, groupID, userID string) error
-	iamRemoveGroupMemberFunc func(ctx context.Context, tenantID, groupID, userID string) error
+	iamListGroupsFunc        func(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error)
+	iamAddGroupMemberFunc    func(ctx context.Context, tenantID, groupID, userID string) (interface{}, error)
+	iamRemoveGroupMemberFunc func(ctx context.Context, tenantID, groupID, userID string) (interface{}, error)
 
 	// IAM Tenant
 	iamCreateTenantFunc func(ctx context.Context, req *IAMCreateTenantRequest) (interface{}, error)
-	iamDeleteTenantFunc func(ctx context.Context, tenantID string) error
+	iamDeleteTenantFunc func(ctx context.Context, tenantID string) (interface{}, error)
 	iamGetTenantFunc    func(ctx context.Context, tenantID string) (interface{}, error)
-	iamListTenantsFunc  func(ctx context.Context, limit, offset int) (interface{}, error)
+	iamListTenantsFunc  func(ctx context.Context, page IAMPagination) (interface{}, error)
 
 	// IAM Token
 	iamCreateTokenFunc func(ctx context.Context, req *IAMCreateTokenRequest) (interface{}, error)
@@ -604,9 +604,6 @@ func newMockServiceProvider() *mockServiceProvider {
 				"roles":     req.Roles,
 			}, nil
 		},
-		iamDeleteUserFunc: func(ctx context.Context, tenantID, userID string) error {
-			return nil
-		},
 		iamGetUserFunc: func(ctx context.Context, tenantID, userID string) (interface{}, error) {
 			return map[string]interface{}{
 				"id":        userID,
@@ -615,15 +612,13 @@ func newMockServiceProvider() *mockServiceProvider {
 				"name":      "Test User",
 			}, nil
 		},
-		iamListUsersFunc: func(ctx context.Context, tenantID string, limit, offset int) (interface{}, error) {
+		iamListUsersFunc: func(ctx context.Context, req *IAMListUsersRequest) (interface{}, error) {
 			return map[string]interface{}{
 				"users": []map[string]interface{}{
 					{"id": "user-1", "email": "user1@example.com"},
 					{"id": "user-2", "email": "user2@example.com"},
 				},
-				"total":  2,
-				"limit":  limit,
-				"offset": offset,
+				"pagination": map[string]interface{}{"total_count": 2, "page": req.Pagination.Page, "page_size": req.Pagination.PageSize},
 			}, nil
 		},
 		iamCreateRoleFunc: func(ctx context.Context, req *IAMCreateRoleRequest) (interface{}, error) {
@@ -635,9 +630,6 @@ func newMockServiceProvider() *mockServiceProvider {
 				"permissions": req.Permissions,
 			}, nil
 		},
-		iamDeleteRoleFunc: func(ctx context.Context, tenantID, roleID string) error {
-			return nil
-		},
 		iamGetRoleFunc: func(ctx context.Context, tenantID, roleID string) (interface{}, error) {
 			return map[string]interface{}{
 				"id":          roleID,
@@ -647,25 +639,17 @@ func newMockServiceProvider() *mockServiceProvider {
 				"permissions": []string{"read", "write"},
 			}, nil
 		},
-		iamListRolesFunc: func(ctx context.Context, tenantID string, limit, offset int) (interface{}, error) {
+		iamListRolesFunc: func(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error) {
 			return map[string]interface{}{
 				"roles": []map[string]interface{}{
 					{"id": "role-1", "name": "Admin"},
 					{"id": "role-2", "name": "User"},
 				},
-				"total":  2,
-				"limit":  limit,
-				"offset": offset,
+				"pagination": map[string]interface{}{"total_count": 2, "page": page.Page, "page_size": page.PageSize},
 			}, nil
 		},
-		iamAssignRoleFunc: func(ctx context.Context, tenantID, userID, role string) error {
-			return nil
-		},
-		iamRevokeRoleFunc: func(ctx context.Context, tenantID, userID, role string) error {
-			return nil
-		},
-		iamCheckPermissionFunc: func(ctx context.Context, tenantID, userID, resource, action string) (bool, error) {
-			return true, nil
+		iamCheckPermissionFunc: func(ctx context.Context, req *IAMCheckPermissionRequest) (interface{}, error) {
+			return map[string]interface{}{"allowed": true}, nil
 		},
 		iamAuthenticateFunc: func(ctx context.Context, req *IAMAuthenticateRequest) (interface{}, error) {
 			return map[string]interface{}{
@@ -1488,11 +1472,17 @@ func (m *mockServiceProvider) IAMCreateUser(ctx context.Context, req *IAMCreateU
 	return nil, nil
 }
 
-func (m *mockServiceProvider) IAMDeleteUser(ctx context.Context, tenantID, userID string) error {
+// mockIAMSuccess is the answer a mutating IAM mock gives by default, the
+// shape of the gRPC Delete/Assign/Revoke/Add/Remove responses.
+func mockIAMSuccess() map[string]interface{} {
+	return map[string]interface{}{"success": true}
+}
+
+func (m *mockServiceProvider) IAMDeleteUser(ctx context.Context, tenantID, userID string) (interface{}, error) {
 	if m.iamDeleteUserFunc != nil {
 		return m.iamDeleteUserFunc(ctx, tenantID, userID)
 	}
-	return nil
+	return mockIAMSuccess(), nil
 }
 
 func (m *mockServiceProvider) IAMGetUser(ctx context.Context, tenantID, userID string) (interface{}, error) {
@@ -1502,9 +1492,9 @@ func (m *mockServiceProvider) IAMGetUser(ctx context.Context, tenantID, userID s
 	return nil, nil
 }
 
-func (m *mockServiceProvider) IAMListUsers(ctx context.Context, tenantID string, limit, offset int) (interface{}, error) {
+func (m *mockServiceProvider) IAMListUsers(ctx context.Context, req *IAMListUsersRequest) (interface{}, error) {
 	if m.iamListUsersFunc != nil {
-		return m.iamListUsersFunc(ctx, tenantID, limit, offset)
+		return m.iamListUsersFunc(ctx, req)
 	}
 	return nil, nil
 }
@@ -1516,11 +1506,11 @@ func (m *mockServiceProvider) IAMCreateRole(ctx context.Context, req *IAMCreateR
 	return nil, nil
 }
 
-func (m *mockServiceProvider) IAMDeleteRole(ctx context.Context, tenantID, roleID string) error {
+func (m *mockServiceProvider) IAMDeleteRole(ctx context.Context, tenantID, roleID string) (interface{}, error) {
 	if m.iamDeleteRoleFunc != nil {
 		return m.iamDeleteRoleFunc(ctx, tenantID, roleID)
 	}
-	return nil
+	return mockIAMSuccess(), nil
 }
 
 func (m *mockServiceProvider) IAMGetRole(ctx context.Context, tenantID, roleID string) (interface{}, error) {
@@ -1530,32 +1520,32 @@ func (m *mockServiceProvider) IAMGetRole(ctx context.Context, tenantID, roleID s
 	return nil, nil
 }
 
-func (m *mockServiceProvider) IAMListRoles(ctx context.Context, tenantID string, limit, offset int) (interface{}, error) {
+func (m *mockServiceProvider) IAMListRoles(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error) {
 	if m.iamListRolesFunc != nil {
-		return m.iamListRolesFunc(ctx, tenantID, limit, offset)
+		return m.iamListRolesFunc(ctx, tenantID, page)
 	}
 	return nil, nil
 }
 
-func (m *mockServiceProvider) IAMAssignRole(ctx context.Context, tenantID, userID, role string) error {
+func (m *mockServiceProvider) IAMAssignRole(ctx context.Context, tenantID, userID, roleID string) (interface{}, error) {
 	if m.iamAssignRoleFunc != nil {
-		return m.iamAssignRoleFunc(ctx, tenantID, userID, role)
+		return m.iamAssignRoleFunc(ctx, tenantID, userID, roleID)
 	}
-	return nil
+	return mockIAMSuccess(), nil
 }
 
-func (m *mockServiceProvider) IAMRevokeRole(ctx context.Context, tenantID, userID, role string) error {
+func (m *mockServiceProvider) IAMRevokeRole(ctx context.Context, tenantID, userID, roleID string) (interface{}, error) {
 	if m.iamRevokeRoleFunc != nil {
-		return m.iamRevokeRoleFunc(ctx, tenantID, userID, role)
+		return m.iamRevokeRoleFunc(ctx, tenantID, userID, roleID)
 	}
-	return nil
+	return mockIAMSuccess(), nil
 }
 
-func (m *mockServiceProvider) IAMCheckPermission(ctx context.Context, tenantID, userID, resource, action string) (bool, error) {
+func (m *mockServiceProvider) IAMCheckPermission(ctx context.Context, req *IAMCheckPermissionRequest) (interface{}, error) {
 	if m.iamCheckPermissionFunc != nil {
-		return m.iamCheckPermissionFunc(ctx, tenantID, userID, resource, action)
+		return m.iamCheckPermissionFunc(ctx, req)
 	}
-	return false, nil
+	return map[string]interface{}{"allowed": false}, nil
 }
 
 func (m *mockServiceProvider) IAMAuthenticate(ctx context.Context, req *IAMAuthenticateRequest) (interface{}, error) {
@@ -1578,11 +1568,11 @@ func (m *mockServiceProvider) IAMCreateGroup(ctx context.Context, req *IAMCreate
 	}, nil
 }
 
-func (m *mockServiceProvider) IAMDeleteGroup(ctx context.Context, tenantID, groupID string) error {
+func (m *mockServiceProvider) IAMDeleteGroup(ctx context.Context, tenantID, groupID string) (interface{}, error) {
 	if m.iamDeleteGroupFunc != nil {
 		return m.iamDeleteGroupFunc(ctx, tenantID, groupID)
 	}
-	return nil
+	return mockIAMSuccess(), nil
 }
 
 func (m *mockServiceProvider) IAMGetGroup(ctx context.Context, tenantID, groupID string) (interface{}, error) {
@@ -1596,32 +1586,30 @@ func (m *mockServiceProvider) IAMGetGroup(ctx context.Context, tenantID, groupID
 	}, nil
 }
 
-func (m *mockServiceProvider) IAMListGroups(ctx context.Context, tenantID string, limit, offset int) (interface{}, error) {
+func (m *mockServiceProvider) IAMListGroups(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error) {
 	if m.iamListGroupsFunc != nil {
-		return m.iamListGroupsFunc(ctx, tenantID, limit, offset)
+		return m.iamListGroupsFunc(ctx, tenantID, page)
 	}
 	return map[string]interface{}{
 		"groups": []map[string]interface{}{
 			{"id": "group-1", "tenant_id": tenantID, "name": "group-1"},
 		},
-		"total":  1,
-		"limit":  limit,
-		"offset": offset,
+		"pagination": map[string]interface{}{"total_count": 1, "page": page.Page, "page_size": page.PageSize},
 	}, nil
 }
 
-func (m *mockServiceProvider) IAMAddGroupMember(ctx context.Context, tenantID, groupID, userID string) error {
+func (m *mockServiceProvider) IAMAddGroupMember(ctx context.Context, tenantID, groupID, userID string) (interface{}, error) {
 	if m.iamAddGroupMemberFunc != nil {
 		return m.iamAddGroupMemberFunc(ctx, tenantID, groupID, userID)
 	}
-	return nil
+	return mockIAMSuccess(), nil
 }
 
-func (m *mockServiceProvider) IAMRemoveGroupMember(ctx context.Context, tenantID, groupID, userID string) error {
+func (m *mockServiceProvider) IAMRemoveGroupMember(ctx context.Context, tenantID, groupID, userID string) (interface{}, error) {
 	if m.iamRemoveGroupMemberFunc != nil {
 		return m.iamRemoveGroupMemberFunc(ctx, tenantID, groupID, userID)
 	}
-	return nil
+	return mockIAMSuccess(), nil
 }
 
 // IAM Tenant implementations
@@ -1635,11 +1623,11 @@ func (m *mockServiceProvider) IAMCreateTenant(ctx context.Context, req *IAMCreat
 	}, nil
 }
 
-func (m *mockServiceProvider) IAMDeleteTenant(ctx context.Context, tenantID string) error {
+func (m *mockServiceProvider) IAMDeleteTenant(ctx context.Context, tenantID string) (interface{}, error) {
 	if m.iamDeleteTenantFunc != nil {
 		return m.iamDeleteTenantFunc(ctx, tenantID)
 	}
-	return nil
+	return mockIAMSuccess(), nil
 }
 
 func (m *mockServiceProvider) IAMGetTenant(ctx context.Context, tenantID string) (interface{}, error) {
@@ -1652,38 +1640,41 @@ func (m *mockServiceProvider) IAMGetTenant(ctx context.Context, tenantID string)
 	}, nil
 }
 
-func (m *mockServiceProvider) IAMListTenants(ctx context.Context, limit, offset int) (interface{}, error) {
+func (m *mockServiceProvider) IAMListTenants(ctx context.Context, page IAMPagination) (interface{}, error) {
 	if m.iamListTenantsFunc != nil {
-		return m.iamListTenantsFunc(ctx, limit, offset)
+		return m.iamListTenantsFunc(ctx, page)
 	}
 	return map[string]interface{}{
 		"tenants": []map[string]interface{}{
 			{"id": "tenant-1", "name": "tenant-1"},
 		},
-		"total":  1,
-		"limit":  limit,
-		"offset": offset,
+		"pagination": map[string]interface{}{"total_count": 1, "page": page.Page, "page_size": page.PageSize},
 	}, nil
 }
 
 // IAM Token implementations
+// errMockTokenRefused mirrors the daemon's refusal of token issue and
+// revocation, so no test can lean on a token operation that "succeeded".
+type errMockTokenRefused struct {
+	op string
+}
+
+func (e errMockTokenRefused) Error() string {
+	return "iam token " + e.op + " is handled via OIDC flows, not the IAM service"
+}
+
 func (m *mockServiceProvider) IAMCreateToken(ctx context.Context, req *IAMCreateTokenRequest) (interface{}, error) {
 	if m.iamCreateTokenFunc != nil {
 		return m.iamCreateTokenFunc(ctx, req)
 	}
-	return map[string]interface{}{
-		"token_id":   "test-token-id",
-		"tenant_id":  req.TenantID,
-		"user_id":    req.UserID,
-		"expires_at": "2025-12-31T23:59:59Z",
-	}, nil
+	return nil, errMockTokenRefused{op: "create"}
 }
 
 func (m *mockServiceProvider) IAMRevokeToken(ctx context.Context, tokenID string) error {
 	if m.iamRevokeTokenFunc != nil {
 		return m.iamRevokeTokenFunc(ctx, tokenID)
 	}
-	return nil
+	return errMockTokenRefused{op: "revoke"}
 }
 
 func (m *mockServiceProvider) IAMVerifyToken(ctx context.Context, token string) (interface{}, error) {
@@ -1691,8 +1682,8 @@ func (m *mockServiceProvider) IAMVerifyToken(ctx context.Context, token string) 
 		return m.iamVerifyTokenFunc(ctx, token)
 	}
 	return map[string]interface{}{
-		"valid":       true,
-		"verified_at": "2025-01-05T12:00:00Z",
+		"valid":  false,
+		"reason": "malformed",
 	}, nil
 }
 
@@ -2497,6 +2488,8 @@ type tpmCall struct {
 	offset   uint16
 	data     []byte
 	password string
+	cn       string
+	pcrs     []uint32
 }
 
 func (m *mockServiceProvider) TPMExtendPCR(ctx context.Context, pcrIndex int, hashAlg string, data []byte) (interface{}, error) {
@@ -2516,11 +2509,13 @@ func (m *mockServiceProvider) TPMRandom(ctx context.Context, numBytes int) ([]by
 	return make([]byte, numBytes), nil
 }
 
-func (m *mockServiceProvider) TPMSeal(ctx context.Context, data []byte, pcrs []int) ([]byte, error) {
+func (m *mockServiceProvider) TPMSeal(ctx context.Context, data []byte, pcrs []uint32, cn, password string) ([]byte, error) {
+	m.tpmCall = tpmCall{data: data, pcrs: pcrs, cn: cn, password: password}
 	return []byte("sealed"), nil
 }
 
-func (m *mockServiceProvider) TPMUnseal(ctx context.Context, cn string) ([]byte, error) {
+func (m *mockServiceProvider) TPMUnseal(ctx context.Context, cn, password string) ([]byte, error) {
+	m.tpmCall = tpmCall{cn: cn, password: password}
 	return []byte("unsealed"), nil
 }
 

@@ -51,9 +51,6 @@ var (
 	// ErrIAMMissingName is returned when name is required but not provided.
 	ErrIAMMissingName = errors.New("name is required")
 
-	// ErrIAMMissingToken is returned when token is required but not provided.
-	ErrIAMMissingToken = errors.New("token is required")
-
 	// ErrIAMMissingSubjectID is returned when subject ID is required but not provided.
 	ErrIAMMissingSubjectID = errors.New("subject ID is required")
 
@@ -94,11 +91,6 @@ type IAMService interface {
 
 	// Authorization operations
 	CheckPermission(ctx context.Context, req *IAMCheckPermissionRequest) (*IAMCheckPermissionResponse, error)
-
-	// Token operations (passwordless authentication)
-	CreateToken(ctx context.Context, tenantID, userID string, req *IAMCreateTokenRequest) (*IAMTokenResponse, error)
-	VerifyToken(ctx context.Context, token string) (*IAMTokenVerifyResponse, error)
-	RevokeToken(ctx context.Context, tokenID string) error
 }
 
 // IAMHandler handles IAM operations over QUIC
@@ -168,14 +160,6 @@ func (h *IAMHandler) HandleRequest(ctx context.Context, req *quicwire.Request) *
 	// Authorization operations
 	case quicwire.OpIAMCheckPermission:
 		return h.handleCheckPermission(ctx, req)
-
-	// Token operations (passwordless authentication)
-	case quicwire.OpIAMTokenCreate:
-		return h.handleTokenCreate(ctx, req)
-	case quicwire.OpIAMTokenVerify:
-		return h.handleTokenVerify(ctx, req)
-	case quicwire.OpIAMTokenRevoke:
-		return h.handleTokenRevoke(ctx, req)
 
 	default:
 		return &quicwire.Response{
@@ -408,45 +392,6 @@ type IAMCheckPermissionResponse struct {
 	Allowed   bool   `codec:"allowed"`
 	Reason    string `codec:"reason"`
 	Timestamp int64  `codec:"timestamp"`
-}
-
-// IAMCreateTokenRequest represents a token creation request
-type IAMCreateTokenRequest struct {
-	TenantID  string   `codec:"tenant_id"`
-	UserID    string   `codec:"user_id"`
-	Scopes    []string `codec:"scopes"`
-	ExpiresIn int64    `codec:"expires_in"`
-}
-
-// IAMTokenResponse represents a token creation response
-type IAMTokenResponse struct {
-	TokenID      string `codec:"token_id"`
-	AccessToken  string `codec:"access_token" secret:"true"`
-	RefreshToken string `codec:"refresh_token" secret:"true"`
-	ExpiresIn    int64  `codec:"expires_in"`
-	TokenType    string `codec:"token_type"`
-	Timestamp    int64  `codec:"timestamp"`
-}
-
-// IAMVerifyTokenRequest represents a token verification request
-type IAMVerifyTokenRequest struct {
-	Token string `codec:"token" secret:"true"`
-}
-
-// IAMTokenVerifyResponse represents a token verification response
-type IAMTokenVerifyResponse struct {
-	Valid     bool     `codec:"valid"`
-	UserID    string   `codec:"user_id"`
-	TenantID  string   `codec:"tenant_id"`
-	Scopes    []string `codec:"scopes"`
-	ExpiresAt int64    `codec:"expires_at"`
-	Timestamp int64    `codec:"timestamp"`
-}
-
-// IAMRevokeTokenRequest represents a token revocation request
-type IAMRevokeTokenRequest struct {
-	TokenID string `codec:"token_id"`
-	Token   string `codec:"token" secret:"true"`
 }
 
 // IAMSuccessResponse represents a generic success response
@@ -1235,123 +1180,6 @@ func (h *IAMHandler) handleCheckPermission(ctx context.Context, req *quicwire.Re
 }
 
 // =============================================================================
-// Token Handler Methods (Passwordless Authentication)
-// =============================================================================
-
-// handleTokenCreate creates a new access token
-func (h *IAMHandler) handleTokenCreate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	if h.service == nil {
-		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
-	}
-
-	var tokenReq IAMCreateTokenRequest
-	if err := quicwire.DecodePayload(req.Payload, &tokenReq); err != nil {
-		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
-	}
-
-	if tokenReq.TenantID == "" {
-		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
-	}
-
-	if tokenReq.UserID == "" {
-		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingUserID)
-	}
-
-	result, err := h.service.CreateToken(ctx, tokenReq.TenantID, tokenReq.UserID, &tokenReq)
-	if err != nil {
-		h.logger.Error(err, "failed to create token")
-		return h.iamErrorResponse(err)
-	}
-
-	result.Timestamp = time.Now().Unix()
-
-	payload, err := quicwire.EncodePayload(result)
-	if err != nil {
-		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
-	}
-
-	return &quicwire.Response{
-		Status:  quicwire.StatusOK,
-		Payload: payload,
-	}
-}
-
-// handleTokenVerify verifies a token
-func (h *IAMHandler) handleTokenVerify(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	if h.service == nil {
-		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
-	}
-
-	var verifyReq IAMVerifyTokenRequest
-	if err := quicwire.DecodePayload(req.Payload, &verifyReq); err != nil {
-		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
-	}
-
-	if verifyReq.Token == "" {
-		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingToken)
-	}
-
-	result, err := h.service.VerifyToken(ctx, verifyReq.Token)
-	if err != nil {
-		h.logger.Error(err, "failed to verify token")
-		return h.errorResponse(quicwire.StatusUnauthorized, ErrIAMTokenVerificationFailed{Cause: err})
-	}
-
-	result.Timestamp = time.Now().Unix()
-
-	payload, err := quicwire.EncodePayload(result)
-	if err != nil {
-		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
-	}
-
-	return &quicwire.Response{
-		Status:  quicwire.StatusOK,
-		Payload: payload,
-	}
-}
-
-// handleTokenRevoke revokes a token
-func (h *IAMHandler) handleTokenRevoke(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	if h.service == nil {
-		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
-	}
-
-	var revokeReq IAMRevokeTokenRequest
-	if err := quicwire.DecodePayload(req.Payload, &revokeReq); err != nil {
-		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
-	}
-
-	tokenID := revokeReq.TokenID
-	if tokenID == "" {
-		tokenID = revokeReq.Token
-	}
-	if tokenID == "" {
-		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingToken)
-	}
-
-	if err := h.service.RevokeToken(ctx, tokenID); err != nil {
-		h.logger.Error(err, "failed to revoke token")
-		return h.iamErrorResponse(err)
-	}
-
-	resp := &IAMSuccessResponse{
-		Success:   true,
-		Message:   "token revoked successfully",
-		Timestamp: time.Now().Unix(),
-	}
-
-	payload, err := quicwire.EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
-	}
-
-	return &quicwire.Response{
-		Status:  quicwire.StatusOK,
-		Payload: payload,
-	}
-}
-
-// =============================================================================
 // Helper Methods
 // =============================================================================
 
@@ -1382,10 +1210,6 @@ func (h *IAMHandler) iamErrorResponse(err error) *quicwire.Response {
 		status = quicwire.StatusAlreadyExists
 	case errors.Is(err, ErrIAMPermissionDenied{}):
 		status = quicwire.StatusPermissionDenied
-	case errors.Is(err, ErrIAMTokenExpired{}):
-		status = quicwire.StatusUnauthorized
-	case errors.Is(err, ErrIAMTokenInvalid{}):
-		status = quicwire.StatusUnauthorized
 	default:
 		status = quicwire.StatusInternalError
 	}
@@ -1519,41 +1343,4 @@ func (e ErrIAMPermissionDenied) Error() string {
 func (e ErrIAMPermissionDenied) Is(target error) bool {
 	_, ok := target.(ErrIAMPermissionDenied)
 	return ok
-}
-
-// ErrIAMTokenExpired represents an expired token error
-type ErrIAMTokenExpired struct{}
-
-func (e ErrIAMTokenExpired) Error() string {
-	return "token expired"
-}
-
-func (e ErrIAMTokenExpired) Is(target error) bool {
-	_, ok := target.(ErrIAMTokenExpired)
-	return ok
-}
-
-// ErrIAMTokenInvalid represents an invalid token error
-type ErrIAMTokenInvalid struct{}
-
-func (e ErrIAMTokenInvalid) Error() string {
-	return "token invalid"
-}
-
-func (e ErrIAMTokenInvalid) Is(target error) bool {
-	_, ok := target.(ErrIAMTokenInvalid)
-	return ok
-}
-
-// ErrIAMTokenVerificationFailed represents a token verification failure
-type ErrIAMTokenVerificationFailed struct {
-	Cause error
-}
-
-func (e ErrIAMTokenVerificationFailed) Error() string {
-	return "token verification failed: " + e.Cause.Error()
-}
-
-func (e ErrIAMTokenVerificationFailed) Unwrap() error {
-	return e.Cause
 }

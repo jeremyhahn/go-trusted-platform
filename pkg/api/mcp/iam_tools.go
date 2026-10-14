@@ -125,6 +125,27 @@ func (r *ToolRegistry) registerIAMTools() {
 	r.registerIAMTokenTools()
 }
 
+// iamPaginationSchema is the "pagination" argument of the IAM list tools, the
+// gRPC PaginationRequest.
+func iamPaginationSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"type":        "object",
+		"description": "Page to return",
+		"properties": map[string]interface{}{
+			"page": map[string]interface{}{
+				"type":        "integer",
+				"description": "Page number, counting from 1",
+				"default":     1,
+			},
+			"page_size": map[string]interface{}{
+				"type":        "integer",
+				"description": "Items per page (default 50, at most 1000)",
+				"default":     50,
+			},
+		},
+	}
+}
+
 // registerIAMUserTools registers IAM user management tools.
 func (r *ToolRegistry) registerIAMUserTools() {
 	r.addTool(mcpwire.ToolDefinition{
@@ -212,15 +233,18 @@ func (r *ToolRegistry) registerIAMUserTools() {
 					"type":        "string",
 					"description": "Tenant ID",
 				},
-				"limit": map[string]interface{}{
-					"type":        "integer",
-					"description": "Maximum number of users to return",
-					"default":     50,
+				"pagination": iamPaginationSchema(),
+				"email_filter": map[string]interface{}{
+					"type":        "string",
+					"description": "Only users whose email matches this filter",
 				},
-				"offset": map[string]interface{}{
-					"type":        "integer",
-					"description": "Number of users to skip for pagination",
-					"default":     0,
+				"role_filter": map[string]interface{}{
+					"type":        "string",
+					"description": "Only users holding this role ID",
+				},
+				"group_filter": map[string]interface{}{
+					"type":        "string",
+					"description": "Only members of this group ID",
 				},
 			},
 			"required": []string{"tenant_id"},
@@ -310,16 +334,7 @@ func (r *ToolRegistry) registerIAMRoleTools() {
 					"type":        "string",
 					"description": "Tenant ID",
 				},
-				"limit": map[string]interface{}{
-					"type":        "integer",
-					"description": "Maximum number of roles to return",
-					"default":     50,
-				},
-				"offset": map[string]interface{}{
-					"type":        "integer",
-					"description": "Number of roles to skip for pagination",
-					"default":     0,
-				},
+				"pagination": iamPaginationSchema(),
 			},
 			"required": []string{"tenant_id"},
 		},
@@ -339,12 +354,12 @@ func (r *ToolRegistry) registerIAMRoleTools() {
 					"type":        "string",
 					"description": "User ID to assign the role to",
 				},
-				"role": map[string]interface{}{
+				"role_id": map[string]interface{}{
 					"type":        "string",
 					"description": "Role ID to assign",
 				},
 			},
-			"required": []string{"tenant_id", "user_id", "role"},
+			"required": []string{"tenant_id", "user_id", "role_id"},
 		},
 	})
 
@@ -362,12 +377,12 @@ func (r *ToolRegistry) registerIAMRoleTools() {
 					"type":        "string",
 					"description": "User ID to revoke the role from",
 				},
-				"role": map[string]interface{}{
+				"role_id": map[string]interface{}{
 					"type":        "string",
 					"description": "Role ID to revoke",
 				},
 			},
-			"required": []string{"tenant_id", "user_id", "role"},
+			"required": []string{"tenant_id", "user_id", "role_id"},
 		},
 	})
 }
@@ -449,16 +464,7 @@ func (r *ToolRegistry) registerIAMGroupTools() {
 					"type":        "string",
 					"description": "Tenant ID",
 				},
-				"limit": map[string]interface{}{
-					"type":        "integer",
-					"description": "Maximum number of groups to return",
-					"default":     50,
-				},
-				"offset": map[string]interface{}{
-					"type":        "integer",
-					"description": "Number of groups to skip for pagination",
-					"default":     0,
-				},
+				"pagination": iamPaginationSchema(),
 			},
 			"required": []string{"tenant_id"},
 		},
@@ -515,7 +521,7 @@ func (r *ToolRegistry) registerIAMGroupTools() {
 func (r *ToolRegistry) registerIAMAuthTools() {
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_check_permission",
-		Description: "Check if a user has permission to perform an action on a resource",
+		Description: "Check if a subject has permission to perform an action on a resource",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -523,9 +529,19 @@ func (r *ToolRegistry) registerIAMAuthTools() {
 					"type":        "string",
 					"description": "Tenant ID",
 				},
-				"user_id": map[string]interface{}{
+				"subject_id": map[string]interface{}{
 					"type":        "string",
-					"description": "User ID to check permissions for",
+					"description": "Subject (user or application) ID to check permissions for",
+				},
+				"roles": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Roles the subject holds",
+				},
+				"groups": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Groups the subject belongs to",
 				},
 				"resource": map[string]interface{}{
 					"type":        "string",
@@ -535,8 +551,18 @@ func (r *ToolRegistry) registerIAMAuthTools() {
 					"type":        "string",
 					"description": "Action to check (e.g., 'read', 'write', 'delete')",
 				},
+				"context": map[string]interface{}{
+					"type":                 "object",
+					"additionalProperties": map[string]interface{}{"type": "string"},
+					"description":          "Request context the policies evaluate",
+				},
+				"attributes": map[string]interface{}{
+					"type":                 "object",
+					"additionalProperties": map[string]interface{}{"type": "string"},
+					"description":          "Subject attributes the policies evaluate",
+				},
 			},
-			"required": []string{"tenant_id", "user_id", "resource", "action"},
+			"required": []string{"tenant_id", "subject_id", "resource", "action"},
 		},
 	})
 
@@ -588,12 +614,22 @@ func (r *ToolRegistry) registerIAMTenantTools() {
 					"type":        "string",
 					"description": "Tenant display name",
 				},
-				"description": map[string]interface{}{
-					"type":        "string",
-					"description": "Tenant description",
+				"settings": map[string]interface{}{
+					"type":        "object",
+					"description": "Tenant settings",
+					"properties": map[string]interface{}{
+						"max_users": map[string]interface{}{
+							"type":        "integer",
+							"description": "Maximum number of users in the tenant",
+						},
+						"mfa_required": map[string]interface{}{
+							"type":        "boolean",
+							"description": "Whether the tenant's users must use MFA",
+						},
+					},
 				},
 			},
-			"required": []string{"id", "name"},
+			"required": []string{"id"},
 		},
 	})
 
@@ -633,16 +669,7 @@ func (r *ToolRegistry) registerIAMTenantTools() {
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"limit": map[string]interface{}{
-					"type":        "integer",
-					"description": "Maximum number of tenants to return",
-					"default":     50,
-				},
-				"offset": map[string]interface{}{
-					"type":        "integer",
-					"description": "Number of tenants to skip for pagination",
-					"default":     0,
-				},
+				"pagination": iamPaginationSchema(),
 			},
 		},
 	})

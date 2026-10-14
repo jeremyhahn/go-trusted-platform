@@ -334,11 +334,11 @@ func TestMCPServiceProviderKMSKeyPolicy(t *testing.T) {
 		assert.Equal(t, uint64(3), policy.Version)
 	})
 
-	t.Run("GetBackendError", func(t *testing.T) {
+	t.Run("GetNotFound", func(t *testing.T) {
 		provider := newLifecycleProvider(&lifecycleKMSServiceMock{}, nil)
 		_, err := provider.KMSGetKeyPolicy(ctx, "key-1")
-		var opErr ErrKMSOperationFailed
-		assert.ErrorAs(t, err, &opErr)
+		var notFoundErr ErrKMSKeyPolicyNotFound
+		assert.ErrorAs(t, err, &notFoundErr)
 	})
 }
 
@@ -517,10 +517,10 @@ func TestMCPServiceProviderSecretRotationPolicy(t *testing.T) {
 		assert.Equal(t, 4, resp.Policy.RetainVersions)
 	})
 
-	t.Run("GetBackendError", func(t *testing.T) {
+	t.Run("GetNotFound", func(t *testing.T) {
 		provider := newLifecycleProvider(nil, &lifecycleSecretsServiceMock{})
 		_, err := provider.SecretGetRotationPolicy(ctx, "db/password")
-		var opErr ErrSecretsOperationFailed
-		assert.ErrorAs(t, err, &opErr)
+		var notFoundErr ErrSecretRotationPolicyNotFound
+		assert.ErrorAs(t, err, &notFoundErr)
 	})
 }

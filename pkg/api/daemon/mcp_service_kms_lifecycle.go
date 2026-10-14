@@ -22,6 +22,8 @@ import (
 
 	baasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // KMS key lifecycle and secrets operations for the MCP service provider.
@@ -49,6 +51,43 @@ type ErrSecretNotFound struct {
 
 func (e ErrSecretNotFound) Error() string {
 	return fmt.Sprintf("secret not found: %s", e.SecretID)
+}
+
+// GRPCStatus classifies the error as NotFound, the code the gRPC secrets
+// adapter returns for the same lookup.
+func (e ErrSecretNotFound) GRPCStatus() *status.Status {
+	return status.New(codes.NotFound, e.Error())
+}
+
+// ErrKMSKeyPolicyNotFound is returned when a key's policy cannot be read.
+type ErrKMSKeyPolicyNotFound struct {
+	KeyID string
+}
+
+func (e ErrKMSKeyPolicyNotFound) Error() string {
+	return fmt.Sprintf("KMS key policy not found: %s", e.KeyID)
+}
+
+// GRPCStatus classifies the error as NotFound, the code the gRPC KMS
+// adapter returns for the same lookup.
+func (e ErrKMSKeyPolicyNotFound) GRPCStatus() *status.Status {
+	return status.New(codes.NotFound, e.Error())
+}
+
+// ErrSecretRotationPolicyNotFound is returned when a secret's rotation
+// policy cannot be read.
+type ErrSecretRotationPolicyNotFound struct {
+	SecretID string
+}
+
+func (e ErrSecretRotationPolicyNotFound) Error() string {
+	return fmt.Sprintf("secret rotation policy not found: %s", e.SecretID)
+}
+
+// GRPCStatus classifies the error as NotFound, the code the gRPC secrets
+// adapter returns for the same lookup.
+func (e ErrSecretRotationPolicyNotFound) GRPCStatus() *status.Status {
+	return status.New(codes.NotFound, e.Error())
 }
 
 // KMSRevokeKey revokes a key, marking it unusable.
@@ -222,7 +261,7 @@ func (p *MCPServiceProvider) KMSGetKeyPolicy(ctx context.Context, keyID string) 
 
 	resp, err := p.kmsService.GetKeyPolicy(ctx, &baasservice.GetKeyPolicyRequest{KeyID: keyID})
 	if err != nil {
-		return nil, ErrKMSOperationFailed{Operation: "GetKeyPolicy", Cause: err}
+		return nil, ErrKMSKeyPolicyNotFound{KeyID: keyID}
 	}
 
 	return resp.Policy, nil
@@ -370,7 +409,7 @@ func (p *MCPServiceProvider) SecretGetRotationPolicy(ctx context.Context, secret
 
 	resp, err := p.secretsService.GetRotationPolicy(ctx, &baasservice.GetRotationPolicyRequest{SecretID: secretID})
 	if err != nil {
-		return nil, ErrSecretsOperationFailed{Operation: "GetRotationPolicy", Cause: err}
+		return nil, ErrSecretRotationPolicyNotFound{SecretID: secretID}
 	}
 
 	return resp, nil

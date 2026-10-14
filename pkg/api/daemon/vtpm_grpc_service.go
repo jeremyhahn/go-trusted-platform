@@ -898,6 +898,13 @@ func (s *VTPMServiceServer) ekAlgorithmToProto(alg vtpm.EKAlgorithm) platformv1.
 
 // mapError converts service errors to gRPC status errors.
 func (s *VTPMServiceServer) mapError(err error) error {
+	return mapVTPMError(err)
+}
+
+// mapVTPMError classes a vTPM service error as a gRPC status. The gRPC
+// VTPMService and the MCP vTPM tools share it so both transports answer the
+// same input with the same error class.
+func mapVTPMError(err error) error {
 	if err == nil {
 		return nil
 	}

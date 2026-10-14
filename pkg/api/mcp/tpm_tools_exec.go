@@ -353,15 +353,32 @@ func (r *ToolRegistry) executeTPMSeal(ctx context.Context, args map[string]inter
 	if err != nil {
 		return nil, ErrTPMInvalidData
 	}
-	pcrs := getIntSlice(args, "pcrs")
+	pcrs, err := sealPCRArgs(args)
+	if err != nil {
+		return nil, err
+	}
 
-	sealed, err := r.service.TPMSeal(ctx, data, pcrs)
+	sealed, err := r.service.TPMSeal(ctx, data, pcrs, getString(args, "cn"), getString(args, "password"))
 	if err != nil {
 		return nil, err
 	}
 	return map[string]interface{}{
 		"sealed_data": base64.StdEncoding.EncodeToString(sealed),
 	}, nil
+}
+
+// sealPCRArgs reads the PCR indices a seal binds to. An index outside uint32
+// has no gRPC form (pcr_indices is uint32), so it is refused.
+func sealPCRArgs(args map[string]interface{}) ([]uint32, error) {
+	indices := getIntSlice(args, "pcrs")
+	pcrs := make([]uint32, 0, len(indices))
+	for _, idx := range indices {
+		if idx < 0 || uint64(idx) > math.MaxUint32 {
+			return nil, ErrInvalidArgument{Msg: "pcrs must be PCR indices"}
+		}
+		pcrs = append(pcrs, uint32(idx))
+	}
+	return pcrs, nil
 }
 
 // executeTPMUnseal unseals data from the TPM.
@@ -371,7 +388,7 @@ func (r *ToolRegistry) executeTPMUnseal(ctx context.Context, args map[string]int
 		return nil, ErrTPMCNRequired
 	}
 
-	data, err := r.service.TPMUnseal(ctx, cn)
+	data, err := r.service.TPMUnseal(ctx, cn, getString(args, "password"))
 	if err != nil {
 		return nil, err
 	}

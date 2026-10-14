@@ -444,6 +444,14 @@ func (r *ToolRegistry) registerTPMTools() {
 					"items":       map[string]interface{}{"type": "integer"},
 					"description": "PCR indices for sealing policy (0-23)",
 				},
+				"cn": map[string]interface{}{
+					"type":        "string",
+					"description": "Common name (key ID) of the sealed object; default platform-sealing-key",
+				},
+				"password": map[string]interface{}{
+					"type":        "string",
+					"description": "Authorization value the unseal must present",
+				},
 			},
 			"required": []string{"data"},
 		},
@@ -459,6 +467,10 @@ func (r *ToolRegistry) registerTPMTools() {
 				"cn": map[string]interface{}{
 					"type":        "string",
 					"description": "Common name (key ID) of the sealed object to unseal",
+				},
+				"password": map[string]interface{}{
+					"type":        "string",
+					"description": "Authorization value given at seal time",
 				},
 			},
 			"required": []string{"cn"},

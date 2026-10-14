@@ -59,11 +59,59 @@ func toolPermissionCatalog() map[string]string {
 	permissions["vtpm_extend_pcr"] = "vtpm:write"
 	permissions["vtpm_read_pcr"] = "vtpm:read"
 
+	// vTPM bundle and template tools carry the scope of their gRPC
+	// VTPMService twin (pkg/api/grpc/method_permissions.go). The
+	// vtpm_bundle_* tools stay unclassified: no executor dispatches them.
+	permissions["vtpm_get"] = "vtpm:read"
+	permissions["vtpm_validate"] = "vtpm:read"
+	permissions["vtpm_export"] = "vtpm:read"
+	permissions["vtpm_get_bundle_path"] = "vtpm:read"
+	permissions["vtpm_get_tpm_socket_path"] = "vtpm:read"
+	permissions["vtpm_get_nvram_path"] = "vtpm:read"
+	permissions["vtpm_is_running"] = "vtpm:read"
+	permissions["vtpm_import"] = "vtpm:write"
+	permissions["vtpm_template_get"] = "vtpm:read"
+	permissions["vtpm_template_list"] = "vtpm:read"
+	permissions["vtpm_template_create"] = "vtpm:write"
+	permissions["vtpm_template_clone"] = "vtpm:write"
+	permissions["vtpm_template_delete"] = "vtpm:delete"
+
 	// Platform TPM quote tools carry the scope of their gRPC TPMService twin
 	// (pkg/api/grpc/method_permissions.go). The quote is channel-bound, so
 	// over stdio, which has no TLS connection, the service refuses it (#482).
 	permissions["platform_tpm_quote"] = "tpm:read"
 	permissions["platform_tpm_verify_quote"] = "tpm:read"
+
+	// The rest of the platform TPM tools carry the scope of their gRPC
+	// TPMService twin the same way: reads are tpm:read, key creation, seal,
+	// NV writes and credential activation are tpm:write, and clearing the
+	// TPM or undefining an NV index is tpm:delete. The tools without a gRPC
+	// or REST twin (capabilities, platform, nv_list, pcr_extend, certify)
+	// stay unclassified, so they are refused (#304).
+	permissions["platform_tpm_info"] = "tpm:read"
+	permissions["platform_tpm_ek"] = "tpm:read"
+	permissions["platform_tpm_ek_cert"] = "tpm:read"
+	permissions["platform_tpm_srk"] = "tpm:read"
+	permissions["platform_tpm_iak"] = "tpm:read"
+	permissions["platform_tpm_pcrs"] = "tpm:read"
+	permissions["platform_tpm_eventlog"] = "tpm:read"
+	permissions["platform_tpm_random"] = "tpm:read"
+	permissions["platform_tpm_nv_read"] = "tpm:read"
+	permissions["platform_tpm_make_credential"] = "tpm:read"
+	permissions["platform_tpm_provision"] = "tpm:write"
+	permissions["platform_tpm_ek_create"] = "tpm:write"
+	permissions["platform_tpm_ek_import_cert"] = "tpm:write"
+	permissions["platform_tpm_srk_create"] = "tpm:write"
+	permissions["platform_tpm_iak_create"] = "tpm:write"
+	permissions["platform_tpm_nv_write"] = "tpm:write"
+	permissions["platform_tpm_activate_credential"] = "tpm:write"
+	permissions["platform_tpm_clear"] = "tpm:delete"
+	permissions["platform_tpm_nv_delete"] = "tpm:delete"
+	permissions["platform_tpm_seal"] = "tpm:write"
+	// Unseal hands back the secret itself, so it needs tpm:write here. gRPC
+	// Unseal is tpm:read; a read token is the wrong grant for releasing
+	// sealed data, so MCP does not copy that.
+	permissions["platform_tpm_unseal"] = "tpm:write"
 
 	// DNS tools
 	permissions["dns_add_record"] = "dns:write"
@@ -368,10 +416,70 @@ func toolPermissionCatalog() map[string]string {
 	permissions["platform_bmc_enroll"] = "bmc:admin"
 	permissions["platform_bmc_cert_restore"] = "bmc:admin"
 
+	// KMS tools (#304) require the scope of the matching gRPC method on
+	// platform.v1.KeyManagementService and quicbaas.kms.v1.{KeyManagement,
+	// Crypto} (pkg/api/grpc/method_permissions.go). Decrypt answers
+	// plaintext, so it is never open: kms:read is the gRPC Decrypt scope.
+	permissions["kms_generate_key"] = "kms:write"
+	permissions["kms_rotate_key"] = "kms:write"
+	permissions["kms_revoke_key"] = "kms:write"
+	permissions["kms_update_key_metadata"] = "kms:write"
+	permissions["kms_set_key_policy"] = "kms:write"
+	permissions["kms_get_key"] = "kms:read"
+	permissions["kms_list_keys"] = "kms:read"
+	permissions["kms_export_public_key"] = "kms:read"
+	permissions["kms_get_key_metadata"] = "kms:read"
+	permissions["kms_get_key_policy"] = "kms:read"
+	permissions["kms_supported_algorithms"] = "kms:read"
+	permissions["kms_backend_status"] = "kms:read"
+	permissions["kms_delete_key"] = "kms:delete"
+
+	permissions["kms_encrypt"] = "kms:write"
+	permissions["kms_sign"] = "kms:write"
+	permissions["kms_generate_data_key"] = "kms:write"
+	permissions["kms_generate_wrapped_data_key"] = "kms:write"
+	permissions["kms_decrypt"] = "kms:read"
+	permissions["kms_verify"] = "kms:read"
+	permissions["kms_random"] = "kms:read"
+
+	// Secret tools (#304) require the scope of the matching gRPC method on
+	// quicbaas.kms.v1.SecretsManagement.
+	permissions["secret_store"] = "secrets:write"
+	permissions["secret_set_rotation_policy"] = "secrets:write"
+	permissions["secret_get"] = "secrets:read"
+	permissions["secret_get_rotation_policy"] = "secrets:read"
+	permissions["secret_list"] = "secrets:list"
+	permissions["secret_delete"] = "secrets:delete"
+
 	// Application service tools (#704) require the scope of their gRPC
 	// method; the tool table carries it.
 	for name, tool := range appServiceTools {
 		permissions[name] = tool.scope
+	}
+
+	// Each IAM tool carries the scope of its gRPC twin on
+	// PlatformIAMService (pkg/api/grpc/method_permissions.go), whose method
+	// it answers through. iam_create_token, iam_revoke_token and
+	// iam_authenticate stay unclassified: they refuse on every transport,
+	// so no scope may unlock them.
+	for _, tool := range []string{
+		"iam_create_user", "iam_create_role", "iam_assign_role", "iam_revoke_role",
+		"iam_create_group", "iam_add_group_member", "iam_remove_group_member",
+		"iam_create_tenant",
+	} {
+		permissions[tool] = "iam:write"
+	}
+	for _, tool := range []string{
+		"iam_delete_user", "iam_delete_role", "iam_delete_group", "iam_delete_tenant",
+	} {
+		permissions[tool] = "iam:delete"
+	}
+	for _, tool := range []string{
+		"iam_get_user", "iam_list_users", "iam_get_role", "iam_list_roles",
+		"iam_get_group", "iam_list_groups", "iam_get_tenant", "iam_list_tenants",
+		"iam_check_permission", "iam_verify_token",
+	} {
+		permissions[tool] = "iam:read"
 	}
 
 	return permissions

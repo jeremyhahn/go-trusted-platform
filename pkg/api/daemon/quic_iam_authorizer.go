@@ -39,12 +39,8 @@ type principalResolver interface {
 // QuicBaaS-minted token carries no tenant, so its principal has an empty
 // TenantID.
 func (v *grpcTokenValidator) ResolvePrincipal(ctx context.Context, token string) (*tokenPrincipal, error) {
-	if claims, ok := v.platformJWTClaims(token); ok {
-		subject := claims.UserIDStr
-		if subject == "" {
-			subject = claims.Subject
-		}
-		return &tokenPrincipal{Subject: subject, TenantID: claims.TenantID, Roles: claims.Roles}, nil
+	if claims, err := v.platformJWTClaims(token); err == nil {
+		return &tokenPrincipal{Subject: platformJWTSubject(claims), TenantID: claims.TenantID, Roles: claims.Roles}, nil
 	}
 	resp, err := v.validateWithQuicBaaS(ctx, token)
 	if err != nil {

@@ -502,15 +502,12 @@ func (s *TPMGRPCService) GetSRK(
 	s.logger.Debug("TPM GetSRK request received",
 		slog.Uint64("requested_handle", uint64(req.GetHandle())))
 
-	srkAttrs, err := tpmsrk.Resolve(tpm, req.GetHandle())
+	srkAttrs, err := resolveTPMSRK(tpm, req.GetHandle())
 	if err != nil {
-		if tpmsrk.IsUnknownHandle(err) {
-			return nil, status.Errorf(codes.NotFound, "GetSRK: %s", err.Error())
-		}
 		s.logger.Slog().Error("Failed to get SRK attributes",
 			slog.Uint64("requested_handle", uint64(req.GetHandle())),
 			slog.String("error", err.Error()))
-		return nil, s.mapError(err)
+		return nil, err
 	}
 
 	return &platformv1.GetSRKResponse{
@@ -518,6 +515,20 @@ func (s *TPMGRPCService) GetSRK(
 		PublicKey: srkAttrs.TPMAttributes.PublicKeyBytes,
 		Algorithm: keyAlgorithmToProto(srkAttrs.KeyAlgorithm),
 	}, nil
+}
+
+// resolveTPMSRK resolves the SRK a caller names by handle (0 is the
+// platform SSRK). A handle that names no SRK is NotFound on every
+// transport; any other failure takes its class from mapTPMError.
+func resolveTPMSRK(tpm quicbaassdk.TrustedPlatformModule, handle uint32) (*quicbaassdk.KeyAttributes, error) {
+	srkAttrs, err := tpmsrk.Resolve(tpm, handle)
+	if err == nil {
+		return srkAttrs, nil
+	}
+	if tpmsrk.IsUnknownHandle(err) {
+		return nil, status.Errorf(codes.NotFound, "GetSRK: %s", err.Error())
+	}
+	return nil, mapTPMError(err)
 }
 
 // DeleteSRK deletes the Storage Root Key.
@@ -608,18 +619,10 @@ func (s *TPMGRPCService) GetAK(
 
 	s.logger.Debug("TPM GetAK request received")
 
-	iakAttrs, err := tpm.IAKAttributes()
+	iakAttrs, err := tpmIAKAttributes(tpm)
 	if err != nil {
 		s.logger.Slog().Error("Failed to get IAK attributes", slog.String("error", err.Error()))
-		return nil, s.mapError(err)
-	}
-
-	pubKey, iakErr := tpm.IAK()
-	if iakErr != nil {
-		return nil, s.mapError(iakErr)
-	}
-	if pubKey == nil {
-		return nil, status.Error(codes.NotFound, "IAK not found")
+		return nil, err
 	}
 
 	s.logger.Debug("TPM GetAK completed")
@@ -628,6 +631,24 @@ func (s *TPMGRPCService) GetAK(
 		PublicKey: iakAttrs.TPMAttributes.PublicKeyBytes,
 		Algorithm: keyAlgorithmToProto(iakAttrs.KeyAlgorithm),
 	}, nil
+}
+
+// tpmIAKAttributes returns the IAK's attributes only when the IAK exists:
+// attributes alone describe where an IAK would live, so a TPM without one
+// answers NotFound on every transport.
+func tpmIAKAttributes(tpm quicbaassdk.TrustedPlatformModule) (*quicbaassdk.KeyAttributes, error) {
+	iakAttrs, err := tpm.IAKAttributes()
+	if err != nil {
+		return nil, mapTPMError(err)
+	}
+	pubKey, err := tpm.IAK()
+	if err != nil {
+		return nil, mapTPMError(err)
+	}
+	if pubKey == nil {
+		return nil, status.Error(codes.NotFound, "IAK not found")
+	}
+	return iakAttrs, nil
 }
 
 // DeleteAK deletes the Attestation Key.
@@ -1623,6 +1644,13 @@ func nvOffset(offset uint32) (uint16, error) {
 
 // mapError converts service errors to gRPC status errors.
 func (s *TPMGRPCService) mapError(err error) error {
+	return mapTPMError(err)
+}
+
+// mapTPMError gives a TPM backend error its gRPC class. The MCP TPM tools
+// return their errors through it too, so a tool and its gRPC twin answer
+// the same input with the same class.
+func mapTPMError(err error) error {
 	if err == nil {
 		return nil
 	}

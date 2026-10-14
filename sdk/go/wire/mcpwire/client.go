@@ -37,10 +37,12 @@ type ClientConfig struct {
 	// Timeout is the request timeout
 	Timeout time.Duration
 
-	// MaxRetries is the maximum number of retry attempts
+	// MaxRetries is the maximum number of retry attempts. Only a failure
+	// IsRetryable accepts is retried.
 	MaxRetries int
 
-	// RetryDelay is the delay between retry attempts
+	// RetryDelay is the delay between retry attempts, unless the answer's
+	// Retry-After header asks for another
 	RetryDelay time.Duration
 
 	// TLSConfig verifies an https:// server (roots, client certificate,
@@ -260,16 +262,19 @@ func (c *Client) call(ctx context.Context, method string, params interface{}) (i
 
 	var result interface{}
 	attempt := 0
+	backoff := &retryAfterBackoff{base: &quicbaas.ConstantBackoff{Delay: c.config.RetryDelay}}
 	retryCfg := &quicbaas.RetryConfig{
 		MaxAttempts: c.config.MaxRetries + 1,
-		Backoff:     &quicbaas.ConstantBackoff{Delay: c.config.RetryDelay},
-		// Preserve pre-SDK behavior: every request error is retryable.
-		RetryableFunc: func(error) bool { return true },
+		Backoff:     backoff,
+		RetryableFunc: func(err error) bool {
+			return IsRetryable(ctx, method, err)
+		},
 	}
 	err := quicbaas.RetryDo(ctx, retryCfg, func(ctx context.Context) error {
 		attempt++
 		res, reqErr := c.doRequest(ctx, req, token)
 		if reqErr != nil {
+			backoff.observe(reqErr)
 			c.logger.Debug("MCP request failed",
 				slog.Int("attempt", attempt),
 				slog.Int("max_attempts", c.config.MaxRetries+1),
@@ -313,6 +318,10 @@ func (c *Client) doRequest(ctx context.Context, req *JSONRPCRequest, token strin
 		return nil, &WrappedError{Msg: "request failed", Err: err}
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, newHTTPStatusError(resp, time.Now())
+	}
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

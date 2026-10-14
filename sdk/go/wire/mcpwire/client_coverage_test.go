@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -399,11 +400,13 @@ func TestClientInitializeEdgeCases(t *testing.T) {
 
 // TestDoRequestContextDeadline tests request with deadline
 func TestDoRequestContextDeadline(t *testing.T) {
-	// Create a server that delays
+	// Create a server that answers only after the client has gone; the
+	// server notices the client leave only once the body has been read
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(100 * time.Millisecond)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"result": "ok"}`))
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			return
+		}
+		<-r.Context().Done()
 	}))
 	defer ts.Close()
 
@@ -669,9 +672,13 @@ func TestServerAddr(t *testing.T) {
 
 // TestClientDoRequestWithContextTimeout tests client doRequest with cancellation
 func TestClientDoRequestWithContextTimeout(t *testing.T) {
-	// Create a server that delays response
+	// Create a server that answers only after the client has gone; the
+	// server notices the client leave only once the body has been read
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(10 * time.Second)
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			return
+		}
+		<-r.Context().Done()
 	}))
 	defer server.Close()
 

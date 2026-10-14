@@ -15,11 +15,10 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
-	"time"
 
-	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	baasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 )
@@ -292,74 +291,6 @@ func TestBuildKeyAttributes(t *testing.T) {
 	}
 }
 
-func TestUserToMap(t *testing.T) {
-	now := time.Now()
-	lastLogin := now
-
-	tests := []struct {
-		name string
-		user *sdkiam.User
-	}{
-		{
-			name: "minimal user",
-			user: &sdkiam.User{ID: "user-123", TenantID: "tenant-456", Email: "test@example.com"},
-		},
-		{
-			name: "user with name",
-			user: &sdkiam.User{ID: "user-123", TenantID: "tenant-456", Email: "test@example.com", DisplayName: "Test User"},
-		},
-		{
-			name: "user with roles",
-			user: &sdkiam.User{ID: "user-123", TenantID: "tenant-456", Email: "test@example.com", Roles: []string{"admin", "user"}},
-		},
-		{
-			name: "user with timestamps",
-			user: &sdkiam.User{ID: "user-123", TenantID: "tenant-456", Email: "test@example.com", CreatedAt: now, UpdatedAt: now, LastLoginAt: &lastLogin},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := sdkUserToMap(tt.user)
-
-			if got["id"] != tt.user.ID {
-				t.Errorf("id = %v, want %v", got["id"], tt.user.ID)
-			}
-			if got["tenant_id"] != tt.user.TenantID {
-				t.Errorf("tenant_id = %v, want %v", got["tenant_id"], tt.user.TenantID)
-			}
-			if got["email"] != tt.user.Email {
-				t.Errorf("email = %v, want %v", got["email"], tt.user.Email)
-			}
-		})
-	}
-}
-
-func TestRoleToMap(t *testing.T) {
-	now := time.Now()
-
-	tests := []struct {
-		name string
-		role *sdkiam.Role
-	}{
-		{name: "minimal role", role: &sdkiam.Role{ID: "role-123", TenantID: "tenant-456"}},
-		{name: "role with name", role: &sdkiam.Role{ID: "role-123", TenantID: "tenant-456", Name: "Admin"}},
-		{name: "role with timestamps", role: &sdkiam.Role{ID: "role-123", TenantID: "tenant-456", CreatedAt: now, UpdatedAt: now}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := sdkRoleToMap(tt.role)
-			if got["id"] != tt.role.ID {
-				t.Errorf("id = %v, want %v", got["id"], tt.role.ID)
-			}
-			if got["tenant_id"] != tt.role.TenantID {
-				t.Errorf("tenant_id = %v, want %v", got["tenant_id"], tt.role.TenantID)
-			}
-		})
-	}
-}
-
 // =============================================================================
 // MCPServiceProvider Tests
 // =============================================================================
@@ -521,18 +452,64 @@ func TestMCPServiceProvider_CAOperations_NilService(t *testing.T) {
 func TestMCPServiceProvider_IAMOperations_NilService(t *testing.T) {
 	ctx := context.Background()
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
+	page := mcp.IAMPagination{Page: 1, PageSize: 10}
 
-	t.Run("IAMCreateUser returns error", func(t *testing.T) {
-		_, err := provider.IAMCreateUser(ctx, &mcp.IAMCreateUserRequest{TenantID: "tenant1", Email: "test@example.com"})
-		if err == nil {
-			t.Error("expected error")
-		}
-	})
+	// Every IAM tool backed by a gRPC method answers the typed unavailable
+	// error when the daemon has no QuicBaaS IAM client.
+	calls := map[string]func() (interface{}, error){
+		"CreateUser": func() (interface{}, error) {
+			return provider.IAMCreateUser(ctx, &mcp.IAMCreateUserRequest{TenantID: "t1", Email: "a@example.com"})
+		},
+		"DeleteUser": func() (interface{}, error) { return provider.IAMDeleteUser(ctx, "t1", "u1") },
+		"GetUser":    func() (interface{}, error) { return provider.IAMGetUser(ctx, "t1", "u1") },
+		"ListUsers": func() (interface{}, error) {
+			return provider.IAMListUsers(ctx, &mcp.IAMListUsersRequest{TenantID: "t1", Pagination: page})
+		},
+		"CreateRole": func() (interface{}, error) {
+			return provider.IAMCreateRole(ctx, &mcp.IAMCreateRoleRequest{TenantID: "t1", ID: "r1"})
+		},
+		"DeleteRole": func() (interface{}, error) { return provider.IAMDeleteRole(ctx, "t1", "r1") },
+		"GetRole":    func() (interface{}, error) { return provider.IAMGetRole(ctx, "t1", "r1") },
+		"ListRoles":  func() (interface{}, error) { return provider.IAMListRoles(ctx, "t1", page) },
+		"AssignRole": func() (interface{}, error) { return provider.IAMAssignRole(ctx, "t1", "u1", "r1") },
+		"RevokeRole": func() (interface{}, error) { return provider.IAMRevokeRole(ctx, "t1", "u1", "r1") },
+		"CheckPermission": func() (interface{}, error) {
+			return provider.IAMCheckPermission(ctx, &mcp.IAMCheckPermissionRequest{
+				TenantID: "t1", SubjectID: "u1", Action: "read", Resource: "kv/a",
+			})
+		},
+		"CreateGroup": func() (interface{}, error) {
+			return provider.IAMCreateGroup(ctx, &mcp.IAMCreateGroupRequest{TenantID: "t1", ID: "g1"})
+		},
+		"DeleteGroup":       func() (interface{}, error) { return provider.IAMDeleteGroup(ctx, "t1", "g1") },
+		"GetGroup":          func() (interface{}, error) { return provider.IAMGetGroup(ctx, "t1", "g1") },
+		"ListGroups":        func() (interface{}, error) { return provider.IAMListGroups(ctx, "t1", page) },
+		"AddGroupMember":    func() (interface{}, error) { return provider.IAMAddGroupMember(ctx, "t1", "g1", "u1") },
+		"RemoveGroupMember": func() (interface{}, error) { return provider.IAMRemoveGroupMember(ctx, "t1", "g1", "u1") },
+		"CreateTenant": func() (interface{}, error) {
+			return provider.IAMCreateTenant(ctx, &mcp.IAMCreateTenantRequest{ID: "t2"})
+		},
+		"DeleteTenant": func() (interface{}, error) { return provider.IAMDeleteTenant(ctx, "t1") },
+		"GetTenant":    func() (interface{}, error) { return provider.IAMGetTenant(ctx, "t1") },
+		"ListTenants":  func() (interface{}, error) { return provider.IAMListTenants(ctx, page) },
+	}
+	for name, call := range calls {
+		t.Run(name, func(t *testing.T) {
+			_, err := call()
+			var unavailable ErrIAMServiceNotAvailable
+			if !errors.As(err, &unavailable) {
+				t.Fatalf("err = %v (%T), want ErrIAMServiceNotAvailable", err, err)
+			}
+		})
+	}
 
-	t.Run("IAMDeleteUser returns error", func(t *testing.T) {
-		err := provider.IAMDeleteUser(ctx, "tenant1", "user1")
-		if err == nil {
-			t.Error("expected error")
+	t.Run("Authenticate is refused", func(t *testing.T) {
+		_, err := provider.IAMAuthenticate(ctx, &mcp.IAMAuthenticateRequest{
+			TenantID: "t1", Email: "a@example.com", Password: "pw",
+		})
+		var refused ErrIAMAuthenticationViaOIDC
+		if !errors.As(err, &refused) {
+			t.Fatalf("err = %v (%T), want ErrIAMAuthenticationViaOIDC", err, err)
 		}
 	})
 }
@@ -562,35 +539,11 @@ func TestMCPServiceProvider_KMSOperations_NilService(t *testing.T) {
 		}
 	})
 
-	// KMSGenerateRandom uses crypto/rand directly, so it works without the KMS service
-	t.Run("KMSGenerateRandom succeeds without service", func(t *testing.T) {
-		result, err := provider.KMSGenerateRandom(ctx, 32)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
-		if len(result) != 32 {
-			t.Errorf("expected 32 bytes, got %d", len(result))
-		}
-	})
-
-	t.Run("KMSGenerateRandom validates zero bytes", func(t *testing.T) {
-		_, err := provider.KMSGenerateRandom(ctx, 0)
-		if err == nil {
-			t.Error("expected error for 0 bytes")
-		}
-	})
-
-	t.Run("KMSGenerateRandom validates negative bytes", func(t *testing.T) {
-		_, err := provider.KMSGenerateRandom(ctx, -1)
-		if err == nil {
-			t.Error("expected error for negative bytes")
-		}
-	})
-
-	t.Run("KMSGenerateRandom validates max bytes", func(t *testing.T) {
-		_, err := provider.KMSGenerateRandom(ctx, 2000)
-		if err == nil {
-			t.Error("expected error for too many bytes")
+	// KMSGenerateRandom asks the KMS, as gRPC GenerateRandom does (#304).
+	t.Run("KMSGenerateRandom returns error", func(t *testing.T) {
+		_, err := provider.KMSGenerateRandom(ctx, 32)
+		if _, ok := err.(ErrServiceNotAvailable); !ok {
+			t.Errorf("expected ErrServiceNotAvailable, got %T: %v", err, err)
 		}
 	})
 }

@@ -403,13 +403,13 @@ func (r *ToolRegistry) registerKMSCryptoTools() {
 func (r *ToolRegistry) registerKMSRandomTools() {
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "kms_random",
-		Description: "Generate cryptographically secure random bytes (maximum 1024)",
+		Description: "Generate cryptographically secure random bytes from the KMS",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"num_bytes": map[string]interface{}{
 					"type":        "integer",
-					"description": "Number of random bytes to generate (1-1024)",
+					"description": "Number of random bytes to generate (positive; the KMS sets the maximum)",
 				},
 			},
 			"required": []string{"num_bytes"},

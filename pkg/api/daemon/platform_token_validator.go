@@ -136,6 +136,11 @@ type platformTokenValidator struct {
 	validator   *platformtoken.Validator
 	allowBearer bool
 	logger      *logging.Logger
+	// liveness is the revocation backend the validator consults in online and
+	// hybrid authz modes; nil in offline mode. Token verification (see
+	// verifyIAMToken) asks it directly because it checks a token on behalf of
+	// a caller that is not the token's presenter.
+	liveness platformtoken.LivenessChecker
 }
 
 // Compile-time checks: the transports bind the shared validator via runtime
@@ -240,6 +245,7 @@ func newPlatformTokenValidator(cfg PlatformTokenConfig, logger *logging.Logger) 
 		validator:   validator,
 		allowBearer: cfg.AllowBearer,
 		logger:      logger,
+		liveness:    livenessChecker,
 	}, nil
 }
 

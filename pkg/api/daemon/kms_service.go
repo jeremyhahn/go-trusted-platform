@@ -235,6 +235,9 @@ func (a *KMSServerAdapter) GetKey(ctx context.Context, req *pb.GetKeyRequest) (*
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
 	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
 
 	keyInfo, err := a.client.GetKey(ctx, req.GetKeyId())
 	if err != nil {
@@ -286,6 +289,9 @@ func (a *KMSServerAdapter) RotateKey(ctx context.Context, req *pb.RotateKeyReque
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
 	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
 
 	resp, err := a.client.RotateKey(ctx, req.GetKeyId())
 	if err != nil {
@@ -302,6 +308,9 @@ func (a *KMSServerAdapter) RotateKey(ctx context.Context, req *pb.RotateKeyReque
 func (a *KMSServerAdapter) DeleteKey(ctx context.Context, req *pb.DeleteKeyRequest) (*pb.DeleteKeyResponse, error) {
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
 	}
 
 	err := a.client.DeleteKey(ctx, req.GetKeyId())
@@ -480,6 +489,12 @@ func (a *SecretsServerAdapter) StoreSecret(ctx context.Context, req *pb.StoreSec
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "Secrets service unavailable")
 	}
+	if req.GetSecretId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "secret_id is required")
+	}
+	if len(req.GetData()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "data is required")
+	}
 
 	// Convert protobuf data to SDK format
 	data := make(map[string]interface{})
@@ -506,6 +521,9 @@ func (a *SecretsServerAdapter) StoreSecret(ctx context.Context, req *pb.StoreSec
 func (a *SecretsServerAdapter) GetSecret(ctx context.Context, req *pb.GetSecretRequest) (*pb.GetSecretResponse, error) {
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "Secrets service unavailable")
+	}
+	if req.GetSecretId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "secret_id is required")
 	}
 
 	var opts []quicbaas.SecretOption
@@ -561,6 +579,9 @@ func (a *SecretsServerAdapter) DeleteSecret(ctx context.Context, req *pb.DeleteS
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "Secrets service unavailable")
 	}
+	if req.GetSecretId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "secret_id is required")
+	}
 
 	err := a.client.Delete(ctx, req.GetSecretId())
 	if err != nil {
@@ -592,6 +613,12 @@ func (a *CryptoServerAdapter) Encrypt(ctx context.Context, req *pb.CryptoEncrypt
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
 	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+	if len(req.GetPlaintext()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "plaintext is required")
+	}
 
 	sdkReq := &quicbaas.EncryptRequest{
 		KeyID:     req.GetKeyId(),
@@ -614,6 +641,12 @@ func (a *CryptoServerAdapter) Encrypt(ctx context.Context, req *pb.CryptoEncrypt
 func (a *CryptoServerAdapter) Decrypt(ctx context.Context, req *pb.CryptoDecryptRequest) (*pb.CryptoDecryptResponse, error) {
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
+	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+	if len(req.GetCiphertext()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "ciphertext is required")
 	}
 
 	sdkReq := &quicbaas.DecryptRequest{
@@ -788,6 +821,12 @@ func (a *CryptoServerAdapter) Sign(ctx context.Context, req *pb.SignRequest) (*p
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
 	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+	if len(req.GetMessage()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "message is required")
+	}
 
 	sdkReq := &quicbaas.SignRequest{
 		KeyID:     req.GetKeyId(),
@@ -811,6 +850,15 @@ func (a *CryptoServerAdapter) Sign(ctx context.Context, req *pb.SignRequest) (*p
 func (a *CryptoServerAdapter) Verify(ctx context.Context, req *pb.VerifyRequest) (*pb.VerifyResponse, error) {
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
+	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+	if len(req.GetMessage()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "message is required")
+	}
+	if len(req.GetSignature()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "signature is required")
 	}
 
 	sdkReq := &quicbaas.VerifyRequest{

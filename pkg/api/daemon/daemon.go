@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"strconv"
@@ -196,6 +197,7 @@ type Daemon struct {
 	// shared across gRPC/QUIC/MCP when config.PlatformToken.Enabled. Stored so
 	// the lazily-built MCP server can reuse the same instance.
 	platformTokenValidatorShared *platformTokenValidator
+	iamTokenService              *IAMTokenService // IAM token operations on every transport
 	tpm2Service                  xkmssdk.TrustedPlatformModule
 	ceremonyService              *CeremonyGRPCService
 	pivService                   *PIVGRPCService
@@ -1333,12 +1335,23 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		grpcUDSServerIntf = &grpcServerWrapper{server: grpcUDSServer}
 	}
 
+	// One token service answers the IAM token operations on every transport:
+	// gRPC (TCP and UDS), QUIC and the embedded transport through
+	// iamGRPCService, MCP through createMCPServer. Servers start in Start(),
+	// so wiring it here is race-free.
+	iamTokenService := newIAMTokenService(
+		selectIAMTokenVerifier(platformTokenValidatorShared, grpcAuthValidator, quicAuthValidator))
+	if iamGRPCService != nil {
+		iamGRPCService.SetTokenService(iamTokenService)
+	}
+
 	daemon := &Daemon{
 		config:                       config,
 		logger:                       logger,
 		grpcAuthValidator:            grpcAuthValidator,
 		quicAuthValidator:            quicAuthValidator,
 		platformTokenValidatorShared: platformTokenValidatorShared,
+		iamTokenService:              iamTokenService,
 		grpcServer:                   grpcServerIntf,
 		grpcTLSCredsAttached:         grpcTLSCredsAttached,
 		grpcUDSServer:                grpcUDSServerIntf,
@@ -1877,8 +1890,14 @@ func (w *grpcServerWrapper) Unwrap() *grpc.Server {
 
 // createMCPServer creates and configures the MCP server.
 func (d *Daemon) createMCPServer() (*mcp.Server, error) {
-	// Create the MCP service provider that bridges MCP to daemon services
+	// Create the MCP service provider that bridges MCP to daemon services.
+	// The IAM tools answer through the same QuicBaaS IAM and PEP clients
+	// as the gRPC IAM service; without IAM both are nil and the tools
+	// answer ErrIAMServiceNotAvailable.
 	serviceProvider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+		IAMClient:             d.iamService.Client(),
+		PEPClient:             d.iamService.PEP(),
+		IAMTokens:             d.iamTokenService,
 		CAService:             d.caService,
 		VTPMService:           d.config.VTPMService,
 		DeviceService:         d.config.DeviceService,
@@ -2207,7 +2226,7 @@ func newGRPCTokenValidator(service quicbaas.ServiceInterface, logger *logging.Lo
 // At least one verifier must be configured or every call returns an
 // "authentication service not configured" error.
 func (v *grpcTokenValidator) ValidateToken(ctx context.Context, token string) (bool, error) {
-	if _, ok := v.platformJWTClaims(token); ok {
+	if _, err := v.platformJWTClaims(token); err == nil {
 		return true, nil
 	}
 	resp, err := v.validateWithQuicBaaS(ctx, token)
@@ -2220,19 +2239,26 @@ func (v *grpcTokenValidator) ValidateToken(ctx context.Context, token string) (b
 // platformJWTClaims returns the claims of the first platform JWT verifier
 // that accepts token. Multiple webservices may each mint tokens with their
 // own signing key; the token is accepted if ANY verifier validates it.
-func (v *grpcTokenValidator) platformJWTClaims(token string) (*jwt.TokenClaims, bool) {
+// When none accepts it the error is ErrPlatformJWTRejected joining every
+// verifier's rejection, or ErrNoPlatformJWTVerifier when none is attached.
+func (v *grpcTokenValidator) platformJWTClaims(token string) (*jwt.TokenClaims, error) {
 	verifiers := v.jwtVerifiers
 	if len(verifiers) == 0 && v.jwtVerifier != nil {
 		verifiers = []PlatformJWTVerifier{v.jwtVerifier}
 	}
+	var rejections []error
 	for idx, vf := range verifiers {
 		if vf == nil {
 			continue
 		}
 		claims, err := vf.VerifyTokenClaims(token)
 		if err == nil && claims != nil {
-			return claims, true
+			return claims, nil
 		}
+		if err == nil {
+			err = jwt.ErrInvalidToken
+		}
+		rejections = append(rejections, err)
 		if v.logger != nil {
 			v.logger.Debug("Platform JWT verifier rejected token",
 				"verifier_index", idx,
@@ -2240,7 +2266,10 @@ func (v *grpcTokenValidator) platformJWTClaims(token string) (*jwt.TokenClaims, 
 				"err", err)
 		}
 	}
-	return nil, false
+	if len(rejections) == 0 {
+		return nil, ErrNoPlatformJWTVerifier{}
+	}
+	return nil, ErrPlatformJWTRejected{Cause: errors.Join(rejections...)}
 }
 
 // validateWithQuicBaaS validates a token minted by the QuicBaaS auth

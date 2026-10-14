@@ -914,20 +914,15 @@ func (r *ToolRegistry) executeIAMCreateUser(ctx context.Context, args map[string
 }
 
 func (r *ToolRegistry) executeIAMDeleteUser(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	userID := getString(args, "user_id")
-
-	if err := r.service.IAMDeleteUser(ctx, tenantID, userID); err != nil {
+	result, err := r.service.IAMDeleteUser(ctx, getString(args, "tenant_id"), getString(args, "user_id"))
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return marshalResult(result)
 }
 
 func (r *ToolRegistry) executeIAMGetUser(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	userID := getString(args, "user_id")
-
-	user, err := r.service.IAMGetUser(ctx, tenantID, userID)
+	user, err := r.service.IAMGetUser(ctx, getString(args, "tenant_id"), getString(args, "user_id"))
 	if err != nil {
 		return nil, err
 	}
@@ -935,19 +930,41 @@ func (r *ToolRegistry) executeIAMGetUser(ctx context.Context, args map[string]in
 }
 
 func (r *ToolRegistry) executeIAMListUsers(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	limit := getInt(args, "limit")
-	offset := getInt(args, "offset")
-
-	if limit == 0 {
-		limit = 50
+	req := &IAMListUsersRequest{
+		TenantID:    getString(args, "tenant_id"),
+		Pagination:  getIAMPagination(args),
+		EmailFilter: getString(args, "email_filter"),
+		RoleFilter:  getString(args, "role_filter"),
+		GroupFilter: getString(args, "group_filter"),
 	}
 
-	users, err := r.service.IAMListUsers(ctx, tenantID, limit, offset)
+	users, err := r.service.IAMListUsers(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	return marshalResult(users)
+}
+
+// getIAMPagination reads the "pagination" object of an IAM list tool, the
+// gRPC PaginationRequest. A negative page or page size reads as unset.
+func getIAMPagination(args map[string]interface{}) IAMPagination {
+	page := getMap(args, "pagination")
+	return IAMPagination{
+		Page:     nonNegativeUint32(getInt64(page, "page")),
+		PageSize: nonNegativeUint32(getInt64(page, "page_size")),
+	}
+}
+
+// nonNegativeUint32 narrows v to a uint32, reading a negative value as 0 and
+// capping one beyond the uint32 range.
+func nonNegativeUint32(v int64) uint32 {
+	if v <= 0 {
+		return 0
+	}
+	if v > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(v)
 }
 
 // IAM Role tool execution handlers
@@ -969,20 +986,15 @@ func (r *ToolRegistry) executeIAMCreateRole(ctx context.Context, args map[string
 }
 
 func (r *ToolRegistry) executeIAMDeleteRole(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	roleID := getString(args, "role_id")
-
-	if err := r.service.IAMDeleteRole(ctx, tenantID, roleID); err != nil {
+	result, err := r.service.IAMDeleteRole(ctx, getString(args, "tenant_id"), getString(args, "role_id"))
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return marshalResult(result)
 }
 
 func (r *ToolRegistry) executeIAMGetRole(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	roleID := getString(args, "role_id")
-
-	role, err := r.service.IAMGetRole(ctx, tenantID, roleID)
+	role, err := r.service.IAMGetRole(ctx, getString(args, "tenant_id"), getString(args, "role_id"))
 	if err != nil {
 		return nil, err
 	}
@@ -990,15 +1002,7 @@ func (r *ToolRegistry) executeIAMGetRole(ctx context.Context, args map[string]in
 }
 
 func (r *ToolRegistry) executeIAMListRoles(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	limit := getInt(args, "limit")
-	offset := getInt(args, "offset")
-
-	if limit == 0 {
-		limit = 50
-	}
-
-	roles, err := r.service.IAMListRoles(ctx, tenantID, limit, offset)
+	roles, err := r.service.IAMListRoles(ctx, getString(args, "tenant_id"), getIAMPagination(args))
 	if err != nil {
 		return nil, err
 	}
@@ -1006,44 +1010,40 @@ func (r *ToolRegistry) executeIAMListRoles(ctx context.Context, args map[string]
 }
 
 func (r *ToolRegistry) executeIAMAssignRole(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	userID := getString(args, "user_id")
-	role := getString(args, "role")
-
-	if err := r.service.IAMAssignRole(ctx, tenantID, userID, role); err != nil {
-		return nil, err
-	}
-	return map[string]interface{}{"success": true}, nil
-}
-
-func (r *ToolRegistry) executeIAMRevokeRole(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	userID := getString(args, "user_id")
-	role := getString(args, "role")
-
-	if err := r.service.IAMRevokeRole(ctx, tenantID, userID, role); err != nil {
-		return nil, err
-	}
-	return map[string]interface{}{"success": true}, nil
-}
-
-func (r *ToolRegistry) executeIAMCheckPermission(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	userID := getString(args, "user_id")
-	resource := getString(args, "resource")
-	action := getString(args, "action")
-
-	allowed, err := r.service.IAMCheckPermission(ctx, tenantID, userID, resource, action)
+	result, err := r.service.IAMAssignRole(ctx,
+		getString(args, "tenant_id"), getString(args, "user_id"), getString(args, "role_id"))
 	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{
-		"allowed":   allowed,
-		"tenant_id": tenantID,
-		"user_id":   userID,
-		"resource":  resource,
-		"action":    action,
-	}, nil
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeIAMRevokeRole(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	result, err := r.service.IAMRevokeRole(ctx,
+		getString(args, "tenant_id"), getString(args, "user_id"), getString(args, "role_id"))
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeIAMCheckPermission(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	req := &IAMCheckPermissionRequest{
+		TenantID:   getString(args, "tenant_id"),
+		SubjectID:  getString(args, "subject_id"),
+		Roles:      getStringSlice(args, "roles"),
+		Groups:     getStringSlice(args, "groups"),
+		Action:     getString(args, "action"),
+		Resource:   getString(args, "resource"),
+		Context:    getStringMap(args, "context"),
+		Attributes: getStringMap(args, "attributes"),
+	}
+
+	decision, err := r.service.IAMCheckPermission(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(decision)
 }
 
 func (r *ToolRegistry) executeIAMAuthenticate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -1080,20 +1080,15 @@ func (r *ToolRegistry) executeIAMCreateGroup(ctx context.Context, args map[strin
 }
 
 func (r *ToolRegistry) executeIAMDeleteGroup(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	groupID := getString(args, "group_id")
-
-	if err := r.service.IAMDeleteGroup(ctx, tenantID, groupID); err != nil {
+	result, err := r.service.IAMDeleteGroup(ctx, getString(args, "tenant_id"), getString(args, "group_id"))
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return marshalResult(result)
 }
 
 func (r *ToolRegistry) executeIAMGetGroup(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	groupID := getString(args, "group_id")
-
-	group, err := r.service.IAMGetGroup(ctx, tenantID, groupID)
+	group, err := r.service.IAMGetGroup(ctx, getString(args, "tenant_id"), getString(args, "group_id"))
 	if err != nil {
 		return nil, err
 	}
@@ -1101,15 +1096,7 @@ func (r *ToolRegistry) executeIAMGetGroup(ctx context.Context, args map[string]i
 }
 
 func (r *ToolRegistry) executeIAMListGroups(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	limit := getInt(args, "limit")
-	offset := getInt(args, "offset")
-
-	if limit == 0 {
-		limit = 50
-	}
-
-	groups, err := r.service.IAMListGroups(ctx, tenantID, limit, offset)
+	groups, err := r.service.IAMListGroups(ctx, getString(args, "tenant_id"), getIAMPagination(args))
 	if err != nil {
 		return nil, err
 	}
@@ -1117,25 +1104,21 @@ func (r *ToolRegistry) executeIAMListGroups(ctx context.Context, args map[string
 }
 
 func (r *ToolRegistry) executeIAMAddGroupMember(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	groupID := getString(args, "group_id")
-	userID := getString(args, "user_id")
-
-	if err := r.service.IAMAddGroupMember(ctx, tenantID, groupID, userID); err != nil {
+	result, err := r.service.IAMAddGroupMember(ctx,
+		getString(args, "tenant_id"), getString(args, "group_id"), getString(args, "user_id"))
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return marshalResult(result)
 }
 
 func (r *ToolRegistry) executeIAMRemoveGroupMember(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	groupID := getString(args, "group_id")
-	userID := getString(args, "user_id")
-
-	if err := r.service.IAMRemoveGroupMember(ctx, tenantID, groupID, userID); err != nil {
+	result, err := r.service.IAMRemoveGroupMember(ctx,
+		getString(args, "tenant_id"), getString(args, "group_id"), getString(args, "user_id"))
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return marshalResult(result)
 }
 
 // IAM Tenant tool execution handlers
@@ -1145,14 +1128,10 @@ func (r *ToolRegistry) executeIAMCreateTenant(ctx context.Context, args map[stri
 		ID:   getString(args, "id"),
 		Name: getString(args, "name"),
 	}
-
-	// Handle settings
-	maxUsers := getInt(args, "max_users")
-	mfaRequired := getBool(args, "mfa_required")
-	if maxUsers > 0 || mfaRequired {
+	if settings := getMap(args, "settings"); settings != nil {
 		req.Settings = &IAMTenantSettings{
-			MaxUsers:    int32(maxUsers),
-			MFARequired: mfaRequired,
+			MaxUsers:    int32(getInt(settings, "max_users")),
+			MFARequired: getBool(settings, "mfa_required"),
 		}
 	}
 
@@ -1164,18 +1143,15 @@ func (r *ToolRegistry) executeIAMCreateTenant(ctx context.Context, args map[stri
 }
 
 func (r *ToolRegistry) executeIAMDeleteTenant(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-
-	if err := r.service.IAMDeleteTenant(ctx, tenantID); err != nil {
+	result, err := r.service.IAMDeleteTenant(ctx, getString(args, "tenant_id"))
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return marshalResult(result)
 }
 
 func (r *ToolRegistry) executeIAMGetTenant(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-
-	tenant, err := r.service.IAMGetTenant(ctx, tenantID)
+	tenant, err := r.service.IAMGetTenant(ctx, getString(args, "tenant_id"))
 	if err != nil {
 		return nil, err
 	}
@@ -1183,14 +1159,7 @@ func (r *ToolRegistry) executeIAMGetTenant(ctx context.Context, args map[string]
 }
 
 func (r *ToolRegistry) executeIAMListTenants(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	limit := getInt(args, "limit")
-	offset := getInt(args, "offset")
-
-	if limit == 0 {
-		limit = 50
-	}
-
-	tenants, err := r.service.IAMListTenants(ctx, limit, offset)
+	tenants, err := r.service.IAMListTenants(ctx, getIAMPagination(args))
 	if err != nil {
 		return nil, err
 	}

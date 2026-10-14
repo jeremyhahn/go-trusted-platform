@@ -223,6 +223,7 @@ type mockCryptoServiceForMCPTests struct {
 	verifyFunc                 func(ctx context.Context, req *service.VerifyRequest) (*service.VerifyResponse, error)
 	generateDataKeyFunc        func(ctx context.Context, req *service.GenerateDataKeyRequest) (*service.GenerateDataKeyResponse, error)
 	generateWrappedDataKeyFunc func(ctx context.Context, req *service.GenerateWrappedDataKeyRequest) (*service.GenerateWrappedDataKeyResponse, error)
+	generateRandomFunc         func(ctx context.Context, req *service.GenerateRandomRequest) (*service.GenerateRandomResponse, error)
 }
 
 func (m *mockCryptoServiceForMCPTests) Encrypt(ctx context.Context, req *service.EncryptRequest) (*service.EncryptResponse, error) {
@@ -314,6 +315,9 @@ func (m *mockCryptoServiceForMCPTests) VerifyHMAC(ctx context.Context, req *serv
 }
 
 func (m *mockCryptoServiceForMCPTests) GenerateRandom(ctx context.Context, req *service.GenerateRandomRequest) (*service.GenerateRandomResponse, error) {
+	if m.generateRandomFunc != nil {
+		return m.generateRandomFunc(ctx, req)
+	}
 	return nil, errors.New("not implemented")
 }
 
@@ -1079,13 +1083,25 @@ func TestKMSDecrypt_ServiceError(t *testing.T) {
 // KMSGenerateRandom Tests
 // =============================================================================
 
-func TestKMSGenerateRandom_InvalidNumBytes_Zero(t *testing.T) {
-	ctx := context.Background()
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		Logger: slog.Default(),
+// randomProvider builds a provider whose SDK crypto service answers
+// GenerateRandom with generate.
+func randomProvider(generate func(ctx context.Context, req *service.GenerateRandomRequest) (*service.GenerateRandomResponse, error)) *MCPServiceProvider {
+	return NewMCPServiceProvider(&MCPServiceProviderConfig{
+		CryptoService: &mockCryptoServiceForMCPTests{generateRandomFunc: generate},
+		Logger:        slog.Default(),
 	})
+}
 
-	_, err := provider.KMSGenerateRandom(ctx, 0)
+// failIfCalled is a GenerateRandom that fails the test when reached.
+func failIfCalled(t *testing.T) func(context.Context, *service.GenerateRandomRequest) (*service.GenerateRandomResponse, error) {
+	return func(context.Context, *service.GenerateRandomRequest) (*service.GenerateRandomResponse, error) {
+		t.Error("GenerateRandom must not reach the SDK for an invalid num_bytes")
+		return nil, errors.New("unexpected call")
+	}
+}
+
+func TestKMSGenerateRandom_InvalidNumBytes_Zero(t *testing.T) {
+	_, err := randomProvider(failIfCalled(t)).KMSGenerateRandom(context.Background(), 0)
 	if err == nil {
 		t.Fatal("expected error for num_bytes=0")
 	}
@@ -1100,12 +1116,7 @@ func TestKMSGenerateRandom_InvalidNumBytes_Zero(t *testing.T) {
 }
 
 func TestKMSGenerateRandom_InvalidNumBytes_Negative(t *testing.T) {
-	ctx := context.Background()
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		Logger: slog.Default(),
-	})
-
-	_, err := provider.KMSGenerateRandom(ctx, -10)
+	_, err := randomProvider(failIfCalled(t)).KMSGenerateRandom(context.Background(), -10)
 	if err == nil {
 		t.Fatal("expected error for negative num_bytes")
 	}
@@ -1116,31 +1127,53 @@ func TestKMSGenerateRandom_InvalidNumBytes_Negative(t *testing.T) {
 	}
 }
 
-func TestKMSGenerateRandom_InvalidNumBytes_TooLarge(t *testing.T) {
-	ctx := context.Background()
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		Logger: slog.Default(),
-	})
+// TestKMSGenerateRandom_AnswersFromSDK proves kms_random returns the bytes
+// the KMS generated, as gRPC GenerateRandom does, instead of drawing its own
+// (#304). A request above the old local 1024-byte cap reaches the SDK too.
+func TestKMSGenerateRandom_AnswersFromSDK(t *testing.T) {
+	for _, numBytes := range []int{32, 2048} {
+		want := bytes.Repeat([]byte{0xA5}, numBytes)
+		var gotReq *service.GenerateRandomRequest
+		provider := randomProvider(func(_ context.Context, req *service.GenerateRandomRequest) (*service.GenerateRandomResponse, error) {
+			gotReq = req
+			return &service.GenerateRandomResponse{RandomBytes: want}, nil
+		})
 
-	_, err := provider.KMSGenerateRandom(ctx, 2048)
-	if err == nil {
-		t.Fatal("expected error for num_bytes > 1024")
+		result, err := provider.KMSGenerateRandom(context.Background(), numBytes)
+		if err != nil {
+			t.Fatalf("num_bytes=%d: unexpected error: %v", numBytes, err)
+		}
+		if gotReq == nil || gotReq.NumBytes != numBytes {
+			t.Fatalf("num_bytes=%d: SDK request = %+v", numBytes, gotReq)
+		}
+		if !bytes.Equal(result, want) {
+			t.Errorf("num_bytes=%d: result is not the SDK's bytes", numBytes)
+		}
 	}
 }
 
-func TestKMSGenerateRandom_Success(t *testing.T) {
-	ctx := context.Background()
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		Logger: slog.Default(),
+func TestKMSGenerateRandom_SDKErrorPropagates(t *testing.T) {
+	sdkErr := errors.New("rng unavailable")
+	provider := randomProvider(func(context.Context, *service.GenerateRandomRequest) (*service.GenerateRandomResponse, error) {
+		return nil, sdkErr
 	})
 
-	result, err := provider.KMSGenerateRandom(ctx, 32)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	_, err := provider.KMSGenerateRandom(context.Background(), 16)
+	var genErr ErrKMSRandomGenerationFailed
+	if !errors.As(err, &genErr) {
+		t.Fatalf("expected ErrKMSRandomGenerationFailed, got %T: %v", err, err)
 	}
+	if !errors.Is(err, sdkErr) {
+		t.Errorf("the SDK error must be the cause, got %v", err)
+	}
+}
 
-	if len(result) != 32 {
-		t.Errorf("expected 32 random bytes, got %d", len(result))
+func TestKMSGenerateRandom_NoCryptoService(t *testing.T) {
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{Logger: slog.Default()})
+
+	_, err := provider.KMSGenerateRandom(context.Background(), 16)
+	if _, ok := err.(ErrServiceNotAvailable); !ok {
+		t.Fatalf("expected ErrServiceNotAvailable, got %T: %v", err, err)
 	}
 }
 

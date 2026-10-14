@@ -322,8 +322,12 @@ func TestOAuthMetadataHandler_getSupportedScopes_Issue315(t *testing.T) {
 	usedButUnadvertised := []string{
 		"bmc:read", "bmc:write", "bmc:power", "bmc:media", "bmc:admin",
 		"invitation:read", "invitation:write", "invitation:delete",
+		"kms:read", "kms:write", "kms:delete",
 		"ntp:read", "ntp:write",
 		"proxy:read", "proxy:write", "proxy:delete",
+		// the IAM tools backed by the gRPC IAM service (#304)
+		"iam:read", "iam:write", "iam:delete",
+		"secrets:read", "secrets:write", "secrets:list", "secrets:delete",
 	}
 	for _, scope := range usedButUnadvertised {
 		if !advertised[scope] {
@@ -335,8 +339,6 @@ func TestOAuthMetadataHandler_getSupportedScopes_Issue315(t *testing.T) {
 		"mcp:tools", "mcp:resources",
 		"ca:delete",
 		"container:read", "container:write", "container:delete",
-		"iam:read", "iam:write", "iam:delete",
-		"kms:read", "kms:write", "kms:delete",
 		"tenant:read", "tenant:write", "tenant:delete",
 		"platform:admin",
 	}

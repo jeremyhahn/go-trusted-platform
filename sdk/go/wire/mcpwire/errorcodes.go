@@ -13,7 +13,11 @@
 
 package mcpwire
 
-import "google.golang.org/grpc/codes"
+import (
+	"net/http"
+
+	"google.golang.org/grpc/codes"
+)
 
 // codeForClass is the one table that turns a platform error class into a
 // JSON-RPC error code. The server answers a failed tool call with the code
@@ -44,6 +48,22 @@ var classForCode = map[int]codes.Code{
 	NotFound:               codes.NotFound,
 	AlreadyExists:          codes.AlreadyExists,
 	FailedPrecondition:     codes.FailedPrecondition,
+}
+
+// classForHTTPStatus decodes the HTTP status of a non-2xx answer, so a
+// refusal from a proxy in front of the MCP server keeps its class.
+var classForHTTPStatus = map[int]codes.Code{
+	http.StatusBadRequest:          codes.InvalidArgument,
+	http.StatusUnauthorized:        codes.Unauthenticated,
+	http.StatusForbidden:           codes.PermissionDenied,
+	http.StatusNotFound:            codes.NotFound,
+	http.StatusConflict:            codes.AlreadyExists,
+	http.StatusTooManyRequests:     codes.ResourceExhausted,
+	http.StatusInternalServerError: codes.Internal,
+	http.StatusNotImplemented:      codes.Unimplemented,
+	http.StatusBadGateway:          codes.Unavailable,
+	http.StatusServiceUnavailable:  codes.Unavailable,
+	http.StatusGatewayTimeout:      codes.DeadlineExceeded,
 }
 
 // CodeForClass returns the JSON-RPC error code for a platform error class;

@@ -404,8 +404,8 @@ catalogs are default-deny** ([`docs/daemon/api.md`](../daemon/api.md) §5).
 |---|---|
 | gRPC `TPMService` | **every RPC scoped** in `pkg/api/grpc/method_permissions.go`: `tpm:read` for the observers plus `Quote`, `VerifyQuote`, `ReadNVRAM`, `Unseal` and `MakeCredential`; `tpm:write` for `ActivateCredential`, the `Create*` calls, `DefineNVRAM`, `WriteNVRAM`, `ImportEKCertificate`, `Provision` and `Seal`; `tpm:delete` for `DeleteAK`, `DeleteEK`, `DeleteSRK`, `UndefineNVRAM` and `Clear` |
 | gRPC `IDevIDService` | **every RPC scoped**: `idevid:read` for the `Get*` / `Has*` calls; `idevid:write` for CSR, generate, install, `CreateLDevID`, `ActivateCredential` and `FlushTransientContexts`; `idevid:delete` for the four `Delete*` calls |
-| MCP — `platform_tpm_quote`, `platform_tpm_verify_quote` | **scoped `tpm:read`** in `pkg/api/mcp/authz.go`, the scope of their gRPC twins |
-| MCP — every other `platform_tpm_*` tool | **refused**: not in `pkg/api/mcp/authz.go`, so `AuthorizeTool` answers `AuthErrorToolNotClassified` for every caller |
+| MCP — `platform_tpm_*` tools with a gRPC twin | **scoped** in `pkg/api/mcp/authz.go` on the gRPC tiers (#304), except `platform_tpm_unseal`, which needs `tpm:write`; the table is in [api-reference-mcp.md](api-reference-mcp.md) |
+| MCP — `platform_tpm_{ek,srk,iak}_delete`, `capabilities`, `platform`, `nv_list`, `pcr_extend`, `certify` | **refused**: not in `pkg/api/mcp/authz.go`, so `AuthorizeTool` answers `AuthErrorToolNotClassified` for every caller. The deletes flush a persistent handle, which deletes nothing; the rest have no gRPC twin |
 | MCP — `idevid_*` / `iak_*` tools | **refused**, likewise |
 | QUIC `0x99` category | **every sub-opcode scoped** in `pkg/api/quic/opcode_permissions.go`, which is fail-closed: `tpm:read` for the observers plus `Quote`, `VerifyQuote`, `Unseal`, `MakeCred` and the NV reads; `tpm:write` for `Provision`, the `Create*` calls, `ImportEKCert`, `ExtendPCR`, `Seal`, `NVWrite`, the IDevID / LDevID CSRs and `ActivateCred`; `tpm:delete` for `Clear`, the `Delete*` calls and `NVDelete` |
 | QUIC device-identity opcodes | **scoped under `tpm:*`**, not `idevid:*` as on gRPC: `tpm:read` for info and get-cert, `tpm:write` for generate, CSR and install-cert, `tpm:delete` for the deletes ([engineering.md](engineering.md) §13) |
@@ -415,8 +415,8 @@ catalogs are default-deny** ([`docs/daemon/api.md`](../daemon/api.md) §5).
 
 **Concretely: on gRPC, `Clear` and `DeleteEK` need `tpm:delete`, `Unseal`
 needs `tpm:read`, and `DeleteIDevID` needs `idevid:delete`.** Note that
-`Unseal` sits in the read tier. On MCP none of the TPM or device-identity tools
-can be called until they are classified. On QUIC, `SubOpTPM2Clear` needs
+`Unseal` sits in the read tier. On MCP `platform_tpm_unseal` needs `tpm:write`,
+and the device-identity tools cannot be called until they are classified. On QUIC, `SubOpTPM2Clear` needs
 `tpm:delete` and `SubOpTPM2Unseal` `tpm:read`, matching gRPC.
 
 ### Web service REST is gated on the `admin` role (#165)

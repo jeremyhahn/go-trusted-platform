@@ -7,6 +7,23 @@ Protocol: Model Context Protocol (MCP) via JSON-RPC 2.0
 
 The MCP interface exposes TPM operations as tools for AI/LLM integration. All tools follow the MCP JSON-RPC 2.0 specification.
 
+## Authorization
+
+Each tool needs the scope of its gRPC twin, and fails with that method's error
+class (#304). A tool absent from `pkg/api/mcp/authz.go` is refused for every
+caller.
+
+| Tools | Scope |
+|---|---|
+| `info`, `ek`, `ek_cert`, `srk`, `iak`, `pcrs`, `eventlog`, `random`, `nv_read`, `make_credential`, `quote`, `verify_quote` | `tpm:read` |
+| `provision`, `ek_create`, `ek_import_cert`, `srk_create`, `iak_create`, `nv_write`, `activate_credential`, `seal`, `unseal` | `tpm:write` |
+| `clear`, `nv_delete` | `tpm:delete` |
+| `ek_delete`, `srk_delete`, `iak_delete` | **refused** — they flush a persistent handle, which deletes nothing; gRPC `Delete*` does the same |
+| `capabilities`, `platform`, `nv_list`, `pcr_extend`, `certify` | **refused** — no gRPC or REST twin to take a scope from |
+
+Names are `platform_tpm_<tool>`. `unseal` is the one tool stricter than its
+gRPC twin: an unseal tool never takes a read scope on MCP.
+
 ## Available Tools
 
 ### Device Information and Management
@@ -24,7 +41,7 @@ The MCP interface exposes TPM operations as tools for AI/LLM integration. All to
 |------|-------------|
 | `platform_tpm_ek` | Get Endorsement Key public key and handle |
 | `platform_tpm_ek_create` | Create Endorsement Key |
-| `platform_tpm_ek_delete` | Flush EK handle from TPM |
+| `platform_tpm_ek_delete` | Flush EK handle from TPM (refused, see Authorization) |
 | `platform_tpm_ek_cert` | Get EK certificate |
 | `platform_tpm_ek_import_cert` | Import EK certificate |
 
@@ -34,7 +51,7 @@ The MCP interface exposes TPM operations as tools for AI/LLM integration. All to
 |------|-------------|
 | `platform_tpm_srk` | Get Storage Root Key |
 | `platform_tpm_srk_create` | Create Storage Root Key |
-| `platform_tpm_srk_delete` | Flush SRK handle |
+| `platform_tpm_srk_delete` | Flush SRK handle (refused, see Authorization) |
 
 ### Initial Attestation Key Tools
 
@@ -42,7 +59,7 @@ The MCP interface exposes TPM operations as tools for AI/LLM integration. All to
 |------|-------------|
 | `platform_tpm_iak` | Get Initial Attestation Key |
 | `platform_tpm_iak_create` | Create Initial Attestation Key |
-| `platform_tpm_iak_delete` | Flush IAK handle |
+| `platform_tpm_iak_delete` | Flush IAK handle (refused, see Authorization) |
 | `platform_tpm_idevid` | Get Initial Device ID |
 
 ### Attestation Tools
@@ -457,11 +474,22 @@ Seal data to the TPM, optionally binding to PCR state.
       "type": "array",
       "items": {"type": "integer"},
       "description": "PCR indices for sealing policy (0-23)"
+    },
+    "cn": {
+      "type": "string",
+      "description": "Common name (key ID) of the sealed object; default platform-sealing-key"
+    },
+    "password": {
+      "type": "string",
+      "description": "Authorization value the unseal must present"
     }
   },
   "required": ["data"]
 }
 ```
+
+Runs gRPC `Seal` and returns its `sealed_data`. A PCR index outside 0-23 is
+`-32602` (invalid params).
 
 ### platform_tpm_unseal
 
@@ -475,11 +503,18 @@ Unseal TPM-sealed data.
     "cn": {
       "type": "string",
       "description": "Common name of the sealed object"
+    },
+    "password": {
+      "type": "string",
+      "description": "Authorization value given at seal time"
     }
   },
   "required": ["cn"]
 }
 ```
+
+Runs gRPC `Unseal`: an unknown `cn` is not-found, an empty one invalid
+params. Requires `tpm:write`, where gRPC `Unseal` takes `tpm:read`.
 
 ### platform_tpm_idevid_csr
 

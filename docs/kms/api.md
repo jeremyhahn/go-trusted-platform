@@ -26,22 +26,22 @@ MCP: 20 `kms_*` tools and 6 `secret_*` tools.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Generate key | `POST /api/v1/kms/keys` | `GenerateKey` | `0xC0`–`0xCF` | `kms_generate_key` | ✅ |
+| Generate key | `POST /api/v1/kms/keys` | `GenerateKey` | `0xC0`–`0xCF` | `kms_generate_key` (`kms:write`) | ✅ |
 | Import key | `POST /api/v1/kms/keys/import` | `ImportKey` | as above | `MISSING — docs/13 G7` | ✅ |
-| List keys | `GET /api/v1/kms/keys` | `ListKeys` | as above | `kms_list_keys` | ✅ |
-| Get key | `GET /api/v1/kms/keys/{name}` | `GetKey` | as above | `kms_get_key` | ✅ |
-| Delete key | `DELETE /api/v1/kms/keys/{name}` | `DeleteKey` | as above | `kms_delete_key` | ✅ |
-| Rotate key | `POST /api/v1/kms/keys/{name}/rotate` | `RotateKey` | as above | `kms_rotate_key` | ✅ |
-| Revoke key | `POST /api/v1/kms/keys/{name}/revoke` | `MISSING — docs/13 G7` | as above | `kms_revoke_key` | — |
+| List keys | `GET /api/v1/kms/keys` | `ListKeys` | as above | `kms_list_keys` (`kms:read`) | ✅ |
+| Get key | `GET /api/v1/kms/keys/{name}` | `GetKey` | as above | `kms_get_key` (`kms:read`) | ✅ |
+| Delete key | `DELETE /api/v1/kms/keys/{name}` | `DeleteKey` | as above | `kms_delete_key` (`kms:delete`) | ✅ |
+| Rotate key | `POST /api/v1/kms/keys/{name}/rotate` | `RotateKey` | as above | `kms_rotate_key` (`kms:write`) | ✅ |
+| Revoke key | `POST /api/v1/kms/keys/{name}/revoke` | `MISSING — docs/13 G7` | as above | `kms_revoke_key` (`kms:write`) | — |
 | Update key status | `PUT /api/v1/kms/keys/{name}/status` | `UpdateKeyStatus` | as above | `MISSING — docs/13 G7` | ✅ |
 | List key versions | `GET /api/v1/kms/keys/{name}/versions` | `GetKeyVersions` | as above | `MISSING — docs/13 G7` | ✅ |
-| Export key | `MISSING — docs/13 G7` | `ExportKey` | as above | `kms_export_public_key` | ✅ |
-| Get key metadata | `GET /api/v1/kms/keys/{name}/metadata` | `MISSING — docs/13 G7` | as above | `kms_get_key_metadata` | — |
-| Update key metadata | `PUT /api/v1/kms/keys/{name}/metadata` | `MISSING — docs/13 G7` | as above | `kms_update_key_metadata` | — |
-| Get key policy | `GET /api/v1/kms/keys/{name}/policy` | `MISSING — docs/13 G7` | as above | `kms_get_key_policy` | — |
-| Set key policy | `PUT /api/v1/kms/keys/{name}/policy` | `MISSING — docs/13 G7` | as above | `kms_set_key_policy` | — |
-| List algorithms | `GET /api/v1/kms/algorithms` | `MISSING — docs/13 G7` | as above | `kms_supported_algorithms` | — |
-| Backend status | `GET /api/v1/kms/backend/status` | `BackendStatus` | as above | `kms_backend_status` | ✅ |
+| Export key | `MISSING — docs/13 G7` | `ExportKey` | as above | `kms_export_public_key` (`kms:read`) | ✅ |
+| Get key metadata | `GET /api/v1/kms/keys/{name}/metadata` | `MISSING — docs/13 G7` | as above | `kms_get_key_metadata` (`kms:read`) | — |
+| Update key metadata | `PUT /api/v1/kms/keys/{name}/metadata` | `MISSING — docs/13 G7` | as above | `kms_update_key_metadata` (`kms:write`) | — |
+| Get key policy | `GET /api/v1/kms/keys/{name}/policy` | `MISSING — docs/13 G7` | as above | `kms_get_key_policy` (`kms:read`) | — |
+| Set key policy | `PUT /api/v1/kms/keys/{name}/policy` | `MISSING — docs/13 G7` | as above | `kms_set_key_policy` (`kms:write`) | — |
+| List algorithms | `GET /api/v1/kms/algorithms` | `MISSING — docs/13 G7` | as above | `kms_supported_algorithms` (`kms:read`) | — |
+| Backend status | `GET /api/v1/kms/backend/status` | `BackendStatus` | as above | `kms_backend_status` (`kms:read`) | ✅ |
 
 **`ExportKey` exists on gRPC and has no REST route.** The MCP tool is
 `kms_export_public_key` — note the name: public key only. The gRPC RPC is
@@ -66,17 +66,17 @@ route would answer 400.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Encrypt | `POST /api/v1/kms/encrypt/{name}` | `Encrypt` | `0xD0`–`0xDA` | `kms_encrypt` | ✅ |
-| Decrypt | `POST /api/v1/kms/decrypt/{name}` | `Decrypt` | as above | `kms_decrypt` | ✅ |
+| Encrypt | `POST /api/v1/kms/encrypt/{name}` | `Encrypt` | `0xD0`–`0xDA` | `kms_encrypt` (`kms:write`) | ✅ |
+| Decrypt | `POST /api/v1/kms/decrypt/{name}` | `Decrypt` | as above | `kms_decrypt` (`kms:read`) | ✅ |
 | Batch encrypt | `MISSING — docs/13 G7` | `BatchEncrypt` | as above | `MISSING — docs/13 G7` | ✅ |
 | Batch decrypt | `MISSING — docs/13 G7` | `BatchDecrypt` | as above | `MISSING — docs/13 G7` | ✅ |
 | Rewrap | `MISSING — docs/13 G7` | `Rewrap` | as above | `MISSING — docs/13 G7` | ✅ |
-| Sign | `POST /api/v1/kms/sign/{name}` | `Sign` | as above | `kms_sign` | ✅ |
-| Verify | `POST /api/v1/kms/verify/{name}` | `Verify` | as above | `kms_verify` | ✅ |
+| Sign | `POST /api/v1/kms/sign/{name}` | `Sign` | as above | `kms_sign` (`kms:write`) | ✅ |
+| Verify | `POST /api/v1/kms/verify/{name}` | `Verify` | as above | `kms_verify` (`kms:read`) | ✅ |
 | Hash | `POST /api/v1/kms/hash` | `Hash` | as above | `MISSING — docs/13 G7` | ✅ |
 | HMAC | `POST /api/v1/kms/hmac/{name}` | `HMAC` | as above | `MISSING — docs/13 G7` | ✅ |
 | Verify HMAC | `POST /api/v1/kms/hmac/{name}/verify` | `VerifyHMAC` | as above | `MISSING — docs/13 G7` | ✅ |
-| Generate random | `POST /api/v1/kms/random` | `GenerateRandom` | as above | `kms_random` | ✅ |
+| Generate random | `POST /api/v1/kms/random` | `GenerateRandom` | as above | `kms_random` (`kms:read`) | ✅ |
 
 `Hash` takes no key name in its path — it is unkeyed. `HMAC` does. Do not treat
 them as interchangeable: an unkeyed digest where an HMAC is required is a real
@@ -97,8 +97,8 @@ makes key rotation cheap, and it is unreachable from REST and MCP.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Generate data key | `POST /api/v1/kms/data-keys` | `GenerateDataKey` | `0xF0`–`0xF5` | `kms_generate_data_key` | ✅ |
-| Generate wrapped data key | `POST /api/v1/kms/data-keys/wrapped` | `GenerateWrappedDataKey` | as above | `kms_generate_wrapped_data_key` | ✅ |
+| Generate data key | `POST /api/v1/kms/data-keys` | `GenerateDataKey` | `0xF0`–`0xF5` | `kms_generate_data_key` (`kms:write`) | ✅ |
+| Generate wrapped data key | `POST /api/v1/kms/data-keys/wrapped` | `GenerateWrappedDataKey` | as above | `kms_generate_wrapped_data_key` (`kms:write`) | ✅ |
 | Create DEK | `POST /api/v1/kms/deks` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
 | List DEKs | `GET /api/v1/kms/deks` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
 | Get DEK | `GET /api/v1/kms/deks/{path}` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
@@ -108,17 +108,17 @@ makes key rotation cheap, and it is unreachable from REST and MCP.
 
 | Secrets capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Store secret | `POST /api/v1/kms/secrets` | `MISSING — docs/13 G7` | secrets category `0xCE` | `secret_store` | — |
-| List secrets | `GET /api/v1/kms/secrets` | `MISSING — docs/13 G7` | as above | `secret_list` | — |
-| Get secret | `GET /api/v1/kms/secrets/{name}` | `MISSING — docs/13 G7` | as above | `secret_get` | — |
-| Delete secret | `DELETE /api/v1/kms/secrets/{name}` | `MISSING — docs/13 G7` | as above | `secret_delete` | — |
+| Store secret | `POST /api/v1/kms/secrets` | `MISSING — docs/13 G7` | secrets category `0xCE` | `secret_store` (`secrets:write`) | — |
+| List secrets | `GET /api/v1/kms/secrets` | `MISSING — docs/13 G7` | as above | `secret_list` (`secrets:list`) | — |
+| Get secret | `GET /api/v1/kms/secrets/{name}` | `MISSING — docs/13 G7` | as above | `secret_get` (`secrets:read`) | — |
+| Delete secret | `DELETE /api/v1/kms/secrets/{name}` | `MISSING — docs/13 G7` | as above | `secret_delete` (`secrets:delete`) | — |
 | Get secret version | `GET /api/v1/kms/secrets/{name}/versions/{version}` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
 | List secret versions | `GET /api/v1/kms/secrets/{name}/versions` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
 | Rotate secret | `POST /api/v1/kms/secrets/{name}/rotate` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
 | Rollback secret | `POST /api/v1/kms/secrets/{name}/rollback` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
 | Update secret status | `PUT /api/v1/kms/secrets/{name}/status` | `MISSING — docs/13 G7` | as above | `MISSING — docs/13 G7` | — |
-| Get rotation policy | `GET /api/v1/kms/secrets/{name}/policy` | `MISSING — docs/13 G7` | as above | `secret_get_rotation_policy` | — |
-| Set rotation policy | `PUT /api/v1/kms/secrets/{name}/policy` | `MISSING — docs/13 G7` | as above | `secret_set_rotation_policy` | — |
+| Get rotation policy | `GET /api/v1/kms/secrets/{name}/policy` | `MISSING — docs/13 G7` | as above | `secret_get_rotation_policy` (`secrets:read`) | — |
+| Set rotation policy | `PUT /api/v1/kms/secrets/{name}/policy` | `MISSING — docs/13 G7` | as above | `secret_set_rotation_policy` (`secrets:write`) | — |
 
 **Secrets and DEK management have no gRPC service at all.** They are REST, QUIC
 and (partially) MCP. That means the SDK's typed gRPC path cannot reach them, and
@@ -189,13 +189,17 @@ question in the migration report.
 **`KeyManagementService` is in the gRPC scope catalog** with all 23 methods
 mapped — resource `kms`, actions `read`/`write`/`delete`. Complete coverage.
 
-**None of the 20 `kms_*` or 6 `secret_*` MCP tools is in the MCP authorization
-map**, and the map is default-deny (#300): `AuthorizeTool` refuses each of them
-with `AuthErrorToolNotClassified`, whatever scopes the token holds.
+**Every `kms_*` and `secret_*` MCP tool carries the scope of the gRPC method it
+mirrors (#304)**, shown beside each tool in the tables above. The `kms_*`
+scopes are those of `KeyManagementService` and the `quicbaas.kms.v1`
+`KeyManagement` and `Crypto` services; the `secret_*` scopes are those of
+`quicbaas.kms.v1.SecretsManagement` (`pkg/api/grpc/method_permissions.go`).
+A caller without the scope is refused with `PermissionDenied` before the
+handler runs.
 
-So `Decrypt` over gRPC requires a `kms` scope, while `kms_decrypt`, `kms_sign`,
-`kms_generate_key`, `kms_delete_key`, `kms_generate_data_key` and `secret_get`
-over MCP cannot be called at all until they are classified.
+`kms_decrypt` and `kms_generate_data_key` answer plaintext key material and
+`secret_get` answers the secret, so each reaches only a holder of its scope.
+No handler logs the material.
 
 ### REST is gated on the `admin` role (#165)
 
@@ -234,6 +238,23 @@ reuse. Rotate the key.
 
 QUIC payloads are capped at `MaxPayloadSize` (16 MiB) — relevant for batch
 operations and large ciphertexts.
+
+### MCP answers in the gRPC classes (#304)
+
+An MCP tool fails with the gRPC code its gRPC method would answer for the same
+input. `pkg/api/daemon/kms_mcp_grpc_parity_test.go` holds both transports to
+it, per group, against one in-memory SDK fake.
+
+| Input | gRPC | MCP |
+|---|---|---|
+| Missing `key_id`, `secret_id`, plaintext, ciphertext, message, signature or data | `InvalidArgument` — the `quicbaas.kms.v1` adapters check before calling the SDK | `InvalidArgument` |
+| Unknown key (`kms_get_key`, `kms_get_key_metadata`, `kms_get_key_policy`) | `NotFound` | `NotFound` |
+| Unknown secret (`secret_get`, `secret_get_rotation_policy`) | `NotFound` | `NotFound` |
+| Encrypt, decrypt or data key under an unknown key | `Internal` | `Internal` |
+
+The read methods answer any SDK failure as `NotFound` on both transports. The
+data-key comparison is against `platform.v1` `GenerateDataKey`, since
+`quicbaas.kms.v1` has no data-key method.
 
 ---
 

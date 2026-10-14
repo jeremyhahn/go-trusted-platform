@@ -4,6 +4,7 @@ import (
 	"context"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 
 	"google.golang.org/grpc/codes"
@@ -15,14 +16,17 @@ import (
 // the Unix-socket operator, authenticated by peer credentials, and a daemon
 // run with SkipIAMValidation.
 //
-// The sources mirror the REST session: a validated platform token (gRPC or
-// QUIC) carries its tenant_id claim, and an mTLS client certificate carries
+// The sources mirror the REST session: a validated platform token (gRPC,
+// QUIC or MCP) carries its tenant_id claim, and an mTLS client certificate carries
 // the tenant the certificate authenticator extracted from it.
 func callerTenant(ctx context.Context) (string, bool) {
 	if authCtx, ok := grpcapi.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
 		return authCtx.TenantID, true
 	}
 	if authCtx, ok := quic.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
+		return authCtx.TenantID, true
+	}
+	if authCtx, ok := mcp.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
 		return authCtx.TenantID, true
 	}
 	if identity := IdentityFromContext(ctx); identity != nil {

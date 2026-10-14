@@ -71,13 +71,19 @@ func (k *ptIssuerKey) jwksHandler(t *testing.T) *httptest.Server {
 
 func (k *ptIssuerKey) sign(t *testing.T, sub, tid string, scp []string) string {
 	t.Helper()
-	now := time.Now()
+	return k.signExpiring(t, sub, tid, scp, time.Now().Add(10*time.Minute))
+}
+
+// signExpiring mints a token like sign whose exp is exp, issued ten minutes
+// before it, so a past exp yields an expired but otherwise valid token.
+func (k *ptIssuerKey) signExpiring(t *testing.T, sub, tid string, scp []string, exp time.Time) string {
+	t.Helper()
 	m := jwt.MapClaims{
 		"iss": testPTIssuer,
 		"aud": []string{testPTAudience},
 		"sub": sub,
-		"exp": now.Add(10 * time.Minute).Unix(),
-		"iat": now.Unix(),
+		"exp": exp.Unix(),
+		"iat": exp.Add(-10 * time.Minute).Unix(),
 		"jti": "jti-" + sub,
 	}
 	if tid != "" {

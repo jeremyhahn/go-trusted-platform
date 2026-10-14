@@ -165,6 +165,37 @@ type IAMCreateTokenRequest struct {
 	Description string   `json:"description,omitempty"`
 }
 
+// IAMPagination is the page an IAM list tool asks for, the gRPC
+// PaginationRequest: Page counts from 1, and a zero PageSize takes the
+// service default.
+type IAMPagination struct {
+	Page     uint32 `json:"page,omitempty"`
+	PageSize uint32 `json:"page_size,omitempty"`
+}
+
+// IAMListUsersRequest represents a user listing request for MCP, with the
+// same fields as the gRPC ListIAMUsersRequest.
+type IAMListUsersRequest struct {
+	TenantID    string        `json:"tenant_id"`
+	Pagination  IAMPagination `json:"pagination,omitempty"`
+	EmailFilter string        `json:"email_filter,omitempty"`
+	RoleFilter  string        `json:"role_filter,omitempty"`
+	GroupFilter string        `json:"group_filter,omitempty"`
+}
+
+// IAMCheckPermissionRequest represents a policy decision request for MCP,
+// with the same fields as the gRPC CheckIAMPermissionRequest.
+type IAMCheckPermissionRequest struct {
+	TenantID   string            `json:"tenant_id"`
+	SubjectID  string            `json:"subject_id"`
+	Roles      []string          `json:"roles,omitempty"`
+	Groups     []string          `json:"groups,omitempty"`
+	Action     string            `json:"action"`
+	Resource   string            `json:"resource"`
+	Context    map[string]string `json:"context,omitempty"`
+	Attributes map[string]string `json:"attributes,omitempty"`
+}
+
 // KMSCreateKeyRequest represents a key creation request for MCP.
 type KMSCreateKeyRequest struct {
 	Name               string            `json:"name"`
@@ -649,39 +680,40 @@ type ServiceProvider interface {
 	CACRL(ctx context.Context) (interface{}, error)
 	CABundle(ctx context.Context, storeType string, algorithm string) (interface{}, error)
 
-	// IAM User operations
+	// IAM operations. Each answers what its gRPC PlatformIAMService method
+	// answers, the same response message and the same error class.
 	IAMCreateUser(ctx context.Context, req *IAMCreateUserRequest) (interface{}, error)
-	IAMDeleteUser(ctx context.Context, tenantID string, userID string) error
+	IAMDeleteUser(ctx context.Context, tenantID string, userID string) (interface{}, error)
 	IAMGetUser(ctx context.Context, tenantID string, userID string) (interface{}, error)
-	IAMListUsers(ctx context.Context, tenantID string, limit int, offset int) (interface{}, error)
+	IAMListUsers(ctx context.Context, req *IAMListUsersRequest) (interface{}, error)
 
 	// IAM Role operations
 	IAMCreateRole(ctx context.Context, req *IAMCreateRoleRequest) (interface{}, error)
-	IAMDeleteRole(ctx context.Context, tenantID string, roleID string) error
+	IAMDeleteRole(ctx context.Context, tenantID string, roleID string) (interface{}, error)
 	IAMGetRole(ctx context.Context, tenantID string, roleID string) (interface{}, error)
-	IAMListRoles(ctx context.Context, tenantID string, limit int, offset int) (interface{}, error)
+	IAMListRoles(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error)
 
 	// IAM Role assignment operations
-	IAMAssignRole(ctx context.Context, tenantID string, userID string, role string) error
-	IAMRevokeRole(ctx context.Context, tenantID string, userID string, role string) error
+	IAMAssignRole(ctx context.Context, tenantID string, userID string, roleID string) (interface{}, error)
+	IAMRevokeRole(ctx context.Context, tenantID string, userID string, roleID string) (interface{}, error)
 
 	// IAM Authorization operations
-	IAMCheckPermission(ctx context.Context, tenantID string, userID string, resource string, action string) (bool, error)
+	IAMCheckPermission(ctx context.Context, req *IAMCheckPermissionRequest) (interface{}, error)
 	IAMAuthenticate(ctx context.Context, req *IAMAuthenticateRequest) (interface{}, error)
 
 	// IAM Group operations
 	IAMCreateGroup(ctx context.Context, req *IAMCreateGroupRequest) (interface{}, error)
-	IAMDeleteGroup(ctx context.Context, tenantID string, groupID string) error
+	IAMDeleteGroup(ctx context.Context, tenantID string, groupID string) (interface{}, error)
 	IAMGetGroup(ctx context.Context, tenantID string, groupID string) (interface{}, error)
-	IAMListGroups(ctx context.Context, tenantID string, limit int, offset int) (interface{}, error)
-	IAMAddGroupMember(ctx context.Context, tenantID string, groupID string, userID string) error
-	IAMRemoveGroupMember(ctx context.Context, tenantID string, groupID string, userID string) error
+	IAMListGroups(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error)
+	IAMAddGroupMember(ctx context.Context, tenantID string, groupID string, userID string) (interface{}, error)
+	IAMRemoveGroupMember(ctx context.Context, tenantID string, groupID string, userID string) (interface{}, error)
 
 	// IAM Tenant operations
 	IAMCreateTenant(ctx context.Context, req *IAMCreateTenantRequest) (interface{}, error)
-	IAMDeleteTenant(ctx context.Context, tenantID string) error
+	IAMDeleteTenant(ctx context.Context, tenantID string) (interface{}, error)
 	IAMGetTenant(ctx context.Context, tenantID string) (interface{}, error)
-	IAMListTenants(ctx context.Context, limit int, offset int) (interface{}, error)
+	IAMListTenants(ctx context.Context, page IAMPagination) (interface{}, error)
 
 	// IAM Token operations
 	IAMCreateToken(ctx context.Context, req *IAMCreateTokenRequest) (interface{}, error)
@@ -785,8 +817,8 @@ type ServiceProvider interface {
 	TPMEventLog(ctx context.Context) (interface{}, error)
 	TPMCapabilities(ctx context.Context) (interface{}, error)
 	TPMRandom(ctx context.Context, numBytes int) ([]byte, error)
-	TPMSeal(ctx context.Context, data []byte, pcrs []int) ([]byte, error)
-	TPMUnseal(ctx context.Context, cn string) ([]byte, error)
+	TPMSeal(ctx context.Context, data []byte, pcrs []uint32, cn, password string) ([]byte, error)
+	TPMUnseal(ctx context.Context, cn, password string) ([]byte, error)
 	TPMCertify(ctx context.Context, keyHandle int) (interface{}, error)
 	TPMNVList(ctx context.Context) (interface{}, error)
 	TPMNVRead(ctx context.Context, index uint32, size, offset uint16, password string) ([]byte, error)

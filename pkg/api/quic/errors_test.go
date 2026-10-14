@@ -1233,80 +1233,6 @@ func TestErrIAMPermissionDenied(t *testing.T) {
 	}
 }
 
-func TestErrIAMTokenExpired(t *testing.T) {
-	t.Parallel()
-	err := ErrIAMTokenExpired{}
-
-	// Test Error()
-	expected := "token expired"
-	if err.Error() != expected {
-		t.Errorf("expected '%s', got '%s'", expected, err.Error())
-	}
-
-	// Test Is() - same type
-	if !err.Is(ErrIAMTokenExpired{}) {
-		t.Error("expected Is() to return true for same type")
-	}
-
-	// Test Is() - different type
-	if err.Is(ErrIAMTokenInvalid{}) {
-		t.Error("expected Is() to return false for different type")
-	}
-
-	// Test errors.Is with same type
-	if !errors.Is(err, ErrIAMTokenExpired{}) {
-		t.Error("expected errors.Is to find ErrIAMTokenExpired")
-	}
-}
-
-func TestErrIAMTokenInvalid(t *testing.T) {
-	t.Parallel()
-	err := ErrIAMTokenInvalid{}
-
-	// Test Error()
-	expected := "token invalid"
-	if err.Error() != expected {
-		t.Errorf("expected '%s', got '%s'", expected, err.Error())
-	}
-
-	// Test Is() - same type
-	if !err.Is(ErrIAMTokenInvalid{}) {
-		t.Error("expected Is() to return true for same type")
-	}
-
-	// Test Is() - different type
-	if err.Is(ErrIAMTokenExpired{}) {
-		t.Error("expected Is() to return false for different type")
-	}
-
-	// Test errors.Is with same type
-	if !errors.Is(err, ErrIAMTokenInvalid{}) {
-		t.Error("expected errors.Is to find ErrIAMTokenInvalid")
-	}
-}
-
-func TestErrIAMTokenVerificationFailed(t *testing.T) {
-	t.Parallel()
-	cause := errors.New("verification failed")
-	err := ErrIAMTokenVerificationFailed{Cause: cause}
-
-	// Test Error()
-	expected := "token verification failed: verification failed"
-	if err.Error() != expected {
-		t.Errorf("expected '%s', got '%s'", expected, err.Error())
-	}
-
-	// Test Unwrap()
-	if err.Unwrap() != cause {
-		t.Errorf("expected unwrapped error to be the cause")
-	}
-
-	// Verify errors.Is works through Unwrap
-	if !errors.Is(err, cause) {
-		t.Error("expected errors.Is to find the cause")
-	}
-}
-
 func TestIAMErrorTypesInterface(t *testing.T) {
 	t.Parallel()
 	// Verify all IAM error types implement error interface
@@ -1317,9 +1243,6 @@ func TestIAMErrorTypesInterface(t *testing.T) {
 	var _ error = ErrIAMRoleAlreadyExists{}
 	var _ error = ErrIAMGroupAlreadyExists{}
 	var _ error = ErrIAMPermissionDenied{}
-	var _ error = ErrIAMTokenExpired{}
-	var _ error = ErrIAMTokenInvalid{}
-	var _ error = ErrIAMTokenVerificationFailed{}
 }
 
 func TestIAMErrorIsMethodsWithNonMatchingTypes(t *testing.T) {
@@ -1365,16 +1288,6 @@ func TestIAMErrorIsMethodsWithNonMatchingTypes(t *testing.T) {
 			err:    ErrIAMPermissionDenied{},
 			target: errors.New("some error"),
 		},
-		{
-			name:   "TokenExpired vs generic error",
-			err:    ErrIAMTokenExpired{},
-			target: errors.New("some error"),
-		},
-		{
-			name:   "TokenInvalid vs generic error",
-			err:    ErrIAMTokenInvalid{},
-			target: errors.New("some error"),
-		},
 	}
 
 	for _, tt := range tests {
@@ -1407,14 +1320,6 @@ func TestIAMErrorIsMethodsWithNonMatchingTypes(t *testing.T) {
 					t.Error("expected Is() to return false for non-matching type")
 				}
 			case ErrIAMPermissionDenied:
-				if e.Is(tt.target) {
-					t.Error("expected Is() to return false for non-matching type")
-				}
-			case ErrIAMTokenExpired:
-				if e.Is(tt.target) {
-					t.Error("expected Is() to return false for non-matching type")
-				}
-			case ErrIAMTokenInvalid:
 				if e.Is(tt.target) {
 					t.Error("expected Is() to return false for non-matching type")
 				}

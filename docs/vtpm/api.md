@@ -126,16 +126,29 @@ key operations.
 | `vtpm_extend_pcr` → `vtpm:write` | `vtpm_bundle_pcr_extend` |
 | `vtpm_read_pcr` → `vtpm:read` | `vtpm_bundle_pcr_read` |
 | `vtpm_start` → `vtpm:write`, `vtpm_stop` → `vtpm:write` | — |
-| — | all `vtpm_template_*`, `vtpm_export`, `vtpm_import`, `vtpm_validate`, `vtpm_get*`, `vtpm_is_running` |
 
 `AuthorizeTool` (`pkg/api/mcp/authz.go`) is default-deny (#300): a tool absent
 from the map is refused with `AuthErrorToolNotClassified` whatever scopes the
 token holds. **`vtpm_seal` requires `vtpm:write`; `vtpm_bundle_seal` is refused
 for every caller. `vtpm_unseal` requires `vtpm:read`; `vtpm_bundle_unseal` is
-refused likewise.**
+refused likewise.** No executor dispatches the `vtpm_bundle_*` names either, so
+classifying them alone would not make them answer.
 
-The newer names do not work over MCP until they are classified. Which family is
-canonical is the same open question as DNS.
+The newer names do not work over MCP until they are classified and dispatched.
+Which family is canonical is the same open question as DNS.
+
+The tools with no duplicate carry the scope of their gRPC method (#304), and
+fail with the same gRPC class as that method:
+
+| Tools | Scope |
+|---|---|
+| `vtpm_get`, `vtpm_validate`, `vtpm_export`, `vtpm_get_bundle_path`, `vtpm_get_tpm_socket_path`, `vtpm_get_nvram_path`, `vtpm_is_running`, `vtpm_template_get`, `vtpm_template_list` | `vtpm:read` |
+| `vtpm_import`, `vtpm_template_create`, `vtpm_template_clone` | `vtpm:write` |
+| `vtpm_template_delete` | `vtpm:delete` |
+
+`vtpm_export` sits in the read tier because gRPC `ExportBundle` does, although
+the archive is key material ([user.md](user.md), "Moving a vTPM"). `vtpm_validate` answers
+`valid: false` for an absent bundle, as gRPC `ValidateBundle` does.
 
 ---
 
@@ -147,7 +160,8 @@ Both catalogs are **default-deny**
 **`VTPMService` is fully scoped on gRPC** with 23 methods mapped — resource
 `vtpm`, actions `read`/`write`/`delete`. `UnsealVTPM` sits in the read tier.
 
-On MCP, ten vTPM tool names carry a permission; the rest are refused. See §5.
+On MCP, 23 vTPM tool names carry a permission; the nine `vtpm_bundle_*` names
+are refused. See §5.
 
 ### REST is gated on the `admin` role (#165)
 
