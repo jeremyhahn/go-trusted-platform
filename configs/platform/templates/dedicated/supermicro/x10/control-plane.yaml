@@ -1165,6 +1165,10 @@ webservices:
         - http-8081
         - enroll-8080
         - enroll-8081
+      # Gateway and compute nodes enroll from the private zones of the
+      # reference network, so the http-01 / enroll-01 verifiers must reach
+      # private addresses. The public listener keeps the SSRF guard.
+      allow-private-targets: true
     jwt:
       expiration: 60
       issuer: trusted-platform

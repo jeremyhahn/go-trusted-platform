@@ -162,6 +162,11 @@ control-plane CA via custom ACME extensions (enroll-01, device-attest-01)"*.
 **The control plane itself is the exception** and deliberately has no
 `acme.challenge` on its listener: it is the CA, so it issues its own.
 
+Its `internal` listener, the ACME directory the other nodes enroll against,
+sets `acme.allow-private-targets: true`. The gateway and compute nodes answer
+http-01 and enroll-01 from private 10.4.x addresses, which the validator
+refuses by default (the SSRF guard). The `public` listener keeps the default.
+
 `control-plane.yaml` also carries the `attestation.reporting` block that
 starts the collector. That key is also the gate on the control plane
 registering itself as a device in its own registry (#472), so a control plane

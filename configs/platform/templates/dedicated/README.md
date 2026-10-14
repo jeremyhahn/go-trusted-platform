@@ -57,6 +57,14 @@ completes a challenge, and receives the production webservice
 certificates. The root CA bundle is baked into the install ISO so the
 first ACME connection can verify TLS before any cert has been issued.
 
+Those nodes enroll from the private zones of the reference network, so the
+`internal` listener of each `control-plane.yaml` sets
+`acme.allow-private-targets: true`: without it the http-01 and enroll-01
+validators refuse private addresses (the SSRF guard) and no gateway or compute
+node, the Raspberry Pi compute included, can enroll. The `public` listener and
+the gateways' own ACME servers keep the default, `false`.
+`TestShippedTemplates_ACMEPrivateTargetsOptIn` pins which listeners opt in.
+
 The platform listener (`tls-port: 9443`) of every `gateway.yaml` and
 `compute.yaml` here, Supermicro X10 and Dell R640 alike, sets
 `certificate.acme.challenge: device-attest-01`, so its certificate comes from
