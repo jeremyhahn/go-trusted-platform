@@ -1,6 +1,6 @@
 # Autoinstall Script Reference
 
-> **Status: REFERENCE** · Last verified: 2026-10-13
+> **Status: REFERENCE** · Last verified: 2026-10-14
 > The embedded `autoinstall.sh`: config and hostname resolution, log upload and failure handling.
 
 Reference for `autoinstall.sh` — the shell script that runs inside the
@@ -25,7 +25,10 @@ In order of execution:
 
 1. Resolve device config (priority chain — §2)
 2. Resolve hostname (priority chain — §3)
-3. Run `platformctl install system`, which:
+3. Pick the target: `/dev/nbd0` on a `diskless-nbd` node
+   (`nbd_install_target`; no local disk is scanned), otherwise the first
+   non-removable, writable disk of at least 8 GB
+4. Run `platformctl install system`, which:
    - partitions the target disk (GPT, EFI + LUKS-wrapped root);
    - formats the filesystems (FAT32 EFI, ext4 root inside LUKS);
    - installs the UKI and tools;
@@ -33,8 +36,8 @@ In order of execution:
      first-boot sealing (§7);
    - creates a UEFI boot entry, keeping the fallback bootloader path
      if that fails.
-4. Upload install.log to the deployer (§5)
-5. Run the `after-install` action — `poweroff` by default, or `reboot`
+5. Upload install.log to the deployer (§5)
+6. Run the `after-install` action — `poweroff` by default, or `reboot`
 
 ---
 
@@ -219,6 +222,8 @@ First boot kills keyslot 0.
 | Stage | Failure | Autoinstall behavior |
 |-------|---------|----------------------|
 | Config resolve | All three priorities fail | Drops to `/bin/sh`; install-log shows diagnostics |
+| Target | No local disk qualifies (not a `diskless-nbd` node) | `error`: stops before the installer runs |
+| Target | `diskless-nbd` node whose `/dev/nbd0` is not attached to its export | The installer refuses with `ErrorTypeNBDTarget` before the TPM or the export is touched; uploads log; **stops in the installer** ([engineering](engineering.md#attaching-before-the-install)) |
 | Partition | Target disk missing or too small | Aborts; uploads log with the exit code; **stops in the installer** |
 | LUKS format | Entropy starvation, keyslot init fail | Aborts; uploads log; **stops in the installer** |
 | LUKS keys | Keyslot add, missing platform config or `installer.luks` creation fails | Aborts; uploads log; **stops in the installer**. TPM sealing is a first-boot step (§7), not an install failure |

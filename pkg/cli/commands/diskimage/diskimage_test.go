@@ -203,6 +203,81 @@ func TestBuildConfigRefusesPlatformAPKDirWithoutPreFetch(t *testing.T) {
 	}
 }
 
+// rpiBinaries writes a stand-in aarch64 platformd and returns its directory.
+func rpiBinaries(t *testing.T) string {
+	t.Helper()
+	bins := filepath.Join(t.TempDir(), "aarch64")
+	if err := os.MkdirAll(bins, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bins, "platformd"), []byte("elf"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bins
+}
+
+// The template lookups are relative to the repository root, where
+// platformctl diskimage create runs, so these tests run from there and
+// resolve the shipped templates.
+const repoRoot = "../../../.."
+
+// --role builds the shipped dedicated-profile template for the role, and
+// nothing else: the single-node default is not a fallback.
+func TestBuildConfigRoleBuildsTheDedicatedTemplate(t *testing.T) {
+	t.Chdir(repoRoot)
+	for _, role := range []string{"compute"} {
+		t.Run(role, func(t *testing.T) {
+			flags := &createFlags{target: "rpi", model: "rpi4", role: role, binariesDir: rpiBinaries(t)}
+			cfg, err := buildConfig(flags)
+			if err != nil {
+				t.Fatalf("buildConfig: %v", err)
+			}
+			want := filepath.Join("configs", "platform", "templates", "dedicated", "raspberrypi", "rpi4", role+".yaml")
+			if cfg.PlatformConfigFile != want {
+				t.Errorf("platform config = %q, want %q", cfg.PlatformConfigFile, want)
+			}
+		})
+	}
+}
+
+// Without --role the rpi image stays the single-node one.
+func TestBuildConfigWithoutRoleBuildsSingleNode(t *testing.T) {
+	t.Chdir(repoRoot)
+	cfg, err := buildConfig(&createFlags{target: "rpi", binariesDir: rpiBinaries(t)})
+	if err != nil {
+		t.Fatalf("buildConfig: %v", err)
+	}
+	want := filepath.Join("configs", "platform", "templates", "single-node", "raspberrypi", "rpi4", "default.yaml")
+	if cfg.PlatformConfigFile != want {
+		t.Errorf("platform config = %q, want %q", cfg.PlatformConfigFile, want)
+	}
+}
+
+// A role the builder cannot build is refused rather than built as
+// single-node: no template for it, a target other than rpi, or a
+// --platform-config that already chose the template.
+func TestBuildConfigRefusesRoleItCannotBuild(t *testing.T) {
+	t.Chdir(repoRoot)
+	bins := rpiBinaries(t)
+	cases := map[string]*createFlags{
+		"no template":     {target: "rpi", model: "rpi4", role: "gateway", binariesDir: bins},
+		"unknown model":   {target: "rpi", model: "rpi5", role: "compute", binariesDir: bins},
+		"qemu-virt":       {target: "qemu-virt", role: "compute", binariesDir: bins},
+		"platform-config": {target: "rpi", role: "compute", binariesDir: bins, mediaFlags: mediaFlags{platformConfig: "node.yaml"}},
+	}
+	for name, flags := range cases {
+		t.Run(name, func(t *testing.T) {
+			var refused ErrRoleTemplate
+			if _, err := buildConfig(flags); !errors.As(err, &refused) {
+				t.Fatalf("buildConfig = %v, want ErrRoleTemplate", err)
+			}
+			if refused.Role != flags.role {
+				t.Errorf("refused role = %q, want %q", refused.Role, flags.role)
+			}
+		})
+	}
+}
+
 func TestErrorStrings(t *testing.T) {
 	inner := errors.New("inner")
 	if got := (ErrConfigLoadFailed{Path: "/p", Err: inner}).Error(); got != "diskimage: failed to load /p: inner" {

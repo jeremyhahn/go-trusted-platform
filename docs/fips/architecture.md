@@ -71,7 +71,7 @@ mode). Until it is built, an operator sets `GODEBUG` by hand
 - **The FIPS OS image** is built by the installer and ISO builder:
   - a FIPS kernel and the OpenSSL FIPS provider, from builder containers;
   - `fips=1` on the kernel command line;
-  - installer code in `pkg/installer/alpine/fips.go`, `pkg/installer/installer.go:286-291`, `:371-375`, `:1192-1194`.
+  - installer code in `pkg/installer/alpine/fips.go`, `pkg/installer/installer.go:303-308`, `:388-392`, `:1209-1211`.
 
   It changes the kernel indicator, not the Go binaries.
 

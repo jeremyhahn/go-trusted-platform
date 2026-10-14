@@ -16,6 +16,7 @@ package container
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -30,11 +31,24 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/disklessroot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/uki"
 )
 
 const (
 	// shutdownTimeout is the maximum time to wait for graceful HTTP shutdown.
 	shutdownTimeout = 5 * time.Second
+
+	// deviceScriptRoute serves a node's iPXE script, by MAC.
+	deviceScriptRoute  = "/boot/device/"
+	deviceScriptSuffix = ".ipxe"
+
+	// installedUKIRoute serves a diskless-nbd node's installed UKI, by MAC.
+	installedUKIRoute  = "/boot/uki/"
+	installedUKISuffix = ".efi"
+
+	// installedUKIDir is where in the NBD metadata area the installer writes
+	// the UKI, under its removable-media boot file name.
+	installedUKIDir = "EFI/BOOT/"
 )
 
 // Server wraps pkg/ipxe.Server with manifest-based boot script generation.
@@ -196,6 +210,15 @@ func (s *Server) deviceScriptAddr() string {
 	return net.JoinHostPort(s.config.DHCPConfig.ServerIP, strconv.Itoa(port))
 }
 
+// deviceScriptMux routes the device-script listener: each node's iPXE script
+// and, for an installed diskless-nbd node, the UKI that script boots.
+func (s *Server) deviceScriptMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc(deviceScriptRoute, s.HandleDeviceBootScript)
+	mux.HandleFunc(installedUKIRoute, s.HandleInstalledUKI)
+	return mux
+}
+
 // the per-device boot script endpoint.
 func (s *Server) Start(ctx context.Context) error {
 	s.mu.Lock()
@@ -204,13 +227,10 @@ func (s *Server) Start(ctx context.Context) error {
 		return ErrServerStartFailed{Cause: &MessageError{Msg: "server is already running"}}
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/boot/device/", s.HandleDeviceBootScript)
-
 	addr := s.deviceScriptAddr()
 	s.httpServer = &http.Server{
 		Addr:    addr,
-		Handler: mux,
+		Handler: s.deviceScriptMux(),
 	}
 	s.running.Store(true)
 	s.mu.Unlock()
@@ -344,7 +364,7 @@ func (s *Server) deviceBootInfo(mac string) (*ipxe.DeviceBootInfo, error) {
 		return nil, err
 	}
 	base := serverBaseURL(s.config)
-	return &ipxe.DeviceBootInfo{
+	info := &ipxe.DeviceBootInfo{
 		MAC:             mac,
 		Role:            entry.Role,
 		Hostname:        entry.Hostname,
@@ -352,7 +372,20 @@ func (s *Server) deviceBootInfo(mac string) (*ipxe.DeviceBootInfo, error) {
 		KernelURL:       set.url(base, set.Kernel),
 		InitrdURL:       set.url(base, set.Initrd),
 		ExtraKernelArgs: []string{args},
-	}, nil
+	}
+	if entry.BootModel == nbd.BootModel {
+		// A diskless-nbd node installs once; from then on it boots the
+		// signed UKI its export holds instead of the installer.
+		installed, err := s.nbdInstalled(entry, set)
+		if err != nil {
+			return nil, err
+		}
+		if installed {
+			// Served beside this script, on the device-script listener.
+			info.BootImageURL = "http://" + s.deviceScriptAddr() + installedUKIRoute + mac + installedUKISuffix
+		}
+	}
+	return info, nil
 }
 
 // nodeBootArgs are the set's kernel arguments for one node. A diskless node
@@ -410,7 +443,7 @@ func (s *Server) setFor(entry *ManifestEntry) (MediaSet, error) {
 // client's architecture picks its default — never a kernel chosen without
 // knowing the architecture.
 func (s *Server) HandleDeviceBootScript(w http.ResponseWriter, r *http.Request) {
-	mac := extractMACFromPath(r.URL.Path)
+	mac := extractMACFromPath(r.URL.Path, deviceScriptRoute, deviceScriptSuffix)
 	if mac == "" {
 		http.Error(w, "missing or malformed MAC address in path", http.StatusBadRequest)
 		return
@@ -442,13 +475,116 @@ func (s *Server) HandleDeviceBootScript(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
+// HandleInstalledUKI serves /boot/uki/<mac>.efi: the UKI a diskless-nbd
+// install left in the node's export, at EFI/BOOT/<boot file> in its metadata
+// area. That one file is all it serves; the sealed key material beside it in
+// tpm2/ never leaves the export. A MAC that names no installed diskless-nbd
+// node is 404, and a volume that is partitioned but unreadable is 500.
+func (s *Server) HandleInstalledUKI(w http.ResponseWriter, r *http.Request) {
+	mac := extractMACFromPath(r.URL.Path, installedUKIRoute, installedUKISuffix)
+	if mac == "" {
+		http.Error(w, "missing or malformed MAC address in path", http.StatusBadRequest)
+		return
+	}
+	entry, set, err := s.disklessNBDNode(mac)
+	if err != nil {
+		s.serveInstalledUKIError(w, mac, err)
+		return
+	}
+	file, err := s.openInstalledUKI(entry, set)
+	if err != nil {
+		s.serveInstalledUKIError(w, mac, err)
+		return
+	}
+	defer s.closeInstalledUKI(mac, file)
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Length", strconv.FormatInt(file.Size, 10))
+	s.logger.Info("serving installed UKI", slog.String("mac", mac), slog.String("hostname", entry.Hostname))
+	if _, err := io.Copy(w, file); err != nil {
+		s.logger.Warn("writing installed UKI", slog.String("mac", mac), slog.String("error", err.Error()))
+	}
+}
+
+// serveInstalledUKIError answers a UKI request that found no file to serve.
+func (s *Server) serveInstalledUKIError(w http.ResponseWriter, mac string, err error) {
+	var notInManifest ErrMACNotInManifest
+	var notNBD ErrNotDisklessNBD
+	var notInstalled nbd.ErrNotInstalled
+	if errors.As(err, &notInManifest) || errors.As(err, &notNBD) || errors.As(err, &notInstalled) {
+		http.Error(w, "no installed UKI for this device", http.StatusNotFound)
+		return
+	}
+	s.logger.Error("installed UKI", slog.String("mac", mac), slog.String("error", err.Error()))
+	http.Error(w, "installed UKI lookup failed", http.StatusInternalServerError)
+}
+
+func (s *Server) closeInstalledUKI(mac string, file *nbd.MetadataFile) {
+	if err := file.Close(); err != nil {
+		s.logger.Warn("closing installed UKI", slog.String("mac", mac), slog.String("error", err.Error()))
+	}
+}
+
+// disklessNBDNode is the manifest entry and media set of the diskless-nbd
+// node mac names.
+func (s *Server) disklessNBDNode(mac string) (*ManifestEntry, MediaSet, error) {
+	entry, found := s.manifest.LookupMAC(mac)
+	if !found {
+		return nil, MediaSet{}, ErrMACNotInManifest{MAC: mac}
+	}
+	if entry.BootModel != nbd.BootModel {
+		return nil, MediaSet{}, ErrNotDisklessNBD{MAC: mac, BootModel: entry.BootModel}
+	}
+	set, err := s.setFor(entry)
+	if err != nil {
+		return nil, MediaSet{}, err
+	}
+	return entry, set, nil
+}
+
+// openInstalledUKI opens the UKI in entry's export: the removable-media boot
+// file for the set's architecture, which the installer writes into the
+// metadata area (docs/installer/engineering.md, "The NBD metadata area").
+// An export with no install is nbd.ErrNotInstalled.
+func (s *Server) openInstalledUKI(entry *ManifestEntry, set MediaSet) (*nbd.MetadataFile, error) {
+	arch, err := uki.ParseArchitecture(set.Architecture)
+	if err != nil {
+		return nil, err
+	}
+	bootFile, err := uki.BootFileName(arch)
+	if err != nil {
+		return nil, err
+	}
+	return nbd.OpenMetadataFile(s.config.NBD.VolumeDir, entry.Hostname, installedUKIDir+bootFile)
+}
+
+// nbdInstalled reports whether entry's export holds an install whose UKI the
+// node can boot. An export never installed is false; one partitioned but
+// unreadable is an error, never a reinstall over it.
+func (s *Server) nbdInstalled(entry *ManifestEntry, set MediaSet) (bool, error) {
+	file, err := s.openInstalledUKI(entry, set)
+	var notInstalled nbd.ErrNotInstalled
+	if errors.As(err, &notInstalled) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if err := file.Close(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // extractMACFromPath extracts the MAC address from a URL path like
-// /boot/device/aa:bb:cc:dd:ee:ff.ipxe or /boot/device/aa-bb-cc-dd-ee-ff.ipxe
-// and returns it in canonical lower-case colon form. Anything that is not a
+// /boot/device/aa:bb:cc:dd:ee:ff.ipxe or /boot/device/aa-bb-cc-dd-ee-ff.ipxe,
+// given its route and suffix, and returns it in canonical lower-case colon
+// form. Anything that is not a
 // 48-bit MAC returns "", so no request-supplied text reaches a lookup, a log
 // line or the served script.
-func extractMACFromPath(path string) string {
-	path = strings.TrimSuffix(strings.TrimPrefix(path, "/boot/device/"), ".ipxe")
+func extractMACFromPath(path, route, suffix string) string {
+	path = strings.TrimSuffix(strings.TrimPrefix(path, route), suffix)
 	hw, err := net.ParseMAC(path)
 	if err != nil || len(hw) != 6 {
 		return ""

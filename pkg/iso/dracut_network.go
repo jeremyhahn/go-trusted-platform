@@ -165,14 +165,15 @@ platformd_network_up() {
 // network modules, so nothing else carries them. busybox udhcpc only obtains
 // a lease: the default.script it runs (busybox's, from the root the initramfs
 // is built in) puts the address, route and resolver on the interface with ip,
-// cut, chmod and mv. A diskless node fetches its root over that network, so a
-// missing piece fails its initramfs build instead of producing a node that
-// cannot boot; a disk install only warns, since its initramfs needs the
-// network for a diagnostic alone.
-const platformdInstallNetworkShell = disklessroot.BootModelShell + `
+// cut, chmod and mv. A diskless node fetches its root over that network, and a
+// diskless-nbd node reaches its NBD export over it, so a missing piece fails
+// either's initramfs build instead of producing a node that cannot boot; a
+// disk install only warns, since its initramfs needs the network for a
+// diagnostic alone.
+const platformdInstallNetworkShell = disklessroot.BootModelShell + nbdNodeShell + `
 # Install the DHCP client, the script that applies its lease and the tools
 # both run from the root at $1. Returns 1 when one is missing and the command
-# line in $2 selects the diskless root.
+# line in $2 selects the diskless root or the diskless-nbd export.
 # Usage: platformd_install_network <build root, "" for /> <cmdline file>
 platformd_install_network() {
     _net_missing=""
@@ -193,8 +194,8 @@ platformd_install_network() {
             _net_missing="$_net_missing udhcpc.conf"
     fi
     [ -z "$_net_missing" ] && return 0
-    if [ "$(platformd_boot_model "$2")" = "diskless" ]; then
-        derror "PLATFORMD: a diskless node fetches its root over the network, and the initramfs lacks:$_net_missing"
+    if [ "$(platformd_boot_model "$2")" = "diskless" ] || platformd_nbd_node "$2"; then
+        derror "PLATFORMD: a diskless node reaches its root over the network, and the initramfs lacks:$_net_missing"
         return 1
     fi
     dwarn "PLATFORMD: the initramfs lacks:$_net_missing; the first-boot network diagnostic may not come up"

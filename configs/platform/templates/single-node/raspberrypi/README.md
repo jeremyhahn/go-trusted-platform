@@ -6,6 +6,9 @@ rather than an installer ISO: `platformctl diskimage create --target rpi
 (`make image-rpi` builds the `rpi4` one). The feature is documented in
 [docs/factory-image/](../../../../../docs/factory-image/); the hardware
 runbook is its [user.md](../../../../../docs/factory-image/user.md).
+A Pi as a compute node of the dedicated profile is built with `--role
+compute` from [`dedicated/raspberrypi/`](../../dedicated/raspberrypi/README.md);
+the hardware prerequisites below apply to it too.
 
 | Model directory | Board | Device tree | Status |
 |---|---|---|---|

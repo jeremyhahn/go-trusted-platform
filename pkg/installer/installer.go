@@ -33,6 +33,7 @@ import (
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/nbd"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/disklessroot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/fips"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -94,6 +95,14 @@ type installer struct {
 	// cmdlineFile overrides where the live kernel command line is read for
 	// tests; empty means /proc/cmdline.
 	cmdlineFile string
+
+	// sysfsRoot overrides where a diskless-nbd target's attachment is read
+	// for tests; empty means /sys.
+	sysfsRoot string
+
+	// bootModel is the boot model Install's step 0 read from the live
+	// command line: "" (disk), diskless or diskless-nbd.
+	bootModel string
 }
 
 // InstallerOption customises a newly constructed installer. The primary use is
@@ -241,10 +250,17 @@ func (i *installer) Install(ctx context.Context) (err error) {
 
 	// Step 0: Refuse a boot model this installer cannot install before
 	// anything destructive runs. A diskless-nbd node's root is its NBD
-	// export, which the installer has no target for yet: without this check
-	// it would clear the TPM and install to whatever local disk the node has.
-	if err := checkBootModel(i.liveCmdline()); err != nil {
+	// export: the install goes to /dev/nbd0, never to a local disk, and is
+	// refused here when the export is not attached.
+	bootModel, err := checkBootModel(i.liveCmdline())
+	if err != nil {
 		return err
+	}
+	i.bootModel = bootModel
+	if bootModel == nbd.BootModel {
+		if err := i.useNBDTarget(); err != nil {
+			return err
+		}
 	}
 
 	// Step 1: Clear TPM state before provisioning.
@@ -260,7 +276,8 @@ func (i *installer) Install(ctx context.Context) (err error) {
 	// attempts modprobe(tpm_tis/tpm_crb) so the live ISO doesn't need the
 	// modules preloaded.
 	if i.skip(stepClearTPM) {
-		i.logger.Info("[INSTALLER] Image target: leaving the build host's TPM alone; the node clears and provisions its own on first boot")
+		i.logger.Info("[INSTALLER] Leaving the TPM alone: an image build's TPM is the build host's, and a diskless-nbd node's holds the IDevID its export attaches with",
+			"target", i.config.Target, "boot_model", i.bootModel)
 	} else if err := i.clearTPM(); err != nil {
 		i.logger.Warn("[INSTALLER] TPM clear skipped or failed (continuing)", "error", err)
 	} else {
@@ -1376,7 +1393,11 @@ func (i *installer) buildUKI(ctx context.Context, diskInfo *DiskInfo) error {
 		"--kver", kernelVersion,
 		"--add", "platformd lvm dm",
 		"--install", "modprobe insmod",
-		"--add-drivers", i.bootTarget().dracutDrivers,
+		"--add-drivers", i.dracutDrivers(),
+		// dracut's own network and nbd modules stay out for every boot
+		// model: the platformd module brings up the network itself
+		// (platformd_install_network), and a diskless-nbd node's
+		// platform-initrd attaches its export without nbd-client.
 		"--omit", "crypt network network-legacy nbd nfs",
 		// CRITICAL: dracut by default prepends an early-microcode cpio
 		// archive (uncompressed AuthenticAMD.bin / GenuineIntel.bin) to

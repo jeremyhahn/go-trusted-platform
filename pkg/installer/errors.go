@@ -29,6 +29,7 @@ const (
 	ErrorTypeCompletion    ErrorType = "completion"
 	ErrorTypeDiskRelease   ErrorType = "disk_release"
 	ErrorTypeBootModel     ErrorType = "boot_model"
+	ErrorTypeNBDTarget     ErrorType = "nbd_target"
 )
 
 // InstallerError wraps errors with additional context
@@ -227,4 +228,22 @@ func ErrDiskRelease(message string, cause error) error {
 // touches a disk.
 func ErrBootModel(message string, cause error) error {
 	return &InstallerError{Type: ErrorTypeBootModel, Message: message, Cause: cause}
+}
+
+// ErrNBDTarget reports a diskless-nbd install whose target, /dev/nbd0, is
+// not an attached NBD export. Install returns it before it clears the TPM or
+// touches a disk.
+func ErrNBDTarget(message string, cause error) error {
+	return &InstallerError{Type: ErrorTypeNBDTarget, Message: message, Cause: cause}
+}
+
+// NBDTargetError is the cause of an ErrNBDTarget: the device that was
+// checked and why it cannot be installed to.
+type NBDTargetError struct {
+	Device string
+	Reason string
+}
+
+func (e *NBDTargetError) Error() string {
+	return e.Device + ": " + e.Reason
 }

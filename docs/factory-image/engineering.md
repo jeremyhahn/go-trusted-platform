@@ -34,6 +34,7 @@
 | `pkg/installer/release.go` | `releaseOnFailure`, `afterFailedInstall`, `releaseDisk`, `diskRelease`, `luksMappedName`; `ErrDiskRelease` (installer engineering.md invariant 16) |
 | `pkg/authenticode/pe.go` | `embedSignature`: `WIN_CERTIFICATE.dwLength` is header + DER and the 8-byte padding stays outside it (what `sbsign` writes; mbedTLS rejects the alternative, see §10) |
 | `configs/platform/templates/single-node/raspberrypi/rpi4/default.yaml` | the Raspberry Pi 4 template `create --target rpi` picks up (`raspberrypi/README.md` lists what differs from the x86 template) |
+| `configs/platform/templates/dedicated/raspberrypi/rpi4/compute.yaml` | the Raspberry Pi 4 compute node of the dedicated profile, built with `create --target rpi --role compute` (`dedicated/raspberrypi/README.md` lists what differs from the x10 compute template) |
 | `test/integration/diskimage/` | `suite_test.go` (inputs from `DISKIMAGE_IMAGE`, `DISKIMAGE_RPI_IMAGE`, `DISKIMAGE_UBOOT`, `DISKIMAGE_WORK_DIR`; `MissingInputError`), `image_test.go`, `uboot_test.go`, `firstboot_test.go`; `userspace/` (the arm64 container suite) |
 | `pkg/installer/boot_firmware.go` | `InstallTarget`, `BootFirmwareType`, `BootConfig`, `bootFirmwares`, `imageTargetSkips` (contract in [installer engineering.md](../installer/engineering.md) §2, invariant 3) |
 | `pkg/iso/types.go` | `InstallerOverrides` |
@@ -232,7 +233,7 @@ All errors are typed; none is `fmt.Errorf`. Every wrapping type implements
 | `ArtifactMissingError{Path, Hint}`; `ChecksumMismatchError{Path, Reason}`; `ManifestError{Path, Err}` | `uboot` | `u-boot.bin`, `SHA256SUMS` or the overlay absent; a digest mismatch, a file with no entry or a malformed sums line; `manifest.json` unreadable, incomplete or carrying the wrong cache key |
 | `InputError{Path, Err}`; `BuildError{Step, Err}` | `uboot` | a fragment, overlay source or certificate unreadable; the builder image build or run failed |
 | `CommandError{Name, Args, Output, Err}` | `runner` | any external command exited non-zero; carries the combined output |
-| `ErrBuildFailed{Reason}`, `ErrConfigRequired{}`, `ErrConfigLoadFailed{Path, Err}`, `ErrBinariesNotFound{Dir}` | `cli/commands/diskimage` | the CLI wrappers; `ErrBinariesNotFound` names `make rpi-binaries` |
+| `ErrBuildFailed{Reason}`, `ErrConfigRequired{}`, `ErrConfigLoadFailed{Path, Err}`, `ErrBinariesNotFound{Dir}`, `ErrRoleTemplate{Target, Model, Role, Reason}` | `cli/commands/diskimage` | the CLI wrappers; `ErrBinariesNotFound` names `make rpi-binaries`; `ErrRoleTemplate` is a `--role` with no dedicated template to build |
 | `ErrUnknownInstallTarget`, `ErrUnknownBootFirmware`, `ErrBootFirmwareStage` | `installer` | an unknown `install-target` / `boot.firmware` spelling; a failed firmware copy |
 
 **Fail-closed paths**: preflight; the size floor; U-Boot checksum
@@ -250,9 +251,11 @@ default > `iso.DefaultISOBuildConfig()`.
 
 The platform config baked into the image is `--platform-config`
 (auto-detected: `configs/platform/templates/single-node/raspberrypi/<model>/default.yaml`
-when it exists — it does not ship yet — else
-`configs/platform/templates/single-node/default.yaml`), deep-merged with
-`--overrides`. The target's `InstallerOverrides` are then applied on top:
+when it exists — `rpi4` ships one — else
+`configs/platform/templates/single-node/default.yaml`), or, with `--role
+<role>`, `configs/platform/templates/dedicated/raspberrypi/<model>/<role>.yaml`
+(`rpi4/compute.yaml` ships; a missing file is `ErrRoleTemplate`, never a
+fallback to single-node). It is deep-merged with `--overrides`. The target's `InstallerOverrides` are then applied on top:
 
 | Target | `disk.device` | `disk.partition-table` | `os.kernel-package` | `hardware-manufacturer` / `hardware-model` | `install-target` | `boot.firmware` |
 |---|---|---|---|---|---|---|

@@ -21,6 +21,10 @@ const (
 	// diskless node: the verified image and no local root.
 	disklessCmdline = "platform_boot_model=diskless platform_rootfs_url=http://192.0.2.10/set/rootfs.squashfs " +
 		"platform_verity_url=http://192.0.2.10/set/rootfs.verity platform_roothash=1111 ro console=ttyS0"
+	// nbdCmdline is the command line the installer signs for a diskless-nbd
+	// node: its NBD export and the LUKS root on it.
+	nbdCmdline = "platform_boot_model=diskless-nbd platform_nbd_server=192.0.2.10:10809 " +
+		"root=/dev/mapper/cryptroot rd.luks.uuid=5b1c7a52 ro console=ttyS0"
 )
 
 // runBootModelShell sources the shipped helpers under /bin/sh, with dracut's

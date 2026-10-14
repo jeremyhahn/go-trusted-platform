@@ -107,13 +107,19 @@ func (g *ScriptGenerator) GenerateDefaultMenu(entries []BootEntry) string
 ```
 
 `DeviceBootInfo` fields: `MAC`, `Role`, `Hostname`, `KernelURL`, `InitrdURL`,
-`ConfigServerURL`, `BootstrapStrategy`, `ExtraKernelArgs`, `Architecture`.
+`ConfigServerURL`, `BootstrapStrategy`, `ExtraKernelArgs`, `Architecture`,
+`BootImageURL`.
 `GenerateScript` emits `#!ipxe`, the architecture guard when `Architecture` is
 set, then the same bounded-retry boot block `/boot.ipxe` uses (`bootBlock`,
 20 attempts): a `kernel` line carrying `platform_config=`, `platform_role=`,
 `platform_hostname=` and `bootstrap_strategy=` for whichever fields are
 non-empty plus every `ExtraKernelArgs` entry verbatim, then `initrd`, then
-`boot`.
+`boot`. When `BootImageURL` is set the block loads that signed UKI instead:
+`kernel <BootImageURL>` with no arguments and no `initrd` line, then `boot`.
+The UKI runs the command line signed into it; under Secure Boot systemd-stub
+ignores load options in any case. The bootstrap container sets it for an
+installed `diskless-nbd` node
+([bootstrap engineering](../bootstrap/engineering.md#the-diskless-nbd-runtime-path)).
 
 A `DeviceLookup` returns `ErrDeviceNotFound` for a MAC it has no assignment
 for; `/boot/device/<mac>.ipxe` answers that with 404 and any other lookup

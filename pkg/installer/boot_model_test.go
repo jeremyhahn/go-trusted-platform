@@ -24,6 +24,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/nbd"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/disklessroot"
 )
 
 // writeLiveCmdline writes cmdline to a file the installer reads in place of
@@ -71,11 +74,11 @@ func newInstallRecorder(t *testing.T, cmdline string) *installRecorder {
 	}
 }
 
-// TestInstall_RefusesDisklessNBDBeforeAnythingDestructive is the fail-closed
-// path a bootstrap container takes when it hands a Pi with an SD card the
-// diskless-nbd model: Install refuses it before it clears the TPM, partitions
-// the disk or installs the OS.
-func TestInstall_RefusesDisklessNBDBeforeAnythingDestructive(t *testing.T) {
+// TestInstall_RefusesDisklessNBDWithoutServerBeforeAnythingDestructive is the
+// fail-closed path for a diskless-nbd line with no NBD server to sign into
+// the UKI: Install refuses it before it clears the TPM, partitions the disk or
+// installs the OS.
+func TestInstall_RefusesDisklessNBDWithoutServerBeforeAnythingDestructive(t *testing.T) {
 	r := newInstallRecorder(t, "console=ttyS0 alpine_start=autoinstall platform_boot_model=diskless-nbd")
 	// Stops a regression at the first disk step so it reports below.
 	r.disk.On("CreatePartitionTable", mock.Anything, mock.Anything).Return(errors.New("disk touched")).Maybe()
@@ -106,29 +109,37 @@ func TestInstall_DiskNodeReachesTheTPMAndDisk(t *testing.T) {
 }
 
 func TestCheckBootModel_Installable(t *testing.T) {
-	for name, cmdline := range map[string]string{
-		"no command line": "",
-		"a disk node":     "console=ttyS0 alpine_start=autoinstall",
-		"a diskless node": "alpine_start=autoinstall platform_boot_model=diskless",
+	for name, tc := range map[string]struct {
+		cmdline string
+		model   string
+	}{
+		"no command line":     {"", ""},
+		"a disk node":         {"console=ttyS0 alpine_start=autoinstall", ""},
+		"a diskless node":     {"alpine_start=autoinstall platform_boot_model=diskless", disklessroot.BootModel},
+		"a diskless-nbd node": {"alpine_start=autoinstall platform_boot_model=diskless-nbd platform_nbd_server=10.0.0.1:10809", nbd.BootModel},
 	} {
 		t.Run(name, func(t *testing.T) {
-			assert.NoError(t, checkBootModel(cmdline))
+			model, err := checkBootModel(tc.cmdline)
+			require.NoError(t, err)
+			assert.Equal(t, tc.model, model)
 		})
 	}
 }
 
 func TestCheckBootModel_Refused(t *testing.T) {
 	for name, cmdline := range map[string]string{
-		"a diskless-nbd node":  "alpine_start=autoinstall platform_boot_model=diskless-nbd",
-		"an unknown model":     "platform_boot_model=nbd",
-		"the boot model twice": "platform_boot_model=diskless platform_boot_model=diskless",
+		"a diskless-nbd node without its server": "alpine_start=autoinstall platform_boot_model=diskless-nbd",
+		"a malformed NBD server":                 "platform_boot_model=diskless-nbd platform_nbd_server=10.0.0.1",
+		"an unknown model":                       "platform_boot_model=nbd",
+		"the boot model twice":                   "platform_boot_model=diskless platform_boot_model=diskless",
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := checkBootModel(cmdline)
+			model, err := checkBootModel(cmdline)
 			var installErr *InstallerError
 			require.ErrorAs(t, err, &installErr)
 			assert.Equal(t, ErrorTypeBootModel, installErr.Type)
 			assert.Error(t, installErr.Cause, "the parse failure is kept as the cause")
+			assert.Empty(t, model)
 		})
 	}
 }

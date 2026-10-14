@@ -120,7 +120,11 @@ what `/boot.ipxe` chains; and it runs its own `http.Server` on
 known MAC gets the same script from both (one lookup, one generator); an
 unknown MAC gets a 404 here and, on the second listener, a script that chains
 `/boot.ipxe`. That listener is where a port conflict on the deployer kills
-pxeboot, which is why the port is configurable rather than derived-only.
+pxeboot, which is why the port is configurable rather than derived-only. It
+also serves `GET /boot/uki/{mac}.efi`, an installed `diskless-nbd` node's UKI
+read from its NBD export, which that node's device script boots
+([bootstrap engineering](../bootstrap/engineering.md#the-diskless-nbd-runtime-path));
+this server has no such route.
 
 | Method | Path | Purpose | Registered when |
 |---|---|---|---|

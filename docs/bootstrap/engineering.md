@@ -275,8 +275,9 @@ node contract in [installer engineering](../installer/engineering.md), and its
 refusals are `ErrServerRefused`, `ErrTLSHandshake` and `ErrProtocol`.
 `ServerFromCmdline` reads `platform_nbd_server`
 ([kernel-cmdline §4](../reference/kernel-cmdline.md#nbd-root-parameter)) and
-refuses with `ErrCmdline`; `NewClientConfig` builds `Attach`'s configuration
-from it. Nothing calls either yet.
+refuses with `ErrCmdline`; the installer's `nbd` target calls it.
+`NewClientConfig` builds `Attach`'s configuration from it; nothing calls
+`NewClientConfig` or `Attach` yet.
 
 `Config` holds the following fields:
 
@@ -390,9 +391,43 @@ IDevID. The set needs no diskless root. The deployer does not set the `BOOTSTRAP
 variables yet: the volume size, the server certificate and the CA bundle have
 no `bootstrap.yaml` source. Until they do, a deploy whose manifest names a
 `diskless-nbd` node fails closed when the container starts, with
-`ErrInvalidServerConfig`. The installer has no `nbd` target yet either, so
-`Install` refuses `platform_boot_model=diskless-nbd` (`ErrorTypeBootModel`) as
-its first step, before it clears the TPM or touches a local disk.
+`ErrInvalidServerConfig`. The installer's `nbd` target installs a
+`diskless-nbd` node onto `/dev/nbd0` once the export is attached, and refuses
+(`ErrorTypeNBDTarget`) before it formats anything when it is not; it never
+clears this model's TPM, which holds the IDevID the export attaches with ([installer engineering](../installer/engineering.md#the-installer-target-nbd)).
+
+### The diskless-nbd runtime path
+
+A `diskless-nbd` node boots the installer until its export holds an install,
+then boots the UKI the install wrote. Its device script decides which on every
+request (`deviceBootInfo`, `pkg/bootstrap/container/server.go`) by reading the
+export's [metadata area](../installer/engineering.md#the-nbd-metadata-area)
+with `nbd.OpenMetadataFile(NBDConfig.VolumeDir, <hostname>, "EFI/BOOT/<file>")`,
+where `<file>` is `uki.BootFileName` for the media set's architecture
+(`BOOTX64.EFI`, `BOOTAA64.EFI`):
+
+| Export | Device script |
+|---|---|
+| none, or blank (`nbd.ErrNotInstalled`) | the installer, as above |
+| holds the UKI | `kernel http://<device-script listener>/boot/uki/<mac>.efi`, then `boot`: no `initrd` line, no arguments |
+| partitioned but unreadable (`nbd.ErrMetadataArea`) | HTTP 500; the node is never handed the installer, which would format the export |
+
+`GET /boot/uki/{mac}.efi` is served on the device-script listener beside
+`/boot/device/{mac}.ipxe` (`deviceScriptMux`). It streams that one file from
+the export, as `application/octet-stream` with its `Content-Length`. It answers
+400 for a malformed MAC, 404 for a MAC not in the manifest
+(`ErrMACNotInManifest`), one that is not `diskless-nbd` (`ErrNotDisklessNBD`)
+or one whose export holds no install, and 500 for an unreadable area. Only a
+manifest MAC's own export is read, and only that path in it.
+
+The UKI's command line is the signed one the installer embedded
+(`platform_nbd_server` and the root parameters,
+[kernel-cmdline](../reference/kernel-cmdline.md)); the script passes none,
+and under Secure Boot systemd-stub ignores load options anyway. The boot after
+this needs the initrd half, which is **Planned** (`pkg/initrd`): attach
+`/dev/nbd0`, unlock the LUKS2 root on `/dev/nbd0p2` from the seal in
+`/dev/nbd0p1`, and activate the volume group inside it, since the UKI carries
+no `rd.luks.*` or `rd.lvm.*`.
 
 ## 3. Invariants
 
@@ -871,7 +906,7 @@ rather than silently ignored.
 | `deployer.bootstrap_bind_host` | string | every interface | Sets `BOOTSTRAP_BIND_HOST` (pxeboot `--bind-host`): the address the container's HTTP and TFTP servers bind. Must be an IP address (`ErrInvalidConfig` at load). DHCP never binds it — see [`docs/ipxe/engineering.md`](../ipxe/engineering.md) |
 | `deployer.bootstrap_server_ip` | string | container default | Sets `BOOTSTRAP_SERVER_IP`: the address advertised as DHCP server and next server, and the one the device-script listener binds; must be an address the deployer host already holds on a first bootstrap |
 | `deployer.bootstrap_http_port` | int | `8080` | Sets `BOOTSTRAP_HTTP_PORT`. The container's HTTP service — per-MAC config endpoint, install-log sink, `/health` — and the port the orchestrator builds its own URLs against (`installLogBaseURL`) |
-| `deployer.bootstrap_device_script_port` | int | `bootstrap_http_port` + 1 | Sets `BOOTSTRAP_DEVICE_SCRIPT_PORT`. The container's second listener, `/boot/device/{mac}.ipxe`. Set it when something else on the deployer already owns the derived port |
+| `deployer.bootstrap_device_script_port` | int | `bootstrap_http_port` + 1 | Sets `BOOTSTRAP_DEVICE_SCRIPT_PORT`. The container's second listener, `/boot/device/{mac}.ipxe` and `/boot/uki/{mac}.efi`. Set it when something else on the deployer already owns the derived port |
 | `deployer.bootstrap_dhcp_start` / `_end` | string | container defaults | `BOOTSTRAP_DHCP_START` / `BOOTSTRAP_DHCP_END` |
 | `deployer.bootstrap_gateway`, `deployer.bootstrap_dns` | string | container defaults | `BOOTSTRAP_GATEWAY`, `BOOTSTRAP_DNS` |
 | `deployer.bootstrap_apk_mirror` | string | public mirror | `BOOTSTRAP_APK_MIRROR`; required on networks with no outbound internet |

@@ -61,6 +61,7 @@ for the current production reference.
 | Supermicro | X10 (X10SDV-TP8F, etc.) | dedicated | control-plane, gateway, compute | Production |
 | Dell | PowerEdge R640 | dedicated | control-plane, gateway, compute | Phase 2 (UNTESTED) |
 | Raspberry Pi | 4 Model B (`single-node/raspberrypi/rpi4`) | single-node | control-plane, gateway, compute | Factory SD-card image (`make image-rpi`, [factory-image/](factory-image/)); boots on the QEMU virt stand-in, hardware validation per its `user.md` |
+| Raspberry Pi | 4 Model B (`dedicated/raspberrypi/rpi4`) | dedicated | compute | Factory SD-card image (`platformctl diskimage create --target rpi --model rpi4 --role compute`); joins the x86 control plane and gateway. A one-port Pi cannot be the gateway and the control plane stays x86 — [its README](../configs/platform/templates/dedicated/raspberrypi/README.md) |
 
 **Each profile directory carries a `README.md` recording what the hardware needs
 before its templates will install** — BIOS settings, BMC behaviour, firmware quirks —

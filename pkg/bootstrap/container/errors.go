@@ -166,6 +166,21 @@ func (e ErrDisklessUnavailable) Error() string {
 	return "bootstrap container: " + e.MAC + " boots diskless and media set " + e.MediaSet + " has no diskless root (rebuild the netboot media with --diskless)"
 }
 
+// ErrNotDisklessNBD is a request for the installed UKI of a node whose boot
+// model is not diskless-nbd: it has no export, so no UKI there to serve.
+type ErrNotDisklessNBD struct {
+	MAC       string
+	BootModel string
+}
+
+func (e ErrNotDisklessNBD) Error() string {
+	model := e.BootModel
+	if model == "" {
+		model = "disk"
+	}
+	return "bootstrap container: " + e.MAC + " boots " + model + ", not diskless-nbd, and has no installed UKI to serve"
+}
+
 // ErrNBDCredentials is an NBD export server certificate or key that cannot
 // be loaded. Without them no diskless-nbd node can attach its root.
 type ErrNBDCredentials struct {

@@ -103,15 +103,15 @@ v0.2.0).
 
 | Piece | Where |
 |---|---|
-| `os.fips` (installer YAML) copies to `Disk.Encryption.FIPS` | `pkg/installer/types.go:407`, `:257`; `pkg/installer/installer.go:138-140` |
+| `os.fips` (installer YAML) copies to `Disk.Encryption.FIPS` | `pkg/installer/types.go:407`, `:257`; `pkg/installer/installer.go:147-149` |
 | The `fips` profile | `pkg/installer/profiles.go:43`, `:72` |
 | Alpine FIPS installer, registered as `alpine` | `pkg/installer/alpine/fips.go:28-31` |
-| Phase 1, before the UKI: install `vmlinuz-fips` and its modules from `/media/cdrom/fips-artifacts/` | `pkg/installer/installer.go:286-291`; `pkg/installer/alpine/fips.go:192-266` |
-| The UKI uses `/boot/vmlinuz-fips`; `fips=1` is appended to the command line | `pkg/installer/installer.go:1128-1133`, `:1192-1194` |
-| Phase 2, after signing: the OpenSSL FIPS provider, `openssl fipsinstall`, and an `openssl.cnf` with `default_properties = fips=yes` | `pkg/installer/installer.go:371-375`; `pkg/installer/alpine/fips.go:269-467` |
+| Phase 1, before the UKI: install `vmlinuz-fips` and its modules from `/media/cdrom/fips-artifacts/` | `pkg/installer/installer.go:303-308`; `pkg/installer/alpine/fips.go:192-266` |
+| The UKI uses `/boot/vmlinuz-fips`; `fips=1` is appended to the command line | `pkg/installer/installer.go:1145-1150`, `:1209-1211` |
+| Phase 2, after signing: the OpenSSL FIPS provider, `openssl fipsinstall`, and an `openssl.cnf` with `default_properties = fips=yes` | `pkg/installer/installer.go:388-392`; `pkg/installer/alpine/fips.go:269-467` |
 | `Verify`: `fips.so`, `fipsmodule.cnf` and `fips_sect` are present | `pkg/installer/alpine/fips.go:98-126` |
 | ISO: x86_64 only (`FIPSUnsupportedArchitectureError`); builder containers `fips-kernel-builder` and `openssl-fips-provider-builder`; name suffix `-fips` | `pkg/iso/types.go:322-324`, `:427-435`, `:454-456` |
-| ISO: artifacts copied, `--fips` added to the install command, `fips=1` set; no stock kernel or `gatewayd` packages are prefetched | `pkg/iso/customize.go:225-230`, `:4259-4260`, `:5741-5743`; `pkg/iso/prefetch.go:299`, `:375` |
+| ISO: artifacts copied, `--fips` added to the install command, `fips=1` set; no stock kernel or `gatewayd` packages are prefetched | `pkg/iso/customize.go:227-232`, `:4297-4298`, `:5779-5781`; `pkg/iso/prefetch.go:299`, `:375` |
 
 The kernel and provider builders are `build/docker/fips-kernel-builder/` and
 `build/docker/openssl-fips-provider/`.

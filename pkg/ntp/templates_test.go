@@ -270,46 +270,78 @@ func TestShippedTemplatesNameTheirNTSUpstream(t *testing.T) {
 // wrong produces a fleet that never synchronises, which is the state #509
 // measured.
 func TestShippedControlPlanesServeEveryNTSNameTheirNodesDial(t *testing.T) {
-	// Group the templates by profile directory: a profile's node templates
-	// are served by that profile's control-plane template.
-	byDir := map[string][]string{}
+	// Group the templates by board directory: a board's node templates are
+	// served by that board's control-plane template. A board directory with
+	// no time server of its own (dedicated/raspberrypi/rpi4, whose nodes
+	// join an x86 control plane) is served by any control plane of its
+	// profile, so every one of them must list the names its nodes dial.
+	hasServer := map[string]bool{}
+	served := map[string]map[string]struct{}{}
+	dialed := map[string][]struct{ path, name string }{}
 	for _, path := range templatePaths(t) {
 		dir := filepath.Dir(path)
-		byDir[dir] = append(byDir[dir], path)
+		config, present := decodeTemplateNTP(t, path)
+		if !present {
+			continue
+		}
+		if config.Serve != nil {
+			hasServer[dir] = true
+		}
+		for _, name := range config.NTSServerNames() {
+			if served[dir] == nil {
+				served[dir] = map[string]struct{}{}
+			}
+			served[dir][name] = struct{}{}
+		}
+		if config.Consume == nil {
+			continue
+		}
+		for _, source := range config.Consume.Upstream {
+			if source.NTS {
+				dialed[dir] = append(dialed[dir], struct{ path, name string }{path, strings.TrimSpace(source.Address)})
+			}
+		}
 	}
 
-	for dir, paths := range byDir {
+	for dir, nodes := range dialed {
 		t.Run(filepath.Base(filepath.Dir(dir))+"/"+filepath.Base(dir), func(t *testing.T) {
-			served := map[string]struct{}{}
-			var dialed []struct{ path, name string }
-
-			for _, path := range paths {
-				config, present := decodeTemplateNTP(t, path)
-				if !present {
-					continue
-				}
-				for _, name := range config.NTSServerNames() {
-					served[name] = struct{}{}
-				}
-				if config.Consume == nil {
-					continue
-				}
-				for _, source := range config.Consume.Upstream {
-					if !source.NTS {
-						continue
-					}
-					dialed = append(dialed, struct{ path, name string }{path, strings.TrimSpace(source.Address)})
-				}
+			servers := []string{dir}
+			if !hasServer[dir] {
+				servers = profileServers(t, dir, hasServer)
 			}
-
-			for _, d := range dialed {
-				if _, ok := served[d.name]; !ok {
-					t.Fatalf("%s dials %s over NTS, but no template in %s lists that name in "+
-						"ntp.serve.nts.server-names; the certificate the control plane serves "+
-						"would not carry it and every handshake would fail (#509)",
-						d.path, d.name, dir)
+			for _, d := range nodes {
+				for _, server := range servers {
+					if _, ok := served[server][d.name]; !ok {
+						t.Fatalf("%s dials %s over NTS, but no template in %s lists that name in "+
+							"ntp.serve.nts.server-names; the certificate the control plane serves "+
+							"would not carry it and every handshake would fail (#509)",
+							d.path, d.name, server)
+					}
 				}
 			}
 		})
 	}
+}
+
+// profileServers returns the board directories of dir's deployment profile
+// (dedicated/, single-node/, ...) that carry a time server.
+func profileServers(t *testing.T, dir string, hasServer map[string]bool) []string {
+	t.Helper()
+	profile := func(d string) string {
+		rel, err := filepath.Rel(templateDir, d)
+		if err != nil {
+			t.Fatalf("%s is outside %s: %v", d, templateDir, err)
+		}
+		return strings.Split(filepath.ToSlash(rel), "/")[0]
+	}
+	var servers []string
+	for server := range hasServer {
+		if profile(server) == profile(dir) {
+			servers = append(servers, server)
+		}
+	}
+	if len(servers) == 0 {
+		t.Fatalf("%s: its nodes dial NTS, but no template in its profile serves time", dir)
+	}
+	return servers
 }

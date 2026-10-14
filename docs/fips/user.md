@@ -65,7 +65,7 @@ Use `only`, not `on`: `on` still permits non-approved algorithms.
 | DNS refuses to start with `nsec-mode: nsec3` | NSEC3 is SHA-1 only | Use `nsec-mode: nsec` (this permits zone enumeration), or run that node outside FIPS mode. See [dnssec.md](../dns/dnssec.md) |
 | An IPMI session fails: "FIPS 140-3 requires at least 14 …" | The BMC password or KG key is under 14 bytes | Set a password of 14 bytes or more, or manage the controller over Redfish |
 | An IPMI controller is refused for an unapproved algorithm | It offers only MD5 or SHA-1 for RMCP+ | Manage it over Redfish |
-| A BGP peer with `auth-type: md5` is refused | TCP-MD5 is not in FIPS builds | Use `tcp-ao`. See [BGP configuration](../sdn/bgp/configuration.md) |
+| A BGP peer with `auth-type: md5` is refused | TCP-MD5 is not in FIPS builds | Use `auth-type: none` until TCP-AO works: a `tcp-ao` peer is refused at start. See the [BGP user guide](../bgp/user.md) |
 | ISO creation fails while prefetching packages | A FIPS-built `platformctl` cannot verify the Alpine package index (its checksums are SHA-1) | Build the ISO with a default `platformctl`; `--fips` still makes a FIPS ISO |
 | Adding a disk keyslot with Argon2id, `pbkdf2-sha1` or a SHA-1 hash is refused | The kernel is in FIPS mode | Use PBKDF2 with SHA-256 or SHA-512 |
 | The Noise bootstrap listener does not start in a FIPS build | Its only suite uses Curve25519 | Bootstrap another way; the approved P-256 suite is **Planned (#518)** |

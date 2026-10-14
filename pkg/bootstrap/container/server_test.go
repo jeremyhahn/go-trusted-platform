@@ -636,10 +636,24 @@ func TestExtractMACFromPath(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := extractMACFromPath(tc.path)
+			result := extractMACFromPath(tc.path, deviceScriptRoute, deviceScriptSuffix)
 			if result != tc.expected {
 				t.Errorf("extractMACFromPath(%q) = %q, want %q", tc.path, result, tc.expected)
 			}
 		})
+	}
+}
+
+func TestExtractMACFromPath_InstalledUKIRoute(t *testing.T) {
+	for path, want := range map[string]string{
+		"/boot/uki/DC-A6-32-01-36-C2.efi":    "dc:a6:32:01:36:c2",
+		"/boot/uki/dc:a6:32:01:36:c2.efi":    "dc:a6:32:01:36:c2",
+		"/boot/uki/dc:a6:32:01:36:c2.ipxe":   "",
+		"/boot/uki/../tpm2/installer.luks":   "",
+		"/boot/device/dc:a6:32:01:36:c2.efi": "",
+	} {
+		if got := extractMACFromPath(path, installedUKIRoute, installedUKISuffix); got != want {
+			t.Errorf("extractMACFromPath(%q) = %q, want %q", path, got, want)
+		}
 	}
 }

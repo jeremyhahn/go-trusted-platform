@@ -19,6 +19,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -36,8 +37,10 @@ import (
 // keeps so a test can verify the quote it produced.
 type signingTPM struct {
 	xkmssdk.TrustedPlatformModule
-	t        testing.TB
-	akPublic []byte
+	t testing.TB
+	// lastAK holds the PKIX AK public key of the last quote. A transport
+	// handler's goroutine writes it while the test reads it.
+	lastAK atomic.Pointer[[]byte]
 }
 
 func newSigningTPM(t testing.TB) *signingTPM {
@@ -47,12 +50,21 @@ func newSigningTPM(t testing.TB) *signingTPM {
 func (s *signingTPM) Quote(_ []uint, qualifyingData []byte) (xkmssdk.Quote, error) {
 	quoted := quoteEchoing(qualifyingData)
 	signature, akPublic := testutil.SignPSSQuote(s.t, quoted)
-	s.akPublic = akPublic
+	s.lastAK.Store(&akPublic)
 	return xkmssdk.Quote{Quoted: quoted, Signature: signature}, nil
 }
 
+// akPublic returns the AK public key of the last quote, or nil before the
+// first one.
+func (s *signingTPM) akPublic() []byte {
+	if akPublic := s.lastAK.Load(); akPublic != nil {
+		return *akPublic
+	}
+	return nil
+}
+
 func (s *signingTPM) IAK() (crypto.PublicKey, error) {
-	return x509.ParsePKIXPublicKey(s.akPublic)
+	return x509.ParsePKIXPublicKey(s.akPublic())
 }
 
 func (s *signingTPM) IAKAttributes() (*xkmssdk.KeyAttributes, error) {
@@ -128,7 +140,7 @@ func TestTPMQuoteTools_AQuoteVerifies(t *testing.T) {
 			p := provider(tpm)
 			q := quoteThrough(t, p, nonce)
 			assert.Equal(t, testutil.PSSQuoteScheme, q.scheme)
-			akPublic := tpm.akPublic
+			akPublic := tpm.akPublic()
 
 			for label, ak := range map[string][]byte{"ak_public": akPublic, "platform IAK": nil} {
 				result := verifyThrough(t, p, &mcp.TPMVerifyQuoteRequest{
@@ -157,8 +169,8 @@ func TestTPMQuoteTools_RefusesAWrongSchemeOrAK(t *testing.T) {
 			q := quoteThrough(t, p, nonce)
 
 			for label, req := range map[string]*mcp.TPMVerifyQuoteRequest{
-				"PKCS#1 v1.5 scheme": {AKPublic: tpm.akPublic, SignatureAlgorithm: x509.SHA256WithRSA.String()},
-				"undeclared scheme":  {AKPublic: tpm.akPublic},
+				"PKCS#1 v1.5 scheme": {AKPublic: tpm.akPublic(), SignatureAlgorithm: x509.SHA256WithRSA.String()},
+				"undeclared scheme":  {AKPublic: tpm.akPublic()},
 				"another AK":         {AKPublic: otherAK, SignatureAlgorithm: q.scheme},
 				"malformed AK":       {AKPublic: []byte("not a PKIX key"), SignatureAlgorithm: q.scheme},
 			} {
@@ -180,7 +192,7 @@ func TestTPMQuoteTools_RefusesAnUnboundQuote(t *testing.T) {
 			ctx := channelbind.WithConnectionTLS(context.Background(), channelbind.TransportMCP, nil)
 			_, err := provider(tpm).TPMQuote(ctx, []byte("nonce"), []int{0})
 			requireBindingRefusal(t, err, channelbind.TransportMCP)
-			assert.Nil(t, tpm.akPublic, "the TPM must not quote")
+			assert.Nil(t, tpm.akPublic(), "the TPM must not quote")
 		})
 	}
 }

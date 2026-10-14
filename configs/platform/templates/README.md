@@ -43,6 +43,9 @@ configs/platform/templates/
         control-plane.yaml
         gateway.yaml
         compute.yaml
+    raspberrypi/        # Factory SD-card image (diskimage create --target rpi --role <role>)
+      rpi4/
+        compute.yaml    # compute only; gateway and control plane stay x86
   single-node/          # Colocated all-in-one: the default ISO template
     default.yaml
     raspberrypi/        # Factory SD-card image (platformctl diskimage create --target rpi)
@@ -77,6 +80,7 @@ Override files use the same YAML structure but only include fields to change.
 | Supermicro | X10 (X10SDV-TP8F, etc.) | dedicated | Production |
 | Dell | PowerEdge R640 | dedicated | Phase 2 (UNTESTED) |
 | Raspberry Pi | 4 Model B (`rpi4`; SLB9670 TPM HAT on SPI0 CE1) | single-node, factory SD-card image | Boots on the QEMU virt stand-in; hardware validation per [docs/factory-image/user.md](../../../docs/factory-image/user.md) |
+| Raspberry Pi | 4 Model B (`rpi4`) | dedicated, compute role only ([dedicated/raspberrypi/](./dedicated/raspberrypi/README.md)) | Template builds and validates; no hardware run yet |
 
 ## Architecture Notes
 

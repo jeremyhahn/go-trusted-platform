@@ -195,6 +195,10 @@ func TestPlatformdInstallNetworkShell_MissingPieces(t *testing.T) {
 		{name: "a diskless node without ip", cmdline: disklessCmdline, missing: []string{"ip"}, wantStatus: 1},
 		{name: "a diskless node without the optional ping", cmdline: disklessCmdline, missing: []string{"ping"}, wantStatus: 0},
 		{name: "a disk install only warns", root: scriptless, cmdline: diskCmdline, missing: []string{"udhcpc"}, wantStatus: 0},
+		{name: "a diskless-nbd node without udhcpc", cmdline: nbdCmdline, missing: []string{"udhcpc"}, wantStatus: 1},
+		{name: "a diskless-nbd node without the lease script", root: scriptless, cmdline: nbdCmdline, wantStatus: 1},
+		{name: "a diskless-nbd node without the optional ping", cmdline: nbdCmdline, missing: []string{"ping"}, wantStatus: 0},
+		{name: "a parameter that only contains the diskless-nbd model only warns", root: scriptless, cmdline: "x" + nbdCmdline, missing: []string{"udhcpc"}, wantStatus: 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

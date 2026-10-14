@@ -32,6 +32,7 @@
 | `hardreset.go` | `HardReset` — SysRq-b warm reset |
 | `hwoffload.go` | `CheckHWOffloadSupport` |
 | `postinstall.go` | `PostInstallExecutor` |
+| `diskless.go`, `nbd_target.go` | `checkBootModel`, the diskless root parameters; the `diskless-nbd` target (`useNBDTarget`, `checkNBDAttached`, `nbdCmdlineParams`, `espFstabSource`) |
 | `errors.go`, `uki_rebuild_errors.go` | Typed errors |
 
 `pkg/initrd/` — the boot-time unlock engine: `types.go`, `config.go`,
@@ -660,10 +661,22 @@ installs busybox `udhcpc`, the `default.script` that applies its lease
 the busybox package of the root dracut runs in), and `ip`, `cut`, `chmod` and
 `mv`, which that script runs; `ping` and `hostname` are optional. `udhcpc`
 without its script obtains a lease and never puts the address or route on the
-interface. A diskless node fetches its root over that network, so when its
-embedded command line selects the diskless root a missing piece fails the
-dracut run, and the install, rather than producing a node that cannot boot; a
-disk install only warns.
+interface. A diskless node fetches its root over that network, and a
+`diskless-nbd` node reaches its export over it, so when the embedded command
+line selects either model (`platformd_boot_model`, or `platformd_nbd_node` for
+`diskless-nbd`) a missing piece fails the dracut run, and the install, rather
+than producing a node that cannot boot; a disk install only warns.
+
+That initramfs is on the boot path of every model: `buildUKI` (`pkg/installer/installer.go`)
+runs dracut, injects `platform-initrd`, and makes the result the UKI's
+`.initrd`. Its `--omit` list stays `crypt network network-legacy nbd nfs` for
+every boot model. dracut's `nbd` module runs `nbd-client` over dracut's own
+network stack. A `diskless-nbd` node's `platform-initrd` attaches the export
+itself (planned, [below](#attaching-before-the-install)), over the network the
+platformd module brings up. What that node does need is the kernel's NBD block
+driver. `dracutDrivers` (`pkg/installer/arch.go`) adds `nbd` to the
+architecture's `--add-drivers` set for `diskless-nbd` only (`bootModelDrivers`),
+and the other models' sets are unchanged (`TestDracutDriversByBootModel`).
 
 A diskless node's root is shared by every node of the media set, so its own
 `/etc/hostname`, `/etc/network/interfaces` and `/etc/resolv.conf` would
@@ -672,16 +685,20 @@ override the per-node `network.conf`. After mounting the overlay, and before
 interface (static or DHCP) and resolver into the tmpfs upper layer, replacing
 any symlink; the shared root is never written.
 
-**`diskless-nbd` node side — partly built, attach and install Planned (#689).** The NBD export server is built
+**`diskless-nbd` node side — install and boot of the installed UKI built, attach Planned (#689).** The NBD export server is built
 (`pkg/bootstrap/nbd`, [bootstrap engineering](../bootstrap/engineering.md#nbd-export-server-pkgbootstrapnbd)).
-So are three pieces of the node half: the `platform_nbd_server` reader
+So are four pieces of the node half: the `platform_nbd_server` reader
 `nbd.ServerFromCmdline`
 ([kernel-cmdline §4](../reference/kernel-cmdline.md#nbd-root-parameter)), the
-client configuration builder `nbd.NewClientConfig`, and the negotiation
+client configuration builder `nbd.NewClientConfig`, the negotiation
 `nbd.Attach` (below), which meets the second to fourth points of this
-contract. Nothing calls any of them yet: `platform-initrd` does not attach an
-export, and the installer has no `nbd` target. The node half below is the
-contract the later slices must meet:
+contract, and the installer target `nbd` (the fifth point,
+[below](#the-installer-target-nbd)). After the install, the boot server hands
+the node the UKI from its export instead of the installer
+([bootstrap engineering](../bootstrap/engineering.md#the-diskless-nbd-runtime-path)).
+`platform-initrd` does not attach an export yet, so only the installer calls
+`nbd.ServerFromCmdline`, and nothing calls the other two. The node half below is the
+contract every slice meets:
 
 - The boot server's NBD address comes from the **signed** UKI `.cmdline`,
   under the same rule as the diskless root parameters: nothing on the live
@@ -700,7 +717,7 @@ contract the later slices must meet:
   another export. The boot fails closed into the recovery path.
 - The installer target `nbd` runs Phase A against the attached export instead
   of a local disk: it LUKS2-formats the export and installs onto it. The key
-  is sealed to the node's TPM, as on a disk install.
+  is sealed to the node's TPM, as on a disk install. Built.
 
 ```go
 func Attach(ctx context.Context, conn net.Conn, cfg nbd.ClientConfig) (*nbd.Export, error)
@@ -741,6 +758,167 @@ model is the export itself. Nothing calls `NewClientConfig` yet.
 | no anchor | `nbd.ErrInvalidConfig` (`RootCAs`) |
 | an anchor whose bundle is unreadable or holds no CA | `nbd.ErrTrustAnchor`, wrapping `trust.ErrAnchorUnavailable` or `trust.ErrAnchorEmpty` |
 | an IDevID with no certificate or no key | `nbd.ErrInvalidConfig` (`Certificate`), from `ClientConfig.Validate` |
+
+### The installer target `nbd`
+
+`checkBootModel` (`pkg/installer/diskless.go`) is `Install`'s step 0. It
+returns the model the live command line selects: `""` (disk), `diskless`, or
+`diskless-nbd`, which it accepts only with exactly one well-formed
+`platform_nbd_server` (`nbd.ServerFromCmdline`). Every other value is
+`ErrorTypeBootModel`. For `diskless-nbd`, `Install` then calls `useNBDTarget`
+(`pkg/installer/nbd_target.go`), before step 1, and it refuses with
+`ErrorTypeNBDTarget` wrapping `*NBDTargetError{Device, Reason}`:
+
+| Condition | `Reason` |
+|---|---|
+| no `disk.encryption` (the export's root is always LUKS2) | `a diskless-nbd root must be LUKS2-encrypted; …` |
+| no `/sys/block/nbd0` (module not loaded) | `no such block device (…)` |
+| no `/sys/block/nbd0/pid` (no client holds an export) | `not attached to an NBD export (no pid)` |
+| `size` missing or not a decimal sector count | `size unreadable: …` / `size is not a number: …` |
+| `size` is 0 | `attached export has size 0` |
+
+Otherwise it sets `disk.device` to `/dev/nbd0` and `disk.partition-table` to
+`gpt`, whatever the profile chose for a local disk (a Pi profile's is `mbr`, for
+its firmware): the boot server reads the export's partition table itself
+([below](#the-nbd-metadata-area)) and reads only GPT. The disk manager shares that
+config, so the unchanged `setupDisk` partitions, LUKS2-formats, LVMs and
+mounts the export exactly as it would a disk; nothing is copied per model. The
+installer reads the attachment and never makes it: the export must be attached
+before `platformctl install system` runs
+([below](#attaching-before-the-install)).
+
+Step 1, the TPM clear, does not run for this model (`nbdTargetSkips`,
+`pkg/installer/boot_firmware.go`). The node attached its export with the IDevID
+whose key the TPM holds, and a TPM2_Clear evicts it with every other owner and
+endorsement object, so the node could never attach its root again. A
+re-install therefore keeps whatever else the TPM holds.
+
+The UKI's root parameters come from `nbdCmdlineParams`:
+`platform_boot_model=diskless-nbd` and the signed `platform_nbd_server`, and
+nothing else. `ukiRootCmdlineParams` returns them as they are, so the UKI
+carries no `root=`, `rd.luks.*` or `rd.lvm.*`; the only live-line parameter
+that reaches it is the debug sink (`hostUKICmdlineParams`).
+
+### Attaching before the install
+
+How the live environment reaches the installer on a `diskless-nbd` node:
+
+| Step | Where |
+|---|---|
+| The media set's installer initramfs | `pkg/diskimage/netboot/build.go` (`installerInitramfs`) makes it from Alpine's with `Customizer.InstallerInitramfs` (`pkg/iso/customize.go`), which adds the autoinstall overlay and patches `init` |
+| `init` starts the autoinstall | `patchInitScript`: when `/proc/cmdline` carries `alpine_start=autoinstall`, an inittab (`createAutoinstallOverlay`) runs `/root/run-autoinstall.sh` as `::sysinit:`, which runs `autoinstall.sh` |
+| The live command line | the device script's kernel arguments: `alpine_start=autoinstall` from the media set (`pkg/bootstrap/container/mediaset.go`), plus `platform_boot_model=diskless-nbd` and `platform_nbd_server` from `nodeBootArgs` (`pkg/bootstrap/container/server.go`). iPXE passes them to the kernel; nothing signs them |
+| The install | `autoinstall.sh` (`buildAutoinstallScript`) runs `platformctl install system --disk "$INSTALL_DISK"` |
+
+On this model `nbd_install_target` (`nbdInstallTargetFunction`) sets
+`INSTALL_DISK` to `/dev/nbd0`, and the local-disk scan does not run, so a node
+with no local disk does not stop at "No suitable installation disk found". It
+matches only the whole word `platform_boot_model=diskless-nbd`; every other
+node scans its disks as before. The installer validates the rest of the line
+(`checkBootModel`) and checks the attachment (`useNBDTarget`).
+
+The attach itself is **Planned**. It runs in the live environment between
+`nbd_install_target` and the install, through the code `platform-initrd` uses
+(the media already carries the `platform-initrd` binary,
+`CopyPlatformInitrdBinary`), and its failure ends the script through `error`
+before `platformctl install system` runs. Until it exists, the installer's own
+check is the refusal: no attached `nbd0` is `ErrorTypeNBDTarget`, before the
+TPM, a partition table or a key is touched, and the failed install stays in
+the installer ([autoinstall](autoinstall.md#8-failure-paths)). Two things hold
+the attach back, and both hold the `platform-initrd` attach back too:
+
+1. **The handoff to the kernel.** `nbd.Attach` ends with a `crypto/tls`
+   connection. The kernel `nbd` driver takes a socket it reads and writes in
+   plaintext (`NBD_SET_SOCK`, or netlink `NBD_ATTR_SOCKETS`), and `crypto/tls`
+   cannot hand its session keys to kernel TLS.
+2. **The IDevID before the first install.** A node attaches only after
+   enrollment, with the IDevID the bootstrap CA issued through the SDK (#883).
+   Enrollment is `platformd`'s, on an installed root; on a node's first install
+   nothing in the live environment has enrolled it.
+
+### The command line under Secure Boot
+
+An installed `diskless-nbd` node takes its root from the UKI's `.cmdline`, and
+from nothing else:
+
+| Link | Where |
+|---|---|
+| The UKI is systemd-stub plus `.linux`, `.initrd` and `.cmdline`; Secure Boot signs the whole image, sections included | `pkg/uki` (`builder.go`, `builder_objcopy.go`); the parser refuses a UKI with no `.cmdline` (`parser.go`) |
+| The device script boots the installed UKI by URL with **no arguments** | `BootImageURL` (`pkg/ipxe/script_generator.go`), set by `deviceBootInfo` (`pkg/bootstrap/container/server.go`) |
+| `platform-initrd` reads `/proc/cmdline`, which under Secure Boot is the signed `.cmdline`: systemd-stub ignores the load options | `pkg/boot/commands/boot.go`; `platform_nbd_server` is read only from it (`pkg/bootstrap/nbd/cmdline.go`) |
+| The dracut module reads `root=` from the `/etc/kernel/cmdline` it embeds in the initramfs, not from `/proc/cmdline` | `pkg/iso/customize.go` (the platformd module's `module-setup.sh` and `platformd-root.sh`) |
+
+Who refuses an unsigned command line is the **firmware**, not the server. The
+bootstrap server streams the UKI as it is and checks no signature
+(`pkg/bootstrap` has none). With Secure Boot on, the firmware refuses a UKI
+the db does not sign, and systemd-stub refuses load options, so a changed
+`.cmdline` does not boot. A Raspberry Pi always verifies: its U-Boot carries
+the preseeded keys ([factory image](../factory-image/architecture.md#3-rejected-alternatives),
+[`pxe-client --secure-boot`](../ipxe/cli.md)). On x86 Secure Boot is the
+firmware's setting.
+
+Two gaps remain, and neither is closed in code:
+
+1. **Without Secure Boot** systemd-stub takes the load options over `.cmdline`,
+   and anyone who can change the device script or the served UKI chooses the
+   server and the boot model. Nothing refuses a `diskless-nbd` boot with
+   Secure Boot off, and no document requires a check, so none is added here.
+   The TLS handshake still authenticates the export server, and the sealed key
+   still unseals only under the PCR policy.
+2. **The live line is unsigned.** The installer copies `platform_nbd_server`
+   from the live command line into the UKI it builds
+   (`disklessCmdlineParams`, `pkg/installer/diskless.go`). The signature says
+   who built the UKI; it does not prove the address was right. The attach's
+   TLS server authentication is what proves that.
+
+### The NBD metadata area
+
+Per the owner ruling the sealed key blob and the PCR banks live **on the NBD
+volume**, not on the node. The area is partition 1 of the export, the same
+partition a disk install uses as its ESP, so every reader and writer of those
+files works unchanged:
+
+| | |
+|---|---|
+| Location | `/dev/nbd0p1`: GPT partition 1, from 1 MiB (`diskManager.CreateEFIPartition`, `pkg/installer/disk.go`) |
+| Size | `disk.efi-partition-size` MiB, default 538; the LUKS2 root (`/dev/nbd0p2`) takes the rest |
+| Format | FAT32 (`vfat`, label `EFI`), the [ESP layout](#8-persistence-and-on-disk-layout) above: the UKI under `EFI/BOOT/`, and `tpm2/pcr-banks`, `tpm2/installer.luks` (first boot), `tpm2/seal-platform.pub` / `.priv`, `tpm2/seal-upgrade.*`, `tpm2/pcr-seal-values.txt` |
+| Mounted at | `/mnt/boot/efi` during Phase A; `/boot/efi` on the node, from fstab **by path** (`espFstabSource`), never `LABEL=EFI`, so a stray local partition with that label cannot receive the seal |
+
+Writers: Phase A writes `tpm2/pcr-banks` and `tpm2/installer.luks` under
+`/mnt/boot/efi/tpm2` (`prepareLUKSKeyForTPM`, `pkg/installer/installer.go`),
+and the first-boot seal writes `seal-platform.*` under `/boot/efi/tpm2`
+(`pkg/firstboot/types.go` `EFISealPlatformPub`/`Priv`). Readers: the unlock
+strategies find the area with `partition.FindESP(root)`, which takes partition
+1 beside the root device first (`/dev/nbd0p2` → `/dev/nbd0p1`) before any
+`EFI` label, and read `tpm2/seal-platform.*` and `tpm2/pcr-banks` from it
+(`pkg/initrd/strategy_tpm_pcr.go`). The boot server holds the area and the
+LUKS2 ciphertext; neither is useful without the node's TPM.
+
+The boot server reads one file from the area: the installed UKI, which it
+serves the node at every boot after the install (see
+[bootstrap engineering](../bootstrap/engineering.md#the-diskless-nbd-runtime-path)).
+`nbd.OpenMetadataFile(volumeDir, identity, name)` (`pkg/bootstrap/nbd/metadata.go`)
+reads it from `<volume_dir>/<identity>.img` without mounting or attaching
+anything. It finds the GPT header at LBA 1 for 512-, 1024-, 2048- or
+4096-byte sectors, checks the header and entry-array CRC32s, takes partition 1
+only if it lies inside the volume, checks the FAT32 boot sector, reads the
+first FAT whole (16 MiB at most), and follows cluster chains, refusing a free,
+reserved or out-of-range cluster, a loop, or a chain shorter than the file.
+Names match case-insensitively; long names are used only when their checksum
+matches the 8.3 entry.
+
+| Volume | Result |
+|---|---|
+| no `<identity>.img`, or one with no GPT and no MBR signature (blank, as the NBD server creates it) | `nbd.ErrNotInstalled` — the node has not been installed |
+| partitioned, but not a readable area holding `name` | `nbd.ErrMetadataArea{Identity, Reason, Cause}` |
+| an identity that is not a valid volume name | `nbd.ErrVolume` wrapping `fs.ErrInvalid` |
+
+An install that stopped after partitioning leaves a volume that is
+`ErrMetadataArea`. The boot server never reinstalls over it, because the
+installer would format whatever the export holds. To reinstall, the operator
+removes `<volume_dir>/<hostname>.img` while the node is off; the NBD server
+creates a blank one at the next attach.
 
 Inside the container while it is mounted at `/mnt/installer`:
 `luks-key.bin` (the only path `KeyfileStrategy` looks at),

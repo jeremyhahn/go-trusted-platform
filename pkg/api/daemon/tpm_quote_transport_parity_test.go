@@ -224,7 +224,7 @@ func TestTPMQuoteParity_AQuoteVerifies(t *testing.T) {
 			assert.Equal(t, testutil.PSSQuoteScheme, q.GetSignatureAlgorithm())
 			assert.NotEmpty(t, q.GetChannelBinding())
 
-			v, err := client.VerifyQuote(context.Background(), verifyRequest(q, nonce, f.tpm.akPublic))
+			v, err := client.VerifyQuote(context.Background(), verifyRequest(q, nonce, f.tpm.akPublic()))
 			require.NoError(t, err)
 			assert.True(t, v.GetVerified(), v.GetMessage())
 		})
@@ -239,7 +239,7 @@ func TestTPMQuoteParity_RefusesAWrongSchemeOrAK(t *testing.T) {
 	nonce := []byte("parity refusal")
 	q, err := quoteOver(t, f.client(t, f.grpcConn), nonce)
 	require.NoError(t, err)
-	akPublic := f.tpm.akPublic
+	akPublic := f.tpm.akPublic()
 	_, otherAK := testutil.SignPSSQuote(t, []byte("another key"))
 
 	refusals := map[string]func(*platformv1.VerifyQuoteRequest){
@@ -283,7 +283,7 @@ func TestTPMQuoteParity_UnboundTransportsRefuseAQuote(t *testing.T) {
 			require.ErrorAs(t, err, &failed)
 			var unavailable *transport.ErrChannelBindingUnavailable
 			require.ErrorAs(t, err, &unavailable)
-			assert.Nil(t, f.tpm.akPublic, "the TPM must not quote")
+			assert.Nil(t, f.tpm.akPublic(), "the TPM must not quote")
 		})
 	}
 }
@@ -298,7 +298,7 @@ func TestTPMQuoteParity_DaemonRESTNeedsTPMRead(t *testing.T) {
 
 	_, err := quoteOver(t, client, nonce)
 	assert.Equal(t, codes.PermissionDenied, status.Code(err), err)
-	assert.Nil(t, f.tpm.akPublic, "the TPM must not quote")
+	assert.Nil(t, f.tpm.akPublic(), "the TPM must not quote")
 
 	_, err = client.VerifyQuote(context.Background(), &platformv1.VerifyQuoteRequest{Nonce: nonce})
 	assert.Equal(t, codes.PermissionDenied, status.Code(err), err)

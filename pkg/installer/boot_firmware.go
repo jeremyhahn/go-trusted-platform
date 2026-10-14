@@ -6,6 +6,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/nbd"
 )
 
 // InstallTarget names what the installer writes to.
@@ -256,7 +258,19 @@ var imageTargetSkips = map[installStep]bool{
 	stepHostCmdlinePropagation: true,
 }
 
-// skip reports whether step is disabled for the configured install target.
+// nbdTargetSkips lists the steps a diskless-nbd install must not perform.
+// The node attaches its export only after enrollment, with the IDevID whose
+// key the TPM holds; a TPM2_Clear would evict that key, and the node could
+// never attach its root again.
+var nbdTargetSkips = map[installStep]bool{
+	stepClearTPM: true,
+}
+
+// skip reports whether step is disabled for the configured install target
+// or for the boot model Install's step 0 read.
 func (i *installer) skip(step installStep) bool {
+	if i.bootModel == nbd.BootModel && nbdTargetSkips[step] {
+		return true
+	}
 	return i.config != nil && i.config.Target == InstallTargetImage && imageTargetSkips[step]
 }

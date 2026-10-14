@@ -211,9 +211,16 @@ other model, `diskless`, is unchanged.
 
 The node's negotiation (`nbd.Attach`), its `platform_nbd_server` reader
 (`nbd.ServerFromCmdline`) and its client configuration (`nbd.NewClientConfig`)
-are built in the same package. Their use
-(the attach in `platform-initrd` and the installer's `nbd` target) is
-**Planned**; see [installer architecture](../installer/architecture.md#2-the-shape-chosen).
+are built in the same package. So is the installer's `nbd` target, which
+installs the node onto its attached export, with the sealed key and PCR banks
+in the export's metadata partition
+([installer engineering](../installer/engineering.md#the-nbd-metadata-area)).
+Once that partition holds the UKI, the node's device script boots it
+instead of the installer: the container reads it straight from the volume file
+and serves it at `/boot/uki/{mac}.efi`
+([engineering](engineering.md#the-diskless-nbd-runtime-path)).
+The attach itself, in `platform-initrd`, is **Planned**; see
+[installer architecture](../installer/architecture.md#2-the-shape-chosen).
 The container's listen address, volume directory, volume size, platform CA
 bundle and server certificate come from its configuration (pxeboot flags,
 `BOOTSTRAP_NBD_*` in the container), required only when the manifest has a

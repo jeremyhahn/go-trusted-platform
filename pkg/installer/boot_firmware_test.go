@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/nbd"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/disklessroot"
 )
 
 func TestConfigValidateTargetAndBootFirmware(t *testing.T) {
@@ -78,6 +81,24 @@ func TestImageTargetSkips(t *testing.T) {
 		}
 		if !image.skip(step) {
 			t.Errorf("step %d not skipped for an image target", step)
+		}
+	}
+}
+
+func TestNBDTargetSkips(t *testing.T) {
+	nbdNode := &installer{config: &Config{Target: InstallTargetDisk}, bootModel: nbd.BootModel}
+	if !nbdNode.skip(stepClearTPM) {
+		t.Error("a diskless-nbd install clears the TPM that holds its IDevID")
+	}
+	for _, step := range []installStep{stepTPMDevicePresence, stepFIDO2AutoEnroll, stepHostCmdlinePropagation} {
+		if nbdNode.skip(step) {
+			t.Errorf("step %d skipped for a diskless-nbd install", step)
+		}
+	}
+	for _, model := range []string{"", disklessroot.BootModel} {
+		other := &installer{config: &Config{Target: InstallTargetDisk}, bootModel: model}
+		if other.skip(stepClearTPM) {
+			t.Errorf("boot model %q skips the TPM clear", model)
 		}
 	}
 }

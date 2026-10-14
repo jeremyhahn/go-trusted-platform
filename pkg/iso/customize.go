@@ -28,7 +28,9 @@ import (
 	"gopkg.in/yaml.v2"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/nbd"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/runner"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/disklessroot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/initrd"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -3087,6 +3089,34 @@ const NodeConfigFunction = `stage_node_config() {
     fi
 }`
 
+// nbdNodeShell defines platformd_nbd_node CMDLINE, which returns 0 when the
+// command line file CMDLINE selects the diskless-nbd boot model
+// (platform_boot_model=diskless-nbd as a whole word) and 1 otherwise,
+// including when the file cannot be read. disklessroot's platformd_boot_model
+// cannot answer this: pkg/bootstrap/nbd, which owns the model, imports it.
+const nbdNodeShell = `platformd_nbd_node() {
+    for _arg in $(cat "$1" 2>/dev/null); do
+        if [ "$_arg" = "` + disklessroot.ParamBootModel + `=` + nbd.BootModel + `" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+`
+
+// nbdInstallTargetFunction is the autoinstall's nbd_install_target CMDLINE:
+// on a diskless-nbd node (platform_boot_model=diskless-nbd in the live
+// command line file CMDLINE) it prints /dev/nbd0, the NBD export the install
+// goes to, and returns 0; on any other node it prints nothing and returns 1,
+// and the local-disk scan runs as before. The node may have no local disk,
+// and the installer forces /dev/nbd0 for this model anyway, refusing before
+// the TPM or a disk is touched when the export is not attached; the
+// installer, not this function, validates the rest of the command line.
+const nbdInstallTargetFunction = nbdNodeShell + `nbd_install_target() {
+    platformd_nbd_node "$1" || return 1
+    echo /dev/nbd0
+}`
+
 // buildAutoinstallScript generates the autoinstall script content
 func (c *Customizer) buildAutoinstallScript() string {
 	var sb strings.Builder
@@ -4120,38 +4150,44 @@ if [ -z "$INSTALLER_CONFIG" ]; then
     log "No installer configuration found, using defaults"
 fi
 
-# Detect target installation disk
-# Skip removable devices (BMC virtual CD-ROM) and small devices (< 8GB)
-INSTALL_DISK=""
-log "Auto-detecting installation disk..."
-lsblk -d -o NAME,SIZE,TYPE,TRAN,RO,RM 2>/dev/null | while read line; do log "  $line"; done
+# Detect target installation disk. A diskless-nbd node installs onto its NBD
+# export, never a local disk (nbd_install_target).
+` + nbdInstallTargetFunction + `
+if INSTALL_DISK=$(nbd_install_target /proc/cmdline); then
+    log "diskless-nbd node: installing onto its NBD export $INSTALL_DISK; no local disk is chosen"
+else
+    # Skip removable devices (BMC virtual CD-ROM) and small devices (< 8GB)
+    INSTALL_DISK=""
+    log "Auto-detecting installation disk..."
+    lsblk -d -o NAME,SIZE,TYPE,TRAN,RO,RM 2>/dev/null | while read line; do log "  $line"; done
 
-for disk in /dev/sda /dev/sdb /dev/sdc /dev/nvme0n1 /dev/vda; do
-    [ -b "$disk" ] || continue
-    DEVNAME=$(basename $disk)
-    REMOVABLE=$(cat /sys/block/$DEVNAME/removable 2>/dev/null || echo "1")
-    if [ "$REMOVABLE" = "1" ]; then
-        log "  Skipping $disk (removable - likely virtual CD)"
-        continue
-    fi
-    READONLY=$(cat /sys/block/$DEVNAME/ro 2>/dev/null || echo "1")
-    if [ "$READONLY" = "1" ]; then
-        log "  Skipping $disk (read-only)"
-        continue
-    fi
-    SIZE_SECTORS=$(cat /sys/block/$DEVNAME/size 2>/dev/null || echo "0")
-    SIZE_GB=$((SIZE_SECTORS * 512 / 1024 / 1024 / 1024))
-    if [ "$SIZE_GB" -lt 8 ]; then
-        log "  Skipping $disk (${SIZE_GB}GB - too small)"
-        continue
-    fi
-    INSTALL_DISK="$disk"
-    log "Found installation target: $INSTALL_DISK (${SIZE_GB}GB)"
-    break
-done
+    for disk in /dev/sda /dev/sdb /dev/sdc /dev/nvme0n1 /dev/vda; do
+        [ -b "$disk" ] || continue
+        DEVNAME=$(basename $disk)
+        REMOVABLE=$(cat /sys/block/$DEVNAME/removable 2>/dev/null || echo "1")
+        if [ "$REMOVABLE" = "1" ]; then
+            log "  Skipping $disk (removable - likely virtual CD)"
+            continue
+        fi
+        READONLY=$(cat /sys/block/$DEVNAME/ro 2>/dev/null || echo "1")
+        if [ "$READONLY" = "1" ]; then
+            log "  Skipping $disk (read-only)"
+            continue
+        fi
+        SIZE_SECTORS=$(cat /sys/block/$DEVNAME/size 2>/dev/null || echo "0")
+        SIZE_GB=$((SIZE_SECTORS * 512 / 1024 / 1024 / 1024))
+        if [ "$SIZE_GB" -lt 8 ]; then
+            log "  Skipping $disk (${SIZE_GB}GB - too small)"
+            continue
+        fi
+        INSTALL_DISK="$disk"
+        log "Found installation target: $INSTALL_DISK (${SIZE_GB}GB)"
+        break
+    done
 
-if [ -z "$INSTALL_DISK" ]; then
-    error "No suitable installation disk found (need non-removable disk >= 8GB)"
+    if [ -z "$INSTALL_DISK" ]; then
+        error "No suitable installation disk found (need non-removable disk >= 8GB)"
+    fi
 fi
 
 log "Installing Alpine Linux with TPM-based disk encryption"
@@ -4252,8 +4288,10 @@ if [ -n "$APK_MIRROR" ]; then
     log "OS install mirror: $APK_MIRROR"
 fi
 
-# Add additional flags if not using config file
+# Add additional flags if not using config file. The ':' keeps the body
+# non-empty when no security flag is configured; an empty one does not parse.
 if [ -z "$INSTALLER_CONFIG" ]; then
+    :
 `)
 
 	if c.config.Security.FIPS {

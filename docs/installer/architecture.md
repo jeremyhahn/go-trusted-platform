@@ -34,7 +34,9 @@ Two facts make this hard, and both of them shape every decision below.
   — plus the platform config — inside a 100 MB LUKS2 container written to the
   EFI System Partition at `/boot/efi/tpm2/installer.luks`. **The TPM is not
   sealed to in this phase.** The only TPM operation the installer performs is a
-  `TPM2_Clear` to remove stale hierarchy state from a previous install.
+  `TPM2_Clear` to remove stale hierarchy state from a previous install, and it
+  skips that on a `diskless-nbd` node, whose TPM holds the IDevID its export
+  attaches with.
 - **Phase B — first production boot** (`pkg/firstboot`, running inside
   `platform-initrd` under the production UKI). Opens the carrier, provisions the
   TPM, seals the LUKS key against **live** production PCRs, unlocks the root,
@@ -104,13 +106,13 @@ NFS was ruled out. The export is reached only over TLS 1.3 after
 which chains to the platform anchor. The server picks the export from that
 verified identity and from nothing the client names. The server side is built
 ([bootstrap architecture](../bootstrap/architecture.md#nbd-export-server-diskless-nbd)).
-The node side is partly built; the attach and the install are **Planned**:
+The node side is partly built; the attach is **Planned**:
 
 - **Built:** `bootstrap.yaml` accepts `boot_model: diskless-nbd` on a
   Raspberry Pi, and the bootstrap server puts `platform_boot_model=diskless-nbd`
-  on that node's installer command line. Until the installer target `nbd`
-  exists, the installer refuses that value as its first step, before it clears
-  the TPM or touches a local disk, because a node that asked for it would otherwise boot the wrong path.
+  on that node's installer command line. The installer accepts that value only
+  with exactly one well-formed `platform_nbd_server`; any other unknown model is
+  still refused as its first step, before it clears the TPM or touches a disk.
 - **Built:** the node's half of the negotiation, `nbd.Attach`: STARTTLS
   first, TLS 1.3 with the IDevID as the client certificate, `NBD_OPT_GO`, and a
   refusal is final ([installer engineering](engineering.md)). Nothing calls it
@@ -119,15 +121,35 @@ The node side is partly built; the attach and the install are **Planned**:
   server's address on the provisioning segment, on that node's installer
   command line. The node reads the address only from the signed UKI
   `.cmdline` (`nbd.ServerFromCmdline`), and builds its client configuration
-  from it, the platform anchor and its IDevID (`nbd.NewClientConfig`). Nothing
-  calls either yet.
+  from it, the platform anchor and its IDevID (`nbd.NewClientConfig`). The
+  installer reads the address; nothing calls `nbd.NewClientConfig` yet.
+- **Built:** the installer target `nbd`. A `diskless-nbd` install runs Phase A
+  against `/dev/nbd0` instead of the configured disk, with the same partition,
+  LUKS2 and LVM steps a disk install uses. It refuses, before the TPM clear or
+  any format, an `nbd0` that is missing or not attached to an export, and a
+  configuration without `disk.encryption`. Partition 1 of the export is the
+  **metadata area** that holds the sealed key and the PCR banks
+  ([installer engineering](engineering.md#the-nbd-metadata-area)). The UKI it
+  builds signs `platform_boot_model=diskless-nbd` and `platform_nbd_server`
+  and no local root, LUKS or LVM device. The installer always writes the export
+  as GPT, whatever the profile's local-disk table, because the boot server
+  reads it. The live environment's `autoinstall.sh` targets `/dev/nbd0` on this
+  model and scans no local disk, and the install leaves the TPM alone: a
+  TPM2_Clear would evict the IDevID key the export attaches with.
+- **Built:** the boot after the install. Once the export's metadata area holds
+  the UKI, the node's device script boots that UKI instead of the installer;
+  the bootstrap server reads it from the volume file and serves it
+  ([bootstrap engineering](../bootstrap/engineering.md#the-diskless-nbd-runtime-path)).
+  The UKI then needs the `platform-initrd` attach below.
 - **Planned:** where the node takes the platform anchor and its IDevID from
   before the export is attached; the image's CA bundle lives on the root
   filesystem, which for this model is the export.
-- **Planned:** the installer target `nbd` runs Phase A against the attached
-  export instead of a local disk.
 - **Planned:** `platform-initrd` attaches the export before the unlock chain
-  runs, then unlocks it like a local LUKS root.
+  runs, then unlocks it like a local LUKS root. The live environment needs the
+  same attach before `platformctl install system` runs, from the same code;
+  the installer reads the attachment and never makes it. Until then the
+  installer refuses the install, before anything destructive
+  ([installer engineering](engineering.md#attaching-before-the-install)).
 
 ## 3. Rejected alternatives
 
@@ -276,13 +298,15 @@ the TPM-resident IDevID and an IAK quote bound to that connection
 carries the control plane's address (`acme.client.directory-url`) and, unless
 the OS trust store already anchors it, its CA as `ca-bundle.pem`.
 
-A `diskless-nbd` node (**Planned**) also takes neither path. Before the unlock
-chain runs, `platform-initrd` reaches the boot server's NBD listener on the
+A `diskless-nbd` node takes the disk path once its export is attached; the
+attach is **Planned**. Before the unlock chain runs, `platform-initrd` reaches the boot server's NBD listener on the
 provisioning segment and negotiates fixed newstyle. Its first option is
 `NBD_OPT_STARTTLS`; it completes TLS 1.3 with its TPM-resident IDevID as the
 client certificate and verifies the server against the platform anchor. It then
 asks for the default export with `NBD_OPT_GO` and attaches the result as a
-block device. From there the unlock chain treats the device as the LUKS root.
+block device. From there the unlock chain treats the device as the LUKS root:
+`/dev/nbd0p2` is the LUKS2 root and `/dev/nbd0p1`, the metadata area, holds
+`tpm2/installer.luks` for the first boot and the seal afterwards.
 
 ### Steady state
 
@@ -301,7 +325,12 @@ and, after Phase B, the platform state. The **ESP holds every artefact the
 machine needs before the root is readable**: the UKI, `tpm2/pcr-banks`,
 `tpm2/seal-platform.pub` / `.priv`, `tpm2/seal-upgrade.pub` / `.priv` when a
 kernel change is in flight, and — for one boot only — `tpm2/installer.luks`.
-Nothing crosses a host boundary during Phase A or B except the Secure Boot
+A `diskless-nbd` node keeps the same artefacts in the same layout on
+partition 1 of its NBD export, the metadata area, which it mounts at
+`/boot/efi` by path (`/dev/nbd0p1`), never by the `EFI` label; the boot server
+stores that partition and the LUKS2 ciphertext beside it, and holds no key.
+Apart from those export blocks, nothing crosses a host boundary during Phase A
+or B except the Secure Boot
 digest under `resign-mode: remote`, which travels to the control plane and
 returns as a signature.
 

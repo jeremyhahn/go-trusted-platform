@@ -513,7 +513,7 @@ func (ai *alpineInstaller) ConfigureSystem(ctx context.Context, rootPath string,
 	// Add EFI partition (mount at /boot/efi to match reference Alpine architecture)
 	if diskInfo.EFIPartition != "" {
 		fstabLines = append(fstabLines,
-			"LABEL=EFI /boot/efi vfat defaults 0 2")
+			espFstabSource(diskInfo)+" /boot/efi vfat defaults 0 2")
 	}
 
 	// Add root partition

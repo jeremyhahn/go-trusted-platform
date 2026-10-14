@@ -37,6 +37,20 @@ func (e ErrBinariesNotFound) Error() string {
 	return "diskimage: no platformd in " + e.Dir + " (build the target binaries with `make rpi-binaries` or pass --binaries-dir)"
 }
 
+// ErrRoleTemplate reports a --role the image builder cannot build: a target
+// other than rpi, a model with no dedicated template for the role, or a
+// --platform-config that already chose the template.
+type ErrRoleTemplate struct {
+	Target string
+	Model  string
+	Role   string
+	Reason string
+}
+
+func (e ErrRoleTemplate) Error() string {
+	return "diskimage: --role " + e.Role + " (target " + e.Target + ", model " + e.Model + "): " + e.Reason
+}
+
 // ErrInvalidPortForward reports a --forward value that is not
 // host:guest[/tcp|udp].
 type ErrInvalidPortForward struct {

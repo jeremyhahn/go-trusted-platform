@@ -158,6 +158,37 @@ func (e ErrVolume) Unwrap() error {
 	return e.Cause
 }
 
+// ErrNotInstalled is returned for a volume that holds no installed node: it
+// does not exist yet, or it is blank, with no partition table. Installing
+// onto it destroys nothing.
+type ErrNotInstalled struct {
+	Identity string
+}
+
+func (e ErrNotInstalled) Error() string {
+	return fmt.Sprintf("nbd: volume %q holds no installed node", e.Identity)
+}
+
+// ErrMetadataArea is returned for a partitioned volume whose metadata area
+// cannot be read, or does not hold the file asked for. The volume may hold a
+// node's root, so it is never taken for a blank one.
+type ErrMetadataArea struct {
+	Identity string
+	Reason   string
+	Cause    error
+}
+
+func (e ErrMetadataArea) Error() string {
+	if e.Cause == nil {
+		return fmt.Sprintf("nbd: volume %q: metadata area: %s", e.Identity, e.Reason)
+	}
+	return fmt.Sprintf("nbd: volume %q: metadata area: %s: %v", e.Identity, e.Reason, e.Cause)
+}
+
+func (e ErrMetadataArea) Unwrap() error {
+	return e.Cause
+}
+
 // ErrProtocol ends a session that broke the NBD protocol.
 type ErrProtocol struct {
 	Reason string

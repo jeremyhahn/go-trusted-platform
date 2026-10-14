@@ -28,12 +28,12 @@ For architectural context see:
 | `platform_apk_mirror` | `iso create --apk-mirror` (GRUB), bootstrap server `BOOTSTRAP_APK_MIRROR` (PXE) | `autoinstall.sh` | Install-time APK repository base for nodes with no `/media/cdrom` |
 | `alpine_repo` | Bootstrap server (PXE only) | Alpine initramfs `init` | Live-system (diskless root) repository; without it PXE installs 0 packages |
 | `modloop` | Bootstrap server (PXE only) | Alpine initramfs `init`, `run-autoinstall.sh` | Kernel-modules squashfs URL; `run-autoinstall.sh` fetches+mounts it over HTTP when no CD is present (dm-crypt/LUKS/ext4/TPM modules) |
-| `platform_boot_model` | Bootstrap server (per node, from `boot_model`) | installer, `platform-initrd` | `diskless` selects the diskless root; absent means the disk install. The installer copies it into the signed UKI `.cmdline`. `diskless-nbd` marks a node whose root is an NBD export; the installer refuses it until its `nbd` target exists |
+| `platform_boot_model` | Bootstrap server (per node, from `boot_model`) | installer, `platform-initrd` | `diskless` selects the diskless root; absent means the disk install. The installer copies it into the signed UKI `.cmdline`. `diskless-nbd` marks a node whose root is an NBD export: the installer requires `platform_nbd_server` with it, installs onto `/dev/nbd0` (its `nbd` target), and signs both into the UKI `.cmdline`. Any other value is refused before the TPM clear |
 | `platform_rootfs_url` | Installer, from the signed media-set manifest | `platform-initrd` | HTTP(S) URL of the squashfs root image for stateless boot |
 | `platform_verity_url` | Installer, from the signed media-set manifest | `platform-initrd` | HTTP(S) URL of the dm-verity hash tree for `platform_rootfs_url` |
 | `platform_roothash` | Signed UKI `.cmdline`, from the signed media-set manifest | `platform-initrd` | dm-verity SHA-256 root hash of the diskless root; Secure Boot and measured boot cover it |
 | `platform_verity_salt`, `platform_rootfs_size`, `platform_verity_size` | Signed UKI `.cmdline`, from the signed media-set manifest | `platform-initrd` | Pinned dm-verity salt and the exact byte sizes fetched; nothing is read from a superblock |
-| `platform_nbd_server` | Bootstrap server, on a `diskless-nbd` node's installer line; the node reads it from the signed UKI `.cmdline` only (§4, NBD root parameter) | `nbd.ServerFromCmdline`; nothing calls it yet | `host:port` of the boot server's NBD listener a `diskless-nbd` node attaches its root from |
+| `platform_nbd_server` | Bootstrap server, on a `diskless-nbd` node's installer line; the node reads it from the signed UKI `.cmdline` only (§4, NBD root parameter) | installer (`checkBootModel`, `disklessCmdlineParams`), through `nbd.ServerFromCmdline`; `platform-initrd` does not read it yet | `host:port` of the boot server's NBD listener a `diskless-nbd` node attaches its root from |
 | `platform_autoinstall_debug` | Operator (manual) | `autoinstall.sh` | Enable `set -x` for verbose install trace |
 | `platform_server` | Nothing | Nothing | Server URL for interactive QR mode; no code sets or reads it (§3) |
 | `bootstrap_strategy` | `iso create --bootstrap-strategy`, iPXE script generator | Nothing (§3) | `dane`, `noise`, `spki`, or `auto` |
@@ -319,7 +319,7 @@ not a class: they are verified against the platform anchor, which needs no
 configuration — see
 [docs/trust/architecture.md](../trust/architecture.md#21-platform-anchor).
 
-The `trust:` key is read into `pkg/app.App.TrustConfig` (`pkg/app/app.go:505`)
+The `trust:` key is read into `pkg/app.App.TrustConfig` (`pkg/app/app.go:506`)
 and wired to `pkg/trust.NewResolver()` by `App.BootstrapTrust`. The first-boot
 CA bundle fetch uses that resolver's `trust.bootstrap` scope; there is no
 separate `pkg/bootstrap.ClientConfig` or `bootstrap.Fetch()`.
@@ -390,16 +390,18 @@ verity root of its own.
 `platform_boot_model=diskless-nbd`, and ignores it on any other line. On a
 `diskless-nbd` line it is required, may appear once, and a malformed value is
 refused with `nbd.ErrCmdline`; `platform_boot_model` may appear once on any
-line. Nothing calls the reader yet: `platform-initrd` does not attach an export
+line. The installer calls it; `platform-initrd` does not attach an export yet
 (**Planned**, #689).
 
 The bootstrap server puts the address on the installer's command line for a
 `diskless-nbd` node (`nodeBootArgs`): the NBD listen address, with an empty or
 wildcard host replaced by the DHCP server IP. That line is the installer's
-input only. Writing the value into the signed UKI `.cmdline` is the installer's
-`nbd` target (**Planned**, #689); the installer's UKI command line carries no
-live-line parameter but the debug sink (`hostUKICmdlineParams`), so a live
-`platform_nbd_server` never reaches the node's boot.
+input only. The installer's `nbd` target writes the value into the signed UKI
+`.cmdline` (`nbdCmdlineParams`, `pkg/installer/nbd_target.go`): exactly
+`platform_boot_model=diskless-nbd platform_nbd_server=<host>:<port>`, with no
+`root=`, `rd.luks.*` or `rd.lvm.*`. Beyond those two, the UKI command line
+carries no live-line parameter but the debug sink (`hostUKICmdlineParams`), so
+nothing else on the live line reaches the node's boot.
 
 ---
 

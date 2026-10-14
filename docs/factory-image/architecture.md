@@ -304,6 +304,10 @@ What persists: the image, the staged media directory, the U-Boot output
   ([`docs/ima/`](../ima/)) is unavailable on that kernel.
 - **It does not flash cards from the CLI.** Writing a device is a Makefile
   target with explicit guards ([user.md](user.md)), the only `sudo` step.
-- **It does not ship a Raspberry Pi platform template yet.** The default
-  single-node template is used with the target's overrides; `--overrides`
-  adjusts anything else, including `seal-pcrs`.
+- **It does not build every role on every Pi.** `rpi4` ships the
+  single-node template (the default) and, through `--role compute`, the
+  dedicated-profile compute node. A Pi gateway or control plane has no
+  template ([`dedicated/raspberrypi/README.md`](../../configs/platform/templates/dedicated/raspberrypi/README.md)
+  says why), and other models fall back to the x86 single-node template with
+  the target's overrides; `--overrides` adjusts anything else, including
+  `seal-pcrs`.

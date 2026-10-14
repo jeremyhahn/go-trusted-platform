@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/nbd"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/disklessroot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/uefi"
 )
@@ -29,15 +30,29 @@ import (
 // set; the diskless root's artifacts sit in it under their fixed names.
 const disklessBaseURLParam = "platform_bin_url="
 
-// disklessCmdlineParams are the diskless root parameters the installer signs
-// into a diskless node's UKI, or none for a node that boots from its disk.
+// disklessCmdlineParams are the root parameters the installer signs into a
+// diskless or diskless-nbd node's UKI, or none for a node that boots from its
+// disk.
 //
 // The boot server marks a diskless node with platform_boot_model=diskless on
 // the installer's command line. The root itself — hash, salt and sizes —
 // comes only from the media set's manifest, verified against a pinned anchor
 // (disklessManifestAnchors): a root hash or URL written on the live command
 // line or in an iPXE script names nothing.
+//
+// A diskless-nbd node's root is its NBD export, LUKS2 on the partition this
+// install wrote, so its parameters are the boot model and the NBD server
+// (nbdCmdlineParams). The installer is the one that signs the server address
+// into the UKI; the node reads it from there, never from a live line.
 func (i *installer) disklessCmdlineParams(ctx context.Context, liveCmdline string) ([]string, error) {
+	server, isNBD, err := nbd.ServerFromCmdline(liveCmdline)
+	if err != nil {
+		return nil, ErrUKIBuild("diskless-nbd root: reading the NBD server", err)
+	}
+	if isNBD {
+		i.logger.Info("[UKI] diskless-nbd root on the NBD export", "server", server.String())
+		return nbdCmdlineParams(server), nil
+	}
 	model, err := disklessroot.BootModelFromCmdline(liveCmdline)
 	if err != nil {
 		return nil, ErrUKIBuild("diskless root: reading the boot model", err)
@@ -76,21 +91,31 @@ func (i *installer) liveCmdline() string {
 	return string(data)
 }
 
-// checkBootModel refuses a live command line whose boot model this installer
-// cannot install. It installs a disk node and a diskless node; anything else,
-// a diskless-nbd node included, fails here, before Install clears the TPM or
-// touches a disk.
-func checkBootModel(liveCmdline string) error {
-	if _, err := disklessroot.BootModelFromCmdline(liveCmdline); err != nil {
-		return ErrBootModel("refusing to install: unsupported boot model", err)
+// checkBootModel returns the boot model the live command line names, empty
+// for a disk node, and refuses one this installer cannot install. It installs
+// a disk node, a diskless node and a diskless-nbd node, whose
+// platform_nbd_server must be present and well formed; anything else fails
+// here, before Install clears the TPM or touches a disk.
+func checkBootModel(liveCmdline string) (string, error) {
+	_, isNBD, err := nbd.ServerFromCmdline(liveCmdline)
+	if err != nil {
+		return "", ErrBootModel("refusing to install: invalid "+nbd.BootModel+" command line", err)
 	}
-	return nil
+	if isNBD {
+		return nbd.BootModel, nil
+	}
+	model, err := disklessroot.BootModelFromCmdline(liveCmdline)
+	if err != nil {
+		return "", ErrBootModel("refusing to install: unsupported boot model", err)
+	}
+	return model, nil
 }
 
 // ukiRootCmdlineParams names the root the UKI boots. A diskless node's root is
-// the verified image disklessParams describe, so its command line carries no
-// local root, LUKS or LVM device for dracut to wait on or unlock; a disk node
-// gets those and no diskless parameters.
+// the verified image disklessParams describe, and a diskless-nbd node's is its
+// NBD export, so their command lines carry no local root, LUKS or LVM device
+// for dracut to wait on or unlock; a disk node gets those and no diskless
+// parameters.
 func (i *installer) ukiRootCmdlineParams(diskInfo *DiskInfo, disklessParams []string) []string {
 	if len(disklessParams) > 0 {
 		return append([]string(nil), disklessParams...)

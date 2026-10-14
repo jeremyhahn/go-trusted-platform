@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/nbd"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/disklessroot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/uki"
 )
 
@@ -91,6 +93,34 @@ func TestInstallerBootTargetAccessors(t *testing.T) {
 	}
 	if strings.Contains(zero.bootTarget().dracutDrivers, "tpm_tis_spi") {
 		t.Errorf("x86_64 dracut drivers changed: %q", zero.bootTarget().dracutDrivers)
+	}
+}
+
+// A diskless-nbd initramfs carries the NBD block driver its platform-initrd
+// attaches the export with; every other boot model keeps its architecture's
+// driver set unchanged, on both architectures.
+func TestDracutDriversByBootModel(t *testing.T) {
+	arm, err := resolveBootTarget("aarch64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []bootTarget{{}, arm} {
+		archDrivers := (&installer{boot: target}).bootTarget().dracutDrivers
+		tests := []struct {
+			model string
+			want  string
+		}{
+			{"", archDrivers},
+			{disklessroot.BootModel, archDrivers},
+			{nbd.BootModel, archDrivers + " nbd"},
+			{"diskless-nbd-extra", archDrivers},
+		}
+		for _, tc := range tests {
+			inst := &installer{boot: target, bootModel: tc.model}
+			if got := inst.dracutDrivers(); got != tc.want {
+				t.Errorf("arch %q boot model %q: dracutDrivers = %q, want %q", inst.bootTarget().arch, tc.model, got, tc.want)
+			}
+		}
 	}
 }
 

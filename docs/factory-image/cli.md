@@ -49,6 +49,7 @@ and the staged media directory.
 |---|---|---|---|
 | `--target` | string | `rpi` | `rpi` or `qemu-virt` |
 | `--model` | string | `rpi4` for `rpi` | `rpi4`, `rpi400`, `cm4`, `rpi3b+`, `rpi5` (experimental) |
+| `--role` | string | | dedicated-profile role for `--target rpi`: builds `configs/platform/templates/dedicated/raspberrypi/<model>/<role>.yaml` (today `compute` on `rpi4`). Empty builds the single-node image. Refused with `ErrRoleTemplate` beside `--platform-config`, on `qemu-virt`, or when that file does not exist; there is no fallback |
 | `--size` | int | `4096` | image size in MB; minimum `2048` |
 | `--output` | string | `<work-dir>/trusted-platform-<target>.img` | output image path |
 | `--binaries-dir` | string | `aarch64/` next to the running binary | directory holding the target-architecture `platformd`, `platformctl`, `platformctl-static`, `platform-initrd`, `gatewayd` |
@@ -73,7 +74,7 @@ and the staged media directory.
 | `--alpine-version` | string | `3.22.2` | Alpine Linux version |
 | `--mirror` | string | `http://mirror.cs.odu.edu/alpine` | Alpine mirror used for the build-time pre-fetch |
 | `--apk-mirror` | string | | install-time apk mirror baked into the kernel cmdline |
-| `--platform-config` | string | auto-detected | platform config template baked into the image (`configs/platform/templates/single-node/raspberrypi/<model>/default.yaml` when present, else `configs/platform/templates/single-node/default.yaml`) |
+| `--platform-config` | string | auto-detected | platform config template baked into the image (the `--role` template when one is given; otherwise `configs/platform/templates/single-node/raspberrypi/<model>/default.yaml` when present, else `configs/platform/templates/single-node/default.yaml`) |
 | `--overrides` | string | | override YAML deep-merged onto `--platform-config` (requires it) |
 | `--platform-type` | string | `server` | `server` or `client` |
 | `--secure-boot` | bool | `true` | enable Secure Boot; the keys are preseeded into U-Boot |
@@ -100,6 +101,10 @@ without a `--platform-config` (explicit or auto-detected) is an error.
 ```sh
 # Raspberry Pi 4 image with the defaults
 platformctl diskimage create --target rpi --model rpi4 --output bin/trusted-platform-rpi.img
+
+# A Raspberry Pi 4 compute node of the dedicated profile, joining an x86 control plane
+platformctl diskimage create --target rpi --model rpi4 --role compute --overrides node.yaml \
+  --ca-bundle cp-ca.pem --output bin/trusted-platform-rpi4-compute.img
 
 # A Compute Module 4 image, larger card, prebuilt U-Boot, keys from a fixed directory
 platformctl diskimage create --target rpi --model cm4 --size 8192 \
