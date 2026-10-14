@@ -57,6 +57,7 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **gateway** — secret-store identity and scheme, with #659 — [#658](../../issues/658) — open
 - **factory-image** — Raspberry Pi factory image (PR #680) — [#667](../../issues/667) — open
 - **factory-image** — diskless squashfs + dm-verity root (PR #764) — [#690](../../issues/690) — done
+- **factory-image** — measurement manifest per signed image in the go-quicbaas reference-values store (blocked by the go-quicbaas tag that carries [go-xkms#1443](../../../go-xkms/issues/1443) step 3) — [#720](../../issues/720) — blocked: waits on the go-quicbaas tag
 - **firmware** — AVR support on trusted-firmware, the device reached through the go-quicbaas SDK, which composes trusted-firmware's `xkms` adapter into go-xkms; provider landed (PR #700) — [#771](../../issues/771) — open
 - **device-enrollment** — AVR enrollment, device registry and gateway relay, the device reached through the go-quicbaas SDK — [#696](../../issues/696) — open
 - **device-enrollment** — DICE AVR end to end, the device reached through the go-quicbaas SDK — [#772](../../issues/772) — open
@@ -70,6 +71,7 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **attestation** — the device quote verifier uses that same SDK attested-peer primitive — [#482](../../issues/482) — open
 - **attestation** — admission status source — [#715](../../issues/715) — open
 - **attestation** — parity and production wiring, with #498 and #386 — [#545](../../issues/545) — open
+- **attestation** — expected PCR values from the go-quicbaas reference-values store, replacing the `PCRBaseline` table and the `GoldenValues` policy surface (blocked by the go-quicbaas tag that carries [go-xkms#1443](../../../go-xkms/issues/1443) step 3) — [#720](../../issues/720) — blocked: waits on the go-quicbaas tag
 - **auth** — no user store of the platform's own, users held in go-quicbaas IAM, the stack's one user store — [#644](../../issues/644) — open
 - **auth** — login, logout, mTLS sign-in and backbone sessions, with #213, #199 and #662 — [#640](../../issues/640) — open
 - **auth** — hardware enrollment check — [#281](../../issues/281) — open
@@ -86,9 +88,11 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **daemon** — FailedPrecondition mapping — [#665](../../issues/665) — open
 - **installer** — signed ISO kernel and initrd — [#354](../../issues/354) — open
 - **installer** — required build inputs — [#351](../../issues/351) — open
+- **installer** — root seal on `luks-root` from `seal-pcrs` and offline unseal from the `.tpmpolicy` binding record (blocked by the go-quicbaas tag that carries [go-xkms#1443](../../../go-xkms/issues/1443) step 3) — [#720](../../issues/720) — blocked: waits on the go-quicbaas tag
 - **luks** — real backend — [#647](../../issues/647) — open
 - **luks** — go-luks2 v1.0.0-rc.2 — [#746](../../issues/746) — open
 - **luks** — FIPS activation restrictions — [#26](../../issues/26) — open
+- **luks** — upgrade by staging a signed image and confirm after boot (blocked by the go-quicbaas tag that carries [go-xkms#1443](../../../go-xkms/issues/1443) step 3) — [#720](../../issues/720) — blocked: waits on the go-quicbaas tag
 - **tenant** — tenant VRFs and the platform-services VRF — [#721](../../issues/721) — blocked: waits on #709
 - **tenant** — owner-invitation route — [#299](../../issues/299) — open
 - **gateway** — service layer: VIPs, placement, discovery, identity, policy — [#722](../../issues/722) — blocked: waits on #721
@@ -115,6 +119,7 @@ The trusted-computing platform product and control plane: provisioning, node and
 ## Dependencies
 
 - **tpm** — [go-quicbaas#1171](../../../go-quicbaas/issues/1171) re-exports in a go-quicbaas release, plus [go-xkms#1442](../../../go-xkms/issues/1442) and [go-xkms#1443](../../../go-xkms/issues/1443) → #720 → #682. [go-quicbaas#1171](../../../go-quicbaas/issues/1171) → **ipxe** #688.
+- **installer**, **luks**, **factory-image**, **attestation** — unattended unlock across kernel updates: [go-xkms#1443](../../../go-xkms/issues/1443) steps 1 and 2 tagged → the go-quicbaas tag that carries step 3 (`Security().TPMPolicy()` and the initrd re-exports in `sdk/go/xkms`) → step 4 (installer seal and initrd unseal, attestation reference values) → step 5 (factory-image manifest, luks staging and confirm) → the owner's SPEC change that retires TPM-Upgrade, `seal-upgrade.*` and the on-device rebuild.
 - **pi-node-roles** — a go-qrdb arm64 release → Pi control-plane nodes.
 - **daemon** — [go-quicbaas#1150](../../../go-quicbaas/issues/1150) → one authenticated REST and MCP surface #175, #232, #412.
 - **gateway** #709 → **tenant** #721 → **gateway** #722 → **daemon** #723 → the v0.2.0-alpha gate #724.
