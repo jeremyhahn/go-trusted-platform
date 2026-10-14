@@ -334,6 +334,12 @@ func (c *restClientConn) Invoke(ctx context.Context, method string, args interfa
 		return status.Error(codes.Unavailable, "connection closed")
 	}
 
+	// A method the platform serves no REST route for is refused here,
+	// before a channel binding or a request could reach the network.
+	if reason, refused := restRefusedMethods[method]; refused {
+		return ErrNoRESTRoute{Method: method, Reason: reason}
+	}
+
 	// Methods whose server-side JSON shape does not match the pb reply
 	// (domain JSON, flattened oneofs) capture the raw payload and run a
 	// custom decoder after the request completes. Everything else decodes
@@ -924,6 +930,12 @@ var templatedRouteTable = map[string]templatedRoute{
 		pathParams:  []pathParam{{placeholder: "{serial}", field: "serial"}},
 		queryParams: []queryParam{{name: "include_pem", field: "include_pem"}, {name: "include_der", field: "include_der"}},
 	},
+	// DELETE /api/v1/ca/certificates/{serial} and
+	// POST /api/v1/ca/certificates/{serial}/renew: item operations on the
+	// certificate the serial names. reason and delete_keys (revoke) and
+	// valid_days and the SANs (renew) stay in the body (#452).
+	"/platform.v1.CAService/RevokeCertificate": itemRoute("/api/v1/ca/certificates/{serial}", http.MethodDelete, "{serial}", "serial"),
+	"/platform.v1.CAService/RenewCertificate":  itemRoute("/api/v1/ca/certificates/{serial}/renew", http.MethodPost, "{serial}", "serial"),
 
 	// GET /api/v1/compute/containers/{id}
 	"/platform.v1.ComputeService/GetContainer": itemRoute("/api/v1/compute/containers/{id}", http.MethodGet, "{id}", "id"),
@@ -1000,6 +1012,17 @@ var templatedRouteTable = map[string]templatedRoute{
 	// GET /api/v1/invitations/{id:[0-9]+} -- proto field is invitation_id.
 	"/platform.v1.InvitationService/GetInvitation": itemRoute("/api/v1/invitations/{id:[0-9]+}", http.MethodGet, "{id:[0-9]+}", "invitation_id"),
 
+	// The invitation item operations (#452), each on the template
+	// pkg/webservice/v1/rest/invitation/router.go registers. The flat rows
+	// sent DELETE /api/v1/invitations, POST /api/v1/invitations/revoke and
+	// GET /api/v1/invitations/by-token with the identifier in the body, and
+	// the server serves none of the three. RevokeInvitation keeps revoker_id
+	// in the POST body. The token route is the invitee half, registered
+	// outside the tenant-admin gate.
+	"/platform.v1.InvitationService/DeleteInvitation":     itemRoute("/api/v1/invitations/{id:[0-9]+}", http.MethodDelete, "{id:[0-9]+}", "invitation_id"),
+	"/platform.v1.InvitationService/RevokeInvitation":     itemRoute("/api/v1/invitations/{id:[0-9]+}/revoke", http.MethodPost, "{id:[0-9]+}", "invitation_id"),
+	"/platform.v1.InvitationService/GetInvitationByToken": itemRoute("/api/v1/invitations/token/{token}", http.MethodGet, "{token}", "token"),
+
 	// GET /api/v1/kms/keys/{name} -- the server names the segment {name}; the
 	// proto field is key_id. The two names describe the same value.
 	"/platform.v1.KeyManagementService/GetKey": itemRoute("/api/v1/kms/keys/{name}", http.MethodGet, "{name}", "key_id"),
@@ -1016,6 +1039,12 @@ var templatedRouteTable = map[string]templatedRoute{
 	// GET /api/v1/overlay/vteps/{nodeId}
 	"/platform.v1.OverlayService/GetVTEP": itemRoute("/api/v1/overlay/vteps/{nodeId}", http.MethodGet, "{nodeId}", "node_id"),
 
+	// DELETE /api/v1/overlay/vnis/{vni:[0-9]+} --
+	// pkg/webservice/v1/rest/overlay/router.go. The flat row sent the VNI in
+	// the body of DELETE /api/v1/overlay/vnis, which the server does not
+	// serve (#452).
+	"/platform.v1.OverlayService/DeleteVNI": itemRoute("/api/v1/overlay/vnis/{vni:[0-9]+}", http.MethodDelete, "{vni:[0-9]+}", "vni"),
+
 	// GET /api/v1/pxe/devices/{id} -- request message is GetPXEDeviceRequest.
 	"/platform.v1.PXEService/GetDevice": itemRoute("/api/v1/pxe/devices/{id}", http.MethodGet, "{id}", "device_id"),
 
@@ -1024,6 +1053,16 @@ var templatedRouteTable = map[string]templatedRoute{
 
 	// GET /api/v1/tenants/{id}
 	"/platform.v1.TenantService/GetTenant": itemRoute("/api/v1/tenants/{id}", http.MethodGet, "{id}", "tenant_id"),
+
+	// The tenant item operations (#452), each on the template
+	// pkg/webservice/v1/rest/tenant/router.go registers. The flat rows sent
+	// the collection path (or /tenants/suspend, /tenants/resume) with
+	// tenant_id in the body; the server serves none of them. UpdateTenant
+	// keeps display_name, labels and annotations in the PUT body.
+	"/platform.v1.TenantService/UpdateTenant":  itemRoute("/api/v1/tenants/{id}", http.MethodPut, "{id}", "tenant_id"),
+	"/platform.v1.TenantService/DeleteTenant":  itemRoute("/api/v1/tenants/{id}", http.MethodDelete, "{id}", "tenant_id"),
+	"/platform.v1.TenantService/SuspendTenant": itemRoute("/api/v1/tenants/{id}/suspend", http.MethodPost, "{id}", "tenant_id"),
+	"/platform.v1.TenantService/ResumeTenant":  itemRoute("/api/v1/tenants/{id}/resume", http.MethodPost, "{id}", "tenant_id"),
 
 	// GET /api/v1/iam/tenants/{tenant}/users/{id} --
 	// pkg/webservice/v1/rest/iam/router.go registerUserRoutes.
@@ -1185,8 +1224,6 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.CAService/IssueCertificate":  {"/api/v1/ca/certificates", http.MethodPost},
 	"/platform.v1.CAService/SignCSR":           {"/api/v1/ca/sign-csr", http.MethodPost},
 	"/platform.v1.CAService/ListCertificates":  {"/api/v1/ca/certificates", http.MethodGet},
-	"/platform.v1.CAService/RevokeCertificate": {"/api/v1/ca/certificates/revoke", http.MethodPost},
-	"/platform.v1.CAService/RenewCertificate":  {"/api/v1/ca/certificates/renew", http.MethodPost},
 	"/platform.v1.CAService/VerifyCertificate": {"/api/v1/ca/certificates/verify", http.MethodPost},
 	"/platform.v1.CAService/GetCRL":            {"/api/v1/ca/crl", http.MethodGet},
 	"/platform.v1.CAService/GetCABundle":       {"/api/v1/ca/bundle", http.MethodGet},
@@ -1204,9 +1241,8 @@ var grpcMethodToRESTMap = map[string]struct {
 	// GetCurrentUser was removed (#415): iam.proto declares no such rpc, and
 	// its path /iam/users/current routed to GetUser with id="current".
 	"/platform.v1.PlatformIAMService/CheckPermission": {"/api/v1/iam/permissions/check", http.MethodPost},
-	"/platform.v1.PlatformIAMService/CreateToken":     {"/api/v1/iam/tokens", http.MethodPost},
-	"/platform.v1.PlatformIAMService/RevokeToken":     {"/api/v1/iam/tokens/revoke", http.MethodPost},
-	"/platform.v1.PlatformIAMService/VerifyToken":     {"/api/v1/iam/tokens/verify", http.MethodPost},
+	// CreateToken, RevokeToken and VerifyToken have no REST route: route()
+	// refuses them through restRefusedMethods (iam.go).
 
 	// KMS Service
 	"/platform.v1.KeyManagementService/GenerateKey":            {"/api/v1/kms/keys", http.MethodPost},
@@ -1283,22 +1319,31 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.AttestationService/VerifyAttestationQuote": {"/api/v1/attestation/quote/verify", http.MethodPost},
 	"/platform.v1.AttestationService/CollectHostAttestation": {"/api/v1/attestation/host", http.MethodPost},
 
-	// IDevID Service
-	"/platform.v1.IDevIDService/Generate":    {"/api/v1/idevid", http.MethodPost},
-	"/platform.v1.IDevIDService/GetInfo":     {"/api/v1/idevid/info", http.MethodGet},
-	"/platform.v1.IDevIDService/Delete":      {"/api/v1/idevid", http.MethodDelete},
-	"/platform.v1.IDevIDService/GetCSR":      {"/api/v1/idevid/csr", http.MethodGet},
-	"/platform.v1.IDevIDService/InstallCert": {"/api/v1/idevid/cert", http.MethodPost},
-	"/platform.v1.IDevIDService/GetCert":     {"/api/v1/idevid/cert", http.MethodGet},
-	"/platform.v1.IDevIDService/Exists":      {"/api/v1/idevid/exists", http.MethodGet},
+	// IDevID Service — the routes are pkg/webservice/v1/rest/idevid/router.go's.
+	// CreateLDevID is mapped in ldevid.go.
+	"/platform.v1.IDevIDService/GenerateIDevID":           {"/api/v1/idevid/generate", http.MethodPost},
+	"/platform.v1.IDevIDService/GetIDevIDInfo":            {"/api/v1/idevid/info", http.MethodGet},
+	"/platform.v1.IDevIDService/HasIDevID":                {"/api/v1/idevid/exists", http.MethodGet},
+	"/platform.v1.IDevIDService/DeleteIDevID":             {"/api/v1/idevid", http.MethodDelete},
+	"/platform.v1.IDevIDService/CreateIDevIDCSR":          {"/api/v1/idevid/csr", http.MethodPost},
+	"/platform.v1.IDevIDService/InstallIDevIDCertificate": {"/api/v1/idevid/certificate", http.MethodPost},
+	"/platform.v1.IDevIDService/GetIDevIDCertificate":     {"/api/v1/idevid/certificate", http.MethodGet},
+	"/platform.v1.IDevIDService/DeleteIDevIDCertificate":  {"/api/v1/idevid/certificate", http.MethodDelete},
+	"/platform.v1.IDevIDService/GenerateIAK":              {"/api/v1/idevid/iak/generate", http.MethodPost},
+	"/platform.v1.IDevIDService/GetIAKInfo":               {"/api/v1/idevid/iak", http.MethodGet},
+	"/platform.v1.IDevIDService/HasIAK":                   {"/api/v1/idevid/iak/exists", http.MethodGet},
+	"/platform.v1.IDevIDService/DeleteIAK":                {"/api/v1/idevid/iak", http.MethodDelete},
+	"/platform.v1.IDevIDService/CreateIAKCSR":             {"/api/v1/idevid/iak/csr", http.MethodPost},
+	"/platform.v1.IDevIDService/InstallIAKCertificate":    {"/api/v1/idevid/iak/certificate", http.MethodPost},
+	"/platform.v1.IDevIDService/GetIAKCertificate":        {"/api/v1/idevid/iak/certificate", http.MethodGet},
+	"/platform.v1.IDevIDService/DeleteIAKCertificate":     {"/api/v1/idevid/iak/certificate", http.MethodDelete},
+	"/platform.v1.IDevIDService/GetDeviceAttributes":      {"/api/v1/idevid/attributes", http.MethodGet},
+	"/platform.v1.IDevIDService/FlushTransientContexts":   {"/api/v1/idevid/flush", http.MethodPost},
+	"/platform.v1.IDevIDService/ActivateCredential":       {"/api/v1/idevid/activate-credential", http.MethodPost},
 
 	// Tenant Service
-	"/platform.v1.TenantService/CreateTenant":  {"/api/v1/tenants", http.MethodPost},
-	"/platform.v1.TenantService/DeleteTenant":  {"/api/v1/tenants", http.MethodDelete},
-	"/platform.v1.TenantService/ListTenants":   {"/api/v1/tenants", http.MethodGet},
-	"/platform.v1.TenantService/UpdateTenant":  {"/api/v1/tenants", http.MethodPut},
-	"/platform.v1.TenantService/SuspendTenant": {"/api/v1/tenants/suspend", http.MethodPost},
-	"/platform.v1.TenantService/ResumeTenant":  {"/api/v1/tenants/resume", http.MethodPost},
+	"/platform.v1.TenantService/CreateTenant": {"/api/v1/tenants", http.MethodPost},
+	"/platform.v1.TenantService/ListTenants":  {"/api/v1/tenants", http.MethodGet},
 
 	// PXE Service
 	"/platform.v1.PXEService/ListDevices":    {"/api/v1/pxe/devices", http.MethodGet},
@@ -1392,14 +1437,11 @@ var grpcMethodToRESTMap = map[string]struct {
 
 	// Invitation Service — proto: pkg/api/grpc/proto/invitation.proto
 	// Server registrations live in pkg/webservice/v1/rest/invitation/.
-	// Detail/revoke routes carry {id}/{token} in the URL; the SDK
-	// adapter posts the body and the server extracts vars.
-	"/platform.v1.InvitationService/CreateInvitation":     {"/api/v1/invitations", http.MethodPost},
-	"/platform.v1.InvitationService/GetInvitationByToken": {"/api/v1/invitations/by-token", http.MethodGet},
-	"/platform.v1.InvitationService/ListInvitations":      {"/api/v1/invitations", http.MethodGet},
-	"/platform.v1.InvitationService/RevokeInvitation":     {"/api/v1/invitations/revoke", http.MethodPost},
-	"/platform.v1.InvitationService/AcceptInvitation":     {"/api/v1/invitations/accept", http.MethodPost},
-	"/platform.v1.InvitationService/DeleteInvitation":     {"/api/v1/invitations", http.MethodDelete},
+	// The item routes, which carry {id} or {token} in the URL, are in
+	// templatedRouteTable.
+	"/platform.v1.InvitationService/CreateInvitation": {"/api/v1/invitations", http.MethodPost},
+	"/platform.v1.InvitationService/ListInvitations":  {"/api/v1/invitations", http.MethodGet},
+	"/platform.v1.InvitationService/AcceptInvitation": {"/api/v1/invitations/accept", http.MethodPost},
 
 	// LUKS Service — proto: pkg/api/grpc/proto/luks.proto
 	// Server registrations live in pkg/api/daemon/luks_rest.go. Status,
@@ -1417,7 +1459,6 @@ var grpcMethodToRESTMap = map[string]struct {
 	// Server registrations live in pkg/webservice/v1/rest/overlay/.
 	"/platform.v1.OverlayService/ListVTEPs":        {"/api/v1/overlay/vteps", http.MethodGet},
 	"/platform.v1.OverlayService/CreateVNI":        {"/api/v1/overlay/vnis", http.MethodPost},
-	"/platform.v1.OverlayService/DeleteVNI":        {"/api/v1/overlay/vnis", http.MethodDelete},
 	"/platform.v1.OverlayService/ListVNIs":         {"/api/v1/overlay/vnis", http.MethodGet},
 	"/platform.v1.OverlayService/ListTunnels":      {"/api/v1/overlay/tunnels", http.MethodGet},
 	"/platform.v1.OverlayService/GetTunnelStats":   {"/api/v1/overlay/tunnels/stats", http.MethodGet},
@@ -1438,12 +1479,9 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.ConfigDeliveryService/SignDigest":   {"/api/v1/provisioning/sign", http.MethodPost},
 	"/platform.v1.ConfigDeliveryService/ListSessions": {"/api/v1/provisioning/sessions", http.MethodGet},
 
-	// Provisioning Gateway — proto: pkg/api/grpc/proto/provisioning.proto
-	// Server registrations live in pkg/api/daemon/rest_service.go.
-	"/platform.v1.ProvisioningGateway/RegisterPXEDevice":     {"/api/v1/provisioning/pxe/register", http.MethodPost},
-	"/platform.v1.ProvisioningGateway/GetBootConfig":         {"/api/v1/provisioning/boot-config", http.MethodGet},
-	"/platform.v1.ProvisioningGateway/ReportDeviceState":     {"/api/v1/provisioning/devices/state", http.MethodPost},
-	"/platform.v1.ProvisioningGateway/NotifyInstallComplete": {"/api/v1/provisioning/devices/install-complete", http.MethodPost},
+	// Provisioning Gateway — proto: pkg/api/grpc/proto/provisioning.proto.
+	// Every RPC names a device by MAC, so all four are templated routes
+	// (provisioning_gateway.go).
 
 	// Cluster Service — proto: pkg/api/grpc/proto/cluster.proto
 	// REST routes are best-effort; gRPC/Unix remain the canonical

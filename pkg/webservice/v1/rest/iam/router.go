@@ -172,6 +172,9 @@ func (r *IAMRouter) registerFlatRoutes(router *mux.Router) {
 	router.Handle("/policies/{id}", r.tenantScoped(r.handlers.UpdatePolicy)).Methods("PUT")
 	router.Handle("/policies/{id}", r.tenantScoped(r.handlers.DeletePolicy)).Methods("DELETE")
 
+	// Permissions
+	router.Handle("/permissions/check", r.tenantScoped(r.handlers.CheckPermission)).Methods("POST")
+
 	// Applications
 	router.Handle("/apps", r.tenantScoped(r.handlers.RegisterApp)).Methods("POST")
 	router.Handle("/apps", r.tenantScoped(r.handlers.ListApps)).Methods("GET")
@@ -279,6 +282,7 @@ func (r *IAMRouter) registerRoleRoutes(router *mux.Router) {
 // DELETE /api/v1/iam/tenants/{tenant}/policies/{id}         - Delete policy
 // POST   /api/v1/iam/tenants/{tenant}/policies/validate     - Validate policy
 // POST   /api/v1/iam/tenants/{tenant}/policies/test         - Test policy
+// POST   /api/v1/iam/tenants/{tenant}/permissions/check     - Live PEP decision
 func (r *IAMRouter) registerPolicyRoutes(router *mux.Router) {
 	// Policy special action routes (must be before {id} routes to avoid conflicts)
 	router.Handle("/tenants/{tenant}/policies/validate", r.tenantScoped(r.handlers.ValidatePolicy)).Methods("POST")
@@ -292,6 +296,9 @@ func (r *IAMRouter) registerPolicyRoutes(router *mux.Router) {
 	router.Handle("/tenants/{tenant}/policies/{id}", r.tenantScoped(r.handlers.GetPolicy)).Methods("GET")
 	router.Handle("/tenants/{tenant}/policies/{id}", r.tenantScoped(r.handlers.UpdatePolicy)).Methods("PUT")
 	router.Handle("/tenants/{tenant}/policies/{id}", r.tenantScoped(r.handlers.DeletePolicy)).Methods("DELETE")
+
+	// Live permission decision from the policy enforcement point
+	router.Handle("/tenants/{tenant}/permissions/check", r.tenantScoped(r.handlers.CheckPermission)).Methods("POST")
 }
 
 // registerAppRoutes registers application (OAuth client) management endpoints

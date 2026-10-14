@@ -8,7 +8,8 @@ rather than an installer ISO: `platformctl diskimage create --target rpi
 runbook is its [user.md](../../../../../docs/factory-image/user.md).
 A Pi as a compute node of the dedicated profile is built with `--role
 compute` from [`dedicated/raspberrypi/`](../../dedicated/raspberrypi/README.md);
-the hardware prerequisites below apply to it too.
+the hardware prerequisites below apply to it too (to the Pi 4 — the
+experimental Pi 5 compute template lists what differs there).
 
 | Model directory | Board | Device tree | Status |
 |---|---|---|---|
@@ -16,7 +17,7 @@ the hardware prerequisites below apply to it too.
 
 Other boards the image builder knows (`--model rpi400`, `cm4`, `rpi3b+`,
 `rpi5`) fall back to `single-node/default.yaml` until they get a directory
-here; copy `rpi4/default.yaml` and change `hardware-model` and `os.hostname`.
+here (the Pi 5 has only the experimental dedicated compute template); copy `rpi4/default.yaml` and change `hardware-model` and `os.hostname`.
 
 ## Hardware prerequisites
 

@@ -1303,6 +1303,9 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			if svc := platformDaemon.InvitationGRPCService(); svc != nil {
 				params.InvitationServiceServer = svc
 			}
+			if svc := platformDaemon.CAGRPCService(); svc != nil {
+				params.CAServiceServer = svc
+			}
 			if svc := platformDaemon.OverlayGRPCService(); svc != nil {
 				params.OverlayServiceServer = svc
 			}

@@ -87,7 +87,7 @@ run this from live install media.** It repartitions the target disk.
 | `--fips` | bool | `false` | FIPS mode (forces PBKDF2 over Argon2id) |
 | `--lockdown` | bool | **`true`** | Kernel lockdown |
 | `--lockdown-mode` | string | `confidentiality` | `integrity` or `confidentiality` |
-| `--tpm-auto-upgrade-seal` | bool | **`true`** | Reseal automatically on kernel upgrade |
+| `--tpm-auto-upgrade-seal` | bool | **`true`** | Written to `/etc/alpine-tpm.conf` (`pkg/installer/alpine.go:601`) and read by nothing; no automatic reseal exists ([engineering.md §5](engineering.md#5-unlock-strategy-table--as-the-code-registers-it)) |
 | `--platformd-binary` | string | `""` | Path to the platformd binary to install |
 | `--verbose` / `-v` | bool | `false` | Verbose logging |
 | `--debug` | bool | `false` | Debug logging (implies verbose) |
@@ -173,7 +173,9 @@ platformctl install uki-rebuild --kver 6.12.8-lts
 
 **A rebuilt UKI changes what the machine measures.** New PCR values invalidate
 anything sealed to them — the LUKS key, vTPM-sealed secrets, golden-PCR
-attestation policy. Plan the reseal in the same maintenance window. The install
+attestation policy. Plan the reseal in the same maintenance window: nothing
+re-seals automatically, so the next boot ends at the LUKS passphrase prompt
+([architecture.md](architecture.md) trust boundary 4). The install
 also writes a kernel-update hook so an ordinary `apk upgrade linux-lts` triggers
 this automatically; `uki-rebuild` is the manual path when that hook failed to
 install.

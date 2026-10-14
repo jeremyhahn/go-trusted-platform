@@ -80,6 +80,7 @@ func TestShippedTemplates_GatewayRoleIsTheGatewayTemplatesOnly(t *testing.T) {
 		"dell/r640/control-plane.yaml":      false,
 		"dell/r640/compute.yaml":            false,
 		"raspberrypi/rpi4/compute.yaml":     false,
+		"raspberrypi/rpi5/compute.yaml":     false,
 	}
 	for rel, want := range cases {
 		t.Run(rel, func(t *testing.T) {
@@ -127,6 +128,7 @@ func TestShippedTemplates_GatewaydPackagesOnGatewaysOnly(t *testing.T) {
 		"dell/r640/control-plane.yaml":      false,
 		"dell/r640/compute.yaml":            false,
 		"raspberrypi/rpi4/compute.yaml":     false,
+		"raspberrypi/rpi5/compute.yaml":     false,
 	}
 	for rel, gateway := range cases {
 		t.Run(rel, func(t *testing.T) {

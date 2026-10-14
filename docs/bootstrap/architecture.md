@@ -309,10 +309,15 @@ the logged fallback.
    re-provision with a `TPM2_Clear`, which would regenerate the storage seed
    and invalidate the seal written in step 4.
 4. Seal the LUKS key **under the Platform KeyStore SRK** (never the SSRK)
-   with a PCR policy on the sealed object, plus a non-PCR upgrade seal, and
-   write both to the EFI partition. `pcr-banks` records the parent handle
+   with the platform policy on the sealed object (`PlatformPolicy: true`,
+   `pkg/firstboot/strategy.go:1302`), and write it to the EFI partition.
+   This is the only seal first boot writes: it writes no upgrade seal, and
+   it deletes any `seal-upgrade.*` it finds
+   (`pkg/firstboot/strategy.go:1361`). `pcr-banks` records the parent handle
    and its authorization mode (`keystore-platform-policy`) for the unseal
-   side to replay.
+   side to replay. It also records the configured `seal-pcrs` list
+   (`pkg/firstboot/strategy.go:1335`), but that list is never applied to
+   the seal; the platform policy decides which PCRs bind it.
 5. Unlock the LUKS root; copy the installer's contents onto it; apply the
    recovery-key strategy (destroy or escrow).
 6. Preserve `installer.luks` if anything in 3–4 failed, and return
@@ -437,12 +442,36 @@ platform is first drawn here.
    reach it.
 
 5. **Node → its own TPM (the seal).** The LUKS key is sealed under a PCR policy
-   so the disk unlocks only when the boot chain measures the same. Two seals
-   exist for two different purposes: the PCR-bound platform seal is the security
-   control; the non-PCR upgrade seal is the recovery path when a kernel upgrade
-   changes the measurements. Both are written with restrictive permissions to the
-   EFI partition, which is unencrypted — the confidentiality of a TPM-sealed blob
-   comes from the TPM, not the filesystem.
+   so the disk unlocks only when the boot chain measures the same. One seal
+   exists on a production device: the PCR-bound platform seal, the security
+   control. It is written with restrictive permissions to the EFI partition,
+   which is unencrypted — the confidentiality of a TPM-sealed blob comes from
+   the TPM, not the filesystem.
+
+   There is **no upgrade seal in production**. The initrd still registers the
+   `TPM-Upgrade` reader (`pkg/initrd/initrd.go:188-189`, priority 2,
+   `pkg/initrd/strategy_tpm_upgrade.go:66`) and it runs every boot, but it
+   finds no `seal-upgrade.*` files and declines
+   (`pkg/initrd/strategy_tpm_upgrade.go:117-118`). The writer,
+   `writeUpgradeSealedObjects` (`pkg/firstboot/executor.go:763-774`), is
+   called only from `Executor.Run` (`pkg/firstboot/executor.go:357`), and
+   nothing calls `Run`: `platformctl firstboot` builds an executor
+   (`pkg/cli/commands/firstboot/firstboot.go:156`) but unlocks through
+   `FirstbootSealStrategy` (`firstboot.go:171-189`). So a kernel or firmware
+   change that moves the bound PCRs falls through the chain: `TPM-PCR` fails
+   under the platform policy, `TPM-Upgrade` declines, `FIDO2` runs only if
+   enrolled, `Keyfile` has no `installer.luks` once seal confirmation wiped
+   it, and the boot stops at the `Password` prompt. After the passphrase,
+   platformd sees the Platform SRK policy no longer match the current PCRs
+   (`pkg/app/app.go:1927-1934`) beside a present seal and refuses to start
+   with `ErrTPMSealPolicyDrift` (`pkg/app/app.go:1970-1972`,
+   `pkg/app/tpm_seal_guard.go:214`).
+
+   *Planned, not implemented (go-xkms #1443):* `TPM-Upgrade` stays; upgraded
+   images are built and signed centrally and staged, not rebuilt on the
+   device; the bound PCR set becomes configurable per board, default 7 and
+   11; and the upgrade seal gets a named policy approved for the predicted
+   PCR values.
 
 6. **The installer container is key material.** `installer.luks` holds the
    plaintext LUKS key and is protected by a well-known password whose only job is

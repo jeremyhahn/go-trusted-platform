@@ -19,7 +19,7 @@ bytes and the category-opcode rule are in
 |---|---|
 | gRPC | `TPMService`, **27 RPCs** (`pkg/api/grpc/proto/tpm.proto`); `IDevIDService`, **20 RPCs** (`idevid.proto`) |
 | Embedded | `ServiceRegistry.TPM` (`platformv1.TPMServiceServer`) and `ServiceRegistry.IDevID` — the embedded adapter dispatches gRPC method strings, so **embedded coverage equals gRPC coverage exactly** |
-| REST | web service: `/api/v1/tpm` (`pkg/webservice/v1/rest/tpm/router.go`) and `/api/v1/idevid` (`pkg/webservice/v1/rest/idevid/router.go`); daemon REST listener: `/api/v1/tpm` (`pkg/api/rest/tpm_handlers.go`, mounted by `RESTServer.SetTPMHandlers`) |
+| REST | web service: `/api/v1/tpm` (`pkg/webservice/v1/rest/tpm/router.go`) and `/api/v1/idevid` (`pkg/webservice/v1/rest/idevid/router.go`); daemon REST listener: `/api/v1/tpm` (`pkg/api/rest/tpm_handlers.go`, mounted by `RESTServer.SetTPMHandlers`) and `POST /api/v1/idevid/ldevid` (`pkg/api/daemon/rest_idevid_ldevid.go`) |
 | QUIC | category opcode `OpTPM2Category` = **`0x99`**, sub-opcode in `payload[0]` (`pkg/api/quic/tpm_handlers.go`); device identity uses **top-level** opcodes `0x56`–`0x5F`, `0x6B`–`0x6E`, `0x78`–`0x7B` |
 | MCP | 31 `platform_tpm_*` tools (`pkg/api/mcp/tpm_tools.go`) plus 17 `idevid_*` / `iak_*` tools (`idevid_tools.go`, `ldevid_tools.go`) |
 
@@ -385,17 +385,22 @@ REST base path `/api/v1/idevid`. QUIC uses **top-level** opcodes here, not the
 | Install IAK certificate | `POST /api/v1/idevid/iak/certificate` | `InstallIAKCertificate` | `0x6B` | `iak_install_cert` | ✅ |
 | Get IAK certificate | `GET /api/v1/idevid/iak/certificate` | `GetIAKCertificate` | `0x6C` | `iak_get_cert` | ✅ |
 | Delete IAK certificate | `DELETE /api/v1/idevid/iak/certificate` | `DeleteIAKCertificate` | `0x7B` | `iak_delete_cert` | ✅ |
-| **Create LDevID** | `MISSING — docs/13 G7` | `CreateLDevID` | `0x99` · `0x1D` | `idevid_create_ldevid` | ✅ |
+| Create LDevID | `POST /api/v1/idevid/ldevid` | `CreateLDevID` | `0x99` · `0x1D` | `idevid_create_ldevid` | ✅ |
 | Device attributes | `GET /api/v1/idevid/attributes` | `GetDeviceAttributes` | `0x6D` | `MISSING — docs/13 G7` | ✅ |
 | Flush transient contexts | `POST /api/v1/idevid/flush` | `FlushTransientContexts` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 
-Two asymmetries worth naming:
+**`GET /api/v1/idevid/expiring` is REST-only and has no gRPC method behind
+it.** It is the only certificate-expiry surface in the feature, and the only
+way to reach it is HTTP.
 
-- **`GET /api/v1/idevid/expiring` is REST-only and has no gRPC method behind
-  it.** It is the only certificate-expiry surface in the feature, and the only
-  way to reach it is HTTP.
-- **LDevID has no REST route.** It is the newest identity verb and the one
-  operators are most likely to want from a browser or a script.
+**The Go SDK's REST adapter maps every `IDevIDService` RPC to the web
+service's route above** (`sdk/go/transport/rest/adapter.go`; `CreateLDevID` in
+`ldevid.go`), so `platformv1.NewIDevIDServiceClient` over REST reaches the same
+handlers a browser does (`TestSDKREST_*`,
+`pkg/webservice/v1/rest/idevid/ldevid_test.go`). Until #452 the table named
+seven RPCs that do not exist, and every real call except `CreateLDevID` fell
+through to a derived path that answered `404`. `POST /api/v1/idevid/ldevid` is served by both the
+web service and the daemon listener (`pkg/api/daemon/rest_idevid_ldevid.go`).
 
 ---
 
@@ -435,7 +440,7 @@ platform's measured state, which is what an attacker preparing to forge a
 quote reads first.
 
 `/api/v1/idevid/**` — the node's own IDevID and IAK, their CSRs and
-certificate install/delete, and `activate-credential` — is gated the same
+certificate install/delete, LDevID issuance, and `activate-credential` — is gated the same
 way. It is the identity every other node authenticates this one by.
 
 Until #165 both surfaces answered callers with no token at all. See

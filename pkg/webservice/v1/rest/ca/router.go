@@ -14,13 +14,17 @@
 package ca
 
 import (
+	"net/http"
+
 	"github.com/gorilla/mux"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 const (
@@ -36,7 +40,8 @@ const (
 
 // CARouter provides REST routing for CA operations
 type CARouter struct {
-	handlers *CAHandlers
+	handlers        *CAHandlers
+	scopeAuthorizer middleware.ScopeAuthorizer
 }
 
 // NewCARouter creates a new CARouter instance.
@@ -144,21 +149,48 @@ func (r *CARouter) WithKMS(kms issuance.KMS) *CARouter {
 	return r
 }
 
+// WithService sets the CA service that renew and verify call: the one the
+// gRPC, Unix and MCP transports serve.
+func (r *CARouter) WithService(service platformv1.CAServiceServer) *CARouter {
+	r.handlers.WithService(service)
+	return r
+}
+
+// SetScopeAuthorizer supplies the scope check renew, revoke and verify take
+// on top of the admin gate. Nil leaves them on the role gate alone, which is
+// the case under the legacy JWT handler: its sessions carry roles, not
+// scopes.
+func (r *CARouter) SetScopeAuthorizer(authorizer middleware.ScopeAuthorizer) {
+	r.scopeAuthorizer = authorizer
+}
+
+// requireScope wraps handler in the scope check when one is configured.
+func (r *CARouter) requireScope(scope string, handler http.HandlerFunc) http.Handler {
+	if r.scopeAuthorizer == nil {
+		return handler
+	}
+	return r.scopeAuthorizer.RequireScope(scope)(handler)
+}
+
 // registerCertificateRoutes registers certificate management endpoints
 // POST   /api/v1/ca/certificates               - Issue certificate
 // POST   /api/v1/ca/sign-csr                   - Certify a KMS key for code signing (ca:sign-csr)
 // GET    /api/v1/ca/certificates               - List certificates
+// POST   /api/v1/ca/certificates/verify        - Verify a certificate against this CA (certs:read)
 // GET    /api/v1/ca/certificates/{serial}      - Get certificate by serial
-// DELETE /api/v1/ca/certificates/{serial}      - Revoke certificate
+// DELETE /api/v1/ca/certificates/{serial}      - Revoke certificate (certs:revoke)
+// POST   /api/v1/ca/certificates/{serial}/renew - Renew certificate (certs:generate)
 func (r *CARouter) registerCertificateRoutes(router *mux.Router) {
 	// Certificate collection routes
 	router.HandleFunc("/certificates", r.handlers.IssueCertificate).Methods("POST")
 	router.HandleFunc("/sign-csr", r.handlers.SignCSR).Methods("POST")
 	router.HandleFunc("/certificates", r.handlers.ListCertificates).Methods("GET")
+	router.Handle("/certificates/verify", r.requireScope(VerifyScope, r.handlers.VerifyCertificate)).Methods("POST")
 
 	// Certificate instance routes
 	router.HandleFunc("/certificates/{serial}", r.handlers.GetCertificate).Methods("GET")
-	router.HandleFunc("/certificates/{serial}", r.handlers.RevokeCertificate).Methods("DELETE")
+	router.Handle("/certificates/{serial}", r.requireScope(RevokeScope, r.handlers.RevokeCertificate)).Methods("DELETE")
+	router.Handle("/certificates/{serial}/renew", r.requireScope(RenewScope, r.handlers.RenewCertificate)).Methods("POST")
 }
 
 // registerBundleRoutes registers CA bundle endpoints

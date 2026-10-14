@@ -36,10 +36,15 @@ var bootloaderPackages = []string{"raspberrypi-bootloader", "raspberrypi-bootloa
 type Model struct {
 	// Name is the --model value.
 	Name string
-	// Description is what the operator sees.
+	// Description is the board's name: what the operator sees, and the
+	// hardware-model the image's platform config carries.
 	Description string
 	// DTB is the device tree the firmware loads for the board.
 	DTB string
+	// Firmware is the GPU firmware the board loads from the boot partition
+	// before U-Boot. Empty for the Pi 5, whose bootloader EEPROM reads
+	// config.txt and loads kernel8.img itself.
+	Firmware []string
 	// Experimental marks boards mainline U-Boot only recently gained
 	// (validation on hardware is still owed).
 	Experimental bool
@@ -51,12 +56,15 @@ type Model struct {
 
 // models is the supported board table, keyed by --model.
 var models = map[string]Model{
-	"rpi4":   {Name: "rpi4", Description: "Raspberry Pi 4 Model B", DTB: "bcm2711-rpi-4-b.dtb", SoC: "2711"},
-	"rpi400": {Name: "rpi400", Description: "Raspberry Pi 400", DTB: "bcm2711-rpi-400.dtb", SoC: "2711"},
-	"cm4":    {Name: "cm4", Description: "Raspberry Pi Compute Module 4", DTB: "bcm2711-rpi-cm4.dtb", SoC: "2711"},
-	"rpi3b+": {Name: "rpi3b+", Description: "Raspberry Pi 3 Model B+", DTB: "bcm2710-rpi-3-b-plus.dtb"},
-	"rpi5":   {Name: "rpi5", Description: "Raspberry Pi 5 (experimental: mainline U-Boot support is recent)", DTB: "bcm2712-rpi-5-b.dtb", Experimental: true, SoC: "2712"},
+	"rpi4":   {Name: "rpi4", Description: "Raspberry Pi 4 Model B", DTB: "bcm2711-rpi-4-b.dtb", Firmware: pi4Firmware, SoC: "2711"},
+	"rpi400": {Name: "rpi400", Description: "Raspberry Pi 400", DTB: "bcm2711-rpi-400.dtb", Firmware: pi4Firmware, SoC: "2711"},
+	"cm4":    {Name: "cm4", Description: "Raspberry Pi Compute Module 4", DTB: "bcm2711-rpi-cm4.dtb", Firmware: pi4Firmware, SoC: "2711"},
+	"rpi3b+": {Name: "rpi3b+", Description: "Raspberry Pi 3 Model B+", DTB: "bcm2710-rpi-3-b-plus.dtb", Firmware: []string{"bootcode.bin", "start.elf", "fixup.dat"}},
+	"rpi5":   {Name: "rpi5", Description: "Raspberry Pi 5", DTB: "bcm2712-rpi-5-b.dtb", Experimental: true, SoC: "2712"},
 }
+
+// pi4Firmware is what the BCM2711 boards' EEPROM loads before U-Boot.
+var pi4Firmware = []string{"start4.elf", "fixup4.dat"}
 
 // DefaultModel is used when --model is not given.
 const DefaultModel = "rpi4"
@@ -162,7 +170,8 @@ func ConfigTxt(m Model) string {
 // requiredFirmware must exist on the boot partition for the target model to
 // start U-Boot at all.
 func requiredFirmware(m Model) []string {
-	return []string{"kernel8.img", "config.txt", m.DTB, "overlays/tpm-soft-spi.dtbo", "overlays/disable-bt.dtbo", "start4.elf", "fixup4.dat"}
+	files := []string{"kernel8.img", "config.txt", m.DTB, "overlays/tpm-soft-spi.dtbo", "overlays/disable-bt.dtbo"}
+	return append(files, m.Firmware...)
 }
 
 // StageBootFirmware implements diskimage.Target: it fills

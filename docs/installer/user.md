@@ -327,7 +327,9 @@ platformctl install uki-rebuild --kver 6.12.8-lts
 
 Then plan the reseal. A new UKI produces new PCR values, and anything sealed to
 the old ones — the LUKS key, vTPM secrets, golden-PCR attestation policy — needs
-updating in the same maintenance window.
+updating in the same maintenance window. Nothing re-seals automatically —
+the hook rebuilds and re-signs only — so expect the next boot to stop at the
+passphrase prompt ([architecture.md](architecture.md) trust boundary 4).
 
 ### Firmware updates
 

@@ -618,14 +618,16 @@ func TestRegisterRoutes_RegistersOnlyTheProtectedHalf(t *testing.T) {
 	got := registeredPaths(caRouter.RegisterRoutes)
 
 	want := map[string]bool{
-		"POST /api/v1/ca/certificates":            true,
-		"POST /api/v1/ca/sign-csr":                true,
-		"GET /api/v1/ca/certificates":             true,
-		"GET /api/v1/ca/certificates/{serial}":    true,
-		"DELETE /api/v1/ca/certificates/{serial}": true,
+		"POST /api/v1/ca/certificates":                true,
+		"POST /api/v1/ca/sign-csr":                    true,
+		"GET /api/v1/ca/certificates":                 true,
+		"POST /api/v1/ca/certificates/verify":         true,
+		"GET /api/v1/ca/certificates/{serial}":        true,
+		"DELETE /api/v1/ca/certificates/{serial}":     true,
+		"POST /api/v1/ca/certificates/{serial}/renew": true,
 	}
 	assert.Equal(t, want, got,
-		"the protected CA half must be exactly issuance, CSR signing, revocation and the issued-certificate inventory")
+		"the protected CA half must be exactly issuance, CSR signing, renewal, revocation, verification and the issued-certificate inventory")
 }
 
 // TestRegisterPublicRoutes_RegistersOnlyTheUnauthenticatedHalf pins the
@@ -681,5 +683,5 @@ func TestRegisterRoutes_HalvesAreDisjointAndCoverTheSurface(t *testing.T) {
 		caRouter.RegisterPublicRoutes(r)
 		caRouter.RegisterRoutes(r)
 	}), union, "the two halves must cover the whole CA surface")
-	assert.Len(t, union, 11)
+	assert.Len(t, union, 13)
 }

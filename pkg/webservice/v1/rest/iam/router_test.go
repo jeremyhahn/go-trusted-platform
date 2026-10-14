@@ -93,6 +93,10 @@ func TestRegisterRoutes(t *testing.T) {
 		{"validate policy", http.MethodPost, "/api/v1/iam/tenants/tenant-1/policies/validate"},
 		{"test policy", http.MethodPost, "/api/v1/iam/tenants/tenant-1/policies/test"},
 
+		// Permission routes
+		{"check permission", http.MethodPost, "/api/v1/iam/tenants/tenant-1/permissions/check"},
+		{"check permission (flat)", http.MethodPost, "/api/v1/iam/permissions/check"},
+
 		// App routes
 		{"register app", http.MethodPost, "/api/v1/iam/tenants/tenant-1/apps"},
 		{"list apps", http.MethodGet, "/api/v1/iam/tenants/tenant-1/apps"},
@@ -306,6 +310,11 @@ func TestPolicyRoutes_Registration(t *testing.T) {
 		{
 			method:       http.MethodPost,
 			path:         "/api/v1/iam/tenants/tenant-1/policies/test",
+			expectedVars: map[string]string{"tenant": "tenant-1"},
+		},
+		{
+			method:       http.MethodPost,
+			path:         "/api/v1/iam/tenants/tenant-1/permissions/check",
 			expectedVars: map[string]string{"tenant": "tenant-1"},
 		},
 	}

@@ -23,7 +23,9 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
@@ -148,4 +150,105 @@ func TestPXERouter_NilServer(t *testing.T) {
 	parent.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 	assert.Contains(t, rec.Body.String(), "pxe service is not available")
+}
+
+// operatorScopeProbes is every operator route with a concrete path and the
+// scope its PXEService RPC takes in the gRPC catalog
+// (pkg/api/grpc/method_permissions.go). docs/ipxe/api.md §5 states the same.
+var operatorScopeProbes = []struct{ method, path, scope string }{
+	{http.MethodGet, "/api/v1/pxe/status", "pxe:read"},
+	{http.MethodPost, "/api/v1/pxe/start", "pxe:write"},
+	{http.MethodPost, "/api/v1/pxe/stop", "pxe:write"},
+	{http.MethodGet, "/api/v1/pxe/devices", "pxe:read"},
+	{http.MethodPost, "/api/v1/pxe/devices", "pxe:write"},
+	{http.MethodGet, "/api/v1/pxe/devices/mac/aa:bb:cc:dd:ee:ff", "pxe:read"},
+	{http.MethodGet, "/api/v1/pxe/devices/d1", "pxe:read"},
+	{http.MethodDelete, "/api/v1/pxe/devices/d1", "pxe:delete"},
+	{http.MethodPut, "/api/v1/pxe/devices/d1/state", "pxe:write"},
+	{http.MethodPost, "/api/v1/pxe/devices/d1/enrolled", "pxe:write"},
+	{http.MethodPost, "/api/v1/pxe/devices/d1/authorize", "pxe:write"},
+	{http.MethodPost, "/api/v1/pxe/devices/d1/quarantine", "pxe:write"},
+	{http.MethodPost, "/api/v1/pxe/devices/d1/retry", "pxe:write"},
+	{http.MethodGet, "/api/v1/pxe/devices/d1/events", "pxe:read"},
+}
+
+// operatorRoot mounts the operator routes under /api/v1 with no PXE server,
+// so a request that passes the scope check answers 503 from the handler.
+func operatorRoot(authorizer middleware.ScopeAuthorizer) *mux.Router {
+	w := response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil)
+	r := NewPXERouter(logging.NewLogger(slog.LevelError, io.Discard), nil, w, false)
+	r.SetScopeAuthorizer(authorizer)
+	root := mux.NewRouter()
+	r.RegisterRoutes(root.PathPrefix("/api/v1").Subrouter())
+	return root
+}
+
+func serveProbe(router *mux.Router, method, path string) int {
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(method, path, nil))
+	return rec.Code
+}
+
+// TestOperatorRoutes_TakeTheirRPCScope checks that each operator route
+// reaches its handler with its RPC's scope and is refused with any other pxe
+// scope, as gRPC refuses the RPC.
+func TestOperatorRoutes_TakeTheirRPCScope(t *testing.T) {
+	pxeScopes := []string{"pxe:read", "pxe:write", "pxe:delete"}
+	for _, probe := range operatorScopeProbes {
+		t.Run(probe.method+" "+probe.path, func(t *testing.T) {
+			assert.Equal(t, http.StatusServiceUnavailable,
+				serveProbe(operatorRoot(scopeGrant{granted: probe.scope}), probe.method, probe.path),
+				"%s must reach the handler", probe.scope)
+			for _, other := range pxeScopes {
+				if other == probe.scope {
+					continue
+				}
+				assert.Equal(t, http.StatusForbidden,
+					serveProbe(operatorRoot(scopeGrant{granted: other}), probe.method, probe.path),
+					"%s must not reach the handler", other)
+			}
+		})
+	}
+}
+
+// TestOperatorRoutes_RoleGateAloneWithoutAScopeAuthorizer pins the legacy
+// JWT case: its sessions carry roles and no scopes, so with no authorizer
+// every operator route is left on the admin gate the caller mounts.
+func TestOperatorRoutes_RoleGateAloneWithoutAScopeAuthorizer(t *testing.T) {
+	router := operatorRoot(nil)
+	for _, probe := range operatorScopeProbes {
+		assert.Equal(t, http.StatusServiceUnavailable, serveProbe(router, probe.method, probe.path),
+			"%s %s", probe.method, probe.path)
+	}
+}
+
+// TestScopedRoutes_EveryRouteHasACatalogScope fails when a PXE or gateway
+// route is mounted without a scope from the gRPC catalog: its RPC name does
+// not resolve, or the route was registered outside the scoped table.
+func TestScopedRoutes_EveryRouteHasACatalogScope(t *testing.T) {
+	w := response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil)
+	r := NewPXERouter(logging.NewLogger(slog.LevelError, io.Discard), nil, w, false)
+
+	tables := []struct {
+		name     string
+		base     string
+		routes   []scopedRoute
+		register func(*mux.Router)
+	}{
+		{"operator", basePath, r.operatorRoutes(), r.RegisterRoutes},
+		{"gateway", gatewayBasePath, r.gatewayRoutes(), r.RegisterGatewayRoutes},
+	}
+	for _, table := range tables {
+		t.Run(table.name, func(t *testing.T) {
+			scoped := map[string]bool{}
+			for _, route := range table.routes {
+				assert.NotEmpty(t, grpcapi.ScopeForMethod(route.rpc),
+					"%s %s: %s has no scope in the gRPC catalog", route.method, route.path, route.rpc)
+				scoped[route.method+" /api/v1"+table.base+route.path] = true
+			}
+			assert.Equal(t, scoped, registeredPXEPaths(table.register),
+				"a route was mounted outside the scoped table, so it takes no scope")
+		})
+	}
+	assert.Len(t, operatorScopeProbes, len(r.operatorRoutes()), "a scope probe per operator route")
 }

@@ -65,6 +65,10 @@
 //   - POST   /api/v1/iam/tenants/{tenant}/policies/validate - Validate policy
 //   - POST   /api/v1/iam/tenants/{tenant}/policies/test   - Test policy
 //
+// Permission Checks:
+//
+//   - POST   /api/v1/iam/tenants/{tenant}/permissions/check - Live PEP decision
+//
 // Application Management:
 //
 //   - POST   /api/v1/iam/tenants/{tenant}/apps            - Register app

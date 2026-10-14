@@ -34,18 +34,6 @@ import (
 // from, so a test can prove no request is answered from another tenant.
 func tenantBoundIAMServer(t *testing.T, servedTenant *string) *httptest.Server {
 	t.Helper()
-	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
-	writer := response.NewResponseWriter(logger, nil)
-	guard, err := iammw.NewSessionGuard(logger, writer)
-	require.NoError(t, err)
-
-	session := iammw.NewIAMSession(&iamsdk.User{ID: "admin-a", TenantID: "tenant-a", Roles: []string{"admin"}})
-	authenticate := func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			next.ServeHTTP(w, r.WithContext(iammw.SetSessionInContext(r.Context(), session)))
-		})
-	}
-
 	client := &mockIAMClient{
 		getUserFn: func(_ context.Context, tenantID, userID string) (*iamsdk.User, error) {
 			*servedTenant = tenantID
@@ -81,7 +69,27 @@ func tenantBoundIAMServer(t *testing.T, servedTenant *string) *httptest.Server {
 		},
 	}
 
-	iamRouter, err := NewIAMRouter(logger, client, &mockPEPClient{}, writer, Authorization{
+	return adminSessionIAMServer(t, client, &mockPEPClient{})
+}
+
+// adminSessionIAMServer serves the real IAM router over TLS, behind the real
+// session guards, to a caller authenticated as admin-a of tenant-a, with the
+// given IAM client and policy enforcement point behind the handlers.
+func adminSessionIAMServer(t *testing.T, client IAMClient, pep PEPClient) *httptest.Server {
+	t.Helper()
+	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
+	writer := response.NewResponseWriter(logger, nil)
+	guard, err := iammw.NewSessionGuard(logger, writer)
+	require.NoError(t, err)
+
+	session := iammw.NewIAMSession(&iamsdk.User{ID: "admin-a", TenantID: "tenant-a", Roles: []string{"admin"}})
+	authenticate := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(iammw.SetSessionInContext(r.Context(), session)))
+		})
+	}
+
+	iamRouter, err := NewIAMRouter(logger, client, pep, writer, Authorization{
 		Authenticate:        authenticate,
 		RequireAdmin:        guard.RequireRoles("admin"),
 		RequireSystemTenant: guard.RequireTenant("system"),

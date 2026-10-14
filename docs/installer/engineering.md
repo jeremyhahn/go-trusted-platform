@@ -334,6 +334,34 @@ Strategy constructors: `NewKeyfileStrategy`, `NewTPMPCRStrategy`,
 `DefaultConfig().FallbackMethods` is
 `[UnlockTPMPCR, UnlockTPMUpgrade, UnlockFIDO2, UnlockPassword]`.
 
+**`TPM-Upgrade` has a reader and no production writer.** It is registered by
+default (`pkg/initrd/initrd.go:188-189`) and runs every boot: `CanUnlock`
+mounts the ESP, finds no `tpm2/seal-upgrade.pub` / `.priv`, logs
+*"TPM-Upgrade: No upgrade seal files found"* and declines
+(`pkg/initrd/strategy_tpm_upgrade.go:108-118`). `Install` creates nothing
+(`strategy_tpm_upgrade.go:287`), and `CreateUpgradeSeal`
+(`strategy_tpm_upgrade.go:304`) is called only from its test. The firstboot
+writer, `writeUpgradeSealedObjects` (`pkg/firstboot/executor.go:763-774`), is
+reached only from `Executor.Run` (`executor.go:357`), which nothing calls:
+`platformctl firstboot` builds an executor
+(`pkg/cli/commands/firstboot/firstboot.go:156`) but unlocks through
+`FirstbootSealStrategy` (`firstboot.go:171-189`), whose seal path writes the
+platform seal only and deletes any upgrade seal
+(`pkg/firstboot/strategy.go:1361`). Neither the kernel-update hook
+(`pkg/installer/kernel_hook.go`, `uki_rebuild.go`) nor the
+`tpm-firstboot-seal` OpenRC service re-seals: the service tests for
+`seal-upgrade.*` (`pkg/installer/installer.go:3259`) that never exist, and the
+`platformctl firstboot` it runs (`installer.go:3346`) declines once
+`seal-platform.pub` exists (`pkg/firstboot/strategy.go:131-161`). So a kernel
+or firmware change that moves the bound PCRs goes: `TPM-PCR` fails under the
+platform policy (`strategy_tpm_pcr.go:239-246`), `TPM-Upgrade` declines,
+`FIDO2` runs only if registered, `Keyfile` finds no `installer.luks`, and
+`Password` prompts. After the passphrase, platformd detects the Platform SRK
+policy drift (`pkg/app/app.go:1927-1934`) beside a present seal and returns
+`ErrTPMSealPolicyDrift` (`pkg/app/tpm_seal_guard.go:214`,
+`pkg/app/app.go:1970-1972`). The planned upgrade path is
+[architecture.md](architecture.md) trust boundary 4.
+
 **`TPMNoPCRStrategy` is constructible but unreachable through
 `registerDefaultStrategies`.** `luks.UnlockTPMNoPCR` exists as an
 `UnlockMethod` constant, but the `switch` in `initrd.go` has no case for it, so
@@ -428,7 +456,7 @@ re-applies only the flags cobra reports as `Changed`.
 | `disk.encryption.password` / `passphrase` | string, `secret:"true"` | — |
 | `disk.encryption.tpm.enabled` | bool | — |
 | `disk.encryption.tpm.handle` | uint32 | `DefaultLUKSTPMHandle` = `0x81000001` (SSRK) |
-| `disk.encryption.tpm.seal-pcrs` | []uint | falls back to top-level `pcrs` |
+| `disk.encryption.tpm.seal-pcrs` | []uint | falls back to top-level `pcrs`; recorded in `pcr-banks` only (`pkg/firstboot/strategy.go:1335`) and never applied to the seal, which uses the platform policy (`strategy.go:1302`) |
 | `disk.encryption.tpm.pcr-banks` | []string | falls back to the TPM config value |
 | `disk.encryption.tpm.platform-policy` | bool | should be `false` — the initrd unseals before platformd creates the platform policy |
 | `disk.encryption.tpm.factory-reset-on-firstboot` | bool | `false` in Go, `true` in reference templates |
@@ -444,7 +472,7 @@ re-applies only the flags cobra reports as `Changed`.
 | `os.hostname` | string | `trusted-platform` |
 | `os.fips` | bool | `false` |
 | `os.lockdown` / `os.lockdown-mode` | bool / `integrity`\|`confidentiality` | `true` / `confidentiality` |
-| `os.tpm-auto-upgrade-seal` | bool | `true` |
+| `os.tpm-auto-upgrade-seal` | bool | `true` — written to `/etc/alpine-tpm.conf` as `TPM_AUTO_UPGRADE_SEAL` (`pkg/installer/alpine.go:601`), which nothing reads; no upgrade seal is created either way (§5) |
 | `os.enable-fido2` | bool | `false` |
 | `os.kernel-modules` | []string | — (needed on bare metal for `igb`, `ixgbe`, …) |
 | `os.ima.*` | `IMAConfig` | policy `tcb`\|`appraise_tcb`\|`secure_boot`\|`critical_data`; appraise `off`\|`log`\|`enforce`\|`fix` |
@@ -623,7 +651,7 @@ ESP layout, with the constants that name each file (`pkg/firstboot/types.go`,
 | `/boot/efi/tpm2/installer.luks` | `EFIInstallerFile`, `strategyInstallerContainerFile` | first boot, then until the **first `TPM-PCR` unlock**, which securely wipes it |
 | `/boot/efi/tpm2/seal-platform.pub` | `EFISealPlatformPub`, `strategySealPub` | permanent |
 | `/boot/efi/tpm2/seal-platform.priv` | `EFISealPlatformPriv`, `strategySealPriv` | permanent |
-| `/boot/efi/tpm2/seal-upgrade.pub` / `.priv` | `EFISealUpgradePub` / `Priv` | one boot — deleted immediately on use |
+| `/boot/efi/tpm2/seal-upgrade.pub` / `.priv` | `EFISealUpgradePub` / `Priv` | never written in production (§5); `TPM-Upgrade` would keep them after use (`pkg/initrd/strategy_tpm_upgrade.go:236-252`), and the first-boot seal and a `TPM-PCR` unlock delete them (`pkg/firstboot/strategy.go:1361`, `pkg/initrd/strategy_tpm_pcr.go:227`) |
 | `/boot/efi/tpm2/pcr-banks` | `EFIPCRBanks` | written minimally at install, overwritten authoritatively by firstboot |
 | `/boot/efi/tpm2/pcr-seal-values.txt` | `EFIPCRValues` | permanent |
 | `/boot/efi/tpm2/swtpm-state` | `EFISwtpmStateDir` | swtpm deployments only |
@@ -882,7 +910,7 @@ files works unchanged:
 |---|---|
 | Location | `/dev/nbd0p1`: GPT partition 1, from 1 MiB (`diskManager.CreateEFIPartition`, `pkg/installer/disk.go`) |
 | Size | `disk.efi-partition-size` MiB, default 538; the LUKS2 root (`/dev/nbd0p2`) takes the rest |
-| Format | FAT32 (`vfat`, label `EFI`), the [ESP layout](#8-persistence-and-on-disk-layout) above: the UKI under `EFI/BOOT/`, and `tpm2/pcr-banks`, `tpm2/installer.luks` (first boot), `tpm2/seal-platform.pub` / `.priv`, `tpm2/seal-upgrade.*`, `tpm2/pcr-seal-values.txt` |
+| Format | FAT32 (`vfat`, label `EFI`), the [ESP layout](#8-persistence-and-on-disk-layout) above: the UKI under `EFI/BOOT/`, and `tpm2/pcr-banks`, `tpm2/installer.luks` (first boot), `tpm2/seal-platform.pub` / `.priv`, `tpm2/pcr-seal-values.txt` (no `tpm2/seal-upgrade.*` — nothing writes it, §5) |
 | Mounted at | `/mnt/boot/efi` during Phase A; `/boot/efi` on the node, from fstab **by path** (`espFstabSource`), never `LABEL=EFI`, so a stray local partition with that label cannot receive the seal |
 
 Writers: Phase A writes `tpm2/pcr-banks` and `tpm2/installer.luks` under
@@ -966,8 +994,11 @@ have a matching `CommandDefinition` in the integration parity suite. **No
 
 ## 10. Corrections against the pre-convention documents
 
-The code wins. Each row is a defect in the older file, recorded rather than
-silently fixed, because those files are still linked from elsewhere.
+The code wins. Each row is a defect in an older file, recorded rather than
+silently fixed. SECURITY_MODEL.md, UNLOCK_STRATEGIES.md, initrd-overview.md,
+initrd-architecture.md and README.md have since been deleted
+([architecture.md §8](architecture.md#8-related)); their rows stay as the
+record of what they claimed.
 
 | Claim | Where | Reality in code |
 |---|---|---|
@@ -975,7 +1006,7 @@ silently fixed, because those files are still linked from elsewhere.
 | Installer container password is `installer` | SECURITY_MODEL.md | `installer.InstallerPassword` = `"forensic-protection-only"`. factory-reset.md is right. |
 | Seal files are `seal.pub` / `seal.priv` | SECURITY_MODEL.md, UNLOCK_STRATEGIES.md | `seal-platform.pub` / `seal-platform.priv`. |
 | FIDO2 strategy priority is 4 | UNLOCK_STRATEGIES.md | `3` (`strategy_fido2.go`). |
-| The strategy set is Firstboot / TPM-PCR / TPM-Upgrade / FIDO2 / Password | UNLOCK_STRATEGIES.md | `Keyfile` (80) and `TPMNoPCR` (5) also exist; `Keyfile` is the strategy that actually carries the first boot inside `pkg/initrd`. |
+| The strategy set is Firstboot / TPM-PCR / TPM-Upgrade / FIDO2 / Password, and `TPM-Upgrade` carries a kernel upgrade across | the pre-convention unlock-strategy notes | `Keyfile` (80) and `TPMNoPCR` (5) also exist; `Keyfile` is the strategy that actually carries the first boot inside `pkg/initrd`. `TPM-Upgrade` has no production writer and declines every boot ([§5](#5-unlock-strategy-table--as-the-code-registers-it)). |
 | "Write plain key to EFI partition" during install | README.md §System Overview | Superseded. The key is only ever inside `installer.luks`; the same README says so five sections later. |
 | Platform SRK policy is "PCR + PIN"; there are "PIN seals" | README.md, initrd-architecture.md | No PIN seal path exists in `pkg/initrd`. SECURITY_MODEL.md's "PCR policy" description is the accurate one. |
 | `pkg/luks`, `pkg/fido2`, `pkg/initrd/strategies/` | initrd-architecture.md | The real paths are `pkg/storage/luks`, the `go-quicbaas/sdk/go/xkms/fido2` re-export, and `pkg/initrd/strategy_*.go`. `initrd-architecture.md` is an **aspirational design note that predates the implementation** — read it for intent, never for identifiers. |

@@ -234,6 +234,7 @@ GET /api/v1/platform/status
 GET /api/v1/platform/system
 GET /api/v1/platform/version
 GET /api/v1/provisioning/config/nonce
+GET /api/v1/provisioning/devices
 GET /api/v1/provisioning/sessions
 GET /api/v1/provisioning/sessions/{sessionID}
 GET /api/v1/provisioning/sessions/{sessionID}/poll
@@ -344,6 +345,8 @@ POST /api/v1/attestation/quote/verify
 POST /api/v1/attestation/reports/{device_id}/refresh
 POST /api/v1/attestation/vm/{id}
 POST /api/v1/ca/certificates
+POST /api/v1/ca/certificates/verify
+POST /api/v1/ca/certificates/{serial}/renew
 POST /api/v1/ca/sign-csr
 POST /api/v1/compute/containers
 POST /api/v1/compute/containers/{id}/exec
@@ -394,6 +397,7 @@ POST /api/v1/gateway/mode
 POST /api/v1/gateway/telemetry
 POST /api/v1/iam/apps
 POST /api/v1/iam/apps/{id}/rotate
+POST /api/v1/iam/permissions/check
 POST /api/v1/iam/policies
 POST /api/v1/iam/policies/test
 POST /api/v1/iam/policies/validate
@@ -401,6 +405,7 @@ POST /api/v1/iam/roles
 POST /api/v1/iam/tenants
 POST /api/v1/iam/tenants/{tenant}/apps
 POST /api/v1/iam/tenants/{tenant}/apps/{id}/rotate
+POST /api/v1/iam/tenants/{tenant}/permissions/check
 POST /api/v1/iam/tenants/{tenant}/policies
 POST /api/v1/iam/tenants/{tenant}/policies/test
 POST /api/v1/iam/tenants/{tenant}/policies/validate
@@ -417,6 +422,7 @@ POST /api/v1/idevid/generate
 POST /api/v1/idevid/iak/certificate
 POST /api/v1/idevid/iak/csr
 POST /api/v1/idevid/iak/generate
+POST /api/v1/idevid/ldevid
 POST /api/v1/invitations
 POST /api/v1/invitations/accept
 POST /api/v1/invitations/{id:[0-9]+}/revoke
@@ -451,6 +457,9 @@ POST /api/v1/platform/services/{service}/restart
 POST /api/v1/platform/services/{service}/start
 POST /api/v1/platform/services/{service}/stop
 POST /api/v1/provisioning/config
+POST /api/v1/provisioning/devices/{mac}/install-complete
+POST /api/v1/provisioning/devices/{mac}/register
+POST /api/v1/provisioning/devices/{mac}/state
 POST /api/v1/provisioning/sessions/{sessionID}/fulfill
 POST /api/v1/provisioning/sign
 POST /api/v1/pxe/devices

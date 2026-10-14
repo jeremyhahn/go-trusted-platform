@@ -13,6 +13,23 @@ import (
 // JSON field names of the two match, so the resource decodes as-is; without
 // these decoders protojson discarded every field and the SDK's Create, Get
 // and Update returned a nil resource over REST (#401).
+// iamTokensViaOIDC is why the platform serves the IAM token RPCs on no REST
+// route (docs/iam/api.md §6): its gRPC and QUIC servers answer them
+// Unimplemented, and REST token issuance is the authentication router's
+// login and refresh endpoints.
+const iamTokensViaOIDC = "IAM token issuance, verification and revocation are OIDC flows; " +
+	"log in or refresh through /api/v1/login and /api/v1/login/refresh"
+
+// restRefusedMethods are the gRPC methods the platform deliberately serves no
+// REST route for, each with the reason. route() refuses them with
+// ErrNoRESTRoute instead of deriving a /api/v1/platformiam/... path that
+// does not exist, so the call never reaches the network.
+var restRefusedMethods = map[string]string{
+	platformv1.PlatformIAMService_CreateToken_FullMethodName: iamTokensViaOIDC,
+	platformv1.PlatformIAMService_RevokeToken_FullMethodName: iamTokensViaOIDC,
+	platformv1.PlatformIAMService_VerifyToken_FullMethodName: iamTokensViaOIDC,
+}
+
 func init() {
 	iamResources := []struct {
 		field   protoreflect.Name

@@ -19,7 +19,9 @@ import (
 
 	"github.com/gorilla/mux"
 
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/router"
@@ -33,6 +35,9 @@ type PXERouter struct {
 	logger     *logging.Logger
 	server     platformv1.PXEServiceServer
 	respWriter response.HttpWriter
+	// scopeAuthorizer is the per-route scope check the operator and gateway
+	// routes take on top of the admin gate; nil leaves them on the gate.
+	scopeAuthorizer middleware.ScopeAuthorizer
 	// webhookEnabled is pxe.ServiceConfig.WebhookEnabled: whether the
 	// install-completion webhook is mounted at all.
 	webhookEnabled bool
@@ -75,26 +80,74 @@ func NewPXERouter(
 // RegisterRoutes registers the OPERATOR half of the PXE surface on the
 // provided router, which the caller must have gated: the service controls
 // (start / stop / status) and the device lifecycle, including authorize,
-// quarantine, retry and the provisioning-state write.
+// quarantine, retry and the provisioning-state write. Each route also takes
+// the scope its PXEService RPC takes on gRPC.
 //
 // The install-completion webhook is NOT here — see
 // RegisterMachineFacingRoutes, and #238.
 func (r *PXERouter) RegisterRoutes(parent *mux.Router) {
-	sr := parent.PathPrefix(basePath).Subrouter()
-	sr.HandleFunc("/status", r.getStatus).Methods("GET")
-	sr.HandleFunc("/start", r.startService).Methods("POST")
-	sr.HandleFunc("/stop", r.stopService).Methods("POST")
-	sr.HandleFunc("/devices", r.listDevices).Methods("GET")
-	sr.HandleFunc("/devices", r.registerDevice).Methods("POST")
-	sr.HandleFunc("/devices/mac/{mac}", r.getDeviceByMAC).Methods("GET")
-	sr.HandleFunc("/devices/{id}", r.getDevice).Methods("GET")
-	sr.HandleFunc("/devices/{id}", r.removeDevice).Methods("DELETE")
-	sr.HandleFunc("/devices/{id}/state", r.updateState).Methods("PUT")
-	sr.HandleFunc("/devices/{id}/enrolled", r.setEnrolled).Methods("POST")
-	sr.HandleFunc("/devices/{id}/authorize", r.authorize).Methods("POST")
-	sr.HandleFunc("/devices/{id}/quarantine", r.quarantine).Methods("POST")
-	sr.HandleFunc("/devices/{id}/retry", r.retry).Methods("POST")
-	sr.HandleFunc("/devices/{id}/events", r.getEvents).Methods("GET")
+	r.mount(parent.PathPrefix(basePath).Subrouter(), r.operatorRoutes())
+}
+
+// scopedRoute is one REST route and the gRPC method it stands for. The gRPC
+// method names the scope the route takes, read from the gRPC catalog
+// (pkg/api/grpc/method_permissions.go), so REST cannot drift from gRPC.
+type scopedRoute struct {
+	method  string
+	path    string
+	rpc     string
+	handler http.HandlerFunc
+}
+
+// operatorRoutes is the operator half of the PXE surface, relative to
+// basePath. /devices/mac/{mac} precedes /devices/{id}, which would match it.
+func (r *PXERouter) operatorRoutes() []scopedRoute {
+	return []scopedRoute{
+		{http.MethodGet, "/status", pxeRPC("GetStatus"), r.getStatus},
+		{http.MethodPost, "/start", pxeRPC("StartService"), r.startService},
+		{http.MethodPost, "/stop", pxeRPC("StopService"), r.stopService},
+		{http.MethodGet, "/devices", pxeRPC("ListDevices"), r.listDevices},
+		{http.MethodPost, "/devices", pxeRPC("RegisterDevice"), r.registerDevice},
+		{http.MethodGet, "/devices/mac/{mac}", pxeRPC("GetDeviceByMAC"), r.getDeviceByMAC},
+		{http.MethodGet, "/devices/{id}", pxeRPC("GetDevice"), r.getDevice},
+		{http.MethodDelete, "/devices/{id}", pxeRPC("RemoveDevice"), r.removeDevice},
+		{http.MethodPut, "/devices/{id}/state", pxeRPC("UpdateState"), r.updateState},
+		{http.MethodPost, "/devices/{id}/enrolled", pxeRPC("SetDeviceEnrolled"), r.setEnrolled},
+		{http.MethodPost, "/devices/{id}/authorize", pxeRPC("Authorize"), r.authorize},
+		{http.MethodPost, "/devices/{id}/quarantine", pxeRPC("Quarantine"), r.quarantine},
+		{http.MethodPost, "/devices/{id}/retry", pxeRPC("Retry"), r.retry},
+		{http.MethodGet, "/devices/{id}/events", pxeRPC("GetEvents"), r.getEvents},
+	}
+}
+
+// pxeRPC returns the full gRPC method name of a PXEService RPC.
+func pxeRPC(name string) string {
+	return "/" + platformv1.PXEService_ServiceDesc.ServiceName + "/" + name
+}
+
+// mount registers routes on sr, each behind the scope the gRPC catalog gives
+// its RPC.
+func (r *PXERouter) mount(sr *mux.Router, routes []scopedRoute) {
+	for _, route := range routes {
+		scope := grpcapi.ScopeForMethod(route.rpc)
+		sr.Handle(route.path, r.requireScope(scope, route.handler)).Methods(route.method)
+	}
+}
+
+// SetScopeAuthorizer supplies the scope check every operator and gateway
+// route takes on top of the admin gate. Nil leaves the routes on the role
+// gate alone, which is the case under the legacy JWT handler: its sessions
+// carry roles, not scopes.
+func (r *PXERouter) SetScopeAuthorizer(authorizer middleware.ScopeAuthorizer) {
+	r.scopeAuthorizer = authorizer
+}
+
+// requireScope wraps handler in the scope check when one is configured.
+func (r *PXERouter) requireScope(scope string, handler http.HandlerFunc) http.Handler {
+	if r.scopeAuthorizer == nil {
+		return handler
+	}
+	return r.scopeAuthorizer.RequireScope(scope)(handler)
 }
 
 // RegisterMachineFacingRoutes registers the install-completion webhook, and

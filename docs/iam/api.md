@@ -154,10 +154,10 @@ SDN and `0xF0`–`0xF5` are DEK operations.
 | Create tenant (IAM scoping) | `POST /api/v1/iam/tenants` | ✅ | `0x51` sub `0x01` | `iam_create_tenant`, `iam:write` | ✅ |
 | List / get / update / delete tenant | `/api/v1/iam/tenants[/{tenant}]` | ✅ | `0x51` subs `0x03` / `0x02` / `0x04` / `0x05` | `iam_list_tenants` `iam:read`, `iam_get_tenant` `iam:read`, `iam_delete_tenant` `iam:delete`; update `MISSING` | ✅ |
 | Authenticate | `MISSING — docs/13 G7` | `MISSING` — no RPC | `0xF8`, daemon-native | `iam_authenticate`, refused, `Unimplemented`, unclassified | ✅ |
-| Create token | `MISSING — docs/13 G7` | refused, `Unimplemented` | `0xF9`, refused, `StatusNotImplemented` | `iam_create_token`, refused, unclassified | refused |
-| Verify token | `MISSING — docs/13 G7` | ✅ | `0xFB` | `iam_verify_token`, `iam:read` | ✅ |
-| Revoke token | `MISSING — docs/13 G7` | refused, `Unimplemented` | `0xFA`, refused, `StatusNotImplemented` | `iam_revoke_token`, refused, unclassified | refused |
-| Check permission | `MISSING — docs/13 G7` | ✅ | `0xF7` | `iam_check_permission`, `iam:read` | ✅ |
+| Create token | refused by the SDK: `ErrNoRESTRoute` | refused, `Unimplemented` | `0xF9`, refused, `StatusNotImplemented` | `iam_create_token`, refused, unclassified | refused |
+| Verify token | refused by the SDK: `ErrNoRESTRoute` | ✅ | `0xFB` | `iam_verify_token`, `iam:read` | ✅ |
+| Revoke token | refused by the SDK: `ErrNoRESTRoute` | refused, `Unimplemented` | `0xFA`, refused, `StatusNotImplemented` | `iam_revoke_token`, refused, unclassified | refused |
+| Check permission | `POST /api/v1/iam/permissions/check`, `/tenants/{tenant}/permissions/check` | ✅ | `0xF7` | `iam_check_permission`, `iam:read` | ✅ |
 
 **`iam_authenticate` is refused** with `ErrIAMAuthenticationViaOIDC`
 (`Unimplemented`): `PlatformIAMService` has no Authenticate RPC and the IAM
@@ -165,9 +165,22 @@ service holds no credentials to check. Users sign in through the broker's OIDC
 flows, which issue the platform token.
 
 **Token issuance, verification and revocation have no REST route** under
-`/api/v1/iam`. Login and refresh are served by a separate authentication router
-(`pkg/webservice/v1/router/authentication.go` — `login`, `refreshToken`), and
-WebAuthn by `pkg/webservice/v1/router/webauthn.go`.
+`/api/v1/iam`. Login and refresh are served by a separate authentication
+router (`pkg/webservice/v1/router/authentication.go` — `login`, `refreshToken`),
+and WebAuthn by `pkg/webservice/v1/router/webauthn.go`. Create and revoke token
+are OIDC flows, refused on every transport (below); verify token is served on
+gRPC, QUIC, MCP and the embedded transport, not REST. The Go SDK's REST
+transport refuses the three methods before any request is sent, returning
+`ErrNoRESTRoute`, whose gRPC status is `Unimplemented` (`restRefusedMethods`,
+`sdk/go/transport/rest/iam.go`).
+
+**Check permission asks the policy enforcement point for a live decision.** The
+body carries `subject_id`, `action` and `resource`, all required, and optional
+`roles`, `groups`, `context` and `attributes`. The subject is checked within the
+tenant the route acts on. A deny is a `200` with `allowed: false`, not an error.
+A body `tenant_id` naming another tenant gets `403`. A missing field gets `400`.
+A daemon with no PEP wired gets `503`. Through the Go SDK the same refusals
+surface as `PermissionDenied`, `InvalidArgument` and `Unavailable`.
 
 **Verify token checks the token for real, through one service function.**
 gRPC (TCP and Unix), QUIC, MCP and the embedded transport all call

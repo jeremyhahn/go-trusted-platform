@@ -213,6 +213,25 @@ func (h *Handlers) CreateIAKCSR(w http.ResponseWriter, r *http.Request) {
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
 }
 
+// CreateLDevID handles POST /api/v1/idevid/ldevid. It creates the LDevID key
+// in the TPM and has the platform CA issue its certificate.
+func (h *Handlers) CreateLDevID(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	req := &platformv1.CreateLDevIDRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	resp, err := h.server.CreateLDevID(r.Context(), req)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccessStatus(w, r, h.respWriter, http.StatusCreated, resp)
+}
+
 // InstallIDevIDCertificate handles POST /api/v1/idevid/certificate.
 func (h *Handlers) InstallIDevIDCertificate(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureAvailable(w, r) {

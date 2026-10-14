@@ -153,15 +153,8 @@ func TestRouteMaps_DeclareNoMethodThatDoesNotExist(t *testing.T) {
 	// Sorting the two apart is per-entry work tracked separately; doing it by
 	// eye here would be the guess this test exists to remove.
 	knownUnroutable := map[string]bool{
-		"/platform.v1.IDevIDService/Delete":      true,
-		"/platform.v1.IDevIDService/Exists":      true,
-		"/platform.v1.IDevIDService/Generate":    true,
-		"/platform.v1.IDevIDService/GetCSR":      true,
-		"/platform.v1.IDevIDService/GetCert":     true,
-		"/platform.v1.IDevIDService/GetInfo":     true,
-		"/platform.v1.IDevIDService/InstallCert": true,
-		"/platform.v1.PlatformDaemon/Liveness":   true,
-		"/platform.v1.PlatformDaemon/Readiness":  true,
+		"/platform.v1.PlatformDaemon/Liveness":  true,
+		"/platform.v1.PlatformDaemon/Readiness": true,
 	}
 
 	var unexpected []string

@@ -18,7 +18,11 @@ scope ([api.md](api.md) §9):
 
 `GET`/`DELETE /iak`, `GET /idevid` and `GET /device/attributes` are the
 listener's device-identity routes (`pkg/api/daemon/rest_idevid.go`); they take
-no token and are not described here.
+no token and are not described here. The listener also serves
+`POST /api/v1/idevid/ldevid` (`CreateLDevID`, `rest_idevid_ldevid.go`), the
+same path the web service serves. The web service's `/api/v1/idevid` routes —
+the ones the Go SDK's REST adapter maps for every `IDevIDService` RPC — are in
+[api.md](api.md) §8.
 
 ## Wire contract
 

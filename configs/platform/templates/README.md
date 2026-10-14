@@ -81,6 +81,7 @@ Override files use the same YAML structure but only include fields to change.
 | Dell | PowerEdge R640 | dedicated | Phase 2 (UNTESTED) |
 | Raspberry Pi | 4 Model B (`rpi4`; SLB9670 TPM HAT on SPI0 CE1) | single-node, factory SD-card image | Boots on the QEMU virt stand-in; hardware validation per [docs/factory-image/user.md](../../../docs/factory-image/user.md) |
 | Raspberry Pi | 4 Model B (`rpi4`) | dedicated, compute role only ([dedicated/raspberrypi/](./dedicated/raspberrypi/README.md)) | Template builds and validates; no hardware run yet |
+| Raspberry Pi | 5 (`rpi5`) | dedicated, compute role only ([dedicated/raspberrypi/](./dedicated/raspberrypi/README.md)) | **Experimental**: template builds and validates; the TPM, console and Ethernet are unvalidated on a Pi 5 |
 
 ## Architecture Notes
 

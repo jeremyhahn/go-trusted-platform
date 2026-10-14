@@ -76,7 +76,8 @@ exercised under a software TPM before it touches a Pi).
 ### The boot chain on the Raspberry Pi
 
 ```
-VideoCore firmware (start4.elf / fixup4.dat; bootcode.bin on older boards)
+VideoCore firmware (start4.elf / fixup4.dat; bootcode.bin on older boards;
+                    the Pi 5 bootloader EEPROM loads kernel8.img directly)
   └─ config.txt: kernel=kernel8.img, dtoverlay=tpm-soft-spi, dtoverlay=disable-bt
        └─ U-Boot (kernel8.img) — EFI_TCG2_PROTOCOL measured boot, EFI Secure Boot
             └─ EFI boot manager finds EFI/BOOT/BOOTAA64.EFI on the first FAT partition
@@ -306,8 +307,17 @@ What persists: the image, the staged media directory, the U-Boot output
   target with explicit guards ([user.md](user.md)), the only `sudo` step.
 - **It does not build every role on every Pi.** `rpi4` ships the
   single-node template (the default) and, through `--role compute`, the
-  dedicated-profile compute node. A Pi gateway or control plane has no
+  dedicated-profile compute node; `rpi5` ships the same compute node as an
+  experimental template (next item). A Pi gateway or control plane has no
   template ([`dedicated/raspberrypi/README.md`](../../configs/platform/templates/dedicated/raspberrypi/README.md)
   says why), and other models fall back to the x86 single-node template with
   the target's overrides; `--overrides` adjusts anything else, including
   `seal-pcrs`.
+- **It does not validate the Pi 5.** `--model rpi5` builds an image with no
+  VideoCore firmware on the boot partition (the bootloader EEPROM loads
+  `kernel8.img`), but no Pi 5 has booted it. The 40-pin header's GPIO and SPI
+  belong to the RP1 I/O chip behind PCIe, and the U-Boot build bit-bangs the
+  SLB9670 over BCM2835 GPIO, so whether U-Boot reaches the TPM — and so
+  whether PCRs 0, 4, 7 and 9 are measured — is unknown; the console and the
+  RP1 Ethernet are unvalidated too. The detail is in
+  [`dedicated/raspberrypi/README.md`](../../configs/platform/templates/dedicated/raspberrypi/README.md).
