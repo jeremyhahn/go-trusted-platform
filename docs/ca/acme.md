@@ -258,6 +258,7 @@ webservices:
         - http-8081           # HTTP on port 8081
         - enroll-8080         # Enrollment on port 8080
         - enroll-8081         # Enrollment on port 8081
+      # allow-private-targets: false   # default; see "Private enrollment targets"
 
     jwt:
       expiration: 60      # Token expiration in minutes (1 hour default)
@@ -308,6 +309,18 @@ webservices:
         email:
           - admin@example.com
 ```
+
+### Private enrollment targets
+
+The http-01 and enroll-01 verifiers call back to the address the client
+names. By default the go-xkms challenge client refuses loopback, private and
+link-local addresses (the SSRF guard), so a device enrolling from a private
+network fails validation. A listener whose enrolling devices sit on private
+addresses sets `acme.allow-private-targets: true`; public listeners keep the
+default. The shipped configs that opt in are the `internal` listener of each
+dedicated `control-plane.yaml`, of each `configs/platform/cluster/server*`
+config and of `configs/platform/standalone/qemu.server.example.com.yaml`;
+`TestShippedTemplates_ACMEPrivateTargetsOptIn` (`pkg/app`) pins that list.
 
 ## Dynamic Port Configuration
 

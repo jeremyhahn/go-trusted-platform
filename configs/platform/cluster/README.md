@@ -159,6 +159,20 @@ Traffic flow:
    - `https://server2.example.internal:8443`
    - `https://server3.example.internal:8443`
 
+## ACME Enrollment
+
+The servers' `internal` listener (`tls-port: 9443`) is the cluster's ACME
+server. The clients enroll through `https://10.0.1.1:9443` with `enroll-01`
+from their `10.0.2.x` addresses, and the gateways and servers enroll through
+`server*.example.internal:9443`, which resolve to `10.0.1.x`. Every callback
+the http-01 and enroll-01 verifiers make lands on a private address, so each
+server's `internal` listener sets `acme.allow-private-targets: true`. Without
+it the verifiers refuse private addresses (the SSRF guard) and no node can
+enroll. The `public` listeners of the servers and gateways keep the default,
+`false`. `TestShippedTemplates_ACMEPrivateTargetsOptIn` pins which listeners
+opt in. The key is described in
+[`docs/web/engineering.md`](../../../docs/web/engineering.md).
+
 ## Health Checks
 
 The gateway performs active health checks on backend servers:
