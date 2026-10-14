@@ -29,7 +29,11 @@ REST: `pkg/webservice/v1/rest/attestation/` (`server_router.go`,
 QUIC: `pkg/api/quic/attestation_handlers.go` plus the base range in
 `sdk/go/wire/quicwire/protocol.go`, routed by the daemon for opcodes `0x70`–`0x77`
 (`pkg/api/daemon/quic_service.go:522`).
-MCP: fifteen `attestation_*` tools.
+MCP: the `attestation_*` tools. The five manifest tools call the gRPC
+`AttestationService` methods (`pkg/api/daemon/mcp_attestation_manifests.go`), so
+each answers with its gRPC twin's result and error class. A tool marked
+"refused" is registered but has no backend and no scope, so every call is
+refused (§5).
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
@@ -43,10 +47,10 @@ MCP: fifteen `attestation_*` tools.
 | Collect host attestation (TLS only — §5.1a) | `POST /api/v1/attestation/host` | `CollectHostAttestation` (refused over Unix) | `OpAttestHost` (`0x7E`), `OpAttestCollectHost` (`0x72`) | `MISSING — docs/13 G7` | refused — no TLS (§5.1a) |
 | Collect VM attestation | `POST /api/v1/attestation/vm/{id}` | `CollectVMAttestation` | `OpAttestVMWorkload` (`0x7F`) | `MISSING — docs/13 G7` | ✅ |
 | Collect container attestation | `POST /api/v1/attestation/container/{id}` | `CollectContainerAttestation` | `OpAttestContainerWorkload` (`0xED`) | `MISSING — docs/13 G7` | ✅ |
-| Attest a workload | `MISSING — docs/13 G7` | (covered by the two Collect RPCs) | `OpAttestDeviceWorkload` (`0xEE`) | `attestation_attest_workload` | — |
-| Verify a workload | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `attestation_verify_workload` | — |
-| Attestation reports (create / get / list) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestGetReportByID` (`0x77`), `OpAttestListReports` (`0xEF`) | `attestation_create_report`, `attestation_get_report`, `attestation_list_reports` | — |
-| Attestation policies (create / get / list / delete / evaluate) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestCreatePolicy` (`0xAA`), `OpAttestListPolicies` (`0xAB`) | `attestation_create_policy`, `attestation_get_policy`, `attestation_list_policies`, `attestation_delete_policy`, `attestation_evaluate_policy` | — |
+| Attest a workload | `MISSING — docs/13 G7` | (covered by the two Collect RPCs) | `OpAttestDeviceWorkload` (`0xEE`) | `attestation_attest_workload` (refused) | — |
+| Verify a workload | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `attestation_verify_workload` (refused) | — |
+| Attestation reports (create / get / list) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestGetReportByID` (`0x77`), `OpAttestListReports` (`0xEF`) | `attestation_create_report`, `attestation_get_report`, `attestation_list_reports` (refused) | — |
+| Attestation policies (create / get / list / delete / evaluate) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestCreatePolicy` (`0xAA`), `OpAttestListPolicies` (`0xAB`) | `attestation_create_policy`, `attestation_get_policy`, `attestation_list_policies`, `attestation_delete_policy`, `attestation_evaluate_policy` (refused) | — |
 | Attestation events | `GET /api/v1/attestation/events` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 | Caller-admission policy (effective) | `GET /api/v1/attestation/callers` | `DescribeCallerPolicy` | `MISSING — #386` | `attestation_caller_policy` | ✅ |
 | Node clock state (collector-facing) | `GET /api/v1/attestation/clock` | REST-only by design — see §5.2a | REST-only by design | REST-only by design | — |
@@ -59,7 +63,7 @@ MCP: fifteen `attestation_*` tools.
 
 **Reading the gaps.** The rows are lopsided in a consistent direction: manifests
 and quotes are complete on gRPC and REST, while **reports and policies exist only
-on QUIC and MCP**. That is not a documentation artefact — it is the actual
+on QUIC** (their MCP tools are registered but refused). That is not a documentation artefact — it is the actual
 shape, and it means an operator using REST cannot manage attestation policy at
 all. This is the single largest attestation surface hole and belongs in the gap
 register as G7.
@@ -82,6 +86,11 @@ manifest-signing step, push, and the workload chain — return `ErrRESTNoRoute`
 instead of calling a path the daemon never registered (#546).
 `BuildManifest` signs as it builds, and `VerifyManifest` fetches the stored
 manifest and posts it to `/manifests/verify`, which takes the manifest itself.
+
+`VerifyManifest` does not check a manifest signature. A request that carries a
+public key is refused `FailedPrecondition`
+(`ErrAttestationManifestSignatureUnchecked`) on every transport, rather than
+answered with the signature reported valid unchecked (#304).
 
 ---
 
@@ -139,11 +148,27 @@ Attestation gates workload admission and the OCI registry
 `attestation:delete` — building and deleting manifests — are the grants to
 guard.
 
-On MCP, `attestation_device_report`, `attestation_device_reports` and
-`attestation_caller_policy` need `attestation:read`, and
-`attestation_device_refresh` needs `attestation:write`. The other
-`attestation_*` tools are not in the permission map, so every caller is refused
-with `AuthErrorToolNotClassified` until they are classified.
+On MCP (`pkg/api/mcp/authz.go`), each classified tool asks the scope of its
+gRPC twin:
+
+| Permission | MCP tools |
+|---|---|
+| `attestation:read` | `attestation_device_report`, `attestation_device_reports`, `attestation_caller_policy`, `attestation_device_verdicts_poll`, `attestation_get_manifest`, `attestation_list_manifests`, `attestation_verify_manifest` |
+| `attestation:write` | `attestation_device_refresh`, `attestation_create_manifest` |
+| `attestation:delete` | `attestation_delete_manifest` |
+
+Ten tools stay unclassified, so every caller is refused with
+`AuthErrorToolNotClassified`. None has a backend: no gRPC method, and no REST
+route the daemon mounts. They are `attestation_attest_workload` and
+`attestation_verify_workload` (the real workload paths are `container_attest`
+and `vm_attest`), the three report tools (`attestation_create_report`,
+`attestation_get_report`, `attestation_list_reports`) and the five policy tools
+(`attestation_create_policy`, `attestation_get_policy`,
+`attestation_list_policies`, `attestation_delete_policy`,
+`attestation_evaluate_policy`).
+
+Manifests have no tenant: the gRPC manifest methods do not filter by tenant,
+and the MCP tools answer exactly as they do.
 
 ### 5.1 REST `/api/v1/attestation/*` requires the admin role (#387)
 

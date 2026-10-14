@@ -17,13 +17,23 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// The tenant tools are the TenantService over MCP. Every tool calls the
+// TenantService server the gRPC, QUIC, REST and Unix transports serve, so a
+// tool answers what its RPC answers: the same validation, the same error
+// class and the same tenant isolation (docs/tenant/api.md §7). Nothing here
+// validates or decides; the tools translate arguments to a request and a
+// response to a result.
 
 // TenantError represents a tenant operation error.
 type TenantError struct {
@@ -48,48 +58,52 @@ var (
 		Message: "tenant management service is not available",
 	}
 
-	ErrTenantIDRequired = &TenantError{
-		Code:    "TENANT_ID_REQUIRED",
-		Message: "tenant ID is required",
-	}
-
-	ErrTenantNameRequired = &TenantError{
-		Code:    "TENANT_NAME_REQUIRED",
-		Message: "tenant name is required",
-	}
-
-	ErrTenantResourceTypeRequired = &TenantError{
-		Code:    "TENANT_RESOURCE_TYPE_REQUIRED",
-		Message: "resource type is required",
-	}
-
-	ErrTenantAmountRequired = &TenantError{
-		Code:    "TENANT_AMOUNT_REQUIRED",
-		Message: "amount is required",
-	}
-
-	ErrTenantInvalidResourceType = &TenantError{
-		Code:    "TENANT_INVALID_RESOURCE_TYPE",
-		Message: "invalid resource type",
-	}
-
 	ErrTenantBarrierUnsealKeyDecode = &TenantError{
 		Code:    "TENANT_BARRIER_UNSEAL_KEY_DECODE",
 		Message: "failed to base64-decode barrier unseal key",
 	}
 )
 
-// TenantServiceProvider is an interface for accessing the tenant management service.
-type TenantServiceProvider interface {
-	TenantManager() *tenant.Manager
+// ErrTenantCallerUnbound refuses a tenant tool to a caller whose identity
+// carries no tenant. The TenantService admits a caller with no tenant
+// binding, because on the Unix socket that caller is the local operator. An
+// MCP caller is never that operator: one with no binding authenticated on a
+// path that projects no tenant claim (the legacy token adapter), and the
+// service could not keep it to its own tenant.
+type ErrTenantCallerUnbound struct{}
+
+func (ErrTenantCallerUnbound) Error() string {
+	return "mcp: the tenant tools need a tenant-bound platform token; this caller's identity carries no tenant"
 }
 
-// getTenantManager returns the tenant manager from the service provider.
-func (r *ToolRegistry) getTenantManager() *tenant.Manager {
-	if provider, ok := r.service.(TenantServiceProvider); ok {
-		return provider.TenantManager()
+// GRPCStatus classes the error PermissionDenied.
+func (e ErrTenantCallerUnbound) GRPCStatus() *status.Status {
+	return status.New(codes.PermissionDenied, e.Error())
+}
+
+// TenantServiceProvider is implemented by a ServiceProvider that serves the
+// TenantService. A provider without it answers every tenant tool
+// ErrTenantServiceUnavailable.
+type TenantServiceProvider interface {
+	TenantService() platformv1.TenantServiceServer
+}
+
+// tenantServer returns the TenantService the tenant tools call. It refuses
+// an unbound caller before anything else, so such a caller learns nothing,
+// not even whether the service is configured.
+func (r *ToolRegistry) tenantServer(ctx context.Context) (platformv1.TenantServiceServer, error) {
+	if authCtx, ok := AuthorizedContextFromContext(ctx); !ok || authCtx == nil {
+		return nil, ErrTenantCallerUnbound{}
 	}
-	return nil
+	provider, ok := r.service.(TenantServiceProvider)
+	if !ok {
+		return nil, ErrTenantServiceUnavailable
+	}
+	server := provider.TenantService()
+	if server == nil {
+		return nil, ErrTenantServiceUnavailable
+	}
+	return server, nil
 }
 
 // registerTenantTools registers all tenant management MCP tools.
@@ -185,10 +199,6 @@ func (r *ToolRegistry) registerTenantTools() {
 				"max_memory_mb": map[string]interface{}{
 					"type":        "integer",
 					"description": "Maximum memory in MB (compute quota)",
-				},
-				"max_disk_gb": map[string]interface{}{
-					"type":        "integer",
-					"description": "Maximum disk space in GB (compute quota)",
 				},
 				"max_bridges": map[string]interface{}{
 					"type":        "integer",
@@ -310,7 +320,7 @@ func (r *ToolRegistry) registerTenantTools() {
 	// tenant_update_quotas - Update tenant quotas
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "tenant_update_quotas",
-		Description: "Update compute, network, and storage quotas for a tenant",
+		Description: "Update compute, network, and storage quotas for a tenant. A limit not given keeps its current value.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -333,10 +343,6 @@ func (r *ToolRegistry) registerTenantTools() {
 				"max_memory_mb": map[string]interface{}{
 					"type":        "integer",
 					"description": "Maximum memory in MB",
-				},
-				"max_disk_gb": map[string]interface{}{
-					"type":        "integer",
-					"description": "Maximum disk space in GB",
 				},
 				"max_bridges": map[string]interface{}{
 					"type":        "integer",
@@ -463,11 +469,11 @@ func (r *ToolRegistry) registerTenantTools() {
 				},
 				"threshold": map[string]interface{}{
 					"type":        "integer",
-					"description": "Optional Shamir share threshold required to unseal the barrier",
+					"description": "Shamir share threshold; must be 0: the per-tenant barrier initializes deterministically and a Shamir request is refused",
 				},
 				"shares": map[string]interface{}{
 					"type":        "integer",
-					"description": "Optional total number of Shamir shares to generate",
+					"description": "Shamir share count; must be 0: the per-tenant barrier initializes deterministically and a Shamir request is refused",
 				},
 			},
 			"required": []string{"tenant_id"},
@@ -477,7 +483,7 @@ func (r *ToolRegistry) registerTenantTools() {
 	// platform_tenant_barrier_unseal - Unseal a per-tenant barrier
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tenant_barrier_unseal",
-		Description: "Unseal a per-tenant cryptographic barrier using the supplied key material. The key argument is base64-encoded; an empty key falls back to the deterministic init credential.",
+		Description: "Unseal a per-tenant cryptographic barrier using the supplied base64-encoded key material.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -487,10 +493,10 @@ func (r *ToolRegistry) registerTenantTools() {
 				},
 				"key": map[string]interface{}{
 					"type":        "string",
-					"description": "Optional base64-encoded unseal key bytes",
+					"description": "Base64-encoded unseal key bytes (required)",
 				},
 			},
-			"required": []string{"tenant_id"},
+			"required": []string{"tenant_id", "key"},
 		},
 	})
 
@@ -527,554 +533,367 @@ func (r *ToolRegistry) registerTenantTools() {
 	})
 }
 
-// executeTenantList handles the tenant_list tool execution.
+// executeTenantList handles the tenant_list tool (ListTenants).
 func (r *ToolRegistry) executeTenantList(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	mgr := r.getTenantManager()
-	if mgr == nil {
-		return nil, ErrTenantServiceUnavailable
+	server, err := r.tenantServer(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	limit := getInt(args, "limit")
-	if limit <= 0 {
-		limit = 100
-	}
-	offset := getInt(args, "offset")
-
-	tenants, total, err := mgr.ListTenants(ctx, limit, offset)
+	resp, err := server.ListTenants(ctx, &platformv1.ListTenantsRequest{
+		Limit:  int32(getInt(args, "limit")),
+		Offset: int32(getInt(args, "offset")),
+	})
 	if err != nil {
 		return nil, err
 	}
 
 	return map[string]interface{}{
-		"tenants": formatTenantList(tenants),
-		"count":   len(tenants),
-		"total":   total,
-		"limit":   limit,
-		"offset":  offset,
+		"tenants": formatTenants(resp.GetTenants()),
+		"count":   len(resp.GetTenants()),
+		"total":   resp.GetTotal(),
 	}, nil
 }
 
-// executeTenantGet handles the tenant_get tool execution.
+// executeTenantGet handles the tenant_get tool (GetTenant).
 func (r *ToolRegistry) executeTenantGet(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	mgr := r.getTenantManager()
-	if mgr == nil {
-		return nil, ErrTenantServiceUnavailable
-	}
-
-	tenantID := getString(args, "tenant_id")
-	if tenantID == "" {
-		return nil, ErrTenantIDRequired
-	}
-
-	entity, err := mgr.GetTenant(ctx, tenantID)
+	server, err := r.tenantServer(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	return formatTenantEntity(entity), nil
+	resp, err := server.GetTenant(ctx, &platformv1.GetTenantRequest{
+		TenantId: getString(args, "tenant_id"),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return formatTenant(resp.GetTenant()), nil
 }
 
-// executeTenantGetByName handles the tenant_get_by_name tool execution.
+// executeTenantGetByName handles the tenant_get_by_name tool (GetTenantByName).
 func (r *ToolRegistry) executeTenantGetByName(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	mgr := r.getTenantManager()
-	if mgr == nil {
-		return nil, ErrTenantServiceUnavailable
-	}
-
-	name := getString(args, "name")
-	if name == "" {
-		return nil, ErrTenantNameRequired
-	}
-
-	entity, err := mgr.GetTenantByName(ctx, name)
+	server, err := r.tenantServer(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	return formatTenantEntity(entity), nil
+	resp, err := server.GetTenantByName(ctx, &platformv1.GetTenantByNameRequest{
+		Name: getString(args, "name"),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return formatTenant(resp.GetTenant()), nil
 }
 
-// executeTenantCreate handles the tenant_create tool execution.
+// executeTenantCreate handles the tenant_create tool (CreateTenant).
 func (r *ToolRegistry) executeTenantCreate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	mgr := r.getTenantManager()
-	if mgr == nil {
-		return nil, ErrTenantServiceUnavailable
+	server, err := r.tenantServer(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	name := getString(args, "name")
-	if name == "" {
-		return nil, ErrTenantNameRequired
+	resp, err := server.CreateTenant(ctx, &platformv1.CreateTenantRequest{
+		Name:         getString(args, "name"),
+		DisplayName:  getString(args, "display_name"),
+		Labels:       getStringMap(args, "labels"),
+		Annotations:  getStringMap(args, "annotations"),
+		ComputeQuota: computeQuotaFromArgs(args),
+		NetworkQuota: networkQuotaFromArgs(args),
+		StorageQuota: storageQuotaFromArgs(args),
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	req := &tenant.CreateTenantRequest{
-		Name:        name,
+	return statusResult(resp.GetStatus(), map[string]interface{}{
+		"tenant": formatTenant(resp.GetTenant()),
+	}), nil
+}
+
+// executeTenantUpdate handles the tenant_update tool (UpdateTenant).
+func (r *ToolRegistry) executeTenantUpdate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	server, err := r.tenantServer(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := server.UpdateTenant(ctx, &platformv1.UpdateTenantRequest{
+		TenantId:    getString(args, "tenant_id"),
 		DisplayName: getString(args, "display_name"),
 		Labels:      getStringMap(args, "labels"),
 		Annotations: getStringMap(args, "annotations"),
-	}
-
-	// Handle compute quota overrides
-	if hasComputeQuotaArgs(args) {
-		req.ComputeQuota = &tenant.ComputeQuota{
-			MaxVMs:        getInt64(args, "max_vms"),
-			MaxContainers: getInt64(args, "max_containers"),
-			MaxVCPUs:      getInt64(args, "max_vcpus"),
-			MaxMemoryMB:   getInt64(args, "max_memory_mb"),
-			MaxDiskGB:     getInt64(args, "max_disk_gb"),
-		}
-	}
-
-	// Handle network quota overrides
-	if hasNetworkQuotaArgs(args) {
-		req.NetworkQuota = &tenant.NetworkQuota{
-			MaxBridges:       getInt64(args, "max_bridges"),
-			MaxPorts:         getInt64(args, "max_ports"),
-			MaxBandwidthMbps: getInt64(args, "max_bandwidth_mbps"),
-		}
-	}
-
-	// Handle storage quota overrides
-	if hasStorageQuotaArgs(args) {
-		req.StorageQuota = &tenant.StorageQuota{
-			MaxVolumesGB: getInt64(args, "max_volumes_gb"),
-			MaxSnapshots: getInt64(args, "max_snapshots"),
-		}
-	}
-
-	entity, err := mgr.CreateTenant(ctx, req)
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	return map[string]interface{}{
-		"success": true,
-		"tenant":  formatTenantEntity(entity),
-		"message": fmt.Sprintf("tenant '%s' created successfully", name),
-	}, nil
+	return statusResult(resp.GetStatus(), map[string]interface{}{
+		"tenant": formatTenant(resp.GetTenant()),
+	}), nil
 }
 
-// executeTenantUpdate handles the tenant_update tool execution.
-func (r *ToolRegistry) executeTenantUpdate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	mgr := r.getTenantManager()
-	if mgr == nil {
-		return nil, ErrTenantServiceUnavailable
-	}
-
-	tenantID := getString(args, "tenant_id")
-	if tenantID == "" {
-		return nil, ErrTenantIDRequired
-	}
-
-	req := &tenant.UpdateTenantRequest{}
-
-	if displayName := getString(args, "display_name"); displayName != "" {
-		req.DisplayName = &displayName
-	}
-
-	if labels := getStringMap(args, "labels"); labels != nil {
-		req.Labels = labels
-	}
-
-	if annotations := getStringMap(args, "annotations"); annotations != nil {
-		req.Annotations = annotations
-	}
-
-	entity, err := mgr.UpdateTenant(ctx, tenantID, req)
-	if err != nil {
-		return nil, err
-	}
-
-	return map[string]interface{}{
-		"success": true,
-		"tenant":  formatTenantEntity(entity),
-		"message": "tenant updated successfully",
-	}, nil
-}
-
-// executeTenantDelete handles the tenant_delete tool execution.
+// executeTenantDelete handles the tenant_delete tool (DeleteTenant).
 func (r *ToolRegistry) executeTenantDelete(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	mgr := r.getTenantManager()
-	if mgr == nil {
-		return nil, ErrTenantServiceUnavailable
-	}
-
-	tenantID := getString(args, "tenant_id")
-	if tenantID == "" {
-		return nil, ErrTenantIDRequired
-	}
-
-	err := mgr.DeleteTenant(ctx, tenantID)
+	server, err := r.tenantServer(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	return map[string]interface{}{
-		"success":   true,
-		"tenant_id": tenantID,
-		"message":   "tenant deleted successfully",
-	}, nil
+	tenantID := getString(args, "tenant_id")
+	resp, err := server.DeleteTenant(ctx, &platformv1.DeleteTenantRequest{TenantId: tenantID})
+	if err != nil {
+		return nil, err
+	}
+
+	return statusResult(resp.GetStatus(), map[string]interface{}{"tenant_id": tenantID}), nil
 }
 
-// executeTenantSuspend handles the tenant_suspend tool execution.
+// executeTenantSuspend handles the tenant_suspend tool (SuspendTenant).
 func (r *ToolRegistry) executeTenantSuspend(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	mgr := r.getTenantManager()
-	if mgr == nil {
-		return nil, ErrTenantServiceUnavailable
+	server, err := r.tenantServer(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	tenantID := getString(args, "tenant_id")
-	if tenantID == "" {
-		return nil, ErrTenantIDRequired
-	}
-
-	err := mgr.SuspendTenant(ctx, tenantID)
+	resp, err := server.SuspendTenant(ctx, &platformv1.SuspendTenantRequest{TenantId: tenantID})
 	if err != nil {
 		return nil, err
 	}
 
-	// Get updated tenant info
-	entity, err := mgr.GetTenant(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-
-	return map[string]interface{}{
-		"success": true,
-		"tenant":  formatTenantEntity(entity),
-		"message": "tenant suspended successfully",
-	}, nil
+	return statusResult(resp.GetStatus(), map[string]interface{}{"tenant_id": tenantID}), nil
 }
 
-// executeTenantResume handles the tenant_resume tool execution.
+// executeTenantResume handles the tenant_resume tool (ResumeTenant).
 func (r *ToolRegistry) executeTenantResume(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	mgr := r.getTenantManager()
-	if mgr == nil {
-		return nil, ErrTenantServiceUnavailable
+	server, err := r.tenantServer(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	tenantID := getString(args, "tenant_id")
-	if tenantID == "" {
-		return nil, ErrTenantIDRequired
-	}
-
-	err := mgr.ResumeTenant(ctx, tenantID)
+	resp, err := server.ResumeTenant(ctx, &platformv1.ResumeTenantRequest{TenantId: tenantID})
 	if err != nil {
 		return nil, err
 	}
 
-	// Get updated tenant info
-	entity, err := mgr.GetTenant(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-
-	return map[string]interface{}{
-		"success": true,
-		"tenant":  formatTenantEntity(entity),
-		"message": "tenant resumed successfully",
-	}, nil
+	return statusResult(resp.GetStatus(), map[string]interface{}{"tenant_id": tenantID}), nil
 }
 
-// executeTenantGetQuotas handles the tenant_get_quotas tool execution.
+// executeTenantGetQuotas handles the tenant_get_quotas tool (GetQuotas).
 func (r *ToolRegistry) executeTenantGetQuotas(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	mgr := r.getTenantManager()
-	if mgr == nil {
-		return nil, ErrTenantServiceUnavailable
+	server, err := r.tenantServer(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	tenantID := getString(args, "tenant_id")
-	if tenantID == "" {
-		return nil, ErrTenantIDRequired
-	}
-
-	quotas, err := mgr.GetQuotas(ctx, tenantID)
+	resp, err := server.GetQuotas(ctx, &platformv1.GetQuotasRequest{
+		TenantId: getString(args, "tenant_id"),
+	})
 	if err != nil {
 		return nil, err
 	}
 
 	return map[string]interface{}{
-		"tenant_id": tenantID,
-		"compute": map[string]interface{}{
-			"max_vms":        quotas.Compute.MaxVMs,
-			"max_containers": quotas.Compute.MaxContainers,
-			"max_vcpus":      quotas.Compute.MaxVCPUs,
-			"max_memory_mb":  quotas.Compute.MaxMemoryMB,
-			"max_disk_gb":    quotas.Compute.MaxDiskGB,
-		},
-		"network": map[string]interface{}{
-			"max_bridges":        quotas.Network.MaxBridges,
-			"max_ports":          quotas.Network.MaxPorts,
-			"max_bandwidth_mbps": quotas.Network.MaxBandwidthMbps,
-		},
-		"storage": map[string]interface{}{
-			"max_volumes_gb": quotas.Storage.MaxVolumesGB,
-			"max_snapshots":  quotas.Storage.MaxSnapshots,
-		},
+		"tenant_id": resp.GetTenantId(),
+		"compute":   formatComputeQuota(resp.GetCompute()),
+		"network":   formatNetworkQuota(resp.GetNetwork()),
+		"storage":   formatStorageQuota(resp.GetStorage()),
 	}, nil
 }
 
-// executeTenantUpdateQuotas handles the tenant_update_quotas tool execution.
+// executeTenantUpdateQuotas handles the tenant_update_quotas tool. UpdateQuotas
+// replaces every limit, so the tool reads the current quotas (GetQuotas) and
+// sends them back with the limits the caller gave.
 func (r *ToolRegistry) executeTenantUpdateQuotas(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	mgr := r.getTenantManager()
-	if mgr == nil {
-		return nil, ErrTenantServiceUnavailable
+	server, err := r.tenantServer(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	tenantID := getString(args, "tenant_id")
-	if tenantID == "" {
-		return nil, ErrTenantIDRequired
-	}
-
-	// Get current quotas first
-	currentQuotas, err := mgr.GetQuotas(ctx, tenantID)
+	current, err := server.GetQuotas(ctx, &platformv1.GetQuotasRequest{TenantId: tenantID})
 	if err != nil {
 		return nil, err
 	}
 
-	// Update with any provided values
-	quotas := &tenant.TenantQuotas{
-		Compute: currentQuotas.Compute,
-		Network: currentQuotas.Network,
-		Storage: currentQuotas.Storage,
+	req := &platformv1.UpdateQuotasRequest{
+		TenantId: tenantID,
+		Compute: &platformv1.ComputeQuota{
+			MaxVms:        quotaArg(args, "max_vms", current.GetCompute().GetMaxVms()),
+			MaxContainers: quotaArg(args, "max_containers", current.GetCompute().GetMaxContainers()),
+			MaxVcpus:      quotaArg(args, "max_vcpus", current.GetCompute().GetMaxVcpus()),
+			MaxMemoryMb:   quotaArg(args, "max_memory_mb", current.GetCompute().GetMaxMemoryMb()),
+		},
+		Network: &platformv1.NetworkQuota{
+			MaxBridges:       quotaArg(args, "max_bridges", current.GetNetwork().GetMaxBridges()),
+			MaxPorts:         quotaArg(args, "max_ports", current.GetNetwork().GetMaxPorts()),
+			MaxBandwidthMbps: quotaArg(args, "max_bandwidth_mbps", current.GetNetwork().GetMaxBandwidthMbps()),
+		},
+		Storage: &platformv1.StorageQuota{
+			MaxVolumesGb: quotaArg(args, "max_volumes_gb", current.GetStorage().GetMaxVolumesGb()),
+			MaxSnapshots: quotaArg(args, "max_snapshots", current.GetStorage().GetMaxSnapshots()),
+		},
 	}
-
-	// Apply compute quota updates
-	if v := getInt64(args, "max_vms"); v > 0 {
-		quotas.Compute.MaxVMs = v
-	}
-	if v := getInt64(args, "max_containers"); v > 0 {
-		quotas.Compute.MaxContainers = v
-	}
-	if v := getInt64(args, "max_vcpus"); v > 0 {
-		quotas.Compute.MaxVCPUs = v
-	}
-	if v := getInt64(args, "max_memory_mb"); v > 0 {
-		quotas.Compute.MaxMemoryMB = v
-	}
-	if v := getInt64(args, "max_disk_gb"); v > 0 {
-		quotas.Compute.MaxDiskGB = v
-	}
-
-	// Apply network quota updates
-	if v := getInt64(args, "max_bridges"); v > 0 {
-		quotas.Network.MaxBridges = v
-	}
-	if v := getInt64(args, "max_ports"); v > 0 {
-		quotas.Network.MaxPorts = v
-	}
-	if v := getInt64(args, "max_bandwidth_mbps"); v > 0 {
-		quotas.Network.MaxBandwidthMbps = v
-	}
-
-	// Apply storage quota updates
-	if v := getInt64(args, "max_volumes_gb"); v > 0 {
-		quotas.Storage.MaxVolumesGB = v
-	}
-	if v := getInt64(args, "max_snapshots"); v > 0 {
-		quotas.Storage.MaxSnapshots = v
-	}
-
-	err = mgr.UpdateQuotas(ctx, tenantID, quotas)
+	resp, err := server.UpdateQuotas(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 
-	return map[string]interface{}{
-		"success":   true,
+	return statusResult(resp.GetStatus(), map[string]interface{}{
 		"tenant_id": tenantID,
-		"compute": map[string]interface{}{
-			"max_vms":        quotas.Compute.MaxVMs,
-			"max_containers": quotas.Compute.MaxContainers,
-			"max_vcpus":      quotas.Compute.MaxVCPUs,
-			"max_memory_mb":  quotas.Compute.MaxMemoryMB,
-			"max_disk_gb":    quotas.Compute.MaxDiskGB,
-		},
-		"network": map[string]interface{}{
-			"max_bridges":        quotas.Network.MaxBridges,
-			"max_ports":          quotas.Network.MaxPorts,
-			"max_bandwidth_mbps": quotas.Network.MaxBandwidthMbps,
-		},
-		"storage": map[string]interface{}{
-			"max_volumes_gb": quotas.Storage.MaxVolumesGB,
-			"max_snapshots":  quotas.Storage.MaxSnapshots,
-		},
-		"message": "quotas updated successfully",
-	}, nil
+		"compute":   formatComputeQuota(req.GetCompute()),
+		"network":   formatNetworkQuota(req.GetNetwork()),
+		"storage":   formatStorageQuota(req.GetStorage()),
+	}), nil
 }
 
-// executeTenantGetUsage handles the tenant_get_usage tool execution.
+// executeTenantGetUsage handles the tenant_get_usage tool (GetUsage).
 func (r *ToolRegistry) executeTenantGetUsage(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	mgr := r.getTenantManager()
-	if mgr == nil {
-		return nil, ErrTenantServiceUnavailable
-	}
-
-	tenantID := getString(args, "tenant_id")
-	if tenantID == "" {
-		return nil, ErrTenantIDRequired
-	}
-
-	usage, err := mgr.GetUsage(ctx, tenantID)
+	server, err := r.tenantServer(ctx)
 	if err != nil {
 		return nil, err
 	}
 
+	resp, err := server.GetUsage(ctx, &platformv1.GetUsageRequest{
+		TenantId: getString(args, "tenant_id"),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	usage := resp.GetUsage()
 	return map[string]interface{}{
-		"tenant_id": tenantID,
+		"tenant_id": usage.GetTenantId(),
 		"usage": map[string]interface{}{
-			"vms":            usage.VMs,
-			"containers":     usage.Containers,
-			"vcpus":          usage.VCPUs,
-			"memory_mb":      usage.MemoryMB,
-			"disk_gb":        usage.DiskGB,
-			"bridges":        usage.Bridges,
-			"ports":          usage.Ports,
-			"bandwidth_mbps": usage.BandwidthMbps,
-			"volumes":        usage.Volumes,
-			"snapshots":      usage.Snapshots,
+			"vms":            usage.GetVms(),
+			"containers":     usage.GetContainers(),
+			"vcpus":          usage.GetVcpus(),
+			"memory_mb":      usage.GetMemoryMb(),
+			"disk_gb":        usage.GetDiskGb(),
+			"bridges":        usage.GetBridges(),
+			"ports":          usage.GetPorts(),
+			"bandwidth_mbps": usage.GetBandwidthMbps(),
+			"volumes":        usage.GetVolumes(),
+			"snapshots":      usage.GetSnapshots(),
 		},
-		"timestamp": usage.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
+		"timestamp": formatTimestamp(usage.GetTimestamp()),
 	}, nil
 }
 
-// executeTenantCheckQuota handles the tenant_check_quota tool execution.
+// executeTenantCheckQuota handles the tenant_check_quota tool (CheckQuota).
+// A request over quota is an answer (available false), not an error.
 func (r *ToolRegistry) executeTenantCheckQuota(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	mgr := r.getTenantManager()
-	if mgr == nil {
-		return nil, ErrTenantServiceUnavailable
-	}
-
-	tenantID := getString(args, "tenant_id")
-	if tenantID == "" {
-		return nil, ErrTenantIDRequired
-	}
-
-	resourceType := getString(args, "resource_type")
-	if resourceType == "" {
-		return nil, ErrTenantResourceTypeRequired
-	}
-
-	amount := getInt64(args, "amount")
-	if amount <= 0 {
-		return nil, ErrTenantAmountRequired
-	}
-
-	// Convert string to ResourceType
-	rt := quota.ResourceType(resourceType)
-	if !rt.IsValid() {
-		return nil, ErrTenantInvalidResourceType
-	}
-
-	err := mgr.CheckQuota(ctx, tenantID, rt, amount)
-	available := err == nil
-
-	result := map[string]interface{}{
-		"tenant_id":     tenantID,
-		"resource_type": resourceType,
-		"amount":        amount,
-		"available":     available,
-	}
-
+	server, err := r.tenantServer(ctx)
 	if err != nil {
-		result["error"] = err.Error()
+		return nil, err
 	}
 
-	return result, nil
-}
-
-// executeTenantSync handles the tenant_sync tool execution.
-func (r *ToolRegistry) executeTenantSync(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	mgr := r.getTenantManager()
-	if mgr == nil {
-		return nil, ErrTenantServiceUnavailable
-	}
-
-	err := mgr.Sync(ctx)
+	resp, err := server.CheckQuota(ctx, &platformv1.CheckQuotaRequest{
+		TenantId: getString(args, "tenant_id"),
+		Resource: getString(args, "resource_type"),
+		Amount:   getInt64(args, "amount"),
+	})
 	if err != nil {
 		return nil, err
 	}
 
 	return map[string]interface{}{
-		"success": true,
-		"message": "tenant manager state synchronized successfully",
+		"tenant_id":     resp.GetTenantId(),
+		"resource_type": resp.GetResource(),
+		"amount":        resp.GetAmount(),
+		"available":     resp.GetAvailable(),
+		"message":       resp.GetMessage(),
 	}, nil
 }
 
-// executeTenantRotateDEK handles the tenant_rotate_dek tool execution.
+// executeTenantSync handles the tenant_sync tool (Sync). A sync that ran
+// with errors is an answer (success false), as it is over gRPC.
+func (r *ToolRegistry) executeTenantSync(ctx context.Context, _ map[string]interface{}) (interface{}, error) {
+	server, err := r.tenantServer(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := server.Sync(ctx, &platformv1.SyncTenantsRequest{})
+	if err != nil {
+		return nil, err
+	}
+
+	return statusResult(resp.GetStatus(), nil), nil
+}
+
+// executeTenantRotateDEK handles the tenant_rotate_dek tool (RotateTenantDEK).
 func (r *ToolRegistry) executeTenantRotateDEK(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	mgr := r.getTenantManager()
-	if mgr == nil {
-		return nil, ErrTenantServiceUnavailable
+	server, err := r.tenantServer(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	tenantID := getString(args, "tenant_id")
-	if tenantID == "" {
-		return nil, ErrTenantIDRequired
-	}
-
-	// The rotation itself reports both versions, so read them from its
-	// result rather than bracketing the rotate with two status reads —
-	// a concurrent rotation between those reads would report versions
-	// that never belonged to this call.
-	result, err := mgr.RotateTenantDEKWithOptions(ctx, tenantID, false)
+	resp, err := server.RotateTenantDEK(ctx, &platformv1.RotateTenantDEKRequest{
+		TenantId:   getString(args, "tenant_id"),
+		Background: getBool(args, "background"),
+	})
 	if err != nil {
 		return nil, err
 	}
 
 	return map[string]interface{}{
 		"success":     true,
-		"tenant_id":   tenantID,
-		"old_version": result.OldVersion,
-		"new_version": result.NewVersion,
-		"timestamp":   time.Now().Format("2006-01-02T15:04:05Z07:00"),
+		"tenant_id":   resp.GetTenantId(),
+		"old_version": resp.GetOldVersion(),
+		"new_version": resp.GetNewVersion(),
+		"timestamp":   formatTimestamp(resp.GetTimestamp()),
 		"message":     "DEK rotated successfully",
 	}, nil
 }
 
-// executeTenantGetDEKStatus handles the tenant_get_dek_status tool execution.
+// executeTenantGetDEKStatus handles the tenant_get_dek_status tool
+// (GetTenantDEKStatus).
 func (r *ToolRegistry) executeTenantGetDEKStatus(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	mgr := r.getTenantManager()
-	if mgr == nil {
-		return nil, ErrTenantServiceUnavailable
-	}
-
-	tenantID := getString(args, "tenant_id")
-	if tenantID == "" {
-		return nil, ErrTenantIDRequired
-	}
-
-	status, err := mgr.GetTenantDEKStatus(ctx, tenantID)
+	server, err := r.tenantServer(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	result := map[string]interface{}{
-		"tenant_id":       tenantID,
-		"path":            status.Path,
-		"version":         status.Version,
-		"algorithm":       status.Algorithm,
-		"status":          status.Status,
-		"is_default":      status.IsDefault,
-		"created_at":      status.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		"rotated_at":      status.RotatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		"usage_count":     status.UsageCount,
-		"bytes_used":      status.BytesUsed,
-		"max_usage_count": status.MaxUsageCount,
-		"max_bytes_used":  status.MaxBytesUsed,
-		"warning_percent": status.WarningPercent,
-		"usage_percent":   status.UsagePercent,
-		"needs_rotation":  status.NeedsRotation,
+	resp, err := server.GetTenantDEKStatus(ctx, &platformv1.GetTenantDEKStatusRequest{
+		TenantId: getString(args, "tenant_id"),
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	// Include re-encryption progress if available
-	if status.ReencryptProgress != nil {
+	dek := resp.GetDekStatus()
+	result := map[string]interface{}{
+		"tenant_id":       dek.GetTenantId(),
+		"path":            dek.GetPath(),
+		"version":         dek.GetVersion(),
+		"algorithm":       dek.GetAlgorithm(),
+		"status":          dek.GetStatus(),
+		"is_default":      dek.GetIsDefault(),
+		"created_at":      formatTimestamp(dek.GetCreatedAt()),
+		"rotated_at":      formatTimestamp(dek.GetRotatedAt()),
+		"usage_count":     dek.GetUsageCount(),
+		"bytes_used":      dek.GetBytesUsed(),
+		"max_usage_count": dek.GetMaxUsageCount(),
+		"max_bytes_used":  dek.GetMaxBytesUsed(),
+		"warning_percent": dek.GetWarningPercent(),
+		"usage_percent":   dek.GetUsagePercent(),
+		"needs_rotation":  dek.GetNeedsRotation(),
+	}
+
+	if progress := dek.GetReencryptProgress(); progress != nil {
 		result["reencrypt_progress"] = map[string]interface{}{
-			"in_progress":          status.ReencryptProgress.InProgress,
-			"total_keys":           status.ReencryptProgress.TotalKeys,
-			"processed_keys":       status.ReencryptProgress.ProcessedKeys,
-			"failed_keys":          status.ReencryptProgress.FailedKeys,
-			"started_at":           status.ReencryptProgress.StartedAt.Format("2006-01-02T15:04:05Z07:00"),
-			"estimated_completion": status.ReencryptProgress.EstimatedCompletion.Format("2006-01-02T15:04:05Z07:00"),
+			"in_progress":          progress.GetInProgress(),
+			"total_keys":           progress.GetTotalKeys(),
+			"processed_keys":       progress.GetProcessedKeys(),
+			"failed_keys":          progress.GetFailedKeys(),
+			"started_at":           formatTimestamp(progress.GetStartedAt()),
+			"estimated_completion": formatTimestamp(progress.GetEstimatedCompletion()),
 		}
 	}
 
@@ -1082,210 +901,258 @@ func (r *ToolRegistry) executeTenantGetDEKStatus(ctx context.Context, args map[s
 }
 
 // executeTenantBarrierInit handles the platform_tenant_barrier_init tool
-// execution. The threshold and shares arguments are accepted for API parity
-// with REST/gRPC/QUIC but are currently informational; the underlying
-// Manager.InitTenantBarrier uses the platform default Shamir parameters.
+// (InitTenantBarrier).
 func (r *ToolRegistry) executeTenantBarrierInit(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	mgr := r.getTenantManager()
-	if mgr == nil {
-		return nil, ErrTenantServiceUnavailable
-	}
-
-	tenantID := getString(args, "tenant_id")
-	if tenantID == "" {
-		return nil, ErrTenantIDRequired
-	}
-
-	if err := mgr.InitTenantBarrier(ctx, tenantID); err != nil {
-		return nil, err
-	}
-
-	return map[string]interface{}{
-		"success":   true,
-		"tenant_id": tenantID,
-		"threshold": getInt(args, "threshold"),
-		"shares":    getInt(args, "shares"),
-		"message":   "tenant barrier initialized successfully",
-	}, nil
-}
-
-// executeTenantBarrierUnseal handles the platform_tenant_barrier_unseal tool
-// execution. The "key" argument is base64-encoded; an empty key is rejected by
-// the underlying Manager.UnsealTenantBarrier.
-func (r *ToolRegistry) executeTenantBarrierUnseal(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	mgr := r.getTenantManager()
-	if mgr == nil {
-		return nil, ErrTenantServiceUnavailable
-	}
-
-	tenantID := getString(args, "tenant_id")
-	if tenantID == "" {
-		return nil, ErrTenantIDRequired
-	}
-
-	var key []byte
-	if encoded := getString(args, "key"); encoded != "" {
-		decoded, err := base64.StdEncoding.DecodeString(encoded)
-		if err != nil {
-			return nil, ErrTenantBarrierUnsealKeyDecode
-		}
-		key = decoded
-	}
-
-	if err := mgr.UnsealTenantBarrier(ctx, tenantID, key); err != nil {
-		return nil, err
-	}
-
-	return map[string]interface{}{
-		"success":   true,
-		"tenant_id": tenantID,
-		"message":   "tenant barrier unsealed successfully",
-	}, nil
-}
-
-// executeTenantBarrierSeal handles the platform_tenant_barrier_seal tool
-// execution.
-func (r *ToolRegistry) executeTenantBarrierSeal(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	mgr := r.getTenantManager()
-	if mgr == nil {
-		return nil, ErrTenantServiceUnavailable
-	}
-
-	tenantID := getString(args, "tenant_id")
-	if tenantID == "" {
-		return nil, ErrTenantIDRequired
-	}
-
-	if err := mgr.SealTenantBarrier(ctx, tenantID); err != nil {
-		return nil, err
-	}
-
-	return map[string]interface{}{
-		"success":   true,
-		"tenant_id": tenantID,
-		"message":   "tenant barrier sealed successfully",
-	}, nil
-}
-
-// executeTenantBarrierStatus handles the platform_tenant_barrier_status tool
-// execution.
-func (r *ToolRegistry) executeTenantBarrierStatus(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	mgr := r.getTenantManager()
-	if mgr == nil {
-		return nil, ErrTenantServiceUnavailable
-	}
-
-	tenantID := getString(args, "tenant_id")
-	if tenantID == "" {
-		return nil, ErrTenantIDRequired
-	}
-
-	state, err := mgr.TenantBarrierStatus(ctx, tenantID)
+	server, err := r.tenantServer(ctx)
 	if err != nil {
 		return nil, err
 	}
 
+	tenantID := getString(args, "tenant_id")
+	resp, err := server.InitTenantBarrier(ctx, &platformv1.InitTenantBarrierRequest{
+		TenantId:  tenantID,
+		Threshold: int32(getInt(args, "threshold")),
+		Shares:    int32(getInt(args, "shares")),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return statusResult(resp.GetStatus(), map[string]interface{}{"tenant_id": tenantID}), nil
+}
+
+// executeTenantBarrierUnseal handles the platform_tenant_barrier_unseal tool
+// (UnsealTenantBarrier). The "key" argument is base64-encoded.
+func (r *ToolRegistry) executeTenantBarrierUnseal(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	server, err := r.tenantServer(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	key, err := base64.StdEncoding.DecodeString(getString(args, "key"))
+	if err != nil {
+		return nil, ErrTenantBarrierUnsealKeyDecode
+	}
+
+	tenantID := getString(args, "tenant_id")
+	resp, err := server.UnsealTenantBarrier(ctx, &platformv1.UnsealTenantBarrierRequest{
+		TenantId: tenantID,
+		Key:      key,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return statusResult(resp.GetStatus(), map[string]interface{}{"tenant_id": tenantID}), nil
+}
+
+// executeTenantBarrierSeal handles the platform_tenant_barrier_seal tool
+// (SealTenantBarrier).
+func (r *ToolRegistry) executeTenantBarrierSeal(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	server, err := r.tenantServer(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	tenantID := getString(args, "tenant_id")
+	resp, err := server.SealTenantBarrier(ctx, &platformv1.SealTenantBarrierRequest{TenantId: tenantID})
+	if err != nil {
+		return nil, err
+	}
+
+	return statusResult(resp.GetStatus(), map[string]interface{}{"tenant_id": tenantID}), nil
+}
+
+// executeTenantBarrierStatus handles the platform_tenant_barrier_status tool
+// (GetTenantBarrierStatus).
+func (r *ToolRegistry) executeTenantBarrierStatus(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	server, err := r.tenantServer(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := server.GetTenantBarrierStatus(ctx, &platformv1.GetTenantBarrierStatusRequest{
+		TenantId: getString(args, "tenant_id"),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	barrier := resp.GetBarrierStatus()
 	return map[string]interface{}{
-		"tenant_id":       state.TenantID,
-		"sealed":          state.Sealed,
-		"initialized":     state.Initialized,
-		"strategy":        state.Strategy,
-		"hardware_backed": state.HardwareBacked,
+		"tenant_id":       barrier.GetTenantId(),
+		"sealed":          barrier.GetSealed(),
+		"initialized":     barrier.GetInitialized(),
+		"strategy":        barrier.GetStrategy(),
+		"hardware_backed": barrier.GetHardwareBacked(),
 	}, nil
 }
 
-// formatTenantEntity formats a TenantEntity for MCP response.
-func formatTenantEntity(entity *tenant.TenantEntity) map[string]interface{} {
-	if entity == nil {
+// statusResult is a tool result carrying an RPC Status as success and
+// message, together with the fields the tool adds.
+func statusResult(st *platformv1.Status, fields map[string]interface{}) map[string]interface{} {
+	result := map[string]interface{}{
+		"success": st.GetSuccess(),
+		"message": st.GetMessage(),
+	}
+	maps.Copy(result, fields)
+	return result
+}
+
+// tenantStateNames are the tenant states under the names the tenant package
+// gives them, which the tools have always answered with.
+var tenantStateNames = map[platformv1.TenantState]string{
+	platformv1.TenantState_TENANT_STATE_PENDING:   string(tenant.StateCreated),
+	platformv1.TenantState_TENANT_STATE_ACTIVE:    string(tenant.StateActive),
+	platformv1.TenantState_TENANT_STATE_SUSPENDED: string(tenant.StateSuspended),
+	platformv1.TenantState_TENANT_STATE_DELETING:  string(tenant.StateDeleting),
+	platformv1.TenantState_TENANT_STATE_DELETED:   string(tenant.StateDeleted),
+}
+
+// tenantStateName names a tenant state, falling back to the enum name for a
+// state the tenant package does not define.
+func tenantStateName(state platformv1.TenantState) string {
+	if name, ok := tenantStateNames[state]; ok {
+		return name
+	}
+	return state.String()
+}
+
+// formatTenant renders a Tenant as a tool result.
+func formatTenant(t *platformv1.Tenant) map[string]interface{} {
+	if t == nil {
 		return nil
 	}
 
 	result := map[string]interface{}{
-		"id":           entity.ID,
-		"name":         entity.Name,
-		"display_name": entity.DisplayName,
-		"state":        string(entity.State),
-		"created_at":   entity.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		"updated_at":   entity.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		"id":            t.GetId(),
+		"name":          t.GetName(),
+		"display_name":  t.GetDisplayName(),
+		"state":         tenantStateName(t.GetState()),
+		"created_at":    formatTimestamp(t.GetCreatedAt()),
+		"updated_at":    formatTimestamp(t.GetUpdatedAt()),
+		"compute_quota": formatComputeQuota(t.GetComputeQuota()),
+		"network_quota": formatNetworkQuota(t.GetNetworkQuota()),
+		"storage_quota": formatStorageQuota(t.GetStorageQuota()),
 	}
 
-	// Include DEK handle if set
-	if entity.DEKHandle() != 0 {
-		result["dek_handle"] = entity.DEKHandle()
+	if path := t.GetDekPath(); path != "" {
+		result["dek_path"] = path
 	}
-
-	// Include quotas
-	result["compute_quota"] = map[string]interface{}{
-		"max_vms":        entity.ComputeQuota.MaxVMs,
-		"max_containers": entity.ComputeQuota.MaxContainers,
-		"max_vcpus":      entity.ComputeQuota.MaxVCPUs,
-		"max_memory_mb":  entity.ComputeQuota.MaxMemoryMB,
-		"max_disk_gb":    entity.ComputeQuota.MaxDiskGB,
+	if labels := t.GetLabels(); len(labels) > 0 {
+		result["labels"] = labels
 	}
-
-	result["network_quota"] = map[string]interface{}{
-		"max_bridges":        entity.NetworkQuota.MaxBridges,
-		"max_ports":          entity.NetworkQuota.MaxPorts,
-		"max_bandwidth_mbps": entity.NetworkQuota.MaxBandwidthMbps,
-	}
-
-	result["storage_quota"] = map[string]interface{}{
-		"max_volumes_gb": entity.StorageQuota.MaxVolumesGB,
-		"max_snapshots":  entity.StorageQuota.MaxSnapshots,
-	}
-
-	// Include labels if present
-	if len(entity.Labels) > 0 {
-		result["labels"] = entity.Labels
-	}
-
-	// Include annotations if present
-	if len(entity.Annotations) > 0 {
-		result["annotations"] = entity.Annotations
-	}
-
-	// Include deleted timestamp if set
-	if entity.DeletedAt != nil {
-		result["deleted_at"] = entity.DeletedAt.Format("2006-01-02T15:04:05Z07:00")
+	if annotations := t.GetAnnotations(); len(annotations) > 0 {
+		result["annotations"] = annotations
 	}
 
 	return result
 }
 
-// formatTenantList formats a slice of TenantEntity for MCP response.
-func formatTenantList(tenants []*tenant.TenantEntity) []map[string]interface{} {
+// formatTenants renders a list of Tenants as a tool result.
+func formatTenants(tenants []*platformv1.Tenant) []map[string]interface{} {
 	result := make([]map[string]interface{}, 0, len(tenants))
 	for _, t := range tenants {
-		result = append(result, formatTenantEntity(t))
+		result = append(result, formatTenant(t))
 	}
 	return result
+}
+
+func formatComputeQuota(q *platformv1.ComputeQuota) map[string]interface{} {
+	return map[string]interface{}{
+		"max_vms":        q.GetMaxVms(),
+		"max_containers": q.GetMaxContainers(),
+		"max_vcpus":      q.GetMaxVcpus(),
+		"max_memory_mb":  q.GetMaxMemoryMb(),
+	}
+}
+
+func formatNetworkQuota(q *platformv1.NetworkQuota) map[string]interface{} {
+	return map[string]interface{}{
+		"max_bridges":        q.GetMaxBridges(),
+		"max_ports":          q.GetMaxPorts(),
+		"max_bandwidth_mbps": q.GetMaxBandwidthMbps(),
+	}
+}
+
+func formatStorageQuota(q *platformv1.StorageQuota) map[string]interface{} {
+	return map[string]interface{}{
+		"max_volumes_gb": q.GetMaxVolumesGb(),
+		"max_snapshots":  q.GetMaxSnapshots(),
+	}
+}
+
+// formatTimestamp renders a timestamp as RFC 3339, and an absent one as "".
+func formatTimestamp(ts *timestamppb.Timestamp) string {
+	if ts == nil {
+		return ""
+	}
+	return ts.AsTime().Format(time.RFC3339)
+}
+
+// quotaArg is the limit the caller gave under key, or current when the
+// caller gave none. A limit is positive, so 0 keeps the current value.
+func quotaArg(args map[string]interface{}, key string, current int64) int64 {
+	if v := getInt64(args, key); v > 0 {
+		return v
+	}
+	return current
+}
+
+// computeQuotaFromArgs is the compute quota the caller gave, or nil (the
+// tenant default) when the caller gave no compute limit.
+func computeQuotaFromArgs(args map[string]interface{}) *platformv1.ComputeQuota {
+	if !hasComputeQuotaArgs(args) {
+		return nil
+	}
+	return &platformv1.ComputeQuota{
+		MaxVms:        getInt64(args, "max_vms"),
+		MaxContainers: getInt64(args, "max_containers"),
+		MaxVcpus:      getInt64(args, "max_vcpus"),
+		MaxMemoryMb:   getInt64(args, "max_memory_mb"),
+	}
+}
+
+// networkQuotaFromArgs is the network quota the caller gave, or nil.
+func networkQuotaFromArgs(args map[string]interface{}) *platformv1.NetworkQuota {
+	if !hasNetworkQuotaArgs(args) {
+		return nil
+	}
+	return &platformv1.NetworkQuota{
+		MaxBridges:       getInt64(args, "max_bridges"),
+		MaxPorts:         getInt64(args, "max_ports"),
+		MaxBandwidthMbps: getInt64(args, "max_bandwidth_mbps"),
+	}
+}
+
+// storageQuotaFromArgs is the storage quota the caller gave, or nil.
+func storageQuotaFromArgs(args map[string]interface{}) *platformv1.StorageQuota {
+	if !hasStorageQuotaArgs(args) {
+		return nil
+	}
+	return &platformv1.StorageQuota{
+		MaxVolumesGb: getInt64(args, "max_volumes_gb"),
+		MaxSnapshots: getInt64(args, "max_snapshots"),
+	}
 }
 
 // hasComputeQuotaArgs checks if any compute quota arguments were provided.
 func hasComputeQuotaArgs(args map[string]interface{}) bool {
-	keys := []string{"max_vms", "max_containers", "max_vcpus", "max_memory_mb", "max_disk_gb"}
-	for _, key := range keys {
-		if _, ok := args[key]; ok {
-			return true
-		}
-	}
-	return false
+	return hasAnyArg(args, "max_vms", "max_containers", "max_vcpus", "max_memory_mb")
 }
 
 // hasNetworkQuotaArgs checks if any network quota arguments were provided.
 func hasNetworkQuotaArgs(args map[string]interface{}) bool {
-	keys := []string{"max_bridges", "max_ports", "max_bandwidth_mbps"}
-	for _, key := range keys {
-		if _, ok := args[key]; ok {
-			return true
-		}
-	}
-	return false
+	return hasAnyArg(args, "max_bridges", "max_ports", "max_bandwidth_mbps")
 }
 
 // hasStorageQuotaArgs checks if any storage quota arguments were provided.
 func hasStorageQuotaArgs(args map[string]interface{}) bool {
-	keys := []string{"max_volumes_gb", "max_snapshots"}
+	return hasAnyArg(args, "max_volumes_gb", "max_snapshots")
+}
+
+// hasAnyArg reports whether args holds any of keys.
+func hasAnyArg(args map[string]interface{}, keys ...string) bool {
 	for _, key := range keys {
 		if _, ok := args[key]; ok {
 			return true

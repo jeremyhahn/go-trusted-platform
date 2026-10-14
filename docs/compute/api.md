@@ -89,16 +89,16 @@ streams (§5).
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Create VM | `POST /api/v1/compute/vms` | `CreateVM` | `OpVMCreate` (`0x60`) | `vm_create` | ✅ |
-| List VMs | `GET /api/v1/compute/vms` | `ListVMs` | `OpVMList` (`0x65`) | `vm_list` | ✅ |
-| Get VM | `GET /api/v1/compute/vms/{id}` | `GetVM` | `OpVMGet` (`0x64`) | `vm_get` | ✅ |
-| Delete VM | `DELETE /api/v1/compute/vms/{id}` | `DeleteVM` | `OpVMDelete` (`0x61`) | `vm_delete` | ✅ |
-| Start VM | `POST /api/v1/compute/vms/{id}/start` | `StartVM` | `OpVMStart` (`0x62`) | `vm_start` | ✅ |
-| Stop VM | `POST /api/v1/compute/vms/{id}/stop` | `StopVM` | `OpVMStop` (`0x63`) | `vm_stop` | ✅ |
-| Reboot VM | `POST /api/v1/compute/vms/{id}/reboot` | `RebootVM` | `OpVMRestart` (`0xB6`) | `vm_reboot` | ✅ |
-| Suspend VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpVMSuspend` (`0xB7`) | `vm_suspend` | — |
-| Resume VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpVMResume` (`0xB8`) | `vm_resume` | — |
-| Update VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `vm_update` | — |
+| Create VM | `POST /api/v1/compute/vms` | `CreateVM` | `OpVMCreate` (`0x60`) | `vm_create` (refused, §7) | ✅ |
+| List VMs | `GET /api/v1/compute/vms` | `ListVMs` | `OpVMList` (`0x65`) | `vm_list` (refused, §7) | ✅ |
+| Get VM | `GET /api/v1/compute/vms/{id}` | `GetVM` | `OpVMGet` (`0x64`) | `vm_get` (refused, §7) | ✅ |
+| Delete VM | `DELETE /api/v1/compute/vms/{id}` | `DeleteVM` | `OpVMDelete` (`0x61`) | `vm_delete` (refused, §7) | ✅ |
+| Start VM | `POST /api/v1/compute/vms/{id}/start` | `StartVM` | `OpVMStart` (`0x62`) | `vm_start` (refused, §7) | ✅ |
+| Stop VM | `POST /api/v1/compute/vms/{id}/stop` | `StopVM` | `OpVMStop` (`0x63`) | `vm_stop` (refused, §7) | ✅ |
+| Reboot VM | `POST /api/v1/compute/vms/{id}/reboot` | `RebootVM` | `OpVMRestart` (`0xB6`) | `vm_reboot` (refused, §7) | ✅ |
+| Suspend VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpVMSuspend` (`0xB7`) | `vm_suspend` (refused, §7) | — |
+| Resume VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpVMResume` (`0xB8`) | `vm_resume` (refused, §7) | — |
+| Update VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `vm_update` (refused, §7) | — |
 | Get VM state | `MISSING — docs/13 G7` | (via `GetVM`) | `OpVMGetState` (`0x6A`) | `MISSING — docs/13 G7` | — |
 | Activate VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpVMActivate` (`0x68`) | `MISSING — docs/13 G7` | — |
 
@@ -120,7 +120,7 @@ QUIC serves these as **sub-opcodes under `OpVMExtendedCategory` (`0x69`)** — s
 | Resize disk | `PATCH /api/v1/compute/vms/{id}/disks/{diskId}` | `ResizeDisk` | `OpVMResizeDisk` (`0xCF`) | `vm_disk_resize` | ✅ |
 | Create snapshot | `POST /api/v1/compute/vms/{id}/snapshots` | `CreateSnapshot` | `MISSING — docs/13 G7` | `vm_snapshot_create` | ✅ |
 | List snapshots | `GET /api/v1/compute/vms/{id}/snapshots` | `ListSnapshots` | `MISSING — docs/13 G7` | `vm_snapshot_list` | ✅ |
-| Get snapshot | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `vm_snapshot_get` | — |
+| Get snapshot | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `vm_snapshot_get` (refused, §7) | — |
 | Delete snapshot | `DELETE /api/v1/compute/vms/{id}/snapshots/{snapshotId}` | `DeleteSnapshot` | `MISSING — docs/13 G7` | `vm_snapshot_delete` | ✅ |
 | Restore snapshot | `POST /api/v1/compute/vms/{id}/snapshots/{snapshotId}/restore` | `RestoreSnapshot` | `MISSING — docs/13 G7` | `vm_snapshot_restore` | ✅ |
 | Migrate VM | `POST /api/v1/compute/vms/{id}/migrate` | `MigrateVM` | `OpVMMigrate` (`0xD0`) | `vm_migrate` | ✅ |
@@ -242,9 +242,37 @@ under two resources:
 `ExecContainer` is arbitrary command execution inside a workload, so
 `container:write` is the scope to guard.
 
-**Every `vm_*` and `container_*` MCP tool is refused.** None is in the MCP
-permission map (`pkg/api/mcp/authz.go`), so `AuthorizeTool` answers
-`AuthErrorToolNotClassified` for every caller until they are classified.
+**The MCP tools answer under the scope of their gRPC twin** (#304). The MCP
+permission map (`pkg/api/mcp/authz.go`) holds each tool that reaches a real
+backend:
+
+| Permission | MCP tools |
+|---|---|
+| `container:read` | `container_get`, `container_list`, `container_logs`, `container_metrics`, `container_attest` |
+| `container:write` | `container_create`, `container_start`, `container_stop`, `container_exec` |
+| `container:delete` | `container_remove` |
+| `vm:read` | `vm_snapshot_list`, `vm_attest`, `vm_attest_verify`, `vm_metrics`, `vm_logs` |
+| `vm:write` | `vm_snapshot_create`, `vm_snapshot_restore`, `vm_disk_attach`, `vm_disk_detach`, `vm_disk_resize`, `vm_migrate` |
+| `vm:delete` | `vm_snapshot_delete` |
+
+`vm_disk_detach` is `vm:write`, not `vm:delete`, because `DetachDisk` is.
+
+A tool's failure carries the gRPC status class its twin RPC answers the same
+failure with: NotFound for an unknown VM, container, snapshot or disk,
+InvalidArgument for malformed input (including a PCR index outside 0-23),
+FailedPrecondition for a missing orchestrator or VM capability, and
+Unimplemented for a missing container capability.
+
+**Eleven tools stay refused**, marked *(refused, §7)* in the tables above.
+`AuthorizeTool` answers `AuthErrorToolNotClassified` for every caller. The ten
+VM lifecycle tools (`vm_create`, `vm_list`, `vm_get`, `vm_update`,
+`vm_delete`, `vm_start`, `vm_stop`, `vm_reboot`, `vm_suspend`, `vm_resume`)
+have no executor behind them. `vm_snapshot_get` has no gRPC or REST twin whose
+scope it could take.
+
+No transport scopes a VM or container to a tenant. `compute.Instance` has no
+tenant field, and neither `ComputeService` nor the MCP tools filter by tenant.
+A caller holding `vm:read` reads every VM on the node.
 
 ### The web-service REST surface is gated on the `admin` role (#165)
 

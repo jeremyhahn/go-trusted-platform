@@ -483,7 +483,7 @@ catalog entry is refused, not allowed.
 | Catalog | Coverage | Default for an unlisted entry |
 |---|---|---|
 | gRPC `pkg/api/grpc/method_permissions.go` | Every registered RPC; a contract test keeps it that way | Refused with `PermissionDenied` (`ErrMethodNotClassified`) before the token is read, unless the method is on the documented pre-auth list |
-| MCP `pkg/api/mcp/authz.go` | 156 of 433 registered tools | `AuthorizeTool` refuses it with `AuthErrorToolNotClassified` |
+| MCP `pkg/api/mcp/authz.go` | 370 of 469 registered tools (363 scoped, 7 open) | `AuthorizeTool` refuses it with `AuthErrorToolNotClassified` |
 | QUIC `pkg/api/quic/opcode_permissions.go` | every routable opcode and sub-opcode | Denied (`StatusPermissionDenied`, #767) |
 
 Detail, the pre-auth list and the unclassified MCP tools are in

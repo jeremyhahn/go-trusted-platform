@@ -984,6 +984,7 @@ func (s *AttestationServiceServer) mapError(err error) error {
 		errManifestBuildFailed  manifest.ErrManifestBuildFailed
 		errManifestSignFailed   manifest.ErrManifestSignFailed
 		errManifestVerifyFailed manifest.ErrManifestVerifyFailed
+		errSignatureUnchecked   ErrAttestationManifestSignatureUnchecked
 	)
 
 	switch {
@@ -1015,6 +1016,8 @@ func (s *AttestationServiceServer) mapError(err error) error {
 	case errors.As(err, &errTPMNotAvailable):
 		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.As(err, &errManifestExpired):
+		return status.Error(codes.FailedPrecondition, err.Error())
+	case errors.As(err, &errSignatureUnchecked):
 		return status.Error(codes.FailedPrecondition, err.Error())
 
 	// Canceled errors

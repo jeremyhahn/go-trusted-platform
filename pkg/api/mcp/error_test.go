@@ -384,11 +384,7 @@ func TestTenantError_PredefinedErrors(t *testing.T) {
 		expected string
 	}{
 		{"ErrTenantServiceUnavailable", ErrTenantServiceUnavailable, "TENANT_SERVICE_UNAVAILABLE: tenant management service is not available"},
-		{"ErrTenantIDRequired", ErrTenantIDRequired, "TENANT_ID_REQUIRED: tenant ID is required"},
-		{"ErrTenantNameRequired", ErrTenantNameRequired, "TENANT_NAME_REQUIRED: tenant name is required"},
-		{"ErrTenantResourceTypeRequired", ErrTenantResourceTypeRequired, "TENANT_RESOURCE_TYPE_REQUIRED: resource type is required"},
-		{"ErrTenantAmountRequired", ErrTenantAmountRequired, "TENANT_AMOUNT_REQUIRED: amount is required"},
-		{"ErrTenantInvalidResourceType", ErrTenantInvalidResourceType, "TENANT_INVALID_RESOURCE_TYPE: invalid resource type"},
+		{"ErrTenantBarrierUnsealKeyDecode", ErrTenantBarrierUnsealKeyDecode, "TENANT_BARRIER_UNSEAL_KEY_DECODE: failed to base64-decode barrier unseal key"},
 	}
 
 	for _, tt := range tests {

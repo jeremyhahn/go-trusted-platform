@@ -180,7 +180,7 @@ func TestMCPService_SDNOperations_NoService(t *testing.T) {
 	})
 
 	t.Run("SDNGetFlowStats without SDN service", func(t *testing.T) {
-		result, err := provider.SDNGetFlowStats(ctx, "br0")
+		result, err := provider.SDNGetFlowStats(ctx, "br0", "0x1")
 		assert.Nil(t, result)
 		assert.Error(t, err)
 	})

@@ -92,9 +92,11 @@ and `state` for the port tools, the four rates as decimal strings,
 document for the policy tools and the zone fields for the zone tools.
 `sdn_set_port_state` answers with the refreshed port, and `sdn_add_port`
 refuses a `port_type` it does not know instead of adding an unspecified port.
+`AddFlow` sends the whole `FlowConfig` under its proto field names, which
+`sdn_add_flow` decodes as strictly as gRPC does (#304).
 A request field the tool cannot carry is refused before the call
 (`InvalidArgument`, `ErrFieldNotSupported` naming the field), never dropped:
-on MCP, `AddFlow` takes no flow body, `CreateBridge` only the name and type
+on MCP, `CreateBridge` takes only the name and type
 `ovs`, `DeleteBridge` no `force`, `AddPort` no VLAN, trunk, MAC,
 MTU, promiscuous flag, options or zone, `CreateVLAN` no ports, `FlushFlows`
 no table, and the list calls no selector or pagination. Labels pass,
@@ -135,8 +137,8 @@ spellings.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Authenticate port | `POST /api/v1/sdn/bridges/{name}/ports/{port}/auth` (webservice only) | `AuthenticatePort` | `MISSING — docs/13 G7` | `sdn_authenticate_port` | ✅ |
-| Revoke port auth | `DELETE /api/v1/sdn/bridges/{name}/ports/{port}/auth` (webservice only) | `RevokePortAuth` | `MISSING — docs/13 G7` | `sdn_revoke_port_auth` | ✅ |
+| Authenticate port | `POST /api/v1/sdn/bridges/{name}/ports/{port}/auth` (webservice only) | `AuthenticatePort` | `MISSING — docs/13 G7` | `sdn_authenticate_port` (refused) | ✅ |
+| Revoke port auth | `DELETE /api/v1/sdn/bridges/{name}/ports/{port}/auth` (webservice only) | `RevokePortAuth` | `MISSING — docs/13 G7` | `sdn_revoke_port_auth` (refused) | ✅ |
 | Apply policy | `POST /api/v1/sdn/policies` | `ApplyPolicy` | `OpSDNApplyPolicy` (`0x47`) | `sdn_apply_policy` | ✅ |
 | List policies | `GET /api/v1/sdn/policies` | `ListPolicies` | `OpSDNListPolicies` (`0x49`) | `sdn_list_policies` | ✅ |
 | Get policy | `GET /api/v1/sdn/policies/{id}` | `GetPolicy` | `OpSDNGetPolicy` (`0x48`) | `sdn_get_policy` | ✅ |
@@ -192,6 +194,16 @@ routes no server registers. `ApplyPolicy` still claims
 
 **This is IDevID-certificate authentication, not EAP/RADIUS.** `AuthenticatePort`
 validates a device certificate; there is no RADIUS exchange behind it.
+
+**Port authentication enforces nothing today.** `SDNService.AuthenticatePort`
+parses the certificate and checks only its validity window — it does not verify
+the chain to the platform anchor or that the certificate is an IDevID, so a
+self-signed certificate passes — and records the port in a map no other code
+reads; the switch never admits or blocks the port. REST and gRPC still answer
+it. MCP refuses both tools: they carry no scope mapping, so the server refuses
+them before they run (`AuthErrorToolNotClassified`), and the handlers
+themselves return `ErrPortAuthNotEnforced` (`FailedPrecondition`) without
+calling the service (#304). Until #304 the MCP tools answered success.
 
 ---
 

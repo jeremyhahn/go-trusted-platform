@@ -80,7 +80,9 @@ func (s *Service) BuildManifest(ctx context.Context, config *manifest.BuilderCon
 // Merkle root recomputation — without requiring the full
 // ManifestVerifier's CA chain validation (which needs a
 // PlatformCACert that's not threaded through this surface yet).
-// The signature check uses the supplied publicKey when present.
+// It does not check a manifest signature: a supplied publicKey is
+// refused with ErrAttestationManifestSignatureUnchecked rather than
+// reported valid unchecked (#304).
 //
 // Used by /attestation/manifests/verify and by the WebUI's per-row
 // Verify action. Both success and rejection paths emit events for
@@ -98,6 +100,9 @@ func (s *Service) VerifyManifest(
 ) (*manifest.VerificationResult, error) {
 	if m == nil {
 		return nil, &MessageError{Msg: "attestation/service: manifest is required"}
+	}
+	if len(publicKey) > 0 {
+		return nil, daemon.ErrAttestationManifestSignatureUnchecked{}
 	}
 	result := &manifest.VerificationResult{
 		VerifiedAt: time.Now().UTC(),

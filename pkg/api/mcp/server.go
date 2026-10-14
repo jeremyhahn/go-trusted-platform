@@ -626,15 +626,19 @@ func extractTokenFromHTTPRequest(r *http.Request) string {
 	return ""
 }
 
+// tokenArgumentKeys are the tool arguments that may carry the caller's
+// token, in the order extractTokenFromParams prefers them. They are the
+// transport's credential, not a tool argument.
+var tokenArgumentKeys = []string{"_token", "accessToken"}
+
 // extractTokenFromParams extracts the authentication token from MCP params.
 func extractTokenFromParams(params map[string]interface{}) string {
 	// Check for token in arguments
 	if args, ok := params["arguments"].(map[string]interface{}); ok {
-		if token, ok := args["_token"].(string); ok {
-			return token
-		}
-		if token, ok := args["accessToken"].(string); ok {
-			return token
+		for _, key := range tokenArgumentKeys {
+			if token, ok := args[key].(string); ok {
+				return token
+			}
 		}
 	}
 

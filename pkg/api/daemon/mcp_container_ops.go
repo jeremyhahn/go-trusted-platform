@@ -68,7 +68,7 @@ func (m *MCPServiceProvider) ContainerExec(ctx context.Context, id string, comma
 	result, err := executor.Exec(ctx, id, opts)
 	if err != nil {
 		m.logger.Error("failed to exec in container", "container_id", id, "error", err)
-		return nil, ErrContainerOperationFailed{Operation: "exec", Cause: err}
+		return nil, classifyComputeErr(ErrContainerOperationFailed{Operation: "exec", Cause: err}, containerOpsErrToStatus)
 	}
 
 	return map[string]interface{}{
@@ -97,7 +97,7 @@ func (m *MCPServiceProvider) ContainerMetrics(ctx context.Context, id string) (i
 	stats, err := reader.Metrics(ctx, id)
 	if err != nil {
 		m.logger.Error("failed to read container metrics", "container_id", id, "error", err)
-		return nil, ErrContainerOperationFailed{Operation: "metrics", Cause: err}
+		return nil, classifyComputeErr(ErrContainerOperationFailed{Operation: "metrics", Cause: err}, containerOpsErrToStatus)
 	}
 
 	return map[string]interface{}{

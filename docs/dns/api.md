@@ -70,8 +70,9 @@ filtered by `?type=`. The two are distinct routes with distinct answers.
 The SDK REST client (`sdk/go/transport/rest/dns.go`) calls these routes with
 the zone, record type and record name in the path, never in the body; the type
 travels as its mnemonic (`A`, `AAAA`, `MX`), and a record call without a type
-is refused before it is sent. Get record is served on REST only: the SDK
-cannot call it because `DNSService` declares no `GetRecord` rpc (docs/13 G7).
+is refused before it is sent. Get record is served on REST, and on MCP by
+`dns_record_get` from `ListRecords` (§3). The SDK cannot call it, because
+`DNSService` declares no `GetRecord` rpc (docs/13 G7).
 
 `GET /api/v1/dns/resolve` answers from managed zones only, exactly as gRPC
 `Resolve` does — both call `dns.ResolveName`: `fqdn` is required (400 without
@@ -84,9 +85,9 @@ is a 400 (gRPC `InvalidArgument`). See
 
 ---
 
-## 3. The MCP surface is duplicated — and the two halves authorize differently
+## 3. The MCP surface is duplicated
 
-**This is the finding to read before writing an MCP client.**
+**Read this before writing an MCP client.**
 
 Twenty DNS tool names exist for roughly ten capabilities, in two families:
 
@@ -103,19 +104,34 @@ Twenty DNS tool names exist for roughly ten capabilities, in two families:
 | — | `dns_record_update` |
 | `dns_resolve` | `dns_lookup`, `dns_reverse_lookup` |
 
-**Only the older family is in the authorization map.**
-`pkg/api/mcp/authz.go` sets `toolPermissions` for `dns_add_record` →
+**Both families are in the authorization map, under `dns:*` scopes.** The older
+family's permissions are listed in `pkg/api/mcp/authz.go` (`dns_add_record` →
 `dns:write`, `dns_create_zone` → `dns:write`, `dns_delete_zone` →
-`dns:delete`, `dns_resolve` → `dns:read`, and the other four older names.
-`dns_zone_create`, `dns_record_create`, `dns_zone_update`, `dns_record_update`,
-`dns_lookup` and `dns_reverse_lookup` are **absent**.
+`dns:delete`, `dns_resolve` → `dns:read`, and four more).
 
-`AuthorizeTool` is default-deny (#300): a tool absent from the map is refused
-with `AuthErrorToolNotClassified` whatever scopes the token holds.
+The newer family is bound to the gRPC `DNSService` servicer (#304). Each tool
+decodes its arguments into the RPC's request message and calls the RPC over the
+daemon's DNS service. It returns the response with proto field names and
+requires the RPC's scope (`dnsTools`, `pkg/api/mcp/dns_tools.go`). The tool
+therefore answers and fails as gRPC does: the gRPC status passes through, so
+`NotFound` and `InvalidArgument` keep their class on the wire.
 
-**Net effect: `dns_create_zone` requires `dns:write`, and `dns_zone_create` is
-refused for every caller.** Same operation, two names; the newer name a client
-is more likely to discover does not work until it is classified.
+- **Arguments.** The arguments are the request message in its JSON form.
+  `dns_record_create` takes `zone_name` and a `record` such as
+  `{"type": "RECORD_TYPE_A", "a": {"name": "www", "value": "10.0.0.1", "ttl": 300}}`.
+  An argument the request does not have is `InvalidArgument`.
+- **`dns_record_get` has no RPC**, because `DNSService` declares no `GetRecord`.
+  It lists the zone's records of `type` and returns the one named `name`, as
+  REST's `GET …/records/{type}/{name}` does. When none matches it returns
+  `NotFound` (`ErrDNSRecordNotFound`). It requires `dns:read`, the scope of
+  `ListRecords`.
+- **`dns_reverse_lookup` has no backend.** No transport serves a reverse lookup,
+  and the record set has no PTR type. It is left out of the map and refused with
+  `AuthErrorToolNotClassified`.
+- **No DNS service.** When none is wired into the daemon, every tool returns
+  `Unavailable`.
+
+`dns_create_zone` and `dns_zone_create` now need the same scope.
 
 Which family is canonical, and whether the other is removed or aliased, is
 still open.
@@ -130,8 +146,15 @@ are **default-deny** ([`docs/auth/architecture.md`](../auth/architecture.md)).
 **`DNSService` is fully scoped on gRPC** with 13 methods mapped, resource
 `dns`, actions `read`/`write`/`delete`.
 
-On MCP, the eight older-family tools in §3 carry a permission; the twelve
-newer-family names are refused. Platform-wide catalog totals are in
+On MCP, the eight older-family tools in §3 carry a permission. So do eleven of
+the twelve newer-family tools, each with its gRPC method's scope;
+`dns_reverse_lookup` is refused.
+
+The tenant is the DNS service's own. `DNSService` carries no caller tenant on
+gRPC: it acts in the tenant the daemon configured the DNS service with, and a
+zone of another tenant is `NotFound`. The MCP tools call the same servicer, so
+they behave identically and add no tenant binding of their own. Platform-wide
+catalog totals are in
 [`docs/daemon/api.md`](../daemon/api.md) §5.
 
 ### REST is gated on the `admin` role (#165)

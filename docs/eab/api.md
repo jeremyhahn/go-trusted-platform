@@ -117,7 +117,10 @@ comment), `profile_id` (optional filter), `pagination` (`PaginationRequest`),
 Pagination is the shared `PaginationRequest`/`PaginationResponse` from
 `common.proto`. On the MCP surface, `page` and `page_size` of `0` mean "return
 the full set"; the service walks the store in pages of `eabPageCollectSize`
-(100) to assemble an unfiltered list.
+(100) to assemble an unfiltered list. MCP lists through the same
+`collectEABCredentials` / `filterEABCredentials` / `paginateEABCredentials`
+path as gRPC, in gRPC's default order (`id` ascending); it has no `sort_by` or
+`ascending` argument. An unknown `status` is `InvalidArgument`.
 
 ### Validate
 
@@ -157,7 +160,9 @@ The URL is built from the configured base
 
 `CleanupExpiredEABCredentialsRequest`: `tenant_id` (optional; empty = all
 tenants). `CleanupExpiredEABCredentialsResponse`: `deleted_count` (`int32`),
-`status`, `timestamp`.
+`status`, `timestamp`. A named tenant deletes only that tenant's expired
+credentials (`cleanupExpiredEABCredentials`) on gRPC and MCP alike; before #304
+the MCP tool ignored `tenant_id` and swept every tenant.
 
 ---
 
@@ -170,7 +175,7 @@ tenants). `CleanupExpiredEABCredentialsResponse`: `deleted_count` (`int32`),
 | `0x02` | `StatusNotFound` | `NotFound` | 404 | `ErrCredentialNotFound` |
 | `0x03` | `StatusUnauthorized` | `Unauthenticated` | 401 | Token invalid |
 | `0x04` | `StatusInternalError` | `Internal` | 500 | `ErrKeyGenerationFailed`, `ErrQRCodeGenerationFailed`, `ErrFileExportFailed`, any unmatched error |
-| `0x07` | `StatusPermissionDenied` | `PermissionDenied` | 403 | See §5 — no scope is currently required |
+| `0x07` | `StatusPermissionDenied` | `PermissionDenied` | 403 | Missing `eab:*` scope (§5) |
 | `0x09` | `StatusInvalidArgument` | `InvalidArgument` | 400 | `ErrInvalidCredential`, `ErrInvalidProfileID`, `ErrInvalidTenantID`, `ErrInvalidExpiresAt`, `ErrCredentialExpired`, `ErrCredentialRevoked`, `ErrCredentialAlreadyUsed` (the last three as `FailedPrecondition`) |
 | `0x0A` | `StatusUnavailable` | `Unavailable` | 503 | `ErrEABNotConfigured`, `ErrEABDeliveryNotConfigured` |
 
@@ -206,13 +211,32 @@ Both catalogs are **default-deny**
 | `eab:write` | `EABSubCreateCredential`, `EABSubRevokeCredential`, `EABSubMarkCredentialUsed` |
 | `eab:delete` | `EABSubDeleteCredential`, `EABSubCleanupExpiredCredentials` |
 
-**Every `platform_eab_*` MCP tool is refused.** None is in the MCP permission
-map (`pkg/api/mcp/authz.go`), so `AuthorizeTool` answers
-`AuthErrorToolNotClassified` for every caller until they are classified.
+**MCP tools carry the gRPC scopes (#304).** Each `platform_eab_*` tool is in
+the MCP permission map (`pkg/api/mcp/authz.go`) with its gRPC twin's pair; a
+caller without it gets `AuthErrorPermissionDenied` and the tool never runs:
 
-The `hmac_key` suppression on read paths is a separate control from the scope
-check, so an `eab:read` holder still never sees an existing credential's secret.
-It holds: `eabCredentialToPb(..., false)` on every path but create.
+| Scope | MCP tools |
+|---|---|
+| `eab:read` | `platform_eab_get_credential`, `platform_eab_get_credential_by_key_id`, `platform_eab_list_credentials`, `platform_eab_validate_credential`, `platform_eab_get_credential_qr_code`, `platform_eab_get_enrollment_url` |
+| `eab:write` | `platform_eab_create_credential`, `platform_eab_revoke_credential`, `platform_eab_mark_credential_used`, `platform_eab_cleanup_expired_credentials` |
+| `eab:delete` | `platform_eab_delete_credential` |
+
+QUIC puts `CleanupExpiredCredentials` under `eab:delete`; gRPC and MCP put it
+under `eab:write`. The two catalogs disagree on that one operation.
+
+MCP errors carry the gRPC class of §4 (`ErrEABToolFailure`,
+`pkg/api/daemon/mcp_eab.go`), so a missing credential is `NotFound` and a bad
+argument is `InvalidArgument` on both transports, not `Internal`.
+
+**No transport binds EAB to the caller's tenant.** gRPC, QUIC and MCP serve the
+`tenant_id` the request names, or the whole store when it names none; `eab:*`
+is a store-wide grant.
+
+**`eab:read` does reach the HMAC secret.** `get_credential`, `get_by_key_id`
+and `list` omit `hmac_key` (`eabCredentialToPb(..., false)` and the MCP
+renderer), but the QR code and the enrollment URL embed it by design
+(`pkg/eab/delivery.go`) and are `eab:read` on gRPC, QUIC and MCP. Treat
+`eab:read` as credential-bearing.
 
 ### REST is gated on the `admin` role (#165)
 

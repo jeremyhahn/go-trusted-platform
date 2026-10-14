@@ -179,9 +179,10 @@ The tenant service is not wired into the daemon.
 ## One thing to be aware of
 
 **Init, seal and unseal of a per-tenant barrier** are key-custody operations. On
-gRPC and Unix they need `tenant:write`, the same grant as tenant create and
-update, so treat a `tenant:write` holder as a tenancy administrator. MCP
-refuses every tenant tool until they are classified. See [api.md](api.md) §7.
+gRPC, QUIC, MCP and Unix they need `tenant:write`, the same grant as tenant
+create and update, so treat a `tenant:write` holder as a tenancy administrator
+of its own tenant; only the system tenant reaches another tenant's barrier.
+See [api.md](api.md) §7.
 
 ---
 

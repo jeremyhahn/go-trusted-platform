@@ -54,6 +54,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -182,6 +183,7 @@ type MCPServiceProvider struct {
 	overlayTools
 	ntpService    platformv1.NTPServiceServer
 	vpnService    platformv1.VPNServiceServer
+	tenantService platformv1.TenantServiceServer
 	logger        *slog.Logger
 	idevidService *IDevIDGRPCService
 	// appServices serves the cache_*, scheduler_* and messaging_* tools.
@@ -605,6 +607,17 @@ func (p *MCPServiceProvider) VTPMIsRunning(ctx context.Context, name string) (in
 // =============================================================================
 
 // DNSAddRecord adds a DNS record to a zone.
+// DNSServiceServer implements mcp.DNSServiceProvider: the dns_zone_*,
+// dns_record_* and dns_lookup MCP tools call the gRPC DNSService servicer
+// over the same DNS service, so they answer and fail as gRPC does. It
+// returns nil while no DNS service is wired.
+func (p *MCPServiceProvider) DNSServiceServer() platformv1.DNSServiceServer {
+	if p.dnsService == nil {
+		return nil
+	}
+	return NewDNSServiceServer(p.dnsService, p.logger)
+}
+
 func (p *MCPServiceProvider) DNSAddRecord(ctx context.Context, name string, recordType string, value string, ttl int) error {
 	if p.dnsService == nil {
 		return ErrDNSServiceNotAvailable{}
@@ -1123,13 +1136,39 @@ func (p *MCPServiceProvider) SDNDeletePolicy(ctx context.Context, policyID strin
 }
 
 // SDNAddFlow adds a flow to an SDN bridge.
-func (p *MCPServiceProvider) SDNAddFlow(ctx context.Context, bridgeName string, flow map[string]interface{}) error {
+func (p *MCPServiceProvider) SDNAddFlow(ctx context.Context, bridgeName string, flow map[string]interface{}) (interface{}, error) {
 	if p.sdnService == nil {
-		return ErrServiceNotAvailable{Service: "sdn"}
+		return nil, ErrServiceNotAvailable{Service: "sdn"}
 	}
-	flowConfig := &platformv1.FlowConfig{BridgeId: bridgeName}
-	_, err := p.sdnService.AddFlow(ctx, &platformv1.AddFlowRequest{Config: flowConfig})
-	return err
+	flowConfig, err := flowConfigFromMap(flow)
+	if err != nil {
+		return nil, err
+	}
+	flowConfig.BridgeId = bridgeName
+	resp, err := p.sdnService.AddFlow(ctx, &platformv1.AddFlowRequest{Config: flowConfig})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetFlow(), nil
+}
+
+// flowConfigFromMap decodes an MCP flow body into the FlowConfig the gRPC
+// AddFlow takes, field for field. Decoding is strict: a field FlowConfig does
+// not have, or an enum name it does not know, is refused rather than dropped,
+// so a flow is never installed wider than the caller asked for.
+func flowConfigFromMap(flow map[string]interface{}) (*platformv1.FlowConfig, error) {
+	flowConfig := &platformv1.FlowConfig{}
+	if len(flow) == 0 {
+		return flowConfig, nil
+	}
+	body, err := json.Marshal(flow)
+	if err != nil {
+		return nil, ErrInvalidFlowConfig{Cause: err}
+	}
+	if err := protojson.Unmarshal(body, flowConfig); err != nil {
+		return nil, ErrInvalidFlowConfig{Cause: err}
+	}
+	return flowConfig, nil
 }
 
 // SDNDeleteFlow deletes a flow from an SDN bridge.
@@ -1161,27 +1200,33 @@ func (p *MCPServiceProvider) SDNListFlows(ctx context.Context, bridgeName string
 }
 
 // SDNFlushFlows flushes all flows from an SDN bridge.
-func (p *MCPServiceProvider) SDNFlushFlows(ctx context.Context, bridgeName string) error {
+func (p *MCPServiceProvider) SDNFlushFlows(ctx context.Context, bridgeName string) (uint32, error) {
 	if p.sdnService == nil {
-		return ErrServiceNotAvailable{Service: "sdn"}
+		return 0, ErrServiceNotAvailable{Service: "sdn"}
 	}
-	_, err := p.sdnService.FlushFlows(ctx, &platformv1.FlushFlowsRequest{BridgeId: bridgeName})
-	return err
+	resp, err := p.sdnService.FlushFlows(ctx, &platformv1.FlushFlowsRequest{BridgeId: bridgeName})
+	if err != nil {
+		return 0, err
+	}
+	return resp.GetDeletedCount(), nil
 }
 
 // SDNCreateVLAN creates a VLAN on an SDN bridge.
-func (p *MCPServiceProvider) SDNCreateVLAN(ctx context.Context, bridgeName string, vlanID int, name string) error {
+func (p *MCPServiceProvider) SDNCreateVLAN(ctx context.Context, bridgeName string, vlanID int, name string) (interface{}, error) {
 	if p.sdnService == nil {
-		return ErrServiceNotAvailable{Service: "sdn"}
+		return nil, ErrServiceNotAvailable{Service: "sdn"}
 	}
-	_, err := p.sdnService.CreateVLAN(ctx, &platformv1.CreateVLANRequest{
+	resp, err := p.sdnService.CreateVLAN(ctx, &platformv1.CreateVLANRequest{
 		Config: &platformv1.VLANConfig{
 			BridgeId: bridgeName,
 			VlanId:   uint32(vlanID),
 			Name:     name,
 		},
 	})
-	return err
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetVlan(), nil
 }
 
 // SDNDeleteVLAN deletes a VLAN from an SDN bridge.
@@ -1212,37 +1257,6 @@ func (p *MCPServiceProvider) SDNListVLANs(ctx context.Context, bridgeName string
 	return result, nil
 }
 
-// SDNAuthenticatePort authenticates a port.
-func (p *MCPServiceProvider) SDNAuthenticatePort(ctx context.Context, bridgeName string, portName string, credentials map[string]string) error {
-	if p.sdnService == nil {
-		return ErrServiceNotAvailable{Service: "sdn"}
-	}
-	certificate := credentials["certificate"]
-	format := credentials["format"]
-	if format == "" {
-		format = "PEM"
-	}
-	_, err := p.sdnService.AuthenticatePort(ctx, &platformv1.AuthenticatePortRequest{
-		BridgeId:    bridgeName,
-		PortId:      portName,
-		Certificate: []byte(certificate),
-		Format:      format,
-	})
-	return err
-}
-
-// SDNRevokePortAuth revokes port authentication.
-func (p *MCPServiceProvider) SDNRevokePortAuth(ctx context.Context, bridgeName string, portName string) error {
-	if p.sdnService == nil {
-		return ErrServiceNotAvailable{Service: "sdn"}
-	}
-	_, err := p.sdnService.RevokePortAuth(ctx, &platformv1.RevokePortAuthRequest{
-		BridgeId: bridgeName,
-		PortId:   portName,
-	})
-	return err
-}
-
 // SDNGetPortStats gets port statistics.
 func (p *MCPServiceProvider) SDNGetPortStats(ctx context.Context, bridgeName string, portName string) (interface{}, error) {
 	if p.sdnService == nil {
@@ -1259,11 +1273,14 @@ func (p *MCPServiceProvider) SDNGetPortStats(ctx context.Context, bridgeName str
 }
 
 // SDNGetFlowStats gets flow statistics.
-func (p *MCPServiceProvider) SDNGetFlowStats(ctx context.Context, bridgeName string) (interface{}, error) {
+func (p *MCPServiceProvider) SDNGetFlowStats(ctx context.Context, bridgeName string, flowID string) (interface{}, error) {
 	if p.sdnService == nil {
 		return nil, ErrServiceNotAvailable{Service: "sdn"}
 	}
-	resp, err := p.sdnService.GetFlowStats(ctx, &platformv1.GetFlowStatsRequest{BridgeId: bridgeName})
+	resp, err := p.sdnService.GetFlowStats(ctx, &platformv1.GetFlowStatsRequest{
+		BridgeId: bridgeName,
+		FlowId:   flowID,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -2572,7 +2589,7 @@ func (m *MCPServiceProvider) ContainerLogs(ctx context.Context, id string, follo
 	reader, err := streamer.Logs(ctx, id, opts)
 	if err != nil {
 		m.logger.Error("failed to get container logs", "container_id", id, "error", err)
-		return "", ErrContainerOperationFailed{Operation: "logs", Cause: err}
+		return "", classifyComputeErr(ErrContainerOperationFailed{Operation: "logs", Cause: err}, containerLogsErrToStatus)
 	}
 	defer reader.Close()
 

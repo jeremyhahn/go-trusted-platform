@@ -99,6 +99,11 @@ var eabErrorMatchers = []configDeliveryErrorMatcher{
 	matchConfigDeliveryError[eab.ErrQRCodeGenerationFailed](codes.Internal),
 }
 
+// errEABNegativeExpiry refuses a create request whose expires_in_seconds
+// is negative; a negative duration must never yield a non-expiring
+// credential.
+var errEABNegativeExpiry = eab.ErrInvalidExpiresAt{Reason: "expiration duration cannot be negative"}
+
 // eabErrorToStatus maps a typed eab error to a gRPC status error using
 // the eabErrorMatchers table.
 func eabErrorToStatus(err error) error {
@@ -180,8 +185,7 @@ func (s *EABGRPCService) CreateCredential(
 	if secs := req.GetExpiresInSeconds(); secs > 0 {
 		params.ExpiresIn = time.Duration(secs) * time.Second
 	} else if secs < 0 {
-		return nil, status.Error(codes.InvalidArgument,
-			eab.ErrInvalidExpiresAt{Reason: "expiration duration cannot be negative"}.Error())
+		return nil, status.Error(codes.InvalidArgument, errEABNegativeExpiry.Error())
 	}
 
 	cred, err := s.service.Generate(ctx, params)
@@ -251,12 +255,17 @@ func (s *EABGRPCService) ListCredentials(
 		return nil, err
 	}
 
-	creds, err := s.collectCredentials(ctx, req)
+	creds, err := collectEABCredentials(ctx, s.service, req.GetProfileId(), req.GetTenantId())
 	if err != nil {
 		return nil, eabErrorToStatus(err)
 	}
 
-	filtered := filterEABCredentials(creds, req)
+	statusFilter, hasStatusFilter := pbStatusToEAB[req.GetStatusFilter()]
+	filtered := filterEABCredentials(creds, eabCredentialFilter{
+		status:     statusFilter,
+		byStatus:   hasStatusFilter,
+		activeOnly: req.GetActiveOnly(),
+	})
 	if err := sortEABCredentials(filtered, req.GetPagination()); err != nil {
 		return nil, err
 	}
@@ -275,21 +284,24 @@ func (s *EABGRPCService) ListCredentials(
 	}, nil
 }
 
-// collectCredentials resolves the base credential set for a list request
-// using the narrowest available index.
-func (s *EABGRPCService) collectCredentials(
+// collectEABCredentials resolves the base credential set for a list
+// request using the narrowest available index. The gRPC and MCP surfaces
+// share it so both list the same credentials for the same filters.
+func collectEABCredentials(
 	ctx context.Context,
-	req *platformv1.ListEABCredentialsRequest,
+	svc EABServicer,
+	profileID uint64,
+	tenantID string,
 ) ([]*eab.Credential, error) {
 	switch {
-	case req.GetProfileId() > 0:
-		creds, err := s.service.ListByProfile(ctx, req.GetProfileId())
+	case profileID > 0:
+		creds, err := svc.ListByProfile(ctx, profileID)
 		if err != nil {
 			return nil, err
 		}
 		// A tenant filter on top of a profile listing must never leak
 		// another tenant's credentials.
-		if tenantID := req.GetTenantId(); tenantID != "" {
+		if tenantID != "" {
 			scoped := make([]*eab.Credential, 0, len(creds))
 			for _, cred := range creds {
 				if cred.TenantID == tenantID {
@@ -300,27 +312,34 @@ func (s *EABGRPCService) collectCredentials(
 		}
 		return creds, nil
 
-	case req.GetTenantId() != "":
-		return s.service.ListByTenant(ctx, req.GetTenantId())
+	case tenantID != "":
+		return svc.ListByTenant(ctx, tenantID)
 
 	default:
-		return eabCollectAll(ctx, s.service)
+		return eabCollectAll(ctx, svc)
 	}
 }
 
-// filterEABCredentials applies the status_filter and active_only
-// refinements to a credential set.
-func filterEABCredentials(creds []*eab.Credential, req *platformv1.ListEABCredentialsRequest) []*eab.Credential {
-	statusFilter, hasStatusFilter := pbStatusToEAB[req.GetStatusFilter()]
-	if !hasStatusFilter && !req.GetActiveOnly() {
+// eabCredentialFilter is the status and active-only refinement of a list
+// request, decoded from the pb enum (gRPC) or the status name (MCP).
+type eabCredentialFilter struct {
+	status     eab.Status
+	byStatus   bool
+	activeOnly bool
+}
+
+// filterEABCredentials applies the status and active-only refinements to
+// a credential set.
+func filterEABCredentials(creds []*eab.Credential, filter eabCredentialFilter) []*eab.Credential {
+	if !filter.byStatus && !filter.activeOnly {
 		return creds
 	}
 	filtered := make([]*eab.Credential, 0, len(creds))
 	for _, cred := range creds {
-		if hasStatusFilter && cred.Status != statusFilter {
+		if filter.byStatus && cred.Status != filter.status {
 			continue
 		}
-		if req.GetActiveOnly() && !cred.IsValid() {
+		if filter.activeOnly && !cred.IsValid() {
 			continue
 		}
 		filtered = append(filtered, cred)
@@ -502,7 +521,7 @@ func (s *EABGRPCService) GetCredentialQRCode(
 	}
 	if req.GetSize() < 0 {
 		return nil, status.Error(codes.InvalidArgument,
-			ErrEABInvalidQRCodeSize{Size: req.GetSize()}.Error())
+			ErrEABInvalidQRCodeSize{Size: int(req.GetSize())}.Error())
 	}
 
 	cred, err := s.service.Get(ctx, req.GetCredentialId())
@@ -591,27 +610,9 @@ func (s *EABGRPCService) CleanupExpiredCredentials(
 		return nil, err
 	}
 
-	var deleted int
-	if tenantID := req.GetTenantId(); tenantID != "" {
-		creds, err := s.service.ListByTenant(ctx, tenantID)
-		if err != nil {
-			return nil, eabErrorToStatus(err)
-		}
-		for _, cred := range creds {
-			if cred.Status != eab.StatusExpired && !cred.IsExpired() {
-				continue
-			}
-			if err := s.service.Delete(ctx, cred.ID); err != nil {
-				return nil, eabErrorToStatus(err)
-			}
-			deleted++
-		}
-	} else {
-		var err error
-		deleted, err = s.service.CleanupExpired(ctx)
-		if err != nil {
-			return nil, eabErrorToStatus(err)
-		}
+	deleted, err := cleanupExpiredEABCredentials(ctx, s.service, req.GetTenantId())
+	if err != nil {
+		return nil, eabErrorToStatus(err)
 	}
 
 	return &platformv1.CleanupExpiredEABCredentialsResponse{
@@ -619,6 +620,31 @@ func (s *EABGRPCService) CleanupExpiredCredentials(
 		Status:       &platformv1.Status{Success: true, Message: "expired credentials removed"},
 		Timestamp:    timestamppb.Now(),
 	}, nil
+}
+
+// cleanupExpiredEABCredentials deletes the expired credentials of one
+// tenant, or of every tenant when tenantID is empty, and returns how many
+// it deleted. The gRPC and MCP surfaces share it so a tenant-scoped
+// cleanup never touches another tenant's credentials on either.
+func cleanupExpiredEABCredentials(ctx context.Context, svc EABServicer, tenantID string) (int, error) {
+	if tenantID == "" {
+		return svc.CleanupExpired(ctx)
+	}
+	creds, err := svc.ListByTenant(ctx, tenantID)
+	if err != nil {
+		return 0, err
+	}
+	deleted := 0
+	for _, cred := range creds {
+		if cred.Status != eab.StatusExpired && !cred.IsExpired() {
+			continue
+		}
+		if err := svc.Delete(ctx, cred.ID); err != nil {
+			return deleted, err
+		}
+		deleted++
+	}
+	return deleted, nil
 }
 
 // Ensure EABGRPCService implements the generated server interface.

@@ -1209,8 +1209,8 @@ func (s *ComputeGRPCService) AttestVM(ctx context.Context, req *platformv1.Attes
 
 	pcrIndices := make([]int, 0, len(req.GetPcrIndices()))
 	for _, idx := range req.GetPcrIndices() {
-		if idx > 23 {
-			return nil, status.Error(codes.InvalidArgument, "PCR index must be between 0 and 23")
+		if err := validateVMPCRIndex(int(idx)); err != nil {
+			return nil, err
 		}
 		pcrIndices = append(pcrIndices, int(idx))
 	}

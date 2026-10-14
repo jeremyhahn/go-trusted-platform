@@ -15,6 +15,7 @@ package mcp
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -270,6 +271,37 @@ func TestSDNMCP_ArgsReachTool(t *testing.T) {
 	}
 }
 
+// TestSDNMCP_AddFlowCarriesFlowBody checks that a flow's table, match,
+// actions and timeouts reach sdn_add_flow under their proto names. Until #304
+// the tool dropped them, so the SDK refused any flow that had them.
+func TestSDNMCP_AddFlowCarriesFlowBody(t *testing.T) {
+	req := &platformv1.AddFlowRequest{Config: &platformv1.FlowConfig{
+		BridgeId:    "br0",
+		Table:       platformv1.FlowTable_FLOW_TABLE_1,
+		Priority:    100,
+		Match:       &platformv1.FlowMatch{InPort: "1"},
+		Actions:     []*platformv1.FlowAction{{Type: platformv1.FlowActionType_FLOW_ACTION_OUTPUT, Port: "2"}},
+		IdleTimeout: 30,
+	}}
+
+	calls, err := invokePhase35(t, map[string]interface{}{}, platformv1.SDNService_AddFlow_FullMethodName, req, nil)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+
+	want := map[string]interface{}{
+		"bridge_name":  "br0",
+		"table":        "FLOW_TABLE_1",
+		"priority":     float64(100),
+		"match":        map[string]interface{}{"in_port": "1"},
+		"actions":      []interface{}{map[string]interface{}{"type": "FLOW_ACTION_OUTPUT", "port": "2"}},
+		"idle_timeout": float64(30),
+	}
+	if got := calls[0].Arguments; !reflect.DeepEqual(got, want) {
+		t.Errorf("arguments = %#v, want %#v", got, want)
+	}
+}
+
 // TestSDNMCP_RefusesUncarriedFields checks a request field the tool has no
 // argument for fails InvalidArgument, naming the field, before any call.
 func TestSDNMCP_RefusesUncarriedFields(t *testing.T) {
@@ -312,14 +344,6 @@ func TestSDNMCP_RefusesUncarriedFields(t *testing.T) {
 				Name: "eth1", Vlan: 10, Mtu: 1500,
 			}},
 			field: "config.mtu",
-		},
-		{
-			name:   "flow table and actions",
-			method: platformv1.SDNService_AddFlow_FullMethodName,
-			req: &platformv1.AddFlowRequest{Config: &platformv1.FlowConfig{
-				BridgeId: "br0", Table: 1, Actions: []*platformv1.FlowAction{{Port: "eth1"}},
-			}},
-			field: "config.actions",
 		},
 		{
 			name:   "flow table filter",

@@ -215,18 +215,26 @@ func buildSDNGetPortStatsArgs(args interface{}) (map[string]interface{}, error) 
 	return bridgePortArgs(in.GetBridgeId(), in.GetPortId()), nil
 }
 
-// buildSDNAddFlowArgs carries the bridge only: sdn_add_flow takes no flow
-// the daemon installs, so a flow with a table, match or actions is refused.
+// buildSDNAddFlowArgs carries the whole flow: sdn_add_flow takes the
+// FlowConfig fields under their proto names, with the bridge as bridge_name,
+// and decodes them as strictly as the gRPC request is decoded.
 func buildSDNAddFlowArgs(args interface{}) (map[string]interface{}, error) {
 	const method = platformv1.SDNService_AddFlow_FullMethodName
 	in, ok := args.(*platformv1.AddFlowRequest)
 	if !ok {
 		return nil, ErrUnexpectedArgsType{Method: method}
 	}
-	if err := refuseUncarried(method, "config.", in.GetConfig(), "bridge_id"); err != nil {
+	config := in.GetConfig()
+	if config == nil {
+		config = &platformv1.FlowConfig{}
+	}
+	out, err := protoJSONArgs(method)(config)
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"bridge_name": in.GetConfig().GetBridgeId()}, nil
+	delete(out, "bridge_id")
+	out["bridge_name"] = config.GetBridgeId()
+	return out, nil
 }
 
 func buildSDNDeleteFlowArgs(args interface{}) (map[string]interface{}, error) {

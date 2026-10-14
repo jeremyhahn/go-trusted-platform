@@ -1523,6 +1523,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 		if daemon.tenantService != nil && daemon.tenantService.grpcServer != nil {
 			daemon.tenantService.grpcServer.SetManager(config.PlatformTenantManager)
+			daemon.tenantService.grpcServer.SetSystemTenant(config.PlatformTenantID)
 			logger.Info("Platform tenant manager wired into gRPC TenantService")
 
 			// Share the same *TenantGRPCServer delegate with the QUIC handler so
@@ -1945,6 +1946,13 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 	// VPNGRPCService instance that backs REST, gRPC, QUIC, and Unix.
 	if d.vpnGRPCService != nil {
 		serviceProvider.SetVPNService(d.vpnGRPCService)
+	}
+
+	// Wire the TenantService so the tenant tools delegate to the same
+	// TenantGRPCServer that backs REST, gRPC, QUIC, and Unix. The nil check
+	// keeps a typed-nil server out of the interface field.
+	if tenantServer := d.TenantGRPCServer(); tenantServer != nil {
+		serviceProvider.SetTenantService(tenantServer)
 	}
 
 	// Wire Cache, Scheduler and Messaging so their tools delegate to the

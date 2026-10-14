@@ -93,28 +93,26 @@ type mockServiceProvider struct {
 	deviceEnableFunc           func(ctx context.Context, deviceID string) (interface{}, error)
 
 	// SDN Bridge
-	sdnGetPortStateFunc     func(ctx context.Context, bridgeName, portName string) (interface{}, error)
-	sdnSetPortStateFunc     func(ctx context.Context, bridgeName, portName, state string, rates PortRates) (interface{}, error)
-	sdnListBridgesFunc      func(ctx context.Context) ([]interface{}, error)
-	sdnCreateBridgeFunc     func(ctx context.Context, bridgeName string) error
-	sdnDeleteBridgeFunc     func(ctx context.Context, bridgeName string) error
-	sdnAddPortFunc          func(ctx context.Context, bridgeName, portName, portType string) error
-	sdnDeletePortFunc       func(ctx context.Context, bridgeName, portName string) error
-	sdnApplyPolicyFunc      func(ctx context.Context, policy json.RawMessage) (interface{}, error)
-	sdnGetPolicyFunc        func(ctx context.Context, policyID string) (interface{}, error)
-	sdnListPoliciesFunc     func(ctx context.Context, policyType, targetID string) ([]interface{}, error)
-	sdnDeletePolicyFunc     func(ctx context.Context, policyID string) error
-	sdnAddFlowFunc          func(ctx context.Context, bridgeName string, flow map[string]interface{}) error
-	sdnDeleteFlowFunc       func(ctx context.Context, bridgeName, flowID string) error
-	sdnListFlowsFunc        func(ctx context.Context, bridgeName string) ([]interface{}, error)
-	sdnFlushFlowsFunc       func(ctx context.Context, bridgeName string) error
-	sdnCreateVLANFunc       func(ctx context.Context, bridgeName string, vlanID int, name string) error
-	sdnDeleteVLANFunc       func(ctx context.Context, bridgeName string, vlanID int) error
-	sdnListVLANsFunc        func(ctx context.Context, bridgeName string) ([]interface{}, error)
-	sdnAuthenticatePortFunc func(ctx context.Context, bridgeName, portName string, credentials map[string]string) error
-	sdnRevokePortAuthFunc   func(ctx context.Context, bridgeName, portName string) error
-	sdnGetPortStatsFunc     func(ctx context.Context, bridgeName, portName string) (interface{}, error)
-	sdnGetFlowStatsFunc     func(ctx context.Context, bridgeName string) (interface{}, error)
+	sdnGetPortStateFunc func(ctx context.Context, bridgeName, portName string) (interface{}, error)
+	sdnSetPortStateFunc func(ctx context.Context, bridgeName, portName, state string, rates PortRates) (interface{}, error)
+	sdnListBridgesFunc  func(ctx context.Context) ([]interface{}, error)
+	sdnCreateBridgeFunc func(ctx context.Context, bridgeName string) error
+	sdnDeleteBridgeFunc func(ctx context.Context, bridgeName string) error
+	sdnAddPortFunc      func(ctx context.Context, bridgeName, portName, portType string) error
+	sdnDeletePortFunc   func(ctx context.Context, bridgeName, portName string) error
+	sdnApplyPolicyFunc  func(ctx context.Context, policy json.RawMessage) (interface{}, error)
+	sdnGetPolicyFunc    func(ctx context.Context, policyID string) (interface{}, error)
+	sdnListPoliciesFunc func(ctx context.Context, policyType, targetID string) ([]interface{}, error)
+	sdnDeletePolicyFunc func(ctx context.Context, policyID string) error
+	sdnAddFlowFunc      func(ctx context.Context, bridgeName string, flow map[string]interface{}) (interface{}, error)
+	sdnDeleteFlowFunc   func(ctx context.Context, bridgeName, flowID string) error
+	sdnListFlowsFunc    func(ctx context.Context, bridgeName string) ([]interface{}, error)
+	sdnFlushFlowsFunc   func(ctx context.Context, bridgeName string) (uint32, error)
+	sdnCreateVLANFunc   func(ctx context.Context, bridgeName string, vlanID int, name string) (interface{}, error)
+	sdnDeleteVLANFunc   func(ctx context.Context, bridgeName string, vlanID int) error
+	sdnListVLANsFunc    func(ctx context.Context, bridgeName string) ([]interface{}, error)
+	sdnGetPortStatsFunc func(ctx context.Context, bridgeName, portName string) (interface{}, error)
+	sdnGetFlowStatsFunc func(ctx context.Context, bridgeName, flowID string) (interface{}, error)
 
 	// Health
 	healthFunc    func(ctx context.Context) (interface{}, error)
@@ -420,8 +418,8 @@ func newMockServiceProvider() *mockServiceProvider {
 				map[string]interface{}{"id": "policy-1", "name": "Policy 1"},
 			}, nil
 		},
-		sdnAddFlowFunc: func(ctx context.Context, bridgeName string, flow map[string]interface{}) error {
-			return nil
+		sdnAddFlowFunc: func(ctx context.Context, bridgeName string, flow map[string]interface{}) (interface{}, error) {
+			return map[string]interface{}{"id": "0x1"}, nil
 		},
 		sdnDeleteFlowFunc: func(ctx context.Context, bridgeName, flowID string) error {
 			return nil
@@ -431,11 +429,11 @@ func newMockServiceProvider() *mockServiceProvider {
 				map[string]interface{}{"id": "flow-1", "priority": 100},
 			}, nil
 		},
-		sdnFlushFlowsFunc: func(ctx context.Context, bridgeName string) error {
-			return nil
+		sdnFlushFlowsFunc: func(ctx context.Context, bridgeName string) (uint32, error) {
+			return 0, nil
 		},
-		sdnCreateVLANFunc: func(ctx context.Context, bridgeName string, vlanID int, name string) error {
-			return nil
+		sdnCreateVLANFunc: func(ctx context.Context, bridgeName string, vlanID int, name string) (interface{}, error) {
+			return map[string]interface{}{"vlan_id": vlanID, "name": name}, nil
 		},
 		sdnDeleteVLANFunc: func(ctx context.Context, bridgeName string, vlanID int) error {
 			return nil
@@ -445,16 +443,10 @@ func newMockServiceProvider() *mockServiceProvider {
 				map[string]interface{}{"id": 100, "name": "vlan-100"},
 			}, nil
 		},
-		sdnAuthenticatePortFunc: func(ctx context.Context, bridgeName, portName string, credentials map[string]string) error {
-			return nil
-		},
-		sdnRevokePortAuthFunc: func(ctx context.Context, bridgeName, portName string) error {
-			return nil
-		},
 		sdnGetPortStatsFunc: func(ctx context.Context, bridgeName, portName string) (interface{}, error) {
 			return map[string]interface{}{"rx_packets": 1000, "tx_packets": 500}, nil
 		},
-		sdnGetFlowStatsFunc: func(ctx context.Context, bridgeName string) (interface{}, error) {
+		sdnGetFlowStatsFunc: func(ctx context.Context, bridgeName, flowID string) (interface{}, error) {
 			return map[string]interface{}{"flows": 10, "packets": 5000}, nil
 		},
 
@@ -1230,11 +1222,11 @@ func (m *mockServiceProvider) SDNDeletePolicy(ctx context.Context, policyID stri
 	return nil
 }
 
-func (m *mockServiceProvider) SDNAddFlow(ctx context.Context, bridgeName string, flow map[string]interface{}) error {
+func (m *mockServiceProvider) SDNAddFlow(ctx context.Context, bridgeName string, flow map[string]interface{}) (interface{}, error) {
 	if m.sdnAddFlowFunc != nil {
 		return m.sdnAddFlowFunc(ctx, bridgeName, flow)
 	}
-	return nil
+	return nil, nil
 }
 
 func (m *mockServiceProvider) SDNDeleteFlow(ctx context.Context, bridgeName, flowID string) error {
@@ -1251,18 +1243,18 @@ func (m *mockServiceProvider) SDNListFlows(ctx context.Context, bridgeName strin
 	return nil, nil
 }
 
-func (m *mockServiceProvider) SDNFlushFlows(ctx context.Context, bridgeName string) error {
+func (m *mockServiceProvider) SDNFlushFlows(ctx context.Context, bridgeName string) (uint32, error) {
 	if m.sdnFlushFlowsFunc != nil {
 		return m.sdnFlushFlowsFunc(ctx, bridgeName)
 	}
-	return nil
+	return 0, nil
 }
 
-func (m *mockServiceProvider) SDNCreateVLAN(ctx context.Context, bridgeName string, vlanID int, name string) error {
+func (m *mockServiceProvider) SDNCreateVLAN(ctx context.Context, bridgeName string, vlanID int, name string) (interface{}, error) {
 	if m.sdnCreateVLANFunc != nil {
 		return m.sdnCreateVLANFunc(ctx, bridgeName, vlanID, name)
 	}
-	return nil
+	return nil, nil
 }
 
 func (m *mockServiceProvider) SDNDeleteVLAN(ctx context.Context, bridgeName string, vlanID int) error {
@@ -1279,20 +1271,6 @@ func (m *mockServiceProvider) SDNListVLANs(ctx context.Context, bridgeName strin
 	return nil, nil
 }
 
-func (m *mockServiceProvider) SDNAuthenticatePort(ctx context.Context, bridgeName, portName string, credentials map[string]string) error {
-	if m.sdnAuthenticatePortFunc != nil {
-		return m.sdnAuthenticatePortFunc(ctx, bridgeName, portName, credentials)
-	}
-	return nil
-}
-
-func (m *mockServiceProvider) SDNRevokePortAuth(ctx context.Context, bridgeName, portName string) error {
-	if m.sdnRevokePortAuthFunc != nil {
-		return m.sdnRevokePortAuthFunc(ctx, bridgeName, portName)
-	}
-	return nil
-}
-
 func (m *mockServiceProvider) SDNGetPortStats(ctx context.Context, bridgeName, portName string) (interface{}, error) {
 	if m.sdnGetPortStatsFunc != nil {
 		return m.sdnGetPortStatsFunc(ctx, bridgeName, portName)
@@ -1300,9 +1278,9 @@ func (m *mockServiceProvider) SDNGetPortStats(ctx context.Context, bridgeName, p
 	return nil, nil
 }
 
-func (m *mockServiceProvider) SDNGetFlowStats(ctx context.Context, bridgeName string) (interface{}, error) {
+func (m *mockServiceProvider) SDNGetFlowStats(ctx context.Context, bridgeName, flowID string) (interface{}, error) {
 	if m.sdnGetFlowStatsFunc != nil {
-		return m.sdnGetFlowStatsFunc(ctx, bridgeName)
+		return m.sdnGetFlowStatsFunc(ctx, bridgeName, flowID)
 	}
 	return nil, nil
 }

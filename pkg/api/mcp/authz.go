@@ -132,6 +132,11 @@ func toolPermissionCatalog() map[string]string {
 	permissions["dns_create_zone"] = "dns:write"
 	permissions["dns_delete_zone"] = "dns:delete"
 	permissions["dns_list_zones"] = "dns:read"
+	// The DNS tools bound to the gRPC DNSService (#304) require the scope
+	// of their gRPC method; the tool table carries it.
+	for name, tool := range dnsTools {
+		permissions[name] = tool.scope
+	}
 
 	// Device tools
 	permissions["device_register"] = "device:write"
@@ -160,6 +165,12 @@ func toolPermissionCatalog() map[string]string {
 	permissions["attestation_device_refresh"] = "attestation:write"
 	// The device verdict feed (#709), the same scope as the gRPC stream.
 	permissions["attestation_device_verdicts_poll"] = "attestation:read"
+	// Host manifests (#304), each the scope of its gRPC method.
+	permissions["attestation_get_manifest"] = "attestation:read"
+	permissions["attestation_list_manifests"] = "attestation:read"
+	permissions["attestation_verify_manifest"] = "attestation:read"
+	permissions["attestation_create_manifest"] = "attestation:write"
+	permissions["attestation_delete_manifest"] = "attestation:delete"
 	permissions["device_provision"] = "device:write"
 
 	// Device profile tools (same scopes as the gRPC DeviceService profile
@@ -238,6 +249,35 @@ func toolPermissionCatalog() map[string]string {
 	permissions["overlay_mac_list"] = "sdn:read"
 	permissions["overlay_mac_forget"] = "sdn:write"
 
+	// VM and container tools carry the scopes of their gRPC ComputeService
+	// twins (pkg/api/grpc/method_permissions.go, #304). vm_disk_detach is
+	// vm:write as DetachDisk is: the disk is unplugged, not destroyed. The
+	// VM lifecycle tools (vm_create .. vm_resume) have no executor, and
+	// vm_snapshot_get has neither a gRPC nor a REST twin to take a scope
+	// from, so they stay unclassified and refused.
+	permissions["vm_snapshot_create"] = "vm:write"
+	permissions["vm_snapshot_list"] = "vm:read"
+	permissions["vm_snapshot_restore"] = "vm:write"
+	permissions["vm_snapshot_delete"] = "vm:delete"
+	permissions["vm_attest"] = "vm:read"
+	permissions["vm_attest_verify"] = "vm:read"
+	permissions["vm_metrics"] = "vm:read"
+	permissions["vm_logs"] = "vm:read"
+	permissions["vm_disk_attach"] = "vm:write"
+	permissions["vm_disk_detach"] = "vm:write"
+	permissions["vm_disk_resize"] = "vm:write"
+	permissions["vm_migrate"] = "vm:write"
+	permissions["container_create"] = "container:write"
+	permissions["container_start"] = "container:write"
+	permissions["container_stop"] = "container:write"
+	permissions["container_exec"] = "container:write"
+	permissions["container_remove"] = "container:delete"
+	permissions["container_get"] = "container:read"
+	permissions["container_list"] = "container:read"
+	permissions["container_logs"] = "container:read"
+	permissions["container_metrics"] = "container:read"
+	permissions["container_attest"] = "container:read"
+
 	permissions["sdn_get_port_state"] = "sdn:read"
 	permissions["sdn_set_port_state"] = "sdn:write"
 	permissions["sdn_list_bridges"] = "sdn:read"
@@ -249,6 +289,19 @@ func toolPermissionCatalog() map[string]string {
 	permissions["sdn_get_policy"] = "sdn:read"
 	permissions["sdn_list_policies"] = "sdn:read"
 	permissions["sdn_delete_policy"] = "sdn:delete"
+
+	// SDN flow, VLAN and port-statistics tools carry the scope of their gRPC
+	// twin (pkg/api/grpc/method_permissions.go). The port-auth tools stay
+	// unclassified: the service behind them enforces nothing on the switch.
+	permissions["sdn_add_flow"] = "sdn:write"
+	permissions["sdn_delete_flow"] = "sdn:delete"
+	permissions["sdn_flush_flows"] = "sdn:write"
+	permissions["sdn_list_flows"] = "sdn:read"
+	permissions["sdn_get_flow_stats"] = "sdn:read"
+	permissions["sdn_create_vlan"] = "sdn:write"
+	permissions["sdn_delete_vlan"] = "sdn:delete"
+	permissions["sdn_list_vlans"] = "sdn:read"
+	permissions["sdn_get_port_stats"] = "sdn:read"
 
 	// Proxy (reverse-proxy configuration) tools
 	permissions["proxy_route_create"] = "proxy:write"
@@ -461,6 +514,25 @@ func toolPermissionCatalog() map[string]string {
 	permissions["secret_list"] = "secrets:list"
 	permissions["secret_delete"] = "secrets:delete"
 
+	// EAB tools (#304) carry exactly the scope of their gRPC EABService
+	// twin (pkg/api/grpc/method_permissions.go); both reach the same
+	// eab.Service. Cleanup is eab:write on gRPC, so it is eab:write here.
+	// The QR code and enrollment URL embed the HMAC key, and gRPC serves
+	// them under eab:read, so MCP does too.
+	permissions["platform_eab_create_credential"] = "eab:write"
+	permissions["platform_eab_revoke_credential"] = "eab:write"
+	permissions["platform_eab_mark_credential_used"] = "eab:write"
+	permissions["platform_eab_cleanup_expired_credentials"] = "eab:write"
+
+	permissions["platform_eab_get_credential"] = "eab:read"
+	permissions["platform_eab_get_credential_by_key_id"] = "eab:read"
+	permissions["platform_eab_list_credentials"] = "eab:read"
+	permissions["platform_eab_validate_credential"] = "eab:read"
+	permissions["platform_eab_get_credential_qr_code"] = "eab:read"
+	permissions["platform_eab_get_enrollment_url"] = "eab:read"
+
+	permissions["platform_eab_delete_credential"] = "eab:delete"
+
 	// Application service tools (#704) require the scope of their gRPC
 	// method; the tool table carries it.
 	for name, tool := range appServiceTools {
@@ -491,6 +563,35 @@ func toolPermissionCatalog() map[string]string {
 	} {
 		permissions[tool] = "iam:read"
 	}
+
+	// Tenant tools (#304) require the scope of their TenantService method
+	// (pkg/api/grpc/method_permissions.go). The scope is necessary, not
+	// sufficient: every tool calls the shared TenantGRPCServer, which keeps a
+	// caller to its own tenant and the cross-tenant methods (list, get by
+	// name, create, sync) to the system tenant (pkg/api/daemon/
+	// tenant_grpc_authz.go), and the tools refuse a caller with no tenant
+	// binding (ErrTenantCallerUnbound) before the server is reached.
+	permissions["tenant_list"] = "tenant:read"
+	permissions["tenant_get"] = "tenant:read"
+	permissions["tenant_get_by_name"] = "tenant:read"
+	permissions["tenant_get_quotas"] = "tenant:read"
+	permissions["tenant_get_usage"] = "tenant:read"
+	permissions["tenant_check_quota"] = "tenant:read"
+	permissions["tenant_get_dek_status"] = "tenant:read"
+	permissions["platform_tenant_barrier_status"] = "tenant:read"
+
+	permissions["tenant_create"] = "tenant:write"
+	permissions["tenant_update"] = "tenant:write"
+	permissions["tenant_update_quotas"] = "tenant:write"
+	permissions["tenant_suspend"] = "tenant:write"
+	permissions["tenant_resume"] = "tenant:write"
+	permissions["tenant_sync"] = "tenant:write"
+	permissions["tenant_rotate_dek"] = "tenant:write"
+	permissions["platform_tenant_barrier_init"] = "tenant:write"
+	permissions["platform_tenant_barrier_seal"] = "tenant:write"
+	permissions["platform_tenant_barrier_unseal"] = "tenant:write"
+
+	permissions["tenant_delete"] = "tenant:delete"
 
 	return permissions
 }

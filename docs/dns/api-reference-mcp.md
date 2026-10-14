@@ -209,23 +209,6 @@ List records in a zone.
 }
 ```
 
-### dns_add_tlsa_record
-
-Add a TLSA record for DANE.
-
-**Parameters:**
-```json
-{
-  "zone_name": "string (required) - Zone name",
-  "name": "string (required) - Record name (e.g., _443._tcp.www)",
-  "usage": "number (required) - TLSA usage (0-3)",
-  "selector": "number (required) - Selector (0-1)",
-  "matching_type": "number (required) - Matching type (0-2)",
-  "certificate": "string (required) - Base64-encoded certificate data",
-  "ttl": "number (required) - TTL in seconds"
-}
-```
-
 ### dns_resolve
 
 Resolve a name from the managed zones: the longest managed zone suffix of
@@ -266,6 +249,59 @@ error ("no records found").
   }
 }
 ```
+
+## Tools bound to DNSService
+
+These tools call the gRPC `DNSService` RPC named below over the daemon's DNS
+service, so they answer and fail as gRPC does
+([api.md](api.md) §3). Each one requires the RPC's scope. The arguments are the
+RPC's request message in its JSON form, with proto field names and enum names
+such as `RECORD_TYPE_A`. An argument the request does not have is
+`InvalidArgument`. The result is the response message, with proto field names.
+
+| Tool | RPC | Scope | Arguments |
+|------|-----|-------|-----------|
+| `dns_zone_create` | `CreateZone` | `dns:write` | `name`, `ttl`, `description`, `internal`, `soa`, `ns_records` |
+| `dns_zone_get` | `GetZone` | `dns:read` | `name` |
+| `dns_zone_list` | `ListZones` | `dns:read` | `internal_only`, `public_only`, `pagination` |
+| `dns_zone_update` | `UpdateZone` | `dns:write` | `name`, `ttl`, `description` |
+| `dns_zone_delete` | `DeleteZone` | `dns:delete` | `name` |
+| `dns_record_create` | `AddRecord` | `dns:write` | `zone_name`, `record` |
+| `dns_record_get` | none (`ListRecords`) | `dns:read` | `zone_name`, `type`, `name` |
+| `dns_record_list` | `ListRecords` | `dns:read` | `zone_name`, `type` |
+| `dns_record_update` | `UpdateRecord` | `dns:write` | `zone_name`, `old_record`, `new_record` |
+| `dns_record_delete` | `DeleteRecord` | `dns:delete` | `zone_name`, `type`, `name` |
+| `dns_lookup` | `Resolve` | `dns:read` | `fqdn`, `type` |
+
+A `record` names its `type` and carries the record in the field for that type:
+`a`, `aaaa`, `cname`, `mx`, `ns`, `txt`, `srv`, `caa` or `tlsa`. A TLSA record
+for DANE is added with `dns_record_create` and a `tlsa` record.
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "dns_record_create",
+    "arguments": {
+      "zone_name": "example.internal.",
+      "record": {
+        "type": "RECORD_TYPE_A",
+        "a": {"name": "server01", "value": "192.168.1.100", "ttl": 3600}
+      }
+    }
+  }
+}
+```
+
+`dns_record_get` lists the zone's records of `type` and returns the one named
+`name`. When none matches, it returns `NotFound`. With no `type` or no `name`,
+it returns `InvalidArgument`.
+
+`dns_reverse_lookup` is advertised but has no backend, so every caller is
+refused.
+
+With no DNS service wired into the daemon, every tool in this section returns
+`Unavailable`.
 
 ## Resources
 

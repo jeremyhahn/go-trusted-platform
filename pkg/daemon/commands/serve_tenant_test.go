@@ -63,3 +63,15 @@ func TestPlatformTenantManager_NoSDKClientWiresNothing(t *testing.T) {
 	// rather than with a manager that fails every call.
 	assert.Nil(t, platformTenantManager(logging.NewLogger(0, nil), &app.App{}))
 }
+
+func TestPlatformTenantID_NamesTheAppTenant(t *testing.T) {
+	// The TenantService admits this tenant across tenants, as the REST
+	// tenant guards do; it must be the tenant the App runs as.
+	assert.Equal(t, "system-tenant", platformTenantID(&app.App{TenantID: "system-tenant"}))
+}
+
+func TestPlatformTenantID_NilAppNamesNone(t *testing.T) {
+	// No App means no system tenant, so no tenant-bound caller may act
+	// across tenants.
+	assert.Empty(t, platformTenantID(nil))
+}

@@ -433,8 +433,8 @@ func runScripted(t *testing.T, ctx context.Context, cfg ClientConfig, script fun
 	export, err := Attach(ctx, node, cfg)
 	select {
 	case <-peerDone:
-	case <-time.After(sessionTimeout):
-		t.Fatal("scripted peer did not finish")
+	case <-untilDeadline(t):
+		t.Fatal("scripted peer did not finish before the test deadline")
 	}
 	return export, err
 }

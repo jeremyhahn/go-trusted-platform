@@ -674,6 +674,25 @@ func (e ErrInvalidPortType) GRPCStatus() *status.Status {
 	return status.New(codes.InvalidArgument, e.Error())
 }
 
+// ErrInvalidFlowConfig is returned when an MCP flow body does not decode into
+// a FlowConfig: an unknown field, a wrong type or an unknown enum name.
+type ErrInvalidFlowConfig struct {
+	Cause error
+}
+
+func (e ErrInvalidFlowConfig) Error() string {
+	return fmt.Sprintf("invalid flow config: %v", e.Cause)
+}
+
+func (e ErrInvalidFlowConfig) Unwrap() error {
+	return e.Cause
+}
+
+// GRPCStatus classifies an undecodable flow body as InvalidArgument.
+func (e ErrInvalidFlowConfig) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // ErrAttestationFailed is returned when device attestation fails
 type ErrAttestationFailed struct {
 	Reason string
@@ -1068,6 +1087,43 @@ type ErrIAMTenantForbidden struct {
 
 func (e ErrIAMTenantForbidden) Error() string {
 	return fmt.Sprintf("IAM request names tenant %q: caller may not act on another tenant", e.Requested)
+}
+
+// ErrTenantForbidden is returned when a TenantService request names a tenant
+// other than the caller's own and the caller is not the system tenant. It is
+// the gRPC twin of the REST tenant guard's 403 from RequireOwnTenantOrSystem.
+type ErrTenantForbidden struct {
+	Requested string
+}
+
+func (e ErrTenantForbidden) Error() string {
+	return fmt.Sprintf("tenant request names tenant %q: caller may not act on another tenant", e.Requested)
+}
+
+// ErrTenantSystemOnly is returned when a caller other than the system tenant
+// calls a cross-tenant TenantService method. It is the gRPC twin of the REST
+// tenant guard's 403 from RequireSystemTenant.
+type ErrTenantSystemOnly struct {
+	Method string
+}
+
+func (e ErrTenantSystemOnly) Error() string {
+	return fmt.Sprintf("%s acts across tenants: only the system tenant may call it", e.Method)
+}
+
+// ErrTenantBarrierShamirUnsupported is returned when InitTenantBarrier asks
+// for Shamir sharing. The per-tenant barrier initializes with its
+// deterministic credential only, and the init returns no shares, so
+// honouring the request would leave a barrier nobody could unseal.
+type ErrTenantBarrierShamirUnsupported struct {
+	Threshold int32
+	Shares    int32
+}
+
+func (e ErrTenantBarrierShamirUnsupported) Error() string {
+	return fmt.Sprintf("tenant barrier init with Shamir threshold %d of %d shares is not supported: "+
+		"the per-tenant barrier initializes with its deterministic credential and returns no shares; send threshold and shares 0",
+		e.Threshold, e.Shares)
 }
 
 // ErrIAMInvalidCredentials is returned when credentials are invalid
@@ -1712,6 +1768,16 @@ func (ErrAttestationManifestIDRequired) Error() string {
 	return "daemon: attestation manifest id is required"
 }
 
+// ErrAttestationManifestSignatureUnchecked is returned by
+// AttestationService.VerifyManifest when the caller supplies a public
+// key: the service cannot check a manifest signature against it, so it
+// refuses rather than report the signature valid unchecked.
+type ErrAttestationManifestSignatureUnchecked struct{}
+
+func (ErrAttestationManifestSignatureUnchecked) Error() string {
+	return "daemon: manifest verification cannot check a signature against a supplied public key"
+}
+
 // MessageError is a typed error carrying a fully formatted message with no
 // underlying cause. It replaces inline formatted-error constructions that do not wrap
 // another error.
@@ -1781,12 +1847,23 @@ func (e ErrEABUnsupportedSortField) Error() string {
 // ErrEABInvalidQRCodeSize is returned when an EAB QR code request asks
 // for a negative pixel size.
 type ErrEABInvalidQRCodeSize struct {
-	Size int32
+	Size int
 }
 
 // Error implements the error interface.
 func (e ErrEABInvalidQRCodeSize) Error() string {
 	return fmt.Sprintf("eab: invalid QR code size: %d", e.Size)
+}
+
+// ErrEABUnsupportedStatusFilter is returned when an EAB list request over
+// MCP names a status other than active, revoked, expired or used.
+type ErrEABUnsupportedStatusFilter struct {
+	Status string
+}
+
+// Error implements the error interface.
+func (e ErrEABUnsupportedStatusFilter) Error() string {
+	return "eab: unsupported status filter: " + e.Status
 }
 
 // ErrProfileConfigInvalid is returned when a device profile create or

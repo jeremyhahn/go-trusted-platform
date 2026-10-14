@@ -31,7 +31,11 @@ import (
 const (
 	testIdentity   = "test-client"
 	testVolumeSize = 1 << 20
-	sessionTimeout = 10 * time.Second
+
+	// deadlineGrace is how long before the test binary's -timeout a wait
+	// gives up, so the test fails with its own message rather than the
+	// binary's timeout panic.
+	deadlineGrace = 5 * time.Second
 )
 
 // staticAnchor returns a platform anchor that always yields ca.
@@ -104,10 +108,23 @@ func awaitResult(t *testing.T, result <-chan error) error {
 	select {
 	case err := <-result:
 		return err
-	case <-time.After(sessionTimeout):
-		t.Fatal("session did not end")
+	case <-untilDeadline(t):
+		t.Fatal("session did not end before the test deadline")
 		return nil
 	}
+}
+
+// untilDeadline fires shortly before the test binary's deadline. A session
+// ends in milliseconds, but under -race on a loaded runner its fsync and TLS
+// close can take longer than any fixed budget, so only the binary's own
+// -timeout bounds the wait. Without a deadline (-timeout 0) it never fires.
+func untilDeadline(t *testing.T) <-chan time.Time {
+	t.Helper()
+	deadline, ok := t.Deadline()
+	if !ok {
+		return nil
+	}
+	return time.After(time.Until(deadline) - deadlineGrace)
 }
 
 // clientTLS is the configuration of a node presenting cert and verifying
