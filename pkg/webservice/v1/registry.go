@@ -787,6 +787,7 @@ type XKMSSigner interface {
 type RestHandlerRegistry interface {
 	ACMERestService() trustedca.ACMERestServicer
 	AttestationServiceServer() platformv1.AttestationServiceServer
+	CAServiceServer() platformv1.CAServiceServer
 	ComputeServiceServer() platformv1.ComputeServiceServer
 	DeviceServiceServer() platformv1.DeviceServiceServer
 	DeviceRestHandler() device.RestHandler
@@ -1018,6 +1019,7 @@ type RegistryParams struct {
 	Logger                   *logging.Logger
 	PEPClient                restiam.PEPClient
 	AttestationServiceServer platformv1.AttestationServiceServer
+	CAServiceServer          platformv1.CAServiceServer
 	ComputeServiceServer     platformv1.ComputeServiceServer
 	DeviceServiceServer      platformv1.DeviceServiceServer
 	EABServiceServer         platformv1.EABServiceServer
@@ -2050,6 +2052,11 @@ func (registry *HandlerRegistry) GatewayServiceServer() platformv1.GatewayServic
 // IDevIDServiceServer returns the in-process IDevIDService gRPC implementation, or nil.
 func (registry *HandlerRegistry) IDevIDServiceServer() platformv1.IDevIDServiceServer {
 	return registry.params.IDevIDServiceServer
+}
+
+// CAServiceServer returns the in-process CAService gRPC implementation, or nil.
+func (registry *HandlerRegistry) CAServiceServer() platformv1.CAServiceServer {
+	return registry.params.CAServiceServer
 }
 
 // InvitationServiceServer returns the in-process InvitationService gRPC implementation, or nil.

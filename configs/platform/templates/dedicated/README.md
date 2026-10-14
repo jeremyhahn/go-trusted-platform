@@ -235,6 +235,7 @@ tenant-id) only *fills* empty template fields — it never overrides.
 | [`supermicro/x10/compute.yaml`](./supermicro/x10/compute.yaml) | Compute | Enrolls with CP via ACME, QEMU/KVM + Podman |
 | [`dell/r640/`](./dell/r640/) | R640 variants | Phase-2 hardware (UNTESTED) |
 | [`raspberrypi/rpi4/compute.yaml`](./raspberrypi/rpi4/compute.yaml) | Compute | Pi 4 factory SD-card image (`diskimage create --target rpi --role compute`); one port, zone VLANs on `eth0`; no gateway or control-plane Pi template — [`raspberrypi/README.md`](./raspberrypi/README.md) says why |
+| [`raspberrypi/rpi5/compute.yaml`](./raspberrypi/rpi5/compute.yaml) | Compute | **Experimental**: the rpi4 compute role on a Pi 5 (`--model rpi5`); TPM, console and Ethernet unvalidated — [`raspberrypi/README.md`](./raspberrypi/README.md) |
 
 ---
 

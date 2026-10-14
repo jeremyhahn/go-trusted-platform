@@ -23,6 +23,7 @@ import (
 	restregistry "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/registry"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -848,6 +849,8 @@ var gatedProbes = []struct {
 	{"ca revoke certificate", http.MethodDelete, "/api/v1/ca/certificates/abc"},
 	{"idevid generate", http.MethodPost, "/api/v1/idevid/generate"},
 	{"idevid delete", http.MethodDelete, "/api/v1/idevid"},
+	{"idevid install certificate", http.MethodPost, "/api/v1/idevid/certificate"},
+	{"idevid create ldevid", http.MethodPost, "/api/v1/idevid/ldevid"},
 	{"vtpm bundle export", http.MethodGet, "/api/v1/vtpm/bundles/b1/export"},
 	{"vtpm bundle delete", http.MethodDelete, "/api/v1/vtpm/bundles/b1"},
 	{"vtpm start", http.MethodPost, "/api/v1/vtpm/bundles/b1/start"},
@@ -1825,6 +1828,99 @@ func TestRegisterRoutes_DeviceAttestIsRegisteredAndGated(t *testing.T) {
 	assert.False(t, pending, "%s must not be parked as pending; it is gated today", route)
 }
 
+// scopedSessionAuth is a session carrying roles AND scopes. Like the
+// platform-token middleware it is also the router's ScopeAuthorizer, so the
+// routes that take a scope check it; the legacy sessionAuth does not.
+type scopedSessionAuth struct {
+	sessionAuth
+	scopes []string
+}
+
+func (s *scopedSessionAuth) RequireScope(scope string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !slices.Contains(s.scopes, scope) {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// pxeOperatorProbes is every PXE operator route and the PXEService RPC it
+// stands for. The route must take the scope the gRPC catalog gives the RPC.
+var pxeOperatorProbes = []struct{ method, path, rpc string }{
+	{http.MethodGet, "/api/v1/pxe/status", "GetStatus"},
+	{http.MethodPost, "/api/v1/pxe/start", "StartService"},
+	{http.MethodPost, "/api/v1/pxe/stop", "StopService"},
+	{http.MethodGet, "/api/v1/pxe/devices", "ListDevices"},
+	{http.MethodPost, "/api/v1/pxe/devices", "RegisterDevice"},
+	{http.MethodGet, "/api/v1/pxe/devices/mac/{mac}", "GetDeviceByMAC"},
+	{http.MethodGet, "/api/v1/pxe/devices/{id}", "GetDevice"},
+	{http.MethodDelete, "/api/v1/pxe/devices/{id}", "RemoveDevice"},
+	{http.MethodPut, "/api/v1/pxe/devices/{id}/state", "UpdateState"},
+	{http.MethodPost, "/api/v1/pxe/devices/{id}/enrolled", "SetDeviceEnrolled"},
+	{http.MethodPost, "/api/v1/pxe/devices/{id}/authorize", "Authorize"},
+	{http.MethodPost, "/api/v1/pxe/devices/{id}/quarantine", "Quarantine"},
+	{http.MethodPost, "/api/v1/pxe/devices/{id}/retry", "Retry"},
+	{http.MethodGet, "/api/v1/pxe/devices/{id}/events", "GetEvents"},
+}
+
+// pxeScopedAdmin builds the gated router for an admin session holding scopes.
+func pxeScopedAdmin(t *testing.T, scopes ...string) *mux.Router {
+	return newGatedTestRouter(t, &testHandlerRegistry{
+		tokenHandler: &scopedSessionAuth{
+			sessionAuth: sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"},
+			scopes:      scopes,
+		},
+	})
+}
+
+// TestPXEOperatorRoutes_RefuseTheAdminRoleWithoutTheRPCScope closes the gap
+// where REST was wider than gRPC: an admin token holding every pxe scope but
+// the one the route's RPC needs is refused, as gRPC refuses the RPC.
+func TestPXEOperatorRoutes_RefuseTheAdminRoleWithoutTheRPCScope(t *testing.T) {
+	pxeScopes := []string{"pxe:read", "pxe:write", "pxe:delete"}
+	for _, tc := range pxeOperatorProbes {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			scope := grpcapi.ScopeForMethod("/platform.v1.PXEService/" + tc.rpc)
+			require.NotEmpty(t, scope, "%s is not in the gRPC catalog", tc.rpc)
+			others := slices.DeleteFunc(slices.Clone(pxeScopes), func(s string) bool { return s == scope })
+
+			assert.Equal(t, http.StatusForbidden, probe(pxeScopedAdmin(t, others...), tc.method, tc.path))
+		})
+	}
+}
+
+// TestPXEOperatorRoutes_AdmitTheAdminRoleWithTheRPCScope: the role and the
+// RPC's scope together reach the service. The stub service implements no
+// RPC, so reaching it answers 501.
+func TestPXEOperatorRoutes_AdmitTheAdminRoleWithTheRPCScope(t *testing.T) {
+	for _, tc := range pxeOperatorProbes {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			scope := grpcapi.ScopeForMethod("/platform.v1.PXEService/" + tc.rpc)
+			require.NotEmpty(t, scope, "%s is not in the gRPC catalog", tc.rpc)
+
+			assert.Equal(t, http.StatusNotImplemented, probe(pxeScopedAdmin(t, scope), tc.method, tc.path))
+		})
+	}
+}
+
+// TestPXEOperatorRoutes_ScopeAloneDoesNotPassTheRoleGate: the scope is on top
+// of the admin gate, not instead of it.
+func TestPXEOperatorRoutes_ScopeAloneDoesNotPassTheRoleGate(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{
+		tokenHandler: &scopedSessionAuth{
+			sessionAuth: sessionAuth{roles: []string{"user"}, tenantID: "system"},
+			scopes:      []string{"pxe:read", "pxe:write", "pxe:delete"},
+		},
+	})
+	for _, tc := range pxeOperatorProbes {
+		assert.Equal(t, http.StatusForbidden, probe(router, tc.method, tc.path), "%s %s", tc.method, tc.path)
+	}
+}
+
 // =============================================================================
 // IAM (#400)
 // =============================================================================
@@ -1835,13 +1931,13 @@ func TestRegisterRoutes_DeviceAttestIsRegisteredAndGated(t *testing.T) {
 // matching only it answers 404).
 //
 // It requires the count rather than merely the presence: rest/iam/router.go
-// registers each capability twice (docs/iam/api.md §2) — 32 flat routes and
-// 37 tenant-scoped ones — and a fixture that silently lost one tree would
+// registers each capability twice (docs/iam/api.md §2) — 33 flat routes and
+// 38 tenant-scoped ones — and a fixture that silently lost one tree would
 // otherwise pass the per-route assertions over the other.
 func iamRoutesUnderAudit(t *testing.T, router *mux.Router) []string {
 	t.Helper()
 
-	const wantIAMRoutes = 69
+	const wantIAMRoutes = 71
 	var routes []string
 	for _, route := range walkRoutes(t, router) {
 		_, template := splitRoute(route)
@@ -1889,6 +1985,32 @@ func TestIAMRoutes_RejectAuthenticatedCallersWithoutTheAdminRole(t *testing.T) {
 	}
 }
 
+// TestIAMPermissionCheckRoutes_AreGated pins the gate on the permission-check
+// routes #452 registered for the SDK's CheckPermission claim. The check is a
+// read-tier decision, but it sits behind the same admin gate as every other
+// /api/v1/iam route (docs/iam/api.md §8): no credential is 401 and a
+// non-admin session is 403, on the flat route and its tenant-scoped twin.
+// Requiring the routes in the audited set first keeps a 401 from an
+// unregistered path from passing for the gate.
+func TestIAMPermissionCheckRoutes_AreGated(t *testing.T) {
+	anonymous := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
+	underPrivileged := newGatedTestRouter(t, &testHandlerRegistry{
+		tokenHandler: &sessionAuth{roles: []string{"user"}, tenantID: "system"},
+	})
+	built := iamRoutesUnderAudit(t, anonymous)
+
+	for _, template := range []string{
+		"/api/v1/iam/permissions/check",
+		"/api/v1/iam/tenants/{tenant}/permissions/check",
+	} {
+		require.Containsf(t, built, http.MethodPost+" "+template, "%s is not registered", template)
+		assert.Equalf(t, http.StatusUnauthorized, probe(anonymous, http.MethodPost, template),
+			"POST %s did not answer 401 to a request carrying no credential", template)
+		assert.Equalf(t, http.StatusForbidden, probe(underPrivileged, http.MethodPost, template),
+			"POST %s did not answer 403 to an authenticated caller without the admin role", template)
+	}
+}
+
 // TestIAMRoutes_TenantGuardsAreWiredToThePlatformSession asserts the two
 // guards Router.iamRoutes builds from the platform's own state, which
 // rest/iam's tests cannot see because they inject their own:
@@ -1922,8 +2044,8 @@ func TestIAMRoutes_TenantGuardsAreWiredToThePlatformSession(t *testing.T) {
 		assert.NotEqualf(t, http.StatusUnauthorized, code, "%s refused the admin authentication", route)
 		assert.NotEqualf(t, http.StatusForbidden, code, "%s refused the admin authorization", route)
 	}
-	require.Equal(t, 37, tenantGuarded, "tenant-record plus tenant-scoped routes")
-	require.Equal(t, 32, flat, "flat routes")
+	require.Equal(t, 38, tenantGuarded, "tenant-record plus tenant-scoped routes")
+	require.Equal(t, 33, flat, "flat routes")
 }
 
 // TestIAMRoutes_SystemTenantAdminReachesTenantLifecycle is the other half of

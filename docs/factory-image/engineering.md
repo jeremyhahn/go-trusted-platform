@@ -35,6 +35,7 @@
 | `pkg/authenticode/pe.go` | `embedSignature`: `WIN_CERTIFICATE.dwLength` is header + DER and the 8-byte padding stays outside it (what `sbsign` writes; mbedTLS rejects the alternative, see §10) |
 | `configs/platform/templates/single-node/raspberrypi/rpi4/default.yaml` | the Raspberry Pi 4 template `create --target rpi` picks up (`raspberrypi/README.md` lists what differs from the x86 template) |
 | `configs/platform/templates/dedicated/raspberrypi/rpi4/compute.yaml` | the Raspberry Pi 4 compute node of the dedicated profile, built with `create --target rpi --role compute` (`dedicated/raspberrypi/README.md` lists what differs from the x10 compute template) |
+| `configs/platform/templates/dedicated/raspberrypi/rpi5/compute.yaml` | the same compute node on a Raspberry Pi 5, **experimental** (`create --target rpi --model rpi5 --role compute`); its header and `dedicated/raspberrypi/README.md` list what is unvalidated |
 | `test/integration/diskimage/` | `suite_test.go` (inputs from `DISKIMAGE_IMAGE`, `DISKIMAGE_RPI_IMAGE`, `DISKIMAGE_UBOOT`, `DISKIMAGE_WORK_DIR`; `MissingInputError`), `image_test.go`, `uboot_test.go`, `firstboot_test.go`; `userspace/` (the arm64 container suite) |
 | `pkg/installer/boot_firmware.go` | `InstallTarget`, `BootFirmwareType`, `BootConfig`, `bootFirmwares`, `imageTargetSkips` (contract in [installer engineering.md](../installer/engineering.md) §2, invariant 3) |
 | `pkg/iso/types.go` | `InstallerOverrides` |
@@ -102,7 +103,11 @@ stops it; the swtpm is stopped on every return.
 "rpi4"`; models `rpi4` (`bcm2711-rpi-4-b.dtb`), `rpi400`
 (`bcm2711-rpi-400.dtb`), `cm4` (`bcm2711-rpi-cm4.dtb`), `rpi3b+`
 (`bcm2710-rpi-3-b-plus.dtb`), `rpi5` (`bcm2712-rpi-5-b.dtb`,
-`Experimental: true`). `ConfigTxt(m)` yields `arm_64bit=1`, `enable_uart=1`,
+`Experimental: true`). `Model.Description` is the board name and becomes the
+image's `hardware-model`. `Model.Firmware` is the GPU firmware the board loads
+before U-Boot: `start4.elf`, `fixup4.dat` on the BCM2711 boards;
+`bootcode.bin`, `start.elf`, `fixup.dat` on the 3B+; none on the Pi 5, whose
+bootloader EEPROM reads `config.txt` and loads `kernel8.img` itself. `ConfigTxt(m)` yields `arm_64bit=1`, `enable_uart=1`,
 `uart_2ndstage=1`, `dtoverlay=disable-bt`, `dtoverlay=tpm-soft-spi`,
 `kernel=kernel8.img`.
 
@@ -143,8 +148,8 @@ release and are held equal to `build/docker/uboot-builder/Makefile` by
    no firmware fallback that could find the UKI.
 5. **The Pi target verifies its own output.** `StageBootFirmware` fails with
    `FirmwareMissingError` unless `kernel8.img`, `config.txt`, the model's
-   DTB, `overlays/tpm-soft-spi.dtbo`, `overlays/disable-bt.dtbo`,
-   `start4.elf` and `fixup4.dat` all exist after staging. Files come only
+   DTB, `overlays/tpm-soft-spi.dtbo`, `overlays/disable-bt.dtbo`
+   and the model's `Firmware` all exist after staging. Files come only
    from the prefetched apks and the verified U-Boot output, so the image is
    built offline from the packages the node has installed.
 6. **Nothing unverified reaches the ESP.** `uboot.Locate` requires every
@@ -254,7 +259,8 @@ The platform config baked into the image is `--platform-config`
 when it exists — `rpi4` ships one — else
 `configs/platform/templates/single-node/default.yaml`), or, with `--role
 <role>`, `configs/platform/templates/dedicated/raspberrypi/<model>/<role>.yaml`
-(`rpi4/compute.yaml` ships; a missing file is `ErrRoleTemplate`, never a
+(`rpi4/compute.yaml` and the experimental `rpi5/compute.yaml` ship; a model
+the builder does not know or a missing file is `ErrRoleTemplate`, never a
 fallback to single-node). It is deep-merged with `--overrides`. The target's `InstallerOverrides` are then applied on top:
 
 | Target | `disk.device` | `disk.partition-table` | `os.kernel-package` | `hardware-manufacturer` / `hardware-model` | `install-target` | `boot.firmware` |

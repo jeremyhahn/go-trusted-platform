@@ -103,8 +103,10 @@ func TestModels(t *testing.T) {
 	if err != nil || m.Name != DefaultModel || m.DTB != "bcm2711-rpi-4-b.dtb" {
 		t.Errorf("LookupModel(\"\") = %+v, %v", m, err)
 	}
-	if m, err := LookupModel("rpi5"); err != nil || !m.Experimental {
-		t.Errorf("rpi5 = %+v, %v; want experimental", m, err)
+	// The rpi5 is experimental, and its description is the board name the
+	// image carries as hardware-model, not a status note.
+	if m, err := LookupModel("rpi5"); err != nil || !m.Experimental || m.Description != "Raspberry Pi 5" || len(m.Firmware) != 0 {
+		t.Errorf("rpi5 = %+v, %v; want experimental, \"Raspberry Pi 5\", no GPU firmware", m, err)
 	}
 	_, err = LookupModel("rpi2")
 	var unknown *UnknownModelError
@@ -257,6 +259,41 @@ func TestStageBootFirmwareFailures(t *testing.T) {
 	var stage *StageError
 	if err := tgt.StageBootFirmware(context.Background(), media, prefetchDir(t), uboot.Artifacts{Binary: "/nonexistent/u-boot.bin"}); !errors.As(err, &stage) {
 		t.Errorf("missing U-Boot error = %v", err)
+	}
+}
+
+// The GPU firmware a model needs is its own: the Pi 5's bootloader EEPROM
+// loads U-Boot itself, so a bootloader package without start4.elf still
+// stages it, while the Pi 4 and the 3B+ (which reads bootcode.bin from the
+// card) are refused without theirs.
+func TestStageBootFirmwareGPUFirmwarePerModel(t *testing.T) {
+	noGPUFirmware := t.TempDir()
+	writeAPK(t, filepath.Join(noGPUFirmware, "raspberrypi-bootloader-1.0-r0.apk"), map[string]string{"boot/LICENCE.broadcom": "l"})
+	writeAPK(t, filepath.Join(noGPUFirmware, "raspberrypi-bootloader-common-1.0-r0.apk"), map[string]string{"boot/cmdline.txt": "c"})
+	writeAPK(t, filepath.Join(noGPUFirmware, "linux-rpi-6.12-r0.apk"), map[string]string{
+		"boot/bcm2711-rpi-4-b.dtb": "dtb4", "boot/bcm2710-rpi-3-b-plus.dtb": "dtb3", "boot/bcm2712-rpi-5-b.dtb": "dtb5",
+		"boot/overlays/disable-bt.dtbo": "d",
+	})
+
+	cases := map[string]string{"rpi5": "", "rpi4": "start4.elf", "rpi3b+": "bootcode.bin"}
+	for model, wantMissing := range cases {
+		t.Run(model, func(t *testing.T) {
+			tgt, err := New(model)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = tgt.StageBootFirmware(context.Background(), t.TempDir(), noGPUFirmware, ubootArtifacts(t))
+			if wantMissing == "" {
+				if err != nil {
+					t.Fatalf("StageBootFirmware(%s) = %v, want no GPU firmware required", model, err)
+				}
+				return
+			}
+			var fw *FirmwareMissingError
+			if !errors.As(err, &fw) || fw.File != wantMissing {
+				t.Errorf("StageBootFirmware(%s) = %v, want %s missing", model, err, wantMissing)
+			}
+		})
 	}
 }
 

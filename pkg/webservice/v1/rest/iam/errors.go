@@ -208,3 +208,12 @@ type ErrConflictingQueryTenant struct {
 func (e ErrConflictingQueryTenant) Error() string {
 	return fmt.Sprintf("rest/iam: tenant_id query %q conflicts with path tenant %q", e.Query, e.Path)
 }
+
+// ErrPEPClientMissing is returned when a permission check reaches a router
+// built without the policy enforcement point the check is evaluated by: the
+// daemon wired no IAM PEP, so the route answers 503 rather than a verdict.
+type ErrPEPClientMissing struct{}
+
+func (e ErrPEPClientMissing) Error() string {
+	return "rest/iam: no policy enforcement point is wired to check permissions"
+}

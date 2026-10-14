@@ -49,7 +49,7 @@ and the staged media directory.
 |---|---|---|---|
 | `--target` | string | `rpi` | `rpi` or `qemu-virt` |
 | `--model` | string | `rpi4` for `rpi` | `rpi4`, `rpi400`, `cm4`, `rpi3b+`, `rpi5` (experimental) |
-| `--role` | string | | dedicated-profile role for `--target rpi`: builds `configs/platform/templates/dedicated/raspberrypi/<model>/<role>.yaml` (today `compute` on `rpi4`). Empty builds the single-node image. Refused with `ErrRoleTemplate` beside `--platform-config`, on `qemu-virt`, or when that file does not exist; there is no fallback |
+| `--role` | string | | dedicated-profile role for `--target rpi`: builds `configs/platform/templates/dedicated/raspberrypi/<model>/<role>.yaml` (today `compute` on `rpi4`, and on `rpi5` as an experimental template). Empty builds the single-node image. Refused with `ErrRoleTemplate` beside `--platform-config`, on `qemu-virt`, for a model the builder does not know, or when that file does not exist; there is no fallback |
 | `--size` | int | `4096` | image size in MB; minimum `2048` |
 | `--output` | string | `<work-dir>/trusted-platform-<target>.img` | output image path |
 | `--binaries-dir` | string | `aarch64/` next to the running binary | directory holding the target-architecture `platformd`, `platformctl`, `platformctl-static`, `platform-initrd`, `gatewayd` |

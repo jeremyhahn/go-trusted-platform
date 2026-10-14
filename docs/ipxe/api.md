@@ -257,7 +257,7 @@ who arrived here can find them:
 | Events | `GET /api/v1/pxe/devices/{id}/events` | `GetEvents` | as above | `pxe_get_device_events` |
 | Service status / start / stop | `/api/v1/pxe/status`, `/start`, `/stop` | `GetStatus`, `StartService`, `StopService` | as above | `pxe_service_status`, `pxe_start_service`, `pxe_stop_service` |
 | Install-complete webhook | `POST /api/v1/pxe/webhook/complete` | `WebhookComplete` | as above | `pxe_webhook_complete` |
-| Gateway-side provisioning | — | `ProvisioningGateway` (4 RPCs) | — | — |
+| Gateway-side provisioning — register, state, install complete | `/api/v1/provisioning/devices/{mac}/…` ([provisioning api.md](../provisioning/api.md) §4) | `ProvisioningGateway` (4 RPCs) | — | — |
 
 **The install-complete webhook route exists only when the operator sets
 `pxe.ServiceConfig.WebhookEnabled`** (default `false`). Disabled, the path is
@@ -313,7 +313,35 @@ RPC is in the gRPC scope catalog (`pkg/api/grpc/method_permissions.go`):
 | `pxe:delete` | `RemoveDevice` |
 
 Authorizing or quarantining a PXE device therefore needs `pxe:write`. No `pxe_*`
-MCP tool is registered. [`docs/provisioning/api.md`](../provisioning/api.md) §6
+MCP tool is registered.
+
+**REST takes the same scopes (#452).** Behind the platform-token middleware each
+operator route takes, on top of the admin role gate, the scope its RPC takes on
+gRPC; a token without it gets `403`. The route table names the RPC and reads the
+scope from the gRPC catalog (`pkg/webservice/v1/rest/pxe/router.go`), so the two
+cannot drift. Under the legacy JWT handler, which carries roles and no scopes,
+the role gate alone applies.
+
+| Route | RPC | Scope |
+|---|---|---|
+| `GET /api/v1/pxe/status` | `GetStatus` | `pxe:read` |
+| `POST /api/v1/pxe/start` | `StartService` | `pxe:write` |
+| `POST /api/v1/pxe/stop` | `StopService` | `pxe:write` |
+| `GET /api/v1/pxe/devices` | `ListDevices` | `pxe:read` |
+| `POST /api/v1/pxe/devices` | `RegisterDevice` | `pxe:write` |
+| `GET /api/v1/pxe/devices/mac/{mac}` | `GetDeviceByMAC` | `pxe:read` |
+| `GET /api/v1/pxe/devices/{id}` | `GetDevice` | `pxe:read` |
+| `DELETE /api/v1/pxe/devices/{id}` | `RemoveDevice` | `pxe:delete` |
+| `PUT /api/v1/pxe/devices/{id}/state` | `UpdateState` | `pxe:write` |
+| `POST /api/v1/pxe/devices/{id}/enrolled` | `SetDeviceEnrolled` | `pxe:write` |
+| `POST /api/v1/pxe/devices/{id}/authorize` | `Authorize` | `pxe:write` |
+| `POST /api/v1/pxe/devices/{id}/quarantine` | `Quarantine` | `pxe:write` |
+| `POST /api/v1/pxe/devices/{id}/retry` | `Retry` | `pxe:write` |
+| `GET /api/v1/pxe/devices/{id}/events` | `GetEvents` | `pxe:read` |
+
+`POST /api/v1/pxe/webhook/complete` takes neither the admin gate nor a scope:
+its caller is a booting node, and it presents no credential (#238). It is the
+one PXE route wider than its RPC, `WebhookComplete`, which needs `pxe:write`. [`docs/provisioning/api.md`](../provisioning/api.md) §6
 covers the provisioning half of the control plane.
 
 ---

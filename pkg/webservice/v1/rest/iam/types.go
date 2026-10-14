@@ -272,6 +272,29 @@ type TestPolicyResponse struct {
 	EvaluationTimeNs int64  `json:"evaluation_time_ns"`
 }
 
+// CheckPermissionRequest asks the policy enforcement point whether a subject
+// may perform an action on a resource. Unlike TestPolicyRequest, which
+// dry-runs the tenant's policy set, this is the live decision the PEP enforces.
+type CheckPermissionRequest struct {
+	BodyTenant
+
+	SubjectID  string            `json:"subject_id"`
+	Roles      []string          `json:"roles,omitempty"`
+	Groups     []string          `json:"groups,omitempty"`
+	Action     string            `json:"action"`
+	Resource   string            `json:"resource"`
+	Context    map[string]string `json:"context,omitempty"`
+	Attributes map[string]string `json:"attributes,omitempty"`
+}
+
+// CheckPermissionResponse is the PEP's decision for a CheckPermissionRequest.
+type CheckPermissionResponse struct {
+	Allowed          bool   `json:"allowed"`
+	MatchedPolicy    string `json:"matched_policy,omitempty"`
+	MatchedRule      string `json:"matched_rule,omitempty"`
+	EvaluationTimeNs int64  `json:"evaluation_time_ns"`
+}
+
 // RegisterAppRequest is the request body for registering an application.
 // Accepts both snake_case (canonical REST) and camelCase (JS SDK) field
 // names so the WebUI's `{grantTypes: [...]}` payload reaches the

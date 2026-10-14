@@ -55,11 +55,20 @@ type CAHandlers struct {
 	respWriter response.HttpWriter
 	objStorage objectstorage.Client
 	kms        issuance.KMS
+	service    platformv1.CAServiceServer
 }
 
 // SignCSRScope is the scope that authorizes certifying a CSR.
 // certs:generate, which issues ordinary certificates, does not grant it.
 const SignCSRScope = issuance.SignCSRScope
+
+// Scopes the certificate item routes require of a platform token (#452).
+// Renewing issues a certificate, so it takes the issuing scope.
+const (
+	RenewScope  = "certs:generate"
+	RevokeScope = "certs:revoke"
+	VerifyScope = "certs:read"
+)
 
 // NewCAHandlers creates a new CAHandlers instance.
 // objStorage may be nil; if nil, the revocation object-store check is skipped.
@@ -84,10 +93,39 @@ func (h *CAHandlers) WithKMS(kms issuance.KMS) *CAHandlers {
 	return h
 }
 
+// WithService sets the CA service that renew and verify call: the one the
+// gRPC, Unix and MCP transports serve. Without it those routes answer 503.
+func (h *CAHandlers) WithService(service platformv1.CAServiceServer) *CAHandlers {
+	h.service = service
+	return h
+}
+
 // Helper methods
 
 func (h *CAHandlers) getSerial(r *http.Request) string {
 	return mux.Vars(r)["serial"]
+}
+
+// maxSerialHexDigits bounds a serial in the path: RFC 5280 §4.1.2.2 caps a
+// serial number at 20 octets, which is 40 hex digits.
+const maxSerialHexDigits = 40
+
+// pathSerial returns the {serial} path variable of an item route, refusing
+// one that is empty or is not a hex serial as this CA writes them.
+func (h *CAHandlers) pathSerial(r *http.Request) (string, error) {
+	serial := h.getSerial(r)
+	if serial == "" {
+		return "", ErrInvalidSerialNumber{Reason: "serial number is required"}
+	}
+	if len(serial) > maxSerialHexDigits {
+		return "", ErrInvalidSerialNumber{Serial: serial, Reason: "longer than 20 octets"}
+	}
+	for _, c := range serial {
+		if !strings.ContainsRune("0123456789abcdefABCDEF", c) {
+			return "", ErrInvalidSerialNumber{Serial: serial, Reason: "not a hexadecimal serial"}
+		}
+	}
+	return serial, nil
 }
 
 func (h *CAHandlers) getPaginationParams(r *http.Request) (int32, string) {
@@ -912,10 +950,9 @@ func (h *CAHandlers) RevokeCertificate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	serial := h.getSerial(r)
-	if serial == "" {
-		protorest.WriteError(w, r, h.respWriter,
-			status.Error(codes.InvalidArgument, ErrInvalidSerialNumber{Reason: "serial number is required"}.Error()))
+	serial, err := h.pathSerial(r)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, status.Error(codes.InvalidArgument, err.Error()))
 		return
 	}
 
@@ -958,6 +995,61 @@ func (h *CAHandlers) RevokeCertificate(w http.ResponseWriter, r *http.Request) {
 		Reason:            req.GetReason(),
 		Timestamp:         now,
 	})
+}
+
+// RenewCertificate handles POST /api/v1/ca/certificates/{serial}/renew.
+// The serial comes from the path; valid_days, preserve_sans and new_sans
+// from the RenewCertificateRequest body. The CA service does the work.
+func (h *CAHandlers) RenewCertificate(w http.ResponseWriter, r *http.Request) {
+	if h.service == nil {
+		protorest.WriteError(w, r, h.respWriter, &protorest.ErrServiceUnavailable{Service: "ca"})
+		return
+	}
+
+	serial, err := h.pathSerial(r)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, status.Error(codes.InvalidArgument, err.Error()))
+		return
+	}
+
+	req := &platformv1.RenewCertificateRequest{}
+	if r.Body != nil && r.ContentLength > 0 {
+		if err := protorest.DecodeRequest(r, req); err != nil {
+			protorest.WriteError(w, r, h.respWriter, status.Error(codes.InvalidArgument, err.Error()))
+			return
+		}
+	}
+	req.Serial = serial
+
+	resp, err := h.service.RenewCertificate(r.Context(), req)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// VerifyCertificate handles POST /api/v1/ca/certificates/verify. The
+// certificate travels in the VerifyCertificateRequest body as PEM or DER;
+// there is no serial, since the certificate need not be one this CA issued.
+func (h *CAHandlers) VerifyCertificate(w http.ResponseWriter, r *http.Request) {
+	if h.service == nil {
+		protorest.WriteError(w, r, h.respWriter, &protorest.ErrServiceUnavailable{Service: "ca"})
+		return
+	}
+
+	req := &platformv1.VerifyCertificateRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		protorest.WriteError(w, r, h.respWriter, status.Error(codes.InvalidArgument, err.Error()))
+		return
+	}
+
+	resp, err := h.service.VerifyCertificate(r.Context(), req)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
 }
 
 // =============================================================================

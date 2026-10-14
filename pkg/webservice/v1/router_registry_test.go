@@ -122,6 +122,7 @@ type testHandlerRegistry struct {
 	deviceTemplateService devicepkg.DeviceTemplateService
 	deviceProfileService  devicepkg.DeviceProfileService
 	invitationService     platformv1.InvitationServiceServer
+	caService             platformv1.CAServiceServer
 	registryService       grpcapi.RegistryService
 	tpmService            platformv1.TPMServiceServer
 	tenantService         platformv1.TenantServiceServer
@@ -263,6 +264,10 @@ func (r *testHandlerRegistry) IDevIDServiceServer() platformv1.IDevIDServiceServ
 
 func (r *testHandlerRegistry) InvitationServiceServer() platformv1.InvitationServiceServer {
 	return r.invitationService
+}
+
+func (r *testHandlerRegistry) CAServiceServer() platformv1.CAServiceServer {
+	return r.caService
 }
 
 func (r *testHandlerRegistry) OverlayServiceServer() platformv1.OverlayServiceServer {

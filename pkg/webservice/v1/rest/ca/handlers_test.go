@@ -1222,13 +1222,36 @@ func TestRevokeCertificate_Error(t *testing.T) {
 		}
 		handlers, writer := newTestHandlers(mockCA)
 
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/nonexistent", nil)
-		req = mux.SetURLVars(req, map[string]string{"serial": "nonexistent"})
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/dead0001", nil)
+		req = mux.SetURLVars(req, map[string]string{"serial": "dead0001"})
 		rec := httptest.NewRecorder()
 
 		handlers.RevokeCertificate(rec, req)
 
 		assert.Equal(t, http.StatusNotFound, writer.lastStatus)
+	})
+
+	t.Run("returns 400 for a serial that is not hex", func(t *testing.T) {
+		var looked bool
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			certStore: &mockCertStore{
+				getCertificateFn: func(string) (*x509.Certificate, error) {
+					looked = true
+					return nil, errors.New("not found")
+				},
+			},
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/not-a-serial", nil)
+		req = mux.SetURLVars(req, map[string]string{"serial": "not-a-serial"})
+		rec := httptest.NewRecorder()
+
+		handlers.RevokeCertificate(rec, req)
+
+		assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+		assert.False(t, looked, "a malformed serial must be refused before the store lookup")
 	})
 
 	t.Run("returns error for invalid request body", func(t *testing.T) {

@@ -115,7 +115,7 @@ Examples:
 	f := cmd.Flags()
 	f.StringVar(&flags.target, "target", pkgdiskimage.DefaultTarget, "Image target: rpi or qemu-virt")
 	f.StringVar(&flags.model, "model", "", "Board model for the rpi target (default "+rpi.DefaultModel+"): "+joinModels())
-	f.StringVar(&flags.role, "role", "", "Dedicated-profile role for the rpi target, built from dedicated/raspberrypi/<model>/<role>.yaml (compute); empty builds the single-node image")
+	f.StringVar(&flags.role, "role", "", "Dedicated-profile role for the rpi target, built from dedicated/raspberrypi/<model>/<role>.yaml (compute on rpi4 and rpi5); empty builds the single-node image")
 	f.IntVar(&flags.sizeMB, "size", pkgdiskimage.DefaultSizeMB, "Image size in MB")
 	f.StringVar(&flags.output, "output", "", "Output image path (default <work-dir>/trusted-platform-<target>.img)")
 	f.StringVar(&flags.binariesDir, "binaries-dir", "", "Directory holding the target-architecture platformd, platformctl, platformctl-static, platform-initrd and gatewayd (default: aarch64/ next to this binary)")
@@ -164,11 +164,14 @@ func addMediaFlags(f *pflag.FlagSet, flags *mediaFlags) {
 
 func joinModels() string {
 	out := ""
-	for i, m := range rpi.Models() {
+	for i, name := range rpi.Models() {
 		if i > 0 {
 			out += ", "
 		}
-		out += m
+		out += name
+		if m, err := rpi.LookupModel(name); err == nil && m.Experimental {
+			out += " (experimental)"
+		}
 	}
 	return out
 }
@@ -330,6 +333,11 @@ func roleTemplate(target, model, role, platformConfig string) (string, error) {
 	}
 	if target != rpi.Name {
 		return refuse("dedicated roles are built for the " + rpi.Name + " target only")
+	}
+	// The model names the template directory, so only a board the image
+	// builder knows may reach the path.
+	if _, err := rpi.LookupModel(model); err != nil {
+		return refuse(err.Error())
 	}
 	path := filepath.Join("configs", "platform", "templates", "dedicated", "raspberrypi", model, role+".yaml")
 	if _, err := os.Stat(path); err != nil {

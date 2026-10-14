@@ -207,10 +207,17 @@ enrollment endpoint is reachable from that zone ([`docs/sdn/`](../sdn/)).
 ## Two things to be aware of
 
 **Authorization.** `PXEService`, `ConfigDeliveryService`, `ProvisioningGateway`
-and `BMCService` are all absent from the gRPC scope catalog, and none of their
-MCP tools is in the MCP authorization map. **Any validated token can authorize a
-PXE device, fulfil a provisioning session, or ask the platform to sign a Secure
-Boot digest.** Recorded in [api.md](api.md) §6 and raised for the owner.
+and `BMCService` are all in the gRPC scope catalog, which is default-deny.
+Authorizing a PXE device needs `pxe:write` and fulfilling a provisioning session
+`provisioning:write`, on gRPC and on the webservice's REST operator routes alike,
+where the scope sits on top of the admin role. Signing a Secure Boot digest is
+pre-auth on gRPC: the machine proves itself inside the request (single-use
+nonce, EAB HMAC, EK-certificate binding), not with a platform token. On MCP the
+BMC tools are mapped; the `provision_*` tools are not, so every caller is
+refused them, and no `pxe_*` tool is registered. **One open path remains:** the
+install-completion webhook `POST /api/v1/pxe/webhook/complete` presents no
+credential (#238). See [api.md](api.md) §6 and
+[`docs/ipxe/api.md`](../ipxe/api.md) §5.
 
 **Test coverage.** Two provisioning integration suites do not exercise what they
 appear to: the PXE gRPC adapter is hollow (15 unimplemented TODOs) and the

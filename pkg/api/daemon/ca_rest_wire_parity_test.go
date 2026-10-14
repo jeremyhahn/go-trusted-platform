@@ -22,6 +22,7 @@ import (
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -86,10 +87,33 @@ func (s tokenScopes) authorize(next http.Handler) http.Handler {
 	})
 }
 
+// RequireScope is the webservice's scope check over the authorized context
+// authorize attached: 401 without one, 403 when the scope is missing.
+func (s tokenScopes) RequireScope(scope string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			authCtx, ok := iammw.AuthorizedContextFromRequest(r)
+			if !ok {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			if !slices.Contains(authCtx.Scopes, scope) {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 const (
-	signerToken = "signer"
-	readerToken = "reader"
-	csrKeyID    = "rpi/fleet"
+	signerToken   = "signer"
+	readerToken   = "reader"
+	renewToken    = "renewer"
+	revokeToken   = "revoker"
+	verifyToken   = "verifier"
+	csrKeyID      = "rpi/fleet"
+	unknownSerial = "dead0001"
 )
 
 type caWireServer struct {
@@ -115,6 +139,20 @@ var caWireServers = []caWireServer{
 		return tokens.authorize(router)
 	}},
 }
+
+// caWebServiceServer is the CA webservice as the daemon wires it for the
+// certificate item routes: renew and verify call the CA service gRPC serves,
+// and renew, revoke and verify each demand their scope.
+var caWebServiceServer = caWireServer{name: "webservice", build: func(ca *signingCA, kms issuance.KMS, tokens tokenScopes) http.Handler {
+	router := mux.NewRouter()
+	logger := logging.DefaultLogger()
+	caRouter := restca.NewCARouter(logger, ca, response.NewResponseWriter(logger, nil)).
+		WithKMS(kms).
+		WithService(NewCAGRPCService(logger, ca, nil))
+	caRouter.SetScopeAuthorizer(tokens)
+	caRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
+	return tokens.authorize(router)
+}}
 
 // caWireClient serves handler over TLS, with the /health route the SDK probes
 // on Connect, and returns an SDK REST CA client presenting token.
@@ -156,6 +194,9 @@ func newCAWireFixture(t *testing.T) *caWireFixture {
 		tokens: tokenScopes{
 			signerToken: {issuance.SignCSRScope},
 			readerToken: {"ca:read"},
+			renewToken:  {restca.RenewScope},
+			revokeToken: {restca.RevokeScope},
+			verifyToken: {restca.VerifyScope},
 		},
 		key: key,
 	}
@@ -303,5 +344,106 @@ func TestCARESTWire_SignCSR_Refused(t *testing.T) {
 				assert.Equal(t, tc.want, status.Code(err), "%v", err)
 			})
 		}
+	}
+}
+
+// The certificate item operations — revoke, renew and verify — are claimed
+// by the SDK on the web service's routes, so they are driven against it.
+
+func TestCARESTWire_RevokeCertificate(t *testing.T) {
+	f := newCAWireFixture(t)
+	client := f.client(t, caWebServiceServer, revokeToken)
+
+	resp, err := client.RevokeCertificate(context.Background(), &platformv1.RevokeCertificateRequest{
+		Serial: f.serial,
+		Reason: platformv1.RevocationReason_REVOCATION_REASON_KEY_COMPROMISE,
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.GetStatus().GetSuccess())
+	assert.Equal(t, f.serial, resp.GetSerial())
+	assert.Equal(t, platformv1.CertificateStatus_CERTIFICATE_STATUS_REVOKED, resp.GetCertificateStatus())
+	assert.Equal(t, platformv1.RevocationReason_REVOCATION_REASON_KEY_COMPROMISE, resp.GetReason())
+	assert.NotNil(t, resp.GetRevokedAt())
+}
+
+func TestCARESTWire_RenewCertificate(t *testing.T) {
+	f := newCAWireFixture(t)
+	client := f.client(t, caWebServiceServer, renewToken)
+
+	resp, err := client.RenewCertificate(context.Background(), &platformv1.RenewCertificateRequest{
+		Serial:    f.serial,
+		ValidDays: 30,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, f.serial, resp.GetOldCertificate().GetSerial())
+	assert.Equal(t, "parity.example", resp.GetNewCertificate().GetSubject().GetCommonName())
+
+	got := f.ca.last.Load()
+	require.NotNil(t, got, "the renewal reached the CA")
+	assert.Equal(t, "parity.example", got.Subject.CommonName)
+	assert.Equal(t, 30, got.Valid)
+}
+
+func TestCARESTWire_VerifyCertificate(t *testing.T) {
+	f := newCAWireFixture(t)
+	client := f.client(t, caWebServiceServer, verifyToken)
+
+	resp, err := client.VerifyCertificate(context.Background(), &platformv1.VerifyCertificateRequest{
+		CertificatePem: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: f.ca.issuedCert.Raw}),
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.GetValid(), "the leaf chains to the CA root: %v", resp.GetErrors())
+	assert.False(t, resp.GetRevoked())
+}
+
+func TestCARESTWire_CertificateItemOperations_Refused(t *testing.T) {
+	cases := []struct {
+		name  string
+		token string
+		call  func(client platformv1.CAServiceClient, f *caWireFixture) error
+		want  codes.Code
+	}{
+		{"revoke without the revoke scope", renewToken, func(client platformv1.CAServiceClient, f *caWireFixture) error {
+			_, err := client.RevokeCertificate(context.Background(), &platformv1.RevokeCertificateRequest{Serial: f.serial})
+			return err
+		}, codes.PermissionDenied},
+		{"revoke an unknown serial", revokeToken, func(client platformv1.CAServiceClient, _ *caWireFixture) error {
+			_, err := client.RevokeCertificate(context.Background(), &platformv1.RevokeCertificateRequest{Serial: unknownSerial})
+			return err
+		}, codes.NotFound},
+		{"renew without the renew scope", revokeToken, func(client platformv1.CAServiceClient, f *caWireFixture) error {
+			_, err := client.RenewCertificate(context.Background(), &platformv1.RenewCertificateRequest{Serial: f.serial, ValidDays: 30})
+			return err
+		}, codes.PermissionDenied},
+		{"renew an unknown serial", renewToken, func(client platformv1.CAServiceClient, _ *caWireFixture) error {
+			_, err := client.RenewCertificate(context.Background(), &platformv1.RenewCertificateRequest{Serial: unknownSerial, ValidDays: 30})
+			return err
+		}, codes.NotFound},
+		{"renew a serial that is not hex", renewToken, func(client platformv1.CAServiceClient, _ *caWireFixture) error {
+			_, err := client.RenewCertificate(context.Background(), &platformv1.RenewCertificateRequest{Serial: "not-a-serial", ValidDays: 30})
+			return err
+		}, codes.InvalidArgument},
+		{"verify without the read scope", readerToken, func(client platformv1.CAServiceClient, f *caWireFixture) error {
+			_, err := client.VerifyCertificate(context.Background(), &platformv1.VerifyCertificateRequest{CertificateDer: f.ca.issuedCert.Raw})
+			return err
+		}, codes.PermissionDenied},
+		{"verify a PEM that does not decode", verifyToken, func(client platformv1.CAServiceClient, _ *caWireFixture) error {
+			_, err := client.VerifyCertificate(context.Background(), &platformv1.VerifyCertificateRequest{CertificatePem: []byte("not a certificate")})
+			return err
+		}, codes.InvalidArgument},
+		{"an unknown token", "stranger", func(client platformv1.CAServiceClient, f *caWireFixture) error {
+			_, err := client.RevokeCertificate(context.Background(), &platformv1.RevokeCertificateRequest{Serial: f.serial})
+			return err
+		}, codes.Unauthenticated},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCAWireFixture(t)
+			client := f.client(t, caWebServiceServer, tc.token)
+
+			err := tc.call(client, f)
+			assert.Equal(t, tc.want, status.Code(err), "%v", err)
+			assert.Nil(t, f.ca.last.Load(), "a refused call never issues a certificate")
+		})
 	}
 }

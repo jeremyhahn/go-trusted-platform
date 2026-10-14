@@ -36,8 +36,8 @@ MCP: ten `ca_*` tools.
 | List certificates | `GET /api/v1/ca/certificates` | `ListCertificates` | `OpCAList` (`0xA5`) | `ca_list` | ✅ |
 | Get certificate | `GET /api/v1/ca/certificates/{serial}` | `GetCertificate` | `OpCAGet` (`0xA4`) | `ca_get` | ✅ |
 | Revoke certificate | `DELETE /api/v1/ca/certificates/{serial}` | `RevokeCertificate` | `OpCARevoke` (`0xA2`) | `ca_revoke` | ✅ |
-| Renew certificate | `MISSING — docs/13 G7` | `RenewCertificate` | `OpCARenew` (`0xA3`) | `ca_renew` | ✅ |
-| Verify certificate | `MISSING — docs/13 G7` | `VerifyCertificate` | `OpCAVerify` (`0xA6`) | `ca_verify` | ✅ |
+| Renew certificate | `POST /api/v1/ca/certificates/{serial}/renew` | `RenewCertificate` | `OpCARenew` (`0xA3`) | `ca_renew` | ✅ |
+| Verify certificate | `POST /api/v1/ca/certificates/verify` | `VerifyCertificate` | `OpCAVerify` (`0xA6`) | `ca_verify` | ✅ |
 | Get CRL | `GET /api/v1/ca/crl` | `GetCRL` | `OpCACRL` (`0xA7`) | `ca_crl` | ✅ |
 | Get CA bundle | `GET /api/v1/ca/bundle` | `GetCABundle` | `OpCABundle` (`0xA8`) | `ca_bundle` | ✅ |
 | Get bootstrap bundle | `GET /api/v1/ca/bootstrap` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
@@ -46,10 +46,10 @@ MCP: ten `ca_*` tools.
 
 Two shapes:
 
-- **Renew and verify are missing from REST** while present on gRPC, QUIC, MCP
-  and embedded. So is the whole CA administration set (`InitCA`,
-  `InstallCACertificates`, `UninstallCACertificates`), which is gRPC and
-  embedded only.
+- **The CA administration set is missing from REST, QUIC and MCP**:
+  `InitCA`, `InstallCACertificates` and `UninstallCACertificates` are gRPC
+  and embedded only. Renew and verify reached REST in #452: the web service
+  serves them through the same `CAService` implementation gRPC serves.
 - **Three REST routes have no counterpart anywhere else**: `/ca/root`,
   `/ca/intermediate`, `/ca/bootstrap`. They serve raw trust material to clients
   that have none yet, which is why they are HTTP-only — a client that cannot
@@ -93,8 +93,20 @@ The SDK's REST adapter sends the message as it is and unwraps the envelope
 when one is present, so the same client works against either server.
 `TestCARESTWire_*` (`pkg/api/daemon/ca_rest_wire_parity_test.go`) drives
 the SDK against both real handlers over one CA for issue, get and sign-csr,
-including the refusals. The daemon's other CA routes (list, revoke, renew,
-verify) still answer their own flat JSON.
+including the refusals, and against the web service for revoke, renew and
+verify, scopes included.
+
+Revoke, renew and verify are proto-JSON on the web service too. Revoke and
+renew are item operations: the serial travels in the path and only in the
+path, and the body carries the rest of the request (`reason`, `delete_keys`;
+`valid_days`, `preserve_sans`, `new_sans`). A serial that is not 1–40 hex
+digits is refused with 400 before the CA is asked. Verify takes a
+`VerifyCertificateRequest` (`certificate_pem` or `certificate_der`, both
+base64 in proto-JSON) and answers a `VerifyCertificateResponse`.
+
+The daemon REST listener still answers list, revoke, renew and verify with
+its own flat JSON, and it revokes with `POST .../{serial}/revoke`. The SDK's
+revoke, renew and verify claims follow the web service.
 
 The MCP `ca_issue` tool takes the request flat — subject fields including
 `address` and `postal_code`, SANs as `dns_names` / `ip_addresses` /
@@ -113,7 +125,8 @@ requires each transport to return the gRPC service's certificate and to ask
 the CA for the same certificate.
 
 **Revocation is `DELETE .../{serial}`, not `POST .../{serial}/revoke`.** An
-earlier planning document specified the `POST` form; the code registers `DELETE`.
+earlier planning document specified the `POST` form; the web service
+registers `DELETE`, and the SDK sends it.
 
 ### Issuing from a CSR
 
@@ -276,6 +289,21 @@ Authorization runs first, so a non-root caller is still refused sign-csr with
 certificates this CA has issued is an inventory of every identity on the
 platform. `POST /api/v1/ca/sign-csr` is in the same gated half and in
 addition requires `ca:sign-csr` (above).
+
+Renew, revoke and verify are in the gated half and each also takes the scope
+of its gRPC twin:
+
+| Route | Scope |
+|---|---|
+| `POST /api/v1/ca/certificates/{serial}/renew` | `certs:generate` |
+| `DELETE /api/v1/ca/certificates/{serial}` | `certs:revoke` |
+| `POST /api/v1/ca/certificates/verify` | `certs:read` |
+
+Under platform-token auth a request with no token is refused with 401 and a
+token without the scope with 403, before the handler runs. Under the legacy
+JWT handler the role gate alone applies, because its sessions carry roles,
+not scopes. Devices, VPN and the provisioning gateway are scoped the same
+way. Sign CSR differs: its handler checks its scope itself and fails closed.
 
 `GET /api/v1/ca/bootstrap`, `/ca/crl`, `/ca/bundle`, `/ca/root`,
 `/ca/intermediate` and `/ca/info` stay **public**, and must: the

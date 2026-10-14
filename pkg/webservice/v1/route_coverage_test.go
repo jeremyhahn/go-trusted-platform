@@ -185,7 +185,7 @@ var unservedPrefixes = map[string]string{
 	"version": "daemon REST server, rest_service.go:handleVersion",
 }
 
-// unroutedClaims are the 49 claims where the server DOES serve the prefix but
+// unroutedClaims are the 26 claims where the server DOES serve the prefix but
 // the client asks for a path that does not resolve. This is #321's shape at
 // scale, and it is the actionable half of this test's findings.
 //
@@ -197,8 +197,8 @@ var unservedPrefixes = map[string]string{
 // The flat route table's path is passed to DoRequest VERBATIM — no identifier is
 // appended, it travels in the body — so these are the paths actually sent.
 //
-// Keyed by gRPC method, because a route need not be unique: today 49 methods
-// claim 49 distinct routes, but until #452 GET /api/v1/dns/records was claimed
+// Keyed by gRPC method, because a route need not be unique: today 26 methods
+// claim 26 distinct routes, but until #452 GET /api/v1/dns/records was claimed
 // by both GetRecord and ListRecords — a get-one and a list-many on the same
 // collection path, which is #266's shape ("answers four operations and 404s on
 // three") showing up in the client table rather than the server one. #452 moved
@@ -218,86 +218,51 @@ var unservedPrefixes = map[string]string{
 // is actively mounting the /sdn/gateway prefix on this router. The claims
 // describe the intended surface correctly; this router's half is what is
 // missing.
+//
+// ProvisioningGateway/GetBootConfig is the one gateway claim left (#452): its
+// three neighbours resolve under /provisioning/devices/{mac}
+// (rest/pxe/gateway.go), but platformd holds no per-MAC boot configuration to
+// answer it from — the PXE service's devices carry no kernel, initrd or
+// cmdline.
 var unroutedClaims = map[string]string{
-	"/platform.v1.CAService/RenewCertificate":                "POST /api/v1/ca/certificates/renew",
-	"/platform.v1.CAService/RevokeCertificate":               "POST /api/v1/ca/certificates/revoke",
-	"/platform.v1.CAService/VerifyCertificate":               "POST /api/v1/ca/certificates/verify",
-	"/platform.v1.ComputeService/AttestContainer":            "POST /api/v1/compute/containers/attest",
-	"/platform.v1.ComputeService/DeleteContainer":            "DELETE /api/v1/compute/containers",
-	"/platform.v1.ComputeService/StartContainer":             "POST /api/v1/compute/containers/start",
-	"/platform.v1.ComputeService/StopContainer":              "POST /api/v1/compute/containers/stop",
-	"/platform.v1.GatewayService/GetGatewayAdmittedVTEP":     "GET /api/v1/sdn/gateway/overlay/vteps/{vtep}",
-	"/platform.v1.GatewayService/GetNAT64Status":             "GET /api/v1/sdn/gateway/nat64/status",
-	"/platform.v1.GatewayService/GetPerfConntrack":           "GET /api/v1/sdn/gateway/perf/conntrack",
-	"/platform.v1.GatewayService/GetPerfDatapath":            "GET /api/v1/sdn/gateway/perf/datapath",
-	"/platform.v1.GatewayService/GetPerfFlows":               "POST /api/v1/sdn/gateway/perf/flows",
-	"/platform.v1.GatewayService/ListGatewayAdmittedVTEPs":   "GET /api/v1/sdn/gateway/overlay/vteps",
-	"/platform.v1.IDevIDService/CreateLDevID":                "POST /api/v1/idevid/ldevid",
-	"/platform.v1.IDevIDService/Generate":                    "POST /api/v1/idevid",
-	"/platform.v1.IDevIDService/GetCSR":                      "GET /api/v1/idevid/csr",
-	"/platform.v1.IDevIDService/GetCert":                     "GET /api/v1/idevid/cert",
-	"/platform.v1.IDevIDService/InstallCert":                 "POST /api/v1/idevid/cert",
-	"/platform.v1.InvitationService/DeleteInvitation":        "DELETE /api/v1/invitations",
-	"/platform.v1.InvitationService/GetInvitationByToken":    "GET /api/v1/invitations/by-token",
-	"/platform.v1.InvitationService/RevokeInvitation":        "POST /api/v1/invitations/revoke",
-	"/platform.v1.OverlayService/DeleteVNI":                  "DELETE /api/v1/overlay/vnis",
-	"/platform.v1.PXEService/Authorize":                      "POST /api/v1/pxe/devices/authorize",
-	"/platform.v1.PXEService/Quarantine":                     "POST /api/v1/pxe/devices/quarantine",
-	"/platform.v1.PXEService/UpdateState":                    "PUT /api/v1/pxe/devices/state",
-	"/platform.v1.PlatformDaemon/GetHealth":                  "GET /health",
-	"/platform.v1.PlatformDaemon/Liveness":                   "GET /health/live",
-	"/platform.v1.PlatformDaemon/Readiness":                  "GET /health/ready",
-	"/platform.v1.ProvisioningGateway/GetBootConfig":         "GET /api/v1/provisioning/boot-config",
-	"/platform.v1.ProvisioningGateway/NotifyInstallComplete": "POST /api/v1/provisioning/devices/install-complete",
-	"/platform.v1.ProvisioningGateway/RegisterPXEDevice":     "POST /api/v1/provisioning/pxe/register",
-	"/platform.v1.ProvisioningGateway/ReportDeviceState":     "POST /api/v1/provisioning/devices/state",
-	"/platform.v1.SDNService/ApplyPolicy":                    "POST /api/v1/sdn/policies/apply",
-	"/platform.v1.SwitchService/DisablePort":                 "POST /api/v1/switches/ports/disable",
-	"/platform.v1.SwitchService/EnablePort":                  "POST /api/v1/switches/ports/enable",
-	"/platform.v1.SwitchService/GetPortStatus":               "GET /api/v1/switches/ports/status",
-	"/platform.v1.SwitchService/ListPorts":                   "GET /api/v1/switches/ports",
-	"/platform.v1.SwitchService/SetPortVLAN":                 "POST /api/v1/switches/ports/vlan",
-	"/platform.v1.TPMService/ReadNVRAM":                      "GET /api/v1/tpm/nvram",
-	"/platform.v1.TPMService/UndefineNVRAM":                  "DELETE /api/v1/tpm/nvram",
-	"/platform.v1.TPMService/WriteNVRAM":                     "PUT /api/v1/tpm/nvram",
-	"/platform.v1.TenantService/DeleteTenant":                "DELETE /api/v1/tenants",
-	"/platform.v1.TenantService/ResumeTenant":                "POST /api/v1/tenants/resume",
-	"/platform.v1.TenantService/SuspendTenant":               "POST /api/v1/tenants/suspend",
-	"/platform.v1.TenantService/UpdateTenant":                "PUT /api/v1/tenants",
+	"/platform.v1.ComputeService/AttestContainer":          "POST /api/v1/compute/containers/attest",
+	"/platform.v1.ComputeService/DeleteContainer":          "DELETE /api/v1/compute/containers",
+	"/platform.v1.ComputeService/StartContainer":           "POST /api/v1/compute/containers/start",
+	"/platform.v1.ComputeService/StopContainer":            "POST /api/v1/compute/containers/stop",
+	"/platform.v1.GatewayService/GetGatewayAdmittedVTEP":   "GET /api/v1/sdn/gateway/overlay/vteps/{vtep}",
+	"/platform.v1.GatewayService/GetNAT64Status":           "GET /api/v1/sdn/gateway/nat64/status",
+	"/platform.v1.GatewayService/GetPerfConntrack":         "GET /api/v1/sdn/gateway/perf/conntrack",
+	"/platform.v1.GatewayService/GetPerfDatapath":          "GET /api/v1/sdn/gateway/perf/datapath",
+	"/platform.v1.GatewayService/GetPerfFlows":             "POST /api/v1/sdn/gateway/perf/flows",
+	"/platform.v1.GatewayService/ListGatewayAdmittedVTEPs": "GET /api/v1/sdn/gateway/overlay/vteps",
+	"/platform.v1.PXEService/Authorize":                    "POST /api/v1/pxe/devices/authorize",
+	"/platform.v1.PXEService/Quarantine":                   "POST /api/v1/pxe/devices/quarantine",
+	"/platform.v1.PXEService/UpdateState":                  "PUT /api/v1/pxe/devices/state",
+	"/platform.v1.PlatformDaemon/GetHealth":                "GET /health",
+	"/platform.v1.PlatformDaemon/Liveness":                 "GET /health/live",
+	"/platform.v1.PlatformDaemon/Readiness":                "GET /health/ready",
+	"/platform.v1.ProvisioningGateway/GetBootConfig":       "GET /api/v1/provisioning/devices/{mac}/boot-config",
+	"/platform.v1.SDNService/ApplyPolicy":                  "POST /api/v1/sdn/policies/apply",
+	"/platform.v1.SwitchService/DisablePort":               "POST /api/v1/switches/ports/disable",
+	"/platform.v1.SwitchService/EnablePort":                "POST /api/v1/switches/ports/enable",
+	"/platform.v1.SwitchService/GetPortStatus":             "GET /api/v1/switches/ports/status",
+	"/platform.v1.SwitchService/ListPorts":                 "GET /api/v1/switches/ports",
+	"/platform.v1.SwitchService/SetPortVLAN":               "POST /api/v1/switches/ports/vlan",
+	"/platform.v1.TPMService/ReadNVRAM":                    "GET /api/v1/tpm/nvram",
+	"/platform.v1.TPMService/UndefineNVRAM":                "DELETE /api/v1/tpm/nvram",
+	"/platform.v1.TPMService/WriteNVRAM":                   "PUT /api/v1/tpm/nvram",
 
-	// The IAM rows sit after the alphabetical run above, in their own block,
-	// so that adding them did not re-align every row beneath them and turn a
-	// 30-row addition into a 70-line diff.
-	//
-	// IAM (#400). Thirty claims, three families, each row a judgment made
-	// against the built router rather than against router.go's comments.
-	//
-	// (a) REPAIRED (#416). Seven item operations sent a collection path
-	// (#379's shape on the mutating verbs): DeleteUser, DeleteRole,
-	// DeleteGroup, DeleteTenant, AssignRole, RevokeRole and AddGroupMember.
-	// The SDK now claims the item routes the server serves
-	// (sdk/go/transport/rest/adapter.go, templatedRouteTable), so they resolve
-	// in the walk below and have no row here. RemoveGroupMember and
-	// GetCurrentUser, the two that resolved to the WRONG route, were fixed in
-	// #414 (#415).
-
-	// (b) RECORD — the rpc exists in iam.proto but rest/iam/router.go registers
-	// no route for it under any path: the REST surface is users, groups, roles,
-	// policies, apps and tenants, and nothing else (docs/iam/api.md §2). This
-	// is docs/13 G7's population: the route that is missing is the one named
-	// by the claim.
-	"/platform.v1.PlatformIAMService/CheckPermission": "POST /api/v1/iam/permissions/check",
-	"/platform.v1.PlatformIAMService/CreateToken":     "POST /api/v1/iam/tokens",
-	"/platform.v1.PlatformIAMService/RevokeToken":     "POST /api/v1/iam/tokens/revoke",
-	"/platform.v1.PlatformIAMService/VerifyToken":     "POST /api/v1/iam/tokens/verify",
-
-	// (c) RECORD — the claim names a gRPC method that does not exist. iam.proto
-	// declares 41 rpcs; these 19 keys are none of them, and no route serves
-	// their paths on either server. They are dead rows in the SDK's flat route
-	// table (the MCP adapter maps Authenticate to iam_authenticate; nothing
-	// else references any of them). Whether to delete them from the SDK table
-	// or keep them as G7 roadmap is an owner call raised on #400; until it is
-	// made they are recorded, not repaired.
+	// IAM (#400) has no row. (a) Seven item operations that sent a collection
+	// path were repaired in #416: the SDK claims the item routes the server
+	// serves (sdk/go/transport/rest/adapter.go, templatedRouteTable);
+	// RemoveGroupMember and GetCurrentUser were fixed in #414 (#415).
+	// (b) The four claims the IAM router did not serve were settled in #452:
+	// CheckPermission is now served at POST /api/v1/iam/permissions/check,
+	// and CreateToken, RevokeToken and VerifyToken are refused inside the SDK
+	// REST transport (restRefusedMethods, sdk/go/transport/rest/iam.go), so
+	// they make no claim. Token issuance is the OIDC login flow
+	// (docs/iam/api.md §6). (c) The 19 ghost methods once recorded here were
+	// deleted from the SDK table in #333.
 }
 
 func TestSDKRouteClaims_ResolveAgainstBuiltRoutes(t *testing.T) {

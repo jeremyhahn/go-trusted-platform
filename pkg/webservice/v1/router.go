@@ -421,6 +421,14 @@ func (v1Router *Router) caRoutes() {
 				v1Router.logger,
 				v1Router.ca,
 				v1Router.responseWriter).WithKMS(issuance.ClientKMS(kmsClient))
+			// Renew and verify are served by the same CA service gRPC
+			// serves; without it they answer 503.
+			if server := v1Router.restHandlerRegistry.CAServiceServer(); server != nil {
+				caRouter.WithService(server)
+			}
+			if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+				caRouter.SetScopeAuthorizer(scoped)
+			}
 			caRouter.RegisterPublicRoutes(v1Router.router)
 			caRouter.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 		},
@@ -892,11 +900,25 @@ func (v1Router *Router) pxeRoutes() {
 		v1Router.restHandlerRegistry.PXEWebhookEnabled())
 	// Split by principal. Service controls and the device lifecycle —
 	// authorize, quarantine, retry, state — are operator work and take the
-	// admin gate. The install-completion webhook stays off it because its
-	// caller is a booting node; it presents and checks no credential at
-	// all (#238), so it is mounted only when the operator enabled it.
+	// admin gate, then per route the pxe:* scope its RPC takes on gRPC. The
+	// install-completion webhook stays off both because its caller is a
+	// booting node; it presents and checks no credential at all (#238), so
+	// it is mounted only when the operator enabled it.
+	//
+	// The provisioning gateway's device reports (register, state, install
+	// complete) under /provisioning/devices/{mac}: the admin gate, then
+	// provisioning:write per route, as on gRPC. The install-complete report
+	// is the webhook's operation behind a credential, so it does not widen
+	// #238.
+	//
+	// Under the legacy JWT handler, which carries roles and no scopes, the
+	// role gate alone applies (docs/ipxe/api.md §5).
+	if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+		r.SetScopeAuthorizer(scoped)
+	}
 	r.RegisterMachineFacingRoutes(v1Router.router)
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+	r.RegisterGatewayRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
 func (v1Router *Router) tenantRoutes() {

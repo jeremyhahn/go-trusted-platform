@@ -50,6 +50,7 @@ func NewIDevIDRouter(
 //	GET    /api/v1/idevid/certificate              - GetIDevIDCertificate
 //	POST   /api/v1/idevid/certificate              - InstallIDevIDCertificate
 //	DELETE /api/v1/idevid/certificate              - DeleteIDevIDCertificate
+//	POST   /api/v1/idevid/ldevid                   - CreateLDevID
 //	GET    /api/v1/idevid/iak                      - GetIAKInfo
 //	POST   /api/v1/idevid/iak/generate             - GenerateIAK
 //	GET    /api/v1/idevid/iak/exists               - HasIAK
@@ -79,6 +80,7 @@ func (r *IDevIDRouter) RegisterRoutes(parent *mux.Router) {
 	sr.HandleFunc("/certificate", r.handlers.GetIDevIDCertificate).Methods("GET")
 	sr.HandleFunc("/certificate", r.handlers.InstallIDevIDCertificate).Methods("POST")
 	sr.HandleFunc("/certificate", r.handlers.DeleteIDevIDCertificate).Methods("DELETE")
+	sr.HandleFunc("/ldevid", r.handlers.CreateLDevID).Methods("POST")
 	sr.HandleFunc("/iak", r.handlers.GetIAKInfo).Methods("GET")
 	sr.HandleFunc("/iak/generate", r.handlers.GenerateIAK).Methods("POST")
 	sr.HandleFunc("/iak/exists", r.handlers.HasIAK).Methods("GET")

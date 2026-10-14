@@ -62,6 +62,7 @@ for the current production reference.
 | Dell | PowerEdge R640 | dedicated | control-plane, gateway, compute | Phase 2 (UNTESTED) |
 | Raspberry Pi | 4 Model B (`single-node/raspberrypi/rpi4`) | single-node | control-plane, gateway, compute | Factory SD-card image (`make image-rpi`, [factory-image/](factory-image/)); boots on the QEMU virt stand-in, hardware validation per its `user.md` |
 | Raspberry Pi | 4 Model B (`dedicated/raspberrypi/rpi4`) | dedicated | compute | Factory SD-card image (`platformctl diskimage create --target rpi --model rpi4 --role compute`); joins the x86 control plane and gateway. A one-port Pi cannot be the gateway and the control plane stays x86 — [its README](../configs/platform/templates/dedicated/raspberrypi/README.md) |
+| Raspberry Pi | 5 (`dedicated/raspberrypi/rpi5`) | dedicated | compute | **Experimental** (`--model rpi5 --role compute`): the image builds and the template validates, but no Pi 5 has booted it; the TPM behind the RP1 I/O chip, the serial console and the RP1 Ethernet are unvalidated — [its README](../configs/platform/templates/dedicated/raspberrypi/README.md) |
 
 **Each profile directory carries a `README.md` recording what the hardware needs
 before its templates will install** — BIOS settings, BMC behaviour, firmware quirks —

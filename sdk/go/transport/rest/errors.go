@@ -14,7 +14,12 @@
 // Package rest provides the REST transport adapter for the platform SDK.
 package rest
 
-import "fmt"
+import (
+	"fmt"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
 
 // ErrHTTPStatus represents an HTTP error response.
 type ErrHTTPStatus struct {
@@ -94,6 +99,26 @@ type ErrNotImplemented struct {
 // Error implements the error interface.
 func (e ErrNotImplemented) Error() string {
 	return fmt.Sprintf("method not implemented for REST transport: %s", e.Method)
+}
+
+// ErrNoRESTRoute is returned, before any request is built, for a gRPC method
+// the platform deliberately serves no REST route for. Reason names where the
+// operation is served instead. It carries codes.Unimplemented, the code the
+// platform's gRPC and QUIC servers answer the same methods with, so
+// status.Code(err) matches across transports while errors.As still finds it.
+type ErrNoRESTRoute struct {
+	Method string
+	Reason string
+}
+
+// Error implements the error interface.
+func (e ErrNoRESTRoute) Error() string {
+	return fmt.Sprintf("REST transport has no route for %s: %s", e.Method, e.Reason)
+}
+
+// GRPCStatus reports the error as codes.Unimplemented to status.FromError.
+func (e ErrNoRESTRoute) GRPCStatus() *status.Status {
+	return status.New(codes.Unimplemented, e.Error())
 }
 
 // ErrUnexpectedReplyType indicates a custom REST response decoder received

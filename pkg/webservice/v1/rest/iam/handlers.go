@@ -32,6 +32,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 const (
@@ -1387,6 +1388,85 @@ func (h *IAMHandlers) TestPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.respWriter.Success200(w, r, resp)
+}
+
+// CheckPermission handles POST /api/v1/iam/permissions/check and its
+// /tenants/{tenant}/ twin. It asks the policy enforcement point the gRPC
+// CheckPermission RPC uses for the live decision on one subject, action and
+// resource; the subject's tenant is always the request's resolved tenant.
+func (h *IAMHandlers) CheckPermission(w http.ResponseWriter, r *http.Request) {
+	if h.pepClient == nil {
+		err := ErrPEPClientMissing{}
+		h.respWriter.Write(w, r, http.StatusServiceUnavailable, restwire.WebServiceResponse{
+			Code:  http.StatusServiceUnavailable,
+			Error: err.Error(),
+		})
+		return
+	}
+
+	tenantID := h.getTenantID(r)
+	if tenantID == "" {
+		h.respWriter.Error400(w, r, ErrMissingTenantID{})
+		return
+	}
+
+	var req CheckPermissionRequest
+	if !h.decodeTenantBody(w, r, tenantID, &req) {
+		return
+	}
+
+	if req.SubjectID == "" {
+		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: "subject_id is required"})
+		return
+	}
+	if req.Action == "" {
+		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: "action is required"})
+		return
+	}
+	if req.Resource == "" {
+		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: "resource is required"})
+		return
+	}
+
+	ctx, cancel := h.createContext()
+	defer cancel()
+
+	resp, err := h.pepClient.Check(ctx, &iamsdk.CheckRequest{
+		Subject: iamsdk.CheckSubject{
+			ID:         req.SubjectID,
+			TenantID:   tenantID,
+			Roles:      req.Roles,
+			Groups:     req.Groups,
+			Attributes: toAnyMap(req.Attributes),
+		},
+		Action:   req.Action,
+		Resource: req.Resource,
+		Context:  toAnyMap(req.Context),
+	})
+	if err != nil {
+		h.handleError(w, r, err)
+		return
+	}
+
+	h.respWriter.Success200(w, r, &CheckPermissionResponse{
+		Allowed:          resp.Allowed,
+		MatchedPolicy:    resp.MatchedPolicy,
+		MatchedRule:      resp.MatchedRule,
+		EvaluationTimeNs: resp.EvaluationTimeNs,
+	})
+}
+
+// toAnyMap widens a string map to the map[string]interface{} the PEP's
+// subject attributes and request context take; an empty map stays nil.
+func toAnyMap(in map[string]string) map[string]interface{} {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]interface{}, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // App Handlers
