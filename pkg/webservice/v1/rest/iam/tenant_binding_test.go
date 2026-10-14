@@ -114,8 +114,8 @@ func adminSessionIAMServer(t *testing.T, client IAMClient, pep PEPClient) *httpt
 	require.NoError(t, err)
 
 	root := mux.NewRouter()
-	// The SDK probes /health on Connect; the daemon serves it unauthenticated.
-	root.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+	// The SDK probes /health/live on Connect; the daemon serves it unauthenticated.
+	root.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	iamRouter.RegisterRoutes(root.PathPrefix("/api/v1").Subrouter())

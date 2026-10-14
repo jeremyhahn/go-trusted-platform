@@ -91,9 +91,8 @@ columns are not a stable interface.
 `ComponentHealth.Details`, the field that carries the actually diagnostic
 content (stratum, certificate expiry, listen address, connection counts), is
 **not rendered in table form at all**, and `HealthInfo` as returned by the gRPC
-projection does not carry it either. To see details, query
-`GET /api/v1/platform/health` or the QUIC health opcode instead
-([api.md](api.md) §3).
+projection does not carry it either. No other transport carries it today
+([api.md](api.md) §5).
 
 ## 4. Exit codes
 
@@ -130,8 +129,8 @@ test "$(platformctl --output json health | jq -r .status)" = "healthy"
 | Capability | Reach it with |
 |---|---|
 | A single named component | No CLI verb. Embedded Go (`Daemon.HealthCheckComponent`) only — [api.md](api.md) §3 |
-| `ComponentHealth.Details` | `GET /api/v1/platform/health`, `GET /api/v1/health`, QUIC `OpHealth`, MCP `platform_health` |
-| Liveness / readiness probes | QUIC `OpLiveness` / `OpReadiness`, MCP `platform_liveness` / `platform_readiness` |
+| `ComponentHealth.Details` | No transport carries it — [api.md](api.md) §5 |
+| Liveness / readiness probes | REST `GET /health/live` / `/health/ready`, gRPC `PlatformDaemon/Liveness` / `Readiness`, QUIC `OpLiveness` / `OpReadiness`, MCP `platform_liveness` / `platform_readiness` |
 | Registering or removing a checker | Embedded Go only (`Daemon.RegisterHealthChecker`) |
 | Listing registered checker names | Embedded Go only (`Registry.List`) |
 

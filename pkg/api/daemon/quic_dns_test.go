@@ -17,8 +17,10 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
@@ -80,9 +82,7 @@ func TestHandleDNSOperation_ServiceNotAvailable(t *testing.T) {
 		{"ListZones", quicwire.OpDNSListZones},
 		{"Resolve", quicwire.OpDNSResolve},
 		{"GetConfig", quicwire.OpDNSGetConfig},
-		{"UpdateConfig", quicwire.OpDNSUpdateConfig},
 		{"GetMetrics", quicwire.OpDNSGetMetrics},
-		{"FlushCache", quicwire.OpDNSFlushCache},
 	}
 
 	for _, tc := range opcodes {
@@ -187,8 +187,6 @@ func TestDNSRecord_Fields(t *testing.T) {
 
 func TestDNSErrors(t *testing.T) {
 	assert.Equal(t, "DNS service not available", ErrDNSServiceNotAvailable{}.Error())
-	assert.Equal(t, "DNS configuration updates are not supported at runtime", ErrDNSConfigUpdateNotSupported{}.Error())
-	assert.Equal(t, "DNS cache flushing is not supported", ErrDNSCacheFlushNotSupported{}.Error())
 	assert.Equal(t, "DNS zone not found: example.com", ErrDNSZoneNotFound{Zone: "example.com"}.Error())
 	assert.Equal(t, "DNS record not found: www.example.com A", ErrDNSRecordNotFound{Name: "www.example.com", RecordType: "A"}.Error())
 
@@ -349,16 +347,23 @@ func TestDNSGetMetrics_DaemonNative(t *testing.T) {
 	assert.Equal(t, 2, result.Metrics.ZoneCount)
 }
 
-func TestDNSUpdateConfig_DaemonNativeNotImplemented(t *testing.T) {
+// TestDNSRetiredOpcodes_AnswerUnknownOpcode pins 0x2B (UpdateConfig) and 0x2D
+// (FlushCache), retired unimplemented in #317. The authorization catalog no
+// longer classifies them, so the wire refuses them before dispatch, and the
+// DNS dispatcher itself answers the unknown-opcode error, never a stub.
+func TestDNSRetiredOpcodes_AnswerUnknownOpcode(t *testing.T) {
 	handler := createDNSUnitTestHandler(NewMockDNSService())
-	req := createDNSUnitTestRequest(t, quicwire.OpDNSUpdateConfig, &DNSUpdateConfigRequest{})
-	resp := handler.HandleRequest(context.Background(), req)
-	assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
-}
+	for _, opcode := range []byte{0x2B, 0x2D} {
+		t.Run(fmt.Sprintf("0x%02X", opcode), func(t *testing.T) {
+			req := &quicwire.Request{Opcode: opcode, Payload: []byte{}}
 
-func TestDNSFlushCache_DaemonNativeNotImplemented(t *testing.T) {
-	handler := createDNSUnitTestHandler(NewMockDNSService())
-	req := createDNSUnitTestRequest(t, quicwire.OpDNSFlushCache, &DNSFlushCacheRequest{Zone: "example.com."})
-	resp := handler.HandleRequest(context.Background(), req)
-	assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
+			resp := handler.HandleRequest(context.Background(), req)
+			assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
+			assert.Equal(t, quic.ErrOperationNotClassified{Opcode: opcode}.Error(), string(resp.Payload))
+
+			resp = handler.handleDNSOperation(context.Background(), req)
+			assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
+			assert.Equal(t, ErrQUICUnknownOpcode{Opcode: opcode}.Error(), string(resp.Payload))
+		})
+	}
 }

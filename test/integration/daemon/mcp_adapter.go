@@ -29,6 +29,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"google.golang.org/protobuf/encoding/protojson"
+
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -301,26 +304,18 @@ func (m *MCPAdapter) callTool(ctx context.Context, toolName string, args map[str
 
 // Health retrieves health status via MCP tool call.
 func (m *MCPAdapter) Health(ctx context.Context) (*HealthResult, error) {
-	var resp mcpHealthResponse
-	if err := m.callTool(ctx, "platform_health", nil, &resp); err != nil {
+	// platform_health is unauthenticated, so it answers the status only: a
+	// GetHealthResponse with no components, in protojson.
+	var raw json.RawMessage
+	if err := m.callTool(ctx, "platform_health", nil, &raw); err != nil {
 		return nil, err
 	}
 
-	result := &HealthResult{
-		Status:    resp.Status,
-		Timestamp: mcpUnixMillisToTime(resp.Timestamp),
+	var resp pb.GetHealthResponse
+	if err := protojson.Unmarshal(raw, &resp); err != nil {
+		return nil, ErrMCPResponseParseFailed{Operation: "platform_health", Err: err}
 	}
-
-	for _, c := range resp.Components {
-		result.Components = append(result.Components, ComponentHealth{
-			Name:      c.Name,
-			Status:    c.Status,
-			Message:   c.Message,
-			LastCheck: mcpUnixMillisToTime(c.LastCheck),
-		})
-	}
-
-	return result, nil
+	return healthResultFromProto(&resp), nil
 }
 
 // =============================================================================
@@ -521,19 +516,6 @@ func (m *MCPAdapter) ListProtocols(ctx context.Context) (*ListProtocolsResult, e
 // =============================================================================
 // MCP Response Types
 // =============================================================================
-
-type mcpHealthResponse struct {
-	Status     string                       `json:"status"`
-	Components []mcpComponentHealthResponse `json:"components,omitempty"`
-	Timestamp  int64                        `json:"timestamp"`
-}
-
-type mcpComponentHealthResponse struct {
-	Name      string `json:"name"`
-	Status    string `json:"status"`
-	Message   string `json:"message,omitempty"`
-	LastCheck int64  `json:"lastCheck"`
-}
 
 type mcpStatusResponse struct {
 	Status    string               `json:"status"`

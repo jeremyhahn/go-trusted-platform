@@ -2707,6 +2707,200 @@ func (x *VerifyQuoteResponse) GetActualPcrs() []*PCRValue {
 	return nil
 }
 
+// CertifyRequest asks the TPM to certify, under the IAK, that the key at a
+// persistent handle (0x81000000-0x81FFFFFF) is resident in this TPM
+// (TPM2_Certify).
+type CertifyRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	KeyHandle uint32                 `protobuf:"varint,1,opt,name=key_handle,json=keyHandle,proto3" json:"key_handle,omitempty"`
+	// key_password is the certified key's authValue; empty when it has none.
+	KeyPassword string `protobuf:"bytes,2,opt,name=key_password,json=keyPassword,proto3" json:"key_password,omitempty"`
+	// nonce is the caller's qualifying data, echoed in certify_info's
+	// extraData. It is not channel-bound. At most 64 bytes.
+	Nonce         []byte `protobuf:"bytes,3,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CertifyRequest) Reset() {
+	*x = CertifyRequest{}
+	mi := &file_tpm_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CertifyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CertifyRequest) ProtoMessage() {}
+
+func (x *CertifyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_tpm_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CertifyRequest.ProtoReflect.Descriptor instead.
+func (*CertifyRequest) Descriptor() ([]byte, []int) {
+	return file_tpm_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *CertifyRequest) GetKeyHandle() uint32 {
+	if x != nil {
+		return x.KeyHandle
+	}
+	return 0
+}
+
+func (x *CertifyRequest) GetKeyPassword() string {
+	if x != nil {
+		return x.KeyPassword
+	}
+	return ""
+}
+
+func (x *CertifyRequest) GetNonce() []byte {
+	if x != nil {
+		return x.Nonce
+	}
+	return nil
+}
+
+type CertifyResponse struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Status *Status                `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
+	// certify_info is the marshalled TPMS_ATTEST the IAK signed.
+	CertifyInfo []byte `protobuf:"bytes,2,opt,name=certify_info,json=certifyInfo,proto3" json:"certify_info,omitempty"`
+	// signature is the bare signature over certify_info: RSA bytes, or an
+	// ASN.1 DER ECDSA (r, s).
+	Signature []byte `protobuf:"bytes,3,opt,name=signature,proto3" json:"signature,omitempty"`
+	// signature_algorithm is the x509.SignatureAlgorithm name the IAK signed
+	// under (e.g. "SHA256-RSAPSS").
+	SignatureAlgorithm string `protobuf:"bytes,4,opt,name=signature_algorithm,json=signatureAlgorithm,proto3" json:"signature_algorithm,omitempty"`
+	// certify_info_signature is the marshalled TPMT_SIGNATURE, the form a
+	// remote verifier hands to TPM2 certify verification.
+	CertifyInfoSignature []byte `protobuf:"bytes,5,opt,name=certify_info_signature,json=certifyInfoSignature,proto3" json:"certify_info_signature,omitempty"`
+	// attesting_key_public is the IAK public key, PKIX DER.
+	AttestingKeyPublic []byte `protobuf:"bytes,6,opt,name=attesting_key_public,json=attestingKeyPublic,proto3" json:"attesting_key_public,omitempty"`
+	// attested_key_public is the certified key's public key, PKIX DER.
+	AttestedKeyPublic []byte `protobuf:"bytes,7,opt,name=attested_key_public,json=attestedKeyPublic,proto3" json:"attested_key_public,omitempty"`
+	// attesting_key_public_area is the IAK's marshalled TPMT_PUBLIC.
+	AttestingKeyPublicArea []byte `protobuf:"bytes,8,opt,name=attesting_key_public_area,json=attestingKeyPublicArea,proto3" json:"attesting_key_public_area,omitempty"`
+	// attested_key_public_area is the certified key's marshalled TPMT_PUBLIC.
+	AttestedKeyPublicArea []byte `protobuf:"bytes,9,opt,name=attested_key_public_area,json=attestedKeyPublicArea,proto3" json:"attested_key_public_area,omitempty"`
+	// nonce echoes the qualifying data the TPM certified under.
+	Nonce         []byte `protobuf:"bytes,10,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CertifyResponse) Reset() {
+	*x = CertifyResponse{}
+	mi := &file_tpm_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CertifyResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CertifyResponse) ProtoMessage() {}
+
+func (x *CertifyResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_tpm_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CertifyResponse.ProtoReflect.Descriptor instead.
+func (*CertifyResponse) Descriptor() ([]byte, []int) {
+	return file_tpm_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *CertifyResponse) GetStatus() *Status {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
+func (x *CertifyResponse) GetCertifyInfo() []byte {
+	if x != nil {
+		return x.CertifyInfo
+	}
+	return nil
+}
+
+func (x *CertifyResponse) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
+func (x *CertifyResponse) GetSignatureAlgorithm() string {
+	if x != nil {
+		return x.SignatureAlgorithm
+	}
+	return ""
+}
+
+func (x *CertifyResponse) GetCertifyInfoSignature() []byte {
+	if x != nil {
+		return x.CertifyInfoSignature
+	}
+	return nil
+}
+
+func (x *CertifyResponse) GetAttestingKeyPublic() []byte {
+	if x != nil {
+		return x.AttestingKeyPublic
+	}
+	return nil
+}
+
+func (x *CertifyResponse) GetAttestedKeyPublic() []byte {
+	if x != nil {
+		return x.AttestedKeyPublic
+	}
+	return nil
+}
+
+func (x *CertifyResponse) GetAttestingKeyPublicArea() []byte {
+	if x != nil {
+		return x.AttestingKeyPublicArea
+	}
+	return nil
+}
+
+func (x *CertifyResponse) GetAttestedKeyPublicArea() []byte {
+	if x != nil {
+		return x.AttestedKeyPublicArea
+	}
+	return nil
+}
+
+func (x *CertifyResponse) GetNonce() []byte {
+	if x != nil {
+		return x.Nonce
+	}
+	return nil
+}
+
 type GetEventLogRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Format        string                 `protobuf:"bytes,1,opt,name=format,proto3" json:"format,omitempty"` // json, binary, text
@@ -2716,7 +2910,7 @@ type GetEventLogRequest struct {
 
 func (x *GetEventLogRequest) Reset() {
 	*x = GetEventLogRequest{}
-	mi := &file_tpm_proto_msgTypes[40]
+	mi := &file_tpm_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2728,7 +2922,7 @@ func (x *GetEventLogRequest) String() string {
 func (*GetEventLogRequest) ProtoMessage() {}
 
 func (x *GetEventLogRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tpm_proto_msgTypes[40]
+	mi := &file_tpm_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2741,7 +2935,7 @@ func (x *GetEventLogRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEventLogRequest.ProtoReflect.Descriptor instead.
 func (*GetEventLogRequest) Descriptor() ([]byte, []int) {
-	return file_tpm_proto_rawDescGZIP(), []int{40}
+	return file_tpm_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *GetEventLogRequest) GetFormat() string {
@@ -2767,7 +2961,7 @@ type GetEventLogResponse struct {
 
 func (x *GetEventLogResponse) Reset() {
 	*x = GetEventLogResponse{}
-	mi := &file_tpm_proto_msgTypes[41]
+	mi := &file_tpm_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2779,7 +2973,7 @@ func (x *GetEventLogResponse) String() string {
 func (*GetEventLogResponse) ProtoMessage() {}
 
 func (x *GetEventLogResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tpm_proto_msgTypes[41]
+	mi := &file_tpm_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2792,7 +2986,7 @@ func (x *GetEventLogResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEventLogResponse.ProtoReflect.Descriptor instead.
 func (*GetEventLogResponse) Descriptor() ([]byte, []int) {
-	return file_tpm_proto_rawDescGZIP(), []int{41}
+	return file_tpm_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *GetEventLogResponse) GetEventLog() []byte {
@@ -2843,7 +3037,7 @@ type EventLogEntry struct {
 
 func (x *EventLogEntry) Reset() {
 	*x = EventLogEntry{}
-	mi := &file_tpm_proto_msgTypes[42]
+	mi := &file_tpm_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2855,7 +3049,7 @@ func (x *EventLogEntry) String() string {
 func (*EventLogEntry) ProtoMessage() {}
 
 func (x *EventLogEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_tpm_proto_msgTypes[42]
+	mi := &file_tpm_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2868,7 +3062,7 @@ func (x *EventLogEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EventLogEntry.ProtoReflect.Descriptor instead.
 func (*EventLogEntry) Descriptor() ([]byte, []int) {
-	return file_tpm_proto_rawDescGZIP(), []int{42}
+	return file_tpm_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *EventLogEntry) GetEventNum() uint32 {
@@ -2931,7 +3125,7 @@ type EventDigest struct {
 
 func (x *EventDigest) Reset() {
 	*x = EventDigest{}
-	mi := &file_tpm_proto_msgTypes[43]
+	mi := &file_tpm_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2943,7 +3137,7 @@ func (x *EventDigest) String() string {
 func (*EventDigest) ProtoMessage() {}
 
 func (x *EventDigest) ProtoReflect() protoreflect.Message {
-	mi := &file_tpm_proto_msgTypes[43]
+	mi := &file_tpm_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2956,7 +3150,7 @@ func (x *EventDigest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EventDigest.ProtoReflect.Descriptor instead.
 func (*EventDigest) Descriptor() ([]byte, []int) {
-	return file_tpm_proto_rawDescGZIP(), []int{43}
+	return file_tpm_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *EventDigest) GetAlgorithmId() string {
@@ -2983,7 +3177,7 @@ type GetPCRsRequest struct {
 
 func (x *GetPCRsRequest) Reset() {
 	*x = GetPCRsRequest{}
-	mi := &file_tpm_proto_msgTypes[44]
+	mi := &file_tpm_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2995,7 +3189,7 @@ func (x *GetPCRsRequest) String() string {
 func (*GetPCRsRequest) ProtoMessage() {}
 
 func (x *GetPCRsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tpm_proto_msgTypes[44]
+	mi := &file_tpm_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3008,7 +3202,7 @@ func (x *GetPCRsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPCRsRequest.ProtoReflect.Descriptor instead.
 func (*GetPCRsRequest) Descriptor() ([]byte, []int) {
-	return file_tpm_proto_rawDescGZIP(), []int{44}
+	return file_tpm_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *GetPCRsRequest) GetIndices() []uint32 {
@@ -3034,7 +3228,7 @@ type GetPCRsResponse struct {
 
 func (x *GetPCRsResponse) Reset() {
 	*x = GetPCRsResponse{}
-	mi := &file_tpm_proto_msgTypes[45]
+	mi := &file_tpm_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3046,7 +3240,7 @@ func (x *GetPCRsResponse) String() string {
 func (*GetPCRsResponse) ProtoMessage() {}
 
 func (x *GetPCRsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tpm_proto_msgTypes[45]
+	mi := &file_tpm_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3059,7 +3253,7 @@ func (x *GetPCRsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPCRsResponse.ProtoReflect.Descriptor instead.
 func (*GetPCRsResponse) Descriptor() ([]byte, []int) {
-	return file_tpm_proto_rawDescGZIP(), []int{45}
+	return file_tpm_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *GetPCRsResponse) GetPcrValues() []*PCRValue {
@@ -3088,7 +3282,7 @@ type DefineNVRAMRequest struct {
 
 func (x *DefineNVRAMRequest) Reset() {
 	*x = DefineNVRAMRequest{}
-	mi := &file_tpm_proto_msgTypes[46]
+	mi := &file_tpm_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3100,7 +3294,7 @@ func (x *DefineNVRAMRequest) String() string {
 func (*DefineNVRAMRequest) ProtoMessage() {}
 
 func (x *DefineNVRAMRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tpm_proto_msgTypes[46]
+	mi := &file_tpm_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3113,7 +3307,7 @@ func (x *DefineNVRAMRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DefineNVRAMRequest.ProtoReflect.Descriptor instead.
 func (*DefineNVRAMRequest) Descriptor() ([]byte, []int) {
-	return file_tpm_proto_rawDescGZIP(), []int{46}
+	return file_tpm_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *DefineNVRAMRequest) GetIndex() uint32 {
@@ -3160,7 +3354,7 @@ type DefineNVRAMResponse struct {
 
 func (x *DefineNVRAMResponse) Reset() {
 	*x = DefineNVRAMResponse{}
-	mi := &file_tpm_proto_msgTypes[47]
+	mi := &file_tpm_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3172,7 +3366,7 @@ func (x *DefineNVRAMResponse) String() string {
 func (*DefineNVRAMResponse) ProtoMessage() {}
 
 func (x *DefineNVRAMResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tpm_proto_msgTypes[47]
+	mi := &file_tpm_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3185,7 +3379,7 @@ func (x *DefineNVRAMResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DefineNVRAMResponse.ProtoReflect.Descriptor instead.
 func (*DefineNVRAMResponse) Descriptor() ([]byte, []int) {
-	return file_tpm_proto_rawDescGZIP(), []int{47}
+	return file_tpm_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *DefineNVRAMResponse) GetStatus() *Status {
@@ -3207,7 +3401,7 @@ type WriteNVRAMRequest struct {
 
 func (x *WriteNVRAMRequest) Reset() {
 	*x = WriteNVRAMRequest{}
-	mi := &file_tpm_proto_msgTypes[48]
+	mi := &file_tpm_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3219,7 +3413,7 @@ func (x *WriteNVRAMRequest) String() string {
 func (*WriteNVRAMRequest) ProtoMessage() {}
 
 func (x *WriteNVRAMRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tpm_proto_msgTypes[48]
+	mi := &file_tpm_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3232,7 +3426,7 @@ func (x *WriteNVRAMRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteNVRAMRequest.ProtoReflect.Descriptor instead.
 func (*WriteNVRAMRequest) Descriptor() ([]byte, []int) {
-	return file_tpm_proto_rawDescGZIP(), []int{48}
+	return file_tpm_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *WriteNVRAMRequest) GetIndex() uint32 {
@@ -3272,7 +3466,7 @@ type WriteNVRAMResponse struct {
 
 func (x *WriteNVRAMResponse) Reset() {
 	*x = WriteNVRAMResponse{}
-	mi := &file_tpm_proto_msgTypes[49]
+	mi := &file_tpm_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3284,7 +3478,7 @@ func (x *WriteNVRAMResponse) String() string {
 func (*WriteNVRAMResponse) ProtoMessage() {}
 
 func (x *WriteNVRAMResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tpm_proto_msgTypes[49]
+	mi := &file_tpm_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3297,7 +3491,7 @@ func (x *WriteNVRAMResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteNVRAMResponse.ProtoReflect.Descriptor instead.
 func (*WriteNVRAMResponse) Descriptor() ([]byte, []int) {
-	return file_tpm_proto_rawDescGZIP(), []int{49}
+	return file_tpm_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *WriteNVRAMResponse) GetStatus() *Status {
@@ -3319,7 +3513,7 @@ type ReadNVRAMRequest struct {
 
 func (x *ReadNVRAMRequest) Reset() {
 	*x = ReadNVRAMRequest{}
-	mi := &file_tpm_proto_msgTypes[50]
+	mi := &file_tpm_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3331,7 +3525,7 @@ func (x *ReadNVRAMRequest) String() string {
 func (*ReadNVRAMRequest) ProtoMessage() {}
 
 func (x *ReadNVRAMRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tpm_proto_msgTypes[50]
+	mi := &file_tpm_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3344,7 +3538,7 @@ func (x *ReadNVRAMRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadNVRAMRequest.ProtoReflect.Descriptor instead.
 func (*ReadNVRAMRequest) Descriptor() ([]byte, []int) {
-	return file_tpm_proto_rawDescGZIP(), []int{50}
+	return file_tpm_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *ReadNVRAMRequest) GetIndex() uint32 {
@@ -3384,7 +3578,7 @@ type ReadNVRAMResponse struct {
 
 func (x *ReadNVRAMResponse) Reset() {
 	*x = ReadNVRAMResponse{}
-	mi := &file_tpm_proto_msgTypes[51]
+	mi := &file_tpm_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3396,7 +3590,7 @@ func (x *ReadNVRAMResponse) String() string {
 func (*ReadNVRAMResponse) ProtoMessage() {}
 
 func (x *ReadNVRAMResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tpm_proto_msgTypes[51]
+	mi := &file_tpm_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3409,7 +3603,7 @@ func (x *ReadNVRAMResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadNVRAMResponse.ProtoReflect.Descriptor instead.
 func (*ReadNVRAMResponse) Descriptor() ([]byte, []int) {
-	return file_tpm_proto_rawDescGZIP(), []int{51}
+	return file_tpm_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *ReadNVRAMResponse) GetData() []byte {
@@ -3433,7 +3627,7 @@ type UndefineNVRAMRequest struct {
 
 func (x *UndefineNVRAMRequest) Reset() {
 	*x = UndefineNVRAMRequest{}
-	mi := &file_tpm_proto_msgTypes[52]
+	mi := &file_tpm_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3445,7 +3639,7 @@ func (x *UndefineNVRAMRequest) String() string {
 func (*UndefineNVRAMRequest) ProtoMessage() {}
 
 func (x *UndefineNVRAMRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tpm_proto_msgTypes[52]
+	mi := &file_tpm_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3458,7 +3652,7 @@ func (x *UndefineNVRAMRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UndefineNVRAMRequest.ProtoReflect.Descriptor instead.
 func (*UndefineNVRAMRequest) Descriptor() ([]byte, []int) {
-	return file_tpm_proto_rawDescGZIP(), []int{52}
+	return file_tpm_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *UndefineNVRAMRequest) GetIndex() uint32 {
@@ -3491,7 +3685,7 @@ type UndefineNVRAMResponse struct {
 
 func (x *UndefineNVRAMResponse) Reset() {
 	*x = UndefineNVRAMResponse{}
-	mi := &file_tpm_proto_msgTypes[53]
+	mi := &file_tpm_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3503,7 +3697,7 @@ func (x *UndefineNVRAMResponse) String() string {
 func (*UndefineNVRAMResponse) ProtoMessage() {}
 
 func (x *UndefineNVRAMResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tpm_proto_msgTypes[53]
+	mi := &file_tpm_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3516,7 +3710,7 @@ func (x *UndefineNVRAMResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UndefineNVRAMResponse.ProtoReflect.Descriptor instead.
 func (*UndefineNVRAMResponse) Descriptor() ([]byte, []int) {
-	return file_tpm_proto_rawDescGZIP(), []int{53}
+	return file_tpm_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *UndefineNVRAMResponse) GetStatus() *Status {
@@ -3536,7 +3730,7 @@ type GetRandomRequest struct {
 
 func (x *GetRandomRequest) Reset() {
 	*x = GetRandomRequest{}
-	mi := &file_tpm_proto_msgTypes[54]
+	mi := &file_tpm_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3548,7 +3742,7 @@ func (x *GetRandomRequest) String() string {
 func (*GetRandomRequest) ProtoMessage() {}
 
 func (x *GetRandomRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tpm_proto_msgTypes[54]
+	mi := &file_tpm_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3561,7 +3755,7 @@ func (x *GetRandomRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRandomRequest.ProtoReflect.Descriptor instead.
 func (*GetRandomRequest) Descriptor() ([]byte, []int) {
-	return file_tpm_proto_rawDescGZIP(), []int{54}
+	return file_tpm_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *GetRandomRequest) GetNumBytes() uint32 {
@@ -3580,7 +3774,7 @@ type GetRandomResponse struct {
 
 func (x *GetRandomResponse) Reset() {
 	*x = GetRandomResponse{}
-	mi := &file_tpm_proto_msgTypes[55]
+	mi := &file_tpm_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3592,7 +3786,7 @@ func (x *GetRandomResponse) String() string {
 func (*GetRandomResponse) ProtoMessage() {}
 
 func (x *GetRandomResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tpm_proto_msgTypes[55]
+	mi := &file_tpm_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3605,7 +3799,7 @@ func (x *GetRandomResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRandomResponse.ProtoReflect.Descriptor instead.
 func (*GetRandomResponse) Descriptor() ([]byte, []int) {
-	return file_tpm_proto_rawDescGZIP(), []int{55}
+	return file_tpm_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *GetRandomResponse) GetRandomBytes() []byte {
@@ -3633,7 +3827,7 @@ type MakeCredentialRequest struct {
 
 func (x *MakeCredentialRequest) Reset() {
 	*x = MakeCredentialRequest{}
-	mi := &file_tpm_proto_msgTypes[56]
+	mi := &file_tpm_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3645,7 +3839,7 @@ func (x *MakeCredentialRequest) String() string {
 func (*MakeCredentialRequest) ProtoMessage() {}
 
 func (x *MakeCredentialRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tpm_proto_msgTypes[56]
+	mi := &file_tpm_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3658,7 +3852,7 @@ func (x *MakeCredentialRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MakeCredentialRequest.ProtoReflect.Descriptor instead.
 func (*MakeCredentialRequest) Descriptor() ([]byte, []int) {
-	return file_tpm_proto_rawDescGZIP(), []int{56}
+	return file_tpm_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *MakeCredentialRequest) GetAkName() []byte {
@@ -3700,7 +3894,7 @@ type MakeCredentialResponse struct {
 
 func (x *MakeCredentialResponse) Reset() {
 	*x = MakeCredentialResponse{}
-	mi := &file_tpm_proto_msgTypes[57]
+	mi := &file_tpm_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3712,7 +3906,7 @@ func (x *MakeCredentialResponse) String() string {
 func (*MakeCredentialResponse) ProtoMessage() {}
 
 func (x *MakeCredentialResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tpm_proto_msgTypes[57]
+	mi := &file_tpm_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3725,7 +3919,7 @@ func (x *MakeCredentialResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MakeCredentialResponse.ProtoReflect.Descriptor instead.
 func (*MakeCredentialResponse) Descriptor() ([]byte, []int) {
-	return file_tpm_proto_rawDescGZIP(), []int{57}
+	return file_tpm_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *MakeCredentialResponse) GetCredentialBlob() []byte {
@@ -3761,7 +3955,7 @@ type TPMActivateCredentialRequest struct {
 
 func (x *TPMActivateCredentialRequest) Reset() {
 	*x = TPMActivateCredentialRequest{}
-	mi := &file_tpm_proto_msgTypes[58]
+	mi := &file_tpm_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3773,7 +3967,7 @@ func (x *TPMActivateCredentialRequest) String() string {
 func (*TPMActivateCredentialRequest) ProtoMessage() {}
 
 func (x *TPMActivateCredentialRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tpm_proto_msgTypes[58]
+	mi := &file_tpm_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3786,7 +3980,7 @@ func (x *TPMActivateCredentialRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TPMActivateCredentialRequest.ProtoReflect.Descriptor instead.
 func (*TPMActivateCredentialRequest) Descriptor() ([]byte, []int) {
-	return file_tpm_proto_rawDescGZIP(), []int{58}
+	return file_tpm_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *TPMActivateCredentialRequest) GetCredentialBlob() []byte {
@@ -3812,7 +4006,7 @@ type TPMActivateCredentialResponse struct {
 
 func (x *TPMActivateCredentialResponse) Reset() {
 	*x = TPMActivateCredentialResponse{}
-	mi := &file_tpm_proto_msgTypes[59]
+	mi := &file_tpm_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3824,7 +4018,7 @@ func (x *TPMActivateCredentialResponse) String() string {
 func (*TPMActivateCredentialResponse) ProtoMessage() {}
 
 func (x *TPMActivateCredentialResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tpm_proto_msgTypes[59]
+	mi := &file_tpm_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3837,7 +4031,7 @@ func (x *TPMActivateCredentialResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TPMActivateCredentialResponse.ProtoReflect.Descriptor instead.
 func (*TPMActivateCredentialResponse) Descriptor() ([]byte, []int) {
-	return file_tpm_proto_rawDescGZIP(), []int{59}
+	return file_tpm_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *TPMActivateCredentialResponse) GetSecret() []byte {
@@ -4066,7 +4260,24 @@ const file_tpm_proto_rawDesc = "" +
 	"\bverified\x18\x02 \x01(\bR\bverified\x12\x18\n" +
 	"\amessage\x18\x03 \x01(\tR\amessage\x126\n" +
 	"\vactual_pcrs\x18\x04 \x03(\v2\x15.platform.v1.PCRValueR\n" +
-	"actualPcrs\",\n" +
+	"actualPcrs\"h\n" +
+	"\x0eCertifyRequest\x12\x1d\n" +
+	"\n" +
+	"key_handle\x18\x01 \x01(\rR\tkeyHandle\x12!\n" +
+	"\fkey_password\x18\x02 \x01(\tR\vkeyPassword\x12\x14\n" +
+	"\x05nonce\x18\x03 \x01(\fR\x05nonce\"\xd2\x03\n" +
+	"\x0fCertifyResponse\x12+\n" +
+	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x12!\n" +
+	"\fcertify_info\x18\x02 \x01(\fR\vcertifyInfo\x12\x1c\n" +
+	"\tsignature\x18\x03 \x01(\fR\tsignature\x12/\n" +
+	"\x13signature_algorithm\x18\x04 \x01(\tR\x12signatureAlgorithm\x124\n" +
+	"\x16certify_info_signature\x18\x05 \x01(\fR\x14certifyInfoSignature\x120\n" +
+	"\x14attesting_key_public\x18\x06 \x01(\fR\x12attestingKeyPublic\x12.\n" +
+	"\x13attested_key_public\x18\a \x01(\fR\x11attestedKeyPublic\x129\n" +
+	"\x19attesting_key_public_area\x18\b \x01(\fR\x16attestingKeyPublicArea\x127\n" +
+	"\x18attested_key_public_area\x18\t \x01(\fR\x15attestedKeyPublicArea\x12\x14\n" +
+	"\x05nonce\x18\n" +
+	" \x01(\fR\x05nonce\",\n" +
 	"\x12GetEventLogRequest\x12\x16\n" +
 	"\x06format\x18\x01 \x01(\tR\x06format\"\xa1\x01\n" +
 	"\x13GetEventLogResponse\x12\x1b\n" +
@@ -4154,7 +4365,7 @@ const file_tpm_proto_rawDesc = "" +
 	"\x0fPCR_BANK_SHA256\x10\x02\x12\x13\n" +
 	"\x0fPCR_BANK_SHA384\x10\x03\x12\x13\n" +
 	"\x0fPCR_BANK_SHA512\x10\x04\x12\x14\n" +
-	"\x10PCR_BANK_SM3_256\x10\x052\xb4\x10\n" +
+	"\x10PCR_BANK_SM3_256\x10\x052\xfa\x10\n" +
 	"\n" +
 	"TPMService\x12A\n" +
 	"\x04Info\x12\x1b.platform.v1.TPMInfoRequest\x1a\x1c.platform.v1.TPMInfoResponse\x12P\n" +
@@ -4174,7 +4385,8 @@ const file_tpm_proto_rawDesc = "" +
 	"\x04Seal\x12\x18.platform.v1.SealRequest\x1a\x19.platform.v1.SealResponse\x12A\n" +
 	"\x06Unseal\x12\x1a.platform.v1.UnsealRequest\x1a\x1b.platform.v1.UnsealResponse\x12>\n" +
 	"\x05Quote\x12\x19.platform.v1.QuoteRequest\x1a\x1a.platform.v1.QuoteResponse\x12P\n" +
-	"\vVerifyQuote\x12\x1f.platform.v1.VerifyQuoteRequest\x1a .platform.v1.VerifyQuoteResponse\x12P\n" +
+	"\vVerifyQuote\x12\x1f.platform.v1.VerifyQuoteRequest\x1a .platform.v1.VerifyQuoteResponse\x12D\n" +
+	"\aCertify\x12\x1b.platform.v1.CertifyRequest\x1a\x1c.platform.v1.CertifyResponse\x12P\n" +
 	"\vGetEventLog\x12\x1f.platform.v1.GetEventLogRequest\x1a .platform.v1.GetEventLogResponse\x12D\n" +
 	"\aGetPCRs\x12\x1b.platform.v1.GetPCRsRequest\x1a\x1c.platform.v1.GetPCRsResponse\x12Y\n" +
 	"\x0eMakeCredential\x12\".platform.v1.MakeCredentialRequest\x1a#.platform.v1.MakeCredentialResponse\x12k\n" +
@@ -4199,7 +4411,7 @@ func file_tpm_proto_rawDescGZIP() []byte {
 }
 
 var file_tpm_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_tpm_proto_msgTypes = make([]protoimpl.MessageInfo, 61)
+var file_tpm_proto_msgTypes = make([]protoimpl.MessageInfo, 63)
 var file_tpm_proto_goTypes = []any{
 	(TPMVersion)(0),                       // 0: platform.v1.TPMVersion
 	(PCRBank)(0),                          // 1: platform.v1.PCRBank
@@ -4243,30 +4455,32 @@ var file_tpm_proto_goTypes = []any{
 	(*QuoteResponse)(nil),                 // 39: platform.v1.QuoteResponse
 	(*VerifyQuoteRequest)(nil),            // 40: platform.v1.VerifyQuoteRequest
 	(*VerifyQuoteResponse)(nil),           // 41: platform.v1.VerifyQuoteResponse
-	(*GetEventLogRequest)(nil),            // 42: platform.v1.GetEventLogRequest
-	(*GetEventLogResponse)(nil),           // 43: platform.v1.GetEventLogResponse
-	(*EventLogEntry)(nil),                 // 44: platform.v1.EventLogEntry
-	(*EventDigest)(nil),                   // 45: platform.v1.EventDigest
-	(*GetPCRsRequest)(nil),                // 46: platform.v1.GetPCRsRequest
-	(*GetPCRsResponse)(nil),               // 47: platform.v1.GetPCRsResponse
-	(*DefineNVRAMRequest)(nil),            // 48: platform.v1.DefineNVRAMRequest
-	(*DefineNVRAMResponse)(nil),           // 49: platform.v1.DefineNVRAMResponse
-	(*WriteNVRAMRequest)(nil),             // 50: platform.v1.WriteNVRAMRequest
-	(*WriteNVRAMResponse)(nil),            // 51: platform.v1.WriteNVRAMResponse
-	(*ReadNVRAMRequest)(nil),              // 52: platform.v1.ReadNVRAMRequest
-	(*ReadNVRAMResponse)(nil),             // 53: platform.v1.ReadNVRAMResponse
-	(*UndefineNVRAMRequest)(nil),          // 54: platform.v1.UndefineNVRAMRequest
-	(*UndefineNVRAMResponse)(nil),         // 55: platform.v1.UndefineNVRAMResponse
-	(*GetRandomRequest)(nil),              // 56: platform.v1.GetRandomRequest
-	(*GetRandomResponse)(nil),             // 57: platform.v1.GetRandomResponse
-	(*MakeCredentialRequest)(nil),         // 58: platform.v1.MakeCredentialRequest
-	(*MakeCredentialResponse)(nil),        // 59: platform.v1.MakeCredentialResponse
-	(*TPMActivateCredentialRequest)(nil),  // 60: platform.v1.TPMActivateCredentialRequest
-	(*TPMActivateCredentialResponse)(nil), // 61: platform.v1.TPMActivateCredentialResponse
-	nil,                                   // 62: platform.v1.TPMInfoResponse.PropertiesEntry
-	(*KeyAttributes)(nil),                 // 63: platform.v1.KeyAttributes
-	(*Status)(nil),                        // 64: platform.v1.Status
-	(KeyAlgorithm)(0),                     // 65: platform.v1.KeyAlgorithm
+	(*CertifyRequest)(nil),                // 42: platform.v1.CertifyRequest
+	(*CertifyResponse)(nil),               // 43: platform.v1.CertifyResponse
+	(*GetEventLogRequest)(nil),            // 44: platform.v1.GetEventLogRequest
+	(*GetEventLogResponse)(nil),           // 45: platform.v1.GetEventLogResponse
+	(*EventLogEntry)(nil),                 // 46: platform.v1.EventLogEntry
+	(*EventDigest)(nil),                   // 47: platform.v1.EventDigest
+	(*GetPCRsRequest)(nil),                // 48: platform.v1.GetPCRsRequest
+	(*GetPCRsResponse)(nil),               // 49: platform.v1.GetPCRsResponse
+	(*DefineNVRAMRequest)(nil),            // 50: platform.v1.DefineNVRAMRequest
+	(*DefineNVRAMResponse)(nil),           // 51: platform.v1.DefineNVRAMResponse
+	(*WriteNVRAMRequest)(nil),             // 52: platform.v1.WriteNVRAMRequest
+	(*WriteNVRAMResponse)(nil),            // 53: platform.v1.WriteNVRAMResponse
+	(*ReadNVRAMRequest)(nil),              // 54: platform.v1.ReadNVRAMRequest
+	(*ReadNVRAMResponse)(nil),             // 55: platform.v1.ReadNVRAMResponse
+	(*UndefineNVRAMRequest)(nil),          // 56: platform.v1.UndefineNVRAMRequest
+	(*UndefineNVRAMResponse)(nil),         // 57: platform.v1.UndefineNVRAMResponse
+	(*GetRandomRequest)(nil),              // 58: platform.v1.GetRandomRequest
+	(*GetRandomResponse)(nil),             // 59: platform.v1.GetRandomResponse
+	(*MakeCredentialRequest)(nil),         // 60: platform.v1.MakeCredentialRequest
+	(*MakeCredentialResponse)(nil),        // 61: platform.v1.MakeCredentialResponse
+	(*TPMActivateCredentialRequest)(nil),  // 62: platform.v1.TPMActivateCredentialRequest
+	(*TPMActivateCredentialResponse)(nil), // 63: platform.v1.TPMActivateCredentialResponse
+	nil,                                   // 64: platform.v1.TPMInfoResponse.PropertiesEntry
+	(*KeyAttributes)(nil),                 // 65: platform.v1.KeyAttributes
+	(*Status)(nil),                        // 66: platform.v1.Status
+	(KeyAlgorithm)(0),                     // 67: platform.v1.KeyAlgorithm
 }
 var file_tpm_proto_depIdxs = []int32{
 	1,  // 0: platform.v1.PCRValue.bank:type_name -> platform.v1.PCRBank
@@ -4274,109 +4488,112 @@ var file_tpm_proto_depIdxs = []int32{
 	2,  // 2: platform.v1.TPMInfoResponse.manufacturer:type_name -> platform.v1.TPMManufacturer
 	3,  // 3: platform.v1.TPMInfoResponse.capabilities:type_name -> platform.v1.TPMCapability
 	1,  // 4: platform.v1.TPMInfoResponse.pcr_banks:type_name -> platform.v1.PCRBank
-	62, // 5: platform.v1.TPMInfoResponse.properties:type_name -> platform.v1.TPMInfoResponse.PropertiesEntry
+	64, // 5: platform.v1.TPMInfoResponse.properties:type_name -> platform.v1.TPMInfoResponse.PropertiesEntry
 	7,  // 6: platform.v1.TPMInfoResponse.nv_indexes:type_name -> platform.v1.NVIndex
-	63, // 7: platform.v1.TPMProvisionRequest.ek_attributes:type_name -> platform.v1.KeyAttributes
-	63, // 8: platform.v1.TPMProvisionRequest.srk_attributes:type_name -> platform.v1.KeyAttributes
-	63, // 9: platform.v1.TPMProvisionRequest.ak_attributes:type_name -> platform.v1.KeyAttributes
-	64, // 10: platform.v1.TPMProvisionResponse.status:type_name -> platform.v1.Status
-	64, // 11: platform.v1.TPMClearResponse.status:type_name -> platform.v1.Status
-	63, // 12: platform.v1.CreateEKRequest.attributes:type_name -> platform.v1.KeyAttributes
-	64, // 13: platform.v1.CreateEKResponse.status:type_name -> platform.v1.Status
-	65, // 14: platform.v1.GetEKRequest.algorithm:type_name -> platform.v1.KeyAlgorithm
-	65, // 15: platform.v1.GetEKResponse.algorithm:type_name -> platform.v1.KeyAlgorithm
-	65, // 16: platform.v1.GetEKCertificateRequest.algorithm:type_name -> platform.v1.KeyAlgorithm
-	64, // 17: platform.v1.ImportEKCertificateResponse.status:type_name -> platform.v1.Status
-	65, // 18: platform.v1.DeleteEKRequest.algorithm:type_name -> platform.v1.KeyAlgorithm
-	64, // 19: platform.v1.DeleteEKResponse.status:type_name -> platform.v1.Status
-	63, // 20: platform.v1.CreateSRKRequest.attributes:type_name -> platform.v1.KeyAttributes
-	64, // 21: platform.v1.CreateSRKResponse.status:type_name -> platform.v1.Status
-	65, // 22: platform.v1.GetSRKRequest.algorithm:type_name -> platform.v1.KeyAlgorithm
-	65, // 23: platform.v1.GetSRKResponse.algorithm:type_name -> platform.v1.KeyAlgorithm
-	65, // 24: platform.v1.DeleteSRKRequest.algorithm:type_name -> platform.v1.KeyAlgorithm
-	64, // 25: platform.v1.DeleteSRKResponse.status:type_name -> platform.v1.Status
-	63, // 26: platform.v1.CreateAKRequest.attributes:type_name -> platform.v1.KeyAttributes
-	64, // 27: platform.v1.CreateAKResponse.status:type_name -> platform.v1.Status
-	65, // 28: platform.v1.GetAKRequest.algorithm:type_name -> platform.v1.KeyAlgorithm
-	65, // 29: platform.v1.GetAKResponse.algorithm:type_name -> platform.v1.KeyAlgorithm
-	65, // 30: platform.v1.DeleteAKRequest.algorithm:type_name -> platform.v1.KeyAlgorithm
-	64, // 31: platform.v1.DeleteAKResponse.status:type_name -> platform.v1.Status
+	65, // 7: platform.v1.TPMProvisionRequest.ek_attributes:type_name -> platform.v1.KeyAttributes
+	65, // 8: platform.v1.TPMProvisionRequest.srk_attributes:type_name -> platform.v1.KeyAttributes
+	65, // 9: platform.v1.TPMProvisionRequest.ak_attributes:type_name -> platform.v1.KeyAttributes
+	66, // 10: platform.v1.TPMProvisionResponse.status:type_name -> platform.v1.Status
+	66, // 11: platform.v1.TPMClearResponse.status:type_name -> platform.v1.Status
+	65, // 12: platform.v1.CreateEKRequest.attributes:type_name -> platform.v1.KeyAttributes
+	66, // 13: platform.v1.CreateEKResponse.status:type_name -> platform.v1.Status
+	67, // 14: platform.v1.GetEKRequest.algorithm:type_name -> platform.v1.KeyAlgorithm
+	67, // 15: platform.v1.GetEKResponse.algorithm:type_name -> platform.v1.KeyAlgorithm
+	67, // 16: platform.v1.GetEKCertificateRequest.algorithm:type_name -> platform.v1.KeyAlgorithm
+	66, // 17: platform.v1.ImportEKCertificateResponse.status:type_name -> platform.v1.Status
+	67, // 18: platform.v1.DeleteEKRequest.algorithm:type_name -> platform.v1.KeyAlgorithm
+	66, // 19: platform.v1.DeleteEKResponse.status:type_name -> platform.v1.Status
+	65, // 20: platform.v1.CreateSRKRequest.attributes:type_name -> platform.v1.KeyAttributes
+	66, // 21: platform.v1.CreateSRKResponse.status:type_name -> platform.v1.Status
+	67, // 22: platform.v1.GetSRKRequest.algorithm:type_name -> platform.v1.KeyAlgorithm
+	67, // 23: platform.v1.GetSRKResponse.algorithm:type_name -> platform.v1.KeyAlgorithm
+	67, // 24: platform.v1.DeleteSRKRequest.algorithm:type_name -> platform.v1.KeyAlgorithm
+	66, // 25: platform.v1.DeleteSRKResponse.status:type_name -> platform.v1.Status
+	65, // 26: platform.v1.CreateAKRequest.attributes:type_name -> platform.v1.KeyAttributes
+	66, // 27: platform.v1.CreateAKResponse.status:type_name -> platform.v1.Status
+	67, // 28: platform.v1.GetAKRequest.algorithm:type_name -> platform.v1.KeyAlgorithm
+	67, // 29: platform.v1.GetAKResponse.algorithm:type_name -> platform.v1.KeyAlgorithm
+	67, // 30: platform.v1.DeleteAKRequest.algorithm:type_name -> platform.v1.KeyAlgorithm
+	66, // 31: platform.v1.DeleteAKResponse.status:type_name -> platform.v1.Status
 	1,  // 32: platform.v1.SealRequest.pcr_bank:type_name -> platform.v1.PCRBank
-	64, // 33: platform.v1.SealResponse.status:type_name -> platform.v1.Status
+	66, // 33: platform.v1.SealResponse.status:type_name -> platform.v1.Status
 	1,  // 34: platform.v1.UnsealRequest.pcr_bank:type_name -> platform.v1.PCRBank
-	64, // 35: platform.v1.UnsealResponse.status:type_name -> platform.v1.Status
+	66, // 35: platform.v1.UnsealResponse.status:type_name -> platform.v1.Status
 	1,  // 36: platform.v1.QuoteRequest.pcr_bank:type_name -> platform.v1.PCRBank
-	64, // 37: platform.v1.QuoteResponse.status:type_name -> platform.v1.Status
+	66, // 37: platform.v1.QuoteResponse.status:type_name -> platform.v1.Status
 	4,  // 38: platform.v1.QuoteResponse.pcr_values:type_name -> platform.v1.PCRValue
 	4,  // 39: platform.v1.VerifyQuoteRequest.expected_pcrs:type_name -> platform.v1.PCRValue
-	64, // 40: platform.v1.VerifyQuoteResponse.status:type_name -> platform.v1.Status
+	66, // 40: platform.v1.VerifyQuoteResponse.status:type_name -> platform.v1.Status
 	4,  // 41: platform.v1.VerifyQuoteResponse.actual_pcrs:type_name -> platform.v1.PCRValue
-	44, // 42: platform.v1.GetEventLogResponse.entries:type_name -> platform.v1.EventLogEntry
-	45, // 43: platform.v1.EventLogEntry.digests:type_name -> platform.v1.EventDigest
-	1,  // 44: platform.v1.GetPCRsRequest.bank:type_name -> platform.v1.PCRBank
-	4,  // 45: platform.v1.GetPCRsResponse.pcr_values:type_name -> platform.v1.PCRValue
-	64, // 46: platform.v1.DefineNVRAMResponse.status:type_name -> platform.v1.Status
-	64, // 47: platform.v1.WriteNVRAMResponse.status:type_name -> platform.v1.Status
-	64, // 48: platform.v1.UndefineNVRAMResponse.status:type_name -> platform.v1.Status
-	5,  // 49: platform.v1.TPMService.Info:input_type -> platform.v1.TPMInfoRequest
-	8,  // 50: platform.v1.TPMService.Provision:input_type -> platform.v1.TPMProvisionRequest
-	10, // 51: platform.v1.TPMService.Clear:input_type -> platform.v1.TPMClearRequest
-	12, // 52: platform.v1.TPMService.CreateEK:input_type -> platform.v1.CreateEKRequest
-	14, // 53: platform.v1.TPMService.GetEK:input_type -> platform.v1.GetEKRequest
-	16, // 54: platform.v1.TPMService.GetEKCertificate:input_type -> platform.v1.GetEKCertificateRequest
-	18, // 55: platform.v1.TPMService.ImportEKCertificate:input_type -> platform.v1.ImportEKCertificateRequest
-	20, // 56: platform.v1.TPMService.DeleteEK:input_type -> platform.v1.DeleteEKRequest
-	22, // 57: platform.v1.TPMService.CreateSRK:input_type -> platform.v1.CreateSRKRequest
-	24, // 58: platform.v1.TPMService.GetSRK:input_type -> platform.v1.GetSRKRequest
-	26, // 59: platform.v1.TPMService.DeleteSRK:input_type -> platform.v1.DeleteSRKRequest
-	28, // 60: platform.v1.TPMService.CreateAK:input_type -> platform.v1.CreateAKRequest
-	30, // 61: platform.v1.TPMService.GetAK:input_type -> platform.v1.GetAKRequest
-	32, // 62: platform.v1.TPMService.DeleteAK:input_type -> platform.v1.DeleteAKRequest
-	34, // 63: platform.v1.TPMService.Seal:input_type -> platform.v1.SealRequest
-	36, // 64: platform.v1.TPMService.Unseal:input_type -> platform.v1.UnsealRequest
-	38, // 65: platform.v1.TPMService.Quote:input_type -> platform.v1.QuoteRequest
-	40, // 66: platform.v1.TPMService.VerifyQuote:input_type -> platform.v1.VerifyQuoteRequest
-	42, // 67: platform.v1.TPMService.GetEventLog:input_type -> platform.v1.GetEventLogRequest
-	46, // 68: platform.v1.TPMService.GetPCRs:input_type -> platform.v1.GetPCRsRequest
-	58, // 69: platform.v1.TPMService.MakeCredential:input_type -> platform.v1.MakeCredentialRequest
-	60, // 70: platform.v1.TPMService.ActivateCredential:input_type -> platform.v1.TPMActivateCredentialRequest
-	48, // 71: platform.v1.TPMService.DefineNVRAM:input_type -> platform.v1.DefineNVRAMRequest
-	50, // 72: platform.v1.TPMService.WriteNVRAM:input_type -> platform.v1.WriteNVRAMRequest
-	52, // 73: platform.v1.TPMService.ReadNVRAM:input_type -> platform.v1.ReadNVRAMRequest
-	54, // 74: platform.v1.TPMService.UndefineNVRAM:input_type -> platform.v1.UndefineNVRAMRequest
-	56, // 75: platform.v1.TPMService.GetRandom:input_type -> platform.v1.GetRandomRequest
-	6,  // 76: platform.v1.TPMService.Info:output_type -> platform.v1.TPMInfoResponse
-	9,  // 77: platform.v1.TPMService.Provision:output_type -> platform.v1.TPMProvisionResponse
-	11, // 78: platform.v1.TPMService.Clear:output_type -> platform.v1.TPMClearResponse
-	13, // 79: platform.v1.TPMService.CreateEK:output_type -> platform.v1.CreateEKResponse
-	15, // 80: platform.v1.TPMService.GetEK:output_type -> platform.v1.GetEKResponse
-	17, // 81: platform.v1.TPMService.GetEKCertificate:output_type -> platform.v1.GetEKCertificateResponse
-	19, // 82: platform.v1.TPMService.ImportEKCertificate:output_type -> platform.v1.ImportEKCertificateResponse
-	21, // 83: platform.v1.TPMService.DeleteEK:output_type -> platform.v1.DeleteEKResponse
-	23, // 84: platform.v1.TPMService.CreateSRK:output_type -> platform.v1.CreateSRKResponse
-	25, // 85: platform.v1.TPMService.GetSRK:output_type -> platform.v1.GetSRKResponse
-	27, // 86: platform.v1.TPMService.DeleteSRK:output_type -> platform.v1.DeleteSRKResponse
-	29, // 87: platform.v1.TPMService.CreateAK:output_type -> platform.v1.CreateAKResponse
-	31, // 88: platform.v1.TPMService.GetAK:output_type -> platform.v1.GetAKResponse
-	33, // 89: platform.v1.TPMService.DeleteAK:output_type -> platform.v1.DeleteAKResponse
-	35, // 90: platform.v1.TPMService.Seal:output_type -> platform.v1.SealResponse
-	37, // 91: platform.v1.TPMService.Unseal:output_type -> platform.v1.UnsealResponse
-	39, // 92: platform.v1.TPMService.Quote:output_type -> platform.v1.QuoteResponse
-	41, // 93: platform.v1.TPMService.VerifyQuote:output_type -> platform.v1.VerifyQuoteResponse
-	43, // 94: platform.v1.TPMService.GetEventLog:output_type -> platform.v1.GetEventLogResponse
-	47, // 95: platform.v1.TPMService.GetPCRs:output_type -> platform.v1.GetPCRsResponse
-	59, // 96: platform.v1.TPMService.MakeCredential:output_type -> platform.v1.MakeCredentialResponse
-	61, // 97: platform.v1.TPMService.ActivateCredential:output_type -> platform.v1.TPMActivateCredentialResponse
-	49, // 98: platform.v1.TPMService.DefineNVRAM:output_type -> platform.v1.DefineNVRAMResponse
-	51, // 99: platform.v1.TPMService.WriteNVRAM:output_type -> platform.v1.WriteNVRAMResponse
-	53, // 100: platform.v1.TPMService.ReadNVRAM:output_type -> platform.v1.ReadNVRAMResponse
-	55, // 101: platform.v1.TPMService.UndefineNVRAM:output_type -> platform.v1.UndefineNVRAMResponse
-	57, // 102: platform.v1.TPMService.GetRandom:output_type -> platform.v1.GetRandomResponse
-	76, // [76:103] is the sub-list for method output_type
-	49, // [49:76] is the sub-list for method input_type
-	49, // [49:49] is the sub-list for extension type_name
-	49, // [49:49] is the sub-list for extension extendee
-	0,  // [0:49] is the sub-list for field type_name
+	66, // 42: platform.v1.CertifyResponse.status:type_name -> platform.v1.Status
+	46, // 43: platform.v1.GetEventLogResponse.entries:type_name -> platform.v1.EventLogEntry
+	47, // 44: platform.v1.EventLogEntry.digests:type_name -> platform.v1.EventDigest
+	1,  // 45: platform.v1.GetPCRsRequest.bank:type_name -> platform.v1.PCRBank
+	4,  // 46: platform.v1.GetPCRsResponse.pcr_values:type_name -> platform.v1.PCRValue
+	66, // 47: platform.v1.DefineNVRAMResponse.status:type_name -> platform.v1.Status
+	66, // 48: platform.v1.WriteNVRAMResponse.status:type_name -> platform.v1.Status
+	66, // 49: platform.v1.UndefineNVRAMResponse.status:type_name -> platform.v1.Status
+	5,  // 50: platform.v1.TPMService.Info:input_type -> platform.v1.TPMInfoRequest
+	8,  // 51: platform.v1.TPMService.Provision:input_type -> platform.v1.TPMProvisionRequest
+	10, // 52: platform.v1.TPMService.Clear:input_type -> platform.v1.TPMClearRequest
+	12, // 53: platform.v1.TPMService.CreateEK:input_type -> platform.v1.CreateEKRequest
+	14, // 54: platform.v1.TPMService.GetEK:input_type -> platform.v1.GetEKRequest
+	16, // 55: platform.v1.TPMService.GetEKCertificate:input_type -> platform.v1.GetEKCertificateRequest
+	18, // 56: platform.v1.TPMService.ImportEKCertificate:input_type -> platform.v1.ImportEKCertificateRequest
+	20, // 57: platform.v1.TPMService.DeleteEK:input_type -> platform.v1.DeleteEKRequest
+	22, // 58: platform.v1.TPMService.CreateSRK:input_type -> platform.v1.CreateSRKRequest
+	24, // 59: platform.v1.TPMService.GetSRK:input_type -> platform.v1.GetSRKRequest
+	26, // 60: platform.v1.TPMService.DeleteSRK:input_type -> platform.v1.DeleteSRKRequest
+	28, // 61: platform.v1.TPMService.CreateAK:input_type -> platform.v1.CreateAKRequest
+	30, // 62: platform.v1.TPMService.GetAK:input_type -> platform.v1.GetAKRequest
+	32, // 63: platform.v1.TPMService.DeleteAK:input_type -> platform.v1.DeleteAKRequest
+	34, // 64: platform.v1.TPMService.Seal:input_type -> platform.v1.SealRequest
+	36, // 65: platform.v1.TPMService.Unseal:input_type -> platform.v1.UnsealRequest
+	38, // 66: platform.v1.TPMService.Quote:input_type -> platform.v1.QuoteRequest
+	40, // 67: platform.v1.TPMService.VerifyQuote:input_type -> platform.v1.VerifyQuoteRequest
+	42, // 68: platform.v1.TPMService.Certify:input_type -> platform.v1.CertifyRequest
+	44, // 69: platform.v1.TPMService.GetEventLog:input_type -> platform.v1.GetEventLogRequest
+	48, // 70: platform.v1.TPMService.GetPCRs:input_type -> platform.v1.GetPCRsRequest
+	60, // 71: platform.v1.TPMService.MakeCredential:input_type -> platform.v1.MakeCredentialRequest
+	62, // 72: platform.v1.TPMService.ActivateCredential:input_type -> platform.v1.TPMActivateCredentialRequest
+	50, // 73: platform.v1.TPMService.DefineNVRAM:input_type -> platform.v1.DefineNVRAMRequest
+	52, // 74: platform.v1.TPMService.WriteNVRAM:input_type -> platform.v1.WriteNVRAMRequest
+	54, // 75: platform.v1.TPMService.ReadNVRAM:input_type -> platform.v1.ReadNVRAMRequest
+	56, // 76: platform.v1.TPMService.UndefineNVRAM:input_type -> platform.v1.UndefineNVRAMRequest
+	58, // 77: platform.v1.TPMService.GetRandom:input_type -> platform.v1.GetRandomRequest
+	6,  // 78: platform.v1.TPMService.Info:output_type -> platform.v1.TPMInfoResponse
+	9,  // 79: platform.v1.TPMService.Provision:output_type -> platform.v1.TPMProvisionResponse
+	11, // 80: platform.v1.TPMService.Clear:output_type -> platform.v1.TPMClearResponse
+	13, // 81: platform.v1.TPMService.CreateEK:output_type -> platform.v1.CreateEKResponse
+	15, // 82: platform.v1.TPMService.GetEK:output_type -> platform.v1.GetEKResponse
+	17, // 83: platform.v1.TPMService.GetEKCertificate:output_type -> platform.v1.GetEKCertificateResponse
+	19, // 84: platform.v1.TPMService.ImportEKCertificate:output_type -> platform.v1.ImportEKCertificateResponse
+	21, // 85: platform.v1.TPMService.DeleteEK:output_type -> platform.v1.DeleteEKResponse
+	23, // 86: platform.v1.TPMService.CreateSRK:output_type -> platform.v1.CreateSRKResponse
+	25, // 87: platform.v1.TPMService.GetSRK:output_type -> platform.v1.GetSRKResponse
+	27, // 88: platform.v1.TPMService.DeleteSRK:output_type -> platform.v1.DeleteSRKResponse
+	29, // 89: platform.v1.TPMService.CreateAK:output_type -> platform.v1.CreateAKResponse
+	31, // 90: platform.v1.TPMService.GetAK:output_type -> platform.v1.GetAKResponse
+	33, // 91: platform.v1.TPMService.DeleteAK:output_type -> platform.v1.DeleteAKResponse
+	35, // 92: platform.v1.TPMService.Seal:output_type -> platform.v1.SealResponse
+	37, // 93: platform.v1.TPMService.Unseal:output_type -> platform.v1.UnsealResponse
+	39, // 94: platform.v1.TPMService.Quote:output_type -> platform.v1.QuoteResponse
+	41, // 95: platform.v1.TPMService.VerifyQuote:output_type -> platform.v1.VerifyQuoteResponse
+	43, // 96: platform.v1.TPMService.Certify:output_type -> platform.v1.CertifyResponse
+	45, // 97: platform.v1.TPMService.GetEventLog:output_type -> platform.v1.GetEventLogResponse
+	49, // 98: platform.v1.TPMService.GetPCRs:output_type -> platform.v1.GetPCRsResponse
+	61, // 99: platform.v1.TPMService.MakeCredential:output_type -> platform.v1.MakeCredentialResponse
+	63, // 100: platform.v1.TPMService.ActivateCredential:output_type -> platform.v1.TPMActivateCredentialResponse
+	51, // 101: platform.v1.TPMService.DefineNVRAM:output_type -> platform.v1.DefineNVRAMResponse
+	53, // 102: platform.v1.TPMService.WriteNVRAM:output_type -> platform.v1.WriteNVRAMResponse
+	55, // 103: platform.v1.TPMService.ReadNVRAM:output_type -> platform.v1.ReadNVRAMResponse
+	57, // 104: platform.v1.TPMService.UndefineNVRAM:output_type -> platform.v1.UndefineNVRAMResponse
+	59, // 105: platform.v1.TPMService.GetRandom:output_type -> platform.v1.GetRandomResponse
+	78, // [78:106] is the sub-list for method output_type
+	50, // [50:78] is the sub-list for method input_type
+	50, // [50:50] is the sub-list for extension type_name
+	50, // [50:50] is the sub-list for extension extendee
+	0,  // [0:50] is the sub-list for field type_name
 }
 
 func init() { file_tpm_proto_init() }
@@ -4391,7 +4608,7 @@ func file_tpm_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_tpm_proto_rawDesc), len(file_tpm_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   61,
+			NumMessages:   63,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

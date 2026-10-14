@@ -135,3 +135,30 @@ func TestIAMTokenAuthorizer_CheckPermission_Errors(t *testing.T) {
 		assert.False(t, allowed)
 	})
 }
+
+func TestErrPEPClientNotAvailable_Error(t *testing.T) {
+	err := ErrPEPClientNotAvailable{}
+	if err.Error() != "PEP client is not available" {
+		t.Errorf("unexpected error message: %s", err.Error())
+	}
+}
+
+// mockSDKPEPClient is an sdkiam.PEPClient whose answers the test supplies.
+type mockSDKPEPClient struct {
+	checkFunc      func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error)
+	checkBatchFunc func(ctx context.Context, req *sdkiam.CheckBatchRequest) (*sdkiam.CheckBatchResponse, error)
+}
+
+func (m *mockSDKPEPClient) Check(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+	if m.checkFunc != nil {
+		return m.checkFunc(ctx, req)
+	}
+	return &sdkiam.CheckResponse{}, nil
+}
+
+func (m *mockSDKPEPClient) CheckBatch(ctx context.Context, req *sdkiam.CheckBatchRequest) (*sdkiam.CheckBatchResponse, error) {
+	if m.checkBatchFunc != nil {
+		return m.checkBatchFunc(ctx, req)
+	}
+	return &sdkiam.CheckBatchResponse{}, nil
+}

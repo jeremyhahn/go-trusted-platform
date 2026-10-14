@@ -324,29 +324,6 @@ func computeRouteCases() []computeRouteCase {
 			resp: &platformv1.ListContainersResponse{Containers: []*platformv1.Container{{Id: "ctr-1", ExitCode: 0}}}, key: "containers",
 		},
 		{
-			route: "DELETE " + containers, method: http.MethodDelete, target: containers,
-			body: `{"id":"ctr-1","force":true,"deleteVolumes":true}`,
-			want: &platformv1.DeleteContainerRequest{Id: "ctr-1", Force: true, DeleteVolumes: true},
-			resp: &platformv1.DeleteContainerResponse{Status: ok}, key: "status",
-		},
-		{
-			route: "POST " + containers + "/start", method: http.MethodPost, target: containers + "/start", body: `{"id":"ctr-1"}`,
-			want: &platformv1.StartContainerRequest{Id: "ctr-1"},
-			resp: &platformv1.StartContainerResponse{Status: ok}, key: "status",
-		},
-		{
-			route: "POST " + containers + "/stop", method: http.MethodPost, target: containers + "/stop",
-			body: `{"id":"ctr-1","timeoutSeconds":5}`,
-			want: &platformv1.StopContainerRequest{Id: "ctr-1", TimeoutSeconds: 5},
-			resp: &platformv1.StopContainerResponse{Status: ok}, key: "status",
-		},
-		{
-			route: "POST " + containers + "/attest", method: http.MethodPost, target: containers + "/attest",
-			body: `{"id":"ctr-1","pcrIndices":[10]}`,
-			want: &platformv1.AttestContainerRequest{Id: "ctr-1", PcrIndices: []uint32{10}},
-			resp: &platformv1.AttestContainerResponse{ContainerId: "ctr-1", Verified: true}, key: "containerId",
-		},
-		{
 			route: "GET " + containers + "/{id}", method: http.MethodGet, target: containers + "/ctr-1",
 			want: &platformv1.GetContainerRequest{Id: "ctr-1"},
 			resp: &platformv1.GetContainerResponse{Container: &platformv1.Container{Id: "ctr-1", HostId: "host-1"}}, key: "container",

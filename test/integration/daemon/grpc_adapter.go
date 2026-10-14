@@ -94,29 +94,35 @@ func (g *GRPCAdapter) Health(ctx context.Context) (*HealthResult, error) {
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "GetHealth", Err: err}
 	}
+	return healthResultFromProto(resp), nil
+}
 
+// healthResultFromProto converts a GetHealthResponse into the common result.
+// Every transport answers health with this message; the unauthenticated
+// transports (QUIC, MCP) send it with no components.
+func healthResultFromProto(resp *pb.GetHealthResponse) *HealthResult {
 	result := &HealthResult{
-		Status:    normalizeHealthStatus(resp.Status.String()),
+		Status:    normalizeHealthStatus(resp.GetStatus().String()),
 		Timestamp: time.Now(),
 	}
 
-	if resp.Timestamp != nil {
-		result.Timestamp = resp.Timestamp.AsTime()
+	if resp.GetTimestamp() != nil {
+		result.Timestamp = resp.GetTimestamp().AsTime()
 	}
 
-	for _, c := range resp.Components {
+	for _, c := range resp.GetComponents() {
 		ch := ComponentHealth{
-			Name:    c.Name,
-			Status:  normalizeHealthStatus(c.Status.String()),
-			Message: c.Message,
+			Name:    c.GetName(),
+			Status:  normalizeHealthStatus(c.GetStatus().String()),
+			Message: c.GetMessage(),
 		}
-		if c.LastCheck != nil {
-			ch.LastCheck = c.LastCheck.AsTime()
+		if c.GetLastCheck() != nil {
+			ch.LastCheck = c.GetLastCheck().AsTime()
 		}
 		result.Components = append(result.Components, ch)
 	}
 
-	return result, nil
+	return result
 }
 
 // =============================================================================

@@ -201,8 +201,8 @@ device dispatcher carried an unreachable `StatusNotImplemented` case for it
 
 `OpDeviceAttest` answered `StatusNotImplemented` too, until #226: it did so
 on the live dispatcher while a `handleAttest` sat in
-`pkg/api/quic/device_handlers.go` — a package whose `NewDeviceHandler` has no
-non-test caller (#291). So the operation read as implemented in one package
+`pkg/api/quic/device_handlers.go`, whose `NewDeviceHandler` had no non-test
+caller (#291); #317 deleted it. So the operation read as implemented in one package
 and was a stub in the one actually served, which is the failure mode
 CLAUDE.md names when it says a "wire this up later" stub on a multi-protocol
 service is a bug rather than a transitional state. It now delegates to the
@@ -586,9 +586,9 @@ profile's networks as:
   from overrides: `config` is the template's, and EK binding belongs to
   `POST /device/profiles/{id}/assign`. Until #378 the template handler mapped
   only `name`/`model`/`role` and its `201` omitted networks, so a network
-  override on that route was discarded with a `2xx`; the daemon-only REST stack
-  (`pkg/api/rest/template_handlers.go`) still maps only those three, on a path
-  shipped configurations do not reach.
+  override on that route was discarded with a `2xx`. An unreached daemon-side
+  copy (`pkg/api/rest/template_handlers.go`) mapped only those three until #317
+  deleted it.
 
 ---
 

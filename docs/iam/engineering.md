@@ -23,7 +23,7 @@ What is local:
 | Location | Role |
 |---|---|
 | `pkg/webservice/v1/rest/iam/` | REST adapter — `handlers.go`, `router.go`, `types.go`, `errors.go`, `adapter.go`, `adapter_helpers.go`, `mirror.go` |
-| `pkg/api/daemon/iam_service.go`, `iam_adapter.go`, `iam_grpc_service.go` | Service and gRPC wiring |
+| `pkg/api/daemon/iam_service.go`, `iam_grpc_service.go` | Service and gRPC wiring |
 | `pkg/api/daemon/iam_service_stub.go` | The stub used when IAM is not wired |
 | `pkg/api/daemon/iam_health_checker.go` | Health |
 | `pkg/api/grpc/iam_service.go`, `iam_types.go` | gRPC `PlatformIAMService` |

@@ -365,18 +365,6 @@ func TestPXEErrorVariables(t *testing.T) {
 // PXE Tool Handler Tests
 // =============================================================================
 
-func TestNewPXEToolHandler(t *testing.T) {
-	mockSvc := newMockPXEService()
-	handler := NewPXEToolHandler(mockSvc)
-
-	if handler == nil {
-		t.Fatal("expected non-nil handler")
-	}
-	if handler.service != mockSvc {
-		t.Error("handler service not set correctly")
-	}
-}
-
 // =============================================================================
 // Tool Execution Tests
 // =============================================================================

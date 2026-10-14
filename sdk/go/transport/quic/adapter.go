@@ -501,6 +501,7 @@ var categorySubOpcodeMap = map[string]byte{
 	// tpm_quote.go (#482).
 	"/platform.v1.TPMService/Quote":       quicwire.SubOpTPM2Quote,
 	"/platform.v1.TPMService/VerifyQuote": quicwire.SubOpTPM2VerifyQuote,
+	"/platform.v1.TPMService/Certify":     quicwire.SubOpTPM2Certify,
 
 	// PIV Service — OpPIVCategory (0x9B)
 	// Server dispatcher: pkg/api/daemon/phase35_quic.go::pivQUICDispatch
@@ -787,6 +788,7 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	// TPM Service — proto: pkg/api/grpc/proto/tpm.proto; category-routed
 	"/platform.v1.TPMService/Quote":       quicwire.OpTPM2Category,
 	"/platform.v1.TPMService/VerifyQuote": quicwire.OpTPM2Category,
+	"/platform.v1.TPMService/Certify":     quicwire.OpTPM2Category,
 
 	// Device Service — proto: pkg/api/grpc/proto/device.proto
 	"/platform.v1.DeviceService/CreateDevice":       quicwire.OpDeviceRegister,
@@ -1029,6 +1031,8 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.PlatformDaemon/GetVersion":       quicwire.OpDaemonVersion,
 	"/platform.v1.PlatformDaemon/GetStatus":        quicwire.OpDaemonStatus,
 	"/platform.v1.PlatformDaemon/GetHealth":        quicwire.OpHealth,
+	"/platform.v1.PlatformDaemon/Liveness":         quicwire.OpLiveness,
+	"/platform.v1.PlatformDaemon/Readiness":        quicwire.OpReadiness,
 	"/platform.v1.PlatformDaemon/ListServices":     quicwire.OpDaemonListServices,
 	"/platform.v1.PlatformDaemon/GetServiceStatus": quicwire.OpDaemonGetService,
 	"/platform.v1.PlatformDaemon/StartService":     quicwire.OpDaemonStartService,

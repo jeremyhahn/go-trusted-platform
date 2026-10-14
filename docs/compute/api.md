@@ -162,7 +162,7 @@ Containers are the most evenly covered capability set in this feature.
 |---|---|---|---|---|---|
 | Attest VM | `POST /api/v1/compute/vms/{id}/attest` | `AttestVM` | `OpVMAttest` (`0xB9`) | `vm_attest` | ✅ |
 | Verify VM attestation | `POST /api/v1/compute/vms/{id}/attest/verify` | `VerifyVMAttestation` | `OpVMVerifyAttest` (`0xBF`) | `vm_attest_verify` | ✅ |
-| Attest container | `POST /api/v1/compute/containers/{id}/attest` (daemon listener only) | `AttestContainer` | `OpContainerAttest` (`0xEC`) | `container_attest` | ✅ |
+| Attest container | `POST /api/v1/compute/containers/{id}/attest` | `AttestContainer` | `OpContainerAttest` (`0xEC`) | `container_attest` | ✅ |
 
 `platformctl container attest` is the only attestation CLI verb in the whole
 platform — see [`docs/attestation/cli.md`](../attestation/cli.md).
@@ -257,7 +257,14 @@ inside a workload and previously answered a caller with no token at all.
 Reads are gated with the writes: the VM and container inventory is the map of
 what runs on this node and for whom.
 
-The web-service gate is role-based. platformd's REST listener checks the gRPC
+The web-service gate is role-based. The one exception is container
+attestation: `POST /compute/containers/{id}/attest` also requires
+`container:read`, the scope of `AttestContainer`, whenever the session
+middleware checks scopes. The legacy JWT handler carries roles, not scopes, so
+under it the route has the `admin` gate alone. The body carries `nonce`,
+`pcr_indices` and `pcr_bank`, and the container ID comes from the path.
+
+platformd's REST listener checks the gRPC
 scope catalog above, route by route: each route requires exactly the
 permission of the RPC it calls (`computeRouteScopes`,
 `pkg/api/rest/route_scope_test.go`). The MCP position is its own catalog. See [`docs/auth/architecture.md`](../auth/architecture.md) §6c.

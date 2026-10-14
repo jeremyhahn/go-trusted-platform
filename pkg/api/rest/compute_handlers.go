@@ -93,9 +93,7 @@ func (h *ComputeHandlers) RegisterRoutes(router *mux.Router) {
 }
 
 // routes is the compute route table. Path variables are named after the
-// request field they set ({id}, {vmId}, {diskId}, {snapshotId}). The Go SDK
-// carries a container ID in the body of start, stop, attest and delete, so
-// those bare forms are mounted beside the JavaScript SDK's {id} forms.
+// request field they set ({id}, {vmId}, {diskId}, {snapshotId}).
 // Streaming RPCs (console, logs, attach) have no REST route.
 func (h *ComputeHandlers) routes() []computeRoute {
 	return []computeRoute{
@@ -128,10 +126,6 @@ func (h *ComputeHandlers) routes() []computeRoute {
 		// Containers
 		{http.MethodPost, "/containers", scopeContainerWrite, computeRPC(h, platformv1.ComputeServiceServer.CreateContainer)},
 		{http.MethodGet, "/containers", scopeContainerRead, computeRPC(h, platformv1.ComputeServiceServer.ListContainers)},
-		{http.MethodDelete, "/containers", scopeContainerDelete, computeRPC(h, platformv1.ComputeServiceServer.DeleteContainer)},
-		{http.MethodPost, "/containers/start", scopeContainerWrite, computeRPC(h, platformv1.ComputeServiceServer.StartContainer)},
-		{http.MethodPost, "/containers/stop", scopeContainerWrite, computeRPC(h, platformv1.ComputeServiceServer.StopContainer)},
-		{http.MethodPost, "/containers/attest", scopeContainerRead, computeRPC(h, platformv1.ComputeServiceServer.AttestContainer)},
 		{http.MethodGet, "/containers/{id}", scopeContainerRead, computeRPC(h, platformv1.ComputeServiceServer.GetContainer)},
 		{http.MethodDelete, "/containers/{id}", scopeContainerDelete, computeRPC(h, platformv1.ComputeServiceServer.DeleteContainer)},
 		{http.MethodPost, "/containers/{id}/start", scopeContainerWrite, computeRPC(h, platformv1.ComputeServiceServer.StartContainer)},

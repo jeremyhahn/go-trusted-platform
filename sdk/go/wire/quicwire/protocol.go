@@ -118,9 +118,10 @@ const (
 	OpDNSListZones    byte = 0x28
 	OpDNSResolve      byte = 0x29
 	OpDNSGetConfig    byte = 0x2A
-	OpDNSUpdateConfig byte = 0x2B
 	OpDNSGetMetrics   byte = 0x2C
-	OpDNSFlushCache   byte = 0x2D
+	// 0x2B and 0x2D (UpdateConfig, FlushCache) were retired unimplemented:
+	// the DNS service has no runtime config update and no cache (#317); do
+	// not reuse them.
 
 	// SDN Overlay/Gateway/IPAM Category Opcodes (0x2E-0x2F)
 	// These are "category" opcodes that multiplex multiple sub-operations.
@@ -808,9 +809,7 @@ var opcodeNames = map[byte]string{
 	OpDNSListZones:    "DNSListZones",
 	OpDNSResolve:      "DNSResolve",
 	OpDNSGetConfig:    "DNSGetConfig",
-	OpDNSUpdateConfig: "DNSUpdateConfig",
 	OpDNSGetMetrics:   "DNSGetMetrics",
-	OpDNSFlushCache:   "DNSFlushCache",
 	OpOverlayCategory: "OverlayCategory",
 	OpGatewayCategory: "GatewayCategory",
 

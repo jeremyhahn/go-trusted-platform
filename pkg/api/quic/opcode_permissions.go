@@ -311,9 +311,7 @@ var opcodePermissions = map[byte]OpcodePermission{
 	quicwire.OpDNSListZones:    dnsRead,
 	quicwire.OpDNSResolve:      dnsRead,
 	quicwire.OpDNSGetConfig:    dnsRead,
-	quicwire.OpDNSUpdateConfig: dnsWrite,
 	quicwire.OpDNSGetMetrics:   dnsRead,
-	quicwire.OpDNSFlushCache:   dnsWrite,
 
 	// Devices and device profiles (gRPC DeviceService)
 	quicwire.OpDeviceRegister:      deviceWrite,
@@ -723,6 +721,7 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.SubOpTPM2GetIDevID:     tpmRead,
 		quicwire.SubOpTPM2MakeCred:      tpmRead,
 		quicwire.SubOpTPM2ActivateCred:  tpmWrite,
+		quicwire.SubOpTPM2Certify:       tpmRead,
 	},
 
 	// Bootstrap ceremony. Init is not pre-auth here: first-boot

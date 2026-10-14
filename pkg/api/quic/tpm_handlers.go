@@ -26,6 +26,7 @@ import (
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmcertify"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmpcr"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
@@ -114,6 +115,7 @@ func NewTPM2Handler(logger *logging.Logger) *TPM2Handler {
 		quicwire.SubOpTPM2GetIDevID:     h.handleGetIDevID,
 		quicwire.SubOpTPM2MakeCred:      h.handleMakeCredential,
 		quicwire.SubOpTPM2ActivateCred:  h.handleActivateCredential,
+		quicwire.SubOpTPM2Certify:       h.handleCertify,
 	}
 	return h
 }
@@ -803,6 +805,32 @@ func (h *TPM2Handler) handleQuote(ctx context.Context, payload []byte) *quicwire
 		ChannelBinding:     bound.Binding,
 		Timestamp:          time.Now().Unix(),
 		SignatureAlgorithm: sigAlg,
+	})
+}
+
+// handleCertify has the IAK certify that the key at a persistent handle is
+// resident in this TPM, over the shared tpmcertify path.
+func (h *TPM2Handler) handleCertify(_ context.Context, payload []byte) *quicwire.Response {
+	var req quicwire.TPM2CertifyRequest
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
+	}
+
+	res, err := tpmcertify.Certify(h.tpm, req.KeyHandle, req.KeyPassword, req.Nonce)
+	if err != nil {
+		return h.tpmErrorResponse(err)
+	}
+
+	return h.encodeResponse(&quicwire.TPM2CertifyResponse{
+		CertifyInfo:            res.CertifyInfo,
+		Signature:              res.Signature,
+		SignatureAlgorithm:     res.SignatureAlgorithm,
+		CertifyInfoSignature:   res.CertifyInfoSignature,
+		AttestingKeyPublic:     res.AttestingKeyPublic,
+		AttestedKeyPublic:      res.AttestedKeyPublic,
+		AttestingKeyPublicArea: res.AttestingKeyPublicArea,
+		AttestedKeyPublicArea:  res.AttestedKeyPublicArea,
+		Nonce:                  res.Nonce,
 	})
 }
 

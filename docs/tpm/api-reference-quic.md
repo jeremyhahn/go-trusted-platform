@@ -74,6 +74,7 @@ TPM operations use a category opcode (0x27) with a sub-opcode in the first byte 
 | `0x0F` | Quote | Generate quote over PCRs |
 | `0x10` | VerifyQuote | Verify quote signature |
 | `0x13` | EventLog | Get TPM event log |
+| `0x22` | Certify | IAK certifies a persistent key (`TPM2CertifyRequest` → `TPM2CertifyResponse`) |
 
 ### PCR Operations
 

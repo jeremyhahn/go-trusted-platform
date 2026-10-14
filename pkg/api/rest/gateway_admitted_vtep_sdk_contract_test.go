@@ -65,7 +65,7 @@ func (s *admittedVTEPService) ListAdmittedVTEPs(_ context.Context, gatewayID str
 func sdkGatewayAgainstRoutes(t *testing.T, svc *admittedVTEPService) *sdkgateway.Client {
 	t.Helper()
 	router := mux.NewRouter()
-	router.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	router.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	NewGatewayHandlers(svc, slog.Default()).RegisterRoutes(router)
 	server := httptest.NewTLSServer(router)
 	t.Cleanup(server.Close)

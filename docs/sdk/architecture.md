@@ -169,7 +169,7 @@ object storage stay side-client routes.
    (`ErrUnsupportedOption`). See §4.
 3. `Connect` falls back on failure: any error from an adapter moves it to the
    next candidate, including a refused credential option. REST probes
-   `GET /health`, MCP runs `initialize` and QUIC completes its handshake before
+   `GET /health/live` (liveness, so a degraded platform still connects), MCP runs `initialize` and QUIC completes its handshake before
    returning, so a dead endpoint fails there with `ErrConnectionFailed`. gRPC
    and Unix build a lazy `grpc.ClientConn` (Unix checks only that the socket
    exists); a dead gRPC endpoint fails on the first RPC with `Unavailable`.

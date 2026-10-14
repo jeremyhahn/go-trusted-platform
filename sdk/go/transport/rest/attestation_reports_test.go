@@ -39,7 +39,7 @@ type capturedRequest struct {
 func attestationServer(t *testing.T, statusCode int, body string, captured *capturedRequest) *Adapter {
 	t.Helper()
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}

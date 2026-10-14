@@ -88,18 +88,6 @@ var ErrPXEInvalidState = &PXEError{
 // PXE Tool Handler
 // =============================================================================
 
-// PXEToolHandler handles MCP tool execution for PXE provisioning operations.
-type PXEToolHandler struct {
-	service pxe.Service
-}
-
-// NewPXEToolHandler creates a new PXE tool handler with the given service dependency.
-func NewPXEToolHandler(service pxe.Service) *PXEToolHandler {
-	return &PXEToolHandler{
-		service: service,
-	}
-}
-
 // =============================================================================
 // PXE Tool Registration
 // =============================================================================

@@ -392,6 +392,26 @@ func (e ErrNVRAMDeleteFailed) Error() string {
 	return fmt.Sprintf("failed to delete NV index 0x%08X: %s", e.Index, e.Reason)
 }
 
+// ErrCertifyFailed is returned when the daemon refuses or fails to certify
+// a key.
+type ErrCertifyFailed struct {
+	Handle uint32
+	Reason string
+}
+
+func (e ErrCertifyFailed) Error() string {
+	return fmt.Sprintf("failed to certify key 0x%08X: %s", e.Handle, e.Reason)
+}
+
+// ErrInvalidCertifyNonce is returned when the --nonce flag is not hex.
+type ErrInvalidCertifyNonce struct {
+	Nonce string
+}
+
+func (e ErrInvalidCertifyNonce) Error() string {
+	return fmt.Sprintf("invalid certify nonce %q: expected hex", e.Nonce)
+}
+
 // ErrStatusCertificatePEM is returned by `tpm status` when a certificate the
 // daemon reported as installed does not decode as a PEM block.
 type ErrStatusCertificatePEM struct{}

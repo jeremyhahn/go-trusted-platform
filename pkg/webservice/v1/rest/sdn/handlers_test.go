@@ -30,6 +30,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
@@ -39,21 +40,21 @@ import (
 type mockSDNService struct {
 	platformv1.UnimplementedSDNServiceServer
 
-	createBridgeFunc func(ctx context.Context, req *platformv1.CreateBridgeRequest) (*platformv1.CreateBridgeResponse, error)
-	deleteBridgeFunc func(ctx context.Context, req *platformv1.DeleteBridgeRequest) (*platformv1.DeleteBridgeResponse, error)
-	getBridgeFunc    func(ctx context.Context, req *platformv1.GetBridgeRequest) (*platformv1.GetBridgeResponse, error)
-	listBridgesFunc  func(ctx context.Context, req *platformv1.ListBridgesRequest) (*platformv1.ListBridgesResponse, error)
-	addPortFunc      func(ctx context.Context, req *platformv1.AddPortRequest) (*platformv1.AddPortResponse, error)
-	deletePortFunc   func(ctx context.Context, req *platformv1.DeletePortRequest) (*platformv1.DeletePortResponse, error)
-	getPortFunc      func(ctx context.Context, req *platformv1.GetPortRequest) (*platformv1.GetPortResponse, error)
-	setPortStateFunc func(ctx context.Context, req *platformv1.SetPortStateRequest) (*platformv1.SetPortStateResponse, error)
-	addFlowFunc      func(ctx context.Context, req *platformv1.AddFlowRequest) (*platformv1.AddFlowResponse, error)
-	deleteFlowFunc   func(ctx context.Context, req *platformv1.DeleteFlowRequest) (*platformv1.DeleteFlowResponse, error)
-	listFlowsFunc    func(ctx context.Context, req *platformv1.ListFlowsRequest) (*platformv1.ListFlowsResponse, error)
-	createVLANFunc   func(ctx context.Context, req *platformv1.CreateVLANRequest) (*platformv1.CreateVLANResponse, error)
-	listVLANsFunc    func(ctx context.Context, req *platformv1.ListVLANsRequest) (*platformv1.ListVLANsResponse, error)
-	getPortStatsFunc func(ctx context.Context, req *platformv1.GetPortStatsRequest) (*platformv1.GetPortStatsResponse, error)
-
+	createBridgeFunc     func(ctx context.Context, req *platformv1.CreateBridgeRequest) (*platformv1.CreateBridgeResponse, error)
+	deleteBridgeFunc     func(ctx context.Context, req *platformv1.DeleteBridgeRequest) (*platformv1.DeleteBridgeResponse, error)
+	getBridgeFunc        func(ctx context.Context, req *platformv1.GetBridgeRequest) (*platformv1.GetBridgeResponse, error)
+	listBridgesFunc      func(ctx context.Context, req *platformv1.ListBridgesRequest) (*platformv1.ListBridgesResponse, error)
+	addPortFunc          func(ctx context.Context, req *platformv1.AddPortRequest) (*platformv1.AddPortResponse, error)
+	deletePortFunc       func(ctx context.Context, req *platformv1.DeletePortRequest) (*platformv1.DeletePortResponse, error)
+	getPortFunc          func(ctx context.Context, req *platformv1.GetPortRequest) (*platformv1.GetPortResponse, error)
+	setPortStateFunc     func(ctx context.Context, req *platformv1.SetPortStateRequest) (*platformv1.SetPortStateResponse, error)
+	addFlowFunc          func(ctx context.Context, req *platformv1.AddFlowRequest) (*platformv1.AddFlowResponse, error)
+	deleteFlowFunc       func(ctx context.Context, req *platformv1.DeleteFlowRequest) (*platformv1.DeleteFlowResponse, error)
+	listFlowsFunc        func(ctx context.Context, req *platformv1.ListFlowsRequest) (*platformv1.ListFlowsResponse, error)
+	createVLANFunc       func(ctx context.Context, req *platformv1.CreateVLANRequest) (*platformv1.CreateVLANResponse, error)
+	listVLANsFunc        func(ctx context.Context, req *platformv1.ListVLANsRequest) (*platformv1.ListVLANsResponse, error)
+	getPortStatsFunc     func(ctx context.Context, req *platformv1.GetPortStatsRequest) (*platformv1.GetPortStatsResponse, error)
+	applyPolicyFunc      func(ctx context.Context, req *platformv1.ApplyPolicyRequest) (*platformv1.ApplyPolicyResponse, error)
 	authenticatePortFunc func(ctx context.Context, req *platformv1.AuthenticatePortRequest) (*platformv1.AuthenticatePortResponse, error)
 	revokePortAuthFunc   func(ctx context.Context, req *platformv1.RevokePortAuthRequest) (*platformv1.RevokePortAuthResponse, error)
 }
@@ -166,6 +167,13 @@ func (m *mockSDNService) ListVLANs(ctx context.Context, req *platformv1.ListVLAN
 func (m *mockSDNService) GetPortStats(ctx context.Context, req *platformv1.GetPortStatsRequest) (*platformv1.GetPortStatsResponse, error) {
 	if m.getPortStatsFunc != nil {
 		return m.getPortStatsFunc(ctx, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockSDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolicyRequest) (*platformv1.ApplyPolicyResponse, error) {
+	if m.applyPolicyFunc != nil {
+		return m.applyPolicyFunc(ctx, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
@@ -1300,25 +1308,69 @@ func TestListFlows_GRPCError(t *testing.T) {
 // Policy Handler Tests
 
 func TestApplyPolicy_Success(t *testing.T) {
-	mock := &mockSDNService{}
+	var got *platformv1.ApplyPolicyRequest
+	mock := &mockSDNService{
+		applyPolicyFunc: func(_ context.Context, req *platformv1.ApplyPolicyRequest) (*platformv1.ApplyPolicyResponse, error) {
+			got = req
+			return &platformv1.ApplyPolicyResponse{Policy: &platformv1.Policy{
+				Id:     "p1",
+				Config: req.GetConfig(),
+				Status: platformv1.PolicyStatus_POLICY_STATUS_ACTIVE,
+			}}, nil
+		},
+	}
 	handlers, respWriter := createTestHandlers(mock)
 
-	body := `{"name": "test-policy", "description": "test", "rules": [], "bridge_ids": ["br0"]}`
+	body := `{"id": "p1", "name": "web", "type": "qos",
+		"rules": [{"rule_id": "r1", "vlan_id": 20, "action": "rate-limit", "action_value": "1mbit"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/policies", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
 	handlers.ApplyPolicy(w, req)
 
-	assert.Equal(t, http.StatusOK, respWriter.lastStatus)
+	require.Equal(t, http.StatusCreated, respWriter.lastStatus)
+	require.NotNil(t, got)
+	assert.Equal(t, "p1", got.GetPolicyId())
+	assert.Equal(t, "web", got.GetConfig().GetName())
+	assert.Equal(t, platformv1.PolicyType_POLICY_TYPE_QOS, got.GetConfig().GetType())
+	assert.Equal(t, uint32(20), got.GetConfig().GetRules()[0].GetMatch().GetVlanId())
+	assert.Equal(t, platformv1.PolicyRuleAction_POLICY_RULE_ACTION_RATE_LIMIT, got.GetConfig().GetRules()[0].GetAction())
+
+	policy, ok := respWriter.lastPayload.(restapi.PolicyResponse)
+	require.True(t, ok, "payload = %T", respWriter.lastPayload)
+	assert.Equal(t, "p1", policy.ID)
+	assert.Equal(t, "qos", policy.Type)
+	assert.Equal(t, "active", policy.Status)
 }
 
-func TestApplyPolicy_MissingName(t *testing.T) {
-	mock := &mockSDNService{}
+func TestApplyPolicy_UnknownEnumNameIsBadRequest(t *testing.T) {
+	mock := &mockSDNService{
+		applyPolicyFunc: func(context.Context, *platformv1.ApplyPolicyRequest) (*platformv1.ApplyPolicyResponse, error) {
+			t.Fatal("a policy with an unknown type reached the service")
+			return nil, nil
+		},
+	}
 	handlers, respWriter := createTestHandlers(mock)
 
-	body := `{"description": "test"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/policies", bytes.NewBufferString(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/policies", bytes.NewBufferString(`{"name": "web", "type": "bogus"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handlers.ApplyPolicy(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, respWriter.lastStatus)
+}
+
+func TestApplyPolicy_ServiceRefusalIsBadRequest(t *testing.T) {
+	mock := &mockSDNService{
+		applyPolicyFunc: func(context.Context, *platformv1.ApplyPolicyRequest) (*platformv1.ApplyPolicyResponse, error) {
+			return nil, status.Error(codes.InvalidArgument, "policy name is required")
+		},
+	}
+	handlers, respWriter := createTestHandlers(mock)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/policies", bytes.NewBufferString(`{"description": "test"}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 

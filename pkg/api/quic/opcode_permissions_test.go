@@ -86,6 +86,7 @@ func TestLookupOperationPermission_CategorySubOpcodes(t *testing.T) {
 		{"tenant barrier unseal", quicwire.OpTenantBarrierCategory, quicwire.TenantBarrierSubUnseal, OpcodePermission{Resource: "tenant", Action: "write"}},
 		{"tenant barrier status", quicwire.OpTenantBarrierCategory, quicwire.TenantBarrierSubStatus, OpcodePermission{Resource: "tenant", Action: "read"}},
 		{"tpm2 clear", quicwire.OpTPM2Category, quicwire.SubOpTPM2Clear, OpcodePermission{Resource: "tpm", Action: "delete"}},
+		{"tpm2 certify", quicwire.OpTPM2Category, quicwire.SubOpTPM2Certify, OpcodePermission{Resource: "tpm", Action: "read"}},
 		{"secrets delete", quicwire.OpSecretsCategory, quicwire.SecretsSubDelete, OpcodePermission{Resource: "secrets", Action: "delete"}},
 	}
 	for _, tc := range cases {

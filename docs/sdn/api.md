@@ -153,6 +153,14 @@ other transport saw. The REST policy object no longer carries `labels` — the
 gRPC `Policy` has no such field. The webservice still has no policy delete
 route.
 
+The webservice's apply route takes the same body, calls the same
+`ApplyPolicy` and answers `201` with the same policy object; it reports a
+duplicate name as `400`, not `409`. The SDK's REST client sends `ApplyPolicy`
+there in this form, through the policy codec its MCP client uses
+(`sdk/go/services/sdn/policy_wire.go`). Until #452 it posted the gRPC request
+to `/api/v1/sdn/policies/apply`, which no server serves, and the webservice
+route answered a made-up policy without calling the service.
+
 **The MCP policy tools are the same operations.** `sdn_apply_policy`,
 `sdn_get_policy`, `sdn_list_policies` and `sdn_delete_policy` call the same
 `SDNService` on both MCP providers and speak the REST policy document, so a

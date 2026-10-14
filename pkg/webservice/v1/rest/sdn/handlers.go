@@ -17,7 +17,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +24,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -933,34 +933,33 @@ func (h *SDNHandlers) flowActionTypeToString(t platformv1.FlowActionType) string
 
 // Policy Handlers
 
-// ApplyPolicy handles POST /api/v1/sdn/policies
+// ApplyPolicy handles POST /api/v1/sdn/policies. The body is the daemon REST
+// policy contract (pkg/api/rest CreatePolicyRequest) the SDK sends: the config
+// flattened, policy_id as id, the enums as lowercase names. It answers 201
+// with the applied policy in the same form. The service owns validation.
 func (h *SDNHandlers) ApplyPolicy(w http.ResponseWriter, r *http.Request) {
-	var req ApplyPolicyRequest
+	var req restapi.CreatePolicyRequest
 	if err := h.decodeJSON(r, &req); err != nil {
 		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
 		return
 	}
 
-	if req.Name == "" {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: "policy name is required"})
+	grpcReq, err := restapi.PolicyRequestToProto(req)
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
 		return
 	}
 
-	// Policy management would be implemented through flows
-	// For now, we create a policy response with a generated ID
-	policyID := "policy-" + strconv.FormatInt(time.Now().UnixNano(), 16)
-	now := time.Now()
+	ctx, cancel := h.createContext()
+	defer cancel()
 
-	h.respWriter.Success200(w, r, PolicyResponse{
-		ID:          policyID,
-		Name:        req.Name,
-		Description: req.Description,
-		Rules:       req.Rules,
-		BridgeIDs:   req.BridgeIDs,
-		Priority:    req.Priority,
-		CreatedAt:   &now,
-		UpdatedAt:   &now,
-	})
+	resp, err := h.sdnService.ApplyPolicy(ctx, grpcReq)
+	if err != nil {
+		h.handleGRPCError(w, r, err)
+		return
+	}
+
+	h.respWriter.Success201(w, r, restapi.PolicyToResponse(resp.GetPolicy()))
 }
 
 // ListPolicies handles GET /api/v1/sdn/policies

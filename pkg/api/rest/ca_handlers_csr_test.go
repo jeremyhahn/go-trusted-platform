@@ -197,8 +197,8 @@ func TestCAHandlers_SignCSR_CertifiesTheKMSKeyForCodeSigning(t *testing.T) {
 // as platformd serves it, with adminToken as the bearer.
 func sdkCAClient(t *testing.T, router *mux.Router) platformv1.CAServiceClient {
 	t.Helper()
-	// sdkrest.Connect probes /health before handing the adapter out.
-	router.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+	// sdkrest.Connect probes /health/live before handing the adapter out.
+	router.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}).Methods(http.MethodGet)
 	srv := httptest.NewTLSServer(router)

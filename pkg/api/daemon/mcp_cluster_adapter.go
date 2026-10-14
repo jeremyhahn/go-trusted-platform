@@ -61,6 +61,7 @@ type clusterServiceAdapter struct {
 // NewClusterServiceAdapter wraps a *ClusterService so it can be passed
 // into MCPServiceProvider via SetClusterService. Returns nil if svc is
 // nil so callers can pass through optional services without checks.
+// Kept with no caller: the cluster registration lane hands the real ClusterService to MCP through it.
 func NewClusterServiceAdapter(svc *ClusterService) ClusterServicer {
 	if svc == nil {
 		return nil

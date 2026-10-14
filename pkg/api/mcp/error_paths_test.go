@@ -295,11 +295,11 @@ func (e *errorServiceProvider) TPMPlatform(ctx context.Context) (interface{}, er
 	return e.mockServiceProvider.TPMPlatform(ctx)
 }
 
-func (e *errorServiceProvider) TPMCertify(ctx context.Context, keyHandle int) (interface{}, error) {
+func (e *errorServiceProvider) TPMCertify(ctx context.Context, keyHandle uint32, keyPassword string, nonce []byte) (interface{}, error) {
 	if e.shouldFail("TPMCertify") {
 		return nil, ErrMockServiceError
 	}
-	return e.mockServiceProvider.TPMCertify(ctx, keyHandle)
+	return e.mockServiceProvider.TPMCertify(ctx, keyHandle, keyPassword, nonce)
 }
 
 func (e *errorServiceProvider) TPMUnseal(ctx context.Context, cn, password string) ([]byte, error) {

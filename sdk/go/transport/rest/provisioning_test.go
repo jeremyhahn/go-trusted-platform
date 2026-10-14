@@ -38,7 +38,7 @@ func TestProvisioning_GetNonce_RouteAndDecode(t *testing.T) {
 	}
 
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -75,7 +75,7 @@ func TestProvisioning_FetchConfig_Delivered(t *testing.T) {
 	}
 
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -115,7 +115,7 @@ func TestProvisioning_FetchConfig_Delivered(t *testing.T) {
 
 func TestProvisioning_FetchConfig_Pending(t *testing.T) {
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -147,7 +147,7 @@ func TestProvisioning_SignDigest_RouteAndDecode(t *testing.T) {
 	}
 
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -184,7 +184,7 @@ func TestProvisioning_ListSessions_RouteAndDecode(t *testing.T) {
 	}
 
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -224,7 +224,7 @@ func TestProvisioning_GetSession_PathTemplated(t *testing.T) {
 	}
 
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -259,7 +259,7 @@ func TestProvisioning_PollSession_PathTemplated(t *testing.T) {
 	}
 
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -292,7 +292,7 @@ func TestProvisioning_FulfillSession_PathAndBody(t *testing.T) {
 	}
 
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -332,7 +332,7 @@ func TestProvisioning_FulfillSession_PathAndBody(t *testing.T) {
 func TestProvisioning_FulfillSession_EmptySessionIDRejected(t *testing.T) {
 	var apiHits int
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/health" {
+		if r.URL.Path != "/health/live" {
 			apiHits++
 		}
 		w.WriteHeader(http.StatusOK)
@@ -354,7 +354,7 @@ func TestProvisioning_FulfillSession_EmptySessionIDRejected(t *testing.T) {
 
 func TestProvisioning_DecodeFailureSurfacesInternal(t *testing.T) {
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}

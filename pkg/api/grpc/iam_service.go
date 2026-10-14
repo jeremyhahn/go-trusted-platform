@@ -157,6 +157,7 @@ type IAMGRPCService struct {
 }
 
 // NewIAMGRPCService creates a new IAMGRPCService instance.
+// Kept with no caller: docs/iam names this file as the PlatformIAMService surface the daemon's token stubs still shadow.
 func NewIAMGRPCService(
 	logger *logging.Logger,
 	service IAMService,

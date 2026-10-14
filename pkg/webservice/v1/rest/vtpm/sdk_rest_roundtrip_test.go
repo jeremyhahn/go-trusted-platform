@@ -43,7 +43,7 @@ func connectVTPMSDK(t *testing.T, service *mockVTPMService) platformv1.VTPMServi
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	root := mux.NewRouter()
-	root.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+	root.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	NewVTPMRouter(logger, service, response.NewResponseWriter(logger, nil)).

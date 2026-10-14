@@ -192,6 +192,7 @@ type ExtendedContainerOrchestrator interface {
 }
 
 // NewContainerHandlers creates a new ContainerHandlers instance.
+// Kept with no caller: it carries the container logs route that #452 owns.
 func NewContainerHandlers(orchestrator ContainerOrchestratorInterface, logger *slog.Logger) *ContainerHandlers {
 	if logger == nil {
 		logger = slog.Default()

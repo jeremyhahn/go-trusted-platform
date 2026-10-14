@@ -59,6 +59,14 @@ var preAuthMethods = map[string]struct{}{
 	// and PlatformDaemon/GetHealth names each component with its failure.
 	"/grpc.health.v1.Health/Check": {},
 
+	// The platform's own liveness and readiness probes, served without a
+	// token for the same reason as Health/Check: an orchestrator probes before
+	// it holds a credential. Each answers a boolean and the overall status,
+	// never a component name, so it discloses no more than Health/Check;
+	// the component breakdown stays behind PlatformDaemon/GetHealth.
+	"/platform.v1.PlatformDaemon/Liveness":  {},
+	"/platform.v1.PlatformDaemon/Readiness": {},
+
 	// Invitation redemption. The invitation token in the request is the
 	// credential: an invitee has no platform session yet. Matches the ungated
 	// REST invitee routes and the MCP get_by_token / accept tools.
@@ -912,6 +920,7 @@ func buildGRPCMethodPermissions() map[string]string {
 		"/platform.v1.TPMService/GetRandom":           scope(tpm, read),
 		"/platform.v1.TPMService/Quote":               scope(tpm, read),
 		"/platform.v1.TPMService/VerifyQuote":         scope(tpm, read),
+		"/platform.v1.TPMService/Certify":             scope(tpm, read),
 		"/platform.v1.TPMService/ReadNVRAM":           scope(tpm, read),
 		"/platform.v1.TPMService/Unseal":              scope(tpm, read),
 		"/platform.v1.TPMService/MakeCredential":      scope(tpm, read),

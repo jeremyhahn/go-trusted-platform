@@ -290,7 +290,7 @@ func TestProvisioningState(t *testing.T) {
 func connectGatewaySDK(t *testing.T, server platformv1.PXEServiceServer) platformv1.ProvisioningGatewayClient {
 	t.Helper()
 	root := gatewayRoot(server, nil)
-	root.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+	root.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	ts := httptest.NewTLSServer(root)

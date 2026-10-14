@@ -421,9 +421,9 @@ func TestSDNMCP_DecodersRejectWrongReplyType(t *testing.T) {
 	for method, decode := range map[string]mcpReplyDecoder{
 		platformv1.SDNService_GetPort_FullMethodName:           decodeSDNGetPortResult,
 		platformv1.SDNService_GetPortStats_FullMethodName:      decodeSDNGetPortStatsResult,
-		platformv1.SDNService_ApplyPolicy_FullMethodName:       decodeSDNApplyPolicyResult,
-		platformv1.SDNService_GetPolicy_FullMethodName:         decodeSDNGetPolicyResult,
-		platformv1.SDNService_ListPolicies_FullMethodName:      decodeSDNListPoliciesResult,
+		platformv1.SDNService_ApplyPolicy_FullMethodName:       mcpReplyDecoders[platformv1.SDNService_ApplyPolicy_FullMethodName],
+		platformv1.SDNService_GetPolicy_FullMethodName:         mcpReplyDecoders[platformv1.SDNService_GetPolicy_FullMethodName],
+		platformv1.SDNService_ListPolicies_FullMethodName:      mcpReplyDecoders[platformv1.SDNService_ListPolicies_FullMethodName],
 		platformv1.SDNService_ListNetworkZones_FullMethodName:  decodeSDNListNetworkZonesResult,
 		platformv1.SDNService_CreateNetworkZone_FullMethodName: decodeSDNCreateNetworkZoneResult,
 		platformv1.SDNService_UpdateNetworkZone_FullMethodName: decodeSDNUpdateNetworkZoneResult,
@@ -470,5 +470,5 @@ func TestDecodeStatus(t *testing.T) {
 		t.Errorf("decodeStatus(nil) = %v", err)
 	}
 	requireCode(t, decodeStatus(ErrBridgeNotFound{ID: "br0"}), codes.NotFound)
-	requireCode(t, decodeStatus(ErrUnknownEnumName{Field: "f", Name: "n"}), codes.Internal)
+	requireCode(t, decodeStatus(ErrUnexpectedReplyType{Method: "m"}), codes.Internal)
 }

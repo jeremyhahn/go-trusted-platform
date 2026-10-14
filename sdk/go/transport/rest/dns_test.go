@@ -38,7 +38,7 @@ func dnsOverREST(t *testing.T, payload string) (platformv1.DNSServiceClient, *dn
 	t.Helper()
 	sent := &dnsSent{}
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}

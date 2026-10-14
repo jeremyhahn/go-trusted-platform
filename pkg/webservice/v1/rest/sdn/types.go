@@ -180,15 +180,6 @@ type DeleteFlowRequest struct {
 	FlowID   string `json:"flow_id"`
 }
 
-// ApplyPolicyRequest is the request body for applying a policy
-type ApplyPolicyRequest struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description,omitempty"`
-	Rules       []Rule   `json:"rules"`
-	BridgeIDs   []string `json:"bridge_ids,omitempty"`
-	Priority    int32    `json:"priority,omitempty"`
-}
-
 // Rule represents a policy rule
 type Rule struct {
 	Name        string            `json:"name"`

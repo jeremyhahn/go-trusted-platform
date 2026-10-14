@@ -325,6 +325,9 @@ GET /api/v1/webauthn/login/finish
 GET /api/v1/webauthn/registration/begin
 GET /api/v1/webauthn/registration/finish
 GET /api/v1/webauthn/registration/status
+GET /health
+GET /health/live
+GET /health/ready
 HEAD /api/v1/acme/new-nonce
 PATCH /api/v1/cache/config
 PATCH /api/v1/compute/vms/{id}/disks/{diskId}
@@ -357,6 +360,7 @@ POST /api/v1/ca/certificates/verify
 POST /api/v1/ca/certificates/{serial}/renew
 POST /api/v1/ca/sign-csr
 POST /api/v1/compute/containers
+POST /api/v1/compute/containers/{id}/attest
 POST /api/v1/compute/containers/{id}/exec
 POST /api/v1/compute/containers/{id}/start
 POST /api/v1/compute/containers/{id}/stop
@@ -518,6 +522,7 @@ POST /api/v1/tenants/{id}/quota-check
 POST /api/v1/tenants/{id}/resume
 POST /api/v1/tenants/{id}/suspend
 POST /api/v1/tpm/ak
+POST /api/v1/tpm/certify
 POST /api/v1/tpm/clear
 POST /api/v1/tpm/ek
 POST /api/v1/tpm/ek/certificate

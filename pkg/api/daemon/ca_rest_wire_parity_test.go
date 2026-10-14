@@ -154,12 +154,12 @@ var caWebServiceServer = caWireServer{name: "webservice", build: func(ca *signin
 	return tokens.authorize(router)
 }}
 
-// caWireClient serves handler over TLS, with the /health route the SDK probes
+// caWireClient serves handler over TLS, with the /health/live route the SDK probes
 // on Connect, and returns an SDK REST CA client presenting token.
 func caWireClient(t *testing.T, f *caParityFixture, handler http.Handler, token string) platformv1.CAServiceClient {
 	t.Helper()
 	routes := http.NewServeMux()
-	routes.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
+	routes.HandleFunc("GET /health/live", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	routes.Handle("/", handler)

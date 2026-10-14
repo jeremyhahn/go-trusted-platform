@@ -306,6 +306,7 @@ const (
         SubOpTPM2GetIDevID     byte = 0x1F
         SubOpTPM2MakeCred      byte = 0x20
         SubOpTPM2ActivateCred  byte = 0x21
+        SubOpTPM2Certify       byte = 0x22
 )
 ```
 

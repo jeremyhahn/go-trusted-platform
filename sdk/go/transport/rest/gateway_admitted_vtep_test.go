@@ -49,7 +49,7 @@ func sdkGatewayOverREST(t *testing.T, body string) (*sdkgateway.Client, *url.URL
 	t.Helper()
 	requested := &url.URL{}
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}

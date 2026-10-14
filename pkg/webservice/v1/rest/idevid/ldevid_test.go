@@ -152,7 +152,7 @@ func TestCreateLDevID_MapsTheServiceErrorCode(t *testing.T) {
 func connectSDK(t *testing.T, server platformv1.IDevIDServiceServer) platformv1.IDevIDServiceClient {
 	t.Helper()
 	root := newRouterWith(server)
-	root.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+	root.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	httpServer := httptest.NewTLSServer(root)

@@ -71,38 +71,3 @@ func TestDeviceHandlers_writeProfileError_UnrelatedStaysInternal(t *testing.T) {
 	h.writeProfileError(rec, "save", &device.WrappedError{Msg: "failed to save profile", Err: assert.AnError})
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
-
-// TestTemplateHandlers_writeProfileError_VLANsNotDistinct is the same
-// assertion for the create-profile-from-template route, which had no
-// client-error arm at all.
-func TestTemplateHandlers_writeProfileError_VLANsNotDistinct(t *testing.T) {
-	h := &TemplateHandlers{logger: vlanErrTestLogger()}
-
-	for _, tc := range vlanErrorCases() {
-		t.Run(tc.name, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			h.writeProfileError(rec, "create-profile", tc.err)
-			assert.Equal(t, http.StatusBadRequest, rec.Code)
-		})
-	}
-}
-
-// TestTemplateHandlers_writeProfileError_UnrelatedStaysInternal is its
-// error-direction counterpart.
-func TestTemplateHandlers_writeProfileError_UnrelatedStaysInternal(t *testing.T) {
-	h := &TemplateHandlers{logger: vlanErrTestLogger()}
-
-	rec := httptest.NewRecorder()
-	h.writeProfileError(rec, "create-profile", &device.WrappedError{Msg: "failed to save profile", Err: assert.AnError})
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
-}
-
-// TestTemplateHandlers_writeProfileError_NoMatchingConfigIsNotFound: a find-config
-// lookup for an unknown identity answers 404, not 500.
-func TestTemplateHandlers_writeProfileError_NoMatchingConfigIsNotFound(t *testing.T) {
-	h := &TemplateHandlers{logger: vlanErrTestLogger()}
-
-	rec := httptest.NewRecorder()
-	h.writeProfileError(rec, "find-config", device.ErrNoMatchingConfig{EKSerial: "EK-UNKNOWN"})
-	assert.Equal(t, http.StatusNotFound, rec.Code)
-}

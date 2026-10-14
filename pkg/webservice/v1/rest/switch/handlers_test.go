@@ -408,3 +408,38 @@ func TestDisablePort_OperationFails(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
+
+// A port the switch does not have is 404 on the mutators too, as it is on
+// GetPortStatus, so the SDK sees NotFound rather than Internal (#452) — also
+// when the manager wraps the error.
+func TestPortMutators_PortNotFound(t *testing.T) {
+	notFound := func(port string) error { return switchmgmt.ErrPortNotFound{Port: port} }
+	wrapped := func(port string) error {
+		return switchmgmt.ErrSSHCommandFailed{Command: "interface " + port, Cause: notFound(port)}
+	}
+	for _, missing := range []struct {
+		name string
+		err  func(string) error
+	}{
+		{"bare", notFound},
+		{"wrapped", wrapped},
+	} {
+		mgr := &mockManager{
+			setPortVLANFunc: func(_ context.Context, port string, _ uint16) error { return missing.err(port) },
+			enablePortFunc:  func(_ context.Context, port string) error { return missing.err(port) },
+			disablePortFunc: func(_ context.Context, port string) error { return missing.err(port) },
+		}
+		router := newTestRouter(newTestHandlers(&mockSwitchService{managers: map[string]switchmgmt.Manager{"core-01": mgr}}))
+
+		for _, path := range []string{"/vlan", "/enable", "/disable"} {
+			t.Run(missing.name+path, func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodPost, "/api/v1/switches/core-01/ports/Eth9%2F9"+path,
+					bytes.NewReader([]byte(`{"vlan_id":200}`)))
+				rec := httptest.NewRecorder()
+				router.ServeHTTP(rec, req)
+
+				assert.Equal(t, http.StatusNotFound, rec.Code)
+			})
+		}
+	}
+}

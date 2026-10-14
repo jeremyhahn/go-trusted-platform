@@ -39,7 +39,7 @@ func connectTenantSDK(t *testing.T, srv platformv1.TenantServiceServer) platform
 	t.Helper()
 
 	root := newRouterWithServer(t, srv)
-	root.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+	root.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 

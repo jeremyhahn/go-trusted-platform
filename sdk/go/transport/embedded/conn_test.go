@@ -228,9 +228,10 @@ func TestMethodCount(t *testing.T) {
 		t.Error("expected MethodCount() > 0 for registry with Daemon service")
 	}
 
-	// The daemon service registers 14 unary methods (excluding streaming).
-	if count != 13 {
-		t.Errorf("expected 13 daemon methods, got %d", count)
+	// The daemon service registers 15 unary methods (excluding streaming),
+	// Liveness and Readiness among them.
+	if count != 15 {
+		t.Errorf("expected 15 daemon methods, got %d", count)
 	}
 }
 

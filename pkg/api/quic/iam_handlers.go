@@ -100,6 +100,7 @@ type IAMHandler struct {
 }
 
 // NewIAMHandler creates a new IAM handler
+// Kept with no caller: docs/iam names it, and it implements the token ops the daemon's QUIC IAM stubs still shadow.
 func NewIAMHandler(logger *logging.Logger, service IAMService) *IAMHandler {
 	return &IAMHandler{
 		service: service,

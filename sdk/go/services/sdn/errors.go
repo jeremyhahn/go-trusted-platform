@@ -338,3 +338,40 @@ func (e *ErrListNetworkZonesFailed) Error() string {
 }
 
 func (e *ErrListNetworkZonesFailed) Unwrap() error { return e.Cause }
+
+// Wire Errors
+
+// ErrUnknownWireValue indicates a transport carried an enum value the SDK
+// does not recognise. It is refused rather than reported as UNSPECIFIED.
+type ErrUnknownWireValue struct {
+	Kind  string
+	Value string
+}
+
+func (e *ErrUnknownWireValue) Error() string {
+	return fmt.Sprintf("sdn: unknown %s %q", e.Kind, e.Value)
+}
+
+// ErrWireEncode indicates a request could not be encoded for a transport.
+type ErrWireEncode struct {
+	Message string
+	Err     error
+}
+
+func (e *ErrWireEncode) Error() string {
+	return fmt.Sprintf("sdn: encode %s request: %v", e.Message, e.Err)
+}
+
+func (e *ErrWireEncode) Unwrap() error { return e.Err }
+
+// ErrWireDecode indicates a REST or MCP reply could not be decoded.
+type ErrWireDecode struct {
+	Message string
+	Err     error
+}
+
+func (e *ErrWireDecode) Error() string {
+	return fmt.Sprintf("sdn: decode %s reply: %v", e.Message, e.Err)
+}
+
+func (e *ErrWireDecode) Unwrap() error { return e.Err }

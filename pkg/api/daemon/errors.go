@@ -866,20 +866,6 @@ func (ErrOVSNotConfigured) Error() string {
 // DNS Service Errors
 // =============================================================================
 
-// ErrDNSConfigUpdateNotSupported is returned when DNS configuration updates are not supported
-type ErrDNSConfigUpdateNotSupported struct{}
-
-func (e ErrDNSConfigUpdateNotSupported) Error() string {
-	return "DNS configuration updates are not supported at runtime"
-}
-
-// ErrDNSCacheFlushNotSupported is returned when DNS cache flushing is not supported
-type ErrDNSCacheFlushNotSupported struct{}
-
-func (e ErrDNSCacheFlushNotSupported) Error() string {
-	return "DNS cache flushing is not supported"
-}
-
 // ErrDNSZoneNotFound is returned when a DNS zone is not found
 type ErrDNSZoneNotFound struct {
 	Zone string
@@ -1649,15 +1635,6 @@ func (e ErrBGPAttributeUnsupported) GRPCStatus() *status.Status {
 // =============================================================================
 // TPM Service Errors
 // =============================================================================
-
-// ErrTPMOperationNotImplemented is returned when a TPM operation is not yet implemented.
-type ErrTPMOperationNotImplemented struct {
-	Operation string
-}
-
-func (e ErrTPMOperationNotImplemented) Error() string {
-	return fmt.Sprintf("TPM operation not implemented: %s", e.Operation)
-}
 
 // ErrTPMInvalidSize is returned when a requested size exceeds the maximum.
 type ErrTPMInvalidSize struct {

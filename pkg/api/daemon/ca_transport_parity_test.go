@@ -40,6 +40,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
@@ -214,7 +215,7 @@ func (f *caParityFixture) restClient(t *testing.T) platformv1.CAServiceClient {
 	restapi.NewCAHandlers(restapi.NewCAAuthorityAdapter(f.ca), nil, nil).RegisterRoutes(router)
 	// The SDK's REST Connect probes GET /health, which the daemon serves on
 	// every REST listener.
-	router.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+	router.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}).Methods(http.MethodGet)
 	srv := httptest.NewUnstartedServer(router)
@@ -300,7 +301,8 @@ func mcpToolBridge(t *testing.T, registry *mcp.ToolRegistry) http.Handler {
 			result, err := callTool(r.Context(), registry, req.Params)
 			if err != nil {
 				resp.Result = nil
-				resp.Error = &mcpwire.JSONRPCError{Code: mcpwire.InternalError, Message: err.Error()}
+				// Classified as the MCP server does, so a caller error stays one.
+				resp.Error = &mcpwire.JSONRPCError{Code: mcpwire.CodeForClass(status.Code(err)), Message: err.Error()}
 			} else {
 				resp.Result = result
 			}

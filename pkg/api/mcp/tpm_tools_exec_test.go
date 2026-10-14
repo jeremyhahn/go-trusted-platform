@@ -626,21 +626,6 @@ func TestTPMToolExecution(t *testing.T) {
 		}
 	})
 
-	t.Run("executeTPMCertify success", func(t *testing.T) {
-		svc := newMockServiceProvider()
-		registry := NewToolRegistry(svc, log)
-
-		result, err := registry.ExecuteTool(ctx, "platform_tpm_certify", map[string]interface{}{
-			"key_handle": float64(0x81000001),
-		})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if result == nil {
-			t.Fatal("result should not be nil")
-		}
-	})
-
 	t.Run("executeTPMNVList success", func(t *testing.T) {
 		svc := newMockServiceProvider()
 		registry := NewToolRegistry(svc, log)

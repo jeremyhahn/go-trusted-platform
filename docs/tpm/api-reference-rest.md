@@ -69,6 +69,7 @@ Unix and embedded call — and speaks that RPC's messages
 | `POST /activate-credential` | `ActivateCredential` | `credentialBlob`, `encryptedSecret` |
 | `POST /quote` | `Quote` | `akHandle`, `akPassword`, `pcrIndices`, `pcrBank`, `nonce` |
 | `POST /quote/verify` | `VerifyQuote` | `quote`, `signature`, `signatureAlgorithm`, `akPublic`, `nonce`, `expectedPcrs`, `channelBinding`, … |
+| `POST /certify` | `Certify` | `keyHandle`, `keyPassword`, `nonce` |
 | `GET /pcrs`, `POST /pcrs` | `GetPCRs` | `indices`, `bank` (`GET`: `?indices=0&indices=7&bank=PCR_BANK_SHA256`) |
 | `GET /eventlog` | `GetEventLog` | `?format=` |
 | `POST /nvram` | `DefineNVRAM` | `index`, `size`, `password`, `attributes`, `parentPassword` |
@@ -80,7 +81,10 @@ Unix and embedded call — and speaks that RPC's messages
 | `POST /unseal` | `Unseal` | `cn`, `parentHandle`, `parentPassword`, `password`, `pcrIndices`, `pcrBank` |
 
 The path forms (`/ek/{handle}`, `/nvram/{index}`) are what the JavaScript SDK
-calls; the Go SDK sends the same fields in the body of the bare route.
+calls. The Go SDK sends `DeleteEK`, `DeleteSRK` and `DeleteAK` to the bare
+route with the fields in the body, and `ReadNVRAM`, `WriteNVRAM` and
+`UndefineNVRAM` to `/nvram/{index}` with the index in the path and the other
+fields in the body — the web service serves only that form.
 
 ### Info
 

@@ -62,6 +62,7 @@ func NewTPMRouter(
 //	POST   /api/v1/tpm/unseal
 //	POST   /api/v1/tpm/quote
 //	POST   /api/v1/tpm/quote/verify
+//	POST   /api/v1/tpm/certify
 //	GET    /api/v1/tpm/eventlog
 //	GET    /api/v1/tpm/pcrs
 //	POST   /api/v1/tpm/nvram                     (define)
@@ -89,6 +90,7 @@ func (r *TPMRouter) RegisterRoutes(parent *mux.Router) {
 	sr.HandleFunc("/unseal", r.handlers.Unseal).Methods("POST")
 	sr.HandleFunc("/quote", r.handlers.Quote).Methods("POST")
 	sr.HandleFunc("/quote/verify", r.handlers.VerifyQuote).Methods("POST")
+	sr.HandleFunc("/certify", r.handlers.Certify).Methods("POST")
 	sr.HandleFunc("/eventlog", r.handlers.GetEventLog).Methods("GET")
 	sr.HandleFunc("/pcrs", r.handlers.GetPCRs).Methods("GET")
 	// SDK alias: the JS SDK posts to /pcrs with a request body

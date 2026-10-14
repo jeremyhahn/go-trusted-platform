@@ -72,7 +72,6 @@ func TestCoverageFinalUncoveredErrors(t *testing.T) {
 		{"ErrGatewayOperationNotImplemented", ErrGatewayOperationNotImplemented{Operation: "delete"}, "gateway operation not implemented: delete"},
 
 		// TPM errors
-		{"ErrTPMOperationNotImplemented", ErrTPMOperationNotImplemented{Operation: "seal"}, "TPM operation not implemented: seal"},
 		{"ErrTPMInvalidSize", ErrTPMInvalidSize{Max: 64, Requested: 128}, "requested size 128 exceeds maximum 64 bytes"},
 
 		// mTLS errors
@@ -80,8 +79,7 @@ func TestCoverageFinalUncoveredErrors(t *testing.T) {
 		{"ErrMTLSNoTLSInfo", ErrMTLSNoTLSInfo{}, ""},
 		{"ErrMTLSNoCertificates", ErrMTLSNoCertificates{}, ""},
 
-		// IAM adapter errors
-		{"ErrStreamingNotSupported", ErrStreamingNotSupported{}, "streaming RPCs are not supported"},
+		// IAM authorizer errors
 		{"ErrPEPClientNotAvailable", ErrPEPClientNotAvailable{}, ""},
 
 		// TPM2/IDevID errors

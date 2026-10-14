@@ -16,9 +16,13 @@ package daemon
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -30,6 +34,93 @@ import (
 type iamTenantOnlyClient struct {
 	quicbaassdk.IAMClient
 	tenants quicbaassdk.IAMTenantClient
+}
+
+// mockIAMClientForTenant is an in-memory quicbaassdk.IAMTenantClient.
+type mockIAMClientForTenant struct {
+	mu      sync.RWMutex
+	tenants map[string]*sdkiam.Tenant
+	nextID  int
+}
+
+func newMockIAMClientForTenant() *mockIAMClientForTenant {
+	return &mockIAMClientForTenant{
+		tenants: make(map[string]*sdkiam.Tenant),
+		nextID:  1,
+	}
+}
+
+// Reconcile satisfies tenant.RoleReconciler; these tests do not inspect roles.
+func (m *mockIAMClientForTenant) Reconcile(_ context.Context, tenantID string) (*sdkiam.ReconcileRolesResponse, error) {
+	return &sdkiam.ReconcileRolesResponse{TenantID: tenantID}, nil
+}
+
+func (m *mockIAMClientForTenant) Create(ctx context.Context, req *sdkiam.CreateTenantRequest) (*sdkiam.Tenant, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	id := req.ID
+	if id == "" {
+		id = req.Name + "-id"
+	}
+
+	t := &sdkiam.Tenant{
+		ID:   id,
+		Name: req.Name,
+	}
+
+	m.tenants[t.ID] = t
+	m.nextID++
+	return t, nil
+}
+
+func (m *mockIAMClientForTenant) Get(ctx context.Context, tenantID string) (*sdkiam.Tenant, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	t, ok := m.tenants[tenantID]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "tenant not found")
+	}
+	return t, nil
+}
+
+func (m *mockIAMClientForTenant) List(ctx context.Context, req *sdkiam.ListTenantsRequest) (*sdkiam.ListTenantsResponse, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	tenants := make([]sdkiam.Tenant, 0, len(m.tenants))
+	for _, t := range m.tenants {
+		tenants = append(tenants, *t)
+	}
+
+	return &sdkiam.ListTenantsResponse{
+		Tenants:    tenants,
+		Pagination: sdkiam.PaginationInfo{TotalCount: len(tenants)},
+	}, nil
+}
+
+func (m *mockIAMClientForTenant) Update(ctx context.Context, tenantID string, req *sdkiam.UpdateTenantRequest) (*sdkiam.Tenant, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	t, ok := m.tenants[tenantID]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "tenant not found")
+	}
+
+	if req.DisplayName != "" {
+		t.DisplayName = req.DisplayName
+	}
+	return t, nil
+}
+
+func (m *mockIAMClientForTenant) Delete(ctx context.Context, tenantID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.tenants, tenantID)
+	return nil
 }
 
 func (c iamTenantOnlyClient) Tenant() quicbaassdk.IAMTenantClient {

@@ -814,6 +814,7 @@ type RestHandlerRegistry interface {
 	AppServiceServers() restapi.AppServiceServers
 	RegistryService() grpcapi.RegistryService
 	OCIDistBackend() restregistry.OCIDistBackend
+	HealthRegistry() health.Registry
 	AttestationEventReader() restattestation.EventReader
 	AttestationReporting() *restattestation.Reporting
 	AttestationVerdicts() restattestation.VerdictPoller
@@ -2008,6 +2009,13 @@ func (registry *HandlerRegistry) RegistryService() grpcapi.RegistryService {
 // /v2/ router so `crane`/`skopeo`/`oras` can push and pull.
 func (registry *HandlerRegistry) OCIDistBackend() restregistry.OCIDistBackend {
 	return registry.params.OCIDistBackend
+}
+
+// HealthRegistry returns the platform health registry, or nil when none is
+// wired. Used by the root-level probe routes (/health, /health/live,
+// /health/ready).
+func (registry *HandlerRegistry) HealthRegistry() health.Registry {
+	return registry.params.HealthRegistry
 }
 
 // AttestationEventReader returns the platform attestation events

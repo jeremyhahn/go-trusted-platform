@@ -86,7 +86,7 @@ func kmsOverSDK(t *testing.T, kms kmsclient.Client, crypto cryptoclient.Client) 
 	t.Helper()
 	logger := logging.DefaultLogger()
 	root := mux.NewRouter()
-	root.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	root.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	NewKMSRouter(logger, kms, crypto, nil, nil, response.NewResponseWriter(logger, nil)).
 		RegisterRoutes(root.PathPrefix("/api/v1").Subrouter())
 

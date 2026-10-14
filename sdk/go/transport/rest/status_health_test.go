@@ -42,7 +42,7 @@ func TestInvokeGetStatus_DecodesServerBodies(t *testing.T) {
 	for name, body := range statusBodies {
 		t.Run(name, func(t *testing.T) {
 			conn := connectTo(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/health" { // Connect's liveness probe
+				if r.URL.Path == "/health/live" { // Connect's liveness probe
 					return
 				}
 				assert.Equal(t, "/api/v1/status", r.URL.Path)
@@ -61,7 +61,7 @@ func TestInvokeGetStatus_DecodesServerBodies(t *testing.T) {
 
 func TestInvokeGetStatus_RejectsUnknownStatus(t *testing.T) {
 	conn := connectTo(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			return
 		}
 		_, _ = w.Write([]byte(`{"success":true,"code":200,"payload":{"status":"bogus","timestamp":"2026-10-11T10:00:00Z"}}`))

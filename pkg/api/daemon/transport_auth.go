@@ -77,9 +77,10 @@ func (s grpcAuthSelection) options() []grpc.ServerOption {
 // method, Shutdown and BMC power included (#768).
 // grpcTCPSkipMethods are the gRPC methods the TCP transport serves without a
 // credential, under both the mTLS and the OIDC interceptor. The unary health
-// probe is here, but not PlatformDaemon/GetHealth: it names every component
-// with its failure message, so it needs a credential like the REST
-// /api/v1/platform/health route (#768). The diskless boot calls are here
+// probe and the status-only Liveness and Readiness probes are here, but not
+// PlatformDaemon/GetHealth: it names every component with its failure
+// message, so it needs a credential like the REST /api/v1/platform/health
+// route (#768). The diskless boot calls are here
 // because a diskless node holds no platform token and, for BootCertificate,
 // no certificate yet; the boot service authenticates both itself, verifying
 // the node's proof or its chain and quote, bound to the connection. The OIDC
@@ -87,6 +88,8 @@ func (s grpcAuthSelection) options() []grpc.ServerOption {
 // and refuses every method absent from its scope catalog.
 var grpcTCPSkipMethods = []string{
 	"/grpc.health.v1.Health/Check",
+	platformv1.PlatformDaemon_Liveness_FullMethodName,
+	platformv1.PlatformDaemon_Readiness_FullMethodName,
 	platformv1.DeviceService_BootCertificate_FullMethodName,
 	platformv1.DeviceService_BootDelivery_FullMethodName,
 }

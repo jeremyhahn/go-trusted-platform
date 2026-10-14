@@ -37,7 +37,7 @@ func TestNewCommand(t *testing.T) {
 
 	// Verify subcommands are registered
 	subcommands := cmd.Commands()
-	assert.Len(t, subcommands, 20) // all TPM subcommands
+	assert.Len(t, subcommands, 21) // all TPM subcommands
 
 	// Verify key subcommands exist
 	expectedCommands := map[string]bool{
@@ -61,6 +61,7 @@ func TestNewCommand(t *testing.T) {
 		"eventlog":  false,
 		"nvram":     false,
 		"enroll":    false,
+		"certify":   false,
 	}
 	for _, sub := range subcommands {
 		if _, ok := expectedCommands[sub.Use]; ok {

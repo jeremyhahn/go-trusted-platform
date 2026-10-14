@@ -199,18 +199,6 @@ func (e ErrValueOutOfRange) Error() string {
 	return fmt.Sprintf("MCP cannot carry %s=%d: the tool argument holds at most %d", e.Field, e.Value, e.Max)
 }
 
-// ErrUnknownEnumName indicates an enum name in a tool result that the pb
-// enum does not define.
-type ErrUnknownEnumName struct {
-	Field string
-	Name  string
-}
-
-// Error implements the error interface.
-func (e ErrUnknownEnumName) Error() string {
-	return fmt.Sprintf("MCP result names an unknown %s %q", e.Field, e.Name)
-}
-
 // ErrBridgeNotFound indicates a GetBridge whose bridge is not in the
 // sdn_list_bridges result.
 type ErrBridgeNotFound struct {

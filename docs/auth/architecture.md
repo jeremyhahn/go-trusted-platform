@@ -912,11 +912,13 @@ protocol reports.
 
 Unlike `/ca` this needs no public half. Every `/platform` caller in the tree is
 the console, which authenticates, and the health feature's documented
-load-balancer integration points at the unversioned `/health` on the daemon's
-own listener (`docs/health/user.md`), not at anything under `/api/v1/platform`.
+load-balancer integration points at the unversioned `/health`, `/health/live`
+and `/health/ready` probes, served on both listeners without a credential
+(`docs/health/user.md`), not at anything under `/api/v1/platform`.
 The component-by-component health breakdown is gated **with** the rest
 deliberately: which subsystem is degraded is useful to somebody choosing where
-to push, and a caller that needs only liveness has `/api/v1/status`.
+to push, and a caller that needs only liveness or readiness has the probes,
+which carry the overall status and never a component name.
 
 **`/platform/service-registry` is not part of it.** It is registered separately
 on the ungated router under its own earlier decision, so the console can show
@@ -1052,6 +1054,7 @@ must:
 | Route | Why |
 |---|---|
 | `GET /api/v1/status` | Bootstrap liveness, and it is load-bearing: `pkg/bootstrap/orchestrator.go`'s `httpHealthChecker` probes `https://<node>:{8443,9443,443}/api/v1/status` to decide a node has finished booting, from a machine with no credential that may not yet trust the node's CA, and `platformctl bootstrap status` probes it across the fleet. **Its response is now the liveness core only** — status, uptime, timestamp. It previously returned SMBIOS product/board/chassis including serial numbers, kernel version, hostname, network interfaces and addresses, CPU, TPM and CA state to any caller that could open a connection; that was an information-disclosure defect a gate could not fix, and it was fixed by narrowing the body instead (#236). |
+| `GET /health`, `GET /health/live`, `GET /health/ready` | The load-balancer and orchestrator probes, mounted on the root router outside the `/api/v1` chain (#452). Each body is the overall status only — never a component name, message or detail; the breakdown stays `admin`-gated on `/api/v1/platform/health` (`docs/health/api.md` §7). |
 | `GET /api/v1/pubkey`, `GET /api/v1/certificate` | The server's own public key and certificate, which it presents on every TLS handshake. |
 | `/api/v1/login`, `/api/v1/login/refresh` | Credential issuance. Gating the endpoint that mints the credential is a deadlock. Registered with no method matcher, so they answer every verb. |
 | `/api/v1/admin/claim/**` | The one-time admin-claim ceremony, pre-auth by necessity and protected instead by the firstboot certificate proof (§Admin claim). |
@@ -1195,7 +1198,7 @@ webservice serves **no** `/bmc` route. `pkg/webservice/v1/router/bmc.go`
 exists, but `NewBMCRouter` has no non-test caller, and the live BMC surface
 belongs to the second REST server tracked on #232.
 
-Tracked on #165 (the eight routes) and #420 (the audit's reach) — do not read
+Tracked on #165 (the seven routes) and #420 (the audit's reach) — do not read
 this section as a claim that the platform is fully gated.
 
 ## 7. What this feature deliberately does not do

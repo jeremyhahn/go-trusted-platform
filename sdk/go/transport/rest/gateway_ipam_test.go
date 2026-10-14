@@ -57,7 +57,7 @@ type ipamCapture struct {
 func ipamServer(t *testing.T, statusCode int, payload string, c *ipamCapture) *Adapter {
 	t.Helper()
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}

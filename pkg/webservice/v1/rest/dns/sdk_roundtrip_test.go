@@ -37,7 +37,7 @@ func dnsOverSDK(t *testing.T, service *mockDNSService) platformv1.DNSServiceClie
 	t.Helper()
 	logger := newTestLogger()
 	root := mux.NewRouter()
-	root.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	root.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	NewDNSRouter(logger, service, response.NewResponseWriter(logger, nil)).
 		RegisterRoutes(root.PathPrefix("/api/v1").Subrouter())
 

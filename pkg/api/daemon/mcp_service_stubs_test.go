@@ -374,7 +374,7 @@ func TestMCPServiceProvider_TPMStubs(t *testing.T) {
 		{"TPMRandom", func() error { _, err := p.TPMRandom(ctx, 32); return err }},
 		{"TPMSeal", func() error { _, err := p.TPMSeal(ctx, []byte("d"), []uint32{0}, "cn", ""); return err }},
 		{"TPMUnseal", func() error { _, err := p.TPMUnseal(ctx, "cn", ""); return err }},
-		{"TPMCertify", func() error { _, err := p.TPMCertify(ctx, 1); return err }},
+		{"TPMCertify", func() error { _, err := p.TPMCertify(ctx, 0x81000001, "", nil); return err }},
 		{"TPMNVList", func() error { _, err := p.TPMNVList(ctx); return err }},
 		{"TPMNVRead", func() error { _, err := p.TPMNVRead(ctx, 1, 32, 0, ""); return err }},
 		{"TPMNVWrite", func() error { _, err := p.TPMNVWrite(ctx, 1, []byte("d"), 0, ""); return err }},

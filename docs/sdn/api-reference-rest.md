@@ -125,7 +125,9 @@ DELETE /api/v1/sdn/policies/{id}    # Delete policy
 ```
 
 These routes call the daemon's `SDNService` — the same operations and state
-as gRPC `ApplyPolicy`, `ListPolicies`, `GetPolicy` and `DeletePolicy`.
+as gRPC `ApplyPolicy`, `ListPolicies`, `GetPolicy` and `DeletePolicy`. The
+webservice serves apply with the same body and answer (a duplicate name is
+`400` there), and the SDK's REST client sends `ApplyPolicy` to it in this form.
 
 Apply body: `name` (required), optional `id`, `description`, `type`
 (`acl`, `qos`, `nat`, `firewall`, `routing`), `priority`, `enabled`,

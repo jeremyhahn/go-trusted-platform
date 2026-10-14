@@ -28,6 +28,7 @@ import (
 type ClusterService struct{}
 
 // NewClusterService returns an error when cluster support is not enabled.
+// Kept with no caller: the build-tag twin of the cluster_service.go constructor.
 func NewClusterService(application *app.App, logger *slog.Logger) (*ClusterService, error) {
 	return nil, ErrInvalidConfig{Reason: "cluster service not enabled (build with -tags cluster)"}
 }

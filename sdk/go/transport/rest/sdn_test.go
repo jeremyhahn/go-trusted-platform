@@ -40,7 +40,7 @@ func sdnOverREST(t *testing.T, answer string) (platformv1.SDNServiceClient, *sen
 	t.Helper()
 	sent := &sentRequest{}
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}

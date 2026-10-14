@@ -259,6 +259,19 @@ func (e *ErrVerifyQuoteFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrCertifyFailed is returned when a key certification (TPM2_Certify) fails.
+type ErrCertifyFailed struct {
+	Cause error
+}
+
+func (e *ErrCertifyFailed) Error() string {
+	return fmt.Sprintf("failed to certify key: %v", e.Cause)
+}
+
+func (e *ErrCertifyFailed) Unwrap() error {
+	return e.Cause
+}
+
 // ErrGetEventLogFailed is returned when getting event log fails.
 type ErrGetEventLogFailed struct {
 	Cause error

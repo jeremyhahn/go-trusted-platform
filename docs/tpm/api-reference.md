@@ -44,7 +44,7 @@ type TPMService interface {
     // Attestation operations
     Quote(ctx context.Context, opts *QuoteOptions) (*Quote, error)
     VerifyQuote(ctx context.Context, quote *Quote) (bool, error)
-    Certify(ctx context.Context, handle uint32, nonce []byte) (*CertifyResponse, error)
+    Certify(ctx context.Context, keyHandle uint32, keyPassword string, nonce []byte) (*CertifyResponse, error)
     GetEventLog(ctx context.Context, format string) ([]byte, error)
 
     // PCR operations
@@ -94,7 +94,7 @@ type TPMService interface {
 | GetIDevID | Get Initial Device Identifier certificate |
 | Quote | Generate attestation quote over PCRs |
 | VerifyQuote | Verify attestation quote signature |
-| Certify | Certify key or object |
+| Certify | IAK certifies a persistent key (TPM2_Certify) over a nonce of at most 64 bytes |
 | GetEventLog | Retrieve TPM event log |
 | ReadPCRs | Read Platform Configuration Register values |
 | ExtendPCR | Extend PCR with measurement data |

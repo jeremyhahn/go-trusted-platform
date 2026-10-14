@@ -144,18 +144,14 @@ func TestRouteMaps_DeclareNoMethodThatDoesNotExist(t *testing.T) {
 	//
 	//   - Some name a method that does not exist AND a path that is served
 	//     nowhere — pure cruft, safe to delete.
-	//   - Others name a method that does not exist but a path that IS served.
-	//     Liveness and Readiness map to routes pkg/api/daemon/rest_service.go
-	//     serves, but the proto declares no such methods. They are MISNAMED
-	//     BRIDGES to working routes; Health was one until #138 renamed its key
-	//     to the real GetHealth.
+	//   - Others named a method that did not exist but a path that WAS served.
+	//     Liveness and Readiness were such MISNAMED BRIDGES until #452 added
+	//     the rpcs; Health was one until #138 renamed its key to the real
+	//     GetHealth.
 	//
 	// Sorting the two apart is per-entry work tracked separately; doing it by
 	// eye here would be the guess this test exists to remove.
-	knownUnroutable := map[string]bool{
-		"/platform.v1.PlatformDaemon/Liveness":  true,
-		"/platform.v1.PlatformDaemon/Readiness": true,
-	}
+	knownUnroutable := map[string]bool{}
 
 	var unexpected []string
 	for _, g := range ghosts {

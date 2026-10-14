@@ -33,6 +33,7 @@ type ClusterGRPCService struct {
 }
 
 // NewClusterGRPCService creates a new ClusterGRPCService instance.
+// Kept with no caller: docs/cluster names it as the real service that replaces the registered daemon stub.
 func NewClusterGRPCService(
 	logger *logging.Logger,
 	service ClusterService,

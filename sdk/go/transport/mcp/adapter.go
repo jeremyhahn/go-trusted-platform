@@ -288,7 +288,6 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.GatewayService/ListGatewayAdmittedVTEPs": "gateway_admitted_vteps",
 
 	// Daemon / Health — proto: pkg/api/grpc/proto/daemon.proto
-	"/platform.v1.PlatformDaemon/GetHealth":        "platform_health",
 	"/platform.v1.PlatformDaemon/GetStatus":        "platform_daemon_status",
 	"/platform.v1.PlatformDaemon/GetVersion":       "platform_daemon_version",
 	"/platform.v1.PlatformDaemon/ListServices":     "platform_daemon_list_services",
@@ -302,6 +301,7 @@ var grpcMethodToMCPToolMap = map[string]string{
 	// TLS connection to bind it to.
 	"/platform.v1.TPMService/Quote":       "platform_tpm_quote",
 	"/platform.v1.TPMService/VerifyQuote": "platform_tpm_verify_quote",
+	"/platform.v1.TPMService/Certify":     "platform_tpm_certify",
 
 	// CA Service — proto: pkg/api/grpc/proto/ca.proto
 	"/platform.v1.CAService/GetCAInfo":         "ca_info",

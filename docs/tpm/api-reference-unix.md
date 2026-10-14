@@ -72,6 +72,7 @@ All methods from the [gRPC API](api-reference-grpc.md) are available via Unix so
 |--------|-------------|
 | `Quote` | Generate attestation quote over PCRs |
 | `VerifyQuote` | Verify quote signature |
+| `Certify` | IAK certifies a persistent key (TPM2_Certify) |
 | `GetEventLog` | Get TPM event log |
 | `GetPCRs` | Read PCR values |
 

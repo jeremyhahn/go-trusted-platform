@@ -39,6 +39,7 @@ The TPM subsystem provides device identity management per TCG specifications:
   - Seal/Unseal operations
   - NVRAM management
   - PCR policy operations
+  - Key certification (TPM2_Certify)
 
 These keys are used for device authentication and attestation in
 trusted computing environments.
@@ -88,6 +89,7 @@ Examples:
 	cmd.AddCommand(newEventlogCommand(getFlags))
 	cmd.AddCommand(newNVRAMCommand(getFlags))
 	cmd.AddCommand(newEnrollCommand(getFlags))
+	cmd.AddCommand(newCertifyCommand(getFlags))
 
 	return cmd
 }

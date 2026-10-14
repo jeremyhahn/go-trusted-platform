@@ -127,13 +127,15 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 	return a, nil
 }
 
-// probeHealth issues GET /health and succeeds only on a 2xx answer. The
-// daemon serves /health unauthenticated on every REST listener.
+// probeHealth issues GET /health/live and succeeds only on a 2xx answer.
+// Every REST listener serves the liveness probe unauthenticated. It probes
+// liveness, not /health, because /health answers 503 while a component is
+// degraded, and a degraded platform is still one the client can talk to.
 func (a *Adapter) probeHealth(ctx context.Context, timeout time.Duration) error {
 	healthCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(healthCtx, http.MethodGet, a.baseURL+"/health", nil)
+	req, err := http.NewRequestWithContext(healthCtx, http.MethodGet, a.baseURL+"/health/live", nil)
 	if err != nil {
 		return err
 	}
@@ -372,6 +374,9 @@ func (c *restClientConn) Invoke(ctx context.Context, method string, args interfa
 		return err
 	}
 	if reqErr := send(ctx, httpMethod, path, body, result); reqErr != nil {
+		if probeVerdict(method, reqErr, reply) {
+			return nil
+		}
 		return translateErrorToGRPC(reqErr)
 	}
 	return c.finishInvoke(hasDecoder, decode, raw, reply)
@@ -768,6 +773,12 @@ var templatedRouteTable = map[string]templatedRoute{
 		method:      http.MethodGet,
 		queryParams: []queryParam{{name: "handle", field: "handle"}},
 	},
+	// NV index operations address the index in the path, the way the
+	// server registers them (pkg/webservice/v1/rest/tpm/router.go); the
+	// password, offset and size stay in the body.
+	"/platform.v1.TPMService/ReadNVRAM":     itemRoute("/api/v1/tpm/nvram/{index}", http.MethodGet, "{index}", "index"),
+	"/platform.v1.TPMService/WriteNVRAM":    itemRoute("/api/v1/tpm/nvram/{index}", http.MethodPut, "{index}", "index"),
+	"/platform.v1.TPMService/UndefineNVRAM": itemRoute("/api/v1/tpm/nvram/{index}", http.MethodDelete, "{index}", "index"),
 
 	// Admitted overlay VTEPs — server registrations in
 	// pkg/api/rest/gateway_handlers.go::RegisterRoutes. An empty gateway_id
@@ -940,6 +951,25 @@ var templatedRouteTable = map[string]templatedRoute{
 	// GET /api/v1/compute/containers/{id}
 	"/platform.v1.ComputeService/GetContainer": itemRoute("/api/v1/compute/containers/{id}", http.MethodGet, "{id}", "id"),
 
+	// DELETE /api/v1/compute/containers/{id}?force=true&delete_volumes=true
+	// -- the handler reads force and delete_volumes from the query.
+	"/platform.v1.ComputeService/DeleteContainer": {
+		path:        "/api/v1/compute/containers/{id}",
+		method:      http.MethodDelete,
+		pathParams:  []pathParam{{placeholder: "{id}", field: "id"}},
+		queryParams: []queryParam{{name: "force", field: "force"}, {name: "delete_volumes", field: "delete_volumes"}},
+	},
+
+	// POST /api/v1/compute/containers/{id}/start
+	"/platform.v1.ComputeService/StartContainer": itemRoute("/api/v1/compute/containers/{id}/start", http.MethodPost, "{id}", "id"),
+
+	// POST /api/v1/compute/containers/{id}/stop -- timeout_seconds stays in the body.
+	"/platform.v1.ComputeService/StopContainer": itemRoute("/api/v1/compute/containers/{id}/stop", http.MethodPost, "{id}", "id"),
+
+	// POST /api/v1/compute/containers/{id}/attest -- nonce, pcr_indices and
+	// pcr_bank stay in the body.
+	"/platform.v1.ComputeService/AttestContainer": itemRoute("/api/v1/compute/containers/{id}/attest", http.MethodPost, "{id}", "id"),
+
 	// GET /api/v1/devices/{id:[0-9]+} -- uint64, rendered decimal.
 	//
 	// The three routes whose server template carries a :[0-9]+ constraint keep
@@ -1047,6 +1077,13 @@ var templatedRouteTable = map[string]templatedRoute{
 
 	// GET /api/v1/pxe/devices/{id} -- request message is GetPXEDeviceRequest.
 	"/platform.v1.PXEService/GetDevice": itemRoute("/api/v1/pxe/devices/{id}", http.MethodGet, "{id}", "device_id"),
+
+	// PUT /api/v1/pxe/devices/{id}/state, POST .../{id}/authorize and
+	// POST .../{id}/quarantine (#452) -- the device travels in the path,
+	// the rest of the request in the body.
+	"/platform.v1.PXEService/UpdateState": itemRoute("/api/v1/pxe/devices/{id}/state", http.MethodPut, "{id}", "device_id"),
+	"/platform.v1.PXEService/Authorize":   itemRoute("/api/v1/pxe/devices/{id}/authorize", http.MethodPost, "{id}", "device_id"),
+	"/platform.v1.PXEService/Quarantine":  itemRoute("/api/v1/pxe/devices/{id}/quarantine", http.MethodPost, "{id}", "device_id"),
 
 	// GET /api/v1/sdn/policies/{id}
 	"/platform.v1.SDNService/GetPolicy": itemRoute("/api/v1/sdn/policies/{id}", http.MethodGet, "{id}", "policy_id"),
@@ -1295,12 +1332,10 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.TPMService/Unseal":              {"/api/v1/tpm/unseal", http.MethodPost},
 	"/platform.v1.TPMService/Quote":               {"/api/v1/tpm/quote", http.MethodPost},
 	"/platform.v1.TPMService/VerifyQuote":         {"/api/v1/tpm/quote/verify", http.MethodPost},
+	"/platform.v1.TPMService/Certify":             {"/api/v1/tpm/certify", http.MethodPost},
 	"/platform.v1.TPMService/GetEventLog":         {"/api/v1/tpm/eventlog", http.MethodGet},
 	"/platform.v1.TPMService/GetPCRs":             {"/api/v1/tpm/pcrs", http.MethodGet},
 	"/platform.v1.TPMService/DefineNVRAM":         {"/api/v1/tpm/nvram", http.MethodPost},
-	"/platform.v1.TPMService/ReadNVRAM":           {"/api/v1/tpm/nvram", http.MethodGet},
-	"/platform.v1.TPMService/WriteNVRAM":          {"/api/v1/tpm/nvram", http.MethodPut},
-	"/platform.v1.TPMService/UndefineNVRAM":       {"/api/v1/tpm/nvram", http.MethodDelete},
 	"/platform.v1.TPMService/GetRandom":           {"/api/v1/tpm/random", http.MethodPost},
 
 	// Device Service. The item, lookup and nested-action routes live in
@@ -1321,12 +1356,14 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.DeviceService/BootDelivery":    {"/api/v1/device/boot", http.MethodPost},
 
 	// SDN Service
+	// DeleteBridge, AddPort, DeletePort, AuthenticatePort and RevokePortAuth
+	// are templated in sdn.go.
 	"/platform.v1.SDNService/CreateBridge": {"/api/v1/sdn/bridges", http.MethodPost},
 	"/platform.v1.SDNService/ListBridges":  {"/api/v1/sdn/bridges", http.MethodGet},
 	"/platform.v1.SDNService/AddFlow":      {"/api/v1/sdn/flows", http.MethodPost},
 	"/platform.v1.SDNService/DeleteFlow":   {"/api/v1/sdn/flows", http.MethodDelete},
 	"/platform.v1.SDNService/ListFlows":    {"/api/v1/sdn/flows", http.MethodGet},
-	"/platform.v1.SDNService/ApplyPolicy":  {"/api/v1/sdn/policies/apply", http.MethodPost},
+	"/platform.v1.SDNService/ApplyPolicy":  {"/api/v1/sdn/policies", http.MethodPost},
 	"/platform.v1.SDNService/ListPolicies": {"/api/v1/sdn/policies", http.MethodGet},
 
 	// DNS Service. The record, resolve and zone-delete routes are templated
@@ -1369,25 +1406,13 @@ var grpcMethodToRESTMap = map[string]struct {
 	// PXE Service
 	"/platform.v1.PXEService/ListDevices":    {"/api/v1/pxe/devices", http.MethodGet},
 	"/platform.v1.PXEService/RegisterDevice": {"/api/v1/pxe/devices", http.MethodPost},
-	"/platform.v1.PXEService/UpdateState":    {"/api/v1/pxe/devices/state", http.MethodPut},
-	"/platform.v1.PXEService/Authorize":      {"/api/v1/pxe/devices/authorize", http.MethodPost},
-	"/platform.v1.PXEService/Quarantine":     {"/api/v1/pxe/devices/quarantine", http.MethodPost},
 	"/platform.v1.PXEService/GetStatus":      {"/api/v1/pxe/status", http.MethodGet},
 
-	// Switch Service
-	"/platform.v1.SwitchService/ListPorts":     {"/api/v1/switches/ports", http.MethodGet},
-	"/platform.v1.SwitchService/GetPortStatus": {"/api/v1/switches/ports/status", http.MethodGet},
-	"/platform.v1.SwitchService/SetPortVLAN":   {"/api/v1/switches/ports/vlan", http.MethodPost},
-	"/platform.v1.SwitchService/EnablePort":    {"/api/v1/switches/ports/enable", http.MethodPost},
-	"/platform.v1.SwitchService/DisablePort":   {"/api/v1/switches/ports/disable", http.MethodPost},
+	// Switch Service routes are templated: see switches.go.
 
 	// Compute Service
 	"/platform.v1.ComputeService/CreateContainer":  {"/api/v1/compute/containers", http.MethodPost},
-	"/platform.v1.ComputeService/DeleteContainer":  {"/api/v1/compute/containers", http.MethodDelete},
-	"/platform.v1.ComputeService/StartContainer":   {"/api/v1/compute/containers/start", http.MethodPost},
-	"/platform.v1.ComputeService/StopContainer":    {"/api/v1/compute/containers/stop", http.MethodPost},
 	"/platform.v1.ComputeService/ListContainers":   {"/api/v1/compute/containers", http.MethodGet},
-	"/platform.v1.ComputeService/AttestContainer":  {"/api/v1/compute/containers/attest", http.MethodPost},
 	"/platform.v1.ComputeService/GetContainerLogs": {"/api/v1/compute/containers/logs", http.MethodGet},
 
 	// Ceremony Service — proto: pkg/api/grpc/proto/ceremony.proto

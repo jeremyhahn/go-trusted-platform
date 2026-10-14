@@ -116,7 +116,7 @@ func TestDeviceLifecycle_DisableCarriesTheReason(t *testing.T) {
 func TestDeviceLifecycle_MissingIDNeverLeavesTheClient(t *testing.T) {
 	var apiHits int
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/health" {
+		if r.URL.Path != "/health/live" {
 			apiHits++
 		}
 		w.WriteHeader(http.StatusOK)

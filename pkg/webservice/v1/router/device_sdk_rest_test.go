@@ -92,7 +92,7 @@ func newDeviceSDKServer(t *testing.T) *deviceSDKServer {
 func connectDeviceSDK(t *testing.T, root *mux.Router) platformv1.DeviceServiceClient {
 	t.Helper()
 
-	root.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+	root.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	server := httptest.NewTLSServer(root)

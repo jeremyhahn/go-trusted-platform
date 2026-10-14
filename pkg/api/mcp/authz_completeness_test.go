@@ -153,11 +153,8 @@ var knownUnclassified = []string{
 	"platform_tenant_barrier_status",
 	"platform_tenant_barrier_unseal",
 	"platform_tpm_capabilities",
-	"platform_tpm_certify",
 	"platform_tpm_ek_delete",
 	"platform_tpm_iak_delete",
-	"platform_tpm_nv_list",
-	"platform_tpm_pcr_extend",
 	"platform_tpm_platform",
 	"platform_tpm_srk_delete",
 	"provision_fetch_config",
@@ -418,15 +415,36 @@ func TestBMCToolsAreClassified(t *testing.T) {
 	}
 }
 
-// TestTPMQuoteToolsAreClassified: the quote tools carry the scope of their
-// gRPC TPMService twin, so an MCP caller reaches the same service (#482).
+// TestTPMQuoteToolsAreClassified: the quote and certify tools carry the scope
+// of their gRPC TPMService twin, so an MCP caller reaches the same service
+// (#482, #317).
 func TestTPMQuoteToolsAreClassified(t *testing.T) {
 	checker := NewAuthorizationChecker(nil, nil)
 
-	for _, tool := range []string{"platform_tpm_quote", "platform_tpm_verify_quote"} {
+	for _, tool := range []string{"platform_tpm_quote", "platform_tpm_verify_quote", "platform_tpm_certify"} {
 		got, ok := checker.toolPermissions[tool]
 		require.True(t, ok, "%s must have an explicit permission entry", tool)
 		assert.Equal(t, "tpm:read", got, "%s", tool)
+	}
+}
+
+// TestTPMNVToolsAreClassified pins each NV tool to the scope its gRPC
+// TPMService twin requires (pkg/api/grpc/method_permissions.go), and
+// pcr_extend to the scope of QUIC's SubOpTPM2ExtendPCR.
+func TestTPMNVToolsAreClassified(t *testing.T) {
+	checker := NewAuthorizationChecker(nil, nil)
+
+	want := map[string]string{
+		"platform_tpm_nv_list":    "tpm:read",
+		"platform_tpm_nv_read":    "tpm:read",
+		"platform_tpm_nv_write":   "tpm:write",
+		"platform_tpm_nv_delete":  "tpm:delete",
+		"platform_tpm_pcr_extend": "tpm:write",
+	}
+	for tool, scope := range want {
+		got, ok := checker.toolPermissions[tool]
+		require.True(t, ok, "%s must have an explicit permission entry", tool)
+		assert.Equal(t, scope, got, "%s", tool)
 	}
 }
 

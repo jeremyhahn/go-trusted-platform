@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/codes"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	sdnsdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/sdn"
 )
 
 // policyResult is a policy as sdn_get_policy answers with it.
@@ -153,9 +154,10 @@ func TestSDNMCP_PolicyResult_UnknownEnumName(t *testing.T) {
 			result := policyResult()
 			tt.mutate(result)
 
-			_, err := decodePolicyResult(result)
-			if !errors.Is(err, ErrUnknownEnumName{Field: tt.field, Name: "bogus"}) {
-				t.Fatalf("err = %v, want ErrUnknownEnumName for %s", err, tt.field)
+			err := mcpReplyDecoders[platformv1.SDNService_GetPolicy_FullMethodName](result, &platformv1.GetPolicyResponse{})
+			var unknown *sdnsdk.ErrUnknownWireValue
+			if !errors.As(err, &unknown) || unknown.Kind != tt.field || unknown.Value != "bogus" {
+				t.Fatalf("err = %v, want ErrUnknownWireValue for %s", err, tt.field)
 			}
 
 			_, err = invokePhase35(t, map[string]interface{}{"sdn_get_policy": result},
@@ -178,26 +180,7 @@ func TestSDNMCP_PolicyDecoders_RejectMalformedResult(t *testing.T) {
 	}
 
 	bad := map[string]interface{}{"policies": []interface{}{map[string]interface{}{"type": "bogus"}}}
-	if err := decodeSDNListPoliciesResult(bad, &platformv1.ListPoliciesResponse{}); err == nil {
+	if err := mcpReplyDecoders[platformv1.SDNService_ListPolicies_FullMethodName](bad, &platformv1.ListPoliciesResponse{}); err == nil {
 		t.Error("ListPolicies decoded a policy with an unknown type")
-	}
-}
-
-func TestPolicyEnumNames(t *testing.T) {
-	if got := enumName("POLICY_RULE_ACTION_RATE_LIMIT", policyRuleActionPrefix); got != "rate-limit" {
-		t.Errorf("enumName = %q", got)
-	}
-	if got := enumName("POLICY_TYPE_UNSPECIFIED", policyTypePrefix); got != "" {
-		t.Errorf("enumName(UNSPECIFIED) = %q", got)
-	}
-	if got, err := enumValue(platformv1.PolicyRuleAction_value, policyRuleActionPrefix, "rule action", "rate-limit"); err != nil ||
-		got != int32(platformv1.PolicyRuleAction_POLICY_RULE_ACTION_RATE_LIMIT) {
-		t.Errorf("enumValue = %d, %v", got, err)
-	}
-	if got, err := enumValue(platformv1.PolicyType_value, policyTypePrefix, "policy type", ""); err != nil || got != 0 {
-		t.Errorf("enumValue(\"\") = %d, %v", got, err)
-	}
-	if _, err := enumValue(platformv1.PolicyType_value, policyTypePrefix, "policy type", "bogus"); err == nil {
-		t.Error("enumValue accepted an unknown name")
 	}
 }

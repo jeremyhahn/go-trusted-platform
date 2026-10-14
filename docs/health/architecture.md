@@ -1,6 +1,6 @@
 # Component Health — Architecture
 
-> **Status: NORMATIVE** · Scope: `pkg/health/` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `pkg/health/` · Last verified: 2026-10-14
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 
@@ -37,6 +37,13 @@ timeout**, aggregated into a four-state verdict.
   unknown point past where the registry stopped waiting. See §5.
 - The overall verdict is derived, never stored: any unhealthy component makes
   the system unhealthy; otherwise any degraded component makes it degraded.
+- The probe verdicts are derived from that one sweep, once, in
+  `pkg/health/probe.go`, and every transport encodes them ([api.md](api.md) §4):
+  - **liveness** consults nothing — the process answering is the proof;
+  - **readiness** passes unless the overall status is unhealthy, so a degraded
+    component or an unanswered check leaves the node in rotation, and a
+    closed registry takes it out;
+  - **aggregate** passes only when every component is healthy.
 
 The status vocabulary is **not** this package's. `HealthStatus` is a type alias
 for `quicbaas.HealthCheckStatus`, so healthy/degraded/unhealthy mean the same
@@ -53,7 +60,8 @@ same claim as "the component is broken".
 | **One shared timeout for the whole sweep** | A single hung checker would consume the budget and starve the rest, so one broken subsystem would blank out the report for all of them. Each check gets its own `context.WithTimeout` from `DefaultTimeout`. |
 | **Three states (healthy / degraded / unhealthy)** | A probe that timed out is not evidence that the component is down; reporting it as `unhealthy` manufactures an outage. `StatusUnknown` keeps "we do not know" distinct from "it is broken", and `calculateOverallStatus` deliberately does **not** let unknowns alone make the system unhealthy. |
 | **Defining a platform-local status enum** | Would fork the stack's health vocabulary and force translation at every boundary. `HealthStatus` is an alias of the quicbaas SDK type, so the values interoperate by construction. |
-| **Reimplementing liveness/readiness/startup probes here** | The Kubernetes-style probe primitives are the quicbaas SDK's (`quicbaas.HealthChecker`). This package adds only what the shared framework lacks: parallel timeout-bounded sweeps, per-component queries, `Details`-bearing results, and aggregate counts. |
+| **Reimplementing the liveness/readiness/startup probe primitives here** | The Kubernetes-style probe primitives are the quicbaas SDK's (`quicbaas.HealthChecker`). This package adds only what the shared framework lacks: parallel timeout-bounded sweeps, per-component queries, `Details`-bearing results, aggregate counts, and the platform's three verdicts over this registry (`probe.go`). |
+| **Each transport computing its own probe answer** | That is how it was until #452: QUIC answered liveness with a constant and readiness with a nil-check over wired services, and REST and gRPC had no probe at all, so one daemon gave different answers per transport. `Liveness`, `Readiness` and `Aggregate` are defined once here; a transport only encodes the `Probe`. |
 | **A push model — components report status when it changes** | A component that has crashed reports nothing, which is indistinguishable from a component that is fine. Pull-on-demand means an unresponsive component is visible as a timeout. |
 | **Letting `Register` overwrite an existing name** | Two subsystems silently sharing a name would erase one of them from every report. `ErrCheckerAlreadyRegistered` makes the collision loud at wiring time. |
 
@@ -65,11 +73,12 @@ same claim as "the component is broken".
 | `Registry` interface and implementation | `pkg/health/registry.go` | this repo |
 | `ComponentHealth`, `SystemHealth`, `RegistryConfig` | `pkg/health/types.go` | this repo |
 | Typed registry errors | `pkg/health/errors.go` | this repo |
+| Probe verdicts (`Liveness`, `Readiness`, `Aggregate`) | `pkg/health/probe.go` | this repo |
 | **The status vocabulary** (`quicbaas.HealthCheckStatus`) | `go-quicbaas/sdk/go` | **not this repo** |
 | **Liveness / readiness / startup probe primitives** (`quicbaas.HealthChecker`) | `go-quicbaas/sdk/go` | **not this repo** |
 | The concrete checkers (`ca`, `sdn`, `ntp`, `kms`, `iam`, `tenant`, `quic`, `rest`, `mcp`) | `pkg/api/daemon/health_checker.go`, `iam_health_checker.go`, `ntp_health_checker.go` | this repo, daemon feature |
 | Registration and lifecycle | `pkg/api/daemon/daemon.go` (`registerHealthCheckers`) | this repo, daemon feature |
-| REST / gRPC / QUIC / MCP exposure | `pkg/webservice/v1/rest/platform/`, `pkg/api/daemon/` | this repo — see [`docs/daemon/`](../daemon/) |
+| REST / gRPC / QUIC / MCP exposure | `pkg/api/healthprobe/` (the root REST probes, on both listeners), `pkg/webservice/v1/rest/platform/`, `pkg/api/daemon/` | this repo — see [api.md](api.md) and [`docs/daemon/`](../daemon/) |
 | **`grpc.health.v1` standard health service** | `pkg/api/daemon/health_grpc_service.go` | this repo, **separate mechanism** — see §6 |
 
 `pkg/health` imports exactly one thing beyond the standard library:
@@ -113,12 +122,19 @@ business, which is exactly why each one is separately timeout-bounded.
 This feature holds no keys, mints no tokens, and makes no tenancy decision. It
 has one security-relevant property, and it is about **disclosure**:
 
-**`ComponentHealth.Details` is operational detail that reaches unauthenticated
-callers.** On MCP, `platform_health`, `platform_liveness` and
-`platform_readiness` are mapped to the **empty permission string** in
-`pkg/api/mcp/authz.go` — deliberately, so a probe never needs a credential. The
-REST `/health` route on the daemon's own listener is likewise reachable without
-a token. The details a checker publishes are therefore public:
+**Health is served to unauthenticated callers, and is shaped for it.** The
+probes — REST `/health`, `/health/live` and `/health/ready` on both listeners,
+gRPC `Liveness`, `Readiness` and `grpc.health.v1.Health/Check`, the QUIC probe
+opcodes, and the MCP `platform_health`, `platform_liveness` and
+`platform_readiness` tools (mapped to the **empty permission string** in
+`pkg/api/mcp/authz.go`) — answer without a credential, deliberately, so a probe
+never needs one. They carry the overall status only, never a component name.
+
+The breakdown is gated — gRPC `GetHealth` needs `platform:read`,
+`/api/v1/platform/health` needs `admin` — with one exception: `/api/v1/health`
+on the daemon's own listener is unauthenticated and lists every component with
+its status and message. `Details` crosses no wire transport today, but it is
+written as public all the same, so a projection that adds it leaks nothing:
 
 - the CA checker publishes the root subject common name and validity window,
 - the QUIC checker publishes the listen address and connection counters,
@@ -132,7 +148,7 @@ a token. The details a checker publishes are therefore public:
 
 None of this is secret material, and it is intentionally on the public side of
 the line. **A new checker must not put key material, tokens, tenant
-identifiers, or subject identities into `Details`** — that is the boundary, and
+identifiers, or subject identities into `Details` or `Message`** — that is the boundary, and
 it is enforced by review rather than by code.
 
 The second property is availability: a checker is untrusted code from the
@@ -192,11 +208,11 @@ problem.
 
 - **It does not define health states.** Those are the quicbaas SDK's, consumed
   by alias. Only `StatusUnknown` is local.
-- **It does not implement liveness, readiness or startup probes.** Those
-  primitives are the quicbaas SDK's. The daemon's `platform_liveness` and
-  `platform_readiness` surfaces do not consult this registry at all — liveness
-  is a constant, readiness is a nil-check over wired services
-  ([api.md](api.md) §4).
+- **It does not implement the probe primitives or a startup probe.** Those
+  are the quicbaas SDK's. It derives only the platform's liveness, readiness
+  and aggregate verdicts over this registry (`probe.go`, §2); every
+  transport's probe — `platform_liveness` and `platform_readiness` included —
+  answers from them ([api.md](api.md) §4).
 - **It does not run a background sweep.** There is no periodic poller, no
   history, no trend, no alerting. Every result is on demand.
 - **It does not persist anything.** No store, no schema, no migration.

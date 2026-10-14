@@ -524,24 +524,6 @@ func TestErrSDNMissingParameter(t *testing.T) {
 
 // DNS QUIC Handler Errors
 
-func TestErrDNSConfigUpdateNotSupported(t *testing.T) {
-	t.Parallel()
-	err := ErrDNSConfigUpdateNotSupported{}
-	expected := "DNS configuration updates are not supported at runtime"
-	if got := err.Error(); got != expected {
-		t.Errorf("Error() = %q, want %q", got, expected)
-	}
-}
-
-func TestErrDNSCacheFlushNotSupported(t *testing.T) {
-	t.Parallel()
-	err := ErrDNSCacheFlushNotSupported{}
-	expected := "DNS cache flushing is not supported"
-	if got := err.Error(); got != expected {
-		t.Errorf("Error() = %q, want %q", got, expected)
-	}
-}
-
 func TestErrDNSZoneNotFound(t *testing.T) {
 	t.Parallel()
 	err := ErrDNSZoneNotFound{Zone: "example.com"}

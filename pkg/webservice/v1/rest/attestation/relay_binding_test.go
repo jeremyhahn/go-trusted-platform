@@ -75,8 +75,8 @@ func attestorRouter(tpm *quotingTPM) http.Handler {
 	server := daemon.NewAttestationServiceServer(tpm, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	router := attestation.NewAttestationServerRouter(logger, server, response.NewResponseWriter(logger, nil))
 	parent := mux.NewRouter()
-	// The SDK REST transport probes /health before its first call.
-	parent.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	// The SDK REST transport probes /health/live before its first call.
+	parent.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	router.RegisterQuoteRoutes(parent.PathPrefix("/api/v1").Subrouter(), nil, nil)
 	return parent
 }

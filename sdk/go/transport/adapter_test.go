@@ -40,7 +40,7 @@ import (
 func TestConnect_FallsBackWhenRESTProbeFails(t *testing.T) {
 	var healthProbes atomic.Int32
 	restServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			healthProbes.Add(1)
 		}
 		w.WriteHeader(http.StatusServiceUnavailable)

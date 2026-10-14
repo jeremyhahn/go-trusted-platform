@@ -42,6 +42,7 @@ import (
 	// name (UnsealRequest, KeyInfo, PIVSignRequest, …).
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmcertify"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
 )
@@ -1094,6 +1095,46 @@ func (s *TPMGRPCService) VerifyQuote(
 	}, nil
 }
 
+// Certify has the IAK certify that the key at a persistent handle is
+// resident in this TPM (TPM2_Certify), over the caller's nonce.
+func (s *TPMGRPCService) Certify(
+	ctx context.Context,
+	req *platformv1.CertifyRequest,
+) (*platformv1.CertifyResponse, error) {
+
+	s.mu.RLock()
+	tpm := s.tpm
+	s.mu.RUnlock()
+
+	if tpm == nil {
+		return nil, status.Error(codes.Unavailable, "TPM service not available")
+	}
+
+	s.logger.Debug("TPM Certify request received",
+		slog.String("handle", fmt.Sprintf("0x%08X", req.GetKeyHandle())))
+
+	res, err := tpmcertify.Certify(tpm, req.GetKeyHandle(), req.GetKeyPassword(), req.GetNonce())
+	if err != nil {
+		s.logger.Slog().Error("TPM Certify failed",
+			slog.String("handle", fmt.Sprintf("0x%08X", req.GetKeyHandle())),
+			slog.String("error", err.Error()))
+		return nil, s.mapError(err)
+	}
+
+	s.logger.Debug("TPM Certify completed")
+	return &platformv1.CertifyResponse{
+		CertifyInfo:            res.CertifyInfo,
+		Signature:              res.Signature,
+		SignatureAlgorithm:     res.SignatureAlgorithm,
+		CertifyInfoSignature:   res.CertifyInfoSignature,
+		AttestingKeyPublic:     res.AttestingKeyPublic,
+		AttestedKeyPublic:      res.AttestedKeyPublic,
+		AttestingKeyPublicArea: res.AttestingKeyPublicArea,
+		AttestedKeyPublicArea:  res.AttestedKeyPublicArea,
+		Nonce:                  res.Nonce,
+	}, nil
+}
+
 // resolveVerifyAKPublic returns the PKIX DER of the AK public key the
 // quote is verified against. Caller-supplied akPublic wins; otherwise
 // the IAK provisioned on this platform is used.
@@ -1272,6 +1313,12 @@ func (s *TPMGRPCService) DefineNVRAM(
 	}
 	if req.GetSize() == 0 {
 		return nil, status.Error(codes.InvalidArgument, "size is required")
+	}
+	if err := tpmnv.CheckIndex(req.GetIndex()); err != nil {
+		return nil, err
+	}
+	if err := tpmnv.CheckSpan(0, uint64(req.GetSize())); err != nil {
+		return nil, err
 	}
 
 	tr := tpm.Transport()

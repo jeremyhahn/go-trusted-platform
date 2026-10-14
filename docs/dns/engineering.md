@@ -340,8 +340,10 @@ practice — there is no DNS CLI at all ([cli.md](cli.md)).
 ## 8. Observability
 
 `OpDNSGetMetrics` (`0x2C`) exposes DNS metrics over QUIC; there is no REST or
-gRPC equivalent. `OpDNSFlushCache` (`0x2D`) is likewise QUIC-only. Both are
-operational verbs that an operator on REST cannot reach.
+gRPC equivalent, so an operator on REST cannot reach it. There is no cache
+flush on any transport: `OpDNSFlushCache` (`0x2D`) only ever answered
+`StatusNotImplemented` and was retired with `OpDNSUpdateConfig` (`0x2B`) in
+#317 ([api.md](api.md) §2).
 
 ## 9. Related
 

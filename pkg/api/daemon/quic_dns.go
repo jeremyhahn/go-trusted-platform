@@ -32,10 +32,12 @@ import (
 //     mirror wire types, and error mapping live in quic_dns_delegate.go.
 //
 //   - Daemon-native operations (UpdateRecord 0x22, GetRecord 0x23,
-//     GetZone 0x27, GetConfig 0x2A, UpdateConfig 0x2B, GetMetrics 0x2C,
-//     FlushCache 0x2D) have NO SDK QUIC client. They are exercised only by
-//     the local CLI and integration harness and keep their flat wire structs
-//     defined below.
+//     GetZone 0x27, GetConfig 0x2A, GetMetrics 0x2C) have NO SDK QUIC
+//     client. They are exercised only by the local CLI and integration
+//     harness and keep their flat wire structs defined below.
+//
+// 0x2B and 0x2D (UpdateConfig, FlushCache) were retired unimplemented
+// (#317): the DNS service has no runtime config update and no cache.
 //
 // The SDK QUIC adapter sends the generated platform.v1 request struct straight
 // to the wire, so the SDK-mapped handlers MUST decode the same message the SDK
@@ -121,19 +123,6 @@ type DNSGetConfigResponse struct {
 	Timestamp int64      `codec:"timestamp"`
 }
 
-// DNSUpdateConfigRequest represents a request to update DNS configuration
-type DNSUpdateConfigRequest struct {
-	AllowRegistration         *bool `codec:"allow_registration"`
-	AllowExternalRegistration *bool `codec:"allow_external_registration"`
-	AllowInternalRegistration *bool `codec:"allow_internal_registration"`
-}
-
-// DNSUpdateConfigResponse represents the response after updating DNS configuration
-type DNSUpdateConfigResponse struct {
-	Success   bool  `codec:"success"`
-	Timestamp int64 `codec:"timestamp"`
-}
-
 // DNSGetMetricsRequest represents a request to get DNS metrics
 type DNSGetMetricsRequest struct{}
 
@@ -152,18 +141,6 @@ type DNSMetrics struct {
 type DNSGetMetricsResponse struct {
 	Metrics   *DNSMetrics `codec:"metrics"`
 	Timestamp int64       `codec:"timestamp"`
-}
-
-// DNSFlushCacheRequest represents a request to flush DNS cache
-type DNSFlushCacheRequest struct {
-	Zone string `codec:"zone"`
-}
-
-// DNSFlushCacheResponse represents the response after flushing DNS cache
-type DNSFlushCacheResponse struct {
-	Success       bool  `codec:"success"`
-	EntriesPurged int   `codec:"entries_purged"`
-	Timestamp     int64 `codec:"timestamp"`
 }
 
 // handleDNSOperation routes DNS operations to their handlers. SDK-mapped
@@ -201,12 +178,8 @@ func (h *QUICServiceHandler) handleDNSOperation(ctx context.Context, req *quicwi
 		return h.handleDNSGetZone(ctx, req)
 	case quicwire.OpDNSGetConfig:
 		return h.handleDNSGetConfig(ctx, req)
-	case quicwire.OpDNSUpdateConfig:
-		return h.handleDNSUpdateConfig(ctx, req)
 	case quicwire.OpDNSGetMetrics:
 		return h.handleDNSGetMetrics(ctx, req)
-	case quicwire.OpDNSFlushCache:
-		return h.handleDNSFlushCache(ctx, req)
 
 	default:
 		return h.errorResponse(quicwire.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: req.Opcode})
@@ -381,14 +354,6 @@ func (h *QUICServiceHandler) handleDNSGetConfig(ctx context.Context, req *quicwi
 	}
 }
 
-// handleDNSUpdateConfig handles updating DNS configuration (daemon-native).
-func (h *QUICServiceHandler) handleDNSUpdateConfig(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	// DNS configuration updates are not supported by the service interface.
-	// This would require extending the DNS service to support runtime
-	// configuration changes.
-	return h.errorResponse(quicwire.StatusNotImplemented, ErrQUICOperationFailed{Op: "DNSUpdateConfig", Cause: ErrDNSConfigUpdateNotSupported{}})
-}
-
 // handleDNSGetMetrics handles getting DNS metrics (daemon-native).
 func (h *QUICServiceHandler) handleDNSGetMetrics(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	zones, err := h.dnsService.ListZones(ctx)
@@ -421,13 +386,6 @@ func (h *QUICServiceHandler) handleDNSGetMetrics(ctx context.Context, req *quicw
 		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
-}
-
-// handleDNSFlushCache handles flushing DNS cache (daemon-native).
-func (h *QUICServiceHandler) handleDNSFlushCache(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	// DNS cache flushing is not supported by the service interface. This would
-	// require CoreDNS integration to clear caches.
-	return h.errorResponse(quicwire.StatusNotImplemented, ErrQUICOperationFailed{Op: "DNSFlushCache", Cause: ErrDNSCacheFlushNotSupported{}})
 }
 
 // Helper functions

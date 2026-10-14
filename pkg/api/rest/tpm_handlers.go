@@ -162,6 +162,7 @@ func (h *TPMHandlers) routes() []tpmRoute {
 		// Quote and attestation
 		{http.MethodPost, "/api/v1/tpm/quote", tpmScopeRead, tpmRPC(h, platformv1.TPMServiceServer.Quote)},
 		{http.MethodPost, "/api/v1/tpm/quote/verify", tpmScopeRead, tpmRPC(h, platformv1.TPMServiceServer.VerifyQuote)},
+		{http.MethodPost, "/api/v1/tpm/certify", tpmScopeRead, tpmRPC(h, platformv1.TPMServiceServer.Certify)},
 
 		// PCRs and the event log. POST /pcrs is the JavaScript SDK's form.
 		{http.MethodGet, "/api/v1/tpm/pcrs", tpmScopeRead, tpmRPC(h, platformv1.TPMServiceServer.GetPCRs)},

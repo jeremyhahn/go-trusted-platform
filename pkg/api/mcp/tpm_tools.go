@@ -480,13 +480,21 @@ func (r *ToolRegistry) registerTPMTools() {
 	// Certify
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_certify",
-		Description: "Certify a TPM key using the attestation key, proving it resides in the TPM",
+		Description: "Certify a TPM key with the attestation key (IAK), proving it resides in this TPM. Returns the IAK-signed TPMS_ATTEST, its signature and both public keys",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"key_handle": map[string]interface{}{
 					"type":        "integer",
-					"description": "Handle of the key to certify",
+					"description": "Persistent handle of the key to certify (0x81000000-0x81FFFFFF)",
+				},
+				"key_password": map[string]interface{}{
+					"type":        "string",
+					"description": "Authorization value of the key, when it has one",
+				},
+				"nonce": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded qualifying data (at most 64 bytes) echoed in the attestation",
 				},
 			},
 			"required": []string{"key_handle"},
