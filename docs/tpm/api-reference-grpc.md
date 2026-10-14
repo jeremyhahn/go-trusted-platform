@@ -41,6 +41,7 @@ service TPMService {
   // Attestation operations
   rpc Quote(QuoteRequest) returns (QuoteResponse);
   rpc VerifyQuote(VerifyQuoteRequest) returns (VerifyQuoteResponse);
+  rpc Certify(CertifyRequest) returns (CertifyResponse);
   rpc GetEventLog(GetEventLogRequest) returns (GetEventLogResponse);
   rpc GetPCRs(GetPCRsRequest) returns (GetPCRsResponse);
 
@@ -478,6 +479,38 @@ message VerifyQuoteResponse {
   bool verified = 2;
   string message = 3;
   repeated PCRValue actual_pcrs = 4;
+}
+```
+
+### Certify
+
+The IAK certifies that the key at a persistent handle is resident in this TPM
+(TPM2_Certify). Scope `tpm:read`. A zero or non-persistent handle, or a nonce
+over 64 bytes, is `InvalidArgument`; a handle the TPM does not hold is
+`NotFound` ([api.md](api.md) §5).
+
+**Request:**
+```protobuf
+message CertifyRequest {
+  uint32 key_handle = 1;
+  string key_password = 2;  // the key's authValue; empty when it has none
+  bytes nonce = 3;          // echoed in certify_info's extraData; at most 64 bytes
+}
+```
+
+**Response:**
+```protobuf
+message CertifyResponse {
+  Status status = 1;
+  bytes certify_info = 2;              // the TPMS_ATTEST the IAK signed
+  bytes signature = 3;                 // RSA bytes or ASN.1 DER ECDSA (r, s)
+  string signature_algorithm = 4;      // x509.SignatureAlgorithm name
+  bytes certify_info_signature = 5;    // marshalled TPMT_SIGNATURE
+  bytes attesting_key_public = 6;      // IAK, PKIX DER
+  bytes attested_key_public = 7;       // certified key, PKIX DER
+  bytes attesting_key_public_area = 8; // IAK TPMT_PUBLIC
+  bytes attested_key_public_area = 9;  // certified key TPMT_PUBLIC
+  bytes nonce = 10;
 }
 ```
 

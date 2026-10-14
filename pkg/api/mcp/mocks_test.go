@@ -2455,8 +2455,9 @@ func (m *mockServiceProvider) TPMUnseal(ctx context.Context, cn, password string
 	return []byte("unsealed"), nil
 }
 
-func (m *mockServiceProvider) TPMCertify(ctx context.Context, keyHandle int) (interface{}, error) {
-	return map[string]interface{}{"certify_info": "base64info"}, nil
+func (m *mockServiceProvider) TPMCertify(ctx context.Context, keyHandle uint32, keyPassword string, nonce []byte) (interface{}, error) {
+	m.tpmCall = tpmCall{index: keyHandle, password: keyPassword, data: nonce}
+	return map[string]interface{}{"certify_info": []byte("attest")}, nil
 }
 
 func (m *mockServiceProvider) TPMNVList(ctx context.Context) (interface{}, error) {

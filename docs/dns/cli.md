@@ -17,7 +17,7 @@ MCP. [api.md](api.md) has the full matrix.
 
 **This is a gap, not a design decision.** DNS is a Tier 1 platform capability
 that an operator cannot exercise from a shell: no way to list zones, add a
-record, sign a zone or flush the cache without writing a client. It is raised in
+record or sign a zone without writing a client. It is raised in
 the migration report as an owner question — whether to build `platformctl dns`
 or to record the omission deliberately.
 
@@ -39,12 +39,11 @@ description of the product.
 | Zone and record CRUD | REST `/api/v1/dns/zones/...`, or gRPC `DNSService` |
 | Sign a zone / DNSSEC status | REST or gRPC only — no QUIC, no MCP |
 | Resolve a name | gRPC `Resolve`, QUIC `OpDNSResolve` (`0x29`), MCP `dns_resolve` |
-| Flush the cache | **QUIC only** — `OpDNSFlushCache` (`0x2D`) |
 | Read DNS metrics | **QUIC only** — `OpDNSGetMetrics` (`0x2C`) |
-| Read or change DNS config | **QUIC only** — `OpDNSGetConfig` (`0x2A`), `OpDNSUpdateConfig` (`0x2B`) |
+| Read DNS config | **QUIC only** — `OpDNSGetConfig` (`0x2A`) |
 
-The four QUIC-only rows are the operational verbs. An operator without a QUIC
-client cannot flush the DNS cache.
+The two QUIC-only rows are the operational reads. No transport changes DNS
+config at runtime or flushes a cache ([api.md](api.md) §2).
 
 ---
 

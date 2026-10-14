@@ -42,7 +42,9 @@ const maxNVChunk = 512
 // authorization. The auth hierarchy is chosen from the index's public
 // attributes: AUTHREAD authorizes against the index's own AuthValue,
 // OWNERREAD routes through the owner hierarchy, PPREAD through the
-// platform hierarchy. Reads larger than maxNVChunk are chunked.
+// platform hierarchy. Reads larger than maxNVChunk are chunked. The read
+// is clamped to the index's DataSize, so it needs no CheckSpan: a size
+// past the end reads to the end.
 func Read(tr transport.TPM, index uint32, size, offset uint16, password []byte) ([]byte, error) {
 	if err := checkTarget(tr, index); err != nil {
 		return nil, err
@@ -92,7 +94,8 @@ func Read(tr transport.TPM, index uint32, size, offset uint16, password []byte) 
 // Write writes data to the NV index starting at offset, using password
 // for authorization. The auth hierarchy is chosen from the index's
 // public attributes (AUTHWRITE / OWNERWRITE / PPWRITE). Writes larger
-// than maxNVChunk are chunked. Empty data is rejected.
+// than maxNVChunk are chunked. Empty data is rejected, and so is data
+// that would run past MaxSpan, before any chunk is written.
 func Write(tr transport.TPM, index uint32, data []byte, offset uint16, password []byte) error {
 	if index == 0 {
 		return ErrIndexRequired{}
@@ -100,8 +103,11 @@ func Write(tr transport.TPM, index uint32, data []byte, offset uint16, password 
 	if len(data) == 0 {
 		return ErrDataRequired{}
 	}
-	if tr == nil {
-		return ErrTransportUnavailable{}
+	if err := CheckSpan(uint32(offset), uint64(len(data))); err != nil {
+		return err
+	}
+	if err := checkTarget(tr, index); err != nil {
+		return err
 	}
 	nvHandle := tpmgo.TPMHandle(index)
 	pubRsp, err := tpmgo.NVReadPublic{NVIndex: nvHandle}.Execute(tr)
@@ -197,11 +203,14 @@ func Password(s string) []byte {
 	return []byte(s)
 }
 
-// checkTarget rejects index 0 and a TPM without a raw transport before
-// any command is framed.
+// checkTarget rejects index 0, a handle outside the NV index range and a
+// TPM without a raw transport before any command is framed.
 func checkTarget(tr transport.TPM, index uint32) error {
 	if index == 0 {
 		return ErrIndexRequired{}
+	}
+	if err := CheckIndex(index); err != nil {
+		return err
 	}
 	if tr == nil {
 		return ErrTransportUnavailable{}

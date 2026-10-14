@@ -30,6 +30,7 @@ import (
 	attestationstore "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/store"
 	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
@@ -118,6 +119,7 @@ type testHandlerRegistry struct {
 	attestationService    platformv1.AttestationServiceServer
 	attestationReporting  *restattestation.Reporting
 	ociDistBackend        restregistry.OCIDistBackend
+	healthRegistry        health.Registry
 	deviceGRPCService     platformv1.DeviceServiceServer
 	deviceTemplateService devicepkg.DeviceTemplateService
 	deviceProfileService  devicepkg.DeviceProfileService
@@ -308,6 +310,10 @@ func (r *testHandlerRegistry) RegistryService() grpcapi.RegistryService {
 
 func (r *testHandlerRegistry) OCIDistBackend() restregistry.OCIDistBackend {
 	return r.ociDistBackend
+}
+
+func (r *testHandlerRegistry) HealthRegistry() health.Registry {
+	return r.healthRegistry
 }
 
 // stubEventReader mounts /api/v1/attestation/events under the audit so the

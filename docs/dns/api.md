@@ -16,7 +16,8 @@ over a Unix domain socket**, so gRPC and Unix share a column.
 
 gRPC: `DNSService`, 13 RPCs (`pkg/api/grpc/proto/platform_dns.proto`).
 REST: base path `/api/v1/dns` (`pkg/webservice/v1/rest/dns/router.go`).
-QUIC: top-level opcodes `0x20`–`0x2D` — no category indirection.
+QUIC: top-level opcodes `0x20`–`0x2C` — no category indirection. `0x2B` and
+`0x2D` are retired (#317) — see §2.
 MCP: **two parallel tool families** — see §3.
 
 ---
@@ -41,18 +42,23 @@ MCP: **two parallel tool families** — see §3.
 | Reverse lookup | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `dns_reverse_lookup` | — |
 | Register | `POST /api/v1/dns/register` | `Register` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Get DNS config | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDNSGetConfig` (`0x2A`) | `MISSING — docs/13 G7` | — |
-| Update DNS config | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDNSUpdateConfig` (`0x2B`) | `MISSING — docs/13 G7` | — |
 | DNS metrics | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDNSGetMetrics` (`0x2C`) | `MISSING — docs/13 G7` | — |
-| Flush cache | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDNSFlushCache` (`0x2D`) | `MISSING — docs/13 G7` | — |
 
 Two shapes stand out:
 
 - **DNSSEC — signing and status — exists only on REST, gRPC and embedded.** No
   QUIC, no MCP. Signing a zone is the operation that matters most and is
   reachable on the fewest transports.
-- **Four operational verbs are QUIC-only**: get config, update config, metrics,
-  flush cache. An operator on REST cannot flush the DNS cache or read DNS
-  metrics.
+- **Two operational reads are QUIC-only**: get config and metrics. An operator
+  on REST cannot read DNS metrics.
+- **There is no update-config or flush-cache verb on any transport.**
+  `OpDNSUpdateConfig` (`0x2B`) and `OpDNSFlushCache` (`0x2D`) only ever
+  answered `StatusNotImplemented`: `DNSService` has no runtime config setter,
+  and the platform's DNS server keeps no cache. The only cache is the dnsmasq
+  local forwarder's (`cache-size`, `pkg/dns/resolver.go`), which no platform
+  API controls. #317 retired both bytes; the wire refuses them as unclassified
+  (`StatusPermissionDenied`). Do not reuse them. A flush verb needs a dnsmasq
+  control path in the DNS service layer, served on every transport.
 
 `DELETE /api/v1/dns/zones/{zone}/records/{type}/{name}` keys a record by type
 and name in the path, so a record with the same name in two types is deleted

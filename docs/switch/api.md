@@ -108,9 +108,18 @@ just a route.
 `vlan_id` is `uint16`. `0` ⇒ 400 `ErrMissingVLANID`; `> 4094` ⇒ 400
 `ErrInvalidVLANID`. `EnablePort` and `DisablePort` take **no body**.
 
+The SDK REST transport claims exactly these routes
+(`sdk/go/transport/rest/switches.go`, #452): `switch_name` and `port_name`
+travel only in the path, escaped, and only `vlan_id` travels in the body. A
+request missing either name is refused with `InvalidArgument` before it is
+sent.
+
 Responses are wrapped in the platform `WebServiceResponse` envelope
-(`{success, payload, error}`) — the SDK client unwraps it and re-marshals the
-payload into the target type. Success payloads:
+(`{success, payload, error}`). The SDK unwraps it and builds the gRPC reply
+from the payload: `PortStatus` becomes `SwitchPortStatus`, and an
+acknowledgement whose `status` is `"ok"` becomes the same `Status` the gRPC
+service returns. Any other `status` is an error
+(`ErrSwitchActionNotAcknowledged`). Success payloads:
 
 | Route | Payload |
 |---|---|

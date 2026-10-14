@@ -105,3 +105,10 @@ func (a *iamTokenAuthorizer) CheckPermission(ctx context.Context, token, resourc
 	}
 	return resp != nil && resp.Allowed, nil
 }
+
+// ErrPEPClientNotAvailable is returned when the PEP client is nil.
+type ErrPEPClientNotAvailable struct{}
+
+func (e ErrPEPClientNotAvailable) Error() string {
+	return "PEP client is not available"
+}

@@ -115,29 +115,7 @@ func (u *UnixAdapter) Health(ctx context.Context) (*HealthResult, error) {
 	if err != nil {
 		return nil, ErrUnixRPCFailed{Method: "GetHealth", Err: err}
 	}
-
-	result := &HealthResult{
-		Status:    normalizeHealthStatus(resp.Status.String()),
-		Timestamp: time.Now(),
-	}
-
-	if resp.Timestamp != nil {
-		result.Timestamp = resp.Timestamp.AsTime()
-	}
-
-	for _, c := range resp.Components {
-		ch := ComponentHealth{
-			Name:    c.Name,
-			Status:  normalizeHealthStatus(c.Status.String()),
-			Message: c.Message,
-		}
-		if c.LastCheck != nil {
-			ch.LastCheck = c.LastCheck.AsTime()
-		}
-		result.Components = append(result.Components, ch)
-	}
-
-	return result, nil
+	return healthResultFromProto(resp), nil
 }
 
 // =============================================================================

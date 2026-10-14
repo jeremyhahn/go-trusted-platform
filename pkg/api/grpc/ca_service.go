@@ -139,6 +139,7 @@ func (s *CAGRPCService) WithKMS(kms issuance.KMS) *CAGRPCService {
 }
 
 // NewCAGRPCService creates a new CAGRPCService instance.
+// Kept with no caller: docs/ca names this file as the CAService surface the daemon's InitCA/Install/Uninstall stubs still shadow.
 func NewCAGRPCService(
 	logger *logging.Logger,
 	ca quicbaasca.CACertificateAuthority,

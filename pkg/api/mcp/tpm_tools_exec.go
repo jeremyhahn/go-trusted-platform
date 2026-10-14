@@ -399,8 +399,16 @@ func (r *ToolRegistry) executeTPMUnseal(ctx context.Context, args map[string]int
 
 // executeTPMCertify certifies a TPM key.
 func (r *ToolRegistry) executeTPMCertify(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	keyHandle := getInt(args, "key_handle")
-	result, err := r.service.TPMCertify(ctx, keyHandle)
+	keyHandle, err := uintArgUpTo(args, "key_handle", math.MaxUint32)
+	if err != nil {
+		return nil, err
+	}
+	nonce, err := base64.StdEncoding.DecodeString(getString(args, "nonce"))
+	if err != nil {
+		return nil, ErrTPMInvalidNonce
+	}
+
+	result, err := r.service.TPMCertify(ctx, uint32(keyHandle), getString(args, "key_password"), nonce)
 	if err != nil {
 		return nil, err
 	}

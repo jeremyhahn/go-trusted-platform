@@ -43,7 +43,7 @@ func invokeCapturing(t *testing.T, method string, req, reply proto.Message, resp
 	t.Helper()
 	var got phase35Request
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			return
 		}
 		got.method = r.Method

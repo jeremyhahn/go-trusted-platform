@@ -108,6 +108,8 @@ func TestScopeForMethod_UnknownMethodIsUnscoped(t *testing.T) {
 func TestIsPreAuthMethod(t *testing.T) {
 	preAuth := []string{
 		"/grpc.health.v1.Health/Check",
+		"/platform.v1.PlatformDaemon/Liveness",
+		"/platform.v1.PlatformDaemon/Readiness",
 		"/platform.v1.InvitationService/AcceptInvitation",
 		"/platform.v1.ConfigDeliveryService/FetchConfig",
 	}
@@ -515,15 +517,22 @@ func TestOIDCUnaryInterceptor_UnclassifiedMethodDenied_LegacyValidator(t *testin
 // TestOIDCUnaryInterceptor_PreAuthMethodNeedsNoToken verifies a pre-auth method
 // is served with no Authorization header and without consulting the validator.
 func TestOIDCUnaryInterceptor_PreAuthMethodNeedsNoToken(t *testing.T) {
-	stub := &claimsValidatorStub{authCtx: &platformtoken.AuthorizedContext{Subject: "u"}}
-	interceptor := OIDCUnaryInterceptor(WithTokenValidator(stub))
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) { return "ok", nil }
-	info := &grpc.UnaryServerInfo{FullMethod: "/grpc.health.v1.Health/Check"}
-	if _, err := interceptor(context.Background(), nil, info, handler); err != nil {
-		t.Fatalf("pre-auth method refused: %v", err)
+	probes := []string{
+		"/grpc.health.v1.Health/Check",
+		"/platform.v1.PlatformDaemon/Liveness",
+		"/platform.v1.PlatformDaemon/Readiness",
 	}
-	if stub.calls != 0 {
-		t.Errorf("validator called %d times for a pre-auth method, want 0", stub.calls)
+	for _, method := range probes {
+		stub := &claimsValidatorStub{authCtx: &platformtoken.AuthorizedContext{Subject: "u"}}
+		interceptor := OIDCUnaryInterceptor(WithTokenValidator(stub))
+		handler := func(ctx context.Context, req interface{}) (interface{}, error) { return "ok", nil }
+		info := &grpc.UnaryServerInfo{FullMethod: method}
+		if _, err := interceptor(context.Background(), nil, info, handler); err != nil {
+			t.Fatalf("pre-auth method %s refused: %v", method, err)
+		}
+		if stub.calls != 0 {
+			t.Errorf("validator called %d times for pre-auth %s, want 0", stub.calls, method)
+		}
 	}
 }
 

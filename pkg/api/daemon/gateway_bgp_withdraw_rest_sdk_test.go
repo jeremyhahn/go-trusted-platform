@@ -67,7 +67,7 @@ func newBGPWithdrawRESTClient(t *testing.T, speaker BGPSpeakerInterface) (platfo
 // webservice router registers its routes as it does in the daemon.
 func newWebserviceRESTMux() (*mux.Router, *mux.Router) {
 	parent := mux.NewRouter()
-	parent.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+	parent.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	return parent, parent.PathPrefix("/api/v1").Subrouter()

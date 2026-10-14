@@ -31,7 +31,7 @@ func eabAdapter(t *testing.T, payload string) (*Adapter, *captureEAB) {
 	t.Helper()
 	captured := &captureEAB{}
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}

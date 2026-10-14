@@ -266,6 +266,13 @@ not registered and answers 404 like any unknown path. Enabled, it is
 and the device is identified by the MAC in the request body. What a booting
 node should present is #238; `WebhookSecret` is reserved for it and unused.
 
+**The install-complete webhook route exists only when the operator sets
+`pxe.ServiceConfig.WebhookEnabled`** (default `false`). Disabled, the path is
+not registered and answers 404 like any unknown path. Enabled, it is
+**unauthenticated**: the caller is a booting node that presents no credential,
+and the device is identified by the MAC in the request body. What a booting
+node should present is #238; `WebhookSecret` is reserved for it and unused.
+
 **The `REST base` column is a locator, not the contract.** It gives the prefix a
 route hangs under; it does not give the route. The normative per-route path
 **and HTTP method** for all fifteen are the first column of
@@ -285,6 +292,13 @@ hand-rolled method checks do return 405. So on the control plane a wrong verb
 and an unimplemented route are indistinguishable from the client, and the
 client cannot tell it guessed. Record the method beside the path or this
 recurs.
+
+The SDK's own REST transport guessed too, until #452. It sent `UpdateState`,
+`Authorize` and `Quarantine` to `…/devices/state`, `…/devices/authorize` and
+`…/devices/quarantine` with the device in the body, and no router serves those
+paths. It now claims the normative item routes. The device id travels only in
+the path (the templated rows in `sdk/go/transport/rest/adapter.go`), and a
+request without one is refused with `InvalidArgument` before it is sent.
 
 **Correction to carry upstream.** `docs/provisioning/api.md` §1 records the PXE
 QUIC opcodes as `0xFC`–`0xFF`. `sdk/go/wire/quicwire/protocol.go` also defines

@@ -56,6 +56,7 @@ func TestTPMRouter_RoutesRegistered(t *testing.T) {
 		{http.MethodPost, "/api/v1/tpm/unseal"},
 		{http.MethodPost, "/api/v1/tpm/quote"},
 		{http.MethodPost, "/api/v1/tpm/quote/verify"},
+		{http.MethodPost, "/api/v1/tpm/certify"},
 		{http.MethodGet, "/api/v1/tpm/eventlog"},
 		{http.MethodGet, "/api/v1/tpm/pcrs"},
 		{http.MethodPost, "/api/v1/tpm/nvram"},

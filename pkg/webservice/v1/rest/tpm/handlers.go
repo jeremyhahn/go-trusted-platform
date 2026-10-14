@@ -393,6 +393,24 @@ func (h *Handlers) VerifyQuote(w http.ResponseWriter, r *http.Request) {
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
 }
 
+// Certify handles POST /api/v1/tpm/certify.
+func (h *Handlers) Certify(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	req := &platformv1.CertifyRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	resp, err := h.server.Certify(r.Context(), req)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
 // GetEventLog handles GET /api/v1/tpm/eventlog.
 func (h *Handlers) GetEventLog(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureAvailable(w, r) {
@@ -451,7 +469,8 @@ func (h *Handlers) DefineNVRAM(w http.ResponseWriter, r *http.Request) {
 	protorest.WriteSuccessStatus(w, r, h.respWriter, http.StatusCreated, resp)
 }
 
-// ReadNVRAM handles GET /api/v1/tpm/nvram/{index}.
+// ReadNVRAM handles GET /api/v1/tpm/nvram/{index}. The optional body
+// carries password, offset and size; the index always comes from the path.
 func (h *Handlers) ReadNVRAM(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureAvailable(w, r) {
 		return
@@ -460,7 +479,13 @@ func (h *Handlers) ReadNVRAM(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	resp, err := h.server.ReadNVRAM(r.Context(), &platformv1.ReadNVRAMRequest{Index: idx})
+	req := &platformv1.ReadNVRAMRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	req.Index = idx
+	resp, err := h.server.ReadNVRAM(r.Context(), req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return
@@ -491,7 +516,8 @@ func (h *Handlers) WriteNVRAM(w http.ResponseWriter, r *http.Request) {
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
 }
 
-// UndefineNVRAM handles DELETE /api/v1/tpm/nvram/{index}.
+// UndefineNVRAM handles DELETE /api/v1/tpm/nvram/{index}. The optional
+// body carries the password; the index always comes from the path.
 func (h *Handlers) UndefineNVRAM(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureAvailable(w, r) {
 		return
@@ -500,7 +526,13 @@ func (h *Handlers) UndefineNVRAM(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	resp, err := h.server.UndefineNVRAM(r.Context(), &platformv1.UndefineNVRAMRequest{Index: idx})
+	req := &platformv1.UndefineNVRAMRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	req.Index = idx
+	resp, err := h.server.UndefineNVRAM(r.Context(), req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return

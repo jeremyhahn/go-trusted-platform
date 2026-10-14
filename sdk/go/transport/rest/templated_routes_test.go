@@ -83,7 +83,7 @@ func TestBMCPower_ZeroProfileIDRejected(t *testing.T) {
 	var apiHits int
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
 		// Connect()'s probe hits /health; only count real API calls.
-		if r.URL.Path != "/health" {
+		if r.URL.Path != "/health/live" {
 			apiHits++
 		}
 		w.WriteHeader(http.StatusOK)
@@ -201,7 +201,7 @@ func TestTenantBarrier_Init_PathTemplated(t *testing.T) {
 func TestTenantBarrier_EmptyTenantIDRejected(t *testing.T) {
 	var apiHits int
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/health" {
+		if r.URL.Path != "/health/live" {
 			apiHits++
 		}
 		w.WriteHeader(http.StatusOK)
@@ -482,7 +482,7 @@ func TestSingularAccessors_ZeroIdentifierRejectedBeforeTheWire(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var apiHits int
 			a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != "/health" {
+				if r.URL.Path != "/health/live" {
 					apiHits++
 				}
 				w.WriteHeader(http.StatusOK)

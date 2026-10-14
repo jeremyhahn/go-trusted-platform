@@ -140,6 +140,10 @@ func (f *fakeTPMService) VerifyQuote(ctx context.Context, req *platformv1.Verify
 	return tpmAnswer(f, ctx, req, &platformv1.VerifyQuoteResponse{})
 }
 
+func (f *fakeTPMService) Certify(ctx context.Context, req *platformv1.CertifyRequest) (*platformv1.CertifyResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.CertifyResponse{})
+}
+
 func (f *fakeTPMService) GetEventLog(ctx context.Context, req *platformv1.GetEventLogRequest) (*platformv1.GetEventLogResponse, error) {
 	return tpmAnswer(f, ctx, req, &platformv1.GetEventLogResponse{})
 }
@@ -378,6 +382,12 @@ func tpmRouteCases() []tpmRouteCase {
 			resp: &platformv1.VerifyQuoteResponse{Verified: true}, key: "actualPcrs",
 		},
 		{
+			route: "POST /api/v1/tpm/certify", method: http.MethodPost, target: "/api/v1/tpm/certify",
+			body: `{"keyHandle":2164260865,"keyPassword":"pw","nonce":"bm9uY2U="}`,
+			want: &platformv1.CertifyRequest{KeyHandle: 0x81000001, KeyPassword: "pw", Nonce: []byte("nonce")},
+			resp: &platformv1.CertifyResponse{CertifyInfo: []byte("attest"), SignatureAlgorithm: "SHA256-RSAPSS"}, key: "certifyInfo",
+		},
+		{
 			route: "GET /api/v1/tpm/pcrs", method: http.MethodGet, target: "/api/v1/tpm/pcrs?indices=0&indices=7&bank=PCR_BANK_SHA256",
 			want: &platformv1.GetPCRsRequest{Indices: []uint32{0, 7}, Bank: sha256},
 			resp: &platformv1.GetPCRsResponse{}, key: "pcrValues",
@@ -557,7 +567,6 @@ func TestTPMRoutesRefuseMalformedRequests(t *testing.T) {
 // for are no longer mounted.
 func TestTPMLegacyRoutesAreGone(t *testing.T) {
 	legacy := []struct{ method, path string }{
-		{http.MethodPost, "/api/v1/tpm/certify"},
 		{http.MethodGet, "/api/v1/tpm/capabilities"},
 		{http.MethodGet, "/api/v1/tpm/platform"},
 		{http.MethodPost, "/api/v1/tpm/pcrs/extend"},

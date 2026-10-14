@@ -30,7 +30,7 @@ import (
 func tpmQuoteServer(t *testing.T, statusCode int, body string, path *string, sent *map[string]any) *Adapter {
 	t.Helper()
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}

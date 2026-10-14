@@ -100,6 +100,12 @@ func registerDaemonHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.PlatformDaemon_GetHealth_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.GetHealth(ctx, req.(*platformv1.GetHealthRequest))
 	}
+	m[platformv1.PlatformDaemon_Liveness_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Liveness(ctx, req.(*platformv1.LivenessRequest))
+	}
+	m[platformv1.PlatformDaemon_Readiness_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Readiness(ctx, req.(*platformv1.ReadinessRequest))
+	}
 	m[platformv1.PlatformDaemon_Shutdown_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.Shutdown(ctx, req.(*platformv1.ShutdownRequest))
 	}
@@ -245,6 +251,9 @@ func registerTPMHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	}
 	m[platformv1.TPMService_VerifyQuote_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.VerifyQuote(ctx, req.(*platformv1.VerifyQuoteRequest))
+	}
+	m[platformv1.TPMService_Certify_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Certify(ctx, req.(*platformv1.CertifyRequest))
 	}
 	m[platformv1.TPMService_GetEventLog_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.GetEventLog(ctx, req.(*platformv1.GetEventLogRequest))

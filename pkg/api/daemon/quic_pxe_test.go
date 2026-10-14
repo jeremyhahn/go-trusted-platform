@@ -1144,22 +1144,3 @@ func TestConvertDeviceInfoToPXEDevice(t *testing.T) {
 // =============================================================================
 // Readiness Check PXE Component Test
 // =============================================================================
-
-func TestHandleReadiness_WithPXEService(t *testing.T) {
-	handler, _ := createTestPXEHandler()
-	ctx := context.Background()
-
-	req := &quicwire.Request{
-		Opcode:  quicwire.OpReadiness,
-		Payload: nil,
-	}
-
-	resp := handler.HandleRequest(ctx, req)
-
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
-
-	var healthResp HealthCheckResponse
-	err := quicwire.DecodePayload(resp.Payload, &healthResp)
-	require.NoError(t, err)
-	assert.Equal(t, "ready", healthResp.Components["pxe"])
-}

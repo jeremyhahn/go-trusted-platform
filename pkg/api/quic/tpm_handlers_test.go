@@ -298,7 +298,7 @@ func TestNewTPM2Handler(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	require.NotNil(t, h)
 	assert.NotNil(t, h.handlers)
-	assert.Len(t, h.handlers, 33)
+	assert.Len(t, h.handlers, 34)
 	assert.Nil(t, h.tpm)
 }
 

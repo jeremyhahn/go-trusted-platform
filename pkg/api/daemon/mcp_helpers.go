@@ -21,13 +21,6 @@ import (
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
-// mcpHealthStatusString converts a protobuf HealthStatus enum to the lowercase
-// string expected by MCP tool consumers (e.g., "healthy", "degraded", "unhealthy").
-func mcpHealthStatusString(s platformv1.HealthStatus) string {
-	raw := s.String()
-	return strings.ToLower(strings.TrimPrefix(raw, "HEALTH_STATUS_"))
-}
-
 // mcpSystemStatusString converts a protobuf SystemStatus enum to the lowercase
 // string expected by MCP tool consumers (e.g., "ready", "initializing").
 func mcpSystemStatusString(s platformv1.SystemStatus) string {
@@ -48,27 +41,6 @@ func mcpTimestampMillis(t time.Time) int64 {
 		return 0
 	}
 	return t.UnixMilli()
-}
-
-// mcpHealthResponseMap converts a GetHealthResponse proto to an MCP-compatible map
-// with lowercase string status values and Unix millisecond timestamps.
-func mcpHealthResponseMap(resp *platformv1.GetHealthResponse) map[string]interface{} {
-	components := make([]map[string]interface{}, 0, len(resp.GetComponents()))
-	for _, c := range resp.GetComponents() {
-		comp := map[string]interface{}{
-			"name":      c.GetName(),
-			"status":    mcpHealthStatusString(c.GetStatus()),
-			"message":   c.GetMessage(),
-			"lastCheck": mcpTimestampMillis(c.GetLastCheck().AsTime()),
-		}
-		components = append(components, comp)
-	}
-
-	return map[string]interface{}{
-		"status":     mcpHealthStatusString(resp.GetStatus()),
-		"components": components,
-		"timestamp":  mcpTimestampMillis(resp.GetTimestamp().AsTime()),
-	}
 }
 
 // mcpStatusResponseMap converts a GetStatusResponse proto to an MCP-compatible map.

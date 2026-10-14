@@ -145,6 +145,18 @@ func (e ErrUnexpectedRequestType) Error() string {
 	return fmt.Sprintf("unexpected request message type for gRPC method %s", e.Method)
 }
 
+// ErrSwitchActionNotAcknowledged indicates a switch port mutator answered
+// with a status other than "ok", so the change was not acknowledged.
+type ErrSwitchActionNotAcknowledged struct {
+	Method string
+	Status string
+}
+
+// Error implements the error interface.
+func (e ErrSwitchActionNotAcknowledged) Error() string {
+	return fmt.Sprintf("%s: switch answered status %q, not \"ok\"", e.Method, e.Status)
+}
+
 // ErrUnknownPortType indicates an SDN port type outside the pb PortType enum,
 // which has no REST name to send.
 type ErrUnknownPortType struct {

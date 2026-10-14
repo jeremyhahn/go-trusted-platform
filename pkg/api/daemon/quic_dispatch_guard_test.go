@@ -189,7 +189,10 @@ var quicWireOwners = []struct {
 }{
 	{0x00, 0x02, "health"},
 	{0x03, 0x1F, "vtpm"},
-	{0x20, 0x2D, "dns"},
+	{0x20, 0x2A, "dns"},
+	{0x2B, 0x2B, "reserved"}, // retired DNSUpdateConfig (#317), unclassified
+	{0x2C, 0x2C, "dns"},
+	{0x2D, 0x2D, "reserved"}, // retired DNSFlushCache (#317), unclassified
 	{0x2E, 0x2E, "overlay"},
 	{0x2F, 0x2F, "gateway"},
 	{0x30, 0x3B, "device"},
@@ -343,9 +346,7 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpDNSListZones":              {value: quicwire.OpDNSListZones, mode: wireDirect, family: "dns"},
 	"OpDNSResolve":                {value: quicwire.OpDNSResolve, mode: wireDirect, family: "dns"},
 	"OpDNSGetConfig":              {value: quicwire.OpDNSGetConfig, mode: wireDirect, family: "dns"},
-	"OpDNSUpdateConfig":           {value: quicwire.OpDNSUpdateConfig, mode: wireDirect, family: "dns"},
 	"OpDNSGetMetrics":             {value: quicwire.OpDNSGetMetrics, mode: wireDirect, family: "dns"},
-	"OpDNSFlushCache":             {value: quicwire.OpDNSFlushCache, mode: wireDirect, family: "dns"},
 	"OpOverlayCategory":           {value: quicwire.OpOverlayCategory, mode: wireDirect, family: "overlay"},
 	"OpGatewayCategory":           {value: quicwire.OpGatewayCategory, mode: wireDirect, family: "gateway"},
 	"OpDeviceRegister":            {value: quicwire.OpDeviceRegister, mode: wireDirect, family: "device"},

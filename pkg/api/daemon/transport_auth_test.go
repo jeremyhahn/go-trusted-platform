@@ -39,6 +39,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
@@ -189,8 +190,8 @@ func TestSelectGRPCTCPAuth_LocalValidator_AuthorizesEachMethodThroughIAM(t *test
 	assert.Equal(t, "admin", last.Action)
 }
 
-// Only the unary Health/Check probe is served without a token. GetHealth names
-// every component with its failure message and Health/Watch holds a stream
+// Only the unary Health/Check probe and the status-only Liveness and Readiness
+// probes are served without a token. GetHealth names every component with its failure message and Health/Watch holds a stream
 // open, so the daemon's own skip list must not reopen what the interceptor's
 // catalog scopes (#768).
 func TestSelectGRPCTCPAuth_OnlyHealthCheckIsAnonymous(t *testing.T) {
@@ -204,17 +205,23 @@ func TestSelectGRPCTCPAuth_OnlyHealthCheckIsAnonymous(t *testing.T) {
 	require.NotNil(t, sel.unary)
 	require.NotNil(t, sel.stream)
 
-	reached := false
-	_, err = sel.unary(context.Background(), struct{}{},
-		&grpc.UnaryServerInfo{FullMethod: "/grpc.health.v1.Health/Check"},
-		func(context.Context, interface{}) (interface{}, error) {
-			reached = true
-			return nil, nil
-		})
-	require.NoError(t, err)
-	assert.True(t, reached, "the health probe must answer without a token")
+	for _, method := range []string{
+		"/grpc.health.v1.Health/Check",
+		platformv1.PlatformDaemon_Liveness_FullMethodName,
+		platformv1.PlatformDaemon_Readiness_FullMethodName,
+	} {
+		reached := false
+		_, err = sel.unary(context.Background(), struct{}{},
+			&grpc.UnaryServerInfo{FullMethod: method},
+			func(context.Context, interface{}) (interface{}, error) {
+				reached = true
+				return nil, nil
+			})
+		require.NoError(t, err, method)
+		assert.True(t, reached, "the %s probe must answer without a token", method)
+	}
 
-	reached = false
+	reached := false
 	_, err = sel.unary(context.Background(), struct{}{},
 		&grpc.UnaryServerInfo{FullMethod: "/platform.v1.PlatformDaemon/GetHealth"},
 		func(context.Context, interface{}) (interface{}, error) {

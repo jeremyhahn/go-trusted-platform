@@ -62,12 +62,13 @@ func TestBuildTPMQuoteArgs_RefusesWrongArgs(t *testing.T) {
 	}
 }
 
-// Both quote methods are routed, so a raw TPMService client reaches the tools
-// instead of codes.Unimplemented.
+// The quote and certify methods are routed, so a raw TPMService client
+// reaches the tools instead of codes.Unimplemented.
 func TestTPMQuoteMethodsAreRouted(t *testing.T) {
 	want := map[string]string{
 		platformv1.TPMService_Quote_FullMethodName:       "platform_tpm_quote",
 		platformv1.TPMService_VerifyQuote_FullMethodName: "platform_tpm_verify_quote",
+		platformv1.TPMService_Certify_FullMethodName:     "platform_tpm_certify",
 	}
 	for method, tool := range want {
 		if got := grpcMethodToMCPToolMap[method]; got != tool {

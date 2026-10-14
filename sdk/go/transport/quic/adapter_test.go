@@ -458,6 +458,8 @@ func TestGRPCMethodToOpcodeMap_Health(t *testing.T) {
 		expected byte
 	}{
 		{"/platform.v1.PlatformDaemon/GetHealth", quicwire.OpHealth},
+		{"/platform.v1.PlatformDaemon/Liveness", quicwire.OpLiveness},
+		{"/platform.v1.PlatformDaemon/Readiness", quicwire.OpReadiness},
 		{"/platform.v1.PlatformDaemon/GetStatus", quicwire.OpDaemonStatus},
 		{"/platform.v1.PlatformDaemon/GetVersion", quicwire.OpDaemonVersion},
 	}

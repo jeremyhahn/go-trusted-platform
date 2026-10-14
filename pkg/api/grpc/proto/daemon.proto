@@ -17,6 +17,9 @@ service PlatformDaemon {
   // System operations
   rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
   rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
+  // Liveness and Readiness are status-only probes, served without a token.
+  rpc Liveness(LivenessRequest) returns (LivenessResponse);
+  rpc Readiness(ReadinessRequest) returns (ReadinessResponse);
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
   rpc GetVersion(GetVersionRequest) returns (GetVersionResponse);
 
@@ -212,6 +215,25 @@ message GetHealthRequest {
 message GetHealthResponse {
   HealthStatus status = 1;
   repeated ComponentHealth components = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+message LivenessRequest {}
+
+// LivenessResponse answers whether the process is serving. alive is always
+// true on a response that arrives.
+message LivenessResponse {
+  bool alive = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message ReadinessRequest {}
+
+// ReadinessResponse answers whether the platform can take traffic: ready when
+// no registered health checker is unhealthy. It names no component.
+message ReadinessResponse {
+  bool ready = 1;
+  HealthStatus status = 2;
   google.protobuf.Timestamp timestamp = 3;
 }
 

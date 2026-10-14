@@ -45,16 +45,10 @@ func newProxyStoreService(store *ProxyStore, zoneSvc gateway.ZoneService) *proxy
 	return &proxyStoreService{store: store, zoneSvc: zoneSvc}
 }
 
-// NewProxyGRPCService constructs the shared ProxyGRPCService over a new
-// empty ProxyStore and the given zone service. The returned service backs
-// every proxy transport (gRPC TCP/UDS, REST, QUIC, MCP, embedded SDK).
-func NewProxyGRPCService(logger *logging.Logger, zoneSvc gateway.ZoneService) *grpcapi.ProxyGRPCService {
-	return NewProxyGRPCServiceWithStore(logger, NewProxyStore(), zoneSvc)
-}
-
 // NewProxyGRPCServiceWithStore constructs the shared ProxyGRPCService over
 // the given store — the persistent one in the daemon, the in-memory one in
-// tests — and the given zone service.
+// tests — and the given zone service. The returned service backs every proxy
+// transport (gRPC TCP/UDS, REST, QUIC, MCP, embedded SDK).
 func NewProxyGRPCServiceWithStore(logger *logging.Logger, store *ProxyStore, zoneSvc gateway.ZoneService) *grpcapi.ProxyGRPCService {
 	return grpcapi.NewProxyGRPCService(logger, newProxyStoreService(store, zoneSvc))
 }

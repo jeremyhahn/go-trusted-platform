@@ -41,7 +41,7 @@ func gatewayAdapter(t *testing.T, reply string) (*Adapter, *gatewayCapture) {
 	t.Helper()
 	captured := &gatewayCapture{}
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -161,7 +161,7 @@ func TestProvisioningGateway_NotifyInstallComplete_OmitsUnsetTimestamp(t *testin
 func TestProvisioningGateway_EmptyMACRejected(t *testing.T) {
 	var apiHits int
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/health" {
+		if r.URL.Path != "/health/live" {
 			apiHits++
 		}
 		w.WriteHeader(http.StatusOK)

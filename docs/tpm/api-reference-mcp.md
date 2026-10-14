@@ -15,14 +15,16 @@ caller.
 
 | Tools | Scope |
 |---|---|
-| `info`, `ek`, `ek_cert`, `srk`, `iak`, `pcrs`, `eventlog`, `random`, `nv_read`, `make_credential`, `quote`, `verify_quote` | `tpm:read` |
-| `provision`, `ek_create`, `ek_import_cert`, `srk_create`, `iak_create`, `nv_write`, `activate_credential`, `seal`, `unseal` | `tpm:write` |
+| `info`, `ek`, `ek_cert`, `srk`, `iak`, `pcrs`, `eventlog`, `random`, `nv_list`, `nv_read`, `make_credential`, `quote`, `verify_quote`, `certify` | `tpm:read` |
+| `provision`, `ek_create`, `ek_import_cert`, `srk_create`, `iak_create`, `nv_write`, `activate_credential`, `seal`, `unseal`, `pcr_extend` | `tpm:write` |
 | `clear`, `nv_delete` | `tpm:delete` |
 | `ek_delete`, `srk_delete`, `iak_delete` | **refused** — they flush a persistent handle, which deletes nothing; gRPC `Delete*` does the same |
-| `capabilities`, `platform`, `nv_list`, `pcr_extend`, `certify` | **refused** — no gRPC or REST twin to take a scope from |
+| `capabilities`, `platform` | **refused** — no gRPC or REST twin to take a scope from |
 
 Names are `platform_tpm_<tool>`. `unseal` is the one tool stricter than its
-gRPC twin: an unseal tool never takes a read scope on MCP.
+gRPC twin: an unseal tool never takes a read scope on MCP. `nv_list` takes the
+scope of gRPC `Info`, and `pcr_extend`, which has no gRPC twin, takes the scope
+of QUIC's `SubOpTPM2ExtendPCR`.
 
 ## Available Tools
 
@@ -68,8 +70,8 @@ gRPC twin: an unseal tool never takes a read scope on MCP.
 |------|-------------|
 | `platform_tpm_quote` | Generate TPM quote for remote attestation |
 | `platform_tpm_verify_quote` | Verify quote signature and freshness |
+| `platform_tpm_certify` | IAK certifies a persistent key is resident in this TPM |
 | `platform_tpm_pcrs` | Read Platform Configuration Registers |
-| `platform_tpm_pcr_extend` | Extend PCR with measurement data |
 | `platform_tpm_eventlog` | Retrieve TPM event log |
 
 ### Cryptographic Tools
@@ -89,12 +91,18 @@ gRPC twin: an unseal tool never takes a read scope on MCP.
 
 ### NVRAM Tools
 
-| Tool | Description |
-|------|-------------|
-| `platform_tpm_nv_list` | List defined NVRAM indexes |
-| `platform_tpm_nv_read` | Read NVRAM index |
-| `platform_tpm_nv_write` | Write NVRAM index |
-| `platform_tpm_nv_delete` | Delete NVRAM index |
+| Tool | Description | Scope |
+|------|-------------|-------|
+| `platform_tpm_nv_list` | List defined NVRAM indexes | `tpm:read` |
+| `platform_tpm_nv_read` | Read NVRAM index | `tpm:read` |
+| `platform_tpm_nv_write` | Write NVRAM index | `tpm:write` |
+| `platform_tpm_nv_delete` | Undefine NVRAM index | `tpm:delete` |
+
+The NV tools call `pkg/api/tpmnv`, the code gRPC and QUIC run, so they apply
+the same bounds before the TPM is touched: the index must be an NV handle in
+`0x01000000`-`0x01FFFFFF`, and a write's offset plus data length must fit the
+65535-byte NV offset space (see [api.md](api.md)). The scopes are those of the
+gRPC twins (`Info`, `ReadNVRAM`, `WriteNVRAM`, `UndefineNVRAM`).
 
 ## Tool Definitions
 
@@ -371,6 +379,39 @@ Requires scope `tpm:read`, as does `platform_tpm_quote`. The result is
 }
 ```
 
+### platform_tpm_certify
+
+Have the IAK certify that the key at a persistent handle is resident in this
+TPM (TPM2_Certify). Requires scope `tpm:read`. It calls the same
+`pkg/api/tpmcertify` layer as every other transport, so a zero or transient
+handle, or a nonce over 64 bytes, is refused before the TPM is called
+([api.md](api.md) §5). The result carries the `CertifyResponse` fields
+(`certify_info`, `signature`, `signature_algorithm`, `certify_info_signature`,
+`attesting_key_public`, `attested_key_public`, `attesting_key_public_area`,
+`attested_key_public_area`, `nonce`), byte fields base64-encoded.
+
+**Input Schema:**
+```json
+{
+  "type": "object",
+  "properties": {
+    "key_handle": {
+      "type": "integer",
+      "description": "Persistent handle of the key to certify (0x81000000-0x81FFFFFF)"
+    },
+    "key_password": {
+      "type": "string",
+      "description": "Authorization value of the key, when it has one"
+    },
+    "nonce": {
+      "type": "string",
+      "description": "Base64-encoded qualifying data (at most 64 bytes) echoed in the attestation"
+    }
+  },
+  "required": ["key_handle"]
+}
+```
+
 ### platform_tpm_pcrs
 
 Read Platform Configuration Register (PCR) values from the TPM.
@@ -392,6 +433,9 @@ Read Platform Configuration Register (PCR) values from the TPM.
 ### platform_tpm_pcr_extend
 
 Extend a PCR with measurement data (hash is computed by the TPM).
+
+Scope `tpm:write`, the scope of QUIC's `SubOpTPM2ExtendPCR`; there is no gRPC
+twin. The tool calls `pkg/api/tpmpcr`, the code QUIC runs.
 
 **Input Schema:**
 ```json
@@ -563,7 +607,8 @@ properties.
 ### platform_tpm_nv_read
 
 Read data from an NVRAM index. The result is `{"index", "data", "size"}` with
-`data` base64-encoded.
+`data` base64-encoded. A `size` that runs past the end of the index reads to
+the end.
 
 **Input Schema:**
 ```json
@@ -572,7 +617,7 @@ Read data from an NVRAM index. The result is `{"index", "data", "size"}` with
   "properties": {
     "index": {
       "type": "integer",
-      "description": "NVRAM index to read from"
+      "description": "NVRAM index to read from (0x01000000-0x01FFFFFF)"
     },
     "size": {
       "type": "integer",
@@ -593,7 +638,8 @@ Read data from an NVRAM index. The result is `{"index", "data", "size"}` with
 
 ### platform_tpm_nv_write
 
-Write data to an NVRAM index.
+Write data to an NVRAM index. The result is `{"success", "message"}`. Data
+that would run past offset 65535 is refused before any chunk is written.
 
 **Input Schema:**
 ```json
@@ -602,7 +648,7 @@ Write data to an NVRAM index.
   "properties": {
     "index": {
       "type": "integer",
-      "description": "NVRAM index to write to"
+      "description": "NVRAM index to write to (0x01000000-0x01FFFFFF)"
     },
     "data": {
       "type": "string",
@@ -623,7 +669,7 @@ Write data to an NVRAM index.
 
 ### platform_tpm_nv_delete
 
-Undefine (delete) an NVRAM index.
+Undefine (delete) an NVRAM index. The result is `{"success", "message"}`.
 
 **Input Schema:**
 ```json
@@ -632,7 +678,7 @@ Undefine (delete) an NVRAM index.
   "properties": {
     "index": {
       "type": "integer",
-      "description": "NVRAM index to undefine"
+      "description": "NVRAM index to undefine (0x01000000-0x01FFFFFF)"
     },
     "parent_password": {
       "type": "string",
@@ -646,6 +692,8 @@ Undefine (delete) an NVRAM index.
 `index` must fit in 32 bits, and `size` and `offset` in 16 bits. The values
 are whole decimal numbers; anything else is refused with `-32602` (invalid params)
 before the TPM is touched. Index 0 and empty `data` are refused the same way.
+An index outside `0x01000000`-`0x01FFFFFF`, or a write past the NV offset space,
+is refused by `pkg/api/tpmnv` before the TPM is touched.
 
 ## JSON-RPC Examples
 

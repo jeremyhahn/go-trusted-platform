@@ -40,7 +40,7 @@ func templateServer(t *testing.T, payload string) (*Adapter, *templateRequest) {
 	captured := &templateRequest{}
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			_, _ = w.Write([]byte(`{}`))
 			return
 		}

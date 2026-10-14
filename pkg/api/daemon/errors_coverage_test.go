@@ -59,8 +59,6 @@ func TestAllErrorTypes_ErrorMethod(t *testing.T) {
 		{"ErrUnsupportedRecordType", ErrUnsupportedRecordType{}, "unsupported DNS record type"},
 		{"ErrDNSServiceNotAvailable", ErrDNSServiceNotAvailable{}, "DNS service not available"},
 		{"ErrDNSInvalidParameter", ErrDNSInvalidParameter{Parameter: "ttl", Reason: "must be positive"}, "invalid DNS parameter ttl: must be positive"},
-		{"ErrDNSConfigUpdateNotSupported", ErrDNSConfigUpdateNotSupported{}, "DNS configuration updates are not supported at runtime"},
-		{"ErrDNSCacheFlushNotSupported", ErrDNSCacheFlushNotSupported{}, "DNS cache flushing is not supported"},
 		{"ErrDNSZoneNotFound", ErrDNSZoneNotFound{Zone: "example.com"}, "DNS zone not found: example.com"},
 		{"ErrDNSRecordNotFound", ErrDNSRecordNotFound{Name: "www.example.com", RecordType: "A"}, "DNS record not found: www.example.com A"},
 		{"ErrDNSOperationFailed", ErrDNSOperationFailed{Operation: "add", Cause: errors.New("zone locked")}, "DNS operation add failed: zone locked"},
@@ -326,8 +324,6 @@ func TestErrorsImplementErrorInterface(t *testing.T) {
 	var _ error = ErrSDNBridgeNotFound{}
 	var _ error = ErrSDNPortNotFound{}
 	var _ error = ErrSDNMissingParameter{}
-	var _ error = ErrDNSConfigUpdateNotSupported{}
-	var _ error = ErrDNSCacheFlushNotSupported{}
 	var _ error = ErrDNSZoneNotFound{}
 	var _ error = ErrDNSRecordNotFound{}
 	var _ error = ErrDNSOperationFailed{}

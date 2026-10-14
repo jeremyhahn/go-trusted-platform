@@ -29,15 +29,17 @@ func TestBuildHandlerMap_DaemonOnly(t *testing.T) {
 		t.Fatal("expected handlers registered for Daemon service")
 	}
 
-	// Daemon should register exactly 14 unary methods.
-	if len(m) != 13 {
-		t.Errorf("expected 13 daemon handlers, got %d", len(m))
+	// Daemon should register exactly 15 unary methods.
+	if len(m) != 15 {
+		t.Errorf("expected 15 daemon handlers, got %d", len(m))
 	}
 
 	// Verify a few known methods are present.
 	methods := []string{
 		platformv1.PlatformDaemon_GetStatus_FullMethodName,
 		platformv1.PlatformDaemon_GetHealth_FullMethodName,
+		platformv1.PlatformDaemon_Liveness_FullMethodName,
+		platformv1.PlatformDaemon_Readiness_FullMethodName,
 		platformv1.PlatformDaemon_GetVersion_FullMethodName,
 		platformv1.PlatformDaemon_Shutdown_FullMethodName,
 		platformv1.PlatformDaemon_GetConfig_FullMethodName,
@@ -53,19 +55,20 @@ func TestBuildHandlerMap_FullRegistry(t *testing.T) {
 	registry := fullTestRegistry()
 	m := buildHandlerMap(registry)
 
-	// All 20 services registered should yield 340 handlers (320 base +
+	// All 20 services registered should yield 343 handlers (320 base +
 	// 6 gateway load balancer VIP methods + 3 gateway perf methods +
 	// 4 IPAM pool CRUD + 4 network zone CRUD - 2 retired tenant VLAN/bridge
 	// methods, #708 + gateway.GetNAT64Status, #601 + ca.SignCSR, #691 + 6 device
 	// attestation, template and profile-assignment methods, #250 +
-	// CreateTemplate, #497 + attestation.PollDeviceVerdicts, #709 - 7 IAM
+	// CreateTemplate, #497 + attestation.PollDeviceVerdicts, #709 +
+	// daemon Liveness and Readiness, #452 + tpm.Certify, #317 - 7 IAM
 	// group methods, removed with IAM groups in go-quicbaas v0.13).
 	if len(m) < 300 {
 		t.Errorf("expected at least 300 handlers for full registry, got %d", len(m))
 	}
 
-	if len(m) != 340 {
-		t.Errorf("expected exactly 340 handlers for full registry, got %d", len(m))
+	if len(m) != 343 {
+		t.Errorf("expected exactly 343 handlers for full registry, got %d", len(m))
 	}
 }
 
@@ -179,6 +182,53 @@ func TestDispatch_DaemonGetHealth(t *testing.T) {
 
 	if healthResp.Status != platformv1.HealthStatus_HEALTH_STATUS_HEALTHY {
 		t.Errorf("expected HEALTHY status, got %v", healthResp.Status)
+	}
+}
+
+// probeDaemonServer answers the two status-only probes with fixed verdicts.
+type probeDaemonServer struct {
+	platformv1.UnimplementedPlatformDaemonServer
+}
+
+func (probeDaemonServer) Liveness(context.Context, *platformv1.LivenessRequest) (*platformv1.LivenessResponse, error) {
+	return &platformv1.LivenessResponse{Alive: true}, nil
+}
+
+func (probeDaemonServer) Readiness(context.Context, *platformv1.ReadinessRequest) (*platformv1.ReadinessResponse, error) {
+	return &platformv1.ReadinessResponse{Status: platformv1.HealthStatus_HEALTH_STATUS_UNHEALTHY}, nil
+}
+
+func TestDispatch_DaemonProbes(t *testing.T) {
+	m := buildHandlerMap(&ServiceRegistry{Daemon: probeDaemonServer{}})
+
+	live, err := m[platformv1.PlatformDaemon_Liveness_FullMethodName](context.Background(), &platformv1.LivenessRequest{})
+	if err != nil {
+		t.Fatalf("Liveness: %v", err)
+	}
+	if resp, ok := live.(*platformv1.LivenessResponse); !ok || !resp.GetAlive() {
+		t.Errorf("Liveness = %v, want an alive *LivenessResponse", live)
+	}
+
+	ready, err := m[platformv1.PlatformDaemon_Readiness_FullMethodName](context.Background(), &platformv1.ReadinessRequest{})
+	if err != nil {
+		t.Fatalf("Readiness: %v", err)
+	}
+	resp, ok := ready.(*platformv1.ReadinessResponse)
+	if !ok || resp.GetReady() || resp.GetStatus() != platformv1.HealthStatus_HEALTH_STATUS_UNHEALTHY {
+		t.Errorf("Readiness = %v, want the server's unready verdict", ready)
+	}
+}
+
+// A daemon that does not implement the probes surfaces its own error rather
+// than a fabricated verdict.
+func TestDispatch_DaemonProbesUnimplemented(t *testing.T) {
+	m := buildHandlerMap(testRegistry())
+
+	if _, err := m[platformv1.PlatformDaemon_Readiness_FullMethodName](context.Background(), &platformv1.ReadinessRequest{}); err == nil {
+		t.Error("Readiness on a daemon without it returned no error")
+	}
+	if _, err := m[platformv1.PlatformDaemon_Liveness_FullMethodName](context.Background(), &platformv1.LivenessRequest{}); err == nil {
+		t.Error("Liveness on a daemon without it returned no error")
 	}
 }
 

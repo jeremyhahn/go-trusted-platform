@@ -69,7 +69,7 @@ func sdkAgainstEABRouter(t *testing.T) (*sdkrest.Adapter, *recordingEABServer, *
 	svc := &recordingEABServer{}
 
 	parent := mux.NewRouter()
-	parent.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+	parent.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	NewEABRouter(logger, svc, response.NewResponseWriter(logger, nil)).

@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -744,9 +745,7 @@ func TestOpcodeToString(t *testing.T) {
 		{OpDNSListZones, "DNSListZones"},
 		{OpDNSResolve, "DNSResolve"},
 		{OpDNSGetConfig, "DNSGetConfig"},
-		{OpDNSUpdateConfig, "DNSUpdateConfig"},
 		{OpDNSGetMetrics, "DNSGetMetrics"},
-		{OpDNSFlushCache, "DNSFlushCache"},
 
 		// Device Operations
 		{OpDeviceRegister, "DeviceRegister"},
@@ -842,6 +841,17 @@ func TestOpcodeToString(t *testing.T) {
 				t.Errorf("expected '%s', got '%s'", tt.expected, result)
 			}
 		})
+	}
+}
+
+// TestOpcodeToString_RetiredBytes pins the DNS and device bytes retired
+// unimplemented in #317: none of them names an operation any more.
+func TestOpcodeToString_RetiredBytes(t *testing.T) {
+	for _, opcode := range []byte{0x2B, 0x2D, 0x3C, 0x3E} {
+		want := fmt.Sprintf("Unknown(0x%02X)", opcode)
+		if got := OpcodeToString(opcode); got != want {
+			t.Errorf("OpcodeToString(0x%02X) = %q, want %q", opcode, got, want)
+		}
 	}
 }
 

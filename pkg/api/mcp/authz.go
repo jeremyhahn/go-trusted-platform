@@ -76,18 +76,28 @@ func toolPermissionCatalog() map[string]string {
 	permissions["vtpm_template_clone"] = "vtpm:write"
 	permissions["vtpm_template_delete"] = "vtpm:delete"
 
-	// Platform TPM quote tools carry the scope of their gRPC TPMService twin
+	// Platform TPM quote and certify tools carry the scope of their gRPC TPMService twin
 	// (pkg/api/grpc/method_permissions.go). The quote is channel-bound, so
 	// over stdio, which has no TLS connection, the service refuses it (#482).
 	permissions["platform_tpm_quote"] = "tpm:read"
 	permissions["platform_tpm_verify_quote"] = "tpm:read"
+	permissions["platform_tpm_certify"] = "tpm:read"
+
+	// Platform TPM NV tools run on the gRPC TPMService and carry its scopes:
+	// nv_list reads Info; nv_read, nv_write and nv_delete map to
+	// ReadNVRAM / WriteNVRAM / UndefineNVRAM and are classified below.
+	permissions["platform_tpm_nv_list"] = "tpm:read"
+
+	// PCR extend has no gRPC twin; it carries the scope of QUIC's
+	// SubOpTPM2ExtendPCR (pkg/api/quic/opcode_permissions.go).
+	permissions["platform_tpm_pcr_extend"] = "tpm:write"
 
 	// The rest of the platform TPM tools carry the scope of their gRPC
 	// TPMService twin the same way: reads are tpm:read, key creation, seal,
 	// NV writes and credential activation are tpm:write, and clearing the
 	// TPM or undefining an NV index is tpm:delete. The tools without a gRPC
-	// or REST twin (capabilities, platform, nv_list, pcr_extend, certify)
-	// stay unclassified, so they are refused (#304).
+	// or REST twin (capabilities, platform) stay unclassified, so they are
+	// refused (#304).
 	permissions["platform_tpm_info"] = "tpm:read"
 	permissions["platform_tpm_ek"] = "tpm:read"
 	permissions["platform_tpm_ek_cert"] = "tpm:read"

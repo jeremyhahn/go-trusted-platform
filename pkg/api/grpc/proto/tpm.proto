@@ -42,6 +42,7 @@ service TPMService {
   // Attestation operations
   rpc Quote(QuoteRequest) returns (QuoteResponse);
   rpc VerifyQuote(VerifyQuoteRequest) returns (VerifyQuoteResponse);
+  rpc Certify(CertifyRequest) returns (CertifyResponse);
   rpc GetEventLog(GetEventLogRequest) returns (GetEventLogResponse);
   rpc GetPCRs(GetPCRsRequest) returns (GetPCRsResponse);
 
@@ -363,6 +364,43 @@ message VerifyQuoteResponse {
   bool verified = 2;
   string message = 3;
   repeated PCRValue actual_pcrs = 4;
+}
+
+// CertifyRequest asks the TPM to certify, under the IAK, that the key at a
+// persistent handle (0x81000000-0x81FFFFFF) is resident in this TPM
+// (TPM2_Certify).
+message CertifyRequest {
+  uint32 key_handle = 1;
+  // key_password is the certified key's authValue; empty when it has none.
+  string key_password = 2;
+  // nonce is the caller's qualifying data, echoed in certify_info's
+  // extraData. It is not channel-bound. At most 64 bytes.
+  bytes nonce = 3;
+}
+
+message CertifyResponse {
+  Status status = 1;
+  // certify_info is the marshalled TPMS_ATTEST the IAK signed.
+  bytes certify_info = 2;
+  // signature is the bare signature over certify_info: RSA bytes, or an
+  // ASN.1 DER ECDSA (r, s).
+  bytes signature = 3;
+  // signature_algorithm is the x509.SignatureAlgorithm name the IAK signed
+  // under (e.g. "SHA256-RSAPSS").
+  string signature_algorithm = 4;
+  // certify_info_signature is the marshalled TPMT_SIGNATURE, the form a
+  // remote verifier hands to TPM2 certify verification.
+  bytes certify_info_signature = 5;
+  // attesting_key_public is the IAK public key, PKIX DER.
+  bytes attesting_key_public = 6;
+  // attested_key_public is the certified key's public key, PKIX DER.
+  bytes attested_key_public = 7;
+  // attesting_key_public_area is the IAK's marshalled TPMT_PUBLIC.
+  bytes attesting_key_public_area = 8;
+  // attested_key_public_area is the certified key's marshalled TPMT_PUBLIC.
+  bytes attested_key_public_area = 9;
+  // nonce echoes the qualifying data the TPM certified under.
+  bytes nonce = 10;
 }
 
 message GetEventLogRequest {

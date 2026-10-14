@@ -52,7 +52,7 @@ func TestConnect_EmptyAddress(t *testing.T) {
 func TestConnect_WithHealthyServer(t *testing.T) {
 	// Create a test server with health endpoint
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -233,7 +233,7 @@ func TestConnect_AddsHTTPSPrefix(t *testing.T) {
 func TestConnect_SendsBearerTokenOverTLS(t *testing.T) {
 	var authHeader atomic.Value
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/health" {
+		if r.URL.Path != "/health/live" {
 			authHeader.Store(r.Header.Get("Authorization"))
 		}
 		w.WriteHeader(http.StatusOK)
@@ -374,7 +374,7 @@ func TestAdapter_DoRequest_Success(t *testing.T) {
 	expectedResponse := map[string]string{"status": "ok"}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/health/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("/api/test", func(w http.ResponseWriter, r *http.Request) {
@@ -424,7 +424,7 @@ func TestAdapter_DoRequest_Success(t *testing.T) {
 
 func TestAdapter_DoRequest_WithBody(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/health/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("/api/test", func(w http.ResponseWriter, r *http.Request) {
@@ -472,7 +472,7 @@ func TestAdapter_DoRequest_WithToken(t *testing.T) {
 	var authHeaderReceived string
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/health/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("/api/test", func(w http.ResponseWriter, r *http.Request) {
@@ -514,7 +514,7 @@ func TestAdapter_DoRequest_WithToken(t *testing.T) {
 
 func TestAdapter_DoRequest_HTTPError(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/health/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("/api/missing", func(w http.ResponseWriter, r *http.Request) {
@@ -590,7 +590,7 @@ func TestAdapter_DoRequest_ClientClosed(t *testing.T) {
 
 func TestRestClientConn_Invoke(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/health/live", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("/api/v1/version", func(w http.ResponseWriter, r *http.Request) {

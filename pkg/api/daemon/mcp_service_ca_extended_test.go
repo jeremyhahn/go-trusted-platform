@@ -953,30 +953,6 @@ func TestMCPServiceProvider_Health_NilServiceExtended(t *testing.T) {
 	}
 }
 
-func TestMCPServiceProvider_Health_SuccessExtended(t *testing.T) {
-	ctx := context.Background()
-	healthService := createTestHealthServiceForCAExtendedTests(t)
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		HealthService: healthService,
-		Logger:        slog.Default(),
-	})
-
-	result, err := provider.Health(ctx)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	resp, ok := result.(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected map[string]interface{}, got %T", result)
-	}
-	status, _ := resp["status"].(string)
-	if status == "" || status == "unspecified" {
-		t.Error("expected specific health status")
-	}
-}
-
 // =============================================================================
 // Liveness Tests
 // =============================================================================
@@ -1001,32 +977,6 @@ func TestMCPServiceProvider_Liveness_NilServiceExtended(t *testing.T) {
 	}
 }
 
-func TestMCPServiceProvider_Liveness_SuccessExtended(t *testing.T) {
-	ctx := context.Background()
-	healthService := createTestHealthServiceForCAExtendedTests(t)
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		HealthService: healthService,
-		Logger:        slog.Default(),
-	})
-
-	result, err := provider.Liveness(ctx)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	resultMap, ok := result.(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected map[string]interface{}, got %T", result)
-	}
-	if _, exists := resultMap["live"]; !exists {
-		t.Error("expected 'live' key in result")
-	}
-	if _, exists := resultMap["status"]; !exists {
-		t.Error("expected 'status' key in result")
-	}
-}
-
 // =============================================================================
 // Readiness Tests
 // =============================================================================
@@ -1048,32 +998,6 @@ func TestMCPServiceProvider_Readiness_NilServiceExtended(t *testing.T) {
 	}
 	if svcErr.Service != "health" {
 		t.Errorf("expected service='health', got %q", svcErr.Service)
-	}
-}
-
-func TestMCPServiceProvider_Readiness_SuccessExtended(t *testing.T) {
-	ctx := context.Background()
-	healthService := createTestHealthServiceForCAExtendedTests(t)
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		HealthService: healthService,
-		Logger:        slog.Default(),
-	})
-
-	result, err := provider.Readiness(ctx)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	resultMap, ok := result.(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected map[string]interface{}, got %T", result)
-	}
-	if _, exists := resultMap["ready"]; !exists {
-		t.Error("expected 'ready' key in result")
-	}
-	if _, exists := resultMap["status"]; !exists {
-		t.Error("expected 'status' key in result")
 	}
 }
 
@@ -1113,20 +1037,4 @@ func TestErrServiceNotAvailable_HealthErrorMsg(t *testing.T) {
 	if err.Error() != expected {
 		t.Errorf("expected error message %q, got %q", expected, err.Error())
 	}
-}
-
-// =============================================================================
-// Helper Functions
-// =============================================================================
-
-// createTestHealthServiceForCAExtendedTests creates a real Service using DefaultConfig
-func createTestHealthServiceForCAExtendedTests(t *testing.T) *Service {
-	t.Helper()
-	config := DefaultConfig()
-	svc, err := NewService(config)
-	if err != nil {
-		t.Fatalf("NewService(DefaultConfig()) failed: %v", err)
-	}
-	svc.MarkReady()
-	return svc
 }

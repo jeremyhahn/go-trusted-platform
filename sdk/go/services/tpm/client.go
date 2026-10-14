@@ -285,6 +285,22 @@ func (c *Client) VerifyQuote(ctx context.Context, req *platformv1.VerifyQuoteReq
 	return resp, nil
 }
 
+// Certify has the IAK certify that the key at a persistent handle is
+// resident in the TPM (TPM2_Certify). keyPassword is the certified key's
+// authValue, empty when it has none; nonce, at most 64 bytes, is echoed in
+// the attestation's extraData and is not bound to the connection.
+func (c *Client) Certify(ctx context.Context, keyHandle uint32, keyPassword string, nonce []byte) (*platformv1.CertifyResponse, error) {
+	resp, err := c.grpc.Certify(ctx, &platformv1.CertifyRequest{
+		KeyHandle:   keyHandle,
+		KeyPassword: keyPassword,
+		Nonce:       nonce,
+	})
+	if err != nil {
+		return nil, &ErrCertifyFailed{Cause: err}
+	}
+	return resp, nil
+}
+
 // GetEventLog retrieves the TPM event log.
 func (c *Client) GetEventLog(ctx context.Context, format string) (*platformv1.GetEventLogResponse, error) {
 	resp, err := c.grpc.GetEventLog(ctx, &platformv1.GetEventLogRequest{Format: format})

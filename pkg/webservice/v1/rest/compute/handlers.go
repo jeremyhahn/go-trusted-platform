@@ -490,6 +490,27 @@ func (h *Handlers) GetContainerMetrics(w http.ResponseWriter, r *http.Request) {
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
 }
 
+// AttestContainer handles POST /api/v1/compute/containers/{id}/attest.
+// The body carries the nonce and PCR selection; the container ID comes
+// from the path.
+func (h *Handlers) AttestContainer(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	req := &platformv1.AttestContainerRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	req.Id = mux.Vars(r)["id"]
+	resp, err := h.server.AttestContainer(r.Context(), req)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
 // AttestVM handles POST /api/v1/compute/vms/{id}/attest.
 func (h *Handlers) AttestVM(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureAvailable(w, r) {

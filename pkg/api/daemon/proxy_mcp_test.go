@@ -28,7 +28,7 @@ import (
 func newProxyMCPProvider(t *testing.T) *MCPServiceProvider {
 	t.Helper()
 	return NewMCPServiceProvider(&MCPServiceProviderConfig{
-		ProxyService: NewProxyGRPCService(nil, newTestZoneService(t)),
+		ProxyService: NewProxyGRPCServiceWithStore(nil, NewProxyStore(), newTestZoneService(t)),
 	})
 }
 

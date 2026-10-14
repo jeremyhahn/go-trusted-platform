@@ -40,11 +40,13 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/healthprobe"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	dnsentities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
@@ -348,7 +350,10 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 
 	v1Router := NewRouter(logger, &stubCA{}, nil, nil, registry, respWriter)
 
+	// Both halves, as webserver_v1.go mounts them: the root carries the
+	// health probes the SDK's PlatformDaemon claims resolve to.
 	root := mux.NewRouter()
+	require.NoError(t, v1Router.RegisterRootRoutes(root))
 	v1Router.RegisterRoutes(root.PathPrefix("/api/v1").Subrouter())
 	return root
 }
@@ -407,7 +412,7 @@ func denied(code int) bool {
 		code == http.StatusNotFound
 }
 
-// publicRoutes is the complete set of v1 routes that answer a caller
+// publicRoutes is the complete set of v1 and root routes that answer a caller
 // holding no credential, WITH the reason each one must. It is the
 // artifact #165 asks for: an unexplained public route is the defect, so a
 // route may only leave the gate by acquiring a line here.
@@ -500,6 +505,15 @@ var publicRoutes = map[string]string{
 	// the connection, checked against the recorded chain. Every other
 	// request is refused alike, so a name alone learns nothing.
 	"POST /api/v1/device/boot/certificate": "a diskless node's IDevID chain, released for proof of its TPM-resident key over the connection, needed before it can present that chain over mTLS (docs/device/api.md).",
+
+	// The health probes at the host root (docs/health/api.md §7). Load
+	// balancers, orchestrators and the SDK's Connect probe reach them before
+	// any credential exists. The bodies carry the verdict only; the
+	// component breakdown stays behind the admin chain at
+	// /api/v1/platform/health.
+	"GET /health":       "aggregate health for load balancers and the SDK's GetHealth; status only, 503 unless healthy.",
+	"GET /health/live":  "liveness for orchestrators and the SDK's Connect probe; answers whenever the process does.",
+	"GET /health/ready": "readiness for orchestrators; status only, 503 while a checker is unhealthy.",
 }
 
 // pendingRoutes is the rest of #165: routes still reachable without a
@@ -723,9 +737,9 @@ func TestRegisterRoutes_EveryRouteDeniesWithoutCredential(t *testing.T) {
 // never sees them. That blind spot is exactly where /v2 shipped
 // unauthenticated (#549): a comment excused it as attestation-gated and no
 // test could contradict the comment. This walk can. Every route the root
-// router carries must refuse a credential-free request; there is no public
-// list, because nothing at the root is public by design — a registry
-// client that reaches an ungated /v2/ is a client that could push.
+// router carries must refuse a credential-free request except the health
+// probes declared in publicRoutes, which carry a verdict and nothing else — a
+// registry client that reaches an ungated /v2/ is a client that could push.
 func TestRegisterRootRoutes_EveryRouteDeniesWithoutCredential(t *testing.T) {
 	root := newRootTestRouter(t, &testHandlerRegistry{
 		tokenHandler:   &anonymousAuth{},
@@ -735,23 +749,27 @@ func TestRegisterRootRoutes_EveryRouteDeniesWithoutCredential(t *testing.T) {
 	routes := walkRoutes(t, root)
 	require.NotEmpty(t, routes, "the root fixture mounted nothing, so it proves nothing")
 	for _, route := range routes {
+		if _, ok := publicRoutes[route]; ok {
+			continue
+		}
 		method, template := splitRoute(route)
 		code := probe(root, method, template)
 		// Stricter than denied(): every root route addresses a handler, so
 		// a 404 here would mean the mount vanished, not that it refused.
 		assert.True(t, code == http.StatusUnauthorized || code == http.StatusForbidden,
 			"%s answered %d to a request carrying no credential. Root mounts go through "+
-				"RegisterRootRoutes behind the caller gate and admin chain; nothing at the root is public.",
+				"RegisterRootRoutes behind the caller gate and admin chain; only publicRoutes is public.",
 			route, code)
 	}
 }
 
-// TestRegisterRootRoutes_NilBackendMountsNothing pins the other half of the
-// contract: with no distribution backend the registry is not configured on
-// this node, and the root carries no /v2 at all — not an ungated one.
-func TestRegisterRootRoutes_NilBackendMountsNothing(t *testing.T) {
+// TestRegisterRootRoutes_NilBackendMountsOnlyTheProbes pins the other half of
+// the contract: with no distribution backend the registry is not configured
+// on this node, and the root carries no /v2 at all — not an ungated one —
+// only the health probes.
+func TestRegisterRootRoutes_NilBackendMountsOnlyTheProbes(t *testing.T) {
 	root := newRootTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
-	assert.Empty(t, walkRoutes(t, root))
+	assert.ElementsMatch(t, probeRoutes, walkRoutes(t, root))
 }
 
 // newRootTestRouter builds the v1 router on the same fixture as
@@ -769,6 +787,70 @@ func newRootTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router 
 	root := mux.NewRouter()
 	require.NoError(t, v1Router.RegisterRootRoutes(root))
 	return root
+}
+
+// probeRoutes are the health probes RegisterRootRoutes mounts whether or not
+// a distribution backend is configured.
+var probeRoutes = []string{
+	"GET " + healthprobe.HealthPath,
+	"GET " + healthprobe.LivenessPath,
+	"GET " + healthprobe.ReadinessPath,
+}
+
+// fixedHealthChecker reports a fixed status under a name, message and detail
+// no probe body may carry.
+type fixedHealthChecker struct {
+	name   string
+	status health.HealthStatus
+}
+
+func (c *fixedHealthChecker) Name() string { return c.name }
+
+func (c *fixedHealthChecker) Check(ctx context.Context) health.ComponentHealth {
+	return health.ComponentHealth{
+		Name:    c.name,
+		Status:  c.status,
+		Message: "secret-message-" + c.name,
+		Details: map[string]interface{}{"address": "10.9.8.7"},
+	}
+}
+
+// The probes the webservice listener mounts at the root answer a caller with
+// no credential, 503 when the probe fails, and name no component.
+func TestRegisterRootRoutes_HealthProbesAnswerWithoutCredential(t *testing.T) {
+	cases := map[health.HealthStatus]map[string]int{
+		health.StatusHealthy: {
+			healthprobe.HealthPath: http.StatusOK, healthprobe.LivenessPath: http.StatusOK, healthprobe.ReadinessPath: http.StatusOK},
+		health.StatusDegraded: {
+			healthprobe.HealthPath: http.StatusServiceUnavailable, healthprobe.LivenessPath: http.StatusOK, healthprobe.ReadinessPath: http.StatusOK},
+		health.StatusUnhealthy: {
+			healthprobe.HealthPath: http.StatusServiceUnavailable, healthprobe.LivenessPath: http.StatusOK, healthprobe.ReadinessPath: http.StatusServiceUnavailable},
+	}
+	for status, want := range cases {
+		t.Run(string(status), func(t *testing.T) {
+			registry := health.NewRegistry()
+			t.Cleanup(func() {
+				if err := registry.Close(); err != nil {
+					t.Errorf("Close: %v", err)
+				}
+			})
+			require.NoError(t, registry.Register(&fixedHealthChecker{name: "component-ca", status: health.StatusHealthy}))
+			require.NoError(t, registry.Register(&fixedHealthChecker{name: "component-kms", status: status}))
+			root := newRootTestRouter(t, &testHandlerRegistry{
+				tokenHandler:   &anonymousAuth{},
+				healthRegistry: registry,
+			})
+
+			for path, code := range want {
+				recorder := httptest.NewRecorder()
+				root.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+				assert.Equal(t, code, recorder.Code, "GET %s", path)
+				for _, leak := range []string{"component-", "secret-message", "10.9.8.7"} {
+					assert.NotContains(t, recorder.Body.String(), leak, "GET %s leaks %q", path, leak)
+				}
+			}
+		})
+	}
 }
 
 // stubOCIDistBackend mounts /v2 in the root fixture. Its methods are never
@@ -834,7 +916,9 @@ var gatedProbes = []struct {
 	{"attestation manifests list", http.MethodGet, "/api/v1/attestation/manifests"},
 	{"attestation manifest build", http.MethodPost, "/api/v1/attestation/manifests/build"},
 	{"attestation events", http.MethodGet, "/api/v1/attestation/events"},
+	{"tpm nvram read", http.MethodGet, "/api/v1/tpm/nvram/0x1c00002"},
 	{"tpm nvram write", http.MethodPut, "/api/v1/tpm/nvram/0x1c00002"},
+	{"tpm nvram undefine", http.MethodDelete, "/api/v1/tpm/nvram/0x1c00002"},
 	{"tenant barrier unseal", http.MethodPost, "/api/v1/tenants/t1/barrier/unseal"},
 	{"tenant barrier init", http.MethodPost, "/api/v1/tenants/t1/barrier/init"},
 	{"tenant DEK rotate", http.MethodPost, "/api/v1/tenants/t1/dek/rotate"},
@@ -1456,8 +1540,15 @@ var networkProbes = []struct {
 	{"sdn add port", http.MethodPost, "/api/v1/sdn/bridges/br0/ports"},
 	{"sdn authenticate port", http.MethodPost, "/api/v1/sdn/bridges/br0/ports/p1/auth"},
 	{"sdn revoke port auth", http.MethodDelete, "/api/v1/sdn/bridges/br0/ports/p1/auth"},
+	{"switch list ports", http.MethodGet, "/api/v1/switches/sw1/ports"},
+	{"switch get port status", http.MethodGet, "/api/v1/switches/sw1/ports/1"},
 	{"switch set port vlan", http.MethodPost, "/api/v1/switches/sw1/ports/1/vlan"},
+	{"switch enable port", http.MethodPost, "/api/v1/switches/sw1/ports/1/enable"},
 	{"switch disable port", http.MethodPost, "/api/v1/switches/sw1/ports/1/disable"},
+	// Authorizing or quarantining a PXE device moves it between VLANs too.
+	{"pxe update state", http.MethodPut, "/api/v1/pxe/devices/d1/state"},
+	{"pxe authorize", http.MethodPost, "/api/v1/pxe/devices/d1/authorize"},
+	{"pxe quarantine", http.MethodPost, "/api/v1/pxe/devices/d1/quarantine"},
 	{"overlay create vni", http.MethodPost, "/api/v1/overlay/vnis"},
 	{"overlay delete vni", http.MethodDelete, "/api/v1/overlay/vnis/100"},
 	{"dns zone list", http.MethodGet, "/api/v1/dns/zones"},
@@ -1481,6 +1572,7 @@ func TestNetworkRoutes_AreRegisteredAndGated(t *testing.T) {
 		"POST /api/v1/sdn/bridges/{name}/ports/{port}/auth",
 		"DELETE /api/v1/sdn/bridges/{name}/ports/{port}/auth",
 		"POST /api/v1/switches/{switch}/ports/{port}/vlan",
+		"POST /api/v1/pxe/devices/{id}/authorize",
 		"POST /api/v1/overlay/vnis",
 		"POST /api/v1/ntp/step",
 	} {

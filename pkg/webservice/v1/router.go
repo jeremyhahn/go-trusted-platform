@@ -22,6 +22,7 @@ import (
 	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/healthprobe"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
@@ -95,8 +96,13 @@ func NewRouter(
 
 // Registers all websocket and REST services
 // RegisterRootRoutes mounts the surfaces the platform serves at the host
-// root rather than under /api/v1 — today only the OCI Distribution
-// protocol, which its spec fixes at /v2/ (#549).
+// root rather than under /api/v1: the health probes and the OCI
+// Distribution protocol, which its spec fixes at /v2/ (#549).
+//
+// The probes — GET /health, /health/live and /health/ready — are
+// unauthenticated so load balancers and orchestrators can reach them; their
+// bodies carry the verdict only, never a component (docs/health/api.md §4).
+// The component breakdown stays admin-gated at /api/v1/platform/health.
 //
 // The registry's authentication method is TPM attestation, so /v2 takes
 // the two principals the attestation quote routes take: a machine caller
@@ -111,6 +117,8 @@ func NewRouter(
 // applies to a nil service. Anything else that stops the mount is an
 // error, never a silent skip.
 func (v1Router *Router) RegisterRootRoutes(root *mux.Router) error {
+	healthprobe.NewHandlers(v1Router.restHandlerRegistry.HealthRegistry).RegisterRoutes(root)
+
 	backend := v1Router.restHandlerRegistry.OCIDistBackend()
 	if backend == nil {
 		v1Router.logger.Debug("OCI distribution backend is nil - /v2 not registered")
@@ -655,10 +663,14 @@ func (v1Router *Router) computeRoutes() {
 				v1Router.logger,
 				server,
 				v1Router.responseWriter)
+			if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+				r.SetScopeAuthorizer(scoped)
+			}
 			// VM and container lifecycle: create, delete, start, stop,
 			// reboot, migrate, snapshot and restore, disk attach/detach,
-			// and container exec. Reads are gated with the writes — the
-			// VM and container inventory is the tenant workload map.
+			// container exec and attestation. Reads are gated with the
+			// writes — the VM and container inventory is the tenant
+			// workload map.
 			r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 		},
 		"/compute/images",

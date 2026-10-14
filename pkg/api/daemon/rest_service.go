@@ -32,6 +32,7 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/healthprobe"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
@@ -249,8 +250,10 @@ func (s *RESTServer) Router() *mux.Router {
 
 // registerRoutes registers all daemon-level REST endpoints
 func (s *RESTServer) registerRoutes() {
-	// Root-level health endpoint for service discovery and load balancers
-	s.router.HandleFunc("/health", s.handleHealth).Methods(http.MethodGet)
+	// Root-level probes for service discovery and load balancers: GET /health,
+	// /health/live and /health/ready, status only, the answers the webservice
+	// listener and every other transport give (docs/health/api.md §4).
+	healthprobe.NewHandlers(s.service.currentHealthRegistry).RegisterRoutes(s.router)
 
 	api := s.router.PathPrefix(restBasePath).Subrouter()
 

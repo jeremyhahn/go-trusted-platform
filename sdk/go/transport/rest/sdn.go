@@ -22,6 +22,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	sdnsdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/sdn"
 )
 
 // SDN port state (#730). The daemon REST stack (pkg/api/rest/sdn_handlers.go)
@@ -90,6 +91,14 @@ func init() {
 		func(s *platformv1.Status) *platformv1.RevokePortAuthResponse {
 			return &platformv1.RevokePortAuthResponse{Status: s}
 		})
+
+	// ApplyPolicy posts to /api/v1/sdn/policies (pkg/api/rest CreatePolicyRequest):
+	// the config is flattened, policy_id travels as id and the enums as
+	// lowercase names. The server answers the applied policy, not the gRPC
+	// reply. The MCP transport speaks the same JSON through the same codec.
+	const applyPolicy = platformv1.SDNService_ApplyPolicy_FullMethodName
+	restRequestEncoders[applyPolicy] = requestEncoder(applyPolicy, sdnsdk.EncodeApplyPolicyRequest)
+	restResponseDecoders[applyPolicy] = wireDecoder(applyPolicy, sdnsdk.DecodeApplyPolicyJSON)
 }
 
 // sdnPortPathParams places a port-scoped call's bridge and port in the path.

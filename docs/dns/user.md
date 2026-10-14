@@ -102,19 +102,19 @@ MCP route for signing or status.
 
 ---
 
-## Operational verbs are QUIC-only
+## Operational reads are QUIC-only
 
-Four things an operator regularly wants have **no REST and no gRPC route**:
+Two things an operator regularly wants have **no REST and no gRPC route**:
 
 | Task | QUIC opcode |
 |---|---|
-| Flush the DNS cache | `OpDNSFlushCache` (`0x2D`) |
 | Read DNS metrics | `OpDNSGetMetrics` (`0x2C`) |
 | Read DNS config | `OpDNSGetConfig` (`0x2A`) |
-| Update DNS config | `OpDNSUpdateConfig` (`0x2B`) |
 
-If you do not have a QUIC client, you cannot flush the cache. That is a real
-constraint on day-to-day operation, recorded as a gap in [api.md](api.md).
+There is no way to change DNS config at runtime or to flush a cache on any
+transport: change the configuration and restart. The two QUIC opcodes that
+claimed those verbs never did anything and were retired (#317); see
+[api.md](api.md) §2.
 
 ---
 

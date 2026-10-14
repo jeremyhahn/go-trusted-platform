@@ -53,10 +53,10 @@ type daemonHealthResponse struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// daemonHealthHandler answers GET /health the way the daemon's REST
-// listener does: unauthenticated, 200, a JSON health body. The SDK REST
-// transport probes it at connect time and refuses a listener that does
-// not answer 2xx. The daemon's own handler cannot be mounted here,
+// daemonHealthHandler answers GET /health and GET /health/live the way the
+// daemon's REST listener does: unauthenticated, 200, a JSON health body. The
+// SDK REST transport probes GET /health/live at connect time and refuses a
+// listener that does not answer 2xx. The daemon's own handler cannot be mounted here,
 // because pkg/api/daemon imports this package.
 func daemonHealthHandler(t *testing.T) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
@@ -74,6 +74,7 @@ func startBootControlPlane(t *testing.T, f *bootFixture) *httptest.Server {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", daemonHealthHandler(t))
+	mux.HandleFunc("GET /health/live", daemonHealthHandler(t))
 	mux.HandleFunc("POST "+provisioning.BootCertificatePath, handler.HandleBootCertificate)
 	mux.HandleFunc("POST "+provisioning.BootDeliveryPath, func(w http.ResponseWriter, r *http.Request) {
 		if len(r.TLS.PeerCertificates) == 0 {

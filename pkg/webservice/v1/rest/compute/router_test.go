@@ -76,6 +76,7 @@ func TestComputeRouter_RoutesRegistered(t *testing.T) {
 		{http.MethodPost, "/api/v1/compute/containers/c1/stop"},
 		{http.MethodPost, "/api/v1/compute/containers/c1/exec"},
 		{http.MethodGet, "/api/v1/compute/containers/c1/metrics"},
+		{http.MethodPost, "/api/v1/compute/containers/c1/attest"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {

@@ -185,7 +185,7 @@ var unservedPrefixes = map[string]string{
 	"version": "daemon REST server, rest_service.go:handleVersion",
 }
 
-// unroutedClaims are the 26 claims where the server DOES serve the prefix but
+// unroutedClaims are the 7 claims where the server DOES serve the prefix but
 // the client asks for a path that does not resolve. This is #321's shape at
 // scale, and it is the actionable half of this test's findings.
 //
@@ -197,8 +197,7 @@ var unservedPrefixes = map[string]string{
 // The flat route table's path is passed to DoRequest VERBATIM — no identifier is
 // appended, it travels in the body — so these are the paths actually sent.
 //
-// Keyed by gRPC method, because a route need not be unique: today 26 methods
-// claim 26 distinct routes, but until #452 GET /api/v1/dns/records was claimed
+// Keyed by gRPC method, because a route need not be unique: today 7 methods\n// claim 7 distinct routes, but until #452 GET /api/v1/dns/records was claimed
 // by both GetRecord and ListRecords — a get-one and a list-many on the same
 // collection path, which is #266's shape ("answers four operations and 404s on
 // three") showing up in the client table rather than the server one. #452 moved
@@ -225,32 +224,13 @@ var unservedPrefixes = map[string]string{
 // answer it from — the PXE service's devices carry no kernel, initrd or
 // cmdline.
 var unroutedClaims = map[string]string{
-	"/platform.v1.ComputeService/AttestContainer":          "POST /api/v1/compute/containers/attest",
-	"/platform.v1.ComputeService/DeleteContainer":          "DELETE /api/v1/compute/containers",
-	"/platform.v1.ComputeService/StartContainer":           "POST /api/v1/compute/containers/start",
-	"/platform.v1.ComputeService/StopContainer":            "POST /api/v1/compute/containers/stop",
 	"/platform.v1.GatewayService/GetGatewayAdmittedVTEP":   "GET /api/v1/sdn/gateway/overlay/vteps/{vtep}",
 	"/platform.v1.GatewayService/GetNAT64Status":           "GET /api/v1/sdn/gateway/nat64/status",
 	"/platform.v1.GatewayService/GetPerfConntrack":         "GET /api/v1/sdn/gateway/perf/conntrack",
 	"/platform.v1.GatewayService/GetPerfDatapath":          "GET /api/v1/sdn/gateway/perf/datapath",
 	"/platform.v1.GatewayService/GetPerfFlows":             "POST /api/v1/sdn/gateway/perf/flows",
 	"/platform.v1.GatewayService/ListGatewayAdmittedVTEPs": "GET /api/v1/sdn/gateway/overlay/vteps",
-	"/platform.v1.PXEService/Authorize":                    "POST /api/v1/pxe/devices/authorize",
-	"/platform.v1.PXEService/Quarantine":                   "POST /api/v1/pxe/devices/quarantine",
-	"/platform.v1.PXEService/UpdateState":                  "PUT /api/v1/pxe/devices/state",
-	"/platform.v1.PlatformDaemon/GetHealth":                "GET /health",
-	"/platform.v1.PlatformDaemon/Liveness":                 "GET /health/live",
-	"/platform.v1.PlatformDaemon/Readiness":                "GET /health/ready",
 	"/platform.v1.ProvisioningGateway/GetBootConfig":       "GET /api/v1/provisioning/devices/{mac}/boot-config",
-	"/platform.v1.SDNService/ApplyPolicy":                  "POST /api/v1/sdn/policies/apply",
-	"/platform.v1.SwitchService/DisablePort":               "POST /api/v1/switches/ports/disable",
-	"/platform.v1.SwitchService/EnablePort":                "POST /api/v1/switches/ports/enable",
-	"/platform.v1.SwitchService/GetPortStatus":             "GET /api/v1/switches/ports/status",
-	"/platform.v1.SwitchService/ListPorts":                 "GET /api/v1/switches/ports",
-	"/platform.v1.SwitchService/SetPortVLAN":               "POST /api/v1/switches/ports/vlan",
-	"/platform.v1.TPMService/ReadNVRAM":                    "GET /api/v1/tpm/nvram",
-	"/platform.v1.TPMService/UndefineNVRAM":                "DELETE /api/v1/tpm/nvram",
-	"/platform.v1.TPMService/WriteNVRAM":                   "PUT /api/v1/tpm/nvram",
 
 	// IAM (#400) has no row. (a) Seven item operations that sent a collection
 	// path were repaired in #416: the SDK claims the item routes the server

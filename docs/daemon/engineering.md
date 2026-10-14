@@ -293,13 +293,33 @@ They cover these cases:
 | Layer | Location | Covers |
 |---|---|---|
 | Unit | `pkg/api/daemon/*_test.go` and per-transport tests | Service behaviour, interceptors, adapters |
-| **Architecture** | `pkg/arch/layerguard_test.go`, `pkg/arch/gatewayguard_test.go` | Import boundaries — **normative** |
+| **Architecture** | `pkg/arch/layerguard_test.go`, `pkg/arch/gatewayguard_test.go`, `pkg/arch/dispatch_*_test.go` | Import boundaries; no served stubs — **normative** |
 | Integration | `test/integration/daemon/`, `cmd/`, `cli/`, `quic/`, `restroutes/`, `multi_protocol_test.go` | Cross-transport behaviour |
 
 `pkg/arch/layerguard_test.go` runs in `make test` and forbids direct imports of
 the four lower-layer modules, including in `_test.go` files.
 `pkg/arch/gatewayguard_test.go` guards `gatewayd`'s closure. **Never weaken
 either to make a build pass.**
+
+**Dispatch-stub check (#317).** `TestDispatchedOperationsReachRealImplementations`
+(`pkg/arch/dispatch_*_test.go`, in `make test`) walks every operation the
+daemon serves: the QUIC category and opcode dispatch, the gRPC services
+registered on TCP and Unix, the daemon and webservice REST routes, and the MCP
+tools. It resolves each handler through the file's import bindings, never by a
+bare name, so a stub and a real type that share a constructor name are told
+apart. An operation fails when the last statement of its handler answers a stub
+marker: `codes.Unimplemented`, a `*NotImplemented*` name, a "not yet
+supported" string, or an embedded `Unimplemented*Server` method nothing
+overrides. The report names the operation and the stub's `file:line`. The check
+is static (`go/ast`). A runtime probe would need a fully wired daemon, and it
+could not tell a stub from a request the service rightly refused.
+
+Stubs already on `main` are listed in `stubExceptions`
+(`pkg/arch/dispatch_stub_test.go`), each with its `file:line` and a reason. To
+clear one, implement the operation, delete its entry, and lower
+`stubExceptionCeiling` to the new length. The check fails on an entry whose stub
+is gone, so the list can only shrink. Never add an entry for a new stub:
+implement the operation instead.
 
 **Fault-injection seam — the subscribe hook.** `Service.onSubscribe` is an
 unexported `func()` invoked by `StreamEvents`, `StreamLogs` and `StreamMetrics`

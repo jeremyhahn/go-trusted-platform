@@ -29,7 +29,7 @@ import (
 func TestIAMTokenClaims_RefusedWithoutANetworkCall(t *testing.T) {
 	var hits atomic.Int32
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/health" {
+		if r.URL.Path != "/health/live" {
 			hits.Add(1)
 		}
 		w.WriteHeader(http.StatusOK)
@@ -100,7 +100,7 @@ func TestErrNoRESTRoute_ErrorAndStatus(t *testing.T) {
 func TestErrNoRESTRoute_OnlyForRefusedMethods(t *testing.T) {
 	var hits atomic.Int32
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}

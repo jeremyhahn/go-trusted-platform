@@ -37,8 +37,10 @@ them with a typed error; none drops them silently:
 | Unix | Refuses all three with `ErrUnsupportedOption`; the daemon authenticates by `SO_PEERCRED`. |
 | Embedded | Refuses all three with `ErrUnsupportedOption`; calls never leave the process. |
 
-Connecting also proves the endpoint answers: REST probes `GET /health` and MCP
-runs `initialize`. A failure returns `ErrConnectionFailed`, so auto-detection
+Connecting also proves the endpoint answers: REST probes `GET /health/live` and
+MCP runs `initialize`. REST probes liveness, not the aggregate `/health`, because
+`/health` answers `503` on a platform that is up but degraded
+([`health/api.md`](../health/api.md) §4). A failure returns `ErrConnectionFailed`, so auto-detection
 moves on to the next protocol instead of handing back a dead client.
 
 **The embedded transport's reach is bounded by `ServiceRegistry`**
@@ -137,16 +139,16 @@ answered every tool failure with `-32603`.
 
 ## 2. Daemon capabilities
 
-gRPC: `PlatformDaemon`, 17 RPCs (`pkg/api/grpc/proto/daemon.proto`).
+gRPC: `PlatformDaemon`, 19 RPCs (`pkg/api/grpc/proto/daemon.proto`).
 REST: `/api/v1/platform` (`pkg/webservice/v1/rest/platform/router.go`).
 MCP: eleven tools.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
 | Status | `GET /api/v1/platform/status` | `GetStatus` | `MISSING — docs/13 G7` | `platform_daemon_status` | ✅ |
-| Health | `GET /api/v1/platform/health` | `GetHealth` | `OpHealth` (`0x00`) | `platform_health` | ✅ |
-| Liveness | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpLiveness` (`0x01`) | `platform_liveness` | — |
-| Readiness | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpReadiness` (`0x02`) | `platform_readiness` | — |
+| Health | `GET /api/v1/platform/health`; `GET /health` (status only) | `GetHealth` | `OpHealth` (`0x00`) | `platform_health` | ✅ |
+| Liveness | `GET /health/live` | `Liveness` | `OpLiveness` (`0x01`) | `platform_liveness` | ✅ |
+| Readiness | `GET /health/ready` | `Readiness` | `OpReadiness` (`0x02`) | `platform_readiness` | ✅ |
 | Version | `GET /api/v1/platform/version` | `GetVersion` | `MISSING — docs/13 G7` | `platform_daemon_version` | ✅ |
 | System info | `GET /api/v1/platform/system` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 | **Shutdown** | `MISSING — docs/13 G7` | `Shutdown` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
@@ -531,7 +533,8 @@ its reason:
 
 | Methods | Why they are pre-auth |
 |---|---|
-| `grpc.health.v1.Health/Check` | The liveness and readiness probe: it answers one aggregate SERVING status, and orchestrators call it without credentials |
+| `grpc.health.v1.Health/Check` | The standard gRPC probe: it answers one aggregate SERVING status, and orchestrators call it without credentials |
+| `PlatformDaemon/{Liveness,Readiness}` | The platform's liveness and readiness probes: each answers a boolean — readiness the overall status too — never a component name, so it discloses no more than `Health/Check`. On the TCP skip list too ([`health/api.md`](../health/api.md) §7) |
 | `CeremonyService/{Init,Status}` | First-boot ceremony: `Init` enrolls the first custodians, so no principal exists yet to hold a token; `Status` lets them follow it |
 | `InvitationService/{GetInvitationByToken,AcceptInvitation}` | The invitation token in the request is the credential; the invitee has no platform session yet (matches the ungated REST invitee routes and MCP tools) |
 | `ConfigDeliveryService/{GetNonce,FetchConfig,SignDigest,PollSession}` | Pre-enrollment config delivery: the machine authenticates inside the request (single-use nonce, EAB HMAC, EK-certificate binding) and the session ID is the poll capability (matches the ungated REST `/provisioning` routes); the operator half — `ListSessions`, `GetSession`, `FulfillSession` — is scoped `provisioning` |

@@ -801,7 +801,7 @@ type ServiceProvider interface {
 	TPMRandom(ctx context.Context, numBytes int) ([]byte, error)
 	TPMSeal(ctx context.Context, data []byte, pcrs []uint32, cn, password string) ([]byte, error)
 	TPMUnseal(ctx context.Context, cn, password string) ([]byte, error)
-	TPMCertify(ctx context.Context, keyHandle int) (interface{}, error)
+	TPMCertify(ctx context.Context, keyHandle uint32, keyPassword string, nonce []byte) (interface{}, error)
 	TPMNVList(ctx context.Context) (interface{}, error)
 	TPMNVRead(ctx context.Context, index uint32, size, offset uint16, password string) ([]byte, error)
 	TPMNVWrite(ctx context.Context, index uint32, data []byte, offset uint16, password string) (interface{}, error)

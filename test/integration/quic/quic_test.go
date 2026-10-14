@@ -111,30 +111,30 @@ func TestQUICHealth(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
+	// The probe opcodes are unauthenticated, so they answer the status only.
 	t.Run("Health check succeeds", func(t *testing.T) {
-		var resp daemon.HealthCheckResponse
+		var resp platformv1.GetHealthResponse
 		err := client.Send(ctx, quicwire.OpHealth, nil, &resp)
 		require.NoError(t, err)
-		assert.True(t, resp.Healthy, "Server should report healthy")
-		assert.NotEmpty(t, resp.Status, "Status should not be empty")
-		assert.NotZero(t, resp.Timestamp, "Timestamp should be set")
+		assert.Equal(t, platformv1.HealthStatus_HEALTH_STATUS_HEALTHY, resp.GetStatus(), "Server should report healthy")
+		assert.Empty(t, resp.GetComponents(), "an unauthenticated probe names no component")
+		assert.NotNil(t, resp.GetTimestamp(), "Timestamp should be set")
 	})
 
 	t.Run("Liveness check succeeds", func(t *testing.T) {
-		var resp daemon.HealthCheckResponse
+		var resp platformv1.LivenessResponse
 		err := client.Send(ctx, quicwire.OpLiveness, nil, &resp)
 		require.NoError(t, err)
-		assert.True(t, resp.Healthy, "Server should report healthy")
-		assert.NotZero(t, resp.Timestamp, "Timestamp should be set")
+		assert.True(t, resp.GetAlive(), "Server should report alive")
+		assert.NotNil(t, resp.GetTimestamp(), "Timestamp should be set")
 	})
 
 	t.Run("Readiness check succeeds", func(t *testing.T) {
-		var resp daemon.HealthCheckResponse
+		var resp platformv1.ReadinessResponse
 		err := client.Send(ctx, quicwire.OpReadiness, nil, &resp)
 		require.NoError(t, err)
-		assert.True(t, resp.Healthy, "Server should report ready")
-		assert.NotNil(t, resp.Components, "Components map should be present")
-		assert.NotZero(t, resp.Timestamp, "Timestamp should be set")
+		assert.True(t, resp.GetReady(), "Server should report ready")
+		assert.NotNil(t, resp.GetTimestamp(), "Timestamp should be set")
 	})
 }
 

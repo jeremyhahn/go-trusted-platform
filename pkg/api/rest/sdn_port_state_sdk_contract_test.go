@@ -35,7 +35,7 @@ import (
 func sdkSDNAgainstRoutes(t *testing.T) (*mockSDNService, *sdksdn.Client) {
 	t.Helper()
 	svc, router := portStateRouter()
-	router.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	router.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	server := httptest.NewTLSServer(router)
 	t.Cleanup(server.Close)
 

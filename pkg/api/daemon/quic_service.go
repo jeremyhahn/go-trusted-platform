@@ -24,6 +24,7 @@ import (
 	"time"
 
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/healthprobe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
@@ -583,7 +584,7 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 		return h.handleVTPM(ctx, req)
 
 	// DNS Operations (0x20-0x2F)
-	case req.Opcode >= quicwire.OpDNSAddRecord && req.Opcode <= quicwire.OpDNSFlushCache:
+	case req.Opcode >= quicwire.OpDNSAddRecord && req.Opcode <= quicwire.OpDNSGetMetrics:
 		return h.handleDNS(ctx, req)
 
 	// Overlay Category Opcode (0x2E) - multiplexes overlay sub-operations
@@ -943,139 +944,37 @@ func (h *QUICServiceHandler) handleIPAMCategory(ctx context.Context, req *quicwi
 	return h.gatewayHandler.HandleRequest(ctx, subReq)
 }
 
-// handleHealthCheck handles the health check operation
+// handleHealthCheck answers OpHealth with the aggregate verdict, as a
+// GetHealthResponse with no components.
 func (h *QUICServiceHandler) handleHealthCheck(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	resp := &HealthCheckResponse{
-		Healthy:    true,
-		Status:     "healthy",
-		Components: make(map[string]string),
-		Timestamp:  time.Now().Unix(),
-	}
-
-	if h.healthRegistry != nil {
-		systemHealth := h.healthRegistry.Check(ctx)
-		if systemHealth.Status != health.StatusHealthy {
-			resp.Healthy = false
-			resp.Status = "unhealthy"
-		}
-		// Components is a slice of ComponentHealth
-		for _, component := range systemHealth.Components {
-			if component.Status == health.StatusHealthy {
-				resp.Components[component.Name] = "healthy"
-			} else {
-				resp.Components[component.Name] = "unhealthy"
-			}
-		}
-	}
-
-	payload, err := quicwire.EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
-	}
-
-	return &quicwire.Response{
-		Status:  quicwire.StatusOK,
-		Payload: payload,
-	}
+	return h.probeResponse(healthprobe.HealthSummaryResponse(health.Aggregate(ctx, h.healthRegistry)))
 }
 
-// handleLiveness handles the liveness probe operation
+// handleLiveness answers OpLiveness as a LivenessResponse.
 func (h *QUICServiceHandler) handleLiveness(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	resp := &HealthCheckResponse{
-		Healthy:   true,
-		Status:    "alive",
-		Timestamp: time.Now().Unix(),
-	}
-
-	payload, err := quicwire.EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
-	}
-
-	return &quicwire.Response{
-		Status:  quicwire.StatusOK,
-		Payload: payload,
-	}
+	return h.probeResponse(healthprobe.LivenessResponse(health.Liveness()))
 }
 
-// handleReadiness handles the readiness probe operation
+// handleReadiness answers OpReadiness as a ReadinessResponse.
 func (h *QUICServiceHandler) handleReadiness(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	resp := &HealthCheckResponse{
-		Healthy:    true,
-		Status:     "ready",
-		Components: make(map[string]string),
-		Timestamp:  time.Now().Unix(),
-	}
+	return h.probeResponse(healthprobe.ReadinessResponse(health.Readiness(ctx, h.healthRegistry)))
+}
 
-	// Check if required services are available
-	if h.caHandler != nil {
-		resp.Components["ca"] = "ready"
-	}
-	if h.vtpmService != nil {
-		resp.Components["vtpm"] = "ready"
-	}
-	if h.deviceService != nil {
-		resp.Components["device"] = "ready"
-	}
-	if h.dnsService != nil {
-		resp.Components["dns"] = "ready"
-	}
-	if h.sdnService != nil {
-		resp.Components["sdn"] = "ready"
-	}
-	if h.iamService != nil {
-		resp.Components["iam"] = "ready"
-	}
-	if h.kmsService != nil {
-		resp.Components["kms"] = "ready"
-	}
-	if h.tpm2Service != nil {
-		resp.Components["tpm2"] = "ready"
-	}
-	if h.containerHandler != nil {
-		resp.Components["container"] = "ready"
-	}
-	if h.attestationHandler != nil {
-		resp.Components["attestation"] = "ready"
-	}
-	if h.vmHandler != nil {
-		resp.Components["vm"] = "ready"
-	}
-	if h.pxeService != nil {
-		resp.Components["pxe"] = "ready"
-	}
-	if h.tenantGRPC != nil {
-		resp.Components["tenant"] = "ready"
-	}
-	if h.overlayHandler != nil {
-		resp.Components["overlay"] = "ready"
-	}
-	if h.gatewayHandler != nil {
-		resp.Components["gateway"] = "ready"
-	}
-
-	payload, err := quicwire.EncodePayload(resp)
+// probeResponse encodes a probe answer. The probe opcodes are served before
+// authentication, so the answer is the status-only message the matching
+// PlatformDaemon rpc returns, and the verdict travels in the payload with
+// StatusOK exactly as it does over gRPC.
+func (h *QUICServiceHandler) probeResponse(message interface{}) *quicwire.Response {
+	payload, err := quicwire.EncodePayload(message)
 	if err != nil {
 		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
-
-	return &quicwire.Response{
-		Status:  quicwire.StatusOK,
-		Payload: payload,
-	}
+	return &quicwire.Response{Status: quicwire.StatusOK, Payload: payload}
 }
 
 // HealthCheckRequest represents a health check request
 type HealthCheckRequest struct {
 	Component string `codec:"component"`
-}
-
-// HealthCheckResponse represents a health check response
-type HealthCheckResponse struct {
-	Healthy    bool              `codec:"healthy"`
-	Status     string            `codec:"status"`
-	Components map[string]string `codec:"components"`
-	Timestamp  int64             `codec:"timestamp"`
 }
 
 // =============================================================================

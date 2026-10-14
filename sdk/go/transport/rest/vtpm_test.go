@@ -44,7 +44,7 @@ func vtpmAdapterReplying(t *testing.T, payload string) (*Adapter, *vtpmCall) {
 	t.Helper()
 	seen := &vtpmCall{}
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			_, _ = w.Write([]byte(`{}`))
 			return
 		}

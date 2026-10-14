@@ -247,9 +247,9 @@ surprises.
   two paths disagree on the same port; the list is the one to believe.
 - **`GetPortStatus` cannot 404 correctly.** `parseSwitchportOutput` returns
   `(status, nil)` for any input, so a nonexistent port yields a zero-valued
-  `PortStatus` rather than `ErrPortNotFound`. The REST handler has a
-  `handlePortError` branch that maps `ErrPortNotFound` to 404 — that branch is
-  currently unreachable from the SSH driver.
+  `PortStatus` rather than `ErrPortNotFound`. The REST handlers map
+  `ErrPortNotFound` to 404 on every port operation (`handlePortError`) — that
+  mapping is currently unreachable from the SSH driver.
 - **Lookups are one SSH round trip per command**, and `SetPortVLAN` sends five.
   There is no batching.
 

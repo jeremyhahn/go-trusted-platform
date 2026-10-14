@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/healthprobe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
@@ -263,9 +264,7 @@ func (s *Service) GetStatus(ctx context.Context, req *platformv1.GetStatusReques
 // If a health registry is configured, it performs deep health checks on all
 // registered components. Otherwise, it returns basic status based on service state.
 func (s *Service) GetHealth(ctx context.Context, req *platformv1.GetHealthRequest) (*platformv1.GetHealthResponse, error) {
-	s.mu.RLock()
-	registry := s.healthRegistry
-	s.mu.RUnlock()
+	registry := s.currentHealthRegistry()
 
 	// If health registry is available, use it for comprehensive health checks
 	if registry != nil {
@@ -322,6 +321,25 @@ func (s *Service) GetHealth(ctx context.Context, req *platformv1.GetHealthReques
 		Components: componentHealth,
 		Timestamp:  timestamppb.New(s.currentTime()),
 	}, nil
+}
+
+// Liveness answers the liveness probe. It is served without a token.
+func (s *Service) Liveness(ctx context.Context, req *platformv1.LivenessRequest) (*platformv1.LivenessResponse, error) {
+	return healthprobe.LivenessResponse(health.Liveness()), nil
+}
+
+// Readiness answers the readiness probe from the health registry: ready when
+// no registered checker is unhealthy. It is served without a token, so it
+// names no component; GetHealth carries the breakdown.
+func (s *Service) Readiness(ctx context.Context, req *platformv1.ReadinessRequest) (*platformv1.ReadinessResponse, error) {
+	return healthprobe.ReadinessResponse(health.Readiness(ctx, s.currentHealthRegistry())), nil
+}
+
+// currentHealthRegistry returns the wired health registry, or nil.
+func (s *Service) currentHealthRegistry() health.Registry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.healthRegistry
 }
 
 // GetVersion returns version, build time, and git commit
@@ -1127,18 +1145,7 @@ func healthStatusFromServiceStatus(svcStatus platformv1.ServiceStatus) platformv
 }
 
 func healthStatusFromHealthStatus(status health.HealthStatus) platformv1.HealthStatus {
-	switch status {
-	case health.StatusHealthy:
-		return platformv1.HealthStatus_HEALTH_STATUS_HEALTHY
-	case health.StatusDegraded:
-		return platformv1.HealthStatus_HEALTH_STATUS_DEGRADED
-	case health.StatusUnhealthy:
-		return platformv1.HealthStatus_HEALTH_STATUS_UNHEALTHY
-	case health.StatusUnknown:
-		return platformv1.HealthStatus_HEALTH_STATUS_UNSPECIFIED
-	default:
-		return platformv1.HealthStatus_HEALTH_STATUS_UNSPECIFIED
-	}
+	return healthprobe.StatusToProto(status)
 }
 
 func getHostname() string {

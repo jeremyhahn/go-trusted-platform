@@ -55,14 +55,14 @@ import (
 // tpmParityFixture is one TPM served by the daemon's TPM service on every
 // transport, and the TLS material the network transports share.
 type tpmParityFixture struct {
-	tpm *signingTPM
+	tpm *certifyingTPM
 	svc *TPMGRPCService
 	tls *testutil.TestTLSBundle
 }
 
 func newTPMParityFixture(t *testing.T) *tpmParityFixture {
 	t.Helper()
-	tpm := newSigningTPM(t)
+	tpm := newCertifyingTPM(t)
 	svc := NewTPMGRPCService(logging.DefaultLogger())
 	svc.SetTPM2Service(tpm)
 	return &tpmParityFixture{tpm: tpm, svc: svc, tls: testutil.GenerateTestTLSBundle(t)}
@@ -126,7 +126,7 @@ func (f *tpmParityFixture) restConn(t *testing.T) grpc.ClientConnInterface {
 	resttpm.NewTPMRouter(logger, f.svc, response.NewResponseWriter(logger, nil)).
 		RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 	// The SDK's REST Connect probes GET /health.
-	router.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+	router.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}).Methods(http.MethodGet)
 	srv := httptest.NewUnstartedServer(router)
@@ -150,7 +150,7 @@ func (f *tpmParityFixture) daemonRESTConn(scopes ...string) tpmTransport {
 			WithTPMService(f.svc).
 			WithTokenAuthorizer(tokenScopes{token: scopes}).
 			RegisterRoutes(router)
-		router.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		router.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}).Methods(http.MethodGet)
 		srv := httptest.NewUnstartedServer(router)

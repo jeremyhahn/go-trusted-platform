@@ -26,7 +26,7 @@
 // Resolve) carry the protobuf oneof, which cannot decode into raw pb — the
 // daemon encodes a flat mirror, so this adapter decodes the same mirror shape.
 //
-// UpdateZone has NO QUIC opcode (the 0x20-0x2D space is fully allocated and
+// UpdateZone has NO QUIC opcode (the 0x20-0x2D space is allocated or retired and
 // the gRPC UpdateZone RPC is not SDK-mapped over QUIC); it returns a typed
 // unsupported error.
 
@@ -546,7 +546,7 @@ func (q *QUICAdapter) GetZone(ctx context.Context, zoneName string) (*GetZoneRes
 }
 
 // UpdateZone has no QUIC opcode (not SDK-mapped and the 0x20-0x2D space is
-// fully allocated). It reports the operation as unsupported over QUIC.
+// allocated or retired). It reports the operation as unsupported over QUIC.
 func (q *QUICAdapter) UpdateZone(ctx context.Context, zoneName string, opts UpdateZoneOptions) (*UpdateZoneResult, error) {
 	return nil, ErrQUICDNSUnsupported{Method: "UpdateZone"}
 }

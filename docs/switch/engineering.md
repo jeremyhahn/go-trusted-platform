@@ -246,7 +246,7 @@ reach the underlying failure.
 
 | Layer | Not found | Invalid input | Service absent | Other failure |
 |---|---|---|---|---|
-| REST (`pkg/webservice/v1/rest/switch/`) | 404 `ErrSwitchNotFound`; `ErrPortOperationFailed` via `handlePortError` | 400 `ErrMissingSwitchName`, `ErrMissingPortName`, `ErrInvalidRequestBody`, `ErrMissingVLANID`, `ErrInvalidVLANID` | 503 from `requireService` catch-all | 500 `ErrPortOperationFailed`, `ErrListPortsFailed` |
+| REST (`pkg/webservice/v1/rest/switch/`) | 404 `ErrSwitchNotFound`; `ErrPortOperationFailed` via `handlePortError` on every port operation, matching `ErrPortNotFound` through wrapping | 400 `ErrMissingSwitchName`, `ErrMissingPortName`, `ErrInvalidRequestBody`, `ErrMissingVLANID`, `ErrInvalidVLANID` | 503 from `requireService` catch-all | 500 `ErrPortOperationFailed`, `ErrListPortsFailed` |
 | gRPC (`switch_grpc_service.go`) | `codes.NotFound` via `mapSwitchError` / `mapPortError` | `codes.InvalidArgument` `"switch_name is required"` / `"port_name is required"` | `codes.FailedPrecondition` `"switch service not initialized"` | `codes.Internal` |
 | QUIC (`quic_switch.go`) | `StatusNotFound` `ErrSwitchNotFoundQUIC` | `StatusInvalidArgument` `ErrQUICMissingField`, `ErrSwitchInvalidVLANID`; `StatusInvalidRequest` on decode failure | `StatusUnavailable` `ErrQUICServiceUnavailable{Service:"switch"}` | `StatusInternalError` `ErrQUICOperationFailed` |
 | MCP (`switch_tools.go`) | driver error passed through | `SWITCH_NAME_REQUIRED`, `SWITCH_PORT_NAME_REQUIRED`, `SWITCH_INVALID_VLAN` | `SWITCH_SERVICE_UNAVAILABLE` | driver error passed through |

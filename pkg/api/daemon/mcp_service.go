@@ -33,7 +33,9 @@ import (
 	baasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/healthprobe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmcertify"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmpcr"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
@@ -43,6 +45,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
@@ -51,6 +54,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"google.golang.org/protobuf/proto"
 )
 
 // MCPServiceProviderConfig holds configuration for MCPServiceProvider.
@@ -1270,47 +1274,50 @@ func (p *MCPServiceProvider) SDNGetFlowStats(ctx context.Context, bridgeName str
 // Health Operations
 // =============================================================================
 
-// Health returns the platform health status as an MCP-compatible map with
-// lowercase string status values and Unix millisecond timestamps.
+// Health returns the aggregate platform health verdict with no components:
+// the unauthenticated form of GetHealth, the answer QUIC OpHealth and
+// REST GET /health give.
 func (p *MCPServiceProvider) Health(ctx context.Context) (interface{}, error) {
 	if p.healthService == nil {
 		return nil, ErrServiceNotAvailable{Service: "health"}
 	}
-	resp, err := p.healthService.GetHealth(ctx, &platformv1.GetHealthRequest{})
-	if err != nil {
-		return nil, err
-	}
-	return mcpHealthResponseMap(resp), nil
+	probe := health.Aggregate(ctx, p.healthService.currentHealthRegistry())
+	return mcpProbeJSON(healthprobe.HealthSummaryResponse(probe))
 }
 
-// Liveness returns the platform liveness status.
+// Liveness returns the platform liveness status, as the Liveness rpc does.
 func (p *MCPServiceProvider) Liveness(ctx context.Context) (interface{}, error) {
 	if p.healthService == nil {
 		return nil, ErrServiceNotAvailable{Service: "health"}
 	}
-	resp, err := p.healthService.GetHealth(ctx, &platformv1.GetHealthRequest{})
+	resp, err := p.healthService.Liveness(ctx, &platformv1.LivenessRequest{})
 	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{
-		"live":   resp.GetStatus() == platformv1.HealthStatus_HEALTH_STATUS_HEALTHY,
-		"status": mcpHealthStatusString(resp.GetStatus()),
-	}, nil
+	return mcpProbeJSON(resp)
 }
 
-// Readiness returns the platform readiness status.
+// Readiness returns the platform readiness status, as the Readiness rpc does.
 func (p *MCPServiceProvider) Readiness(ctx context.Context) (interface{}, error) {
 	if p.healthService == nil {
 		return nil, ErrServiceNotAvailable{Service: "health"}
 	}
-	resp, err := p.healthService.GetHealth(ctx, &platformv1.GetHealthRequest{})
+	resp, err := p.healthService.Readiness(ctx, &platformv1.ReadinessRequest{})
 	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{
-		"ready":  resp.GetStatus() == platformv1.HealthStatus_HEALTH_STATUS_HEALTHY,
-		"status": mcpHealthStatusString(resp.GetStatus()),
-	}, nil
+	return mcpProbeJSON(resp)
+}
+
+// mcpProbeJSON renders a probe answer in the protojson the REST probes send,
+// so the SDK decodes the MCP result into the same message gRPC returns. The
+// probe tools are unauthenticated, so the answer is the status only.
+func mcpProbeJSON(message proto.Message) (interface{}, error) {
+	data, err := healthprobe.MarshalJSON(message)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(data), nil
 }
 
 // =============================================================================
@@ -3266,15 +3273,31 @@ func (p *MCPServiceProvider) TPMUnseal(ctx context.Context, cn, password string)
 	return resp.GetData(), nil
 }
 
-// TPMCertify certifies a TPM key.
-func (p *MCPServiceProvider) TPMCertify(ctx context.Context, keyHandle int) (interface{}, error) {
+// TPMCertify has the IAK certify the key at a persistent handle through the
+// shared tpmcertify layer the gRPC, REST and QUIC transports use.
+func (p *MCPServiceProvider) TPMCertify(ctx context.Context, keyHandle uint32, keyPassword string, nonce []byte) (interface{}, error) {
 	if p.tpm2Service == nil {
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	// Key certification requires additional context (which AK to use, qualifying data)
-	// Not yet fully implemented in the gRPC service either
-	return nil, ErrTPMOperationNotImplemented{Operation: "Certify"}
+	res, err := tpmcertify.Certify(p.tpm2Service, keyHandle, keyPassword, nonce)
+	if err != nil {
+		return nil, err
+	}
+
+	// The keys are the CertifyResponse proto's JSON names, so the SDK's
+	// MCP transport decodes the reply into the same message gRPC returns.
+	return map[string]interface{}{
+		"certify_info":              res.CertifyInfo,
+		"signature":                 res.Signature,
+		"signature_algorithm":       res.SignatureAlgorithm,
+		"certify_info_signature":    res.CertifyInfoSignature,
+		"attesting_key_public":      res.AttestingKeyPublic,
+		"attested_key_public":       res.AttestedKeyPublic,
+		"attesting_key_public_area": res.AttestingKeyPublicArea,
+		"attested_key_public_area":  res.AttestedKeyPublicArea,
+		"nonce":                     res.Nonce,
+	}, nil
 }
 
 // TPMNVList lists the NV indexes defined on the TPM, from the same

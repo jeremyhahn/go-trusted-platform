@@ -68,7 +68,7 @@ func serveInvitations(t *testing.T, srv platformv1.InvitationServiceServer) (*ht
 	logger := logging.NewLogger(slog.LevelError, io.Discard)
 	r := NewInvitationRouter(logger, srv, response.NewResponseWriter(logger, nil))
 	root := mux.NewRouter()
-	root.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+	root.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	sub := root.PathPrefix("/api/v1").Subrouter()

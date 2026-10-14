@@ -150,8 +150,11 @@ is unbounded.
 | **Readiness** | It is ready to serve. Take it out of rotation if this fails, but do not restart it. |
 | **Health** | The composite view. |
 
-On QUIC these are `0x00`, `0x01` and `0x02`; on MCP, `platform_health`,
-`platform_liveness` and `platform_readiness`.
+On REST these are `GET /health`, `/health/live` and `/health/ready`; on gRPC,
+`PlatformDaemon/GetHealth`, `/Liveness` and `/Readiness`; on QUIC, `0x00`,
+`0x01` and `0x02`; on MCP, `platform_health`, `platform_liveness` and
+`platform_readiness`. Every transport answers them from the same functions
+([`health/api.md`](../health/api.md) §4).
 
 **Wiring a load balancer to liveness instead of readiness** sends traffic to a
 node that is up and not ready. It is a common mistake and the platform gives you

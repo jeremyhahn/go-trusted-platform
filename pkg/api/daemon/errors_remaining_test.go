@@ -232,14 +232,6 @@ func TestErrGatewayOperationNotImplemented(t *testing.T) {
 	}
 }
 
-func TestErrTPMOperationNotImplemented(t *testing.T) {
-	err := ErrTPMOperationNotImplemented{Operation: "TPMInfo"}
-	expected := "TPM operation not implemented: TPMInfo"
-	if got := err.Error(); got != expected {
-		t.Errorf("Error() = %q, want %q", got, expected)
-	}
-}
-
 func TestErrTPMInvalidSize(t *testing.T) {
 	err := ErrTPMInvalidSize{Max: 1024, Requested: 2048}
 	expected := "requested size 2048 exceeds maximum 1024 bytes"
