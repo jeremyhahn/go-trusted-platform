@@ -1,6 +1,6 @@
 # IPAM gRPC API Reference
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > IPAM over gRPC, as part of `platform.v1.GatewayService`.
 
 There is no standalone `IPAMService` — IPAM operations are part of
@@ -26,14 +26,15 @@ service GatewayService {
 ```
 
 Pools carry an ID, display name, CIDR (immutable after creation),
-gateway address, zone, description, default lease duration, and the
-allocation window: `reserved` (never-allocatable prefixes; the gateway is
+gateway address, zone, description, default lease duration, inactivity
+timeout, and the allocation window: `reserved` (never-allocatable prefixes; the gateway is
 always reserved), `range_start` and `range_end` (the dynamic window
 `AllocateIP` draws from). `UpdateIPAMPoolRequest` replaces the window only
 when `update_window` is true, with exactly the values given (empty clears).
-A reserved address or a window that does not fit the CIDR is
-`InvalidArgument`. Allocations associate an IP with a device ID and optional
-hostname.
+A reserved prefix or a window that does not fit the CIDR is
+`InvalidArgument`. `CreateIPAMPoolRequest.id` is generated server-side when
+empty. Allocations associate an IP with a device ID and optional hostname;
+`AllocateIPRequest` has no requested-address field.
 
 ## Usage Example (Go)
 
@@ -45,6 +46,7 @@ client := platformv1.NewGatewayServiceClient(conn)
 pools, err := client.ListIPAMPools(ctx, &platformv1.ListIPAMPoolsRequest{})
 
 pool, err := client.CreateIPAMPool(ctx, &platformv1.CreateIPAMPoolRequest{
+    Id:         "lab",
     Name:       "lab",
     Cidr:       "10.4.9.0/24",
     Gateway:    "10.4.9.1",
@@ -54,7 +56,7 @@ pool, err := client.CreateIPAMPool(ctx, &platformv1.CreateIPAMPoolRequest{
 })
 
 alloc, err := client.AllocateIP(ctx, &platformv1.AllocateIPRequest{
-    PoolId:   "pool1",
+    PoolId:   "lab",
     DeviceId: "vm-123",
     Hostname: "webserver",
 })
