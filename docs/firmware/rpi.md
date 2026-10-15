@@ -1,9 +1,9 @@
 # Raspberry Pi Secure Boot Implementation
 
-> Part of the go-trusted-platform trusted firmware architecture
+> **Status: NORMATIVE** · Scope: planned Raspberry Pi signed boot chain; the shipped SD-card image is [docs/factory-image/](../factory-image/)
+> Conflicts with this document are defects. Fix them here first.
 >
-> **Status: PLANNED (this document); the SD-card image SHIPPED.** What is
-> implemented today is the factory image in [docs/factory-image/](../factory-image/):
+> What is implemented today is the factory image in [docs/factory-image/](../factory-image/):
 > Alpine aarch64 on an MBR SD card, U-Boot loaded by the Pi firmware as
 > `kernel8.img` with the platform's PK/KEK/db preseeded and EFI TCG2 measured
 > boot, a signed UKI at `EFI/BOOT/BOOTAA64.EFI`, and the unchanged

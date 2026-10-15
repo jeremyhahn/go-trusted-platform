@@ -1,6 +1,7 @@
 # Android/GrapheneOS Secure Mobile Implementation
 
-> Part of the go-trusted-platform trusted firmware architecture
+> **Status: NORMATIVE** · Scope: planned Android and GrapheneOS support; not implemented
+> Conflicts with this document are defects. Fix them here first.
 
 ## Overview
 

@@ -1,5 +1,8 @@
 # Authenticode Signing Package
 
+> **Status: REFERENCE**
+> The Authenticode signer in `pkg/authenticode`.
+
 ## Overview
 
 The Authenticode package (`pkg/authenticode`) provides native Go implementation of Microsoft Authenticode signing for PE/COFF (Portable Executable) files. This is primarily used for signing EFI binaries to enable UEFI Secure Boot verification.
@@ -436,4 +439,4 @@ if err != nil {
 - [Firmware Architecture](architecture.md) - Overall firmware architecture
 - [API Reference](api-reference.md) - Firmware CLI commands
 - [KMS API Reference](../kms/api.md) - Key management integration
-- [TPM CLI Usage](/docs/tpm/cli-usage.md) - TPM key operations
+- [TPM CLI Usage](../tpm/cli-usage.md) - TPM key operations

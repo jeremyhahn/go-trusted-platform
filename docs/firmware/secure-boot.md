@@ -1,5 +1,8 @@
 # Secure Boot Configuration and Management
 
+> **Status: REFERENCE**
+> Secure Boot key management, module signing and install-time enforcement as built.
+
 ## Overview
 
 The Trusted Platform provides **URI-driven Secure Boot key management** with support for both **TPM-resident keys** (PK/KEK) and **remote KMS-backed keys** (DB). Keys are referenced by URI (`kms://` or `file://`) rather than filesystem paths, enabling flexible deployment from ISO media, remote KMS backends, or airgap-mode file storage.

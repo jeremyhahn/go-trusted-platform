@@ -1,5 +1,8 @@
 # UEFI Package Documentation
 
+> **Status: REFERENCE**
+> The UEFI NVRAM and key-enrollment package `pkg/uefi`.
+
 Native Go implementation for UEFI firmware operations including NVRAM manipulation, Secure Boot key enrollment, and EFI Signature List (ESL) encoding.
 
 ## Overview

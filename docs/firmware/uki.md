@@ -1,5 +1,8 @@
 # Unified Kernel Image (UKI)
 
+> **Status: REFERENCE**
+> The UKI builder and parser in `pkg/uki`.
+
 ## Overview
 
 A Unified Kernel Image (UKI) is a single EFI PE/COFF executable that bundles all components needed to boot a Linux system:
