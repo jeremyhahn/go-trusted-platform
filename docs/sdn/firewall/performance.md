@@ -1,6 +1,6 @@
 # Firewall Performance
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > What determines firewall throughput now that the userspace engine is gone.
 
 The former Go userspace firewall engine has been replaced by the

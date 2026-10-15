@@ -1,6 +1,6 @@
 # Firewall Architecture
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > How zone policy compiles to OVS conntrack flows.
 
 The stateful firewall is a compiler and lifecycle manager for OVS
@@ -12,15 +12,16 @@ flows. Packets are filtered exclusively by the OVS datapath.
 
 ## Pipeline
 
-The overlay pipeline (installed by `pkg/sdn/gateway/modes`) is
-`0 → 10 → 30 → 40 → 50 → 60`. Tables 20, 21, 25, 26 and 27 are reserved for
-the firewall, NAT, load-balancer and NAT64 services and are empty when they
-are disabled:
+The gateway's base pipeline (`pkg/sdn/gateway/pipeline.go`; the table
+numbers are in `pkg/sdn/gateway/modes/overlay.go:43`) is
+`0 → 10 → 30 → 40 → 50 → 60`. Tables 20 and 21 (firewall), 25 (NAT), 26, 28
+and 29 (load balancer) and 27 (NAT64) are reserved for the datapath services
+and are empty when they are disabled:
 
 ```
         table 0          table 10                 table 20               table 21
   ┌────────────┐   ┌────────────────┐      ┌─────────────────┐   ┌──────────────────────┐
-  │  ingress   │──▶│  VXLAN decap   │─fw──▶│  conntrack gate │──▶│  conntrack verdict   │
+  │  ingress   │──▶│  service gate  │─fw──▶│  conntrack gate │──▶│  conntrack verdict   │
   └────────────┘   │ (default→30;   │gate  │ ip: ct(zone=Z,  │   │ +inv → drop          │
                    │  fw diverts→20)│      │       table=21) │   │ +est/+rel → 30       │
                    └───────┬────────┘      │ miss → 30       │   │ +new: matrix verdict │
@@ -54,9 +55,11 @@ The NAT64 gate is why the service works on a gateway running neither the
 firewall nor NAT: without it nothing enters table 20, and the divert below
 would be installed but unreachable.
 
-VXLAN-decapsulated traffic matches the per-VNI decap flows (priority 100,
-`goto_table:30`) and therefore bypasses the ct pipeline; the firewall
-gates the table 10 default path (native/VLAN traffic).
+The firewall, NAT and load balancer never share a gateway with an enabled
+overlay: under the overlay terminal table 10 is VXLAN decap authorisation,
+whose miss drops unadmitted tunnelled frames, so a service gate there would
+forward frames from revoked VTEPs. Validation refuses the combination with
+`ErrOverlayServiceConflict` (`pkg/sdn/gateway/types.go:1421`).
 
 ### Table 20 — conntrack gate
 
@@ -250,7 +253,7 @@ priority, match, and full-mask cookie.
 | `pkg/sdn/ovs` | Match/action string grammar (`ct_state`, `ct()`, `nat()`, `goto_table`), cookie/strict deletes |
 | `pkg/sdn/openflow` | Wire encoders: `ActionCT`, `ActionNAT`, conntrack OXM fields |
 | `pkg/sdn/gateway/services/firewall` | Service lifecycle: Start/Stop/Reconcile/Health, SNAT/DNAT management |
-| `pkg/sdn/gateway` (node.go) | `firewall`/`nat` service handlers, runtime dependency injection |
+| `pkg/sdn/gateway` | `firewall`/`nat` service builders (`handlers.go`), health and reconcile accessors (`node.go`), runtime dependency injection (`runtime.go`) |
 
 ## See Also
 
