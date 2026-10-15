@@ -181,8 +181,8 @@ different request messages (`RegisterProvisioningDeviceRequest` versus
 `BMCService` (`pkg/api/grpc/proto/bmc.proto`) carries 23 RPCs — power control,
 boot device, virtual media, sensors, system info, provisioning, web certificate
 management, enrollment, factory restore and user management. QUIC reaches BMC
-enrollment through the **BMC category opcode `0x9F`**, and there are 16
-`platform_bmc_*` MCP tools.
+enrollment through the **BMC category opcode `0x9F`**, and there are 23
+`platform_bmc_*` MCP tools, one per RPC.
 
 **BMC internals are not documented in this pass** — see
 [engineering.md](engineering.md) §1. The transport shape is recorded here so the
@@ -235,7 +235,7 @@ device-facing routes take no scope (§3). The gateway's device reports under
 `/api/v1/provisioning/devices/{mac}` require `provisioning:write` the same way
 (§4).
 
-On MCP, the 16 BMC tools are mapped ([`docs/bmc/api.md`](../bmc/api.md) §8).
+On MCP, the 23 BMC tools are mapped ([`docs/bmc/api.md`](../bmc/api.md) §8).
 The `provision_*` tools take the scopes of their gRPC twin (#304):
 `provision_list_sessions` and `provision_get_session` need `provisioning:read`,
 `provision_fulfill_session` needs `provisioning:write`, and

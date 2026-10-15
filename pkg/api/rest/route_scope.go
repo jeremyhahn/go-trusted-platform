@@ -77,30 +77,43 @@ func NewScopeGuard(tokens TokenAuthorizer, peers PeerAuthenticator, logger *slog
 // Require wraps next so it runs only for a caller holding scope: 401 when
 // the caller is not authenticated, 403 when it lacks the scope.
 func (g *ScopeGuard) Require(scope string, next http.HandlerFunc) http.HandlerFunc {
+	return g.RequireCaller(scope, func(w http.ResponseWriter, r *http.Request, _ *platformtoken.AuthorizedContext) {
+		next(w, r)
+	})
+}
+
+// CallerHandlerFunc is a handler that also receives the caller its
+// ScopeGuard authenticated, for a route whose decision depends on who is
+// calling (the tenant routes' own-tenant rule).
+type CallerHandlerFunc func(w http.ResponseWriter, r *http.Request, caller *platformtoken.AuthorizedContext)
+
+// RequireCaller is Require for a handler that needs the authenticated
+// caller: next runs only for a caller holding scope, and receives it.
+func (g *ScopeGuard) RequireCaller(scope string, next CallerHandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		statusCode, err := g.authorize(r, scope)
+		caller, statusCode, err := g.authorize(r, scope)
 		if err != nil {
 			writeGuardError(w, g.loggerOrDefault(), statusCode, err)
 			return
 		}
-		next(w, r)
+		next(w, r, caller)
 	}
 }
 
-// authorize authenticates r and checks scope, returning the HTTP status to
-// answer with when it fails.
-func (g *ScopeGuard) authorize(r *http.Request, scope string) (int, error) {
+// authorize authenticates r and checks scope, returning the caller, or the
+// HTTP status to answer with when it fails.
+func (g *ScopeGuard) authorize(r *http.Request, scope string) (*platformtoken.AuthorizedContext, int, error) {
 	if g == nil {
-		return http.StatusForbidden, ErrRouteForbidden{Scope: scope, Reason: "no authorization is configured for this route"}
+		return nil, http.StatusForbidden, ErrRouteForbidden{Scope: scope, Reason: "no authorization is configured for this route"}
 	}
 	authCtx, err := g.authenticate(r)
 	if err != nil {
-		return http.StatusUnauthorized, err
+		return nil, http.StatusUnauthorized, err
 	}
 	if err := authCtx.RequireScope(scope); err != nil {
-		return http.StatusForbidden, ErrRouteForbidden{Scope: scope, Reason: err.Error()}
+		return nil, http.StatusForbidden, ErrRouteForbidden{Scope: scope, Reason: err.Error()}
 	}
-	return http.StatusOK, nil
+	return authCtx, http.StatusOK, nil
 }
 
 // authenticate resolves the caller from its bearer token, or else from its

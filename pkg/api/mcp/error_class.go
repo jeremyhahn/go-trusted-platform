@@ -80,9 +80,6 @@ var sentinelClasses = []struct {
 
 	{ErrDeviceProfileIdentityRequired, codes.InvalidArgument},
 	{ErrDeviceProfileMatchCriteriaRequired, codes.InvalidArgument},
-	{ErrBMCProfileIDRequired, codes.InvalidArgument},
-	{ErrBMCBootDeviceRequired, codes.InvalidArgument},
-	{ErrBMCISOURLRequired, codes.InvalidArgument},
 	{ErrClusterSeedAddressRequired, codes.InvalidArgument},
 	{ErrEABCredentialIDRequired, codes.InvalidArgument},
 	{ErrEABKeyIDRequired, codes.InvalidArgument},

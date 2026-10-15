@@ -451,19 +451,20 @@ invalidated when a profile changes. Restart `platformd`.
 
 ## Things worth knowing before you rely on them
 
-**BMC operations are not scope-checked.** Any valid platform token can power
-off a node, mount an installer, replace a BMC certificate, or create a BMC
-administrator. Neither the gRPC nor the MCP authorization catalog covers BMC
-today. Treat platform tokens that can reach the BMC API as equivalent to
-physical access, and restrict who holds them. Recorded in [api.md](api.md) §8.
+**BMC operations are not scope-checked on REST.** Any valid platform token can
+power off a node, mount an installer, replace a BMC certificate, or create a BMC
+administrator through the REST routes. gRPC, QUIC and MCP check the `bmc:*` scopes.
+Treat platform tokens that can reach the BMC REST API as equivalent to physical
+access, and restrict who holds them. Recorded in [api.md](api.md) §8.
 
 **`--transport embedded` cannot reach BMC.** If you need to work without a
 running daemon, that is what standalone mode is for.
 
-**MCP clients can restore a factory certificate but cannot install one.**
-`platform_bmc_cert_restore` is exposed; there is no replace-certificate tool. If
-you drive the platform from an AI or MCP client, the destructive direction is
-the one that is available.
+**MCP clients reach every BMC operation gRPC does.** That includes
+`platform_bmc_create_user` and `platform_bmc_set_user_password`, whose
+arguments carry the password, and `platform_bmc_replace_web_certificate`, whose
+arguments carry the private key. Grant `bmc:admin` to an AI or MCP client only
+if it should hold those.
 
 **Standalone mode leaves no trace.** No audit record, no persisted state.
 Use it for bootstrap and recovery, not as a habit.

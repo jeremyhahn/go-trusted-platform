@@ -405,14 +405,7 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.DNSService/DeleteZone":   "dns_delete_zone",
 	"/platform.v1.DNSService/ListZones":    "dns_list_zones",
 
-	// Tenant — proto: pkg/api/grpc/proto/tenant.proto
-	"/platform.v1.TenantService/CreateTenant":  "tenant_create",
-	"/platform.v1.TenantService/DeleteTenant":  "tenant_delete",
-	"/platform.v1.TenantService/GetTenant":     "tenant_get",
-	"/platform.v1.TenantService/ListTenants":   "tenant_list",
-	"/platform.v1.TenantService/UpdateTenant":  "tenant_update",
-	"/platform.v1.TenantService/SuspendTenant": "tenant_suspend",
-	"/platform.v1.TenantService/ResumeTenant":  "tenant_resume",
+	// Tenant — proto: pkg/api/grpc/proto/tenant.proto; registered in tenant.go.
 
 	// Compute / Container — proto: pkg/api/grpc/proto/compute.proto
 	"/platform.v1.ComputeService/CreateContainer":  "container_create",

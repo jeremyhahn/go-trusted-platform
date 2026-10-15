@@ -29,6 +29,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"sync/atomic"
 
 	bmcsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/bmc"
@@ -328,9 +329,7 @@ func (m *MCPAdapter) EnrollBMC(ctx context.Context, profileID uint64, opts *Enro
 
 // mcpEnrollResultToDomain parses the JSON map returned by the
 // platform_bmc_enroll MCP tool into the local EnrollResult type.
-// The server-side shape is defined in pkg/api/daemon/mcp_bmc.go
-// (BMCEnrollBMC). DeviceID arrives as a float64 from JSON; it is
-// cast to uint64 explicitly.
+// The result is the protojson form of BMCEnrollResponse.
 func mcpEnrollResultToDomain(raw json.RawMessage) (*EnrollResult, error) {
 	if len(raw) == 0 {
 		return &EnrollResult{}, nil
@@ -343,13 +342,7 @@ func mcpEnrollResultToDomain(raw json.RawMessage) (*EnrollResult, error) {
 
 	result := &EnrollResult{}
 
-	// device_id arrives as a JSON number (float64).
-	if v, ok := m["device_id"]; ok {
-		var f float64
-		if err := json.Unmarshal(v, &f); err == nil {
-			result.DeviceID = uint64(f)
-		}
-	}
+	mcpUnmarshalUint64(m, "device_id", &result.DeviceID)
 	mcpUnmarshalString(m, "endpoint", &result.Endpoint)
 	mcpUnmarshalString(m, "hostname", &result.Hostname)
 	mcpUnmarshalString(m, "dns_name", &result.DNSName)
@@ -397,8 +390,6 @@ func mcpEnrollResultToDomain(raw json.RawMessage) (*EnrollResult, error) {
 // RestoreBMC runs the BMC factory-certificate restore ceremony via the
 // platform_bmc_cert_restore MCP tool. The tool result is a JSON map returned
 // inside a text content item; it is parsed into the local RestoreResult type.
-// The server-side response shape is defined in pkg/api/daemon/mcp_bmc.go
-// (BMCRestoreFactoryCert). DeviceID arrives as a float64; it is cast to uint64.
 func (m *MCPAdapter) RestoreBMC(ctx context.Context, profileID uint64) (*RestoreResult, error) {
 	if err := m.initClient(ctx); err != nil {
 		return nil, err
@@ -417,8 +408,7 @@ func (m *MCPAdapter) RestoreBMC(ctx context.Context, profileID uint64) (*Restore
 
 // mcpRestoreResultToDomain parses the JSON map returned by the
 // platform_bmc_cert_restore MCP tool into the local RestoreResult type.
-// The server serialises device_id as a plain JSON number (float64); it is
-// converted to uint64 explicitly to preserve full precision.
+// The result is the protojson form of BMCRestoreResponse.
 func mcpRestoreResultToDomain(raw json.RawMessage) (*RestoreResult, error) {
 	if len(raw) == 0 {
 		return &RestoreResult{}, nil
@@ -431,13 +421,7 @@ func mcpRestoreResultToDomain(raw json.RawMessage) (*RestoreResult, error) {
 
 	result := &RestoreResult{}
 
-	// device_id arrives as a JSON number (float64).
-	if v, ok := m["device_id"]; ok {
-		var f float64
-		if err := json.Unmarshal(v, &f); err == nil {
-			result.DeviceID = uint64(f)
-		}
-	}
+	mcpUnmarshalUint64(m, "device_id", &result.DeviceID)
 	mcpUnmarshalString(m, "endpoint", &result.Endpoint)
 	mcpUnmarshalString(m, "hostname", &result.Hostname)
 
@@ -486,6 +470,16 @@ func mcpUnmarshalString(m map[string]json.RawMessage, key string, dst *string) {
 	var s string
 	if err := json.Unmarshal(v, &s); err == nil {
 		*dst = s
+	}
+}
+
+// mcpUnmarshalUint64 reads a uint64 field. The MCP tools answer in protojson,
+// which carries a uint64 as a decimal string to keep its full precision.
+func mcpUnmarshalUint64(m map[string]json.RawMessage, key string, dst *uint64) {
+	var s string
+	mcpUnmarshalString(m, key, &s)
+	if n, err := strconv.ParseUint(s, 10, 64); err == nil {
+		*dst = n
 	}
 }
 

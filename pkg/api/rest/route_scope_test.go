@@ -49,6 +49,51 @@ func operatorRequest(method, target string, body io.Reader) *http.Request {
 	return req
 }
 
+// TestScopeGuardRequireCaller: the handler receives the caller the guard
+// authenticated, and runs only when it holds the scope.
+func TestScopeGuardRequireCaller(t *testing.T) {
+	var got *platformtoken.AuthorizedContext
+	handler := func(w http.ResponseWriter, _ *http.Request, caller *platformtoken.AuthorizedContext) {
+		got = caller
+		w.WriteHeader(http.StatusNoContent)
+	}
+
+	t.Run("passes the authenticated caller", func(t *testing.T) {
+		got = nil
+		rr := httptest.NewRecorder()
+		operatorGuard().RequireCaller("tenant:read", handler)(rr, operatorRequest(http.MethodGet, "/x", nil))
+		assert.Equal(t, http.StatusNoContent, rr.Code)
+		require.NotNil(t, got)
+		assert.Equal(t, operatorToken, got.Subject)
+	})
+
+	t.Run("an unauthenticated caller is 401 and never reaches the handler", func(t *testing.T) {
+		got = nil
+		rr := httptest.NewRecorder()
+		operatorGuard().RequireCaller("tenant:read", handler)(rr, httptest.NewRequest(http.MethodGet, "/x", nil))
+		assert.Equal(t, http.StatusUnauthorized, rr.Code)
+		assert.Nil(t, got)
+	})
+
+	t.Run("a caller without the scope is 403", func(t *testing.T) {
+		got = nil
+		guard := NewScopeGuard(&scopedAuthorizer{scopes: map[string][]string{operatorToken: {"tenant:read"}}}, nil, nil)
+		rr := httptest.NewRecorder()
+		guard.RequireCaller("tenant:write", handler)(rr, operatorRequest(http.MethodPost, "/x", nil))
+		assert.Equal(t, http.StatusForbidden, rr.Code)
+		assert.Nil(t, got)
+	})
+
+	t.Run("a nil guard is 403", func(t *testing.T) {
+		got = nil
+		var guard *ScopeGuard
+		rr := httptest.NewRecorder()
+		guard.RequireCaller("tenant:read", handler)(rr, operatorRequest(http.MethodGet, "/x", nil))
+		assert.Equal(t, http.StatusForbidden, rr.Code)
+		assert.Nil(t, got)
+	})
+}
+
 // grantingPeers admits any verified chain with scopes, or fails with err.
 type grantingPeers struct {
 	scopes []string

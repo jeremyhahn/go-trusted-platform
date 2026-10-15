@@ -96,13 +96,11 @@ type MCPServiceProviderConfig struct {
 	TPM2Service           xkmssdk.TrustedPlatformModule
 	Logger                *slog.Logger
 	ComputeOrchestrator   compute.Orchestrator
-	BMCService            BMCServicer
 	ClusterService        ClusterServicer
 	RegistryService       grpcapi.RegistryService
 	InvitationService     platformservice.InvitationServicer
 	EABService            EABServicer
 	EABDelivery           EABDeliveryServicer
-	BMCEnroller           BMCEnroller
 	ZoneService           gateway.ZoneService
 	IPAMService           ipam.Allocator
 	ConfigDeliveryService *configdelivery.Service
@@ -156,14 +154,12 @@ type MCPServiceProvider struct {
 	secretsService        baasservice.SecretsService
 	tpm2Service           xkmssdk.TrustedPlatformModule
 	computeOrchestrator   compute.Orchestrator
-	bmcService            BMCServicer
+	bmcServer             platformv1.BMCServiceServer
 	clusterService        ClusterServicer
 	registryService       grpcapi.RegistryService
 	invitationService     platformservice.InvitationServicer
 	eabService            EABServicer
 	eabDelivery           EABDeliveryServicer
-	bmcEnroller           BMCEnroller
-	bmcRestorer           BMCRestorer
 	phase35               phase35State
 	zoneService           gateway.ZoneService
 	configDeliveryService *configdelivery.Service
@@ -218,8 +214,6 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		secretsService:        config.SecretsService,
 		tpm2Service:           config.TPM2Service,
 		computeOrchestrator:   config.ComputeOrchestrator,
-		bmcService:            config.BMCService,
-		bmcEnroller:           config.BMCEnroller,
 		clusterService:        config.ClusterService,
 		registryService:       config.RegistryService,
 		invitationService:     config.InvitationService,

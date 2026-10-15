@@ -52,13 +52,10 @@ tenant and no other: another tenant's name, and a name that does not exist,
 are both refused with `PermissionDenied`. The system tenant and the Unix-socket
 operator can name any tenant ([api.md](api.md) §7).
 
-Every verb runs on `unix`, `grpc`, `rest`, `quic` and `embedded`: the SDK REST
-transport carries the name lookup, quotas and usage on the routes in
-[api.md](api.md) §2–3. Over `rest` the name lookup is still system-only, so a
-tenant-bound caller is refused even its own name there ([api.md](api.md) §7).
-Over `mcp` only `create` and `list` run: every other verb resolves the name
-with `GetTenantByName`, which the SDK MCP transport does not map
-(`sdk/go/transport/mcp/adapter.go`), so it fails with `Unimplemented`.
+Every verb runs on `unix`, `grpc`, `rest`, `quic`, `mcp` and `embedded`: the
+SDK REST transport carries the name lookup, quotas and usage on the routes in
+[api.md](api.md) §2–3, and the SDK MCP transport carries every method on the
+daemon's MCP tools ([api.md](api.md) §7).
 
 ```bash
 platformctl tenant create --name tenant-a --display-name "Tenant A"

@@ -1129,28 +1129,6 @@ func (e ErrIAMTenantForbidden) Error() string {
 	return fmt.Sprintf("IAM request names tenant %q: caller may not act on another tenant", e.Requested)
 }
 
-// ErrTenantForbidden is returned when a TenantService request names a tenant
-// other than the caller's own and the caller is not the system tenant. It is
-// the gRPC twin of the REST tenant guard's 403 from RequireOwnTenantOrSystem.
-type ErrTenantForbidden struct {
-	Requested string
-}
-
-func (e ErrTenantForbidden) Error() string {
-	return fmt.Sprintf("tenant request names tenant %q: caller may not act on another tenant", e.Requested)
-}
-
-// ErrTenantSystemOnly is returned when a caller other than the system tenant
-// calls a cross-tenant TenantService method. It is the gRPC twin of the REST
-// tenant guard's 403 from RequireSystemTenant.
-type ErrTenantSystemOnly struct {
-	Method string
-}
-
-func (e ErrTenantSystemOnly) Error() string {
-	return fmt.Sprintf("%s acts across tenants: only the system tenant may call it", e.Method)
-}
-
 // ErrTenantBarrierShamirUnsupported is returned when InitTenantBarrier asks
 // for Shamir sharing. The per-tenant barrier initializes with its
 // deterministic credential only, and the init returns no shares, so

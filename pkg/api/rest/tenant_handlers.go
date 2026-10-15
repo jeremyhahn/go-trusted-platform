@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
 )
@@ -374,10 +375,26 @@ type TenantManagerInterface interface {
 // Tenant Handlers
 // =============================================================================
 
+// Scopes the tenant routes require, the same ones the tenant gRPC methods
+// require (pkg/api/grpc/method_permissions.go).
+const (
+	scopeTenantRead   = "tenant:read"
+	scopeTenantWrite  = "tenant:write"
+	scopeTenantDelete = "tenant:delete"
+)
+
 // TenantHandlers provides REST API handlers for tenant operations.
+//
+// Every route runs behind guard and authorizes the caller it verified by the
+// rules the tenant gRPC server applies to the same method (pkg/tenant
+// access.go): a route naming a tenant admits that tenant and the system
+// tenant, list/create/sync admit the system tenant only, and the by-name
+// lookup applies tenant.AuthorizeNameLookup. Refusals are 403.
 type TenantHandlers struct {
-	manager TenantManagerInterface
-	logger  *slog.Logger
+	manager        TenantManagerInterface
+	logger         *slog.Logger
+	guard          *ScopeGuard
+	systemTenantID string
 }
 
 // TenantHandlersOption is a functional option for configuring TenantHandlers.
@@ -397,6 +414,23 @@ func WithTenantLogger(logger *slog.Logger) TenantHandlersOption {
 	}
 }
 
+// WithTenantGuard sets the guard that authenticates every tenant route's
+// caller. Without one every route answers 403.
+func WithTenantGuard(guard *ScopeGuard) TenantHandlersOption {
+	return func(h *TenantHandlers) {
+		h.guard = guard
+	}
+}
+
+// WithTenantSystemTenant sets the platform's system tenant, the one tenant
+// allowed to act on every other tenant. Unset, no caller is the system
+// tenant.
+func WithTenantSystemTenant(tenantID string) TenantHandlersOption {
+	return func(h *TenantHandlers) {
+		h.systemTenantID = tenantID
+	}
+}
+
 // NewTenantHandlers creates a new TenantHandlers instance with the provided options.
 func NewTenantHandlers(opts ...TenantHandlersOption) *TenantHandlers {
 	h := &TenantHandlers{
@@ -413,41 +447,73 @@ func NewTenantHandlers(opts ...TenantHandlersOption) *TenantHandlers {
 // RegisterRoutes registers all tenant routes on the provided router.
 func (h *TenantHandlers) RegisterRoutes(router *mux.Router) {
 	// List and Create
-	router.HandleFunc("/api/v1/tenants", h.handleListTenants).Methods(http.MethodGet)
-	router.HandleFunc("/api/v1/tenants", h.handleCreateTenant).Methods(http.MethodPost)
+	router.HandleFunc("/api/v1/tenants", h.systemOnly(scopeTenantRead, "ListTenants", h.handleListTenants)).Methods(http.MethodGet)
+	router.HandleFunc("/api/v1/tenants", h.systemOnly(scopeTenantWrite, "CreateTenant", h.handleCreateTenant)).Methods(http.MethodPost)
 
 	// Sync operation
-	router.HandleFunc("/api/v1/tenants/sync", h.handleSync).Methods(http.MethodPost)
+	router.HandleFunc("/api/v1/tenants/sync", h.systemOnly(scopeTenantWrite, "Sync", h.handleSync)).Methods(http.MethodPost)
 
 	// Get by name (before {id} to prevent conflict)
-	router.HandleFunc("/api/v1/tenants/name/{name}", h.handleGetTenantByName).Methods(http.MethodGet)
+	router.HandleFunc("/api/v1/tenants/name/{name}", h.guard.RequireCaller(scopeTenantRead, h.handleGetTenantByName)).Methods(http.MethodGet)
 
 	// Individual tenant operations
-	router.HandleFunc("/api/v1/tenants/{id}", h.handleGetTenant).Methods(http.MethodGet)
-	router.HandleFunc("/api/v1/tenants/{id}", h.handleUpdateTenant).Methods(http.MethodPut)
-	router.HandleFunc("/api/v1/tenants/{id}", h.handleDeleteTenant).Methods(http.MethodDelete)
+	router.HandleFunc("/api/v1/tenants/{id}", h.ownOrSystem(scopeTenantRead, h.handleGetTenant)).Methods(http.MethodGet)
+	router.HandleFunc("/api/v1/tenants/{id}", h.ownOrSystem(scopeTenantWrite, h.handleUpdateTenant)).Methods(http.MethodPut)
+	router.HandleFunc("/api/v1/tenants/{id}", h.ownOrSystem(scopeTenantDelete, h.handleDeleteTenant)).Methods(http.MethodDelete)
 
 	// Tenant state management
-	router.HandleFunc("/api/v1/tenants/{id}/suspend", h.handleSuspendTenant).Methods(http.MethodPost)
-	router.HandleFunc("/api/v1/tenants/{id}/resume", h.handleResumeTenant).Methods(http.MethodPost)
+	router.HandleFunc("/api/v1/tenants/{id}/suspend", h.ownOrSystem(scopeTenantWrite, h.handleSuspendTenant)).Methods(http.MethodPost)
+	router.HandleFunc("/api/v1/tenants/{id}/resume", h.ownOrSystem(scopeTenantWrite, h.handleResumeTenant)).Methods(http.MethodPost)
 
 	// Quota operations
-	router.HandleFunc("/api/v1/tenants/{id}/quotas", h.handleGetQuotas).Methods(http.MethodGet)
-	router.HandleFunc("/api/v1/tenants/{id}/quotas", h.handleUpdateQuotas).Methods(http.MethodPut)
-	router.HandleFunc("/api/v1/tenants/{id}/usage", h.handleGetUsage).Methods(http.MethodGet)
-	router.HandleFunc("/api/v1/tenants/{id}/check-quota", h.handleCheckQuota).Methods(http.MethodPost)
+	router.HandleFunc("/api/v1/tenants/{id}/quotas", h.ownOrSystem(scopeTenantRead, h.handleGetQuotas)).Methods(http.MethodGet)
+	router.HandleFunc("/api/v1/tenants/{id}/quotas", h.ownOrSystem(scopeTenantWrite, h.handleUpdateQuotas)).Methods(http.MethodPut)
+	router.HandleFunc("/api/v1/tenants/{id}/usage", h.ownOrSystem(scopeTenantRead, h.handleGetUsage)).Methods(http.MethodGet)
+	router.HandleFunc("/api/v1/tenants/{id}/check-quota", h.ownOrSystem(scopeTenantRead, h.handleCheckQuota)).Methods(http.MethodPost)
 
 	// DEK operations
-	router.HandleFunc("/api/v1/tenants/{id}/dek/rotate", h.handleRotateTenantDEK).Methods(http.MethodPost)
-	router.HandleFunc("/api/v1/tenants/{id}/dek/status", h.handleGetTenantDEKStatus).Methods(http.MethodGet)
+	router.HandleFunc("/api/v1/tenants/{id}/dek/rotate", h.ownOrSystem(scopeTenantWrite, h.handleRotateTenantDEK)).Methods(http.MethodPost)
+	router.HandleFunc("/api/v1/tenants/{id}/dek/status", h.ownOrSystem(scopeTenantRead, h.handleGetTenantDEKStatus)).Methods(http.MethodGet)
 
 	// Per-tenant barrier operations
-	router.HandleFunc("/api/v1/tenants/{id}/barrier/init", h.handleInitTenantBarrier).Methods(http.MethodPost)
-	router.HandleFunc("/api/v1/tenants/{id}/barrier/unseal", h.handleUnsealTenantBarrier).Methods(http.MethodPost)
-	router.HandleFunc("/api/v1/tenants/{id}/barrier/seal", h.handleSealTenantBarrier).Methods(http.MethodPost)
-	router.HandleFunc("/api/v1/tenants/{id}/barrier/status", h.handleTenantBarrierStatus).Methods(http.MethodGet)
+	router.HandleFunc("/api/v1/tenants/{id}/barrier/init", h.ownOrSystem(scopeTenantWrite, h.handleInitTenantBarrier)).Methods(http.MethodPost)
+	router.HandleFunc("/api/v1/tenants/{id}/barrier/unseal", h.ownOrSystem(scopeTenantWrite, h.handleUnsealTenantBarrier)).Methods(http.MethodPost)
+	router.HandleFunc("/api/v1/tenants/{id}/barrier/seal", h.ownOrSystem(scopeTenantWrite, h.handleSealTenantBarrier)).Methods(http.MethodPost)
+	router.HandleFunc("/api/v1/tenants/{id}/barrier/status", h.ownOrSystem(scopeTenantRead, h.handleTenantBarrierStatus)).Methods(http.MethodGet)
 
 	h.logger.Info("Tenant REST routes registered")
+}
+
+// isSystemTenant reports whether caller is the configured system tenant.
+func (h *TenantHandlers) isSystemTenant(caller *platformtoken.AuthorizedContext) bool {
+	return tenant.IsSystemTenant(h.systemTenantID, caller.TenantID)
+}
+
+// systemOnly guards a route that acts across tenants, named by the
+// TenantService method it maps to: the caller must hold scope and be the
+// system tenant (tenant.AuthorizeCrossTenant), else 403.
+func (h *TenantHandlers) systemOnly(scope, method string, next http.HandlerFunc) http.HandlerFunc {
+	return h.guard.RequireCaller(scope, func(w http.ResponseWriter, r *http.Request, caller *platformtoken.AuthorizedContext) {
+		if err := tenant.AuthorizeCrossTenant(h.isSystemTenant(caller), method); err != nil {
+			h.writeError(w, http.StatusForbidden, err)
+			return
+		}
+		next(w, r)
+	})
+}
+
+// ownOrSystem guards a route naming one tenant by its {id}: the caller must
+// hold scope and be that tenant or the system tenant
+// (tenant.AuthorizeTenantAccess), else 403.
+func (h *TenantHandlers) ownOrSystem(scope string, next http.HandlerFunc) http.HandlerFunc {
+	return h.guard.RequireCaller(scope, func(w http.ResponseWriter, r *http.Request, caller *platformtoken.AuthorizedContext) {
+		requested := mux.Vars(r)["id"]
+		if err := tenant.AuthorizeTenantAccess(caller.TenantID, h.isSystemTenant(caller), requested); err != nil {
+			h.writeError(w, http.StatusForbidden, err)
+			return
+		}
+		next(w, r)
+	})
 }
 
 // =============================================================================
@@ -560,7 +626,7 @@ func (h *TenantHandlers) handleGetTenant(w http.ResponseWriter, r *http.Request)
 }
 
 // handleGetTenantByName handles GET /api/v1/tenants/name/{name}
-func (h *TenantHandlers) handleGetTenantByName(w http.ResponseWriter, r *http.Request) {
+func (h *TenantHandlers) handleGetTenantByName(w http.ResponseWriter, r *http.Request, caller *platformtoken.AuthorizedContext) {
 	ctx := r.Context()
 
 	if h.manager == nil {
@@ -575,9 +641,22 @@ func (h *TenantHandlers) handleGetTenantByName(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// The name is resolved before the caller is checked, as the tenant gRPC
+	// server does: only the resolved ID can say whether the name is the
+	// caller's own, and an unknown name is refused like another tenant's.
 	entity, err := h.manager.GetTenantByName(ctx, name)
 	if err != nil {
 		h.logger.Error("Failed to get tenant by name", "error", err, "name", name)
+	}
+	resolvedID := ""
+	if err == nil {
+		resolvedID = entity.ID
+	}
+	if authErr := tenant.AuthorizeNameLookup(caller.TenantID, h.isSystemTenant(caller), resolvedID); authErr != nil {
+		h.writeError(w, http.StatusForbidden, authErr)
+		return
+	}
+	if err != nil {
 		h.writeTenantError(w, "get_tenant_by_name", err)
 		return
 	}

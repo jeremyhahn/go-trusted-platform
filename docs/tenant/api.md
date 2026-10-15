@@ -188,25 +188,30 @@ and MCP alike — the rule the REST guards apply:
 |---|---|---|
 | names a tenant (get, update, delete, quotas, usage, suspend, resume, DEK, barrier) | the caller's own tenant, or the system tenant | `PermissionDenied`, `ErrTenantForbidden` |
 | acts across tenants (`ListTenants`, `CreateTenant`, `Sync`) | the system tenant | `PermissionDenied`, `ErrTenantSystemOnly` |
-| looks a tenant up by name (`GetTenantByName`) | the caller's own tenant, or the system tenant for any name | `PermissionDenied`, `ErrTenantSystemOnly` |
+| looks a tenant up by name (`GetTenantByName`) | the caller's own tenant, or the system tenant for any name | `PermissionDenied`, `tenant.ErrNameLookupDenied` |
 
 **Lookup by name resolves first, then decides (#304).** The CLI is
 name-keyed, so every verb starts with `GetTenantByName`; a tenant acting on
-itself must be able to resolve its own name. The server resolves the name, and
-admits a tenant-bound caller only when the resolved ID is the caller's tenant
-from the token or certificate, never from a request field. Another tenant's
-name and a name that does not exist get the same `ErrTenantSystemOnly`, so a
-tenant learns nothing about which names exist. Only the system tenant and an
-unbound caller see `NotFound` for a missing name.
+itself must be able to resolve its own name. The server resolves the name, then
+applies one rule, `tenant.AuthorizeNameLookup` (`pkg/tenant/access.go`), to the
+caller's tenant from the token or certificate (on REST, the session's claim; see
+below), never from a request field. Another tenant's name and a name that does not exist get the
+same `tenant.ErrNameLookupDenied`, so a tenant learns nothing about which names
+exist. Only the system tenant and an unbound caller see `NotFound` for a
+missing name.
 
-**The REST `by-name` route is still system-only.** `GET
-/api/v1/tenants/by-name/{name}` keeps its `RequireSystemTenant` guard
-(`pkg/webservice/v1/rest/tenant/router.go`), so over REST a tenant still cannot
-resolve its own name. Bringing it to the rule above needs a guard that checks
-the resolved ID, which is an open question for the owner: the REST handler
-calls the same `TenantGRPCServer.GetTenantByName`, but the server reads the
-caller from the gRPC, QUIC, MCP or mTLS context, never the REST session, so
-behind the route the REST caller reads as unbound.
+**REST applies the same rule in a per-route guard.** `GET
+/api/v1/tenants/by-name/{name}` is guarded by
+`SessionGuard.RequireOwnTenantNameOrSystem`
+(`pkg/webservice/v1/middleware/iam/guard.go`), not by the system-only guard.
+The guard reads the caller from the REST session's authenticated tenant claim,
+resolves the name through `TenantGRPCServer.GetTenantByName`, and calls
+`tenant.AuthorizeNameLookup`. A tenant resolves its own name; the system
+tenant resolves any name without the extra lookup. Another tenant's name and an
+unknown name both get `403` with the `tenant.ErrNameLookupDenied` message, so
+the two answers are identical. The shared server check never reads the REST
+session: behind the guard, the REST caller reads as unbound to
+`TenantGRPCServer`.
 
 The SDK REST transport (`sdk/go/transport/rest/adapter.go`) carries
 `GetTenantByName`, `GetQuotas`, `UpdateQuotas` and `GetUsage` on the routes in
@@ -218,10 +223,12 @@ DEK rotation keeps `background` there.
 The SDK QUIC transport (`sdk/go/transport/quic/adapter.go`) carries every
 §2–4 method, `CheckQuota` (`0xE6`), `Sync` (`0xE9`), `RotateTenantDEK`
 (`0xEA`) and `GetTenantDEKStatus` (`0xEB`) included, and the §5 barrier methods
-under `0x9E`. The SDK MCP transport (`sdk/go/transport/mcp/adapter.go`) maps
-only `ListTenants`, `GetTenant`, `CreateTenant`, `UpdateTenant`,
-`DeleteTenant`, `SuspendTenant` and `ResumeTenant`; every other method answers
-`Unimplemented` on the client before reaching the daemon's MCP tools.
+under `0x9E`. The SDK MCP transport (`sdk/go/transport/mcp/tenant.go`) carries
+every §2–5 method on the MCP tools those sections name: quota limits travel as the
+tools' flat `max_*` arguments, the quota check's `resource` as
+`resource_type`, and the tools' state names and RFC 3339 times decode back onto
+the gRPC replies. On `tenant_update_quotas` a zero limit keeps the tenant's
+current limit, so MCP cannot lower a limit to 0.
 
 The caller's tenant is the token's `tenant_id` claim, or the mTLS certificate.
 The system tenant is the platform's operating tenant (`App.TenantID`); with none
@@ -263,6 +270,43 @@ covers tenant create, delete, suspend and resume, quota updates, `POST
 
 The REST gate is role-based; the gRPC, QUIC and MCP positions are the scope
 catalogs above, with the tenant binding behind them.
+
+### The daemon REST server checks the scope and the binding (#304)
+
+The daemon listener serves the tenant routes too (`pkg/api/rest/tenant_handlers.go`,
+wired by `RESTServer.SetTenantHandlers`). Before #304 they had no guard, so any
+caller past the mTLS handshake reached every tenant. Each route now runs through
+`restapi.ScopeGuard` (`pkg/api/rest/route_scope.go`), which authenticates the
+caller with a `Bearer` platform token and its `DPoP` proof, or else with the
+verified client certificate, admitted as an operator of the certificate's tenant
+holding `*:*` ([`docs/daemon/api.md`](../daemon/api.md) §5). The route requires
+its RPC's scope, then applies the `TenantService` rule to the authenticated
+caller, never to a request field:
+
+| Daemon REST route | Scope | Who may call |
+|---|---|---|
+| `GET /api/v1/tenants` | `tenant:read` | the system tenant |
+| `POST /api/v1/tenants` | `tenant:write` | the system tenant |
+| `POST /api/v1/tenants/sync` | `tenant:write` | the system tenant |
+| `GET /api/v1/tenants/name/{name}` | `tenant:read` | the tenant of that name, or the system tenant for any name |
+| `GET /api/v1/tenants/{id}`, `.../quotas`, `.../usage`, `.../dek/status`, `.../barrier/status`; `POST .../check-quota` | `tenant:read` | tenant `{id}`, or the system tenant |
+| `PUT /api/v1/tenants/{id}`, `PUT .../quotas`; `POST .../suspend`, `.../resume`, `.../dek/rotate`, `.../barrier/init`, `.../barrier/unseal`, `.../barrier/seal` | `tenant:write` | tenant `{id}`, or the system tenant |
+| `DELETE /api/v1/tenants/{id}` | `tenant:delete` | tenant `{id}`, or the system tenant |
+
+A missing or invalid credential is `401`. A missing scope is `403`. A refusal by
+the binding is `403`, and its `error` text is the message gRPC returns with
+`PermissionDenied`: `ErrTenantForbidden`, `ErrTenantSystemOnly` or
+`tenant.ErrNameLookupDenied`. The by-name route resolves the name first, then
+calls `tenant.AuthorizeNameLookup`. Another tenant's name and an unknown name
+therefore get the same `403`, and only the system tenant sees `404`.
+
+The system tenant is `App.TenantID`, the same one the gRPC server uses. Every
+caller on this listener is authenticated, so the unbound caller that gRPC
+serves has no daemon REST counterpart. Both transports call the same exported
+rules in `pkg/tenant/access.go`: `AuthorizeTenantAccess`, `AuthorizeCrossTenant`
+and `AuthorizeNameLookup`. `pkg/api/daemon/rest_tenant_authz_test.go` runs the
+system tenant, the caller's own tenant and another tenant through both
+transports for every route.
 
 Note the two tenant surfaces are different things. `/api/v1/tenants` is the
 tenancy data plane gated here; `/api/v1/iam/tenants` is the tenant *record*

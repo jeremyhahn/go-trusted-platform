@@ -73,7 +73,7 @@ func daemonRouteTable(t *testing.T) (*RESTServer, []string) {
 	s.SetVPNHandlers(platformv1.UnimplementedVPNServiceServer{}, nil)
 	s.SetAppServiceHandlers(restapi.AppServiceServers{}, nil)
 	s.SetDeviceHandlers(routeTableDevices{}, routeTableProfiles{}, platformv1.UnimplementedDeviceServiceServer{})
-	s.SetTenantHandlers(routeTableTenants{})
+	s.SetTenantHandlers(routeTableTenants{}, nil, "")
 	s.SetKMSHandlers(routeTableKMS{})
 	s.SetComputeHandlers(platformv1.UnimplementedComputeServiceServer{}, nil)
 	s.SetOverlayHandlers(routeTableOverlay{})

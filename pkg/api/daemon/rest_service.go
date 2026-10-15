@@ -427,13 +427,19 @@ func (s *RESTServer) SetDeviceHandlers(
 //
 // Without this wiring /api/v1/tenants/* would 404 even though the gRPC
 // TenantService is registered. Mirrors SetDeviceHandlers / SetCAHandlers.
-func (s *RESTServer) SetTenantHandlers(manager restapi.TenantManagerInterface) {
+//
+// Every route runs behind guard and authorizes the caller it verified as the
+// tenant gRPC server does, with systemTenantID as the one tenant allowed to
+// act on every other (restapi.TenantHandlers). A nil guard answers 403.
+func (s *RESTServer) SetTenantHandlers(manager restapi.TenantManagerInterface, guard *restapi.ScopeGuard, systemTenantID string) {
 	if manager == nil {
 		return
 	}
 	handlers := restapi.NewTenantHandlers(
 		restapi.WithTenantManager(manager),
 		restapi.WithTenantLogger(s.logger),
+		restapi.WithTenantGuard(guard),
+		restapi.WithTenantSystemTenant(systemTenantID),
 	)
 	handlers.RegisterRoutes(s.router)
 	s.logger.Info("Tenant REST routes registered")

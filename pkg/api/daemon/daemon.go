@@ -36,6 +36,7 @@ import (
 	grpccreds "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/barrier"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
@@ -205,7 +206,7 @@ type Daemon struct {
 	fido2Service                 *FIDO2GRPCService
 	mcpServer                    MCPServerInterface
 	mcpProvider                  *MCPServiceProvider
-	bmcService                   BMCServicer
+	bmcGRPCService               *BMCGRPCService
 	eabService                   EABServicer
 	eabGRPCService               *EABGRPCService
 	eabDelivery                  EABDeliveryServicer
@@ -1459,8 +1460,10 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Each route requires the scope its RPC requires on gRPC, checked by one
 	// guard: a platform token, else the verified client certificate. The
 	// compute routes run the same ComputeGRPCService gRPC and QUIC serve.
+	var restGuard *restapi.ScopeGuard
 	if daemon.concreteRestServer != nil {
-		restGuard, guardErr := newRESTScopeGuard(config, platformTokenValidatorShared, logger)
+		var guardErr error
+		restGuard, guardErr = newRESTScopeGuard(config, platformTokenValidatorShared, logger)
 		if guardErr != nil {
 			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: guardErr}
 			logger.Error(constructErr, "component", "rest_server")
@@ -1522,9 +1525,10 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// TenantService methods would return FailedPrecondition. The manager
 	// instance is shared across REST, gRPC, QUIC, MCP, and Unix so every
 	// transport sees identical per-tenant state including barrier lifecycle.
+	// REST and gRPC both authorize the caller against the same system tenant.
 	if config.PlatformTenantManager != nil {
 		if daemon.concreteRestServer != nil {
-			daemon.concreteRestServer.SetTenantHandlers(config.PlatformTenantManager)
+			daemon.concreteRestServer.SetTenantHandlers(config.PlatformTenantManager, restGuard, config.PlatformTenantID)
 		}
 		if daemon.tenantService != nil && daemon.tenantService.grpcServer != nil {
 			daemon.tenantService.grpcServer.SetManager(config.PlatformTenantManager)
@@ -1774,10 +1778,10 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			}
 		}
 
-		// Stash the BMC service so the MCP server (created below) can
-		// expose it via the platform_bmc_* tools. Direct field assignment
-		// keeps the gRPC and MCP surfaces backed by the same Servicer.
-		daemon.bmcService = bmcSvc
+		// Stash the BMC gRPC servicer so the MCP server (created below)
+		// serves the platform_bmc_* tools through it: MCP and gRPC then
+		// answer and refuse alike.
+		daemon.bmcGRPCService = bmcGRPCService
 	}
 
 	// Create MCP server if enabled and not overridden by option
@@ -1918,13 +1922,11 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		HealthService:         d.service,
 		Logger:                d.logger.Slog(),
 		ComputeOrchestrator:   d.config.ComputeOrchestrator,
-		BMCService:            d.bmcService,
 		RegistryService:       d.config.RegistryService,
 		EABService:            d.eabService,
 		EABDelivery:           d.eabDelivery,
 		ClusterService:        d.clusterService,
 		InvitationService:     d.invitationService,
-		BMCEnroller:           d.config.App,
 		ZoneService:           d.zoneSvc,
 		IPAMService:           d.gatewayGRPCService.IPAMAllocator(),
 		GatewayPerf:           d.gatewayPerfService,
@@ -1973,12 +1975,11 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		serviceProvider.secretsService = d.config.App.Secrets()
 	}
 
-	// Wire the BMCRestorer into the MCP provider so the platform_bmc_cert_restore
-	// tool executes the real ceremony. Guarded on both App and DeviceProfileService
-	// being present, matching the gRPC and QUIC wiring pattern.
-	if d.config.App != nil && d.config.DeviceProfileService != nil {
-		serviceProvider.SetBMCRestorer(d.config.App, d.config.DeviceProfileService)
-		d.logger.Info("BMC MCP restorer wired")
+	// The platform_bmc_* tools call the gRPC BMC servicer, which already
+	// carries the enroller and restorer. The nil check keeps a missing BMC
+	// service a nil interface, so the tools refuse with ErrBMCNotConfigured.
+	if d.bmcGRPCService != nil {
+		serviceProvider.SetBMCServer(d.bmcGRPCService)
 	}
 
 	// Mirror the invitation servicer into the gRPC service so MCP and gRPC

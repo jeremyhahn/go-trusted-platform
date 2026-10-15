@@ -154,13 +154,13 @@ func buildForgetMACArgs(args interface{}) (map[string]interface{}, error) {
 	return map[string]interface{}{"mac": in.GetMac(), "vni": in.GetVni()}, nil
 }
 
-// overlayTime is an overlay view moment: RFC 3339, or "" when unset.
-type overlayTime struct {
+// optionalTime is a tool result moment: RFC 3339, or "" when unset.
+type optionalTime struct {
 	time.Time
 }
 
 // UnmarshalJSON reads "" as the zero time and anything else as RFC 3339.
-func (t *overlayTime) UnmarshalJSON(data []byte) error {
+func (t *optionalTime) UnmarshalJSON(data []byte) error {
 	if string(data) == `""` {
 		t.Time = time.Time{}
 		return nil
@@ -184,14 +184,14 @@ type overlayStatusWire struct {
 // overlayVTEPWire is one overlay_vtep_list entry, or the overlay_vtep_get
 // result, which adds the VNIs, MAC count and byte counts.
 type overlayVTEPWire struct {
-	NodeID    string      `json:"node_id"`
-	IP        string      `json:"ip"`
-	Healthy   bool        `json:"healthy"`
-	LastSeen  overlayTime `json:"last_seen"`
-	VNIs      []uint32    `json:"vnis"`
-	MACCount  uint32      `json:"mac_count"`
-	BytesSent uint64      `json:"bytes_sent"`
-	BytesRecv uint64      `json:"bytes_recv"`
+	NodeID    string       `json:"node_id"`
+	IP        string       `json:"ip"`
+	Healthy   bool         `json:"healthy"`
+	LastSeen  optionalTime `json:"last_seen"`
+	VNIs      []uint32     `json:"vnis"`
+	MACCount  uint32       `json:"mac_count"`
+	BytesSent uint64       `json:"bytes_sent"`
+	BytesRecv uint64       `json:"bytes_recv"`
 }
 
 func (v overlayVTEPWire) toPb() *platformv1.VTEPInfo {
@@ -210,10 +210,10 @@ func (v overlayVTEPWire) toPb() *platformv1.VTEPInfo {
 // overlayVNIWire is one overlay_vni_list entry, or the overlay_vni_create
 // result. The overlay stores no VNI name.
 type overlayVNIWire struct {
-	VNI       uint32      `json:"vni"`
-	VLAN      uint32      `json:"vlan"`
-	MACCount  uint32      `json:"mac_count"`
-	CreatedAt overlayTime `json:"created_at"`
+	VNI       uint32       `json:"vni"`
+	VLAN      uint32       `json:"vlan"`
+	MACCount  uint32       `json:"mac_count"`
+	CreatedAt optionalTime `json:"created_at"`
 }
 
 // toPb names the VNI as gRPC names it.
@@ -250,10 +250,10 @@ func (t overlayTunnelWire) toPb() *platformv1.TunnelInfo {
 
 // overlayMACWire is one overlay_mac_list entry.
 type overlayMACWire struct {
-	MAC        string      `json:"mac"`
-	VNI        uint32      `json:"vni"`
-	RemoteVTEP string      `json:"remote_vtep"`
-	LearnedAt  overlayTime `json:"learned_at"`
+	MAC        string       `json:"mac"`
+	VNI        uint32       `json:"vni"`
+	RemoteVTEP string       `json:"remote_vtep"`
+	LearnedAt  optionalTime `json:"learned_at"`
 }
 
 func (m overlayMACWire) toPb() *platformv1.RemoteMACEntry {

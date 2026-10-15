@@ -164,7 +164,7 @@ named. **Do not treat this table as the installer's API.**
 | Upload the install log | iPXE HTTP server, `PUT /installs/{hostname}/{filename}` | [`docs/ipxe/api.md`](../ipxe/api.md) §3 |
 | Serve the network boot | iPXE DHCP/TFTP/HTTP | [`docs/ipxe/api.md`](../ipxe/api.md) |
 | Running-system LUKS operations | `LUKSService`, QUIC `0x9C` | [`docs/daemon/api.md`](../daemon/api.md) §4 |
-| BMC virtual-media boot of the ISO | `BMCService`, QUIC `0x9F`, 16 `platform_bmc_*` MCP tools | [`docs/provisioning/api.md`](../provisioning/api.md) §5 |
+| BMC virtual-media boot of the ISO | `BMCService`, QUIC `0x9F`, 23 `platform_bmc_*` MCP tools | [`docs/provisioning/api.md`](../provisioning/api.md) §5 |
 
 ## 8. Errors as they would cross a transport
 

@@ -54,7 +54,7 @@ contract: protobuf request/response messages, decoded from JSON with
 | PXE | `/api/v1/pxe` | `platformv1.PXEServiceServer` | `admin`; `POST /pxe/webhook/complete` is registered only when `pxe.ServiceConfig.WebhookEnabled` is true (default false, so 404) and is then **unauthenticated** — it sits off the gate and checks no credential; #238 owns what a booting node presents |
 | SDN | `/api/v1/sdn` | `platformv1.SDNServiceServer` | `admin` |
 | Switches | `/api/v1/switches` | `device.SwitchServiceProvider` | `admin` |
-| Tenants | `/api/v1/tenants` | `platformv1.TenantServiceServer` | `admin`, plus a within-tenant boundary: `/{id}/**` requires the caller's own tenant **or** the system tenant; list/create/sync/by-name are system-tenant only (#234) |
+| Tenants | `/api/v1/tenants` | `platformv1.TenantServiceServer` | `admin`, plus a within-tenant boundary: `/{id}/**` requires the caller's own tenant **or** the system tenant; list/create/sync are system-tenant only (#234); by-name resolves the caller's own tenant's name, or any name for the system tenant (#304) |
 | TPM | `/api/v1/tpm` | `platformv1.TPMServiceServer` | `admin` |
 | vTPM | `/api/v1/vtpm` | `vtpm.VTPMService` | `admin` |
 

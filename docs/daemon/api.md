@@ -409,8 +409,12 @@ sources, `ntp:write` for step, and `cache`, `scheduler` and `messaging` as in
 
 No credential, or one with no verifier configured, is 401; a caller without the
 scope is 403. A handler set built without a guard answers 403 on every route
-(default-deny). The guard is built by `newRESTScopeGuard`; it does not change
-the routes of the other REST handler sets.
+(default-deny). The guard is built by `newRESTScopeGuard`.
+
+The daemon REST tenant routes (`/api/v1/tenants/*`, #304) run behind the same
+guard with the `tenant` scopes. They then apply the `TenantService` tenant
+binding to the authenticated caller
+([`docs/tenant/api.md`](../tenant/api.md) §7).
 
 **QUIC authorizes every request before dispatch (#767).** Before #767 the QUIC
 dispatcher authenticated a token when a middleware was installed and then

@@ -889,7 +889,13 @@ func TestTenantSystemOnlyMethodsRefuseOtherTenants(t *testing.T) {
 
 			assert.Equal(t, codes.PermissionDenied, status.Code(grpcErr), "gRPC: %v", grpcErr)
 			assert.Equal(t, codes.PermissionDenied, status.Code(mcpErr), "MCP: %v", mcpErr)
-			assert.Contains(t, status.Convert(grpcErr).Message(), "system tenant")
+			// The by-name lookup answers with the own-name rule, which says
+			// nothing about whether the name exists.
+			want := "system tenant"
+			if op.tool == "tenant_get_by_name" {
+				want = tenant.ErrNameLookupDenied{}.Error()
+			}
+			assert.Contains(t, status.Convert(grpcErr).Message(), want)
 			assert.Equal(t, before, grpcSide.snapshot())
 			assert.Equal(t, before, mcpSide.snapshot())
 		})
@@ -1058,7 +1064,7 @@ func TestTenantGetByNameResolvesOwnTenantOnly(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	denied := status.Error(codes.PermissionDenied, ErrTenantSystemOnly{Method: "GetTenantByName"}.Error())
+	denied := status.Error(codes.PermissionDenied, tenant.ErrNameLookupDenied{}.Error())
 	for _, name := range []string{"tenant-b", parityGhostTenant} {
 		t.Run("refuses "+name, func(t *testing.T) {
 			_, grpcErr := h.server.GetTenantByName(grpcCtx, &platformv1.GetTenantByNameRequest{Name: name})
@@ -1138,8 +1144,8 @@ func TestMCPServiceProviderTenantService(t *testing.T) {
 }
 
 func TestTenantIsolationErrorsNameWhatWasRefused(t *testing.T) {
-	assert.Contains(t, ErrTenantForbidden{Requested: parityTenantB}.Error(), parityTenantB)
-	assert.Contains(t, ErrTenantSystemOnly{Method: "ListTenants"}.Error(), "ListTenants")
+	assert.Contains(t, tenant.ErrTenantForbidden{Requested: parityTenantB}.Error(), parityTenantB)
+	assert.Contains(t, tenant.ErrTenantSystemOnly{Method: "ListTenants"}.Error(), "ListTenants")
 	shamir := ErrTenantBarrierShamirUnsupported{Threshold: 2, Shares: 3}.Error()
 	assert.Contains(t, shamir, "threshold 2 of 3 shares")
 }

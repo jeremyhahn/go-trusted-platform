@@ -26,6 +26,7 @@ import (
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
@@ -308,6 +309,97 @@ func TestRequireOwnTenantOrSystem_DeniesWithoutAnExtractor(t *testing.T) {
 		NewIAMSession(&iamsdk.User{ID: "u1", TenantID: "system"})))
 
 	g.RequireOwnTenantOrSystem("system", nil)(
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true })).
+		ServeHTTP(rec, req)
+
+	assert.False(t, reached)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+// byNameResult is what serveOwnNameOrSystem observed.
+type byNameResult struct {
+	reached  bool
+	resolved bool
+	status   int
+	body     string
+}
+
+// serveOwnNameOrSystem runs one request through RequireOwnTenantNameOrSystem
+// with a session for sessionTenant ("" for no session) and a resolver that
+// answers resolvedID ("" for a name that resolves to nothing).
+func serveOwnNameOrSystem(
+	t *testing.T, systemID, sessionTenant, resolvedID string) byNameResult {
+	t.Helper()
+
+	var got byNameResult
+	g, rec := ownOrSystemGuard(t, systemID)
+	mw := g.RequireOwnTenantNameOrSystem(systemID, func(*http.Request) string {
+		got.resolved = true
+		return resolvedID
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/by-name/acme", nil)
+	if sessionTenant != "" {
+		req = req.WithContext(SetSessionInContext(req.Context(),
+			NewIAMSession(&iamsdk.User{ID: "u1", TenantID: sessionTenant})))
+	}
+
+	mw(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { got.reached = true })).
+		ServeHTTP(rec, req)
+	got.status = rec.Code
+	got.body = rec.Body.String()
+	return got
+}
+
+func TestRequireOwnTenantNameOrSystem_AdmitsTheCallersOwnName(t *testing.T) {
+	got := serveOwnNameOrSystem(t, "system", "tenant-a", "tenant-a")
+	assert.True(t, got.reached, "a tenant must resolve its own name")
+	assert.Equal(t, http.StatusOK, got.status)
+}
+
+func TestRequireOwnTenantNameOrSystem_AdmitsTheSystemTenantWithoutALookup(t *testing.T) {
+	got := serveOwnNameOrSystem(t, "system", "system", "tenant-b")
+	assert.True(t, got.reached, "the system tenant resolves any name")
+	assert.False(t, got.resolved, "the system tenant needs no lookup")
+}
+
+func TestRequireOwnTenantNameOrSystem_DeniesAForeignAndAnUnknownNameAlike(t *testing.T) {
+	foreign := serveOwnNameOrSystem(t, "system", "tenant-a", "tenant-b")
+	unknown := serveOwnNameOrSystem(t, "system", "tenant-a", "")
+
+	assert.False(t, foreign.reached)
+	assert.False(t, unknown.reached)
+	assert.Equal(t, http.StatusForbidden, foreign.status)
+	assert.Equal(t, foreign.status, unknown.status)
+	assert.Equal(t, foreign.body, unknown.body,
+		"the answer must not say whether the name exists")
+	assert.Contains(t, foreign.body, tenant.ErrNameLookupDenied{}.Error())
+}
+
+func TestRequireOwnTenantNameOrSystem_DeniesWithoutASession(t *testing.T) {
+	got := serveOwnNameOrSystem(t, "system", "", "tenant-a")
+	assert.False(t, got.reached)
+	assert.False(t, got.resolved, "no lookup runs for an unauthenticated caller")
+	assert.Equal(t, http.StatusUnauthorized, got.status)
+}
+
+func TestRequireOwnTenantNameOrSystem_AnEmptySystemIDDoesNotAdmit(t *testing.T) {
+	// With no system tenant configured the caller is an ordinary tenant:
+	// another tenant's name is still refused.
+	got := serveOwnNameOrSystem(t, "", "tenant-a", "tenant-b")
+	assert.False(t, got.reached)
+	assert.Equal(t, http.StatusForbidden, got.status)
+}
+
+func TestRequireOwnTenantNameOrSystem_DeniesWithoutAResolver(t *testing.T) {
+	g, rec := ownOrSystemGuard(t, "system")
+
+	reached := false
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/by-name/acme", nil)
+	req = req.WithContext(SetSessionInContext(req.Context(),
+		NewIAMSession(&iamsdk.User{ID: "u1", TenantID: "system"})))
+
+	g.RequireOwnTenantNameOrSystem("system", nil)(
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true })).
 		ServeHTTP(rec, req)
 

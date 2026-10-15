@@ -398,6 +398,8 @@ func newTestTenantHandlersWithMock(mgr *mockTenantManager) *TenantHandlers {
 	return NewTenantHandlers(
 		WithTenantManager(mgr),
 		WithTenantLogger(slog.Default()),
+		WithTenantGuard(tenantTestGuard()),
+		WithTenantSystemTenant(tenantSystemID),
 	)
 }
 
@@ -441,6 +443,7 @@ func executeTenantRequest(router *mux.Router, method, path string, body interfac
 
 	req, _ := http.NewRequest(method, path, reqBody)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tenantSystemToken)
 
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -580,7 +583,7 @@ func TestNewTenantHandlers(t *testing.T) {
 // =============================================================================
 
 func TestHandlersWithNilManager(t *testing.T) {
-	h := NewTenantHandlers()
+	h := NewTenantHandlers(WithTenantGuard(tenantTestGuard()), WithTenantSystemTenant(tenantSystemID))
 	router := mux.NewRouter()
 	h.RegisterRoutes(router)
 
@@ -751,6 +754,7 @@ func TestHandleCreateTenant_InvalidBody(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodPost, "/api/v1/tenants", bytes.NewBufferString("{invalid"))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tenantSystemToken)
 
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -914,6 +918,7 @@ func TestHandleUpdateTenant_InvalidBody(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodPut, "/api/v1/tenants/tenant-123", bytes.NewBufferString("{invalid"))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tenantSystemToken)
 
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -1184,6 +1189,7 @@ func TestHandleUpdateQuotas_InvalidBody(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodPut, "/api/v1/tenants/tenant-123/quotas", bytes.NewBufferString("{invalid"))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tenantSystemToken)
 
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -1373,6 +1379,7 @@ func TestHandleCheckQuota_InvalidBody(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodPost, "/api/v1/tenants/tenant-123/check-quota", bytes.NewBufferString("{invalid"))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tenantSystemToken)
 
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -1543,6 +1550,7 @@ func TestHandleRotateTenantDEK_InvalidBody(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodPost, "/api/v1/tenants/tenant-123/dek/rotate", bytes.NewBufferString("{invalid"))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tenantSystemToken)
 
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -2103,6 +2111,7 @@ func TestContextPropagation(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodGet, "/api/v1/tenants", nil)
 	req = req.WithContext(ctx)
+	req.Header.Set("Authorization", "Bearer "+tenantSystemToken)
 
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)

@@ -1000,7 +1000,8 @@ unseal the barrier of tenant B by changing a path segment.
 | Routes | Guard | Why |
 |---|---|---|
 | `/tenants/{id}` and every `/{id}/**` | **`RequireOwnTenantOrSystem`** | The caller's own tenant, **or** the system tenant acting as the control plane. |
-| `GET /tenants`, `POST /tenants`, `POST /tenants/sync`, `GET /tenants/by-name/{name}` | **`RequireSystemTenant`** | Inherently cross-tenant. A tenant admin must not enumerate or create tenants with the role they hold inside their own — the decision #159 already made for `/api/v1/iam/tenants`. |
+| `GET /tenants`, `POST /tenants`, `POST /tenants/sync` | **`RequireSystemTenant`** | Inherently cross-tenant. A tenant admin must not enumerate or create tenants with the role they hold inside their own — the decision #159 already made for `/api/v1/iam/tenants`. |
+| `GET /tenants/by-name/{name}` | **`RequireOwnTenantNameOrSystem`** | The caller's own tenant's name, **or** any name for the system tenant (#304). |
 
 **Neither existing guard was usable alone, and the naive fix would have caused
 an outage.** `RequireOwnTenant` — which is what this issue originally
@@ -1015,7 +1016,10 @@ third case, which is the defect.
 **`by-name` could not take the `{id}` guard even in principle.** Tenant ids are
 UUIDs (`pkg/tenant/manager.go` generates `uuid.New()`), so comparing a *name*
 against the session's tenant *id* would deny every caller including a tenant
-looking up its own. It is control-plane only.
+looking up its own. Its guard resolves the name first, then applies
+`tenant.AuthorizeNameLookup` — the rule gRPC, QUIC, MCP and Unix apply — to
+the session's tenant claim. Another tenant's name and an unknown name get the
+same `403` (#304; `docs/tenant/api.md` §7).
 
 **On severity: this was latent, not live.** Nothing in the tree provisions a
 tenant-scoped administrator today — tenant creation does not create an admin

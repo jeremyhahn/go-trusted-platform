@@ -17,6 +17,7 @@ import (
 	"net/http"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
@@ -205,6 +206,55 @@ func (g *SessionGuard) RequireOwnTenantOrSystem(
 			g.responseWriter.Error403(w, r, ErrForbidden{
 				Reason: "caller may not act on another tenant",
 			}, nil)
+		})
+	}
+}
+
+// RequireOwnTenantNameOrSystem returns a middleware for a route that names a
+// tenant by NAME rather than by id: GET /api/v1/tenants/by-name/{name}.
+// RequireOwnTenantOrSystem cannot guard it, because a tenant name never
+// equals the session's tenant id.
+//
+// resolve maps the request's name to a tenant id, returning "" when the name
+// resolves to nothing. The decision is tenant.AuthorizeNameLookup, the rule
+// TenantGRPCServer applies on gRPC, QUIC, MCP and Unix, fed the session's
+// tenant claim — never a request field. The system tenant is admitted
+// without a lookup. Any other caller is admitted for its own tenant's name
+// only; another tenant's name and an unknown one get the same 403 carrying
+// tenant.ErrNameLookupDenied.
+//
+// systemTenantID empty admits no caller as the system tenant, on the same
+// fail-closed reasoning as RequireTenant. A nil resolve denies every request.
+func (g *SessionGuard) RequireOwnTenantNameOrSystem(
+	systemTenantID string,
+	resolve func(*http.Request) string) func(http.Handler) http.Handler {
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if resolve == nil {
+				g.logger.Error(ErrForbidden{Reason: "tenant name resolver is unconfigured"},
+					"iam/guard: RequireOwnTenantNameOrSystem mounted without a resolver; denying")
+				g.responseWriter.Error403(w, r, ErrForbidden{
+					Reason: "tenant guard is unconfigured",
+				}, nil)
+				return
+			}
+			session, ok := g.session(w, r)
+			if !ok {
+				return
+			}
+			caller := session.TenantID()
+			isSystem := systemTenantID != "" && caller == systemTenantID
+			resolvedID := ""
+			if !isSystem {
+				resolvedID = resolve(r)
+			}
+			if err := tenant.AuthorizeNameLookup(caller, isSystem, resolvedID); err != nil {
+				g.logger.Debugf("iam/guard: tenant %q may not resolve that tenant name", caller)
+				g.responseWriter.Error403(w, r, err, nil)
+				return
+			}
+			next.ServeHTTP(w, r)
 		})
 	}
 }

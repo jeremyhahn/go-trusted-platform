@@ -302,7 +302,9 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	respWriter := response.NewResponseWriter(logger, nil)
 	registry.responseWriter = respWriter
 	registry.tpmService = &stubTPMServer{}
-	registry.tenantService = &stubTenantServer{}
+	if registry.tenantService == nil {
+		registry.tenantService = &stubTenantServer{}
+	}
 	registry.idevidService = &stubIDevIDServer{}
 	registry.vtpmService = &stubVTPMService{}
 	registry.kmsKeyMgmt = &stubKMSClient{}
@@ -1846,7 +1848,8 @@ func TestTenantRoutes_CrossTenantOperationsAreSystemOnly(t *testing.T) {
 		{"list every tenant", http.MethodGet, "/api/v1/tenants"},
 		{"create a tenant", http.MethodPost, "/api/v1/tenants"},
 		{"sync tenants", http.MethodPost, "/api/v1/tenants/sync"},
-		{"look a tenant up by name", http.MethodGet, "/api/v1/tenants/by-name/victim"},
+		// The lookup by name is not system-only: a tenant resolves its own
+		// name (router_tenant_byname_test.go).
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, http.StatusForbidden, probe(router, tc.method, tc.path),

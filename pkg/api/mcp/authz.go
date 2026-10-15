@@ -506,26 +506,12 @@ func toolPermissionCatalog() map[string]string {
 	// Splitting media from power is what stops one grant conferring the whole
 	// set_boot_device + mount_iso + power_cycle sequence — "boot the machine off
 	// attacker-supplied media" — which a single bmc:write did confer.
-	permissions["platform_bmc_power_status"] = "bmc:read"
-	permissions["platform_bmc_get_boot_device"] = "bmc:read"
-	permissions["platform_bmc_virtual_media_status"] = "bmc:read"
-	permissions["platform_bmc_get_sensors"] = "bmc:read"
-	permissions["platform_bmc_get_system_info"] = "bmc:read"
-	permissions["platform_bmc_list_users"] = "bmc:read"
-	permissions["platform_bmc_get_web_certificate"] = "bmc:read"
-
-	permissions["platform_bmc_power_on"] = "bmc:write"
-	permissions["platform_bmc_set_boot_device"] = "bmc:write"
-
-	permissions["platform_bmc_power_off"] = "bmc:power"
-	permissions["platform_bmc_power_reset"] = "bmc:power"
-	permissions["platform_bmc_power_cycle"] = "bmc:power"
-
-	permissions["platform_bmc_mount_iso"] = "bmc:media"
-	permissions["platform_bmc_unmount_iso"] = "bmc:media"
-
-	permissions["platform_bmc_enroll"] = "bmc:admin"
-	permissions["platform_bmc_cert_restore"] = "bmc:admin"
+	//
+	// Each tool's scope lives on its bmcTools entry and equals the scope of
+	// its gRPC method in pkg/api/grpc/method_permissions.go.
+	for name, tool := range bmcTools {
+		permissions[name] = tool.scope
+	}
 
 	// KMS tools (#304) require the scope of the matching gRPC method on
 	// platform.v1.KeyManagementService and quicbaas.kms.v1.{KeyManagement,
