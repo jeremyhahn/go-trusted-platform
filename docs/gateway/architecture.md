@@ -244,6 +244,10 @@ exchange, authenticated with certificates whose private key lives behind the
 go-xkms PKCS#11 module (`pubkey` only, strict revocation). The policies require
 ESP, so a tunnel without an SA carries no traffic.
 
+platformd runs it (`sdn.overlay.ipsec`). gatewayd's `overlay` service starts
+no IPsec, so a VTEP hosted by gatewayd sends VXLAN in the clear over its
+underlay ([engineering.md](engineering.md#in-gatewayd)).
+
 charon is a node package, not a library: the install media, the factory
 image and the netboot sets carry the `trusted-platform-strongswan` and
 `trusted-platform-p11-host` apks (with their OpenRC services) and
@@ -362,7 +366,15 @@ hosts the refusals and the parent relays them; a backend that lands later
 lands in the child. `datapath` (`firewall`, `nat`, `load-balancer`, `nat64`,
 `hostfw`, `tunnels`, `overlay`) moved last. It is the one supervised process
 that is not unprivileged: it keeps uid 0 with exactly `CAP_NET_ADMIN` and
-`CAP_NET_RAW`, the capabilities its kernel programming needs. Only the
+`CAP_NET_RAW`, the capabilities its kernel programming needs. Every child,
+whatever its class, also runs under a seccomp filter that denies the kernel
+surface no gateway service uses (module load, mounts, namespaces, `ptrace`,
+`bpf`, `io_uring`, the keyring); a parser is additionally denied `execve`,
+which the datapath keeps because `nat64` runs `jool`. If the supervisor
+itself dies, the kernel kills every child (`SIGKILL`, not `SIGTERM`), so the
+datapath never runs its withdraw path: its flows stay in place for the
+successor's cookie-scoped reconcile, while a planned stop still withdraws them.
+Only the
 management VPN, which has no backend yet, keeps its in-process handler. The
 order still to come is `vpn` once it has a backend;
 [`engineering.md`](engineering.md) §The process model carries the state.

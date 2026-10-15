@@ -1972,6 +1972,8 @@ func TestErrors_Messages(t *testing.T) {
 		{&ErrProcessNeverStarted{Process: "p"}, "has not been started"},
 		{&ErrSocketDir{Path: "/run/gatewayd", Op: "create", Cause: errors.New("x")}, "control socket directory create"},
 		{&ErrUserUnknown{Name: "gatewayd", Cause: errors.New("x")}, "does not exist"},
+		{&ErrSeccompUnsupportedArch{Arch: "riscv64"}, "no seccomp syscall table for riscv64"},
+		{&ErrSeccompThreadNotSynced{Thread: 101}, "could not synchronise thread 101"},
 	}
 	for _, c := range cases {
 		assert.Contains(t, c.err.Error(), c.contains)
@@ -2016,8 +2018,9 @@ func TestExecLauncher_PassesTheClassPrivilegeAndTheChildArguments(t *testing.T) 
 	assert.Equal(t, []uintptr{unix.CAP_NET_BIND_SERVICE}, attr.AmbientCaps,
 		"the class's capabilities are granted at clone time")
 	assert.False(t, attr.UseCgroupFD, "a negative descriptor means no cgroup placement")
-	assert.Equal(t, syscall.SIGTERM, attr.Pdeathsig,
-		"a dead supervisor must not leave orphans behind")
+	assert.Equal(t, syscall.SIGKILL, attr.Pdeathsig,
+		"a dead supervisor must not leave orphans behind, and a killed child "+
+			"leaves the datapath's kernel state for the successor to reconcile")
 
 	// Granting an ambient capability needs one to give, so the launch that
 	// actually runs uses the class that asks for none. The capability path
@@ -2101,6 +2104,10 @@ type recordingHardenOps struct {
 	groups []int
 	// uid and gid are what the child dropped to; -1 means it did not.
 	uid, gid int
+	// filter is the seccomp filter the child installed.
+	filter []unix.SockFilter
+	// deathSignal is the parent-death signal the child re-armed.
+	deathSignal uintptr
 	// ppid is what getppid reports; ppidAfter, when non-zero, is what it
 	// reports from the second call on, so a test can put the supervisor's
 	// death inside the window where the parent-death signal is disarmed.
@@ -2164,6 +2171,8 @@ func (o *recordingHardenOps) prctl(option, arg2, arg3, _, _ uintptr) error {
 		o.ambient = append(o.ambient, arg3)
 	case unix.PR_SET_KEEPCAPS:
 		name = "keepcaps=" + strconv.Itoa(int(arg2))
+	case unix.PR_SET_PDEATHSIG:
+		o.deathSignal = arg2
 	}
 	return o.record(name)
 }
@@ -2186,6 +2195,11 @@ func (o *recordingHardenOps) setresuid(ruid, _, _ int) error {
 func (o *recordingHardenOps) capset(_ *unix.CapUserHeader, data *[2]unix.CapUserData) error {
 	o.sets = *data
 	return o.record("capset")
+}
+
+func (o *recordingHardenOps) seccomp(filter []unix.SockFilter) error {
+	o.filter = filter
+	return o.record("seccomp")
 }
 
 // index returns where a step appears in the recorded sequence, or -1.
@@ -2291,6 +2305,8 @@ func TestHarden_TheKernelClassStaysRootButKeepsOnlyItsOwnCapabilities(t *testing
 	assert.Equal(t, -1, ops.uid, "a kernel-class process does not drop its uid")
 	assert.Equal(t, -1, ops.gid)
 	assert.NotContains(t, ops.calls, "keepcaps=1", "there is no uid change to carry capabilities across")
+	assert.Equal(t, uintptr(syscall.SIGKILL), ops.deathSignal,
+		"a SIGTERM would run the stop path and withdraw the flows the successor is meant to adopt")
 
 	want := uint32(1<<uint(unix.CAP_NET_ADMIN)) | uint32(1<<uint(unix.CAP_NET_RAW))
 	assert.Equal(t, want, ops.sets[0].Permitted, "exactly the class's two capabilities, and no others")
@@ -2339,6 +2355,7 @@ func TestHarden_ReportsTheStepThatFailed(t *testing.T) {
 		{"capset", "set the class capabilities after the uid drop"},
 		{"cap_ambient_raise", "raise ambient capability"},
 		{"keepcaps=0", "clear keepcaps"},
+		{"pdeathsig", "re-arm the parent-death signal"},
 	} {
 		ops := newRecordingHardenOps()
 		ops.failAt, ops.failWith = tc.call, unix.EPERM

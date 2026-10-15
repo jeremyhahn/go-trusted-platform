@@ -77,8 +77,8 @@ Examples:
 	}
 	cmd.Flags().StringVar(&identity, "identity", "", "Claimed device identity")
 	cmd.Flags().StringVar(&keyPath, "key", "", "PEM private key of the identity's IDevID certificate")
-	_ = cmd.MarkFlagRequired("identity")
-	_ = cmd.MarkFlagRequired("key")
+	cli.MarkFlagsRequired(cmd, "identity")
+	cli.MarkFlagsRequired(cmd, "key")
 	return cmd
 }
 
@@ -105,7 +105,7 @@ Examples:
 		},
 	}
 	cmd.Flags().StringVar(&quoteCommand, "quote-command", "", "Program that prints quote evidence over the base64 nonce it is given")
-	_ = cmd.MarkFlagRequired("quote-command")
+	cli.MarkFlagsRequired(cmd, "quote-command")
 	return cmd
 }
 

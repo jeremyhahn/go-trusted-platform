@@ -15,15 +15,26 @@ package authenticode
 
 import "fmt"
 
-// ErrRFC3161NotImplemented indicates that RFC3161 timestamping was requested
-// but is not yet implemented.
-type ErrRFC3161NotImplemented struct {
-	URL string
+// TimestampError reports that the RFC 3161 time-stamp authority at URL could
+// not countersign a signature: the request failed, the TSA refused it, or
+// the token it returned does not match the signature it was asked to stamp.
+type TimestampError struct {
+	URL    string
+	Reason string
+	Err    error
 }
 
 // Error returns the error message.
-func (e ErrRFC3161NotImplemented) Error() string {
-	return fmt.Sprintf("authenticode: RFC3161 timestamping not implemented (TSA URL: %s)", e.URL)
+func (e *TimestampError) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("authenticode: timestamp from %s: %s: %v", e.URL, e.Reason, e.Err)
+	}
+	return fmt.Sprintf("authenticode: timestamp from %s: %s", e.URL, e.Reason)
+}
+
+// Unwrap returns the underlying error.
+func (e *TimestampError) Unwrap() error {
+	return e.Err
 }
 
 // MessageError is a typed error carrying a fully formatted message with no

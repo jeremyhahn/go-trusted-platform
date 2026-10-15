@@ -88,9 +88,7 @@ Examples:
 	cmd.Flags().BoolVar(&opts.start, "start", false, "start VM immediately after creation")
 
 	// Mark required flags
-	if err := cmd.MarkFlagRequired("name"); err != nil {
-		return nil
-	}
+	cli.MarkFlagsRequired(cmd, "name")
 
 	return cmd
 }

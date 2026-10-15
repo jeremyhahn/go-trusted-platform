@@ -375,7 +375,7 @@ const ( ArchX86_64 = "x86_64"; ArchAArch64 = "aarch64"; ArchARM = "arm"; ArchRIS
 ```go
 type Authenticode interface {
     Sign(input io.Reader, output io.Writer) error
-    SignFile(inputPath, outputPath string) error
+    SignFile(inputPath, outputPath string) error // atomic replace; paths may be equal
     Verify(input io.Reader) error
     VerifyFile(path string) error
     ExtractCertificate(input io.Reader) (*x509.Certificate, error)
@@ -387,7 +387,7 @@ type SignerOptions struct {
     KeyAttributes *xkmssdk.KeyAttributes // required
     Certificate   *x509.Certificate      // required
     CertChain     []*x509.Certificate
-    TimestampURL  string                 // accepted; PLANNED (see §5)
+    TimestampURL  string                 // RFC 3161 TSA; a failed stamp fails signing
     Logger        *logging.Logger        // required
 }
 
@@ -561,10 +561,12 @@ failure with captured output or a remediation hint — for example
 
 ### `pkg/authenticode`
 
-`ErrRFC3161NotImplemented{URL}` — the only typed error; everything else is
-`MessageError` / `WrappedError`. Verification failures surface as
-`"Authenticode digest mismatch"`, `"PE file is not signed"`, or a wrapped
-`"cryptographic signature verification failed"`.
+`TimestampError{URL, Reason, Err}` — the TSA could not stamp the signature
+(unreachable, refused, or its token did not verify); `Sign` writes nothing.
+Everything else is `MessageError` / `WrappedError`. Verification failures
+surface as `"Authenticode digest mismatch"`, `"PE file is not signed"`, or a
+wrapped `"cryptographic signature verification failed"` or
+`"timestamp verification failed"`.
 
 ### CLI errors
 

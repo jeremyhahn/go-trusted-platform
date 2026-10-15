@@ -19,7 +19,7 @@ single flow-based VXLAN port.
 | **Decap Authorisation** | a tunnelled frame is accepted only from a VTEP EVPN places on its VNI |
 | **BUM Handling** | ingress replication to the VTEPs of the VNI, from Type-3 routes |
 | **ARP/ND Suppression** | A flow answers ARP for known IPv4 bindings. An IPv6 NS for a known target is punted to a packet-in controller, answered with a proxy NA and not flooded (RFC 9161). Unknown targets and DAD probes flood. Fail mode: the punts expire 12 s after a crash, are removed on stop, and are withdrawn on any meter or queue drop, so the NS floods ([ND fail mode](../../gateway/engineering.md#fail-mode)) |
-| **Symmetric IRB** | anycast gateway on every VTEP; routed traffic crosses the L3VNI |
+| **Symmetric IRB** | anycast gateway on every VTEP; routed traffic crosses the L3VNI. The overlay handler implements it, but no configuration sets the anycast gateway or L3VNI yet, so gatewayd's overlay bridges only ([In gatewayd](../../gateway/engineering.md#in-gatewayd), #709) |
 | **VNI Numbering** | overlay network n of environment E is VNI E·100000+n ([reference network](../../architecture/reference-network.md)) |
 
 ## Architecture Overview
@@ -122,9 +122,16 @@ nc -zuv 10.0.0.2 4789
 - A VTEP can inject frames only into the VNIs its EVPN routes place it
   on; everything else from the VXLAN port is dropped in table 10.
 - Before a route is installed, the handler's `VTEPAdmitter` vets the
-  VTEP; EVPN without one is a config error (`ErrAdmitterNil`). Nothing
-  backs it in gatewayd yet (#709), so encryption and
-  admission of VTEP-to-VTEP traffic are still the underlay's to provide.
+  VTEP; EVPN without one is a config error (`ErrAdmitterNil`). In gatewayd
+  it is `gateway.VTEPAdmitter`: a VTEP is admitted only while the device
+  holding its fabric address has a passed, signed and fresh attestation
+  verdict, and it is withdrawn when that stops being true
+  ([VTEP admission](../../gateway/engineering.md#vtep-admission)).
+- platformd's overlay IPsec (`overlay.ipsec`, [architecture](architecture.md#overlay-ipsec))
+  carries every packet between two VTEPs in a transport-mode ESP SA behind
+  a fail-closed floor; its peers are the static peers. gatewayd's overlay
+  runs no IPsec, so on a gateway the underlay still has to encrypt
+  VTEP-to-VTEP traffic (#709).
 - VNI isolation keeps segments apart; routing between them crosses the
   anycast gateway.
 

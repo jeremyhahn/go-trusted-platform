@@ -66,8 +66,8 @@ Examples:
 	cmd.Flags().StringVar(&pcrs, "pcrs", "", "comma-separated list of PCR indices to bind to")
 	cmd.Flags().StringVar(&authValue, "auth-value", "", "optional auth value for the sealed data")
 
-	_ = cmd.MarkFlagRequired("bundle-id")
-	_ = cmd.MarkFlagRequired("data")
+	cli.MarkFlagsRequired(cmd, "bundle-id")
+	cli.MarkFlagsRequired(cmd, "data")
 
 	return cmd
 }

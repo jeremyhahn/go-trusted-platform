@@ -65,7 +65,7 @@ Examples:
 	cmd.Flags().StringVar(&opts.Password, "password", "", "authorization password of the key")
 	cmd.Flags().StringVar(&opts.Nonce, "nonce", "", "verifier nonce as hex (at most 64 bytes)")
 
-	_ = cmd.MarkFlagRequired("handle")
+	cli.MarkFlagsRequired(cmd, "handle")
 
 	return cmd
 }

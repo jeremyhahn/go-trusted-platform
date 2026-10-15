@@ -63,10 +63,10 @@ Examples:
 	cmd.Flags().StringVar(&input, "input", "", "path to input PE/COFF file")
 	cmd.Flags().StringVar(&output, "output", "", "path to output signed file")
 
-	_ = cmd.MarkFlagRequired("key")
-	_ = cmd.MarkFlagRequired("cert")
-	_ = cmd.MarkFlagRequired("input")
-	_ = cmd.MarkFlagRequired("output")
+	cli.MarkFlagsRequired(cmd, "key")
+	cli.MarkFlagsRequired(cmd, "cert")
+	cli.MarkFlagsRequired(cmd, "input")
+	cli.MarkFlagsRequired(cmd, "output")
 
 	return cmd
 }

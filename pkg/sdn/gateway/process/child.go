@@ -45,6 +45,8 @@ type childOps struct {
 	environ []string
 	// taskStatuses returns /proc/self/task/<tid>/status for every thread.
 	taskStatuses func() (map[string]string, error)
+	// syscalls returns this architecture's seccomp syscall table.
+	syscalls func() (seccompTable, error)
 }
 
 // EnterHardened drops a child to its class and returns only in a process
@@ -56,8 +58,8 @@ type childOps struct {
 // binary from it: execve keeps the calling thread's credentials and discards
 // every other thread, and every thread the new runtime starts is cloned from
 // the hardened one. The second stage, recognised by hardenedParentEnv,
-// verifies every thread against the class and re-arms the parent-death
-// signal. A failure in either stage is fatal to the child.
+// installs the class's seccomp filter on every thread, verifies every thread
+// against the class and re-arms the parent-death signal. A failure in either stage is fatal to the child.
 func EnterHardened(def Definition, uid, gid uint32) error {
 	// The lock is never released: on success the image is replaced, and on
 	// failure the child exits, so no other goroutine may run on a
@@ -70,6 +72,7 @@ func EnterHardened(def Definition, uid, gid uint32) error {
 		args:         os.Args,
 		environ:      os.Environ(),
 		taskStatuses: readTaskStatuses,
+		syscalls:     nativeSeccompTable,
 	})
 }
 
@@ -91,13 +94,21 @@ func enterHardened(def Definition, uid, gid uint32, ops childOps) error {
 	return &ErrHardening{Step: "re-execute from the hardened thread", Cause: err}
 }
 
-// verifyHardened is the second stage: every thread must already hold the
-// class's credentials, then the parent-death signal is re-armed against the
-// supervisor the first stage saw.
+// verifyHardened is the second stage: the class's seccomp filter is
+// installed on every thread, every thread must then hold the class's
+// credentials and the filter, and the parent-death signal is re-armed
+// against the supervisor the first stage saw.
+//
+// The filter is installed here rather than before the re-exec because the
+// first stage still has to exec, which a parser's filter refuses, and
+// because the new image's threads are all present to be synchronised.
 func verifyHardened(def Definition, uid, gid uint32, marker string, ops childOps) error {
 	parent, err := strconv.Atoi(marker)
 	if err != nil {
 		return &ErrHardening{Step: "read the hardened-stage marker", Cause: err}
+	}
+	if err := confineSyscalls(def.Class, ops); err != nil {
+		return err
 	}
 	statuses, err := ops.taskStatuses()
 	if err != nil {
@@ -119,16 +130,38 @@ func verifyHardened(def Definition, uid, gid uint32, marker string, ops childOps
 	return rearmParentDeath(parent, ops.harden)
 }
 
+// confineSyscalls installs the class's seccomp filter on every thread. It
+// proves nothing by itself: the credential check that follows reads each
+// thread's Seccomp field, so a thread the kernel left unfiltered fails the
+// child.
+func confineSyscalls(class Class, ops childOps) error {
+	table, err := ops.syscalls()
+	if err != nil {
+		return &ErrHardening{Step: "build the seccomp filter", Cause: err}
+	}
+	filter, err := seccompFilter(table, class)
+	if err != nil {
+		return &ErrHardening{Step: "build the seccomp filter", Cause: err}
+	}
+	if err := ops.harden.seccomp(filter); err != nil {
+		return &ErrHardening{Step: "install the seccomp filter", Cause: err}
+	}
+	return nil
+}
+
 // checkTaskStatus compares one thread's /proc status with the class. The
 // capability sets that decide what a thread can do — permitted, effective
 // and bounding — must equal the class mask exactly. Ambient is not checked:
 // it only carries capabilities across an exec, and the permitted and
-// effective sets already show what the exec produced from it.
+// effective sets already show what the exec produced from it. Seccomp must
+// read 2, filter mode: the thread carries the filter confineSyscalls
+// installed.
 func checkTaskStatus(def Definition, uid, gid uint32, task, status string) error {
 	fields := parseStatus(status)
 	mask := fmt.Sprintf("%016x", capabilityMask(def.Capabilities))
 	want := map[string]string{
 		"NoNewPrivs": "1",
+		"Seccomp":    "2",
 		"CapPrm":     mask,
 		"CapEff":     mask,
 		"CapBnd":     mask,
@@ -139,7 +172,7 @@ func checkTaskStatus(def Definition, uid, gid uint32, task, status string) error
 		want["Gid"] = strings.Join([]string{g, g, g, g}, " ")
 		want["Groups"] = g
 	}
-	for _, field := range []string{"NoNewPrivs", "CapPrm", "CapEff", "CapBnd", "Uid", "Gid", "Groups"} {
+	for _, field := range []string{"NoNewPrivs", "Seccomp", "CapPrm", "CapEff", "CapBnd", "Uid", "Gid", "Groups"} {
 		expected, checked := want[field]
 		if !checked {
 			continue

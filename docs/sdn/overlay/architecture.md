@@ -323,8 +323,9 @@ open.
 
 platformd has no EVPN route source, so its controller admits no VTEP a
 route names (`ErrNoVTEPAdmission`): its peers are the static peers.
-gatewayd does not host the overlay (it refuses `ServiceOverlay`), so it
-runs no IPsec.
+gatewayd hosts the overlay's EVPN data plane (its `overlay` service, with
+attestation-verdict VTEP admission) but starts no IPsec, so its VTEP traffic
+is not carried by this service (#709).
 
 ### Status
 

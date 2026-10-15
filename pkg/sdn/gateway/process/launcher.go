@@ -18,8 +18,10 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -182,14 +184,23 @@ func (l *ExecLauncher) Launch(ctx context.Context, spec Spec) (Child, error) {
 	return &execChild{cmd: cmd}, nil
 }
 
+// parentDeathSignal is what the kernel sends a child when its supervisor
+// dies. It is SIGKILL, not SIGTERM: a child that is terminated runs its
+// stop path, and the datapath's stop path withdraws every flow, route and
+// rule it installed, so a supervisor crash would take the forwarding plane
+// down with it. A killed child leaves its kernel state where it is; the
+// successor supervisor's datapath adopts it through the cookie-scoped
+// reconcile, and BGP peers see a dropped session rather than a Cease, so
+// graceful restart keeps their routes. A planned stop still signals SIGTERM.
+const parentDeathSignal = syscall.SIGKILL
+
 // sysProcAttr builds the child's clone attributes: the ambient capability
-// set the class keeps, the cgroup leaf to be born into, and Pdeathsig so a
-// supervisor that dies never leaves orphaned children programming the
-// kernel.
+// set the class keeps, the cgroup leaf to be born into, and the parent-death
+// signal so a supervisor that dies never leaves orphaned children running.
 func sysProcAttr(spec Spec) *syscall.SysProcAttr {
 	attr := &syscall.SysProcAttr{
 		Setpgid:   true,
-		Pdeathsig: syscall.SIGTERM,
+		Pdeathsig: parentDeathSignal,
 	}
 	if len(spec.Definition.Capabilities) > 0 {
 		attr.AmbientCaps = append([]uintptr(nil), spec.Definition.Capabilities...)
@@ -222,6 +233,7 @@ type hardenOps interface {
 	setresgid(rgid, egid, sgid int) error
 	setresuid(ruid, euid, suid int) error
 	capset(header *unix.CapUserHeader, data *[2]unix.CapUserData) error
+	seccomp(filter []unix.SockFilter) error
 	getppid() int
 }
 
@@ -248,6 +260,28 @@ func (kernelHardenOps) setresuid(ruid, euid, suid int) error {
 
 func (kernelHardenOps) capset(header *unix.CapUserHeader, data *[2]unix.CapUserData) error {
 	return unix.Capset(header, &data[0])
+}
+
+// seccomp installs filter on every thread of the process at once
+// (SECCOMP_FILTER_FLAG_TSYNC). A filter on the calling thread alone would
+// leave the threads the Go runtime already started unconfined, the #657
+// problem again. On a synchronisation failure the kernel returns the id of
+// the thread it could not move and installs the filter on none.
+func (kernelHardenOps) seccomp(filter []unix.SockFilter) error {
+	if len(filter) == 0 || len(filter) > unix.BPF_MAXINSNS {
+		return unix.EINVAL
+	}
+	program := unix.SockFprog{Len: uint16(len(filter)), Filter: &filter[0]}
+	thread, _, errno := unix.Syscall(unix.SYS_SECCOMP, unix.SECCOMP_SET_MODE_FILTER,
+		unix.SECCOMP_FILTER_FLAG_TSYNC, uintptr(unsafe.Pointer(&program)))
+	runtime.KeepAlive(filter)
+	if errno != 0 {
+		return errno
+	}
+	if thread != 0 {
+		return &ErrSeccompThreadNotSynced{Thread: int(thread)}
+	}
+	return nil
 }
 
 func (kernelHardenOps) getppid() int { return os.Getppid() }
@@ -341,7 +375,7 @@ func dropCredentials(uid, gid uint32, ops hardenOps) error {
 // rearmParentDeath re-arms the parent-death signal the privilege drop cleared
 // and refuses to continue if the supervisor died while it was disarmed.
 func rearmParentDeath(parent int, ops hardenOps) error {
-	if err := ops.prctl(unix.PR_SET_PDEATHSIG, uintptr(syscall.SIGTERM), 0, 0, 0); err != nil {
+	if err := ops.prctl(unix.PR_SET_PDEATHSIG, uintptr(parentDeathSignal), 0, 0, 0); err != nil {
 		return &ErrHardening{Step: "re-arm the parent-death signal", Cause: err}
 	}
 	// Between the credential change that disarmed the signal and the re-arm

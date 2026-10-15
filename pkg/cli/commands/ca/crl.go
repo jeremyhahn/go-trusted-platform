@@ -146,7 +146,7 @@ Examples:
 	}
 
 	cmd.Flags().StringVar(&output, "output", "", "Output file path for CRL export (required)")
-	_ = cmd.MarkFlagRequired("output")
+	cli.MarkFlagsRequired(cmd, "output")
 
 	return cmd
 }

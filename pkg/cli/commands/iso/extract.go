@@ -69,7 +69,7 @@ Examples:
 	cmd.Flags().BoolVar(&flags.verbose, "verbose", false, "Enable verbose output")
 
 	// Mark required flags
-	_ = cmd.MarkFlagRequired("iso")
+	cli.MarkFlagsRequired(cmd, "iso")
 
 	return cmd
 }

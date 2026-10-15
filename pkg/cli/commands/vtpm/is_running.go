@@ -45,7 +45,7 @@ Examples:
 	}
 
 	cmd.Flags().StringVar(&bundleID, "bundle-id", "", "bundle ID (required)")
-	_ = cmd.MarkFlagRequired("bundle-id")
+	cli.MarkFlagsRequired(cmd, "bundle-id")
 
 	return cmd
 }

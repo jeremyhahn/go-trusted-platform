@@ -61,10 +61,12 @@ service means adding a builder (and a `backedService` adapter if the backend's
 lifecycle does not already fit) — never a handler type of its own, and never a
 handler that reports active without a backend.
 
-The builder ordering is `enabledServices()` in `types.go`: firewall, nat,
-load-balancer, hostfw, tunnels, transit, then the refused sections. Tunnels
-start before transit so BGP sessions have their interfaces; a refused section
-fails startup before any datapath service has to be rolled back for it.
+The builder ordering is `EnabledServices()` in `types.go`: firewall, nat,
+load-balancer, nat64, hostfw, tunnels, transit, overlay, the refused sections
+(edge, dhcp, pxe), then management-vpn. Tunnels start before transit so BGP
+sessions have their interfaces. A section that fails to start, refused or not,
+fails startup: the services already started are stopped again
+(`rollbackStartedServices`) and the base pipeline is removed.
 
 Owner design decision (2026-09-26): the EVPN `overlay` service is required, not
 optional. Gatewayd now builds it from `ServiceOverlay` when the host runtime
@@ -187,7 +189,6 @@ new code uses service sections.
 |---|---|
 | `ErrPipelineBridgeMissing` | the runtime names no bridge |
 | `ErrPipelineOwned{Bridge, Owner}` | another gateway's pipeline holds the bridge; two owners would replace each other's table-0 flow silently |
-| `ErrPipelineTerminalUnavailable{Terminal, Reason}` | `overlay` asked for before the overlay service owns egress (the overlay is required by owner design decision 2026-09-26; #709) |
 | `ErrPipelineTerminalUnknown{Terminal}` | not `normal` or `overlay` |
 | `ErrPipelineInstallFailed{Bridge, Step, Cause}` | a failed install step; flows and `fail_mode` are rolled back |
 | `ErrPipelineRemoveFailed{Bridge, Step, Cause}` | a failed removal; the record is kept so a retry can finish |
@@ -854,7 +855,7 @@ together with stateless NAT failover. Conntrack/NAT state sync is #710.
 | `Config`, `Settings` | the supervisor's wiring, and the `process:` YAML section that builds it |
 | `Launcher`, `Spec`, `Child`, `ExecLauncher` | how a child is started; tests substitute a launcher whose children are in-process IPC servers |
 | `CgroupManager` | one cgroup v2 leaf per process; `+memory`/`+cpu` enabled in the `cgroup.subtree_control` of every `cgroup-parent` directory, then `memory.max` and `cpu.max` written before the child exists |
-| `EnterHardened` | the child-side privilege drop: harden one thread, re-execute from it, verify every thread |
+| `EnterHardened` | the child-side privilege drop: harden one thread, re-execute from it, install the class's seccomp filter on every thread, verify every thread |
 
 **The class table is not configuration.** `definitions` in `class.go` is the
 one place a service's class, capabilities and limits are decided. An operator
@@ -906,6 +907,26 @@ steps on one locked OS thread, in the order the kernel requires:
    (`ErrSupervisorExited`) rather than becoming the orphan the signal exists
    to prevent.
 
+**The parent-death signal is `SIGKILL` (`parentDeathSignal`).** A child
+that is sent `SIGTERM` runs its stop path, and the datapath's stop path
+withdraws every flow, route and rule it installed: a supervisor crash would
+take the forwarding plane down with it, which is the opposite of the
+invariant that the datapath survives a control-process restart. A killed
+child runs nothing, so its kernel state stays where it is. The successor
+supervisor's datapath child adopts it through the cookie-scoped reconcile
+(stale generations swept, nothing flushed), and a BGP peer sees the session
+drop without a Cease NOTIFICATION, so graceful restart keeps its routes for
+the restart time. A planned stop — `StopService`, `Shutdown`, an OpenRC
+`stop` — still sends `SIGTERM` and gets the orderly withdrawal. The signal is
+asserted at clone time and at the re-arm
+(`TestExecLauncher_PassesTheClassPrivilegeAndTheChildArguments`,
+`TestHarden_TheKernelClassStaysRootButKeepsOnlyItsOwnCapabilities`).
+`TestGatewaydSupervisorDeathLeavesTheDatapath` (`make integration-test-proxy`)
+proves it on a real kernel and bridge: it kills the supervisor, waits for
+every child to die with it, finds the bridge's flows, groups and generations
+untouched, then launches a successor and waits for its datapath to adopt
+them under a generation of its own.
+
 A failure at any step is fatal to the child. The syscalls go through the
 unexported `hardenOps` seam so the ordering is a unit test rather than a
 hope — the drop is irreversible, so a test that made the real calls would
@@ -926,14 +947,40 @@ effective set follows. `no_new_privs` survives the exec, so a setuid or
 file-capability image cannot raise anything.
 
 The second stage is recognised by `GATEWAYD_HARDENED_PARENT`, which carries
-the supervisor's pid across the exec. The marker grants nothing: the second
-stage reads `/proc/self/task/*/status` and refuses unless **every** thread has
-`NoNewPrivs` set and `CapPrm`, `CapEff` and `CapBnd` equal to the class mask —
-and, for an unprivileged class, all four uids and gids equal to the service
-account and no supplementary group but its own (`ErrPrivilegeNotHeld`, naming
-the thread and the field). It then re-arms the parent-death signal against the
-pid the first stage saw, so a supervisor that died across the exec is
-`ErrSupervisorExited`, not an orphan.
+the supervisor's pid across the exec. The marker grants nothing. The second
+stage first installs the class's seccomp filter (below), then reads
+`/proc/self/task/*/status` and refuses unless **every** thread has
+`NoNewPrivs` set, `Seccomp` at 2 (filter mode), and `CapPrm`, `CapEff` and
+`CapBnd` equal to the class mask — and, for an unprivileged class, all four
+uids and gids equal to the service account and no supplementary group but its
+own (`ErrPrivilegeNotHeld`, naming the thread and the field). It then re-arms
+the parent-death signal against the pid the first stage saw, so a supervisor
+that died across the exec is `ErrSupervisorExited`, not an orphan.
+
+**Seccomp, where the class allows (`seccomp.go`).** Capabilities bound what a
+child may do with privilege; much kernel surface needs none (a user namespace,
+`io_uring`, `bpf` with unprivileged BPF enabled). Every child therefore runs a
+classic-BPF seccomp filter, installed with `SECCOMP_FILTER_FLAG_TSYNC` so the
+runtime's threads are filtered together — a filter on the calling thread alone
+would repeat #657. The filter is a deny list, not an allow list: it removes
+the kernel interfaces no gateway service uses, so a library update that makes
+a new, harmless call cannot take a service down.
+
+| Verdict | Calls |
+|---|---|
+| process killed | any call from a foreign architecture (`seccomp_data.arch` is not the native one) |
+| `EPERM`, every class | module load and `kexec`, `reboot`, swap, `acct`, `quotactl`, `syslog`; `mount` and the new mount API, `pivot_root`, `chroot`; `unshare`, `setns`; `ptrace`, `process_vm_readv`/`writev`, `kcmp`, `pidfd_getfd`; `bpf`, `perf_event_open`, `userfaultfd`, the keyring calls, `io_uring_*`, `name_to_handle_at`/`open_by_handle_at`, `fanotify_init`; setting the clock, hostname or domain name; on x86-64 also `iopl`, `ioperm`, `modify_ldt`, `uselib` and every x32 call |
+| `EPERM`, parser class only | `execve`, `execveat` — the kernel class keeps them because `nat64` runs `jool` |
+| `EPERM` | `clone` with any `CLONE_NEW*` namespace flag |
+| `ENOSYS` | `clone3`, whose flags sit behind a pointer the filter cannot read; Go and libc fall back to `clone`, whose flags it can |
+
+A denied call fails with `EPERM` rather than killing the child, so a library
+probing for a feature degrades instead of crashing the service. The tables
+exist for amd64 and arm64, the architectures gatewayd ships on; on any other
+architecture the child refuses to start (`ErrSeccompUnsupportedArch`) rather
+than run unfiltered. The program's logic is unit-tested in the `x/net/bpf`
+VM; the filter on a real kernel is exercised by every supervised child in
+`make integration-test-proxy`.
 
 The re-exec was chosen over the alternatives #657 listed:
 `syscall.AllThreadsSyscall` returns `ENOTSUP` under cgo and gatewayd is built
@@ -1281,6 +1328,16 @@ its limit from outside. It checks the child sits in its own leaf at the class
 - only that child comes back, with a new PID;
 - the relaunch rewrites the class limit (`Prepare` runs on every launch);
 - the proxy loses no request.
+
+`TestGatewaydSupervisorDeathLeavesTheDatapath` kills the supervisor instead
+of a child, then asserts the following:
+
+- every child dies with it, through the parent-death signal;
+- the bridge's flows, groups and generations are exactly what the datapath
+  child left, because a killed child runs no stop path;
+- a successor supervisor started on the same configuration brings all three
+  children back, and its datapath adopts the bridge under a generation of its
+  own with nothing flushed.
 
 The devcontainer harness delegates `+memory +cpu` at the container's cgroup
 root before the suite runs (`prepare_gatewayd_supervision`). This works the
@@ -1994,6 +2051,15 @@ nothing is left half-running. The service is healthy only while the handler
 runs and carries every configured VNI: a running handler with no VNI forwards
 nothing, and used to report healthy anyway.
 
+The section sets no `AnycastGatewayIP`, `AnycastGatewayMAC` or `L3VNI` on the
+handler, and no EVPN router MAC: gatewayd's overlay bridges each L2VNI and
+does not route between them. There is no symmetric IRB, no local prefix is
+originated as a Type-5 route, and a received Type-5 route is ignored (it needs
+the L3VNI). Nor does gatewayd run the overlay's IPsec: the IKEv2 transport
+([architecture](architecture.md#the-overlays-ipsec-transport-packaging-709))
+is platformd's `sdn.overlay.ipsec` alone, so VXLAN to or from a gatewayd VTEP
+is only as confidential as the underlay (#709).
+
 #### VTEP admission
 
 `gateway.VTEPAdmitter` decides whether a remote VTEP may hold decap state. In
@@ -2205,7 +2271,8 @@ was recorded reads that failure, not an earlier pass, on its first admission.
 - **Underlay source addresses.** Decap authorisation matches the outer source
   IP. On an underlay without source validation, a host can send VXLAN under an
   admitted VTEP's address. The control for that is the authenticated underlay
-  (the IPsec underlay), not admission.
+  (the overlay IPsec, which platformd runs and gatewayd does not yet), not
+  admission.
 
 ## 6. Persistence
 

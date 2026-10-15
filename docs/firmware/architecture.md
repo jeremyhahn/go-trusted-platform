@@ -284,9 +284,6 @@ what it is.
 - **It does not decide when to enforce.** `secure-boot.enforce` is operator
   policy; this feature only refuses to act on it when acting would be unsafe.
 - **It does not offer a remote enrollment RPC.** By design — see §3.
-- **It does not implement RFC 3161 timestamping.** `SignerOptions.TimestampURL`
-  is accepted and `addTimestamp` returns `ErrRFC3161NotImplemented`, which the
-  signer logs as a non-fatal warning and proceeds without a timestamp. **PLANNED.**
 - **It does not sign modules anywhere in the production path.** `pkg/modulesign`
   is complete and proven against OpenSSL and a real FIPS kernel, but the only
   callers today are the integration tests; in-tree modules are signed by the
@@ -311,7 +308,7 @@ the code, the code is right.
 | `README.md`, `configuration.md`: a top-level `firmware:` config section | Does not exist. The legacy files already flag this as PROPOSED in places; treat the whole section as PLANNED. |
 | `secure-boot.md`: `uefi.ReadVariable(...)` / `uefi.WriteVariable(...)` | Those functions are in **`pkg/uefi/firmware`**, not `pkg/uefi`, and their signatures differ: `firmware.ReadVariable(name, guid) ([]byte, uint32, error)`, `firmware.WriteVariable(name, guid, attrs, data) error`. |
 | `secure-boot.md`, `uki.md`: `authenticode.NewSigner(&authenticode.SignerOptions{...})` | The constructor takes a context first: `authenticode.NewSigner(ctx, opts)`. |
-| `secure-boot.md`: `signer.SignFile(ukiPath)` | `SignFile(inputPath, outputPath string)` — two arguments. The installer signs to `<uki>.signed` and renames. |
+| `secure-boot.md`: `signer.SignFile(ukiPath)` | `SignFile(inputPath, outputPath string)` — two arguments; signing in place is `SignFile(ukiPath, ukiPath)`. The output is written to a temporary file beside it and renamed over it, so a failed signing leaves the existing file untouched. The installer signs to `<uki>.signed` and renames. |
 | `uki.md`: "Uses kernel's built-in EFI stub (CONFIG_EFI_STUB)"; "When `Stub` is nil, the builder uses the kernel itself as the base PE" | The opposite. `builder.loadStub` reads `uki.DefaultStubPath` (`/usr/lib/systemd/boot/efi/linuxx64.efi.stub`) when `UKI.Stub` is nil, precisely because the kernel's own EFI stub does not read PE sections. The kernel goes into the `.linux` section. (One log line in `builder.go` still says "Kernel loaded as base PE"; the log string is stale, the behaviour is not.) |
 | `uki.md`: per-architecture EFI stub paths for aarch64/arm/riscv64 | `SetArchitecture` records the architecture and nothing else. Both builders always read `DefaultStubPath`. Non-x86_64 stub selection is **PLANNED**. |
 | `uki.md`: `logging.NewLogger(logging.INFO)` | `logging.NewLogger(level slog.Level, ...)`. |
