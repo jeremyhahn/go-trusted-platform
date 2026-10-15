@@ -1339,24 +1339,6 @@ func TestInvitationDAO_GetPendingByTenant_InvalidJSON_Skipped(t *testing.T) {
 	assert.Len(t, invitations, 1)
 }
 
-// =============================================================================
-// Config edge cases: ToQuicBaaSConfig JoinAddresses
-// =============================================================================
-
-func TestConfig_ToQuicBaaSConfig_WithJoinAddresses(t *testing.T) {
-	cfg := TestConfig(t)
-	cfg.JoinAddresses = []string{"peer1:63000", "peer2:63000"}
-	dbCfg := cfg.ToQuicBaaSConfig()
-	assert.Equal(t, []string{"peer1:63000", "peer2:63000"}, dbCfg.Raft.JoinAddresses)
-}
-
-func TestConfig_ToQuicBaaSConfig_WithoutJoinAddresses(t *testing.T) {
-	cfg := TestConfig(t)
-	cfg.JoinAddresses = nil
-	dbCfg := cfg.ToQuicBaaSConfig()
-	assert.Nil(t, dbCfg.Raft.JoinAddresses)
-}
-
 func TestConfig_ToQuicBaaSConfig_EmptyStorageBackend(t *testing.T) {
 	cfg := TestConfig(t)
 	cfg.StorageBackend = ""

@@ -96,13 +96,46 @@ func parseNodeAddress(value string) (netip.Addr, bool) {
 	return addr, err == nil
 }
 
+// nodeIDevID is the device a node's merged config names in its IDevID
+// certificate: the TCG product model and serial.
+type nodeIDevID struct {
+	Model  string `yaml:"model"`
+	Serial string `yaml:"serial"`
+}
+
+// mergedIDevID reads tpm.idevid's model and serial from a node's merged
+// config.
+func mergedIDevID(merged string) (nodeIDevID, error) {
+	var doc struct {
+		TPM struct {
+			IDevID nodeIDevID `yaml:"idevid"`
+		} `yaml:"tpm"`
+	}
+	if err := yaml.Unmarshal([]byte(merged), &doc); err != nil {
+		return nodeIDevID{}, err
+	}
+	return doc.TPM.IDevID, nil
+}
+
+// keepsConfigSerial reports whether a node's IDevID certificate carries the
+// serial its merged config sets. A diskless node's does not: every node
+// booting one media set reads the same config, so platformd names the node
+// after its TPM's EK and puts that name in place of tpm.idevid.serial on
+// every boot (applyDisklessNodeIdentity, docs/tpm/architecture.md). A
+// diskless-nbd node boots its own root and keeps its config's serial.
+func keepsConfigSerial(n *NodeConfig) bool {
+	return n.EffectiveBootModel() != BootModelDiskless
+}
+
 // checkNodeConfigs resolves every node and refuses the configs the
 // installer would take but the network cannot: a diskless node asking for
-// the image target, and an address two nodes both claim. A node that does
+// the image target, an address two nodes both claim, and an IDevID model and
+// serial two nodes that keep their config's serial both claim. A node that does
 // not resolve for any other reason is left to per-MAC staging's documented
 // fall-back, as before.
 func (o *Orchestrator) checkNodeConfigs() error {
 	owners := map[netip.Addr]nodeAddress{}
+	serialOwners := map[nodeIDevID]string{}
 	for _, n := range o.config.Nodes {
 		merged, err := o.resolveNodeConfig(n.Hostname, n.Role, nil)
 		var imageErr ErrDisklessImageTarget
@@ -129,6 +162,26 @@ func (o *Orchestrator) checkNodeConfigs() error {
 			}
 			owners[a.addr] = a
 		}
+
+		if !keepsConfigSerial(&n) {
+			continue
+		}
+		idevid, err := mergedIDevID(merged)
+		if err != nil {
+			return ErrNodeConfigResolveFailed{Hostname: n.Hostname, Cause: err}
+		}
+		if idevid.Serial == "" {
+			continue
+		}
+		if other, taken := serialOwners[idevid]; taken {
+			return ErrDuplicateIDevIDSerial{
+				Model:         idevid.Model,
+				Serial:        idevid.Serial,
+				Hostname:      n.Hostname,
+				OtherHostname: other,
+			}
+		}
+		serialOwners[idevid] = n.Hostname
 	}
 	return nil
 }

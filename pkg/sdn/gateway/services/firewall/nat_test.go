@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
@@ -161,7 +162,10 @@ func TestNAT_Start(t *testing.T) {
 		t.Errorf("unexpected gate rule: %+v", gate)
 	}
 
-	wantCookie := fmt.Sprintf("0x%x", CookieNAT)
+	wantCookie := rules[0].Cookie
+	if c := cookieOf(wantCookie); c&CookieMask != CookieNAT || c == CookieNAT {
+		t.Fatalf("cookie %q is not the NAT owner with a generation", wantCookie)
+	}
 	for i, rule := range rules {
 		if rule.Cookie != wantCookie {
 			t.Errorf("rule %d cookie = %q, want %q", i, rule.Cookie, wantCookie)
@@ -209,6 +213,212 @@ func TestNAT_StartErrors(t *testing.T) {
 			t.Errorf("expected install OpError, got %v", err)
 		}
 	})
+
+	t.Run("sweep failure", func(t *testing.T) {
+		deps, _, ovsClient, _ := testDeps()
+		ovsClient.statsErr = errors.New("dump-flows failed")
+		nat, err := NewNAT(deps, testNATConfig())
+		if err != nil {
+			t.Fatalf("new nat: %v", err)
+		}
+		err = nat.Start(context.Background())
+		var opErr *OpError
+		if !errors.As(err, &opErr) || opErr.Op != "sweep" {
+			t.Fatalf("expected sweep OpError, got %v", err)
+		}
+		if !errors.Is(err, ovsClient.statsErr) {
+			t.Errorf("the sweep error must wrap the cause, got %v", err)
+		}
+	})
+}
+
+// A failed Start leaves the bridge as Stop would (#557): no NAT gate, no
+// NAT flow of any generation, the previous process's the failed sweep left
+// included, and no NAT conntrack zone. The firewall's flows stay, and the
+// service can be started again.
+func TestNAT_StartRollsBack(t *testing.T) {
+	cases := []struct {
+		name   string
+		op     string
+		inject func(cause error, controller *fakeController, ovsClient *fakeOVS)
+	}{
+		{
+			name: "sweep stats query fails",
+			op:   "sweep",
+			inject: func(cause error, _ *fakeController, ovsClient *fakeOVS) {
+				ovsClient.statsErr = cause
+			},
+		},
+		{
+			name: "sweep delete fails",
+			op:   "sweep",
+			inject: func(cause error, _ *fakeController, ovsClient *fakeOVS) {
+				ovsClient.sweepErr = cause
+			},
+		},
+		{
+			name: "snat install fails after the gate",
+			op:   "install",
+			inject: func(cause error, controller *fakeController, _ *fakeOVS) {
+				controller.installErr = cause
+				controller.failAt = 2
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			deps, controller, ovsClient, _ := testDeps()
+			ctx := context.Background()
+			ovsClient.seed(staleFlow(CookieNAT))
+			firewallFlow := staleFlow(CookieFirewall)
+			firewallFlow.Match = "in_port=8"
+			ovsClient.seed(firewallFlow)
+			cause := errors.New("injected fault")
+			tc.inject(cause, controller, ovsClient)
+
+			nat, err := NewNAT(deps, testNATConfig())
+			if err != nil {
+				t.Fatalf("new nat: %v", err)
+			}
+			err = nat.Start(ctx)
+			var opErr *OpError
+			if !errors.As(err, &opErr) || opErr.Op != tc.op {
+				t.Fatalf("expected %s OpError, got %v", tc.op, err)
+			}
+			if !errors.Is(err, cause) {
+				t.Errorf("the error must wrap the cause, got %v", err)
+			}
+			if nat.Active() {
+				t.Error("nat must not be active after a failed start")
+			}
+			if left := ovsClient.flowsUnder(CookieNAT); len(left) != 0 {
+				t.Errorf("a failed start left %d NAT flows live: %+v", len(left), left)
+			}
+			if zones := deps.Allocator.Snapshot(); len(zones) != 0 {
+				t.Errorf("a failed start kept the NAT conntrack zone: %v", zones)
+			}
+			if fw := ovsClient.flowsUnder(CookieFirewall); len(fw) != 1 || fw[0] != firewallFlow {
+				t.Errorf("the rollback touched the firewall's flow: %+v", fw)
+			}
+
+			clearFaults(controller, ovsClient)
+			if err := nat.Start(ctx); err != nil {
+				t.Fatalf("start after a rolled-back start: %v", err)
+			}
+			if !nat.Active() || len(nat.snatRules) == 0 {
+				t.Errorf("the second start must bring NAT and SNAT up: active=%v snat=%d", nat.Active(), len(nat.snatRules))
+			}
+		})
+	}
+}
+
+// A rollback that fails is joined to the Start error, never dropped, and
+// the gate still goes first: with the owner-wide delete failing, no packet
+// enters the NAT pipeline left behind.
+func TestNAT_StartRollbackError(t *testing.T) {
+	deps, controller, ovsClient, _ := testDeps()
+	ctx := context.Background()
+	ovsClient.statsErr = errors.New("dump-flows failed")
+	ovsClient.cookieErr = errors.New("del-flows failed")
+
+	nat, err := NewNAT(deps, testNATConfig())
+	if err != nil {
+		t.Fatalf("new nat: %v", err)
+	}
+	err = nat.Start(ctx)
+	if !errors.Is(err, ovsClient.statsErr) || !errors.Is(err, ovsClient.cookieErr) {
+		t.Fatalf("both the sweep and the rollback cause must be reachable, got %v", err)
+	}
+	var joined interface{ Unwrap() []error }
+	if !errors.As(err, &joined) || len(joined.Unwrap()) != 2 {
+		t.Fatalf("expected the start and rollback errors joined, got %v", err)
+	}
+	var startErr, rollbackErr *OpError
+	if parts := joined.Unwrap(); !errors.As(parts[0], &startErr) || !errors.As(parts[1], &rollbackErr) {
+		t.Fatalf("both joined errors must be OpErrors, got %v", err)
+	}
+	if startErr.Op != "sweep" || rollbackErr.Op != "rollback" {
+		t.Errorf("ops = %q, %q, want sweep, rollback", startErr.Op, rollbackErr.Op)
+	}
+
+	for _, flow := range ovsClient.flowsUnder(CookieNAT) {
+		if flow.Table == gateTable && flow.Priority == natGatePriority {
+			t.Errorf("the gate outlived a failed rollback: %+v", flow)
+		}
+	}
+	if zones := deps.Allocator.Snapshot(); len(zones) != 0 {
+		t.Errorf("the zone must be released even when a delete fails: %v", zones)
+	}
+	if nat.Active() {
+		t.Error("nat must not be active after a failed start")
+	}
+
+	clearFaults(controller, ovsClient)
+	if err := nat.Start(ctx); err != nil {
+		t.Fatalf("start after a failed rollback: %v", err)
+	}
+}
+
+// A NAT process that exits without Stop leaves its flows on the bridge
+// (#557). The next Start installs the current set under a fresh
+// generation, then sweeps the port-forward the new process does not have,
+// and leaves the firewall's flows alone.
+func TestNAT_StartSweepsAPreviousProcessFlows(t *testing.T) {
+	deps, _, ovsClient, _ := testDeps()
+	ctx := context.Background()
+
+	firewall, err := New(deps)
+	if err != nil {
+		t.Fatalf("new firewall: %v", err)
+	}
+	if err := firewall.Start(ctx); err != nil {
+		t.Fatalf("firewall start: %v", err)
+	}
+	firewallFlows := len(ovsClient.flowsUnder(CookieFirewall))
+
+	previous, err := NewNAT(deps, testNATConfig())
+	if err != nil {
+		t.Fatalf("new nat: %v", err)
+	}
+	if err := previous.Start(ctx); err != nil {
+		t.Fatalf("previous start: %v", err)
+	}
+	if err := previous.AddDNAT(ctx, "tcp", mustAddrPort(t, "203.0.113.10:443"), mustAddrPort(t, "10.0.100.5:8443")); err != nil {
+		t.Fatalf("add dnat: %v", err)
+	}
+	previousFlows := len(ovsClient.flowsUnder(CookieNAT))
+
+	nat, err := NewNAT(deps, testNATConfig())
+	if err != nil {
+		t.Fatalf("new nat: %v", err)
+	}
+	if err := nat.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	// Gate, 4 table-25 scaffolding rules, the IPv6 passthrough and 2 SNAT
+	// rules: the set both processes share, now under the new generation.
+	current := ovsClient.flowsUnder(CookieNAT)
+	if len(current) != 8 {
+		t.Errorf("bridge holds %d NAT flows, want 8 (the port-forward swept)", len(current))
+	}
+	if len(current) >= previousFlows {
+		t.Errorf("the port-forward survived: %d flows now, %d before", len(current), previousFlows)
+	}
+	for _, flow := range current {
+		if flow.Cookie != nat.cookie {
+			t.Errorf("flow %+v kept cookie %s, want the current generation %s", flow, flow.Cookie, nat.cookie)
+		}
+		if strings.Contains(flow.Actions, "nat(dst=") {
+			t.Errorf("the previous process's port-forward survived: %+v", flow)
+		}
+	}
+	if nat.cookie == previous.cookie {
+		t.Fatalf("the restart reused generation %s", nat.cookie)
+	}
+	if got := len(ovsClient.flowsUnder(CookieFirewall)); got != firewallFlows {
+		t.Errorf("the NAT sweep touched the firewall: %d flows, want %d", got, firewallFlows)
+	}
 }
 
 func TestNAT_Stop(t *testing.T) {

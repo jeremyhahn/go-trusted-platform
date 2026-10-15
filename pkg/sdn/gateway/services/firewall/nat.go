@@ -15,6 +15,7 @@ package firewall
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -446,7 +447,15 @@ func (n *NAT) deleteStrict(ctx context.Context, rules []zoneflows.FlowRule) erro
 // Start allocates the NAT conntrack zone, installs the base pipeline
 // (gate + table 25 scaffolding), and enables SNAT when InternalCIDR is
 // configured.
-func (n *NAT) Start(ctx context.Context) error {
+//
+// Start also reconciles against the flows a process that exited without
+// Stop left behind (#557): every flow it installs carries a fresh
+// generation under the NAT owner, and once SNAT and the statics are in
+// place every NAT flow of an older generation is swept.
+//
+// A Start that fails leaves the bridge as Stop would: no NAT gate, no NAT
+// flow of any generation and no NAT conntrack zone.
+func (n *NAT) Start(ctx context.Context) (err error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
@@ -454,11 +463,30 @@ func (n *NAT) Start(ctx context.Context) error {
 		return ErrAlreadyStarted
 	}
 
+	cookie, err := ovs.NewGenerationCookie(CookieNAT)
+	if err != nil {
+		return &OpError{Op: "generation", Err: err}
+	}
+	n.cookie = fmt.Sprintf("0x%x", cookie)
+
 	ctZone, err := n.deps.Allocator.Allocate(ctx, AllocatorOwnerNAT, natZoneKey)
 	if err != nil {
 		return &OpError{Op: "allocate", Err: err}
 	}
 	n.ctZone = ctZone
+
+	// Start is transactional. The gateway registers the service only when
+	// Start succeeds, so a failed Start has no Stop to clean up after it:
+	// whatever it programmed or allocated is taken back here instead of
+	// being left live on the bridge.
+	defer func() {
+		if err == nil {
+			return
+		}
+		if rollbackErr := n.rollbackStartLocked(ctx); rollbackErr != nil {
+			err = errors.Join(err, rollbackErr)
+		}
+	}()
 
 	if err := n.deps.Controller.InstallFlows(n.cfg.Bridge, n.baseRules()); err != nil {
 		return &OpError{Op: "install", Err: err}
@@ -473,6 +501,9 @@ func (n *NAT) Start(ctx context.Context) error {
 	if err := n.installStaticsLocked(ctx); err != nil {
 		return err
 	}
+	if err := ovs.SweepStaleGenerations(ctx, n.deps.OVS, n.cfg.Bridge, cookie); err != nil {
+		return &OpError{Op: "sweep", Err: err}
+	}
 
 	n.deps.Logger.Info("nat service started",
 		slog.String("bridge", n.cfg.Bridge),
@@ -482,6 +513,35 @@ func (n *NAT) Start(ctx context.Context) error {
 		slog.Bool("snat", len(n.snatRules) > 0),
 	)
 
+	return nil
+}
+
+// rollbackStartLocked takes back what a failed Start did and leaves the
+// bridge as Stop would: the gate first, so no packet enters a half-removed
+// pipeline, then every NAT flow of any generation (a previous process's
+// included, which the failed sweep may have left), then the conntrack
+// zone. Every step runs even when an earlier one fails.
+func (n *NAT) rollbackStartLocked(ctx context.Context) error {
+	var errs []error
+	if err := n.deleteStrict(ctx, n.baseRules()[:1]); err != nil {
+		errs = append(errs, err)
+	}
+	if err := n.deps.OVS.DeleteFlowsByCookie(ctx, n.cfg.Bridge, CookieNAT, CookieMask); err != nil {
+		errs = append(errs, err)
+	}
+	if err := n.deps.Allocator.Release(ctx, AllocatorOwnerNAT, natZoneKey); err != nil {
+		errs = append(errs, err)
+	}
+	n.active = false
+	n.ctZone = 0
+	n.snatRules = nil
+	n.snatPrefix = netip.Prefix{}
+	n.staticRules = nil
+	n.uplinkOFPort = 0
+	n.uplinkPorts = make(map[string]int32)
+	if len(errs) > 0 {
+		return &OpError{Op: "rollback", Err: errors.Join(errs...)}
+	}
 	return nil
 }
 

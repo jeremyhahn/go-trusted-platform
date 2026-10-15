@@ -44,7 +44,7 @@ prerequisites (SLB9670 TPM HAT, serial console) are those of
 | `install-target`, `boot.firmware` | unset (ISO install, UEFI) | `image`, `uboot` | Phase A runs on the build host; U-Boot carries the Secure Boot keys |
 | `hardware-manufacturer` / `hardware-model` | unset | `Raspberry Pi` / `Raspberry Pi 4 Model B` | the `pkg/quirks` console line |
 | `seal-pcrs` | `[7, 9]` | `[0, 4, 7, 9]` | U-Boot's TCG2 measures 0, 4, 7; the EFI stub measures 9 |
-| `tpm.idevid` model / serial | `SuperMicro X10` / `sm-compute-01` | `Raspberry Pi 4 Model B` / `rpi4-compute-01` | override the serial with the Pi's `/proc/cpuinfo` serial |
+| `tpm.idevid` model / serial | `SuperMicro X10` / `sm-compute-01` | `Raspberry Pi 4 Model B` / `rpi4-compute-01` | an SD-booted or `diskless-nbd` Pi overrides the serial with its `/proc/cpuinfo` serial, and bootstrap refuses two such Pis on one serial; a `diskless` Pi keeps it, since platformd replaces it with the Pi's EK-derived name at every boot |
 | `os.packages` | no VM packages | adds `qemu-system-aarch64`, `qemu-img`, `swtpm`, `swtpm-tools`, `aavmf` after `lsblk` | the aarch64 compute VMs ([below](#compute-vms)) |
 
 Everything else — `network.role: compute`, `ip-forward: false`, the

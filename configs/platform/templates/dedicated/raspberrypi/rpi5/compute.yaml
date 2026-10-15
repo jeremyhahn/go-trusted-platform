@@ -468,9 +468,11 @@ bmc:
   protocol: ipmi
 
 # QuicBaaS runs in STANDALONE EMBEDDED MODE (non-HA reference architecture).
-# storage-backend=file with node-id=1 and no join-addresses means Raft
-# consensus is NOT engaged. For HA, switch to storage-backend=raft and
-# populate join-addresses (see configs/platform/templates/high-availability/).
+# No join-addresses means Raft consensus is NOT engaged. For HA, use
+# storage-backend=pebble (there is no "raft" backend), list every member as
+# "id=host:port" in join-addresses (this node included), and set the same
+# deployment-id on every member plus raft-tls-{cert,key,ca}-file: a clustered
+# node without Raft TLS is refused (see docs/cluster/user.md).
 quicbaas:
   data-dir: /var/lib/trusted-platform/quicbaas
   storage-backend: file

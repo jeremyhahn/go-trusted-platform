@@ -52,13 +52,19 @@ quicbaas:
   consistency-level: linearizable
 
   # Raft address advertised to peers (cluster members only)
-  raft-address: "192.168.1.12:63000"
+  raft-address: "192.168.1.10:63000"
 
-  # Peer addresses for multi-node clusters. When set, raft-address must be
-  # routable: a loopback address fails validation.
+  # Every cluster member as "id=host:port", this node included. When set,
+  # raft-address must be routable, and deployment-id and the three Raft TLS
+  # files are required (see docs/cluster/user.md).
+  deployment-id: 100
   join-addresses:
-    - "192.168.1.10:63000"
-    - "192.168.1.11:63000"
+    - "1=192.168.1.10:63000"
+    - "2=192.168.1.11:63000"
+    - "3=192.168.1.12:63000"
+  raft-tls-cert-file: /etc/trusted-platform/raft/tls.crt
+  raft-tls-key-file: /etc/trusted-platform/raft/tls.key
+  raft-tls-ca-file: /etc/trusted-platform/raft/ca.crt
 ```
 
 ## IAM Service Configuration
@@ -330,6 +336,7 @@ The embedded `quicbaas:` configuration is validated at startup:
 | `quicbaas.wal-dir` | Required for `pebble`; defaults to `data-dir/wal` |
 | `quicbaas.cache-size` | Must not be negative; zero means 128MB |
 | `quicbaas.raft-address` | Must be routable when `join-addresses` is set |
+| `quicbaas.deployment-id`, `quicbaas.raft-tls-*-file` | Required when `join-addresses` is set |
 | `quicbaas.spiffe-trust-domain` | Required: first-boot IAM seeding needs it |
 | `mTLS.TrustedRoots` | Recommended for production |
 

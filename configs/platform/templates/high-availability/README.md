@@ -22,8 +22,13 @@ as `dedicated/`, on a vPC/MLAG switch pair, with the gateway pair sharing each
 zone's `.1` as a VRRP address (`.2` and `.3` are the gateway nodes) and
 syncing state over the reserved `10.E.128.0/31` link.
 
-QuicBaaS runs with `storage-backend: raft` and full Raft consensus across
-the 3 control-plane nodes. Gateway nodes form their own smaller Raft
+QuicBaaS runs full Raft consensus across the 3 control-plane nodes. Raft is
+engaged by `join-addresses`, not by the storage backend (`storage-backend:
+raft` is refused; clustered nodes use `pebble`): each control-plane node lists
+all three members as `id=host:port`, shares one `deployment-id`, and sets the
+three `raft-tls-*-file` keys, because Raft between peers is always mutual TLS.
+[configs/platform/cluster/](../../cluster/) holds a working three-server
+example, and [docs/cluster/user.md](../../../../docs/cluster/user.md) the rules. Gateway nodes form their own smaller Raft
 cluster for conntrack/firewall state replication.
 
 See [dedicated/](../dedicated/) for the current reference architecture.

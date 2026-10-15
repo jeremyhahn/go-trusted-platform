@@ -82,13 +82,6 @@ network:
     upstream-servers:
       - 10.0.1.1:9053
     local-domain: example.internal
-    custom-records:
-      - name: custom.example.com
-        type: A
-        value: 10.0.2.3
-      - name: custom.example.internal
-        type: A
-        value: 10.0.2.3
   interfaces: []
   bridges: []
   bonds: []
@@ -157,7 +150,7 @@ acme:
         cn: acme-account
         debug: true
         hash: SHA-256
-        password: 123456
+        password: "123456"
         platform-policy: true
         rsa:
           size: 2048
@@ -272,7 +265,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: software
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
 
@@ -283,7 +276,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: tpm2
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
 
@@ -294,7 +287,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: software
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
 
@@ -305,7 +298,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: tpm2
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
 
@@ -316,7 +309,7 @@ certificate-authority:
           signature-algorithm: Ed25519
           hash: SHA-256
           store: software
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
 
@@ -354,7 +347,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: software
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
 
@@ -365,7 +358,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: tpm2
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
 
@@ -376,7 +369,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: software
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
 
@@ -387,7 +380,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: tpm2
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
 
@@ -398,7 +391,7 @@ certificate-authority:
           signature-algorithm: Ed25519
           hash: SHA-256
           store: software
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
       valid: 10
@@ -450,7 +443,7 @@ webservice:
     signature-algorithm: ECDSA-SHA256
     hash: SHA-256
     store: software
-    password: 123456
+    password: "123456"
     platform-policy: true
     debug: true
   certificate:

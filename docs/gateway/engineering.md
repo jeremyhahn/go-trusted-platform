@@ -134,7 +134,7 @@ because the backend is built in the child process that owns the service.
 | `Start` | `StartService(ctx, name)` | `ErrServiceStartFailed{Service, Cause}` |
 | `Stop` | `StopService(ctx, name)` | `ErrServiceStopFailed{Service, Cause}` |
 | `IsActive` | `ServiceActive(name)` | — |
-| `Health` | `ServiceHealth(name)` | `ErrServiceUnhealthy{Service, Cause}` |
+| `Health` | `ServiceHealth(name)` | `ErrServiceUnhealthy{Service, Cause}` (after a start whose re-send failed, `Cause` unwraps to `ErrDesiredRestoreFailed`) |
 
 `Gateway.Apply` also switches: with a supervisor it calls
 `Supervisor.Apply(ctx, desired)` and stores the returned
@@ -204,7 +204,9 @@ Typed structs, grouped by what they tell you:
 `ErrServiceAlreadyActive`, `ErrServiceNotActive`, `ErrServiceNotFound`,
 `ErrStartupFailed`, `ErrShutdownFailed`, `ErrInvalidState`,
 `ErrServiceUnhealthy` (a supervised service whose child is down or over its
-restart budget; it unwraps to the supervisor's own error).
+restart budget, or whose start failed to re-send the desired document; it
+unwraps to the supervisor's own error, `ErrDesiredRestoreFailed` in the last
+case).
 
 **Operation failures:** `ErrBGPOperationFailed`, `ErrUplinkOperationFailed`,
 `ErrIPPoolOperationFailed`, `ErrGatewayOperationFailed`, `ErrHealthCheckFailed`,
@@ -964,6 +966,80 @@ a crash loop. More than `RestartBudget` crashes inside `RestartWindow` and the
 supervisor stops: the services stay unhealthy with `ErrRestartBudgetExhausted` in their
 health, which an operator sees in the snapshot. An endless crash loop at an
 internet edge is worse than a loud stop.
+
+**A relaunched child reconciles the flows its predecessor left.** A child
+that crashed never ran `Stop`, so its flows are still on the bridge. Every
+OVS datapath service — firewall, NAT, load balancer and NAT64 — therefore
+reconciles against them on `Start` through one helper,
+`ovs.NewGenerationCookie` plus `ovs.SweepStaleGenerations`
+(`pkg/sdn/ovs/generation.go`). A service cookie's high 32 bits are its owner
+id (`ovs.OwnerCookieMask`); the low 32 bits are a flow generation, fresh on
+every start. `Start` installs the current set first, gate last, and each
+flow of the same (table, priority, match) is replaced along with its cookie,
+so traffic the new configuration still carries sees no gap. Only then is
+every flow still under an older generation of that owner deleted by its
+exact cookie: a firewall rule removed while the process was down does not
+come back with the restart, nor does a NAT rule or a deleted VIP. Another
+owner's flows are never touched. `Stop` still deletes under the owner mask,
+every generation. For the firewall, NAT and load balancer a failed sweep
+fails `Start` with an `OpError` whose `Op` is `sweep`.
+
+**A failed `Start` leaves what `Stop` leaves.** The gateway registers a
+service only when `Start` succeeds, so no `Stop` follows a failed one. The
+firewall, NAT and load balancer `Start` are therefore transactional: one that
+fails, at the sweep, the gate install or any earlier step, rolls back before
+it returns. The firewall, NAT and load balancer delete their gate first, on
+its own, so no packet enters a half-removed pipeline and a failed owner-wide
+delete cannot leave the gate steering traffic into flows nobody manages. Then
+they delete every flow under their owner mask, every generation, and release
+their conntrack zones; the load balancer also deletes its groups. Every step
+runs even when an earlier one fails. The previous process's flows the failed sweep could not remove go
+with them, so an unmanaged firewall, NAT or VIP rule does not stay live:
+traffic sees what it sees after `Stop`, table 10's default carrying it on to
+table 30 untranslated and unfiltered by that service. A rollback that fails
+itself is joined to the `Start` error (`errors.Join`) as an `OpError` whose
+`Op` is `rollback`, and the service can be started again. NAT64 keeps its sweep
+non-fatal and retries it from the reconcile loop (see its **Stop and
+restart** above). The load balancer also still deletes stale groups, as
+before.
+
+**A relaunched child is given the desired document again (#557).** The sweep
+removes the predecessor's DNAT rules and VIPs with everything else, and nothing
+upstream re-sends them: the parent's `Gateway.Apply` still holds the document's
+version and skips it as unchanged. So `Supervisor.Apply` records the last
+document it sent to each process, and `restartLoop` re-applies it once the new
+child answers on its socket, before the restart counts as recovered. The
+supervisor is the seam because it is the only component that knows a relaunch
+happened; the child's own version check cannot skip the re-send, since a fresh
+child has applied nothing. A process never sent a document is sent nothing.
+Until the re-send succeeds the process's services report `ErrProcessDown`
+wrapping `ErrDesiredNotRestored`, so a relaunched child is never reported up
+while its config is missing. A failed re-send (`ErrDesiredRestoreFailed`) is a
+failed restart: the child is stopped, the attempt spends budget, and the same
+loop retries it. `Apply` and the re-send take the same one-slot semaphore and
+read the document only once they hold it, so an `Apply` arriving during a
+relaunch is never overwritten by the older document — it either is the document
+re-sent, or it waits for the re-send and lands after it.
+
+The document also survives the two other ways a child comes back. An `Apply`
+that arrives while the datapath process has no child serving — waiting out its
+restart backoff, mid-relaunch, or stopped — is recorded as the process's
+desired document and returns `ErrDesiredPending`: the relaunch re-sends it, so
+the newest document wins. It is an error, not success, because nothing holds
+the document yet; the parent records it as a failed attempt and sends the
+version again on its next `Apply`. `StartService` after a `StopService` runs
+the same bring-up as a relaunch (`serveLaunched`: the child answers on its
+socket, then `restoreDesired`) before the service reports up, because the
+parent's version check will not send the unchanged document to the new child.
+A re-send that fails there stops the child and fails the start with
+`ErrDesiredRestoreFailed`; the service stays down rather than up with nothing
+applied, and `ServiceHealth` keeps naming that failure (`ErrProcessDown`
+wrapping `ErrDesiredRestoreFailed`, not `ErrProcessNeverStarted`): the failed
+start's teardown records the failure again after it clears the process. A
+later start that launches clears it, as does a clean `StopService`, so a
+service stopped on purpose reports no old error. A process that was never sent a document is sent nothing in either
+case. Only an `Apply` before any datapath process was started, or after
+`Shutdown`, still returns `ErrNoDatapathProcess`.
 
 **One launch per process, claimed under the lock.** Deciding to launch and
 assigning the child are separate critical sections — the launch itself must not

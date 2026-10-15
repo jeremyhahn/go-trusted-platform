@@ -263,16 +263,13 @@ func TestIsRoutableRaftAddress_NotRoutable(t *testing.T) {
 }
 
 func TestConfig_Validate_JoinRequiresRoutableAdvertise(t *testing.T) {
-	cfg := TestConfig(t)
-	cfg.JoinAddresses = []string{"10.0.0.6:63000"}
-	cfg.RaftAddress = "10.0.0.5:63000"
+	cfg := clusterMemberConfig(t, 1)
 	assert.NoError(t, cfg.Validate())
 }
 
 func TestConfig_Validate_JoinWithLoopbackAdvertise(t *testing.T) {
 	for _, addr := range []string{"", "127.0.0.1:63000", "0.0.0.0:63000"} {
-		cfg := TestConfig(t)
-		cfg.JoinAddresses = []string{"10.0.0.6:63000"}
+		cfg := clusterMemberConfig(t, 1)
 		cfg.RaftAddress = addr
 
 		err := cfg.Validate()

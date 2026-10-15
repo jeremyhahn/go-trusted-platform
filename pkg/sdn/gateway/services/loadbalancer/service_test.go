@@ -40,6 +40,8 @@ type fakeController struct {
 	// installErr; zero fails every call while installErr is set.
 	failOnCall int
 	calls      int
+	// bridge, when set, receives every installed batch.
+	bridge *fakeOVS
 }
 
 func (f *fakeController) InstallFlow(bridgeName string, priority int, match string, actions string) error {
@@ -54,6 +56,9 @@ func (f *fakeController) InstallFlows(bridgeName string, rules []zoneflows.FlowR
 		return f.installErr
 	}
 	f.batches = append(f.batches, rules)
+	if f.bridge != nil {
+		f.bridge.install(rules)
+	}
 	return nil
 }
 
@@ -78,11 +83,86 @@ func (f *fakeController) allRules() []zoneflows.FlowRule {
 type fakeOVS struct {
 	ovs.ClientInterface
 
-	mu            sync.Mutex
+	mu sync.Mutex
+	// flows is the bridge's flow table: the controller's installs land in
+	// it with OFPFC_ADD semantics, deletes remove from it and GetFlowStats
+	// reads it, so a Start's generation sweep runs against real state.
+	flows         []*ovs.Flow
+	statsErr      error
 	strictDeletes []*ovs.FlowMod
 	cookieDeletes []uint64
 	strictErr     error
 	cookieErr     error
+}
+
+// cookieOf parses a "0x%x" flow cookie; anything else reads as zero.
+func cookieOf(cookie string) uint64 {
+	var c uint64
+	if _, err := fmt.Sscanf(cookie, "0x%x", &c); err != nil {
+		return 0
+	}
+	return c
+}
+
+// install applies OFPFC_ADD: a rule replaces the flow of identical
+// (table, priority, match), cookie included, and is appended otherwise.
+func (f *fakeOVS) install(rules []zoneflows.FlowRule) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, rule := range rules {
+		flow := &ovs.Flow{Table: rule.Table, Priority: rule.Priority, Match: rule.Match, Actions: rule.Actions, Cookie: rule.Cookie}
+		replaced := false
+		for i, existing := range f.flows {
+			if existing.Table == rule.Table && existing.Priority == rule.Priority && existing.Match == rule.Match {
+				f.flows[i] = flow
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			f.flows = append(f.flows, flow)
+		}
+	}
+}
+
+// seed puts a flow on the bridge as another process would have.
+func (f *fakeOVS) seed(flow *ovs.Flow) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.flows = append(f.flows, flow)
+}
+
+// flowsUnder returns the flows on the bridge whose cookie carries owner.
+func (f *fakeOVS) flowsUnder(owner uint64) []*ovs.Flow {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []*ovs.Flow
+	for _, flow := range f.flows {
+		if cookieOf(flow.Cookie)&CookieMask == owner {
+			out = append(out, flow)
+		}
+	}
+	return out
+}
+
+func (f *fakeOVS) GetFlowStats(ctx context.Context, bridgeName string, match string) ([]*ovs.Flow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.statsErr != nil {
+		return nil, f.statsErr
+	}
+	var cookie, mask uint64
+	if _, err := fmt.Sscanf(match, "cookie=0x%x/0x%x", &cookie, &mask); err != nil {
+		return nil, err
+	}
+	var out []*ovs.Flow
+	for _, flow := range f.flows {
+		if cookieOf(flow.Cookie)&mask == cookie&mask {
+			copied := *flow
+			out = append(out, &copied)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeOVS) DeleteFlowStrict(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error {
@@ -92,6 +172,13 @@ func (f *fakeOVS) DeleteFlowStrict(ctx context.Context, bridgeName string, flow 
 		return f.strictErr
 	}
 	f.strictDeletes = append(f.strictDeletes, flow)
+	kept := f.flows[:0]
+	for _, existing := range f.flows {
+		if existing.Table != flow.Table || existing.Priority != flow.Priority || existing.Match != flow.Match {
+			kept = append(kept, existing)
+		}
+	}
+	f.flows = kept
 	return nil
 }
 
@@ -102,6 +189,13 @@ func (f *fakeOVS) DeleteFlowsByCookie(ctx context.Context, bridgeName string, co
 		return f.cookieErr
 	}
 	f.cookieDeletes = append(f.cookieDeletes, cookie)
+	kept := f.flows[:0]
+	for _, flow := range f.flows {
+		if cookieOf(flow.Cookie)&cookieMask != cookie&cookieMask {
+			kept = append(kept, flow)
+		}
+	}
+	f.flows = kept
 	return nil
 }
 
@@ -197,8 +291,8 @@ func testVIP() VIP {
 
 // testDeps builds a full fake dependency set with one configured VIP.
 func testDeps(vips ...VIP) (Deps, *fakeController, *fakeOVS, *fakeGroups) {
-	controller := &fakeController{}
 	ovsClient := &fakeOVS{}
+	controller := &fakeController{bridge: ovsClient}
 	groups := newFakeGroups()
 	deps := Deps{
 		Controller: controller,
@@ -323,8 +417,8 @@ func TestStartInstallsPipeline(t *testing.T) {
 		if r.Table == 26 && r.Priority == prioLBMissT26 && r.Actions == "drop" {
 			haveMissT26 = true
 		}
-		if r.Cookie != fmt.Sprintf("0x%x", CookieLoadBalancer) {
-			t.Errorf("rule %+v missing LB cookie", r)
+		if c := cookieOf(r.Cookie); c&CookieMask != CookieLoadBalancer || c&^CookieMask == 0 {
+			t.Errorf("rule %+v missing LB cookie with a generation", r)
 		}
 	}
 	if !haveDivert || !haveDispatch || !haveMissT26 {
@@ -396,6 +490,100 @@ func TestStartErrors(t *testing.T) {
 			t.Fatalf("Start = %v, want install OpError", err)
 		}
 	})
+
+	t.Run("sweep failure", func(t *testing.T) {
+		deps, _, ovsClient, _ := testDeps(testVIP())
+		statsErr := errors.New("flow stats unavailable")
+		ovsClient.statsErr = statsErr
+		svc, err := New(deps)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		err = svc.Start(context.Background())
+		var opErr *OpError
+		if !errors.As(err, &opErr) || opErr.Op != "sweep" || !errors.Is(err, statsErr) {
+			t.Fatalf("Start = %v, want a sweep OpError wrapping the stats failure", err)
+		}
+		if svc.Active() {
+			t.Fatal("a failed sweep must not leave the service active")
+		}
+		if left := ovsClient.flowsUnder(CookieLoadBalancer); len(left) != 0 {
+			t.Errorf("rollback left %d LB flows on the bridge", len(left))
+		}
+	})
+}
+
+// TestStartSweepsAPreviousProcessFlows is #557: a load balancer process
+// that dies without a Stop leaves its flows on the bridge, and the next
+// process's Start must remove the ones its configuration no longer has
+// (a VIP deleted meanwhile) while re-stamping the ones it keeps, and
+// leave another service's flows alone.
+func TestStartSweepsAPreviousProcessFlows(t *testing.T) {
+	deps, controller, ovsClient, _ := testDeps(testVIP(), secondVIP())
+	previous, err := New(deps)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := previous.Start(context.Background()); err != nil {
+		t.Fatalf("previous Start: %v", err)
+	}
+	firewall := &ovs.Flow{Table: 20, Priority: 100, Match: "ip", Actions: "drop", Cookie: "0xf1be000100000001"}
+	ovsClient.seed(firewall)
+	previousCookie := cookieOf(ovsClient.flowsUnder(CookieLoadBalancer)[0].Cookie)
+
+	// The previous process dies: no Stop. The next one runs without the
+	// second VIP, on the same bridge and group table.
+	next := deps
+	next.Allocator = ct.NewZoneAllocator(nil)
+	next.Config.VIPs = []VIP{testVIP()}
+	svc, err := New(next)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	controller.mu.Lock()
+	installedBefore := len(controller.batches)
+	controller.mu.Unlock()
+	if err := svc.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := svc.Stop(context.Background()); err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+	})
+
+	controller.mu.Lock()
+	var installed int
+	for _, batch := range controller.batches[installedBefore:] {
+		installed += len(batch)
+	}
+	controller.mu.Unlock()
+
+	flows := ovsClient.flowsUnder(CookieLoadBalancer)
+	if len(flows) != installed {
+		t.Errorf("LB flows on the bridge = %d, want the %d the new Start installed", len(flows), installed)
+	}
+	current := cookieOf(flows[0].Cookie)
+	if current == previousCookie {
+		t.Fatal("the new process must stamp a new generation")
+	}
+	for _, flow := range flows {
+		if cookieOf(flow.Cookie) != current {
+			t.Errorf("flow %+v kept a previous generation", flow)
+		}
+		if strings.Contains(flow.Match, "10.100.0.11") || strings.Contains(flow.Actions, "10.100.0.11") {
+			t.Errorf("the removed VIP's flow %+v survived the restart", flow)
+		}
+	}
+	if others := ovsClient.flowsUnder(0xF1BE000100000000); len(others) != 1 || others[0] != firewall {
+		t.Errorf("another owner's flows = %+v, want the firewall flow untouched", others)
+	}
+	ovsClient.mu.Lock()
+	cookieDeletes := append([]uint64(nil), ovsClient.cookieDeletes...)
+	ovsClient.mu.Unlock()
+	if len(cookieDeletes) != 1 || cookieDeletes[0] != previousCookie {
+		t.Errorf("cookie deletes = %x, want exactly the previous generation", cookieDeletes)
+	}
 }
 
 func TestStartRecoversExistingGroupsAndPrunesStale(t *testing.T) {
@@ -1299,6 +1487,62 @@ func TestStartReportsAFailedRollback(t *testing.T) {
 	err = svc.Start(context.Background())
 	if !errors.Is(err, controller.installErr) || !errors.Is(err, ovsClient.cookieErr) {
 		t.Fatalf("Start = %v, want both the install and the rollback failure", err)
+	}
+}
+
+// TestStartRollbackRemovesTheGateWhenTheFlowDeleteFails pins the rollback
+// order: the gate goes on its own before the owner-wide delete, so a
+// failed owner-wide delete cannot leave it steering traffic into flows
+// nobody manages, and the groups and zones are still taken back.
+func TestStartRollbackRemovesTheGateWhenTheFlowDeleteFails(t *testing.T) {
+	deps, _, ovsClient, groups := testDeps(testVIP())
+	ctx := context.Background()
+	ovsClient.statsErr = errors.New("dump-flows failed")
+	ovsClient.cookieErr = errors.New("del-flows failed")
+	svc, err := New(deps)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	err = svc.Start(ctx)
+	if !errors.Is(err, ovsClient.statsErr) || !errors.Is(err, ovsClient.cookieErr) {
+		t.Fatalf("Start = %v, want both the sweep and the rollback failure", err)
+	}
+	var joined interface{ Unwrap() []error }
+	if !errors.As(err, &joined) || len(joined.Unwrap()) != 2 {
+		t.Fatalf("expected the start and rollback errors joined, got %v", err)
+	}
+	var startErr, rollbackErr *OpError
+	if parts := joined.Unwrap(); !errors.As(parts[0], &startErr) || !errors.As(parts[1], &rollbackErr) {
+		t.Fatalf("both joined errors must be OpErrors, got %v", err)
+	}
+	if startErr.Op != "sweep" || rollbackErr.Op != "rollback" {
+		t.Errorf("ops = %q, %q, want sweep, rollback", startErr.Op, rollbackErr.Op)
+	}
+
+	gate := svc.gateRule()
+	for _, flow := range ovsClient.flowsUnder(CookieLoadBalancer) {
+		if flow.Table == gate.Table && flow.Priority == gate.Priority {
+			t.Errorf("the gate outlived a failed rollback: %+v", flow)
+		}
+	}
+	groups.mu.Lock()
+	if len(groups.groups) != 0 {
+		t.Errorf("groups left on the switch: %v", groups.groups)
+	}
+	groups.mu.Unlock()
+	if held := deps.Allocator.Snapshot(); len(held) != 0 {
+		t.Errorf("the zones must be released even when a delete fails: %v", held)
+	}
+
+	ovsClient.mu.Lock()
+	ovsClient.statsErr, ovsClient.cookieErr = nil, nil
+	ovsClient.mu.Unlock()
+	if err := svc.Start(ctx); err != nil {
+		t.Fatalf("start after a failed rollback: %v", err)
+	}
+	if err := svc.Stop(ctx); err != nil {
+		t.Fatalf("Stop: %v", err)
 	}
 }
 

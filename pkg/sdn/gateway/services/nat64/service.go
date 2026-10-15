@@ -15,14 +15,10 @@ package nat64
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -47,7 +43,7 @@ import (
 // apart by cookie alone and swept only after the new set is in place.
 const (
 	CookieNAT64 uint64 = 0xF1BE000400000000
-	CookieMask  uint64 = 0xFFFFFFFF00000000
+	CookieMask         = ovs.OwnerCookieMask
 )
 
 // Pipeline priorities.
@@ -212,10 +208,10 @@ type Service struct {
 	now    func() time.Time
 	res    *resolved
 
-	// generation is the low 32 bits of the cookie this start stamped on
-	// its flows; flows under the NAT64 owner with any other generation are
-	// stale.
-	generation uint32
+	// flowCookie is the cookie this start stamped on its flows: the NAT64
+	// owner and a fresh generation. Flows under the owner with any other
+	// generation are stale.
+	flowCookie uint64
 
 	mu        sync.Mutex
 	active    bool
@@ -250,10 +246,11 @@ func New(deps Deps) (*Service, error) {
 		deps.ReconcileInterval = DefaultReconcileInterval
 	}
 	return &Service{
-		deps:   deps,
-		logger: deps.Logger,
-		now:    deps.Now,
-		res:    res,
+		deps:       deps,
+		logger:     deps.Logger,
+		now:        deps.Now,
+		res:        res,
+		flowCookie: CookieNAT64,
 	}, nil
 }
 
@@ -342,20 +339,7 @@ func (s *Service) FlowRules(port TranslatorPort) []zoneflows.FlowRule {
 // cookie is the full cookie of this start's flows: the NAT64 owner and
 // the flow generation.
 func (s *Service) cookie() uint64 {
-	return CookieNAT64 | uint64(s.generation)
-}
-
-// newGeneration draws a fresh, nonzero flow generation.
-func newGeneration() (uint32, error) {
-	var b [4]byte
-	for {
-		if _, err := rand.Read(b[:]); err != nil {
-			return 0, &OpError{Op: "generation", Err: err}
-		}
-		if g := binary.BigEndian.Uint32(b[:]); g != 0 {
-			return g, nil
-		}
-	}
+	return s.flowCookie
 }
 
 // sweepStale deletes every flow under the NAT64 owner whose generation is
@@ -367,24 +351,8 @@ func newGeneration() (uint32, error) {
 // what is left under an older generation is exactly what no longer
 // belongs.
 func (s *Service) sweepStale(ctx context.Context) error {
-	flows, err := s.deps.OVS.GetFlowStats(ctx, s.res.bridge,
-		fmt.Sprintf("cookie=0x%x/0x%x", CookieNAT64, CookieMask))
-	if err != nil {
+	if err := ovs.SweepStaleGenerations(ctx, s.deps.OVS, s.res.bridge, s.cookie()); err != nil {
 		return &OpError{Op: "sweep", Err: err}
-	}
-	current := s.cookie()
-	stale := make(map[uint64]struct{})
-	for _, f := range flows {
-		c, err := strconv.ParseUint(strings.TrimPrefix(strings.ToLower(f.Cookie), "0x"), 16, 64)
-		if err != nil || c == current || c&CookieMask != CookieNAT64 {
-			continue
-		}
-		stale[c] = struct{}{}
-	}
-	for c := range stale {
-		if err := s.deps.OVS.DeleteFlowsByCookie(ctx, s.res.bridge, c, ^uint64(0)); err != nil {
-			return &OpError{Op: "sweep", Err: err}
-		}
 	}
 	return nil
 }
@@ -431,9 +399,9 @@ func (s *Service) Start(ctx context.Context) error {
 		return err
 	}
 
-	generation, err := newGeneration()
+	cookie, err := ovs.NewGenerationCookie(CookieNAT64)
 	if err != nil {
-		return err
+		return &OpError{Op: "generation", Err: err}
 	}
 
 	created, err := s.deps.Driver.Apply(ctx, s.instance())
@@ -451,7 +419,7 @@ func (s *Service) Start(ctx context.Context) error {
 		return s.rollback(ctx, created, ErrInstanceVanished)
 	}
 
-	s.generation = generation
+	s.flowCookie = cookie
 	rules := s.FlowRules(port)
 	if err := s.deps.Controller.InstallFlows(s.res.bridge, rules); err != nil {
 		return s.rollback(ctx, created, &OpError{Op: "install", Err: err})

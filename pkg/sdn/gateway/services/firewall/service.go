@@ -36,7 +36,8 @@ import (
 
 // Flow cookies identifying firewall-owned and NAT-owned flows. The high 32
 // bits are the owner prefix used with CookieMask for bulk deletion; the low
-// 32 bits are free for future per-rule tagging.
+// 32 bits carry the flow generation each Start stamps, so the flows a
+// previous process left are told apart and swept (ovs.NewGenerationCookie).
 const (
 	// CookieFirewall tags every flow installed by the firewall Service.
 	CookieFirewall uint64 = 0xF1BE000100000000
@@ -45,7 +46,7 @@ const (
 	CookieNAT uint64 = 0xF1BE000200000000
 
 	// CookieMask selects the owner prefix of CookieFirewall / CookieNAT.
-	CookieMask uint64 = 0xFFFFFFFF00000000
+	CookieMask = ovs.OwnerCookieMask
 )
 
 // Table-10 gate flows. The overlay pipeline's table 10 default (priority 0)
@@ -183,7 +184,8 @@ func (s *Service) gateRule() zoneflows.FlowRule {
 }
 
 // compile derives the current conntrack rule set from the zone providers,
-// allocating conntrack zones for any zone not yet seen.
+// allocating conntrack zones for any zone not yet seen. On an allocation
+// error it still returns the zones it took, so Start can release them.
 func (s *Service) compile(ctx context.Context) ([]zoneflows.FlowRule, map[zone.Zone]uint16, error) {
 	zones := s.deps.Zones()
 	networks := s.deps.Networks()
@@ -196,7 +198,7 @@ func (s *Service) compile(ctx context.Context) ([]zoneflows.FlowRule, map[zone.Z
 		}
 		id, err := s.deps.Allocator.Allocate(ctx, AllocatorOwnerFirewall, string(z.Name))
 		if err != nil {
-			return nil, nil, &OpError{Op: "allocate", Err: err}
+			return nil, ctZones, &OpError{Op: "allocate", Err: err}
 		}
 		ctZones[z.Name] = id
 	}
@@ -218,7 +220,17 @@ func (s *Service) compile(ctx context.Context) ([]zoneflows.FlowRule, map[zone.Z
 
 // Start compiles and installs the conntrack pipeline in one batched
 // transaction, then flips the table 10 gate so traffic enters it.
-func (s *Service) Start(ctx context.Context) error {
+//
+// Start also reconciles against the flows a process that exited without
+// Stop left behind (#557). The new set carries a fresh generation in its
+// cookie and replaces every flow of the same identity; only then is every
+// firewall flow still carrying an older generation swept. A rule the
+// current zone matrix no longer has, an allow most of all, does not
+// outlive a restart, and the policy that stays is never interrupted.
+//
+// A Start that fails leaves the bridge as Stop would: no firewall gate, no
+// firewall flow of any generation and no conntrack zone.
+func (s *Service) Start(ctx context.Context) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -226,7 +238,27 @@ func (s *Service) Start(ctx context.Context) error {
 		return ErrAlreadyStarted
 	}
 
+	cookie, err := ovs.NewGenerationCookie(CookieFirewall)
+	if err != nil {
+		return &OpError{Op: "generation", Err: err}
+	}
+	s.cookie = fmt.Sprintf("0x%x", cookie)
+
+	// Start is transactional. The gateway registers the service only when
+	// Start succeeds, so a failed Start has no Stop to clean up after it:
+	// whatever it programmed or allocated is taken back here instead of
+	// being left live on the bridge.
+	defer func() {
+		if err == nil {
+			return
+		}
+		if rollbackErr := s.rollbackStartLocked(ctx); rollbackErr != nil {
+			err = errors.Join(err, rollbackErr)
+		}
+	}()
+
 	rules, ctZones, err := s.compile(ctx)
+	s.ctZones = ctZones
 	if err != nil {
 		return err
 	}
@@ -239,6 +271,9 @@ func (s *Service) Start(ctx context.Context) error {
 	if err := s.deps.Controller.InstallFlows(s.deps.Config.Bridge, []zoneflows.FlowRule{s.gateRule()}); err != nil {
 		return &OpError{Op: "install", Err: err}
 	}
+	if err := ovs.SweepStaleGenerations(ctx, s.deps.OVS, s.deps.Config.Bridge, cookie); err != nil {
+		return &OpError{Op: "sweep", Err: err}
+	}
 
 	installed := make(map[flowKey]zoneflows.FlowRule, len(rules))
 	for _, rule := range rules {
@@ -246,7 +281,6 @@ func (s *Service) Start(ctx context.Context) error {
 	}
 
 	s.installed = installed
-	s.ctZones = ctZones
 	s.lastReconcile = time.Now()
 	s.active = true
 
@@ -260,6 +294,43 @@ func (s *Service) Start(ctx context.Context) error {
 	return nil
 }
 
+// rollbackStartLocked takes back what a failed Start did and leaves the
+// bridge as Stop would: the gate first, so no packet enters a half-removed
+// pipeline, then every firewall flow of any generation (a previous
+// process's included, which the failed sweep may have left), then the
+// conntrack zones. Every step runs even when an earlier one fails.
+func (s *Service) rollbackStartLocked(ctx context.Context) error {
+	var errs []error
+	if err := s.deleteGate(ctx); err != nil {
+		errs = append(errs, err)
+	}
+	if err := s.deps.OVS.DeleteFlowsByCookie(ctx, s.deps.Config.Bridge, CookieFirewall, CookieMask); err != nil {
+		errs = append(errs, err)
+	}
+	for name := range s.ctZones {
+		if err := s.deps.Allocator.Release(ctx, AllocatorOwnerFirewall, string(name)); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	s.ctZones = nil
+	if len(errs) > 0 {
+		return &OpError{Op: "rollback", Err: errors.Join(errs...)}
+	}
+	return nil
+}
+
+// deleteGate removes this generation's table 10 gate, so traffic stops
+// entering the conntrack pipeline before the pipeline itself goes.
+func (s *Service) deleteGate(ctx context.Context) error {
+	gate := s.gateRule()
+	return s.deps.OVS.DeleteFlowStrict(ctx, s.deps.Config.Bridge, &ovs.FlowMod{
+		Table:    gate.Table,
+		Priority: gate.Priority,
+		Match:    gate.Match,
+		Cookie:   gate.Cookie,
+	})
+}
+
 // Stop removes the table 10 gate first (so traffic falls back to the base
 // pipeline), then deletes every firewall-owned flow by cookie and releases
 // the conntrack zones.
@@ -271,13 +342,7 @@ func (s *Service) Stop(ctx context.Context) error {
 		return ErrNotStarted
 	}
 
-	gate := s.gateRule()
-	if err := s.deps.OVS.DeleteFlowStrict(ctx, s.deps.Config.Bridge, &ovs.FlowMod{
-		Table:    gate.Table,
-		Priority: gate.Priority,
-		Match:    gate.Match,
-		Cookie:   gate.Cookie,
-	}); err != nil {
+	if err := s.deleteGate(ctx); err != nil {
 		return &OpError{Op: "delete", Err: err}
 	}
 

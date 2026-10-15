@@ -453,7 +453,14 @@ no `rd.luks.*` or `rd.lvm.*`.
    Addresses are unique too, but in the *merged* configs: `checkNodeConfigs`
    resolves every node (with no hardware identity) and refuses an address two
    nodes both assign, on an interface, bridge, bond, bond zone VLAN, VLAN or the
-   platform VRF (`ErrDuplicateNodeAddress`). The same pass refuses a diskless
+   platform VRF (`ErrDuplicateNodeAddress`). It also refuses a `tpm.idevid`
+   model and serial two nodes both carry (`ErrDuplicateIDevIDSerial`), since
+   the pair names the device in its IDevID certificate. A `diskless` node is
+   left out of that check (`keepsConfigSerial`): platformd replaces its
+   config's serial with its EK-derived name on every boot
+   (`applyDisklessNodeIdentity`), so the serial every node of a media set
+   shares never reaches a certificate. A `diskless-nbd` node boots its own
+   root and keeps its serial. The same pass refuses a diskless
    node (`diskless` or `diskless-nbd`, not `skip_install`) whose merged config
    keeps `install-target: image` (`ErrDisklessImageTarget`, also raised by
    every resolve of that node). It runs first in `Run` and `Deploy` (phase
@@ -768,6 +775,7 @@ Every error in this feature is a typed struct or a package sentinel;
 | `ErrNodeMissingIdentity{Hostname}` | Neither `bmc_address` nor `macs` on an installing node |
 | `ErrDuplicateMAC{MAC, Hostnames}` | The same MAC on two nodes |
 | `ErrDuplicateNodeAddress{Address, Hostname, Where, OtherHostname, OtherWhere}` | Two nodes' merged configs assign the same address |
+| `ErrDuplicateIDevIDSerial{Model, Serial, Hostname, OtherHostname}` | Two nodes that keep their config's serial (not `diskless`) carry the same `tpm.idevid` model and serial |
 | `ErrDisklessImageTarget{Hostname, BootModel}` | A diskless node's merged config keeps `install-target: image` |
 | `ErrInvalidControlPlaneCount{Count}` | Count is 0, 2, or even |
 | `ErrInvalidBootMethod{Hostname, Value}` | `boot_method` is neither `pxe` nor `virtual-media` |

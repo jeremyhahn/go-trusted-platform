@@ -67,6 +67,46 @@ func (e *ErrProcessUnreachable) Error() string {
 
 func (e *ErrProcessUnreachable) Unwrap() error { return e.Cause }
 
+// ErrDesiredNotRestored reports a relaunched child that answers on its
+// control socket but has not yet been given the desired document its
+// predecessor held, so its services are not reported up (#557).
+type ErrDesiredNotRestored struct {
+	Process string
+}
+
+func (e *ErrDesiredNotRestored) Error() string {
+	return fmt.Sprintf("gatewayd supervisor: process %q was relaunched and has not been given its desired config yet", e.Process)
+}
+
+// ErrDesiredRestoreFailed reports a relaunched child that could not be given
+// the desired document its predecessor held. It is a failed restart.
+type ErrDesiredRestoreFailed struct {
+	Process string
+	Version string
+	Cause   error
+}
+
+func (e *ErrDesiredRestoreFailed) Error() string {
+	return fmt.Sprintf("gatewayd supervisor: re-applying desired config %q to relaunched process %q: %v",
+		e.Version, e.Process, e.Cause)
+}
+
+func (e *ErrDesiredRestoreFailed) Unwrap() error { return e.Cause }
+
+// ErrDesiredPending reports a desired document that arrived while the
+// datapath process had no child serving it — in its restart backoff,
+// mid-relaunch, or stopped. The document is recorded and is the one the next
+// child is given; it is not applied yet (#557).
+type ErrDesiredPending struct {
+	Process string
+	Version string
+}
+
+func (e *ErrDesiredPending) Error() string {
+	return fmt.Sprintf("gatewayd supervisor: process %q is down; desired config %q is recorded and is applied when it is next up",
+		e.Process, e.Version)
+}
+
 // ErrServiceNotActiveInProcess reports a child that came up without the
 // service the supervisor asked it for. Detail carries the child's own start
 // error or health text when it reported one.
@@ -143,7 +183,8 @@ func (e *ErrRestartBudgetExhausted) Error() string {
 func (e *ErrRestartBudgetExhausted) Unwrap() error { return e.Last }
 
 // ErrNoDatapathProcess reports an Apply with no kernel-class process running
-// to apply it.
+// to apply it and none down to record it for (ErrDesiredPending): none was
+// ever started, or the supervisor has shut down.
 type ErrNoDatapathProcess struct{}
 
 func (e *ErrNoDatapathProcess) Error() string {

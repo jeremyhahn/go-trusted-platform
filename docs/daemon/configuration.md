@@ -163,6 +163,24 @@ key out is rejected, even if a code-level `App` literal carries a placeholder.
 The bootstrap seeder fills the key from `platform.internal_domain` (see
 [bootstrap engineering](../bootstrap/engineering.md)).
 
+### Cluster keys
+
+A non-empty `quicbaas.join-addresses` makes the node a member of a go-qrdb
+Raft cluster: platformd passes the keys below to go-quicbaas cluster mode.
+`quicbaas.Config.Validate` checks them when `App.Init` builds the store, so a
+bad cluster config stops platformd before the store opens.
+
+| Key | Rule |
+|-----|------|
+| `quicbaas.join-addresses` | Every member as `id=host:port`, this node included as `node-id=raft-address`. A bare `host:port`, a repeated ID or a missing self entry is refused. |
+| `quicbaas.node-id`, `quicbaas.deployment-id` | Non-zero. `deployment-id` is the same on every member; left at zero, go-quicbaas would derive a different one on each. |
+| `quicbaas.raft-address` | Routable: not loopback, unspecified or empty. |
+| `quicbaas.raft-tls-cert-file`, `raft-tls-key-file`, `raft-tls-ca-file` | All three set. Raft between peers is always mutual TLS; a clustered config without the files is refused, never run in plaintext. |
+
+TPM-held Raft keys are out of scope until the issuer of peer certificates is
+ruled on. The [cluster user guide](../cluster/user.md#configuring-a-cluster)
+has the full example.
+
 ## Example Configurations
 
 ### Development (loopback, the defaults)

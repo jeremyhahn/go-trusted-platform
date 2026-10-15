@@ -147,7 +147,9 @@ Cluster deployment is configured under **`quicbaas:`**, not `cluster:`
 | `quicbaas.node-id` | uint64 | unique per node |
 | `quicbaas.raft-address` | string | `host:port` advertised to peers; env `PLATFORMD_QUICBAAS_RAFT_ADDRESS`, flag `--raft-address` |
 | `quicbaas.raft-listen-address` | string | `host:port` the Raft transport binds; empty binds `raft-address`; env `PLATFORMD_QUICBAAS_RAFT_LISTEN_ADDRESS`, flag `--raft-listen-address` |
-| `quicbaas.join-addresses` | []string | peer addresses for multi-node clusters |
+| `quicbaas.join-addresses` | []string | every member as `id=host:port`, this node included; non-empty makes the node clustered |
+| `quicbaas.deployment-id` | uint64 | required when clustered; the same on every member |
+| `quicbaas.raft-tls-cert-file`, `raft-tls-key-file`, `raft-tls-ca-file` | string | required when clustered; Raft peer mTLS |
 | `quicbaas.consistency-level` | `linearizable` \| `strong` \| `eventual` | default `linearizable` |
 | `quicbaas.cache-size`, `compression`, `sync-writes`, `log-level`, `request-timeout` | | |
 | `quicbaas.startup-timeout` | duration | default `2m`; liveness backstop for embedded-server startup |
@@ -163,6 +165,30 @@ constructors (`pkg/storage/quicbaas/testconfig.go`). The upstream embedded node
 `raft-listen-address`, or `127.0.0.1:63000`, to `0.0.0.0:<port>`. Until that is
 fixed upstream, an explicit non-default `raft-listen-address` is the only way to
 keep the Raft bind off the wildcard.
+
+**A clustered config is mapped onto go-quicbaas cluster mode, and checked
+first** (#685). Formation is go-qrdb's, reached through go-quicbaas; the
+platform only passes config through. `Config.IsClustered` is
+`len(join-addresses) > 0`. For a clustered node, `ToQuicBaaSConfig` sets
+`Server.Mode` to `ServerModeCluster` and copies `join-addresses`,
+`deployment-id` and the three Raft TLS paths into `Raft`. A standalone node's
+mapping is unchanged: those fields stay empty even when set. `validateCluster`
+refuses, with typed errors, what go-quicbaas would otherwise accept silently:
+
+| go-quicbaas behavior (`pkg/server`) | Platform check |
+|---|---|
+| An empty `Server.Mode` starts a standalone node | mode set from `join-addresses` |
+| `buildClusterMembers` drops entries without `id=`; with none it starts a one-node cluster | `ErrRaftPeerAddress` on any entry that is not `id=host:port` |
+| Bootstrap requires self in the members map | `ErrRaftSelfPeer` unless the list holds `node-id=raft-address` |
+| `ParsePeers` keeps the last of two equal IDs | `ErrRaftDuplicatePeer` |
+| `buildQRDBConfig` derives `DeploymentID` from `NodeID` when unset, so members disagree | `ErrRaftClusterField` on a zero `deployment-id` or `node-id` |
+| No TLS files falls through to auto-enrolled or (without `-tags raft`) plaintext transport | `ErrRaftTLSRequired` names each missing `raft-tls-*-file` |
+
+The TLS check is presence only; go-quicbaas reads the files at start and fails
+with `RaftMTLSLoadError`. TPM-held Raft keys are out of scope until the issuer
+of peer certificates is ruled on. `TestShippedClusterExamples_*`
+(`pkg/app/templates_network_test.go`) load every `configs/platform/cluster`
+example through platformd's loader and `Validate`.
 
 **`startup-timeout` is deliberately separate from `request-timeout`** (#270).
 `request-timeout` bounds ONE DAO operation; startup constructs the data-plane

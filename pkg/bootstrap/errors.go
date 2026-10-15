@@ -716,3 +716,19 @@ func (e ErrDuplicateNodeAddress) Error() string {
 	return "bootstrap: address " + e.Address + " is on node " + e.OtherHostname + " (" + e.OtherWhere +
 		") and on node " + e.Hostname + " (" + e.Where + "); give each node its own address in nodes[].overrides"
 }
+
+// ErrDuplicateIDevIDSerial is two nodes whose merged configs give the same
+// tpm.idevid model and serial, usually because both take them from a shared
+// role template. The pair names the device in its IDevID certificate, so the
+// two certificates would name one device.
+type ErrDuplicateIDevIDSerial struct {
+	Model         string
+	Serial        string
+	Hostname      string
+	OtherHostname string
+}
+
+func (e ErrDuplicateIDevIDSerial) Error() string {
+	return "bootstrap: IDevID serial " + e.Serial + " (model " + e.Model + ") is on node " + e.OtherHostname +
+		" and on node " + e.Hostname + "; give each node its own tpm.idevid.serial in nodes[].overrides"
+}

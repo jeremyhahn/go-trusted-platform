@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -128,7 +129,8 @@ type Config struct {
 	//   - "file": Simple file-based storage (development/low-volume)
 	//   - "pebble": PebbleDB for high-performance local storage (recommended)
 	// Default: "pebble" for high-performance local storage.
-	// Raft consensus is enabled separately via server mode, not storage backend.
+	// There is no "raft" backend: Raft consensus is enabled by JoinAddresses,
+	// and a clustered node keeps its replicated state on this backend.
 	// Use quicbaas.StorageBackendPebble, quicbaas.StorageBackendMemory, etc.
 	StorageBackend string `yaml:"storage-backend" json:"storage_backend" mapstructure:"storage-backend"`
 
@@ -258,13 +260,31 @@ type Config struct {
 	// container port mapping).
 	RaftListenAddress string `yaml:"raft-listen-address" json:"raft_listen_address" mapstructure:"raft-listen-address"`
 
-	// JoinAddresses is a list of peer addresses to join for multi-node clusters.
-	// Only used with "raft" backend for production clusters.
+	// JoinAddresses is the cluster's full member list, one "id=host:port"
+	// entry per member, this node included ("<node-id>=<raft-address>").
+	// Every member carries the same list and they bootstrap the cluster
+	// together. Setting it makes the node clustered: ToQuicBaaSConfig runs
+	// go-quicbaas in cluster mode, and Validate requires DeploymentID and
+	// the three Raft TLS files. Empty means a standalone node.
 	JoinAddresses []string `yaml:"join-addresses" json:"join_addresses" mapstructure:"join-addresses"`
 
 	// NodeID is the unique identifier for this node in the cluster.
 	// Must be unique across all nodes.
 	NodeID uint64 `yaml:"node-id" json:"node_id" mapstructure:"node-id"`
+
+	// DeploymentID identifies the cluster; every member must carry the same
+	// non-zero value. Required with JoinAddresses: left unset, go-quicbaas
+	// derives it from each node's own NodeID, so no two members would agree.
+	DeploymentID uint64 `yaml:"deployment-id,omitempty" json:"deployment_id,omitempty" mapstructure:"deployment-id"`
+
+	// RaftTLSCertFile, RaftTLSKeyFile and RaftTLSCAFile are the PEM files
+	// for mutually authenticated TLS between Raft peers: this node's
+	// certificate, its private key, and the CA that issued every member's
+	// certificate. All three are required with JoinAddresses; the operator
+	// supplies them.
+	RaftTLSCertFile string `yaml:"raft-tls-cert-file,omitempty" json:"raft_tls_cert_file,omitempty" mapstructure:"raft-tls-cert-file"`
+	RaftTLSKeyFile  string `yaml:"raft-tls-key-file,omitempty" json:"raft_tls_key_file,omitempty" mapstructure:"raft-tls-key-file"`
+	RaftTLSCAFile   string `yaml:"raft-tls-ca-file,omitempty" json:"raft_tls_ca_file,omitempty" mapstructure:"raft-tls-ca-file"`
 
 	// CacheSize is the size of the in-memory cache in bytes.
 	// Defaults to 128MB.
@@ -448,15 +468,22 @@ func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
 	cfg.Storage.SyncWrites = c.SyncWrites
 	cfg.Storage.CompressionType = c.Compression
 
-	// Raft settings (only used in cluster/node modes)
+	// Raft settings (only used in cluster mode)
 	cfg.Raft.NodeID = c.NodeID
 	cfg.Raft.RaftAddress = c.RaftAddress
 	cfg.Raft.ListenAddress = c.EffectiveRaftListenAddress()
 	cfg.Raft.RequestTimeout = c.RequestTimeout
 
-	// Join addresses for multi-node production clusters
-	if len(c.JoinAddresses) > 0 {
+	// A clustered node runs go-quicbaas in cluster mode, which forms
+	// go-qrdb's Raft cluster from the member list. The platform only passes
+	// the configuration through; formation is go-qrdb's.
+	if c.IsClustered() {
+		cfg.Server.Mode = quicbaas.ServerModeCluster
 		cfg.Raft.JoinAddresses = c.JoinAddresses
+		cfg.Raft.DeploymentID = c.DeploymentID
+		cfg.Raft.TLSCertFile = c.RaftTLSCertFile
+		cfg.Raft.TLSKeyFile = c.RaftTLSKeyFile
+		cfg.Raft.TLSCAFile = c.RaftTLSCAFile
 	}
 
 	// Logging
@@ -731,10 +758,10 @@ func (c *Config) validateEmbeddedConfig() error {
 		return ErrInvalidConfig{Field: "CacheSize", Reason: "cache size cannot be negative"}
 	}
 
-	// A node that joins peers is a cluster member, and its peers dial the
-	// address it advertises: loopback would publish an unreachable peer.
-	if len(c.JoinAddresses) > 0 && !IsRoutableRaftAddress(c.RaftAddress) {
-		return ErrRaftAdvertiseAddress{Address: c.RaftAddress}
+	if c.IsClustered() {
+		if err := c.validateCluster(); err != nil {
+			return err
+		}
 	}
 
 	// The embedded server runs qrdb first-boot, whose IAM seeding (system
@@ -747,6 +774,80 @@ func (c *Config) validateEmbeddedConfig() error {
 	}
 
 	return nil
+}
+
+// IsClustered reports whether this node is a member of a multi-node Raft
+// cluster, which is what a non-empty JoinAddresses declares.
+func (c *Config) IsClustered() bool {
+	return len(c.JoinAddresses) > 0
+}
+
+// validateCluster checks a clustered node's configuration before go-quicbaas
+// sees it: go-quicbaas drops malformed members silently and cannot tell a
+// missing TLS file from a deliberate one, so the platform refuses both here.
+func (c *Config) validateCluster() error {
+	// Peers dial the address this node advertises: loopback would publish
+	// an unreachable peer.
+	if !IsRoutableRaftAddress(c.RaftAddress) {
+		return ErrRaftAdvertiseAddress{Address: c.RaftAddress}
+	}
+	if c.NodeID == 0 {
+		return ErrRaftClusterField{Field: "node-id", Reason: "every member needs a non-zero node ID"}
+	}
+	if c.DeploymentID == 0 {
+		return ErrRaftClusterField{Field: "deployment-id", Reason: "every member must carry the same non-zero deployment ID"}
+	}
+
+	members := make(map[uint64]string, len(c.JoinAddresses))
+	for _, entry := range c.JoinAddresses {
+		id, addr, err := parseRaftMember(entry)
+		if err != nil {
+			return err
+		}
+		if _, seen := members[id]; seen {
+			return ErrRaftDuplicatePeer{NodeID: id}
+		}
+		members[id] = addr
+	}
+	if members[c.NodeID] != c.RaftAddress {
+		return ErrRaftSelfPeer{NodeID: c.NodeID, RaftAddress: c.RaftAddress}
+	}
+
+	var missing []string
+	if c.RaftTLSCertFile == "" {
+		missing = append(missing, "quicbaas.raft-tls-cert-file")
+	}
+	if c.RaftTLSKeyFile == "" {
+		missing = append(missing, "quicbaas.raft-tls-key-file")
+	}
+	if c.RaftTLSCAFile == "" {
+		missing = append(missing, "quicbaas.raft-tls-ca-file")
+	}
+	if len(missing) > 0 {
+		return ErrRaftTLSRequired{Missing: missing}
+	}
+	return nil
+}
+
+// parseRaftMember splits a join-addresses entry in go-quicbaas's
+// "id=host:port" member form into its node ID and address.
+func parseRaftMember(entry string) (uint64, string, error) {
+	idText, addr, found := strings.Cut(entry, "=")
+	if !found {
+		return 0, "", ErrRaftPeerAddress{Entry: entry, Reason: "missing the \"id=\" prefix"}
+	}
+	id, err := strconv.ParseUint(idText, 10, 64)
+	if err != nil || id == 0 {
+		return 0, "", ErrRaftPeerAddress{Entry: entry, Reason: "the node ID must be a positive integer"}
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host == "" {
+		return 0, "", ErrRaftPeerAddress{Entry: entry, Reason: "the address must be host:port"}
+	}
+	if portNum, err := strconv.ParseUint(port, 10, 16); err != nil || portNum == 0 {
+		return 0, "", ErrRaftPeerAddress{Entry: entry, Reason: "the port must be 1-65535"}
+	}
+	return id, addr, nil
 }
 
 // ValidateSPIFFETrustDomain checks spiffe-trust-domain the way the
