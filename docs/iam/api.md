@@ -282,6 +282,10 @@ served only from its own tenant:
 | Unix | none — peer-credential operator | served (the operator is not tenant-bound) | `InvalidArgument` |
 | MCP | the token's `tenant_id` claim, from the MCP authorized context | `PermissionDenied`, `ErrIAMTenantForbidden` | `InvalidArgument`, `tenant_id` is required |
 
+These tenant checks, and the unbound Unix peer-credential operator, are the
+platform's own; the IAM clean-up rows in [SPEC.md §Interfaces](../SPEC.md#interfaces)
+move them to go-qrdb, and `RequireOwnTenant` stays until go-qrdb #683 lands.
+
 On REST the extractor the guard reads is `RequestedTenant`
 (`pkg/webservice/v1/rest/iam/router.go`): the path's `{tenant}`, otherwise the
 `tenant_id` query. Every IAM route except the tenant-record routes, which are
@@ -594,7 +598,9 @@ service with `FailedPrecondition` (#317, [`docs/daemon/api.md`](../daemon/api.md
 under `platform:read` with the other daemon reads, and its REST route is gated
 on the admin role, which carries no scope. Provisioning sessions record a
 tenant, but gRPC does not bind the caller to it, so neither does QUIC nor MCP:
-`provisioning:read` lists every tenant's sessions.
+`provisioning:read` lists every tenant's sessions. The admin-role REST gate and
+the platform-declared `provisioning:*` permissions are departures that the IAM
+clean-up rows in [SPEC.md §Interfaces](../SPEC.md#interfaces) move to go-qrdb.
 
 ---
 
