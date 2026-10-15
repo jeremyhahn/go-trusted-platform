@@ -102,7 +102,6 @@ type QUICServiceHandler struct {
 	tpm2Handler        *quic.TPM2Handler
 	containerHandler   *quic.ContainerHandler
 	attestationHandler *quic.AttestationHandler
-	vmHandler          *quic.VMHandler
 	tenantManager      TenantManagerInterface
 	// tenantGRPC is the shared *TenantGRPCServer the converged tenant QUIC
 	// handlers delegate to (pb wire), wired via SetTenantGRPCServer.
@@ -293,15 +292,6 @@ func WithQUICAttestationService(svc quic.AttestationServiceInterface) QUICServic
 	return func(h *QUICServiceHandler) {
 		if svc != nil {
 			h.attestationHandler = quic.NewAttestationHandler(h.logger, svc)
-		}
-	}
-}
-
-// WithQUICVMService sets the VM orchestrator for the QUIC handler
-func WithQUICVMService(orchestrator quic.VMOrchestrator) QUICServiceHandlerOption {
-	return func(h *QUICServiceHandler) {
-		if orchestrator != nil {
-			h.vmHandler = quic.NewVMHandler(h.logger, orchestrator)
 		}
 	}
 }
@@ -502,18 +492,6 @@ func (h *QUICServiceHandler) SetAttestationService(svc quic.AttestationServiceIn
 	}
 }
 
-// SetVMHandler sets the VM handler after construction
-func (h *QUICServiceHandler) SetVMHandler(handler *quic.VMHandler) {
-	h.vmHandler = handler
-}
-
-// SetVMOrchestrator sets the VM orchestrator and creates a handler
-func (h *QUICServiceHandler) SetVMOrchestrator(orchestrator quic.VMOrchestrator) {
-	if orchestrator != nil {
-		h.vmHandler = quic.NewVMHandler(h.logger, orchestrator)
-	}
-}
-
 // SetDaemonService sets the daemon service after construction
 func (h *QUICServiceHandler) SetDaemonService(svc *Service) {
 	h.daemonService = svc
@@ -650,13 +628,12 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 	case req.Opcode >= quicwire.OpIDevIDGenerate && req.Opcode <= quicwire.OpIAKCSR:
 		return h.handleIDevIDOperation(ctx, req)
 
-	// Compute/VM Operations (0x60-0x6A). The compute extended category
-	// opcode (0x69) inside this range carries extended VM sub-opcodes AND
-	// container sub-opcodes (create/start/stop/remove/get/list/logs/attest,
-	// whose direct opcodes are shadowed by the PXE ranges) in payload[0];
-	// handleVMServiceOperation routes container sub-opcodes to the
-	// container handler and everything else to the VM handler.
-	case req.Opcode >= quicwire.OpVMCreate && req.Opcode <= quicwire.OpVMGetState:
+	// Compute (0x69). The compute extended category carries the VM
+	// sub-opcodes AND the container sub-opcodes (create/start/stop/remove/
+	// get/list/logs/attest, whose direct opcodes are shadowed by the PXE
+	// ranges) in payload[0]; handleVMServiceOperation routes each to its
+	// handler. The rest of 0x60-0x6A is unassigned.
+	case req.Opcode == quicwire.OpVMExtendedCategory:
 		return h.handleVMServiceOperation(ctx, req)
 
 	// IAK Extended Operations (0x6B-0x6E)

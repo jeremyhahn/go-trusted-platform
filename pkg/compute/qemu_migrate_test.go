@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 	"github.com/stretchr/testify/assert"
@@ -194,10 +195,20 @@ func migrateTestOrchestrator(t *testing.T, live bool) (*QEMUOrchestrator, *fakeC
 	return orch, coord, tls, fake
 }
 
+// migrateOnFakeClock runs MigrateVM in a synctest bubble, so the status
+// poll's ticker fires on fake time instead of a real 250ms wait.
+func migrateOnFakeClock(t *testing.T, orch *QEMUOrchestrator, opts MigrateOptions) (result *MigrationResult, err error) {
+	t.Helper()
+	synctest.Test(t, func(*testing.T) {
+		result, err = orch.MigrateVM(context.Background(), "vm1", "dest.example:10443", opts)
+	})
+	return result, err
+}
+
 func TestMigrateVM_ColdHappyPath(t *testing.T) {
 	orch, coord, _, fake := migrateTestOrchestrator(t, false)
 
-	result, err := orch.MigrateVM(context.Background(), "vm1", "dest.example:10443", MigrateOptions{Live: false, BandwidthLimitMbps: 100})
+	result, err := migrateOnFakeClock(t, orch, MigrateOptions{Live: false, BandwidthLimitMbps: 100})
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -230,7 +241,7 @@ func TestMigrateVM_SpecCarriesTheGuestArch(t *testing.T) {
 	orch, coord, _, _ := migrateTestOrchestrator(t, false)
 	orch.config.Arch = qemu.ArchAArch64
 
-	_, err := orch.MigrateVM(context.Background(), "vm1", "dest.example:10443", MigrateOptions{})
+	_, err := migrateOnFakeClock(t, orch, MigrateOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, qemu.ArchAArch64, coord.spec.Arch)
 }
@@ -238,7 +249,7 @@ func TestMigrateVM_SpecCarriesTheGuestArch(t *testing.T) {
 func TestMigrateVM_LiveHappyPath(t *testing.T) {
 	orch, coord, _, fake := migrateTestOrchestrator(t, true)
 
-	result, err := orch.MigrateVM(context.Background(), "vm1", "dest.example:10443", MigrateOptions{Live: true})
+	result, err := migrateOnFakeClock(t, orch, MigrateOptions{Live: true})
 	require.NoError(t, err)
 	assert.Equal(t, MigrateModeLive, result.Mode)
 
@@ -326,7 +337,7 @@ func TestMigrateVM_TerminalFailedStatus(t *testing.T) {
 	orch, _, _, fake := migrateTestOrchestrator(t, false)
 	fake.statusResult = qemu.MigrationStatusFailed
 
-	_, err := orch.MigrateVM(context.Background(), "vm1", "dest.example:10443", MigrateOptions{})
+	_, err := migrateOnFakeClock(t, orch, MigrateOptions{})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrMigrationFailed)
 	assert.True(t, fake.resumed, "a failed transfer must resume the paused source")

@@ -20,16 +20,12 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
-// handleVMOperation routes VM opcodes to the VM handler.
-// This handles VM operations (0x60-0x6A range and extended codes).
-//
-// The compute extended category opcode (quicwire.OpVMExtendedCategory, 0x69)
-// carries a sub-opcode in payload[0]. Container sub-opcodes (create, start,
-// stop, remove, get, list, logs, attest — whose direct opcodes are shadowed
-// by the PXE ranges at the top-level dispatcher) are handled first; every
-// other sub-opcode falls through to the VM handler, which unwraps the
-// extended VM sub-opcodes internally. This mirrors the provisioning category,
-// where EAB sub-opcodes are routed ahead of the config delivery dispatcher.
+// handleVMServiceOperation routes the compute extended category
+// (quicwire.OpVMExtendedCategory, 0x69), which carries a sub-opcode in
+// payload[0]. Container sub-opcodes (create, start, stop, remove, get, list,
+// logs, attest — whose direct opcodes are shadowed by the PXE ranges at the
+// top-level dispatcher) are handled first; VM sub-opcodes go to handleVMPB.
+// A sub-opcode neither answers is refused as unknown.
 //
 // The six unary container sub-opcodes converge to the platform.v1
 // ComputeService pb wire contract and delegate to the shared
@@ -37,7 +33,11 @@ import (
 // and OpContainerAttest have no converged pb path and are forwarded to the
 // flat ContainerHandler.
 func (h *QUICServiceHandler) handleVMServiceOperation(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	if req.Opcode == quicwire.OpVMExtendedCategory && len(req.Payload) > 0 && quic.IsContainerSubOpcode(req.Payload[0]) {
+	if len(req.Payload) == 0 {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICMissingField{Field: "sub_opcode"})
+	}
+
+	if quic.IsContainerSubOpcode(req.Payload[0]) {
 		subOpcode := req.Payload[0]
 		body := req.Payload[1:]
 
@@ -55,20 +55,12 @@ func (h *QUICServiceHandler) handleVMServiceOperation(ctx context.Context, req *
 		})
 	}
 
-	// Operational VM sub-opcodes (metrics, disk hotplug/unplug/resize, migrate)
-	// and the lifecycle sub-opcodes (restart, suspend, resume) converge on the
-	// platform.v1 pb wire contract and delegate to the shared
-	// *ComputeGRPCService, mirroring the container sub-opcode path above.
-	// handleVMPB declines every other sub-opcode, which falls through to the
-	// flat VMHandler.
-	if req.Opcode == quicwire.OpVMExtendedCategory && len(req.Payload) > 0 {
-		if resp, handled := h.handleVMPB(ctx, req.Payload[0], req.Payload[1:]); handled {
-			return resp
-		}
+	// The VM verbs and the operational VM sub-opcodes (metrics, disk
+	// hotplug/unplug/resize, migrate) converge on the platform.v1 pb wire
+	// contract and delegate to the shared *ComputeGRPCService, mirroring the
+	// container sub-opcode path above.
+	if resp, handled := h.handleVMPB(ctx, req.Payload[0], req.Payload[1:]); handled {
+		return resp
 	}
-
-	if h.vmHandler == nil {
-		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"})
-	}
-	return h.vmHandler.HandleRequest(ctx, req)
+	return h.errorResponse(quicwire.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: req.Payload[0]})
 }

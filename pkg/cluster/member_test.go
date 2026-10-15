@@ -854,23 +854,26 @@ func TestMembershipManager_WaitForLeader(t *testing.T) {
 	})
 
 	t.Run("returns error on context cancellation", func(t *testing.T) {
-		mm, raftOp := createTestMembershipManager(t)
-		defer func() { _ = mm.Close() }()
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-		defer cancel()
+		// The deadline and the leader check ticks run on synctest time (#284).
+		synctest.Test(t, func(t *testing.T) {
+			mm, raftOp := createTestMembershipManager(t)
+			defer func() { _ = mm.Close() }()
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
 
-		_ = mm.Bootstrap(ctx)
-		raftOp.setLeader(0, "") // No leader
+			_ = mm.Bootstrap(ctx)
+			raftOp.setLeader(0, "") // No leader
 
-		_, err := mm.WaitForLeader(ctx)
-		if err == nil {
-			t.Error("WaitForLeader() should return error on context cancellation")
-		}
+			_, err := mm.WaitForLeader(ctx)
+			if err == nil {
+				t.Error("WaitForLeader() should return error on context cancellation")
+			}
 
-		_, ok := err.(ErrLeadershipTimeout)
-		if !ok {
-			t.Errorf("expected ErrLeadershipTimeout, got %T", err)
-		}
+			_, ok := err.(ErrLeadershipTimeout)
+			if !ok {
+				t.Errorf("expected ErrLeadershipTimeout, got %T", err)
+			}
+		})
 	})
 
 	t.Run("returns error when closed", func(t *testing.T) {

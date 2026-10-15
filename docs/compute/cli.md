@@ -123,12 +123,9 @@ QUIC and MCP; HTTP 400, read back as InvalidArgument, over REST).
 
 ### Transports
 
-Every VM verb above reaches the daemon over `grpc`, `unix` and `rest`.
-Two transports carry fewer:
+Every VM verb above reaches the daemon over `grpc`, `unix`, `rest` and `quic`.
+One transport carries fewer:
 
-- **`quic`** carries only `reboot`, `suspend` and `resume`. platformd's QUIC
-  listener answers no start, stop or delete, so those fail locally with
-  Unimplemented.
 - **`mcp`**: the `vm_*` tools take only the VM id. A request carrying `force`,
   `timeout_seconds` or `delete_disks` is refused with InvalidArgument rather
   than run without it. `compute stop` always sends its `--timeout` (default
@@ -228,7 +225,7 @@ This is the **only attestation verb in the entire CLI** — see
 
 | Capability | Reach it with |
 |---|---|
-| VM snapshots (create, list, delete, restore) | REST, gRPC, MCP |
+| VM snapshots (create, list, delete, restore) | REST, gRPC, QUIC, MCP |
 | Disk attach / detach / resize | REST, gRPC, QUIC, MCP |
 | VM metrics, container metrics | REST, gRPC, QUIC, MCP |
 | Exec in a container | REST, gRPC, QUIC, MCP |

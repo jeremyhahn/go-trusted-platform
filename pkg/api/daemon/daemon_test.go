@@ -33,6 +33,10 @@ type mockManagedService struct {
 	startCount atomic.Int32
 	stopCount  atomic.Int32
 
+	// stopDeadline is the deadline of the context the last Stop was handed,
+	// nil when it had none.
+	stopDeadline atomic.Pointer[time.Time]
+
 	// starts carries one pending notification. startCount above is
 	// authoritative; this only nudges a waiter, so a notification dropped while
 	// nobody is waiting cannot lose an occurrence — awaitStarts re-reads the
@@ -115,6 +119,9 @@ func (m *mockManagedService) Start(ctx context.Context) error {
 
 func (m *mockManagedService) Stop(ctx context.Context) error {
 	m.stopCount.Add(1)
+	if deadline, ok := ctx.Deadline(); ok {
+		m.stopDeadline.Store(&deadline)
+	}
 	if m.stopDelay > 0 {
 		select {
 		case <-time.After(m.stopDelay):

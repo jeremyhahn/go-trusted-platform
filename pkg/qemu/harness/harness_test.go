@@ -330,20 +330,33 @@ func TestConsole_ExpectReportsAClosedGuest(t *testing.T) {
 }
 
 func TestDialConsole_WaitsForTheSocketThenGivesUp(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "late.sock")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	go func() {
-		// The socket appears after the first dial attempts have failed.
-		timer := time.NewTimer(450 * time.Millisecond)
-		<-timer.C
-		fakeGuest(t, socketPath, func(conn net.Conn) { _, _ = conn.Write([]byte("hello\n")) })
-	}()
-	console, err := DialConsole(ctx, socketPath)
-	require.NoError(t, err)
-	_, err = console.Expect(ctx, "hello")
-	require.NoError(t, err)
-	require.NoError(t, console.Close())
+	dir := t.TempDir()
+	staged := filepath.Join(dir, "staged.sock")
+	socketPath := filepath.Join(dir, "late.sock")
+	// The guest listens outside the bubble, at a path the dialer does not
+	// know yet: a goroutine blocked in Accept is not durably blocked, so it
+	// would stop the bubble's clock.
+	fakeGuest(t, staged, func(conn net.Conn) { _, _ = conn.Write([]byte("hello\n")) })
+
+	// The socket appears after the first dial attempts have failed. The late
+	// appearance and the retry ticks run on the synctest bubble's clock
+	// (#284); a rename moves the bound socket along with its listener.
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		go func() {
+			timer := time.NewTimer(3*consoleDialInterval + consoleDialInterval/2)
+			<-timer.C
+			if err := os.Rename(staged, socketPath); err != nil {
+				t.Errorf("move the guest socket into place: %v", err)
+			}
+		}()
+		console, err := DialConsole(ctx, socketPath)
+		require.NoError(t, err)
+		_, err = console.Expect(ctx, "hello")
+		require.NoError(t, err)
+		require.NoError(t, console.Close())
+	})
 }
 
 func TestDialConsole_GivesUpWhenTheSocketNeverAppears(t *testing.T) {

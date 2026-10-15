@@ -53,7 +53,7 @@ import (
 //	0x54      scheduler category
 //	0x55      messaging category
 //	0x56-0x5F tpm2 (idevid)     0xB0-0xB4 sdn extended
-//	0x60-0x6A vm (0x69=ext cat) 0xB5-0xBF iam roles/groups
+//	0x69      vm (ext cat)      0xB5-0xBF iam roles/groups
 //	0x6B-0x6E tpm2 (iak ext)    0xC0-0xCB kms keys
 //	0x6F      container         0xCC-0xCF switch/kms-ext/secrets/prov cats
 //	0x70-0x7F attestation       0xD0-0xDA kms crypto
@@ -67,7 +67,10 @@ import (
 // Constants whose byte is owned by another family at the top level
 // (documented multiplexing) are encoded explicitly below:
 //
-//   - Extended VM ops (OpVMRestart..OpVMVerifyAttest, 0xB6-0xBF) and the
+//   - VM ops (OpVMCreate..OpVMList, 0x60-0x65, and
+//     OpVMRestart..OpVMResume, 0xB6-0xB8, and
+//     OpVMSnapshotCreate..OpVMSnapshotList, 0xBB-0xBE, and
+//     OpVMAttest 0xB9, OpVMVerifyAttest 0xBF) and the
 //     container ops (create/start/stop/remove/attest) travel as
 //     sub-opcodes in payload[0] under quicwire.OpVMExtendedCategory (0x69).
 //   - Overlay/gateway ops travel under their category opcodes 0x2E/0x2F.
@@ -208,7 +211,9 @@ var quicWireOwners = []struct {
 	{0x54, 0x54, "scheduler"},
 	{0x55, 0x55, "messaging"},
 	{0x56, 0x5F, "tpm2"},
-	{0x60, 0x6A, "vm"},
+	{0x60, 0x68, "reserved"}, // retired top-level VM bytes (#704), unclassified
+	{0x69, 0x69, "vm"},
+	{0x6A, 0x6A, "reserved"}, // retired VMGetState (#704), unclassified
 	{0x6B, 0x6E, "tpm2"},
 	{0x6F, 0x6F, "container"},
 	{0x70, 0x77, "attestation"},
@@ -394,17 +399,13 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpIAKInfo":                   {value: quicwire.OpIAKInfo, mode: wireDirect, family: "tpm2"},
 	"OpIAKDelete":                 {value: quicwire.OpIAKDelete, mode: wireDirect, family: "tpm2"},
 	"OpIAKCSR":                    {value: quicwire.OpIAKCSR, mode: wireDirect, family: "tpm2"},
-	"OpVMCreate":                  {value: quicwire.OpVMCreate, mode: wireDirect, family: "vm"},
-	"OpVMDelete":                  {value: quicwire.OpVMDelete, mode: wireDirect, family: "vm"},
-	"OpVMStart":                   {value: quicwire.OpVMStart, mode: wireDirect, family: "vm"},
-	"OpVMStop":                    {value: quicwire.OpVMStop, mode: wireDirect, family: "vm"},
-	"OpVMGet":                     {value: quicwire.OpVMGet, mode: wireDirect, family: "vm"},
-	"OpVMList":                    {value: quicwire.OpVMList, mode: wireDirect, family: "vm"},
-	"OpVMAttachNet":               {value: quicwire.OpVMAttachNet, mode: wireDirect, family: "vm"},
-	"OpVMDetachNet":               {value: quicwire.OpVMDetachNet, mode: wireDirect, family: "vm"},
-	"OpVMActivate":                {value: quicwire.OpVMActivate, mode: wireDirect, family: "vm"},
+	"OpVMCreate":                  {value: quicwire.OpVMCreate, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
+	"OpVMDelete":                  {value: quicwire.OpVMDelete, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
+	"OpVMStart":                   {value: quicwire.OpVMStart, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
+	"OpVMStop":                    {value: quicwire.OpVMStop, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
+	"OpVMGet":                     {value: quicwire.OpVMGet, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
+	"OpVMList":                    {value: quicwire.OpVMList, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
 	"OpVMExtendedCategory":        {value: quicwire.OpVMExtendedCategory, mode: wireDirect, family: "vm"},
-	"OpVMGetState":                {value: quicwire.OpVMGetState, mode: wireDirect, family: "vm"},
 	"OpIAKInstallCert":            {value: quicwire.OpIAKInstallCert, mode: wireDirect, family: "tpm2"},
 	"OpIAKGetCert":                {value: quicwire.OpIAKGetCert, mode: wireDirect, family: "tpm2"},
 	"OpDeviceAttributes":          {value: quicwire.OpDeviceAttributes, mode: wireDirect, family: "tpm2"},
@@ -493,9 +494,8 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpIAMRoleAssign":             {value: quicwire.OpIAMRoleAssign, mode: wireDirect, family: "iam"},
 	"OpVMAttest":                  {value: quicwire.OpVMAttest, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
 	"OpIAMRoleRevoke":             {value: quicwire.OpIAMRoleRevoke, mode: wireDirect, family: "iam"},
-	"OpVMConsole":                 {value: quicwire.OpVMConsole, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
 	"OpIAMGroupCreate":            {value: quicwire.OpIAMGroupCreate, mode: wireDirect, family: "iam"},
-	"OpVMSnapshot":                {value: quicwire.OpVMSnapshot, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
+	"OpVMSnapshotCreate":          {value: quicwire.OpVMSnapshotCreate, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
 	"OpIAMGroupDelete":            {value: quicwire.OpIAMGroupDelete, mode: wireDirect, family: "iam"},
 	"OpVMSnapshotRestore":         {value: quicwire.OpVMSnapshotRestore, mode: categorySub, family: "vm", category: quicwire.OpVMExtendedCategory},
 	"OpIAMGroupGet":               {value: quicwire.OpIAMGroupGet, mode: wireDirect, family: "iam"},

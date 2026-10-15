@@ -152,6 +152,51 @@ func (a *UnixAdapter) StopVM(ctx context.Context, opts StopVMOptions) (*StopVMRe
 	return result, nil
 }
 
+// RebootVM restarts a running virtual machine via the Unix socket.
+func (a *UnixAdapter) RebootVM(ctx context.Context, opts RebootVMOptions) (*RebootVMResult, error) {
+	status, err := a.client.RebootVMDomain(ctx, opts.VMID, opts.Force)
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "RebootVM", Err: err}
+	}
+
+	result := &RebootVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
+}
+
+// SuspendVM pauses a running virtual machine via the Unix socket.
+func (a *UnixAdapter) SuspendVM(ctx context.Context, opts SuspendVMOptions) (*SuspendVMResult, error) {
+	status, err := a.client.SuspendVMDomain(ctx, opts.VMID)
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "SuspendVM", Err: err}
+	}
+
+	result := &SuspendVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
+}
+
+// ResumeVM continues a suspended virtual machine via the Unix socket.
+func (a *UnixAdapter) ResumeVM(ctx context.Context, opts ResumeVMOptions) (*ResumeVMResult, error) {
+	status, err := a.client.ResumeVMDomain(ctx, opts.VMID)
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "ResumeVM", Err: err}
+	}
+
+	result := &ResumeVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
+}
+
 // DeleteVM deletes a virtual machine via the SDK client over Unix socket.
 func (a *UnixAdapter) DeleteVM(ctx context.Context, opts DeleteVMOptions) (*DeleteVMResult, error) {
 	status, err := a.client.DeleteVMDomain(ctx, &computesvc.DeleteVMParams{

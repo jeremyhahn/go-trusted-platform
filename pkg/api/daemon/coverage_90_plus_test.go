@@ -199,16 +199,6 @@ func TestQUICServiceHandler_Setters(t *testing.T) {
 		assert.Nil(t, handler.attestationHandler)
 	})
 
-	t.Run("SetVMHandler", func(t *testing.T) {
-		handler.SetVMHandler(nil)
-		assert.Nil(t, handler.vmHandler)
-	})
-
-	t.Run("SetVMOrchestrator_Nil", func(t *testing.T) {
-		handler.SetVMOrchestrator(nil)
-		assert.Nil(t, handler.vmHandler)
-	})
-
 	t.Run("SetTenantManager", func(t *testing.T) {
 		handler.SetTenantManager(nil)
 		assert.Nil(t, handler.tenantManager)
@@ -230,11 +220,6 @@ func TestQUICServiceHandlerOptions(t *testing.T) {
 	t.Run("WithQUICAttestationService_Nil", func(t *testing.T) {
 		handler := newTestQUICServiceHandler(logger, WithQUICAttestationService(nil))
 		assert.Nil(t, handler.attestationHandler)
-	})
-
-	t.Run("WithQUICVMService_Nil", func(t *testing.T) {
-		handler := newTestQUICServiceHandler(logger, WithQUICVMService(nil))
-		assert.Nil(t, handler.vmHandler)
 	})
 
 	t.Run("WithQUICTenantManager", func(t *testing.T) {
@@ -289,14 +274,30 @@ func TestQUICServiceHandler_VMServiceOperation(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ctx := context.Background()
 
-	t.Run("handleVMServiceOperation_NoHandler", func(t *testing.T) {
+	t.Run("empty payload has no sub-opcode", func(t *testing.T) {
 		handler := newTestQUICServiceHandler(logger)
-		req := &quicwire.Request{Opcode: quicwire.OpVMCreate}
+		req := &quicwire.Request{Opcode: quicwire.OpVMExtendedCategory}
+
+		resp := handler.handleVMServiceOperation(ctx, req)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
+	})
+
+	t.Run("VM sub-opcode without the compute service", func(t *testing.T) {
+		handler := newTestQUICServiceHandler(logger)
+		req := &quicwire.Request{Opcode: quicwire.OpVMExtendedCategory, Payload: []byte{quicwire.OpVMCreate}}
 
 		resp := handler.handleVMServiceOperation(ctx, req)
 		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
+	t.Run("unknown sub-opcode is not implemented", func(t *testing.T) {
+		handler := newTestQUICServiceHandler(logger)
+		// 0xBA was OpVMConsole, retired with the flat VM handler (#704).
+		req := &quicwire.Request{Opcode: quicwire.OpVMExtendedCategory, Payload: []byte{0xBA}}
+
+		resp := handler.handleVMServiceOperation(ctx, req)
+		assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
+	})
 }
 
 func TestQUICServiceHandler_AttestationOperation(t *testing.T) {
@@ -1008,11 +1009,6 @@ func TestQUICServiceHandler_SetOrchestrators_WithNonNil(t *testing.T) {
 	t.Run("SetContainerHandler clears to nil", func(t *testing.T) {
 		handler.SetContainerHandler(nil)
 		assert.Nil(t, handler.containerHandler)
-	})
-
-	t.Run("SetVMHandler clears to nil", func(t *testing.T) {
-		handler.SetVMHandler(nil)
-		assert.Nil(t, handler.vmHandler)
 	})
 
 	t.Run("SetAttestationHandler clears to nil", func(t *testing.T) {

@@ -18,6 +18,7 @@ package compute_test
 import (
 	"os"
 
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -57,4 +58,50 @@ func GetSocketPath() string {
 // generateTestVMName generates a unique VM name for testing.
 func generateTestVMName(suffix string) string {
 	return "test-vm-" + helpers.GenerateUniqueID(suffix)
+}
+
+// fullSnapshotConfig builds the memory-and-disk snapshot configuration the
+// compute service requires.
+func fullSnapshotConfig(opts CreateSnapshotOptions) *pb.SnapshotConfig {
+	return &pb.SnapshotConfig{
+		Name:           opts.Name,
+		Description:    opts.Description,
+		MemorySnapshot: true,
+		DiskSnapshot:   true,
+	}
+}
+
+// snapshotSummary converts an SDK snapshot into its test summary.
+func snapshotSummary(snapshot *pb.Snapshot) SnapshotSummary {
+	return SnapshotSummary{ID: snapshot.GetId(), VMID: snapshot.GetVmId()}
+}
+
+// snapshotSummaries converts SDK snapshots into their test summaries.
+func snapshotSummaries(snapshots []*pb.Snapshot) []SnapshotSummary {
+	summaries := make([]SnapshotSummary, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		summaries = append(summaries, snapshotSummary(snapshot))
+	}
+	return summaries
+}
+
+// vmQuote maps an SDK attestation response to the adapter quote.
+func vmQuote(resp *pb.AttestVMResponse) *VMQuote {
+	return &VMQuote{
+		Quote:              resp.GetQuote(),
+		Signature:          resp.GetSignature(),
+		SignatureAlgorithm: resp.GetSignatureAlgorithm(),
+	}
+}
+
+// verifyVMAttestationRequest builds the SDK verification request from the
+// adapter options.
+func verifyVMAttestationRequest(opts VerifyVMAttestationOptions) *pb.VerifyVMAttestationRequest {
+	return &pb.VerifyVMAttestationRequest{
+		VmId:               opts.VMID,
+		Quote:              opts.Quote,
+		Signature:          opts.Signature,
+		SignatureAlgorithm: opts.SignatureAlgorithm,
+		Nonce:              opts.Nonce,
+	}
 }

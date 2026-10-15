@@ -48,6 +48,11 @@ func (r *lifecycleRecorder) Stop(ctx context.Context, instanceID string) error {
 	return r.err
 }
 
+func (r *lifecycleRecorder) Delete(ctx context.Context, instanceID string) error {
+	r.calls = append(r.calls, "delete "+instanceID)
+	return r.err
+}
+
 func (r *lifecycleRecorder) Suspend(ctx context.Context, instanceID string) error {
 	r.calls = append(r.calls, "suspend "+instanceID)
 	return r.err
@@ -72,6 +77,27 @@ var quicVMLifecycleOps = []struct {
 	response func() vmStatusResponse
 	calls    []string
 }{
+	{
+		name:     "start",
+		opcode:   quicwire.OpVMStart,
+		request:  func(id string) any { return &platformv1.StartVMRequest{Id: id} },
+		response: func() vmStatusResponse { return &platformv1.StartVMResponse{} },
+		calls:    []string{"start vm-1"},
+	},
+	{
+		name:     "stop",
+		opcode:   quicwire.OpVMStop,
+		request:  func(id string) any { return &platformv1.StopVMRequest{Id: id} },
+		response: func() vmStatusResponse { return &platformv1.StopVMResponse{} },
+		calls:    []string{"stop vm-1"},
+	},
+	{
+		name:     "delete",
+		opcode:   quicwire.OpVMDelete,
+		request:  func(id string) any { return &platformv1.DeleteVMRequest{Id: id} },
+		response: func() vmStatusResponse { return &platformv1.DeleteVMResponse{} },
+		calls:    []string{"delete vm-1"},
+	},
 	{
 		name:     "restart",
 		opcode:   quicwire.OpVMRestart,
@@ -192,5 +218,87 @@ func TestQUICVMLifecycle_NoComputeServiceIsUnavailable(t *testing.T) {
 
 			assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 		})
+	}
+}
+
+func TestQUICVMCreate_ReturnsTheNewVM(t *testing.T) {
+	h, _ := newQUICVMLifecycleHandler(nil)
+	req := &platformv1.CreateVMRequest{Config: &platformv1.VMConfig{Name: "web"}}
+
+	resp := sendVMLifecycle(t, h, quicwire.OpVMCreate, encodeVMLifecycle(t, req))
+
+	require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
+	var created platformv1.CreateVMResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &created))
+	assert.True(t, created.GetStatus().GetSuccess())
+	assert.Equal(t, "web-instance", created.GetVm().GetId())
+}
+
+func TestQUICVMCreate_MissingConfigIsInvalidArgument(t *testing.T) {
+	h, _ := newQUICVMLifecycleHandler(nil)
+
+	resp := sendVMLifecycle(t, h, quicwire.OpVMCreate, encodeVMLifecycle(t, &platformv1.CreateVMRequest{}))
+
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status, string(resp.Payload))
+}
+
+func TestQUICVMGet_ReturnsTheVM(t *testing.T) {
+	h, _ := newQUICVMLifecycleHandler(nil)
+	create := &platformv1.CreateVMRequest{Config: &platformv1.VMConfig{Name: "web"}}
+	require.Equal(t, quicwire.StatusOK, sendVMLifecycle(t, h, quicwire.OpVMCreate, encodeVMLifecycle(t, create)).Status)
+
+	resp := sendVMLifecycle(t, h, quicwire.OpVMGet, encodeVMLifecycle(t, &platformv1.GetVMRequest{Id: "web-instance"}))
+
+	require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
+	var got platformv1.GetVMResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &got))
+	assert.Equal(t, "web-instance", got.GetVm().GetId())
+}
+
+func TestQUICVMGet_UnknownVMIsNotFound(t *testing.T) {
+	h, _ := newQUICVMLifecycleHandler(nil)
+
+	resp := sendVMLifecycle(t, h, quicwire.OpVMGet, encodeVMLifecycle(t, &platformv1.GetVMRequest{Id: "missing"}))
+
+	assert.Equal(t, quicwire.StatusNotFound, resp.Status, string(resp.Payload))
+}
+
+func TestQUICVMList_ReturnsTheVMs(t *testing.T) {
+	h, _ := newQUICVMLifecycleHandler(nil)
+	for _, name := range []string{"web", "db"} {
+		create := &platformv1.CreateVMRequest{Config: &platformv1.VMConfig{Name: name}}
+		require.Equal(t, quicwire.StatusOK, sendVMLifecycle(t, h, quicwire.OpVMCreate, encodeVMLifecycle(t, create)).Status)
+	}
+
+	resp := sendVMLifecycle(t, h, quicwire.OpVMList, encodeVMLifecycle(t, &platformv1.ListVMsRequest{}))
+
+	require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
+	var listed platformv1.ListVMsResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &listed))
+	ids := make([]string, 0, len(listed.GetVms()))
+	for _, vm := range listed.GetVms() {
+		ids = append(ids, vm.GetId())
+	}
+	assert.ElementsMatch(t, []string{"web-instance", "db-instance"}, ids)
+}
+
+func TestQUICVMList_OrchestratorFailureIsInternal(t *testing.T) {
+	h, recorder := newQUICVMLifecycleHandler(nil)
+	recorder.listFunc = func(context.Context, *compute.InstanceFilter) ([]*compute.Instance, error) {
+		return nil, &compute.MessageError{Msg: "store offline"}
+	}
+
+	resp := sendVMLifecycle(t, h, quicwire.OpVMList, encodeVMLifecycle(t, &platformv1.ListVMsRequest{}))
+
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status, string(resp.Payload))
+}
+
+func TestQUICVMReads_MalformedPayloadIsInvalidRequest(t *testing.T) {
+	for _, opcode := range []byte{quicwire.OpVMCreate, quicwire.OpVMGet, quicwire.OpVMList} {
+		h, _ := newQUICVMLifecycleHandler(nil)
+
+		resp := sendVMLifecycle(t, h, opcode, []byte("invalid payload"))
+
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status, "opcode 0x%02x", opcode)
 	}
 }

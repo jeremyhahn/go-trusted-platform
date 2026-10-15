@@ -18,6 +18,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
@@ -1476,38 +1477,43 @@ func (m *mockFlowLogsServer) Context() context.Context {
 }
 
 func TestSDNServiceUnit_StreamFlowLogs_Success(t *testing.T) {
-	mockClient := NewConfigurableMockOVSClient()
-	mockClient.OnListFlows(func(ctx context.Context, bridgeName string) ([]*ovs.Flow, error) {
-		return []*ovs.Flow{
-			{Cookie: "flow-1", Actions: "output:1", ByteCount: 1000},
-			{Cookie: "flow-2", Actions: "output:2", ByteCount: 2000},
-		}, nil
+	// StreamFlowLogs polls on a one-second ticker and the stream cancels
+	// after its third entry, two ticks in. The ticks run on synctest time
+	// (#284).
+	synctest.Test(t, func(t *testing.T) {
+		mockClient := NewConfigurableMockOVSClient()
+		mockClient.OnListFlows(func(ctx context.Context, bridgeName string) ([]*ovs.Flow, error) {
+			return []*ovs.Flow{
+				{Cookie: "flow-1", Actions: "output:1", ByteCount: 1000},
+				{Cookie: "flow-2", Actions: "output:2", ByteCount: 2000},
+			}, nil
+		})
+
+		svc := newTestSDNService(mockClient)
+		svc.bridges["br0"] = &bridgeResource{id: "uuid-br0", name: "br0"}
+
+		req := &platformv1.StreamFlowLogsRequest{BridgeId: "br0"}
+		stream := newMockFlowLogsServer()
+
+		// Run StreamFlowLogs in a goroutine since it blocks
+		done := make(chan error, 1)
+		go func() {
+			done <- svc.StreamFlowLogs(req, stream)
+		}()
+
+		// Wait for stream to complete or timeout
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("StreamFlowLogs timed out")
+		}
+
+		// Verify entries were sent
+		stream.mu.Lock()
+		assert.GreaterOrEqual(t, len(stream.entries), 2)
+		stream.mu.Unlock()
 	})
-
-	svc := newTestSDNService(mockClient)
-	svc.bridges["br0"] = &bridgeResource{id: "uuid-br0", name: "br0"}
-
-	req := &platformv1.StreamFlowLogsRequest{BridgeId: "br0"}
-	stream := newMockFlowLogsServer()
-
-	// Run StreamFlowLogs in a goroutine since it blocks
-	done := make(chan error, 1)
-	go func() {
-		done <- svc.StreamFlowLogs(req, stream)
-	}()
-
-	// Wait for stream to complete or timeout
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("StreamFlowLogs timed out")
-	}
-
-	// Verify entries were sent
-	stream.mu.Lock()
-	assert.GreaterOrEqual(t, len(stream.entries), 2)
-	stream.mu.Unlock()
 }
 
 func TestSDNServiceUnit_StreamFlowLogs_BridgeNotFound(t *testing.T) {

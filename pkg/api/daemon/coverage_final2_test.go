@@ -632,12 +632,6 @@ func TestCoverageFinal2WithQUICOptions(t *testing.T) {
 		t.Error("attestationHandler should be nil when svc is nil")
 	}
 
-	// WithQUICVMService with nil should not set handler
-	h = newTestQUICServiceHandler(logger, WithQUICVMService(nil))
-	if h.vmHandler != nil {
-		t.Error("vmHandler should be nil when orchestrator is nil")
-	}
-
 	// WithQUICVTPMService sets the vtpm service
 	h = newTestQUICServiceHandler(logger, WithQUICVTPMService(nil))
 	if h.vtpmService != nil {

@@ -1,6 +1,6 @@
 # Compute — API
 
-> **Status: NORMATIVE** · Scope: VM and container routes on every transport · Last verified: 2026-10-13
+> **Status: NORMATIVE** · Scope: VM and container routes on every transport · Last verified: 2026-10-15
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING`, never omitted.
@@ -44,8 +44,9 @@ service, which carries no `reason`. `error` is operator-facing prose and may
 change at any time — clients MUST NOT match on it. The TypeScript SDK lifts
 `reason` and `service` into `ApiError.details` and exposes the predicate as
 `isServiceNotConfigured(err)`, which additionally requires status 503.
-QUIC: top-level VM opcodes `0x60`–`0x6A`, extended lifecycle `0xB6`–`0xBF`, and
-a **VM extended category opcode `0x69`** for the operational sub-opcodes — §6.
+QUIC: the **VM extended category opcode `0x69`**, whose sub-opcodes carry the
+VM verbs (§2), the snapshot verbs (§3), the attestation verbs (§5) and the
+operational calls — §6.
 
 **Two REST servers serve `/api/v1/compute`.** The web service mounts its router
 (the 503 above and the `admin` gate of §7 are its behaviour); platformd's own
@@ -97,15 +98,35 @@ The daemon listener has no console or logs route: they are streams (§5).
 | Suspend VM | `POST /api/v1/compute/vms/{id}/suspend` | `SuspendVM` | `OpVMSuspend` (`0xB7`) | `vm_suspend` | ✅ |
 | Resume VM | `POST /api/v1/compute/vms/{id}/resume` | `ResumeVM` | `OpVMResume` (`0xB8`) | `vm_resume` | ✅ |
 | Update VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
-| Get VM state | `MISSING — docs/13 G7` | (via `GetVM`) | `OpVMGetState` (`0x6A`) | `MISSING — docs/13 G7` | — |
-| Activate VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpVMActivate` (`0x68`) | `MISSING — docs/13 G7` | — |
+| Get VM state | `MISSING — docs/13 G7` | (via `GetVM`) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
+| Activate VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 
 **Suspend pauses a running VM in memory; resume continues it** (#704). The
 QEMU orchestrator sends QMP `stop` and `cont` (`pkg/compute/qemu_suspend.go`)
-and records the VM as `suspended`, which `GetVM` reports as `VM_STATE_PAUSED`
-and the container view of the compute adapter as `paused`.
+and records the VM as `suspended`, which `GetVM` reports as `VM_STATE_PAUSED`,
+`GetContainer` and `ListContainers` as `CONTAINER_STATE_PAUSED`, and the
+container view of the compute adapter as `paused`.
 Suspending a VM that is not running, or resuming one that is not suspended, is
 FailedPrecondition. Stop and delete accept a suspended VM; start refuses it.
+
+The proto views map the lifecycle state through one table each
+(`instanceStateToVMProtoState`, `instanceStateToContainerProtoState`,
+`pkg/api/daemon/compute_grpc_service.go`). gRPC, Unix, REST and QUIC all carry
+these messages:
+
+| Lifecycle state | `VMState` | `ContainerState` |
+|---|---|---|
+| `creating` | `UNSPECIFIED` | `CREATED` |
+| `starting` | `STARTING` | `STARTING` |
+| `running` | `RUNNING` | `RUNNING` |
+| `suspended` | `PAUSED` | `PAUSED` |
+| `stopping` | `STOPPING` | `STOPPING` |
+| `stopped` | `STOPPED` | `EXITED` |
+| `error` | `ERROR` | `ERROR` |
+| `unknown`, `deleting` | `UNSPECIFIED` | `UNSPECIFIED` |
+
+The proto enums have no value for `unknown` or `deleting`, and `VMState` none
+for `creating`.
 
 **A VM is recorded `stopped` only when stop asked for it.** When the QEMU
 process exits, the orchestrator (`recordExit`, `pkg/compute/qemu.go`) moves a
@@ -119,25 +140,45 @@ recreated.
 `pkg/compute/reboot.go`), so a stopped VM refuses a reboot with
 FailedPrecondition.
 
-QUIC carries `OpVMRestart`, `OpVMSuspend` and `OpVMResume` as sub-opcodes under
-`OpVMExtendedCategory` (`0x69`). The payload after the sub-opcode byte is the
-`RebootVMRequest`, `SuspendVMRequest` or `ResumeVMRequest` message, and the
-daemon answers through the same `ComputeService` as gRPC (§6).
+QUIC carries create, list, get, delete, start, stop, reboot, suspend and resume
+as sub-opcodes under `OpVMExtendedCategory` (`0x69`), with the values in the
+table above. The payload after the sub-opcode byte is the RPC's request message
+(`CreateVMRequest`, ..., `ResumeVMRequest`), and the daemon answers through the
+same `ComputeService` as gRPC (§6).
 
 **The Go SDK carries each verb the daemon answers.** Its REST adapter maps all
 six lifecycle verbs to the routes above, with the id in the path and
 `delete_disks` as a query parameter. Its MCP adapter maps all six to the
 `vm_*` tools. The tools take only `id`, so the adapter refuses `force`,
 `timeout_seconds` or `delete_disks` with InvalidArgument rather than drop them
-(`sdk/go/transport/mcp/compute_vm.go`). Its QUIC adapter maps reboot, suspend
-and resume. Start, stop and delete fail locally with Unimplemented, because
-`0x62`, `0x63` and `0x61` answer `StatusUnavailable` on a running daemon (§6).
+(`sdk/go/transport/mcp/compute_vm.go`). Its QUIC adapter maps all six, and create,
+get and list, to their sub-opcodes (`sdk/go/transport/quic/adapter.go`).
 Every adapter returns the client's typed error (`ErrStartVMFailed`, ...,
 `sdk/go/services/compute/errors.go`) wrapping the transport status: an unknown VM
 is NotFound everywhere. A VM in the wrong state is FailedPrecondition, except
 over REST, where it is InvalidArgument because both REST servers render
 FailedPrecondition as HTTP 400. `TestVMLifecycleSDKParity_*`
 (`pkg/api/daemon/compute_sdk_parity_test.go`) holds this.
+
+Against a running daemon, `TestComputeMultiProtocol/<transport>/VMSuspendResumeReboot`
+(`test/integration/compute/multiprotocol_test.go`) sends suspend, resume and
+reboot over the CLI, REST, gRPC, QUIC, MCP and Unix to a VM a gRPC fixture
+created and started. It checks that the VM reads `paused` after suspend and
+`running` after resume and after reboot, reading the state over the same
+transport. It also checks that resuming a running VM answers that
+transport's wrong-state class:
+
+| Transport | Wrong-state answer |
+|---|---|
+| gRPC, Unix, QUIC | FailedPrecondition |
+| REST | HTTP 400 |
+| MCP | a JSON-RPC code of the FailedPrecondition class (`mcpwire.ClassForCode`) |
+| CLI | non-zero exit, with `code = FailedPrecondition` in the output |
+
+`TestQEMUOrchestratorSuspendResumeReboot`
+(`test/integration/compute/orchestrator_integration_test.go`) drives the same
+verbs on the QEMU orchestrator directly. It checks `ErrInstanceNotRunning` and
+`ErrInstanceNotSuspended` for wrong-state calls.
 
 ---
 
@@ -151,16 +192,37 @@ QUIC serves these as **sub-opcodes under `OpVMExtendedCategory` (`0x69`)** — s
 | Attach disk | `POST /api/v1/compute/vms/{id}/disks` | `AttachDisk` | `OpVMAttachDisk` (`0xCD`) | `vm_disk_attach` | ✅ |
 | Detach disk | `DELETE /api/v1/compute/vms/{id}/disks/{diskId}` | `DetachDisk` | `OpVMDetachDisk` (`0xCE`) | `vm_disk_detach` | ✅ |
 | Resize disk | `PATCH /api/v1/compute/vms/{id}/disks/{diskId}` | `ResizeDisk` | `OpVMResizeDisk` (`0xCF`) | `vm_disk_resize` | ✅ |
-| Create snapshot | `POST /api/v1/compute/vms/{id}/snapshots` | `CreateSnapshot` | `MISSING — docs/13 G7` | `vm_snapshot_create` | ✅ |
-| List snapshots | `GET /api/v1/compute/vms/{id}/snapshots` | `ListSnapshots` | `MISSING — docs/13 G7` | `vm_snapshot_list` | ✅ |
+| Create snapshot | `POST /api/v1/compute/vms/{id}/snapshots` | `CreateSnapshot` | `OpVMSnapshotCreate` (`0xBB`) | `vm_snapshot_create` | ✅ |
+| List snapshots | `GET /api/v1/compute/vms/{id}/snapshots` | `ListSnapshots` | `OpVMSnapshotList` (`0xBE`) | `vm_snapshot_list` | ✅ |
 | Get snapshot | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `vm_snapshot_get` | — |
-| Delete snapshot | `DELETE /api/v1/compute/vms/{id}/snapshots/{snapshotId}` | `DeleteSnapshot` | `MISSING — docs/13 G7` | `vm_snapshot_delete` | ✅ |
-| Restore snapshot | `POST /api/v1/compute/vms/{id}/snapshots/{snapshotId}/restore` | `RestoreSnapshot` | `MISSING — docs/13 G7` | `vm_snapshot_restore` | ✅ |
+| Delete snapshot | `DELETE /api/v1/compute/vms/{id}/snapshots/{snapshotId}` | `DeleteSnapshot` | `OpVMSnapshotDelete` (`0xBD`) | `vm_snapshot_delete` | ✅ |
+| Restore snapshot | `POST /api/v1/compute/vms/{id}/snapshots/{snapshotId}/restore` | `RestoreSnapshot` | `OpVMSnapshotRestore` (`0xBC`) | `vm_snapshot_restore` | ✅ |
 | Migrate VM | `POST /api/v1/compute/vms/{id}/migrate` | `MigrateVM` | `OpVMMigrate` (`0xD0`) | `vm_migrate` | ✅ |
 | Prepare migration | `MISSING — docs/13 G7` | `PrepareMigration` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Finalize migration | `MISSING — docs/13 G7` | `FinalizeMigration` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | VM metrics | `GET /api/v1/compute/vms/{id}/metrics` | `GetVMMetrics` | `OpVMMetrics` (`0xCC`) | `vm_metrics` | ✅ |
 | VM logs | `MISSING` — streaming, §5 | `GetVMLogs` (server stream) | `MISSING` — streaming | `vm_logs` | ✅ |
+
+The four snapshot sub-opcodes carry the RPC's request message
+(`CreateSnapshotRequest`, `ListSnapshotsRequest`, `DeleteSnapshotRequest`,
+`RestoreSnapshotRequest`) and are answered by the same `ComputeService` as gRPC
+(§6), with the same checks: a missing VM or snapshot id, or a snapshot that
+takes memory without disk or disk without memory, is InvalidArgument; an
+unknown VM or snapshot is NotFound; a VM that is not running, or an
+orchestrator without snapshots, is FailedPrecondition. The snapshot's id is
+its name.
+
+The Go SDK carries the snapshot verbs over gRPC and QUIC
+(`sdk/go/transport/quic/adapter.go`), returning the client's typed error
+(`ErrCreateSnapshotFailed`, ..., `sdk/go/services/compute/errors.go`) around
+the transport status; `TestVMSnapshotSDKParity_*`
+(`pkg/api/daemon/compute_sdk_snapshot_parity_test.go`) holds this. Its REST
+adapter routes no `/snapshots` path and its MCP adapter maps no `vm_snapshot_*`
+tool, so the SDK does not reach snapshots over REST or MCP. Against a running
+daemon, `TestComputeSnapshotsMultiProtocol`
+(`test/integration/compute/multiprotocol_test.go`) creates, lists, restores and
+deletes a snapshot of a running VM over gRPC and QUIC, then checks deleting it
+again answers NotFound.
 
 `PrepareMigration` and `FinalizeMigration` are gRPC-only and exist so a
 migration can be staged and confirmed; `MigrateVM` is the one-shot form. Do not
@@ -200,6 +262,24 @@ Containers are the most evenly covered capability set in this feature.
 `platformctl container attest` is the only attestation CLI verb in the whole
 platform — see [`docs/attestation/cli.md`](../attestation/cli.md).
 
+The two VM attestation sub-opcodes carry the RPC's request message
+(`AttestVMRequest`, `VerifyVMAttestationRequest`) and are answered by the same
+`ComputeService` as gRPC (§6), with the same checks: a missing VM id, a PCR
+bank other than SHA-256, or evidence without its quote, signature or nonce is
+InvalidArgument; an unknown VM is NotFound; a VM that is not running, has no
+vTPM, or runs on an orchestrator without attestation is FailedPrecondition.
+
+The Go SDK carries both verbs over gRPC and QUIC, returning the client's typed
+`ErrAttestVMFailed` or `ErrVerifyVMAttestationFailed` around the transport
+status; `TestVMAttestSDKParity_*`
+(`pkg/api/daemon/compute_sdk_attest_parity_test.go`) holds this. As with
+snapshots, its REST adapter routes no `/attest` path and its MCP adapter maps
+no `vm_attest*` tool. Against a running daemon,
+`TestComputeAttestationMultiProtocol`
+(`test/integration/compute/multiprotocol_test.go`) checks over gRPC and QUIC
+that attesting a stopped VM is FailedPrecondition, attesting an unknown VM is
+NotFound, and verifying evidence without a quote is InvalidArgument.
+
 ### A VM quote declares its signature scheme
 
 Attest VM returns `signature_algorithm` beside `signature` on every transport:
@@ -209,8 +289,9 @@ the scheme the vTPM's attestation key signed the quote with, named as
 attributes, not from its key type.
 
 Verify VM attestation takes the same field back (REST and MCP
-`signature_algorithm`, gRPC `VerifyVMAttestationRequest.signature_algorithm`,
-QUIC `signature_algorithm`) and checks the signature under that scheme alone.
+`signature_algorithm`, gRPC and QUIC
+`VerifyVMAttestationRequest.signature_algorithm`)
+and checks the signature under that scheme alone.
 An absent or unknown scheme, or one the live AK cannot carry, is not a
 transport error: the call succeeds with `verified` and `signature_valid` false
 and the reason in `message`. A client therefore echoes Attest VM's
@@ -246,12 +327,29 @@ The same pattern applies to `OpContainerExec` (`0xCA`) and `OpContainerMetrics`
 **A client that sends `0xCC` at top level is talking to the switch service, not
 asking for VM metrics.** Under `0x69` the daemon first offers every sub-opcode
 to the `ComputeService` path (`handleVMPB`, `pkg/api/daemon/quic_vm_pb.go`):
-the operational sub-opcodes above and the lifecycle sub-opcodes `OpVMRestart`,
-`OpVMSuspend` and `OpVMResume` (`0xB6`–`0xB8`) are answered there, and the rest
-of `0xB9`–`0xBF` fall through to the flat VM handler. platformd does not wire
-that handler (nothing outside tests calls `SetVMOrchestrator`), so those
-sub-opcodes, and the top-level opcodes `0x60`–`0x6A`, answer
-`StatusUnavailable` on a running daemon.
+the operational sub-opcodes above and the VM verbs `OpVMCreate`–`OpVMList`
+(`0x60`–`0x65`), `OpVMRestart`, `OpVMSuspend` and `OpVMResume` (`0xB6`–`0xB8`),
+the snapshot verbs `OpVMSnapshotCreate`, `OpVMSnapshotRestore`,
+`OpVMSnapshotDelete` and `OpVMSnapshotList` (`0xBB`–`0xBE`), and the
+attestation verbs `OpVMAttest` (`0xB9`) and `OpVMVerifyAttest` (`0xBF`) are
+answered there.
+A verb's failure keeps its class: a missing id or VM config is
+`StatusInvalidArgument`, an unknown VM or snapshot `StatusNotFound`, and a VM
+in the wrong state `StatusFailedPrecondition`.
+
+The top-level bytes `0x60`–`0x68` and `0x6A` are unassigned (#704). The flat VM
+handler that once answered them was never wired into platformd and has been
+removed. `0x60`–`0x65` survive only as sub-opcodes under `0x69`. Of the
+sub-opcodes `0xB9`–`0xBF` that went with it, `0xBB`–`0xBE` now carry the
+snapshot verbs and `0xB9` and `0xBF` the attestation verbs through
+`ComputeService`; `0xBA` is unassigned.
+
+The permission guard (`AuthMiddleware.GuardRequest`, `pkg/api/quic/auth.go`)
+runs before dispatch. It answers `StatusPermissionDenied` to an authenticated
+request for a byte or sub-opcode it has no permission for, which now includes
+the retired ones, and `StatusInvalidRequest` to `0x69` with an empty payload.
+A classified sub-opcode that no handler answers gets `StatusNotImplemented`
+from `handleVMServiceOperation` (`pkg/api/daemon/quic_vm.go`).
 
 The full category-opcode table is in
 [`docs/daemon/api.md`](../daemon/api.md).
@@ -363,7 +461,7 @@ permission of the RPC it calls (`computeRouteScopes`,
 | `0x09` | `StatusInvalidArgument` | 400 | `ErrNoNetworkInZone` |
 | `0x0A` | `StatusUnavailable` | 503 | Compute not wired into the daemon |
 | `0x0B` | `StatusNotImplemented` | 501 | `ErrComputeProviderNotCompiled` |
-| `0x0C` | `StatusFailedPrecondition` | 400 | VM in the wrong state for reboot, suspend or resume |
+| `0x0C` | `StatusFailedPrecondition` | 400 | VM in the wrong state for the verb |
 
 **501 means the binary was built without the provider's build tag** (`awscompute`,
 `azurecompute`, `gcpcompute`) — not that the feature is unfinished.

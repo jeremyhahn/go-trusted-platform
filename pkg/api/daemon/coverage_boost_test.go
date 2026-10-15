@@ -686,28 +686,6 @@ func TestBoost_ComputeGRPCService_InstanceToContainerProto_WithName(t *testing.T
 	}
 }
 
-func TestBoost_ComputeGRPCService_InstanceStateToContainerState(t *testing.T) {
-	logger := boostLogger()
-	svc := NewComputeGRPCService(logger, nil)
-
-	tests := []struct {
-		name  string
-		input compute.InstanceState
-	}{
-		{"creating", compute.StateCreating},
-		{"running", compute.StateRunning},
-		{"stopped", compute.StateStopped},
-		{"unknown", compute.StateUnknown},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := svc.instanceStateToContainerState(tc.input)
-			_ = got
-		})
-	}
-}
-
 func TestBoost_ComputeGRPCService_StreamingStubs(t *testing.T) {
 	logger := boostLogger()
 	svc := NewComputeGRPCService(logger, nil)

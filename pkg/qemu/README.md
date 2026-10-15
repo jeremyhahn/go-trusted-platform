@@ -285,6 +285,12 @@ go test -v -coverprofile=coverage.out ./pkg/qemu/...
 go tool cover -html=coverage.out
 ```
 
+The unit tests do not need `qemu-img`. `CreateDisk` reaches it through a seam,
+and the tests replace it with an in-memory fake. The tests that run the real
+`qemu-img` are in `test/integration/vtpm/qemu_test.go`. They run in the
+devcontainer with `make integration-test-vtpm`, and they fail if the binary is
+missing.
+
 ## Requirements
 
 - QEMU (qemu-system-x86_64)

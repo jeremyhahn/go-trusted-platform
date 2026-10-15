@@ -370,6 +370,83 @@ func TestQEMUOrchestratorStopError(t *testing.T) {
 	assert.ErrorIs(t, err, compute.ErrInstanceNotRunning)
 }
 
+// TestQEMUOrchestratorSuspendResumeReboot tests suspend, resume and reboot of a
+// running VM instance, and the wrong-state errors of suspend and resume.
+func TestQEMUOrchestratorSuspendResumeReboot(t *testing.T) {
+	requireDevcontainer(t)
+	setupTestBridge(t)
+	defer cleanupTestBridge(t)
+
+	workDir := t.TempDir()
+	defer cleanupTestDir(t, workDir)
+
+	orchestrator := createTestOrchestrator(t, workDir)
+	defer orchestrator.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	profile := createTestDeviceProfile("test-vm-suspend")
+
+	instance, err := orchestrator.Create(ctx, profile)
+	require.NoError(t, err)
+	defer func() {
+		state, stateErr := orchestrator.GetState(ctx, instance.ID)
+		if stateErr == nil && state != compute.StateStopped {
+			if stopErr := orchestrator.Stop(ctx, instance.ID); stopErr != nil {
+				t.Logf("Cleanup: failed to stop VM %s: %v", instance.ID, stopErr)
+			}
+		}
+		if deleteErr := orchestrator.Delete(ctx, instance.ID); deleteErr != nil {
+			t.Logf("Cleanup: failed to delete VM %s: %v", instance.ID, deleteErr)
+		}
+	}()
+
+	// Resuming an instance that is not suspended fails.
+	err = orchestrator.Resume(ctx, instance.ID)
+	assert.ErrorIs(t, err, compute.ErrInstanceNotSuspended)
+
+	// Suspending an instance that is not running fails.
+	err = orchestrator.Suspend(ctx, instance.ID)
+	assert.ErrorIs(t, err, compute.ErrInstanceNotRunning)
+
+	err = orchestrator.Start(ctx, instance.ID)
+	require.NoError(t, err)
+
+	// Suspend: the instance is paused, and a second suspend fails.
+	err = orchestrator.Suspend(ctx, instance.ID)
+	require.NoError(t, err, "Failed to suspend VM instance")
+
+	state, err := orchestrator.GetState(ctx, instance.ID)
+	require.NoError(t, err)
+	assert.Equal(t, compute.StateSuspended, state, "State should be suspended after suspend")
+
+	err = orchestrator.Suspend(ctx, instance.ID)
+	assert.ErrorIs(t, err, compute.ErrInstanceNotRunning)
+
+	// Resume: the instance runs again, and a second resume fails.
+	err = orchestrator.Resume(ctx, instance.ID)
+	require.NoError(t, err, "Failed to resume VM instance")
+
+	state, err = orchestrator.GetState(ctx, instance.ID)
+	require.NoError(t, err)
+	assert.Equal(t, compute.StateRunning, state, "State should be running after resume")
+
+	err = orchestrator.Resume(ctx, instance.ID)
+	assert.ErrorIs(t, err, compute.ErrInstanceNotSuspended)
+
+	// Reboot: stop then start leaves the instance running.
+	err = compute.Reboot(ctx, orchestrator, instance.ID)
+	require.NoError(t, err, "Failed to reboot VM instance")
+
+	state, err = orchestrator.GetState(ctx, instance.ID)
+	require.NoError(t, err)
+	assert.Equal(t, compute.StateRunning, state, "State should be running after reboot")
+
+	err = orchestrator.Stop(ctx, instance.ID)
+	require.NoError(t, err)
+}
+
 // TestQEMUOrchestratorAttachNetwork tests OVS network attachment.
 func TestQEMUOrchestratorAttachNetwork(t *testing.T) {
 	requireDevcontainer(t)

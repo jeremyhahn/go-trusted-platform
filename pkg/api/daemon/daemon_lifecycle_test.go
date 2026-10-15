@@ -761,7 +761,7 @@ func TestForceStopDaemon_HandlesNilServices(t *testing.T) {
 	}
 }
 
-func TestForceStopDaemon_QuickerThanGracefulStop(t *testing.T) {
+func TestForceStopDaemon_BoundsEachServiceStop(t *testing.T) {
 	config := testConfig("/tmp/test-lifecycle-forcestop-fast.sock")
 	config.Services = map[string]ServiceConfig{
 		"tpm": {
@@ -778,9 +778,12 @@ func TestForceStopDaemon_QuickerThanGracefulStop(t *testing.T) {
 		t.Fatalf("New() failed: %v", err)
 	}
 
-	// Register a slow service
+	// A service that fails to stop. It records the deadline it was handed
+	// rather than waiting it out (#284): the old form slept a 2s stop and
+	// asserted ForceStop took under 3s, which held only because 2s is
+	// inside the force timeout.
 	svc := newMockService("tpm")
-	svc.stopDelay = 2 * time.Second
+	svc.stopErr = ErrServiceNotRunning{ServiceName: "tpm"}
 	err = d.RegisterService(svc)
 	if err != nil {
 		t.Fatalf("RegisterService() failed: %v", err)
@@ -794,17 +797,25 @@ func TestForceStopDaemon_QuickerThanGracefulStop(t *testing.T) {
 
 	<-autoStarted
 
-	start := time.Now()
+	forceTimeout := forceStopTimeoutSeconds * time.Second
+	before := time.Now()
 	err = d.ForceStop()
-	elapsed := time.Since(start)
+	after := time.Now()
 
 	if err != nil {
-		t.Errorf("ForceStop() failed: %v", err)
+		t.Errorf("ForceStop() failed despite the service's stop error: %v", err)
+	}
+	if d.IsRunning() {
+		t.Error("daemon still running after ForceStop()")
 	}
 
-	// ForceStop should complete faster than the slow service would take
-	if elapsed > 3*time.Second {
-		t.Errorf("ForceStop() took too long: %v", elapsed)
+	deadline := svc.stopDeadline.Load()
+	if deadline == nil {
+		t.Fatal("ForceStop() handed the service's Stop no deadline")
+	}
+	if deadline.Before(before.Add(forceTimeout)) || deadline.After(after.Add(forceTimeout)) {
+		t.Errorf("Stop deadline %v is not %v after ForceStop() began (between %v and %v)",
+			*deadline, forceTimeout, before.Add(forceTimeout), after.Add(forceTimeout))
 	}
 }
 

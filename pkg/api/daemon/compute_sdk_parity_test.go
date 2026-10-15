@@ -74,26 +74,18 @@ var vmSDKVerbs = []vmSDKVerb{
 // vmSDKTransport serves the daemon's compute handlers for one protocol and
 // returns an SDK compute client connected to them.
 type vmSDKTransport struct {
-	name  string
-	dial  func(t *testing.T, provider *MCPServiceProvider, svc *ComputeGRPCService) *sdkcompute.Client
-	verbs map[string]bool
+	name string
+	dial func(t *testing.T, provider *MCPServiceProvider, svc *ComputeGRPCService) *sdkcompute.Client
 	// wrongState is the class a VM in the wrong state reaches the caller as.
 	wrongState codes.Code
 }
 
-// allVMVerbs is every verb; QUIC carries only reboot, suspend and resume
-// because platformd's QUIC listener answers no other VM verb.
-var (
-	allVMVerbs  = map[string]bool{"start": true, "stop": true, "reboot": true, "suspend": true, "resume": true, "delete": true}
-	quicVMVerbs = map[string]bool{"reboot": true, "suspend": true, "resume": true}
-)
-
 var vmSDKTransports = []vmSDKTransport{
 	// Both REST servers render FailedPrecondition as 400, which the SDK
 	// reads back as InvalidArgument.
-	{"REST", dialComputeREST, allVMVerbs, codes.InvalidArgument},
-	{"QUIC", dialComputeQUIC, quicVMVerbs, codes.FailedPrecondition},
-	{"MCP", dialComputeMCP, allVMVerbs, codes.FailedPrecondition},
+	{"REST", dialComputeREST, codes.InvalidArgument},
+	{"QUIC", dialComputeQUIC, codes.FailedPrecondition},
+	{"MCP", dialComputeMCP, codes.FailedPrecondition},
 }
 
 func dialComputeREST(t *testing.T, _ *MCPServiceProvider, svc *ComputeGRPCService) *sdkcompute.Client {
@@ -165,9 +157,6 @@ func drain(ops <-chan string) []string {
 func TestVMLifecycleSDKParity_RunsTheVerb(t *testing.T) {
 	for _, transport := range vmSDKTransports {
 		for _, verb := range vmSDKVerbs {
-			if !transport.verbs[verb.name] {
-				continue
-			}
 			t.Run(transport.name+" "+verb.name, func(t *testing.T) {
 				provider, svc, orch := seededVMPair()
 				ops := recordVMOps(orch, nil)
@@ -184,9 +173,6 @@ func TestVMLifecycleSDKParity_UnknownVM(t *testing.T) {
 	notFound := &compute.SentinelCauseError{Sentinel: compute.ErrInstanceNotFound, Cause: &compute.MessageError{Msg: "no such vm"}}
 	for _, transport := range vmSDKTransports {
 		for _, verb := range vmSDKVerbs {
-			if !transport.verbs[verb.name] {
-				continue
-			}
 			t.Run(transport.name+" "+verb.name, func(t *testing.T) {
 				provider, svc, orch := seededVMPair()
 				recordVMOps(orch, notFound)
@@ -219,25 +205,5 @@ func TestVMLifecycleSDKParity_WrongState(t *testing.T) {
 				})
 			}
 		}
-	}
-}
-
-// platformd's QUIC listener answers no start, stop or delete, so the SDK
-// refuses them before the wire and the orchestrator never runs.
-func TestVMLifecycleSDKParity_QUICVerbsWithoutAServerAnswer(t *testing.T) {
-	for _, verb := range vmSDKVerbs {
-		if quicVMVerbs[verb.name] {
-			continue
-		}
-		t.Run(verb.name, func(t *testing.T) {
-			provider, svc, orch := seededVMPair()
-			ops := recordVMOps(orch, nil)
-			client := dialComputeQUIC(t, provider, svc)
-
-			err := verb.call(context.Background(), client, "vm-1")
-			assert.True(t, verb.typed(err), "err = %T, want the client's typed %s error", err, verb.name)
-			assert.Equal(t, codes.Unimplemented, status.Code(err), "err = %v", err)
-			assert.Empty(t, drain(ops))
-		})
 	}
 }

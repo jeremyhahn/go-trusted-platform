@@ -81,7 +81,15 @@ func TestLookupOperationPermission_CategorySubOpcodes(t *testing.T) {
 		{"invitation delete", quicwire.OpIAMCategory, quicwire.InvitationSubDelete, OpcodePermission{Resource: "invitation", Action: "delete"}},
 		{"ipam release", quicwire.OpIPAMCategory, quicwire.OpGatewayReleaseIP, OpcodePermission{Resource: "sdn", Action: "write"}},
 		{"container remove", quicwire.OpVMExtendedCategory, quicwire.OpContainerRemove, OpcodePermission{Resource: "container", Action: "delete"}},
+		{"vm create", quicwire.OpVMExtendedCategory, quicwire.OpVMCreate, OpcodePermission{Resource: "vm", Action: "write"}},
+		{"vm delete", quicwire.OpVMExtendedCategory, quicwire.OpVMDelete, OpcodePermission{Resource: "vm", Action: "delete"}},
+		{"vm list", quicwire.OpVMExtendedCategory, quicwire.OpVMList, OpcodePermission{Resource: "vm", Action: "read"}},
+		{"vm snapshot create", quicwire.OpVMExtendedCategory, quicwire.OpVMSnapshotCreate, OpcodePermission{Resource: "vm", Action: "write"}},
+		{"vm snapshot restore", quicwire.OpVMExtendedCategory, quicwire.OpVMSnapshotRestore, OpcodePermission{Resource: "vm", Action: "write"}},
 		{"vm snapshot delete", quicwire.OpVMExtendedCategory, quicwire.OpVMSnapshotDelete, OpcodePermission{Resource: "vm", Action: "delete"}},
+		{"vm snapshot list", quicwire.OpVMExtendedCategory, quicwire.OpVMSnapshotList, OpcodePermission{Resource: "vm", Action: "read"}},
+		{"vm attest", quicwire.OpVMExtendedCategory, quicwire.OpVMAttest, OpcodePermission{Resource: "vm", Action: "read"}},
+		{"vm verify attest", quicwire.OpVMExtendedCategory, quicwire.OpVMVerifyAttest, OpcodePermission{Resource: "vm", Action: "read"}},
 		{"eab revoke", quicwire.OpProvisioningCategory, quicwire.EABSubRevokeCredential, OpcodePermission{Resource: "eab", Action: "write"}},
 		{"device profile assign", quicwire.OpProvisioningCategory, quicwire.DeviceProfileSubAssign, OpcodePermission{Resource: "device", Action: "write"}},
 		{"device disable", quicwire.OpProvisioningCategory, quicwire.DeviceSubDisable, OpcodePermission{Resource: "device", Action: "write"}},
@@ -241,15 +249,16 @@ func TestLookupOperationPermission_CategoryWithoutSubOpcode(t *testing.T) {
 	}
 }
 
-func TestLookupOperationPermission_VMDirectOpcodesStayDirect(t *testing.T) {
-	// 0x69 is a category, but the neighbouring VM opcodes are direct: their
-	// payload must not be read as a sub-opcode.
-	got, _, err := LookupOperationPermission(quicwire.OpVMDelete, []byte{quicwire.OpContainerGet})
-	if err != nil {
-		t.Fatalf("unexpected error %v", err)
+func TestLookupOperationPermission_RetiredVMBytesAreUnclassified(t *testing.T) {
+	// The VM verbs moved under 0x69; their old top-level bytes must not
+	// grant a permission on their own.
+	_, _, err := LookupOperationPermission(quicwire.OpVMDelete, []byte{quicwire.OpContainerGet})
+	var unclassified ErrOperationNotClassified
+	if !errors.As(err, &unclassified) {
+		t.Fatalf("err = %v, want ErrOperationNotClassified", err)
 	}
-	if want := (OpcodePermission{Resource: "vm", Action: "delete"}); got != want {
-		t.Fatalf("got %+v, want %+v", got, want)
+	if unclassified.HasSub {
+		t.Fatalf("err = %+v, want a top-level refusal", unclassified)
 	}
 }
 

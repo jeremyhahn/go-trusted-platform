@@ -60,6 +60,28 @@ type QEMUOrchestrator struct {
 	// vtpmDeviceFor produces the vTPM attestor device for a swtpm socket.
 	// Overridable seam for tests; defaults to defaultVTPMDevice.
 	vtpmDeviceFor func(socketPath string) (vm.VTPMDevice, error)
+
+	// emulatorFor opens the swtpm a VM boots against.
+	// Overridable seam for tests; defaults to defaultEmulator.
+	emulatorFor func(config *swtpm.Config) (tpmEmulator, error)
+
+	// createDisk creates a VM's disk image.
+	// Overridable seam for tests; defaults to (*qemu.VM).CreateDisk.
+	createDisk func(vm *qemu.VM) error
+}
+
+// tpmEmulator is the software TPM a VM boots against; *swtpm.SWTPM
+// implements it.
+type tpmEmulator interface {
+	Initialize(ctx context.Context) error
+	IsInitialized() bool
+	Start(ctx context.Context) error
+	WaitForSocket(timeout time.Duration) error
+	Stop() error
+	IsRunning() bool
+	PID() int
+	SocketPath() string
+	StateDir() string
 }
 
 // qemuInstance holds the VM instance and its metadata
@@ -67,7 +89,7 @@ type qemuInstance struct {
 	vm                *qemu.VM
 	instance          *Instance
 	ovsNetwork        *qemu.OVSNetwork
-	swtpm             *swtpm.SWTPM
+	swtpm             tpmEmulator
 	mu                sync.Mutex
 	cancelFunc        context.CancelFunc
 	waitGroup         sync.WaitGroup
@@ -117,6 +139,8 @@ func NewQEMUOrchestrator(config *OrchestratorConfig, logger *logging.Logger) (*Q
 	}
 	o.snapshotOpsFor = o.defaultSnapshotOps
 	o.vtpmDeviceFor = o.defaultVTPMDevice
+	o.emulatorFor = o.defaultEmulator
+	o.createDisk = (*qemu.VM).CreateDisk
 
 	// Connect to OVS if available
 	if o.ovsClient != nil {
@@ -159,7 +183,7 @@ func generateInstanceID() string {
 }
 
 // createSWTPM creates and initializes a software TPM instance for a VM
-func (o *QEMUOrchestrator) createSWTPM(ctx context.Context, instanceID, workDir string) (*swtpm.SWTPM, error) {
+func (o *QEMUOrchestrator) createSWTPM(ctx context.Context, instanceID, workDir string) (tpmEmulator, error) {
 	// Create TPM state directory
 	tpmStateDir := filepath.Join(workDir, "tpm")
 	if err := os.MkdirAll(tpmStateDir, 0755); err != nil {
@@ -177,7 +201,7 @@ func (o *QEMUOrchestrator) createSWTPM(ctx context.Context, instanceID, workDir 
 	}
 
 	// Create swtpm instance
-	tpm, err := swtpm.NewSWTPM(swtpmConfig, o.logger)
+	tpm, err := o.emulatorFor(swtpmConfig)
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to create swtpm", Err: err}
 	}
@@ -212,7 +236,7 @@ func (o *QEMUOrchestrator) SetVTPMGenerator(gen vtpm.Generator) {
 // with ErrVTPMIdentityRequired when the profile requires a hardware-rooted
 // identity, and otherwise falls back to a local identity-less swtpm with a
 // loud warning — never a silent downgrade.
-func (o *QEMUOrchestrator) provisionVTPM(ctx context.Context, profile *entities.DeviceProfile, cfg *InstanceConfig) (*swtpm.SWTPM, string, string, error) {
+func (o *QEMUOrchestrator) provisionVTPM(ctx context.Context, profile *entities.DeviceProfile, cfg *InstanceConfig) (tpmEmulator, string, string, error) {
 	if o.vtpmGenerator == nil {
 		if vtpmIdentityRequired(profile, cfg) {
 			return nil, "", "", &SentinelCauseError{
@@ -258,7 +282,7 @@ func (o *QEMUOrchestrator) provisionVTPM(ctx context.Context, profile *entities.
 // swtpmForBundle opens an swtpm bound to an existing bundle's TPM state dir and
 // socket. The bundle state is already initialized (EK cert injected at bundle
 // creation), so re-initialization is skipped.
-func (o *QEMUOrchestrator) swtpmForBundle(ctx context.Context, inst *vtpm.VTPMInstance) (*swtpm.SWTPM, error) {
+func (o *QEMUOrchestrator) swtpmForBundle(ctx context.Context, inst *vtpm.VTPMInstance) (tpmEmulator, error) {
 	swtpmConfig := &swtpm.Config{
 		StateDir:   filepath.Join(inst.StoragePath, "tpm"),
 		SocketPath: inst.SocketPath,
@@ -267,7 +291,7 @@ func (o *QEMUOrchestrator) swtpmForBundle(ctx context.Context, inst *vtpm.VTPMIn
 		Debug:      o.config.Debug,
 		QEMUMode:   true,
 	}
-	tpm, err := swtpm.NewSWTPM(swtpmConfig, o.logger)
+	tpm, err := o.emulatorFor(swtpmConfig)
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to open swtpm for bundle", Err: err}
 	}
@@ -276,6 +300,16 @@ func (o *QEMUOrchestrator) swtpmForBundle(ctx context.Context, inst *vtpm.VTPMIn
 		if err := tpm.Initialize(ctx); err != nil {
 			return nil, &WrappedError{Msg: "failed to initialize swtpm for bundle", Err: err}
 		}
+	}
+	return tpm, nil
+}
+
+// defaultEmulator opens the host swtpm. It returns a nil interface, never a
+// typed nil, when swtpm cannot be opened.
+func (o *QEMUOrchestrator) defaultEmulator(config *swtpm.Config) (tpmEmulator, error) {
+	tpm, err := swtpm.NewSWTPM(config, o.logger)
+	if err != nil {
+		return nil, err
 	}
 	return tpm, nil
 }
@@ -343,7 +377,7 @@ func (o *QEMUOrchestrator) Create(ctx context.Context, profile *entities.DeviceP
 	// against a profile-bound, CA-issued-EK bundle rather than an anonymous
 	// swtpm. Only WHERE the swtpm comes from changes here; the socket/NVRAM
 	// plumbing that boots the VM below is unchanged.
-	var tpm *swtpm.SWTPM
+	var tpm tpmEmulator
 	var tpmSocket string
 	var bundleID string
 	if instanceConfig.TPMEnabled {
@@ -383,7 +417,7 @@ func (o *QEMUOrchestrator) Create(ctx context.Context, profile *entities.DeviceP
 	}
 
 	// Create disk
-	if err := vm.CreateDisk(); err != nil {
+	if err := o.createDisk(vm); err != nil {
 		o.lifecycle.SetState(instanceID, StateError)
 		return nil, &WrappedError{Msg: "failed to create VM disk", Err: err}
 	}

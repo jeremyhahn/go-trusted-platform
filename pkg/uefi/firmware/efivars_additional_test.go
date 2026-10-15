@@ -22,56 +22,42 @@ func TestVariablePath(t *testing.T) {
 }
 
 func TestReadVariable_NotAvailable(t *testing.T) {
-	// On most dev systems, efivarfs is not available or is a real directory
-	// that we should not modify. We test the not-available path.
-	if IsAvailable() {
-		t.Skip("efivarfs is available, skipping not-available test")
-	}
+	useMissingEfiVars(t)
 
 	_, _, err := ReadVariable("TestVar", TrustedPlatformGUID)
 	assert.ErrorIs(t, err, ErrNotAvailable)
 }
 
 func TestWriteVariable_NotAvailable(t *testing.T) {
-	if IsAvailable() {
-		t.Skip("efivarfs is available, skipping not-available test")
-	}
+	useMissingEfiVars(t)
 
 	err := WriteVariable("TestVar", TrustedPlatformGUID, 0x07, []byte("test"))
 	assert.ErrorIs(t, err, ErrNotAvailable)
 }
 
 func TestDeleteVariable_NotAvailable(t *testing.T) {
-	if IsAvailable() {
-		t.Skip("efivarfs is available, skipping not-available test")
-	}
+	useMissingEfiVars(t)
 
 	err := DeleteVariable("TestVar", TrustedPlatformGUID)
 	assert.ErrorIs(t, err, ErrNotAvailable)
 }
 
 func TestListVariables_NotAvailable(t *testing.T) {
-	if IsAvailable() {
-		t.Skip("efivarfs is available, skipping not-available test")
-	}
+	useMissingEfiVars(t)
 
 	_, err := ListVariables()
 	assert.ErrorIs(t, err, ErrNotAvailable)
 }
 
 func TestGetVariable_NotAvailable(t *testing.T) {
-	if IsAvailable() {
-		t.Skip("efivarfs is available, skipping not-available test")
-	}
+	useMissingEfiVars(t)
 
 	_, err := GetVariable("TestVar", TrustedPlatformGUID)
 	assert.ErrorIs(t, err, ErrNotAvailable)
 }
 
 func TestSetVariable_NotAvailable(t *testing.T) {
-	if IsAvailable() {
-		t.Skip("efivarfs is available, skipping not-available test")
-	}
+	useMissingEfiVars(t)
 
 	v := &uefi.Variable{
 		Name:       "TestVar",
@@ -84,31 +70,26 @@ func TestSetVariable_NotAvailable(t *testing.T) {
 }
 
 func TestSetTrustedPlatform_NotAvailable(t *testing.T) {
-	if IsAvailable() {
-		t.Skip("efivarfs is available, skipping not-available test")
-	}
+	useMissingEfiVars(t)
 
 	err := SetTrustedPlatform()
 	assert.ErrorIs(t, err, ErrNotAvailable)
 }
 
 func TestClearTrustedPlatform_NotAvailable(t *testing.T) {
-	if IsAvailable() {
-		t.Skip("efivarfs is available, skipping not-available test")
-	}
+	useMissingEfiVars(t)
 
-	// ClearTrustedPlatform returns nil for not-found, but ErrNotAvailable wraps differently
+	// ClearTrustedPlatform returns nil only for a missing variable, never
+	// for missing efivarfs.
 	err := ClearTrustedPlatform()
 	assert.ErrorIs(t, err, ErrNotAvailable)
 }
 
 func TestGetTrustedPlatform_NotAvailable(t *testing.T) {
-	if IsAvailable() {
-		t.Skip("efivarfs is available, skipping not-available test")
-	}
+	useMissingEfiVars(t)
 
 	result, err := GetTrustedPlatform()
-	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrNotAvailable)
 	assert.False(t, result)
 }
 

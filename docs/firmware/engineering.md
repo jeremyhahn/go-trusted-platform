@@ -220,6 +220,10 @@ func GetTrustedPlatform() (bool, error)
 func IsTrustedPlatform() bool
 ```
 
+`ListVariables` takes the last 36 characters of each `{name}-{guid}` file as
+the GUID, so short names such as `Boot0000` are listed; directories and
+names without a valid GUID are skipped.
+
 > **Defect: two different `TRUSTED_PLATFORM` variables.**
 > `uefi.TrustedPlatformGUID` is `F47E4B3D-8C21-4A9F-B6E5-1D2C3E4F5A6B`;
 > `firmware.TrustedPlatformGUID` is `F47DE8A7-8E5B-4F4A-A73C-6D8F2E1B9C54`.
@@ -726,7 +730,7 @@ PEM bundle → `0600`, its parent directory `0700`. Built UKI → `0755`.
 | Unit | `pkg/secureboot/*_test.go` | **yes** | Key generation, key paths, re-sign mode, KMS signer (fake KMS and CA clients), module-key generate/load/malformed |
 | Unit | `pkg/authenticode/authenticode_test.go` | **yes** | Sign/verify round-trip, certificate extraction, constructor validation |
 | Unit | `pkg/modulesign/*_test.go` | **yes** | CMS envelope, trailer, compression codecs, guards, error paths |
-| Unit | `pkg/uefi/firmware/*_test.go` | **no** — excluded | Raw variable read/write/list against a fixture directory |
+| Unit | `pkg/uefi/firmware/*_test.go` | **no** — excluded | Raw variable read/write/delete/list and the `TRUSTED_PLATFORM` marker against a temp-dir efivarfs root with a fake `chattr`; never `/sys` or the host `chattr` |
 | Unit | `pkg/uki/*_test.go` | **no** — excluded | PE patching, section ordering, parser, helpers |
 | Unit | `pkg/cli/commands/secureboot/secureboot_test.go` | **no** — excluded | Verb wiring, flags, the guard pipeline with an injected `uefi.UKIVerifier` |
 | Integration | `test/integration/secureboot/` | separate target | The whole chain against real external verifiers and real firmware |

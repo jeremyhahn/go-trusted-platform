@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -34,7 +35,14 @@ func testFlags() func() *cli.CommonFlags {
 	}
 }
 
-func isRoot() bool { return os.Geteuid() == 0 }
+// asUID makes checkRoot see uid as the effective user ID for one test.
+// The package seam makes these tests unsafe to run in parallel.
+func asUID(t *testing.T, uid int) {
+	t.Helper()
+	saved := geteuid
+	geteuid = func() int { return uid }
+	t.Cleanup(func() { geteuid = saved })
+}
 
 func TestNewCommand_Structure(t *testing.T) {
 	cmd := NewCommand(testFlags())
@@ -182,14 +190,12 @@ func TestChangePassphrase_Flags(t *testing.T) {
 }
 
 // =============================================================================
-// Validation tests. All mutating runXxx helpers bail out on root check when
-// not root, so we structure these to work both as root and non-root.
+// Validation tests. Every mutating runXxx helper checks root first; asUID
+// sets the effective user ID checkRoot sees.
 // =============================================================================
 
 func TestRunStatus_RequiresRoot(t *testing.T) {
-	if isRoot() {
-		t.Skip("running as root; root check is not the error path here")
-	}
+	asUID(t, 1000)
 	err := runStatus(&cli.CommonFlags{OutputFormat: cli.OutputFormatJSON}, &statusFlags{})
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -200,13 +206,24 @@ func TestRunStatus_RequiresRoot(t *testing.T) {
 }
 
 func TestRunEnrollPassphrase_Validation(t *testing.T) {
-	if isRoot() {
-		t.Skip("running as root; validation happens after root check")
+	tests := []struct {
+		name  string
+		uid   int
+		flags enrollPassphraseFlags
+		want  error
+	}{
+		{"not root", 1000, enrollPassphraseFlags{existingPassphrase: "old", newPassphrase: "new"}, ErrRootRequired{}},
+		{"no existing passphrase", 0, enrollPassphraseFlags{newPassphrase: "new"}, ErrExistingPassphraseRequired{}},
+		{"no new passphrase", 0, enrollPassphraseFlags{existingPassphrase: "old"}, ErrNewPassphraseRequired{}},
 	}
-	err := runEnrollPassphrase(&cli.CommonFlags{OutputFormat: cli.OutputFormatJSON}, &enrollPassphraseFlags{})
-	var root ErrRootRequired
-	if !errors.As(err, &root) {
-		t.Errorf("expected ErrRootRequired (non-root), got %T", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			asUID(t, tt.uid)
+			err := runEnrollPassphrase(&cli.CommonFlags{OutputFormat: cli.OutputFormatJSON}, &tt.flags)
+			if !errors.Is(err, tt.want) {
+				t.Errorf("expected %T, got %T: %v", tt.want, err, err)
+			}
+		})
 	}
 }
 
@@ -324,18 +341,23 @@ func TestErrors_Messages(t *testing.T) {
 	}
 }
 
-func TestCheckRoot_NonRootPath(t *testing.T) {
-	// Can't force non-root from inside the process; just confirm that the
-	// function returns a specific error type shape when not root.
-	err := checkRoot()
-	if isRoot() {
-		if err != nil {
-			t.Errorf("expected nil error as root, got %v", err)
-		}
-		return
+func TestGeteuidSeamDefault(t *testing.T) {
+	if reflect.ValueOf(geteuid).Pointer() != reflect.ValueOf(os.Geteuid).Pointer() {
+		t.Error("geteuid should default to os.Geteuid")
 	}
+}
+
+func TestCheckRoot(t *testing.T) {
+	asUID(t, 0)
+	if err := checkRoot(); err != nil {
+		t.Errorf("expected nil error as root, got %v", err)
+	}
+}
+
+func TestCheckRoot_NonRootPath(t *testing.T) {
+	asUID(t, 1000)
 	var rootErr ErrRootRequired
-	if !errors.As(err, &rootErr) {
+	if err := checkRoot(); !errors.As(err, &rootErr) {
 		t.Errorf("expected ErrRootRequired, got %T: %v", err, err)
 	}
 }

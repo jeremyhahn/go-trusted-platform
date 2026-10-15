@@ -50,6 +50,7 @@ type Config struct {
 type SWTPM struct {
 	config       *Config
 	logger       *logging.Logger
+	tools        tools
 	cmd          *exec.Cmd
 	mu           sync.RWMutex
 	pid          int
@@ -61,12 +62,42 @@ type SWTPM struct {
 	exitCh       chan struct{} // Closed when the process exits
 }
 
+// tools reaches the swtpm host binaries.
+// Overridable seam for tests; defaults to hostTools.
+type tools struct {
+	// lookPath reports where the named binary is installed.
+	lookPath func(file string) (string, error)
+
+	// runSetup runs swtpm_setup with args, writing its output to stdout
+	// and stderr.
+	runSetup func(ctx context.Context, args []string, stdout, stderr io.Writer) error
+}
+
+// hostTools finds and runs the swtpm binaries on PATH.
+var hostTools = tools{
+	lookPath: exec.LookPath,
+	runSetup: runSWTPMSetup,
+}
+
+// runSWTPMSetup runs the swtpm_setup binary.
+func runSWTPMSetup(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	cmd := exec.CommandContext(ctx, "swtpm_setup", args...)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	return cmd.Run()
+}
+
 // stopGracePeriod is how long Stop waits after SIGTERM before it kills
 // swtpm. A variable so tests can shorten it.
 var stopGracePeriod = 5 * time.Second
 
 // NewSWTPM creates a new software TPM instance
 func NewSWTPM(config *Config, logger *logging.Logger) (*SWTPM, error) {
+	return newSWTPM(config, logger, hostTools)
+}
+
+// newSWTPM builds an SWTPM that reaches the swtpm binaries through tools.
+func newSWTPM(config *Config, logger *logging.Logger, tools tools) (*SWTPM, error) {
 	if config == nil {
 		return nil, ErrInvalidConfig
 	}
@@ -92,17 +123,18 @@ func NewSWTPM(config *Config, logger *logging.Logger) (*SWTPM, error) {
 	}
 
 	// Check if swtpm is installed
-	if _, err := exec.LookPath("swtpm"); err != nil {
+	if _, err := tools.lookPath("swtpm"); err != nil {
 		return nil, ErrSWTPMNotInstalled
 	}
 
-	if _, err := exec.LookPath("swtpm_setup"); err != nil {
+	if _, err := tools.lookPath("swtpm_setup"); err != nil {
 		return nil, ErrSWTPMNotInstalled
 	}
 
 	return &SWTPM{
 		config: config,
 		logger: logger,
+		tools:  tools,
 	}, nil
 }
 
@@ -139,20 +171,18 @@ func (s *SWTPM) Initialize(ctx context.Context) error {
 		"--overwrite",
 	}
 
-	cmd := exec.CommandContext(ctx, "swtpm_setup", args...)
-
 	// Capture stderr for error reporting
 	var stderr bytes.Buffer
+	var stdout io.Writer
+	var stderrOut io.Writer = &stderr
 	if s.config.Debug {
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
-	} else {
-		cmd.Stderr = &stderr
+		stdout = os.Stdout
+		stderrOut = io.MultiWriter(os.Stderr, &stderr)
 	}
 
 	s.logger.Debugf("Running: swtpm_setup %s", strings.Join(args, " "))
 
-	if err := cmd.Run(); err != nil {
+	if err := s.tools.runSetup(ctx, args, stdout, stderrOut); err != nil {
 		return &SentinelCauseError{Sentinel: ErrInitFailed, Cause: &MessageError{Msg: fmt.Sprintf("swtpm_setup failed: %v (stderr: %s)", err, stderr.String())}}
 	}
 

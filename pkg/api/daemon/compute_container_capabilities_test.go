@@ -502,12 +502,12 @@ func TestQUICComputeExtendedCategory_ContainerSubOpcodes(t *testing.T) {
 		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
-	t.Run("non-container sub-opcodes fall through to VM handler", func(t *testing.T) {
+	t.Run("non-container sub-opcodes route to the VM path", func(t *testing.T) {
 		handler, _ := newHandlerWithContainers(t)
 
-		// OpVMRestart (0xB6) is a VM extended sub-opcode. With no VM
-		// handler configured, the dispatcher must report the VM service
-		// unavailable rather than routing to the container handler.
+		// OpVMRestart (0xB6) is a VM sub-opcode. With no compute service
+		// wired, the dispatcher must report the VM service unavailable
+		// rather than routing to the container handler.
 		resp := handler.HandleRequest(ctx, &quicwire.Request{
 			Opcode:  quicwire.OpVMExtendedCategory,
 			Payload: []byte{quicwire.OpVMRestart},
@@ -531,6 +531,6 @@ func TestIsContainerSubOpcode(t *testing.T) {
 
 	t.Run("rejects VM extended sub-opcodes", func(t *testing.T) {
 		assert.False(t, quic.IsContainerSubOpcode(quicwire.OpVMRestart))
-		assert.False(t, quic.IsContainerSubOpcode(quicwire.OpVMSnapshotList))
+		assert.False(t, quic.IsContainerSubOpcode(quicwire.OpVMMetrics))
 	})
 }

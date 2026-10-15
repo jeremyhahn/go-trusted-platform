@@ -2824,6 +2824,10 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	return err
 }
 
+// forceStopTimeoutSeconds is the deadline ForceStop hands each service's
+// Stop. A forced stop ignores the error a failed or expired Stop returns.
+const forceStopTimeoutSeconds = 5
+
 // ForceStop immediately stops the daemon
 func (d *Daemon) ForceStop() error {
 	if !d.running.Load() {
@@ -2900,7 +2904,7 @@ func (d *Daemon) ForceStop() error {
 	// Force shutdown through the service
 	_, _ = d.service.Shutdown(context.Background(), &platformv1.ShutdownRequest{
 		Graceful:       false,
-		TimeoutSeconds: 5,
+		TimeoutSeconds: forceStopTimeoutSeconds,
 	})
 
 	d.running.Store(false)

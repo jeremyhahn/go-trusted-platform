@@ -164,27 +164,33 @@ Background goroutine that monitors VM exit:
 
 ## Testing
 
-Comprehensive test suite covering:
-
-### Integration Tests
-- `TestQEMUOrchestrator_SWTPM_Integration`: Full lifecycle
-- `TestQEMUOrchestrator_SWTPM_Lifecycle`: Start/stop operations
-- `TestQEMUOrchestrator_SWTPM_MultipleInstances`: Concurrent VMs
-
 ### Unit Tests
-- `TestQEMUOrchestrator_SWTPM_CreateHelper`: Helper method
-- `TestQEMUOrchestrator_SWTPM_SocketPath`: Path management
-- `TestQEMUOrchestrator_SWTPM_StatePermissions`: File permissions
-- `TestQEMUOrchestrator_SWTPM_CleanupOnError`: Error handling
 
-### Running Tests
+`pkg/compute/qemu_swtpm_test.go` replaces swtpm, swtpm_setup and qemu-img
+with in-memory fakes through the orchestrator's `emulatorFor` and
+`createDisk` seams, so the tests need none of the binaries and never skip:
+
+- `TestQEMUOrchestrator_SWTPM_Create`: TPM state, socket metadata, disk, Delete
+- `TestQEMUOrchestrator_SWTPM_DeleteStopsRunningSWTPM`: Delete stops swtpm
+- `TestQEMUOrchestrator_SWTPM_CreateHelper`: state reuse without re-initializing
+- `TestQEMUOrchestrator_SWTPM_CreateHelperErrors`: open, setup and directory failures
+- `TestQEMUOrchestrator_SWTPM_MultipleInstances`: one socket and state directory per VM
+- `TestQEMUOrchestrator_SWTPM_StatePermissions`: owner rwx on the state directory
+- `TestQEMUOrchestrator_SWTPM_CleanupOnError`: no instance kept after a failure
+- `TestQEMUOrchestrator_SWTPM_Bundle`: a VM boots against its profile's vTPM bundle
 
 ```bash
-# Run all swtpm integration tests
-go test -v -run TestQEMUOrchestrator_SWTPM ./pkg/compute
+make test-pkg PKG=./pkg/compute/ TESTFLAGS=-run=TestQEMUOrchestrator_SWTPM
+```
 
-# Run specific test
-go test -v -run TestQEMUOrchestrator_SWTPM_Integration ./pkg/compute
+### Integration Tests
+
+`test/integration/vtpm/qemu_swtpm_test.go` creates and deletes a VM with
+the real swtpm_setup, qemu-img and OVMF firmware. It runs in the
+devcontainer, and a missing binary fails it:
+
+```bash
+make integration-test-vtpm
 ```
 
 ## Requirements

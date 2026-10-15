@@ -34,7 +34,7 @@ func TestQEMUOrchestrator_Start_MoreEdgeCases(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestQEMUOrchestrator_Stop_MoreEdgeCases(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestQEMUOrchestrator_AttachNetwork_MoreEdgeCases(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestQEMUOrchestrator_DetachNetwork_MoreEdgeCases(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -275,7 +275,7 @@ func TestQEMUOrchestrator_Wait_StoppedInstance(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -320,7 +320,7 @@ func TestQEMUOrchestrator_Delete_MoreEdgeCases(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -447,7 +447,7 @@ func TestQEMUOrchestrator_List_Empty(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -472,7 +472,7 @@ func TestQEMUOrchestrator_Create_DuplicateCheck(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -509,7 +509,7 @@ func TestQEMUOrchestrator_Get_CopiesData(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -575,7 +575,7 @@ func TestQEMUOrchestrator_Get_NonExistent(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -597,7 +597,7 @@ func TestQEMUOrchestrator_Get_EmptyID(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -619,7 +619,7 @@ func TestQEMUOrchestrator_Delete_NonExistent(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -641,7 +641,7 @@ func TestQEMUOrchestrator_Delete_EmptyID(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -663,7 +663,7 @@ func TestQEMUOrchestrator_AttachNetwork_EmptyID(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -685,7 +685,7 @@ func TestQEMUOrchestrator_AttachNetwork_NonExistent(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -707,7 +707,7 @@ func TestQEMUOrchestrator_DetachNetwork_EmptyID(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -729,7 +729,7 @@ func TestQEMUOrchestrator_DetachNetwork_NonExistent(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -752,7 +752,7 @@ func TestQEMUOrchestrator_Create_MaxInstances(t *testing.T) {
 	config.MaxInstances = 2
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}

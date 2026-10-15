@@ -1456,22 +1456,22 @@ func (s *ComputeGRPCService) instanceToVMProto(instance *compute.Instance) *plat
 
 // instanceStateToVMState converts compute.InstanceState to platformv1.VMState.
 func (s *ComputeGRPCService) instanceStateToVMState(state compute.InstanceState) platformv1.VMState {
-	switch state {
-	case compute.StateStopped:
-		return platformv1.VMState_VM_STATE_STOPPED
-	case compute.StateStarting:
-		return platformv1.VMState_VM_STATE_STARTING
-	case compute.StateRunning:
-		return platformv1.VMState_VM_STATE_RUNNING
-	case compute.StateSuspended:
-		return platformv1.VMState_VM_STATE_PAUSED
-	case compute.StateStopping:
-		return platformv1.VMState_VM_STATE_STOPPING
-	case compute.StateError:
-		return platformv1.VMState_VM_STATE_ERROR
-	default:
-		return platformv1.VMState_VM_STATE_UNSPECIFIED
+	if vmState, ok := instanceStateToVMProtoState[state]; ok {
+		return vmState
 	}
+	return platformv1.VMState_VM_STATE_UNSPECIFIED
+}
+
+// instanceStateToVMProtoState maps each lifecycle state a VM view can hold
+// onto the proto enum. compute.StateUnknown, compute.StateCreating and
+// compute.StateDeleting have no proto value and fall to UNSPECIFIED.
+var instanceStateToVMProtoState = map[compute.InstanceState]platformv1.VMState{
+	compute.StateStopped:   platformv1.VMState_VM_STATE_STOPPED,
+	compute.StateStarting:  platformv1.VMState_VM_STATE_STARTING,
+	compute.StateRunning:   platformv1.VMState_VM_STATE_RUNNING,
+	compute.StateSuspended: platformv1.VMState_VM_STATE_PAUSED,
+	compute.StateStopping:  platformv1.VMState_VM_STATE_STOPPING,
+	compute.StateError:     platformv1.VMState_VM_STATE_ERROR,
 }
 
 // instanceToContainerProto converts a compute.Instance to a platformv1.Container.
@@ -1498,14 +1498,24 @@ func (s *ComputeGRPCService) instanceToContainerProto(instance *compute.Instance
 
 // instanceStateToContainerState converts compute.InstanceState to platformv1.ContainerState.
 func (s *ComputeGRPCService) instanceStateToContainerState(state compute.InstanceState) platformv1.ContainerState {
-	switch state {
-	case compute.StateCreating:
-		return platformv1.ContainerState_CONTAINER_STATE_CREATED
-	case compute.StateRunning:
-		return platformv1.ContainerState_CONTAINER_STATE_RUNNING
-	case compute.StateStopped:
-		return platformv1.ContainerState_CONTAINER_STATE_EXITED
-	default:
-		return platformv1.ContainerState_CONTAINER_STATE_UNSPECIFIED
+	if containerState, ok := instanceStateToContainerProtoState[state]; ok {
+		return containerState
 	}
+	return platformv1.ContainerState_CONTAINER_STATE_UNSPECIFIED
+}
+
+// instanceStateToContainerProtoState maps each lifecycle state a container
+// view can hold onto the proto enum; REST and QUIC serve the same proto
+// message. A suspended instance is alive with its memory kept but not
+// executing, so it is PAUSED, as the VM view reports it.
+// compute.StateUnknown and compute.StateDeleting have no proto value and fall
+// to UNSPECIFIED.
+var instanceStateToContainerProtoState = map[compute.InstanceState]platformv1.ContainerState{
+	compute.StateCreating:  platformv1.ContainerState_CONTAINER_STATE_CREATED,
+	compute.StateStarting:  platformv1.ContainerState_CONTAINER_STATE_STARTING,
+	compute.StateRunning:   platformv1.ContainerState_CONTAINER_STATE_RUNNING,
+	compute.StateSuspended: platformv1.ContainerState_CONTAINER_STATE_PAUSED,
+	compute.StateStopping:  platformv1.ContainerState_CONTAINER_STATE_STOPPING,
+	compute.StateStopped:   platformv1.ContainerState_CONTAINER_STATE_EXITED,
+	compute.StateError:     platformv1.ContainerState_CONTAINER_STATE_ERROR,
 }

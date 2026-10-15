@@ -22,11 +22,25 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
+	"testing/synctest"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/deployer"
 )
+
+// oneShotServer starts a real HTTP server that closes every connection
+// after its response. The probe's poll ticks run on a synctest bubble's
+// clock (#284), and a kept-alive client connection would sit in network
+// I/O inside the bubble, which is not durable blocking, so the clock
+// would never reach the next tick.
+func oneShotServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewUnstartedServer(handler)
+	srv.Config.SetKeepAlivesEnabled(false)
+	srv.Start()
+	t.Cleanup(srv.Close)
+	return srv
+}
 
 // gateOrchestrator builds the smallest Orchestrator that can run the
 // deploy phase, with the config-server probe supplied by the caller.
@@ -117,8 +131,8 @@ func TestDeployContainer_SucceedsWhenConfigServerServes(t *testing.T) {
 
 // TestDeployContainer_FailsAgainstDeadPort drives the real probe against
 // a port nothing is listening on, which is the observed failure on the
-// jumpbox. Bounded by the caller's context so the test does not sit out
-// the probe's own 30s.
+// jumpbox. The probe's own 30s deadline and its poll ticks run on the
+// synctest bubble's clock (#284), so the test sits out neither.
 func TestDeployContainer_FailsAgainstDeadPort(t *testing.T) {
 	// A listener opened and immediately closed yields a port that is
 	// almost certainly free, without guessing one.
@@ -130,13 +144,12 @@ func TestDeployContainer_FailsAgainstDeadPort(t *testing.T) {
 		DeployerConfig{Host: host, BootstrapHTTPPort: port},
 		httpConfigServerReadiness{})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
-	defer cancel()
-
-	var notServing ErrContainerServiceNotServing
-	if err := o.deployContainer(ctx); !errors.As(err, &notServing) {
-		t.Fatalf("deployContainer = %v, want ErrContainerServiceNotServing", err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		var notServing ErrContainerServiceNotServing
+		if err := o.deployContainer(context.Background()); !errors.As(err, &notServing) {
+			t.Fatalf("deployContainer = %v, want ErrContainerServiceNotServing", err)
+		}
+	})
 }
 
 // TestInstallLogBaseURL_HonoursConfiguredPort pins the other half of the
@@ -200,21 +213,19 @@ func TestRun_NoDeployer_StillVerifiesContainer(t *testing.T) {
 // device-script port it ACCEPTS the connection: a liveness check would
 // call that serving while pxeboot's own listener never bound.
 func TestDeployContainer_FailsWhenDeviceScriptPortIsSquatted(t *testing.T) {
-	cfgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	cfgSrv := oneShotServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/boot.ipxe" {
 			_, _ = w.Write([]byte("#!ipxe\nchain menu.ipxe\n"))
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer cfgSrv.Close()
+	})
 
 	// Stands in for the sysmon-server that owned 8081: alive, answering,
 	// and not the device-script server.
-	squatter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	squatter := oneShotServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("sysmon-server ok\n"))
-	}))
-	defer squatter.Close()
+	})
 
 	host, cfgPort := hostAndPort(t, cfgSrv.URL)
 	_, squatPort := hostAndPort(t, squatter.URL)
@@ -223,17 +234,18 @@ func TestDeployContainer_FailsWhenDeviceScriptPortIsSquatted(t *testing.T) {
 		DeployerConfig{Host: host, BootstrapHTTPPort: cfgPort, BootstrapDeviceScriptPort: squatPort},
 		httpConfigServerReadiness{})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
-	defer cancel()
-
-	var notServing ErrContainerServiceNotServing
-	err := o.deployContainer(ctx)
-	if !errors.As(err, &notServing) {
-		t.Fatalf("deployContainer = %v, want ErrContainerServiceNotServing — a squatting service is not our server", err)
-	}
-	if notServing.Listener != "device-script server" {
-		t.Errorf("Listener = %q, want device-script server", notServing.Listener)
-	}
+	// The servers listen outside the bubble; the probe's deadline and
+	// poll ticks run on its clock (#284).
+	synctest.Test(t, func(t *testing.T) {
+		var notServing ErrContainerServiceNotServing
+		err := o.deployContainer(context.Background())
+		if !errors.As(err, &notServing) {
+			t.Fatalf("deployContainer = %v, want ErrContainerServiceNotServing — a squatting service is not our server", err)
+		}
+		if notServing.Listener != "device-script server" {
+			t.Errorf("Listener = %q, want device-script server", notServing.Listener)
+		}
+	})
 }
 
 // TestDeployContainer_FailsWhenConfigPortIsSquatted is the config-server
@@ -243,28 +255,28 @@ func TestDeployContainer_FailsWhenDeviceScriptPortIsSquatted(t *testing.T) {
 // SOMETHING is on the port — which under --net=host is exactly what a
 // squatter gives you. The probe asks /boot.ipxe instead.
 func TestDeployContainer_FailsWhenConfigPortIsSquatted(t *testing.T) {
-	squatter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	squatter := oneShotServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"healthy"}`))
-	}))
-	defer squatter.Close()
+	})
 
 	host, port := hostAndPort(t, squatter.URL)
 	o := gateOrchestrator(t,
 		DeployerConfig{Host: host, BootstrapHTTPPort: port},
 		httpConfigServerReadiness{})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
-	defer cancel()
-
-	var notServing ErrContainerServiceNotServing
-	err := o.deployContainer(ctx)
-	if !errors.As(err, &notServing) {
-		t.Fatalf("deployContainer = %v, want ErrContainerServiceNotServing — a healthy-looking squatter is not our server", err)
-	}
-	if notServing.Listener != "config server" {
-		t.Errorf("Listener = %q, want config server", notServing.Listener)
-	}
+	// The squatter listens outside the bubble; the probe's deadline and
+	// poll ticks run on its clock (#284).
+	synctest.Test(t, func(t *testing.T) {
+		var notServing ErrContainerServiceNotServing
+		err := o.deployContainer(context.Background())
+		if !errors.As(err, &notServing) {
+			t.Fatalf("deployContainer = %v, want ErrContainerServiceNotServing — a healthy-looking squatter is not our server", err)
+		}
+		if notServing.Listener != "config server" {
+			t.Errorf("Listener = %q, want config server", notServing.Listener)
+		}
+	})
 }
 
 func TestInstallLogBaseURL_HonoursConfiguredPort(t *testing.T) {

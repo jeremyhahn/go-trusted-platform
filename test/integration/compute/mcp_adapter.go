@@ -25,8 +25,17 @@ import (
 	"sync/atomic"
 	"time"
 
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
+
+// mcpToolsSource is where the daemon's VM tool arguments are defined; a
+// declared gap names it so the skip says which tool lacks the option.
+const mcpToolsSource = "pkg/api/mcp/vm_lifecycle_tools.go"
 
 // =============================================================================
 // Error Types
@@ -87,26 +96,11 @@ type mcpToolCallParams struct {
 	Arguments interface{} `json:"arguments"`
 }
 
-// =============================================================================
-// MCP Tool Response Types
-// =============================================================================
-
-// mcpVMResult represents a VM result from an MCP tool call.
-type mcpVMResult struct {
-	ID       string            `json:"id"`
-	Name     string            `json:"name"`
-	State    string            `json:"state"`
-	CPUs     uint32            `json:"cpus"`
-	MemoryMB uint64            `json:"memory_mb"`
-	Labels   map[string]string `json:"labels,omitempty"`
-	Success  bool              `json:"success"`
-	Message  string            `json:"message"`
-}
-
-// mcpListVMsResult represents the list VMs result from an MCP tool call.
-type mcpListVMsResult struct {
-	VMs        []mcpVMResult `json:"vms"`
-	TotalItems uint64        `json:"total_items"`
+// mcpStatusResponse is the reply of a VM lifecycle tool, each of which
+// carries a Status.
+type mcpStatusResponse interface {
+	proto.Message
+	GetStatus() *pb.Status
 }
 
 // =============================================================================
@@ -235,211 +229,164 @@ func (a *MCPAdapter) callTool(ctx context.Context, toolName string, args interfa
 	return a.doRequest(ctx, req)
 }
 
+// callProtoTool invokes an MCP tool and decodes its result, the protojson
+// form of the ComputeService response, into out.
+func (a *MCPAdapter) callProtoTool(ctx context.Context, toolName string, args map[string]interface{}, out proto.Message) error {
+	result, err := a.callTool(ctx, toolName, args)
+	if err != nil {
+		return err
+	}
+	if err := protojson.Unmarshal(result, out); err != nil {
+		return ErrMCPRequestFailed{
+			Operation: toolName,
+			Message:   "failed to parse tool result: " + err.Error(),
+		}
+	}
+	return nil
+}
+
+// callVerb invokes a VM lifecycle tool that takes only the VM id and returns
+// the status of its reply.
+func (a *MCPAdapter) callVerb(ctx context.Context, toolName, vmID string, out mcpStatusResponse) (*pb.Status, error) {
+	if err := a.callProtoTool(ctx, toolName, map[string]interface{}{"id": vmID}, out); err != nil {
+		return nil, err
+	}
+	return out.GetStatus(), nil
+}
+
+// mcpNoSurface declares an option the daemon's MCP tool cannot carry, so the
+// case skips as a declared gap instead of running without the option.
+func mcpNoSurface(operation, reason string) error {
+	return surface.ErrNoSurface{
+		Transport: "MCP",
+		Operation: operation,
+		Reason:    reason + " (" + mcpToolsSource + ")",
+	}
+}
+
 // =============================================================================
 // ComputeCommands Implementation
 // =============================================================================
 
-// CreateVM creates a virtual machine via MCP.
+// CreateVM creates a virtual machine via the vm_create tool.
 func (a *MCPAdapter) CreateVM(ctx context.Context, opts CreateVMOptions) (*CreateVMResult, error) {
+	if opts.DiskSizeGB > 0 || opts.Firmware != "" || opts.Start || len(opts.Labels) > 0 {
+		return nil, mcpNoSurface("CreateVM", "vm_create carries only name, cpus, memory, tpm_enabled and secure_boot")
+	}
+
 	args := map[string]interface{}{
-		"name":         opts.Name,
-		"cpus":         opts.CPUs,
-		"memory_mb":    opts.MemoryMB,
-		"disk_size_gb": opts.DiskSizeGB,
+		"name":        opts.Name,
+		"tpm_enabled": opts.TPM,
+		"secure_boot": opts.SecureBoot,
+	}
+	if opts.CPUs > 0 {
+		args["cpus"] = opts.CPUs
+	}
+	if opts.MemoryMB > 0 {
+		args["memory"] = opts.MemoryMB
 	}
 
-	if opts.Firmware != "" {
-		args["firmware"] = opts.Firmware
-	}
-	if opts.SecureBoot {
-		args["secure_boot"] = true
-	}
-	if opts.TPM {
-		args["tpm"] = true
-	}
-	if opts.Start {
-		args["start"] = true
-	}
-	if len(opts.Labels) > 0 {
-		args["labels"] = opts.Labels
-	}
-
-	result, err := a.callTool(ctx, "platform_compute_create_vm", args)
-	if err != nil {
+	resp := &pb.CreateVMResponse{}
+	if err := a.callProtoTool(ctx, "vm_create", args, resp); err != nil {
 		return nil, err
 	}
-
-	var resp mcpVMResult
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, ErrMCPRequestFailed{
-			Operation: "platform_compute_create_vm",
-			Message:   "failed to parse tool result: " + err.Error(),
-		}
-	}
-
-	return &CreateVMResult{
-		VMID:    resp.ID,
-		Name:    resp.Name,
-		State:   resp.State,
-		Success: resp.Success,
-		Labels:  resp.Labels,
-	}, nil
+	return createVMResultFromDomain(computesvc.VMFromProto(resp.GetVm())), nil
 }
 
-// StartVM starts a virtual machine via MCP.
+// StartVM starts a virtual machine via the vm_start tool.
 func (a *MCPAdapter) StartVM(ctx context.Context, opts StartVMOptions) (*StartVMResult, error) {
-	args := map[string]interface{}{
-		"id": opts.VMID,
-	}
-
-	result, err := a.callTool(ctx, "platform_compute_start_vm", args)
+	status, err := a.callVerb(ctx, "vm_start", opts.VMID, &pb.StartVMResponse{})
 	if err != nil {
 		return nil, err
 	}
-
-	var resp mcpVMResult
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, ErrMCPRequestFailed{
-			Operation: "platform_compute_start_vm",
-			Message:   "failed to parse tool result: " + err.Error(),
-		}
-	}
-
-	return &StartVMResult{
-		Success: resp.Success,
-		Message: resp.Message,
-	}, nil
+	return &StartVMResult{Success: status.GetSuccess(), Message: status.GetMessage()}, nil
 }
 
-// StopVM stops a virtual machine via MCP.
+// StopVM stops a virtual machine via the vm_stop tool.
 func (a *MCPAdapter) StopVM(ctx context.Context, opts StopVMOptions) (*StopVMResult, error) {
-	args := map[string]interface{}{
-		"id": opts.VMID,
+	if opts.Force || opts.TimeoutSeconds > 0 {
+		return nil, mcpNoSurface("StopVM", "vm_stop carries only id, not force or timeout_seconds")
 	}
 
+	status, err := a.callVerb(ctx, "vm_stop", opts.VMID, &pb.StopVMResponse{})
+	if err != nil {
+		return nil, err
+	}
+	return &StopVMResult{Success: status.GetSuccess(), Message: status.GetMessage()}, nil
+}
+
+// RebootVM restarts a running virtual machine via the vm_reboot tool.
+func (a *MCPAdapter) RebootVM(ctx context.Context, opts RebootVMOptions) (*RebootVMResult, error) {
 	if opts.Force {
-		args["force"] = true
-	}
-	if opts.TimeoutSeconds > 0 {
-		args["timeout_seconds"] = opts.TimeoutSeconds
+		return nil, mcpNoSurface("RebootVM", "vm_reboot carries only id, not force")
 	}
 
-	result, err := a.callTool(ctx, "platform_compute_stop_vm", args)
+	status, err := a.callVerb(ctx, "vm_reboot", opts.VMID, &pb.RebootVMResponse{})
 	if err != nil {
 		return nil, err
 	}
-
-	var resp mcpVMResult
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, ErrMCPRequestFailed{
-			Operation: "platform_compute_stop_vm",
-			Message:   "failed to parse tool result: " + err.Error(),
-		}
-	}
-
-	return &StopVMResult{
-		Success: resp.Success,
-		Message: resp.Message,
-	}, nil
+	return &RebootVMResult{Success: status.GetSuccess(), Message: status.GetMessage()}, nil
 }
 
-// DeleteVM deletes a virtual machine via MCP.
+// SuspendVM pauses a running virtual machine via the vm_suspend tool.
+func (a *MCPAdapter) SuspendVM(ctx context.Context, opts SuspendVMOptions) (*SuspendVMResult, error) {
+	status, err := a.callVerb(ctx, "vm_suspend", opts.VMID, &pb.SuspendVMResponse{})
+	if err != nil {
+		return nil, err
+	}
+	return &SuspendVMResult{Success: status.GetSuccess(), Message: status.GetMessage()}, nil
+}
+
+// ResumeVM continues a suspended virtual machine via the vm_resume tool.
+func (a *MCPAdapter) ResumeVM(ctx context.Context, opts ResumeVMOptions) (*ResumeVMResult, error) {
+	status, err := a.callVerb(ctx, "vm_resume", opts.VMID, &pb.ResumeVMResponse{})
+	if err != nil {
+		return nil, err
+	}
+	return &ResumeVMResult{Success: status.GetSuccess(), Message: status.GetMessage()}, nil
+}
+
+// DeleteVM deletes a virtual machine via the vm_delete tool.
 func (a *MCPAdapter) DeleteVM(ctx context.Context, opts DeleteVMOptions) (*DeleteVMResult, error) {
-	args := map[string]interface{}{
-		"id": opts.VMID,
-	}
-
 	if opts.DeleteDisks {
-		args["delete_disks"] = true
+		return nil, mcpNoSurface("DeleteVM", "vm_delete carries only id, not delete_disks")
 	}
 
-	result, err := a.callTool(ctx, "platform_compute_delete_vm", args)
+	status, err := a.callVerb(ctx, "vm_delete", opts.VMID, &pb.DeleteVMResponse{})
 	if err != nil {
 		return nil, err
 	}
-
-	var resp mcpVMResult
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, ErrMCPRequestFailed{
-			Operation: "platform_compute_delete_vm",
-			Message:   "failed to parse tool result: " + err.Error(),
-		}
-	}
-
-	return &DeleteVMResult{
-		Success: resp.Success,
-		Message: resp.Message,
-	}, nil
+	return &DeleteVMResult{Success: status.GetSuccess(), Message: status.GetMessage()}, nil
 }
 
-// GetVM retrieves a virtual machine via MCP.
+// GetVM retrieves a virtual machine via the vm_get tool.
 func (a *MCPAdapter) GetVM(ctx context.Context, opts GetVMOptions) (*GetVMResult, error) {
-	args := map[string]interface{}{
-		"id": opts.VMID,
-	}
-
-	result, err := a.callTool(ctx, "platform_compute_get_vm", args)
-	if err != nil {
+	resp := &pb.GetVMResponse{}
+	if err := a.callProtoTool(ctx, "vm_get", map[string]interface{}{"id": opts.VMID}, resp); err != nil {
 		return nil, err
 	}
-
-	var resp mcpVMResult
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, ErrMCPRequestFailed{
-			Operation: "platform_compute_get_vm",
-			Message:   "failed to parse tool result: " + err.Error(),
-		}
+	if resp.GetVm() == nil {
+		return nil, ErrMCPRequestFailed{Operation: "vm_get", Message: "tool result carries no vm"}
 	}
-
-	return &GetVMResult{
-		VMID:     resp.ID,
-		Name:     resp.Name,
-		State:    resp.State,
-		CPUs:     resp.CPUs,
-		MemoryMB: resp.MemoryMB,
-		Labels:   resp.Labels,
-	}, nil
+	return getVMResultFromDomain(computesvc.VMFromProto(resp.GetVm())), nil
 }
 
-// ListVMs lists virtual machines via MCP.
+// ListVMs lists virtual machines via the vm_list tool.
 func (a *MCPAdapter) ListVMs(ctx context.Context, opts ListVMsOptions) (*ListVMsResult, error) {
-	args := map[string]interface{}{}
-
-	if opts.StateFilter != "" {
-		args["state"] = opts.StateFilter
-	}
-	if opts.PageSize > 0 {
-		args["page_size"] = opts.PageSize
-	}
-	if len(opts.Labels) > 0 {
-		args["labels"] = opts.Labels
+	if opts.StateFilter != "" || opts.PageSize > 0 || len(opts.Labels) > 0 {
+		return nil, mcpNoSurface("ListVMs", "vm_list takes no state, page size or label filter")
 	}
 
-	result, err := a.callTool(ctx, "platform_compute_list_vms", args)
-	if err != nil {
+	resp := &pb.ListVMsResponse{}
+	if err := a.callProtoTool(ctx, "vm_list", map[string]interface{}{}, resp); err != nil {
 		return nil, err
 	}
 
-	var resp mcpListVMsResult
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, ErrMCPRequestFailed{
-			Operation: "platform_compute_list_vms",
-			Message:   "failed to parse tool result: " + err.Error(),
-		}
+	vms := make([]*computesvc.VM, len(resp.GetVms()))
+	for i, vm := range resp.GetVms() {
+		vms[i] = computesvc.VMFromProto(vm)
 	}
-
-	vms := make([]VMSummary, len(resp.VMs))
-	for i, vm := range resp.VMs {
-		vms[i] = VMSummary{
-			VMID:   vm.ID,
-			Name:   vm.Name,
-			State:  vm.State,
-			Labels: vm.Labels,
-		}
-	}
-
-	return &ListVMsResult{
-		VMs:        vms,
-		TotalItems: resp.TotalItems,
-	}, nil
+	result := listVMsResultFromDomain(&computesvc.ListVMsResult{VMs: vms})
+	result.TotalItems = resp.GetPagination().GetTotalItems()
+	return result, nil
 }
