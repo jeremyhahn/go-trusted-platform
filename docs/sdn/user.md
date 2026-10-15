@@ -1,6 +1,6 @@
 # SDN — Using It
 
-> **Status: REFERENCE** · Last verified: 2026-08-18
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > What an operator does with the platform's software-defined network, in the
 > order they do it. Internals are in [engineering.md](engineering.md).
 
@@ -127,9 +127,10 @@ platformctl sdn policy apply --id acl-tenant-a --name tenant-a-acl \
     --type acl --priority 100 --bridge br-tenant-a --enabled
 ```
 
-**`--enabled` defaults to false.** If you apply a policy and nothing changes,
-that is why. Staging a set of policies and enabling them together is the
-intended workflow; forgetting the flag is the common mistake.
+**`--enabled` is recorded but not consulted.** The daemon installs a policy's
+rules on apply whatever the flag says. The CLI sends no rules, so a policy
+applied from `platformctl` installs no flows; rules arrive only through the
+API's `ApplyPolicy` request.
 
 ---
 
@@ -141,6 +142,10 @@ platformctl sdn overlay vtep list
 platformctl sdn overlay vni list
 platformctl sdn overlay tunnel list
 ```
+
+On platformd the tunnel and remote-MAC lists come back empty: nothing feeds
+the controller's VTEP and MAC tables yet ([cli.md](cli.md)). The gateway's
+overlay commands show the remote VTEPs.
 
 When a workload has moved between hosts and traffic still goes to the old place,
 the remote MAC table is stale:
@@ -177,18 +182,21 @@ another's VLAN or subnet, inside the IPAM pool or in a reserved range is refused
 at load, because the runtime symptom would be silent cross-zone reachability —
 traffic going somewhere it should not, with nothing logged.
 
-**"TC policy without hardware offload" or "DPDK requires netdev".**
+**"ovs tc-policy requires hw-offload to be enabled" or "ovs dpdk configuration
+requires datapath "netdev"".**
 The datapath combination you asked for is one the kernel cannot honour. These
 are rejected at load rather than showing up later as packet loss.
 
 **A port sits in `unauthorized` forever.**
-Certificate validation is failing. Check that the device has an IDevID, that the
+Today no API call moves it: port authentication is refused (see the top of this
+page). Once it is enforced, check that the device has an IDevID, that the
 issuing CA is trusted, and — if `encode_zone_in_cert` is on — that the zone in
 the certificate is a zone that exists.
 
 **A port is `blocked`.**
-That is a policy violation and it does not clear itself. Every state can reach
-`blocked`, and `blocked` is not a source state for any transition.
+That is a policy violation and it does not clear itself. Every other state can
+reach `blocked`; the only ways out are an administrative reset to `unconnected`
+or an administrative re-enrollment to `provisioning`.
 
 **Traffic reaches somewhere it should not, across zones.**
 Check the zone's `isolate` and `allow_to`. The built-ins deny every path the

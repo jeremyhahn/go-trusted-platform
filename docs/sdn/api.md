@@ -1,6 +1,6 @@
 # SDN — API
 
-> **Status: NORMATIVE** · Scope: SDN, overlay and switch routes on every transport · Last verified: 2026-10-13
+> **Status: NORMATIVE** · Scope: SDN, overlay and switch routes on every transport · Last verified: 2026-10-15
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING`, never omitted.
@@ -15,7 +15,7 @@ over a Unix domain socket**, so gRPC and Unix share a column.
 `ServiceRegistry.SDN` and `ServiceRegistry.Overlay`
 (`sdk/go/transport/embedded/adapter.go`) carry the services in-process.
 
-Three gRPC services are in scope here: `SDNService` (30 RPCs, `sdn.proto`),
+Three gRPC services are in scope here: `SDNService` (29 RPCs, `sdn.proto`),
 `OverlayService` (10 RPCs, `overlay.proto`) and `SwitchService` (5 RPCs,
 `switch.proto`). The edge gateway's `GatewayService` and `ProxyService` are a
 separate feature — [`docs/gateway/`](../gateway/).
@@ -112,7 +112,7 @@ read, and `platformctl sdn port set-state` over MCP failed `Unimplemented`.
 |---|---|---|---|---|---|
 | Create VLAN | `POST /api/v1/sdn/vlans`, `POST /api/v1/sdn/bridges/{bridge_id}/vlans` | `CreateVLAN` | `OpSDNSetVLAN` (`0x4D`) | `sdn_create_vlan` | ✅ |
 | List VLANs | `GET /api/v1/sdn/vlans`, `GET /api/v1/sdn/bridges/{bridge_id}/vlans` | `ListVLANs` | `OpSDNGetVLAN` (`0x4E`) | `sdn_list_vlans` | ✅ |
-| Delete VLAN | `DELETE /api/v1/sdn/vlans/{vlan_id}?bridge_id=` (daemon REST only) | `DeleteVLAN` | `MISSING — docs/13 G7` | `sdn_delete_vlan` | ✅ |
+| Delete VLAN | `DELETE /api/v1/sdn/vlans/{id}?bridge_id=` (daemon REST only) | `DeleteVLAN` | `MISSING — docs/13 G7` | `sdn_delete_vlan` | ✅ |
 
 **The daemon's REST VLAN routes are the gRPC operations.** The daemon's
 standalone REST server (`pkg/api/rest/sdn_handlers.go`) hands `POST`, `GET` and
@@ -187,8 +187,7 @@ anything.
 and an empty bridge or port ID is refused before the call (`InvalidArgument`).
 `AddPort` sends the REST port document (`type` as the short type name) and
 refuses a port type it does not know. Until #452 these five calls went to flat
-routes no server registers. `ApplyPolicy` still claims
-`POST /api/v1/sdn/policies/apply`, which no server registers.
+routes no server registers.
 
 **This is IDevID-certificate authentication, not EAP/RADIUS.** `AuthenticatePort`
 validates a device certificate; there is no RADIUS exchange behind it.
@@ -322,7 +321,7 @@ the same reason gRPC returns.
 ## 7. Physical switches
 
 REST base path `/api/v1/switches`
-(`pkg/webservice/v1/rest/switch/handlers.go`); gRPC `SwitchService`.
+(`pkg/webservice/v1/rest/switch/router.go`); gRPC `SwitchService`.
 
 QUIC reaches the switch service through the **switch category opcode `0xCC`**,
 whose five sub-opcodes are declared in `sdk/go/wire/quicwire/switch_opcodes.go` and
@@ -355,7 +354,7 @@ per-transport mapping files are listed in [`docs/sdk/api.md`](../sdk/api.md)
 The QUIC protocol is a **flat byte opcode with a two-level extension**: certain
 opcodes are *category* opcodes whose sub-opcode comes from the payload, and the
 daemon routes them to a dedicated handler
-(`pkg/api/daemon/quic_service.go`).
+(`pkg/api/daemon/quic_service.go`). Among them:
 
 | Category opcode | Routes to |
 |---|---|
@@ -367,6 +366,7 @@ daemon routes them to a dedicated handler
 | `0x9A`–`0x9D` | Ceremony, PIV, LUKS, FIDO2 |
 | `0x9E` | Per-tenant barrier |
 | `0x9F` | BMC; sub-opcodes `0x01`–`0x17`, one per `BMCService` RPC |
+| `0xCC` | Switch; sub-opcodes `0x01`–`0x05`, one per `SwitchService` RPC (§7) |
 
 **This is why opcode values collide.** `OpOverlayStatus`, `OpGatewayStatus` and
 `OpLiveness` are all `0x01`, but the first two are *sub*-opcodes inside their
@@ -435,4 +435,4 @@ misconfigured SDN subsystem does not start.
 ## 11. Versioning
 
 REST under `/api/v1`; gRPC package `platform.v1`. Nothing in the SDN, overlay
-or switch surface is deprecated as of 2026-08-18.
+or switch surface is deprecated as of 2026-10-15.
