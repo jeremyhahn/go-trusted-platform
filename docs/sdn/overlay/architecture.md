@@ -1,6 +1,6 @@
 # VXLAN Overlay Architecture
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > The overlay's BGP EVPN and OpenFlow design as built.
 
 ## System Overview
@@ -13,7 +13,7 @@ OpenFlow on one OVS bridge forwards it. Four pieces divide the work:
 | EVPN manager | `pkg/sdn/bgp` (`EVPNManager`) | Type-2/3/5 routes: origination, import, MAC Mobility. See [BGP EVPN](../../bgp/engineering.md#7-evpn) |
 | VTEP manager | `pkg/sdn/vxlan` (`VTEPManager`) | the one flow-based VXLAN port on the bridge |
 | Overlay mode handler | `pkg/sdn/gateway/modes` (`OverlayModeHandler`) | the data plane: every overlay flow, built from EVPN routes. See [the overlay handler](../../gateway/engineering.md#the-overlay-handler-overlaymodehandler) |
-| Overlay controller | `pkg/sdn/overlay` (`Controller`) | the API-facing registry of VNIs, VTEPs and remote MACs; joins a VNI's EVI to originate its Type-3 route |
+| Overlay controller | `pkg/sdn/overlay` (`Controller`) | platformd's API-facing registry of VNIs and the local VTEP; joins a VNI's EVI to originate its Type-3 route |
 
 ```
               BGP EVPN (Type-2 / 3 / 5)
@@ -117,6 +117,14 @@ VNI E·100000+n (`netplan.VNI`).
 
 The controller programs no flows and creates no ports; its records are
 bookkeeping for the API. The data plane is the overlay mode handler's.
+
+Only the local VTEP (registered by `Start`) and the VNIs the API creates
+reach those records. No code outside `pkg/sdn/overlay` calls
+`Controller.AddVTEP`, `LearnMAC` or `LearnMACWithIP`, and nothing adds a
+tunnel record, so on platformd the VTEP list holds the local VTEP alone
+and the tunnel and remote-MAC lists stay empty. The remote VTEPs and MACs
+EVPN delivers are the overlay mode handler's, read through the gateway
+state snapshot (`platformctl sdn gateway snapshot`).
 
 ## Overlay IPsec
 
@@ -326,8 +334,9 @@ open.
 
 platformd has no EVPN route source, so its controller admits no VTEP a
 route names (`ErrNoVTEPAdmission`): its peers are the static peers.
-gatewayd does not host the overlay (it refuses `ServiceOverlay`), so it
-runs no IPsec.
+gatewayd hosts the overlay data plane (`ServiceOverlay`) but runs no IPsec:
+nothing in `pkg/sdn/gateway` builds an `ipsec` service.
+
 
 ### Status
 

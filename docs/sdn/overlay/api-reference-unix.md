@@ -1,6 +1,6 @@
 # VXLAN Overlay Unix Socket API Reference
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > How to reach the overlay operations over the local socket.
 
 ## Overview

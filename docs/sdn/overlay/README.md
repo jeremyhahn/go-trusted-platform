@@ -1,6 +1,6 @@
 # VXLAN Overlay Networking
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > Overview of the EVPN/VXLAN overlay.
 
 Multi-host overlay networking for east-west VM and container traffic.
@@ -76,8 +76,9 @@ sdn:
     underlay-interface: "eth0"
 ```
 
-The VTEP IP is derived from the node's public IPv4 address, or with
-overlay IPsec is `overlay.ipsec.local-address` on its fabric interface; MTU
+`underlay-interface` is required without IPsec; there is no default. The
+VTEP IP is `overlay.vtep-address`, else the node's detected public IPv4
+address; with overlay IPsec it is always `overlay.ipsec.local-address`. MTU
 and bridge name use applied defaults (see [Configuration](configuration.md)).
 
 ### Verify VTEP Status
@@ -125,9 +126,13 @@ nc -zuv 10.0.0.2 4789
 - A VTEP can inject frames only into the VNIs its EVPN routes place it
   on; everything else from the VXLAN port is dropped in table 10.
 - Before a route is installed, the handler's `VTEPAdmitter` vets the
-  VTEP; EVPN without one is a config error (`ErrAdmitterNil`). Nothing
-  backs it in gatewayd yet (#709), so encryption and
-  admission of VTEP-to-VTEP traffic are still the underlay's to provide.
+  VTEP; EVPN without one is a config error (`ErrAdmitterNil`). In
+  gatewayd it is `gateway.VTEPAdmitter`
+  (`pkg/sdn/gateway/vtep_admission.go`): the VTEP address must be a
+  platform IPAM fabric allocation of a device whose attestation verdict
+  passes, and a periodic sweep re-judges every installed VTEP.
+- Encryption of VTEP-to-VTEP traffic comes from overlay IPsec
+  (`overlay.ipsec`, which fails closed without SAs) or the underlay.
 - VNI isolation keeps segments apart; routing between them crosses the
   anycast gateway.
 

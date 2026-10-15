@@ -1,6 +1,6 @@
 # VXLAN Overlay API Reference
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > Index of the overlay's transports.
 
 ## Overview
@@ -21,9 +21,15 @@ MCP, and Unix Socket (gRPC over UDS).
 
 ## Service Operations
 
-The overlay service exposes a read-mostly management surface; VTEP
-registration and tunnel establishment happen automatically inside the
-controller.
+The overlay service exposes a read-mostly management surface over
+platformd's overlay controller. The controller registers the local VTEP
+itself; nothing feeds it remote VTEPs, tunnels or learned MACs, so the
+VTEP list holds this node alone, the tunnel and MAC lists are empty, and
+`GetTunnelStats` and `ForgetMAC` answer not found (see
+[Overlay Controller](architecture.md#overlay-controller)). The remote
+VTEPs and MACs EVPN delivers are the gateway's, read with
+`platformctl sdn gateway overlay vteps` and `platformctl sdn gateway snapshot`.
+
 
 | Operation | Description |
 |-----------|-------------|
@@ -90,26 +96,33 @@ message OverlayStatus {
 }
 ```
 
+`CreateVNI` stores only `vni` and `vlan`; `name` and `labels` are accepted
+and dropped.
+
 `OverlayStatus` carries no ND suppression counters. ND suppression runs in
 the gateway overlay mode, and its counters are on that handler's status
-(`OverlayModeStatus.NDSuppression`, see
-[ND suppression](../../gateway/engineering.md#nd-suppression)).
-gatewayd does not build the overlay service yet, so no transport serves them.
+(`OverlayModeStatus.NDSuppression` and `NDCounters`, see
+[ND suppression](../../gateway/engineering.md#nd-suppression)). They reach
+operators only through the gateway state snapshot
+(`platformctl sdn gateway snapshot`, `gwstate.OverlayState.NDCounters`).
 
 ## REST API Quick Reference
 
-Base URL: `https://localhost:8443/api/v1/sdn/overlay`
+Base URL: `https://localhost:8443/api/v1/overlay` (the webservice; the
+daemon-only REST stack uses `/api/v1/sdn/overlay`, see
+[api-reference-rest.md](api-reference-rest.md))
 
 ```http
-GET    /status             # Overlay status
-GET    /vteps              # List all VTEPs
-GET    /vteps/{node_id}    # Get VTEP by node ID
-GET    /vnis               # List all VNIs
-POST   /vnis               # Create VNI
-DELETE /vnis/{vni}         # Delete VNI
-GET    /tunnels[?vni=N]    # List tunnels (optional VNI filter)
-GET    /macs[?vni=N]       # List remote MACs (optional VNI filter)
-DELETE /macs/{mac}?vni=N   # Forget a learned MAC
+GET    /status                          # Overlay status
+GET    /vteps                           # List all VTEPs
+GET    /vteps/{nodeId}                  # Get VTEP by node ID
+GET    /vnis                            # List all VNIs
+POST   /vnis                            # Create VNI
+DELETE /vnis/{vni}                      # Delete VNI
+GET    /tunnels[?vni=N]                 # List tunnels (optional VNI filter)
+GET    /tunnels/stats?remote_vtep=IP&vni=N  # Tunnel counters
+GET    /macs[?vni=N]                    # List remote MACs (optional VNI filter)
+DELETE /macs?mac=MAC&vni=N              # Forget a learned MAC
 ```
 
 ## gRPC API Quick Reference

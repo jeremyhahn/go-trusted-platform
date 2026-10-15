@@ -1,6 +1,6 @@
 # VXLAN Overlay Operations Guide
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > Day-to-day overlay operations.
 
 ## Overview
@@ -12,6 +12,23 @@ table operations.
 The overlay CLI surface is `platformctl sdn overlay` with the
 subcommands `status`, `vtep list|get`, `vni list|create|delete`,
 `tunnel list`, and `mac list|forget`.
+
+These commands read platformd's overlay controller, whose records hold
+the local VTEP and the VNIs only: nothing feeds it remote VTEPs, tunnels
+or learned MACs (see
+[Overlay Controller](architecture.md#overlay-controller)). On platformd
+`vtep list` shows this node alone, and `tunnel list` and `mac list` print
+nothing. The remote VTEPs and MACs EVPN delivers live in the gateway's
+overlay data plane:
+
+```bash
+# Remote VTEPs a gateway admitted (omit --gateway-id for this node)
+platformctl sdn gateway overlay vteps
+platformctl sdn gateway overlay get 10.0.0.2
+
+# The overlay counters: VNIs, remote VTEPs, local and remote MACs, ND
+platformctl sdn gateway snapshot -o json
+```
 
 ## Overlay Status
 
@@ -60,8 +77,8 @@ platformctl sdn overlay vtep get node-005
 **3. Verify Tunnel Establishment**
 
 ```bash
-# Check tunnels from the new host
-platformctl sdn overlay tunnel list
+# On a gateway, check the new VTEP was admitted from its EVPN routes
+platformctl sdn gateway overlay vteps
 
 # Verify the one flow-based VXLAN port (remote_ip=flow, key=flow);
 # there is no port per remote VTEP
@@ -76,8 +93,8 @@ ovs-vsctl list interface vxlan-evpn
 # 2. Stop the overlay service on the host
 systemctl stop platformd
 
-# 3. From another node, verify the VTEP is gone
-platformctl sdn overlay vtep list
+# 3. From a gateway, verify the VTEP is gone once its routes are withdrawn
+platformctl sdn gateway overlay vteps
 ```
 
 ### VTEP Health Monitoring
@@ -86,11 +103,11 @@ platformctl sdn overlay vtep list
 # Overall overlay health (VTEP/VNI/tunnel/MAC counts, health status)
 platformctl sdn overlay status
 
-# Per-VTEP details
+# Local VTEP details
 platformctl sdn overlay vtep get node-001
 
-# Poll for changes
-watch platformctl sdn overlay vtep list
+# Remote VTEPs, as a gateway admitted them
+watch platformctl sdn gateway overlay vteps
 ```
 
 ## VNI Management
@@ -98,8 +115,8 @@ watch platformctl sdn overlay vtep list
 ### Creating a Virtual Network
 
 ```bash
-# Create VNI mapped to VLAN 100
-platformctl sdn overlay vni create --vni 1000100 --vlan 100 --name production-web
+# Create VNI mapped to VLAN 100 (--name is accepted and not stored)
+platformctl sdn overlay vni create --vni 1000100 --vlan 100
 
 # Verify the VNI is registered
 platformctl sdn overlay vni list
@@ -113,8 +130,8 @@ ovs-ofctl -O OpenFlow13 dump-flows br-int table=10
 ### Deleting a Virtual Network
 
 ```bash
-# Check for remote MACs still active in the VNI before deleting
-platformctl sdn overlay mac list --vni 1000100
+# Check for MACs still active in the VNI before deleting (gateway counters)
+platformctl sdn gateway snapshot -o json
 
 # Delete the VNI
 platformctl sdn overlay vni delete 1000100
@@ -129,15 +146,13 @@ for those devices.
 
 ## Tunnel Monitoring
 
+There is no tunnel per remote VTEP to list: one flow-based VXLAN port
+carries every VNI, and `platformctl sdn overlay tunnel list` prints
+nothing on platformd. Monitor the remote VTEPs a gateway admitted:
+
 ```bash
-# List all VXLAN tunnels
-platformctl sdn overlay tunnel list
-
-# Filter by VNI
-platformctl sdn overlay tunnel list --vni 1000100
-
-# Poll for changes
-watch platformctl sdn overlay tunnel list
+platformctl sdn gateway overlay vteps
+watch platformctl sdn gateway overlay vteps
 ```
 
 ### Diagnosing Tunnel Issues
@@ -158,8 +173,8 @@ ip6tables -L -n | grep 4789
 # Check OVS port state
 ovs-vsctl list interface | grep -A 5 vxlan
 
-# Verify the remote VTEP is registered
-platformctl sdn overlay vtep get node-002
+# Verify a gateway admitted the remote VTEP
+platformctl sdn gateway overlay get 10.0.0.2
 ```
 
 **Suspected Underlay Problems:**
@@ -177,38 +192,23 @@ ip -s link show
 
 ## MAC Table Management
 
-MAC entries are learned from remote VTEPs via EVPN.
-
-### Viewing MAC Tables
-
-```bash
-# List all remote MACs
-platformctl sdn overlay mac list
-
-# Filter by VNI
-platformctl sdn overlay mac list --vni 1000100
-
-# Find a specific MAC
-platformctl sdn overlay mac list --vni 1000100 | grep -i aa:bb:cc:dd:ee:02
-```
-
-### Clearing MAC Entries
+Remote MACs are learned from EVPN Type-2 routes by the gateway's overlay
+mode handler, which holds them as flows; the snapshot counts them
+(`local_mac_count`, `remote_mac_count`). `platformctl sdn overlay mac list`
+and `mac forget` act on the overlay controller's records, which nothing
+fills on platformd, so the list is empty and `forget` answers not found.
 
 ```bash
-# Remove a stale MAC entry from the FDB (relearned via EVPN if still active)
-platformctl sdn overlay mac forget aa:bb:cc:dd:ee:02 --vni 1000100
-
-# Verify removal
-platformctl sdn overlay mac list --vni 1000100 | grep -i aa:bb:cc:dd:ee:02
-# Should return no results
+platformctl sdn gateway snapshot -o json
 ```
 
 ## Recovery
 
-Overlay state is rebuilt automatically: VTEPs re-register when
-platformd starts, tunnels re-establish from the VTEP registry, and MAC
-entries are relearned via EVPN. There is no separate backup/restore
-step for overlay state.
+Overlay state is rebuilt automatically: the local VTEP re-registers when
+platformd starts, and a gateway relearns remote VTEPs and MACs from EVPN.
+The controller keeps its records in memory, so VNIs created through the
+API are not kept across a platformd restart. There is no separate
+backup/restore step for overlay state.
 
 ### Recovery Checklist
 
@@ -222,9 +222,9 @@ step for overlay state.
    platformctl sdn overlay vni list
    ```
 
-3. **Confirm Tunnel Establishment**
+3. **Confirm Remote VTEPs**
    ```bash
-   platformctl sdn overlay tunnel list
+   platformctl sdn gateway overlay vteps
    ```
 
 4. **Test East-West Connectivity**
@@ -239,7 +239,7 @@ step for overlay state.
 
 ```bash
 # 1. Create VNI for the new VLAN
-platformctl sdn overlay vni create --vni 1000400 --vlan 400 --name tenant-acme
+platformctl sdn overlay vni create --vni 1000400 --vlan 400
 
 # 2. Verify on all hosts
 platformctl sdn overlay vni list | grep 1000400
@@ -248,17 +248,12 @@ platformctl sdn overlay vni list | grep 1000400
 ### Task: Migrate VM to Another Host
 
 ```bash
-# Before migration: note the current VTEP for the VM's MAC
-platformctl sdn overlay mac list --vni 1000100 | grep -i aa:bb:cc:dd:ee:10
-
 # Perform VM migration (hypervisor-specific)
 # ...
 
-# After migration: verify the MAC moved to the new VTEP
-platformctl sdn overlay mac list --vni 1000100 | grep -i aa:bb:cc:dd:ee:10
-
-# If the entry is stale, forget it and let EVPN relearn from the new host
-platformctl sdn overlay mac forget aa:bb:cc:dd:ee:10 --vni 1000100
+# The new host advertises the MAC with a higher MAC Mobility sequence;
+# the gateway's flows follow the newest route. Check the counters:
+platformctl sdn gateway snapshot -o json
 ```
 
 ### Task: Upgrade Overlay Software
@@ -276,8 +271,9 @@ systemctl start platformd
 
 # 4. Verify health
 platformctl sdn overlay status
-platformctl sdn overlay tunnel list
+platformctl sdn gateway overlay vteps
 ```
+
 
 ## See Also
 
