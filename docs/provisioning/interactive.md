@@ -1,83 +1,80 @@
-# Interactive QR Provisioning
+# Interactive Provisioning
 
-> **Status: REFERENCE**
-> The interactive QR flow for a device no profile matches.
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The interactive flow for a device no profile matches.
 
-When no pre-existing config matches a device, the device displays a QR code that an operator scans to create a config on the fly.
+When no device profile matches a device, config delivery opens a pending
+session instead of delivering a config. The device waits on the session while
+an operator assigns it a profile.
 
 ## How It Works
 
 ```
-Device (console)                    Operator (any device)
-────────────────                    ─────────────────────
-1. Boot ISO
-2. No matching config found
-3. Display QR code ──────────────▶ 4. Scan QR code
-   (URL to web UI)                  5. Browser opens URL
-                                    6. WebAuthn/FIDO2 login
-                                    7. Select template
-                                    8. Customize config
-                                    9. Save profile ────────▶ 10. Poll returns config
-                                                              11. Install continues
+Device (console)                    Operator
+────────────────                    ────────
+1. provision interactive
+2. No matching profile:
+   server opens a pending session
+3. Prints the session URL ───────▶ 4. Opens the session in the dashboard
+                                      (or uses the CLI)
+                                   5. Creates a profile from a template, or a
+                                      custom profile, and fulfills the session
+6. Poll returns the config ◀──────
+7. Config written to --output
 ```
 
-## QR Code Content
+## Session URL
 
-The QR code contains a standard URL:
+The device prints the `provision_url` the server returned
+(`Service.provisionURL`, `pkg/provisioning/configdelivery/service.go`):
 
 ```
-https://platform.example.com:8443/provisioning/sessions/{sessionID}
+https://platform.example.com:8443/api/v1/provisioning/sessions/{sessionID}
 ```
 
-This URL works with:
-- Any phone's camera app (opens browser)
-- xkey app (using FIDO2/PIV as authenticator)
-- Any laptop or tablet with a camera
-- Manual URL entry in any browser
+That is the REST session view, which needs the `provisioning:read` scope. No
+QR code is rendered: `generateQRText` (`pkg/cli/commands/provision/helpers.go`)
+prints the URL as plain text.
 
 ## Operator Experience
 
-1. **Scan QR code** — any device with a camera
-2. **Authenticate** — standard WebAuthn/FIDO2 login if no active session (xkey works as a FIDO2 authenticator)
-3. **View device info** — EK serial, MAC address, timestamp
-4. **Choose action**:
-   - **Create from Template** — select a template, customize fields (hostname, IP, TPM PCRs, etc.), save as profile
-   - **Create New Profile** — full profile editor
-5. **Save** — profile created with device identity, session fulfilled, device resumes installation
+The web dashboard lists sessions at `/provisioning/sessions`; its session page
+(`web/src/app/(dashboard)/provisioning/sessions/[sessionId]/`) shows the
+device's EK serial and MAC address and offers two actions, each of which creates
+the profile and fulfills the session:
 
-## Device Console Display
+- **Create from Template**: pick a device template and customize it
+- **Create Custom Profile**: fill in the profile directly
 
-When interactive mode activates, the console shows:
+## Device Console Output
 
 ```
-╔══════════════════════════════════════════════════╗
-║        TRUSTED PLATFORM - DEVICE PROVISIONING    ║
-╠══════════════════════════════════════════════════╣
-║                                                  ║
-║  Scan the QR code below to provision this device ║
-║                                                  ║
-║  ┌──────────────────────────────────────┐       ║
-║  │                                      │       ║
-║  │         [QR CODE ASCII ART]          │       ║
-║  │                                      │       ║
-║  └──────────────────────────────────────┘       ║
-║                                                  ║
-║  Device Info:                                    ║
-║    EK Serial: ABC123DEF456789                    ║
-║    MAC:       52:54:00:12:34:56                  ║
-║                                                  ║
-║  Or visit:                                       ║
-║  https://platform:8443/provisioning/sessions/... ║
-║                                                  ║
-║  Waiting for operator...  [polling every 5s]     ║
-╚══════════════════════════════════════════════════╝
+========================================
+  DEVICE PROVISIONING
+========================================
+
+Open this URL to provision the device:
+
+  https://platform:8443/api/v1/provisioning/sessions/...
+
+========================================
+
+Device Info:
+  EK Serial: ABC123DEF456789
+  MAC:       52:54:00:12:34:56
+
+Scan QR code to provision this device
+Waiting for approval (timeout: 600s)...
 ```
+
+The device polls every 5 seconds until the session is fulfilled or the timeout
+expires.
 
 ## CLI Commands
 
 ```bash
-# Automatic flow (called by autoinstall.sh)
-platformctl-static provision interactive \
+# Device side (run explicitly; autoinstall.sh does not call it)
+platformctl provision interactive \
   --server-url https://platform:8443 \
   --ek-serial <serial> \
   --mac <address> \
@@ -86,15 +83,17 @@ platformctl-static provision interactive \
   --output /tmp/platform-config.yaml \
   --timeout 600
 
-# Manual session fulfillment (operator CLI alternative)
+# Operator side
 platformctl provision session fulfill <session-id> --profile-id <pid>
 ```
 
+`--timeout` is in seconds and defaults to 600; every other flag is required.
+
 ## Security
 
-- The QR code URL requires WebAuthn/FIDO2 authentication
-- Session IDs are UUIDs — not guessable
-- Sessions expire after 30 minutes
-- Sessions are single-use — cannot be fulfilled twice
-- The operator's tenant determines the available templates
-- All communication is over TLS (trust bootstrapped via DANE/Noise/SPKI)
+- Opening a session needs valid EAB credentials and a fresh nonce
+- Session IDs are random UUIDs
+- Sessions expire after 30 minutes (`defaultSessionTTL`)
+- A session can be fulfilled once; a second fulfill is refused
+- Session views and fulfillment need the `provisioning:read` /
+  `provisioning:write` scopes

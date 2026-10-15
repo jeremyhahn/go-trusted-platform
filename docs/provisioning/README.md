@@ -1,6 +1,6 @@
 # Device Provisioning
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > Device enrollment, network configuration and production activation: an index of this folder.
 
 Automated device enrollment, network configuration, and production activation.
@@ -40,7 +40,7 @@ ISO Boot --> Trust Bootstrap --> Fetch Config --> Install OS
 ```
 +------------------+     +------------------+     +------------------+
 |   Device Boot    |     |  Provisioning    |     |   Production     |
-|  (VLAN 998)      |---->|    Network       |---->|    Network       |
+|                  |---->|    Network       |---->|    Network       |
 |                  |     |                  |     |                  |
 +------------------+     +------------------+     +------------------+
         |                       |                       |
@@ -59,7 +59,7 @@ ISO Boot --> Trust Bootstrap --> Fetch Config --> Install OS
 | **Interactive QR** | Operator-at-console provisioning via QR code | [interactive.md](interactive.md) |
 | **ISO Configuration** | Building ISOs with embedded or server-fetched config | [iso.md](iso.md) |
 | **Provisioning Client** | mTLS client for profile fetch & activation | [client.md](client.md) |
-| **Bare Metal** | IPMI-based bare metal provisioning | [bare-metal.md](bare-metal.md) |
+| **Bare Metal** | BMC-driven (IPMI/Redfish) bare metal provisioning | [bare-metal.md](bare-metal.md) |
 | **BMC Management** | Power, boot, virtual media, sensors | [../bmc/](../bmc/) |
 | **PXE Bootstrap** | Single-command greenfield deployment | [../bootstrap/user.md](../bootstrap/user.md) |
 
@@ -75,18 +75,25 @@ TPM and no key file is involved
 
 ### Server-Side Configuration
 
-Configure device profiles with network settings:
+The network settings a device receives come from its device profile: the
+post-enrollment network config is served as `admittedNetwork` (with its ACLs)
+and the enrollment network config as `provisioningNetwork`
+(`ProfileFromDeviceProfile`, `pkg/webservice/v1/device/profile_service.go`).
+`GET /api/v1/device/profile` answers:
 
-```yaml
-# Device profile
-device:
-  serial_number: DEVICE-001
-  production_network:
-    vlan: 100
-    use_dhcp: true
-    gateway: 198.51.100.1
-    dns:
-      - 10.99.99.2
+```json
+{
+  "serialNumber": "DEVICE-001",
+  "admittedNetwork": {
+    "vlan": 100,
+    "useDHCP": true,
+    "gateway": "198.51.100.1",
+    "dns": ["10.99.99.2"]
+  },
+  "acls": [
+    {"name": "acl-0", "priority": 100, "match": {"dst_port": "443"}, "action": "allow"}
+  ]
+}
 ```
 
 ## API Endpoints
@@ -100,8 +107,8 @@ device:
 
 - **mTLS Authentication**: All API calls use IDevID certificates
 - **Certificate Validation**: Server and client certificates verified against CA
-- **Secure Transport**: TLS 1.2+ enforced
-- **No Shared Secrets**: Identity derived from certificate CN/serial
+- **Secure Transport**: the provisioning client requires TLS 1.3
+- **No Shared Secrets**: the device serial comes from the verified client certificate, never the request body
 
 ## Related Documentation
 
