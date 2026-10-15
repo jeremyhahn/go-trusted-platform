@@ -1,5 +1,8 @@
 # DHCP Service
 
+> **Status: REFERENCE**
+> Overview of the in-process DHCP server.
+
 Dynamic Host Configuration Protocol (DHCP) service for go-trusted-platform providing IP address allocation integrated with the platform IPAM system.
 
 ## Overview

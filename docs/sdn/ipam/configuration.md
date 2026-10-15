@@ -1,5 +1,8 @@
 # IPAM Configuration Reference
 
+> **Status: REFERENCE**
+> IPAM pools and where they come from.
+
 ## Overview
 
 IPAM holds the platform's address pools and their allocations. Since the

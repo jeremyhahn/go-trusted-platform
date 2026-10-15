@@ -1,5 +1,8 @@
 # VXLAN Overlay Configuration Reference
 
+> **Status: REFERENCE**
+> The overlay's configuration and runtime-derived settings.
+
 ## Overview
 
 This document is the reference for configuring the VXLAN overlay

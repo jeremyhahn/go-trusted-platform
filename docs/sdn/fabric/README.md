@@ -1,5 +1,8 @@
 # Physical Switch Fabric Management
 
+> **Status: REFERENCE**
+> The physical switch fabric manager in `pkg/sdn/fabric`.
+
 `pkg/sdn/fabric` programs the platform's physical switches to the
 [reference network](../../architecture/reference-network.md): the switch is **pure L2**. It carries the
 environment's underlay zone VLANs, each port carries what its **port class** carries, and it does no

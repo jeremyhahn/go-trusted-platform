@@ -1,5 +1,8 @@
 # SDN Testing Strategy
 
+> **Status: REFERENCE**
+> How the SDN packages are tested.
+
 ## Overview
 
 Testing follows TDD principles with distinct unit and integration test layers.

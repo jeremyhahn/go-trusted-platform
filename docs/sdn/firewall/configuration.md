@@ -1,5 +1,8 @@
 # Firewall Configuration
 
+> **Status: REFERENCE**
+> The firewall and NAT gateway service configuration.
+
 The firewall and NAT services are config-driven gateway services: each
 loads when its section is present with `enabled: true`. Policy itself is
 not configured here — it is derived from the

@@ -1,5 +1,8 @@
 # SDN REST API Reference
 
+> **Status: REFERENCE**
+> The `/api/v1/sdn` routes of platformd's REST listener.
+
 Base URL: `https://localhost:8443/api/v1/sdn`
 
 All endpoints require mTLS / platform JWT authentication. Handlers:

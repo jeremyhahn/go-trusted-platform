@@ -1,5 +1,8 @@
 # SDN gRPC API Reference
 
+> **Status: REFERENCE**
+> `platform.v1.SDNService` over gRPC (`pkg/api/grpc/proto/sdn.proto`).
+
 Endpoint: `localhost:10443`
 
 Requires mTLS authentication. The service and all message definitions

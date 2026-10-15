@@ -1,5 +1,8 @@
 # Tunnel Configuration Reference
 
+> **Status: REFERENCE**
+> The tunnel configuration fields.
+
 ## TunnelConfig
 
 | Field | Type | Required | Default | Description |

@@ -1,5 +1,8 @@
 # VXLAN Overlay Networking
 
+> **Status: REFERENCE**
+> Overview of the EVPN/VXLAN overlay.
+
 Multi-host overlay networking for east-west VM and container traffic.
 
 ## Overview

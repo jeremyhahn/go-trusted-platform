@@ -1,5 +1,8 @@
 # DHCP Configuration Reference
 
+> **Status: REFERENCE**
+> The `sdn.dhcp` configuration and where each daemon reads it.
+
 ## Overview
 
 The DHCP server is configured in two places, depending on which daemon

@@ -1,5 +1,8 @@
 # OVS Hardware Offload (tc-flower)
 
+> **Status: REFERENCE**
+> OVS hardware flow offload and the `sdn.ovs.hw-offload` key.
+
 Hardware flow offload moves established OVS datapath flows out of the
 kernel software path and into the NIC's embedded switch. platformd enables
 it declaratively via the `sdn.ovs.hw-offload` config key (see

@@ -1,5 +1,8 @@
 # VXLAN Overlay REST API Reference
 
+> **Status: REFERENCE**
+> The overlay REST routes.
+
 ## Overview
 
 | Property | Value |

@@ -1,5 +1,8 @@
 # VXLAN Overlay gRPC API Reference
 
+> **Status: REFERENCE**
+> The overlay operations over gRPC.
+
 ## Overview
 
 | Property | Value |

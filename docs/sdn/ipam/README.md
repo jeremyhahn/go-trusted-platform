@@ -1,5 +1,8 @@
 # IPAM (IP Address Management)
 
+> **Status: REFERENCE**
+> Overview of the IPAM package.
+
 IP Address Management service providing pool-based IP allocation with support for multiple storage backends, lease management, and distributed environments.
 
 ## Overview

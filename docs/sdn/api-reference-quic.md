@@ -1,5 +1,8 @@
 # SDN QUIC API Reference
 
+> **Status: REFERENCE**
+> The SDN opcodes of the platform QUIC protocol.
+
 Endpoint: UDP port 9444, mTLS required.
 
 Requests and responses are msgpack-encoded frames; msgpack keys follow

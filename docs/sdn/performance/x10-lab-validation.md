@@ -1,5 +1,8 @@
 # X10 Lab Validation Runbook — Hardware Offload / 400G
 
+> **Status: REFERENCE**
+> The lab runbook for offload and datapath measurements.
+
 Concise procedure for validating OVS hardware flow offload and recording
 datapath performance numbers on the X10 mini cluster. Companion to
 [hw-offload.md](./hw-offload.md) (bring-up detail) and the

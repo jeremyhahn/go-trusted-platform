@@ -1,5 +1,8 @@
 # Firewall Architecture
 
+> **Status: REFERENCE**
+> How zone policy compiles to OVS conntrack flows.
+
 The stateful firewall is a compiler and lifecycle manager for OVS
 conntrack flows. Policy lives in the zone matrix (`pkg/sdn/zone`), flow
 generation lives in `pkg/sdn/policy/zoneflows`

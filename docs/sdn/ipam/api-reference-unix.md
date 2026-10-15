@@ -1,5 +1,8 @@
 # IPAM Unix Socket API Reference
 
+> **Status: REFERENCE**
+> How to reach IPAM over the local socket.
+
 Socket: `/run/platformd.sock`
 
 The Unix transport is **gRPC over a Unix domain socket** — IPAM

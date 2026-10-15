@@ -1,5 +1,8 @@
 # SDN Unix Socket API Reference
 
+> **Status: REFERENCE**
+> How to reach the SDN service over the local socket.
+
 Socket: `/run/platformd.sock`
 
 The Unix transport is **gRPC over a Unix domain socket** — it serves

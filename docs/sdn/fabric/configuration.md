@@ -1,5 +1,8 @@
 # Fabric Configuration Reference
 
+> **Status: REFERENCE**
+> The `sdn.fabric` schema and its validation.
+
 The `sdn.fabric` section describes the physical switches, their peer links and LAGs, and the port class
 of every platform port. It carries no VLAN numbers: VLANs, allowed lists and native VLANs are derived
 from `sdn.environment` by the network plan ([README](README.md)).

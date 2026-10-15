@@ -1,5 +1,8 @@
 # DHCP Architecture
 
+> **Status: REFERENCE**
+> The DHCP server's CoreDHCP plugin architecture.
+
 ## Overview
 
 The DHCP service implements a plugin-based architecture built on CoreDHCP, providing high-performance IP allocation integrated with the platform IPAM system.

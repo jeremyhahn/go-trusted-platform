@@ -1,5 +1,8 @@
 # IPAM QUIC API Reference
 
+> **Status: REFERENCE**
+> IPAM on the gateway QUIC opcodes.
+
 IPAM operations ride the gateway QUIC surface: category opcode `0x2F`
 (Gateway) with the IPAM sub-opcodes, served on UDP port 9444 (mTLS).
 Payloads are msgpack-encoded (`pkg/api/quic/gateway_handlers.go`).

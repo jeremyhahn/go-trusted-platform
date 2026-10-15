@@ -1,5 +1,8 @@
 # Tunnel Management
 
+> **Status: REFERENCE**
+> The gateway's transit-relay tunnels in `pkg/sdn/tunnel`.
+
 The `pkg/sdn/tunnel` package manages the gateway's point-to-point tunnels to
 the transit relays (the remote nodes that hold the site's eBGP) through
 Linux netlink, under a **pluggable transport**, and pins each tunnel's outer

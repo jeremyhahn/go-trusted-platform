@@ -1,5 +1,8 @@
 # SDN Documentation Index
 
+> **Status: REFERENCE**
+> Index of the SDN documents.
+
 Complete documentation for the Software-Defined Networking (SDN) components in go-trusted-platform.
 
 ## Quick Navigation

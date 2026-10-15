@@ -1,5 +1,8 @@
 # VXLAN Overlay Unix Socket API Reference
 
+> **Status: REFERENCE**
+> How to reach the overlay operations over the local socket.
+
 ## Overview
 
 | Property | Value |

@@ -1,5 +1,8 @@
 # Stateful Firewall
 
+> **Status: REFERENCE**
+> The OVS-native stateful firewall and NAT of the SDN gateway.
+
 OVS-native stateful firewall and NAT for the trusted-platform SDN gateway.
 All enforcement happens in the OVS kernel datapath using connection
 tracking (`ct()` / `ct_state`) flows — there is no userspace packet path.

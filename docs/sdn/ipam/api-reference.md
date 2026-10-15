@@ -1,5 +1,8 @@
 # IPAM API Reference
 
+> **Status: REFERENCE**
+> Index of IPAM's transports.
+
 ## Overview
 
 IPAM (pools + allocations) is exposed through the **gateway service**

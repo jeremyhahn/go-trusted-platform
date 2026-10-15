@@ -1,17 +1,9 @@
 # SDN (Software-Defined Networking) Package
 
+> **Status: REFERENCE**
+> Overview of the SDN packages under `pkg/sdn/`.
+
 Pure Go implementation of SDN components for the Trusted Platform.
-
-## Status
-
-| Component | Status | Test Coverage | Integration Tests |
-|-----------|--------|---------------|-------------------|
-| ARP Reader | Complete | 95%+ | 10 tests |
-| OpenFlow 1.3 | Complete | 90%+ | 18 tests |
-| OVSDB Client | Complete | 90%+ | 12 tests |
-| TAP/Netlink | Complete | 85%+ | 8 tests |
-| Policy Engine | Complete | 90%+ | 27 tests |
-| **Total** | **100% Complete** | **90%+** | **27 integration tests** |
 
 ## Features
 

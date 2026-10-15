@@ -1,5 +1,8 @@
 # SDN API Reference
 
+> **Status: REFERENCE**
+> Index of the SDN service's transports.
+
 ## Overview
 
 The SDN subsystem provides network management through multiple protocols for maximum interoperability. All operations are available via REST, gRPC, QUIC, MCP, and Unix Socket.

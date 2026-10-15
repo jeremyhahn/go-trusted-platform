@@ -1,5 +1,8 @@
 # IPAM Architecture
 
+> **Status: REFERENCE**
+> The IPAM package's pools, allocators and storage.
+
 ## Overview
 
 The IPAM package implements a pool-based IP address management system with pluggable storage backends, lock-free allocation tracking, and support for distributed environments. The architecture prioritizes consistency, performance, and operational flexibility.

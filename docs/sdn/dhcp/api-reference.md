@@ -1,5 +1,8 @@
 # DHCP API Reference
 
+> **Status: REFERENCE**
+> How the DHCP server is driven: configuration, not an API.
+
 ## Overview
 
 The DHCP service is an **in-process component**: it runs inside the

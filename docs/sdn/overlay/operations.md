@@ -1,5 +1,8 @@
 # VXLAN Overlay Operations Guide
 
+> **Status: REFERENCE**
+> Day-to-day overlay operations.
+
 ## Overview
 
 This guide covers day-to-day operations for the VXLAN overlay network,

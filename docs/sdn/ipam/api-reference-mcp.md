@@ -1,5 +1,8 @@
 # IPAM MCP API Reference
 
+> **Status: REFERENCE**
+> IPAM as gateway MCP tools.
+
 IPAM operations are exposed as gateway MCP tools
 (`pkg/api/mcp/gateway_tools.go`), served via MCP (stdio / HTTPS, port
 9445).

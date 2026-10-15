@@ -1,5 +1,8 @@
 # Adding Switch Vendor Drivers
 
+> **Status: REFERENCE**
+> How to write a switch vendor driver for `pkg/sdn/fabric`.
+
 This guide explains how to implement a new fabric driver for a switch vendor (e.g., Arista EOS, Juniper).
 
 ## Overview

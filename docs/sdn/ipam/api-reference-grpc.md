@@ -1,5 +1,8 @@
 # IPAM gRPC API Reference
 
+> **Status: REFERENCE**
+> IPAM over gRPC, as part of `platform.v1.GatewayService`.
+
 There is no standalone `IPAMService` — IPAM operations are part of
 `platform.v1.GatewayService` in `pkg/api/grpc/proto/gateway.proto`,
 served on TCP port 10443 (mTLS).

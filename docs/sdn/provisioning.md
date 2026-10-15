@@ -1,5 +1,8 @@
 # Device Provisioning Flow
 
+> **Status: REFERENCE**
+> The SDN side of device provisioning.
+
 ## Overview
 
 Device provisioning uses RFC 8555 (ACME) for certificate enrollment with

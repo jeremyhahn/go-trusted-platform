@@ -1,5 +1,8 @@
 # SDN Configuration Reference
 
+> **Status: REFERENCE**
+> The `sdn:` configuration section.
+
 ## Overview
 
 This document provides a comprehensive reference for configuring the SDN subsystem,

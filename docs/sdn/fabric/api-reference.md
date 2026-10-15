@@ -1,5 +1,8 @@
 # Fabric API Reference
 
+> **Status: REFERENCE**
+> The Go API of `pkg/sdn/fabric`.
+
 Package `github.com/jeremyhahn/go-trusted-platform/pkg/sdn/fabric`. A Go library: there is no network
 API for the fabric manager (see [README](README.md#status)).
 

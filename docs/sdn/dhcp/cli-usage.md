@@ -1,5 +1,8 @@
 # DHCP CLI Usage
 
+> **Status: REFERENCE**
+> Why there is no `platformctl sdn dhcp` command group.
+
 ## Overview
 
 There is currently **no `platformctl sdn dhcp` command group**. The

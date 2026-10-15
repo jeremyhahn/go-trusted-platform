@@ -1,5 +1,8 @@
 # IPAM REST API Reference
 
+> **Status: REFERENCE**
+> The IPAM REST routes of the webservice and of platformd.
+
 IPAM endpoints are served by two stacks with the same paths and object
 shapes: the webservice (`pkg/webservice/v1/rest/gateway/ipam.go`, always
 mounted when the gateway service exists — this is the surface the WebUI

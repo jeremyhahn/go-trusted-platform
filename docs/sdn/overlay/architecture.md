@@ -1,5 +1,8 @@
 # VXLAN Overlay Architecture
 
+> **Status: REFERENCE**
+> The overlay's BGP EVPN and OpenFlow design as built.
+
 ## System Overview
 
 The overlay is EVPN over VXLAN. BGP EVPN carries what each VTEP serves;

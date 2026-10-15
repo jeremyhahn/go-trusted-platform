@@ -1,5 +1,8 @@
 # SDN CLI Usage
 
+> **Status: REFERENCE**
+> The `platformctl sdn` commands, by example.
+
 ## Overview
 
 The `platformctl sdn` command provides command-line management of the SDN

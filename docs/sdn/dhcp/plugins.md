@@ -1,5 +1,8 @@
 # DHCP Plugins
 
+> **Status: REFERENCE**
+> The DHCP server's plugins and their options.
+
 ## Overview
 
 The DHCP service uses a plugin-based architecture built on CoreDHCP. This document covers the two platform-specific plugins: the IPAM Plugin for IP allocation and the PXE Plugin for network boot support.

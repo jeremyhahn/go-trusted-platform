@@ -1,5 +1,8 @@
 # VXLAN Overlay API Reference
 
+> **Status: REFERENCE**
+> Index of the overlay's transports.
+
 ## Overview
 
 The VXLAN overlay subsystem provides management operations through
