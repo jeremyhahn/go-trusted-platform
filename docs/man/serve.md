@@ -1,5 +1,8 @@
 % platformd serve | Trusted Platform Commands Manual
 
+> **Status: REFERENCE**
+> Manual page source for `platformd serve`. No build target renders it.
+
 # NAME
 
 **serve** - Trusted Platform Daemon

@@ -1,5 +1,9 @@
 % platformd pkcs11 | Trusted Platform Commands Manual
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> `platformd` has only `serve` and `version`; the CA, TPM and PKCS #11 verbs
+> are `platformctl` commands, documented in each feature folder's `cli.md`.
+
 # NAME
 
 **pkcs11** - Perform PKCS #11 token operations

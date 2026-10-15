@@ -1,5 +1,9 @@
 % platformd tpm info | Trusted Platform Commands Manual
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> `platformd` has only `serve` and `version`; the CA, TPM and PKCS #11 verbs
+> are `platformctl` commands, documented in each feature folder's `cli.md`.
+
 # NAME
 
 **tpm info** - Display TPM information
@@ -17,7 +21,7 @@
   
 ## References
 
-[common options](common/options.md) collection of common options that provide
+[common options](../common/options.md) collection of common options that provide
 information many users may expect.
 
 # NOTES

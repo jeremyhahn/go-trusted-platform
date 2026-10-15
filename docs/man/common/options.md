@@ -1,3 +1,8 @@
+# Common Options
+
+> **Status: REFERENCE**
+> The persistent flags of `platformd` (`pkg/daemon/commands/root.go`).
+
 This is the set of global options supported by every command in the CLI:
 
   * **-h**, **\--help**:
@@ -34,6 +39,3 @@ This is the set of global options supported by every command in the CLI:
   * , **\--setuid**:
     Sets the uid for the platform to run. If the platform is started as root,
     permissions are downgraded to the specified uid.
-
-  * , **\--listen**:
-    The socket listen address used for embedded network services
