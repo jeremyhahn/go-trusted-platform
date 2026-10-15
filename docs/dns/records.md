@@ -81,10 +81,10 @@ Maps a hostname to an IPv4 address.
 ```yaml
 a:
   - name: "www"
-    value: "192.168.1.100"
+    value: "192.0.2.100"
     ttl: 3600
   - name: "@"           # Zone apex
-    value: "192.168.1.1"
+    value: "192.0.2.1"
     ttl: 3600
 ```
 
@@ -459,7 +459,7 @@ tlsa:
 // Add A record to zone
 zone.AddARecord(&entities.ARecord{
     Name:  "newhost",
-    Value: "192.168.1.50",
+    Value: "192.0.2.50",
     TTL:   3600,
 })
 
@@ -473,7 +473,7 @@ err := dnsService.Save(ctx, zone)
 import "github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 
 // Create records using helper functions
-aRecord := dns.NewARecord("www", "192.168.1.100", 3600)
+aRecord := dns.NewARecord("www", "192.0.2.100", 3600)
 aaaaRecord := dns.NewAAAARecord("www", "2001:db8::1", 3600)
 cnameRecord := dns.NewCNAMERecord("alias", "target.example.com.", 3600)
 mxRecord := dns.NewMXRecord("example.com.", "mail.example.com.", 10, 3600)
@@ -511,7 +511,7 @@ zone, err := dnsService.Zone(ctx, "example.com")
 // Find and update A record
 for _, record := range zone.RecordSet.ARecords {
     if record.Name == "www" {
-        record.Value = "192.168.1.200"
+        record.Value = "192.0.2.200"
         record.TTL = 7200
     }
 }
@@ -596,10 +596,10 @@ ns:
 a:
   # Glue records for nameservers
   - name: "ns1"
-    value: "192.168.1.10"
+    value: "192.0.2.10"
     ttl: 86400
   - name: "ns2"
-    value: "192.168.1.11"
+    value: "192.0.2.11"
     ttl: 86400
 ```
 
@@ -636,7 +636,7 @@ platformctl dns record add \
   --zone example.internal \
   --type A \
   --name www \
-  --value 192.168.1.100 \
+  --value 192.0.2.100 \
   --ttl 3600
 ```
 
@@ -708,7 +708,7 @@ platformctl dns record update \
   --zone example.internal \
   --type A \
   --name www \
-  --value 192.168.1.200 \
+  --value 192.0.2.200 \
   --ttl 7200
 ```
 

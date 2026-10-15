@@ -81,7 +81,7 @@ device:
   production_network:
     vlan: 100
     use_dhcp: true
-    gateway: 192.168.100.1
+    gateway: 198.51.100.1
     dns:
       - 10.99.99.2
 ```

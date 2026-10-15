@@ -153,7 +153,7 @@ if err != nil {
 pool := &ipam.Pool{
     ID:                   "dhcp-pool",
     Name:                 "DHCP Pool",
-    CIDR:                 netip.MustParsePrefix("192.168.1.0/24"),
+    CIDR:                 netip.MustParsePrefix("192.0.2.0/24"),
     DefaultLeaseDuration: 24 * time.Hour,
     InactivityTimeout:    7 * 24 * time.Hour,
 }

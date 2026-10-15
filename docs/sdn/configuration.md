@@ -230,7 +230,7 @@ flow.Match.SetVLANVid(100)
 
 // Layer 3 matches (requires EthType)
 flow.Match.SetIPProto(6) // TCP
-flow.Match.SetIPv4Src("192.168.1.0/24")
+flow.Match.SetIPv4Src("192.0.2.0/24")
 flow.Match.SetIPv4Dst("10.0.0.0/8")
 
 // Layer 4 matches (requires IPProto)

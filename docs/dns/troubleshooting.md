@@ -331,7 +331,7 @@ logging:
 **Successful Operations:**
 
 ```
-INFO  Inbound DNS query qname=example.com qtype=A client=192.168.1.100
+INFO  Inbound DNS query qname=example.com qtype=A client=198.51.100.100
 INFO  DNS response qname=example.com qtype=A rcode=NOERROR answers=1
 INFO  Zone signed zone=example.com keys=2 rrsigs=15
 INFO  Dynamic update accepted zone=example.com name=host.example.com type=A
@@ -340,7 +340,7 @@ INFO  Dynamic update accepted zone=example.com name=host.example.com type=A
 **Error Conditions:**
 
 ```
-ERROR received public query for internal zone zone=example.internal client=192.168.1.100
+ERROR received public query for internal zone zone=example.internal client=198.51.100.100
 ERROR DNSSEC signing failed zone=example.com error="key not found"
 ERROR dynamic update refused zone=example.com error="TSIG verification failed"
 ERROR zone transfer denied zone=example.com client=10.0.0.50 error="unauthorized"
@@ -350,7 +350,7 @@ ERROR zone transfer denied zone=example.com client=10.0.0.50 error="unauthorized
 
 ```
 WARN  RRSIG expires soon zone=example.com expires_in=2h
-WARN  rate limit exceeded client=192.168.1.100 queries=1000
+WARN  rate limit exceeded client=198.51.100.100 queries=1000
 WARN  cache size approaching limit current=950MB max=1024MB
 ```
 
@@ -361,7 +361,7 @@ WARN  cache size approaching limit current=950MB max=1024MB
 grep "zone=example.com" /var/log/platform-dns.log
 
 # Filter by client
-grep "client=192.168.1.100" /var/log/platform-dns.log
+grep "client=198.51.100.100" /var/log/platform-dns.log
 
 # Filter errors only
 grep "ERROR" /var/log/platform-dns.log

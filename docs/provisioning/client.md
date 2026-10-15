@@ -128,7 +128,7 @@ Retrieves the device profile using mTLS authentication.
     "vlan": 100,
     "useDHCP": true,
     "staticIP": "",
-    "gateway": "192.168.100.1",
+    "gateway": "198.51.100.1",
     "dns": ["10.99.99.2"]
   },
   "acls": [

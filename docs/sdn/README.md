@@ -201,7 +201,7 @@ import "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/arp"
 table := arp.NewTable()
 
 // Lookup MAC address from IP
-mac, err := table.LookupMAC("192.168.1.100")
+mac, err := table.LookupMAC("192.0.2.100")
 if err != nil {
     // IP not in ARP cache
     return err

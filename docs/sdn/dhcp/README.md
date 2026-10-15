@@ -126,11 +126,11 @@ config := &dhcp.ServerConfig{
         {
             Name:    "eth0",
             Network: dhcp.NetworkPrivate,
-            Address: netip.MustParseAddr("192.168.1.1"),
+            Address: netip.MustParseAddr("192.0.2.1"),
             PoolID:  "internal-pool",
             Options: dhcp.DHCPOptions{
                 SubnetMask: net.CIDRMask(24, 32),
-                Router:     netip.MustParseAddr("192.168.1.1"),
+                Router:     netip.MustParseAddr("192.0.2.1"),
                 DNS:        []netip.Addr{netip.MustParseAddr("8.8.8.8")},
                 DomainName: "example.local",
                 LeaseTime:  24 * time.Hour,
@@ -160,7 +160,7 @@ import "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/dhcp"
 
 // Create PXE plugin with architecture filters
 pxe, err := dhcp.NewPXEPlugin(
-    net.ParseIP("192.168.1.10"),  // TFTP server
+    net.ParseIP("192.0.2.10"),  // TFTP server
     "pxelinux.0",                  // Default boot file
     dhcp.WithArchitectureFilters(map[uint16]string{
         dhcp.PXEArchIntelX86:   "pxelinux.0",      // BIOS

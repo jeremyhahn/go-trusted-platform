@@ -139,7 +139,7 @@ GET /api/v1/dns/zones/{zoneName}/records?type=A
 {
   "zone_name": "example.internal.",
   "records": {
-    "a": [{"name": "ns1", "value": "192.168.1.10", "ttl": 3600}],
+    "a": [{"name": "ns1", "value": "192.0.2.10", "ttl": 3600}],
     "cname": [{"name": "www", "value": "example.internal.", "ttl": 3600}]
   }
 }
@@ -161,7 +161,7 @@ GET /api/v1/dns/zones/example.internal./records/A/ns1
 {
   "type": "A",
   "name": "ns1",
-  "value": "192.168.1.10",
+  "value": "192.0.2.10",
   "ttl": 3600
 }
 ```
@@ -178,7 +178,7 @@ Content-Type: application/json
 {
   "type": "A",
   "name": "server01",
-  "value": "192.168.1.100",
+  "value": "192.0.2.100",
   "ttl": 3600
 }
 ```
@@ -217,7 +217,7 @@ Content-Type: application/json
 **Request:**
 ```json
 {
-  "value": "192.168.1.101",
+  "value": "192.0.2.101",
   "ttl": 7200
 }
 ```
@@ -273,7 +273,7 @@ GET /api/v1/dns/resolve?fqdn=ns1.example.internal.&type=A
 ```json
 {
   "records": [
-    {"type": "A", "a": {"name": "ns1", "value": "192.168.1.10", "ttl": 3600}}
+    {"type": "A", "a": {"name": "ns1", "value": "192.0.2.10", "ttl": 3600}}
   ],
   "authoritative": true
 }
@@ -332,7 +332,7 @@ curl -X POST https://platform.example.com/api/v1/dns/zones \
 curl -X POST https://platform.example.com/api/v1/dns/zones/myzone.internal./records \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"type":"A","name":"server01","value":"192.168.1.100","ttl":3600}'
+  -d '{"type":"A","name":"server01","value":"192.0.2.100","ttl":3600}'
 
 # Resolve
 curl -X GET "https://platform.example.com/api/v1/dns/resolve?fqdn=ns1.example.internal.&type=A" \

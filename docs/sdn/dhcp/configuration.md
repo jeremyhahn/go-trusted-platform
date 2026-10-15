@@ -101,10 +101,10 @@ server, err := dhcp.NewCoreDHCPServer(&dhcp.ServerConfig{
     Interfaces: []dhcp.InterfaceConfig{{
         Name:    "eth0",
         Network: dhcp.NetworkPrivate,
-        Address: netip.MustParseAddr("192.168.1.1"),
+        Address: netip.MustParseAddr("192.0.2.1"),
         PoolID:  "internal-pool",
         Options: dhcp.DHCPOptions{
-            Router:    netip.MustParseAddr("192.168.1.1"),
+            Router:    netip.MustParseAddr("192.0.2.1"),
             DNS:       []netip.Addr{netip.MustParseAddr("8.8.8.8")},
             LeaseTime: 24 * time.Hour,
         },

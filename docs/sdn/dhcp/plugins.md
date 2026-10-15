@@ -67,7 +67,7 @@ plugin, err := dhcp.NewIPAMPlugin(
     "internal-pool",              // Pool ID
     dhcp.DHCPOptions{            // DHCP options
         SubnetMask: net.CIDRMask(24, 32),
-        Router:     netip.MustParseAddr("192.168.1.1"),
+        Router:     netip.MustParseAddr("192.0.2.1"),
         DNS:        []netip.Addr{netip.MustParseAddr("8.8.8.8")},
         LeaseTime:  24 * time.Hour,
     },
@@ -354,7 +354,7 @@ import "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/dhcp"
 
 // Create PXE plugin
 pxe, err := dhcp.NewPXEPlugin(
-    net.ParseIP("192.168.1.10"),  // TFTP server
+    net.ParseIP("192.0.2.10"),  // TFTP server
     "pxelinux.0",                  // Default boot file
     dhcp.WithPXELogger(logger),
     dhcp.WithTFTPRoot("/var/lib/tftpboot"),
@@ -478,7 +478,7 @@ func (p *PXEPlugin) Handler4() handler.Handler4 {
 
 ```go
 // Update TFTP server
-if err := pxe.SetNextServer(net.ParseIP("192.168.1.20")); err != nil {
+if err := pxe.SetNextServer(net.ParseIP("192.0.2.20")); err != nil {
     return err
 }
 
@@ -508,7 +508,7 @@ tftpRoot := pxe.GetTFTPRoot()
 
 ```go
 pxe, _ := dhcp.NewPXEPlugin(
-    net.ParseIP("192.168.1.10"),
+    net.ParseIP("192.0.2.10"),
     "pxelinux.0",
     dhcp.WithArchitectureFilters(map[uint16]string{
         dhcp.PXEArchIntelX86: "pxelinux.0",
@@ -520,7 +520,7 @@ pxe, _ := dhcp.NewPXEPlugin(
 
 ```go
 pxe, _ := dhcp.NewPXEPlugin(
-    net.ParseIP("192.168.1.10"),
+    net.ParseIP("192.0.2.10"),
     "shimx64.efi",  // Shim for Secure Boot
     dhcp.WithArchitectureFilters(map[uint16]string{
         dhcp.PXEArchEFIX8664:  "shimx64.efi",   // x64 Secure Boot
@@ -534,7 +534,7 @@ pxe, _ := dhcp.NewPXEPlugin(
 
 ```go
 pxe, _ := dhcp.NewPXEPlugin(
-    net.ParseIP("192.168.1.10"),
+    net.ParseIP("192.0.2.10"),
     "undionly.kpxe",  // iPXE for BIOS
     dhcp.WithArchitectureFilters(map[uint16]string{
         dhcp.PXEArchIntelX86: "undionly.kpxe",  // BIOS iPXE
@@ -547,7 +547,7 @@ pxe, _ := dhcp.NewPXEPlugin(
 
 ```go
 pxe, _ := dhcp.NewPXEPlugin(
-    net.ParseIP("192.168.1.10"),
+    net.ParseIP("192.0.2.10"),
     "http://boot.example.com/boot.efi",
     dhcp.WithArchitectureFilters(map[uint16]string{
         dhcp.PXEArchX8664HTTP: "http://boot.example.com/bootx64.efi",

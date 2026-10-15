@@ -169,7 +169,7 @@ record, err := client.AddRecord(ctx, &dns.AddRecordRequest{
     ZoneName: "myzone.internal.",
     Type:     "A",
     Name:     "server01",
-    Value:    "192.168.1.100",
+    Value:    "192.0.2.100",
     Ttl:      3600,
 })
 ```

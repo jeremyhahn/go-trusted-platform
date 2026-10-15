@@ -330,7 +330,7 @@ Corefiles are dynamically generated based on configuration:
 
 | Server Type | Default Forwarders |
 |-------------|-------------------|
-| Internal | `192.168.1.1`, `192.168.2.1`, `192.168.3.1` |
+| Internal | `192.0.2.1`, `198.51.100.1`, `203.0.113.1` |
 | Public | `4.4.4.4`, `8.8.8.8` |
 
 Forwarders are configurable per server in the platform configuration:
@@ -340,7 +340,7 @@ dns:
   internal:
     port: 9053
     forwarders:
-      - "192.168.1.1"
+      - "192.0.2.1"
   public:
     port: 8053
     forwarders:

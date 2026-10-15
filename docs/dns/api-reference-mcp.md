@@ -149,7 +149,7 @@ Add a DNS record to a zone.
       "zone_name": "example.internal.",
       "type": "A",
       "name": "server01",
-      "value": "192.168.1.100",
+      "value": "192.0.2.100",
       "ttl": 3600
     }
   }
@@ -244,7 +244,7 @@ error ("no records found").
   "result": {
     "content": [{
       "type": "text",
-      "text": "Resolved ns1.example.internal. A: 192.168.1.10 (TTL: 3600)"
+      "text": "Resolved ns1.example.internal. A: 192.0.2.10 (TTL: 3600)"
     }]
   }
 }
@@ -286,7 +286,7 @@ for DANE is added with `dns_record_create` and a `tlsa` record.
       "zone_name": "example.internal.",
       "record": {
         "type": "RECORD_TYPE_A",
-        "a": {"name": "server01", "value": "192.168.1.100", "ttl": 3600}
+        "a": {"name": "server01", "value": "192.0.2.100", "ttl": 3600}
       }
     }
   }
@@ -402,7 +402,7 @@ result = call_mcp_tool("dns_add_record", {
     "zone_name": "myzone.internal.",
     "type": "A",
     "name": "server01",
-    "value": "192.168.1.100",
+    "value": "192.0.2.100",
     "ttl": 3600
 })
 

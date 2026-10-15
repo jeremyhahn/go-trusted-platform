@@ -154,7 +154,7 @@ zone := &entities.Zone{
             {Name: "myzone.internal.", Value: "ns1.myzone.internal.", TTL: 3600},
         },
         ARecords: []*entities.ARecord{
-            {Name: "ns1", Value: "192.168.1.10", TTL: 3600},
+            {Name: "ns1", Value: "192.0.2.10", TTL: 3600},
         },
     },
 }
@@ -190,7 +190,7 @@ The `Register` function handles zone and record creation:
 
 ```go
 // Register creates zone or adds record based on FQDN
-zone, err := dnsService.Register(ctx, "myhost.example.internal", "192.168.1.100")
+zone, err := dnsService.Register(ctx, "myhost.example.internal", "192.0.2.100")
 ```
 
 ### Zone Persistence
@@ -215,8 +215,8 @@ dns:
   internal:
     port: 9053
     forwarders:
-      - "192.168.1.1"
-      - "192.168.2.1"
+      - "192.0.2.1"
+      - "198.51.100.1"
     zone:
       id: 2
       name: "example.internal."
@@ -246,7 +246,7 @@ dns:
             value: "${LOCAL_IPv4}"
             ttl: 3600
           - name: "ns2"
-            value: "192.168.2.1"
+            value: "198.51.100.1"
             ttl: 3600
           - name: "${HOSTNAME}"
             value: "${LOCAL_IPv4}"
@@ -325,7 +325,7 @@ Configuration values support macro expansion for dynamic IP addresses:
 | Macro | Description | Example |
 |-------|-------------|---------|
 | `${PUBLIC_IPv4}` | Public IPv4 address | `203.0.113.10` |
-| `${LOCAL_IPv4}` | Private IPv4 address | `192.168.1.10` |
+| `${LOCAL_IPv4}` | Private IPv4 address | `192.0.2.10` |
 | `${HOSTNAME}` | System hostname | `server01` |
 
 ```yaml
@@ -372,7 +372,7 @@ platformctl dns zone delete example.internal
 ```bash
 platformctl dns register \
   --fqdn "myhost.example.internal" \
-  --ip "192.168.1.100"
+  --ip "192.0.2.100"
 ```
 
 **Register host in public zone:**

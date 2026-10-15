@@ -424,9 +424,9 @@ testdata/
 
 ```go
 const mockARPTable = `IP address       HW type     Flags       HW address            Mask     Device
-192.168.1.1      0x1         0x2         aa:bb:cc:dd:ee:ff     *        eth0
-192.168.1.2      0x1         0x2         11:22:33:44:55:66     *        eth0
-192.168.1.3      0x1         0x0         00:00:00:00:00:00     *        eth0
+192.0.2.1        0x1         0x2         aa:bb:cc:dd:ee:ff     *        eth0
+192.0.2.2        0x1         0x2         11:22:33:44:55:66     *        eth0
+192.0.2.3        0x1         0x0         00:00:00:00:00:00     *        eth0
 `
 ```
 

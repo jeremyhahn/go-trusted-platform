@@ -139,7 +139,7 @@ curl --unix-socket /run/platformd.sock \
 curl --unix-socket /run/platformd.sock \
   -X POST \
   -H "Content-Type: application/json" \
-  -d '{"type":"A","name":"server01","value":"192.168.1.100","ttl":3600}' \
+  -d '{"type":"A","name":"server01","value":"192.0.2.100","ttl":3600}' \
   http://localhost/api/v1/dns/zones/example.internal./records
 
 # MX record
@@ -156,7 +156,7 @@ curl --unix-socket /run/platformd.sock \
 curl --unix-socket /run/platformd.sock \
   -X PUT \
   -H "Content-Type: application/json" \
-  -d '{"value":"192.168.1.101","ttl":7200}' \
+  -d '{"value":"192.0.2.101","ttl":7200}' \
   http://localhost/api/v1/dns/zones/example.internal./records/A/server01
 ```
 
@@ -347,7 +347,7 @@ The `platformctl` CLI uses Unix socket by default:
 # These commands use /run/platformd.sock internally
 platformctl dns zones list
 platformctl dns zones create --name myzone.internal. --ttl 3600 --internal
-platformctl dns records add --zone myzone.internal. --type A --name server01 --value 192.168.1.100
+platformctl dns records add --zone myzone.internal. --type A --name server01 --value 192.0.2.100
 platformctl dns resolve ns1.example.internal. A
 ```
 

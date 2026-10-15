@@ -538,7 +538,7 @@ Each network interface operates independently with its own:
 │  │  ]                                                           ││
 │  │                                                              ││
 │  │  servers: map[string]*server4.Server {                       ││
-│  │    "eth0": server4@192.168.1.1:67,                          ││
+│  │    "eth0": server4@192.0.2.1:67,                            ││
 │  │    "eth1": server4@10.0.0.1:67,                             ││
 │  │    "br0":  server4@192.0.2.1:67,                             ││
 │  │  }                                                           ││

@@ -47,7 +47,7 @@ dns:
   allow-external-registration: false
   allow-internal-registration: true
   default-ttl: 3600
-  private-ipv4: "192.168.1.100"
+  private-ipv4: "192.0.2.100"
   public-ipv4: "203.0.113.50"
 
   # QuicBaaS storage configuration
@@ -67,7 +67,7 @@ dns:
   internal:
     port: 9053
     forwarders:
-      - "192.168.1.1"
+      - "192.0.2.1"
     zone:
       name: "example.internal."
       ttl: 3600
@@ -149,7 +149,7 @@ dig @localhost -p 9053 example.internal SOA
 # Devices can self-register using the platform API
 platformctl dns register \
   --fqdn "newhost.example.internal" \
-  --ip "192.168.1.50"
+  --ip "192.0.2.50"
 ```
 
 ## Architecture Overview

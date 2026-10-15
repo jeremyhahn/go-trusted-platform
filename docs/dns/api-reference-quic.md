@@ -64,7 +64,7 @@ resp, err := client.Do(req)
 
 ```go
 // Add record
-body := bytes.NewBuffer([]byte(`{"type":"A","name":"server01","value":"192.168.1.100","ttl":3600}`))
+body := bytes.NewBuffer([]byte(`{"type":"A","name":"server01","value":"192.0.2.100","ttl":3600}`))
 req, _ := http.NewRequest("POST", "https://platform.example.com:9444/api/v1/dns/zones/example.internal./records", body)
 req.Header.Set("Content-Type", "application/json")
 resp, err := client.Do(req)
@@ -163,7 +163,7 @@ Same JSON format as REST API:
 {
   "type": "A",
   "name": "server01",
-  "value": "192.168.1.100",
+  "value": "192.0.2.100",
   "ttl": 3600
 }
 ```
@@ -173,7 +173,7 @@ semantics in [resolution.md](resolution.md#api-resolve)):
 ```json
 {
   "records": [
-    {"type": "A", "a": {"name": "ns1", "value": "192.168.1.10", "ttl": 3600}}
+    {"type": "A", "a": {"name": "ns1", "value": "192.0.2.10", "ttl": 3600}}
   ],
   "authoritative": true
 }
