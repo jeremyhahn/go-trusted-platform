@@ -1,6 +1,6 @@
 # Unified Kernel Image (UKI)
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > The UKI builder and parser in `pkg/uki`.
 
 ## Overview
@@ -29,10 +29,10 @@ UKIs simplify secure boot by consolidating all boot components into a single sig
 
 | Feature | Description |
 |---------|-------------|
-| Native PE/COFF manipulation | Pure Go implementation, no external tools required |
+| Native PE/COFF manipulation | Pure Go section patcher (`NewBuilder`); `NewObjcopyBuilder` is an alternative that drives `objcopy` |
 | Multi-architecture support | x86_64, aarch64, arm, riscv64 |
 | Section management | Add standard and custom PE sections |
-| EFI stub integration | Uses kernel's built-in EFI stub (CONFIG_EFI_STUB) |
+| EFI stub integration | systemd-stub is the base PE; the kernel goes in `.linux` |
 | SBAT support | Secure Boot Advanced Targeting metadata |
 | Parser included | Extract and inspect UKI components |
 | Authenticode compatible | Sign with `pkg/authenticode` for Secure Boot |
@@ -70,7 +70,7 @@ A UKI is a PE/COFF executable containing multiple sections:
 |                           |
 +---------------------------+
 |                           |
-|   .linux    (kernel)      |  Required (base PE)
+|   .linux    (kernel)      |  Required           
 |                           |
 +---------------------------+
 |                           |
@@ -91,7 +91,7 @@ A UKI is a PE/COFF executable containing multiple sections:
 
 | Section | Required | Description |
 |---------|----------|-------------|
-| `.linux` | Yes | Linux kernel image (vmlinuz) - serves as base PE |
+| `.linux` | Yes | Linux kernel image (vmlinuz) |
 | `.initrd` | Yes | Initial ramdisk (initramfs/initrd) |
 | `.cmdline` | Yes | Kernel command line arguments |
 | `.osrel` | No | OS release information (from /etc/os-release) |
@@ -106,12 +106,15 @@ A UKI is a PE/COFF executable containing multiple sections:
 
 ```go
 import (
+    "log/slog"
+    "os"
+
     "github.com/jeremyhahn/go-trusted-platform/pkg/uki"
     "github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
 // Create logger
-logger := logging.NewLogger(logging.INFO)
+logger := logging.NewLogger(slog.LevelInfo, os.Stdout)
 
 // Create UKI builder
 builder := uki.NewBuilder(logger)
@@ -263,12 +266,17 @@ The UKI package supports multiple CPU architectures:
 ```go
 builder := uki.NewBuilder(logger)
 
-// Set target architecture (defaults to x86_64)
+// Set target architecture (defaults to the host architecture)
 err := builder.SetArchitecture("aarch64")
 if err != nil {
     return fmt.Errorf("unsupported architecture: %w", err)
 }
 ```
+
+`NewBuilder` picks the stub for the host architecture (`HostArchitecture`,
+`StubPath`). `SetArchitecture` checks the name and records it, but the stub
+path is not changed; to build for another architecture, pass that
+architecture's stub in `UKI.Stub` (its path is `uki.StubPath(arch)`).
 
 ### Using Custom EFI Stub
 
@@ -285,14 +293,19 @@ ukiConfig := &uki.UKI{
 }
 ```
 
-Note: When `Stub` is nil, the builder uses the kernel itself as the base PE file since modern Linux kernels have a built-in EFI stub (CONFIG_EFI_STUB).
+Note: When `Stub` is nil, the builder reads the systemd-stub from the builder's
+stub path (see the table above); a missing file fails with a hint to install
+`systemd-efistub`. The stub is the base PE and the kernel is placed in `.linux`.
 
 ## Integration with Authenticode Signing
 
 UKIs must be signed with Authenticode for Secure Boot. Use the `pkg/authenticode` package:
 
 ```go
-import "github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
+import (
+    "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+    "github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
+)
 
 // Build unsigned UKI
 err = builder.BuildFile(ukiConfig, "/tmp/linux-unsigned.efi")
@@ -301,9 +314,9 @@ if err != nil {
 }
 
 // Create Authenticode signer
-signer, err := authenticode.NewSigner(&authenticode.SignerOptions{
+signer, err := authenticode.NewSigner(ctx, &authenticode.SignerOptions{
     KeyStore:      keyBackend,
-    KeyAttributes: &types.KeyAttributes{CN: "secure-boot-db"},
+    KeyAttributes: &xkms.KeyAttributes{CN: "secure-boot-db"},
     Certificate:   dbCert,
     Logger:        logger,
 })
@@ -324,8 +337,8 @@ err = signer.VerifyFile("/boot/efi/EFI/Linux/linux.efi")
 ### Complete Build and Sign Workflow
 
 ```go
-func BuildSignedUKI(kernelPath, initrdPath, cmdline, outputPath string) error {
-    logger := logging.NewLogger(logging.INFO)
+func BuildSignedUKI(ctx context.Context, kernelPath, initrdPath, cmdline, outputPath string) error {
+    logger := logging.NewLogger(slog.LevelInfo, os.Stdout)
 
     // 1. Create UKI
     ukiConfig, err := uki.FromFiles(kernelPath, initrdPath, cmdline)
@@ -344,7 +357,7 @@ func BuildSignedUKI(kernelPath, initrdPath, cmdline, outputPath string) error {
     defer os.Remove(unsignedPath)
 
     // 3. Sign with DB key
-    signer, err := authenticode.NewSigner(signerOpts)
+    signer, err := authenticode.NewSigner(ctx, signerOpts)
     if err != nil {
         return err
     }
@@ -361,12 +374,16 @@ func BuildSignedUKI(kernelPath, initrdPath, cmdline, outputPath string) error {
 
 The UKI package includes a native PE/COFF implementation:
 
-- **Section Alignment**: 4KB (0x1000) for virtual addresses
+- **Section Alignment**: the stub's own section alignment, 4KB (0x1000) when
+  the stub declares none
 - **File Alignment**: 512 bytes (0x200) for raw data
-- **Section Characteristics**: Data sections use `IMAGE_SCN_CNT_INITIALIZED_DATA` without memory mapping flags
-- **UKI Data Sections**: `.cmdline`, `.initrd`, etc. have `VirtualAddress=0` and are accessed by file offset only
+- **Section Characteristics**: data sections are
+  `IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ` (`0x40000040`)
+- **Virtual Addresses**: each added section gets the next section-aligned
+  `VirtualAddress` and the image size is updated, so UEFI PE loaders (OVMF)
+  accept the binary (`pkg/uki/pe.go`)
 
-This matches the behavior expected by the Linux kernel's EFI stub.
+`NewObjcopyBuilder` instead sets `VirtualAddress=0` on the data sections.
 
 ## Related Documentation
 

@@ -1,6 +1,6 @@
 # Basic Input Output System (BIOS)
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > Background notes on BIOS security.
 
 This document outlines a standards and interesting topics about the BIOS in relation to the Trusted Platform and operating in a Trusted, Confidential computing environment.

@@ -1,6 +1,6 @@
 # UEFI Package Documentation
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > The UEFI NVRAM and key-enrollment package `pkg/uefi`.
 
 Native Go implementation for UEFI firmware operations including NVRAM manipulation, Secure Boot key enrollment, and EFI Signature List (ESL) encoding.
@@ -107,6 +107,7 @@ EFI_SIGNATURE_DATA:
 | Type | GUID | Data Size |
 |------|------|-----------|
 | X.509 Certificate | `A5C059A1-94E4-4AA7-87B5-AB155C2BF072` | Variable |
+| X.509 SHA-256 (`EFIX509SHA256`) | `3BD2A492-96C0-4079-B420-FCF98EF103ED` | 48 bytes |
 | SHA-256 Hash | `C1C41626-504C-4092-ACA9-41F936934328` | 32 bytes |
 | SHA-384 Hash | `FF3E5307-9FD0-48C9-85F1-8AD56C701E01` | 48 bytes |
 | SHA-512 Hash | `093E0FAE-A6C4-4F50-9F1B-D41E2B89C19A` | 64 bytes |
@@ -130,7 +131,7 @@ hashESL := uefi.NewSignatureListFromHash(hash[:], uefi.EFISHA256, ownerGUID)
 // Serialize to binary
 eslBytes := esl.Bytes()
 
-// Concatenate multiple lists
+// Concatenate multiple lists into one []byte
 combined := uefi.ConcatSignatureLists(esl1, esl2, esl3)
 ```
 
@@ -212,6 +213,7 @@ err = nvram.SaveTo(newPath) // Save to new path
 | `AttrBootserviceAccess` | 0x02 | Accessible during boot services |
 | `AttrRuntimeAccess` | 0x04 | Accessible during runtime |
 | `AttrHardwareErrorRecord` | 0x08 | Hardware error record |
+| `AttrAuthenticatedWriteAccess` | 0x10 | Count-based authentication (deprecated in UEFI) |
 | `AttrTimeBasedAuthWriteAccess` | 0x20 | Time-based authentication |
 | `AttrAppendWrite` | 0x40 | Append to existing data |
 
@@ -242,7 +244,8 @@ config := &uefi.SecureBootEnrollerConfig{
     // Directory containing PK.crt, KEK.crt, DB.crt
     KeysDir: "/path/to/keys",
 
-    // Optional: template NVRAM file
+    // Optional: template NVRAM file; when empty, the common OVMF
+    // locations under /usr/share are tried
     TemplatePath: "/usr/share/OVMF/OVMF_VARS_4M.fd",
 
     // Optional: owner GUID (auto-generated if nil)
@@ -263,13 +266,17 @@ if err != nil {
 
 // This performs:
 // 1. Initialize NVRAM from template (if needed)
-// 2. Load PK.crt, KEK.crt, DB.crt from KeysDir
+// 2. Load PK.crt, KEK.crt, DB.crt from KeysDir (PEM or DER)
 // 3. Create ESL structures for each certificate
-// 4. Set PK, KEK, db variables
-// 5. Enable SecureBoot (set to 0x01)
-// 6. Disable SetupMode (set to 0x00)
-// 7. Save NVRAM
+// 4. Set PK, KEK, db variables (SecureBootAttributes)
+// 5. Save NVRAM
 ```
+
+`SecureBoot` and `SetupMode` are not written. The firmware derives them at
+every boot from PK presence (PK present means User Mode with Secure Boot on),
+so enrolling PK is what turns Secure Boot on (`pkg/uefi/enrollment.go`).
+`GetEnrollmentStatus` applies the same rule and prefers a stored value only
+when the store has one.
 
 ### Checking Enrollment Status
 
@@ -305,7 +312,7 @@ info := &uefi.PlatformInfo{
     GitCommit: "abc123def",
 }
 
-err := enroller.SetPlatformInfo(ctx, info)
+err := enroller.SetPlatformInfo(ctx, info) // Version is required
 // Stores: "1.0.0|2025-01-15T12:00:00Z|abc123def"
 // Variable: TRUSTED_PLATFORM
 // GUID: F47E4B3D-8C21-4A9F-B6E5-1D2C3E4F5A6B
@@ -386,6 +393,7 @@ func main() {
 package main
 
 import (
+    "crypto/x509"
     "log"
     "os"
 
@@ -399,7 +407,7 @@ func main() {
         log.Fatal(err)
     }
 
-    // Load certificate
+    // Load certificate (DER)
     certData, _ := os.ReadFile("./DB.crt")
     cert, _ := x509.ParseCertificate(certData)
 
@@ -428,7 +436,7 @@ func main() {
 ```go
 // Generate random GUID
 guid := uefi.NewGUID()
-fmt.Println(guid.String()) // 8BE4DF61-93CA-11D2-AA0D-00E098032B8C
+fmt.Println(guid.String()) // upper-case 8-4-4-4-12 form
 
 // Parse GUID from string
 guid, err := uefi.ParseGUID("8BE4DF61-93CA-11D2-AA0D-00E098032B8C")
@@ -452,6 +460,20 @@ if guid.IsZero() {
     fmt.Println("GUID is all zeros")
 }
 ```
+
+## Live System (efivarfs)
+
+On a running UEFI system the package reads and writes the firmware variables
+through efivarfs (`EfivarsPath`, default `/sys/firmware/efi/efivars`):
+
+| Function | Purpose |
+|----------|---------|
+| `EfivarsAvailable`, `IsSetupMode`, `SecureBootEnabled` | Firmware state checks |
+| `ReadSecureBootStatus`, `ReadDBCertificates` | Read the Secure Boot state and the db certificates |
+| `EnrollKeysToEfivars(ctx, pk, kek, db, ts)` | Enroll in the order db, KEK, PK (PK last); refuses with `ErrEfivarsUnavailable` or `ErrNotSetupMode` |
+| `VerifySignedUKI(verifier, ukiPath, dbCert, logger)` | Check the UKI is signed by exactly `dbCert` before PK is enrolled |
+
+The `...FromDir` / `...Dir` variants take the efivars directory as an argument.
 
 ## Error Handling
 
