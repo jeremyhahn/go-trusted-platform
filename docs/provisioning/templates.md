@@ -1,5 +1,8 @@
 # Device Templates
 
+> **Status: REFERENCE**
+> Device templates and the profiles made from them.
+
 Device templates are reusable configuration blueprints for device provisioning. A template contains a full platform configuration (`app.App`) that can be copied to create device profiles with device-specific customizations.
 
 ## Lifecycle

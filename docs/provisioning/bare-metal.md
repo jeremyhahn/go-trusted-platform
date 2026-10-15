@@ -1,5 +1,8 @@
 # Bare Metal Provisioning
 
+> **Status: REFERENCE**
+> Provisioning a racked server through its BMC, from ISO mount to enrollment.
+
 End-to-end automated provisioning of bare metal servers using BMC out-of-band management.
 
 ## Overview

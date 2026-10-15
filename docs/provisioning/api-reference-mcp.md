@@ -1,5 +1,9 @@
 # Config Delivery MCP API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The `provision_*` tools of the platform MCP server: arguments, scopes and
+> errors.
+
 | Property | Value |
 |----------|-------|
 | Protocol | MCP (JSON-RPC 2.0) |

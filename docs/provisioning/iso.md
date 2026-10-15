@@ -1,5 +1,8 @@
 # ISO Configuration
 
+> **Status: REFERENCE**
+> How the platform ISO receives its config: embedded, server-fetched or interactive.
+
 The platform ISO supports three modes of configuration delivery: embedded config, server-fetched config, and interactive provisioning.
 
 ## Build Modes

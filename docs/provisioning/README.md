@@ -1,5 +1,8 @@
 # Device Provisioning
 
+> **Status: REFERENCE**
+> Device enrollment, network configuration and production activation: an index of this folder.
+
 Automated device enrollment, network configuration, and production activation.
 
 ## Overview

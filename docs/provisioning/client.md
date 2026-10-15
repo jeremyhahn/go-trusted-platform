@@ -1,5 +1,8 @@
 # Provisioning Client
 
+> **Status: REFERENCE**
+> The `pkg/provisioning` client: profile fetch and activation over mTLS.
+
 mTLS-authenticated client for device profile fetching and activation.
 
 ## Overview

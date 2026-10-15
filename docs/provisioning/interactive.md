@@ -1,5 +1,8 @@
 # Interactive QR Provisioning
 
+> **Status: REFERENCE**
+> The interactive QR flow for a device no profile matches.
+
 When no pre-existing config matches a device, the device displays a QR code that an operator scans to create a config on the fly.
 
 ## How It Works
@@ -84,9 +87,7 @@ platformctl-static provision interactive \
   --timeout 600
 
 # Manual session fulfillment (operator CLI alternative)
-platformctl provision fulfill \
-  --session-id <id> \
-  --profile-id <pid>
+platformctl provision session fulfill <session-id> --profile-id <pid>
 ```
 
 ## Security
