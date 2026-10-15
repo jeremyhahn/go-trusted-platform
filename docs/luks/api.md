@@ -122,7 +122,7 @@ message. The SDK REST transport takes that message from the `error` key.
 
 | Transport | Requirement |
 |---|---|
-| REST | mTLS client certificate (the daemon REST server authenticates by mTLS only). No per-route scope. |
+| REST | mTLS client certificate, which the daemon REST handshake requires. The LUKS routes are outside the scope guard: they take no `Bearer` token and check no scope. |
 | gRPC TCP | a platform token carrying the method's `luks:*` scope (`pkg/api/grpc/method_permissions.go`). |
 | QUIC | a platform token carrying the sub-opcode's `luks:*` scope (`pkg/api/quic/opcode_permissions.go`). |
 | MCP | a platform token carrying the tool's `luks:*` scope (`toolPermissionCatalog`, `pkg/api/mcp/authz.go`). `platform_luks_test_unlock` is **refused**: it is unclassified, so `AuthorizeTool` denies it, and the provider itself refuses with `ErrLUKSTestUnlockUnverified`. |

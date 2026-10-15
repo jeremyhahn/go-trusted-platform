@@ -83,6 +83,10 @@ func TestLookupOperationPermission_CategorySubOpcodes(t *testing.T) {
 		{"device enable", quicwire.OpProvisioningCategory, quicwire.DeviceSubEnable, OpcodePermission{Resource: "device", Action: "write"}},
 		{"device profile match", quicwire.OpProvisioningCategory, quicwire.DeviceSubFindMatchingProfile, OpcodePermission{Resource: "device", Action: "read"}},
 		{"bmc enroll", quicwire.OpBMCCategory, quicwire.BMCSubEnroll, OpcodePermission{Resource: "bmc", Action: "admin"}},
+		{"bmc power status", quicwire.OpBMCCategory, quicwire.BMCSubPowerStatus, OpcodePermission{Resource: "bmc", Action: "read"}},
+		{"bmc power on", quicwire.OpBMCCategory, quicwire.BMCSubPowerOn, OpcodePermission{Resource: "bmc", Action: "write"}},
+		{"bmc power cycle", quicwire.OpBMCCategory, quicwire.BMCSubPowerCycle, OpcodePermission{Resource: "bmc", Action: "power"}},
+		{"bmc mount iso", quicwire.OpBMCCategory, quicwire.BMCSubMountISO, OpcodePermission{Resource: "bmc", Action: "media"}},
 		{"tenant barrier unseal", quicwire.OpTenantBarrierCategory, quicwire.TenantBarrierSubUnseal, OpcodePermission{Resource: "tenant", Action: "write"}},
 		{"tenant barrier status", quicwire.OpTenantBarrierCategory, quicwire.TenantBarrierSubStatus, OpcodePermission{Resource: "tenant", Action: "read"}},
 		{"tpm2 clear", quicwire.OpTPM2Category, quicwire.SubOpTPM2Clear, OpcodePermission{Resource: "tpm", Action: "delete"}},
@@ -225,7 +229,7 @@ func TestLookupOperationPermission_VMDirectOpcodesStayDirect(t *testing.T) {
 func TestOperationCatalog_EntriesAreWellFormed(t *testing.T) {
 	actions := map[string]bool{
 		actionRead: true, actionWrite: true, actionDelete: true, actionAdmin: true, actionSignCSR: true,
-		actionGenerate: true, actionRevoke: true, actionList: true,
+		actionGenerate: true, actionRevoke: true, actionList: true, actionPower: true, actionMedia: true,
 	}
 	check := func(where string, perm OpcodePermission) {
 		if perm.Resource == "" || !actions[perm.Action] {

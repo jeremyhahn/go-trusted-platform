@@ -51,6 +51,11 @@ const (
 	actionGenerate = "generate"
 	actionRevoke   = "revoke"
 	actionList     = "list"
+
+	// The BMC family splits its writes: power-off, reset and cycle need
+	// bmc:power and virtual media needs bmc:media.
+	actionPower = "power"
+	actionMedia = "media"
 )
 
 // ErrOperationNotClassified is returned for an opcode, or a category
@@ -270,6 +275,10 @@ var (
 	fido2Read  = OpcodePermission{Resource: "fido2", Action: actionRead}
 	fido2Write = OpcodePermission{Resource: "fido2", Action: actionWrite}
 
+	bmcRead  = OpcodePermission{Resource: "bmc", Action: actionRead}
+	bmcWrite = OpcodePermission{Resource: "bmc", Action: actionWrite}
+	bmcPower = OpcodePermission{Resource: "bmc", Action: actionPower}
+	bmcMedia = OpcodePermission{Resource: "bmc", Action: actionMedia}
 	bmcAdmin = OpcodePermission{Resource: "bmc", Action: actionAdmin}
 
 	pxeRead   = OpcodePermission{Resource: "pxe", Action: actionRead}
@@ -795,11 +804,32 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.TenantBarrierSubStatus: tenantRead,
 	},
 
-	// BMC enrollment and certificate restore (MCP bmc_enroll and
-	// bmc_cert_restore require bmc:admin).
+	// BMC (gRPC BMCService): each sub-opcode takes its method's scope.
+	// Powering on is a write; powering off, reset and cycle need bmc:power.
 	quicwire.OpBMCCategory: {
-		quicwire.BMCSubEnroll:  bmcAdmin,
-		quicwire.BMCSubRestore: bmcAdmin,
+		quicwire.BMCSubPowerOn:               bmcWrite,
+		quicwire.BMCSubPowerOff:              bmcPower,
+		quicwire.BMCSubPowerReset:            bmcPower,
+		quicwire.BMCSubPowerCycle:            bmcPower,
+		quicwire.BMCSubPowerStatus:           bmcRead,
+		quicwire.BMCSubSetBootDevice:         bmcWrite,
+		quicwire.BMCSubGetBootDevice:         bmcRead,
+		quicwire.BMCSubMountISO:              bmcMedia,
+		quicwire.BMCSubUnmountISO:            bmcMedia,
+		quicwire.BMCSubVirtualMediaStatus:    bmcRead,
+		quicwire.BMCSubGetSensors:            bmcRead,
+		quicwire.BMCSubGetSystemInfo:         bmcRead,
+		quicwire.BMCSubProvision:             bmcAdmin,
+		quicwire.BMCSubProvisionStatus:       bmcRead,
+		quicwire.BMCSubGetWebCertificate:     bmcRead,
+		quicwire.BMCSubReplaceWebCertificate: bmcAdmin,
+		quicwire.BMCSubEnroll:                bmcAdmin,
+		quicwire.BMCSubRestore:               bmcAdmin,
+		quicwire.BMCSubListUsers:             bmcRead,
+		quicwire.BMCSubCreateUser:            bmcAdmin,
+		quicwire.BMCSubDeleteUser:            bmcAdmin,
+		quicwire.BMCSubSetUserPassword:       bmcAdmin,
+		quicwire.BMCSubSetUserPrivilege:      bmcAdmin,
 	},
 
 	quicwire.OpSwitchCategory: {

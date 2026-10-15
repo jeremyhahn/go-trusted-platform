@@ -50,6 +50,7 @@ func buildHandlerMap(reg *ServiceRegistry) map[string]handlerFunc {
 	registerCeremonyHandlers(m, reg)
 	registerPIVHandlers(m, reg)
 	registerFIDO2Handlers(m, reg)
+	registerBMCHandlers(m, reg)
 	registerCacheHandlers(m, reg)
 	registerSchedulerHandlers(m, reg)
 	registerMessagingHandlers(m, reg)
@@ -1377,6 +1378,83 @@ func registerFIDO2Handlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	}
 	m[platformv1.FIDO2Service_Authenticate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.Authenticate(ctx, req.(*platformv1.FIDO2AuthenticateRequest))
+	}
+}
+
+func registerBMCHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.BMC == nil {
+		return
+	}
+	svc := reg.BMC
+
+	m[platformv1.BMCService_PowerOn_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.PowerOn(ctx, req.(*platformv1.BMCPowerRequest))
+	}
+	m[platformv1.BMCService_PowerOff_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.PowerOff(ctx, req.(*platformv1.BMCPowerRequest))
+	}
+	m[platformv1.BMCService_PowerReset_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.PowerReset(ctx, req.(*platformv1.BMCPowerRequest))
+	}
+	m[platformv1.BMCService_PowerCycle_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.PowerCycle(ctx, req.(*platformv1.BMCPowerRequest))
+	}
+	m[platformv1.BMCService_PowerStatus_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.PowerStatus(ctx, req.(*platformv1.BMCPowerStatusRequest))
+	}
+	m[platformv1.BMCService_SetBootDevice_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.SetBootDevice(ctx, req.(*platformv1.BMCSetBootDeviceRequest))
+	}
+	m[platformv1.BMCService_GetBootDevice_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetBootDevice(ctx, req.(*platformv1.BMCGetBootDeviceRequest))
+	}
+	m[platformv1.BMCService_MountISO_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.MountISO(ctx, req.(*platformv1.BMCMountISORequest))
+	}
+	m[platformv1.BMCService_UnmountISO_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.UnmountISO(ctx, req.(*platformv1.BMCUnmountISORequest))
+	}
+	m[platformv1.BMCService_VirtualMediaStatus_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.VirtualMediaStatus(ctx, req.(*platformv1.BMCVirtualMediaStatusRequest))
+	}
+	m[platformv1.BMCService_GetSensors_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetSensors(ctx, req.(*platformv1.BMCGetSensorsRequest))
+	}
+	m[platformv1.BMCService_GetSystemInfo_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetSystemInfo(ctx, req.(*platformv1.BMCGetSystemInfoRequest))
+	}
+	m[platformv1.BMCService_Provision_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Provision(ctx, req.(*platformv1.BMCProvisionRequest))
+	}
+	m[platformv1.BMCService_ProvisionStatus_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ProvisionStatus(ctx, req.(*platformv1.BMCProvisionStatusRequest))
+	}
+	m[platformv1.BMCService_GetWebCertificate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetWebCertificate(ctx, req.(*platformv1.BMCGetWebCertificateRequest))
+	}
+	m[platformv1.BMCService_ReplaceWebCertificate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ReplaceWebCertificate(ctx, req.(*platformv1.BMCReplaceWebCertificateRequest))
+	}
+	m[platformv1.BMCService_EnrollBMC_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.EnrollBMC(ctx, req.(*platformv1.BMCEnrollRequest))
+	}
+	m[platformv1.BMCService_RestoreFactoryCert_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.RestoreFactoryCert(ctx, req.(*platformv1.BMCRestoreRequest))
+	}
+	m[platformv1.BMCService_ListUsers_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListUsers(ctx, req.(*platformv1.BMCListUsersRequest))
+	}
+	m[platformv1.BMCService_CreateUser_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CreateUser(ctx, req.(*platformv1.BMCCreateUserRequest))
+	}
+	m[platformv1.BMCService_DeleteUser_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DeleteUser(ctx, req.(*platformv1.BMCDeleteUserRequest))
+	}
+	m[platformv1.BMCService_SetUserPassword_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.SetUserPassword(ctx, req.(*platformv1.BMCSetUserPasswordRequest))
+	}
+	m[platformv1.BMCService_SetUserPrivilege_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.SetUserPrivilege(ctx, req.(*platformv1.BMCSetUserPrivilegeRequest))
 	}
 }
 

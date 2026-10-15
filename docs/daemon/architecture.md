@@ -466,7 +466,10 @@ same way: `EnableMTLS` with no CA service (gRPC) or no resolvable client CA
 pool (gRPC, QUIC, REST) is a typed error, never a listener that merely does
 not ask for a client certificate. The daemon REST server has no token
 middleware — mTLS at the TLS layer is its only listener-wide authentication;
-the CA sign-csr and `/api/v1/tpm` routes check a platform token per route — so
+the CA sign-csr and `/api/v1/tpm` routes check a platform token per route, and
+the scope-guarded VPN, NTP, application service, compute and tenant routes
+take a `Bearer` token or the client certificate
+([`api.md`](api.md) §5), over a connection that has already passed mTLS — so
 `EnableREST` without `EnableMTLS` is refused by both `New` and
 `RESTServer.Start`; in daemon-only mode `platformd serve --enable-rest`
 therefore requires `--enable-mtls`. `SkipIAMValidation` (testing only) is the

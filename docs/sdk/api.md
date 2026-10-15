@@ -18,7 +18,7 @@ when their adapter maps it:
 | Transport | Where the mapping lives |
 |---|---|
 | REST | `transport/rest/adapter.go` (`grpcMethodToRESTMap`, `templatedRouteTable`), plus `ldevid.go`, `provisioning.go`, `attestation_reports.go`, `app_services.go`, `iam.go` (single IAM resources onto the reply's resource field) |
-| QUIC | `transport/quic/adapter.go` (`grpcMethodToOpcodeMap`, `categorySubOpcodeMap`), plus `aaa_ldevid.go`, `aab_ntp.go`, `aac_app_services.go`, `ceremony.go`, `device.go`, `dns.go`, `fido2.go`, `gateway_nat64.go`, `luks.go`, `piv.go`, `provisioning.go`, `tpm_quote.go` |
+| QUIC | `transport/quic/adapter.go` (`grpcMethodToOpcodeMap`, `categorySubOpcodeMap`), plus `aaa_ldevid.go`, `aab_bmc.go`, `aab_ntp.go`, `aac_app_services.go`, `ceremony.go`, `device.go`, `dns.go`, `fido2.go`, `gateway_nat64.go`, `luks.go`, `piv.go`, `provisioning.go`, `tpm_quote.go` |
 | MCP | `transport/mcp/adapter.go` (`grpcMethodToMCPToolMap`), plus `app_services.go`, `attestation_reports.go`, `bmc.go`, `eab.go`, `ldevid.go`, `phase35.go`, `provisioning.go`, `tpm_quote.go` |
 | Embedded | `transport/embedded/adapter.go` (`ServiceRegistry`), `dispatch.go` (`register<Service>Handlers`) |
 
@@ -39,7 +39,7 @@ folder's own `api.md`. Streaming RPCs are ✅ only on gRPC / Unix.
 | `VTPMService` | `VTPM()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `SDNService` | `SDN()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `ComputeService` | `Compute()` | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `BMCService` | `BMC()` | ✅ | ✅ | `MISSING — docs/13 G7` | ✅ | `MISSING — docs/13 G7` |
+| `BMCService` | `BMC()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `IDevIDService` | `IDevID()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `AttestationService` | `Attestation()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `TenantService` | `Tenant()` | ✅ | ✅ | ✅ | ✅ | ✅ |

@@ -457,8 +457,9 @@ administrator through the REST routes. gRPC, QUIC and MCP check the `bmc:*` scop
 Treat platform tokens that can reach the BMC REST API as equivalent to physical
 access, and restrict who holds them. Recorded in [api.md](api.md) §8.
 
-**`--transport embedded` cannot reach BMC.** If you need to work without a
-running daemon, that is what standalone mode is for.
+**`--transport embedded` reaches only the SDK-path verbs** (`cert`, `enroll`,
+`user`), through a `platformd` hosted in the `platformctl` process. If you need
+to work without a daemon at all, that is what standalone mode is for.
 
 **MCP clients reach every BMC operation gRPC does.** That includes
 `platform_bmc_create_user` and `platform_bmc_set_user_password`, whose

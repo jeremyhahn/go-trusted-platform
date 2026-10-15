@@ -136,10 +136,9 @@ type QUICServiceHandler struct {
 	pivQUIC      *pivQUICHandlers
 	luksQUIC     *luksQUICHandlers
 	fido2QUIC    *fido2QUICHandlers
-	// bmcEnrollQUIC is wired via SetBMCEnroller for the OpBMCCategory handler.
-	bmcEnrollQUIC *bmcEnrollQUICHandlers
-	// bmcRestoreQUIC is wired via SetBMCRestorer for the BMCSubRestore handler.
-	bmcRestoreQUIC *bmcRestoreQUICHandlers
+	// bmcServer is the BMCService servicer the OpBMCCategory handlers
+	// delegate to, wired via SetBMCServer.
+	bmcServer platformv1.BMCServiceServer
 }
 
 // QUICServiceHandlerOption is a functional option for configuring QUICServiceHandler

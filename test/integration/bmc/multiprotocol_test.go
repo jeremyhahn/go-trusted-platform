@@ -24,7 +24,6 @@ import (
 	"testing"
 
 	bmcsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/bmc"
-	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // =============================================================================
@@ -60,18 +59,7 @@ func TestBMCMultiProtocol(t *testing.T) {
 	for _, adapter := range adapters {
 		adapter := adapter
 		t.Run(adapter.Name(), func(t *testing.T) {
-			if err := adapter.Setup(ctx); err != nil {
-				if surface.IsNotImplemented(err) {
-					t.Skipf("Skipping %s: %v", adapter.Name(), err)
-					return
-				}
-				t.Fatalf("Setup failed: %v", err)
-			}
-			t.Cleanup(func() {
-				if err := adapter.Teardown(); err != nil {
-					t.Errorf("Teardown failed: %v", err)
-				}
-			})
+			setUpAdapter(t, ctx, adapter)
 
 			t.Run("PowerStatus", func(t *testing.T) {
 				testPowerStatus(t, ctx, adapter)
@@ -144,23 +132,26 @@ func TestBMCUnix(t *testing.T) {
 	testSingleProtocol(t, NewUnixAdapter())
 }
 
+// setUpAdapter connects adapter and closes it when the test ends. Every
+// transport carries every BMCService method, so a Setup failure is fatal.
+func setUpAdapter(t *testing.T, ctx context.Context, adapter BMCCommands) {
+	t.Helper()
+	if err := adapter.Setup(ctx); err != nil {
+		t.Fatalf("%s: Setup failed: %v", adapter.Name(), err)
+	}
+	t.Cleanup(func() {
+		if err := adapter.Teardown(); err != nil {
+			t.Errorf("%s: Teardown failed: %v", adapter.Name(), err)
+		}
+	})
+}
+
 // testSingleProtocol runs the full test suite for a single protocol adapter.
 func testSingleProtocol(t *testing.T, adapter BMCCommands) {
 	ctx, cancel := DefaultTestContext()
 	t.Cleanup(cancel)
 
-	if err := adapter.Setup(ctx); err != nil {
-		if surface.IsNotImplemented(err) {
-			t.Skipf("Skipping %s: %v", adapter.Name(), err)
-			return
-		}
-		t.Fatalf("Setup failed: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := adapter.Teardown(); err != nil {
-			t.Errorf("Teardown failed: %v", err)
-		}
-	})
+	setUpAdapter(t, ctx, adapter)
 
 	t.Run("PowerStatus", func(t *testing.T) {
 		testPowerStatus(t, ctx, adapter)
@@ -409,10 +400,7 @@ func testListUsers(t *testing.T, ctx context.Context, adapter BMCCommands) {
 // =============================================================================
 
 // TestBMCEnrollMultiProtocol runs the EnrollBMC test against all protocol
-// adapters. QUIC and MCP skip the general Setup() path (their adapters return
-// surface.ErrNoSurface there) and connect independently
-// for the enrollment sub-operation, so this test drives enrollment directly
-// rather than going through the common testSingleProtocol helper.
+// adapters.
 func TestBMCEnrollMultiProtocol(t *testing.T) {
 	SkipIfNotIntegration(t)
 
@@ -431,11 +419,6 @@ func TestBMCEnrollMultiProtocol(t *testing.T) {
 
 // testEnrollBMC exercises the EnrollBMC method on a single adapter.
 //
-// Adapters for which the general Setup path returns surface.ErrNoSurface
-// are not set up here — EnrollBMC establishes its own
-// connection internally. Adapters that do require Setup (CLI, REST, gRPC, Unix)
-// are set up and torn down around the call.
-//
 // Tolerated outcomes:
 //   - A structured EnrollResult with at least one step (success path against a
 //     vBMC or real BMC that supports enrollment).
@@ -450,25 +433,7 @@ func TestBMCEnrollMultiProtocol(t *testing.T) {
 func testEnrollBMC(t *testing.T, ctx context.Context, adapter BMCCommands) {
 	t.Helper()
 
-	// Set up adapters that require it. QUIC and MCP skip setup (they return
-	// not-implemented there) and connect lazily inside EnrollBMC.
-	needsTeardown := false
-	if err := adapter.Setup(ctx); err != nil {
-		if surface.IsNotImplemented(err) {
-			// QUIC / MCP: skip setup, proceed directly to EnrollBMC.
-		} else {
-			t.Fatalf("%s: Setup failed: %v", adapter.Name(), err)
-		}
-	} else {
-		needsTeardown = true
-	}
-	if needsTeardown {
-		t.Cleanup(func() {
-			if err := adapter.Teardown(); err != nil {
-				t.Errorf("%s: Teardown failed: %v", adapter.Name(), err)
-			}
-		})
-	}
+	setUpAdapter(t, ctx, adapter)
 
 	result, err := adapter.EnrollBMC(ctx, DefaultTestProfileID, nil)
 	if err != nil {
@@ -524,23 +489,7 @@ func TestBMCEnrollWithOptions(t *testing.T) {
 	for _, adapter := range adapters {
 		adapter := adapter
 		t.Run(adapter.Name(), func(t *testing.T) {
-			needsTeardown := false
-			if err := adapter.Setup(ctx); err != nil {
-				if surface.IsNotImplemented(err) {
-					// QUIC / MCP connect lazily — proceed.
-				} else {
-					t.Fatalf("%s: Setup failed: %v", adapter.Name(), err)
-				}
-			} else {
-				needsTeardown = true
-			}
-			if needsTeardown {
-				t.Cleanup(func() {
-					if err := adapter.Teardown(); err != nil {
-						t.Errorf("%s: Teardown failed: %v", adapter.Name(), err)
-					}
-				})
-			}
+			setUpAdapter(t, ctx, adapter)
 
 			result, err := adapter.EnrollBMC(ctx, DefaultTestProfileID, opts)
 			if err != nil {
@@ -573,18 +522,7 @@ func TestBMCErrorHandling(t *testing.T) {
 	for _, adapter := range adapters {
 		adapter := adapter
 		t.Run(adapter.Name(), func(t *testing.T) {
-			if err := adapter.Setup(ctx); err != nil {
-				if surface.IsNotImplemented(err) {
-					t.Skipf("Skipping %s: %v", adapter.Name(), err)
-					return
-				}
-				t.Fatalf("Setup failed: %v", err)
-			}
-			t.Cleanup(func() {
-				if err := adapter.Teardown(); err != nil {
-					t.Errorf("Teardown failed: %v", err)
-				}
-			})
+			setUpAdapter(t, ctx, adapter)
 
 			t.Run("InvalidProfilePowerStatus", func(t *testing.T) {
 				testInvalidProfilePowerStatus(t, ctx, adapter)
@@ -628,10 +566,7 @@ func testInvalidProfileEnroll(t *testing.T, ctx context.Context, adapter BMCComm
 // =============================================================================
 
 // TestBMCRestoreMultiProtocol runs the RestoreBMC test against all protocol
-// adapters. QUIC and MCP skip the general Setup() path (their adapters return
-// surface.ErrNoSurface there) and connect independently
-// for the restore sub-operation, so this test drives restore directly rather
-// than going through the common testSingleProtocol helper.
+// adapters.
 func TestBMCRestoreMultiProtocol(t *testing.T) {
 	SkipIfNotIntegration(t)
 
@@ -650,11 +585,6 @@ func TestBMCRestoreMultiProtocol(t *testing.T) {
 
 // testRestoreBMC exercises the RestoreBMC method on a single adapter.
 //
-// Adapters for which the general Setup path returns surface.ErrNoSurface
-// are not set up here — RestoreBMC establishes its own
-// connection internally. Adapters that do require Setup (CLI, REST, gRPC, Unix)
-// are set up and torn down around the call.
-//
 // Tolerated outcomes:
 //   - A structured RestoreResult with at least one step (success path against a
 //     vBMC or real BMC that supports the restore ceremony).
@@ -668,25 +598,7 @@ func TestBMCRestoreMultiProtocol(t *testing.T) {
 func testRestoreBMC(t *testing.T, ctx context.Context, adapter BMCCommands) {
 	t.Helper()
 
-	// Set up adapters that require it. QUIC and MCP skip setup (they return
-	// not-implemented there) and connect lazily inside RestoreBMC.
-	needsTeardown := false
-	if err := adapter.Setup(ctx); err != nil {
-		if surface.IsNotImplemented(err) {
-			// QUIC / MCP: skip setup, proceed directly to RestoreBMC.
-		} else {
-			t.Fatalf("%s: Setup failed: %v", adapter.Name(), err)
-		}
-	} else {
-		needsTeardown = true
-	}
-	if needsTeardown {
-		t.Cleanup(func() {
-			if err := adapter.Teardown(); err != nil {
-				t.Errorf("%s: Teardown failed: %v", adapter.Name(), err)
-			}
-		})
-	}
+	setUpAdapter(t, ctx, adapter)
 
 	result, err := adapter.RestoreBMC(ctx, DefaultTestProfileID)
 	if err != nil {
@@ -739,23 +651,7 @@ func TestBMCRestoreInvalidProfile(t *testing.T) {
 	for _, adapter := range adapters {
 		adapter := adapter
 		t.Run(adapter.Name(), func(t *testing.T) {
-			needsTeardown := false
-			if err := adapter.Setup(ctx); err != nil {
-				if surface.IsNotImplemented(err) {
-					// QUIC / MCP connect lazily — proceed.
-				} else {
-					t.Fatalf("%s: Setup failed: %v", adapter.Name(), err)
-				}
-			} else {
-				needsTeardown = true
-			}
-			if needsTeardown {
-				t.Cleanup(func() {
-					if err := adapter.Teardown(); err != nil {
-						t.Errorf("%s: Teardown failed: %v", adapter.Name(), err)
-					}
-				})
-			}
+			setUpAdapter(t, ctx, adapter)
 
 			result, err := adapter.RestoreBMC(ctx, 999999)
 			if err != nil {

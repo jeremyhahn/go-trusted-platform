@@ -180,9 +180,10 @@ different request messages (`RegisterProvisioningDeviceRequest` versus
 
 `BMCService` (`pkg/api/grpc/proto/bmc.proto`) carries 23 RPCs — power control,
 boot device, virtual media, sensors, system info, provisioning, web certificate
-management, enrollment, factory restore and user management. QUIC reaches BMC
-enrollment through the **BMC category opcode `0x9F`**, and there are 23
-`platform_bmc_*` MCP tools, one per RPC.
+management, enrollment, factory restore and user management. QUIC reaches every
+RPC through the **BMC category opcode `0x9F`**, one sub-opcode per RPC; there
+are 23 `platform_bmc_*` MCP tools, one per RPC; and the embedded transport
+carries all 23 through `ServiceRegistry.BMC`.
 
 **BMC internals are not documented in this pass** — see
 [engineering.md](engineering.md) §1. The transport shape is recorded here so the

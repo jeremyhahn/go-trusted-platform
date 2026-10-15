@@ -36,7 +36,7 @@ const (
 	// (Init/Unseal/Seal/Status). The first byte of the request payload
 	// selects the sub-operation per the TenantBarrierSub* constants below.
 	OpTenantBarrierCategory byte = 0x9E
-	// OpBMCCategory multiplexes BMC enrollment sub-operations.
+	// OpBMCCategory multiplexes the BMCService methods.
 	// The first byte of the request payload selects the sub-operation
 	// per the BMCSub* constants below.
 	OpBMCCategory byte = 0x9F
@@ -96,10 +96,54 @@ const (
 	FIDO2SubAuthenticate byte = 0x05
 )
 
-// BMC sub-opcodes.
+// BMC sub-opcodes, one per platform.v1.BMCService method. The payload
+// after the sub-opcode byte is the method's request message and the reply
+// is its response message.
 const (
 	// BMCSubEnroll performs the BMC enrollment ceremony for a device profile.
 	BMCSubEnroll byte = 0x01
 	// BMCSubRestore performs the BMC factory-certificate restore ceremony.
 	BMCSubRestore byte = 0x02
+	// BMCSubPowerOn powers the server on.
+	BMCSubPowerOn byte = 0x03
+	// BMCSubPowerOff powers the server off.
+	BMCSubPowerOff byte = 0x04
+	// BMCSubPowerReset resets the server.
+	BMCSubPowerReset byte = 0x05
+	// BMCSubPowerCycle power-cycles the server.
+	BMCSubPowerCycle byte = 0x06
+	// BMCSubPowerStatus reads the server power state.
+	BMCSubPowerStatus byte = 0x07
+	// BMCSubSetBootDevice sets the next boot device.
+	BMCSubSetBootDevice byte = 0x08
+	// BMCSubGetBootDevice reads the boot device.
+	BMCSubGetBootDevice byte = 0x09
+	// BMCSubMountISO mounts an ISO as virtual media.
+	BMCSubMountISO byte = 0x0A
+	// BMCSubUnmountISO ejects the virtual media.
+	BMCSubUnmountISO byte = 0x0B
+	// BMCSubVirtualMediaStatus reads the virtual media state.
+	BMCSubVirtualMediaStatus byte = 0x0C
+	// BMCSubGetSensors reads the BMC sensors.
+	BMCSubGetSensors byte = 0x0D
+	// BMCSubGetSystemInfo reads the server system information.
+	BMCSubGetSystemInfo byte = 0x0E
+	// BMCSubProvision starts an orchestrated bare-metal provision.
+	BMCSubProvision byte = 0x0F
+	// BMCSubProvisionStatus reads the state of a provision.
+	BMCSubProvisionStatus byte = 0x10
+	// BMCSubGetWebCertificate reads the BMC web certificate.
+	BMCSubGetWebCertificate byte = 0x11
+	// BMCSubReplaceWebCertificate replaces the BMC web certificate.
+	BMCSubReplaceWebCertificate byte = 0x12
+	// BMCSubListUsers lists the BMC user accounts.
+	BMCSubListUsers byte = 0x13
+	// BMCSubCreateUser creates a BMC user account.
+	BMCSubCreateUser byte = 0x14
+	// BMCSubDeleteUser deletes a BMC user account.
+	BMCSubDeleteUser byte = 0x15
+	// BMCSubSetUserPassword sets a BMC user's password.
+	BMCSubSetUserPassword byte = 0x16
+	// BMCSubSetUserPrivilege sets a BMC user's privilege level.
+	BMCSubSetUserPrivilege byte = 0x17
 )

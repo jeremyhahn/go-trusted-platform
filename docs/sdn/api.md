@@ -362,7 +362,7 @@ daemon routes them to a dedicated handler
 | `0x99` | Physical TPM2 handler |
 | `0x9A`–`0x9D` | Ceremony, PIV, LUKS, FIDO2 |
 | `0x9E` | Per-tenant barrier |
-| `0x9F` | BMC enrollment |
+| `0x9F` | BMC; sub-opcodes `0x01`–`0x17`, one per `BMCService` RPC |
 
 **This is why opcode values collide.** `OpOverlayStatus`, `OpGatewayStatus` and
 `OpLiveness` are all `0x01`, but the first two are *sub*-opcodes inside their

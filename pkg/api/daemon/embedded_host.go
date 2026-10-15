@@ -202,5 +202,8 @@ func (d *Daemon) embeddedServices() *embedded.ServiceRegistry {
 	if svc := d.FIDO2Service(); svc != nil {
 		registry.FIDO2 = svc
 	}
+	if svc := d.BMCService(); svc != nil {
+		registry.BMC = svc
+	}
 	return registry
 }

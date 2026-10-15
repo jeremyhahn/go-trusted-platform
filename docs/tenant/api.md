@@ -293,7 +293,9 @@ caller, never to a request field:
 | `PUT /api/v1/tenants/{id}`, `PUT .../quotas`; `POST .../suspend`, `.../resume`, `.../dek/rotate`, `.../barrier/init`, `.../barrier/unseal`, `.../barrier/seal` | `tenant:write` | tenant `{id}`, or the system tenant |
 | `DELETE /api/v1/tenants/{id}` | `tenant:delete` | tenant `{id}`, or the system tenant |
 
-A missing or invalid credential is `401`. A missing scope is `403`. A refusal by
+An invalid `Bearer` token is `401`; a connection with no client certificate is
+refused at the TLS handshake, which requires one (`EnableREST` requires
+`EnableMTLS`), so it never reaches a route. A missing scope is `403`. A refusal by
 the binding is `403`, and its `error` text is the message gRPC returns with
 `PermissionDenied`: `ErrTenantForbidden`, `ErrTenantSystemOnly` or
 `tenant.ErrNameLookupDenied`. The by-name route resolves the name first, then

@@ -618,6 +618,7 @@ signal, `VendorUnknown` otherwise.
 | Unit | `pkg/bmc/*_test.go`, `pkg/bmc/smc/*_test.go`, `pkg/bmc/credentials/*_test.go`, `pkg/quirks/quirks_test.go` | Config validation, factory dispatch, vendor classification, quirk resolution, cert-backend selection and fallback, virtual-media dispatch, rotation state machine, credential marshalling, SDR/FRU parsing, RMCP+ framing |
 | Unit (CLI) | `pkg/cli/commands/bmc/*_test.go` | Flag validation, mode conflict, standalone config construction, enroll option tri-state |
 | Unit (API) | `pkg/webservice/v1/bmc/*_test.go`, `pkg/api/mcp/bmc_dispatch_test.go`, `pkg/api/daemon/quic_dispatch_guard_test.go` | Handler status codes, MCP tool dispatch, QUIC opcode routing |
+| Unit (SDK parity) | `pkg/api/daemon/bmc_{quic,mcp,embedded}_sdk_test.go` (drivers in `bmc_sdk_parity_test.go`) | Every `BMCService` method through the SDK's QUIC, MCP and embedded adapters against the daemon's handlers; the gRPC scope and not-found refusals |
 | Integration | `test/integration/bmc/` | Real containerized vBMC responders |
 
 Make targets: `make test-bmc` (runs `./pkg/bmc/...`,

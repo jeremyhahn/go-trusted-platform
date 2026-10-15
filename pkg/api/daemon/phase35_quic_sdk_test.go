@@ -51,8 +51,9 @@ func reserveUDPPort(t *testing.T) string {
 // newPhase35QUICClient serves handler on a loopback QUIC listener and connects
 // the SDK's QUIC adapter to it, so a call travels the client's opcodes and
 // payloads through the daemon's category dispatch and back. The connection is
-// mutual TLS: the client presents bundle's client certificate.
-func newPhase35QUICClient(t *testing.T, handler *QUICServiceHandler, bundle *testutil.TestTLSBundle) transport.Adapter {
+// mutual TLS: the client presents bundle's client certificate. opts add to
+// the client's connection options.
+func newPhase35QUICClient(t *testing.T, handler *QUICServiceHandler, bundle *testutil.TestTLSBundle, opts ...platform.Option) transport.Adapter {
 	t.Helper()
 	serverTLS := bundle.ServerTLSConfig()
 	serverTLS.NextProtos = []string{quicwire.ALPNProtocol}
@@ -71,11 +72,11 @@ func newPhase35QUICClient(t *testing.T, handler *QUICServiceHandler, bundle *tes
 		}
 	})
 
-	a, err := sdkquic.Connect(context.Background(), platform.NewOptions(
+	a, err := sdkquic.Connect(context.Background(), platform.NewOptions(append([]platform.Option{
 		platform.WithQUICAddr(addr),
 		platform.WithTLSConfig(bundle.ClientTLSConfig()),
 		platform.WithTLSServerName("localhost"),
-	))
+	}, opts...)...))
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}

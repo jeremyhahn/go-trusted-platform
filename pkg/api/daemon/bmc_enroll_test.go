@@ -330,38 +330,6 @@ func TestEnrollResultToProto_FullResult(t *testing.T) {
 }
 
 // =============================================================================
-// QUIC BMC enrollment tests
-// =============================================================================
-
-func TestQUICBMCEnrollResult_NilInput(t *testing.T) {
-	resp := quicBMCEnrollResultToResponse(nil)
-	if resp == nil {
-		t.Fatal("expected non-nil response for nil input")
-	}
-	if resp.Timestamp == 0 {
-		t.Error("expected Timestamp to be set")
-	}
-}
-
-func TestQUICBMCEnrollResult_FullResult(t *testing.T) {
-	src := goodEnrollResult()
-	resp := quicBMCEnrollResultToResponse(src)
-
-	if resp.DeviceID != src.DeviceID {
-		t.Errorf("DeviceID: got %d, want %d", resp.DeviceID, src.DeviceID)
-	}
-	if resp.Endpoint != src.Endpoint {
-		t.Errorf("Endpoint: got %q, want %q", resp.Endpoint, src.Endpoint)
-	}
-	if resp.FactoryCertMeta.Subject != src.FactoryCertMeta.Subject {
-		t.Errorf("FactoryCertMeta.Subject: got %q", resp.FactoryCertMeta.Subject)
-	}
-	if len(resp.Steps) != len(src.Steps) {
-		t.Errorf("Steps len: got %d, want %d", len(resp.Steps), len(src.Steps))
-	}
-}
-
-// =============================================================================
 // REST adapter tests
 // =============================================================================
 

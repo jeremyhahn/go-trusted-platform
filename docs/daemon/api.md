@@ -299,7 +299,7 @@ distinct values, twenty-two names:
 | `0x9C` | `OpLUKSCategory` | LUKS volumes |
 | `0x9D` | `OpFIDO2Category` | FIDO2 tokens; scopes in [`docs/cli/fido2.md`](../cli/fido2.md) |
 | `0x9E` | `OpTenantBarrierCategory` | Per-tenant barrier |
-| `0x9F` | `OpBMCCategory` | BMC enrollment |
+| `0x9F` | `OpBMCCategory` | BMC; sub-opcodes `0x01`–`0x17`, one per `BMCService` RPC ([`docs/bmc/api.md`](../bmc/api.md)) |
 | `0xCC` | `OpSwitchCategory` | Physical switch; sub-opcodes `SwitchSub*` `0x01`–`0x05` |
 | `0xCD` | `OpKMSExtendedCategory` | KMS key-lifecycle verbs; `KMSSubSignCSR` (`0x07`) is CA Sign CSR, which requires `ca:sign-csr` (`docs/ca/api.md` §4) |
 | `0xCE` | `OpSecretsCategory` | Secrets |
@@ -387,8 +387,14 @@ QuicBaaS service, no platform JWT verifier) refuses to construct the gRPC TCP
 and QUIC servers with `ErrTransportAuthRequired`; when a validator exists the
 interceptor requires a credential unconditionally, and an anonymous call is
 `Unauthenticated`. `EnableMTLS` without a CA service or a resolvable client CA
-pool is refused the same way. The daemon REST server authenticates by mTLS
-only, so `EnableREST` requires `EnableMTLS`. Before #550 the interceptors were
+pool is refused the same way. The daemon REST server requires and verifies a
+client certificate at every TLS handshake (`tls.RequireAndVerifyClientCert`,
+`newServerTLSConfig` in `pkg/api/daemon/transport_auth.go`). That certificate
+is the only authentication on the routes outside the scope guard below
+(service control, provisioning, BMC, device, LUKS and the rest); the guarded
+routes also take a `Bearer` token, but only over that mTLS connection. So
+`EnableREST` requires `EnableMTLS`, checked by both `New` and
+`RESTServer.Start`. Before #550 the interceptors were
 installed with `WithRequireAuth(tokenValidator != nil)`, so the misconfigured
 state served the whole daemon API anonymously.
 
@@ -408,7 +414,10 @@ sources, `ntp:write` for step, and `cache`, `scheduler` and `messaging` as in
   holding `*:*`.
 
 No credential, or one with no verifier configured, is 401; a caller without the
-scope is 403. A handler set built without a guard answers 403 on every route
+scope is 403. On the daemon listener a connection without a verified client
+certificate is refused at the handshake and never reaches the guard, so there
+the 401 answers an invalid `Bearer` token; a request with no credential at all
+reaches the guard only under `SkipIAMValidation`, where mTLS may be off. A handler set built without a guard answers 403 on every route
 (default-deny). The guard is built by `newRESTScopeGuard`.
 
 The daemon REST tenant routes (`/api/v1/tenants/*`, #304) run behind the same

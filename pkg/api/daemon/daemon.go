@@ -1272,16 +1272,6 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		quicHandler.SetLUKSService(luksSvc)
 		quicHandler.SetFIDO2Service(fido2Svc)
 
-		// Wire the BMCEnroller and BMCRestorer into the QUIC handler so
-		// OpBMCCategory requests execute the real enrollment and restore
-		// ceremonies. Guarded on both App and DeviceProfileService being present.
-		if config.App != nil && config.DeviceProfileService != nil {
-			quicHandler.SetBMCEnroller(config.App, config.DeviceProfileService)
-			logger.Info("BMC QUIC enroller wired")
-			quicHandler.SetBMCRestorer(config.App, config.DeviceProfileService)
-			logger.Info("BMC QUIC restorer wired")
-		}
-
 		// Wire the shared IAM gRPC delegate into the QUIC handler so IAM QUIC
 		// operations dispatch through the pb service instead of returning
 		// Unavailable. Reuses the instance registered on the gRPC servers.
@@ -1779,9 +1769,13 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 
 		// Stash the BMC gRPC servicer so the MCP server (created below)
-		// serves the platform_bmc_* tools through it: MCP and gRPC then
-		// answer and refuse alike.
+		// and the embedded transport serve BMCService through it, and
+		// hand it to the QUIC handler: every transport then answers and
+		// refuses alike.
 		daemon.bmcGRPCService = bmcGRPCService
+		if daemon.quicHandler != nil {
+			daemon.quicHandler.SetBMCServer(bmcGRPCService)
+		}
 	}
 
 	// Create MCP server if enabled and not overridden by option
@@ -3606,6 +3600,13 @@ func (d *Daemon) PIVService() *PIVGRPCService {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.pivService
+}
+
+// BMCService returns the BMC gRPC service, or nil when not wired.
+func (d *Daemon) BMCService() *BMCGRPCService {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.bmcGRPCService
 }
 
 // SetPIVBackend wires a backend into the PIV service.

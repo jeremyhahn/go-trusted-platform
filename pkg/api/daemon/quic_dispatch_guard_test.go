@@ -125,7 +125,7 @@ var quicDispatchFamilies = map[string]dispatchFamilySpec{
 	"luks":           {status: quicwire.StatusUnavailable, body: "service not available: luks"},
 	"fido2":          {status: quicwire.StatusUnavailable, body: "service not available: fido2"},
 	"tenant":         {status: quicwire.StatusUnavailable, body: "QUIC service unavailable: tenant"},
-	"bmc":            {payload: []byte{quicwire.BMCSubEnroll}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: bmc-enroll"},
+	"bmc":            {payload: []byte{quicwire.BMCSubEnroll}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: bmc"},
 	"iam":            {status: quicwire.StatusUnavailable, body: "QUIC service unavailable: iam"},
 	"kms":            {status: quicwire.StatusUnavailable, body: "QUIC service unavailable: kms"},
 	"switch":         {status: quicwire.StatusUnavailable, body: "QUIC service unavailable: switch"},
