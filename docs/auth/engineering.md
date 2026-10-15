@@ -282,8 +282,7 @@ The ceremony completes by minting a platform-local JWT, and that seam accepts
 only broker-issued bearers, so a completed claim would hand the operator a
 session every protected route rejects. Refusing to publish the flow is the
 fail-closed answer; converging the two token types is
-#202
-(owner ruling 2026-09-02), which retires the local issuer rather than
+#202, which retires the local issuer rather than
 teaching the seam to accept both. `HandlerRegistry.brokerTokenSeamEnabled()`
 answers from configuration alone, so asking which seam is in force never
 builds the validator or its JWKS client as a side effect.

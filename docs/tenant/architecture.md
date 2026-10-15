@@ -718,8 +718,7 @@ the pinned `v0.3.0-alpha` (see `docs/auth/architecture.md` §6c and #298). Read
 the property as "the platform declines to issue one", not as "the system admin
 cannot get there".
 
-The certificate enrollment mode described in the 2026-09-01 ruling is not
-implemented here: it needs `qrdbsdk.ProvisionTenant` reached through the
+Certificate enrollment of a tenant is not implemented here: it needs `qrdbsdk.ProvisionTenant` reached through the
 quicbaas SDK, which is absent at the pinned version (go-quicbaas#358 item 3).
 
 ### Time is a parameter

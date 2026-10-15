@@ -112,7 +112,7 @@ Any failure in step 4 or 5 denies. There is no partial result.
   policies still have no verb; that is a gap, recorded in [cli.md](cli.md)
   §1, not a decision.
 
-## The attestation reporting service (design of record, owner-ruled 2026-09-03)
+## The attestation reporting service (design of record)
 
 > **Status: DESIGN.** Tracked as #226. Sequenced behind go-xkms#274 → go-xkms#273
 > → go-qrdb#278. Nothing below is implemented yet; where this section and the
@@ -427,15 +427,13 @@ to be built around:
 
 Recorded on #377 as well, so the next design starts from the measured shape.
 
-### The control plane is a device in its own registry (#472, owner-ruled 2026-09-06)
+### The control plane is a device in its own registry (#472)
 
 The collector iterates device records. A control plane with no record is never
-collected, so the one machine that decides every other machine's verdict was
-the one machine nothing could attest — measured on the live fleet on
-2026-09-05, where `device list` returned two nodes and no control plane
-despite a fully provisioned control-plane TPM.
+collected, so the one machine that decides every other machine's verdict would
+be the one machine nothing could attest.
 
-The ruling is that **the control plane is enrolled as a device like any node**,
+**The control plane is enrolled as a device like any node**,
 and nodes verify it with the attested-peer primitive at connection time. There
 is no self-report path: a parallel "the control plane reports on itself" code
 path would be a second implementation of verification whose divergence from the
@@ -664,8 +662,8 @@ a MUST before trusting a quote.
 - **Expected state** is the `PCRBaseline` on the device's `DeviceProfile`
   (`source` = `signed` | `tofu`). Reported values must hash to the signed
   digest before they are compared. A profile without a baseline captures one
-  from the first quote whose every other check held (owner ruling: signed
-  manifest, TOFU fallback per profile); only the values the verifier proved
+  from the first quote whose every other check held (a signed manifest
+  first, TOFU as the per-profile fallback); only the values the verifier proved
   are captured, and the capture is a `pcr_baseline_captured` event.
 - **Channel binding is required on the collector's verifier, ignored on the
   transports (#482).** `DeviceQuoteVerifierForReporting` refuses evidence

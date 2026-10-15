@@ -64,7 +64,7 @@ use `platformctl sdn gateway snapshot`.
 3. **Zones defined** ([`docs/sdn/`](../sdn/)). IPAM pools and proxy routes are
    both checked against them.
 4. **The management VPN, ideally.** IPsec in FIPS builds, WireGuard only in
-   non-FIPS builds (owner design decision 2026-09-26; today the config defines
+   non-FIPS builds (today the config defines
    only `wireguard` and the section is refused, #558), and gateways should
    expose it by default, so administrators reach management endpoints through an
    authenticated tunnel instead of putting an operator workstation on a data

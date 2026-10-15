@@ -147,16 +147,15 @@ Alpine package. QEMU's only TPM front-end for the virt machine is the
 memory-mapped `tpm-tis-device`, and no Alpine aarch64 kernel carries the
 memory-mapped TIS driver (`CONFIG_TCG_TIS` is unset in `linux-lts` and
 `linux-rpi`; `linux-virt` has no TPM support), so a stock kernel would boot
-to platform-initrd and find no `/dev/tpm0` (measured 2026-09-20). The built
+to platform-initrd and find no `/dev/tpm0`. The built
 kernel is Alpine's `linux-lts` version with the TIS and CRB drivers built
 in, signed modules and the lockdown LSM; it is installed from the media
 (`os.kernel-artifacts-dir`, verified against its `SHA256SUMS`) under the
 `linux-virt` flavour name, so `vmlinuz-virt` and `/lib/modules/<release>`
 look like a packaged kernel to everything downstream. The Raspberry Pi
 image keeps Alpine's `linux-rpi`, whose SPI transport is what the SLB9670
-needs. Owner ruling 2026-09-21: a platform-built kernel over an out-of-tree
-module (which would have needed lockdown off) or hardware-only firstboot
-testing.
+needs. The stand-in uses a platform-built kernel, not an out-of-tree module
+(which would need lockdown off) and not hardware-only firstboot testing.
 
 ### The diskless root image
 

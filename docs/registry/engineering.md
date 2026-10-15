@@ -225,10 +225,8 @@ before any decryption is attempted.
 nonce field is gone and `encryptedLayerEnvelopeVersion` is `2`; there is no v1
 decoder and no refusal path beyond the version check that already existed.
 
-That is not an oversight, and it is worth stating plainly because the absence of
-a migration looks exactly like one. **No registry had been deployed when the
-format changed** (owner ruling, 2026-09-03), so no v1 envelope has ever existed
-outside a test. "A FIPS build cannot read v1" is therefore not a compatibility
+**No registry had been deployed when the format changed**, so no v1 envelope
+has ever existed outside a test. "A FIPS build cannot read v1" is therefore not a compatibility
 risk that was accepted — it is a property of a format that never shipped.
 
 The version was bumped rather than v1 being redefined in place, for one

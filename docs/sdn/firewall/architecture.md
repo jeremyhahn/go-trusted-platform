@@ -70,7 +70,7 @@ gates the table 10 default path (native/VLAN traffic).
 | 80 | `ipv6` | `goto_table:30` (NAT44 only: IPv6 passes untranslated, ND included) |
 | 0 | (miss) | `goto_table:30` — the base pipeline's flow (`CookiePipeline`), not a service's |
 
-**The table-20 miss belongs to the pipeline (#614, owner ruling 2026-09-25).**
+**The table-20 miss belongs to the pipeline (#614).**
 Every datapath service gates table 10 into table 20 with an empty-match flow
 and then claims only the frames it handles there, so what none of them
 claims needs one disposition that no single service owns. OVS's own table

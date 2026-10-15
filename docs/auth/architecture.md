@@ -1132,14 +1132,13 @@ its handler by design.
 
 | Routes | Why they are open | Blocker / mechanism |
 |---|---|---|
-| `POST /devices/templates`, `POST /devices/templates/{id}/create-profile` | bootstrap seeder (`pkg/webservice/v1/rest/device`); ruled to present `admin@system` over **mTLS** (#121/#176) | go-quicbaas#376 → #28 (SDK bump), then #176 |
+| `POST /devices/templates`, `POST /devices/templates/{id}/create-profile` | bootstrap seeder (`pkg/webservice/v1/rest/device`); presents `admin@system` over **mTLS** (#121/#176) | go-quicbaas#376 → #28 (SDK bump), then #176 |
 | `POST /pxe/webhook/complete` | authenticates nobody; identifies the device by a MAC from the request body; registered only when `pxe.ServiceConfig.WebhookEnabled` is true (default false) | #238 — what a booting node presents is an architecture decision |
 | `POST /provisioning/config`, `GET /provisioning/config/nonce`, `POST /provisioning/sign`, `GET /provisioning/sessions/{sessionID}/poll` | a machine at boot has no operator session; EAB + single-use nonce (+ EK for signing) are verified **in the handler** (`configdelivery/service.go` `verifyNonceAndEAB`, `verifyEKBinding`; `sign.go`) | by design; what is missing is a direct assertion that the handler refuses without a valid EAB, which the deny audit cannot see |
 
 `GET /devices/config` is not in this table because no general listener mounts
 it. It is the unauthenticated boot-time config fetch. Only a webservice with
-`surface: provisioning`, bound inside the provisioning zone, serves it (#177,
-ruled 2026-10-14). That listener serves nothing else. An EK-bound challenge is
+`surface: provisioning`, bound inside the provisioning zone, serves it (#177). That listener serves nothing else. An EK-bound challenge is
 the planned follow-up ([`docs/device/architecture.md`](../device/architecture.md)
 §4.2).
 
