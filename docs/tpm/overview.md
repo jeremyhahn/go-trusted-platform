@@ -1,5 +1,8 @@
 # Trusted Platform Module
 
+> **Status: REFERENCE**
+> Background on the TPM, with tools and tutorials.
+
 This document provides information on what a TPM is along with tools, tutorials,
 and examples on how to work with it.
 

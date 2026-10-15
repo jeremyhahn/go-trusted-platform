@@ -1,5 +1,8 @@
 # TPM Security Considerations
 
+> **Status: REFERENCE**
+> TPM CVEs, mitigations and deployment practice.
+
 This document provides security guidance for TPM 2.0 implementations, including known vulnerabilities (CVEs), mitigation strategies, and security best practices.
 
 ## Common Vulnerabilities and Exposures (CVEs)

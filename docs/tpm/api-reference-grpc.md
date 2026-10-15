@@ -1,8 +1,12 @@
 # TPM gRPC API Reference
 
+> **Status: REFERENCE**
+> `platform.v1.TPMService` messages over gRPC. The cross-transport contract is
+> [api.md](api.md).
+
 Package: `platform.v1`
 Service: `TPMService`
-Port: `9443`
+Port: `10443`
 
 ## Service Definition
 
@@ -44,6 +48,10 @@ service TPMService {
   rpc Certify(CertifyRequest) returns (CertifyResponse);
   rpc GetEventLog(GetEventLogRequest) returns (GetEventLogResponse);
   rpc GetPCRs(GetPCRsRequest) returns (GetPCRsResponse);
+
+  // Credential activation
+  rpc MakeCredential(MakeCredentialRequest) returns (MakeCredentialResponse);
+  rpc ActivateCredential(TPMActivateCredentialRequest) returns (TPMActivateCredentialResponse);
 
   // NVRAM operations
   rpc DefineNVRAM(DefineNVRAMRequest) returns (DefineNVRAMResponse);
@@ -721,7 +729,7 @@ if err != nil {
     return err
 }
 
-conn, err := grpc.Dial("localhost:9443", grpc.WithTransportCredentials(creds))
+conn, err := grpc.Dial("localhost:10443", grpc.WithTransportCredentials(creds))
 if err != nil {
     return err
 }

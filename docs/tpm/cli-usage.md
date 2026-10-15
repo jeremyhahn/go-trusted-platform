@@ -1,5 +1,9 @@
 # TPM CLI Usage
 
+> **Status: REFERENCE**
+> The `platformctl tpm` commands, by example. The command tree is
+> [cli.md](cli.md).
+
 This document provides the command-line reference for TPM operations
 using platformctl.
 

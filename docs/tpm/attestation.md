@@ -1,5 +1,8 @@
 # TPM Attestation
 
+> **Status: REFERENCE**
+> Quote generation, verification and IDevID attestation as built.
+
 This document describes the remote attestation capabilities of the go-trusted-platform,
 including quote generation, verification, and IDevID attestation via ACME enroll-01.
 

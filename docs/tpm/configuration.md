@@ -1,5 +1,8 @@
 # TPM Configuration
 
+> **Status: REFERENCE**
+> The `tpm:` configuration section and its flags.
+
 This document describes the configuration options for the TPM 2.0 integration in go-trusted-platform.
 
 ## Configuration Overview

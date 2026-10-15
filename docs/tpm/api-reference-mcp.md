@@ -1,5 +1,9 @@
 # TPM MCP API Reference
 
+> **Status: REFERENCE**
+> The TPM tools of the platform MCP server. The cross-transport contract is
+> [api.md](api.md).
+
 Port: `9445` (HTTPS) or stdio
 Protocol: Model Context Protocol (MCP) via JSON-RPC 2.0
 

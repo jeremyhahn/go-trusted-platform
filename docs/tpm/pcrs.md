@@ -1,5 +1,8 @@
 # TPM Platform Configuration Registers (PCRs)
 
+> **Status: REFERENCE**
+> PCR allocation and measurement sources, by platform.
+
 This document provides a comprehensive reference for TPM Platform Configuration Registers (PCRs), including their allocation, measurement sources, and usage across different platforms.
 
 ## PCR Overview

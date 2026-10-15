@@ -1,5 +1,9 @@
 # TPM Unix Socket API Reference
 
+> **Status: REFERENCE**
+> How to reach the TPM service over the local socket. The cross-transport
+> contract is [api.md](api.md).
+
 Socket Path: `/run/platformd.sock`
 Protocol: gRPC over Unix domain socket
 

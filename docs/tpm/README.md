@@ -1,5 +1,8 @@
 # TPM2 Module
 
+> **Status: REFERENCE**
+> Overview of the TPM 2.0 integration. The API contract is [api.md](api.md).
+
 The Trusted Platform Module (TPM) 2.0 integration provides hardware-backed security
 operations including key management, attestation, sealing/unsealing, and cryptographic
 operations for the go-trusted-platform.

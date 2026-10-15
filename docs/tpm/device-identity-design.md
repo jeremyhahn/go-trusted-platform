@@ -1,8 +1,7 @@
 # Device Identity (IDevID/IAK/LDevID) Design
 
-**Version**: 1.0
-**Last Updated**: 2026-01-05
-**Status**: Implementation Phase
+> **Status: REFERENCE**
+> Design notes for IDevID, IAK and LDevID. The contract is [api.md](api.md) §8.
 
 ## Overview
 

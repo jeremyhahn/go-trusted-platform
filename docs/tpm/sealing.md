@@ -1,5 +1,8 @@
 # TPM Sealing Operations
 
+> **Status: REFERENCE**
+> Sealing and unsealing data to platform state.
+
 This document describes the TPM sealing and unsealing capabilities for protecting
 sensitive data bound to specific platform states.
 

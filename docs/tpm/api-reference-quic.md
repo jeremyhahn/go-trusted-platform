@@ -1,5 +1,9 @@
 # TPM QUIC API Reference
 
+> **Status: REFERENCE**
+> The TPM opcodes of the platform QUIC protocol. The cross-transport contract
+> is [api.md](api.md).
+
 Port: `9444` (UDP)
 Protocol: QUIC with TLS 1.3
 
