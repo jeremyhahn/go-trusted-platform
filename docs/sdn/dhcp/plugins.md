@@ -1,6 +1,6 @@
 # DHCP Plugins
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > The DHCP server's plugins and their options.
 
 ## Overview
@@ -592,6 +592,11 @@ Request → IPAM Plugin → PXE Plugin → Response
 ```
 
 The PXE plugin is designed to be non-blocking (`return resp, false`) so it can be chained with other plugins. It only modifies responses for PXE clients and passes through all others unchanged.
+
+The chain above is not built anywhere today: `CoreDHCPServer` calls only the
+IPAM plugin (`pkg/sdn/dhcp/coredhcp.go:243`). An embedder that builds it must
+also note that the IPAM plugin returns `stop = true` with every OFFER, ACK and
+NAK, so a plugin placed after it never sees those replies.
 
 ## Error Handling
 

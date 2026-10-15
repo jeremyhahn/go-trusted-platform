@@ -1,22 +1,23 @@
 # DHCP CLI Usage
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > Why there is no `platformctl sdn dhcp` command group.
 
 ## Overview
 
-There is currently **no `platformctl sdn dhcp` command group**. The
-DHCP server is an in-process service configured via the `sdn.dhcp` YAML
-section (see [Configuration](configuration.md)); it starts and stops
-with the daemon and has no dedicated CLI or wire API.
+There is **no `platformctl sdn dhcp` command group**. The DHCP engine is an
+in-process library (see [README](README.md)) and no daemon runs it today:
+platformd's `sdn.dhcp` section only logs the zones it would serve, and
+gatewayd refuses its `dhcp:` section (see [Configuration](configuration.md)).
 
-## Observing DHCP State
+## Observing Pool State
 
-DHCP allocation is backed by the platform IPAM system, so lease-related
-state is visible through the IPAM CLI:
+The engine allocates from the platform IPAM system, so the pools it would
+serve are visible through the IPAM CLI. With no daemon running the engine,
+the allocations listed are not DHCP leases today:
 
 ```bash
-# Pools backing DHCP allocation (utilization, CIDR, gateway, zone)
+# Pools (utilization, CIDR, gateway, zone)
 platformctl sdn ipam pool list
 platformctl sdn ipam pool get --id <pool-id>
 
@@ -28,20 +29,7 @@ platformctl sdn ipam allocations --pool-id <pool-id>
 platformctl sdn ipam release --ip 10.0.0.50
 ```
 
-Server-side visibility (interfaces, leases, PXE decisions) is available
-through the daemon logs.
-
 ## Common Workflows
-
-### Verify DHCP is Serving a Segment
-
-```bash
-# 1. Confirm the pool for the segment exists and has capacity
-platformctl sdn ipam pool list
-
-# 2. Trigger a client renewal on a test host, then confirm the allocation
-platformctl sdn ipam allocations --pool-id <pool-id>
-```
 
 ### Reclaim an Address
 
