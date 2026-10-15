@@ -1,6 +1,8 @@
 # Remote-Access VPN Architecture
 
-> **Status: PARTIAL — the admission core and both data planes (#584 PR 1, PR 2), the gateway service and the operator control plane on every transport with `platformctl vpn` (#584 PR 3) exist; the gateway's mTLS admission listener (#557) and its wire contract exist, as do the client agent core (`pkg/vpn/agent`) and `platformctl vpn connect [--foreground]|disconnect|lease|posture|renew` with their exit codes, presenting the host's TPM device identity, renewing the lease with fresh evidence and bringing up the leased client data plane (WireGuard, absent under FIPS, or MASQUE CONNECT-IP); the JS SDK client and the web page (#584 PR 4) exist; left for PR 4: the client's factor signers.** · Scope: `pkg/sdn/gateway/services/vpn`, `pkg/vpn`, `gatewayd` · Last verified: 2026-10-14
+> **Status: NORMATIVE** · Scope: `pkg/sdn/gateway/services/vpn`, `pkg/vpn`, `gatewayd` · Last verified: 2026-10-14
+> Conflicts with this document are defects. Fix them here first.
+> Partial today: the admission core and both data planes (#584 PR 1, PR 2), the gateway service and the operator control plane on every transport with `platformctl vpn` (#584 PR 3) exist; the gateway's mTLS admission listener (#557) and its wire contract exist, as do the client agent core (`pkg/vpn/agent`) and `platformctl vpn connect [--foreground]|disconnect|lease|posture|renew` with their exit codes, presenting the host's TPM device identity, renewing the lease with fresh evidence and bringing up the leased client data plane (WireGuard, absent under FIPS, or MASQUE CONNECT-IP); the JS SDK client and the web page (#584 PR 4) exist; left for PR 4: the client's factor signers.
 > `pkg/sdn/gateway/services/vpn` ships the lease model, the five-step
 > admission pipeline behind `Deps` interfaces, the typed error vocabulary, the
 > config schema with its FIPS refusal, the lease store (in memory, or a

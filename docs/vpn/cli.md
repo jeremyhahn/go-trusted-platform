@@ -1,6 +1,8 @@
 # Remote-Access VPN — CLI
 
-> **Status: PARTIAL — the operator verbs ship (#584 PR 3); `connect`, `connect --foreground`, `disconnect`, `lease`, `posture` and `renew` exist with their exit codes, the verbs that talk to a gateway present this host's TPM device identity, and `connect` brings up the leased WireGuard or MASQUE data plane; the gateway listener they call exists (#557).** · Last verified: 2026-10-14
+> **Status: NORMATIVE** · Scope: `platformctl vpn` · Last verified: 2026-10-14
+> Conflicts with this document are defects. Fix them here first.
+> Partial today: the operator verbs ship (#584 PR 3); `connect`, `connect --foreground`, `disconnect`, `lease`, `posture` and `renew` exist with their exit codes, the verbs that talk to a gateway present this host's TPM device identity, and `connect` brings up the leased WireGuard or MASQUE data plane; the gateway listener they call exists (#557).
 > `platformctl vpn peer|status|posture-policy` exist (`pkg/cli/commands/vpn`)
 > and are exercised over every transport by `test/integration/vpn/`. The
 > client verbs are tested against a stand-in for the gateway's admission
