@@ -1,6 +1,6 @@
 % platformd serve | Trusted Platform Commands Manual
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > Manual page source for `platformd serve`. No build target renders it.
 
 # NAME
@@ -9,7 +9,9 @@
 
 # SYNOPSIS
 
-**serve** [*OPTIONS*] [*ARGUMENT*]
+**platformd serve** [*OPTIONS*]
+
+**platformd** without a subcommand runs **serve**.
 
 # DESCRIPTION
 
@@ -17,13 +19,34 @@
 is controlled by the platform configuration file:
 
 - **With webservices configured**: Full web services stack (REST API, ACME, WebAuthn, JWT)
-- **Without webservices**: Daemon-only mode (Unix socket, gRPC, QUIC, MCP)
+- **Without webservices**: Daemon-only mode (Unix socket, gRPC, QUIC, MCP;
+  REST only with **\--enable-mtls**, its only authentication)
 
 When web services are enabled, the embedded web server hosts the REST API and
-static assets in the public_html directory. The Swagger / OpenAPI REST API docs
-can be accessed by navigating to https://localhost:8443/swagger.
+static assets in the public_html directory.
+
+If the TPM is not initialized, **serve** provisions the platform before it
+starts. Any startup failure exits non-zero.
 
 # OPTIONS
+
+  * **\--socket-path**:
+    Unix socket path. Default: `/run/platformd.sock`.
+
+  * **\--enable-rest**, **\--enable-grpc**, **\--enable-quic**, **\--enable-mcp**:
+    Enable each transport. Default: `true`.
+
+  * **\--enable-mtls**:
+    Enable mutual TLS authentication. Default: `false`. gRPC over TCP needs it
+    unless platform tokens are enabled or quicbaas runs remotely.
+
+  * **\--skip-iam-validation**:
+    Skip IAM validation (testing only).
+
+  * **\--<transport>-bind-host**, **\--<transport>-port**, **\--raft-address**,
+    **\--raft-listen-address**:
+    Listener and Raft addresses. Each falls through to the `daemon:` /
+    `quicbaas:` config section and the `PLATFORMD_*` environment when unset.
 
 ## References
 
