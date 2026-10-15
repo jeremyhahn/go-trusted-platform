@@ -29,9 +29,9 @@ import (
 
 // TestTAPDeviceCreation tests creating TAP devices
 func TestTAPDeviceCreation(t *testing.T) {
-	skipIfNotRoot(t)
-	skipIfNoOVS(t)
-	skipIfNoIPCommand(t)
+	requireRoot(t)
+	requireOVS(t)
+	requireCommand(t, "ip")
 
 	bridgeName := "test-br-tap-0"
 	portName := "tap-test-0"
@@ -59,9 +59,9 @@ func TestTAPDeviceCreation(t *testing.T) {
 
 // TestTAPDeviceConfiguration tests configuring TAP device properties
 func TestTAPDeviceConfiguration(t *testing.T) {
-	skipIfNotRoot(t)
-	skipIfNoOVS(t)
-	skipIfNoIPCommand(t)
+	requireRoot(t)
+	requireOVS(t)
+	requireCommand(t, "ip")
 
 	bridgeName := "test-br-tap-1"
 	portName := "tap-test-1"
@@ -92,9 +92,9 @@ func TestTAPDeviceConfiguration(t *testing.T) {
 
 // TestInternalPort tests creating internal ports
 func TestInternalPort(t *testing.T) {
-	skipIfNotRoot(t)
-	skipIfNoOVS(t)
-	skipIfNoIPCommand(t)
+	requireRoot(t)
+	requireOVS(t)
+	requireCommand(t, "ip")
 
 	bridgeName := "test-br-internal"
 	portName := "internal-test"
@@ -131,9 +131,9 @@ func TestInternalPort(t *testing.T) {
 
 // TestVETHPair tests creating virtual ethernet pairs
 func TestVETHPair(t *testing.T) {
-	skipIfNotRoot(t)
-	skipIfNoOVS(t)
-	skipIfNoIPCommand(t)
+	requireRoot(t)
+	requireOVS(t)
+	requireCommand(t, "ip")
 
 	bridgeName := "test-br-veth"
 	vethName := "veth-test-0"

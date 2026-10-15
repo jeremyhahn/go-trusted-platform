@@ -17,16 +17,9 @@ package compute_test
 
 import (
 	"os"
-	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
-
-// SkipIfNotIntegration skips the test if not running in integration mode.
-func SkipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	helpers.SkipIfNotIntegration(t)
-}
 
 // GetCLIPath returns the path to the platformctl binary.
 func GetCLIPath() string {

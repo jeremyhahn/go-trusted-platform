@@ -35,8 +35,6 @@ import (
 // TestOverlayMultiProtocol runs all overlay/gateway/IPAM tests across all protocol adapters.
 // This ensures feature parity across CLI, REST, gRPC, QUIC, MCP, and Unix protocols.
 func TestOverlayMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := LongRunningTestContext()
 	// Use t.Cleanup instead of defer cancel() because subtests use t.Parallel().
 	// With t.Parallel(), the parent function returns before subtests start,
@@ -178,7 +176,8 @@ func testVTEPGet(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	}
 
 	if len(listResult.VTEPs) == 0 {
-		t.Skip("No VTEPs available for testing")
+		t.Fatal("VTEPList returned no VTEPs: the overlay controller registers this node's VTEP when it starts " +
+			"(pkg/sdn/overlay/controller.go, initializeComponents) and test/integration/config.yaml enables the overlay")
 	}
 
 	// Get the first VTEP
@@ -700,7 +699,7 @@ func testBGPAnnounceInvalidPrefix(t *testing.T, ctx context.Context, adapter Ove
 	status, err := adapter.BGPStatus(ctx)
 	if err != nil {
 		skipIfGatewayNotHostedHere(t, err)
-		t.Skip("Could not get BGP status")
+		t.Fatalf("BGPStatus failed: %v", err)
 	}
 
 	if !status.Enabled {
@@ -971,8 +970,6 @@ func testIPAMReleaseNonExistent(t *testing.T, ctx context.Context, adapter Overl
 
 // TestOverlayCLIOperations tests overlay operations specifically via CLI.
 func TestOverlayCLIOperations(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
 
@@ -991,8 +988,6 @@ func TestOverlayCLIOperations(t *testing.T) {
 
 // TestOverlayRESTOperations tests overlay operations specifically via REST.
 func TestOverlayRESTOperations(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
 
@@ -1011,8 +1006,6 @@ func TestOverlayRESTOperations(t *testing.T) {
 
 // TestOverlayGRPCOperations tests overlay operations specifically via gRPC.
 func TestOverlayGRPCOperations(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
 
@@ -1031,8 +1024,6 @@ func TestOverlayGRPCOperations(t *testing.T) {
 
 // TestOverlayQUICOperations tests overlay operations specifically via QUIC.
 func TestOverlayQUICOperations(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
 
@@ -1051,8 +1042,6 @@ func TestOverlayQUICOperations(t *testing.T) {
 
 // TestOverlayMCPOperations tests overlay operations specifically via MCP.
 func TestOverlayMCPOperations(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
 
@@ -1071,8 +1060,6 @@ func TestOverlayMCPOperations(t *testing.T) {
 
 // TestOverlayUnixOperations tests overlay operations specifically via Unix socket.
 func TestOverlayUnixOperations(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
 
@@ -1095,8 +1082,6 @@ func TestOverlayUnixOperations(t *testing.T) {
 
 // TestOverlayErrorHandling tests error handling across protocols.
 func TestOverlayErrorHandling(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
 
@@ -1145,8 +1130,6 @@ func TestOverlayErrorHandling(t *testing.T) {
 
 // TestOverlayStressOperations performs stress testing of overlay operations.
 func TestOverlayStressOperations(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := LongRunningTestContext()
 	defer cancel()
 

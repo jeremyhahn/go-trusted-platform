@@ -39,15 +39,22 @@ var ErrHTTPClientNotInitialized = errors.New("HTTP client not initialized")
 // ErrDHCPClientNotInitialized indicates the DHCP client is not initialized.
 var ErrDHCPClientNotInitialized = errors.New("DHCP client not initialized")
 
+// ErrNoNetworkPrivileges reports that a DHCP test runs without the root
+// privileges it needs to bind the DHCP port.
+type ErrNoNetworkPrivileges struct {
+	EUID int
+}
+
+func (e ErrNoNetworkPrivileges) Error() string {
+	return fmt.Sprintf("DHCP tests need root or CAP_NET_ADMIN, running as euid %d: "+
+		"run them in the devcontainer (make integration-test-ipxe), which runs as root", e.EUID)
+}
+
 // =============================================================================
 // Environment Variable Constants
 // =============================================================================
 
 const (
-	// EnvIntegrationTest is the environment variable that must be set to run
-	// integration tests. Set INTEGRATION_TEST=1 to enable.
-	EnvIntegrationTest = "INTEGRATION_TEST"
-
 	// EnvIPXEServerIP is the environment variable for the iPXE server IP.
 	EnvIPXEServerIP = "IPXE_SERVER_IP"
 
@@ -125,16 +132,6 @@ const (
 // Skip Helpers
 // =============================================================================
 
-// SkipIfNotIntegration skips the test if the INTEGRATION_TEST environment
-// variable is not set. This ensures integration tests only run when explicitly
-// requested, preventing accidental execution during normal unit testing.
-func SkipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv(EnvIntegrationTest) == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
-
 // SkipIfNoDHCP skips the test if DHCP testing is not enabled.
 func SkipIfNoDHCP(t *testing.T) {
 	t.Helper()
@@ -143,12 +140,13 @@ func SkipIfNoDHCP(t *testing.T) {
 	}
 }
 
-// SkipIfNoNetworkPrivileges skips the test if running without network privileges.
-func SkipIfNoNetworkPrivileges(t *testing.T) {
-	t.Helper()
-	if os.Geteuid() != 0 {
-		t.Skip("Skipping test requiring network privileges. Run as root or with CAP_NET_ADMIN.")
+// CheckNetworkPrivileges returns ErrNoNetworkPrivileges when the process
+// cannot bind the privileged DHCP port.
+func CheckNetworkPrivileges() error {
+	if euid := os.Geteuid(); euid != 0 {
+		return ErrNoNetworkPrivileges{EUID: euid}
 	}
+	return nil
 }
 
 // =============================================================================

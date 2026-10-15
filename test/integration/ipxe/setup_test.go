@@ -43,12 +43,6 @@ var (
 
 // TestMain sets up and tears down the iPXE server for integration tests.
 func TestMain(m *testing.M) {
-	// Skip if not integration test
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		fmt.Println("Skipping integration tests. Set INTEGRATION_TEST=1 to run.")
-		os.Exit(0)
-	}
-
 	// Find available ports
 	httpPort, err := findAvailablePort()
 	if err != nil {

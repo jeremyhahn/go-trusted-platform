@@ -49,8 +49,6 @@ import (
 // 5. HTTP fetch menu.ipxe
 // 6. HTTP fetch selected boot entry
 func TestIPXEFullBootFlow(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := LongRunningTestContext()
 	defer cancel()
 
@@ -106,9 +104,10 @@ func TestIPXEFullBootFlow(t *testing.T) {
 
 // TestIPXEDHCPToHTTPChain tests the DHCP -> HTTP chainloading flow.
 func TestIPXEDHCPToHTTPChain(t *testing.T) {
-	SkipIfNotIntegration(t)
 	SkipIfNoDHCP(t)
-	SkipIfNoNetworkPrivileges(t)
+	if err := CheckNetworkPrivileges(); err != nil {
+		t.Fatalf("missing prerequisite: %v", err)
+	}
 
 	ctx, cancel := LongRunningTestContext()
 	defer cancel()
@@ -148,8 +147,6 @@ func TestIPXEDHCPToHTTPChain(t *testing.T) {
 
 // TestIPXEMultiClientBoot tests multiple clients booting simultaneously.
 func TestIPXEMultiClientBoot(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -261,8 +258,6 @@ func TestIPXEMultiClientBoot(t *testing.T) {
 
 // TestIPXEServerComponents tests that all server components work together.
 func TestIPXEServerComponents(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
 
@@ -324,8 +319,6 @@ func TestIPXEServerComponents(t *testing.T) {
 
 // TestIPXEBootScriptChaining tests the boot script chain from boot.ipxe to menu.
 func TestIPXEBootScriptChaining(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := HTTPTestContext()
 	defer cancel()
 
@@ -365,8 +358,6 @@ func TestIPXEBootScriptChaining(t *testing.T) {
 
 // TestIPXEBootEntryGeneration tests that boot entries are correctly generated.
 func TestIPXEBootEntryGeneration(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := HTTPTestContext()
 	defer cancel()
 
@@ -422,8 +413,6 @@ func TestIPXEBootEntryGeneration(t *testing.T) {
 
 // TestIPXEProxyURLGeneration tests that HTTPS proxy URLs are correctly generated.
 func TestIPXEProxyURLGeneration(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := HTTPTestContext()
 	defer cancel()
 
@@ -463,8 +452,6 @@ func TestIPXEProxyURLGeneration(t *testing.T) {
 
 // TestIPXEServiceRecovery tests that services recover from errors.
 func TestIPXEServiceRecovery(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -548,8 +535,6 @@ func (p *ProtocolTestAdapter) Teardown() error {
 
 // TestProtocolAdapterFactory tests the protocol adapter factory.
 func TestProtocolAdapterFactory(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
 

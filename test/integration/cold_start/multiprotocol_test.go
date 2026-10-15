@@ -32,8 +32,6 @@ import (
 // #142 App.CA threading) are explicitly skipped with t.Skip pointing at
 // the blocking task.
 func TestColdStartMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	t.Cleanup(cancel)
 
@@ -145,8 +143,7 @@ func runColdStartScenario(t *testing.T, ctx context.Context, cmd ColdStartComman
 		// asserts the daemon is reachable through the adapter.
 		snap, err := cmd.Health(ctx)
 		if err != nil {
-			t.Skipf("step 5 health probe failed for %s: %v", cmd.Name(), err)
-			return
+			t.Fatalf("step 5: health probe failed for %s: %v (the harness-started platformd must answer every adapter)", cmd.Name(), err)
 		}
 		if !snap.Ready {
 			t.Errorf("step 5: %s reports daemon not ready: %+v", cmd.Name(), snap)

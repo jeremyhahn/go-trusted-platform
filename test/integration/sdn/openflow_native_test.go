@@ -53,7 +53,7 @@ type testBridge struct {
 
 // setupTestBridge creates a new OVS bridge for testing.
 // Callers MUST call requireOVSForTest(t) before invoking this function
-// to ensure the test skips gracefully when OVS is not available.
+// so a missing OVS fails the test with the prerequisite named.
 func setupTestBridge(t *testing.T, bridgeName string) *testBridge {
 	t.Helper()
 
@@ -87,7 +87,8 @@ func setupTestBridge(t *testing.T, bridgeName string) *testBridge {
 	// Wait for the OpenFlow management socket to become available.
 	// After bridge creation, OVS takes a moment to set up the socket.
 	if !tb.waitForOpenFlowSocket() {
-		t.Skip("OpenFlow management socket not available - OVS not configured for native OpenFlow. Use ovs-ofctl commands instead.")
+		t.Fatalf("OpenFlow management socket %s did not come up within %s: ovs-vswitchd creates one per bridge; %s",
+			socketPath, ofSocketWaitTimeout, devcontainerRemedy)
 	}
 
 	return tb

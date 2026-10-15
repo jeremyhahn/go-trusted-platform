@@ -33,7 +33,6 @@ The integration tests verify end-to-end functionality of:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `INTEGRATION_TEST` | - | Must be set to `1` to run integration tests |
 | `IPXE_SERVER_IP` | `10.99.99.1` | IP address of the PXE server |
 | `IPXE_HTTP_PORT` | `8080` | HTTP server port |
 | `IPXE_TFTP_PORT` | `69` | TFTP server port |
@@ -52,7 +51,7 @@ The devcontainer provides an isolated environment with proper networking:
 make devcontainer
 
 # Inside devcontainer, run integration tests
-INTEGRATION_TEST=1 go test -v ./test/integration/ipxe/...
+go test -v -tags "$(make -s print-build-tags) integration" ./test/integration/ipxe/...
 ```
 
 ### Using Makefile
@@ -62,10 +61,10 @@ INTEGRATION_TEST=1 go test -v ./test/integration/ipxe/...
 make integration-test-ipxe
 
 # Run specific test file
-INTEGRATION_TEST=1 go test -v ./test/integration/ipxe/... -run TestHTTP
+go test -v -tags "$(make -s print-build-tags) integration" ./test/integration/ipxe/... -run TestHTTP
 
 # Run DHCP tests (requires root)
-sudo INTEGRATION_TEST=1 IPXE_DHCP_ENABLED=1 go test -v ./test/integration/ipxe/... -run TestDHCP
+sudo IPXE_DHCP_ENABLED=1 go test -v -tags "$(make -s print-build-tags) integration" ./test/integration/ipxe/... -run TestDHCP
 ```
 
 ### Test Categories
@@ -75,7 +74,7 @@ sudo INTEGRATION_TEST=1 IPXE_DHCP_ENABLED=1 go test -v ./test/integration/ipxe/.
 Test the HTTP boot script server:
 
 ```bash
-INTEGRATION_TEST=1 go test -v ./test/integration/ipxe/... -run TestHTTP
+go test -v -tags "$(make -s print-build-tags) integration" ./test/integration/ipxe/... -run TestHTTP
 ```
 
 #### TFTP Tests (No Root Required)
@@ -83,7 +82,7 @@ INTEGRATION_TEST=1 go test -v ./test/integration/ipxe/... -run TestHTTP
 Test TFTP firmware downloads:
 
 ```bash
-INTEGRATION_TEST=1 go test -v ./test/integration/ipxe/... -run TestTFTP
+go test -v -tags "$(make -s print-build-tags) integration" ./test/integration/ipxe/... -run TestTFTP
 ```
 
 #### DHCP Tests (Root Required)
@@ -91,7 +90,7 @@ INTEGRATION_TEST=1 go test -v ./test/integration/ipxe/... -run TestTFTP
 Test DHCP server functionality:
 
 ```bash
-sudo INTEGRATION_TEST=1 IPXE_DHCP_ENABLED=1 go test -v ./test/integration/ipxe/... -run TestDHCP
+sudo IPXE_DHCP_ENABLED=1 go test -v -tags "$(make -s print-build-tags) integration" ./test/integration/ipxe/... -run TestDHCP
 ```
 
 #### Full Flow Tests
@@ -99,7 +98,7 @@ sudo INTEGRATION_TEST=1 IPXE_DHCP_ENABLED=1 go test -v ./test/integration/ipxe/.
 Test complete PXE boot sequence:
 
 ```bash
-INTEGRATION_TEST=1 go test -v ./test/integration/ipxe/... -run TestIPXEFull
+go test -v -tags "$(make -s print-build-tags) integration" ./test/integration/ipxe/... -run TestIPXEFull
 ```
 
 ## Test Architecture
@@ -183,7 +182,9 @@ ok      github.com/jeremyhahn/go-trusted-platform/test/integration/ipxe  15.234s
 ### Adding New Tests
 
 1. Create test functions with `Test` prefix
-2. Use `SkipIfNotIntegration(t)` at the start
+2. Do not gate on the environment: the `integration` build tag selects the
+   tests, and a missing prerequisite fails with a typed error (see
+   `CheckNetworkPrivileges`)
 3. Use appropriate context helpers for timeouts
 4. Follow existing patterns for protocol testing
 

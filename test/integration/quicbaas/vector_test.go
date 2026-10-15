@@ -26,8 +26,6 @@ import (
 
 // TestVectorService_Upsert tests vector upsert operations.
 func TestVectorService_Upsert(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -123,8 +121,6 @@ func TestVectorService_Upsert(t *testing.T) {
 
 // TestVectorService_Search tests vector similarity search operations.
 func TestVectorService_Search(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -231,8 +227,6 @@ func TestVectorService_Search(t *testing.T) {
 
 // TestVectorService_Delete tests vector deletion operations.
 func TestVectorService_Delete(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -298,8 +292,6 @@ func TestVectorService_Delete(t *testing.T) {
 
 // TestVectorService_Lifecycle tests the full vector lifecycle.
 func TestVectorService_Lifecycle(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -365,8 +357,6 @@ func TestVectorService_Lifecycle(t *testing.T) {
 
 // TestVectorService_ConcurrentUpserts tests concurrent vector upserts.
 func TestVectorService_ConcurrentUpserts(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -412,8 +402,6 @@ func TestVectorService_ConcurrentUpserts(t *testing.T) {
 
 // TestVectorService_DifferentDimensions tests vectors with different dimensions.
 func TestVectorService_DifferentDimensions(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 

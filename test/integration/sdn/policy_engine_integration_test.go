@@ -159,7 +159,7 @@ func TestPolicyEngineIntegration(t *testing.T) {
 
 	err = client.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB: %v", err)
+		t.Fatal(missing("a connection to OVSDB", err))
 	}
 
 	// Setup test bridge
@@ -434,7 +434,7 @@ func TestPolicyEngineWithCertificate(t *testing.T) {
 
 	err = client.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB: %v", err)
+		t.Fatal(missing("a connection to OVSDB", err))
 	}
 
 	bridgeName := "br-cert-test"

@@ -19,14 +19,13 @@
 //
 // Run these tests via:
 //
-//	make integration-test-quicbaas
+//	go test -v -tags "$(make -s print-build-tags) integration" ./test/integration/quicbaas/...
 //
-// Tests require INTEGRATION_TEST=1 environment variable.
+// The integration build tag selects them; there is no environment gate.
 package quicbaas_test
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -43,14 +42,6 @@ const startupTimeout = 60 * time.Second
 
 // shutdownTimeout is the timeout for factory shutdown operations.
 const shutdownTimeout = 10 * time.Second
-
-// skipIfNotIntegration skips the test if the INTEGRATION_TEST env var is not set.
-func skipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
 
 // testContext returns a context with the test timeout.
 func testContext() (context.Context, context.CancelFunc) {

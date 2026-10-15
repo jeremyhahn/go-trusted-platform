@@ -265,7 +265,7 @@ Available helper functions:
 - `deleteFlow(bridge, match)`: Remove OpenFlow rule
 
 ARP test helpers:
-- `getDefaultGateway(t)`: Get system's default gateway IP
+- `setupTestGateway(t)`: Create a test-owned gateway (a namespace behind a veth pair) and return its IP
 - `pingHost(t, host)`: Ping a host to populate ARP cache
 
 ## Performance Considerations

@@ -36,8 +36,6 @@ import (
 
 // TestHTTPBootScript tests fetching the initial boot script.
 func TestHTTPBootScript(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := HTTPTestContext()
 	defer cancel()
 
@@ -71,8 +69,6 @@ func TestHTTPBootScript(t *testing.T) {
 
 // TestHTTPMenuScript tests fetching the boot menu script.
 func TestHTTPMenuScript(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := HTTPTestContext()
 	defer cancel()
 
@@ -114,8 +110,6 @@ func TestHTTPMenuScript(t *testing.T) {
 
 // TestHTTPBootEntries tests fetching individual boot entry scripts.
 func TestHTTPBootEntries(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := HTTPTestContext()
 	defer cancel()
 
@@ -156,8 +150,6 @@ func TestHTTPBootEntries(t *testing.T) {
 
 // TestHTTPBootEntryNotFound tests handling of non-existent boot entries.
 func TestHTTPBootEntryNotFound(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := HTTPTestContext()
 	defer cancel()
 
@@ -173,8 +165,6 @@ func TestHTTPBootEntryNotFound(t *testing.T) {
 
 // TestHTTPHealthCheck tests the health check endpoint.
 func TestHTTPHealthCheck(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := HTTPTestContext()
 	defer cancel()
 
@@ -207,8 +197,6 @@ func TestHTTPHealthCheck(t *testing.T) {
 
 // TestHTTPProxy tests the HTTPS proxy endpoint.
 func TestHTTPProxy(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -219,9 +207,7 @@ func TestHTTPProxy(t *testing.T) {
 		// Proxy a small HTTPS resource
 		proxyURL := baseURL + "/proxy/https/httpbin.org/get"
 		resp, body, err := httpGet(ctx, proxyURL)
-		if err != nil {
-			t.Skip("External network unavailable")
-		}
+		require.NoError(t, err, "Request to the test iPXE server should complete")
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode, "Proxy should return 200")
 		assert.NotEmpty(t, body, "Response body should not be empty")
@@ -249,8 +235,6 @@ func TestHTTPProxy(t *testing.T) {
 
 // TestHTTPStaticFiles tests serving static files.
 func TestHTTPStaticFiles(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := HTTPTestContext()
 	defer cancel()
 
@@ -282,8 +266,6 @@ func TestHTTPStaticFiles(t *testing.T) {
 
 // TestHTTPLocalFiles tests the local files endpoint.
 func TestHTTPLocalFiles(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := HTTPTestContext()
 	defer cancel()
 
@@ -314,8 +296,6 @@ func TestHTTPLocalFiles(t *testing.T) {
 
 // TestHTTPConcurrentRequests tests handling concurrent HTTP requests.
 func TestHTTPConcurrentRequests(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -367,8 +347,6 @@ func TestHTTPConcurrentRequests(t *testing.T) {
 
 // TestHTTPErrorScenarios tests various HTTP error conditions.
 func TestHTTPErrorScenarios(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	cfg := GetTestServerConfig()
 	baseURL := fmt.Sprintf("http://%s:%d", cfg.ServerIP, cfg.HTTPPort)
 

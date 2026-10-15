@@ -49,8 +49,6 @@ import (
 // Each adapter implements the ISOCommands interface, enabling unified testing across
 // CLI, REST, gRPC, QUIC, MCP, and Unix protocols.
 func TestISOMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer cancel()
 
@@ -756,16 +754,8 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 // TestISOVMTests tests ISO operations that require QEMU and TPM.
 // These are separated because they require special environment setup.
 func TestISOVMTests(t *testing.T) {
-	SkipIfNotIntegration(t)
-
-	// Check for QEMU availability
-	if _, err := os.Stat("/usr/bin/qemu-system-x86_64"); os.IsNotExist(err) {
-		t.Skip("Skipping VM tests: QEMU not available")
-	}
-
-	// Check for swtpm availability
-	if _, err := os.Stat("/usr/bin/swtpm"); os.IsNotExist(err) {
-		t.Skip("Skipping VM tests: swtpm not available")
+	if err := CheckVMTools(); err != nil {
+		t.Fatalf("missing prerequisite: %v", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Minute)
@@ -866,8 +856,6 @@ func testVMBoot(t *testing.T, ctx context.Context, cmd ISOCommands, workDir stri
 // =============================================================================
 
 func TestISOErrorHandling(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 

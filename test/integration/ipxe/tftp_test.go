@@ -34,8 +34,6 @@ import (
 
 // TestTFTPDownloadFirmware tests downloading iPXE firmware files via TFTP.
 func TestTFTPDownloadFirmware(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := TFTPTestContext()
 	defer cancel()
 
@@ -55,10 +53,7 @@ func TestTFTPDownloadFirmware(t *testing.T) {
 
 	t.Run("DownloadIPXE32EFI", func(t *testing.T) {
 		data, err := downloadTFTPFile(ctx, cfg, "ipxe32.efi")
-		if err != nil {
-			// ipxe32.efi is optional
-			t.Skip("ipxe32.efi not available (optional)")
-		}
+		require.NoError(t, err, "TFTP download of ipxe32.efi should succeed")
 
 		// Verify it is a valid PE/EFI binary
 		assert.Greater(t, len(data), 100*1024, "ipxe32.efi should be substantial")
@@ -68,8 +63,6 @@ func TestTFTPDownloadFirmware(t *testing.T) {
 
 // TestTFTPFileNotFound tests handling of non-existent files.
 func TestTFTPFileNotFound(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := TFTPTestContext()
 	defer cancel()
 
@@ -93,8 +86,6 @@ func TestTFTPFileNotFound(t *testing.T) {
 
 // TestTFTPFileIntegrity tests that downloaded files have correct content.
 func TestTFTPFileIntegrity(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := TFTPTestContext()
 	defer cancel()
 
@@ -115,8 +106,6 @@ func TestTFTPFileIntegrity(t *testing.T) {
 
 // TestTFTPTransferModes tests different TFTP transfer modes.
 func TestTFTPTransferModes(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	cfg := GetTestServerConfig()
 
 	t.Run("OctetMode", func(t *testing.T) {
@@ -131,8 +120,6 @@ func TestTFTPTransferModes(t *testing.T) {
 
 // TestTFTPConcurrentDownloads tests handling multiple concurrent downloads.
 func TestTFTPConcurrentDownloads(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -181,8 +168,6 @@ func TestTFTPConcurrentDownloads(t *testing.T) {
 
 // TestTFTPTransferSize tests that the TFTP server reports correct transfer sizes.
 func TestTFTPTransferSize(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := TFTPTestContext()
 	defer cancel()
 
@@ -279,16 +264,12 @@ func downloadTFTPFileWithTSize(ctx context.Context, cfg TestServerConfig,
 
 // TestTFTPErrorScenarios tests various TFTP error conditions.
 func TestTFTPErrorScenarios(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	cfg := GetTestServerConfig()
 
 	t.Run("ServerUnreachable", func(t *testing.T) {
 		// Try to connect to unreachable server
 		badClient, err := tftp.NewClient("10.255.255.254:69")
-		if err != nil {
-			t.Skip("Could not create TFTP client")
-		}
+		require.NoError(t, err, "TFTP client for a literal address should be created")
 
 		badClient.SetTimeout(2 * time.Second)
 		_, err = badClient.Receive("ipxe.efi", "octet")
@@ -298,9 +279,7 @@ func TestTFTPErrorScenarios(t *testing.T) {
 	t.Run("InvalidPort", func(t *testing.T) {
 		// Try to connect to wrong port
 		badClient, err := tftp.NewClient(cfg.ServerIP.String() + ":12345")
-		if err != nil {
-			t.Skip("Could not create TFTP client")
-		}
+		require.NoError(t, err, "TFTP client for a literal address should be created")
 
 		badClient.SetTimeout(2 * time.Second)
 		_, err = badClient.Receive("ipxe.efi", "octet")
@@ -329,8 +308,6 @@ func TestTFTPErrorScenarios(t *testing.T) {
 
 // TestTFTPBlockSize tests TFTP blocksize negotiation.
 func TestTFTPBlockSize(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	cfg := GetTestServerConfig()
 
 	t.Run("DefaultBlockSize", func(t *testing.T) {
@@ -346,8 +323,6 @@ func TestTFTPBlockSize(t *testing.T) {
 
 // TestTFTPRetransmission tests that TFTP handles packet loss gracefully.
 func TestTFTPRetransmission(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	cfg := GetTestServerConfig()
 
 	t.Run("ReliableTransfer", func(t *testing.T) {

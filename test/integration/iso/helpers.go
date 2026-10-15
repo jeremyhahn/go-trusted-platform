@@ -29,7 +29,6 @@ const (
 	EnvPlatformMCPEndpoint  = "PLATFORM_MCP_ENDPOINT"
 	EnvPlatformUnixSocket   = "PLATFORM_UNIX_SOCKET"
 	EnvPlatformCTL          = "PLATFORMCTL_PATH"
-	EnvIntegrationTest      = "INTEGRATION_TEST"
 	EnvISOTestWorkDir       = "ISO_TEST_WORK_DIR"
 	EnvISOTestSkipCleanup   = "ISO_TEST_SKIP_CLEANUP"
 )
@@ -67,11 +66,31 @@ func GetServiceEndpoints() *ServiceEndpoints {
 	}
 }
 
-// SkipIfNotIntegration skips the test if not running integration tests.
-func SkipIfNotIntegration(t *testing.T) {
-	if os.Getenv(EnvIntegrationTest) == "" {
-		t.Skip("Skipping integration test: INTEGRATION_TEST not set")
+// VM tool paths the devcontainer image installs (qemu-system-x86 and swtpm
+// packages) and checks at build time.
+const (
+	QEMUBinaryPath  = "/usr/bin/qemu-system-x86_64"
+	SwtpmBinaryPath = "/usr/bin/swtpm"
+)
+
+// ErrVMToolNotFound reports that a binary the VM tests need is missing.
+type ErrVMToolNotFound struct {
+	Path string
+}
+
+func (e ErrVMToolNotFound) Error() string {
+	return fmt.Sprintf("VM tool not found at %s: run the VM tests in the devcontainer "+
+		"(build/docker/devcontainer/Dockerfile installs qemu-system-x86 and swtpm)", e.Path)
+}
+
+// CheckVMTools returns ErrVMToolNotFound for the first missing VM tool.
+func CheckVMTools() error {
+	for _, path := range []string{QEMUBinaryPath, SwtpmBinaryPath} {
+		if !FileExists(path) {
+			return ErrVMToolNotFound{Path: path}
+		}
 	}
+	return nil
 }
 
 // GetTestWorkDir returns the work directory for ISO tests.

@@ -33,9 +33,10 @@ import (
 
 // TestDHCPDiscoverOffer tests the DHCP DISCOVER -> OFFER flow.
 func TestDHCPDiscoverOffer(t *testing.T) {
-	SkipIfNotIntegration(t)
 	SkipIfNoDHCP(t)
-	SkipIfNoNetworkPrivileges(t)
+	if err := CheckNetworkPrivileges(); err != nil {
+		t.Fatalf("missing prerequisite: %v", err)
+	}
 
 	ctx, cancel := DHCPTestContext()
 	defer cancel()
@@ -84,9 +85,10 @@ func TestDHCPDiscoverOffer(t *testing.T) {
 
 // TestDHCPRequestAck tests the DHCP REQUEST -> ACK flow.
 func TestDHCPRequestAck(t *testing.T) {
-	SkipIfNotIntegration(t)
 	SkipIfNoDHCP(t)
-	SkipIfNoNetworkPrivileges(t)
+	if err := CheckNetworkPrivileges(); err != nil {
+		t.Fatalf("missing prerequisite: %v", err)
+	}
 
 	ctx, cancel := DHCPTestContext()
 	defer cancel()
@@ -121,9 +123,10 @@ func TestDHCPRequestAck(t *testing.T) {
 
 // TestDHCPPXEOptions tests that PXE-specific DHCP options are correctly set.
 func TestDHCPPXEOptions(t *testing.T) {
-	SkipIfNotIntegration(t)
 	SkipIfNoDHCP(t)
-	SkipIfNoNetworkPrivileges(t)
+	if err := CheckNetworkPrivileges(); err != nil {
+		t.Fatalf("missing prerequisite: %v", err)
+	}
 
 	ctx, cancel := DHCPTestContext()
 	defer cancel()
@@ -164,9 +167,10 @@ func TestDHCPPXEOptions(t *testing.T) {
 
 // TestDHCPMultipleClients tests handling multiple concurrent DHCP clients.
 func TestDHCPMultipleClients(t *testing.T) {
-	SkipIfNotIntegration(t)
 	SkipIfNoDHCP(t)
-	SkipIfNoNetworkPrivileges(t)
+	if err := CheckNetworkPrivileges(); err != nil {
+		t.Fatalf("missing prerequisite: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -387,9 +391,10 @@ func sendDHCPRequest(ctx context.Context, cfg TestServerConfig, clientMAC net.Ha
 
 // TestDHCPErrorScenarios tests various DHCP error conditions.
 func TestDHCPErrorScenarios(t *testing.T) {
-	SkipIfNotIntegration(t)
 	SkipIfNoDHCP(t)
-	SkipIfNoNetworkPrivileges(t)
+	if err := CheckNetworkPrivileges(); err != nil {
+		t.Fatalf("missing prerequisite: %v", err)
+	}
 
 	cfg := GetTestServerConfig()
 

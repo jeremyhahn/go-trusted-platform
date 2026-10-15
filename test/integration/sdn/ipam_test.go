@@ -34,8 +34,7 @@ import (
 // protocol adapters, verifying feature parity for create, get, update, delete,
 // and zone-filtered list operations.
 func TestIPAMPoolCRUDMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-	SkipIfSDNUnavailable(t)
+	requireOVSDB(t)
 
 	adapters := NewSDNTestAdapters()
 

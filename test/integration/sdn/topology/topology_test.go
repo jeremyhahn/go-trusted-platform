@@ -29,15 +29,11 @@ import (
 // Test Environment Setup
 // =============================================================================
 
-func skipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
-
 // skipIfNoDockerCompose skips the test if docker-compose is not available in PATH.
-// This allows tests to skip gracefully when running outside the devcontainer.
+// These tests start the multi-node topology with docker-compose, which the
+// devcontainer does not install (build/docker/devcontainer/Dockerfile) and
+// cannot run without a Docker daemon inside it, so they skip there; they run
+// only on a host with docker-compose.
 func skipIfNoDockerCompose(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("docker-compose"); err != nil {
@@ -840,7 +836,6 @@ func TestManager_IsRunning_NotFound(t *testing.T) {
 // =============================================================================
 
 func TestManager_StartAndDestroy_Integration(t *testing.T) {
-	skipIfNotIntegration(t)
 	skipIfNoDockerCompose(t)
 
 	config := DefaultManagerConfig()
@@ -904,7 +899,6 @@ func TestManager_StartAndDestroy_Integration(t *testing.T) {
 }
 
 func TestManager_WaitHealthy_Integration(t *testing.T) {
-	skipIfNotIntegration(t)
 	skipIfNoDockerCompose(t)
 
 	config := DefaultManagerConfig()
@@ -935,7 +929,6 @@ func TestManager_WaitHealthy_Integration(t *testing.T) {
 }
 
 func TestManager_CaptureLogs_Integration(t *testing.T) {
-	skipIfNotIntegration(t)
 	skipIfNoDockerCompose(t)
 
 	config := DefaultManagerConfig()

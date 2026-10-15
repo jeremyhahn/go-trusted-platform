@@ -43,7 +43,7 @@ func TestOpenFlowRulesForNetworkPhases(t *testing.T) {
 
 	err = client.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB: %v", err)
+		t.Fatal(missing("a connection to OVSDB", err))
 	}
 
 	bridgeName := "br-phases-test"
@@ -274,7 +274,7 @@ func TestACLToOpenFlowTranslation(t *testing.T) {
 
 	err = client.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB: %v", err)
+		t.Fatal(missing("a connection to OVSDB", err))
 	}
 
 	bridgeName := "br-acl-test"
@@ -395,7 +395,7 @@ func TestFlowModificationAndRemoval(t *testing.T) {
 
 	err = client.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB: %v", err)
+		t.Fatal(missing("a connection to OVSDB", err))
 	}
 
 	bridgeName := "br-mod-test"
@@ -520,7 +520,7 @@ func TestVLANFlowManipulation(t *testing.T) {
 
 	err = client.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB: %v", err)
+		t.Fatal(missing("a connection to OVSDB", err))
 	}
 
 	bridgeName := "br-vlan-flow-test"
