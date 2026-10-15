@@ -26,6 +26,8 @@ import (
 	"time"
 
 	"github.com/vishvananda/netns"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 )
 
 // nsEndpoint is one network-namespace endpoint attached to an OVS test
@@ -205,27 +207,38 @@ func nsDial(ns, addr string, timeout time.Duration) (net.Conn, error) {
 	return conn, err
 }
 
-// waitFor polls condition with a ticker until it reports true or the
-// deadline passes (channel-based waiting; no bare sleeps).
+// waitFor polls condition every interval until it reports true, failing the
+// test when timeout passes or ctx ends first.
 func waitFor(ctx context.Context, t *testing.T, what string, interval, timeout time.Duration, condition func() bool) {
 	t.Helper()
 
-	deadline, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		if condition() {
-			return
-		}
-		select {
-		case <-deadline.Done():
-			t.Fatalf("timed out waiting for %s", what)
-		case <-ticker.C:
-		}
+	if err := testenv.WaitUntilEvery(ctx, timeout, interval, what, condition); err != nil {
+		t.Fatalf("%v", err)
 	}
+}
+
+const (
+	// internalPortUpTimeout bounds the wait for OVS to create an internal
+	// port's kernel interface after add-port.
+	internalPortUpTimeout = 2 * time.Second
+
+	// ofportTimeout bounds the wait for OVS to assign a port its OpenFlow
+	// port number.
+	ofportTimeout = 4 * time.Second
+)
+
+// bringInternalPortUp sets an OVS internal port up, retrying until OVS has
+// created its kernel interface. On timeout it returns a WaitTimeoutError and
+// the output of the last `ip link set` attempt.
+func bringInternalPortUp(ctx context.Context, port string) ([]byte, error) {
+	var output []byte
+	linkUp := func() bool {
+		var err error
+		output, err = exec.CommandContext(ctx, "ip", "link", "set", port, "up").CombinedOutput()
+		return err == nil
+	}
+	err := testenv.WaitUntil(ctx, internalPortUpTimeout, "interface "+port+" up", linkUp)
+	return output, err
 }
 
 // logBridge logs the bridge's flow table, with packet counts, now.

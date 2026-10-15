@@ -15,6 +15,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -67,6 +68,50 @@ func ssrkHandleHex(srk *xkmssdk.SRKConfig) string {
 		return "none"
 	}
 	return fmt.Sprintf("0x%08x", srk.Handle)
+}
+
+// tpmOpenAttempts and tpmRetryDelay bound how long boot waits for a TPM
+// device that exists but is not ready yet.
+const (
+	tpmOpenAttempts = 5
+	tpmRetryDelay   = 2 * time.Second
+)
+
+// openTPMWithRetry calls open until the TPM opens or attempts run out,
+// waiting delay between attempts. ErrTPMNotInitialized counts as open: the
+// TPM just has not been provisioned yet, which boot handles later. A ctx that
+// ends during a wait stops the retries at once.
+func openTPMWithRetry(ctx context.Context, logger *logging.Logger, open func() (xkmssdk.TrustedPlatformModule, error), attempts int, delay time.Duration) (xkmssdk.TrustedPlatformModule, error) {
+	var err error
+	for i := 0; i < attempts; i++ {
+		var tpmModule xkmssdk.TrustedPlatformModule
+		tpmModule, err = open()
+		if err == nil {
+			logger.Info("TPM initialized successfully", "attempt", i+1)
+			return tpmModule, nil
+		}
+		if errors.Is(err, xkmssdk.ErrTPMNotInitialized) {
+			logger.Info("TPM opened successfully (not yet provisioned)", "attempt", i+1)
+			return tpmModule, nil
+		}
+		if i == attempts-1 {
+			break
+		}
+
+		logger.Warn("TPM initialization failed, retrying",
+			"attempt", i+1,
+			"max_retries", attempts,
+			"error", err,
+			"retry_delay", delay)
+		retry := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			retry.Stop()
+			return nil, &WrappedError{Msg: "TPM initialization canceled", Err: ctx.Err()}
+		case <-retry.C:
+		}
+	}
+	return nil, &WrappedError{Msg: fmt.Sprintf("failed to initialize TPM2 after %d attempts", attempts), Err: err}
 }
 
 // CreateManager creates a new initrd manager with all components initialized
@@ -188,40 +233,11 @@ func CreateManager(ctx context.Context, logger *logging.Logger, config *platform
 		SignerStore:  nil, // Optional
 	}
 
-	// Retry TPM initialization with delays to allow TPM to fully initialize
 	// In initramfs environment, TPM device may exist but not be ready yet
-	var tpmModule xkmssdk.TrustedPlatformModule
-	var err error
-	maxRetries := 5
-	retryDelay := 2 * time.Second
-
-	for i := 0; i < maxRetries; i++ {
-		tpmModule, err = xkmssdk.NewTPM2(tpmParams)
-		if err == nil || err == xkmssdk.ErrTPMNotInitialized {
-			// Success! The TPM is open.
-			// ErrNotInitialized just means it hasn't been provisioned yet,
-			// which is fine - we'll handle that gracefully during boot
-			if err == xkmssdk.ErrTPMNotInitialized {
-				logger.Info("TPM opened successfully (not yet provisioned)", "attempt", i+1)
-			} else {
-				logger.Info("TPM initialized successfully", "attempt", i+1)
-			}
-			break
-		}
-
-		if i < maxRetries-1 {
-			logger.Warn("TPM initialization failed, retrying",
-				"attempt", i+1,
-				"max_retries", maxRetries,
-				"error", err,
-				"retry_delay", retryDelay)
-			time.Sleep(retryDelay)
-		}
-	}
-
-	// Only fail if we couldn't open the TPM at all (not including ErrNotInitialized)
-	if err != nil && err != xkmssdk.ErrTPMNotInitialized {
-		return nil, &WrappedError{Msg: fmt.Sprintf("failed to initialize TPM2 after %d attempts", maxRetries), Err: err}
+	openTPM := func() (xkmssdk.TrustedPlatformModule, error) { return xkmssdk.NewTPM2(tpmParams) }
+	tpmModule, err := openTPMWithRetry(ctx, logger, openTPM, tpmOpenAttempts, tpmRetryDelay)
+	if err != nil {
+		return nil, err
 	}
 
 	// 2. Initialize LUKS handler

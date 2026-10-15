@@ -1049,11 +1049,18 @@ func TestStreamContainerLogs(t *testing.T) {
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
-		// Cancel context immediately to test the context.Done() path
+		streamed := make(chan error, 2)
 		go func() {
-			time.Sleep(10 * time.Millisecond)
+			// A pipe write returns only once the handler has read it, so
+			// the stream loop is live when the context is cancelled.
+			_, err := pw.Write([]byte("line 1\n"))
+			streamed <- err
 			cancel()
-			pw.Close()
+			// A handler blocked in Read takes this line and then sees the
+			// cancelled context; one that already returned closed the
+			// reader, which fails the write with io.ErrClosedPipe.
+			_, err = pw.Write([]byte("line 2\n"))
+			streamed <- err
 		}()
 
 		router.ServeHTTP(w, req)
@@ -1061,8 +1068,15 @@ func TestStreamContainerLogs(t *testing.T) {
 		resp := w.Result()
 		defer resp.Body.Close()
 
-		// Response should be OK because we set up SSE headers before streaming
+		assert.NoError(t, <-streamed)
+		if err := <-streamed; err != nil {
+			assert.ErrorIs(t, err, io.ErrClosedPipe)
+		}
+
+		// Response should be OK because we set up SSE headers before
+		// streaming, and the stream ends on the context, not on EOF.
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.NotContains(t, w.Body.String(), "event: end")
 	})
 }
 

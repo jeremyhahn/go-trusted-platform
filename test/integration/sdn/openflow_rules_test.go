@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 )
 
 // TestOpenFlowRulesForNetworkPhases tests OpenFlow rule installation
@@ -71,29 +72,11 @@ func TestOpenFlowRulesForNetworkPhases(t *testing.T) {
 	require.NoError(t, err, "Failed to add port: %s", output)
 
 	// Wait for OVS to create the internal port interface in the kernel and bring it up
-	var linkUpErr error
-	for i := 0; i < 10; i++ {
-		time.Sleep(100 * time.Millisecond)
-		cmd = exec.Command("ip", "link", "set", portName, "up")
-		output, linkUpErr = cmd.CombinedOutput()
-		if linkUpErr == nil {
-			break
-		}
-	}
+	output, linkUpErr := bringInternalPortUp(ctx, portName)
 	require.NoError(t, linkUpErr, "Failed to bring up interface %s after retries: %s", portName, output)
 
-	// Wait for OVS to assign ofport with retry logic
-	var ofport int32
-	for i := 0; i < 10; i++ {
-		time.Sleep(200 * time.Millisecond)
-		cmd = exec.Command("ovs-vsctl", "get", "interface", portName, "ofport")
-		output, err = cmd.CombinedOutput()
-		require.NoError(t, err, "Failed to get ofport: %s", output)
-		fmt.Sscanf(string(output), "%d", &ofport)
-		if ofport > 0 {
-			break
-		}
-	}
+	// Wait for OVS to assign ofport
+	ofport := waitForOFPort(ctx, t, portName)
 	require.Greater(t, ofport, int32(0), "ofport should be positive after retries")
 
 	t.Run("ProvisioningPhaseRules", func(t *testing.T) {
@@ -315,29 +298,11 @@ func TestACLToOpenFlowTranslation(t *testing.T) {
 	require.NoError(t, err, "Failed to add port: %s", output)
 
 	// Wait for OVS to create the internal port interface in the kernel and bring it up
-	var linkUpErr error
-	for i := 0; i < 10; i++ {
-		time.Sleep(100 * time.Millisecond)
-		cmd = exec.Command("ip", "link", "set", portName, "up")
-		output, linkUpErr = cmd.CombinedOutput()
-		if linkUpErr == nil {
-			break
-		}
-	}
+	output, linkUpErr := bringInternalPortUp(ctx, portName)
 	require.NoError(t, linkUpErr, "Failed to bring up interface %s after retries: %s", portName, output)
 
-	// Wait for OVS to assign ofport with retry logic
-	var ofport int32
-	for i := 0; i < 10; i++ {
-		time.Sleep(200 * time.Millisecond)
-		cmd = exec.Command("ovs-vsctl", "get", "interface", portName, "ofport")
-		output, err = cmd.CombinedOutput()
-		require.NoError(t, err, "Failed to get ofport: %s", output)
-		fmt.Sscanf(string(output), "%d", &ofport)
-		if ofport > 0 {
-			break
-		}
-	}
+	// Wait for OVS to assign ofport
+	ofport := waitForOFPort(ctx, t, portName)
 	require.Greater(t, ofport, int32(0), "ofport should be positive after retries")
 
 	t.Run("TCPPortACL", func(t *testing.T) {
@@ -454,29 +419,11 @@ func TestFlowModificationAndRemoval(t *testing.T) {
 	require.NoError(t, err, "Failed to add port: %s", output)
 
 	// Wait for OVS to create the internal port interface in the kernel and bring it up
-	var linkUpErr error
-	for i := 0; i < 10; i++ {
-		time.Sleep(100 * time.Millisecond)
-		cmd = exec.Command("ip", "link", "set", portName, "up")
-		output, linkUpErr = cmd.CombinedOutput()
-		if linkUpErr == nil {
-			break
-		}
-	}
+	output, linkUpErr := bringInternalPortUp(ctx, portName)
 	require.NoError(t, linkUpErr, "Failed to bring up interface %s after retries: %s", portName, output)
 
-	// Wait for OVS to assign ofport with retry logic
-	var ofport int32
-	for i := 0; i < 10; i++ {
-		time.Sleep(200 * time.Millisecond)
-		cmd = exec.Command("ovs-vsctl", "get", "interface", portName, "ofport")
-		output, err = cmd.CombinedOutput()
-		require.NoError(t, err, "Failed to get ofport: %s", output)
-		fmt.Sscanf(string(output), "%d", &ofport)
-		if ofport > 0 {
-			break
-		}
-	}
+	// Wait for OVS to assign ofport
+	ofport := waitForOFPort(ctx, t, portName)
 	require.Greater(t, ofport, int32(0), "ofport should be positive after retries")
 
 	t.Run("AddAndDeleteFlow", func(t *testing.T) {
@@ -600,29 +547,11 @@ func TestVLANFlowManipulation(t *testing.T) {
 	require.NoError(t, err, "Failed to add port: %s", output)
 
 	// Wait for OVS to create the internal port interface in the kernel and bring it up
-	var linkUpErr error
-	for i := 0; i < 10; i++ {
-		time.Sleep(100 * time.Millisecond)
-		cmd = exec.Command("ip", "link", "set", portName, "up")
-		output, linkUpErr = cmd.CombinedOutput()
-		if linkUpErr == nil {
-			break
-		}
-	}
+	output, linkUpErr := bringInternalPortUp(ctx, portName)
 	require.NoError(t, linkUpErr, "Failed to bring up interface %s after retries: %s", portName, output)
 
-	// Wait for OVS to assign ofport with retry logic
-	var ofport int32
-	for i := 0; i < 10; i++ {
-		time.Sleep(200 * time.Millisecond)
-		cmd = exec.Command("ovs-vsctl", "get", "interface", portName, "ofport")
-		output, err = cmd.CombinedOutput()
-		require.NoError(t, err, "Failed to get ofport: %s", output)
-		fmt.Sscanf(string(output), "%d", &ofport)
-		if ofport > 0 {
-			break
-		}
-	}
+	// Wait for OVS to assign ofport
+	ofport := waitForOFPort(ctx, t, portName)
 	require.Greater(t, ofport, int32(0), "ofport should be positive after retries")
 
 	t.Run("AddVLANTag", func(t *testing.T) {
@@ -676,4 +605,25 @@ func TestVLANFlowManipulation(t *testing.T) {
 		err := client.AddFlow(ctx, bridgeName, flowMod)
 		require.NoError(t, err)
 	})
+}
+
+// waitForOFPort polls ovs-vsctl until OVS assigns port a positive OpenFlow
+// port number and returns it; on timeout it logs and returns the last value
+// read, leaving the caller's assertion to fail.
+func waitForOFPort(ctx context.Context, t *testing.T, port string) int32 {
+	t.Helper()
+
+	var ofport int32
+	assigned := func() bool {
+		output, err := exec.CommandContext(ctx, "ovs-vsctl", "get", "interface", port, "ofport").CombinedOutput()
+		require.NoError(t, err, "Failed to get ofport: %s", output)
+		if _, err := fmt.Sscanf(string(output), "%d", &ofport); err != nil {
+			return false
+		}
+		return ofport > 0
+	}
+	if err := testenv.WaitUntil(ctx, ofportTimeout, "ofport for "+port, assigned); err != nil {
+		t.Logf("%v", err)
+	}
+	return ofport
 }

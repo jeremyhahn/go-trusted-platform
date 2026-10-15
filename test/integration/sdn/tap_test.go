@@ -234,15 +234,7 @@ func addInternalPort(bridge, port string) error {
 	}
 
 	// Wait for OVS to create the internal port interface in the kernel and bring it up
-	var linkUpErr error
-	for i := 0; i < 10; i++ {
-		time.Sleep(100 * time.Millisecond)
-		cmd = exec.CommandContext(ctx, "ip", "link", "set", port, "up")
-		output, linkUpErr = cmd.CombinedOutput()
-		if linkUpErr == nil {
-			break
-		}
-	}
+	output, linkUpErr := bringInternalPortUp(ctx, port)
 	if linkUpErr != nil {
 		return fmt.Errorf("failed to bring up interface %s after retries: %v, output: %s", port, linkUpErr, output)
 	}

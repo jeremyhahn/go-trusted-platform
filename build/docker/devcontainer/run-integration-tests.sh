@@ -443,6 +443,48 @@ build_binaries() {
 # vBMC Setup (bmc integration target only)
 # =============================================================================
 
+# prepare_gatewayd_supervision readies the proxy suite's supervised-process
+# tests (#557): it builds gatewayd, which those tests run as a real
+# `gatewayd serve` with the `process:` section on, and delegates the memory
+# and cpu controllers from the container's cgroup root so gatewayd can give
+# each child a leaf with memory.max and cpu.max. cgroup v2 refuses to enable a
+# controller for the children of a cgroup that itself holds processes, and the
+# container's root holds all of them, so they move to a sibling leaf first —
+# the step docker-in-docker takes for the same reason.
+prepare_gatewayd_supervision() {
+    echo "=== Preparing gatewayd supervision ==="
+    if ! go build -buildvcs=false -tags "${BUILD_TAGS}" \
+        -ldflags "${LDFLAGS}" \
+        -o /tmp/gatewayd ./cmd/gatewayd/; then
+        echo "FATAL: gatewayd build failed"
+        exit 1
+    fi
+    export GATEWAYD_PATH=/tmp/gatewayd
+    echo "gatewayd built: ${GATEWAYD_PATH}"
+
+    local root=/sys/fs/cgroup
+    if [ ! -f "${root}/cgroup.controllers" ]; then
+        echo "FATAL: ${root} is not a cgroup v2 mount"
+        exit 1
+    fi
+    mkdir -p "${root}/init"
+    # A process forked while the list is moved lands back in the root, so
+    # the move repeats until enabling the controllers stops failing.
+    local attempt
+    for attempt in 1 2 3 4 5; do
+        local pid
+        while read -r pid; do
+            echo "${pid}" > "${root}/init/cgroup.procs" 2>/dev/null || true
+        done < "${root}/cgroup.procs"
+        if echo "+memory +cpu" > "${root}/cgroup.subtree_control" 2>/dev/null; then
+            echo "cgroup controllers delegated: $(cat "${root}/cgroup.subtree_control")"
+            return 0
+        fi
+    done
+    echo "FATAL: cannot enable memory and cpu in ${root}/cgroup.subtree_control"
+    exit 1
+}
+
 # start_vbmc builds and starts the virtual BMC responder, exports the harness
 # environment variables, downloads the vBMC CA cert for daemon trust injection,
 # and generates a modified platformd config that trusts the vBMC HTTPS cert.
@@ -805,6 +847,11 @@ elif [ "$RUN_TARGET" = "bmc" ]; then
     # modified config that trusts it), then start platformd with that config.
     start_vbmc || echo "WARNING: vBMC setup failed, BMC tests may fail"
     start_platformd "${VBMC_PLATFORMD_CONFIG}" || abort_no_daemon
+elif [ "$RUN_TARGET" = "proxy" ]; then
+    # The proxy suite talks to the shared platformd and also runs gatewayd
+    # itself, supervised, to kill its children under load.
+    start_platformd || abort_no_daemon
+    prepare_gatewayd_supervision
 elif [ "$RUN_TARGET" = "lb" ]; then
     # The load balancer test drives OVS directly and needs no daemon.
     echo "=== lb target: skipping shared platformd ==="

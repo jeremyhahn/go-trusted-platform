@@ -853,7 +853,7 @@ together with stateless NAT failover. Conntrack/NAT state sync is #710.
 | `Supervisor` | implements `gateway.ServiceSupervisor`: `Supervises`, `StartService`, `StopService`, `ServiceActive`, `ServiceHealth`, `ServiceSnapshot`, `Apply`, plus `Snapshot` and `Shutdown` |
 | `Config`, `Settings` | the supervisor's wiring, and the `process:` YAML section that builds it |
 | `Launcher`, `Spec`, `Child`, `ExecLauncher` | how a child is started; tests substitute a launcher whose children are in-process IPC servers |
-| `CgroupManager` | one cgroup v2 leaf per process, `memory.max` and `cpu.max` written before the child exists |
+| `CgroupManager` | one cgroup v2 leaf per process; `+memory`/`+cpu` enabled in the `cgroup.subtree_control` of every `cgroup-parent` directory, then `memory.max` and `cpu.max` written before the child exists |
 | `EnterHardened` | the child-side privilege drop: harden one thread, re-execute from it, verify every thread |
 
 **The class table is not configuration.** `definitions` in `class.go` is the
@@ -1205,6 +1205,44 @@ socket no longer answers is `process.ErrProcessDown`; the parent wraps it in
 `gateway.ErrSupervisedSnapshot` and reports it in `bgp.error`, keeping the
 configured `local_asn` and `router_id`, rather than presenting a speaker with
 no peers.
+
+**Verified under load** (`test/integration/proxy/supervisor_test.go`, run by
+`make integration-test-proxy`). The suite starts a real `gatewayd serve` as
+root with `process.enabled`, a `bgp:` section with no peers and a public proxy
+route to an echo backend, and keeps four clients requesting through the proxy.
+`TestGatewaydSupervisorKillUnderLoad` checks that the children are exactly
+`proxy` and `routing`, the classes the assembly starts. It then `SIGKILL`s
+each one in turn and asserts the following:
+
+- a child with a new PID answers its probe (the proxy serves, the BGP port
+  accepts) within the relaunch bound;
+- every other child keeps its PID;
+- traffic flows again within the same bound;
+- killing `routing` costs the proxy no failed request.
+
+`TestGatewaydSupervisorMemoryMaxRestartsOnlyThatChild` drives `routing` past
+its limit from outside. It checks the child sits in its own leaf at the class
+`memory.max`, then sets `memory.swap.max` to 0 and lowers the live leaf's
+`memory.max` to 1 MiB. It then asserts the following:
+
+- the kernel's `oom_kill` count in `memory.events` rises;
+- only that child comes back, with a new PID;
+- the relaunch rewrites the class limit (`Prepare` runs on every launch);
+- the proxy loses no request.
+
+The devcontainer harness delegates `+memory +cpu` at the container's cgroup
+root before the suite runs (`prepare_gatewayd_supervision`). This works the
+way a systemd host does: the root's processes first move to an `init` leaf,
+because a cgroup holding processes cannot enable controllers for its children.
+
+The bound is `DefaultRestartBackoff` plus the suite's `ready-timeout` (10s).
+The requirement names no recovery deadline, so this bound is the suite's
+choice, not a documented contract. Two parts of the acceptance are not proven
+here:
+
+- **Reconciled flows.** No supervised process owns OVS flows until `datapath`
+  moves.
+- **BGP graceful restart.** The suite has no BGP peer.
 
 **Still pending:** the next processes, in this order:
 `vpn` once it has a backend (the

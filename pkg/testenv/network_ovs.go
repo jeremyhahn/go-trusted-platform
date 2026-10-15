@@ -275,8 +275,10 @@ func (n *OVSIsolatedNetwork) assignBridgeIP() error {
 	}
 	fmt.Printf("[OVS] Bridge %s is now UP\n", n.config.BridgeName)
 
-	// Small delay to ensure kernel state is stable
-	time.Sleep(100 * time.Millisecond)
+	// Wait until the kernel reports the bridge up with its gateway address
+	if err := n.waitForBridgeAddress(); err != nil {
+		return &WrappedError{Msg: "bridge address not ready", Err: err}
+	}
 
 	// Verify the bridge is actually up with the correct IP
 	verifyCmd := exec.Command("ip", "addr", "show", n.config.BridgeName)
@@ -287,18 +289,45 @@ func (n *OVSIsolatedNetwork) assignBridgeIP() error {
 	return nil
 }
 
+// ovsInterfaceTimeout bounds how long ovs-vswitchd may take to create,
+// configure or remove a bridge's kernel interface
+const ovsInterfaceTimeout = 5 * time.Second
+
 // waitForBridgeInterface waits for the OVS bridge kernel interface to appear
 func (n *OVSIsolatedNetwork) waitForBridgeInterface() error {
-	// Wait up to 5 seconds for the interface to appear
-	for i := 0; i < 50; i++ {
-		// Check if interface exists using ip link
-		cmd := exec.Command("ip", "link", "show", n.config.BridgeName)
-		if err := cmd.Run(); err == nil {
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
+	exists := func() bool {
+		_, err := net.InterfaceByName(n.config.BridgeName)
+		return err == nil
 	}
-	return &MessageError{Msg: fmt.Sprintf("timeout waiting for bridge interface %s", n.config.BridgeName)}
+	return WaitUntil(context.Background(), ovsInterfaceTimeout, "OVS bridge "+n.config.BridgeName+" kernel interface", exists)
+}
+
+// waitForBridgeAddress waits for the kernel to report the OVS bridge up with
+// the gateway address assigned to it
+func (n *OVSIsolatedNetwork) waitForBridgeAddress() error {
+	ready := func() bool {
+		return interfaceUpWithIP(n.config.BridgeName, n.config.GatewayIP)
+	}
+	return WaitUntil(context.Background(), ovsInterfaceTimeout, "OVS bridge "+n.config.BridgeName+" up with "+n.config.GatewayIP.String(), ready)
+}
+
+// interfaceUpWithIP reports whether the named interface exists, is
+// administratively up, and carries ip among its addresses
+func interfaceUpWithIP(name string, ip net.IP) bool {
+	iface, err := net.InterfaceByName(name)
+	if err != nil || iface.Flags&net.FlagUp == 0 {
+		return false
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return false
+	}
+	for _, addr := range addrs {
+		if ipNet, ok := addr.(*net.IPNet); ok && ipNet.IP.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // enableIPForwarding enables IPv4 forwarding

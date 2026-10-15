@@ -114,6 +114,16 @@ func TestMaskSize(t *testing.T) {
 	}
 }
 
+func TestInterfaceUpWithIP_Loopback(t *testing.T) {
+	// Every network namespace has lo up with 127.0.0.1; reading it changes nothing
+	assert.True(t, interfaceUpWithIP("lo", net.ParseIP("127.0.0.1")))
+}
+
+func TestInterfaceUpWithIP_NotReady(t *testing.T) {
+	assert.False(t, interfaceUpWithIP("lo", net.ParseIP("192.0.2.1")), "address not assigned")
+	assert.False(t, interfaceUpWithIP("tp-no-such-br0", net.ParseIP("127.0.0.1")), "interface missing")
+}
+
 func TestDefaultOVSSocketPath(t *testing.T) {
 	assert.Equal(t, "/var/run/openvswitch/db.sock", DefaultOVSSocketPath)
 }

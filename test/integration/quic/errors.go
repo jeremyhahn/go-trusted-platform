@@ -97,11 +97,32 @@ func (e ErrTestSetupFailed) Unwrap() error {
 	return e.Cause
 }
 
-// ErrServiceUnavailable is returned when a required service is not available.
+// ErrServiceUnavailable is returned when the daemon answers StatusUnavailable
+// for a service this suite covers. The devcontainer daemon wires every one of
+// them, so an unavailable service is a failure, not a reason to skip.
 type ErrServiceUnavailable struct {
 	Service string
 }
 
 func (e ErrServiceUnavailable) Error() string {
-	return fmt.Sprintf("service unavailable: %s", e.Service)
+	return fmt.Sprintf("%s service unavailable: platformd answered StatusUnavailable; "+
+		"run the suite with make integration-test, whose daemon (test/integration/config.yaml) wires it", e.Service)
+}
+
+// ErrQUICServerRequired is returned when the suite cannot reach the platformd
+// QUIC listener. build/docker/devcontainer/run-integration-tests.sh starts
+// platformd with --quic-port and exports QUIC_SERVER_ADDR, so a missing
+// server is a failure, not a reason to skip.
+type ErrQUICServerRequired struct {
+	Address string
+	Cause   error
+}
+
+func (e ErrQUICServerRequired) Error() string {
+	return fmt.Sprintf("QUIC server not reachable at %s: %v (run the suite with make integration-test, "+
+		"which starts platformd with --quic-port and exports QUIC_SERVER_ADDR)", e.Address, e.Cause)
+}
+
+func (e ErrQUICServerRequired) Unwrap() error {
+	return e.Cause
 }

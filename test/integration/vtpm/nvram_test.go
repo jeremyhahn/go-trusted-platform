@@ -265,12 +265,7 @@ func setupSWTPM(t *testing.T, ctx context.Context, stateDir, socketPath string) 
 	require.NoError(t, err, "Failed to start SWTPM")
 
 	// Wait for socket to be ready
-	for i := 0; i < 50; i++ {
-		if _, err := os.Stat(socketPath); err == nil {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	waitForSocket(t, socketPath)
 
 	// Verify socket exists
 	_, err = os.Stat(socketPath)

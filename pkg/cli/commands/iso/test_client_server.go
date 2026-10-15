@@ -734,6 +734,9 @@ func stopCSServerVM(logger *logging.Logger) {
 // waitForCSServerReady waits for the server to be reachable via ping and DNS
 // The server may reboot during firstboot provisioning, so this function handles
 // the server going down and coming back up.
+// csReadyPollInterval is the pause between readiness probes of the server VM.
+const csReadyPollInterval = 2 * time.Second
+
 func waitForCSServerReady(ctx context.Context, logger *logging.Logger, serverIP string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 
@@ -827,7 +830,11 @@ func waitForCSServerReady(ctx context.Context, logger *logging.Logger, serverIP 
 			return nil
 		}
 
-		time.Sleep(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(csReadyPollInterval):
+		}
 	}
 
 	if !pingReachable {
@@ -927,7 +934,11 @@ func waitForCSServerReadyUserNetwork(ctx context.Context, logger *logging.Logger
 			return nil
 		}
 
-		time.Sleep(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(csReadyPollInterval):
+		}
 	}
 
 	if !httpsReady {

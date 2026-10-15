@@ -60,12 +60,7 @@ func TestSWTPM_Lifecycle(t *testing.T) {
 	require.NoError(t, err, "Failed to start SWTPM")
 
 	// Wait for socket
-	for i := 0; i < 50; i++ {
-		if _, err := os.Stat(socketPath); err == nil {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	waitForSocket(t, socketPath)
 
 	// Verify socket exists
 	_, err = os.Stat(socketPath)
@@ -271,12 +266,7 @@ func TestSWTPM_RestartWithState(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for socket
-	for i := 0; i < 50; i++ {
-		if _, err := os.Stat(socketPath); err == nil {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	waitForSocket(t, socketPath)
 
 	cert := generateTestCert(t, "Persistent Certificate")
 	injector := vtpm.NewEKCertInjector(socketPath, nil)
@@ -297,12 +287,7 @@ func TestSWTPM_RestartWithState(t *testing.T) {
 	defer sw2.Stop()
 
 	// Wait for socket
-	for i := 0; i < 50; i++ {
-		if _, err := os.Stat(socketPath); err == nil {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	waitForSocket(t, socketPath)
 
 	injector2 := vtpm.NewEKCertInjector(socketPath, nil)
 	readCert, err := injector2.ReadCertificate(ctx, vtpm.EKAlgorithmRSA)
@@ -333,12 +318,7 @@ func setupSWTPMBundle(t *testing.T, ctx context.Context, stateDir, socketPath st
 	require.NoError(t, err, "Failed to start SWTPM")
 
 	// Wait for socket to be ready
-	for i := 0; i < 50; i++ {
-		if _, err := os.Stat(socketPath); err == nil {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	waitForSocket(t, socketPath)
 
 	_, err = os.Stat(socketPath)
 	require.NoError(t, err, "SWTPM socket not created")

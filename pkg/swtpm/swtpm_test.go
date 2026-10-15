@@ -686,9 +686,8 @@ func TestStopAfterKill(t *testing.T) {
 
 	// Kill the process first
 	if swtpm.cmd != nil && swtpm.cmd.Process != nil {
-		_ = swtpm.cmd.Process.Kill()
-		// Give the wait goroutine time to detect the exit
-		time.Sleep(100 * time.Millisecond)
+		require.NoError(t, swtpm.cmd.Process.Kill())
+		<-swtpm.exitCh
 	}
 
 	// Stop should handle the already-dead process gracefully
@@ -763,18 +762,11 @@ func TestIsRunningAfterProcessKilled(t *testing.T) {
 
 	// Kill the process
 	if swtpm.cmd != nil && swtpm.cmd.Process != nil {
-		_ = swtpm.cmd.Process.Kill()
+		require.NoError(t, swtpm.cmd.Process.Kill())
 	}
 
-	// Wait for the exit to be detected by the wait goroutine
-	// Poll with timeout instead of sleeping
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if !swtpm.IsRunning() {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	// The wait goroutine closes exitCh once it has recorded the exit.
+	<-swtpm.exitCh
 
 	// IsRunning should return false after process is killed
 	assert.False(t, swtpm.IsRunning())

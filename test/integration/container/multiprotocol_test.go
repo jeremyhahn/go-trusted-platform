@@ -520,8 +520,10 @@ func runContainerLogsTests(t *testing.T, ctx context.Context, cmd ContainerComma
 	err = cmd.Start(testCtx, created.ID)
 	require.NoError(t, err, "Setup: Start should succeed")
 
-	// Wait for container to produce output
-	time.Sleep(2 * time.Second)
+	// Wait for container to produce output; the subtests below assert on it
+	if err := WaitForContainerLogs(testCtx, cmd, created.ID); err != nil {
+		t.Logf("%v", err)
+	}
 
 	t.Run("GetContainerLogs", func(t *testing.T) {
 		logs, err := cmd.Logs(testCtx, created.ID, LogOptions{Stdout: true, Stderr: true})
@@ -727,7 +729,9 @@ func runContainerFullLifecycleTests(t *testing.T, ctx context.Context, cmd Conta
 
 		// Phase 4: Get logs
 		t.Log("=== Phase 4: Get Logs ===")
-		time.Sleep(2 * time.Second) // Wait for output
+		if err := WaitForContainerLogs(testCtx, cmd, containerID); err != nil {
+			t.Logf("%v", err)
+		}
 		logs, err := cmd.Logs(testCtx, containerID, LogOptions{Stdout: true, Stderr: true})
 		require.NoError(t, err, "Logs should succeed")
 		t.Logf("Retrieved %d log lines", len(logs))

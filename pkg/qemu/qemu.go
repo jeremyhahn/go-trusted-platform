@@ -16,6 +16,7 @@ package qemu
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -35,6 +36,15 @@ const defaultQMPTimeout = 5 * time.Second
 
 // Default timeout for graceful shutdown via QMP before falling back to SIGTERM
 const defaultGracefulShutdownTimeout = 30 * time.Second
+
+// How long Start waits for QEMU to create the TAP device before bringing it up
+const tapOpenTimeout = 2 * time.Second
+
+// How long StopExistingByTap waits for signalled processes to exit
+const processExitTimeout = 500 * time.Millisecond
+
+// How often the wait helpers re-check their condition
+const pollInterval = 100 * time.Millisecond
 
 // VM represents a QEMU virtual machine instance
 type VM struct {
@@ -488,8 +498,11 @@ func (vm *VM) Start(ctx context.Context, mode string) error {
 	// QEMU with script=no,downscript=no doesn't run helper scripts to bring the TAP up
 	// so we must do it ourselves after QEMU has opened the device
 	if vm.config.TapDevice != "" {
-		// Small delay to ensure QEMU has opened the TAP device
-		time.Sleep(100 * time.Millisecond)
+		// QEMU creates the TAP device when it opens it
+		tapPath := filepath.Join(sysClassNet, vm.config.TapDevice)
+		if !waitForPath(ctx, tapPath, tapOpenTimeout) {
+			vm.logger.Warnf("TAP device %s did not appear within %s", vm.config.TapDevice, tapOpenTimeout)
+		}
 		if err := vm.bringTapUp(); err != nil {
 			vm.logger.Warnf("Failed to bring up TAP device %s: %v", vm.config.TapDevice, err)
 		} else {
@@ -707,17 +720,10 @@ func (vm *VM) ConnectMonitor(ctx context.Context) error {
 		}
 	}
 
-	socketReady := false
-	startTime := time.Now()
-	for time.Since(startTime) < timeout {
-		if _, err := os.Stat(qmpSocketPath); err == nil {
-			socketReady = true
-			break
+	if !waitForPath(ctx, qmpSocketPath, timeout) {
+		if ctx != nil && errors.Is(ctx.Err(), context.Canceled) {
+			return &WrappedError{Msg: "canceled waiting for QMP socket " + qmpSocketPath, Err: ctx.Err()}
 		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	if !socketReady {
 		return ErrMonitorSocketNotFound{SocketPath: qmpSocketPath}
 	}
 
@@ -940,60 +946,106 @@ func StopExistingByTap(tapDevice string) error {
 		return nil
 	}
 
-	// Find QEMU processes using this TAP device by searching for the ifname argument
-	// The QEMU command line contains: -netdev tap,...,ifname=<tapDevice>,...
+	pids, err := findQEMUByTap(tapDevice)
+	if err != nil {
+		return err
+	}
+
+	// Send SIGTERM for graceful shutdown and give the processes a moment to exit
+	waitForProcessesExit(signalProcesses(pids, syscall.SIGTERM), processExitTimeout)
+
+	// Force kill any process still running and wait for it to be reaped
+	pids, err = findQEMUByTap(tapDevice)
+	if err != nil {
+		return err
+	}
+	waitForProcessesExit(signalProcesses(pids, syscall.SIGKILL), processExitTimeout)
+
+	return nil
+}
+
+// findQEMUByTap returns the PIDs of the QEMU processes using tapDevice. The
+// QEMU command line contains: -netdev tap,...,ifname=<tapDevice>,...
+func findQEMUByTap(tapDevice string) ([]int, error) {
 	cmd := exec.Command("pgrep", "-f", fmt.Sprintf("qemu.*ifname=%s", tapDevice))
 	output, err := cmd.Output()
 	if err != nil {
 		// pgrep returns exit code 1 if no processes found - this is expected
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			return nil
+			return nil, nil
 		}
-		return &WrappedError{Msg: "failed to find QEMU processes", Err: err}
+		return nil, &WrappedError{Msg: "failed to find QEMU processes", Err: err}
 	}
 
-	// Parse PIDs and kill each process
-	pids := strings.Fields(strings.TrimSpace(string(output)))
-	for _, pidStr := range pids {
+	var pids []int
+	for _, pidStr := range strings.Fields(string(output)) {
 		pid, err := strconv.Atoi(pidStr)
 		if err != nil {
 			continue
 		}
+		pids = append(pids, pid)
+	}
+	return pids, nil
+}
 
-		// Send SIGTERM for graceful shutdown
-		process, err := os.FindProcess(pid)
-		if err != nil {
+// signalProcesses sends sig to each PID and returns the PIDs it reached. A
+// process that has already exited is skipped.
+func signalProcesses(pids []int, sig syscall.Signal) []int {
+	var signalled []int
+	for _, pid := range pids {
+		if err := syscall.Kill(pid, sig); err != nil {
 			continue
 		}
+		signalled = append(signalled, pid)
+	}
+	return signalled
+}
 
-		if err := process.Signal(syscall.SIGTERM); err != nil {
-			// Process may have already exited
-			continue
+// waitForProcessesExit waits up to timeout for every PID to exit and reports
+// whether they all did.
+func waitForProcessesExit(pids []int, timeout time.Duration) bool {
+	return waitFor(context.Background(), timeout, func() bool {
+		for _, pid := range pids {
+			if !errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+				return false
+			}
 		}
+		return true
+	})
+}
+
+// waitForPath waits up to timeout for path to exist and reports whether it
+// does. A nil ctx never cancels the wait.
+func waitForPath(ctx context.Context, path string, timeout time.Duration) bool {
+	return waitFor(ctx, timeout, func() bool {
+		_, err := os.Stat(path)
+		return err == nil
+	})
+}
+
+// waitFor checks done every pollInterval until it returns true, the timeout
+// elapses, or ctx is cancelled, and reports whether done returned true. A nil
+// ctx never cancels the wait.
+func waitFor(ctx context.Context, timeout time.Duration, done func() bool) bool {
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
-	// Wait a moment for processes to terminate
-	time.Sleep(500 * time.Millisecond)
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
 
-	// Check if any processes are still running and force kill them
-	cmd = exec.Command("pgrep", "-f", fmt.Sprintf("qemu.*ifname=%s", tapDevice))
-	if output, err = cmd.Output(); err == nil && len(strings.TrimSpace(string(output))) > 0 {
-		// Some processes are still running, send SIGKILL
-		pids = strings.Fields(strings.TrimSpace(string(output)))
-		for _, pidStr := range pids {
-			pid, err := strconv.Atoi(pidStr)
-			if err != nil {
-				continue
-			}
-			process, err := os.FindProcess(pid)
-			if err != nil {
-				continue
-			}
-			_ = process.Kill()
+	for {
+		if done() {
+			return true
 		}
-		// Wait for processes to be reaped
-		time.Sleep(500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return false
+		case <-deadline.C:
+			return false
+		case <-ticker.C:
+		}
 	}
-
-	return nil
 }

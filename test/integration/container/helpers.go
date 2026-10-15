@@ -25,6 +25,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 )
 
 // =============================================================================
@@ -195,56 +197,18 @@ func CleanupContainersByPrefix(t *testing.T, ctx context.Context, cmd ContainerC
 // Wait Helpers
 // =============================================================================
 
-// WaitForContainerState waits for a container to reach the expected state.
-func WaitForContainerState(
-	ctx context.Context,
-	cmd ContainerCommands,
-	id string,
-	expectedState ContainerState,
-	pollInterval time.Duration,
-) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			container, err := cmd.Get(ctx, id)
-			if err != nil {
-				return err
-			}
-			if container.State == expectedState {
-				return nil
-			}
-			time.Sleep(pollInterval)
-		}
+// containerLogsTimeout bounds the wait for a started container's first output.
+const containerLogsTimeout = 10 * time.Second
+
+// WaitForContainerLogs waits until the container's stdout or stderr holds at
+// least one line. A Logs error counts as no output yet; the caller's own Logs
+// call reports any error that persists.
+func WaitForContainerLogs(ctx context.Context, cmd ContainerCommands, id string) error {
+	hasOutput := func() bool {
+		logs, err := cmd.Logs(ctx, id, LogOptions{Stdout: true, Stderr: true})
+		return err == nil && len(logs) > 0
 	}
-}
-
-// WaitForContainerRunning waits for a container to be running.
-func WaitForContainerRunning(ctx context.Context, cmd ContainerCommands, id string) error {
-	return WaitForContainerState(ctx, cmd, id, StateRunning, 500*time.Millisecond)
-}
-
-// WaitForContainerStopped waits for a container to be stopped.
-func WaitForContainerStopped(ctx context.Context, cmd ContainerCommands, id string) error {
-	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	for {
-		select {
-		case <-waitCtx.Done():
-			return waitCtx.Err()
-		default:
-			container, err := cmd.Get(waitCtx, id)
-			if err != nil {
-				return err
-			}
-			if container.State.IsStopped() {
-				return nil
-			}
-			time.Sleep(500 * time.Millisecond)
-		}
-	}
+	return testenv.WaitUntil(ctx, containerLogsTimeout, "container "+id+" output", hasOutput)
 }
 
 // =============================================================================

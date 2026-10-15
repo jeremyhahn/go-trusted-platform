@@ -1777,6 +1777,51 @@ func TestCgroupManager_ReportsAnUnwritableTree(t *testing.T) {
 	assert.Equal(t, "create", cgroupErr.Op)
 }
 
+func TestCgroupManager_DelegatesControllersDownEveryParentDirectory(t *testing.T) {
+	root := t.TempDir()
+	manager := &CgroupManager{Root: root, Parent: "gatewayd.slice/edge"}
+	def, err := DefinitionByName("proxy")
+	require.NoError(t, err)
+
+	leaf, err := manager.Prepare(def)
+	require.NoError(t, err)
+	t.Cleanup(func() { leaf.Close() })
+
+	for _, dir := range []string{"gatewayd.slice", filepath.Join("gatewayd.slice", "edge")} {
+		control, err := os.ReadFile(filepath.Join(root, dir, "cgroup.subtree_control"))
+		require.NoError(t, err, dir)
+		assert.Equal(t, "+memory +cpu", string(control), dir)
+	}
+	_, err = os.Stat(filepath.Join(root, "cgroup.subtree_control"))
+	assert.True(t, os.IsNotExist(err), "the root's subtree_control belongs to the host")
+	_, err = os.Stat(filepath.Join(root, "gatewayd.slice", "edge", "proxy", "cgroup.subtree_control"))
+	assert.True(t, os.IsNotExist(err), "the leaf holds the process and delegates nothing")
+
+	unlimited, err := manager.Prepare(Definition{Name: "plain"})
+	require.NoError(t, err)
+	t.Cleanup(func() { unlimited.Close() })
+	control, err := os.ReadFile(filepath.Join(root, "gatewayd.slice", "cgroup.subtree_control"))
+	require.NoError(t, err)
+	assert.Equal(t, "+memory +cpu", string(control), "a class without limits enables nothing")
+}
+
+func TestCgroupManager_ReportsAControllerItCannotDelegate(t *testing.T) {
+	root := t.TempDir()
+	// A directory where the interface file should be makes the write fail
+	// the way a kernel refusal (EBUSY, EACCES) would.
+	control := filepath.Join(root, "gatewayd", "cgroup.subtree_control")
+	require.NoError(t, os.MkdirAll(control, 0o750))
+
+	manager := &CgroupManager{Root: root, Parent: "gatewayd"}
+	_, err := manager.Prepare(Definition{Name: "routing", MemoryMax: 1 << 20})
+	var cgroupErr *ErrCgroup
+	require.ErrorAs(t, err, &cgroupErr)
+	assert.Equal(t, "write", cgroupErr.Op)
+	assert.Equal(t, control, cgroupErr.Path)
+	_, err = os.Stat(filepath.Join(root, "gatewayd", "routing", "memory.max"))
+	assert.True(t, os.IsNotExist(err), "no limit is written below a parent that refused the controller")
+}
+
 func TestSettings_ResolvesTheServiceAccountAndDefaults(t *testing.T) {
 	// The current account always exists, so it stands in for the packaged
 	// gatewayd account here.

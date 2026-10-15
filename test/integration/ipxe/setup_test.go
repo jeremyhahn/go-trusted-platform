@@ -26,6 +26,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 )
 
 var (
@@ -152,25 +153,15 @@ func stopTestServer() {
 
 // waitForServerReady waits for the server to be ready to accept connections.
 func waitForServerReady() error {
-	timeout := time.After(10 * time.Second)
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	httpAddr := net.JoinHostPort(testServerIP, fmt.Sprintf("%d", testHTTPPort))
-
-	for {
-		select {
-		case <-timeout:
-			return fmt.Errorf("timeout waiting for server to be ready")
-		case <-ticker.C:
-			conn, err := net.DialTimeout("tcp", httpAddr, 100*time.Millisecond)
-			if err == nil {
-				conn.Close()
-				// Give a bit more time for full initialization
-				time.Sleep(100 * time.Millisecond)
-				return nil
-			}
-		}
+	// Ready closes once the HTTP and TFTP listeners have both bound
+	select {
+	case <-testServer.Ready():
+		return nil
+	case <-ctx.Done():
+		return &testenv.WaitTimeoutError{Condition: "iPXE server listeners bound", Err: ctx.Err()}
 	}
 }
 

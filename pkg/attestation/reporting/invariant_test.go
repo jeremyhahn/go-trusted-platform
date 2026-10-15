@@ -32,16 +32,23 @@ type countingSource struct {
 	calls    []string
 	evidence []byte
 	err      error
+	// changed receives a token after each recorded call (see notifyChanged).
+	changed chan struct{}
 }
 
 func newCountingSource() *countingSource {
-	return &countingSource{mu: make(chan struct{}, 1), evidence: []byte(`{"quote":"x"}`)}
+	return &countingSource{
+		mu:       make(chan struct{}, 1),
+		evidence: []byte(`{"quote":"x"}`),
+		changed:  make(chan struct{}, 1),
+	}
 }
 
 func (s *countingSource) Collect(_ context.Context, deviceID string, nonce []byte) ([]byte, error) {
 	s.mu <- struct{}{}
 	s.calls = append(s.calls, deviceID)
 	<-s.mu
+	notifyChanged(s.changed)
 	if s.err != nil {
 		return nil, s.err
 	}

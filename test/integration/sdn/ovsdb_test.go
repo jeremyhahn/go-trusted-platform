@@ -25,6 +25,8 @@ import (
 	"github.com/ovn-org/libovsdb/ovsdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 )
 
 const (
@@ -207,8 +209,11 @@ func TestOVSDBReconnection(t *testing.T) {
 	// Test disconnect
 	ovs.Disconnect()
 
-	// Give time for disconnect
-	time.Sleep(500 * time.Millisecond)
+	// Wait for the client to observe the disconnect
+	disconnected := func() bool { return !ovs.Connected() }
+	if err := testenv.WaitUntil(ctx, 5*time.Second, "OVSDB client disconnect", disconnected); err != nil {
+		t.Logf("%v", err)
+	}
 
 	// Reconnect
 	err = ovs.Connect(ctx)

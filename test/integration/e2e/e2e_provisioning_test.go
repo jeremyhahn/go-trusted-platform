@@ -32,6 +32,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -260,7 +261,7 @@ func testServerProvisioning(ctx context.Context, t *testing.T, infra *TestInfras
 	// marker is a property of the server ISO and is not known here. Inventing a
 	// pattern would be worse than waiting -- a poll that never matches burns the
 	// whole budget and then claims a verification it did not perform.
-	time.Sleep(serverBootBudget)
+	require.NoError(t, testenv.Elapse(ctx, serverBootBudget))
 
 	// Deliberately NOT "Phase 2 complete: Server provisioned". Nothing here
 	// establishes that the server was provisioned, and a log line that says so
@@ -343,7 +344,7 @@ func testClientProvisioning(ctx context.Context, t *testing.T, infra *TestInfras
 	// NOTHING BELOW VERIFIES ANY OF THE ABOVE (#372) -- same shape as Phase 2:
 	// an unconditional budget, because the enrollment-completion marker is a
 	// property of the client ISO and is not known here.
-	time.Sleep(clientEnrollBudget)
+	require.NoError(t, testenv.Elapse(ctx, clientEnrollBudget))
 
 	// Transition to enrolled state
 	err = infra.PolicyEngine.SetPortState(infra.ClientTapName, policy.PortStateEnrolled)
@@ -412,9 +413,10 @@ func testNetworkTransition(ctx context.Context, t *testing.T, infra *TestInfrast
 	require.NoError(t, err, "Failed to get port state")
 	assert.Equal(t, policy.PortStateAuthorized, state, "Port should be in authorized state")
 
-	// Wait for network transition to settle
+	// Wait for network transition to settle. Nothing observable marks the end
+	// (the flows go to a mock controller), so this is elapsed time.
 	infra.Logger.Info("Waiting for network transition to complete")
-	time.Sleep(NetworkTransitionWait)
+	require.NoError(t, testenv.Elapse(ctx, NetworkTransitionWait))
 
 	infra.Logger.Info("Phase 4 complete: Network transition successful",
 		"from_vlan", infra.Config.ProvisioningNetwork.VLAN,
