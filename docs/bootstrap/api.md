@@ -30,7 +30,7 @@ speaks plain HTTP to a local endpoint rather than any of the six transports:
 | Out-of-band surface | Where | Why it exists |
 |---|---|---|
 | The pre-unseal HTTP mux — `/healthz`, `/init`, `/unseal` | `pkg/api/rest/init_handlers.go`, bound on a bare `http.ServeMux` with no `/api/v1` prefix, on the Unix socket and `127.0.0.1:9446` only | It has to answer *before* the barrier is unsealed, when no other transport is bound ([`docs/daemon/api.md`](../daemon/api.md) §1) |
-| The Noise_NK bundle listener | `pkg/api/noise`, default `:9999` | It has to work when TLS cannot be verified at all |
+| The Noise_NK bundle listener | `pkg/api/noise`, default `:9999` (`pkg/bootstrap` `DefaultConfig`) | It has to work when TLS cannot be verified at all |
 | The bootstrap container's HTTP server — `/installs/…`, `/config/mac/…`, `/boot.ipxe`, `/health` | `pkg/ipxe/http_server.go`, `:8080` on the deployer host | It serves machines that have no identity yet; see [`docs/ipxe/architecture.md`](../ipxe/architecture.md) |
 
 ---
@@ -58,11 +58,15 @@ reachable through the six.
 ³ Constructed in production and shared between the platform's own certificate
 flow and the SDK-registered publisher adapter, so there is one DNS-write path.
 
-⁴ Reached from the CLI (`bootstrap trust --install-to-system-trust`), not from a
-service.
+⁴ Reached from the CLI (`bootstrap trust --install-to-system-trust`) and from
+daemon start-up when the trust config sets `install-to-system-trust`
+(`pkg/app`), not from a service.
 
-⁵ Constructed in production and wired into `tls.Config.GetCertificate`, but
-**no production code calls `Reload`** ([engineering.md](engineering.md) §7.3).
+⁵ Constructed in production and wired into `tls.Config.GetCertificate`.
+`WebServerV1.ReloadCertificate` calls `Reload`; `serve` registers it as the
+webservice certificate installer, so the renewal sweep rotates the live
+certificate ([`docs/operations/cert-lifecycle.md`](../operations/cert-lifecycle.md)).
+`RolloverManager` also calls `Reload`, but nothing in production constructs it.
 
 ### `GET /v1/ca/bootstrap` and `GET /api/v1/ca/bootstrap`
 
