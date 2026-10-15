@@ -1,6 +1,7 @@
 # SDN MCP API Reference
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
+
 > The SDN tools of the platform MCP server.
 
 Transport: MCP (stdio / HTTPS, port 9445).

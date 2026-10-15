@@ -1,6 +1,7 @@
 # SDN QUIC API Reference
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
+
 > The SDN opcodes of the platform QUIC protocol.
 
 Endpoint: UDP port 9444, mTLS required.

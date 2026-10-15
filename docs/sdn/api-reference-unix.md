@@ -1,6 +1,6 @@
 # SDN Unix Socket API Reference
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > How to reach the SDN service over the local socket.
 
 Socket: `/run/platformd.sock`
@@ -39,7 +39,10 @@ platformctl --transport unix sdn port delete eth0 --bridge br0
 platformctl --transport unix sdn flow add --bridge br0 --id f1 --table 0 --priority 100 \
   --in-port 1 --action output --action-port 2
 platformctl --transport unix sdn flow list --bridge br0
-platformctl --transport unix sdn flow delete f1 --bridge br0
+# --id is kept in the flow's metadata only; the flow's ID is the
+# flow-0x<cookie> the add answers and the list shows
+platformctl --transport unix sdn flow delete flow-0x1a2b3c --bridge br0
+
 
 # VLAN operations
 platformctl --transport unix sdn vlan create --id 100 --name tenant-a --bridge br0
