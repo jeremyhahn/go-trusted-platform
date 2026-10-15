@@ -133,7 +133,6 @@ func TestQEMUOrchestrator_Stop_MoreEdgeCases(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to create instance: %v", err)
 		}
-		// Don't defer delete - can't delete error state
 
 		// Set to error state
 		orch.mu.Lock()
@@ -333,13 +332,13 @@ func TestQEMUOrchestrator_Delete_MoreEdgeCases(t *testing.T) {
 
 	ctx := context.Background()
 
-	t.Run("Delete instance in error state fails", func(t *testing.T) {
+	t.Run("Delete instance in error state removes it", func(t *testing.T) {
 		instance, err := orch.Create(ctx, profile)
 		if err != nil {
 			t.Fatalf("Failed to create instance: %v", err)
 		}
 
-		// Set to error state (terminal state - can't transition to deleting)
+		// A failed start leaves the VM in error; delete is the one way out.
 		orch.mu.Lock()
 		orch.lifecycle.SetState(instance.ID, StateError)
 		if qemuInst, exists := orch.instances[instance.ID]; exists {
@@ -347,15 +346,11 @@ func TestQEMUOrchestrator_Delete_MoreEdgeCases(t *testing.T) {
 		}
 		orch.mu.Unlock()
 
-		// Delete should fail because Error is a terminal state
-		err = orch.Delete(ctx, instance.ID)
-		if err == nil {
-			t.Error("Expected error when deleting instance in error state")
+		if err := orch.Delete(ctx, instance.ID); err != nil {
+			t.Fatalf("Delete of an instance in error state: %v", err)
 		}
-		// Error state is terminal and cannot transition to deleting
-		// Use errors.Is for wrapped errors
-		if !errors.Is(err, ErrInvalidState) {
-			t.Errorf("Expected error to wrap ErrInvalidState, got %v", err)
+		if _, err := orch.Get(ctx, instance.ID); !errors.Is(err, ErrInstanceNotFound) {
+			t.Errorf("Get after delete = %v, want ErrInstanceNotFound", err)
 		}
 	})
 

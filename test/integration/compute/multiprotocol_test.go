@@ -27,7 +27,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
@@ -75,6 +74,7 @@ func TestComputeMultiProtocol(t *testing.T) {
 			t.Run("VMListFiltered", func(t *testing.T) { testVMListFiltered(t, ctx, adapter) })
 			t.Run("VMCreateWithLabels", func(t *testing.T) { testVMCreateWithLabels(t, ctx, adapter) })
 			t.Run("VMDeleteNotFound", func(t *testing.T) { testVMDeleteNotFound(t, ctx, adapter) })
+			t.Run("VMCreateRefusesUnsupportedField", func(t *testing.T) { testVMCreateRefusesUnsupportedField(t, ctx, adapter, fixture) })
 			t.Run("VMSuspendResumeReboot", func(t *testing.T) { testVMSuspendResumeReboot(t, ctx, adapter, fixture) })
 		})
 	}
@@ -87,15 +87,18 @@ type snapshotAdapter interface {
 	SnapshotCommands
 }
 
-// TestComputeSnapshotsMultiProtocol drives the snapshot verbs on every
-// transport whose SDK adapter carries them.
+// TestComputeSnapshotsMultiProtocol drives the snapshot verbs on every API
+// transport.
 func TestComputeSnapshotsMultiProtocol(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
 
 	adapters := []snapshotAdapter{
+		NewRESTAdapter(),
 		NewGRPCAdapter(),
 		NewQUICAdapter(),
+		NewMCPAdapter(),
+		NewUnixAdapter(),
 	}
 
 	gate := helpers.NewAdapterGate(t, "compute snapshots", helpers.AdapterNames(adapters)...)
@@ -168,6 +171,11 @@ func testVMSnapshots(t *testing.T, ctx context.Context, adapter snapshotAdapter)
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("DeleteSnapshot of a deleted snapshot over %s: got %v, want NotFound", adapter.Name(), err)
 	}
+
+	_, err = adapter.ListSnapshots(ctx, "")
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("ListSnapshots without a VM id over %s: got %v, want InvalidArgument", adapter.Name(), err)
+	}
 }
 
 // requireSnapshotListed fails the test unless the VM's snapshot list does,
@@ -198,15 +206,17 @@ type attestAdapter interface {
 }
 
 // TestComputeAttestationMultiProtocol drives the VM attestation verbs
-// through every SDK transport that carries them against the real
-// orchestrator.
+// through every API transport against the real orchestrator.
 func TestComputeAttestationMultiProtocol(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
 
 	adapters := []attestAdapter{
+		NewRESTAdapter(),
 		NewGRPCAdapter(),
 		NewQUICAdapter(),
+		NewMCPAdapter(),
+		NewUnixAdapter(),
 	}
 
 	gate := helpers.NewAdapterGate(t, "compute attestation", helpers.AdapterNames(adapters)...)
@@ -252,13 +262,18 @@ func testVMAttestation(t *testing.T, ctx context.Context, adapter attestAdapter)
 
 	// swtpm runs only while the VM runs, so a stopped VM has no quote.
 	_, err = adapter.AttestVM(ctx, AttestVMOptions{VMID: vmID, Nonce: nonce, PCRIndices: []uint32{0, 7}})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Errorf("AttestVM of a stopped VM over %s: got %v, want FailedPrecondition", adapter.Name(), err)
+	if want := sdkWrongStateCode(adapter.Name()); status.Code(err) != want {
+		t.Errorf("AttestVM of a stopped VM over %s: got %v, want %v", adapter.Name(), err, want)
 	}
 
 	_, err = adapter.AttestVM(ctx, AttestVMOptions{VMID: "missing-" + uuid.New().String(), Nonce: nonce})
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("AttestVM of an unknown VM over %s: got %v, want NotFound", adapter.Name(), err)
+	}
+
+	_, err = adapter.AttestVM(ctx, AttestVMOptions{Nonce: nonce})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("AttestVM without a VM id over %s: got %v, want InvalidArgument", adapter.Name(), err)
 	}
 
 	_, err = adapter.VerifyVMAttestation(ctx, VerifyVMAttestationOptions{
@@ -269,6 +284,16 @@ func testVMAttestation(t *testing.T, ctx context.Context, adapter attestAdapter)
 	if status.Code(err) != codes.InvalidArgument {
 		t.Errorf("VerifyVMAttestation without a quote over %s: got %v, want InvalidArgument", adapter.Name(), err)
 	}
+}
+
+// sdkWrongStateCode is the class a VM in the wrong state reaches an SDK
+// adapter as. The REST server renders FailedPrecondition as 400, which the
+// SDK REST transport reads back as InvalidArgument.
+func sdkWrongStateCode(adapter string) codes.Code {
+	if adapter == "REST" {
+		return codes.InvalidArgument
+	}
+	return codes.FailedPrecondition
 }
 
 // =============================================================================
@@ -288,7 +313,7 @@ func testVMLifecycle(t *testing.T, ctx context.Context, adapter ComputeCommands)
 		CPUs:       1,
 		MemoryMB:   512,
 		DiskSizeGB: 1,
-		Firmware:   "bios",
+		Firmware:   "uefi",
 	})
 	if err != nil {
 		surface.SkipIfNotImplemented(t, err)
@@ -643,25 +668,22 @@ func testVMDeleteNotFound(t *testing.T, ctx context.Context, adapter ComputeComm
 	t.Logf("Delete non-existent VM returned expected error: %v", err)
 }
 
-// wrongStateClass reports whether err is the error class a transport answers
-// a lifecycle verb sent to a VM in the wrong state with.
-type wrongStateClass func(err error) bool
+// errorClass reports whether err is the error class a transport answers a
+// failed request with.
+type errorClass func(err error) bool
 
 // wrongStateClasses maps each adapter to its wrong-state error class. gRPC,
-// Unix and QUIC carry the FailedPrecondition code, MCP a JSON-RPC code of the
-// FailedPrecondition class, REST answers 400 and the CLI exits non-zero with
-// the gRPC code in its output.
-var wrongStateClasses = map[string]wrongStateClass{
+// Unix, QUIC and MCP carry the FailedPrecondition code (the SDK MCP transport
+// turns the JSON-RPC code of that class back into it), REST answers 400 and
+// the CLI exits non-zero with the gRPC code in its output.
+var wrongStateClasses = map[string]errorClass{
 	"gRPC": isFailedPrecondition,
 	"Unix": isFailedPrecondition,
 	"QUIC": isFailedPrecondition,
+	"MCP":  isFailedPrecondition,
 	"REST": func(err error) bool {
 		var restErr ErrRESTRequestFailed
 		return errors.As(err, &restErr) && restErr.StatusCode == http.StatusBadRequest
-	},
-	"MCP": func(err error) bool {
-		var mcpErr ErrMCPRequestFailed
-		return errors.As(err, &mcpErr) && mcpwire.ClassForCode(mcpErr.Code) == codes.FailedPrecondition
 	},
 	"CLI": func(err error) bool {
 		var cliErr ErrCLIExecution
@@ -671,6 +693,64 @@ var wrongStateClasses = map[string]wrongStateClass{
 
 func isFailedPrecondition(err error) bool {
 	return status.Code(err) == codes.FailedPrecondition
+}
+
+// refusedFieldClasses maps each adapter to the error class CreateVM answers a
+// config field the backend cannot honour with. gRPC, Unix, QUIC and MCP carry
+// the InvalidArgument code, REST answers 400 and the CLI exits non-zero with
+// the gRPC code in its output.
+var refusedFieldClasses = map[string]errorClass{
+	"gRPC": isInvalidArgument,
+	"Unix": isInvalidArgument,
+	"QUIC": isInvalidArgument,
+	"MCP":  isInvalidArgument,
+	"REST": func(err error) bool {
+		var restErr ErrRESTRequestFailed
+		return errors.As(err, &restErr) && restErr.StatusCode == http.StatusBadRequest
+	},
+	"CLI": func(err error) bool {
+		var cliErr ErrCLIExecution
+		return errors.As(err, &cliErr) && strings.Contains(cliErr.Output, "code = "+codes.InvalidArgument.String())
+	},
+}
+
+func isInvalidArgument(err error) bool {
+	return status.Code(err) == codes.InvalidArgument
+}
+
+// testVMCreateRefusesUnsupportedField asks for BIOS firmware, which the
+// local-qemu backend cannot boot: the request fails with the transport's
+// refused-field class and leaves no VM behind.
+func testVMCreateRefusesUnsupportedField(t *testing.T, ctx context.Context, adapter ComputeCommands, fixture *GRPCAdapter) {
+	isRefused, ok := refusedFieldClasses[adapter.Name()]
+	if !ok {
+		t.Fatalf("no refused-field error class for adapter %s", adapter.Name())
+	}
+
+	vmName := generateTestVMName("refused-" + uuid.New().String()[:8])
+	_, err := adapter.CreateVM(ctx, CreateVMOptions{
+		Name:       vmName,
+		CPUs:       1,
+		MemoryMB:   256,
+		DiskSizeGB: 1,
+		Firmware:   "bios",
+	})
+	if err == nil {
+		t.Fatalf("CreateVM with BIOS firmware over %s succeeded, want a refusal", adapter.Name())
+	}
+	if !isRefused(err) {
+		t.Errorf("CreateVM with BIOS firmware over %s: got %v, want the transport's refused-field class", adapter.Name(), err)
+	}
+
+	listResult, err := fixture.ListVMs(ctx, ListVMsOptions{})
+	if err != nil {
+		t.Fatalf("fixture ListVMs failed: %v", err)
+	}
+	for _, vm := range listResult.VMs {
+		if vm.Name == vmName {
+			t.Errorf("refused CreateVM over %s left VM %s (%s) behind", adapter.Name(), vm.Name, vm.VMID)
+		}
+	}
 }
 
 // testVMSuspendResumeReboot drives suspend, resume and reboot through the
@@ -689,7 +769,7 @@ func testVMSuspendResumeReboot(t *testing.T, ctx context.Context, adapter Comput
 		CPUs:       1,
 		MemoryMB:   512,
 		DiskSizeGB: 1,
-		Firmware:   "bios",
+		Firmware:   "uefi",
 	})
 	if err != nil {
 		t.Fatalf("fixture CreateVM failed: %v", err)

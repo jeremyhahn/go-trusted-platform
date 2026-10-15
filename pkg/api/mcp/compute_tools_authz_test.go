@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
@@ -36,7 +37,7 @@ func (p *computeRecordingProvider) record(op string) map[string]interface{} {
 	return map[string]interface{}{"op": op}
 }
 
-func (p *computeRecordingProvider) VMSnapshotCreate(context.Context, string, string) (interface{}, error) {
+func (p *computeRecordingProvider) VMSnapshotCreate(context.Context, *platformv1.CreateSnapshotRequest) (interface{}, error) {
 	return p.record("VMSnapshotCreate"), nil
 }
 
@@ -44,61 +45,79 @@ func (p *computeRecordingProvider) VMSnapshotGet(context.Context, string, string
 	return p.record("VMSnapshotGet"), nil
 }
 
-func (p *computeRecordingProvider) VMCreate(context.Context, VMCreateSpec) (interface{}, error) {
-	return p.record("VMCreate"), nil
+func (p *computeRecordingProvider) ComputeServiceServer() platformv1.ComputeServiceServer {
+	return &computeRecordingServer{provider: p}
 }
 
-func (p *computeRecordingProvider) VMList(context.Context) (interface{}, error) {
-	return p.record("VMList"), nil
+// computeRecordingServer is the gRPC ComputeService the VM lifecycle tools
+// call; it records each method on its provider.
+type computeRecordingServer struct {
+	platformv1.UnimplementedComputeServiceServer
+	provider *computeRecordingProvider
 }
 
-func (p *computeRecordingProvider) VMGet(context.Context, string) (interface{}, error) {
-	return p.record("VMGet"), nil
+func (s *computeRecordingServer) CreateVM(context.Context, *platformv1.CreateVMRequest) (*platformv1.CreateVMResponse, error) {
+	s.provider.record("VMCreate")
+	return &platformv1.CreateVMResponse{}, nil
 }
 
-func (p *computeRecordingProvider) VMDelete(context.Context, string) (interface{}, error) {
-	return p.record("VMDelete"), nil
+func (s *computeRecordingServer) ListVMs(context.Context, *platformv1.ListVMsRequest) (*platformv1.ListVMsResponse, error) {
+	s.provider.record("VMList")
+	return &platformv1.ListVMsResponse{}, nil
 }
 
-func (p *computeRecordingProvider) VMStart(context.Context, string) (interface{}, error) {
-	return p.record("VMStart"), nil
+func (s *computeRecordingServer) GetVM(context.Context, *platformv1.GetVMRequest) (*platformv1.GetVMResponse, error) {
+	s.provider.record("VMGet")
+	return &platformv1.GetVMResponse{}, nil
 }
 
-func (p *computeRecordingProvider) VMStop(context.Context, string) (interface{}, error) {
-	return p.record("VMStop"), nil
+func (s *computeRecordingServer) DeleteVM(context.Context, *platformv1.DeleteVMRequest) (*platformv1.DeleteVMResponse, error) {
+	s.provider.record("VMDelete")
+	return &platformv1.DeleteVMResponse{}, nil
 }
 
-func (p *computeRecordingProvider) VMReboot(context.Context, string) (interface{}, error) {
-	return p.record("VMReboot"), nil
+func (s *computeRecordingServer) StartVM(context.Context, *platformv1.StartVMRequest) (*platformv1.StartVMResponse, error) {
+	s.provider.record("VMStart")
+	return &platformv1.StartVMResponse{}, nil
 }
 
-func (p *computeRecordingProvider) VMSuspend(context.Context, string) (interface{}, error) {
-	return p.record("VMSuspend"), nil
+func (s *computeRecordingServer) StopVM(context.Context, *platformv1.StopVMRequest) (*platformv1.StopVMResponse, error) {
+	s.provider.record("VMStop")
+	return &platformv1.StopVMResponse{}, nil
 }
 
-func (p *computeRecordingProvider) VMResume(context.Context, string) (interface{}, error) {
-	return p.record("VMResume"), nil
+func (s *computeRecordingServer) RebootVM(context.Context, *platformv1.RebootVMRequest) (*platformv1.RebootVMResponse, error) {
+	s.provider.record("VMReboot")
+	return &platformv1.RebootVMResponse{}, nil
+}
+
+func (s *computeRecordingServer) SuspendVM(context.Context, *platformv1.SuspendVMRequest) (*platformv1.SuspendVMResponse, error) {
+	s.provider.record("VMSuspend")
+	return &platformv1.SuspendVMResponse{}, nil
+}
+
+func (s *computeRecordingServer) ResumeVM(context.Context, *platformv1.ResumeVMRequest) (*platformv1.ResumeVMResponse, error) {
+	s.provider.record("VMResume")
+	return &platformv1.ResumeVMResponse{}, nil
 }
 
 func (p *computeRecordingProvider) VMSnapshotList(context.Context, string) (interface{}, error) {
 	return p.record("VMSnapshotList"), nil
 }
 
-func (p *computeRecordingProvider) VMSnapshotDelete(context.Context, string, string) error {
-	p.record("VMSnapshotDelete")
-	return nil
+func (p *computeRecordingProvider) VMSnapshotDelete(context.Context, string, string) (interface{}, error) {
+	return p.record("VMSnapshotDelete"), nil
 }
 
-func (p *computeRecordingProvider) VMSnapshotRestore(context.Context, string, string) error {
-	p.record("VMSnapshotRestore")
-	return nil
+func (p *computeRecordingProvider) VMSnapshotRestore(context.Context, string, string) (interface{}, error) {
+	return p.record("VMSnapshotRestore"), nil
 }
 
-func (p *computeRecordingProvider) VMAttest(context.Context, string, []byte, []int) (interface{}, error) {
+func (p *computeRecordingProvider) VMAttest(context.Context, *platformv1.AttestVMRequest) (interface{}, error) {
 	return p.record("VMAttest"), nil
 }
 
-func (p *computeRecordingProvider) VMAttestVerify(context.Context, string, *VMAttestVerifyMCPRequest) (interface{}, error) {
+func (p *computeRecordingProvider) VMAttestVerify(context.Context, *platformv1.VerifyVMAttestationRequest) (interface{}, error) {
 	return p.record("VMAttestVerify"), nil
 }
 
@@ -174,6 +193,7 @@ func (p *computeRecordingProvider) ContainerMetrics(context.Context, string) (in
 
 var (
 	_ VMProvider                  = (*computeRecordingProvider)(nil)
+	_ ComputeProvider             = (*computeRecordingProvider)(nil)
 	_ VMOpsServiceProvider        = (*computeRecordingProvider)(nil)
 	_ ContainerOpsServiceProvider = (*computeRecordingProvider)(nil)
 )
@@ -190,7 +210,7 @@ type computeToolCase struct {
 }
 
 var computeToolCases = []computeToolCase{
-	{"vm_create", "vm", "write", map[string]interface{}{"name": "vm-1"}, "VMCreate"},
+	{"vm_create", "vm", "write", map[string]interface{}{"config": map[string]interface{}{"name": "vm-1"}}, "VMCreate"},
 	{"vm_list", "vm", "read", map[string]interface{}{}, "VMList"},
 	{"vm_get", "vm", "read", map[string]interface{}{"id": "vm-1"}, "VMGet"},
 	{"vm_delete", "vm", "delete", map[string]interface{}{"id": "vm-1"}, "VMDelete"},

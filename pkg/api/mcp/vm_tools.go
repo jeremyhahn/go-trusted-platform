@@ -22,152 +22,7 @@ import (
 
 // registerVMTools registers VM-related MCP tools.
 func (r *ToolRegistry) registerVMTools() {
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "vm_create",
-		Description: "Create a virtual machine, as ComputeService.CreateVM does",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"name": map[string]interface{}{
-					"type":        "string",
-					"description": "VM name (required)",
-				},
-				"memory": map[string]interface{}{
-					"type":        "integer",
-					"description": "Memory in MB; omitted, ComputeService's default applies",
-				},
-				"cpus": map[string]interface{}{
-					"type":        "integer",
-					"description": "Number of CPU cores; omitted, ComputeService's default applies",
-				},
-				"secure_boot": map[string]interface{}{
-					"type":        "boolean",
-					"description": "Enable UEFI Secure Boot",
-					"default":     false,
-				},
-				"tpm_enabled": map[string]interface{}{
-					"type":        "boolean",
-					"description": "Enable a virtual TPM for the VM",
-					"default":     false,
-				},
-			},
-			"required": []string{"name"},
-		},
-	})
-
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "vm_get",
-		Description: "Get detailed information about a virtual machine by ID",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "string",
-					"description": "VM ID or name",
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "vm_list",
-		Description: "List every virtual machine, as ComputeService.ListVMs does",
-		InputSchema: map[string]interface{}{
-			"type":       "object",
-			"properties": map[string]interface{}{},
-		},
-	})
-
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "vm_delete",
-		Description: "Delete a virtual machine",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "string",
-					"description": "VM ID or name",
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "vm_start",
-		Description: "Start a stopped virtual machine",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "string",
-					"description": "VM ID or name",
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "vm_stop",
-		Description: "Stop a running virtual machine",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "string",
-					"description": "VM ID or name",
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "vm_reboot",
-		Description: "Reboot a virtual machine",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "string",
-					"description": "VM ID or name",
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "vm_suspend",
-		Description: "Suspend a running virtual machine, keeping it paused in memory",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "string",
-					"description": "VM ID or name",
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "vm_resume",
-		Description: "Resume a suspended virtual machine",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "string",
-					"description": "VM ID or name",
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
+	r.registerVMLifecycleTools()
 
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_snapshot_create",
@@ -186,6 +41,14 @@ func (r *ToolRegistry) registerVMTools() {
 				"description": map[string]interface{}{
 					"type":        "string",
 					"description": "Snapshot description",
+				},
+				"memory_snapshot": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Capture memory. Internal snapshots capture memory and disk together, so this must equal disk_snapshot",
+				},
+				"disk_snapshot": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Capture disk; must equal memory_snapshot",
 				},
 			},
 			"required": []string{"vm_id", "name"},
@@ -353,12 +216,6 @@ func (e *VMError) GRPCStatus() *status.Status {
 var ErrVMServiceUnavailable = &VMError{
 	Code:    "VM_SERVICE_UNAVAILABLE",
 	Message: "VM service is not available",
-}
-
-// ErrVMNameRequired indicates a VM name is required.
-var ErrVMNameRequired = &VMError{
-	Code:    "VM_NAME_REQUIRED",
-	Message: "VM name is required",
 }
 
 // ErrVMIDRequired indicates a VM ID is required.

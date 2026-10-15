@@ -138,7 +138,7 @@ platformctl status
 
 ```bash
 # Create a VM with a virtual TPM on a bridge and start it
-platformctl compute create --name test-vm --cpus 2 --memory 4096 --tpm --network-bridge br0 --start
+platformctl compute create --name test-vm --cpus 2 --memory 4096 --tpm --start
 platformctl compute get test-vm
 ```
 

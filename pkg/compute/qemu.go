@@ -326,8 +326,18 @@ func vtpmIdentityRequired(profile *entities.DeviceProfile, cfg *InstanceConfig) 
 
 // Create creates a new VM instance from a device profile
 func (o *QEMUOrchestrator) Create(ctx context.Context, profile *entities.DeviceProfile) (*Instance, error) {
+	return o.CreateWithSpec(ctx, profile, VMSpec{})
+}
+
+// CreateWithSpec creates a VM from profile with spec applied over the
+// orchestrator's defaults. A spec it cannot honour is refused with
+// ErrInvalidVMSpec before anything is created.
+func (o *QEMUOrchestrator) CreateWithSpec(ctx context.Context, profile *entities.DeviceProfile, spec VMSpec) (*Instance, error) {
 	if profile == nil {
 		return nil, ErrInvalidProfile
+	}
+	if err := o.checkVMSpec(spec); err != nil {
+		return nil, err
 	}
 
 	o.mu.Lock()
@@ -351,21 +361,7 @@ func (o *QEMUOrchestrator) Create(ctx context.Context, profile *entities.DeviceP
 		return nil, err
 	}
 
-	// Create instance configuration
-	instanceConfig := &InstanceConfig{
-		Memory:      o.config.DefaultMemory,
-		CPUs:        o.config.DefaultCPUs,
-		DiskSize:    o.config.DefaultDiskSize,
-		WorkDir:     filepath.Join(o.config.WorkDir, instanceID),
-		SecureBoot:  false,
-		EnableKVM:   o.config.EnableKVM,
-		TPMEnabled:  true,
-		NetworkMode: "bridge",
-		BootMode:    "boot",
-	}
-
-	// Create disk path
-	instanceConfig.DiskPath = filepath.Join(instanceConfig.WorkDir, "disk.qcow2")
+	instanceConfig := o.instanceConfig(instanceID, spec)
 
 	// Create work directory
 	if err := os.MkdirAll(instanceConfig.WorkDir, 0755); err != nil {
@@ -624,8 +620,18 @@ func (o *QEMUOrchestrator) recordExit(instanceID string, qemuInst *qemuInstance)
 	o.logger.Infof("VM %s stopped", instanceID)
 }
 
-// Stop stops a running VM instance
+// Stop stops a running VM instance with the default StopOptions.
 func (o *QEMUOrchestrator) Stop(ctx context.Context, instanceID string) error {
+	return o.StopWithOptions(ctx, instanceID, StopOptions{})
+}
+
+// StopWithOptions stops a running or suspended VM. A forced stop kills the
+// QEMU process; otherwise the guest gets opts.Timeout (or the QEMU default)
+// to answer the ACPI power button before QEMU is terminated.
+func (o *QEMUOrchestrator) StopWithOptions(ctx context.Context, instanceID string, opts StopOptions) error {
+	if err := opts.Validate(); err != nil {
+		return err
+	}
 	if instanceID == "" {
 		return ErrInvalidInstanceID
 	}
@@ -653,8 +659,9 @@ func (o *QEMUOrchestrator) Stop(ctx context.Context, instanceID string) error {
 	}
 
 	// A suspended guest cannot answer the ACPI power button, so continue it
-	// first. If that fails, the stop below still falls back to SIGTERM.
-	if currentState == StateSuspended {
+	// first. If that fails, the stop below still falls back to SIGTERM. A
+	// forced stop does not ask the guest, so it kills the paused process.
+	if currentState == StateSuspended && !opts.Force {
 		o.continueBeforeStop(ctx, qemuInst)
 	}
 
@@ -667,7 +674,7 @@ func (o *QEMUOrchestrator) Stop(ctx context.Context, instanceID string) error {
 	qemuInst.instance.UpdatedAt = time.Now()
 
 	// Stop VM
-	if err := stopVMProcess(qemuInst); err != nil {
+	if err := stopVMProcess(qemuInst, opts); err != nil {
 		o.lifecycle.SetState(instanceID, StateError)
 		qemuInst.instance.State = StateError
 		qemuInst.instance.UpdatedAt = time.Now()

@@ -21,6 +21,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -96,6 +97,91 @@ func TestVMLifecycleRoutes_IDTravelsInThePath(t *testing.T) {
 				t.Errorf("body still carries id: %v", seen.body)
 			}
 		})
+	}
+}
+
+func TestListVMsRoute_TheFilterTravelsInTheBody(t *testing.T) {
+	a, seen := vmLifecycleServer(t, http.StatusOK, `{"vms":[{"id":"vm-1"}],"pagination":{"page":2,"pageSize":1}}`)
+	req := &platformv1.ListVMsRequest{
+		States:     []platformv1.VMState{platformv1.VMState_VM_STATE_RUNNING},
+		Selector:   &platformv1.LabelSelector{MatchLabels: map[string]string{"tier": "web"}},
+		Pagination: &platformv1.PaginationRequest{Page: 2, PageSize: 1, SortBy: "name"},
+	}
+
+	resp, err := platformv1.NewComputeServiceClient(a.Connection()).ListVMs(context.Background(), req)
+
+	if err != nil {
+		t.Fatalf("ListVMs: %v", err)
+	}
+	if seen.method != http.MethodGet || seen.path != "/api/v1/compute/vms" || seen.query != "" {
+		t.Errorf("request = %s %s?%s, want GET /api/v1/compute/vms", seen.method, seen.path, seen.query)
+	}
+	sent := &platformv1.ListVMsRequest{}
+	body, err := json.Marshal(seen.body)
+	if err != nil {
+		t.Fatalf("re-marshal body: %v", err)
+	}
+	if err := protojson.Unmarshal(body, sent); err != nil {
+		t.Fatalf("body %s is not a ListVMsRequest: %v", body, err)
+	}
+	if !proto.Equal(sent, req) {
+		t.Errorf("body = %v, want %v", sent, req)
+	}
+	if len(resp.GetVms()) != 1 || resp.GetVms()[0].GetId() != "vm-1" || resp.GetPagination().GetPage() != 2 {
+		t.Errorf("reply = %v", resp)
+	}
+}
+
+func TestCreateVMRoute_TheWholeRequestTravelsInTheBody(t *testing.T) {
+	a, seen := vmLifecycleServer(t, http.StatusOK, `{"vm":{"id":"vm-1","config":{"name":"vm-web"}}}`)
+	req := &platformv1.CreateVMRequest{
+		Config: &platformv1.VMConfig{
+			Name:       "vm-web",
+			Firmware:   platformv1.FirmwareType_FIRMWARE_TYPE_UEFI,
+			Cpu:        &platformv1.CPUConfig{Cores: 4},
+			Memory:     &platformv1.MemoryConfig{SizeMb: 4096},
+			Disks:      []*platformv1.DiskConfig{{SizeGb: 40, Bus: platformv1.DiskBus_DISK_BUS_SATA}},
+			Networks:   []*platformv1.NetworkConfig{{MacAddress: "52:54:00:12:34:56"}},
+			Tpm:        &platformv1.TPMConfig{Enabled: true},
+			SecureBoot: true,
+			Labels:     map[string]string{"tier": "web"},
+		},
+		Start: true,
+	}
+
+	resp, err := platformv1.NewComputeServiceClient(a.Connection()).CreateVM(context.Background(), req)
+
+	if err != nil {
+		t.Fatalf("CreateVM: %v", err)
+	}
+	if seen.method != http.MethodPost || seen.path != "/api/v1/compute/vms" {
+		t.Errorf("request = %s %s, want POST /api/v1/compute/vms", seen.method, seen.path)
+	}
+	sent := &platformv1.CreateVMRequest{}
+	body, err := json.Marshal(seen.body)
+	if err != nil {
+		t.Fatalf("re-marshal body: %v", err)
+	}
+	if err := protojson.Unmarshal(body, sent); err != nil {
+		t.Fatalf("body %s is not a CreateVMRequest: %v", body, err)
+	}
+	if !proto.Equal(sent, req) {
+		t.Errorf("body = %v, want %v", sent, req)
+	}
+	if resp.GetVm().GetId() != "vm-1" {
+		t.Errorf("reply = %v", resp)
+	}
+}
+
+func TestCreateVMRoute_RefusalKeepsItsClass(t *testing.T) {
+	a, _ := vmLifecycleServer(t, http.StatusBadRequest, `{"error":"create VM: config.firmware is not supported: VMs boot UEFI firmware"}`)
+
+	_, err := platformv1.NewComputeServiceClient(a.Connection()).CreateVM(context.Background(), &platformv1.CreateVMRequest{
+		Config: &platformv1.VMConfig{Name: "vm-bios", Firmware: platformv1.FirmwareType_FIRMWARE_TYPE_BIOS},
+	})
+
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("err = %v, want InvalidArgument", err)
 	}
 }
 

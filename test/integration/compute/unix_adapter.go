@@ -241,3 +241,58 @@ func (a *UnixAdapter) ListVMs(ctx context.Context, opts ListVMsOptions) (*ListVM
 
 	return listVMsResultFromDomain(domainResult), nil
 }
+
+// CreateSnapshot snapshots a running VM via the Unix socket SDK client.
+func (a *UnixAdapter) CreateSnapshot(ctx context.Context, opts CreateSnapshotOptions) (*SnapshotSummary, error) {
+	snapshot, err := a.client.CreateSnapshot(ctx, opts.VMID, fullSnapshotConfig(opts))
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "CreateSnapshot", Err: err}
+	}
+
+	summary := snapshotSummary(snapshot)
+	return &summary, nil
+}
+
+// RestoreSnapshot restores a VM from a snapshot via the Unix socket SDK client.
+func (a *UnixAdapter) RestoreSnapshot(ctx context.Context, opts SnapshotOptions) error {
+	if err := a.client.RestoreSnapshot(ctx, opts.VMID, opts.SnapshotID); err != nil {
+		return ErrUnixRPCFailed{Method: "RestoreSnapshot", Err: err}
+	}
+	return nil
+}
+
+// DeleteSnapshot deletes a VM snapshot via the Unix socket SDK client.
+func (a *UnixAdapter) DeleteSnapshot(ctx context.Context, opts SnapshotOptions) error {
+	if err := a.client.DeleteSnapshot(ctx, opts.VMID, opts.SnapshotID); err != nil {
+		return ErrUnixRPCFailed{Method: "DeleteSnapshot", Err: err}
+	}
+	return nil
+}
+
+// ListSnapshots lists a VM's snapshots via the Unix socket SDK client.
+func (a *UnixAdapter) ListSnapshots(ctx context.Context, vmID string) ([]SnapshotSummary, error) {
+	snapshots, err := a.client.ListSnapshots(ctx, vmID)
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "ListSnapshots", Err: err}
+	}
+	return snapshotSummaries(snapshots), nil
+}
+
+// AttestVM generates a VM's vTPM quote via the Unix socket SDK client.
+func (a *UnixAdapter) AttestVM(ctx context.Context, opts AttestVMOptions) (*VMQuote, error) {
+	resp, err := a.client.AttestVM(ctx, opts.VMID, opts.Nonce, opts.PCRIndices, pb.PCRBank_PCR_BANK_SHA256)
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "AttestVM", Err: err}
+	}
+	return vmQuote(resp), nil
+}
+
+// VerifyVMAttestation verifies VM quote evidence via the Unix socket SDK
+// client.
+func (a *UnixAdapter) VerifyVMAttestation(ctx context.Context, opts VerifyVMAttestationOptions) (bool, error) {
+	resp, err := a.client.VerifyVMAttestation(ctx, verifyVMAttestationRequest(opts))
+	if err != nil {
+		return false, ErrUnixRPCFailed{Method: "VerifyVMAttestation", Err: err}
+	}
+	return resp.GetVerified(), nil
+}

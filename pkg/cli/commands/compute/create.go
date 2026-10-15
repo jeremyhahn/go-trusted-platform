@@ -81,7 +81,7 @@ Examples:
 	cmd.Flags().Uint64Var(&opts.diskSize, "disk-size", 20, "disk size in GB")
 	cmd.Flags().StringVar(&opts.firmware, "firmware", "uefi", "firmware type: bios, uefi, uefi-secure-boot")
 	cmd.Flags().BoolVar(&opts.secureBoot, "secure-boot", false, "enable UEFI Secure Boot")
-	cmd.Flags().BoolVar(&opts.tpm, "tpm", false, "enable virtual TPM (vTPM)")
+	cmd.Flags().BoolVar(&opts.tpm, "tpm", true, "attach a virtual TPM 2.0 (vTPM); --tpm=false creates the VM without one")
 	cmd.Flags().StringVar(&opts.bootDevice, "boot-device", "disk", "boot device: disk, cdrom, network")
 	cmd.Flags().StringVar(&opts.networkBridge, "network-bridge", "", "network bridge name")
 	cmd.Flags().StringArrayVarP(&opts.label, "label", "l", nil, "labels (key=value)")

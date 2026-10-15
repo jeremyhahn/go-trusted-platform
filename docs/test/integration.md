@@ -322,6 +322,7 @@ make integration-test
 
 # Run one suite: integration-test-<key>, where <key> is a TARGET_PACKAGES key
 make integration-test-ca
+make integration-test-compute
 make integration-test-vtpm
 make integration-test-daemon
 make integration-test-root          # test/integration itself, not its subdirectories

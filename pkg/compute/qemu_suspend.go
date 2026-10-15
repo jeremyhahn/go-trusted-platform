@@ -65,10 +65,18 @@ func defaultVMRunControlFor(ctx context.Context, inst *qemuInstance) (vmRunContr
 	return mon, nil
 }
 
-// defaultStopVMProcess stops the QEMU process: ACPI powerdown over QMP, then
-// SIGTERM when the guest does not answer in time.
-func defaultStopVMProcess(inst *qemuInstance) error {
-	return inst.vm.Stop()
+// defaultStopVMProcess stops the QEMU process: SIGKILL for a forced stop,
+// otherwise ACPI powerdown over QMP, then SIGTERM when the guest does not
+// answer within the timeout (the QEMU default when opts has none).
+func defaultStopVMProcess(inst *qemuInstance, opts StopOptions) error {
+	switch {
+	case opts.Force:
+		return inst.vm.ForceStop()
+	case opts.Timeout > 0:
+		return inst.vm.StopWithTimeout(opts.Timeout)
+	default:
+		return inst.vm.Stop()
+	}
 }
 
 // Suspend pauses a running VM's vCPUs with the QMP stop command. The guest

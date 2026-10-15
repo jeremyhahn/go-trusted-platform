@@ -83,8 +83,23 @@ func serveDeviceGRPC(
 	dial grpc.DialOption,
 ) platformv1.DeviceServiceClient {
 	t.Helper()
+	register := func(server *grpc.Server) { platformv1.RegisterDeviceServiceServer(server, svc) }
+	return platformv1.NewDeviceServiceClient(serveTestGRPC(t, register, lis, target, serverCreds, clientCreds, dial))
+}
+
+// serveTestGRPC serves the services register adds on lis and returns a
+// client connection to them; both are closed when the test ends.
+func serveTestGRPC(
+	t *testing.T,
+	register func(*grpc.Server),
+	lis net.Listener,
+	target string,
+	serverCreds, clientCreds credentials.TransportCredentials,
+	dial grpc.DialOption,
+) *grpc.ClientConn {
+	t.Helper()
 	server := grpc.NewServer(grpc.Creds(serverCreds))
-	platformv1.RegisterDeviceServiceServer(server, svc)
+	register(server)
 	served := make(chan error, 1)
 	go func() { served <- server.Serve(lis) }()
 	t.Cleanup(func() {
@@ -99,7 +114,37 @@ func serveDeviceGRPC(
 	conn, err := grpc.NewClient(target, opts...)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, conn.Close()) })
-	return platformv1.NewDeviceServiceClient(conn)
+	return conn
+}
+
+// testGRPCTLSCredentials is the TLS pair the daemon's TCP gRPC listener
+// uses: the self-signed test certificate is its own trust root.
+func testGRPCTLSCredentials(t *testing.T) (server, client credentials.TransportCredentials) {
+	t.Helper()
+	cert := testServerTLSCertificate(t)
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	require.NoError(t, err)
+	roots := x509.NewCertPool()
+	roots.AddCert(leaf)
+	return credentials.NewServerTLSFromCert(&cert), credentials.NewTLS(&tls.Config{
+		RootCAs:    roots,
+		ServerName: "localhost",
+		MinVersion: tls.VersionTLS13,
+	})
+}
+
+// testUnixListener listens on a Unix socket in a fresh directory and returns
+// the listener and the socket path. A short directory keeps the path under
+// the sun_path limit.
+func testUnixListener(t *testing.T) (net.Listener, string) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "devtmpl")
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, os.RemoveAll(dir)) })
+	socket := filepath.Join(dir, "platformd.sock")
+	lis, err := net.Listen("unix", socket)
+	require.NoError(t, err)
+	return lis, socket
 }
 
 // deviceTemplateTransports are the two transports the daemon serves
@@ -107,19 +152,8 @@ func serveDeviceGRPC(
 func deviceTemplateTransports(t *testing.T, svc platformv1.DeviceServiceServer) map[string]platformv1.DeviceServiceClient {
 	t.Helper()
 
-	// The network transport is TLS, as the daemon serves gRPC over TCP: the
-	// self-signed test certificate is its own trust root.
-	cert := testServerTLSCertificate(t)
-	leaf, err := x509.ParseCertificate(cert.Certificate[0])
-	require.NoError(t, err)
-	roots := x509.NewCertPool()
-	roots.AddCert(leaf)
-	serverTLS := credentials.NewServerTLSFromCert(&cert)
-	clientTLS := credentials.NewTLS(&tls.Config{
-		RootCAs:    roots,
-		ServerName: "localhost",
-		MinVersion: tls.VersionTLS13,
-	})
+	// The network transport is TLS, as the daemon serves gRPC over TCP.
+	serverTLS, clientTLS := testGRPCTLSCredentials(t)
 
 	buf := bufconn.Listen(1 << 20)
 	grpcClient := serveDeviceGRPC(t, svc, buf, "passthrough:///bufnet", serverTLS, clientTLS,
@@ -127,13 +161,7 @@ func deviceTemplateTransports(t *testing.T, svc platformv1.DeviceServiceServer) 
 			return buf.DialContext(ctx)
 		}))
 
-	// A short directory keeps the socket path under the sun_path limit.
-	dir, err := os.MkdirTemp("", "devtmpl")
-	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, os.RemoveAll(dir)) })
-	socket := filepath.Join(dir, "platformd.sock")
-	unixLis, err := net.Listen("unix", socket)
-	require.NoError(t, err)
+	unixLis, socket := testUnixListener(t)
 	// The Unix socket carries local credentials: the kernel vouches for the
 	// peer, which is what the daemon's UDS listener relies on.
 	unixClient := serveDeviceGRPC(t, svc, unixLis, "unix://"+socket,

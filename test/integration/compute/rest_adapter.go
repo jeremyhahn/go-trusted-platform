@@ -400,3 +400,51 @@ func (a *RESTAdapter) ListVMs(ctx context.Context, opts ListVMsOptions) (*ListVM
 	}
 	return listVMsResultFromDomain(domainResult), nil
 }
+
+// CreateSnapshot snapshots a running VM via the REST SDK client.
+func (a *RESTAdapter) CreateSnapshot(ctx context.Context, opts CreateSnapshotOptions) (*SnapshotSummary, error) {
+	snapshot, err := a.client.CreateSnapshot(ctx, opts.VMID, fullSnapshotConfig(opts))
+	if err != nil {
+		return nil, err
+	}
+
+	summary := snapshotSummary(snapshot)
+	return &summary, nil
+}
+
+// RestoreSnapshot restores a VM from a snapshot via the REST SDK client.
+func (a *RESTAdapter) RestoreSnapshot(ctx context.Context, opts SnapshotOptions) error {
+	return a.client.RestoreSnapshot(ctx, opts.VMID, opts.SnapshotID)
+}
+
+// DeleteSnapshot deletes a VM snapshot via the REST SDK client.
+func (a *RESTAdapter) DeleteSnapshot(ctx context.Context, opts SnapshotOptions) error {
+	return a.client.DeleteSnapshot(ctx, opts.VMID, opts.SnapshotID)
+}
+
+// ListSnapshots lists a VM's snapshots via the REST SDK client.
+func (a *RESTAdapter) ListSnapshots(ctx context.Context, vmID string) ([]SnapshotSummary, error) {
+	snapshots, err := a.client.ListSnapshots(ctx, vmID)
+	if err != nil {
+		return nil, err
+	}
+	return snapshotSummaries(snapshots), nil
+}
+
+// AttestVM generates a VM's vTPM quote via the REST SDK client.
+func (a *RESTAdapter) AttestVM(ctx context.Context, opts AttestVMOptions) (*VMQuote, error) {
+	resp, err := a.client.AttestVM(ctx, opts.VMID, opts.Nonce, opts.PCRIndices, pb.PCRBank_PCR_BANK_SHA256)
+	if err != nil {
+		return nil, err
+	}
+	return vmQuote(resp), nil
+}
+
+// VerifyVMAttestation verifies VM quote evidence via the REST SDK client.
+func (a *RESTAdapter) VerifyVMAttestation(ctx context.Context, opts VerifyVMAttestationOptions) (bool, error) {
+	resp, err := a.client.VerifyVMAttestation(ctx, verifyVMAttestationRequest(opts))
+	if err != nil {
+		return false, err
+	}
+	return resp.GetVerified(), nil
+}

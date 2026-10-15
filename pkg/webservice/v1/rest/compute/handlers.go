@@ -73,12 +73,18 @@ func (h *Handlers) CreateVM(w http.ResponseWriter, r *http.Request) {
 	protorest.WriteSuccessStatus(w, r, h.respWriter, http.StatusCreated, resp)
 }
 
-// ListVMs handles GET /api/v1/compute/vms.
+// ListVMs handles GET /api/v1/compute/vms. The JSON body is the
+// ListVMsRequest the Go SDK sends; page and page_size query parameters, when
+// given, replace the body's page and page size.
 func (h *Handlers) ListVMs(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureAvailable(w, r) {
 		return
 	}
 	req := &platformv1.ListVMsRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
 	if r.URL.Query().Get("page") != "" || r.URL.Query().Get("page_size") != "" {
 		page, err := protorest.QueryUint32(r, "page")
 		if err != nil {
@@ -90,7 +96,11 @@ func (h *Handlers) ListVMs(w http.ResponseWriter, r *http.Request) {
 			h.respWriter.Error400(w, r, err)
 			return
 		}
-		req.Pagination = &platformv1.PaginationRequest{Page: page, PageSize: size}
+		// The query pages; sort_by and ascending stay as the body set them.
+		if req.Pagination == nil {
+			req.Pagination = &platformv1.PaginationRequest{}
+		}
+		req.Pagination.Page, req.Pagination.PageSize = page, size
 	}
 	resp, err := h.server.ListVMs(r.Context(), req)
 	if err != nil {

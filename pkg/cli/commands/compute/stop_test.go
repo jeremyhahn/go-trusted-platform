@@ -109,8 +109,10 @@ func TestNewStopCommand_Flags(t *testing.T) {
 	if timeoutFlag.Shorthand != "t" {
 		t.Errorf("timeout flag shorthand: expected 't', got %q", timeoutFlag.Shorthand)
 	}
-	if timeoutFlag.DefValue != "30" {
-		t.Errorf("timeout flag default: expected '30', got %q", timeoutFlag.DefValue)
+	// 0 leaves the timeout to the daemon, so a bare --force is not refused
+	// as a forced stop with a timeout.
+	if timeoutFlag.DefValue != "0" {
+		t.Errorf("timeout flag default: expected '0', got %q", timeoutFlag.DefValue)
 	}
 }
 

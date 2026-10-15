@@ -1888,7 +1888,7 @@ integration-test-cli: build-devcontainer
 integration-test-cmd: build-devcontainer
 	$(call run-integration-suite,cmd)
 
-## integration-test-compute: Run the compute orchestrator suite (test/integration/compute) in devcontainer
+## integration-test-compute: Run the compute VM multi-protocol suite (test/integration/compute) in devcontainer, platformd on local-qemu
 .PHONY: integration-test-compute
 integration-test-compute: build-devcontainer
 	$(call run-integration-suite,compute)

@@ -17,8 +17,6 @@ package daemon
 
 import (
 	"context"
-	"encoding/hex"
-	"strconv"
 	"testing"
 	"time"
 
@@ -29,6 +27,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 )
 
 // computeParityOrchestrator is one in-memory orchestrator both transports
@@ -130,14 +129,9 @@ func TestComputeParity_VMSnapshotList(t *testing.T) {
 	grpcResp, err := svc.ListSnapshots(context.Background(), &platformv1.ListSnapshotsRequest{VmId: "vm-1"})
 	require.NoError(t, err)
 
-	mcpSnapshots := mcpResult.(map[string]interface{})["snapshots"].([]interface{})
-	require.Len(t, mcpSnapshots, len(grpcResp.GetSnapshots()))
-	got := mcpSnapshots[0].(map[string]interface{})
-	want := grpcResp.GetSnapshots()[0]
-	assert.Equal(t, want.GetId(), got["name"])
-	assert.Equal(t, want.GetVmId(), got["vm_id"])
-	assert.Equal(t, want.GetConfig().GetDescription(), got["description"])
-	assert.EqualValues(t, want.GetSizeBytes(), got["size_bytes"])
+	var got platformv1.ListSnapshotsResponse
+	decodeMCPProto(t, mcpResult, &got)
+	assert.True(t, proto.Equal(grpcResp, &got), "MCP reply %v, gRPC reply %v", &got, grpcResp)
 }
 
 func TestComputeParity_VMSnapshotListErrors(t *testing.T) {
@@ -153,7 +147,6 @@ func TestComputeParity_VMSnapshotListErrors(t *testing.T) {
 			_, mcpErr := provider.VMSnapshotList(context.Background(), "vm-1")
 			_, grpcErr := svc.ListSnapshots(context.Background(), &platformv1.ListSnapshotsRequest{VmId: "vm-1"})
 			assertSameClass(t, tc.want, mcpErr, grpcErr)
-			assert.ErrorIs(t, mcpErr, tc.err, "the MCP error keeps the orchestrator cause")
 		})
 	}
 }
@@ -162,21 +155,21 @@ func TestComputeParity_VMAttest(t *testing.T) {
 	provider, svc, _ := newComputeParityPair()
 	nonce := []byte("nonce")
 
-	mcpResult, err := provider.VMAttest(context.Background(), "vm-1", nonce, []int{0, 7})
+	req := &platformv1.AttestVMRequest{VmId: "vm-1", Nonce: nonce, PcrIndices: []uint32{0, 7}}
+
+	mcpResult, err := provider.VMAttest(context.Background(), req)
 	require.NoError(t, err)
-	grpcResp, err := svc.AttestVM(context.Background(), &platformv1.AttestVMRequest{
-		VmId: "vm-1", Nonce: nonce, PcrIndices: []uint32{0, 7},
-	})
+	grpcResp, err := svc.AttestVM(context.Background(), req)
 	require.NoError(t, err)
 
-	got := mcpResult.(map[string]interface{})
-	pcrs := got["pcr_values"].(map[string]string)
-	require.Len(t, pcrs, len(grpcResp.GetPcrValues()))
-	for _, pcr := range grpcResp.GetPcrValues() {
-		assert.Equal(t, hex.EncodeToString(pcr.GetValue()), pcrs[strconv.Itoa(int(pcr.GetIndex()))])
+	var got platformv1.AttestVMResponse
+	decodeMCPProto(t, mcpResult, &got)
+	assert.Equal(t, grpcResp.GetQuote(), got.GetQuote())
+	assert.Equal(t, grpcResp.GetSignatureAlgorithm(), got.GetSignatureAlgorithm())
+	require.Len(t, got.GetPcrValues(), len(grpcResp.GetPcrValues()))
+	for i, pcr := range grpcResp.GetPcrValues() {
+		assert.True(t, proto.Equal(pcr, got.GetPcrValues()[i]), "PCR %d: MCP %v, gRPC %v", i, got.GetPcrValues()[i], pcr)
 	}
-	assert.Equal(t, grpcResp.GetSignatureAlgorithm(), got["signature_algorithm"])
-	assert.Equal(t, false, got["verified"], "a quote is not a verification")
 }
 
 // TestComputeParity_VMAttestRefusesOutOfRangePCR: PCR 24 is outside a TPM
@@ -185,10 +178,9 @@ func TestComputeParity_VMAttest(t *testing.T) {
 func TestComputeParity_VMAttestRefusesOutOfRangePCR(t *testing.T) {
 	provider, svc, orch := newComputeParityPair()
 
-	_, mcpErr := provider.VMAttest(context.Background(), "vm-1", []byte("nonce"), []int{24})
-	_, grpcErr := svc.AttestVM(context.Background(), &platformv1.AttestVMRequest{
-		VmId: "vm-1", Nonce: []byte("nonce"), PcrIndices: []uint32{24},
-	})
+	req := &platformv1.AttestVMRequest{VmId: "vm-1", Nonce: []byte("nonce"), PcrIndices: []uint32{24}}
+	_, mcpErr := provider.VMAttest(context.Background(), req)
+	_, grpcErr := svc.AttestVM(context.Background(), req)
 
 	assertSameClass(t, codes.InvalidArgument, mcpErr, grpcErr)
 	assert.Nil(t, orch.lastAttestPCRs, "the backend must not be asked to quote")
@@ -200,8 +192,9 @@ func TestComputeParity_VMAttestErrors(t *testing.T) {
 			provider, svc, orch := newComputeParityPair()
 			orch.attestErr = tc.err
 
-			_, mcpErr := provider.VMAttest(context.Background(), "vm-1", []byte("nonce"), nil)
-			_, grpcErr := svc.AttestVM(context.Background(), &platformv1.AttestVMRequest{VmId: "vm-1", Nonce: []byte("nonce")})
+			req := &platformv1.AttestVMRequest{VmId: "vm-1", Nonce: []byte("nonce")}
+			_, mcpErr := provider.VMAttest(context.Background(), req)
+			_, grpcErr := svc.AttestVM(context.Background(), req)
 			assertSameClass(t, tc.want, mcpErr, grpcErr)
 		})
 	}

@@ -61,27 +61,37 @@ the first thing that costs someone a minute.
 | Flag | Short | Type | Default | Meaning |
 |---|---|---|---|---|
 | `--name` | `-n` | string | | VM name (**required**) |
+| `--cpus` | | uint | `2` | vCPU cores |
+| `--memory` | | uint | `2048` | Memory in MB |
+| `--disk-size` | | uint | `20` | Boot disk size in GB |
 | `--firmware` | | string | `uefi` | `bios`, `uefi`, `uefi-secure-boot` |
 | `--secure-boot` | | bool | `false` | Enable UEFI Secure Boot |
-| `--tpm` | | bool | `false` | Enable a virtual TPM (vTPM) |
+| `--tpm` | | bool | `true` | Attach a virtual TPM 2.0 (vTPM); `--tpm=false` creates the VM without one |
 | `--boot-device` | | string | `disk` | `disk`, `cdrom`, `network` |
 | `--network-bridge` | | string | | Network bridge name |
 | `--label` | `-l` | string array | | Labels (`key=value`), repeatable |
 | `--start` | | bool | `false` | Start immediately after creation |
 
-**`--firmware` defaults to `uefi`, and `--secure-boot` does not.** Secure Boot
-needs UEFI firmware — `--firmware bios --secure-boot` is a contradiction. Use
-`--firmware uefi-secure-boot` when you want it configured as one thing.
+**The daemon applies every flag or refuses the create.** With the `local-qemu`
+provider, `--firmware bios` and `--boot-device cdrom` are refused with
+`code = InvalidArgument` naming the field, and so is a `--network-bridge` other
+than the orchestrator's own; nothing is created. If `--start` cannot start the
+VM, the daemon deletes it and the command fails with the start error. The full
+list of what CreateVM honours and refuses is in
+[api.md §2](api.md#2-vm-lifecycle).
 
-**`--tpm` is what makes a VM attestable.** Without it there is no virtual TPM,
-so the VM cannot produce a quote and `compute attest` has nothing to work with.
-It defaults to off; on a trusted-computing platform you almost always want it
-on.
+**`--firmware` defaults to `uefi`, and `--secure-boot` does not.** Secure Boot
+needs UEFI firmware. Use `--firmware uefi-secure-boot` when you want it
+configured as one thing. Secure Boot also needs `ovmf_code_secure` in the
+daemon's compute configuration.
+
+**`--tpm` is what makes a VM attestable.** Without a virtual TPM the VM cannot
+produce a quote and `compute attest` has nothing to work with. It is on by
+default; `--tpm=false` is the way to leave it off.
 
 ```bash
 platformctl compute create --name web-01 \
-    --firmware uefi-secure-boot --tpm \
-    --network-bridge br-tenant-a \
+    --firmware uefi-secure-boot \
     --label tenant=tenant-a --label role=web \
     --start
 ```
@@ -108,7 +118,13 @@ default, and it is also how storage fills up.
 
 ### `compute stop`
 
-`--force` stops the VM immediately rather than requesting a clean shutdown.
+| Flag | Short | Type | Default | Meaning |
+|---|---|---|---|---|
+| `--force` | | bool | `false` | Kill the VM at once instead of asking the guest to shut down |
+| `--timeout` | `-t` | uint32 | `0` | Seconds the guest gets to shut down before it is terminated; `0` takes the daemon default (30), the maximum is 3600 |
+
+`--force` and `--timeout` together are refused with InvalidArgument: a forced
+stop does not wait.
 
 ### `compute reboot`
 
@@ -123,14 +139,11 @@ QUIC and MCP; HTTP 400, read back as InvalidArgument, over REST).
 
 ### Transports
 
-Every VM verb above reaches the daemon over `grpc`, `unix`, `rest` and `quic`.
-One transport carries fewer:
-
-- **`mcp`**: the `vm_*` tools take only the VM id. A request carrying `force`,
-  `timeout_seconds` or `delete_disks` is refused with InvalidArgument rather
-  than run without it. `compute stop` always sends its `--timeout` (default
-  30), so it cannot run over MCP today; `reboot --force` and
-  `delete --delete-disks` cannot either.
+Every VM verb above reaches the daemon over `grpc`, `unix`, `rest`, `quic` and
+`mcp`, each with its full request (`force`, `timeout_seconds` and
+`delete_disks` included). Over `mcp` the `vm_*` tools take the RPC's full
+request, so `--force`, `--timeout` and `--delete-disks` reach the daemon as
+they do over gRPC.
 
 ### `compute migrate`
 

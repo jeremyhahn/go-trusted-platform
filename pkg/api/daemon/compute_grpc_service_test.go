@@ -18,6 +18,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -54,6 +55,46 @@ type grpcMockOrchestrator struct {
 	waitFunc      func(ctx context.Context, instanceID string) error
 	getStateFunc  func(ctx context.Context, instanceID string) (compute.InstanceState, error)
 	closeFunc     func() error
+
+	// specs records every VMSpec CreateWithSpec received.
+	specs []compute.VMSpec
+}
+
+// CreateWithSpec records spec and applies the parts a VM reports back, the
+// way the QEMU orchestrator does.
+func (m *grpcMockOrchestrator) CreateWithSpec(ctx context.Context, profile *entities.DeviceProfile, spec compute.VMSpec) (*compute.Instance, error) {
+	m.mu.Lock()
+	m.specs = append(m.specs, spec)
+	m.mu.Unlock()
+
+	instance, err := m.Create(ctx, profile)
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if instance.Config == nil {
+		instance.Config = &compute.InstanceConfig{}
+	}
+	if spec.MemoryMB > 0 {
+		instance.Config.Memory = spec.MemoryMB
+	}
+	if spec.CPUs > 0 {
+		instance.Config.CPUs = spec.CPUs
+	}
+	instance.Config.SecureBoot = spec.SecureBoot
+	instance.Config.BootMode = spec.BootMode
+	instance.Config.Description = spec.Description
+	instance.Config.Labels = spec.Labels
+	instance.Config.Metadata = spec.Metadata
+	return instance, nil
+}
+
+// recordedSpecs returns the specs CreateWithSpec has received.
+func (m *grpcMockOrchestrator) recordedSpecs() []compute.VMSpec {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return slices.Clone(m.specs)
 }
 
 func newGRPCMockOrchestrator() *grpcMockOrchestrator {

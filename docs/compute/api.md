@@ -136,9 +136,103 @@ any other state, so a VM whose guest powers off or crashes while `running` or
 `error` VM stays `error`, and a VM already deleted or migrated away is not
 recreated.
 
-**Reboot is stop then start** on every transport (`compute.Reboot`,
+**Reboot is stop then start** on every transport (`compute.RebootWithOptions`,
 `pkg/compute/reboot.go`), so a stopped VM refuses a reboot with
 FailedPrecondition.
+
+**Create honours its config, or refuses it** (#704; `ComputeService.CreateVM`,
+`pkg/api/daemon/compute_vm_create.go`, and `compute.VMSpec`,
+`pkg/compute/vm_create.go`). The `local-qemu` backend builds one shape of VM:
+UEFI firmware, one qcow2 boot disk, one virtio-net NIC on the orchestrator's
+bridge, an emulated TPM 2.0 and no display. CreateVM applies the fields it
+can and refuses every other setting with InvalidArgument
+(`ErrVMCreateUnsupportedField`, "config.`<field>` is not supported: ...")
+before anything is created. A field left at its zero value is never refused.
+
+| Field | What CreateVM does with it |
+|---|---|
+| `name` | the VM name; required |
+| `description`, `labels`, `metadata` | stored on the VM and returned by `GetVM` and `ListVMs`; `labels` is what `selector.match_labels` matches |
+| `firmware` | `UEFI` (or unset) boots UEFI; `UEFI_SECURE_BOOT` turns on Secure Boot |
+| `secure_boot` | turns on Secure Boot, as `UEFI_SECURE_BOOT` does |
+| `boot_device` | `DISK` (or unset) boots the disk; `NETWORK` PXE-boots |
+| `cpu.cores` | the vCPU count; unset is the orchestrator's `default_cpus` |
+| `memory.size_mb` | the memory; unset is the orchestrator's `default_memory` |
+| `disks[0].size_gb` | the boot disk size; unset is the orchestrator's `default_disk_size` |
+| `disks[0].type` | `QCOW2` (or unset) |
+| `disks[0].bus` | the architecture's bus (or unset): `SATA` on x86_64, `VIRTIO` on aarch64 |
+| `disks[0].bootable` | accepted; the one disk is always the boot disk |
+| `networks[0].mac_address` | the NIC's MAC address; unset leaves it to QEMU |
+| `networks[0].bridge` | the orchestrator's bridge (or unset) |
+| `networks[0].model` | `VIRTIO` (or unset) |
+| `tpm` | unset or `enabled: true` attaches a vTPM; `enabled: false` creates the VM without one |
+| `tpm.version` | `2_0` (or unset) |
+| `tpm.emulated` | accepted; the vTPM is always emulated |
+
+| Refused | Why |
+|---|---|
+| `firmware` `BIOS` | VMs boot UEFI firmware |
+| `boot_device` `CDROM` | CD-ROM boot needs an installation ISO, which CreateVM cannot carry |
+| `cpu.sockets` or `cpu.threads` over 1, `cpu.model`, `cpu.features` | vCPUs are single-thread cores on one socket of the default model |
+| `memory.hugepages`, `memory.shared` | not available |
+| more than one `disks` entry | attach more with `AttachDisk` |
+| `disks[0].id`, `.path`, `.readonly`, `.backing_file`; another `.type` | the orchestrator creates a fresh writable qcow2 disk and names it |
+| more than one `networks` entry | attach more with `AttachNetwork` |
+| `networks[0].id`, `.vlan`, `.bandwidth_limit_mbps`; another `.model` | NIC ids are assigned, VLANs come from the network policy, no bandwidth limits |
+| `graphics` (any type but `NONE`, or any listen, port, password or keymap) | VMs have no display; use the serial console |
+| `tpm.version` other than `2_0`, `tpm.device_path`, `tpm.state_dir` | the vTPM is an emulated TPM 2.0 kept in the VM's work directory |
+| `nvram` | UEFI variables start from the configured template |
+
+Three checks depend on the orchestrator's configuration and are made by it
+(`checkVMSpec`, `pkg/compute/qemu_create.go`), also as InvalidArgument: Secure
+Boot when `ovmf_code_secure` is not configured, a `disks[0].bus` the
+architecture does not use, and a `networks[0].bridge` other than its own. A
+malformed `mac_address` is InvalidArgument too. An orchestrator other than
+`local-qemu` builds only its default VM: a config that sets any field in the
+first table to other than its default is FailedPrecondition there.
+
+**`start` deletes the VM it could not start.** With `start` set, CreateVM
+starts the new VM and returns it running. If the start fails, it deletes the
+VM and returns the start error with its class (an unknown disk is NotFound,
+and so on), so a failed create-and-start leaves nothing behind
+(`compute.StartOrDelete`). If the delete fails too, the error carries both.
+
+**Stop and reboot honour `force` and `timeout_seconds`**
+(`compute.StopOptions`, `pkg/compute/vm_stop.go`). By default the guest
+gets an ACPI power-button press and 30 seconds to power off, then the process
+gets SIGTERM. `timeout_seconds` replaces the 30 seconds, up to 3600. `force`
+kills the process with SIGKILL at once; a forced stop of a suspended VM kills
+it without continuing it first. `RebootVM` has only `force`, which forces its
+stop half. A forced stop that also carries a timeout, or a timeout over 3600,
+is InvalidArgument before the VM is touched. An orchestrator that cannot honour
+the options (any but `local-qemu`) answers FailedPrecondition for a non-default
+stop rather than taking a default one.
+
+**List honours `states`, `selector` and `pagination`**
+(`ComputeService.ListVMs`, `pkg/api/daemon/compute_vm_list.go`). `states`
+keeps the VMs in any listed state; an empty list keeps every state.
+`selector.match_labels` keeps the VMs that carry every listed label with an
+equal value; a VM carries the `config.labels` it was created with.
+`pagination` pages the way the EAB credential list does
+(`pkg/api/daemon/pagination.go`): `sort_by` is `id` (the default, always
+ascending), `name` or `created_at`, ties broken by id, in the direction
+`ascending` names. `page_size` 0 is one page of every VM, page 0
+is page 1, and a page past the end is an empty list. The response's
+`pagination` reports the page, the page size, and the total pages and VMs.
+A list that matches nothing is an empty list, not an error. An unknown state
+number, any `selector.match_expressions` entry (the API defines no expression
+syntax) and any other `sort_by` are InvalidArgument (`ErrVMListUnknownState`,
+`ErrVMListSelectorExpression`, `ErrVMListUnsupportedSortField`) before the
+orchestrator is asked.
+
+Every transport reaches that one filter. gRPC and the Unix socket call
+`ListVMs` directly, QUIC `0x65` and MCP `vm_list` carry the full request, and
+both REST servers read the `ListVMsRequest` as the JSON body of
+`GET /api/v1/compute/vms`, which is how the Go SDK's REST adapter sends it
+(`sdk/go/transport/rest/adapter.go`). The web service also takes `page` and
+`page_size` query parameters, which replace the body's page and page size.
+`TestVMListSDKParity_*` (`pkg/api/daemon/compute_sdk_parity_test.go`) holds
+this over REST, MCP and QUIC.
 
 QUIC carries create, list, get, delete, start, stop, reboot, suspend and resume
 as sub-opcodes under `OpVMExtendedCategory` (`0x69`), with the values in the
@@ -148,17 +242,25 @@ same `ComputeService` as gRPC (§6).
 
 **The Go SDK carries each verb the daemon answers.** Its REST adapter maps all
 six lifecycle verbs to the routes above, with the id in the path and
-`delete_disks` as a query parameter. Its MCP adapter maps all six to the
-`vm_*` tools. The tools take only `id`, so the adapter refuses `force`,
-`timeout_seconds` or `delete_disks` with InvalidArgument rather than drop them
-(`sdk/go/transport/mcp/compute_vm.go`). Its QUIC adapter maps all six, and create,
-get and list, to their sub-opcodes (`sdk/go/transport/quic/adapter.go`).
+`delete_disks` as a query parameter, and sends the full `CreateVMRequest` as
+the body of `POST /api/v1/compute/vms`. Its MCP adapter maps all six, plus
+create, get and list, to the `vm_*` tools and sends each RPC's full request,
+`force`, `timeout_seconds` and `delete_disks` included
+(`sdk/go/transport/mcp/compute_vm.go`). Its QUIC adapter maps all six, and
+create, get and list, to their sub-opcodes (`sdk/go/transport/quic/adapter.go`).
 Every adapter returns the client's typed error (`ErrStartVMFailed`, ...,
 `sdk/go/services/compute/errors.go`) wrapping the transport status: an unknown VM
 is NotFound everywhere. A VM in the wrong state is FailedPrecondition, except
 over REST, where it is InvalidArgument because both REST servers render
 FailedPrecondition as HTTP 400. `TestVMLifecycleSDKParity_*`
-(`pkg/api/daemon/compute_sdk_parity_test.go`) holds this.
+(`pkg/api/daemon/compute_sdk_parity_test.go`) holds this over REST, MCP, QUIC,
+gRPC, the Unix socket and the embedded transport.
+
+Create travels the same way. gRPC, the Unix socket and the embedded transport
+call `CreateVM` directly, QUIC `0x60`, MCP `vm_create` and SDK REST send the
+full request, and the CLI builds it from its flags. A refused field is
+InvalidArgument on every one of them. `TestVMCreateSDKParity_*` holds the
+config, the refusal and the failed start over every transport.
 
 Against a running daemon, `TestComputeMultiProtocol/<transport>/VMSuspendResumeReboot`
 (`test/integration/compute/multiprotocol_test.go`) sends suspend, resume and
@@ -170,10 +272,26 @@ transport's wrong-state class:
 
 | Transport | Wrong-state answer |
 |---|---|
-| gRPC, Unix, QUIC | FailedPrecondition |
+| gRPC, Unix, QUIC, MCP | FailedPrecondition (over MCP, the SDK turns the JSON-RPC code of that class back into it) |
 | REST | HTTP 400 |
-| MCP | a JSON-RPC code of the FailedPrecondition class (`mcpwire.ClassForCode`) |
 | CLI | non-zero exit, with `code = FailedPrecondition` in the output |
+
+`TestComputeMultiProtocol/<transport>/VMCreateRefusesUnsupportedField` asks
+each transport for a BIOS VM and checks that the refusal arrives in that
+transport's class and that no VM is left behind: InvalidArgument over gRPC, the
+Unix socket, QUIC and MCP, HTTP 400 over REST, and `code = InvalidArgument` in
+the CLI's output.
+
+The suite's MCP adapter (`test/integration/compute/mcp_adapter.go`) is the
+compute SDK client over MCP, so every case — create with disks, firmware and
+labels, list by label, forced stop and reboot, and delete with its disks —
+runs on MCP with the same options as on gRPC.
+
+`make integration-test-compute` runs the suite in the devcontainer against
+`platformd` with the `local-qemu` provider: the runner appends
+`compute: provider: local-qemu` to the integration config, because with no
+`compute:` section the daemon serves the container orchestrator. No workflow
+runs it; like the other per-package suites it needs the devcontainer.
 
 `TestQEMUOrchestratorSuspendResumeReboot`
 (`test/integration/compute/orchestrator_integration_test.go`) drives the same
@@ -212,17 +330,24 @@ unknown VM or snapshot is NotFound; a VM that is not running, or an
 orchestrator without snapshots, is FailedPrecondition. The snapshot's id is
 its name.
 
-The Go SDK carries the snapshot verbs over gRPC and QUIC
-(`sdk/go/transport/quic/adapter.go`), returning the client's typed error
-(`ErrCreateSnapshotFailed`, ..., `sdk/go/services/compute/errors.go`) around
-the transport status; `TestVMSnapshotSDKParity_*`
-(`pkg/api/daemon/compute_sdk_snapshot_parity_test.go`) holds this. Its REST
-adapter routes no `/snapshots` path and its MCP adapter maps no `vm_snapshot_*`
-tool, so the SDK does not reach snapshots over REST or MCP. Against a running
-daemon, `TestComputeSnapshotsMultiProtocol`
+The Go SDK carries the snapshot verbs over every transport, returning the
+client's typed error (`ErrCreateSnapshotFailed`, ...,
+`sdk/go/services/compute/errors.go`) around the transport status. Its REST
+adapter maps them to the routes above, with the VM and snapshot ids in the
+path and never in the body (`sdk/go/transport/rest/adapter.go`); an empty id is
+InvalidArgument before the request leaves the client. Its MCP adapter maps them
+to the `vm_snapshot_*` tools with the arguments in §7
+(`sdk/go/transport/mcp/compute_vm.go`). Its QUIC adapter maps them to their
+sub-opcodes (`sdk/go/transport/quic/adapter.go`). As with the lifecycle verbs
+(§2), a VM in the wrong state is FailedPrecondition except over REST, where it
+is InvalidArgument. `TestVMSnapshotSDKParity_*` and
+`TestVMSnapshotAttestSDKParity_MissingVMID`
+(`pkg/api/daemon/compute_sdk_snapshot_parity_test.go`) hold this over REST,
+QUIC and MCP. Against a running daemon, `TestComputeSnapshotsMultiProtocol`
 (`test/integration/compute/multiprotocol_test.go`) creates, lists, restores and
-deletes a snapshot of a running VM over gRPC and QUIC, then checks deleting it
-again answers NotFound.
+deletes a snapshot of a running VM over REST, gRPC, QUIC, MCP and Unix, then
+checks that deleting it again answers NotFound and that listing without a VM
+id answers InvalidArgument. The CLI has no snapshot verb.
 
 `PrepareMigration` and `FinalizeMigration` are gRPC-only and exist so a
 migration can be staged and confirmed; `MigrateVM` is the one-shot form. Do not
@@ -269,16 +394,21 @@ bank other than SHA-256, or evidence without its quote, signature or nonce is
 InvalidArgument; an unknown VM is NotFound; a VM that is not running, has no
 vTPM, or runs on an orchestrator without attestation is FailedPrecondition.
 
-The Go SDK carries both verbs over gRPC and QUIC, returning the client's typed
-`ErrAttestVMFailed` or `ErrVerifyVMAttestationFailed` around the transport
-status; `TestVMAttestSDKParity_*`
-(`pkg/api/daemon/compute_sdk_attest_parity_test.go`) holds this. As with
-snapshots, its REST adapter routes no `/attest` path and its MCP adapter maps
-no `vm_attest*` tool. Against a running daemon,
-`TestComputeAttestationMultiProtocol`
-(`test/integration/compute/multiprotocol_test.go`) checks over gRPC and QUIC
-that attesting a stopped VM is FailedPrecondition, attesting an unknown VM is
-NotFound, and verifying evidence without a quote is InvalidArgument.
+The Go SDK carries both verbs over every transport, returning the client's
+typed `ErrAttestVMFailed` or `ErrVerifyVMAttestationFailed` around the
+transport status. Its REST adapter maps them to the two routes above with the
+VM id in the path; its MCP adapter maps them to `vm_attest` and
+`vm_attest_verify` and refuses a PCR bank other than SHA-256 (§7); its QUIC
+adapter maps them to their sub-opcodes. A VM in the wrong state is
+FailedPrecondition except over REST, where it is InvalidArgument (§2).
+`TestVMAttestSDKParity_*` (`pkg/api/daemon/compute_sdk_attest_parity_test.go`)
+and `TestVMSnapshotAttestSDKParity_MissingVMID` hold this over REST, QUIC and
+MCP. Against a running daemon, `TestComputeAttestationMultiProtocol`
+(`test/integration/compute/multiprotocol_test.go`) checks over REST, gRPC,
+QUIC, MCP and Unix that attesting a stopped VM answers the transport's
+wrong-state class, attesting an unknown VM is NotFound, attesting without a VM
+id is InvalidArgument, and verifying evidence without a quote is
+InvalidArgument.
 
 ### A VM quote declares its signature scheme
 
@@ -393,13 +523,40 @@ backend:
 
 `vm_disk_detach` is `vm:write`, not `vm:delete`, because `DetachDisk` is.
 
-The nine VM lifecycle tools answer through their RPC
-(`pkg/api/daemon/mcp_vm_lifecycle.go`): the daemon builds the RPC request,
-calls `ComputeService`, and returns its reply in the proto's field names.
-`vm_create` takes what `CreateVM` reads (`name`, `memory`, `cpus`,
-`tpm_enabled`, `secure_boot`); an omitted `memory` or `cpus` takes the RPC's
-default of 1024 MB and one core. `vm_list` takes no filter, because `ListVMs`
-applies none.
+The nine VM lifecycle tools take their RPC's full request and answer its
+response, both in protojson with the proto's field names
+(`pkg/api/mcp/vm_lifecycle_tools.go`). Each tool calls the gRPC
+`ComputeService` servicer the daemon builds over its orchestrator
+(`pkg/api/daemon/mcp_vm_lifecycle.go`), so it validates and fails as gRPC does.
+An unknown argument, a wrong type, an out-of-range number or an unknown enum
+name is InvalidArgument before the service runs. `vm_create` takes
+`{"config": {...}, "start": bool}`, `vm_list` takes `selector`, `pagination`
+and `states`, and the others take `id` plus the RPC's flags.
+[api-reference-mcp.md](api-reference-mcp.md) lists every argument.
+`CreateVM` applies or refuses every `config` field and acts on `start`, stop
+and reboot read `force` and `timeout_seconds`, and `ListVMs` reads `states`,
+`selector` and `pagination` (§2); delete ignores `delete_disks`. That holds on
+every transport.
+
+The snapshot and attestation tools answer through their RPC the same way
+(`pkg/api/daemon/mcp_vm.go`), so each reply is the RPC's response in the
+proto's field names. Since #704 this replaces the tools' earlier hand-built
+maps: `vm_snapshot_list` returns `ListSnapshotsResponse` with no `count`, and
+`vm_attest` returns `AttestVMResponse`, whose `pcr_values` is a list of
+`{index, bank, value}` entries with base64 values rather than a map of index
+to hex. The arguments map onto the request:
+
+| Tool | Arguments | RPC request |
+|---|---|---|
+| `vm_snapshot_create` | `vm_id`, `name`, `description`, `memory_snapshot`, `disk_snapshot` | `CreateSnapshotRequest` (`config`); the two flags must be equal |
+| `vm_snapshot_list` | `vm_id` | `ListSnapshotsRequest` |
+| `vm_snapshot_delete`, `vm_snapshot_restore` | `vm_id`, `snapshot_id` | `DeleteSnapshotRequest`, `RestoreSnapshotRequest` |
+| `vm_attest` | `vm_id`, `nonce` (base64), `include_pcrs` | `AttestVMRequest`, SHA-256 bank |
+| `vm_attest_verify` | `vm_id`, `quote`, `signature`, `nonce` (base64), `signature_algorithm`, `expected_pcrs` (index → base64 SHA-256) | `VerifyVMAttestationRequest`, SHA-256 bank |
+
+No tool takes a PCR bank, so the SDK's MCP adapter refuses an `AttestVM` or
+`VerifyVMAttestation` request naming another bank with InvalidArgument rather
+than send it as SHA-256 (`sdk/go/transport/mcp/compute_vm.go`).
 
 A tool's failure carries the gRPC status class its twin RPC answers the same
 failure with: NotFound for an unknown VM, container, snapshot or disk,

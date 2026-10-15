@@ -593,6 +593,23 @@ prepare_gatewayd_supervision() {
     exit 1
 }
 
+# prepare_compute_config writes the platformd config for the compute target:
+# the standard integration config with the local QEMU provider selected. With
+# no compute: section the daemon serves the container orchestrator, and the
+# compute suite drives VMs (#260).
+prepare_compute_config() {
+    COMPUTE_PLATFORMD_CONFIG="/tmp/platformd-compute-config.yaml"
+    cp "${PLATFORM_BUILD_DIR}/test/integration/config.yaml" "${COMPUTE_PLATFORMD_CONFIG}"
+    cat >> "${COMPUTE_PLATFORMD_CONFIG}" << 'COMPUTEEOF'
+
+# Compute configuration injected by run-integration-tests.sh for the
+# compute target: the VM orchestrator the compute suite drives.
+compute:
+  provider: local-qemu
+COMPUTEEOF
+    echo "Compute platformd config: ${COMPUTE_PLATFORMD_CONFIG}"
+}
+
 # start_vbmc builds and starts the virtual BMC responder, exports the harness
 # environment variables, downloads the vBMC CA cert for daemon trust injection,
 # and generates a modified platformd config that trusts the vBMC HTTPS cert.
@@ -957,6 +974,11 @@ elif [ "$RUN_TARGET" = "bmc" ]; then
     # modified config that trusts it), then start platformd with that config.
     start_vbmc || echo "WARNING: vBMC setup failed, BMC tests may fail"
     start_platformd "${VBMC_PLATFORMD_CONFIG}" || abort_no_daemon
+elif [ "$RUN_TARGET" = "compute" ]; then
+    # Compute target: platformd with the local QEMU provider, so the VM
+    # tools and RPCs reach a VM orchestrator.
+    prepare_compute_config
+    start_platformd "${COMPUTE_PLATFORMD_CONFIG}" || abort_no_daemon
 elif [ "$RUN_TARGET" = "proxy" ]; then
     # The proxy suite talks to the shared platformd and also runs gatewayd
     # itself, supervised, to kill its children under load.

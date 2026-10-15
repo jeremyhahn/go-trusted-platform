@@ -58,8 +58,8 @@ type ComputeCommands interface {
 	ListVMs(ctx context.Context, opts ListVMsOptions) (*ListVMsResult, error)
 }
 
-// SnapshotCommands defines the VM snapshot verbs. Only the transports whose
-// SDK adapter carries them implement it: gRPC and QUIC.
+// SnapshotCommands defines the VM snapshot verbs. Every API transport
+// implements it; the CLI adapter does not.
 type SnapshotCommands interface {
 	// Name returns the adapter name.
 	Name() string
@@ -77,8 +77,8 @@ type SnapshotCommands interface {
 	ListSnapshots(ctx context.Context, vmID string) ([]SnapshotSummary, error)
 }
 
-// AttestCommands defines the VM attestation verbs. Only the transports whose
-// SDK adapter carries them implement it: gRPC and QUIC.
+// AttestCommands defines the VM attestation verbs. Every API transport
+// implements it; the CLI adapter does not.
 type AttestCommands interface {
 	// Name returns the adapter name.
 	Name() string

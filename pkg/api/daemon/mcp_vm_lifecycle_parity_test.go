@@ -40,11 +40,16 @@ import (
 )
 
 // vmLifecycleCall is one lifecycle operation made through MCP and through
-// gRPC against the same orchestrator state.
+// gRPC against the same orchestrator state. args are the tool arguments.
 type vmLifecycleCall struct {
 	name string
-	mcp  func(*MCPServiceProvider, string) (interface{}, error)
+	args func(id string) map[string]interface{}
 	grpc func(*ComputeGRPCService, string) (proto.Message, error)
+}
+
+// vmByID is the arguments of a tool whose request is the VM id alone.
+func vmByID(id string) map[string]interface{} {
+	return map[string]interface{}{"id": id}
 }
 
 // vmLifecycleCalls are the nine tools and their RPCs. vm_create takes the
@@ -52,8 +57,8 @@ type vmLifecycleCall struct {
 var vmLifecycleCalls = []vmLifecycleCall{
 	{
 		"vm_create",
-		func(p *MCPServiceProvider, id string) (interface{}, error) {
-			return p.VMCreate(context.Background(), mcp.VMCreateSpec{Name: id})
+		func(id string) map[string]interface{} {
+			return map[string]interface{}{"config": map[string]interface{}{"name": id}}
 		},
 		func(s *ComputeGRPCService, id string) (proto.Message, error) {
 			return s.CreateVM(context.Background(), &platformv1.CreateVMRequest{Config: &platformv1.VMConfig{Name: id}})
@@ -61,76 +66,71 @@ var vmLifecycleCalls = []vmLifecycleCall{
 	},
 	{
 		"vm_list",
-		func(p *MCPServiceProvider, _ string) (interface{}, error) {
-			return p.VMList(context.Background())
-		},
+		func(string) map[string]interface{} { return map[string]interface{}{} },
 		func(s *ComputeGRPCService, _ string) (proto.Message, error) {
 			return s.ListVMs(context.Background(), &platformv1.ListVMsRequest{})
 		},
 	},
 	{
 		"vm_get",
-		func(p *MCPServiceProvider, id string) (interface{}, error) {
-			return p.VMGet(context.Background(), id)
-		},
+		vmByID,
 		func(s *ComputeGRPCService, id string) (proto.Message, error) {
 			return s.GetVM(context.Background(), &platformv1.GetVMRequest{Id: id})
 		},
 	},
 	{
 		"vm_delete",
-		func(p *MCPServiceProvider, id string) (interface{}, error) {
-			return p.VMDelete(context.Background(), id)
-		},
+		vmByID,
 		func(s *ComputeGRPCService, id string) (proto.Message, error) {
 			return s.DeleteVM(context.Background(), &platformv1.DeleteVMRequest{Id: id})
 		},
 	},
 	{
 		"vm_start",
-		func(p *MCPServiceProvider, id string) (interface{}, error) {
-			return p.VMStart(context.Background(), id)
-		},
+		vmByID,
 		func(s *ComputeGRPCService, id string) (proto.Message, error) {
 			return s.StartVM(context.Background(), &platformv1.StartVMRequest{Id: id})
 		},
 	},
 	{
 		"vm_stop",
-		func(p *MCPServiceProvider, id string) (interface{}, error) {
-			return p.VMStop(context.Background(), id)
-		},
+		vmByID,
 		func(s *ComputeGRPCService, id string) (proto.Message, error) {
 			return s.StopVM(context.Background(), &platformv1.StopVMRequest{Id: id})
 		},
 	},
 	{
 		"vm_reboot",
-		func(p *MCPServiceProvider, id string) (interface{}, error) {
-			return p.VMReboot(context.Background(), id)
-		},
+		vmByID,
 		func(s *ComputeGRPCService, id string) (proto.Message, error) {
 			return s.RebootVM(context.Background(), &platformv1.RebootVMRequest{Id: id})
 		},
 	},
 	{
 		"vm_suspend",
-		func(p *MCPServiceProvider, id string) (interface{}, error) {
-			return p.VMSuspend(context.Background(), id)
-		},
+		vmByID,
 		func(s *ComputeGRPCService, id string) (proto.Message, error) {
 			return s.SuspendVM(context.Background(), &platformv1.SuspendVMRequest{Id: id})
 		},
 	},
 	{
 		"vm_resume",
-		func(p *MCPServiceProvider, id string) (interface{}, error) {
-			return p.VMResume(context.Background(), id)
-		},
+		vmByID,
 		func(s *ComputeGRPCService, id string) (proto.Message, error) {
 			return s.ResumeVM(context.Background(), &platformv1.ResumeVMRequest{Id: id})
 		},
 	},
+}
+
+// mcp runs the call's tool through the MCP tool registry the daemon builds
+// over provider.
+func (c vmLifecycleCall) mcp(provider *MCPServiceProvider, id string) (interface{}, error) {
+	return runVMTool(provider, c.name, c.args(id))
+}
+
+// runVMTool runs one tool through the MCP tool registry over provider.
+func runVMTool(provider *MCPServiceProvider, tool string, args map[string]interface{}) (interface{}, error) {
+	return mcp.NewToolRegistry(provider, logging.DefaultLogger()).ExecuteTool(context.Background(), tool, args)
 }
 
 // seededVMPair is a parity pair whose orchestrator holds vm-1 and creates
@@ -166,16 +166,22 @@ func TestVMLifecycleParity_Replies(t *testing.T) {
 
 			want, err := protoResultJSON.Marshal(grpcResp)
 			require.NoError(t, err)
-			got, ok := mcpResult.(json.RawMessage)
-			require.True(t, ok, "MCP result is %T, want json.RawMessage", mcpResult)
+			got, err := json.Marshal(mcpResult)
+			require.NoError(t, err)
 			assert.JSONEq(t, string(want), string(got))
 		})
 	}
 }
 
-func TestVMLifecycleParity_CreateBuildsTheSameProfile(t *testing.T) {
+func TestVMLifecycleParity_CreateBuildsTheSameSpec(t *testing.T) {
 	memory, cpus := uint64(4096), uint32(2)
-	spec := mcp.VMCreateSpec{Name: "vm-9", MemoryMB: &memory, CPUs: &cpus, TPMEnabled: true, SecureBoot: true}
+	args := map[string]interface{}{"config": map[string]interface{}{
+		"name":        "vm-9",
+		"memory":      map[string]interface{}{"size_mb": memory},
+		"cpu":         map[string]interface{}{"cores": cpus},
+		"tpm":         map[string]interface{}{"enabled": true, "version": "TPM_VERSION_2_0"},
+		"secure_boot": true,
+	}}
 	req := &platformv1.CreateVMRequest{Config: &platformv1.VMConfig{
 		Name:       "vm-9",
 		Memory:     &platformv1.MemoryConfig{SizeMb: memory},
@@ -185,21 +191,69 @@ func TestVMLifecycleParity_CreateBuildsTheSameProfile(t *testing.T) {
 	}}
 
 	provider, svc, orch := seededVMPair()
-	var models []string
-	created := orch.createFunc
-	orch.createFunc = func(ctx context.Context, profile *entities.DeviceProfile) (*compute.Instance, error) {
-		models = append(models, profile.Model)
-		return created(ctx, profile)
-	}
 
-	_, err := provider.VMCreate(context.Background(), spec)
+	_, err := runVMTool(provider, "vm_create", args)
 	require.NoError(t, err)
 	_, err = svc.CreateVM(context.Background(), req)
 	require.NoError(t, err)
 
-	require.Len(t, models, 2)
-	assert.Equal(t, "vm:memory=4096,cpus=2,tpm=true,secureboot=true", models[1])
-	assert.Equal(t, models[1], models[0], "MCP must hand the orchestrator what gRPC does")
+	specs := orch.recordedSpecs()
+	require.Len(t, specs, 2)
+	assert.Equal(t, compute.VMSpec{MemoryMB: 4096, CPUs: 2, SecureBoot: true}, specs[1])
+	assert.Equal(t, specs[1], specs[0], "MCP must hand the orchestrator what gRPC does")
+}
+
+func TestVMLifecycleParity_CreateRefusesTheSameField(t *testing.T) {
+	args := map[string]interface{}{"config": map[string]interface{}{
+		"name":     "vm-9",
+		"firmware": "FIRMWARE_TYPE_BIOS",
+	}}
+	req := &platformv1.CreateVMRequest{Config: &platformv1.VMConfig{
+		Name:     "vm-9",
+		Firmware: platformv1.FirmwareType_FIRMWARE_TYPE_BIOS,
+	}}
+
+	provider, svc, orch := seededVMPair()
+
+	_, mcpErr := runVMTool(provider, "vm_create", args)
+	_, grpcErr := svc.CreateVM(context.Background(), req)
+
+	require.Error(t, grpcErr)
+	require.Error(t, mcpErr)
+	assert.Equal(t, codes.InvalidArgument, status.Code(grpcErr))
+	assert.Contains(t, grpcErr.Error(), "config.firmware")
+	assert.Contains(t, mcpErr.Error(), grpcErr.Error(), "MCP must refuse what gRPC does")
+	assert.Empty(t, orch.recordedSpecs(), "a refused create must not reach the orchestrator")
+}
+
+// The SDK compute client creates, gets and lists VMs over MCP and reads back
+// what the gRPC ComputeService answers (#704).
+func TestVMLifecycleParity_SDKOverMCP(t *testing.T) {
+	ctx := context.Background()
+	provider, svc, _ := seededVMPair()
+	client := dialComputeMCP(t, provider, svc)
+
+	config := &platformv1.VMConfig{Name: "vm-9", Memory: &platformv1.MemoryConfig{SizeMb: 2048}}
+	created, err := client.CreateVM(ctx, config, false)
+	require.NoError(t, err)
+	wantCreated, err := svc.CreateVM(ctx, &platformv1.CreateVMRequest{Config: config})
+	require.NoError(t, err)
+	assert.True(t, proto.Equal(wantCreated.GetVm(), created), "created = %v, want %v", created, wantCreated.GetVm())
+
+	got, err := client.GetVM(ctx, "vm-1")
+	require.NoError(t, err)
+	wantGot, err := svc.GetVM(ctx, &platformv1.GetVMRequest{Id: "vm-1"})
+	require.NoError(t, err)
+	assert.True(t, proto.Equal(wantGot.GetVm(), got), "got = %v, want %v", got, wantGot.GetVm())
+
+	listed, _, err := client.ListVMs(ctx, &platformv1.ListVMsRequest{})
+	require.NoError(t, err)
+	wantListed, err := svc.ListVMs(ctx, &platformv1.ListVMsRequest{})
+	require.NoError(t, err)
+	require.Len(t, listed, len(wantListed.GetVms()))
+	for i, vm := range wantListed.GetVms() {
+		assert.True(t, proto.Equal(vm, listed[i]), "listed[%d] = %v, want %v", i, listed[i], vm)
+	}
 }
 
 func TestVMLifecycleParity_UnknownVM(t *testing.T) {
@@ -236,7 +290,7 @@ func TestVMLifecycleParity_InvalidInput(t *testing.T) {
 	t.Run("orchestrator refuses the id", func(t *testing.T) {
 		provider, svc, orch := newComputeParityPair()
 		orch.startFunc = func(context.Context, string) error { return compute.ErrInvalidInstanceID }
-		_, mcpErr := provider.VMStart(context.Background(), "bad/id")
+		_, mcpErr := runVMTool(provider, "vm_start", vmByID("bad/id"))
 		_, grpcErr := svc.StartVM(context.Background(), &platformv1.StartVMRequest{Id: "bad/id"})
 		assertSameClass(t, codes.InvalidArgument, mcpErr, grpcErr)
 	})

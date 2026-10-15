@@ -75,7 +75,11 @@ func (s InstanceState) IsTerminal() bool {
 
 // CanTransitionTo checks if the current state can transition to the target state
 func (s InstanceState) CanTransitionTo(target InstanceState) bool {
-	// Terminal states can't transition
+	// An instance in error can still be deleted; nothing else leaves a
+	// terminal state.
+	if s == StateError && target == StateDeleting {
+		return true
+	}
 	if s.IsTerminal() {
 		return false
 	}
