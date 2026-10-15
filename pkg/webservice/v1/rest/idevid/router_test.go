@@ -58,6 +58,8 @@ func TestIDevIDRouter_RoutesRegistered(t *testing.T) {
 		{http.MethodGet, "/api/v1/idevid/attributes"},
 		{http.MethodPost, "/api/v1/idevid/flush"},
 		{http.MethodPost, "/api/v1/idevid/activate-credential"},
+		{http.MethodDelete, "/api/v1/tpm/idevid"},
+		{http.MethodDelete, "/api/v1/tpm/iak"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {

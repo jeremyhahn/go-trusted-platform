@@ -59,10 +59,21 @@ func toolPermissionCatalog() map[string]string {
 	permissions["vtpm_extend_pcr"] = "vtpm:write"
 	permissions["vtpm_read_pcr"] = "vtpm:read"
 
+	// Each vtpm_bundle_* tool runs its vtpm_* twin's executor
+	// (vtpmBundleAliases) and carries that twin's scope.
+	permissions["vtpm_bundle_create"] = permissions["vtpm_create"]
+	permissions["vtpm_bundle_delete"] = permissions["vtpm_delete"]
+	permissions["vtpm_bundle_list"] = permissions["vtpm_list"]
+	permissions["vtpm_bundle_quote"] = permissions["vtpm_quote"]
+	permissions["vtpm_bundle_seal"] = permissions["vtpm_seal"]
+	permissions["vtpm_bundle_unseal"] = permissions["vtpm_unseal"]
+	permissions["vtpm_bundle_pcr_extend"] = permissions["vtpm_extend_pcr"]
+	permissions["vtpm_bundle_pcr_read"] = permissions["vtpm_read_pcr"]
+
 	// vTPM bundle and template tools carry the scope of their gRPC
-	// VTPMService twin (pkg/api/grpc/method_permissions.go). The
-	// vtpm_bundle_* tools stay unclassified: no executor dispatches them.
+	// VTPMService twin (pkg/api/grpc/method_permissions.go).
 	permissions["vtpm_get"] = "vtpm:read"
+	permissions["vtpm_bundle_get"] = permissions["vtpm_get"]
 	permissions["vtpm_validate"] = "vtpm:read"
 	permissions["vtpm_export"] = "vtpm:read"
 	permissions["vtpm_get_bundle_path"] = "vtpm:read"
@@ -95,10 +106,13 @@ func toolPermissionCatalog() map[string]string {
 	// The rest of the platform TPM tools carry the scope of their gRPC
 	// TPMService twin the same way: reads are tpm:read, key creation, seal,
 	// NV writes and credential activation are tpm:write, and clearing the
-	// TPM or undefining an NV index is tpm:delete. The tools without a gRPC
-	// or REST twin (capabilities, platform) stay unclassified, so they are
-	// refused (#304).
+	// TPM or undefining an NV index is tpm:delete.
 	permissions["platform_tpm_info"] = "tpm:read"
+	// capabilities and platform read a subset of what gRPC Info answers (the
+	// fixed properties; the config and the EK/SRK/IAK attributes), and their
+	// QUIC twins, TPM2 Capabilities and PlatformAttrs, are tpm:read.
+	permissions["platform_tpm_capabilities"] = "tpm:read"
+	permissions["platform_tpm_platform"] = "tpm:read"
 	permissions["platform_tpm_ek"] = "tpm:read"
 	permissions["platform_tpm_ek_cert"] = "tpm:read"
 	permissions["platform_tpm_srk"] = "tpm:read"
@@ -251,10 +265,16 @@ func toolPermissionCatalog() map[string]string {
 
 	// VM and container tools carry the scopes of their gRPC ComputeService
 	// twins (pkg/api/grpc/method_permissions.go, #304). vm_disk_detach is
-	// vm:write as DetachDisk is: the disk is unplugged, not destroyed. The
-	// VM lifecycle tools (vm_create .. vm_resume) have no executor, and
-	// vm_snapshot_get has neither a gRPC nor a REST twin to take a scope
-	// from, so they stay unclassified and refused.
+	// vm:write as DetachDisk is: the disk is unplugged, not destroyed.
+	// vm_update, vm_suspend, vm_resume and vm_snapshot_get have no gRPC
+	// twin to take a scope from, so they stay unclassified and refused.
+	permissions["vm_create"] = "vm:write"
+	permissions["vm_list"] = "vm:read"
+	permissions["vm_get"] = "vm:read"
+	permissions["vm_delete"] = "vm:delete"
+	permissions["vm_start"] = "vm:write"
+	permissions["vm_stop"] = "vm:write"
+	permissions["vm_reboot"] = "vm:write"
 	permissions["vm_snapshot_create"] = "vm:write"
 	permissions["vm_snapshot_list"] = "vm:read"
 	permissions["vm_snapshot_restore"] = "vm:write"
@@ -290,9 +310,9 @@ func toolPermissionCatalog() map[string]string {
 	permissions["sdn_list_policies"] = "sdn:read"
 	permissions["sdn_delete_policy"] = "sdn:delete"
 
-	// SDN flow, VLAN and port-statistics tools carry the scope of their gRPC
-	// twin (pkg/api/grpc/method_permissions.go). The port-auth tools stay
-	// unclassified: the service behind them enforces nothing on the switch.
+	// SDN flow, VLAN, port-statistics and port-auth tools carry the scope of
+	// their gRPC twin (pkg/api/grpc/method_permissions.go). The port-auth
+	// tools then refuse with FailedPrecondition, as gRPC does (#304).
 	permissions["sdn_add_flow"] = "sdn:write"
 	permissions["sdn_delete_flow"] = "sdn:delete"
 	permissions["sdn_flush_flows"] = "sdn:write"
@@ -302,6 +322,8 @@ func toolPermissionCatalog() map[string]string {
 	permissions["sdn_delete_vlan"] = "sdn:delete"
 	permissions["sdn_list_vlans"] = "sdn:read"
 	permissions["sdn_get_port_stats"] = "sdn:read"
+	permissions["sdn_authenticate_port"] = "sdn:write"
+	permissions["sdn_revoke_port_auth"] = "sdn:write"
 
 	// Proxy (reverse-proxy configuration) tools
 	permissions["proxy_route_create"] = "proxy:write"
@@ -390,6 +412,32 @@ func toolPermissionCatalog() map[string]string {
 	permissions["ca_info"] = "ca:read"
 	permissions["ca_crl"] = "ca:read"
 	permissions["ca_bundle"] = "ca:read"
+
+	// IDevID and IAK tools carry exactly the scope of their gRPC
+	// IDevIDService twin (pkg/api/grpc/method_permissions.go), which files
+	// both device identities under the idevid resource. The provider
+	// delegates each tool to that service, so the answer matches too.
+	permissions["idevid_info"] = "idevid:read"
+	permissions["idevid_exists"] = "idevid:read"
+	permissions["idevid_get_cert"] = "idevid:read"
+	permissions["idevid_generate"] = "idevid:write"
+	permissions["idevid_csr"] = "idevid:write"
+	permissions["idevid_install_cert"] = "idevid:write"
+	permissions["idevid_create_ldevid"] = "idevid:write"
+	permissions["idevid_delete"] = "idevid:delete"
+	permissions["idevid_delete_cert"] = "idevid:delete"
+	permissions["iak_info"] = "idevid:read"
+	permissions["iak_exists"] = "idevid:read"
+	permissions["iak_get_cert"] = "idevid:read"
+	permissions["iak_generate"] = "idevid:write"
+	permissions["iak_csr"] = "idevid:write"
+	permissions["iak_install_cert"] = "idevid:write"
+	permissions["iak_delete"] = "idevid:delete"
+	permissions["iak_delete_cert"] = "idevid:delete"
+	// device_attributes and activate_credential make the same TPM calls as
+	// gRPC GetDeviceAttributes and IDevIDService ActivateCredential.
+	permissions["device_attributes"] = "idevid:read"
+	permissions["activate_credential"] = "idevid:write"
 
 	// Health tools (no auth required)
 	permissions["platform_health"] = ""
@@ -533,6 +581,40 @@ func toolPermissionCatalog() map[string]string {
 
 	permissions["platform_eab_delete_credential"] = "eab:delete"
 
+	// LUKS tools take the scopes of their gRPC LUKSService twins
+	// (pkg/api/grpc/method_permissions.go). platform_luks_test_unlock stays
+	// unclassified: it tries no key material, so its answer proves nothing.
+	permissions["platform_luks_status"] = "luks:read"
+	permissions["platform_luks_list_slots"] = "luks:read"
+	permissions["platform_luks_info"] = "luks:read"
+
+	permissions["platform_luks_enroll_passphrase"] = "luks:write"
+	permissions["platform_luks_enroll_fido2"] = "luks:write"
+	permissions["platform_luks_enroll_tpm"] = "luks:write"
+	permissions["platform_luks_enroll_recovery"] = "luks:write"
+	permissions["platform_luks_change_passphrase"] = "luks:write"
+
+	permissions["platform_luks_remove_key"] = "luks:delete"
+
+	// Switch, cluster and registry tools (#304) require the scope of their
+	// gRPC twin in SwitchService, ClusterService and RegistryService.
+	permissions["switch_list_ports"] = "switch:read"
+	permissions["switch_port_status"] = "switch:read"
+	permissions["switch_enable_port"] = "switch:write"
+	permissions["switch_disable_port"] = "switch:write"
+	permissions["switch_set_vlan"] = "switch:write"
+
+	permissions["platform_cluster_status"] = "cluster:read"
+	permissions["platform_cluster_list_nodes"] = "cluster:read"
+	permissions["platform_cluster_bootstrap"] = "cluster:write"
+	permissions["platform_cluster_join"] = "cluster:write"
+	permissions["platform_cluster_leave"] = "cluster:write"
+
+	permissions["platform_registry_status"] = "registry:read"
+	permissions["platform_registry_list"] = "registry:read"
+	permissions["platform_registry_inspect"] = "registry:read"
+	permissions["platform_registry_delete"] = "registry:delete"
+
 	// Application service tools (#704) require the scope of their gRPC
 	// method; the tool table carries it.
 	for name, tool := range appServiceTools {
@@ -592,6 +674,32 @@ func toolPermissionCatalog() map[string]string {
 	permissions["platform_tenant_barrier_unseal"] = "tenant:write"
 
 	permissions["tenant_delete"] = "tenant:delete"
+
+	// Daemon read tools (#304) require the scope of their gRPC
+	// PlatformDaemon twin (pkg/api/grpc/method_permissions.go); both read the
+	// same daemon.Service. platform_daemon_list_protocols has no gRPC twin,
+	// so it stays unclassified and refused.
+	permissions["platform_daemon_status"] = "platform:read"
+	permissions["platform_daemon_version"] = "platform:read"
+	permissions["platform_daemon_list_services"] = "platform:read"
+	permissions["platform_daemon_get_service"] = "platform:read"
+	permissions["platform_daemon_start_service"] = "platform:write"
+	permissions["platform_daemon_stop_service"] = "platform:write"
+	permissions["platform_daemon_restart_service"] = "platform:write"
+
+	// Provisioning tools (#304) take the scope of their gRPC
+	// ConfigDeliveryService twin. The operator session tools need a
+	// provisioning scope. The device-side tools are open, as on gRPC: the
+	// shared configdelivery.Service checks the EAB HMAC, the single-use
+	// nonce and the EK binding before it answers, and the unguessable
+	// session ID is the poll capability.
+	permissions["provision_list_sessions"] = "provisioning:read"
+	permissions["provision_get_session"] = "provisioning:read"
+	permissions["provision_fulfill_session"] = "provisioning:write"
+	permissions["provision_get_nonce"] = ""
+	permissions["provision_fetch_config"] = ""
+	permissions["provision_sign_digest"] = ""
+	permissions["provision_poll_session"] = ""
 
 	return permissions
 }

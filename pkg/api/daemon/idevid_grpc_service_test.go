@@ -444,35 +444,25 @@ func TestIDevIDGRPCService_HasIDevID(t *testing.T) {
 func TestIDevIDGRPCService_DeleteIDevID(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("returns error when TPM2 service not initialized", func(t *testing.T) {
+	t.Run("refuses with FailedPrecondition instead of reporting a deletion", func(t *testing.T) {
+		svc, _ := createIDevIDTestServiceWithTPM(t)
+
+		resp, err := svc.DeleteIDevID(ctx, &platformv1.DeleteIDevIDRequest{})
+
+		assert.Nil(t, resp)
+		var refused ErrDeviceIdentityKeyNotDeletable
+		require.ErrorAs(t, err, &refused)
+		assert.Equal(t, "IDevID", refused.Key)
+		assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	})
+
+	t.Run("refuses without a TPM2 service", func(t *testing.T) {
 		svc := createIDevIDTestService(t)
 
 		resp, err := svc.DeleteIDevID(ctx, &platformv1.DeleteIDevIDRequest{})
 
 		assert.Nil(t, resp)
-		require.Error(t, err)
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.FailedPrecondition, st.Code())
-	})
-
-	t.Run("deletes IDevID successfully", func(t *testing.T) {
-		svc, _ := createIDevIDTestServiceWithTPM(t)
-
-		resp, err := svc.DeleteIDevID(ctx, &platformv1.DeleteIDevIDRequest{})
-
-		require.NoError(t, err)
-		assert.True(t, resp.Status.Success)
-	})
-
-	t.Run("continues when certificate deletion fails", func(t *testing.T) {
-		svc, tpm := createIDevIDTestServiceWithTPM(t)
-		tpm.deleteIDevIDCertErr = errors.New("certificate not found")
-
-		resp, err := svc.DeleteIDevID(ctx, &platformv1.DeleteIDevIDRequest{})
-
-		require.NoError(t, err)
-		assert.True(t, resp.Status.Success)
+		assert.Equal(t, codes.FailedPrecondition, status.Code(err))
 	})
 }
 
@@ -615,25 +605,25 @@ func TestIDevIDGRPCService_HasIAK(t *testing.T) {
 func TestIDevIDGRPCService_DeleteIAK(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("returns error when TPM2 service not initialized", func(t *testing.T) {
+	t.Run("refuses with FailedPrecondition instead of reporting a deletion", func(t *testing.T) {
+		svc, _ := createIDevIDTestServiceWithTPM(t)
+
+		resp, err := svc.DeleteIAK(ctx, &platformv1.DeleteIAKRequest{})
+
+		assert.Nil(t, resp)
+		var refused ErrDeviceIdentityKeyNotDeletable
+		require.ErrorAs(t, err, &refused)
+		assert.Equal(t, "IAK", refused.Key)
+		assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	})
+
+	t.Run("refuses without a TPM2 service", func(t *testing.T) {
 		svc := createIDevIDTestService(t)
 
 		resp, err := svc.DeleteIAK(ctx, &platformv1.DeleteIAKRequest{})
 
 		assert.Nil(t, resp)
-		require.Error(t, err)
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.FailedPrecondition, st.Code())
-	})
-
-	t.Run("deletes IAK successfully", func(t *testing.T) {
-		svc, _ := createIDevIDTestServiceWithTPM(t)
-
-		resp, err := svc.DeleteIAK(ctx, &platformv1.DeleteIAKRequest{})
-
-		require.NoError(t, err)
-		assert.True(t, resp.Status.Success)
+		assert.Equal(t, codes.FailedPrecondition, status.Code(err))
 	})
 }
 

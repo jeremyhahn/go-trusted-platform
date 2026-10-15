@@ -110,13 +110,53 @@ func isGatewaydTemplate(t *testing.T, path string) bool {
 	return true
 }
 
+// overrideExamples are the --overrides files shipped beside the templates,
+// relative to templateDir. An override is merged onto its template, not
+// loaded on its own, so it carries no `ntp:` section and no package list of
+// its own: the template's are the node's. Named explicitly, and confirmed by
+// isOverrideExample below.
+var overrideExamples = map[string]bool{
+	"dedicated/raspberrypi/cm4/desk-overrides.yaml": true,
+}
+
+// isOverrideExample confirms the file at path is an override example that
+// leaves the template's time synchronization alone: an override that set
+// `ntp:` or `os:` would change what these tests check on the template, so it
+// must not skip them.
+func isOverrideExample(t *testing.T, path string) bool {
+	t.Helper()
+	rel, err := filepath.Rel(templateDir, path)
+	if err != nil {
+		t.Fatalf("%s is outside %s: %v", path, templateDir, err)
+	}
+	if !overrideExamples[filepath.ToSlash(rel)] {
+		return false
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	for _, key := range []string{"ntp", "os"} {
+		if _, ok := doc[key]; ok {
+			t.Fatalf("%s is exempted as an override example but sets `%s:`; "+
+				"remove it from overrideExamples so it is checked", path, key)
+		}
+	}
+	return true
+}
+
 // templatePaths returns every shipped platformd device template, excluding the
-// edge-daemon configurations that live alongside them.
+// edge-daemon configurations and the override examples that live alongside
+// them.
 func templatePaths(t *testing.T) []string {
 	t.Helper()
 
 	var paths []string
-	seenGatewayd := 0
+	seenGatewayd, seenOverrides := 0, 0
 	walkErr := filepath.WalkDir(templateDir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -128,12 +168,20 @@ func templatePaths(t *testing.T) []string {
 			seenGatewayd++
 			return nil
 		}
+		if isOverrideExample(t, path) {
+			seenOverrides++
+			return nil
+		}
 		paths = append(paths, path)
 		return nil
 	})
 	if seenGatewayd != len(gatewaydTemplates) {
 		t.Errorf("expected to see %d exempted gatewayd configurations, saw %d — the exempt list names a file that no longer exists",
 			len(gatewaydTemplates), seenGatewayd)
+	}
+	if seenOverrides != len(overrideExamples) {
+		t.Errorf("expected to see %d exempted override examples, saw %d — the exempt list names a file that no longer exists",
+			len(overrideExamples), seenOverrides)
 	}
 	if walkErr != nil {
 		t.Fatalf("walk %s: %v", templateDir, walkErr)
@@ -272,8 +320,8 @@ func TestShippedTemplatesNameTheirNTSUpstream(t *testing.T) {
 func TestShippedControlPlanesServeEveryNTSNameTheirNodesDial(t *testing.T) {
 	// Group the templates by board directory: a board's node templates are
 	// served by that board's control-plane template. A board directory with
-	// no time server of its own (dedicated/raspberrypi/rpi4, whose nodes
-	// join an x86 control plane) is served by any control plane of its
+	// no time server of its own (dedicated/raspberrypi/rpi5, whose nodes
+	// join a control plane on another board) is served by any control plane of its
 	// profile, so every one of them must list the names its nodes dial.
 	hasServer := map[string]bool{}
 	served := map[string]map[string]struct{}{}

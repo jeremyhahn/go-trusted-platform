@@ -627,6 +627,11 @@ func TestTranslateQUICErrorToGRPC(t *testing.T) {
 			expectedCode: codes.Unimplemented,
 		},
 		{
+			name:         "protocol error - failed precondition",
+			err:          &quicwire.ErrProtocol{Status: quicwire.StatusFailedPrecondition, Message: "IDevID key delete refused"},
+			expectedCode: codes.FailedPrecondition,
+		},
+		{
 			name:         "protocol error - unknown status",
 			err:          &quicwire.ErrProtocol{Status: 0xFF, Message: "unknown status"},
 			expectedCode: codes.Unknown,
@@ -674,6 +679,7 @@ func TestQUICStatusToGRPCMap_Coverage(t *testing.T) {
 		quicwire.StatusInvalidArgument,
 		quicwire.StatusUnavailable,
 		quicwire.StatusNotImplemented,
+		quicwire.StatusFailedPrecondition,
 	}
 
 	for _, s := range expectedStatuses {

@@ -15,6 +15,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 
 	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
@@ -28,11 +29,11 @@ import (
 
 // SwitchMgmtServiceProvider is an interface for accessing the switch service.
 type SwitchMgmtServiceProvider interface {
-	SwitchService() switchServiceProviderMCP
+	SwitchService() SwitchManagerProvider
 }
 
-// switchServiceProviderMCP abstracts the switch management service for MCP.
-type switchServiceProviderMCP interface {
+// SwitchManagerProvider abstracts the switch management service for MCP.
+type SwitchManagerProvider interface {
 	Manager(name string) (switchmgmt.Manager, error)
 }
 
@@ -156,7 +157,7 @@ func (r *ToolRegistry) executeSwitchListPorts(ctx context.Context, args map[stri
 
 	mgr, err := svc.Manager(switchName)
 	if err != nil {
-		return nil, err
+		return nil, switchManagerError(err)
 	}
 
 	ports, err := mgr.ListPorts(ctx)
@@ -190,12 +191,12 @@ func (r *ToolRegistry) executeSwitchPortStatus(ctx context.Context, args map[str
 
 	mgr, err := svc.Manager(switchName)
 	if err != nil {
-		return nil, err
+		return nil, switchManagerError(err)
 	}
 
 	status, err := mgr.GetPortStatus(ctx, portName)
 	if err != nil {
-		return nil, err
+		return nil, switchPortStatusError(err)
 	}
 
 	return formatPortStatus(status), nil
@@ -225,7 +226,7 @@ func (r *ToolRegistry) executeSwitchSetVLAN(ctx context.Context, args map[string
 
 	mgr, err := svc.Manager(switchName)
 	if err != nil {
-		return nil, err
+		return nil, switchManagerError(err)
 	}
 
 	if err := mgr.SetPortVLAN(ctx, portName, uint16(vlanID)); err != nil {
@@ -260,7 +261,7 @@ func (r *ToolRegistry) executeSwitchEnablePort(ctx context.Context, args map[str
 
 	mgr, err := svc.Manager(switchName)
 	if err != nil {
-		return nil, err
+		return nil, switchManagerError(err)
 	}
 
 	if err := mgr.EnablePort(ctx, portName); err != nil {
@@ -295,7 +296,7 @@ func (r *ToolRegistry) executeSwitchDisablePort(ctx context.Context, args map[st
 
 	mgr, err := svc.Manager(switchName)
 	if err != nil {
-		return nil, err
+		return nil, switchManagerError(err)
 	}
 
 	if err := mgr.DisablePort(ctx, portName); err != nil {
@@ -316,7 +317,7 @@ func (r *ToolRegistry) executeSwitchDisablePort(ctx context.Context, args map[st
 // =============================================================================
 
 // getSwitchService returns the switch service from the service provider.
-func (r *ToolRegistry) getSwitchService() switchServiceProviderMCP {
+func (r *ToolRegistry) getSwitchService() SwitchManagerProvider {
 	if provider, ok := r.service.(SwitchMgmtServiceProvider); ok {
 		return provider.SwitchService()
 	}
@@ -407,4 +408,24 @@ func (e *SwitchError) Error() string {
 // server answers it with the matching JSON-RPC code.
 func (e *SwitchError) GRPCStatus() *status.Status {
 	return codeStatus(e.Code, e.Error())
+}
+
+// switchManagerError classifies an unknown switch name as NotFound, as the
+// gRPC SwitchService does; any other manager lookup failure passes through.
+func switchManagerError(err error) error {
+	var notFound switchmgmt.ErrManagerNotFound
+	if errors.As(err, &notFound) {
+		return &SwitchError{Code: "SWITCH_NOT_FOUND", Message: err.Error()}
+	}
+	return err
+}
+
+// switchPortStatusError classifies an unknown port as NotFound, as gRPC
+// GetPortStatus does; any other port status failure passes through.
+func switchPortStatusError(err error) error {
+	var notFound switchmgmt.ErrPortNotFound
+	if errors.As(err, &notFound) {
+		return &SwitchError{Code: "SWITCH_PORT_NOT_FOUND", Message: err.Error()}
+	}
+	return err
 }

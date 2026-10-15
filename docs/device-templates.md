@@ -61,7 +61,8 @@ for the current production reference.
 | Supermicro | X10 (X10SDV-TP8F, etc.) | dedicated | control-plane, gateway, compute | Production |
 | Dell | PowerEdge R640 | dedicated | control-plane, gateway, compute | Phase 2 (UNTESTED) |
 | Raspberry Pi | 4 Model B (`single-node/raspberrypi/rpi4`) | single-node | control-plane, gateway, compute | Factory SD-card image (`make image-rpi`, [factory-image/](factory-image/)); boots on the QEMU virt stand-in, hardware validation per its `user.md` |
-| Raspberry Pi | 4 Model B (`dedicated/raspberrypi/rpi4`) | dedicated | compute | Factory SD-card image (`platformctl diskimage create --target rpi --model rpi4 --role compute`); joins the x86 control plane and gateway. A one-port Pi cannot be the gateway and the control plane stays x86 — [its README](../configs/platform/templates/dedicated/raspberrypi/README.md) |
+| Raspberry Pi | 4 Model B (`dedicated/raspberrypi/rpi4`) | dedicated | control-plane, compute | Factory SD-card image (`platformctl diskimage create --target rpi --model rpi4 --role compute`, or `--role control-plane`); the compute node joins the x86 control plane and gateway, the control plane is standalone (QuicBaaS `file`, no Raft). A one-port Pi cannot be the gateway — [its README](../configs/platform/templates/dedicated/raspberrypi/README.md) |
+| Raspberry Pi | Compute Module 4 (`dedicated/raspberrypi/cm4`) | dedicated | control-plane | Factory SD-card image (`--model cm4 --role control-plane`), standalone; `cm4/desk-overrides.yaml` puts it on one static address with no gateway. No hardware run yet — [its README](../configs/platform/templates/dedicated/raspberrypi/README.md#control-plane) |
 | Raspberry Pi | 5 (`dedicated/raspberrypi/rpi5`) | dedicated | compute | **Experimental** (`--model rpi5 --role compute`): the image builds and the template validates, but no Pi 5 has booted it; the TPM behind the RP1 I/O chip, the serial console and the RP1 Ethernet are unvalidated — [its README](../configs/platform/templates/dedicated/raspberrypi/README.md) |
 
 **Each profile directory carries a `README.md` recording what the hardware needs
@@ -222,6 +223,7 @@ with this override:
 os:
   hostname: pi4-01
 network:
+  role: null           # a compute role permits only static zone addresses
   dns: null            # no resolv.conf is rendered: the DHCP client writes it
   dnsmasq: null
   platform-vrf: null
@@ -239,9 +241,19 @@ platformctl diskimage create --target rpi --model rpi4 --role compute \
 The rendered `/etc/network/interfaces` has `iface eth0 inet dhcp` and no
 802.1Q or VRF device. The file is
 `pkg/cli/commands/diskimage/testdata/rpi4-flat-dhcp.yaml`, and
-`TestRPi4FlatDHCPOverridesRenderAnAccessPort` renders it. It changes only
+`TestRPi4FlatDHCPOverridesRenderAnAccessPort` loads it through the
+host-network check platformd runs at startup, then renders it. It changes only
 `network:`; the template's other control-plane references (`dns.resolver`,
 `trust.bmc`, `ntp`, `acme`) still name the rack and need the site's values.
+
+`role: null` is required: with the template's `network.role` kept, platformd
+refuses a DHCP interface (`ErrDHCPNotPermitted`, `pkg/installer/network_role.go`).
+A host with no role also gets none of the role's hardening — no forward-drop
+nftables table and no forwarding sysctl — which the
+[Raspberry Pi README](../configs/platform/templates/dedicated/raspberrypi/README.md#a-pi-on-a-flat-dhcp-network)
+spells out. The CM4 control plane's desk override,
+`dedicated/raspberrypi/cm4/desk-overrides.yaml`, takes the same route to one
+static address outside the control-plane zones.
 
 ### Common Override Fields
 

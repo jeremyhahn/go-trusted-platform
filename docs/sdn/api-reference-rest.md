@@ -64,6 +64,24 @@ request is replaced and its rows deleted; a QoS something else attached is
 detached and left in the database. A port that disappears before shaping is
 applied is `404`.
 
+## Port Authentication Endpoints
+
+```http
+POST   /api/v1/sdn/bridges/{name}/ports/{port}/auth   # Authenticate port (refused)
+DELETE /api/v1/sdn/bridges/{name}/ports/{port}/auth   # Revoke port auth (refused)
+```
+
+Only the webservice router (`pkg/webservice/v1/rest/sdn/`) serves these
+routes, behind its admin gate. A missing bridge, port or certificate is `400`
+before the service is called. Every other request is refused with `400` and the
+message `sdn/policy: <operation> is refused: port authentication is not
+enforced on the switch` (`policy.ErrPortAuthNotEnforced`, `FailedPrecondition`):
+nothing enforces port authentication on the switch, so nothing is recorded.
+The Go SDK's REST transport reads that `400` as `InvalidArgument` and keeps
+the message. [api.md](api.md) §4 names what is missing. Until #304 these
+routes answered `200` for any certificate inside its validity window, and the
+webservice answered `500` for a `FailedPrecondition`.
+
 ## Flow Endpoints
 
 ```http

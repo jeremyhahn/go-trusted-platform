@@ -20,6 +20,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 )
 
 // routeGoldenPath holds every "METHOD /template" the built table exposes.
@@ -64,7 +66,7 @@ const minimumRoutes = 300
 // and a flag turns a decision into a keystroke.
 func TestRegisterRoutes_EveryRouteStillExists(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
-	built := walkRoutes(t, router)
+	built := testutil.WalkRoutes(t, router)
 
 	require.GreaterOrEqualf(t, len(built), minimumRoutes,
 		"the route walk enumerated only %d routes, below the %d vacuity floor. "+

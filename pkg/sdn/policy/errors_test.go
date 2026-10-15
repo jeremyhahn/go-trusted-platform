@@ -18,6 +18,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestErrors(t *testing.T) {
@@ -120,4 +122,19 @@ func TestErrors(t *testing.T) {
 			assert.True(t, errors.Is(tt.err, tt.err))
 		})
 	}
+}
+
+// Every transport classifies the port-auth refusal through GRPCStatus, so the
+// class must be FailedPrecondition and the message must name the operation.
+func TestErrPortAuthNotEnforced(t *testing.T) {
+	err := error(ErrPortAuthNotEnforced{Operation: "AuthenticatePort"})
+
+	assert.Equal(t, "sdn/policy: AuthenticatePort is refused: port authentication is not enforced on the switch", err.Error())
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	assert.Equal(t, err.Error(), status.Convert(err).Message())
+
+	wrapped := errors.Join(errors.New("context"), err)
+	var refusal ErrPortAuthNotEnforced
+	assert.ErrorAs(t, wrapped, &refusal)
+	assert.Equal(t, "AuthenticatePort", refusal.Operation)
 }

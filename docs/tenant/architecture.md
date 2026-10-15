@@ -94,7 +94,8 @@ owned abstractions rather than coding protected memory directly.
    `tenant:read`; lifecycle, quota, DEK and barrier init/seal/unseal need
    `tenant:write`; delete needs `tenant:delete`. Behind the scope a
    tenant-bound caller acts only on its own tenant, and only the system tenant
-   lists, creates, syncs or looks tenants up by name ([api.md](api.md) §7).
+   lists, creates or syncs tenants. A tenant may look up its own tenant by
+   name; only the system tenant looks up any other ([api.md](api.md) §7).
 
 ## What this feature deliberately does not do
 

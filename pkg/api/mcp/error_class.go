@@ -98,7 +98,6 @@ var sentinelClasses = []struct {
 	{ErrInvitationUserIDRequired, codes.InvalidArgument},
 	{ErrInvitationRevokerIDRequired, codes.InvalidArgument},
 	{ErrProvisionSessionIDRequired, codes.InvalidArgument},
-	{ErrProvisionProfileIDRequired, codes.InvalidArgument},
 	{ErrProvisionDigestRequired, codes.InvalidArgument},
 	{ErrProxyIDRequired, codes.InvalidArgument},
 	{ErrProxyRouteRequired, codes.InvalidArgument},

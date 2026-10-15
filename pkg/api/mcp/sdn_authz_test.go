@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
@@ -38,6 +39,11 @@ var sdnToolScopes = map[string]string{
 	"sdn_get_port_stats": "read",
 }
 
+// sdnPortAuthTools take gRPC's scope, sdn:write, so an authorized caller gets
+// the refusal gRPC gives (FailedPrecondition), not an authorization one. They
+// never reach the service, so they are kept out of sdnToolScopes.
+var sdnPortAuthTools = []string{"sdn_authenticate_port", "sdn_revoke_port_auth"}
+
 func TestSDNToolsAreClassified(t *testing.T) {
 	checker := NewAuthorizationChecker(nil, nil)
 
@@ -46,12 +52,9 @@ func TestSDNToolsAreClassified(t *testing.T) {
 			t.Errorf("%s permission = %q, want %q", tool, got, want)
 		}
 	}
-
-	// The port-auth tools record a map entry and never reach the switch, so
-	// they stay refused rather than answer a fake success under a scope.
-	for _, tool := range []string{"sdn_authenticate_port", "sdn_revoke_port_auth"} {
-		if perm, ok := checker.toolPermissions[tool]; ok {
-			t.Errorf("%s is classified as %q; it must stay refused", tool, perm)
+	for _, tool := range sdnPortAuthTools {
+		if got := checker.toolPermissions[tool]; got != "sdn:write" {
+			t.Errorf("%s permission = %q, want %q", tool, got, "sdn:write")
 		}
 	}
 }
@@ -147,7 +150,8 @@ func callSDNTool(t *testing.T, tool string, granted ...string) (*mcpwire.JSONRPC
 
 // TestSDNPortAuthToolsRefuse pins the port-auth tools to a typed refusal.
 // Before #304 they answered {"success": true} for a port the switch never
-// admitted or blocked.
+// admitted or blocked. A caller holding sdn:write gets the FailedPrecondition
+// refusal; a caller without it is denied before the tool runs.
 func TestSDNPortAuthToolsRefuse(t *testing.T) {
 	registry := NewToolRegistry(newMockServiceProvider(), newTestLogger())
 	args := map[string]interface{}{
@@ -155,25 +159,49 @@ func TestSDNPortAuthToolsRefuse(t *testing.T) {
 		"port_name":   "eth0",
 		"credentials": map[string]interface{}{"certificate": "-----BEGIN CERTIFICATE-----"},
 	}
+	refusedCode := mcpwire.CodeForClass(codes.FailedPrecondition)
 
-	for _, tool := range []string{"sdn_authenticate_port", "sdn_revoke_port_auth"} {
+	for _, tool := range sdnPortAuthTools {
 		t.Run(tool, func(t *testing.T) {
 			result, err := registry.ExecuteTool(context.Background(), tool, args)
 			if result != nil {
 				t.Errorf("refused tool answered %v", result)
 			}
-			var refusal ErrPortAuthNotEnforced
+			var refusal policy.ErrPortAuthNotEnforced
 			if !errors.As(err, &refusal) {
-				t.Fatalf("error = %v, want ErrPortAuthNotEnforced", err)
+				t.Fatalf("error = %v, want policy.ErrPortAuthNotEnforced", err)
 			}
-			if refusal.Tool != tool {
-				t.Errorf("refusal names %q, want %q", refusal.Tool, tool)
+			if refusal.Operation != tool {
+				t.Errorf("refusal names %q, want %q", refusal.Operation, tool)
 			}
 			if got := status.Code(err); got != codes.FailedPrecondition {
 				t.Errorf("class = %v, want FailedPrecondition", got)
 			}
-			if got, want := toolErrorCode(err), mcpwire.CodeForClass(codes.FailedPrecondition); got != want {
-				t.Errorf("wire code = %d, want %d", got, want)
+			if got := toolErrorCode(err); got != refusedCode {
+				t.Errorf("wire code = %d, want %d", got, refusedCode)
+			}
+		})
+
+		t.Run(tool+"/granted", func(t *testing.T) {
+			resp, ran := callSDNTool(t, tool, "write")
+			if resp.Error == nil {
+				t.Fatal("caller holding sdn:write was answered")
+			}
+			if resp.Error.Code != refusedCode {
+				t.Errorf("error code = %d, want %d (FailedPrecondition)", resp.Error.Code, refusedCode)
+			}
+			if len(ran) != 0 {
+				t.Errorf("refused tool reached the service: %v", ran)
+			}
+		})
+
+		t.Run(tool+"/denied", func(t *testing.T) {
+			resp, _ := callSDNTool(t, tool, "read", "delete")
+			if resp.Error == nil {
+				t.Fatal("caller without sdn:write was answered")
+			}
+			if resp.Error.Code != mcpwire.PermissionDenied {
+				t.Errorf("error code = %d, want %d", resp.Error.Code, mcpwire.PermissionDenied)
 			}
 		})
 	}

@@ -19,6 +19,8 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 )
 
 func TestVTPMToolExecution(t *testing.T) {
@@ -71,7 +73,7 @@ func TestVTPMToolExecution(t *testing.T) {
 
 	t.Run("executeVTPMSeal success", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.vtpmSealFunc = func(ctx context.Context, name string, data []byte, pcrs []int) ([]byte, error) {
+		svc.vtpmSealFunc = func(ctx context.Context, name string, data []byte, pcrs []int, authValue string) ([]byte, error) {
 			if name != "test-vtpm" {
 				t.Errorf("name = %s, want test-vtpm", name)
 			}
@@ -119,7 +121,7 @@ func TestVTPMToolExecution(t *testing.T) {
 
 	t.Run("executeVTPMSeal error from service", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.vtpmSealFunc = func(ctx context.Context, name string, data []byte, pcrs []int) ([]byte, error) {
+		svc.vtpmSealFunc = func(ctx context.Context, name string, data []byte, pcrs []int, authValue string) ([]byte, error) {
 			return nil, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)
@@ -138,7 +140,7 @@ func TestVTPMToolExecution(t *testing.T) {
 
 	t.Run("executeVTPMUnseal success", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.vtpmUnsealFunc = func(ctx context.Context, name string, sealed []byte) ([]byte, error) {
+		svc.vtpmUnsealFunc = func(ctx context.Context, name string, sealed []byte, authValue string) ([]byte, error) {
 			return []byte("unsealed-data"), nil
 		}
 		registry := NewToolRegistry(svc, log)
@@ -264,7 +266,7 @@ func TestVTPMToolExecution(t *testing.T) {
 
 	t.Run("executeVTPMList error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.vtpmListFunc = func(ctx context.Context) ([]interface{}, error) {
+		svc.vtpmListFunc = func(ctx context.Context, opts *vtpm.ListOptions) ([]interface{}, error) {
 			return nil, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)

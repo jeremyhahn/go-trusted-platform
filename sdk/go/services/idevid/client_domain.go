@@ -68,12 +68,13 @@ func (c *Client) GetIDevIDInfoDomain(ctx context.Context) (*DeviceKeyInfo, error
 	return DeviceKeyInfoFromProto(resp.KeyInfo), nil
 }
 
-// DeleteIDevIDDomain deletes the IDevID key.
-// Returns true if deleted, false otherwise, with an optional message.
+// DeleteIDevIDDomain asks the daemon to delete the IDevID key and returns
+// whether the daemon reports it deleted, with the daemon's message. Every
+// daemon transport refuses, which returns *ErrIdentityKeyNotDeletable.
 func (c *Client) DeleteIDevIDDomain(ctx context.Context) (bool, string, error) {
 	resp, err := c.grpc.DeleteIDevID(ctx, &platformv1.DeleteIDevIDRequest{})
 	if err != nil {
-		return false, "", &ErrDeleteIDevIDFailed{Cause: err}
+		return false, "", identityKeyDeleteError("IDevID", err, &ErrDeleteIDevIDFailed{Cause: err})
 	}
 	deleted := resp.Status != nil && resp.Status.Success
 	message := ""
@@ -160,11 +161,13 @@ func (c *Client) GetIAKInfoDomain(ctx context.Context) (*DeviceKeyInfo, error) {
 	return DeviceKeyInfoFromProto(resp.KeyInfo), nil
 }
 
-// DeleteIAKDomain deletes the IAK key.
+// DeleteIAKDomain asks the daemon to delete the IAK and returns whether the
+// daemon reports it deleted, with the daemon's message. Every daemon
+// transport refuses, which returns *ErrIdentityKeyNotDeletable.
 func (c *Client) DeleteIAKDomain(ctx context.Context) (bool, string, error) {
 	resp, err := c.grpc.DeleteIAK(ctx, &platformv1.DeleteIAKRequest{})
 	if err != nil {
-		return false, "", &ErrDeleteIAKFailed{Cause: err}
+		return false, "", identityKeyDeleteError("IAK", err, &ErrDeleteIAKFailed{Cause: err})
 	}
 	deleted := resp.Status != nil && resp.Status.Success
 	message := ""

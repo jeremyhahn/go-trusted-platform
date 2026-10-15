@@ -34,7 +34,7 @@ func TestVTPMToolsEKAlgorithm(t *testing.T) {
 
 	newRegistry := func(got *string, called *bool) *ToolRegistry {
 		svc := newMockServiceProvider()
-		svc.vtpmCreateFunc = func(ctx context.Context, name, algorithm string) (interface{}, error) {
+		svc.vtpmCreateFunc = func(ctx context.Context, name, algorithm string, secureBoot bool, labels map[string]string) (interface{}, error) {
 			*called = true
 			*got = algorithm
 			return map[string]interface{}{"name": name}, nil

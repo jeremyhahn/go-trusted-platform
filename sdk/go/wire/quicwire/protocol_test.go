@@ -65,6 +65,7 @@ func TestStatusCodes(t *testing.T) {
 		{StatusInvalidArgument, 0x09},
 		{StatusUnavailable, 0x0A},
 		{StatusNotImplemented, 0x0B},
+		{StatusFailedPrecondition, 0x0C},
 	}
 
 	for _, tt := range statusCodes {
@@ -883,6 +884,7 @@ func TestStatusToString(t *testing.T) {
 		{StatusInvalidArgument, "InvalidArgument"},
 		{StatusUnavailable, "Unavailable"},
 		{StatusNotImplemented, "NotImplemented"},
+		{StatusFailedPrecondition, "FailedPrecondition"},
 	}
 
 	for _, tt := range tests {
@@ -1308,22 +1310,23 @@ func TestOpcodeValues(t *testing.T) {
 func TestStatusCodeValues(t *testing.T) {
 	// Verify all status codes are unique
 	statusCodes := map[byte]string{
-		StatusOK:                "OK",
-		StatusInvalidRequest:    "InvalidRequest",
-		StatusNotFound:          "NotFound",
-		StatusUnauthorized:      "Unauthorized",
-		StatusInternalError:     "InternalError",
-		StatusTimeout:           "Timeout",
-		StatusAlreadyExists:     "AlreadyExists",
-		StatusPermissionDenied:  "PermissionDenied",
-		StatusResourceExhausted: "ResourceExhausted",
-		StatusInvalidArgument:   "InvalidArgument",
-		StatusUnavailable:       "Unavailable",
-		StatusNotImplemented:    "NotImplemented",
+		StatusOK:                 "OK",
+		StatusInvalidRequest:     "InvalidRequest",
+		StatusNotFound:           "NotFound",
+		StatusUnauthorized:       "Unauthorized",
+		StatusInternalError:      "InternalError",
+		StatusTimeout:            "Timeout",
+		StatusAlreadyExists:      "AlreadyExists",
+		StatusPermissionDenied:   "PermissionDenied",
+		StatusResourceExhausted:  "ResourceExhausted",
+		StatusInvalidArgument:    "InvalidArgument",
+		StatusUnavailable:        "Unavailable",
+		StatusNotImplemented:     "NotImplemented",
+		StatusFailedPrecondition: "FailedPrecondition",
 	}
 
-	if len(statusCodes) != 12 {
-		t.Errorf("expected 12 unique status codes, got %d", len(statusCodes))
+	if len(statusCodes) != 13 {
+		t.Errorf("expected 13 unique status codes, got %d", len(statusCodes))
 	}
 }
 

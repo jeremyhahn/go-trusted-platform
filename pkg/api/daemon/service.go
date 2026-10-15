@@ -111,6 +111,24 @@ type serviceState struct {
 	stopCount  atomic.Uint64
 }
 
+// observedStatus reports the service's state from the service itself:
+// running whenever IsRunning says so, otherwise the transition or failure the
+// last verb recorded, otherwise stopped. A verb can record that it is
+// starting, stopping or failed; it cannot make a service read as running.
+func (st *serviceState) observedStatus() platformv1.ServiceStatus {
+	if st.service.IsRunning() {
+		return platformv1.ServiceStatus_SERVICE_STATUS_RUNNING
+	}
+	recorded := platformv1.ServiceStatus(st.status.Load())
+	switch recorded {
+	case platformv1.ServiceStatus_SERVICE_STATUS_STARTING,
+		platformv1.ServiceStatus_SERVICE_STATUS_STOPPING,
+		platformv1.ServiceStatus_SERVICE_STATUS_ERROR:
+		return recorded
+	}
+	return platformv1.ServiceStatus_SERVICE_STATUS_STOPPED
+}
+
 // NewService creates a new daemon service
 func NewService(config *Config, opts ...ServiceOption) (*Service, error) {
 	if config == nil {
@@ -199,7 +217,7 @@ func (s *Service) GetStatus(ctx context.Context, req *platformv1.GetStatusReques
 	var services []*platformv1.ServiceInfo
 	for name, state := range s.services {
 		state.mu.RLock()
-		svcStatus := platformv1.ServiceStatus(state.status.Load())
+		svcStatus := state.observedStatus()
 
 		// Store start count, stop count, and last error in metadata
 		metadata := make(map[string]string)
@@ -298,7 +316,7 @@ func (s *Service) GetHealth(ctx context.Context, req *platformv1.GetHealthReques
 	var componentHealth []*platformv1.ComponentHealth
 	for name, state := range s.services {
 		state.mu.RLock()
-		svcStatus := platformv1.ServiceStatus(state.status.Load())
+		svcStatus := state.observedStatus()
 		lastError := state.lastError
 		state.mu.RUnlock()
 
@@ -377,9 +395,14 @@ func (s *Service) Shutdown(ctx context.Context, req *platformv1.ShutdownRequest)
 	defer cancel()
 
 	// Stop all services
+	// Process-owned subsystems are left out: they go down with the process,
+	// and stopping them here would only collect their refusals.
 	s.mu.RLock()
 	serviceNames := make([]string, 0, len(s.services))
-	for name := range s.services {
+	for name, state := range s.services {
+		if _, owned := processOwned(state.service); owned {
+			continue
+		}
 		serviceNames = append(serviceNames, name)
 	}
 	s.mu.RUnlock()
@@ -546,10 +569,14 @@ func (s *Service) StartService(ctx context.Context, req *platformv1.StartService
 		return nil, status.Error(codes.NotFound, ErrServiceNotFound{ServiceName: serviceName}.Error())
 	}
 
+	if refusal, owned := processOwned(state.service); owned {
+		return nil, refusal
+	}
+
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	currentStatus := platformv1.ServiceStatus(state.status.Load())
+	currentStatus := state.observedStatus()
 	if currentStatus == platformv1.ServiceStatus_SERVICE_STATUS_RUNNING {
 		return nil, status.Error(codes.AlreadyExists, ErrServiceAlreadyRunning{ServiceName: serviceName}.Error())
 	}
@@ -603,10 +630,14 @@ func (s *Service) StopService(ctx context.Context, req *platformv1.StopServiceRe
 		return nil, status.Error(codes.NotFound, ErrServiceNotFound{ServiceName: serviceName}.Error())
 	}
 
+	if refusal, owned := processOwned(state.service); owned {
+		return nil, refusal
+	}
+
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	currentStatus := platformv1.ServiceStatus(state.status.Load())
+	currentStatus := state.observedStatus()
 	if currentStatus == platformv1.ServiceStatus_SERVICE_STATUS_STOPPED {
 		return nil, status.Error(codes.FailedPrecondition, ErrServiceNotRunning{ServiceName: serviceName}.Error())
 	}
@@ -693,13 +724,14 @@ func (s *Service) GetServiceStatus(ctx context.Context, req *platformv1.GetServi
 		uptimeSeconds = uint64(s.currentTime().Sub(state.startedAt).Seconds())
 	}
 
+	svcStatus := state.observedStatus()
 	serviceInfo := &platformv1.ServiceInfo{
 		Type:          req.GetService(),
 		Name:          serviceName,
-		Status:        platformv1.ServiceStatus(state.status.Load()),
+		Status:        svcStatus,
 		StartedAt:     startedAt,
 		UptimeSeconds: uptimeSeconds,
-		Health:        healthStatusFromServiceStatus(platformv1.ServiceStatus(state.status.Load())),
+		Health:        healthStatusFromServiceStatus(svcStatus),
 		Metadata:      metadata,
 	}
 
@@ -731,13 +763,14 @@ func (s *Service) ListServices(ctx context.Context, req *platformv1.ListServices
 			uptimeSeconds = uint64(s.currentTime().Sub(state.startedAt).Seconds())
 		}
 
+		svcStatus := state.observedStatus()
 		info := &platformv1.ServiceInfo{
 			Name:          name,
 			Type:          serviceTypeFromName(name),
-			Status:        platformv1.ServiceStatus(state.status.Load()),
+			Status:        svcStatus,
 			StartedAt:     startedAt,
 			UptimeSeconds: uptimeSeconds,
-			Health:        healthStatusFromServiceStatus(platformv1.ServiceStatus(state.status.Load())),
+			Health:        healthStatusFromServiceStatus(svcStatus),
 			Metadata:      metadata,
 		}
 		state.mu.RUnlock()

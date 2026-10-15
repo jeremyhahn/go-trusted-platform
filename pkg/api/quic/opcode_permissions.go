@@ -30,7 +30,7 @@ import (
 // The catalog fails closed: an opcode or sub-opcode that is not listed here is
 // refused (ErrOperationNotClassified), so a new operation cannot be served
 // until it is given a permission. The only operations served without
-// credentials are the documented preAuthOpcodes.
+// credentials are the documented preAuthOpcodes and preAuthSubOpcodes.
 //
 // The resource/action pairs mirror the gRPC method catalog
 // (pkg/api/grpc/method_permissions.go) and the MCP tool catalog
@@ -146,6 +146,17 @@ var preAuthSubOpcodes = map[byte]map[byte]string{
 			"the boot service authenticates the request itself against the node's own TLS channel",
 		quicwire.DeviceSubBootDelivery: "a diskless node holds no platform token; the boot service verifies " +
 			"the node's attestation evidence, bound to its own TLS channel, before it delivers anything",
+
+		// Pre-enrollment config delivery, open as on gRPC and MCP. The operator
+		// half (FulfillSession, ListSessions, GetSession) stays scoped.
+		quicwire.ProvisioningSubGetNonce: "a pre-enrollment machine holds no platform credential; the nonce " +
+			"is single-use and only feeds the authenticated fetch and sign requests",
+		quicwire.ProvisioningSubFetchConfig: "a pre-enrollment machine holds no platform credential; the service " +
+			"authenticates the request itself (single-use nonce, EAB HMAC, EK-certificate binding)",
+		quicwire.ProvisioningSubSignDigest: "a pre-enrollment machine holds no platform credential; the service " +
+			"authenticates the request itself (single-use nonce, EAB HMAC, EK-certificate binding)",
+		quicwire.ProvisioningSubPollSession: "a pre-enrollment machine holds no platform credential; the random " +
+			"session ID handed out by an authenticated fetch is the poll capability",
 	},
 }
 
@@ -194,6 +205,10 @@ var (
 	tpmWrite  = OpcodePermission{Resource: "tpm", Action: actionWrite}
 	tpmDelete = OpcodePermission{Resource: "tpm", Action: actionDelete}
 
+	idevidRead   = OpcodePermission{Resource: "idevid", Action: actionRead}
+	idevidWrite  = OpcodePermission{Resource: "idevid", Action: actionWrite}
+	idevidDelete = OpcodePermission{Resource: "idevid", Action: actionDelete}
+
 	vmRead   = OpcodePermission{Resource: "vm", Action: actionRead}
 	vmWrite  = OpcodePermission{Resource: "vm", Action: actionWrite}
 	vmDelete = OpcodePermission{Resource: "vm", Action: actionDelete}
@@ -212,8 +227,8 @@ var (
 	certsRead     = OpcodePermission{Resource: "certs", Action: actionRead}
 	certsList     = OpcodePermission{Resource: "certs", Action: actionList}
 
-	daemonRead  = OpcodePermission{Resource: "daemon", Action: actionRead}
-	daemonWrite = OpcodePermission{Resource: "daemon", Action: actionWrite}
+	platformRead  = OpcodePermission{Resource: "platform", Action: actionRead}
+	platformWrite = OpcodePermission{Resource: "platform", Action: actionWrite}
 
 	iamRead   = OpcodePermission{Resource: "iam", Action: actionRead}
 	iamWrite  = OpcodePermission{Resource: "iam", Action: actionWrite}
@@ -353,25 +368,26 @@ var opcodePermissions = map[byte]OpcodePermission{
 	quicwire.OpSDNDeletePort:   sdnDelete,
 	quicwire.OpSDNDeletePolicy: sdnDelete,
 
-	// Device identity: IDevID / IAK / credential activation
-	quicwire.OpIDevIDGenerate:     tpmWrite,
-	quicwire.OpIDevIDInfo:         tpmRead,
-	quicwire.OpIDevIDDelete:       tpmDelete,
-	quicwire.OpIDevIDCSR:          tpmWrite,
-	quicwire.OpIDevIDInstallCert:  tpmWrite,
-	quicwire.OpIDevIDGetCert:      tpmRead,
-	quicwire.OpIAKGenerate:        tpmWrite,
-	quicwire.OpIAKInfo:            tpmRead,
-	quicwire.OpIAKDelete:          tpmDelete,
-	quicwire.OpIAKCSR:             tpmWrite,
-	quicwire.OpIAKInstallCert:     tpmWrite,
-	quicwire.OpIAKGetCert:         tpmRead,
-	quicwire.OpDeviceAttributes:   tpmRead,
-	quicwire.OpActivateCredential: tpmWrite,
-	quicwire.OpHasIDevID:          tpmRead,
-	quicwire.OpHasIAK:             tpmRead,
-	quicwire.OpIDevIDDeleteCert:   tpmDelete,
-	quicwire.OpIAKDeleteCert:      tpmDelete,
+	// Device identity: IDevID / IAK / credential activation (gRPC
+	// IDevIDService and the MCP idevid_* / iak_* tools)
+	quicwire.OpIDevIDGenerate:     idevidWrite,
+	quicwire.OpIDevIDInfo:         idevidRead,
+	quicwire.OpIDevIDDelete:       idevidDelete,
+	quicwire.OpIDevIDCSR:          idevidWrite,
+	quicwire.OpIDevIDInstallCert:  idevidWrite,
+	quicwire.OpIDevIDGetCert:      idevidRead,
+	quicwire.OpIAKGenerate:        idevidWrite,
+	quicwire.OpIAKInfo:            idevidRead,
+	quicwire.OpIAKDelete:          idevidDelete,
+	quicwire.OpIAKCSR:             idevidWrite,
+	quicwire.OpIAKInstallCert:     idevidWrite,
+	quicwire.OpIAKGetCert:         idevidRead,
+	quicwire.OpDeviceAttributes:   idevidRead,
+	quicwire.OpActivateCredential: idevidWrite,
+	quicwire.OpHasIDevID:          idevidRead,
+	quicwire.OpHasIAK:             idevidRead,
+	quicwire.OpIDevIDDeleteCert:   idevidDelete,
+	quicwire.OpIAKDeleteCert:      idevidDelete,
 
 	// Virtual machines routed on their own byte
 	quicwire.OpVMCreate:    vmWrite,
@@ -428,15 +444,16 @@ var opcodePermissions = map[byte]OpcodePermission{
 	quicwire.OpCACRL:        caRead,
 	quicwire.OpCABundle:     caRead,
 
-	// Daemon management
-	quicwire.OpDaemonStatus:         daemonRead,
-	quicwire.OpDaemonVersion:        daemonRead,
-	quicwire.OpDaemonListServices:   daemonRead,
-	quicwire.OpDaemonGetService:     daemonRead,
-	quicwire.OpDaemonStartService:   daemonWrite,
-	quicwire.OpDaemonStopService:    daemonWrite,
-	quicwire.OpDaemonRestartService: daemonWrite,
-	quicwire.OpDaemonListProtocols:  daemonRead,
+	// Daemon management (gRPC PlatformDaemon). ListProtocols has no gRPC
+	// twin; it is a daemon read like Status and Version.
+	quicwire.OpDaemonStatus:         platformRead,
+	quicwire.OpDaemonVersion:        platformRead,
+	quicwire.OpDaemonListServices:   platformRead,
+	quicwire.OpDaemonGetService:     platformRead,
+	quicwire.OpDaemonStartService:   platformWrite,
+	quicwire.OpDaemonStopService:    platformWrite,
+	quicwire.OpDaemonRestartService: platformWrite,
+	quicwire.OpDaemonListProtocols:  platformRead,
 
 	// IAM users, roles, groups and tokens (gRPC PlatformIAMService)
 	quicwire.OpIAMUserCreate:        iamWrite,
@@ -686,7 +703,8 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.OpContainerMetrics: containerRead,
 	},
 
-	// Physical TPM 2.0
+	// Physical TPM 2.0. The daemon serves the LDevID sub-opcode with
+	// IDevIDService.CreateLDevID, so it takes that method's idevid scope.
 	quicwire.OpTPM2Category: {
 		quicwire.SubOpTPM2Info:          tpmRead,
 		quicwire.SubOpTPM2Provision:     tpmWrite,
@@ -716,7 +734,7 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.SubOpTPM2NVDelete:      tpmDelete,
 		quicwire.SubOpTPM2NVList:        tpmRead,
 		quicwire.SubOpTPM2IDevIDCSR:     tpmWrite,
-		quicwire.SubOpTPM2LDevIDCSR:     tpmWrite,
+		quicwire.SubOpTPM2LDevIDCSR:     idevidWrite,
 		quicwire.SubOpTPM2PlatformAttrs: tpmRead,
 		quicwire.SubOpTPM2GetIDevID:     tpmRead,
 		quicwire.SubOpTPM2MakeCred:      tpmRead,
@@ -814,10 +832,7 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 	// Provisioning: config delivery, EAB credentials and device profile
 	// assignment share this category.
 	quicwire.OpProvisioningCategory: {
-		quicwire.ProvisioningSubGetNonce:       provisioningRead,
-		quicwire.ProvisioningSubFetchConfig:    provisioningRead,
-		quicwire.ProvisioningSubSignDigest:     provisioningWrite,
-		quicwire.ProvisioningSubPollSession:    provisioningRead,
+		// GetNonce, FetchConfig, SignDigest and PollSession are preAuthSubOpcodes.
 		quicwire.ProvisioningSubFulfillSession: provisioningWrite,
 		quicwire.ProvisioningSubListSessions:   provisioningRead,
 		quicwire.ProvisioningSubGetSession:     provisioningRead,

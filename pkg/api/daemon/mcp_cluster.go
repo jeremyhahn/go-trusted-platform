@@ -16,6 +16,11 @@ package daemon
 import (
 	"context"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 )
 
 // =============================================================================
@@ -46,6 +51,12 @@ func (ErrClusterNotConfigured) Error() string {
 	return "cluster service not configured"
 }
 
+// GRPCStatus classifies the error as Unavailable, the class the gRPC
+// ClusterService answers with while no servicer is set.
+func (e ErrClusterNotConfigured) GRPCStatus() *status.Status {
+	return status.New(codes.Unavailable, e.Error())
+}
+
 // ErrClusterPeerAddressRequired indicates that a join operation was issued
 // without any seed peer addresses to dial.
 type ErrClusterPeerAddressRequired struct{}
@@ -53,6 +64,31 @@ type ErrClusterPeerAddressRequired struct{}
 // Error returns a human-readable description of the error.
 func (ErrClusterPeerAddressRequired) Error() string {
 	return "cluster: at least one seed_address is required to join"
+}
+
+// GRPCStatus classifies the error as InvalidArgument, as gRPC Join does.
+func (e ErrClusterPeerAddressRequired) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
+// ErrClusterServicerFailed is a cluster servicer failure answered over MCP.
+// It keeps the servicer's error and carries the class the gRPC
+// ClusterService answers the same failure with.
+type ErrClusterServicerFailed struct {
+	Cause error
+}
+
+func (e ErrClusterServicerFailed) Error() string {
+	return e.Cause.Error()
+}
+
+func (e ErrClusterServicerFailed) Unwrap() error {
+	return e.Cause
+}
+
+// GRPCStatus classifies the failure as grpcapi.ClusterErrorStatus does.
+func (e ErrClusterServicerFailed) GRPCStatus() *status.Status {
+	return status.Convert(grpcapi.ClusterErrorStatus(e.Cause))
 }
 
 // =============================================================================
@@ -146,13 +182,13 @@ func (p *MCPServiceProvider) ClusterBootstrap(ctx context.Context, clusterName s
 		return nil, ErrClusterNotConfigured{}
 	}
 	if err := p.clusterService.Bootstrap(ctx); err != nil {
-		return nil, err
+		return nil, ErrClusterServicerFailed{Cause: err}
 	}
-	status, err := p.clusterService.Status(ctx)
+	st, err := p.clusterService.Status(ctx)
 	if err != nil {
-		return nil, err
+		return nil, ErrClusterServicerFailed{Cause: err}
 	}
-	return clusterBootstrapResultJSON(clusterName, p.clusterService.NodeID(), status), nil
+	return clusterBootstrapResultJSON(clusterName, p.clusterService.NodeID(), st), nil
 }
 
 // ClusterJoin adds this node to an existing cluster.
@@ -164,13 +200,13 @@ func (p *MCPServiceProvider) ClusterJoin(ctx context.Context, seedAddresses []st
 		return nil, ErrClusterPeerAddressRequired{}
 	}
 	if err := p.clusterService.Join(ctx, seedAddresses); err != nil {
-		return nil, err
+		return nil, ErrClusterServicerFailed{Cause: err}
 	}
-	status, err := p.clusterService.Status(ctx)
+	st, err := p.clusterService.Status(ctx)
 	if err != nil {
-		return nil, err
+		return nil, ErrClusterServicerFailed{Cause: err}
 	}
-	return clusterJoinResultJSON(p.clusterService.NodeID(), seedAddresses, status), nil
+	return clusterJoinResultJSON(p.clusterService.NodeID(), seedAddresses, st), nil
 }
 
 // ClusterLeave gracefully removes this node from the cluster.
@@ -180,7 +216,7 @@ func (p *MCPServiceProvider) ClusterLeave(ctx context.Context) (interface{}, err
 	}
 	nodeID := p.clusterService.NodeID()
 	if err := p.clusterService.Leave(ctx); err != nil {
-		return nil, err
+		return nil, ErrClusterServicerFailed{Cause: err}
 	}
 	return map[string]interface{}{
 		"node_id": nodeID,
@@ -198,13 +234,13 @@ func (p *MCPServiceProvider) ClusterStatus(ctx context.Context, includeNodes boo
 	if p.clusterService == nil {
 		return nil, ErrClusterNotConfigured{}
 	}
-	status, err := p.clusterService.Status(ctx)
+	st, err := p.clusterService.Status(ctx)
 	if err != nil {
-		return nil, err
+		return nil, ErrClusterServicerFailed{Cause: err}
 	}
 
 	out := map[string]interface{}{
-		"cluster":   clusterStatusJSON(status),
+		"cluster":   clusterStatusJSON(st),
 		"node_id":   p.clusterService.NodeID(),
 		"is_leader": p.clusterService.IsLeader(),
 		"timestamp": time.Now().UTC(),
@@ -213,7 +249,7 @@ func (p *MCPServiceProvider) ClusterStatus(ctx context.Context, includeNodes boo
 	if includeNodes {
 		nodes, nodesErr := p.clusterService.Nodes(ctx)
 		if nodesErr != nil {
-			return nil, nodesErr
+			return nil, ErrClusterServicerFailed{Cause: nodesErr}
 		}
 		out["nodes"] = clusterNodesJSON(nodes)
 		if nodes != nil && nodes.Leader != nil {
@@ -230,7 +266,7 @@ func (p *MCPServiceProvider) ClusterListNodes(ctx context.Context) (interface{},
 	}
 	nodes, err := p.clusterService.Nodes(ctx)
 	if err != nil {
-		return nil, err
+		return nil, ErrClusterServicerFailed{Cause: err}
 	}
 	out := map[string]interface{}{
 		"nodes": clusterNodesJSON(nodes),
@@ -252,22 +288,22 @@ func (p *MCPServiceProvider) ClusterListNodes(ctx context.Context) (interface{},
 // clusterStatusJSON projects ClusterStatusInfo into a JSON-friendly map.
 // Mirrors the proto ClusterInfo shape so MCP clients see fields the gRPC
 // clients already know.
-func clusterStatusJSON(status *ClusterStatusInfo) map[string]interface{} {
-	if status == nil {
+func clusterStatusJSON(st *ClusterStatusInfo) map[string]interface{} {
+	if st == nil {
 		return map[string]interface{}{}
 	}
 	out := map[string]interface{}{
-		"state":         status.State,
-		"node_count":    status.NodeCount,
-		"healthy_count": status.HealthyCount,
-		"leader_id":     status.LeaderID,
-		"term":          status.Term,
-		"has_quorum":    status.HasQuorum,
-		"last_updated":  status.LastUpdated,
-		"started_at":    status.StartedAt,
+		"state":         st.State,
+		"node_count":    st.NodeCount,
+		"healthy_count": st.HealthyCount,
+		"leader_id":     st.LeaderID,
+		"term":          st.Term,
+		"has_quorum":    st.HasQuorum,
+		"last_updated":  st.LastUpdated,
+		"started_at":    st.StartedAt,
 	}
-	if status.ErrorMessage != "" {
-		out["error_message"] = status.ErrorMessage
+	if st.ErrorMessage != "" {
+		out["error_message"] = st.ErrorMessage
 	}
 	return out
 }
@@ -313,10 +349,10 @@ func clusterNodeCount(nodes *ClusterNodesInfo) int {
 
 // clusterBootstrapResultJSON formats a Bootstrap result combining the
 // supplied cluster name with the post-bootstrap status snapshot.
-func clusterBootstrapResultJSON(clusterName string, nodeID uint64, status *ClusterStatusInfo) map[string]interface{} {
+func clusterBootstrapResultJSON(clusterName string, nodeID uint64, st *ClusterStatusInfo) map[string]interface{} {
 	out := map[string]interface{}{
 		"node_id":   nodeID,
-		"cluster":   clusterStatusJSON(status),
+		"cluster":   clusterStatusJSON(st),
 		"bootstrap": true,
 	}
 	if clusterName != "" {
@@ -327,11 +363,11 @@ func clusterBootstrapResultJSON(clusterName string, nodeID uint64, status *Clust
 
 // clusterJoinResultJSON formats a Join result combining the supplied seed
 // addresses with the post-join status snapshot.
-func clusterJoinResultJSON(nodeID uint64, addresses []string, status *ClusterStatusInfo) map[string]interface{} {
+func clusterJoinResultJSON(nodeID uint64, addresses []string, st *ClusterStatusInfo) map[string]interface{} {
 	return map[string]interface{}{
 		"node_id":        nodeID,
 		"seed_addresses": addresses,
-		"cluster":        clusterStatusJSON(status),
+		"cluster":        clusterStatusJSON(st),
 		"joined":         true,
 	}
 }

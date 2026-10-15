@@ -41,7 +41,6 @@ func newTestSDNService(mockClient *ConfigurableMockOVSClient) *SDNService {
 		taps:           make(map[string]*tapResource),
 		vlans:          make(map[string]*vlanResource),
 		policies:       make(map[string]*policyResource),
-		portAuths:      make(map[string]*portAuthResource),
 	}
 }
 
@@ -1532,11 +1531,10 @@ func TestSDNServiceUnit_WithOVSClient(t *testing.T) {
 	opt := WithOVSClient(mockClient)
 
 	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
+		bridges: make(map[string]*bridgeResource),
+		ports:   make(map[string]*portResource),
+		taps:    make(map[string]*tapResource),
+		vlans:   make(map[string]*vlanResource),
 	}
 	opt(svc)
 

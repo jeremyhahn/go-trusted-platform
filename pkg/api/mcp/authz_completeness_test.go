@@ -50,9 +50,8 @@ import (
 // tools with no gRPC or REST twin to take a scope from, tools no executor
 // dispatches (see knownUndispatched), and tools that refuse on every
 // transport, so no scope may unlock them (iam_create_token, iam_revoke_token,
-// iam_authenticate, sdn_authenticate_port, sdn_revoke_port_auth).
+// iam_authenticate).
 var knownUnclassified = []string{
-	"activate_credential",
 	"attestation_attest_workload",
 	"attestation_create_policy",
 	"attestation_create_report",
@@ -63,96 +62,27 @@ var knownUnclassified = []string{
 	"attestation_list_policies",
 	"attestation_list_reports",
 	"attestation_verify_workload",
-	"device_attributes",
+	// dns_reverse_lookup has no backend: the tool answers with no executor
+	// and no gRPC or REST twin to take a scope from.
 	"dns_reverse_lookup",
-	"iak_csr",
-	"iak_delete",
-	"iak_delete_cert",
-	"iak_exists",
-	"iak_generate",
-	"iak_get_cert",
-	"iak_info",
-	"iak_install_cert",
 	"iam_authenticate",
 	"iam_create_token",
 	"iam_revoke_token",
-	"idevid_create_ldevid",
-	"idevid_csr",
-	"idevid_delete",
-	"idevid_delete_cert",
-	"idevid_exists",
-	"idevid_generate",
-	"idevid_get_cert",
-	"idevid_info",
-	"idevid_install_cert",
-	"platform_cluster_bootstrap",
-	"platform_cluster_join",
-	"platform_cluster_leave",
-	"platform_cluster_list_nodes",
-	"platform_cluster_status",
-	"platform_daemon_get_service",
+	// platform_daemon_list_protocols has no gRPC twin, and its REST route is
+	// gated on the admin role, which carries no scope.
 	"platform_daemon_list_protocols",
-	"platform_daemon_list_services",
-	"platform_daemon_restart_service",
-	"platform_daemon_start_service",
-	"platform_daemon_status",
-	"platform_daemon_stop_service",
-	"platform_daemon_version",
-	"platform_luks_change_passphrase",
-	"platform_luks_enroll_fido2",
-	"platform_luks_enroll_passphrase",
-	"platform_luks_enroll_recovery",
-	"platform_luks_enroll_tpm",
-	"platform_luks_info",
-	"platform_luks_list_slots",
-	"platform_luks_remove_key",
-	"platform_luks_status",
 	"platform_luks_test_unlock",
-	"platform_registry_delete",
-	"platform_registry_inspect",
-	"platform_registry_list",
-	"platform_registry_status",
-	"platform_tpm_capabilities",
 	"platform_tpm_ek_delete",
 	"platform_tpm_iak_delete",
-	"platform_tpm_platform",
 	"platform_tpm_srk_delete",
-	"provision_fetch_config",
-	"provision_fulfill_session",
-	"provision_get_nonce",
-	"provision_get_session",
-	"provision_list_sessions",
-	"provision_poll_session",
-	"provision_sign_digest",
-	// The port-auth tools stay refused: SDNService.AuthenticatePort and
-	// RevokePortAuth only record a map entry and never reach the switch.
-	"sdn_authenticate_port",
-	"sdn_revoke_port_auth",
-	"switch_disable_port",
-	"switch_enable_port",
-	"switch_list_ports",
-	"switch_port_status",
-	"switch_set_vlan",
-	"vm_create",
-	"vm_delete",
-	"vm_get",
-	"vm_list",
-	"vm_reboot",
+	// vm_resume has no gRPC twin to take a scope from, nor an executor.
 	"vm_resume",
+	// vm_snapshot_get has no gRPC or REST twin to take a scope from.
 	"vm_snapshot_get",
-	"vm_start",
-	"vm_stop",
+	// vm_suspend has no gRPC twin to take a scope from, nor an executor.
 	"vm_suspend",
+	// vm_update has no gRPC twin to take a scope from, nor an executor.
 	"vm_update",
-	"vtpm_bundle_create",
-	"vtpm_bundle_delete",
-	"vtpm_bundle_get",
-	"vtpm_bundle_list",
-	"vtpm_bundle_pcr_extend",
-	"vtpm_bundle_pcr_read",
-	"vtpm_bundle_quote",
-	"vtpm_bundle_seal",
-	"vtpm_bundle_unseal",
 }
 
 // TestEveryRegisteredToolIsClassified walks the tool registry the server
@@ -456,6 +386,37 @@ func TestOverlayToolsAreClassified(t *testing.T) {
 		"overlay_tunnel_stats": "sdn:read",
 		"overlay_mac_list":     "sdn:read",
 		"overlay_mac_forget":   "sdn:write",
+	}
+	for tool, scope := range want {
+		got, ok := checker.toolPermissions[tool]
+		require.True(t, ok, "%s must have an explicit permission entry", tool)
+		assert.Equal(t, scope, got, "%s", tool)
+	}
+}
+
+// TestSwitchClusterRegistryToolsAreClassified pins each switch, cluster and
+// registry tool (#304) to the scope its gRPC twin requires in
+// method_permissions.go.
+func TestSwitchClusterRegistryToolsAreClassified(t *testing.T) {
+	checker := NewAuthorizationChecker(nil, nil)
+
+	want := map[string]string{
+		"switch_list_ports":   "switch:read",
+		"switch_port_status":  "switch:read",
+		"switch_enable_port":  "switch:write",
+		"switch_disable_port": "switch:write",
+		"switch_set_vlan":     "switch:write",
+
+		"platform_cluster_status":     "cluster:read",
+		"platform_cluster_list_nodes": "cluster:read",
+		"platform_cluster_bootstrap":  "cluster:write",
+		"platform_cluster_join":       "cluster:write",
+		"platform_cluster_leave":      "cluster:write",
+
+		"platform_registry_status":  "registry:read",
+		"platform_registry_list":    "registry:read",
+		"platform_registry_inspect": "registry:read",
+		"platform_registry_delete":  "registry:delete",
 	}
 	for tool, scope := range want {
 		got, ok := checker.toolPermissions[tool]

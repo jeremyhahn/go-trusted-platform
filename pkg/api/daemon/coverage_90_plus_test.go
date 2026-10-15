@@ -1200,7 +1200,7 @@ func TestMCPServiceProvider_VTPMList(t *testing.T) {
 	provider := &MCPServiceProvider{}
 	ctx := context.Background()
 
-	result, err := provider.VTPMList(ctx)
+	result, err := provider.VTPMList(ctx, nil)
 	assert.Nil(t, result)
 	assert.Error(t, err)
 }

@@ -94,6 +94,13 @@ shape. Check the unit and the field before writing a quota value.
 limit alone rather than zeroing it. Zero is a real value meaning "no capacity",
 which is why the `Changed` check is necessary.
 
+**An update never touches usage.** `Manager.UpdateQuotas` applies each section
+through `SetLimits`, which copies the `Max*` fields and leaves the `Used*`
+counters alone; usage moves only through `Reserve` and `Release`.
+`TenantGRPCServer.UpdateQuotas` starts from `GetQuotas` and overwrites only the
+limits the request carries, so an absent section keeps its limits and
+`MaxDiskGB`, which the gRPC message cannot carry, keeps its value.
+
 Exceeding a quota is `ErrQuotaExceeded`; hitting a hard resource ceiling is
 `ErrResourceLimitReached`.
 

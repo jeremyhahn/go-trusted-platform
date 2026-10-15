@@ -13,6 +13,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	pkgdiskimage "github.com/jeremyhahn/go-trusted-platform/pkg/diskimage"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/rpi"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	pkgiso "github.com/jeremyhahn/go-trusted-platform/pkg/iso"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -115,7 +116,7 @@ Examples:
 	f := cmd.Flags()
 	f.StringVar(&flags.target, "target", pkgdiskimage.DefaultTarget, "Image target: rpi or qemu-virt")
 	f.StringVar(&flags.model, "model", "", "Board model for the rpi target (default "+rpi.DefaultModel+"): "+joinModels())
-	f.StringVar(&flags.role, "role", "", "Dedicated-profile role for the rpi target, built from dedicated/raspberrypi/<model>/<role>.yaml (compute on rpi4 and rpi5); empty builds the single-node image")
+	f.StringVar(&flags.role, "role", "", "Dedicated-profile role for the rpi target, built from dedicated/raspberrypi/<model>/<role>.yaml (compute on rpi4 and rpi5, control-plane on cm4 and rpi4); empty builds the single-node image")
 	f.IntVar(&flags.sizeMB, "size", pkgdiskimage.DefaultSizeMB, "Image size in MB")
 	f.StringVar(&flags.output, "output", "", "Output image path (default <work-dir>/trusted-platform-<target>.img)")
 	f.StringVar(&flags.binariesDir, "binaries-dir", "", "Directory holding the target-architecture platformd, platformctl, platformctl-static, platform-initrd and gatewayd (default: aarch64/ next to this binary)")
@@ -317,6 +318,13 @@ func buildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 	return cfg, nil
 }
 
+// templateRoles are the host roles a dedicated template file is named for.
+var templateRoles = map[installer.HostRole]struct{}{
+	installer.HostRoleGateway:      {},
+	installer.HostRoleControlPlane: {},
+	installer.HostRoleCompute:      {},
+}
+
 // roleTemplate returns the dedicated-profile template a --role build uses,
 // dedicated/raspberrypi/<model>/<role>.yaml. Unlike the single-node default
 // there is no fallback: a role without a template is refused, never built
@@ -338,6 +346,11 @@ func roleTemplate(target, model, role, platformConfig string) (string, error) {
 	// builder knows may reach the path.
 	if _, err := rpi.LookupModel(model); err != nil {
 		return refuse(err.Error())
+	}
+	// The role names the template file, so only a host role may reach the
+	// path; the example overrides beside the templates are not roles.
+	if _, ok := templateRoles[installer.HostRole(role)]; !ok {
+		return refuse("not a host role: want gateway, control-plane or compute")
 	}
 	path := filepath.Join("configs", "platform", "templates", "dedicated", "raspberrypi", model, role+".yaml")
 	if _, err := os.Stat(path); err != nil {

@@ -1,0 +1,33 @@
+# CM4 desk control plane: --overrides for cm4/control-plane.yaml.
+#
+#   platformctl diskimage create --target rpi --model cm4 --role control-plane \
+#     --overrides configs/platform/templates/dedicated/raspberrypi/cm4/desk-overrides.yaml
+#
+# Not a template: the overrides deep-merge onto the control-plane template
+# (docs/device-templates.md, "Merge Rules"). They take the CM4 off the rack
+# trunk and give it one static address, 192.0.2.10/24 in VLAN 405, on an
+# untagged eth0. There is no router and no default gateway on the desk. The
+# README beside the templates says what the control plane keeps and loses
+# without one.
+network:
+  # A control-plane role permits addresses in fabric, hypervisor, storage and
+  # control-plane only, and requires a fabric address
+  # (pkg/installer/network_role.go). 192.0.2.10 is in the provisioning zone,
+  # so the desk host takes no role: its addressing is not constrained, and
+  # it gets no forwarding sysctl and no forward-drop host firewall. The
+  # kernel default (no forwarding) still applies.
+  role: null
+  # The platform-VRF address is a fabric-side /32; the desk has no fabric.
+  platform-vrf: null
+  # The control plane resolves through its own address, as the template does
+  # with its control-plane address.
+  dns:
+    nameservers:
+      - 192.0.2.10
+  # Merges into the template's eth0 by name: the trunk becomes an access
+  # port with the one static address and no gateway.
+  interfaces:
+    - name: eth0
+      type: static
+      ipv4-address: 192.0.2.10/24
+  vlans: []

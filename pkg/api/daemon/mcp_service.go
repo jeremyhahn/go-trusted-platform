@@ -248,8 +248,8 @@ func (p *MCPServiceProvider) SetTPM2Service(svc xkmssdk.TrustedPlatformModule) {
 	p.tpm2Service = svc
 }
 
-// SetIDevIDService injects the shared IDevID gRPC service used for LDevID
-// (802.1AR) issuance over MCP.
+// SetIDevIDService injects the shared IDevID gRPC service that serves the MCP
+// IDevID, IAK and LDevID (802.1AR) tools.
 func (p *MCPServiceProvider) SetIDevIDService(svc *IDevIDGRPCService) {
 	p.idevidService = svc
 }
@@ -259,7 +259,7 @@ func (p *MCPServiceProvider) SetIDevIDService(svc *IDevIDGRPCService) {
 // =============================================================================
 
 // VTPMCreate creates a new vTPM bundle.
-func (p *MCPServiceProvider) VTPMCreate(ctx context.Context, name string, algorithm string) (interface{}, error) {
+func (p *MCPServiceProvider) VTPMCreate(ctx context.Context, name string, algorithm string, secureBoot bool, labels map[string]string) (interface{}, error) {
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
@@ -270,9 +270,11 @@ func (p *MCPServiceProvider) VTPMCreate(ctx context.Context, name string, algori
 	}
 
 	opts := &vtpm.CreateBundleOptions{
-		Hostname:    name,
-		EKAlgorithm: ekAlg,
-		Mode:        vtpm.BundleModePreAssigned,
+		Hostname:          name,
+		EKAlgorithm:       ekAlg,
+		Mode:              vtpm.BundleModePreAssigned,
+		SecureBootEnabled: secureBoot,
+		Labels:            labels,
 	}
 
 	bundle, err := p.vtpmService.CreateBundle(ctx, opts)
@@ -291,12 +293,12 @@ func (p *MCPServiceProvider) VTPMDelete(ctx context.Context, name string) error 
 }
 
 // VTPMList lists all vTPM bundles.
-func (p *MCPServiceProvider) VTPMList(ctx context.Context) ([]interface{}, error) {
+func (p *MCPServiceProvider) VTPMList(ctx context.Context, opts *vtpm.ListOptions) ([]interface{}, error) {
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
 
-	bundles, err := p.vtpmService.ListBundles(ctx, nil)
+	bundles, err := p.vtpmService.ListBundles(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -342,26 +344,26 @@ func (p *MCPServiceProvider) VTPMQuote(ctx context.Context, name string, nonce [
 }
 
 // VTPMSeal seals data to a vTPM.
-func (p *MCPServiceProvider) VTPMSeal(ctx context.Context, name string, data []byte, pcrs []int) ([]byte, error) {
+func (p *MCPServiceProvider) VTPMSeal(ctx context.Context, name string, data []byte, pcrs []int, authValue string) ([]byte, error) {
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
 	if _, err := p.vtpmService.GetBundle(ctx, name); err != nil {
 		return nil, err
 	}
-	opts := &vtpm.SealOptions{PCRs: pcrs}
+	opts := &vtpm.SealOptions{PCRs: pcrs, AuthValue: authValue}
 	return p.vtpmService.Seal(ctx, name, data, opts)
 }
 
 // VTPMUnseal unseals data from a vTPM.
-func (p *MCPServiceProvider) VTPMUnseal(ctx context.Context, name string, sealed []byte) ([]byte, error) {
+func (p *MCPServiceProvider) VTPMUnseal(ctx context.Context, name string, sealed []byte, authValue string) ([]byte, error) {
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
 	if _, err := p.vtpmService.GetBundle(ctx, name); err != nil {
 		return nil, err
 	}
-	return p.vtpmService.Unseal(ctx, name, sealed, "")
+	return p.vtpmService.Unseal(ctx, name, sealed, authValue)
 }
 
 // VTPMExtendPCR extends a PCR value.

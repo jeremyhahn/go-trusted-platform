@@ -681,8 +681,14 @@ gRPC status codes:
 | `ALREADY_EXISTS` | Object already exists |
 | `INVALID_ARGUMENT` | Invalid request parameters |
 | `PERMISSION_DENIED` | Authorization failed |
-| `FAILED_PRECONDITION` | PCR mismatch or TPM not ready |
+| `FAILED_PRECONDITION` | PCR mismatch or TPM not ready; `IDevIDService.DeleteIDevID` and `DeleteIAK`, always |
 | `INTERNAL` | Server error |
+
+`IDevIDService.DeleteIDevID` and `DeleteIAK` are refused until the owner rules
+on eviction: the key is TPM-resident and is not evicted, and the refusal
+changes nothing — no key, no certificate, no state (#304). The certificates
+are deleted with `DeleteIDevIDCertificate` and `DeleteIAKCertificate`. Every
+transport answers the same; see [api.md](api.md) §8.
 
 ```go
 resp, err := client.GetEK(ctx, &platformv1.GetEKRequest{})

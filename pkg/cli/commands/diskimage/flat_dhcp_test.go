@@ -2,6 +2,7 @@ package diskimage
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -39,25 +40,50 @@ func loadMerged(t *testing.T, template, overrides string) *installer.Config {
 	return cfg
 }
 
-// interfaceType returns the configured type of the named interface.
-func interfaceType(t *testing.T, network *installer.NetworkConfig, name string) installer.InterfaceType {
+// requirePlatformdAccepts runs the host-network check platformd runs at
+// config load (app.validateHostNetwork): the network section against the
+// plan app.NetworkPlan derives, which loadInstallerConfig carries as
+// cfg.Plan. platformd refuses to start on any error it returns.
+func requirePlatformdAccepts(t *testing.T, cfg *installer.Config) {
+	t.Helper()
+	if cfg.Plan == nil {
+		t.Fatal("the merged config derives no network plan; platformd would check it plan-free")
+	}
+	if err := cfg.Network.Validate(cfg.Plan); err != nil {
+		t.Fatalf("platformd refuses the merged network section: %v", err)
+	}
+}
+
+// findInterface returns the named interface of a network section.
+func findInterface(t *testing.T, network *installer.NetworkConfig, name string) installer.InterfaceConfig {
 	t.Helper()
 	for _, iface := range network.Interfaces {
 		if iface.Name == name {
-			return iface.Type
+			return iface
 		}
 	}
 	t.Fatalf("no interface %s in %+v", name, network.Interfaces)
-	return ""
+	return installer.InterfaceConfig{}
 }
 
 // TestRPi4FlatDHCPOverridesRenderAnAccessPort builds a Pi 4 compute node for a
 // flat DHCP network (the office VLAN 101) from the rack template and overrides
-// alone: eth0 takes its address by DHCP, and nothing of the rack's trunk, zone
-// VLANs, platform VRF or 10.4.x DNS upstreams is rendered.
+// alone: platformd accepts the merged network section, eth0 takes its address
+// by DHCP, and nothing of the rack's trunk, zone VLANs, platform VRF or 10.4.x
+// DNS upstreams is rendered.
 func TestRPi4FlatDHCPOverridesRenderAnAccessPort(t *testing.T) {
 	cfg := loadMerged(t, rpi4ComputeTemplate, filepath.Join("testdata", "rpi4-flat-dhcp.yaml"))
 	network := cfg.Network
+	requirePlatformdAccepts(t, cfg)
+
+	// The null role is what lets it load: with the template's role back the
+	// same section is refused, so the role rule itself is unchanged.
+	withRole := *network
+	withRole.Role = installer.HostRoleCompute
+	var dhcp *installer.ErrDHCPNotPermitted
+	if err := withRole.Validate(cfg.Plan); !errors.As(err, &dhcp) {
+		t.Errorf("with role compute, Validate = %v, want ErrDHCPNotPermitted", err)
+	}
 
 	// Checked before rendering: a dnsmasq section would make the installer
 	// chroot and mount /proc to install dnsmasq.
@@ -70,7 +96,7 @@ func TestRPi4FlatDHCPOverridesRenderAnAccessPort(t *testing.T) {
 	if len(network.VLANs) != 0 {
 		t.Errorf("the [] vlans override did not replace the template's: %+v", network.VLANs)
 	}
-	if got := interfaceType(t, network, "eth0"); got != installer.InterfaceTypeDHCP {
+	if got := findInterface(t, network, "eth0").Type; got != installer.InterfaceTypeDHCP {
 		t.Errorf("eth0 type = %q, want %q", got, installer.InterfaceTypeDHCP)
 	}
 
@@ -131,7 +157,7 @@ func TestRPi4ComputeTemplateKeepsTheRackTrunk(t *testing.T) {
 	}
 	network := loadMerged(t, rpi4ComputeTemplate, empty).Network
 
-	if got := interfaceType(t, network, "eth0"); got != installer.InterfaceTypeManual {
+	if got := findInterface(t, network, "eth0").Type; got != installer.InterfaceTypeManual {
 		t.Errorf("eth0 type = %q, want %q", got, installer.InterfaceTypeManual)
 	}
 	if len(network.VLANs) != 3 {

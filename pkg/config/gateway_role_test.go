@@ -73,14 +73,16 @@ func TestGatewaydConfigSections_MatchesWhatGatewaydDecodes(t *testing.T) {
 func TestShippedTemplates_GatewayRoleIsTheGatewayTemplatesOnly(t *testing.T) {
 	root := filepath.Join("..", "..", "configs", "platform", "templates", "dedicated")
 	cases := map[string]bool{
-		"supermicro/x10/gateway.yaml":       true,
-		"dell/r640/gateway.yaml":            true,
-		"supermicro/x10/control-plane.yaml": false,
-		"supermicro/x10/compute.yaml":       false,
-		"dell/r640/control-plane.yaml":      false,
-		"dell/r640/compute.yaml":            false,
-		"raspberrypi/rpi4/compute.yaml":     false,
-		"raspberrypi/rpi5/compute.yaml":     false,
+		"supermicro/x10/gateway.yaml":         true,
+		"dell/r640/gateway.yaml":              true,
+		"supermicro/x10/control-plane.yaml":   false,
+		"supermicro/x10/compute.yaml":         false,
+		"dell/r640/control-plane.yaml":        false,
+		"dell/r640/compute.yaml":              false,
+		"raspberrypi/rpi4/compute.yaml":       false,
+		"raspberrypi/rpi5/compute.yaml":       false,
+		"raspberrypi/cm4/control-plane.yaml":  false,
+		"raspberrypi/rpi4/control-plane.yaml": false,
 	}
 	for rel, want := range cases {
 		t.Run(rel, func(t *testing.T) {
@@ -121,14 +123,16 @@ func TestGatewaydPackages_AreTheJoolTranslator(t *testing.T) {
 func TestShippedTemplates_GatewaydPackagesOnGatewaysOnly(t *testing.T) {
 	root := filepath.Join("..", "..", "configs", "platform", "templates", "dedicated")
 	cases := map[string]bool{
-		"supermicro/x10/gateway.yaml":       true,
-		"dell/r640/gateway.yaml":            true,
-		"supermicro/x10/control-plane.yaml": false,
-		"supermicro/x10/compute.yaml":       false,
-		"dell/r640/control-plane.yaml":      false,
-		"dell/r640/compute.yaml":            false,
-		"raspberrypi/rpi4/compute.yaml":     false,
-		"raspberrypi/rpi5/compute.yaml":     false,
+		"supermicro/x10/gateway.yaml":         true,
+		"dell/r640/gateway.yaml":              true,
+		"supermicro/x10/control-plane.yaml":   false,
+		"supermicro/x10/compute.yaml":         false,
+		"dell/r640/control-plane.yaml":        false,
+		"dell/r640/compute.yaml":              false,
+		"raspberrypi/rpi4/compute.yaml":       false,
+		"raspberrypi/rpi5/compute.yaml":       false,
+		"raspberrypi/cm4/control-plane.yaml":  false,
+		"raspberrypi/rpi4/control-plane.yaml": false,
 	}
 	for rel, gateway := range cases {
 		t.Run(rel, func(t *testing.T) {

@@ -16,13 +16,24 @@ scope ([api.md](api.md) §9):
 | `tpm:write` | `POST provision`, `ek`, `ek/certificate`, `srk`, `ak`, `activate-credential`, `nvram`, `seal`; `PUT nvram` |
 | `tpm:delete` | `POST clear`, every `DELETE` |
 
-`GET`/`DELETE /iak`, `GET /idevid` and `GET /device/attributes` are the
-listener's device-identity routes (`pkg/api/daemon/rest_idevid.go`); they take
-no token and are not described here. The listener also serves
-`POST /api/v1/idevid/ldevid` (`CreateLDevID`, `rest_idevid_ldevid.go`), the
-same path the web service serves. The web service's `/api/v1/idevid` routes —
-the ones the Go SDK's REST adapter maps for every `IDevIDService` RPC — are in
-[api.md](api.md) §8.
+`GET`/`DELETE /iak`, `GET`/`DELETE /idevid` and `GET /device/attributes` are
+the listener's device-identity routes (`pkg/api/daemon/rest_idevid.go`); they
+take no token and are not described here, except for one rule: `DELETE /idevid`
+and `DELETE /iak` are refused until the owner rules on eviction. They answer
+`412 Precondition Failed` — the listener's status for the gRPC class
+`FailedPrecondition`, the class every other transport returns — and change
+nothing: no key, no certificate, no state (#304). The certificates have their
+own `DELETE /idevid/cert` and `DELETE /iak/cert`, which do delete. The web
+service serves the same two `DELETE` paths, behind its admin role gate, with
+the same `412` and the same error message
+(`pkg/webservice/v1/rest/idevid/router.go`).
+
+The listener also serves `POST /api/v1/idevid/ldevid` (`CreateLDevID`,
+`rest_idevid_ldevid.go`), the same path the web service serves. The web
+service's `/api/v1/idevid` routes — the ones the Go SDK's REST adapter maps for
+every `IDevIDService` RPC except `DeleteIDevID` and `DeleteIAK`, which it sends
+to the listener's `DELETE /api/v1/tpm/idevid` and `/api/v1/tpm/iak` so the
+refusal keeps its class — are in [api.md](api.md) §8.
 
 ## Wire contract
 

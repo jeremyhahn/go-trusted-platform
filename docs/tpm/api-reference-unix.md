@@ -350,7 +350,13 @@ getent group platform
 
 ## Error Handling
 
-All errors follow standard gRPC status codes:
+All errors follow standard gRPC status codes.
+
+The socket serves the same `IDevIDService` as gRPC, so `DeleteIDevID` and
+`DeleteIAK` are refused with `FailedPrecondition` until the owner rules on
+eviction: the key stays in the TPM and nothing is changed — no key, no
+certificate, no state (#304). `DeleteIDevIDCertificate` and
+`DeleteIAKCertificate` delete the certificates.
 
 ```go
 resp, err := client.Info(ctx, &platformv1.TPMInfoRequest{})

@@ -249,6 +249,10 @@ A node's `address` is the host and `port` the port of its `host:port` address
 | `platform_cluster_status` | `include_nodes` (bool, optional) |
 | `platform_cluster_list_nodes` | none |
 
+MCP asks for less than gRPC: `platform_cluster_bootstrap` has no `node_name`
+and an optional `cluster_name`, and `platform_cluster_join` has no `node_name`,
+where gRPC `Bootstrap` requires both and `Join` requires `node_name`.
+
 MCP outputs are JSON maps built in `pkg/api/daemon/mcp_cluster.go`:
 `platform_cluster_status` returns `{cluster: {state, node_count, healthy_count,
 leader_id, term, has_quorum, last_updated, started_at, error_message?}, node_id,
@@ -309,6 +313,18 @@ rest have no transport projection of their own: a servicer error reaches
 gRPC as `Internal` and REST as 500. Giving them codes means writing that
 mapping — it does not exist to be reused.
 
+### MCP
+
+`pkg/api/daemon/mcp_cluster.go` answers with the gRPC class (#304):
+
+| Error | Code |
+|---|---|
+| `ErrClusterNotConfigured` (no servicer) | `Unavailable` |
+| `ErrClusterPeerAddressRequired` (empty `seed_addresses`) | `InvalidArgument` |
+| a servicer error, wrapped in `ErrClusterServicerFailed` | the code `grpcapi.ClusterErrorStatus` gives it — the gRPC table above |
+
+The wrapper keeps the servicer error, so `errors.Is` still finds it.
+
 ### QUIC
 
 Not applicable: no cluster opcode.
@@ -318,7 +334,7 @@ Not applicable: no cluster opcode.
 | Transport | Requirement |
 |---|---|
 | gRPC / Unix | `GetStatus`, `ListNodes`: `cluster:read`. `Bootstrap`, `Join`, `Leave`: `cluster:write` (`pkg/api/grpc/method_permissions.go`). A caller without the scope gets `PermissionDenied` |
-| MCP | **All five `platform_cluster_*` tools are refused for every caller.** They are not in the permission map (`pkg/api/mcp/authz.go`), so the default-deny `AuthorizeTool` returns `AuthErrorToolNotClassified` until each is classified |
+| MCP | The gRPC twin's scope (#304): `platform_cluster_status`, `platform_cluster_list_nodes`: `cluster:read`. `platform_cluster_bootstrap`, `platform_cluster_join`, `platform_cluster_leave`: `cluster:write` (`pkg/api/mcp/authz.go`). A caller without the scope gets `PermissionDenied` (`-32003`) and the tool never runs |
 | REST | Whatever the daemon REST listener's middleware chain applies to `/api/v1` |
 | QUIC | n/a |
 | Embedded | In-process; no token |
@@ -326,8 +342,8 @@ Not applicable: no cluster opcode.
 Both catalogs are **default-deny**
 ([`docs/auth/architecture.md`](../auth/architecture.md)). On gRPC, membership
 changes (`Bootstrap`, `Join`, `Leave`) need `cluster:write`, separate from the
-read-only status calls. On MCP the lifecycle tools cannot be called at all until
-someone maps them. The platform-wide catalog totals
+read-only status calls; MCP requires the same pairs. Cluster nodes are
+platform-level: no transport scopes them to a tenant. The platform-wide catalog totals
 are in [`docs/daemon/api.md`](../daemon/api.md) §5.
 
 ## 8. Versioning and deprecation

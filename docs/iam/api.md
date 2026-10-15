@@ -345,11 +345,11 @@ method (`iam_verify_token` calls `IAMTokenService.Verify`, as gRPC does), and `I
 
 Since #300 `AuthorizeTool` **denies** a tool absent from the map
 (`AuthErrorToolNotClassified`, `-32603` on the wire) rather than allowing it.
-Of 469 registered tools, 363 carry a `resource:action` permission, 7 are
-classified open (`""`), and the other 99 are absent from the map and refused
+Of 469 registered tools, 435 carry a `resource:action` permission, 11 are
+classified open (`""`), and the other 23 are absent from the map and refused
 (measured from `NewToolRegistry(...).ListTools()` against
-`toolPermissionCatalog`). Since #304 the classified tools include 22 VM and
-container tools ([`docs/compute/api.md`](../compute/api.md) §7). Three IAM tools stay out of it on purpose and are enumerated in
+`toolPermissionCatalog`; the 23 are exactly `knownUnclassified`). Since #304
+the classified tools include 29 VM and container tools ([`docs/compute/api.md`](../compute/api.md) §7). Three IAM tools stay out of it on purpose and are enumerated in
 `knownUnclassified` (`pkg/api/mcp/authz_completeness_test.go`):
 `iam_create_token`, `iam_revoke_token` and `iam_authenticate`. They refuse on
 every transport (§6), and `iam_authenticate` has no gRPC method to take a
@@ -379,6 +379,7 @@ carries the scope of its gRPC method, and its errors carry the same gRPC class
 | `vtpm_{get,validate,export,get_bundle_path,get_tpm_socket_path,get_nvram_path,is_running}`, `vtpm_template_{get,list}` | `vtpm:read` |
 | `vtpm_import`, `vtpm_template_{create,clone}` | `vtpm:write` |
 | `vtpm_template_delete` | `vtpm:delete` |
+| `vtpm_bundle_{create,get,list,delete,quote,pcr_read,pcr_extend,seal,unseal}` | the scope of the `vtpm_*` twin each one runs ([`docs/vtpm/api.md`](../vtpm/api.md) §5) |
 
 Still refused, with the reason:
 
@@ -387,7 +388,6 @@ Still refused, with the reason:
   them evict is an owner decision, not a classification.
 - `platform_tpm_{capabilities,platform,nv_list,pcr_extend,certify}` — no gRPC
   or REST twin to take a scope from.
-- `vtpm_bundle_*` (9 tools) — registered but not dispatched by any executor.
 
 **The KMS and secret MCP tools are classified (#304).** Each of the 20 `kms_*`
 and 6 `secret_*` tools carries the scope of the gRPC method it mirrors
@@ -467,7 +467,7 @@ EAB carries no caller-tenant binding on any transport: gRPC and MCP serve the
 `tenant_id` the request names, so `eab:*` is store-wide. Details:
 [`docs/eab/api.md` §5](../eab/api.md).
 
-**SDN tranche of #304: nine SDN tools carry their gRPC scope.** Each has the
+**SDN tranche of #304: eleven SDN tools carry their gRPC scope.** Each has the
 `resource:action` of its `SDNService` twin in
 `pkg/api/grpc/method_permissions.go`, beside the bridge, port, port-state and
 policy tools that already had one:
@@ -483,15 +483,117 @@ policy tools that already had one:
 | `sdn_delete_vlan` | `sdn:delete` | `DeleteVLAN` |
 | `sdn_list_vlans` | `sdn:read` | `ListVLANs` |
 | `sdn_get_port_stats` | `sdn:read` | `GetPortStats` |
+| `sdn_authenticate_port` | `sdn:write` | `AuthenticatePort` |
+| `sdn_revoke_port_auth` | `sdn:write` | `RevokePortAuth` |
 
 `FlushFlows` takes `sdn:write`, not the `delete` the verb rule would give it:
 where gRPC and the verb rule differ, gRPC wins. `sdn_authenticate_port` and
-`sdn_revoke_port_auth` stay in `knownUnclassified` and are refused, although
-gRPC scopes both `sdn:write`: the service behind them records a map entry no
-code reads and never reaches the switch, and their handlers return
-`ErrPortAuthNotEnforced` (`FailedPrecondition`) even if reached
-([`docs/sdn/api-reference-mcp.md`](../sdn/api-reference-mcp.md)). SDN
+`sdn_revoke_port_auth` left `knownUnclassified` with #304. A caller holding
+`sdn:write` gets the refusal gRPC gives: both tools, like the service, return
+`policy.ErrPortAuthNotEnforced` (`FailedPrecondition`), because nothing
+enforces port authentication on the switch
+([`docs/sdn/api.md`](../sdn/api.md) §4). A caller without the scope is denied
+first. SDN
 objects carry no tenant on gRPC or MCP, so the scope is the whole check.
+
+**LUKS tools carry their gRPC scopes (#304).** Nine of the ten
+`platform_luks_*` tools are in the MCP authorization map, each with the scope
+its `LUKSService` method carries (`pkg/api/grpc/method_permissions.go`):
+
+| MCP tool | Scope |
+|---|---|
+| `platform_luks_status`, `platform_luks_list_slots`, `platform_luks_info` | `luks:read` |
+| `platform_luks_enroll_passphrase`, `platform_luks_enroll_fido2`, `platform_luks_enroll_tpm`, `platform_luks_enroll_recovery`, `platform_luks_change_passphrase` | `luks:write` |
+| `platform_luks_remove_key` | `luks:delete` |
+| `platform_luks_test_unlock` | unclassified, refused |
+
+`platform_luks_test_unlock` stays in `knownUnclassified`: it tries no key, so
+its answer proves nothing ([`docs/luks/api.md`](../luks/api.md) §5). LUKS
+carries no tenant on any transport.
+
+**The IDevID and IAK tools are #304's device-identity tranche.** All 17 are
+served by the daemon's shared `IDevIDGRPCService`, so each answers with its
+gRPC method's message and error class, under that method's scope from
+`pkg/api/grpc/method_permissions.go`. The IAK tools take the `idevid` resource,
+as their gRPC methods do:
+
+| Tools | Scope |
+|---|---|
+| `idevid_{info,exists,get_cert}`, `iak_{info,exists,get_cert}` | `idevid:read` |
+| `idevid_{generate,csr,install_cert,create_ldevid}`, `iak_{generate,csr,install_cert}` | `idevid:write` |
+| `idevid_{delete,delete_cert}`, `iak_{delete,delete_cert}` | `idevid:delete` |
+
+`idevid_delete` and `iak_delete` refuse with `FailedPrecondition`
+(`ErrDeviceIdentityKeyNotDeletable`) and change nothing. Before #304 they, and
+gRPC `DeleteIDevID`/`DeleteIAK`, reported a deletion while the key stayed in the
+TPM. `*_delete_cert` removes the certificate. Device identities belong to the
+node's TPM and carry no tenant on any transport. `device_attributes` takes
+`idevid:read` and `activate_credential` takes `idevid:write`, the scopes of
+gRPC `GetDeviceAttributes` and `ActivateCredential`, whose TPM calls they make.
+
+**The switch, cluster and registry MCP tools are classified (#304).** Each
+carries the scope of its gRPC twin in `SwitchService`, `ClusterService` and
+`RegistryService` (`pkg/api/grpc/method_permissions.go`); a caller without it
+gets `PermissionDenied` (`-32003`) and the tool never runs:
+
+| MCP tool | Scope | gRPC twin |
+|---|---|---|
+| `switch_list_ports` | `switch:read` | `ListPorts` |
+| `switch_port_status` | `switch:read` | `GetPortStatus` |
+| `switch_enable_port` | `switch:write` | `EnablePort` |
+| `switch_disable_port` | `switch:write` | `DisablePort` |
+| `switch_set_vlan` | `switch:write` | `SetPortVLAN` |
+| `platform_cluster_status` | `cluster:read` | `GetStatus` |
+| `platform_cluster_list_nodes` | `cluster:read` | `ListNodes` |
+| `platform_cluster_bootstrap` | `cluster:write` | `Bootstrap` |
+| `platform_cluster_join` | `cluster:write` | `Join` |
+| `platform_cluster_leave` | `cluster:write` | `Leave` |
+| `platform_registry_status` | `registry:read` | `Status` |
+| `platform_registry_list` | `registry:read` | `List` |
+| `platform_registry_inspect` | `registry:read` | `Inspect` |
+| `platform_registry_delete` | `registry:delete` | `Delete` |
+
+None of the three is tenant-scoped on any transport: switch ports, cluster
+nodes and registry artifacts are platform-level, and the gRPC services carry
+no tenant either.
+
+**Each daemon and provisioning operation needs one permission on gRPC, QUIC
+and MCP (#304, #317).** The daemon tools and opcodes read the same
+`daemon.Service` the gRPC `PlatformDaemon` serves; the provisioning tools and
+sub-opcodes call the same `configdelivery.Service` as gRPC
+`ConfigDeliveryService`, and their errors carry its gRPC class. Each scope is
+the one in `pkg/api/grpc/method_permissions.go`, and
+`TestDaemonProvisionScopeParity` (`pkg/api/mcp/daemon_provision_parity_test.go`)
+fails if the three catalogs drift apart:
+
+| Operation | Scope | gRPC | QUIC | MCP tool |
+|---|---|---|---|---|
+| Status | `platform:read` | `GetStatus` | `0x89` | `platform_daemon_status` |
+| Version | `platform:read` | `GetVersion` | `0x8A` | `platform_daemon_version` |
+| List services | `platform:read` | `ListServices` | `0x8B` | `platform_daemon_list_services` |
+| Get service | `platform:read` | `GetServiceStatus` | `0x8C` | `platform_daemon_get_service` |
+| Start / stop / restart service | `platform:write` | `StartService`, `StopService`, `RestartService` | `0x8D`-`0x8F` | `platform_daemon_{start,stop,restart}_service` |
+| List protocols | `platform:read` | none | `0x98` | `platform_daemon_list_protocols`: unclassified, refused |
+| List / get sessions | `provisioning:read` | `ListSessions`, `GetSession` | `0xCF` `0x06`, `0x07` | `provision_list_sessions`, `provision_get_session` |
+| Fulfill session | `provisioning:write` | `FulfillSession` | `0xCF` `0x05` | `provision_fulfill_session` |
+| Get nonce | open | `GetNonce` | `0xCF` `0x01` | `provision_get_nonce` |
+| Fetch config | open | `FetchConfig` | `0xCF` `0x02` | `provision_fetch_config` |
+| Sign digest | open | `SignDigest` | `0xCF` `0x03` | `provision_sign_digest` |
+| Poll session | open | `PollSession` | `0xCF` `0x04` | `provision_poll_session` |
+
+The four device-side provisioning operations are open on every transport: the
+device holds no platform token, and `configdelivery.Service` checks its proof
+itself (the EAB HMAC, the single-use nonce and the EK binding; the random
+session ID is the poll capability). QUIC serves them through its existing
+pre-auth sub-opcode list (`preAuthSubOpcodes`), the one the diskless boot
+sub-opcodes use. The lifecycle tools reach the same `StartService`,
+`StopService` and `RestartService` as gRPC, which refuse every configured
+service with `FailedPrecondition` (#317, [`docs/daemon/api.md`](../daemon/api.md)
+§2). List protocols has no gRPC twin; QUIC files it
+under `platform:read` with the other daemon reads, and its REST route is gated
+on the admin role, which carries no scope. Provisioning sessions record a
+tenant, but gRPC does not bind the caller to it, so neither does QUIC nor MCP:
+`provisioning:read` lists every tenant's sessions.
 
 ---
 

@@ -36,7 +36,7 @@ device identity and platform attestation capabilities.
 Supported operations:
   - generate: Create a new IAK key in the TPM
   - info: Retrieve information about the existing IAK key
-  - delete: Remove the IAK key from the TPM
+  - delete: Refused; the IAK is TPM-resident and is not evicted
 
 Examples:
   # Generate IAK with default algorithm (ECDSA-P256)
@@ -52,10 +52,7 @@ Examples:
   platformctl tpm iak info
 
   # Get IAK info as JSON (for scripting)
-  platformctl tpm iak info -o json
-
-  # Delete IAK key
-  platformctl tpm iak delete`,
+  platformctl tpm iak info -o json`,
 	}
 
 	cmd.AddCommand(newIAKGenerateCommand(getFlags))
@@ -147,17 +144,12 @@ Examples:
 func newIAKDeleteCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete",
-		Short: "Delete the IAK key from the TPM",
-		Long: `Delete the IAK key from the TPM.
+		Short: "Delete the IAK (refused: the key is not evicted)",
+		Long: `Ask the daemon to delete the IAK.
 
-WARNING: This operation is irreversible. Once deleted, the IAK
-key cannot be recovered. Any attestation certificates issued for
-this key will become invalid, and remote attestation will no
-longer be possible until a new IAK is generated.
-
-Examples:
-  # Delete IAK key
-  platformctl tpm iak delete`,
+The daemon refuses on every transport until the owner rules on eviction:
+the IAK is TPM-resident and is not evicted, and nothing is changed. The
+command exits non-zero with the refusal.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := getFlags()
 			return runIAKDelete(flags)

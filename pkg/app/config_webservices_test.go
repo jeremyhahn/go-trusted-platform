@@ -20,6 +20,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 )
 
 // configRoot is the tree of shipped platform configurations, relative to this
@@ -47,6 +49,16 @@ var composeManifests = map[string]bool{
 // this check has to be added here deliberately.
 var gatewaydConfigs = map[string]bool{
 	"platform/templates/dedicated/supermicro/x10/gatewayd.yaml": true,
+}
+
+// overrideExamples are the --overrides files shipped beside the templates,
+// each mapped to the template it merges onto. An override is not a
+// configuration on its own: the template walks skip it, and the webservice
+// check below runs on the merged result, so an override cannot delete the
+// key it guards. pkg/cli/commands/diskimage loads each merged result through
+// the host-network check platformd runs.
+var overrideExamples = map[string]string{
+	"platform/templates/dedicated/raspberrypi/cm4/desk-overrides.yaml": "platform/templates/dedicated/raspberrypi/cm4/control-plane.yaml",
 }
 
 // TestEveryPlatformConfigDeclaresAWebServiceKey guards a security property that
@@ -82,7 +94,7 @@ var gatewaydConfigs = map[string]bool{
 // without re-implementing viper's loading — and it keeps working if the
 // promotion is refactored.
 func TestEveryPlatformConfigDeclaresAWebServiceKey(t *testing.T) {
-	var checked, compose, gatewayd int
+	var checked, compose, gatewayd, overrides int
 
 	err := filepath.WalkDir(configRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -105,6 +117,18 @@ func TestEveryPlatformConfigDeclaresAWebServiceKey(t *testing.T) {
 		if readErr != nil {
 			t.Errorf("%s: cannot read: %v", rel, readErr)
 			return nil
+		}
+
+		// An override example is checked as the configuration it produces:
+		// merged onto its template, the way --overrides applies it.
+		if template, isOverride := overrideExamples[rel]; isOverride {
+			overrides++
+			merged, mergeErr := config.DeepMergeYAMLFiles(filepath.Join(configRoot, filepath.FromSlash(template)), path)
+			if mergeErr != nil {
+				t.Errorf("%s: cannot merge onto %s: %v", rel, template, mergeErr)
+				return nil
+			}
+			raw = merged
 		}
 
 		var doc map[string]any
@@ -192,9 +216,13 @@ func TestEveryPlatformConfigDeclaresAWebServiceKey(t *testing.T) {
 		t.Errorf("expected to see %d exempted gatewayd configurations, saw %d — the exempt list names a file that no longer exists",
 			len(gatewaydConfigs), gatewayd)
 	}
+	if overrides != len(overrideExamples) {
+		t.Errorf("expected to merge %d override examples, merged %d — the list names a file that no longer exists",
+			len(overrideExamples), overrides)
+	}
 
-	t.Logf("checked %d platform configurations, skipped %d Compose manifests and %d gatewayd configurations",
-		checked, compose, gatewayd)
+	t.Logf("checked %d platform configurations (%d of them override examples merged onto their templates), skipped %d Compose manifests and %d gatewayd configurations",
+		checked, overrides, compose, gatewayd)
 }
 
 // TestComposeExemptionsAreMinimal asserts the exempt list contains only files

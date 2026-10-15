@@ -24,7 +24,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"sort"
 	"strings"
 	"testing"
 
@@ -52,6 +51,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/adminclaim"
 	webdevice "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
@@ -380,7 +380,7 @@ const probeHandlerReached = 599
 
 func probe(router *mux.Router, method, template string) int {
 	return serve(router,
-		httptest.NewRequest(method, concreteFor(template), nil))
+		httptest.NewRequest(method, testutil.ConcreteFor(template), nil))
 }
 
 // serve runs one request through the router and reports the status the wire
@@ -619,37 +619,6 @@ var pendingRoutes = map[string]string{
 	"POST /api/v1/admin/claim/verify":    "admin claim: exchanges the certificate proof for a claim token; the proof is the credential.",
 }
 
-// walkRoutes returns every "METHOD /template" the finished table exposes.
-func walkRoutes(t *testing.T, router *mux.Router) []string {
-	t.Helper()
-
-	seen := map[string]bool{}
-	require.NoError(t, router.Walk(
-		func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
-			template, err := route.GetPathTemplate()
-			if err != nil {
-				return nil
-			}
-			methods, err := route.GetMethods()
-			if err != nil || len(methods) == 0 {
-				// A route with no method matcher answers all of them;
-				// GET is enough to establish whether it is gated.
-				methods = []string{http.MethodGet}
-			}
-			for _, method := range methods {
-				seen[method+" "+template] = true
-			}
-			return nil
-		}))
-
-	out := make([]string, 0, len(seen))
-	for route := range seen {
-		out = append(out, route)
-	}
-	sort.Strings(out)
-	return out
-}
-
 // =============================================================================
 // The audit
 // =============================================================================
@@ -714,7 +683,7 @@ func walkRoutes(t *testing.T, router *mux.Router) []string {
 func TestRegisterRoutes_EveryRouteDeniesWithoutCredential(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
 
-	for _, route := range walkRoutes(t, router) {
+	for _, route := range testutil.WalkRoutes(t, router) {
 		method, template := splitRoute(route)
 		if _, ok := publicRoutes[route]; ok {
 			continue
@@ -746,7 +715,7 @@ func TestRegisterRootRoutes_EveryRouteDeniesWithoutCredential(t *testing.T) {
 		ociDistBackend: &stubOCIDistBackend{},
 	})
 
-	routes := walkRoutes(t, root)
+	routes := testutil.WalkRoutes(t, root)
 	require.NotEmpty(t, routes, "the root fixture mounted nothing, so it proves nothing")
 	for _, route := range routes {
 		if _, ok := publicRoutes[route]; ok {
@@ -769,7 +738,7 @@ func TestRegisterRootRoutes_EveryRouteDeniesWithoutCredential(t *testing.T) {
 // only the health probes.
 func TestRegisterRootRoutes_NilBackendMountsOnlyTheProbes(t *testing.T) {
 	root := newRootTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
-	assert.ElementsMatch(t, probeRoutes, walkRoutes(t, root))
+	assert.ElementsMatch(t, probeRoutes, testutil.WalkRoutes(t, root))
 }
 
 // newRootTestRouter builds the v1 router on the same fixture as
@@ -867,7 +836,7 @@ func TestRegisterRoutes_EveryDeclaredOpenRouteIsActuallyOpen(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
 
 	registered := map[string]bool{}
-	for _, route := range walkRoutes(t, router) {
+	for _, route := range testutil.WalkRoutes(t, router) {
 		registered[route] = true
 	}
 
@@ -935,6 +904,8 @@ var gatedProbes = []struct {
 	{"idevid delete", http.MethodDelete, "/api/v1/idevid"},
 	{"idevid install certificate", http.MethodPost, "/api/v1/idevid/certificate"},
 	{"idevid create ldevid", http.MethodPost, "/api/v1/idevid/ldevid"},
+	{"idevid key delete, daemon path", http.MethodDelete, "/api/v1/tpm/idevid"},
+	{"iak key delete, daemon path", http.MethodDelete, "/api/v1/tpm/iak"},
 	{"vtpm bundle export", http.MethodGet, "/api/v1/vtpm/bundles/b1/export"},
 	{"vtpm bundle delete", http.MethodDelete, "/api/v1/vtpm/bundles/b1"},
 	{"vtpm start", http.MethodPost, "/api/v1/vtpm/bundles/b1/start"},
@@ -1369,7 +1340,7 @@ func TestPlatformRoutes_AreRegisteredAndGated(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
 
 	registered := map[string]bool{}
-	for _, route := range walkRoutes(t, router) {
+	for _, route := range testutil.WalkRoutes(t, router) {
 		registered[route] = true
 	}
 	for _, want := range []string{
@@ -1471,7 +1442,7 @@ func TestComputeRoutes_AreRegisteredAndGated(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
 
 	registered := map[string]bool{}
-	for _, route := range walkRoutes(t, router) {
+	for _, route := range testutil.WalkRoutes(t, router) {
 		registered[route] = true
 	}
 	for _, want := range []string{
@@ -1564,7 +1535,7 @@ func TestNetworkRoutes_AreRegisteredAndGated(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
 
 	registered := map[string]bool{}
-	for _, route := range walkRoutes(t, router) {
+	for _, route := range testutil.WalkRoutes(t, router) {
 		registered[route] = true
 	}
 	for _, want := range []string{
@@ -1611,7 +1582,7 @@ func TestGatewayOperatorRoutes_AreRegisteredAndGated(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
 
 	registered := map[string]bool{}
-	for _, route := range walkRoutes(t, router) {
+	for _, route := range testutil.WalkRoutes(t, router) {
 		registered[route] = true
 	}
 	for _, want := range []string{
@@ -1656,7 +1627,7 @@ func TestGatewayFacingRoutes_RefuseACallerWithNoClientCertificate(t *testing.T) 
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
 
 	registered := map[string]bool{}
-	for _, route := range walkRoutes(t, router) {
+	for _, route := range testutil.WalkRoutes(t, router) {
 		registered[route] = true
 	}
 	require.True(t, registered["POST /api/v1/gateway/telemetry"])
@@ -1902,7 +1873,7 @@ func TestRegisterRoutes_DeviceAttestIsRegisteredAndGated(t *testing.T) {
 	const route = "POST /api/v1/devices/{id}/attest"
 
 	var found bool
-	for _, r := range walkRoutes(t, router) {
+	for _, r := range testutil.WalkRoutes(t, router) {
 		if r == route {
 			found = true
 			break
@@ -2031,7 +2002,7 @@ func iamRoutesUnderAudit(t *testing.T, router *mux.Router) []string {
 
 	const wantIAMRoutes = 71
 	var routes []string
-	for _, route := range walkRoutes(t, router) {
+	for _, route := range testutil.WalkRoutes(t, router) {
 		_, template := splitRoute(route)
 		if strings.HasPrefix(template, "/api/v1/iam/") {
 			routes = append(routes, route)

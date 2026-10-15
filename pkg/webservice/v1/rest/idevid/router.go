@@ -92,4 +92,9 @@ func (r *IDevIDRouter) RegisterRoutes(parent *mux.Router) {
 	sr.HandleFunc("/attributes", r.handlers.GetDeviceAttributes).Methods("GET")
 	sr.HandleFunc("/flush", r.handlers.FlushTransientContexts).Methods("POST")
 	sr.HandleFunc("/activate-credential", r.handlers.ActivateCredential).Methods("POST")
+	// The daemon listener's key-delete paths (pkg/api/daemon/rest_idevid.go),
+	// which the SDK's REST transport calls. Same handlers as DELETE "" and
+	// /iak above, so the same service refusal.
+	parent.HandleFunc("/tpm/idevid", r.handlers.DeleteIDevID).Methods("DELETE")
+	parent.HandleFunc("/tpm/iak", r.handlers.DeleteIAK).Methods("DELETE")
 }

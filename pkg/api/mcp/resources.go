@@ -169,7 +169,7 @@ func (r *ResourceRegistry) ReadResource(ctx context.Context, uri string) (interf
 func (r *ResourceRegistry) readVTPMResource(ctx context.Context, parts []string) (interface{}, error) {
 	if len(parts) == 0 || parts[0] == "list" {
 		// List all vTPM instances
-		instances, err := r.service.VTPMList(ctx)
+		instances, err := r.service.VTPMList(ctx, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -266,7 +266,7 @@ func (r *ResourceRegistry) readStatusResource(ctx context.Context) (interface{},
 	}
 
 	// Get vTPM instances count
-	if vtpms, err := r.service.VTPMList(ctx); err == nil {
+	if vtpms, err := r.service.VTPMList(ctx, nil); err == nil {
 		status["vtpm_count"] = len(vtpms)
 	}
 

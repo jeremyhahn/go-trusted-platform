@@ -26,8 +26,11 @@ import (
 //
 //   - a method that names a tenant admits the caller's own tenant and the
 //     system tenant (RequireOwnTenantOrSystem);
-//   - a method that acts across tenants — list, create, sync, lookup by
-//     name — admits the system tenant only (RequireSystemTenant).
+//   - a method that acts across tenants — list, create, sync — admits the
+//     system tenant only (RequireSystemTenant);
+//   - a lookup by name admits the system tenant for any name, and any other
+//     caller for its own tenant's name only (authorizeTenantName), so the
+//     name-keyed CLI works for a tenant acting on itself.
 //
 // A caller with no tenant-bound identity (the Unix-socket operator, and a
 // daemon run with SkipIAMValidation) is admitted, as callerTenant documents.
@@ -63,4 +66,18 @@ func (s *TenantGRPCServer) authorizeSystemTenant(ctx context.Context, method str
 		return nil
 	}
 	return status.Error(codes.PermissionDenied, ErrTenantSystemOnly{Method: method}.Error())
+}
+
+// authorizeTenantName decides a lookup by name once the name has been
+// resolved to resolvedID ("" when it resolved to nothing). The system tenant
+// may resolve any name; any other tenant-bound caller only its own tenant's.
+// Every other name — another tenant's or one that does not exist — gets the
+// same ErrTenantSystemOnly, so the answer says nothing about which names
+// exist.
+func (s *TenantGRPCServer) authorizeTenantName(ctx context.Context, resolvedID string) error {
+	caller, bound := callerTenant(ctx)
+	if !bound || s.isSystemTenant(caller) || (resolvedID != "" && resolvedID == caller) {
+		return nil
+	}
+	return status.Error(codes.PermissionDenied, ErrTenantSystemOnly{Method: "GetTenantByName"}.Error())
 }

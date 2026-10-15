@@ -177,8 +177,10 @@ func (r *ToolRegistry) registerVTPMTools() {
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"name":      map[string]interface{}{"type": "string", "description": "Name for the vTPM instance"},
-				"algorithm": map[string]interface{}{"type": "string", "description": "EK algorithm (RSA or ECC; omit for the configured default)", "enum": []string{"RSA", "ECC"}},
+				"name":                map[string]interface{}{"type": "string", "description": "Name for the vTPM instance"},
+				"algorithm":           map[string]interface{}{"type": "string", "description": "EK algorithm (RSA or ECC; omit for the configured default)", "enum": []string{"RSA", "ECC"}},
+				"secure_boot_enabled": map[string]interface{}{"type": "boolean", "description": "Enable UEFI Secure Boot measurement"},
+				"labels":              map[string]interface{}{"type": "object", "description": "Key-value labels for the vTPM instance"},
 			},
 			"required": []string{"name"},
 		},
@@ -200,8 +202,13 @@ func (r *ToolRegistry) registerVTPMTools() {
 		Name:        "vtpm_list",
 		Description: "List all virtual TPM instances",
 		InputSchema: map[string]interface{}{
-			"type":       "object",
-			"properties": map[string]interface{}{},
+			"type": "object",
+			"properties": map[string]interface{}{
+				"mode":   map[string]interface{}{"type": "string", "description": "Filter by mode", "enum": []string{"template", "pre-assigned"}},
+				"labels": map[string]interface{}{"type": "object", "description": "Filter by label key-value pairs"},
+				"limit":  map[string]interface{}{"type": "integer", "description": "Maximum number of instances to return (omit for all)"},
+				"offset": map[string]interface{}{"type": "integer", "description": "Number of instances to skip"},
+			},
 		},
 	})
 
@@ -249,9 +256,10 @@ func (r *ToolRegistry) registerVTPMTools() {
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"name": map[string]interface{}{"type": "string", "description": "Name of the vTPM instance"},
-				"data": map[string]interface{}{"type": "string", "description": "Base64-encoded data to seal"},
-				"pcrs": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "integer"}, "description": "PCR indices for sealing policy"},
+				"name":       map[string]interface{}{"type": "string", "description": "Name of the vTPM instance"},
+				"data":       map[string]interface{}{"type": "string", "description": "Base64-encoded data to seal"},
+				"pcrs":       map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "integer"}, "description": "PCR indices for sealing policy"},
+				"auth_value": map[string]interface{}{"type": "string", "description": "Optional authorization value required to unseal"},
 			},
 			"required": []string{"name", "data", "pcrs"},
 		},
@@ -263,8 +271,9 @@ func (r *ToolRegistry) registerVTPMTools() {
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"name":   map[string]interface{}{"type": "string", "description": "Name of the vTPM instance"},
-				"sealed": map[string]interface{}{"type": "string", "description": "Base64-encoded sealed data"},
+				"name":       map[string]interface{}{"type": "string", "description": "Name of the vTPM instance"},
+				"sealed":     map[string]interface{}{"type": "string", "description": "Base64-encoded sealed data"},
+				"auth_value": map[string]interface{}{"type": "string", "description": "Authorization value given at seal time"},
 			},
 			"required": []string{"name", "sealed"},
 		},
@@ -1956,6 +1965,9 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 			return result, err
 		}
 		if result, handled, err := r.dispatchVMTool(ctx, name, args); handled {
+			return result, err
+		}
+		if result, handled, err := r.dispatchVTPMBundleTool(ctx, name, args); handled {
 			return result, err
 		}
 		return nil, ErrInvalidArgument{Msg: fmt.Sprintf("unknown tool: %s", name)}

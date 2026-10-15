@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
@@ -241,7 +242,7 @@ func TestExecuteVTPMQuote_ServiceError(t *testing.T) {
 func TestExecuteVTPMUnseal_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.vtpmUnsealFunc = func(ctx context.Context, name string, sealed []byte) ([]byte, error) {
+	svc.vtpmUnsealFunc = func(ctx context.Context, name string, sealed []byte, authValue string) ([]byte, error) {
 		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
@@ -337,7 +338,7 @@ func TestExecuteTool_UnknownTool(t *testing.T) {
 func TestExecuteVTPMCreate_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.vtpmCreateFunc = func(ctx context.Context, name, algorithm string) (interface{}, error) {
+	svc.vtpmCreateFunc = func(ctx context.Context, name, algorithm string, secureBoot bool, labels map[string]string) (interface{}, error) {
 		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
@@ -410,7 +411,7 @@ func TestExecuteVTPMStop_ServiceError(t *testing.T) {
 func TestExecuteVTPMList_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.vtpmListFunc = func(ctx context.Context) ([]interface{}, error) {
+	svc.vtpmListFunc = func(ctx context.Context, opts *vtpm.ListOptions) ([]interface{}, error) {
 		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
@@ -424,7 +425,7 @@ func TestExecuteVTPMList_ServiceError(t *testing.T) {
 func TestExecuteVTPMSeal_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.vtpmSealFunc = func(ctx context.Context, name string, data []byte, pcrs []int) ([]byte, error) {
+	svc.vtpmSealFunc = func(ctx context.Context, name string, data []byte, pcrs []int, authValue string) ([]byte, error) {
 		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())

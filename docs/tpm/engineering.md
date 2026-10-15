@@ -514,13 +514,7 @@ Recorded here so they are debts with a location, not discoveries:
    document flags in their long help (`--so-pin`, `--lockout-password`,
    `--confirm`, `--parent`, `--password`, `--ca`, `--tls`, `--hmac`, …) that are
    not registered, and all return `ErrDaemonConnectionRequired`.
-3. **QUIC and gRPC scope the device-identity operations differently.** The
-   QUIC catalog (`pkg/api/quic/opcode_permissions.go`, fail-closed) scopes
-   every `0x99` sub-opcode and every IDevID / IAK opcode, but the IDevID / IAK
-   opcodes take `tpm:read` / `tpm:write` / `tpm:delete` where gRPC
-   `IDevIDService` takes `idevid:*`, so one grant does not cover the same
-   operation on both transports.
-4. **`TPMService` and `IDevIDService` are scoped on gRPC; most of their MCP
+3. **`TPMService` and `IDevIDService` are scoped on gRPC; most of their MCP
    tools are refused.** Every RPC of both services is in the default-deny gRPC
    scope catalog (`pkg/api/grpc/method_permissions.go`) under `tpm:*` and
    `idevid:*`. Of the MCP tools only `platform_tpm_quote` and
@@ -528,11 +522,11 @@ Recorded here so they are debts with a location, not discoveries:
    `platform_tpm_*`, `idevid_*` and `iak_*` tools are absent from
    `pkg/api/mcp/authz.go`, which is also default-deny, so every caller is
    refused until they are classified ([api.md](api.md) §9).
-5. **AK and IAK are the same key under two names.** gRPC and REST call it `ak`
+4. **AK and IAK are the same key under two names.** gRPC and REST call it `ak`
    (`CreateAK`, `/api/v1/tpm/ak`); QUIC and MCP call it IAK (`SubOpTPM2CreateIAK`,
    `platform_tpm_iak_create`). A client author reading one transport will not
    find the other.
-6. **The daemon REST listener's TPM routes are a thin protojson front for
+5. **The daemon REST listener's TPM routes are a thin protojson front for
    `TPMService`.** Each `TPMHandlers` route decodes the RPC's request message
    (body, then query and path parameters through `decodeProtoParams`, the
    decoder the compute routes share in `pkg/api/rest/protorest.go`), calls the
@@ -542,7 +536,7 @@ Recorded here so they are debts with a location, not discoveries:
    instead of running with a default ([api.md](api.md) §1). The LDevID CSR is
    not a `TPMHandlers` route; `POST /tpm/activate-credential` is, calling
    `TPMService.ActivateCredential` under `tpm:write`.
-7. **The daemon REST listener's device-identity routes carry no scope.**
+6. **The daemon REST listener's device-identity routes carry no scope.**
    `/api/v1/tpm/idevid*`, `/tpm/iak*` and `/tpm/device/attributes`
    (`pkg/api/daemon/rest_idevid.go`) rely on mTLS alone, where `TPMHandlers`
    routes need a scoped platform token.

@@ -165,6 +165,7 @@ func (m *mockTPM2IDevIDService) DeleteIDevIDCertificate() error {
 	if m.deleteIDevIDCertErr != nil {
 		return m.deleteIDevIDCertErr
 	}
+	m.hasIDevIDCert = false
 	return nil
 }
 
@@ -172,6 +173,7 @@ func (m *mockTPM2IDevIDService) DeleteIAKCertificate() error {
 	if m.deleteIAKCertErr != nil {
 		return m.deleteIAKCertErr
 	}
+	m.hasIAKCert = false
 	return nil
 }
 
@@ -261,13 +263,11 @@ func TestQUICIDevID_ServiceNotAvailable(t *testing.T) {
 	}{
 		{"IDevIDGenerate", quicwire.OpIDevIDGenerate},
 		{"IDevIDInfo", quicwire.OpIDevIDInfo},
-		{"IDevIDDelete", quicwire.OpIDevIDDelete},
 		{"IDevIDCSR", quicwire.OpIDevIDCSR},
 		{"IDevIDInstallCert", quicwire.OpIDevIDInstallCert},
 		{"IDevIDGetCert", quicwire.OpIDevIDGetCert},
 		{"IAKGenerate", quicwire.OpIAKGenerate},
 		{"IAKInfo", quicwire.OpIAKInfo},
-		{"IAKDelete", quicwire.OpIAKDelete},
 		{"IAKCSR", quicwire.OpIAKCSR},
 		{"IAKInstallCert", quicwire.OpIAKInstallCert},
 		{"IAKGetCert", quicwire.OpIAKGetCert},
@@ -478,24 +478,33 @@ func TestQUICIDevIDInfo_WithCertificate(t *testing.T) {
 	assert.NotNil(t, infoResp.Certificate)
 }
 
-func TestQUICIDevIDDelete_Success(t *testing.T) {
+// TestQUICIDevIDDelete_RefusedKeyAndCertRemain pins #304: the QUIC key delete
+// answers StatusFailedPrecondition (the gRPC class) and touches nothing.
+func TestQUICIDevIDDelete_RefusedKeyAndCertRemain(t *testing.T) {
 	logger := logging.DefaultLogger()
-	mockTPM := &mockTPM2IDevIDService{hasIDevID: true}
+	mockTPM := &mockTPM2IDevIDService{hasIDevID: true, hasIDevIDCert: true}
 	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quicwire.Request{
-		Opcode:  quicwire.OpIDevIDDelete,
-		Payload: []byte{},
-	}
+	resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpIDevIDDelete})
 
-	resp := handler.HandleRequest(ctx, req)
+	assert.Equal(t, quicwire.StatusFailedPrecondition, resp.Status)
+	assert.Equal(t, ErrDeviceIdentityKeyNotDeletable{Key: "IDevID"}.Error(), string(resp.Payload))
+	assert.True(t, mockTPM.hasIDevID, "IDevID key must remain")
+	assert.True(t, mockTPM.hasIDevIDCert, "IDevID certificate must remain")
+
+	resp = handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpIDevIDGetCert})
 	assert.Equal(t, quicwire.StatusOK, resp.Status)
+}
 
-	var deleteResp IDevIDDeleteResponse
-	err := quicwire.DecodePayload(resp.Payload, &deleteResp)
-	require.NoError(t, err)
-	assert.True(t, deleteResp.Deleted)
+// TestQUICIDevIDDelete_RefusedWithoutTPMService checks the refusal does not
+// depend on TPM availability, matching the gRPC service.
+func TestQUICIDevIDDelete_RefusedWithoutTPMService(t *testing.T) {
+	handler := newTestQUICServiceHandler(logging.DefaultLogger())
+
+	resp := handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpIDevIDDelete})
+
+	assert.Equal(t, quicwire.StatusFailedPrecondition, resp.Status)
 }
 
 func TestQUICIDevIDCSR_Success(t *testing.T) {
@@ -1024,24 +1033,32 @@ func TestQUICIAKInfo_WithCertificate(t *testing.T) {
 	assert.NotNil(t, infoResp.Certificate)
 }
 
-func TestQUICIAKDelete_Success(t *testing.T) {
+// TestQUICIAKDelete_RefusedKeyAndCertRemain pins #304 for the IAK on QUIC.
+func TestQUICIAKDelete_RefusedKeyAndCertRemain(t *testing.T) {
 	logger := logging.DefaultLogger()
-	mockTPM := &mockTPM2IDevIDService{hasIAK: true}
+	mockTPM := &mockTPM2IDevIDService{hasIAK: true, hasIAKCert: true}
 	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quicwire.Request{
-		Opcode:  quicwire.OpIAKDelete,
-		Payload: []byte{},
-	}
+	resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpIAKDelete})
 
-	resp := handler.HandleRequest(ctx, req)
+	assert.Equal(t, quicwire.StatusFailedPrecondition, resp.Status)
+	assert.Equal(t, ErrDeviceIdentityKeyNotDeletable{Key: "IAK"}.Error(), string(resp.Payload))
+	assert.True(t, mockTPM.hasIAK, "IAK must remain")
+	assert.True(t, mockTPM.hasIAKCert, "IAK certificate must remain")
+
+	resp = handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpIAKGetCert})
 	assert.Equal(t, quicwire.StatusOK, resp.Status)
+}
 
-	var deleteResp IAKDeleteResponse
-	err := quicwire.DecodePayload(resp.Payload, &deleteResp)
-	require.NoError(t, err)
-	assert.True(t, deleteResp.Deleted)
+// TestQUICIAKDelete_RefusedWithoutTPMService checks the refusal does not
+// depend on TPM availability, matching the gRPC service.
+func TestQUICIAKDelete_RefusedWithoutTPMService(t *testing.T) {
+	handler := newTestQUICServiceHandler(logging.DefaultLogger())
+
+	resp := handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpIAKDelete})
+
+	assert.Equal(t, quicwire.StatusFailedPrecondition, resp.Status)
 }
 
 func TestQUICIAKCSR_Success(t *testing.T) {

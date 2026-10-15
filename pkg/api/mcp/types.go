@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 )
 
 // AuthErrorType categorizes authorization errors.
@@ -464,9 +465,9 @@ func buildMCPZoneConfig(name string, offset uint8, portClasses []string, interne
 // This allows the MCP server to call platform operations.
 type ServiceProvider interface {
 	// vTPM bundle CRUD operations
-	VTPMCreate(ctx context.Context, name string, algorithm string) (interface{}, error)
+	VTPMCreate(ctx context.Context, name string, algorithm string, secureBoot bool, labels map[string]string) (interface{}, error)
 	VTPMDelete(ctx context.Context, name string) error
-	VTPMList(ctx context.Context) ([]interface{}, error)
+	VTPMList(ctx context.Context, opts *vtpm.ListOptions) ([]interface{}, error)
 	VTPMGet(ctx context.Context, name string) (interface{}, error)
 	VTPMValidate(ctx context.Context, name string) (interface{}, error)
 	VTPMExport(ctx context.Context, name string) (interface{}, error)
@@ -489,8 +490,8 @@ type ServiceProvider interface {
 	VTPMStop(ctx context.Context, name string) error
 	VTPMIsRunning(ctx context.Context, name string) (interface{}, error)
 	VTPMQuote(ctx context.Context, name string, nonce []byte, pcrs []int) (interface{}, error)
-	VTPMSeal(ctx context.Context, name string, data []byte, pcrs []int) ([]byte, error)
-	VTPMUnseal(ctx context.Context, name string, sealed []byte) ([]byte, error)
+	VTPMSeal(ctx context.Context, name string, data []byte, pcrs []int, authValue string) ([]byte, error)
+	VTPMUnseal(ctx context.Context, name string, sealed []byte, authValue string) ([]byte, error)
 	VTPMExtendPCR(ctx context.Context, name string, pcr int, data []byte) error
 	VTPMReadPCR(ctx context.Context, name string, pcr int) ([]byte, error)
 

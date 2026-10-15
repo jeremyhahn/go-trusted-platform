@@ -58,6 +58,8 @@ DELETE /api/v1/sdn/zones/{name}
 DELETE /api/v1/tenants/{id}
 DELETE /api/v1/tpm/ak
 DELETE /api/v1/tpm/ek
+DELETE /api/v1/tpm/iak
+DELETE /api/v1/tpm/idevid
 DELETE /api/v1/tpm/nvram/{index}
 DELETE /api/v1/tpm/srk
 DELETE /api/v1/vpn/peers/{device_id}

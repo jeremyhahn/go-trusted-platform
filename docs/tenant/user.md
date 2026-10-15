@@ -55,6 +55,11 @@ platformctl tenant usage tenant-a      # quota accounting
 
 CLI verbs take the tenant **name**. The API is keyed by **ID**, with a separate
 `by-name` lookup. That difference will bite when you script against both.
+Signed in as a tenant, you can name only your own tenant; any other name is
+refused the same way whether or not that tenant exists. Over `--transport rest`
+the name lookup is still system-only, so a tenant cannot name even its own
+tenant there yet; use gRPC, QUIC or the Unix socket. Over `--transport mcp`
+only `create` and `list` run ([cli.md](cli.md) §1).
 
 ---
 
@@ -94,7 +99,9 @@ platformctl tenant quotas set tenant-a --max-vms 20 --max-vcpus 80 --max-memory-
 
 **Only the flags you pass are changed.** An omitted flag leaves that limit
 alone. This is deliberate: `0` is a real limit meaning "no capacity", so
-omitting a flag cannot be treated as setting it to zero.
+omitting a flag cannot be treated as setting it to zero. Setting a limit never
+resets what the tenant already uses, and it keeps the disk limit, which the CLI
+cannot set.
 
 To set a limit to zero — genuinely blocking a resource — pass it explicitly:
 

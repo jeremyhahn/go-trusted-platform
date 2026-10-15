@@ -159,4 +159,6 @@ Content-Type: application/json
 ```
 
 **Errors:** 404 unknown session or profile, 400 expired or already-fulfilled
-session.
+session, 400 missing or zero `profile_id`
+(`configdelivery: profile_id is required and must be non-zero`, the same typed
+error every transport returns).

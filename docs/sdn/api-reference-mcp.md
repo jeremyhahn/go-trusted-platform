@@ -6,7 +6,7 @@ Tool definitions live in `pkg/api/mcp/tools.go`. Each tool's OAuth scope
 (`sdn:read`, `sdn:write` or `sdn:delete`) is mapped in `pkg/api/mcp/authz.go`
 and is the scope of its gRPC twin (`pkg/api/grpc/method_permissions.go`). A
 tool with no mapping is refused before it runs (`AuthErrorToolNotClassified`);
-the two port-authentication tools are refused this way (see below).
+every SDN tool has one.
 
 ## Tools
 
@@ -27,16 +27,17 @@ the two port-authentication tools are refused this way (see below).
 | `sdn_get_port_state` | Get the state of an OVS port |
 | `sdn_set_port_state` | Set a port's admin state (`up`/`down`) and optional ingress policing (`ingress_rate` bps, `ingress_burst` bits) and egress shaping (`egress_rate` bps, `egress_burst` bits) |
 | `sdn_get_port_stats` | Get statistics for a port (`port_name`); scope `sdn:read` |
-| `sdn_authenticate_port` | Refused: unclassified, see below |
-| `sdn_revoke_port_auth` | Refused: unclassified, see below |
+| `sdn_authenticate_port` | Refused, see below; scope `sdn:write` |
+| `sdn_revoke_port_auth` | Refused, see below; scope `sdn:write` |
 
-The port-authentication tools are refused because the service behind them
-enforces nothing: `SDNService.AuthenticatePort` checks only the certificate's
-validity window and records the port in a map no other code reads, so the
-switch never admits or blocks the port. Answering "authenticated" would be a
-false security claim; the tools stay refused until the service enforces it.
-Should a mapping ever be added, the handlers still refuse: both return
-`ErrPortAuthNotEnforced` (`FailedPrecondition`) without calling the service.
+The port-authentication tools carry gRPC's scope, `sdn:write`, and refuse
+every call with `policy.ErrPortAuthNotEnforced`, class `FailedPrecondition`,
+as gRPC does: nothing enforces port authentication on the switch, so answering
+"authenticated" or "revoked" would be a false security claim. A caller without
+`sdn:write` is denied first (`PermissionDenied`). What is missing before the
+switch can enforce it is in [api.md](api.md) §4. Until #304 the tools carried no
+scope and were refused as unclassified. The SDK's MCP transport does not map
+`AuthenticatePort` or `RevokePortAuth`; it answers `Unimplemented`.
 
 ### Flows
 

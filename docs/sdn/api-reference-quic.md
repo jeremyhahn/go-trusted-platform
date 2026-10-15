@@ -32,6 +32,11 @@ defined in `sdk/go/wire/quicwire/protocol.go`.
 | `0xB3` | SDNDeletePort | Delete a port |
 | `0xB4` | SDNDeletePolicy | Delete a policy |
 
+Port authentication has no opcode. The SDK's QUIC transport maps neither
+`AuthenticatePort` nor `RevokePortAuth` and answers `Unimplemented` without
+sending anything. The other transports refuse both with `FailedPrecondition`
+until the switch enforces port authentication ([api.md](api.md) §4).
+
 The policy operations carry the policy shape REST, gRPC and MCP use, so a
 policy applied on one transport reads back the same on the others. The
 apply request and the responses are the REST types in

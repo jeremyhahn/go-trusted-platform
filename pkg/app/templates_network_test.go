@@ -34,7 +34,8 @@ import (
 const templateRoot = "../../configs/platform/templates"
 
 // shippedPlatformTemplates returns every platformd template (gatewayd's own
-// config file is checked in pkg/sdn/gateway/commands).
+// config file is checked in pkg/sdn/gateway/commands, and the override
+// examples beside the templates are listed in overrideExamples).
 func shippedPlatformTemplates(t *testing.T) []string {
 	t.Helper()
 	var out []string
@@ -43,6 +44,13 @@ func shippedPlatformTemplates(t *testing.T) []string {
 			return err
 		}
 		if d.IsDir() || filepath.Ext(path) != ".yaml" || filepath.Base(path) == "gatewayd.yaml" {
+			return nil
+		}
+		rel, err := filepath.Rel(configRoot, path)
+		if err != nil {
+			return err
+		}
+		if _, isOverride := overrideExamples[filepath.ToSlash(rel)]; isOverride {
 			return nil
 		}
 		out = append(out, path)

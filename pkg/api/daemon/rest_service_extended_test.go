@@ -82,7 +82,7 @@ func TestRESTHandlerGetService_ServiceStates(t *testing.T) {
 			setupService: func(m *mockManagedService) {
 				m.running.Store(true)
 			},
-			expectedStatus: "stopped", // Status is determined by state.status, not IsRunning
+			expectedStatus: "running", // a running service reports running whatever was recorded
 		},
 	}
 

@@ -19,20 +19,27 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/local"
 	"google.golang.org/grpc/status"
 
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	sdktenant "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/tenant"
 )
 
 // These tests hold the tenant tools to the TenantService they call: for one
@@ -74,6 +81,8 @@ type memoryTenantDEKs struct {
 	mu       sync.Mutex
 	versions map[string]uint64
 	calls    []string
+	// reencrypt holds AutoStartReencryption from each rotation, in order.
+	reencrypt []bool
 }
 
 func newMemoryTenantDEKs() *memoryTenantDEKs {
@@ -114,6 +123,7 @@ func (d *memoryTenantDEKs) RotateTenantDEK(_ context.Context, req *tenant.Rotate
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.record("rotate", req.TenantID)
+	d.reencrypt = append(d.reencrypt, req.AutoStartReencryption)
 	version, held := d.versions[req.TenantID]
 	if !held {
 		return nil, errFakeUnknownTenant{TenantID: req.TenantID}
@@ -474,7 +484,9 @@ func tenantParityOps() []tenantParityOp {
 			},
 		},
 		{
-			tool: "tenant_get_by_name", caller: paritySystemTenant, subject: "tenant-a", systemOnly: true, missing: codes.NotFound,
+			// Another tenant's name: a tenant may resolve only its own
+			// (TestTenantGetByNameResolvesOwnTenantOnly).
+			tool: "tenant_get_by_name", caller: paritySystemTenant, subject: "tenant-b", systemOnly: true, missing: codes.NotFound,
 			args: func(subject string) map[string]interface{} { return map[string]interface{}{"name": subject} },
 			keys: tenantKeys,
 			grpc: func(ctx context.Context, s *TenantGRPCServer, subject string) (map[string]string, error) {
@@ -882,7 +894,7 @@ func TestTenantSystemOnlyMethodsRefuseOtherTenants(t *testing.T) {
 			assert.Equal(t, before, mcpSide.snapshot())
 		})
 	}
-	assert.Equal(t, 4, systemOnly, "list, get-by-name, create and sync act across tenants")
+	assert.Equal(t, 4, systemOnly, "list, get-by-name of another tenant, create and sync act across tenants")
 }
 
 func TestTenantSystemTenantActsOnEveryTenant(t *testing.T) {
@@ -902,6 +914,70 @@ func TestTenantSystemTenantActsOnEveryTenant(t *testing.T) {
 			assert.Equal(t, grpcSide.snapshot(), mcpSide.snapshot())
 		})
 	}
+}
+
+// TestTenantUpdateQuotasKeepsWhatTheRequestOmits: a quota update that changes
+// one limit keeps every other limit, including MaxDiskGB, which has no wire
+// field, on both transports. A tenant updates its own quotas here, as
+// `platformctl tenant quotas set` sends only the sections it was given.
+func TestTenantUpdateQuotasKeepsWhatTheRequestOmits(t *testing.T) {
+	seed := tenant.TenantQuotas{
+		Compute: tenant.ComputeQuota{MaxVMs: 10, MaxContainers: 40, MaxVCPUs: 64, MaxMemoryMB: 8192, MaxDiskGB: 500},
+		Network: tenant.NetworkQuota{MaxBridges: 4, MaxPorts: 100, MaxBandwidthMbps: 1000},
+		Storage: tenant.StorageQuota{MaxVolumesGB: 900, MaxSnapshots: 20},
+	}
+	want := seed
+	want.Compute.MaxVMs = 25
+
+	update := map[string]func(h *tenantParityHarness, a string) error{
+		"gRPC": func(h *tenantParityHarness, a string) error {
+			_, err := h.server.UpdateQuotas(tokenCallerContext(a), &platformv1.UpdateQuotasRequest{
+				TenantId: a,
+				Compute:  &platformv1.ComputeQuota{MaxVms: 25, MaxContainers: 40, MaxVcpus: 64, MaxMemoryMb: 8192},
+			})
+			return err
+		},
+		"MCP": func(h *tenantParityHarness, a string) error {
+			_, err := h.tools.ExecuteTool(mcpTokenCtx(a, "tenant:read", "tenant:write"), "tenant_update_quotas",
+				map[string]interface{}{"tenant_id": a, "max_vms": 25})
+			return err
+		},
+	}
+	for transport, call := range update {
+		t.Run(transport, func(t *testing.T) {
+			h := newTenantParityHarness(t)
+			a := h.id(parityTenantA)
+			ctx := context.Background()
+			seeded := seed
+			require.NoError(t, h.manager.UpdateQuotas(ctx, a, &seeded))
+
+			require.NoError(t, call(h, a))
+
+			got, err := h.manager.GetQuotas(ctx, a)
+			require.NoError(t, err)
+			assert.Equal(t, want, *got, "only MaxVMs changes")
+		})
+	}
+}
+
+// TestTenantUpdateQuotasMissingTenant: an update for a tenant that does not
+// exist answers NotFound carrying the typed error, on both transports.
+func TestTenantUpdateQuotasMissingTenant(t *testing.T) {
+	h := newTenantParityHarness(t)
+	system := h.id(paritySystemTenant)
+	wantMessage := tenant.ErrTenantNotFound{ID: parityGhostTenant}.Error()
+
+	_, grpcErr := h.server.UpdateQuotas(tokenCallerContext(system), &platformv1.UpdateQuotasRequest{
+		TenantId: parityGhostTenant,
+		Compute:  &platformv1.ComputeQuota{MaxVms: 25},
+	})
+	_, mcpErr := h.tools.ExecuteTool(mcpTokenCtx(system, "tenant:read", "tenant:write"), "tenant_update_quotas",
+		map[string]interface{}{"tenant_id": parityGhostTenant, "max_vms": 25})
+
+	assert.Equal(t, codes.NotFound, status.Code(grpcErr), "gRPC: %v", grpcErr)
+	assert.Equal(t, codes.NotFound, status.Code(mcpErr), "MCP: %v", mcpErr)
+	assert.Equal(t, wantMessage, status.Convert(grpcErr).Message())
+	assert.Equal(t, wantMessage, status.Convert(mcpErr).Message())
 }
 
 // TestTenantBarrierInitRefusesShamir: a Shamir request used to be dropped and
@@ -949,6 +1025,107 @@ func TestTenantServerWithoutSystemTenant(t *testing.T) {
 	assert.Equal(t, codes.PermissionDenied, status.Code(err))
 	_, err = h.server.GetTenant(tokenCallerContext(a), &platformv1.GetTenantRequest{TenantId: a})
 	assert.NoError(t, err)
+}
+
+// TestTenantGetByNameResolvesOwnTenantOnly: the name-keyed CLI resolves a
+// name before every verb, so a tenant must resolve its own name, and then
+// read its quotas by the ID it got back. Another tenant's name and a name
+// that does not exist are refused alike, so the answer leaks no existence.
+func TestTenantGetByNameResolvesOwnTenantOnly(t *testing.T) {
+	h := newTenantParityHarness(t)
+	a := h.id(parityTenantA)
+	grpcCtx := tokenCallerContext(a)
+	mcpCtx := mcpTokenCtx(a, "tenant:read")
+
+	t.Run("own name over gRPC", func(t *testing.T) {
+		resp, err := h.server.GetTenantByName(grpcCtx, &platformv1.GetTenantByNameRequest{Name: "tenant-a"})
+		require.NoError(t, err)
+		require.Equal(t, a, resp.GetTenant().GetId())
+
+		_, err = h.server.GetQuotas(grpcCtx, &platformv1.GetQuotasRequest{TenantId: resp.GetTenant().GetId()})
+		require.NoError(t, err)
+	})
+
+	t.Run("own name over MCP", func(t *testing.T) {
+		out, err := h.tools.ExecuteTool(mcpCtx, "tenant_get_by_name", map[string]interface{}{"name": "tenant-a"})
+		require.NoError(t, err)
+		result, ok := out.(map[string]interface{})
+		require.True(t, ok, "tenant_get_by_name answered %T", out)
+		resolved := lookupResultPath(result, "id")
+		require.Equal(t, a, resolved)
+
+		_, err = h.tools.ExecuteTool(mcpCtx, "tenant_get_quotas", map[string]interface{}{"tenant_id": resolved})
+		require.NoError(t, err)
+	})
+
+	denied := status.Error(codes.PermissionDenied, ErrTenantSystemOnly{Method: "GetTenantByName"}.Error())
+	for _, name := range []string{"tenant-b", parityGhostTenant} {
+		t.Run("refuses "+name, func(t *testing.T) {
+			_, grpcErr := h.server.GetTenantByName(grpcCtx, &platformv1.GetTenantByNameRequest{Name: name})
+			_, mcpErr := h.tools.ExecuteTool(mcpCtx, "tenant_get_by_name", map[string]interface{}{"name": name})
+
+			assert.Equal(t, denied.Error(), grpcErr.Error(), "gRPC")
+			assert.Equal(t, denied.Error(), mcpErr.Error(), "MCP")
+		})
+	}
+
+	t.Run("system tenant resolves every name", func(t *testing.T) {
+		system := tokenCallerContext(h.id(paritySystemTenant))
+		for _, label := range []string{paritySystemTenant, parityTenantA, parityTenantB} {
+			resp, err := h.server.GetTenantByName(system, &platformv1.GetTenantByNameRequest{Name: parityTenantNames[label]})
+			require.NoError(t, err, label)
+			assert.Equal(t, h.id(label), resp.GetTenant().GetId())
+		}
+		_, err := h.server.GetTenantByName(system, &platformv1.GetTenantByNameRequest{Name: parityGhostTenant})
+		assert.Equal(t, codes.NotFound, status.Code(err), "the system tenant learns a name is missing")
+	})
+
+	t.Run("without a system tenant a tenant still resolves its own name", func(t *testing.T) {
+		h.server.SetSystemTenant("")
+		_, err := h.server.GetTenantByName(grpcCtx, &platformv1.GetTenantByNameRequest{Name: "tenant-a"})
+		assert.NoError(t, err)
+		_, err = h.server.GetTenantByName(grpcCtx, &platformv1.GetTenantByNameRequest{Name: "tenant-b"})
+		assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	})
+}
+
+// TestTenantCLIPathResolvesOwnTenant drives the calls `platformctl tenant
+// show` and `quotas get` make — the SDK client's GetByNameDomain, then
+// GetQuotas by the resolved ID — over a gRPC connection whose caller is bound
+// to tenant A, as the daemon's auth interceptor binds a token.
+func TestTenantCLIPathResolvesOwnTenant(t *testing.T) {
+	h := newTenantParityHarness(t)
+	a := h.id(parityTenantA)
+
+	bindTenantA := func(ctx context.Context, req interface{}, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		return handler(grpcapi.ContextWithAuthorizedContext(ctx, &platformtoken.AuthorizedContext{TenantID: a}), req)
+	}
+	sock := filepath.Join(t.TempDir(), "platformd.sock")
+	lis, err := net.Listen("unix", sock)
+	require.NoError(t, err)
+	gs := grpc.NewServer(grpc.UnaryInterceptor(bindTenantA))
+	platformv1.RegisterTenantServiceServer(gs, h.server)
+	served := make(chan error, 1)
+	go func() { served <- gs.Serve(lis) }()
+	t.Cleanup(func() {
+		gs.Stop()
+		assert.NoError(t, <-served)
+	})
+
+	conn, err := grpc.NewClient("unix://"+sock, grpc.WithTransportCredentials(local.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, conn.Close()) })
+	client := sdktenant.NewClientFromGRPC(platformv1.NewTenantServiceClient(conn))
+	ctx := context.Background()
+
+	own, err := client.GetByNameDomain(ctx, "tenant-a")
+	require.NoError(t, err, "show resolves the caller's own tenant")
+	require.Equal(t, a, own.ID)
+	_, err = client.GetQuotas(ctx, own.ID)
+	require.NoError(t, err, "quotas get reads it by the resolved ID")
+
+	_, err = client.GetByNameDomain(ctx, "tenant-b")
+	assert.Equal(t, codes.PermissionDenied, status.Code(err), "another tenant's name stays refused")
 }
 
 func TestMCPServiceProviderTenantService(t *testing.T) {

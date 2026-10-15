@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -1048,6 +1049,18 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	}
 	logger.Info("Platform daemon started", "socket", platformDaemon.SocketPath())
 
+	// The web services, and the ACME server some of them carry, run here
+	// rather than in the daemon. Count the ones serving so the daemon's
+	// service status reports them as they are. A listener failure is fatal
+	// to the process, so a web service is serving for as long as Run blocks.
+	var webServing, acmeServing atomic.Int32
+	platformDaemon.SetSubsystemProbe(platformv1.ServiceType_SERVICE_TYPE_WEBSERVICE, func() bool {
+		return webServing.Load() > 0
+	})
+	platformDaemon.SetSubsystemProbe(platformv1.ServiceType_SERVICE_TYPE_ACME, func() bool {
+		return acmeServing.Load() > 0
+	})
+
 	var wg sync.WaitGroup
 	for _, wsConfig := range App.WebServices {
 		wg.Add(1)
@@ -1460,9 +1473,18 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		// serves, and TLS breaks when the one it IS serving expires.
 		App.RegisterWebServiceCertInstaller(wsName, webserver.ReloadCertificate)
 
+		servesACME := acmeServerConfig != nil
+		webServing.Add(1)
+		if servesACME {
+			acmeServing.Add(1)
+		}
 		go func(ws *webservice.WebServerV1) {
 			defer wg.Done()
 			ws.Run()
+			webServing.Add(-1)
+			if servesACME {
+				acmeServing.Add(-1)
+			}
 		}(webserver)
 	}
 

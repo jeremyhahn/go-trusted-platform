@@ -137,7 +137,7 @@ var tenantRoutes = []tenantRoute{
 	{http.MethodPut, "/api/v1/tenants/t1/quotas", `{}`, false, "t1"},
 	{http.MethodGet, "/api/v1/tenants/t1/usage", "", false, "t1"},
 	{http.MethodPost, "/api/v1/tenants/t1/quota-check", `{"resource":"vms","amount":1}`, false, "t1"},
-	{http.MethodPost, "/api/v1/tenants/t1/dek/rotate", "", false, "t1"},
+	{http.MethodPost, "/api/v1/tenants/t1/dek/rotate", `{"background":true}`, false, "t1"},
 	{http.MethodGet, "/api/v1/tenants/t1/dek", "", false, "t1"},
 	{http.MethodPost, "/api/v1/tenants/t1/barrier/init", `{}`, true, "t1"},
 	{http.MethodPost, "/api/v1/tenants/t1/barrier/unseal", `{}`, false, "t1"},
@@ -223,4 +223,30 @@ func TestHandlers_CreateIgnoresRetiredVLANRange(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "acme", req.GetName())
 	assert.Empty(t, req.ProtoReflect().GetUnknown(), "retired fields must not survive decoding")
+}
+
+// TestHandlers_RotateDEKCarriesBackground proves the DEK rotate route passes
+// the body's background flag to the server, as the gRPC transport does, and
+// that the tenant always comes from the path.
+func TestHandlers_RotateDEKCarriesBackground(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"background", `{"tenantId":"other","background":true}`, true},
+		{"foreground", `{"background":false}`, false},
+		{"no body", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := &fakeTenantServer{}
+			rec := serve(newRouterWithServer(t, srv), http.MethodPost, "/api/v1/tenants/t1/dek/rotate", tc.body)
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			req, ok := srv.last.(*platformv1.RotateTenantDEKRequest)
+			require.True(t, ok, "server received %T", srv.last)
+			assert.Equal(t, "t1", req.GetTenantId())
+			assert.Equal(t, tc.want, req.GetBackground())
+		})
+	}
 }

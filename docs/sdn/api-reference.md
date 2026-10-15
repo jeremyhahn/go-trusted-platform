@@ -59,8 +59,12 @@ The SDN subsystem provides network management through multiple protocols for max
 
 | Operation | Description |
 |-----------|-------------|
-| AuthenticatePort | Authenticate a port with a device certificate (802.1X-style) |
-| RevokePortAuth | Revoke port authentication |
+| AuthenticatePort | Refused (`FailedPrecondition`): authenticate a port with a device certificate (802.1X-style) |
+| RevokePortAuth | Refused (`FailedPrecondition`): revoke port authentication |
+
+Both operations are refused on every transport with
+`policy.ErrPortAuthNotEnforced` until the switch enforces port authentication;
+[api.md](api.md) §4 names what is missing and what each transport answers.
 
 ### Policy Operations
 

@@ -541,6 +541,16 @@ func (s *RegistryGRPCService) mapError(operation string, err error) error {
 	}
 
 	s.logger.Error(err, "registry operation failed", "operation", operation)
+	return RegistryErrorStatus(err)
+}
+
+// RegistryErrorStatus is the gRPC status error a RegistryService failure is
+// answered with. The gRPC service and the MCP registry tools both classify
+// service errors through it, so a missing artifact is NotFound on both.
+func RegistryErrorStatus(err error) error {
+	if err == nil {
+		return nil
+	}
 
 	switch e := err.(type) {
 	case ErrArtifactNotFound:

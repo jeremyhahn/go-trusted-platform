@@ -36,6 +36,13 @@ import (
 type mcpMockVTPMService struct {
 	bundles map[string]*vtpm.Bundle
 	running map[string]bool
+
+	// The last options each call received, so tests can assert what the
+	// provider forwards.
+	lastCreateOpts *vtpm.CreateBundleOptions
+	lastListOpts   *vtpm.ListOptions
+	lastSealOpts   *vtpm.SealOptions
+	lastUnsealAuth string
 }
 
 func newMCPMockVTPMService() *mcpMockVTPMService {
@@ -46,6 +53,7 @@ func newMCPMockVTPMService() *mcpMockVTPMService {
 }
 
 func (m *mcpMockVTPMService) CreateBundle(ctx context.Context, opts *vtpm.CreateBundleOptions) (*vtpm.Bundle, error) {
+	m.lastCreateOpts = opts
 	bundle := &vtpm.Bundle{
 		ID:        opts.Hostname,
 		Mode:      opts.Mode,
@@ -75,6 +83,7 @@ func (m *mcpMockVTPMService) DeleteBundle(ctx context.Context, id string) error 
 }
 
 func (m *mcpMockVTPMService) ListBundles(ctx context.Context, opts *vtpm.ListOptions) ([]*vtpm.Bundle, error) {
+	m.lastListOpts = opts
 	bundles := make([]*vtpm.Bundle, 0, len(m.bundles))
 	for _, b := range m.bundles {
 		bundles = append(bundles, b)
@@ -165,6 +174,7 @@ func (m *mcpMockVTPMService) Quote(ctx context.Context, bundleID string, nonce [
 }
 
 func (m *mcpMockVTPMService) Seal(ctx context.Context, bundleID string, data []byte, opts *vtpm.SealOptions) ([]byte, error) {
+	m.lastSealOpts = opts
 	if _, ok := m.bundles[bundleID]; !ok {
 		return nil, vtpm.ErrBundleNotFound{ID: bundleID}
 	}
@@ -172,6 +182,7 @@ func (m *mcpMockVTPMService) Seal(ctx context.Context, bundleID string, data []b
 }
 
 func (m *mcpMockVTPMService) Unseal(ctx context.Context, bundleID string, sealedData []byte, authValue string) ([]byte, error) {
+	m.lastUnsealAuth = authValue
 	if _, ok := m.bundles[bundleID]; !ok {
 		return nil, vtpm.ErrBundleNotFound{ID: bundleID}
 	}
@@ -675,7 +686,7 @@ func TestMCPServiceProvider_VTPMSeal_NilService(t *testing.T) {
 	ctx := context.Background()
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
 
-	_, err := provider.VTPMSeal(ctx, "test-bundle", []byte("secret"), []int{0, 1, 2})
+	_, err := provider.VTPMSeal(ctx, "test-bundle", []byte("secret"), []int{0, 1, 2}, "")
 	if err == nil {
 		t.Error("expected error for nil service")
 	}
@@ -693,7 +704,7 @@ func TestMCPServiceProvider_VTPMSeal_Success(t *testing.T) {
 		VTPMService: mockSvc,
 	})
 
-	result, err := provider.VTPMSeal(ctx, "test-bundle", []byte("secret"), []int{0, 1, 2})
+	result, err := provider.VTPMSeal(ctx, "test-bundle", []byte("secret"), []int{0, 1, 2}, "")
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -710,7 +721,7 @@ func TestMCPServiceProvider_VTPMSeal_BundleNotFound(t *testing.T) {
 		VTPMService: mockSvc,
 	})
 
-	_, err := provider.VTPMSeal(ctx, "nonexistent", []byte("secret"), []int{0})
+	_, err := provider.VTPMSeal(ctx, "nonexistent", []byte("secret"), []int{0}, "")
 	if err == nil {
 		t.Error("expected error for nonexistent bundle")
 	}
@@ -720,7 +731,7 @@ func TestMCPServiceProvider_VTPMUnseal_NilService(t *testing.T) {
 	ctx := context.Background()
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
 
-	_, err := provider.VTPMUnseal(ctx, "test-bundle", []byte("sealed"))
+	_, err := provider.VTPMUnseal(ctx, "test-bundle", []byte("sealed"), "")
 	if err == nil {
 		t.Error("expected error for nil service")
 	}
@@ -738,7 +749,7 @@ func TestMCPServiceProvider_VTPMUnseal_Success(t *testing.T) {
 		VTPMService: mockSvc,
 	})
 
-	result, err := provider.VTPMUnseal(ctx, "test-bundle", []byte("sealed"))
+	result, err := provider.VTPMUnseal(ctx, "test-bundle", []byte("sealed"), "")
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -755,9 +766,77 @@ func TestMCPServiceProvider_VTPMUnseal_BundleNotFound(t *testing.T) {
 		VTPMService: mockSvc,
 	})
 
-	_, err := provider.VTPMUnseal(ctx, "nonexistent", []byte("sealed"))
+	_, err := provider.VTPMUnseal(ctx, "nonexistent", []byte("sealed"), "")
 	if err == nil {
 		t.Error("expected error for nonexistent bundle")
+	}
+}
+
+// The MCP vTPM create, list, seal and unseal calls forward the options the
+// gRPC VTPMService carries, so vtpm_bundle_* and vtpm_* reach the same backend.
+func TestMCPServiceProvider_VTPMCreate_ForwardsSecureBootAndLabels(t *testing.T) {
+	mockSvc := newMCPMockVTPMService()
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{VTPMService: mockSvc})
+
+	labels := map[string]string{"env": "prod"}
+	if _, err := provider.VTPMCreate(context.Background(), "web-1", "ECC", true, labels); err != nil {
+		t.Fatalf("VTPMCreate: %v", err)
+	}
+	opts := mockSvc.lastCreateOpts
+	if opts == nil || !opts.SecureBootEnabled || opts.Labels["env"] != "prod" || opts.EKAlgorithm != vtpm.EKAlgorithmECC {
+		t.Fatalf("CreateBundleOptions = %+v, want secure boot, env=prod and ECC", opts)
+	}
+}
+
+func TestMCPServiceProvider_VTPMCreate_InvalidAlgorithm(t *testing.T) {
+	mockSvc := newMCPMockVTPMService()
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{VTPMService: mockSvc})
+
+	if _, err := provider.VTPMCreate(context.Background(), "web-1", "DSA", true, nil); err == nil {
+		t.Fatal("VTPMCreate with algorithm DSA succeeded")
+	}
+	if mockSvc.lastCreateOpts != nil {
+		t.Fatalf("invalid algorithm reached CreateBundle: %+v", mockSvc.lastCreateOpts)
+	}
+}
+
+func TestMCPServiceProvider_VTPMList_ForwardsFilters(t *testing.T) {
+	mockSvc := newMCPMockVTPMService()
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{VTPMService: mockSvc})
+
+	want := &vtpm.ListOptions{Mode: vtpm.BundleModeTemplate, Limit: 5, Offset: 2}
+	if _, err := provider.VTPMList(context.Background(), want); err != nil {
+		t.Fatalf("VTPMList: %v", err)
+	}
+	if mockSvc.lastListOpts != want {
+		t.Fatalf("ListBundles got %+v, want %+v", mockSvc.lastListOpts, want)
+	}
+}
+
+func TestMCPServiceProvider_VTPMSeal_ForwardsAuthValue(t *testing.T) {
+	mockSvc := newMCPMockVTPMService()
+	mockSvc.bundles["b-1"] = &vtpm.Bundle{ID: "b-1"}
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{VTPMService: mockSvc})
+
+	if _, err := provider.VTPMSeal(context.Background(), "b-1", []byte("secret"), []int{7}, "pw"); err != nil {
+		t.Fatalf("VTPMSeal: %v", err)
+	}
+	opts := mockSvc.lastSealOpts
+	if opts == nil || opts.AuthValue != "pw" || len(opts.PCRs) != 1 || opts.PCRs[0] != 7 {
+		t.Fatalf("SealOptions = %+v, want PCRs [7] and auth pw", opts)
+	}
+}
+
+func TestMCPServiceProvider_VTPMUnseal_ForwardsAuthValue(t *testing.T) {
+	mockSvc := newMCPMockVTPMService()
+	mockSvc.bundles["b-1"] = &vtpm.Bundle{ID: "b-1"}
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{VTPMService: mockSvc})
+
+	if _, err := provider.VTPMUnseal(context.Background(), "b-1", []byte("sealed"), "pw"); err != nil {
+		t.Fatalf("VTPMUnseal: %v", err)
+	}
+	if mockSvc.lastUnsealAuth != "pw" {
+		t.Fatalf("Unseal auth = %q, want pw", mockSvc.lastUnsealAuth)
 	}
 }
 

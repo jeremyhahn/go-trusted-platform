@@ -19,8 +19,7 @@ import (
 	"encoding/json"
 	"math"
 
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 )
 
 // vTPM tool execution handlers
@@ -31,8 +30,10 @@ func (r *ToolRegistry) executeVTPMCreate(ctx context.Context, args map[string]in
 	if err != nil {
 		return nil, err
 	}
+	secureBoot := getBool(args, "secure_boot_enabled")
+	labels := getStringMap(args, "labels")
 
-	result, err := r.service.VTPMCreate(ctx, name, algorithm)
+	result, err := r.service.VTPMCreate(ctx, name, algorithm, secureBoot, labels)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +49,11 @@ func (r *ToolRegistry) executeVTPMDelete(ctx context.Context, args map[string]in
 }
 
 func (r *ToolRegistry) executeVTPMList(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	instances, err := r.service.VTPMList(ctx)
+	opts, err := vtpmListOptionsArg(args)
+	if err != nil {
+		return nil, err
+	}
+	instances, err := r.service.VTPMList(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +103,7 @@ func (r *ToolRegistry) executeVTPMSeal(ctx context.Context, args map[string]inte
 		return nil, ErrInvalidArgument{Msg: "invalid data encoding", Cause: err}
 	}
 
-	sealed, err := r.service.VTPMSeal(ctx, name, data, pcrs)
+	sealed, err := r.service.VTPMSeal(ctx, name, data, pcrs, getString(args, "auth_value"))
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +121,7 @@ func (r *ToolRegistry) executeVTPMUnseal(ctx context.Context, args map[string]in
 		return nil, ErrInvalidArgument{Msg: "invalid sealed data encoding", Cause: err}
 	}
 
-	data, err := r.service.VTPMUnseal(ctx, name, sealed)
+	data, err := r.service.VTPMUnseal(ctx, name, sealed, getString(args, "auth_value"))
 	if err != nil {
 		return nil, err
 	}
@@ -670,30 +675,16 @@ func (r *ToolRegistry) executeSDNListVLANs(ctx context.Context, args map[string]
 
 // SDN Port authentication execution handlers
 
-// ErrPortAuthNotEnforced refuses the port-authentication tools. The service
-// behind them checks only a certificate's validity window and records the
-// port in a map nothing reads: the switch never admits or blocks the port, so
-// answering "authenticated" or "revoked" would be a false security claim
-// (#304). It is FailedPrecondition on every transport.
-type ErrPortAuthNotEnforced struct {
-	Tool string
-}
-
-func (e ErrPortAuthNotEnforced) Error() string {
-	return "mcp: " + e.Tool + " is refused: port authentication is not enforced on the switch"
-}
-
-// GRPCStatus classes the error FailedPrecondition.
-func (e ErrPortAuthNotEnforced) GRPCStatus() *status.Status {
-	return status.New(codes.FailedPrecondition, e.Error())
-}
+// The port-authentication tools refuse with policy.ErrPortAuthNotEnforced
+// (FailedPrecondition), the error the SDN service returns on every other
+// transport: the switch does not enforce port authentication (#304).
 
 func (r *ToolRegistry) executeSDNAuthenticatePort(_ context.Context, _ map[string]interface{}) (interface{}, error) {
-	return nil, ErrPortAuthNotEnforced{Tool: "sdn_authenticate_port"}
+	return nil, policy.ErrPortAuthNotEnforced{Operation: "sdn_authenticate_port"}
 }
 
 func (r *ToolRegistry) executeSDNRevokePortAuth(_ context.Context, _ map[string]interface{}) (interface{}, error) {
-	return nil, ErrPortAuthNotEnforced{Tool: "sdn_revoke_port_auth"}
+	return nil, policy.ErrPortAuthNotEnforced{Operation: "sdn_revoke_port_auth"}
 }
 
 // SDN Statistics execution handlers

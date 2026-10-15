@@ -17,13 +17,19 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"strings"
 	"testing"
 )
 
-// vmToolNames is the authoritative list of VM snapshot/attestation tool
-// names. Registration, routing, and this list must all agree.
+// vmToolNames is the authoritative list of VM lifecycle, snapshot and
+// attestation tool names. Registration, routing, and this list must all agree.
 var vmToolNames = []string{
+	"vm_create",
+	"vm_list",
+	"vm_get",
+	"vm_delete",
+	"vm_start",
+	"vm_stop",
+	"vm_reboot",
 	"vm_snapshot_create",
 	"vm_snapshot_get",
 	"vm_snapshot_list",
@@ -144,10 +150,10 @@ func newVMRegistry() (*ToolRegistry, *vmStubProvider) {
 
 // TestVMToolRegistrationAndRoutingParity guards against the bug class where
 // a tool is registered but never routed. It asserts that:
-//  1. every expected VM snapshot/attestation tool is registered,
+//  1. every expected VM lifecycle/snapshot/attestation tool is registered,
 //  2. the dispatch map keys and the expected name list are identical, and
 //  3. ExecuteTool actually routes every tool to the VM executor (a provider
-//     without VMProvider yields ErrVMComputeNotConfigured, never
+//     without the VM interfaces yields ErrVMComputeNotConfigured, never
 //     "unknown tool").
 func TestVMToolRegistrationAndRoutingParity(t *testing.T) {
 	ctx := context.Background()
@@ -155,29 +161,21 @@ func TestVMToolRegistrationAndRoutingParity(t *testing.T) {
 
 	registered := make(map[string]bool)
 	for _, tool := range registry.ListTools() {
-		if strings.HasPrefix(tool.Name, "vm_snapshot_") || strings.HasPrefix(tool.Name, "vm_attest") {
-			registered[tool.Name] = true
-		}
+		registered[tool.Name] = true
 	}
-
-	if len(registered) != len(vmToolNames) {
-		t.Errorf("registered %d VM snapshot/attest tools, want %d: %v",
-			len(registered), len(vmToolNames), registered)
-	}
+	expected := make(map[string]bool, len(vmToolNames))
 	for _, name := range vmToolNames {
+		expected[name] = true
 		if !registered[name] {
 			t.Errorf("expected tool %q is not registered", name)
 		}
-	}
-
-	for name := range registered {
 		if _, ok := vmToolDispatch[name]; !ok {
-			t.Errorf("registered tool %q has no executor in vmToolDispatch", name)
+			t.Errorf("expected tool %q has no executor in vmToolDispatch", name)
 		}
 	}
 	for name := range vmToolDispatch {
-		if !registered[name] {
-			t.Errorf("dispatch map routes %q but the tool is not registered", name)
+		if !expected[name] {
+			t.Errorf("dispatch map routes %q but it is not in vmToolNames", name)
 		}
 	}
 

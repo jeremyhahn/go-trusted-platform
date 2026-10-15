@@ -180,6 +180,63 @@ Secure Boot state; 9 the initrd. All four are non-zero after a good boot.
 IMA (PCR 10) is not available on the Pi: the Alpine `linux-rpi` kernel is
 built without it. Do not enable the IMA feature on these nodes.
 
+## CM4 SD card
+
+A Compute Module 4 as a standalone control plane, booted from an SD card.
+It is built from `dedicated/raspberrypi/cm4/control-plane.yaml` with the
+desk overrides beside it: static 192.0.2.10/24 on an untagged eth0, VLAN 405,
+no gateway. What the control plane does without a gateway is in the
+[templates README](../../configs/platform/templates/dedicated/raspberrypi/README.md#control-plane).
+
+The board:
+
+- A **CM4 Lite** (no eMMC), or a carrier whose SD slot the CM4 boots from. A
+  CM4 with eMMC boots its eMMC, not the SD slot; writing the image to eMMC is
+  not covered here.
+- The **TPM HAT** on SPI0 chip-select 1, wired as in
+  [Prerequisites](#prerequisites). Without it the first boot has nothing to
+  seal to and ends in the fallback ([Troubleshooting](#troubleshooting)).
+- The **serial console** on the primary UART (GPIO 14/15), 115200 baud.
+- 8 GB of RAM. The template is sized for it; confirm it at the first login
+  (below).
+
+Build, compress and check the image. `image-rpi-xz` keeps the `.img` and
+writes the `.xz` beside it:
+
+```sh
+make image-rpi-xz DISKIMAGE_MODEL=cm4 \
+  DISKIMAGE_FLAGS='--role control-plane --overrides configs/platform/templates/dedicated/raspberrypi/cm4/desk-overrides.yaml' \
+  DISKIMAGE_OUTPUT=bin/trusted-platform-cm4-cp.img
+sha256sum bin/trusted-platform-cm4-cp.img.xz    # record it; check it again on the host that writes the card
+```
+
+Write the card by hand. Unlike `make rpi-sdcard`, `dd` checks nothing, so
+find the card with `lsblk` first: it must show `RM=1` and the size of the
+card, and must not hold your root filesystem.
+
+```sh
+lsblk -o NAME,SIZE,RM,TYPE,MOUNTPOINTS
+xzcat bin/trusted-platform-cm4-cp.img.xz | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress
+```
+
+(`make rpi-sdcard RPI_SDCARD=/dev/sdX RPI_SDCARD_CONFIRM=yes
+DISKIMAGE_OUTPUT=bin/trusted-platform-cm4-cp.img` writes the uncompressed
+image with those checks.)
+
+Boot it with the serial console attached and watch the
+[first boot](#first-boot). Then, on the node:
+
+```sh
+ls -l /dev/tpm0 /dev/tpmrm0                    # the TPM HAT is present
+dmesg | grep tpm_tis_spi
+ls /boot/efi/tpm2/                             # firstboot done: installer.luks is gone
+grep MemTotal /proc/meminfo                    # about 8 GB
+platformctl health --detailed
+```
+
+`platformctl health` exits 0 on an unhealthy platform; read the overall
+status and the component table, not `$?` ([health CLI](../health/cli.md#4-exit-codes)).
+
 ## Provision a fleet: signed HTTP boot
 
 A Pi can skip the SD card's first stage and boot from the network instead. Its

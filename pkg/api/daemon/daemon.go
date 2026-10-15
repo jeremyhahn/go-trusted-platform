@@ -256,6 +256,11 @@ type Daemon struct {
 	running atomic.Bool
 	mu      sync.RWMutex
 
+	// subsystemProbes holds, per platformv1.ServiceType, the func() bool
+	// probes SetSubsystemProbe stored for the subsystems run outside the
+	// daemon. Lock-free because status RPCs read it while Stop holds mu.
+	subsystemProbes sync.Map
+
 	// onAutoStart, when non-nil, is invoked by autoStartServices after it has
 	// finished its pass over the configured services. It turns a background
 	// goroutine — otherwise invisible — into a synchronisation point the
@@ -3276,10 +3281,12 @@ func (d *Daemon) IsGRPCTCPEnabled() bool {
 	return d.config.EnableGRPCTCP && d.grpcServer != nil
 }
 
-// registerConfiguredServices registers a configManagedService for each
-// enabled entry in d.config.Services that has a valid protobuf ServiceType
-// mapping, making them visible via ListServices and manageable through
-// all protocols (gRPC, REST, CLI, QUIC, MCP, Unix).
+// registerConfiguredServices registers a subsystemService for each enabled
+// entry in d.config.Services that names a platform subsystem, making it
+// visible via ListServices on every protocol (gRPC, REST, CLI, QUIC, MCP,
+// Unix). Its status is the subsystem's real state; start, stop and restart
+// are refused with ErrServiceNotControllable because platformd owns the
+// subsystem's lifecycle.
 func (d *Daemon) registerConfiguredServices() {
 	for name, cfg := range d.config.Services {
 		if !cfg.Enabled {
@@ -3288,14 +3295,51 @@ func (d *Daemon) registerConfiguredServices() {
 		// Only register services that have a valid protobuf ServiceType mapping.
 		// Services without mappings (e.g., kms, vtpm, ca, mcp) cannot be
 		// managed through gRPC/CLI which require ServiceType enum values.
-		if serviceTypeFromName(name) == platformv1.ServiceType_SERVICE_TYPE_UNSPECIFIED {
+		svcType := serviceTypeFromName(name)
+		spec, known := subsystemSpecs[svcType]
+		if !known {
 			continue
 		}
-		svc := newConfigManagedService(name, cfg)
+		svc := &subsystemService{
+			name:    name,
+			reason:  spec.reason,
+			running: d.subsystemProbe(svcType, spec),
+		}
 		if err := d.RegisterService(svc); err != nil {
 			d.logger.Warn("Failed to register configured service", "service", name, "error", err)
 		}
 	}
+}
+
+// subsystemProbe returns how a configured subsystem's state is observed.
+// Start calls it with d.mu held, so a daemon-built subsystem's wiring is read
+// once here. The returned probe never takes d.mu: Stop holds that lock while
+// it drains in-flight status RPCs, which call the probe.
+func (d *Daemon) subsystemProbe(svcType platformv1.ServiceType, spec subsystemSpec) func() bool {
+	if spec.wired == nil {
+		return func() bool {
+			probe, ok := d.subsystemProbes.Load(svcType)
+			if !ok {
+				return false
+			}
+			running, ok := probe.(func() bool)
+			return ok && running()
+		}
+	}
+	wired := spec.wired(d)
+	return func() bool { return wired }
+}
+
+// SetSubsystemProbe reports the live state of a subsystem the composition
+// root runs outside the daemon: the web services and the ACME server they
+// carry. Until a probe is set, or after a nil one, the subsystem reports
+// stopped.
+func (d *Daemon) SetSubsystemProbe(svcType platformv1.ServiceType, running func() bool) {
+	if running == nil {
+		d.subsystemProbes.Delete(svcType)
+		return
+	}
+	d.subsystemProbes.Store(svcType, running)
 }
 
 // autoStartServices starts services configured for auto-start
@@ -3326,11 +3370,15 @@ func (d *Daemon) autoStartServices(ctx context.Context) {
 		if !exists {
 			continue
 		}
+		// A process-owned subsystem came up with the process; there is
+		// nothing to start, and its refusal is not a failure.
+		if _, owned := processOwned(state.service); owned {
+			continue
+		}
 
 		// Start the service directly using the state
 		state.mu.Lock()
-		currentStatus := platformv1.ServiceStatus(state.status.Load())
-		if currentStatus == platformv1.ServiceStatus_SERVICE_STATUS_RUNNING {
+		if state.observedStatus() == platformv1.ServiceStatus_SERVICE_STATUS_RUNNING {
 			state.mu.Unlock()
 			continue
 		}

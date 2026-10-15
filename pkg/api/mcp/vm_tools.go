@@ -24,50 +24,21 @@ import (
 func (r *ToolRegistry) registerVMTools() {
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_create",
-		Description: "Create a new virtual machine with the specified configuration",
+		Description: "Create a virtual machine, as ComputeService.CreateVM does",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"name": map[string]interface{}{
 					"type":        "string",
-					"description": "VM name (required, must start with a letter, alphanumeric with hyphens/underscores)",
-				},
-				"profile_id": map[string]interface{}{
-					"type":        "integer",
-					"description": "Device profile ID to use for VM configuration",
-				},
-				"profile_name": map[string]interface{}{
-					"type":        "string",
-					"description": "Device profile name to use for VM configuration",
+					"description": "VM name (required)",
 				},
 				"memory": map[string]interface{}{
 					"type":        "integer",
-					"description": "Memory in MB (e.g., 2048 for 2GB)",
-					"default":     2048,
+					"description": "Memory in MB; omitted, ComputeService's default applies",
 				},
 				"cpus": map[string]interface{}{
 					"type":        "integer",
-					"description": "Number of CPU cores",
-					"default":     2,
-				},
-				"disk_size": map[string]interface{}{
-					"type":        "string",
-					"description": "Disk size (e.g., '20G', '100G')",
-					"default":     "20G",
-				},
-				"iso_path": map[string]interface{}{
-					"type":        "string",
-					"description": "Path to installation ISO (for install mode)",
-				},
-				"boot_mode": map[string]interface{}{
-					"type":        "string",
-					"description": "Boot mode (install, boot, pxe)",
-					"default":     "boot",
-				},
-				"enable_kvm": map[string]interface{}{
-					"type":        "boolean",
-					"description": "Enable KVM hardware acceleration",
-					"default":     true,
+					"description": "Number of CPU cores; omitted, ComputeService's default applies",
 				},
 				"secure_boot": map[string]interface{}{
 					"type":        "boolean",
@@ -76,21 +47,8 @@ func (r *ToolRegistry) registerVMTools() {
 				},
 				"tpm_enabled": map[string]interface{}{
 					"type":        "boolean",
-					"description": "Enable virtual TPM for the VM",
-					"default":     true,
-				},
-				"network_mode": map[string]interface{}{
-					"type":        "string",
-					"description": "Network mode (bridge, nat, none)",
-					"default":     "bridge",
-				},
-				"environment": map[string]interface{}{
-					"type":        "object",
-					"description": "Environment variables as key-value pairs",
-				},
-				"labels": map[string]interface{}{
-					"type":        "object",
-					"description": "VM labels as key-value pairs",
+					"description": "Enable a virtual TPM for the VM",
+					"default":     false,
 				},
 			},
 			"required": []string{"name"},
@@ -114,24 +72,10 @@ func (r *ToolRegistry) registerVMTools() {
 
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_list",
-		Description: "List virtual machines with optional filters",
+		Description: "List every virtual machine, as ComputeService.ListVMs does",
 		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"state": map[string]interface{}{
-					"type":        "string",
-					"description": "Filter by state (running, stopped, creating, etc.)",
-				},
-				"name": map[string]interface{}{
-					"type":        "string",
-					"description": "Filter by name (substring match)",
-				},
-				"limit": map[string]interface{}{
-					"type":        "integer",
-					"description": "Maximum number of VMs to return",
-					"default":     50,
-				},
-			},
+			"type":       "object",
+			"properties": map[string]interface{}{},
 		},
 	})
 

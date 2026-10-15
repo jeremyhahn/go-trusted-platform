@@ -89,6 +89,19 @@ func (e ErrDeleteIAKFailed) Error() string {
 	return fmt.Sprintf("failed to delete IAK: %s", e.Reason)
 }
 
+// ErrIdentityKeyDeleteRefused is returned when the daemon refuses to delete
+// the IDevID or IAK key. The key stays in the TPM and nothing was changed.
+type ErrIdentityKeyDeleteRefused struct {
+	Key   string // "IDevID" or "IAK"
+	Cause error
+}
+
+func (e ErrIdentityKeyDeleteRefused) Error() string {
+	return fmt.Sprintf("%s key delete refused: the key is TPM-resident and is not evicted; nothing was changed", e.Key)
+}
+
+func (e ErrIdentityKeyDeleteRefused) Unwrap() error { return e.Cause }
+
 // ErrGetIDevIDInfoFailed is returned when getting IDevID info fails
 type ErrGetIDevIDInfoFailed struct {
 	Reason string

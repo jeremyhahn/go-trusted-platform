@@ -188,11 +188,9 @@ platformctl switch disable-port --server-url https://… --switch core-01 --port
 ```
 
 `disable-port` is `shutdown`. **There is no confirmation, no `--force` and no
-dry-run.** On gRPC and Unix it needs `switch:write`, and the
-`switch_disable_port` MCP tool is refused for every caller ([api.md](api.md)
-§7). The QUIC switch category has no entry in the opcode catalog
-(`DefaultOpcodePermissions`), so on QUIC any caller with a validated token can
-still reach it. Treat QUIC access as access to your fabric until that is fixed.
+dry-run.** On every transport it needs `switch:write`: gRPC
+and Unix, QUIC (#767) and the `switch_disable_port` MCP tool (#304)
+([api.md](api.md) §7).
 
 ---
 

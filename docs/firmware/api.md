@@ -79,11 +79,11 @@ platform's normal `scp`-claim path. It authenticates instead with, in order:
 4. cryptographic EK-certificate binding against the matched profile.
 
 All four are enforced **before the digest is signed**. There is no `scp`
-permission on the REST route and no MCP permission entry for
-`provision_sign_digest` — `AuthorizeTool` allows a tool absent from the
-authorization map once the token validates, so on MCP this capability is gated
-by the token and by the four checks above, not by a scope. Recorded here so the
-gap is visible rather than assumed.
+permission on the REST route, and gRPC `SignDigest` is pre-auth. On MCP
+`provision_sign_digest` is classified open (`""`, #304) to match: it needs no
+token, and the four checks above, made by the shared
+`configdelivery.Service`, are the whole gate. The QUIC sign sub-opcode is
+pre-auth the same way (#317).
 
 Post-install the node stops using this endpoint and reaches the KMS directly:
 `install uki-rebuild` calls the platform `KeyManagementService.Sign` RPC over its

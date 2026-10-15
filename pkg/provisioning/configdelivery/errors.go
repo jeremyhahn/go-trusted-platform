@@ -133,6 +133,16 @@ func (e ErrProfileNotFound) Error() string {
 	return fmt.Sprintf("configdelivery: profile not found: %d", e.ProfileID)
 }
 
+// ErrProfileIDRequired indicates a session fulfillment named no profile:
+// profile_id is missing or zero. Every transport answers it as a bad
+// request.
+type ErrProfileIDRequired struct{}
+
+// Error returns the error message.
+func (e ErrProfileIDRequired) Error() string {
+	return "configdelivery: profile_id is required and must be non-zero"
+}
+
 // ErrMissingLogger indicates a logger is required but was not provided.
 type ErrMissingLogger struct{}
 

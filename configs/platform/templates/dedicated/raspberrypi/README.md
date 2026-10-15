@@ -1,8 +1,10 @@
 # Raspberry Pi — dedicated profile
 
 A Raspberry Pi 4 — or, experimentally, a Pi 5 — as a **compute** node of the
-dedicated profile, joining the x86 control plane and gateway of [`supermicro/x10/`](../supermicro/x10/). It
-ships as a factory SD-card image, not an installer ISO:
+dedicated profile, joining the x86 control plane and gateway of [`supermicro/x10/`](../supermicro/x10/),
+and a Compute Module 4 or a Pi 4 as a standalone **control plane**
+([below](#control-plane)). It ships as a factory SD-card image, not an
+installer ISO:
 
 ```sh
 platformctl diskimage create --target rpi --model rpi4 --role compute \
@@ -10,8 +12,11 @@ platformctl diskimage create --target rpi --model rpi4 --role compute \
 ```
 
 `--role compute` builds [`rpi4/compute.yaml`](./rpi4/compute.yaml), or
-[`rpi5/compute.yaml`](./rpi5/compute.yaml) with `--model rpi5`. A model the
-builder does not know, or a role or model with no file here, is refused
+[`rpi5/compute.yaml`](./rpi5/compute.yaml) with `--model rpi5`;
+`--role control-plane` builds [`cm4/control-plane.yaml`](./cm4/control-plane.yaml)
+with `--model cm4`, or [`rpi4/control-plane.yaml`](./rpi4/control-plane.yaml).
+A model the builder does not know, a role that is not `gateway`,
+`control-plane` or `compute`, or a role or model with no file here, is refused
 (`ErrRoleTemplate`); the build never falls back to the single-node image. The image pipeline is
 [docs/factory-image/](../../../../../docs/factory-image/), and the hardware
 prerequisites (SLB9670 TPM HAT, serial console) are those of
@@ -21,8 +26,9 @@ prerequisites (SLB9670 TPM HAT, serial console) are those of
 |---|---|---|
 | compute | `rpi4/compute.yaml` | Builds; loads and validates against the reference network; no hardware run yet |
 | compute | `rpi5/compute.yaml` | **Experimental**: builds, loads and validates; TPM, console and Ethernet unvalidated on a Pi 5 ([below](#raspberry-pi-5-experimental)) |
+| control-plane | `cm4/control-plane.yaml` | Builds; loads and validates against the reference network; standalone, no hardware run yet ([below](#control-plane)) |
+| control-plane | `rpi4/control-plane.yaml` | As `cm4`, for a Pi 4 Model B |
 | gateway | none | Not supported on a one-port Pi (below) |
-| control-plane | none | Stays on x86 (below) |
 
 ## What `rpi4/compute.yaml` changes against `supermicro/x10/compute.yaml`
 
@@ -58,6 +64,7 @@ that deletes the rack's network sections and makes `eth0` a DHCP client:
 os:
   hostname: pi4-01
 network:
+  role: null           # a compute role refuses DHCP; see below
   dns: null            # the DHCP client writes resolv.conf
   dnsmasq: null
   platform-vrf: null
@@ -75,8 +82,21 @@ platformctl diskimage create --target rpi --model rpi4 --role compute \
 A `null` deletes the template's key and `[]` replaces its list
 ([docs/device-templates.md, "Merge Rules"](../../../../../docs/device-templates.md#merge-rules)).
 The template file is not changed. The override is
-`pkg/cli/commands/diskimage/testdata/rpi4-flat-dhcp.yaml`; its test renders
-`iface eth0 inet dhcp` with no 802.1Q or VRF device and no `10.4.x` address.
+`pkg/cli/commands/diskimage/testdata/rpi4-flat-dhcp.yaml`. Its test
+(`flat_dhcp_test.go`) loads the merged result through the host-network check
+platformd runs at startup, then renders `iface eth0 inet dhcp` with no 802.1Q
+or VRF device and no `10.4.x` address.
+
+`role: null` is what lets platformd load it. A compute role permits only
+static addresses in its zones (`pkg/installer/network_role.go`), so with the
+template's role kept a DHCP `eth0` is refused (`ErrDHCPNotPermitted`). With no
+role the addressing is not constrained, and the role's host hardening goes
+too: no forward-drop nftables table, no forwarding sysctl, nftables is not
+installed (`pkg/installer/alpine_hostnet.go`, `alpine.go`), and a
+network-configuration failure during install is logged rather than fatal
+(`pkg/installer/installer.go`). The kernel default — no forwarding — still
+applies.
+
 It changes only `network:` — `dns.resolver`, `trust.bmc`, `ntp` and `acme`
 still point at the rack's control plane and need the site's values.
 
@@ -174,11 +194,85 @@ bypass the pipelines — a gateway that forwards without enforcing. The x10
 translator, `pkg/config/gateway_role.go`) is built for `linux-lts`, not
 `linux-rpi`.
 
-## Why there is no control-plane template
+## Control plane
 
-The control plane embeds go-qrdb, which the platform consumes as a Go source
-module through go-quicbaas (`go.mod`), not as a released binary. It
-cross-compiles for arm64 with the rest of the daemon (`make build-arm64`,
-`make rpi-binaries`), so there is no separate arm64 release to wait for;
-running a Raft control plane on a Pi is a resource question that has not been
-measured.
+`cm4/control-plane.yaml` is `supermicro/x10/control-plane.yaml` with the Pi
+rows of the compute table above; `rpi4/control-plane.yaml` is the same file
+for a Pi 4 Model B. Each is a full copy — templates have no include mechanism.
+
+| Key | x10 | cm4 / rpi4 |
+|---|---|---|
+| `disk.device` / `partition-table` | `""` / `gpt` | `/dev/mmcblk0` / `mbr` |
+| `os.architecture` / `kernel-package` | `x86_64` / unset (`linux-lts`) | `aarch64` / `linux-rpi` |
+| `network.interfaces` / `bonds` | the bond members / `bond0` | `eth0`, type `manual` (the trunk) / `[]` |
+| zone addresses | `10.4.1.10/24` fabric, `10.4.6.10/24` control-plane on the bond | the same two as 802.1Q interfaces `zone401`, `zone406` on `eth0` |
+| `uki` paths, `install-target`, `boot.firmware` | `-lts`, ISO install, UEFI | `-rpi`, `image`, `uboot` |
+| `hardware-manufacturer` / `hardware-model` | unset | `Raspberry Pi` / `Raspberry Pi Compute Module 4` or `Raspberry Pi 4 Model B` |
+| `seal-pcrs` | `[7, 9]` | `[0, 4, 7, 9]` |
+| `tpm.device` | `/dev/tpmrm0` | `/dev/tpmrm0`, the SLB9670 on SPI0 CE1; fails closed if absent |
+| `tpm.idevid` model / serial | `SuperMicro X10` / `sm-cp-01` | the board name / `cm4-cp-01` or `rpi4-cp-01`; override with `/proc/cpuinfo`'s serial |
+
+Everything else is the x10 control plane: `network.role: control-plane`, its
+CA and ACME server, internal and public DNS, NTP serving, attestation
+collector, SDN controller and webservices. QuicBaaS runs standalone —
+`storage-backend: file`, `node-id: 1`, no `join-addresses` — so no Raft
+consensus is engaged.
+
+Prerequisites:
+
+- **The TPM HAT.** An SLB9670 on SPI0 CE1, the same HAT and `tpm-soft-spi`
+  overlay as the compute image
+  ([`single-node/raspberrypi/`](../../single-node/raspberrypi/README.md)).
+  The IDevID, the CA's TPM keys and the LUKS seal live in it, and
+  `tpm.device: /dev/tpmrm0` names the hardware TPM explicitly, which never
+  falls back to a software TPM.
+- **Memory.** The templates are sized for **8 GB of RAM**. That is the owner's
+  stated figure, not a measurement: confirm it from `/proc/meminfo` at the
+  first ssh.
+- **A CM4 that boots its SD slot**: a CM4 Lite, on a carrier with an SD slot.
+  An eMMC CM4 boots its eMMC. The SD image steps are in
+  [docs/factory-image/user.md, "CM4 SD card"](../../../../../docs/factory-image/user.md#cm4-sd-card).
+
+### On the rack and on the desk
+
+As shipped, the template is the rack form: `eth0` is a switch trunk carrying
+the fabric (401) and control-plane (406) zones, and the gateway owns each
+zone's `.1` ([docs/architecture/deployment-reference.md](../../../../../docs/architecture/deployment-reference.md)).
+
+The desk form is [`cm4/desk-overrides.yaml`](./cm4/desk-overrides.yaml): one
+static address, `192.0.2.10/24` on the provisioning segment (VLAN 405), on an
+untagged `eth0`, with no router and no default gateway.
+
+```sh
+platformctl diskimage create --target rpi --model cm4 --role control-plane \
+  --overrides configs/platform/templates/dedicated/raspberrypi/cm4/desk-overrides.yaml
+```
+
+The override is an example file beside the template, not a template: `--role`
+never builds it. It sets `network.role: null`, deletes `platform-vrf`, empties
+`vlans`, makes `eth0` static and points `dns.nameservers` at `192.0.2.10`.
+`role: null` is needed because a control-plane role permits addresses in the
+fabric, hypervisor, storage and control-plane zones only and requires a fabric
+address (`pkg/installer/network_role.go`); `192.0.2.10` is in provisioning. The
+role rule is unchanged. A null role costs the host hardening described for the
+[flat DHCP override](#a-pi-on-a-flat-dhcp-network): no forward-drop nftables,
+no forwarding sysctl, and a non-fatal network failure at install.
+`pkg/cli/commands/diskimage/desk_overrides_test.go` loads the merged result
+through the host-network check platformd runs at startup and renders it.
+
+What the desk control plane does without a gateway (lines of
+`cm4/control-plane.yaml`):
+
+- **Its own, and unaffected:** the CA (`certificate-authority`, :905) and its
+  ACME server (internal webservice, :1188; the client directory
+  `cp.example.internal:9443`, :594); internal DNS on port 9053 (:426); NTP
+  serving, which allows `192.0.2.0/24` (:537) under the NTS name
+  `cp.example.internal` (:581); the QuicBaaS store (:690).
+- **Lost — the route out:** the public DNS forwarders `1.1.1.1` and `8.8.8.8`
+  (:363-364) and the resolver fallback (:314-315); the preferred NTP upstream
+  `10.4.6.1` (:510), which is the gateway's control-plane address and is not on
+  the desk; `pool.ntp.org` (:516); the BMC at `10.4.2.20` (:677).
+- **NTP warns and carries on:** the startup gate blocks for 120 s (:523-524),
+  then `on-timeout: warn-and-continue` (:528) boots the node flagged
+  time-unsynced in health; `orphan-fallback: true` (:531) keeps it serving its
+  own clock to the desk.

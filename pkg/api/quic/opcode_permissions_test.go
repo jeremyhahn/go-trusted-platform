@@ -121,7 +121,16 @@ func TestLookupOperationPermission_PreAuth(t *testing.T) {
 }
 
 func TestLookupOperationPermission_PreAuthSubOpcodes(t *testing.T) {
-	for _, sub := range []byte{quicwire.DeviceSubBootCertificate, quicwire.DeviceSubBootDelivery} {
+	openSubs := []byte{
+		quicwire.DeviceSubBootCertificate,
+		quicwire.DeviceSubBootDelivery,
+		// Device-side config delivery is open as on gRPC and MCP (#304).
+		quicwire.ProvisioningSubGetNonce,
+		quicwire.ProvisioningSubFetchConfig,
+		quicwire.ProvisioningSubSignDigest,
+		quicwire.ProvisioningSubPollSession,
+	}
+	for _, sub := range openSubs {
 		perm, preAuth, err := LookupOperationPermission(quicwire.OpProvisioningCategory, []byte{sub, 0xAA})
 		if err != nil {
 			t.Fatalf("sub-opcode 0x%02X: unexpected error %v", sub, err)
@@ -134,10 +143,19 @@ func TestLookupOperationPermission_PreAuthSubOpcodes(t *testing.T) {
 		}
 	}
 
-	// A sibling sub-opcode of the same category still needs its permission.
-	_, preAuth, err := LookupOperationPermission(quicwire.OpProvisioningCategory, []byte{quicwire.DeviceSubRecordAttestCert})
-	if err != nil || preAuth {
-		t.Fatalf("record attest cert: preAuth=%v err=%v, want a classified, authenticated operation", preAuth, err)
+	// Sibling sub-opcodes of the same category still need their permission,
+	// including the operator half of config delivery.
+	scoped := []byte{
+		quicwire.DeviceSubRecordAttestCert,
+		quicwire.ProvisioningSubFulfillSession,
+		quicwire.ProvisioningSubListSessions,
+		quicwire.ProvisioningSubGetSession,
+	}
+	for _, sub := range scoped {
+		_, preAuth, err := LookupOperationPermission(quicwire.OpProvisioningCategory, []byte{sub})
+		if err != nil || preAuth {
+			t.Fatalf("sub-opcode 0x%02X: preAuth=%v err=%v, want a classified, authenticated operation", sub, preAuth, err)
+		}
 	}
 }
 

@@ -55,6 +55,14 @@ keys; `{id}` will not match a name.
 body: it answers "would this fit", not "what is the current usage". That is
 `usage`.
 
+**An update changes limits, never usage (#304).** `UpdateQuotas` starts from
+the tenant's current quotas and overwrites only the sections the request
+carries; a section left out keeps its limits. The manager takes only limits
+from any request, so the usage counters survive every update. The gRPC
+`ComputeQuota` message has no disk field: a gRPC, QUIC, MCP or Unix update keeps
+the stored `MaxDiskGB`, and only the daemon REST server
+(`pkg/api/rest/tenant_handlers.go`, `max_disk_gb`) sets it.
+
 ---
 
 ## 4. Key material
@@ -63,6 +71,11 @@ body: it answers "would this fit", not "what is the current usage". That is
 |---|---|---|---|---|---|
 | Rotate tenant DEK | `POST /api/v1/tenants/{id}/dek/rotate` | `RotateTenantDEK` | `0xDB`–`0xEB` | `tenant_rotate_dek` | ✅ |
 | Tenant DEK status | `GET /api/v1/tenants/{id}/dek` | `GetTenantDEKStatus` | as above | `tenant_get_dek_status` | ✅ |
+
+The rotate body is optional: `{"background": true}` asks for a background
+rotation, the same `background` field the gRPC `RotateTenantDEKRequest`
+carries, and an empty body rotates in the foreground. The tenant always comes
+from the path (#304).
 
 **Retired by #708.** The per-tenant VLAN range and OVS bridge are gone, and
 with them `ValidateVLAN` / `GetBridgeName` on every transport: the REST routes
@@ -174,7 +187,41 @@ and MCP alike — the rule the REST guards apply:
 | Request | Admitted | Otherwise |
 |---|---|---|
 | names a tenant (get, update, delete, quotas, usage, suspend, resume, DEK, barrier) | the caller's own tenant, or the system tenant | `PermissionDenied`, `ErrTenantForbidden` |
-| acts across tenants (`ListTenants`, `GetTenantByName`, `CreateTenant`, `Sync`) | the system tenant | `PermissionDenied`, `ErrTenantSystemOnly` |
+| acts across tenants (`ListTenants`, `CreateTenant`, `Sync`) | the system tenant | `PermissionDenied`, `ErrTenantSystemOnly` |
+| looks a tenant up by name (`GetTenantByName`) | the caller's own tenant, or the system tenant for any name | `PermissionDenied`, `ErrTenantSystemOnly` |
+
+**Lookup by name resolves first, then decides (#304).** The CLI is
+name-keyed, so every verb starts with `GetTenantByName`; a tenant acting on
+itself must be able to resolve its own name. The server resolves the name, and
+admits a tenant-bound caller only when the resolved ID is the caller's tenant
+from the token or certificate, never from a request field. Another tenant's
+name and a name that does not exist get the same `ErrTenantSystemOnly`, so a
+tenant learns nothing about which names exist. Only the system tenant and an
+unbound caller see `NotFound` for a missing name.
+
+**The REST `by-name` route is still system-only.** `GET
+/api/v1/tenants/by-name/{name}` keeps its `RequireSystemTenant` guard
+(`pkg/webservice/v1/rest/tenant/router.go`), so over REST a tenant still cannot
+resolve its own name. Bringing it to the rule above needs a guard that checks
+the resolved ID, which is an open question for the owner: the REST handler
+calls the same `TenantGRPCServer.GetTenantByName`, but the server reads the
+caller from the gRPC, QUIC, MCP or mTLS context, never the REST session, so
+behind the route the REST caller reads as unbound.
+
+The SDK REST transport (`sdk/go/transport/rest/adapter.go`) carries
+`GetTenantByName`, `GetQuotas`, `UpdateQuotas` and `GetUsage` on the routes in
+§2–3, so `platformctl tenant` runs over REST like every other transport. It
+also carries `CheckQuota`, `Sync`, `RotateTenantDEK` and `GetTenantDEKStatus`
+(§2–4): the quota check keeps `resource` and `amount` in the POST body, and the
+DEK rotation keeps `background` there.
+
+The SDK QUIC transport (`sdk/go/transport/quic/adapter.go`) carries every
+§2–4 method, `CheckQuota` (`0xE6`), `Sync` (`0xE9`), `RotateTenantDEK`
+(`0xEA`) and `GetTenantDEKStatus` (`0xEB`) included, and the §5 barrier methods
+under `0x9E`. The SDK MCP transport (`sdk/go/transport/mcp/adapter.go`) maps
+only `ListTenants`, `GetTenant`, `CreateTenant`, `UpdateTenant`,
+`DeleteTenant`, `SuspendTenant` and `ResumeTenant`; every other method answers
+`Unimplemented` on the client before reaching the daemon's MCP tools.
 
 The caller's tenant is the token's `tenant_id` claim, or the mTLS certificate.
 The system tenant is the platform's operating tenant (`App.TenantID`); with none

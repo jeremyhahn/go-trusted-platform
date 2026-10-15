@@ -373,8 +373,9 @@ func (c *quicClientConn) sendRaw(ctx context.Context, opcode byte, encode func()
 
 	var buildErr error
 	resp, err := c.sender.SendBoundRequest(ctx, opcode, func(state *tls.ConnectionState) ([]byte, error) {
-		if buildErr = transport.BindChannel(ctx, platform.ProtocolQUIC.String(), state, bind); buildErr != nil {
-			return nil, buildErr
+		if err := transport.BindChannel(ctx, platform.ProtocolQUIC.String(), state, bind); err != nil {
+			buildErr = err
+			return nil, err
 		}
 		var payload []byte
 		payload, buildErr = encode()
@@ -864,17 +865,21 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.IDevIDService/GetIAKCertificate":     quicwire.OpIAKGetCert,
 
 	// Tenant Service — proto: pkg/api/grpc/proto/tenant.proto
-	"/platform.v1.TenantService/CreateTenant":    quicwire.OpTenantCreate,
-	"/platform.v1.TenantService/DeleteTenant":    quicwire.OpTenantDelete,
-	"/platform.v1.TenantService/GetTenant":       quicwire.OpTenantGet,
-	"/platform.v1.TenantService/GetTenantByName": quicwire.OpTenantGetByName,
-	"/platform.v1.TenantService/ListTenants":     quicwire.OpTenantList,
-	"/platform.v1.TenantService/UpdateTenant":    quicwire.OpTenantUpdate,
-	"/platform.v1.TenantService/SuspendTenant":   quicwire.OpTenantSuspend,
-	"/platform.v1.TenantService/ResumeTenant":    quicwire.OpTenantResume,
-	"/platform.v1.TenantService/GetQuotas":       quicwire.OpTenantGetQuotas,
-	"/platform.v1.TenantService/UpdateQuotas":    quicwire.OpTenantUpdateQuotas,
-	"/platform.v1.TenantService/GetUsage":        quicwire.OpTenantGetUsage,
+	"/platform.v1.TenantService/CreateTenant":       quicwire.OpTenantCreate,
+	"/platform.v1.TenantService/DeleteTenant":       quicwire.OpTenantDelete,
+	"/platform.v1.TenantService/GetTenant":          quicwire.OpTenantGet,
+	"/platform.v1.TenantService/GetTenantByName":    quicwire.OpTenantGetByName,
+	"/platform.v1.TenantService/ListTenants":        quicwire.OpTenantList,
+	"/platform.v1.TenantService/UpdateTenant":       quicwire.OpTenantUpdate,
+	"/platform.v1.TenantService/SuspendTenant":      quicwire.OpTenantSuspend,
+	"/platform.v1.TenantService/ResumeTenant":       quicwire.OpTenantResume,
+	"/platform.v1.TenantService/GetQuotas":          quicwire.OpTenantGetQuotas,
+	"/platform.v1.TenantService/UpdateQuotas":       quicwire.OpTenantUpdateQuotas,
+	"/platform.v1.TenantService/GetUsage":           quicwire.OpTenantGetUsage,
+	"/platform.v1.TenantService/CheckQuota":         quicwire.OpTenantCheckQuota,
+	"/platform.v1.TenantService/Sync":               quicwire.OpTenantSync,
+	"/platform.v1.TenantService/RotateTenantDEK":    quicwire.OpTenantRotateDEK,
+	"/platform.v1.TenantService/GetTenantDEKStatus": quicwire.OpTenantGetDEKStatus,
 	// Per-tenant barrier ops share OpTenantBarrierCategory and dispatch via
 	// payload[0] on the server (pkg/api/daemon/quic_tenant.go::handleTenantBarrierCategory).
 	// The SDK adapter prepends the sub-opcode automatically; see
@@ -1048,18 +1053,19 @@ func (c *quicClientConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, m
 
 // quicStatusToGRPCMap provides O(1) lookup for QUIC status to gRPC code mapping.
 var quicStatusToGRPCMap = map[byte]codes.Code{
-	quicwire.StatusOK:                codes.OK,
-	quicwire.StatusInvalidRequest:    codes.InvalidArgument,
-	quicwire.StatusNotFound:          codes.NotFound,
-	quicwire.StatusUnauthorized:      codes.Unauthenticated,
-	quicwire.StatusInternalError:     codes.Internal,
-	quicwire.StatusTimeout:           codes.DeadlineExceeded,
-	quicwire.StatusAlreadyExists:     codes.AlreadyExists,
-	quicwire.StatusPermissionDenied:  codes.PermissionDenied,
-	quicwire.StatusResourceExhausted: codes.ResourceExhausted,
-	quicwire.StatusInvalidArgument:   codes.InvalidArgument,
-	quicwire.StatusUnavailable:       codes.Unavailable,
-	quicwire.StatusNotImplemented:    codes.Unimplemented,
+	quicwire.StatusOK:                 codes.OK,
+	quicwire.StatusInvalidRequest:     codes.InvalidArgument,
+	quicwire.StatusNotFound:           codes.NotFound,
+	quicwire.StatusUnauthorized:       codes.Unauthenticated,
+	quicwire.StatusInternalError:      codes.Internal,
+	quicwire.StatusTimeout:            codes.DeadlineExceeded,
+	quicwire.StatusAlreadyExists:      codes.AlreadyExists,
+	quicwire.StatusPermissionDenied:   codes.PermissionDenied,
+	quicwire.StatusResourceExhausted:  codes.ResourceExhausted,
+	quicwire.StatusInvalidArgument:    codes.InvalidArgument,
+	quicwire.StatusUnavailable:        codes.Unavailable,
+	quicwire.StatusNotImplemented:     codes.Unimplemented,
+	quicwire.StatusFailedPrecondition: codes.FailedPrecondition,
 }
 
 // translateQUICErrorToGRPC translates QUIC errors to gRPC status errors.

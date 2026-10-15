@@ -20,6 +20,8 @@ import (
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/common"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Client provides access to IDevID service operations.
@@ -70,11 +72,13 @@ func (c *Client) HasIDevID(ctx context.Context) (bool, error) {
 	return resp.Exists, nil
 }
 
-// DeleteIDevID removes the IDevID key from the TPM.
+// DeleteIDevID asks the daemon to delete the IDevID key. Every daemon
+// transport refuses, so this returns *ErrIdentityKeyNotDeletable and the key
+// stays in the TPM; DeleteIDevIDCertificate deletes the certificate.
 func (c *Client) DeleteIDevID(ctx context.Context) error {
 	_, err := c.grpc.DeleteIDevID(ctx, &platformv1.DeleteIDevIDRequest{})
 	if err != nil {
-		return &ErrDeleteIDevIDFailed{Cause: err}
+		return identityKeyDeleteError("IDevID", err, &ErrDeleteIDevIDFailed{Cause: err})
 	}
 	return nil
 }
@@ -108,13 +112,25 @@ func (c *Client) HasIAK(ctx context.Context) (bool, error) {
 	return resp.Exists, nil
 }
 
-// DeleteIAK removes the IAK key from the TPM.
+// DeleteIAK asks the daemon to delete the IAK. Every daemon transport
+// refuses, so this returns *ErrIdentityKeyNotDeletable and the key stays in
+// the TPM; DeleteIAKCertificate deletes the certificate.
 func (c *Client) DeleteIAK(ctx context.Context) error {
 	_, err := c.grpc.DeleteIAK(ctx, &platformv1.DeleteIAKRequest{})
 	if err != nil {
-		return &ErrDeleteIAKFailed{Cause: err}
+		return identityKeyDeleteError("IAK", err, &ErrDeleteIAKFailed{Cause: err})
 	}
 	return nil
+}
+
+// identityKeyDeleteError classifies a failed IDevID or IAK key delete: the
+// daemon's refusal (gRPC FailedPrecondition) becomes
+// *ErrIdentityKeyNotDeletable, and any other failure is returned as failed.
+func identityKeyDeleteError(key string, err, failed error) error {
+	if status.Code(err) == codes.FailedPrecondition {
+		return &ErrIdentityKeyNotDeletable{Key: key, Cause: err}
+	}
+	return failed
 }
 
 // CSR Operations

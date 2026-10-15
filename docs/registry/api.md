@@ -145,9 +145,12 @@ Both catalogs are **default-deny**
 `RegistryService` RPC carries a required scope** in the gRPC catalog
 (`pkg/api/grpc/method_permissions.go`): `Inspect`, `List`, `Status` and `Pull`
 need `registry:read`, `Push` needs `registry:write`, and `Delete` needs
-`registry:delete`. The four `platform_registry_*` MCP tools are not in the MCP
-permission map, so every caller is refused with `AuthErrorToolNotClassified`
-until they are classified.
+`registry:delete`. The four `platform_registry_*` MCP tools carry their gRPC
+twin's scope (#304, `pkg/api/mcp/authz.go`): `platform_registry_status`,
+`platform_registry_list` and `platform_registry_inspect` need `registry:read`,
+`platform_registry_delete` needs `registry:delete`. A caller without the scope
+gets `PermissionDenied` (`-32003`) and the tool never runs. Registry artifacts
+are platform-level: no transport scopes them to a tenant.
 
 `VerifyClient` ([engineering.md](engineering.md) §2) is the platform-curated
 API's attestation control. It does **not** run on the `/v2` path: the
@@ -201,6 +204,13 @@ Payloads are capped at `MaxPayloadSize` (16 MiB) and auth tokens at
 **503 is meaningful.** When the daemon starts without a registry service, every
 REST route returns 503 with a structured "not configured" envelope rather than
 404 or 500, so an operator can distinguish a disabled feature from a broken one.
+
+**MCP answers with the REST and QUIC classes** (`pkg/api/daemon/mcp_registry.go`,
+#304): an unwired registry is `Unavailable` (`ErrRegistryNotConfigured`; gRPC
+says `FailedPrecondition`), a missing `repository` or `reference` is
+`InvalidArgument`, and a service error, wrapped in `ErrRegistryServiceFailed`,
+takes the code `grpcapi.RegistryErrorStatus` gives it on gRPC — an unknown
+artifact is `NotFound`.
 
 **A `/v2` path no route claims returns a JSON 404, not the web console.** The
 SPA catch-all declines the whole `/v2/` namespace along with the other API

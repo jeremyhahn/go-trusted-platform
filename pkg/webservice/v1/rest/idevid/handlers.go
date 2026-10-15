@@ -16,10 +16,14 @@ package idevid
 import (
 	"net/http"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 // Handlers serves /api/v1/idevid using the supplied gRPC server impl.
@@ -44,6 +48,24 @@ func (h *Handlers) ensureAvailable(w http.ResponseWriter, r *http.Request) bool 
 		return false
 	}
 	return true
+}
+
+// writeKeyDeleteError answers a failed IDevID or IAK key delete. The
+// service's refusal (FailedPrecondition, ErrDeviceIdentityKeyNotDeletable)
+// is 412, as on the daemon listener: the SDK's REST transport reads 412 back
+// as FailedPrecondition and so returns its typed refusal, where protorest's
+// shared 400 (#665) would read as an ordinary failure. Every other error
+// takes the shared mapping.
+func (h *Handlers) writeKeyDeleteError(w http.ResponseWriter, r *http.Request, err error) {
+	if status.Code(err) != codes.FailedPrecondition {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	h.respWriter.Write(w, r, http.StatusPreconditionFailed, restwire.WebServiceResponse{
+		Code:    http.StatusPreconditionFailed,
+		Error:   err.Error(),
+		Success: false,
+	})
 }
 
 // GenerateIDevID handles POST /api/v1/idevid/generate.
@@ -114,7 +136,7 @@ func (h *Handlers) DeleteIDevID(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := h.server.DeleteIDevID(r.Context(), &platformv1.DeleteIDevIDRequest{})
 	if err != nil {
-		protorest.WriteError(w, r, h.respWriter, err)
+		h.writeKeyDeleteError(w, r, err)
 		return
 	}
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
@@ -171,7 +193,7 @@ func (h *Handlers) DeleteIAK(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := h.server.DeleteIAK(r.Context(), &platformv1.DeleteIAKRequest{})
 	if err != nil {
-		protorest.WriteError(w, r, h.respWriter, err)
+		h.writeKeyDeleteError(w, r, err)
 		return
 	}
 	protorest.WriteSuccess(w, r, h.respWriter, resp)

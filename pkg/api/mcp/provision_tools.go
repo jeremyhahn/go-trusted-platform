@@ -51,10 +51,6 @@ var ErrProvisionNotConfigured = errors.New("provision: config delivery service n
 // missing or empty.
 var ErrProvisionSessionIDRequired = errors.New("provision: session_id is required")
 
-// ErrProvisionProfileIDRequired indicates the profile_id argument is
-// missing or zero.
-var ErrProvisionProfileIDRequired = errors.New("provision: profile_id is required and must be non-zero")
-
 // ErrProvisionDigestRequired indicates the digest argument is missing or
 // empty.
 var ErrProvisionDigestRequired = errors.New("provision: digest is required")
@@ -345,21 +341,20 @@ func provisionSessionID(args map[string]interface{}) (string, error) {
 // provisionProfileID extracts the required profile_id argument as a uint64.
 // It accepts JSON numbers and decimal strings; uint64 IDs SHOULD be passed
 // as strings to avoid precision loss past 2^53 (repo convention for uint64
-// IDs on the wire). Returns ErrProvisionProfileIDRequired when missing or
-// zero and ErrProvisionInvalidProfileID when unparseable.
+// IDs on the wire). A missing or empty profile_id reads as 0, which the
+// config delivery service refuses with configdelivery.ErrProfileIDRequired
+// like every other transport; ErrProvisionInvalidProfileID is returned when
+// the value is negative or unparseable.
 func provisionProfileID(args map[string]interface{}) (uint64, error) {
 	switch v := args["profile_id"].(type) {
 	case nil:
-		return 0, ErrProvisionProfileIDRequired
+		return 0, nil
 	case float64:
 		if v < 0 {
 			return 0, ErrProvisionInvalidProfileID{
 				Value: strconv.FormatFloat(v, 'f', -1, 64),
 				Cause: errors.New("negative value"),
 			}
-		}
-		if v == 0 {
-			return 0, ErrProvisionProfileIDRequired
 		}
 		return uint64(v), nil
 	case int:
@@ -369,9 +364,6 @@ func provisionProfileID(args map[string]interface{}) (uint64, error) {
 				Cause: errors.New("negative value"),
 			}
 		}
-		if v == 0 {
-			return 0, ErrProvisionProfileIDRequired
-		}
 		return uint64(v), nil
 	case int64:
 		if v < 0 {
@@ -380,25 +372,16 @@ func provisionProfileID(args map[string]interface{}) (uint64, error) {
 				Cause: errors.New("negative value"),
 			}
 		}
-		if v == 0 {
-			return 0, ErrProvisionProfileIDRequired
-		}
 		return uint64(v), nil
 	case uint64:
-		if v == 0 {
-			return 0, ErrProvisionProfileIDRequired
-		}
 		return v, nil
 	case string:
 		if v == "" {
-			return 0, ErrProvisionProfileIDRequired
+			return 0, nil
 		}
 		id, err := strconv.ParseUint(v, 10, 64)
 		if err != nil {
 			return 0, ErrProvisionInvalidProfileID{Value: v, Cause: err}
-		}
-		if id == 0 {
-			return 0, ErrProvisionProfileIDRequired
 		}
 		return id, nil
 	default:
