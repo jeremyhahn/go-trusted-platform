@@ -1,6 +1,6 @@
 # Trusted Platform Module
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > Background on the TPM, with tools and tutorials.
 
 This document provides information on what a TPM is along with tools, tutorials,

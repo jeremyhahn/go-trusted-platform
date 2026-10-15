@@ -1,6 +1,6 @@
 # TPM Attestation
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > Quote generation, verification and IDevID attestation as built.
 
 This document describes the remote attestation capabilities of the go-trusted-platform,
@@ -57,7 +57,7 @@ A TPM quote is a signed statement of current PCR values:
 │  │ magic: TPM_GENERATED_VALUE (0xff544347)                     │  │
 │  │ type: TPM_ST_ATTEST_QUOTE                                   │  │
 │  │ qualifiedSigner: AK name (hash of public area)              │  │
-│  │ extraData: nonce from verifier                              │  │
+│  │ extraData: SHA-256(nonce || channel binding)                │  │
 │  │ clockInfo: TPM clock values                                 │  │
 │  │ firmwareVersion: TPM firmware version                       │  │
 │  │ attested:                                                   │  │
@@ -81,19 +81,24 @@ A TPM quote is a signed statement of current PCR values:
 ```go
 // gRPC Quote Request
 request := &platformv1.QuoteRequest{
-    AkHandle:   0x81010002,
-    AkPassword: "",
     PcrIndices: []uint32{0, 1, 2, 3, 7, 8, 9},
-    PcrBank:    platformv1.PCRBank_PCR_BANK_SHA256,
     Nonce:      nonce,
 }
 
 response, err := client.Quote(ctx, request)
-// response.Quote     - TPMS_ATTEST structure
-// response.Signature - Quote signature
-// response.PcrValues - Individual PCR values
-// response.EventLog  - TPM event log (optional)
+// response.Quote              - TPMS_ATTEST structure
+// response.Signature          - Quote signature
+// response.EventLog           - TPM event log
+// response.ChannelBinding     - TLS exporter value the nonce was bound to
+// response.SignatureAlgorithm - Scheme the quote was signed with
 ```
+
+`TPMService.Quote` (`pkg/api/daemon/tpm_grpc_service.go`) reads only
+`pcr_indices` and `nonce`; `ak_handle`, `ak_password` and `pcr_bank` are not
+used, and `pcr_values` is not filled (read them with `GetPCRs`). The TPM never
+quotes the nonce as sent: it quotes SHA-256(nonce || channel binding), where the
+binding is the TLS exporter of the connection the request arrived on (#482,
+`pkg/attestation/channelbind`). A request with no TLS connection is refused.
 
 ## Quote Verification
 
@@ -113,7 +118,7 @@ response, err := client.Quote(ctx, request)
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │ • Check magic value (TPM_GENERATED_VALUE)                   │  │
 │  │ • Verify type is TPM_ST_ATTEST_QUOTE                        │  │
-│  │ • Confirm nonce matches sent value                          │  │
+│  │ • Confirm extraData matches the (bound) nonce               │  │
 │  └────────────────────────────────────────────────────────────┘  │
 │                                                                   │
 │  3. Verify PCR Values                                             │
@@ -138,23 +143,34 @@ response, err := client.Quote(ctx, request)
 ```go
 // gRPC Verify Quote Request
 verifyRequest := &platformv1.VerifyQuoteRequest{
-    Quote:        response.Quote,
-    Signature:    response.Signature,
-    AkPublic:     akPublicKey,
-    Nonce:        nonce,
-    ExpectedPcrs: expectedPcrValues,
+    Quote:              response.Quote,
+    Signature:          response.Signature,
+    AkPublic:           akPublicKey, // empty: the node's own IAK
+    Nonce:              nonce,
+    ChannelBinding:     response.ChannelBinding,
+    SignatureAlgorithm: response.SignatureAlgorithm, // required
 }
 
 verifyResponse, err := client.VerifyQuote(ctx, verifyRequest)
-// verifyResponse.Verified - true if attestation passed
+// verifyResponse.Verified - true if the checks below passed
 // verifyResponse.Message  - verification result details
-// verifyResponse.ActualPcrs - actual PCR values from quote
 ```
+
+`TPMService.VerifyQuote` performs steps 1 and 2 above: it checks the
+TPMS_ATTEST magic and type, compares `extraData` with the nonce (or with
+SHA-256(nonce || channel_binding) when a binding is given), and verifies the
+signature under `signature_algorithm`; an absent or unknown algorithm is
+refused. Empty `quote` or `signature` is `InvalidArgument`. It does not compare
+`expected_pcrs` and does not fill `actual_pcrs`: steps 3 and 4 are left to the
+caller.
 
 ## IDevID Attestation via ACME enroll-01
 
-The platform implements device attestation using the ACME enroll-01 (device-01)
-challenge type for IDevID certificate issuance:
+The platform implements device attestation using the ACME enroll-01 challenge
+type for IDevID certificate issuance. A device runs it with `platformctl tpm
+enroll` (`pkg/cli/commands/tpm/enroll.go`); the daemon registers the `enroll-01`
+verifier in `pkg/daemon/commands/serve.go`, and the TCG-CSR handling and
+credential activation below run in go-xkms, reached through the go-quicbaas SDK:
 
 ```
 ┌───────────────────────────────────────────────────────────────────┐
@@ -298,15 +314,17 @@ The platform verifies boot measurements via the TPM event log:
 
 ```go
 // Get TPM Event Log
-request := &platformv1.GetEventLogRequest{
-    Format: "json", // json, binary, text
-}
+request := &platformv1.GetEventLogRequest{}
 
 response, err := client.GetEventLog(ctx, request)
-// response.EventLog   - Event log data
-// response.Format     - Returned format
-// response.EventCount - Number of events
+// response.EventLog   - Raw binary event log
+// response.Format     - Always "tcg2"
+// response.EventCount - Number of parsed events
+// response.Entries    - Parsed events (PCR index, type, digests, string)
 ```
+
+The request's `format` is not read. When the log cannot be parsed, only the
+raw blob is returned.
 
 ## PCR Reading
 
@@ -323,41 +341,30 @@ for _, pcr := range response.PcrValues {
 }
 ```
 
+With no `indices` the daemon reads PCRs 0-23; with `bank` unset it returns
+every bank the TPM supports.
+
 ## Attestation Policies
 
-### Boot Integrity Policy
+There is no per-policy PCR list in the configuration (`attestation.policies`
+does not exist). The `attestation:` section (`config.Attestation`,
+`pkg/config/attestation.go`) carries the quote PCR selection and one policy
+engine block:
 
 ```yaml
 attestation:
-  policies:
-    boot_integrity:
-      description: "Verify firmware and secure boot state"
-      pcrs:
-        - index: 0
-          bank: SHA256
-          description: "Core firmware"
-        - index: 7
-          bank: SHA256
-          description: "Secure Boot state"
-      action: deny  # deny access if verification fails
+  quote-pcrs: [0, 7, 9]           # example: PCRs to quote
+  policy:
+    engine: opa                   # opa or rego
+    policy-dir: /etc/trusted-platform/policies
+    default-action: deny          # allow or deny
 ```
 
-### Runtime Integrity Policy
-
-```yaml
-attestation:
-  policies:
-    runtime_integrity:
-      description: "Verify kernel and OS state"
-      pcrs:
-        - index: 8
-          bank: SHA256
-        - index: 9
-          bank: SHA256
-        - index: 11
-          bank: SHA256
-      action: audit  # log but allow
-```
+The `policy` defaults are `opa`, `/etc/trusted-platform/policies` and `deny`;
+validation (`PolicyConfig.Validate`) refuses an `engine` without a
+`policy-dir`. Policies themselves are Rego files in `policy-dir`
+(`pkg/policy/opa`). The shipped `single-node/default.yaml` has no
+`attestation:` block.
 
 ## Error Handling
 
@@ -365,7 +372,7 @@ attestation:
 |-------------------------|----------------------------------------------|
 | Invalid nonce           | Reject quote, require fresh attestation      |
 | Signature verification  | Reject quote, log failure                    |
-| PCR mismatch            | Policy-dependent (deny/audit)                |
+| PCR mismatch            | Policy-dependent (`default-action` allow/deny) |
 | Event log mismatch      | Additional verification required             |
 | AK not trusted          | Require AK certification                     |
 | EK certificate invalid  | Reject device enrollment                     |

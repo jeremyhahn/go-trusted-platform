@@ -1,13 +1,15 @@
 # TPM Configuration
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > The `tpm:` configuration section and its flags.
 
 This document describes the configuration options for the TPM 2.0 integration in go-trusted-platform.
 
 ## Configuration Overview
 
-TPM configuration is specified in the platform configuration file (YAML format) and can be overridden via command-line flags.
+TPM configuration is specified in the platform configuration file (YAML format). The shipped block is
+`configs/platform/templates/single-node/default.yaml` (`tpm:`). There are no global TPM flags or
+environment variables; the `platformctl tpm` commands take the per-command flags listed below.
 
 ## Configuration File
 
@@ -84,7 +86,7 @@ tpm:
 #### Certificate handles
 
 **`iak.cert-handle` and `idevid.cert-handle` are currently IGNORED.** Both are
-cleared at startup, and the IAK and IDevID certificates are kept in the platform
+cleared at startup (`applyCertHandleNVInterim`, `pkg/app/tpm_cert_nv.go`), and the IAK and IDevID certificates are kept in the platform
 certificate store instead of TPM NVRAM. A warning naming the ignored handle is
 logged at boot.
 
@@ -116,14 +118,15 @@ tpm:
   golden-pcrs: [7, 9]
 ```
 
-### Keystore Configuration
+### Platform SRK Configuration
 
 ```yaml
 tpm:
-  # TPM keystore for application keys
-  keystore:
+  # Platform storage root key for application keys
+  platform-srk:
     srk-handle: 0x81000002
-    srk-auth: ""                # SRK authorization (empty for no auth)
+    # SRK authorization, generated and kept in the platform KMS
+    srk-auth: "kms://tpm/platform-srk/srk-auth?ensure=true&len=32&enc=raw"
     platform-policy: true       # Bind to platform PCR state
 ```
 
@@ -177,64 +180,59 @@ tpm:
   platform-pcr-bank: sha256
   golden-pcrs: [7, 9]
 
-  # TPM keystore for application keys
-  keystore:
+  # Platform storage root key for application keys
+  platform-srk:
     srk-handle: 0x81000002
-    srk-auth: ""
+    srk-auth: "kms://tpm/platform-srk/srk-auth?ensure=true&len=32&enc=raw"
     platform-policy: true
 ```
 
 ## Command-Line Flags
 
-### Global TPM Flags
+From `pkg/cli/commands/tpm/`.
+
+### `tpm provision`
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--tpm-device` | TPM device path | `/dev/tpmrm0` |
-| `--tpm-simulator` | Use software TPM | `false` |
-| `--tpm-debug` | Enable debug logging | `false` |
+| `--create-ek` | Create the EK | `true` |
+| `--create-srk` | Create the SRK | `true` |
+| `--create-ak` | Create the AK | `true` |
+| `--owner-password` | Owner hierarchy password | - |
+| `--endorsement-password` | Endorsement hierarchy password | - |
 
-### Authorization Flags
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--so-pin` | Prompt for SO PIN | `false` |
-| `--raw-so-pin` | SO PIN value (automation) | - |
-| `--pin` | Prompt for user PIN | `false` |
-| `--raw-pin` | User PIN value (automation) | - |
-
-### Key Operation Flags
+### `tpm ek create` / `tpm srk create`
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--handle` | TPM handle for operation | varies |
-| `--algorithm` | Key algorithm (rsa/ecdsa) | `rsa` |
-| `--key-size` | RSA key size in bits | `2048` |
-| `--ecc-curve` | ECC curve name | `P-256` |
-| `--persistent` | Make key persistent | `true` |
+| `--algorithm` | `RSA-2048`, `RSA-3072`, `ECDSA-P256` or `ECDSA-P384` | `RSA-2048` |
+| `--handle` | Persistent handle | EK `0x81010001`, SRK `0x81000001` |
+| `--persistent` | Make the key persistent | `true` |
+| `--password` | Key password | - |
+| `--parent` | (`srk create` only) parent handle | `0x81010001` |
+| `--parent-password` | (`srk create` only) parent password | - |
 
-### Seal/Unseal Flags
+### `tpm seal` / `tpm unseal`
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--parent` | Parent key handle | `0x81000002` |
-| `--parent-password` | Parent key password | - |
-| `--parent-policy` | Use PCR policy for parent | `true` |
+| `--cn` | Common name of the sealed object (required) | - |
+| `--data` | (`seal` only) data to seal | - |
 | `--password` | Sealed object password | - |
-| `--policy` | Attach PCR policy | `true` |
-| `--overwrite` | Overwrite existing object | `false` |
+| `--parent` | Parent key handle | `0x81000001` |
+| `--parent-password` | Parent key password | - |
+| `--pcrs` | PCR indices to bind to (comma-separated) | - |
+| `--pcr-bank` | `sha1`, `sha256`, `sha384` or `sha512` | `sha256` |
+| `--overwrite` | (`seal` only) overwrite existing sealed data | `false` |
 
-## Environment Variables
+### `tpm clear`
 
-TPM configuration can also be set via environment variables:
-
-| Variable | Description |
-|----------|-------------|
-| `TPM_DEVICE` | TPM device path |
-| `TPM_SIMULATOR` | Use software TPM (true/false) |
-| `TPM_OWNER_PASSWORD` | Owner hierarchy password |
-| `TPM_ENDORSEMENT_PASSWORD` | Endorsement hierarchy password |
-| `TPM_LOCKOUT_PASSWORD` | Lockout hierarchy password |
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--owner-password` | Owner (lockout) authorization | - |
+| `--confirm` | Required; without it the command only warns | `false` |
+| `--force` | Clear through UEFI PPI (bypasses DA lockout, reboots) | `false` |
+| `--device` | TPM device path | `/dev/tpm0` |
 
 ## PCR Reference
 
@@ -276,8 +274,8 @@ TPM configuration can also be set via environment variables:
 |--------|----------|-------------|
 | 0x81010001 | EK | Endorsement Key (RSA) |
 | 0x81010002 | AK/IAK | Attestation Key |
-| 0x81000001 | SRK | Storage Root Key |
-| 0x81000002 | SSRK | Shared Storage Root Key |
+| 0x81000001 | SSRK | Shared Storage Root Key (`tpm.ssrk.handle`) |
+| 0x81000002 | Platform SRK | Application key parent (`tpm.platform-srk.srk-handle`) |
 | 0x81020000 | IDevID | Device Identity Key |
 | 0x81000100+ | App Keys | Application keys |
 
@@ -295,14 +293,12 @@ TPM configuration can also be set via environment variables:
 
 ```yaml
 tpm:
-  simulator: true
+  # A socket path selects swtpm; simulator: true would take precedence
+  simulator: false
   device: /tmp/swtpm-sock
-
-  # swtpm startup options
-  swtpm:
-    state_dir: /var/lib/swtpm
-    log_level: 3
 ```
+
+swtpm itself is started outside the platform; there is no `tpm.swtpm` key.
 
 ### Starting swtpm
 
@@ -338,7 +334,7 @@ qemu-system-x86_64 \
 | "TPM not found" | No TPM device | Check /dev/tpmrm0 exists |
 | "Permission denied" | Insufficient permissions | Add user to tss group |
 | "TPM in lockout" | Too many auth failures | Wait or clear lockout |
-| "Handle exists" | Key already provisioned | Use --overwrite or different handle |
+| "Handle exists" | Key already provisioned | Use `--overwrite` (seal, iak, idevid, ldevid) or a different handle |
 
 ### Verify TPM Access
 
@@ -356,11 +352,11 @@ sudo usermod -aG tss $(whoami)
 ### Reset TPM Lockout
 
 ```bash
-# Clear lockout (requires lockout auth)
-platformctl tpm clear --so-pin
+# Clear the TPM (requires owner authorization)
+platformctl tpm clear --owner-password <password> --confirm
 
 # Force UEFI clear (requires reboot)
-platformctl tpm clear --force
+platformctl tpm clear --force --confirm
 ```
 
 ## Security Recommendations
@@ -384,10 +380,10 @@ tpm:
   platform-pcr-bank: sha256
   golden-pcrs: [0, 1, 2, 3, 7, 8, 9, 11]
 
-  # Keystore with platform policy
-  keystore:
+  # Platform SRK with platform policy
+  platform-srk:
     srk-handle: 0x81000002
-    srk-auth: ""
+    srk-auth: "kms://tpm/platform-srk/srk-auth?ensure=true&len=32&enc=raw"
     platform-policy: true
 ```
 
@@ -432,13 +428,13 @@ The "simplest implementation" may also be safely implemented by the Platform Adm
 
 2. **Provision TPM with Platform Keys**
    ```bash
-   platformctl platform provision --tpm2
+   platformctl tpm provision
    ```
 
 3. **Verify Key Hierarchy**
    ```bash
-   platformctl tpm ek show
-   platformctl tpm srk show
+   platformctl tpm ek info
+   platformctl tpm srk info
    ```
 
 ## Related Documentation

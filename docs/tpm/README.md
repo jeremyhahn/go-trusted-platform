@@ -1,6 +1,6 @@
 # TPM2 Module
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > Overview of the TPM 2.0 integration. The API contract is [api.md](api.md).
 
 The Trusted Platform Module (TPM) 2.0 integration provides hardware-backed security
@@ -69,28 +69,28 @@ platformctl tpm info
 ### 2. Provision TPM
 
 ```bash
-# Provision TPM with platform keys
-platformctl platform provision --tpm2
+# Create the EK, SRK and attestation key (each on by default)
+platformctl tpm provision
 ```
 
 ### 3. Display Key Hierarchy
 
 ```bash
 # View Endorsement Key
-platformctl tpm ek show
+platformctl tpm ek info
 
 # View Storage Root Key
-platformctl tpm srk show
+platformctl tpm srk info
 ```
 
 ### 4. Seal Data
 
 ```bash
-# Seal a secret to current PCR state
-platformctl tpm seal my-secret "sensitive data"
+# Seal a secret to the current state of PCR 7
+platformctl tpm seal --cn my-secret --data "sensitive data" --pcrs 7
 
 # Unseal the secret (requires matching PCR state)
-platformctl tpm unseal my-secret
+platformctl tpm unseal --cn my-secret --pcrs 7
 ```
 
 ## Key Hierarchy
@@ -114,7 +114,7 @@ The TPM key hierarchy follows TCG recommended guidance:
 │             │                                                     │
 │             ▼                                                     │
 │  ┌──────────┴─────────────┐  Storage Root Key (SRK)               │
-│  │        SSRK            │  Handle: 0x81000002                   │
+│  │        SSRK            │  Handle: 0x81000001                   │
 │  │   (Shared Storage)     │  Protects all storage hierarchy keys  │
 │  └──────────┬─────────────┘                                       │
 │             │                                                     │
@@ -140,7 +140,8 @@ The TPM key hierarchy follows TCG recommended guidance:
 
 ## Configuration
 
-TPM configuration is specified in the platform configuration file:
+TPM configuration is specified in the platform configuration file (as shipped in
+`configs/platform/templates/single-node/default.yaml`):
 
 ```yaml
 tpm:
@@ -188,10 +189,10 @@ tpm:
   platform-pcr-bank: sha256     # PCR bank to use
   golden-pcrs: [7, 9]           # PCRs for sealing (Secure Boot + kernel cmdline)
 
-  # TPM keystore for application keys
-  keystore:
+  # PlatformSRK: a different key from the SSRK
+  platform-srk:
     srk-handle: 0x81000002
-    srk-auth: ""                # SRK authorization (empty for no auth)
+    srk-auth: "kms://tpm/platform-srk/srk-auth?ensure=true&len=32&enc=raw"
     platform-policy: true       # Bind to platform PCR state
 ```
 

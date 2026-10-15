@@ -1,6 +1,6 @@
 # TPM Sealing Operations
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > Sealing and unsealing data to platform state.
 
 This document describes the TPM sealing and unsealing capabilities for protecting
@@ -76,53 +76,52 @@ specific state, typically defined by PCR values. This binds secrets to boot inte
 
 ### Command Line
 
+`platformctl tpm seal` (`pkg/cli/commands/tpm/seal.go`) takes the secret in
+`--data`; it reads no positional arguments and no stdin. It calls the daemon's
+`TPMService.Seal` RPC.
+
 ```bash
-# Seal secret to current PCR state
-platformctl tpm seal my-secret "sensitive-data"
-
-# Seal with specific parent key
-platformctl tpm seal my-secret "data" --parent 0x81000002
-
-# Seal with password protection
-platformctl tpm seal my-secret "data" --password "keypass"
-
-# Seal from stdin
-echo "sensitive-data" | platformctl tpm seal my-secret
-
 # Seal with password auth only (no PCR binding: omit --pcrs)
-platformctl tpm seal --cn my-secret --data "data" --password "$PW"
+platformctl tpm seal --cn my-secret --data "sensitive-data" --password "$PW"
+
+# Seal to PCRs 7 and 9 of the sha256 bank
+platformctl tpm seal --cn my-secret --data "sensitive-data" --pcrs 7,9
+
 ```
 
 ### Seal Options
 
 | Option            | Description                                    | Default      |
 |-------------------|------------------------------------------------|--------------|
-| `--parent`        | Parent key handle (SRK)                        | 0x81000002   |
-| `--parent-password`| Parent key authorization                      | (empty)      |
+| `--cn`            | Common name of the sealed object (required)    | -            |
+| `--data`          | Data to seal                                   | (empty)      |
 | `--password`      | Sealed object password                         | (empty)      |
+| `--parent`        | Parent key handle                              | 0x81000001   |
+| `--parent-password`| Parent key authorization                      | (empty)      |
 | `--pcrs`          | PCR indices to bind the sealed object to       | (none)       |
-| `--pcr-bank`      | PCR bank for `--pcrs`                          | sha256       |
+| `--pcr-bank`      | `sha1`, `sha256`, `sha384` or `sha512`         | sha256       |
 | `--overwrite`     | Overwrite existing sealed object               | false        |
+
+The daemon always seals under the SSRK (`buildSealOptions`,
+`pkg/api/daemon/tpm_grpc_service.go`): it does not read `--parent`,
+`--parent-password` or `--overwrite` from the request. Empty data is refused
+with `InvalidArgument`.
 
 ### gRPC Seal Request
 
 ```go
 request := &platformv1.SealRequest{
-    Data:           []byte("sensitive-data"),
-    Cn:             "my-secret",
-    ParentHandle:   0x81000002,
-    ParentPassword: "",
-    Password:       "optional-key-password",
-    PcrIndices:     []uint32{7, 8, 9},
-    PcrBank:        platformv1.PCRBank_PCR_BANK_SHA256,
-    Overwrite:      false,
+    Data:       []byte("sensitive-data"),
+    Cn:         "my-secret",
+    Password:   "optional-key-password",
+    PcrIndices: []uint32{7, 9},
+    PcrBank:    platformv1.PCRBank_PCR_BANK_SHA256,
 }
 
 response, err := client.Seal(ctx, request)
-// response.Status     - Operation status
-// response.SealedData - Encrypted blob
-// response.PublicKey  - Public portion
-// response.PrivateKey - Wrapped private portion
+// response.Status     - success and "sealed <key id>"
+// response.SealedData - length-prefixed TPM2B_PUBLIC + TPM2B_PRIVATE
+// response.PublicKey and response.PrivateKey are not set
 ```
 
 ## Unseal Operation
@@ -130,201 +129,98 @@ response, err := client.Seal(ctx, request)
 ### Command Line
 
 ```bash
-# Unseal secret (requires matching PCR state)
-platformctl tpm unseal my-secret
+# Unseal (requires the PCR state the object was sealed to)
+platformctl tpm unseal --cn my-secret
 
-# Unseal with password
-platformctl tpm unseal my-secret --password "keypass"
-
-# Unseal with specific parent
-platformctl tpm unseal my-secret --parent 0x81000002
+# Unseal a password-protected object
+platformctl tpm unseal --cn my-secret --password "$PW"
 ```
+
+In the default table output the command prints the unsealed data as is, so it
+can be redirected to a file; `-o json` and `-o yaml` wrap it with `success`
+and `cn` (`pkg/cli/commands/tpm/unseal.go`).
 
 ### Unseal Options
 
 | Option            | Description                                    | Default      |
 |-------------------|------------------------------------------------|--------------|
-| `--parent`        | Parent key handle                              | 0x81000002   |
-| `--parent-password`| Parent key authorization                      | (empty)      |
+| `--cn`            | Common name of the sealed object (required)    | -            |
 | `--password`      | Sealed object password                         | (empty)      |
+| `--parent`        | Parent key handle                              | 0x81000001   |
+| `--parent-password`| Parent key authorization                      | (empty)      |
+| `--pcrs`          | PCR indices                                    | (none)       |
+| `--pcr-bank`      | PCR bank                                       | sha256       |
+
+The daemon looks the object up by CN and reads only `cn` and `password` from
+the request; the PCR selection is the one recorded at seal time.
 
 ### gRPC Unseal Request
 
 ```go
 request := &platformv1.UnsealRequest{
-    Cn:             "my-secret",
-    ParentHandle:   0x81000002,
-    ParentPassword: "",
-    Password:       "optional-key-password",
-    PcrIndices:     []uint32{7, 8, 9},
-    PcrBank:        platformv1.PCRBank_PCR_BANK_SHA256,
+    Cn:       "my-secret",
+    Password: "optional-key-password",
 }
 
 response, err := client.Unseal(ctx, request)
-// response.Status - Operation status
-// response.Data   - Unsealed plaintext data
+// response.Data - Unsealed plaintext data (the daemon sets no Status)
 ```
 
 ## PCR Policies
 
-### Default Platform Policy
+`tpm seal` applies no default PCR policy: without `--pcrs` the object is
+protected by its password alone. With `--pcrs` the object gets a PCR policy on
+the chosen bank; when a `--password` is also set, the policy requires it too.
 
-The platform configures a default PCR policy for sealed objects:
+There is no `tpm.seal_policy` configuration key. The PCR lists the platform
+does configure are:
 
-```
-┌───────────────────────────────────────────────────────────────────┐
-│                       Platform PCR Policy                         │
-├───────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│  Firmware Integrity (PCRs 0-3, 7)                                 │
-│  ┌────────────────────────────────────────────────────────────┐  │
-│  │ PCR 0: Core UEFI code                                       │  │
-│  │ PCR 1: UEFI configuration                                   │  │
-│  │ PCR 2: Option ROM code                                      │  │
-│  │ PCR 3: Option ROM data                                      │  │
-│  │ PCR 7: Secure Boot state                                    │  │
-│  └────────────────────────────────────────────────────────────┘  │
-│                                                                   │
-│  Boot Integrity (PCRs 8-9)                                        │
-│  ┌────────────────────────────────────────────────────────────┐  │
-│  │ PCR 8: Kernel command line                                  │  │
-│  │ PCR 9: Kernel and initrd                                    │  │
-│  └────────────────────────────────────────────────────────────┘  │
-│                                                                   │
-│  UKI Integrity (PCR 11)                                           │
-│  ┌────────────────────────────────────────────────────────────┐  │
-│  │ PCR 11: Unified Kernel Image components                     │  │
-│  └────────────────────────────────────────────────────────────┘  │
-│                                                                   │
-└───────────────────────────────────────────────────────────────────┘
-```
+| Key | Shipped value | Used for |
+|-----|---------------|----------|
+| `seal-pcrs` | `[0, 7, 9]` | LUKS key sealing by the installer and initrd |
+| `tpm.golden-pcrs` | `[7, 9]` | Platform policy |
 
-### Policy Configuration
-
-```yaml
-tpm:
-  seal_policy:
-    # Default policy for all sealed objects
-    default:
-      pcr_bank: SHA256
-      pcrs: [7, 8, 9, 11]
-
-    # Named policy for specific use cases
-    firmware_only:
-      pcr_bank: SHA256
-      pcrs: [0, 1, 2, 3, 7]
-
-    # LUKS encryption policy
-    luks:
-      pcr_bank: SHA256
-      pcrs: [7, 11]
-      require_password: true
-```
+(Values from `configs/platform/templates/single-node/default.yaml`.)
 
 ## Data Protection Use Cases
 
 ### LUKS Disk Encryption
 
-```
-┌───────────────────────────────────────────────────────────────────┐
-│                       LUKS Key Sealing                            │
-├───────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│  Installation (First Boot):                                       │
-│  ┌────────────────────────────────────────────────────────────┐  │
-│  │ 1. Generate LUKS master key                                 │  │
-│  │ 2. Seal key to TPM with PCR policy                          │  │
-│  │ 3. Store sealed blob in LUKS token slot                     │  │
-│  └────────────────────────────────────────────────────────────┘  │
-│                                                                   │
-│  Subsequent Boots:                                                │
-│  ┌────────────────────────────────────────────────────────────┐  │
-│  │ 1. initrd loads sealed blob from LUKS header                │  │
-│  │ 2. Unseal using TPM (requires matching PCRs)                │  │
-│  │ 3. Unlock LUKS volume with unsealed key                     │  │
-│  │ 4. Continue boot                                            │  │
-│  └────────────────────────────────────────────────────────────┘  │
-│                                                                   │
-│  Recovery (PCR mismatch):                                         │
-│  ┌────────────────────────────────────────────────────────────┐  │
-│  │ 1. Unseal fails due to PCR change                           │  │
-│  │ 2. Prompt for recovery password                             │  │
-│  │ 3. User enters recovery password                            │  │
-│  │ 4. Re-seal key to new PCR state (if authorized)             │  │
-│  └────────────────────────────────────────────────────────────┘  │
-│                                                                   │
-└───────────────────────────────────────────────────────────────────┘
-```
+The LUKS volume key is sealed to `seal-pcrs` by the installer and unsealed by
+the initrd; that path does not use `platformctl tpm seal`. See
+[LUKS](../luks/user.md) and [Installer](../installer/user.md).
 
 ### Secret Management
 
 ```bash
 # Seal database credentials
-platformctl tpm seal db-credentials "postgres://user:pass@localhost/db"
+platformctl tpm seal --cn db-credentials --data "postgres://user:pass@localhost/db"
 
-# Seal API keys
-platformctl tpm seal api-key "sk_live_..."
-
-# Seal encryption keys
-openssl rand -base64 32 | platformctl tpm seal encryption-key
+# Seal a generated encryption key
+platformctl tpm seal --cn encryption-key --data "$(openssl rand -base64 32)"
 ```
 
 ### TLS Private Key Protection
 
 ```bash
 # Seal TLS private key
-cat server.key | platformctl tpm seal tls-private-key
+platformctl tpm seal --cn tls-private-key --data "$(cat server.key)"
 
 # Unseal for use
-platformctl tpm unseal tls-private-key > /run/secrets/server.key
+platformctl tpm unseal --cn tls-private-key > /run/secrets/server.key
 ```
 
 ## Sealed Object Storage
 
-```
-┌───────────────────────────────────────────────────────────────────┐
-│                      Sealed Object Storage                        │
-├───────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│  Key Store Path: ${platform-dir}/keys/tpm/                        │
-│  ┌────────────────────────────────────────────────────────────┐  │
-│  │ my-secret.pub    - Public portion (TPM2B_PUBLIC)            │  │
-│  │ my-secret.priv   - Private portion (wrapped, TPM2B_PRIVATE) │  │
-│  │ my-secret.policy - Policy digest                            │  │
-│  └────────────────────────────────────────────────────────────┘  │
-│                                                                   │
-│  The sealed data is stored encrypted in the private portion,      │
-│  protected by the parent key (SRK) and the PCR policy.            │
-│                                                                   │
-└───────────────────────────────────────────────────────────────────┘
-```
+The sealed object (TPM2B_PUBLIC and TPM2B_PRIVATE) is kept by the TPM keystore
+under its CN, protected by the SSRK and, when set, the PCR policy. Unseal
+finds it by CN alone.
 
 ## Compound Authorization
 
-Sealed objects can require multiple authorization factors:
-
-```
-┌───────────────────────────────────────────────────────────────────┐
-│                     Compound Authorization                        │
-├───────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│  Policy: PCR + Password                                           │
-│  ┌────────────────────────────────────────────────────────────┐  │
-│  │ 1. Start policy session                                     │  │
-│  │ 2. TPM2_PolicyPCR (bind to PCR values)                      │  │
-│  │ 3. TPM2_PolicyAuthValue (require password)                  │  │
-│  │ 4. Unseal with combined policy                              │  │
-│  └────────────────────────────────────────────────────────────┘  │
-│                                                                   │
-│  Policy: PCR OR Password (recovery)                               │
-│  ┌────────────────────────────────────────────────────────────┐  │
-│  │ Branch A: TPM2_PolicyPCR                                    │  │
-│  │ Branch B: TPM2_PolicyAuthValue                              │  │
-│  │ TPM2_PolicyOR (either branch satisfies)                     │  │
-│  └────────────────────────────────────────────────────────────┘  │
-│                                                                   │
-└───────────────────────────────────────────────────────────────────┘
-```
+With both `--pcrs` and `--password`, the seal carries the password on the
+object and on its PCR policy, so unseal needs the PCR state and the password
+(`buildSealOptions`). There is no PCR-or-password recovery branch.
 
 ## Error Handling
 
@@ -333,37 +229,24 @@ Sealed objects can require multiple authorization factors:
 | TPM_RC_POLICY_FAIL       | PCR values changed             | Re-seal after update   |
 | TPM_RC_AUTH_FAIL         | Wrong password                 | Correct password       |
 | TPM_RC_HANDLE            | Parent key not found           | Check key provisioning |
-| TPM_RC_NV_UNAVAILABLE    | Sealed object not found        | Verify CN exists       |
 | TPM_RC_LOCKOUT           | Too many auth failures         | Wait for lockout reset |
 
-## Recovery Procedures
+The daemon answers `Unavailable` when it has no TPM and `InvalidArgument` for
+empty seal data or an empty unseal CN.
 
-### PCR Change Recovery
+## Re-sealing After an Update
 
-```bash
-# 1. Boot with recovery key (bypasses TPM)
-# 2. Authenticate with SO PIN
-# 3. Re-seal to new PCR state
-platformctl tpm unseal my-secret --recovery-key "..." > /tmp/secret
-platformctl tpm seal my-secret "$(cat /tmp/secret)" --overwrite
-rm /tmp/secret
-```
-
-### Re-sealing After Update
+There is no `tpm reseal` command and no recovery-key flag. To move a secret to
+a new PCR state, unseal it while the old state still holds, then seal it again
+after the update. The daemon ignores `--overwrite`, so seal under a new CN if
+the old object is still in the keystore:
 
 ```bash
-# After kernel update, re-seal objects to new PCR state
-platformctl tpm reseal my-secret --so-pin
+platformctl tpm unseal --cn my-secret > /run/my-secret
+# ... update, reboot ...
+platformctl tpm seal --cn my-secret-v2 --data "$(cat /run/my-secret)" --pcrs 7,9
+rm /run/my-secret
 ```
-
-## Performance
-
-| Operation        | Size    | Typical Latency |
-|------------------|---------|-----------------|
-| Seal 128 bytes   | 128B    | 50-200ms        |
-| Seal 1KB         | 1KB     | 100-300ms       |
-| Unseal 128 bytes | 128B    | 50-200ms        |
-| Policy creation  | -       | 10-50ms         |
 
 ## Related Documentation
 
