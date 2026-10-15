@@ -1,349 +1,158 @@
 # SDN Testing Strategy
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > How the SDN packages are tested.
 
 ## Overview
 
 Testing follows TDD principles with distinct unit and integration test layers.
-Unit tests run fast in-memory with mocks; integration tests run in containers
-with real OVS infrastructure.
-
-## Test Summary
-
-| Package | Unit Tests | Integration Tests | Coverage |
-|---------|------------|-------------------|----------|
-| arp | 15+ | 10 | 95%+ |
-| openflow | 20+ | 18 | 90%+ |
-| ovs | 25+ | 12 | 90%+ |
-| netlink | 20+ | 8 | 85%+ |
-| policy | 30+ | 27 | 90%+ |
-| **Total** | **110+** | **75+** | **90%+** |
+Unit tests run fast in-memory with mocks; integration tests run in the
+devcontainer with real OVS infrastructure.
 
 ## Test Layers
 
-| Layer | Location | Dependencies | CI |
-|-------|----------|--------------|-----|
-| Unit | `pkg/sdn/*/` | None (mocks) | Fast |
-| Integration | `test/integration/sdn/` | OVS in container | Slow |
+| Layer | Location | Dependencies | Run by |
+|-------|----------|--------------|--------|
+| Unit | `pkg/sdn/*/` | None (mocks) | `make test` (CI Gate) |
+| Integration | `test/integration/sdn/` | OVS, swtpm and platformd in the devcontainer | `make integration-test-sdn` (no CI workflow) |
+| Stress | `test/integration/sdn/stress/` | Privileged devcontainer | `make stress-sdn` |
+| Benchmark | `pkg/sdn/*/benchmark_test.go` | None | `make bench-sdn` |
+
+`make test` runs every `pkg/sdn/...` package except `pkg/sdn/netlink`, which
+`TEST_EXCLUDE` in the Makefile leaves out because it needs root and netlink.
+No CI stage runs the netlink tests.
 
 ## Unit Tests
 
 ### Requirements
 
 - Run in-memory, no system modifications
-- Complete quickly (< 1 second per test)
+- Complete quickly
 - No skip guards or -short flags
 - 90%+ code coverage target
 - Test both success and error paths
 
-### Package Coverage
+### Package Layout
 
-#### pkg/sdn/arp
+Each package keeps its tests beside the code, one `_test.go` file per source
+file plus coverage files. The core packages:
 
-```go
-// arp_test.go
-func TestTable_ParseValidFile(t *testing.T)       // Valid /proc/net/arp
-func TestTable_ParseMalformedFile(t *testing.T)   // Bad format handling
-func TestTable_EmptyFile(t *testing.T)            // Empty ARP table
-func TestLookupMAC_Found(t *testing.T)            // Successful lookup
-func TestLookupMAC_NotFound(t *testing.T)         // IP not in table
-func TestLookupMAC_IncompleteEntry(t *testing.T)  // 00:00:00:00:00:00
-```
-
-#### pkg/sdn/openflow
-
-```go
-// client_test.go - with mock server
-func TestClient_Connect(t *testing.T)           // Connection setup
-func TestClient_Handshake(t *testing.T)         // Hello/Features exchange
-func TestClient_AddFlow(t *testing.T)           // Flow mod add
-func TestClient_DeleteFlow(t *testing.T)        // Flow mod delete
-func TestClient_ModifyFlow(t *testing.T)        // Flow mod modify
-func TestClient_GetFlowStats(t *testing.T)      // Multipart request
-func TestClient_Barrier(t *testing.T)           // Barrier sync
-func TestClient_Echo(t *testing.T)              // Echo request/reply
-func TestClient_Reconnect(t *testing.T)         // Reconnection handling
-func TestClient_Timeout(t *testing.T)           // Operation timeout
-
-// messages_test.go
-func TestHeader_MarshalBinary(t *testing.T)     // Header encoding
-func TestHeader_UnmarshalBinary(t *testing.T)   // Header decoding
-func TestMatch_AllFields(t *testing.T)          // All match field types
-func TestMatch_Wildcards(t *testing.T)          // Wildcard matching
-func TestActions_Output(t *testing.T)           // Output action
-func TestActions_SetVLAN(t *testing.T)          // Set VLAN action
-func TestActions_PopVLAN(t *testing.T)          // Pop VLAN action
-func TestActions_GotoTable(t *testing.T)        // Goto table action
-func TestFlowMod_MarshalBinary(t *testing.T)    // Complete flow mod
-func TestFlowStats_UnmarshalBinary(t *testing.T) // Stats parsing
-
-// protocol_test.go
-func TestConstants(t *testing.T)                // Protocol constants
-func TestByteOrder(t *testing.T)                // Big-endian encoding
-```
-
-#### pkg/sdn/ovs
-
-```go
-// client_test.go - with mock OVSDB server
-func TestClient_Connect(t *testing.T)           // Connection setup
-func TestClient_Disconnect(t *testing.T)        // Clean disconnect
-func TestClient_ListDatabases(t *testing.T)     // list_dbs method
-func TestClient_GetSchema(t *testing.T)         // get_schema method
-func TestClient_Echo(t *testing.T)              // echo method
-func TestClient_Transact(t *testing.T)          // Transaction handling
-func TestClient_TransactError(t *testing.T)     // Transaction error
-
-// bridge_test.go
-func TestBridge_Create(t *testing.T)            // CreateBridge
-func TestBridge_Delete(t *testing.T)            // DeleteBridge
-func TestBridge_Get(t *testing.T)               // GetBridge
-func TestBridge_List(t *testing.T)              // ListBridges
-func TestBridge_AlreadyExists(t *testing.T)     // Duplicate bridge
-
-// port_test.go
-func TestPort_Add(t *testing.T)                 // AddPort
-func TestPort_Delete(t *testing.T)              // DeletePort
-func TestPort_Get(t *testing.T)                 // GetPort
-func TestPort_List(t *testing.T)                // ListPorts
-func TestPort_SetVLAN(t *testing.T)             // SetPortVLAN
-func TestPort_SetTrunks(t *testing.T)           // SetPortTrunks
-func TestPort_SetState(t *testing.T)            // SetPortState
-
-// flow_test.go
-func TestFlow_Add(t *testing.T)                 // AddFlow via OpenFlow
-func TestFlow_Delete(t *testing.T)              // DeleteFlow
-func TestFlow_DeleteAll(t *testing.T)           // DeleteAllFlows
-func TestFlow_GetStats(t *testing.T)            // GetFlowStats
-
-// types_test.go
-func TestUUID_Marshal(t *testing.T)             // UUID serialization
-func TestSet_Marshal(t *testing.T)              // Set serialization
-func TestMap_Marshal(t *testing.T)              // Map serialization
-func TestNamedUUID_Marshal(t *testing.T)        // Named UUID ref
-```
-
-#### pkg/sdn/policy
-
-```go
-// engine_test.go
-func TestEngine_New(t *testing.T)               // Engine creation
-func TestEngine_SetPortState(t *testing.T)      // State transitions
-func TestEngine_ApplyPolicy(t *testing.T)       // Policy application
-func TestEngine_RemovePolicy(t *testing.T)      // Policy removal
-func TestEngine_AuthenticatePort(t *testing.T)  // Certificate auth
-
-// state_test.go
-func TestStateMachine_Transitions(t *testing.T) // Valid transitions
-func TestStateMachine_Invalid(t *testing.T)     // Invalid transitions
-
-// certificate_test.go
-func TestX509Extractor_Policy(t *testing.T)     // Policy extraction
-func TestX509Extractor_TenantID(t *testing.T)   // Tenant ID extraction
-
-// enrollment_hook_test.go
-func TestEnrollmentHook_OnComplete(t *testing.T)    // Enrollment handling
-func TestEnrollmentHook_Activate(t *testing.T)      // Device activation
-func TestEnrollmentHook_RegisterPort(t *testing.T)  // Port registration
-```
+| Package | Test files cover |
+|---------|------------------|
+| `pkg/sdn/arp` | `/proc/net/arp` parsing and lookup (`arp_test.go`), duplicate address detection (`dad_test.go`, `dad_frame_test.go`) |
+| `pkg/sdn/openflow` | Client against a mock switch (`client_test.go`, `client_batch_test.go`), message encoding (`messages_test.go`, `protocol_test.go`), groups, meters, conntrack, Nicira extensions, tunnels |
+| `pkg/sdn/ovs` | OVSDB client against a mock server (`client_test.go`), bridges, ports, flows and flow grammar, QoS, VXLAN, `ovs-appctl` (`appctl_test.go`), types |
+| `pkg/sdn/netlink` | Links and TAP devices, with mock netlink handles (`mock_netlink_test.go`, `tap_mock_test.go`) |
+| `pkg/sdn/policy` | Engine, state machine (`state_test.go`), certificate extraction, monitor, enrollment hook, quarantine, admission, zone flows |
 
 ### Mock Servers
 
 #### Mock OpenFlow Server
 
-```go
-// pkg/sdn/openflow/mock_server_test.go
-type mockOFServer struct {
-    listener net.Listener
-    conn     net.Conn
-    handlers map[uint8]func([]byte) []byte
-}
-
-func (s *mockOFServer) handleHello(data []byte) []byte
-func (s *mockOFServer) handleFeaturesRequest(data []byte) []byte
-func (s *mockOFServer) handleFlowMod(data []byte) []byte
-func (s *mockOFServer) handleBarrier(data []byte) []byte
-```
+`pkg/sdn/openflow/mock_server_test.go` defines `mockOFServer`, a TCP listener
+that answers the OpenFlow handshake and records the messages the client sends.
 
 #### Mock OVSDB Server
 
-```go
-// pkg/sdn/ovs/mock_server_test.go
-type mockOVSDBServer struct {
-    listener  net.Listener
-    databases map[string]map[string][]map[string]interface{}
-}
+`pkg/sdn/ovs/mock_server_test.go` defines `mockOVSDBServer`, a JSON-RPC
+listener over in-memory `mockDatabase` / `mockTable` contents.
 
-func (s *mockOVSDBServer) handleListDbs() []string
-func (s *mockOVSDBServer) handleGetSchema(db string) *Schema
-func (s *mockOVSDBServer) handleTransact(ops []Operation) []OpResult
+### ARP Test Data
+
+The ARP tests write literal `/proc/net/arp` text to a temp file
+(`sampleARPTable` in `pkg/sdn/arp/arp_test.go`):
+
 ```
+IP address       HW type     Flags       HW address            Mask     Device
+192.0.2.1        0x1         0x2         aa:bb:cc:dd:ee:ff     *        eth0
+```
+
+There is no shared `testdata/` directory; certificates for the policy tests
+are generated in the tests.
 
 ## Integration Tests
 
 ### Location
 
-```
-test/integration/sdn/
-+-- run-tests.sh              # Test orchestration
-+-- openflow_native_test.go   # Pure Go OpenFlow client tests
-+-- arp_native_test.go        # Pure Go ARP table reader tests
-+-- bridge_test.go            # Bridge operations
-+-- port_test.go              # Port operations
-+-- flow_test.go              # Flow operations
-+-- tap_test.go               # TAP device tests
-+-- ovsdb_test.go             # OVSDB client tests
-+-- policy_test.go            # Policy engine tests
-```
+`test/integration/sdn/` holds one package, `sdn`, plus the `stress/`,
+`topology/` and `mock_bgp/` sub-packages. Among its files:
+
+| File | Covers |
+|------|--------|
+| `openflow_native_test.go` | The pure Go OpenFlow client against a real bridge (`TestNativeOpenFlow_*`) |
+| `arp_native_test.go` | The pure Go ARP reader against the kernel table (`TestNativeARP_*`) |
+| `ovsdb_test.go`, `bridge_test.go`, `port_test.go`, `bridge_port_management_test.go`, `tap_test.go` | OVSDB, bridges, ports, TAP/veth/patch ports |
+| `flow_test.go`, `flow_batch_test.go`, `openflow_rules_test.go` | Flow install, removal, priorities, per-phase rules |
+| `policy_engine_integration_test.go`, `state_transition_integration_test.go`, `network_provisioning_test.go` | Policy engine, port state transitions, provisioning |
+| `multiprotocol_test.go`, `overlay_multiprotocol_test.go`, `ipam_test.go`, `zone_test.go`, `nat64_surface_test.go`, `perf_cli_test.go` | The SDN, overlay, IPAM, zone, NAT64 and perf surfaces over CLI, REST, gRPC, QUIC, MCP and Unix |
+| `gateway_*_test.go`, `ct_firewall_test.go`, `nat_dual_uplink_test.go`, `group_lb_test.go`, `nat64_*_test.go` | The gateway datapath |
+| `*_netns_test.go`, `overlay_nd_test.go` | Network-namespace tests: FHRP, host firewall, tunnels, ND suppression |
+
+`run-tests.sh` and `README.md` beside them describe the standalone setup.
 
 ### Build Tags
 
 ```go
-//go:build integration && linux
+//go:build integration
 
-package sdn_integration
+package sdn
 ```
 
 ### Test Requirements
 
-- Run in privileged Docker container
+- Run in the privileged devcontainer, never on the host
 - OVS installed and running
 - Root permissions for OVS operations
-- Clean environment (no pre-existing bridges)
-
-### Native OpenFlow Integration Tests
-
-Tests using the pure Go OpenFlow client (`pkg/sdn/openflow`):
-
-```go
-// openflow_native_test.go
-func TestNativeOpenFlow_Connection(t *testing.T)     // Connect to real bridge
-func TestNativeOpenFlow_Handshake(t *testing.T)      // Hello/Features exchange
-func TestNativeOpenFlow_AddFlow(t *testing.T)        // Add flow rule
-func TestNativeOpenFlow_DeleteFlow(t *testing.T)     // Delete flow rule
-func TestNativeOpenFlow_ModifyFlow(t *testing.T)     // Modify existing flow
-func TestNativeOpenFlow_GetFlowStats(t *testing.T)   // Get flow statistics
-func TestNativeOpenFlow_Barrier(t *testing.T)        // Barrier sync
-func TestNativeOpenFlow_Echo(t *testing.T)           // Echo request/reply
-func TestNativeOpenFlow_MultipleFlows(t *testing.T)  // Add multiple flows
-func TestNativeOpenFlow_FlowPriority(t *testing.T)   // Priority handling
-func TestNativeOpenFlow_Reconnect(t *testing.T)      // Disconnect and reconnect
-func TestNativeOpenFlow_VLANFlow(t *testing.T)       // VLAN push/pop
-func TestNativeOpenFlow_GotoTableFlow(t *testing.T)  // Goto table instruction
-func TestNativeOpenFlow_ComplexMatch(t *testing.T)   // Multi-field matches
-func TestNativeOpenFlow_DeleteAllFlows(t *testing.T) // Delete all flows
-func TestNativeOpenFlow_ConcurrentOps(t *testing.T)  // Concurrent operations
-func TestNativeOpenFlow_ErrorHandling(t *testing.T)  // Error handling
-func TestNativeOpenFlow_Timeouts(t *testing.T)       // Operation timeouts
-```
-
-### Native ARP Integration Tests
-
-Tests using the pure Go ARP table reader (`pkg/sdn/arp`):
-
-```go
-// arp_native_test.go
-func TestNativeARP_ReadTable(t *testing.T)         // Read /proc/net/arp
-func TestNativeARP_Entries(t *testing.T)           // Get all entries
-func TestNativeARP_LookupAfterPing(t *testing.T)   // Ping creates entry, lookup
-func TestNativeARP_LookupLocalhost(t *testing.T)   // Localhost handling
-func TestNativeARP_LookupNotFound(t *testing.T)    // Non-existent IP
-func TestNativeARP_MultipleEntries(t *testing.T)   // Multiple ARP entries
-func TestNativeARP_LookupIP(t *testing.T)          // MAC to IP lookup
-func TestNativeARP_InvalidIP(t *testing.T)         // Invalid IP error
-func TestNativeARP_InvalidMAC(t *testing.T)        // Invalid MAC error
-func TestNativeARP_GetMACForIP(t *testing.T)       // Convenience function
-```
-
-### Policy Engine Integration Tests
-
-```go
-// policy_test.go
-func TestPolicyEngine_FullLifecycle(t *testing.T)    // Complete flow
-func TestPolicyEngine_CertificateAuth(t *testing.T)  // Certificate-based auth
-func TestPolicyEngine_VLANTransition(t *testing.T)   // VLAN transitions
-func TestPolicyEngine_FlowRules(t *testing.T)        // OpenFlow rule generation
-func TestPolicyEngine_Quarantine(t *testing.T)       // Quarantine handling
-func TestPolicyEngine_Block(t *testing.T)            // Port blocking
-func TestPolicyEngine_Concurrent(t *testing.T)       // Concurrent access
-```
 
 ## Makefile Targets
 
-```makefile
-# Unit tests
-test-sdn:
-    go test -v -cover ./pkg/sdn/...
+| Target | Runs |
+|--------|------|
+| `make test` | All unit tests, `pkg/sdn/netlink` excluded |
+| `make test-pkg PKG=./pkg/sdn/openflow/` | One package with the derived build tags; add `TESTFLAGS='-run TestFoo -v'` to narrow it |
+| `make coverage-sdn` | `./pkg/sdn/...` with a coverage profile and HTML report in the coverage directory |
+| `make bench-sdn` | Benchmarks for vxlan, bgp, gateway, ipam, dhcp and openflow |
+| `make bench-sdn-<pkg>` | One of those six |
+| `make integration-test-sdn` | `./test/integration/sdn/...` through the shared devcontainer runner (OVS, swtpm, platformd) |
+| `make integration-test-sdn-full` | The SDN suite with OVS in a privileged devcontainer |
+| `make integration-test-sdn-shell` | An interactive shell in the SDN devcontainer |
+| `make stress-sdn`, `make stress-sdn-{ipam,bgp,dhcp,overlay,cluster}` | The stress suites |
 
-test-sdn-arp:
-    go test -v -cover ./pkg/sdn/arp/...
-
-test-sdn-openflow:
-    go test -v -cover ./pkg/sdn/openflow/...
-
-test-sdn-ovs:
-    go test -v -cover ./pkg/sdn/ovs/...
-
-test-sdn-netlink:
-    go test -v -cover ./pkg/sdn/netlink/...
-
-test-sdn-policy:
-    go test -v -cover ./pkg/sdn/policy/...
-
-# Integration tests
-integration-test-sdn:
-    docker run --privileged --rm \
-        -v $(PWD):/app \
-        -w /app \
-        trusted-platform-builder \
-        go test -tags "integration $(make -s print-build-tags)" ./test/integration/sdn/...
-
-# Coverage
-coverage-sdn:
-    go test -coverprofile=coverage-sdn.out ./pkg/sdn/...
-    go tool cover -html=coverage-sdn.out -o coverage-sdn.html
-
-# Benchmarks
-bench-sdn:
-    go test -bench=. -benchmem ./pkg/sdn/...
-```
+There are no per-package `test-sdn-*` targets; use `make test-pkg`. Never
+hand-write the `-tags` list: derive it with `make -s print-build-tags`.
 
 ## Running Tests
 
 ### Unit Tests (Fast, Local)
 
 ```bash
-# All SDN packages
-make test-sdn
+# One package
+make test-pkg PKG=./pkg/sdn/openflow/
 
-# Specific package
-go test -v ./pkg/sdn/openflow/...
+# One test
+make test-pkg PKG=./pkg/sdn/openflow/ TESTFLAGS='-run TestClient_AddFlow -v'
 
-# With coverage
-go test -cover -coverprofile=cover.out ./pkg/sdn/openflow/...
-go tool cover -html=cover.out
+# Race detector
+make test-pkg PKG=./pkg/sdn/policy/ TESTFLAGS='-race'
+
+# Coverage for all SDN packages
+make coverage-sdn
 ```
 
 ### Integration Tests (Container)
 
 ```bash
-# All integration tests
 make integration-test-sdn
-
-# Specific test
-docker run --privileged --rm \
-    -v $(PWD):/app \
-    -w /app \
-    trusted-platform-builder \
-    go test -tags "integration $(make -s print-build-tags)" ./test/integration/sdn/... -run TestOpenFlow
 ```
+
+The runner and what `make integration-test` leaves out are described in
+[docs/test/integration.md](../test/integration.md).
 
 ### End-to-End Test
 
 ```bash
-# Full client-server test with OVS
-sudo ./platformctl iso test client-server --use-ovs --debug
+# Full client-server test with OVS (requires root)
+sudo platformctl iso test client-server --use-ovs
 ```
 
 ## Test Conventions
@@ -355,83 +164,12 @@ sudo ./platformctl iso test client-server --use-ovs --debug
 5. **Parallel** - Mark independent tests with t.Parallel()
 6. **Naming** - TestFunctionName_Scenario for clarity
 
-## Coverage Goals
+## CI
 
-| Package | Target | Notes |
-|---------|--------|-------|
-| arp | 95% | Simple, full coverage achievable |
-| openflow | 90% | Protocol encoding complete |
-| ovs | 90% | Mock OVSDB server coverage |
-| netlink | 85% | Some kernel-dependent code |
-| policy | 90% | State machine fully testable |
-
-## Debugging
-
-```bash
-# Verbose output
-go test -v -count=1 ./pkg/sdn/openflow/...
-
-# Run single test
-go test -v -run TestClient_AddFlow ./pkg/sdn/openflow/...
-
-# Race detector
-go test -race ./pkg/sdn/...
-
-# CPU/memory profiling
-go test -cpuprofile=cpu.out -memprofile=mem.out ./pkg/sdn/openflow/...
-```
-
-## CI/CD Integration
-
-### GitHub Actions
-
-```yaml
-sdn-tests:
-  runs-on: ubuntu-latest
-  steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.21'
-
-    - name: Unit Tests
-      run: make test-sdn
-
-    - name: Integration Tests
-      run: make integration-test-sdn
-
-    - name: Coverage Report
-      run: |
-        make coverage-sdn
-        go tool cover -func=coverage-sdn.out
-```
-
-## Test Data
-
-### Sample Certificates
-
-Test certificates are generated in `testdata/`:
-
-```
-testdata/
-+-- ca.pem           # Test CA certificate
-+-- device.pem       # Test device certificate
-+-- device-key.pem   # Test device private key
-+-- expired.pem      # Expired certificate for testing
-+-- revoked.pem      # Revoked certificate for testing
-```
-
-### Mock ARP Table
-
-```go
-const mockARPTable = `IP address       HW type     Flags       HW address            Mask     Device
-192.0.2.1        0x1         0x2         aa:bb:cc:dd:ee:ff     *        eth0
-192.0.2.2        0x1         0x2         11:22:33:44:55:66     *        eth0
-192.0.2.3        0x1         0x0         00:00:00:00:00:00     *        eth0
-`
-```
+The CI Gate runs `make test` on every PR. `make test-race` runs in the full
+tier: pushes to main and PRs labelled `ci:full`. No workflow runs
+`make integration-test-sdn`; run it in the devcontainer before merging SDN
+changes.
 
 ## Performance Testing
 
@@ -440,11 +178,7 @@ const mockARPTable = `IP address       HW type     Flags       HW address       
 Benchmark suites live alongside each package (e.g.
 `pkg/sdn/openflow/benchmark_test.go` for OpenFlow message
 marshal/unmarshal, `pkg/sdn/dhcp/benchmark_test.go` for DHCP). Run them
-with:
-
-```bash
-go test -bench=. -benchmem ./pkg/sdn/...
-```
+with `make bench-sdn`, or one package with `make bench-sdn-openflow`.
 
 For live datapath measurements on a running gateway use
 `platformctl sdn gateway perf` (see
