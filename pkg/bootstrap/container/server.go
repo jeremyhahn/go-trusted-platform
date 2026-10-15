@@ -154,6 +154,7 @@ func NewServer(config *ServerConfig, logger *slog.Logger) (*Server, error) {
 		DHCPRangeEnd:      config.DHCPConfig.RangeEnd,
 		DHCPSubnetMask:    config.DHCPConfig.SubnetMask,
 		DHCPGateway:       config.DHCPConfig.Gateway,
+		DHCPDNS:           config.DHCPConfig.DNS,
 		DHCPLeaseTime:     config.DHCPConfig.LeaseTime,
 		DHCPServerIP:      config.DHCPConfig.ServerIP,
 		DHCPPort:          config.DHCPConfig.Port,
@@ -164,10 +165,6 @@ func NewServer(config *ServerConfig, logger *slog.Logger) (*Server, error) {
 		FirmwareOverrides: config.FirmwareOverrides,
 		DHCPProxyOnly:     config.DHCPProxyOnly,
 	}
-	if len(config.DHCPConfig.DNS) > 0 {
-		ipxeConfig.DHCPDNS = config.DHCPConfig.DNS[0]
-	}
-
 	loggingLogger := logging.DefaultLogger()
 	ipxeServer, err := ipxe.NewServer(ipxeConfig, loggingLogger)
 	if err != nil {

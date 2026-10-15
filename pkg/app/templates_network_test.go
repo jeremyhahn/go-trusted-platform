@@ -77,7 +77,8 @@ func loadTemplate(t *testing.T, path string) *App {
 }
 
 // TestShippedTemplates_FollowTheReferenceNetwork loads every platform
-// template and checks it against the reference network: the SDN section
+// template and checks it against the reference network (a plan-free template
+// is checked for having no plan instead): the SDN section
 // validates and derives a plan on environment 4 (fabric included), the host
 // network validates by role against that plan, the trunk rides br-fabric,
 // and no template carries the retired model (zone trusted, br-int,
@@ -95,6 +96,15 @@ func TestShippedTemplates_FollowTheReferenceNetwork(t *testing.T) {
 
 			a := loadTemplate(t, path)
 			require.NotNil(t, a.SDNConfig, "sdn section")
+			if planFreeTemplates[rel] {
+				// Plan-free: no plan, no host network, checked in full by
+				// TestStandaloneCPTemplate.
+				require.False(t, a.SDNConfig.Enabled, "a plan-free template builds no plan")
+				require.NotNil(t, a.NetworkConfig, "network section")
+				require.NoError(t, a.NetworkConfig.Validate(nil))
+				require.NoError(t, a.validateHostNetwork())
+				return
+			}
 			require.True(t, a.SDNConfig.Enabled)
 			require.NoError(t, a.SDNConfig.Validate(), "sdn section must validate (zones, plan, fabric)")
 			plan := a.SDNConfig.Plan()

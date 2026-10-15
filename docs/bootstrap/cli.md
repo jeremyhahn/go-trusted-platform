@@ -292,6 +292,11 @@ skipped deliberately — the container may still be the only DHCP/DNS provider o
 the provisioning network. This verb is how you tear down afterwards, once you
 have confirmed the platform's own services took over.
 
+With `deployer.boot_node: true`, `bootstrap run` never tears the container down,
+and this verb is the only thing that does. It removes the container and
+`data_dir` as in default mode. The firmware cache (`deployer.firmware_cache_dir`)
+is left on the host.
+
 ---
 
 ## 6a. `platformctl bootstrap probe rpi`
@@ -393,7 +398,7 @@ therefore absent; `run --dry-run` shows them.
 | Flag | Type | Default | Meaning |
 |---|---|---|---|
 | `--config` | string | `""` | Path to `bootstrap.yaml` (**required**) |
-| `--node` | string, repeatable | all nodes | Resolve only these hostnames; an unknown one fails with `ErrUnknownNode` |
+| `--node` | string, repeatable | all nodes | Resolve only these hostnames; an unknown one fails with `ErrUnknownNode`. Every node is still checked for a shared address or a diskless image target |
 | `--dump` | string | `""` | Write `<dir>/<hostname>.yaml` (mode 0600) per node and print each path, instead of printing the configs |
 
 Without `--dump`, the output is one YAML stream: one document per node, in

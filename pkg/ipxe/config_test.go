@@ -254,7 +254,7 @@ func TestServerConfig_ValidateDHCP(t *testing.T) {
 				DHCPRangeEnd:   "192.168.1.200",
 				DHCPSubnetMask: "255.255.255.0",
 				DHCPGateway:    "192.168.1.1",
-				DHCPDNS:        "8.8.8.8",
+				DHCPDNS:        []string{"8.8.8.8"},
 				DHCPLeaseTime:  1 * time.Hour,
 			},
 			wantErr: nil,
@@ -326,7 +326,30 @@ func TestServerConfig_ValidateDHCP(t *testing.T) {
 				DHCPInterface:  "lo",
 				DHCPRangeStart: "192.168.1.100",
 				DHCPRangeEnd:   "192.168.1.200",
-				DHCPDNS:        "invalid",
+				DHCPDNS:        []string{"invalid"},
+			},
+			wantErr: ErrInvalidConfig,
+		},
+		{
+			// To4 of an IPv6 address is nil: it would drop option 3.
+			name: "IPv6 gateway",
+			cfg: &ServerConfig{
+				EnableDHCP:     true,
+				DHCPInterface:  "lo",
+				DHCPRangeStart: "192.168.1.100",
+				DHCPRangeEnd:   "192.168.1.200",
+				DHCPGateway:    "fd00::1",
+			},
+			wantErr: ErrInvalidConfig,
+		},
+		{
+			name: "bad DNS after a good one",
+			cfg: &ServerConfig{
+				EnableDHCP:     true,
+				DHCPInterface:  "lo",
+				DHCPRangeStart: "192.168.1.100",
+				DHCPRangeEnd:   "192.168.1.200",
+				DHCPDNS:        []string{"8.8.8.8", "fd00::53"},
 			},
 			wantErr: ErrInvalidConfig,
 		},
@@ -793,5 +816,29 @@ func TestExtractIPFromURL_EdgeCases(t *testing.T) {
 				t.Errorf("extractIPFromURL(%q) = %q, want %q", tt.urlStr, got, tt.wantIP)
 			}
 		})
+	}
+}
+
+func TestParseDHCPv4(t *testing.T) {
+	ip, err := ParseDHCPv4("gateway", "192.0.2.1")
+	if err != nil {
+		t.Fatalf("ParseDHCPv4(192.0.2.1): %v", err)
+	}
+	if len(ip) != 4 || ip.String() != "192.0.2.1" {
+		t.Errorf("got %v (len %d), want the four-byte form option 3 carries", ip, len(ip))
+	}
+
+	for _, bad := range []string{"", "router", "fd00::1", "192.0.2.256"} {
+		_, err := ParseDHCPv4("dns", bad)
+		var addrErr *DHCPAddressError
+		if !errors.As(err, &addrErr) {
+			t.Fatalf("ParseDHCPv4(%q): got %v, want a *DHCPAddressError", bad, err)
+		}
+		if addrErr.Option != "dns" || addrErr.Value != bad {
+			t.Errorf("ParseDHCPv4(%q): got option %q value %q", bad, addrErr.Option, addrErr.Value)
+		}
+		if !errors.Is(err, ErrInvalidConfig) {
+			t.Errorf("ParseDHCPv4(%q): %v does not match ErrInvalidConfig", bad, err)
+		}
 	}
 }

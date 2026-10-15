@@ -36,7 +36,8 @@ Two things to internalise before you plug anything in:
 - Privilege to bind UDP 67 and UDP 69 — root, or `CAP_NET_BIND_SERVICE` (plus
   `CAP_NET_RAW` if you use the raw-socket DHCP path).
 - Outbound HTTPS to `boot.ipxe.org` **the first time**, so the iPXE firmware can
-  be downloaded. After that it is cached and the server works offline.
+  be downloaded. After that it is cached (see `--firmware-dir` below) and the
+  server works offline.
 - A netboot media build staged under the data directory (`make netboot-media`
   builds one; `bootstrap run` stages it for you), and a `manifest.yaml`
   describing which MAC boots what.
@@ -78,6 +79,21 @@ it can reach, or leave it empty to use the public Alpine mirror — which only
 works if the provisioning network has outbound internet.
 
 `Ctrl-C` or `SIGTERM` shuts it down cleanly. Logs are JSON on stdout.
+
+**`--firmware-dir` is where the iPXE firmware is loaded from and cached into.**
+Unset, it is the user cache directory (`$XDG_CACHE_HOME/go-trusted-platform/firmware/`,
+which for root is `/root/.cache/...`), falling back to
+`/var/cache/go-trusted-platform/firmware/`. The `platform-pxeboot` image sets it
+to `/var/cache/go-trusted-platform/firmware`, so a host volume mounted there keeps
+the firmware across container replacements.
+
+**How long the server lives is the deployer's choice, not the server's.** The
+server runs until it is stopped. `platformctl bootstrap run` starts it in a
+container for one bootstrap and removes the container once the nodes are up;
+with `deployer.boot_node: true` the container is left serving, restarts with the
+host, and keeps its firmware cache on a host volume — see
+[bootstrap user guide](../bootstrap/user.md) and
+[`build/docker/bootstrap/README.md`](../../build/docker/bootstrap/README.md).
 
 ---
 
@@ -439,14 +455,16 @@ not `[a-z0-9][a-z0-9._-]{0,64}`. Or the path contains `..`.
 
 **The TFTP server refuses to start.**
 `ipxe.efi` could not be loaded — no cache and no network to `boot.ipxe.org`.
-That one binary is required; the other two are optional. Pre-seed the cache
-under `$XDG_CACHE_HOME/go-trusted-platform/firmware/` (or
-`/var/cache/go-trusted-platform/firmware/` for a root or container process) if
-the host is air-gapped.
+That one binary is required; the other two are optional. Pre-seed the
+`--firmware-dir` directory if the host is air-gapped — in the `platform-pxeboot`
+image that is `/var/cache/go-trusted-platform/firmware/`, which under
+`deployer.boot_node` is the host's `deployer.firmware_cache_dir`.
 
 **Firmware behaves oddly after an upgrade.**
 A cached firmware file is served without revalidation. Delete the cache
-directory and let it re-download.
+directory and let it re-download. A boot node keeps its cache across
+`bootstrap run` and `bootstrap teardown`, so delete the host's
+`deployer.firmware_cache_dir` contents yourself.
 
 **The proxy returns 502.**
 The upstream HTTPS fetch failed. TLS verification is mandatory and the floor is

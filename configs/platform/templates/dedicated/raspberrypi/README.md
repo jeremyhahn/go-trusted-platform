@@ -53,6 +53,31 @@ Everything else — `network.role: compute`, `ip-forward: false`, the
 x10 compute role unchanged. The `bmc` block is kept as the single-node rpi4
 template keeps it; the Pi has no BMC.
 
+## More than one Pi
+
+The template's addresses are one Pi's: `.20` in the platform VRF and in each
+zone VLAN. Bootstrap refuses two nodes whose merged configs share an address,
+so every further Pi sets its own in its node entry's `overrides:`. `vlans` is a
+list and an override replaces it whole, so it repeats all three entries:
+
+```yaml
+overrides:
+  network:
+    platform-vrf:
+      address: 10.4.144.21/32
+    vlans:
+      - {name: zone401, zone: fabric, parent: eth0, ipv4-address: 10.4.1.21/24, auto-start: true}
+      - {name: zone403, zone: hypervisor, parent: eth0, ipv4-address: 10.4.3.21/24, auto-start: true}
+      - {name: zone407, zone: storage, parent: eth0, ipv4-address: 10.4.7.21/24, auto-start: true}
+```
+
+A Pi netbooted diskless (`boot_model: diskless` or `diskless-nbd`) also needs
+`install-target: disk`: its installer runs on the Pi, and bootstrap refuses
+the template's `image`. `eth0` stays `manual` for a diskless Pi too; the
+compute role holds no provisioning (VLAN 405) address. The
+[tgw-01 example](../../../../bootstrap/tgw01-vlan405.example.yaml) does both
+for three Pis.
+
 ## A Pi on a flat DHCP network
 
 `rpi4/compute.yaml` assumes the rack: `eth0` is a trunk with the zone VLANs.

@@ -83,7 +83,7 @@ firmware. No authentication on any of them; see
 | Direction | Content |
 |---|---|
 | In | `DISCOVER` / `REQUEST`. Client type is read from option 60 (`PXEClient` prefix) or the presence of option 93; iPXE is read from option 77 user class `iPXE` |
-| Out | `yiaddr` from the `IPAllocator`; `siaddr` = server IP; `file` = the arch-selected boot filename, or the iPXE script URL for an iPXE client; option 1 subnet mask; option 3 router when `DHCPGateway` set; option 6 DNS when `DHCPDNS` set; option 51 lease time; **option 60 `PXEClient`**; **option 43 = `{0x06, 0x01, 0x08, 0xFF}`** |
+| Out | `yiaddr` from the `IPAllocator`; `siaddr` = server IP; `file` = the arch-selected boot filename, or the iPXE script URL for an iPXE client; option 1 subnet mask; option 3 router when `DHCPGateway` set; option 6 with every `DHCPDNS` server, in order, when the list is non-empty; option 51 lease time; **option 60 `PXEClient`**; **option 43 = `{0x06, 0x01, 0x08, 0xFF}`** |
 
 Option-93 to boot filename:
 

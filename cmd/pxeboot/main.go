@@ -61,6 +61,10 @@ func main() {
 	dataDir := flag.String("data-dir", container.DefaultDataDir, "directory served over HTTP at /data/ (the media dir must be inside it)")
 	mediaDir := flag.String("media-dir", container.DefaultDataDir+"/"+container.NetbootMediaSetsDir, "directory of the media sets served, one per subdirectory with a media-set.yaml (the netboot media build's media/, under --data-dir)")
 	tftpDir := flag.String("tftp-dir", "", "Raspberry Pi boot tree served over TFTP (start4.elf, config.txt, kernel8.img, ...)")
+	// The bootstrap image passes its cache path explicitly: left empty, a
+	// root process with HOME set caches under ~/.cache, which is not the
+	// directory a boot-node deployment mounts from the host.
+	firmwareDir := flag.String("firmware-dir", "", "directory iPXE firmware is loaded from and cached into (default: the user, else system, cache directory)")
 	overrides := firmwareOverrides{}
 	flag.Var(overrides, "firmware-override", "serve a prebuilt firmware file in place of the upstream download, as name=path (repeatable), e.g. snponly-aarch64.efi=/data/firmware/snponly-aarch64.efi")
 	proxyDHCP := flag.Bool("dhcp-proxy", false, "answer PXE clients with boot options and no lease (the segment has its own DHCP server)")
@@ -92,9 +96,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	var dnsServers []string
-	if *dhcpDNS != "" {
-		dnsServers = strings.Split(*dhcpDNS, ",")
+	gateway, dnsServers, err := parseDHCPOptionFlags(*dhcpGateway, *dhcpDNS)
+	if err != nil {
+		logger.Error("invalid DHCP option flag", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 
 	config := &container.ServerConfig{
@@ -110,13 +115,14 @@ func main() {
 		DataDir:           *dataDir,
 		MediaDir:          *mediaDir,
 		TFTPDir:           *tftpDir,
+		FirmwareDir:       *firmwareDir,
 		FirmwareOverrides: overrides,
 		DHCPProxyOnly:     *proxyDHCP,
 		DHCPConfig: container.DHCPConfig{
 			ServerIP:   *dhcpServerIP,
 			RangeStart: *dhcpRangeStart,
 			RangeEnd:   *dhcpRangeEnd,
-			Gateway:    *dhcpGateway,
+			Gateway:    gateway,
 			DNS:        dnsServers,
 		},
 		NBD: container.NBDConfig{
@@ -182,6 +188,30 @@ func validateRequiredFlags(manifest, mediaDir, serverIP, rangeStart, rangeEnd st
 		return &MessageError{Msg: fmt.Sprintf("required flags not set: %s", strings.Join(missing, ", "))}
 	}
 	return nil
+}
+
+// parseDHCPOptionFlags checks --dhcp-gateway and --dhcp-dns before anything
+// starts. No gateway advertises no router (option 3): that is how the
+// bootstrap image's BOOTSTRAP_NO_ROUTER reaches the DHCP server. Every
+// comma-separated DNS server is advertised in option 6, in order; spaces
+// around an entry are dropped and an empty entry is refused.
+func parseDHCPOptionFlags(gateway, dns string) (string, []string, error) {
+	if gateway != "" {
+		if _, err := ipxe.ParseDHCPv4("gateway", gateway); err != nil {
+			return "", nil, &FlagError{Flag: "dhcp-gateway", Err: err}
+		}
+	}
+	if dns == "" {
+		return gateway, nil, nil
+	}
+	servers := strings.Split(dns, ",")
+	for i, server := range servers {
+		servers[i] = strings.TrimSpace(server)
+		if _, err := ipxe.ParseDHCPv4("dns", servers[i]); err != nil {
+			return "", nil, &FlagError{Flag: "dhcp-dns", Err: err}
+		}
+	}
+	return gateway, servers, nil
 }
 
 // firmwareOverrides is the repeatable --firmware-override name=path flag.

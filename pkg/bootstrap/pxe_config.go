@@ -366,6 +366,13 @@ type DeployerConfig struct {
 	// offers. Empty falls through to entrypoint default (192.0.2.1).
 	BootstrapGateway string `yaml:"bootstrap_gateway,omitempty"`
 
+	// BootstrapNoRouter makes the bootstrap container's DHCP server
+	// advertise no gateway (no option 3), for an isolated provisioning
+	// VLAN whose boot server is not a router. Off (the default) keeps
+	// bootstrap_gateway and its entrypoint default. Setting both is an
+	// error.
+	BootstrapNoRouter bool `yaml:"bootstrap_no_router,omitempty"`
+
 	// BootstrapDNS is the DNS server advertised in DHCP offers.
 	// Empty falls through to entrypoint default (192.0.2.1).
 	BootstrapDNS string `yaml:"bootstrap_dns,omitempty"`
@@ -391,6 +398,22 @@ type DeployerConfig struct {
 	// get boot options and no lease, for a provisioning segment whose own
 	// DHCP server leases addresses.
 	ProxyDHCP bool `yaml:"proxy_dhcp,omitempty"`
+
+	// BootNode keeps the bootstrap container serving after the run: it
+	// starts with --restart unless-stopped, Phase 7 neither removes it nor
+	// deletes data_dir, and the iPXE firmware cache is a host volume at
+	// FirmwareCacheDir. data_dir must then be an absolute path that
+	// survives a reboot (not under /tmp, /run or /dev/shm). An explicit
+	// `platformctl bootstrap teardown` still removes the container and
+	// data_dir. Off (the default) is the transient bootstrap container.
+	BootNode bool `yaml:"boot_node,omitempty"`
+
+	// FirmwareCacheDir is the host directory mounted as the container's
+	// iPXE firmware cache in boot-node mode. Empty means data_dir with
+	// "-firmware" appended (/srv/pxeboot → /srv/pxeboot-firmware): beside
+	// data_dir, never inside it, so a teardown keeps the cache. Only valid
+	// with boot_node.
+	FirmwareCacheDir string `yaml:"firmware_cache_dir,omitempty"`
 
 	// PXEServiceHost names the platform node that should host the
 	// persistent PXE/DHCP service after Phase 5 hand-off. Empty means
@@ -513,6 +536,30 @@ func (d *DeployerConfig) validateBindHost() error {
 		Field:  "deployer.bootstrap_bind_host",
 		Reason: d.BootstrapBindHost + " is not an IP address",
 	}
+}
+
+// validateBootNode applies the deployer's boot-node rules at config-load
+// time, so `platformctl bootstrap validate` rejects a boot node on a
+// volatile data_dir before any SSH session. The rules live in the
+// deployer package; this only feeds them the YAML values.
+func (d *DeployerConfig) validateBootNode() error {
+	dc := deployer.DeployConfig{
+		DataDir:          d.DataDir,
+		BootNode:         d.BootNode,
+		FirmwareCacheDir: d.FirmwareCacheDir,
+	}
+	dc.ApplyDefaults()
+	return dc.ValidateBootNode()
+}
+
+// validateRouter applies the deployer's router rule at config-load time:
+// bootstrap_no_router and bootstrap_gateway together are refused.
+func (d *DeployerConfig) validateRouter() error {
+	dc := deployer.DeployConfig{
+		BootstrapGateway:  d.BootstrapGateway,
+		BootstrapNoRouter: d.BootstrapNoRouter,
+	}
+	return dc.ValidateRouter()
 }
 
 // validateExplicitPort bounds a port an operator actually set. Zero is
@@ -1110,6 +1157,12 @@ func (c *BootstrapConfig) ValidateDefinition() error {
 		return err
 	}
 	if err := c.Deployer.validateBindHost(); err != nil {
+		return err
+	}
+	if err := c.Deployer.validateBootNode(); err != nil {
+		return err
+	}
+	if err := c.Deployer.validateRouter(); err != nil {
 		return err
 	}
 	if err := validateExplicitPort("platform.control_plane_port", c.Platform.ControlPlanePort); err != nil {

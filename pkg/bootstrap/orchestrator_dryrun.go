@@ -177,6 +177,11 @@ func (o *Orchestrator) DryRun(ctx context.Context) (*DryRunResult, error) {
 		}
 		nodeResult.ResolvedConfig = resolvedYAML
 	}
+	if err := o.checkNodeConfigs(); err != nil {
+		result.Errors = append(result.Errors, err.Error())
+		result.Duration = time.Since(start)
+		return result, err
+	}
 
 	// Collect node-level errors and warnings into the summary.
 	for i := range result.Nodes {
@@ -253,7 +258,7 @@ func (o *Orchestrator) ResolveNodeConfigs(hostnames ...string) ([]ResolvedNodeCo
 	}
 	var resolved []ResolvedNodeConfig
 	for _, n := range o.config.Nodes {
-		if len(wanted) > 0 && !wanted[n.Hostname] {
+		if len(hostnames) > 0 && !wanted[n.Hostname] {
 			continue
 		}
 		delete(wanted, n.Hostname)
@@ -265,6 +270,9 @@ func (o *Orchestrator) ResolveNodeConfigs(hostnames ...string) ([]ResolvedNodeCo
 	}
 	for h := range wanted {
 		return nil, ErrUnknownNode{Hostname: h}
+	}
+	if err := o.checkNodeConfigs(); err != nil {
+		return nil, err
 	}
 	return resolved, nil
 }
@@ -345,6 +353,9 @@ func (o *Orchestrator) resolveNodeConfigMap(hostname, role string, hw *quirks.Id
 		if err := ApplyNodeIdentity(templateMap, node); err != nil {
 			return nil, templatePath, ErrTemplateMergeFailed{Hostname: hostname, Role: role, Cause: err}
 		}
+	}
+	if err := refuseDisklessImageTarget(templateMap, node); err != nil {
+		return nil, templatePath, err
 	}
 
 	// Point non-CP nodes at the control plane's IP for DNS. The CP

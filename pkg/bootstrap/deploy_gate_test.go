@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/deployer"
 )
 
 // gateOrchestrator builds the smallest Orchestrator that can run the
@@ -439,5 +440,83 @@ func TestBootstrapConfig_Validate_RejectsBadPorts(t *testing.T) {
 	var invalid ErrInvalidPort
 	if err := cfg.Validate(); !errors.As(err, &invalid) {
 		t.Fatalf("Validate = %v, want ErrInvalidPort", err)
+	}
+}
+
+// TestBootstrapConfig_Validate_NoRouter proves bootstrap_no_router with a
+// bootstrap_gateway is refused at config load, and that either alone loads.
+func TestBootstrapConfig_Validate_NoRouter(t *testing.T) {
+	cases := []struct {
+		name     string
+		noRouter bool
+		gateway  string
+		wantErr  bool
+	}{
+		{"neither", false, "", false},
+		{"gateway only", false, "192.0.2.1", false},
+		{"no-router only", true, "", false},
+		{"no-router with a gateway", true, "192.0.2.1", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := minimalConfig()
+			cfg.Deployer.BootstrapNoRouter = tc.noRouter
+			cfg.Deployer.BootstrapGateway = tc.gateway
+
+			err := cfg.ValidateDefinition()
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("ValidateDefinition = %v, want nil", err)
+				}
+				return
+			}
+			var invalid deployer.ErrNoRouterWithGateway
+			if !errors.As(err, &invalid) {
+				t.Fatalf("ValidateDefinition = %v (%T), want ErrNoRouterWithGateway", err, err)
+			}
+		})
+	}
+}
+
+// TestBootstrapConfig_Validate_BootNode proves the deployer's boot-node
+// rules are reached from BootstrapConfig.Validate, so a boot node on a
+// volatile data_dir is refused at config load rather than over SSH.
+func TestBootstrapConfig_Validate_BootNode(t *testing.T) {
+	cases := []struct {
+		name      string
+		dataDir   string
+		cacheDir  string
+		bootNode  bool
+		wantField string // "" = valid
+	}{
+		{"default mode on the /tmp default", "", "", false, ""},
+		{"boot node on a persistent data_dir", "/srv/pxeboot", "", true, ""},
+		{"boot node on the /tmp default", "", "", true, "data_dir"},
+		{"boot node with data_dir under /tmp", "/tmp/pxeboot", "", true, "data_dir"},
+		{"boot node with the cache inside data_dir", "/srv/pxeboot", "/srv/pxeboot/firmware", true, "firmware_cache_dir"},
+		{"firmware cache without boot node", "/srv/pxeboot", "/srv/pxeboot-firmware", false, "firmware_cache_dir"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := minimalConfig()
+			cfg.Deployer.DataDir = tc.dataDir
+			cfg.Deployer.FirmwareCacheDir = tc.cacheDir
+			cfg.Deployer.BootNode = tc.bootNode
+
+			err := cfg.ValidateDefinition()
+			if tc.wantField == "" {
+				if err != nil {
+					t.Fatalf("ValidateDefinition = %v, want nil", err)
+				}
+				return
+			}
+			var invalid deployer.ErrInvalidBootNodeConfig
+			if !errors.As(err, &invalid) {
+				t.Fatalf("ValidateDefinition = %v (%T), want ErrInvalidBootNodeConfig", err, err)
+			}
+			if invalid.Field != tc.wantField {
+				t.Fatalf("Field = %q, want %q", invalid.Field, tc.wantField)
+			}
+		})
 	}
 }

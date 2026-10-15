@@ -159,10 +159,13 @@ func (a *linuxDeployerAdapter) deployConfig(manifestPath string) *deployer.Deplo
 		BootstrapDHCPStart:        c.BootstrapDHCPStart,
 		BootstrapDHCPEnd:          c.BootstrapDHCPEnd,
 		BootstrapGateway:          c.BootstrapGateway,
+		BootstrapNoRouter:         c.BootstrapNoRouter,
 		BootstrapDNS:              c.BootstrapDNS,
 		BootstrapAPKMirror:        c.BootstrapAPKMirror,
 		NetbootMediaDir:           c.NetbootMediaDir,
 		BootstrapProxyDHCP:        c.ProxyDHCP,
+		BootNode:                  c.BootNode,
+		FirmwareCacheDir:          c.FirmwareCacheDir,
 	}
 	dc.ApplyDefaults()
 	return dc

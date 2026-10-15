@@ -4176,6 +4176,21 @@ func (app *App) webServiceUsesPublicACME(wsConfig *v1.Config, useLocalCA bool) b
 		app.ACMEConfig.Client.DirectoryURL != ""
 }
 
+// webServiceDialHost is the address the renewal sweep dials to read the
+// certificate a webservice serves: its bind-host when that names one address,
+// or loopback when the webservice binds every interface. A webservice pinned
+// to one interface does not listen on loopback, so dialing 127.0.0.1 there
+// would fail every read and the certificate would never be renewed.
+func webServiceDialHost(bindHost string) string {
+	if bindHost == "" {
+		return "127.0.0.1"
+	}
+	if ip := net.ParseIP(bindHost); ip != nil && ip.IsUnspecified() {
+		return "127.0.0.1"
+	}
+	return bindHost
+}
+
 // buildWebServiceCertTarget constructs a CertTarget for a webservice
 // TLS identity. The Current closure performs a live TLS handshake
 // against the local webservice endpoint so the renewal handler always
@@ -4204,13 +4219,14 @@ func buildWebServiceCertTarget(ctx context.Context, wsName string, wsConfig *v1.
 	if port == 0 {
 		port = 443
 	}
-	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	addr := net.JoinHostPort(webServiceDialHost(wsConfig.BindHost), strconv.Itoa(port))
 
-	// The dial goes to the loopback address, but the certificate is issued for
-	// the service's DNS identity (keyAttrs.CN), not for 127.0.0.1. Left unset,
-	// crypto/tls derives ServerName from the dial address and every handshake
-	// fails hostname verification before NotAfter is ever read -- so the sweep
-	// would report each target as failed and never reissue any of them.
+	// The dial goes to the bind address, but the certificate is issued for
+	// the service's DNS identity (keyAttrs.CN), not for that address. Left
+	// unset, crypto/tls derives ServerName from the dial address and every
+	// handshake fails hostname verification before NotAfter is ever read -- so
+	// the sweep would report each target as failed and never reissue any of
+	// them.
 	serverName := keyAttrs.CN
 
 	return &CertTarget{

@@ -195,6 +195,31 @@ func (e ErrInvalidDeployConfig) Error() string {
 	return fmt.Sprintf("deployer: invalid config: field %s: %s", e.Field, e.Reason)
 }
 
+// ErrInvalidBootNodeConfig is returned when the boot-node settings cannot
+// keep the container serving: a data or firmware cache directory that does
+// not survive a reboot, the two overlapping, or a firmware cache set
+// without boot-node mode.
+type ErrInvalidBootNodeConfig struct {
+	Field  string
+	Value  string
+	Reason string
+}
+
+func (e ErrInvalidBootNodeConfig) Error() string {
+	return fmt.Sprintf("deployer: invalid boot-node config: field %s %q: %s", e.Field, e.Value, e.Reason)
+}
+
+// ErrNoRouterWithGateway is returned when a deploy config sets both
+// bootstrap_no_router and bootstrap_gateway: one drops the DHCP router
+// option, the other advertises it.
+type ErrNoRouterWithGateway struct {
+	Gateway string
+}
+
+func (e ErrNoRouterWithGateway) Error() string {
+	return fmt.Sprintf("deployer: invalid config: bootstrap_no_router advertises no gateway, but bootstrap_gateway is %q: set one or the other", e.Gateway)
+}
+
 // ErrNetbootMediaStage is a failure staging a netboot media build onto the
 // deploy target, at the named step.
 type ErrNetbootMediaStage struct {

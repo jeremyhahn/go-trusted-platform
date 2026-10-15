@@ -1,0 +1,150 @@
+# tgw-01 as the boot node for the Raspberry Pi rack on VLAN 405.
+#
+# tgw-01 keeps the platform-pxeboot container running on bond0.405
+# (192.0.2.1) after the run (deployer.boot_node) and netboots the rack Pis
+# diskless as workers: their root is the media set's verified squashfs, so
+# the netboot media build must carry a diskless root for the Pi set. VLAN 405
+# is isolated and tgw-01 does not route it, so DHCP advertises no gateway
+# (deployer.bootstrap_no_router). The Pis hold no VLAN 405 address once
+# installed: the compute role addresses only fabric, hypervisor and storage
+# (docs/architecture/reference-network.md, "Host addressing"), so eth0 stays
+# manual and 405 serves only their netboot.
+#
+# The control plane is platformd standalone on tgw-01 itself, at 192.0.2.1,
+# until the CM4 control plane is proven. tgw-01 is not installed by this run
+# (skip_install: true); it runs
+# configs/platform/templates/single-node/standalone-cp.example.yaml, the
+# control-plane template below. The orchestrator dials it at 192.0.2.1:8443,
+# so `platformctl bootstrap` runs on tgw-01 or on a host on VLAN 405.
+#
+# Values marked PLACEHOLDER must be replaced before a run. The DNS server
+# and the APK mirror belong to Infrastructure. Their placeholders are
+# reserved documentation values (RFC 5737, RFC 2606), so a forgotten one
+# fails visibly instead of pointing at a real host.
+# Docs: docs/bootstrap/user.md, build/docker/bootstrap/README.md.
+
+deployer:
+  host: 198.51.100.60                        # tgw-01, reached over SSH
+  user: <deploy-user>                         # PLACEHOLDER
+  ssh_key: <path-to-ssh-private-key>          # PLACEHOLDER
+  known_hosts_path: <install-dir>/known_hosts # PLACEHOLDER: pinned host keys
+  container_runtime: docker
+  container_image: platform-pxeboot:latest
+  data_dir: /srv/pxeboot
+  # redeploy_mode stays at its default, if-stale. It does not compare the
+  # container's BOOTSTRAP_* settings: after changing one, run once with
+  # redeploy_mode: always to replace the container.
+
+  # The boot server on VLAN 405.
+  bootstrap_interface: bond0.405
+  bootstrap_server_ip: 192.0.2.1
+  bootstrap_http_port: 8080
+  bootstrap_device_script_port: 18081
+  bootstrap_dhcp_start: 192.0.2.100
+  bootstrap_dhcp_end: 192.0.2.200
+  proxy_dhcp: false                           # the only DHCP server on 405
+  bootstrap_no_router: true                   # isolated VLAN: no option 3
+  bootstrap_dns: 192.0.2.53                   # PLACEHOLDER (Infrastructure): DNS server for VLAN 405
+  bootstrap_apk_mirror: http://apk-mirror.invalid/alpine # PLACEHOLDER (Infrastructure): APK mirror reachable from 405
+
+  # Long-running boot node; the firmware cache defaults to /srv/pxeboot-firmware.
+  boot_node: true
+
+  # make netboot-media; relative to this file.
+  netboot_media_dir: ../../bin/netboot-media
+
+environment:
+  id: 4                       # VLAN 405 = provisioning = 192.0.2.0/24
+
+platform:
+  domain: example.com         # PLACEHOLDER
+  internal_domain: example.internal # PLACEHOLDER
+
+templates:
+  control-plane: ../platform/templates/single-node/standalone-cp.example.yaml
+  worker: ../platform/templates/dedicated/raspberrypi/rpi4/compute.yaml
+
+nodes:
+  # The control plane: platformd standalone on tgw-01, on the same address
+  # as the boot server. It is not installed by this run.
+  - hostname: tgw-01
+    role: control-plane
+    skip_install: true
+    interfaces:
+      - name: bond0.405
+        type: static
+        ipv4-address: 192.0.2.1/24
+
+  # The CM4 becomes the control plane once it is proven: it then replaces
+  # tgw-01 above (a deployment has one control plane, or an odd number of
+  # three or more), boots from its own SD card and is not installed by this
+  # run either.
+  # - hostname: cm4-01
+  #   role: control-plane
+  #   skip_install: true
+  #   platform: raspberrypi
+  #   model: cm4
+  #   interfaces:
+  #     - name: eth0
+  #       type: static
+  #       ipv4-address: 192.0.2.10/24
+
+  # Rack Pis, netbooted diskless. Their overrides file points the rpi4
+  # compute template at this control plane and sets install-target: disk
+  # (bootstrap refuses image for a diskless node). Each Pi's inline
+  # overrides give it its own addresses, .20/.21/.22 in the platform VRF
+  # and in each zone VLAN: the template carries one Pi's (.20), and
+  # bootstrap refuses two nodes resolving to the same address. vlans is a
+  # list, so an override carries all three entries. serial is the low 32 bits of
+  # /proc/cpuinfo Serial (up to eight hex digits); set it to serve the Pi's
+  # per-device boot directory.
+  - hostname: rpi4-01
+    role: worker
+    macs: ["dc:a6:32:50:76:60"]
+    platform: raspberrypi
+    model: rpi4
+    boot_model: diskless
+    overrides_file: tgw01-vlan405-pi.overrides.yaml
+    # serial: <serial>        # PLACEHOLDER
+    overrides:
+      network:
+        platform-vrf:
+          address: 10.4.144.20/32
+        vlans:
+          - {name: zone401, zone: fabric, parent: eth0, ipv4-address: 10.4.1.20/24, auto-start: true}
+          - {name: zone403, zone: hypervisor, parent: eth0, ipv4-address: 10.4.3.20/24, auto-start: true}
+          - {name: zone407, zone: storage, parent: eth0, ipv4-address: 10.4.7.20/24, auto-start: true}
+
+  - hostname: rpi4-02
+    role: worker
+    macs: ["dc:a6:32:50:76:18"]
+    platform: raspberrypi
+    model: rpi4
+    boot_model: diskless
+    overrides_file: tgw01-vlan405-pi.overrides.yaml
+    # serial: <serial>        # PLACEHOLDER
+    overrides:
+      network:
+        platform-vrf:
+          address: 10.4.144.21/32
+        vlans:
+          - {name: zone401, zone: fabric, parent: eth0, ipv4-address: 10.4.1.21/24, auto-start: true}
+          - {name: zone403, zone: hypervisor, parent: eth0, ipv4-address: 10.4.3.21/24, auto-start: true}
+          - {name: zone407, zone: storage, parent: eth0, ipv4-address: 10.4.7.21/24, auto-start: true}
+
+  - hostname: rpi4-03
+    role: worker
+    macs: ["dc:a6:32:50:75:43"]
+    platform: raspberrypi
+    model: rpi4
+    boot_model: diskless
+    overrides_file: tgw01-vlan405-pi.overrides.yaml
+    # serial: <serial>        # PLACEHOLDER
+    overrides:
+      network:
+        platform-vrf:
+          address: 10.4.144.22/32
+        vlans:
+          - {name: zone401, zone: fabric, parent: eth0, ipv4-address: 10.4.1.22/24, auto-start: true}
+          - {name: zone403, zone: hypervisor, parent: eth0, ipv4-address: 10.4.3.22/24, auto-start: true}
+          - {name: zone407, zone: storage, parent: eth0, ipv4-address: 10.4.7.22/24, auto-start: true}

@@ -211,7 +211,10 @@ type mockDeployer struct {
 	deployErr   error
 	teardownErr error
 	deployCalls atomic.Int64
-	manifest    *container.Manifest
+	// teardownCalls counts Teardown calls, so a test can tell a skipped
+	// Phase 7 from a failed one.
+	teardownCalls atomic.Int64
+	manifest      *container.Manifest
 }
 
 func (m *mockDeployer) Deploy(_ context.Context, manifest *container.Manifest) error {
@@ -221,6 +224,7 @@ func (m *mockDeployer) Deploy(_ context.Context, manifest *container.Manifest) e
 }
 
 func (m *mockDeployer) Teardown(_ context.Context) error {
+	m.teardownCalls.Add(1)
 	return m.teardownErr
 }
 
@@ -532,6 +536,58 @@ func TestOrchestrator_Run_MinimalConfig(t *testing.T) {
 	}
 	if result.Nodes[0].Status != nodeStatusInstalled {
 		t.Errorf("expected status installed, got %s", result.Nodes[0].Status)
+	}
+}
+
+// TestOrchestrator_Run_Phase7_BootNode: Phase 7 tears the transient
+// container down by default and leaves a boot node serving; an explicit
+// Teardown still reaches the deployer in boot-node mode.
+func TestOrchestrator_Run_Phase7_BootNode(t *testing.T) {
+	cases := []struct {
+		name          string
+		bootNode      bool
+		wantTornDown  bool
+		wantTeardowns int64
+	}{
+		{"default mode tears down", false, true, 1},
+		{"boot node keeps serving", true, false, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := minimalConfig()
+			cfg.Deployer.BootNode = tc.bootNode
+			cfg.Deployer.DataDir = "/srv/pxeboot"
+			deployer := &mockDeployer{}
+			o := newRunOrchestrator(t, OrchestratorParams{
+				Config:                cfg,
+				BMCFactory:            &mockBMCFactory{client: bmc.NewMockClient()},
+				Logger:                orchTestLogger(),
+				Deployer:              deployer,
+				ConfigServerReadiness: readyConfigServer{},
+				HealthChecker:         &mockHealthChecker{},
+			})
+
+			result, err := o.Run(t.Context())
+			if err != nil {
+				t.Fatalf("run failed: %v", err)
+			}
+			if result.Phase != "complete" {
+				t.Errorf("phase = %s, want complete", result.Phase)
+			}
+			if result.ContainerTornDown != tc.wantTornDown {
+				t.Errorf("ContainerTornDown = %v, want %v", result.ContainerTornDown, tc.wantTornDown)
+			}
+			if got := deployer.teardownCalls.Load(); got != tc.wantTeardowns {
+				t.Errorf("Teardown calls after Run = %d, want %d", got, tc.wantTeardowns)
+			}
+
+			if err := o.Teardown(t.Context()); err != nil {
+				t.Fatalf("explicit Teardown: %v", err)
+			}
+			if got := deployer.teardownCalls.Load(); got != tc.wantTeardowns+1 {
+				t.Errorf("Teardown calls after explicit Teardown = %d, want %d", got, tc.wantTeardowns+1)
+			}
+		})
 	}
 }
 

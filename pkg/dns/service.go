@@ -1056,22 +1056,14 @@ func (s *Service) RegisterWebservice(ctx context.Context, cn string) error {
 		if err != nil {
 			return &WrappedError{Msg: "failed to get internal zone", Err: err}
 		}
-		if s.params.PrivateIPv4 != nil {
-			ip = s.params.PrivateIPv4.String()
-		} else if s.params.Config.PrivateIPv4 != "" {
-			ip = s.params.Config.PrivateIPv4
-		}
+		ip = configuredOrDetected(s.params.Config.PrivateIPv4, s.params.PrivateIPv4)
 	// Check if CN matches public zone
 	case publicZoneName != "" && strings.HasSuffix(cn, publicZoneName):
 		zone, err = s.PublicZone(ctx)
 		if err != nil {
 			return &WrappedError{Msg: "failed to get public zone", Err: err}
 		}
-		if s.params.PublicIPv4 != nil {
-			ip = s.params.PublicIPv4.String()
-		} else if s.params.Config.PublicIPv4 != "" {
-			ip = s.params.Config.PublicIPv4
-		}
+		ip = configuredOrDetected(s.params.Config.PublicIPv4, s.params.PublicIPv4)
 	default:
 		return &MessageError{Msg: fmt.Sprintf("CN %s does not match any configured zone (internal: %s, public: %s)", cn, internalZoneName, publicZoneName)}
 	}
@@ -1104,6 +1096,22 @@ func (s *Service) RegisterWebservice(ctx context.Context, cn string) error {
 	}
 
 	return nil
+}
+
+// configuredOrDetected is the address a webservice record points at: the
+// dns.private-ipv4 / dns.public-ipv4 the operator configured, else the
+// address the host detected. The configured address wins because it is the
+// one the zone's static records carry; a host with several interfaces (a
+// boot node serving one VLAN) would otherwise register its default-route
+// address beside them, and a client could be handed an unreachable record.
+func configuredOrDetected(configured string, detected net.IP) string {
+	if configured != "" {
+		return configured
+	}
+	if detected != nil {
+		return detected.String()
+	}
+	return ""
 }
 
 // extractHostnameFromCN extracts the hostname portion from a CN.

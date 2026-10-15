@@ -203,7 +203,7 @@ func TestServer_BuildDHCPConfig_AllOptionalFields(t *testing.T) {
 		DHCPSubnetMask: "255.255.255.0",
 		DHCPLeaseTime:  2 * time.Hour,
 		DHCPGateway:    "127.0.0.1",
-		DHCPDNS:        "8.8.8.8",
+		DHCPDNS:        []string{"8.8.8.8"},
 		DHCPServerIP:   "127.0.0.1",
 		TFTPServerName: "pxeserver",
 		BootFilename:   "ipxe.efi",

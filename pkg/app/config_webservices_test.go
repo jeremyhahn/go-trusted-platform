@@ -51,6 +51,21 @@ var gatewaydConfigs = map[string]bool{
 	"platform/templates/dedicated/supermicro/x10/gatewayd.yaml": true,
 }
 
+// bootstrapConfigs are the bootstrap orchestrator's files, not platformd
+// configurations. A bootstrap config (top-level `nodes:`) is read only by
+// `platformctl bootstrap`. A per-node overrides file is a fragment that a
+// bootstrap config's nodes[].overrides_file merges over a role template; the
+// template, checked here in its own right, carries the webservice key that
+// platformd reads.
+//
+// Listed explicitly, and confirmed below to still be what they claim: a
+// bootstrap config has `nodes:`, and every other entry is named by an
+// exempted bootstrap config's overrides_file.
+var bootstrapConfigs = map[string]bool{
+	"bootstrap/tgw01-vlan405.example.yaml":      true,
+	"bootstrap/tgw01-vlan405-pi.overrides.yaml": true,
+}
+
 // overrideExamples are the --overrides files shipped beside the templates,
 // each mapped to the template it merges onto. An override is not a
 // configuration on its own: the template walks skip it, and the webservice
@@ -94,7 +109,12 @@ var overrideExamples = map[string]string{
 // without re-implementing viper's loading — and it keeps working if the
 // promotion is refactored.
 func TestEveryPlatformConfigDeclaresAWebServiceKey(t *testing.T) {
-	var checked, compose, gatewayd, overrides int
+	var checked, compose, gatewayd, overrides, bootstrap int
+	// overridesNamed holds the overrides files exempted bootstrap configs
+	// name; overridesFiles the exempted entries that are not bootstrap
+	// configs, each of which must be among them.
+	overridesNamed := map[string]bool{}
+	var overridesFiles []string
 
 	err := filepath.WalkDir(configRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -178,6 +198,25 @@ func TestEveryPlatformConfigDeclaresAWebServiceKey(t *testing.T) {
 			return nil
 		}
 
+		if bootstrapConfigs[rel] {
+			bootstrap++
+			nodes, isBootstrap := doc["nodes"].([]any)
+			if !isBootstrap {
+				overridesFiles = append(overridesFiles, rel)
+				return nil
+			}
+			for _, node := range nodes {
+				entry, ok := node.(map[string]any)
+				if !ok {
+					continue
+				}
+				if file, ok := entry["overrides_file"].(string); ok {
+					overridesNamed[filepath.ToSlash(filepath.Join(filepath.Dir(rel), file))] = true
+				}
+			}
+			return nil
+		}
+
 		checked++
 
 		// An empty `webservices: []` does not populate the field, and the
@@ -221,8 +260,19 @@ func TestEveryPlatformConfigDeclaresAWebServiceKey(t *testing.T) {
 			len(overrideExamples), overrides)
 	}
 
-	t.Logf("checked %d platform configurations (%d of them override examples merged onto their templates), skipped %d Compose manifests and %d gatewayd configurations",
-		checked, overrides, compose, gatewayd)
+	if bootstrap != len(bootstrapConfigs) {
+		t.Errorf("expected to see %d exempted bootstrap files, saw %d — the exempt list names a file that no longer exists",
+			len(bootstrapConfigs), bootstrap)
+	}
+	for _, rel := range overridesFiles {
+		if !overridesNamed[rel] {
+			t.Errorf("%s is exempted as a bootstrap file but has no `nodes:` and no exempted bootstrap config names it "+
+				"as an overrides_file; if it is now a platform configuration, remove it from bootstrapConfigs", rel)
+		}
+	}
+
+	t.Logf("checked %d platform configurations (%d of them override examples merged onto their templates), skipped %d Compose manifests, %d gatewayd configurations and %d bootstrap files",
+		checked, overrides, compose, gatewayd, bootstrap)
 }
 
 // TestComposeExemptionsAreMinimal asserts the exempt list contains only files

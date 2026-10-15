@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 )
@@ -119,6 +120,107 @@ func TestLinuxDeployer_DataDirOverride(t *testing.T) {
 	}
 }
 
+// TestGenerateRunCommand_BootNode: boot-node mode adds the restart policy
+// and the firmware cache volume; default mode carries neither.
+func TestGenerateRunCommand_BootNode(t *testing.T) {
+	const restartFlag = "--restart unless-stopped"
+	firmwareVolume := "-v '/srv/pxeboot-firmware':" + ContainerFirmwareCacheDir + " "
+
+	bootNode := &DeployConfig{ContainerImage: "platform-pxeboot:latest", DataDir: "/srv/pxeboot", BootNode: true}
+	bootNode.ApplyDefaults()
+	cmd := GenerateRunCommand(bootNode)
+	for _, want := range []string{restartFlag, firmwareVolume, "-v '/srv/pxeboot':/data "} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("boot-node run command missing %q: %s", want, cmd)
+		}
+	}
+
+	defaultMode := &DeployConfig{ContainerImage: "platform-pxeboot:latest", DataDir: "/srv/pxeboot"}
+	defaultMode.ApplyDefaults()
+	cmd = GenerateRunCommand(defaultMode)
+	for _, unwanted := range []string{"--restart", ContainerFirmwareCacheDir} {
+		if strings.Contains(cmd, unwanted) {
+			t.Errorf("default-mode run command carries %q: %s", unwanted, cmd)
+		}
+	}
+}
+
+// TestGeneratePrepareCommand: Deploy creates the host directories the
+// container mounts; podman refuses a missing bind source, so boot-node
+// mode creates the firmware cache too.
+func TestGeneratePrepareCommand(t *testing.T) {
+	bootNode := &DeployConfig{DataDir: "/srv/pxeboot", BootNode: true}
+	bootNode.ApplyDefaults()
+	if got, want := GeneratePrepareCommand(bootNode), "mkdir -p '/srv/pxeboot/configs' '/srv/pxeboot-firmware'"; got != want {
+		t.Errorf("boot-node prepare = %q, want %q", got, want)
+	}
+
+	defaultMode := &DeployConfig{}
+	defaultMode.ApplyDefaults()
+	if got, want := GeneratePrepareCommand(defaultMode), "mkdir -p '"+DefaultRemoteDataDir+"/configs'"; got != want {
+		t.Errorf("default prepare = %q, want %q", got, want)
+	}
+}
+
+// TestRedeploy_KeepsBootNodeVolumes: a re-run replaces the container and
+// keeps both host volumes. The replace step removes only the named
+// container, the prepare step only creates directories, and the new
+// container mounts the same host paths as the old one.
+func TestRedeploy_KeepsBootNodeVolumes(t *testing.T) {
+	first := &DeployConfig{ContainerImage: "platform-pxeboot:latest", DataDir: "/srv/pxeboot", BootNode: true}
+	first.ApplyDefaults()
+	second := &DeployConfig{ContainerImage: "platform-pxeboot:v2", DataDir: "/srv/pxeboot", BootNode: true}
+	second.ApplyDefaults()
+
+	replace := GenerateReplaceCommand(second)
+	if want := "'docker' rm -f '" + DefaultContainerName + "' 2>/dev/null || true"; replace != want {
+		t.Errorf("replace = %q, want %q", replace, want)
+	}
+	for _, cmd := range []string{replace, GeneratePrepareCommand(second)} {
+		if strings.Contains(cmd, "rm -rf") || strings.Contains(cmd, " -v") {
+			t.Errorf("re-deploy step touches a volume: %s", cmd)
+		}
+	}
+
+	for _, mount := range []string{"-v '/srv/pxeboot':/data ", "-v '/srv/pxeboot-firmware':" + ContainerFirmwareCacheDir + " "} {
+		if !strings.Contains(GenerateRunCommand(first), mount) || !strings.Contains(GenerateRunCommand(second), mount) {
+			t.Errorf("both deploys must mount %q", mount)
+		}
+	}
+}
+
+// TestGenerateTeardownCommand_BootNodeKeepsFirmwareCache: an explicit
+// teardown removes the container and data_dir as in default mode; the
+// firmware cache beside data_dir is left on the host.
+func TestGenerateTeardownCommand_BootNodeKeepsFirmwareCache(t *testing.T) {
+	config := &DeployConfig{ContainerImage: "platform-pxeboot:latest", DataDir: "/srv/pxeboot", BootNode: true}
+	config.ApplyDefaults()
+	cmd := GenerateTeardownCommand(config)
+	if !strings.Contains(cmd, "'docker' rm -f '"+DefaultContainerName+"'") {
+		t.Errorf("teardown must remove the container: %s", cmd)
+	}
+	if !strings.Contains(cmd, "rm -rf '/host/pxeboot'") {
+		t.Errorf("teardown must remove data_dir: %s", cmd)
+	}
+	if strings.Contains(cmd, "firmware") {
+		t.Errorf("teardown must keep the firmware cache: %s", cmd)
+	}
+}
+
+// TestImageFirmwareDirMatchesMount: the bootstrap image must point pxeboot
+// at the directory boot-node mode mounts from the host. Left to its own
+// default, pxeboot running as root caches under ~/.cache, and the mounted
+// cache would stay empty while every restart downloads again.
+func TestImageFirmwareDirMatchesMount(t *testing.T) {
+	conf, err := os.ReadFile("../../../build/docker/bootstrap/supervisord.conf")
+	if err != nil {
+		t.Fatalf("read supervisord.conf: %v", err)
+	}
+	if want := "--firmware-dir " + ContainerFirmwareCacheDir + "\n"; !strings.Contains(string(conf), want) {
+		t.Errorf("supervisord.conf pxeboot command lacks %q", want)
+	}
+}
+
 func TestLinuxDeployer_GenerateTeardownCommand_RootCleanupContainer(t *testing.T) {
 	config := &DeployConfig{
 		ContainerRuntime: "docker",
@@ -195,44 +297,50 @@ func TestShellQuote(t *testing.T) {
 
 func TestParseVerifyInspect(t *testing.T) {
 	tests := []struct {
-		name        string
-		output      string
-		wantRunning string
-		wantTag     string
-		wantID      string
-		wantBind    string
-		wantOK      bool
+		name   string
+		output string
+		want   inspectState
+		wantOK bool
 	}{
 		{
-			name:        "four fields ok",
-			output:      "true\tplatform-pxeboot:latest\tsha256:abc123\t/tmp/bootstrap",
-			wantRunning: "true",
-			wantTag:     "platform-pxeboot:latest",
-			wantID:      "sha256:abc123",
-			wantBind:    "/tmp/bootstrap",
-			wantOK:      true,
+			name:   "six fields ok",
+			output: "true\tplatform-pxeboot:latest\tsha256:abc123\t/srv/pxeboot\tunless-stopped\t/srv/pxeboot-firmware",
+			want: inspectState{
+				Running:       "true",
+				Image:         "platform-pxeboot:latest",
+				ImageID:       "sha256:abc123",
+				DataBind:      "/srv/pxeboot",
+				RestartPolicy: "unless-stopped",
+				FirmwareBind:  "/srv/pxeboot-firmware",
+			},
+			wantOK: true,
 		},
 		{
-			name:        "empty bind still four fields",
-			output:      "true\timg:v1\tsha256:def\t",
-			wantRunning: "true",
-			wantTag:     "img:v1",
-			wantID:      "sha256:def",
-			wantBind:    "",
-			wantOK:      true,
+			name:   "default-mode container has empty trailing fields",
+			output: "true\timg:v1\tsha256:def\t/tmp/bootstrap\tno\t",
+			want: inspectState{
+				Running:       "true",
+				Image:         "img:v1",
+				ImageID:       "sha256:def",
+				DataBind:      "/tmp/bootstrap",
+				RestartPolicy: "no",
+			},
+			wantOK: true,
 		},
 		{
-			name:        "leading and trailing whitespace trimmed",
-			output:      "  true\timg:v1\tsha256:xyz\t/tmp/bootstrap  \n",
-			wantRunning: "true",
-			wantTag:     "img:v1",
-			wantID:      "sha256:xyz",
-			wantBind:    "/tmp/bootstrap",
-			wantOK:      true,
+			name:   "leading and trailing whitespace trimmed",
+			output: "  true\timg:v1\tsha256:xyz\t/tmp/bootstrap\t\t  \n",
+			want: inspectState{
+				Running:  "true",
+				Image:    "img:v1",
+				ImageID:  "sha256:xyz",
+				DataBind: "/tmp/bootstrap",
+			},
+			wantOK: true,
 		},
 		{
-			name:   "three fields not ok",
-			output: "true\timg:v1\tsha256:abc",
+			name:   "four fields not ok",
+			output: "true\timg:v1\tsha256:abc\t/tmp/bootstrap",
 			wantOK: false,
 		},
 		{
@@ -243,24 +351,89 @@ func TestParseVerifyInspect(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			running, tag, id, bind, ok := parseVerifyInspect(tt.output)
+			got, ok := parseVerifyInspect(tt.output)
 			if ok != tt.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
 			}
-			if !tt.wantOK {
-				return
+			if got != tt.want {
+				t.Errorf("state = %+v, want %+v", got, tt.want)
 			}
-			if running != tt.wantRunning {
-				t.Errorf("running = %q, want %q", running, tt.wantRunning)
-			}
-			if tag != tt.wantTag {
-				t.Errorf("tag = %q, want %q", tag, tt.wantTag)
-			}
-			if id != tt.wantID {
-				t.Errorf("id = %q, want %q", id, tt.wantID)
-			}
-			if bind != tt.wantBind {
-				t.Errorf("bind = %q, want %q", bind, tt.wantBind)
+		})
+	}
+}
+
+func TestVerifyInspectFormat_FieldCount(t *testing.T) {
+	if got := strings.Count(verifyInspectFormat, "\t") + 1; got != verifyInspectFields {
+		t.Fatalf("verifyInspectFormat has %d fields, parser expects %d", got, verifyInspectFields)
+	}
+	if !strings.Contains(verifyInspectFormat, `eq .Destination "`+ContainerFirmwareCacheDir+`"`) {
+		t.Errorf("verifyInspectFormat does not read the firmware cache mount: %s", verifyInspectFormat)
+	}
+}
+
+func TestCheckContainerState(t *testing.T) {
+	defaultMode := &DeployConfig{
+		ContainerName:  "bootstrap-server",
+		ContainerImage: "platform-pxeboot:latest",
+		DataDir:        "/srv/pxeboot",
+	}
+	bootNode := &DeployConfig{
+		ContainerName:    "bootstrap-server",
+		ContainerImage:   "platform-pxeboot:latest",
+		DataDir:          "/srv/pxeboot",
+		BootNode:         true,
+		FirmwareCacheDir: "/srv/pxeboot-firmware",
+	}
+	serving := inspectState{
+		Running:       "true",
+		Image:         "platform-pxeboot:latest",
+		DataBind:      "/srv/pxeboot",
+		RestartPolicy: "unless-stopped",
+		FirmwareBind:  "/srv/pxeboot-firmware",
+	}
+	withField := func(mutate func(*inspectState)) inspectState {
+		s := serving
+		mutate(&s)
+		return s
+	}
+	tests := []struct {
+		name      string
+		config    *DeployConfig
+		got       inspectState
+		wantField string // empty for a match, not-running for ErrContainerNotRunning
+	}{
+		{"boot node matches", bootNode, serving, ""},
+		{"default mode ignores restart policy and cache", defaultMode,
+			withField(func(s *inspectState) { s.RestartPolicy, s.FirmwareBind = "no", "" }), ""},
+		{"stopped container", bootNode, withField(func(s *inspectState) { s.Running = "false" }), "not-running"},
+		{"image differs", defaultMode, withField(func(s *inspectState) { s.Image = "other:v2" }), "image"},
+		{"data bind differs", defaultMode, withField(func(s *inspectState) { s.DataBind = "/tmp/bootstrap" }), "bind-mount"},
+		{"boot node without restart policy", bootNode,
+			withField(func(s *inspectState) { s.RestartPolicy = "no" }), "restart-policy"},
+		{"boot node without firmware cache", bootNode,
+			withField(func(s *inspectState) { s.FirmwareBind = "" }), "firmware-cache"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkContainerState(tt.config, tt.got)
+			switch tt.wantField {
+			case "":
+				if err != nil {
+					t.Fatalf("checkContainerState = %v, want nil", err)
+				}
+			case "not-running":
+				var notRunning ErrContainerNotRunning
+				if !errors.As(err, &notRunning) {
+					t.Fatalf("checkContainerState = %v, want ErrContainerNotRunning", err)
+				}
+			default:
+				var mismatch ErrContainerStateMismatch
+				if !errors.As(err, &mismatch) {
+					t.Fatalf("checkContainerState = %v, want ErrContainerStateMismatch", err)
+				}
+				if mismatch.Field != tt.wantField {
+					t.Errorf("mismatch field = %q, want %q", mismatch.Field, tt.wantField)
+				}
 			}
 		})
 	}
@@ -509,6 +682,27 @@ func TestPortEnvValue(t *testing.T) {
 	}
 	if got := portEnvValue(8081); got != "8081" {
 		t.Fatalf("portEnvValue(8081) = %q, want \"8081\"", got)
+	}
+}
+
+// TestBootstrapEnvFlags_NoRouter: the no-router setting reaches the
+// container as BOOTSTRAP_NO_ROUTER, and off it is not mentioned, so a
+// configured gateway and the entrypoint default work as before.
+func TestBootstrapEnvFlags_NoRouter(t *testing.T) {
+	on := bootstrapEnvFlags(&DeployConfig{BootstrapServerIP: "192.0.2.1", BootstrapNoRouter: true})
+	if !strings.Contains(on, "-e BOOTSTRAP_NO_ROUTER='true'") {
+		t.Fatalf("env flags = %q, want BOOTSTRAP_NO_ROUTER='true'", on)
+	}
+	if strings.Contains(on, "BOOTSTRAP_GATEWAY") {
+		t.Fatalf("env flags = %q, must not pass a gateway with no-router", on)
+	}
+
+	off := bootstrapEnvFlags(&DeployConfig{BootstrapServerIP: "192.0.2.1", BootstrapGateway: "192.0.2.254"})
+	if strings.Contains(off, "BOOTSTRAP_NO_ROUTER") {
+		t.Fatalf("env flags = %q, must not mention BOOTSTRAP_NO_ROUTER when off", off)
+	}
+	if !strings.Contains(off, "-e BOOTSTRAP_GATEWAY='192.0.2.254'") {
+		t.Fatalf("env flags = %q, want the configured gateway", off)
 	}
 }
 
