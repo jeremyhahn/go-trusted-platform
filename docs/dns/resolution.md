@@ -1,6 +1,8 @@
 # DNS Resolution
 
-Query handling and resolution in the Trusted Platform DNS subsystem.
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> How the DNS wire plugin and the resolve API answer queries, as built in
+> `pkg/dns/plugin.go`, `parser.go` and `resolve.go`.
 
 ## Overview
 
@@ -11,35 +13,31 @@ DNS resolution is handled by the custom `TrustedPlatformPlugin` which integrates
 1. **Query Reception**: CoreDNS receives the DNS query and routes it to `TrustedPlatformPlugin.ServeDNS()`
 2. **Port Detection**: The plugin extracts the listening port from `w.LocalAddr()` to determine server type (internal vs public)
 3. **Query Normalization**: The qname is normalized using `dns.Fqdn()` to ensure a trailing dot
-4. **Validation**: The query is validated via `validateQuery()` for RFC 1035 compliance
-5. **Zone Lookup**: Two-phase lookup attempts to locate the zone:
-   - Direct lookup using the full qname as zone ID
-   - If not found, parse qname via `ParseDomainName()` and construct zone name from subdomains + root domain
-6. **Security Check**: If query arrives on public port for an internal zone, silently drop and log security event
-7. **Record Parsing**: `parseQueriedRecord()` dispatches to the appropriate parser function based on query type, which selects the records whose owner name IS the queried name (see [Name matching](#name-matching))
-8. **Response**: `buildResponse()` assembles the reply — matching records as an authoritative answer, or a negative answer distinguishing NXDOMAIN from NODATA (see [Negative answers](#negative-answers))
+4. **Validation**: The query is validated via `validateQuery()` for RFC 1035 compliance; a query that fails goes to the next plugin
+5. **NAT64 discovery**: `ipv4only.arpa` (RFC 7050 prefix discovery) is answered before the zone lookup
+6. **Zone Lookup**: `findZoneForQuery()` tries each suffix of the qname, longest first, and the first stored zone is authoritative; no zone sends the query to the next plugin
+7. **Security Check**: If the query arrives on the public port for an internal zone, the plugin logs a security event and passes the query on without answering from the zone
+8. **Zone transfer**: AXFR and IXFR go to the transfer responder ([zone-transfer.md](zone-transfer.md))
+9. **Record Parsing**: `parseQueriedRecord()` dispatches to the appropriate parser function based on query type, which selects the records whose owner name IS the queried name (see [Name matching](#name-matching))
+10. **Response**: `buildResponse()` assembles the reply — matching records as an authoritative answer, or a negative answer distinguishing NXDOMAIN from NODATA (see [Negative answers](#negative-answers))
 
 ```
 Query: myhost.example.internal A
            │
            ▼
 ┌──────────────────────┐
-│ Validate RFC 1035    │
+│ Validate RFC 1035    │─────▶ invalid: next plugin
 └──────────────────────┘
            │
            ▼
 ┌──────────────────────┐
-│ Zone Lookup (qname)  │─────▶ Not found
-└──────────────────────┘            │
-           │                        ▼
-           │               ┌──────────────────────┐
-           │               │ Parse subdomain/zone │
-           │               │ Retry lookup         │
-           │               └──────────────────────┘
-           │                        │
-           ▼                        ▼
+│ Zone lookup, longest │─────▶ no zone: next plugin (forward)
+│ suffix first         │
+└──────────────────────┘
+           │
+           ▼
 ┌──────────────────────┐
-│ Check internal flag  │
+│ Check internal flag  │─────▶ internal zone on public port: next plugin
 │ vs server port       │
 └──────────────────────┘
            │
@@ -271,28 +269,30 @@ The platform runs two separate DNS server instances differentiated by port:
 
 When a query arrives on the public server port for a zone marked `Internal: true`:
 
-1. The query is silently dropped (no response sent)
-2. A security log entry is recorded with severity `HIGH`
-3. The offender's address is captured for audit
-4. `ErrInternalZoneQueryViolation` is logged
+1. `ErrInternalZoneQueryViolation` is logged
+2. A security log entry is recorded with severity `HIGH` and the offender's address
+3. The query goes to the next plugin unanswered by the zone, so with forwarders
+   configured it is forwarded upstream like a name the platform does not serve
 
 ```go
 // Security check in ServeDNS
 if port == strconv.Itoa(Configuration.PublicServer.Port) && zone.Internal {
     // Log violation and drop query silently
-    Configuration.Logger.Security(logging.SecurityLogEntry{
+    Configuration.Logger.Error(ErrInternalZoneQueryViolation)
+    Configuration.Logger.Security(ctx, logging.SecurityLogEntry{
         Category:        logging.CategoryNetworkSecurity,
         Description:     "Ignoring public query for internal zone",
         Details:         qname,
         OffenderAddress: w.RemoteAddr().String(),
         Source:          logging.SourceDNS,
         Severity:        logging.SeverityHigh,
+        Timestamp:       time.Now(),
     })
     return plugin.NextOrFailure(cp.Name(), cp.Next, ctx, w, r)
 }
 ```
 
-No error response is returned to prevent attackers from enumerating internal zone names.
+The platform returns no error of its own, so the public server does not reveal which internal zones exist.
 
 ## Query Validation
 
@@ -300,10 +300,11 @@ All queries pass through `validateQuery()` which enforces RFC 1035 compliance:
 
 | Check | Limit | Error |
 |-------|-------|-------|
-| Domain length | 253 characters max | "DNS query exceeds maximum domain length" |
+| Empty query | Not allowed | "DNS query is empty" |
+| Domain length | 253 characters max | "DNS query exceeds maximum domain length (253 characters)" |
 | Label length | 63 characters max | "DNS query contains a label exceeding 63 characters" |
 | Empty labels | Not allowed | "DNS query contains an empty label" |
-| Label format | `^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$` | "DNS query contains an invalid label" |
+| Label format | `^[a-zA-Z0-9_]([a-zA-Z0-9_-]{0,61}[a-zA-Z0-9])?$` (underscores allowed for `_acme-challenge`, SRV and TLSA owners) | "DNS query contains an invalid label" |
 | IP addresses | Rejected | "DNS query must not be an IP address" |
 
 These checks protect against DNS injection attacks and malformed inputs. Queries failing validation are passed to the next plugin in the chain.
@@ -322,15 +323,19 @@ Corefiles are dynamically generated based on configuration:
     trustedPlatform
     log
     chaos
+    {dns64 stanza, when DNS64 serves this listener}
     forward . {forwarders}
 }
 ```
+
+`NewCorefileForServer` (`pkg/dns/corefile.go`) writes one block per listener;
+the `forward` line is omitted when the listener has no forwarders.
 
 ### Default Forwarders
 
 | Server Type | Default Forwarders |
 |-------------|-------------------|
-| Internal | `192.0.2.1`, `198.51.100.1`, `203.0.113.1` |
+| Internal | three RFC 1918 gateway addresses (`DefaultConfig`, `pkg/dns/config.go`); set your own |
 | Public | `4.4.4.4`, `8.8.8.8` |
 
 Forwarders are configurable per server in the platform configuration:
@@ -366,18 +371,16 @@ The resolver is configured to:
 - Allow resolution of both internal and public zones
 - Forward unknown queries to configured upstream servers
 
-## Future: DNSSEC Validation
+## DNSSEC
 
-Planned DNSSEC support will add cryptographic validation to DNS responses:
+Zone signing is implemented ([dnssec.md](dnssec.md)): a signed zone's DNSKEY,
+DS, RRSIG, NSEC, NSEC3 and NSEC3PARAM records are served when queried by type,
+as in the table above. Two things are not implemented:
 
-| Feature | Description |
-|---------|-------------|
-| DO Flag Handling | Detect DNSSEC OK flag in queries |
-| RRSIG Responses | Include resource record signatures in responses |
-| NSEC/NSEC3 | Authenticated denial of existence |
-| Key Management | TPM-backed DNSSEC signing keys via KMS |
-
-DNSSEC record types are already defined in the zone entity structure (`DNSKEYRecord`, `DSRecord`, `RRSIGRecord`) but signing and validation logic is not yet implemented.
+| Feature | State |
+|---------|-------|
+| DO-bit handling | The plugin does not read the DNSSEC OK flag; RRSIGs are not added to answers for other types |
+| Validation | Answers forwarded upstream are not validated |
 
 ## See Also
 

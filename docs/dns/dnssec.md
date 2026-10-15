@@ -1,6 +1,7 @@
 # DNSSEC Signing
 
-Hardware-backed DNSSEC signing integrated with the Trusted Platform.
+> **Status: REFERENCE**
+> Hardware-backed DNSSEC signing integrated with the Trusted Platform.
 
 ## Overview
 

@@ -1,5 +1,8 @@
 # DNS Security
 
+> **Status: REFERENCE**
+> The DNS subsystem's security model.
+
 ## Overview
 
 The Trusted Platform DNS module implements a security-first design with defense in depth, leveraging trusted computing capabilities for hardware-backed protection of cryptographic keys and operations.

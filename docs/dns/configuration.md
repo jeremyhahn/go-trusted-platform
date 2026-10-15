@@ -1,6 +1,7 @@
 # DNS Configuration Reference
 
-Complete configuration reference for the Trusted Platform DNS subsystem.
+> **Status: REFERENCE**
+> Complete configuration reference for the Trusted Platform DNS subsystem.
 
 ## Overview
 

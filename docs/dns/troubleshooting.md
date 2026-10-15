@@ -1,6 +1,7 @@
 # DNS Troubleshooting Guide
 
-Practical debugging guide for diagnosing and resolving DNS issues in the Trusted Platform.
+> **Status: REFERENCE**
+> Practical debugging guide for diagnosing and resolving DNS issues in the Trusted Platform.
 
 ## Overview
 
@@ -682,6 +683,6 @@ journalctl -u platform-dns --since "1 hour ago" > dns-logs.txt
 | Document | Description |
 |----------|-------------|
 | [README](README.md) | DNS overview |
-| [Configuration](../configuration.md) | Platform configuration |
+| [Configuration](configuration.md) | Platform configuration |
 | [KMS](../kms/architecture.md) | Key management |
 | [TPM](../tpm/README.md) | TPM integration |

@@ -1,5 +1,8 @@
 # DNSSEC Key Rollover
 
+> **Status: REFERENCE**
+> DNSSEC key rollover for platform zones.
+
 ## Overview
 
 DNSSEC key rollover is the process of replacing cryptographic keys used to sign DNS zones while maintaining the chain of trust. Proper key rollover is essential for:

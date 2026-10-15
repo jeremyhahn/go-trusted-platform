@@ -1,5 +1,8 @@
 # Dynamic DNS (DDNS)
 
+> **Status: REFERENCE**
+> Dynamic DNS updates to platform zones.
+
 ## Overview
 
 Dynamic DNS (DDNS) enables programmatic updates to DNS records without manual zone file editing. The Trusted Platform implements RFC 2136 DNS UPDATE protocol with TSIG authentication for secure, automated record management.

@@ -1,258 +1,69 @@
 # DNS QUIC API Reference
 
-QUIC protocol usage for the DNS service.
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The DNS opcodes of the platform QUIC protocol, as handled by
+> `pkg/api/daemon/quic_dns.go` and `quic_dns_delegate.go`. Frame constants and
+> status bytes are [daemon/api.md](../daemon/api.md) §4; the cross-transport
+> matrix is [api.md](api.md).
 
 | Property | Value |
 |----------|-------|
-| Port | 9444 |
-| Transport | UDP with QUIC |
-| Protocol | HTTP/3 or raw QUIC streams |
+| Port | 9444 (UDP, QUIC with TLS 1.3) |
+| Opcodes | `0x20`–`0x2C`, top level, no category byte |
+| Payload | the platform codec (`quicwire.EncodePayload`), not HTTP/3 |
 
-## Overview
+QUIC does not carry the REST routes. Each request is one opcode and one
+encoded payload; each response is one status byte and one encoded payload.
 
-QUIC provides low-latency DNS operations over UDP with TLS 1.3 encryption. Ideal for:
+## Opcodes
 
-- Mobile clients with changing networks
-- High-frequency DNS updates
-- Low-latency resolution requirements
+| Opcode | Name | Request | Response |
+|--------|------|---------|----------|
+| `0x20` | `OpDNSAddRecord` | `ZoneName`, `Record` | `AddRecordResponse` |
+| `0x21` | `OpDNSDeleteRecord` | `DeleteRecordRequest` | `DeleteRecordResponse` |
+| `0x22` | `OpDNSUpdateRecord` | `zone`, `name`, `record_type`, `value`, `ttl`, `priority` | `success`, `zone`, `name`, `timestamp` |
+| `0x23` | `OpDNSGetRecord` | `zone`, `name`, `record_type` | `record`, `zone`, `timestamp` |
+| `0x24` | `OpDNSListRecords` | `ListRecordsRequest` | `Records` |
+| `0x25` | `OpDNSAddZone` | `CreateZoneRequest` | `CreateZoneResponse` |
+| `0x26` | `OpDNSDeleteZone` | `DeleteZoneRequest` | `DeleteZoneResponse` |
+| `0x27` | `OpDNSGetZone` | `zone` | `zone` (`id`, `name`, `ttl`, `description`, `internal`, `record_count`), `timestamp` |
+| `0x28` | `OpDNSListZones` | `ListZonesRequest`, or empty | `ListZonesResponse` |
+| `0x29` | `OpDNSResolve` | `ResolveRequest` | `Records`, `Authoritative` |
+| `0x2A` | `OpDNSGetConfig` | empty | `config` (`internal_domain`, `public_domain`, `dnssec_enabled`, `allow_registration`), `timestamp` |
+| `0x2C` | `OpDNSGetMetrics` | empty | `metrics` (`zone_count`, `total_records`, `queries_total`, `cache_hits`, `cache_misses`, `dnssec_validated`, `forwarded_queries`), `timestamp` |
 
-## Connection Setup
+`0x2B` and `0x2D` are retired and refused ([api.md](api.md) §2). There is no
+QUIC opcode for update zone, sign zone, DNSSEC status or register.
 
-```go
-import (
-    "crypto/tls"
-    "github.com/quic-go/quic-go"
-    "github.com/quic-go/quic-go/http3"
-)
+### Two payload shapes
 
-func NewQUICClient(addr string, tlsConfig *tls.Config) (*http3.RoundTripper, error) {
-    return &http3.RoundTripper{
-        TLSClientConfig: tlsConfig,
-        QuicConfig: &quic.Config{
-            MaxIdleTimeout:  30 * time.Second,
-            KeepAlivePeriod: 10 * time.Second,
-        },
-    }, nil
-}
-```
+- **Delegated opcodes** (`0x20`, `0x21`, `0x24`–`0x26`, `0x28`, `0x29`) carry
+  the gRPC request message under its Go field names (`ZoneName`, `Fqdn`,
+  `Type`) and call the same `DNSService` servicer as gRPC
+  ([api-reference-grpc.md](api-reference-grpc.md)). A record is `Type` (the
+  `RecordType` number) plus `Record` holding one of `A`, `Aaaa`, `Cname`,
+  `Mx`, `Ns`, `Txt`, `Srv`, `Caa`, `Tlsa`:
 
-## HTTP/3 API
+  ```json
+  {"ZoneName": "example.internal.",
+   "Record": {"Type": 1, "Record": {"A": {"Name": "www", "Value": "192.0.2.10", "Ttl": 300}}}}
+  ```
 
-QUIC exposes the same REST API over HTTP/3:
+- **Daemon-native opcodes** (`0x22`, `0x23`, `0x27`, `0x2A`, `0x2C`) carry the
+  flat snake_case fields in the table. `0x22` deletes the record and adds it
+  again with `value`; `ttl` defaults to 3600.
 
-### Zone Operations
+## Status bytes
 
-```go
-// Create zone
-req, _ := http.NewRequest("POST", "https://platform.example.com:9444/api/v1/dns/zones", body)
-resp, err := client.Do(req)
+| Status | DNS cause |
+|--------|-----------|
+| `0x00` OK | — |
+| `0x01` InvalidRequest | payload does not decode |
+| `0x09` InvalidArgument | a required field (`zone_name`, `record`, `name`, `fqdn`, `zone`, `record_type`, `value`) is empty |
+| `0x02` NotFound | unknown zone or record |
+| `0x04` InternalError | store failure |
+| `0x07` PermissionDenied | missing `dns:*` scope |
+| `0x0A` Unavailable | no `dns:` section: no DNS backend |
 
-// Get zone
-req, _ := http.NewRequest("GET", "https://platform.example.com:9444/api/v1/dns/zones/example.internal.", nil)
-resp, err := client.Do(req)
-
-// List zones
-req, _ := http.NewRequest("GET", "https://platform.example.com:9444/api/v1/dns/zones", nil)
-resp, err := client.Do(req)
-
-// Delete zone
-req, _ := http.NewRequest("DELETE", "https://platform.example.com:9444/api/v1/dns/zones/example.internal.", nil)
-resp, err := client.Do(req)
-```
-
-### Record Operations
-
-```go
-// Add record
-body := bytes.NewBuffer([]byte(`{"type":"A","name":"server01","value":"192.0.2.100","ttl":3600}`))
-req, _ := http.NewRequest("POST", "https://platform.example.com:9444/api/v1/dns/zones/example.internal./records", body)
-req.Header.Set("Content-Type", "application/json")
-resp, err := client.Do(req)
-
-// Get record
-req, _ := http.NewRequest("GET", "https://platform.example.com:9444/api/v1/dns/zones/example.internal./records/A/server01", nil)
-resp, err := client.Do(req)
-
-// Delete record
-req, _ := http.NewRequest("DELETE", "https://platform.example.com:9444/api/v1/dns/zones/example.internal./records/A/server01", nil)
-resp, err := client.Do(req)
-```
-
-### TLSA/DANE
-
-```go
-body := bytes.NewBuffer([]byte(`{
-    "type": "TLSA",
-    "name": "_443._tcp.www",
-    "usage": 3,
-    "selector": 1,
-    "matching_type": 1,
-    "certificate": "base64-data",
-    "ttl": 3600
-}`))
-req, _ := http.NewRequest("POST", "https://platform.example.com:9444/api/v1/dns/zones/example.com./records", body)
-```
-
-### Resolution
-
-```go
-req, _ := http.NewRequest("GET", "https://platform.example.com:9444/api/v1/dns/resolve?fqdn=ns1.example.internal.&type=A", nil)
-resp, err := client.Do(req)
-```
-
-## Stream-Based API
-
-For high-performance scenarios, use raw QUIC streams:
-
-```go
-func StreamResolve(conn quic.Connection, queries []ResolveRequest) ([]ResolveResponse, error) {
-    stream, err := conn.OpenStreamSync(ctx)
-    if err != nil {
-        return nil, err
-    }
-    defer stream.Close()
-
-    // Write queries
-    encoder := json.NewEncoder(stream)
-    for _, q := range queries {
-        if err := encoder.Encode(q); err != nil {
-            return nil, err
-        }
-    }
-    stream.Close() // Signal end of writes
-
-    // Read responses
-    var responses []ResolveResponse
-    decoder := json.NewDecoder(stream)
-    for {
-        var resp ResolveResponse
-        if err := decoder.Decode(&resp); err == io.EOF {
-            break
-        } else if err != nil {
-            return nil, err
-        }
-        responses = append(responses, resp)
-    }
-    return responses, nil
-}
-```
-
-## Request/Response Format
-
-Same JSON format as REST API:
-
-**Create Zone Request:**
-```json
-{
-  "name": "myzone.internal.",
-  "ttl": 3600,
-  "internal": true,
-  "records": {
-    "soa": {
-      "name": "myzone.internal.",
-      "mname": "ns1.myzone.internal.",
-      "rname": "hostmaster.myzone.internal.",
-      "serial": 1
-    }
-  }
-}
-```
-
-**Add Record Request:**
-```json
-{
-  "type": "A",
-  "name": "server01",
-  "value": "192.0.2.100",
-  "ttl": 3600
-}
-```
-
-**Resolve Response** (`GET /api/v1/dns/resolve?fqdn=ns1.example.internal.&type=A`;
-semantics in [resolution.md](resolution.md#api-resolve)):
-```json
-{
-  "records": [
-    {"type": "A", "a": {"name": "ns1", "value": "192.0.2.10", "ttl": 3600}}
-  ],
-  "authoritative": true
-}
-```
-
-## Connection Management
-
-```go
-type QUICDNSClient struct {
-    conn      quic.Connection
-    tlsConfig *tls.Config
-    addr      string
-}
-
-func (c *QUICDNSClient) Connect(ctx context.Context) error {
-    conn, err := quic.DialAddr(ctx, c.addr, c.tlsConfig, &quic.Config{
-        MaxIdleTimeout:       30 * time.Second,
-        KeepAlivePeriod:      10 * time.Second,
-        EnableDatagrams:      true,
-    })
-    if err != nil {
-        return err
-    }
-    c.conn = conn
-    return nil
-}
-
-func (c *QUICDNSClient) Close() error {
-    return c.conn.CloseWithError(0, "client closed")
-}
-```
-
-## Error Handling
-
-QUIC errors map to application errors:
-
-| QUIC Error | Meaning |
-|------------|---------|
-| `NO_ERROR` | Success |
-| `APPLICATION_ERROR` | Check JSON error response |
-| `CONNECTION_REFUSED` | Service unavailable |
-
-With no `dns:` section every DNS opcode answers `StatusUnavailable`
-(`0x0A`), which the SDK maps to gRPC `Unavailable`, the same class every other
-transport answers.
-
-```go
-resp, err := client.Do(req)
-if err != nil {
-    var qErr *quic.ApplicationError
-    if errors.As(err, &qErr) {
-        // Handle QUIC application error
-    }
-    return err
-}
-
-if resp.StatusCode >= 400 {
-    var apiErr APIError
-    json.NewDecoder(resp.Body).Decode(&apiErr)
-    // Handle API error
-}
-```
-
-## Performance Considerations
-
-- 0-RTT connection resumption for repeat connections
-- Multiplexed streams for concurrent operations
-- No head-of-line blocking
-- Connection migration for mobile clients
-
-```go
-// Enable 0-RTT
-quicConfig := &quic.Config{
-    Allow0RTT: true,
-}
-
-// Store session for resumption
-sessionCache := tls.NewLRUClientSessionCache(100)
-tlsConfig := &tls.Config{
-    ClientSessionCache: sessionCache,
-}
-```
+Delegated opcodes map the servicer's gRPC status as [api.md](api.md) §5 gives
+it.

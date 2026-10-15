@@ -1,5 +1,8 @@
 # DNS Record Types
 
+> **Status: REFERENCE**
+> The record types a platform zone stores and serves.
+
 ## Overview
 
 The Trusted Platform DNS service supports standard DNS record types and DNSSEC extensions. Records are organized within zones and stored in the platform's datastore. Each record type has specific fields and use cases for resolving domain names, mail routing, service discovery, and cryptographic validation.
@@ -762,5 +765,5 @@ platformctl dns record add \
 ## See Also
 
 - [DNS Zones](zones.md) - Zone management guide
-- [Platform Configuration](../configuration.md) - Full configuration reference
+- [Platform Configuration](configuration.md) - Full configuration reference
 - [Security Documentation](../security/architecture.md) - Security model and DNSSEC

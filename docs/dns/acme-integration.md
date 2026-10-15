@@ -1,5 +1,8 @@
 # ACME DNS Integration
 
+> **Status: REFERENCE**
+> dns-01 ACME challenges answered from the platform's DNS zones.
+
 ## Overview
 
 The Trusted Platform DNS module provides integrated dns-01 ACME challenge support for automated certificate issuance. This integration enables seamless certificate management with automatic DNSSEC signing of challenge records when DNSSEC is enabled for a zone.

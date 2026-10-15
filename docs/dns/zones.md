@@ -1,5 +1,8 @@
 # DNS Zone Management
 
+> **Status: REFERENCE**
+> The zone model and zone management.
+
 ## Overview
 
 The Trusted Platform DNS service provides authoritative DNS for internal and public zones. Zones define the namespace boundaries and contain all DNS records for a domain. The platform supports running separate internal and public DNS servers, each with their own zone configuration, forwarders, and security policies.
@@ -412,5 +415,5 @@ platformctl dns register \
 ## See Also
 
 - [DNS Records](records.md) - Record type reference
-- [Platform Configuration](../configuration.md) - Full configuration reference
+- [Platform Configuration](configuration.md) - Full configuration reference
 - [KMS Documentation](../kms/architecture.md) - Key management integration

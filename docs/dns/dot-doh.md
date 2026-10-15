@@ -1,10 +1,7 @@
 # DNS over TLS / DNS over HTTPS
 
-Design specification for encrypted DNS transport protocols.
-
-## Status
-
-**Design Specification (Planned Feature)**
+> **Status: NORMATIVE** · Scope: planned DNS over TLS and DNS over HTTPS; not implemented
+> Conflicts with this document are defects. Fix them here first.
 
 This document describes the planned architecture and configuration for DNS over TLS (DoT) and DNS over HTTPS (DoH) support in the Trusted Platform DNS subsystem. Implementation is scheduled for a future release.
 
