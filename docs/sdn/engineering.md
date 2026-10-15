@@ -1,6 +1,6 @@
 # SDN — Engineering Contract
 
-> **Status: NORMATIVE** · Scope: `pkg/sdn/` (excluding `pkg/sdn/gateway/`), `pkg/switch/` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `pkg/sdn/` (excluding `pkg/sdn/gateway/`), `pkg/switch/` · Last verified: 2026-10-15
 > Conflicts with this document are defects. Fix them here first.
 > Design and boundaries: [architecture.md](architecture.md). Transport matrix:
 > [api.md](api.md). The edge gateway is a separate feature —
@@ -10,7 +10,7 @@
 
 ## 1. Package layout
 
-`pkg/sdn/` is the largest subsystem in the repository: seventeen sub-packages
+`pkg/sdn/` is the largest subsystem in the repository: nineteen sub-packages
 plus a handful of files at the root.
 
 | Package | Holds |
@@ -29,6 +29,8 @@ plus a handful of files at the root.
 | `pkg/sdn/arp`, `pkg/sdn/ct` | ARP handling (table reader + RFC 5227 duplicate-address detection), connection tracking |
 | `pkg/sdn/netlink` | Host networking via netlink (TAP, links, routes) |
 | `pkg/sdn/cluster` | Cluster-wide SDN state |
+| `pkg/sdn/fhrp` | VRRPv3 speaker (RFC 5798) for the gateway's shared addresses (§5) |
+| `pkg/sdn/ipsec` | IPsec transport control: charon over VICI (§9) |
 | `pkg/sdn/gateway` | **Not this feature** — see [`docs/gateway/`](../gateway/) |
 | root: `config.go`, `errors.go`, `identity.go`, `networks.go` | Configuration (builds the plan), typed errors, port identity, per-zone flow summaries |
 
@@ -61,21 +63,24 @@ because a RADIUS server said so. Nothing in `pkg/sdn/policy` speaks EAP.
 | `PortStateBlocked` | `blocked` | Blocked on policy violation |
 
 **Transitions are an explicit allowlist**, not free movement
-(`pkg/sdn/policy/state.go:187`):
+(`pkg/sdn/policy/state.go:186`):
 
 ```
 unconnected   -> provisioning | blocked
 provisioning  -> enrolled | unauthorized | authenticating | authorized | blocked
 enrolled      -> authorized | provisioning | blocked
 unauthorized  -> authenticating | provisioning | blocked
-authenticating-> authorized | unauthorized
+authenticating-> authorized | unauthorized | blocked
+authorized    -> unauthorized | quarantined | blocked
+quarantined   -> authorized | provisioning | blocked
+blocked       -> unconnected | provisioning
 ```
 
-Two consequences that are easy to miss:
+Consequences that are easy to miss:
 
-- **Every state can reach `blocked`, and `blocked` is not in any source list.**
-  A blocked port does not transition out on its own; unblocking is an
-  administrative action.
+- **Every state can reach `blocked`, and nothing leaves it on its own.**
+  `blocked`'s two exits are administrative: the reset to `unconnected`, and
+  re-enrollment to `provisioning` (`Engine.UnblockPort`).
 - **`enrolled` can return to `provisioning`** — that is the re-enrollment path,
   and it is deliberate. Removing it would make a re-provisioned device
   unrecoverable without physically moving it.
@@ -98,14 +103,15 @@ nothing knows about carries no authorisation.
 
 ## 3. Configuration
 
-`sdn.Config` (`pkg/sdn/config.go`) carries `Environment` (a
-`netplan.Environment`), `Zones`, and the nested `OVSConfig`, `DPDKConfig`,
-`IPAMConfig`, `PoolConfig`, `DHCPConfig`, `OverlayConfig`, `GatewayConfig`,
-`fabric.FabricConfig`, `ManagementVPNConfig` and `IdentityConfig`. There is
+`sdn.Config` (`pkg/sdn/config.go:170`) carries `Enabled`, `Controller`,
+`Environment` (a `netplan.Environment`), `Zones`, and the nested `OVSConfig`
+(with its `DPDKConfig`), `IPAMConfig` (with its `PoolConfig` list),
+`DHCPConfig`, `OverlayConfig`, `GatewayConfig`, `fabric.FabricConfig`,
+`IdentityConfig` and `ManagementVPNConfig`. There is
 no per-network or per-VLAN configuration: `Validate` resolves the zones,
 validates them and derives the plan, which `Config.Plan()` returns.
 
-**`encode_zone_in_cert` is a trust decision, not a formatting one.** When true,
+**`sdn.identity.encode_zone_in_cert` is a trust decision, not a formatting one.** When true,
 a device's network zone is carried inside its IDevID certificate, so the zone is
 attested rather than asserted at connection time. Turning it off moves zone
 assignment to something the device can influence.
@@ -122,9 +128,11 @@ assignment to something the device can influence.
 | `ErrIPAMBackendUnconfigured`, `ErrIPAMBackendUnknown`, `ErrIPAMBackendP2PRequired` | `sdn` | IPAM backend selection wrong |
 | `ErrInvalidTCPolicy`, `ErrTCPolicyWithoutHWOffload`, `ErrDPDKRequiresNetdev` | `sdn` | Datapath combination impossible |
 | `ErrBuiltinIdentity`, `ErrOmitRequired`, `ErrOmitUnknown` | `zone` | A built-in zone renumbered, re-classed or omitted when required |
+| `ErrEmptyZoneName`, `ErrInvalidZoneName`, `ErrDuplicateZone` | `zone` | A zone name missing, malformed or repeated |
 | `ErrOwnerZoneOffset`, `ErrDuplicateOffset`, `ErrOwnerZonePortClass`, `ErrOwnerZoneField`, `ErrReservedZoneName` | `zone` | An owner-defined zone malformed |
 | `ErrPrivilegedAccessRequired` | `zone` | A path into control-plane or management without an audited override |
-| `ErrLifecycleRoleCount`, `ErrUnknownZoneRef`, `ErrOOBWithInternetIngress` | `zone` | Zone graph inconsistent |
+| `ErrLifecycleRoleCount`, `ErrInvalidLifecycleRole`, `ErrUnknownZoneRef` | `zone` | Zone graph inconsistent: a lifecycle role unknown or held by the wrong number of zones, a reference to an undeclared zone |
+| `ErrOOBWithInternetIngress`, `ErrOOBAllowTo` | `zone` | A zone both out-of-band and internet-ingress, or the out-of-band zone opening a path to another zone |
 | `ErrEnvironmentID`, `ErrBase`, `ErrULA`, `ErrOverride` | `netplan` | Environment inputs malformed |
 | `ErrDuplicateVLAN`, `ErrOverlap`, `ErrVLANOutOfRange` | `netplan` | Two zones collide, or a zone lands in the IPAM pool, link-local space or host-services `/64` |
 
@@ -227,10 +235,12 @@ A port the fabric has never seen is not a fail-closed subject: there is no
 port to hold closed, so enrollment does not fail on it (§2) — enforcement
 attaches when the port appears.
 
-**Bridge addressing is the sixth fail-closed path.** Before `initBridgeIPs`
-(`pkg/app/sdn.go`) assigns a configured address to an OVS bridge, it probes
-the segment for that address: `arp.DuplicateAddressDetector.Check` sends three
-RFC 5227 ARP probes on the bridge interface — sender protocol address
+**Bridge addressing is the sixth fail-closed path.** `App.initZoneAddresses`
+(`pkg/app/sdn.go:953`) gives each zone address its own internal OVS port,
+`zone<VLAN>`, and brings it up. Before it assigns the address it calls
+`App.guardBridgeAddress` (`pkg/app/sdn_dad.go:115`), which probes the segment
+for that address: `arp.DuplicateAddressDetector.Check` sends three
+RFC 5227 ARP probes on the zone port — sender protocol address
 `0.0.0.0`, so no receiver caches the probe itself — and listens one second
 after each. A reply, or another host's request, carrying that address from a
 MAC that is not ours is a defence, and the address is refused.
@@ -239,7 +249,7 @@ The refusal is narrow by design, and the boundaries matter:
 
 - **A measured conflict fails the address closed, not the daemon.** The
   address is not assigned, the conflict is recorded on the `App`, and the loop
-  moves to the next bridge. `initBridgeIPs` still returns nil so bring-up
+  moves to the next zone address. `initZoneAddresses` still returns nil so bring-up
   continues: a node that is wrong about one address is still worth having on
   its others.
 - **An unusable probe fails open, but never silently.** No `CAP_NET_RAW`, an
@@ -247,11 +257,11 @@ The refusal is narrow by design, and the boundaries matter:
   anything about the segment, and refusing an address over a broken diagnostic
   would take a control plane offline for no measured reason. The assignment
   proceeds. The unguarded assignment is *recorded* as a
-  `BridgeAddressProbeUnavailable` (bridge, address, cause) and reported
+  `BridgeAddressProbeUnavailable` (port, address, cause) and reported
   degraded, because the one outcome a guard must never produce is a node that
   stopped guarding and still looks healthy.
 - **The detector never reports itself.** AF_PACKET sockets see the frames they
-  transmit, so a defence whose sender MAC equals the bridge's own MAC is
+  transmit, so a defence whose sender MAC equals the interface's own MAC is
   discarded.
 - **There is no opt-out knob; there is a shared-address declaration.** The
   guard is always on. The one protocol the platform runs that deliberately
@@ -352,7 +362,7 @@ interval only sets how fast they arrive. `StopHealthMonitor` joins the monitor
 goroutine, so the post-stop read is not a race.
 
 **Known repo-wide gap:** no `CommandDefinition` type exists in this repository
-(grepped 2026-08-18), so the CLI parity requirement in
+(searched 2026-10-15), so the CLI parity requirement in
 `conventions/feature-docs.md` §4 is unmet repo-wide.
 
 ## 8. Observability
@@ -362,9 +372,9 @@ goroutine, so the post-stop read is not a race.
 the right tool when you need to see what the datapath is actually doing rather
 than what the control plane believes.
 
-`platformctl sdn port stats <port-id>` and `sdn perf` surface counters;
-`sdn perf conntrack` and `sdn perf datapath` reach the connection-tracking and
-datapath statistics.
+`platformctl sdn port stats <port-id>` and `sdn gateway perf` surface counters;
+`sdn gateway perf conntrack` and `sdn gateway perf datapath` reach the
+connection-tracking and datapath statistics.
 
 The guard has two reportable outcomes, and they are not interchangeable. A
 **refused address** is not on the wire and something is broken now. An
