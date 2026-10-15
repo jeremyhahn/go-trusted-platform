@@ -73,10 +73,12 @@ func (g *Gateway) Apply(ctx context.Context, desired *gwstate.DesiredConfig) err
 		return nil
 	}
 
-	// Once the datapath services are supervised they live in the datapath
-	// child; the document goes to it whole and its reconciliation state is
-	// the truth this gateway reports (#557). Until then they are in this
-	// process and the document is applied here.
+	// A supervising gatewayd runs the datapath services in the datapath
+	// child; the document goes to it whole, the supervisor keeps it to
+	// re-send to a relaunched child, and its reconciliation state is the truth this
+	// gateway reports (#557). A gatewayd with no supervisor — the datapath
+	// child itself, or one run with process supervision off — hosts the
+	// services and applies the document here.
 	// The VPN runs in this process whichever way the datapath runs, so its
 	// section is applied here in both cases.
 	var failures []error

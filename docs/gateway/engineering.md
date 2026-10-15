@@ -1021,6 +1021,17 @@ read the document only once they hold it, so an `Apply` arriving during a
 relaunch is never overwritten by the older document — it either is the document
 re-sent, or it waits for the re-send and lands after it.
 
+A killed child runs no `Stop`, so its flows and groups are still on the bridge
+when its successor starts there. The successor's start sweep and the re-sent
+document must together leave the bridge holding exactly what the killed child
+held, every flow under the successor's own generation.
+`TestSupervisedRelaunch_AKilledChildsSuccessorReconcilesTheBridgeItLeft`
+(`pkg/sdn/gateway/relaunch_test.go`) proves it: both children program one
+fake bridge (`bridge_test.go`, add-flow semantics, groups that refuse what OVS
+refuses), the first is killed through the launcher seam, and the bridge's flows
+and groups are compared before and after, with each owner left one generation,
+not the dead child's.
+
 The document also survives the two other ways a child comes back. An `Apply`
 that arrives while the datapath process has no child serving — waiting out its
 restart backoff, mid-relaunch, or stopped — is recorded as the process's
@@ -1089,11 +1100,24 @@ decide where the desired configuration lands. Two live kernel-class processes
 are `ErrAmbiguousDatapath` naming both.
 
 **The supervisor creates `runtime-dir`** before the first launch, group-owned
-by the service account at mode `1770`, so a hand-started supervisor works
-without the packaged init script; the packaged script creates it too, and both
-are idempotent. An existing directory has its mode set rather than assumed,
-and one the service group still cannot write is a refusal naming the
-directory.
+by the service account at mode `3770` (setgid, sticky, `rwxrwx---`), so a
+hand-started supervisor works without the packaged init script; the packaged
+script creates it too, and both are idempotent. An existing directory has its
+group and then its mode set rather than assumed — group first, because the
+kernel keeps a setgid bit only for a caller in the directory's group or holding
+`CAP_FSETID` — and one the service group still cannot write, or one without
+the setgid bit while a socket group is configured (`ErrSocketDirNotSetgid`), is
+a refusal naming the directory.
+
+The setgid bit is how every control socket gets the service group. The
+datapath child stays uid 0, but `harden` leaves it exactly `CAP_NET_ADMIN` and
+`CAP_NET_RAW` and does not touch its groups, so it can neither chown its socket
+(`CAP_CHOWN`) nor give it a group it is not in. A socket bound in a setgid
+directory takes the directory's group from the kernel, so the socket is right
+the moment it exists, and `ipc.Server.Listen` only checks it: the chown runs
+only when the group differs (a parser child may still make it, the service group
+being its own gid) and a refused one is `ErrSocketGroup` naming both groups,
+not a readiness timeout. No class gains a capability or a group for it.
 
 Group **write** is the part that is easy to get wrong and fatal when it is:
 every unprivileged child binds its own control socket *after* dropping to the
@@ -1116,7 +1140,7 @@ been reaped. Every path that ends a child goes through the same
 graceful-then-kill `terminate`, so none of them can wait on a wedged child
 forever.
 
-**Processes move one at a time — `routing`, then `proxy`, then `provisioning`.**
+**Processes move one at a time — `routing`, then `proxy`, then `provisioning`, then `datapath`.**
 `Definition.Supervised` marks the processes that have left `gatewayd serve`;
 `Supervisor.Supervises` answers from it, and the gateway (`handlers.go`)
 registers a supervised handler only for those services. Every other service
@@ -1149,11 +1173,23 @@ model off (`TestProvisioning_TheParentRelaysEverySectionToItsChild`,
 snapshot's `pxe` and `dhcp` status lines read the relay's `IsActive`, which is
 the child's verdict, so no snapshot section needs `ServiceSnapshot`; the
 `refused_reason` of a supervised section is empty, and its reason is in the
-service's health instead. Every supervised process is a parser class and runs
-unprivileged (`TestSupervises_OnlyTheMovedProcessIsSupervised`).
-`Gateway.Apply` forwards the desired document to the supervisor only once
-`nat` or `load-balancer` is supervised; until `datapath` moves, it is applied
-in-process.
+service's health instead.
+
+`datapath` (`firewall`, `nat`, `load-balancer`, `nat64`, `hostfw`, `tunnels`,
+`overlay`) moved last. Every other supervised process is a parser class and
+runs unprivileged; `datapath` is the one that is not. It stays uid 0 with
+exactly `CAP_NET_ADMIN` and `CAP_NET_RAW`, because it holds the OVS runtime and
+programs the kernel (`TestSupervises_OnlyTheMovedProcessIsSupervised`). Its
+sections are gateway sections, so the walk relays them, and the parent builds
+no OVS runtime and dials no OVSDB
+(`TestBuildGatewaySupervisorRelaysTheDatapathWithoutDialingOVSDB`).
+`Gateway.Apply` forwards the whole desired document to the supervisor, which
+keeps it to re-send to a relaunched child, and records the state the child
+reports. The only way into the datapath child from another process is
+`DatapathService` on its socket, which `SO_PEERCRED` admits for the supervisor
+and the service account the parsers share. No parser process programs the
+kernel in-process: their backends (the BGP speaker, the proxy, the
+provisioning refusals) use no netlink and no OVS.
 
 **The wiring in `cmd/gatewayd`** (`pkg/sdn/gateway/commands`):
 
@@ -1163,7 +1199,7 @@ in-process.
 | `BuildSupervisor` | builds the supervisor from `process:` and attaches it to `GatewayConfig.Supervisor` before `BuildGateway`; nil when the section is absent or `enabled: false`, or there is no `gateway:` section |
 | `childInheritance` → `process.Inherited` | the global flags every child is started with, as the supervisor resolved them: the config file it loaded, `--data-dir`, `--log-format`, `--debug`. `Spec.Args` appends them after the `service run` arguments and leaves out an empty one, so the child applies the same default. A child is a fresh `gatewayd` invocation: a flag not passed on falls back to its default there, and for `--data-dir` that is a different TOFU pin store |
 | `runServe` | shuts the supervisor down after `gw.Stop` on every exit path, within `shutdownTimeout` |
-| `gatewayd service run <process>` | the child: `EnterHardened`, then the configuration read as the service account (`ErrServiceConfigUnreadable` if it cannot), `GatewayConfig.HostedServices` set to the process's enabled services (`enabledServices`: the enabled gateway sections, then the proxy when `proxy:` enables it), `BuildGateway`, the IPC server listening at mode `0660`, then `gw.Start` |
+| `gatewayd service run <process>` | the child: `EnterHardened`, then the configuration read as the service account (`ErrServiceConfigUnreadable` if it cannot), `GatewayConfig.HostedServices` set to the process's enabled services (`enabledServices`: the enabled gateway sections, then the proxy when `proxy:` enables it), `BuildGateway`, the IPC server listening at mode `0660` in the socket group it inherits from the setgid `runtime-dir` (`ipc.ErrSocketGroup` when it does not have it and cannot be given it), then `gw.Start` |
 
 `GatewayConfig.HostedServices` restricts a gateway to one process's services:
 `Hosts(service)` gates handler registration, the OVS runtime (built only when
@@ -1206,19 +1242,35 @@ socket no longer answers is `process.ErrProcessDown`; the parent wraps it in
 configured `local_asn` and `router_id`, rather than presenting a speaker with
 no peers.
 
+With `datapath` supervised, the `firewall`, `nat`, `hostfw`, `tunnels` (with
+`uplinks`), `overlay` and `pipeline` sections come from the datapath child's
+snapshot, read once however many of its services are enabled
+(`collectSupervisedDatapath`). Those sections have no error field, so an
+unreadable child leaves them empty and logs `ErrSupervisedSnapshot`, while the
+`services` list reports the relays unhealthy.
+
 **Verified under load** (`test/integration/proxy/supervisor_test.go`, run by
 `make integration-test-proxy`). The suite starts a real `gatewayd serve` as
-root with `process.enabled`, a `bgp:` section with no peers and a public proxy
-route to an echo backend, and keeps four clients requesting through the proxy.
+root with `process.enabled`, a `bgp:` section with no peers, a public proxy
+route to an echo backend, and a load balancer with one config VIP on an
+OpenFlow 1.3 bridge the suite creates (`br-gwsup`, through an `sdn:` section).
+It keeps four clients requesting through the proxy.
 `TestGatewaydSupervisorKillUnderLoad` checks that the children are exactly
-`proxy` and `routing`, the classes the assembly starts. It then `SIGKILL`s
-each one in turn and asserts the following:
+`datapath`, `proxy` and `routing`, the classes the assembly starts. Before
+each kill it records the bridge: `ovs-ofctl dump-flows` and `dump-groups`,
+counters dropped and each gateway cookie cut to its owner id. It then
+`SIGKILL`s each child in turn and asserts the following:
 
-- a child with a new PID answers its probe (the proxy serves, the BGP port
-  accepts) within the relaunch bound;
+- a child with a new PID answers its probe within the relaunch bound: the
+  proxy serves, the BGP port accepts, and the datapath child has reprogrammed
+  the bridge, its flows and groups equal to the recorded ones and none under a
+  generation the killed child stamped;
 - every other child keeps its PID;
+- after `ovs-appctl revalidator/wait` the bridge still holds the recorded flows
+  and groups, and a kill of `proxy` or `routing` leaves even the generations
+  unchanged;
 - traffic flows again within the same bound;
-- killing `routing` costs the proxy no failed request.
+- killing `datapath` or `routing` costs the proxy no failed request.
 
 `TestGatewaydSupervisorMemoryMaxRestartsOnlyThatChild` drives `routing` past
 its limit from outside. It checks the child sits in its own leaf at the class
@@ -1237,19 +1289,17 @@ because a cgroup holding processes cannot enable controllers for its children.
 
 The bound is `DefaultRestartBackoff` plus the suite's `ready-timeout` (10s).
 The requirement names no recovery deadline, so this bound is the suite's
-choice, not a documented contract. Two parts of the acceptance are not proven
-here:
+choice, not a documented contract. One part of the acceptance is not proven
+here: **BGP graceful restart**, because the suite has no BGP peer. Reconciled
+flows are proven for the load balancer only; the other datapath services need
+zone networks the suite does not configure, and their restart path is the
+same generation sweep (unit-tested in
+`TestSupervisedRelaunch_AKilledChildsSuccessorReconcilesTheBridgeItLeft` for
+the load balancer and NAT).
 
-- **Reconciled flows.** No supervised process owns OVS flows until `datapath`
-  moves.
-- **BGP graceful restart.** The suite has no BGP peer.
-
-**Still pending:** the next processes, in this order:
-`vpn` once it has a backend (the
-management VPN is a refused section today, #558), and `datapath` last —
-moving it changes where `Apply` and the rest of the snapshot come from. Each
-move must route the snapshot sections its services own through
-`ServiceSnapshot` the same way.
+**Still pending:** `vpn`, once it has a backend (the management VPN is a
+refused section today, #558). Its move must route the snapshot sections its
+service owns through `ServiceSnapshot` the same way.
 
 ### Supervisor IPC — `pkg/sdn/gateway/ipc` (#557)
 

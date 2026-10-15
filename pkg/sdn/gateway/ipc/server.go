@@ -23,6 +23,7 @@ import (
 	"net"
 	"os"
 	"sync/atomic"
+	"syscall"
 
 	"google.golang.org/grpc"
 
@@ -64,12 +65,15 @@ type Server struct {
 	grpc     *grpc.Server
 	listener net.Listener
 	startErr atomic.Pointer[string]
+	// chown is os.Chown; a test replaces it to stand for a process that
+	// holds neither CAP_CHOWN nor membership of the socket group.
+	chown func(name string, uid, gid int) error
 }
 
 // NewServer builds a server for node under policy. Nothing listens until
 // Listen.
 func NewServer(node Node, policy Policy) *Server {
-	s := &Server{node: node, policy: policy}
+	s := &Server{node: node, policy: policy, chown: os.Chown}
 	s.grpc = grpc.NewServer(
 		grpc.Creds(peercred.NewUnixTransportCredentials(peercred.WithRequireCredentials(true))),
 		grpc.ChainUnaryInterceptor(
@@ -95,7 +99,9 @@ func (s *Server) SetStartError(err error) {
 
 // Listen binds the Unix socket at path with the given mode and group. A
 // stale socket file from a previous instance is removed first; any other
-// file at the path is an error. gid < 0 leaves the group as created.
+// file at the path is an error. gid < 0 leaves the group as created; a socket
+// that already has group gid — every socket bound in the supervisor's setgid
+// control-socket directory — is not chowned.
 func (s *Server) Listen(path string, mode os.FileMode, gid int) error {
 	if info, err := os.Lstat(path); err == nil {
 		if info.Mode()&os.ModeSocket == 0 {
@@ -112,9 +118,9 @@ func (s *Server) Listen(path string, mode os.FileMode, gid int) error {
 		return &ErrSocketPath{Path: path, Op: "listen", Cause: err}
 	}
 	if gid >= 0 {
-		if err := os.Chown(path, -1, gid); err != nil {
+		if err := s.ensureSocketGroup(path, gid); err != nil {
 			_ = listener.Close()
-			return &ErrSocketPath{Path: path, Op: "chown", Cause: err}
+			return err
 		}
 	}
 	if err := os.Chmod(path, mode); err != nil {
@@ -122,6 +128,28 @@ func (s *Server) Listen(path string, mode os.FileMode, gid int) error {
 		return &ErrSocketPath{Path: path, Op: "chmod", Cause: err}
 	}
 	s.listener = listener
+	return nil
+}
+
+// ensureSocketGroup gives the bound socket at path the group gid. A socket
+// bound in a setgid directory owned by gid has it from the kernel already,
+// and the chown is skipped: the datapath child stays uid 0 but keeps no
+// CAP_CHOWN and is not in the service group, so it could not make it.
+func (s *Server) ensureSocketGroup(path string, gid int) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return &ErrSocketPath{Path: path, Op: "stat", Cause: err}
+	}
+	got := -1
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		got = int(stat.Gid)
+	}
+	if got == gid {
+		return nil
+	}
+	if err := s.chown(path, -1, gid); err != nil {
+		return &ErrSocketGroup{Path: path, Want: gid, Got: got, Cause: err}
+	}
 	return nil
 }
 

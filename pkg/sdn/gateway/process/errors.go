@@ -276,6 +276,19 @@ func (e *ErrSocketDirNotGroupWritable) Error() string {
 	return fmt.Sprintf("mode %04o denies the service group the write permission every unprivileged child needs to bind its control socket", e.Mode)
 }
 
+// ErrSocketDirNotSetgid reports a control-socket directory without the setgid
+// bit. The bit is how a control socket gets the service group: the datapath
+// child keeps no CAP_CHOWN and is not in the service group, so a socket that
+// does not inherit the group from its directory never gets it.
+type ErrSocketDirNotSetgid struct {
+	Path string
+	Mode os.FileMode
+}
+
+func (e *ErrSocketDirNotSetgid) Error() string {
+	return fmt.Sprintf("mode %04o lacks the setgid bit that gives every control socket the service group", e.Mode)
+}
+
 // ErrSupervisorExited reports a child that lost its supervisor during the
 // privilege drop, in the window where the parent-death signal was disarmed by
 // the credential change and not yet re-armed. The child exits on it: a child

@@ -20,6 +20,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -301,6 +302,94 @@ func TestListen_ReplacesStaleSocketAndRefusesOtherFiles(t *testing.T) {
 	}
 }
 
+// socketDir is a short directory for a Unix socket (sun_path is 108 bytes),
+// setgid like the supervisor's control-socket directory, and its group.
+func socketDir(t *testing.T) (string, int) {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "gwipc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	if err := os.Chmod(dir, os.ModeSetgid|0o770); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSetgid == 0 {
+		t.Fatalf("%s mode %v: the kernel dropped the setgid bit", dir, info.Mode())
+	}
+	return dir, int(info.Sys().(*syscall.Stat_t).Gid)
+}
+
+// deniedChown stands for the datapath child: uid 0, but holding no CAP_CHOWN
+// and not a member of the socket group, so every chown is EPERM.
+type deniedChown struct{ calls int }
+
+func (d *deniedChown) chown(string, int, int) error {
+	d.calls++
+	return syscall.EPERM
+}
+
+func TestListen_TakesTheGroupFromTheSetgidDirectoryWithoutAChown(t *testing.T) {
+	// The supervisor makes the control-socket directory setgid and owned by
+	// the service group, so the socket has the group the moment it is bound.
+	// A child that could not chown still listens, and the mode is still set.
+	dir, group := socketDir(t)
+	path := filepath.Join(dir, "datapath.sock")
+	srv := NewServer(&fakeNode{}, Policy{})
+	denied := &deniedChown{}
+	srv.chown = denied.chown
+	if err := srv.Listen(path, 0o660, group); err != nil {
+		t.Fatalf("Listen in a setgid directory: %v", err)
+	}
+	t.Cleanup(srv.Stop)
+	if denied.calls != 0 {
+		t.Fatalf("chown called %d times for a socket that already had the group", denied.calls)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o660 {
+		t.Fatalf("socket mode = %v, want 0660", info.Mode().Perm())
+	}
+	if gid := info.Sys().(*syscall.Stat_t).Gid; int(gid) != group {
+		t.Fatalf("socket group = %d, want the directory's %d", gid, group)
+	}
+}
+
+func TestListen_RefusesASocketItCannotGiveTheGroup(t *testing.T) {
+	// A group the socket did not inherit needs a chown; without the privilege
+	// that is a typed error naming both groups, not a readiness timeout.
+	dir, group := socketDir(t)
+	path := filepath.Join(dir, "datapath.sock")
+	srv := NewServer(&fakeNode{}, Policy{})
+	denied := &deniedChown{}
+	srv.chown = denied.chown
+	want := group + 1
+
+	err := srv.Listen(path, 0o660, want)
+	var groupErr *ErrSocketGroup
+	if !errors.As(err, &groupErr) {
+		t.Fatalf("Listen = %v, want *ErrSocketGroup", err)
+	}
+	if groupErr.Want != want || groupErr.Got != group || !errors.Is(err, syscall.EPERM) {
+		t.Fatalf("ErrSocketGroup = %+v", groupErr)
+	}
+	if denied.calls != 1 {
+		t.Fatalf("chown called %d times, want 1", denied.calls)
+	}
+	if addr := srv.Addr(); addr != "" {
+		t.Fatalf("a refused Listen kept its listener at %q", addr)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("a refused Listen left its socket behind: %v", err)
+	}
+}
+
 func TestServe_RequiresListen(t *testing.T) {
 	var notListening *ErrServerNotListening
 	if err := NewServer(&fakeNode{}, Policy{}).Serve(); !errors.As(err, &notListening) {
@@ -329,6 +418,11 @@ func TestErrors_Messages(t *testing.T) {
 		{&ErrDocument{Document: "snapshot", Cause: errors.New("bad")}, "gatewayd ipc: snapshot document: bad"},
 		{&ErrRemoteApply{Message: "x"}, "gatewayd ipc: datapath apply failed: x"},
 		{&ErrServerNotListening{}, "gatewayd ipc: server has no listener; call Listen first"},
+		{
+			&ErrSocketGroup{Path: "/p", Want: 65534, Got: 0, Cause: errors.New("denied")},
+			"gatewayd ipc: socket \"/p\" has group 0, not 65534, and cannot be given it " +
+				"(the control-socket directory must be setgid and owned by that group): denied",
+		},
 	}
 	for _, c := range cases {
 		if got := c.err.Error(); got != c.want {
@@ -336,7 +430,8 @@ func TestErrors_Messages(t *testing.T) {
 		}
 	}
 	cause := errors.New("cause")
-	if !errors.Is(&ErrSocketPath{Cause: cause}, cause) || !errors.Is(&ErrDocument{Cause: cause}, cause) {
+	if !errors.Is(&ErrSocketPath{Cause: cause}, cause) || !errors.Is(&ErrDocument{Cause: cause}, cause) ||
+		!errors.Is(&ErrSocketGroup{Cause: cause}, cause) {
 		t.Fatal("Unwrap does not reach the cause")
 	}
 }

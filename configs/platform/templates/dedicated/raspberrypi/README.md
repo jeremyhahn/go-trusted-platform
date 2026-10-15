@@ -125,6 +125,15 @@ applies.
 It changes only `network:` — `dns.resolver`, `trust.bmc`, `ntp` and `acme`
 still point at the rack's control plane and need the site's values.
 
+## Secrets
+
+Every secret in these templates is a `kms://` reference, the platform PINs
+included (`platform.so-pin`, `platform.user-pin`). platformd generates them on
+its first start and returns the same values on every start after; nothing
+earlier in the boot reads them. Put no literal PIN or password in an override
+such as `cm4/desk-overrides.yaml`
+([docs/device-templates.md](../../../../../docs/device-templates.md#platform-pins)).
+
 ## Smart-card tokens
 
 Every Pi image carries the token stack, whatever the model and role: the image

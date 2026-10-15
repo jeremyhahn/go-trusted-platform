@@ -268,7 +268,8 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 
 	// The OVS runtime is assembled only when a datapath service needs it;
 	// a proxy-only gatewayd never dials OVSDB even with an sdn: section
-	// present. The runtime owns a live OVSDB connection, so every error
+	// present, and neither does a supervisor: the datapath child holds the
+	// runtime and this process relays to it (#557). The runtime owns a live OVSDB connection, so every error
 	// path below must release it — the deferred close runs unless
 	// assembly reaches the success return.
 	if service := datapathService(gwCfg); service != "" {
@@ -299,8 +300,8 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 	// not host the proxy neither builds it nor touches its pin directory,
 	// and neither does a supervisor whose proxy runs in its own child.
 	proxyEnabled := cfg.Proxy != nil && cfg.Proxy.Enabled
-	proxySupervised := gwCfg.Supervisor != nil && gwCfg.Supervisor.Supervises(gateway.ServiceProxy)
-	runsProxy := proxyEnabled && gwCfg.Hosts(gateway.ServiceProxy) && !proxySupervised
+	proxySupervised := supervised(gwCfg, gateway.ServiceProxy)
+	runsProxy := runs(gwCfg, proxyEnabled, gateway.ServiceProxy)
 	var trustResolver trust.Resolver
 	if runsProxy {
 		resolver, err := buildTrustResolver(cfg.Trust, cfg.DataDir, logger)

@@ -60,6 +60,27 @@ func (e *ErrSocketPath) Unwrap() error {
 	return e.Cause
 }
 
+// ErrSocketGroup reports a control socket that did not get the group its
+// peers reach it through. The supervisor's setgid control-socket directory
+// gives every socket bound in it that group; a socket bound elsewhere needs a
+// chown, which the datapath child — holding no CAP_CHOWN and not in the
+// group — cannot make.
+type ErrSocketGroup struct {
+	Path  string
+	Want  int
+	Got   int
+	Cause error
+}
+
+func (e *ErrSocketGroup) Error() string {
+	return fmt.Sprintf("gatewayd ipc: socket %q has group %d, not %d, and cannot be given it (the control-socket directory must be setgid and owned by that group): %v",
+		e.Path, e.Got, e.Want, e.Cause)
+}
+
+func (e *ErrSocketGroup) Unwrap() error {
+	return e.Cause
+}
+
 // ErrDocument reports a gwstate document that did not encode or decode
 // across the socket.
 type ErrDocument struct {

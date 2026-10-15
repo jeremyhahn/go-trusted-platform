@@ -22,6 +22,9 @@ import (
 // gatewaySnapshotTools serves the MCP gateway_snapshot and
 // gateway_snapshots tools from the gateway gRPC service, so the MCP
 // transport answers from the same implementation as gRPC and QUIC (#594).
+// With no reader wired the gateway service is not configured on this node,
+// and every tool answers ErrServiceNotAvailable (Unavailable), as the QUIC
+// and REST transports do.
 type gatewaySnapshotTools struct {
 	reader GatewaySnapshotReader
 }
@@ -29,7 +32,7 @@ type gatewaySnapshotTools struct {
 // GatewaySnapshot returns one gateway's telemetry snapshot.
 func (t gatewaySnapshotTools) GatewaySnapshot(ctx context.Context, gatewayID string) (interface{}, error) {
 	if t.reader == nil {
-		return nil, ErrGatewayOperationNotImplemented{Operation: "GatewaySnapshot"}
+		return nil, ErrServiceNotAvailable{Service: "gateway"}
 	}
 	resp, err := t.reader.GetGatewaySnapshot(ctx, &platformv1.GetGatewaySnapshotRequest{GatewayId: gatewayID})
 	if err != nil {
@@ -41,7 +44,7 @@ func (t gatewaySnapshotTools) GatewaySnapshot(ctx context.Context, gatewayID str
 // GatewaySnapshots returns every reported gateway's telemetry snapshot.
 func (t gatewaySnapshotTools) GatewaySnapshots(ctx context.Context) ([]interface{}, error) {
 	if t.reader == nil {
-		return nil, ErrGatewayOperationNotImplemented{Operation: "GatewaySnapshots"}
+		return nil, ErrServiceNotAvailable{Service: "gateway"}
 	}
 	resp, err := t.reader.ListGatewaySnapshots(ctx, &platformv1.ListGatewaySnapshotsRequest{})
 	if err != nil {
@@ -57,7 +60,7 @@ func (t gatewaySnapshotTools) GatewaySnapshots(ctx context.Context) ([]interface
 // GatewayAdmittedVTEP returns one VTEP the gateway reported as admitted.
 func (t gatewaySnapshotTools) GatewayAdmittedVTEP(ctx context.Context, gatewayID, vtep string) (interface{}, error) {
 	if t.reader == nil {
-		return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayAdmittedVTEP"}
+		return nil, ErrServiceNotAvailable{Service: "gateway"}
 	}
 	resp, err := t.reader.GetGatewayAdmittedVTEP(ctx, &platformv1.GetGatewayAdmittedVTEPRequest{GatewayId: gatewayID, Vtep: vtep})
 	if err != nil {
@@ -69,7 +72,7 @@ func (t gatewaySnapshotTools) GatewayAdmittedVTEP(ctx context.Context, gatewayID
 // GatewayAdmittedVTEPs returns every VTEP the gateway reported as admitted.
 func (t gatewaySnapshotTools) GatewayAdmittedVTEPs(ctx context.Context, gatewayID string) ([]interface{}, error) {
 	if t.reader == nil {
-		return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayAdmittedVTEPs"}
+		return nil, ErrServiceNotAvailable{Service: "gateway"}
 	}
 	resp, err := t.reader.ListGatewayAdmittedVTEPs(ctx, &platformv1.ListGatewayAdmittedVTEPsRequest{GatewayId: gatewayID})
 	if err != nil {

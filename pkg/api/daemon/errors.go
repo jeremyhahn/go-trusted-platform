@@ -1661,15 +1661,6 @@ func (e ErrGatewayServiceNotAvailable) Error() string {
 	return "gateway service not available"
 }
 
-// ErrGatewayOperationNotImplemented is returned when a gateway operation is not yet implemented
-type ErrGatewayOperationNotImplemented struct {
-	Operation string
-}
-
-func (e ErrGatewayOperationNotImplemented) Error() string {
-	return fmt.Sprintf("gateway operation not implemented: %s", e.Operation)
-}
-
 // ErrBGPAttributeUnsupported is returned when a prefix announcement asks
 // for a BGP path attribute the gateway service does not announce with.
 type ErrBGPAttributeUnsupported struct {

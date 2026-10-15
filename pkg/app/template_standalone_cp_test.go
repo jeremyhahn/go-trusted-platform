@@ -16,6 +16,7 @@ package app
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -149,14 +150,16 @@ func templateDaemonListeners(t *testing.T, path string) config.DaemonListeners {
 	return listeners
 }
 
-// walkSecrets calls found for every non-empty string set under a secret
-// key in node.
+// walkSecrets calls found for every non-empty value set under a secret
+// key in node. A value that is not a string is reported too: an unquoted
+// `password: 123456` decodes as an int and is as much a literal secret as
+// a quoted one.
 func walkSecrets(node any, path string, found func(path, value string)) {
 	switch n := node.(type) {
 	case map[string]any:
 		for k, v := range n {
 			child := path + "." + k
-			if s, ok := v.(string); ok && secretKeys[k] && s != "" {
+			if s, ok := secretScalar(v); ok && secretKeys[k] {
 				found(child, s)
 				continue
 			}
@@ -167,4 +170,15 @@ func walkSecrets(node any, path string, found func(path, value string)) {
 			walkSecrets(v, path+"[]", found)
 		}
 	}
+}
+
+// secretScalar returns v as text when it is a non-empty scalar; a map, a
+// list or an empty value is not a secret value of its own.
+func secretScalar(v any) (string, bool) {
+	switch v.(type) {
+	case nil, map[string]any, []any:
+		return "", false
+	}
+	s := fmt.Sprint(v)
+	return s, s != ""
 }

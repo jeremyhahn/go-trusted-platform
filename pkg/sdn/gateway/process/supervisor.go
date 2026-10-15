@@ -358,10 +358,17 @@ func (s *Supervisor) abandonLaunch(ctx context.Context, proc *supervised, child 
 // The sticky bit is what makes group write safe: parsers share one account, so
 // without it any one of them could unlink another's control socket and take
 // over the name.
-const runtimeDirMode = os.ModeSticky | 0o770
+//
+// The setgid bit is what gives every control socket the service group without
+// a chown. A socket bound in a setgid directory takes the directory's group
+// from the kernel, so the datapath child — uid 0, but holding only
+// CAP_NET_ADMIN and CAP_NET_RAW, and not a member of the service group — gets
+// a socket the parsers can reach without needing CAP_CHOWN in its steady state.
+const runtimeDirMode = os.ModeSticky | os.ModeSetgid | 0o770
 
 // ensureRuntimeDir makes the control-socket directory exist, owned by the
-// service account's group and writable by it. The packaged init script creates
+// service account's group, writable by it and setgid so every socket bound in
+// it gets that group. The packaged init script creates
 // it too; doing it here keeps a hand-started supervisor working and is
 // idempotent.
 func (s *Supervisor) ensureRuntimeDir() error {
@@ -372,13 +379,6 @@ func (s *Supervisor) ensureRuntimeDir() error {
 	if err := os.MkdirAll(dir, runtimeDirMode); err != nil {
 		return &ErrSocketDir{Path: dir, Op: "create", Cause: err}
 	}
-	// MkdirAll leaves an existing directory's mode alone, and the packaged
-	// init script may have created it, so the mode is set rather than
-	// assumed.
-	if err := os.Chmod(dir, runtimeDirMode); err != nil {
-		s.cfg.Logger.Warn("gatewayd supervisor: setting the control-socket directory mode",
-			slog.String("path", dir), slog.Any("error", err))
-	}
 	if s.cfg.SocketGID >= 0 {
 		if err := os.Chown(dir, -1, s.cfg.SocketGID); err != nil {
 			// A supervisor without the privilege to chown is a developer
@@ -387,6 +387,14 @@ func (s *Supervisor) ensureRuntimeDir() error {
 				slog.String("path", dir), slog.Any("error", err))
 		}
 	}
+	// MkdirAll leaves an existing directory's mode alone, and the packaged
+	// init script may have created it, so the mode is set rather than
+	// assumed. It follows the chown: the kernel keeps a setgid bit only for
+	// a caller in the directory's group or holding CAP_FSETID.
+	if err := os.Chmod(dir, runtimeDirMode); err != nil {
+		s.cfg.Logger.Warn("gatewayd supervisor: setting the control-socket directory mode",
+			slog.String("path", dir), slog.Any("error", err))
+	}
 	// Verify rather than hope. A directory the children cannot write is a
 	// refusal now, naming the directory, instead of four readiness timeouts
 	// that name the children.
@@ -394,11 +402,22 @@ func (s *Supervisor) ensureRuntimeDir() error {
 	if err != nil {
 		return &ErrSocketDir{Path: dir, Op: "stat", Cause: err}
 	}
-	if !bindableByServiceGroup(info.Mode()) {
-		return &ErrSocketDir{
-			Path: dir, Op: "secure",
-			Cause: &ErrSocketDirNotGroupWritable{Path: dir, Mode: info.Mode().Perm()},
-		}
+	if fault := socketDirFault(dir, info.Mode(), s.cfg.SocketGID >= 0); fault != nil {
+		return &ErrSocketDir{Path: dir, Op: "secure", Cause: fault}
+	}
+	return nil
+}
+
+// socketDirFault reports what keeps the children from using a control-socket
+// directory of the given mode, or nil. A directory that hands out a socket
+// group must also be setgid: otherwise the datapath child binds its socket in
+// its own group and has no privilege to change it.
+func socketDirFault(path string, mode os.FileMode, socketGroup bool) error {
+	if !bindableByServiceGroup(mode) {
+		return &ErrSocketDirNotGroupWritable{Path: path, Mode: mode.Perm()}
+	}
+	if socketGroup && mode&os.ModeSetgid == 0 {
+		return &ErrSocketDirNotSetgid{Path: path, Mode: mode.Perm()}
 	}
 	return nil
 }

@@ -14,8 +14,10 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -39,8 +41,9 @@ type fakeSupervisor struct {
 	applyState gwstate.DesiredConfigState
 	applyErr   error
 
-	snapshots   map[string]*gwstate.Snapshot
-	snapshotErr error
+	snapshots     map[string]*gwstate.Snapshot
+	snapshotErr   error
+	snapshotReads []string
 
 	// unsupervised are the services that have not moved out of process.
 	unsupervised map[string]bool
@@ -84,6 +87,7 @@ func (f *fakeSupervisor) ServiceActive(service string) bool { return f.active[se
 func (f *fakeSupervisor) ServiceHealth(service string) error { return f.health[service] }
 
 func (f *fakeSupervisor) ServiceSnapshot(_ context.Context, service string) (*gwstate.Snapshot, error) {
+	f.snapshotReads = append(f.snapshotReads, service)
 	if f.snapshotErr != nil {
 		return nil, f.snapshotErr
 	}
@@ -250,6 +254,64 @@ func TestSupervisedSnapshot_AnUnsupervisedSpeakerIsReadInProcess(t *testing.T) {
 	assert.Equal(t, uint32(64512), snap.BGP.LocalASN)
 }
 
+func TestSupervisedSnapshot_CarriesTheDatapathChildsSectionsFromOneRead(t *testing.T) {
+	sup := newFakeSupervisor()
+	child := &gwstate.Snapshot{
+		Services: []gwstate.ServiceState{{Name: ServiceFirewall, Active: true}, {Name: ServiceNAT, Active: true}},
+		Firewall: &gwstate.FirewallState{Active: true, FlowCount: 12},
+		NAT:      &gwstate.NATState{Active: true, SNATEnabled: true, DNATRules: 2},
+		Pipeline: &gwstate.PipelineState{Installed: true, Bridge: "br-test", Owner: "gatewayd:supervised-gw"},
+	}
+	// One datapath child runs both services, so the supervisor answers
+	// either with the same snapshot.
+	sup.snapshots[ServiceFirewall] = child
+	sup.snapshots[ServiceNAT] = child
+	gw := newSupervisedGateway(t, sup)
+
+	snap := gw.Snapshot()
+
+	assert.Equal(t, child.Firewall, snap.Firewall, "the flow detail comes from the child that holds the flows")
+	assert.Equal(t, child.NAT, snap.NAT)
+	assert.Equal(t, child.Pipeline, snap.Pipeline, "the pipeline is the datapath child's: this process holds no runtime")
+	datapathReads := 0
+	for _, service := range sup.snapshotReads {
+		if service == ServiceFirewall || service == ServiceNAT {
+			datapathReads++
+		}
+	}
+	assert.Equal(t, 1, datapathReads, "a child that lists both services is read once")
+}
+
+func TestSupervisedSnapshot_AnUnreadableDatapathChildLeavesItsSectionsEmpty(t *testing.T) {
+	sup := newFakeSupervisor()
+	sup.snapshotErr = errors.New("control socket gone")
+	var logged bytes.Buffer
+	cfg := supervisedConfig(sup)
+	cfg.Host = &HostRuntime{Logger: slog.New(slog.NewTextHandler(&logged, nil))}
+	gw, err := NewGateway(cfg)
+	require.NoError(t, err)
+
+	snap := gw.Snapshot()
+
+	assert.Nil(t, snap.Firewall, "no stale or invented flow detail for a child that cannot be read")
+	assert.Nil(t, snap.NAT)
+	assert.Nil(t, snap.Pipeline)
+	assert.Contains(t, logged.String(), "snapshot unavailable from its supervised process", "the failure is logged, not dropped")
+	assert.Contains(t, logged.String(), "control socket gone", "with the supervisor's cause")
+}
+
+func TestSupervisedSnapshot_AnUnsupervisedDatapathIsNotReadFromAChild(t *testing.T) {
+	sup := newFakeSupervisor()
+	sup.unsupervised[ServiceFirewall] = true
+	sup.unsupervised[ServiceNAT] = true
+	gw := newSupervisedGateway(t, sup)
+
+	gw.Snapshot()
+
+	assert.NotContains(t, sup.snapshotReads, ServiceFirewall, "a datapath in this process is read in process")
+	assert.NotContains(t, sup.snapshotReads, ServiceNAT)
+}
+
 func TestSupervisor_UnsupervisedSectionKeepsItsInProcessHandler(t *testing.T) {
 	sup := newFakeSupervisor()
 	sup.unsupervised[ServiceManagementVPN] = true
@@ -384,7 +446,7 @@ func TestSupervisedApply_ReportsTheChildFailureWithItsState(t *testing.T) {
 	assert.Nil(t, sup.applied)
 }
 
-func TestSupervisedApply_StaysInProcessUntilTheDatapathMoves(t *testing.T) {
+func TestSupervisedApply_AnUnsupervisedDatapathAppliesInProcess(t *testing.T) {
 	sup := newFakeSupervisor()
 	sup.unsupervised[ServiceNAT] = true
 	sup.unsupervised[ServiceLoadBalancer] = true

@@ -94,6 +94,11 @@ var definitions = []Definition{
 		Capabilities: []uintptr{unix.CAP_NET_ADMIN, unix.CAP_NET_RAW},
 		MemoryMax:    512 << 20,
 		CPUMax:       "200000 100000",
+		// Last to move: the one supervised process that is not unprivileged.
+		// It keeps exactly the two capabilities the kernel needs from it,
+		// holds the OVS runtime, and is reached by parser children only
+		// through the datapath IPC service.
+		Supervised: true,
 	},
 	{
 		Name:         "routing",

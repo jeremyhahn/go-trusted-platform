@@ -200,6 +200,11 @@ IPv6-only traffic untranslated. See `docs/gateway/user.md`, "IPv6-only clients".
 - A successful install **powers the node off** rather than rebooting
   ("Remove the installation media and reboot"). A powered-off node after
   an install is the success case, not a failure.
+- **Every secret is a `kms://` reference**, the platform PINs included
+  (`platform.so-pin`, `platform.user-pin`). platformd generates them on its
+  first start and returns the same values on every start after; nothing
+  earlier in the boot reads them. Put no literal PIN or password in an
+  override ([docs/device-templates.md](../../../../../../docs/device-templates.md#platform-pins)).
 
 
 ### Gateway overlay fields

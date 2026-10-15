@@ -687,10 +687,18 @@ platform:
   user-pin: "kms://platform/user-pin?ensure=true&len=6&enc=numeric"
 ```
 
-These PINs are generated automatically during first-boot provisioning.
+platformd resolves these references when it starts, before it reads either
+PIN: `SecretsService.EnsureSecret` generates and persists them on first
+resolve and returns the same stable bytes on every subsequent boot. Nothing
+earlier in the boot reads them: firstboot provisions the TPM with no
+hierarchy auth, and the initramfs and installer never open these fields.
 There is no need to pass PINs on the command line or store them in override
-files -- `SecretsService.EnsureSecret` generates and persists them on first
-resolve and returns the same stable bytes on every subsequent boot.
+files.
+
+No shipped template carries a literal PIN, password or key: every field the
+platform schema marks secret holds a `kms://` reference.
+`TestShippedTemplates_NoLiteralSecrets` (`pkg/app`) fails the build on a
+literal value in any template or override example.
 
 ## Bootstrap Integration
 

@@ -359,18 +359,21 @@ registers its relay directly (`RegisterSupervisedService`). `provisioning`
 privileged ports it answers on, and every request it parses comes from a
 device not yet trusted. None of its sections has a backend yet, so its child
 hosts the refusals and the parent relays them; a backend that lands later
-lands in the child. Every other section keeps its in-process handler, exactly
-as with the model off. The order still to come is `vpn` once it has a backend,
-and `datapath` last;
+lands in the child. `datapath` (`firewall`, `nat`, `load-balancer`, `nat64`,
+`hostfw`, `tunnels`, `overlay`) moved last. It is the one supervised process
+that is not unprivileged: it keeps uid 0 with exactly `CAP_NET_ADMIN` and
+`CAP_NET_RAW`, the capabilities its kernel programming needs. Only the
+management VPN, which has no backend yet, keeps its in-process handler. The
+order still to come is `vpn` once it has a backend;
 [`engineering.md`](engineering.md) §The process model carries the state.
 
-Once `datapath` moves, two consequences are deliberate. `Gateway.Apply`
-forwards the whole desired document to the supervisor and records the state
-the datapath child reports, rather than reconciling anything locally — the
-services it would reconcile are not in this process. And the parent installs
-no base pipeline: `Runtime` is nil there because the datapath child holds the
-OVSDB connection and owns the bridge. Until then `Apply` forwards only when
-`nat` or `load-balancer` is supervised, so today it reconciles in-process.
+Moving `datapath` has two deliberate consequences. `Gateway.Apply` forwards
+the whole desired document to the supervisor and records the state the
+datapath child reports, rather than reconciling anything locally — the
+services it would reconcile are not in this process. The supervisor keeps the
+document and re-sends it to a relaunched child, which reconciles its flows
+from it. And the parent installs no base pipeline: `Runtime` is nil there
+because the datapath child holds the OVSDB connection and owns the bridge.
 
 A child hosts only its own process's services (`GatewayConfig.HostedServices`):
 it builds no OVS runtime unless it hosts a datapath service (the overlay
@@ -400,6 +403,12 @@ cannot be forged.
 |---|---|---|
 | `ProcessControlService` | `Status`, `Snapshot` | the supervisor's uid (root) |
 | `DatapathService` | `ApplyDesired` | the supervisor, plus — on the kernel-class process only — the parser class's unprivileged uid; a parser process admits no other parser |
+
+Each socket is mode `0660` in the service group, so a parser reaches the
+kernel-class socket through the filesystem before `SO_PEERCRED` decides. The
+socket inherits that group from the supervisor's setgid `runtime-dir`: the
+kernel-class child stays root but keeps only `CAP_NET_ADMIN` and `CAP_NET_RAW`
+and is not in the service group, so it could not chown the socket itself.
 
 The supervisor is root and the parser class runs unprivileged, so the uid is
 the whole authorization question. `Policy` is the per-service uid table; an RPC for a service it does not know is

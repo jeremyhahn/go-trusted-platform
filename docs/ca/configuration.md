@@ -49,7 +49,7 @@ certificate-authority:
           platform-policy: true
         tpm2:
           srk-handle: 0x81000001
-          srk-auth: "123456"
+          srk-auth: "kms://ca/root/tpm2/srk-auth?ensure=true&len=32&enc=raw"
           platform-policy: true
       keys:
         - algorithm: RSA
@@ -58,7 +58,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: software
-          password: "123456"
+          password: "kms://ca/root/keys/0/password?ensure=true&len=32&enc=base64"
           platform-policy: true
       valid: 50                     # Validity in years
       subject:
@@ -84,7 +84,7 @@ certificate-authority:
           platform-policy: true
         tpm2:
           srk-handle: 0x81000001
-          srk-auth: "123456"
+          srk-auth: "kms://ca/issuing/tpm2/srk-auth?ensure=true&len=32&enc=raw"
           platform-policy: true
       keys:
         - algorithm: RSA
@@ -93,7 +93,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: software
-          password: "123456"
+          password: "kms://ca/issuing/keys/0/password?ensure=true&len=32&enc=base64"
           platform-policy: true
       valid: 10
       subject:
@@ -146,7 +146,7 @@ identity:
 
       tpm2:
         srk-handle: 0x81000001      # Storage Root Key handle
-        srk-auth: "123456"          # SRK authorization value
+        srk-auth: "kms://ca/root/tpm2/srk-auth?ensure=true&len=32&enc=raw"  # SRK authorization value
         platform-policy: true
 
       pkcs11:
@@ -154,7 +154,7 @@ identity:
         config: /etc/softhsm.conf
         slot: 0
         label: SoftHSM
-        pin: "123456"
+        pin: "kms://ca/root/pkcs11/pin"  # set when the token was initialised
         platform-policy: true
 
     # Define keys for this CA (supports multiple algorithms/stores)
@@ -166,7 +166,7 @@ identity:
         signature-algorithm: SHA256-RSA
         hash: SHA-256
         store: software             # software, tpm2, pkcs11
-        password: "123456"
+        password: "kms://ca/root/keys/0/password?ensure=true&len=32&enc=base64"
         platform-policy: true
         debug: true
 
@@ -177,7 +177,7 @@ identity:
         signature-algorithm: SHA256-RSA
         hash: SHA-256
         store: tpm2
-        password: "123456"
+        password: "kms://ca/root/keys/1/password?ensure=true&len=32&enc=base64"
         platform-policy: true
 
       # PKCS#8 ECDSA
@@ -187,7 +187,7 @@ identity:
         signature-algorithm: ECDSA-SHA256
         hash: SHA-256
         store: software
-        password: "123456"
+        password: "kms://ca/root/keys/2/password?ensure=true&len=32&enc=base64"
         platform-policy: true
 
       # TPM 2.0 ECDSA
@@ -197,7 +197,7 @@ identity:
         signature-algorithm: ECDSA-SHA256
         hash: SHA-256
         store: tpm2
-        password: "123456"
+        password: "kms://ca/root/keys/3/password?ensure=true&len=32&enc=base64"
         platform-policy: true
 
       # PKCS#8 Ed25519
@@ -207,7 +207,7 @@ identity:
         signature-algorithm: Ed25519
         hash: SHA-256
         store: software
-        password: "123456"
+        password: "kms://ca/root/keys/4/password?ensure=true&len=32&enc=base64"
         platform-policy: true
 
     valid: 50                       # Certificate validity in years
@@ -245,7 +245,7 @@ certificate-authority:
           platform-policy: true
         tpm2:
           srk-handle: 0x81000001
-          srk-auth: "123456"
+          srk-auth: "kms://ca/issuing/tpm2/srk-auth?ensure=true&len=32&enc=raw"
           platform-policy: true
       keys:
         - algorithm: RSA
@@ -254,7 +254,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: software
-          password: "123456"
+          password: "kms://ca/issuing/keys/0/password?ensure=true&len=32&enc=base64"
           platform-policy: true
         - algorithm: ECDSA
           ecc:
@@ -262,7 +262,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: tpm2
-          password: "123456"
+          password: "kms://ca/issuing/keys/1/password?ensure=true&len=32&enc=base64"
           platform-policy: true
       valid: 10
       subject:
@@ -342,7 +342,7 @@ webservices:
       signature-algorithm: ECDSA-SHA256
       hash: SHA-256
       store: software
-      password: "123456"
+      password: "kms://webservices/0/key/password?ensure=true&len=32&enc=raw"
       platform-policy: true
 
     # TLS certificate configuration
@@ -529,7 +529,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: software
-          password: "dev-password"
+          password: "kms://ca/root/keys/0/password?ensure=true&len=32&enc=base64"
           platform-policy: true
       valid: 5
       subject:
@@ -554,7 +554,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: software
-          password: "dev-password"
+          password: "kms://ca/issuing/keys/0/password?ensure=true&len=32&enc=base64"
           platform-policy: true
       valid: 2
       subject:

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
@@ -176,6 +178,35 @@ func TestShippedTemplates_RetiredKeysAreGone(t *testing.T) {
 	}
 }
 
+// TestShippedTemplates_NoLiteralSecrets holds every shipped template, and
+// every override example beside one, to the no-literal-secrets rule: each
+// PIN, password and key field the App schema marks secret holds a secret
+// reference (kms://), never a value an operator could copy into a
+// deployment. platformd resolves the references before any field is read.
+func TestShippedTemplates_NoLiteralSecrets(t *testing.T) {
+	paths := shippedPlatformTemplates(t)
+	for rel := range overrideExamples {
+		paths = append(paths, filepath.Join(configRoot, rel))
+	}
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err)
+		fields, err := bootstrap.PlaintextSecretFields(raw, reflect.TypeFor[App]())
+		require.NoError(t, err, path)
+		assert.Empty(t, fields, "%s: literal secret values; use a kms:// reference", path)
+	}
+}
+
+// TestShippedTemplates_NoLiteralSecretsCatchesALiteral proves the check
+// above can fail: a template carrying the literal PINs it replaced is
+// reported field by field.
+func TestShippedTemplates_NoLiteralSecretsCatchesALiteral(t *testing.T) {
+	doc := []byte("platform:\n  so-pin: \"12345678\"\n  user-pin: \"kms://platform/user-pin?ensure=true&len=6&enc=numeric\"\n")
+	fields, err := bootstrap.PlaintextSecretFields(doc, reflect.TypeFor[App]())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"platform.so-pin"}, fields)
+}
+
 // TestShippedTemplates_QuicBaaSValidates runs every template's quicbaas
 // section through the validation platformd runs before it opens the store,
 // including the Raft rule: a template with join-addresses advertises a
@@ -209,21 +240,6 @@ func TestShippedTemplates_JoinWithoutRaftAddressRefused(t *testing.T) {
 // clusterExampleRoot holds the multi-node cluster example configurations.
 var clusterExampleRoot = filepath.Join(configRoot, "platform", "cluster")
 
-// TestShippedClusterExamples_QuicBaaSValidates runs the quicbaas section of
-// every cluster example through the validation platformd runs before it
-// opens the store, so an example can never again name a storage backend or
-// a member form the code refuses.
-func TestShippedClusterExamples_QuicBaaSValidates(t *testing.T) {
-	paths, err := filepath.Glob(filepath.Join(clusterExampleRoot, "*.example.com.yaml"))
-	require.NoError(t, err)
-	require.Len(t, paths, 8, "the cluster example set changed; review this test")
-	for _, path := range paths {
-		a := loadTemplate(t, path)
-		require.NotNil(t, a.QuicBaaSConfig, "%s: quicbaas section", path)
-		require.NoError(t, a.QuicBaaSConfig.Validate(), path)
-	}
-}
-
 // TestShippedClusterExamples_ServersFormOneCluster checks the three server
 // examples describe one cluster: each is clustered, all carry the same
 // member list, deployment ID and Raft CA, and each lists itself at its own
@@ -245,5 +261,20 @@ func TestShippedClusterExamples_ServersFormOneCluster(t *testing.T) {
 		assert.Equal(t, first.JoinAddresses, c.JoinAddresses, path)
 		assert.Equal(t, first.DeploymentID, c.DeploymentID, path)
 		assert.Equal(t, first.RaftTLSCAFile, c.RaftTLSCAFile, path)
+	}
+}
+
+// TestShippedClusterExamples_ServersForwardToTheirInternalDNS pins the
+// servers' dnsmasq forwarder where platformd decodes it, network.dnsmasq:
+// under dns: the key is never read, and the resolver at 127.0.0.1 the
+// servers name would have nothing behind it.
+func TestShippedClusterExamples_ServersForwardToTheirInternalDNS(t *testing.T) {
+	for id := 1; id <= 3; id++ {
+		path := filepath.Join(clusterExampleRoot, fmt.Sprintf("server%d.example.com.yaml", id))
+		n := loadTemplate(t, path).NetworkConfig
+		require.NotNil(t, n, "%s: network section", path)
+		require.NotNil(t, n.DNSMasq, "%s: network.dnsmasq", path)
+		assert.True(t, n.DNSMasq.Enabled, path)
+		assert.Equal(t, []string{"127.0.0.1:9053"}, n.DNSMasq.UpstreamServers, path)
 	}
 }

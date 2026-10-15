@@ -24,6 +24,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/process"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/proxysvc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
@@ -202,6 +203,75 @@ func TestBuildGatewaySkipsRuntimeWithoutDatapathService(t *testing.T) {
 	}
 	if gw.GetConfig().Runtime != nil {
 		t.Fatal("runtime must not be assembled without a datapath service")
+	}
+}
+
+// supervisedDatapathConfig enables every OVS-backed datapath service over an
+// sdn: section whose OVSDB socket does not exist, so any dial fails the build.
+func supervisedDatapathConfig(t *testing.T) *ServeConfig {
+	t.Helper()
+	return &ServeConfig{
+		Gateway: &gateway.GatewayConfig{
+			Enabled:  true,
+			ID:       "gw-supervisor",
+			Firewall: &gateway.FirewallConfig{Enabled: true, DefaultPolicy: "deny"},
+			NAT: &gateway.NATConfig{
+				Enabled:        true,
+				ExternalIP:     "203.0.113.10",
+				PortRangeStart: 1024,
+				PortRangeEnd:   65535,
+				MaxSessions:    1000,
+				InternalCIDR:   "10.0.100.0/24",
+			},
+			LoadBalancer: &gateway.LoadBalancerConfig{
+				Enabled:             true,
+				Algorithm:           "hash",
+				HealthCheckInterval: time.Hour,
+				HealthCheckTimeout:  time.Second,
+				MaxBackends:         8,
+			},
+		},
+		SDN: &sdn.Config{
+			Enabled:     true,
+			OVS:         &sdn.OVSConfig{Socket: filepath.Join(t.TempDir(), "missing.sock"), Bridge: "br0"},
+			Environment: &netplan.Environment{ID: 4},
+		},
+		Process: supervisorSettings(t),
+		DataDir: t.TempDir(),
+	}
+}
+
+func TestBuildGatewaySupervisorRelaysTheDatapathWithoutDialingOVSDB(t *testing.T) {
+	// The datapath child holds the OVS runtime (#557, R14); the supervising
+	// parent relays to it and must not dial OVSDB itself.
+	cfg := supervisedDatapathConfig(t)
+	if _, err := BuildSupervisor(cfg, process.Inherited{ConfigFile: "/etc/gatewayd/config.yaml"}, testLogger()); err != nil {
+		t.Fatalf("BuildSupervisor: %v", err)
+	}
+	gw, err := BuildGateway(context.Background(), cfg, testLogger())
+	if err != nil {
+		t.Fatalf("BuildGateway must relay the datapath, not dial OVSDB: %v", err)
+	}
+	if gw.GetConfig().Runtime != nil {
+		t.Fatal("the supervising parent must not hold the OVS runtime")
+	}
+	registered := make(map[string]bool)
+	for _, report := range gw.ServiceReports() {
+		registered[report.Name] = true
+	}
+	for _, service := range []string{gateway.ServiceFirewall, gateway.ServiceNAT, gateway.ServiceLoadBalancer} {
+		if !registered[service] {
+			t.Fatalf("the supervising parent must register the %s relay", service)
+		}
+	}
+}
+
+func TestBuildGatewayWithoutSupervisorDialsOVSDBForTheDatapath(t *testing.T) {
+	// The same configuration without a supervisor runs the datapath in this
+	// process, so the missing OVSDB socket fails the build.
+	var connectErr *ErrOVSConnectFailed
+	if _, err := BuildGateway(context.Background(), supervisedDatapathConfig(t), testLogger()); !errors.As(err, &connectErr) {
+		t.Fatalf("err = %v, want *ErrOVSConnectFailed: an unsupervised datapath dials OVSDB", err)
 	}
 }
 
