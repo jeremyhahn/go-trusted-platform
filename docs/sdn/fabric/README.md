@@ -1,6 +1,6 @@
 # Physical Switch Fabric Management
 
-> **Status: REFERENCE**
+> **Status: REFERENCE** · Last verified: 2026-10-15
 > The physical switch fabric manager in `pkg/sdn/fabric`.
 
 `pkg/sdn/fabric` programs the platform's physical switches to the
@@ -52,11 +52,15 @@ sdn:
         vendor: cisco-nexus
         model: N9K-C93180YC-EX
         mgmt-ip: 192.0.2.10
-        credentials-ref: "kms://switches/sw-01"
+        ssh-user: platform
+        ssh-key-path: /etc/platform/fabric/id_ed25519
+        known-hosts-path: /etc/platform/fabric/known_hosts
       - id: sw-02
         vendor: cisco-nexus
         mgmt-ip: 192.0.2.11
-        credentials-ref: "kms://switches/sw-02"
+        ssh-user: platform
+        ssh-key-path: /etc/platform/fabric/id_ed25519
+        known-hosts-path: /etc/platform/fabric/known_hosts
     peers:
       - switch-a: sw-01
         switch-b: sw-02
@@ -70,7 +74,8 @@ sdn:
 ## Status
 
 The fabric manager is a library: `platformd` validates `sdn.fabric` at startup but does not yet drive
-the switches from it. Day-zero switch configuration is done by the bootstrap switch phase
+the switches from it. No binary imports `pkg/sdn/fabric/nexus`, so no vendor driver is registered
+outside tests. Day-zero switch configuration is done by the bootstrap switch phase
 (`bootstrap.yaml` `switch:`, [switch management](../../switch/user.md)), which uses the
 same port classes from the same plan.
 
