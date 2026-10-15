@@ -79,62 +79,49 @@ func TestCertificateMonitor_StartStop(t *testing.T) {
 }
 
 func TestCertificateMonitor_ExpiryCallbacks(t *testing.T) {
-	engine := createTestEngine(t)
 	config := MonitorConfig{
 		CheckInterval:   50 * time.Millisecond,
 		ExpiryThreshold: 1 * time.Hour,
 	}
-	monitor := NewCertificateMonitor(engine, config)
 
+	// The tick runs on the bubble's fake clock (#284): synctest.Wait returns
+	// once the sweep and its callback goroutines have settled.
 	t.Run("Register and trigger callback", func(t *testing.T) {
-		var callbackCount atomic.Int32
-		done := make(chan bool, 1)
+		synctest.Test(t, func(t *testing.T) {
+			engine := createTestEngine(t)
+			monitor := NewCertificateMonitor(engine, config)
+			var callbackCount atomic.Int32
+			monitor.OnExpiry(func(portID string, cert interface{}, timeUntilExpiry time.Duration) {
+				callbackCount.Add(1)
+				assert.Equal(t, "port1", portID)
+				assert.NotNil(t, cert)
+			})
 
-		// The monitor re-invokes the callback on every tick while the
-		// certificate stays within the expiry threshold, so signal without
-		// blocking: a blocking send would strand every later invocation.
-		monitor.OnExpiry(func(portID string, cert interface{}, timeUntilExpiry time.Duration) {
-			callbackCount.Add(1)
-			assert.Equal(t, "port1", portID)
-			assert.NotNil(t, cert)
-			select {
-			case done <- true:
-			default:
+			// Create a port with an expiring certificate
+			policy := &PortPolicy{
+				TenantID:    "tenant-1",
+				VLAN:        100,
+				Certificate: createTestCertificate(t, x509.Certificate{}),
+				ExpiresAt:   time.Now().Add(30 * time.Minute), // Within threshold
 			}
+			// Follow proper state machine flow: unconnected -> provisioning -> authenticating -> authorized
+			require.NoError(t, engine.stateMachine.SetState("port1", PortStateProvisioning))
+			require.NoError(t, engine.stateMachine.SetState("port1", PortStateAuthenticating))
+			require.NoError(t, engine.stateMachine.SetState("port1", PortStateAuthorized))
+			require.NoError(t, engine.stateMachine.SetPolicy("port1", policy))
+
+			require.NoError(t, monitor.Start(context.Background()))
+
+			<-time.After(config.CheckInterval)
+			synctest.Wait()
+			assert.Equal(t, int32(1), callbackCount.Load(), "one tick, one callback")
+
+			require.NoError(t, monitor.Stop())
 		})
-
-		// Create a port with an expiring certificate
-		policy := &PortPolicy{
-			TenantID:    "tenant-1",
-			VLAN:        100,
-			Certificate: createTestCertificate(t, x509.Certificate{}),
-			ExpiresAt:   time.Now().Add(30 * time.Minute), // Within threshold
-		}
-		// Follow proper state machine flow: unconnected -> provisioning -> authenticating -> authorized
-		require.NoError(t, engine.stateMachine.SetState("port1", PortStateProvisioning))
-		require.NoError(t, engine.stateMachine.SetState("port1", PortStateAuthenticating))
-		require.NoError(t, engine.stateMachine.SetState("port1", PortStateAuthorized))
-		require.NoError(t, engine.stateMachine.SetPolicy("port1", policy))
-
-		// Start monitor
-		ctx := context.Background()
-		require.NoError(t, monitor.Start(ctx))
-		defer func() {
-			if err := monitor.Stop(); err != nil {
-				t.Logf("cleanup: %v", err)
-			}
-		}()
-
-		// Wait for callback
-		select {
-		case <-done:
-			assert.Greater(t, callbackCount.Load(), int32(0))
-		case <-time.After(500 * time.Millisecond):
-			t.Fatal("Callback not triggered within timeout")
-		}
 	})
 
 	t.Run("Multiple callbacks", func(t *testing.T) {
+		monitor := NewCertificateMonitor(createTestEngine(t), config)
 		var count1, count2 atomic.Int32
 
 		monitor.OnExpiry(func(portID string, cert interface{}, timeUntilExpiry time.Duration) {
@@ -145,7 +132,7 @@ func TestCertificateMonitor_ExpiryCallbacks(t *testing.T) {
 			count2.Add(1)
 		})
 
-		assert.Len(t, monitor.expiryCallbacks, 3) // 1 from previous test + 2 new
+		assert.Len(t, monitor.expiryCallbacks, 2)
 	})
 }
 
@@ -228,50 +215,40 @@ func TestCertificateMonitor_CheckExpiry(t *testing.T) {
 	})
 
 	t.Run("Certificate expiring soon", func(t *testing.T) {
-		engine := createTestEngine(t)
-		var callbackTriggered atomic.Bool
-		done := make(chan bool, 1)
+		synctest.Test(t, func(t *testing.T) {
+			engine := createTestEngine(t)
+			var callbackTriggered atomic.Bool
 
-		newMonitor := NewCertificateMonitor(engine, MonitorConfig{
-			CheckInterval:   50 * time.Millisecond,
-			ExpiryThreshold: 1 * time.Hour,
-		})
+			newMonitor := NewCertificateMonitor(engine, MonitorConfig{
+				CheckInterval:   50 * time.Millisecond,
+				ExpiryThreshold: 1 * time.Hour,
+			})
 
-		newMonitor.OnExpiry(func(portID string, cert interface{}, timeUntilExpiry time.Duration) {
-			callbackTriggered.Store(true)
-			select {
-			case done <- true:
-			default:
+			newMonitor.OnExpiry(func(portID string, cert interface{}, timeUntilExpiry time.Duration) {
+				callbackTriggered.Store(true)
+			})
+
+			// Create a port with certificate expiring within threshold
+			policy := &PortPolicy{
+				TenantID:    "tenant-2",
+				VLAN:        200,
+				Certificate: createTestCertificate(t, x509.Certificate{}),
+				ExpiresAt:   time.Now().Add(30 * time.Minute),
 			}
+			// Follow proper state machine flow: unconnected -> provisioning -> authenticating -> authorized
+			require.NoError(t, engine.stateMachine.SetState("port2", PortStateProvisioning))
+			require.NoError(t, engine.stateMachine.SetState("port2", PortStateAuthenticating))
+			require.NoError(t, engine.stateMachine.SetState("port2", PortStateAuthorized))
+			require.NoError(t, engine.stateMachine.SetPolicy("port2", policy))
+
+			require.NoError(t, newMonitor.Start(context.Background()))
+
+			<-time.After(50 * time.Millisecond)
+			synctest.Wait()
+			assert.True(t, callbackTriggered.Load(), "the first tick reports the expiring certificate")
+
+			require.NoError(t, newMonitor.Stop())
 		})
-
-		// Create a port with certificate expiring within threshold
-		policy := &PortPolicy{
-			TenantID:    "tenant-2",
-			VLAN:        200,
-			Certificate: createTestCertificate(t, x509.Certificate{}),
-			ExpiresAt:   time.Now().Add(30 * time.Minute),
-		}
-		// Follow proper state machine flow: unconnected -> provisioning -> authenticating -> authorized
-		require.NoError(t, engine.stateMachine.SetState("port2", PortStateProvisioning))
-		require.NoError(t, engine.stateMachine.SetState("port2", PortStateAuthenticating))
-		require.NoError(t, engine.stateMachine.SetState("port2", PortStateAuthorized))
-		require.NoError(t, engine.stateMachine.SetPolicy("port2", policy))
-
-		ctx := context.Background()
-		require.NoError(t, newMonitor.Start(ctx))
-		defer func() {
-			if err := newMonitor.Stop(); err != nil {
-				t.Logf("cleanup: %v", err)
-			}
-		}()
-
-		select {
-		case <-done:
-			assert.True(t, callbackTriggered.Load())
-		case <-time.After(500 * time.Millisecond):
-			t.Fatal("Expiry callback not triggered")
-		}
 	})
 }
 

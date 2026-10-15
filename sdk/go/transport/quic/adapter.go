@@ -555,11 +555,16 @@ var categorySubOpcodeMap = map[string]byte{
 
 	// Compute Service operational VM verbs — OpVMExtendedCategory (0x69) sub-opcodes.
 	// Server dispatcher: pkg/api/daemon/quic_vm_pb.go::handleVMPB
+	// StartVM, StopVM and DeleteVM stay unmapped: platformd answers no
+	// sub-opcode for them, and their flat opcodes are unwired there.
 	"/platform.v1.ComputeService/GetVMMetrics": quicwire.OpVMMetrics,
 	"/platform.v1.ComputeService/AttachDisk":   quicwire.OpVMAttachDisk,
 	"/platform.v1.ComputeService/DetachDisk":   quicwire.OpVMDetachDisk,
 	"/platform.v1.ComputeService/ResizeDisk":   quicwire.OpVMResizeDisk,
 	"/platform.v1.ComputeService/MigrateVM":    quicwire.OpVMMigrate,
+	"/platform.v1.ComputeService/RebootVM":     quicwire.OpVMRestart,
+	"/platform.v1.ComputeService/SuspendVM":    quicwire.OpVMSuspend,
+	"/platform.v1.ComputeService/ResumeVM":     quicwire.OpVMResume,
 
 	// Tenant Service — OpTenantBarrierCategory (0x9E)
 	// Server dispatcher: pkg/api/daemon/quic_tenant.go::handleTenantBarrierCategory
@@ -974,6 +979,9 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.ComputeService/DetachDisk":       quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/ResizeDisk":       quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/MigrateVM":        quicwire.OpVMExtendedCategory,
+	"/platform.v1.ComputeService/RebootVM":         quicwire.OpVMExtendedCategory,
+	"/platform.v1.ComputeService/SuspendVM":        quicwire.OpVMExtendedCategory,
+	"/platform.v1.ComputeService/ResumeVM":         quicwire.OpVMExtendedCategory,
 
 	// Switch Service — proto: pkg/api/grpc/proto/switch.proto
 	// All SwitchService methods route to OpSwitchCategory (0xCC); the

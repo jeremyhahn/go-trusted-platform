@@ -345,11 +345,11 @@ method (`iam_verify_token` calls `IAMTokenService.Verify`, as gRPC does), and `I
 
 Since #300 `AuthorizeTool` **denies** a tool absent from the map
 (`AuthErrorToolNotClassified`, `-32603` on the wire) rather than allowing it.
-Every one of the 477 registered tools is in the map: 465 carry a
+Every one of the 479 registered tools is in the map: 467 carry a
 `resource:action` permission and 12 are classified open (`""`) (measured from
 `NewToolRegistry(...).ListTools()` against `toolPermissionCatalog`;
 `TestEveryRegisteredToolIsClassified` fails if a registered tool has no entry).
-Since #304 the classified tools include 30 VM and container tools
+Since #304 the classified tools include 32 VM and container tools
 ([`docs/compute/api.md`](../compute/api.md) §7). `iam_create_token` and
 `iam_revoke_token` carry `iam:write`, the scope of gRPC `CreateToken` and
 `RevokeToken`; like their twins they refuse every caller (§6).

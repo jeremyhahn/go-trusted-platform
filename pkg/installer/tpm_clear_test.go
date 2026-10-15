@@ -18,7 +18,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 // withTPMDeviceCandidates swaps the package-level TPM device candidates for
@@ -44,6 +43,22 @@ func stubTPMModprobe(t *testing.T) *[]string {
 	}
 	t.Cleanup(func() { tpmModprobe = orig })
 	return &requested
+}
+
+// withoutHostTPM makes the code under test see no TPM, whatever the host
+// has: the device candidates are missing temp paths, modprobe is stubbed,
+// and the device wait is zero so the post-modprobe poll does not wait out
+// its 2s for a node that cannot appear (#284). Returns the modules the code
+// asked modprobe for.
+func withoutHostTPM(t *testing.T) *[]string {
+	t.Helper()
+	dir := t.TempDir()
+	withTPMDeviceCandidates(t, []string{filepath.Join(dir, "missing-tpmrm0"), filepath.Join(dir, "missing-tpm0")})
+	requested := stubTPMModprobe(t)
+	origTimeout := tpmDeviceWaitTimeout
+	tpmDeviceWaitTimeout = 0
+	t.Cleanup(func() { tpmDeviceWaitTimeout = origTimeout })
+	return requested
 }
 
 // TestResolveTPMDevice_NoDevice verifies that resolveTPMDevice returns the
@@ -108,16 +123,7 @@ func TestResolveTPMDevice_FallsBackToRaw(t *testing.T) {
 // regardless of whether the host has a real TPM, and stubs the modprobe
 // call so it doesn't mutate host kernel modules.
 func TestClearTPM_NoDevice_ReturnsTypedError(t *testing.T) {
-	dir := t.TempDir()
-	withTPMDeviceCandidates(t, []string{
-		filepath.Join(dir, "missing-tpmrm0"),
-		filepath.Join(dir, "missing-tpm0"),
-	})
-	requested := stubTPMModprobe(t)
-	// Shrink the device-wait poll window so the test doesn't linger.
-	origTimeout := tpmDeviceWaitTimeout
-	tpmDeviceWaitTimeout = 100 * time.Millisecond
-	t.Cleanup(func() { tpmDeviceWaitTimeout = origTimeout })
+	requested := withoutHostTPM(t)
 
 	inst := &installer{logger: createTestLogger()}
 	err := inst.clearTPM()

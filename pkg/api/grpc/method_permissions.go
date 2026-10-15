@@ -745,6 +745,8 @@ func buildGRPCMethodPermissions() map[string]string {
 		"/platform.v1.ComputeService/StartVM":             scope(vm, write),
 		"/platform.v1.ComputeService/StopVM":              scope(vm, write),
 		"/platform.v1.ComputeService/RebootVM":            scope(vm, write),
+		"/platform.v1.ComputeService/SuspendVM":           scope(vm, write),
+		"/platform.v1.ComputeService/ResumeVM":            scope(vm, write),
 		"/platform.v1.ComputeService/DeleteVM":            scope(vm, del),
 		"/platform.v1.ComputeService/GetVM":               scope(vm, read),
 		"/platform.v1.ComputeService/ListVMs":             scope(vm, read),

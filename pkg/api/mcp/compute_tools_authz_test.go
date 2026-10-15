@@ -72,6 +72,14 @@ func (p *computeRecordingProvider) VMReboot(context.Context, string) (interface{
 	return p.record("VMReboot"), nil
 }
 
+func (p *computeRecordingProvider) VMSuspend(context.Context, string) (interface{}, error) {
+	return p.record("VMSuspend"), nil
+}
+
+func (p *computeRecordingProvider) VMResume(context.Context, string) (interface{}, error) {
+	return p.record("VMResume"), nil
+}
+
 func (p *computeRecordingProvider) VMSnapshotList(context.Context, string) (interface{}, error) {
 	return p.record("VMSnapshotList"), nil
 }
@@ -189,6 +197,8 @@ var computeToolCases = []computeToolCase{
 	{"vm_start", "vm", "write", map[string]interface{}{"id": "vm-1"}, "VMStart"},
 	{"vm_stop", "vm", "write", map[string]interface{}{"id": "vm-1"}, "VMStop"},
 	{"vm_reboot", "vm", "write", map[string]interface{}{"id": "vm-1"}, "VMReboot"},
+	{"vm_suspend", "vm", "write", map[string]interface{}{"id": "vm-1"}, "VMSuspend"},
+	{"vm_resume", "vm", "write", map[string]interface{}{"id": "vm-1"}, "VMResume"},
 	{"vm_snapshot_create", "vm", "write", map[string]interface{}{"vm_id": "vm-1", "name": "snap-1"}, "VMSnapshotCreate"},
 	{"vm_snapshot_list", "vm", "read", map[string]interface{}{"vm_id": "vm-1"}, "VMSnapshotList"},
 	// vm_snapshot_get has no gRPC twin; it reads one entry of ListSnapshots.

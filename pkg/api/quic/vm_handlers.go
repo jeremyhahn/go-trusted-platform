@@ -73,34 +73,26 @@ type VMOrchestrator interface {
 	DetachNetwork(ctx context.Context, instanceID, portName string) error
 }
 
-// VMExtendedLifecycle groups the extended lifecycle operations (suspend /
-// resume / restart / console) that are not yet provided by any production
-// orchestrator. Handlers type-assert this interface so the operations fail
-// gracefully with a typed not-supported error until an orchestrator
-// implements them.
-type VMExtendedLifecycle interface {
-	// Suspend suspends a running VM
-	Suspend(ctx context.Context, instanceID string) error
-
-	// Resume resumes a suspended VM
-	Resume(ctx context.Context, instanceID string) error
-
-	// Restart restarts a VM
-	Restart(ctx context.Context, instanceID string) error
-
+// VMConsoleProvider returns console access information for a VM. No
+// production orchestrator provides it yet, so OpVMConsole answers with a
+// typed not-supported error until one does.
+type VMConsoleProvider interface {
 	// GetConsole returns console access information for a VM
 	GetConsole(ctx context.Context, instanceID string) (*VMConsoleInfo, error)
 }
 
 // ExtendedVMOrchestrator composes the full extended VM capability set. The
-// snapshot and attestation capabilities are the canonical pkg/compute
-// interfaces (compute.VMSnapshotter / compute.VMAttester); handlers assert
-// each capability individually so partially-capable orchestrators (such as
-// compute.QEMUOrchestrator, which implements snapshots and attestation but
-// not suspend/resume/console) expose exactly what they support.
+// suspend, snapshot and attestation capabilities are the canonical
+// pkg/compute interfaces (compute.VMSuspender / compute.VMSnapshotter /
+// compute.VMAttester); handlers assert each capability individually so
+// partially-capable orchestrators (such as compute.QEMUOrchestrator, which
+// implements suspend, snapshots and attestation but not console) expose
+// exactly what they support. Restart needs only Start and Stop, so every
+// VMOrchestrator restarts through compute.Reboot, as gRPC RebootVM does.
 type ExtendedVMOrchestrator interface {
 	VMOrchestrator
-	VMExtendedLifecycle
+	compute.VMSuspender
+	VMConsoleProvider
 	compute.VMSnapshotter
 	compute.VMAttester
 }
@@ -899,15 +891,11 @@ func (h *VMHandler) handleGetState(ctx context.Context, req *quicwire.Request) *
 	}
 }
 
-// handleRestart restarts a VM (extended operation)
+// handleRestart restarts a VM through compute.Reboot, the implementation
+// gRPC RebootVM uses (extended operation)
 func (h *VMHandler) handleRestart(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
 		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
-	}
-
-	extOrch, ok := h.orchestrator.(VMExtendedLifecycle)
-	if !ok {
-		return h.errorResponse(quicwire.StatusNotImplemented, ErrVMOperationNotSupported)
 	}
 
 	var restartReq VMRestartRequest
@@ -919,7 +907,7 @@ func (h *VMHandler) handleRestart(ctx context.Context, req *quicwire.Request) *q
 		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingID)
 	}
 
-	if err := extOrch.Restart(ctx, restartReq.ID); err != nil {
+	if err := compute.Reboot(ctx, h.orchestrator, restartReq.ID); err != nil {
 		h.logger.Error(err, "failed to restart VM")
 		return h.vmErrorResponse(err)
 	}
@@ -947,7 +935,7 @@ func (h *VMHandler) handleSuspend(ctx context.Context, req *quicwire.Request) *q
 		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
-	extOrch, ok := h.orchestrator.(VMExtendedLifecycle)
+	suspender, ok := h.orchestrator.(compute.VMSuspender)
 	if !ok {
 		return h.errorResponse(quicwire.StatusNotImplemented, ErrVMOperationNotSupported)
 	}
@@ -961,7 +949,7 @@ func (h *VMHandler) handleSuspend(ctx context.Context, req *quicwire.Request) *q
 		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingID)
 	}
 
-	if err := extOrch.Suspend(ctx, suspendReq.ID); err != nil {
+	if err := suspender.Suspend(ctx, suspendReq.ID); err != nil {
 		h.logger.Error(err, "failed to suspend VM")
 		return h.vmErrorResponse(err)
 	}
@@ -989,7 +977,7 @@ func (h *VMHandler) handleResume(ctx context.Context, req *quicwire.Request) *qu
 		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
-	extOrch, ok := h.orchestrator.(VMExtendedLifecycle)
+	suspender, ok := h.orchestrator.(compute.VMSuspender)
 	if !ok {
 		return h.errorResponse(quicwire.StatusNotImplemented, ErrVMOperationNotSupported)
 	}
@@ -1003,7 +991,7 @@ func (h *VMHandler) handleResume(ctx context.Context, req *quicwire.Request) *qu
 		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingID)
 	}
 
-	if err := extOrch.Resume(ctx, resumeReq.ID); err != nil {
+	if err := suspender.Resume(ctx, resumeReq.ID); err != nil {
 		h.logger.Error(err, "failed to resume VM")
 		return h.vmErrorResponse(err)
 	}
@@ -1137,7 +1125,7 @@ func (h *VMHandler) handleGetConsole(ctx context.Context, req *quicwire.Request)
 		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
-	extOrch, ok := h.orchestrator.(VMExtendedLifecycle)
+	consoleProvider, ok := h.orchestrator.(VMConsoleProvider)
 	if !ok {
 		return h.errorResponse(quicwire.StatusNotImplemented, ErrVMOperationNotSupported)
 	}
@@ -1151,7 +1139,7 @@ func (h *VMHandler) handleGetConsole(ctx context.Context, req *quicwire.Request)
 		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingID)
 	}
 
-	consoleInfo, err := extOrch.GetConsole(ctx, consoleReq.ID)
+	consoleInfo, err := consoleProvider.GetConsole(ctx, consoleReq.ID)
 	if err != nil {
 		h.logger.Error(err, "failed to get VM console")
 		return h.vmErrorResponse(err)
@@ -1497,9 +1485,11 @@ func (h *VMHandler) vmErrorResponse(err error) *quicwire.Response {
 	case errors.Is(err, compute.ErrInstanceAlreadyExists):
 		status = quicwire.StatusAlreadyExists
 	case errors.Is(err, compute.ErrInstanceAlreadyRunning):
-		status = quicwire.StatusInvalidRequest
+		status = quicwire.StatusFailedPrecondition
 	case errors.Is(err, compute.ErrInstanceNotRunning):
-		status = quicwire.StatusInvalidRequest
+		status = quicwire.StatusFailedPrecondition
+	case errors.Is(err, compute.ErrInstanceNotSuspended):
+		status = quicwire.StatusFailedPrecondition
 	case errors.Is(err, compute.ErrInvalidInstanceID):
 		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, compute.ErrInvalidProfile):
@@ -1507,7 +1497,7 @@ func (h *VMHandler) vmErrorResponse(err error) *quicwire.Response {
 	case errors.Is(err, compute.ErrInvalidConfiguration):
 		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, compute.ErrInvalidState):
-		status = quicwire.StatusInvalidRequest
+		status = quicwire.StatusFailedPrecondition
 	case errors.Is(err, compute.ErrResourceExhausted):
 		status = quicwire.StatusResourceExhausted
 	case errors.Is(err, compute.ErrOrchestratorNotInitialized):

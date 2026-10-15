@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -153,58 +154,68 @@ func contains(list []string, s string) bool {
 	return false
 }
 
+// The serial waits only read a file between ticks, so they run in a
+// synctest bubble: the poll interval and the deadlines pass on the
+// bubble's clock instead of being waited out (#284).
+
 func TestWaitForSerial_ReturnsWhenTheMilestoneAppears(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "serial.log")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "serial.log")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 
-	done := make(chan error, 1)
-	go func() { done <- WaitForSerial(ctx, path, "platformd ready") }()
+		done := make(chan error, 1)
+		go func() { done <- WaitForSerial(ctx, path, "platformd ready") }()
 
-	// The transcript does not exist yet, then grows in two writes.
-	require.NoError(t, os.WriteFile(path, []byte("U-Boot 2026.07\nBooting Linux\n"), 0o644))
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
-	_, err = f.WriteString("[INIT] platformd ready\n")
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
+		// The transcript does not exist yet, then grows in two writes.
+		require.NoError(t, os.WriteFile(path, []byte("U-Boot 2026.07\nBooting Linux\n"), 0o644))
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+		require.NoError(t, err)
+		_, err = f.WriteString("[INIT] platformd ready\n")
+		require.NoError(t, err)
+		require.NoError(t, f.Close())
 
-	require.NoError(t, <-done)
+		require.NoError(t, <-done)
+	})
 }
 
 func TestWaitForSerial_TimesOutWithTheTail(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "serial.log")
-	require.NoError(t, os.WriteFile(path, []byte("U-Boot 2026.07\nstuck at the prompt\n"), 0o644))
-	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
-	defer cancel()
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "serial.log")
+		require.NoError(t, os.WriteFile(path, []byte("U-Boot 2026.07\nstuck at the prompt\n"), 0o644))
+		ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+		defer cancel()
 
-	err := WaitForSerial(ctx, path, "Booting Linux")
+		err := WaitForSerial(ctx, path, "Booting Linux")
 
-	var timeout *SerialTimeoutError
-	require.True(t, errors.As(err, &timeout))
-	assert.Equal(t, "Booting Linux", timeout.Needle)
-	assert.Contains(t, timeout.Tail, "stuck at the prompt")
-	assert.Contains(t, err.Error(), `"Booting Linux"`)
+		var timeout *SerialTimeoutError
+		require.True(t, errors.As(err, &timeout))
+		assert.Equal(t, "Booting Linux", timeout.Needle)
+		assert.Contains(t, timeout.Tail, "stuck at the prompt")
+		assert.Contains(t, err.Error(), `"Booting Linux"`)
+	})
 }
 
 func TestWaitForSerialAfter_IgnoresAnEarlierBoot(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "serial.log")
-	first := []byte("boot one: sealed\n")
-	require.NoError(t, os.WriteFile(path, first, 0o644))
-	offset, err := SerialSize(path)
-	require.NoError(t, err)
-	assert.Equal(t, int64(len(first)), offset)
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "serial.log")
+		first := []byte("boot one: sealed\n")
+		require.NoError(t, os.WriteFile(path, first, 0o644))
+		offset, err := SerialSize(path)
+		require.NoError(t, err)
+		assert.Equal(t, int64(len(first)), offset)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	err = WaitForSerialAfter(ctx, path, "sealed", offset)
-	var timeout *SerialTimeoutError
-	assert.True(t, errors.As(err, &timeout), "the first boot's milestone must not satisfy the second boot's wait")
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+		err = WaitForSerialAfter(ctx, path, "sealed", offset)
+		var timeout *SerialTimeoutError
+		assert.True(t, errors.As(err, &timeout), "the first boot's milestone must not satisfy the second boot's wait")
 
-	require.NoError(t, os.WriteFile(path, append(first, []byte("boot two: sealed\n")...), 0o644))
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel2()
-	assert.NoError(t, WaitForSerialAfter(ctx2, path, "sealed", offset))
+		require.NoError(t, os.WriteFile(path, append(first, []byte("boot two: sealed\n")...), 0o644))
+		ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel2()
+		assert.NoError(t, WaitForSerialAfter(ctx2, path, "sealed", offset))
+	})
 }
 
 func TestSerialSize_MissingFileIsZero(t *testing.T) {
@@ -287,9 +298,14 @@ func TestConsole_ExpectTimesOutWithTheTranscript(t *testing.T) {
 	require.NoError(t, err)
 	defer console.Close()
 
-	short, cancelShort := context.WithTimeout(ctx, 300*time.Millisecond)
-	defer cancelShort()
-	_, err = console.Expect(short, "=> ")
+	_, err = console.Expect(ctx, "nothing useful\n")
+	require.NoError(t, err)
+
+	// The guest has said all it will, so a deadline that has already
+	// passed times the wait out without spending one (#284).
+	expired, cancelExpired := context.WithDeadline(ctx, time.Now())
+	defer cancelExpired()
+	_, err = console.Expect(expired, "=> ")
 
 	var timeout *ConsoleTimeoutError
 	require.True(t, errors.As(err, &timeout))
@@ -328,12 +344,18 @@ func TestDialConsole_WaitsForTheSocketThenGivesUp(t *testing.T) {
 	_, err = console.Expect(ctx, "hello")
 	require.NoError(t, err)
 	require.NoError(t, console.Close())
+}
 
-	short, cancelShort := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancelShort()
-	_, err = DialConsole(short, filepath.Join(t.TempDir(), "never.sock"))
-	var consoleErr *ConsoleError
-	require.True(t, errors.As(err, &consoleErr))
+func TestDialConsole_GivesUpWhenTheSocketNeverAppears(t *testing.T) {
+	// A dial of a missing socket fails at once, so the retries and the
+	// deadline run on the synctest bubble's clock (#284).
+	synctest.Test(t, func(t *testing.T) {
+		short, cancelShort := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancelShort()
+		_, err := DialConsole(short, filepath.Join(t.TempDir(), "never.sock"))
+		var consoleErr *ConsoleError
+		require.True(t, errors.As(err, &consoleErr))
+	})
 }
 
 func TestConsole_SendOnAClosedSessionFails(t *testing.T) {

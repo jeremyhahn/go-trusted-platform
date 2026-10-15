@@ -14,7 +14,7 @@
 package compute
 
 import (
-	"fmt"
+	"context"
 
 	"github.com/spf13/cobra"
 
@@ -52,44 +52,11 @@ Examples:
 
 // runStart executes the compute start command
 func runStart(flags *cli.CommonFlags, vmID string) error {
-	if vmID == "" {
-		return ErrInvalidVMConfig{Field: "id", Reason: "VM ID is required"}
-	}
-
-	base, err := cli.NewBaseCommand(flags)
-	if err != nil {
-		return err
-	}
-	defer base.Close()
-
-	grpcClient := base.Client().Compute()
-	if grpcClient == nil {
-		return ErrComputeClientNotInitialized{}
-	}
-
-	sdkClient := computesvc.NewClientFromGRPC(grpcClient)
-
-	ctx := base.Context()
-	status, err := sdkClient.StartVMDomain(ctx, vmID)
-	if err != nil {
-		return ErrVMOperationFailed{Operation: "start", ID: vmID, Err: err}
-	}
-
-	printer := base.Printer()
-
-	switch flags.OutputFormat {
-	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(status)
-
-	case cli.OutputFormatTable:
-		if status != nil && status.Success {
-			printer.PrintSuccess(fmt.Sprintf("VM started successfully: %s", vmID))
-		} else if status != nil {
-			printer.PrintError(fmt.Sprintf("Failed to start VM: %s", status.Message))
-		}
-		return nil
-
-	default:
-		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
-	}
+	return runVMVerb(flags, vmID, vmVerb{
+		operation: "start",
+		done:      "started",
+		call: func(ctx context.Context, client *computesvc.Client, id string) (*computesvc.VMStatus, error) {
+			return client.StartVMDomain(ctx, id)
+		},
+	})
 }

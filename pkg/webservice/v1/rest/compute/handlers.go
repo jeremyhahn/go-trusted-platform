@@ -186,6 +186,32 @@ func (h *Handlers) RebootVM(w http.ResponseWriter, r *http.Request) {
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
 }
 
+// SuspendVM handles POST /api/v1/compute/vms/{id}/suspend.
+func (h *Handlers) SuspendVM(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	resp, err := h.server.SuspendVM(r.Context(), &platformv1.SuspendVMRequest{Id: mux.Vars(r)["id"]})
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// ResumeVM handles POST /api/v1/compute/vms/{id}/resume.
+func (h *Handlers) ResumeVM(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	resp, err := h.server.ResumeVM(r.Context(), &platformv1.ResumeVMRequest{Id: mux.Vars(r)["id"]})
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
 // GetVMMetrics handles GET /api/v1/compute/vms/{id}/metrics.
 func (h *Handlers) GetVMMetrics(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureAvailable(w, r) {

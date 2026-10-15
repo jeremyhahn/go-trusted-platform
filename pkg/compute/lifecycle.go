@@ -46,6 +46,10 @@ const (
 
 	// StateDeleting represents an instance being deleted
 	StateDeleting InstanceState = "deleting"
+
+	// StateSuspended represents a VM whose vCPUs are paused in memory; it
+	// resumes where it stopped
+	StateSuspended InstanceState = "suspended"
 )
 
 // String returns the string representation of InstanceState
@@ -57,7 +61,7 @@ func (s InstanceState) String() string {
 func (s InstanceState) IsValid() bool {
 	switch s {
 	case StateUnknown, StateCreating, StateStopped, StateStarting,
-		StateRunning, StateStopping, StateError, StateDeleting:
+		StateRunning, StateStopping, StateError, StateDeleting, StateSuspended:
 		return true
 	default:
 		return false
@@ -78,14 +82,15 @@ func (s InstanceState) CanTransitionTo(target InstanceState) bool {
 
 	// Valid state transitions
 	validTransitions := map[InstanceState][]InstanceState{
-		StateUnknown:  {StateCreating, StateError},
-		StateCreating: {StateStopped, StateError},
-		StateStopped:  {StateStarting, StateDeleting, StateError},
-		StateStarting: {StateRunning, StateError},
-		StateRunning:  {StateStopping, StateError},
-		StateStopping: {StateStopped, StateError},
-		StateError:    {}, // Terminal state
-		StateDeleting: {}, // Terminal state
+		StateUnknown:   {StateCreating, StateError},
+		StateCreating:  {StateStopped, StateError},
+		StateStopped:   {StateStarting, StateDeleting, StateError},
+		StateStarting:  {StateRunning, StateError},
+		StateRunning:   {StateStopping, StateSuspended, StateError},
+		StateSuspended: {StateRunning, StateStopping, StateError},
+		StateStopping:  {StateStopped, StateError},
+		StateError:     {}, // Terminal state
+		StateDeleting:  {}, // Terminal state
 	}
 
 	allowed, exists := validTransitions[s]

@@ -280,6 +280,8 @@ func toolPermissionCatalog() map[string]string {
 	permissions["vm_start"] = "vm:write"
 	permissions["vm_stop"] = "vm:write"
 	permissions["vm_reboot"] = "vm:write"
+	permissions["vm_suspend"] = "vm:write"
+	permissions["vm_resume"] = "vm:write"
 	permissions["vm_snapshot_create"] = "vm:write"
 	permissions["vm_snapshot_list"] = "vm:read"
 	permissions["vm_snapshot_get"] = "vm:read"

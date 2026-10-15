@@ -221,8 +221,8 @@ It already defaults to true, as does `--stderr`. To suppress one, pass
 **`ExecContainer` runs an arbitrary command inside a workload.** On gRPC and
 Unix it needs `container:write`; treat that grant as shell access on every
 container the caller can name. Over MCP each `vm_*` and `container_*` tool
-takes its gRPC twin's scope, so `container_exec` needs `container:write` too;
-the four VM tools with no gRPC twin stay refused. See [api.md](api.md) §7.
+takes its gRPC twin's scope, so `container_exec` needs `container:write` too.
+See [api.md](api.md) §7.
 
 ---
 

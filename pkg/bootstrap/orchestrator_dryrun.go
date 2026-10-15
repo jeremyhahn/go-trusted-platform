@@ -742,7 +742,7 @@ func (o *Orchestrator) dryRunBMCNode(ctx context.Context, node *NodeConfig, nr *
 	nr.Warnings = append(nr.Warnings, o.dryRunEventLog(ctx, client, node.Hostname)...)
 
 	// Best-effort read-only MAC discovery via Redfish EthernetInterfaces.
-	macs, macErr := bmc.DiscoverMACs(ctx, bmcConfig, o.logger)
+	macs, macErr := o.discoverMACs.discover(ctx, bmcConfig, o.logger)
 	if macErr == nil && len(macs) > 0 {
 		nr.DiscoveredMACs = macs
 	} else if macErr != nil {

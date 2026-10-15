@@ -258,6 +258,7 @@ func TestNewInstaller(t *testing.T) {
 }
 
 func TestInstaller_Install_DiskSetupFailure(t *testing.T) {
+	withoutHostTPM(t)
 	mockDisk := new(MockDiskManager)
 	mockOS := new(MockOSInstaller)
 	mockUKI := new(MockUKIBuilder)

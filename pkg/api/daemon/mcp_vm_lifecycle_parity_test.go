@@ -15,7 +15,7 @@
 
 package daemon
 
-// MCP-vs-gRPC parity for the seven VM lifecycle tools (#304, #317): each MCP
+// MCP-vs-gRPC parity for the nine VM lifecycle tools (#304, #317, #704): each MCP
 // call must answer exactly what its ComputeService RPC answers, reply and
 // error class alike.
 
@@ -47,7 +47,7 @@ type vmLifecycleCall struct {
 	grpc func(*ComputeGRPCService, string) (proto.Message, error)
 }
 
-// vmLifecycleCalls are the seven tools and their RPCs. vm_create takes the
+// vmLifecycleCalls are the nine tools and their RPCs. vm_create takes the
 // id as the VM name; vm_list ignores it.
 var vmLifecycleCalls = []vmLifecycleCall{
 	{
@@ -111,6 +111,24 @@ var vmLifecycleCalls = []vmLifecycleCall{
 		},
 		func(s *ComputeGRPCService, id string) (proto.Message, error) {
 			return s.RebootVM(context.Background(), &platformv1.RebootVMRequest{Id: id})
+		},
+	},
+	{
+		"vm_suspend",
+		func(p *MCPServiceProvider, id string) (interface{}, error) {
+			return p.VMSuspend(context.Background(), id)
+		},
+		func(s *ComputeGRPCService, id string) (proto.Message, error) {
+			return s.SuspendVM(context.Background(), &platformv1.SuspendVMRequest{Id: id})
+		},
+	},
+	{
+		"vm_resume",
+		func(p *MCPServiceProvider, id string) (interface{}, error) {
+			return p.VMResume(context.Background(), id)
+		},
+		func(s *ComputeGRPCService, id string) (proto.Message, error) {
+			return s.ResumeVM(context.Background(), &platformv1.ResumeVMRequest{Id: id})
 		},
 	},
 }
@@ -193,6 +211,7 @@ func TestVMLifecycleParity_UnknownVM(t *testing.T) {
 		t.Run(call.name, func(t *testing.T) {
 			provider, svc, orch := newComputeParityPair()
 			orch.startFunc, orch.stopFunc, orch.deleteFunc = notFound, notFound, notFound
+			orch.runStateFunc = notFound
 
 			_, mcpErr := call.mcp(provider, "vm-missing")
 			_, grpcErr := call.grpc(svc, "vm-missing")
@@ -221,6 +240,27 @@ func TestVMLifecycleParity_InvalidInput(t *testing.T) {
 		_, grpcErr := svc.StartVM(context.Background(), &platformv1.StartVMRequest{Id: "bad/id"})
 		assertSameClass(t, codes.InvalidArgument, mcpErr, grpcErr)
 	})
+}
+
+// Suspending a stopped VM or resuming a running one is a FailedPrecondition
+// on both transports, as the orchestrator's wrong-state refusal is.
+func TestVMLifecycleParity_WrongState(t *testing.T) {
+	for _, sentinel := range []error{compute.ErrInstanceNotRunning, compute.ErrInstanceNotSuspended} {
+		for _, call := range vmLifecycleCalls {
+			if call.name != "vm_suspend" && call.name != "vm_resume" {
+				continue
+			}
+			t.Run(call.name+" "+sentinel.Error(), func(t *testing.T) {
+				provider, svc, orch := seededVMPair()
+				orch.runStateFunc = func(context.Context, string) error {
+					return &compute.SentinelCauseError{Sentinel: sentinel, Cause: &compute.MessageError{Msg: "wrong state"}}
+				}
+				_, mcpErr := call.mcp(provider, "vm-1")
+				_, grpcErr := call.grpc(svc, "vm-1")
+				assertSameClass(t, codes.FailedPrecondition, mcpErr, grpcErr)
+			})
+		}
+	}
 }
 
 func TestVMLifecycleParity_NoOrchestrator(t *testing.T) {

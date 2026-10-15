@@ -30,6 +30,8 @@ var vmToolNames = []string{
 	"vm_start",
 	"vm_stop",
 	"vm_reboot",
+	"vm_suspend",
+	"vm_resume",
 	"vm_snapshot_create",
 	"vm_snapshot_get",
 	"vm_snapshot_list",

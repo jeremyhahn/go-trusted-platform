@@ -14,7 +14,7 @@
 over a Unix domain socket**, so gRPC and Unix share a column.
 `ServiceRegistry.Compute` carries the service in-process.
 
-gRPC: `ComputeService`, 34 RPCs (`pkg/api/grpc/proto/compute.proto`) — the
+gRPC: `ComputeService`, 36 RPCs (`pkg/api/grpc/proto/compute.proto`) — the
 largest service in the platform after IAM.
 REST: base path `/api/v1/compute` — web service
 (`pkg/webservice/v1/rest/compute/router.go`) and platformd's REST listener
@@ -79,9 +79,7 @@ mounts none of these routes. Each route speaks the SDK wire contract
   every field present. An RPC error is the standard error envelope, its status
   mapped from the gRPC code as on the TPM routes.
 
-The daemon listener has no suspend, resume, restart, console or logs route:
-suspend and resume have no `ComputeService` RPC, and console and logs are
-streams (§5).
+The daemon listener has no console or logs route: they are streams (§5).
 
 ---
 
@@ -96,15 +94,50 @@ streams (§5).
 | Start VM | `POST /api/v1/compute/vms/{id}/start` | `StartVM` | `OpVMStart` (`0x62`) | `vm_start` | ✅ |
 | Stop VM | `POST /api/v1/compute/vms/{id}/stop` | `StopVM` | `OpVMStop` (`0x63`) | `vm_stop` | ✅ |
 | Reboot VM | `POST /api/v1/compute/vms/{id}/reboot` | `RebootVM` | `OpVMRestart` (`0xB6`) | `vm_reboot` | ✅ |
-| Suspend VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpVMSuspend` (`0xB7`) | `MISSING — docs/13 G7` | — |
-| Resume VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpVMResume` (`0xB8`) | `MISSING — docs/13 G7` | — |
+| Suspend VM | `POST /api/v1/compute/vms/{id}/suspend` | `SuspendVM` | `OpVMSuspend` (`0xB7`) | `vm_suspend` | ✅ |
+| Resume VM | `POST /api/v1/compute/vms/{id}/resume` | `ResumeVM` | `OpVMResume` (`0xB8`) | `vm_resume` | ✅ |
 | Update VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 | Get VM state | `MISSING — docs/13 G7` | (via `GetVM`) | `OpVMGetState` (`0x6A`) | `MISSING — docs/13 G7` | — |
 | Activate VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpVMActivate` (`0x68`) | `MISSING — docs/13 G7` | — |
 
-**Suspend and resume have no REST, gRPC or MCP route.** They exist on QUIC
-only. That is a plain asymmetry in the most-used capability set — an operator
-on REST can stop a VM but not suspend it.
+**Suspend pauses a running VM in memory; resume continues it** (#704). The
+QEMU orchestrator sends QMP `stop` and `cont` (`pkg/compute/qemu_suspend.go`)
+and records the VM as `suspended`, which `GetVM` reports as `VM_STATE_PAUSED`
+and the container view of the compute adapter as `paused`.
+Suspending a VM that is not running, or resuming one that is not suspended, is
+FailedPrecondition. Stop and delete accept a suspended VM; start refuses it.
+
+**A VM is recorded `stopped` only when stop asked for it.** When the QEMU
+process exits, the orchestrator (`recordExit`, `pkg/compute/qemu.go`) moves a
+`stopping` VM to `stopped`. The lifecycle has no transition into `stopped` from
+any other state, so a VM whose guest powers off or crashes while `running` or
+`suspended` keeps that state, with its PID cleared and a warning logged. An
+`error` VM stays `error`, and a VM already deleted or migrated away is not
+recreated.
+
+**Reboot is stop then start** on every transport (`compute.Reboot`,
+`pkg/compute/reboot.go`), so a stopped VM refuses a reboot with
+FailedPrecondition.
+
+QUIC carries `OpVMRestart`, `OpVMSuspend` and `OpVMResume` as sub-opcodes under
+`OpVMExtendedCategory` (`0x69`). The payload after the sub-opcode byte is the
+`RebootVMRequest`, `SuspendVMRequest` or `ResumeVMRequest` message, and the
+daemon answers through the same `ComputeService` as gRPC (§6).
+
+**The Go SDK carries each verb the daemon answers.** Its REST adapter maps all
+six lifecycle verbs to the routes above, with the id in the path and
+`delete_disks` as a query parameter. Its MCP adapter maps all six to the
+`vm_*` tools. The tools take only `id`, so the adapter refuses `force`,
+`timeout_seconds` or `delete_disks` with InvalidArgument rather than drop them
+(`sdk/go/transport/mcp/compute_vm.go`). Its QUIC adapter maps reboot, suspend
+and resume. Start, stop and delete fail locally with Unimplemented, because
+`0x62`, `0x63` and `0x61` answer `StatusUnavailable` on a running daemon (§6).
+Every adapter returns the client's typed error (`ErrStartVMFailed`, ...,
+`sdk/go/services/compute/errors.go`) wrapping the transport status: an unknown VM
+is NotFound everywhere. A VM in the wrong state is FailedPrecondition, except
+over REST, where it is InvalidArgument because both REST servers render
+FailedPrecondition as HTTP 400. `TestVMLifecycleSDKParity_*`
+(`pkg/api/daemon/compute_sdk_parity_test.go`) holds this.
 
 ---
 
@@ -211,9 +244,14 @@ The same pattern applies to `OpContainerExec` (`0xCA`) and `OpContainerMetrics`
 (`0xCB`), which reuse the top-level KMS range.
 
 **A client that sends `0xCC` at top level is talking to the switch service, not
-asking for VM metrics.** The extended VM lifecycle sub-opcodes `0xB6`–`0xBF` are
-handled by the flat VM handler and intercepted ahead of that fallthrough by the
-dispatcher's `IsVMSubOpcode` check.
+asking for VM metrics.** Under `0x69` the daemon first offers every sub-opcode
+to the `ComputeService` path (`handleVMPB`, `pkg/api/daemon/quic_vm_pb.go`):
+the operational sub-opcodes above and the lifecycle sub-opcodes `OpVMRestart`,
+`OpVMSuspend` and `OpVMResume` (`0xB6`–`0xB8`) are answered there, and the rest
+of `0xB9`–`0xBF` fall through to the flat VM handler. platformd does not wire
+that handler (nothing outside tests calls `SetVMOrchestrator`), so those
+sub-opcodes, and the top-level opcodes `0x60`–`0x6A`, answer
+`StatusUnavailable` on a running daemon.
 
 The full category-opcode table is in
 [`docs/daemon/api.md`](../daemon/api.md).
@@ -236,7 +274,7 @@ under two resources:
 | `container:write` | `CreateContainer`, `StartContainer`, `StopContainer`, `ExecContainer`, `AttachContainer` |
 | `container:delete` | `DeleteContainer` |
 | `vm:read` | `GetVM`, `ListVMs`, `GetVMLogs`, `GetVMMetrics`, `ListSnapshots`, `AttestVM`, `VerifyVMAttestation` |
-| `vm:write` | `CreateVM`, `StartVM`, `StopVM`, `RebootVM`, `AttachDisk`, `DetachDisk`, `ResizeDisk`, `CreateSnapshot`, `RestoreSnapshot`, `MigrateVM`, `PrepareMigration`, `FinalizeMigration`, `AttachVMConsole`, `SendVMConsoleInput` |
+| `vm:write` | `CreateVM`, `StartVM`, `StopVM`, `RebootVM`, `SuspendVM`, `ResumeVM`, `AttachDisk`, `DetachDisk`, `ResizeDisk`, `CreateSnapshot`, `RestoreSnapshot`, `MigrateVM`, `PrepareMigration`, `FinalizeMigration`, `AttachVMConsole`, `SendVMConsoleInput` |
 | `vm:delete` | `DeleteVM`, `DeleteSnapshot` |
 
 `ExecContainer` is arbitrary command execution inside a workload, so
@@ -252,12 +290,12 @@ backend:
 | `container:write` | `container_create`, `container_start`, `container_stop`, `container_exec` |
 | `container:delete` | `container_remove` |
 | `vm:read` | `vm_list`, `vm_get`, `vm_snapshot_list`, `vm_snapshot_get`, `vm_attest`, `vm_attest_verify`, `vm_metrics`, `vm_logs` |
-| `vm:write` | `vm_create`, `vm_start`, `vm_stop`, `vm_reboot`, `vm_snapshot_create`, `vm_snapshot_restore`, `vm_disk_attach`, `vm_disk_detach`, `vm_disk_resize`, `vm_migrate` |
+| `vm:write` | `vm_create`, `vm_start`, `vm_stop`, `vm_reboot`, `vm_suspend`, `vm_resume`, `vm_snapshot_create`, `vm_snapshot_restore`, `vm_disk_attach`, `vm_disk_detach`, `vm_disk_resize`, `vm_migrate` |
 | `vm:delete` | `vm_delete`, `vm_snapshot_delete` |
 
 `vm_disk_detach` is `vm:write`, not `vm:delete`, because `DetachDisk` is.
 
-The seven VM lifecycle tools answer through their RPC
+The nine VM lifecycle tools answer through their RPC
 (`pkg/api/daemon/mcp_vm_lifecycle.go`): the daemon builds the RPC request,
 calls `ComputeService`, and returns its reply in the proto's field names.
 `vm_create` takes what `CreateVM` reads (`name`, `memory`, `cpus`,
@@ -269,15 +307,17 @@ A tool's failure carries the gRPC status class its twin RPC answers the same
 failure with: NotFound for an unknown VM, container, snapshot or disk,
 InvalidArgument for malformed input (including a PCR index outside 0-23),
 FailedPrecondition for a missing orchestrator or VM capability, and
-Unimplemented for a missing container capability. `CreateVM`, `StartVM`,
-`StopVM`, `RebootVM` and `DeleteVM` classify an orchestrator failure as the
+Unimplemented for a missing container capability. A VM in the wrong state for
+the verb (starting a running VM, suspending a stopped one, resuming a running
+one) is FailedPrecondition. `CreateVM`, `StartVM`, `StopVM`, `RebootVM`,
+`SuspendVM`, `ResumeVM` and `DeleteVM` classify an orchestrator failure as the
 disk RPCs do, so an unknown VM is NotFound there too; any other failure
 stays Internal.
 
 `vm_snapshot_get` has no gRPC or REST twin. It reads one entry of what
 `ListSnapshots` returns, so it takes `ListSnapshots`' `vm:read`. #304 deleted
-`vm_update`, `vm_suspend` and `vm_resume`: they had no twin and no executor
-behind them. Giving those capabilities routes is docs/13 G7 work.
+`vm_update`, which had no twin and no executor behind it; #704 brought
+`vm_suspend` and `vm_resume` back with `SuspendVM` and `ResumeVM` as their twins.
 
 No transport scopes a VM or container to a tenant. `compute.Instance` has no
 tenant field, and neither `ComputeService` nor the MCP tools filter by tenant.
@@ -323,6 +363,7 @@ permission of the RPC it calls (`computeRouteScopes`,
 | `0x09` | `StatusInvalidArgument` | 400 | `ErrNoNetworkInZone` |
 | `0x0A` | `StatusUnavailable` | 503 | Compute not wired into the daemon |
 | `0x0B` | `StatusNotImplemented` | 501 | `ErrComputeProviderNotCompiled` |
+| `0x0C` | `StatusFailedPrecondition` | 400 | VM in the wrong state for reboot, suspend or resume |
 
 **501 means the binary was built without the provider's build tag** (`awscompute`,
 `azurecompute`, `gcpcompute`) — not that the feature is unfinished.

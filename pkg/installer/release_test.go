@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
@@ -234,10 +235,14 @@ func TestReleaseDisk_ReportsAMappingThatNeverDisappears(t *testing.T) {
 }
 
 func TestWaitForMappingRemoval(t *testing.T) {
-	polls := 0
-	gone := func(string) bool { polls++; return polls < 3 } // present twice, then gone
-	require.NoError(t, waitForMappingRemoval(context.Background(), "vg0-root", gone))
-	assert.Equal(t, 3, polls)
+	// The poll interval runs on synctest time, so the two waits between
+	// polls cost nothing (#284).
+	synctest.Test(t, func(t *testing.T) {
+		polls := 0
+		gone := func(string) bool { polls++; return polls < 3 } // present twice, then gone
+		require.NoError(t, waitForMappingRemoval(context.Background(), "vg0-root", gone))
+		assert.Equal(t, 3, polls)
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

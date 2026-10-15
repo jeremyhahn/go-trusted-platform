@@ -28,6 +28,10 @@ var (
 	// ErrInstanceAlreadyRunning is returned when attempting to start an already running instance
 	ErrInstanceAlreadyRunning = errors.New("instance is already running")
 
+	// ErrInstanceNotSuspended is returned when resuming an instance that is
+	// not suspended
+	ErrInstanceNotSuspended = errors.New("instance is not suspended")
+
 	// ErrInvalidConfiguration is returned when the configuration is invalid
 	ErrInvalidConfiguration = errors.New("invalid configuration")
 

@@ -564,7 +564,8 @@ func awaitRelaunch(t *testing.T, s *Supervisor, l *fakeLauncher, process string,
 // was asked for, so backoff growth is asserted without waiting for it.
 //
 // It collapses the restart backoff and the readiness poll to a millisecond,
-// and only those. stopTimeout is the supervisor's configured StopTimeout, and
+// and only those; each poll also moves Now forward by readyPollInterval, so
+// a ReadyTimeout expires without being waited out. stopTimeout is the supervisor's configured StopTimeout, and
 // that wait runs in real time: it is the window a child gets to exit after
 // SIGTERM before it is killed. Collapsing it too gave every test a 1ms stop
 // window, so a child that took longer than that to exit -- routine under
@@ -579,13 +580,25 @@ type testClock struct {
 	// releases it; see holdDelay.
 	heldDelay time.Duration
 	held      *heldCall
+	// elapsed is how far the readiness polls have moved Now past the wall
+	// clock. Each collapsed poll stands for readyPollInterval, so a
+	// ReadyTimeout runs out after its polls rather than its real duration
+	// (#284).
+	elapsed time.Duration
 }
 
-func (c *testClock) Now() time.Time { return time.Now() }
+func (c *testClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return time.Now().Add(c.elapsed)
+}
 
 func (c *testClock) After(d time.Duration) <-chan time.Time {
 	c.mu.Lock()
 	c.delays = append(c.delays, d)
+	if d == readyPollInterval {
+		c.elapsed += d
+	}
 	stopTimeout := c.stopTimeout
 	held := c.held
 	if held != nil && d == c.heldDelay {
@@ -848,9 +861,9 @@ func TestStartService_ReportsAChildThatDidNotActivateTheService(t *testing.T) {
 	assert.Nil(t, live)
 	assert.Nil(t, client)
 
-	launched := launcher.launchCount()
-	assert.Never(t, func() bool { return launcher.launchCount() > launched }, 500*time.Millisecond, 50*time.Millisecond,
-		"a process nobody wants is not restarted")
+	// The stop waited for the child's watch goroutine, and a restart would
+	// have run inside it, so the count is final once StartService returns.
+	assert.Equal(t, 1, launcher.launchCount(), "a process nobody wants is not restarted")
 }
 
 func TestStartService_AFailedStartLeavesTheProcessAnotherServiceStillWants(t *testing.T) {
@@ -956,8 +969,11 @@ func TestStopService_StopsTheProcessOnlyWhenItsLastServiceGoes(t *testing.T) {
 func TestStopService_KillsAChildThatIgnoresTheGracefulStop(t *testing.T) {
 	// A wedged service must not hold the daemon's shutdown open: SIGTERM
 	// first, and SIGKILL once StopTimeout has passed.
-	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.StopTimeout = 50 * time.Millisecond })
+	supervisor, launcher, clock := newSupervisor(t, func(c *Config) { c.StopTimeout = 50 * time.Millisecond })
 	launcher.stubborn = true
+	// The child ignores SIGTERM, so no graceful exit can land inside the stop
+	// window: collapse it like a backoff instead of waiting it out (#284).
+	clock.stopTimeout = 0
 	ctx := testContext(t)
 	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceProxy))
 
@@ -1062,12 +1078,14 @@ func TestRestart_AFailingLaunchSpendsTheBudgetInsteadOfSpinningForever(t *testin
 	launcher.lastChild().exit(errors.New("signal: killed"))
 
 	// One launch for the start, then RestartBudget relaunch attempts.
-	require.Eventually(t, func() bool { return launcher.launchCount() == 3 }, 5*time.Second, 10*time.Millisecond)
-	assert.Never(t, func() bool { return launcher.launchCount() > 3 }, time.Second, 50*time.Millisecond,
-		"the budget stops the retry loop the same way it stops the crash loop")
-
+	// The loop records the exhausted budget and returns without launching
+	// again, so once health reports it the count is final.
 	var exhausted *ErrRestartBudgetExhausted
-	require.ErrorAs(t, supervisor.ServiceHealth(gateway.ServiceTransit), &exhausted)
+	require.Eventually(t, func() bool {
+		return errors.As(supervisor.ServiceHealth(gateway.ServiceTransit), &exhausted)
+	}, 5*time.Second, 10*time.Millisecond)
+	assert.Equal(t, 3, launcher.launchCount(),
+		"the budget stops the retry loop the same way it stops the crash loop")
 }
 
 func TestRestart_AChildThatNeverServesIsNotAcceptedAsLive(t *testing.T) {
@@ -2376,11 +2394,20 @@ func TestStopDuringACrash_DoesNotLeaveARestartedOrphan(t *testing.T) {
 	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
 
 	child := launcher.lastChild()
+	// The watch goroutine closes watched only after any restart it started
+	// has finished, so waiting on it replaces waiting out the clock.
+	supervisor.mu.Lock()
+	watched := supervisor.processes["routing"].done
+	supervisor.mu.Unlock()
 	child.exit(errors.New("signal: killed"))
 	require.NoError(t, supervisor.StopService(ctx, gateway.ServiceTransit))
 
-	launched := launcher.launchCount()
-	assert.Never(t, func() bool { return launcher.launchCount() > launched }, time.Second, 50*time.Millisecond,
+	select {
+	case <-watched:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the crashed child's watch never finished")
+	}
+	assert.Equal(t, 1, launcher.launchCount(),
 		"a released process is not relaunched by the crash that raced its stop")
 }
 

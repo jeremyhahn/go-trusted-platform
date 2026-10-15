@@ -431,7 +431,7 @@ func (h *QUICServiceHandler) SetDNSService(svc DNSService) {
 }
 
 // SetComputeGRPCService sets the shared compute gRPC service the container
-// QUIC handlers delegate to.
+// and converged VM QUIC handlers delegate to.
 func (h *QUICServiceHandler) SetComputeGRPCService(svc *ComputeGRPCService) { h.computeGRPC = svc }
 
 // SetAttestationGRPCService sets the shared attestation gRPC service the

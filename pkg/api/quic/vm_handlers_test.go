@@ -213,7 +213,6 @@ func (m *mockVMOrchestrator) DetachNetwork(ctx context.Context, instanceID, port
 // mockExtendedVMOrchestrator implements ExtendedVMOrchestrator for testing
 type mockExtendedVMOrchestrator struct {
 	*mockVMOrchestrator
-	restartError         error
 	suspendError         error
 	resumeError          error
 	attestError          error
@@ -237,17 +236,7 @@ func newMockExtendedVMOrchestrator() *mockExtendedVMOrchestrator {
 	}
 }
 
-func (m *mockExtendedVMOrchestrator) Restart(ctx context.Context, instanceID string) error {
-	if m.restartError != nil {
-		return m.restartError
-	}
-
-	if _, ok := m.instances[instanceID]; !ok {
-		return compute.ErrInstanceNotFound
-	}
-
-	return nil
-}
+var _ ExtendedVMOrchestrator = (*mockExtendedVMOrchestrator)(nil)
 
 func (m *mockExtendedVMOrchestrator) Suspend(ctx context.Context, instanceID string) error {
 	if m.suspendError != nil {
@@ -839,7 +828,7 @@ func TestVMHandleStart(t *testing.T) {
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusFailedPrecondition, resp.Status)
 	})
 }
 
@@ -1468,25 +1457,34 @@ func TestVMHandleRestart(t *testing.T) {
 		assert.True(t, restartResp.Success)
 	})
 
-	t.Run("returns error when not extended orchestrator", func(t *testing.T) {
+	// Restart needs only Start and Stop, so a base orchestrator restarts
+	// through compute.Reboot exactly as gRPC RebootVM does.
+	t.Run("restarts on a base orchestrator", func(t *testing.T) {
 		handler, orchestrator := createTestVMHandler()
 		createTestVM(orchestrator, "vm-1", "test-vm")
 
-		restartReq := &VMRestartRequest{
-			ID: "vm-1",
-		}
+		resp := handler.HandleRequest(ctx, vmIDRequest(t, quicwire.OpVMRestart, &VMRestartRequest{ID: "vm-1"}))
 
-		payload, err := quicwire.EncodePayload(restartReq)
-		require.NoError(t, err)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
+		assert.Equal(t, compute.StateRunning, orchestrator.instances["vm-1"].State)
+	})
 
-		req := &quicwire.Request{
-			Opcode:  quicwire.OpVMRestart,
-			Payload: payload,
-		}
+	t.Run("returns not found for unknown VM", func(t *testing.T) {
+		handler, _ := createTestVMHandler()
 
-		resp := handler.HandleRequest(ctx, req)
+		resp := handler.HandleRequest(ctx, vmIDRequest(t, quicwire.OpVMRestart, &VMRestartRequest{ID: "missing"}))
 
-		assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
+	})
+
+	t.Run("returns failed precondition for a stopped VM", func(t *testing.T) {
+		handler, orchestrator := createTestVMHandler()
+		createTestVM(orchestrator, "vm-1", "test-vm")
+		orchestrator.stopError = compute.ErrInstanceNotRunning
+
+		resp := handler.HandleRequest(ctx, vmIDRequest(t, quicwire.OpVMRestart, &VMRestartRequest{ID: "vm-1"}))
+
+		assert.Equal(t, quicwire.StatusFailedPrecondition, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -2132,12 +2130,13 @@ func TestVMErrorResponse(t *testing.T) {
 	}{
 		{"instance not found", compute.ErrInstanceNotFound, quicwire.StatusNotFound},
 		{"instance already exists", compute.ErrInstanceAlreadyExists, quicwire.StatusAlreadyExists},
-		{"instance already running", compute.ErrInstanceAlreadyRunning, quicwire.StatusInvalidRequest},
-		{"instance not running", compute.ErrInstanceNotRunning, quicwire.StatusInvalidRequest},
+		{"instance already running", compute.ErrInstanceAlreadyRunning, quicwire.StatusFailedPrecondition},
+		{"instance not running", compute.ErrInstanceNotRunning, quicwire.StatusFailedPrecondition},
+		{"instance not suspended", compute.ErrInstanceNotSuspended, quicwire.StatusFailedPrecondition},
 		{"invalid instance ID", compute.ErrInvalidInstanceID, quicwire.StatusInvalidArgument},
 		{"invalid profile", compute.ErrInvalidProfile, quicwire.StatusInvalidArgument},
 		{"invalid configuration", compute.ErrInvalidConfiguration, quicwire.StatusInvalidArgument},
-		{"invalid state", compute.ErrInvalidState, quicwire.StatusInvalidRequest},
+		{"invalid state", compute.ErrInvalidState, quicwire.StatusFailedPrecondition},
 		{"resource exhausted", compute.ErrResourceExhausted, quicwire.StatusResourceExhausted},
 		{"orchestrator not initialized", compute.ErrOrchestratorNotInitialized, quicwire.StatusUnavailable},
 		{"timeout", compute.ErrTimeout, quicwire.StatusTimeout},
@@ -2475,6 +2474,62 @@ func TestVMHandleSuspendErrors(t *testing.T) {
 
 		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
+}
+
+// TestVMHandleSuspendResumeClasses holds the suspend and resume opcodes to
+// the classes gRPC SuspendVM and ResumeVM answer: an unknown VM is not
+// found, and a VM in the wrong state is a failed precondition.
+func TestVMHandleSuspendResumeClasses(t *testing.T) {
+	ctx := context.Background()
+	wrongState := &compute.SentinelCauseError{
+		Sentinel: compute.ErrInstanceNotRunning,
+		Cause:    &compute.MessageError{Msg: "cannot suspend instance in state stopped"},
+	}
+	notSuspended := &compute.SentinelCauseError{
+		Sentinel: compute.ErrInstanceNotSuspended,
+		Cause:    &compute.MessageError{Msg: "cannot resume instance in state running"},
+	}
+
+	tests := []struct {
+		name   string
+		opcode byte
+		body   interface{}
+		err    func(o *mockExtendedVMOrchestrator)
+		want   byte
+	}{
+		{"suspend unknown VM", quicwire.OpVMSuspend, &VMSuspendRequest{ID: "missing"}, nil, quicwire.StatusNotFound},
+		{"resume unknown VM", quicwire.OpVMResume, &VMResumeRequest{ID: "missing"}, nil, quicwire.StatusNotFound},
+		{
+			"suspend stopped VM", quicwire.OpVMSuspend, &VMSuspendRequest{ID: "vm-1"},
+			func(o *mockExtendedVMOrchestrator) { o.suspendError = wrongState }, quicwire.StatusFailedPrecondition,
+		},
+		{
+			"resume running VM", quicwire.OpVMResume, &VMResumeRequest{ID: "vm-1"},
+			func(o *mockExtendedVMOrchestrator) { o.resumeError = notSuspended }, quicwire.StatusFailedPrecondition,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler, orchestrator := createExtendedTestVMHandler()
+			createTestVM(orchestrator.mockVMOrchestrator, "vm-1", "test-vm")
+			if tt.err != nil {
+				tt.err(orchestrator)
+			}
+
+			resp := handler.HandleRequest(ctx, vmIDRequest(t, tt.opcode, tt.body))
+
+			assert.Equal(t, tt.want, resp.Status)
+		})
+	}
+}
+
+// vmIDRequest encodes body as the payload of a request for opcode.
+func vmIDRequest(t *testing.T, opcode byte, body interface{}) *quicwire.Request {
+	t.Helper()
+	payload, err := quicwire.EncodePayload(body)
+	require.NoError(t, err)
+	return &quicwire.Request{Opcode: opcode, Payload: payload}
 }
 
 func TestVMHandleResumeErrors(t *testing.T) {
@@ -3042,7 +3097,7 @@ func TestVMHandleRestartErrors(t *testing.T) {
 	t.Run("returns error when restart fails", func(t *testing.T) {
 		handler, orchestrator := createExtendedTestVMHandler()
 		createTestVM(orchestrator.mockVMOrchestrator, "vm-1", "test-vm")
-		orchestrator.restartError = errors.New("restart failed")
+		orchestrator.stopError = errors.New("restart failed")
 
 		restartReq := &VMRestartRequest{
 			ID: "vm-1",

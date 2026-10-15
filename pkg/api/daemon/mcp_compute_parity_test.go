@@ -47,6 +47,24 @@ type computeParityOrchestrator struct {
 	execErr        error
 	containerStats *container.ContainerStats
 	statsErr       error
+
+	// runStateFunc answers Suspend and Resume; nil succeeds.
+	runStateFunc func(ctx context.Context, instanceID string) error
+}
+
+func (m *computeParityOrchestrator) Suspend(ctx context.Context, instanceID string) error {
+	return m.runState(ctx, instanceID)
+}
+
+func (m *computeParityOrchestrator) Resume(ctx context.Context, instanceID string) error {
+	return m.runState(ctx, instanceID)
+}
+
+func (m *computeParityOrchestrator) runState(ctx context.Context, instanceID string) error {
+	if m.runStateFunc == nil {
+		return nil
+	}
+	return m.runStateFunc(ctx, instanceID)
 }
 
 func (m *computeParityOrchestrator) GetVMMetrics(context.Context, string) (*compute.VMMetrics, error) {
@@ -76,6 +94,7 @@ func (m *computeParityOrchestrator) Metrics(context.Context, string) (*container
 var (
 	_ compute.VMMetricsReader = (*computeParityOrchestrator)(nil)
 	_ compute.VMDiskManager   = (*computeParityOrchestrator)(nil)
+	_ compute.VMSuspender     = (*computeParityOrchestrator)(nil)
 	_ containerExecutor       = (*computeParityOrchestrator)(nil)
 	_ containerMetricsReader  = (*computeParityOrchestrator)(nil)
 )

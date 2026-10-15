@@ -87,6 +87,14 @@ func (f *fakeComputeService) RebootVM(ctx context.Context, req *platformv1.Reboo
 	return computeAnswer(f, ctx, req, &platformv1.RebootVMResponse{})
 }
 
+func (f *fakeComputeService) SuspendVM(ctx context.Context, req *platformv1.SuspendVMRequest) (*platformv1.SuspendVMResponse, error) {
+	return computeAnswer(f, ctx, req, &platformv1.SuspendVMResponse{})
+}
+
+func (f *fakeComputeService) ResumeVM(ctx context.Context, req *platformv1.ResumeVMRequest) (*platformv1.ResumeVMResponse, error) {
+	return computeAnswer(f, ctx, req, &platformv1.ResumeVMResponse{})
+}
+
 func (f *fakeComputeService) GetVMMetrics(ctx context.Context, req *platformv1.GetVMMetricsRequest) (*platformv1.VMMetricsResponse, error) {
 	return computeAnswer(f, ctx, req, &platformv1.VMMetricsResponse{})
 }
@@ -240,6 +248,16 @@ func computeRouteCases() []computeRouteCase {
 			route: "POST " + vms + "/{id}/reboot", method: http.MethodPost, target: vms + "/vm-1/reboot", body: `{"force":true}`,
 			want: &platformv1.RebootVMRequest{Id: "vm-1", Force: true},
 			resp: &platformv1.RebootVMResponse{Status: ok}, key: "status",
+		},
+		{
+			route: "POST " + vms + "/{id}/suspend", method: http.MethodPost, target: vms + "/vm-1/suspend", body: `{}`,
+			want: &platformv1.SuspendVMRequest{Id: "vm-1"},
+			resp: &platformv1.SuspendVMResponse{Status: ok}, key: "status",
+		},
+		{
+			route: "POST " + vms + "/{id}/resume", method: http.MethodPost, target: vms + "/vm-1/resume",
+			want: &platformv1.ResumeVMRequest{Id: "vm-1"},
+			resp: &platformv1.ResumeVMResponse{Status: ok}, key: "status",
 		},
 		{
 			route: "GET " + vms + "/{id}/metrics", method: http.MethodGet, target: vms + "/vm-1/metrics",
@@ -504,8 +522,6 @@ func TestComputeRoutesRefuseMalformedRequests(t *testing.T) {
 // served without a unary ComputeService RPC are not mounted.
 func TestComputeRetiredRoutesAreGone(t *testing.T) {
 	retired := []struct{ method, path string }{
-		{http.MethodPost, "/vms/vm-1/suspend"},
-		{http.MethodPost, "/vms/vm-1/resume"},
 		{http.MethodPost, "/vms/vm-1/restart"},
 		{http.MethodGet, "/vms/vm-1/console"},
 		{http.MethodGet, "/containers/ctr-1/logs"},

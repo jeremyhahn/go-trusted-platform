@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -672,54 +673,54 @@ func TestSchedulerDebounceWindow(t *testing.T) {
 
 func TestSchedulerPeriodicPush(t *testing.T) {
 	t.Run("periodic push triggers on interval", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}))
-		defer server.Close()
+		// The push interval runs on synctest time (#284).
+		synctest.Test(t, func(t *testing.T) {
+			cfg := &SchedulerConfig{
+				TriggerType:         TriggerPeriodic,
+				PushInterval:        50 * time.Millisecond,
+				MaxConcurrentPushes: 1,
+			}
+			clientCfg := DefaultClientConfig()
+			httpClient := &http.Client{Transport: statusTransport(http.StatusOK)}
+			client, err := NewClient(clientCfg, WithHTTPClient(httpClient))
+			if err != nil {
+				t.Fatalf("failed to create client: %v", err)
+			}
+			defer client.Close()
 
-		cfg := &SchedulerConfig{
-			TriggerType:         TriggerPeriodic,
-			PushInterval:        50 * time.Millisecond,
-			MaxConcurrentPushes: 1,
-		}
-		clientCfg := DefaultClientConfig()
-		client, err := NewClient(clientCfg)
-		if err != nil {
-			t.Fatalf("failed to create client: %v", err)
-		}
-		defer client.Close()
+			targets := []*PushTarget{
+				{ID: "t1", Endpoint: inMemoryEndpoint, Transport: TransportHTTP, Enabled: true},
+			}
 
-		targets := []*PushTarget{
-			{ID: "t1", Endpoint: server.URL, Transport: TransportHTTP, Enabled: true},
-		}
+			provider := NewSimpleManifestProvider("application/json")
+			provider.SetManifest("m1", []byte(`{"test":"data"}`))
 
-		provider := NewSimpleManifestProvider("application/json")
-		provider.SetManifest("m1", []byte(`{"test":"data"}`))
+			observer := newPushObserver()
 
-		observer := newPushObserver()
+			scheduler, err := NewScheduler(cfg, client, targets,
+				WithManifestProvider(provider),
+				WithHandler(observer.handle))
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
 
-		scheduler, err := NewScheduler(cfg, client, targets,
-			WithManifestProvider(provider),
-			WithHandler(observer.handle))
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
+			ctx := context.Background()
+			err = scheduler.Start(ctx)
+			if err != nil {
+				t.Fatalf("expected no error on start, got %v", err)
+			}
 
-		ctx := context.Background()
-		err = scheduler.Start(ctx)
-		if err != nil {
-			t.Fatalf("expected no error on start, got %v", err)
-		}
+			// The property is that the ticker keeps firing, so wait for a
+			// second push to actually happen. The old form asserted that two
+			// pushes fit inside 150ms of wall clock, and on a loaded host
+			// only one did (#207). The interval now only sets how fast they
+			// arrive.
+			observer.awaitPushes(t, 2)
 
-		// The property is that the ticker keeps firing, so wait for a second
-		// push to actually happen. The old form asserted that two pushes fit
-		// inside 150ms of wall clock, and on a loaded host only one did
-		// (#207). The interval now only sets how fast they arrive.
-		observer.awaitPushes(t, 2)
-
-		if err := scheduler.Stop(); err != nil {
-			t.Logf("cleanup: %v", err)
-		}
+			if err := scheduler.Stop(); err != nil {
+				t.Logf("cleanup: %v", err)
+			}
+		})
 	})
 }
 

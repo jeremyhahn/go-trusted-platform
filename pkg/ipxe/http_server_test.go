@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -832,25 +833,24 @@ func TestHTTPServer_Start_GracefulShutdown(t *testing.T) {
 	}
 }
 
+// TestHTTPServer_Start_InvalidConfig gives Start a listen address it cannot
+// bind and expects the bind error back at once, rather than serving until a
+// deadline the test has to wait out (#284).
 func TestHTTPServer_Start_InvalidConfig(t *testing.T) {
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, taken.Close()) })
+
 	cfg := DefaultServerConfig()
-	// Use a port that's likely to fail (like 0 in some contexts or already bound)
-	// This test verifies error handling during startup
+	cfg.BindHost = "127.0.0.1"
+	cfg.HTTPPort = taken.Addr().(*net.TCPAddr).Port
 
 	server := newTestHTTPServer(t, cfg)
+	err = server.Start(t.Context(), nil)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-
-	// The server should start successfully in most cases
-	// This test primarily verifies the error handling structure
-	err := server.Start(ctx, nil)
-
-	// We expect either success or a specific error
-	// In a timeout scenario, we get context.DeadlineExceeded
-	if err != nil {
-		assert.Error(t, err)
-	}
+	var bindErr *WrappedError
+	require.ErrorAs(t, err, &bindErr)
+	assert.Contains(t, bindErr.Msg, "failed to bind")
 }
 
 // Additional tests for better coverage

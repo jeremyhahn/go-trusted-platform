@@ -313,12 +313,9 @@ func (o *QEMUOrchestrator) ResizeDisk(ctx context.Context, instanceID, diskID st
 // defaultVMDiskMonitorFor connects the instance's QMP monitor (reusing an
 // existing connection) and returns the disk operations bound to it.
 func defaultVMDiskMonitorFor(ctx context.Context, o *QEMUOrchestrator, inst *qemuInstance) (diskMonitorOps, error) {
-	mon := inst.vm.Monitor()
-	if mon == nil || !mon.IsConnected() {
-		if err := inst.vm.ConnectMonitor(ctx); err != nil {
-			return nil, &WrappedError{Msg: "failed to connect QMP monitor", Err: err}
-		}
-		mon = inst.vm.Monitor()
+	mon, err := instanceMonitor(ctx, inst)
+	if err != nil {
+		return nil, err
 	}
 	return mon, nil
 }

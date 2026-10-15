@@ -91,6 +91,24 @@ func (c *Client) RebootVM(ctx context.Context, id string, force bool) error {
 	return nil
 }
 
+// SuspendVM pauses a running virtual machine in memory.
+func (c *Client) SuspendVM(ctx context.Context, id string) error {
+	_, err := c.grpc.SuspendVM(ctx, &platformv1.SuspendVMRequest{Id: id})
+	if err != nil {
+		return &ErrSuspendVMFailed{ID: id, Cause: err}
+	}
+	return nil
+}
+
+// ResumeVM continues a suspended virtual machine.
+func (c *Client) ResumeVM(ctx context.Context, id string) error {
+	_, err := c.grpc.ResumeVM(ctx, &platformv1.ResumeVMRequest{Id: id})
+	if err != nil {
+		return &ErrResumeVMFailed{ID: id, Cause: err}
+	}
+	return nil
+}
+
 // DeleteVM deletes a virtual machine.
 func (c *Client) DeleteVM(ctx context.Context, id string, deleteDisks bool) error {
 	_, err := c.grpc.DeleteVM(ctx, &platformv1.DeleteVMRequest{Id: id, DeleteDisks: deleteDisks})
@@ -373,6 +391,35 @@ func (c *Client) StopVMDomain(ctx context.Context, params *StopVMParams) (*VMSta
 	})
 	if err != nil {
 		return nil, &ErrStopVMFailed{ID: params.ID, Cause: err}
+	}
+	return statusFromProto(resp.Status), nil
+}
+
+// RebootVMDomain reboots a virtual machine and returns the operation status.
+func (c *Client) RebootVMDomain(ctx context.Context, id string, force bool) (*VMStatus, error) {
+	resp, err := c.grpc.RebootVM(ctx, &platformv1.RebootVMRequest{Id: id, Force: force})
+	if err != nil {
+		return nil, &ErrRebootVMFailed{ID: id, Cause: err}
+	}
+	return statusFromProto(resp.Status), nil
+}
+
+// SuspendVMDomain pauses a running virtual machine in memory and returns the
+// operation status.
+func (c *Client) SuspendVMDomain(ctx context.Context, id string) (*VMStatus, error) {
+	resp, err := c.grpc.SuspendVM(ctx, &platformv1.SuspendVMRequest{Id: id})
+	if err != nil {
+		return nil, &ErrSuspendVMFailed{ID: id, Cause: err}
+	}
+	return statusFromProto(resp.Status), nil
+}
+
+// ResumeVMDomain continues a suspended virtual machine and returns the
+// operation status.
+func (c *Client) ResumeVMDomain(ctx context.Context, id string) (*VMStatus, error) {
+	resp, err := c.grpc.ResumeVM(ctx, &platformv1.ResumeVMRequest{Id: id})
+	if err != nil {
+		return nil, &ErrResumeVMFailed{ID: id, Cause: err}
 	}
 	return statusFromProto(resp.Status), nil
 }

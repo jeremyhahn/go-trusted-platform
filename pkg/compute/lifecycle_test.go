@@ -54,6 +54,7 @@ func TestInstanceState_IsValid(t *testing.T) {
 		{"Valid Creating", StateCreating, true},
 		{"Valid Stopped", StateStopped, true},
 		{"Valid Running", StateRunning, true},
+		{"Valid Suspended", StateSuspended, true},
 		{"Invalid", InstanceState("invalid"), false},
 		{"Empty", InstanceState(""), false},
 	}
@@ -106,6 +107,12 @@ func TestInstanceState_CanTransitionTo(t *testing.T) {
 		{"Error to anything is invalid", StateError, StateRunning, false},
 		{"Deleting to anything is invalid", StateDeleting, StateStopped, false},
 		{"Running to Stopped is invalid", StateRunning, StateStopped, false},
+		{"Running to Suspended", StateRunning, StateSuspended, true},
+		{"Suspended to Running", StateSuspended, StateRunning, true},
+		{"Suspended to Stopping", StateSuspended, StateStopping, true},
+		{"Suspended to Error", StateSuspended, StateError, true},
+		{"Stopped to Suspended is invalid", StateStopped, StateSuspended, false},
+		{"Suspended to Deleting is invalid", StateSuspended, StateDeleting, false},
 	}
 
 	for _, tt := range tests {

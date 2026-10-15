@@ -153,6 +153,8 @@ var vmToolDispatch = map[string]vmToolHandler{
 	"vm_start":            (*ToolRegistry).executeVMStart,
 	"vm_stop":             (*ToolRegistry).executeVMStop,
 	"vm_reboot":           (*ToolRegistry).executeVMReboot,
+	"vm_suspend":          (*ToolRegistry).executeVMSuspend,
+	"vm_resume":           (*ToolRegistry).executeVMResume,
 	"vm_snapshot_create":  (*ToolRegistry).executeVMSnapshotCreate,
 	"vm_snapshot_get":     (*ToolRegistry).executeVMSnapshotGet,
 	"vm_snapshot_list":    (*ToolRegistry).executeVMSnapshotList,

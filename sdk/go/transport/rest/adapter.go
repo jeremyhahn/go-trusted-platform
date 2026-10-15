@@ -970,6 +970,23 @@ var templatedRouteTable = map[string]templatedRoute{
 	// pcr_bank stay in the body.
 	"/platform.v1.ComputeService/AttestContainer": itemRoute("/api/v1/compute/containers/{id}/attest", http.MethodPost, "{id}", "id"),
 
+	// DELETE /api/v1/compute/vms/{id}?delete_disks=true -- both REST servers
+	// read delete_disks from the query.
+	"/platform.v1.ComputeService/DeleteVM": {
+		path:        "/api/v1/compute/vms/{id}",
+		method:      http.MethodDelete,
+		pathParams:  []pathParam{{placeholder: "{id}", field: "id"}},
+		queryParams: []queryParam{{name: "delete_disks", field: "delete_disks"}},
+	},
+
+	// POST /api/v1/compute/vms/{id}/{start,stop,reboot,suspend,resume} --
+	// stop's force and timeout_seconds and reboot's force stay in the body.
+	"/platform.v1.ComputeService/StartVM":   itemRoute("/api/v1/compute/vms/{id}/start", http.MethodPost, "{id}", "id"),
+	"/platform.v1.ComputeService/StopVM":    itemRoute("/api/v1/compute/vms/{id}/stop", http.MethodPost, "{id}", "id"),
+	"/platform.v1.ComputeService/RebootVM":  itemRoute("/api/v1/compute/vms/{id}/reboot", http.MethodPost, "{id}", "id"),
+	"/platform.v1.ComputeService/SuspendVM": itemRoute("/api/v1/compute/vms/{id}/suspend", http.MethodPost, "{id}", "id"),
+	"/platform.v1.ComputeService/ResumeVM":  itemRoute("/api/v1/compute/vms/{id}/resume", http.MethodPost, "{id}", "id"),
+
 	// GET /api/v1/devices/{id:[0-9]+} -- uint64, rendered decimal.
 	//
 	// The three routes whose server template carries a :[0-9]+ constraint keep

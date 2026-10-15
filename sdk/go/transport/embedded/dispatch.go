@@ -750,6 +750,12 @@ func registerComputeHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.ComputeService_RebootVM_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.RebootVM(ctx, req.(*platformv1.RebootVMRequest))
 	}
+	m[platformv1.ComputeService_SuspendVM_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.SuspendVM(ctx, req.(*platformv1.SuspendVMRequest))
+	}
+	m[platformv1.ComputeService_ResumeVM_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ResumeVM(ctx, req.(*platformv1.ResumeVMRequest))
+	}
 	m[platformv1.ComputeService_DeleteVM_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.DeleteVM(ctx, req.(*platformv1.DeleteVMRequest))
 	}

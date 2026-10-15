@@ -170,14 +170,8 @@ func (s *ComputeGRPCService) RebootVM(ctx context.Context, req *platformv1.Reboo
 		return nil, status.Error(codes.InvalidArgument, "VM ID is required")
 	}
 
-	// Reboot by stopping then starting
-	if err := s.orchestrator.Stop(ctx, vmID); err != nil {
-		s.logger.Error(err, "Failed to stop VM for reboot", "vm_id", vmID)
-		return nil, vmLifecycleStatus("reboot", err)
-	}
-
-	if err := s.orchestrator.Start(ctx, vmID); err != nil {
-		s.logger.Error(err, "Failed to start VM after reboot stop", "vm_id", vmID)
+	if err := compute.Reboot(ctx, s.orchestrator, vmID); err != nil {
+		s.logger.Error(err, "Failed to reboot VM", "vm_id", vmID)
 		return nil, vmLifecycleStatus("reboot", err)
 	}
 
@@ -185,6 +179,56 @@ func (s *ComputeGRPCService) RebootVM(ctx context.Context, req *platformv1.Reboo
 		Status: &platformv1.Status{
 			Success: true,
 			Message: "VM rebooted successfully",
+		},
+	}, nil
+}
+
+// SuspendVM pauses a running VM in memory.
+func (s *ComputeGRPCService) SuspendVM(ctx context.Context, req *platformv1.SuspendVMRequest) (*platformv1.SuspendVMResponse, error) {
+	suspender, err := s.vmSuspender()
+	if err != nil {
+		return nil, err
+	}
+
+	vmID := req.GetId()
+	if vmID == "" {
+		return nil, status.Error(codes.InvalidArgument, "VM ID is required")
+	}
+
+	if err := suspender.Suspend(ctx, vmID); err != nil {
+		s.logger.Error(err, "Failed to suspend VM", "vm_id", vmID)
+		return nil, vmLifecycleStatus("suspend", err)
+	}
+
+	return &platformv1.SuspendVMResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "VM suspended successfully",
+		},
+	}, nil
+}
+
+// ResumeVM continues a suspended VM.
+func (s *ComputeGRPCService) ResumeVM(ctx context.Context, req *platformv1.ResumeVMRequest) (*platformv1.ResumeVMResponse, error) {
+	suspender, err := s.vmSuspender()
+	if err != nil {
+		return nil, err
+	}
+
+	vmID := req.GetId()
+	if vmID == "" {
+		return nil, status.Error(codes.InvalidArgument, "VM ID is required")
+	}
+
+	if err := suspender.Resume(ctx, vmID); err != nil {
+		s.logger.Error(err, "Failed to resume VM", "vm_id", vmID)
+		return nil, vmLifecycleStatus("resume", err)
+	}
+
+	return &platformv1.ResumeVMResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "VM resumed successfully",
 		},
 	}, nil
 }
@@ -320,6 +364,9 @@ func vmOpsErrToStatus(err error) error {
 	case errors.Is(err, compute.ErrDiskAlreadyAttached):
 		return status.Error(codes.AlreadyExists, err.Error())
 	case errors.Is(err, compute.ErrInstanceNotRunning),
+		errors.Is(err, compute.ErrInstanceNotSuspended),
+		errors.Is(err, compute.ErrInstanceAlreadyRunning),
+		errors.Is(err, compute.ErrInvalidState),
 		errors.Is(err, compute.ErrConsoleUnavailable),
 		errors.Is(err, compute.ErrVMMetricsUnavailable),
 		errors.Is(err, compute.ErrVMLogsUnavailable):
@@ -613,6 +660,20 @@ func (s *ComputeGRPCService) vmSnapshotter() (compute.VMSnapshotter, error) {
 		return nil, status.Error(codes.FailedPrecondition, "VM snapshots not supported by this compute orchestrator")
 	}
 	return snapshotter, nil
+}
+
+// vmSuspender returns the orchestrator's suspend/resume capability, or a
+// FailedPrecondition status when there is no orchestrator or it cannot
+// suspend VMs.
+func (s *ComputeGRPCService) vmSuspender() (compute.VMSuspender, error) {
+	if s.orchestrator == nil {
+		return nil, status.Error(codes.FailedPrecondition, "compute orchestrator not initialized")
+	}
+	suspender, ok := s.orchestrator.(compute.VMSuspender)
+	if !ok {
+		return nil, status.Error(codes.FailedPrecondition, "VM suspend and resume not supported by this compute orchestrator")
+	}
+	return suspender, nil
 }
 
 // CreateSnapshot creates an internal QEMU snapshot (memory + disk) of a
@@ -1402,6 +1463,8 @@ func (s *ComputeGRPCService) instanceStateToVMState(state compute.InstanceState)
 		return platformv1.VMState_VM_STATE_STARTING
 	case compute.StateRunning:
 		return platformv1.VMState_VM_STATE_RUNNING
+	case compute.StateSuspended:
+		return platformv1.VMState_VM_STATE_PAUSED
 	case compute.StateStopping:
 		return platformv1.VMState_VM_STATE_STOPPING
 	case compute.StateError:

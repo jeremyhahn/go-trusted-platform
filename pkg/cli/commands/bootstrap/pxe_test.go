@@ -371,10 +371,12 @@ func TestBoolStatus(t *testing.T) {
 
 func TestCheckNodeHealth_UnreachableHost(t *testing.T) {
 	// Provide a real RootCAs pool from a minted test CA rather than
-	// InsecureSkipVerify. The connection targets 192.0.2.1 (TEST-NET),
-	// which is guaranteed unreachable, so no TLS handshake ever occurs —
-	// the transport fails at TCP dial and the config is never exercised.
-	// The pool makes the tls.Config honest without skipping verification.
+	// InsecureSkipVerify. Every probe port is refused on loopback, so no
+	// TLS handshake ever occurs — the transport fails at TCP dial and the
+	// config is never exercised. The pool makes the tls.Config honest
+	// without skipping verification. Refused ports answer at once, where
+	// an unroutable address made each probe wait out the client timeout
+	// (#284); the timeout stays only as a guard.
 	client := &http.Client{
 		Timeout: 100 * time.Millisecond,
 		Transport: &http.Transport{
@@ -385,9 +387,24 @@ func TestCheckNodeHealth_UnreachableHost(t *testing.T) {
 			},
 		},
 	}
-	ports := (&bootstrap.BootstrapConfig{}).HealthProbePorts()
-	result := checkNodeHealth(t.Context(), client, "192.0.2.1", ports) // TEST-NET, unreachable
+	probePorts := (&bootstrap.BootstrapConfig{}).HealthProbePorts()
+	refused := make([]int, len(probePorts))
+	for i := range refused {
+		refused[i] = refusedLoopbackPort(t)
+	}
+	result := checkNodeHealth(t.Context(), client, "127.0.0.1", refused)
 	assert.Equal(t, "unreachable", result)
+}
+
+// refusedLoopbackPort returns a loopback TCP port nothing listens on, so a
+// dial to it is refused immediately.
+func refusedLoopbackPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := ln.Addr().(*net.TCPAddr).Port
+	require.NoError(t, ln.Close())
+	return port
 }
 
 // newTestTLSHealthServer serves the health endpoint over TLS with a leaf

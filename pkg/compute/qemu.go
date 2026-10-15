@@ -550,19 +550,44 @@ func (o *QEMUOrchestrator) Start(ctx context.Context, instanceID string) error {
 		}
 		qemuInst.mu.Unlock()
 
-		// Update state to stopped
-		o.lifecycle.SetState(instanceID, StateStopped)
-		qemuInst.mu.Lock()
-		qemuInst.instance.State = StateStopped
-		qemuInst.instance.UpdatedAt = time.Now()
-		qemuInst.instance.PID = 0
-		qemuInst.mu.Unlock()
-		o.logger.Infof("VM %s stopped", instanceID)
+		o.recordExit(instanceID, qemuInst)
 	}()
 
 	o.logger.Infof("Started VM instance: %s (PID: %d)", instanceID, qemuInst.instance.PID)
 
 	return nil
+}
+
+// recordExit records that the QEMU process of instanceID has exited.
+//
+// The lifecycle reaches Stopped only from Stopping, so the exit is recorded
+// as Stopped only when Stop asked for it. Every other state is kept and
+// logged: an instance gone from the lifecycle was deleted or migrated away
+// and is not recreated, Error and Deleting are terminal, and the lifecycle
+// has no transition for a VM that exits on its own while running or
+// suspended.
+func (o *QEMUOrchestrator) recordExit(instanceID string, qemuInst *qemuInstance) {
+	qemuInst.mu.Lock()
+	defer qemuInst.mu.Unlock()
+
+	qemuInst.instance.PID = 0
+	qemuInst.instance.UpdatedAt = time.Now()
+
+	state, err := o.lifecycle.GetState(instanceID)
+	if err != nil {
+		o.logger.Warnf("VM %s exited after leaving the lifecycle: %v", instanceID, err)
+		return
+	}
+	if state != StateStopping {
+		o.logger.Warnf("VM %s exited while %s; no stop was requested, so its state stays %s", instanceID, state, state)
+		return
+	}
+	if err := o.lifecycle.SetState(instanceID, StateStopped); err != nil {
+		o.logger.Errorf("VM %s exited but could not be marked stopped: %v", instanceID, err)
+		return
+	}
+	qemuInst.instance.State = StateStopped
+	o.logger.Infof("VM %s stopped", instanceID)
 }
 
 // Stop stops a running VM instance
@@ -580,30 +605,39 @@ func (o *QEMUOrchestrator) Stop(ctx context.Context, instanceID string) error {
 	}
 
 	qemuInst.mu.Lock()
-	defer qemuInst.mu.Unlock()
 
 	// Check current state
 	currentState, err := o.lifecycle.GetState(instanceID)
 	if err != nil {
+		qemuInst.mu.Unlock()
 		return err
 	}
 
-	if currentState != StateRunning {
+	if currentState != StateRunning && currentState != StateSuspended {
+		qemuInst.mu.Unlock()
 		return ErrInstanceNotRunning
+	}
+
+	// A suspended guest cannot answer the ACPI power button, so continue it
+	// first. If that fails, the stop below still falls back to SIGTERM.
+	if currentState == StateSuspended {
+		o.continueBeforeStop(ctx, qemuInst)
 	}
 
 	// Update state to stopping
 	if err := o.lifecycle.SetState(instanceID, StateStopping); err != nil {
+		qemuInst.mu.Unlock()
 		return err
 	}
 	qemuInst.instance.State = StateStopping
 	qemuInst.instance.UpdatedAt = time.Now()
 
 	// Stop VM
-	if err := qemuInst.vm.Stop(); err != nil {
+	if err := stopVMProcess(qemuInst); err != nil {
 		o.lifecycle.SetState(instanceID, StateError)
 		qemuInst.instance.State = StateError
 		qemuInst.instance.UpdatedAt = time.Now()
+		qemuInst.mu.Unlock()
 		return &WrappedError{Msg: "failed to stop VM", Err: err}
 	}
 
@@ -611,6 +645,10 @@ func (o *QEMUOrchestrator) Stop(ctx context.Context, instanceID string) error {
 	if qemuInst.cancelFunc != nil {
 		qemuInst.cancelFunc()
 	}
+
+	// The wait goroutine takes the instance lock to record the exit, so the
+	// lock is released before waiting for it.
+	qemuInst.mu.Unlock()
 
 	// Wait for VM to exit (this will also stop swtpm via the wait goroutine)
 	qemuInst.waitGroup.Wait()
@@ -643,8 +681,8 @@ func (o *QEMUOrchestrator) Delete(ctx context.Context, instanceID string) error 
 		return err
 	}
 
-	// Stop if running
-	if currentState == StateRunning {
+	// Stop if running or suspended
+	if currentState == StateRunning || currentState == StateSuspended {
 		qemuInst.mu.Unlock()
 		o.mu.Unlock()
 		if err := o.Stop(ctx, instanceID); err != nil {

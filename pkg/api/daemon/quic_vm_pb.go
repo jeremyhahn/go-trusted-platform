@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
@@ -40,6 +41,12 @@ import (
 // SendVMConsoleInput and the streaming GetVMLogs RPCs are server-streaming and
 // are NOT carried over the unary QUIC transport — they remain gRPC/daemon-native
 // (mirroring GetContainerLogs / AttachContainer).
+//
+// The lifecycle verbs RebootVM, SuspendVM and ResumeVM (OpVMRestart,
+// OpVMSuspend, OpVMResume, 0xB6-0xB8) converge the same way, as sub-opcodes
+// under OpVMExtendedCategory. Their errors take the shared errclass QUIC
+// status, so a VM in the wrong state answers StatusFailedPrecondition exactly
+// as gRPC answers FailedPrecondition.
 
 // handleVMPB decodes the pb request for a converged unary operational VM
 // opcode and delegates to the shared *ComputeGRPCService, returning
@@ -49,6 +56,48 @@ import (
 // flat VMHandler.
 func (h *QUICServiceHandler) handleVMPB(ctx context.Context, opcode byte, payload []byte) (*quicwire.Response, bool) {
 	switch opcode {
+	case quicwire.OpVMRestart:
+		if h.computeGRPC == nil {
+			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"}), true
+		}
+		var req platformv1.RebootVMRequest
+		if err := quicwire.DecodePayload(payload, &req); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
+		}
+		resp, err := h.computeGRPC.RebootVM(ctx, &req)
+		if err != nil {
+			return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "VMRestart", Cause: err}), true
+		}
+		return h.encodeQUICOK(resp), true
+
+	case quicwire.OpVMSuspend:
+		if h.computeGRPC == nil {
+			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"}), true
+		}
+		var req platformv1.SuspendVMRequest
+		if err := quicwire.DecodePayload(payload, &req); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
+		}
+		resp, err := h.computeGRPC.SuspendVM(ctx, &req)
+		if err != nil {
+			return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "VMSuspend", Cause: err}), true
+		}
+		return h.encodeQUICOK(resp), true
+
+	case quicwire.OpVMResume:
+		if h.computeGRPC == nil {
+			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"}), true
+		}
+		var req platformv1.ResumeVMRequest
+		if err := quicwire.DecodePayload(payload, &req); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
+		}
+		resp, err := h.computeGRPC.ResumeVM(ctx, &req)
+		if err != nil {
+			return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "VMResume", Cause: err}), true
+		}
+		return h.encodeQUICOK(resp), true
+
 	case quicwire.OpVMMetrics:
 		if h.computeGRPC == nil {
 			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"}), true

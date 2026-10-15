@@ -140,6 +140,36 @@ func (r *ToolRegistry) registerVMTools() {
 	})
 
 	r.addTool(mcpwire.ToolDefinition{
+		Name:        "vm_suspend",
+		Description: "Suspend a running virtual machine, keeping it paused in memory",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id": map[string]interface{}{
+					"type":        "string",
+					"description": "VM ID or name",
+				},
+			},
+			"required": []string{"id"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "vm_resume",
+		Description: "Resume a suspended virtual machine",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id": map[string]interface{}{
+					"type":        "string",
+					"description": "VM ID or name",
+				},
+			},
+			"required": []string{"id"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_snapshot_create",
 		Description: "Create a snapshot of a virtual machine",
 		InputSchema: map[string]interface{}{

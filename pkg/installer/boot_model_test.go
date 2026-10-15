@@ -19,7 +19,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -50,12 +49,7 @@ type installRecorder struct {
 
 func newInstallRecorder(t *testing.T, cmdline string) *installRecorder {
 	t.Helper()
-	dir := t.TempDir()
-	withTPMDeviceCandidates(t, []string{filepath.Join(dir, "missing-tpmrm0"), filepath.Join(dir, "missing-tpm0")})
-	modprobes := stubTPMModprobe(t)
-	origTimeout := tpmDeviceWaitTimeout
-	tpmDeviceWaitTimeout = 10 * time.Millisecond
-	t.Cleanup(func() { tpmDeviceWaitTimeout = origTimeout })
+	modprobes := withoutHostTPM(t)
 
 	disk := new(MockDiskManager)
 	osInstaller := new(MockOSInstaller)

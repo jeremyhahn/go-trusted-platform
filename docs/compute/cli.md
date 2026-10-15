@@ -50,6 +50,9 @@ the first thing that costs someone a minute.
 | `get` | `<vm-id>` | VM details |
 | `start` | `<vm-id>` | Start a VM |
 | `stop` | `<vm-id>` | Stop a running VM |
+| `reboot` | `<vm-id>` | Reboot a VM (stop, then start) |
+| `suspend` | `<vm-id>` | Pause a running VM in memory |
+| `resume` | `<vm-id>` | Continue a suspended VM |
 | `delete` | `<vm-id>` | Delete a VM |
 | `migrate` | `<vm-id> --destination <host:port>` | Migrate to another host |
 
@@ -106,6 +109,31 @@ default, and it is also how storage fills up.
 ### `compute stop`
 
 `--force` stops the VM immediately rather than requesting a clean shutdown.
+
+### `compute reboot`
+
+`--force` turns the VM off immediately instead of shutting it down cleanly;
+the VM then starts again.
+
+### `compute suspend` and `compute resume`
+
+No flags. `suspend` needs a running VM and `resume` a suspended one; a VM in
+the wrong state fails with the daemon's error (FailedPrecondition over gRPC,
+QUIC and MCP; HTTP 400, read back as InvalidArgument, over REST).
+
+### Transports
+
+Every VM verb above reaches the daemon over `grpc`, `unix` and `rest`.
+Two transports carry fewer:
+
+- **`quic`** carries only `reboot`, `suspend` and `resume`. platformd's QUIC
+  listener answers no start, stop or delete, so those fail locally with
+  Unimplemented.
+- **`mcp`**: the `vm_*` tools take only the VM id. A request carrying `force`,
+  `timeout_seconds` or `delete_disks` is refused with InvalidArgument rather
+  than run without it. `compute stop` always sends its `--timeout` (default
+  30), so it cannot run over MCP today; `reboot --force` and
+  `delete --delete-disks` cannot either.
 
 ### `compute migrate`
 
@@ -200,7 +228,6 @@ This is the **only attestation verb in the entire CLI** — see
 
 | Capability | Reach it with |
 |---|---|
-| Suspend / resume a VM | QUIC |
 | VM snapshots (create, list, delete, restore) | REST, gRPC, MCP |
 | Disk attach / detach / resize | REST, gRPC, QUIC, MCP |
 | VM metrics, container metrics | REST, gRPC, QUIC, MCP |

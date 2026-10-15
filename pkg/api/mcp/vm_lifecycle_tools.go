@@ -52,6 +52,12 @@ type VMLifecycleProvider interface {
 
 	// VMReboot stops then starts a VM, as RebootVM does.
 	VMReboot(ctx context.Context, vmID string) (interface{}, error)
+
+	// VMSuspend pauses a running VM in memory, as SuspendVM does.
+	VMSuspend(ctx context.Context, vmID string) (interface{}, error)
+
+	// VMResume continues a suspended VM, as ResumeVM does.
+	VMResume(ctx context.Context, vmID string) (interface{}, error)
 }
 
 // vmLifecycleProvider returns the VMLifecycleProvider the configured service
@@ -98,6 +104,14 @@ func (r *ToolRegistry) executeVMStop(ctx context.Context, args map[string]interf
 
 func (r *ToolRegistry) executeVMReboot(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	return r.executeVMByID(ctx, args, VMLifecycleProvider.VMReboot)
+}
+
+func (r *ToolRegistry) executeVMSuspend(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	return r.executeVMByID(ctx, args, VMLifecycleProvider.VMSuspend)
+}
+
+func (r *ToolRegistry) executeVMResume(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	return r.executeVMByID(ctx, args, VMLifecycleProvider.VMResume)
 }
 
 func (r *ToolRegistry) executeVMList(ctx context.Context, _ map[string]interface{}) (interface{}, error) {

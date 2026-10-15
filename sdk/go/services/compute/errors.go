@@ -72,6 +72,34 @@ func (e *ErrRebootVMFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrSuspendVMFailed is returned when suspending a VM fails.
+type ErrSuspendVMFailed struct {
+	ID    string
+	Cause error
+}
+
+func (e *ErrSuspendVMFailed) Error() string {
+	return fmt.Sprintf("failed to suspend VM %s: %v", e.ID, e.Cause)
+}
+
+func (e *ErrSuspendVMFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrResumeVMFailed is returned when resuming a VM fails.
+type ErrResumeVMFailed struct {
+	ID    string
+	Cause error
+}
+
+func (e *ErrResumeVMFailed) Error() string {
+	return fmt.Sprintf("failed to resume VM %s: %v", e.ID, e.Cause)
+}
+
+func (e *ErrResumeVMFailed) Unwrap() error {
+	return e.Cause
+}
+
 // ErrDeleteVMFailed is returned when deleting a VM fails.
 type ErrDeleteVMFailed struct {
 	ID    string

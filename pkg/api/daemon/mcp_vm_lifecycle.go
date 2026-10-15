@@ -80,3 +80,13 @@ func (m *MCPServiceProvider) VMStop(ctx context.Context, vmID string) (interface
 func (m *MCPServiceProvider) VMReboot(ctx context.Context, vmID string) (interface{}, error) {
 	return protoResult(m.computeService().RebootVM(ctx, &platformv1.RebootVMRequest{Id: vmID}))
 }
+
+// VMSuspend suspends a VM through ComputeService.SuspendVM.
+func (m *MCPServiceProvider) VMSuspend(ctx context.Context, vmID string) (interface{}, error) {
+	return protoResult(m.computeService().SuspendVM(ctx, &platformv1.SuspendVMRequest{Id: vmID}))
+}
+
+// VMResume resumes a VM through ComputeService.ResumeVM.
+func (m *MCPServiceProvider) VMResume(ctx context.Context, vmID string) (interface{}, error) {
+	return protoResult(m.computeService().ResumeVM(ctx, &platformv1.ResumeVMRequest{Id: vmID}))
+}

@@ -69,6 +69,14 @@ func (s *vmLifecycleStub) VMReboot(_ context.Context, id string) (interface{}, e
 	return s.answer("VMReboot", id)
 }
 
+func (s *vmLifecycleStub) VMSuspend(_ context.Context, id string) (interface{}, error) {
+	return s.answer("VMSuspend", id)
+}
+
+func (s *vmLifecycleStub) VMResume(_ context.Context, id string) (interface{}, error) {
+	return s.answer("VMResume", id)
+}
+
 func newVMLifecycleRegistry() (*ToolRegistry, *vmLifecycleStub) {
 	stub := &vmLifecycleStub{mockServiceProvider: newMockServiceProvider()}
 	return NewToolRegistry(stub, newTestLogger()), stub
@@ -76,11 +84,13 @@ func newVMLifecycleRegistry() (*ToolRegistry, *vmLifecycleStub) {
 
 // vmByIDTools are the lifecycle tools that name one VM by its "id".
 var vmByIDTools = map[string]string{
-	"vm_get":    "VMGet",
-	"vm_delete": "VMDelete",
-	"vm_start":  "VMStart",
-	"vm_stop":   "VMStop",
-	"vm_reboot": "VMReboot",
+	"vm_get":     "VMGet",
+	"vm_delete":  "VMDelete",
+	"vm_start":   "VMStart",
+	"vm_stop":    "VMStop",
+	"vm_reboot":  "VMReboot",
+	"vm_suspend": "VMSuspend",
+	"vm_resume":  "VMResume",
 }
 
 func TestVMByIDToolsPassTheID(t *testing.T) {
@@ -118,7 +128,7 @@ func TestVMByIDToolsRequireTheID(t *testing.T) {
 func TestVMLifecycleToolsWithoutProviderAreNotConfigured(t *testing.T) {
 	registry := NewToolRegistry(newMockServiceProvider(), newTestLogger())
 	args := map[string]interface{}{"id": "vm-1", "name": "vm-1"}
-	for _, tool := range []string{"vm_create", "vm_list", "vm_get", "vm_delete", "vm_start", "vm_stop", "vm_reboot"} {
+	for _, tool := range []string{"vm_create", "vm_list", "vm_get", "vm_delete", "vm_start", "vm_stop", "vm_reboot", "vm_suspend", "vm_resume"} {
 		if _, err := registry.ExecuteTool(context.Background(), tool, args); !errors.Is(err, ErrVMComputeNotConfigured) {
 			t.Errorf("%s: err = %v, want ErrVMComputeNotConfigured", tool, err)
 		}
@@ -128,7 +138,7 @@ func TestVMLifecycleToolsWithoutProviderAreNotConfigured(t *testing.T) {
 func TestVMLifecycleToolsPassProviderErrorsOn(t *testing.T) {
 	notFound := status.Error(codes.NotFound, "VM not found")
 	args := map[string]interface{}{"id": "vm-1", "name": "vm-1"}
-	for _, tool := range []string{"vm_create", "vm_list", "vm_get", "vm_delete", "vm_start", "vm_stop", "vm_reboot"} {
+	for _, tool := range []string{"vm_create", "vm_list", "vm_get", "vm_delete", "vm_start", "vm_stop", "vm_reboot", "vm_suspend", "vm_resume"} {
 		registry, stub := newVMLifecycleRegistry()
 		stub.err = notFound
 		if _, err := registry.ExecuteTool(context.Background(), tool, args); !errors.Is(err, notFound) {

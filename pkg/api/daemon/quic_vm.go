@@ -56,9 +56,12 @@ func (h *QUICServiceHandler) handleVMServiceOperation(ctx context.Context, req *
 	}
 
 	// Operational VM sub-opcodes (metrics, disk hotplug/unplug/resize, migrate)
-	// converge on the platform.v1 pb wire contract and delegate to the shared
+	// and the lifecycle sub-opcodes (restart, suspend, resume) converge on the
+	// platform.v1 pb wire contract and delegate to the shared
 	// *ComputeGRPCService, mirroring the container sub-opcode path above.
-	if req.Opcode == quicwire.OpVMExtendedCategory && len(req.Payload) > 0 && quicwire.IsVMSubOpcode(req.Payload[0]) {
+	// handleVMPB declines every other sub-opcode, which falls through to the
+	// flat VMHandler.
+	if req.Opcode == quicwire.OpVMExtendedCategory && len(req.Payload) > 0 {
 		if resp, handled := h.handleVMPB(ctx, req.Payload[0], req.Payload[1:]); handled {
 			return resp
 		}

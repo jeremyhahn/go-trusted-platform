@@ -20,6 +20,7 @@ import (
 	"os"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -423,19 +424,23 @@ func TestServer_WaitForReady(t *testing.T) {
 }
 
 func TestServer_WaitForReadyTimeout(t *testing.T) {
-	config := createMinimalConfig(t)
-	logger := logging.DefaultLogger()
+	// The refused dials return at once and the polls between them run on
+	// synctest time, so the 500ms timeout costs nothing (#284).
+	synctest.Test(t, func(t *testing.T) {
+		config := createMinimalConfig(t)
+		logger := logging.DefaultLogger()
 
-	server, err := NewServer(config, logger)
-	if err != nil {
-		t.Fatalf("NewServer() error: %v", err)
-	}
+		server, err := NewServer(config, logger)
+		if err != nil {
+			t.Fatalf("NewServer() error: %v", err)
+		}
 
-	// Don't start the server, should timeout
-	err = server.WaitForReady(500 * time.Millisecond)
-	if err == nil {
-		t.Error("WaitForReady() should timeout when server not started")
-	}
+		// Don't start the server, should timeout
+		err = server.WaitForReady(500 * time.Millisecond)
+		if err == nil {
+			t.Error("WaitForReady() should timeout when server not started")
+		}
+	})
 }
 
 func TestServer_WaitForReadyDefaultTimeout(t *testing.T) {

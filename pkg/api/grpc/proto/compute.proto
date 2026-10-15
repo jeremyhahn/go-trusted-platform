@@ -15,6 +15,8 @@ service ComputeService {
   rpc StartVM(StartVMRequest) returns (StartVMResponse);
   rpc StopVM(StopVMRequest) returns (StopVMResponse);
   rpc RebootVM(RebootVMRequest) returns (RebootVMResponse);
+  rpc SuspendVM(SuspendVMRequest) returns (SuspendVMResponse);
+  rpc ResumeVM(ResumeVMRequest) returns (ResumeVMResponse);
   rpc DeleteVM(DeleteVMRequest) returns (DeleteVMResponse);
   rpc GetVM(GetVMRequest) returns (GetVMResponse);
   rpc ListVMs(ListVMsRequest) returns (ListVMsResponse);
@@ -399,6 +401,24 @@ message RebootVMRequest {
 }
 
 message RebootVMResponse {
+  Status status = 1;
+}
+
+// SuspendVM pauses a running VM in memory (QMP stop).
+message SuspendVMRequest {
+  string id = 1;
+}
+
+message SuspendVMResponse {
+  Status status = 1;
+}
+
+// ResumeVM continues a suspended VM (QMP cont).
+message ResumeVMRequest {
+  string id = 1;
+}
+
+message ResumeVMResponse {
   Status status = 1;
 }
 

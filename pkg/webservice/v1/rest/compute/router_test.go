@@ -57,6 +57,8 @@ func TestComputeRouter_RoutesRegistered(t *testing.T) {
 		{http.MethodPost, "/api/v1/compute/vms/abc/start"},
 		{http.MethodPost, "/api/v1/compute/vms/abc/stop"},
 		{http.MethodPost, "/api/v1/compute/vms/abc/reboot"},
+		{http.MethodPost, "/api/v1/compute/vms/abc/suspend"},
+		{http.MethodPost, "/api/v1/compute/vms/abc/resume"},
 		{http.MethodGet, "/api/v1/compute/vms/abc/metrics"},
 		{http.MethodPost, "/api/v1/compute/vms/abc/migrate"},
 		{http.MethodPost, "/api/v1/compute/vms/abc/disks"},
