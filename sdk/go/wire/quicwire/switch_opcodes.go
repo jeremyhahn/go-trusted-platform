@@ -19,7 +19,7 @@ package quicwire
 // single top-level opcode. The first byte of the request payload selects
 // the sub-operation; the remaining bytes are the MessagePack-encoded
 // sub-request. The server-side dispatcher lives at
-// pkg/api/daemon/quic_switch.go::handleSwitchCategory.
+// pkg/api/daemon/quic_switch.go::switchQUICHandlers.
 //
 // These constants are the canonical wire-format definitions and are
 // consumed by the SDK QUIC adapter (sdk/go/transport/quic/adapter.go).

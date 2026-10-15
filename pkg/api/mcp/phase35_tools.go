@@ -339,7 +339,7 @@ func (r *ToolRegistry) registerPhase35Tools() {
 	})
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_luks_test_unlock",
-		Description: "Refused: test-unlock tries no key material, so it cannot verify a keyslot unlocks the device",
+		Description: "Report whether a LUKS keyslot exists on a device; no key material is tried",
 		InputSchema: map[string]interface{}{"type": "object", "properties": slotProps, "required": []string{"device", "slot"}},
 	})
 	changePPProps := map[string]interface{}{

@@ -31,11 +31,14 @@ import (
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	service "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // The MCP KMS and secret tools must answer as gRPC does (#304): the same
@@ -56,10 +59,11 @@ const (
 	parityMissingID      = "missing"
 )
 
-// errParityMissing is what the fake SDK answers for an unknown object.
-type errParityMissing struct{ id string }
-
-func (e errParityMissing) Error() string { return "parity fake: not found: " + e.id }
+// parityMissing is what the fake SDK answers for an unknown object: the
+// SDK's typed NotFound, as go-quicbaas answers it.
+func parityMissing(id string) error {
+	return sdkerrors.NewNotFound("parity", "no object "+id)
+}
 
 // parityStore is the one backend both transports read.
 type parityStore struct {
@@ -81,7 +85,7 @@ func newParityStore() *parityStore {
 func (s *parityStore) keyName(keyID string) (string, error) {
 	name, ok := s.keys[keyID]
 	if !ok {
-		return "", errParityMissing{id: keyID}
+		return "", parityMissing(keyID)
 	}
 	return name, nil
 }
@@ -99,7 +103,7 @@ func (s *parityStore) decrypt(keyID string, ciphertext []byte) ([]byte, error) {
 	}
 	prefix := []byte(keyID + ":")
 	if !bytes.HasPrefix(ciphertext, prefix) {
-		return nil, errParityMissing{id: keyID}
+		return nil, sdkerrors.NewInvalidInput("parity", "ciphertext not sealed under "+keyID)
 	}
 	return ciphertext[len(prefix):], nil
 }
@@ -117,14 +121,14 @@ func (s *parityStore) putSecret(secretID string, data []byte) uint64 {
 func (s *parityStore) secret(secretID string) ([]byte, uint64, error) {
 	data, ok := s.secrets[secretID]
 	if !ok {
-		return nil, 0, errParityMissing{id: secretID}
+		return nil, 0, parityMissing(secretID)
 	}
 	return data, s.versions[secretID], nil
 }
 
 func (s *parityStore) rotationPolicy(secretID string) error {
 	if !s.rotation[secretID] {
-		return errParityMissing{id: secretID}
+		return parityMissing(secretID)
 	}
 	return nil
 }
@@ -309,13 +313,11 @@ func parityTool(t *testing.T, registry *mcp.ToolRegistry, tool string, args map[
 	return nil
 }
 
-// mcpErrorClass is the class an MCP client reads for err: the class the error
-// carries, or Internal when it carries none (pkg/api/mcp toolErrorCode).
+// mcpErrorClass is the class an MCP client reads for err: the server answers
+// the JSON-RPC code for the error's class (pkg/api/mcp toolErrorCode, which
+// falls back to errclass), and the client decodes that code to a class.
 func mcpErrorClass(err error) codes.Code {
-	if class := status.Code(err); class != codes.Unknown {
-		return class
-	}
-	return codes.Internal
+	return mcpwire.ClassForCode(mcpwire.CodeForClass(errclass.Code(err)))
 }
 
 // requireSameClass asserts both transports failed with the class want.
@@ -410,14 +412,21 @@ func TestMCPKMSParity_CryptoOps(t *testing.T) {
 		args := map[string]interface{}{"key_id": parityMissingID, "plaintext": b64(plaintext)}
 		mcpErr := parityTool(t, tools, "kms_encrypt", args, &cryptoAnswer{})
 		_, grpcErr := adapter.Encrypt(ctx, &pb.CryptoEncryptRequest{KeyId: parityMissingID, Plaintext: plaintext})
-		requireSameClass(t, mcpErr, grpcErr, codes.Internal)
+		requireSameClass(t, mcpErr, grpcErr, codes.NotFound)
 	})
 
 	t.Run("decrypt under a missing key", func(t *testing.T) {
 		args := map[string]interface{}{"key_id": parityMissingID, "ciphertext": b64(plaintext)}
 		mcpErr := parityTool(t, tools, "kms_decrypt", args, &cryptoAnswer{})
 		_, grpcErr := adapter.Decrypt(ctx, &pb.CryptoDecryptRequest{KeyId: parityMissingID, Ciphertext: plaintext})
-		requireSameClass(t, mcpErr, grpcErr, codes.Internal)
+		requireSameClass(t, mcpErr, grpcErr, codes.NotFound)
+	})
+
+	t.Run("decrypt a ciphertext the key did not seal", func(t *testing.T) {
+		args := map[string]interface{}{"key_id": parityKeyID, "ciphertext": b64(plaintext)}
+		mcpErr := parityTool(t, tools, "kms_decrypt", args, &cryptoAnswer{})
+		_, grpcErr := adapter.Decrypt(ctx, &pb.CryptoDecryptRequest{KeyId: parityKeyID, Ciphertext: plaintext})
+		requireSameClass(t, mcpErr, grpcErr, codes.InvalidArgument)
 	})
 
 	t.Run("encrypt without key_id", func(t *testing.T) {
@@ -469,7 +478,7 @@ func TestMCPKMSParity_DataKeys(t *testing.T) {
 	t.Run("under a missing key", func(t *testing.T) {
 		mcpErr := parityTool(t, tools, "kms_generate_data_key", map[string]interface{}{"key_id": parityMissingID}, &dataKeyAnswer{})
 		_, grpcErr := rpc.GenerateDataKey(ctx, &platformv1.GenerateDataKeyRequest{KeyId: parityMissingID})
-		requireSameClass(t, mcpErr, grpcErr, codes.Internal)
+		requireSameClass(t, mcpErr, grpcErr, codes.NotFound)
 	})
 
 	t.Run("without key_id", func(t *testing.T) {

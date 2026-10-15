@@ -142,6 +142,9 @@ func (r *ToolRegistry) registerTools() {
 	// gRPC BMCService surface.
 	r.registerBMCTools()
 
+	// Register PXE provisioning tools mirroring the gRPC PXEService surface.
+	r.registerPXETools()
+
 	// Register Cluster lifecycle tools mirroring the gRPC ClusterService
 	// surface.
 	r.registerClusterTools()
@@ -1852,18 +1855,6 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 	case "platform_tpm_platform":
 		return r.executeTPMPlatform(ctx, args)
 
-	// Physical Switch Management Operations
-	case "switch_list_ports":
-		return r.executeSwitchListPorts(ctx, args)
-	case "switch_port_status":
-		return r.executeSwitchPortStatus(ctx, args)
-	case "switch_set_vlan":
-		return r.executeSwitchSetVLAN(ctx, args)
-	case "switch_enable_port":
-		return r.executeSwitchEnablePort(ctx, args)
-	case "switch_disable_port":
-		return r.executeSwitchDisablePort(ctx, args)
-
 	default:
 		// Gateway load balancer tool dispatch (gateway_lb_*) uses a
 		// map-based dispatcher for O(1) routing per project conventions.
@@ -1903,6 +1894,16 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		// BMC tool dispatch (platform_bmc_*) uses a map-based dispatcher
 		// for O(1) routing per project conventions.
 		if result, handled, err := r.dispatchBMCTool(ctx, name, args); handled {
+			return result, err
+		}
+		// PXE tool dispatch (pxe_*) calls the gRPC PXEService servicer
+		// through the pxeTools table.
+		if result, handled, err := r.dispatchPXETool(ctx, name, args); handled {
+			return result, err
+		}
+		// Switch tool dispatch (switch_*) calls the gRPC SwitchService
+		// servicer through the switchTools table.
+		if result, handled, err := r.dispatchSwitchTool(ctx, name, args); handled {
 			return result, err
 		}
 		// Cluster tool dispatch (platform_cluster_*) uses a map-based

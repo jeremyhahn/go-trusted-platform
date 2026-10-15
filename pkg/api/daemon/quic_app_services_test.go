@@ -25,8 +25,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
-// appQUICOperation is one application service sub-operation with a request
-// the service accepts.
+// appQUICOperation is one sub-operation of an appQUICCategories category with
+// a request its service accepts.
 type appQUICOperation struct {
 	name    string
 	opcode  byte
@@ -62,6 +62,11 @@ func appQUICOperations() []appQUICOperation {
 		{"messaging.GetStats", quicwire.OpMessagingCategory, quicwire.MessagingSubGetStats, &platformv1.GetMessagingStatsRequest{}},
 		{"messaging.GetDedupStats", quicwire.OpMessagingCategory, quicwire.MessagingSubGetDedupStats, &platformv1.GetMessagingDedupStatsRequest{}},
 		{"messaging.GetChannelStats", quicwire.OpMessagingCategory, quicwire.MessagingSubGetChannelStats, &platformv1.GetMessagingChannelStatsRequest{Channel: "events"}},
+		{"switch.ListPorts", quicwire.OpSwitchCategory, quicwire.SwitchSubListPorts, &platformv1.ListSwitchPortsRequest{SwitchName: "core-1"}},
+		{"switch.GetPortStatus", quicwire.OpSwitchCategory, quicwire.SwitchSubGetPortStatus, &platformv1.GetSwitchPortStatusRequest{SwitchName: "core-1", PortName: "eth1"}},
+		{"switch.SetPortVLAN", quicwire.OpSwitchCategory, quicwire.SwitchSubSetPortVLAN, &platformv1.SetSwitchPortVLANRequest{SwitchName: "core-1", PortName: "eth1", VlanId: 20}},
+		{"switch.EnablePort", quicwire.OpSwitchCategory, quicwire.SwitchSubEnablePort, &platformv1.EnableSwitchPortRequest{SwitchName: "core-1", PortName: "eth1"}},
+		{"switch.DisablePort", quicwire.OpSwitchCategory, quicwire.SwitchSubDisablePort, &platformv1.DisableSwitchPortRequest{SwitchName: "core-1", PortName: "eth1"}},
 	}
 }
 
@@ -72,9 +77,12 @@ func appQUICRequest(t *testing.T, opcode, sub byte, message interface{}) *quicwi
 	return &quicwire.Request{Opcode: opcode, Payload: append([]byte{sub}, body...)}
 }
 
+// newAppQUICHandler serves servers, plus a switch servicer backed by the fake
+// switch core-1, so every category in appQUICCategories is wired.
 func newAppQUICHandler(servers appServiceServers) *QUICServiceHandler {
 	handler := newTestQUICServiceHandler(logging.DefaultLogger())
 	handler.SetAppServices(servers)
+	handler.SetSwitchServer(NewSwitchGRPCService(logging.DefaultLogger(), newFakeSwitchService()))
 	return handler
 }
 
@@ -126,8 +134,9 @@ func TestQUICAppServices_DecodeReplies(t *testing.T) {
 }
 
 func TestQUICAppServices_NotConfiguredIsUnavailable(t *testing.T) {
-	// A daemon whose DAO factory has no SDK.
+	// A daemon whose DAO factory has no SDK and that has no switch backend.
 	handler := newAppQUICHandler(newAppServiceServers(nil, nil))
+	handler.SetSwitchServer(NewSwitchGRPCService(logging.DefaultLogger(), nil))
 	for _, op := range appQUICOperations() {
 		resp := handler.HandleRequest(context.Background(), appQUICRequest(t, op.opcode, op.sub, op.request))
 		assert.Equal(t, quicwire.StatusUnavailable, resp.Status, "%s: payload %q", op.name, resp.Payload)
@@ -136,6 +145,7 @@ func TestQUICAppServices_NotConfiguredIsUnavailable(t *testing.T) {
 
 func TestQUICAppServices_UnwiredCategoryIsUnavailable(t *testing.T) {
 	handler := newAppQUICHandler(appServiceServers{})
+	handler.SetSwitchServer(nil)
 	for opcode, category := range appQUICCategories {
 		for sub := range category.handlers {
 			resp := handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: opcode, Payload: []byte{sub}})

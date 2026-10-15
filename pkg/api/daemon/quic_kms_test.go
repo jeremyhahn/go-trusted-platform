@@ -27,6 +27,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -125,7 +127,7 @@ func (m *mockKMSService) GetKey(ctx context.Context, req *pb.GetKeyRequest) (*pb
 	}
 	key, ok := m.keys[req.KeyId]
 	if !ok {
-		return nil, errors.New("key not found")
+		return nil, status.Error(codes.NotFound, "key not found")
 	}
 	return &pb.GetKeyResponse{Key: key, Metadata: m.metadata[req.KeyId]}, nil
 }
@@ -153,7 +155,7 @@ func (m *mockKMSService) DeleteKey(ctx context.Context, req *pb.DeleteKeyRequest
 		return nil, m.errToReturn
 	}
 	if _, ok := m.keys[req.KeyId]; !ok {
-		return nil, errors.New("key not found")
+		return nil, status.Error(codes.NotFound, "key not found")
 	}
 	delete(m.keys, req.KeyId)
 	delete(m.metadata, req.KeyId)
@@ -171,7 +173,7 @@ func (m *mockKMSService) RotateKey(ctx context.Context, req *pb.RotateKeyRequest
 	}
 	key, ok := m.keys[req.KeyId]
 	if !ok {
-		return nil, errors.New("key not found")
+		return nil, status.Error(codes.NotFound, "key not found")
 	}
 	oldVersion := key.Version
 	key.Version++
@@ -189,7 +191,7 @@ func (m *mockKMSService) UpdateKeyStatus(ctx context.Context, req *pb.UpdateKeyS
 	}
 	key, ok := m.keys[req.KeyId]
 	if !ok {
-		return nil, errors.New("key not found")
+		return nil, status.Error(codes.NotFound, "key not found")
 	}
 	key.Status = req.Status
 	return &pb.UpdateKeyStatusResponse{
@@ -205,7 +207,7 @@ func (m *mockKMSService) ExportKey(ctx context.Context, req *pb.ExportKeyRequest
 		return nil, m.errToReturn
 	}
 	if _, ok := m.keys[req.KeyId]; !ok {
-		return nil, errors.New("key not found")
+		return nil, status.Error(codes.NotFound, "key not found")
 	}
 	return &pb.ExportKeyResponse{
 		KeyId:             req.KeyId,
@@ -407,7 +409,7 @@ func (m *mockKMSService) RevokeKey(ctx context.Context, req *pb.RevokeKeyRequest
 	}
 	key, ok := m.keys[req.KeyId]
 	if !ok {
-		return nil, errors.New("key not found")
+		return nil, status.Error(codes.NotFound, "key not found")
 	}
 	key.Status = pb.KeyStatus_KEY_STATUS_DISABLED
 	return &pb.RevokeKeyResponse{
@@ -424,7 +426,7 @@ func (m *mockKMSService) GetKeyMetadata(ctx context.Context, req *pb.GetKeyMetad
 	}
 	meta, ok := m.metadata[req.KeyId]
 	if !ok {
-		return nil, errors.New("key not found")
+		return nil, status.Error(codes.NotFound, "key not found")
 	}
 	return &pb.GetKeyMetadataResponse{
 		Metadata:  meta,
@@ -439,7 +441,7 @@ func (m *mockKMSService) UpdateKeyMetadata(ctx context.Context, req *pb.UpdateKe
 	}
 	meta, ok := m.metadata[req.KeyId]
 	if !ok {
-		return nil, errors.New("key not found")
+		return nil, status.Error(codes.NotFound, "key not found")
 	}
 	if req.Name != "" {
 		meta.Name = req.Name
@@ -473,7 +475,7 @@ func (m *mockKMSService) GetKeyPolicy(ctx context.Context, req *pb.GetKeyPolicyR
 	}
 	policy, ok := m.policies[req.KeyId]
 	if !ok {
-		return nil, errors.New("policy not found")
+		return nil, status.Error(codes.NotFound, "policy not found")
 	}
 	return &pb.GetKeyPolicyResponse{
 		Policy:    policy,
@@ -885,6 +887,56 @@ func TestHandleKMSGetKey(t *testing.T) {
 
 		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
+}
+
+// TestHandleKMSErrorClasses: each QUIC KMS handler answers a failed call with
+// the QUIC status for the error's class (#304), the class gRPC answers, and an
+// error that names no class with InternalError.
+func TestHandleKMSErrorClasses(t *testing.T) {
+	classes := []struct {
+		name string
+		err  error
+		want byte
+	}{
+		{"not found", status.Error(codes.NotFound, "no key"), quicwire.StatusNotFound},
+		{"invalid argument", status.Error(codes.InvalidArgument, "bad key id"), quicwire.StatusInvalidArgument},
+		{"already exists", status.Error(codes.AlreadyExists, "dup"), quicwire.StatusAlreadyExists},
+		{"failed precondition", status.Error(codes.FailedPrecondition, "disabled"), quicwire.StatusFailedPrecondition},
+		{"permission denied", status.Error(codes.PermissionDenied, "no"), quicwire.StatusPermissionDenied},
+		{"unimplemented", status.Error(codes.Unimplemented, "later"), quicwire.StatusNotImplemented},
+		{"unavailable", status.Error(codes.Unavailable, "down"), quicwire.StatusUnavailable},
+		{"no class", errors.New("key not found"), quicwire.StatusInternalError},
+	}
+	calls := []struct {
+		name    string
+		request func(t *testing.T) *quicwire.Request
+	}{
+		{"GetKey", func(t *testing.T) *quicwire.Request {
+			payload, err := quicwire.EncodePayload(KMSGetKeyRequest{KeyId: "k"})
+			require.NoError(t, err)
+			return &quicwire.Request{Opcode: quicwire.OpKMSGetKey, Payload: payload}
+		}},
+		{"ListKeys", func(t *testing.T) *quicwire.Request {
+			return &quicwire.Request{Opcode: quicwire.OpKMSListKeys}
+		}},
+		{"GetKeyMetadata", func(t *testing.T) *quicwire.Request {
+			return kmsExtendedRequest(t, quicwire.OpKMSExtendedCategory, quicwire.KMSSubGetKeyMetadata,
+				&KMSGetKeyMetadataRequest{KeyID: "k"})
+		}},
+	}
+	for _, call := range calls {
+		for _, class := range classes {
+			t.Run(call.name+"/"+class.name, func(t *testing.T) {
+				svc := newMockKMSService()
+				svc.shouldErr = true
+				svc.errToReturn = class.err
+				handler := newTestQUICServiceHandler(logging.DefaultLogger(), WithQUICKMSService(svc))
+
+				resp := handler.HandleRequest(context.Background(), call.request(t))
+				assert.Equal(t, class.want, resp.Status)
+			})
+		}
+	}
 }
 
 func TestHandleKMSListKeys(t *testing.T) {

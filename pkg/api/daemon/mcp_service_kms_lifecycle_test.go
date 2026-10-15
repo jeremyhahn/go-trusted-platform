@@ -22,8 +22,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
 
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	service "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 )
 
@@ -244,7 +247,12 @@ func TestMCPServiceProviderKMSKeyMetadata(t *testing.T) {
 	})
 
 	t.Run("GetNotFound", func(t *testing.T) {
-		provider := newLifecycleProvider(&lifecycleKMSServiceMock{}, nil)
+		mock := &lifecycleKMSServiceMock{
+			getKeyMetadataFunc: func(ctx context.Context, req *service.GetKeyMetadataRequest) (*service.GetKeyMetadataResponse, error) {
+				return nil, sdkerrors.NewNotFound("kms", "no key "+req.KeyID)
+			},
+		}
+		provider := newLifecycleProvider(mock, nil)
 		_, err := provider.KMSGetKeyMetadata(ctx, "missing")
 		var notFoundErr ErrKMSKeyNotFound
 		assert.ErrorAs(t, err, &notFoundErr)
@@ -335,11 +343,62 @@ func TestMCPServiceProviderKMSKeyPolicy(t *testing.T) {
 	})
 
 	t.Run("GetNotFound", func(t *testing.T) {
-		provider := newLifecycleProvider(&lifecycleKMSServiceMock{}, nil)
+		mock := &lifecycleKMSServiceMock{
+			getKeyPolicyFunc: func(ctx context.Context, req *service.GetKeyPolicyRequest) (*service.GetKeyPolicyResponse, error) {
+				return nil, sdkerrors.NewNotFound("kms", "no policy for "+req.KeyID)
+			},
+		}
+		provider := newLifecycleProvider(mock, nil)
 		_, err := provider.KMSGetKeyPolicy(ctx, "key-1")
 		var notFoundErr ErrKMSKeyPolicyNotFound
 		assert.ErrorAs(t, err, &notFoundErr)
 	})
+}
+
+// TestMCPServiceProviderKMSLookupClasses checks that a failed key lookup
+// keeps the backend's class on MCP, as it does on gRPC (#304): only a
+// NotFound backend error answers "key not found".
+func TestMCPServiceProviderKMSLookupClasses(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		err  error
+		want codes.Code
+	}{
+		{"not found", sdkerrors.NewNotFound("kms", "no key"), codes.NotFound},
+		{"invalid input", sdkerrors.NewInvalidInput("kms", "bad key id"), codes.InvalidArgument},
+		{"forbidden", sdkerrors.NewForbidden("kms", "no"), codes.PermissionDenied},
+		{"unavailable", sdkerrors.NewUnavailable("kms", "down"), codes.Unavailable},
+		{"no class", errors.New("key not found"), codes.Internal},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			mock := &lifecycleKMSServiceMock{
+				mockKMSServiceForMCPTests: mockKMSServiceForMCPTests{
+					getKeyFunc: func(ctx context.Context, req *service.GetKeyRequest) (*service.GetKeyResponse, error) {
+						return nil, tt.err
+					},
+				},
+				getKeyMetadataFunc: func(ctx context.Context, req *service.GetKeyMetadataRequest) (*service.GetKeyMetadataResponse, error) {
+					return nil, tt.err
+				},
+				getKeyPolicyFunc: func(ctx context.Context, req *service.GetKeyPolicyRequest) (*service.GetKeyPolicyResponse, error) {
+					return nil, tt.err
+				},
+			}
+			provider := newLifecycleProvider(mock, nil)
+
+			_, err := provider.KMSGetKey(ctx, "k", 0)
+			assert.Equal(t, tt.want, errclass.Code(err), "GetKey: %v", err)
+			_, err = provider.KMSGetKeyMetadata(ctx, "k")
+			assert.Equal(t, tt.want, errclass.Code(err), "GetKeyMetadata: %v", err)
+			_, err = provider.KMSGetKeyPolicy(ctx, "k")
+			assert.Equal(t, tt.want, errclass.Code(err), "GetKeyPolicy: %v", err)
+		})
+	}
 }
 
 func TestMCPServiceProviderKMSAlgorithmsAndStatus(t *testing.T) {

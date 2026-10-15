@@ -155,7 +155,7 @@ Every IAM byte the daemon dispatches (`handleIAMOperation`,
 | `0xF9` | `OpIAMTokenCreate` | Create token — refused, `StatusNotImplemented` |
 | `0xFA` | `OpIAMTokenRevoke` | Revoke token — refused, `StatusNotImplemented` |
 | `0xFB` | `OpIAMTokenVerify` | Verify token |
-| `0x51` | `OpIAMCategory` | Tenant records; sub-opcode in `payload[0]`: `0x01` create, `0x02` get, `0x03` list, `0x04` update, `0x05` delete |
+| `0x51` | `OpIAMCategory` | Tenant records; sub-opcode in `payload[0]`: `0x01` create, `0x02` get, `0x03` list, `0x04` update, `0x05` delete. `0x10`–`0x16` are `InvitationService` ([`docs/tenant/api.md`](../tenant/api.md) §10) |
 
 The bytes between the IAM ranges belong to other services: `0xB0`–`0xB4` are
 SDN and `0xF0`–`0xF5` are DEK operations.
@@ -166,10 +166,10 @@ SDN and `0xF0`–`0xF5` are DEK operations.
 |---|---|---|---|---|---|
 | Create tenant (IAM scoping) | `POST /api/v1/iam/tenants` | ✅ | `0x51` sub `0x01` | `iam_create_tenant`, `iam:write` | ✅ |
 | List / get / update / delete tenant | `/api/v1/iam/tenants[/{tenant}]` | ✅ | `0x51` subs `0x03` / `0x02` / `0x04` / `0x05` | `iam_list_tenants` `iam:read`, `iam_get_tenant` `iam:read`, `iam_delete_tenant` `iam:delete`; update `MISSING` | ✅ |
-| Authenticate | `MISSING — docs/13 G7` | `MISSING` — no RPC | `0xF8`, daemon-native | `iam_authenticate`, refused, `Unimplemented`, unclassified | ✅ |
-| Create token | refused by the SDK: `ErrNoRESTRoute` | refused, `Unimplemented` | `0xF9`, refused, `StatusNotImplemented` | `iam_create_token`, refused, unclassified | refused |
+| Authenticate | `MISSING — docs/13 G7` | `MISSING` — no RPC | `0xF8`, daemon-native | `iam_authenticate`, open, refused, `Unimplemented` | ✅ |
+| Create token | refused by the SDK: `ErrNoRESTRoute` | refused, `Unimplemented` | `0xF9`, refused, `StatusNotImplemented` | `iam_create_token`, `iam:write`, refused | refused |
 | Verify token | refused by the SDK: `ErrNoRESTRoute` | ✅ | `0xFB` | `iam_verify_token`, `iam:read` | ✅ |
-| Revoke token | refused by the SDK: `ErrNoRESTRoute` | refused, `Unimplemented` | `0xFA`, refused, `StatusNotImplemented` | `iam_revoke_token`, refused, unclassified | refused |
+| Revoke token | refused by the SDK: `ErrNoRESTRoute` | refused, `Unimplemented` | `0xFA`, refused, `StatusNotImplemented` | `iam_revoke_token`, `iam:write`, refused | refused |
 | Check permission | `POST /api/v1/iam/permissions/check`, `/tenants/{tenant}/permissions/check` | ✅ | `0xF7` | `iam_check_permission`, `iam:read` | ✅ |
 
 **`iam_authenticate` is refused** with `ErrIAMAuthenticationViaOIDC`
@@ -345,18 +345,20 @@ method (`iam_verify_token` calls `IAMTokenService.Verify`, as gRPC does), and `I
 
 Since #300 `AuthorizeTool` **denies** a tool absent from the map
 (`AuthErrorToolNotClassified`, `-32603` on the wire) rather than allowing it.
-Of 469 registered tools, 435 carry a `resource:action` permission, 11 are
-classified open (`""`), and the other 23 are absent from the map and refused
-(measured from `NewToolRegistry(...).ListTools()` against
-`toolPermissionCatalog`; the 23 are exactly `knownUnclassified`). Since #304
-the classified tools include 29 VM and container tools ([`docs/compute/api.md`](../compute/api.md) §7). Three IAM tools stay out of it on purpose and are enumerated in
-`knownUnclassified` (`pkg/api/mcp/authz_completeness_test.go`):
-`iam_create_token`, `iam_revoke_token` and `iam_authenticate`. They refuse on
-every transport (§6), and `iam_authenticate` has no gRPC method to take a
-scope from, so no scope may unlock them. The escalation this section once
-described — any valid token minting credentials through `iam_create_token` —
-was closed by #300, and since #304 that tool no longer pretends to mint
-anything (#412).
+Every one of the 477 registered tools is in the map: 465 carry a
+`resource:action` permission and 12 are classified open (`""`) (measured from
+`NewToolRegistry(...).ListTools()` against `toolPermissionCatalog`;
+`TestEveryRegisteredToolIsClassified` fails if a registered tool has no entry).
+Since #304 the classified tools include 30 VM and container tools
+([`docs/compute/api.md`](../compute/api.md) §7). `iam_create_token` and
+`iam_revoke_token` carry `iam:write`, the scope of gRPC `CreateToken` and
+`RevokeToken`; like their twins they refuse every caller (§6).
+`iam_authenticate` is open: it is the credential exchange that would issue a
+token, so it cannot require one, and QUIC lists its twin `0xF8` in
+`preAuthOpcodes` for the same reason. It too refuses (§6). The escalation this
+section once described — any valid token minting credentials through
+`iam_create_token` — was closed by #300, and since #304 that tool no longer
+pretends to mint anything (#412).
 
 `iam_create_tenant` and `iam_list_tenants` are not tenant-bound (above): an
 `iam:write` or `iam:read` caller of any tenant can create or list tenant
@@ -415,7 +417,7 @@ methods' scopes: `attestation_get_manifest`, `attestation_list_manifests` and
 `attestation_verify_manifest` need `attestation:read`,
 `attestation_create_manifest` needs `attestation:write`, and
 `attestation_delete_manifest` needs `attestation:delete`. The ten other
-attestation tools in `knownUnclassified` have no backend and stay refused
+attestation tools had no backend and were deleted
 ([`docs/attestation/api.md`](../attestation/api.md) §5).
 
 **#304 DNS tranche: the DNS tools bound to `DNSService` require their gRPC
@@ -436,7 +438,6 @@ gRPC does; [`docs/dns/api.md`](../dns/api.md) §3 has the detail.
 | `dns_record_update` | `UpdateRecord` | `dns:write` |
 | `dns_record_delete` | `DeleteRecord` | `dns:delete` |
 | `dns_lookup` | `Resolve` | `dns:read` |
-| `dns_reverse_lookup` | none; no backend | unclassified, refused |
 
 `DNSService` carries no caller tenant on gRPC: the DNS service acts in the
 tenant the daemon configured it with, and a zone of another tenant is
@@ -488,7 +489,7 @@ policy tools that already had one:
 
 `FlushFlows` takes `sdn:write`, not the `delete` the verb rule would give it:
 where gRPC and the verb rule differ, gRPC wins. `sdn_authenticate_port` and
-`sdn_revoke_port_auth` left `knownUnclassified` with #304. A caller holding
+`sdn_revoke_port_auth` were classified by #304. A caller holding
 `sdn:write` gets the refusal gRPC gives: both tools, like the service, return
 `policy.ErrPortAuthNotEnforced` (`FailedPrecondition`), because nothing
 enforces port authentication on the switch
@@ -496,20 +497,20 @@ enforces port authentication on the switch
 first. SDN
 objects carry no tenant on gRPC or MCP, so the scope is the whole check.
 
-**LUKS tools carry their gRPC scopes (#304).** Nine of the ten
-`platform_luks_*` tools are in the MCP authorization map, each with the scope
-its `LUKSService` method carries (`pkg/api/grpc/method_permissions.go`):
+**LUKS tools carry their gRPC scopes (#304).** All ten `platform_luks_*`
+tools are in the MCP authorization map, each with the scope its `LUKSService`
+method carries (`pkg/api/grpc/method_permissions.go`):
 
 | MCP tool | Scope |
 |---|---|
-| `platform_luks_status`, `platform_luks_list_slots`, `platform_luks_info` | `luks:read` |
+| `platform_luks_status`, `platform_luks_list_slots`, `platform_luks_info`, `platform_luks_test_unlock` | `luks:read` |
 | `platform_luks_enroll_passphrase`, `platform_luks_enroll_fido2`, `platform_luks_enroll_tpm`, `platform_luks_enroll_recovery`, `platform_luks_change_passphrase` | `luks:write` |
 | `platform_luks_remove_key` | `luks:delete` |
-| `platform_luks_test_unlock` | unclassified, refused |
 
-`platform_luks_test_unlock` stays in `knownUnclassified`: it tries no key, so
-its answer proves nothing ([`docs/luks/api.md`](../luks/api.md) §5). LUKS
-carries no tenant on any transport.
+`platform_luks_test_unlock` takes `luks:read` from gRPC `TestUnlock` and
+answers as gRPC does: whether the keyslot exists, with no key tried
+([`docs/luks/api.md`](../luks/api.md) §5). LUKS carries no tenant on any
+transport.
 
 **The IDevID and IAK tools are #304's device-identity tranche.** All 17 are
 served by the daemon's shared `IDevIDGRPCService`, so each answers with its
@@ -573,7 +574,7 @@ fails if the three catalogs drift apart:
 | List services | `platform:read` | `ListServices` | `0x8B` | `platform_daemon_list_services` |
 | Get service | `platform:read` | `GetServiceStatus` | `0x8C` | `platform_daemon_get_service` |
 | Start / stop / restart service | `platform:write` | `StartService`, `StopService`, `RestartService` | `0x8D`-`0x8F` | `platform_daemon_{start,stop,restart}_service` |
-| List protocols | `platform:read` | none | `0x98` | `platform_daemon_list_protocols`: unclassified, refused |
+| List protocols | `platform:read` | none | `0x98` | `platform_daemon_list_protocols` |
 | List / get sessions | `provisioning:read` | `ListSessions`, `GetSession` | `0xCF` `0x06`, `0x07` | `provision_list_sessions`, `provision_get_session` |
 | Fulfill session | `provisioning:write` | `FulfillSession` | `0xCF` `0x05` | `provision_fulfill_session` |
 | Get nonce | open | `GetNonce` | `0xCF` `0x01` | `provision_get_nonce` |

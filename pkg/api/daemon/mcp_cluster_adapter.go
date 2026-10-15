@@ -27,15 +27,14 @@ import (
 //
 // clusterServiceAdapter bridges the build-tagged *ClusterService (which
 // owns a real cluster.Coordinator) to the tag-agnostic ClusterServicer
-// interface consumed by the MCP cluster tools. This preserves the
-// MCP/gRPC parity contract: both surfaces delegate to the same
-// underlying coordinator.
+// interface behind the gRPC ClusterService servicer, which every cluster
+// transport calls, so all of them delegate to the same coordinator.
 //
 // The adapter is only compiled when the daemon is built with
 // `-tags cluster` — but nothing calls NewClusterServiceAdapter in any
-// build, so the daemon's clusterService field stays nil and MCP cluster
-// tools surface ErrClusterNotConfigured with the tag as well as without
-// it. This bridge is written and unused. See #334.
+// build, so no ClusterServicer is set and every cluster transport answers
+// Unavailable with the tag as well as without it. This bridge is written
+// and unused. See #334.
 
 // clusterCore is the minimal subset of *ClusterService the adapter
 // depends on. Defining it as an interface (rather than wrapping the
@@ -59,9 +58,9 @@ type clusterServiceAdapter struct {
 }
 
 // NewClusterServiceAdapter wraps a *ClusterService so it can be passed
-// into MCPServiceProvider via SetClusterService. Returns nil if svc is
-// nil so callers can pass through optional services without checks.
-// Kept with no caller: the cluster registration lane hands the real ClusterService to MCP through it.
+// to Daemon.SetClusterService. Returns nil if svc is nil so callers can
+// pass through optional services without checks.
+// Kept with no caller: the cluster registration lane hands the real ClusterService to the daemon through it.
 func NewClusterServiceAdapter(svc *ClusterService) ClusterServicer {
 	if svc == nil {
 		return nil

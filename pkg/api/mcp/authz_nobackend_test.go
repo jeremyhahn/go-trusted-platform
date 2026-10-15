@@ -53,7 +53,7 @@ func TestNoAuthorizationBackend_RefusesEveryToolThatNeedsAPermission(t *testing.
 	tools := registry.ListTools()
 	require.NotEmpty(t, tools, "the registry built no tools; this test would pass vacuously")
 
-	var refusedMissingToken, refusedUnclassified, admitted []string
+	var refusedMissingToken, admitted []string
 	for _, tool := range tools {
 		_, authErr := checker.AuthorizeTool(context.Background(), tool.Name, "")
 		switch {
@@ -61,8 +61,6 @@ func TestNoAuthorizationBackend_RefusesEveryToolThatNeedsAPermission(t *testing.
 			admitted = append(admitted, tool.Name)
 		case authErr.Type == AuthErrorMissingToken:
 			refusedMissingToken = append(refusedMissingToken, tool.Name)
-		case authErr.Type == AuthErrorToolNotClassified:
-			refusedUnclassified = append(refusedUnclassified, tool.Name)
 		default:
 			t.Errorf("%s: unexpected refusal type %v (%s)", tool.Name, authErr.Type, authErr.Message)
 		}
@@ -81,14 +79,17 @@ func TestNoAuthorizationBackend_RefusesEveryToolThatNeedsAPermission(t *testing.
 	assert.Equal(t, explicitlyOpen, admitted,
 		"with no authorization backend, only tools explicitly mapped to \"\" may be admitted")
 
-	assert.Equal(t, len(tools), len(admitted)+len(refusedMissingToken)+len(refusedUnclassified),
+	assert.Equal(t, len(tools), len(admitted)+len(refusedMissingToken),
 		"every registered tool must be accounted for")
 	assert.NotEmpty(t, refusedMissingToken,
 		"no mapped tool was refused for the missing backend; the fail-closed branch is not reached")
-	assert.NotEmpty(t, refusedUnclassified,
-		"no unmapped tool was refused; the map lookup no longer runs before the backend check")
-	t.Logf("registered=%d admitted(open)=%d refused(no backend)=%d refused(unclassified)=%d",
-		len(tools), len(admitted), len(refusedMissingToken), len(refusedUnclassified))
+
+	// Every registered tool is classified (#304), so an unmapped name stands in
+	// for one: the map lookup must still run before the backend check.
+	_, authErr := checker.AuthorizeTool(context.Background(), "platform_not_a_real_tool", "")
+	require.NotNil(t, authErr, "an unmapped tool was admitted with no backend")
+	assert.Equal(t, AuthErrorToolNotClassified, authErr.Type,
+		"the map lookup no longer runs before the backend check")
 }
 
 // TestNoAuthorizationBackend_RefusalNamesTheCause pins the message an operator

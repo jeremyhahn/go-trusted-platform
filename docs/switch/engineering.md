@@ -205,9 +205,9 @@ activation.
    with `/` but no `-` are returned unchanged in a one-element slice. The
    generated command list therefore has one `interface` block per physical
    port, not one per range.
-8. **The VLAN bound is 4094 and it is enforced in four places** — the CLI
-   (`ErrInvalidVLANID`), REST (`ErrInvalidVLANID`), QUIC (`switchMaxVLANID`
-   constant, `ErrSwitchInvalidVLANID`) and MCP (`ErrSwitchInvalidVLAN`). Zero
+8. **The VLAN bound is 4094 and it is enforced in three places** — the CLI
+   (`ErrInvalidVLANID`), REST (`ErrInvalidVLANID`) and the gRPC servicer
+   (`codes.InvalidArgument`), which QUIC, MCP and embedded call. Zero
    is rejected everywhere as "missing". `Manager.SetPortVLAN` itself does
    **not** range-check; the bound is a transport-layer contract.
 9. **Port names are never validated.** No length limit, no character
@@ -247,10 +247,11 @@ reach the underlying failure.
 | Layer | Not found | Invalid input | Service absent | Other failure |
 |---|---|---|---|---|
 | REST (`pkg/webservice/v1/rest/switch/`) | 404 `ErrSwitchNotFound`; `ErrPortOperationFailed` via `handlePortError` on every port operation, matching `ErrPortNotFound` through wrapping | 400 `ErrMissingSwitchName`, `ErrMissingPortName`, `ErrInvalidRequestBody`, `ErrMissingVLANID`, `ErrInvalidVLANID` | 503 from `requireService` catch-all | 500 `ErrPortOperationFailed`, `ErrListPortsFailed` |
-| gRPC (`switch_grpc_service.go`) | `codes.NotFound` via `mapSwitchError` / `mapPortError` | `codes.InvalidArgument` `"switch_name is required"` / `"port_name is required"` | `codes.FailedPrecondition` `"switch service not initialized"` | `codes.Internal` |
-| QUIC (`quic_switch.go`) | `StatusNotFound` `ErrSwitchNotFoundQUIC` | `StatusInvalidArgument` `ErrQUICMissingField`, `ErrSwitchInvalidVLANID`; `StatusInvalidRequest` on decode failure | `StatusUnavailable` `ErrQUICServiceUnavailable{Service:"switch"}` | `StatusInternalError` `ErrQUICOperationFailed` |
-| MCP (`switch_tools.go`) | `NotFound` `SWITCH_NOT_FOUND` / `SWITCH_PORT_NOT_FOUND` via `switchManagerError` / `switchPortStatusError` | `InvalidArgument` `SWITCH_NAME_REQUIRED`, `SWITCH_PORT_NAME_REQUIRED`, `SWITCH_INVALID_VLAN` | `Unavailable` `SWITCH_SERVICE_UNAVAILABLE` | driver error passed through (`Internal`) |
-| SDK (`sdk/go/services/switch/`) | `ErrUnexpectedStatus{StatusCode, Body}` | same | same | `ErrListPortsFailed`, `ErrGetPortStatusFailed`, `ErrSetPortVLANFailed`, `ErrEnablePortFailed`, `ErrDisablePortFailed` |
+| gRPC (`switch_grpc_service.go`) | `codes.NotFound` via `mapSwitchError` / `mapPortError` | `codes.InvalidArgument` `"switch_name is required"` / `"port_name is required"` | `codes.Unavailable`, reason `SERVICE_NOT_CONFIGURED` (`switchNotConfigured`) | `codes.Internal` |
+| QUIC (`quic_switch.go`) | the gRPC servicer's code, mapped by `grpcDelegateCodeToQUICStatus` (`StatusNotFound`), in `ErrQUICOperationFailed` | the servicer's code (`StatusInvalidArgument`); `StatusInvalidRequest` on decode failure or an empty payload | the servicer's `Unavailable` (`StatusUnavailable`); a handler with no servicer set answers `ErrQUICServiceUnavailable{Service:"switch"}`, also `StatusUnavailable` | the servicer's code (`StatusInternalError`), in `ErrQUICOperationFailed` |
+| MCP (`switch_tools.go`) and embedded (`dispatch.go`) | the gRPC servicer's code, passed through | the gRPC servicer's code; MCP also refuses an argument the request does not declare as `InvalidArgument` | the servicer's `Unavailable`; an MCP provider with no servicer answers `ErrSwitchNotConfigured`, also `Unavailable`; an embedded registry with no servicer leaves the methods unregistered (`Unimplemented`) | the gRPC servicer's code |
+| SDK `Client.Switch()` | the transport's gRPC code | same | same | same |
+| SDK (`sdk/go/services/switch/`, REST only) | `ErrUnexpectedStatus{StatusCode, Body}` | same | same | `ErrListPortsFailed`, `ErrGetPortStatusFailed`, `ErrSetPortVLANFailed`, `ErrEnablePortFailed`, `ErrDisablePortFailed` |
 
 **`ErrServiceNil` is declared in the REST error set and never returned** — the
 nil-service case is handled one level up by `requireService`, which never
@@ -266,7 +267,7 @@ constructs the handlers at all.
 | Unregistered switch name | `ErrManagerNotFound` → 404 / `codes.NotFound` / `StatusNotFound`. |
 | VLAN out of range | Rejected at all four transports before reaching the driver. |
 | Any command output matching `containsError` | The command sequence aborts; remaining commands are not sent. |
-| Service not wired | 503 / `FailedPrecondition` / `StatusUnavailable` / `SWITCH_SERVICE_UNAVAILABLE`, plus a startup warning and a `Configured: false` entry on `GET /api/v1/platform/service-registry`. |
+| Service not wired | 503 / `Unavailable` / `StatusUnavailable` / MCP and embedded `Unavailable` (the gRPC servicer's), plus a startup warning and a `Configured: false` entry on `GET /api/v1/platform/service-registry`. |
 
 **One path fails open**: `NewManager(nil, …)` and `NewConfigurator(nil, …)`
 return no-op implementations that silently succeed. That is intentional for
@@ -433,9 +434,9 @@ There is no integration suite against real switch hardware in this repository.
 - **Logging.** Every command is logged at **Debug** with the full command
   string (`"ssh set port vlan"`, `"ssh enable port"`, `"ssh disable port"`,
   `"ssh list ports"`, `"executing vlan command"`, `"executing port command"`).
-  Successful mutations are logged at **Info** by the QUIC handler with switch,
-  port and VLAN. Failures are logged at **Error** by the REST, gRPC and QUIC
-  layers with switch, port and error. `Service.Close` logs a failed manager
+  Failures are logged at **Error** by the REST layer and by the gRPC servicer,
+  which QUIC, MCP and embedded call, with switch, port and error. No transport
+  logs a successful mutation above Debug. `Service.Close` logs a failed manager
   close at Error and continues.
 - **Debug logging exposes the CLI session.** It does not log the key or the
   password, but it does log every command sent to the fabric. Treat

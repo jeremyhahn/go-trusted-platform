@@ -46,7 +46,6 @@ import (
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
-	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
@@ -96,9 +95,7 @@ type MCPServiceProviderConfig struct {
 	TPM2Service           xkmssdk.TrustedPlatformModule
 	Logger                *slog.Logger
 	ComputeOrchestrator   compute.Orchestrator
-	ClusterService        ClusterServicer
 	RegistryService       grpcapi.RegistryService
-	InvitationService     platformservice.InvitationServicer
 	EABService            EABServicer
 	EABDelivery           EABDeliveryServicer
 	ZoneService           gateway.ZoneService
@@ -155,9 +152,11 @@ type MCPServiceProvider struct {
 	tpm2Service           xkmssdk.TrustedPlatformModule
 	computeOrchestrator   compute.Orchestrator
 	bmcServer             platformv1.BMCServiceServer
-	clusterService        ClusterServicer
+	pxeServer             platformv1.PXEServiceServer
+	clusterServer         platformv1.ClusterServiceServer
+	switchServer          platformv1.SwitchServiceServer
 	registryService       grpcapi.RegistryService
-	invitationService     platformservice.InvitationServicer
+	invitationServer      platformv1.InvitationServiceServer
 	eabService            EABServicer
 	eabDelivery           EABDeliveryServicer
 	phase35               phase35State
@@ -214,9 +213,7 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		secretsService:        config.SecretsService,
 		tpm2Service:           config.TPM2Service,
 		computeOrchestrator:   config.ComputeOrchestrator,
-		clusterService:        config.ClusterService,
 		registryService:       config.RegistryService,
-		invitationService:     config.InvitationService,
 		eabService:            config.EABService,
 		eabDelivery:           config.EABDelivery,
 		zoneService:           config.ZoneService,
@@ -1938,7 +1935,7 @@ func (p *MCPServiceProvider) KMSGetKey(ctx context.Context, keyID string, versio
 		Version: version,
 	})
 	if err != nil {
-		return nil, ErrKMSKeyNotFound{KeyID: keyID}
+		return nil, kmsLookupError("GetKey", ErrKMSKeyNotFound{KeyID: keyID}, err)
 	}
 
 	return resp.Key, nil

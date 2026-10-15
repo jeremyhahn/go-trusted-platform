@@ -106,8 +106,8 @@ platformctl luks remove-key  --device /dev/<device> --slot 3
 
 `remove-key` wipes the slot and cannot be undone. Make sure another slot you
 can use still exists first. `test-unlock` confirms only that the slot exists;
-it does not prove a credential opens it. For that reason the MCP tool
-`platform_luks_test_unlock` refuses every call.
+it does not prove a credential opens it. Every transport, MCP included, gives
+that same answer.
 
 ---
 

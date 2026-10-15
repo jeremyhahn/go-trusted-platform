@@ -14,6 +14,7 @@
 package daemon
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,7 +23,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/baremetal"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // notConfiguredServiceName returns the service named by the status's
@@ -76,4 +80,71 @@ func TestServiceNotConfigured_ProducesTheSameStatus(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, codes.Unavailable, st.Code())
 	assert.Equal(t, "gateway", notConfiguredServiceName(t, st))
+}
+
+// TestInfraServiceNotConfigured_AnswersUnavailable holds every BMC and switch
+// servicer path to the platform-wide not-configured answer, one row per
+// error: Unavailable with the SERVICE_NOT_CONFIGURED reason, so REST answers
+// 503, QUIC StatusUnavailable, and MCP and the embedded transport pass the
+// same class through.
+func TestInfraServiceNotConfigured_AnswersUnavailable(t *testing.T) {
+	ctx := context.Background()
+	bmcNoBackend := NewBMCGRPCService(nil, nil, nil)
+	bmcNoProfiles := NewBMCGRPCService(&fakeBMCService{}, nil, nil)
+	bmcNoProfiles.SetEnroller(&fakeBMCEnroller{}, nil)
+	switches := NewSwitchGRPCService(logging.DefaultLogger(), nil)
+
+	cases := []struct {
+		name    string
+		service string
+		call    func() error
+	}{
+		{"ErrBMCServiceNotConfigured", "bmc", func() error {
+			_, err := bmcNoBackend.PowerStatus(ctx, &platformv1.BMCPowerStatusRequest{ProfileId: 1})
+			return err
+		}},
+		{"ErrBMCServiceNotConfigured from the profile lookup", "bmc", func() error {
+			_, err := bmcNoProfiles.EnrollBMC(ctx, &platformv1.BMCEnrollRequest{ProfileId: 1})
+			return err
+		}},
+		{"ErrBaremetalServiceNotConfigured", "bmc", func() error {
+			_, err := bmcNoBackend.ProvisionStatus(ctx, &platformv1.BMCProvisionStatusRequest{ProfileId: 1})
+			return err
+		}},
+		{"ErrBMCEnrollerNotConfigured", "bmc", func() error {
+			_, err := bmcNoBackend.EnrollBMC(ctx, &platformv1.BMCEnrollRequest{ProfileId: 1})
+			return err
+		}},
+		{"ErrBMCRestorerNotConfigured", "bmc", func() error {
+			_, err := bmcNoBackend.RestoreFactoryCert(ctx, &platformv1.BMCRestoreRequest{ProfileId: 1})
+			return err
+		}},
+		{"switch service not configured", "switch", func() error {
+			_, err := switches.ListPorts(ctx, &platformv1.ListSwitchPortsRequest{SwitchName: "core"})
+			return err
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st, ok := status.FromError(tc.call())
+			require.True(t, ok)
+			assert.Equal(t, codes.Unavailable, st.Code(), st.Message())
+			assert.Equal(t, tc.service, notConfiguredServiceName(t, st))
+		})
+	}
+}
+
+// TestInfraServiceNotConfigured_ConfiguredRefusalKeepsItsClass proves the
+// not-configured answer is not a catch-all: a wired service that refuses
+// for its own reason keeps that class and carries no not-configured reason.
+func TestInfraServiceNotConfigured_ConfiguredRefusalKeepsItsClass(t *testing.T) {
+	bm := &fakeBaremetalService{provisionErr: baremetal.ErrProfileNoBMC{ProfileID: 1}}
+	svc := NewBMCGRPCService(&fakeBMCService{}, bm, nil)
+
+	_, err := svc.Provision(context.Background(), &platformv1.BMCProvisionRequest{ProfileId: 1})
+
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.FailedPrecondition, st.Code())
+	assert.Empty(t, st.Details())
 }

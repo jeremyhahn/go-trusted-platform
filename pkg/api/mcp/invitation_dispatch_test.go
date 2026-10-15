@@ -15,408 +15,151 @@ package mcp
 
 import (
 	"context"
-	"errors"
+	"path"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
-// =============================================================================
-// Test fixtures
-// =============================================================================
-
-// invitationStubProvider is a minimal InvitationProvider that records the
-// last invoked method so tests can assert dispatch.
-type invitationStubProvider struct {
-	lastCall string
-	// Optional error to inject from any handler.
-	err error
-}
-
-func (s *invitationStubProvider) CreateInvitation(_ context.Context, tenantID, email, role string, invitedByID uint64, expiresInSeconds int64) (interface{}, error) {
-	s.lastCall = "create:" + tenantID + ":" + email + ":" + role
-	if s.err != nil {
-		return nil, s.err
-	}
-	return map[string]interface{}{
-		"tenant_id":     tenantID,
-		"email":         email,
-		"role":          role,
-		"invited_by_id": invitedByID,
-		"expires_in":    expiresInSeconds,
-	}, nil
-}
-
-func (s *invitationStubProvider) GetInvitation(_ context.Context, invitationID uint64) (interface{}, error) {
-	s.lastCall = "get"
-	if s.err != nil {
-		return nil, s.err
-	}
-	return map[string]interface{}{"invitation_id": invitationID}, nil
-}
-
-func (s *invitationStubProvider) GetInvitationByToken(_ context.Context, token string) (interface{}, error) {
-	s.lastCall = "get_by_token:" + token
-	if s.err != nil {
-		return nil, s.err
-	}
-	return map[string]interface{}{"token": token}, nil
-}
-
-func (s *invitationStubProvider) ListInvitations(_ context.Context, tenantID string, pendingOnly bool) (interface{}, error) {
-	s.lastCall = "list:" + tenantID
-	if pendingOnly {
-		s.lastCall += ":pending"
-	}
-	if s.err != nil {
-		return nil, s.err
-	}
-	return map[string]interface{}{
-		"tenant_id":    tenantID,
-		"pending_only": pendingOnly,
-		"invitations":  []map[string]interface{}{},
-	}, nil
-}
-
-func (s *invitationStubProvider) RevokeInvitation(_ context.Context, invitationID, revokerID uint64) (interface{}, error) {
-	s.lastCall = "revoke"
-	if s.err != nil {
-		return nil, s.err
-	}
-	return map[string]interface{}{
-		"invitation_id": invitationID,
-		"revoker_id":    revokerID,
-	}, nil
-}
-
-func (s *invitationStubProvider) AcceptInvitation(_ context.Context, token string, userID uint64) (interface{}, error) {
-	s.lastCall = "accept:" + token
-	if s.err != nil {
-		return nil, s.err
-	}
-	return map[string]interface{}{
-		"token":   token,
-		"user_id": userID,
-	}, nil
-}
-
-func (s *invitationStubProvider) DeleteInvitation(_ context.Context, invitationID uint64) (interface{}, error) {
-	s.lastCall = "delete"
-	if s.err != nil {
-		return nil, s.err
-	}
-	return map[string]interface{}{
-		"invitation_id": invitationID,
-		"deleted":       true,
-	}, nil
-}
-
-// invitationCombinedProvider satisfies both ServiceProvider (via mockServiceProvider)
-// and InvitationProvider (via invitationStubProvider). The two types contribute
-// disjoint method sets so embedding is collision-free.
-type invitationCombinedProvider struct {
+// invitationTestProvider serves an InvitationService servicer next to the
+// mock service provider.
+type invitationTestProvider struct {
 	*mockServiceProvider
-	*invitationStubProvider
+	server platformv1.InvitationServiceServer
 }
 
-// Compile-time assertions: combined provider satisfies both interfaces.
-var (
-	_ ServiceProvider    = (*invitationCombinedProvider)(nil)
-	_ InvitationProvider = (*invitationCombinedProvider)(nil)
-)
+func (p invitationTestProvider) InvitationServiceServer() platformv1.InvitationServiceServer {
+	return p.server
+}
 
-// =============================================================================
-// Tests
-// =============================================================================
+// fakeMCPInvitations answers GetInvitation and records the request; every
+// other method is Unimplemented.
+type fakeMCPInvitations struct {
+	platformv1.UnimplementedInvitationServiceServer
+	got *platformv1.GetInvitationRequest
+}
 
-// TestToolRegistry_ExecuteTool_Invitation_RoutesToProvider verifies that
-// the ExecuteTool dispatcher routes platform_invitation_* tools through
-// the optional InvitationProvider interface.
-func TestToolRegistry_ExecuteTool_Invitation_RoutesToProvider(t *testing.T) {
-	stub := &invitationStubProvider{}
-	svc := &invitationCombinedProvider{
-		mockServiceProvider:    newMockServiceProvider(),
-		invitationStubProvider: stub,
+func (f *fakeMCPInvitations) GetInvitation(_ context.Context, req *platformv1.GetInvitationRequest) (*platformv1.GetInvitationResponse, error) {
+	f.got = req
+	return &platformv1.GetInvitationResponse{Invitation: &platformv1.Invitation{
+		Id:     req.GetInvitationId(),
+		Status: platformv1.InvitationStatus_INVITATION_STATUS_PENDING,
+	}}, nil
+}
+
+func newInvitationTestRegistry(server platformv1.InvitationServiceServer) *ToolRegistry {
+	provider := invitationTestProvider{mockServiceProvider: newMockServiceProvider(), server: server}
+	return NewToolRegistry(provider, logging.DefaultLogger())
+}
+
+// TestInvitationTools_CoverEveryMethodWithItsGRPCScope requires one tool per
+// gRPC InvitationService method, classified with the scope gRPC requires:
+// none for the two invitee methods, whose token is the credential.
+func TestInvitationTools_CoverEveryMethodWithItsGRPCScope(t *testing.T) {
+	permissions := toolPermissionCatalog()
+	byMethod := make(map[string]string, len(invitationTools))
+	for name, tool := range invitationTools {
+		byMethod[tool.method] = name
 	}
-	registry := NewToolRegistry(svc, logging.DefaultLogger())
-	ctx := context.Background()
 
-	cases := []struct {
-		name     string
-		args     map[string]interface{}
-		wantCall string
-	}{
-		{
-			name: "platform_invitation_create",
-			args: map[string]interface{}{
-				"tenant_id":          "tenant-1",
-				"email":              "alice@example.com",
-				"role":               "member",
-				"invited_by_id":      99,
-				"expires_in_seconds": 3600,
-			},
-			wantCall: "create:tenant-1:alice@example.com:member",
-		},
-		{
-			name:     "platform_invitation_get",
-			args:     map[string]interface{}{"invitation_id": 42},
-			wantCall: "get",
-		},
-		{
-			name:     "platform_invitation_get_by_token",
-			args:     map[string]interface{}{"token": "tok-abc"},
-			wantCall: "get_by_token:tok-abc",
-		},
-		{
-			name:     "platform_invitation_list",
-			args:     map[string]interface{}{"tenant_id": "tenant-1"},
-			wantCall: "list:tenant-1",
-		},
-		{
-			name:     "platform_invitation_list",
-			args:     map[string]interface{}{"tenant_id": "tenant-1", "pending_only": true},
-			wantCall: "list:tenant-1:pending",
-		},
-		{
-			name:     "platform_invitation_revoke",
-			args:     map[string]interface{}{"invitation_id": 42, "revoker_id": 99},
-			wantCall: "revoke",
-		},
-		{
-			name:     "platform_invitation_accept",
-			args:     map[string]interface{}{"token": "tok-xyz", "user_id": 7},
-			wantCall: "accept:tok-xyz",
-		},
-		{
-			name:     "platform_invitation_delete",
-			args:     map[string]interface{}{"invitation_id": 42},
-			wantCall: "delete",
-		},
+	for _, desc := range platformv1.InvitationService_ServiceDesc.Methods {
+		method := path.Join("/", platformv1.InvitationService_ServiceDesc.ServiceName, desc.MethodName)
+		name, ok := byMethod[method]
+		require.True(t, ok, "%s has no tool", method)
+		permission, classified := permissions[name]
+		require.True(t, classified, "%s is not classified", name)
+		assert.Equal(t, grpcapi.ScopeForMethod(method), permission, name)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name+":"+tc.wantCall, func(t *testing.T) {
-			result, err := registry.ExecuteTool(ctx, tc.name, tc.args)
-			if err != nil {
-				t.Fatalf("%s: unexpected error: %v", tc.name, err)
-			}
-			if result == nil {
-				t.Errorf("%s: result should not be nil", tc.name)
-			}
-			if stub.lastCall != tc.wantCall {
-				t.Errorf("%s: lastCall = %q, want %q", tc.name, stub.lastCall, tc.wantCall)
-			}
-		})
+	assert.Len(t, invitationTools, len(platformv1.InvitationService_ServiceDesc.Methods))
+}
+
+// TestInvitationTools_AreRegisteredWithTheirSchema requires every tool to be
+// listed with the arguments its gRPC request cannot do without.
+func TestInvitationTools_AreRegisteredWithTheirSchema(t *testing.T) {
+	required := map[string][]string{
+		"platform_invitation_create":       {"tenant_id", "email", "role", "invited_by_id"},
+		"platform_invitation_get":          {"invitation_id"},
+		"platform_invitation_get_by_token": {"token"},
+		"platform_invitation_list":         {"tenant_id"},
+		"platform_invitation_revoke":       {"invitation_id", "revoker_id"},
+		"platform_invitation_accept":       {"token", "user_id"},
+		"platform_invitation_delete":       {"invitation_id"},
+	}
+	registered := make(map[string]map[string]interface{})
+	for _, def := range newInvitationTestRegistry(nil).ListTools() {
+		registered[def.Name] = def.InputSchema
+	}
+
+	require.Len(t, required, len(invitationTools))
+	for name, args := range required {
+		schema, ok := registered[name]
+		require.True(t, ok, "%s is not registered", name)
+		assert.ElementsMatch(t, args, schema["required"], name)
 	}
 }
 
-// TestToolRegistry_ExecuteTool_Invitation_NoProvider verifies that
-// invitation tools return ErrInvitationNotConfigured when the
-// ServiceProvider does not also satisfy InvitationProvider.
-func TestToolRegistry_ExecuteTool_Invitation_NoProvider(t *testing.T) {
-	svc := newMockServiceProvider()
-	registry := NewToolRegistry(svc, logging.DefaultLogger())
-	ctx := context.Background()
+// TestInvitationTools_CallTheServicer requires a tool to decode its
+// arguments into the gRPC request and answer the gRPC response in protojson
+// form.
+func TestInvitationTools_CallTheServicer(t *testing.T) {
+	fake := &fakeMCPInvitations{}
+	registry := newInvitationTestRegistry(fake)
 
-	tools := []struct {
-		name string
-		args map[string]interface{}
-	}{
-		{
-			name: "platform_invitation_create",
-			args: map[string]interface{}{
-				"tenant_id":     "t",
-				"email":         "a@b",
-				"role":          "member",
-				"invited_by_id": 1,
-			},
-		},
-		{name: "platform_invitation_get", args: map[string]interface{}{"invitation_id": 1}},
-		{name: "platform_invitation_get_by_token", args: map[string]interface{}{"token": "t"}},
-		{name: "platform_invitation_list", args: map[string]interface{}{"tenant_id": "t"}},
-		{name: "platform_invitation_revoke", args: map[string]interface{}{"invitation_id": 1, "revoker_id": 2}},
-		{name: "platform_invitation_accept", args: map[string]interface{}{"token": "t", "user_id": 1}},
-		{name: "platform_invitation_delete", args: map[string]interface{}{"invitation_id": 1}},
-	}
-	for _, tc := range tools {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := registry.ExecuteTool(ctx, tc.name, tc.args)
-			if err == nil {
-				t.Fatalf("%s: expected error, got nil", tc.name)
-			}
-			if !errors.Is(err, ErrInvitationNotConfigured) {
-				t.Errorf("%s: expected ErrInvitationNotConfigured, got %v", tc.name, err)
-			}
-		})
-	}
+	result, err := registry.ExecuteTool(context.Background(), "platform_invitation_get",
+		map[string]interface{}{"invitation_id": "42"})
+
+	require.NoError(t, err)
+	require.NotNil(t, fake.got)
+	assert.Equal(t, uint64(42), fake.got.GetInvitationId())
+	assert.Equal(t, map[string]interface{}{"invitation": map[string]interface{}{
+		"id": "42", "status": "INVITATION_STATUS_PENDING",
+	}}, result)
 }
 
-// TestToolRegistry_ExecuteTool_Invitation_MissingArgs verifies argument
-// validation errors for each invitation tool.
-func TestToolRegistry_ExecuteTool_Invitation_MissingArgs(t *testing.T) {
-	stub := &invitationStubProvider{}
-	svc := &invitationCombinedProvider{
-		mockServiceProvider:    newMockServiceProvider(),
-		invitationStubProvider: stub,
-	}
-	registry := NewToolRegistry(svc, logging.DefaultLogger())
-	ctx := context.Background()
+// TestInvitationTools_PassTheServicerStatusThrough requires the servicer's
+// gRPC status to reach the caller unchanged.
+func TestInvitationTools_PassTheServicerStatusThrough(t *testing.T) {
+	registry := newInvitationTestRegistry(&fakeMCPInvitations{})
 
-	cases := []struct {
-		name    string
-		tool    string
-		args    map[string]interface{}
-		wantErr error
-	}{
-		// create
-		{name: "create_missing_tenant", tool: "platform_invitation_create",
-			args:    map[string]interface{}{"email": "a@b", "role": "r", "invited_by_id": 1},
-			wantErr: ErrInvitationTenantIDRequired},
-		{name: "create_missing_email", tool: "platform_invitation_create",
-			args:    map[string]interface{}{"tenant_id": "t", "role": "r", "invited_by_id": 1},
-			wantErr: ErrInvitationEmailRequired},
-		{name: "create_missing_role", tool: "platform_invitation_create",
-			args:    map[string]interface{}{"tenant_id": "t", "email": "a@b", "invited_by_id": 1},
-			wantErr: ErrInvitationRoleRequired},
-		{name: "create_missing_invited_by_id", tool: "platform_invitation_create",
-			args:    map[string]interface{}{"tenant_id": "t", "email": "a@b", "role": "r"},
-			wantErr: ErrInvitationInvitedByIDRequired},
+	_, err := registry.ExecuteTool(context.Background(), "platform_invitation_delete",
+		map[string]interface{}{"invitation_id": 1})
 
-		// get
-		{name: "get_missing_id", tool: "platform_invitation_get",
-			args: map[string]interface{}{}, wantErr: ErrInvitationIDRequired},
-
-		// get_by_token
-		{name: "get_by_token_missing_token", tool: "platform_invitation_get_by_token",
-			args: map[string]interface{}{}, wantErr: ErrInvitationTokenRequired},
-
-		// list
-		{name: "list_missing_tenant", tool: "platform_invitation_list",
-			args: map[string]interface{}{}, wantErr: ErrInvitationTenantIDRequired},
-
-		// revoke
-		{name: "revoke_missing_id", tool: "platform_invitation_revoke",
-			args: map[string]interface{}{"revoker_id": 1}, wantErr: ErrInvitationIDRequired},
-		{name: "revoke_missing_revoker", tool: "platform_invitation_revoke",
-			args: map[string]interface{}{"invitation_id": 1}, wantErr: ErrInvitationRevokerIDRequired},
-
-		// accept
-		{name: "accept_missing_token", tool: "platform_invitation_accept",
-			args: map[string]interface{}{"user_id": 1}, wantErr: ErrInvitationTokenRequired},
-		{name: "accept_missing_user", tool: "platform_invitation_accept",
-			args: map[string]interface{}{"token": "t"}, wantErr: ErrInvitationUserIDRequired},
-
-		// delete
-		{name: "delete_missing_id", tool: "platform_invitation_delete",
-			args: map[string]interface{}{}, wantErr: ErrInvitationIDRequired},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := registry.ExecuteTool(ctx, tc.tool, tc.args)
-			if err == nil {
-				t.Fatalf("expected error, got nil")
-			}
-			if !errors.Is(err, tc.wantErr) {
-				t.Errorf("expected %v, got %v", tc.wantErr, err)
-			}
-		})
-	}
+	assert.Equal(t, codes.Unimplemented, status.Code(err), "err = %v", err)
 }
 
-// TestToolRegistry_ExecuteTool_Invitation_PropagatesProviderError verifies
-// that errors returned from the InvitationProvider are surfaced to the
-// caller verbatim.
-func TestToolRegistry_ExecuteTool_Invitation_PropagatesProviderError(t *testing.T) {
-	sentinel := errors.New("backend boom")
-	stub := &invitationStubProvider{err: sentinel}
-	svc := &invitationCombinedProvider{
-		mockServiceProvider:    newMockServiceProvider(),
-		invitationStubProvider: stub,
-	}
-	registry := NewToolRegistry(svc, logging.DefaultLogger())
-	ctx := context.Background()
-
-	args := map[string]interface{}{
-		"tenant_id":     "t",
-		"email":         "a@b",
-		"role":          "r",
-		"invited_by_id": 1,
-	}
-	_, err := registry.ExecuteTool(ctx, "platform_invitation_create", args)
-	if !errors.Is(err, sentinel) {
-		t.Fatalf("expected sentinel error, got %v", err)
-	}
-}
-
-// TestToolRegistry_InvitationToolsRegistered verifies all
-// platform_invitation_* tool definitions are registered and listable.
-func TestToolRegistry_InvitationToolsRegistered(t *testing.T) {
-	svc := newMockServiceProvider()
-	registry := NewToolRegistry(svc, logging.DefaultLogger())
-
-	expected := []string{
-		"platform_invitation_create",
-		"platform_invitation_get",
-		"platform_invitation_get_by_token",
-		"platform_invitation_list",
-		"platform_invitation_revoke",
-		"platform_invitation_accept",
-		"platform_invitation_delete",
-	}
-	tools := registry.ListTools()
-	got := make(map[string]struct{}, len(tools))
-	for _, td := range tools {
-		got[td.Name] = struct{}{}
-	}
-	for _, name := range expected {
-		if _, ok := got[name]; !ok {
-			t.Errorf("missing registered tool: %s", name)
+// TestInvitationTools_RefuseWhenTheInvitationServiceIsNotWired covers a
+// provider without InvitationServiceServer and one that serves none.
+func TestInvitationTools_RefuseWhenTheInvitationServiceIsNotWired(t *testing.T) {
+	for _, provider := range []ServiceProvider{
+		newMockServiceProvider(),
+		invitationTestProvider{mockServiceProvider: newMockServiceProvider()},
+	} {
+		registry := NewToolRegistry(provider, logging.DefaultLogger())
+		for name := range invitationTools {
+			_, err := registry.ExecuteTool(context.Background(), name, map[string]interface{}{})
+			require.ErrorIs(t, err, ErrInvitationNotConfigured, name)
 		}
 	}
 }
 
-// TestDispatchInvitationTool_NotHandled verifies that the dispatcher
-// returns handled=false for unknown tool names so the caller can fall
-// through to other dispatchers.
-func TestDispatchInvitationTool_NotHandled(t *testing.T) {
-	svc := newMockServiceProvider()
-	registry := NewToolRegistry(svc, logging.DefaultLogger())
+// TestInvitationTools_RejectArgumentsTheRequestDoesNotHave requires an
+// argument the gRPC request has no field for to be refused before the
+// servicer runs.
+func TestInvitationTools_RejectArgumentsTheRequestDoesNotHave(t *testing.T) {
+	fake := &fakeMCPInvitations{}
+	registry := newInvitationTestRegistry(fake)
 
-	result, handled, err := registry.dispatchInvitationTool(context.Background(), "platform_unknown_tool", nil)
-	if handled {
-		t.Fatalf("expected handled=false, got true")
-	}
-	if result != nil {
-		t.Errorf("expected nil result, got %v", result)
-	}
-	if err != nil {
-		t.Errorf("expected nil error, got %v", err)
-	}
-}
+	_, err := registry.ExecuteTool(context.Background(), "platform_invitation_get",
+		map[string]interface{}{"invitation_id": 1, "tenant_id": "t"})
 
-// TestInvitationProvider_NilWhenNotImplemented verifies that the
-// invitationProvider helper returns nil when the underlying
-// ServiceProvider does not satisfy InvitationProvider.
-func TestInvitationProvider_NilWhenNotImplemented(t *testing.T) {
-	svc := newMockServiceProvider()
-	registry := NewToolRegistry(svc, logging.DefaultLogger())
-
-	if p := registry.invitationProvider(); p != nil {
-		t.Errorf("expected nil InvitationProvider, got %T", p)
-	}
-}
-
-// TestInvitationProvider_PresentWhenImplemented verifies the helper
-// returns the underlying provider when the ServiceProvider implements
-// InvitationProvider.
-func TestInvitationProvider_PresentWhenImplemented(t *testing.T) {
-	stub := &invitationStubProvider{}
-	svc := &invitationCombinedProvider{
-		mockServiceProvider:    newMockServiceProvider(),
-		invitationStubProvider: stub,
-	}
-	registry := NewToolRegistry(svc, logging.DefaultLogger())
-
-	if p := registry.invitationProvider(); p == nil {
-		t.Fatalf("expected non-nil InvitationProvider")
-	}
+	var invalid ErrInvalidArgument
+	require.ErrorAs(t, err, &invalid)
+	assert.Nil(t, fake.got, "the servicer ran for a malformed call")
 }

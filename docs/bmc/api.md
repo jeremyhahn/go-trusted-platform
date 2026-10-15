@@ -35,9 +35,14 @@ RPC's response message, both in protobuf JSON under the proto field names:
 enums by name (`BMC_BOOT_DEVICE_PXE`), 64-bit integers as strings, `bytes`
 fields base64. An argument the request message does not declare is refused as
 `InvalidArgument` before the servicer runs. A tool therefore succeeds and
-refuses with the gRPC status its RPC gives the same caller. The one refusal
-gRPC cannot give is `Unavailable` on a daemon with no BMC service: MCP returns
-`ErrBMCNotConfigured` and QUIC `StatusUnavailable` (§6).
+refuses with the gRPC status its RPC gives the same caller.
+
+A backend the node does not have — no BMC service, no profile store, no
+enroller, no restorer, no baremetal orchestrator — is *service not
+configured*, answered as `Unavailable` everywhere: gRPC `Unavailable` with the
+`SERVICE_NOT_CONFIGURED` reason (`bmcNotConfigured`,
+`pkg/api/daemon/bmc_grpc_service.go`), REST `503`, QUIC `StatusUnavailable`,
+and MCP `ErrBMCNotConfigured` or the servicer's `Unavailable`.
 
 ## 2. The embedded transport
 
@@ -153,9 +158,8 @@ is not made here.
 
 **Provision and ProvisionStatus are registered and non-functional on a stock
 daemon.** `pkg/api/daemon/daemon.go` passes `nil` for the baremetal
-orchestrator, and the code comment states that both RPCs "return
-FailedPrecondition until a baremetal orchestrator is wired via
-`SetBaremetalService`". On REST the equivalent is `500`
+orchestrator, so both RPCs answer `Unavailable` (service not configured) until
+one is wired via `SetBaremetalService`. On REST the equivalent is `503`
 (`ErrBaremetalServiceNotAvailable`). Provisioning error mapping when the
 orchestrator *is* wired: `409` `ErrProvisionInProgress`, `400`
 `ErrInvalidProvisionRequest` and `ErrProfileNoBMC`, `404`
@@ -205,9 +209,10 @@ REST request/response detail:
   `replace_certificate`, `rotate_password`, `dns_register`, `dane_publish`. An
   absent field keeps the profile's stored default; `{}` is a valid body. The
   response is `EnrollResponse`, whose `steps[]` is `{name, ok, detail}` per
-  step. `500` `ErrBMCEnrollerNotAvailable` when the enroller is not wired;
+  step. `503` `ErrBMCEnrollerNotAvailable` when the enroller is not wired;
   `400` `ErrInvalidRequestBody` on malformed JSON.
-- `POST .../cert/restore` needs no body.
+- `POST .../cert/restore` needs no body; `503` `ErrBMCRestorerNotAvailable`
+  when the restorer is not wired.
 
 QUIC payload shapes (`pkg/api/daemon/quic_bmc.go`): a request under
 `OpBMCCategory` is the sub-opcode byte followed by the RPC's request message
@@ -244,8 +249,8 @@ Status bytes and their REST equivalents are the platform-wide table in
 | 400 | `StatusInvalidRequest` / `StatusInvalidArgument` | `ErrMissingAction`, `ErrInvalidAction`, `ErrMissingBootDevice`, `ErrInvalidBootDevice`, `ErrMissingISOURL`, `ErrMissingCertPEM`, `ErrMissingKeyPEM`, `ErrMissingUsername`, `ErrMissingPassword`, `ErrMissingPrivilege`, `ErrInvalidRequestBody`, `bmc.ErrInvalidConfig`, `baremetal.ErrInvalidProvisionRequest`, `baremetal.ErrProfileNoBMC` |
 | 404 | `StatusNotFound` | `bmc.ErrProfileNotFound` (profile absent, **or has no BMC block, or no `ProfileStore` is wired** — all three are indistinguishable), `baremetal.ErrProvisionNotFound` |
 | 409 | `StatusAlreadyExists` | `baremetal.ErrProvisionInProgress` |
-| 500 | `StatusInternalError` | `ErrServiceError{Operation, Cause}` wrapping any `pkg/bmc` failure — `ErrConnectionFailed`, `ErrPowerOperation`, `ErrBootDevice`, `ErrVirtualMedia`, `ErrSensorRead`, `ErrInventory`, `ErrAutoCert*`, `ErrRotation*`; plus `ErrBMCEnrollerNotAvailable`, `ErrBaremetalServiceNotAvailable` |
-| 503 | `StatusUnavailable` | QUIC and MCP: the daemon has no BMC service |
+| 500 | `StatusInternalError` | `ErrServiceError{Operation, Cause}` wrapping any `pkg/bmc` failure — `ErrConnectionFailed`, `ErrPowerOperation`, `ErrBootDevice`, `ErrVirtualMedia`, `ErrSensorRead`, `ErrInventory`, `ErrAutoCert*`, `ErrRotation*` |
+| 503 | `StatusUnavailable` | service not configured: no BMC service (QUIC, MCP, gRPC), no profile store, enroller, restorer or baremetal orchestrator (`ErrBMCEnrollerNotAvailable`, `ErrBMCRestorerNotAvailable`, `ErrBaremetalServiceNotAvailable` on REST) |
 | 501 | `StatusNotImplemented` | QUIC only: unknown sub-opcode under `0x9F` |
 
 REST bodies are the platform envelope:

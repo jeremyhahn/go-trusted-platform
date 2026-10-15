@@ -17,6 +17,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	kmssdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
@@ -1189,7 +1190,8 @@ func kmsBatchDecryptResultsToProto(results []*KMSBatchDecryptResultItem) []*plat
 	return protoResults
 }
 
-// mapError maps KMS errors to appropriate gRPC status codes.
+// mapError answers a failed KMS operation with the class of its error, as
+// the shared classifier names it; an error that names no class is Internal.
 func (s *KMSGRPCService) mapError(operation string, err error) error {
 	if err == nil {
 		return nil
@@ -1197,13 +1199,7 @@ func (s *KMSGRPCService) mapError(operation string, err error) error {
 
 	s.logger.Error(err, "kms operation failed", "operation", operation)
 
-	// Check for specific KMS error types
-	if e, ok := err.(ErrKMSOperationFailed); ok {
-		return status.Errorf(codes.Internal, "kms operation %s failed: %s", e.Operation, e.Reason)
-	}
-
-	// Default to internal error
-	return status.Error(codes.Internal, err.Error())
+	return status.Error(errclass.Code(err), err.Error())
 }
 
 // Ensure KMSGRPCService implements the KeyManagementServiceServer interface.

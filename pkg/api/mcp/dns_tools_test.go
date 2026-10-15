@@ -153,8 +153,7 @@ func callDNSTool(ctx context.Context, server *Server, name string, args map[stri
 }
 
 // Each bound DNS tool calls one DNSService RPC and requires that RPC's gRPC
-// scope. dns_record_get has no RPC and reads; dns_reverse_lookup has no
-// backend and stays unclassified.
+// scope. dns_record_get has no RPC and reads.
 func TestDNSTools_RequireTheirGRPCScope(t *testing.T) {
 	want := map[string]string{
 		"dns_zone_create":   platformv1.DNSService_CreateZone_FullMethodName,
@@ -181,8 +180,6 @@ func TestDNSTools_RequireTheirGRPCScope(t *testing.T) {
 
 	assert.Equal(t, "dns:read", permissions["dns_record_get"])
 	assert.Len(t, dnsTools, len(want)+1, "a bound tool is missing from this table")
-	_, classified := permissions["dns_reverse_lookup"]
-	assert.False(t, classified, "dns_reverse_lookup has no backend and must stay unclassified")
 }
 
 // A caller holding the tool's scope gets the answer; a caller holding every

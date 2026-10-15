@@ -28,6 +28,8 @@ package quicwire
 //	0x01-0x07  config delivery (provisioning_opcodes.go)
 //	0x08-0x0F  reserved for config delivery growth
 //	0x10-0x1A  EAB credential management (this file)
+//	0x20-0x2F  device profile operations (device_profile_opcodes.go)
+//	0x30-0x3F  PXE operations (pxe_opcodes.go)
 //
 // The daemon dispatcher (pkg/api/daemon/quic_eab.go) routes the EAB
 // range before delegating the remainder to the config delivery handler,

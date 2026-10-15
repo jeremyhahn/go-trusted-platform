@@ -29,12 +29,14 @@ For NTP:
   dispatched by `handleNTPCategory` (`pkg/api/daemon/quic_ntp.go`).
 - **MCP**: `ntp_status`, `ntp_sources`, `ntp_step`
   (`pkg/api/mcp/ntp_tools.go`).
-- **Embedded**: **no route.** `ServiceRegistry`
-  (`sdk/go/transport/embedded/adapter.go`) has no `NTP` field.
+- **Embedded**: `ServiceRegistry.NTP`
+  (`sdk/go/transport/embedded/adapter.go`), dispatched by `registerNTPHandlers`
+  (`sdk/go/transport/embedded/dispatch.go`) under the gRPC method names.
 
 **One implementation backs all of them.** `NTPGRPCService` is registered on the
 TCP gRPC server and the Unix-socket gRPC server, handed to the QUIC handler and
-both REST routers, and reached by the MCP tools — so semantics and error
+both REST routers, reached by the MCP tools, and placed in the embedded host's
+`ServiceRegistry` (`pkg/api/daemon/embedded_host.go`) — so semantics and error
 mapping are identical everywhere by construction, not by convention.
 
 ## 2. Two REST routers serve the same three paths
@@ -81,20 +83,15 @@ daemon side.
 
 | Capability | Embedded (Go) | Unix | REST | gRPC | QUIC | MCP |
 |---|---|---|---|---|---|---|
-| **Get sync status** | `MISSING — docs/13 G7` (no `ServiceRegistry.NTP`); in-process `ntp.Service.Status(ctx)` | `platform.v1.NTPService/GetStatus` | `GET /api/v1/ntp/status` | `platform.v1.NTPService/GetStatus` | `OpNTPCategory` `0x50` + `NTPSubGetStatus` `0x01` | `ntp_status` |
-| **List time sources** | `MISSING — docs/13 G7`; in-process `ntp.Service.Sources(ctx)` | `platform.v1.NTPService/ListSources` | `GET /api/v1/ntp/sources` | `platform.v1.NTPService/ListSources` | `0x50` + `NTPSubListSources` `0x02` | `ntp_sources` |
-| **Step the clock** | `MISSING — docs/13 G7`; in-process `ntp.Service.Step(ctx)` | `platform.v1.NTPService/Step` | `POST /api/v1/ntp/step` | `platform.v1.NTPService/Step` | `0x50` + `NTPSubStep` `0x03` | `ntp_step` |
+| **Get sync status** | `platform.v1.NTPService/GetStatus` via `ServiceRegistry.NTP` | `platform.v1.NTPService/GetStatus` | `GET /api/v1/ntp/status` | `platform.v1.NTPService/GetStatus` | `OpNTPCategory` `0x50` + `NTPSubGetStatus` `0x01` | `ntp_status` |
+| **List time sources** | `platform.v1.NTPService/ListSources` via `ServiceRegistry.NTP` | `platform.v1.NTPService/ListSources` | `GET /api/v1/ntp/sources` | `platform.v1.NTPService/ListSources` | `0x50` + `NTPSubListSources` `0x02` | `ntp_sources` |
+| **Step the clock** | `platform.v1.NTPService/Step` via `ServiceRegistry.NTP` | `platform.v1.NTPService/Step` | `POST /api/v1/ntp/step` | `platform.v1.NTPService/Step` | `0x50` + `NTPSubStep` `0x03` | `ntp_step` |
 | **Apply configuration** (render `chrony.conf`, enable and restart chronyd) | `ntp.Service.Apply(ctx)` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | **Wait for the startup gate** | `ntp.Service.WaitForSync(ctx)` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | **Read the cached last status** (no poll) | `ntp.Service.LastStatus()` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | **Clock trustworthiness as a health component** | via `pkg/health` | see [`docs/health/api.md`](../health/api.md) | ditto | ditto | ditto | ditto |
 
-Two gaps worth naming:
-
-**NTP is absent from the embedded transport.** `ServiceRegistry` has no `NTP`
-field, so `platformctl --transport embedded ntp status` cannot reach the
-service, and an in-process SDK consumer has no NTP client. The in-process route
-that exists is a direct `*ntp.Service` call, which is not the SDK boundary.
+One gap worth naming:
 
 **Configuration application has no remote surface at all.** `Apply` and
 `WaitForSync` are bring-up-only Go calls. Changing a node's time configuration

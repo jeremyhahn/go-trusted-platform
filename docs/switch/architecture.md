@@ -87,10 +87,12 @@ destroyed on every error path.
 | Typed errors | `pkg/switch/errors.go` | this repo |
 | REST handlers and router | `pkg/webservice/v1/rest/switch/` | this repo |
 | gRPC `SwitchService` implementation | `pkg/api/daemon/switch_grpc_service.go` | this repo |
-| QUIC category handler | `pkg/api/daemon/quic_switch.go` | this repo |
+| QUIC sub-opcode table (delegates to the gRPC servicer) | `pkg/api/daemon/quic_switch.go` | this repo |
 | QUIC sub-opcode constants | `sdk/go/wire/quicwire/switch_opcodes.go` | this repo |
-| MCP tools | `pkg/api/mcp/switch_tools.go` | this repo |
-| REST SDK client | `sdk/go/services/switch/client.go` | this repo |
+| MCP tools (call the gRPC servicer) | `pkg/api/mcp/switch_tools.go` | this repo |
+| Embedded dispatch (calls the gRPC servicer) | `sdk/go/transport/embedded/dispatch.go` (`registerSwitchHandlers`) | this repo |
+| SDK accessor `Client.Switch()` and per-transport mappings | `sdk/go/client.go`, `sdk/go/transport/*/` ([`docs/sdk/api.md`](../sdk/api.md) §1) | this repo |
+| REST-only SDK client | `sdk/go/services/switch/client.go` | this repo |
 | CLI | `pkg/cli/commands/switch/` | this repo |
 | Bootstrap-time invocation | `pkg/bootstrap/orchestrator.go` (`configureSwitch`, `buildSwitchConfig`) | this repo, separate feature |
 | **Enclave-backed SSH keys, sessions, `known_hosts` pin store** | `go-quicbaas/sdk/go/xkms/{secure,ssh/keys,ssh/knownhosts,ssh/scope,ssh/session,storage/file}` | **go-quicbaas** — consumed through its SDK |
@@ -177,9 +179,10 @@ POST /api/v1/device/activate       (docs/device/)
 
 `SwitchServiceProvider` is declared in `pkg/webservice/v1/device` as a
 one-method interface (`Manager(name) (switchmgmt.Manager, error)`), which
-`*switchmgmt.Service` satisfies structurally. The QUIC handler declares its own
-identical `switchServiceProvider` *"to avoid an import cycle with the
-webservice package."*
+`*switchmgmt.Service` satisfies structurally. The gRPC servicer takes the same
+interface (`device.SwitchServiceProvider`), and the QUIC, MCP and embedded
+transports call that servicer, so no transport holds a second switch
+interface.
 
 **Nothing is persisted by this feature.** There is no datastore, no cache and
 no local state. The switch is the source of truth for every read.
@@ -207,7 +210,7 @@ no local state. The switch is the source of truth for every read.
    [engineering.md](engineering.md) §4.
 4. **Command construction is string interpolation.** `SetPortVLAN` builds
    `interface %s` from the caller's port name with no escaping or allow-list.
-   The VLAN id is bounded (1–4094) at four separate entry points; **the port
+   The VLAN id is bounded (1–4094) at three separate entry points; **the port
    name is not validated anywhere**. The blast radius is limited by the SSH
    session running a single command per `Execute` and by the switch CLI not
    being a shell, but a port name is untrusted input reaching a device CLI.
@@ -271,22 +274,17 @@ surprises.
   `Manager` only. VLAN creation is a bootstrap operation.
 - **It does not retry.** Every method performs one operation and returns. There
   are no retry loops and no backoff.
-- **It has no embedded transport.** `ServiceRegistry`
-  (`sdk/go/transport/embedded/adapter.go`) has no `Switch` field, so
-  `--transport embedded` cannot reach switch management at all
-  ([api.md](api.md) §2).
 
 ## 8. Deployment reality: the surface is dark by default
 
-Four wiring seams exist — `switchmgmt.NewService`,
-`HandlerRegistryParams.SwitchService`,
-`(*SwitchGRPCService).SetSwitchService`, and
-`WithQUICSwitchService`/`(*QUICServiceHandler).SetSwitchService` — and **none
-of them has a caller anywhere in the repository** (all grepped 2026-08-18).
+Three wiring seams exist — `switchmgmt.NewService`,
+`HandlerRegistryParams.SwitchService`, and
+`(*SwitchGRPCService).SetSwitchService` — and **none of them has a caller
+anywhere in the repository**.
 The gRPC service is registered with an explicit nil backend under the comment
-*"Create Switch gRPC service - stub returning Unimplemented. Full
-implementation wired when switch service is available."*
-(`pkg/api/daemon/daemon.go:931`). The consequence is concrete and worth
+*"Create the Switch gRPC service. It has no switch backend yet, so every
+method answers Unavailable (not configured); the QUIC opcodes, the MCP tools
+and the embedded transport call this same servicer."* (`pkg/api/daemon/daemon.go:1026`). The consequence is concrete and worth
 stating plainly:
 
 - REST `/api/v1/switches/...` returns **503** carrying the machine-readable
@@ -295,9 +293,10 @@ stating plainly:
   daemon logs a warning at startup, and
   `GET /api/v1/platform/service-registry` reports the surface as
   `Configured: false`.
-- gRPC returns `codes.FailedPrecondition` — `"switch service not initialized"`.
-- QUIC returns `StatusUnavailable` with `ErrQUICServiceUnavailable{Service:"switch"}`.
-- MCP returns `SWITCH_SERVICE_UNAVAILABLE`.
+- gRPC returns `codes.Unavailable` with reason `SERVICE_NOT_CONFIGURED` —
+  `"switch service is not configured on this node"`.
+- QUIC, MCP and embedded call that servicer, so they return the same
+  `Unavailable` (`StatusUnavailable` on QUIC).
 
 The `switches:` configuration block is parsed into `app.App.SwitchConfigs`
 (`pkg/app/app.go:334`) and, today, nothing constructs a `Service` from it. The

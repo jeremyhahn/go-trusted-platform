@@ -85,7 +85,7 @@ func newRestoreTestHandler(restorer BMCRestorerServicer, lookup ProfileLookup) (
 
 // TestRestoreBMC_NoRestorerReturns500 verifies that a 500 is returned when
 // the restorer has not been injected.
-func TestRestoreBMC_NoRestorerReturns500(t *testing.T) {
+func TestRestoreBMC_NoRestorerReturns503(t *testing.T) {
 	rw := &mockResponseWriter{}
 	h, err := NewHandler(HandlerParams{
 		Logger:         newTestLogger(),
@@ -102,8 +102,11 @@ func TestRestoreBMC_NoRestorerReturns500(t *testing.T) {
 	router := newTestRouter("POST", "/bmc/{profileID}/cert/restore", h.RestoreBMC)
 	router.ServeHTTP(rec, req)
 
-	if rw.lastStatus != http.StatusInternalServerError {
-		t.Errorf("expected 500, got %d", rw.lastStatus)
+	if rw.lastStatus != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rw.lastStatus)
+	}
+	if _, ok := rw.lastErr.(ErrBMCRestorerNotAvailable); !ok {
+		t.Errorf("err = %T, want ErrBMCRestorerNotAvailable", rw.lastErr)
 	}
 }
 

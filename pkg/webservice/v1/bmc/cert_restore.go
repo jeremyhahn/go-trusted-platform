@@ -101,7 +101,7 @@ func (h *handler) RestoreBMC(w http.ResponseWriter, r *http.Request) {
 	h.logger.Debug("bmc: restore request received")
 
 	if h.restoreDeps.restorer == nil {
-		h.responseWriter.Error500(w, r, ErrBMCRestorerNotAvailable{})
+		h.responseWriter.Error503(w, r, ErrBMCRestorerNotAvailable{})
 		return
 	}
 

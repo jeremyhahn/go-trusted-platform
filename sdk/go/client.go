@@ -62,6 +62,7 @@ type Client interface {
 	FIDO2() platformv1.FIDO2ServiceClient
 	Ceremony() platformv1.CeremonyServiceClient
 	LUKS() platformv1.LUKSServiceClient
+	Switch() platformv1.SwitchServiceClient
 
 	// ConfigDelivery returns the config-delivery provisioning client
 	// (nonce issuance, pre-enrollment config fetch, remote Secure Boot
@@ -78,6 +79,11 @@ type Client interface {
 	IAM() platformv1.PlatformIAMServiceClient
 	KMS() platformv1.KeyManagementServiceClient
 	Barrier() platformv1.BarrierServiceClient
+
+	// Invitation returns the tenant invitation client; EAB returns the ACME
+	// External Account Binding client.
+	Invitation() platformv1.InvitationServiceClient
+	EAB() platformv1.EABServiceClient
 
 	// QuicBaaS returns the QuicBaaS SDK client used to reach quicbaasd.
 	// Returns ErrQuicBaaSNotConfigured when no QuicBaaS address was
@@ -124,9 +130,13 @@ type ServiceClients struct {
 	FIDO2       platformv1.FIDO2ServiceClient
 	Ceremony    platformv1.CeremonyServiceClient
 	LUKS        platformv1.LUKSServiceClient
+	Switch      platformv1.SwitchServiceClient
 
 	// ConfigDelivery is the config-delivery provisioning service client.
 	ConfigDelivery platformv1.ConfigDeliveryServiceClient
+
+	Invitation platformv1.InvitationServiceClient
+	EAB        platformv1.EABServiceClient
 
 	// Application services served over the composed go-quicbaas SDK.
 	Cache     platformv1.CacheServiceClient
@@ -366,8 +376,12 @@ func (c *platformClient) initServiceClients() {
 		FIDO2:       platformv1.NewFIDO2ServiceClient(conn),
 		Ceremony:    platformv1.NewCeremonyServiceClient(conn),
 		LUKS:        platformv1.NewLUKSServiceClient(conn),
+		Switch:      platformv1.NewSwitchServiceClient(conn),
 
 		ConfigDelivery: platformv1.NewConfigDeliveryServiceClient(conn),
+
+		Invitation: platformv1.NewInvitationServiceClient(conn),
+		EAB:        platformv1.NewEABServiceClient(conn),
 
 		Cache:     platformv1.NewCacheServiceClient(conn),
 		Scheduler: platformv1.NewSchedulerServiceClient(conn),
@@ -648,6 +662,30 @@ func (c *platformClient) LUKS() platformv1.LUKSServiceClient {
 		return nil
 	}
 	return c.services.LUKS
+}
+
+// Invitation returns the tenant invitation service client.
+func (c *platformClient) Invitation() platformv1.InvitationServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.Invitation
+}
+
+// EAB returns the ACME External Account Binding service client.
+func (c *platformClient) EAB() platformv1.EABServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.EAB
+}
+
+// Switch returns the physical switch port service client.
+func (c *platformClient) Switch() platformv1.SwitchServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.Switch
 }
 
 // ConfigDelivery returns the config-delivery provisioning service client.

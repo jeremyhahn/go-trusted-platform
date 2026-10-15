@@ -15,9 +15,18 @@ package daemon
 
 import (
 	"context"
-	"errors"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // =============================================================================
@@ -28,18 +37,17 @@ import (
 // and returns canned data. Hand-rolling beats a mocking framework here:
 // the surface is tiny (7 methods) and tests stay readable.
 type fakeClusterServicer struct {
-	bootstrapCalled int
-	joinCalled      int
-	joinAddresses   []string
-	leaveCalled     int
+	// mu guards clusterCalls: a transport's server goroutine records a call
+	// while the test reads it, and a reply over a socket gives the race
+	// detector no happens-before edge.
+	mu sync.Mutex
+	clusterCalls
 
-	statusInfo  *ClusterStatusInfo
-	statusErr   error
-	statusCalls int
+	statusInfo *ClusterStatusInfo
+	statusErr  error
 
-	nodes     *ClusterNodesInfo
-	nodesErr  error
-	nodeCalls int
+	nodes    *ClusterNodesInfo
+	nodesErr error
 
 	bootstrapErr error
 	joinErr      error
@@ -49,24 +57,50 @@ type fakeClusterServicer struct {
 	nodeID uint64
 }
 
+// clusterCalls is what fakeClusterServicer records of the calls it serves.
+type clusterCalls struct {
+	bootstrapCalled int
+	joinCalled      int
+	joinAddresses   []string
+	leaveCalled     int
+	statusCalls     int
+	nodeCalls       int
+}
+
+// calls returns a copy of the recorded calls, taken under the lock.
+func (f *fakeClusterServicer) calls() clusterCalls {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.clusterCalls
+}
+
+// record runs one call's bookkeeping under the lock.
+func (f *fakeClusterServicer) record(note func(*clusterCalls)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	note(&f.clusterCalls)
+}
+
 func (f *fakeClusterServicer) Bootstrap(ctx context.Context) error {
-	f.bootstrapCalled++
+	f.record(func(c *clusterCalls) { c.bootstrapCalled++ })
 	return f.bootstrapErr
 }
 
 func (f *fakeClusterServicer) Join(ctx context.Context, addresses []string) error {
-	f.joinCalled++
-	f.joinAddresses = append([]string(nil), addresses...)
+	f.record(func(c *clusterCalls) {
+		c.joinCalled++
+		c.joinAddresses = append([]string(nil), addresses...)
+	})
 	return f.joinErr
 }
 
 func (f *fakeClusterServicer) Leave(ctx context.Context) error {
-	f.leaveCalled++
+	f.record(func(c *clusterCalls) { c.leaveCalled++ })
 	return f.leaveErr
 }
 
 func (f *fakeClusterServicer) Status(ctx context.Context) (*ClusterStatusInfo, error) {
-	f.statusCalls++
+	f.record(func(c *clusterCalls) { c.statusCalls++ })
 	if f.statusErr != nil {
 		return nil, f.statusErr
 	}
@@ -74,7 +108,7 @@ func (f *fakeClusterServicer) Status(ctx context.Context) (*ClusterStatusInfo, e
 }
 
 func (f *fakeClusterServicer) Nodes(ctx context.Context) (*ClusterNodesInfo, error) {
-	f.nodeCalls++
+	f.record(func(c *clusterCalls) { c.nodeCalls++ })
 	if f.nodesErr != nil {
 		return nil, f.nodesErr
 	}
@@ -85,11 +119,11 @@ func (f *fakeClusterServicer) IsLeader() bool { return f.leader }
 func (f *fakeClusterServicer) NodeID() uint64 { return f.nodeID }
 
 // newProviderWithCluster wires a fake servicer into a fresh
-// MCPServiceProvider via the public setter (which is itself part of the
-// surface under test).
+// MCPServiceProvider the way the daemon does: behind the gRPC
+// ClusterService servicer the platform_cluster_* tools call.
 func newProviderWithCluster(svc ClusterServicer) *MCPServiceProvider {
 	p := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-	p.SetClusterService(svc)
+	p.SetClusterServer(grpcapi.NewClusterGRPCService(logging.DefaultLogger(), newTestClusterBackend(svc)))
 	return p
 }
 
@@ -137,504 +171,49 @@ func stockNodes() *ClusterNodesInfo {
 }
 
 // =============================================================================
-// Tests: errors
+// Tests
 // =============================================================================
 
 func TestErrClusterNotConfigured_Error(t *testing.T) {
-	if got := (ErrClusterNotConfigured{}).Error(); got != "cluster service not configured" {
-		t.Errorf("unexpected message: %q", got)
-	}
+	err := ErrClusterNotConfigured{}
+	assert.Equal(t, "cluster service not configured", err.Error())
+	assert.Equal(t, codes.Unavailable, status.Code(err))
 }
 
-func TestErrClusterPeerAddressRequired_Error(t *testing.T) {
-	got := (ErrClusterPeerAddressRequired{}).Error()
-	if got == "" {
-		t.Fatal("expected non-empty error message")
-	}
-}
-
-// =============================================================================
-// Tests: ClusterBootstrap
-// =============================================================================
-
-func TestClusterBootstrap_NoServicer(t *testing.T) {
+// The provider serves the servicer it was given, and nil until then.
+func TestMCPServiceProvider_SetClusterServer(t *testing.T) {
 	p := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-	_, err := p.ClusterBootstrap(context.Background(), "alpha")
-	if !errors.As(err, new(ErrClusterNotConfigured)) {
-		t.Fatalf("expected ErrClusterNotConfigured, got %v", err)
-	}
+	assert.Nil(t, p.ClusterServiceServer(), "an unwired provider serves a cluster servicer")
+
+	server, _ := registerClusterGRPCService(logging.DefaultLogger())
+	p.SetClusterServer(server)
+	assert.Same(t, server, p.ClusterServiceServer())
+
+	p.SetClusterServer(nil)
+	assert.Nil(t, p.ClusterServiceServer())
 }
 
-func TestClusterBootstrap_HappyPath(t *testing.T) {
-	fake := &fakeClusterServicer{
-		statusInfo: stockStatus(),
-		nodeID:     1,
-		leader:     true,
-	}
-	p := newProviderWithCluster(fake)
+// The daemon hands its MCP provider the gRPC ClusterService servicer it
+// registers, so the tools answer as gRPC does: Unavailable until a cluster
+// service is set, the service's answer after.
+func TestCreateMCPServer_WiresTheClusterGRPCServicer(t *testing.T) {
+	config := testConfig("/tmp/test-mcp-cluster.sock")
+	config.EnableMCP = false
+	d, err := New(config)
+	require.NoError(t, err)
+	d.config.MCPConfig = &MCPConfig{Transport: "stdio"}
 
-	result, err := p.ClusterBootstrap(context.Background(), "alpha")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if fake.bootstrapCalled != 1 {
-		t.Errorf("Bootstrap call count = %d, want 1", fake.bootstrapCalled)
-	}
-	if fake.statusCalls != 1 {
-		t.Errorf("Status call count = %d, want 1", fake.statusCalls)
-	}
-	m, ok := result.(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected map result, got %T", result)
-	}
-	if m["bootstrap"] != true {
-		t.Errorf("bootstrap field = %v, want true", m["bootstrap"])
-	}
-	if m["cluster_name"] != "alpha" {
-		t.Errorf("cluster_name = %v, want alpha", m["cluster_name"])
-	}
-	if m["node_id"] != uint64(1) {
-		t.Errorf("node_id = %v, want 1", m["node_id"])
-	}
-}
+	_, err = d.createMCPServer()
+	require.NoError(t, err)
+	server := d.mcpProvider.ClusterServiceServer()
+	require.NotNil(t, server, "the MCP cluster tools have no servicer")
 
-func TestClusterBootstrap_WithoutName_OmitsField(t *testing.T) {
-	fake := &fakeClusterServicer{statusInfo: stockStatus()}
-	p := newProviderWithCluster(fake)
+	ctx := context.Background()
+	_, err = server.GetStatus(ctx, &platformv1.GetClusterStatusRequest{})
+	assert.Equal(t, codes.Unavailable, status.Code(err))
 
-	result, err := p.ClusterBootstrap(context.Background(), "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	m := result.(map[string]interface{})
-	if _, ok := m["cluster_name"]; ok {
-		t.Errorf("expected cluster_name to be omitted when empty")
-	}
-}
-
-func TestClusterBootstrap_BootstrapError(t *testing.T) {
-	want := errors.New("boom: raft")
-	fake := &fakeClusterServicer{bootstrapErr: want}
-	p := newProviderWithCluster(fake)
-
-	_, err := p.ClusterBootstrap(context.Background(), "alpha")
-	if !errors.Is(err, want) {
-		t.Fatalf("expected wrapped error %v, got %v", want, err)
-	}
-	if fake.statusCalls != 0 {
-		t.Errorf("Status should not be called after bootstrap fails")
-	}
-}
-
-func TestClusterBootstrap_StatusError(t *testing.T) {
-	want := errors.New("boom: status")
-	fake := &fakeClusterServicer{statusErr: want}
-	p := newProviderWithCluster(fake)
-
-	_, err := p.ClusterBootstrap(context.Background(), "alpha")
-	if !errors.Is(err, want) {
-		t.Fatalf("expected status error, got %v", err)
-	}
-}
-
-// =============================================================================
-// Tests: ClusterJoin
-// =============================================================================
-
-func TestClusterJoin_NoServicer(t *testing.T) {
-	p := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-	_, err := p.ClusterJoin(context.Background(), []string{"x:1"})
-	if !errors.As(err, new(ErrClusterNotConfigured)) {
-		t.Fatalf("expected ErrClusterNotConfigured, got %v", err)
-	}
-}
-
-func TestClusterJoin_NoAddresses(t *testing.T) {
-	fake := &fakeClusterServicer{}
-	p := newProviderWithCluster(fake)
-
-	_, err := p.ClusterJoin(context.Background(), nil)
-	if !errors.As(err, new(ErrClusterPeerAddressRequired)) {
-		t.Fatalf("expected ErrClusterPeerAddressRequired, got %v", err)
-	}
-	if fake.joinCalled != 0 {
-		t.Errorf("Join must not be called with no addresses")
-	}
-}
-
-func TestClusterJoin_HappyPath(t *testing.T) {
-	fake := &fakeClusterServicer{
-		statusInfo: stockStatus(),
-		nodeID:     2,
-	}
-	p := newProviderWithCluster(fake)
-
-	addrs := []string{"10.0.0.1:7001", "10.0.0.2:7001"}
-	result, err := p.ClusterJoin(context.Background(), addrs)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if fake.joinCalled != 1 {
-		t.Errorf("Join call count = %d, want 1", fake.joinCalled)
-	}
-	if len(fake.joinAddresses) != 2 {
-		t.Errorf("Join addresses = %v, want %v", fake.joinAddresses, addrs)
-	}
-	m := result.(map[string]interface{})
-	if m["joined"] != true {
-		t.Errorf("joined = %v, want true", m["joined"])
-	}
-}
-
-func TestClusterJoin_PropagatesError(t *testing.T) {
-	want := errors.New("boom: dial")
-	fake := &fakeClusterServicer{joinErr: want}
-	p := newProviderWithCluster(fake)
-
-	_, err := p.ClusterJoin(context.Background(), []string{"x:1"})
-	if !errors.Is(err, want) {
-		t.Fatalf("expected join error, got %v", err)
-	}
-}
-
-// =============================================================================
-// Tests: ClusterLeave
-// =============================================================================
-
-func TestClusterLeave_NoServicer(t *testing.T) {
-	p := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-	_, err := p.ClusterLeave(context.Background())
-	if !errors.As(err, new(ErrClusterNotConfigured)) {
-		t.Fatalf("expected ErrClusterNotConfigured, got %v", err)
-	}
-}
-
-func TestClusterLeave_HappyPath(t *testing.T) {
-	fake := &fakeClusterServicer{nodeID: 7}
-	p := newProviderWithCluster(fake)
-
-	result, err := p.ClusterLeave(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if fake.leaveCalled != 1 {
-		t.Errorf("Leave call count = %d, want 1", fake.leaveCalled)
-	}
-	m := result.(map[string]interface{})
-	if m["left"] != true {
-		t.Errorf("left = %v, want true", m["left"])
-	}
-	if m["node_id"] != uint64(7) {
-		t.Errorf("node_id = %v, want 7", m["node_id"])
-	}
-}
-
-func TestClusterLeave_PropagatesError(t *testing.T) {
-	want := errors.New("boom: leave")
-	fake := &fakeClusterServicer{leaveErr: want}
-	p := newProviderWithCluster(fake)
-
-	_, err := p.ClusterLeave(context.Background())
-	if !errors.Is(err, want) {
-		t.Fatalf("expected leave error, got %v", err)
-	}
-}
-
-// =============================================================================
-// Tests: ClusterStatus
-// =============================================================================
-
-func TestClusterStatus_NoServicer(t *testing.T) {
-	p := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-	_, err := p.ClusterStatus(context.Background(), false)
-	if !errors.As(err, new(ErrClusterNotConfigured)) {
-		t.Fatalf("expected ErrClusterNotConfigured, got %v", err)
-	}
-}
-
-func TestClusterStatus_WithoutNodes(t *testing.T) {
-	fake := &fakeClusterServicer{
-		statusInfo: stockStatus(),
-		nodeID:     1,
-		leader:     true,
-	}
-	p := newProviderWithCluster(fake)
-
-	result, err := p.ClusterStatus(context.Background(), false)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if fake.nodeCalls != 0 {
-		t.Errorf("Nodes should not be called when include_nodes=false")
-	}
-	m := result.(map[string]interface{})
-	if m["is_leader"] != true {
-		t.Errorf("is_leader = %v, want true", m["is_leader"])
-	}
-	if m["node_id"] != uint64(1) {
-		t.Errorf("node_id = %v, want 1", m["node_id"])
-	}
-	if _, ok := m["nodes"]; ok {
-		t.Errorf("nodes should be omitted when include_nodes=false")
-	}
-	cluster := m["cluster"].(map[string]interface{})
-	if cluster["state"] != "healthy" {
-		t.Errorf("cluster.state = %v, want healthy", cluster["state"])
-	}
-}
-
-func TestClusterStatus_WithNodes(t *testing.T) {
-	fake := &fakeClusterServicer{
-		statusInfo: stockStatus(),
-		nodes:      stockNodes(),
-		nodeID:     1,
-		leader:     true,
-	}
-	p := newProviderWithCluster(fake)
-
-	result, err := p.ClusterStatus(context.Background(), true)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if fake.nodeCalls != 1 {
-		t.Errorf("Nodes call count = %d, want 1", fake.nodeCalls)
-	}
-	m := result.(map[string]interface{})
-	nodes := m["nodes"].([]map[string]interface{})
-	if len(nodes) != 2 {
-		t.Errorf("nodes len = %d, want 2", len(nodes))
-	}
-	leader := m["leader"].(map[string]interface{})
-	if leader["id"] != uint64(1) {
-		t.Errorf("leader.id = %v, want 1", leader["id"])
-	}
-}
-
-func TestClusterStatus_StatusError(t *testing.T) {
-	want := errors.New("boom: status")
-	fake := &fakeClusterServicer{statusErr: want}
-	p := newProviderWithCluster(fake)
-
-	_, err := p.ClusterStatus(context.Background(), false)
-	if !errors.Is(err, want) {
-		t.Fatalf("expected status error, got %v", err)
-	}
-}
-
-func TestClusterStatus_NodesError(t *testing.T) {
-	want := errors.New("boom: nodes")
-	fake := &fakeClusterServicer{
-		statusInfo: stockStatus(),
-		nodesErr:   want,
-	}
-	p := newProviderWithCluster(fake)
-
-	_, err := p.ClusterStatus(context.Background(), true)
-	if !errors.Is(err, want) {
-		t.Fatalf("expected nodes error, got %v", err)
-	}
-}
-
-// =============================================================================
-// Tests: ClusterListNodes
-// =============================================================================
-
-func TestClusterListNodes_NoServicer(t *testing.T) {
-	p := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-	_, err := p.ClusterListNodes(context.Background())
-	if !errors.As(err, new(ErrClusterNotConfigured)) {
-		t.Fatalf("expected ErrClusterNotConfigured, got %v", err)
-	}
-}
-
-func TestClusterListNodes_HappyPath(t *testing.T) {
-	fake := &fakeClusterServicer{nodes: stockNodes()}
-	p := newProviderWithCluster(fake)
-
-	result, err := p.ClusterListNodes(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	m := result.(map[string]interface{})
-	if m["total"] != 2 {
-		t.Errorf("total = %v, want 2", m["total"])
-	}
-	if m["term"] != uint64(5) {
-		t.Errorf("term = %v, want 5", m["term"])
-	}
-	leader := m["leader"].(map[string]interface{})
-	if leader["id"] != uint64(1) {
-		t.Errorf("leader.id = %v, want 1", leader["id"])
-	}
-	nodes := m["nodes"].([]map[string]interface{})
-	if len(nodes) != 2 {
-		t.Errorf("nodes len = %d, want 2", len(nodes))
-	}
-}
-
-func TestClusterListNodes_NilNodes(t *testing.T) {
-	fake := &fakeClusterServicer{nodes: nil}
-	p := newProviderWithCluster(fake)
-
-	result, err := p.ClusterListNodes(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	m := result.(map[string]interface{})
-	if m["total"] != 0 {
-		t.Errorf("total = %v, want 0", m["total"])
-	}
-	if _, ok := m["leader"]; ok {
-		t.Errorf("leader should be omitted when nodes is nil")
-	}
-}
-
-func TestClusterListNodes_PropagatesError(t *testing.T) {
-	want := errors.New("boom: list")
-	fake := &fakeClusterServicer{nodesErr: want}
-	p := newProviderWithCluster(fake)
-
-	_, err := p.ClusterListNodes(context.Background())
-	if !errors.Is(err, want) {
-		t.Fatalf("expected list error, got %v", err)
-	}
-}
-
-// =============================================================================
-// Tests: JSON projection helpers
-// =============================================================================
-
-func TestClusterStatusJSON_NilStatus(t *testing.T) {
-	got := clusterStatusJSON(nil)
-	if got == nil {
-		t.Fatal("expected non-nil empty map for nil status")
-	}
-	if len(got) != 0 {
-		t.Errorf("expected empty map, got %v", got)
-	}
-}
-
-func TestClusterStatusJSON_OmitsEmptyError(t *testing.T) {
-	got := clusterStatusJSON(stockStatus())
-	if _, ok := got["error_message"]; ok {
-		t.Errorf("error_message should be omitted when empty")
-	}
-}
-
-func TestClusterStatusJSON_IncludesError(t *testing.T) {
-	st := stockStatus()
-	st.ErrorMessage = "raft: split"
-	got := clusterStatusJSON(st)
-	if got["error_message"] != "raft: split" {
-		t.Errorf("error_message = %v, want raft: split", got["error_message"])
-	}
-}
-
-func TestClusterNodeJSON_OmitsEmptyOptionals(t *testing.T) {
-	n := ClusterNodeInfo{ID: 1, Address: "x:1", State: "healthy"}
-	got := clusterNodeJSON(n)
-	if _, ok := got["raft_address"]; ok {
-		t.Errorf("raft_address should be omitted when empty")
-	}
-	if _, ok := got["metadata"]; ok {
-		t.Errorf("metadata should be omitted when empty")
-	}
-}
-
-func TestClusterNodeJSON_IncludesOptionals(t *testing.T) {
-	n := ClusterNodeInfo{
-		ID:          1,
-		Address:     "x:1",
-		RaftAddress: "x:7000",
-		State:       "healthy",
-		Metadata:    map[string]string{"k": "v"},
-	}
-	got := clusterNodeJSON(n)
-	if got["raft_address"] != "x:7000" {
-		t.Errorf("raft_address = %v, want x:7000", got["raft_address"])
-	}
-	if got["metadata"] == nil {
-		t.Errorf("metadata should be present")
-	}
-}
-
-func TestClusterNodesJSON_NilReturnsEmptySlice(t *testing.T) {
-	got := clusterNodesJSON(nil)
-	if got == nil {
-		t.Fatal("expected non-nil empty slice")
-	}
-	if len(got) != 0 {
-		t.Errorf("expected empty slice, got %d entries", len(got))
-	}
-}
-
-func TestClusterNodeCount_Nil(t *testing.T) {
-	if got := clusterNodeCount(nil); got != 0 {
-		t.Errorf("got %d, want 0", got)
-	}
-}
-
-func TestClusterNodeCount_Populated(t *testing.T) {
-	if got := clusterNodeCount(stockNodes()); got != 2 {
-		t.Errorf("got %d, want 2", got)
-	}
-}
-
-func TestClusterBootstrapResultJSON_OmitsEmptyName(t *testing.T) {
-	got := clusterBootstrapResultJSON("", 1, stockStatus())
-	if _, ok := got["cluster_name"]; ok {
-		t.Errorf("cluster_name should be omitted when empty")
-	}
-}
-
-func TestClusterBootstrapResultJSON_IncludesName(t *testing.T) {
-	got := clusterBootstrapResultJSON("alpha", 1, stockStatus())
-	if got["cluster_name"] != "alpha" {
-		t.Errorf("cluster_name = %v, want alpha", got["cluster_name"])
-	}
-}
-
-func TestClusterJoinResultJSON_KeepsAddresses(t *testing.T) {
-	addrs := []string{"a:1", "b:2"}
-	got := clusterJoinResultJSON(2, addrs, stockStatus())
-	out := got["seed_addresses"].([]string)
-	if len(out) != 2 || out[0] != "a:1" {
-		t.Errorf("seed_addresses = %v, want %v", out, addrs)
-	}
-}
-
-// =============================================================================
-// Tests: SetClusterService
-// =============================================================================
-
-func TestSetClusterService_InjectsServicer(t *testing.T) {
-	p := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-	if p.clusterService != nil {
-		t.Fatal("expected nil clusterService at construction")
-	}
-	fake := &fakeClusterServicer{}
-	p.SetClusterService(fake)
-	if p.clusterService != fake {
-		t.Fatalf("clusterService not injected: got %v, want %v", p.clusterService, fake)
-	}
-}
-
-func TestSetClusterService_AcceptsNil(t *testing.T) {
-	fake := &fakeClusterServicer{}
-	p := newProviderWithCluster(fake)
-	p.SetClusterService(nil)
-	if p.clusterService != nil {
-		t.Errorf("expected nil after SetClusterService(nil), got %v", p.clusterService)
-	}
-}
-
-// TestNewMCPServiceProvider_WiresClusterService verifies the constructor
-// pulls ClusterService out of the config. Without this wiring, callers
-// would have to remember to invoke SetClusterService after construction.
-func TestNewMCPServiceProvider_WiresClusterService(t *testing.T) {
-	fake := &fakeClusterServicer{}
-	p := NewMCPServiceProvider(&MCPServiceProviderConfig{ClusterService: fake})
-	if p.clusterService != fake {
-		t.Errorf("constructor should wire ClusterService config, got %v", p.clusterService)
-	}
+	d.SetClusterService(&fakeClusterServicer{statusInfo: stockStatus()})
+	resp, err := server.GetStatus(ctx, &platformv1.GetClusterStatusRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, uint32(3), resp.GetCluster().GetTotalNodes())
 }

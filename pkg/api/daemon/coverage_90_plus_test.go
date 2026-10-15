@@ -952,7 +952,7 @@ func TestQUICServiceHandler_HandleRequest_PXE(t *testing.T) {
 	handler := newTestQUICServiceHandler(logger)
 
 	t.Run("PXE opcode without service", func(t *testing.T) {
-		req := &quicwire.Request{Opcode: OpPXEListDevices}
+		req := &quicwire.Request{Opcode: quicwire.OpPXEListDevices}
 		resp := handler.HandleRequest(ctx, req)
 		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
@@ -991,7 +991,7 @@ func TestQUICServiceHandler_HandleRequest_Unknown(t *testing.T) {
 	t.Run("Unknown opcode", func(t *testing.T) {
 		// An unallocated opcode is unclassified: the authorization guard
 		// refuses it before dispatch.
-		req := &quicwire.Request{Opcode: 0x90}
+		req := &quicwire.Request{Opcode: quicwire.OpJWTVerify}
 		resp := handler.HandleRequest(ctx, req)
 		assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
 	})
@@ -1274,25 +1274,25 @@ func TestQUICServiceHandler_PXEOperation_NoService(t *testing.T) {
 	handler := newTestQUICServiceHandler(logger)
 
 	t.Run("ListDevices", func(t *testing.T) {
-		req := &quicwire.Request{Opcode: OpPXEListDevices}
+		req := &quicwire.Request{Opcode: quicwire.OpPXEListDevices}
 		resp := handler.handlePXEOperation(ctx, req)
 		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("GetDevice", func(t *testing.T) {
-		req := &quicwire.Request{Opcode: OpPXEGetDevice}
+		req := &quicwire.Request{Opcode: quicwire.OpPXEGetDevice}
 		resp := handler.handlePXEOperation(ctx, req)
 		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("RegisterDevice", func(t *testing.T) {
-		req := &quicwire.Request{Opcode: OpPXERegisterDevice}
+		req := &quicwire.Request{Opcode: quicwire.OpPXERegisterDevice}
 		resp := handler.handlePXEOperation(ctx, req)
 		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("UpdateState", func(t *testing.T) {
-		req := &quicwire.Request{Opcode: OpPXEUpdateState}
+		req := &quicwire.Request{Opcode: quicwire.OpPXEUpdateState}
 		resp := handler.handlePXEOperation(ctx, req)
 		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})

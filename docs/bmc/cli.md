@@ -250,8 +250,8 @@ platformctl bmc provision \
 
 **This returns an error on a stock daemon.** `pkg/api/daemon/daemon.go`
 constructs the BMC gRPC service with a nil baremetal orchestrator, so
-`Provision` and `ProvisionStatus` return `FailedPrecondition` until one is
-wired via `SetBaremetalService`.
+`Provision` and `ProvisionStatus` answer `Unavailable` (service not configured)
+until one is wired via `SetBaremetalService`.
 
 ---
 

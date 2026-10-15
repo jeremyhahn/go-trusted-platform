@@ -21,6 +21,7 @@ import (
 	"time"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	kmssdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
@@ -1018,7 +1019,7 @@ func (h *QUICServiceHandler) handleKMSGenerateKey(ctx context.Context, req *quic
 	pbResp, err := h.kmsService.GenerateKey(ctx, pbReq)
 	if err != nil {
 		h.logger.Error(err, "failed to generate key")
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSGenerateKey", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSGenerateKey", Cause: err})
 	}
 
 	resp := &KMSGenerateKeyResponse{
@@ -1071,7 +1072,7 @@ func (h *QUICServiceHandler) handleKMSImportKey(ctx context.Context, req *quicwi
 	pbResp, err := h.kmsService.ImportKey(ctx, pbReq)
 	if err != nil {
 		h.logger.Error(err, "failed to import key")
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSImportKey", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSImportKey", Cause: err})
 	}
 
 	resp := &KMSImportKeyResponse{
@@ -1109,7 +1110,7 @@ func (h *QUICServiceHandler) handleKMSGetKey(ctx context.Context, req *quicwire.
 	pbResp, err := h.kmsService.GetKey(ctx, pbReq)
 	if err != nil {
 		h.logger.Error(err, "failed to get key", "key_id", getReq.KeyId)
-		return h.errorResponse(quicwire.StatusNotFound, ErrQUICOperationFailed{Op: "KMSGetKey", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSGetKey", Cause: err})
 	}
 
 	resp := &KMSGetKeyResponse{
@@ -1154,7 +1155,7 @@ func (h *QUICServiceHandler) handleKMSListKeys(ctx context.Context, req *quicwir
 	pbResp, err := h.kmsService.ListKeys(ctx, pbReq)
 	if err != nil {
 		h.logger.Error(err, "failed to list keys")
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSListKeys", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSListKeys", Cause: err})
 	}
 
 	keys := make([]*KMSKeyHandleResponse, 0, len(pbResp.Keys))
@@ -1200,7 +1201,7 @@ func (h *QUICServiceHandler) handleKMSDeleteKey(ctx context.Context, req *quicwi
 	pbResp, err := h.kmsService.DeleteKey(ctx, pbReq)
 	if err != nil {
 		h.logger.Error(err, "failed to delete key", "key_id", deleteReq.KeyId)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSDeleteKey", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSDeleteKey", Cause: err})
 	}
 
 	resp := &KMSDeleteKeyResponse{
@@ -1241,7 +1242,7 @@ func (h *QUICServiceHandler) handleKMSRotateKey(ctx context.Context, req *quicwi
 	pbResp, err := h.kmsService.RotateKey(ctx, pbReq)
 	if err != nil {
 		h.logger.Error(err, "failed to rotate key", "key_id", rotateReq.KeyId)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSRotateKey", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSRotateKey", Cause: err})
 	}
 
 	resp := &KMSRotateKeyResponse{
@@ -1292,7 +1293,7 @@ func (h *QUICServiceHandler) handleKMSUpdateKeyStatus(ctx context.Context, req *
 	pbResp, err := h.kmsService.UpdateKeyStatus(ctx, pbReq)
 	if err != nil {
 		h.logger.Error(err, "failed to update key status", "key_id", updateReq.KeyId)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSUpdateKeyStatus", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSUpdateKeyStatus", Cause: err})
 	}
 
 	resp := &KMSUpdateKeyStatusResponse{
@@ -1344,7 +1345,7 @@ func (h *QUICServiceHandler) handleKMSExportKey(ctx context.Context, req *quicwi
 	pbResp, err := h.kmsService.ExportKey(ctx, pbReq)
 	if err != nil {
 		h.logger.Error(err, "failed to export key", "key_id", exportReq.KeyId)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSExportKey", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSExportKey", Cause: err})
 	}
 
 	resp := &KMSExportKeyResponse{
@@ -1395,7 +1396,7 @@ func (h *QUICServiceHandler) handleKMSGetKeyVersions(ctx context.Context, req *q
 	pbResp, err := h.kmsService.ListKeyVersions(ctx, pbReq)
 	if err != nil {
 		h.logger.Error(err, "failed to list key versions", "key_id", versionsReq.KeyId)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSGetKeyVersions", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSGetKeyVersions", Cause: err})
 	}
 
 	versions := make([]*KMSKeyVersionInfoResponse, 0, len(pbResp.Versions))
@@ -1432,7 +1433,7 @@ func (h *QUICServiceHandler) handleKMSBackendStatus(ctx context.Context, req *qu
 	pbResp, err := h.kmsService.BackendStatus(ctx, &pb.BackendStatusRequest{})
 	if err != nil {
 		h.logger.Error(err, "failed to get KMS backend status")
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSBackendStatus", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSBackendStatus", Cause: err})
 	}
 
 	resp := &KMSBackendStatusResponse{
@@ -1502,7 +1503,7 @@ func (h *QUICServiceHandler) handleKMSBatchEncrypt(ctx context.Context, req *qui
 	})
 	if err != nil {
 		h.logger.Error(err, "failed to batch encrypt", "key_id", batchReq.KeyId)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSBatchEncrypt", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSBatchEncrypt", Cause: err})
 	}
 
 	// The QuicBaaS pb batch messages are positional without item IDs;
@@ -1591,7 +1592,7 @@ func (h *QUICServiceHandler) handleKMSBatchDecrypt(ctx context.Context, req *qui
 	})
 	if err != nil {
 		h.logger.Error(err, "failed to batch decrypt", "key_id", batchReq.KeyId)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSBatchDecrypt", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSBatchDecrypt", Cause: err})
 	}
 
 	// Correlate positional pb results back to the request item IDs.
@@ -1663,7 +1664,7 @@ func (h *QUICServiceHandler) handleKMSEncrypt(ctx context.Context, req *quicwire
 	pbResp, err := h.kmsService.Encrypt(ctx, pbReq)
 	if err != nil {
 		h.logger.Error(err, "failed to encrypt data", "key_id", encryptReq.KeyId)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSEncrypt", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSEncrypt", Cause: err})
 	}
 
 	resp := &KMSEncryptResponse{
@@ -1710,7 +1711,7 @@ func (h *QUICServiceHandler) handleKMSDecrypt(ctx context.Context, req *quicwire
 	pbResp, err := h.kmsService.Decrypt(ctx, pbReq)
 	if err != nil {
 		h.logger.Error(err, "failed to decrypt data", "key_id", decryptReq.KeyId)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSDecrypt", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSDecrypt", Cause: err})
 	}
 
 	resp := &KMSDecryptResponse{
@@ -1760,7 +1761,7 @@ func (h *QUICServiceHandler) handleKMSSign(ctx context.Context, req *quicwire.Re
 	pbResp, err := h.kmsService.Sign(ctx, pbReq)
 	if err != nil {
 		h.logger.Error(err, "failed to sign message", "key_id", signReq.KeyId)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSSign", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSSign", Cause: err})
 	}
 
 	resp := &KMSSignResponse{
@@ -1816,7 +1817,7 @@ func (h *QUICServiceHandler) handleKMSVerify(ctx context.Context, req *quicwire.
 	pbResp, err := h.kmsService.Verify(ctx, pbReq)
 	if err != nil {
 		h.logger.Error(err, "failed to verify signature", "key_id", verifyReq.KeyId)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSVerify", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSVerify", Cause: err})
 	}
 
 	resp := &KMSVerifyResponse{
@@ -1854,7 +1855,7 @@ func (h *QUICServiceHandler) handleKMSGenerateRandom(ctx context.Context, req *q
 	pbResp, err := h.kmsService.GenerateRandom(ctx, pbReq)
 	if err != nil {
 		h.logger.Error(err, "failed to generate random bytes")
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSGenerateRandom", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSGenerateRandom", Cause: err})
 	}
 
 	resp := &KMSGenerateRandomResponse{
@@ -1896,7 +1897,7 @@ func (h *QUICServiceHandler) handleKMSHash(ctx context.Context, req *quicwire.Re
 	pbResp, err := h.kmsService.Hash(ctx, pbReq)
 	if err != nil {
 		h.logger.Error(err, "failed to hash data")
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSHash", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSHash", Cause: err})
 	}
 
 	resp := &KMSHashResponse{
@@ -1942,7 +1943,7 @@ func (h *QUICServiceHandler) handleKMSHMAC(ctx context.Context, req *quicwire.Re
 	})
 	if err != nil {
 		h.logger.Error(err, "failed to generate HMAC", "key_id", hmacReq.KeyId)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSHMAC", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSHMAC", Cause: err})
 	}
 
 	resp := &KMSHMACResponse{
@@ -1996,7 +1997,7 @@ func (h *QUICServiceHandler) handleKMSVerifyHMAC(ctx context.Context, req *quicw
 	})
 	if err != nil {
 		h.logger.Error(err, "failed to verify HMAC", "key_id", verifyReq.KeyId)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSVerifyHMAC", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSVerifyHMAC", Cause: err})
 	}
 
 	resp := &KMSVerifyHMACResponse{
@@ -2048,7 +2049,7 @@ func (h *QUICServiceHandler) handleKMSRewrap(ctx context.Context, req *quicwire.
 	})
 	if err != nil {
 		h.logger.Error(err, "failed to rewrap ciphertext", "key_id", rewrapReq.KeyId)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSRewrap", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSRewrap", Cause: err})
 	}
 
 	resp := &KMSRewrapResponse{
@@ -2144,7 +2145,7 @@ func (h *QUICServiceHandler) handleKMSGenerateDataKey(ctx context.Context, req *
 	pbResp, err := h.cryptoService.GenerateDataKey(ctx, pbReq)
 	if err != nil {
 		h.logger.Error(err, "failed to generate data key", "key_id", dataKeyReq.KeyId)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSGenerateDataKey", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSGenerateDataKey", Cause: err})
 	}
 
 	resp := &KMSGenerateDataKeyQUICResponse{
@@ -2209,7 +2210,7 @@ func (h *QUICServiceHandler) handleKMSGenerateWrappedDataKey(ctx context.Context
 	pbResp, err := h.cryptoService.GenerateWrappedDataKey(ctx, pbReq)
 	if err != nil {
 		h.logger.Error(err, "failed to generate wrapped data key", "wrapping_key_id", dataKeyReq.WrappingKeyId)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSGenerateWrappedDataKey", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSGenerateWrappedDataKey", Cause: err})
 	}
 
 	resp := &KMSGenerateWrappedDataKeyQUICResponse{

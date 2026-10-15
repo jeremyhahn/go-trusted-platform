@@ -163,6 +163,14 @@ var preAuthSubOpcodes = map[byte]map[byte]string{
 		quicwire.ProvisioningSubPollSession: "a pre-enrollment machine holds no platform credential; the random " +
 			"session ID handed out by an authenticated fetch is the poll capability",
 	},
+	quicwire.OpIAMCategory: {
+		// The invitee half of the invitation flow, open as on gRPC, REST and MCP.
+		// The operator half (Create, Get, List, Revoke, Delete) stays scoped.
+		quicwire.InvitationSubGetByToken: "an invitee holds no platform credential yet; the invitation token " +
+			"in the request is the credential",
+		quicwire.InvitationSubAccept: "an invitee holds no platform credential yet; the invitation token " +
+			"in the request is the credential",
+	},
 }
 
 // Permissions shared by many entries.
@@ -261,6 +269,10 @@ var (
 	eabWrite  = OpcodePermission{Resource: "eab", Action: actionWrite}
 	eabDelete = OpcodePermission{Resource: "eab", Action: actionDelete}
 
+	invitationRead   = OpcodePermission{Resource: "invitation", Action: actionRead}
+	invitationWrite  = OpcodePermission{Resource: "invitation", Action: actionWrite}
+	invitationDelete = OpcodePermission{Resource: "invitation", Action: actionDelete}
+
 	ceremonyRead  = OpcodePermission{Resource: "ceremony", Action: actionRead}
 	ceremonyWrite = OpcodePermission{Resource: "ceremony", Action: actionWrite}
 
@@ -280,6 +292,9 @@ var (
 	bmcPower = OpcodePermission{Resource: "bmc", Action: actionPower}
 	bmcMedia = OpcodePermission{Resource: "bmc", Action: actionMedia}
 	bmcAdmin = OpcodePermission{Resource: "bmc", Action: actionAdmin}
+
+	clusterRead  = OpcodePermission{Resource: "cluster", Action: actionRead}
+	clusterWrite = OpcodePermission{Resource: "cluster", Action: actionWrite}
 
 	pxeRead   = OpcodePermission{Resource: "pxe", Action: actionRead}
 	pxeWrite  = OpcodePermission{Resource: "pxe", Action: actionWrite}
@@ -680,6 +695,13 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.IAMSubTenantList:   iamRead,
 		quicwire.IAMSubTenantUpdate: iamWrite,
 		quicwire.IAMSubTenantDelete: iamDelete,
+
+		// Invitations. GetByToken and Accept are preAuthSubOpcodes.
+		quicwire.InvitationSubCreate: invitationWrite,
+		quicwire.InvitationSubGet:    invitationRead,
+		quicwire.InvitationSubList:   invitationRead,
+		quicwire.InvitationSubRevoke: invitationWrite,
+		quicwire.InvitationSubDelete: invitationDelete,
 	},
 
 	// Compute: extended VM operations and the container operations.
@@ -832,6 +854,14 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.BMCSubSetUserPrivilege:      bmcAdmin,
 	},
 
+	quicwire.OpClusterCategory: {
+		quicwire.ClusterSubBootstrap: clusterWrite,
+		quicwire.ClusterSubJoin:      clusterWrite,
+		quicwire.ClusterSubLeave:     clusterWrite,
+		quicwire.ClusterSubGetStatus: clusterRead,
+		quicwire.ClusterSubListNodes: clusterRead,
+	},
+
 	quicwire.OpSwitchCategory: {
 		quicwire.SwitchSubListPorts:     switchRead,
 		quicwire.SwitchSubGetPortStatus: switchRead,
@@ -890,6 +920,15 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.DeviceSubTemplateCreate:      deviceWrite,
 		quicwire.DeviceSubProfileFromTemplate: deviceWrite,
 		quicwire.DeviceSubFindMatchingProfile: deviceRead,
+
+		// The PXEService methods without a direct opcode, scoped as on gRPC.
+		quicwire.PXESubGetDeviceByMAC:    pxeRead,
+		quicwire.PXESubSetDeviceEnrolled: pxeWrite,
+		quicwire.PXESubGetEvents:         pxeRead,
+		quicwire.PXESubGetStatus:         pxeRead,
+		quicwire.PXESubStartService:      pxeWrite,
+		quicwire.PXESubStopService:       pxeWrite,
+		quicwire.PXESubWebhookComplete:   pxeWrite,
 	},
 }
 

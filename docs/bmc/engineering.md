@@ -343,7 +343,7 @@ Precedence on the CLI: **flag > environment > built-in default.**
 | `--bmc-host` given together with `--server-url`/`--profile-id` | `ErrBMCFlagConflict`. Neither mode is guessed |
 | Neither `--bmc-host` nor daemon flags | `ErrBMCNoMode` |
 | `bmc cert restore` without `--factory` | Rejected. The flag exists solely to make accidental invocation impossible |
-| `Provision` / `ProvisionStatus` with no baremetal orchestrator wired | gRPC `FailedPrecondition` — the daemon passes `nil` for the baremetal service today |
+| `Provision` / `ProvisionStatus` with no baremetal orchestrator wired | gRPC `Unavailable` with reason `SERVICE_NOT_CONFIGURED`, REST `503` — the daemon passes `nil` for the baremetal service today |
 | Rotation apply or verify fails | Rollback is attempted; the outcome is encoded in the error type (§6) |
 | IPMI password (or KG key) shorter than 14 bytes, **under FIPS activation** | `ErrFIPSKeyTooShort` at session open. See below |
 

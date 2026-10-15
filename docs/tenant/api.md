@@ -1,6 +1,6 @@
 # Platform Tenancy — API
 
-> **Status: NORMATIVE** · Scope: tenant routes on every transport · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: tenant routes on every transport · Last verified: 2026-10-15
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING`, never omitted.
@@ -344,3 +344,57 @@ returns 200, not 409.
 REST under `/api/v1`; gRPC package `platform.v1`. Nothing deprecated. The two
 parallel tenant route trees in §6 are a duplication awaiting an owner ruling,
 not a deprecation.
+
+---
+
+## 10. Invitations
+
+`InvitationService`, 7 RPCs (`pkg/api/grpc/proto/invitation.proto`). The
+invitation model — redemption, initial-admin invitations, time — is in
+[architecture.md](architecture.md). QUIC and MCP call the daemon's gRPC
+servicer (`pkg/api/daemon/invitation_grpc_service.go`), so a call gets the
+answer and the error code gRPC gives for the same input (#704). REST is served
+by `pkg/webservice/v1/rest/invitation`.
+
+| Capability | REST | gRPC / Unix | QUIC (under `0x51`) | MCP | Scope |
+|---|---|---|---|---|---|
+| Create | `POST /api/v1/invitations` | `CreateInvitation` | sub `0x10` | `platform_invitation_create` | `invitation:write` |
+| Get | `GET /api/v1/invitations/{id}` | `GetInvitation` | sub `0x11` | `platform_invitation_get` | `invitation:read` |
+| Get by token | `GET /api/v1/invitations/token/{token}` | `GetInvitationByToken` | sub `0x12` | `platform_invitation_get_by_token` | pre-auth |
+| List | `GET /api/v1/invitations` | `ListInvitations` | sub `0x13` | `platform_invitation_list` | `invitation:read` |
+| Revoke | `POST /api/v1/invitations/{id}/revoke` | `RevokeInvitation` | sub `0x14` | `platform_invitation_revoke` | `invitation:write` |
+| Accept | `POST /api/v1/invitations/accept` | `AcceptInvitation` | sub `0x15` | `platform_invitation_accept` | pre-auth |
+| Delete | `DELETE /api/v1/invitations/{id}` | `DeleteInvitation` | sub `0x16` | `platform_invitation_delete` | `invitation:delete` |
+
+**Get by token and Accept are pre-auth on every transport.** The invitation
+token in the request is the credential; the invitee holds no platform session
+yet. They are on the gRPC pre-auth list, QUIC's `preAuthSubOpcodes`
+(`pkg/api/quic/opcode_permissions.go`) and the MCP open tools, and REST serves
+them outside the `admin` gate ([`docs/auth/architecture.md`](../auth/architecture.md)).
+REST gates the operator half on the `admin` role; gRPC, QUIC and MCP require
+the scope in the table.
+
+**QUIC shares `OpIAMCategory` (`0x51`) with the IAM tenant records** (`0x01`–
+`0x05`, [`docs/iam/api.md`](../iam/api.md) §5a): no free opcode byte remained,
+so the invitation sub-opcodes start at `0x10` (`InvitationSub*`,
+`sdk/go/wire/quicwire/invitation_opcodes.go`). The daemon dispatches them
+through a map to the servicer (`pkg/api/daemon/quic_invitation.go`).
+
+**MCP tools take the request and return the response as protojson** with proto
+field names: IDs are decimal strings, enums travel by name
+(`INVITATION_STATUS_PENDING`), times as RFC 3339. An argument the request does
+not have is refused. `platform_invitation_list` takes `status_filter` and
+`email_filter` as the gRPC request does.
+
+**Error codes on gRPC, QUIC and MCP.** The servicer maps the service's typed errors:
+`ErrInvitationNotFound` is `NotFound`, `ErrInvalidInvitation` is
+`InvalidArgument` (a zero `user_id` on Accept among them),
+`ErrEmailAlreadyRegistered` is `AlreadyExists`, and an expired, accepted or
+revoked invitation, or a wrong status, is `FailedPrecondition`. Anything else is
+`Internal` and logged. A daemon with no invitation service answers
+`Unimplemented` on all three. Before #704 every gRPC error was `Unknown`.
+
+**The Go SDK** reaches the service through `Invitation()` (and `EAB()` for
+`EABService`). Its QUIC adapter maps every method in
+`sdk/go/transport/quic/aab_invitation.go` and its MCP adapter in
+`sdk/go/transport/mcp/invitation.go`.

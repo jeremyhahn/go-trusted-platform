@@ -436,16 +436,17 @@ Declared and never returned by any code path:
 
 The daemon registers `pkg/api/grpc`'s `ClusterGRPCService` on the TCP server
 and the Unix-socket server through `registerClusterGRPCService`
-(`pkg/api/daemon/cluster_grpc_backend.go`, called at `daemon.go:946`), and
-passes the same service to the REST routes (`daemon.go:1577`). The stub that
-used to be registered in its place was deleted (#317).
+(`pkg/api/daemon/cluster_grpc_backend.go`, called at `daemon.go:954`), and
+passes the same service to the QUIC category handler (`daemon.go:1284`), the
+REST routes (`daemon.go:1595`) and the MCP provider (`daemon.go:1985`). The
+stub that used to be registered in its place was deleted (#317).
 
 Its `grpc.ClusterService` is `clusterGRPCBackend`, the daemon adapter over
 `ClusterServicer`:
 
 - The servicer is late-bound: `Daemon.SetClusterService` stores it in an
-  `atomic.Pointer`, and the same call feeds the MCP provider. Unset, every
-  method returns `ErrClusterServiceUnavailable` (`Unavailable`).
+  `atomic.Pointer`. Unset, every method returns
+  `ErrClusterServiceUnavailable` (`Unavailable`) on every transport.
 - `ClusterServicer` acts on the serving node only, so `Leave` with another
   node's ID is `ErrLeaveNodeNotLocal`, and the bind/advertise fields of
   `Bootstrap` and `Join` and `Leave`'s `force` are not applied.
@@ -502,7 +503,7 @@ Its `mapError`:
 `interface{}` instead of the `cluster.*` types. Code that compiles against one
 does not necessarily compile against the other.
 
-### The tag-agnostic MCP bridge
+### The tag-agnostic servicer types
 
 `pkg/api/daemon/mcp_cluster.go` defines `ClusterServicer` plus
 `ClusterStatusInfo` and `ClusterNodeInfo` — plain structs mirroring
@@ -512,9 +513,10 @@ does not necessarily compile against the other.
 through the unexported `clusterCore` interface, which exists so the adapter is
 unit-testable without a real coordinator.
 
-`Daemon.SetClusterService(svc ClusterServicer)` stores it and forwards to
-`mcpProvider.SetClusterService`. **Nothing calls it**, so `p.clusterService`
-stays nil and every MCP cluster tool returns `ErrClusterNotConfigured`.
+`Daemon.SetClusterService(svc ClusterServicer)` stores it in the gRPC
+backend. **Nothing calls it**, so every transport — the MCP
+`platform_cluster_*` tools and the QUIC `0x90` sub-opcodes included, since both
+call the registered gRPC service — returns `Unavailable`.
 
 ## 9. Persistence
 

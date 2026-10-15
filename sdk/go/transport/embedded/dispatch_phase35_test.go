@@ -43,14 +43,20 @@ func phase35Services() (*ServiceRegistry, []grpc.ServiceDesc, []any) {
 	piv := platformv1.UnimplementedPIVServiceServer{}
 	fido := platformv1.UnimplementedFIDO2ServiceServer{}
 	bmc := platformv1.UnimplementedBMCServiceServer{}
-	reg := &ServiceRegistry{Ceremony: ceremony, PIV: piv, FIDO2: fido, BMC: bmc}
+	ntp := platformv1.UnimplementedNTPServiceServer{}
+	luks := platformv1.UnimplementedLUKSServiceServer{}
+	sw := platformv1.UnimplementedSwitchServiceServer{}
+	reg := &ServiceRegistry{Ceremony: ceremony, PIV: piv, FIDO2: fido, BMC: bmc, NTP: ntp, LUKS: luks, Switch: sw}
 	descs := []grpc.ServiceDesc{
 		platformv1.CeremonyService_ServiceDesc,
 		platformv1.PIVService_ServiceDesc,
 		platformv1.FIDO2Service_ServiceDesc,
 		platformv1.BMCService_ServiceDesc,
+		platformv1.NTPService_ServiceDesc,
+		platformv1.LUKSService_ServiceDesc,
+		platformv1.SwitchService_ServiceDesc,
 	}
-	return reg, descs, []any{ceremony, piv, fido, bmc}
+	return reg, descs, []any{ceremony, piv, fido, bmc, ntp, luks, sw}
 }
 
 // requestTypeOf asks the generated gRPC handler which request message the
@@ -69,7 +75,7 @@ func requestTypeOf(t *testing.T, md grpc.MethodDesc, srv any) any {
 }
 
 // TestBuildHandlerMap_Phase35EveryMethodReachesItsServer drives every
-// ceremony, PIV, FIDO2 and BMC method in the generated service descriptors
+// ceremony, PIV, FIDO2, BMC, NTP, LUKS and Switch method in the generated service descriptors
 // through the embedded dispatcher and asserts it lands on the server method
 // of the same name.
 func TestBuildHandlerMap_Phase35EveryMethodReachesItsServer(t *testing.T) {

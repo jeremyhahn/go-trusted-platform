@@ -49,11 +49,6 @@ var ErrLUKSRootRequired = errors.New("luks: operation requires root privileges")
 // error quotes the offending input and the body may hold a passphrase.
 var ErrLUKSMalformedBody = errors.New("luks: malformed request body")
 
-// ErrLUKSTestUnlockUnverified refuses test-unlock over MCP. The request
-// carries no key and the backend only checks that the keyslot exists, so
-// an "unlocked" answer would claim a key works without trying one.
-var ErrLUKSTestUnlockUnverified = errors.New("luks: test-unlock tries no key material; refused over MCP")
-
 // LUKSKeyType enumerates the LUKS2 keyslot backends.
 type LUKSKeyType string
 

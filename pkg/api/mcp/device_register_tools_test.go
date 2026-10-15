@@ -193,53 +193,19 @@ func TestExecuteDeviceUpdate_Errors(t *testing.T) {
 	})
 }
 
-// knownUndispatched lists tools advertised in tools/list that no executor
-// serves yet; each answers "unknown tool". Like knownUnclassified, the list
-// may only shrink: a new advertised tool must ship with its executor, and a
-// tool that gains one must leave the list.
-var knownUndispatched = []string{
-	"attestation_attest_workload",
-	"attestation_create_policy",
-	"attestation_create_report",
-	"attestation_delete_policy",
-	"attestation_evaluate_policy",
-	"attestation_get_policy",
-	"attestation_get_report",
-	"attestation_list_policies",
-	"attestation_list_reports",
-	"attestation_verify_workload",
-	"dns_reverse_lookup",
-	"vm_resume",
-	"vm_suspend",
-	"vm_update",
-}
-
 // TestExecuteTool_EveryAdvertisedToolDispatches is the #533 regression for
 // tools advertised in tools/list with no executor behind them: seven
-// device_* tools answered "unknown tool". Any advertised tool may refuse
-// empty arguments, but none outside knownUndispatched may be unknown to its
-// own registry.
+// device_* tools answered "unknown tool", and #304 deleted fourteen more
+// that no backend served. Any advertised tool may refuse empty arguments,
+// but none may be unknown to its own registry.
 func TestExecuteTool_EveryAdvertisedToolDispatches(t *testing.T) {
 	registry := NewToolRegistry(newMockServiceProvider(), logging.DefaultLogger())
 
-	pending := make(map[string]bool, len(knownUndispatched))
-	for _, name := range knownUndispatched {
-		pending[name] = true
-	}
-
 	for _, tool := range registry.ListTools() {
 		err := executeRecovering(registry, tool.Name)
-		unknown := err != nil && strings.Contains(err.Error(), "unknown tool: "+tool.Name)
-		switch {
-		case unknown && !pending[tool.Name]:
+		if err != nil && strings.Contains(err.Error(), "unknown tool: "+tool.Name) {
 			t.Errorf("%s is advertised but has no executor", tool.Name)
-		case !unknown && pending[tool.Name]:
-			t.Errorf("%s now dispatches; remove it from knownUndispatched", tool.Name)
 		}
-		delete(pending, tool.Name)
-	}
-	for name := range pending {
-		t.Errorf("%s is no longer advertised; remove it from knownUndispatched", name)
 	}
 }
 

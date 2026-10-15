@@ -96,31 +96,13 @@ func newBMCSDKFixture(enroll *app.BMCEnrollResult, restore *app.BMCRestoreResult
 
 // recorded is everything the fakes recorded about the calls they served.
 func (f *bmcSDKFixture) recorded() []interface{} {
-	return []interface{}{
-		*f.bmc, *f.baremetal,
-		f.enroller.lastDeviceID, f.enroller.lastBMCCfg, f.enroller.lastOpts,
-		f.restorer.lastDeviceID, f.restorer.lastBMCCfg,
-	}
+	return []interface{}{f.bmc.calls(), f.baremetal.calls(), f.enroller.calls(), f.restorer.calls()}
 }
 
 // invokeBMCServer calls method on server directly, through the generated
 // service descriptor, as a gRPC caller reaches it once authorized.
 func invokeBMCServer(server platformv1.BMCServiceServer, method string, req proto.Message) (proto.Message, error) {
-	for _, desc := range platformv1.BMCService_ServiceDesc.Methods {
-		if desc.MethodName != path.Base(method) {
-			continue
-		}
-		decode := func(in interface{}) error {
-			proto.Merge(in.(proto.Message), req)
-			return nil
-		}
-		resp, err := desc.Handler(server, context.Background(), decode, nil)
-		if err != nil {
-			return nil, err
-		}
-		return resp.(proto.Message), nil
-	}
-	return nil, status.Errorf(codes.Unimplemented, "%s is not a BMCService method", method)
+	return invokeGRPCMethod(&platformv1.BMCService_ServiceDesc, server, method, req)
 }
 
 // bmcSDKRequests holds one request for every BMCService method.

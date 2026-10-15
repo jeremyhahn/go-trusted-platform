@@ -115,7 +115,7 @@ func newConnWithSender(t *testing.T, sender *recordingSender) *quicClientConn {
 // method emits the correct (opcode, sub-opcode) pair and that the
 // remainder of the payload is the codec-encoded args, not the raw args
 // passed straight to the wire. This is the exact behavior the
-// server-side handleSwitchCategory expects in pkg/api/daemon/quic_switch.go.
+// server-side switchQUICHandlers expect in pkg/api/daemon/quic_switch.go.
 func TestInvoke_CategoryPrefix_AllSwitchMethods(t *testing.T) {
 	tests := []struct {
 		method           string

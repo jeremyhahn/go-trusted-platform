@@ -432,12 +432,11 @@ silently fixed.
 | `/boot.ipxe` chains `/boot/device/<mac>.ipxe` when a `DeviceLookup` is wired | [architecture.md](architecture.md) §5 data flow, until 2026-09-22 | Nothing chained it: the per-device route was mounted and answered, but no script a node booted ever asked for it, so every device booted the shared entry. `/boot.ipxe` now chains it first (invariant 18). The per-device script also lacked the retry loop `/boot.ipxe` had; both now render the same block. |
 | `platformctl iso test pxe` builds `DefaultTestEnvConfig()` | [cli.md](cli.md) §3, until 2026-09-22 | It built its own copy from `testenv.DefaultNetworkConfig()`, whose bridge subnet is a `/28`, while leasing `.100`–`.200`: every unicast reply to a client (the TFTP data) left through the host's default route, and the command's `qemu.Config` had no disk, which `Validate` refuses. Neither run had ever completed. The command now uses `ipxe.NewTestEnv` — which in turn named its unused second TAP 21 characters long, over the kernel's 15 — and gives the client a disk. Fixed with the aarch64 work (#686). |
 
-**Not a correction, but a divergence worth flagging:**
-[`docs/provisioning/api.md`](../provisioning/api.md) §1 records the PXE QUIC
-opcodes as `0xFC`–`0xFF`. `sdk/go/wire/quicwire/protocol.go` also defines
-`OpPXEListDevices` `0xEC`, `OpPXEGetDevice` `0xED`, `OpPXERegisterDevice`
-`0xEE` and `OpPXEUpdateState` `0xEF`. Eight opcodes, not four. Raised against
-`docs/provisioning/`, which owns that table.
+**Resolved divergence:** [`docs/provisioning/api.md`](../provisioning/api.md)
+§1 recorded the PXE QUIC opcodes as `0xFC`–`0xFF`, while
+`sdk/go/wire/quicwire/protocol.go` defines eight (`0xEC`–`0xEF` too). Since #704
+that table names the opcode per method, including the seven `0xCF` subs
+`0x30`–`0x36`.
 
 ## 10. Related
 

@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -72,6 +73,50 @@ func (s *InvitationGRPCService) SetService(svc platformservice.InvitationService
 // invitationNotImplemented returns the standard error for unimplemented operations.
 func (s *InvitationGRPCService) invitationNotImplemented(method string) error {
 	return status.Errorf(codes.Unimplemented, "invitation: %s not implemented", method)
+}
+
+// toGRPCError maps an invitation service error to a gRPC status, in the
+// classes the REST handler answers with: a missing invitation is NotFound
+// (404), a bad request InvalidArgument (400), an address already in the
+// tenant AlreadyExists (409), and an invitation in the wrong state
+// FailedPrecondition (REST 400 on accept, 409 on revoke). Anything else is
+// logged and answered Internal.
+func (s *InvitationGRPCService) toGRPCError(operation string, err error) error {
+	code := invitationErrorCode(err)
+	if code == codes.Internal {
+		s.logger.Error(err, "invitation grpc: operation failed", "operation", operation)
+	}
+	return status.Error(code, err.Error())
+}
+
+// invitationErrorCode classifies a typed invitation service error.
+func invitationErrorCode(err error) codes.Code {
+	var (
+		notFound      platformservice.ErrInvitationNotFound
+		invalid       platformservice.ErrInvalidInvitation
+		registered    platformservice.ErrEmailAlreadyRegistered
+		expired       platformservice.ErrInvitationExpired
+		accepted      platformservice.ErrInvitationAlreadyAccepted
+		revoked       platformservice.ErrInvitationRevoked
+		alreadyRevoke platformservice.ErrInvitationAlreadyRevoked
+		badStatus     platformservice.ErrInvalidInvitationStatus
+	)
+	switch {
+	case errors.As(err, &notFound):
+		return codes.NotFound
+	case errors.As(err, &invalid):
+		return codes.InvalidArgument
+	case errors.As(err, &registered):
+		return codes.AlreadyExists
+	case errors.As(err, &expired),
+		errors.As(err, &accepted),
+		errors.As(err, &revoked),
+		errors.As(err, &alreadyRevoke),
+		errors.As(err, &badStatus):
+		return codes.FailedPrecondition
+	default:
+		return codes.Internal
+	}
 }
 
 // invitationToProto converts the persistence entity into the proto wire
@@ -137,7 +182,7 @@ func (s *InvitationGRPCService) CreateInvitation(
 	}
 	inv, err := s.svc.Create(ctx, createReq)
 	if err != nil {
-		return nil, err
+		return nil, s.toGRPCError("CreateInvitation", err)
 	}
 	return &platformv1.CreateInvitationResponse{
 		Invitation: invitationToProto(inv),
@@ -158,7 +203,7 @@ func (s *InvitationGRPCService) GetInvitation(
 	}
 	inv, err := s.svc.GetByID(ctx, req.InvitationId)
 	if err != nil {
-		return nil, err
+		return nil, s.toGRPCError("GetInvitation", err)
 	}
 	return &platformv1.GetInvitationResponse{
 		Invitation: invitationToProto(inv),
@@ -179,7 +224,7 @@ func (s *InvitationGRPCService) GetInvitationByToken(
 	}
 	inv, err := s.svc.GetByToken(ctx, req.Token)
 	if err != nil {
-		return nil, err
+		return nil, s.toGRPCError("GetInvitationByToken", err)
 	}
 	return &platformv1.GetInvitationResponse{
 		Invitation: invitationToProto(inv),
@@ -208,7 +253,7 @@ func (s *InvitationGRPCService) ListInvitations(
 		invs, err = s.svc.ListByTenant(ctx, req.TenantId)
 	}
 	if err != nil {
-		return nil, err
+		return nil, s.toGRPCError("ListInvitations", err)
 	}
 	out := make([]*platformv1.Invitation, 0, len(invs))
 	for _, inv := range invs {
@@ -243,7 +288,7 @@ func (s *InvitationGRPCService) RevokeInvitation(
 		return nil, status.Error(codes.InvalidArgument, "invitation: request is required")
 	}
 	if err := s.svc.Revoke(ctx, req.InvitationId, req.RevokerId); err != nil {
-		return nil, err
+		return nil, s.toGRPCError("RevokeInvitation", err)
 	}
 	return &platformv1.RevokeInvitationResponse{
 		Status: &platformv1.Status{
@@ -266,7 +311,7 @@ func (s *InvitationGRPCService) AcceptInvitation(
 		return nil, status.Error(codes.InvalidArgument, "invitation: request is required")
 	}
 	if err := s.svc.Accept(ctx, req.Token, req.UserId); err != nil {
-		return nil, err
+		return nil, s.toGRPCError("AcceptInvitation", err)
 	}
 	inv, err := s.svc.GetByToken(ctx, req.Token)
 	if err != nil {
@@ -302,7 +347,7 @@ func (s *InvitationGRPCService) DeleteInvitation(
 		return nil, status.Error(codes.InvalidArgument, "invitation: request is required")
 	}
 	if err := s.svc.Delete(ctx, req.InvitationId); err != nil {
-		return nil, err
+		return nil, s.toGRPCError("DeleteInvitation", err)
 	}
 	return &platformv1.DeleteInvitationResponse{
 		Status: &platformv1.Status{

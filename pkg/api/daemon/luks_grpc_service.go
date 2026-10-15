@@ -61,8 +61,6 @@ func luksErrorToGRPC(err error) error {
 		errors.Is(err, ErrLUKSCredentialIDRequired),
 		errors.Is(err, ErrLUKSSlotRequired):
 		return status.Error(codes.InvalidArgument, err.Error())
-	case errors.Is(err, ErrLUKSTestUnlockUnverified):
-		return status.Error(codes.Unimplemented, err.Error())
 	}
 	return status.Error(codes.Internal, err.Error())
 }

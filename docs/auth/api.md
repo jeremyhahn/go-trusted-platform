@@ -483,10 +483,10 @@ catalog entry is refused, not allowed.
 | Catalog | Coverage | Default for an unlisted entry |
 |---|---|---|
 | gRPC `pkg/api/grpc/method_permissions.go` | Every registered RPC; a contract test keeps it that way | Refused with `PermissionDenied` (`ErrMethodNotClassified`) before the token is read, unless the method is on the documented pre-auth list |
-| MCP `pkg/api/mcp/authz.go` | 446 of 469 registered tools (435 scoped, 11 open) | `AuthorizeTool` refuses it with `AuthErrorToolNotClassified` |
+| MCP `pkg/api/mcp/authz.go` | All 477 registered tools (465 scoped, 12 open); a contract test keeps it that way | `AuthorizeTool` refuses it with `AuthErrorToolNotClassified` |
 | QUIC `pkg/api/quic/opcode_permissions.go` | every routable opcode and sub-opcode | Denied (`StatusPermissionDenied`, #767) |
 
-Detail, the pre-auth list and the unclassified MCP tools are in
+Detail, the pre-auth list and the open MCP tools are in
 [`docs/daemon/api.md`](../daemon/api.md) §5. They are not restated here.
 
 Eleven MCP tools are explicitly public (empty required permission):
@@ -501,8 +501,10 @@ delivery service checks the nonce, EAB HMAC and EK binding itself, and a poll
 needs the random session ID ([`docs/provisioning/api.md`](../provisioning/api.md) §6).
 On QUIC, `OpHealth`, `OpLiveness`, `OpReadiness` and `OpIAMAuthenticate`
 are the pre-auth list of the operation catalog
-(`pkg/api/quic/opcode_permissions.go`). Every other QUIC operation is
-classified there or refused (#767).
+(`pkg/api/quic/opcode_permissions.go`), and `preAuthSubOpcodes` opens the
+boot and pre-enrollment provisioning sub-opcodes and the invitee pair under
+`OpIAMCategory`, `InvitationSubGetByToken` and `InvitationSubAccept` (#704).
+Every other QUIC operation is classified there or refused (#767).
 
 ---
 

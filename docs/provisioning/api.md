@@ -27,7 +27,10 @@ Three gRPC services are in scope:
 
 QUIC uses a **provisioning category opcode `0xCF`**
 (`sdk/go/wire/quicwire/provisioning_opcodes.go`, which notes it follows "the same
-pattern as OpSwitchCategory (0xCC)"), plus PXE extended opcodes `0xFC`–`0xFF`.
+pattern as OpSwitchCategory (0xCC)"), plus eight direct PXE opcodes, `0xEC`–`0xEF`
+and `0xFC`–`0xFF` (`sdk/go/wire/quicwire/protocol.go`). The seven `PXEService`
+methods without a direct opcode ride `0xCF` subs `0x30`–`0x36`
+(`sdk/go/wire/quicwire/pxe_opcodes.go`).
 
 ---
 
@@ -37,21 +40,21 @@ REST base path `/api/v1/pxe` (`pkg/webservice/v1/rest/pxe/router.go`).
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Register device | `POST /api/v1/pxe/devices` | `RegisterDevice` | `0xFC`–`0xFF` | `pxe_register_device` | ✅ |
-| List devices | `GET /api/v1/pxe/devices` | `ListDevices` | as above | `pxe_list_devices` | ✅ |
-| Get device | `GET /api/v1/pxe/devices/{id}` | `GetDevice` | as above | `pxe_get_device` | ✅ |
-| Get device by MAC | `GET /api/v1/pxe/devices/mac/{mac}` | `GetDeviceByMAC` | as above | `pxe_get_device_by_mac` | ✅ |
-| Remove device | `DELETE /api/v1/pxe/devices/{id}` | `RemoveDevice` | as above | `pxe_remove_device` | ✅ |
-| Update state | `PUT /api/v1/pxe/devices/{id}/state` | `UpdateState` | as above | `pxe_update_state` | ✅ |
-| Set enrolled | `POST /api/v1/pxe/devices/{id}/enrolled` | `SetDeviceEnrolled` | as above | `pxe_set_device_enrolled` | ✅ |
-| **Authorize** | `POST /api/v1/pxe/devices/{id}/authorize` | `Authorize` | as above | `pxe_authorize_device` | ✅ |
-| **Quarantine** | `POST /api/v1/pxe/devices/{id}/quarantine` | `Quarantine` | as above | `pxe_quarantine_device` | ✅ |
-| Retry | `POST /api/v1/pxe/devices/{id}/retry` | `Retry` | as above | `pxe_retry_device` | ✅ |
-| Device events | `GET /api/v1/pxe/devices/{id}/events` | `GetEvents` | as above | `pxe_get_device_events` | ✅ |
-| Service status | `GET /api/v1/pxe/status` | `GetStatus` | as above | `pxe_service_status` | ✅ |
-| Start service | `POST /api/v1/pxe/start` | `StartService` | as above | `pxe_start_service` | ✅ |
-| Stop service | `POST /api/v1/pxe/stop` | `StopService` | as above | `pxe_stop_service` | ✅ |
-| Install-complete webhook | `POST /api/v1/pxe/webhook/complete` | `WebhookComplete` | as above | `pxe_webhook_complete` | ✅ |
+| Register device | `POST /api/v1/pxe/devices` | `RegisterDevice` | `0xEE` | `pxe_register_device` | ✅ |
+| List devices | `GET /api/v1/pxe/devices` | `ListDevices` | `0xEC` | `pxe_list_devices` | ✅ |
+| Get device | `GET /api/v1/pxe/devices/{id}` | `GetDevice` | `0xED` | `pxe_get_device` | ✅ |
+| Get device by MAC | `GET /api/v1/pxe/devices/mac/{mac}` | `GetDeviceByMAC` | `0xCF` / `0x30` | `pxe_get_device_by_mac` | ✅ |
+| Remove device | `DELETE /api/v1/pxe/devices/{id}` | `RemoveDevice` | `0xFF` | `pxe_remove_device` | ✅ |
+| Update state | `PUT /api/v1/pxe/devices/{id}/state` | `UpdateState` | `0xEF` | `pxe_update_state` | ✅ |
+| Set enrolled | `POST /api/v1/pxe/devices/{id}/enrolled` | `SetDeviceEnrolled` | `0xCF` / `0x31` | `pxe_set_device_enrolled` | ✅ |
+| **Authorize** | `POST /api/v1/pxe/devices/{id}/authorize` | `Authorize` | `0xFC` | `pxe_authorize_device` | ✅ |
+| **Quarantine** | `POST /api/v1/pxe/devices/{id}/quarantine` | `Quarantine` | `0xFD` | `pxe_quarantine_device` | ✅ |
+| Retry | `POST /api/v1/pxe/devices/{id}/retry` | `Retry` | `0xFE` | `pxe_retry_device` | ✅ |
+| Device events | `GET /api/v1/pxe/devices/{id}/events` | `GetEvents` | `0xCF` / `0x32` | `pxe_get_device_events` | ✅ |
+| Service status | `GET /api/v1/pxe/status` | `GetStatus` | `0xCF` / `0x33` | `pxe_service_status` | ✅ |
+| Start service | `POST /api/v1/pxe/start` | `StartService` | `0xCF` / `0x34` | `pxe_start_service` | ✅ |
+| Stop service | `POST /api/v1/pxe/stop` | `StopService` | `0xCF` / `0x35` | `pxe_stop_service` | ✅ |
+| Install-complete webhook | `POST /api/v1/pxe/webhook/complete` | `WebhookComplete` | `0xCF` / `0x36` | `pxe_webhook_complete` | ✅ |
 
 **This is the most complete capability set in the platform** — fifteen
 capabilities, all fifteen on five transports.
@@ -211,8 +214,8 @@ services is classified in the gRPC catalog (`pkg/api/grpc/method_permissions.go`
 
 | Scope | QUIC operations |
 |---|---|
-| `pxe:read` | `OpPXEListDevices`, `OpPXEGetDevice` |
-| `pxe:write` | `OpPXERegisterDevice`, `OpPXEUpdateState`, `OpPXEAuthorize`, `OpPXEQuarantine`, `OpPXERetry` |
+| `pxe:read` | `OpPXEListDevices`, `OpPXEGetDevice`; `0xCF` subs `PXESubGetDeviceByMAC`, `PXESubGetEvents`, `PXESubGetStatus` |
+| `pxe:write` | `OpPXERegisterDevice`, `OpPXEUpdateState`, `OpPXEAuthorize`, `OpPXEQuarantine`, `OpPXERetry`; `0xCF` subs `PXESubSetDeviceEnrolled`, `PXESubStartService`, `PXESubStopService`, `PXESubWebhookComplete` |
 | `pxe:delete` | `OpPXERemoveDevice` |
 | `provisioning:read` | `OpProvisioningCategory` (`0xCF`) subs `ListSessions`, `GetSession` |
 | `provisioning:write` | sub `FulfillSession` |
@@ -236,7 +239,8 @@ device-facing routes take no scope (§3). The gateway's device reports under
 `/api/v1/provisioning/devices/{mac}` require `provisioning:write` the same way
 (§4).
 
-On MCP, the 23 BMC tools are mapped ([`docs/bmc/api.md`](../bmc/api.md) §8).
+On MCP, the fifteen `pxe_*` tools take the scopes of their gRPC twin
+(`pkg/api/mcp/pxe_tools.go`), and the 23 BMC tools are mapped ([`docs/bmc/api.md`](../bmc/api.md) §8).
 The `provision_*` tools take the scopes of their gRPC twin (#304):
 `provision_list_sessions` and `provision_get_session` need `provisioning:read`,
 `provision_fulfill_session` needs `provisioning:write`, and

@@ -30,6 +30,9 @@ var codeForClass = map[codes.Code]int{
 	codes.NotFound:           NotFound,
 	codes.AlreadyExists:      AlreadyExists,
 	codes.FailedPrecondition: FailedPrecondition,
+	// A server that does not serve a service answers its tools as JSON-RPC
+	// answers a method it does not know.
+	codes.Unimplemented: MethodNotFound,
 }
 
 // classForCode is the inverse a client uses to decode a JSON-RPC error

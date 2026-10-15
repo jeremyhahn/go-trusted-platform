@@ -44,10 +44,11 @@ MCP runs `initialize`. REST probes liveness, not the aggregate `/health`, becaus
 moves on to the next protocol instead of handing back a dead client.
 
 **The embedded transport's reach is bounded by `ServiceRegistry`**
-(`sdk/go/transport/embedded/adapter.go:32`), which has **25 service fields**: Daemon, CA,
+(`sdk/go/transport/embedded/adapter.go:32`), which has **30 service fields**: Daemon, CA,
 TPM, VTPM, Device, IAM, KMS, SDN, Compute, IDevID, Attestation, Tenant, PXE,
 DNS, Gateway, Proxy, Overlay, Registry, Cluster, EAB, Invitation,
-ConfigDelivery, Ceremony, PIV and FIDO2, plus the `CallerContext` hook that
+ConfigDelivery, Ceremony, PIV, FIDO2, BMC, Switch, Cache, Scheduler and
+Messaging, plus the `CallerContext` hook that
 attaches the caller's identity. platformctl's embedded hosts (the desktop
 standalone daemon and a CLI context whose transport is embedded) both start
 through `daemon.StartEmbeddedHost`, which fills each field from the daemon
@@ -56,8 +57,9 @@ daemon did not build stays nil and registers no methods. Both pass
 `appbackends.WireEmbeddedHost` as `WireBackends`, which wires the same ceremony
 backend `platformd serve` does (`appbackends.WireSDKBackends`), so the ceremony
 answers on the embedded transport too, and without an SDK client the embedded
-host refuses to start (`ErrEmbeddedHostFailed{Op: "backends"}`). Anything not in that list has **no embedded route** —
-`SwitchService` is the notable absentee ([`docs/sdn/api.md`](../sdn/api.md) §7).
+host refuses to start (`ErrEmbeddedHostFailed{Op: "backends"}`). Anything not in that list has **no embedded route**.
+`SwitchService` is in it (`ServiceRegistry.Switch`, #704 —
+[`docs/switch/api.md`](../switch/api.md) §2).
 
 **An enabled transport that cannot be constructed or started stops the
 daemon (#444).** `New` returns `ErrTransportConstructionFailed` (transport name
@@ -161,7 +163,7 @@ MCP: eleven tools.
 | Start service | `POST /api/v1/platform/services/{service}/start` | `StartService` | `OpDaemonStartService` (`0x8D`) | `platform_daemon_start_service` | ✅ |
 | Stop service | `POST /api/v1/platform/services/{service}/stop` | `StopService` | `OpDaemonStopService` (`0x8E`) | `platform_daemon_stop_service` | ✅ |
 | Restart service | `POST /api/v1/platform/services/{service}/restart` | `RestartService` | `OpDaemonRestartService` (`0x8F`) | `platform_daemon_restart_service` | ✅ |
-| List protocols | `GET /api/v1/platform/protocols` | `MISSING — docs/13 G7` | `OpDaemonListProtocols` (`0x98`) | `platform_daemon_list_protocols`, refused (unclassified) | — |
+| List protocols | `GET /api/v1/platform/protocols` | `MISSING — docs/13 G7` | `OpDaemonListProtocols` (`0x98`) | `platform_daemon_list_protocols` | — |
 | Metrics | `GET /api/v1/platform/metrics` | `StreamMetrics` (stream) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Query logs | `GET /api/v1/platform/logs` | `StreamLogs` (stream) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | List log services | `GET /api/v1/platform/logs/services` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
@@ -177,11 +179,11 @@ gRPC, MCP or embedded.
 
 **Each operation needs the gRPC scope on every transport (#304, #317).** The
 reads (status, version, list and get service) need `platform:read`; start,
-stop and restart need `platform:write`. QUIC list protocols, which has no gRPC
-twin, needs `platform:read`. Before #317 the QUIC catalog filed these opcodes
-under a `daemon` resource no role grants. MCP refuses
-`platform_daemon_list_protocols` outright ([`docs/iam/api.md`](../iam/api.md)
-§8 has the full table; `TestDaemonProvisionScopeParity` pins it).
+stop and restart need `platform:write`. List protocols, which has no gRPC twin,
+needs `platform:read` on QUIC and MCP. Before #317 the QUIC catalog filed these
+opcodes under a `daemon` resource no role grants
+([`docs/iam/api.md`](../iam/api.md) §8 has the full table;
+`TestDaemonProvisionScopeParity` pins it).
 
 ### Service start, stop and restart are refused (#317)
 
@@ -277,8 +279,8 @@ changing, validate before applying, roll back if wrong.
 
 The opcode is a **single byte** with a **two-level extension**: certain values
 are *category* opcodes whose sub-opcode is carried in the payload, and the daemon
-routes them to a dedicated handler (`pkg/api/daemon/quic_service.go`). Twenty-one
-distinct values, twenty-two names:
+routes them to a dedicated handler (`pkg/api/daemon/quic_service.go`). Twenty-two
+distinct values, twenty-three names:
 
 | Opcode | Category | Notes |
 |---|---|---|
@@ -287,12 +289,13 @@ distinct values, twenty-two names:
 | `0x2F` | `OpProxyCategory` | **An alias of `OpGatewayCategory`**, not a separate value |
 | `0x3F` | `OpIPAMCategory` | IPAM |
 | `0x50` | `OpNTPCategory` | Time synchronisation |
-| `0x51` | `OpIAMCategory` | IAM tenant records; sub-opcodes `IAMSub*` `0x01`–`0x05`. Not the platform tenancy opcodes `0xDB`–`0xEB` |
+| `0x51` | `OpIAMCategory` | IAM tenant records; sub-opcodes `IAMSub*` `0x01`–`0x05`. Not the platform tenancy opcodes `0xDB`–`0xEB`. `InvitationService` on `InvitationSub*` `0x10`–`0x16` ([docs/tenant/api.md](../tenant/api.md) §10) |
 | `0x52` | `OpVPNCategory` | VPN control plane; sub-opcodes `VPNSub*` `0x01`–`0x08`, scopes `vpn:read`/`vpn:write`/`vpn:admin` ([docs/vpn/api.md](../vpn/api.md)) |
 | `0x53` | `OpCacheCategory` | Cache through the composed go-quicbaas SDK; sub-opcodes `CacheSub*` `0x01`–`0x04`, scopes `cache:read`/`cache:write`/`cache:delete` ([docs/sdk/api.md](../sdk/api.md) §3.5) |
 | `0x54` | `OpSchedulerCategory` | Scheduler through the composed go-quicbaas SDK; sub-opcodes `SchedulerSub*` `0x01`–`0x0B`, scopes `scheduler:read`/`scheduler:write`/`scheduler:delete` ([docs/sdk/api.md](../sdk/api.md) §3.5) |
 | `0x55` | `OpMessagingCategory` | Messaging through the composed go-quicbaas SDK; sub-opcodes `MessagingSub*` `0x01`–`0x08`, scopes `messaging:read`/`messaging:write`/`messaging:delete` ([docs/sdk/api.md](../sdk/api.md) §3.5) |
 | `0x69` | `OpVMExtendedCategory` | VM operational sub-opcodes (`0xCC`–`0xD0`) |
+| `0x90` | `OpClusterCategory` | Cluster; sub-opcodes `ClusterSub*` `0x01`–`0x05`, one per `ClusterService` RPC, scopes `cluster:read`/`cluster:write` ([`docs/cluster/api.md`](../cluster/api.md)). Reclaimed from the never-implemented `OpJWTCreate` |
 | `0x99` | `OpTPM2Category` | Physical TPM |
 | `0x9A` | `OpCeremonyCategory` | Bootstrap ceremony; per-sub-opcode scopes in [`docs/cli/ceremony.md`](../cli/ceremony.md) |
 | `0x9B` | `OpPIVCategory` | PIV smartcards; scopes in [`docs/cli/piv.md`](../cli/piv.md) |
@@ -370,7 +373,7 @@ All three catalogs **deny an unlisted entry** — MCP since #300, QUIC since
 | Catalog | Coverage | Default for an unlisted entry |
 |---|---|---|
 | gRPC (`pkg/api/grpc/method_permissions.go`) | **every registered RPC**, unary and streaming, across every `platform.v1` service, the four quicbaas KMS services and `grpc.health.v1.Health`; a contract test keeps it that way | **denied**: the OIDC interceptor answers `PermissionDenied` (`ErrMethodNotClassified`) before it reads a token, unless the method is on the documented pre-auth list |
-| MCP (`pkg/api/mcp/authz.go`) | **446 of 469 registered tools** (11 of them explicitly open with `""`) | **denied**: `AuthorizeTool` refuses a tool with no map entry (`AuthErrorToolNotClassified`, reported on the wire as `-32603`); the 23 unmapped tools are enumerated in `knownUnclassified` (`authz_completeness_test.go`), a list that may only shrink (#304) |
+| MCP (`pkg/api/mcp/authz.go`) | **all 477 registered tools** (12 of them explicitly open with `""`) | **denied**: `AuthorizeTool` refuses a tool with no map entry (`AuthErrorToolNotClassified`, reported on the wire as `-32603`); `TestEveryRegisteredToolIsClassified` (`authz_completeness_test.go`) fails if a registered tool has none (#304) |
 | QUIC (`pkg/api/quic/opcode_permissions.go`) | **every routable opcode and sub-opcode** — pinned by `pkg/api/daemon/quic_authz_contract_test.go` | **denied**: `StatusPermissionDenied`, payload `QUIC operation not classified for authorization: …` (`ErrOperationNotClassified`) |
 
 Per-service scopes are listed in each feature folder. A new RPC must carry the

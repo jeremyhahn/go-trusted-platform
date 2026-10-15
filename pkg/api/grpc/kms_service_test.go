@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -2426,6 +2428,47 @@ func TestUnixKeyMetadataToProto_Success(t *testing.T) {
 }
 
 // Test mapError
+
+// TestKMSGRPCService_mapError_Classes covers each class an upstream typed
+// error carries into the platform KMS service: mapError answers with that
+// class instead of Internal.
+func TestKMSGRPCService_mapError_Classes(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want codes.Code
+	}{
+		{"not found", sdkerrors.NewNotFound("kms.GetKeyMetadata", "key not found"), codes.NotFound},
+		{"database not found", quicbaas.NewDatabaseError(quicbaas.ErrNotFound, "kms.GetKey", "key not found"), codes.NotFound},
+		{"invalid argument", sdkerrors.NewInvalidInput("kms.GetKeyMetadata", "key ID is required"), codes.InvalidArgument},
+		{"already exists", sdkerrors.NewAlreadyExists("kms.CreateKey", "key exists"), codes.AlreadyExists},
+		{"failed precondition", sdkerrors.NewPreconditionFailed("kms.Decrypt", "key disabled"), codes.FailedPrecondition},
+		{"permission denied", sdkerrors.NewForbidden("kms.ExportKey", "not exportable"), codes.PermissionDenied},
+		{"unimplemented", sdkerrors.NewUnimplemented("kms.ImportKey", "not supported"), codes.Unimplemented},
+		{"unavailable", sdkerrors.NewUnavailable("kms.GetKey", "sealed"), codes.Unavailable},
+		{"typed status error", status.Error(codes.InvalidArgument, "bad cursor"), codes.InvalidArgument},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service, _ := newTestKMSService()
+			if got := status.Code(service.mapError("test", tt.err)); got != tt.want {
+				t.Errorf("mapError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestKMSGRPCService_GetKey_NotFound drives the class through an RPC: a
+// missing key is NotFound to the caller, not Internal.
+func TestKMSGRPCService_GetKey_NotFound(t *testing.T) {
+	service, mock := newTestKMSService()
+	mock.getKeyErr = sdkerrors.NewNotFound("kms.GetKeyMetadata", "key not found")
+
+	_, err := service.GetKey(context.Background(), &platformv1.GetKeyRequest{KeyId: "missing"})
+	if got := status.Code(err); got != codes.NotFound {
+		t.Errorf("GetKey(missing) = %v, want NotFound", got)
+	}
+}
 
 func TestKMSGRPCService_mapError_NilError(t *testing.T) {
 	service, _ := newTestKMSService()

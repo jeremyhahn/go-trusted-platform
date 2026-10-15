@@ -136,10 +136,10 @@ func TestQUICSwitchWireCompatDisablePort(t *testing.T) {
 		&platformv1.DisableSwitchPortResponse{})
 }
 
-// TestQUICSwitchPortStatusToPb guards the native->pb conversion used by the
-// daemon handlers, in particular the uint16->uint32 widening of the access and
-// trunk VLAN fields.
-func TestQUICSwitchPortStatusToPb(t *testing.T) {
+// TestSwitchPortStatusToProto guards the native->pb conversion the
+// SwitchService servicer (and so every transport) uses, in particular the
+// uint16->uint32 widening of the access and trunk VLAN fields.
+func TestSwitchPortStatusToProto(t *testing.T) {
 	native := &switchwire.PortStatus{
 		Port:        "Eth1/3",
 		Mode:        switchwire.PortMode("trunk"),
@@ -151,18 +151,10 @@ func TestQUICSwitchPortStatusToPb(t *testing.T) {
 		NativeVLAN:  10,
 	}
 
-	pb := portStatusToPb(native)
-	if !proto.Equal(pb, compatTestSwitchPortStatus()) {
-		t.Fatalf("portStatusToPb mismatch:\n got: %+v\n want: %+v", pb, compatTestSwitchPortStatus())
-	}
 	if grpcPB := portStatusToProto(native); !proto.Equal(grpcPB, compatTestSwitchPortStatus()) {
 		t.Fatalf("portStatusToProto mismatch:\n got: %+v\n want: %+v", grpcPB, compatTestSwitchPortStatus())
 	}
 	if portStatusToProto(nil) != nil {
 		t.Fatal("portStatusToProto(nil) = non-nil, want nil")
-	}
-
-	if portStatusToPb(nil) != nil {
-		t.Fatal("portStatusToPb(nil) = non-nil, want nil")
 	}
 }

@@ -18,6 +18,7 @@ import (
 	stdtls "crypto/tls"
 	"errors"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,15 +37,32 @@ import (
 
 // fakeBMCEnroller records calls and returns configured responses.
 type fakeBMCEnroller struct {
+	// mu guards enrollCalls; see fakeBMCService.mu.
+	mu sync.Mutex
+	enrollCalls
+
 	enrollResult *app.BMCEnrollResult
 	enrollErr    error
 	tlsProvider  bmc.TLSProvider
+}
+
+// enrollCalls is what fakeBMCEnroller records of the enrollment it serves.
+type enrollCalls struct {
 	lastDeviceID uint64
 	lastBMCCfg   *bmc.Config
 	lastOpts     *app.BMCEnrollOptions
 }
 
+// calls returns a copy of the recorded enrollment, taken under the lock.
+func (f *fakeBMCEnroller) calls() enrollCalls {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.enrollCalls
+}
+
 func (f *fakeBMCEnroller) EnrollBMC(ctx context.Context, deviceID uint64, bmcCfg *bmc.Config, opts *app.BMCEnrollOptions) (*app.BMCEnrollResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.lastDeviceID = deviceID
 	f.lastBMCCfg = bmcCfg
 	f.lastOpts = opts
@@ -101,9 +119,9 @@ func fakeDeviceProfileSvcForEnroll(id uint64, hasBMC bool) *mockProfileService {
 // BMCGRPCService.EnrollBMC tests
 // =============================================================================
 
-func TestBMCGRPCEnrollBMC_NoEnrollerReturnsFailedPrecondition(t *testing.T) {
+func TestBMCGRPCEnrollBMC_NoEnrollerReturnsUnavailable(t *testing.T) {
 	svc := NewBMCGRPCService(&fakeBMCService{}, nil, slog.Default())
-	// enroller is not wired — should return FailedPrecondition.
+	// enroller is not wired — the service is not configured on this node.
 	_, err := svc.EnrollBMC(context.Background(), &platformv1.BMCEnrollRequest{ProfileId: 1})
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -112,8 +130,8 @@ func TestBMCGRPCEnrollBMC_NoEnrollerReturnsFailedPrecondition(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected gRPC status error, got %T: %v", err, err)
 	}
-	if st.Code() != codes.FailedPrecondition {
-		t.Fatalf("expected FailedPrecondition, got %s", st.Code())
+	if st.Code() != codes.Unavailable {
+		t.Fatalf("expected Unavailable, got %s", st.Code())
 	}
 }
 

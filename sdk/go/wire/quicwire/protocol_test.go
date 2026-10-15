@@ -824,8 +824,10 @@ func TestOpcodeToString(t *testing.T) {
 		{OpCertGetCRL, "CertGetCRL"},
 		{OpCertGetOCSP, "CertGetOCSP"},
 
+		// Cluster category opcode
+		{OpClusterCategory, "ClusterCategory"},
+
 		// JWT/Auth Operations
-		{OpJWTCreate, "JWTCreate"},
 		{OpJWTVerify, "JWTVerify"},
 		{OpJWTRefresh, "JWTRefresh"},
 		{OpJWTRevoke, "JWTRevoke"},

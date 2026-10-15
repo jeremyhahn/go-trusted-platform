@@ -197,7 +197,7 @@ var methodRequestEncoders = map[string]methodRequestEncoder{}
 // Category opcodes (overlay, gateway, IPAM, switch, tenant barrier, etc.)
 // multiplex multiple operations under one wire opcode by stuffing the
 // sub-opcode into payload[0] and the marshalled request into payload[1:].
-// The server-side dispatchers (e.g. handleSwitchCategory,
+// The server-side dispatchers (e.g. handleAppServiceCategory,
 // handleTenantBarrierCategory) require this exact framing or they reject
 // the request with ErrQUICMissingField{Field: "sub_opcode"}.
 func (c *quicClientConn) Invoke(ctx context.Context, method string, args interface{}, reply interface{}, opts ...grpc.CallOption) error {
@@ -537,7 +537,7 @@ var categorySubOpcodeMap = map[string]byte{
 	"/platform.v1.FIDO2Service/Authenticate": quicwire.FIDO2SubAuthenticate,
 
 	// Switch Service — OpSwitchCategory (0xCC)
-	// Server dispatcher: pkg/api/daemon/quic_switch.go::handleSwitchCategory
+	// Server dispatcher: pkg/api/daemon/quic_switch.go::switchQUICHandlers
 	"/platform.v1.SwitchService/ListPorts":     quicwire.SwitchSubListPorts,
 	"/platform.v1.SwitchService/GetPortStatus": quicwire.SwitchSubGetPortStatus,
 	"/platform.v1.SwitchService/SetPortVLAN":   quicwire.SwitchSubSetPortVLAN,

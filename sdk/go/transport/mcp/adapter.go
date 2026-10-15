@@ -344,7 +344,6 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.PlatformIAMService/ListTenants":  "iam_list_tenants",
 
 	// IAM Token / Auth Operations
-	"/platform.v1.PlatformIAMService/Authenticate":    "iam_authenticate",
 	"/platform.v1.PlatformIAMService/CheckPermission": "iam_check_permission",
 	"/platform.v1.PlatformIAMService/CreateToken":     "iam_create_token",
 	"/platform.v1.PlatformIAMService/RevokeToken":     "iam_revoke_token",

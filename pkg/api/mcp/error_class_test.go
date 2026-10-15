@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
@@ -91,6 +92,7 @@ func TestToolErrorCode_Classified(t *testing.T) {
 		{"profile service not configured", ErrDeviceProfileNotConfigured, mcpwire.ServiceUnavailable},
 		{"profile identity required", ErrDeviceProfileIdentityRequired, mcpwire.InvalidParams},
 		{"bmc not configured", ErrBMCNotConfigured, mcpwire.ServiceUnavailable},
+		{"pxe not configured", ErrPXENotConfigured, mcpwire.ServiceUnavailable},
 		{"wrapped eab argument sentinel", fmt.Errorf("eab_create: %w", ErrEABKeyIDRequired), mcpwire.InvalidParams},
 		{"hash algorithm out of range", ErrDeviceHashAlgoInvalid, mcpwire.InvalidParams},
 		{"undecodable base64 argument", ErrInvalidArgument{Msg: "invalid nonce encoding", Cause: errors.New("illegal base64")}, mcpwire.InvalidParams},
@@ -99,6 +101,9 @@ func TestToolErrorCode_Classified(t *testing.T) {
 		{"provision profile id", ErrProvisionInvalidProfileID{Value: "x", Cause: errors.New("not a number")}, mcpwire.InvalidParams},
 		{"provision digest", ErrProvisionInvalidDigest{Cause: errors.New("illegal base64")}, mcpwire.InvalidParams},
 		{"daemon service name", ErrDaemonServiceNameRequired{}, mcpwire.InvalidParams},
+		{"wrapped sdk not found", fmt.Errorf("kms_get_key: %w", sdkerrors.NewNotFound("kms", "no key")), mcpwire.NotFound},
+		{"sdk invalid input", sdkerrors.NewInvalidInput("kms", "bad ciphertext"), mcpwire.InvalidParams},
+		{"sdk precondition", sdkerrors.NewPreconditionFailed("kms", "key disabled"), mcpwire.FailedPrecondition},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -14,15 +14,12 @@
 package daemon
 
 import (
-	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
-	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/embedded"
 )
 
 // connectBMCEmbedded wires server as an embedded host's BMC service and
@@ -31,17 +28,9 @@ import (
 // in-process caller is the daemon's own process.
 func connectBMCEmbedded(t *testing.T, server platformv1.BMCServiceServer, _ ...string) grpc.ClientConnInterface {
 	t.Helper()
-	host, err := NewEmbeddedHost(testConfig(filepath.Join(t.TempDir(), "platformd.sock")))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, host.Stop(context.Background())) })
-
 	bmcServer, ok := server.(*BMCGRPCService)
 	require.True(t, ok, "the daemon wires a *BMCGRPCService, got %T", server)
-	host.daemon.bmcGRPCService = bmcServer
-
-	adapter, err := embedded.New(host.daemon.embeddedServices())
-	require.NoError(t, err)
-	return adapter.Connection()
+	return connectEmbeddedHost(t, func(d *Daemon) { d.bmcGRPCService = bmcServer })
 }
 
 // TestSDKEmbedded_BMCMethods drives every BMCService method through the

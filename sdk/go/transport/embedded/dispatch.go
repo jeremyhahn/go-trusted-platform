@@ -51,6 +51,9 @@ func buildHandlerMap(reg *ServiceRegistry) map[string]handlerFunc {
 	registerPIVHandlers(m, reg)
 	registerFIDO2Handlers(m, reg)
 	registerBMCHandlers(m, reg)
+	registerNTPHandlers(m, reg)
+	registerLUKSHandlers(m, reg)
+	registerSwitchHandlers(m, reg)
 	registerCacheHandlers(m, reg)
 	registerSchedulerHandlers(m, reg)
 	registerMessagingHandlers(m, reg)
@@ -1455,6 +1458,84 @@ func registerBMCHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	}
 	m[platformv1.BMCService_SetUserPrivilege_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.SetUserPrivilege(ctx, req.(*platformv1.BMCSetUserPrivilegeRequest))
+	}
+}
+
+func registerNTPHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.NTP == nil {
+		return
+	}
+	svc := reg.NTP
+
+	m[platformv1.NTPService_GetStatus_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetStatus(ctx, req.(*platformv1.GetNTPStatusRequest))
+	}
+	m[platformv1.NTPService_ListSources_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListSources(ctx, req.(*platformv1.ListNTPSourcesRequest))
+	}
+	m[platformv1.NTPService_Step_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Step(ctx, req.(*platformv1.StepNTPClockRequest))
+	}
+}
+
+func registerLUKSHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.LUKS == nil {
+		return
+	}
+	svc := reg.LUKS
+
+	m[platformv1.LUKSService_Status_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Status(ctx, req.(*platformv1.LUKSStatusRequest))
+	}
+	m[platformv1.LUKSService_ListSlots_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListSlots(ctx, req.(*platformv1.LUKSListSlotsRequest))
+	}
+	m[platformv1.LUKSService_Info_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Info(ctx, req.(*platformv1.LUKSInfoRequest))
+	}
+	m[platformv1.LUKSService_EnrollPassphrase_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.EnrollPassphrase(ctx, req.(*platformv1.LUKSEnrollPassphraseRequest))
+	}
+	m[platformv1.LUKSService_EnrollFIDO2_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.EnrollFIDO2(ctx, req.(*platformv1.LUKSEnrollFIDO2Request))
+	}
+	m[platformv1.LUKSService_EnrollTPM_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.EnrollTPM(ctx, req.(*platformv1.LUKSEnrollTPMRequest))
+	}
+	m[platformv1.LUKSService_EnrollRecovery_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.EnrollRecovery(ctx, req.(*platformv1.LUKSEnrollRecoveryRequest))
+	}
+	m[platformv1.LUKSService_RemoveKey_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.RemoveKey(ctx, req.(*platformv1.LUKSRemoveKeyRequest))
+	}
+	m[platformv1.LUKSService_TestUnlock_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.TestUnlock(ctx, req.(*platformv1.LUKSTestUnlockRequest))
+	}
+	m[platformv1.LUKSService_ChangePassphrase_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ChangePassphrase(ctx, req.(*platformv1.LUKSChangePassphraseRequest))
+	}
+}
+
+func registerSwitchHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.Switch == nil {
+		return
+	}
+	svc := reg.Switch
+
+	m[platformv1.SwitchService_ListPorts_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListPorts(ctx, req.(*platformv1.ListSwitchPortsRequest))
+	}
+	m[platformv1.SwitchService_GetPortStatus_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetPortStatus(ctx, req.(*platformv1.GetSwitchPortStatusRequest))
+	}
+	m[platformv1.SwitchService_SetPortVLAN_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.SetPortVLAN(ctx, req.(*platformv1.SetSwitchPortVLANRequest))
+	}
+	m[platformv1.SwitchService_EnablePort_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.EnablePort(ctx, req.(*platformv1.EnableSwitchPortRequest))
+	}
+	m[platformv1.SwitchService_DisablePort_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DisablePort(ctx, req.(*platformv1.DisableSwitchPortRequest))
 	}
 }
 

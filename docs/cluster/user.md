@@ -9,14 +9,13 @@
 ## Start here: what you can and cannot do today
 
 **The platform's cluster management API is not usable yet.** Verified against
-the code on 2026-08-18:
+the code on 2026-10-15:
 
 - `platformctl cluster …` **is not a command.** The command tree exists in the
   source and is registered on no root command, so the binary does not have it.
 - Every cluster REST route returns **503**.
-- Every cluster gRPC call returns **unimplemented**.
-- Every cluster MCP tool returns **"cluster: service provider not configured"**.
-- There is no cluster operation on QUIC at all.
+- Every cluster gRPC, QUIC and MCP call returns **`Unavailable`** with
+  "cluster service not configured".
 
 None of that is a bug in your deployment. The lifecycle verbs, the status
 projection and the transports are all written; the piece that connects them to
@@ -252,8 +251,8 @@ that loses quorum is noticed within about five seconds even if nobody asks.
 
 **Cluster membership needs `cluster:write`.** On gRPC, `Bootstrap`, `Join` and
 `Leave` need `cluster:write`, and status and the node list need
-`cluster:read`. The `platform_cluster_*` MCP tools require the same scopes
-([api.md](api.md) §7).
+`cluster:read`. The QUIC `0x90` sub-opcodes and the `platform_cluster_*` MCP
+tools require the same scopes ([api.md](api.md) §7).
 
 ---
 
@@ -266,13 +265,10 @@ file.
 **Every cluster REST call returns 503 with "cluster service not configured".**
 Expected. No coordinator is wired into the daemon.
 
-**Cluster gRPC calls return `Unavailable` with "cluster service not
-configured".**
-Expected, same cause: the registered service has no cluster servicer behind it.
-
-**MCP `platform_cluster_status` returns "cluster: service provider not
-configured".**
-Expected, same cause.
+**Cluster gRPC, QUIC or MCP calls return `Unavailable` with "cluster service
+not configured".**
+Expected, same cause: the registered service has no cluster servicer behind it,
+and QUIC and MCP call that same service.
 
 **Startup fails with "cluster service not enabled (build with -tags cluster)".**
 The binary was built without the `cluster` tag. It is in the default tag set, so

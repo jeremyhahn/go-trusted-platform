@@ -297,9 +297,6 @@ for DANE is added with `dns_record_create` and a `tlsa` record.
 `name`. When none matches, it returns `NotFound`. With no `type` or no `name`,
 it returns `InvalidArgument`.
 
-`dns_reverse_lookup` is advertised but has no backend, so every caller is
-refused.
-
 With no DNS service wired into the daemon, every tool in this section returns
 `Unavailable`.
 

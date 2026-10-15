@@ -28,8 +28,7 @@ import (
 // each transport. scope is the permission every transport must require;
 // "" means the operation is open (pre-auth) everywhere it is served. An
 // empty grpcMethod or quicOpcode means that transport does not serve the
-// operation. mcpRefused marks a tool MCP deliberately leaves unclassified
-// so the authorizer refuses it (#304).
+// operation.
 type scopeParityRow struct {
 	name       string
 	scope      string
@@ -37,7 +36,6 @@ type scopeParityRow struct {
 	quicOpcode byte
 	quicSub    []byte
 	mcpTool    string
-	mcpRefused bool
 }
 
 var daemonProvisionParityRows = []scopeParityRow{
@@ -63,7 +61,7 @@ var daemonProvisionParityRows = []scopeParityRow{
 		grpcMethod: "/platform.v1.PlatformDaemon/RestartService",
 		quicOpcode: quicwire.OpDaemonRestartService, mcpTool: "platform_daemon_restart_service"},
 	{name: "daemon list protocols", scope: "platform:read",
-		quicOpcode: quicwire.OpDaemonListProtocols, mcpTool: "platform_daemon_list_protocols", mcpRefused: true},
+		quicOpcode: quicwire.OpDaemonListProtocols, mcpTool: "platform_daemon_list_protocols"},
 	{name: "provisioning get nonce",
 		grpcMethod: "/platform.v1.ConfigDeliveryService/GetNonce",
 		quicOpcode: quicwire.OpProvisioningCategory, quicSub: []byte{quicwire.ProvisioningSubGetNonce},
@@ -124,10 +122,6 @@ func assertScopeParity(t *testing.T, rows []scopeParityRow) {
 			}
 
 			mcpScope, classified := catalog[row.mcpTool]
-			if row.mcpRefused {
-				assert.False(t, classified, "MCP %s must stay unclassified (refused)", row.mcpTool)
-				return
-			}
 			require.True(t, classified, "MCP %s is not classified", row.mcpTool)
 			assert.Equal(t, row.scope, mcpScope, "MCP %s", row.mcpTool)
 		})

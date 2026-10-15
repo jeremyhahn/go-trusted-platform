@@ -976,8 +976,11 @@ func TestProvision(t *testing.T) {
 		router := newTestRouter("POST", "/bmc/{profileID}/provision", h.Provision)
 		router.ServeHTTP(rec, req)
 
-		if rw.lastStatus != http.StatusInternalServerError {
-			t.Errorf("expected status 500, got %d", rw.lastStatus)
+		if rw.lastStatus != http.StatusServiceUnavailable {
+			t.Errorf("expected status 503, got %d", rw.lastStatus)
+		}
+		if _, ok := rw.lastErr.(ErrBaremetalServiceNotAvailable); !ok {
+			t.Errorf("err = %T, want ErrBaremetalServiceNotAvailable", rw.lastErr)
 		}
 	})
 
@@ -1109,8 +1112,11 @@ func TestProvisionStatus(t *testing.T) {
 		router := newTestRouter("GET", "/bmc/{profileID}/provision", h.ProvisionStatus)
 		router.ServeHTTP(rec, req)
 
-		if rw.lastStatus != http.StatusInternalServerError {
-			t.Errorf("expected status 500, got %d", rw.lastStatus)
+		if rw.lastStatus != http.StatusServiceUnavailable {
+			t.Errorf("expected status 503, got %d", rw.lastStatus)
+		}
+		if _, ok := rw.lastErr.(ErrBaremetalServiceNotAvailable); !ok {
+			t.Errorf("err = %T, want ErrBaremetalServiceNotAvailable", rw.lastErr)
 		}
 	})
 }

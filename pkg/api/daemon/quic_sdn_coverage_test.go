@@ -78,11 +78,11 @@ func TestHandleSDNOperation_UnknownOpcode(t *testing.T) {
 	// Since we can't mock the client easily, let's verify the routing behavior
 	// by ensuring the HandleRequest method routes SDN operations correctly
 	req := &quicwire.Request{
-		Opcode:  0x90, // Not a valid SDN opcode; reserved
+		Opcode:  quicwire.OpJWTVerify, // Not a valid SDN opcode; reserved
 		Payload: []byte{},
 	}
 	resp := handler.HandleRequest(ctx, req)
-	// 0x90 is unallocated (0x90-0x97 are reserved), so the authorization
+	// 0x91 is unallocated (0x91-0x97 are reserved), so the authorization
 	// guard refuses it as unclassified before dispatch.
 	assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
 }

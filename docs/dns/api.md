@@ -39,7 +39,7 @@ MCP: **two parallel tool families** — see §3.
 | Sign zone | `POST /api/v1/dns/zones/{zone}/sign` | `SignZone` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | DNSSEC status | `GET /api/v1/dns/zones/{zone}/dnssec` | `GetDNSSECStatus` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Resolve | `GET /api/v1/dns/resolve?fqdn={fqdn}&type={type}` | `Resolve` | `OpDNSResolve` (`0x29`) | `dns_resolve`, `dns_lookup` | ✅ |
-| Reverse lookup | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `dns_reverse_lookup` | — |
+| Reverse lookup | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 | Register | `POST /api/v1/dns/register` | `Register` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Get DNS config | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDNSGetConfig` (`0x2A`) | `MISSING — docs/13 G7` | — |
 | DNS metrics | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDNSGetMetrics` (`0x2C`) | `MISSING — docs/13 G7` | — |
@@ -102,7 +102,7 @@ Twenty DNS tool names exist for roughly ten capabilities, in two families:
 | `dns_get_record` | `dns_record_get` |
 | `dns_delete_record` | `dns_record_delete` |
 | — | `dns_record_update` |
-| `dns_resolve` | `dns_lookup`, `dns_reverse_lookup` |
+| `dns_resolve` | `dns_lookup` |
 
 **Both families are in the authorization map, under `dns:*` scopes.** The older
 family's permissions are listed in `pkg/api/mcp/authz.go` (`dns_add_record` →
@@ -125,9 +125,9 @@ therefore answers and fails as gRPC does: the gRPC status passes through, so
   REST's `GET …/records/{type}/{name}` does. When none matches it returns
   `NotFound` (`ErrDNSRecordNotFound`). It requires `dns:read`, the scope of
   `ListRecords`.
-- **`dns_reverse_lookup` has no backend.** No transport serves a reverse lookup,
-  and the record set has no PTR type. It is left out of the map and refused with
-  `AuthErrorToolNotClassified`.
+- **There is no reverse lookup tool.** No transport serves a reverse lookup and
+  the record set has no PTR type, so #304 deleted the backendless
+  `dns_reverse_lookup`.
 - **No DNS service.** When none is wired into the daemon, every tool returns
   `Unavailable`.
 
@@ -146,9 +146,8 @@ are **default-deny** ([`docs/auth/architecture.md`](../auth/architecture.md)).
 **`DNSService` is fully scoped on gRPC** with 13 methods mapped, resource
 `dns`, actions `read`/`write`/`delete`.
 
-On MCP, the eight older-family tools in §3 carry a permission. So do eleven of
-the twelve newer-family tools, each with its gRPC method's scope;
-`dns_reverse_lookup` is refused.
+On MCP, the eight older-family tools in §3 carry a permission. So do all eleven
+newer-family tools, each with its gRPC method's scope.
 
 The tenant is the DNS service's own. `DNSService` carries no caller tenant on
 gRPC: it acts in the tenant the daemon configured the DNS service with, and a
