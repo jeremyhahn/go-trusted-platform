@@ -101,3 +101,33 @@ func TestKeyDelete_NilServerIsUnavailable(t *testing.T) {
 		})
 	}
 }
+
+// TestCertDelete_NoTPMIsPreconditionFailed drives the certificate deletes
+// against the daemon's IDevIDGRPCService with no TPM. The service answers
+// FailedPrecondition, and the routes carry it as 412, as the daemon listener
+// does, so the SDK reads back gRPC's class rather than InvalidArgument.
+func TestCertDelete_NoTPMIsPreconditionFailed(t *testing.T) {
+	router := newServedRouter(daemon.NewIDevIDGRPCService(logging.NewLogger(slog.LevelError, io.Discard)))
+
+	for _, path := range []string{"/api/v1/idevid/certificate", "/api/v1/idevid/iak/certificate"} {
+		t.Run(path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, path, nil))
+			assert.Equal(t, http.StatusPreconditionFailed, rec.Code)
+		})
+	}
+}
+
+// TestCertDelete_OtherFailuresKeepTheSharedMapping pins the 412 to
+// FailedPrecondition alone: Unimplemented keeps protorest's shared 501.
+func TestCertDelete_OtherFailuresKeepTheSharedMapping(t *testing.T) {
+	router := newServedRouter(platformv1.UnimplementedIDevIDServiceServer{})
+
+	for _, path := range []string{"/api/v1/idevid/certificate", "/api/v1/idevid/iak/certificate"} {
+		t.Run(path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, path, nil))
+			assert.Equal(t, http.StatusNotImplemented, rec.Code)
+		})
+	}
+}

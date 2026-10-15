@@ -36,8 +36,6 @@ const mcpTransportProbeToken = "mcp-transport-probe"
 // only (#844): a bearer-carrying request over mTLS is answered at TLS 1.3, a
 // TLS 1.2 handshake is rejected, and a plain http:// dial is not served.
 func TestDaemonMCPTransportSecurity(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
 

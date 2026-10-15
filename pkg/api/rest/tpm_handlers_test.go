@@ -801,6 +801,42 @@ func TestTPMRPC(t *testing.T) {
 	}
 }
 
+// DeleteAK refuses because the IAK is not evicted. Both routes answer that
+// refusal 412, as the daemon's IAK delete route does, while every other
+// error keeps the generic mapping.
+func TestTPMDeleteAKStatuses(t *testing.T) {
+	refused := status.Error(codes.FailedPrecondition, "the IAK key is TPM-resident")
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"refusal is 412", refused, http.StatusPreconditionFailed},
+		{"unavailable stays 503", status.Error(codes.Unavailable, "no TPM"), http.StatusServiceUnavailable},
+		{"non-status error stays 500", errors.New("not a status error"), http.StatusInternalServerError},
+	}
+	for _, target := range []string{"/api/v1/tpm/ak", "/api/v1/tpm/ak/0x81010002"} {
+		for _, tc := range cases {
+			t.Run(target+" "+tc.name, func(t *testing.T) {
+				router := tpmRouter(&fakeTPMService{err: tc.err}, tpmScopedAuthorizer())
+
+				rec := serveTPM(router, newTPMRequest(http.MethodDelete, target, ""), tpmAdminToken)
+
+				assert.Equal(t, tc.want, rec.Code)
+				assert.Contains(t, rec.Body.String(), status.Convert(tc.err).Message())
+			})
+		}
+	}
+
+	t.Run("other routes keep FailedPrecondition at 400", func(t *testing.T) {
+		router := tpmRouter(&fakeTPMService{err: refused}, tpmScopedAuthorizer())
+
+		rec := serveTPM(router, newTPMRequest(http.MethodDelete, "/api/v1/tpm/srk", ""), tpmAdminToken)
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+}
+
 func TestTPMHandlerErrors(t *testing.T) {
 	t.Run("ErrTPMServiceNotAvailable", func(t *testing.T) {
 		assert.Equal(t, "TPM service not available", ErrTPMServiceNotAvailable{}.Error())

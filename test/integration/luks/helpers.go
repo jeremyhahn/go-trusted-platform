@@ -72,15 +72,6 @@ func isBackendUnavailable(err error) bool {
 	)
 }
 
-// SkipIfNotIntegration skips when INTEGRATION_TEST is not set.
-func SkipIfNotIntegration(t interface {
-	Skip(args ...any)
-}) {
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test: INTEGRATION_TEST not set")
-	}
-}
-
 // IsRoot returns true when the test is running as uid 0.
 func IsRoot() bool { return os.Geteuid() == 0 }
 

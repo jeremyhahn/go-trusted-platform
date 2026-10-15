@@ -83,7 +83,6 @@ cd test/integration/cluster
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `INTEGRATION_TEST` | - | Must be set to "1" to run tests |
 | `CLUSTER_SIZE` | 3 | Number of cluster nodes |
 | `NODE_TIMEOUT` | 30s | Node startup timeout |
 | `CLUSTER_TIMEOUT` | 60s | Cluster formation timeout |

@@ -8,16 +8,21 @@ The DNS subsystem is configured through the platform configuration file. This do
 
 ### Configuration File Location
 
-The DNS configuration is part of the main platform configuration:
+The DNS configuration is part of the main platform configuration. platformd
+reads exactly one file: the one `--config` names, or else the first
+`config.yaml` it finds in this order:
 
 | Location | Description |
 |----------|-------------|
-| `config.yaml` | Primary configuration file |
-| `config.local.yaml` | Local overrides (not committed to version control) |
-| `/etc/trusted-platform/config.yaml` | System-wide configuration |
+| `etc/config/trusted-platform/config.yaml` | Relative to the working directory |
+| `<platform-dir>/etc/config.yaml` | Platform home (`--platform-dir`) |
 | `~/.trusted-platform/config.yaml` | User-specific configuration |
+| `<config-dir>/config.yaml` | `--config-dir`, default `/etc/trusted-platform` |
+| `./config.yaml` | Working directory |
 
-Configuration files are loaded in order with later files overriding earlier values.
+Files are not merged: the first one found is the whole configuration. Only
+when no `config.yaml` exists in any of these locations does platformd look
+for `config.<env>.yaml` (`--env`, default `dev`) in the same locations.
 
 ### Configuration Hierarchy
 

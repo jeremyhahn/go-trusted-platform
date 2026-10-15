@@ -15,10 +15,6 @@
 
 package ceremony
 
-import (
-	"os"
-)
-
 // Environment variable names for service endpoints. Keep in sync with the CA
 // adapter conventions so a single run-integration-tests.sh run picks up all
 // service adapters identically.
@@ -51,14 +47,5 @@ func GetServiceEndpoints() *ServiceEndpoints {
 		PlatformMCP:  "localhost:9445",
 		PlatformUnix: "/run/platformd.sock",
 		PlatformCTL:  "platformctl",
-	}
-}
-
-// SkipIfNotIntegration skips the test when INTEGRATION_TEST is not set.
-func SkipIfNotIntegration(t interface {
-	Skip(args ...any)
-}) {
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test: INTEGRATION_TEST not set")
 	}
 }

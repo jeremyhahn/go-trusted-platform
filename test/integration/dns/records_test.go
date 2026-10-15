@@ -15,7 +15,7 @@
 
 // Package dns provides integration tests for DNS record type operations.
 // These tests verify CAA, TLSA, and other record type functionality.
-// Run via: make integration-test-dns or INTEGRATION_TEST=1 go test ./test/integration/dns/...
+// Run via: make integration-test-dns
 package dns
 
 import (
@@ -31,8 +31,6 @@ import (
 
 // TestCAARecord_Create_Success tests successful CAA record creation.
 func TestCAARecord_Create_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -62,8 +60,6 @@ func TestCAARecord_Create_Success(t *testing.T) {
 
 // TestCAARecord_MultipleTags tests creating CAA records with different tags.
 func TestCAARecord_MultipleTags(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -100,8 +96,6 @@ func TestCAARecord_MultipleTags(t *testing.T) {
 
 // TestCAARecord_CriticalFlag tests CAA record with critical flag set.
 func TestCAARecord_CriticalFlag(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -129,8 +123,6 @@ func TestCAARecord_CriticalFlag(t *testing.T) {
 
 // TestCAARecord_Remove tests removing a CAA record.
 func TestCAARecord_Remove(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -166,8 +158,6 @@ func TestCAARecord_Remove(t *testing.T) {
 
 // TestTLSARecord_Create_Success tests successful TLSA record creation.
 func TestTLSARecord_Create_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -199,8 +189,6 @@ func TestTLSARecord_Create_Success(t *testing.T) {
 
 // TestTLSARecord_MultipleRecords tests creating multiple TLSA records.
 func TestTLSARecord_MultipleRecords(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -248,8 +236,6 @@ func TestTLSARecord_MultipleRecords(t *testing.T) {
 
 // TestTLSARecord_DANEUsageTypes tests TLSA records with different usage types.
 func TestTLSARecord_DANEUsageTypes(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -297,8 +283,6 @@ func TestTLSARecord_DANEUsageTypes(t *testing.T) {
 
 // TestTLSARecord_MatchingTypes tests TLSA records with different matching types.
 func TestTLSARecord_MatchingTypes(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -336,8 +320,6 @@ func TestTLSARecord_MatchingTypes(t *testing.T) {
 
 // TestTLSARecord_Remove tests removing a TLSA record.
 func TestTLSARecord_Remove(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -375,8 +357,6 @@ func TestTLSARecord_Remove(t *testing.T) {
 
 // TestTLSARecord_ZoneNotFound tests adding TLSA record to non-existent zone.
 func TestTLSARecord_ZoneNotFound(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -395,8 +375,6 @@ func TestTLSARecord_ZoneNotFound(t *testing.T) {
 
 // TestTLSARecord_PreservesExistingRecords tests that adding TLSA preserves other records.
 func TestTLSARecord_PreservesExistingRecords(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -445,8 +423,6 @@ func TestTLSARecord_PreservesExistingRecords(t *testing.T) {
 
 // TestARecord_Operations tests A record operations.
 func TestARecord_Operations(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -497,8 +473,6 @@ func TestARecord_Operations(t *testing.T) {
 
 // TestAAAARecord_Operations tests AAAA record operations.
 func TestAAAARecord_Operations(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -538,8 +512,6 @@ func TestAAAARecord_Operations(t *testing.T) {
 
 // TestCNAMERecord_Operations tests CNAME record operations.
 func TestCNAMERecord_Operations(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -575,8 +547,6 @@ func TestCNAMERecord_Operations(t *testing.T) {
 
 // TestMXRecord_Operations tests MX record operations.
 func TestMXRecord_Operations(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -613,8 +583,6 @@ func TestMXRecord_Operations(t *testing.T) {
 
 // TestTXTRecord_Operations tests TXT record operations.
 func TestTXTRecord_Operations(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -643,8 +611,6 @@ func TestTXTRecord_Operations(t *testing.T) {
 
 // TestSRVRecord_Operations tests SRV record operations.
 func TestSRVRecord_Operations(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -680,8 +646,6 @@ func TestSRVRecord_Operations(t *testing.T) {
 
 // TestNSRecord_Operations tests NS record operations.
 func TestNSRecord_Operations(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -730,8 +694,6 @@ func TestNSRecord_Operations(t *testing.T) {
 
 // TestRecordCreationHelpers tests the dns.New* helper functions integration.
 func TestRecordCreationHelpers(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 

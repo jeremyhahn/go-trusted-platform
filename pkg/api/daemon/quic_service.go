@@ -866,6 +866,12 @@ func (h *QUICServiceHandler) handleCASignCSR(ctx context.Context, payload []byte
 // The first byte of the payload is the sub-opcode that selects the TPM2
 // operation; the remaining payload bytes are the operation request payload.
 func (h *QUICServiceHandler) handleTPM2Category(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	// The IAK is the 802.1AR attestation key the IDevID service refuses to
+	// delete. The TPM2 DeleteIAK sub-opcode names the same key, so it gets
+	// the same refusal as OpIAKDelete instead of reaching the TPM.
+	if len(req.Payload) > 0 && req.Payload[0] == quicwire.SubOpTPM2DeleteIAK {
+		return h.handleIAKDelete(ctx, req)
+	}
 	// LDevID (802.1AR) issuance is CA-backed and lives in the shared
 	// IDevIDGRPCService, not the physical-TPM handler. Intercept the LDevID
 	// sub-opcode and delegate so QUIC matches gRPC/Unix/embedded semantics.

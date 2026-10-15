@@ -64,7 +64,7 @@ TPM operations use a category opcode (0x27) with a sub-opcode in the first byte 
 |-------|------|-------------|
 | `0x0C` | GetIAK | Retrieve Initial Attestation Key |
 | `0x0D` | CreateIAK | Create Initial Attestation Key |
-| `0x0E` | DeleteIAK | Delete Initial Attestation Key |
+| `0x0E` | DeleteIAK | Refused with `StatusFailedPrecondition` (`0x0C`), as `OpIAKDelete` (`0x5E`): the IAK is not deleted ([api.md](api.md) §8) |
 | `0x1F` | GetIDevID | Get Initial Device ID |
 
 ### Attestation Operations
@@ -125,7 +125,9 @@ until the owner rules on eviction:
 The key is TPM-resident and is not evicted; the refusal deletes no key, no
 certificate and no state, as on every other transport (#304). The
 certificates have their own opcodes, `0x7A` IDevIDDeleteCert and `0x7B`
-IAKDeleteCert, which do delete.
+IAKDeleteCert, which do delete and answer in gRPC's classes (#704): no TPM is
+`0x0C` FailedPrecondition, a missing certificate NotFound, and no IDevID
+service wired `Unavailable` (api.md §8).
 
 ## Status Codes
 

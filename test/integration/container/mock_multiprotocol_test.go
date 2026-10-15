@@ -39,8 +39,6 @@ import (
 // TestContainerMockAdapter runs the complete container test suite using the mock
 // adapter. This enables testing container operations without a real container runtime.
 func TestContainerMockAdapter(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -744,7 +742,6 @@ func runMockFullLifecycleTest(t *testing.T, ctx context.Context, adapter *MockAd
 
 // TestContainerMock tests container operations via Mock adapter only.
 func TestContainerMock(t *testing.T) {
-	SkipIfNotIntegration(t)
 	testSingleAdapter(t, NewMockAdapter())
 }
 

@@ -33,7 +33,6 @@ import (
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -43,10 +42,6 @@ import (
 // =============================================================================
 
 const (
-	// EnvIntegrationTest is the environment variable that must be set to run
-	// integration tests. Set INTEGRATION_TEST=1 to enable.
-	EnvIntegrationTest = "INTEGRATION_TEST"
-
 	// EnvQuicBaaSEndpoint is the environment variable for QuicBaaS service endpoint.
 	// Default: 127.0.0.1:63000
 	EnvQuicBaaSEndpoint = "QUICBAAS_ENDPOINT"
@@ -88,56 +83,6 @@ const (
 	// DefaultPlatformAPIEndpoint is the default platformd REST endpoint.
 	DefaultPlatformAPIEndpoint = "127.0.0.1:8443"
 )
-
-// =============================================================================
-// Skip Helpers
-// =============================================================================
-
-// SkipIfNotIntegration skips the test if the INTEGRATION_TEST environment
-// variable is not set. This ensures integration tests only run when explicitly
-// requested, preventing accidental execution during normal unit testing.
-// This is an exported version for use by other test packages.
-func SkipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv(EnvIntegrationTest) == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
-
-// SkipIfKMSUnavailable skips the test if the KMS service is not responding
-// to health checks. This prevents tests from failing due to infrastructure
-// issues rather than actual test failures.
-func SkipIfKMSUnavailable(t *testing.T, client *quicbaas.Client, ctx context.Context) {
-	t.Helper()
-
-	if client == nil || !client.IsStarted() {
-		t.Skip("Skipping test: QuicBaaS client not started")
-		return
-	}
-
-	dbSvc := client.Service()
-	if dbSvc == nil {
-		t.Skip("Skipping test: QuicBaaS service not available")
-		return
-	}
-
-	kms := dbSvc.KMS()
-	if kms == nil {
-		t.Skip("Skipping test: KMS service not available")
-		return
-	}
-
-	// Perform a backend status check to verify KMS is responding
-	status, err := kms.BackendStatus(ctx)
-	if err != nil {
-		t.Skipf("Skipping test: KMS backend not responding: %v", err)
-		return
-	}
-
-	if status == nil || status.Status != "healthy" {
-		t.Skipf("Skipping test: KMS backend not healthy: %v", status)
-	}
-}
 
 // =============================================================================
 // Key Attribute Helpers

@@ -15,7 +15,7 @@
 
 // Package datastore provides integration tests for the QuicBaaS DeviceDAO implementation.
 // These tests verify device-specific operations using real QuicBaaS with embedded PebbleDB.
-// Run via: make integration-test-datastore or INTEGRATION_TEST=1 go test ./test/integration/datastore/...
+// Run via: make integration-test-datastore
 package datastore
 
 import (
@@ -45,8 +45,6 @@ func createTestDevice(serial, model string) *deviceEntities.Device {
 
 // TestDeviceDAO_Save_NewDevice tests saving a new device with auto-generated ID.
 func TestDeviceDAO_Save_NewDevice(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -78,8 +76,6 @@ func TestDeviceDAO_Save_NewDevice(t *testing.T) {
 
 // TestDeviceDAO_Save_UpdateDevice tests updating an existing device.
 func TestDeviceDAO_Save_UpdateDevice(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -109,8 +105,6 @@ func TestDeviceDAO_Save_UpdateDevice(t *testing.T) {
 
 // TestDeviceDAO_Get_Success tests successful device retrieval.
 func TestDeviceDAO_Get_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -130,8 +124,6 @@ func TestDeviceDAO_Get_Success(t *testing.T) {
 
 // TestDeviceDAO_Get_NotFound tests retrieval of non-existent device.
 func TestDeviceDAO_Get_NotFound(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -149,8 +141,6 @@ func TestDeviceDAO_Get_NotFound(t *testing.T) {
 
 // TestDeviceDAO_Delete_Success tests successful device deletion.
 func TestDeviceDAO_Delete_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -177,8 +167,6 @@ func TestDeviceDAO_Delete_Success(t *testing.T) {
 
 // TestDeviceDAO_FindBySerial_Success tests retrieving device by serial number.
 func TestDeviceDAO_FindBySerial_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -202,8 +190,6 @@ func TestDeviceDAO_FindBySerial_Success(t *testing.T) {
 
 // TestDeviceDAO_FindBySerial_NotFound tests FindBySerial with non-existent serial.
 func TestDeviceDAO_FindBySerial_NotFound(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -221,8 +207,6 @@ func TestDeviceDAO_FindBySerial_NotFound(t *testing.T) {
 
 // TestDeviceDAO_GetByModel_Success tests retrieving devices by model.
 func TestDeviceDAO_GetByModel_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -256,8 +240,6 @@ func TestDeviceDAO_GetByModel_Success(t *testing.T) {
 
 // TestDeviceDAO_GetByModel_Empty tests GetByModel when no devices match.
 func TestDeviceDAO_GetByModel_Empty(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -273,8 +255,6 @@ func TestDeviceDAO_GetByModel_Empty(t *testing.T) {
 
 // TestDeviceDAO_Count tests counting devices.
 func TestDeviceDAO_Count(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -302,8 +282,6 @@ func TestDeviceDAO_Count(t *testing.T) {
 
 // TestDeviceDAO_DataPersistence tests that device data persists correctly.
 func TestDeviceDAO_DataPersistence(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -342,8 +320,6 @@ func TestDeviceDAO_DataPersistence(t *testing.T) {
 
 // TestDeviceDAO_ConcurrentOperations tests concurrent device operations.
 func TestDeviceDAO_ConcurrentOperations(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -390,8 +366,6 @@ func TestDeviceDAO_ConcurrentOperations(t *testing.T) {
 
 // TestDeviceDAO_FindBySerial_FallbackScan tests that FindBySerial falls back to scan.
 func TestDeviceDAO_FindBySerial_FallbackScan(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 

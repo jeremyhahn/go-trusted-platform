@@ -52,24 +52,6 @@ const (
 	shutdownTimeout           = 10 * time.Second
 )
 
-// skipIfNotIntegration skips the test if the INTEGRATION_TEST env var is not set.
-func skipIfNotIntegration(t *testing.T) {
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
-
-// skipIfNoRaftCluster skips data replication tests that require a Raft cluster
-// simulation. The mock cluster provides shared storage that simulates Raft
-// replication by propagating writes to all nodes.
-// Set RAFT_CLUSTER_TEST=1 to run these tests.
-func skipIfNoRaftCluster(t *testing.T) {
-	skipIfNotIntegration(t)
-	if os.Getenv("RAFT_CLUSTER_TEST") == "" {
-		t.Skip("Skipping Raft cluster test. Set RAFT_CLUSTER_TEST=1 to run with simulated Raft cluster.")
-	}
-}
-
 // sharedStorage provides a thread-safe storage wrapper that propagates writes
 // to all registered node storages, simulating Raft replication.
 type sharedStorage struct {

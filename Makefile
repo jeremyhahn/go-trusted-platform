@@ -420,7 +420,7 @@ CONFIG_DIR                  ?= configs
 EXAMPLE_DIR                 ?= examples
 PLATFORM_CONFIG_DIR         ?= $(CONFIG_DIR)/platform
 
-CONFIG_YAML                 ?= config.dev.server.yaml
+CONFIG_YAML                 ?= standalone/web-test.example.yaml
 
 ROOT_CA                     ?= root-ca
 INTERMEDIATE_CA             ?= intermediate-ca
@@ -1009,16 +1009,6 @@ build-deployer-pin:
 		-o $(DEPLOYER_PIN) ./cmd/deployer-pin
 	@echo "Binary size: $$(du -h $(DEPLOYER_PIN) | cut -f1)"
 # ==============================================================================
-
-.PHONY: build-dev
-build-dev: clean build-debug
-	sudo chown $(USER):$(USER) /dev/tpmrm0
-	-sudo chown $(USER):$(USER) /sys/kernel/security/tpm0/binary_bios_measurements
-	mkdir -p $(PLATFORM_DIR)/etc/ $(PLATFORM_DIR)/softhsm2 pkg/$(PLATFORM_DIR)/softhsm2
-	cp configs/platform/config.dev.yaml config.yaml
-	cp configs/softhsm.conf $(PLATFORM_DIR)/etc/softhsm.conf
-	cp configs/platform/config.debug.yaml pkg/config.yaml
-	cp -R $(WEB_PUBLIC_HTML) pkg/
 
 # Build the public_html directory using devcontainer
 # This target uses docker to ensure consistent builds regardless of host environment
@@ -2415,7 +2405,7 @@ integration-test-web: devcontainer-compose-up
 	@echo ""
 	@echo "$(YELLOW)→ Copying web-test configuration...$(RESET)"
 	@docker exec $(DEVCONTAINER_NAME) bash -c "\
-		cp /workspace/configs/platform/config.web-test.yaml /workspace/pkg/config.yaml && \
+		cp /workspace/configs/platform/standalone/web-test.example.yaml /workspace/pkg/config.yaml && \
 		rm -rf /workspace/pkg/trusted-data && \
 		mkdir -p /workspace/pkg/trusted-data/etc"
 	@echo ""

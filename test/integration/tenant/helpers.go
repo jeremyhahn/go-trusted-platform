@@ -19,21 +19,12 @@ package tenant
 
 import (
 	"os"
-	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
-
-// SkipIfNotIntegration skips the test if not running in integration mode
-func SkipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
 
 // GenerateTestTenantName generates a unique tenant name for testing
 func GenerateTestTenantName(prefix string) string {

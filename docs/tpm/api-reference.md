@@ -90,7 +90,7 @@ type TPMService interface {
 | DeleteSRK | Flush Storage Root Key handle |
 | GetIAK | Retrieve Initial Attestation Key |
 | CreateIAK | Create Initial Attestation Key |
-| DeleteIAK | Flush Attestation Key handle |
+| DeleteIAK | Refused with `FailedPrecondition`: the IAK is not deleted ([api.md](api.md) §8) |
 | GetIDevID | Get Initial Device Identifier certificate |
 | Quote | Generate attestation quote over PCRs |
 | VerifyQuote | Verify attestation quote signature |

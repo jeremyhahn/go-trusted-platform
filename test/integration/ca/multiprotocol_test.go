@@ -56,8 +56,6 @@ import (
 // Each adapter implements the CACommands interface, enabling unified testing across
 // CLI, REST, gRPC, QUIC, MCP, and Unix protocols.
 func TestCAMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -497,7 +495,7 @@ func testVerifyCertificate(t *testing.T, ctx context.Context, cmd CACommands, pr
 
 	t.Run("VerifyValidCertificate", func(t *testing.T) {
 		if len(certPEM) == 0 {
-			t.Skip("PEM not available for verification")
+			t.Fatalf("Setup: no PEM from IssueCertificate or GetCertificate(IncludePEM) for serial %s; verification needs the issued certificate", issueResult.Certificate.Serial)
 		}
 
 		opts := VerifyCertificateOptions{
@@ -517,7 +515,7 @@ func testVerifyCertificate(t *testing.T, ctx context.Context, cmd CACommands, pr
 
 	t.Run("VerifyWithPEM", func(t *testing.T) {
 		if len(certPEM) == 0 {
-			t.Skip("PEM not available in issued certificate")
+			t.Fatalf("Setup: no PEM from IssueCertificate or GetCertificate(IncludePEM) for serial %s; PEM verification needs the issued certificate", issueResult.Certificate.Serial)
 		}
 
 		opts := VerifyCertificateOptions{
@@ -627,7 +625,7 @@ func testRevokeCertificate(t *testing.T, ctx context.Context, cmd CACommands, pr
 
 	t.Run("VerifyRevokedCertificate", func(t *testing.T) {
 		if len(certPEM) == 0 {
-			t.Skip("PEM not available for revocation verification")
+			t.Fatalf("Setup: no PEM from IssueCertificate or GetCertificate(IncludePEM) for serial %s; revocation verification needs the issued certificate", issueResult.Certificate.Serial)
 		}
 
 		opts := VerifyCertificateOptions{
@@ -671,10 +669,6 @@ func testCRL(t *testing.T, ctx context.Context, cmd CACommands) {
 	t.Run("GenerateCRL", func(t *testing.T) {
 		result, err := cmd.GenerateCRL(testCtx)
 		if err != nil {
-			// Some adapters may not support CRL generation
-			if surface.IsNotImplemented(err) {
-				t.Skipf("CRL generate not implemented for this adapter")
-			}
 			require.Fail(t, "Generate CRL failed", err.Error())
 		}
 

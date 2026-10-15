@@ -377,19 +377,19 @@ carries the scope of its gRPC method, and its errors carry the same gRPC class
 | `platform_tpm_{info,ek,ek_cert,srk,iak,pcrs,eventlog,random,nv_read,make_credential}` | `tpm:read` |
 | `platform_tpm_{provision,ek_create,ek_import_cert,srk_create,iak_create,nv_write,activate_credential,seal}` | `tpm:write` |
 | `platform_tpm_unseal` | `tpm:write` — stricter than gRPC `Unseal` (`tpm:read`): an unseal tool never takes a read scope on MCP |
-| `platform_tpm_{clear,nv_delete}` | `tpm:delete` |
+| `platform_tpm_{clear,nv_delete,ek_delete,srk_delete,iak_delete}` | `tpm:delete` |
 | `vtpm_{get,validate,export,get_bundle_path,get_tpm_socket_path,get_nvram_path,is_running}`, `vtpm_template_{get,list}` | `vtpm:read` |
 | `vtpm_import`, `vtpm_template_{create,clone}` | `vtpm:write` |
 | `vtpm_template_delete` | `vtpm:delete` |
 | `vtpm_bundle_{create,get,list,delete,quote,pcr_read,pcr_extend,seal,unseal}` | the scope of the `vtpm_*` twin each one runs ([`docs/vtpm/api.md`](../vtpm/api.md) §5) |
 
-Still refused, with the reason:
-
-- `platform_tpm_{ek,srk,iak}_delete` — they flush a persistent handle, which
-  deletes nothing; gRPC `DeleteEK`/`DeleteSRK`/`DeleteAK` do the same. Making
-  them evict is an owner decision, not a classification.
-- `platform_tpm_{capabilities,platform,nv_list,pcr_extend,certify}` — no gRPC
-  or REST twin to take a scope from.
+`platform_tpm_{capabilities,platform,nv_list,certify}` (`tpm:read`) and
+`platform_tpm_pcr_extend` (`tpm:write`) take their QUIC or gRPC twin's scope;
+[`docs/tpm/api-reference-mcp.md`](../tpm/api-reference-mcp.md) is the full
+list. `platform_tpm_ek_delete` and `platform_tpm_srk_delete` flush a persistent
+handle, which deletes nothing, as gRPC `DeleteEK`/`DeleteSRK` do.
+`platform_tpm_iak_delete` refuses with `FailedPrecondition`, as `iak_delete`
+and gRPC `DeleteAK` do (#704).
 
 **The KMS and secret MCP tools are classified (#304).** Each of the 20 `kms_*`
 and 6 `secret_*` tools carries the scope of the gRPC method it mirrors

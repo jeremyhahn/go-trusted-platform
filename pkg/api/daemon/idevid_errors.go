@@ -33,7 +33,8 @@ func (e ErrIDevIDServiceNotConfigured) GRPCStatus() *status.Status {
 	return status.New(codes.Unavailable, e.Error())
 }
 
-// ErrDeviceIdentityKeyNotDeletable is returned by DeleteIDevID and DeleteIAK.
+// ErrDeviceIdentityKeyNotDeletable is returned by DeleteIDevID and DeleteIAK,
+// and by the TPM service's DeleteAK, which names the same IAK.
 // The service does not evict the persistent 802.1AR key from the TPM, so it
 // refuses instead of reporting a deletion that did not happen. Nothing is
 // changed; the key's certificate is removed by its own delete-certificate

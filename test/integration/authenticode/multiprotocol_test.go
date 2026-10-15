@@ -59,8 +59,6 @@ import (
 // protocol adapters. Each adapter implements the AuthenticodeCommands interface, enabling
 // unified testing across CLI, REST, gRPC, QUIC, MCP, and Unix protocols.
 func TestAuthenticodeMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 

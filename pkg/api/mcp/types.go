@@ -806,7 +806,6 @@ type ServiceProvider interface {
 	TPMDeleteSRK(ctx context.Context) (interface{}, error)
 	TPMGetIAK(ctx context.Context) (interface{}, error)
 	TPMCreateIAK(ctx context.Context) (interface{}, error)
-	TPMDeleteIAK(ctx context.Context) (interface{}, error)
 	TPMQuote(ctx context.Context, nonce []byte, pcrs []int) (interface{}, error)
 	TPMVerifyQuote(ctx context.Context, req *TPMVerifyQuoteRequest) (interface{}, error)
 	TPMReadPCRs(ctx context.Context, indices []int) (interface{}, error)

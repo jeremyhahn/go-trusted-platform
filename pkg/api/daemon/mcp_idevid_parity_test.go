@@ -22,6 +22,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/google/go-tpm/tpm2"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
@@ -38,6 +40,19 @@ type identityRecordingTPM struct {
 	*idevIDTestTPM
 	idevidCertDeletes atomic.Int32
 	iakCertDeletes    atomic.Int32
+	// flushes and iakLookups count the calls the old TPM-service IAK delete
+	// made: look the IAK up, then flush its handle.
+	flushes    atomic.Int32
+	iakLookups atomic.Int32
+}
+
+func (r *identityRecordingTPM) Flush(handle tpm2.TPMHandle) {
+	r.flushes.Add(1)
+}
+
+func (r *identityRecordingTPM) IAKAttributes() (*xkmssdk.KeyAttributes, error) {
+	r.iakLookups.Add(1)
+	return r.idevIDTestTPM.IAKAttributes()
 }
 
 func (r *identityRecordingTPM) DeleteIDevIDCertificate() error {

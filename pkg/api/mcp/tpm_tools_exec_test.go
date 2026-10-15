@@ -227,16 +227,30 @@ func TestTPMToolExecution(t *testing.T) {
 		}
 	})
 
-	t.Run("executeTPMDeleteIAK success", func(t *testing.T) {
+	// platform_tpm_iak_delete names the same key as iak_delete, so it must
+	// reach the same IAKDelete call and hand back the same refusal.
+	t.Run("platform_tpm_iak_delete answers as iak_delete", func(t *testing.T) {
 		svc := newMockServiceProvider()
+		calls := 0
+		svc.iakDeleteFunc = func(ctx context.Context) error {
+			calls++
+			return ErrMockServiceError
+		}
 		registry := NewToolRegistry(svc, log)
 
-		result, err := registry.ExecuteTool(ctx, "platform_tpm_iak_delete", map[string]interface{}{})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		tpmResult, tpmErr := registry.ExecuteTool(ctx, "platform_tpm_iak_delete", map[string]interface{}{})
+		_, idevidErr := registry.ExecuteTool(ctx, "iak_delete", map[string]interface{}{})
+		if tpmErr == nil || idevidErr == nil {
+			t.Fatalf("both tools must refuse, got %v and %v", tpmErr, idevidErr)
 		}
-		if result == nil {
-			t.Fatal("result should not be nil")
+		if tpmResult != nil {
+			t.Errorf("a refusal returns no result, got %v", tpmResult)
+		}
+		if tpmErr.Error() != idevidErr.Error() {
+			t.Errorf("platform_tpm_iak_delete error %q differs from iak_delete error %q", tpmErr, idevidErr)
+		}
+		if calls != 2 {
+			t.Errorf("IAKDelete calls = %d, want 2 (one per tool)", calls)
 		}
 	})
 

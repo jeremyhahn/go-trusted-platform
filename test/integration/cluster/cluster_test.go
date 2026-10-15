@@ -27,8 +27,6 @@ import (
 
 // TestClusterFormation tests that a 3-node cluster forms successfully.
 func TestClusterFormation(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -67,8 +65,6 @@ func TestClusterFormation(t *testing.T) {
 
 // TestClusterFormation_SingleNode tests that a single-node cluster works.
 func TestClusterFormation_SingleNode(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 1)
 	defer tc.stop()
 
@@ -88,8 +84,6 @@ func TestClusterFormation_SingleNode(t *testing.T) {
 
 // TestLeaderElection tests that a leader is elected within timeout.
 func TestLeaderElection(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -124,8 +118,6 @@ func TestLeaderElection(t *testing.T) {
 
 // TestLeaderElection_Timeout tests that WaitForLeader times out correctly.
 func TestLeaderElection_Timeout(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	coordinator, membership, cleanup := newTestCoordinator(t, 1)
 	defer cleanup()
 
@@ -148,8 +140,6 @@ func TestLeaderElection_Timeout(t *testing.T) {
 
 // TestNodeDiscovery tests that all nodes discover each other.
 func TestNodeDiscovery(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -177,8 +167,6 @@ func TestNodeDiscovery(t *testing.T) {
 
 // TestNodeDiscovery_FindByID tests finding nodes by ID.
 func TestNodeDiscovery_FindByID(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -213,8 +201,6 @@ func TestNodeDiscovery_FindByID(t *testing.T) {
 
 // TestClusterStatus tests that the Status API returns correct information.
 func TestClusterStatus(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -249,8 +235,6 @@ func TestClusterStatus(t *testing.T) {
 
 // TestClusterStatus_Degraded tests status when cluster is degraded.
 func TestClusterStatus_Degraded(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -276,8 +260,6 @@ func TestClusterStatus_Degraded(t *testing.T) {
 
 // TestClusterNodes tests that the Nodes API lists all members.
 func TestClusterNodes(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -318,8 +300,6 @@ func TestClusterNodes(t *testing.T) {
 
 // TestClusterNodes_HealthyNodes tests filtering healthy nodes.
 func TestClusterNodes_HealthyNodes(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -350,8 +330,6 @@ func TestClusterNodes_HealthyNodes(t *testing.T) {
 
 // TestClusterNodes_AfterJoin tests that nodes are visible after joining.
 func TestClusterNodes_AfterJoin(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -382,8 +360,6 @@ func TestClusterNodes_AfterJoin(t *testing.T) {
 
 // TestClusterCoordinator_Lifecycle tests coordinator lifecycle operations.
 func TestClusterCoordinator_Lifecycle(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	coordinator, membership, cleanup := newTestCoordinator(t, 1)
 	defer cleanup()
 
@@ -418,8 +394,6 @@ func TestClusterCoordinator_Lifecycle(t *testing.T) {
 
 // TestClusterCoordinator_DoubleStart tests that double start returns error.
 func TestClusterCoordinator_DoubleStart(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	coordinator, membership, cleanup := newTestCoordinator(t, 1)
 	defer cleanup()
 
@@ -441,8 +415,6 @@ func TestClusterCoordinator_DoubleStart(t *testing.T) {
 
 // TestClusterCoordinator_OperationsWhenNotRunning tests operations fail when not running.
 func TestClusterCoordinator_OperationsWhenNotRunning(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	coordinator, membership, cleanup := newTestCoordinator(t, 1)
 	defer cleanup()
 

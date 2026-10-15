@@ -33,6 +33,7 @@ import (
 
 	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"log/slog"
@@ -261,9 +262,14 @@ func createTestRESTServer(t *testing.T, mockTPM *mockTPM2RESTService) *RESTServe
 	server, err := NewRESTServer(config, service, slog.Default())
 	require.NoError(t, err)
 
+	// The daemon always gives REST the shared IDevID service, over the same
+	// TPM; the certificate deletes are served through it.
+	idevid := NewIDevIDGRPCService(logging.DefaultLogger())
 	if mockTPM != nil {
 		server.SetTPM2Service(mockTPM)
+		idevid.SetTPM2Service(mockTPM)
 	}
+	server.SetIDevIDService(idevid)
 
 	return server
 }
@@ -664,8 +670,17 @@ func TestRESTIDevIDDeleteCert_Success(t *testing.T) {
 	assert.True(t, resp.Deleted)
 }
 
-func TestRESTIDevIDDeleteCert_ServiceNotAvailable(t *testing.T) {
+func TestRESTIDevIDDeleteCert_NoTPMIsPreconditionFailed(t *testing.T) {
 	server := createTestRESTServer(t, nil)
+
+	rr := executeRESTRequest(t, server, http.MethodDelete, "/api/v1/tpm/idevid/cert", nil)
+
+	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
+}
+
+func TestRESTIDevIDDeleteCert_ServiceNotConfigured(t *testing.T) {
+	server := createTestRESTServer(t, &mockTPM2RESTService{hasIDevID: true, hasIDevIDCert: true})
+	server.SetIDevIDService(nil)
 
 	rr := executeRESTRequest(t, server, http.MethodDelete, "/api/v1/tpm/idevid/cert", nil)
 
@@ -1010,8 +1025,17 @@ func TestRESTIAKDeleteCert_Success(t *testing.T) {
 	assert.True(t, resp.Deleted)
 }
 
-func TestRESTIAKDeleteCert_ServiceNotAvailable(t *testing.T) {
+func TestRESTIAKDeleteCert_NoTPMIsPreconditionFailed(t *testing.T) {
 	server := createTestRESTServer(t, nil)
+
+	rr := executeRESTRequest(t, server, http.MethodDelete, "/api/v1/tpm/iak/cert", nil)
+
+	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
+}
+
+func TestRESTIAKDeleteCert_ServiceNotConfigured(t *testing.T) {
+	server := createTestRESTServer(t, &mockTPM2RESTService{hasIAK: true, hasIAKCert: true})
+	server.SetIDevIDService(nil)
 
 	rr := executeRESTRequest(t, server, http.MethodDelete, "/api/v1/tpm/iak/cert", nil)
 

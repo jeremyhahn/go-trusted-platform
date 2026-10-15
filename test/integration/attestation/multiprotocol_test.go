@@ -27,8 +27,6 @@ import (
 
 // TestAttestationMultiProtocol runs all attestation tests across multiple protocols
 func TestAttestationMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -848,8 +846,6 @@ func testWorkloadChain(t *testing.T, ctx context.Context, adapter AttestationCom
 // =============================================================================
 
 func TestAttestationCLI(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -864,8 +860,6 @@ func TestAttestationCLI(t *testing.T) {
 }
 
 func TestAttestationREST(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -880,8 +874,6 @@ func TestAttestationREST(t *testing.T) {
 }
 
 func TestAttestationGRPC(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -896,8 +888,6 @@ func TestAttestationGRPC(t *testing.T) {
 }
 
 func TestAttestationQUIC(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -912,8 +902,6 @@ func TestAttestationQUIC(t *testing.T) {
 }
 
 func TestAttestationMCP(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -928,8 +916,6 @@ func TestAttestationMCP(t *testing.T) {
 }
 
 func TestAttestationUnix(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -948,8 +934,6 @@ func TestAttestationUnix(t *testing.T) {
 // =============================================================================
 
 func TestAttestationMultiProtocol_ErrorHandling(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 

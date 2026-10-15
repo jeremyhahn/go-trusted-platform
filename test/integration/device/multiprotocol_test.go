@@ -20,8 +20,6 @@ import (
 
 // TestDeviceMultiProtocol runs all device tests across multiple protocols
 func TestDeviceMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -1438,8 +1436,6 @@ func testProfileAssignment(t *testing.T, ctx context.Context, adapter DeviceComm
 // ============================================================================
 
 func TestDeviceMultiProtocol_ErrorHandling(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -1528,8 +1524,6 @@ func TestDeviceMultiProtocol_ErrorHandling(t *testing.T) {
 // ============================================================================
 
 func TestDeviceCLI(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -1543,8 +1537,6 @@ func TestDeviceCLI(t *testing.T) {
 }
 
 func TestDeviceREST(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -1558,8 +1550,6 @@ func TestDeviceREST(t *testing.T) {
 }
 
 func TestDeviceGRPC(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -1573,8 +1563,6 @@ func TestDeviceGRPC(t *testing.T) {
 }
 
 func TestDeviceQUIC(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -1588,8 +1576,6 @@ func TestDeviceQUIC(t *testing.T) {
 }
 
 func TestDeviceMCP(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -1603,8 +1589,6 @@ func TestDeviceMCP(t *testing.T) {
 }
 
 func TestDeviceUnix(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 

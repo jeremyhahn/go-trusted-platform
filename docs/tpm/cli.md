@@ -438,7 +438,7 @@ is the only LDevID verb.
 | Quote the physical TPM | **No CLI verb anywhere.** There is no `platformctl attestation` group; the only attest verb is `platformctl container attest`, which quotes a container's measurement ([`docs/attestation/cli.md`](../attestation/cli.md) §1). Direct quoting is gRPC `Quote`, REST `POST /api/v1/tpm/quote`, QUIC `0x0F`, MCP `platform_tpm_quote` — over TLS only, bound to the connection ([api.md](api.md) §5) |
 | Verify a quote | gRPC `VerifyQuote`, REST `POST /api/v1/tpm/quote/verify`, QUIC `0x10`, MCP `platform_tpm_verify_quote` |
 | Read or extend physical PCRs | REST `GET /api/v1/tpm/pcrs` (read); extend is QUIC `0x12` only |
-| Attestation key (AK/IAK) create, get, delete on the *TPMService* surface | gRPC `CreateAK`/`GetAK`/`DeleteAK`, REST `/api/v1/tpm/ak`, QUIC `0x0C`–`0x0E` (named IAK), MCP `platform_tpm_iak*` |
+| Attestation key (AK/IAK) create, get on the *TPMService* surface (delete is refused, [api.md](api.md) §8) | gRPC `CreateAK`/`GetAK`/`DeleteAK`, REST `/api/v1/tpm/ak`, QUIC `0x0C`–`0x0E` (named IAK), MCP `platform_tpm_iak*` |
 | Import an EK certificate | gRPC `ImportEKCertificate`, REST `POST /api/v1/tpm/ek/certificate`, QUIC `0x08`, MCP `platform_tpm_ek_import_cert` |
 | Get random bytes from the TPM | gRPC `GetRandom`, REST `POST /api/v1/tpm/random`, QUIC `0x14`, MCP `platform_tpm_random` |
 | MakeCredential / ActivateCredential | gRPC, QUIC `0x20`/`0x21`, MCP; also the daemon REST listener's `POST /api/v1/tpm/make-credential` and `POST /api/v1/tpm/activate-credential` ([api.md](api.md) §1) |

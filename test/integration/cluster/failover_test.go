@@ -46,9 +46,6 @@ func (tc *testCluster) getRunningFollowers() []*testNode {
 
 // TestLeaderFailover tests that a new leader is elected when the leader dies.
 func TestLeaderFailover(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -107,9 +104,6 @@ func TestLeaderFailover(t *testing.T) {
 
 // TestLeaderFailover_QuorumMaintained tests quorum is maintained after failover.
 func TestLeaderFailover_QuorumMaintained(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -136,9 +130,6 @@ func TestLeaderFailover_QuorumMaintained(t *testing.T) {
 
 // TestFollowerFailure tests the cluster survives follower loss.
 func TestFollowerFailure(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -181,9 +172,6 @@ func TestFollowerFailure(t *testing.T) {
 
 // TestFollowerFailure_DataIntegrity tests data integrity during follower failure.
 func TestFollowerFailure_DataIntegrity(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -239,9 +227,6 @@ func TestFollowerFailure_DataIntegrity(t *testing.T) {
 
 // TestNodeRestart tests that a restarted node rejoins the cluster.
 func TestNodeRestart(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -300,9 +285,6 @@ func TestNodeRestart(t *testing.T) {
 
 // TestNodeRestart_DataRecovery tests data recovery after node restart.
 func TestNodeRestart_DataRecovery(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -346,9 +328,6 @@ func TestNodeRestart_DataRecovery(t *testing.T) {
 
 // TestNetworkPartition tests that the majority continues operating.
 func TestNetworkPartition(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -392,9 +371,6 @@ func TestNetworkPartition(t *testing.T) {
 
 // TestNetworkPartition_MinorityBlocked tests minority partition cannot write.
 func TestNetworkPartition_MinorityBlocked(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -419,9 +395,6 @@ func TestNetworkPartition_MinorityBlocked(t *testing.T) {
 
 // TestPartitionRecovery tests the cluster heals after partition.
 func TestPartitionRecovery(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -491,9 +464,6 @@ func TestPartitionRecovery(t *testing.T) {
 
 // TestFailoverTime tests that leader election completes within 10 seconds.
 func TestFailoverTime(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -551,9 +521,6 @@ func TestFailoverTime(t *testing.T) {
 
 // TestFailover_WritesDuringElection tests handling of writes during election.
 func TestFailover_WritesDuringElection(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -577,9 +544,6 @@ func TestFailover_WritesDuringElection(t *testing.T) {
 
 // TestFailover_MultipleFollowerLoss tests cluster survives multiple follower loss.
 func TestFailover_MultipleFollowerLoss(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	// Use 5 nodes so we can lose 2 and still have quorum
 	tc := newTestCluster(t, 5)
 	defer tc.stop()

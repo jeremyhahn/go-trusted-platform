@@ -275,8 +275,6 @@ func TestQUICIDevID_ServiceNotAvailable(t *testing.T) {
 		{"ActivateCredential", quicwire.OpActivateCredential},
 		{"HasIDevID", quicwire.OpHasIDevID},
 		{"HasIAK", quicwire.OpHasIAK},
-		{"IDevIDDeleteCert", quicwire.OpIDevIDDeleteCert},
-		{"IAKDeleteCert", quicwire.OpIAKDeleteCert},
 	}
 
 	for _, tc := range testCases {
@@ -830,10 +828,24 @@ func TestQUICHasIAK_NotExists(t *testing.T) {
 	assert.False(t, hasResp.Exists)
 }
 
+// newCertDeleteQUICHandler wires the QUIC handler as the daemon does: its own
+// TPM plus the shared IDevID service over the same TPM, which serves the
+// certificate deletes. A nil TPM leaves both without one.
+func newCertDeleteQUICHandler(mockTPM *mockTPM2IDevIDService) *QUICServiceHandler {
+	idevid := NewIDevIDGRPCService(logging.DefaultLogger())
+	var opts []QUICServiceHandlerOption
+	if mockTPM != nil {
+		opts = append(opts, WithQUICTPM2Service(mockTPM))
+		idevid.SetTPM2Service(mockTPM)
+	}
+	handler := newTestQUICServiceHandler(logging.DefaultLogger(), opts...)
+	handler.SetIDevIDService(idevid)
+	return handler
+}
+
 func TestQUICIDevIDDeleteCert_Success(t *testing.T) {
-	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true, hasIDevIDCert: true}
-	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newCertDeleteQUICHandler(mockTPM)
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -851,12 +863,11 @@ func TestQUICIDevIDDeleteCert_Success(t *testing.T) {
 }
 
 func TestQUICIDevIDDeleteCert_Error(t *testing.T) {
-	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{
 		hasIDevID:           true,
 		deleteIDevIDCertErr: errors.New("delete failed"),
 	}
-	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newCertDeleteQUICHandler(mockTPM)
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -865,13 +876,28 @@ func TestQUICIDevIDDeleteCert_Error(t *testing.T) {
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
+}
+
+// TestQUICIdentityCertDelete_Unserved covers the two ways the certificate
+// deletes cannot be served: no TPM is the shared service's FailedPrecondition,
+// as on gRPC, and no shared service is Unavailable.
+func TestQUICIdentityCertDelete_Unserved(t *testing.T) {
+	noService := newTestQUICServiceHandler(logging.DefaultLogger(),
+		WithQUICTPM2Service(&mockTPM2IDevIDService{hasIDevID: true, hasIAK: true}))
+
+	for _, opcode := range []byte{quicwire.OpIDevIDDeleteCert, quicwire.OpIAKDeleteCert} {
+		resp := newCertDeleteQUICHandler(nil).HandleRequest(context.Background(), &quicwire.Request{Opcode: opcode})
+		assert.Equal(t, quicwire.StatusFailedPrecondition, resp.Status, "opcode 0x%02X without a TPM", opcode)
+
+		resp = noService.HandleRequest(context.Background(), &quicwire.Request{Opcode: opcode})
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status, "opcode 0x%02X without the IDevID service", opcode)
+	}
 }
 
 func TestQUICIAKDeleteCert_Success(t *testing.T) {
-	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: true, hasIAKCert: true}
-	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newCertDeleteQUICHandler(mockTPM)
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -889,12 +915,11 @@ func TestQUICIAKDeleteCert_Success(t *testing.T) {
 }
 
 func TestQUICIAKDeleteCert_Error(t *testing.T) {
-	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{
 		hasIAK:           true,
 		deleteIAKCertErr: errors.New("delete failed"),
 	}
-	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newCertDeleteQUICHandler(mockTPM)
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -903,7 +928,7 @@ func TestQUICIAKDeleteCert_Error(t *testing.T) {
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 // =============================================================================

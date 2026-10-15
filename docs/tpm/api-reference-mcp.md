@@ -24,10 +24,12 @@ gRPC twin: an unseal tool never takes a read scope on MCP. `nv_list` takes the
 scope of gRPC `Info`, and `pcr_extend`, which has no gRPC twin, takes the scope
 of QUIC's `SubOpTPM2ExtendPCR`. `capabilities` and `platform` have no gRPC
 method of their own: each answers a subset of gRPC `Info`, and their QUIC twins
-(`0x99` · `0x17`, `0x99` · `0x1E`) are `tpm:read`. `ek_delete`, `srk_delete`
-and `iak_delete` flush a persistent handle, which deletes nothing, exactly as
-gRPC `DeleteEK` and `DeleteSRK` do; `iak_delete` has no gRPC twin and takes the
-scope of QUIC's `SubOpTPM2DeleteIAK` (`0x99` · `0x0E`).
+(`0x99` · `0x17`, `0x99` · `0x1E`) are `tpm:read`. `ek_delete` and
+`srk_delete` flush a persistent handle, which deletes nothing, exactly as gRPC
+`DeleteEK` and `DeleteSRK` do. `iak_delete` takes the scope of its twins, gRPC
+`TPMService/DeleteAK` and QUIC's `SubOpTPM2DeleteIAK` (`0x99` · `0x0E`), and
+refuses as they do: `FailedPrecondition` (`ErrDeviceIdentityKeyNotDeletable`),
+the answer of the IDevID tool `iak_delete`, with nothing flushed (#704).
 
 ## Available Tools
 
@@ -64,7 +66,7 @@ scope of QUIC's `SubOpTPM2DeleteIAK` (`0x99` · `0x0E`).
 |------|-------------|
 | `platform_tpm_iak` | Get Initial Attestation Key |
 | `platform_tpm_iak_create` | Create Initial Attestation Key |
-| `platform_tpm_iak_delete` | Flush IAK handle |
+| `platform_tpm_iak_delete` | Refused: the IAK is not deleted (`FailedPrecondition`) |
 | `platform_tpm_idevid` | Get Initial Device ID |
 
 ### Attestation Tools
@@ -327,7 +329,10 @@ Create an Initial Attestation Key (IAK) under the Endorsement Key hierarchy.
 
 ### platform_tpm_iak_delete
 
-Flush the Initial Attestation Key (IAK) handle from the TPM.
+Refused. The Initial Attestation Key (IAK) is TPM-resident and is not deleted;
+the tool answers as `iak_delete` does, `FailedPrecondition`
+(`ErrDeviceIdentityKeyNotDeletable`), and touches nothing. Delete the IAK
+certificate with `iak_delete_cert`.
 
 **Input Schema:**
 ```json

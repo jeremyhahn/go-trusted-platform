@@ -178,7 +178,7 @@ func (r *ToolRegistry) registerIDevIDTools() {
 
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "idevid_delete",
-		Description: "Delete the IDevID key and associated certificate from the TPM",
+		Description: "Refused: the IDevID key is TPM-resident and is not deleted (FailedPrecondition); delete its certificate with idevid_delete_cert",
 		InputSchema: map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
@@ -315,7 +315,7 @@ func (r *ToolRegistry) registerIDevIDTools() {
 
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iak_delete",
-		Description: "Delete the IAK key and associated certificate from the TPM",
+		Description: "Refused: the IAK is TPM-resident and is not deleted (FailedPrecondition); delete its certificate with iak_delete_cert",
 		InputSchema: map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},

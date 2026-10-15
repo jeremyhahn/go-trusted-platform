@@ -608,6 +608,14 @@ var deviceIdentityKeyDeleteRefusals = map[byte]ErrDeviceIdentityKeyNotDeletable{
 	quicwire.OpIAKDelete:    {Key: "IAK"},
 }
 
+// identityCertDeleteOpcodes are the tpm2-family certificate-delete opcodes.
+// They are served by the shared IDevID service, as on gRPC (#704), so a bare
+// handler answers that service's absence instead of the tpm2-unavailable error.
+var identityCertDeleteOpcodes = map[byte]bool{
+	quicwire.OpIDevIDDeleteCert: true,
+	quicwire.OpIAKDeleteCert:    true,
+}
+
 // assertDispatchFamily drives one request through HandleRequest and
 // asserts the response carries the family signature.
 func assertDispatchFamily(t *testing.T, h *QUICServiceHandler, opcode byte, payload []byte, family string) {
@@ -636,6 +644,15 @@ func assertDispatchFamily(t *testing.T, h *QUICServiceHandler, opcode byte, payl
 		if resp.Status != quicwire.StatusFailedPrecondition || string(resp.Payload) != refused.Error() {
 			t.Fatalf("opcode 0x%02X: expected key-delete refusal %q, got status 0x%02X payload %q",
 				opcode, refused.Error(), resp.Status, resp.Payload)
+		}
+		return
+	}
+
+	if identityCertDeleteOpcodes[opcode] {
+		unserved := ErrIDevIDServiceNotConfigured{}
+		if resp.Status != quicwire.StatusUnavailable || string(resp.Payload) != unserved.Error() {
+			t.Fatalf("opcode 0x%02X: expected %q, got status 0x%02X payload %q",
+				opcode, unserved.Error(), resp.Status, resp.Payload)
 		}
 		return
 	}

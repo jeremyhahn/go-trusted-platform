@@ -15,7 +15,7 @@
 
 // Package dns provides integration tests for attestation-gated DNS updates.
 // These tests verify the attestation guard functionality for DNS operations.
-// Run via: make integration-test-dns or INTEGRATION_TEST=1 go test ./test/integration/dns/...
+// Run via: make integration-test-dns
 package dns
 
 import (
@@ -62,8 +62,6 @@ func createExpiredToken(deviceID string) *attestation.AttestationToken {
 
 // TestAttestationGuard_Create_DefaultConfig tests guard creation with default config.
 func TestAttestationGuard_Create_DefaultConfig(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	guard := attestation.NewGuard(nil)
 	require.NotNil(t, guard)
 
@@ -76,8 +74,6 @@ func TestAttestationGuard_Create_DefaultConfig(t *testing.T) {
 
 // TestAttestationGuard_Create_CustomConfig tests guard creation with custom config.
 func TestAttestationGuard_Create_CustomConfig(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	customConfig := &attestation.ZoneAttestationConfig{
 		Required:  false,
 		MaxAge:    10 * time.Minute,
@@ -96,8 +92,6 @@ func TestAttestationGuard_Create_CustomConfig(t *testing.T) {
 
 // TestAttestationGuard_SetZoneConfig tests setting zone-specific configuration.
 func TestAttestationGuard_SetZoneConfig(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	guard := attestation.NewGuard(nil)
 
 	zoneConfig := &attestation.ZoneAttestationConfig{
@@ -117,8 +111,6 @@ func TestAttestationGuard_SetZoneConfig(t *testing.T) {
 
 // TestAttestationGuard_GetZoneConfig_Fallback tests fallback to default config.
 func TestAttestationGuard_GetZoneConfig_Fallback(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	defaultConfig := &attestation.ZoneAttestationConfig{
 		Required: true,
 		MaxAge:   5 * time.Minute,
@@ -134,8 +126,6 @@ func TestAttestationGuard_GetZoneConfig_Fallback(t *testing.T) {
 
 // TestAttestationGuard_RemoveZoneConfig tests removing zone configuration.
 func TestAttestationGuard_RemoveZoneConfig(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	guard := attestation.NewGuard(nil)
 
 	zoneConfig := &attestation.ZoneAttestationConfig{
@@ -156,8 +146,6 @@ func TestAttestationGuard_RemoveZoneConfig(t *testing.T) {
 
 // TestAttestationGuard_VerifyForUpdate_NotRequired tests update when attestation not required.
 func TestAttestationGuard_VerifyForUpdate_NotRequired(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	config := &attestation.ZoneAttestationConfig{
 		Required: false,
 		MaxAge:   5 * time.Minute,
@@ -174,8 +162,6 @@ func TestAttestationGuard_VerifyForUpdate_NotRequired(t *testing.T) {
 
 // TestAttestationGuard_VerifyForUpdate_RequiredNoToken tests update fails without token.
 func TestAttestationGuard_VerifyForUpdate_RequiredNoToken(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	config := &attestation.ZoneAttestationConfig{
 		Required: true,
 		MaxAge:   5 * time.Minute,
@@ -194,8 +180,6 @@ func TestAttestationGuard_VerifyForUpdate_RequiredNoToken(t *testing.T) {
 
 // TestAttestationGuard_VerifyForUpdate_ExpiredToken tests update fails with expired token.
 func TestAttestationGuard_VerifyForUpdate_ExpiredToken(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	config := &attestation.ZoneAttestationConfig{
 		Required: true,
 		MaxAge:   5 * time.Minute,
@@ -215,8 +199,6 @@ func TestAttestationGuard_VerifyForUpdate_ExpiredToken(t *testing.T) {
 
 // TestAttestationGuard_VerifyForUpdate_TooOld tests update fails when token too old.
 func TestAttestationGuard_VerifyForUpdate_TooOld(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	config := &attestation.ZoneAttestationConfig{
 		Required: true,
 		MaxAge:   1 * time.Second, // Very short max age
@@ -245,8 +227,6 @@ func TestAttestationGuard_VerifyForUpdate_TooOld(t *testing.T) {
 
 // TestAttestationGuard_VerifyForUpdate_OperationNotAllowed tests update fails for disallowed operation.
 func TestAttestationGuard_VerifyForUpdate_OperationNotAllowed(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	config := &attestation.ZoneAttestationConfig{
 		Required: true,
 		MaxAge:   5 * time.Minute,
@@ -267,8 +247,6 @@ func TestAttestationGuard_VerifyForUpdate_OperationNotAllowed(t *testing.T) {
 
 // TestAttestationGuard_VerifyForUpdate_ZoneNotAllowed tests update fails for disallowed zone.
 func TestAttestationGuard_VerifyForUpdate_ZoneNotAllowed(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	config := &attestation.ZoneAttestationConfig{
 		Required: true,
 		MaxAge:   5 * time.Minute,
@@ -289,8 +267,6 @@ func TestAttestationGuard_VerifyForUpdate_ZoneNotAllowed(t *testing.T) {
 
 // TestAttestationGuard_VerifyForUpdate_Success tests successful update verification.
 func TestAttestationGuard_VerifyForUpdate_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	config := &attestation.ZoneAttestationConfig{
 		Required: true,
 		MaxAge:   5 * time.Minute,
@@ -309,8 +285,6 @@ func TestAttestationGuard_VerifyForUpdate_Success(t *testing.T) {
 
 // TestAttestationGuard_VerifyForUpdate_WildcardOperations tests wildcard operation permission.
 func TestAttestationGuard_VerifyForUpdate_WildcardOperations(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	config := &attestation.ZoneAttestationConfig{
 		Required: true,
 		MaxAge:   5 * time.Minute,
@@ -330,8 +304,6 @@ func TestAttestationGuard_VerifyForUpdate_WildcardOperations(t *testing.T) {
 
 // TestAttestationGuard_VerifyForUpdate_WildcardZones tests wildcard zone permission.
 func TestAttestationGuard_VerifyForUpdate_WildcardZones(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	config := &attestation.ZoneAttestationConfig{
 		Required: true,
 		MaxAge:   5 * time.Minute,
@@ -351,8 +323,6 @@ func TestAttestationGuard_VerifyForUpdate_WildcardZones(t *testing.T) {
 
 // TestAttestationGuard_VerifyForQuery_NotRequired tests query when attestation not required.
 func TestAttestationGuard_VerifyForQuery_NotRequired(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	config := &attestation.ZoneAttestationConfig{
 		Required: false,
 		MaxAge:   5 * time.Minute,
@@ -368,8 +338,6 @@ func TestAttestationGuard_VerifyForQuery_NotRequired(t *testing.T) {
 
 // TestAttestationGuard_VerifyForQuery_RequiredNoToken tests query without token (allowed for queries).
 func TestAttestationGuard_VerifyForQuery_RequiredNoToken(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	config := &attestation.ZoneAttestationConfig{
 		Required: true,
 		MaxAge:   5 * time.Minute,
@@ -385,8 +353,6 @@ func TestAttestationGuard_VerifyForQuery_RequiredNoToken(t *testing.T) {
 
 // TestAttestationGuard_VerifyForQuery_WithValidToken tests query with valid token.
 func TestAttestationGuard_VerifyForQuery_WithValidToken(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	config := &attestation.ZoneAttestationConfig{
 		Required: true,
 		MaxAge:   5 * time.Minute,
@@ -403,8 +369,6 @@ func TestAttestationGuard_VerifyForQuery_WithValidToken(t *testing.T) {
 
 // TestAttestationGuard_VerifyForQuery_WithExpiredToken tests query with expired token (still allowed).
 func TestAttestationGuard_VerifyForQuery_WithExpiredToken(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	config := &attestation.ZoneAttestationConfig{
 		Required: true,
 		MaxAge:   5 * time.Minute,
@@ -422,8 +386,6 @@ func TestAttestationGuard_VerifyForQuery_WithExpiredToken(t *testing.T) {
 
 // TestAttestationGuard_ContextCancellation tests behavior when context is cancelled.
 func TestAttestationGuard_ContextCancellation(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	config := &attestation.ZoneAttestationConfig{
 		Required: true,
 		MaxAge:   5 * time.Minute,
@@ -449,8 +411,6 @@ func TestAttestationGuard_ContextCancellation(t *testing.T) {
 
 // TestAttestationGuard_MultipleZoneConfigs tests managing multiple zone configurations.
 func TestAttestationGuard_MultipleZoneConfigs(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	defaultConfig := &attestation.ZoneAttestationConfig{
 		Required: true,
 		MaxAge:   5 * time.Minute,
@@ -492,8 +452,6 @@ func TestAttestationGuard_MultipleZoneConfigs(t *testing.T) {
 
 // TestAttestationGuard_ZoneSpecificConfig_Override tests zone config overrides default.
 func TestAttestationGuard_ZoneSpecificConfig_Override(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	defaultConfig := &attestation.ZoneAttestationConfig{
 		Required: true,
 		MaxAge:   5 * time.Minute,
@@ -520,8 +478,6 @@ func TestAttestationGuard_ZoneSpecificConfig_Override(t *testing.T) {
 
 // TestAttestationToken_IsExpired tests token expiration check.
 func TestAttestationToken_IsExpired(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	// Valid token
 	validToken := createTestToken("device-123", []string{"*"}, []string{"*"})
 	assert.False(t, validToken.IsExpired())
@@ -533,8 +489,6 @@ func TestAttestationToken_IsExpired(t *testing.T) {
 
 // TestAttestationToken_IsValidFor tests token validation for operation and zone.
 func TestAttestationToken_IsValidFor(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	token := createTestToken("device-123", []string{"example.com.", "test.org."}, []string{"A", "AAAA", "TLSA"})
 
 	// Valid combinations
@@ -555,8 +509,6 @@ func TestAttestationToken_IsValidFor(t *testing.T) {
 
 // TestAttestationToken_WildcardValidation tests wildcard validation.
 func TestAttestationToken_WildcardValidation(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	// Wildcard operations
 	token := createTestToken("device-123", []string{"example.com."}, []string{"*"})
 	assert.True(t, token.IsValidFor("A", "example.com."))
@@ -575,8 +527,6 @@ func TestAttestationToken_WildcardValidation(t *testing.T) {
 
 // TestDefaultZoneAttestationConfig tests default configuration values.
 func TestDefaultZoneAttestationConfig(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	config := attestation.DefaultZoneAttestationConfig()
 
 	assert.True(t, config.Required)
@@ -587,8 +537,6 @@ func TestDefaultZoneAttestationConfig(t *testing.T) {
 
 // TestAttestationGuard_SetZoneConfig_Nil tests setting nil config removes zone.
 func TestAttestationGuard_SetZoneConfig_Nil(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	guard := attestation.NewGuard(nil)
 
 	guard.SetZoneConfig("test.example.com.", &attestation.ZoneAttestationConfig{

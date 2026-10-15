@@ -16,7 +16,7 @@
 // Package dns provides integration tests for DANE (DNS-based Authentication
 // of Named Entities) service integration. These tests verify TLSA record
 // auto-generation and DANE workflow functionality.
-// Run via: make integration-test-dns or INTEGRATION_TEST=1 go test ./test/integration/dns/...
+// Run via: make integration-test-dns
 package dns
 
 import (
@@ -35,8 +35,6 @@ import (
 
 // TestDANE_TLSARecordCreation tests creating TLSA records for DANE.
 func TestDANE_TLSARecordCreation(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -71,8 +69,6 @@ func TestDANE_TLSARecordCreation(t *testing.T) {
 
 // TestDANE_MultiService tests TLSA records for multiple services on same host.
 func TestDANE_MultiService(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -115,8 +111,6 @@ func TestDANE_MultiService(t *testing.T) {
 
 // TestDANE_SHA256Matching tests TLSA record with SHA-256 matching type.
 func TestDANE_SHA256Matching(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -149,8 +143,6 @@ func TestDANE_SHA256Matching(t *testing.T) {
 
 // TestDANE_SHA512Matching tests TLSA record with SHA-512 matching type.
 func TestDANE_SHA512Matching(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -183,8 +175,6 @@ func TestDANE_SHA512Matching(t *testing.T) {
 
 // TestDANE_FullCertificate tests TLSA record with full certificate matching.
 func TestDANE_FullCertificate(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -216,8 +206,6 @@ func TestDANE_FullCertificate(t *testing.T) {
 
 // TestDANE_PKIXUsageTypes tests TLSA records with PKIX usage types.
 func TestDANE_PKIXUsageTypes(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -256,8 +244,6 @@ func TestDANE_PKIXUsageTypes(t *testing.T) {
 
 // TestDANE_TAUsageType tests DANE-TA (Trust Anchor) usage type.
 func TestDANE_TAUsageType(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -289,8 +275,6 @@ func TestDANE_TAUsageType(t *testing.T) {
 
 // TestDANE_EEUsageType tests DANE-EE (End Entity) usage type.
 func TestDANE_EEUsageType(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -321,8 +305,6 @@ func TestDANE_EEUsageType(t *testing.T) {
 
 // TestDANE_CertificateRotation tests updating TLSA records during cert rotation.
 func TestDANE_CertificateRotation(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -372,8 +354,6 @@ func TestDANE_CertificateRotation(t *testing.T) {
 
 // TestDANE_WithCAARecord tests DANE and CAA records coexistence.
 func TestDANE_WithCAARecord(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -413,8 +393,6 @@ func TestDANE_WithCAARecord(t *testing.T) {
 
 // TestDANE_InternalZone tests DANE for internal/private zones.
 func TestDANE_InternalZone(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -469,8 +447,6 @@ func TestDANE_InternalZone(t *testing.T) {
 
 // TestDANE_SMTPService tests TLSA for SMTP (MTA-STS/DANE).
 func TestDANE_SMTPService(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -526,8 +502,6 @@ func TestDANE_SMTPService(t *testing.T) {
 
 // TestDANE_WildcardService tests TLSA for wildcard subdomains.
 func TestDANE_WildcardService(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -557,8 +531,6 @@ func TestDANE_WildcardService(t *testing.T) {
 
 // TestDANE_ConfigDefaults tests DANE configuration defaults.
 func TestDANE_ConfigDefaults(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	config := &dns.DANEConfig{
 		Enabled:             true,
 		AutoGenerate:        true,
@@ -580,8 +552,6 @@ func TestDANE_ConfigDefaults(t *testing.T) {
 
 // TestDANE_RecordLifecycle tests complete TLSA record lifecycle.
 func TestDANE_RecordLifecycle(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 

@@ -33,8 +33,6 @@ import (
 
 // TestContainerOrchestrator runs the complete container orchestrator test suite.
 func TestContainerOrchestrator(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultTestTimeout)
 	defer cancel()
 

@@ -132,20 +132,20 @@ See the [Reference Architecture](docs/architecture/reference.md) for details on 
 
 #### Configuration
 
-Copy a [config file](configs/platform/) to `./config.yaml` (where you will run the `platformd` binary). Edit the configuration file according to your environment and requirements.
+Copy a deployment profile (single-node, dedicated, high-availability) from [`configs/platform/templates/`](configs/platform/templates/README.md) to `./config.yaml` (where you will run the `platformd` binary). Edit the configuration file according to your environment and requirements.
 
-The development and example attestation configs use a TPM simulator which is reset every time the platform starts. Be sure to set the simulator to false in the platform configuration file to start using your real TPM device.
+For local web console work, [`configs/platform/standalone/web-test.example.yaml`](configs/platform/standalone/web-test.example.yaml) starts platformd on a swtpm socket (`/tmp/swtpm/swtpm.sock`) with in-memory quicbaas and REST on 8443. `make config` copies it to `pkg/config.yaml`.
 
 #### Quick Start
 
-Generate a configuration and start the platform:
+Copy a configuration and start the platform:
 
 ```bash
-# Generate config and initialize the platform
-./platformd config gen --init --domain=example.test --platform-dir trusted-data
+# Copy the single-node profile
+cp configs/platform/templates/single-node/default.yaml config.yaml
 
-# Start the platform daemon (all protocol servers auto-start)
-sudo ./platformd serve --config config.yaml --enable-mtls
+# Initialize the platform and start the daemon (all protocol servers auto-start)
+sudo ./platformd --config config.yaml --init serve --enable-mtls
 
 # Use the CLI to manage the platform
 platformctl daemon status
@@ -154,13 +154,6 @@ platformctl tpm info
 
 # Browse REST API documentation
 xdg-open https://localhost:8443/swagger/
-```
-
-Alternatively, use an existing configuration:
-
-```bash
-cp configs/platform/config.prod.yaml config.yaml
-sudo ./platformd serve --config config.yaml --enable-mtls
 ```
 
 

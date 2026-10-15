@@ -21,13 +21,10 @@
 // Run these tests via:
 //
 //	make integration-test-sdk
-//
-// Tests require INTEGRATION_TEST=1 environment variable.
 package sdk_test
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -48,14 +45,6 @@ const startupTimeout = 60 * time.Second
 
 // shutdownTimeout is the timeout for factory shutdown operations.
 const shutdownTimeout = 10 * time.Second
-
-// skipIfNotIntegration skips the test if the INTEGRATION_TEST env var is not set.
-func skipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
 
 // testContext returns a context with the test timeout.
 func testContext() (context.Context, context.CancelFunc) {
@@ -130,8 +119,6 @@ func newTestFixture(t *testing.T) *testFixture {
 
 // TestPlatformSDKClient_Creation tests platform SDK client creation.
 func TestPlatformSDKClient_Creation(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFixture(t)
 	defer tf.Cleanup()
 
@@ -151,8 +138,6 @@ func TestPlatformSDKClient_Creation(t *testing.T) {
 
 // TestPlatformSDKClient_AllServiceAccessors tests that all 28 service accessors work.
 func TestPlatformSDKClient_AllServiceAccessors(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFixture(t)
 	defer tf.Cleanup()
 
@@ -214,8 +199,6 @@ func TestPlatformSDKClient_AllServiceAccessors(t *testing.T) {
 
 // TestPlatformSDKClient_KVOperations tests KV operations via the platform SDK.
 func TestPlatformSDKClient_KVOperations(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFixture(t)
 	defer tf.Cleanup()
 
@@ -261,8 +244,6 @@ func TestPlatformSDKClient_KVOperations(t *testing.T) {
 
 // TestPlatformSDKClient_VectorOperations tests vector operations via the platform SDK.
 func TestPlatformSDKClient_VectorOperations(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFixture(t)
 	defer tf.Cleanup()
 
@@ -301,8 +282,6 @@ func TestPlatformSDKClient_VectorOperations(t *testing.T) {
 
 // TestPlatformSDKClient_HealthCheck tests health check via the platform SDK.
 func TestPlatformSDKClient_HealthCheck(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFixture(t)
 	defer tf.Cleanup()
 
@@ -326,8 +305,6 @@ func TestPlatformSDKClient_HealthCheck(t *testing.T) {
 
 // TestPlatformSDKClient_BatchOperations tests batch operations via the platform SDK.
 func TestPlatformSDKClient_BatchOperations(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFixture(t)
 	defer tf.Cleanup()
 
@@ -358,8 +335,6 @@ func TestPlatformSDKClient_BatchOperations(t *testing.T) {
 
 // TestPlatformSDKClient_TransactionOperations tests transaction operations via the platform SDK.
 func TestPlatformSDKClient_TransactionOperations(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFixture(t)
 	defer tf.Cleanup()
 
@@ -410,8 +385,6 @@ func TestPlatformSDKClient_TransactionOperations(t *testing.T) {
 
 // TestPlatformSDKClient_ParameterStore tests parameter store operations.
 func TestPlatformSDKClient_ParameterStore(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFixture(t)
 	defer tf.Cleanup()
 
@@ -444,8 +417,6 @@ func TestPlatformSDKClient_ParameterStore(t *testing.T) {
 
 // TestPlatformSDKClient_ConcurrentAccess tests concurrent access to the SDK client.
 func TestPlatformSDKClient_ConcurrentAccess(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFixture(t)
 	defer tf.Cleanup()
 
@@ -479,8 +450,6 @@ func TestPlatformSDKClient_ConcurrentAccess(t *testing.T) {
 
 // TestPlatformSDKClient_ErrorHandling tests error handling in the SDK client.
 func TestPlatformSDKClient_ErrorHandling(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	t.Run("NilSDKClient", func(t *testing.T) {
 		_, err := sdkquicbaas.NewClientFromSDK(nil)
 		assert.Error(t, err, "Creating client with nil SDK should fail")
@@ -496,8 +465,6 @@ func TestPlatformSDKClient_ErrorHandling(t *testing.T) {
 
 // TestPlatformSDKClient_Close tests client close behavior.
 func TestPlatformSDKClient_Close(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	// Create a standalone SDK client (not through factory)
 	cfg := quicbaas.TestConfig(t)
 	cfg.Transport = quicbaas.TransportEmbedded

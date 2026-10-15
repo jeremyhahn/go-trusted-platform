@@ -17,8 +17,6 @@ package tpm
 
 import (
 	"fmt"
-	"os"
-	"testing"
 )
 
 // Environment variable names for service endpoints
@@ -50,13 +48,6 @@ func GetServiceEndpoints() *ServiceEndpoints {
 		PlatformMCP:  "localhost:9445",
 		PlatformUnix: "/run/platformd.sock",
 		PlatformCTL:  "platformctl",
-	}
-}
-
-// SkipIfNotIntegration skips the test if not running integration tests.
-func SkipIfNotIntegration(t *testing.T) {
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test: INTEGRATION_TEST not set")
 	}
 }
 

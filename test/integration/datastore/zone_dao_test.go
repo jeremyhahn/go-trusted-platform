@@ -15,7 +15,7 @@
 
 // Package datastore provides integration tests for the QuicBaaS ZoneDAO implementation.
 // These tests verify DNS zone-specific operations using real QuicBaaS with embedded PebbleDB.
-// Run via: make integration-test-datastore or INTEGRATION_TEST=1 go test ./test/integration/datastore/...
+// Run via: make integration-test-datastore
 package datastore
 
 import (
@@ -64,8 +64,6 @@ func createTestZone(name string, internal bool) *dnsEntities.Zone {
 
 // TestZoneDAO_Save_NewZone tests saving a new zone with auto-generated ID.
 func TestZoneDAO_Save_NewZone(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -95,8 +93,6 @@ func TestZoneDAO_Save_NewZone(t *testing.T) {
 
 // TestZoneDAO_Save_UpdateZone tests updating an existing zone.
 func TestZoneDAO_Save_UpdateZone(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -128,8 +124,6 @@ func TestZoneDAO_Save_UpdateZone(t *testing.T) {
 
 // TestZoneDAO_Get_Success tests successful zone retrieval.
 func TestZoneDAO_Get_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -149,8 +143,6 @@ func TestZoneDAO_Get_Success(t *testing.T) {
 
 // TestZoneDAO_Get_NotFound tests retrieval of non-existent zone.
 func TestZoneDAO_Get_NotFound(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -168,8 +160,6 @@ func TestZoneDAO_Get_NotFound(t *testing.T) {
 
 // TestZoneDAO_Delete_Success tests successful zone deletion.
 func TestZoneDAO_Delete_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -196,8 +186,6 @@ func TestZoneDAO_Delete_Success(t *testing.T) {
 
 // TestZoneDAO_GetByName_Success tests retrieving zone by name.
 func TestZoneDAO_GetByName_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -221,8 +209,6 @@ func TestZoneDAO_GetByName_Success(t *testing.T) {
 
 // TestZoneDAO_GetByName_NotFound tests GetByName with non-existent zone.
 func TestZoneDAO_GetByName_NotFound(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -240,8 +226,6 @@ func TestZoneDAO_GetByName_NotFound(t *testing.T) {
 
 // TestZoneDAO_GetByName_FallbackScan tests that GetByName falls back to scan.
 func TestZoneDAO_GetByName_FallbackScan(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -270,8 +254,6 @@ func TestZoneDAO_GetByName_FallbackScan(t *testing.T) {
 
 // TestZoneDAO_Count tests counting zones.
 func TestZoneDAO_Count(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -299,8 +281,6 @@ func TestZoneDAO_Count(t *testing.T) {
 
 // TestZoneDAO_RecordSetPersistence tests that zone records persist correctly.
 func TestZoneDAO_RecordSetPersistence(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -388,8 +368,6 @@ func TestZoneDAO_RecordSetPersistence(t *testing.T) {
 
 // TestZoneDAO_AddRemoveRecords tests adding and removing records from a zone.
 func TestZoneDAO_AddRemoveRecords(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -427,8 +405,6 @@ func TestZoneDAO_AddRemoveRecords(t *testing.T) {
 
 // TestZoneDAO_InternalVsExternal tests internal vs external zone distinction.
 func TestZoneDAO_InternalVsExternal(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -458,8 +434,6 @@ func TestZoneDAO_InternalVsExternal(t *testing.T) {
 
 // TestZoneDAO_ConcurrentOperations tests concurrent zone operations.
 func TestZoneDAO_ConcurrentOperations(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -506,8 +480,6 @@ func TestZoneDAO_ConcurrentOperations(t *testing.T) {
 
 // TestZoneDAO_DataPersistenceAcrossDAOInstances tests data persists across DAO instances.
 func TestZoneDAO_DataPersistenceAcrossDAOInstances(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 

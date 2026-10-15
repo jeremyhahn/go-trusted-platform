@@ -32,10 +32,6 @@ import (
 // =============================================================================
 
 const (
-	// EnvIntegrationTest is the environment variable that must be set to run
-	// integration tests. Set INTEGRATION_TEST=1 to enable.
-	EnvIntegrationTest = "INTEGRATION_TEST"
-
 	// EnvPlatformdSocket is the Unix socket path for platformd.
 	EnvPlatformdSocket = "PLATFORMD_SOCKET"
 
@@ -117,20 +113,6 @@ const (
 	// StateQuarantined indicates the device has been quarantined.
 	StateQuarantined = "quarantined"
 )
-
-// =============================================================================
-// Skip Helpers
-// =============================================================================
-
-// SkipIfNotIntegration skips the test if the INTEGRATION_TEST environment
-// variable is not set. This ensures integration tests only run when explicitly
-// requested, preventing accidental execution during normal unit testing.
-func SkipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv(EnvIntegrationTest) == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
 
 // =============================================================================
 // Endpoint Configuration

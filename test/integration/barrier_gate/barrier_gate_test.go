@@ -28,8 +28,6 @@ import (
 // comes up in the uninitialized state, binds the gate /healthz endpoint on
 // 127.0.0.1:9446, and does NOT bind any production transport ports.
 func TestM6_SealedDaemonRefusesRemotePorts(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
 
@@ -75,8 +73,6 @@ func TestM6_SealedDaemonRefusesRemotePorts(t *testing.T) {
 //  4. Production REST listener begins accepting connections.
 //  5. Production gRPC and QUIC ports accept TCP-probe connections.
 func TestM6_GateAcceptsInitThenTransitions(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	t.Cleanup(cancel)
 
@@ -147,8 +143,6 @@ func TestM6_GateAcceptsInitThenTransitions(t *testing.T) {
 //  4. POST /unseal with the master credentials returns 200.
 //  5. Gate listener shuts down; production REST listener binds.
 func TestM6_WarmBoot_UnsealThenTransitions(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	t.Cleanup(cancel)
 

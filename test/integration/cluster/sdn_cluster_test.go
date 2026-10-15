@@ -115,9 +115,6 @@ func (stc *sdnTestCluster) waitForBridge(ctx context.Context, t *testing.T, brid
 
 // TestSDNBridgeReplication tests that bridge state replicates across nodes.
 func TestSDNBridgeReplication(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	stc := newSDNTestCluster(t, 3)
 	defer stc.stop()
 
@@ -178,9 +175,6 @@ func TestSDNBridgeReplication(t *testing.T) {
 
 // TestSDNBridgeReplication_Update tests bridge update replication.
 func TestSDNBridgeReplication_Update(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	stc := newSDNTestCluster(t, 3)
 	defer stc.stop()
 
@@ -258,9 +252,6 @@ func TestSDNBridgeReplication_Update(t *testing.T) {
 
 // TestSDNPortReplication tests that port state replicates across nodes.
 func TestSDNPortReplication(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	stc := newSDNTestCluster(t, 3)
 	defer stc.stop()
 
@@ -342,9 +333,6 @@ func TestSDNPortReplication(t *testing.T) {
 
 // TestSDNFlowReplication tests that flow rules replicate across nodes.
 func TestSDNFlowReplication(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	stc := newSDNTestCluster(t, 3)
 	defer stc.stop()
 
@@ -434,9 +422,6 @@ func TestSDNFlowReplication(t *testing.T) {
 
 // TestSDNFlowReplication_MultipleFlows tests multiple flow replication.
 func TestSDNFlowReplication_MultipleFlows(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	stc := newSDNTestCluster(t, 3)
 	defer stc.stop()
 
@@ -534,9 +519,6 @@ func TestSDNFlowReplication_MultipleFlows(t *testing.T) {
 
 // TestSDNStateConsistency tests read-after-write consistency.
 func TestSDNStateConsistency(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	stc := newSDNTestCluster(t, 3)
 	defer stc.stop()
 
@@ -596,9 +578,6 @@ func TestSDNStateConsistency(t *testing.T) {
 
 // TestSDNStateConsistency_ConcurrentReads tests concurrent read consistency.
 func TestSDNStateConsistency_ConcurrentReads(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	stc := newSDNTestCluster(t, 3)
 	defer stc.stop()
 
@@ -679,9 +658,6 @@ func TestSDNStateConsistency_ConcurrentReads(t *testing.T) {
 
 // TestSDNFailoverPersistence tests that state survives leader change.
 func TestSDNFailoverPersistence(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	stc := newSDNTestCluster(t, 3)
 	defer stc.stop()
 
@@ -786,9 +762,6 @@ func TestSDNFailoverPersistence(t *testing.T) {
 
 // TestSDNFailoverPersistence_WriteAfterFailover tests writes work after failover.
 func TestSDNFailoverPersistence_WriteAfterFailover(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	stc := newSDNTestCluster(t, 3)
 	defer stc.stop()
 

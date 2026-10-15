@@ -15,7 +15,7 @@
 
 // Package db provides integration tests for the platformctl db dump command.
 // These tests verify end-to-end functionality with a real QuicBaaS instance.
-// Run via: make integration-test-cmd-db or INTEGRATION_TEST=1 go test ./test/integration/cmd/db/...
+// Run via: make integration-test-cmd-db
 package db
 
 import (
@@ -35,13 +35,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
-
-// skipIfNotIntegration skips the test if the INTEGRATION_TEST env var is not set.
-func skipIfNotIntegration(t *testing.T) {
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
 
 // testContext holds shared resources for dump integration tests.
 type testContext struct {
@@ -117,8 +110,6 @@ func createTestZone(name string, internal bool) *dnsEntities.Zone {
 
 // TestDumpCommand_JSONFormat tests dumping data to JSON format.
 func TestDumpCommand_JSONFormat(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestContext(t)
 	defer tc.cleanup()
 
@@ -209,8 +200,6 @@ func TestDumpCommand_JSONFormat(t *testing.T) {
 
 // TestDumpCommand_YAMLFormat tests dumping data to YAML format.
 func TestDumpCommand_YAMLFormat(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestContext(t)
 	defer tc.cleanup()
 
@@ -269,8 +258,6 @@ func TestDumpCommand_YAMLFormat(t *testing.T) {
 
 // TestDumpCommand_PrettyJSON tests dumping data with pretty-printed JSON.
 func TestDumpCommand_PrettyJSON(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestContext(t)
 	defer tc.cleanup()
 
@@ -323,8 +310,6 @@ func TestDumpCommand_PrettyJSON(t *testing.T) {
 
 // TestDumpCommand_PartitionFilter tests dumping only specific entity types.
 func TestDumpCommand_PartitionFilter(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestContext(t)
 	defer tc.cleanup()
 
@@ -375,8 +360,6 @@ func TestDumpCommand_PartitionFilter(t *testing.T) {
 
 // TestDumpCommand_EmptyPartition tests dumping when a partition has no data.
 func TestDumpCommand_EmptyPartition(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestContext(t)
 	defer tc.cleanup()
 
@@ -408,8 +391,6 @@ func TestDumpCommand_EmptyPartition(t *testing.T) {
 
 // TestDumpCommand_MultipleEntityTypes tests dumping all known entity types.
 func TestDumpCommand_MultipleEntityTypes(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestContext(t)
 	defer tc.cleanup()
 
@@ -467,8 +448,6 @@ func TestDumpCommand_MultipleEntityTypes(t *testing.T) {
 
 // TestDumpCommand_ZoneWithRecordSet tests that zone records are properly serialized.
 func TestDumpCommand_ZoneWithRecordSet(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestContext(t)
 	defer tc.cleanup()
 
@@ -566,8 +545,6 @@ func TestDumpCommand_ZoneWithRecordSet(t *testing.T) {
 
 // TestDumpCommand_LargeDataset tests dumping a larger number of entities.
 func TestDumpCommand_LargeDataset(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestContext(t)
 	defer tc.cleanup()
 
@@ -607,8 +584,6 @@ func TestDumpCommand_LargeDataset(t *testing.T) {
 
 // TestDumpCommand_DataIntegrity tests that dumped data can be parsed back.
 func TestDumpCommand_DataIntegrity(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestContext(t)
 	defer tc.cleanup()
 
@@ -664,8 +639,6 @@ func TestDumpCommand_DataIntegrity(t *testing.T) {
 
 // TestDumpCommand_ConcurrentDump tests concurrent dump operations.
 func TestDumpCommand_ConcurrentDump(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestContext(t)
 	defer tc.cleanup()
 
@@ -734,8 +707,6 @@ func TestDumpCommand_ConcurrentDump(t *testing.T) {
 
 // TestDumpCommand_OutputDirectoryPermissions tests creating output in various directories.
 func TestDumpCommand_OutputDirectoryPermissions(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestContext(t)
 	defer tc.cleanup()
 
@@ -774,8 +745,6 @@ func TestDumpCommand_OutputDirectoryPermissions(t *testing.T) {
 
 // TestDumpCommand_JSONFormatInvalid tests error handling for invalid data.
 func TestDumpCommand_JSONFormatInvalid(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestContext(t)
 	defer tc.cleanup()
 
@@ -803,8 +772,6 @@ func TestDumpCommand_JSONFormatInvalid(t *testing.T) {
 
 // TestDumpCommand_SpecialCharactersInData tests handling of special characters.
 func TestDumpCommand_SpecialCharactersInData(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tc := newTestContext(t)
 	defer tc.cleanup()
 

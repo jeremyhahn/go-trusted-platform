@@ -337,7 +337,7 @@ start_platformd_web() {
 
     # Setup config
     echo "Setting up web-test configuration..."
-    cp /workspace/configs/platform/config.web-test.yaml /workspace/pkg/config.yaml
+    cp /workspace/configs/platform/standalone/web-test.example.yaml /workspace/pkg/config.yaml
     rm -rf /workspace/pkg/trusted-data
     mkdir -p /workspace/pkg/trusted-data/etc
 

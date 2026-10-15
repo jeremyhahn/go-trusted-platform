@@ -38,8 +38,6 @@ import (
 
 // TestPIVMultiProtocol runs the shared scenario against every protocol.
 func TestPIVMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
 

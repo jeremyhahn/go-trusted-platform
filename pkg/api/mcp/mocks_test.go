@@ -2436,10 +2436,6 @@ func (m *mockServiceProvider) TPMCreateIAK(ctx context.Context) (interface{}, er
 	return map[string]interface{}{"success": true}, nil
 }
 
-func (m *mockServiceProvider) TPMDeleteIAK(ctx context.Context) (interface{}, error) {
-	return map[string]interface{}{"success": true}, nil
-}
-
 func (m *mockServiceProvider) TPMQuote(ctx context.Context, nonce []byte, pcrs []int) (interface{}, error) {
 	return map[string]interface{}{"quote": "base64quote"}, nil
 }

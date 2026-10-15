@@ -42,8 +42,6 @@ const tenantOwnerRole = "admin"
 // registration itself cannot run here; this exercises the IAM operation the
 // mirror performs, on a tenant created the way registration creates one.
 func TestIAMTenantDefaultRoles_OwnerMirrorSucceeds(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
