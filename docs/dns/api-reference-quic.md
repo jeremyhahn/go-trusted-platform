@@ -216,6 +216,10 @@ QUIC errors map to application errors:
 | `APPLICATION_ERROR` | Check JSON error response |
 | `CONNECTION_REFUSED` | Service unavailable |
 
+With no `dns:` section every DNS opcode answers `StatusUnavailable`
+(`0x0A`), which the SDK maps to gRPC `Unavailable`, the same class every other
+transport answers.
+
 ```go
 resp, err := client.Do(req)
 if err != nil {

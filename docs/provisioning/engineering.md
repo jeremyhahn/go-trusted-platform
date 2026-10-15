@@ -157,17 +157,22 @@ reachable by unidentified machines and is rate-limited for that reason.
 | Unit | `pkg/provisioning/**/*_test.go`, `pkg/installer/*_test.go` | Session state, nonce handling, config generation, UKI rebuild |
 | Integration | `test/integration/provision/`, `test/integration/pxe/`, `test/integration/ipxe/`, `test/integration/iso/` | Real boot flows |
 
-**Two known holes in the integration suite** (measured 2026-08-18):
+**Known holes in the integration suite:**
 
-- `test/integration/pxe/grpc_adapter.go` contains **15 occurrences** of
-  *"TODO: Implement when proto definitions are available"* — the adapter is
-  hollow, so the PXE integration tests that use it exercise nothing.
+- `test/integration/pxe/` drives every transport through real clients: the
+  REST, CLI and Unix adapters, and the shared `SDKAdapter` (`sdk_adapter.go`)
+  pinned to gRPC, QUIC or MCP with `platform.WithOnlyProtocol`. But no
+  production code constructs a `pkg/compute/pxe.Service`, so platformd's
+  `PXEGRPCService` has no backend (`pkg/api/daemon/daemon.go:975-979`) and every
+  PXE call answers `SERVICE_NOT_CONFIGURED`. Against the shared integration
+  platformd the suite fails at adapter setup on every transport, so it is
+  kept out of `make integration-test`'s default set and runs by name with
+  `make integration-test-pxe`.
 - `test/integration/authenticode/multiprotocol_test.go:68-72` has **all five
-  protocol adapters commented out** — a multi-protocol conformance test that
-  exercises no protocol.
+  protocol adapters commented out**: a multi-protocol conformance test that
+  exercises the CLI alone.
 
-Both are recorded here rather than left to be rediscovered. A green run of
-either suite currently means less than it appears to.
+Both are recorded here rather than left to be rediscovered.
 
 **Known repo-wide gap:** no `CommandDefinition` type exists in this repository
 (grepped 2026-08-18), so the CLI parity requirement in

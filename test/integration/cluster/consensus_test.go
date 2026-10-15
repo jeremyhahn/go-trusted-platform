@@ -386,7 +386,7 @@ func TestSnapshotRecovery(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		key := fmt.Sprintf("recovery-test-%d-%d", time.Now().UnixNano(), i)
 		testKeys[i] = hashString(key)
-		data := []byte(fmt.Sprintf(`{"index": %d, "timestamp": "%s"}`, i, time.Now().Format(time.RFC3339)))
+		data := []byte(fmt.Sprintf(`{"index": %d, "timestamp": %q}`, i, time.Now().Format(time.RFC3339)))
 		err := leader.storage.Put(ctx, "RecoveryTest", testKeys[i], data, shardID)
 		require.NoError(t, err)
 		written[testKeys[i]] = data

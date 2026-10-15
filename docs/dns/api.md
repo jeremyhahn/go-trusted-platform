@@ -1,6 +1,6 @@
 # DNS — API
 
-> **Status: NORMATIVE** · Scope: DNS routes on every transport · Last verified: 2026-10-14
+> **Status: NORMATIVE** · Scope: DNS routes on every transport · Last verified: 2026-10-15
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING`, never omitted.
@@ -13,6 +13,12 @@
 `ProtocolGRPC`, `ProtocolREST`, `ProtocolQUIC`, `ProtocolMCP`. **Unix is gRPC
 over a Unix domain socket**, so gRPC and Unix share a column.
 `ServiceRegistry.DNS` carries the service in-process.
+
+**One backend serves every transport.** platformd starts one DNS service from
+the `dns:` section. gRPC, Unix and embedded share one `DNSServiceServer` over
+it (`Daemon.DNSGRPCServiceServer`, `pkg/api/daemon/daemon.go`); QUIC, MCP and
+REST hold the same `*dns.Service`. With no `dns:` section there is no backend,
+and every transport answers the not-configured error (§5).
 
 gRPC: `DNSService`, 13 RPCs (`pkg/api/grpc/proto/platform_dns.proto`).
 REST: base path `/api/v1/dns` (`pkg/webservice/v1/rest/dns/router.go`).
@@ -128,10 +134,18 @@ therefore answers and fails as gRPC does: the gRPC status passes through, so
 - **There is no reverse lookup tool.** No transport serves a reverse lookup and
   the record set has no PTR type, so #304 deleted the backendless
   `dns_reverse_lookup`.
-- **No DNS service.** When none is wired into the daemon, every tool returns
-  `Unavailable`.
+- **No DNS service.** With no `dns:` section, every tool in both families
+  returns `Unavailable` (§5).
 
 `dns_create_zone` and `dns_zone_create` now need the same scope.
+
+**The Go SDK's MCP transport calls the older family.** Its route table
+(`grpcMethodToMCPToolMap`, `sdk/go/transport/mcp/adapter.go`) sends
+`DNSService` calls to `dns_create_zone`, `dns_list_zones` and the other older
+names, with the request in its proto JSON form. `dns_create_zone` reads the
+zone from `zone`, but `CreateZoneRequest` names it `name`, so SDK `CreateZone`
+over MCP is refused with the zone name missing even when a backend is
+configured. Settling the canonical family settles this route too.
 
 Which family is canonical, and whether the other is removed or aliased, is
 still open.
@@ -181,7 +195,14 @@ positions described above are unchanged. See
 | `0x06` | `StatusAlreadyExists` | 409 | `ErrZoneAlreadyExists` |
 | `0x07` | `StatusPermissionDenied` | 403 | Missing `dns:*` scope |
 | `0x09` | `StatusInvalidArgument` | 400 | `ErrRecordTypeNotSupported`, `ErrInvalidResolverAddress`, `ErrInvalidResolverPort` |
-| `0x0A` | `StatusUnavailable` | 503 | DNS service not wired into the daemon |
+| `0x0A` | `StatusUnavailable` | 503 | No DNS backend: the daemon has no `dns:` section |
+
+With no backend, every DNS call answers the not-configured error before it
+reads its input, so an empty request is `Unavailable`, not `InvalidArgument`.
+gRPC, Unix and embedded answer `Unavailable` with an `ErrorInfo` reason
+`SERVICE_NOT_CONFIGURED`, metadata `service=dns` (`ErrDNSServiceNotAvailable`,
+`pkg/api/daemon/errors.go`); REST answers 503 with code
+`SERVICE_NOT_CONFIGURED`; QUIC answers `0x0A`; MCP answers `Unavailable`.
 
 `ErrNoResolverServers`, `ErrZoneSubdomainsNoInternalServer` and
 `ErrZoneSubdomainsNoNetworkZones` are **load-time** errors — the service does not

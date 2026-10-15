@@ -18,7 +18,7 @@ This development container provides a complete environment for integration testi
 ### Build the Container
 
 ```bash
-make devcontainer-build
+make build-devcontainer
 ```
 
 ### Verify Installation
@@ -65,6 +65,9 @@ make integration-test-vtpm
 make integration-test-vtpm-shell
 ```
 
+A swtpm that does not start fails `integration-test-vtpm`; every other target
+warns and runs on.
+
 ### End-to-End Tests
 
 ```bash
@@ -75,9 +78,14 @@ make integration-test-e2e
 ### All Tests
 
 ```bash
-# Run all integration tests
-make integration-test-all
+# Run every devcontainer-runnable suite
+make integration-test
+
+# Run one suite: <key> is a TARGET_PACKAGES key in run-integration-tests.sh
+make integration-test-<key>
 ```
+
+`docs/test/integration.md` lists the targets and the suites no container runs.
 
 ## Docker Compose Environment
 
@@ -108,7 +116,7 @@ make devcontainer-compose-down
 docker run --rm -it --privileged \
   -v $(pwd):/workspace \
   -w /workspace \
-  go-trusted-platform-dev:latest bash
+  trusted-platform-dev:latest bash
 ```
 
 ### With OVS and TUN/TAP
@@ -121,7 +129,7 @@ docker run --rm -it --privileged \
   -e AUTO_START_OVS=true \
   -v $(pwd):/workspace \
   -w /workspace \
-  go-trusted-platform-dev:latest ovs-shell
+  trusted-platform-dev:latest ovs-shell
 ```
 
 ### With Full Capabilities (KVM + OVS)
@@ -137,7 +145,7 @@ docker run --rm -it --privileged \
   -e AUTO_START_OVS=true \
   -v $(pwd):/workspace \
   -w /workspace \
-  go-trusted-platform-dev:latest ovs-shell
+  trusted-platform-dev:latest ovs-shell
 ```
 
 ## Entrypoint Commands
@@ -155,21 +163,21 @@ The container entrypoint supports several commands:
 
 ```bash
 # Verify environment
-docker run --rm go-trusted-platform-dev:latest verify
+docker run --rm trusted-platform-dev:latest verify
 
 # Start OVS and run tests
 docker run --rm --privileged \
   --device /dev/net/tun \
   -e AUTO_START_OVS=true \
   -v $(pwd):/workspace \
-  go-trusted-platform-dev:latest \
-  go test -v ./test/integration/sdn/...
+  -w /workspace \
+  trusted-platform-dev:latest \
+  go test -v -tags "integration $(make -s print-build-tags)" ./test/integration/sdn/...
 ```
 
 ## Environment Variables
 
 - `AUTO_START_OVS`: Set to "true" to automatically start OVS on container start
-- `INTEGRATION_TEST`: Set to "1" to enable integration test mode
 - `QEMU_ENABLE_KVM`: Set to "true" to enable KVM acceleration
 - `OVS_MANAGER`: OVS manager connection string (default: tcp:127.0.0.1:6640)
 
@@ -237,23 +245,15 @@ All services are connected to `trusted-platform-net` bridge network (172.28.0.0/
 
 ## Integration Test Structure
 
-```
-test/integration/
-├── sdn/                    # SDN/OVS integration tests
-│   ├── run-tests.sh       # Test runner with OVS setup
-│   ├── setup.sh           # OVS initialization
-│   └── *_test.go          # Go integration tests
-├── vtpm/                  # Virtual TPM integration tests
-│   ├── run-tests.sh       # Test runner
-│   └── setup.sh           # swtpm setup
-└── datastore/             # Datastore/QuicBaaS integration tests
-    └── run-tests.sh       # Test runner
-```
-
-Each integration test directory has its own `run-tests.sh` script that:
-1. Sets up required services (OVS, swtpm, etc.)
-2. Runs the tests
+Each directory under `test/integration/` holds one suite (`sdn/`, `vtpm/`,
+`datastore/`, ...). Every `make integration-test-<key>` target runs its suite
+through `run-integration-tests.sh` in this container, which:
+1. Sets up required services (OVS, swtpm, a shared `platformd` unless the key
+   is in `TARGET_NO_DAEMON`)
+2. Runs the tests with the tags `make -s print-build-tags` gives, plus `integration`
 3. Cleans up resources
+
+The `run-tests.sh` scripts beside some suites are older; no target calls them.
 
 ## Troubleshooting
 
@@ -322,7 +322,7 @@ make integration-test-vtpm
 
 ```bash
 # All tests
-make integration-test-all
+make integration-test
 
 # Or use compose for complex scenarios
 make integration-test-compose-full
@@ -335,7 +335,7 @@ make integration-test-compose-full
 make devcontainer-shell-full
 
 # Inside container
-go test -v -run TestSpecificTest ./test/integration/sdn/...
+go test -v -tags "integration $(make -s print-build-tags)" -run TestSpecificTest ./test/integration/sdn/...
 ```
 
 ## Performance Considerations
@@ -369,19 +369,11 @@ The devcontainer can be used in CI/CD pipelines:
 # GitHub Actions example
 - name: Run Integration Tests
   run: |
-    make devcontainer-build
-    make integration-test-all
+    make build-devcontainer
+    make integration-test
 ```
 
-For environments without KVM:
-
-```yaml
-- name: Run Integration Tests (No KVM)
-  run: |
-    make devcontainer-build
-    # Tests will automatically detect and adapt to no-KVM environment
-    make integration-test-all
-```
+Without KVM the same targets run; QEMU falls back to software emulation.
 
 ## Cleanup
 

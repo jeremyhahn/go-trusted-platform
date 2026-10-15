@@ -41,10 +41,14 @@ Runs complete provisioning workflow with actual platform ISOs:
 
 **Run with:**
 ```bash
-export INTEGRATION_TEST_SERVER_ISO=/path/to/server.iso
-export INTEGRATION_TEST_CLIENT_ISO=/path/to/client.iso
+export INTEGRATION_TEST_SERVER_ISO=build/iso/server.iso
+export INTEGRATION_TEST_CLIENT_ISO=build/iso/client.iso
 make integration-test-e2e
 ```
+
+The target passes both variables into the devcontainer when they are set.
+Give paths under the repository, which the container mounts at `/workspace`;
+a host path outside it does not exist in the container.
 
 ## Requirements
 

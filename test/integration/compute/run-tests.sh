@@ -15,6 +15,10 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+
+# The tags come from the Makefile, never a hand-written list.
+BUILD_TAGS="${BUILD_TAGS:-integration $(make -s -C "$REPO_ROOT" print-build-tags)}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -165,12 +169,12 @@ teardown_ovs() {
 
     # Stop processes
     if [ -f /var/run/openvswitch/ovs-vswitchd.pid ]; then
-        sudo kill $(cat /var/run/openvswitch/ovs-vswitchd.pid) 2>/dev/null || true
+        sudo kill "$(cat /var/run/openvswitch/ovs-vswitchd.pid)" 2>/dev/null || true
         sleep 1
     fi
 
     if [ -f /var/run/openvswitch/ovsdb-server.pid ]; then
-        sudo kill $(cat /var/run/openvswitch/ovsdb-server.pid) 2>/dev/null || true
+        sudo kill "$(cat /var/run/openvswitch/ovsdb-server.pid)" 2>/dev/null || true
         sleep 1
     fi
 
@@ -207,15 +211,8 @@ run_all_tests() {
 
     cd "$SCRIPT_DIR"
 
-    # Set environment for integration tests
-    export INTEGRATION_TEST=1
-
-    # Ensure dependencies are resolved
-    log_info "Resolving dependencies..."
-    go mod tidy
-
     log_info "Running all integration tests..."
-    go test -v -timeout 30m ./... -count=1
+    go test -v -tags "$BUILD_TAGS" -timeout 30m ./... -count=1
 
     cleanup_test_resources
 
@@ -228,10 +225,9 @@ run_lifecycle_tests() {
     cleanup_test_resources
 
     cd "$SCRIPT_DIR"
-    export INTEGRATION_TEST=1
 
     log_info "Running VM lifecycle tests..."
-    go test -v -timeout 20m -run "TestQEMUOrchestratorStart|TestQEMUOrchestratorStop" ./... -count=1
+    go test -v -tags "$BUILD_TAGS" -timeout 20m -run "TestQEMUOrchestratorStart|TestQEMUOrchestratorStop" ./... -count=1
 
     cleanup_test_resources
     log_info "=== VM Lifecycle Tests Complete ==="
@@ -243,10 +239,9 @@ run_network_tests() {
     cleanup_test_resources
 
     cd "$SCRIPT_DIR"
-    export INTEGRATION_TEST=1
 
     log_info "Running network attachment tests..."
-    go test -v -timeout 20m -run "TestQEMUOrchestratorAttachNetwork|TestQEMUOrchestratorDetachNetwork" ./... -count=1
+    go test -v -tags "$BUILD_TAGS" -timeout 20m -run "TestQEMUOrchestratorAttachNetwork|TestQEMUOrchestratorDetachNetwork" ./... -count=1
 
     cleanup_test_resources
     log_info "=== Network Attachment Tests Complete ==="
@@ -258,10 +253,9 @@ run_e2e_tests() {
     cleanup_test_resources
 
     cd "$SCRIPT_DIR"
-    export INTEGRATION_TEST=1
 
     log_info "Running end-to-end tests..."
-    go test -v -timeout 30m -run "TestQEMUOrchestratorE2ELifecycle" ./... -count=1
+    go test -v -tags "$BUILD_TAGS" -timeout 30m -run "TestQEMUOrchestratorE2ELifecycle" ./... -count=1
 
     cleanup_test_resources
     log_info "=== End-to-End Tests Complete ==="
@@ -273,10 +267,9 @@ run_tpm_tests() {
     cleanup_test_resources
 
     cd "$SCRIPT_DIR"
-    export INTEGRATION_TEST=1
 
     log_info "Running TPM tests..."
-    go test -v -timeout 20m -run "TestQEMUOrchestratorWithTPM" ./... -count=1
+    go test -v -tags "$BUILD_TAGS" -timeout 20m -run "TestQEMUOrchestratorWithTPM" ./... -count=1
 
     cleanup_test_resources
     log_info "=== TPM Tests Complete ==="
@@ -288,10 +281,9 @@ run_multi_instance_tests() {
     cleanup_test_resources
 
     cd "$SCRIPT_DIR"
-    export INTEGRATION_TEST=1
 
     log_info "Running multiple instance tests..."
-    go test -v -timeout 30m -run "TestQEMUOrchestratorMultipleInstances" ./... -count=1
+    go test -v -tags "$BUILD_TAGS" -timeout 30m -run "TestQEMUOrchestratorMultipleInstances" ./... -count=1
 
     cleanup_test_resources
     log_info "=== Multiple Instance Tests Complete ==="

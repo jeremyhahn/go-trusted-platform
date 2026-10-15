@@ -1674,6 +1674,34 @@ func TestDHCPServer_HandleDHCP(t *testing.T) {
 		assert.NotNil(t, mockConn.writtenData)
 	})
 
+	t.Run("ignores PXE discover from the all-zero MAC", func(t *testing.T) {
+		server := createTestDHCPServer(t)
+		mockConn := &mockPacketConn{}
+
+		req := createPXEDiscoverRequest(t)
+		req.ClientHWAddr = net.HardwareAddr{0, 0, 0, 0, 0, 0}
+		peer := &net.UDPAddr{IP: net.ParseIP("192.168.1.50"), Port: 68}
+
+		server.handleDHCP(mockConn, peer, req)
+
+		assert.Nil(t, mockConn.writtenData, "no offer for a zero chaddr")
+		assert.Empty(t, server.leases, "no lease keyed on a zero chaddr")
+	})
+
+	t.Run("ignores PXE discover with an empty MAC", func(t *testing.T) {
+		server := createTestDHCPServer(t)
+		mockConn := &mockPacketConn{}
+
+		req := createPXEDiscoverRequest(t)
+		req.ClientHWAddr = nil
+		peer := &net.UDPAddr{IP: net.ParseIP("192.168.1.50"), Port: 68}
+
+		server.handleDHCP(mockConn, peer, req)
+
+		assert.Nil(t, mockConn.writtenData, "no offer for an empty chaddr")
+		assert.Empty(t, server.leases, "no lease keyed on an empty chaddr")
+	})
+
 	t.Run("ignores non-PXE discover", func(t *testing.T) {
 		server := createTestDHCPServer(t)
 		mockConn := &mockPacketConn{}
@@ -1722,6 +1750,25 @@ func TestDHCPServer_HandleDHCP(t *testing.T) {
 		// No response should be sent
 		assert.Nil(t, mockConn.writtenData)
 	})
+}
+
+func TestHasClientHWAddr(t *testing.T) {
+	tests := []struct {
+		name string
+		mac  net.HardwareAddr
+		want bool
+	}{
+		{name: "ethernet MAC", mac: net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x55}, want: true},
+		{name: "only the last byte set", mac: net.HardwareAddr{0, 0, 0, 0, 0, 1}, want: true},
+		{name: "all zero", mac: net.HardwareAddr{0, 0, 0, 0, 0, 0}, want: false},
+		{name: "empty", mac: net.HardwareAddr{}, want: false},
+		{name: "nil", mac: nil, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, hasClientHWAddr(tt.mac))
+		})
+	}
 }
 
 // TestDHCPServer_HandleDiscover tests DHCP discover handling.

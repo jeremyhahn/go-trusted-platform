@@ -163,7 +163,7 @@ type exists in this repository** (grepped 2026-08-18), so the requirement is
 unmet repo-wide.
 
 Additionally, two provisioning integration suites do not exercise what they
-appear to — `test/integration/pxe/grpc_adapter.go` is hollow (15 "TODO:
-Implement when proto definitions are available") and
+appear to. The PXE suite's adapters are real on every transport, but platformd
+has no PXE backend, so every call answers `SERVICE_NOT_CONFIGURED`.
 `test/integration/authenticode/multiprotocol_test.go` has all five protocol
 adapters commented out. See [engineering.md](engineering.md) §7.

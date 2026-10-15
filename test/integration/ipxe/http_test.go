@@ -204,13 +204,14 @@ func TestHTTPProxy(t *testing.T) {
 	baseURL := fmt.Sprintf("http://%s:%d", cfg.ServerIP, cfg.HTTPPort)
 
 	t.Run("ProxyHTTPSResource", func(t *testing.T) {
-		// Proxy a small HTTPS resource
-		proxyURL := baseURL + "/proxy/https/httpbin.org/get"
-		resp, body, err := httpGet(ctx, proxyURL)
-		require.NoError(t, err, "Request to the test iPXE server should complete")
+		// The suite's HTTPS upstream, trusted through ProxyCACertPool
+		resp, body, err := httpGet(ctx, ProxyUpstreamURL(cfg))
+		require.NoError(t, err, "Proxy request should complete")
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode, "Proxy should return 200")
-		assert.NotEmpty(t, body, "Response body should not be empty")
+		assert.Equal(t, proxyUpstreamBody, body, "Proxy should relay the upstream body")
+		assert.Equal(t, "application/json", resp.Header.Get("Content-Type"),
+			"Proxy should relay the upstream headers")
 	})
 
 	t.Run("ProxyRejectHTTP", func(t *testing.T) {
@@ -464,7 +465,7 @@ func extractBootEntryNames(menuScript string) []string {
 // HTTP Client Adapter Implementation
 // =============================================================================
 
-// HTTPClientAdapter implements the IPXECommands HTTP operations.
+// HTTPClientAdapter fetches boot scripts, menus and health from the iPXE HTTP server.
 type HTTPClientAdapter struct {
 	baseURL    string
 	httpClient *http.Client
@@ -490,10 +491,10 @@ func (h *HTTPClientAdapter) Setup(ctx context.Context) error {
 	// Verify connectivity by checking health endpoint
 	resp, _, err := httpGet(ctx, h.baseURL+"/health")
 	if err != nil {
-		return fmt.Errorf("HTTP server unreachable: %w", err)
+		return &AdapterSetupError{Protocol: "HTTP", Err: err}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP server unhealthy: status %d", resp.StatusCode)
+		return &AdapterSetupError{Protocol: "HTTP", Err: ErrServerUnhealthy}
 	}
 	return nil
 }
@@ -571,27 +572,13 @@ func (h *HTTPClientAdapter) HTTPGetHealth(ctx context.Context) (*HTTPHealthResul
 	var health struct {
 		Status string `json:"status"`
 	}
-	_ = json.Unmarshal([]byte(body), &health)
+	if err := json.Unmarshal([]byte(body), &health); err != nil {
+		return nil, err
+	}
 
 	return &HTTPHealthResult{
 		Status:     health.Status,
 		StatusCode: resp.StatusCode,
-	}, nil
-}
-
-// HTTPGetFile fetches a file from the server.
-func (h *HTTPClientAdapter) HTTPGetFile(ctx context.Context, path string) (*HTTPFileResult, error) {
-	resp, body, err := httpGet(ctx, h.baseURL+path)
-	if err != nil {
-		return nil, err
-	}
-
-	return &HTTPFileResult{
-		Path:        path,
-		Data:        []byte(body),
-		Size:        int64(len(body)),
-		ContentType: resp.Header.Get("Content-Type"),
-		StatusCode:  resp.StatusCode,
 	}, nil
 }
 

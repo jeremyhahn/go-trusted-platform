@@ -48,19 +48,21 @@ The testenv enrollment integration test (`testenv_enrollment_integration_test.go
 #### Quick Start
 
 ```bash
-# Run the integration test (requires root)
-sudo make integration-test-testenv-enrollment
+# Runs in the privileged devcontainer, which supplies root, QEMU and swtpm
+make integration-test-testenv-enrollment
 ```
+
+The target passes `INTEGRATION_TEST_SERVER_ISO` and
+`INTEGRATION_TEST_CLIENT_ISO` through when they are set; give paths under the
+repository, which the container mounts at `/workspace`. Without them the test
+runs its framework VM only.
 
 #### Manual Execution
 
 ```bash
-# Navigate to the integration test directory
-cd test/integration
-
-# Run with Go test (requires root)
-sudo CGO_ENABLED=1 go test -tags=integration -v -timeout=40m \
-  -run TestEnrollmentIntegration ./...
+# Inside the devcontainer, from the repository root
+CGO_ENABLED=1 go test -tags "integration $(make -s print-build-tags)" -v -timeout=40m \
+  -run '^TestEnrollmentIntegration$' ./test/integration
 ```
 
 ### Test Workflow
@@ -203,9 +205,12 @@ test-integration-enrollment/
 The test automatically cleans up on completion, but you can manually clean up with:
 
 ```bash
-# Clean test artifacts (requires root)
+# Clean artifacts a host run left behind (requires root)
 sudo make integration-test-testenv-enrollment-clean
 ```
+
+A devcontainer run creates its bridge and TAP devices in the container's own
+network namespace, so they go away with the container.
 
 ### Troubleshooting
 

@@ -37,10 +37,6 @@ import (
 // =============================================================================
 
 const (
-	// EnvIntegrationTest is the environment variable that must be set to run
-	// integration tests. Set INTEGRATION_TEST=1 to enable.
-	EnvIntegrationTest = "INTEGRATION_TEST"
-
 	// EnvDNSServer overrides the DNS server address used by DANE tests.
 	// Defaults to 127.0.0.1:8053 (public DNS port) in the devcontainer.
 	EnvDNSServer = "PLATFORM_DNS_SERVER"

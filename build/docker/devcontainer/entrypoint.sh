@@ -79,10 +79,10 @@ start_ovs() {
 stop_ovs() {
     echo "=== Stopping Open vSwitch Services ==="
     if [ -f /var/run/openvswitch/ovs-vswitchd.pid ]; then
-        kill $(cat /var/run/openvswitch/ovs-vswitchd.pid) 2>/dev/null || true
+        kill "$(cat /var/run/openvswitch/ovs-vswitchd.pid)" 2>/dev/null || true
     fi
     if [ -f /var/run/openvswitch/ovsdb-server.pid ]; then
-        kill $(cat /var/run/openvswitch/ovsdb-server.pid) 2>/dev/null || true
+        kill "$(cat /var/run/openvswitch/ovsdb-server.pid)" 2>/dev/null || true
     fi
     echo "=== OVS Services Stopped ==="
 }
@@ -146,7 +146,7 @@ setup_web() {
         fi
 
         # Install Playwright browsers if configured and not already installed
-        if [ -n "${PLAYWRIGHT_BROWSERS_PATH}" ] && [ ! -d "${PLAYWRIGHT_BROWSERS_PATH}/chromium-"* 2>/dev/null ]; then
+        if [ -n "${PLAYWRIGHT_BROWSERS_PATH}" ] && ! compgen -G "${PLAYWRIGHT_BROWSERS_PATH}/chromium-*" >/dev/null; then
             echo "Installing Playwright browsers to ${PLAYWRIGHT_BROWSERS_PATH}..."
             npx playwright install chromium firefox webkit
             echo "Playwright browsers installed"
@@ -332,7 +332,10 @@ start_platformd_web() {
     # Build platformd-web-test if not already built
     if [ ! -f /workspace/bin/platformd-web-test ]; then
         echo "Building platformd-web-test..."
-        cd /workspace && go build -tags 'raft iam' -o bin/platformd-web-test ./cmd/platformd/
+        cd /workspace || return 1
+        local build_tags
+        build_tags="$(make -s print-build-tags)" || return 1
+        go build -tags "$build_tags" -o bin/platformd-web-test ./cmd/platformd/ || return 1
     fi
 
     # Setup config
@@ -527,7 +530,7 @@ Examples:
     # Run specific test with OVS
     docker run --rm --privileged --device /dev/net/tun \\
         -e AUTO_START_OVS=true IMAGE \\
-        go test -v ./test/integration/sdn/...
+        go test -v -tags "integration \$(make -s print-build-tags)" ./test/integration/sdn/...
 
     # Interactive development with full capabilities
     docker run --rm -it --privileged \\

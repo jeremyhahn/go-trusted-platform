@@ -1471,26 +1471,16 @@ test-quicbaas-all:
 	@echo "Running all QuicBaaS tests (includes Raft, serial, ~3 min)..."
 	go test -v -count=1 -tags "$(BUILD_TAGS)" -parallel 1 -timeout 10m ./pkg/storage/quicbaas/...
 
-# QuicBaaS/Datastore Integration Tests (using devcontainer)
+# QuicBaaS and Datastore Integration Tests (using devcontainer)
 .PHONY: integration-test-quicbaas
-## integration-test-quicbaas: Run QuicBaaS/datastore integration tests in development container
+## integration-test-quicbaas: Run the QuicBaaS SDK integration suite (test/integration/quicbaas) in the devcontainer
 integration-test-quicbaas: build-devcontainer
-	@echo "Running QuicBaaS integration tests in development container..."
-	@echo "Build tags: $(TEST_BUILD_TAGS)"
-	@docker run --rm --privileged \
-		--name go-trusted-platform-datastore-test \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/datastore/...
+	$(call run-integration-suite,quicbaas)
 
 .PHONY: integration-test-datastore
-## integration-test-datastore: Alias for integration-test-quicbaas
-integration-test-datastore: integration-test-quicbaas
+## integration-test-datastore: Run the datastore integration suite (test/integration/datastore) in the devcontainer
+integration-test-datastore: build-devcontainer
+	$(call run-integration-suite,datastore)
 
 .PHONY: integration-test-ca-quicbaas-adapter
 ## integration-test-ca-quicbaas-adapter: Run CA QuicBaaS adapter integration tests in development container
@@ -1503,7 +1493,6 @@ integration-test-ca-quicbaas-adapter: build-devcontainer
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
 		-w /workspace \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
 		$(DEVCONTAINER_IMAGE) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./pkg/store/datastore/...
@@ -1512,24 +1501,14 @@ integration-test-ca-quicbaas-adapter: build-devcontainer
 .PHONY: integration-test-dns
 ## integration-test-dns: Run DNS integration tests (zone CRUD, record types, attestation, DANE)
 integration-test-dns: build-devcontainer
-	@echo "Running DNS integration tests in development container..."
-	@echo "Build tags: $(TEST_BUILD_TAGS)"
-	@docker run --rm \
-		--name go-trusted-platform-dns-test \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/dns/...
+	$(call run-integration-suite,dns)
 
 .PHONY: integration-test-dns-local
 ## integration-test-dns-local: Run DNS integration tests locally (no container)
 integration-test-dns-local:
 	@echo "Running DNS integration tests locally..."
 	@echo "Build tags: $(TEST_BUILD_TAGS)"
-	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/dns/...
+	go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/dns/...
 
 # Compute Orchestration Tests
 .PHONY: test-compute
@@ -1764,7 +1743,7 @@ integration-test-secureboot-hw:
 	@echo "NOTE: run this ON the target node (e.g. Supermicro X10) with a provisioned hardware TPM,"
 	@echo "      NOT in the devcontainer. The efivars checks are strictly read-only; the efivars"
 	@echo "      WRITE path is validated via 'platformctl secure-boot enroll' (dry-run, then --commit)."
-	TP_HW_TPM=1 TP_HW_EFIVARS=1 TP_HW_TPM_DEVICE=$(TP_HW_TPM_DEVICE) 		go test -tags 'integration codec_msgpack codec_json codec_cbor' -count=1 -v 		-run 'TestHardware' ./test/integration/secureboot/hardware/...
+	TP_HW_TPM=1 TP_HW_EFIVARS=1 TP_HW_TPM_DEVICE=$(TP_HW_TPM_DEVICE) 		go test $(TEST_BUILD_TAGS_ARG) -count=1 -v 		-run 'TestHardware' ./test/integration/secureboot/hardware/...
 
 ## integration-test-cold-start: Run cold-start lifecycle integration tests in devcontainer
 .PHONY: integration-test-cold-start
@@ -1879,6 +1858,76 @@ integration-test-vpn: build-devcontainer
 integration-test-installer: build-devcontainer
 	$(call run-integration-suite,installer)
 
+## integration-test-root: Run the root package (test/integration, not its subdirectories) in devcontainer
+.PHONY: integration-test-root
+integration-test-root: build-devcontainer
+	$(call run-integration-suite,root)
+
+## integration-test-helpers: Run the integration-tagged tests of the shared harness library in devcontainer
+.PHONY: integration-test-helpers
+integration-test-helpers: build-devcontainer
+	$(call run-integration-suite,helpers)
+
+## integration-test-acme: Run the ACME suite (test/integration/acme) in devcontainer
+.PHONY: integration-test-acme
+integration-test-acme: build-devcontainer
+	$(call run-integration-suite,acme)
+
+## integration-test-authenticode: Run the Authenticode suite (test/integration/authenticode) in devcontainer
+.PHONY: integration-test-authenticode
+integration-test-authenticode: build-devcontainer
+	$(call run-integration-suite,authenticode)
+
+## integration-test-cli: Run the platformctl suite (test/integration/cli) in devcontainer
+.PHONY: integration-test-cli
+integration-test-cli: build-devcontainer
+	$(call run-integration-suite,cli)
+
+## integration-test-cmd: Run the command suites (test/integration/cmd) in devcontainer, no shared platformd
+.PHONY: integration-test-cmd
+integration-test-cmd: build-devcontainer
+	$(call run-integration-suite,cmd)
+
+## integration-test-compute: Run the compute orchestrator suite (test/integration/compute) in devcontainer
+.PHONY: integration-test-compute
+integration-test-compute: build-devcontainer
+	$(call run-integration-suite,compute)
+
+## integration-test-container: Run the container suite (test/integration/container) in devcontainer
+.PHONY: integration-test-container
+integration-test-container: build-devcontainer
+	$(call run-integration-suite,container)
+
+## integration-test-invitation: Run the invitation suite (test/integration/invitation) in devcontainer
+.PHONY: integration-test-invitation
+integration-test-invitation: build-devcontainer
+	$(call run-integration-suite,invitation)
+
+## integration-test-iso: Run the ISO suite (test/integration/iso) in devcontainer
+.PHONY: integration-test-iso
+integration-test-iso: build-devcontainer
+	$(call run-integration-suite,iso)
+
+## integration-test-pxe: Run the PXE suite (test/integration/pxe) in devcontainer
+.PHONY: integration-test-pxe
+integration-test-pxe: build-devcontainer
+	$(call run-integration-suite,pxe)
+
+## integration-test-registry: Run the registry suite (test/integration/registry) in devcontainer
+.PHONY: integration-test-registry
+integration-test-registry: build-devcontainer
+	$(call run-integration-suite,registry)
+
+## integration-test-sdk: Run the SDK suite (test/integration/sdk) in devcontainer, no shared platformd
+.PHONY: integration-test-sdk
+integration-test-sdk: build-devcontainer
+	$(call run-integration-suite,sdk)
+
+## integration-test-user-registration: Run the user registration suite (test/integration/user_registration) in devcontainer
+.PHONY: integration-test-user-registration
+integration-test-user-registration: build-devcontainer
+	$(call run-integration-suite,user-registration)
+
 ## bench-ntp: Run time-synchronization benchmarks
 .PHONY: bench-ntp
 bench-ntp:
@@ -1957,7 +2006,6 @@ define run-integration-suite
 		-v $(GO_MODULE_CACHE):/go/pkg/mod \
 		$(DOCKER_MODULE_MOUNTS) \
 		-w $(SOURCES_BASE)/go-trusted-platform \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=1 \
 		-e GOTOOLCHAIN=auto \
 		-e GOWORK=off \
@@ -2008,15 +2056,9 @@ integration-test-sdn-shell: build-devcontainer
 
 # KMS Integration Tests (with TPM simulator)
 .PHONY: integration-test-kms
-integration-test-kms: docker-builder-load
-	@echo "Running KMS integration tests in docker container..."
-	docker run --rm --privileged \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		$(APPNAME)-builder-$(DOCKER_BUILDER_BASE):amd64 \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/kms/...
+## integration-test-kms: Run KMS integration tests in the devcontainer
+integration-test-kms: build-devcontainer
+	$(call run-integration-suite,kms)
 
 .PHONY: integration-test-kms-local
 ## integration-test-kms-local: Run KMS integration tests locally (requires swtpm installed)
@@ -2026,20 +2068,13 @@ integration-test-kms-local:
 		echo "ERROR: swtpm not installed. Install with: apt-get install swtpm swtpm-tools"; \
 		exit 1; \
 	fi
-	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/kms/...
+	go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/kms/...
 
 # Secrets Integration Tests (with TPM simulator)
 .PHONY: integration-test-secrets
-## integration-test-secrets: Run Secrets integration tests in docker container
-integration-test-secrets: docker-builder-load
-	@echo "Running Secrets integration tests in docker container..."
-	docker run --rm --privileged \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		$(APPNAME)-builder-$(DOCKER_BUILDER_BASE):amd64 \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/secrets/...
+## integration-test-secrets: Run Secrets integration tests in the devcontainer
+integration-test-secrets: build-devcontainer
+	$(call run-integration-suite,secrets)
 
 .PHONY: integration-test-secrets-local
 ## integration-test-secrets-local: Run Secrets integration tests locally (requires swtpm installed)
@@ -2049,7 +2084,7 @@ integration-test-secrets-local:
 		echo "ERROR: swtpm not installed. Install with: apt-get install swtpm swtpm-tools"; \
 		exit 1; \
 	fi
-	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/secrets/...
+	go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/secrets/...
 
 # =============================================================================
 # Development Container
@@ -2173,7 +2208,6 @@ integration-test-sdn-full: build-devcontainer
 		--cap-add=NET_ADMIN \
 		--cap-add=SYS_MODULE \
 		-e AUTO_START_OVS=true \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
@@ -2191,27 +2225,12 @@ integration-test-lb: build-devcontainer
 
 .PHONY: integration-test-e2e
 ## integration-test-e2e: Run end-to-end tests with QEMU VMs and OVS networking
+## Without INTEGRATION_TEST_SERVER_ISO/CLIENT_ISO the suite validates its
+## infrastructure (OVS bridges, policy engine) and stops before provisioning.
+## Set both to paths under the repository (the container sees it at
+## /workspace) for the full provisioning run.
 integration-test-e2e: build-devcontainer
-	@echo "Running E2E integration tests with QEMU and OVS..."
-	@if [ ! -e /dev/kvm ]; then \
-		echo "WARNING: /dev/kvm not available. Tests will run without KVM acceleration."; \
-	fi
-	@docker run --rm --privileged \
-		--name go-trusted-platform-e2e \
-		--device /dev/net/tun:/dev/net/tun \
-		$$([ -e /dev/kvm ] && echo "--device /dev/kvm:/dev/kvm") \
-		--cap-add=NET_ADMIN \
-		--cap-add=SYS_MODULE \
-		--cap-add=IPC_LOCK \
-		--shm-size=2g \
-		-e AUTO_START_OVS=true \
-		-e INTEGRATION_TEST=1 \
-		-e QEMU_ENABLE_KVM=$$([ -e /dev/kvm ] && echo "true" || echo "false") \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		$(DEVCONTAINER_IMAGE) \
-		bash -c "echo 'E2E test infrastructure ready. Add E2E test script here.'"
+	$(call run-integration-suite,e2e,-e INTEGRATION_TEST_SERVER_ISO -e INTEGRATION_TEST_CLIENT_ISO)
 
 .PHONY: integration-test-device-profile
 ## integration-test-device-profile: Test device profile network state transitions
@@ -2223,7 +2242,6 @@ integration-test-device-profile: build-devcontainer
 		--cap-add=NET_ADMIN \
 		--cap-add=SYS_MODULE \
 		-e AUTO_START_OVS=true \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
@@ -2242,7 +2260,6 @@ stress-sdn: build-devcontainer
 		--cap-add=NET_ADMIN \
 		--cap-add=SYS_MODULE \
 		-e AUTO_START_OVS=true \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
@@ -2256,7 +2273,6 @@ stress-sdn-ipam: build-devcontainer
 	@echo "Running IPAM stress tests..."
 	@docker run --rm --privileged \
 		--name go-trusted-platform-ipam-stress \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
@@ -2270,7 +2286,6 @@ stress-sdn-bgp: build-devcontainer
 	@echo "Running BGP stress tests..."
 	@docker run --rm --privileged \
 		--name go-trusted-platform-bgp-stress \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
@@ -2284,7 +2299,6 @@ stress-sdn-dhcp: build-devcontainer
 	@echo "Running DHCP stress tests..."
 	@docker run --rm --privileged \
 		--name go-trusted-platform-dhcp-stress \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
@@ -2301,7 +2315,6 @@ stress-sdn-overlay: build-devcontainer
 		--device /dev/net/tun:/dev/net/tun \
 		--cap-add=NET_ADMIN \
 		-e AUTO_START_OVS=true \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
@@ -2315,7 +2328,6 @@ stress-sdn-cluster: build-devcontainer
 	@echo "Running cluster state stress tests..."
 	@docker run --rm --privileged \
 		--name go-trusted-platform-cluster-stress \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
@@ -2327,7 +2339,7 @@ stress-sdn-cluster: build-devcontainer
 ## stress-sdn-local: Run SDN stress tests locally (without container)
 stress-sdn-local:
 	@echo "Running SDN stress tests locally..."
-	cd test/integration/sdn && INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -timeout=30m ./stress/...
+	cd test/integration/sdn && go test -v $(TEST_BUILD_TAGS_ARG) -timeout=30m ./stress/...
 
 # =============================================================================
 # Docker Compose Based Integration Tests
@@ -2363,7 +2375,7 @@ devcontainer-compose-shell: devcontainer-compose-up
 ## integration-test-compose-full: Run full test suite using docker-compose environment
 integration-test-compose-full: devcontainer-compose-up
 	@echo "Running full integration test suite in compose environment..."
-	@docker exec -e INTEGRATION_TEST=1 -e CGO_ENABLED=0 -w /workspace $(DEVCONTAINER_NAME) \
+	@docker exec -e CGO_ENABLED=0 -w /workspace $(DEVCONTAINER_NAME) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 30m \
 		./test/integration/sdn/... \
 		./test/integration/vtpm/... \
@@ -2552,19 +2564,9 @@ devcontainer-help: build-devcontainer
 # =============================================================================
 .PHONY: integration-test-vtpm
 ## integration-test-vtpm: Run full E2E vTPM integration tests (ISO creation + QEMU boot)
+## A swtpm that does not start fails this target.
 integration-test-vtpm: build-devcontainer
-	@echo "Running vTPM E2E integration tests in development container..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-vtpm-test \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-e HOST_UID=$$(id -u) \
-		-e HOST_GID=$$(id -g) \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		-w /workspace \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 15m ./test/integration/vtpm/...
+	$(call run-integration-suite,vtpm)
 
 .PHONY: integration-test-vtpm-shell
 ## integration-test-vtpm-shell: Start interactive shell for vTPM testing
@@ -2603,19 +2605,7 @@ devcontainer-clean:
 .PHONY: integration-test-cluster
 ## integration-test-cluster: Run cluster integration tests with multi-node Raft cluster
 integration-test-cluster: build-devcontainer
-	@echo "Running cluster integration tests..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-cluster-test \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		-e RAFT_CLUSTER_TEST=1 \
-		-e CLUSTER_SIZE=3 \
-		-e LOG_LEVEL=info \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 15m ./test/integration/cluster/...
+	$(call run-integration-suite,cluster)
 
 .PHONY: integration-test-cluster-consensus
 ## integration-test-cluster-consensus: Run cluster consensus tests only
@@ -2626,9 +2616,7 @@ integration-test-cluster-consensus: build-devcontainer
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
 		-w /workspace \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
-		-e RAFT_CLUSTER_TEST=1 \
 		$(DEVCONTAINER_IMAGE) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*Consensus.*' ./test/integration/cluster/...
 
@@ -2641,9 +2629,7 @@ integration-test-cluster-failover: build-devcontainer
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
 		-w /workspace \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
-		-e RAFT_CLUSTER_TEST=1 \
 		$(DEVCONTAINER_IMAGE) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*Failover.*' ./test/integration/cluster/...
 
@@ -2657,8 +2643,6 @@ integration-test-cluster-sdn: build-devcontainer
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
 		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e RAFT_CLUSTER_TEST=1 \
 		-e CGO_ENABLED=0 \
 		$(DEVCONTAINER_IMAGE) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*SDN.*' ./test/integration/cluster/...
@@ -2672,8 +2656,6 @@ integration-test-cluster-ca: build-devcontainer
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
 		-w /workspace \
-		-e RAFT_CLUSTER_TEST=1 \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
 		$(DEVCONTAINER_IMAGE) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*CA.*' ./test/integration/cluster/...
@@ -2687,22 +2669,22 @@ integration-test-cluster-shell: build-devcontainer
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
 		-w /workspace/test/integration/cluster \
-		-e INTEGRATION_TEST=1 \
 		$(DEVCONTAINER_IMAGE) \
 		bash
 
 .PHONY: integration-test-cluster-compose
 ## integration-test-cluster-compose: Run cluster tests using docker-compose (full multi-container setup)
-integration-test-cluster-compose:
+integration-test-cluster-compose: build-devcontainer
 	@echo "Starting multi-node cluster with docker-compose..."
-	@cd test/integration/cluster && docker compose up --build --abort-on-container-exit
-	@cd test/integration/cluster && docker compose down -v
+	@cd test/integration/cluster || exit 1; export DEVCONTAINER_IMAGE=$(DEVCONTAINER_IMAGE); \
+		status=0; docker compose up --abort-on-container-exit --exit-code-from test-runner || status=$$?; \
+		docker compose down -v; exit $$status
 
 .PHONY: integration-test-cluster-compose-up
 ## integration-test-cluster-compose-up: Start cluster nodes only (for manual testing)
-integration-test-cluster-compose-up:
+integration-test-cluster-compose-up: build-devcontainer
 	@echo "Starting cluster nodes..."
-	@cd test/integration/cluster && docker compose up -d --scale test-runner=0
+	@cd test/integration/cluster && DEVCONTAINER_IMAGE=$(DEVCONTAINER_IMAGE) docker compose up -d --scale test-runner=0
 
 .PHONY: integration-test-cluster-compose-down
 ## integration-test-cluster-compose-down: Stop cluster nodes and cleanup
@@ -2716,24 +2698,13 @@ integration-test-cluster-compose-down:
 .PHONY: integration-test-daemon
 ## integration-test-daemon: Run daemon multi-protocol integration tests in development container
 integration-test-daemon: build-devcontainer
-	@echo "Running daemon multi-protocol integration tests in development container..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-daemon-test \
-		--device /dev/net/tun:/dev/net/tun \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/daemon/...
+	$(call run-integration-suite,daemon)
 
 .PHONY: integration-test-daemon-local
 ## integration-test-daemon-local: Run daemon integration tests locally (requires services running)
 integration-test-daemon-local:
 	@echo "Running daemon integration tests locally..."
-	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/daemon/...
+	go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/daemon/...
 
 # =============================================================================
 # IAM Multi-Protocol Integration Tests
@@ -2747,7 +2718,7 @@ integration-test-iam: build-devcontainer
 ## integration-test-iam-local: Run IAM integration tests locally (requires services running)
 integration-test-iam-local:
 	@echo "Running IAM integration tests locally..."
-	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/iam/...
+	go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/iam/...
 
 
 # =============================================================================
@@ -2756,72 +2727,30 @@ integration-test-iam-local:
 .PHONY: integration-test-ipxe
 ## integration-test-ipxe: Run iPXE/PXE integration tests in development container
 integration-test-ipxe: build-devcontainer
-	@echo "Running iPXE/PXE integration tests in development container..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-ipxe-test \
-		--device /dev/net/tun:/dev/net/tun \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/ipxe/...
+	$(call run-integration-suite,ipxe)
 
 .PHONY: integration-test-ipxe-local
-## integration-test-ipxe-local: Run iPXE integration tests locally (requires root for DHCP/TFTP)
+## integration-test-ipxe-local: Run iPXE integration tests locally (requires root: the DHCP client binds UDP 68)
 integration-test-ipxe-local:
 	@echo "Running iPXE integration tests locally..."
-	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/ipxe/...
+	IPXE_DHCP_ENABLED=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/ipxe/...
 
 .PHONY: integration-test-ipxe-dhcp
 ## integration-test-ipxe-dhcp: Run only DHCP protocol tests
+## The runner sets IPXE_DHCP_ENABLED=1 for this target and for ipxe
+## (TARGET_ENV); without it the DHCP tests fail, they do not skip.
 integration-test-ipxe-dhcp: build-devcontainer
-	@echo "Running iPXE DHCP protocol tests..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-ipxe-dhcp-test \
-		--device /dev/net/tun:/dev/net/tun \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*DHCP.*' ./test/integration/ipxe/...
+	$(call run-integration-suite,ipxe-dhcp)
 
 .PHONY: integration-test-ipxe-tftp
 ## integration-test-ipxe-tftp: Run only TFTP protocol tests
 integration-test-ipxe-tftp: build-devcontainer
-	@echo "Running iPXE TFTP protocol tests..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-ipxe-tftp-test \
-		--device /dev/net/tun:/dev/net/tun \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*TFTP.*' ./test/integration/ipxe/...
+	$(call run-integration-suite,ipxe-tftp)
 
 .PHONY: integration-test-ipxe-http
 ## integration-test-ipxe-http: Run only HTTP boot script tests
 integration-test-ipxe-http: build-devcontainer
-	@echo "Running iPXE HTTP boot script tests..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-ipxe-http-test \
-		--device /dev/net/tun:/dev/net/tun \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*HTTP.*' ./test/integration/ipxe/...
+	$(call run-integration-suite,ipxe-http)
 
 # =============================================================================
 # QUIC Protocol Integration Tests
@@ -2829,24 +2758,13 @@ integration-test-ipxe-http: build-devcontainer
 .PHONY: integration-test-quic
 ## integration-test-quic: Run QUIC protocol integration tests in development container
 integration-test-quic: build-devcontainer
-	@echo "Running QUIC protocol integration tests in development container..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-quic-test \
-		--device /dev/net/tun:/dev/net/tun \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/quic/...
+	$(call run-integration-suite,quic)
 
 .PHONY: integration-test-quic-local
 ## integration-test-quic-local: Run QUIC integration tests locally (requires QUIC server running)
 integration-test-quic-local:
 	@echo "Running QUIC integration tests locally..."
-	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/quic/...
+	go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/quic/...
 
 # =============================================================================
 # Network Authentication Integration Tests
@@ -2854,18 +2772,7 @@ integration-test-quic-local:
 .PHONY: integration-test-network
 ## integration-test-network: Run network authentication integration tests in development container
 integration-test-network: build-devcontainer
-	@echo "Running network authentication integration tests in development container..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-network-test \
-		--device /dev/net/tun:/dev/net/tun \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/network/...
+	$(call run-integration-suite,network)
 
 # vTPM Coverage
 .PHONY: coverage-vtpm
@@ -4627,18 +4534,12 @@ config:
 
 # Testenv Enrollment Integration Tests
 .PHONY: integration-test-testenv-enrollment
-integration-test-testenv-enrollment:
-	@echo "Running testenv enrollment integration tests (requires root)..."
-	@echo "WARNING: This test will create VMs, network bridges, and requires ~20GB disk space"
-	@if [ "$$(id -u)" -ne 0 ]; then \
-		echo "ERROR: This test requires root privileges"; \
-		echo "Run with: sudo make integration-test-testenv-enrollment"; \
-		exit 1; \
-	fi
-	cd test/integration && \
-		CGO_ENABLED=1 go test -tags=integration -v -timeout=40m \
-			-run TestEnrollmentIntegration \
-			./...
+## integration-test-testenv-enrollment: Run TestEnrollmentIntegration in the devcontainer
+## Without ISOs it boots its framework VM on an isolated bridge. Set
+## INTEGRATION_TEST_SERVER_ISO and INTEGRATION_TEST_CLIENT_ISO to paths under
+## the repository (the container sees it at /workspace) for the full ISO run.
+integration-test-testenv-enrollment: build-devcontainer
+	$(call run-integration-suite,testenv-enrollment,-e INTEGRATION_TEST_SERVER_ISO -e INTEGRATION_TEST_CLIENT_ISO)
 
 .PHONY: integration-test-testenv-enrollment-clean
 integration-test-testenv-enrollment-clean:

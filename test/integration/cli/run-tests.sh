@@ -18,11 +18,10 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="${WORKSPACE:-/workspace}"
 
-# Build tags for CGO and PKCS11 support
-BUILD_TAGS="integration pkcs11 objstore"
+# The tags come from the Makefile, never a hand-written list.
+BUILD_TAGS="${BUILD_TAGS:-integration $(make -s -C "$WORKSPACE" print-build-tags)}"
 
 # =============================================================================
 # Test Functions
@@ -33,7 +32,6 @@ run_tests() {
     echo "=== Running CLI Multi-Protocol Integration Tests ==="
     cd "$WORKSPACE"
 
-    export INTEGRATION_TEST=1
     export CGO_ENABLED=1
 
     if [ -n "$filter" ]; then

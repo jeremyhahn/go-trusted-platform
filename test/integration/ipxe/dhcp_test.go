@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"syscall"
 	"testing"
 	"time"
 
@@ -33,15 +34,12 @@ import (
 
 // TestDHCPDiscoverOffer tests the DHCP DISCOVER -> OFFER flow.
 func TestDHCPDiscoverOffer(t *testing.T) {
-	SkipIfNoDHCP(t)
-	if err := CheckNetworkPrivileges(); err != nil {
-		t.Fatalf("missing prerequisite: %v", err)
-	}
+	cfg := GetTestServerConfig()
+	RequireDHCPServer(t, cfg)
 
 	ctx, cancel := DHCPTestContext()
 	defer cancel()
 
-	cfg := GetTestServerConfig()
 	clientMAC := GenerateRandomMAC()
 
 	t.Run("PXEClientDiscover", func(t *testing.T) {
@@ -85,15 +83,12 @@ func TestDHCPDiscoverOffer(t *testing.T) {
 
 // TestDHCPRequestAck tests the DHCP REQUEST -> ACK flow.
 func TestDHCPRequestAck(t *testing.T) {
-	SkipIfNoDHCP(t)
-	if err := CheckNetworkPrivileges(); err != nil {
-		t.Fatalf("missing prerequisite: %v", err)
-	}
+	cfg := GetTestServerConfig()
+	RequireDHCPServer(t, cfg)
 
 	ctx, cancel := DHCPTestContext()
 	defer cancel()
 
-	cfg := GetTestServerConfig()
 	clientMAC := GenerateRandomMAC()
 
 	// First get an offer
@@ -102,7 +97,7 @@ func TestDHCPRequestAck(t *testing.T) {
 	require.NotNil(t, offer, "OFFER should not be nil")
 
 	t.Run("ValidRequest", func(t *testing.T) {
-		ack, err := sendDHCPRequest(ctx, cfg, clientMAC, offer)
+		ack, err := sendDHCPRequest(ctx, cfg, offer, ArchEFIx64)
 		require.NoError(t, err, "DHCP REQUEST should succeed")
 		require.NotNil(t, ack, "ACK should not be nil")
 
@@ -113,7 +108,7 @@ func TestDHCPRequestAck(t *testing.T) {
 
 	t.Run("LeaseRenewal", func(t *testing.T) {
 		// Request same IP again to simulate renewal
-		ack, err := sendDHCPRequest(ctx, cfg, clientMAC, offer)
+		ack, err := sendDHCPRequest(ctx, cfg, offer, ArchEFIx64)
 		require.NoError(t, err, "Lease renewal should succeed")
 		require.NotNil(t, ack, "ACK should not be nil")
 
@@ -123,15 +118,11 @@ func TestDHCPRequestAck(t *testing.T) {
 
 // TestDHCPPXEOptions tests that PXE-specific DHCP options are correctly set.
 func TestDHCPPXEOptions(t *testing.T) {
-	SkipIfNoDHCP(t)
-	if err := CheckNetworkPrivileges(); err != nil {
-		t.Fatalf("missing prerequisite: %v", err)
-	}
+	cfg := GetTestServerConfig()
+	RequireDHCPServer(t, cfg)
 
 	ctx, cancel := DHCPTestContext()
 	defer cancel()
-
-	cfg := GetTestServerConfig()
 
 	t.Run("EFIx64BootFile", func(t *testing.T) {
 		clientMAC := GenerateRandomMAC()
@@ -167,15 +158,12 @@ func TestDHCPPXEOptions(t *testing.T) {
 
 // TestDHCPMultipleClients tests handling multiple concurrent DHCP clients.
 func TestDHCPMultipleClients(t *testing.T) {
-	SkipIfNoDHCP(t)
-	if err := CheckNetworkPrivileges(); err != nil {
-		t.Fatalf("missing prerequisite: %v", err)
-	}
+	cfg := GetTestServerConfig()
+	RequireDHCPServer(t, cfg)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cfg := GetTestServerConfig()
 	numClients := 5
 
 	t.Run("ConcurrentDiscoverRequests", func(t *testing.T) {
@@ -242,147 +230,103 @@ func TestDHCPMultipleClients(t *testing.T) {
 func sendDHCPDiscover(ctx context.Context, cfg TestServerConfig, clientMAC net.HardwareAddr,
 	clientArch uint16, isPXE, isIPXE bool) (*dhcpv4.DHCPv4, error) {
 
-	// Create DHCP DISCOVER packet
-	discover, err := dhcpv4.NewDiscovery(clientMAC)
+	discover, err := dhcpv4.NewDiscovery(clientMAC, dhcpClientOptions(clientArch, isPXE, isIPXE)...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create DISCOVER: %w", err)
+		return nil, &DHCPExchangeError{Step: "build DISCOVER", Err: err}
 	}
+	return exchangeDHCP(ctx, cfg, discover, dhcpv4.MessageTypeOffer)
+}
 
-	// Add PXE client options if requested
+// sendDHCPRequest sends a DHCP REQUEST packet and waits for an ACK.
+func sendDHCPRequest(ctx context.Context, cfg TestServerConfig, offer *dhcpv4.DHCPv4,
+	clientArch uint16) (*dhcpv4.DHCPv4, error) {
+
+	// A PXE firmware repeats its vendor class and architecture on the
+	// REQUEST; the server ignores a REQUEST without them.
+	request, err := dhcpv4.NewRequestFromOffer(offer, dhcpClientOptions(clientArch, true, false)...)
+	if err != nil {
+		return nil, &DHCPExchangeError{Step: "build REQUEST", Err: err}
+	}
+	return exchangeDHCP(ctx, cfg, request, dhcpv4.MessageTypeAck)
+}
+
+// dhcpClientOptions returns the options a PXE firmware, or iPXE chained
+// from it, puts on its DISCOVER and REQUEST.
+func dhcpClientOptions(clientArch uint16, isPXE, isIPXE bool) []dhcpv4.Modifier {
+	var options []dhcpv4.Modifier
 	if isPXE {
-		// Add vendor class identifier (option 60)
-		discover.UpdateOption(dhcpv4.OptClassIdentifier("PXEClient:Arch:00007:UNDI:003010"))
-
-		// Add client architecture (option 93)
 		archData := []byte{byte(clientArch >> 8), byte(clientArch)}
-		discover.UpdateOption(dhcpv4.OptGeneric(dhcpv4.OptionClientSystemArchitectureType, archData))
+		options = append(options,
+			dhcpv4.WithOption(dhcpv4.OptClassIdentifier("PXEClient:Arch:00007:UNDI:003010")),
+			dhcpv4.WithOption(dhcpv4.OptGeneric(dhcpv4.OptionClientSystemArchitectureType, archData)),
+		)
 	}
-
-	// Add iPXE user class if requested
 	if isIPXE {
-		discover.UpdateOption(dhcpv4.OptUserClass("iPXE"))
+		options = append(options, dhcpv4.WithOption(dhcpv4.OptUserClass("iPXE")))
 	}
+	return options
+}
 
-	// Create UDP connection
-	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+// exchangeDHCP sends msg to the suite's DHCP server and returns the first
+// reply of type want that carries msg's transaction ID.
+//
+// The client listens where a real one does, 0.0.0.0:68: the server
+// broadcasts its replies to 255.255.255.255:68, never back to the source
+// port. SO_REUSEADDR lets concurrent clients share the port; each sees
+// every reply and keeps only its own.
+func exchangeDHCP(ctx context.Context, cfg TestServerConfig, msg *dhcpv4.DHCPv4,
+	want dhcpv4.MessageType) (*dhcpv4.DHCPv4, error) {
+
+	listener := net.ListenConfig{Control: reuseAddrControl}
+	conn, err := listener.ListenPacket(ctx, "udp4", fmt.Sprintf("0.0.0.0:%d", DHCPClientPort))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create UDP connection: %w", err)
+		return nil, &DHCPExchangeError{Step: "listen for " + want.String(), Err: err}
 	}
 	defer conn.Close()
 
-	// Set deadline
 	deadline, ok := ctx.Deadline()
-	if ok {
-		conn.SetDeadline(deadline)
+	if !ok {
+		deadline = time.Now().Add(DefaultDHCPTimeout)
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		return nil, &DHCPExchangeError{Step: "set deadline", Err: err}
 	}
 
-	// Send to DHCP server
-	serverAddr := &net.UDPAddr{
-		IP:   cfg.ServerIP,
-		Port: 67,
+	server := &net.UDPAddr{IP: cfg.ServerIP, Port: cfg.DHCPPort}
+	if _, err := conn.WriteTo(msg.ToBytes(), server); err != nil {
+		return nil, &DHCPExchangeError{Step: "send " + msg.MessageType().String(), Err: err}
 	}
 
-	_, err = conn.WriteTo(discover.ToBytes(), serverAddr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send DISCOVER: %w", err)
-	}
-
-	// Wait for OFFER
 	buf := make([]byte, 1500)
 	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
-
-		n, _, err := conn.ReadFromUDP(buf)
+		n, _, err := conn.ReadFrom(buf)
 		if err != nil {
-			return nil, fmt.Errorf("failed to receive response: %w", err)
+			return nil, &DHCPExchangeError{Step: "await " + want.String(), Err: err}
 		}
 
-		offer, err := dhcpv4.FromBytes(buf[:n])
-		if err != nil {
-			continue // Ignore malformed packets
+		reply, err := dhcpv4.FromBytes(buf[:n])
+		if err != nil || reply.TransactionID != msg.TransactionID {
+			continue // not DHCP, or another client's reply
 		}
 
-		// Verify it is our OFFER
-		if offer.TransactionID != discover.TransactionID {
-			continue
-		}
-
-		if offer.MessageType() == dhcpv4.MessageTypeOffer {
-			return offer, nil
+		switch reply.MessageType() {
+		case want:
+			return reply, nil
+		case dhcpv4.MessageTypeNak:
+			return nil, &DHCPExchangeError{Step: "await " + want.String(), Err: ErrDHCPNak}
 		}
 	}
 }
 
-// sendDHCPRequest sends a DHCP REQUEST packet and waits for an ACK.
-func sendDHCPRequest(ctx context.Context, cfg TestServerConfig, clientMAC net.HardwareAddr,
-	offer *dhcpv4.DHCPv4) (*dhcpv4.DHCPv4, error) {
-
-	// Create DHCP REQUEST packet
-	request, err := dhcpv4.NewRequestFromOffer(offer)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create REQUEST: %w", err)
+// reuseAddrControl sets SO_REUSEADDR so concurrent clients can all bind :68.
+func reuseAddrControl(_, _ string, c syscall.RawConn) error {
+	var sockErr error
+	if err := c.Control(func(fd uintptr) {
+		sockErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+	}); err != nil {
+		return err
 	}
-
-	// Create UDP connection
-	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create UDP connection: %w", err)
-	}
-	defer conn.Close()
-
-	// Set deadline
-	deadline, ok := ctx.Deadline()
-	if ok {
-		conn.SetDeadline(deadline)
-	}
-
-	// Send to DHCP server
-	serverAddr := &net.UDPAddr{
-		IP:   cfg.ServerIP,
-		Port: 67,
-	}
-
-	_, err = conn.WriteTo(request.ToBytes(), serverAddr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send REQUEST: %w", err)
-	}
-
-	// Wait for ACK
-	buf := make([]byte, 1500)
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
-
-		n, _, err := conn.ReadFromUDP(buf)
-		if err != nil {
-			return nil, fmt.Errorf("failed to receive response: %w", err)
-		}
-
-		ack, err := dhcpv4.FromBytes(buf[:n])
-		if err != nil {
-			continue // Ignore malformed packets
-		}
-
-		// Verify it is our ACK
-		if ack.TransactionID != request.TransactionID {
-			continue
-		}
-
-		if ack.MessageType() == dhcpv4.MessageTypeAck {
-			return ack, nil
-		}
-
-		if ack.MessageType() == dhcpv4.MessageTypeNak {
-			return nil, fmt.Errorf("received DHCP NAK")
-		}
-	}
+	return sockErr
 }
 
 // =============================================================================
@@ -391,12 +335,8 @@ func sendDHCPRequest(ctx context.Context, cfg TestServerConfig, clientMAC net.Ha
 
 // TestDHCPErrorScenarios tests various DHCP error conditions.
 func TestDHCPErrorScenarios(t *testing.T) {
-	SkipIfNoDHCP(t)
-	if err := CheckNetworkPrivileges(); err != nil {
-		t.Fatalf("missing prerequisite: %v", err)
-	}
-
 	cfg := GetTestServerConfig()
+	RequireDHCPServer(t, cfg)
 
 	t.Run("InvalidMACAddress", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

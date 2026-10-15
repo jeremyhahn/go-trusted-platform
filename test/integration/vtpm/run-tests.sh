@@ -10,6 +10,9 @@
 set -e
 
 WORKSPACE="${WORKSPACE:-/workspace}"
+
+# The tags come from the Makefile, never a hand-written list.
+BUILD_TAGS="${BUILD_TAGS:-integration $(make -s -C "$WORKSPACE" print-build-tags)}"
 # Use a path under workspace so logs are preserved after container exits
 WORK_DIR="${WORK_DIR:-$WORKSPACE/build/integration/vtpm}"
 
@@ -41,7 +44,7 @@ setup_vtpm() {
 run_unit_tests() {
     echo ">>> Running vTPM Go unit tests..."
     cd "$WORKSPACE"
-    CGO_ENABLED=1 go test -v -tags=integration -timeout=10m ./test/integration/vtpm/...
+    CGO_ENABLED=1 go test -v -tags "$BUILD_TAGS" -timeout=10m ./test/integration/vtpm/...
 }
 
 build_platform() {

@@ -14,8 +14,10 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="${WORKSPACE:-/workspace}"
+
+# The tags come from the Makefile, never a hand-written list.
+BUILD_TAGS="${BUILD_TAGS:-integration $(make -s -C "$WORKSPACE" print-build-tags)}"
 
 # =============================================================================
 # Test Functions
@@ -26,14 +28,13 @@ run_tests() {
     echo "=== Running Daemon Multi-Protocol Integration Tests ==="
     cd "$WORKSPACE"
 
-    export INTEGRATION_TEST=1
     export CGO_ENABLED=1
 
     if [ -n "$filter" ]; then
         echo "Filter: $filter"
-        go test -v -tags integration -count=1 -parallel 1 -timeout 10m -run "$filter" ./test/integration/daemon/...
+        go test -v -tags "$BUILD_TAGS" -count=1 -parallel 1 -timeout 10m -run "$filter" ./test/integration/daemon/...
     else
-        go test -v -tags integration -count=1 -parallel 1 -timeout 10m ./test/integration/daemon/...
+        go test -v -tags "$BUILD_TAGS" -count=1 -parallel 1 -timeout 10m ./test/integration/daemon/...
     fi
 
     echo "=== Daemon Multi-Protocol Integration Tests Complete ==="

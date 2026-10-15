@@ -100,6 +100,22 @@ All protocols return consistent error codes:
 | `unauthorized_zone_access` | Caller tenant does not own the zone |
 | `missing_tenant_context` | Service TenantID not configured |
 
+### One backend, and the answer without one
+
+Every transport reaches the one DNS service a `dns:` section starts. gRPC,
+the Unix socket and the embedded SDK transport share one `DNSServiceServer`;
+QUIC, MCP and REST hold the same `*dns.Service`.
+
+With no `dns:` section there is no backend, and every DNS call answers the
+not-configured error before it reads its input:
+
+| Transport | Answer |
+|-----------|--------|
+| gRPC, Unix, embedded | `UNAVAILABLE`, `ErrorInfo` reason `SERVICE_NOT_CONFIGURED`, metadata `service=dns` |
+| REST | `503`, code `SERVICE_NOT_CONFIGURED` |
+| QUIC | `StatusUnavailable` (`0x0A`) |
+| MCP | `Unavailable`, both tool families |
+
 ## See Also
 
 - [DNS Overview](README.md)

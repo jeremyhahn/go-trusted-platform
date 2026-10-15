@@ -42,22 +42,22 @@ func TestTFTPDownloadFirmware(t *testing.T) {
 	t.Run("DownloadIPXEEFI", func(t *testing.T) {
 		data, err := downloadTFTPFile(ctx, cfg, "ipxe.efi")
 		require.NoError(t, err, "TFTP download of ipxe.efi should succeed")
-		require.NotNil(t, data, "Downloaded data should not be nil")
-
-		// iPXE EFI binary should be at least 500KB
-		assert.Greater(t, len(data), 500*1024, "ipxe.efi should be at least 500KB")
-
-		// Verify it is a valid PE/EFI binary (starts with "MZ" magic)
-		assert.Equal(t, "MZ", string(data[:2]), "ipxe.efi should be a PE binary")
+		assert.True(t, bytes.Equal(FirmwareFixture("ipxe.efi"), data),
+			"ipxe.efi should be the bytes the firmware upstream served")
 	})
 
 	t.Run("DownloadIPXE32EFI", func(t *testing.T) {
 		data, err := downloadTFTPFile(ctx, cfg, "ipxe32.efi")
 		require.NoError(t, err, "TFTP download of ipxe32.efi should succeed")
+		assert.True(t, bytes.Equal(FirmwareFixture("ipxe32.efi"), data),
+			"ipxe32.efi should be the bytes the firmware upstream served")
+	})
 
-		// Verify it is a valid PE/EFI binary
-		assert.Greater(t, len(data), 100*1024, "ipxe32.efi should be substantial")
-		assert.Equal(t, "MZ", string(data[:2]), "ipxe32.efi should be a PE binary")
+	t.Run("DownloadUndionlyKPXE", func(t *testing.T) {
+		data, err := downloadTFTPFile(ctx, cfg, "undionly.kpxe")
+		require.NoError(t, err, "TFTP download of undionly.kpxe should succeed")
+		assert.True(t, bytes.Equal(FirmwareFixture("undionly.kpxe"), data),
+			"undionly.kpxe should be the bytes the firmware upstream served")
 	})
 }
 
@@ -99,8 +99,9 @@ func TestTFTPFileIntegrity(t *testing.T) {
 		data2, err := downloadTFTPFile(ctx, cfg, "ipxe.efi")
 		require.NoError(t, err, "Second download should succeed")
 
-		assert.Equal(t, len(data1), len(data2), "File sizes should match")
 		assert.True(t, bytes.Equal(data1, data2), "File contents should be identical")
+		assert.True(t, bytes.Equal(FirmwareFixture("ipxe.efi"), data1),
+			"File contents should be the bytes the firmware upstream served")
 	})
 }
 
@@ -114,7 +115,8 @@ func TestTFTPTransferModes(t *testing.T) {
 
 		data, err := downloadTFTPFileWithMode(ctx, cfg, "ipxe.efi", "octet")
 		require.NoError(t, err, "Octet mode download should succeed")
-		assert.Greater(t, len(data), 0, "Downloaded data should not be empty")
+		assert.True(t, bytes.Equal(FirmwareFixture("ipxe.efi"), data),
+			"Octet mode should transfer the firmware byte for byte")
 	})
 }
 
@@ -129,40 +131,31 @@ func TestTFTPConcurrentDownloads(t *testing.T) {
 	t.Run("ParallelDownloads", func(t *testing.T) {
 		type result struct {
 			clientID int
-			size     int
+			data     []byte
 			err      error
 		}
 
 		results := make(chan result, numClients)
+		want := FirmwareFixture("ipxe.efi")
 
 		// Start concurrent downloads
 		for i := 0; i < numClients; i++ {
 			go func(id int) {
 				data, err := downloadTFTPFile(ctx, cfg, "ipxe.efi")
-				results <- result{clientID: id, size: len(data), err: err}
+				results <- result{clientID: id, data: data, err: err}
 			}(i)
 		}
 
 		// Collect results
-		var successCount int
-		var expectedSize int
 		for i := 0; i < numClients; i++ {
 			r := <-results
 			if r.err != nil {
 				t.Errorf("Client %d failed: %v", r.clientID, r.err)
 				continue
 			}
-			successCount++
-
-			if expectedSize == 0 {
-				expectedSize = r.size
-			} else {
-				assert.Equal(t, expectedSize, r.size,
-					"All clients should get same file size")
-			}
+			assert.True(t, bytes.Equal(want, r.data),
+				"Client %d should get the firmware byte for byte", r.clientID)
 		}
-
-		assert.Equal(t, numClients, successCount, "All downloads should succeed")
 	})
 }
 
@@ -178,10 +171,10 @@ func TestTFTPTransferSize(t *testing.T) {
 		data, reportedSize, err := downloadTFTPFileWithTSize(ctx, cfg, "ipxe.efi")
 		require.NoError(t, err, "Download with tsize should succeed")
 
-		if reportedSize > 0 {
-			assert.Equal(t, int64(len(data)), reportedSize,
-				"Reported size should match actual size")
-		}
+		assert.Equal(t, int64(len(FirmwareFixture("ipxe.efi"))), reportedSize,
+			"Reported size should match the firmware size")
+		assert.Equal(t, int64(len(data)), reportedSize,
+			"Reported size should match actual size")
 	})
 }
 
@@ -233,8 +226,9 @@ func downloadTFTPFileWithTSize(ctx context.Context, cfg TestServerConfig,
 		return nil, 0, err
 	}
 
-	// Set timeout
+	// Set timeout and ask the server for the transfer size (RFC 2349)
 	client.SetTimeout(5 * time.Second)
+	client.RequestTSize(true)
 
 	// Request file
 	wt, err := client.Receive(filename, "octet")
@@ -242,10 +236,12 @@ func downloadTFTPFileWithTSize(ctx context.Context, cfg TestServerConfig,
 		return nil, 0, err
 	}
 
-	// Get transfer size if available
-	var reportedSize int64
-	if transfer, ok := wt.(interface{ Size() int64 }); ok {
-		reportedSize = transfer.Size()
+	// A server that ignores the tsize option reports -1.
+	reportedSize := int64(-1)
+	if transfer, ok := wt.(tftp.IncomingTransfer); ok {
+		if size, sent := transfer.Size(); sent {
+			reportedSize = size
+		}
 	}
 
 	// Read into buffer
@@ -267,9 +263,9 @@ func TestTFTPErrorScenarios(t *testing.T) {
 	cfg := GetTestServerConfig()
 
 	t.Run("ServerUnreachable", func(t *testing.T) {
-		// Try to connect to unreachable server
-		badClient, err := tftp.NewClient("10.255.255.254:69")
-		require.NoError(t, err, "TFTP client for a literal address should be created")
+		// 192.0.2.1 is TEST-NET-1 (RFC 5737): never assigned, never answers
+		badClient, err := tftp.NewClient("192.0.2.1:69")
+		require.NoError(t, err, "Creating a TFTP client should succeed")
 
 		badClient.SetTimeout(2 * time.Second)
 		_, err = badClient.Receive("ipxe.efi", "octet")
@@ -277,9 +273,11 @@ func TestTFTPErrorScenarios(t *testing.T) {
 	})
 
 	t.Run("InvalidPort", func(t *testing.T) {
-		// Try to connect to wrong port
-		badClient, err := tftp.NewClient(cfg.ServerIP.String() + ":12345")
-		require.NoError(t, err, "TFTP client for a literal address should be created")
+		// A port nothing listens on
+		port, err := findAvailableUDPPort()
+		require.NoError(t, err, "Finding a free UDP port should succeed")
+		badClient, err := tftp.NewClient(fmt.Sprintf("%s:%d", cfg.ServerIP, port))
+		require.NoError(t, err, "Creating a TFTP client should succeed")
 
 		badClient.SetTimeout(2 * time.Second)
 		_, err = badClient.Receive("ipxe.efi", "octet")
@@ -317,7 +315,8 @@ func TestTFTPBlockSize(t *testing.T) {
 		// Standard TFTP uses 512-byte blocks
 		data, err := downloadTFTPFile(ctx, cfg, "ipxe.efi")
 		require.NoError(t, err, "Download should succeed")
-		assert.Greater(t, len(data), 0, "Data should not be empty")
+		assert.True(t, bytes.Equal(FirmwareFixture("ipxe.efi"), data),
+			"512-byte blocks should carry the firmware byte for byte")
 	})
 }
 
@@ -349,7 +348,7 @@ func TestTFTPRetransmission(t *testing.T) {
 // TFTP Client Adapter Implementation
 // =============================================================================
 
-// TFTPClientAdapter implements the IPXECommands TFTP operations.
+// TFTPClientAdapter downloads firmware from the iPXE TFTP server.
 type TFTPClientAdapter struct {
 	serverIP string
 	port     int
@@ -420,17 +419,5 @@ func (t *TFTPClientAdapter) TFTPDownload(ctx context.Context,
 		Data:         buf.Bytes(),
 		Size:         n,
 		TransferTime: time.Since(start),
-	}, nil
-}
-
-// TFTPList lists available files (not supported by standard TFTP).
-func (t *TFTPClientAdapter) TFTPList(ctx context.Context) (*TFTPListResult, error) {
-	// TFTP does not support directory listing
-	// Return known firmware files
-	return &TFTPListResult{
-		Files: []TFTPFileInfo{
-			{Filename: "ipxe.efi"},
-			{Filename: "ipxe32.efi"},
-		},
 	}, nil
 }

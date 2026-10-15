@@ -10,8 +10,10 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="${WORKSPACE:-/workspace}"
+
+# The tags come from the Makefile, never a hand-written list.
+BUILD_TAGS="${BUILD_TAGS:-integration $(make -s -C "$WORKSPACE" print-build-tags)}"
 
 # =============================================================================
 # Test Functions
@@ -21,10 +23,9 @@ run_tests() {
     echo "=== Running KMS Integration Tests ==="
     cd "$WORKSPACE"
 
-    export INTEGRATION_TEST=1
     export CGO_ENABLED=0
 
-    go test -v -tags integration -count=1 -parallel 1 -timeout 10m ./test/integration/kms/...
+    go test -v -tags "$BUILD_TAGS" -count=1 -parallel 1 -timeout 10m ./test/integration/kms/...
 
     echo "=== KMS Integration Tests Complete ==="
 }

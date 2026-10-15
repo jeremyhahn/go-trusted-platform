@@ -156,6 +156,13 @@ func (d *Daemon) embeddedServices() *embedded.ServiceRegistry {
 		registry.CA = svc
 	}
 
+	// DNS is registered the same way: the servicer gRPC and Unix serve,
+	// over the same backend, or one that answers not-configured.
+	registry.DNS = NewDNSServiceServer(nil, logging.DefaultLogger().Slog())
+	if svc := d.DNSGRPCServiceServer(); svc != nil {
+		registry.DNS = svc
+	}
+
 	// New always builds Cache, Scheduler and Messaging: a node whose SDK
 	// does not serve them answers Unavailable, as on every other transport.
 	if d.appServices.cache != nil {

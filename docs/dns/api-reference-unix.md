@@ -333,6 +333,12 @@ curl --unix-socket /run/platformd.sock \
 # Returns: 404
 ```
 
+The gRPC `DNSService` on the socket is the same servicer as the TCP gRPC
+listener, so it reaches the same DNS backend. With no `dns:` section it
+answers `UNAVAILABLE` with an `ErrorInfo` reason `SERVICE_NOT_CONFIGURED`,
+metadata `service=dns`, as described in
+[api-reference-grpc.md](api-reference-grpc.md#error-handling).
+
 ## CLI Integration
 
 The `platformctl` CLI uses Unix socket by default:

@@ -4,7 +4,7 @@
 
 ```bash
 # Build container
-make devcontainer-build
+make build-devcontainer
 
 # Verify everything works
 make devcontainer-verify
@@ -19,7 +19,7 @@ make integration-test-sdn-full
 make integration-test-e2e
 
 # Run all integration tests
-make integration-test-all
+make integration-test
 ```
 
 ## Common Tasks
@@ -55,7 +55,7 @@ make integration-test-vtpm
 make integration-test-e2e
 
 # All integration tests
-make integration-test-all
+make integration-test
 ```
 
 ### Docker Compose
@@ -117,7 +117,7 @@ lsmod | grep -E "tun|kvm|openvswitch"
 # Clean everything and rebuild
 make devcontainer-clean
 docker system prune -f
-make devcontainer-build
+make build-devcontainer
 ```
 
 ### OVS Fails to Start
@@ -125,13 +125,13 @@ make devcontainer-build
 ```bash
 # Check if running as privileged
 docker run --rm --privileged \
-  go-trusted-platform-dev:latest \
+  trusted-platform-dev:latest \
   bash -c "modprobe tun && echo OK"
 
 # Manually start OVS
 docker run --rm -it --privileged \
   --device /dev/net/tun \
-  go-trusted-platform-dev:latest \
+  trusted-platform-dev:latest \
   ovs-start
 ```
 
@@ -211,7 +211,7 @@ Docker compose automatically creates persistent volumes for Go caches. If runnin
 docker run --rm -it \
   -v go-mod-cache:/go/pkg/mod \
   -v go-build-cache:/root/.cache/go-build \
-  go-trusted-platform-dev:latest
+  trusted-platform-dev:latest
 ```
 
 ### Parallel Testing
@@ -236,7 +236,7 @@ Use the `.devcontainer/devcontainer.json` configuration (if present) or manually
 
 1. Install "Remote - Containers" extension
 2. Open command palette: "Remote-Containers: Attach to Running Container"
-3. Select `go-trusted-platform-dev` container
+3. Select the `trusted-platform-devcontainer` container (`make devcontainer-compose-up`)
 
 ### JetBrains GoLand
 
@@ -261,10 +261,10 @@ jobs:
     - uses: actions/checkout@v3
 
     - name: Build Dev Container
-      run: make devcontainer-build
+      run: make build-devcontainer
 
     - name: Run Integration Tests
-      run: make integration-test-all
+      run: make integration-test
 ```
 
 ### GitLab CI
@@ -275,8 +275,8 @@ integration-tests:
   services:
     - docker:dind
   script:
-    - make devcontainer-build
-    - make integration-test-all
+    - make build-devcontainer
+    - make integration-test
   only:
     - merge_requests
     - main

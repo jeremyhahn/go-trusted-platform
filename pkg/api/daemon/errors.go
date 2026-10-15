@@ -254,6 +254,13 @@ func (e ErrDNSServiceNotAvailable) Error() string {
 	return "DNS service not available"
 }
 
+// GRPCStatus classifies the error as the canonical not-configured answer for
+// service "dns" (codes.Unavailable, SERVICE_NOT_CONFIGURED), so gRPC, Unix,
+// QUIC and MCP agree with REST's 503.
+func (e ErrDNSServiceNotAvailable) GRPCStatus() *status.Status {
+	return ErrServiceNotConfigured{Service: "dns", Detail: e.Error()}.GRPCStatus()
+}
+
 // ErrDNSInvalidParameter is returned when a DNS operation receives an invalid parameter
 type ErrDNSInvalidParameter struct {
 	Parameter string

@@ -34,7 +34,9 @@ type DNSServiceServer struct {
 	logger  *slog.Logger
 }
 
-// NewDNSServiceServer creates a new DNSServiceServer.
+// NewDNSServiceServer creates a new DNSServiceServer. A nil service is a
+// node without a dns: section: every handler then answers requireService's
+// not-configured error.
 func NewDNSServiceServer(service dns.DNSService, logger *slog.Logger) *DNSServiceServer {
 	return &DNSServiceServer{
 		service: service,
@@ -42,8 +44,23 @@ func NewDNSServiceServer(service dns.DNSService, logger *slog.Logger) *DNSServic
 	}
 }
 
+// requireService returns the canonical not-configured error when this node
+// has no DNS backend: codes.Unavailable (REST 503) carrying the
+// SERVICE_NOT_CONFIGURED discriminator for service "dns", the answer the PXE
+// service gives. Every handler checks it before any other work.
+func (s *DNSServiceServer) requireService() error {
+	if s.service == nil {
+		return ErrDNSServiceNotAvailable{}.GRPCStatus().Err()
+	}
+	return nil
+}
+
 // CreateZone creates a new DNS zone.
 func (s *DNSServiceServer) CreateZone(ctx context.Context, req *platformv1.CreateZoneRequest) (*platformv1.CreateZoneResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "zone name is required")
 	}
@@ -101,6 +118,10 @@ func (s *DNSServiceServer) CreateZone(ctx context.Context, req *platformv1.Creat
 
 // GetZone retrieves a DNS zone by name.
 func (s *DNSServiceServer) GetZone(ctx context.Context, req *platformv1.GetZoneRequest) (*platformv1.GetZoneResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "zone name is required")
 	}
@@ -118,6 +139,10 @@ func (s *DNSServiceServer) GetZone(ctx context.Context, req *platformv1.GetZoneR
 
 // UpdateZone updates an existing DNS zone.
 func (s *DNSServiceServer) UpdateZone(ctx context.Context, req *platformv1.UpdateZoneRequest) (*platformv1.UpdateZoneResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "zone name is required")
 	}
@@ -151,6 +176,10 @@ func (s *DNSServiceServer) UpdateZone(ctx context.Context, req *platformv1.Updat
 
 // DeleteZone deletes a DNS zone.
 func (s *DNSServiceServer) DeleteZone(ctx context.Context, req *platformv1.DeleteZoneRequest) (*platformv1.DeleteZoneResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "zone name is required")
 	}
@@ -176,6 +205,10 @@ func (s *DNSServiceServer) DeleteZone(ctx context.Context, req *platformv1.Delet
 
 // ListZones lists all DNS zones.
 func (s *DNSServiceServer) ListZones(ctx context.Context, req *platformv1.ListZonesRequest) (*platformv1.ListZonesResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	zones, err := s.service.ListZones(ctx)
 	if err != nil {
 		s.logger.Error("failed to list zones", slog.String("error", err.Error()))
@@ -201,6 +234,10 @@ func (s *DNSServiceServer) ListZones(ctx context.Context, req *platformv1.ListZo
 
 // AddRecord adds a record to a zone.
 func (s *DNSServiceServer) AddRecord(ctx context.Context, req *platformv1.AddRecordRequest) (*platformv1.AddRecordResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetZoneName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "zone name is required")
 	}
@@ -235,6 +272,10 @@ func (s *DNSServiceServer) AddRecord(ctx context.Context, req *platformv1.AddRec
 
 // DeleteRecord deletes a record from a zone.
 func (s *DNSServiceServer) DeleteRecord(ctx context.Context, req *platformv1.DeleteRecordRequest) (*platformv1.DeleteRecordResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetZoneName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "zone name is required")
 	}
@@ -267,6 +308,10 @@ func (s *DNSServiceServer) DeleteRecord(ctx context.Context, req *platformv1.Del
 
 // UpdateRecord updates a record in a zone.
 func (s *DNSServiceServer) UpdateRecord(ctx context.Context, req *platformv1.UpdateRecordRequest) (*platformv1.UpdateRecordResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetZoneName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "zone name is required")
 	}
@@ -304,6 +349,10 @@ func (s *DNSServiceServer) UpdateRecord(ctx context.Context, req *platformv1.Upd
 
 // ListRecords lists records in a zone.
 func (s *DNSServiceServer) ListRecords(ctx context.Context, req *platformv1.ListRecordsRequest) (*platformv1.ListRecordsResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetZoneName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "zone name is required")
 	}
@@ -323,6 +372,10 @@ func (s *DNSServiceServer) ListRecords(ctx context.Context, req *platformv1.List
 
 // SignZone signs a zone with DNSSEC.
 func (s *DNSServiceServer) SignZone(ctx context.Context, req *platformv1.SignZoneRequest) (*platformv1.SignZoneResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetZoneName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "zone name is required")
 	}
@@ -354,6 +407,10 @@ func (s *DNSServiceServer) SignZone(ctx context.Context, req *platformv1.SignZon
 
 // GetDNSSECStatus returns the DNSSEC status for a zone.
 func (s *DNSServiceServer) GetDNSSECStatus(ctx context.Context, req *platformv1.GetDNSSECStatusRequest) (*platformv1.GetDNSSECStatusResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetZoneName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "zone name is required")
 	}
@@ -402,6 +459,10 @@ func (s *DNSServiceServer) GetDNSSECStatus(ctx context.Context, req *platformv1.
 // resolution every transport serves. QUIC and Unix reach it through this
 // server; a type resolution does not serve is InvalidArgument.
 func (s *DNSServiceServer) Resolve(ctx context.Context, req *platformv1.ResolveRequest) (*platformv1.ResolveResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetFqdn() == "" {
 		return nil, status.Error(codes.InvalidArgument, "fqdn is required")
 	}
@@ -428,6 +489,10 @@ func resolveRecordType(recordType platformv1.RecordType) string {
 
 // Register registers a new DNS record or zone.
 func (s *DNSServiceServer) Register(ctx context.Context, req *platformv1.RegisterRequest) (*platformv1.RegisterResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetFqdn() == "" {
 		return nil, status.Error(codes.InvalidArgument, "fqdn is required")
 	}

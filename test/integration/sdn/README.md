@@ -36,59 +36,41 @@ Run all SDN integration tests:
 make integration-test-sdn
 ```
 
-Build the Docker image:
+It builds the shared devcontainer image (`make build-devcontainer`) and runs
+the suite through `run-integration-tests.sh sdn`, which starts OVS, swtpm and
+platformd first.
+
+Open a shell in the devcontainer for SDN debugging:
 ```bash
-make integration-test-sdn-build
+make integration-test-sdn-shell
 ```
 
-Clean up test artifacts:
+Remove the devcontainer image:
 ```bash
-make integration-test-sdn-clean
+make devcontainer-clean
 ```
 
 ### Using Docker Compose
 
-Build and run tests:
+The compose file builds the devcontainer image and derives the build tags
+from `make print-build-tags` (set `BUILD_TAGS` to override):
 ```bash
 cd test/integration/sdn
-docker-compose up --build
-```
-
-Run tests with existing image:
-```bash
-docker-compose up
-```
-
-Stop and clean up:
-```bash
-docker-compose down -v
+docker compose up --build
+docker compose down -v
 ```
 
 ### Manual Docker Commands
 
-Build the image:
-```bash
-docker build -t go-trusted-platform-sdn-test .
-```
-
-Run tests:
+Run ARP tests only, from the repository root:
 ```bash
 docker run --rm --privileged \
   --device /dev/net/tun:/dev/net/tun \
-  -v $(pwd)/../../../:/workspace \
+  -e AUTO_START_OVS=true \
+  -v $(pwd):/workspace \
   -w /workspace/test/integration/sdn \
-  go-trusted-platform-sdn-test \
-  go test -v -timeout 10m ./...
-```
-
-Run ARP tests only:
-```bash
-docker run --rm --privileged \
-  --device /dev/net/tun:/dev/net/tun \
-  -v $(pwd)/../../../:/workspace \
-  -w /workspace/test/integration/sdn \
-  go-trusted-platform-sdn-test \
-  go test -v -timeout 5m -run TestNativeARP
+  trusted-platform-dev:latest \
+  go test -v -timeout 5m -tags "integration $(make -s print-build-tags)" -run TestNativeARP
 ```
 
 ## Test Categories

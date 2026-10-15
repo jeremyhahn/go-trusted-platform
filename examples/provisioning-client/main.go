@@ -38,6 +38,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -129,8 +131,12 @@ func main() {
 	var profile *provisioning.ProfileResponse
 	var activateResp *provisioning.ActivateResponse
 
-	err = retryOperation(logger, *retryCount, *retryDelay, func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	// SIGINT or SIGTERM cancels the in-flight attempt and any retry wait
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	err = retryOperation(ctx, logger, *retryCount, *retryDelay, func(ctx context.Context) error {
+		ctx, cancel := context.WithTimeout(ctx, *timeout)
 		defer cancel()
 
 		if *profileOnly {
@@ -172,7 +178,7 @@ func main() {
 }
 
 // retryOperation executes the given operation with exponential backoff
-func retryOperation(logger *logging.Logger, maxRetries int, delay time.Duration, op func() error) error {
+func retryOperation(ctx context.Context, logger *logging.Logger, maxRetries int, delay time.Duration, op func(ctx context.Context) error) error {
 	var lastErr error
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
@@ -180,7 +186,7 @@ func retryOperation(logger *logging.Logger, maxRetries int, delay time.Duration,
 			"attempt", attempt,
 			"max", maxRetries)
 
-		err := op()
+		err := op(ctx)
 		if err == nil {
 			return nil
 		}
@@ -191,7 +197,14 @@ func retryOperation(logger *logging.Logger, maxRetries int, delay time.Duration,
 		if attempt < maxRetries {
 			logger.Info("Retrying after delay",
 				"delay", delay)
-			time.Sleep(delay)
+			// Wait out the delay, or stop at once when the program is cancelled
+			timer := time.NewTimer(delay)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			}
 			delay *= 2 // Exponential backoff
 		}
 	}

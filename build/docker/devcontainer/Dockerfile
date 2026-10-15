@@ -2,11 +2,11 @@
 # This container provides all tooling needed for development, testing, and CI/CD
 #
 # Usage:
-#   docker build -t go-trusted-platform-dev .
-#   docker run --rm -it --privileged -v $(pwd):/workspace go-trusted-platform-dev
+#   docker build -t trusted-platform-dev .
+#   docker run --rm -it --privileged -v $(pwd):/workspace trusted-platform-dev
 #
 # For integration tests with KVM acceleration:
-#   docker run --rm -it --privileged --device /dev/kvm -v $(pwd):/workspace go-trusted-platform-dev
+#   docker run --rm -it --privileged --device /dev/kvm -v $(pwd):/workspace trusted-platform-dev
 
 ARG BASE_IMAGE="golang:1.27.2-bookworm"
 

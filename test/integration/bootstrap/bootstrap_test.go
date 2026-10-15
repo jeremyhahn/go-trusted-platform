@@ -33,15 +33,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
-// TestMain gates all tests in this package on the INTEGRATION_TEST environment
-// variable. When not set, the entire package is skipped cleanly.
-func TestMain(m *testing.M) {
-	if os.Getenv(EnvIntegrationTest) == "" {
-		os.Exit(0)
-	}
-	os.Exit(m.Run())
-}
-
 // TestBootstrapEndpoint_REST verifies the CA bootstrap REST endpoint returns
 // a valid PEM certificate chain with the correct content type.
 func TestBootstrapEndpoint_REST(t *testing.T) {

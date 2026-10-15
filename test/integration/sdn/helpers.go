@@ -31,10 +31,6 @@ import (
 // =============================================================================
 
 const (
-	// EnvIntegrationTest is the environment variable that must be set to run
-	// integration tests. Set INTEGRATION_TEST=1 to enable.
-	EnvIntegrationTest = "INTEGRATION_TEST"
-
 	// EnvPlatformdGRPCEndpoint is the environment variable for platformd gRPC endpoint.
 	// Default: 127.0.0.1:10443
 	EnvPlatformdGRPCEndpoint = "PLATFORMD_GRPC_ENDPOINT"
