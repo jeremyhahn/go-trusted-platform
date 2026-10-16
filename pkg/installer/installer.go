@@ -103,6 +103,10 @@ type installer struct {
 	// bootModel is the boot model Install's step 0 read from the live
 	// command line: "" (disk), diskless or diskless-nbd.
 	bootModel string
+
+	// enroller is the enrollment client a diskless-nbd install runs before
+	// it uses its export (WithIdentityEnroller); nil refuses that install.
+	enroller IdentityEnroller
 }
 
 // InstallerOption customises a newly constructed installer. The primary use is
@@ -250,14 +254,19 @@ func (i *installer) Install(ctx context.Context) (err error) {
 
 	// Step 0: Refuse a boot model this installer cannot install before
 	// anything destructive runs. A diskless-nbd node's root is its NBD
-	// export: the install goes to /dev/nbd0, never to a local disk, and is
-	// refused here when the export is not attached.
+	// export: the install goes to /dev/nbd0, never to a local disk. The node
+	// enrols first, because the export admits only its IDevID, and the
+	// install is refused here when enrollment fails or the export is not
+	// attached.
 	bootModel, err := checkBootModel(i.liveCmdline())
 	if err != nil {
 		return err
 	}
 	i.bootModel = bootModel
 	if bootModel == nbd.BootModel {
+		if err := i.enrollNBDIdentity(ctx); err != nil {
+			return err
+		}
 		if err := i.useNBDTarget(); err != nil {
 			return err
 		}

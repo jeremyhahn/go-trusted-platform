@@ -1,6 +1,6 @@
 # Remote-Access VPN — Engineering Contract
 
-> **Status: PARTIAL — the core (#584 PR 1), both data planes (#584 PR 2), the gateway service and the operator control plane (#584 PR 3) exist; the control-plane lease record and the gateway's projection of it exist (§6); the admission listener (#557), its wire contract and the client agent core (`pkg/vpn/agent`) exist; the JS SDK client and the web page (#584 PR 4) exist, and so do `platformctl vpn connect [--foreground]|disconnect|lease|posture|renew` and their exit codes; the client presents the host's TPM device identity (`TPMDevice`, `OpenHostDevice`), renews its lease with fresh evidence (`Agent.Renew`, `Agent.KeepAlive`) and brings up the leased data plane, WireGuard (`!fips`) or MASQUE CONNECT-IP; left for PR 4: the client's factor signers. The gatewayd runtime assembly and the datapath process client are planned (§1).** · Scope: `pkg/sdn/gateway/services/vpn`, `pkg/sdn/tunnel`, `pkg/vpn` · Last verified: 2026-10-14
+> **Status: PARTIAL — the core (#584 PR 1), both data planes (#584 PR 2), the gateway service and the operator control plane (#584 PR 3) exist; the control-plane lease record and the gateway's projection of it exist (§6); the admission listener (#557), its wire contract and the client agent core (`pkg/vpn/agent`) exist; the JS SDK client and the web page (#584 PR 4) exist, and so do `platformctl vpn connect [--foreground]|disconnect|lease|posture|renew` and their exit codes; the client presents the host's TPM device identity (`TPMDevice`, `OpenHostDevice`), renews its lease with fresh evidence (`Agent.Renew`, `Agent.KeepAlive`) and brings up the leased data plane, WireGuard (`!fips`) or MASQUE CONNECT-IP; left for PR 4: the client's factor signers. The datapath child's peer RPCs, its plane host and the process client that reaches it exist (#584); the gatewayd runtime assembly that wires them is planned (§1).** · Scope: `pkg/sdn/gateway/services/vpn`, `pkg/sdn/gateway/ipc`, `pkg/sdn/tunnel`, `pkg/vpn` · Last verified: 2026-10-15
 > Identifiers below are either real today (grepped) or marked *(planned)*. A
 > planned name is a requirement for the implementing PR, not a claim.
 > Feature folder: [architecture.md](architecture.md) · engineering (this file) ·
@@ -68,6 +68,15 @@
 | `tunnel.TUN`, `OpenTUN(TUNConfig{Name, Addresses, MTU, Routes})` | `pkg/sdn/tunnel` | The MASQUE planes' host-side layer-3 device. `Routes` are installed as link routes through it; a route that fails removes the device |
 | `tunnel.WireGuardClient`, `NewWireGuardClient`, `Up(WireGuardClientConfig)`, `Down(name)`, `GenerateWireGuardKey` (`!fips`) | `pkg/sdn/tunnel` | The client WireGuard link: one peer (the gateway), its address, and a route per lease route through it |
 
+### Datapath process — exists since #584 (gateway process model #557)
+
+| Identifier | Package | Contract |
+|---|---|---|
+| `DatapathService.InstallVPNPeer`, `RemoveVPNPeer`; `VPNPeer{lease_id, data_plane, address, wireguard_public_key, client_certificate_sha256}`, `VPNPeerRefusal{class, field, reason, existing_lease_id}`, `VPNPeerRefusalClass` | `pkg/sdn/gateway/ipc` (`proto/ipc.proto`) | The `DataPlane` seam across the gateway socket, under the datapath UID policy. A plane's refusal travels in the response with the class of its typed error (`INVALID_REQUEST`, `PEER_KEY_INVALID`, `PEER_CONFLICT`, `NOT_STARTED`, `LEASE_NOT_FOUND`, `UNAVAILABLE`); an RPC error means the child never answered. A process hosting no planes refuses `UNAVAILABLE` |
+| `(*ipc.Server).SetVPNPlanes(VPNPlanes)`, `ipc.VPNPlanes`; `(*ipc.Client).InstallVPNPeer`, `RemoveVPNPeer` | `pkg/sdn/gateway/ipc` | The child publishes its planes on its server (nil withdraws them); the client is the one channel, shared with `ApplyDesired` |
+| `PlaneHost`, `NewPlaneHost(...ManagedDataPlane) (*PlaneHost, error)`, `Start`, `Stop`, `InstallVPNPeer`, `RemoveVPNPeer` | `pkg/sdn/gateway/services/vpn` | The child's side: it owns the planes (and `CAP_NET_ADMIN`), one per kind this build offers. `NewPlaneHost` refuses no planes, a nil plane (`ErrDepsMissing`), a kind the build lacks or a kind twice (`ErrInvalidConfig`), so a FIPS child cannot host WireGuard. `Start` starts them in order and stops the started ones when one fails; `Stop` stops them in reverse. A request it cannot parse is `ErrInvalidRequest` (`peer`, `lease_id`, `address`); a plane it does not host is `ErrDataPlaneUnavailable`; any untyped plane error is `UNAVAILABLE` with its text |
+| `DatapathPlane`, `NewDatapathPlane(kind, DatapathPeers) (*DatapathPlane, error)`, `DatapathPeers` | `pkg/sdn/gateway/services/vpn` | The `DataPlane` of a process that does not own the plane; `*ipc.Client` is its `DatapathPeers`. A kind this build does not offer is `ErrDataPlaneUnavailable` (WireGuard under `fips`); no peers is `ErrDepsMissing`. It fails closed: an RPC that gets no answer (child down, socket gone, caller not admitted) is `ErrDataPlaneUnavailable` wrapping the RPC error, and a refusal is rebuilt as the same typed error, an unknown class as `ErrDataPlaneUnavailable` |
+
 ### Gateway service — exists since #584 PR 3 (`pkg/sdn/gateway`, `pkg/sdn/gateway/state`)
 
 | Identifier | Contract |
@@ -110,7 +119,6 @@
 
 | Identifier | Package | Contract |
 |---|---|---|
-| The datapath process client | `pkg/sdn/gateway/services/vpn` | The gateway process model (#557): `DatapathService` carries only `ApplyDesired`, so installing a peer in the datapath child needs its own RPCs and the planes moved into that child |
 | The gatewayd assembly of `VPNRuntime`: the planes from `masque.*` / `wireguard.*` keys, the listener's TLS, and a `FactorVerifier` over the SDK | `pkg/sdn/gateway/commands` | Blocked on the SDK: no quicbaas verb verifies a FIDO2 or PIV assertion over a caller nonce. Until then gatewayd refuses a configured `management_vpn` with `ErrRuntimeMissing` |
 | The FIDO2 / PIV `FactorSigner` over the SDK | `pkg/vpn/agent` | Blocked on the SDK as the `FactorVerifier` row above |
 
@@ -313,7 +321,10 @@ carried or revoked separately.
   carrying an ICMP echo, revocation removing it; the same verbs over REST,
   gRPC, QUIC, MCP, Unix and the CLI per the multi-protocol adapter pattern.
 - **Fault injection seams**: `Deps` interfaces; the datapath fake can refuse,
-  hang (context-bounded) or succeed.
+  hang (context-bounded) or succeed. `DatapathPeers` stands in for the child:
+  the tests answer with every refusal class, an unknown class and an RPC
+  error, and `pkg/sdn/gateway/ipc` runs `DatapathPlane` over a real socket to
+  a `PlaneHost`, to a missing socket and as a caller the policy refuses.
 
 ## 8. Observability
 

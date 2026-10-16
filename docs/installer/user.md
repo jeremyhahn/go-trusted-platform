@@ -250,9 +250,13 @@ real work happens.** Watch it on the console or the BMC serial channel.
 A node with `boot_model: diskless-nbd` in `bootstrap.yaml` has no local disk.
 Its installer command line carries `platform_boot_model=diskless-nbd` and
 `platform_nbd_server`, and the installer ignores `disk.device` and installs
-onto `/dev/nbd0`, the node's export on the boot server. Two things must hold
+onto `/dev/nbd0`, the node's export on the boot server. Three things must hold
 before it starts, or it stops before it clears the TPM or formats anything:
 
+- The node enrols first, through the same `enroll-01` or `endorse-01` client
+  every node uses, because the export admits only its IDevID. The live
+  environment does not supply that client yet (**Planned**), so today every
+  `diskless-nbd` install stops here.
 - `/dev/nbd0` is attached to the export. The installer checks and never
   attaches it itself (the attach is **Planned** with `platform-initrd`).
 - `disk.encryption` is set. The export is always LUKS2; the boot server only
@@ -408,6 +412,11 @@ A `diskless-nbd` install found no usable export: the `nbd` module is not
 loaded, `nbd0` is not attached, the export is empty, or `disk.encryption` is
 not set. The message names which. Nothing was touched; attach the export or
 fix the config and rerun.
+
+**"enrollment: refusing to attach the NBD export".**
+A `diskless-nbd` node did not enrol, so it holds no IDevID to attach its export
+with: no enrollment client is configured, enrollment failed (the client's own
+error follows), or it returned no certificate. Nothing was touched.
 
 **No TPM detected.**
 The installer logs *"TPM sealing enabled but no TPM device found, continuing

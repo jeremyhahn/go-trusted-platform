@@ -176,9 +176,9 @@ The fail-closed rules are in
 
 ### 3.4 Application and search client types
 
-The application and search accessors follow §3.2: each has a sibling package
-that re-exports the request, response and value types of its go-quicbaas
-client, plus its `Client` interface. Every identifier is a type alias or a
+The application, search and data-service accessors follow §3.2: each has a
+sibling package that re-exports the request, response and value types of its
+go-quicbaas client, plus its `Client` interface. Every identifier is a type alias or a
 constant bound to the upstream value.
 
 | Accessor | Package | Replaces | Constants |
@@ -189,6 +189,18 @@ constant bound to the upstream value.
 | `ObjectStorage()` | `sdk/go/services/objectstorage` | `go-quicbaas/sdk/go/client/objectstorage` | `ReplicationMode*` |
 | `Scheduler()` | `sdk/go/services/scheduler` | `go-quicbaas/sdk/go/client/scheduler` | `JobStatus*`, `JobType*`, `OwnerType*` |
 | `Messaging()` | `sdk/go/services/messaging` | `go-quicbaas/sdk/go/client/messaging` | `Codec*`, `MessageType*`, `EventType*`, `Op*` |
+| `Backup()` | `sdk/go/services/backup` | `go-quicbaas/sdk/go/client/backup` | none |
+| `ParameterStore()` | `sdk/go/services/parameterstore` | `go-quicbaas/sdk/go/client/parameterstore` | none |
+| `Operations()` | `sdk/go/services/operations` | `go-quicbaas/sdk/go/client/operations` | none |
+| `ObjectStorageAdmin()` | `sdk/go/services/objectstorageadmin` | `go-quicbaas/sdk/go/client/objectstorageadmin` | `BackendType*`, `StorageTier*`, `GCStatus*` |
+| `ObjectTransfer()` | `sdk/go/services/objecttransfer` | `go-quicbaas/sdk/go/client/objecttransfer` | `Compression*` |
+| `Embedding()` | `sdk/go/services/embedding` | `go-quicbaas/sdk/go/client/embedding` | `Provider*`, `InputType*`, `Status*` |
+| `Ollama()` | `sdk/go/services/ollama` | `go-quicbaas/sdk/go/client/ollama` | none |
+| `RAG()` | `sdk/go/services/rag` | `go-quicbaas/sdk/go/client/rag` | none |
+
+#704 added the eight packages from `backup` to `rag`, so their consumers no
+longer import go-quicbaas. None of their upstream packages exports a
+sentinel error.
 
 `messaging` also forwards `NewDeltaBuilder()` and `NewDeltaApplier[E]()`,
 because the upstream `DeltaBuilder` and `DeltaApplier[E]` keep their state
@@ -198,9 +210,9 @@ unexported and cannot be built any other way. The packages leave out the
 An accessor returns nil when the SDK does not serve the service, and
 `NewClientFromSDK(nil)` fails with `ErrNilSDKClient`.
 
-platformd serves Cache, Scheduler and Messaging itself (§3.5). Vector,
-TimeSeries and ObjectStorage are reached only through the side-client (§3),
-and `platformctl` has no command group for them.
+platformd serves Cache, Scheduler and Messaging itself (§3.5). Every other
+accessor in the table is reached only through the side-client (§3), and
+`platformctl` has no command group for it.
 
 ### 3.5 Cache, Scheduler and Messaging on platformd
 

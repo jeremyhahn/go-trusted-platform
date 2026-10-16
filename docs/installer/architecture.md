@@ -136,19 +136,32 @@ The node side is partly built; the attach is **Planned**:
   reads it. The live environment's `autoinstall.sh` targets `/dev/nbd0` on this
   model and scans no local disk, and the install leaves the TPM alone: a
   TPM2_Clear would evict the IDevID key the export attaches with.
+- **Built:** the installer enrols, then attaches (#883 Q2). Every node except
+  the first enrols the same way on every architecture and boot model: ACME
+  `enroll-01` or `endorse-01` through the go-quicbaas SDK client that
+  `platformd` runs on a disk node's first boot. There is no second path. A
+  `diskless-nbd` install calls that client through one seam before the TPM
+  clear, before it uses the export and before any disk. A failed enrollment is
+  its own refusal and changes no disk
+  ([installer engineering](engineering.md#enrolling-before-the-attach)).
+- **Planned:** the live environment supplying that enrollment client. It runs
+  inside `platformd`'s first-boot provisioning, whose TPM PINs and datastore
+  belong on the export the node cannot attach until it enrols. Until then a
+  `diskless-nbd` install is refused at enrollment.
 - **Built:** the boot after the install. Once the export's metadata area holds
   the UKI, the node's device script boots that UKI instead of the installer;
   the bootstrap server reads it from the volume file and serves it
   ([bootstrap engineering](../bootstrap/engineering.md#the-diskless-nbd-runtime-path)).
   The UKI then needs the `platform-initrd` attach below.
-- **Planned:** where the node takes the platform anchor and its IDevID from
-  before the export is attached; the image's CA bundle lives on the root
-  filesystem, which for this model is the export.
+- **Planned:** where the node takes the platform anchor from before the export
+  is attached; the image's CA bundle lives on the root filesystem, which for
+  this model is the export. The IDevID is the one its enrollment put in its
+  TPM.
 - **Planned:** `platform-initrd` attaches the export before the unlock chain
   runs, then unlocks it like a local LUKS root. The live environment needs the
-  same attach before `platformctl install system` runs, from the same code;
-  the installer reads the attachment and never makes it. Until then the
-  installer refuses the install, before anything destructive
+  same attach before `platformctl install system` runs, from the same code,
+  after the node enrols; the installer reads the attachment and never makes
+  it. Until then the installer refuses the install, before anything destructive
   ([installer engineering](engineering.md#attaching-before-the-install)).
 
 ## 3. Rejected alternatives

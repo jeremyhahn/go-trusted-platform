@@ -30,11 +30,19 @@ service ProcessControlService {
 
 // DatapathService is the narrow surface the kernel-programming process exposes to
 // the supervisor's reconciler: the control plane's desired configuration in,
-// the reconciliation state out.
+// the reconciliation state out. It also carries the VPN DataPlane seam
+// (pkg/sdn/gateway/services/vpn): the datapath child owns the WireGuard and
+// MASQUE planes, and admission installs and removes peers on them here.
 service DatapathService {
   // ApplyDesired brings the datapath services to the desired configuration
   // through the child's Gateway.Apply.
   rpc ApplyDesired(ApplyDesiredRequest) returns (ApplyDesiredResponse);
+  // InstallVPNPeer installs one admitted lease's peer on the data plane it
+  // names. A plane's refusal travels in the response; an RPC error means
+  // the child never answered.
+  rpc InstallVPNPeer(InstallVPNPeerRequest) returns (InstallVPNPeerResponse);
+  // RemoveVPNPeer removes a lease's peer from the data plane it names.
+  rpc RemoveVPNPeer(RemoveVPNPeerRequest) returns (RemoveVPNPeerResponse);
 }
 
 message StatusRequest {}
@@ -85,4 +93,63 @@ message ApplyDesiredResponse {
   // apply_error is the Gateway.Apply error text; the RPC itself succeeds so
   // the state travels with the failure.
   string apply_error = 2;
+}
+
+// VPNPeer is the part of a vpn.Lease a data plane binds a peer with.
+message VPNPeer {
+  string lease_id = 1;
+  // data_plane is the vpn.DataPlaneKind: "wireguard" or "masque".
+  string data_plane = 2;
+  // address is the leased host prefix, e.g. "100.64.0.7/32".
+  string address = 3;
+  // wireguard_public_key is the client's 32-byte Curve25519 key (WireGuard).
+  bytes wireguard_public_key = 4;
+  // client_certificate_sha256 is the admitted client certificate's
+  // fingerprint (MASQUE).
+  bytes client_certificate_sha256 = 5;
+}
+
+message InstallVPNPeerRequest {
+  VPNPeer peer = 1;
+}
+
+message InstallVPNPeerResponse {
+  // refusal is absent when the peer was installed.
+  VPNPeerRefusal refusal = 1;
+}
+
+message RemoveVPNPeerRequest {
+  string data_plane = 1;
+  string lease_id = 2;
+}
+
+message RemoveVPNPeerResponse {
+  // refusal is absent when the peer was removed or was not installed.
+  VPNPeerRefusal refusal = 1;
+}
+
+// VPNPeerRefusalClass names the vpn package error a plane refused with, so
+// the caller rebuilds the same typed error. UNSPECIFIED, or a class this
+// binary does not know, is read as UNAVAILABLE.
+enum VPNPeerRefusalClass {
+  VPN_PEER_REFUSAL_CLASS_UNSPECIFIED = 0;
+  // vpn.ErrInvalidRequest: field and reason.
+  VPN_PEER_REFUSAL_CLASS_INVALID_REQUEST = 1;
+  // vpn.ErrPeerKeyInvalid: reason.
+  VPN_PEER_REFUSAL_CLASS_PEER_KEY_INVALID = 2;
+  // vpn.ErrPeerConflict: existing_lease_id and reason.
+  VPN_PEER_REFUSAL_CLASS_PEER_CONFLICT = 3;
+  // vpn.ErrDataPlaneNotStarted.
+  VPN_PEER_REFUSAL_CLASS_NOT_STARTED = 4;
+  // vpn.ErrLeaseNotFound.
+  VPN_PEER_REFUSAL_CLASS_LEASE_NOT_FOUND = 5;
+  // vpn.ErrDataPlaneUnavailable: reason. Also any untyped plane error.
+  VPN_PEER_REFUSAL_CLASS_UNAVAILABLE = 6;
+}
+
+message VPNPeerRefusal {
+  VPNPeerRefusalClass class = 1;
+  string field = 2;
+  string reason = 3;
+  string existing_lease_id = 4;
 }

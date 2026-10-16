@@ -43,6 +43,25 @@ type Node interface {
 	DesiredConfigState() gwstate.DesiredConfigState
 }
 
+// VPNPlanes is the VPN data plane host the datapath child serves the peer
+// RPCs from; *vpn.PlaneHost satisfies it. A refusal travels in the
+// response.
+type VPNPlanes interface {
+	InstallVPNPeer(ctx context.Context, req *ipcv1.InstallVPNPeerRequest) *ipcv1.InstallVPNPeerResponse
+	RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerRequest) *ipcv1.RemoveVPNPeerResponse
+}
+
+// vpnPlanes boxes a VPNPlanes for Server's atomic pointer.
+type vpnPlanes struct{ host VPNPlanes }
+
+// noVPNPlanes is the refusal of a process that hosts no VPN data plane.
+func noVPNPlanes() *ipcv1.VPNPeerRefusal {
+	return &ipcv1.VPNPeerRefusal{
+		Class:  ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE,
+		Reason: "this process hosts no VPN data plane",
+	}
+}
+
 // stateToProto maps the gateway state machine onto the wire enum.
 var stateToProto = map[gateway.GatewayState]ipcv1.ProcessState{
 	gateway.GatewayStateUnknown:      ipcv1.ProcessState_PROCESS_STATE_UNSPECIFIED,
@@ -65,6 +84,7 @@ type Server struct {
 	grpc     *grpc.Server
 	listener net.Listener
 	startErr atomic.Pointer[string]
+	vpn      atomic.Pointer[vpnPlanes]
 	// chown is os.Chown; a test replaces it to stand for a process that
 	// holds neither CAP_CHOWN nor membership of the socket group.
 	chown func(name string, uid, gid int) error
@@ -95,6 +115,16 @@ func (s *Server) SetStartError(err error) {
 	}
 	text := err.Error()
 	s.startErr.Store(&text)
+}
+
+// SetVPNPlanes makes the server answer the VPN peer RPCs from host; nil
+// withdraws it. Until it is set, every peer RPC is refused UNAVAILABLE.
+func (s *Server) SetVPNPlanes(host VPNPlanes) {
+	if host == nil {
+		s.vpn.Store(nil)
+		return
+	}
+	s.vpn.Store(&vpnPlanes{host: host})
 }
 
 // Listen binds the Unix socket at path with the given mode and group. A
@@ -224,4 +254,22 @@ func (s *Server) ApplyDesired(ctx context.Context, req *ipcv1.ApplyDesiredReques
 		resp.ApplyError = applyErr.Error()
 	}
 	return resp, nil
+}
+
+// InstallVPNPeer implements DatapathService through the hosted VPN planes.
+func (s *Server) InstallVPNPeer(ctx context.Context, req *ipcv1.InstallVPNPeerRequest) (*ipcv1.InstallVPNPeerResponse, error) {
+	planes := s.vpn.Load()
+	if planes == nil {
+		return &ipcv1.InstallVPNPeerResponse{Refusal: noVPNPlanes()}, nil
+	}
+	return planes.host.InstallVPNPeer(ctx, req), nil
+}
+
+// RemoveVPNPeer implements DatapathService through the hosted VPN planes.
+func (s *Server) RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerRequest) (*ipcv1.RemoveVPNPeerResponse, error) {
+	planes := s.vpn.Load()
+	if planes == nil {
+		return &ipcv1.RemoveVPNPeerResponse{Refusal: noVPNPlanes()}, nil
+	}
+	return planes.host.RemoveVPNPeer(ctx, req), nil
 }

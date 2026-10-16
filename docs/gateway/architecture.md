@@ -414,7 +414,16 @@ cannot be forged.
 | Service | Method | Who may call it |
 |---|---|---|
 | `ProcessControlService` | `Status`, `Snapshot` | the supervisor's uid (root) |
-| `DatapathService` | `ApplyDesired` | the supervisor, plus — on the kernel-class process only — the parser class's unprivileged uid; a parser process admits no other parser |
+| `DatapathService` | `ApplyDesired`, `InstallVPNPeer`, `RemoveVPNPeer` | the supervisor, plus — on the kernel-class process only — the parser class's unprivileged uid; a parser process admits no other parser |
+
+The two VPN peer RPCs are the VPN `DataPlane` seam carried across the socket
+(`docs/vpn/architecture.md`): the datapath child owns the WireGuard (`!fips`)
+and MASQUE planes and installs or removes a leased peer on them, so the
+`CAP_NET_ADMIN` the planes need stays in that child and admission holds none.
+A plane's refusal comes back in the response as a typed class
+(invalid request, peer key invalid, peer conflict, not started, lease not
+found, unavailable); an RPC error means the child did not answer, and the
+caller treats it as a refusal.
 
 Each socket is mode `0660` in the service group, so a parser reaches the
 kernel-class socket through the filesystem before `SO_PEERCRED` decides. The

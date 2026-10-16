@@ -91,6 +91,19 @@ func (c *Client) ApplyDesired(ctx context.Context, desired *gwstate.DesiredConfi
 	return state, nil
 }
 
+// InstallVPNPeer asks the datapath child to install a VPN peer. A plane's
+// refusal is in the response; the error is the RPC's own. *Client is the
+// transport vpn.DatapathPlane forwards over.
+func (c *Client) InstallVPNPeer(ctx context.Context, req *ipcv1.InstallVPNPeerRequest) (*ipcv1.InstallVPNPeerResponse, error) {
+	return c.datapath.InstallVPNPeer(ctx, req)
+}
+
+// RemoveVPNPeer asks the datapath child to remove a VPN peer, the same way
+// as InstallVPNPeer.
+func (c *Client) RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerRequest) (*ipcv1.RemoveVPNPeerResponse, error) {
+	return c.datapath.RemoveVPNPeer(ctx, req)
+}
+
 // Close releases the connection.
 func (c *Client) Close() error {
 	return c.conn.Close()

@@ -1363,19 +1363,26 @@ service owns through `ServiceSnapshot` the same way.
 The contract is `ipc/proto/ipc.proto`, generated into `ipc/gen` with
 `buf generate` from `pkg/sdn/gateway/ipc` (its own `buf.gen.yaml`; the output
 stays beside the contract rather than going to `sdk/go/gen`, because it is
-internal to one binary and no SDK consumer may depend on it).
+internal to one binary and no SDK consumer may depend on it). Where `buf` is
+not installed, `protoc -I . --go_out=../gen --go_opt=paths=source_relative
+--go-grpc_out=../gen --go-grpc_opt=paths=source_relative ipc.proto` from
+`ipc/proto`, with the `protoc-gen-go` and `protoc-gen-go-grpc` versions named
+in the generated headers, produces the same code.
 
 ```
 ProcessControlService   Status(StatusRequest) -> StatusResponse
                         Snapshot(SnapshotRequest) -> SnapshotResponse
 DatapathService         ApplyDesired(ApplyDesiredRequest) -> ApplyDesiredResponse
+                        InstallVPNPeer(InstallVPNPeerRequest) -> InstallVPNPeerResponse
+                        RemoveVPNPeer(RemoveVPNPeerRequest) -> RemoveVPNPeerResponse
 ```
 
 | Type | Purpose |
 |---|---|
-| `Server` | serves both services for one child; `Listen(path, mode, gid)`, `Serve()`, `Stop()`, `SetStartError(err)` |
-| `Client` | `Status`, `Snapshot`, `ApplyDesired`, `Close` |
+| `Server` | serves both services for one child; `Listen(path, mode, gid)`, `Serve()`, `Stop()`, `SetStartError(err)`, `SetVPNPlanes(host)` |
+| `Client` | `Status`, `Snapshot`, `ApplyDesired`, `InstallVPNPeer`, `RemoveVPNPeer`, `Close` |
 | `Node` | what the server drives: `GetState`, `ServiceReports`, `Snapshot`, `Apply`, `DesiredConfigState` — `*gateway.Gateway` satisfies it |
+| `VPNPlanes` | the VPN data plane host the peer RPCs reach: `InstallVPNPeer`, `RemoveVPNPeer` — `*vpn.PlaneHost` satisfies it |
 | `Policy` | `ControlUIDs` / `DatapathUIDs`; empty means uid 0 only |
 
 Authentication is `SO_PEERCRED` and nothing else, through
@@ -1391,6 +1398,15 @@ Documents cross as JSON (`gwstate.Snapshot`, `gwstate.DesiredConfig`,
 `gwstate.DesiredConfigState`) rather than being redeclared in proto.
 `ApplyDesired` always returns the child's state; a child-side apply failure
 comes back as `*ErrRemoteApply` with that state beside it.
+
+`InstallVPNPeer` / `RemoveVPNPeer` carry the VPN `DataPlane` seam. The peer
+is the part of a lease a plane binds (lease id, plane kind, address, WireGuard
+key, client-certificate fingerprint). A plane's refusal rides in the response
+as a `VPNPeerRefusal` whose class names the `vpn` error it came from, so the
+caller rebuilds the same typed error; an unknown class reads as unavailable.
+Until `SetVPNPlanes` is called, both RPCs are refused unavailable ("this
+process hosts no VPN data plane"). They are `DatapathService` methods, so the
+existing per-service `Policy` governs them.
 
 ### The conntrack stage classifies tagged ingress only (open question)
 
