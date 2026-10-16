@@ -746,7 +746,22 @@ PCR bank active. The integration container is privileged and sees the host's
 `/dev/tpmrm0`, so a config naming that device runs `platformd` on the CI host's
 own TPM; on a host whose TPM has no active SHA-256 bank the daemon stops at
 `PCR 23 is not present in bank 0x000b`. `TestIntegrationConfig_TPMIsHarnessSwtpm`
-in `pkg/app` holds both configs to the runner's socket.
+in `pkg/app` holds both configs to the runner's socket. It also holds the
+embedded quicbaas server's `seal.tpm2.device` to that socket. platformd copies
+`tpm.device` into that setting, so the server's hardware probe never opens the
+host's `/dev/tpmrm0` ([daemon configuration](../daemon/configuration.md)).
+
+The swtpm starts fresh, with no EK, so `platformd` provisions it in full. Before
+it clears a TPM, its seal guard must prove that no TPM-sealed LUKS unlock is on
+the ESP, and it accepts that proof only from a verified ESP: vfat, from a `/dev`
+block device, mounted at `/boot/efi`, with an `EFI/` directory
+([factory reset](../installer/factory-reset.md)). Without one it refuses to
+start with `ErrTPMSealStateUnknown`. That is the correct behaviour on a real
+node, so the harness supplies the ESP rather than the guard relaxing.
+`setup_esp` builds an empty 32 MiB vfat image, loop-mounts it at `/boot/efi`
+inside the container and creates `EFI/`; `cleanup` unmounts it. This needs
+loop devices and `CAP_SYS_ADMIN` in the container. If the mount fails, the
+runner prints a warning, and `platformd` then stops on that typed error.
 
 A bring-up failure ends the run for the same reason. When `platformd` does not
 start, `build/docker/devcontainer/run-integration-tests.sh` aborts before any
