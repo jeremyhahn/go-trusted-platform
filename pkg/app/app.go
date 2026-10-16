@@ -1539,6 +1539,24 @@ func (app *App) mirrorBarrierSealStrategy() {
 	app.QuicBaaSConfig.BarrierShamirShares = app.BarrierConfig.ShamirShares
 }
 
+// mirrorTPMDevice copies the platform's tpm.device into the embedded quicbaas
+// config, so the embedded server's hardware probe and tpm2 seal strategy open
+// the platform's own TPM. Without the mirror quicbaas opens its default
+// /dev/tpmrm0 during the store start — a TPM the platform never configured
+// (on a CI runner, the shared host TPM). Nothing is mirrored when the
+// simulator is on (no device to name), or when the device is empty or "auto"
+// (not resolved until OpenTPM, which runs after the stores start).
+func (app *App) mirrorTPMDevice() {
+	if app.TPMConfig.UseSimulator {
+		return
+	}
+	device := app.TPMConfig.Device
+	if device == "" || device == vtpm.TPMDeviceAuto {
+		return
+	}
+	app.QuicBaaSConfig.TPMDevice = device
+}
+
 // Initializes the Viper configuration library and unmarshals it
 // into this App struct.
 func (app *App) initConfig(env string) error {
@@ -1724,6 +1742,7 @@ func (app *App) initStores() error {
 		// cannot work against a single-RP factory (upstream gap).
 		app.mirrorWebAuthnRelyingParty()
 		app.mirrorBarrierSealStrategy()
+		app.mirrorTPMDevice()
 
 		app.Logger.Info("Initializing QuicBaaS",
 			slog.String("transport", app.QuicBaaSConfig.Transport.String()),

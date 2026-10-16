@@ -70,6 +70,13 @@ func TestIntegrationConfig_TPMIsHarnessSwtpm(t *testing.T) {
 		assert.False(t, a.TPMConfig.UseSimulator, "%s: tpm.simulator", path)
 		assert.Equal(t, socket, a.TPMConfig.Device, "%s: tpm.device is the harness swtpm socket", path)
 
+		// The embedded quicbaas server's TPM probe and tpm2 seal strategy
+		// open the same socket, never the runner's /dev/tpmrm0.
+		require.NotNil(t, a.QuicBaaSConfig, "%s: quicbaas section", path)
+		a.mirrorTPMDevice()
+		assert.Equal(t, socket, a.QuicBaaSConfig.ToQuicBaaSConfig().Seal.TPM2.Device,
+			"%s: the embedded server's seal.tpm2.device is the harness swtpm socket", path)
+
 		resolved, err := vtpm.ResolveTPMTarget(&a.TPMConfig, nil)
 		if err != nil {
 			var swtpmErr vtpm.ErrSwtpmSocketUnavailable

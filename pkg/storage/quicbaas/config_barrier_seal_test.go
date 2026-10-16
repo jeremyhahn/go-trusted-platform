@@ -68,3 +68,24 @@ func TestToQuicBaaSConfig_BarrierNonShamirKeepsDefault(t *testing.T) {
 		})
 	}
 }
+
+// The embedded server's TPM probe and tpm2 seal strategy open the platform's
+// TPM: a set TPMDevice reaches seal.tpm2.device.
+func TestToQuicBaaSConfig_TPMDevice(t *testing.T) {
+	c := &Config{
+		DataDir:           t.TempDir(),
+		SPIFFETrustDomain: "example.internal",
+		TPMDevice:         "/tmp/swtpm/swtpm.sock",
+	}
+	c.SetDefaults()
+	cfg := c.ToQuicBaaSConfig()
+	assert.Equal(t, "/tmp/swtpm/swtpm.sock", cfg.Seal.TPM2.Device)
+}
+
+// No TPMDevice keeps the upstream default; an empty device is never written.
+func TestToQuicBaaSConfig_TPMDeviceUnsetKeepsDefault(t *testing.T) {
+	c := &Config{DataDir: t.TempDir(), SPIFFETrustDomain: "example.internal"}
+	c.SetDefaults()
+	cfg := c.ToQuicBaaSConfig()
+	assert.Equal(t, quicbaas.EmbeddedServerConfig().Seal.TPM2.Device, cfg.Seal.TPM2.Device)
+}
