@@ -739,6 +739,15 @@ run such a failure means that bring-up failed, and the runner has already
 printed a warning saying so. For
 `integration-test-vtpm` a swtpm that does not start ends the run.
 
+That swtpm is the daemon's TPM: `test/integration/config.yaml` and
+`test/integration/barrier_gate/config.yaml` set `tpm.device` to
+`/tmp/swtpm/swtpm.sock`, the socket `start_swtpm` serves, with only the SHA-256
+PCR bank active. The integration container is privileged and sees the host's
+`/dev/tpmrm0`, so a config naming that device runs `platformd` on the CI host's
+own TPM; on a host whose TPM has no active SHA-256 bank the daemon stops at
+`PCR 23 is not present in bank 0x000b`. `TestIntegrationConfig_TPMIsHarnessSwtpm`
+in `pkg/app` holds both configs to the runner's socket.
+
 A bring-up failure ends the run for the same reason. When `platformd` does not
 start, `build/docker/devcontainer/run-integration-tests.sh` aborts before any
 suite runs rather than handing the suites endpoints nothing is listening on.

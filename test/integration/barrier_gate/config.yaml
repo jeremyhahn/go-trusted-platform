@@ -147,10 +147,13 @@ certificate-authority:
 # TPM 2.0 CONFIGURATION
 # =============================================================================
 # Required for CA identities that set platform-policy: true. Integration tests
-# run against swtpm started by the devcontainer harness.
+# run against swtpm started by the devcontainer harness: device is the socket
+# start_swtpm in run-integration-tests.sh serves. The integration container is
+# privileged and sees the host's /dev/tpmrm0, so a hardware path here would
+# provision the CI host's own TPM.
 
 tpm:
-  device: /dev/tpmrm0
+  device: /tmp/swtpm/swtpm.sock
   simulator: false
   encrypt-sessions: false
   entropy: false
