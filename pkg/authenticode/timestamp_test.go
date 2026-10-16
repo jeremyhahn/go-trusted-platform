@@ -35,7 +35,7 @@ func newTestSigner(t *testing.T, tsaURL string) Authenticode {
 	t.Helper()
 	key, cert := generateTestKey(t)
 	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyStore:      &mockBackend{privateKey: key},
 		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
 		Certificate:   cert,
 		TimestampURL:  tsaURL,

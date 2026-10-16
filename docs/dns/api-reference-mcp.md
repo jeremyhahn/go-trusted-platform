@@ -32,6 +32,9 @@ The response carries proto field names; gRPC status codes pass through.
 | `dns_record_update` | `UpdateRecord` | `dns:write` | `zone_name`, `old_record`, `new_record` |
 | `dns_record_delete` | `DeleteRecord` | `dns:delete` | `zone_name`, `name` |
 | `dns_lookup` | `Resolve` | `dns:read` | `fqdn` |
+| `dns_zone_sign` | `SignZone` | `dns:write` | `zone_name` |
+| `dns_zone_dnssec_status` | `GetDNSSECStatus` | `dns:read` | `zone_name` |
+| `dns_register` | `Register` | `dns:write` | `fqdn`, `ip` |
 
 An argument the request message does not have is `InvalidArgument`.
 `dns_record_get` has no RPC of its own: it lists the zone's records of `type`

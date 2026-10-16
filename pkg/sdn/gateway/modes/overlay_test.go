@@ -143,14 +143,16 @@ func TestOverlayModeHandler_Start(t *testing.T) {
 		assert.False(t, status.StartedAt.IsZero())
 	})
 
-	t.Run("replaces the flows a previous run left", func(t *testing.T) {
+	t.Run("sweeps the flows a previous run left once the hold passes", func(t *testing.T) {
 		f := newStoppedOverlay(t, nil)
 		stale := testBuilder(t).decapAllow(ovlL2VNI, ovlVTEPC)
 		require.NoError(t, f.sw.SendFlowMods(context.Background(), []*openflow.FlowMod{stale}))
 
 		require.NoError(t, f.handler.Start(context.Background()))
 		t.Cleanup(func() { require.NoError(t, f.handler.Stop(context.Background())) })
+		assert.Len(t, f.sw.matching("10.0.0.3"), 1, "held while EVPN re-learns")
 
+		f.handler.sweepPredecessor(context.Background(), f.handler.staleSweepAt)
 		assert.Equal(t, ovlBaseTable, f.sw.table())
 	})
 

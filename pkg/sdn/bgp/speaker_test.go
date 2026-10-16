@@ -527,6 +527,9 @@ func TestSpeakerStartStop(t *testing.T) {
 	if !speaker.IsStarted() {
 		t.Error("speaker should be started")
 	}
+	if !mock.started {
+		t.Error("Start should start the BGP server")
+	}
 
 	// Test double start
 	err = speaker.Start(ctx)
@@ -542,6 +545,9 @@ func TestSpeakerStartStop(t *testing.T) {
 
 	if speaker.IsStarted() {
 		t.Error("speaker should be stopped")
+	}
+	if mock.started || !mock.stopped {
+		t.Error("Stop should stop the BGP server")
 	}
 
 	// Test stop when not started

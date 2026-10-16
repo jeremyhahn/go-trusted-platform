@@ -30,13 +30,11 @@ type stubFetcher struct {
 	mu   sync.Mutex
 	docs []*gwstate.DesiredConfig
 	err  error
-	n    int
 }
 
 func (f *stubFetcher) FetchDesiredConfig(context.Context) (*gwstate.DesiredConfig, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.n++
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -48,17 +46,15 @@ func (f *stubFetcher) FetchDesiredConfig(context.Context) (*gwstate.DesiredConfi
 }
 
 type stubApplier struct {
-	mu       sync.Mutex
-	applied  []string
-	err      error
-	notify   chan struct{}
-	lastSeen string
+	mu      sync.Mutex
+	applied []string
+	err     error
+	notify  chan struct{}
 }
 
 func (a *stubApplier) Apply(_ context.Context, d *gwstate.DesiredConfig) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.lastSeen = d.EffectiveVersion()
 	if a.err != nil {
 		return a.err
 	}

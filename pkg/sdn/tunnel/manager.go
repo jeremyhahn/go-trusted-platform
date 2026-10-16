@@ -117,7 +117,7 @@ func (m *Manager) EnsureTunnel(ctx context.Context, config TunnelConfig) error {
 	// carries; anything else is deleted and recreated.
 	adopted := false
 	if link, err := m.nl.LinkByName(config.Name); err == nil {
-		adopted, err = m.adoptable(link, config)
+		adopted, err = m.adoptable(ctx, link, config)
 		if err != nil {
 			return &ErrTunnelCreateFailed{Name: config.Name, Cause: err}
 		}
@@ -187,7 +187,8 @@ func (m *Manager) createTransport(ctx context.Context, config TunnelConfig) erro
 	case TransportIPsec:
 		// Protection first: the carrier must never carry a packet in the
 		// clear, so the policies exist before the interface comes up.
-		if err := m.installIPsec(ctx, config); err != nil {
+		if err := m.reconcileIPsec(ctx, config); err != nil {
+			_ = m.removeIPsec(config)
 			return err
 		}
 		if err := m.createTunnel(config); err != nil {
@@ -481,14 +482,31 @@ func (m *Manager) addAddress(link vnl.Link, cidr string) error {
 
 // adoptable reports whether a link already in the kernel is exactly the
 // tunnel config describes: same kind, endpoints, key, TTL and MTU, up, and
-// carrying exactly the configured tunnel addresses. Only the plain GRE
-// transport is adopted. An IPsec or WireGuard tunnel's keys live in kernel
-// state the manager would have to read back to trust, so those links are
-// recreated, as is anything that differs in a single field.
-func (m *Manager) adoptable(link vnl.Link, config TunnelConfig) (bool, error) {
-	if config.effectiveTransport() != TransportGRE || !linkMatches(link, config) {
+// carrying exactly the configured tunnel addresses. A plain GRE link is
+// adopted on that alone. A WireGuard device is adopted when its private key
+// and listen port also match, and its peers are then reconciled by diff
+// (adoptWireGuard). An IPsec carrier is adopted the same way as a GRE link,
+// and its SAs and policies are then reconciled against the kernel's
+// (adoptIPsec). Anything that differs in a single field is recreated.
+func (m *Manager) adoptable(ctx context.Context, link vnl.Link, config TunnelConfig) (bool, error) {
+	switch config.effectiveTransport() {
+	case TransportGRE:
+		if !linkMatches(link, config) {
+			return false, nil
+		}
+		return m.hasTunnelAddresses(link, config)
+	case TransportIPsec:
+		return m.adoptIPsec(ctx, link, config)
+	case TransportWireGuard:
+		return m.adoptWireGuard(ctx, link, config)
+	default:
 		return false, nil
 	}
+}
+
+// hasTunnelAddresses reports whether link carries exactly the configured
+// tunnel addresses, link-local ones aside.
+func (m *Manager) hasTunnelAddresses(link vnl.Link, config TunnelConfig) (bool, error) {
 	addrs, err := m.nl.AddrList(link, vnl.FAMILY_ALL)
 	if err != nil {
 		return false, err
@@ -519,6 +537,8 @@ func linkMatches(link vnl.Link, config TunnelConfig) bool {
 	case *vnl.Iptun:
 		return config.Type == TunnelTypeIPIP && tunnel.Local.Equal(local) && tunnel.Remote.Equal(remote) &&
 			tunnel.Ttl == ttl
+	case *vnl.Wireguard:
+		return config.effectiveTransport() == TransportWireGuard
 	default:
 		return false
 	}

@@ -349,7 +349,7 @@ method (`iam_verify_token` calls `IAMTokenService.Verify`, as gRPC does), and `I
 
 Since #300 `AuthorizeTool` **denies** a tool absent from the map
 (`AuthErrorToolNotClassified`, `-32603` on the wire) rather than allowing it.
-Every one of the 479 registered tools is in the map: 467 carry a
+Every one of the 487 registered tools is in the map: 475 carry a
 `resource:action` permission and 12 are classified open (`""`) (measured from
 `NewToolRegistry(...).ListTools()` against `toolPermissionCatalog`;
 `TestEveryRegisteredToolIsClassified` fails if a registered tool has no entry).
@@ -422,7 +422,11 @@ methods' scopes: `attestation_get_manifest`, `attestation_list_manifests` and
 `attestation_create_manifest` needs `attestation:write`, and
 `attestation_delete_manifest` needs `attestation:delete`. The ten other
 attestation tools had no backend and were deleted
-([`docs/attestation/api.md`](../attestation/api.md) §5).
+([`docs/attestation/api.md`](../attestation/api.md) §5). #704 bound five
+more to `AttestationService`, each with its gRPC method's scope:
+`attestation_get_quote` and `attestation_verify_quote` need `attestation:read`;
+`attestation_collect_host`, `attestation_collect_vm` and
+`attestation_collect_container` need `attestation:write`.
 
 **#304 DNS tranche: the DNS tools bound to `DNSService` require their gRPC
 method's scope.** Each tool calls the gRPC servicer over the daemon's DNS
@@ -442,6 +446,9 @@ gRPC does; [`docs/dns/api.md`](../dns/api.md) §3 has the detail.
 | `dns_record_update` | `UpdateRecord` | `dns:write` |
 | `dns_record_delete` | `DeleteRecord` | `dns:delete` |
 | `dns_lookup` | `Resolve` | `dns:read` |
+| `dns_zone_sign` | `SignZone` | `dns:write` |
+| `dns_zone_dnssec_status` | `GetDNSSECStatus` | `dns:read` |
+| `dns_register` | `Register` | `dns:write` |
 
 `DNSService` carries no caller tenant on gRPC: the DNS service acts in the
 tenant the daemon configured it with, and a zone of another tenant is

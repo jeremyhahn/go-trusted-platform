@@ -53,7 +53,6 @@ type zoneTestController struct {
 	trunkErr   error
 	trunks     [][]uint16
 	natives    []uint16
-	stateCalls []ovs.PortState
 
 	// installBatches records the size of each InstallFlows batch.
 	installBatches []int
@@ -128,10 +127,7 @@ func (c *zoneTestController) SetPortTrunk(_ context.Context, _ string, allowed [
 	return c.trunkErr
 }
 
-func (c *zoneTestController) SetPortState(_ context.Context, _ string, state ovs.PortState) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.stateCalls = append(c.stateCalls, state)
+func (c *zoneTestController) SetPortState(context.Context, string, ovs.PortState) error {
 	return nil
 }
 

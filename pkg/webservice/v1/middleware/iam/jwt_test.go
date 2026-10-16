@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -1118,6 +1119,12 @@ func TestJWTMiddleware_RefreshToken(t *testing.T) {
 		rec := httptest.NewRecorder()
 
 		middleware.RefreshToken(rec, req)
+
+		// The user lookup must be scoped to the token's own tenant.
+		want := []getUserCall{{TenantID: "tenant-456", UserID: "user-123"}}
+		if !reflect.DeepEqual(iamService.getUserCalls, want) {
+			t.Errorf("GetUser calls = %+v; want %+v", iamService.getUserCalls, want)
+		}
 
 		// Refresh generates a token via GenerateToken which returns an error
 		// (middleware is verification-only). The implementation surfaces

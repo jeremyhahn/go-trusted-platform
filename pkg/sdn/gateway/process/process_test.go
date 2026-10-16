@@ -335,7 +335,6 @@ func (f *fakeNode) DesiredConfigState() gwstate.DesiredConfigState {
 type fakeChild struct {
 	pid    int
 	server *ipc.Server
-	node   *fakeNode
 
 	once sync.Once
 	done chan struct{}
@@ -504,7 +503,7 @@ func (l *fakeLauncher) Launch(ctx context.Context, spec Spec) (Child, error) {
 	l.mu.Lock()
 	stubborn := l.stubborn
 	l.mu.Unlock()
-	child := &fakeChild{pid: pid, server: server, node: node, done: make(chan struct{}), stubborn: stubborn, launcher: l}
+	child := &fakeChild{pid: pid, server: server, done: make(chan struct{}), stubborn: stubborn, launcher: l}
 	go func() {
 		if err := server.Serve(); err != nil {
 			l.t.Errorf("child %s serve: %v", spec.Definition.Name, err)

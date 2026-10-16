@@ -26,6 +26,10 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/openflow"
 )
 
+// testOverlayCookie is the overlay cookie of one generation, which the
+// builder tests build flows under.
+const testOverlayCookie = OverlayCookie | 0x2A
+
 // ovlBaseTable is the base pipeline of the default test config, as the
 // switch holds it.
 var ovlBaseTable = []string{
@@ -48,7 +52,7 @@ var ovlBaseTable = []string{
 // access port 3.
 func testBuilder(t *testing.T) *flowBuilder {
 	t.Helper()
-	b, err := newFlowBuilder(overlayConfig(newFakeSpeaker()), overlayPorts{vxlan: 7, access: 3})
+	b, err := newFlowBuilder(overlayConfig(newFakeSpeaker()), overlayPorts{vxlan: 7, access: 3}, testOverlayCookie)
 	require.NoError(t, err)
 	return b
 }
@@ -221,7 +225,7 @@ func TestFlowTable_StrictDelete(t *testing.T) {
 	d := strictDelete(flow)
 
 	assert.Equal(t, uint8(openflow.OFPFCDeleteStrict), d.Command)
-	assert.Equal(t, OverlayCookie, d.Cookie)
+	assert.Equal(t, testOverlayCookie, d.Cookie)
 	assert.Equal(t, ^uint64(0), d.CookieMask)
 	assert.Equal(t, flow.TableID, d.TableID)
 	assert.Equal(t, flow.Priority, d.Priority)
@@ -276,7 +280,7 @@ func TestFlowBuilder_Base(t *testing.T) {
 	t.Run("bridging only", func(t *testing.T) {
 		cfg := overlayConfig(newFakeSpeaker())
 		cfg.AnycastGateways, cfg.Subnets, cfg.AnycastGatewayMAC, cfg.L3VNI = nil, nil, nil, 0
-		b, err := newFlowBuilder(cfg, overlayPorts{vxlan: 7, access: 3})
+		b, err := newFlowBuilder(cfg, overlayPorts{vxlan: 7, access: 3}, testOverlayCookie)
 		require.NoError(t, err)
 		sw := newFakeSwitch()
 		require.NoError(t, sw.SendFlowMods(context.Background(), b.base()))
@@ -315,7 +319,7 @@ func TestFlowBuilder_Segment(t *testing.T) {
 	t.Run("each VNI answers ARP for its own gateway only", func(t *testing.T) {
 		cfg := overlayConfig(newFakeSpeaker())
 		cfg.AnycastGateways[ovlL2VNI+1] = netip.MustParseAddr("10.2.0.1")
-		perVNI, err := newFlowBuilder(cfg, overlayPorts{vxlan: 7, access: 3})
+		perVNI, err := newFlowBuilder(cfg, overlayPorts{vxlan: 7, access: 3}, testOverlayCookie)
 		require.NoError(t, err)
 		sw := newFakeSwitch()
 		require.NoError(t, sw.SendFlowMods(context.Background(), perVNI.segment(ovlL2VNI+1, &overlaySegment{vlan: ovlVLAN + 1})))
@@ -450,7 +454,7 @@ func TestNewFlowBuilder(t *testing.T) {
 		cfg := overlayConfig(newFakeSpeaker())
 		cfg.L3VNI = 0
 
-		b, err := newFlowBuilder(cfg, overlayPorts{vxlan: 7, access: 3})
+		b, err := newFlowBuilder(cfg, overlayPorts{vxlan: 7, access: 3}, testOverlayCookie)
 
 		require.NoError(t, err)
 		assert.Nil(t, b.routerMAC)

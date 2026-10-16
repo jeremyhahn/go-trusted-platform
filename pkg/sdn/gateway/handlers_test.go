@@ -686,7 +686,12 @@ func TestHostFWService_Lifecycle(t *testing.T) {
 		TunnelManager: &fakeTunnelManager{},
 	}
 	gw := startGateway(t, cfg)
-	defer func() { require.NoError(t, gw.Stop(context.Background())) }()
+	stopped := false
+	defer func() {
+		if !stopped {
+			require.NoError(t, gw.Stop(context.Background()))
+		}
+	}()
 
 	assert.True(t, gw.HasService(ServiceHostFW))
 	assert.Equal(t, 1, applier.applied)
@@ -702,6 +707,11 @@ func TestHostFWService_Lifecycle(t *testing.T) {
 
 	require.NoError(t, gw.ReconcileHostFW(context.Background()))
 	assert.Equal(t, "healthy", gw.Snapshot().Health.Components[ServiceHostFW])
+
+	// Stopping the gateway takes its host firewall table down with it.
+	stopped = true
+	require.NoError(t, gw.Stop(context.Background()))
+	assert.Equal(t, 1, applier.removed)
 }
 
 func TestHostFWService_InvalidConfigIsRefusedAtValidate(t *testing.T) {

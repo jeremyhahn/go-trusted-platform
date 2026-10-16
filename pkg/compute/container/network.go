@@ -15,6 +15,7 @@ package container
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -741,25 +742,34 @@ func (nm *SDNNetworkManager) teardownContainerNetworkInternal(ctx context.Contex
 		return nil
 	}
 
+	// Every step runs even when an earlier one fails, so a failed flow
+	// delete does not also leak the port; the failures are reported
+	// together. A flow left behind keeps matching the port's OpenFlow
+	// number, which OVS hands to the next container.
+	var errs []error
+
 	// Remove OpenFlow rules for this container
 	if nm.ofCtrl != nil && info.OFPort > 0 {
-		// Best-effort cleanup: log but continue on error
-		_ = nm.ofCtrl.DeleteFlowsByPort(ctx, info.PortName, info.OFPort)
+		if err := nm.ofCtrl.DeleteFlowsByPort(ctx, info.PortName, info.OFPort); err != nil {
+			errs = append(errs, &SentinelCauseError{Sentinel: ErrNetworkTeardownFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to delete OpenFlow rules for port %s: %v", info.PortName, err)}})
+		}
 	}
 
 	// Also delete via OVS client if available
 	if nm.ovs != nil && nm.ovs.IsConnected() && info.OFPort > 0 {
-		nm.ovs.DeleteFlowsByPort(ctx, info.BridgeName, info.PortName, info.OFPort)
+		if err := nm.ovs.DeleteFlowsByPort(ctx, info.BridgeName, info.PortName, info.OFPort); err != nil {
+			errs = append(errs, &SentinelCauseError{Sentinel: ErrNetworkTeardownFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to delete OVS flows for port %s: %v", info.PortName, err)}})
+		}
 	}
 
 	// Remove OVS port
 	if nm.ovs != nil && nm.ovs.IsConnected() && info.PortName != "" {
 		if err := nm.ovs.DeletePort(ctx, info.BridgeName, info.PortName); err != nil {
-			return &SentinelCauseError{Sentinel: ErrNetworkTeardownFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to delete OVS port %s: %v", info.PortName, err)}}
+			errs = append(errs, &SentinelCauseError{Sentinel: ErrNetworkTeardownFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to delete OVS port %s: %v", info.PortName, err)}})
 		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 // ApplySecurityGroup applies a security group to a container.
@@ -1131,7 +1141,9 @@ func (nm *SDNNetworkManager) removeSecurityGroupFlows(ctx context.Context, conta
 	for _, rule := range sg.Rules {
 		match := nm.buildSecurityRuleMatch(ofPort, 0, &rule)
 		if nm.ovs != nil {
-			nm.ovs.DeleteFlow(ctx, bridgeName, match)
+			if err := nm.ovs.DeleteFlow(ctx, bridgeName, match); err != nil {
+				return &SentinelCauseError{Sentinel: ErrNetworkTeardownFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to delete security group %s flow %q: %v", sgName, match, err)}}
+			}
 		}
 	}
 

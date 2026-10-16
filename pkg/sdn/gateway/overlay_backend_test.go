@@ -98,6 +98,11 @@ func (s *backendSwitch) SendFlowMods(_ context.Context, mods []*openflow.FlowMod
 	return nil
 }
 
+// QueryFlowStats reports no flows: the switch holds no older generation.
+func (s *backendSwitch) QueryFlowStats(context.Context, openflow.FlowStatsFilter) ([]openflow.FlowStats, error) {
+	return nil, nil
+}
+
 // routedFlows counts the flows added that hand frames to the symmetric IRB
 // routing table: the table-30 entries for the anycast and router MACs.
 func (s *backendSwitch) routedFlows() int {

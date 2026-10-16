@@ -445,6 +445,11 @@ func (c *Config) SetTransport(transport Transport) {
 	c.TransportStr = transport.String()
 }
 
+// webAuthnResidentKeyRequired is the iam.webauthn.resident_key_requirement
+// value that makes every passkey registration create a discoverable
+// credential.
+const webAuthnResidentKeyRequired = "required"
+
 // ToQuicBaaSConfig converts our Config to go-quicbaas's native config.Config.
 // This is only applicable for embedded transport mode.
 func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
@@ -521,6 +526,12 @@ func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
 	cfg.IAM.WebAuthn.RPID = c.WebAuthnRPID
 	cfg.IAM.WebAuthn.RPDisplayName = c.WebAuthnRPDisplayName
 	cfg.IAM.WebAuthn.RPOrigins = c.WebAuthnRPOrigins
+
+	// Browser login is usernameless: the authenticator must find the
+	// credential on its own, so a credential registered without a resident
+	// key can never sign in. Require one at registration instead of taking
+	// the upstream "preferred" default, which lets such a credential enrol.
+	cfg.IAM.WebAuthn.ResidentKeyRequirement = webAuthnResidentKeyRequired
 
 	// Data-plane barrier: a shamir barrier must be sealed by the Shamir
 	// strategy, or InitializeShamir runs in credential mode and the quorum

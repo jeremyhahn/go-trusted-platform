@@ -494,7 +494,6 @@ func TestCiscoNexus_Configure_PortError(t *testing.T) {
 type countingMockExecutor struct {
 	callCount int
 	failAfter int
-	closed    bool
 }
 
 func (m *countingMockExecutor) Execute(_ context.Context, _ string) (string, error) {
@@ -506,7 +505,6 @@ func (m *countingMockExecutor) Execute(_ context.Context, _ string) (string, err
 }
 
 func (m *countingMockExecutor) Close() error {
-	m.closed = true
 	return nil
 }
 
@@ -808,7 +806,6 @@ func TestCiscoNexus_Verify_NoVLANsOrPorts(t *testing.T) {
 type selectiveMockExecutor struct {
 	outputs map[string]string
 	errors  map[string]error
-	closed  bool
 }
 
 func (m *selectiveMockExecutor) Execute(_ context.Context, command string) (string, error) {
@@ -823,7 +820,6 @@ func (m *selectiveMockExecutor) Execute(_ context.Context, command string) (stri
 }
 
 func (m *selectiveMockExecutor) Close() error {
-	m.closed = true
 	return nil
 }
 

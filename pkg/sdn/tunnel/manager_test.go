@@ -625,20 +625,6 @@ func TestManager_EnsureTunnel_AdoptionAddrListFails(t *testing.T) {
 	assert.Empty(t, mgr.tunnels)
 }
 
-func TestManagerAdoptable_NeverAdoptsAKeyedTransport(t *testing.T) {
-	mock := newMockNetlinkOps()
-	left := leftGRE(t, mock)
-	config := ipsecConfig()
-	config.Name, config.Local, config.Remote, config.TunnelIP, config.MTU, config.TTL =
-		"gre1", "198.51.100.4", "198.51.100.100", "10.255.0.1/30", 1400, 64
-	mgr := newManagerWithOps(testLogger(), mock)
-
-	adopt, err := mgr.adoptable(left, config)
-
-	require.NoError(t, err)
-	assert.False(t, adopt, "an IPsec tunnel's SAs cannot be trusted without reading the keys back")
-}
-
 func TestLinkMatches_EachTunnelKind(t *testing.T) {
 	gre6 := TunnelConfig{Type: TunnelTypeGRE6, Local: "2001:db8::1", Remote: "2001:db8::2", MTU: 1400, TTL: 64}
 	ipip := TunnelConfig{Type: TunnelTypeIPIP, Local: "198.51.100.4", Remote: "198.51.100.100", MTU: 1400, TTL: 64}

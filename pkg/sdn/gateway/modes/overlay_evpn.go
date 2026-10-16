@@ -296,11 +296,23 @@ func (h *OverlayModeHandler) RevokeVTEP(ctx context.Context, vtep netip.Addr) er
 		return nil
 	}
 	routes := h.revocationRoutesLocked(vtep)
+	sweepPending := !h.staleSweepAt.IsZero()
 	h.mu.Unlock()
 
 	var errs []error
 	for _, route := range routes {
 		if err := h.handleEVPNRoute(ctx, route); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	// A predecessor's flows for the revoked VTEP are not this run's to
+	// withdraw, and its decap authorisation among them must not outlive the
+	// revocation, so the older generations go now rather than at the hold.
+	if sweepPending {
+		if err := h.sweepStaleGenerations(ctx); err != nil {
+			h.mu.Lock()
+			h.staleSweepAt = time.Now()
+			h.mu.Unlock()
 			errs = append(errs, err)
 		}
 	}

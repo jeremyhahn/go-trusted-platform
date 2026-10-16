@@ -1306,14 +1306,12 @@ func TestDefaultBarrierGateConfig_UsesInitOnlyDefault(t *testing.T) {
 // threaded through to the listener.
 type fakeInitOnlyGate struct {
 	called    int
-	lastApp   *app.App
 	lastCfg   barrierGateConfig
 	returnErr error
 }
 
-func (f *fakeInitOnlyGate) run(_ context.Context, a *app.App, _ *logging.Logger, cfg barrierGateConfig) error {
+func (f *fakeInitOnlyGate) run(_ context.Context, _ *app.App, _ *logging.Logger, cfg barrierGateConfig) error {
 	f.called++
-	f.lastApp = a
 	f.lastCfg = cfg
 	return f.returnErr
 }

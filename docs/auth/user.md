@@ -271,6 +271,10 @@ identifies you and the platform resolves your account from the credential it
 presents. If you hold passkeys for more than one account, your authenticator
 asks which — the platform cannot narrow that down for you, and a username box
 that looked as though it did would be telling you something untrue.
+For the same reason registration requires your authenticator to store the
+passkey on itself (a resident, or discoverable, credential): one that cannot is
+refused by your browser at registration rather than leaving you with a passkey
+that can never sign in.
 Registration asks for your email address, because that is when the account is
 named. It must be a full address (`name@example.com`): the platform refuses
 anything else before it creates the account, rather than leaving behind a user

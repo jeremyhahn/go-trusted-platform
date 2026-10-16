@@ -203,8 +203,10 @@ type fakeSwitch struct {
 	flows      map[string]*switchFlow
 	packetIns  []*openflow.PacketInSubscription
 	packetOuts []*openflow.PacketOut
-	// packetOutErr is what SendPacketOut fails with.
+	// packetOutErr is what SendPacketOut fails with; statsErr is what
+	// QueryFlowStats fails with.
 	packetOutErr error
+	statsErr     error
 	meters       map[uint32]struct{}
 	// meterErr is what SetMeter fails with; meterDrops is the packets the
 	// installed meter reports dropped.
@@ -344,6 +346,38 @@ func (s *fakeSwitch) SendPacketOut(_ context.Context, packet *openflow.PacketOut
 	}
 	s.packetOuts = append(s.packetOuts, packet)
 	return nil
+}
+
+// QueryFlowStats returns the table, priority and cookie of every flow the
+// filter's table and cookie under its mask select, as OVS does.
+func (s *fakeSwitch) QueryFlowStats(_ context.Context, filter openflow.FlowStatsFilter) ([]openflow.FlowStats, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lost {
+		return nil, openflow.ErrNotConnected
+	}
+	if s.statsErr != nil {
+		return nil, s.statsErr
+	}
+	var stats []openflow.FlowStats
+	for _, f := range s.flows {
+		inTable := filter.TableID == openflow.OFPTTAll || filter.TableID == f.table
+		if inTable && f.cookie&filter.CookieMask == filter.Cookie&filter.CookieMask {
+			stats = append(stats, openflow.FlowStats{TableID: f.table, Priority: f.priority, Cookie: f.cookie})
+		}
+	}
+	return stats, nil
+}
+
+// cookies counts the flows the switch holds by cookie.
+func (s *fakeSwitch) cookies() map[uint64]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	counts := make(map[uint64]int)
+	for _, f := range s.flows {
+		counts[f.cookie]++
+	}
+	return counts
 }
 
 func (s *fakeSwitch) SetMeter(_ context.Context, meterID uint32, _ uint32, _ uint32) error {

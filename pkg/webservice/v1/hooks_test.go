@@ -470,6 +470,7 @@ func TestNewDNSRegistrationHook_ZoneQualifiedRegistration(t *testing.T) {
 
 	err := hook(ctx)
 	assert.NoError(t, err)
+	assert.True(t, registrar.registerCalled, "the standard record is still registered alongside the zone one")
 	assert.True(t, registrar.withZoneCalled, "RegisterWithNetworkZone must be called")
 	assert.Equal(t, "control-plane", registrar.lastNetworkZone)
 	assert.Equal(t, "192.168.1.10", registrar.lastZoneIP)

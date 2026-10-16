@@ -46,10 +46,9 @@ type mockRaftOperator struct {
 	nodes      []RaftMemberInfo
 
 	// Tracking
-	bootstrapCalled   int
-	addVoterCalled    int
-	addNonvoterCalled int
-	removeCalled      int
+	bootstrapCalled int
+	addVoterCalled  int
+	removeCalled    int
 }
 
 func newMockRaftOperator() *mockRaftOperator {
@@ -88,7 +87,6 @@ func (m *mockRaftOperator) AddVoter(ctx context.Context, id uint64, address stri
 func (m *mockRaftOperator) AddNonvoter(ctx context.Context, id uint64, address string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.addNonvoterCalled++
 	if m.addNonvoterError != nil {
 		return m.addNonvoterError
 	}

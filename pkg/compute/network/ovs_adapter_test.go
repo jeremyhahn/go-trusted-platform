@@ -56,7 +56,6 @@ type mockOVSController struct {
 	deleteFlowMatch  string
 	deleteFlowErr    error
 
-	listFlowsCalled bool
 	listFlowsBridge string
 	listFlowsResult []string
 	listFlowsErr    error
@@ -92,7 +91,6 @@ func (m *mockOVSController) DeleteFlow(bridgeName string, match string) error {
 func (m *mockOVSController) ListFlows(bridgeName string) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.listFlowsCalled = true
 	m.listFlowsBridge = bridgeName
 	return m.listFlowsResult, m.listFlowsErr
 }
@@ -614,8 +612,9 @@ func TestOVSFlowControllerAdapter_GetFlows(t *testing.T) {
 		adapter := newTestableAdapter(mock)
 		ctx := context.Background()
 
-		rules, err := adapter.GetFlows(ctx, "br0")
+		rules, err := adapter.GetFlows(ctx, "br-tenant")
 		require.NoError(t, err)
+		assert.Equal(t, "br-tenant", mock.listFlowsBridge, "flows must be listed from the requested bridge")
 		assert.Len(t, rules, 2)
 
 		assert.Equal(t, uint16(100), rules[0].Priority)

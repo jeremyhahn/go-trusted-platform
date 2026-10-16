@@ -160,6 +160,9 @@ func TestToolRegistry_ExecuteTool_EAB_RoutesToProvider(t *testing.T) {
 		name     string
 		args     map[string]interface{}
 		wantCall string
+		// wantArgs, when set, reports whether the arguments the provider
+		// received are the ones the tool was called with.
+		wantArgs func(s *eabStubProvider) bool
 	}{
 		{
 			name:     "platform_eab_create_credential",
@@ -175,21 +178,28 @@ func TestToolRegistry_ExecuteTool_EAB_RoutesToProvider(t *testing.T) {
 			name:     "platform_eab_get_credential_by_key_id",
 			args:     map[string]interface{}{"key_id": "k-abc"},
 			wantCall: "get_by_key_id",
+			wantArgs: func(s *eabStubProvider) bool { return s.lastKeyID == "k-abc" },
 		},
 		{
 			name:     "platform_eab_list_credentials",
 			args:     map[string]interface{}{"tenant_id": "tenant-1", "profile_id": 7, "active_only": true, "status": "active", "page": 2, "page_size": 10},
 			wantCall: "list",
+			wantArgs: func(s *eabStubProvider) bool {
+				return s.lastTenantID == "tenant-1" && s.lastProfileID == 7 && s.lastActiveOnly &&
+					s.lastStatus == "active" && s.lastPage == 2 && s.lastPageSize == 10
+			},
 		},
 		{
 			name:     "platform_eab_revoke_credential",
 			args:     map[string]interface{}{"credential_id": 42, "revoker_id": 99},
 			wantCall: "revoke",
+			wantArgs: func(s *eabStubProvider) bool { return s.lastCredentialID == 42 && s.lastRevokerID == 99 },
 		},
 		{
 			name:     "platform_eab_validate_credential",
 			args:     map[string]interface{}{"key_id": "k-abc", "hmac_key": "AAECAwQF"},
 			wantCall: "validate",
+			wantArgs: func(s *eabStubProvider) bool { return s.lastKeyID == "k-abc" && s.lastHMACKey == "AAECAwQF" },
 		},
 		{
 			name:     "platform_eab_delete_credential",
@@ -210,6 +220,7 @@ func TestToolRegistry_ExecuteTool_EAB_RoutesToProvider(t *testing.T) {
 			name:     "platform_eab_get_credential_qr_code",
 			args:     map[string]interface{}{"credential_id": 42, "size": 256},
 			wantCall: "qr",
+			wantArgs: func(s *eabStubProvider) bool { return s.lastCredentialID == 42 && s.lastSize == 256 },
 		},
 		{
 			name:     "platform_eab_get_enrollment_url",
@@ -228,6 +239,9 @@ func TestToolRegistry_ExecuteTool_EAB_RoutesToProvider(t *testing.T) {
 			}
 			if stub.lastCall != tc.wantCall {
 				t.Errorf("%s: lastCall = %q, want %q", tc.name, stub.lastCall, tc.wantCall)
+			}
+			if tc.wantArgs != nil && !tc.wantArgs(stub) {
+				t.Errorf("%s: provider received the wrong arguments: %+v", tc.name, stub)
 			}
 		})
 	}

@@ -236,26 +236,25 @@ type event struct {
 }
 
 func (s *Speaker) startGroup(ctx context.Context, gc GroupConfig) (*runner, error) {
-	src, _ := netip.ParseAddr(gc.Source)
-	family := gc.family()
-	conn, err := s.deps.Transport.Open(gc.Interface, family, src)
-	if err != nil {
-		return nil, &ErrTransportFailed{VRID: gc.VRID, Interface: gc.Interface, Operation: "open", Cause: err}
-	}
 	r := &runner{
 		speaker: s,
-		conn:    conn,
-		dst:     family.MulticastAddr(),
+		dst:     gc.family().MulticastAddr(),
 		events:  make(chan event, 16),
 		stopCh:  make(chan struct{}),
 		done:    make(chan struct{}),
 	}
+	// The group validates the config, so build it before opening a socket
+	// and open on the source address it parsed.
 	g, err := NewGroup(gc, r)
 	if err != nil {
-		_ = conn.Close()
 		return nil, err
 	}
 	r.group = g
+	conn, err := s.deps.Transport.Open(gc.Interface, g.family, g.source)
+	if err != nil {
+		return nil, &ErrTransportFailed{VRID: gc.VRID, Interface: gc.Interface, Operation: "open", Cause: err}
+	}
+	r.conn = conn
 	now := s.clock.Now()
 	r.mu.Lock()
 	err = g.Startup(now)

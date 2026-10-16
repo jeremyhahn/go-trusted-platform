@@ -30,7 +30,6 @@ type MockPrinter struct {
 	PrintInfoFunc     func(message string)
 	PrintWarningFunc  func(message string)
 	PrintErrorFunc    func(message string)
-	Output            *bytes.Buffer
 }
 
 func (m *MockPrinter) Print(v interface{}) error {
@@ -71,9 +70,7 @@ func (m *MockPrinter) PrintError(message string) {
 }
 
 func newMockPrinter() *MockPrinter {
-	return &MockPrinter{
-		Output: &bytes.Buffer{},
-	}
+	return &MockPrinter{}
 }
 
 // MockRegistryClient implements RegistryClient for testing

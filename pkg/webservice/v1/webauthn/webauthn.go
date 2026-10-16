@@ -22,6 +22,7 @@ package webauthn
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -46,9 +47,11 @@ func NewHandler(params ServiceParams) (RestHandler, error) {
 	if params.LoginDriver == nil {
 		return nil, ErrLoginDriverRequired
 	}
+	if params.TenantUserService == nil {
+		return nil, ErrTenantUserServiceRequired
+	}
 	return &WebAuthnRestHandler{
 		logger:              params.Logger,
-		jwtService:          params.JWTService,
 		userService:         params.UserService,
 		registrationService: params.RegistrationService,
 		tenantUserService:   params.TenantUserService,
@@ -203,6 +206,10 @@ func (h *WebAuthnRestHandler) FinishRegistration(w http.ResponseWriter, r *http.
 		return
 	}
 	token, err := h.issueToken(r, user)
+	if errors.Is(err, ErrOperatingTenant) {
+		h.responseWriter.Error403(w, r, err, nil)
+		return
+	}
 	if err != nil {
 		h.responseWriter.Error500(w, r, err)
 		return

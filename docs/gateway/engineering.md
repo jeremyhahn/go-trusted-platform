@@ -788,7 +788,7 @@ A tunnel's `uplink:` names an entry of `routing-uplinks:`.
 | `wireguard` is `ErrTransportUnavailable` under the `fips` build tag, at validation and at create/rekey | `wireguard_fips.go` |
 | Uplink tables are 100–252; source rules at `priority` (default 1000), tunnel pins at `priority - 100` (clamped at 1); rules already in the kernel are adopted, not duplicated | `UplinkManager` |
 | A tunnel bound to an uplink is unbound before its interface is removed; a bind failure removes the tunnel just created | `Manager.EnsureTunnel`, `removeTunnelLocked` |
-| A GRE-transport link already in the kernel that matches its config exactly (kind, endpoints, key, TTL, MTU, up, exactly the tunnel addresses) is adopted, not recreated, so a relaunched datapath child does not drop the traffic it carries; any difference, and every IPsec or WireGuard tunnel (whose keys sit in kernel state the manager would have to read back to trust), is deleted and recreated | `Manager.adoptable`, `linkMatches` |
+| A GRE-transport link already in the kernel that matches its config exactly (kind, endpoints, key, TTL, MTU, up, exactly the tunnel addresses) is adopted, not recreated, so a relaunched datapath child does not drop the traffic it carries. A WireGuard device is adopted when it also matches on its private key and listen port, read back from the kernel; its peers are then reconciled by diff (a peer not configured removed, the configured one set in place only where it differs), so the peer's session survives. An IPsec-transport carrier is adopted on the GRE test; its SAs and policies are then reconciled against the kernel's: each is read back, a matching one kept (its sequence numbers and replay state survive), a differing SA deleted and re-added, a differing policy replaced in place, a missing one added. A kernel in lockdown confidentiality mode returns SA keys zeroed, so there its SAs are always replaced. Any other difference is deleted and recreated | `Manager.adoptable`, `linkMatches`, `adoptWireGuard`, `wireGuardPeerDiff`, `adoptIPsec`, `reconcileIPsec` |
 
 The `backedServiceHandler` (#568) builds both managers from these sections and
 hands the tunnel manager the `HostRuntime` secret resolver as its
@@ -913,14 +913,15 @@ withdraws every flow, route and rule it installed: a supervisor crash would
 take the forwarding plane down with it, which is the opposite of the
 invariant that the datapath survives a control-process restart. A killed
 child runs nothing, so its kernel state stays where it is. The successor
-supervisor's datapath child adopts it: the firewall, NAT, load-balancer and
-NAT64 flows through the cookie-scoped reconcile (stale generations swept,
-nothing flushed), `hostfw` by replacing its table in one netlink
-transaction, and a GRE-transport tunnel by keeping the link when it matches
-its config. Two parts still rebuild rather than reconcile: an IPsec or
-WireGuard tunnel is recreated, and the overlay installs its base flows
-behind a flush of its own cookie, so its segment and host flows are
-re-learned after a relaunch. A BGP peer sees the session
+supervisor's datapath child adopts it: the firewall, NAT, load-balancer,
+NAT64 and overlay flows through the cookie-scoped reconcile (stale
+generations swept, nothing flushed), `hostfw` by replacing its table in one
+netlink transaction, a GRE-transport tunnel by keeping the link when it
+matches its config, and a WireGuard tunnel by keeping the device when its
+link, private key and listen port match and diffing its peers, and an
+IPsec tunnel by keeping the carrier link when it matches and reconciling
+its SAs and policies against the kernel's (matching ones kept, so their
+sequence numbers and replay state survive). A BGP peer sees the session
 drop without a Cease NOTIFICATION, so graceful restart keeps its routes for
 the restart time. It can only keep the families the capability names: the
 speaker marks each enabled family's `MpGracefulRestart` on every peer when
@@ -1052,6 +1053,40 @@ come back with the restart, nor does a NAT rule or a deleted VIP. Another
 owner's flows are never touched. `Stop` still deletes under the owner mask,
 every generation. For the firewall, NAT and load balancer a failed sweep
 fails `Start` with an `OpError` whose `Op` is `sweep`.
+
+The overlay (`OverlayCookie`, owner `0xF1BE0005`) draws its generation the
+same way but defers the sweep: its remote host and VTEP flows come from EVPN
+routes, which a relaunch re-learns only as its BGP peers re-advertise them.
+So `Start` installs the base pipeline under the new generation, flushing
+nothing, and the predecessor's other flows — remote hosts, VTEP decap
+authorisations — keep forwarding for `overlayStaleFlowHold`, the BGP
+graceful-restart time a peer keeps the killed speaker's routes for. Each
+route the relaunch re-learns re-adds its flow in place under the new
+generation. When the hold passes, the ND poll loop
+(`sweepPredecessor`) reads the cookies under the owner mask and deletes every
+older generation by its exact cookie. A gatewayd upgraded over the flows of
+the release before generations finds them under the exact cookie
+`0xF1BE000000000005` (`legacyOverlayCookie`), whose owner bits are the
+pipeline's, so neither the owner-mask read nor `Stop` would select them: the
+sweep reads and deletes that exact cookie too, and `overlayFlush` (`Stop`, a
+failed install, a rebuild) deletes it beside the owner. A failed read or delete is an
+`ErrFlowOperationFailed` (`read stale generations` / `sweep stale
+generations`), logged and retried on the next tick. A `RevokeVTEP` while the
+sweep is pending sweeps at once, since OpenFlow cannot delete the revoked
+VTEP's flows the predecessor installed by their actions, and a decap
+authorisation must not outlive its revocation; a failure there is returned
+and retried on the next tick. A flow the relaunch re-adds takes its actions
+at once, so a VNI's flood list floods only to the VTEPs the relaunch has
+learned until EVPN re-advertises the rest. The ND punts (`OverlayNDCookie`,
+owner `0xF1BE0006`) carry no generation and are not flushed either: the
+relaunched controller routes the predecessor's punts by that cookie and
+answers or floods them, and each lapses at its 12-second hard timeout unless
+the relaunch refreshes it. A failed `Start`, `Stop`, and a rebuild delete
+under the overlay's owner mask, every generation. Both owners sit outside the
+pipeline's `0xF1BE0000` owner, whose own owner-masked deletes therefore never
+reach them (`TestOverlayRelaunchKeepsForwarding`,
+`TestOverlaySweepsStaleGenerations`,
+`TestOverlay_RelaunchReconcilesByGeneration` on a real bridge).
 
 **A failed `Start` leaves what `Stop` leaves.** The gateway registers a
 service only when `Start` succeeds, so no `Stop` follows a failed one. The
@@ -1780,9 +1815,13 @@ underlay MTU below `vxlan.MinimumUnderlayMTU`, the 9000-byte
 | 60 | Egress | flood: the access port, then every VTEP on the VNI; miss → drop |
 | 70 | Local delivery | out the access port (`IN_PORT` when it came from there) |
 
-The table constants are in `modes/overlay.go`. Every overlay flow carries
-`OverlayCookie` (`0xF1BE000000000005`); `Start` and `Stop` remove them with
-one cookie-scoped delete.
+The table constants are in `modes/overlay.go`. Every overlay flow carries a
+generation of the `OverlayCookie` owner (`0xF1BE000500000000`): the owner in
+the high 32 bits, a generation drawn on each `Start` in the low 32. A
+relaunch installs its generation over the flows its predecessor left and
+sweeps the older generations later (see [The process
+model](#the-process-model--pkgsdngatewayprocess-557)); `Stop` removes every
+generation with one owner-masked delete.
 
 #### Decap authorisation
 
@@ -1885,7 +1924,7 @@ Table 40 holds three kinds of ND flow:
 | 0 | the table miss | NS for unknown targets floods through table 60 |
 
 The punt flows carry their own cookie, `OverlayNDCookie`
-(`0xF1BE000000000006`). The ND controller owns them apart from the overlay's
+(`0xF1BE000600000000`). The ND controller owns them apart from the overlay's
 flow table: it adds a punt when a target gets exactly one owner on the VNI. It
 strict-deletes the punt when the target is withdrawn, or when a second host
 claims it.
@@ -1943,7 +1982,10 @@ controller can answer it. Three mechanisms guarantee this:
   restarts its timeout. If platformd crashes, or loses its OpenFlow
   connection, OVS expires the punts within 12 s, and solicitations flood
   through the table-40 miss. A controller that returns re-adds them on its
-  next refresh. Start also deletes any punts left by an earlier run.
+  next refresh. Start does not delete the punts a killed earlier run left:
+  the new controller routes them by `OverlayNDCookie` and answers or floods
+  what they punt, and each lapses within 12 s unless the new run refreshes
+  it (`TestOverlayStartKeepsPuntsAKilledRunLeft`).
   - A live platformd that finds its OpenFlow socket closed (OVS restarted)
     redials it on every poll. A restarted switch has lost every flow and
     meter, so on the new connection it rebuilds the overlay pipeline from
@@ -2023,11 +2065,12 @@ A switch can apply part of a flow batch and refuse the rest
 (`openflow.ErrBatchPartialFailure`). When it refuses any of a change, the
 handler sends the mods that put every flow the batch touched back to what it
 had committed, so the switch and the handler's state are as they were and the
-operation or route can be applied again. A refused start flushes the overlay
-flows instead. If the switch refuses the put-back too, the error carries an
+operation or route can be applied again. A refused start deletes the overlay
+flows of every generation instead. If the switch refuses the put-back too, the error carries an
 `ErrFlowResyncFailed`: the switch may then hold flows the handler does not
 track. The handler marks its flows drifted, and the next change of any kind
-first flushes the overlay's flows (by cookie) and installs every flow it has
+first flushes the overlay's flows (under the owner mask, every generation)
+and installs every flow it has
 committed, so stale flows such as a decap authorisation do not survive. A
 switch refusing that rebuild fails the change with an `ErrFlowResyncFailed`,
 and the rebuild is tried again on the change after. While ND suppression runs,
@@ -2035,8 +2078,8 @@ its poll also retries a drifted switch's rebuild on its own (see
 [ND suppression](#nd-suppression)), so the overlay does not wait for a change.
 
 OVS applies a batch one mod at a time, not atomically, and the OpenFlow client
-has no bundle support. So the start and the rebuild send the flows after the
-flush in a fail-closed order, the same on every rebuild: the pipeline's last
+has no bundle support. So the start, and the rebuild after its flush, send
+the flows in a fail-closed order, the same on every rebuild: the pipeline's last
 table first, so a goto only ever reaches a table that is already complete and
 the table-0 goto that admits frames comes last; and within a table the highest
 priority first, so the table-10 drop of unauthorised tunnelled frames is in

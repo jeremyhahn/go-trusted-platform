@@ -84,6 +84,16 @@ target (`devops.md` §4):
 | `make security` | gosec, govulncheck, `go mod verify`, trivy fs (`devops.md` §8) |
 | `make deps-check` | Latest-version check |
 
+`make vuln`, the govulncheck step of `make security`, scans every package of
+each module in `GOVULN_MODULES` (`.` and `sdk/go`). It first runs
+`govulncheck -scan package`, which reports the vulnerable packages the code
+imports. When every one of them is in the `GOVULN_ALLOW` allowlist, the module
+passes: a called vulnerability is always an imported one. Otherwise it runs the
+symbol scan (`-scan symbol`), which builds the call graph and fails the target
+on any called vulnerability outside the allowlist. The symbol scan of module
+`.` needs more than the CI job's 12 GiB of memory, so it runs only in that case
+(#940). If either scan cannot complete, the target fails.
+
 `make deps-check` runs `scripts/depscheck` over `go.mod` and `sdk/go/go.mod`.
 It fails when a direct `require` or a version `replace` is behind its latest
 version and the line has no comment, trailing or directly above, naming the

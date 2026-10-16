@@ -373,7 +373,7 @@ All three catalogs **deny an unlisted entry** — MCP since #300, QUIC since
 | Catalog | Coverage | Default for an unlisted entry |
 |---|---|---|
 | gRPC (`pkg/api/grpc/method_permissions.go`) | **every registered RPC**, unary and streaming, across every `platform.v1` service, the four quicbaas KMS services and `grpc.health.v1.Health`; a contract test keeps it that way | **denied**: the OIDC interceptor answers `PermissionDenied` (`ErrMethodNotClassified`) before it reads a token, unless the method is on the documented pre-auth list |
-| MCP (`pkg/api/mcp/authz.go`) | **all 479 registered tools** (12 of them explicitly open with `""`) | **denied**: `AuthorizeTool` refuses a tool with no map entry (`AuthErrorToolNotClassified`, reported on the wire as `-32603`); `TestEveryRegisteredToolIsClassified` (`authz_completeness_test.go`) fails if a registered tool has none (#304) |
+| MCP (`pkg/api/mcp/authz.go`) | **all 487 registered tools** (12 of them explicitly open with `""`) | **denied**: `AuthorizeTool` refuses a tool with no map entry (`AuthErrorToolNotClassified`, reported on the wire as `-32603`); `TestEveryRegisteredToolIsClassified` (`authz_completeness_test.go`) fails if a registered tool has none (#304) |
 | QUIC (`pkg/api/quic/opcode_permissions.go`) | **every routable opcode and sub-opcode** — pinned by `pkg/api/daemon/quic_authz_contract_test.go` | **denied**: `StatusPermissionDenied`, payload `QUIC operation not classified for authorization: …` (`ErrOperationNotClassified`) |
 
 Per-service scopes are listed in each feature folder. A new RPC must carry the

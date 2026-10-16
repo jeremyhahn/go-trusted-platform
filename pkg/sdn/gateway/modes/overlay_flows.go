@@ -21,16 +21,32 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/openflow"
 )
 
-// OverlayCookie tags every flow the overlay handler installs, so Stop can
-// remove them all with one cookie-scoped delete. It carries gatewayd's
-// 0xF1BE owner prefix beside the pipeline (…0000), firewall (…0001), NAT
-// (…0002), load balancer (…0003), NAT64 (…0004) and perf (…00FF) cookies.
-const OverlayCookie uint64 = 0xF1BE000000000005
+// OverlayCookie is the owner id of every flow the overlay handler installs:
+// gatewayd's 0xF1BE prefix with the overlay's 0x0005, beside the pipeline
+// (0xF1BE0000), firewall (0xF1BE0001), NAT (0xF1BE0002), load balancer
+// (0xF1BE0003), NAT64 (0xF1BE0004) and perf (0xF1BE00FF) owners. Each Start
+// stamps a fresh flow generation in the low 32 bits (ovs.NewGenerationCookie),
+// so the flows a killed predecessor left are told apart from the successor's
+// by cookie alone (#557). Stop deletes under ovs.OwnerCookieMask, every
+// generation.
+const OverlayCookie uint64 = 0xF1BE000500000000
+
+// legacyOverlayCookie is the exact cookie every overlay flow carried before
+// flows were stamped with generations (#557). Its owner bits are the
+// pipeline's, so neither the generation sweep's owner match nor Stop's
+// selects it. It is kept so a gatewayd upgraded over OVS state an older
+// release left deletes those flows by exact cookie, with the stale
+// generations, rather than keeping unrelearned host flows and VTEP decap
+// authorisations for ever.
+const legacyOverlayCookie uint64 = 0xF1BE000000000005
 
 // OverlayNDCookie tags the overlay's ND punt flows, which the ND controller
 // owns apart from every other overlay flow: they expire unless it refreshes
-// them, and it removes them alone when it falls back to the flood.
-const OverlayNDCookie uint64 = 0xF1BE000000000006
+// them, and it removes them alone when it falls back to the flood. It
+// carries no generation: the controller routes packet-ins by this exact
+// cookie, so a successor answers, or floods, the solicitations its
+// predecessor's punts send it until they lapse or it refreshes them.
+const OverlayNDCookie uint64 = 0xF1BE000600000000
 
 // Flow priorities of the overlay pipeline. Within a table a more specific
 // purpose outranks a broader one; priority 0 is each table's miss.
@@ -97,6 +113,9 @@ type overlayPorts struct {
 type flowBuilder struct {
 	ports overlayPorts
 
+	// cookie is the overlay's owner id with this start's flow generation.
+	cookie uint64
+
 	// anycastIPs, per L2VNI, and anycastMAC are the distributed gateway;
 	// empty and nil when routing is off.
 	anycastIPs map[uint32]netip.Addr
@@ -122,7 +141,7 @@ type flowBuilder struct {
 
 // newFlowBuilder builds the ARP rewrite once; a field-width mismatch there
 // is a programming error the constructor reports rather than hides.
-func newFlowBuilder(cfg *OverlayModeConfig, ports overlayPorts) (*flowBuilder, error) {
+func newFlowBuilder(cfg *OverlayModeConfig, ports overlayPorts, cookie uint64) (*flowBuilder, error) {
 	moves := [][2]uint32{
 		{openflow.OXMHeader(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBEthSrc, 6),
 			openflow.OXMHeader(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBEthDst, 6)},
@@ -133,6 +152,7 @@ func newFlowBuilder(cfg *OverlayModeConfig, ports overlayPorts) (*flowBuilder, e
 	}
 	b := &flowBuilder{
 		ports:          ports,
+		cookie:         cookie,
 		anycastIPs:     cfg.AnycastGateways,
 		anycastMAC:     cfg.AnycastGatewayMAC,
 		l3vni:          cfg.L3VNI,
@@ -167,7 +187,7 @@ func (b *flowBuilder) routes(vni uint32) bool {
 // instructions drop.
 func (b *flowBuilder) flow(table uint8, priority uint16, match *openflow.Match, instructions ...openflow.Instruction) *openflow.FlowMod {
 	f := openflow.NewFlowMod(0)
-	f.Cookie = OverlayCookie
+	f.Cookie = b.cookie
 	f.TableID = table
 	f.Priority = priority
 	if match != nil {

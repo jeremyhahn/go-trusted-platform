@@ -3351,6 +3351,16 @@ GOVULN_MODULES := . sdk/go
 #       https://pkg.go.dev/vuln/GO-2026-4736.
 GOVULN_ALLOW := GO-2026-4736
 
+# Each module is scanned in two steps (#940). The symbol scan builds SSA and a
+# call graph for the whole import closure; on module . it outgrew the CI job's
+# 12 GiB memory limit and was OOM-killed, and neither GOMEMLIMIT nor scanning
+# the packages in groups bounds it (cmd/platformctl alone keeps a >5 GB live
+# heap). So every package is first scanned for vulnerable IMPORTS
+# (-scan package, no SSA, well under 1 GiB). A called vulnerability is always
+# an imported one, so when every imported ID is allowlisted the symbol scan's
+# verdict is already known and it is not run. Only an imported ID outside the
+# allowlist runs the symbol scan, which decides as before whether the code calls
+# it; if that scan cannot complete, the target fails.
 .PHONY: vuln
 ## vuln: Run vulnerability scan with govulncheck (allowlist: GOVULN_ALLOW)
 vuln:
@@ -3361,19 +3371,26 @@ vuln:
 		echo "$(YELLOW)  Install with: make install-govulncheck$(RESET)"; \
 		exit 1; \
 	fi; \
-	FAILED=0; \
-	for mod in $(GOVULN_MODULES); do \
-		echo "$(CYAN)  scanning module $$mod$(RESET)"; \
-		OUT=$$(cd $$mod && $$GOVULNCHECK_BIN ./... 2>&1); STATUS=$$?; \
+	scan() { \
+		OUT=$$(cd $$1 && $$GOVULNCHECK_BIN -scan $$2 ./... 2>&1); STATUS=$$?; \
 		echo "$$OUT"; \
 		if [ $$STATUS -ne 0 ] && [ $$STATUS -ne 3 ]; then \
-			echo "$(RED)✗ govulncheck could not complete in $$mod (exit $$STATUS)$(RESET)"; \
+			echo "$(RED)✗ govulncheck -scan $$2 could not complete in $$1 (exit $$STATUS)$(RESET)"; \
 			echo "$(RED)  A scan that fails to run is not a pass — fix the error above.$(RESET)"; \
 			exit 1; \
 		fi; \
 		FOUND=$$(echo "$$OUT" | sed -n 's/^Vulnerability #[0-9]*: \(GO-[0-9][0-9-]*\).*/\1/p' | sort -u); \
 		for id in $(GOVULN_ALLOW); do FOUND=$$(echo "$$FOUND" | grep -vx "$$id" || true); done; \
 		FOUND=$$(echo $$FOUND); \
+	}; \
+	FAILED=0; \
+	for mod in $(GOVULN_MODULES); do \
+		echo "$(CYAN)  scanning module $$mod (imported packages)$(RESET)"; \
+		scan $$mod package; \
+		if [ -n "$$FOUND" ]; then \
+			echo "$(CYAN)  $$mod imports $$FOUND outside the allowlist; scanning module $$mod (called symbols)$(RESET)"; \
+			scan $$mod symbol; \
+		fi; \
 		if [ -n "$$FOUND" ]; then \
 			echo "$(RED)✗ $$mod: vulnerabilities outside the documented allowlist: $$FOUND$(RESET)"; \
 			echo "$(RED)  Fix them or record an exception in GOVULN_ALLOW with a reason and a date.$(RESET)"; \

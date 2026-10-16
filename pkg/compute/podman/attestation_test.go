@@ -93,23 +93,13 @@ func (m *mockTPMExtender) CreateQuote(pcrIndices []int, nonce []byte) ([]byte, e
 }
 
 // mockLogger implements minimal logging interface for testing
-type mockLogger struct {
-	infoCalls  []string
-	errorCalls []string
-	debugCalls []string
-}
+type mockLogger struct{}
 
-func (m *mockLogger) Infof(format string, args ...any) {
-	m.infoCalls = append(m.infoCalls, format)
-}
+func (m *mockLogger) Infof(format string, args ...any) {}
 
-func (m *mockLogger) Errorf(format string, args ...any) {
-	m.errorCalls = append(m.errorCalls, format)
-}
+func (m *mockLogger) Errorf(format string, args ...any) {}
 
-func (m *mockLogger) Debugf(format string, args ...any) {
-	m.debugCalls = append(m.debugCalls, format)
-}
+func (m *mockLogger) Debugf(format string, args ...any) {}
 
 func TestNewContainerAttestor(t *testing.T) {
 	tpm := newMockTPMExtender()

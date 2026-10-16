@@ -383,16 +383,20 @@ func TestUKICloseMultipleErrors(t *testing.T) {
 }
 
 func TestUKIClosePartialErrors(t *testing.T) {
+	kernel := &mockCloser{Reader: strings.NewReader("kernel")}
+	stub := &mockCloser{Reader: strings.NewReader("stub")}
 	uki := &UKI{
-		Kernel:    &mockCloser{Reader: strings.NewReader("kernel")},
+		Kernel:    kernel,
 		Initramfs: &mockCloserWithError{Reader: strings.NewReader("initramfs"), err: errors.New("initramfs error")},
-		Stub:      &mockCloser{Reader: strings.NewReader("stub")},
+		Stub:      stub,
 		Cmdline:   "test",
 	}
 
 	err := uki.Close()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "initramfs error")
+	assert.True(t, kernel.closed, "kernel must be closed")
+	assert.True(t, stub.closed, "a failed initramfs close must not skip the stub")
 }
 
 func TestUKIWithBytesReader(t *testing.T) {

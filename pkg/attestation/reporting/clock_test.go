@@ -150,11 +150,9 @@ func TestNodeQuoteSource_ClockSyncedPropagatesResolverFailure(t *testing.T) {
 type syncedClock struct {
 	synced bool
 	err    error
-	calls  int
 }
 
 func (c *syncedClock) ClockSynced(context.Context, string) (bool, error) {
-	c.calls++
 	return c.synced, c.err
 }
 

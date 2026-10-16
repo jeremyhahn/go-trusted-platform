@@ -28,6 +28,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/openflow"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/vxlan"
 )
 
@@ -56,6 +57,12 @@ const (
 	TableEgress        uint8 = 60 // BUM ingress replication
 	TableLocalDelivery uint8 = 70 // Out the access port
 )
+
+// overlayStaleFlowHold is how long a relaunched overlay keeps the flows its
+// predecessor installed and it has not re-added: the BGP graceful-restart
+// time, within which EVPN peers re-advertise the remote hosts whose flows
+// those are. Like a peer's stale routes, they are then swept.
+const overlayStaleFlowHold = time.Duration(bgp.DefaultGracefulRestartTime) * time.Second
 
 // MACEntrySource indicates where a MAC entry was learned from.
 type MACEntrySource uint8
@@ -204,6 +211,9 @@ type OverlayOpenFlowClient interface {
 	Connect(ctx context.Context) error
 	// SendFlowMods sends flow mods as one batch, followed by one barrier.
 	SendFlowMods(ctx context.Context, flows []*openflow.FlowMod) error
+	// QueryFlowStats reads the flows the filter selects, which the
+	// generation sweep reads the cookies of.
+	QueryFlowStats(ctx context.Context, filter openflow.FlowStatsFilter) ([]openflow.FlowStats, error)
 	SendPacketOut(ctx context.Context, packet *openflow.PacketOut) error
 	// SetMeter installs a drop meter, or updates the rate of an existing one.
 	SetMeter(ctx context.Context, meterID uint32, rateKbps uint32, burstKbps uint32) error
@@ -437,6 +447,13 @@ type OverlayModeHandler struct {
 	startedAt time.Time
 	builder   *flowBuilder
 	flows     *flowTable
+	// cookie is OverlayCookie with the generation Start drew; every flow
+	// this run installs carries it.
+	cookie uint64
+	// staleSweepAt is when the flows of an older generation, which a
+	// killed predecessor left on the switch, are swept; zero once they are
+	// and while stopped.
+	staleSweepAt time.Time
 	// drifted is set when the switch refused a put-back and may hold
 	// flows the table does not; the next change rebuilds the switch, and so
 	// does the ND watch, which retries a refused rebuild with a backoff:
@@ -563,10 +580,18 @@ func (h *OverlayModeHandler) Start(ctx context.Context) error {
 		return ErrAlreadyRunning
 	}
 
+	cookie, err := ovs.NewGenerationCookie(OverlayCookie)
+	if err != nil {
+		return &ErrOverlayStartFailed{Component: "OpenFlow", Cause: err}
+	}
+	h.mu.Lock()
+	h.cookie = cookie
+	h.mu.Unlock()
+
 	if err := h.vtepManager.Start(ctx); err != nil {
 		return &ErrOverlayStartFailed{Component: "VTEPManager", Cause: err}
 	}
-	builder, err := h.newBuilder(ctx)
+	builder, err := h.newBuilder(ctx, cookie)
 	if err != nil {
 		h.abortStart(ctx, false)
 		component := "OpenFlow"
@@ -604,9 +629,12 @@ func (h *OverlayModeHandler) Start(ctx context.Context) error {
 	return nil
 }
 
-// installBase replaces whatever overlay flows the bridge holds, ND punts a
-// crashed run left included, with the base pipeline, in fail-closed order,
-// and marks the handler running. Caller holds mu.
+// installBase installs the base pipeline under this run's generation, in
+// fail-closed order, and marks the handler running. It flushes nothing: an
+// ADD of the same table, priority and match replaces a predecessor's flow in
+// place, so forwarding the relaunch still wants never gaps, and whatever the
+// predecessor installed that this run does not is swept by generation once
+// overlayStaleFlowHold has passed (sweepPredecessor). Caller holds mu.
 func (h *OverlayModeHandler) installBase(ctx context.Context, builder *flowBuilder) error {
 	h.flows.reset()
 	h.drifted, h.remap = false, false
@@ -614,19 +642,86 @@ func (h *OverlayModeHandler) installBase(ctx context.Context, builder *flowBuild
 	if err != nil {
 		return err
 	}
-	if err := h.ofClient.SendFlowMods(ctx, append([]*openflow.FlowMod{overlayFlush(), ndFlush()}, failClosed(plan.mods)...)); err != nil {
-		return h.resync(ctx, err, []*openflow.FlowMod{overlayFlush()})
+	if err := h.ofClient.SendFlowMods(ctx, failClosed(plan.mods)); err != nil {
+		return h.resync(ctx, err, overlayFlush())
 	}
 	plan.commit()
 	h.builder = builder
 	h.running = true
 	h.startedAt = time.Now()
+	h.staleSweepAt = h.startedAt.Add(overlayStaleFlowHold)
+	return nil
+}
+
+// sweepPredecessor deletes the flows of older overlay generations once the
+// hold Start set has passed. A failure is logged and retried on the next
+// tick. Called from the ND poll loop.
+func (h *OverlayModeHandler) sweepPredecessor(ctx context.Context, now time.Time) {
+	h.mu.Lock()
+	due := h.running && !h.staleSweepAt.IsZero() && !now.Before(h.staleSweepAt)
+	h.mu.Unlock()
+	if !due {
+		return
+	}
+	if err := h.sweepStaleGenerations(ctx); err != nil {
+		h.logger.Warn("overlay stale generation sweep failed; retrying", "error", err)
+	}
+}
+
+// sweepStaleGenerations deletes every flow under the overlay's owner cookie
+// whose generation is not this run's, leaving this run's flows and every
+// other owner's untouched. Each stale generation is deleted by its exact
+// cookie, so a flow this run re-added in place, which now carries this run's
+// cookie, survives. The flows an older release left under the exact
+// legacyOverlayCookie are swept the same way.
+func (h *OverlayModeHandler) sweepStaleGenerations(ctx context.Context) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.running {
+		return nil
+	}
+	stats, err := h.ofClient.QueryFlowStats(ctx, openflow.FlowStatsFilter{
+		TableID:    openflow.OFPTTAll,
+		Cookie:     OverlayCookie,
+		CookieMask: ovs.OwnerCookieMask,
+	})
+	if err != nil {
+		return &ErrFlowOperationFailed{Table: openflow.OFPTTAll, Operation: "read stale generations", Cause: err}
+	}
+	legacy, err := h.ofClient.QueryFlowStats(ctx, openflow.FlowStatsFilter{
+		TableID:    openflow.OFPTTAll,
+		Cookie:     legacyOverlayCookie,
+		CookieMask: ^uint64(0),
+	})
+	if err != nil {
+		return &ErrFlowOperationFailed{Table: openflow.OFPTTAll, Operation: "read stale generations", Cause: err}
+	}
+	stale := make(map[uint64]struct{})
+	for _, s := range stats {
+		if s.Cookie&ovs.OwnerCookieMask == OverlayCookie && s.Cookie != h.cookie {
+			stale[s.Cookie] = struct{}{}
+		}
+	}
+	if len(legacy) > 0 {
+		stale[legacyOverlayCookie] = struct{}{}
+	}
+	if len(stale) > 0 {
+		mods := make([]*openflow.FlowMod, 0, len(stale))
+		for _, cookie := range slices.Sorted(maps.Keys(stale)) {
+			mods = append(mods, generationDelete(cookie))
+		}
+		if err := h.ofClient.SendFlowMods(ctx, mods); err != nil {
+			return &ErrFlowOperationFailed{Table: openflow.OFPTTAll, Operation: "sweep stale generations", Cause: err}
+		}
+		h.logger.Info("overlay flows of older generations swept", "generations", len(stale))
+	}
+	h.staleSweepAt = time.Time{}
 	return nil
 }
 
 // newBuilder builds the overlay's flows on the current OpenFlow numbers of
 // the VXLAN and access ports, read from OVS.
-func (h *OverlayModeHandler) newBuilder(ctx context.Context) (*flowBuilder, error) {
+func (h *OverlayModeHandler) newBuilder(ctx context.Context, cookie uint64) (*flowBuilder, error) {
 	vxlanPort, err := h.vtepManager.ResolveOFPort(ctx)
 	if err != nil {
 		return nil, &ErrOverlayPortUnresolved{Port: "VXLANPort", Cause: err}
@@ -638,7 +733,7 @@ func (h *OverlayModeHandler) newBuilder(ctx context.Context) (*flowBuilder, erro
 	if err != nil {
 		return nil, &ErrOverlayPortUnresolved{Port: "AccessPort", Cause: err}
 	}
-	return newFlowBuilder(h.config, overlayPorts{vxlan: vxlanPort, access: uint32(accessPort)})
+	return newFlowBuilder(h.config, overlayPorts{vxlan: vxlanPort, access: uint32(accessPort)}, cookie)
 }
 
 // remapPorts reads the ports' OpenFlow numbers again, which a restarted
@@ -648,7 +743,7 @@ func (h *OverlayModeHandler) newBuilder(ctx context.Context) (*flowBuilder, erro
 // last updated, so where two hold one flow differently the later still
 // wins. The switch is not touched. Caller holds mu.
 func (h *OverlayModeHandler) remapPorts(ctx context.Context) error {
-	builder, err := h.newBuilder(ctx)
+	builder, err := h.newBuilder(ctx, h.cookie)
 	if err != nil {
 		return err
 	}
@@ -746,10 +841,11 @@ func (h *OverlayModeHandler) Stop(ctx context.Context) error {
 	}
 
 	h.mu.Lock()
-	if err := h.ofClient.SendFlowMods(ctx, []*openflow.FlowMod{overlayFlush()}); err != nil {
+	if err := h.ofClient.SendFlowMods(ctx, overlayFlush()); err != nil {
 		errs = append(errs, &ErrFlowOperationFailed{Table: openflow.OFPTTAll, Operation: "delete", Cause: err})
 	}
 	h.flows.reset()
+	h.staleSweepAt = time.Time{}
 	clear(h.segments)
 	clear(h.vlans)
 	clear(h.hosts)
@@ -1235,27 +1331,40 @@ func (h *OverlayModeHandler) resync(ctx context.Context, cause error, restore []
 func (h *OverlayModeHandler) rebuild(ctx context.Context) error {
 	if h.remap {
 		if err := h.remapPorts(ctx); err != nil {
-			if flushErr := h.ofClient.SendFlowMods(ctx, []*openflow.FlowMod{overlayFlush()}); flushErr != nil {
+			if flushErr := h.ofClient.SendFlowMods(ctx, overlayFlush()); flushErr != nil {
 				return errors.Join(err, &ErrFlowResyncFailed{Cause: flushErr})
 			}
 			return err
 		}
 	}
-	mods := append([]*openflow.FlowMod{overlayFlush()}, h.flows.installed()...)
+	mods := append(overlayFlush(), h.flows.installed()...)
 	if err := h.ofClient.SendFlowMods(ctx, mods); err != nil {
 		return &ErrFlowResyncFailed{Cause: err}
 	}
 	h.drifted = false
+	h.staleSweepAt = time.Time{}
 	h.logger.Info("overlay flows rebuilt from the committed state")
 	return nil
 }
 
-// overlayFlush deletes every overlay flow in every table.
-func overlayFlush() *openflow.FlowMod {
+// overlayFlush deletes every overlay flow in every table, of every
+// generation, and those an older release left under legacyOverlayCookie.
+func overlayFlush() []*openflow.FlowMod {
 	f := openflow.NewFlowMod(0)
 	f.Command = openflow.OFPFCDelete
 	f.TableID = openflow.OFPTTAll
 	f.Cookie = OverlayCookie
+	f.CookieMask = ovs.OwnerCookieMask
+	return []*openflow.FlowMod{f, generationDelete(legacyOverlayCookie)}
+}
+
+// generationDelete deletes, from every table, the flows of one overlay
+// generation.
+func generationDelete(cookie uint64) *openflow.FlowMod {
+	f := openflow.NewFlowMod(0)
+	f.Command = openflow.OFPFCDelete
+	f.TableID = openflow.OFPTTAll
+	f.Cookie = cookie
 	f.CookieMask = ^uint64(0)
 	return f
 }

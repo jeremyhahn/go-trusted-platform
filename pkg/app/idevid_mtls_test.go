@@ -44,7 +44,6 @@ import (
 type simulatedIDevID struct {
 	TPM     xkmssdk.TrustedPlatformModule
 	Config  *xkmssdk.TPMConfig
-	Attrs   *xkmssdk.KeyAttributes
 	Backend xkmssdk.TPMKeyBackend
 }
 
@@ -86,10 +85,10 @@ func newSimulatedIDevID(t *testing.T) *simulatedIDevID {
 	ekPub, err := tpm.EKRSA()
 	require.NoError(t, err)
 
-	idevidAttrs, _, err := tpm.CreateIDevID(iakAttrs, selfSignedCertificate(t, ekPub), nil)
+	_, _, err = tpm.CreateIDevID(iakAttrs, selfSignedCertificate(t, ekPub), nil)
 	require.NoError(t, err)
 
-	return &simulatedIDevID{TPM: tpm, Config: config, Attrs: idevidAttrs, Backend: backend}
+	return &simulatedIDevID{TPM: tpm, Config: config, Backend: backend}
 }
 
 // simulatedIDevIDConfig mirrors the TPM section of the shipped device
