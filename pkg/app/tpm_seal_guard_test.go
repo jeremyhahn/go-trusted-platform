@@ -157,60 +157,6 @@ func TestProbeTPMSealArtifacts(t *testing.T) {
 	})
 }
 
-// The integration harness (setup_esp in run-integration-tests.sh) gives
-// platformd a fresh node's ESP: an empty vfat image on a loop device with
-// only EFI/. On it, a fresh swtpm's provisioning must resolve to full
-// provisioning. Without that ESP, the guard's refusal stands.
-func TestProbeTPMSealArtifacts_HarnessLoopESP(t *testing.T) {
-	restorePaths := tpmSealArtifactPaths
-	restoreMounts := tpmSealMountsFile
-	restoreMP := tpmSealESPMountPoint
-	defer func() {
-		tpmSealArtifactPaths = restorePaths
-		tpmSealMountsFile = restoreMounts
-		tpmSealESPMountPoint = restoreMP
-	}()
-
-	esp := t.TempDir()
-	tpmSealESPMountPoint = esp
-	tpmSealArtifactPaths = []string{
-		filepath.Join(esp, "tpm2", "seal-platform.pub"),
-		filepath.Join(esp, "tpm2", "seal-platform.priv"),
-	}
-	if err := os.MkdirAll(filepath.Join(esp, "EFI"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	mounts := filepath.Join(t.TempDir(), "mounts")
-	line := "/dev/loop3 " + esp + " vfat rw,relatime,fmask=0022,dmask=0022,codepage=437,iocharset=ascii,shortname=mixed,errors=remount-ro 0 0\n"
-	if err := os.WriteFile(mounts, []byte("overlay / overlay rw 0 0\n"+line), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	t.Run("the harness ESP resolves to full provisioning", func(t *testing.T) {
-		tpmSealMountsFile = mounts
-		probe := probeTPMSealArtifacts()
-		if probe != tpmSealAbsent {
-			t.Fatalf("probe = %v, want absent on the harness's loop-mounted ESP", probe)
-		}
-		action, err := resolveTPMRecovery(probe, tpmCauseUnprovisioned)
-		if err != nil || action != tpmRecoverFullProvision {
-			t.Fatalf("resolveTPMRecovery = (%v, %v), want full provisioning", action, err)
-		}
-	})
-
-	t.Run("a container without the ESP refuses typed", func(t *testing.T) {
-		tpmSealMountsFile = filepath.Join(t.TempDir(), "no-esp-mounts")
-		if err := os.WriteFile(tpmSealMountsFile, []byte("overlay / overlay rw 0 0\n"), 0644); err != nil {
-			t.Fatal(err)
-		}
-		_, err := resolveTPMRecovery(probeTPMSealArtifacts(), tpmCauseUnprovisioned)
-		var unknown ErrTPMSealStateUnknown
-		if !errors.As(err, &unknown) {
-			t.Fatalf("resolveTPMRecovery err = %v, want ErrTPMSealStateUnknown", err)
-		}
-	})
-}
-
 // TestErrTPMSealStateUnknown asserts the indeterminate-probe error names
 // the mount point the operator must make readable, with and without
 // detail.

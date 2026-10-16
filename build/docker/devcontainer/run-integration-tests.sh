@@ -328,12 +328,6 @@ cleanup() {
     # Stop swtpm
     pkill -9 -f 'swtpm socket' 2>/dev/null || true
 
-    # Unmount the harness ESP; the loop device detaches with it
-    if [ "${ESP_MOUNTED:-false}" = true ]; then
-        umount "$ESP_MOUNT" 2>/dev/null || true
-        rm -f "$ESP_IMAGE"
-    fi
-
     # Stop OVS
     if [ -f /var/run/openvswitch/ovs-vswitchd.pid ]; then
         kill "$(cat /var/run/openvswitch/ovs-vswitchd.pid)" 2>/dev/null || true
@@ -476,38 +470,6 @@ start_swtpm() {
     echo "=== swtpm setup complete ==="
 }
 
-# A fresh swtpm has no EK, so platformd must fully provision it. Before it
-# clears a TPM, platformd's seal guard (pkg/app/tpm_seal_guard.go) must
-# prove that no TPM-sealed LUKS unlock exists on the ESP. It accepts that
-# proof only from a verified ESP: a vfat filesystem from a /dev block device,
-# mounted at /boot/efi, with an EFI/ directory. A container has no ESP, so
-# without one platformd refuses to start (ErrTPMSealStateUnknown), as it
-# should on a real node. Give the container what a freshly installed node
-# has: an empty ESP on a loop device. The mount is in the container's own
-# mount namespace; cleanup unmounts it.
-ESP_IMAGE=/tmp/integration-esp.img
-ESP_MOUNT=/boot/efi
-ESP_MOUNTED=false
-
-setup_esp() {
-    echo "=== Mounting a fresh ESP at ${ESP_MOUNT} ==="
-
-    if mountpoint -q "$ESP_MOUNT"; then
-        echo "ERROR: ${ESP_MOUNT} is already a mount point; the harness mounts its own ESP"
-        return 1
-    fi
-
-    rm -f "$ESP_IMAGE"
-    truncate -s 32M "$ESP_IMAGE" || return 1
-    mkfs.vfat -n ESP "$ESP_IMAGE" > /dev/null || return 1
-    mkdir -p "$ESP_MOUNT"
-    mount -o loop -t vfat "$ESP_IMAGE" "$ESP_MOUNT" || return 1
-    ESP_MOUNTED=true
-    mkdir -p "${ESP_MOUNT}/EFI" || return 1
-
-    echo "=== ESP mounted ($(findmnt -n -o SOURCE "$ESP_MOUNT")) ==="
-}
-
 # =============================================================================
 # platformd Setup
 # =============================================================================
@@ -617,7 +579,8 @@ prepare_gatewayd_supervision() {
     mkdir -p "${root}/init"
     # A process forked while the list is moved lands back in the root, so
     # the move repeats until enabling the controllers stops failing.
-    for _ in 1 2 3 4 5; do
+    local attempt
+    for attempt in 1 2 3 4 5; do
         local pid
         while read -r pid; do
             echo "${pid}" > "${root}/init/cgroup.procs" 2>/dev/null || true
@@ -979,10 +942,6 @@ if ! start_swtpm; then
         exit 1
     fi
     echo "WARNING: swtpm setup failed; the suites that need a TPM have none"
-fi
-
-if ! setup_esp; then
-    echo "WARNING: no ESP at ${ESP_MOUNT}; platformd cannot provision the fresh swtpm and will refuse to start"
 fi
 
 # Cold-start and barrier-gate scenarios manage their own platformd
