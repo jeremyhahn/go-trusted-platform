@@ -40,7 +40,6 @@ type fakeEABService struct {
 
 	// Last-call record for assertion.
 	lastGenerate     eab.GenerateParams
-	lastValidateKey  string
 	lastValidateHMAC []byte
 	cleanupCount     int
 
@@ -149,7 +148,6 @@ func (f *fakeEABService) Revoke(ctx context.Context, id uint64) error {
 }
 
 func (f *fakeEABService) Validate(ctx context.Context, keyID string, hmacKey []byte) (*eab.Credential, error) {
-	f.lastValidateKey = keyID
 	f.lastValidateHMAC = append([]byte(nil), hmacKey...)
 	if f.errValidate != nil {
 		return nil, f.errValidate

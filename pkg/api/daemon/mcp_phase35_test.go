@@ -430,6 +430,9 @@ func TestPhase35Provider_PIVDelegation(t *testing.T) {
 	if _, err := p.PIVSlotInfo(ctx, "yk5", "9a"); err != nil {
 		t.Fatalf("PIVSlotInfo: %v", err)
 	}
+	if pb.lastSlotDev != "yk5" {
+		t.Errorf("SlotInfo: device not passed, got %q", pb.lastSlotDev)
+	}
 	if pb.lastSlotID != "9a" {
 		t.Errorf("SlotInfo: slot not passed, got %q", pb.lastSlotID)
 	}

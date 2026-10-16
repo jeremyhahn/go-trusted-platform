@@ -75,8 +75,8 @@ sdn:
 | local-address | string | — | Required; this VTEP's unicast address, the IKE endpoint and certificate identity. With the overlay enabled it is also the VTEP address the overlay controller registers and sources VXLAN from, so it must be an address of `fabric-interface` (see [Runtime-Derived Settings](#runtime-derived-settings)) |
 | static-peers | []string | none | Explicit per-peer connections (route reflectors, gateways); single unicast addresses of the local address's family, no duplicates, never the local address. There is no wildcard peer |
 | vici-socket | string | `/run/charon.vici` | Absolute path. platformd refuses the socket unless it is mode 0600 and owned by platformd's user, and served by a process that listened as charon's uid |
-| certificate-file | string | none | Absolute path; PEM tunnel certificate followed by its CA chain, read on every attach by `ipsec.FileIdentity`. Required by platformd |
-| crl-files | []string | none | Absolute paths; one CRL per issuer of the tunnel chain, PEM (`X509 CRL`) or DER. platformd reads them at start and again every minute (`ipsec.CRLRefresh`) and pushes each to charon; a CRL no newer than the one charon holds is ignored, so replacing a file on disk is how a revocation reaches the node. Required by platformd |
+| certificate-file | string | none | Absolute path; PEM tunnel certificate followed by its CA chain, read on every attach by `ipsec.FileIdentity`. Required by platformd and gatewayd |
+| crl-files | []string | none | Absolute paths; one CRL per issuer of the tunnel chain, PEM (`X509 CRL`) or DER. platformd reads them at start and again every minute (`ipsec.CRLRefresh`) and pushes each to charon; a CRL no newer than the one charon holds is ignored, so replacing a file on disk is how a revocation reaches the node. Required by platformd and gatewayd |
 | token.module | string | `xkms` | The name of the module under charon's `pkcs11 { modules { } }` in strongswan.conf, sent with `load-token`; letters, digits, `-` and `_`, at most 64. The shipped `pkcs11.conf` defines `xkms`, whose path is the p11-kit client that forwards to the node-local xkms token |
 | token.slot | uint32 | 0 | Token slot holding the IKE key |
 | token.handle | string | — | Required; the key's CKA_ID in hex |
@@ -175,6 +175,14 @@ VNI. Routing is per VNI: a VNI without a subnet, such as 40200 above, stays
 bridged beside routed ones. Its hosts get no host route, and its frames for
 the gateway MAC are bridged, not routed. A failure is an
 `*gateway.ErrOverlayConfigInvalid` naming the key.
+
+`gateway.overlay.ipsec` is the section above, under the gateway's overlay:
+`local-address` must be `local-vtep` and `fabric-interface` must be
+`underlay-interface`, else `*gateway.ErrOverlayConfigInvalid` names the key; a
+section that fails its own checks is a `*gateway.ErrOverlayIPsecConfigInvalid`
+wrapping the `*config.ConfigError`. gatewayd installs the floor before the
+overlay starts, and its peers are the static peers plus the admitted VTEPs on
+its flood lists ([Overlay IPsec in gatewayd](../../gateway/engineering.md#overlay-ipsec-in-gatewayd)).
 
 The overlay speaker's peer policy rejects every route an allowlist does not
 name. An `rr-peers` entry with an empty `policy.import-route-targets` or

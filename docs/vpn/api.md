@@ -69,13 +69,19 @@ reports telemetry.
   "device_id": "laptop-1", "address": "10.8.0.2", "data_plane": "masque", "zones": ["management"],
   "issued_at_unix": 1760300000, "expires_at_unix": 1760328800, "renewals": 0}],
   "posture_policy_errors": [], "rejected_peers": [{"tenant_id": "acme", "device_id": "laptop-9",
-  "reason": "vpn: zone \"storage\" is not reachable through this service"}] }
+  "reason": "vpn: zone \"storage\" is not reachable through this service"}],
+  "revocations": {"expired": 4}, "posture_violations": {"secure-boot-enabled": 1},
+  "reattest": {"count": 9, "sum_seconds": 0.42, "buckets": [{"upper_bound_seconds": 0.005, "count": 0}, …]} }
 ```
 
 - The names above are the proto field names. REST bodies are protojson: it
   writes camelCase names (`tenantId`, `enrolledAtUnix`) and reads either form,
   and it encodes the 64-bit fields (the `*_unix` times, `admissions`,
-  `refusals`) as decimal strings. The JS SDK types follow that encoding.
+  `refusals`, the `revocations` and `posture_violations` counts, the
+  `reattest` counts) as decimal strings. The JS SDK types follow that encoding.
+- `revocations`, `posture_violations` and `reattest` are the counters behind
+  the `gatewayd_vpn_*` metrics ([engineering.md](engineering.md) §8);
+  `reattest.buckets` are cumulative.
 - `zones` narrows the gateway's `allow-to` set; empty means every allowed zone.
 - `enrolled_at_unix` and `updated_at_unix` are set by the service and ignored on
   write. Re-enrolling a device replaces its zones and keeps its first enrolment

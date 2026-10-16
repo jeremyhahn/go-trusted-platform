@@ -263,6 +263,12 @@ type OverlayModeConfig struct {
 	// Admitter vets the remote VTEPs routes name; EVPN requires it.
 	Admitter VTEPAdmitter
 
+	// FloodPeers, when set, is told each change to a VNI's flood list as
+	// the Type-3 route that made it, once the flows hold it; leaving a VNI
+	// withdraws each VTEP that was on it. gatewayd's overlay IPsec follows
+	// it, so an SA runs to exactly the VTEPs this node exchanges frames with.
+	FloodPeers bgp.EVPNRouteHandler
+
 	// Logger for logging operations.
 	Logger *slog.Logger
 }
@@ -802,7 +808,7 @@ func (h *OverlayModeHandler) AddVNI(ctx context.Context, vni uint32, vlan uint16
 	}
 	if err := h.evpnManager.JoinVNI(ctx, vni, h.config.L3VNI); err != nil {
 		h.mu.Lock()
-		if removeErr := h.removeSegment(ctx, vni); removeErr != nil {
+		if removeErr := h.removeSegmentAndPeers(ctx, vni); removeErr != nil {
 			h.logger.Error("removing a VNI EVPN refused", slog.Uint64("vni", uint64(vni)), slog.Any("error", removeErr))
 		}
 		h.mu.Unlock()
@@ -813,7 +819,7 @@ func (h *OverlayModeHandler) AddVNI(ctx context.Context, vni uint32, vlan uint16
 			h.logger.Error("leaving a VNI whose subnet EVPN refused", slog.Uint64("vni", uint64(vni)), slog.Any("error", leaveErr))
 		}
 		h.mu.Lock()
-		if removeErr := h.removeSegment(ctx, vni); removeErr != nil {
+		if removeErr := h.removeSegmentAndPeers(ctx, vni); removeErr != nil {
 			h.logger.Error("removing a VNI whose subnet EVPN refused", slog.Uint64("vni", uint64(vni)), slog.Any("error", removeErr))
 		}
 		h.mu.Unlock()
@@ -883,10 +889,11 @@ func (h *OverlayModeHandler) RemoveVNI(ctx context.Context, vni uint32) error {
 	}
 
 	h.mu.Lock()
+	flood := h.segments[vni].flood
 	if err := h.removeSegment(ctx, vni); err != nil {
 		errs = append(errs, &ErrVNIOperationFailed{VNI: vni, Operation: "remove", Cause: err})
-	} else if err := h.releaseHeld(ctx); err != nil {
-		errs = append(errs, err)
+	} else {
+		errs = append(errs, h.releaseHeld(ctx), h.withdrawFloodPeers(ctx, vni, flood))
 	}
 	h.mu.Unlock()
 	return errors.Join(errs...)
@@ -942,6 +949,32 @@ func (h *OverlayModeHandler) removeSegment(ctx context.Context, vni uint32) erro
 	delete(h.vlans, segment.vlan)
 	delete(h.segments, vni)
 	return nil
+}
+
+// removeSegmentAndPeers removes a VNI's segment, then withdraws each VTEP
+// on its flood list from FloodPeers. Caller holds mu.
+func (h *OverlayModeHandler) removeSegmentAndPeers(ctx context.Context, vni uint32) error {
+	flood := h.segments[vni].flood
+	if err := h.removeSegment(ctx, vni); err != nil {
+		return err
+	}
+	return h.withdrawFloodPeers(ctx, vni, flood)
+}
+
+// withdrawFloodPeers tells FloodPeers that each VTEP of flood left vni, as
+// the Type-3 withdrawal BGP would have sent. Every VTEP is tried and the
+// failures are joined. Caller holds mu.
+func (h *OverlayModeHandler) withdrawFloodPeers(ctx context.Context, vni uint32, flood []netip.Addr) error {
+	var errs []error
+	for _, vtep := range flood {
+		errs = append(errs, h.tellFloodPeers(ctx, &bgp.EVPNRouteData{
+			Type:       bgp.EVPNTypeInclusiveMulticast,
+			IMET:       &bgp.IMETEntry{VNI: vni, VTEPIP: vtep},
+			NextHop:    vtep,
+			IsWithdraw: true,
+		}))
+	}
+	return errors.Join(errs...)
 }
 
 // LearnMAC records a host on the access port — its MAC alone, or a MAC/IP

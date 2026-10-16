@@ -1,6 +1,6 @@
 # Remote-Access VPN — Engineering Contract
 
-> **Status: NORMATIVE** · Scope: `pkg/sdn/gateway/services/vpn`, `pkg/sdn/gateway/ipc`, `pkg/sdn/tunnel`, `pkg/vpn` · Last verified: 2026-10-15
+> **Status: NORMATIVE** · Scope: `pkg/sdn/gateway/services/vpn`, `pkg/sdn/gateway/ipc`, `pkg/sdn/tunnel`, `pkg/vpn` · Last verified: 2026-10-16
 > Conflicts with this document are defects. Fix them here first.
 > Partial today: the core (#584 PR 1), both data planes (#584 PR 2), the gateway service and the operator control plane (#584 PR 3) exist; the control-plane lease record and the gateway's projection of it exist (§6); the admission listener (#557), its wire contract and the client agent core (`pkg/vpn/agent`) exist; the JS SDK client and the web page (#584 PR 4) exist, and so do `platformctl vpn connect [--foreground]|disconnect|lease|posture|renew` and their exit codes; the client presents the host's TPM device identity (`TPMDevice`, `OpenHostDevice`), renews its lease with fresh evidence (`Agent.Renew`, `Agent.KeepAlive`) and brings up the leased data plane, WireGuard (`!fips`) or MASQUE CONNECT-IP; left for PR 4: the client's factor signers. The datapath child's peer RPCs, its plane host and the process client that reaches it exist (#584); the gatewayd runtime assembly that wires them is planned (§1).
 > Identifiers below are either real today (grepped) or marked *(planned)*. A
@@ -88,7 +88,7 @@
 | `serviceBuilders["management-vpn"]` → `buildManagementVPN` | Builds the planes, then `vpn.New`, then the admission listener; a refusal stops the planes already built. `Start` rebuilds the projected leases (below), starts the planes in order, then the service, rolling back on the first failure; with a projection it then calls `Restore` (a dropped lease is logged, not fatal) before applying the enrolment set, and it opens the listener last (a port that will not bind stops the service and the planes). `Stop` cancels the listener's context and waits for its port, then stops the service, then the planes in reverse; without a projection it first revokes every lease (`operator`) so the addresses return to the pool, with one it keeps them, because a stop is not a revocation and the next start reinstates them. The listener therefore runs wherever the service runs: today inside `gatewayd serve` |
 | `VPNLeaseControl` (`FetchDesiredConfig`, `PutVPNLease`, `DeleteVPNLease`), `(*Gateway).SetVPNLeaseControl(control, journal)`, `RevocationJournal`, `NewRevocationJournal`, `ErrRevocationJournal{Path, Op, Cause}`, `projectedLeaseStore` | The control plane as the record of the gateway's leases; `controlplane.Reporter` implements it and `gatewayd serve` sets it whenever the reporter runs, with the revocation journal at `<--data-dir>/vpn/pending-revocations.json`. A control plane set without a journal refuses the service (`ErrServiceUnavailable`). On start the service pulls the desired config once — the same pull, no second channel — loads its `vpn.leases` into the local store and keeps its `vpn` section for the apply. An unreachable control plane refuses the start (`ErrLeaseStoreUnavailable`) before any plane starts, rather than running on an empty projection; a recorded lease that does not parse refuses it (`ErrDesiredConfigInvalid{Field: "vpn.leases[i].address"}`). `Put` goes to the control plane first. A renewal it refuses is `ErrLeaseStoreUnavailable` and leaves the projection unchanged. An admission (a lease the projection does not hold) is journaled before its PUT is sent and cleared once the control plane and the projection both hold it; a journal that cannot be written refuses the admission before anything is sent. A PUT that fails — including one the control plane committed while its answer was lost — or a projection that refuses the lease after the control plane took it fails the admission (`ErrLeaseStoreUnavailable`) and withdraws it: the entry becomes a pending revocation and its DELETE is sent at once, so no failed admission is left recorded for a restart to reinstate. `Delete` (revoke, sweep) journals the revocation as pending, drops the lease from the projection, then sends the control-plane DELETE; a refused DELETE is `ErrLeaseStoreUnavailable` and stays pending, one that lands clears the entry. If the journal cannot be written, the revocation is durable only through the DELETE: one that lands drops the lease; one that is refused too keeps the lease and is `ErrLeaseStoreUnavailable` wrapping `ErrRevocationNotRecorded{LeaseID, Cause}`, and the service then refuses the revocation whole — the peer and the address stay, so the running gateway and a restarted one, which rebuilds the lease from the control plane, agree — until a retry (the caller's, or the next sweep's for an expired lease) is recorded. The service therefore revokes in the order record, peer, address, and `Restore` deletes a dropped lease before releasing its address. Every sweep retries the pending DELETEs alone (`RetryPendingDeletes`, the optional `vpn.PendingDeleteStore`), never the peer removal or address release, so an address handed to another device meanwhile is left intact. A start loads the journal and leaves every lease it names out of the rebuilt projection — a pending revocation, or an admission a previous process journaled and never cleared, whose DELETE becomes pending — so neither survives a process restart and the device must be admitted afresh; a journal that cannot be read or parsed refuses the start (`ErrLeaseStoreUnavailable` wrapping `ErrRevocationJournal`). The journal is the pending revocations and the admissions in flight as JSON, replaced whole through a synced temporary file and a rename; a journal write that fails is `ErrLeaseStoreUnavailable` wrapping `ErrRevocationJournal`. Reads are local |
 | `DesiredConfig.VPN` → `DesiredVPN{Peers []DesiredVPNPeer{TenantID, DeviceID, Zones}, PosturePolicies []DesiredVPNPosturePolicy{TenantID, Name, Module}, Leases []DesiredVPNLease}`, `DesiredVPNVerdict`, `SectionVPN` | The control plane's enrolment set and tenant posture policies, and the leases this gateway recorded (read only on start, above; each needs an ID, tenant, device, data plane, a prefix address and an expiry after its issue time, and no (tenant, ID) repeats; not part of the content version). `Gateway.Apply` validates it (tenant and device required, no duplicate (tenant, device) peer or (tenant, name) policy, compared field by field), records it and hands it to the running service: policies first, then enrolments. A section that arrives before the service starts is applied as it starts. A gateway that does not run the VPN ignores the section. A supervised VPN refuses it (`ErrDesiredApplyFailed{Section: "vpn"}`): the supervisor forwards the document to the datapath child only |
-| `Snapshot.VPN` → `VPNState{Running, Admissions, Refusals, LastRefusal, EnrolledPeers, LeasesByDataPlane, Leases []VPNLeaseState, PosturePolicyErrors, RejectedPeers []VPNRejectedPeer}`, `(*Service).PosturePolicyErrors()`, `(*Service).RejectedEnrolments()` | The telemetry section; absent while the service is not running here. A tenant whose delivered policy is refused is listed with the reason, and so is every peer refused from the last enrolment set (`rejected_peers` in the API) |
+| `Snapshot.VPN` → `VPNState{Running, Admissions, Refusals, LastRefusal, EnrolledPeers, LeasesByDataPlane, Leases []VPNLeaseState, PosturePolicyErrors, RejectedPeers []VPNRejectedPeer, Revocations, PostureViolations, Reattest *DurationHistogram}`, `(*Service).PosturePolicyErrors()`, `(*Service).RejectedEnrolments()` | The telemetry section; absent while the service is not running here. A tenant whose delivered policy is refused is listed with the reason, and so is every peer refused from the last enrolment set (`rejected_peers` in the API) |
 
 ### Control plane — exists since #584 PR 3 (`pkg/vpn`, `pkg/api/daemon`)
 
@@ -330,20 +330,41 @@ carried or revoked separately.
 
 ## 8. Observability
 
-Log events (structured): `vpn.admit`, `vpn.refuse` (with `reason` class, never
-the policy's identity list), `vpn.renew`, `vpn.revoke`, `vpn.lease.expire`.
+Log events (structured): `vpn.admit`, `vpn.refuse`, `vpn.renew`, `vpn.revoke`
+and `vpn.lease.expire`. `vpn.refuse` carries `device`, the refusal `reason`
+class (`RefusalOf`, [api.md](api.md) §5) and, for a posture violation, the violated `rules`. It never
+carries a policy refusal's error text, which can hold the policy's identity
+list. Only a refusal the gateway caused (a 5xx class: the lease store, a data
+plane or the posture engine is down) adds `error`, naming the failing
+dependency. `Sweep` logs `vpn.lease.expire` (`lease`, `device`, `expired_at`)
+before the `vpn.revoke` with reason `expired`.
 The planes add `vpn.wireguard.peer.{install,remove}`,
 `vpn.masque.{start,stop}`, `vpn.masque.peer.{install,remove}`,
 `vpn.masque.session.{open,close,refused}` and `vpn.masque.packet.dropped`.
-Metrics: `vpn_leases_active`, `vpn_admissions_total{outcome}`,
-`vpn_revocations_total{reason}`, `vpn_posture_violations_total{rule}`,
-`vpn_reattest_duration_seconds`. Audit: every decision through the
+Metrics come from the `vpn` telemetry section through the gatewayd collector
+(`pkg/sdn/gateway/metrics.go`), so they and the control plane's
+`GetStatus` always agree. Each carries the `gateway` label and is absent
+while the service is not running on the gateway:
+
+| Series | Type | Counts |
+|---|---|---|
+| `gatewayd_vpn_leases_active{data_plane}` | gauge | active leases per data plane |
+| `gatewayd_vpn_admissions_total{outcome}` | counter | `admitted` and `refused` decisions |
+| `gatewayd_vpn_revocations_total{reason}` | counter | revoked leases by `RevokeReason` (`expired`, `operator`, `attestation-failed`, …); a revoke the journal did not record is not counted |
+| `gatewayd_vpn_posture_violations_total{rule}` | counter | each posture rule that refused an admission or a renewal (`posture-missing` and `denied` included); past 64 distinct rule names the rest count as `other`, so a tenant policy cannot grow the label set; an engine failure is a refusal, not a violation |
+| `gatewayd_vpn_reattest_duration_seconds` | histogram | how long a renewal's re-attestation took to verify, passed or failed (buckets 5ms–10s); the admission attestation is not a re-attestation |
+
+`vpn.Health()` carries the same counts (`Revocations`, `PostureViolations`,
+`Reattest DurationHistogram`), counted lock-free in
+`services/vpn/meters.go`. Audit: every decision through the
 `calleradmission.Auditor` sink and the SDK audit record, carrying device id,
 tenant, lease id and outcome. The gateway telemetry snapshot carries a `vpn`
 section (`VPNState`, §1): admission and refusal counts, the last refusal
 reason, enrolled peers, leases per data plane, every lease, the tenants
-whose posture policy is refused, and the peers refused from the enrolment set
-(each also logged once per set as `vpn.enrolment: peer refused`).
+whose posture policy is refused, the peers refused from the enrolment set
+(each also logged once per set as `vpn.enrolment: peer refused`), and the
+revocation, posture-violation and re-attestation counts above
+(`revocations`, `posture_violations`, `reattest` in the API).
 
 ## 9. Replacing the interim endpoint
 

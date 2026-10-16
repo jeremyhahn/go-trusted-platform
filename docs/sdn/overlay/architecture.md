@@ -335,8 +335,11 @@ open.
 platformd has no EVPN route source, so its controller admits no VTEP a
 route names (`ErrNoVTEPAdmission`): its peers are the static peers.
 gatewayd hosts the overlay's EVPN data plane (its `overlay` service, with
-attestation-verdict VTEP admission) but starts no overlay IPsec, so its VTEP
-traffic is not carried by this service (#709).
+attestation-verdict VTEP admission) and, with `gateway.overlay.ipsec`, runs
+this service through `ipsec.NewEVPNService`: its peers are the static peers
+plus each VTEP on one of its flood lists, which its controller admits only
+while the overlay holds a fresh admission for it, and a revoked VTEP is
+evicted ([gateway engineering](../../gateway/engineering.md#overlay-ipsec-in-gatewayd)).
 
 ### Status
 

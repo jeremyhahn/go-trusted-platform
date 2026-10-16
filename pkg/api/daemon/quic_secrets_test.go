@@ -32,11 +32,10 @@ import (
 // mockSecretsQUICService implements SecretsServiceInterface with in-memory
 // state for QUIC secrets category tests.
 type mockSecretsQUICService struct {
-	secrets       map[string][]byte
-	policies      map[string]*pb.SecretRotationPolicy
-	shouldErr     bool
-	errToReturn   error
-	lastOperation string
+	secrets     map[string][]byte
+	policies    map[string]*pb.SecretRotationPolicy
+	shouldErr   bool
+	errToReturn error
 }
 
 var _ SecretsServiceInterface = (*mockSecretsQUICService)(nil)
@@ -49,7 +48,6 @@ func newMockSecretsQUICService() *mockSecretsQUICService {
 }
 
 func (m *mockSecretsQUICService) StoreSecret(ctx context.Context, req *pb.StoreSecretRequest) (*pb.StoreSecretResponse, error) {
-	m.lastOperation = "StoreSecret"
 	if m.shouldErr {
 		return nil, m.errToReturn
 	}
@@ -58,7 +56,6 @@ func (m *mockSecretsQUICService) StoreSecret(ctx context.Context, req *pb.StoreS
 }
 
 func (m *mockSecretsQUICService) GetSecret(ctx context.Context, req *pb.GetSecretRequest) (*pb.GetSecretResponse, error) {
-	m.lastOperation = "GetSecret"
 	if m.shouldErr {
 		return nil, m.errToReturn
 	}
@@ -70,7 +67,6 @@ func (m *mockSecretsQUICService) GetSecret(ctx context.Context, req *pb.GetSecre
 }
 
 func (m *mockSecretsQUICService) ListSecrets(ctx context.Context, req *pb.ListSecretsRequest) (*pb.ListSecretsResponse, error) {
-	m.lastOperation = "ListSecrets"
 	if m.shouldErr {
 		return nil, m.errToReturn
 	}
@@ -82,7 +78,6 @@ func (m *mockSecretsQUICService) ListSecrets(ctx context.Context, req *pb.ListSe
 }
 
 func (m *mockSecretsQUICService) DeleteSecret(ctx context.Context, req *pb.DeleteSecretRequest) (*pb.DeleteSecretResponse, error) {
-	m.lastOperation = "DeleteSecret"
 	if m.shouldErr {
 		return nil, m.errToReturn
 	}
@@ -91,7 +86,6 @@ func (m *mockSecretsQUICService) DeleteSecret(ctx context.Context, req *pb.Delet
 }
 
 func (m *mockSecretsQUICService) SetRotationPolicy(ctx context.Context, req *pb.SetRotationPolicyRequest) (*pb.SetRotationPolicyResponse, error) {
-	m.lastOperation = "SetRotationPolicy"
 	if m.shouldErr {
 		return nil, m.errToReturn
 	}
@@ -100,7 +94,6 @@ func (m *mockSecretsQUICService) SetRotationPolicy(ctx context.Context, req *pb.
 }
 
 func (m *mockSecretsQUICService) GetRotationPolicy(ctx context.Context, req *pb.GetRotationPolicyRequest) (*pb.GetRotationPolicyResponse, error) {
-	m.lastOperation = "GetRotationPolicy"
 	if m.shouldErr {
 		return nil, m.errToReturn
 	}

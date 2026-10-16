@@ -36,9 +36,12 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/controlplane"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/modes"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/process"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/proxysvc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/secrets"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec"
+	ipsecconfig "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	sdkattestation "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/attestation"
@@ -817,7 +820,18 @@ func wireOverlayRuntime(ctx context.Context, cfg *ServeConfig, anchor *trust.Anc
 		return err
 	}
 	WireOverlayPlatform(runtime, client)
+	runtime.OverlayIPsec = newOverlayIPsec
 	return nil
+}
+
+// newOverlayIPsec builds the overlay's IPsec: an ipsec.Service that follows
+// the overlay's flood lists, as platformd's follows its static peers.
+func newOverlayIPsec(cfg *ipsecconfig.Config, admitter modes.VTEPAdmitter, logger *slog.Logger) (gateway.OverlayIPsec, error) {
+	svc, err := ipsec.NewEVPNService(cfg, admitter, logger)
+	if err != nil {
+		return nil, err
+	}
+	return svc, nil
 }
 
 // WireOverlayPlatform points the overlay admission inputs of runtime at

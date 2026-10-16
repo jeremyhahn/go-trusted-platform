@@ -57,6 +57,9 @@ const gateway = {
   ],
   posturePolicyErrors: [],
   rejectedPeers: [{ tenantId: "acme", deviceId: "laptop-9", reason: "zone \"storage\" is not served" }],
+  revocations: { expired: "2" },
+  postureViolations: { "secure-boot": "1" },
+  reattest: { count: "1", sumSeconds: 0.04, buckets: [{ upperBoundSeconds: 0.05, count: "1" }] },
 };
 
 type Route = (method: string, url: URL, body: unknown) => Response | undefined;

@@ -80,6 +80,7 @@ platform code and SDK consumers program against.
 | go-quicbaas group | Accessor | `services/quicbaas.Client` |
 |---|---|---|
 | `CoreData()` | `KV()`, `Batch()`, `Transaction()`, `Query()` | ✅ each |
+| `CoreData()` | request / response types of `client/kv` (with its `service` request types), `client/batch`, `client/transaction`, `client/query` | ✅ `sdk/go/services/{kv,batch,transaction,query}` (§3.4) |
 | `ClusterMgmt()` | `Cluster()`, `Health()`, `Operations()`, `Cache()` | ✅ each |
 | `Security()` | `Auth()`, `Seal()`, `KMS()`, `Secrets()`, `Crypto()`, `Certificate()`, `DEK()`, `DynamicSecrets()`, `RBAC()` | ✅ each |
 | `Security()` | `CertificateExt()`, `ACME()`, `Trust()`, `Attestation()`, `SSH()` | ✅ each |
@@ -183,6 +184,10 @@ constant bound to the upstream value.
 
 | Accessor | Package | Replaces | Constants |
 |---|---|---|---|
+| `KV()` | `sdk/go/services/kv` | `go-quicbaas/sdk/go/client/kv`, `go-quicbaas/sdk/go/service` | `ConsistencyLevel*`, `WriteMode*`, `Event*` |
+| `Batch()` | `sdk/go/services/batch` | `go-quicbaas/sdk/go/client/batch` | `Op*` |
+| `Transaction()` | `sdk/go/services/transaction` | `go-quicbaas/sdk/go/client/transaction` | `Compare*`, `TxnOp*` |
+| `Query()` | `sdk/go/services/query` | `go-quicbaas/sdk/go/client/query` | `Op*` |
 | `Cache()` | `sdk/go/services/cache` | `go-quicbaas/sdk/go/client/cache` | none |
 | `Vector()` | `sdk/go/services/vector` | `go-quicbaas/sdk/go/client/vector` | `FilterOperator*`, `IndexType*` |
 | `TimeSeries()` | `sdk/go/services/timeseries` | `go-quicbaas/sdk/go/client/timeseries` | `Aggregate*` |
@@ -198,13 +203,17 @@ constant bound to the upstream value.
 | `Ollama()` | `sdk/go/services/ollama` | `go-quicbaas/sdk/go/client/ollama` | none |
 | `RAG()` | `sdk/go/services/rag` | `go-quicbaas/sdk/go/client/rag` | none |
 
-#704 added the eight packages from `backup` to `rag`, so their consumers no
-longer import go-quicbaas. None of their upstream packages exports a
-sentinel error.
+#704 added the four CoreData packages and the eight from `backup` to `rag`,
+so their consumers no longer import go-quicbaas. None of their upstream
+packages exports a sentinel error. The key-value request types (`PutRequest`,
+`GetRequest`, `DeleteRequest`, `ListRequest` and their responses) live in
+`kv`; `batch`'s `Put`, `Get` and `Delete` take slices of them.
 
 `messaging` also forwards `NewDeltaBuilder()` and `NewDeltaApplier[E]()`,
 because the upstream `DeltaBuilder` and `DeltaApplier[E]` keep their state
-unexported and cannot be built any other way. The packages leave out the
+unexported and cannot be built any other way. `kv` forwards the watch options
+(`WithStartRevision`, `WithPrevKV`, `WithProgressNotify`, `WithFilterPut`,
+`WithFilterDelete`) for the same reason. The packages leave out the
 `NewClient` constructors, which take a raw go-quicbaas transport.
 
 An accessor returns nil when the SDK does not serve the service, and

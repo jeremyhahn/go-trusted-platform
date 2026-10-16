@@ -16,6 +16,7 @@ package commands
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/netip"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/process"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/proxysvc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec"
+	ipsecconfig "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
@@ -373,5 +376,32 @@ func TestWireOverlayRuntime_DialsOnlyInTheOverlayHost(t *testing.T) {
 	var cfgErr *proxysvc.ErrConfigInvalid
 	if err := wireOverlayRuntime(context.Background(), overlaySharedConfig(t, gateway.ServiceOverlay), nil, runtime); !errors.As(err, &cfgErr) {
 		t.Fatalf("overlay host: err = %v, want the dial's *proxysvc.ErrConfigInvalid", err)
+	}
+}
+
+// admitEvery is a modes.VTEPAdmitter that admits every VTEP.
+type admitEvery struct{}
+
+func (admitEvery) AdmitVTEP(context.Context, uint32, netip.Addr) error { return nil }
+
+// newOverlayIPsec refuses before it opens the token or the certificate: an
+// overlay IPsec without the admitter would bring up an SA to any VTEP a
+// route names, and one without CRLs could not check a peer's revocation.
+func TestNewOverlayIPsec_RefusesBeforeOpeningAnything(t *testing.T) {
+	cfg := &ipsecconfig.Config{
+		Enabled:         true,
+		FabricInterface: "vtep0",
+		LocalAddress:    "10.4.100.20",
+		Token:           ipsecconfig.TokenConfig{Handle: "6970736563"},
+	}
+	logger := slog.New(slog.DiscardHandler)
+
+	if _, err := newOverlayIPsec(cfg, nil, logger); !errors.Is(err, ipsec.ErrMissingDependency) {
+		t.Errorf("no admitter: err = %v, want ipsec.ErrMissingDependency", err)
+	}
+	_, err := newOverlayIPsec(cfg, admitEvery{}, logger)
+	var invalid *ipsecconfig.ConfigError
+	if !errors.As(err, &invalid) || invalid.Field != "crl-files" {
+		t.Errorf("no CRLs: err = %v, want a crl-files *ipsecconfig.ConfigError", err)
 	}
 }

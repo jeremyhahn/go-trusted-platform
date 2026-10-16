@@ -84,6 +84,10 @@ type GatewayRuntime struct {
 	// OverlayPlatform is the SDK connection backing overlay admission reads.
 	OverlayPlatform interface{ Close() error }
 
+	// OverlayIPsec builds the overlay's VTEP-to-VTEP IPsec. It is required
+	// only when gateway.overlay.ipsec is enabled.
+	OverlayIPsec OverlayIPsecFactory
+
 	// VPN carries what the management VPN service needs from the assembly.
 	// Nil refuses the service with ErrRuntimeMissing.
 	VPN *VPNRuntime

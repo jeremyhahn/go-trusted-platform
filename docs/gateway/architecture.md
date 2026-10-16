@@ -244,9 +244,10 @@ exchange, authenticated with certificates whose private key lives behind the
 go-xkms PKCS#11 module (`pubkey` only, strict revocation). The policies require
 ESP, so a tunnel without an SA carries no traffic.
 
-platformd runs it (`sdn.overlay.ipsec`). gatewayd's `overlay` service starts
-no IPsec, so a VTEP hosted by gatewayd sends VXLAN in the clear over its
-underlay ([engineering.md](engineering.md#in-gatewayd)).
+platformd runs it (`sdn.overlay.ipsec`), and so does gatewayd's `overlay`
+service with `gateway.overlay.ipsec` enabled
+([engineering.md](engineering.md#overlay-ipsec-in-gatewayd)). Without it, a VTEP
+hosted by gatewayd sends VXLAN in the clear over its underlay.
 
 charon is a node package, not a library: the install media, the factory
 image and the netboot sets carry the `trusted-platform-strongswan` and

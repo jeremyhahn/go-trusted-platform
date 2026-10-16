@@ -55,8 +55,6 @@ type mockTenantManager struct {
 	getDEKStatusErr   error
 	createdTenant     *tenant.TenantEntity
 	updatedTenant     *tenant.TenantEntity
-	lastCreateReq     *tenant.CreateTenantRequest
-	lastUpdateReq     *tenant.UpdateTenantRequest
 	lastQuotasUpdated *tenant.TenantQuotas
 	dekRotationResult *tenant.DEKRotationResult
 	dekStatus         *tenant.DEKStatus
@@ -101,7 +99,6 @@ func (m *mockTenantManager) addTenant(e *tenant.TenantEntity) {
 }
 
 func (m *mockTenantManager) CreateTenant(ctx context.Context, req *tenant.CreateTenantRequest) (*tenant.TenantEntity, error) {
-	m.lastCreateReq = req
 	if m.createErr != nil {
 		return nil, m.createErr
 	}
@@ -166,7 +163,6 @@ func (m *mockTenantManager) ListTenants(ctx context.Context, limit, offset int) 
 }
 
 func (m *mockTenantManager) UpdateTenant(ctx context.Context, id string, req *tenant.UpdateTenantRequest) (*tenant.TenantEntity, error) {
-	m.lastUpdateReq = req
 	if m.updateErr != nil {
 		return nil, m.updateErr
 	}
@@ -1161,6 +1157,17 @@ func TestHandleUpdateQuotas_Success(t *testing.T) {
 	if resp.Compute.MaxVMs != 20 {
 		t.Errorf("Expected MaxVMs 20, got %d", resp.Compute.MaxVMs)
 	}
+
+	stored := mgr.lastQuotasUpdated
+	if stored == nil {
+		t.Fatal("the merged quotas were never handed to UpdateQuotas")
+	}
+	if stored.Compute.MaxVMs != 20 || stored.Network.MaxBridges != 10 || stored.Storage.MaxVolumesGB != 4096 {
+		t.Errorf("persisted quotas lack the requested values: %+v", stored)
+	}
+	if stored.Compute.MaxVCPUs != 32 {
+		t.Errorf("a quota the request omits must keep its existing value 32, got %d", stored.Compute.MaxVCPUs)
+	}
 }
 
 func TestHandleUpdateQuotas_NotFound(t *testing.T) {
@@ -1218,6 +1225,27 @@ func TestHandleUpdateQuotas_UpdateError(t *testing.T) {
 
 	if rr.Code != http.StatusInternalServerError {
 		t.Errorf("Expected status %d, got %d", http.StatusInternalServerError, rr.Code)
+	}
+}
+
+// TestHandleUnsealTenantBarrier_PassesKey: the key in the request body is the
+// one the tenant barrier is unsealed with.
+func TestHandleUnsealTenantBarrier_PassesKey(t *testing.T) {
+	mgr := newMockTenantManager()
+	mgr.addTenant(createTestTenantEntity("tenant-123", "test-tenant"))
+
+	h := newTestTenantHandlersWithMock(mgr)
+	router := mux.NewRouter()
+	h.RegisterRoutes(router)
+
+	key := []byte("tenant-unseal-key")
+	rr := executeTenantRequest(router, http.MethodPost, "/api/v1/tenants/tenant-123/barrier/unseal", UnsealTenantBarrierRequest{Key: key})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected status %d, got %d: %s", http.StatusOK, rr.Code, rr.Body.String())
+	}
+	if !bytes.Equal(mgr.lastUnsealKey, key) {
+		t.Errorf("barrier unsealed with key %q, want %q", mgr.lastUnsealKey, key)
 	}
 }
 

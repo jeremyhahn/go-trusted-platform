@@ -138,8 +138,8 @@ These are library code with no production caller:
 - the overlay package's `WithBGPSpeaker` / `WithEVPNManager`
   (`pkg/sdn/overlay/options.go:59,66`);
 - the IPsec controller's `HandleEVPNRoute`
-  (`pkg/sdn/ipsec/controller.go:440`). **Planned (#709):** the IPsec control
-  path.
+  (`pkg/sdn/ipsec/controller.go:440`), which gatewayd's overlay feeds each
+  flood-list change as a Type-3 route (`OverlayModeConfig.FloodPeers`).
 
 ## 8. Data flow
 

@@ -515,6 +515,25 @@ func TestSchedulerGRPCService_CreateJobConverts(t *testing.T) {
 	assert.True(t, fake.created.ExecuteAt.IsZero())
 }
 
+func TestSchedulerGRPCService_UpdateJobConverts(t *testing.T) {
+	fake := &fakeAppScheduler{}
+	svc := appServersWith(nil, fake, nil).scheduler
+	_, err := svc.UpdateJob(context.Background(), &platformv1.UpdateSchedulerJobRequest{
+		JobId:      "18446744073709551615",
+		Name:       "renamed",
+		DelayMs:    3000,
+		TimeoutMs:  500,
+		MaxRetries: 7,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, fake.updated)
+	assert.Equal(t, uint64(18446744073709551615), fake.updated.JobID, "the decimal job ID parses to the full 64 bits")
+	assert.Equal(t, "renamed", fake.updated.Name)
+	assert.Equal(t, 3*time.Second, fake.updated.Delay)
+	assert.Equal(t, 500*time.Millisecond, fake.updated.Timeout)
+	assert.Equal(t, 7, fake.updated.MaxRetries)
+}
+
 func TestSchedulerGRPCService_CreateJobRefusesBadEnums(t *testing.T) {
 	fake := &fakeAppScheduler{}
 	svc := appServersWith(nil, fake, nil).scheduler

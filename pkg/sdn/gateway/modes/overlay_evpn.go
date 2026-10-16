@@ -199,6 +199,19 @@ func (h *OverlayModeHandler) handleIMETRoute(ctx context.Context, route *bgp.EVP
 		return &ErrVTEPOperationFailed{VTEPIP: entry.VTEPIP, Operation: "flood list", Cause: err}
 	}
 	h.segments[entry.VNI] = next
+	return h.tellFloodPeers(ctx, route)
+}
+
+// tellFloodPeers hands a flood-list change to FloodPeers, if set. Its
+// failure does not undo the change: the flows already hold it. Caller holds
+// mu.
+func (h *OverlayModeHandler) tellFloodPeers(ctx context.Context, route *bgp.EVPNRouteData) error {
+	if h.config.FloodPeers == nil {
+		return nil
+	}
+	if err := h.config.FloodPeers(ctx, route); err != nil {
+		return &ErrVTEPOperationFailed{VTEPIP: route.IMET.VTEPIP, Operation: "flood peers", Cause: err}
+	}
 	return nil
 }
 

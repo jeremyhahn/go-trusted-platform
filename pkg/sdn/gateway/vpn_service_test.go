@@ -376,6 +376,40 @@ func TestVPNService_StartWithoutASectionEnrolsNobody(t *testing.T) {
 	assert.Len(t, r.gw.collectVPN(ctx).Leases, 1, "no section, no sweep: nothing was delivered to act on")
 }
 
+// TestCollectVPN_CarriesTheServiceCounters: the section carries what the
+// gatewayd_vpn_* metrics export, from the same health snapshot.
+func TestCollectVPN_CarriesTheServiceCounters(t *testing.T) {
+	ctx := context.Background()
+	r := newVPNRig(t)
+	lease := r.putLease(t)
+	require.NoError(t, r.handler().Start(ctx))
+	defer func() { require.NoError(t, r.handler().Stop(ctx)) }()
+
+	snap := r.gw.collectVPN(ctx)
+	assert.Nil(t, snap.Revocations, "nothing revoked yet")
+	assert.Nil(t, snap.PostureViolations)
+	require.NotNil(t, snap.Reattest, "the histogram is always reported")
+	assert.Equal(t, uint64(0), snap.Reattest.Count)
+	assert.NotEmpty(t, snap.Reattest.Buckets)
+
+	require.NoError(t, r.gw.vpn.svc.Revoke(ctx, lease.ID, vpn.RevokeOperator))
+	assert.Equal(t, map[string]uint64{"operator": 1}, r.gw.collectVPN(ctx).Revocations)
+}
+
+func TestReattestState_ConvertsTheHistogram(t *testing.T) {
+	got := reattestState(vpn.DurationHistogram{
+		Count:   3,
+		Sum:     1500 * time.Millisecond,
+		Buckets: []vpn.HistogramBucket{{UpperBoundSeconds: 0.5, Count: 1}, {UpperBoundSeconds: 1, Count: 2}},
+	})
+	assert.Equal(t, &gwstate.DurationHistogram{
+		Count:      3,
+		SumSeconds: 1.5,
+		Buckets:    []gwstate.HistogramBucket{{UpperBoundSeconds: 0.5, Count: 1}, {UpperBoundSeconds: 1, Count: 2}},
+	}, got)
+	assert.Empty(t, reattestState(vpn.DurationHistogram{}).Buckets, "no buckets converts to none")
+}
+
 func TestVPNBackend_StartRollsBackThePlanesAlreadyStarted(t *testing.T) {
 	ctx := context.Background()
 	r := newVPNRig(t)

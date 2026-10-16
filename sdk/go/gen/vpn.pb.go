@@ -297,6 +297,14 @@ type VPNGatewayStatus struct {
 	// rejected_peers are the enrolled peers this gateway refused (a zone it
 	// does not serve). Each is refused admission; the rest of the set applies.
 	RejectedPeers []*VPNRejectedPeer `protobuf:"bytes,12,rep,name=rejected_peers,json=rejectedPeers,proto3" json:"rejected_peers,omitempty"`
+	// revocations counts the revoked leases by reason.
+	Revocations map[string]uint64 `protobuf:"bytes,13,rep,name=revocations,proto3" json:"revocations,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
+	// posture_violations counts the posture rules that refused an admission
+	// or a renewal, by rule name; past 64 distinct rules the rest count as
+	// "other".
+	PostureViolations map[string]uint64 `protobuf:"bytes,14,rep,name=posture_violations,json=postureViolations,proto3" json:"posture_violations,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
+	// reattest is how long the renewal re-attestations took to verify.
+	Reattest      *VPNDurationHistogram `protobuf:"bytes,15,opt,name=reattest,proto3" json:"reattest,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -415,6 +423,142 @@ func (x *VPNGatewayStatus) GetRejectedPeers() []*VPNRejectedPeer {
 	return nil
 }
 
+func (x *VPNGatewayStatus) GetRevocations() map[string]uint64 {
+	if x != nil {
+		return x.Revocations
+	}
+	return nil
+}
+
+func (x *VPNGatewayStatus) GetPostureViolations() map[string]uint64 {
+	if x != nil {
+		return x.PostureViolations
+	}
+	return nil
+}
+
+func (x *VPNGatewayStatus) GetReattest() *VPNDurationHistogram {
+	if x != nil {
+		return x.Reattest
+	}
+	return nil
+}
+
+// VPNDurationHistogram is a cumulative histogram of durations.
+type VPNDurationHistogram struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Count      uint64                 `protobuf:"varint,1,opt,name=count,proto3" json:"count,omitempty"`
+	SumSeconds float64                `protobuf:"fixed64,2,opt,name=sum_seconds,json=sumSeconds,proto3" json:"sum_seconds,omitempty"`
+	// buckets are cumulative: each counts the observations at or under its
+	// upper bound. Observations over the last bound count only in count.
+	Buckets       []*VPNHistogramBucket `protobuf:"bytes,3,rep,name=buckets,proto3" json:"buckets,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VPNDurationHistogram) Reset() {
+	*x = VPNDurationHistogram{}
+	mi := &file_vpn_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VPNDurationHistogram) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VPNDurationHistogram) ProtoMessage() {}
+
+func (x *VPNDurationHistogram) ProtoReflect() protoreflect.Message {
+	mi := &file_vpn_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VPNDurationHistogram.ProtoReflect.Descriptor instead.
+func (*VPNDurationHistogram) Descriptor() ([]byte, []int) {
+	return file_vpn_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *VPNDurationHistogram) GetCount() uint64 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
+func (x *VPNDurationHistogram) GetSumSeconds() float64 {
+	if x != nil {
+		return x.SumSeconds
+	}
+	return 0
+}
+
+func (x *VPNDurationHistogram) GetBuckets() []*VPNHistogramBucket {
+	if x != nil {
+		return x.Buckets
+	}
+	return nil
+}
+
+type VPNHistogramBucket struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	UpperBoundSeconds float64                `protobuf:"fixed64,1,opt,name=upper_bound_seconds,json=upperBoundSeconds,proto3" json:"upper_bound_seconds,omitempty"`
+	Count             uint64                 `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *VPNHistogramBucket) Reset() {
+	*x = VPNHistogramBucket{}
+	mi := &file_vpn_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VPNHistogramBucket) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VPNHistogramBucket) ProtoMessage() {}
+
+func (x *VPNHistogramBucket) ProtoReflect() protoreflect.Message {
+	mi := &file_vpn_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VPNHistogramBucket.ProtoReflect.Descriptor instead.
+func (*VPNHistogramBucket) Descriptor() ([]byte, []int) {
+	return file_vpn_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *VPNHistogramBucket) GetUpperBoundSeconds() float64 {
+	if x != nil {
+		return x.UpperBoundSeconds
+	}
+	return 0
+}
+
+func (x *VPNHistogramBucket) GetCount() uint64 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
 // VPNRejectedPeer is one enrolment a gateway refused, and why.
 type VPNRejectedPeer struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -427,7 +571,7 @@ type VPNRejectedPeer struct {
 
 func (x *VPNRejectedPeer) Reset() {
 	*x = VPNRejectedPeer{}
-	mi := &file_vpn_proto_msgTypes[4]
+	mi := &file_vpn_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -439,7 +583,7 @@ func (x *VPNRejectedPeer) String() string {
 func (*VPNRejectedPeer) ProtoMessage() {}
 
 func (x *VPNRejectedPeer) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_proto_msgTypes[4]
+	mi := &file_vpn_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -452,7 +596,7 @@ func (x *VPNRejectedPeer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VPNRejectedPeer.ProtoReflect.Descriptor instead.
 func (*VPNRejectedPeer) Descriptor() ([]byte, []int) {
-	return file_vpn_proto_rawDescGZIP(), []int{4}
+	return file_vpn_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *VPNRejectedPeer) GetTenantId() string {
@@ -485,7 +629,7 @@ type EnrolVPNPeerRequest struct {
 
 func (x *EnrolVPNPeerRequest) Reset() {
 	*x = EnrolVPNPeerRequest{}
-	mi := &file_vpn_proto_msgTypes[5]
+	mi := &file_vpn_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -497,7 +641,7 @@ func (x *EnrolVPNPeerRequest) String() string {
 func (*EnrolVPNPeerRequest) ProtoMessage() {}
 
 func (x *EnrolVPNPeerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_proto_msgTypes[5]
+	mi := &file_vpn_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -510,7 +654,7 @@ func (x *EnrolVPNPeerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnrolVPNPeerRequest.ProtoReflect.Descriptor instead.
 func (*EnrolVPNPeerRequest) Descriptor() ([]byte, []int) {
-	return file_vpn_proto_rawDescGZIP(), []int{5}
+	return file_vpn_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *EnrolVPNPeerRequest) GetPeer() *VPNPeer {
@@ -529,7 +673,7 @@ type EnrolVPNPeerResponse struct {
 
 func (x *EnrolVPNPeerResponse) Reset() {
 	*x = EnrolVPNPeerResponse{}
-	mi := &file_vpn_proto_msgTypes[6]
+	mi := &file_vpn_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -541,7 +685,7 @@ func (x *EnrolVPNPeerResponse) String() string {
 func (*EnrolVPNPeerResponse) ProtoMessage() {}
 
 func (x *EnrolVPNPeerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_proto_msgTypes[6]
+	mi := &file_vpn_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -554,7 +698,7 @@ func (x *EnrolVPNPeerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnrolVPNPeerResponse.ProtoReflect.Descriptor instead.
 func (*EnrolVPNPeerResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_proto_rawDescGZIP(), []int{6}
+	return file_vpn_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *EnrolVPNPeerResponse) GetPeer() *VPNPeer {
@@ -574,7 +718,7 @@ type ListVPNPeersRequest struct {
 
 func (x *ListVPNPeersRequest) Reset() {
 	*x = ListVPNPeersRequest{}
-	mi := &file_vpn_proto_msgTypes[7]
+	mi := &file_vpn_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -586,7 +730,7 @@ func (x *ListVPNPeersRequest) String() string {
 func (*ListVPNPeersRequest) ProtoMessage() {}
 
 func (x *ListVPNPeersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_proto_msgTypes[7]
+	mi := &file_vpn_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -599,7 +743,7 @@ func (x *ListVPNPeersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListVPNPeersRequest.ProtoReflect.Descriptor instead.
 func (*ListVPNPeersRequest) Descriptor() ([]byte, []int) {
-	return file_vpn_proto_rawDescGZIP(), []int{7}
+	return file_vpn_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ListVPNPeersRequest) GetTenantId() string {
@@ -618,7 +762,7 @@ type ListVPNPeersResponse struct {
 
 func (x *ListVPNPeersResponse) Reset() {
 	*x = ListVPNPeersResponse{}
-	mi := &file_vpn_proto_msgTypes[8]
+	mi := &file_vpn_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -630,7 +774,7 @@ func (x *ListVPNPeersResponse) String() string {
 func (*ListVPNPeersResponse) ProtoMessage() {}
 
 func (x *ListVPNPeersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_proto_msgTypes[8]
+	mi := &file_vpn_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -643,7 +787,7 @@ func (x *ListVPNPeersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListVPNPeersResponse.ProtoReflect.Descriptor instead.
 func (*ListVPNPeersResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_proto_rawDescGZIP(), []int{8}
+	return file_vpn_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ListVPNPeersResponse) GetPeers() []*VPNPeer {
@@ -663,7 +807,7 @@ type RevokeVPNPeerRequest struct {
 
 func (x *RevokeVPNPeerRequest) Reset() {
 	*x = RevokeVPNPeerRequest{}
-	mi := &file_vpn_proto_msgTypes[9]
+	mi := &file_vpn_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -675,7 +819,7 @@ func (x *RevokeVPNPeerRequest) String() string {
 func (*RevokeVPNPeerRequest) ProtoMessage() {}
 
 func (x *RevokeVPNPeerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_proto_msgTypes[9]
+	mi := &file_vpn_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -688,7 +832,7 @@ func (x *RevokeVPNPeerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeVPNPeerRequest.ProtoReflect.Descriptor instead.
 func (*RevokeVPNPeerRequest) Descriptor() ([]byte, []int) {
-	return file_vpn_proto_rawDescGZIP(), []int{9}
+	return file_vpn_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *RevokeVPNPeerRequest) GetTenantId() string {
@@ -713,7 +857,7 @@ type RevokeVPNPeerResponse struct {
 
 func (x *RevokeVPNPeerResponse) Reset() {
 	*x = RevokeVPNPeerResponse{}
-	mi := &file_vpn_proto_msgTypes[10]
+	mi := &file_vpn_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -725,7 +869,7 @@ func (x *RevokeVPNPeerResponse) String() string {
 func (*RevokeVPNPeerResponse) ProtoMessage() {}
 
 func (x *RevokeVPNPeerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_proto_msgTypes[10]
+	mi := &file_vpn_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -738,7 +882,7 @@ func (x *RevokeVPNPeerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeVPNPeerResponse.ProtoReflect.Descriptor instead.
 func (*RevokeVPNPeerResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_proto_rawDescGZIP(), []int{10}
+	return file_vpn_proto_rawDescGZIP(), []int{12}
 }
 
 type GetVPNStatusRequest struct {
@@ -751,7 +895,7 @@ type GetVPNStatusRequest struct {
 
 func (x *GetVPNStatusRequest) Reset() {
 	*x = GetVPNStatusRequest{}
-	mi := &file_vpn_proto_msgTypes[11]
+	mi := &file_vpn_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -763,7 +907,7 @@ func (x *GetVPNStatusRequest) String() string {
 func (*GetVPNStatusRequest) ProtoMessage() {}
 
 func (x *GetVPNStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_proto_msgTypes[11]
+	mi := &file_vpn_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -776,7 +920,7 @@ func (x *GetVPNStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetVPNStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetVPNStatusRequest) Descriptor() ([]byte, []int) {
-	return file_vpn_proto_rawDescGZIP(), []int{11}
+	return file_vpn_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *GetVPNStatusRequest) GetGatewayId() string {
@@ -795,7 +939,7 @@ type GetVPNStatusResponse struct {
 
 func (x *GetVPNStatusResponse) Reset() {
 	*x = GetVPNStatusResponse{}
-	mi := &file_vpn_proto_msgTypes[12]
+	mi := &file_vpn_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -807,7 +951,7 @@ func (x *GetVPNStatusResponse) String() string {
 func (*GetVPNStatusResponse) ProtoMessage() {}
 
 func (x *GetVPNStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_proto_msgTypes[12]
+	mi := &file_vpn_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -820,7 +964,7 @@ func (x *GetVPNStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetVPNStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetVPNStatusResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_proto_rawDescGZIP(), []int{12}
+	return file_vpn_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *GetVPNStatusResponse) GetGateways() []*VPNGatewayStatus {
@@ -840,7 +984,7 @@ type GetVPNPosturePolicyRequest struct {
 
 func (x *GetVPNPosturePolicyRequest) Reset() {
 	*x = GetVPNPosturePolicyRequest{}
-	mi := &file_vpn_proto_msgTypes[13]
+	mi := &file_vpn_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -852,7 +996,7 @@ func (x *GetVPNPosturePolicyRequest) String() string {
 func (*GetVPNPosturePolicyRequest) ProtoMessage() {}
 
 func (x *GetVPNPosturePolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_proto_msgTypes[13]
+	mi := &file_vpn_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -865,7 +1009,7 @@ func (x *GetVPNPosturePolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetVPNPosturePolicyRequest.ProtoReflect.Descriptor instead.
 func (*GetVPNPosturePolicyRequest) Descriptor() ([]byte, []int) {
-	return file_vpn_proto_rawDescGZIP(), []int{13}
+	return file_vpn_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *GetVPNPosturePolicyRequest) GetTenantId() string {
@@ -891,7 +1035,7 @@ type GetVPNPosturePolicyResponse struct {
 
 func (x *GetVPNPosturePolicyResponse) Reset() {
 	*x = GetVPNPosturePolicyResponse{}
-	mi := &file_vpn_proto_msgTypes[14]
+	mi := &file_vpn_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -903,7 +1047,7 @@ func (x *GetVPNPosturePolicyResponse) String() string {
 func (*GetVPNPosturePolicyResponse) ProtoMessage() {}
 
 func (x *GetVPNPosturePolicyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_proto_msgTypes[14]
+	mi := &file_vpn_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -916,7 +1060,7 @@ func (x *GetVPNPosturePolicyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetVPNPosturePolicyResponse.ProtoReflect.Descriptor instead.
 func (*GetVPNPosturePolicyResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_proto_rawDescGZIP(), []int{14}
+	return file_vpn_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *GetVPNPosturePolicyResponse) GetPolicy() *VPNPosturePolicy {
@@ -935,7 +1079,7 @@ type SetVPNPosturePolicyRequest struct {
 
 func (x *SetVPNPosturePolicyRequest) Reset() {
 	*x = SetVPNPosturePolicyRequest{}
-	mi := &file_vpn_proto_msgTypes[15]
+	mi := &file_vpn_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -947,7 +1091,7 @@ func (x *SetVPNPosturePolicyRequest) String() string {
 func (*SetVPNPosturePolicyRequest) ProtoMessage() {}
 
 func (x *SetVPNPosturePolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_proto_msgTypes[15]
+	mi := &file_vpn_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -960,7 +1104,7 @@ func (x *SetVPNPosturePolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetVPNPosturePolicyRequest.ProtoReflect.Descriptor instead.
 func (*SetVPNPosturePolicyRequest) Descriptor() ([]byte, []int) {
-	return file_vpn_proto_rawDescGZIP(), []int{15}
+	return file_vpn_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *SetVPNPosturePolicyRequest) GetPolicy() *VPNPosturePolicy {
@@ -979,7 +1123,7 @@ type SetVPNPosturePolicyResponse struct {
 
 func (x *SetVPNPosturePolicyResponse) Reset() {
 	*x = SetVPNPosturePolicyResponse{}
-	mi := &file_vpn_proto_msgTypes[16]
+	mi := &file_vpn_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -991,7 +1135,7 @@ func (x *SetVPNPosturePolicyResponse) String() string {
 func (*SetVPNPosturePolicyResponse) ProtoMessage() {}
 
 func (x *SetVPNPosturePolicyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_proto_msgTypes[16]
+	mi := &file_vpn_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1004,7 +1148,7 @@ func (x *SetVPNPosturePolicyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetVPNPosturePolicyResponse.ProtoReflect.Descriptor instead.
 func (*SetVPNPosturePolicyResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_proto_rawDescGZIP(), []int{16}
+	return file_vpn_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *SetVPNPosturePolicyResponse) GetPolicy() *VPNPosturePolicy {
@@ -1024,7 +1168,7 @@ type DeleteVPNPosturePolicyRequest struct {
 
 func (x *DeleteVPNPosturePolicyRequest) Reset() {
 	*x = DeleteVPNPosturePolicyRequest{}
-	mi := &file_vpn_proto_msgTypes[17]
+	mi := &file_vpn_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1036,7 +1180,7 @@ func (x *DeleteVPNPosturePolicyRequest) String() string {
 func (*DeleteVPNPosturePolicyRequest) ProtoMessage() {}
 
 func (x *DeleteVPNPosturePolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_proto_msgTypes[17]
+	mi := &file_vpn_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1049,7 +1193,7 @@ func (x *DeleteVPNPosturePolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteVPNPosturePolicyRequest.ProtoReflect.Descriptor instead.
 func (*DeleteVPNPosturePolicyRequest) Descriptor() ([]byte, []int) {
-	return file_vpn_proto_rawDescGZIP(), []int{17}
+	return file_vpn_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *DeleteVPNPosturePolicyRequest) GetTenantId() string {
@@ -1074,7 +1218,7 @@ type DeleteVPNPosturePolicyResponse struct {
 
 func (x *DeleteVPNPosturePolicyResponse) Reset() {
 	*x = DeleteVPNPosturePolicyResponse{}
-	mi := &file_vpn_proto_msgTypes[18]
+	mi := &file_vpn_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1086,7 +1230,7 @@ func (x *DeleteVPNPosturePolicyResponse) String() string {
 func (*DeleteVPNPosturePolicyResponse) ProtoMessage() {}
 
 func (x *DeleteVPNPosturePolicyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_proto_msgTypes[18]
+	mi := &file_vpn_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1099,7 +1243,7 @@ func (x *DeleteVPNPosturePolicyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteVPNPosturePolicyResponse.ProtoReflect.Descriptor instead.
 func (*DeleteVPNPosturePolicyResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_proto_rawDescGZIP(), []int{18}
+	return file_vpn_proto_rawDescGZIP(), []int{20}
 }
 
 type ListVPNPosturePoliciesRequest struct {
@@ -1112,7 +1256,7 @@ type ListVPNPosturePoliciesRequest struct {
 
 func (x *ListVPNPosturePoliciesRequest) Reset() {
 	*x = ListVPNPosturePoliciesRequest{}
-	mi := &file_vpn_proto_msgTypes[19]
+	mi := &file_vpn_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1124,7 +1268,7 @@ func (x *ListVPNPosturePoliciesRequest) String() string {
 func (*ListVPNPosturePoliciesRequest) ProtoMessage() {}
 
 func (x *ListVPNPosturePoliciesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_proto_msgTypes[19]
+	mi := &file_vpn_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1137,7 +1281,7 @@ func (x *ListVPNPosturePoliciesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListVPNPosturePoliciesRequest.ProtoReflect.Descriptor instead.
 func (*ListVPNPosturePoliciesRequest) Descriptor() ([]byte, []int) {
-	return file_vpn_proto_rawDescGZIP(), []int{19}
+	return file_vpn_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ListVPNPosturePoliciesRequest) GetTenantId() string {
@@ -1156,7 +1300,7 @@ type ListVPNPosturePoliciesResponse struct {
 
 func (x *ListVPNPosturePoliciesResponse) Reset() {
 	*x = ListVPNPosturePoliciesResponse{}
-	mi := &file_vpn_proto_msgTypes[20]
+	mi := &file_vpn_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1168,7 +1312,7 @@ func (x *ListVPNPosturePoliciesResponse) String() string {
 func (*ListVPNPosturePoliciesResponse) ProtoMessage() {}
 
 func (x *ListVPNPosturePoliciesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_vpn_proto_msgTypes[20]
+	mi := &file_vpn_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1181,7 +1325,7 @@ func (x *ListVPNPosturePoliciesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListVPNPosturePoliciesResponse.ProtoReflect.Descriptor instead.
 func (*ListVPNPosturePoliciesResponse) Descriptor() ([]byte, []int) {
-	return file_vpn_proto_rawDescGZIP(), []int{20}
+	return file_vpn_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ListVPNPosturePoliciesResponse) GetPolicies() []*VPNPosturePolicy {
@@ -1216,7 +1360,7 @@ const file_vpn_proto_rawDesc = "" +
 	"\x05zones\x18\x06 \x03(\tR\x05zones\x12$\n" +
 	"\x0eissued_at_unix\x18\a \x01(\x03R\fissuedAtUnix\x12&\n" +
 	"\x0fexpires_at_unix\x18\b \x01(\x03R\rexpiresAtUnix\x12\x1a\n" +
-	"\brenewals\x18\t \x01(\rR\brenewals\"\xee\x04\n" +
+	"\brenewals\x18\t \x01(\rR\brenewals\"\xea\a\n" +
 	"\x10VPNGatewayStatus\x12\x1d\n" +
 	"\n" +
 	"gateway_id\x18\x01 \x01(\tR\tgatewayId\x12(\n" +
@@ -1233,10 +1377,27 @@ const file_vpn_proto_rawDesc = "" +
 	"\x06leases\x18\n" +
 	" \x03(\v2\x15.platform.v1.VPNLeaseR\x06leases\x122\n" +
 	"\x15posture_policy_errors\x18\v \x03(\tR\x13posturePolicyErrors\x12C\n" +
-	"\x0erejected_peers\x18\f \x03(\v2\x1c.platform.v1.VPNRejectedPeerR\rrejectedPeers\x1aD\n" +
+	"\x0erejected_peers\x18\f \x03(\v2\x1c.platform.v1.VPNRejectedPeerR\rrejectedPeers\x12P\n" +
+	"\vrevocations\x18\r \x03(\v2..platform.v1.VPNGatewayStatus.RevocationsEntryR\vrevocations\x12c\n" +
+	"\x12posture_violations\x18\x0e \x03(\v24.platform.v1.VPNGatewayStatus.PostureViolationsEntryR\x11postureViolations\x12=\n" +
+	"\breattest\x18\x0f \x01(\v2!.platform.v1.VPNDurationHistogramR\breattest\x1aD\n" +
 	"\x16LeasesByDataPlaneEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\rR\x05value:\x028\x01\"c\n" +
+	"\x05value\x18\x02 \x01(\rR\x05value:\x028\x01\x1a>\n" +
+	"\x10RevocationsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01\x1aD\n" +
+	"\x16PostureViolationsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01\"\x88\x01\n" +
+	"\x14VPNDurationHistogram\x12\x14\n" +
+	"\x05count\x18\x01 \x01(\x04R\x05count\x12\x1f\n" +
+	"\vsum_seconds\x18\x02 \x01(\x01R\n" +
+	"sumSeconds\x129\n" +
+	"\abuckets\x18\x03 \x03(\v2\x1f.platform.v1.VPNHistogramBucketR\abuckets\"Z\n" +
+	"\x12VPNHistogramBucket\x12.\n" +
+	"\x13upper_bound_seconds\x18\x01 \x01(\x01R\x11upperBoundSeconds\x12\x14\n" +
+	"\x05count\x18\x02 \x01(\x04R\x05count\"c\n" +
 	"\x0fVPNRejectedPeer\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
 	"\tdevice_id\x18\x02 \x01(\tR\bdeviceId\x12\x16\n" +
@@ -1299,64 +1460,72 @@ func file_vpn_proto_rawDescGZIP() []byte {
 	return file_vpn_proto_rawDescData
 }
 
-var file_vpn_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_vpn_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_vpn_proto_goTypes = []any{
 	(*VPNPeer)(nil),                        // 0: platform.v1.VPNPeer
 	(*VPNPosturePolicy)(nil),               // 1: platform.v1.VPNPosturePolicy
 	(*VPNLease)(nil),                       // 2: platform.v1.VPNLease
 	(*VPNGatewayStatus)(nil),               // 3: platform.v1.VPNGatewayStatus
-	(*VPNRejectedPeer)(nil),                // 4: platform.v1.VPNRejectedPeer
-	(*EnrolVPNPeerRequest)(nil),            // 5: platform.v1.EnrolVPNPeerRequest
-	(*EnrolVPNPeerResponse)(nil),           // 6: platform.v1.EnrolVPNPeerResponse
-	(*ListVPNPeersRequest)(nil),            // 7: platform.v1.ListVPNPeersRequest
-	(*ListVPNPeersResponse)(nil),           // 8: platform.v1.ListVPNPeersResponse
-	(*RevokeVPNPeerRequest)(nil),           // 9: platform.v1.RevokeVPNPeerRequest
-	(*RevokeVPNPeerResponse)(nil),          // 10: platform.v1.RevokeVPNPeerResponse
-	(*GetVPNStatusRequest)(nil),            // 11: platform.v1.GetVPNStatusRequest
-	(*GetVPNStatusResponse)(nil),           // 12: platform.v1.GetVPNStatusResponse
-	(*GetVPNPosturePolicyRequest)(nil),     // 13: platform.v1.GetVPNPosturePolicyRequest
-	(*GetVPNPosturePolicyResponse)(nil),    // 14: platform.v1.GetVPNPosturePolicyResponse
-	(*SetVPNPosturePolicyRequest)(nil),     // 15: platform.v1.SetVPNPosturePolicyRequest
-	(*SetVPNPosturePolicyResponse)(nil),    // 16: platform.v1.SetVPNPosturePolicyResponse
-	(*DeleteVPNPosturePolicyRequest)(nil),  // 17: platform.v1.DeleteVPNPosturePolicyRequest
-	(*DeleteVPNPosturePolicyResponse)(nil), // 18: platform.v1.DeleteVPNPosturePolicyResponse
-	(*ListVPNPosturePoliciesRequest)(nil),  // 19: platform.v1.ListVPNPosturePoliciesRequest
-	(*ListVPNPosturePoliciesResponse)(nil), // 20: platform.v1.ListVPNPosturePoliciesResponse
-	nil,                                    // 21: platform.v1.VPNGatewayStatus.LeasesByDataPlaneEntry
+	(*VPNDurationHistogram)(nil),           // 4: platform.v1.VPNDurationHistogram
+	(*VPNHistogramBucket)(nil),             // 5: platform.v1.VPNHistogramBucket
+	(*VPNRejectedPeer)(nil),                // 6: platform.v1.VPNRejectedPeer
+	(*EnrolVPNPeerRequest)(nil),            // 7: platform.v1.EnrolVPNPeerRequest
+	(*EnrolVPNPeerResponse)(nil),           // 8: platform.v1.EnrolVPNPeerResponse
+	(*ListVPNPeersRequest)(nil),            // 9: platform.v1.ListVPNPeersRequest
+	(*ListVPNPeersResponse)(nil),           // 10: platform.v1.ListVPNPeersResponse
+	(*RevokeVPNPeerRequest)(nil),           // 11: platform.v1.RevokeVPNPeerRequest
+	(*RevokeVPNPeerResponse)(nil),          // 12: platform.v1.RevokeVPNPeerResponse
+	(*GetVPNStatusRequest)(nil),            // 13: platform.v1.GetVPNStatusRequest
+	(*GetVPNStatusResponse)(nil),           // 14: platform.v1.GetVPNStatusResponse
+	(*GetVPNPosturePolicyRequest)(nil),     // 15: platform.v1.GetVPNPosturePolicyRequest
+	(*GetVPNPosturePolicyResponse)(nil),    // 16: platform.v1.GetVPNPosturePolicyResponse
+	(*SetVPNPosturePolicyRequest)(nil),     // 17: platform.v1.SetVPNPosturePolicyRequest
+	(*SetVPNPosturePolicyResponse)(nil),    // 18: platform.v1.SetVPNPosturePolicyResponse
+	(*DeleteVPNPosturePolicyRequest)(nil),  // 19: platform.v1.DeleteVPNPosturePolicyRequest
+	(*DeleteVPNPosturePolicyResponse)(nil), // 20: platform.v1.DeleteVPNPosturePolicyResponse
+	(*ListVPNPosturePoliciesRequest)(nil),  // 21: platform.v1.ListVPNPosturePoliciesRequest
+	(*ListVPNPosturePoliciesResponse)(nil), // 22: platform.v1.ListVPNPosturePoliciesResponse
+	nil,                                    // 23: platform.v1.VPNGatewayStatus.LeasesByDataPlaneEntry
+	nil,                                    // 24: platform.v1.VPNGatewayStatus.RevocationsEntry
+	nil,                                    // 25: platform.v1.VPNGatewayStatus.PostureViolationsEntry
 }
 var file_vpn_proto_depIdxs = []int32{
-	21, // 0: platform.v1.VPNGatewayStatus.leases_by_data_plane:type_name -> platform.v1.VPNGatewayStatus.LeasesByDataPlaneEntry
+	23, // 0: platform.v1.VPNGatewayStatus.leases_by_data_plane:type_name -> platform.v1.VPNGatewayStatus.LeasesByDataPlaneEntry
 	2,  // 1: platform.v1.VPNGatewayStatus.leases:type_name -> platform.v1.VPNLease
-	4,  // 2: platform.v1.VPNGatewayStatus.rejected_peers:type_name -> platform.v1.VPNRejectedPeer
-	0,  // 3: platform.v1.EnrolVPNPeerRequest.peer:type_name -> platform.v1.VPNPeer
-	0,  // 4: platform.v1.EnrolVPNPeerResponse.peer:type_name -> platform.v1.VPNPeer
-	0,  // 5: platform.v1.ListVPNPeersResponse.peers:type_name -> platform.v1.VPNPeer
-	3,  // 6: platform.v1.GetVPNStatusResponse.gateways:type_name -> platform.v1.VPNGatewayStatus
-	1,  // 7: platform.v1.GetVPNPosturePolicyResponse.policy:type_name -> platform.v1.VPNPosturePolicy
-	1,  // 8: platform.v1.SetVPNPosturePolicyRequest.policy:type_name -> platform.v1.VPNPosturePolicy
-	1,  // 9: platform.v1.SetVPNPosturePolicyResponse.policy:type_name -> platform.v1.VPNPosturePolicy
-	1,  // 10: platform.v1.ListVPNPosturePoliciesResponse.policies:type_name -> platform.v1.VPNPosturePolicy
-	5,  // 11: platform.v1.VPNService.EnrolPeer:input_type -> platform.v1.EnrolVPNPeerRequest
-	7,  // 12: platform.v1.VPNService.ListPeers:input_type -> platform.v1.ListVPNPeersRequest
-	9,  // 13: platform.v1.VPNService.RevokePeer:input_type -> platform.v1.RevokeVPNPeerRequest
-	11, // 14: platform.v1.VPNService.GetStatus:input_type -> platform.v1.GetVPNStatusRequest
-	13, // 15: platform.v1.VPNService.GetPosturePolicy:input_type -> platform.v1.GetVPNPosturePolicyRequest
-	15, // 16: platform.v1.VPNService.SetPosturePolicy:input_type -> platform.v1.SetVPNPosturePolicyRequest
-	17, // 17: platform.v1.VPNService.DeletePosturePolicy:input_type -> platform.v1.DeleteVPNPosturePolicyRequest
-	19, // 18: platform.v1.VPNService.ListPosturePolicies:input_type -> platform.v1.ListVPNPosturePoliciesRequest
-	6,  // 19: platform.v1.VPNService.EnrolPeer:output_type -> platform.v1.EnrolVPNPeerResponse
-	8,  // 20: platform.v1.VPNService.ListPeers:output_type -> platform.v1.ListVPNPeersResponse
-	10, // 21: platform.v1.VPNService.RevokePeer:output_type -> platform.v1.RevokeVPNPeerResponse
-	12, // 22: platform.v1.VPNService.GetStatus:output_type -> platform.v1.GetVPNStatusResponse
-	14, // 23: platform.v1.VPNService.GetPosturePolicy:output_type -> platform.v1.GetVPNPosturePolicyResponse
-	16, // 24: platform.v1.VPNService.SetPosturePolicy:output_type -> platform.v1.SetVPNPosturePolicyResponse
-	18, // 25: platform.v1.VPNService.DeletePosturePolicy:output_type -> platform.v1.DeleteVPNPosturePolicyResponse
-	20, // 26: platform.v1.VPNService.ListPosturePolicies:output_type -> platform.v1.ListVPNPosturePoliciesResponse
-	19, // [19:27] is the sub-list for method output_type
-	11, // [11:19] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	6,  // 2: platform.v1.VPNGatewayStatus.rejected_peers:type_name -> platform.v1.VPNRejectedPeer
+	24, // 3: platform.v1.VPNGatewayStatus.revocations:type_name -> platform.v1.VPNGatewayStatus.RevocationsEntry
+	25, // 4: platform.v1.VPNGatewayStatus.posture_violations:type_name -> platform.v1.VPNGatewayStatus.PostureViolationsEntry
+	4,  // 5: platform.v1.VPNGatewayStatus.reattest:type_name -> platform.v1.VPNDurationHistogram
+	5,  // 6: platform.v1.VPNDurationHistogram.buckets:type_name -> platform.v1.VPNHistogramBucket
+	0,  // 7: platform.v1.EnrolVPNPeerRequest.peer:type_name -> platform.v1.VPNPeer
+	0,  // 8: platform.v1.EnrolVPNPeerResponse.peer:type_name -> platform.v1.VPNPeer
+	0,  // 9: platform.v1.ListVPNPeersResponse.peers:type_name -> platform.v1.VPNPeer
+	3,  // 10: platform.v1.GetVPNStatusResponse.gateways:type_name -> platform.v1.VPNGatewayStatus
+	1,  // 11: platform.v1.GetVPNPosturePolicyResponse.policy:type_name -> platform.v1.VPNPosturePolicy
+	1,  // 12: platform.v1.SetVPNPosturePolicyRequest.policy:type_name -> platform.v1.VPNPosturePolicy
+	1,  // 13: platform.v1.SetVPNPosturePolicyResponse.policy:type_name -> platform.v1.VPNPosturePolicy
+	1,  // 14: platform.v1.ListVPNPosturePoliciesResponse.policies:type_name -> platform.v1.VPNPosturePolicy
+	7,  // 15: platform.v1.VPNService.EnrolPeer:input_type -> platform.v1.EnrolVPNPeerRequest
+	9,  // 16: platform.v1.VPNService.ListPeers:input_type -> platform.v1.ListVPNPeersRequest
+	11, // 17: platform.v1.VPNService.RevokePeer:input_type -> platform.v1.RevokeVPNPeerRequest
+	13, // 18: platform.v1.VPNService.GetStatus:input_type -> platform.v1.GetVPNStatusRequest
+	15, // 19: platform.v1.VPNService.GetPosturePolicy:input_type -> platform.v1.GetVPNPosturePolicyRequest
+	17, // 20: platform.v1.VPNService.SetPosturePolicy:input_type -> platform.v1.SetVPNPosturePolicyRequest
+	19, // 21: platform.v1.VPNService.DeletePosturePolicy:input_type -> platform.v1.DeleteVPNPosturePolicyRequest
+	21, // 22: platform.v1.VPNService.ListPosturePolicies:input_type -> platform.v1.ListVPNPosturePoliciesRequest
+	8,  // 23: platform.v1.VPNService.EnrolPeer:output_type -> platform.v1.EnrolVPNPeerResponse
+	10, // 24: platform.v1.VPNService.ListPeers:output_type -> platform.v1.ListVPNPeersResponse
+	12, // 25: platform.v1.VPNService.RevokePeer:output_type -> platform.v1.RevokeVPNPeerResponse
+	14, // 26: platform.v1.VPNService.GetStatus:output_type -> platform.v1.GetVPNStatusResponse
+	16, // 27: platform.v1.VPNService.GetPosturePolicy:output_type -> platform.v1.GetVPNPosturePolicyResponse
+	18, // 28: platform.v1.VPNService.SetPosturePolicy:output_type -> platform.v1.SetVPNPosturePolicyResponse
+	20, // 29: platform.v1.VPNService.DeletePosturePolicy:output_type -> platform.v1.DeleteVPNPosturePolicyResponse
+	22, // 30: platform.v1.VPNService.ListPosturePolicies:output_type -> platform.v1.ListVPNPosturePoliciesResponse
+	23, // [23:31] is the sub-list for method output_type
+	15, // [15:23] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_vpn_proto_init() }
@@ -1370,7 +1539,7 @@ func file_vpn_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_vpn_proto_rawDesc), len(file_vpn_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   22,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

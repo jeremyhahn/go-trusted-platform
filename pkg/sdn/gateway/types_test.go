@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	ipsecconfig "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/vxlan"
 )
 
@@ -1222,6 +1223,16 @@ func TestOverlayServiceConfig_Validate(t *testing.T) {
 			c.VNIs[0].Subnet, c.VNIs[1].Subnet, c.AnycastGatewayMAC = netip.Prefix{}, netip.Prefix{}, ""
 		}, field: "l3vni"},
 		{name: "rejects an L3VNI without RR peers", edit: func(c *OverlayServiceConfig) { withOverlayIRB(c); c.RRPeers = nil }, field: "l3vni"},
+		{name: "accepts overlay IPsec on the VTEP and underlay", edit: withOverlayIPsec},
+		{name: "ignores a disabled IPsec section", edit: func(c *OverlayServiceConfig) { c.IPsec = &ipsecconfig.Config{LocalAddress: "nonsense"} }},
+		{name: "rejects IPsec on another local address", edit: func(c *OverlayServiceConfig) {
+			withOverlayIPsec(c)
+			c.IPsec.LocalAddress = "10.4.100.21"
+		}, field: "ipsec.local-address"},
+		{name: "rejects IPsec guarding another interface", edit: func(c *OverlayServiceConfig) {
+			withOverlayIPsec(c)
+			c.IPsec.FabricInterface = "eth9"
+		}, field: "ipsec.fabric-interface"},
 	}
 
 	for _, tt := range tests {
@@ -1243,6 +1254,35 @@ func TestOverlayServiceConfig_Validate(t *testing.T) {
 				t.Errorf("Field = %q, want %q", invalid.Field, tt.field)
 			}
 		})
+	}
+}
+
+// withOverlayIPsec turns overlay IPsec on, on the overlay's VTEP address and
+// underlay interface, with the route reflector as a static peer.
+func withOverlayIPsec(c *OverlayServiceConfig) {
+	c.IPsec = &ipsecconfig.Config{
+		Enabled:         true,
+		FabricInterface: c.UnderlayInterface,
+		LocalAddress:    c.LocalVTEP.String(),
+		StaticPeers:     []string{"10.4.100.10"},
+		Token:           ipsecconfig.TokenConfig{Handle: "6970736563"},
+	}
+}
+
+func TestOverlayServiceConfig_ValidateRejectsAnInvalidIPsecSection(t *testing.T) {
+	cfg := validOverlayServiceConfig()
+	withOverlayIPsec(cfg)
+	cfg.IPsec.StaticPeers = []string{"not-an-address"}
+
+	err := cfg.Validate()
+
+	var invalid *ErrOverlayIPsecConfigInvalid
+	if !errors.As(err, &invalid) {
+		t.Fatalf("Validate() = %v, want *ErrOverlayIPsecConfigInvalid", err)
+	}
+	var cause *ipsecconfig.ConfigError
+	if !errors.As(err, &cause) {
+		t.Errorf("Validate() = %v, want the ipsec section's *ConfigError underneath", err)
 	}
 }
 

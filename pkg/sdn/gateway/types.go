@@ -30,6 +30,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/loadbalancer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/nat64"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/vpn"
+	ipsecconfig "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/tunnel"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/vxlan"
@@ -522,6 +523,14 @@ type OverlayServiceConfig struct {
 	// re-judged against the admission policy. Zero defaults to
 	// DefaultOverlayAdmissionSweepInterval.
 	AdmissionSweepInterval time.Duration `yaml:"admission-sweep-interval,omitempty" json:"admission_sweep_interval,omitempty" mapstructure:"admission-sweep-interval"`
+
+	// IPsec, when enabled, carries every packet between this VTEP and a
+	// remote one in a transport-mode ESP SA behind a fail-closed floor
+	// (docs/sdn/overlay/architecture.md#overlay-ipsec). Its peers are its
+	// static peers and every admitted VTEP on a flood list of this overlay.
+	// Its local-address must be LocalVTEP and its fabric-interface
+	// UnderlayInterface.
+	IPsec *ipsecconfig.Config `yaml:"ipsec,omitempty" json:"ipsec,omitempty" mapstructure:"ipsec"`
 }
 
 // Validate checks if the overlay service configuration is valid.
@@ -584,7 +593,35 @@ func (c *OverlayServiceConfig) Validate() error {
 	if c.VerdictMaxAge == 0 {
 		c.VerdictMaxAge = DefaultOverlayVerdictMaxAge
 	}
+	return c.validateIPsec()
+}
+
+// validateIPsec checks an enabled ipsec section, and that it runs on this
+// VTEP: its local address is LocalVTEP and the interface its floor guards
+// is UnderlayInterface.
+func (c *OverlayServiceConfig) validateIPsec() error {
+	if !c.IPsecEnabled() {
+		return nil
+	}
+	if err := c.IPsec.Validate(); err != nil {
+		return &ErrOverlayIPsecConfigInvalid{Cause: err}
+	}
+	local, err := c.IPsec.Local()
+	if err != nil {
+		return &ErrOverlayIPsecConfigInvalid{Cause: err}
+	}
+	if local != c.LocalVTEP {
+		return &ErrOverlayConfigInvalid{Field: "ipsec.local-address", Reason: "must be local-vtep " + c.LocalVTEP.String()}
+	}
+	if c.IPsec.FabricInterface != c.UnderlayInterface {
+		return &ErrOverlayConfigInvalid{Field: "ipsec.fabric-interface", Reason: "must be underlay-interface " + c.UnderlayInterface}
+	}
 	return nil
+}
+
+// IPsecEnabled reports whether the overlay runs IPsec between its VTEPs.
+func (c *OverlayServiceConfig) IPsecEnabled() bool {
+	return c.IPsec != nil && c.IPsec.Enabled
 }
 
 // validateVNIs checks the VNIs the overlay joins at start: at least one, each

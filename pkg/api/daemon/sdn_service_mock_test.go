@@ -94,8 +94,7 @@ type ConfigurableMockOVSClient struct {
 
 // ConfigurableMockCall records information about a method call
 type ConfigurableMockCall struct {
-	Method string
-	Args   []interface{}
+	Args []interface{}
 }
 
 // NewConfigurableMockOVSClient creates a new configurable mock OVS client with default implementations
@@ -109,7 +108,7 @@ func NewConfigurableMockOVSClient() *ConfigurableMockOVSClient {
 func (m *ConfigurableMockOVSClient) recordCall(method string, args ...interface{}) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.calls[method] = append(m.calls[method], ConfigurableMockCall{Method: method, Args: args})
+	m.calls[method] = append(m.calls[method], ConfigurableMockCall{Args: args})
 }
 
 // GetCalls returns all recorded calls for a specific method

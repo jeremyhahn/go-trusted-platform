@@ -46,8 +46,6 @@ type extKMSClientMock struct {
 	lastRevokedKey       string
 	lastSetPolicyReq     *kms.SetKeyPolicyRequest
 	lastUpdateMetaReq    *kms.UpdateKeyMetadataRequest
-	lastMetadataKeyID    string
-	lastGetPolicyKeyID   string
 	backendStatusInvoked bool
 }
 
@@ -62,7 +60,6 @@ func (m *extKMSClientMock) RevokeKey(ctx context.Context, keyID, _ string) error
 }
 
 func (m *extKMSClientMock) GetKeyMetadata(ctx context.Context, keyID string) (*kms.KeyMetadataResponse, error) {
-	m.lastMetadataKeyID = keyID
 	if m.getKeyMetadataFn != nil {
 		return m.getKeyMetadataFn(ctx, keyID)
 	}
@@ -86,7 +83,6 @@ func (m *extKMSClientMock) SetKeyPolicy(ctx context.Context, req *kms.SetKeyPoli
 }
 
 func (m *extKMSClientMock) GetKeyPolicy(ctx context.Context, keyID string) (*kms.KeyPolicy, error) {
-	m.lastGetPolicyKeyID = keyID
 	if m.getKeyPolicyFn != nil {
 		return m.getKeyPolicyFn(ctx, keyID)
 	}
@@ -114,9 +110,8 @@ type extSecretsClientMock struct {
 	setRotationPolicyFn func(ctx context.Context, req *secrets.SetRotationPolicyRequest) error
 	getRotationPolicyFn func(ctx context.Context, secretID string) (*secrets.RotationPolicy, error)
 
-	lastSetPolicyReq  *secrets.SetRotationPolicyRequest
-	lastGetPolicyID   string
-	lastDeletedSecret string
+	lastSetPolicyReq *secrets.SetRotationPolicyRequest
+	lastGetPolicyID  string
 }
 
 var _ quicbaas.SecretsClient = (*extSecretsClientMock)(nil)
@@ -134,7 +129,6 @@ func (m *extSecretsClientMock) List(ctx context.Context, prefix string) (*secret
 }
 
 func (m *extSecretsClientMock) Delete(ctx context.Context, path string) error {
-	m.lastDeletedSecret = path
 	return errKMSLifecycleMock{method: "Delete"}
 }
 

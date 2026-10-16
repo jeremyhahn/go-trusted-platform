@@ -2125,10 +2125,9 @@ as a Type-5 route in the IP-VRF once the VNI has joined; `RemoveVNI` and Stop
 withdraw it before the VNI leaves. A bridged VNI, or any VNI without `l3vni`,
 originates nothing. An origination EVPN refuses fails the start the way a
 refused join does, as an `*ErrVNIOperationFailed` with operation `originate`,
-with the VNI left again and nothing left running. Nor does gatewayd run the overlay's IPsec: the IKEv2 transport
-([architecture](architecture.md#the-overlays-ipsec-transport-packaging-709))
-is platformd's `sdn.overlay.ipsec` alone, so VXLAN to or from a gatewayd VTEP
-is only as confidential as the underlay (#709).
+with the VNI left again and nothing left running. With `ipsec` enabled the
+overlay also carries its VXLAN in ESP ([Overlay IPsec in
+gatewayd](#overlay-ipsec-in-gatewayd)).
 
 #### VTEP admission
 
@@ -2308,6 +2307,39 @@ VTEP, so a missed failure still withdraws decap, and a missed pass still
 admits the device, within one interval. A gatewayd that starts after a failure
 was recorded reads that failure, not an earlier pass, on its first admission.
 
+#### Overlay IPsec in gatewayd
+
+`gateway.overlay.ipsec` is the `ipsec.Config` platformd's
+`sdn.overlay.ipsec` takes ([configuration](../sdn/overlay/configuration.md#ipsec)),
+and with `enabled: true` gatewayd runs the same `pkg/sdn/ipsec` service
+(`ipsec.NewEVPNService`, built through `GatewayRuntime.OverlayIPsec`): every
+packet between this VTEP and another rides a transport-mode ESP SA, behind the
+fail-closed floor on the fabric interface. Validation requires
+`local-address` to be the overlay's `local-vtep` and `fabric-interface` its
+`underlay-interface`, so the floor guards the interface the VXLAN leaves by;
+`crl-files` are required. The floor admits only IKE, ESP and SA-protected
+traffic, so `static-peers` must list the route reflectors, or the EVPN
+sessions never come up.
+
+The peers are the static peers plus each VTEP on one of the overlay's flood
+lists. The handler tells `OverlayModeConfig.FloodPeers` every flood-list change
+as the Type-3 route that made it, once the flows hold it, and the VTEPs of a
+VNI it leaves as withdrawals; a VTEP is a peer while one admitted route names
+it. Before the IPsec controller brings up an SA to a VTEP it asks again whether
+the overlay's `VTEPAdmitter` holds a fresh admission for it, from memory and
+without a platformd read. A revocation withdraws the VTEP's routes first, then
+evicts it from IPsec: its SAs end and its packets are dropped until a replay
+readmits it. A VTEP newly placed on a flood list is readmitted before its SA is
+asked for, so an address reassigned to an attested device is not held off by
+an old eviction.
+
+Start installs the floor before the handler starts; a failed start closes the
+service and Stop closes it after the speaker. Neither removes the floor, so a
+node whose IPsec has stopped carries no plaintext VTEP traffic. The IPsec
+identity is the same file identity platformd uses (`token`,
+`certificate-file`); a certificate derived from the node's IDevID is not yet
+wired.
+
 #### Trust assumptions
 
 - **IPAM writers.** Admission trusts the fabric IPAM allocation to bind a VTEP
@@ -2341,8 +2373,8 @@ was recorded reads that failure, not an earlier pass, on its first admission.
 - **Underlay source addresses.** Decap authorisation matches the outer source
   IP. On an underlay without source validation, a host can send VXLAN under an
   admitted VTEP's address. The control for that is the authenticated underlay
-  (the overlay IPsec, which platformd runs and gatewayd does not yet), not
-  admission.
+  ([overlay IPsec](#overlay-ipsec-in-gatewayd)), not admission; without
+  `ipsec` the overlay relies on the underlay alone.
 
 ## 6. Persistence
 
@@ -2429,6 +2461,7 @@ the service it drives says so — extends to telemetry:
 | `nat` | `firewall.NAT.Health()` — SNAT/DNAT and the per-uplink pools (#586) |
 | `overlay` | overlay backend `Status()` plus `ListAdmittedVTEPs()` — local VTEP, table ids, admitted VTEPs and ND counters (punted, answered, meter-dropped, queue-dropped, fell-through) |
 | `pipeline` | `GatewayRuntime.PipelineStatus()` — owner, terminal and the held fail mode (#567) |
+| `vpn` | `vpn.Service.Health()` and `Leases` — admissions, refusals, revocations by reason, posture violations by rule, the renewal re-attestation histogram, leases per data plane and every lease (#584; [docs/vpn/engineering.md](../vpn/engineering.md) §8) |
 
 Two invariants make the document readable:
 
@@ -2454,8 +2487,9 @@ carry the `gateway` label; the sections above map to `service_active`,
 `bfd_failure_transitions_total`, `tunnel_up`, `tunnel_bytes_total`,
 `tunnel_packets_total`, `tunnel_last_rekey_timestamp_seconds`,
 `uplink_policy_rules`, `uplink_bound_tunnels`, `hostfw_installed`,
-`hostfw_rules`, `firewall_flows`, `nat_dnat_rules`, `nat_pool_addresses` and
-`pipeline_installed`. An absent section emits **no series** for the same
+`hostfw_rules`, `firewall_flows`, `nat_dnat_rules`, `nat_pool_addresses`,
+`pipeline_installed`, and the `vpn_*` series of the remote-access VPN
+([docs/vpn/engineering.md](../vpn/engineering.md) §8). An absent section emits **no series** for the same
 reason it is absent from the document.
 
 The endpoint is the gatewayd `metrics:` section (`enabled`, `listen`,

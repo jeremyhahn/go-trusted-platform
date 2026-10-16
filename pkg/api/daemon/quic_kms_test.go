@@ -38,7 +38,6 @@ import (
 type mockKMSService struct {
 	keys                map[string]*pb.KeyHandle
 	metadata            map[string]*pb.KeyMetadata
-	versions            map[string][]*pb.KeyVersionInfo
 	policies            map[string]*pb.KeyPolicy
 	shouldErr           bool
 	errToReturn         error
@@ -59,7 +58,6 @@ func newMockKMSService() *mockKMSService {
 	return &mockKMSService{
 		keys:     make(map[string]*pb.KeyHandle),
 		metadata: make(map[string]*pb.KeyMetadata),
-		versions: make(map[string][]*pb.KeyVersionInfo),
 		policies: make(map[string]*pb.KeyPolicy),
 	}
 }

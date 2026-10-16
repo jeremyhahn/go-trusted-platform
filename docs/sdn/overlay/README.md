@@ -135,8 +135,10 @@ nc -zuv 10.0.0.2 4789
 - platformd's overlay IPsec (`overlay.ipsec`, [architecture](architecture.md#overlay-ipsec))
   carries every packet between two VTEPs in a transport-mode ESP SA behind
   a fail-closed floor; its peers are the static peers. gatewayd's overlay
-  runs no IPsec, so on a gateway the underlay still has to encrypt
-  VTEP-to-VTEP traffic (#709).
+  runs the same service from `gateway.overlay.ipsec`; its peers are the
+  static peers plus every admitted VTEP on one of its flood lists, and a
+  revoked VTEP is evicted with its routes
+  ([Overlay IPsec in gatewayd](../../gateway/engineering.md#overlay-ipsec-in-gatewayd)).
 - VNI isolation keeps segments apart; routing between them crosses the
   anycast gateway.
 

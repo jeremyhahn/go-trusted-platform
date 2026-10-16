@@ -687,13 +687,15 @@ type overlayBackend struct {
 	server   bgp.BGPServerInterface
 	logger   *slog.Logger
 	bridge   string
+	newIPsec OverlayIPsecFactory
 
 	mu      sync.Mutex
 	handler *modes.OverlayModeHandler
 	admit   *VTEPAdmitter
 	speaker *bgp.Speaker
-	// stopLoops ends the admission sweep and the verdict follower; loopsDone
-	// closes once both have returned.
+	ipsec   OverlayIPsec
+	// stopLoops ends the admission sweep, the verdict follower and the
+	// IPsec service; loopsDone closes once all have returned.
 	stopLoops context.CancelFunc
 	loopsDone chan struct{}
 }
@@ -758,39 +760,59 @@ type overlayVTEPControl interface {
 
 // overlayHandlerProxy hands the admitter's revocations and replays to the
 // overlay handler once it is built, and refuses them before then: the admitter
-// is built first, because the handler is configured with it.
+// is built first, because the handler is configured with it. With overlay
+// IPsec it also evicts a revoked VTEP from IPsec and lifts that eviction
+// before a replay.
 type overlayHandlerProxy struct {
 	mu      sync.RWMutex
 	handler overlayVTEPControl
+	ipsec   OverlayIPsec
 }
 
-func (p *overlayHandlerProxy) set(handler overlayVTEPControl) {
+// set hands the proxy the handler, and the overlay's IPsec or nil for none.
+func (p *overlayHandlerProxy) set(handler overlayVTEPControl, ipsec OverlayIPsec) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.handler = handler
+	p.ipsec = ipsec
 }
 
-func (p *overlayHandlerProxy) get() (overlayVTEPControl, error) {
+func (p *overlayHandlerProxy) get() (overlayVTEPControl, OverlayIPsec, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if p.handler == nil {
-		return nil, &ErrServiceUnavailable{Service: ServiceOverlay, Reason: "overlay handler is not ready"}
+		return nil, nil, &ErrServiceUnavailable{Service: ServiceOverlay, Reason: "overlay handler is not ready"}
 	}
-	return p.handler, nil
+	return p.handler, p.ipsec, nil
 }
 
+// RevokeVTEP withdraws the VTEP's routes, then evicts it from IPsec: its SAs
+// end and its packets drop until a replay readmits it. The eviction follows
+// the withdrawal, so no admission the handler took before the revocation can
+// lift it, and it runs whether or not the withdrawal failed.
 func (p *overlayHandlerProxy) RevokeVTEP(ctx context.Context, vtep netip.Addr) error {
-	handler, err := p.get()
+	handler, ipsec, err := p.get()
 	if err != nil {
 		return err
 	}
-	return handler.RevokeVTEP(ctx, vtep)
+	err = handler.RevokeVTEP(ctx, vtep)
+	if ipsec == nil {
+		return err
+	}
+	return errors.Join(err, ipsec.Evict(ctx, vtep))
 }
 
+// ReplayVTEP lifts the VTEP's IPsec eviction, then replays its routes,
+// which bring its SA back up.
 func (p *overlayHandlerProxy) ReplayVTEP(ctx context.Context, vtep netip.Addr) error {
-	handler, err := p.get()
+	handler, ipsec, err := p.get()
 	if err != nil {
 		return err
+	}
+	if ipsec != nil {
+		if err := ipsec.Readmit(ctx, vtep); err != nil {
+			return err
+		}
 	}
 	return handler.ReplayVTEP(ctx, vtep)
 }
@@ -798,7 +820,7 @@ func (p *overlayHandlerProxy) ReplayVTEP(ctx context.Context, vtep netip.Addr) e
 // RefusedVTEPs reports nothing before the handler is built: it has refused
 // nothing yet.
 func (p *overlayHandlerProxy) RefusedVTEPs() []netip.Addr {
-	handler, err := p.get()
+	handler, _, err := p.get()
 	if err != nil {
 		return nil
 	}
@@ -854,6 +876,24 @@ func (b *overlayBackend) Start(ctx context.Context) error {
 		Logger:            logger,
 	}
 
+	// The floor goes in before the speaker dials, so nothing crosses the
+	// fabric unprotected while the overlay comes up. A start that fails
+	// releases the IPsec service but leaves the floor: the fabric stays
+	// closed, not open.
+	var ipsec OverlayIPsec
+	started := false
+	defer func() {
+		if !started && ipsec != nil {
+			ipsec.Close()
+		}
+	}()
+	if b.config.IPsecEnabled() {
+		if ipsec, err = b.startIPsec(ctx, admitter, logger); err != nil {
+			return err
+		}
+		modeCfg.FloodPeers = overlayIPsecPeers(ipsec)
+	}
+
 	speaker, evpnCfg, err := b.overlayEVPN(ctx, logger)
 	if err != nil {
 		return err
@@ -863,7 +903,7 @@ func (b *overlayBackend) Start(ctx context.Context) error {
 	if err != nil {
 		return errors.Join(err, stopOverlaySpeaker(ctx, speaker))
 	}
-	proxy.set(handler)
+	proxy.set(handler, ipsec)
 	if err := handler.Start(ctx); err != nil {
 		return errors.Join(err, stopOverlaySpeaker(ctx, speaker))
 	}
@@ -877,16 +917,16 @@ func (b *overlayBackend) Start(ctx context.Context) error {
 	loopsCtx, stopLoops := context.WithCancel(context.WithoutCancel(ctx))
 	var loops sync.WaitGroup
 	ticker := time.NewTicker(b.config.admissionSweepInterval())
-	loops.Add(2)
-	go func() {
-		defer loops.Done()
+	loops.Go(func() {
 		defer ticker.Stop()
 		runAdmissionSweep(loopsCtx, ticker.C, handler, admitter, logger)
-	}()
-	go func() {
-		defer loops.Done()
+	})
+	loops.Go(func() {
 		runVerdictFollower(loopsCtx, b.stream, admitter, overlayVerdictFollowRetry, logger)
-	}()
+	})
+	if ipsec != nil {
+		loops.Go(func() { ipsec.Run(loopsCtx) })
+	}
 	loopsDone := make(chan struct{})
 	go func() {
 		loops.Wait()
@@ -896,9 +936,26 @@ func (b *overlayBackend) Start(ctx context.Context) error {
 	b.handler = handler
 	b.admit = admitter
 	b.speaker = speaker
+	b.ipsec = ipsec
 	b.stopLoops = stopLoops
 	b.loopsDone = loopsDone
+	started = true
 	return nil
+}
+
+// startIPsec builds the overlay's IPsec and installs its fail-closed floor.
+// Its controller asks the admitter's remembered admissions, not the platform:
+// the overlay judged each VTEP before it put it on a flood list.
+func (b *overlayBackend) startIPsec(ctx context.Context, admitter *VTEPAdmitter, logger *slog.Logger) (OverlayIPsec, error) {
+	ipsec, err := b.newIPsec(b.config.IPsec, admittedVTEPs{admitter: admitter}, logger)
+	if err != nil {
+		return nil, &ErrOverlayIPsec{Operation: "build", Cause: err}
+	}
+	if err := ipsec.Install(ctx); err != nil {
+		ipsec.Close()
+		return nil, &ErrOverlayIPsec{Operation: "install floor", Cause: err}
+	}
+	return ipsec, nil
 }
 
 // joinOverlayVNIs joins each configured L2VNI on its access VLAN. With EVPN a
@@ -932,9 +989,14 @@ func (b *overlayBackend) Stop(ctx context.Context) error {
 	if b.speaker != nil {
 		errs = append(errs, b.speaker.Stop(ctx))
 	}
+	// The floor stays installed: a stopped overlay leaves the fabric closed.
+	if b.ipsec != nil {
+		b.ipsec.Close()
+	}
 	b.handler = nil
 	b.admit = nil
 	b.speaker = nil
+	b.ipsec = nil
 	b.stopLoops = nil
 	b.loopsDone = nil
 	return errors.Join(errs...)
@@ -1081,8 +1143,12 @@ func buildOverlay(g *Gateway) (backedService, error) {
 	if g.config.Overlay == nil {
 		return nil, &ErrServiceUnavailable{Service: ServiceOverlay, Reason: "the overlay service needs a gateway.overlay section"}
 	}
+	if g.config.Overlay.IPsecEnabled() && runtime.OverlayIPsec == nil {
+		return nil, &ErrRuntimeMissing{Service: ServiceOverlay}
+	}
 	host := g.config.hostRuntime()
 	return &overlayBackend{
+		newIPsec: runtime.OverlayIPsec,
 		config:   g.config.Overlay,
 		ovs:      runtime.OVS,
 		of:       runtime.OverlayOpenFlow,
