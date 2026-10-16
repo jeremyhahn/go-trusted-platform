@@ -186,6 +186,14 @@ type Config struct {
 	BarrierShamirThreshold int    `yaml:"-" json:"-" mapstructure:"-"`
 	BarrierShamirShares    int    `yaml:"-" json:"-" mapstructure:"-"`
 
+	// TPMDevice is the TPM the embedded server's hardware probe and TPM2
+	// seal strategy open (seal.tpm2.device). It is populated
+	// programmatically from the platform's tpm.device — it is NOT a platform
+	// YAML key. Left empty, quicbaas opens its default /dev/tpmrm0, which on
+	// a node whose platform TPM is elsewhere (a swtpm socket) is a TPM the
+	// platform never configured.
+	TPMDevice string `yaml:"-" json:"-" mapstructure:"-"`
+
 	// BootstrapAdminCSRPath, BootstrapAdminPIVCertPath, AdminFactors and
 	// PasskeyDevice select how the FIRST administrator is enrolled at first
 	// boot, and are passed straight through to the embedded server's
@@ -544,6 +552,13 @@ func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
 		if c.BarrierShamirShares > 0 {
 			cfg.Seal.TotalShares = c.BarrierShamirShares
 		}
+	}
+
+	// The embedded server probes, and a tpm2 seal strategy seals against,
+	// the platform's own TPM — never a default device the platform did not
+	// configure.
+	if c.TPMDevice != "" {
+		cfg.Seal.TPM2.Device = c.TPMDevice
 	}
 
 	// Enable KMS for key management operations
