@@ -87,6 +87,10 @@ var (
 	// without the anycast gateway that routes into it.
 	ErrAnycastGatewayRequired = &errAnycastGatewayRequired{}
 
+	// ErrRoutedSubnetInvalid is returned when a routed subnet is not an
+	// IPv4 network holding its VNI's anycast gateway, or repeats another.
+	ErrRoutedSubnetInvalid = &errRoutedSubnetInvalid{}
+
 	// ErrRouterMACRequired is returned when an L3VNI is configured
 	// without the EVPN router MAC symmetric IRB addresses.
 	ErrRouterMACRequired = &errRouterMACRequired{}
@@ -193,6 +197,12 @@ type errAnycastGatewayIncomplete struct{}
 
 func (e *errAnycastGatewayIncomplete) Error() string {
 	return "anycast gateway needs both an IPv4 address and a MAC"
+}
+
+type errRoutedSubnetInvalid struct{}
+
+func (e *errRoutedSubnetInvalid) Error() string {
+	return "a routed subnet must be a distinct IPv4 network holding its VNI's anycast gateway"
 }
 
 type errAnycastGatewayRequired struct{}

@@ -181,12 +181,23 @@ gateway:
     overlay-asn: 65000
     vxlan-port: 4789
     # The L2VNIs joined at start, each on its own access-port VLAN. The
-    # overlay is healthy only while it carries every one of them.
+    # overlay is healthy only while it carries every one of them. A VNI
+    # with a `subnet` is routed: every VTEP answers for the subnet's first
+    # host (here 10.4.192.1) as its distributed anycast gateway. A VNI
+    # without one is bridged only.
     vnis:
       - vni: 40100
         vlan: 401
+        subnet: 10.4.192.0/24
     default-vni: 40100
     max-vnis: 16384
+    # Symmetric IRB (RFC 9135). The anycast gateway MAC is shared by every
+    # routed VNI and every VTEP; 02:00:xx:xx:xx:xx is reserved for the
+    # router MACs, which each VTEP derives from local-vtep. Routed traffic
+    # to another VTEP crosses the L3VNI, which needs rr-peers and must not
+    # be one of vnis. Drop all three keys to bridge only.
+    anycast-gateway-mac: "02:aa:aa:00:00:01"
+    l3vni: 40999
     verdict-max-age: 15m
     verdict-clock-skew: 30s
     admission-sweep-interval: 30s

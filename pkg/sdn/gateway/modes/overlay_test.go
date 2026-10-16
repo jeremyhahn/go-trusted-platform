@@ -35,7 +35,7 @@ func TestOverlayModeConfig_Validate(t *testing.T) {
 	}{
 		{name: "symmetric IRB", edit: func(*OverlayModeConfig) {}},
 		{name: "bridging only, without EVPN or an admitter", edit: func(c *OverlayModeConfig) {
-			c.EVPNConfig, c.AnycastGatewayIP, c.AnycastGatewayMAC, c.L3VNI = nil, netip.Addr{}, nil, 0
+			c.EVPNConfig, c.AnycastGateways, c.Subnets, c.AnycastGatewayMAC, c.L3VNI = nil, nil, nil, nil, 0
 			c.Admitter = nil
 		}},
 		{name: "EVPN without an admitter", edit: func(c *OverlayModeConfig) { c.Admitter = nil }, want: ErrAdmitterNil},
@@ -46,14 +46,32 @@ func TestOverlayModeConfig_Validate(t *testing.T) {
 		{name: "no access port", edit: func(c *OverlayModeConfig) { c.AccessPort = "" }, want: ErrAccessPortEmpty},
 		{name: "no logger", edit: func(c *OverlayModeConfig) { c.Logger = nil }, want: ErrLoggerNil},
 		{name: "anycast IP without a MAC", edit: func(c *OverlayModeConfig) { c.AnycastGatewayMAC = nil }, want: ErrAnycastGatewayIncomplete},
-		{name: "anycast MAC without an IP", edit: func(c *OverlayModeConfig) { c.AnycastGatewayIP = netip.Addr{} }, want: ErrAnycastGatewayIncomplete},
-		{name: "IPv6 anycast gateway", edit: func(c *OverlayModeConfig) { c.AnycastGatewayIP = netip.MustParseAddr("fd00::1") }, want: ErrAnycastGatewayIncomplete},
+		{name: "anycast MAC without an IP", edit: func(c *OverlayModeConfig) { c.AnycastGateways = nil }, want: ErrAnycastGatewayIncomplete},
+		{name: "IPv6 anycast gateway", edit: func(c *OverlayModeConfig) { c.AnycastGateways[ovlL2VNI] = netip.MustParseAddr("fd00::1") }, want: ErrAnycastGatewayIncomplete},
+		{name: "anycast gateway on a VNI beyond 24 bits", edit: func(c *OverlayModeConfig) { c.AnycastGateways[1<<24] = ovlAnycastIP }, want: ErrVNIOutOfRange},
 		{name: "L3VNI beyond 24 bits", edit: func(c *OverlayModeConfig) { c.L3VNI = 1 << 24 }, want: ErrVNIOutOfRange},
 		{name: "L3VNI without EVPN", edit: func(c *OverlayModeConfig) { c.EVPNConfig = nil }, want: ErrRouterMACRequired},
 		{name: "L3VNI without a router MAC", edit: func(c *OverlayModeConfig) { c.EVPNConfig.RouterMAC = nil }, want: ErrRouterMACRequired},
 		{name: "L3VNI without the anycast gateway", edit: func(c *OverlayModeConfig) {
-			c.AnycastGatewayIP, c.AnycastGatewayMAC = netip.Addr{}, nil
+			c.AnycastGateways, c.Subnets, c.AnycastGatewayMAC = nil, nil, nil
 		}, want: ErrAnycastGatewayRequired},
+		{name: "routed subnets without an L3VNI", edit: func(c *OverlayModeConfig) { c.L3VNI = 0 }},
+		{name: "subnet on a VNI without an anycast gateway", edit: func(c *OverlayModeConfig) {
+			c.Subnets[ovlL2VNI+1] = netip.MustParsePrefix("10.2.0.0/24")
+		}, want: ErrRoutedSubnetInvalid},
+		{name: "subnet not holding its anycast gateway", edit: func(c *OverlayModeConfig) {
+			c.Subnets[ovlL2VNI] = netip.MustParsePrefix("10.2.0.0/24")
+		}, want: ErrRoutedSubnetInvalid},
+		{name: "subnet with host bits", edit: func(c *OverlayModeConfig) {
+			c.Subnets[ovlL2VNI] = netip.MustParsePrefix("10.1.0.1/24")
+		}, want: ErrRoutedSubnetInvalid},
+		{name: "IPv6 subnet", edit: func(c *OverlayModeConfig) {
+			c.Subnets[ovlL2VNI] = netip.MustParsePrefix("fd00::/64")
+		}, want: ErrRoutedSubnetInvalid},
+		{name: "two VNIs with the same subnet", edit: func(c *OverlayModeConfig) {
+			c.AnycastGateways[ovlL2VNI+1] = ovlAnycastIP
+			c.Subnets[ovlL2VNI+1] = ovlSubnet
+		}, want: ErrRoutedSubnetInvalid},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -268,7 +286,7 @@ func TestOverlayModeHandler_AddVNI(t *testing.T) {
 	t.Run("carries the VNI and places this VTEP on it", func(t *testing.T) {
 		f := newOverlayFixture(t, nil).withVNI(t)
 
-		assert.Len(t, f.sw.matching("tun_id=10100"), 3, "ingress, flood, gateway ARP")
+		assert.Len(t, f.sw.matching("tun_id=10100"), 4, "ingress, flood, gateway-MAC ingress, gateway ARP")
 		assert.Equal(t, "pop_vlan,set:tun_id=10100 goto:20", f.sw.lookup(t, TableVXLANDecap, "in_port=3", "vlan=100"))
 		assert.Equal(t, "push_vlan,set:vlan=100,output:3,pop_vlan", f.sw.lookup(t, TableEgress, "tun_id=10100"))
 		assert.Contains(t, f.speaker.addedTypes(), bgp.EVPNTypeInclusiveMulticast)
@@ -326,7 +344,7 @@ func TestOverlayModeHandler_AddVNI(t *testing.T) {
 
 	t.Run("without EVPN the VNI bridges locally", func(t *testing.T) {
 		f := newOverlayFixture(t, func(c *OverlayModeConfig) {
-			c.EVPNConfig, c.AnycastGatewayIP, c.AnycastGatewayMAC, c.L3VNI = nil, netip.Addr{}, nil, 0
+			c.EVPNConfig, c.AnycastGateways, c.Subnets, c.AnycastGatewayMAC, c.L3VNI = nil, nil, nil, nil, 0
 		}).withVNI(t)
 
 		assert.Len(t, f.sw.matching("tun_id=10100"), 2, "ingress and flood")
@@ -339,6 +357,82 @@ func assertVNIFailed(t *testing.T, err error, operation string) {
 	require.ErrorAs(t, err, &vniErr)
 	assert.Equal(t, operation, vniErr.Operation)
 	assert.Equal(t, ovlL2VNI, vniErr.VNI)
+}
+
+func TestOverlayModeHandler_SubnetOrigination(t *testing.T) {
+	originated := []bgp.PrefixRoute{{Prefix: ovlSubnet, VNI: ovlL3VNI}}
+
+	t.Run("a routed VNI originates its subnet in the L3VNI's IP-VRF", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+
+		assert.Equal(t, originated, f.speaker.addedPrefixes())
+	})
+
+	t.Run("a bridged VNI originates nothing", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+
+		require.NoError(t, f.handler.AddVNI(context.Background(), ovlL2VNI+1, ovlVLAN+1))
+
+		assert.Equal(t, originated, f.speaker.addedPrefixes(), "only the routed VNI's subnet")
+	})
+
+	t.Run("without an L3VNI nothing is originated or withdrawn", func(t *testing.T) {
+		f := newOverlayFixture(t, func(c *OverlayModeConfig) { c.L3VNI = 0 }).withVNI(t)
+
+		require.NoError(t, f.handler.RemoveVNI(context.Background(), ovlL2VNI))
+
+		assert.Empty(t, f.speaker.addedPrefixes())
+		assert.Empty(t, f.speaker.deletedPrefixes())
+	})
+
+	t.Run("removing the VNI withdraws its subnet once", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.handler.AddVNI(context.Background(), ovlL2VNI+1, ovlVLAN+1))
+
+		require.NoError(t, f.handler.RemoveVNI(context.Background(), ovlL2VNI))
+		assert.Equal(t, originated, f.speaker.deletedPrefixes(), "withdrawn while the IP-VRF has another VNI")
+
+		require.NoError(t, f.handler.RemoveVNI(context.Background(), ovlL2VNI+1))
+		assert.Equal(t, originated, f.speaker.deletedPrefixes(), "not withdrawn again with the last VNI")
+	})
+
+	t.Run("stop withdraws the subnet", func(t *testing.T) {
+		f := newStoppedOverlay(t, nil)
+		require.NoError(t, f.handler.Start(context.Background()))
+		f.withVNI(t)
+
+		require.NoError(t, f.handler.Stop(context.Background()))
+
+		assert.Equal(t, originated, f.speaker.deletedPrefixes())
+	})
+
+	t.Run("an origination EVPN refuses removes the VNI again", func(t *testing.T) {
+		f := newOverlayFixture(t, nil)
+		f.speaker.refuseRoutes(bgp.EVPNTypeIPPrefix, errSwitchDown)
+
+		err := f.handler.AddVNI(context.Background(), ovlL2VNI, ovlVLAN)
+
+		assertVNIFailed(t, err, "originate")
+		assert.ErrorIs(t, err, errSwitchDown)
+		assert.Equal(t, ovlBaseTable, f.sw.table())
+		assert.Zero(t, f.handler.GetStatus().VNICount)
+		assert.Contains(t, f.speaker.deletedTypes(), bgp.EVPNTypeInclusiveMulticast, "the VNI left EVPN")
+		f.speaker.refuseRoutes(bgp.EVPNTypeIPPrefix, nil)
+		require.NoError(t, f.handler.AddVNI(context.Background(), ovlL2VNI, ovlVLAN), "the VNI can be added again")
+		assert.Equal(t, originated, f.speaker.addedPrefixes())
+	})
+
+	t.Run("a refused withdrawal is reported and the VNI still leaves", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		f.speaker.refuseRoutes(bgp.EVPNTypeIPPrefix, errSwitchDown)
+
+		err := f.handler.RemoveVNI(context.Background(), ovlL2VNI)
+
+		assertVNIFailed(t, err, "withdraw")
+		assert.ErrorIs(t, err, errSwitchDown)
+		assert.Zero(t, f.handler.GetStatus().VNICount)
+		assert.Contains(t, f.speaker.deletedTypes(), bgp.EVPNTypeInclusiveMulticast)
+	})
 }
 
 func TestOverlayModeHandler_RemoveVNI(t *testing.T) {

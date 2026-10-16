@@ -815,6 +815,11 @@ func (b *overlayBackend) Start(ctx context.Context) error {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	// Symmetric IRB is on for the VNIs with a subnet; none bridges only.
+	gateways, anycastMAC, err := b.config.anycastGateways()
+	if err != nil {
+		return err
+	}
 	proxy := &overlayHandlerProxy{}
 	admitter, err := NewVTEPAdmitter(VTEPAdmissionConfig{
 		IPAM:             b.ipam,
@@ -839,10 +844,14 @@ func (b *overlayBackend) Start(ctx context.Context) error {
 			UnderlayMTU:   b.config.UnderlayMTU,
 			VXLANPort:     b.config.VXLANPort,
 		},
-		BridgeName: b.bridge,
-		AccessPort: b.config.AccessPort,
-		Admitter:   admitter,
-		Logger:     logger,
+		BridgeName:        b.bridge,
+		AccessPort:        b.config.AccessPort,
+		AnycastGateways:   gateways,
+		Subnets:           b.config.routedSubnets(),
+		AnycastGatewayMAC: anycastMAC,
+		L3VNI:             b.config.L3VNI,
+		Admitter:          admitter,
+		Logger:            logger,
 	}
 
 	speaker, evpnCfg, err := b.overlayEVPN(ctx, logger)
@@ -1020,23 +1029,32 @@ func (b *overlayBackend) overlayEVPN(ctx context.Context, logger *slog.Logger) (
 		Logger:     logger,
 		LocalVTEP:  b.config.LocalVTEP,
 		OverlayASN: uint16(b.config.OverlayASN),
+		RouterMAC:  b.config.routerMAC(),
 	}, nil
 }
 
 // overlayRRPeers copies the route-reflector peers for the overlay speaker and
 // fills each empty route-target allowlist with the route targets of the
-// configured VNIs. The speaker's RFC 8212 policy rejects every EVPN route an
-// allowlist does not name, so a peer configured without one would establish
-// and then carry no Type-2 or Type-3 route in that direction. Every VTEP
-// derives the same route target for a VNI (RFC 8365 §5.1.2.1), so the
-// default is the overlay's own; an allowlist the operator wrote is kept.
+// configured VNIs and, with an L3VNI, the route target of its IP-VRF. The
+// speaker's RFC 8212 policy rejects every EVPN route an allowlist does not
+// name, so a peer configured without one would establish and then carry no
+// Type-2, Type-3 or Type-5 route in that direction. Every VTEP derives the
+// same route target for a VNI (RFC 8365 §5.1.2.1), so the default is the
+// overlay's own; an allowlist the operator wrote is kept as written.
 func overlayRRPeers(cfg *OverlayServiceConfig) ([]bgp.NeighborConfig, error) {
 	if len(cfg.RRPeers) == 0 {
 		return nil, nil
 	}
-	routeTargets := make([]string, 0, len(cfg.VNIs))
+	vnis := make([]uint32, 0, len(cfg.VNIs)+1)
 	for _, v := range cfg.VNIs {
-		rt, err := bgp.AutoRouteTarget(uint16(cfg.OverlayASN), 0, v.VNI)
+		vnis = append(vnis, v.VNI)
+	}
+	if cfg.L3VNI != 0 {
+		vnis = append(vnis, cfg.L3VNI)
+	}
+	routeTargets := make([]string, 0, len(vnis))
+	for _, vni := range vnis {
+		rt, err := bgp.AutoRouteTarget(uint16(cfg.OverlayASN), 0, vni)
 		if err != nil {
 			return nil, err
 		}

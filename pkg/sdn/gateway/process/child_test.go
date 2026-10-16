@@ -49,7 +49,7 @@ type fakeStages struct {
 
 // testSeccompTable stands in for the native table, so the stage tests do
 // not depend on the architecture they run on.
-var testSeccompTable = seccompTable{arch: 1, denied: []uint32{2}, exec: []uint32{3}, clone: 4, clone3: 5}
+var testSeccompTable = seccompTable{arch: 1, denied: []uint32{2}, exec: []uint32{3}, clone: 4, clone3: 5, socket: 6, socketpair: 7}
 
 func newFakeStages() *fakeStages {
 	return &fakeStages{
@@ -177,9 +177,9 @@ func TestEnterHardened_SecondStageVerifiesEveryThreadAndRearms(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"seccomp", "pdeathsig"}, child.harden.calls,
 		"the second stage drops no credential; it confines syscalls, then re-arms")
-	want, err := seccompFilter(testSeccompTable, ClassParser)
+	want, err := seccompFilter(testSeccompTable, routing(t))
 	require.NoError(t, err)
-	assert.Equal(t, want, child.harden.filter, "the parser class's filter is the one installed")
+	assert.Equal(t, want, child.harden.filter, "the routing process's filter is the one installed")
 	assert.Zero(t, child.execs)
 }
 

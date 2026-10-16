@@ -301,7 +301,7 @@ Gateway-side, in `pkg/sdn/config.go`:
 | Type | Keys | Notes |
 |---|---|---|
 | `GatewayConfig` | `enabled` | Master switch |
-| `OverlayServiceConfig` | `enabled`, `local-vtep`, `underlay-interface`, `underlay-mtu`, `access-port`, `overlay-asn`, `rr-peers`, `vxlan-port`, `vnis`, `default-vni`, `max-vnis`, `verdict-max-age`, `verdict-clock-skew`, `admission-sweep-interval` | EVPN/VXLAN VTEP settings. `overlay-asn` must be a private 2-octet ASN (64512-65534). `vnis` (at least one, at most `max-vnis`) lists each L2VNI (1-16777215) with the access-port VLAN (1-4094) that carries it; no VNI or VLAN may repeat, and `default-vni` must be one of them. Start joins every one before the overlay counts as running, and it is healthy only while it carries all of them. The overlay's EVPN speaker is outbound-only: it dials each `rr-peers` entry from `local-vtep` and opens no listener beside the transit speaker on TCP 179, so a `passive` RR peer is refused. Peer policy is RFC 8212 reject-by-default, so an `rr-peers` entry whose `policy.import-route-targets` or `policy.export-route-targets` is empty gets, in that direction, the auto-derived route target of every configured VNI (`overlay-asn:` type 1, domain 0, VNI; RFC 8365 §5.1.2.1); an allowlist the operator wrote is kept as written. `verdict-max-age` (15m) bounds the age of the signed attestation verdict that admits a remote VTEP, `verdict-clock-skew` (30s) how far ahead of the gateway's clock that verdict may be dated, and `admission-sweep-interval` (30s) how often installed VTEPs are re-admitted; half of it bounds the platformd reads behind one sweep or one admission decision. Enabling the overlay beside the firewall, NAT or load balancer is refused ([§5a, In gatewayd](#in-gatewayd)). |
+| `OverlayServiceConfig` | `enabled`, `local-vtep`, `underlay-interface`, `underlay-mtu`, `access-port`, `overlay-asn`, `rr-peers`, `vxlan-port`, `vnis`, `default-vni`, `max-vnis`, `anycast-gateway-mac`, `l3vni`, `verdict-max-age`, `verdict-clock-skew`, `admission-sweep-interval` | EVPN/VXLAN VTEP settings. `overlay-asn` must be a private 2-octet ASN (64512-65534). `vnis` (at least one, at most `max-vnis`) lists each L2VNI (1-16777215) with the access-port VLAN (1-4094) that carries it; no VNI or VLAN may repeat, and `default-vni` must be one of them. A VNI with a `subnet` is routed through the anycast gateway `anycast-gateway-mac`, and `l3vni` turns on symmetric IRB between VTEPs ([In gatewayd](#in-gatewayd)). Start joins every one before the overlay counts as running, and it is healthy only while it carries all of them. The overlay's EVPN speaker is outbound-only: it dials each `rr-peers` entry from `local-vtep` and opens no listener beside the transit speaker on TCP 179, so a `passive` RR peer is refused. Peer policy is RFC 8212 reject-by-default, so an `rr-peers` entry whose `policy.import-route-targets` or `policy.export-route-targets` is empty gets, in that direction, the auto-derived route target of every configured VNI (`overlay-asn:` type 1, domain 0, VNI; RFC 8365 §5.1.2.1) and, with `l3vni`, of the L3VNI, the only route target a Type-5 route carries; an allowlist the operator wrote is kept as written, so it must name the L3VNI's route target itself for Type-5 routes to cross it. `verdict-max-age` (15m) bounds the age of the signed attestation verdict that admits a remote VTEP, `verdict-clock-skew` (30s) how far ahead of the gateway's clock that verdict may be dated, and `admission-sweep-interval` (30s) how often installed VTEPs are re-admitted; half of it bounds the platformd reads behind one sweep or one admission decision. Enabling the overlay beside the firewall, NAT or load balancer is refused ([§5a, In gatewayd](#in-gatewayd)). |
 | (transit) | none | Transit is the environment's x00 zone: its VLAN and subnet come from `sdn.environment` like every zone's, and transit point-to-point links take `/31`s from the `tunnel-p2p` IPAM range ([`../architecture/reference-network.md`](../architecture/reference-network.md)). There is no transit section |
 | `ManagementVPNConfig` | `enabled`, `type` (only `wireguard` is defined), `allow_to` | Administrators reach management endpoints through this tunnel so operator workstations are **never dual-homed onto a data zone**. Gateways should expose it by default. The section is refused today (#558, [`docs/vpn/`](../vpn/)). IPsec in FIPS builds, WireGuard only in non-FIPS builds |
 
@@ -788,6 +788,7 @@ A tunnel's `uplink:` names an entry of `routing-uplinks:`.
 | `wireguard` is `ErrTransportUnavailable` under the `fips` build tag, at validation and at create/rekey | `wireguard_fips.go` |
 | Uplink tables are 100–252; source rules at `priority` (default 1000), tunnel pins at `priority - 100` (clamped at 1); rules already in the kernel are adopted, not duplicated | `UplinkManager` |
 | A tunnel bound to an uplink is unbound before its interface is removed; a bind failure removes the tunnel just created | `Manager.EnsureTunnel`, `removeTunnelLocked` |
+| A GRE-transport link already in the kernel that matches its config exactly (kind, endpoints, key, TTL, MTU, up, exactly the tunnel addresses) is adopted, not recreated, so a relaunched datapath child does not drop the traffic it carries; any difference, and every IPsec or WireGuard tunnel (whose keys sit in kernel state the manager would have to read back to trust), is deleted and recreated | `Manager.adoptable`, `linkMatches` |
 
 The `backedServiceHandler` (#568) builds both managers from these sections and
 hands the tunnel manager the `HostRuntime` secret resolver as its
@@ -848,7 +849,7 @@ together with stateless NAT failover. Conntrack/NAT state sync is #710.
 
 | Type | What it is |
 |---|---|
-| `Class`, `Definition` | a privilege class (`ClassKernel`, `ClassParser`) and one process: name, class, hosted services, capabilities, `MemoryMax`, `CPUMax`, `Unprivileged`, `Supervised` |
+| `Class`, `Definition` | a privilege class (`ClassKernel`, `ClassParser`) and one process: name, class, hosted services, capabilities, `AddressFamilies`, `MemoryMax`, `CPUMax`, `Unprivileged`, `Supervised` |
 | `DefinitionForService`, `DefinitionByName`, `Definitions`, `Processes` | the class table's lookups; `Processes(enabled)` returns only the processes those services need, each carrying only the enabled ones |
 | `Supervisor` | implements `gateway.ServiceSupervisor`: `Supervises`, `StartService`, `StopService`, `ServiceActive`, `ServiceHealth`, `ServiceSnapshot`, `Apply`, plus `Snapshot` and `Shutdown` |
 | `Config`, `Settings` | the supervisor's wiring, and the `process:` YAML section that builds it |
@@ -912,10 +913,20 @@ withdraws every flow, route and rule it installed: a supervisor crash would
 take the forwarding plane down with it, which is the opposite of the
 invariant that the datapath survives a control-process restart. A killed
 child runs nothing, so its kernel state stays where it is. The successor
-supervisor's datapath child adopts it through the cookie-scoped reconcile
-(stale generations swept, nothing flushed), and a BGP peer sees the session
+supervisor's datapath child adopts it: the firewall, NAT, load-balancer and
+NAT64 flows through the cookie-scoped reconcile (stale generations swept,
+nothing flushed), `hostfw` by replacing its table in one netlink
+transaction, and a GRE-transport tunnel by keeping the link when it matches
+its config. Two parts still rebuild rather than reconcile: an IPsec or
+WireGuard tunnel is recreated, and the overlay installs its base flows
+behind a flush of its own cookie, so its segment and host flows are
+re-learned after a relaunch. A BGP peer sees the session
 drop without a Cease NOTIFICATION, so graceful restart keeps its routes for
-the restart time. A planned stop — `StopService`, `Shutdown`, an OpenRC
+the restart time. It can only keep the families the capability names: the
+speaker marks each enabled family's `MpGracefulRestart` on every peer when
+graceful restart is on, because GoBGP sends one tuple per such family, and a
+capability with no tuples preserves nothing
+(`TestSpeaker_PeerNamesEveryFamilyForGracefulRestart`). A planned stop — `StopService`, `Shutdown`, an OpenRC
 `stop` — still sends `SIGTERM` and gets the orderly withdrawal. The signal is
 asserted at clone time and at the re-arm
 (`TestExecLauncher_PassesTheClassPrivilegeAndTheChildArguments`,
@@ -970,8 +981,20 @@ a new, harmless call cannot take a service down.
 | process killed | any call from a foreign architecture (`seccomp_data.arch` is not the native one) |
 | `EPERM`, every class | module load and `kexec`, `reboot`, swap, `acct`, `quotactl`, `syslog`; `mount` and the new mount API, `pivot_root`, `chroot`; `unshare`, `setns`; `ptrace`, `process_vm_readv`/`writev`, `kcmp`, `pidfd_getfd`; `bpf`, `perf_event_open`, `userfaultfd`, the keyring calls, `io_uring_*`, `name_to_handle_at`/`open_by_handle_at`, `fanotify_init`; setting the clock, hostname or domain name; on x86-64 also `iopl`, `ioperm`, `modify_ldt`, `uselib` and every x32 call |
 | `EPERM`, parser class only | `execve`, `execveat` — the kernel class keeps them because `nat64` runs `jool` |
+| `EAFNOSUPPORT` | `socket` or `socketpair` in an address family outside the process's `AddressFamilies` |
 | `EPERM` | `clone` with any `CLONE_NEW*` namespace flag |
 | `ENOSYS` | `clone3`, whose flags sit behind a pointer the filter cannot read; Go and libc fall back to `clone`, whose flags it can |
+
+Address families are the one allow list. Each row of the class table carries
+`AddressFamilies`, and the filter compares `socket`'s and `socketpair`'s first
+argument against it: every process today opens `AF_UNIX` (its IPC),
+`AF_INET` and `AF_INET6` (its listeners and peers) and `AF_NETLINK` (the
+datapath's nftables, route, XFRM and WireGuard programming, and every
+process's interface lookups over `NETLINK_ROUTE`), and nothing else. No
+gateway process sends raw frames, so `AF_PACKET` is refused along with
+`AF_ALG`, `AF_VSOCK`, `AF_KEY` and the protocol families no service speaks
+(`TestClassTable_EveryProcessOpensOnlyServiceFamilies`). The refusal is
+`EAFNOSUPPORT`, the answer of a kernel built without the family.
 
 A denied call fails with `EPERM` rather than killing the child, so a library
 probing for a feature degrades instead of crashing the service. The tables
@@ -1233,7 +1256,8 @@ no OVS runtime and dials no OVSDB
 keeps it to re-send to a relaunched child, and records the state the child
 reports. The only way into the datapath child from another process is
 `DatapathService` on its socket, which `SO_PEERCRED` admits for the supervisor
-and the service account the parsers share. No parser process programs the
+and, for the VPN peer methods only, the service account the parsers share;
+`ApplyDesired` is the supervisor's alone. No parser process programs the
 kernel in-process: their backends (the BGP speaker, the proxy, the
 provisioning refusals) use no netlink and no OVS.
 
@@ -1264,8 +1288,9 @@ with `SetStartError` and stays readable over `Status`, so the supervisor
 reports why (`ErrServiceNotActiveInProcess` with the detail) rather than a
 socket that never appeared. The child's IPC policy admits the supervisor's uid
 to the control service; only the kernel-class process also admits the service
-account to `DatapathService`, so one parser cannot reach another's surface
-though they share an account.
+account, and only to `InstallVPNPeer` and `RemoveVPNPeer`, so one parser cannot
+reach another's surface though they share an account, and no parser can send
+the datapath a desired document.
 
 **Readable as the service account.** The child reads the gatewayd
 configuration — and, for the processes that build them, the `secret-store:`
@@ -1345,8 +1370,15 @@ because a cgroup holding processes cannot enable controllers for its children.
 
 The bound is `DefaultRestartBackoff` plus the suite's `ready-timeout` (10s).
 The requirement names no recovery deadline, so this bound is the suite's
-choice, not a documented contract. One part of the acceptance is not proven
-here: **BGP graceful restart**, because the suite has no BGP peer. Reconciled
+choice, not a documented contract. **BGP graceful restart** is not proven
+here, because this suite has no BGP peer. It has its own test instead:
+`TestBGPGracefulRestart_UpstreamKeepsTheGatewaysRoutes`
+(`make integration-test-sdn`) runs the platform speaker against a GoBGP
+upstream over loopback. It closes the speaker's session without a
+NOTIFICATION, the way a killed routing child does. It then finds the
+announced prefix still in the upstream's RIB, marked stale, and refreshed by
+the successor's session. With graceful restart off, the control case finds
+the prefix withdrawn. Reconciled
 flows are proven for the load balancer only; the other datapath services need
 zone networks the suite does not configure, and their restart path is the
 same generation sweep (unit-tested in
@@ -1382,14 +1414,17 @@ DatapathService         ApplyDesired(ApplyDesiredRequest) -> ApplyDesiredRespons
 | `Client` | `Status`, `Snapshot`, `ApplyDesired`, `InstallVPNPeer`, `RemoveVPNPeer`, `Close` |
 | `Node` | what the server drives: `GetState`, `ServiceReports`, `Snapshot`, `Apply`, `DesiredConfigState` — `*gateway.Gateway` satisfies it |
 | `VPNPlanes` | the VPN data plane host the peer RPCs reach: `InstallVPNPeer`, `RemoveVPNPeer` — `*vpn.PlaneHost` satisfies it |
-| `Policy` | `ControlUIDs` / `DatapathUIDs`; empty means uid 0 only |
+| `Policy` | `ControlUIDs` (every method) / `DatapathUIDs` (the VPN peer methods); empty means uid 0 only |
 
 Authentication is `SO_PEERCRED` and nothing else, through
 `pkg/util/peercred` (moved there from `pkg/api/grpc` so both platformd's Unix
 transport and this IPC share one implementation). The transport credentials
 require peer credentials, the required interceptor puts them in the context,
-and `Policy.unaryInterceptor` admits per service; an unknown service is
-`ErrUnknownService`, so the table fails closed.
+and `Policy.unaryInterceptor` admits per method (`methodAdmissions`, keyed by
+the full gRPC method); a method the table does not name is
+`ErrUnknownService`, so the table fails closed, and
+`TestPolicy_EveryContractMethodIsPlaced` fails a method added to `ipc.proto`
+without an entry.
 
 `Listen` removes a **stale socket file** (a crashed child's) and refuses to
 replace anything that is not a socket, then chmods to the requested mode.
@@ -1405,7 +1440,7 @@ as a `VPNPeerRefusal` whose class names the `vpn` error it came from, so the
 caller rebuilds the same typed error; an unknown class reads as unavailable.
 Until `SetVPNPlanes` is called, both RPCs are refused unavailable ("this
 process hosts no VPN data plane"). They are `DatapathService` methods, so the
-existing per-service `Policy` governs them.
+per-method `Policy` admits the parser class to them.
 
 ### The conntrack stage classifies tagged ingress only (open question)
 
@@ -1739,7 +1774,7 @@ underlay MTU below `vxlan.MinimumUnderlayMTU`, the 9000-byte
 | 0 | Ingress | everything → 10 |
 | 10 | VXLAN decap | access ingress (VLAN → VNI); decap authorisation; every other tunnelled frame dropped |
 | 20–29 | Services | NAT64 (firewall, NAT and load balancer are refused beside the overlay); miss → 30 |
-| 30 | MAC | anycast MAC from the access port, or router MAC on the L3VNI → 50; anycast MAC from a VTEP → drop; known MAC → its VTEP or 70; miss → 40 |
+| 30 | MAC | anycast MAC from the access port on a routed VNI, or router MAC on the L3VNI → 50; anycast MAC from a VTEP → drop; known MAC → its VTEP or 70; miss → 40 |
 | 40 | ARP / ND | ARP replies in the switch; ND punts to the controller ([ND suppression](#nd-suppression)); miss → 60 |
 | 50 | L3 | host and prefix routes (symmetric IRB); miss → drop |
 | 60 | Egress | flood: the access port, then every VTEP on the VNI; miss → drop |
@@ -1812,9 +1847,11 @@ the fabric, and a local one never back to the access port.
 by a table-40 flow that rewrites the request into the reply and sends it back
 out `IN_PORT`. Unanswered ARP floods like other BUM traffic.
 
-**Symmetric IRB:** with `AnycastGatewayIP`/`AnycastGatewayMAC`, every VTEP is
-the same gateway, and frames from the access port to the anycast MAC go to
-table 50. A tunnelled frame to the anycast MAC is dropped: its ingress VTEP
+**Symmetric IRB:** with `AnycastGateways`/`AnycastGatewayMAC`, every VTEP is
+the same gateway: on each L2VNI with an entry it answers ARP for that VNI's
+gateway IP with the shared anycast MAC, and frames from the access port to the
+anycast MAC on that VNI go to table 50. A VNI without an entry gets neither,
+nor host routes: it is bridged only. A tunnelled frame to the anycast MAC is dropped: its ingress VTEP
 routes it, so it never needs this one's gateway, and routing it here would let
 any VTEP authorised on an L2VNI reach table 50 without the L3VNI's decap
 authorisation.
@@ -1976,8 +2013,8 @@ Overlay status reports `NDSuppression`:
 
 | Handler call | EVPN action |
 |---|---|
-| `AddVNI(vni, vlan)` | segment flows installed, then `JoinVNI(vni, L3VNI)`: the Type-3 route is originated and the routes already received are replayed. A refused join removes the segment again |
-| `RemoveVNI(vni)` | `LeaveVNI(vni)`, then everything on the VNI is removed — and the Type-5 prefixes with the last VNI |
+| `AddVNI(vni, vlan)` | segment flows installed, then `JoinVNI(vni, L3VNI)`: the Type-3 route is originated and the routes already received are replayed. With an L3VNI, the VNI's subnet is then originated as a Type-5 route (`AdvertisePrefix`). A refused join or origination removes the segment again |
+| `RemoveVNI(vni)` | `WithdrawPrefix` for the VNI's subnet, `LeaveVNI(vni)`, then everything on the VNI is removed — and the Type-5 prefixes with the last VNI |
 | `LearnMAC(vni, mac, ip)` | local delivery flows installed, then `AdvertiseMACIP`. A failed advertisement leaves the flows; learning again retries it |
 | `ForgetMAC(vni, mac)` | local flows removed, then `WithdrawMACIP` for each binding. A withdrawal BGP refuses fails the call and is remembered; forgetting the MAC again retries it until BGP takes it, and `RemoveVNI` or `Stop` withdraws it with the VNI. Learning the binding again drops it |
 | imported route change | the registered handler installs or removes the flows above |
@@ -2021,7 +2058,7 @@ held rather than deleting the flow.
 | `EVPNConfig` | EVPN manager; nil bridges local hosts only |
 | `BridgeName`, `AccessPort` | the bridge, and the port carrying the VNIs as VLANs |
 | `ARPSuppression` | answer ARP for every known binding |
-| `AnycastGatewayIP`, `AnycastGatewayMAC` | both or neither; turns on routing |
+| `AnycastGateways`, `AnycastGatewayMAC` | both or neither; turns on routing. `AnycastGateways` maps an L2VNI to the IPv4 gateway answered for on that VNI's segment; the MAC is shared by every VNI and every VTEP. Routing is per VNI: only a VNI with an entry gets host routes and has its access frames for the gateway MAC enter routing, so a VNI without one is bridged only, even beside routed VNIs |
 | `L3VNI` | the IP-VRF of symmetric IRB; needs the anycast gateway and `EVPNConfig.RouterMAC` |
 | `Admitter` | vets remote VTEPs; required with `EVPNConfig` (`ErrAdmitterNil`) |
 
@@ -2036,7 +2073,11 @@ of the table-0, 10, 20, 30, 40, 50, 60 and 70 miss entries.
 
 With RR peers the overlay runs its own outbound-only BGP speaker in the
 overlay ASN, dialling each route reflector from `local-vtep`; an RR peer with
-no route-target allowlist gets the route target of every configured VNI. The
+no route-target allowlist in a direction gets, in that direction, the route
+target of every configured VNI and, with `l3vni`, of the L3VNI, so the Type-5
+routes this VTEP originates and those it receives pass the reject-by-default
+policy. An allowlist the operator wrote is kept as written and must name the
+L3VNI's route target itself. The
 speaker, its policy and why it cannot share the transit speaker are in
 [BGP architecture](../bgp/architecture.md) and
 [BGP engineering](../bgp/engineering.md#5-configuration).
@@ -2050,7 +2091,10 @@ VTEPs. NAT64 hands off through tables 20-29 and may run beside it.
 | Field | Default | Meaning |
 |-------|---------|---------|
 | `overlay-asn` | required | private 2-octet ASN (64512-65534); the auto-derived route targets carry it in a 2-octet field |
-| `vnis` | required | the L2VNIs joined at start: each `vni` (1-16777215) with the access-port `vlan` (1-4094) that carries it. At least one, at most `max-vnis`; no VNI or VLAN repeats |
+| `vnis` | required | the L2VNIs joined at start: each `vni` (1-16777215) with the access-port `vlan` (1-4094) that carries it, and an optional `subnet`. At least one, at most `max-vnis`; no VNI or VLAN repeats |
+| `vnis[].subnet` | none | the VNI's IPv4 network (no host bits, room for a host address); no two subnets overlap. A VNI with one is routed: its anycast gateway is the subnet's first host address (`netplan.AnycastGateway`). A VNI without one is bridged only |
+| `anycast-gateway-mac` | none | the gateway MAC every VTEP answers with on every routed VNI. Required with any `subnet`, refused without one; unicast, non-zero, and outside `02:00:xx:xx:xx:xx` (the router MACs) |
+| `l3vni` | none | the IP-VRF of symmetric IRB (1-16777215), not one of `vnis`. Needs a routed VNI and `rr-peers`. The EVPN router MAC is derived: `02:00` followed by the four octets of `local-vtep` |
 | `default-vni` | none | must be one of `vnis` |
 | `verdict-max-age` | 15m | oldest attestation verdict that still admits a VTEP |
 | `verdict-clock-skew` | 30s | how far past the gateway's clock a verdict's attestation time may lie |
@@ -2066,11 +2110,22 @@ nothing is left half-running. The service is healthy only while the handler
 runs and carries every configured VNI: a running handler with no VNI forwards
 nothing, and used to report healthy anyway.
 
-The section sets no `AnycastGatewayIP`, `AnycastGatewayMAC` or `L3VNI` on the
-handler, and no EVPN router MAC: gatewayd's overlay bridges each L2VNI and
-does not route between them. There is no symmetric IRB, no local prefix is
-originated as a Type-5 route, and a received Type-5 route is ignored (it needs
-the L3VNI). Nor does gatewayd run the overlay's IPsec: the IKEv2 transport
+Symmetric IRB is configured by `vnis[].subnet`, `anycast-gateway-mac` and
+`l3vni`. Start hands the handler `AnycastGateways` (each routed VNI's
+`netplan.AnycastGateway`), `AnycastGatewayMAC` and `L3VNI`, and the EVPN
+manager the derived router MAC; the status, and so the snapshot, reports
+`AnycastGatewayConfigured` and `L3VNI`. Subnets with a MAC but no `l3vni`
+route between the hosts on this VTEP only; with `l3vni`, routes to hosts and
+prefixes behind other VTEPs come from their Type-2 and Type-5 routes. With
+none of the three the overlay bridges each L2VNI, as before. Routing is per
+VNI: a VNI without a `subnet` stays bridged beside routed ones, with no host
+route to its hosts and no gateway-MAC ingress from its VLAN. With `l3vni`, Start
+also hands the handler `Subnets`, and each routed VNI's `subnet` is originated
+as a Type-5 route in the IP-VRF once the VNI has joined; `RemoveVNI` and Stop
+withdraw it before the VNI leaves. A bridged VNI, or any VNI without `l3vni`,
+originates nothing. An origination EVPN refuses fails the start the way a
+refused join does, as an `*ErrVNIOperationFailed` with operation `originate`,
+with the VNI left again and nothing left running. Nor does gatewayd run the overlay's IPsec: the IKEv2 transport
 ([architecture](architecture.md#the-overlays-ipsec-transport-packaging-709))
 is platformd's `sdn.overlay.ipsec` alone, so VXLAN to or from a gatewayd VTEP
 is only as confidential as the underlay (#709).

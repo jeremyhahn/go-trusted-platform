@@ -22,7 +22,7 @@ single flow-based VXLAN port.
 | **Decap Authorisation** | a tunnelled frame is accepted only from a VTEP EVPN places on its VNI |
 | **BUM Handling** | ingress replication to the VTEPs of the VNI, from Type-3 routes |
 | **ARP/ND Suppression** | A flow answers ARP for known IPv4 bindings. An IPv6 NS for a known target is punted to a packet-in controller, answered with a proxy NA and not flooded (RFC 9161). Unknown targets and DAD probes flood. Fail mode: the punts expire 12 s after a crash, are removed on stop, and are withdrawn on any meter or queue drop, so the NS floods ([ND fail mode](../../gateway/engineering.md#fail-mode)) |
-| **Symmetric IRB** | anycast gateway on every VTEP; routed traffic crosses the L3VNI. The overlay handler implements it, but no configuration sets the anycast gateway or L3VNI yet, so gatewayd's overlay bridges only ([In gatewayd](../../gateway/engineering.md#in-gatewayd), #709) |
+| **Symmetric IRB** | anycast gateway on every VTEP; routed traffic crosses the L3VNI. In gatewayd, a VNI with a `subnet` is routed (its gateway is the subnet's first host address, answered for with `anycast-gateway-mac`), and `l3vni` routes between VTEPs over EVPN, originating each routed subnet as a Type-5 route; a VNI without a subnet is bridged only ([In gatewayd](../../gateway/engineering.md#in-gatewayd)) |
 | **VNI Numbering** | overlay network n of environment E is VNI E·100000+n ([reference network](../../architecture/reference-network.md)) |
 
 ## Architecture Overview

@@ -234,12 +234,19 @@ type OverlayModeConfig struct {
 	// switch, not only for the anycast gateway.
 	ARPSuppression bool
 
-	// AnycastGatewayIP is the distributed anycast gateway's IPv4 address;
-	// with AnycastGatewayMAC it turns on routing.
-	AnycastGatewayIP netip.Addr
+	// AnycastGateways maps an L2VNI to the IPv4 address of its distributed
+	// anycast gateway, answered for on that VNI's segment; with
+	// AnycastGatewayMAC it turns on routing. A VNI without an entry is
+	// bridged and routed only by hosts that know another gateway.
+	AnycastGateways map[uint32]netip.Addr
 
-	// AnycastGatewayMAC is the distributed anycast gateway MAC.
-	// This MAC is shared across all nodes for seamless L3 routing.
+	// Subnets maps a routed L2VNI to its IPv4 subnet, which holds the
+	// VNI's anycast gateway. With L3VNI, each is originated as a Type-5
+	// route in the IP-VRF while its VNI is joined.
+	Subnets map[uint32]netip.Prefix
+
+	// AnycastGatewayMAC is the distributed anycast gateway MAC, shared by
+	// every VNI's gateway and by every VTEP.
 	AnycastGatewayMAC net.HardwareAddr
 
 	// L3VNI is the IP-VRF of symmetric IRB; zero routes between local
@@ -283,9 +290,28 @@ func (c *OverlayModeConfig) Validate() error {
 	if c.EVPNConfig != nil && c.Admitter == nil {
 		return ErrAdmitterNil
 	}
-	anycast := c.AnycastGatewayIP.IsValid() || c.AnycastGatewayMAC != nil
-	if anycast && (!c.AnycastGatewayIP.Is4() || len(c.AnycastGatewayMAC) != 6) {
+	anycast := len(c.AnycastGateways) > 0 || c.AnycastGatewayMAC != nil
+	if anycast && (len(c.AnycastGateways) == 0 || len(c.AnycastGatewayMAC) != 6) {
 		return ErrAnycastGatewayIncomplete
+	}
+	for vni, ip := range c.AnycastGateways {
+		if err := validateOverlayVNI(vni); err != nil {
+			return err
+		}
+		if !ip.Is4() {
+			return ErrAnycastGatewayIncomplete
+		}
+	}
+	seen := make(map[netip.Prefix]struct{}, len(c.Subnets))
+	for vni, subnet := range c.Subnets {
+		gateway, ok := c.AnycastGateways[vni]
+		if !ok || !subnet.Addr().Is4() || subnet != subnet.Masked() || !subnet.Contains(gateway) {
+			return ErrRoutedSubnetInvalid
+		}
+		if _, repeated := seen[subnet]; repeated {
+			return ErrRoutedSubnetInvalid
+		}
+		seen[subnet] = struct{}{}
 	}
 	if c.L3VNI == 0 {
 		return nil
@@ -782,7 +808,53 @@ func (h *OverlayModeHandler) AddVNI(ctx context.Context, vni uint32, vlan uint16
 		h.mu.Unlock()
 		return &ErrVNIOperationFailed{VNI: vni, Operation: "join", Cause: err}
 	}
+	if err := h.originateSubnet(ctx, vni); err != nil {
+		if leaveErr := h.leaveVNI(ctx, vni); leaveErr != nil {
+			h.logger.Error("leaving a VNI whose subnet EVPN refused", slog.Uint64("vni", uint64(vni)), slog.Any("error", leaveErr))
+		}
+		h.mu.Lock()
+		if removeErr := h.removeSegment(ctx, vni); removeErr != nil {
+			h.logger.Error("removing a VNI whose subnet EVPN refused", slog.Uint64("vni", uint64(vni)), slog.Any("error", removeErr))
+		}
+		h.mu.Unlock()
+		return &ErrVNIOperationFailed{VNI: vni, Operation: "originate", Cause: err}
+	}
 	return nil
+}
+
+// originatedSubnet is the subnet vni originates as a Type-5 route: only a
+// routed VNI does, and only with an L3VNI.
+func (h *OverlayModeHandler) originatedSubnet(vni uint32) (netip.Prefix, bool) {
+	if h.config.L3VNI == 0 {
+		return netip.Prefix{}, false
+	}
+	subnet, ok := h.config.Subnets[vni]
+	return subnet, ok
+}
+
+// originateSubnet advertises vni's subnet in the IP-VRF of the L3VNI.
+func (h *OverlayModeHandler) originateSubnet(ctx context.Context, vni uint32) error {
+	subnet, ok := h.originatedSubnet(vni)
+	if !ok {
+		return nil
+	}
+	return h.evpnManager.AdvertisePrefix(ctx, h.config.L3VNI, subnet)
+}
+
+// withdrawSubnet withdraws the Type-5 route originateSubnet advertised for
+// vni; a subnet that is not advertised is no error.
+func (h *OverlayModeHandler) withdrawSubnet(ctx context.Context, vni uint32) error {
+	subnet, ok := h.originatedSubnet(vni)
+	if !ok {
+		return nil
+	}
+	err := h.evpnManager.WithdrawPrefix(ctx, h.config.L3VNI, subnet)
+	var notJoined bgp.ErrVNINotJoined
+	var notFound bgp.ErrPrefixNotFound
+	if err == nil || errors.As(err, &notJoined) || errors.As(err, &notFound) {
+		return nil
+	}
+	return &ErrVNIOperationFailed{VNI: vni, Operation: "withdraw", Cause: err}
 }
 
 // RemoveVNI takes this VTEP off an L2VNI and removes everything forwarded
@@ -821,18 +893,20 @@ func (h *OverlayModeHandler) RemoveVNI(ctx context.Context, vni uint32) error {
 }
 
 // leaveVNI takes this VTEP off a VNI in EVPN, which withdraws the VNI's
-// routes, those whose withdrawal BGP refused before included. A VNI
+// routes, those whose withdrawal BGP refused before included, and first
+// the Type-5 route of its subnet. A VNI
 // already left — by a removal whose flows the switch then refused — is not
 // an error, so the removal can be retried and Stop still completes.
 // Caller holds opMu.
 func (h *OverlayModeHandler) leaveVNI(ctx context.Context, vni uint32) error {
+	withdrawErr := h.withdrawSubnet(ctx, vni)
 	err := h.evpnManager.LeaveVNI(ctx, vni)
 	var notJoined bgp.ErrVNINotJoined
 	if err == nil || errors.As(err, &notJoined) {
 		maps.DeleteFunc(h.unwithdrawn, func(key hostKey, _ map[netip.Addr]struct{}) bool { return key.vni == vni })
-		return nil
+		return withdrawErr
 	}
-	return &ErrVNIOperationFailed{VNI: vni, Operation: "leave", Cause: err}
+	return errors.Join(withdrawErr, &ErrVNIOperationFailed{VNI: vni, Operation: "leave", Cause: err})
 }
 
 // removeSegment removes a VNI's flows and hosts, and the prefixes with
@@ -1055,7 +1129,7 @@ func (h *OverlayModeHandler) GetStatus() *OverlayModeStatus {
 		L3VNI:                    h.config.L3VNI,
 		ARPSuppressionEnabled:    h.config.ARPSuppression,
 		NDSuppression:            h.ndStatus(),
-		AnycastGatewayConfigured: h.config.AnycastGatewayIP.IsValid(),
+		AnycastGatewayConfigured: len(h.config.AnycastGateways) > 0,
 	}
 	vteps := make(map[netip.Addr]struct{})
 	for _, segment := range h.segments {

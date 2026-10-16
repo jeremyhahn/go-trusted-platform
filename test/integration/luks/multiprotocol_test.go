@@ -166,6 +166,30 @@ func runLUKSScenario(t *testing.T, ctx context.Context, cmd LUKSCommands, loop *
 		}
 	})
 
+	// A PIN-required FIDO2 keyslot is refused on every transport until the
+	// SDK ships a PIN-capable handler (#584), and nothing is written.
+	t.Run("EnrollFIDO2RequirePIN", func(t *testing.T) {
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		before, beforeErr := cmd.ListSlots(cctx, &lukssdk.ListSlotsRequest{Device: device})
+		_, err := cmd.EnrollFIDO2(cctx, &lukssdk.EnrollFIDO2Request{
+			Device:             device,
+			ExistingPassphrase: initialPassphrase,
+			CredentialID:       "multiprotocol-cred",
+			RequirePIN:         true,
+		})
+		if err == nil {
+			t.Fatal("EnrollFIDO2 with RequirePIN succeeded; want the PIN refusal")
+		}
+		if !isPINRefusal(err) && !isBackendUnavailable(err) {
+			t.Fatalf("unexpected EnrollFIDO2 error: %v", err)
+		}
+		after, afterErr := cmd.ListSlots(cctx, &lukssdk.ListSlotsRequest{Device: device})
+		if beforeErr == nil && afterErr == nil && len(after.Slots) != len(before.Slots) {
+			t.Errorf("keyslots changed across a refused enrolment: before %v, after %v", before.Slots, after.Slots)
+		}
+	})
+
 	t.Run("TestUnlock", func(t *testing.T) {
 		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()

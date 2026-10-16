@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	sdktenant "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/tenant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -124,6 +125,8 @@ func TestToQuotaSummary_NilQuotas(t *testing.T) {
 	assert.Equal(t, int64(0), summary.Storage.MaxVolumesGB)
 }
 
+// TestToUsageSummary: each used value sits beside the quota of the same
+// resource, and storage in use is the disk usage in GB.
 func TestToUsageSummary(t *testing.T) {
 	tenant := &sdktenant.Tenant{
 		ID: "t1",
@@ -132,27 +135,33 @@ func TestToUsageSummary(t *testing.T) {
 			MaxVCPUs: 400,
 		},
 		NetworkQuota: &sdktenant.NetworkQuota{
-			MaxBridges: 10,
+			MaxBridges:       10,
+			MaxBandwidthMbps: 1000,
 		},
 		StorageQuota: &sdktenant.StorageQuota{
 			MaxVolumesGB: 500,
 		},
 	}
+	usage := &platformv1.TenantUsage{TenantId: "t1", Vms: 3, Vcpus: 12, Bridges: 2, BandwidthMbps: 250, Volumes: 4, DiskGb: 80}
 
-	summary := toUsageSummary("t1", tenant)
+	summary := toUsageSummary(tenant, usage)
 	require.NotNil(t, summary)
 	assert.Equal(t, "t1", summary.TenantID)
-	assert.Equal(t, int64(0), summary.Compute.VMs.Used)
-	assert.Equal(t, int64(100), summary.Compute.VMs.Max)
-	assert.Equal(t, int64(0), summary.Network.Bridges.Used)
-	assert.Equal(t, int64(10), summary.Network.Bridges.Max)
+	assert.Equal(t, UsageItem{Used: 3, Max: 100}, summary.Compute.VMs)
+	assert.Equal(t, UsageItem{Used: 12, Max: 400}, summary.Compute.VCPUs)
+	assert.Equal(t, UsageItem{Used: 2, Max: 10}, summary.Network.Bridges)
+	assert.Equal(t, UsageItem{Used: 250, Max: 1000}, summary.Network.BandwidthMbps)
+	assert.Equal(t, UsageItem{Used: 80, Max: 500}, summary.Storage.VolumesGB, "GB in use against the GB quota, not the volume count")
 }
 
-func TestToUsageSummary_NilQuotas(t *testing.T) {
-	tenant := &sdktenant.Tenant{ID: "t1"}
-	summary := toUsageSummary("t1", tenant)
+// TestToUsageSummary_NilQuotasAndUsage: a tenant with no quotas and no usage
+// reported gives zeros, not a panic.
+func TestToUsageSummary_NilQuotasAndUsage(t *testing.T) {
+	summary := toUsageSummary(&sdktenant.Tenant{ID: "t1"}, nil)
 	require.NotNil(t, summary)
-	assert.Equal(t, int64(0), summary.Compute.VMs.Max)
+	assert.Equal(t, "t1", summary.TenantID)
+	assert.Equal(t, UsageItem{}, summary.Compute.VMs)
+	assert.Equal(t, UsageItem{}, summary.Storage.Snapshots)
 }
 
 func TestTenantSummaryStruct(t *testing.T) {

@@ -50,8 +50,8 @@ func TestNewCommand(t *testing.T) {
 
 	// Check that all subcommands are added
 	expectedSubcommands := []string{
-		"list", "show", "create", "delete",
-		"suspend", "resume", "quotas", "usage",
+		"list", "show", "create", "update", "delete",
+		"suspend", "resume", "quotas", "usage", "sync",
 	}
 
 	for _, expected := range expectedSubcommands {

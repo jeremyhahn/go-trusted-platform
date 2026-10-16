@@ -49,6 +49,12 @@ var ErrLUKSRootRequired = errors.New("luks: operation requires root privileges")
 // error quotes the offending input and the body may hold a passphrase.
 var ErrLUKSMalformedBody = errors.New("luks: malformed request body")
 
+// ErrLUKSFIDO2PINUnsupported refuses a FIDO2 enrolment that asks for a PIN.
+// The go-quicbaas SDK fido2 re-export offers only the PIN-less handler, so a
+// "PIN-required" keyslot would be protected by user presence alone. The
+// refusal stands until the SDK seam for a PIN-capable handler ships (#584).
+var ErrLUKSFIDO2PINUnsupported = errors.New("luks: fido2 require-pin is refused: the SDK has no PIN-capable fido2 handler yet (SDK seam #584)")
+
 // LUKSKeyType enumerates the LUKS2 keyslot backends.
 type LUKSKeyType string
 
@@ -304,6 +310,10 @@ func (s *LUKSService) EnrollPassphrase(ctx context.Context, req *LUKSEnrollPassp
 
 // EnrollFIDO2 adds a FIDO2 slot. Requires root.
 func (s *LUKSService) EnrollFIDO2(ctx context.Context, req *LUKSEnrollFIDO2Request) (*LUKSEnrollFIDO2Result, error) {
+	// Refused before anything else: no caller can get a PIN-required slot.
+	if req != nil && req.RequirePIN {
+		return nil, ErrLUKSFIDO2PINUnsupported
+	}
 	if err := s.requireRoot(); err != nil {
 		return nil, err
 	}

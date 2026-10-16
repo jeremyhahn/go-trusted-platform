@@ -162,6 +162,18 @@ func TestClassTable_OnlyTheKernelClassKeepsNetAdmin(t *testing.T) {
 	assert.Equal(t, 1, kernel, "exactly one process programs the kernel")
 }
 
+func TestClassTable_EveryProcessOpensOnlyServiceFamilies(t *testing.T) {
+	for _, def := range Definitions() {
+		// A process with no families could not reach its own supervisor.
+		assert.Containsf(t, def.AddressFamilies, uint32(unix.AF_UNIX),
+			"process %q needs AF_UNIX for its IPC", def.Name)
+		for _, family := range []uint32{unix.AF_PACKET, unix.AF_ALG, unix.AF_VSOCK, unix.AF_KEY} {
+			assert.NotContainsf(t, def.AddressFamilies, family,
+				"process %q opens no family %d socket", def.Name, family)
+		}
+	}
+}
+
 func TestProcesses_OnlyTheNeededOnesWithOnlyTheEnabledServices(t *testing.T) {
 	defs, err := Processes([]string{gateway.ServiceNAT, gateway.ServiceProxy, gateway.ServiceFirewall})
 	require.NoError(t, err)

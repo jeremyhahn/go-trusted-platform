@@ -19,10 +19,12 @@ import "golang.org/x/sys/unix"
 // second-ABI bit to deny.
 func nativeSeccompTable() (seccompTable, error) {
 	return seccompTable{
-		arch:   unix.AUDIT_ARCH_AARCH64,
-		denied: deniedSyscalls,
-		exec:   execSyscalls,
-		clone:  unix.SYS_CLONE,
-		clone3: unix.SYS_CLONE3,
+		arch:       unix.AUDIT_ARCH_AARCH64,
+		denied:     deniedSyscalls,
+		exec:       execSyscalls,
+		clone:      unix.SYS_CLONE,
+		clone3:     unix.SYS_CLONE3,
+		socket:     unix.SYS_SOCKET,
+		socketpair: unix.SYS_SOCKETPAIR,
 	}, nil
 }

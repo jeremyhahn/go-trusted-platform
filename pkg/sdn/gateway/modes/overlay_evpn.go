@@ -521,8 +521,13 @@ func (h *OverlayModeHandler) conflict(entry *bgp.MACIPEntry) string {
 	if slices.Equal(entry.MAC, h.config.AnycastGatewayMAC) {
 		return "anycast gateway MAC"
 	}
-	if entry.IP.IsValid() && entry.IP == h.config.AnycastGatewayIP {
-		return "anycast gateway IP"
+	if !entry.IP.IsValid() {
+		return ""
+	}
+	for _, gateway := range h.config.AnycastGateways {
+		if entry.IP == gateway {
+			return "anycast gateway IP"
+		}
 	}
 	return ""
 }

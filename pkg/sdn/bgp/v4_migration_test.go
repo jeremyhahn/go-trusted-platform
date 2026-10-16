@@ -413,6 +413,51 @@ func TestSpeaker_PeerCarriesPolicyBFDAndPrefixLimit(t *testing.T) {
 	assert.True(t, peer.GracefulRestart.Enabled)
 }
 
+// Graceful restart preserves only the families named in the capability, and
+// GoBGP names a family only when its MpGracefulRestart is enabled: without
+// it the peer advertises GR yet flushes every route on a restart.
+func TestSpeaker_PeerNamesEveryFamilyForGracefulRestart(t *testing.T) {
+	cfg := baseConfig()
+	_, mock := startedSpeaker(t, cfg)
+	sp, err := NewSpeaker(cfg, speakerTestLogger(), WithBGPServer(mock))
+	require.NoError(t, err)
+
+	peer := sp.neighborConfigToPeer(&NeighborConfig{
+		Address:         netip.MustParseAddr("10.255.0.2"),
+		ASN:             64512,
+		EnabledFamilies: []AddressFamily{AFamilyIPv4Unicast, AFamilyIPv6Unicast, AFamilyEVPN},
+	})
+
+	require.NotNil(t, peer.GracefulRestart)
+	require.Len(t, peer.AfiSafis, 3)
+	for _, as := range peer.AfiSafis {
+		require.NotNil(t, as.MpGracefulRestart, "family %v", as.Config.Family)
+		require.NotNil(t, as.MpGracefulRestart.Config, "family %v", as.Config.Family)
+		assert.True(t, as.MpGracefulRestart.Config.Enabled, "family %v", as.Config.Family)
+	}
+}
+
+func TestSpeaker_PeerNamesNoFamilyWithGracefulRestartOff(t *testing.T) {
+	cfg := baseConfig()
+	off := false
+	cfg.GracefulRestart = &off
+	_, mock := startedSpeaker(t, cfg)
+	sp, err := NewSpeaker(cfg, speakerTestLogger(), WithBGPServer(mock))
+	require.NoError(t, err)
+
+	peer := sp.neighborConfigToPeer(&NeighborConfig{
+		Address:         netip.MustParseAddr("10.255.0.2"),
+		ASN:             64512,
+		EnabledFamilies: []AddressFamily{AFamilyIPv4Unicast, AFamilyIPv6Unicast},
+	})
+
+	assert.Nil(t, peer.GracefulRestart)
+	require.Len(t, peer.AfiSafis, 2)
+	for _, as := range peer.AfiSafis {
+		assert.Nil(t, as.MpGracefulRestart, "family %v", as.Config.Family)
+	}
+}
+
 func TestSpeaker_TCPAOPeerIsRefusedUntilGoBGPBindsIt(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Keychains = []TCPAOKeychainConfig{{Name: "vps", Keys: []TCPAOKeyConfig{{SendID: 1, ReceiveID: 1, MasterKey: []byte("k")}}}}

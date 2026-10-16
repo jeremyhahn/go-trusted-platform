@@ -368,11 +368,15 @@ that is not unprivileged: it keeps uid 0 with exactly `CAP_NET_ADMIN` and
 `CAP_NET_RAW`, the capabilities its kernel programming needs. Every child,
 whatever its class, also runs under a seccomp filter that denies the kernel
 surface no gateway service uses (module load, mounts, namespaces, `ptrace`,
-`bpf`, `io_uring`, the keyring); a parser is additionally denied `execve`,
-which the datapath keeps because `nat64` runs `jool`. If the supervisor
+`bpf`, `io_uring`, the keyring) and refuses a socket outside the process's
+address families (`AF_UNIX`, `AF_INET`, `AF_INET6`, `AF_NETLINK`; never
+`AF_PACKET`); a parser is additionally denied `execve`, which the datapath
+keeps because `nat64` runs `jool`. If the supervisor
 itself dies, the kernel kills every child (`SIGKILL`, not `SIGTERM`), so the
 datapath never runs its withdraw path: its flows stay in place for the
-successor's cookie-scoped reconcile, while a planned stop still withdraws them.
+successor to adopt (cookie-scoped reconcile for the flow tables, a matching
+GRE tunnel kept; see [engineering.md](engineering.md)), while a planned stop
+still withdraws them.
 Only the
 management VPN, which has no backend yet, keeps its in-process handler. The
 order still to come is `vpn` once it has a backend;
@@ -413,7 +417,8 @@ cannot be forged.
 | Service | Method | Who may call it |
 |---|---|---|
 | `ProcessControlService` | `Status`, `Snapshot` | the supervisor's uid (root) |
-| `DatapathService` | `ApplyDesired`, `InstallVPNPeer`, `RemoveVPNPeer` | the supervisor, plus — on the kernel-class process only — the parser class's unprivileged uid; a parser process admits no other parser |
+| `DatapathService` | `ApplyDesired` | the supervisor's uid alone: it replaces the whole desired document, firewall included |
+| `DatapathService` | `InstallVPNPeer`, `RemoveVPNPeer` | the supervisor, plus — on the kernel-class process only — the parser class's unprivileged uid; a parser process admits no other parser |
 
 The two VPN peer RPCs are the VPN `DataPlane` seam carried across the socket
 (`docs/vpn/architecture.md`): the datapath child owns the WireGuard (`!fips`)
@@ -431,9 +436,12 @@ kernel-class child stays root but keeps only `CAP_NET_ADMIN` and `CAP_NET_RAW`
 and is not in the service group, so it could not chown the socket itself.
 
 The supervisor is root and the parser class runs unprivileged, so the uid is
-the whole authorization question. `Policy` is the per-service uid table; an RPC for a service it does not know is
+the whole authorization question. `Policy` is the per-method uid table; an RPC for a method it does not name is
 refused (`ErrUnknownService`), so the policy fails closed rather than defaulting
-to allow. Structured documents ride as JSON inside the messages:
+to allow. The table is per method, not per service, because the parsers'
+surface on the datapath is narrow (R14): a parser that is compromised can
+install or remove a VPN peer it was leased, and cannot send a desired document
+that rewrites the firewall, NAT or tunnels. Structured documents ride as JSON inside the messages:
 `gwstate.Snapshot` and `gwstate.DesiredConfig` are already the schema the
 control plane, the reporter and the reconciler share, and both ends of the
 socket are the same binary — redeclaring them in proto would be a second schema
@@ -502,8 +510,8 @@ into gatewayd is #596):
   is not wired into gatewayd yet (#596)**: no handler builds it today.
 - **Overlay segments**, which include the public address block (`public` is
   an overlay, not a VLAN) — the **EVPN distributed anycast gateway** (RFC 9135)
-  the overlay pipeline already programs per VNI in
-  `pkg/sdn/gateway/modes/overlay.go` (`installAnycastGatewayFlows`): every
+  the overlay pipeline programs per VNI in
+  `pkg/sdn/gateway/modes/overlay_flows.go` (`flowBuilder.segment`): every
   gateway answers for the segment's gateway MAC/IP locally, so there is no
   election to run.
 

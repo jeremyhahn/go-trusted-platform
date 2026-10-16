@@ -15,7 +15,6 @@ package ipc
 
 import (
 	"context"
-	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -25,15 +24,42 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 )
 
-// Policy names the kernel-verified uids each IPC service admits. The
+// Policy names the kernel-verified uids each IPC method admits. The
 // supervisor is root, so ControlUIDs is {0} unless a test says otherwise;
-// DatapathUIDs additionally admits the parser processes' uid so they can
-// reach the kernel-programming process over its narrow surface.
+// DatapathUIDs additionally admits the parser processes' uid to the
+// kernel-programming process's narrow surface: the VPN peer RPCs, never
+// ApplyDesired, which replaces the whole desired document and is the
+// supervisor's alone.
 type Policy struct {
-	// ControlUIDs may call ProcessControlService. Empty means uid 0 only.
+	// ControlUIDs may call every method. Empty means uid 0 only.
 	ControlUIDs []uint32
-	// DatapathUIDs may call DatapathService in addition to ControlUIDs.
+	// DatapathUIDs may call the parser-facing DatapathService methods in
+	// addition to ControlUIDs.
 	DatapathUIDs []uint32
+}
+
+// admission decides whether a kernel-verified uid may call one method.
+type admission func(p Policy, uid uint32) bool
+
+// supervisorOnly admits the control uids alone.
+func supervisorOnly(p Policy, uid uint32) bool {
+	return admits(p.ControlUIDs, uid)
+}
+
+// supervisorOrParser admits the control uids and the parser class's uid.
+func supervisorOrParser(p Policy, uid uint32) bool {
+	return admits(p.ControlUIDs, uid) || admits(p.DatapathUIDs, uid)
+}
+
+// methodAdmissions is the authorization table, keyed by the full gRPC
+// method. A method it does not name is refused (ErrUnknownService), so a
+// method added to the contract is closed until it is placed here.
+var methodAdmissions = map[string]admission{
+	ipcv1.ProcessControlService_Status_FullMethodName:   supervisorOnly,
+	ipcv1.ProcessControlService_Snapshot_FullMethodName: supervisorOnly,
+	ipcv1.DatapathService_ApplyDesired_FullMethodName:   supervisorOnly,
+	ipcv1.DatapathService_InstallVPNPeer_FullMethodName: supervisorOrParser,
+	ipcv1.DatapathService_RemoveVPNPeer_FullMethodName:  supervisorOrParser,
 }
 
 // admits reports whether uid is in the list, treating an empty list as
@@ -50,32 +76,17 @@ func admits(uids []uint32, uid uint32) bool {
 	return false
 }
 
-// serviceOf extracts the fully qualified service name from a gRPC method
+// admit applies the authorization table to one full gRPC method
 // ("/pkg.Service/Method").
-func serviceOf(fullMethod string) string {
-	trimmed := strings.TrimPrefix(fullMethod, "/")
-	if i := strings.IndexByte(trimmed, '/'); i >= 0 {
-		return trimmed[:i]
+func (p Policy) admit(method string, creds peercred.UnixCredentials) error {
+	allowed, ok := methodAdmissions[method]
+	if !ok {
+		return &ErrUnknownService{Method: method}
 	}
-	return trimmed
-}
-
-// admit is the per-service authorization table, keyed by fully qualified
-// service name.
-func (p Policy) admit(service string, creds peercred.UnixCredentials) error {
-	switch service {
-	case ipcv1.ProcessControlService_ServiceDesc.ServiceName:
-		if admits(p.ControlUIDs, creds.UID) {
-			return nil
-		}
-	case ipcv1.DatapathService_ServiceDesc.ServiceName:
-		if admits(p.ControlUIDs, creds.UID) || admits(p.DatapathUIDs, creds.UID) {
-			return nil
-		}
-	default:
-		return &ErrUnknownService{Method: service}
+	if allowed(p, creds.UID) {
+		return nil
 	}
-	return &ErrPeerDenied{Service: service, UID: creds.UID, PID: creds.PID}
+	return &ErrPeerDenied{Method: method, UID: creds.UID, PID: creds.PID}
 }
 
 // unaryInterceptor enforces the policy on every unary RPC. It runs after
@@ -87,7 +98,7 @@ func (p Policy) unaryInterceptor() grpc.UnaryServerInterceptor {
 		if !ok {
 			return nil, status.Error(codes.Unauthenticated, peercred.ErrCredentialsNotInContext{}.Error())
 		}
-		if err := p.admit(serviceOf(info.FullMethod), creds); err != nil {
+		if err := p.admit(info.FullMethod, creds); err != nil {
 			return nil, status.Error(codes.PermissionDenied, err.Error())
 		}
 		return handler(ctx, req)

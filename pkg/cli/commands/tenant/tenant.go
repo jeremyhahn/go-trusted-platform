@@ -67,12 +67,14 @@ Examples:
 	cmd.AddCommand(NewListCommand(getFlags))
 	cmd.AddCommand(NewShowCommand(getFlags))
 	cmd.AddCommand(NewCreateCommand(getFlags))
+	cmd.AddCommand(NewUpdateCommand(getFlags))
 	cmd.AddCommand(NewDeleteCommand(getFlags))
 	cmd.AddCommand(NewSuspendCommand(getFlags))
 	cmd.AddCommand(NewResumeCommand(getFlags))
 	cmd.AddCommand(NewQuotasCommand(getFlags))
 	cmd.AddCommand(NewUsageCommand(getFlags))
 	cmd.AddCommand(NewBarrierCommand(getFlags))
+	cmd.AddCommand(NewSyncCommand(getFlags))
 
 	return cmd
 }

@@ -55,6 +55,10 @@ type Definition struct {
 	// at exec and the only ones left in its bounding set afterwards.
 	// Everything else is dropped.
 	Capabilities []uintptr
+	// AddressFamilies are the socket(2) families the process may open. The
+	// seccomp filter fails a socket or socketpair in any other family with
+	// EAFNOSUPPORT, so an empty list refuses every socket.
+	AddressFamilies []uint32
 	// MemoryMax is the cgroup v2 memory.max in bytes; 0 leaves it unset.
 	MemoryMax int64
 	// CPUMax is the cgroup v2 cpu.max value ("200000 100000" is two cores);
@@ -69,6 +73,15 @@ type Definition struct {
 	// does, its services keep running inside the supervisor's own process.
 	Supervised bool
 }
+
+// serviceFamilies are the address families every gateway process opens:
+// AF_UNIX for the supervisor and datapath IPC, AF_INET and AF_INET6 for its
+// listeners and peers, and AF_NETLINK, over which the datapath programs
+// nftables, routes, XFRM and WireGuard and every process's net package reads
+// interfaces and addresses (NETLINK_ROUTE). No gateway process opens
+// AF_PACKET: none sends raw frames (the ARP prober and the FHRP announcer
+// run in platformd).
+var serviceFamilies = []uint32{unix.AF_UNIX, unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK}
 
 // definitions is the process table. It is the one place a service's class,
 // capabilities and limits are decided; the supervisor, the child command and
@@ -91,9 +104,10 @@ var definitions = []Definition{
 			gateway.ServiceTunnels,
 			gateway.ServiceOverlay,
 		},
-		Capabilities: []uintptr{unix.CAP_NET_ADMIN, unix.CAP_NET_RAW},
-		MemoryMax:    512 << 20,
-		CPUMax:       "200000 100000",
+		Capabilities:    []uintptr{unix.CAP_NET_ADMIN, unix.CAP_NET_RAW},
+		AddressFamilies: serviceFamilies,
+		MemoryMax:       512 << 20,
+		CPUMax:          "200000 100000",
 		// Last to move: the one supervised process that is not unprivileged.
 		// It keeps exactly the two capabilities the kernel needs from it,
 		// holds the OVS runtime, and is reached by parser children only
@@ -101,50 +115,54 @@ var definitions = []Definition{
 		Supervised: true,
 	},
 	{
-		Name:         "routing",
-		Class:        ClassParser,
-		Services:     []string{gateway.ServiceTransit},
-		Capabilities: []uintptr{unix.CAP_NET_BIND_SERVICE},
-		MemoryMax:    512 << 20,
-		CPUMax:       "100000 100000",
-		Unprivileged: true,
+		Name:            "routing",
+		Class:           ClassParser,
+		Services:        []string{gateway.ServiceTransit},
+		Capabilities:    []uintptr{unix.CAP_NET_BIND_SERVICE},
+		AddressFamilies: serviceFamilies,
+		MemoryMax:       512 << 20,
+		CPUMax:          "100000 100000",
+		Unprivileged:    true,
 		// First to move: the smallest privilege set of the processes that
 		// have a backend (one capability, no kernel programming), and BGP
 		// is the most exposed untrusted parser gatewayd runs.
 		Supervised: true,
 	},
 	{
-		Name:         "proxy",
-		Class:        ClassParser,
-		Services:     []string{gateway.ServiceProxy},
-		Capabilities: []uintptr{unix.CAP_NET_BIND_SERVICE},
-		MemoryMax:    1 << 30,
-		CPUMax:       "200000 100000",
-		Unprivileged: true,
+		Name:            "proxy",
+		Class:           ClassParser,
+		Services:        []string{gateway.ServiceProxy},
+		Capabilities:    []uintptr{unix.CAP_NET_BIND_SERVICE},
+		AddressFamilies: serviceFamilies,
+		MemoryMax:       1 << 30,
+		CPUMax:          "200000 100000",
+		Unprivileged:    true,
 		// Second to move: the same one capability, and the next most
 		// exposed parser — it terminates TLS from the internet.
 		Supervised: true,
 	},
 	{
-		Name:         "provisioning",
-		Class:        ClassParser,
-		Services:     []string{gateway.ServiceDHCP, gateway.ServicePXE, gateway.ServiceEdge},
-		Capabilities: []uintptr{unix.CAP_NET_BIND_SERVICE},
-		MemoryMax:    256 << 20,
-		CPUMax:       "100000 100000",
-		Unprivileged: true,
+		Name:            "provisioning",
+		Class:           ClassParser,
+		Services:        []string{gateway.ServiceDHCP, gateway.ServicePXE, gateway.ServiceEdge},
+		Capabilities:    []uintptr{unix.CAP_NET_BIND_SERVICE},
+		AddressFamilies: serviceFamilies,
+		MemoryMax:       256 << 20,
+		CPUMax:          "100000 100000",
+		Unprivileged:    true,
 		// Third to move: one capability, for the privileged ports it
 		// answers on (DHCP 67, TFTP 69, PXE over HTTP 80), and every
 		// request it parses comes from a device not yet trusted.
 		Supervised: true,
 	},
 	{
-		Name:         "vpn",
-		Class:        ClassParser,
-		Services:     []string{gateway.ServiceManagementVPN},
-		MemoryMax:    256 << 20,
-		CPUMax:       "100000 100000",
-		Unprivileged: true,
+		Name:            "vpn",
+		Class:           ClassParser,
+		Services:        []string{gateway.ServiceManagementVPN},
+		AddressFamilies: serviceFamilies,
+		MemoryMax:       256 << 20,
+		CPUMax:          "100000 100000",
+		Unprivileged:    true,
 	},
 }
 

@@ -52,7 +52,7 @@ func luksSDKCalls(device string) []sdkCall {
 		{platformv1.LUKSService_EnrollFIDO2_FullMethodName,
 			&platformv1.LUKSEnrollFIDO2Request{
 				Device: device, ExistingPassphrase: luksTestExisting, CredentialId: "cred-1",
-				RequirePin: true, RequireUv: true,
+				RequireUv: true,
 			}, &platformv1.LUKSEnrollFIDO2Response{}},
 		{platformv1.LUKSService_EnrollTPM_FullMethodName,
 			&platformv1.LUKSEnrollTPMRequest{

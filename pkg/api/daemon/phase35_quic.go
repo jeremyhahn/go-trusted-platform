@@ -65,6 +65,10 @@ func errResponseFrom(err error) *quicwire.Response {
 		return &quicwire.Response{Status: quicwire.StatusUnavailable, Payload: []byte(err.Error())}
 	case errors.Is(err, ErrLUKSRootRequired):
 		return &quicwire.Response{Status: quicwire.StatusPermissionDenied}
+	case errors.Is(err, ErrLUKSFIDO2PINUnsupported):
+		// The message names the missing SDK seam, so the client can tell
+		// this refusal from a malformed request.
+		return &quicwire.Response{Status: quicwire.StatusInvalidArgument, Payload: []byte(err.Error())}
 	case errors.Is(err, ErrCeremonyOfficerRequired),
 		errors.Is(err, ErrCeremonyChallengeRequired),
 		errors.Is(err, ErrCeremonyCSRRequired),

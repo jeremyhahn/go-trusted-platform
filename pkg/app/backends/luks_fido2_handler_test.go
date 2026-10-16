@@ -41,6 +41,9 @@ type stubXKMSFIDO2Handler struct {
 	// blockUntil, when non-nil, causes UnlockWithKey to block on the
 	// channel before returning. Tests use it to exercise ctx cancellation.
 	blockUntil chan struct{}
+	// lastUV records RequireUserVerification from the last UnlockWithKey,
+	// so tests can see what the derivation actually enforced.
+	lastUV bool
 }
 
 // newStubXKMSFIDO2Handler returns a stub seeded with the supplied bytes.
@@ -59,6 +62,7 @@ func (s *stubXKMSFIDO2Handler) EnrollKey(_ *fido2.EnrollmentConfig) (*fido2.Enro
 
 func (s *stubXKMSFIDO2Handler) UnlockWithKey(cfg *fido2.AuthenticationConfig) ([]byte, error) {
 	s.calls++
+	s.lastUV = cfg.RequireUserVerification
 	if s.blockUntil != nil {
 		<-s.blockUntil
 	}
@@ -161,6 +165,53 @@ func TestLUKSFIDO2Handler_EnrollCredential_ReturnsKeyOnly(t *testing.T) {
 	}
 	if len(key) != 32 {
 		t.Fatalf("key length = %d, want 32", len(key))
+	}
+}
+
+// The token records only the verification the derivation enforced: UV when
+// asked for it, nothing otherwise.
+func TestLUKSFIDO2Handler_DeriveEnroll_RecordsEnforcedUV(t *testing.T) {
+	credID := hex.EncodeToString([]byte("uv-credential"))
+	for _, requireUV := range []bool{true, false} {
+		stub := newStubXKMSFIDO2Handler(nil)
+		h, _ := NewLUKSFIDO2Handler(nil, stub, "example.com")
+
+		res, err := h.DeriveEnroll(context.Background(), credID, false, requireUV)
+		if err != nil {
+			t.Fatalf("DeriveEnroll(requireUV=%v): %v", requireUV, err)
+		}
+		if stub.lastUV != requireUV {
+			t.Errorf("derive RequireUserVerification = %v, want %v", stub.lastUV, requireUV)
+		}
+		var tok fido2LUKSToken
+		if err := json.Unmarshal(res.TokenJSON, &tok); err != nil {
+			t.Fatalf("unmarshal token: %v", err)
+		}
+		if tok.UPRequired != requireUV {
+			t.Errorf("token UPRequired = %v, want %v", tok.UPRequired, requireUV)
+		}
+	}
+}
+
+// A PIN-required enrolment is refused on both entry points before the
+// authenticator is touched, whatever requireUV says.
+func TestLUKSFIDO2Handler_RequirePINRefused(t *testing.T) {
+	credID := hex.EncodeToString([]byte("pin-credential"))
+	for _, requireUV := range []bool{true, false} {
+		stub := newStubXKMSFIDO2Handler(nil)
+		h, _ := NewLUKSFIDO2Handler(nil, stub, "example.com")
+
+		res, err := h.DeriveEnroll(context.Background(), credID, true, requireUV)
+		if !errors.Is(err, ErrLUKSFIDO2PINUnsupported) || res != nil {
+			t.Fatalf("DeriveEnroll(requireUV=%v) = %v, %v; want ErrLUKSFIDO2PINUnsupported", requireUV, res, err)
+		}
+		key, err := h.EnrollCredential(context.Background(), credID, true, requireUV)
+		if !errors.Is(err, ErrLUKSFIDO2PINUnsupported) || key != nil {
+			t.Fatalf("EnrollCredential(requireUV=%v) = %x, %v; want ErrLUKSFIDO2PINUnsupported", requireUV, key, err)
+		}
+		if stub.calls != 0 {
+			t.Errorf("authenticator called %d times, want 0", stub.calls)
+		}
 	}
 }
 

@@ -97,9 +97,9 @@ type overlayPorts struct {
 type flowBuilder struct {
 	ports overlayPorts
 
-	// anycastIP and anycastMAC are the distributed gateway; invalid and
-	// nil when routing is off.
-	anycastIP  netip.Addr
+	// anycastIPs, per L2VNI, and anycastMAC are the distributed gateway;
+	// empty and nil when routing is off.
+	anycastIPs map[uint32]netip.Addr
 	anycastMAC net.HardwareAddr
 
 	// l3vni and routerMAC are the IP-VRF of symmetric IRB; zero and nil
@@ -133,7 +133,7 @@ func newFlowBuilder(cfg *OverlayModeConfig, ports overlayPorts) (*flowBuilder, e
 	}
 	b := &flowBuilder{
 		ports:          ports,
-		anycastIP:      cfg.AnycastGatewayIP,
+		anycastIPs:     cfg.AnycastGateways,
 		anycastMAC:     cfg.AnycastGatewayMAC,
 		l3vni:          cfg.L3VNI,
 		arpSuppression: cfg.ARPSuppression,
@@ -156,9 +156,11 @@ func newFlowBuilder(cfg *OverlayModeConfig, ports overlayPorts) (*flowBuilder, e
 	return b, nil
 }
 
-// routing reports whether the anycast gateway routes between segments.
-func (b *flowBuilder) routing() bool {
-	return b.anycastIP.IsValid()
+// routes reports whether vni is routed. Only a VNI with an anycast gateway
+// is, so a bridge-only VNI beside routed ones stays bridged.
+func (b *flowBuilder) routes(vni uint32) bool {
+	_, ok := b.anycastIPs[vni]
+	return ok
 }
 
 // flow builds one overlay flow; a nil match matches everything and no
@@ -181,8 +183,9 @@ func (b *flowBuilder) flow(table uint8, priority uint16, match *openflow.Match, 
 //	0   → 10
 //	10  tunnelled and not authorised → drop; otherwise → 30
 //	20  (the services' conntrack gate) miss → 30
-//	30  gateway MAC from access, or router MAC on the L3VNI → 50;
-//	    gateway MAC from a VTEP → drop; miss → 40
+//	30  router MAC on the L3VNI → 50 (and, from segment, the gateway MAC
+//	    from access on a routed VNI); gateway MAC from a VTEP → drop;
+//	    miss → 40
 //	40  a DAD probe from access → 60, outranking every ND punt; miss → 60
 //	50  miss → drop: a routed frame without a route
 //	60  miss → drop: a frame with no segment to flood in
@@ -209,16 +212,13 @@ func (b *flowBuilder) base() []*openflow.FlowMod {
 		b.flow(TableLocalDelivery, priorityMiss, nil,
 			openflow.NewInstructionApplyActions(openflow.NewActionOutput(b.ports.access, 0))),
 	}
-	if b.routing() {
-		toGateway := openflow.NewMatch()
-		toGateway.AddInPort(b.ports.access)
-		toGateway.AddEthDst(b.anycastMAC)
+	if b.anycastMAC != nil {
+		// Every VTEP answers for the gateway itself, so a frame for it that
+		// arrives tunnelled is dropped on whichever VNI carries it.
 		tunnelledToGateway := openflow.NewMatch()
 		tunnelledToGateway.AddInPort(b.ports.vxlan)
 		tunnelledToGateway.AddEthDst(b.anycastMAC)
-		flows = append(flows,
-			b.flow(TableMACLearning, priorityRouterMAC, toGateway, openflow.NewInstructionGotoTable(TableL3Routing)),
-			b.flow(TableMACLearning, priorityRemoteGateway, tunnelledToGateway))
+		flows = append(flows, b.flow(TableMACLearning, priorityRemoteGateway, tunnelledToGateway))
 	}
 	if b.l3vni != 0 {
 		toRouter := openflow.NewMatch()
@@ -259,8 +259,15 @@ func (b *flowBuilder) segment(vni uint32, s *overlaySegment) []*openflow.FlowMod
 			openflow.NewInstructionGotoTable(TableCTGate)),
 		b.flow(TableEgress, priorityFlood, onSegment, openflow.NewInstructionApplyActions(flood...)),
 	}
-	if b.routing() {
-		flows = append(flows, b.arpReply(vni, s.vlan, b.anycastIP, b.anycastMAC))
+	if gateway, ok := b.anycastIPs[vni]; ok {
+		// Only a routed VNI's frames for the gateway MAC enter routing.
+		toGateway := openflow.NewMatch()
+		toGateway.AddInPort(b.ports.access)
+		toGateway.AddTunnelID(uint64(vni))
+		toGateway.AddEthDst(b.anycastMAC)
+		flows = append(flows,
+			b.flow(TableMACLearning, priorityRouterMAC, toGateway, openflow.NewInstructionGotoTable(TableL3Routing)),
+			b.arpReply(vni, s.vlan, gateway, b.anycastMAC))
 	}
 	for _, vtep := range s.flood {
 		flows = append(flows, b.decapAllow(vni, vtep))
@@ -357,7 +364,7 @@ func (b *flowBuilder) solicitation() *openflow.Match {
 }
 
 // host is the flows of one MAC on vni: bridging to it, the ARP replies for
-// its IPv4 bindings and, when routing, a host route to each. A local host
+// its IPv4 bindings and, on a routed VNI, a host route to each. A local host
 // is reached on the access port, a remote one through its VTEP.
 func (b *flowBuilder) host(vni uint32, vlan uint16, h *overlayHost) []*openflow.FlowMod {
 	toMAC := openflow.NewMatch()
@@ -383,7 +390,7 @@ func (b *flowBuilder) host(vni uint32, vlan uint16, h *overlayHost) []*openflow.
 		if b.arpSuppression {
 			flows = append(flows, b.arpReply(vni, vlan, ip, h.mac))
 		}
-		if !b.routing() {
+		if !b.routes(vni) {
 			continue
 		}
 		if h.local() {
