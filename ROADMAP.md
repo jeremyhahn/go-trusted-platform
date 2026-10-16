@@ -1,6 +1,6 @@
 # go-trusted-platform roadmap
 
-> **Status: REFERENCE** · Owner: Software Department · Last verified: 2026-10-15
+> **Status: REFERENCE** · Owner: Software Department · Last verified: 2026-10-16
 > The one roadmap of this repository. [docs/SPEC.md](docs/SPEC.md) specifies the features; this file orders them and names each by its SPEC table name. The issue tracker is the backlog. Older plans are in `docs/archive/`.
 
 ## Mission
@@ -53,9 +53,9 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **daemon** — MCP refuses anonymous enumeration and every tool has a permission — [#412](../../issues/412) — open
 - **installer** — root seal on `luks-root` and offline unseal from the `.tpmpolicy` binding record — [#720](../../issues/720) — blocked: waits on the go-quicbaas tag that carries go-xkms#1443 step 3
 - **luks** — the LUKS service on a real backend — [#647](../../issues/647) — open
-- **sdn** — `pkg/sdn/policy` folded into one of the two engines (access → go-qrdb ABAC through the SDK, evidence → OPA) — [docs/sdn/](docs/sdn/) — open
-- **security** — Rego policies held in the datastore and served through the go-quicbaas SDK, with the embedded set as the floor; ruled option A: go-qrdb ABAC answers every access question, OPA every evidence question including image admission and workload compliance — [docs/security/](docs/security/) — open
-- **security** — OPA behind one build tag, so a binary that evaluates no evidence omits it (as the NBD build tag) — [docs/security/](docs/security/) — open
+- **policy-engines** — `pkg/sdn/policy` folded into one of the two engines (access → go-qrdb ABAC through the SDK, evidence → OPA) — [docs/sdn/](docs/sdn/) — open
+- **policy-engines** — Rego policies held in the datastore and served through the go-quicbaas SDK, with the embedded set as the floor; ruled option A: go-qrdb ABAC answers every access question, OPA every evidence question including image admission and workload compliance — [docs/security/](docs/security/) — open
+- **policy-engines** — OPA behind one build tag, so a binary that evaluates no evidence omits it (as the NBD build tag) — [docs/security/](docs/security/) — open
 - **tenant** — tenant VRFs and the platform-services VRF — [#721](../../issues/721) — blocked: waits on #709
 
 ## Later
@@ -63,8 +63,6 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **remote-deploy** — remote agent deploy over QUIC, replacing SSH — [#54](../../issues/54) — open
 - **pi-node-roles** — control-plane, compute and gateway templates for raspberrypi — [Raspberry Pi templates](configs/platform/templates/dedicated/raspberrypi/README.md) — open
 - **ha-raft-template** — the three-node control plane — [configs/platform/templates/README.md](configs/platform/templates/README.md) — open
-- **standards-watch** — draft-ietf-rats-corim-11 pinned; a new revision or its RFC updates `docs/reference/rats/` and the code — [docs/reference/rats/](docs/reference/rats/) — pinned -11
-- **standards-watch** — draft-ietf-lamps-csr-attestation-29 pinned; a new revision or its RFC updates `docs/reference/rats/` and the code — [docs/reference/rats/](docs/reference/rats/) — pinned -29
 
 ## Future
 - **dht** — trusted DHT for the public peer-to-peer hosting platform; design only — [docs/dht/](docs/dht/) — open
@@ -77,4 +75,6 @@ The trusted-computing platform product and control plane: provisioning, node and
 - Upstream go-quicbaas: pinned v0.12.0-alpha; needed the tag that carries [go-xkms#1443](../../../go-xkms/issues/1443) step 3, [go-xkms#1442](../../../go-xkms/issues/1442) and the [go-quicbaas#1171](../../../go-quicbaas/issues/1171) re-exports (#720, #682, #688), [go-quicbaas#1150](../../../go-quicbaas/issues/1150) (#175, #232, #412), and the release that composes trusted-firmware's `xkms` adapter after [trusted-firmware#28](../../../trusted-firmware/issues/28) phases B and C (#771, #772).
 - Upstream go-qrdb: an arm64 release, reached through go-quicbaas, for Pi control-plane nodes.
 - Upstream go-luks2: pinned v0.2.0-alpha; needed v1.0.0-rc.2 (#746).
+- Standards watch: draft-ietf-rats-corim-11, pinned at revision -11, implemented in `pkg/attestation/`; a new revision or its RFC updates [docs/reference/rats/](docs/reference/rats/) and the code.
+- Standards watch: draft-ietf-lamps-csr-attestation-29, pinned at revision -29, implemented in `pkg/attestation/` and the enrollment paths (`pkg/device/`, `pkg/webservice/v1/device/`, `pkg/api/daemon/`, `pkg/installer/`, `pkg/firstboot/`); a new revision or its RFC updates [docs/reference/rats/](docs/reference/rats/) and the code.
 - Downstream: the go-recountly deployment, the automatethethings.com launch and the P1 staging run wait on Dev complete.

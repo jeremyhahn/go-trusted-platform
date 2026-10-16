@@ -1,6 +1,6 @@
 # go-trusted-platform specification
 
-> **Status: NORMATIVE** · Scope: the whole repository · Last verified: 2026-10-15
+> **Status: NORMATIVE** · Scope: the whole repository · Last verified: 2026-10-16
 > Conflicts with this document are defects. Fix them here first.
 > [ROADMAP.md](../ROADMAP.md) orders the work this file specifies; the two agree feature for feature.
 
@@ -81,6 +81,7 @@ Status is exactly one of `shipped`, `in progress`, `planned`, `future`. A featur
 | avr-attestation | shipped | Attest trusted-firmware AVR devices through the AVR attestation provider. Provider only: it reaches the devices through the go-quicbaas SDK, which composes trusted-firmware's `xkms` adapter into go-xkms as a hardware crypto implementation; the platform imports no trusted-firmware module. See [avr-attestation](firmware/avr-attestation.md). | [docs/firmware/](firmware/) |
 | sdk-javascript | shipped | Provide the TypeScript SDK (`trusted-platform-sdk`, `sdk/javascript`) for web applications; the control panel consumes the platform through it. | none |
 | device-enrollment | in progress | Own AVR device enrollment, the device registry and fleet policy. Reach AVR and the other trusted-firmware devices only through the go-quicbaas SDK, which composes trusted-firmware's `xkms` adapter into go-xkms as a hardware crypto implementation; the platform imports no trusted-firmware module and blank-imports no device adapter. Collect the DICE evidence through that SDK and verify it through the go-quicbaas SDK's DICE evidence verification (not yet published; go-quicbaas row: none yet), re-exported from go-xkms, which verifies it. The HAL-ported MCU boards from trusted-firmware (RP2350, ESP32-C6, nRF54L15, STM32H5) enroll as device classes. | none |
+| policy-engines | in progress | Fold the platform's policy decisions into the two engines: access questions to go-qrdb ABAC through the go-quicbaas SDK, evidence questions to OPA (attestation, image admission, workload compliance), including `pkg/sdn/policy`; Rego held in the datastore with the embedded set as the floor; OPA behind one build tag. | [docs/security/](security/) |
 | volume | planned | Add a go-blockstore volume adapter and configuration on go-qrdb's volume pools, reached through the go-quicbaas SDK, with no coordinator of the platform's own, and the trust and workload wiring: a volume-mount attestation gate, container volumes, live migration and NFS root. | none |
 | remote-deploy | planned | Deploy the remote agent over QUIC, replacing SSH, FIPS-native. | none |
 | pi-node-roles | planned | Provide control-plane, compute and gateway templates for raspberrypi: rpi4 first, rpi5 experimental, the 3B+ as standalone compute only if its 1 GB proves enough. Pi control-plane nodes depend on a go-qrdb arm64 release. | none |
