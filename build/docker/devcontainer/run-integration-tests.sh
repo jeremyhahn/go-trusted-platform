@@ -34,6 +34,9 @@
 
 set -uo pipefail
 
+# shellcheck source=build/docker/devcontainer/swtpm-provision.sh
+source "$(dirname "${BASH_SOURCE[0]}")/swtpm-provision.sh"
+
 # Known target keywords mapped to their Go test package paths. A single-word
 # first argument matching a key here selects that target; anything else is
 # treated as the legacy BUILD_TAGS argument.
@@ -443,9 +446,12 @@ start_swtpm() {
     rm -rf /tmp/swtpm
     mkdir -p /tmp/swtpm
 
-    # Initialize TPM state
-    if command -v swtpm_setup > /dev/null 2>&1; then
-        swtpm_setup --tpm2 --tpmstate /tmp/swtpm --overwrite --pcr-banks sha256
+    # Provision it like shipped hardware, with an EK and an EK certificate.
+    # A TPM without an EK sends platformd down its recovery path, which no
+    # real node takes, so the run stops here rather than test that.
+    if ! provision_swtpm_state /tmp/swtpm; then
+        echo "FATAL: the harness swtpm has no EK and EK certificate; platformd cannot run on it"
+        exit 1
     fi
 
     # Start swtpm daemon
@@ -579,8 +585,7 @@ prepare_gatewayd_supervision() {
     mkdir -p "${root}/init"
     # A process forked while the list is moved lands back in the root, so
     # the move repeats until enabling the controllers stops failing.
-    local attempt
-    for attempt in 1 2 3 4 5; do
+    for _ in 1 2 3 4 5; do
         local pid
         while read -r pid; do
             echo "${pid}" > "${root}/init/cgroup.procs" 2>/dev/null || true

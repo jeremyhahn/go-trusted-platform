@@ -746,7 +746,22 @@ PCR bank active. The integration container is privileged and sees the host's
 `/dev/tpmrm0`, so a config naming that device runs `platformd` on the CI host's
 own TPM; on a host whose TPM has no active SHA-256 bank the daemon stops at
 `PCR 23 is not present in bank 0x000b`. `TestIntegrationConfig_TPMIsHarnessSwtpm`
-in `pkg/app` holds both configs to the runner's socket.
+in `pkg/app` holds both configs to the runner's socket. It also holds the
+embedded quicbaas server's `seal.tpm2.device` to that socket. platformd copies
+`tpm.device` into that setting, so the server's hardware probe never opens the
+host's `/dev/tpmrm0` ([daemon configuration](../daemon/configuration.md)).
+
+The harness swtpm is provisioned like shipped hardware: it has an endorsement
+key and an EK certificate before `platformd` first opens it. `start_swtpm`
+calls `provision_swtpm_state` (`build/docker/devcontainer/swtpm-provision.sh`),
+which runs `swtpm_setup --createek --create-ek-cert`: the RSA 2048 EK is
+persisted at `0x81010001`, the `tpm.ek.handle` both configs name, and its
+certificate, issued by a `swtpm_localca` CA created under `/tmp/swtpm/localca`,
+is written to NV index `0x01C00002`. `platformd` therefore opens a TPM it
+recognises as initialized and does not take its recovery path, which no
+shipped TPM needs. If `swtpm_setup` or `swtpm_localca` is missing, or
+provisioning fails, the runner stops with a `FATAL` message instead of starting
+the daemons on a TPM without an EK.
 
 A bring-up failure ends the run for the same reason. When `platformd` does not
 start, `build/docker/devcontainer/run-integration-tests.sh` aborts before any
