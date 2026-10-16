@@ -71,6 +71,28 @@ To perform a container build, use the Makefile `docker-builder-load` and `releas
 | `make binaries` | Build the `make build` binaries plus platform-initrd |
 | `make build-static` | Build all static binaries |
 
+### CI Stage Targets
+
+CI runs the five stages of the handbook's `ci-standard.md` §1, each a `make`
+target (`devops.md` §4):
+
+| Target | Stage |
+|--------|-------|
+| `make build` | Build every binary |
+| `make test` | Unit tests |
+| `make integration-test` | Integration suites in the devcontainer ([test/integration.md](test/integration.md)) |
+| `make security` | gosec, govulncheck, `go mod verify`, trivy fs (`devops.md` §8) |
+| `make deps-check` | Latest-version check |
+
+`make deps-check` runs `scripts/depscheck` over `go.mod` and `sdk/go/go.mod`.
+It fails when a direct `require` or a version `replace` is behind its latest
+version and the line has no comment, trailing or directly above, naming the
+reason (`devops.md` §9). A first-party module's latest is its highest tag
+including `-alpha`, the version `make deps-latest` moves to
+(`dependency-resolution.md` §3); a third-party require's is the go command's
+`go list -m -u` update. It looks versions up through the module proxy and the
+dev Gitea, so under `GOPROXY=off` it exits 2 with that reason rather than pass.
+
 ### Build All Binaries
 
 ```bash

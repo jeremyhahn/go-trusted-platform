@@ -98,10 +98,10 @@ lives in platform services after `switch_root`.
 model, separate from `diskless` and leaving it unchanged: the node has no local
 disk, and its root is a **persistent, per-device block device** that the boot
 server exports over NBD on the provisioning segment (VLAN 405, `192.0.2.0/24`,
-pure L2 with no gateway — [sdn configuration](../sdn/configuration.md)). Per the
-#685 rulings the root is NBD + LUKS + TPM: the node LUKS2-encrypts its export
+pure L2 with no gateway — [sdn configuration](../sdn/configuration.md)). The root
+is NBD + LUKS + TPM (#685): the node LUKS2-encrypts its export
 and seals the key to its own TPM, so the boot server stores ciphertext only.
-NFS was ruled out. The export is reached only over TLS 1.3 after
+The root is never NFS. The export is reached only over TLS 1.3 after
 `NBD_OPT_STARTTLS`, and the node authenticates with its IDevID certificate,
 which chains to the platform anchor. The server picks the export from that
 verified identity and from nothing the client names. The server side is built

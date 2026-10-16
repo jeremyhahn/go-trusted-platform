@@ -1,5 +1,8 @@
 # Trusted Platform Firmware Support
 
+> **Status: NORMATIVE** · Scope: planned trusted-firmware programme for AVR, Raspberry Pi and Android; `platformctl firmware`, `platformctl ota` and the `firmware:` section are not implemented
+> Conflicts with this document are defects. Fix them here first.
+
 Enterprise-grade firmware signing, attestation, and OTA updates for embedded devices and mobile platforms.
 
 ## Overview

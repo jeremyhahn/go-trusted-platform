@@ -34,7 +34,7 @@ none of it is configurable from the file, the flags or the environment.
 ## Listen addresses — bind hosts and ports (#552, #93)
 
 Where each transport binds is configuration, never a literal in code
-(handbook `conventions/configuration.md` §3, owner ruling 2026-08-26). The
+(handbook `conventions/configuration.md` §3). The
 one defaults layer is **loopback on the canonical ports**; a transport reaches
 an interface only because an operator named one. `platformd serve` resolves
 exactly the keys above through viper and the listeners consume the resolved

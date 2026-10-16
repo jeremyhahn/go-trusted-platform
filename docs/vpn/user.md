@@ -1,6 +1,7 @@
 # Remote-Access VPN — User Guide
 
-> **Status: PARTIAL — operators can manage enrolment, posture policies and session status today, from the CLI (#584 PR 3) and the web console (#584 PR 4); the client verbs, both tunnels and the gateway's admission listener exist, but a machine cannot connect yet.** · Last verified: 2026-10-14
+> **Status: REFERENCE** · Last verified: 2026-10-14
+> How an operator and a machine use the remote-access VPN. Partial today: operators can manage enrolment, posture policies and session status today, from the CLI (#584 PR 3) and the web console (#584 PR 4); the client verbs, both tunnels and the gateway's admission listener exist, but a machine cannot connect yet.
 > "Operator tasks" below works now, and so does `platformctl vpn posture`.
 > `platformctl vpn connect` (with `--foreground` to keep the lease renewed),
 > `renew`, `lease` and `disconnect` exist, present the machine's TPM identity

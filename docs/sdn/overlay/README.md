@@ -1,5 +1,8 @@
 # VXLAN Overlay Networking
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> Overview of the EVPN/VXLAN overlay.
+
 Multi-host overlay networking for east-west VM and container traffic.
 
 ## Overview
@@ -73,8 +76,9 @@ sdn:
     underlay-interface: "eth0"
 ```
 
-The VTEP IP is derived from the node's public IPv4 address, or with
-overlay IPsec is `overlay.ipsec.local-address` on its fabric interface; MTU
+`underlay-interface` is required without IPsec; there is no default. The
+VTEP IP is `overlay.vtep-address`, else the node's detected public IPv4
+address; with overlay IPsec it is always `overlay.ipsec.local-address`. MTU
 and bridge name use applied defaults (see [Configuration](configuration.md)).
 
 ### Verify VTEP Status
@@ -123,9 +127,10 @@ nc -zuv 10.0.0.2 4789
   on; everything else from the VXLAN port is dropped in table 10.
 - Before a route is installed, the handler's `VTEPAdmitter` vets the
   VTEP; EVPN without one is a config error (`ErrAdmitterNil`). In gatewayd
-  it is `gateway.VTEPAdmitter`: a VTEP is admitted only while the device
-  holding its fabric address has a passed, signed and fresh attestation
-  verdict, and it is withdrawn when that stops being true
+  it is `gateway.VTEPAdmitter` (`pkg/sdn/gateway/vtep_admission.go`): a VTEP
+  is admitted only while the device holding its IPAM fabric address has a
+  passed, signed and fresh attestation verdict, and a periodic sweep
+  withdraws it when that stops being true
   ([VTEP admission](../../gateway/engineering.md#vtep-admission)).
 - platformd's overlay IPsec (`overlay.ipsec`, [architecture](architecture.md#overlay-ipsec))
   carries every packet between two VTEPs in a transport-mode ESP SA behind

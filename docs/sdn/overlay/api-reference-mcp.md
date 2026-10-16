@@ -1,5 +1,8 @@
 # VXLAN Overlay MCP API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The overlay tools of the platform MCP server.
+
 ## Overview
 
 | Property | Value |

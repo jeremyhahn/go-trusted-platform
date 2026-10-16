@@ -1,5 +1,9 @@
 # Config Delivery QUIC API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The config-delivery sub-opcodes under QUIC category `0xCF`: wire structs,
+> scopes and status bytes.
+
 | Property | Value |
 |----------|-------|
 | Endpoint | `host:9444` (UDP, QUIC + TLS 1.3) |

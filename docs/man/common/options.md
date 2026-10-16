@@ -1,4 +1,9 @@
-This is the set of global options supported by every command in the CLI:
+# Common Options
+
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The persistent flags of `platformd` (`pkg/daemon/commands/root.go`).
+
+This is the set of global options supported by every `platformd` command:
 
   * **-h**, **\--help**:
     Display the commands usage. The help menu is also available for subcommands.
@@ -6,34 +11,47 @@ This is the set of global options supported by every command in the CLI:
   * **-d**, **\--debug**:
     Enables debug mode with verbose logging
 
-  * , **\--debug-secrets**:
+  * **\--debug-secrets**:
     Enables secret debugging. Passwords and other sensitive information is
     printed to the log for debugging.
 
+  * **-e**, **\--env**:
+    Runtime environment: `dev`, `staging` or `prod`. Default: `dev`.
+
+  * **-c**, **\--config**:
+    Path to a specific config file; overrides **\--config-dir**.
+
   * **\--init**:
-    Perform initialization
+    Initialize and provision the platform.
 
   * **\--so-pin**:
-    The Security Officer PIN
+    Prompt for the Security Officer PIN.
 
   * **\--pin**:
-    The user PIN
+    Prompt for the administrator or user PIN.
 
-  * , **\--platform-dir**:
-    The directory where all platform data is stored.
+  * **\--raw-so-pin**, **\--raw-pin**:
+    The Security Officer PIN / user PIN as plain text, without a prompt. For
+    automation, testing and development.
 
-  * , **\--config-dir**:
-    The directory where all platform configuration files are stored.
+  * **\--platform-dir**:
+    The directory where all platform data is stored. Default:
+    `<working directory>/trusted-data`.
 
-  * , **\--log-dir**:
-    The directory where all platform log files are stored.
+  * **\--config-dir**:
+    The directory where all platform configuration files are stored. Default:
+    `/etc/trusted-platform`.
 
-  * , **\--ca-dir**:
-    The directory where all Certificate Authority files are kept.
+  * **\--log-dir**:
+    The directory where all platform log files are stored. Default:
+    `trusted-data/log`.
 
-  * , **\--setuid**:
-    Sets the uid for the platform to run. If the platform is started as root,
-    permissions are downgraded to the specified uid.
+  * **\--ca-dir**:
+    The directory where all Certificate Authority files are kept. Default:
+    `trusted-data/ca`.
 
-  * , **\--listen**:
-    The socket listen address used for embedded network services
+  * **\--intermediate**:
+    The target Certificate Authority index. Default: `1`.
+
+  * **\--setuid**:
+    The operating system user to run as. Default: `root`.

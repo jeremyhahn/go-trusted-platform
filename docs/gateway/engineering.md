@@ -68,8 +68,7 @@ sessions have their interfaces. A section that fails to start, refused or not,
 fails startup: the services already started are stopped again
 (`rollbackStartedServices`) and the base pipeline is removed.
 
-Owner design decision (2026-09-26): the EVPN `overlay` service is required, not
-optional. Gatewayd now builds it from `ServiceOverlay` when the host runtime
+The EVPN `overlay` service is required, not optional. Gatewayd now builds it from `ServiceOverlay` when the host runtime
 injects OVS/OpenFlow, IPAM fabric reservations, platform device lookup and the
 attestation verdict reader. Lighting a public address block still depends on it
 plus gateway HA (#596, #710).
@@ -304,7 +303,7 @@ Gateway-side, in `pkg/sdn/config.go`:
 | `GatewayConfig` | `enabled` | Master switch |
 | `OverlayServiceConfig` | `enabled`, `local-vtep`, `underlay-interface`, `underlay-mtu`, `access-port`, `overlay-asn`, `rr-peers`, `vxlan-port`, `vnis`, `default-vni`, `max-vnis`, `verdict-max-age`, `verdict-clock-skew`, `admission-sweep-interval` | EVPN/VXLAN VTEP settings. `overlay-asn` must be a private 2-octet ASN (64512-65534). `vnis` (at least one, at most `max-vnis`) lists each L2VNI (1-16777215) with the access-port VLAN (1-4094) that carries it; no VNI or VLAN may repeat, and `default-vni` must be one of them. Start joins every one before the overlay counts as running, and it is healthy only while it carries all of them. The overlay's EVPN speaker is outbound-only: it dials each `rr-peers` entry from `local-vtep` and opens no listener beside the transit speaker on TCP 179, so a `passive` RR peer is refused. Peer policy is RFC 8212 reject-by-default, so an `rr-peers` entry whose `policy.import-route-targets` or `policy.export-route-targets` is empty gets, in that direction, the auto-derived route target of every configured VNI (`overlay-asn:` type 1, domain 0, VNI; RFC 8365 §5.1.2.1); an allowlist the operator wrote is kept as written. `verdict-max-age` (15m) bounds the age of the signed attestation verdict that admits a remote VTEP, `verdict-clock-skew` (30s) how far ahead of the gateway's clock that verdict may be dated, and `admission-sweep-interval` (30s) how often installed VTEPs are re-admitted; half of it bounds the platformd reads behind one sweep or one admission decision. Enabling the overlay beside the firewall, NAT or load balancer is refused ([§5a, In gatewayd](#in-gatewayd)). |
 | (transit) | none | Transit is the environment's x00 zone: its VLAN and subnet come from `sdn.environment` like every zone's, and transit point-to-point links take `/31`s from the `tunnel-p2p` IPAM range ([`../architecture/reference-network.md`](../architecture/reference-network.md)). There is no transit section |
-| `ManagementVPNConfig` | `enabled`, `type` (only `wireguard` is defined), `allow_to` | Administrators reach management endpoints through this tunnel so operator workstations are **never dual-homed onto a data zone**. Gateways should expose it by default. The section is refused today (#558, [`docs/vpn/`](../vpn/)); owner design decision (2026-09-26): IPsec in FIPS builds, WireGuard only in non-FIPS builds |
+| `ManagementVPNConfig` | `enabled`, `type` (only `wireguard` is defined), `allow_to` | Administrators reach management endpoints through this tunnel so operator workstations are **never dual-homed onto a data zone**. Gateways should expose it by default. The section is refused today (#558, [`docs/vpn/`](../vpn/)). IPsec in FIPS builds, WireGuard only in non-FIPS builds |
 
 `ManagementVPNConfig.Type` exists for extensibility and has exactly one defined
 value today. Treat an unrecognised value as a configuration error, not as a

@@ -1,5 +1,8 @@
 # Config Delivery Unix Socket API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> Reaching `platform.v1.ConfigDeliveryService` over the local socket.
+
 Socket path: `/run/platformd.sock`
 
 ## Overview

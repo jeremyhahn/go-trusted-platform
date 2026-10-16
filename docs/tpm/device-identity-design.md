@@ -1,8 +1,7 @@
 # Device Identity (IDevID/IAK/LDevID) Design
 
-**Version**: 1.0
-**Last Updated**: 2026-01-05
-**Status**: Implementation Phase
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> Design notes for IDevID, IAK and LDevID. The contract is [api.md](api.md) §8.
 
 ## Overview
 
@@ -65,6 +64,8 @@ This document describes the architecture and implementation of TPM-based Device 
 
 ### TPM Key Hierarchy
 
+The TCG device identity model places the keys as follows:
+
 ```
 Endorsement Hierarchy (EH)
 |
@@ -74,200 +75,70 @@ Endorsement Hierarchy (EH)
 |   +-- Certified by TPM manufacturer
 |
 +-- IDevID (Initial Device Identifier)
-    +-- Sign-only, non-restricted
-    +-- Certified by device manufacturer/enterprise
-    +-- Used for device authentication
-
-Owner Hierarchy (OH)
-|
-+-- SRK (Storage Root Key)
-    +-- Parent for user keys
-    +-- Sealing operations
-
-Endorsement Hierarchy (EH) or Platform Hierarchy (PH)
+|   +-- Sign-only, non-restricted
+|   +-- Used for device authentication
 |
 +-- IAK (Initial Attestation Key)
     +-- Restricted signing key
     +-- Used for TPM quotes/attestation
-    +-- Certified by device manufacturer/enterprise
+
+Owner Hierarchy (OH)
+|
++-- SSRK / Platform SRK
+    +-- Parents for sealed objects and application keys
 ```
 
-### Key Properties
+The keys are created by the go-xkms TPM backend, reached through the
+go-quicbaas SDK re-exports; the platform supplies the configuration.
 
-| Key | Algorithm | Attributes | Use Case |
-|-----|-----------|------------|----------|
-| IDevID | ECDSA P-256 | Sign, FixedTPM, FixedParent, SensitiveDataOrigin | Device authentication, TLS client auth |
-| IAK | ECDSA P-256 | Sign, Restricted, FixedTPM, FixedParent | TPM quotes, attestation |
+### Shipped Key Configuration
 
-## TCG OID Constants
+From `configs/platform/templates/single-node/default.yaml` (`tpm:`):
 
-The following OIDs are defined by TCG for device identity certificates:
+| Key | Config | Handle | Algorithm | Signature |
+|-----|--------|--------|-----------|-----------|
+| IAK | `tpm.iak` | `0x81010002` | RSA-2048 | SHA256-RSA |
+| IDevID | `tpm.idevid` | `0x81020000` | RSA-2048 | SHA256-RSA |
+| LDevID | request field | `0x81010102` (default) | ECDSA-P256 (default) | - |
 
-```
-tcg OBJECT IDENTIFIER ::= { joint-iso-ccitt(2) international-organizations(23) 133 }
-tcg-at OBJECT IDENTIFIER ::= { tcg 2 }
-tcg-tcpaSpecVersion OBJECT IDENTIFIER ::= { tcg-at 16 }
-tcg-at-tpmManufacturer OBJECT IDENTIFIER ::= { tcg-at 1 }
-tcg-at-tpmModel OBJECT IDENTIFIER ::= { tcg-at 2 }
-tcg-at-tpmVersion OBJECT IDENTIFIER ::= { tcg-at 3 }
-tcg-at-platformManufacturer OBJECT IDENTIFIER ::= { tcg-at 4 }
-tcg-at-platformModel OBJECT IDENTIFIER ::= { tcg-at 5 }
-tcg-at-platformVersion OBJECT IDENTIFIER ::= { tcg-at 6 }
+The IDevID config also carries the `model` and `serial` used in the device
+identity (`control-plane`, `tp-cp-01` in the shipped file). The LDevID default
+handle is `defaultLDevIDHandle` in `pkg/api/daemon/idevid_ldevid.go`.
 
-OID Values:
-- 2.23.133.2.1 - TPM Manufacturer
-- 2.23.133.2.2 - TPM Model
-- 2.23.133.2.3 - TPM Version
-- 2.23.133.2.4 - Platform Manufacturer
-- 2.23.133.2.5 - Platform Model
-- 2.23.133.2.6 - Platform Version
-- 2.23.133.2.16 - TCG Spec Version
-```
+## Key Generation and CSRs
 
-## Key Generation Flow
+`IDevIDService` (`pkg/api/daemon/idevid_grpc_service.go`) exposes the device
+identity operations:
 
-### IDevID Generation
+| RPC | CLI |
+|-----|-----|
+| `GenerateIDevID`, `GenerateIAK` | `platformctl tpm idevid generate`, `platformctl tpm iak generate` |
+| `GetIDevIDInfo`, `GetIAKInfo` | `platformctl tpm idevid info`, `platformctl tpm iak info` |
+| `CreateIDevIDCSR`, `CreateIAKCSR` | `platformctl tpm idevid csr`, `platformctl tpm iak csr` |
+| `InstallIDevIDCertificate`, `InstallIAKCertificate` | `platformctl tpm idevid install`, `platformctl tpm iak install` |
+| `GetIDevIDCertificate`, `GetIAKCertificate` | `platformctl tpm idevid certificate`, `platformctl tpm iak certificate` |
+| `DeleteIDevID`, `DeleteIAK` | `platformctl tpm idevid delete`, `platformctl tpm iak delete` (refused: the key is not evicted) |
+| `GetDeviceAttributes` | `platformctl tpm device attributes` |
+| `ActivateCredential` | - |
 
-```go
-1. Check if IDevID already exists at persistent handle
-2. If not exists:
-   a. Create ECC P-256 key under Endorsement Hierarchy
-   b. Set attributes: Sign, FixedTPM, FixedParent, SensitiveDataOrigin
-   c. Evict to persistent handle (0x81010100)
-3. Export public key for CSR generation
-```
+The TCG-CSR-IDEVID itself (IAK public area, IDevID CSR, EK certificate) is built
+in go-xkms; see [Attestation](attestation.md#tcg-csr-idevid-structure).
 
-### IAK Generation
+## Certificate Installation
 
-```go
-1. Check if IAK already exists at persistent handle
-2. If not exists:
-   a. Create ECC P-256 key under Endorsement Hierarchy
-   b. Set attributes: Sign, Restricted, FixedTPM, FixedParent
-   c. Evict to persistent handle (0x81010101)
-3. Export public key for CSR generation
-```
+`InstallIDevIDCertificate` parses the PEM and hands the certificate to the TPM
+backend (`ProvisionIDevIDCert`); empty or malformed PEM is `InvalidArgument`.
+The shipped `tpm.idevid.cert-handle` (`0x01C90000`) and `tpm.iak.cert-handle`
+are not used today: both are cleared at startup
+(`applyCertHandleNVInterim`, `pkg/app/tpm_cert_nv.go`); see
+[Configuration](configuration.md).
 
-### Persistent Handle Allocation
+## Integration with the CA
 
-| Handle | Key Type | Description |
-|--------|----------|-------------|
-| 0x81010100 | IDevID | Device identity key |
-| 0x81010101 | IAK | Initial attestation key |
-| 0x81010102 | LDevID | Local device identity (optional) |
-| 0x81010103 | LAK | Local attestation key (optional) |
-
-## CSR Generation with TCG Profile
-
-### Certificate Request Structure
-
-```
-CertificationRequest ::= SEQUENCE {
-    certificationRequestInfo CertificationRequestInfo,
-    signatureAlgorithm AlgorithmIdentifier,
-    signature BIT STRING
-}
-
-CertificationRequestInfo ::= SEQUENCE {
-    version INTEGER { v1(0) },
-    subject Name,
-    subjectPKInfo SubjectPublicKeyInfo,
-    attributes [0] Attributes
-}
-```
-
-### TCG Subject Alternative Name Extension
-
-```
-SubjectAltName ::= SEQUENCE OF GeneralName
-    directoryName ::= RDNSequence {
-        tpmManufacturer UTF8String,
-        tpmModel UTF8String,
-        tpmVersion UTF8String
-    }
-```
-
-### CSR Generation Steps
-
-```go
-1. Read TPM properties:
-   - Manufacturer (TPM2_PT_MANUFACTURER)
-   - Model/Family (TPM2_PT_VENDOR_STRING_1-4)
-   - Firmware version (TPM2_PT_FIRMWARE_VERSION)
-
-2. Read platform properties (from SMBIOS/DMI):
-   - System manufacturer
-   - System product name
-   - System serial number
-
-3. Build CSR:
-   - Subject: CN=<serial_number>, O=<manufacturer>
-   - Key Usage: Digital Signature
-   - Extended Key Usage: id-kp-cmcRA (if for CMC enrollment)
-   - SAN: TCG OIDs with TPM/platform info
-   - Public key: IDevID public key from TPM
-
-4. Sign CSR using IDevID key via TPM
-```
-
-## Certificate Installation Flow
-
-### IDevID Certificate Storage
-
-```go
-1. Receive certificate from CA
-2. Parse and validate certificate
-3. Verify public key matches IDevID
-4. Store options:
-   a. TPM NVRAM (preferred for hardware TPM)
-   b. Filesystem (for vTPM bundles)
-5. Update manifest/metadata
-```
-
-### NVRAM Storage Locations
-
-| NV Index | Certificate | Size |
-|----------|-------------|------|
-| 0x01C00100 | IDevID Certificate | 2048 bytes |
-| 0x01C00101 | IAK Certificate | 2048 bytes |
-
-## Integration with CA Module
-
-### Certificate Profiles
-
-The CA module must support the following certificate profiles:
-
-1. **IDevID Profile**
-   - Key Usage: Digital Signature
-   - Extended Key Usage: Client Authentication
-   - Subject: Device serial number
-   - Validity: 10+ years (device lifetime)
-   - SAN: TCG hardware attributes
-
-2. **IAK Profile**
-   - Key Usage: Digital Signature
-   - Extended Key Usage: Key Encipherment, Attestation
-   - Subject: Device serial number + "-ak"
-   - Validity: 10+ years (device lifetime)
-   - SAN: TCG hardware attributes
-
-### CA Interface
-
-```go
-type DeviceIdentityCA interface {
-    // IssueIDevIDCertificate issues an IDevID certificate.
-    IssueIDevIDCertificate(ctx context.Context, csr []byte) (*x509.Certificate, error)
-
-    // IssueIAKCertificate issues an IAK certificate.
-    IssueIAKCertificate(ctx context.Context, csr []byte) (*x509.Certificate, error)
-
-    // VerifyTPMBinding verifies the CSR is bound to a real TPM via ActivateCredential.
-    VerifyTPMBinding(ctx context.Context, ekCert *x509.Certificate, akPub []byte) (*ActivateCredentialChallenge, error)
-
-    // CompleteTPMVerification completes TPM verification with decrypted secret.
-    CompleteTPMVerification(ctx context.Context, challengeID string, secret []byte) error
-}
-```
+Device identity certificates are issued by the go-xkms CA/ACME engine through
+the go-quicbaas SDK (see the note under Architecture Overview). The platform
+defines no CA interface of its own for device identity; the TPM binding check
+(credential activation) is part of the enroll-01 challenge.
 
 ## LDevID (IEEE 802.1AR Local Device Identifier)
 
@@ -356,74 +227,13 @@ CLI (`platformctl tpm idevid ldevid create`) flags:
 `--profile`, `--validity-days`, `--overwrite`, and `--out` (writes the issued
 certificate PEM to the path and the CSR to `<out>.csr`).
 
-## ACME enroll-01 Challenge Flow (Future)
+## ACME enroll-01 Challenge Flow
 
-### Overview
-
-The ACME enroll-01 challenge provides automated device identity enrollment using ACME protocol with TPM attestation.
-
-### Flow
-
-```
-Device                          ACME Server                    CA
-   |                                |                           |
-   |  1. POST /newOrder            |                           |
-   |  (identifiers: device-id)     |                           |
-   |------------------------------->|                           |
-   |                                |                           |
-   |  2. 201 Created               |                           |
-   |  (authorizations: [...])      |                           |
-   |<------------------------------|                           |
-   |                                |                           |
-   |  3. POST /authz/{id}          |                           |
-   |------------------------------->|                           |
-   |                                |                           |
-   |  4. 200 OK                    |                           |
-   |  (challenges: [enroll-01])    |                           |
-   |<------------------------------|                           |
-   |                                |                           |
-   |  5. POST /challenge           |                           |
-   |  (EK cert, AK pub)            |                           |
-   |------------------------------->|                           |
-   |                                |  6. MakeCredential       |
-   |                                |------------------------->|
-   |                                |                           |
-   |  7. credential blob           |  8. credential blob       |
-   |<------------------------------|<--------------------------|
-   |                                |                           |
-   |  [TPM: ActivateCredential]    |                           |
-   |                                |                           |
-   |  9. POST /challenge           |                           |
-   |  (decrypted secret)           |                           |
-   |------------------------------->|                           |
-   |                                | 10. Verify secret        |
-   |                                |------------------------->|
-   |                                |                           |
-   | 11. POST /finalize            |                           |
-   |  (CSR)                        |                           |
-   |------------------------------->|                           |
-   |                                | 12. Issue certificate    |
-   |                                |------------------------->|
-   |                                |                           |
-   | 13. 200 OK                    | 14. Certificate          |
-   |  (certificate URL)            |<--------------------------|
-   |<------------------------------|                           |
-```
-
-### ACME Challenge Response
-
-```json
-{
-  "type": "enroll-01",
-  "status": "pending",
-  "token": "base64-encoded-challenge-token",
-  "attestation": {
-    "ek_cert": "base64-encoded-ek-certificate",
-    "ak_pub": "base64-encoded-ak-public-key",
-    "credential_blob": "base64-encoded-make-credential-output"
-  }
-}
-```
+enroll-01 is implemented. A device runs it with `platformctl tpm enroll`
+(`pkg/cli/commands/tpm/enroll.go`); the daemon registers the `enroll-01`
+verifier in `pkg/daemon/commands/serve.go`. The flow, the TCG-CSR-IDEVID
+structure and credential activation are described in
+[Attestation](attestation.md#idevid-attestation-via-acme-enroll-01).
 
 ## Security Considerations
 
@@ -442,39 +252,20 @@ Device                          ACME Server                    CA
 
 ### Storage Security
 
-1. NVRAM storage protected by TPM authorization
-2. Filesystem storage protected by file permissions
-3. Certificate chain should be validated on use
+1. Certificates are installed through the TPM backend; the NV cert handles are
+   not used today (see Certificate Installation)
+2. Certificate chain should be validated on use
 
-## Implementation Checklist
-
-- [ ] Define TCG OID constants
-- [ ] Implement IDevIDConfig and IAKConfig types
-- [ ] Implement DeviceIdentityCertificate type
-- [ ] Define typed errors
-- [ ] Define DeviceIdentityService interface
-- [ ] Implement key generation for IDevID
-- [ ] Implement key generation for IAK
-- [ ] Implement CSR generation with TCG profile
-- [ ] Implement certificate installation
-- [ ] Implement NVRAM storage
-- [ ] Integrate with CA module
-- [ ] Add CLI commands (platformctl tpm idevid)
-- [ ] Add multi-protocol API support
-- [ ] Implement ACME enroll-01 challenge (future)
-- [ ] Write unit tests
-- [ ] Write integration tests
-
-## File Structure
+## Code Locations
 
 ```
-pkg/tpm/idevid/
-    types.go          - Configuration and data types
-    errors.go         - Typed error definitions
-    interface.go      - Service interface definition
-    service.go        - Service implementation
-    csr.go            - CSR generation with TCG profile
-    nvram.go          - NVRAM certificate storage
-    oid.go            - TCG OID definitions
-    service_test.go   - Unit tests
+pkg/api/daemon/idevid_grpc_service.go   - IDevIDService (IDevID, IAK, CSRs, certificates)
+pkg/api/daemon/idevid_ldevid.go         - CreateLDevID
+pkg/api/daemon/rest_idevid_ldevid.go    - REST POST /api/v1/idevid/ldevid
+pkg/api/daemon/quic_idevid_ldevid.go    - QUIC LDevID sub-opcode
+pkg/api/mcp/ldevid_tools.go             - MCP idevid_create_ldevid
+pkg/cli/commands/tpm/idevid.go          - platformctl tpm idevid
+pkg/cli/commands/tpm/iak.go             - platformctl tpm iak
+pkg/cli/commands/tpm/ldevid.go          - platformctl tpm idevid ldevid
+pkg/cli/commands/tpm/enroll.go          - platformctl tpm enroll
 ```

@@ -472,9 +472,35 @@ func testInvitationErrors(t *testing.T, ctx context.Context, cmd InvitationComma
 	})
 
 	t.Run("GetExpiredInvitationFails", func(t *testing.T) {
-		t.Skip("Requires creating invitation with short expiration - implementation specific")
-		// This test would require the ability to create invitations with short expiration times
-		// which may not be supported via the standard API
+		fixture := NewTestFixture(prefix + "-expired")
+		createOpts := fixture.CreateInvitationOptionsFromFixture()
+		createOpts.ExpiresIn = ShortExpirationDuration()
+
+		createResult, err := cmd.CreateInvitation(testCtx, createOpts)
+		require.NoError(t, err, "Setup: CreateInvitation should succeed")
+
+		// Wait until the server-issued expiry has passed; the margin keeps
+		// the checks below clear of the expiry instant.
+		expired := time.NewTimer(time.Until(createResult.Invitation.ExpiresAt) + time.Second)
+		defer expired.Stop()
+		select {
+		case <-expired.C:
+		case <-testCtx.Done():
+			t.Fatalf("context ended before the invitation expired: %v", testCtx.Err())
+		}
+
+		_, err = cmd.GetInvitationByToken(testCtx, GetByTokenOptions{
+			Token: createResult.Invitation.Token,
+		})
+		require.Error(t, err, "GetInvitationByToken should fail for expired invitation")
+
+		acceptOpts := AcceptInvitationOptions{
+			Token:    createResult.Invitation.Token,
+			Name:     GenerateTestName(prefix + "-expired"),
+			Password: GenerateTestPassword(),
+		}
+		_, err = cmd.AcceptInvitation(testCtx, acceptOpts)
+		require.Error(t, err, "AcceptInvitation should fail for expired invitation")
 	})
 }
 

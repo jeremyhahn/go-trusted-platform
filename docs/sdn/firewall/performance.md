@@ -1,6 +1,7 @@
 # Firewall Performance
 
-## Status
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> What determines firewall throughput now that the userspace engine is gone.
 
 The former Go userspace firewall engine has been replaced by the
 OVS-native conntrack firewall (`ct()` / `ct_state` flows); its code

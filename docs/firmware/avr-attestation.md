@@ -1,7 +1,7 @@
 # AVR Attestation Provider
 
-Status: Implemented (provider only)
-Owner: `pkg/firmware/avr/attestation`
+> **Status: REFERENCE**
+> The AVR attestation provider in `pkg/firmware/avr/attestation`.
 
 The platform-side attestation provider for trusted-firmware AVR devices. It
 collects device-signed evidence, parses it, and appraises it against a policy,

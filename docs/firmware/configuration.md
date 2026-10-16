@@ -1,11 +1,10 @@
 # Firmware Configuration Reference
 
-> **NOTE: PROPOSED CONFIGURATION - Not yet implemented**
->
-> The firmware configuration schemas documented on this page are **planned features** for Phase O.
-> These schemas are proposed and subject to change. The current platform configuration
-> does not include a `firmware:` section. All configuration examples below represent the
-> intended design for future implementation.
+> **Status: NORMATIVE** · Scope: planned firmware device configuration; not implemented
+> Conflicts with this document are defects. Fix them here first.
+
+The platform configuration has no `firmware:` section today. Every example
+below is the intended design.
 
 Configuration examples for Trusted Platform Firmware support across AVR, Raspberry Pi, and Android platforms.
 

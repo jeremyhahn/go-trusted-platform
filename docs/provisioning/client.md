@@ -1,5 +1,8 @@
 # Provisioning Client
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The `pkg/provisioning` client: profile fetch and activation over mTLS.
+
 mTLS-authenticated client for device profile fetching and activation.
 
 ## Overview
@@ -12,39 +15,49 @@ The provisioning client enables devices to authenticate with the Trusted Platfor
 - **Profile Fetching**: Retrieve device configuration from platform
 - **Device Activation**: Signal production readiness
 - **Context Support**: Cancellation and timeouts
-- **Typed Errors**: Distinguishes transient vs permanent failures
+- **Sentinel Errors**: Distinguishes transport failures from server refusals
 
 ## API
 
-### Client Interface
+### Client Methods
+
+`provisioning.Client` (`pkg/provisioning/client.go`) is a concrete type:
 
 ```go
-type Client interface {
-    // FetchProfile retrieves the device profile
-    FetchProfile(ctx context.Context) (*DeviceProfile, error)
+// FetchProfile retrieves the device profile (GET /api/v1/device/profile)
+func (c *Client) FetchProfile(ctx context.Context) (*ProfileResponse, error)
 
-    // Activate signals the device is ready for production
-    Activate(ctx context.Context) (*ActivateResponse, error)
+// Activate signals the device is ready (POST /api/v1/device/activate)
+func (c *Client) Activate(ctx context.Context) (*ActivateResponse, error)
 
-    // FetchProfileAndActivate combines both operations
-    FetchProfileAndActivate(ctx context.Context) (*DeviceProfile, *ActivateResponse, error)
+// FetchProfileAndActivate combines both operations
+func (c *Client) FetchProfileAndActivate(ctx context.Context) (*ProfileResponse, *ActivateResponse, error)
 
-    // Close releases client resources
-    Close() error
-}
+// Heartbeat reports liveness (POST /api/v1/device/heartbeat)
+func (c *Client) Heartbeat(ctx context.Context) (*HeartbeatResponse, error)
+
+// BootDelivery runs the diskless boot delivery exchange (pkg/provisioning/boot.go)
+func (c *Client) BootDelivery(ctx context.Context, quote BootQuoteFunc) (*BootDeliveryResponse, error)
+
+// Close releases client resources
+func (c *Client) Close() error
 ```
 
 ### Configuration
 
 ```go
 type ClientConfig struct {
-    ServerURL   string              // Platform API URL
-    Certificate *x509.Certificate   // IDevID certificate
-    PrivateKey  crypto.PrivateKey   // IDevID private key
-    CACertPool  *x509.CertPool      // CA certificates
-    Timeout     time.Duration       // Request timeout
+    ServerURL      string            // Platform API URL
+    Certificate    *x509.Certificate // IDevID certificate
+    PrivateKey     crypto.PrivateKey // IDevID private key
+    CACertPool     *x509.CertPool    // CA certificates
+    TLSCertificate *tls.Certificate  // Optional full chain; presented verbatim when set
+    Timeout        time.Duration     // Request timeout; 0 means 30s
 }
 ```
+
+`NewClient(config *ClientConfig, logger *logging.Logger)` rejects a missing
+certificate, private key or CA pool.
 
 ## Usage
 
@@ -78,8 +91,10 @@ if err != nil {
     log.Fatal(err)
 }
 
-// Apply production network configuration
-applyNetworkConfig(profile.ProductionNetwork)
+// "activated" moved the port to the admitted VLAN; "quarantined" did not
+if activateResp.Status == "activated" {
+    applyNetworkConfig(profile.AdmittedNetwork)
+}
 ```
 
 ### With Retry Logic
@@ -95,17 +110,21 @@ func provisionWithRetry(ctx context.Context, client *provisioning.Client) error 
             return applyConfig(profile)
         }
 
-        // Check if error is retryable
-        if !isTransientError(err) {
+        // Only transport failures are worth retrying
+        if !errors.Is(err, provisioning.ErrConnectionFailed) {
             return err
         }
 
         log.Printf("Attempt %d failed: %v, retrying in %v", attempt, err, backoff)
-        time.Sleep(backoff)
+        select {
+        case <-ctx.Done():
+            return ctx.Err()
+        case <-time.After(backoff):
+        }
         backoff *= 2
     }
 
-    return fmt.Errorf("provisioning failed after %d attempts", maxRetries)
+    return errProvisioningExhausted
 }
 ```
 
@@ -113,7 +132,8 @@ func provisionWithRetry(ctx context.Context, client *provisioning.Client) error 
 
 ### GET /api/v1/device/profile
 
-Retrieves the device profile using mTLS authentication.
+Retrieves the device profile using mTLS authentication. The serial comes from
+the verified client certificate.
 
 **Request:**
 - Method: GET
@@ -124,31 +144,34 @@ Retrieves the device profile using mTLS authentication.
 ```json
 {
   "serialNumber": "DEVICE-001",
-  "productionNetwork": {
+  "admittedNetwork": {
     "vlan": 100,
     "useDHCP": true,
-    "staticIP": "",
-    "gateway": "192.168.100.1",
+    "gateway": "198.51.100.1",
     "dns": ["10.99.99.2"]
+  },
+  "provisioningNetwork": {
+    "vlan": 10,
+    "useDHCP": true
   },
   "acls": [
     {
-      "name": "allow-https",
+      "name": "acl-0",
       "priority": 100,
-      "match": {"tcp_dst": "443"},
+      "match": {"protocol": "tcp", "dst_port": "443"},
       "action": "allow"
     }
-  ],
-  "rateLimit": {
-    "ingressMbps": 1000,
-    "egressMbps": 1000
-  }
+  ]
 }
 ```
 
+ACL names are `acl-<index>`; `match` keys are `protocol`, `src_ip`, `dst_ip`,
+`src_port` and `dst_port` (`ProfileFromDeviceProfile`,
+`pkg/webservice/v1/device/profile_service.go`).
+
 ### POST /api/v1/device/activate
 
-Signals device activation to transition to production network.
+Signals device activation to transition to the admitted network.
 
 **Request:**
 - Method: POST
@@ -164,16 +187,22 @@ Signals device activation to transition to production network.
 }
 ```
 
+`status` is `activated` or `quarantined`; when quarantined, `vlan` is the
+quarantine VLAN, never the admitted one.
+
 ## Data Types
 
-### DeviceProfile
+From `pkg/provisioning/types.go`.
+
+### ProfileResponse
 
 ```go
-type DeviceProfile struct {
-    SerialNumber      string            `json:"serialNumber"`
-    ProductionNetwork *NetworkConfig    `json:"productionNetwork"`
-    ACLs              []ACL             `json:"acls,omitempty"`
-    RateLimit         *RateLimitConfig  `json:"rateLimit,omitempty"`
+type ProfileResponse struct {
+    SerialNumber        string           `json:"serialNumber"`
+    AdmittedNetwork     NetworkConfig    `json:"admittedNetwork"`
+    ProvisioningNetwork *NetworkConfig   `json:"provisioningNetwork,omitempty"`
+    ACLs                []ACLConfig      `json:"acls,omitempty"`
+    RateLimit           *RateLimitConfig `json:"rateLimit,omitempty"`
 }
 ```
 
@@ -181,11 +210,11 @@ type DeviceProfile struct {
 
 ```go
 type NetworkConfig struct {
-    VLAN      int      `json:"vlan"`
-    UseDHCP   bool     `json:"useDHCP"`
-    StaticIP  string   `json:"staticIP,omitempty"`
-    Gateway   string   `json:"gateway"`
-    DNS       []string `json:"dns,omitempty"`
+    VLAN     uint16   `json:"vlan"`
+    UseDHCP  bool     `json:"useDHCP"`
+    StaticIP string   `json:"staticIP,omitempty"`
+    Gateway  string   `json:"gateway,omitempty"`
+    DNS      []string `json:"dns,omitempty"`
 }
 ```
 
@@ -194,23 +223,25 @@ type NetworkConfig struct {
 ```go
 type ActivateResponse struct {
     Status         string    `json:"status"`
-    VLAN           int       `json:"vlan"`
+    VLAN           uint16    `json:"vlan"`
     TransitionedAt time.Time `json:"transitionedAt"`
 }
 ```
 
 ## Error Types
 
+Sentinels from `pkg/provisioning/errors.go`; request errors wrap them, so test
+with `errors.Is`.
+
 | Error | Condition | Retryable |
 |-------|-----------|-----------|
-| `ErrCertificateRequired` | Missing client certificate | No |
-| `ErrPrivateKeyRequired` | Missing private key | No |
-| `ErrCABundleRequired` | Missing CA certificates | No |
-| `ErrConnectionFailed` | Network unreachable | Yes |
-| `ErrServerError` | Server returned 5xx | Yes |
-| `ErrUnauthorized` | Certificate rejected | No |
-| `ErrNotFound` | Profile not found | No |
+| `ErrMissingCertificate` | Missing client certificate | No |
+| `ErrMissingPrivateKey` | Missing private key | No |
+| `ErrMissingCABundle` | Missing CA certificates | No |
+| `ErrConnectionFailed` | Request could not be sent (network, TLS, timeout) | Yes |
+| `ErrServerError` | Server answered any status other than 200 | Depends on the status in the message |
 | `ErrInvalidResponse` | Malformed JSON | No |
+| `ErrProfileFetchFailed`, `ErrActivationFailed` | The request could not be built | No |
 
 ## Security
 
@@ -222,22 +253,19 @@ type ActivateResponse struct {
 
 ### Security Checklist
 
-- Certificate validation enabled by default
-- Minimum TLS 1.2 enforced
+- Server certificate always validated against the CA pool
+- TLS 1.3 minimum enforced
 - Private keys never transmitted
-- TLS 1.3 required; server certificate always validated against CA pool
 - Timeout prevents resource exhaustion
-- Error messages don't leak sensitive info
 - Context cancellation prevents leaks
 
 ## Performance
 
 | Characteristic | Value |
 |----------------|-------|
-| Connection pooling | Enabled |
-| Keep-alive | Enabled |
+| Connection pooling | `net/http` transport defaults |
+| Keep-alive | `net/http` transport defaults |
 | Request timeout | Configurable (default 30s) |
-| Memory | Minimal allocations |
 | Concurrency | Safe for concurrent use |
 
 ## Integration Points
@@ -257,5 +285,5 @@ type ActivateResponse struct {
 |-----------|-------------|
 | ACME Client | Issues IDevID certificates |
 | TPM | Protects IDevID private key |
-| Network Setup | Applies production config |
+| Network Setup | Applies admitted network config |
 | OVS | VLAN transitions |

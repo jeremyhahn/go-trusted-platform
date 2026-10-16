@@ -1282,7 +1282,7 @@ func TestOpenFileStoreRejectsSymlinkedRoot(t *testing.T) {
 	}
 	link := filepath.Join(base, "known_hosts.d")
 	if err := os.Symlink(target, link); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
+		t.Fatalf("symlink %s: %v", link, err)
 	}
 
 	_, err := openFileStore(link)
@@ -1630,7 +1630,7 @@ func TestCheckStoreDirAllowsSymlinkedAncestor(t *testing.T) {
 	}
 	link := filepath.Join(base, "link")
 	if err := os.Symlink(real, link); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
+		t.Fatalf("symlink %s: %v", link, err)
 	}
 
 	// The store reached THROUGH the symlinked ancestor. The leaf itself is a
@@ -1672,7 +1672,7 @@ func TestCheckStoreDirRejectsWritableAncestorBehindSymlink(t *testing.T) {
 	}
 	link := filepath.Join(base, "link")
 	if err := os.Symlink(shared, link); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
+		t.Fatalf("symlink %s: %v", link, err)
 	}
 
 	err := checkStoreDir(filepath.Join(link, "known_hosts.d"))

@@ -16,8 +16,6 @@
 package alpine
 
 import (
-	"archive/tar"
-	"compress/gzip"
 	"context"
 	"io"
 	"log/slog"
@@ -336,86 +334,6 @@ func TestFIPSInstaller_configureOpenSSLFIPS_Success(t *testing.T) {
 	if err == nil {
 		t.Error("expected error due to missing openssl binary")
 	}
-}
-
-// TestFIPSInstaller_installPackage_Success tests successful package installation
-func TestFIPSInstaller_installPackage_Success(t *testing.T) {
-
-	// This test would require a real APK mirror or mock HTTP server
-	// For now, we test the error path which is already covered
-	t.Skip("skipping full package installation test - requires network/mock server")
-}
-
-// Helper function to create mock kernel modules archive
-func createMockModulesArchive(path string) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	gzw := gzip.NewWriter(f)
-	defer gzw.Close()
-
-	tw := tar.NewWriter(gzw)
-	defer tw.Close()
-
-	// Create a mock modules directory structure
-	entries := []struct {
-		name    string
-		isDir   bool
-		content string
-	}{
-		{"lib/", true, ""},
-		{"lib/modules/", true, ""},
-		{"lib/modules/6.1.0-fips/", true, ""},
-		{"lib/modules/6.1.0-fips/kernel/", true, ""},
-		{"lib/modules/6.1.0-fips/kernel/crypto/", true, ""},
-		{"lib/modules/6.1.0-fips/kernel/crypto/sha256.ko", false, "mock kernel module"},
-	}
-
-	for _, entry := range entries {
-		if entry.isDir {
-			hdr := &tar.Header{
-				Name:     entry.name,
-				Mode:     0755,
-				Typeflag: tar.TypeDir,
-			}
-			if err := tw.WriteHeader(hdr); err != nil {
-				return err
-			}
-		} else {
-			hdr := &tar.Header{
-				Name:     entry.name,
-				Mode:     0644,
-				Size:     int64(len(entry.content)),
-				Typeflag: tar.TypeReg,
-			}
-			if err := tw.WriteHeader(hdr); err != nil {
-				return err
-			}
-			if _, err := tw.Write([]byte(entry.content)); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
-// TestFIPSInstaller_installFIPSKernel_ReadDirFailure tests directory reading errors
-func TestFIPSInstaller_installFIPSKernel_ReadDirFailure(t *testing.T) {
-	// This tests the error handling when ReadDir fails
-	// Since we can't easily create a directory that ReadDir will fail on,
-	// we verify the error path is there by code inspection
-	t.Skip("testing ReadDir error path requires special setup")
-}
-
-// TestFIPSInstaller_installFIPSKernel_DepmodWarning tests depmod warning path
-func TestFIPSInstaller_installFIPSKernel_DepmodWarning(t *testing.T) {
-	// This would require creating a chroot environment and running depmod
-	// which is beyond unit test scope
-	t.Skip("testing depmod warning path requires chroot environment")
 }
 
 // TestFIPSInstaller_ConfigureOpenSSL_AllVerificationPaths tests all verification branches

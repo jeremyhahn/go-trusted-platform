@@ -54,20 +54,40 @@ func (m *mockAdapter) Target() string {
 var _ transport.Adapter = (*mockAdapter)(nil)
 
 func TestConnect_NilOptions(t *testing.T) {
-	ctx := context.Background()
+	originalConnectors := protocolConnectors
+	t.Cleanup(func() {
+		protocolConnectors = originalConnectors
+	})
 
-	// Connect with nil options should use defaults
-	// This test verifies no panic occurs with nil options
-	_, err := Connect(ctx, nil)
-	if err == nil {
-		t.Skip("expected error when no protocols are available (test running as non-root)")
+	// Every connector refuses, so the result does not depend on a daemon
+	// listening on the host or on the user the test runs as.
+	refused := errors.New("connection refused")
+	protocolConnectors = make(map[Protocol]ConnectFunc)
+	for _, proto := range []Protocol{ProtocolUnix, ProtocolGRPC, ProtocolREST, ProtocolQUIC, ProtocolMCP, ProtocolEmbedded} {
+		protocolConnectors[proto] = func(context.Context, *Options) (transport.Adapter, error) {
+			return nil, refused
+		}
 	}
 
-	// Should get daemon unavailable or protocol not implemented error
+	client, err := Connect(context.Background(), nil)
+	if client != nil {
+		t.Fatalf("Connect(nil) returned a client with every connector refusing")
+	}
+
 	var unavailableErr ErrDaemonUnavailable
-	var notImplErr ErrProtocolNotImplemented
-	if !errors.As(err, &unavailableErr) && !errors.As(err, &notImplErr) {
-		t.Errorf("unexpected error type: %T: %v", err, err)
+	if !errors.As(err, &unavailableErr) {
+		t.Fatalf("Connect(nil) error = %T: %v, want ErrDaemonUnavailable", err, err)
+	}
+
+	// Nil options fall back to NewOptions, which configures only the Unix
+	// socket: no network protocol may be attempted.
+	for _, proto := range unavailableErr.Attempted {
+		if proto != ProtocolUnix {
+			t.Errorf("Connect(nil) attempted %v, want only %v from the default options", proto, ProtocolUnix)
+		}
+	}
+	if len(unavailableErr.Attempted) > 0 && !errors.Is(unavailableErr.LastErr, refused) {
+		t.Errorf("LastErr = %v, want the connector's error", unavailableErr.LastErr)
 	}
 }
 

@@ -1,5 +1,8 @@
 # DNS Security
 
+> **Status: REFERENCE**
+> The DNS subsystem's security model.
+
 ## Overview
 
 The Trusted Platform DNS module implements a security-first design with defense in depth, leveraging trusted computing capabilities for hardware-backed protection of cryptographic keys and operations.
@@ -232,7 +235,7 @@ rules:
       - dns/zones/**
     unless:
       - request.ip in 10.0.0.0/8
-      - request.ip in 192.168.0.0/16
+      - request.ip in 192.0.2.0/24
 ```
 
 ### Multi-Tenant Zone Authorization

@@ -186,6 +186,18 @@ func (e *ErrCIDRMismatch) Error() string {
 		e.IP, ipFamily, e.CIDR, cidrFamily)
 }
 
+// ErrPoolTooLarge indicates a pool holds more addresses than a backend can
+// track; the memory backend keeps one bit per usable address.
+type ErrPoolTooLarge struct {
+	CIDR netip.Prefix
+	Max  uint64
+}
+
+// Error returns the error message.
+func (e *ErrPoolTooLarge) Error() string {
+	return fmt.Sprintf("pool %s is larger than the %d addresses this backend can track", e.CIDR, e.Max)
+}
+
 // ErrLeaseExpired indicates the allocation lease has expired.
 type ErrLeaseExpired struct {
 	IP        netip.Addr
@@ -267,7 +279,9 @@ func IsValidationError(err error) bool {
 		return false
 	}
 	var window *ErrInvalidWindow
+	var tooLarge *ErrPoolTooLarge
 	return errors.As(err, &window) ||
+		errors.As(err, &tooLarge) ||
 		errors.Is(err, ErrInvalidCIDR) ||
 		errors.Is(err, ErrInvalidIP) ||
 		errors.Is(err, ErrInvalidGateway) ||

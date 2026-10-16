@@ -1,5 +1,8 @@
 # Tunnel Management
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The gateway's transit-relay tunnels in `pkg/sdn/tunnel`.
+
 The `pkg/sdn/tunnel` package manages the gateway's point-to-point tunnels to
 the transit relays (the remote nodes that hold the site's eBGP) through
 Linux netlink, under a **pluggable transport**, and pins each tunnel's outer
@@ -40,6 +43,8 @@ ever leaves in the clear; a failure at any step unwinds what preceded it.
 Removal is the reverse. `Rekey(name)` re-resolves both references and updates the
 SAs in place (`XFRM_MSG_UPDSA`), outbound first; SPIs and policies do not change,
 so the peer rotates the same references in lockstep and traffic never stops.
+Nothing in the platform calls `Rekey` yet: `ipsec.rekey-interval` is reported in
+the tunnel status (`pkg/sdn/gateway/snapshot.go:372`) but drives no timer.
 Liveness is not this package's job: BFD on the BGP neighbor (GoBGP 4.9, #556)
 detects a dead path; vendor GRE keepalives are a non-goal.
 
@@ -80,7 +85,9 @@ err := mgr.EnsureTunnel(ctx, tunnel.TunnelConfig{
 The tunnel addresses (`/31`s from the environment's tunnel point-to-point range,
 `10.4.128.0/22` in environment 4 of the
 [reference network](../../architecture/reference-network.md)) are the iBGP peer addresses in
-`BGPConfig.Neighbors`. The gateway service handler that builds both managers
-from the `tunnels:` and `uplinks:` sections is #568's `backedServiceHandler`.
+`BGPConfig.Neighbors`. The gateway's tunnels service builds both managers from
+the `tunnels:` and `routing-uplinks:` sections of the gateway configuration
+(`pkg/sdn/gateway/handlers.go:635`). `routing-uplinks:` is distinct from the
+gateway's `uplinks:`, which are the NAT and NIC ports.
 
 See [configuration.md](configuration.md) for the field reference.

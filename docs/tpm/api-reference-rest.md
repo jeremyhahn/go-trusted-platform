@@ -1,5 +1,9 @@
 # TPM REST API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The `/api/v1/tpm` routes of platformd's REST listener. The cross-transport
+> contract is [api.md](api.md).
+
 Base URL: `https://localhost:8443/api/v1/tpm`
 
 These are the routes platformd's own REST listener serves through
@@ -12,7 +16,7 @@ scope ([api.md](api.md) §9):
 
 | Scope | Routes |
 |-------|--------|
-| `tpm:read` | every `GET`, plus `POST pcrs`, `quote`, `quote/verify`, `make-credential`, `random`, `unseal` |
+| `tpm:read` | every `GET`, plus `POST pcrs`, `quote`, `quote/verify`, `certify`, `make-credential`, `random`, `unseal` |
 | `tpm:write` | `POST provision`, `ek`, `ek/certificate`, `srk`, `ak`, `activate-credential`, `nvram`, `seal`; `PUT nvram` |
 | `tpm:delete` | `POST clear`, every `DELETE` |
 
@@ -159,12 +163,15 @@ A refused request, or an RPC error, is the standard error body:
 | Status | Cause |
 |--------|-------|
 | `400 Bad Request` | A malformed or unknown body field (`ErrInvalidRequestBody`) or URL parameter (`ErrInvalidQueryParameter`); the RPC's `InvalidArgument` or `FailedPrecondition` |
-| `401 Unauthorized` | No bearer token (`ErrTPMTokenRequired`) |
+| `401 Unauthorized` | No bearer token (`ErrTPMTokenRequired`); the RPC's `Unauthenticated` |
 | `403 Forbidden` | The token is rejected or lacks the route's scope, or no token validator is configured (`ErrTPMForbidden`); the RPC's `PermissionDenied` |
 | `404 Not Found` | The RPC's `NotFound` |
 | `409 Conflict` | The RPC's `AlreadyExists` or `Aborted` |
+| `412 Precondition Failed` | `DELETE /ak` and `DELETE /ak/{handle}`: the RPC's `FailedPrecondition` |
 | `500 Internal Server Error` | Any other RPC error, or a response that cannot be encoded |
+| `501 Not Implemented` | The RPC's `Unimplemented` |
 | `503 Service Unavailable` | No TPM service (`ErrTPMServiceNotAvailable`), or the RPC's `Unavailable` |
+| `504 Gateway Timeout` | The RPC's `DeadlineExceeded` |
 
 ## cURL examples
 

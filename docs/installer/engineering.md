@@ -528,7 +528,7 @@ The role → zones table (`roleZones`, `pkg/installer/network_role.go`):
 |---|---|
 | `control-plane` | fabric, hypervisor, storage, control-plane (control-plane nodes are hypervisors too) |
 | `compute` | fabric, hypervisor, storage |
-| `gateway` | exempt: gateways route and NAT by role (owner confirmation 2026-10-01) |
+| `gateway` | exempt: gateways route and NAT by role |
 
 For `control-plane` and `compute`, every static address — interfaces (IPv4 and
 IPv6), bridges, bonds, VLAN interfaces and bond zone VLANs — must lie in one of
@@ -972,7 +972,7 @@ Two gaps remain, and neither is closed in code:
 
 ### The NBD metadata area
 
-Per the owner ruling the sealed key blob and the PCR banks live **on the NBD
+The sealed key blob and the PCR banks live **on the NBD
 volume**, not on the node. The area is partition 1 of the export, the same
 partition a disk install uses as its ESP, so every reader and writer of those
 files works unchanged:

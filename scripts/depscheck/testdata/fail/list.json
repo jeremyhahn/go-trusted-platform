@@ -1,0 +1,52 @@
+{
+	"Path": "example.com/forked",
+	"Version": "v1.0.0",
+	"Replace": {
+		"Path": "example.com/fork",
+		"Version": "v1.0.0"
+	}
+}
+{
+	"Path": "example.com/gone"
+}
+{
+	"Path": "example.com/current",
+	"Version": "v1.4.0",
+	"Versions": ["v1.3.0", "v1.4.0", "v1.5.0-rc.1"]
+}
+{
+	"Path": "example.com/behind",
+	"Version": "v1.2.0",
+	"Versions": ["v1.1.0", "v1.2.0", "v1.3.0"],
+	"Update": {
+		"Path": "example.com/behind",
+		"Version": "v1.3.0"
+	}
+}
+{
+	"Path": "example.com/documented",
+	"Version": "v1.2.0",
+	"Versions": ["v1.2.0", "v1.3.0"],
+	"Update": {
+		"Path": "example.com/documented",
+		"Version": "v1.3.0"
+	}
+}
+{
+	"Path": "example.com/pseudo",
+	"Version": "v0.0.0-20250101000000-abcdefabcdef",
+	"Update": {
+		"Path": "example.com/pseudo",
+		"Version": "v0.0.0-20260101000000-123456123456"
+	}
+}
+{
+	"Path": "github.com/jeremyhahn/go-lib",
+	"Version": "v0.3.0-alpha",
+	"Versions": ["v0.0.0", "v0.3.0-alpha", "v0.4.0-alpha"]
+}
+{
+	"Path": "github.com/jeremyhahn/go-latest",
+	"Version": "v0.5.0-alpha",
+	"Versions": ["v0.0.0", "v0.4.0-alpha", "v0.5.0-alpha"]
+}

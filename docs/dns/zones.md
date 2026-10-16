@@ -1,5 +1,8 @@
 # DNS Zone Management
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The zone model and zone management.
+
 ## Overview
 
 The Trusted Platform DNS service provides authoritative DNS for internal and public zones. Zones define the namespace boundaries and contain all DNS records for a domain. The platform supports running separate internal and public DNS servers, each with their own zone configuration, forwarders, and security policies.
@@ -10,11 +13,13 @@ The Trusted Platform DNS service provides authoritative DNS for internal and pub
 
 Internal zones use private TLDs that are not registered with IANA. These zones are only resolvable within your private network.
 
+An internal zone's TLD must not appear in the IANA root list (`IsTLD`,
+`pkg/dns/tld.go`). `.home.arpa` does not qualify: its TLD, `arpa`, is in that list.
+
 | TLD | Use Case |
 |-----|----------|
-| `.internal` | RFC 8375 recommended private TLD |
+| `.internal` | Recommended private TLD (ICANN reserved, 2024) |
 | `.local` | mDNS/Bonjour (may conflict with multicast DNS) |
-| `.home.arpa` | RFC 8375 home network reserved |
 | `.lan` | Common private network TLD |
 | `.corp` | Corporate internal networks |
 
@@ -102,9 +107,12 @@ soa:
   refresh: 86400                       # Seconds before refresh
   retry: 7200                          # Seconds before retry
   expire: 86400                        # Seconds before expiration
-  min-ttl: 3600                        # Minimum TTL for negative caching
+  min_ttl: 3600                        # Minimum TTL for negative caching
   ttl: 3600                            # SOA record TTL
 ```
+
+The config loader reads `min_ttl`, the field's `mapstructure` tag
+(`pkg/dns/entities/records.go:114`); a `min-ttl:` key is silently ignored.
 
 ### NS Record Configuration
 
@@ -127,13 +135,13 @@ ns:
 ```go
 import (
     "context"
-    "github.com/jeremyhahn/go-trusted-platform/pkg/dns"
     "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
+    "github.com/jeremyhahn/go-trusted-platform/pkg/util"
 )
 
 // Create zone entity
 zone := &entities.Zone{
-    ID:          dns.NewID([]byte("myzone.internal.")),
+    ID:          util.NewID([]byte("myzone.internal.")),
     Name:        "myzone.internal.",
     TTL:         3600,
     Internal:    true,
@@ -154,7 +162,7 @@ zone := &entities.Zone{
             {Name: "myzone.internal.", Value: "ns1.myzone.internal.", TTL: 3600},
         },
         ARecords: []*entities.ARecord{
-            {Name: "ns1", Value: "192.168.1.10", TTL: 3600},
+            {Name: "ns1", Value: "192.0.2.10", TTL: 3600},
         },
     },
 }
@@ -181,16 +189,20 @@ dns:
 
 The `Register` function handles zone and record creation:
 
-1. **Validate registration is allowed** - Check `allow-registration` config
-2. **Parse FQDN** - Extract hostname, subdomains, root domain, TLD
-3. **Determine zone type** - Internal vs public based on IP and TLD
-4. **Check zone existence** - Add record to existing zone or create new
-5. **Validate IP/TLD pairing** - Private IPs for internal, public IPs for public
-6. **Create zone or record** - Persist to datastore
+1. **Validate registration is allowed** - `allow-registration` must be true
+2. **Validate the IP** - `ErrInvalidIPAddress` if it does not parse
+3. **Parse FQDN** - Extract hostname, subdomains, root domain, TLD
+4. **Configured zones first** - an FQDN under the `internal` zone needs a private
+   IP and a non-IANA TLD; one under the `public` zone needs a public IP and an
+   IANA TLD. A match registers the record in that zone.
+5. **Otherwise a new zone** - `allow-external-registration` (IANA TLD) or
+   `allow-internal-registration` (other TLD) must be true, and the root domain
+   must not already be a zone (`ErrZoneAlreadyExists`)
+6. **Persist** - the zone is saved to the datastore
 
 ```go
 // Register creates zone or adds record based on FQDN
-zone, err := dnsService.Register(ctx, "myhost.example.internal", "192.168.1.100")
+zone, err := dnsService.Register(ctx, "myhost.example.internal", "192.0.2.100")
 ```
 
 ### Zone Persistence
@@ -215,8 +227,8 @@ dns:
   internal:
     port: 9053
     forwarders:
-      - "192.168.1.1"
-      - "192.168.2.1"
+      - "192.0.2.1"
+      - "198.51.100.1"
     zone:
       id: 2
       name: "example.internal."
@@ -232,7 +244,7 @@ dns:
           refresh: 86400
           retry: 7200
           expire: 86400
-          min-ttl: 3600
+          min_ttl: 3600
           ttl: 3600
         ns:
           - name: "example.internal."
@@ -243,13 +255,13 @@ dns:
             ttl: 3600
         a:
           - name: "ns1"
-            value: "${LOCAL_IPv4}"
+            value: "${PRIVATE_IPv4}"
             ttl: 3600
           - name: "ns2"
-            value: "192.168.2.1"
+            value: "198.51.100.1"
             ttl: 3600
           - name: "${HOSTNAME}"
-            value: "${LOCAL_IPv4}"
+            value: "${PRIVATE_IPv4}"
             ttl: 3600
         cname:
           - name: "www"
@@ -284,7 +296,7 @@ dns:
           refresh: 86400
           retry: 7200
           expire: 86400
-          min-ttl: 3600
+          min_ttl: 3600
           ttl: 3600
         ns:
           - name: "example.com."
@@ -320,13 +332,17 @@ dns:
 
 ### Macro Expansion
 
-Configuration values support macro expansion for dynamic IP addresses:
+Configuration values support macro expansion (`pkg/dns/macros.go`):
 
 | Macro | Description | Example |
 |-------|-------------|---------|
-| `${PUBLIC_IPv4}` | Public IPv4 address | `203.0.113.10` |
-| `${LOCAL_IPv4}` | Private IPv4 address | `192.168.1.10` |
+| `${PUBLIC_IPv4}`, `${PUBLIC_IPv6}` | Public address | `203.0.113.10` |
+| `${PRIVATE_IPv4}`, `${PRIVATE_IPv6}` | Private address | `192.0.2.10` |
 | `${HOSTNAME}` | System hostname | `server01` |
+| `${PUBLIC_DOMAIN}`, `${PUBLIC_FQDN}`, `${PRIVATE_FQDN}` | Domain names | `example.com` |
+
+The private-domain macro is spelled `PRVATE_DOMAIN` in the code
+(`pkg/dns/macros.go:33`); `${PRIVATE_DOMAIN}` does not expand.
 
 ```yaml
 a:
@@ -334,64 +350,16 @@ a:
     value: "${PUBLIC_IPv4}"  # Expanded at runtime
     ttl: 3600
   - name: "${HOSTNAME}"      # Creates record for this host
-    value: "${LOCAL_IPv4}"
+    value: "${PRIVATE_IPv4}"
     ttl: 3600
 ```
 
-## CLI Commands
+## Zone Operations Without a CLI
 
-### Zone Management
-
-**List zones:**
-```bash
-platformctl dns zone list
-```
-
-**Get zone details:**
-```bash
-platformctl dns zone get example.internal
-```
-
-**Create zone:**
-```bash
-platformctl dns zone create \
-  --name "myzone.internal." \
-  --ttl 3600 \
-  --internal \
-  --description "My internal zone"
-```
-
-**Delete zone:**
-```bash
-platformctl dns zone delete example.internal
-```
-
-### Zone Registration
-
-**Register host in internal zone:**
-```bash
-platformctl dns register \
-  --fqdn "myhost.example.internal" \
-  --ip "192.168.1.100"
-```
-
-**Register host in public zone:**
-```bash
-platformctl dns register \
-  --fqdn "www.example.com" \
-  --ip "203.0.113.10"
-```
-
-### Configuration Options
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--name` | Zone FQDN with trailing dot | Required |
-| `--ttl` | Default TTL in seconds | `3600` |
-| `--internal` | Mark as internal zone | `false` |
-| `--description` | Zone description | Empty |
-| `--fqdn` | Full qualified domain name | Required |
-| `--ip` | IP address for registration | Required |
+There is no `platformctl dns` command group ([cli.md](cli.md)). Zone and record
+CRUD go through REST `/api/v1/dns/zones` or gRPC `DNSService`; host registration
+is `POST /api/v1/dns/register`. [api-reference-rest.md](api-reference-rest.md)
+has the request bodies.
 
 ## Error Handling
 
@@ -412,5 +380,5 @@ platformctl dns register \
 ## See Also
 
 - [DNS Records](records.md) - Record type reference
-- [Platform Configuration](../configuration.md) - Full configuration reference
+- [Platform Configuration](configuration.md) - Full configuration reference
 - [KMS Documentation](../kms/architecture.md) - Key management integration

@@ -640,11 +640,12 @@ Two helpers in `test/integration/helpers` carry this:
   cleanup if **no** transport ran, so a suite cannot degrade to zero adapters
   and still report success.
 
-Environment guards that fire *before* the adapter loop remain skips: they state
-that the suite is not applicable here, rather than hiding a transport that was
-supposed to work. `SkipIfNoTPM`, `SkipIfNoOVS` and their siblings are
-unaffected. The runner starts OVS and swtpm for every target, so in a `make` run these guards fire only when that
-bring-up failed, and the runner has already printed a warning saying so. For
+Environment guards fail as well. A suite whose prerequisite (a TPM, OVS,
+swtpm, a configured daemon section) is missing fails; where a suite checks the
+prerequisite itself, the failure is a typed error naming it and how to provide
+it. Nothing in `test/integration` skips (#260). The runner starts OVS and swtpm for every target, so in a `make`
+run such a failure means that bring-up failed, and the runner has already
+printed a warning saying so. For
 `integration-test-vtpm` a swtpm that does not start ends the run.
 
 A bring-up failure ends the run for the same reason. When `platformd` does not
@@ -653,8 +654,9 @@ suite runs rather than handing the suites endpoints nothing is listening on.
 
 ## A Missing Surface Is Declared by Type, Never by Error Text
 
-A subtest may skip because an operation has no endpoint on a transport, but
-only when that gap is *declared*. Suites used to skip whenever the error text
+A subtest whose operation has no endpoint on a transport fails with the
+declared gap's own text, naming the transport and operation; it is never
+skipped (#260). The gap must be *declared*. Suites used to skip whenever the error text
 contained one of a dozen phrases ("not implemented", "unavailable", "501",
 "404", "unknown flag", ...), so a 404, a mistyped CLI flag, a timeout or a
 failed handshake read as "not built yet" (issue #487). Error text is never
@@ -667,16 +669,16 @@ matched now.
   names where the gap is recorded.
 - `surface.IsNotImplemented(err)` is true only for an `ErrNoSurface` anywhere in
   the chain (`errors.As`) or a gRPC status with `codes.Unimplemented`.
-- `surface.SkipIfNotImplemented(t, err)` skips on exactly that and leaves every
-  other error to the caller, which fails with its text or asserts it as an
+- `surface.RequireImplemented(t, err)` fails the test on exactly that, with the
+  gap's text, and leaves every other error to the caller, which fails with its text or asserts it as an
   expected refusal.
 - `surface.IsDeclaredRefusal(err, sentinels...)` recognises a deployment gap
   the daemon declares with a sentinel (for example
   `daemon.ErrFIDO2NotConfigured`), either in the chain or carried across the
   wire as that sentinel's exact text. The match comes from the sentinel value,
   so renaming or retiring a sentinel breaks the build rather than widening the
-  skip. The fido2, piv, luks and ceremony suites skip on their backend
-  sentinels this way.
+  match. The fido2, piv and luks suites assert their backend sentinels as the
+  expected refusal this way.
 
 Do not add a phrase list to a suite. If a transport lacks an operation, make
 its adapter return `ErrNoSurface`. If the server refuses for a deployment
@@ -691,7 +693,7 @@ reason, match its sentinel with `IsDeclaredRefusal`.
 5. **Never Skip an Unreachable Transport** - A transport whose `Setup` fails has
    not been tested. Fail with `helpers.RequireAdapterSetup` or
    `AdapterGate.RequireSetup`, never `t.Skip` (see the section above)
-6. **Skip Only on a Typed Declaration** - `surface.SkipIfNotImplemented` or a
-   server sentinel through `surface.IsDeclaredRefusal`, never a match on error
-   text (see the section above)
+6. **Recognise a Gap Only by Its Typed Declaration** - `surface.RequireImplemented`
+   or a server sentinel through `surface.IsDeclaredRefusal`, never a match on
+   error text (see the section above)
 7. **Assert Behavior, Not Implementation** - Test outcomes, not internals

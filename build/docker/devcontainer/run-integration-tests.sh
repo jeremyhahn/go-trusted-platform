@@ -827,9 +827,6 @@ abort_no_daemon() {
 setup_env_vars() {
     echo "=== Setting environment variables for adapters ==="
 
-    # helpers.SkipIfNotDevContainer checks this at runtime
-    export DEVCONTAINER="1"
-
     # Socket path for Unix adapters (daemon, sdn, vtpm, overlay, and the new
     # ceremony/piv/luks/fido2 suites that share the adapter pattern).
     export PLATFORMD_SOCKET="${PLATFORMD_SOCK_PATH}"

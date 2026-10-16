@@ -30,7 +30,6 @@ package integration
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -2193,10 +2192,6 @@ func setupAttestationAdapter(t *testing.T, ctx context.Context, adapter Protocol
 func testAttestationGetChallenge(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupAttestationAdapter(t, ctx, adapter)
 	_, err := cmd.GetVMIdentity(ctx, attestation.GetVMIdentityOptions{VMID: "nonexistent-test"})
-	var gap surface.ErrNoSurface
-	if errors.As(err, &gap) {
-		t.Skipf("%s: %v", protocolName(adapter), gap)
-	}
 	if missing := surfaceMissing(adapter, "Attestation", "GetVMIdentity", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -2206,10 +2201,6 @@ func testAttestationGetChallenge(t *testing.T, ctx context.Context, adapter Prot
 func testAttestationSubmitQuote(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupAttestationAdapter(t, ctx, adapter)
 	_, err := cmd.GetVMIdentity(ctx, attestation.GetVMIdentityOptions{VMID: "nonexistent-submit-test"})
-	var gap surface.ErrNoSurface
-	if errors.As(err, &gap) {
-		t.Skipf("%s: %v", protocolName(adapter), gap)
-	}
 	if missing := surfaceMissing(adapter, "Attestation", "GetVMIdentity", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -2218,10 +2209,6 @@ func testAttestationSubmitQuote(t *testing.T, ctx context.Context, adapter Proto
 func testAttestationVerifyQuote(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupAttestationAdapter(t, ctx, adapter)
 	_, err := cmd.GetVMIdentity(ctx, attestation.GetVMIdentityOptions{VMID: "nonexistent-verify-test"})
-	var gap surface.ErrNoSurface
-	if errors.As(err, &gap) {
-		t.Skipf("%s: %v", protocolName(adapter), gap)
-	}
 	if missing := surfaceMissing(adapter, "Attestation", "GetVMIdentity", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -2230,10 +2217,6 @@ func testAttestationVerifyQuote(t *testing.T, ctx context.Context, adapter Proto
 func testAttestationGetStatus(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupAttestationAdapter(t, ctx, adapter)
 	_, err := cmd.GetVMIdentity(ctx, attestation.GetVMIdentityOptions{VMID: "nonexistent-status-test"})
-	var gap surface.ErrNoSurface
-	if errors.As(err, &gap) {
-		t.Skipf("%s: %v", protocolName(adapter), gap)
-	}
 	if missing := surfaceMissing(adapter, "Attestation", "GetVMIdentity", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -2242,10 +2225,6 @@ func testAttestationGetStatus(t *testing.T, ctx context.Context, adapter Protoco
 func testAttestationPolicyEvaluation(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupAttestationAdapter(t, ctx, adapter)
 	_, err := cmd.GetVMIdentity(ctx, attestation.GetVMIdentityOptions{VMID: "nonexistent-policy-test"})
-	var gap surface.ErrNoSurface
-	if errors.As(err, &gap) {
-		t.Skipf("%s: %v", protocolName(adapter), gap)
-	}
 	if missing := surfaceMissing(adapter, "Attestation", "GetVMIdentity", err); missing != nil {
 		t.Fatal(missing)
 	}

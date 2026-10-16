@@ -342,7 +342,7 @@ func TestQUICDNS(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("DNS service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "DNS"})
 				}
 			}
 			t.Fatalf("DNS ListZones request failed: %v", err)
@@ -359,7 +359,7 @@ func TestQUICDNS(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("DNS service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "DNS"})
 				}
 			}
 			t.Fatalf("DNS GetConfig request failed: %v", err)
@@ -375,7 +375,7 @@ func TestQUICDNS(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("DNS service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "DNS"})
 				}
 			}
 			t.Fatalf("DNS GetMetrics request failed: %v", err)
@@ -397,7 +397,7 @@ func TestQUICDNS(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("DNS service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "DNS"})
 				}
 			}
 		}
@@ -417,7 +417,7 @@ func TestQUICDNS(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("DNS service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "DNS"})
 				}
 			}
 		}
@@ -435,7 +435,7 @@ func TestQUICDNS(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("DNS service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "DNS"})
 				}
 			}
 		}

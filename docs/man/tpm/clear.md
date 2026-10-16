@@ -1,5 +1,9 @@
 % platformd tpm clear | Trusted Platform Commands Manual
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> `platformd` has only `serve` and `version`; the CA, TPM and PKCS #11 verbs
+> are `platformctl` commands, documented in each feature folder's `cli.md`.
+
 # NAME
 
 **tpm clear** - Display TPM clearrmation
@@ -47,7 +51,7 @@ https://trustedcomputinggroup.org/wp-content/uploads/TPM-2.0-1.83-Part-3-Command
   
 ## References
 
-[common options](common/options.md) collection of common options that provide
+[common options](../common/options.md) collection of common options that provide
 clearrmation many users may expect.
 
 [Trusted Platform Module Library Part 3: Commands - Section 24.6: TPM2_Clear](https://trustedcomputinggroup.org/wp-content/uploads/TPM-2.0-1.83-Part-3-Commands.pdf)

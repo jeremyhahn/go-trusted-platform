@@ -368,6 +368,35 @@ template per role, then creates one profile per node carrying the **merged**
 config (role template → platform globals → per-node overrides → injected node
 identity). Profile IDs are captured for Phase 6.
 
+The node reads its profile's config back at boot with
+`GET /api/v1/devices/config?mac=…` (or `?serial=…`). The route is
+unauthenticated by design, because its caller is a machine that is still
+booting and holds no credential, so the boundary is where it is served
+(#177, ruled 2026-10-14):
+
+- **Provisioning listener only.** Only a webservice with
+  `surface: provisioning` mounts the route, and that listener mounts nothing
+  else. Every full and edge listener answers it with the unknown-route `404`
+  (`WebServerV1.buildRoutes`, `pkg/webservice/webserver_v1.go:1234-1243`).
+- **Bound inside the provisioning zone.** Startup refuses a provisioning
+  listener unless its `bind-host` is an IP literal inside the provisioning
+  zone of the node's network plan (`webservice.ValidateProvisioningSurface`,
+  `pkg/webservice/provisioning.go:38`, called from `App.validateWebServices`
+  in `pkg/app/app.go`). That zone is the isolated provisioning VLAN, and its
+  flows, not the bound address alone, keep everything else off the route. A
+  host on that VLAN that knows or guesses a MAC or serial still reads that
+  profile's config.
+- **EK-bound challenge: PLANNED, blocked on the SDK.** The #177 follow-up
+  releases a config only to the machine whose EK the profile names. The SDK
+  has no activation the device can answer from the installer, before first
+  boot creates its IAK
+  ([`docs/provisioning/engineering.md`](../provisioning/engineering.md) §3,
+  Planned).
+
+The ruling and the route's shapes are in [`api.md`](api.md) §6; the trust
+boundary is in [`docs/device/architecture.md`](../device/architecture.md)
+§4.2.
+
 ### Phase 5 · Gateways and workers
 
 Same per-node paths as Phase 3, run concurrently for every non-control-plane

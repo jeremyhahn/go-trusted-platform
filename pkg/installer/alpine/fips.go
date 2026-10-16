@@ -30,11 +30,16 @@ func init() {
 	fips.RegisterInstaller("alpine", NewFIPSInstaller)
 }
 
+// fipsArtifactsDir is where an ISO built with --fips carries the pre-built
+// FIPS kernel, kernel modules and OpenSSL FIPS provider.
+const fipsArtifactsDir = "/media/cdrom/fips-artifacts"
+
 // FIPSInstaller implements FIPS installation for Alpine Linux
 type FIPSInstaller struct {
-	config     *fips.Config
-	logger     *slog.Logger
-	apkManager *APKManager
+	config       *fips.Config
+	logger       *slog.Logger
+	apkManager   *APKManager
+	artifactsDir string
 }
 
 // NewFIPSInstaller creates a new Alpine FIPS installer
@@ -51,9 +56,10 @@ func NewFIPSInstaller(config *fips.Config) (fips.Installer, error) {
 	apkManager := NewAPKManager(config.Mirror, config.Version, config.Arch, config.WorkDir, config.Logger)
 
 	return &FIPSInstaller{
-		config:     config,
-		logger:     config.Logger,
-		apkManager: apkManager,
+		config:       config,
+		logger:       config.Logger,
+		apkManager:   apkManager,
+		artifactsDir: fipsArtifactsDir,
 	}, nil
 }
 
@@ -193,7 +199,7 @@ func (i *FIPSInstaller) installFIPSKernel(ctx context.Context) error {
 	i.logger.Info("Installing pre-built FIPS-capable kernel from ISO")
 
 	// Check if FIPS artifacts are available on the ISO
-	artifactsDir := "/media/cdrom/fips-artifacts"
+	artifactsDir := i.artifactsDir
 	if _, err := os.Stat(artifactsDir); os.IsNotExist(err) {
 		return &MessageError{Msg: fmt.Sprintf("FIPS artifacts not found on ISO at %s. Was the ISO built with --fips flag?", artifactsDir)}
 	}
@@ -297,7 +303,7 @@ func (i *FIPSInstaller) installOpenSSLFIPS(ctx context.Context) error {
 	i.logger.Info("Alpine's system OpenSSL installed successfully")
 
 	// Step 2: Copy ONLY the FIPS provider module from ISO
-	artifactsDir := "/media/cdrom/fips-artifacts"
+	artifactsDir := i.artifactsDir
 	fipsModuleSrc := filepath.Join(artifactsDir, "usr", "lib", "ossl-modules", "fips.so")
 
 	// Verify the FIPS module exists on the ISO

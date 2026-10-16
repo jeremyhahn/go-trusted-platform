@@ -1,12 +1,12 @@
 # DNS Zone Transfers (AXFR)
 
-> **Status: Outbound AXFR implemented (platform as PRIMARY).**
->
-> The Trusted Platform DNS server acts as a **primary (master) nameserver**.
-> It serves full zone transfers (AXFR, RFC 5936) over DNS TCP to explicitly
-> configured, **TSIG-authenticated** secondary nameservers. Inbound/secondary
-> mode, IXFR, and NOTIFY are **not** implemented — see
-> [Not Yet Implemented](#not-yet-implemented).
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> Outbound AXFR with the platform as primary, as served by `pkg/dns/axfr.go`.
+
+The platform DNS server is a **primary nameserver**. It serves full zone
+transfers (AXFR, RFC 5936) over DNS TCP to configured, **TSIG-authenticated**
+secondaries. Secondary mode, IXFR and NOTIFY are not implemented; see
+[Not Implemented](#not-implemented).
 
 ## Overview
 
@@ -45,36 +45,11 @@ protocols, because a secondary nameserver speaks DNS, not the platform SDK.
 
 The DNS server validates the request TSIG (the configured keys are installed
 into the server's TSIG secret table at startup) and signs the AXFR response.
-The zone content emitted on the wire is produced by `dns.BuildZoneTransfer`,
-the single projection function that both the wire responder and the REST
-export surface share, so they never drift.
+The records on the wire come from `dns.BuildZoneTransfer`.
 
-### REST/management surface
-
-`POST /api/v1/dns/transfer` is a **management / export** surface, not a wire
-transfer. It returns exactly the records a secondary would receive (RFC 5936
-order, rendered as presentation-format strings) plus the configured secondary
-key names, so an operator can preview a zone export or audit which secondaries
-are authorized. It never performs a wire transfer and never discloses a TSIG
-secret.
-
-```jsonc
-// POST /api/v1/dns/transfer  { "zone_name": "example.com." }
-{
-  "zone_name": "example.com.",
-  "model": "primary",
-  "records": [
-    "example.com.\t3600\tIN\tSOA\tns1.example.com. hostmaster.example.com. 2026080401 86400 7200 3600000 3600",
-    "example.com.\t3600\tIN\tNS\tns1.example.com.",
-    "www.example.com.\t300\tIN\tA\t192.0.2.10",
-    "example.com.\t3600\tIN\tSOA\tns1.example.com. hostmaster.example.com. 2026080401 86400 7200 3600000 3600"
-  ],
-  "record_count": 4,
-  "secondaries": ["secondary1."],
-  "message": "authoritative AXFR is served over DNS TCP to TSIG-authenticated secondaries; this is the zone-export preview",
-  "timestamp": "2026-08-04T00:00:00Z"
-}
-```
+No API transport serves a transfer or an export preview: there is no
+`/api/v1/dns/transfer` route, and the `Service.ZoneTransfer` method has no
+caller outside `pkg/dns`.
 
 ## Configuration
 
@@ -88,8 +63,8 @@ dns:
     enabled: true
     tsig-keys:
       - name: "secondary1."          # TSIG key name (canonicalized to lowercase FQDN)
-        algorithm: "hmac-sha256"      # optional; defaults to hmac-sha256
-        secret: "${ZONE_TRANSFER_KEY}" # base64-encoded shared HMAC secret
+        algorithm: "hmac-sha256"      # read but not enforced; see below
+        secret: "<base64 secret>"     # base64-encoded shared HMAC secret
 ```
 
 ### `dns.transfer` options
@@ -104,8 +79,8 @@ dns:
 | Option | Type | Required | Description |
 |--------|------|----------|-------------|
 | `name` | string | Yes | TSIG key name; canonicalized to a lowercase FQDN (e.g. `secondary1.`) |
-| `algorithm` | string | No | HMAC algorithm; one of `hmac-sha256` (default), `hmac-sha512`, `hmac-sha1` |
-| `secret` | string | Yes | Base64-encoded shared HMAC secret. Provide via environment/secret reference — never hardcode |
+| `algorithm` | string | No | Loaded but not used: the response is signed with the algorithm of the request's TSIG (hmac-sha256 when the request names none) |
+| `secret` | string | Yes | Base64-encoded shared HMAC secret. Keep it out of checked-in config |
 
 A key with an empty `name` or `secret` is ignored. If no valid key remains,
 the responder stays fail-closed.
@@ -148,16 +123,14 @@ zone "example.com." {
 
 - Use a distinct TSIG key per secondary (or per trust domain) to limit blast
   radius and simplify rotation.
-- Prefer `hmac-sha256` or `hmac-sha512`.
-- Supply secrets through environment variables / secret references, never
-  literals in checked-in config.
+- Configure secondaries to sign with `hmac-sha256` or `hmac-sha512`; the
+  platform answers with whatever algorithm the request used.
+- Keep secrets out of checked-in config.
 - Rotate TSIG keys on a regular cadence.
 
-## Not Yet Implemented
+## Not Implemented
 
-The following were part of an earlier design sketch and are **not** in the
-current build. They are documented here only to set expectations; the code
-does not read any of this configuration:
+The code reads none of this configuration:
 
 | Feature | Status |
 |---------|--------|
@@ -166,7 +139,7 @@ does not read any of this configuration:
 | **Secondary/slave mode** | Not implemented — the platform is primary-only and never pulls a zone |
 | **IP-based `allow-transfer` ACLs** | Not implemented — authorization is by TSIG key, not source IP |
 | **Per-zone key scoping / rate limiting** | Not implemented — a configured key may transfer any served zone |
-| **`platformctl dns transfer …` CLI** | Not implemented — use the REST export surface for previews |
+| **Transfer or export over the API transports** | Not implemented — no REST, gRPC, QUIC, MCP or Unix surface, and no `platformctl` command |
 
 When any of these lands, this document and the `dns.transfer` schema must be
 updated in the same change.

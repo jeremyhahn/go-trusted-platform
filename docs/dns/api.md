@@ -192,7 +192,7 @@ positions described above are unchanged. See
 | `0x02` | `StatusNotFound` | 404 | Unknown zone or record |
 | `0x03` | `StatusUnauthorized` | 401 | Token invalid |
 | `0x04` | `StatusInternalError` | 500 | Resolver or key-store failure |
-| `0x06` | `StatusAlreadyExists` | 409 | `ErrZoneAlreadyExists` |
+| `0x06` | `StatusAlreadyExists` | 500 | `ErrZoneAlreadyExists` (REST `Register` only; REST `CreateZone` saves over an existing zone) |
 | `0x07` | `StatusPermissionDenied` | 403 | Missing `dns:*` scope |
 | `0x09` | `StatusInvalidArgument` | 400 | `ErrRecordTypeNotSupported`, `ErrInvalidResolverAddress`, `ErrInvalidResolverPort` |
 | `0x0A` | `StatusUnavailable` | 503 | No DNS backend: the daemon has no `dns:` section |

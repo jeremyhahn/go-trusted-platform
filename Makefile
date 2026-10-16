@@ -2917,7 +2917,12 @@ TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cm
 # the package is endpoints.go and endpoints_test.go alone, which check that the
 # shared endpoint helpers read the variables run-integration-tests.sh exports,
 # built from the ports it gives platformd. Every other file keeps the tag.
-TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./test/integration/helpers/surface/ ./test/integration/helpers/
+#
+# scripts/depscheck added 2026-10-15 (#927): `make deps-check`'s parse and
+# decision logic, tested over testdata fixtures with no network. Discovery
+# lists only ./pkg/... and ./cmd/..., so without this entry it would run in no
+# unit stage.
+TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./test/integration/helpers/surface/ ./test/integration/helpers/ ./scripts/depscheck/
 
 # RACE_EXCLUDE: packages with data races that are KNOWN and TRACKED. The race
 # gate must be green to be a gate, so a package lands here only with an issue
@@ -4630,6 +4635,18 @@ deps-latest:
 	  V=$$(go list -m -versions "$$m" 2>/dev/null | tr " " "\n" | tail -1); \
 	  if [ -n "$$V" ] && [ "$$V" != "$$m" ]; then go get "$$m@$$V" || exit 1; fi; \
 	done; go mod tidy'
+
+# deps-check is the CI standard's latest-version stage (handbook ci-standard.md
+# §1, devops.md §4). scripts/depscheck fails when a direct require or a version
+# replace in go.mod or sdk/go/go.mod is behind its latest version and its line
+# carries no comment naming the reason (devops.md §9). First-party modules are
+# compared with their highest tag including -alpha, the version deps-latest
+# moves to (dependency-resolution.md §3). It needs the module proxy and the dev
+# Gitea: under GOPROXY=off it fails with that reason instead of passing.
+.PHONY: deps-check
+## deps-check: Fail when a dependency is behind its latest version without a go.mod reason comment
+deps-check:
+	@$(GO) run ./scripts/depscheck -go $(GO) . sdk/go
 
 # ---- release-alpha: handbook template release-alpha v2.4.0 ----
 # make release-alpha VERSION=vX.Y.Z-alpha cuts an internal alpha from main

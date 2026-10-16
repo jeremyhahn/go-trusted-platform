@@ -81,6 +81,38 @@ const (
 	oidTPMAttestationQuote = "2.23.133.11.2"
 )
 
+// ErrMissingPrerequisite reports an environment prerequisite the enrollment
+// test needs and the environment lacks.
+type ErrMissingPrerequisite struct {
+	Prerequisite string
+	Err          error
+}
+
+func (e ErrMissingPrerequisite) Error() string {
+	const remedy = "run in the devcontainer, which runs as root and installs qemu-system-x86"
+	if e.Err != nil {
+		return fmt.Sprintf("%s: %v: %s", e.Prerequisite, e.Err, remedy)
+	}
+	return fmt.Sprintf("%s: %s", e.Prerequisite, remedy)
+}
+
+func (e ErrMissingPrerequisite) Unwrap() error {
+	return e.Err
+}
+
+// checkEnrollmentPrerequisites returns ErrMissingPrerequisite for the first
+// prerequisite the environment lacks: root for the isolated bridge and TAP
+// network, and QEMU for the server and client VMs.
+func checkEnrollmentPrerequisites() error {
+	if euid := os.Geteuid(); euid != 0 {
+		return ErrMissingPrerequisite{Prerequisite: fmt.Sprintf("root privileges for network setup (running as euid %d)", euid)}
+	}
+	if _, err := exec.LookPath("qemu-system-x86_64"); err != nil {
+		return ErrMissingPrerequisite{Prerequisite: "QEMU binary qemu-system-x86_64", Err: err}
+	}
+	return nil
+}
+
 // TestEnrollmentIntegration tests the full ACME enrollment flow between server and client VMs.
 // This test has two modes:
 // 1. Framework validation mode (default): Validates the test infrastructure works
@@ -89,14 +121,8 @@ const (
 // 2. Full integration mode: Requires pre-built ISOs with the platform installed
 //   - Set INTEGRATION_TEST_SERVER_ISO and INTEGRATION_TEST_CLIENT_ISO env vars
 func TestEnrollmentIntegration(t *testing.T) {
-	// Skip if not running as root (required for network setup)
-	if os.Geteuid() != 0 {
-		t.Skip("Integration test requires root privileges for network setup")
-	}
-
-	// Check QEMU availability
-	if _, err := exec.LookPath("qemu-system-x86_64"); err != nil {
-		t.Skip("QEMU not available, skipping integration test")
+	if err := checkEnrollmentPrerequisites(); err != nil {
+		t.Fatalf("missing prerequisite: %v", err)
 	}
 
 	// Check for pre-built ISOs to determine test mode

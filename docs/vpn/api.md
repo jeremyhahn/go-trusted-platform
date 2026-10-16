@@ -1,6 +1,8 @@
 # Remote-Access VPN — API
 
-> **Status: PARTIAL — the operator control plane ships on every transport (#584 PR 3) and in the JS SDK and the web console (#584 PR 4), and the gateway lease record (§6) is served; the gateway's admission listener serves the client verbs over HTTPS (#557), and the client in `pkg/vpn/agent` speaks them (§5).** · Last verified: 2026-10-14
+> **Status: NORMATIVE** · Scope: `VPNService` and the gateway admission listener · Last verified: 2026-10-14
+> Conflicts with this document are defects. Fix them here first.
+> Partial today: the operator control plane ships on every transport (#584 PR 3) and in the JS SDK and the web console (#584 PR 4), and the gateway lease record (§6) is served; the gateway's admission listener serves the client verbs over HTTPS (#557), and the client in `pkg/vpn/agent` speaks them (§5).
 > §1–§4 describe `VPNService` as it is routed today. §5 is the gateway's
 > admission listener: routed, but `gatewayd` does not yet assemble the VPN
 > runtime that opens it (see [engineering.md](engineering.md) §1).

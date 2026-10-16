@@ -1,5 +1,8 @@
 # SDN Configuration Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The `sdn:` configuration section.
+
 ## Overview
 
 This document provides a comprehensive reference for configuring the SDN subsystem,
@@ -18,6 +21,7 @@ client, err := ovs.NewClient(
     ovs.WithDatabase("Open_vSwitch"),
     ovs.WithTimeout(30*time.Second),
     ovs.WithOpenFlowSocketDir("/var/run/openvswitch"),
+    ovs.WithAppCtlRunDir("/var/run/openvswitch"),
 )
 ```
 
@@ -25,10 +29,11 @@ client, err := ovs.NewClient(
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| socketPath | string | Required | Path to OVSDB Unix socket |
+| socketPath | string | Required | Path to OVSDB Unix socket; empty returns `ErrInvalidSocket` |
 | database | string | "Open_vSwitch" | OVSDB database name |
 | timeout | time.Duration | 30s | Operation timeout |
 | ofSocketDir | string | "/var/run/openvswitch" | Directory for OpenFlow sockets |
+| appCtlRunDir | string | "/var/run/openvswitch" | Run directory holding the `ovs-appctl` control sockets (`WithAppCtlRunDir`) |
 
 ### Socket Paths
 
@@ -56,7 +61,7 @@ ofClient, err := openflow.NewClient(
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| bridgeName | string | Required | OVS bridge name |
+| bridgeName | string | Required | OVS bridge name; empty returns `ErrInvalidBridgeName` |
 | socketDir | string | "/var/run/openvswitch" | Directory for management sockets |
 | timeout | time.Duration | 30s | Operation timeout |
 
@@ -74,26 +79,37 @@ config := policy.Config{
     // Required: Flow controller for OpenFlow operations
     FlowController: ovsClient,
 
-    // Required: Port controller for VLAN/state operations
-    // If nil, uses FlowController if it implements OVSPortController
+    // Port controller for VLAN/state operations. If nil, FlowController is
+    // used when it implements OVSPortController; otherwise NewEngine fails.
     PortController: ovsClient,
 
     // Optional: Logger (uses slog.Default() if nil)
     Logger: slog.Default(),
 
-    // Optional: Certificate policy extractor
+    // Optional: Certificate policy extractor (NewX509PolicyExtractor() if nil)
     PolicyExtractor: policy.NewX509PolicyExtractor(),
 
-    // Optional: Certificate validator
+    // Optional: Certificate validator (revocation checks)
     CertificateValidator: certValidator,
+
+    // Optional: Zone-keyed flow installation; a quarantine policy is
+    // refused without it
+    ZoneFlowManager: zoneFlows,
+
+    // Optional: How per-port allow rules end: normal, or goto_table:10
+    // when a gatewayd pipeline owns the bridge
+    Terminal: zoneflows.TerminalNormal,
+
+    // Optional: Resolved zones; identifies the quarantine zone
+    Zones: resolvedZones,
 
     // Optional: Enable certificate lifecycle monitoring
     EnableMonitoring: true,
 
     // Optional: Monitor configuration
     MonitorConfig: policy.MonitorConfig{
-        CheckInterval:    time.Hour,
-        ExpiryThreshold:  7 * 24 * time.Hour, // 7 days
+        CheckInterval:   time.Hour,
+        ExpiryThreshold: 7 * 24 * time.Hour, // 7 days
     },
 }
 
@@ -106,30 +122,38 @@ engine, err := policy.NewEngine(config)
 |-----------|------|---------|-------------|
 | BridgeName | string | Required | OVS bridge to manage |
 | FlowController | FlowController | Required | OpenFlow operations interface |
-| PortController | OVSPortController | nil | OVSDB port operations interface |
+| PortController | OVSPortController | FlowController | OVSDB port operations; defaults to FlowController when it implements OVSPortController, otherwise NewEngine returns an error |
 | Logger | *slog.Logger | slog.Default() | Structured logger |
-| PolicyExtractor | PolicyExtractor | X509PolicyExtractor | Certificate policy extraction |
+| PolicyExtractor | PolicyExtractor | NewX509PolicyExtractor() | Certificate policy extraction |
 | CertificateValidator | CertificateValidator | nil | Certificate validation |
-| EnableMonitoring | bool | false | Enable certificate monitoring |
+| ZoneFlowManager | *ZoneFlowManager | nil | Zone-keyed flow installation; required for a quarantine policy |
+| Terminal | zoneflows.Terminal | normal | How per-port allow rules end (`normal` or `goto_table:10`) |
+| Zones | []zone.ZoneConfig | nil | Resolved zone set; identifies the quarantine zone |
+| EnableMonitoring | bool | false | Enable certificate monitoring; the monitor is created only when true |
 | MonitorConfig | MonitorConfig | - | Monitor settings |
 
 ### Monitor Configuration
 
 ```go
 type MonitorConfig struct {
-    // How often to check certificate expiry
+    // How often to check certificate status (default 5m)
     CheckInterval time.Duration
 
-    // Threshold before expiry to trigger warning
+    // Callbacks fire for certificates expiring within this duration (default 24h)
     ExpiryThreshold time.Duration
-
-    // Callback when certificate is about to expire
-    OnExpirySoon func(portID string, expiresIn time.Duration)
-
-    // Callback when certificate has expired
-    OnExpired func(portID string)
 }
 ```
+
+Callbacks are registered on the `*CertificateMonitor`, not in the config:
+
+```go
+monitor.OnExpiry(func(portID string, cert interface{}, timeUntilExpiry time.Duration) { ... })
+monitor.OnRevoked(func(portID string, cert interface{}) { ... })
+```
+
+Each callback runs in its own goroutine and is re-invoked on every check while
+the condition holds, so it must be safe for concurrent use. An expired or
+revoked certificate also blocks the port.
 
 ## Bridge Configuration
 
@@ -141,8 +165,12 @@ ctx := context.Background()
 // Create bridge with default settings
 bridge, err := client.CreateBridge(ctx, "br0")
 
-// Create bridge with OpenFlow protocol
-bridge, err := client.CreateBridgeWithProtocol(ctx, "br0", "OpenFlow13")
+// Create bridge with datapath, fail mode and OpenFlow protocols
+bridge, err := client.CreateBridgeWithOptions(ctx, "br0", &ovs.BridgeOptions{
+    DatapathType: "system",          // "" or "system" = kernel; "netdev" = userspace/DPDK
+    FailMode:     "secure",          // "standalone", "secure" or empty
+    Protocols:    []string{"OpenFlow13"},
+})
 ```
 
 ### Bridge Properties
@@ -154,16 +182,8 @@ bridge, err := client.CreateBridgeWithProtocol(ctx, "br0", "OpenFlow13")
 | fail_mode | string | Behavior on controller disconnect ("secure", "standalone") |
 | datapath_type | string | Datapath implementation ("system", "netdev") |
 
-### Default Bridge Configuration
-
-```yaml
-bridge:
-  name: "br0"
-  protocols:
-    - "OpenFlow13"
-  fail_mode: "secure"
-  datapath_type: "system"
-```
+The platform's own bridge is configured by `sdn.ovs` (`bridge`, `datapath`,
+`protocols`); see [`ovs:`](#ovs--datapath-hardware-offload-and-dpdk).
 
 ## Port Configuration
 
@@ -206,61 +226,77 @@ ofPort, err := client.GetOFPort(ctx, "eth0")
 
 ### Flow Priorities
 
-| Priority | Use Case |
-|----------|----------|
-| 65535 | Controller rules (highest) |
-| 1000-9999 | User ACL rules |
-| 100-999 | System rules (DHCP, DNS, etc.) |
-| 1-99 | Default rules |
-| 0 | Table-miss (lowest) |
+The zone templates in `pkg/sdn/policy/zoneflows` install their table-0 rules at
+these priorities:
 
-### Match Field Configuration
+| Priority | Rule |
+|----------|------|
+| 1900 | ARP and IPv6 neighbour discovery |
+| 1850 | DHCP |
+| 1800 | DNS |
+| 1750 | TFTP |
+| 1700 | ACME (provisioning), scanning servers (quarantine) |
+| 1650 | Package repositories (provisioning), remediation servers (quarantine) |
+| 1600 | Notification portal (quarantine), ICMP (provisioning, when allowed) |
+| 1100 | Quarantine default drop |
+| 900 | Provisioning default drop |
+| 200 | Inter-zone matrix deny |
+| 100 | Inter-zone matrix allow, east-west, management |
 
-```go
-flow := openflow.NewFlowMod(1000) // priority
+Conntrack uses table 20 (the gate: IP at 100, neighbour discovery at 200) and
+table 21 (the verdict: invalid 400, established/related 300, miss 0);
+accepted traffic continues in table 30.
 
-// Layer 2 matches
-flow.Match.SetInPort(1)
-flow.Match.SetEthSrc("aa:bb:cc:dd:ee:ff")
-flow.Match.SetEthDst("11:22:33:44:55:66")
-flow.Match.SetEthType(0x0800) // IPv4
+### Building a Flow
 
-// VLAN matches
-flow.Match.SetVLANVid(100)
-
-// Layer 3 matches (requires EthType)
-flow.Match.SetIPProto(6) // TCP
-flow.Match.SetIPv4Src("192.168.1.0/24")
-flow.Match.SetIPv4Dst("10.0.0.0/8")
-
-// Layer 4 matches (requires IPProto)
-flow.Match.SetTCPDst(443)
-flow.Match.SetUDPDst(53)
-```
-
-### Action Configuration
+A `FlowMod` is built from a match and an instruction list and sent with
+`(*openflow.Client).AddFlow`:
 
 ```go
-// Output to port
-flow.AddOutputAction(2)
+fm := openflow.NewFlowMod(xid) // xid is the OpenFlow transaction ID
+fm.TableID = 0
+fm.Priority = 1000
 
-// Output to multiple ports
-flow.AddOutputAction(2)
-flow.AddOutputAction(3)
+// Layer 2 matches (fm.Match is created by NewFlowMod)
+fm.Match.AddInPort(1)
+fm.Match.AddEthSrc(srcMAC)          // net.HardwareAddr
+fm.Match.AddEthType(0x0800)         // IPv4
+fm.Match.AddVLANVid(100)
 
-// VLAN operations
-flow.AddSetVLANAction(100)
-flow.AddPopVLANAction()
+// Layer 3 and 4 matches
+fm.Match.AddIPProto(6)              // TCP
+fm.Match.AddIPv4DstMasked(net.ParseIP("10.0.0.0"), net.CIDRMask(8, 32))
+fm.Match.AddTCPDst(443)
 
-// Drop (no action = drop)
-// flow with no actions drops packets
+fm.Instructions = []openflow.Instruction{
+    openflow.NewInstructionApplyActions(
+        openflow.NewActionOutput(2, 0),
+    ),
+}
 
-// Normal L2/L3 processing
-flow.AddNormalAction()
-
-// Go to another table
-flow.AddGotoTableAction(1)
+err = ofClient.AddFlow(ctx, fm)
 ```
+
+Other matches: `AddEthDst`, `AddIPv4Src`/`AddIPv4Dst` (and `Masked` forms),
+`AddTCPSrc`, `AddUDPSrc`/`AddUDPDst`, `AddReg`, `AddCTState`/`AddCTZone`/
+`AddCTMark` and the tunnel matches.
+
+### Actions and Instructions
+
+| Need | Call |
+|------|------|
+| Output to a port | `openflow.NewActionOutput(port, 0)` |
+| Normal L2/L3 processing | `openflow.NewActionOutput(openflow.OFPPNormal, 0)` |
+| Flood / to controller | `NewActionOutput(openflow.OFPPFlood, 0)`, `NewActionOutput(openflow.OFPPController, maxLen)` |
+| VLAN push / pop | `openflow.NewActionPushVLAN(0x8100)`, `openflow.NewActionPopVLAN()` |
+| Set a field | `openflow.NewActionSetField(class, field, value)` |
+| Decrement TTL | `openflow.NewActionDecNwTTL()` |
+| Group, conntrack, register load, resubmit | `NewActionGroup`, `NewActionCT`/`NewActionCTCommit`, `NewActionRegLoad`, `NewActionResubmit` |
+| Apply actions | `openflow.NewInstructionApplyActions(actions...)` |
+| Go to another table | `openflow.NewInstructionGotoTable(tableID)` |
+| Meter | `openflow.NewInstructionMeter(meterID)` |
+
+A flow with no instructions drops the packet.
 
 ## Zone-Based Network Configuration
 
@@ -384,27 +420,40 @@ with the port's other rules.
 
 With environment 4, on a hypervisor trunk (provisioning is the native zone):
 
-**provisioning** (VLAN 405, native, untagged) — DHCP, DNS, TFTP, HTTP and ACME
-only, default drop:
+IP rules are shown for IPv4; each has an IPv6 twin (`dl_type=0x86dd`,
+`ipv6_dst`, DHCPv6 ports 546/547), and ARP has neighbour-discovery twins.
+
+**provisioning** (VLAN 405, native, untagged) — DHCP, DNS, TFTP, ACME and
+package repositories only, default drop. With no server addresses configured
+the DNS, ACME and package rules accept any destination; with addresses, one
+rule per address (`nw_dst=<ip>`):
 
 ```
-in_port=<port>,vlan_tci=0x0000/0x1fff,arp,                      actions=normal
-in_port=<port>,vlan_tci=0x0000/0x1fff,udp,tp_src=68,tp_dst=67,  actions=normal   # DHCP
-in_port=<port>,vlan_tci=0x0000/0x1fff,udp,tp_dst=53,            actions=normal   # DNS
-in_port=<port>,vlan_tci=0x0000/0x1fff,udp,tp_dst=69,            actions=normal   # TFTP
-in_port=<port>,vlan_tci=0x0000/0x1fff,tcp,tp_dst=443,           actions=normal   # ACME
-in_port=<port>,vlan_tci=0x0000/0x1fff,                          actions=drop
+priority=1900 in_port=<port>,vlan_tci=0x0000/0x1fff,dl_type=0x0806                                  actions=normal  # ARP
+priority=1850 in_port=<port>,vlan_tci=0x0000/0x1fff,dl_type=0x0800,nw_proto=17,tp_src=68,tp_dst=67  actions=normal  # DHCP
+priority=1800 in_port=<port>,vlan_tci=0x0000/0x1fff,dl_type=0x0800,nw_proto=17,tp_dst=53            actions=normal  # DNS; also 8053, 9053
+priority=1750 in_port=<port>,vlan_tci=0x0000/0x1fff,dl_type=0x0800,nw_proto=17,tp_dst=69            actions=normal  # TFTP
+priority=1700 in_port=<port>,vlan_tci=0x0000/0x1fff,dl_type=0x0800,nw_proto=6,tp_dst=443            actions=normal  # ACME; also 8443, 9443
+priority=1650 in_port=<port>,vlan_tci=0x0000/0x1fff,dl_type=0x0800,nw_proto=6,tp_dst=80             actions=normal  # package repos; also 443
+priority=1600 in_port=<port>,vlan_tci=0x0000/0x1fff,dl_type=0x0800,nw_proto=1                       actions=normal  # ICMP, only when AllowICMP
+priority=900  in_port=<port>,vlan_tci=0x0000/0x1fff                                                 actions=drop
 ```
 
-**quarantine** (VLAN 404, tagged on the trunk) — authentication and
-remediation only, default drop:
+**quarantine** (VLAN 404, tagged on the trunk) — DHCP, DNS, scanning,
+remediation and the notification portal only, default drop:
 
 ```
-in_port=<port>,dl_vlan=404,arp,                      actions=normal
-in_port=<port>,dl_vlan=404,udp,tp_src=68,tp_dst=67,  actions=normal   # DHCP
-in_port=<port>,dl_vlan=404,tcp,tp_dst=443,           actions=normal   # remediation
-in_port=<port>,dl_vlan=404,                          actions=drop
+priority=1900 in_port=<port>,dl_vlan=404,dl_type=0x0806                                  actions=normal  # ARP
+priority=1850 in_port=<port>,dl_vlan=404,dl_type=0x0800,nw_proto=17,tp_src=68,tp_dst=67  actions=normal  # DHCP
+priority=1800 in_port=<port>,dl_vlan=404,dl_type=0x0800,nw_proto=17,tp_dst=53            actions=normal  # DNS (nw_dst=<DNS server> when set)
+priority=1700 in_port=<port>,dl_vlan=404,dl_type=0x0800,nw_dst=<scanner>                 actions=normal  # per scanning server
+priority=1650 in_port=<port>,dl_vlan=404,dl_type=0x0800,nw_proto=6,nw_dst=<rem>,tp_dst=443 actions=normal # per remediation server and allowed port (default 443)
+priority=1600 in_port=<port>,dl_vlan=404,dl_type=0x0800,nw_proto=6,nw_dst=<portal>,tp_dst=80 actions=normal # notification portal; also 443
+priority=1100 in_port=<port>,dl_vlan=404                                                 actions=drop    # cookie quarantine:<port>
 ```
+
+When a gatewayd pipeline owns the bridge, every `actions=normal` above is
+written as `actions=goto_table:10` instead.
 
 A port placed in quarantine as an access port matches the quarantine rules on
 untagged ingress instead.
@@ -420,16 +469,8 @@ when a profile needs exactly one.
 
 ## Environment Variables
 
-Environment variables can override configuration for quick testing or container deployments:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| OVS_DB_SOCK | /var/run/openvswitch/db.sock | OVSDB socket path |
-| OVS_RUNDIR | /var/run/openvswitch | OVS runtime directory |
-| SDN_LOG_LEVEL | info | Logging level (debug, info, warn, error) |
-
-No environment variable sets a VLAN: numbering comes only from
-`sdn.environment`.
+No environment variable configures the `sdn:` section: the OVSDB socket,
+bridge and every VLAN come only from the configuration file.
 
 ## Platform Configuration (YAML)
 
@@ -514,31 +555,31 @@ Semantics:
 - Changing `ovs.datapath` for an existing bridge updates the bridge's
   `datapath_type` and logs a warning — ovs-vswitchd destroys and recreates
   the datapath, briefly interrupting forwarding on that bridge.
-- Validation: `tc-policy` without `hw-offload: true` and a `dpdk:` block
-  without `datapath: netdev` are configuration errors that fail startup.
+- Validation fails startup on an empty `socket` (`ErrInvalidOVSSocket`) or
+  `bridge` (`ErrInvalidBridge`), an unknown `tc-policy`
+  (`ErrInvalidTCPolicy`), `tc-policy` without `hw-offload: true`
+  (`ErrTCPolicyWithoutHWOffload`), and a `dpdk:` block without
+  `datapath: netdev` (`ErrDPDKRequiresNetdev`).
+- If the Open_vSwitch root row is not there yet, platformd retries for up to
+  two minutes before it gives up.
 - NIC/kernel requirements, the switchdev bring-up order, and what
   actually offloads: see [performance/hw-offload.md](./performance/hw-offload.md).
 
 ## Systemd Configuration
 
-### OVS Service Dependencies
+The SDN controller runs inside `platformd serve`; there is no separate SDN
+command or unit. The shipped unit is `configs/os/platformd.service`:
 
 ```ini
 [Unit]
-Description=Trusted Platform SDN Controller
-After=openvswitch-switch.service
-Requires=openvswitch-switch.service
+After=network-online.target systemd-tmpfiles-setup.service
 
 [Service]
-Type=simple
-ExecStart=/usr/bin/platformd sdn start
-ExecReload=/bin/kill -HUP $MAINPID
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
+ExecStart=/usr/local/bin/platformd serve --config=/etc/trusted-platform/config.yaml --socket-path=/var/run/platformd.sock --log-dir=/var/log/trusted-platform --enable-mtls ${PLATFORMD_DEBUG}
 ```
+
+It is not ordered after Open vSwitch; platformd waits for the OVS root row
+itself (see [`ovs:`](#ovs--datapath-hardware-offload-and-dpdk)).
 
 ## Troubleshooting
 
@@ -626,7 +667,8 @@ When `encode_zone_in_cert: true`:
    embedded in the issued certificate against the profile zone. A mismatch
    places the device in quarantine and returns `ErrZoneMismatch`. Certificates
    without a zone extension fall back to the profile zone (backward-compatible
-   with pre-Z3 deployments).
+   with pre-Z3 deployments); an extension that is present but unreadable fails
+   closed with `ErrZoneExtensionInvalid`.
 
 ### Example
 
@@ -669,6 +711,10 @@ subsystem at startup.
   startup so that `ResolvedZones()` returns the full zone list.
 - `dns.zone-subdomains: true` in the DNS configuration.
 
+Startup fails with `ErrZoneSubdomainsNoInternalServer` when zone subdomains
+are on without an internal DNS server, and with
+`ErrZoneSubdomainsNoNetworkZones` when the zone list is empty.
+
 **Example — resulting DNS names for host `cp-01` in zone `control-plane`:**
 
 ```
@@ -679,11 +725,11 @@ cp-01-bmc.example.internal.            # BMC — not zone-qualified (unchanged)
 
 ## Management VPN Configuration (`management_vpn:`)
 
-The `sdn.management_vpn` block enables a VPN tunnel that allows traffic from
-specified zones to reach the management plane. The WireGuard runtime details
-(key generation, peer enrollment, dynamic IP assignment) are handled by the
-go-xkms WireGuard support reached through the quicbaas SDK. This block only
-controls whether the service is active and which zones are allowed inbound.
+The `sdn.management_vpn` block declares which zones a management VPN may
+reach. platformd only validates it; nothing in platformd starts a VPN from it.
+The management VPN service itself is gatewayd's: it reads its own
+`management_vpn` section (`pkg/sdn/gateway/vpn_service.go`), described in
+[Gateway architecture](../gateway/architecture.md).
 
 ```yaml
 sdn:
@@ -694,9 +740,9 @@ sdn:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | `false` | Activates the management VPN service. When `false`, the block is accepted but the service is not started and zone validation is skipped. |
-| `type` | string | `"wireguard"` | VPN protocol. Currently only `"wireguard"` is supported. |
-| `allow_to` | []string | `[]` | Zone names whose traffic is permitted into the management plane. Each name must exist in the resolved zone set. |
+| `enabled` | bool | `false` | Turns on validation of `allow_to`. When `false`, the block is accepted and zone validation is skipped. |
+| `type` | string | `""` | VPN protocol. Only `"wireguard"` is defined by the reference architecture; the value is not checked. |
+| `allow_to` | []string | `[]` | Zone names the VPN admin subnet may reach. Each name must exist in the resolved zone set. |
 
 ### Validation
 
@@ -707,16 +753,6 @@ for the first unrecognised name.
 | Error | Cause |
 |-------|-------|
 | `ErrManagementVPNUnknownZone` | An `allow_to` entry does not match any resolved zone |
-
-### Runtime-undefined behaviour
-
-The following aspects are intentionally outside this config block and are
-managed entirely by the quicbaas SDK at runtime:
-
-- WireGuard private/public key generation and rotation
-- Per-peer allowed-IPs assignment and IPAM lease
-- Peer enrollment ceremony (IDevID attestation gate)
-- Cryptographic handshake timeouts and re-keying intervals
 
 ### Example — three-node reference deployment
 

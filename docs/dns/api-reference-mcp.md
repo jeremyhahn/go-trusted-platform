@@ -1,439 +1,87 @@
 # DNS MCP API Reference
 
-Model Context Protocol (MCP) tools for AI/LLM integration with the DNS service.
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The DNS tools of the platform MCP server (`pkg/api/mcp/`). Why there are two
+> tool families, and which transports carry what, is [api.md](api.md) §2–3.
 
 | Property | Value |
 |----------|-------|
-| Transport | stdio or HTTP |
-| Port | 9445 (HTTPS mode) |
-| Protocol | JSON-RPC 2.0 |
+| Protocol | JSON-RPC 2.0, `tools/call` |
+| HTTP transport | `POST https://<host>:9445/mcp` (TLS only, no plaintext mode) |
+| stdio transport | JSON-RPC over stdin/stdout |
+| Authorization | each tool requires a `dns:read`, `dns:write` or `dns:delete` scope |
 
-## Overview
+There are no DNS resources (`resources/read`); everything is a tool.
 
-MCP enables AI assistants to manage DNS zones and records through structured tool calls.
+## Newer family (bound to `DNSService`)
 
-## Tools
+Each tool decodes its arguments into the gRPC request message, in its proto
+JSON form, and calls the RPC ([api-reference-grpc.md](api-reference-grpc.md)).
+The response carries proto field names; gRPC status codes pass through.
 
-### dns_create_zone
-
-Create a new DNS zone.
-
-**Parameters:**
-```json
-{
-  "name": "string (required) - Zone FQDN with trailing dot",
-  "ttl": "number (required) - Default TTL in seconds",
-  "description": "string (optional) - Zone description",
-  "internal": "boolean (required) - True for internal zones"
-}
-```
-
-**Example:**
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "tools/call",
-  "params": {
-    "name": "dns_create_zone",
-    "arguments": {
-      "name": "myzone.internal.",
-      "ttl": 3600,
-      "description": "My internal zone",
-      "internal": true
-    }
-  },
-  "id": 1
-}
-```
-
-**Response:**
-```json
-{
-  "jsonrpc": "2.0",
-  "result": {
-    "content": [{
-      "type": "text",
-      "text": "Zone myzone.internal. created successfully with ID 1234567890"
-    }]
-  },
-  "id": 1
-}
-```
-
-### dns_get_zone
-
-Retrieve zone details.
-
-**Parameters:**
-```json
-{
-  "name": "string (required) - Zone name"
-}
-```
-
-**Example:**
-```json
-{
-  "method": "tools/call",
-  "params": {
-    "name": "dns_get_zone",
-    "arguments": {
-      "name": "example.internal."
-    }
-  }
-}
-```
-
-### dns_update_zone
-
-Update zone configuration.
-
-**Parameters:**
-```json
-{
-  "name": "string (required) - Zone name",
-  "ttl": "number (optional) - New TTL",
-  "description": "string (optional) - New description"
-}
-```
-
-### dns_delete_zone
-
-Delete a zone and all its records.
-
-**Parameters:**
-```json
-{
-  "name": "string (required) - Zone name"
-}
-```
-
-### dns_list_zones
-
-List all zones.
-
-**Parameters:**
-```json
-{
-  "internal": "boolean (optional) - Filter by internal/public",
-  "limit": "number (optional) - Max results",
-  "offset": "number (optional) - Pagination offset"
-}
-```
-
-### dns_add_record
-
-Add a DNS record to a zone.
-
-**Parameters:**
-```json
-{
-  "zone_name": "string (required) - Zone name",
-  "type": "string (required) - Record type (A, AAAA, CNAME, MX, NS, SRV, TXT)",
-  "name": "string (required) - Record name",
-  "value": "string (required) - Record value",
-  "ttl": "number (required) - TTL in seconds",
-  "priority": "number (optional) - Priority for MX/SRV",
-  "weight": "number (optional) - Weight for SRV",
-  "port": "number (optional) - Port for SRV"
-}
-```
-
-**Example:**
-```json
-{
-  "method": "tools/call",
-  "params": {
-    "name": "dns_add_record",
-    "arguments": {
-      "zone_name": "example.internal.",
-      "type": "A",
-      "name": "server01",
-      "value": "192.168.1.100",
-      "ttl": 3600
-    }
-  }
-}
-```
-
-### dns_get_record
-
-Get a specific DNS record.
-
-**Parameters:**
-```json
-{
-  "zone_name": "string (required) - Zone name",
-  "type": "string (required) - Record type",
-  "name": "string (required) - Record name"
-}
-```
-
-### dns_update_record
-
-Update an existing DNS record.
-
-**Parameters:**
-```json
-{
-  "zone_name": "string (required) - Zone name",
-  "type": "string (required) - Record type",
-  "name": "string (required) - Record name",
-  "value": "string (optional) - New value",
-  "ttl": "number (optional) - New TTL"
-}
-```
-
-### dns_delete_record
-
-Delete a DNS record.
-
-**Parameters:**
-```json
-{
-  "zone_name": "string (required) - Zone name",
-  "type": "string (required) - Record type",
-  "name": "string (required) - Record name"
-}
-```
-
-### dns_list_records
-
-List records in a zone.
-
-**Parameters:**
-```json
-{
-  "zone_name": "string (required) - Zone name",
-  "type": "string (optional) - Filter by record type"
-}
-```
-
-### dns_resolve
-
-Resolve a name from the managed zones: the longest managed zone suffix of
-`name` answers with only the records `name` owns
-([resolution.md](resolution.md#api-resolve)). A name with no such records is an
-error ("no records found").
-
-**Parameters:**
-```json
-{
-  "name": "string (required) - FQDN to resolve",
-  "record_type": "string (optional, default A) - A, AAAA, CNAME, MX, NS or TXT"
-}
-```
-
-**Example:**
-```json
-{
-  "method": "tools/call",
-  "params": {
-    "name": "dns_resolve",
-    "arguments": {
-      "name": "ns1.example.internal.",
-      "record_type": "A"
-    }
-  }
-}
-```
-
-**Response:**
-```json
-{
-  "result": {
-    "content": [{
-      "type": "text",
-      "text": "Resolved ns1.example.internal. A: 192.168.1.10 (TTL: 3600)"
-    }]
-  }
-}
-```
-
-## Tools bound to DNSService
-
-These tools call the gRPC `DNSService` RPC named below over the daemon's DNS
-service, so they answer and fail as gRPC does
-([api.md](api.md) §3). Each one requires the RPC's scope. The arguments are the
-RPC's request message in its JSON form, with proto field names and enum names
-such as `RECORD_TYPE_A`. An argument the request does not have is
-`InvalidArgument`. The result is the response message, with proto field names.
-
-| Tool | RPC | Scope | Arguments |
-|------|-----|-------|-----------|
-| `dns_zone_create` | `CreateZone` | `dns:write` | `name`, `ttl`, `description`, `internal`, `soa`, `ns_records` |
+| Tool | RPC | Scope | Required arguments |
+|------|-----|-------|--------------------|
+| `dns_zone_create` | `CreateZone` | `dns:write` | `name` |
 | `dns_zone_get` | `GetZone` | `dns:read` | `name` |
-| `dns_zone_list` | `ListZones` | `dns:read` | `internal_only`, `public_only`, `pagination` |
-| `dns_zone_update` | `UpdateZone` | `dns:write` | `name`, `ttl`, `description` |
+| `dns_zone_list` | `ListZones` | `dns:read` | — |
+| `dns_zone_update` | `UpdateZone` | `dns:write` | `name` |
 | `dns_zone_delete` | `DeleteZone` | `dns:delete` | `name` |
 | `dns_record_create` | `AddRecord` | `dns:write` | `zone_name`, `record` |
-| `dns_record_get` | none (`ListRecords`) | `dns:read` | `zone_name`, `type`, `name` |
-| `dns_record_list` | `ListRecords` | `dns:read` | `zone_name`, `type` |
+| `dns_record_get` | `ListRecords`, filtered | `dns:read` | `zone_name`, `type`, `name` |
+| `dns_record_list` | `ListRecords` | `dns:read` | `zone_name` |
 | `dns_record_update` | `UpdateRecord` | `dns:write` | `zone_name`, `old_record`, `new_record` |
-| `dns_record_delete` | `DeleteRecord` | `dns:delete` | `zone_name`, `type`, `name` |
-| `dns_lookup` | `Resolve` | `dns:read` | `fqdn`, `type` |
+| `dns_record_delete` | `DeleteRecord` | `dns:delete` | `zone_name`, `name` |
+| `dns_lookup` | `Resolve` | `dns:read` | `fqdn` |
 
-A `record` names its `type` and carries the record in the field for that type:
-`a`, `aaaa`, `cname`, `mx`, `ns`, `txt`, `srv`, `caa` or `tlsa`. A TLSA record
-for DANE is added with `dns_record_create` and a `tlsa` record.
+An argument the request message does not have is `InvalidArgument`.
+`dns_record_get` has no RPC of its own: it lists the zone's records of `type`
+and returns the one named `name`, or `NotFound`.
 
 ```json
 {
+  "jsonrpc": "2.0",
+  "id": 1,
   "method": "tools/call",
   "params": {
     "name": "dns_record_create",
     "arguments": {
       "zone_name": "example.internal.",
-      "record": {
-        "type": "RECORD_TYPE_A",
-        "a": {"name": "server01", "value": "192.168.1.100", "ttl": 3600}
-      }
+      "record": {"type": "RECORD_TYPE_A", "a": {"name": "www", "value": "192.0.2.10", "ttl": 300}}
     }
   }
 }
 ```
 
-`dns_record_get` lists the zone's records of `type` and returns the one named
-`name`. When none matches, it returns `NotFound`. With no `type` or no `name`,
-it returns `InvalidArgument`.
+## Older family
 
-With no `dns:` section in the daemon configuration there is no DNS backend,
-and every DNS tool, in this section and in the older `dns_*` family, returns
-`Unavailable`. The older family's answer also carries the reason
-`SERVICE_NOT_CONFIGURED` for service `dns`, the same answer gRPC gives.
+| Tool | Scope | Arguments |
+|------|-------|-----------|
+| `dns_create_zone` | `dns:write` | `zone` (required) |
+| `dns_delete_zone` | `dns:delete` | `zone` (required) |
+| `dns_list_zones` | `dns:read` | none |
+| `dns_add_record` | `dns:write` | `name` (FQDN), `record_type`, `value` (required); `ttl` (default 300) |
+| `dns_get_record` | `dns:read` | `name` (FQDN), `record_type` (required) |
+| `dns_delete_record` | `dns:delete` | `name` (FQDN), `record_type` (required) |
+| `dns_list_records` | `dns:read` | `zone` (required) |
+| `dns_resolve` | `dns:read` | `name` (required); `record_type` (default `A`) |
 
-The Go SDK's MCP transport routes `DNSService` calls to the older family
-(`dns_create_zone`, `dns_list_zones`, ...), not to these tools, and sends the
-request in its proto JSON form. `dns_create_zone` reads the zone from `zone`,
-while `CreateZoneRequest` names it `name`, so `CreateZone` through the SDK over
-MCP is refused with the zone name missing. Call `dns_zone_create` directly
-until the route is settled ([api.md](api.md) §3).
-
-## Resources
-
-MCP resources provide read-only access to DNS data.
-
-### dns://zones
-
-List all zones.
-
-```json
-{
-  "method": "resources/read",
-  "params": {
-    "uri": "dns://zones"
-  }
-}
-```
-
-### dns://zones/{zoneName}
-
-Get zone details.
-
-```json
-{
-  "method": "resources/read",
-  "params": {
-    "uri": "dns://zones/example.internal."
-  }
-}
-```
-
-### dns://zones/{zoneName}/records
-
-List zone records.
-
-```json
-{
-  "method": "resources/read",
-  "params": {
-    "uri": "dns://zones/example.internal./records"
-  }
-}
-```
-
-## Server Configuration
-
-**stdio mode (default):**
-```bash
-platformctl mcp serve --transport stdio
-```
-
-**HTTP mode:**
-```bash
-platformctl mcp serve --transport http --port 9445
-```
-
-## Client Example
-
-```python
-import json
-import subprocess
-
-def call_mcp_tool(tool_name, arguments):
-    request = {
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "params": {
-            "name": tool_name,
-            "arguments": arguments
-        },
-        "id": 1
-    }
-
-    proc = subprocess.Popen(
-        ["platformctl", "mcp", "serve", "--transport", "stdio"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE
-    )
-
-    stdout, _ = proc.communicate(json.dumps(request).encode())
-    return json.loads(stdout)
-
-# Create zone
-result = call_mcp_tool("dns_create_zone", {
-    "name": "myzone.internal.",
-    "ttl": 3600,
-    "internal": True
-})
-
-# Add record
-result = call_mcp_tool("dns_add_record", {
-    "zone_name": "myzone.internal.",
-    "type": "A",
-    "name": "server01",
-    "value": "192.168.1.100",
-    "ttl": 3600
-})
-
-# Resolve
-result = call_mcp_tool("dns_resolve", {
-    "name": "server01.myzone.internal.",
-    "record_type": "A"
-})
-```
-
-## Error Responses
+The older tools take a record's FQDN, not a zone and a relative name.
+`dns_add_record` returns `{"success": true}`; `dns_resolve` returns
+`{"results": [...]}`; `dns_list_zones` returns `{"zones": [...]}`.
 
 ```json
 {
   "jsonrpc": "2.0",
-  "error": {
-    "code": -32000,
-    "message": "Zone not found",
-    "data": {
-      "error": "zone_not_found",
-      "zone_name": "nonexistent.internal."
-    }
-  },
-  "id": 1
+  "id": 2,
+  "method": "tools/call",
+  "params": {
+    "name": "dns_resolve",
+    "arguments": {"name": "www.example.internal.", "record_type": "A"}
+  }
 }
 ```
 
-| Code | Meaning |
-|------|---------|
-| -32700 | Parse error |
-| -32600 | Invalid request |
-| -32601 | Method not found |
-| -32602 | Invalid params |
-| -32000 | Application error |
+## Errors
+
+Tool failures map as [api.md](api.md) §5 gives them. With no `dns:` section,
+every tool in both families returns `Unavailable`.
