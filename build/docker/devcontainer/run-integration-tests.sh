@@ -677,13 +677,7 @@ start_vbmc() {
     if curl -sf http://127.0.0.1:8645/tls/ca -o /tmp/vbmc-ca.pem 2>/dev/null; then
         echo "vBMC CA cert downloaded to /tmp/vbmc-ca.pem"
     else
-        # Fallback: wget (in case curl is absent)
-        wget -q -O /tmp/vbmc-ca.pem http://127.0.0.1:8645/tls/ca 2>/dev/null || true
-        if [ -s /tmp/vbmc-ca.pem ]; then
-            echo "vBMC CA cert downloaded to /tmp/vbmc-ca.pem (via wget)"
-        else
-            echo "WARNING: could not download vBMC CA cert; GetWebCertificate tests may fail"
-        fi
+        echo "WARNING: could not download vBMC CA cert; GetWebCertificate tests may fail"
     fi
 
     # Generate a modified platformd config that adds trust.bmc so the daemon

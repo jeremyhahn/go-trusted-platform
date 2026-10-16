@@ -1,8 +1,8 @@
 # Remote-Access VPN — CLI
 
-> **Status: NORMATIVE** · Scope: `platformctl vpn` · Last verified: 2026-10-14
+> **Status: NORMATIVE** · Scope: `platformctl vpn` · Last verified: 2026-10-16
 > Conflicts with this document are defects. Fix them here first.
-> Partial today: the operator verbs ship (#584 PR 3); `connect`, `connect --foreground`, `disconnect`, `lease`, `posture` and `renew` exist with their exit codes, the verbs that talk to a gateway present this host's TPM device identity, and `connect` brings up the leased WireGuard or MASQUE data plane; the gateway listener they call exists (#557).
+> Partial today: the operator verbs ship (#584 PR 3); `connect`, `connect --foreground`, `disconnect`, `lease`, `posture` and `renew` exist with their exit codes, the verbs that talk to a gateway present this host's TPM device identity, and `connect` brings up the leased WireGuard or MASQUE data plane; `connect` and `renew` sign the fido2 person factor with a FIDO2 authenticator, while a PIV signer waits on the SDK; the gateway listener they call exists (#557).
 > `platformctl vpn peer|status|posture-policy` exist (`pkg/cli/commands/vpn`)
 > and are exercised over every transport by `test/integration/vpn/`. The
 > client verbs are tested against a stand-in for the gateway's admission
@@ -61,18 +61,28 @@ platformctl vpn peer revoke laptop-1 --tenant acme
 
 | Verb | Purpose | Flags | Exit |
 |---|---|---|---|
-| `connect` | Run the admission (identity → quote → posture → factor → lease) and bring the data plane up | `--gateway <host:port>` (required), `--tenant <t>` (required; the tenant the device is enrolled in), `--device-id <id>` (required; the id the device is enrolled under with `peer enrol`), `--idevid-cert <pem>` (see below), `--data-plane wireguard\|masque` (default: the first plane the gateway offers that this build has; see below), `--factor fido2\|piv`, `--zones <a,b>` (default: every zone the peer may reach), `--ca-file <pem>` (default: the system roots), `--foreground` (stay running and renew the lease; see below) | 0; 4 refused (reason class printed); 5 posture violation (rules listed) |
+| `connect` | Run the admission (identity → quote → posture → factor → lease) and bring the data plane up | `--gateway <host:port>` (required), `--tenant <t>` (required; the tenant the device is enrolled in), `--device-id <id>` (required; the id the device is enrolled under with `peer enrol`), `--idevid-cert <pem>` (see below), `--data-plane wireguard\|masque` (default: the first plane the gateway offers that this build has; see below), `--factor fido2\|piv`, `--fido2-rp-id <rp>` and `--fido2-credential-id <id>` (see below), `--zones <a,b>` (default: every zone the peer may reach), `--ca-file <pem>` (default: the system roots), `--foreground` (stay running and renew the lease; see below) | 0; 4 refused (reason class printed); 5 posture violation (rules listed) |
 | `disconnect` | Revoke the lease and tear the data plane down | `--ca-file <pem>`, `--idevid-cert <pem>` | 0; 4 the gateway refused the revocation; 6 not connected |
 | `lease` | Lease id, gateway, address, zones, data plane, interface, expiry, next re-attestation | `-o` | 0; 6 not connected |
 | `posture` | Print the posture report the agent would send: Secure Boot, IMA and disk-encryption state, agent version, OS and kernel releases, collection time | `-o json` (the report as the gateway's policy receives it) | 0; 1 the report could not be collected |
-| `renew` | Renew the lease now with a fresh quote, posture report and, when `connect` presented one, person factor; print the renewed lease | `--ca-file <pem>`, `--idevid-cert <pem>`, `-o` | 0; 4 refused; 5 posture violation; 6 not connected |
+| `renew` | Renew the lease now with a fresh quote, posture report and, when `connect` presented one, person factor; print the renewed lease | `--ca-file <pem>`, `--idevid-cert <pem>`, `--fido2-rp-id <rp>`, `--fido2-credential-id <id>`, `-o` | 0; 4 refused; 5 posture violation; 6 not connected |
 
 Every other failure exits 1: an unreadable `--ca-file`, a gateway that cannot
 be reached or whose certificate does not chain to the roots, an unknown
-`--factor` or one this host has no signer for (no FIDO2 or PIV signer exists
-yet), a host without a TPM device identity, or a data plane that cannot come
+`--factor` or one this host has no signer for (`piv` has none yet; `fido2`
+needs `--fido2-rp-id`), a bad `--fido2-*` flag, no FIDO2 authenticator
+attached or no touch, a host without a TPM device identity, or a data plane that cannot come
 up (the lease is then revoked). A 503 from the gateway (`unavailable: …`) is a
 refusal and exits 4.
+
+`--factor fido2` signs the gateway's session nonce with the FIDO2 security key
+attached to this host: a WebAuthn assertion under the relying party
+`--fido2-rp-id` (the RP ID the key's credential was registered under), with
+the credential `--fido2-credential-id` (unpadded base64url; omitted, the key
+picks a discoverable credential for the RP). The key asks for a touch, not a
+PIN, so a key that requires its PIN to assert cannot be used yet. `renew` of a
+lease admitted with fido2 needs the same `--fido2-*` flags, and the key is
+touched again. A bad flag exits 1 before the gateway is dialled.
 
 `connect` brings up the data plane the lease names, and needs root (or
 `CAP_NET_ADMIN`) to do it:
@@ -146,7 +156,7 @@ Examples:
 
 ```sh
 platformctl tpm idevid certificate -o json | jq -r .certificate_pem > idevid.pem
-platformctl vpn connect --gateway gw.letstrust.com:4433 --tenant acme --device-id laptop-1 --idevid-cert idevid.pem --factor fido2
+platformctl vpn connect --gateway gw.letstrust.com:4433 --tenant acme --device-id laptop-1 --idevid-cert idevid.pem --factor fido2 --fido2-rp-id auth.letstrust.com
 platformctl vpn connect --gateway gw.letstrust.com:4433 --tenant acme --device-id laptop-1 --idevid-cert idevid.pem --ca-file gw-roots.pem --zones management
 platformctl vpn connect --gateway gw.letstrust.com:4433 --tenant acme --device-id laptop-1 --idevid-cert idevid.pem --foreground
 platformctl vpn connect --gateway gw.letstrust.com:4433 --tenant acme --device-id laptop-1 --idevid-cert idevid.pem --data-plane masque --foreground

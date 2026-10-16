@@ -1,6 +1,6 @@
 # Trusted Registry — API
 
-> **Status: NORMATIVE** · Scope: registry routes on every transport · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: registry routes on every transport · Last verified: 2026-10-16
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability, showing its form on each of the six transports. A
 > transport that does not carry a capability is written `MISSING`, never
@@ -128,7 +128,9 @@ session, so a client restarts rather than keeping a rejected buffer pinned.
 an oversight (`pkg/api/mcp/registry_tools.go`): binary blob transfer over
 JSON-RPC is a poor fit, and both are already served by gRPC and REST. An LLM
 client that needs image bytes calls those transports. Do not "complete" the MCP
-surface by adding them.
+surface by adding them. The SDK MCP transport follows suit: it maps the four
+unary methods onto the four tools and no tool for `Push` or `Pull`
+(`sdk/go/transport/mcp/registry.go`).
 
 ---
 
@@ -228,6 +230,12 @@ signature is
 `List(ctx, repository string, limit int32, cursor, sortBy string, ascending bool)`
 (`sdk/go/services/registry/client.go:64`), and the CLI surfaces the same
 parameters as `--repository`, `--cursor`, `--sort-by` and `--sort-desc`.
+
+`platform_registry_list` carries the whole `ListArtifactsRequest`:
+`repository`, `artifact_type`, `limit`, `offset`, `cursor`, `sort_by`,
+`ascending`, and the label selector as `match_labels` (object) and
+`match_expressions` (array). The SDK MCP transport sends each of them, so a
+cursor page over MCP is the same page as over gRPC.
 
 The OCI `_catalog` and `tags/list` routes follow the distribution spec's own
 `n`/`last` pagination, which is a different scheme; do not conflate them.

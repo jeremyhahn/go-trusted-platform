@@ -143,3 +143,6 @@ __pycache__/
 /pkg/cli/commands/db/trusted-data/
 /pkg/webservice/v1/test/trusted-data/log/
 /pkg/webservice/v1/test/trusted-data/quicbaas/
+
+# Forge credentials for the devcontainer module download (MODULE_ENV_FILE)
+/.devcontainer/.env

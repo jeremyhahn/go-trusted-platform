@@ -1,6 +1,6 @@
 # Remote-Access VPN — User Guide
 
-> **Status: REFERENCE** · Last verified: 2026-10-14
+> **Status: REFERENCE** · Last verified: 2026-10-16
 > How an operator and a machine use the remote-access VPN. Partial today: operators can manage enrolment, posture policies and session status today, from the CLI (#584 PR 3) and the web console (#584 PR 4); the client verbs, both tunnels and the gateway's admission listener exist, but a machine cannot connect yet.
 > "Operator tasks" below works now, and so does `platformctl vpn posture`.
 > `platformctl vpn connect` (with `--foreground` to keep the lease renewed),
@@ -51,7 +51,7 @@ Bringing a tunnel up needs root.
 ## First connection
 
 ```sh
-platformctl vpn connect --gateway gw.letstrust.com:4433 --tenant acme --device-id laptop-1 --factor fido2
+platformctl vpn connect --gateway gw.letstrust.com:4433 --tenant acme --device-id laptop-1 --factor fido2 --fido2-rp-id auth.letstrust.com
 ```
 
 `--gateway` is the gateway's admission listener (`management_vpn.listener`,

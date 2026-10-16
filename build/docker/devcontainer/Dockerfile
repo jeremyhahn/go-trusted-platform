@@ -1,83 +1,196 @@
-# Development Container for go-trusted-platform
-# This container provides all tooling needed for development, testing, and CI/CD
+# go-trusted-platform devcontainer: one Dockerfile, the shipped stages built
+# FROM base (handbook devcontainer.md §1).
 #
-# Usage:
-#   docker build -t trusted-platform-dev .
-#   docker run --rm -it --privileged -v $(pwd):/workspace trusted-platform-dev
+#   tools        build-only: govulncheck and trivy, built or downloaded into /out;
+#                swag (integration only) into /out-integration
+#   modules      build-only: the module caches of the root module, sdk/go and
+#                the build/tools-src tool modules, fetched with the forge
+#                credentials
+#   base         the Go toolchain, the C toolchain cgo and -race need, the
+#                OpenSSL headers the TPM simulator compiles against, a non-root
+#                user and the verified module cache; GOPROXY=off
+#   toolchain    base + every tool the Makefile calls. `make build`, `make test`,
+#                `make security` and `make deps-check` run here, in CI too.
+#   integration  base + the integration suite's system packages (swtpm,
+#                tpm2-tss, Open vSwitch, qemu, cryptsetup, the ISO and
+#                initramfs tools, Node and the Playwright libraries) and the
+#                source at /workspace. `make integration-test` runs it under the
+#                privileged compose service (compose.yaml beside this file).
 #
-# For integration tests with KVM acceleration:
-#   docker run --rm -it --privileged --device /dev/kvm -v $(pwd):/workspace trusted-platform-dev
+# Build with `make docker-build` (both images) or `make build-devcontainer`
+# (the integration image as trusted-platform-dev:latest): they pass GO_IMAGE
+# from scripts/tool-pins.sh, the one pin file the Makefile also reads, and the
+# forge credentials as the gomodauth BuildKit secret. GO_IMAGE has no default
+# here, so a build that bypasses the pin file fails instead of drifting.
+# Requires BuildKit.
+#
+# The build context is the repository root, filtered by the root .dockerignore.
+# A CI runner reaches its Docker daemon through a socket, so a bind mount would
+# resolve on the daemon's host, where the checkout does not exist: integration
+# bakes the source in, and CI copies the checkout into a toolchain container
+# (scripts/in-toolchain-image.sh) instead of mounting it.
+#
+# Debian, not Alpine (devops.md §9a): the integration suite needs Debian's
+# swtpm, tpm2-tss, Open vSwitch and qemu packages, and the cgo TPM simulator
+# links glibc.
 
-ARG BASE_IMAGE="golang:1.27.2-bookworm"
+ARG GO_IMAGE
+# Build-time module and tool downloads go through this proxy (devcontainer.md
+# §4). The caller's environment supplies another; no tracked file does.
+ARG GO_BUILD_PROXY=https://proxy.golang.org,direct
 
-FROM ${BASE_IMAGE}
+# ---------------------------------------------------------------------------
+FROM ${GO_IMAGE} AS tools
+ARG GO_BUILD_PROXY
+ARG TARGETARCH
+ENV GOTOOLCHAIN=local CGO_ENABLED=0 GOPROXY=${GO_BUILD_PROXY} GOBIN=/out
+COPY scripts/tool-pins.sh /tmp/tool-pins.sh
+# swag builds from its build/tools-src module: `go install swag@version` would
+# link the stale dependencies swag's own go.mod requires, which the image's
+# trivy gate reports (#933). golangci-lint, actionlint and gosec are not here:
+# the Makefile builds each from its build/tools-src module, whose cache the
+# modules stage downloads.
+COPY build/tools-src/swag/ /tmp/tools-src/swag/
+RUN set -eu; \
+    . /tmp/tool-pins.sh; \
+    go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"; \
+    go build -C /tmp/tools-src/swag -mod=readonly -trimpath \
+      -o /out-integration/swag github.com/swaggo/swag/cmd/swag; \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) arch=64bit; sum="${TRIVY_SHA256_LINUX_AMD64}" ;; \
+      arm64) arch=ARM64; sum="${TRIVY_SHA256_LINUX_ARM64}" ;; \
+      *) echo "no trivy pin for ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    v="${TRIVY_VERSION#v}"; \
+    f="trivy_${v}_Linux-${arch}.tar.gz"; \
+    curl -fsSL -o "/tmp/${f}" "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/${f}"; \
+    echo "${sum}  /tmp/${f}" > /tmp/trivy.sha256; \
+    sha256sum -c /tmp/trivy.sha256; \
+    tar -xzf "/tmp/${f}" -C /out trivy; \
+    rm -f "/tmp/${f}"
 
-LABEL maintainer="Jeremy Hahn <mail@jeremyhahn.com>"
-LABEL description="Development container for go-trusted-platform with TPM, QEMU, and security tooling"
+# ---------------------------------------------------------------------------
+# github.com/jeremyhahn/* modules resolve from the forge through git, which the
+# golang bookworm image carries.
+FROM ${GO_IMAGE} AS modules
+ARG GO_BUILD_PROXY
+ENV GOTOOLCHAIN=local GOFLAGS=-mod=readonly GOMODCACHE=/gomodcache GOPROXY=${GO_BUILD_PROXY}
+WORKDIR /src
 
-# Build arguments
-ARG NVM_VERSION=v0.39.5
-ARG NODE_VERSION=21.1.0
-ARG QEMU_VERSION=8.2.0
+# Download the module caches in their own layer. Credentials for the project
+# forge arrive as the optional gomodauth BuildKit secret (the K=V lines of
+# .devcontainer/.env), mounted for this RUN only: sourced, never written to a
+# layer or a command line. With no secret, modules resolve from the public
+# proxy, so a module only the forge serves fails the build here, loudly.
+# sdk/go is copied because the root go.mod replaces it with ./sdk/go.
+COPY go.mod go.sum ./
+COPY sdk/go/go.mod sdk/go/go.sum ./sdk/go/
+COPY build/tools-src/ ./build/tools-src/
+RUN --mount=type=secret,id=gomodauth \
+    set -eu; \
+    if [ -s /run/secrets/gomodauth ]; then \
+      set -a; . /run/secrets/gomodauth; set +a; \
+      echo "==> go mod download: Gitea module credentials mounted"; \
+    else \
+      echo "==> go mod download: no module credentials mounted; github.com/jeremyhahn/* resolves from the public proxy only"; \
+    fi; \
+    go mod download; \
+    (cd sdk/go && go mod download); \
+    for d in build/tools-src/*/; do (cd "$d" && go mod download); done
+RUN set -eu; \
+    go mod verify; \
+    (cd sdk/go && go mod verify)
 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV GOPATH=/go
-ENV PATH="/usr/local/go/bin:${GOPATH}/bin:${PATH}"
+# ---------------------------------------------------------------------------
+FROM ${GO_IMAGE} AS base
+ARG DEBIAN_FRONTEND=noninteractive
+# GOTOOLCHAIN=local: a go.mod asking for a newer Go fails instead of
+# downloading one. CGO for -race and the TPM simulator.
+ENV GOTOOLCHAIN=local \
+    CGO_ENABLED=1 \
+    GOFLAGS=-mod=readonly \
+    GOMODCACHE=/gomodcache \
+    GOCACHE=/gocache
+# cpio: pkg/diskimage/netboot repacks its installer initramfs with it.
+# libssl-dev: go-tpm-tools' simulator compiles the reference TPM against
+# OpenSSL (#149).
+RUN set -eu; \
+    apt-get update; \
+    apt-get upgrade -y; \
+    apt-get install -y --no-install-recommends \
+      build-essential pkg-config libssl-dev openssl ca-certificates \
+      git make cpio xz-utils zstd file; \
+    rm -rf /var/lib/apt/lists/*; \
+    groupadd -g 10001 dev; \
+    useradd -m -u 10001 -g dev -d /home/dev dev; \
+    install -d -m 0755 -o 10001 -g 10001 /src
+COPY --from=modules /gomodcache /gomodcache
+# Pre-warm the race-instrumented standard library, then open the build cache to
+# any uid (the toolchain image runs as the invoking user).
+RUN set -eu; \
+    chmod -R a+rX /gomodcache; \
+    go build -race std; \
+    chmod -R a+rwX /gocache
+# Nothing fetches a module at run time (devcontainer.md §4).
+ENV GOPROXY=off
 
+# ---------------------------------------------------------------------------
+FROM base AS toolchain
+ARG DEBIAN_FRONTEND=noninteractive
+# GOTMPDIR: the go command's work directory ($WORK: every compiled package and
+# linked test binary of a run) goes beside the build cache, on disk, wherever
+# that cache is mounted. Under the default it lands in the size-capped /tmp
+# tmpfs, which `make test` over the whole tree overflows (#933). testing's
+# t.TempDir() follows GOTMPDIR, so test directories land on /gocache, which any
+# uid can write and is not sticky: a test that needs a private ancestor chain
+# makes its directory under os.TempDir() instead (cmd/deployer-pin
+# privateTempDir).
+# TMPDIR: the linker does not follow GOTMPDIR. An external (cgo) link writes
+# its objects under os.MkdirTemp("", "go-link-") (cmd/link hostlinksetup), and
+# `make test` links one test binary per CPU at once, so in /tmp those overflow
+# it too (#933). /var/tmp is on disk and, like /tmp, sticky under root-owned
+# ancestors, so os.TempDir() still passes deployer-pin's ancestor check, and
+# it is short enough for the Unix socket paths tests bind under it.
+# TRIVY_CACHE_DIR: trivy's vulnerability DB (1.6 GB unpacked) and its scan cache
+# go beside the build cache too, for every trivy run in this image (`make
+# trivy`, CI's `trivy image`). Under the default, $HOME/.cache/trivy, the DB
+# lands in /tmp beside the module cache CI's security step downloads, and the
+# two overflow it (#933).
+ENV HOME=/tmp \
+    GOTMPDIR=/gocache \
+    TMPDIR=/var/tmp \
+    TRIVY_CACHE_DIR=/gocache/trivy
+RUN set -eu; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends bash curl jq shellcheck; \
+    rm -rf /var/lib/apt/lists/*; \
+    git config --system --add safe.directory '*'
+COPY --from=tools /out/ /usr/local/bin/
+WORKDIR /src
+USER dev:dev
+
+# ---------------------------------------------------------------------------
+# The suite runs as root, privileged: it starts Open vSwitch, swtpm and qemu,
+# and attaches loopback LUKS2 volumes (docs/test/integration.md). It is the
+# devcontainer for interactive work too (`make devcontainer-shell`).
+FROM base AS integration
+ARG DEBIAN_FRONTEND=noninteractive
+ARG TARGETARCH
 SHELL ["/bin/bash", "-c"]
 
-# =============================================================================
-# Core system packages and build tools
-# =============================================================================
-RUN apt-get update && apt-get upgrade -y && apt-get install -y \
-    # Build essentials
-    build-essential \
-    gcc \
-    g++ \
-    make \
-    pkg-config \
-    autoconf \
-    automake \
-    libtool \
-    # Development tools
-    git \
-    curl \
-    wget \
-    vim \
-    nano \
-    jq \
-    tree \
-    htop \
-    # Networking tools
-    iproute2 \
-    iputils-ping \
-    dnsutils \
-    netcat-openbsd \
-    tcpdump \
-    # SSL/TLS libraries
-    libssl-dev \
-    ca-certificates \
-    openssl \
-    gnutls-bin \
-    # Compression
-    xz-utils \
-    zstd \
-    # Process management
-    procps \
-    psmisc \
-    supervisor \
-    # Shell utilities
-    bash-completion \
+# Networking and process tools the suites and the entrypoint call. Every
+# package in this stage is one a suite, the runner or a Makefile target run
+# here calls: each one more is attack surface the trivy image gate scans (#933).
+RUN apt-get update && apt-get install -y \
+    curl jq \
+    iproute2 iputils-ping dnsutils netcat-openbsd \
+    procps psmisc \
     sudo \
     && rm -rf /var/lib/apt/lists/*
 
-# =============================================================================
-# TPM 2.0 Software Stack and swtpm (Software TPM)
-# =============================================================================
+# TPM 2.0 software stack and swtpm (software TPM).
 RUN apt-get update && apt-get install -y \
-    # TPM 2.0 tools and libraries
     tpm2-tools \
-    tpm2-abrmd \
     libtss2-dev \
     libtss2-esys-3.0.2-0 \
     libtss2-fapi1 \
@@ -89,17 +202,13 @@ RUN apt-get update && apt-get install -y \
     libtss2-tcti-swtpm0 \
     libtss2-tcti-tabrmd0 \
     libtss2-tctildr0 \
-    # Software TPM emulator
     swtpm \
     swtpm-tools \
     libtpms0 \
-    # TPM PKCS#11 interface
     libtpm2-pkcs11-1 \
     && rm -rf /var/lib/apt/lists/*
 
-# =============================================================================
-# PKCS#11 / HSM / Smart Card tooling
-# =============================================================================
+# PKCS#11, HSM and smart card tooling; FIDO2 tooling.
 RUN apt-get update && apt-get install -y \
     opensc \
     opensc-pkcs11 \
@@ -107,23 +216,14 @@ RUN apt-get update && apt-get install -y \
     softhsm2 \
     pcscd \
     libpcsclite-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# =============================================================================
-# FIDO2 / Yubikey tooling
-# =============================================================================
-RUN apt-get update && apt-get install -y \
-    yubikey-manager \
     libu2f-udev \
     libfido2-dev \
     fido2-tools \
     && rm -rf /var/lib/apt/lists/*
 
-# =============================================================================
-# QEMU and OVMF for VM-based integration tests.
-# busybox-static populates the minimal initramfs used by the Secure Boot
-# FIPS-kernel insmod-rejection test (test/integration/secureboot).
-# =============================================================================
+# QEMU and OVMF for the VM-based suites. busybox-static populates the minimal
+# initramfs the Secure Boot FIPS-kernel insmod-rejection test uses
+# (test/integration/secureboot).
 RUN apt-get update && apt-get install -y \
     qemu-system-x86 \
     qemu-utils \
@@ -133,170 +233,60 @@ RUN apt-get update && apt-get install -y \
     busybox-static \
     && rm -rf /var/lib/apt/lists/*
 
-# =============================================================================
-# Build QEMU with CanoKey support for FIDO2 emulation
-# This provides qemu-system-x86_64-canokey binary alongside standard QEMU
-# =============================================================================
-
-# Install QEMU build dependencies
+# Network virtualization and SDN tooling (Open vSwitch).
 RUN apt-get update && apt-get install -y \
-    cmake \
-    ninja-build \
-    python3 \
-    python3-pip \
-    python3-venv \
-    python3-jsonschema \
-    python3-jinja2 \
-    libglib2.0-dev \
-    libfdt-dev \
-    libpixman-1-dev \
-    zlib1g-dev \
-    libgtk-3-dev \
-    libsdl2-dev \
-    libspice-server-dev \
-    libusb-1.0-0-dev \
-    libusbredirparser-dev \
-    libcap-ng-dev \
-    libattr1-dev \
-    libseccomp-dev \
-    libaio-dev \
-    libcurl4-gnutls-dev \
-    libnuma-dev \
-    libepoxy-dev \
-    libgbm-dev \
-    libdrm-dev \
-    libvirglrenderer-dev \
-    libslirp-dev \
-    flex \
-    bison \
-    && rm -rf /var/lib/apt/lists/*
-
-# Build libcanokey-qemu
-RUN git clone --recursive https://github.com/canokeys/canokey-qemu /tmp/canokey-qemu && \
-    cd /tmp/canokey-qemu && \
-    mkdir build && cd build && \
-    cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local && \
-    make -j$(nproc) && \
-    make install && \
-    ldconfig && \
-    rm -rf /tmp/canokey-qemu
-
-# Build QEMU with CanoKey support
-RUN export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH && \
-    cd /tmp && \
-    curl -sSL "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz" -o qemu.tar.xz && \
-    tar xf qemu.tar.xz && \
-    cd qemu-${QEMU_VERSION} && \
-    ./configure \
-        --prefix=/usr/local \
-        --target-list=x86_64-softmmu \
-        --enable-kvm \
-        --enable-canokey \
-        --enable-slirp \
-        --enable-usb-redir \
-        --enable-libusb \
-        --enable-virtfs \
-        --enable-spice \
-        --enable-gtk \
-        --enable-sdl \
-        --enable-opengl \
-        --enable-virglrenderer \
-        --disable-docs && \
-    make -j$(nproc) && \
-    cp build/qemu-system-x86_64 /usr/local/bin/qemu-system-x86_64-canokey && \
-    rm -rf /tmp/qemu*
-
-# =============================================================================
-# Secure Boot / UEFI tooling
-# =============================================================================
-RUN apt-get update && apt-get install -y \
-    efitools \
-    sbsigntool \
-    pesign \
-    && rm -rf /var/lib/apt/lists/*
-
-# =============================================================================
-# Network virtualization and SDN tooling (Open vSwitch)
-# =============================================================================
-RUN apt-get update && apt-get install -y \
-    bridge-utils \
-    vde2 \
-    # Open vSwitch for SDN integration tests
     openvswitch-switch \
     openvswitch-common \
     iptables \
-    net-tools \
     dnsmasq \
     kmod \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* && \
+    mkdir -p \
+      /var/run/openvswitch \
+      /var/log/openvswitch \
+      /etc/openvswitch \
+      /usr/local/var/run/openvswitch \
+      /usr/local/var/log/openvswitch
 
-# Create OVS directories
-RUN mkdir -p \
-    /var/run/openvswitch \
-    /var/log/openvswitch \
-    /etc/openvswitch \
-    /usr/local/var/run/openvswitch \
-    /usr/local/var/log/openvswitch
-
-# =============================================================================
-# ISO building and initramfs manipulation tools
-# =============================================================================
+# ISO building, initramfs and archive tools; LUKS2 for the suites that create
+# loopback-backed LUKS2 containers.
 RUN apt-get update && apt-get install -y \
-    # ISO creation and manipulation
     xorriso \
-    genisoimage \
     grub-efi-amd64-bin \
     grub-common \
     dosfstools \
     mtools \
-    # Initramfs and archive tools
-    cpio \
     squashfs-tools \
     libarchive-tools \
     p7zip-full \
-    # File type detection
-    file \
-    && rm -rf /var/lib/apt/lists/*
-
-# =============================================================================
-# LUKS2 / disk encryption tooling (required by LUKS integration tests that
-# create loopback-backed LUKS2 containers).
-# =============================================================================
-RUN apt-get update && apt-get install -y \
     cryptsetup \
     cryptsetup-bin \
     && rm -rf /var/lib/apt/lists/*
 
-# =============================================================================
-# Install Go development tools
-# =============================================================================
-RUN go install github.com/swaggo/swag/cmd/swag@latest && \
-    go install golang.org/x/tools/gopls@latest && \
-    go install github.com/go-delve/delve/cmd/dlv@latest && \
-    go install honnef.co/go/tools/cmd/staticcheck@latest && \
-    go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+# Node.js, for the web console and its Playwright suite (test/integration/web):
+# the official release archive pinned in scripts/tool-pins.sh, checked against
+# its digest before it is unpacked into /usr/local. npm and npx come with it;
+# nothing here uses yarn.
+COPY scripts/tool-pins.sh /tmp/tool-pins.sh
+RUN set -eu; \
+    . /tmp/tool-pins.sh; \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) arch=x64; sum="${NODE_SHA256_LINUX_AMD64}" ;; \
+      arm64) arch=arm64; sum="${NODE_SHA256_LINUX_ARM64}" ;; \
+      *) echo "no node pin for ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    f="node-${NODE_VERSION}-linux-${arch}.tar.xz"; \
+    curl -fsSL -o "/tmp/${f}" "https://nodejs.org/dist/${NODE_VERSION}/${f}"; \
+    echo "${sum}  /tmp/${f}" > /tmp/node.sha256; \
+    sha256sum -c /tmp/node.sha256; \
+    tar -xJf "/tmp/${f}" -C /usr/local --strip-components=1 --no-same-owner; \
+    rm -f "/tmp/${f}" /tmp/node.sha256 /tmp/tool-pins.sh \
+      /usr/local/CHANGELOG.md /usr/local/LICENSE /usr/local/README.md; \
+    node -v; npm -v
 
-# =============================================================================
-# Install Node.js via nvm (for web dashboard builds)
-# =============================================================================
-RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh | bash && \
-    export NVM_DIR="$HOME/.nvm" && \
-    [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && \
-    nvm install ${NODE_VERSION} && \
-    nvm use ${NODE_VERSION} && \
-    nvm alias default ${NODE_VERSION} && \
-    ln -sf "$NVM_DIR/versions/node/$(nvm version)/bin/node" /usr/local/bin/node && \
-    ln -sf "$NVM_DIR/versions/node/$(nvm version)/bin/npm" /usr/local/bin/npm && \
-    ln -sf "$NVM_DIR/versions/node/$(nvm version)/bin/npx" /usr/local/bin/npx && \
-    npm install --global yarn && \
-    ln -sf "$NVM_DIR/versions/node/$(nvm version)/bin/yarn" /usr/local/bin/yarn && \
-    node -v && npm -v && yarn -v
-
-# =============================================================================
-# Install Playwright browser dependencies for E2E testing
-# =============================================================================
+# Playwright browser runtime libraries and fonts. The suite runs headless, so
+# no X server.
 RUN apt-get update && apt-get install -y \
-    # Browser runtime dependencies
     libnss3 \
     libnspr4 \
     libatk1.0-0 \
@@ -315,66 +305,43 @@ RUN apt-get update && apt-get install -y \
     libasound2 \
     libatspi2.0-0 \
     libwayland-client0 \
-    # Font support
     fonts-liberation \
     fonts-noto-color-emoji \
-    # Media codecs
     libvpx7 \
     libopus0 \
     libharfbuzz0b \
-    # X11 dependencies for headless mode
-    xvfb \
-    x11-utils \
-    x11-xserver-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Environment variables for Playwright
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0
 
-# =============================================================================
-# Create directories and set permissions
-# =============================================================================
 RUN mkdir -p \
-    /var/run/swtpm \
-    /var/lib/swtpm \
-    /var/log/swtpm \
-    /workspace \
-    /go \
-    /ms-playwright \
-    && chmod 777 /var/run/swtpm /var/lib/swtpm /var/log/swtpm /ms-playwright
+      /var/run/swtpm \
+      /var/lib/swtpm \
+      /var/log/swtpm \
+      /ms-playwright && \
+    chmod 777 /var/run/swtpm /var/lib/swtpm /var/log/swtpm /ms-playwright && \
+    echo -e "*\t-\tmemlock\tunlimited" >> /etc/security/limits.conf
 
-# Set memory limits for TPM operations
-RUN echo "*\t-\tmemlock\tunlimited" >> /etc/security/limits.conf
-
-# =============================================================================
-# Setup working directory
-# =============================================================================
-WORKDIR /workspace
-
-# =============================================================================
-# Verify installations
-# =============================================================================
 RUN echo "=== Installation Verification ===" && \
     echo "Go: $(go version)" && \
     echo "Node: $(node -v)" && \
-    echo "npm: $(npm -v)" && \
-    echo "Yarn: $(yarn -v)" && \
     echo "swtpm: $(swtpm --version 2>&1 | head -1)" && \
     echo "QEMU: $(qemu-system-x86_64 --version | head -1)" && \
-    echo "QEMU-CanoKey: $(/usr/local/bin/qemu-system-x86_64-canokey --version | head -1)" && \
     echo "OVS: $(ovs-vsctl --version | head -1)" && \
-    echo "xorriso: $(xorriso --version 2>&1 | head -1)" && \
-    echo "tpm2_startup: $(which tpm2_startup)" && \
-    echo "OVMF: $(ls -la /usr/share/OVMF/OVMF_CODE*.fd 2>/dev/null | head -2 || echo 'OVMF installed')" && \
-    echo "Playwright: Browser dependencies installed" && \
-    echo "================================="
+    echo "tpm2_startup: $(command -v tpm2_startup)" && \
+    echo "cryptsetup: $(cryptsetup --version)"
 
-# =============================================================================
-# Default entrypoint
-# =============================================================================
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+# `make build-public-html` runs swag by this path.
+COPY --from=tools /out-integration/swag /go/bin/swag
+COPY build/docker/devcontainer/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# The source, last, so a code change rebuilds only this layer.
+# build/docker/devcontainer/run-integration-tests.sh builds from /workspace.
+COPY . /workspace
+RUN git config --system --add safe.directory '*'
+WORKDIR /workspace
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["bash"]

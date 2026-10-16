@@ -24,13 +24,14 @@ import (
 // agentFactory builds the client agent that trusts roots for the gateway's
 // admission listener (nil: the system pool), presents device, which is nil
 // for the verbs that contact no gateway, and brings up planes.
-type agentFactory func(roots *x509.CertPool, device agent.Device, planes []agent.DataPlane) (*agent.Agent, error)
+type agentFactory func(roots *x509.CertPool, device agent.Device, planes []agent.DataPlane, factors agent.FactorSigner) (*agent.Agent, error)
 
 // newClientAgent is replaced in tests.
-var newClientAgent agentFactory = func(roots *x509.CertPool, device agent.Device, planes []agent.DataPlane) (*agent.Agent, error) {
+var newClientAgent agentFactory = func(roots *x509.CertPool, device agent.Device, planes []agent.DataPlane, factors agent.FactorSigner) (*agent.Agent, error) {
 	return agent.New(agent.Deps{
 		Device:     device,
 		Posture:    agent.NewHostPosture(app.Version),
+		Factors:    factors,
 		DataPlanes: planes,
 		State:      agent.NewFileStateStore(""),
 		Dial:       agent.DialHTTPGateway(roots),
@@ -86,9 +87,34 @@ type connectOptions struct {
 	idevidCert string
 	dataPlane  string
 	factor     string
+	fido2      fido2Flags
 	zones      []string
 	caFile     string
 	foreground bool
+}
+
+// fido2Flags select the credential the fido2 person factor asserts with.
+type fido2Flags struct {
+	rpID         string
+	credentialID string
+}
+
+func (f *fido2Flags) register(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&f.rpID, "fido2-rp-id", "", "WebAuthn relying party the person's FIDO2 credential is registered under (required for --factor fido2)")
+	cmd.Flags().StringVar(&f.credentialID, "fido2-credential-id", "", "FIDO2 credential to assert with, unpadded base64url (default: a discoverable credential)")
+}
+
+// signer is the person factor signer the flags configure, nil when they
+// configure none.
+func (f fido2Flags) signer() (agent.FactorSigner, error) {
+	if f.rpID == "" && f.credentialID == "" {
+		return nil, nil
+	}
+	s, err := agent.NewFIDO2Signer(agent.FIDO2SignerOptions{RPID: f.rpID, CredentialID: f.credentialID})
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 // idevidCertUsage is the --idevid-cert help shared by connect and disconnect.
@@ -119,12 +145,18 @@ A refusal tears the data plane down and exits with the refusal's code; a
 renewal that fails otherwise is retried until the lease expires. SIGINT or
 SIGTERM disconnects and exits 0.
 
+--factor fido2 asks the person to touch a FIDO2 authenticator attached to
+this host; the WebAuthn assertion is signed over the gateway's session nonce
+with the credential registered under --fido2-rp-id. No PIV signer exists
+yet, so --factor piv is refused.
+
 Exit codes: 0 connected; 4 refused (the reason class is printed); 5 posture
 violation (the failed rules are listed); 1 any other failure, including a
-host with no TPM device identity.
+host with no TPM device identity, a --factor this host has no signer for,
+and an authenticator that is absent or never touched.
 
 Examples:
-  platformctl vpn connect --gateway gw.example.com:4433 --tenant acme --device-id laptop-1 --factor fido2
+  platformctl vpn connect --gateway gw.example.com:4433 --tenant acme --device-id laptop-1 --factor fido2 --fido2-rp-id auth.example.com
   platformctl vpn connect --gateway gw.example.com:4433 --tenant acme --device-id laptop-1 --idevid-cert idevid.pem --ca-file gw-ca.pem --zones management
   platformctl vpn connect --gateway gw.example.com:4433 --tenant acme --device-id laptop-1 --idevid-cert idevid.pem --foreground
   platformctl vpn connect --gateway gw.example.com:4433 --tenant acme --device-id laptop-1 --data-plane masque --foreground`,
@@ -139,7 +171,8 @@ Examples:
 	cmd.Flags().StringVar(&opts.deviceID, "device-id", "", "this device's id in the gateway's device registry (required)")
 	cmd.Flags().StringVar(&opts.idevidCert, "idevid-cert", "", idevidCertUsage)
 	cmd.Flags().StringVar(&opts.dataPlane, "data-plane", "", "wireguard or masque; masque needs --foreground (default: the gateway's preference)")
-	cmd.Flags().StringVar(&opts.factor, "factor", "", "person factor to present: fido2 or piv")
+	cmd.Flags().StringVar(&opts.factor, "factor", "", "person factor to present: fido2 (needs --fido2-rp-id) or piv")
+	opts.fido2.register(cmd)
 	cmd.Flags().StringSliceVar(&opts.zones, "zones", nil, "zones to request (default: every zone the peer may reach)")
 	cmd.Flags().StringVar(&opts.caFile, "ca-file", "", "PEM roots the gateway's certificate chains to (default: the system pool)")
 	cmd.Flags().BoolVar(&opts.foreground, "foreground", false, "stay running and renew the lease until interrupted")
@@ -196,11 +229,13 @@ Examples:
 
 func newRenewCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	var caFile, idevidCert string
+	var fido2 fido2Flags
 	cmd := &cobra.Command{
 		Use:   "renew",
 		Short: "Renew this device's lease now",
 		Long: `Renew the lease now with a fresh TPM quote, posture report and, when connect
-presented one, person factor. A refusal that ends the lease (a posture
+presented one, person factor: a lease connected with --factor fido2 renews
+with the same --fido2-rp-id (and --fido2-credential-id, if one was given). A refusal that ends the lease (a posture
 violation, a failed attestation, an expired lease) tears the data plane down;
 a renewal the gateway does not accept yet keeps the lease.
 
@@ -209,21 +244,27 @@ violation (the failed rules are listed); 6 not connected; 1 any other failure.
 
 Examples:
   platformctl vpn renew --idevid-cert idevid.pem
+  platformctl vpn renew --idevid-cert idevid.pem --fido2-rp-id auth.example.com
   platformctl vpn renew --idevid-cert idevid.pem -o json`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runRenew(getFlags(), caFile, idevidCert)
+			return runRenew(getFlags(), caFile, idevidCert, fido2)
 		},
 	}
 	cmd.Flags().StringVar(&caFile, "ca-file", "", "PEM roots the gateway's certificate chains to (default: the system pool)")
 	cmd.Flags().StringVar(&idevidCert, "idevid-cert", "", idevidCertUsage)
+	fido2.register(cmd)
 	return cmd
 }
 
 func runConnect(flags *cli.CommonFlags, opts connectOptions) (err error) {
 	if gwvpn.DataPlaneKind(opts.dataPlane) == gwvpn.DataPlaneMASQUE && !opts.foreground {
 		return &ErrForegroundRequired{DataPlane: opts.dataPlane}
+	}
+	factors, err := opts.fido2.signer()
+	if err != nil {
+		return agentError("failed to connect to the VPN", err)
 	}
 	roots, err := loadGatewayRoots(opts.caFile)
 	if err != nil {
@@ -234,7 +275,7 @@ func runConnect(flags *cli.CommonFlags, opts connectOptions) (err error) {
 		return agentError("failed to connect to the VPN", err)
 	}
 	defer func() { err = errors.Join(err, device.Close()) }()
-	a, err := clientAgent(roots, device, clientDataPlanes(roots, device, opts.foreground))
+	a, err := clientAgent(roots, device, clientDataPlanes(roots, device, opts.foreground), factors)
 	if err != nil {
 		return err
 	}
@@ -289,7 +330,7 @@ func runDisconnect(flags *cli.CommonFlags, caFile, idevidCert string) (err error
 		device = unopenedDevice{err: err}
 	}
 	defer func() { err = errors.Join(err, device.Close()) }()
-	a, err := clientAgent(roots, device, clientDataPlanes(roots, device, true))
+	a, err := clientAgent(roots, device, clientDataPlanes(roots, device, true), nil)
 	if err != nil {
 		return err
 	}
@@ -307,7 +348,11 @@ func runDisconnect(flags *cli.CommonFlags, caFile, idevidCert string) (err error
 	return output(flags, *table)
 }
 
-func runRenew(flags *cli.CommonFlags, caFile, idevidCert string) (err error) {
+func runRenew(flags *cli.CommonFlags, caFile, idevidCert string, fido2 fido2Flags) (err error) {
+	factors, err := fido2.signer()
+	if err != nil {
+		return agentError("failed to renew the VPN lease", err)
+	}
 	roots, err := loadGatewayRoots(caFile)
 	if err != nil {
 		return err
@@ -318,7 +363,7 @@ func runRenew(flags *cli.CommonFlags, caFile, idevidCert string) (err error) {
 		return agentError("failed to renew the VPN lease", err)
 	}
 	defer func() { err = errors.Join(err, device.Close()) }()
-	a, err := clientAgent(roots, device, clientDataPlanes(roots, device, true))
+	a, err := clientAgent(roots, device, clientDataPlanes(roots, device, true), factors)
 	if err != nil {
 		return err
 	}
@@ -332,7 +377,7 @@ func runRenew(flags *cli.CommonFlags, caFile, idevidCert string) (err error) {
 }
 
 func runLease(flags *cli.CommonFlags) error {
-	a, err := clientAgent(nil, nil, nil)
+	a, err := clientAgent(nil, nil, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -367,7 +412,7 @@ Examples:
 }
 
 func runPosture(flags *cli.CommonFlags) error {
-	a, err := clientAgent(nil, nil, nil)
+	a, err := clientAgent(nil, nil, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -397,8 +442,8 @@ func runPosture(flags *cli.CommonFlags) error {
 
 // clientAgent builds the agent over roots, device and planes, wrapping a
 // failure.
-func clientAgent(roots *x509.CertPool, device agent.Device, planes []agent.DataPlane) (*agent.Agent, error) {
-	a, err := newClientAgent(roots, device, planes)
+func clientAgent(roots *x509.CertPool, device agent.Device, planes []agent.DataPlane, factors agent.FactorSigner) (*agent.Agent, error) {
+	a, err := newClientAgent(roots, device, planes, factors)
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to start the VPN client agent", Err: err}
 	}

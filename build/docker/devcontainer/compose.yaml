@@ -1,0 +1,135 @@
+# go-trusted-platform devcontainer: one service per shipped stage of the
+# Dockerfile beside this file (handbook devcontainer.md §3, §6).
+#
+#   integration  `make integration-test`: the integration suites in the
+#                integration image, which carries the source at /workspace. The
+#                Makefile builds that image (with the forge credentials as a
+#                BuildKit secret), names it in GO_TRUSTED_PLATFORM_IT_IMAGE and
+#                runs this file under its own project name, so two runs on one
+#                daemon never share a container, network or volume.
+#   toolchain    `make docker-run CMD='make lint'`: a command in the toolchain
+#                image, as the invoking user, with the checkout bind-mounted.
+#                For a workstation: on a CI runner the bind mount would resolve
+#                on the daemon's host, so CI copies the checkout in instead
+#                (scripts/in-toolchain-image.sh).
+#
+# docker-compose.yml beside this file is the separate interactive stack
+# (devcontainer, vBMC, BMC simulators); it is not part of CI.
+#
+# SECURITY POSTURE
+#
+# toolchain (x-posture):
+#   cap_drop ALL, no cap_add; no-new-privileges; Docker's default seccomp and
+#     AppArmor profiles stay on.
+#   user: never root, so no test passes only because root bypasses a check.
+#   read_only: the root filesystem and the module cache cannot be written.
+#     Writable: /tmp (tmpfs, `exec` because `go test` runs its binary from
+#     there), the checkout and the build-cache volume, which also holds the
+#     go command's work directory (GOTMPDIR=/gocache in the image), so the
+#     compiled packages and test binaries of a run never fill the 3g /tmp,
+#     and trivy's cache (TRIVY_CACHE_DIR=/gocache/trivy), so its 1.6 GB DB
+#     does not either; and /var/tmp, a volume, which is TMPDIR in the image:
+#     the linker's go-link-* objects, one set per test binary linked at once,
+#     ignore GOTMPDIR and would fill /tmp too.
+#   network_mode none: the modules are baked into the image with GOPROXY=off.
+#   init: a real PID 1 reaps children and forwards signals.
+#   pids_limit / mem_limit: bounds, so a runaway test cannot starve a shared
+#     runner host.
+#
+# integration is DELIBERATELY NOT hardened (devcontainer.md §3 departs here):
+#   privileged, root, a writable root filesystem and the default network. The
+#   suites start Open vSwitch (kernel datapath, netlink, tap devices), swtpm,
+#   qemu guests and dnsmasq, attach loopback-backed LUKS2 volumes with
+#   cryptsetup, and bind platformd's REST, gRPC, QUIC and MCP listeners
+#   (docs/test/integration.md). None of that runs with capabilities dropped or
+#   without /dev access. The same flags the suite has always run under
+#   (`docker run --privileged --device /dev/net/tun`), now in one place.
+#
+# ULIMITS:
+#   memlock 64 MiB soft = hard on toolchain; unlimited on integration, where
+#     swtpm and the TPM stack lock memory (the old image's limits.conf).
+#   core 1 MiB, non-zero.
+#   nofile: explicit; platformd, OVS and the cluster suites hold many sockets.
+
+x-posture: &posture
+  init: true
+  read_only: true
+  network_mode: none
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 4096
+  mem_limit: 8g
+  memswap_limit: 8g
+  ulimits:
+    memlock:
+      soft: 67108864
+      hard: 67108864
+    core:
+      soft: 1048576
+      hard: 1048576
+    nofile:
+      soft: 65536
+      hard: 65536
+  working_dir: /src
+
+services:
+  integration:
+    image: ${GO_TRUSTED_PLATFORM_IT_IMAGE:-go-trusted-platform-it:local}
+    pull_policy: never
+    # The service runs the suite runner and nothing else: `docker compose run
+    # integration <target> <build-tags>` passes the runner its arguments
+    # (ALL_TARGETS in the runner for `all`).
+    entrypoint:
+      - /usr/local/bin/entrypoint.sh
+      - bash
+      - /workspace/build/docker/devcontainer/run-integration-tests.sh
+    init: true
+    privileged: true
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    tmpfs:
+      - /tmp:rw,exec,mode=1777
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      core:
+        soft: 1048576
+        hard: 1048576
+      nofile:
+        soft: 65536
+        hard: 65536
+    working_dir: /workspace
+    environment:
+      GOTOOLCHAIN: local
+      GOFLAGS: -mod=readonly -buildvcs=false
+      GOPROXY: "off"
+      GOWORK: "off"
+      CGO_ENABLED: "1"
+      CI: ${CI:-}
+      HOST_UID: ${HOST_UID:-}
+      HOST_GID: ${HOST_GID:-}
+
+  toolchain:
+    <<: *posture
+    image: go-trusted-platform-toolchain:${GO_TRUSTED_PLATFORM_TOOLCHAIN_TAG:-latest}
+    pull_policy: never
+    user: "${GO_TRUSTED_PLATFORM_UID:-10001}:${GO_TRUSTED_PLATFORM_GID:-10001}"
+    tmpfs:
+      - /tmp:rw,exec,nosuid,nodev,size=3g,mode=1777
+    volumes:
+      - ../../..:/src
+      - toolchain-gocache:/gocache
+      - toolchain-tmp:/var/tmp
+    environment:
+      GOTOOLCHAIN: local
+      GOFLAGS: -mod=readonly
+      GOPROXY: "off"
+      GOWORK: "off"
+      HOME: /tmp
+
+volumes:
+  toolchain-gocache:
+  toolchain-tmp:

@@ -391,8 +391,8 @@ deliberate exception. They run on the host against services the caller has
 already started, they say so in their help text, and they are not what CI or a
 lane runs.
 
-No workflow runs these suites; they need the devcontainer. `.github/workflows/batch.yml`
-(#860) is the closest thing: a `workflow_dispatch`-only workflow, dispatched on
+CI runs `make integration-test` in its full tier (see CI below). The other
+workflow that touches tests is `.github/workflows/batch.yml` (#860): a `workflow_dispatch`-only workflow, dispatched on
 `main` and never part of a merge gate, that runs on the self-hosted `batch`
 runners. It fuzzes every `Fuzz*` target, runs the `make test-race` package set
 with `-count=3`, soaks by looping `make test-race` (not these suites), and
@@ -492,14 +492,104 @@ exactly that until #492.
 not follow this: they test packages under `pkg/`, not a suite under
 `test/integration`, so the runner has no key for them.
 
-No target hand-writes its own `docker run` of the runner either, including
-`make integration-test`, which calls the define with the runner's `all`
-keyword. A hand-written block drifts: `integration-test`, `-sdn` and
-`-barrier-gate` lost the define's module-cache mount and `GOWORK=off`, so the
-container resolved every module over the network and the SDN suite never got
-past building `platformd` (#539). `pkg/arch/integrationsuite_test.go` fails
-`make test` on any recipe that invokes the runner outside the define, and on a
-define that drops either flag.
+No target hand-writes its own `docker run` of the runner either. A
+hand-written block drifts: `integration-test`, `-sdn` and `-barrier-gate` lost
+the define's module-cache mount and `GOWORK=off`, so the container resolved
+every module over the network and the SDN suite never got past building
+`platformd` (#539). `pkg/arch/integrationsuite_test.go` fails `make test` on
+any recipe that names the runner outside the define, and on a define that
+drops either flag.
+
+`make integration-test` is the one target that does not use the define. It is
+the CI standard's integration stage, so it builds the `integration` stage of
+`build/docker/devcontainer/Dockerfile` as `IT_IMAGE` and runs
+`build/docker/devcontainer/compose.yaml`'s `integration` service under the
+compose project `IT_PROJECT`. The service's entrypoint is the runner, so the
+Makefile passes it only `all` and the tags; the service carries the define's
+flags (privileged, `/dev/net/tun`, an exec `/tmp`, `GOWORK=off`). The image
+bakes the source and the module cache with `GOPROXY=off`, so nothing is
+bind-mounted and nothing is fetched. The target tears the stack down on every
+exit and exits with the suites' status.
+
+### CI
+
+`.github/workflows/ci.yml` is the canonical CI (handbook `ci-standard.md`,
+ci-template). Its five stages are Makefile targets, `make build`, `make test`,
+`make integration-test`, `make security` and `make deps-check`, and run in the
+devcontainer image so a developer and CI run the same thing:
+
+| Job | Tier | What it runs |
+|-----|------|--------------|
+| `image` | PR | `make docker-build` (toolchain and integration images), then `make build`, `make test`, `make security` and `make deps-check` in the toolchain image through `scripts/in-toolchain-image.sh`, and `trivy image` on the integration image |
+| `integration` | full | `make integration-test` under a per-run `IT_PROJECT` and `IT_IMAGE`, torn down on every exit |
+| `lint`, `sdkjs`, `security`, `build`, `test` | PR | Native-runner checks: format, vet, lint, `check-insecure-tls`; the JS SDK; gosec with its SARIF upload (GitHub only), govulncheck, module verification; `go build ./...` (root and `sdk/go`), `build-no-web`, the Pi binaries and the `sdk/go` consumer check; `make test` and `make test-sdk-go` |
+| `race`, `web` | full | `make test-race`; the web console's tests, typecheck and build |
+| `fips` | main only | `make test-fips`; outside the gate |
+
+The full tier runs on every push to `main`, on `workflow_dispatch`, and on a PR
+labelled `ci:full`. `CI Gate` passes when every PR-tier job passed and every
+full-tier job passed or was not selected.
+
+The `image` job's `trivy image` step fails on any CRITICAL or HIGH finding in
+the integration image that has a fix (`--severity CRITICAL,HIGH --exit-code 1
+--ignore-unfixed`, handbook `devops.md` §8). It skips `/gomodcache`, the baked
+third-party module cache, whose test-fixture keys are not credentials; module
+vulnerabilities stay gated by govulncheck and `trivy fs` in `make security`.
+Its suppressions are `build/docker/devcontainer/trivyignore-image.yaml`, not
+the root `.trivyignore`: each entry is scoped by path to one package copy and
+carries its reason and an `expired_at` date, after which the finding fails the
+gate again. Today it holds only advisories in the dependencies npm itself
+bundles, which no Node or npm release fixes yet.
+
+The images come from one Dockerfile, `build/docker/devcontainer/Dockerfile`,
+built from the repository root. `scripts/tool-pins.sh` holds the base image and
+the pins for govulncheck, trivy and Node.js (the integration image's official
+Node release archive, digest-checked per architecture in place of nvm), and the
+Makefile includes it;
+golangci-lint, actionlint, gosec and swag stay pinned in their
+`build/tools-src` modules, so each links the dependency versions its module
+names rather than the tool's own (#933). The integration stage installs only
+the packages a suite, the runner or a Makefile target run there calls; the
+CanoKey QEMU build, autotools, tpm2-abrmd, yubikey-manager, the Secure Boot
+signing tools, the X server and the legacy network tools were dropped because
+nothing called them, and the `trivy image` step scans every package left. The toolchain image is tagged with a hash of its inputs
+(`make -s toolchain-image`). Forge credentials reach the build only as the
+`gomodauth` BuildKit secret, from `MODULE_ENV_FILE`. Every job that starts
+containers first runs `scripts/reap-stale-ci-stacks.sh go-trusted-platform-ci-`,
+which removes the stacks a runner that died mid-job left behind.
+
+The toolchain container writes in four places: the checkout at `/src`, the
+build cache at `/gocache` (a named volume under compose, the container's own
+disk-backed layer under `scripts/in-toolchain-image.sh`), `/var/tmp` (likewise
+a named volume or the container's layer), which is `TMPDIR`, and a 3 GB tmpfs
+at `/tmp`, which is `HOME`. The image sets `GOTMPDIR=/gocache`, so the go
+command's work directory, every compiled package and linked test binary of a
+run, sits on disk beside the cache. `make test` over the whole tree needs more
+than `/tmp` holds: on a cold cache at `-p 8` its work directory peaked at
+4.2 GB and the build cache ended at 3.5 GB, and the peak grows with the
+runner's CPU count.
+
+The linker does not follow `GOTMPDIR`. An external (cgo) link writes its
+objects under `os.MkdirTemp("", "go-link-")` (`hostlinksetup` in
+`cmd/link/internal/ld/lib.go`), which follows `TMPDIR`, and `make test` links
+one test binary per CPU at once; with `TMPDIR=/tmp` those links failed with
+`no space left on device`. `/var/tmp` is on disk, and like `/tmp` it is sticky
+under root-owned ancestors, so a 0700 directory made under `os.TempDir()`
+still passes `cmd/deployer-pin`'s ancestor check, and its path is short
+enough for the Unix sockets the tests bind there. `t.TempDir()` follows
+`GOTMPDIR` and lands in `/gocache`.
+
+The stages that get a network (`make security`, `make deps-check` and CI's
+`trivy image`, with `IN_IMAGE_NETWORK=bridge`) keep their downloads off `/tmp`
+as well. `scripts/in-toolchain-image.sh` points their writable module cache at
+`/gocache/mod`: it starts empty, so the stage downloads its whole module graph
+(about 2.3 GB unpacked for the root module). The image sets
+`TRIVY_CACHE_DIR=/gocache/trivy`, so trivy's vulnerability DB (1.6 GB
+unpacked) is not written to `$HOME/.cache/trivy`. With both in `/tmp`,
+`make security` failed writing `trivy.db` with `no space left on device`.
+
+To run a stage locally as CI does: `make docker-build`, then
+`make docker-run CMD='make test'`.
 
 ## Protocol Parity Assertions
 

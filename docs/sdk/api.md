@@ -1,6 +1,6 @@
 # Go SDK — API
 
-> **Status: NORMATIVE** · Scope: what `sdk/go` carries, per service and per transport · Last verified: 2026-10-15
+> **Status: NORMATIVE** · Scope: what `sdk/go` carries, per service and per transport · Last verified: 2026-10-16
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING`, never omitted.
@@ -19,7 +19,7 @@ when their adapter maps it:
 |---|---|
 | REST | `transport/rest/adapter.go` (`grpcMethodToRESTMap`, `templatedRouteTable`), plus `ldevid.go`, `provisioning.go`, `attestation_reports.go`, `app_services.go`, `iam.go` (single IAM resources onto the reply's resource field) |
 | QUIC | `transport/quic/adapter.go` (`grpcMethodToOpcodeMap`, `categorySubOpcodeMap`), plus `aaa_ldevid.go`, `aab_bmc.go`, `aab_cluster.go`, `aab_invitation.go`, `aab_ntp.go`, `aab_pxe.go`, `aac_app_services.go`, `ceremony.go`, `device.go`, `dns.go`, `fido2.go`, `gateway_nat64.go`, `luks.go`, `piv.go`, `provisioning.go`, `tpm_quote.go` |
-| MCP | `transport/mcp/adapter.go` (`grpcMethodToMCPToolMap`), plus `app_services.go`, `attestation_reports.go`, `bmc.go`, `cluster.go`, `eab.go`, `invitation.go`, `ldevid.go`, `phase35.go`, `provisioning.go`, `pxe.go`, `switch.go`, `tpm_quote.go` |
+| MCP | `transport/mcp/adapter.go` (`grpcMethodToMCPToolMap`), plus `app_services.go`, `attestation_reports.go`, `bmc.go`, `cluster.go`, `eab.go`, `invitation.go`, `ldevid.go`, `phase35.go`, `provisioning.go`, `pxe.go`, `registry.go`, `switch.go`, `tpm_quote.go` |
 | Embedded | `transport/embedded/adapter.go` (`ServiceRegistry`), `dispatch.go` (`register<Service>Handlers`) |
 
 The server side of each transport, with ports, opcodes and authorization, is
@@ -49,7 +49,7 @@ folder's own `api.md`. Streaming RPCs are ✅ only on gRPC / Unix.
 | `GatewayService` | `Gateway()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `ProxyService` | `Proxy()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `OverlayService` | `Overlay()` | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `RegistryService` | `Registry()` | `MISSING — docs/13 G7` | ✅ | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+| `RegistryService` | `Registry()` | `MISSING — docs/13 G7` | ✅ | `MISSING — docs/13 G7` | ✅ | ✅ |
 | `ClusterService` | `Cluster()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `ConfigDeliveryService` | `ConfigDelivery()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `PlatformIAMService` | `IAM()` | ✅ | ✅ | ✅ | ✅ | ✅ |

@@ -154,6 +154,9 @@ func TestStart_DeviceScriptNeverBindsWhenAListenerFails(t *testing.T) {
 // port configurable, so only the first reason still applies.)
 func TestIPXEServerReady_ClosesOnlyAfterEveryListenerBinds(t *testing.T) {
 	cfg := &ipxe.ServerConfig{
+		// Loopback names the server IP outright: auto-detection wants a
+		// routable interface, and the hermetic test container has only lo.
+		BindHost:        "127.0.0.1",
 		HTTPPort:        freeTCPPort(t),
 		TFTPPort:        freeUDPPort(t),
 		EnableDHCP:      false,
@@ -188,6 +191,9 @@ func TestIPXEServerReady_StaysOpenWhenAListenerCannotBind(t *testing.T) {
 	defer squatter.Close()
 
 	cfg := &ipxe.ServerConfig{
+		// Loopback names the server IP outright: auto-detection wants a
+		// routable interface, and the hermetic test container has only lo.
+		BindHost: "127.0.0.1",
 		HTTPPort: freeTCPPort(t),
 		TFTPPort: squatter.LocalAddr().(*net.UDPAddr).Port,
 		// Without the fixture the TFTP server fetches firmware from

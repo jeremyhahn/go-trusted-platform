@@ -490,6 +490,7 @@ func TestGatewayMCPErrors_Messages(t *testing.T) {
 	}{
 		{ErrUnknownGatewayModes{Modes: 8}, "0x8 names an unknown mode"},
 		{ErrFieldNotSupported{Method: "/m", Field: "id"}, "MCP cannot carry id for gRPC method /m"},
+		{ErrUnknownRegistryEnum{Field: "health", Value: "fine"}, `registry tool result names an unknown health "fine"`},
 		{ErrDurationNotWholeSeconds{Field: "lease", Nanos: 5}, "lease in whole seconds; 5ns"},
 		{ErrDurationClearNotSupported{Field: "lease"}, "cannot set lease to zero"},
 	}
