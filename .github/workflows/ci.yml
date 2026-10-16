@@ -507,7 +507,9 @@ jobs:
 
   ci-gate:
     name: CI Gate
-    runs-on: ubuntu-latest
+    # The reserved 1-CPU ci-gate runners (DS-2273), so the gate does not queue
+    # behind ubuntu-latest jobs: never add a checkout or a `uses:` step here.
+    runs-on: ci-gate
     if: always()
     needs: [lint, sdkjs, security, image, build, test, race, web, integration]
     steps:

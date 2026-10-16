@@ -1,9 +1,14 @@
 # actionlint configuration, read by `make lint`.
 #
-# `batch` is the self-hosted label of the batch runners batch.yml runs on
-# (#860); nothing else uses it.
+# The custom labels of our Gitea runners:
+#
+# - `ci-gate` is the reserved label of the 1-CPU gate runners the CI Gate job
+#   in ci.yml runs on (DS-2273); that job takes no checkout and no `uses:`.
+# - `batch` is the self-hosted label of the batch runners batch.yml runs on
+#   (#860); nothing else uses it.
 self-hosted-runner:
   labels:
+    - ci-gate
     - batch
 
 # The ignore is deliberate and scoped to one file and one message:
