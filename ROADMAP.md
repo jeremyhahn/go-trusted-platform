@@ -53,6 +53,9 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **daemon** — MCP refuses anonymous enumeration and every tool has a permission — [#412](../../issues/412) — open
 - **installer** — root seal on `luks-root` and offline unseal from the `.tpmpolicy` binding record — [#720](../../issues/720) — blocked: waits on the go-quicbaas tag that carries go-xkms#1443 step 3
 - **luks** — the LUKS service on a real backend — [#647](../../issues/647) — open
+- **sdn** — `pkg/sdn/policy` folded into one of the two engines (access → go-qrdb ABAC through the SDK, evidence → OPA) — [docs/sdn/](docs/sdn/) — open
+- **security** — Rego policies held in the datastore and served through the go-quicbaas SDK, with the embedded set as the floor; ruled option A: go-qrdb ABAC answers every access question, OPA every evidence question including image admission and workload compliance — [docs/security/](docs/security/) — open
+- **security** — OPA behind one build tag, so a binary that evaluates no evidence omits it (as the NBD build tag) — [docs/security/](docs/security/) — open
 - **tenant** — tenant VRFs and the platform-services VRF — [#721](../../issues/721) — blocked: waits on #709
 
 ## Later
@@ -60,6 +63,8 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **remote-deploy** — remote agent deploy over QUIC, replacing SSH — [#54](../../issues/54) — open
 - **pi-node-roles** — control-plane, compute and gateway templates for raspberrypi — [Raspberry Pi templates](configs/platform/templates/dedicated/raspberrypi/README.md) — open
 - **ha-raft-template** — the three-node control plane — [configs/platform/templates/README.md](configs/platform/templates/README.md) — open
+- **standards-watch** — draft-ietf-rats-corim-11 pinned; a new revision or its RFC updates `docs/reference/rats/` and the code — [docs/reference/rats/](docs/reference/rats/) — pinned -11
+- **standards-watch** — draft-ietf-lamps-csr-attestation-29 pinned; a new revision or its RFC updates `docs/reference/rats/` and the code — [docs/reference/rats/](docs/reference/rats/) — pinned -29
 
 ## Future
 - **dht** — trusted DHT for the public peer-to-peer hosting platform; design only — [docs/dht/](docs/dht/) — open
