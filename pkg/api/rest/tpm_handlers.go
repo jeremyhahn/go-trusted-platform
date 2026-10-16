@@ -134,6 +134,8 @@ func (h *TPMHandlers) routes() []tpmRoute {
 		{http.MethodGet, "/api/v1/tpm/info", tpmScopeRead, tpmRPC(h, platformv1.TPMServiceServer.Info)},
 		{http.MethodPost, "/api/v1/tpm/provision", tpmScopeWrite, tpmRPC(h, platformv1.TPMServiceServer.Provision)},
 		{http.MethodPost, "/api/v1/tpm/clear", tpmScopeDelete, tpmRPC(h, platformv1.TPMServiceServer.Clear)},
+		{http.MethodGet, "/api/v1/tpm/capabilities", tpmScopeRead, tpmRPC(h, platformv1.TPMServiceServer.GetCapabilities)},
+		{http.MethodGet, "/api/v1/tpm/platform", tpmScopeRead, tpmRPC(h, platformv1.TPMServiceServer.GetPlatformAttributes)},
 
 		// Endorsement key
 		{http.MethodGet, "/api/v1/tpm/ek", tpmScopeRead, tpmRPC(h, platformv1.TPMServiceServer.GetEK)},
@@ -168,6 +170,7 @@ func (h *TPMHandlers) routes() []tpmRoute {
 		// PCRs and the event log. POST /pcrs is the JavaScript SDK's form.
 		{http.MethodGet, "/api/v1/tpm/pcrs", tpmScopeRead, tpmRPC(h, platformv1.TPMServiceServer.GetPCRs)},
 		{http.MethodPost, "/api/v1/tpm/pcrs", tpmScopeRead, tpmRPC(h, platformv1.TPMServiceServer.GetPCRs)},
+		{http.MethodPost, "/api/v1/tpm/pcrs/extend", tpmScopeWrite, tpmRPC(h, platformv1.TPMServiceServer.ExtendPCR)},
 		{http.MethodGet, "/api/v1/tpm/eventlog", tpmScopeRead, tpmRPC(h, platformv1.TPMServiceServer.GetEventLog)},
 
 		// NVRAM

@@ -60,6 +60,7 @@ folder's own `api.md`. Streaming RPCs are ✅ only on gRPC / Unix.
 | `CacheService` (§3.5) | `Cache()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `SchedulerService` (§3.5) | `Scheduler()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `MessagingService` (§3.5) | `Messaging()` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `ObjectStorageService` (§3.5) | `ObjectStorage()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `SwitchService` | `Switch()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `ProvisioningGateway` | `MISSING — docs/13 G7` | ✅ | ✅ | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | `CeremonyService` | `Ceremony()` | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -106,8 +107,8 @@ platform code and SDK consumers program against.
 
 A re-exported accessor rides the side-client's transport (`QuicBaaSTransport`:
 unix, grpc, rest, quic or mcp) to quicbaasd, so its transport coverage is
-go-quicbaas's own. platformd itself serves only `Cache()`, `Scheduler()` and
-`Messaging()` of these groups (§3.5).
+go-quicbaas's own. platformd itself serves only `Cache()`, `Scheduler()`,
+`Messaging()` and `ObjectStorage()` of these groups (§3.5).
 
 ### 3.1 Container-trust types
 
@@ -219,11 +220,19 @@ unexported and cannot be built any other way. `kv` forwards the watch options
 An accessor returns nil when the SDK does not serve the service, and
 `NewClientFromSDK(nil)` fails with `ErrNilSDKClient`.
 
-platformd serves Cache, Scheduler and Messaging itself (§3.5). Every other
-accessor in the table is reached only through the side-client (§3), and
-`platformctl` has no command group for it.
+platformd serves Cache, Scheduler, Messaging and ObjectStorage itself (§3.5).
+Every other accessor in the table is reached only through the side-client
+(§3), and `platformctl` has no command group for it.
 
-### 3.5 Cache, Scheduler and Messaging on platformd
+### 3.5 Application services on platformd
+
+ObjectStorage (objects group: put, get, delete, head, list, copy, list by tag,
+list by tenant) follows the same service-layer, REST, QUIC (`0x60`), MCP and
+scope rules as the three below; its routes, sub-opcodes, tools and
+pin-specific limits are in [../objectstorage/api-reference.md](../objectstorage/api-reference.md).
+Unlike the three, the embedded transport serves it. A put or copy must name
+`target_backend`, because the pinned SDK's object store has no primary
+backend to choose.
 
 platformd serves `platform.v1.CacheService`, `SchedulerService` and
 `MessagingService` (`pkg/api/grpc/proto/{cache,scheduler,messaging}.proto`)
@@ -326,7 +335,7 @@ Errors:
 
 | Cause | Status |
 |---|---|
-| The node's DAO factory has no SDK, or the SDK does not serve the service (the embedded transport answers `UnknownMethodError`) | `UNAVAILABLE`, `ErrorInfo` reason `SERVICE_NOT_CONFIGURED`, metadata `service` = `cache`, `scheduler` or `messaging` |
+| The node's DAO factory has no SDK, or the SDK does not serve the service (the embedded transport answers `UnknownMethodError`) | `UNAVAILABLE`, `ErrorInfo` reason `SERVICE_NOT_CONFIGURED`, metadata `service` = `cache`, `scheduler`, `messaging` or `objectstorage` |
 | The request fails validation | `INVALID_ARGUMENT`, naming the field |
 | The SDK answers with a typed error (`QBError`) | its code's gRPC twin, as `barrier.SDKCode` maps it: `NotFound` `NOT_FOUND`, `AlreadyExists` and `Conflict` `ALREADY_EXISTS`, `InvalidInput` `INVALID_ARGUMENT`, `Unavailable` `UNAVAILABLE`, and so on |
 | The SDK answers with a gRPC status | that status code |

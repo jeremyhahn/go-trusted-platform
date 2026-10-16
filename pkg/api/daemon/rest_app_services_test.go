@@ -75,6 +75,20 @@ func appRESTRequests() map[string]proto.Message {
 		platformv1.MessagingService_GetChannelStats_FullMethodName: &platformv1.GetMessagingChannelStatsRequest{Channel: "events"},
 		platformv1.MessagingService_GetStats_FullMethodName:        &platformv1.GetMessagingStatsRequest{},
 		platformv1.MessagingService_GetDedupStats_FullMethodName:   &platformv1.GetMessagingDedupStatsRequest{},
+
+		platformv1.ObjectStorageService_PutObject_FullMethodName: &platformv1.PutObjectRequest{
+			Key: "docs:reports/a.txt", Value: []byte("a"), Tags: map[string]string{"env": "prod"}, TargetBackend: "local",
+			ReplicationPolicy: &platformv1.ObjectReplicationPolicy{Mode: "quorum", MinReplicas: 2},
+		},
+		platformv1.ObjectStorageService_GetObject_FullMethodName:    &platformv1.GetObjectRequest{Key: "docs:reports/a.txt", IncludeMetadata: true},
+		platformv1.ObjectStorageService_DeleteObject_FullMethodName: &platformv1.DeleteObjectRequest{Key: "docs:reports/a.txt"},
+		platformv1.ObjectStorageService_HeadObject_FullMethodName:   &platformv1.HeadObjectRequest{Key: "docs:reports/a.txt"},
+		platformv1.ObjectStorageService_ListObjects_FullMethodName:  &platformv1.ListObjectsRequest{Prefix: "docs:", Limit: 5},
+		platformv1.ObjectStorageService_CopyObject_FullMethodName: &platformv1.CopyObjectRequest{
+			SourceKey: "docs:reports/a.txt", DestinationKey: "docs:reports/b.txt", TargetBackend: "local",
+		},
+		platformv1.ObjectStorageService_ListObjectsByTag_FullMethodName:  &platformv1.ListObjectsByTagRequest{TagName: "env", TagValue: "prod"},
+		platformv1.ObjectStorageService_ListTenantObjects_FullMethodName: &platformv1.ListTenantObjectsRequest{TenantId: "acme", Limit: 2},
 	}
 }
 
@@ -126,7 +140,7 @@ func appServicesRESTHandler(t *testing.T, servers appServiceServers) http.Handle
 // error over REST: the client sees 404, not 500.
 func TestAppServicesREST_SDKNotFoundIs404(t *testing.T) {
 	notFound := sdkerrors.NewNotFound("Get", "no such resource")
-	handler := appServicesRESTHandler(t, appServersWith(&fakeAppCache{err: notFound}, &fakeAppScheduler{err: notFound}, &fakeAppMessaging{err: notFound}))
+	handler := appServicesRESTHandler(t, appServersWith(&fakeAppCache{err: notFound}, &fakeAppScheduler{err: notFound}, &fakeAppMessaging{err: notFound}, &fakeAppObjectStorage{err: notFound}))
 	for _, path := range []string{"/api/v1/cache/config", "/api/v1/scheduler/jobs/7", "/api/v1/messaging/channels/orders"} {
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "https://platformd"+path, nil))
@@ -139,7 +153,8 @@ func TestAppServicesREST_SDKNotFoundIs404(t *testing.T) {
 // the daemon routes to the service layer and back.
 func TestAppServicesRESTClientAgainstDaemonRouter(t *testing.T) {
 	cacheClient, schedulerClient, messagingClient := &fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}
-	conn := connectAppServicesREST(t, appServersWith(cacheClient, schedulerClient, messagingClient))
+	objectStorageClient := &fakeAppObjectStorage{}
+	conn := connectAppServicesREST(t, appServersWith(cacheClient, schedulerClient, messagingClient, objectStorageClient))
 
 	for method, request := range appRESTRequests() {
 		err := conn.Invoke(context.Background(), method, request, appRESTResponseFor(t, method))
@@ -155,6 +170,13 @@ func TestAppServicesRESTClientAgainstDaemonRouter(t *testing.T) {
 	// The body and the path parameter both reach the request.
 	require.NotNil(t, messagingClient.published)
 	assert.Equal(t, "b", messagingClient.published.Metadata["a"])
+
+	// An object key holding ":", "/" and a space arrives intact.
+	var head platformv1.HeadObjectResponse
+	require.NoError(t, conn.Invoke(context.Background(), platformv1.ObjectStorageService_HeadObject_FullMethodName,
+		&platformv1.HeadObjectRequest{Key: "docs:a/b c.txt"}, &head))
+	assert.Equal(t, "docs:a/b c.txt", objectStorageClient.name)
+	assert.Equal(t, int32(2), head.GetReplicaCount())
 	assert.Equal(t, "events", messagingClient.name)
 
 	var job platformv1.GetSchedulerJobResponse
@@ -172,14 +194,14 @@ func TestAppServicesRESTClientAgainstDaemonRouter_Errors(t *testing.T) {
 		assert.Equal(t, codes.Unavailable, status.Code(err), method)
 	}
 
-	conn := connectAppServicesREST(t, appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}))
+	conn := connectAppServicesREST(t, appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}, &fakeAppObjectStorage{}))
 	err := conn.Invoke(context.Background(), platformv1.SchedulerService_GetJob_FullMethodName,
 		&platformv1.GetSchedulerJobRequest{JobId: "abc"}, &platformv1.GetSchedulerJobResponse{})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "a job ID that is not decimal")
 }
 
 func TestAppServiceServers_RESTServers(t *testing.T) {
-	servers := appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}).restServers()
+	servers := appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}, &fakeAppObjectStorage{}).restServers()
 	assert.NotNil(t, servers.Cache)
 	assert.NotNil(t, servers.Scheduler)
 	assert.NotNil(t, servers.Messaging)
@@ -194,7 +216,7 @@ func TestAppServiceServers_RESTServers(t *testing.T) {
 
 // The webservice listener is handed the daemon's own servers, never copies.
 func TestDaemon_AppServiceRESTServers(t *testing.T) {
-	servers := appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{})
+	servers := appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}, &fakeAppObjectStorage{})
 	got := (&Daemon{appServices: servers}).AppServiceRESTServers()
 	assert.Same(t, servers.cache, got.Cache)
 	assert.Same(t, servers.scheduler, got.Scheduler)
@@ -210,7 +232,7 @@ func TestDaemon_AppServiceRESTServers(t *testing.T) {
 // refused before it reaches a server.
 func TestRESTServer_SetAppServiceHandlers_NilGuardRefuses(t *testing.T) {
 	s := newTestRESTServerForPhase35(t)
-	s.SetAppServiceHandlers(appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}).restServers(), nil)
+	s.SetAppServiceHandlers(appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}, &fakeAppObjectStorage{}).restServers(), nil)
 
 	for _, path := range []string{"/api/v1/cache/config", "/api/v1/scheduler/status", "/api/v1/messaging/stats"} {
 		code, _ := doJSON(t, s, http.MethodGet, path, nil)

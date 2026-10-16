@@ -1810,6 +1810,11 @@ coverage-ntp:
 integration-test-ntp: build-devcontainer
 	$(call run-integration-suite,ntp)
 
+## integration-test-objectstorage: Run object storage multi-protocol integration tests in devcontainer
+.PHONY: integration-test-objectstorage
+integration-test-objectstorage: build-devcontainer
+	$(call run-integration-suite,objectstorage)
+
 # VPN (management-VPN control plane) Tests
 #
 # These use the fully assembled $(BUILD_TAGS), never a literal list, so every

@@ -32,11 +32,12 @@ import (
 )
 
 // =============================================================================
-// Application service tools: Cache, Scheduler and Messaging (#704)
+// Application service tools: Cache, Scheduler, Messaging and ObjectStorage (#704)
 // =============================================================================
 //
-// Every cache_*, scheduler_* and messaging_* tool is one RPC of
-// CacheService, SchedulerService or MessagingService. Its arguments are the
+// Every cache_*, scheduler_*, messaging_* and objectstorage_* tool is one RPC
+// of CacheService, SchedulerService, MessagingService or
+// ObjectStorageService. Its arguments are the
 // RPC request in the proto3 JSON mapping, under the proto field names, and
 // its result is the RPC response in the same mapping. The tools call the
 // same server instances the gRPC, REST, QUIC and Unix transports serve, so
@@ -45,9 +46,10 @@ import (
 // AppServiceServers are the servers the application service tools call. A
 // nil server leaves its tools answering ErrAppServiceNotConfigured.
 type AppServiceServers struct {
-	Cache     platformv1.CacheServiceServer
-	Scheduler platformv1.SchedulerServiceServer
-	Messaging platformv1.MessagingServiceServer
+	Cache         platformv1.CacheServiceServer
+	Scheduler     platformv1.SchedulerServiceServer
+	Messaging     platformv1.MessagingServiceServer
+	ObjectStorage platformv1.ObjectStorageServiceServer
 }
 
 // AppServiceProvider is implemented by a ServiceProvider that serves the
@@ -117,6 +119,10 @@ type appTool struct {
 func appCacheServer(s AppServiceServers) platformv1.CacheServiceServer         { return s.Cache }
 func appSchedulerServer(s AppServiceServers) platformv1.SchedulerServiceServer { return s.Scheduler }
 func appMessagingServer(s AppServiceServers) platformv1.MessagingServiceServer { return s.Messaging }
+
+func appObjectStorageServer(s AppServiceServers) platformv1.ObjectStorageServiceServer {
+	return s.ObjectStorage
+}
 
 // appServiceTools maps each application service tool name to its RPC
 // (map-based dispatch for O(1) routing per project conventions).
@@ -251,6 +257,54 @@ var appServiceTools = map[string]appTool{
 		method: platformv1.MessagingService_GetDedupStats_FullMethodName, scope: "messaging:read",
 		description: "Report the message deduplication statistics",
 		binding:     appToolMethod(appservices.ServiceMessaging, appMessagingServer, platformv1.MessagingServiceServer.GetDedupStats),
+	},
+
+	"objectstorage_put": {
+		method: platformv1.ObjectStorageService_PutObject_FullMethodName, scope: "objectstorage:write",
+		description: "Store an object; the value is base64",
+		required:    []string{"key", "target_backend"},
+		binding:     appToolMethod(appservices.ServiceObjectStorage, appObjectStorageServer, platformv1.ObjectStorageServiceServer.PutObject),
+	},
+	"objectstorage_get": {
+		method: platformv1.ObjectStorageService_GetObject_FullMethodName, scope: "objectstorage:read",
+		description: "Get an object with its data; the value is base64",
+		required:    []string{"key"},
+		binding:     appToolMethod(appservices.ServiceObjectStorage, appObjectStorageServer, platformv1.ObjectStorageServiceServer.GetObject),
+	},
+	"objectstorage_delete": {
+		method: platformv1.ObjectStorageService_DeleteObject_FullMethodName, scope: "objectstorage:delete",
+		description: "Delete an object",
+		required:    []string{"key"},
+		binding:     appToolMethod(appservices.ServiceObjectStorage, appObjectStorageServer, platformv1.ObjectStorageServiceServer.DeleteObject),
+	},
+	"objectstorage_head": {
+		method: platformv1.ObjectStorageService_HeadObject_FullMethodName, scope: "objectstorage:read",
+		description: "Get the metadata of an object without its data",
+		required:    []string{"key"},
+		binding:     appToolMethod(appservices.ServiceObjectStorage, appObjectStorageServer, platformv1.ObjectStorageServiceServer.HeadObject),
+	},
+	"objectstorage_list": {
+		method: platformv1.ObjectStorageService_ListObjects_FullMethodName, scope: "objectstorage:read",
+		description: "List the objects under a key prefix",
+		binding:     appToolMethod(appservices.ServiceObjectStorage, appObjectStorageServer, platformv1.ObjectStorageServiceServer.ListObjects),
+	},
+	"objectstorage_copy": {
+		method: platformv1.ObjectStorageService_CopyObject_FullMethodName, scope: "objectstorage:write",
+		description: "Copy an object to a new key",
+		required:    []string{"source_key", "destination_key", "target_backend"},
+		binding:     appToolMethod(appservices.ServiceObjectStorage, appObjectStorageServer, platformv1.ObjectStorageServiceServer.CopyObject),
+	},
+	"objectstorage_list_by_tag": {
+		method: platformv1.ObjectStorageService_ListObjectsByTag_FullMethodName, scope: "objectstorage:read",
+		description: "List the objects whose tag has a value",
+		required:    []string{"tag_name"},
+		binding:     appToolMethod(appservices.ServiceObjectStorage, appObjectStorageServer, platformv1.ObjectStorageServiceServer.ListObjectsByTag),
+	},
+	"objectstorage_list_tenant": {
+		method: platformv1.ObjectStorageService_ListTenantObjects_FullMethodName, scope: "objectstorage:read",
+		description: "List the objects one tenant owns",
+		required:    []string{"tenant_id"},
+		binding:     appToolMethod(appservices.ServiceObjectStorage, appObjectStorageServer, platformv1.ObjectStorageServiceServer.ListTenantObjects),
 	},
 }
 
@@ -390,8 +444,8 @@ func appValueSchema(field protoreflect.FieldDescriptor) map[string]interface{} {
 	return schema
 }
 
-// registerAppServiceTools registers the cache_*, scheduler_* and
-// messaging_* tools in name order.
+// registerAppServiceTools registers the cache_*, scheduler_*, messaging_*
+// and objectstorage_* tools in name order.
 func (r *ToolRegistry) registerAppServiceTools() {
 	for _, name := range slices.Sorted(maps.Keys(appServiceTools)) {
 		tool := appServiceTools[name]

@@ -1036,8 +1036,8 @@ type RegistryParams struct {
 	PXEWebhookEnabled bool
 	NTPServiceServer  platformv1.NTPServiceServer
 	VPNServiceServer  platformv1.VPNServiceServer
-	// AppServiceServers are the daemon's Cache, Scheduler and Messaging
-	// servers, the instances behind every other transport.
+	// AppServiceServers are the daemon's Cache, Scheduler, Messaging and
+	// ObjectStorage servers, the instances behind every other transport.
 	AppServiceServers restapi.AppServiceServers
 	SDNEnrollmentHook *policy.SDNEnrollmentHook
 	// SDNIdentityConfig is sourced from app.SDNConfig.Identity. When present and
@@ -2106,8 +2106,8 @@ func (registry *HandlerRegistry) VPNServiceServer() platformv1.VPNServiceServer 
 	return registry.params.VPNServiceServer
 }
 
-// AppServiceServers returns the daemon's Cache, Scheduler and Messaging
-// servers; a service the daemon does not wire is a nil interface.
+// AppServiceServers returns the daemon's Cache, Scheduler, Messaging and
+// ObjectStorage servers; a service the daemon does not wire is a nil interface.
 func (registry *HandlerRegistry) AppServiceServers() restapi.AppServiceServers {
 	return registry.params.AppServiceServers
 }

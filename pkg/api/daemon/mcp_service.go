@@ -35,6 +35,7 @@ import (
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/healthprobe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmattrs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmcertify"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmpcr"
@@ -2855,6 +2856,8 @@ func (p *MCPServiceProvider) TPMInfo(ctx context.Context) (interface{}, error) {
 		result["vendor_id"] = props.VendorID
 		result["fips_mode"] = props.Fips1402
 		result["max_nvram_size"] = props.NVBufferMax
+		result["lockout_counter"] = props.LockoutCounter
+		result["max_auth_fail"] = props.MaxAuthFail
 	}
 
 	cfg := p.tpm2Service.Config()
@@ -3187,7 +3190,7 @@ func (p *MCPServiceProvider) TPMExtendPCR(ctx context.Context, pcrIndex int, has
 
 	return map[string]interface{}{
 		"success": true,
-		"message": fmt.Sprintf("PCR %d extended", pcrIndex),
+		"message": tpmpcr.ExtendedMessage(pcrIndex),
 	}, nil
 }
 
@@ -3221,26 +3224,16 @@ func (p *MCPServiceProvider) TPMCapabilities(ctx context.Context) (interface{}, 
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	props, err := p.tpm2Service.FixedProperties()
+	caps, err := tpmattrs.ReadCapabilities(p.tpm2Service)
 	if err != nil {
-		return nil, err
+		return nil, mapTPMError(err)
 	}
 
-	result := map[string]interface{}{
-		"manufacturer":    props.Manufacturer,
-		"model":           props.Model,
-		"family":          props.Family,
-		"revision":        props.Revision,
-		"vendor_id":       props.VendorID,
-		"fw_major":        props.FwMajor,
-		"fw_minor":        props.FwMinor,
-		"fips_mode":       props.Fips1402,
-		"lockout_counter": props.LockoutCounter,
-		"max_auth_fail":   props.MaxAuthFail,
-		"max_nvram_size":  props.NVBufferMax,
-	}
-
-	return result, nil
+	return map[string]interface{}{
+		"algorithms": caps.Algorithms,
+		"commands":   caps.Commands,
+		"ecc_curves": caps.ECCCurves,
+	}, nil
 }
 
 // TPMRandom generates random bytes from the TPM.
@@ -3407,38 +3400,30 @@ func (p *MCPServiceProvider) TPMPlatform(ctx context.Context) (interface{}, erro
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	cfg := p.tpm2Service.Config()
+	platform := tpmattrs.ReadPlatform(p.tpm2Service)
 	result := map[string]interface{}{
-		"available": true,
+		"available":    true,
+		"device":       platform.Device,
+		"is_fips":      platform.IsFIPS,
+		"pcr_extended": platform.PCRExtended,
+		"can_seal":     platform.CanSeal,
+		"is_simulator": platform.IsSimulator,
+		"manufacturer": platform.Manufacturer,
 	}
-
-	if cfg != nil {
-		result["is_simulator"] = cfg.UseSimulator
-		result["device"] = cfg.Device
-	}
-
-	// Include EK info if available
-	ekAttrs, err := p.tpm2Service.EKAttributes()
-	if err == nil {
-		result["ek_handle"] = uint32(ekAttrs.TPMAttributes.Handle)
-		result["ek_algorithm"] = ekAttrs.KeyAlgorithm.String()
-	}
-
-	// Include SRK info if available
-	srkAttrs, err := p.tpm2Service.SSRKAttributes()
-	if err == nil {
-		result["srk_handle"] = uint32(srkAttrs.TPMAttributes.Handle)
-		result["srk_algorithm"] = srkAttrs.KeyAlgorithm.String()
-	}
-
-	// Include IAK info if available
-	iakAttrs, err := p.tpm2Service.IAKAttributes()
-	if err == nil {
-		result["iak_handle"] = uint32(iakAttrs.TPMAttributes.Handle)
-		result["iak_algorithm"] = iakAttrs.KeyAlgorithm.String()
-	}
-
+	addKeyRef(result, "ek", platform.EK)
+	addKeyRef(result, "srk", platform.SRK)
+	addKeyRef(result, "iak", platform.IAK)
 	return result, nil
+}
+
+// addKeyRef adds a provisioned key's <name>_handle and <name>_algorithm
+// to an MCP result; an absent key adds neither.
+func addKeyRef(result map[string]interface{}, name string, ref *tpmattrs.KeyRef) {
+	if ref == nil {
+		return
+	}
+	result[name+"_handle"] = ref.Handle
+	result[name+"_algorithm"] = ref.Algorithm
 }
 
 // TPMMakeCredential creates a TPM2_MakeCredential challenge, delegating to

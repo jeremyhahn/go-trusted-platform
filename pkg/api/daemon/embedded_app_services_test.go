@@ -46,7 +46,7 @@ func embeddedAppConn(t *testing.T, servers *appServiceServers) *embedded.Adapter
 }
 
 func TestNewEmbeddedHost_ServesTheAppServices(t *testing.T) {
-	servers := appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{})
+	servers := appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}, &fakeAppObjectStorage{})
 	conn := embeddedAppConn(t, &servers).Connection()
 	ctx := context.Background()
 
@@ -59,16 +59,23 @@ func TestNewEmbeddedHost_ServesTheAppServices(t *testing.T) {
 	channels, err := platformv1.NewMessagingServiceClient(conn).ListChannels(ctx, &platformv1.ListMessagingChannelsRequest{})
 	require.NoError(t, err, "messaging")
 	assert.Len(t, channels.GetChannels(), 2)
+
+	head, err := platformv1.NewObjectStorageServiceClient(conn).HeadObject(ctx, &platformv1.HeadObjectRequest{Key: "docs:a.txt"})
+	require.NoError(t, err, "object storage")
+	assert.Equal(t, int32(2), head.GetReplicaCount())
 }
 
 func TestNewEmbeddedHost_AppServicesRefuseAnInvalidRequest(t *testing.T) {
-	servers := appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{})
+	servers := appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}, &fakeAppObjectStorage{})
 	conn := embeddedAppConn(t, &servers).Connection()
 
 	_, err := platformv1.NewMessagingServiceClient(conn).GetChannel(context.Background(), &platformv1.GetMessagingChannelRequest{})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "%v", err)
 
 	_, err = platformv1.NewSchedulerServiceClient(conn).GetJob(context.Background(), &platformv1.GetSchedulerJobRequest{JobId: "x"})
+	assert.Equal(t, codes.InvalidArgument, status.Code(err), "%v", err)
+
+	_, err = platformv1.NewObjectStorageServiceClient(conn).GetObject(context.Background(), &platformv1.GetObjectRequest{})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "%v", err)
 }
 
@@ -89,6 +96,10 @@ func TestNewEmbeddedHost_AppServicesWithoutAnSDKAreUnavailable(t *testing.T) {
 		},
 		"messaging": func() error {
 			_, err := platformv1.NewMessagingServiceClient(conn).GetStats(ctx, &platformv1.GetMessagingStatsRequest{})
+			return err
+		},
+		"objectstorage": func() error {
+			_, err := platformv1.NewObjectStorageServiceClient(conn).ListObjects(ctx, &platformv1.ListObjectsRequest{})
 			return err
 		},
 	}

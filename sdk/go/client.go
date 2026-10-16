@@ -69,11 +69,12 @@ type Client interface {
 	// digest signing, provisioning session management).
 	ConfigDelivery() platformv1.ConfigDeliveryServiceClient
 
-	// Cache, Scheduler and Messaging return the clients of the application
+	// Cache, Scheduler, Messaging and ObjectStorage return the clients of the application
 	// services platformd serves over the composed go-quicbaas SDK.
 	Cache() platformv1.CacheServiceClient
 	Scheduler() platformv1.SchedulerServiceClient
 	Messaging() platformv1.MessagingServiceClient
+	ObjectStorage() platformv1.ObjectStorageServiceClient
 
 	// Security Platform Services
 	IAM() platformv1.PlatformIAMServiceClient
@@ -139,9 +140,10 @@ type ServiceClients struct {
 	EAB        platformv1.EABServiceClient
 
 	// Application services served over the composed go-quicbaas SDK.
-	Cache     platformv1.CacheServiceClient
-	Scheduler platformv1.SchedulerServiceClient
-	Messaging platformv1.MessagingServiceClient
+	Cache         platformv1.CacheServiceClient
+	Scheduler     platformv1.SchedulerServiceClient
+	Messaging     platformv1.MessagingServiceClient
+	ObjectStorage platformv1.ObjectStorageServiceClient
 }
 
 // ConnectFunc is a function type for protocol-specific connection establishment.
@@ -383,9 +385,10 @@ func (c *platformClient) initServiceClients() {
 		Invitation: platformv1.NewInvitationServiceClient(conn),
 		EAB:        platformv1.NewEABServiceClient(conn),
 
-		Cache:     platformv1.NewCacheServiceClient(conn),
-		Scheduler: platformv1.NewSchedulerServiceClient(conn),
-		Messaging: platformv1.NewMessagingServiceClient(conn),
+		Cache:         platformv1.NewCacheServiceClient(conn),
+		Scheduler:     platformv1.NewSchedulerServiceClient(conn),
+		Messaging:     platformv1.NewMessagingServiceClient(conn),
+		ObjectStorage: platformv1.NewObjectStorageServiceClient(conn),
 	}
 }
 
@@ -718,6 +721,14 @@ func (c *platformClient) Messaging() platformv1.MessagingServiceClient {
 		return nil
 	}
 	return c.services.Messaging
+}
+
+// ObjectStorage returns the object storage service client.
+func (c *platformClient) ObjectStorage() platformv1.ObjectStorageServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.ObjectStorage
 }
 
 // QuicBaaS returns the QuicBaaS SDK client used to reach quicbaasd.

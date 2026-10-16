@@ -17,7 +17,7 @@ scope ([api.md](api.md) §9):
 | Scope | Routes |
 |-------|--------|
 | `tpm:read` | every `GET`, plus `POST pcrs`, `quote`, `quote/verify`, `certify`, `make-credential`, `random`, `unseal` |
-| `tpm:write` | `POST provision`, `ek`, `ek/certificate`, `srk`, `ak`, `activate-credential`, `nvram`, `seal`; `PUT nvram` |
+| `tpm:write` | `POST provision`, `ek`, `ek/certificate`, `srk`, `ak`, `activate-credential`, `nvram`, `pcrs/extend`, `seal`; `PUT nvram` |
 | `tpm:delete` | `POST clear`, every `DELETE` |
 
 `GET`/`DELETE /iak`, `GET`/`DELETE /idevid` and `GET /device/attributes` are
@@ -69,6 +69,8 @@ Unix and embedded call — and speaks that RPC's messages
 | Route | RPC | Request fields (body, or parameters where shown) |
 |-------|-----|------|
 | `GET /info` | `Info` | none |
+| `GET /capabilities` | `GetCapabilities` | none |
+| `GET /platform` | `GetPlatformAttributes` | none |
 | `POST /provision` | `Provision` | `ownerPassword`, `endorsementPassword`, `createEk`, `createSrk`, `createAk`, `ekAttributes`, `srkAttributes`, `akAttributes` |
 | `POST /clear` | `Clear` | `ownerPassword`, `confirm` |
 | `GET /ek` | `GetEK` | `?algorithm=&handle=` |
@@ -88,6 +90,7 @@ Unix and embedded call — and speaks that RPC's messages
 | `POST /quote/verify` | `VerifyQuote` | `quote`, `signature`, `signatureAlgorithm`, `akPublic`, `nonce`, `expectedPcrs`, `channelBinding`, … |
 | `POST /certify` | `Certify` | `keyHandle`, `keyPassword`, `nonce` |
 | `GET /pcrs`, `POST /pcrs` | `GetPCRs` | `indices`, `bank` (`GET`: `?indices=0&indices=7&bank=PCR_BANK_SHA256`) |
+| `POST /pcrs/extend` | `ExtendPCR` | `index` (0-23), `hashAlg` (default `sha256`), `data` (base64, not empty) |
 | `GET /eventlog` | `GetEventLog` | `?format=` |
 | `POST /nvram` | `DefineNVRAM` | `index`, `size`, `password`, `attributes`, `parentPassword` |
 | `GET /nvram`, `GET /nvram/{index}` | `ReadNVRAM` | `index`, `password`, `offset`, `size` (`?offset=&size=` on the path form) |

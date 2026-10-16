@@ -132,6 +132,7 @@ func TestAppRESTRoutes_ScopesMatchTheGRPCCatalog(t *testing.T) {
 		platformv1.CacheService_ServiceDesc,
 		platformv1.SchedulerService_ServiceDesc,
 		platformv1.MessagingService_ServiceDesc,
+		platformv1.ObjectStorageService_ServiceDesc,
 	} {
 		for _, m := range desc.Methods {
 			declared++

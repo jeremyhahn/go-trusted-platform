@@ -44,6 +44,8 @@ All methods from the [gRPC API](api-reference-grpc.md) are available via Unix so
 | Method | Description |
 |--------|-------------|
 | `Info` | Get TPM device information |
+| `GetCapabilities` | List the algorithms, commands and ECC curves the TPM implements |
+| `GetPlatformAttributes` | Describe the TPM device and its provisioned EK, SRK and IAK |
 | `Provision` | Provision TPM with owner authorization |
 | `Clear` | Clear TPM and reset authorization |
 
@@ -82,6 +84,7 @@ All methods from the [gRPC API](api-reference-grpc.md) are available via Unix so
 | `Certify` | IAK certifies a persistent key (TPM2_Certify) |
 | `GetEventLog` | Get TPM event log |
 | `GetPCRs` | Read PCR values |
+| `ExtendPCR` | Extend a PCR with data (`tpm:write`) |
 | `MakeCredential` | Create a TPM2_MakeCredential challenge |
 | `ActivateCredential` | Activate a challenge and recover the wrapped secret |
 

@@ -40,7 +40,8 @@ func connectAppServicesMCP(t *testing.T, servers appServiceServers) grpc.ClientC
 // the daemon tools to the service layer and back.
 func TestAppServicesMCPClientAgainstDaemonTools(t *testing.T) {
 	cacheClient, schedulerClient, messagingClient := &fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}
-	conn := connectAppServicesMCP(t, appServersWith(cacheClient, schedulerClient, messagingClient))
+	objectStorageClient := &fakeAppObjectStorage{}
+	conn := connectAppServicesMCP(t, appServersWith(cacheClient, schedulerClient, messagingClient, objectStorageClient))
 
 	for method, request := range appRESTRequests() {
 		err := conn.Invoke(context.Background(), method, request, appRESTResponseFor(t, method))
@@ -55,6 +56,13 @@ func TestAppServicesMCPClientAgainstDaemonTools(t *testing.T) {
 	assert.Equal(t, 10, schedulerClient.listed.Limit)
 	require.NotNil(t, messagingClient.published)
 	assert.Equal(t, "b", messagingClient.published.Metadata["a"])
+
+	// An object key holding ":", "/" and a space arrives intact.
+	var head platformv1.HeadObjectResponse
+	require.NoError(t, conn.Invoke(context.Background(), platformv1.ObjectStorageService_HeadObject_FullMethodName,
+		&platformv1.HeadObjectRequest{Key: "docs:a/b c.txt"}, &head))
+	assert.Equal(t, "docs:a/b c.txt", objectStorageClient.name)
+	assert.Equal(t, int32(2), head.GetReplicaCount())
 
 	var job platformv1.GetSchedulerJobResponse
 	require.NoError(t, conn.Invoke(context.Background(), platformv1.SchedulerService_GetJob_FullMethodName,
@@ -75,14 +83,14 @@ func TestAppServicesMCPClientAgainstDaemonTools_Errors(t *testing.T) {
 		assert.Equal(t, codes.Unavailable, status.Code(err), method)
 	}
 
-	conn := connectAppServicesMCP(t, appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}))
+	conn := connectAppServicesMCP(t, appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}, &fakeAppObjectStorage{}))
 	err := conn.Invoke(context.Background(), platformv1.SchedulerService_GetJob_FullMethodName,
 		&platformv1.GetSchedulerJobRequest{JobId: "abc"}, &platformv1.GetSchedulerJobResponse{})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "a job ID that is not decimal")
 }
 
 func TestAppServiceServers_MCPServers(t *testing.T) {
-	servers := appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}).mcpServers()
+	servers := appServersWith(&fakeAppCache{}, &fakeAppScheduler{}, &fakeAppMessaging{}, &fakeAppObjectStorage{}).mcpServers()
 	assert.NotNil(t, servers.Cache)
 	assert.NotNil(t, servers.Scheduler)
 	assert.NotNil(t, servers.Messaging)

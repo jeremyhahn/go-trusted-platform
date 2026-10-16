@@ -73,6 +73,34 @@ func (h *Handlers) Info(w http.ResponseWriter, r *http.Request) {
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
 }
 
+// Capabilities returns the algorithms, commands and ECC curves the TPM
+// implements.
+func (h *Handlers) Capabilities(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	resp, err := h.server.GetCapabilities(r.Context(), &platformv1.TPMCapabilitiesRequest{})
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// PlatformAttributes returns the TPM device, FIPS mode, platform PCR
+// state and the provisioned EK, SRK and IAK.
+func (h *Handlers) PlatformAttributes(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	resp, err := h.server.GetPlatformAttributes(r.Context(), &platformv1.TPMPlatformAttributesRequest{})
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
 // Provision handles POST /api/v1/tpm/provision.
 func (h *Handlers) Provision(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureAvailable(w, r) {
@@ -412,6 +440,42 @@ func (h *Handlers) Certify(w http.ResponseWriter, r *http.Request) {
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
 }
 
+// MakeCredential wraps a secret to an EK and an attestation key name.
+func (h *Handlers) MakeCredential(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	req := &platformv1.MakeCredentialRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	resp, err := h.server.MakeCredential(r.Context(), req)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// ActivateCredential recovers the secret MakeCredential wrapped.
+func (h *Handlers) ActivateCredential(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	req := &platformv1.TPMActivateCredentialRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	resp, err := h.server.ActivateCredential(r.Context(), req)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
 // GetEventLog handles GET /api/v1/tpm/eventlog.
 func (h *Handlers) GetEventLog(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureAvailable(w, r) {
@@ -445,6 +509,24 @@ func (h *Handlers) GetPCRs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	resp, err := h.server.GetPCRs(r.Context(), req)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// ExtendPCR extends one PCR with the request data.
+func (h *Handlers) ExtendPCR(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	req := &platformv1.ExtendPCRRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	resp, err := h.server.ExtendPCR(r.Context(), req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return

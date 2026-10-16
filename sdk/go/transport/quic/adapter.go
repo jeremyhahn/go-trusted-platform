@@ -499,10 +499,13 @@ var categorySubOpcodeMap = map[string]byte{
 
 	// TPM Service — OpTPM2Category (0x99)
 	// Server dispatcher: pkg/api/quic/tpm_handlers.go::TPM2Handler; codecs in
-	// tpm_quote.go (#482).
-	"/platform.v1.TPMService/Quote":       quicwire.SubOpTPM2Quote,
-	"/platform.v1.TPMService/VerifyQuote": quicwire.SubOpTPM2VerifyQuote,
-	"/platform.v1.TPMService/Certify":     quicwire.SubOpTPM2Certify,
+	// tpm_quote.go (#482), tpm_certify.go and tpm_attrs.go (#704).
+	"/platform.v1.TPMService/Quote":                 quicwire.SubOpTPM2Quote,
+	"/platform.v1.TPMService/VerifyQuote":           quicwire.SubOpTPM2VerifyQuote,
+	"/platform.v1.TPMService/Certify":               quicwire.SubOpTPM2Certify,
+	"/platform.v1.TPMService/GetCapabilities":       quicwire.SubOpTPM2Capabilities,
+	"/platform.v1.TPMService/GetPlatformAttributes": quicwire.SubOpTPM2PlatformAttrs,
+	"/platform.v1.TPMService/ExtendPCR":             quicwire.SubOpTPM2ExtendPCR,
 
 	// PIV Service — OpPIVCategory (0x9B)
 	// Server dispatcher: pkg/api/daemon/phase35_quic.go::pivQUICDispatch
@@ -802,9 +805,12 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.VTPMService/ReadVTPMPCR":   quicwire.OpVTPMReadPCR,
 
 	// TPM Service — proto: pkg/api/grpc/proto/tpm.proto; category-routed
-	"/platform.v1.TPMService/Quote":       quicwire.OpTPM2Category,
-	"/platform.v1.TPMService/VerifyQuote": quicwire.OpTPM2Category,
-	"/platform.v1.TPMService/Certify":     quicwire.OpTPM2Category,
+	"/platform.v1.TPMService/Quote":                 quicwire.OpTPM2Category,
+	"/platform.v1.TPMService/VerifyQuote":           quicwire.OpTPM2Category,
+	"/platform.v1.TPMService/Certify":               quicwire.OpTPM2Category,
+	"/platform.v1.TPMService/GetCapabilities":       quicwire.OpTPM2Category,
+	"/platform.v1.TPMService/GetPlatformAttributes": quicwire.OpTPM2Category,
+	"/platform.v1.TPMService/ExtendPCR":             quicwire.OpTPM2Category,
 
 	// Device Service — proto: pkg/api/grpc/proto/device.proto
 	"/platform.v1.DeviceService/CreateDevice":       quicwire.OpDeviceRegister,

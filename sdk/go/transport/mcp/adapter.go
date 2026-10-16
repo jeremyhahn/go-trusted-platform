@@ -302,6 +302,11 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.TPMService/Quote":       "platform_tpm_quote",
 	"/platform.v1.TPMService/VerifyQuote": "platform_tpm_verify_quote",
 	"/platform.v1.TPMService/Certify":     "platform_tpm_certify",
+	// Capabilities, platform attributes and PCR extend (#704); the argument
+	// and result mapping is in tpm_attrs.go.
+	"/platform.v1.TPMService/GetCapabilities":       "platform_tpm_capabilities",
+	"/platform.v1.TPMService/GetPlatformAttributes": "platform_tpm_platform",
+	"/platform.v1.TPMService/ExtendPCR":             "platform_tpm_pcr_extend",
 
 	// CA Service — proto: pkg/api/grpc/proto/ca.proto
 	"/platform.v1.CAService/GetCAInfo":         "ca_info",

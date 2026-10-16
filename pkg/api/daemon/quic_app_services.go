@@ -26,8 +26,9 @@ import (
 // =============================================================================
 //
 // The SDK QUIC transport adapter routes every CacheService, SchedulerService,
-// MessagingService and SwitchService method to its category opcode (0x53,
-// 0x54, 0x55, 0xCC) with the sub-opcode in payload[0] and the
+// MessagingService, ObjectStorageService and SwitchService method to its
+// category opcode (0x53, 0x54, 0x55, 0x60, 0xCC) with the sub-opcode in
+// payload[0] and the
 // MessagePack-encoded platform.v1 request in payload[1:]. The handlers run the
 // same gRPC service instances the other transports use, so a node without the
 // service answers StatusUnavailable naming it on QUIC as it does everywhere
@@ -55,6 +56,10 @@ func quicSchedulerServer(h *QUICServiceHandler) platformv1.SchedulerServiceServe
 
 func quicMessagingServer(h *QUICServiceHandler) platformv1.MessagingServiceServer {
 	return h.messagingService
+}
+
+func quicObjectStorageServer(h *QUICServiceHandler) platformv1.ObjectStorageServiceServer {
+	return h.objectStorageService
 }
 
 // cacheQUICHandlers routes cache sub-opcodes to their handlers.
@@ -92,6 +97,19 @@ var messagingQUICHandlers = map[byte]appQUICHandler{
 	quicwire.MessagingSubGetChannelStats: appQUICCall("MessagingGetChannelStats", quicMessagingServer, platformv1.MessagingServiceServer.GetChannelStats),
 }
 
+// objectStorageQUICHandlers routes object storage sub-opcodes to their
+// handlers.
+var objectStorageQUICHandlers = map[byte]appQUICHandler{
+	quicwire.ObjectStorageSubPutObject:         appQUICCall("ObjectStoragePutObject", quicObjectStorageServer, platformv1.ObjectStorageServiceServer.PutObject),
+	quicwire.ObjectStorageSubGetObject:         appQUICCall("ObjectStorageGetObject", quicObjectStorageServer, platformv1.ObjectStorageServiceServer.GetObject),
+	quicwire.ObjectStorageSubDeleteObject:      appQUICCall("ObjectStorageDeleteObject", quicObjectStorageServer, platformv1.ObjectStorageServiceServer.DeleteObject),
+	quicwire.ObjectStorageSubHeadObject:        appQUICCall("ObjectStorageHeadObject", quicObjectStorageServer, platformv1.ObjectStorageServiceServer.HeadObject),
+	quicwire.ObjectStorageSubListObjects:       appQUICCall("ObjectStorageListObjects", quicObjectStorageServer, platformv1.ObjectStorageServiceServer.ListObjects),
+	quicwire.ObjectStorageSubCopyObject:        appQUICCall("ObjectStorageCopyObject", quicObjectStorageServer, platformv1.ObjectStorageServiceServer.CopyObject),
+	quicwire.ObjectStorageSubListObjectsByTag:  appQUICCall("ObjectStorageListObjectsByTag", quicObjectStorageServer, platformv1.ObjectStorageServiceServer.ListObjectsByTag),
+	quicwire.ObjectStorageSubListTenantObjects: appQUICCall("ObjectStorageListTenantObjects", quicObjectStorageServer, platformv1.ObjectStorageServiceServer.ListTenantObjects),
+}
+
 // appQUICCategories routes the category opcodes whose sub-opcodes all call
 // one gRPC servicer: the application services and the switch service.
 var appQUICCategories = map[byte]appQUICCategory{
@@ -109,6 +127,11 @@ var appQUICCategories = map[byte]appQUICCategory{
 		service:  appservices.ServiceMessaging,
 		wired:    func(h *QUICServiceHandler) bool { return h.messagingService != nil },
 		handlers: messagingQUICHandlers,
+	},
+	quicwire.OpObjectStorageCategory: {
+		service:  appservices.ServiceObjectStorage,
+		wired:    func(h *QUICServiceHandler) bool { return h.objectStorageService != nil },
+		handlers: objectStorageQUICHandlers,
 	},
 	quicwire.OpSwitchCategory: {
 		service:  "switch",
@@ -136,13 +159,14 @@ func appQUICCall[S any, Req any, Resp any](op string, server func(*QUICServiceHa
 	}
 }
 
-// SetAppServices wires the cache, scheduler and messaging services into the
-// QUIC handler. The same instances back REST, gRPC, MCP, and the Unix socket.
+// SetAppServices wires the cache, scheduler, messaging and object storage
+// services into the QUIC handler. The same instances back REST, gRPC, MCP, and the Unix socket.
 // A nil server leaves its category unavailable.
 func (h *QUICServiceHandler) SetAppServices(servers appServiceServers) {
 	h.cacheService = nil
 	h.schedulerService = nil
 	h.messagingService = nil
+	h.objectStorageService = nil
 	if servers.cache != nil {
 		h.cacheService = servers.cache
 	}
@@ -151,6 +175,9 @@ func (h *QUICServiceHandler) SetAppServices(servers appServiceServers) {
 	}
 	if servers.messaging != nil {
 		h.messagingService = servers.messaging
+	}
+	if servers.objectStorage != nil {
+		h.objectStorageService = servers.objectStorage
 	}
 }
 

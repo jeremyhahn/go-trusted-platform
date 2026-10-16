@@ -214,6 +214,10 @@ var (
 	messagingWrite  = OpcodePermission{Resource: "messaging", Action: actionWrite}
 	messagingDelete = OpcodePermission{Resource: "messaging", Action: actionDelete}
 
+	objectStorageRead   = OpcodePermission{Resource: "objectstorage", Action: actionRead}
+	objectStorageWrite  = OpcodePermission{Resource: "objectstorage", Action: actionWrite}
+	objectStorageDelete = OpcodePermission{Resource: "objectstorage", Action: actionDelete}
+
 	tpmRead   = OpcodePermission{Resource: "tpm", Action: actionRead}
 	tpmWrite  = OpcodePermission{Resource: "tpm", Action: actionWrite}
 	tpmDelete = OpcodePermission{Resource: "tpm", Action: actionDelete}
@@ -674,6 +678,16 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.MessagingSubGetStats:        messagingRead,
 		quicwire.MessagingSubGetDedupStats:   messagingRead,
 		quicwire.MessagingSubGetChannelStats: messagingRead,
+	},
+	quicwire.OpObjectStorageCategory: {
+		quicwire.ObjectStorageSubPutObject:         objectStorageWrite,
+		quicwire.ObjectStorageSubGetObject:         objectStorageRead,
+		quicwire.ObjectStorageSubDeleteObject:      objectStorageDelete,
+		quicwire.ObjectStorageSubHeadObject:        objectStorageRead,
+		quicwire.ObjectStorageSubListObjects:       objectStorageRead,
+		quicwire.ObjectStorageSubCopyObject:        objectStorageWrite,
+		quicwire.ObjectStorageSubListObjectsByTag:  objectStorageRead,
+		quicwire.ObjectStorageSubListTenantObjects: objectStorageRead,
 	},
 
 	// IAM tenant records (gRPC PlatformIAMService tenant methods)

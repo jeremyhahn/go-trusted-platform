@@ -13,7 +13,7 @@
 
 // Package appservices is the service layer between platformd's transports
 // and the application services of the composed go-quicbaas SDK: Cache,
-// Scheduler and Messaging (docs/sdk/architecture.md).
+// Scheduler, Messaging and ObjectStorage (docs/sdk/architecture.md).
 //
 // No transport calls the SDK client directly. Each service resolves its SDK
 // group on every call, so a daemon whose SDK starts after the transports, or

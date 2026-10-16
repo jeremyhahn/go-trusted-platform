@@ -42,8 +42,10 @@ import (
 	// name (UnsealRequest, KeyInfo, PIVSignRequest, …).
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmattrs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmcertify"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmpcr"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
 )
 
@@ -1553,6 +1555,108 @@ func (s *TPMGRPCService) GetRandom(
 	s.logger.Debug("TPM GetRandom completed")
 	return &platformv1.GetRandomResponse{
 		RandomBytes: random,
+	}, nil
+}
+
+// GetCapabilities returns the algorithms, commands and ECC curves the TPM
+// implements. QUIC 0x99·0x17 and MCP platform_tpm_capabilities read the
+// same lists through tpmattrs.ReadCapabilities.
+func (s *TPMGRPCService) GetCapabilities(
+	ctx context.Context,
+	req *platformv1.TPMCapabilitiesRequest,
+) (*platformv1.TPMCapabilitiesResponse, error) {
+
+	s.mu.RLock()
+	tpm := s.tpm
+	s.mu.RUnlock()
+
+	if tpm == nil {
+		return nil, status.Error(codes.Unavailable, "TPM service not available")
+	}
+
+	caps, err := tpmattrs.ReadCapabilities(tpm)
+	if err != nil {
+		s.logger.Slog().Error("TPM capability read failed", slog.String("error", err.Error()))
+		return nil, s.mapError(err)
+	}
+
+	return &platformv1.TPMCapabilitiesResponse{
+		Algorithms: caps.Algorithms,
+		Commands:   caps.Commands,
+		EccCurves:  caps.ECCCurves,
+	}, nil
+}
+
+// GetPlatformAttributes describes the TPM device and its provisioned
+// identity keys. QUIC 0x99·0x1E and MCP platform_tpm_platform read the
+// same attributes through tpmattrs.ReadPlatform.
+func (s *TPMGRPCService) GetPlatformAttributes(
+	ctx context.Context,
+	req *platformv1.TPMPlatformAttributesRequest,
+) (*platformv1.TPMPlatformAttributesResponse, error) {
+
+	s.mu.RLock()
+	tpm := s.tpm
+	s.mu.RUnlock()
+
+	if tpm == nil {
+		return nil, status.Error(codes.Unavailable, "TPM service not available")
+	}
+
+	platform := tpmattrs.ReadPlatform(tpm)
+	return &platformv1.TPMPlatformAttributesResponse{
+		Device:       platform.Device,
+		IsFips:       platform.IsFIPS,
+		PcrExtended:  platform.PCRExtended,
+		CanSeal:      platform.CanSeal,
+		IsSimulator:  platform.IsSimulator,
+		Manufacturer: platform.Manufacturer,
+		Ek:           tpmKeyRefProto(platform.EK),
+		Srk:          tpmKeyRefProto(platform.SRK),
+		Iak:          tpmKeyRefProto(platform.IAK),
+	}, nil
+}
+
+// tpmKeyRefProto converts a provisioned key reference; an absent key
+// stays absent.
+func tpmKeyRefProto(ref *tpmattrs.KeyRef) *platformv1.TPMKeyRef {
+	if ref == nil {
+		return nil
+	}
+	return &platformv1.TPMKeyRef{Handle: ref.Handle, Algorithm: ref.Algorithm}
+}
+
+// ExtendPCR extends one PCR through tpmpcr.Extend, the validation QUIC
+// 0x99·0x12 and MCP platform_tpm_pcr_extend share.
+func (s *TPMGRPCService) ExtendPCR(
+	ctx context.Context,
+	req *platformv1.ExtendPCRRequest,
+) (*platformv1.ExtendPCRResponse, error) {
+
+	s.mu.RLock()
+	tpm := s.tpm
+	s.mu.RUnlock()
+
+	if tpm == nil {
+		return nil, status.Error(codes.Unavailable, "TPM service not available")
+	}
+
+	s.logger.Debug("TPM ExtendPCR request received",
+		slog.Uint64("index", uint64(req.GetIndex())),
+		slog.String("hash_alg", req.GetHashAlg()))
+
+	if err := tpmpcr.Extend(tpm, int(req.GetIndex()), req.GetHashAlg(), req.GetData()); err != nil {
+		s.logger.Slog().Error("TPM ExtendPCR failed",
+			slog.Uint64("index", uint64(req.GetIndex())),
+			slog.String("error", err.Error()))
+		return nil, s.mapError(err)
+	}
+
+	return &platformv1.ExtendPCRResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: tpmpcr.ExtendedMessage(int(req.GetIndex())),
+		},
 	}, nil
 }
 

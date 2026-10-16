@@ -754,8 +754,15 @@ func TestTPM2Handler_HandleUnseal_MissingCN(t *testing.T) {
 func TestTPM2Handler_HandleCapabilities_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
+
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Capabilities}})
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
+
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	var out TPM2CapabilitiesResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+	assert.Equal(t, []string{"RSA", "ECDSA", "SHA256"}, out.Algorithms)
+	assert.Equal(t, []string{"TPM2_Create", "TPM2_Sign"}, out.Commands)
+	assert.Equal(t, []string{"P256", "P384"}, out.ECCCurves)
 }
 
 func TestTPM2Handler_HandleCapabilities_Errors(t *testing.T) {
@@ -970,21 +977,42 @@ func TestTPM2Handler_HandleVerifyQuote_ChannelBinding(t *testing.T) {
 
 func TestTPM2Handler_HandlePlatformAttributes_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
-	h.SetTPM2Service(newMockTPM())
+	mock := newMockTPM()
+	mock.deviceResult = "/dev/tpmrm0"
+	mock.ekAttrs = &xkmssdk.KeyAttributes{KeyAlgorithm: x509.RSA, TPMAttributes: &xkmssdk.TPMAttributes{Handle: 0x81010001}}
+	mock.ssrkAttrs = &xkmssdk.KeyAttributes{KeyAlgorithm: x509.RSA, TPMAttributes: &xkmssdk.TPMAttributes{Handle: 0x81000001}}
+	mock.iakAttrs = nil
+	mock.iakAttrsErr = errors.New("IAK not provisioned")
+	h.SetTPM2Service(mock)
+
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2PlatformAttrs}})
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
+
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	var out TPM2PlatformAttributesResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+	assert.Equal(t, "/dev/tpmrm0", out.Device)
+	assert.Equal(t, &TPM2KeyRef{Handle: 0x81010001, Algorithm: "RSA"}, out.EK)
+	assert.Equal(t, &TPM2KeyRef{Handle: 0x81000001, Algorithm: "RSA"}, out.SRK)
+	assert.Nil(t, out.IAK, "an unprovisioned IAK is absent, not a zero handle")
 }
 
 func TestTPM2Handler_HandlePlatformAttributes_ErrorPaths(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	mock := newMockTPM()
+	mock.isFIPSResult = true
 	mock.isFIPSErr = errors.New("n/a")
 	mock.isPCRExtErr = errors.New("n/a")
 	mock.config = nil
 	mock.fixedPropsErr = errors.New("n/a")
 	h.SetTPM2Service(mock)
+
 	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2PlatformAttrs}})
-	assert.Equal(t, quicwire.StatusOK, resp.Status)
+
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	var out TPM2PlatformAttributesResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+	assert.False(t, out.IsFIPS, "a refused FIPS read reports false")
+	assert.Empty(t, out.Manufacturer)
 }
 
 func TestTPM2Handler_HandleGetIDevID_Success(t *testing.T) {

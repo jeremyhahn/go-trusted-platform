@@ -76,11 +76,12 @@ type ServiceRegistry struct {
 	// enable, disable).
 	Switch platformv1.SwitchServiceServer
 
-	// Cache, Scheduler and Messaging back the application services the
-	// composed go-quicbaas SDK serves (docs/sdk/api.md §3.5).
-	Cache     platformv1.CacheServiceServer
-	Scheduler platformv1.SchedulerServiceServer
-	Messaging platformv1.MessagingServiceServer
+	// Cache, Scheduler, Messaging and ObjectStorage back the application
+	// services the composed go-quicbaas SDK serves (docs/sdk/api.md §3.5).
+	Cache         platformv1.CacheServiceServer
+	Scheduler     platformv1.SchedulerServiceServer
+	Messaging     platformv1.MessagingServiceServer
+	ObjectStorage platformv1.ObjectStorageServiceServer
 
 	// CallerContext attaches the in-process caller's identity to every
 	// call, as a network transport's authentication interceptors do; the

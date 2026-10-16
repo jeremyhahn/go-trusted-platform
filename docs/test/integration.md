@@ -272,6 +272,7 @@ The following test packages have multi-protocol adapters implemented:
 | `pxe` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `tenant` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `device` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `objectstorage` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 ## Directory Structure
 

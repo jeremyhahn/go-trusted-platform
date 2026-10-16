@@ -19,34 +19,37 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	TPMService_Info_FullMethodName                = "/platform.v1.TPMService/Info"
-	TPMService_Provision_FullMethodName           = "/platform.v1.TPMService/Provision"
-	TPMService_Clear_FullMethodName               = "/platform.v1.TPMService/Clear"
-	TPMService_CreateEK_FullMethodName            = "/platform.v1.TPMService/CreateEK"
-	TPMService_GetEK_FullMethodName               = "/platform.v1.TPMService/GetEK"
-	TPMService_GetEKCertificate_FullMethodName    = "/platform.v1.TPMService/GetEKCertificate"
-	TPMService_ImportEKCertificate_FullMethodName = "/platform.v1.TPMService/ImportEKCertificate"
-	TPMService_DeleteEK_FullMethodName            = "/platform.v1.TPMService/DeleteEK"
-	TPMService_CreateSRK_FullMethodName           = "/platform.v1.TPMService/CreateSRK"
-	TPMService_GetSRK_FullMethodName              = "/platform.v1.TPMService/GetSRK"
-	TPMService_DeleteSRK_FullMethodName           = "/platform.v1.TPMService/DeleteSRK"
-	TPMService_CreateAK_FullMethodName            = "/platform.v1.TPMService/CreateAK"
-	TPMService_GetAK_FullMethodName               = "/platform.v1.TPMService/GetAK"
-	TPMService_DeleteAK_FullMethodName            = "/platform.v1.TPMService/DeleteAK"
-	TPMService_Seal_FullMethodName                = "/platform.v1.TPMService/Seal"
-	TPMService_Unseal_FullMethodName              = "/platform.v1.TPMService/Unseal"
-	TPMService_Quote_FullMethodName               = "/platform.v1.TPMService/Quote"
-	TPMService_VerifyQuote_FullMethodName         = "/platform.v1.TPMService/VerifyQuote"
-	TPMService_Certify_FullMethodName             = "/platform.v1.TPMService/Certify"
-	TPMService_GetEventLog_FullMethodName         = "/platform.v1.TPMService/GetEventLog"
-	TPMService_GetPCRs_FullMethodName             = "/platform.v1.TPMService/GetPCRs"
-	TPMService_MakeCredential_FullMethodName      = "/platform.v1.TPMService/MakeCredential"
-	TPMService_ActivateCredential_FullMethodName  = "/platform.v1.TPMService/ActivateCredential"
-	TPMService_DefineNVRAM_FullMethodName         = "/platform.v1.TPMService/DefineNVRAM"
-	TPMService_WriteNVRAM_FullMethodName          = "/platform.v1.TPMService/WriteNVRAM"
-	TPMService_ReadNVRAM_FullMethodName           = "/platform.v1.TPMService/ReadNVRAM"
-	TPMService_UndefineNVRAM_FullMethodName       = "/platform.v1.TPMService/UndefineNVRAM"
-	TPMService_GetRandom_FullMethodName           = "/platform.v1.TPMService/GetRandom"
+	TPMService_Info_FullMethodName                  = "/platform.v1.TPMService/Info"
+	TPMService_Provision_FullMethodName             = "/platform.v1.TPMService/Provision"
+	TPMService_Clear_FullMethodName                 = "/platform.v1.TPMService/Clear"
+	TPMService_GetCapabilities_FullMethodName       = "/platform.v1.TPMService/GetCapabilities"
+	TPMService_GetPlatformAttributes_FullMethodName = "/platform.v1.TPMService/GetPlatformAttributes"
+	TPMService_CreateEK_FullMethodName              = "/platform.v1.TPMService/CreateEK"
+	TPMService_GetEK_FullMethodName                 = "/platform.v1.TPMService/GetEK"
+	TPMService_GetEKCertificate_FullMethodName      = "/platform.v1.TPMService/GetEKCertificate"
+	TPMService_ImportEKCertificate_FullMethodName   = "/platform.v1.TPMService/ImportEKCertificate"
+	TPMService_DeleteEK_FullMethodName              = "/platform.v1.TPMService/DeleteEK"
+	TPMService_CreateSRK_FullMethodName             = "/platform.v1.TPMService/CreateSRK"
+	TPMService_GetSRK_FullMethodName                = "/platform.v1.TPMService/GetSRK"
+	TPMService_DeleteSRK_FullMethodName             = "/platform.v1.TPMService/DeleteSRK"
+	TPMService_CreateAK_FullMethodName              = "/platform.v1.TPMService/CreateAK"
+	TPMService_GetAK_FullMethodName                 = "/platform.v1.TPMService/GetAK"
+	TPMService_DeleteAK_FullMethodName              = "/platform.v1.TPMService/DeleteAK"
+	TPMService_Seal_FullMethodName                  = "/platform.v1.TPMService/Seal"
+	TPMService_Unseal_FullMethodName                = "/platform.v1.TPMService/Unseal"
+	TPMService_Quote_FullMethodName                 = "/platform.v1.TPMService/Quote"
+	TPMService_VerifyQuote_FullMethodName           = "/platform.v1.TPMService/VerifyQuote"
+	TPMService_Certify_FullMethodName               = "/platform.v1.TPMService/Certify"
+	TPMService_GetEventLog_FullMethodName           = "/platform.v1.TPMService/GetEventLog"
+	TPMService_GetPCRs_FullMethodName               = "/platform.v1.TPMService/GetPCRs"
+	TPMService_ExtendPCR_FullMethodName             = "/platform.v1.TPMService/ExtendPCR"
+	TPMService_MakeCredential_FullMethodName        = "/platform.v1.TPMService/MakeCredential"
+	TPMService_ActivateCredential_FullMethodName    = "/platform.v1.TPMService/ActivateCredential"
+	TPMService_DefineNVRAM_FullMethodName           = "/platform.v1.TPMService/DefineNVRAM"
+	TPMService_WriteNVRAM_FullMethodName            = "/platform.v1.TPMService/WriteNVRAM"
+	TPMService_ReadNVRAM_FullMethodName             = "/platform.v1.TPMService/ReadNVRAM"
+	TPMService_UndefineNVRAM_FullMethodName         = "/platform.v1.TPMService/UndefineNVRAM"
+	TPMService_GetRandom_FullMethodName             = "/platform.v1.TPMService/GetRandom"
 )
 
 // TPMServiceClient is the client API for TPMService service.
@@ -61,6 +64,10 @@ type TPMServiceClient interface {
 	Provision(ctx context.Context, in *TPMProvisionRequest, opts ...grpc.CallOption) (*TPMProvisionResponse, error)
 	// Clear clears the TPM (requires owner authorization)
 	Clear(ctx context.Context, in *TPMClearRequest, opts ...grpc.CallOption) (*TPMClearResponse, error)
+	// GetCapabilities returns the algorithms, commands and ECC curves the TPM implements
+	GetCapabilities(ctx context.Context, in *TPMCapabilitiesRequest, opts ...grpc.CallOption) (*TPMCapabilitiesResponse, error)
+	// GetPlatformAttributes describes the TPM device and its provisioned identity keys
+	GetPlatformAttributes(ctx context.Context, in *TPMPlatformAttributesRequest, opts ...grpc.CallOption) (*TPMPlatformAttributesResponse, error)
 	// EK operations
 	CreateEK(ctx context.Context, in *CreateEKRequest, opts ...grpc.CallOption) (*CreateEKResponse, error)
 	GetEK(ctx context.Context, in *GetEKRequest, opts ...grpc.CallOption) (*GetEKResponse, error)
@@ -84,6 +91,7 @@ type TPMServiceClient interface {
 	Certify(ctx context.Context, in *CertifyRequest, opts ...grpc.CallOption) (*CertifyResponse, error)
 	GetEventLog(ctx context.Context, in *GetEventLogRequest, opts ...grpc.CallOption) (*GetEventLogResponse, error)
 	GetPCRs(ctx context.Context, in *GetPCRsRequest, opts ...grpc.CallOption) (*GetPCRsResponse, error)
+	ExtendPCR(ctx context.Context, in *ExtendPCRRequest, opts ...grpc.CallOption) (*ExtendPCRResponse, error)
 	// Credential activation (TPM2_MakeCredential / TPM2_ActivateCredential)
 	MakeCredential(ctx context.Context, in *MakeCredentialRequest, opts ...grpc.CallOption) (*MakeCredentialResponse, error)
 	ActivateCredential(ctx context.Context, in *TPMActivateCredentialRequest, opts ...grpc.CallOption) (*TPMActivateCredentialResponse, error)
@@ -128,6 +136,26 @@ func (c *tPMServiceClient) Clear(ctx context.Context, in *TPMClearRequest, opts 
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(TPMClearResponse)
 	err := c.cc.Invoke(ctx, TPMService_Clear_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tPMServiceClient) GetCapabilities(ctx context.Context, in *TPMCapabilitiesRequest, opts ...grpc.CallOption) (*TPMCapabilitiesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TPMCapabilitiesResponse)
+	err := c.cc.Invoke(ctx, TPMService_GetCapabilities_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tPMServiceClient) GetPlatformAttributes(ctx context.Context, in *TPMPlatformAttributesRequest, opts ...grpc.CallOption) (*TPMPlatformAttributesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TPMPlatformAttributesResponse)
+	err := c.cc.Invoke(ctx, TPMService_GetPlatformAttributes_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -314,6 +342,16 @@ func (c *tPMServiceClient) GetPCRs(ctx context.Context, in *GetPCRsRequest, opts
 	return out, nil
 }
 
+func (c *tPMServiceClient) ExtendPCR(ctx context.Context, in *ExtendPCRRequest, opts ...grpc.CallOption) (*ExtendPCRResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExtendPCRResponse)
+	err := c.cc.Invoke(ctx, TPMService_ExtendPCR_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *tPMServiceClient) MakeCredential(ctx context.Context, in *MakeCredentialRequest, opts ...grpc.CallOption) (*MakeCredentialResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(MakeCredentialResponse)
@@ -396,6 +434,10 @@ type TPMServiceServer interface {
 	Provision(context.Context, *TPMProvisionRequest) (*TPMProvisionResponse, error)
 	// Clear clears the TPM (requires owner authorization)
 	Clear(context.Context, *TPMClearRequest) (*TPMClearResponse, error)
+	// GetCapabilities returns the algorithms, commands and ECC curves the TPM implements
+	GetCapabilities(context.Context, *TPMCapabilitiesRequest) (*TPMCapabilitiesResponse, error)
+	// GetPlatformAttributes describes the TPM device and its provisioned identity keys
+	GetPlatformAttributes(context.Context, *TPMPlatformAttributesRequest) (*TPMPlatformAttributesResponse, error)
 	// EK operations
 	CreateEK(context.Context, *CreateEKRequest) (*CreateEKResponse, error)
 	GetEK(context.Context, *GetEKRequest) (*GetEKResponse, error)
@@ -419,6 +461,7 @@ type TPMServiceServer interface {
 	Certify(context.Context, *CertifyRequest) (*CertifyResponse, error)
 	GetEventLog(context.Context, *GetEventLogRequest) (*GetEventLogResponse, error)
 	GetPCRs(context.Context, *GetPCRsRequest) (*GetPCRsResponse, error)
+	ExtendPCR(context.Context, *ExtendPCRRequest) (*ExtendPCRResponse, error)
 	// Credential activation (TPM2_MakeCredential / TPM2_ActivateCredential)
 	MakeCredential(context.Context, *MakeCredentialRequest) (*MakeCredentialResponse, error)
 	ActivateCredential(context.Context, *TPMActivateCredentialRequest) (*TPMActivateCredentialResponse, error)
@@ -447,6 +490,12 @@ func (UnimplementedTPMServiceServer) Provision(context.Context, *TPMProvisionReq
 }
 func (UnimplementedTPMServiceServer) Clear(context.Context, *TPMClearRequest) (*TPMClearResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Clear not implemented")
+}
+func (UnimplementedTPMServiceServer) GetCapabilities(context.Context, *TPMCapabilitiesRequest) (*TPMCapabilitiesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetCapabilities not implemented")
+}
+func (UnimplementedTPMServiceServer) GetPlatformAttributes(context.Context, *TPMPlatformAttributesRequest) (*TPMPlatformAttributesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPlatformAttributes not implemented")
 }
 func (UnimplementedTPMServiceServer) CreateEK(context.Context, *CreateEKRequest) (*CreateEKResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateEK not implemented")
@@ -501,6 +550,9 @@ func (UnimplementedTPMServiceServer) GetEventLog(context.Context, *GetEventLogRe
 }
 func (UnimplementedTPMServiceServer) GetPCRs(context.Context, *GetPCRsRequest) (*GetPCRsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetPCRs not implemented")
+}
+func (UnimplementedTPMServiceServer) ExtendPCR(context.Context, *ExtendPCRRequest) (*ExtendPCRResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ExtendPCR not implemented")
 }
 func (UnimplementedTPMServiceServer) MakeCredential(context.Context, *MakeCredentialRequest) (*MakeCredentialResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MakeCredential not implemented")
@@ -594,6 +646,42 @@ func _TPMService_Clear_Handler(srv interface{}, ctx context.Context, dec func(in
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(TPMServiceServer).Clear(ctx, req.(*TPMClearRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TPMService_GetCapabilities_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TPMCapabilitiesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TPMServiceServer).GetCapabilities(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TPMService_GetCapabilities_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TPMServiceServer).GetCapabilities(ctx, req.(*TPMCapabilitiesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TPMService_GetPlatformAttributes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TPMPlatformAttributesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TPMServiceServer).GetPlatformAttributes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TPMService_GetPlatformAttributes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TPMServiceServer).GetPlatformAttributes(ctx, req.(*TPMPlatformAttributesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -922,6 +1010,24 @@ func _TPMService_GetPCRs_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TPMService_ExtendPCR_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExtendPCRRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TPMServiceServer).ExtendPCR(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TPMService_ExtendPCR_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TPMServiceServer).ExtendPCR(ctx, req.(*ExtendPCRRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _TPMService_MakeCredential_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(MakeCredentialRequest)
 	if err := dec(in); err != nil {
@@ -1068,6 +1174,14 @@ var TPMService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _TPMService_Clear_Handler,
 		},
 		{
+			MethodName: "GetCapabilities",
+			Handler:    _TPMService_GetCapabilities_Handler,
+		},
+		{
+			MethodName: "GetPlatformAttributes",
+			Handler:    _TPMService_GetPlatformAttributes_Handler,
+		},
+		{
 			MethodName: "CreateEK",
 			Handler:    _TPMService_CreateEK_Handler,
 		},
@@ -1138,6 +1252,10 @@ var TPMService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetPCRs",
 			Handler:    _TPMService_GetPCRs_Handler,
+		},
+		{
+			MethodName: "ExtendPCR",
+			Handler:    _TPMService_ExtendPCR_Handler,
 		},
 		{
 			MethodName: "MakeCredential",

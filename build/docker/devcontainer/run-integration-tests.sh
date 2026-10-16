@@ -56,6 +56,7 @@ declare -A TARGET_PACKAGES=(
     [sdn]="./test/integration/sdn/..."
     [proxy]="./test/integration/proxy/..."
     [ntp]="./test/integration/ntp/..."
+    [objectstorage]="./test/integration/objectstorage/..."
     [vpn]="./test/integration/vpn/..."
     [tenant]="./test/integration/tenant/..."
     [iam]="./test/integration/iam/..."
@@ -185,8 +186,8 @@ ALL_TARGETS=(
     helpers datastore quicbaas sdk cluster cmd ipxe installer e2e
     root acme attestation authenticode ca ceremony cli compute
     container daemon device dns fido2 iam invitation iso kms luks network
-    ntp piv provision proxy quic registry restroutes sdn secrets
-    tenant tpm user-registration vpn vtpm
+    ntp objectstorage piv provision proxy quic registry restroutes sdn
+    secrets tenant tpm user-registration vpn vtpm
 )
 
 RUN_TARGET="all"

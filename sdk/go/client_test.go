@@ -470,7 +470,7 @@ func TestPlatformClient_ServiceClients(t *testing.T) {
 	if c.ConfigDelivery() != nil {
 		t.Error("ConfigDelivery() should return nil with nil services")
 	}
-	if c.Cache() != nil || c.Scheduler() != nil || c.Messaging() != nil {
+	if c.Cache() != nil || c.Scheduler() != nil || c.Messaging() != nil || c.ObjectStorage() != nil {
 		t.Error("the application service clients should be nil with nil services")
 	}
 }
@@ -489,13 +489,13 @@ type fakeClientConn struct {
 
 func TestPlatformClient_AppServiceClientsAreBuiltOnTheConnection(t *testing.T) {
 	c := newClientFromAdapter(&connAdapter{conn: fakeClientConn{}}, ProtocolGRPC, nil)
-	if c.Cache() == nil || c.Scheduler() == nil || c.Messaging() == nil {
-		t.Fatalf("Cache, Scheduler and Messaging must be built on the adapter connection")
+	if c.Cache() == nil || c.Scheduler() == nil || c.Messaging() == nil || c.ObjectStorage() == nil {
+		t.Fatalf("Cache, Scheduler, Messaging and ObjectStorage must be built on the adapter connection")
 	}
 
 	// Without a connection no service client is built.
 	c = newClientFromAdapter(&connAdapter{}, ProtocolGRPC, nil)
-	if c.Cache() != nil || c.Scheduler() != nil || c.Messaging() != nil {
+	if c.Cache() != nil || c.Scheduler() != nil || c.Messaging() != nil || c.ObjectStorage() != nil {
 		t.Error("the application service clients must be nil without a connection")
 	}
 }

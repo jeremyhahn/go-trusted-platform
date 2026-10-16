@@ -467,7 +467,8 @@ A verb's failure keeps its class: a missing id or VM config is
 `StatusInvalidArgument`, an unknown VM or snapshot `StatusNotFound`, and a VM
 in the wrong state `StatusFailedPrecondition`.
 
-The top-level bytes `0x60`–`0x68` and `0x6A` are unassigned (#704). The flat VM
+The top-level bytes `0x61`–`0x68` and `0x6A` are unassigned, and `0x60` is
+object storage's category (#704). The flat VM
 handler that once answered them was never wired into platformd and has been
 removed. `0x60`–`0x65` survive only as sub-opcodes under `0x69`. Of the
 sub-opcodes `0xB9`–`0xBF` that went with it, `0xBB`–`0xBE` now carry the

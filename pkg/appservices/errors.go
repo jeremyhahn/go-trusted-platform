@@ -18,9 +18,10 @@ import "fmt"
 // Service names, as they appear in errors and in the not-configured reason
 // every transport carries.
 const (
-	ServiceCache     = "cache"
-	ServiceScheduler = "scheduler"
-	ServiceMessaging = "messaging"
+	ServiceCache         = "cache"
+	ServiceScheduler     = "scheduler"
+	ServiceMessaging     = "messaging"
+	ServiceObjectStorage = "objectstorage"
 )
 
 // ErrNotConfigured reports that the composed SDK does not serve the service
