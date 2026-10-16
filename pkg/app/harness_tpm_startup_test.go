@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"encoding/binary"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -55,6 +57,49 @@ func newHarnessSwtpmState(t *testing.T) transport.TPM {
 // platform policy digest over PCR 23 in the sha256 bank — where main's
 // Integration job failed on the runner's hardware TPM — is computable.
 func TestHarnessTPMStartup_EKOnlyInitTPM(t *testing.T) {
+	a, err := harnessStart(t, newHarnessSwtpmState(t), t.TempDir(), harnessSOPIN)
+	require.NoError(t, err)
+	digest, err := a.TPM.PlatformPolicyDigest()
+	require.NoError(t, err, "PCR 23 is present in the sha256 bank")
+	require.NotEmpty(t, digest.Buffer)
+}
+
+// harnessSOPIN is the SO PIN run-integration-tests.sh starts platformd with
+// (--raw-so-pin=123456).
+const harnessSOPIN = "123456"
+
+// errInjectedTPMFault is the transport error countingTPM injects.
+var errInjectedTPMFault = errors.New("injected TPM transport fault")
+
+// countingTPM forwards commands to a TPM, counts them by command code, and
+// fails the command named by failCC. It has no Close, so an SDK TPM closing
+// it at the end of one start leaves the simulator open for the next.
+type countingTPM struct {
+	tpm    transport.TPM
+	counts map[tpm2.TPMCC]int
+	failCC tpm2.TPMCC
+}
+
+func newCountingTPM(tpm transport.TPM) *countingTPM {
+	return &countingTPM{tpm: tpm, counts: map[tpm2.TPMCC]int{}}
+}
+
+// Send counts the command code (TPM 2.0 Part 1 §18.2: the 10-byte command
+// header ends with it) and forwards the command.
+func (c *countingTPM) Send(cmd []byte) ([]byte, error) {
+	cc := tpm2.TPMCC(binary.BigEndian.Uint32(cmd[6:10]))
+	c.counts[cc]++
+	if c.failCC != 0 && cc == c.failCC {
+		return nil, errInjectedTPMFault
+	}
+	return c.tpm.Send(cmd)
+}
+
+// harnessStart is one platformd start on the harness TPM, as App.Init runs
+// it: a fresh App and SDK TPM with the integration config, then InitTPM and
+// InitPlatformKeyStore. Starts sharing platformDir share the on-disk state.
+func harnessStart(t *testing.T, tpm transport.TPM, platformDir, soPIN string) (*App, error) {
+	t.Helper()
 	restore := disklessCmdlinePath
 	t.Cleanup(func() { disklessCmdlinePath = restore })
 	disklessCmdlinePath = filepath.Join(t.TempDir(), "cmdline")
@@ -62,29 +107,160 @@ func TestHarnessTPMStartup_EKOnlyInitTPM(t *testing.T) {
 
 	a := loadTemplate(t, integrationConfig)
 	a.Logger = logging.DefaultLogger()
-	a.PlatformDir = t.TempDir()
+	a.PlatformDir = platformDir
 
-	storage, err := xkmssdk.NewFileStorageBackend(t.TempDir())
+	tpmDir := filepath.Join(platformDir, "tpm")
+	require.NoError(t, os.MkdirAll(tpmDir, 0o700))
+	storage, err := xkmssdk.NewFileStorageBackend(tpmDir)
 	require.NoError(t, err)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	a.TPM, err = xkmssdk.NewTPM2(&xkmssdk.TPMParams{
 		Backend:   xkmssdk.NewFileBackend(logger, storage),
 		Config:    &a.TPMConfig,
 		Logger:    logger,
-		Transport: newHarnessSwtpmState(t),
+		Transport: tpm,
 	})
 	require.NoError(t, err, "the persistent EK satisfies NewTPM2")
 	t.Cleanup(func() { require.NoError(t, a.TPM.Close()) })
 
-	// run-integration-tests.sh starts platformd with --raw-so-pin=123456.
-	soPIN, userPIN, err := a.ParsePINs([]byte("123456"), []byte("123456"))
+	so, user, err := a.ParsePINs([]byte(soPIN), []byte("123456"))
 	require.NoError(t, err)
-	// App.Init mirrors the SO PIN into the hierarchy auth (app.go:741).
-	a.TPMConfig.SSRK.HierarchyAuth = string(soPIN.Bytes())
-	a.TPMConfig.EK.HierarchyAuth = string(soPIN.Bytes())
+	if err := a.InitTPM(context.Background(), so, user, &AppInitParams{}); err != nil {
+		return a, err
+	}
+	err = a.InitPlatformKeyStore(so, user)
+	return a, err
+}
 
-	require.NoError(t, a.InitTPM(context.Background(), soPIN, userPIN, &AppInitParams{}))
-	digest, err := a.TPM.PlatformPolicyDigest()
-	require.NoError(t, err, "PCR 23 is present in the sha256 bank")
-	require.NotEmpty(t, digest.Buffer)
+// ownerAuthorizes reports whether the TPM owner hierarchy accepts auth.
+func ownerAuthorizes(t *testing.T, tpm transport.TPM, auth string) error {
+	t.Helper()
+	pw, err := xkmssdk.NewPasswordFromString(auth)
+	require.NoError(t, err)
+	return verifyOwnerAuth(tpm, pw)
+}
+
+// hierarchyAuthState reads TPMA_PERMANENT from the TPM.
+func hierarchyAuthState(t *testing.T, tpm transport.TPM) tpmHierarchyAuthState {
+	t.Helper()
+	state, err := readTPMHierarchyAuthState(tpm)
+	require.NoError(t, err)
+	return state
+}
+
+// TestTPMOwnership_FirstStartTakesOwnership: on a fresh EK-only TPM (empty
+// owner auth, as shipped) the first start creates the Platform KeyStore SRK
+// under the empty owner auth, then sets the owner auth to the SO PIN once.
+// The endorsement auth is left empty.
+func TestTPMOwnership_FirstStartTakesOwnership(t *testing.T) {
+	sim := newHarnessSwtpmState(t)
+	require.False(t, hierarchyAuthState(t, sim).ownerAuthSet, "a fresh TPM has empty owner auth")
+	counting := newCountingTPM(sim)
+
+	a, err := harnessStart(t, counting, t.TempDir(), harnessSOPIN)
+	require.NoError(t, err)
+	require.NotNil(t, a.PlatformKS)
+	require.Equal(t, 1, counting.counts[tpm2.TPMCCHierarchyChanegAuth])
+
+	state := hierarchyAuthState(t, sim)
+	require.True(t, state.ownerAuthSet)
+	require.False(t, state.endorsementAuthSet, "the endorsement auth is not changed")
+	require.NoError(t, ownerAuthorizes(t, sim, harnessSOPIN))
+	var rejected *OwnerAuthRejectedError
+	require.ErrorAs(t, ownerAuthorizes(t, sim, ""), &rejected)
+	require.Equal(t, harnessSOPIN, a.TPMConfig.SSRK.HierarchyAuth)
+	require.Empty(t, a.TPMConfig.EK.HierarchyAuth)
+}
+
+// TestTPMOwnership_SecondStartUsesSOPIN: a restart on the owned TPM opens the
+// Platform KeyStore with the SO PIN and does not change the owner auth again.
+func TestTPMOwnership_SecondStartUsesSOPIN(t *testing.T) {
+	sim := newHarnessSwtpmState(t)
+	dir := t.TempDir()
+	_, err := harnessStart(t, sim, dir, harnessSOPIN)
+	require.NoError(t, err)
+
+	counting := newCountingTPM(sim)
+	a, err := harnessStart(t, counting, dir, harnessSOPIN)
+	require.NoError(t, err)
+	require.NotNil(t, a.PlatformKS)
+	require.Zero(t, counting.counts[tpm2.TPMCCHierarchyChanegAuth])
+	require.Equal(t, harnessSOPIN, a.TPMConfig.SSRK.HierarchyAuth)
+	require.NoError(t, ownerAuthorizes(t, sim, harnessSOPIN))
+}
+
+// TestTPMOwnership_SecondStartWrongSOPIN: a restart with an SO PIN the owned
+// TPM does not hold fails with OwnerAuthRejectedError.
+func TestTPMOwnership_SecondStartWrongSOPIN(t *testing.T) {
+	sim := newHarnessSwtpmState(t)
+	dir := t.TempDir()
+	_, err := harnessStart(t, sim, dir, harnessSOPIN)
+	require.NoError(t, err)
+
+	a, err := harnessStart(t, sim, dir, "654321")
+	var rejected *OwnerAuthRejectedError
+	require.ErrorAs(t, err, &rejected)
+	require.Nil(t, a.PlatformKS)
+	require.NoError(t, ownerAuthorizes(t, sim, harnessSOPIN), "the owner auth is unchanged")
+}
+
+// TestTPMOwnership_AlreadyOwnedTPM: a TPM whose owner and endorsement auth
+// an earlier provisioning set to the SO PIN starts with the SO PIN for both,
+// with no ownership change.
+func TestTPMOwnership_AlreadyOwnedTPM(t *testing.T) {
+	sim := newHarnessSwtpmState(t)
+	for _, hierarchy := range []tpm2.TPMHandle{tpm2.TPMRHOwner, tpm2.TPMRHEndorsement} {
+		_, err := tpm2.HierarchyChangeAuth{
+			AuthHandle: hierarchy,
+			NewAuth:    tpm2.TPM2BAuth{Buffer: []byte(harnessSOPIN)},
+		}.Execute(sim)
+		require.NoError(t, err)
+	}
+
+	counting := newCountingTPM(sim)
+	a, err := harnessStart(t, counting, t.TempDir(), harnessSOPIN)
+	require.NoError(t, err)
+	require.NotNil(t, a.PlatformKS)
+	require.Zero(t, counting.counts[tpm2.TPMCCHierarchyChanegAuth])
+	require.Equal(t, harnessSOPIN, a.TPMConfig.SSRK.HierarchyAuth)
+	require.Equal(t, harnessSOPIN, a.TPMConfig.EK.HierarchyAuth)
+}
+
+// TestTPMOwnership_ChangeAuthFault: a failed TPM2_HierarchyChangeAuth fails
+// the start with TPMOwnershipError and leaves the TPM unowned.
+func TestTPMOwnership_ChangeAuthFault(t *testing.T) {
+	sim := newHarnessSwtpmState(t)
+	counting := newCountingTPM(sim)
+	counting.failCC = tpm2.TPMCCHierarchyChanegAuth
+
+	_, err := harnessStart(t, counting, t.TempDir(), harnessSOPIN)
+	var ownership *TPMOwnershipError
+	require.ErrorAs(t, err, &ownership)
+	require.ErrorIs(t, err, errInjectedTPMFault)
+	require.False(t, hierarchyAuthState(t, sim).ownerAuthSet)
+}
+
+// TestReadTPMHierarchyAuthState_TransportFault: a failed TPM2_GetCapability
+// is a TPMPermanentReadError, never a silent "not owned".
+func TestReadTPMHierarchyAuthState_TransportFault(t *testing.T) {
+	counting := newCountingTPM(newHarnessSwtpmState(t))
+	counting.failCC = tpm2.TPMCCGetCapability
+
+	_, err := readTPMHierarchyAuthState(counting)
+	var readErr *TPMPermanentReadError
+	require.ErrorAs(t, err, &readErr)
+	require.ErrorIs(t, err, errInjectedTPMFault)
+}
+
+// TestVerifyOwnerAuth_TransportFault: a probe that fails for a reason other
+// than the auth is an OwnerAuthProbeError, not a rejected SO PIN.
+func TestVerifyOwnerAuth_TransportFault(t *testing.T) {
+	counting := newCountingTPM(newHarnessSwtpmState(t))
+	counting.failCC = tpm2.TPMCCCreatePrimary
+
+	err := ownerAuthorizes(t, counting, harnessSOPIN)
+	var probeErr *OwnerAuthProbeError
+	require.ErrorAs(t, err, &probeErr)
+	var rejected *OwnerAuthRejectedError
+	require.False(t, errors.As(err, &rejected))
 }

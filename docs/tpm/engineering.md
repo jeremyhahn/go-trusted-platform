@@ -126,13 +126,30 @@ downgrade is invisible in every downstream artefact.
    platform-sealed secret is unreachable after a power cycle. The failure path
    is a `WrappedError` with `"failed to restore platform policy"`.
 4. **Unresolved secret references fail closed before the TPM is touched.**
-   `assertNoUnresolvedKMSURI` is applied to `TPMConfig.SSRK.HierarchyAuth` and
-   `TPMConfig.EK.HierarchyAuth`. A `kms://` URI submitted as hierarchy auth
-   would be rejected by the TPM as an oversized buffer and could corrupt
-   hierarchy state.
-5. **The SO PIN is mirrored into `TPMConfig.SSRK`/`.EK` `HierarchyAuth`** when
-   those are empty, so a reboot against an already-provisioned TPM presents the
-   same auth it was provisioned with.
+   `assertNoUnresolvedKMSURI` is applied to the SO PIN and the user PIN. A
+   `kms://` URI submitted as hierarchy auth would be rejected by the TPM as an
+   oversized buffer and could corrupt hierarchy state.
+5. **Hierarchy auth comes from the TPM's own record, never from config.**
+   `TPMConfig.SSRK.HierarchyAuth` (owner) and `TPMConfig.EK.HierarchyAuth`
+   (endorsement) are set from `TPMA_PERMANENT.ownerAuthSet` /
+   `.endorsementAuthSet` (TPM 2.0 Part 2 §8.6), read with
+   `TPM2_GetCapability(TPM_CAP_TPM_PROPERTIES, TPM_PT_PERMANENT)` (Part 3
+   §30.2) right after `OpenTPM` in `InitTPM` and again in
+   `InitPlatformKeyStore` (`pkg/app/tpm_ownership.go`). A clear bit means the
+   hierarchy's auth is empty; a set bit means it is the SO PIN. There is no
+   file or datastore flag: the bits survive reboot and only `TPM2_Clear`
+   resets them.
+   - **First start (owner bit clear)** — a fresh TPM, hardware or swtpm, has
+     empty owner auth. The SRK is created under that empty auth, then
+     `TPM2_HierarchyChangeAuth` (Part 3 §24.8) sets the owner auth to the SO
+     PIN, which sets `ownerAuthSet`.
+   - **Every later start (owner bit set)** — the SO PIN is presented. It is
+     checked first with an owner-authorized `TPM2_CreatePrimary` (Part 3
+     §24.1); a wrong SO PIN fails with `OwnerAuthRejectedError`, naming the
+     owner hierarchy, before the Platform KeyStore opens. The owner hierarchy
+     is not dictionary-attack protected, so the check costs no lockout.
+   - The endorsement auth is presented as its bit says and is never changed;
+     the lockout auth is never touched.
 6. **SRK policy drift is detected, not ignored.** `InitTPM` compares the stored
    `srkAttrs.TPMAttributes.Public.AuthPolicy.Buffer` against the live
    `PlatformPolicyDigest`; a mismatch triggers re-provisioning, because
@@ -432,7 +449,7 @@ Keys as shipped in `configs/platform/templates/single-node/default.yaml`:
 | `tpm.ek.rsa.size` | `2048` | EK RSA size |
 | `tpm.ssrk.handle` | `0x81000001` | **Shared SRK** persistent handle |
 | `tpm.ssrk.platform-policy` | `false` | Bind the SSRK to the platform policy |
-| `tpm.ssrk.hierarchy-auth` | (empty; filled from the SO PIN) | Storage hierarchy auth |
+| `tpm.ssrk.hierarchy-auth` | (ignored; set from `TPMA_PERMANENT`, §4 item 5) | Storage (owner) hierarchy auth |
 | `tpm.iak.handle` | `0x81010002` | IAK persistent handle |
 | `tpm.iak.signature-algorithm` | `SHA256-RSA` | IAK signing algorithm |
 | `tpm.idevid.handle` | `0x81020000` | IDevID persistent handle |
