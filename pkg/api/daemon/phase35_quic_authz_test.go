@@ -15,6 +15,8 @@ package daemon
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
@@ -72,6 +74,40 @@ func TestErrResponseFrom_NotConfiguredNamesTheService(t *testing.T) {
 	}
 	if resp := errResponseFrom(ErrPIVSlotRequired); resp.Status != quicwire.StatusInvalidArgument {
 		t.Errorf("slot required: status=%d, want InvalidArgument", resp.Status)
+	}
+}
+
+// Every typed refusal crosses QUIC with its own text, as it does over gRPC
+// and REST: the LUKS root refusal used to arrive as a bare 0x07 the client
+// could not tell from any other PermissionDenied.
+func TestErrResponseFrom_RefusalCarriesSentinelText(t *testing.T) {
+	cases := []struct {
+		err  error
+		want byte
+	}{
+		{ErrLUKSRootRequired, quicwire.StatusPermissionDenied},
+		{fmt.Errorf("enroll: %w", ErrLUKSRootRequired), quicwire.StatusPermissionDenied},
+		{ErrLUKSNotConfigured, quicwire.StatusUnavailable},
+		{ErrFIDO2UsernameRequired, quicwire.StatusInvalidArgument},
+		{ErrPIVKeyImportUnsupported, quicwire.StatusNotImplemented},
+	}
+	for _, tc := range cases {
+		resp := errResponseFrom(tc.err)
+		if resp.Status != tc.want || string(resp.Payload) != tc.err.Error() {
+			t.Errorf("%v: status=%#x payload=%q, want %#x with the error text", tc.err, resp.Status, resp.Payload, tc.want)
+		}
+	}
+}
+
+// An untyped failure stays opaque: InternalError, no payload, so backend
+// detail never leaks to the client.
+func TestErrResponseFrom_UntypedErrorIsOpaque(t *testing.T) {
+	resp := errResponseFrom(errors.New("backend exploded at /dev/hidraw3"))
+	if resp.Status != quicwire.StatusInternalError || len(resp.Payload) != 0 {
+		t.Errorf("status=%#x payload=%q, want InternalError with no payload", resp.Status, resp.Payload)
+	}
+	if resp := errResponseFrom(nil); resp.Status != quicwire.StatusOK {
+		t.Errorf("nil error: status=%#x, want OK", resp.Status)
 	}
 }
 
