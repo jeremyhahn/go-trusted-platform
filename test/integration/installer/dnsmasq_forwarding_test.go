@@ -44,6 +44,15 @@ const (
 	// suiteTimeout bounds every wait: dnsmasq start-up, each query and
 	// each stub receive.
 	suiteTimeout = 30 * time.Second
+
+	// dnsmasqStartAttempts bounds the restarts after dnsmasq loses its
+	// port to another socket before binding it (startDNSMasq).
+	dnsmasqStartAttempts = 3
+	// freePortAttempts bounds the search for a port free for both TCP and
+	// UDP (freePort).
+	freePortAttempts = 16
+	// addrInUse is the EADDRINUSE text dnsmasq logs when a bind fails.
+	addrInUse = "Address already in use"
 )
 
 // stubAnswer is the address the stub upstream answers every A query with.
@@ -216,12 +225,61 @@ func (s *upstreamStub) nextQuery(t *testing.T, ctx context.Context) string {
 // free port of 127.0.0.1 (the generated listen-address), and returns its
 // address once it has started. The process is stopped when the test ends;
 // its log is printed if the test failed.
+//
+// The port is free when freePort returns it, but dnsmasq binds it a moment
+// later; a loopback connection made in between can take it as its local
+// port. dnsmasq then exits with "Address already in use", and only that exit
+// is retried, on a fresh port, after the failed process has been reaped.
 func startDNSMasq(t *testing.T, ctx context.Context, conf string) string {
 	t.Helper()
 
 	confPath := filepath.Join(t.TempDir(), "dnsmasq.conf")
 	require.NoError(t, os.WriteFile(confPath, []byte(conf), 0o600))
-	port := freePort(t)
+
+	for attempt := 1; ; attempt++ {
+		port := freePort(t)
+		proc := launchDNSMasq(t, conf, confPath, port)
+
+		select {
+		case <-proc.started:
+			return net.JoinHostPort("127.0.0.1", port)
+		case <-proc.exited:
+			if attempt < dnsmasqStartAttempts && strings.Contains(proc.log(), addrInUse) {
+				t.Logf("dnsmasq lost port %s before binding it (attempt %d): %s",
+					port, attempt, proc.log())
+				continue
+			}
+			t.Fatalf("dnsmasq exited before it started: %v\n%s", proc.waitErr, proc.log())
+		case <-ctx.Done():
+			t.Fatalf("dnsmasq did not start: %v\n%s", ctx.Err(), proc.log())
+		}
+	}
+}
+
+// dnsmasqProcess is one dnsmasq run. started closes when dnsmasq logs its
+// start-up line; exited closes once the process has been reaped, after which
+// waitErr holds its exit status.
+type dnsmasqProcess struct {
+	started chan struct{}
+	exited  chan struct{}
+	waitErr error
+
+	logMu    sync.Mutex
+	logLines []string
+}
+
+// log returns everything the process has written to stderr so far.
+func (p *dnsmasqProcess) log() string {
+	p.logMu.Lock()
+	defer p.logMu.Unlock()
+	return strings.Join(p.logLines, "\n")
+}
+
+// launchDNSMasq starts dnsmasq on confPath and port. A cleanup stops it and
+// waits for it to be reaped, so its sockets are closed before the next
+// subtest binds its own.
+func launchDNSMasq(t *testing.T, conf, confPath, port string) *dnsmasqProcess {
+	t.Helper()
 
 	procCtx, stop := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(procCtx, "dnsmasq",
@@ -232,63 +290,67 @@ func startDNSMasq(t *testing.T, ctx context.Context, conf string) string {
 		"--log-queries",
 	)
 	stderr, err := cmd.StderrPipe()
-	require.NoError(t, err)
-	require.NoError(t, cmd.Start(), "start dnsmasq (installed in the devcontainer image)")
+	if err != nil {
+		stop()
+		t.Fatalf("dnsmasq stderr pipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		stop()
+		t.Fatalf("start dnsmasq (installed in the devcontainer image): %v", err)
+	}
 
-	var logMu sync.Mutex
-	var logLines []string
-	started := make(chan struct{})
-	exited := make(chan struct{})
-	var waitErr error
+	proc := &dnsmasqProcess{
+		started: make(chan struct{}),
+		exited:  make(chan struct{}),
+	}
 	go func() {
 		scanner := bufio.NewScanner(stderr)
 		signalled := false
 		for scanner.Scan() {
 			line := scanner.Text()
-			logMu.Lock()
-			logLines = append(logLines, line)
-			logMu.Unlock()
+			proc.logMu.Lock()
+			proc.logLines = append(proc.logLines, line)
+			proc.logMu.Unlock()
 			if !signalled && strings.Contains(line, "started, version") {
-				close(started)
+				close(proc.started)
 				signalled = true
 			}
 		}
-		waitErr = cmd.Wait()
-		close(exited)
+		proc.waitErr = cmd.Wait()
+		close(proc.exited)
 	}()
 
-	dnsmasqLog := func() string {
-		logMu.Lock()
-		defer logMu.Unlock()
-		return strings.Join(logLines, "\n")
-	}
 	t.Cleanup(func() {
 		stop()
-		<-exited
+		<-proc.exited
 		if t.Failed() {
-			t.Logf("dnsmasq.conf:\n%s\ndnsmasq log:\n%s", conf, dnsmasqLog())
+			t.Logf("dnsmasq.conf:\n%s\ndnsmasq log:\n%s", conf, proc.log())
 		}
 	})
-
-	select {
-	case <-started:
-	case <-exited:
-		t.Fatalf("dnsmasq exited before it started: %v\n%s", waitErr, dnsmasqLog())
-	case <-ctx.Done():
-		t.Fatalf("dnsmasq did not start: %v\n%s", ctx.Err(), dnsmasqLog())
-	}
-	return net.JoinHostPort("127.0.0.1", port)
+	return proc
 }
 
-// freePort returns a port of 127.0.0.1 that is free for UDP at the time of
-// the call.
+// freePort returns a port of 127.0.0.1 that is free for both TCP and UDP at
+// the time of the call. dnsmasq binds the port for both, and the TCP side
+// shares the ephemeral range with every loopback client connection on the
+// host, so a UDP-only probe can hand out a port a TCP connection holds.
 func freePort(t *testing.T) string {
 	t.Helper()
-	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
-	require.NoError(t, err)
-	port := conn.LocalAddr().(*net.UDPAddr).Port
-	require.NoError(t, conn.Close())
-	return strconv.Itoa(port)
+	for attempt := 1; attempt <= freePortAttempts; attempt++ {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+
+		conn, udpErr := net.ListenPacket("udp", net.JoinHostPort("127.0.0.1", port))
+		require.NoError(t, listener.Close())
+		if udpErr != nil {
+			continue
+		}
+		require.NoError(t, conn.Close())
+		return port
+	}
+	t.Fatalf("no port of 127.0.0.1 was free for both TCP and UDP in %d attempts", freePortAttempts)
+	return ""
 }
 
 // queryA sends an A query for name to server over UDP.
