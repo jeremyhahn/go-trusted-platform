@@ -116,6 +116,9 @@ func (g *GRPCAdapter) CreateZone(ctx context.Context, opts CreateZoneOptions) (*
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "CreateZone", Err: err}
 	}
+	if resp.GetZone() == nil {
+		return nil, ErrZoneMissingFromReply{Method: "CreateZone"}
+	}
 
 	return &CreateZoneResult{
 		Name:      resp.Zone.Name,
@@ -135,6 +138,9 @@ func (g *GRPCAdapter) GetZone(ctx context.Context, zoneName string) (*GetZoneRes
 	resp, err := g.dns.GetZone(ctx, req)
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "GetZone", Err: err}
+	}
+	if resp.GetZone() == nil {
+		return nil, ErrZoneMissingFromReply{Method: "GetZone"}
 	}
 
 	result := &GetZoneResult{
@@ -174,6 +180,9 @@ func (g *GRPCAdapter) UpdateZone(ctx context.Context, zoneName string, opts Upda
 	resp, err := g.dns.UpdateZone(ctx, req)
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "UpdateZone", Err: err}
+	}
+	if resp.GetZone() == nil {
+		return nil, ErrZoneMissingFromReply{Method: "UpdateZone"}
 	}
 
 	return &UpdateZoneResult{
@@ -749,6 +758,16 @@ type ErrRecordNotFound struct {
 
 func (e ErrRecordNotFound) Error() string {
 	return fmt.Sprintf("record not found: %s (type %s)", e.Name, e.Type)
+}
+
+// ErrZoneMissingFromReply is returned when a zone RPC succeeds but its reply
+// carries no zone, so the suite fails on the reply instead of panicking.
+type ErrZoneMissingFromReply struct {
+	Method string
+}
+
+func (e ErrZoneMissingFromReply) Error() string {
+	return fmt.Sprintf("%s reply carries no zone", e.Method)
 }
 
 // Ensure GRPCAdapter implements DNSCommands interface.
