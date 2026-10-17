@@ -330,8 +330,14 @@ func (s *DNSServiceServer) UpdateRecord(ctx context.Context, req *platformv1.Upd
 		return nil, status.Error(codes.NotFound, err.Error())
 	}
 
-	// Delete old record
-	s.deleteRecordFromZone(zone, req.GetOldRecord().GetType(), s.getRecordName(req.GetOldRecord()))
+	// An update replaces a record the zone holds; it never creates one.
+	oldType := req.GetOldRecord().GetType()
+	oldName := s.getRecordName(req.GetOldRecord())
+	if !s.zoneHasRecord(zone, oldType, oldName) {
+		return nil, ErrDNSRecordNotFound{Name: oldName, RecordType: resolveRecordType(oldType)}.GRPCStatus().Err()
+	}
+
+	s.deleteRecordFromZone(zone, oldType, oldName)
 
 	// Add new record
 	if err := s.addRecordToZone(zone, req.GetNewRecord()); err != nil {
@@ -889,6 +895,20 @@ func (s *DNSServiceServer) getRecordName(record *platformv1.Record) string {
 		}
 	}
 	return ""
+}
+
+// zoneHasRecord reports whether the zone holds a record of the given type
+// owned by name. An unspecified type matches no record.
+func (s *DNSServiceServer) zoneHasRecord(zone *entities.Zone, recordType platformv1.RecordType, name string) bool {
+	if recordType == platformv1.RecordType_RECORD_TYPE_UNSPECIFIED {
+		return false
+	}
+	for _, record := range s.extractRecords(&zone.RecordSet, recordType) {
+		if s.getRecordName(record) == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *DNSServiceServer) extractRecords(rs *entities.RecordSet, recordType platformv1.RecordType) []*platformv1.Record {

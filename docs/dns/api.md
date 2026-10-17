@@ -96,6 +96,9 @@ is a 400 (gRPC `InvalidArgument`). See
 Adding or updating a record runs one check, `dns.ValidateRecord` plus the
 TLSA usage check, before anything is stored. A refused record leaves the zone
 as it was; `UpdateRecord` checks the new record before it removes the old one.
+`UpdateRecord` replaces a record the zone holds and never creates one: an old
+record of a name and type the zone does not hold is `ErrDNSRecordNotFound`,
+`NotFound` on gRPC, Unix and MCP and `StatusNotFound` on QUIC.
 
 | Refusal | Typed error |
 |---|---|
@@ -110,7 +113,7 @@ alike:
 |---|---|
 | REST | 400 |
 | gRPC, Unix | `InvalidArgument` |
-| QUIC | `StatusInvalidArgument` (AddRecord delegates to the gRPC servicer) |
+| QUIC | `StatusInvalidArgument` (AddRecord and UpdateRecord delegate to the gRPC servicer) |
 | MCP (both families) | `-32602` |
 
 ---

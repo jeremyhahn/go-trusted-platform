@@ -15,9 +15,11 @@ package daemon
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
@@ -188,6 +190,10 @@ func (h *QUICServiceHandler) handleDNSOperation(ctx context.Context, req *quicwi
 
 // handleDNSUpdateRecord handles updating a DNS record (daemon-native).
 func (h *QUICServiceHandler) handleDNSUpdateRecord(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	if h.dnsGRPC == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDNSServiceNotAvailable{})
+	}
+
 	var updateReq DNSUpdateRecordRequest
 	if err := quicwire.DecodePayload(req.Payload, &updateReq); err != nil {
 		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
@@ -206,23 +212,31 @@ func (h *QUICServiceHandler) handleDNSUpdateRecord(ctx context.Context, req *qui
 		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "value"})
 	}
 
-	// Update is delete + add
-	if err := h.dnsService.DeleteRecord(ctx, updateReq.Name, updateReq.RecordType); err != nil {
-		h.logger.Debug("delete during update failed (may not exist)", "error", err)
-	}
-
 	ttl := updateReq.TTL
 	if ttl <= 0 {
 		ttl = 3600
 	}
+	build, ok := flatRecordBuilders[strings.ToUpper(updateReq.RecordType)]
+	if !ok {
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDNSInvalidParameter{
+			Parameter: "record_type",
+			Reason:    "update carries one of A, AAAA, CNAME, MX, NS, TXT",
+		})
+	}
 
-	err := h.dnsService.AddRecord(ctx, updateReq.Name, updateReq.RecordType, updateReq.Value, ttl)
+	// The servicer checks the new record and that the old one exists before
+	// it touches the zone, as gRPC UpdateRecord does.
+	_, err := h.dnsGRPC.UpdateRecord(ctx, &platformv1.UpdateRecordRequest{
+		ZoneName:  updateReq.Zone,
+		OldRecord: build(updateReq.Name, "", 0, 0),
+		NewRecord: build(updateReq.Name, updateReq.Value, uint32(ttl), uint32(updateReq.Priority)),
+	})
 	if err != nil {
 		h.logger.Error(err, "failed to update DNS record",
 			"zone", updateReq.Zone,
 			"name", updateReq.Name,
 			"type", updateReq.RecordType)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "DNSUpdateRecord", Cause: err})
+		return h.dnsErrorToQUICResponse("DNSUpdateRecord", err)
 	}
 
 	resp := &DNSUpdateRecordResponse{
@@ -241,6 +255,36 @@ func (h *QUICServiceHandler) handleDNSUpdateRecord(ctx context.Context, req *qui
 		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
+}
+
+// flatRecordBuilders turns the flat 0x22 fields into the servicer's record,
+// keyed by record type. The flat wire has one value, so it carries the types
+// whose data is one value (MX adds its priority).
+var flatRecordBuilders = map[string]func(name, value string, ttl, priority uint32) *platformv1.Record{
+	"A": func(name, value string, ttl, _ uint32) *platformv1.Record {
+		return &platformv1.Record{Type: platformv1.RecordType_RECORD_TYPE_A,
+			Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: name, Value: value, Ttl: ttl}}}
+	},
+	"AAAA": func(name, value string, ttl, _ uint32) *platformv1.Record {
+		return &platformv1.Record{Type: platformv1.RecordType_RECORD_TYPE_AAAA,
+			Record: &platformv1.Record_Aaaa{Aaaa: &platformv1.AAAARecord{Name: name, Value: value, Ttl: ttl}}}
+	},
+	"CNAME": func(name, value string, ttl, _ uint32) *platformv1.Record {
+		return &platformv1.Record{Type: platformv1.RecordType_RECORD_TYPE_CNAME,
+			Record: &platformv1.Record_Cname{Cname: &platformv1.CNAMERecord{Name: name, Value: value, Ttl: ttl}}}
+	},
+	"MX": func(name, value string, ttl, priority uint32) *platformv1.Record {
+		return &platformv1.Record{Type: platformv1.RecordType_RECORD_TYPE_MX,
+			Record: &platformv1.Record_Mx{Mx: &platformv1.MXRecord{Name: name, Value: value, Priority: priority, Ttl: ttl}}}
+	},
+	"NS": func(name, value string, ttl, _ uint32) *platformv1.Record {
+		return &platformv1.Record{Type: platformv1.RecordType_RECORD_TYPE_NS,
+			Record: &platformv1.Record_Ns{Ns: &platformv1.NSRecord{Name: name, Value: value, Ttl: ttl}}}
+	},
+	"TXT": func(name, value string, ttl, _ uint32) *platformv1.Record {
+		return &platformv1.Record{Type: platformv1.RecordType_RECORD_TYPE_TXT,
+			Record: &platformv1.Record_Txt{Txt: &platformv1.TXTRecord{Name: name, Value: value, Ttl: ttl}}}
+	},
 }
 
 // handleDNSGetRecord handles getting a DNS record (daemon-native).

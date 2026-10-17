@@ -937,6 +937,11 @@ func (e ErrDNSRecordNotFound) Error() string {
 	return fmt.Sprintf("DNS record not found: %s %s", e.Name, e.RecordType)
 }
 
+// GRPCStatus classes a missing record as NotFound on every transport.
+func (e ErrDNSRecordNotFound) GRPCStatus() *status.Status {
+	return status.New(codes.NotFound, e.Error())
+}
+
 // ErrDNSOperationFailed is returned when a DNS operation fails
 type ErrDNSOperationFailed struct {
 	Operation string

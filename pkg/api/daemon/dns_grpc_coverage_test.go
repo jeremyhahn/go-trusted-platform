@@ -259,6 +259,57 @@ func TestDNSServiceServer_UpdateRecord_SaveError(t *testing.T) {
 	assert.Equal(t, codes.Internal, st.Code())
 }
 
+// An update replaces a record the zone holds. A record of another name, or of
+// another type under the same name, is not there to replace: NotFound, and the
+// zone keeps what it had.
+func TestDNSServiceServer_UpdateRecord_RecordNotFound(t *testing.T) {
+	tests := []struct {
+		name      string
+		oldRecord *platformv1.Record
+	}{
+		{"unknown name", &platformv1.Record{
+			Type:   platformv1.RecordType_RECORD_TYPE_A,
+			Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "ftp"}},
+		}},
+		{"name held only in another type", &platformv1.Record{
+			Type:   platformv1.RecordType_RECORD_TYPE_AAAA,
+			Record: &platformv1.Record_Aaaa{Aaaa: &platformv1.AAAARecord{Name: "www"}},
+		}},
+		{"unspecified type", &platformv1.Record{
+			Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "www"}},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := newMockDNSService()
+			mock.zones["example.com."] = &entities.Zone{
+				ID:   1,
+				Name: "example.com.",
+				RecordSet: entities.RecordSet{
+					ARecords: []*entities.ARecord{{Name: "www", Value: "192.168.1.1", TTL: 3600}},
+				},
+			}
+			server := NewDNSServiceServer(mock, testLogger())
+
+			_, err := server.UpdateRecord(context.Background(), &platformv1.UpdateRecordRequest{
+				ZoneName:  "example.com.",
+				OldRecord: tt.oldRecord,
+				NewRecord: &platformv1.Record{
+					Type:   platformv1.RecordType_RECORD_TYPE_A,
+					Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "ftp", Value: "192.168.1.2"}},
+				},
+			})
+
+			require.Error(t, err)
+			assert.Equal(t, codes.NotFound, status.Code(err))
+			records := mock.zones["example.com."].RecordSet.ARecords
+			require.Len(t, records, 1, "a refused update must leave the zone as it was")
+			assert.Equal(t, "www", records[0].Name)
+			assert.Equal(t, "192.168.1.1", records[0].Value)
+		})
+	}
+}
+
 func TestDNSServiceServer_UpdateRecord_AllRecordTypes(t *testing.T) {
 	tests := []struct {
 		name       string
