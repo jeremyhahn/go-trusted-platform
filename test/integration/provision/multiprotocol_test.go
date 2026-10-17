@@ -675,14 +675,20 @@ func runDeliveredConfigScenario(t *testing.T, ctx context.Context, cmd Provision
 	t.Run("SignDigest", func(t *testing.T) {
 		// Same authentication as FetchConfig plus the DB-signer gate. The
 		// fixture prestages the EK certificate AND presents the matching
-		// one, so the EK-binding gate PASSES and exactly two outcomes
-		// remain legitimate, both fully asserted:
+		// one, so the EK-binding gate PASSES. The seeded db.key-uri names a
+		// key the KMS does not hold (the suite provisions no Secure Boot DB
+		// key), so the documented outcomes (docs/firmware/api.md, Errors)
+		// are, each fully asserted:
 		//
 		//   - no DB key signer wired in this environment: typed
 		//     ErrSignerUnavailable (fail-fast before the nonce is
 		//     consumed);
-		//   - signer wired: the EK-bound SIGNED path must complete with a
-		//     non-empty signature and a parseable PEM DB certificate.
+		//   - signer wired: typed ErrSignFailed ("KMS refused the
+		//     signature"), which is reached only after the nonce, EAB,
+		//     profile-match and EK-binding gates have all passed;
+		//   - a KMS that does hold the key: the EK-bound SIGNED path must
+		//     complete with a non-empty signature and a parseable PEM DB
+		//     certificate.
 		//
 		// An EK-binding rejection is NO LONGER legitimate here — the
 		// prestage feature makes the gate pass by construction.
@@ -712,8 +718,15 @@ func runDeliveredConfigScenario(t *testing.T, ctx context.Context, cmd Provision
 			t.Log("remote sign succeeded: CP DB key signed the digest through the EK-bound path")
 			return
 		}
+		if isSignFailed(err) {
+			if !strings.Contains(err.Error(), fixture.dbKeyID) {
+				t.Fatalf("SignDigest failed at the signer but not for the seeded DB key %q: %v", fixture.dbKeyID, err)
+			}
+			t.Log("SignDigest passed every authentication gate; the KMS refused the unprovisioned DB key (typed ErrSignFailed)")
+			return
+		}
 		if !isSignerUnavailable(err) {
-			t.Fatalf("EK-bound SignDigest must succeed or fail with the typed signer-unavailable, got: %v", err)
+			t.Fatalf("EK-bound SignDigest must succeed, fail with the typed sign-failed for the unprovisioned DB key, or fail with the typed signer-unavailable, got: %v", err)
 		}
 		t.Log("SignDigest blocked by typed signer-unavailable: no CP DB key signer wired in this environment")
 	})

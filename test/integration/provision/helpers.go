@@ -177,6 +177,13 @@ func isSignerUnavailable(err error) bool {
 	)
 }
 
+// isSignFailed reports the typed ErrSignFailed: every authentication gate
+// passed and the control-plane DB signer was asked to sign, but the KMS
+// refused (docs/firmware/api.md, Errors: "KMS refused the signature").
+func isSignFailed(err error) bool {
+	return containsAny(err, "configdelivery: digest signing failed")
+}
+
 // uniqueMAC generates a unique locally-administered MAC address for
 // MAC-only device-identity tests so adapters never collide on the shared
 // daemon.
