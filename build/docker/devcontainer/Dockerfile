@@ -188,6 +188,12 @@ RUN apt-get update && apt-get install -y \
     sudo \
     && rm -rf /var/lib/apt/lists/*
 
+# chrony for the ntp suite: platformd renders chrony.conf from the
+# integration config's ntp: section and drives chronyc against the chronyd
+# the runner starts on it (run-integration-tests.sh start_chronyd).
+RUN apt-get update && apt-get install -y chrony \
+    && rm -rf /var/lib/apt/lists/*
+
 # TPM 2.0 software stack and swtpm (software TPM).
 RUN apt-get update && apt-get install -y \
     tpm2-tools \

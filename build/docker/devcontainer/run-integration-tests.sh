@@ -305,6 +305,12 @@ restore_workspace_ownership() {
         || echo "WARNING: could not restore ownership under ${dir}"
 }
 
+# chronyd paths (start_chronyd): the Debian chrony package's defaults, which
+# pkg/ntp DefaultPaths also renders and drives.
+CHRONYD_CONF="/etc/chrony/chrony.conf"
+CHRONYD_SOCK="/run/chrony/chronyd.sock"
+CHRONYD_PID_FILE="/run/chrony/chronyd.pid"
+
 cleanup() {
     if [ "$CLEANUP_DONE" = true ]; then
         return
@@ -326,6 +332,11 @@ cleanup() {
         echo "Stopping vBMC (PID: $VBMC_PID)..."
         kill "$VBMC_PID" 2>/dev/null || true
         wait "$VBMC_PID" 2>/dev/null || true
+    fi
+
+    # Stop chronyd
+    if [ -f "${CHRONYD_PID_FILE}" ]; then
+        kill "$(cat "${CHRONYD_PID_FILE}")" 2>/dev/null || true
     fi
 
     # Stop swtpm
@@ -720,6 +731,34 @@ TRUSTEOF
     echo "=== vBMC started ==="
 }
 
+# chronyd backs the ntp suite. platformd renders /etc/chrony/chrony.conf from
+# the config's ntp: section and enables chronyd through OpenRC, which this
+# Debian container does not have, so the runner starts chronyd on the rendered
+# file. -x keeps chronyd off the system clock: the container shares the CI
+# host's kernel clock, and no suite may move it. A config without an ntp:
+# section renders nothing, and chronyd is not started. The paths are set
+# beside cleanup(), which stops chronyd.
+start_chronyd() {
+    if [ ! -f "${CHRONYD_CONF}" ]; then
+        echo "WARNING: platformd rendered no ${CHRONYD_CONF}; the ntp suite has no chronyd"
+        return 0
+    fi
+    echo "=== Starting chronyd (config: ${CHRONYD_CONF}, clock control off) ==="
+    mkdir -p "$(dirname "${CHRONYD_SOCK}")"
+    if ! chronyd -x -f "${CHRONYD_CONF}"; then
+        echo "WARNING: chronyd failed to start; the ntp suite has no chronyd"
+        return 0
+    fi
+    for _ in $(seq 1 10); do
+        if chronyc -n -h "${CHRONYD_SOCK}" tracking >/dev/null 2>&1; then
+            echo "chronyd ready"
+            return 0
+        fi
+        sleep 1
+    done
+    echo "WARNING: chronyd never answered on ${CHRONYD_SOCK}"
+}
+
 start_platformd() {
     local config_file="${1:-${PLATFORM_BUILD_DIR}/test/integration/config.yaml}"
     echo "=== Starting platformd (config: ${config_file}) ==="
@@ -789,6 +828,8 @@ start_platformd() {
                 fi
                 sleep 1
             done
+
+            start_chronyd
 
             echo "=== platformd ready ==="
             return 0

@@ -26,6 +26,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ntp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 )
 
@@ -135,4 +136,51 @@ func TestIntegrationConfig_DNSTypoRefused(t *testing.T) {
 	var unknown *config.ErrUnknownConfigKeys
 	require.True(t, errors.As(err, &unknown), "got %v", err)
 	assert.Equal(t, "dns", unknown.Section)
+}
+
+// TestIntegrationConfig_NTPConsumesFromLoopbackOnly pins the ntp section the
+// ntp suite needs: without one every NTP call answers "not configured". The
+// only upstream is the loopback, where nothing serves NTP, so no source is
+// ever reachable and a step the suite sends is always refused: the
+// devcontainer shares the CI host's clock.
+func TestIntegrationConfig_NTPConsumesFromLoopbackOnly(t *testing.T) {
+	a := loadTemplate(t, integrationConfig)
+
+	raw, err := os.ReadFile(integrationConfig)
+	require.NoError(t, err)
+	v := viper.New()
+	v.SetConfigType("yaml")
+	require.NoError(t, v.ReadConfig(bytes.NewReader(raw)))
+	require.NoError(t, config.CheckViperSection(v, "ntp", &ntp.Config{}))
+
+	require.NotNil(t, a.NTPConfig, "ntp section")
+	assert.True(t, a.NTPConfig.Active(), "the ntp service is enabled")
+	require.NoError(t, a.NTPConfig.Validate())
+	assert.Equal(t, ntp.ModeConsume, a.NTPConfig.Mode, "consume only: the node serves no time")
+	require.NotNil(t, a.NTPConfig.Consume)
+	require.Len(t, a.NTPConfig.Consume.Upstream, 1)
+	assert.Equal(t, "127.0.0.1", a.NTPConfig.Consume.Upstream[0].Address,
+		"the only upstream is the loopback, which never answers")
+	require.NotNil(t, a.NTPConfig.Consume.StartupGate)
+	assert.False(t, a.NTPConfig.Consume.StartupGate.BlockUntilSynced,
+		"no startup gate: nothing will ever synchronize")
+}
+
+// TestIntegrationConfig_NTPTypoRefused proves the ntp section is checked
+// strictly: a misspelt gate key is refused rather than silently enabling the
+// default gate.
+func TestIntegrationConfig_NTPTypoRefused(t *testing.T) {
+	raw, err := os.ReadFile(integrationConfig)
+	require.NoError(t, err)
+	typo := bytes.Replace(raw, []byte("block-until-synced:"), []byte("block-until-sync:"), 1)
+	require.NotEqual(t, raw, typo, "the config carries a startup gate")
+
+	v := viper.New()
+	v.SetConfigType("yaml")
+	require.NoError(t, v.ReadConfig(bytes.NewReader(typo)))
+	err = config.CheckViperSection(v, "ntp", &ntp.Config{})
+
+	var unknown *config.ErrUnknownConfigKeys
+	require.True(t, errors.As(err, &unknown), "got %v", err)
+	assert.Equal(t, "ntp", unknown.Section)
 }
