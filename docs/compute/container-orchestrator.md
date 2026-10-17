@@ -73,7 +73,11 @@ Key wiring facts:
   plus IAK-signed quote attestation. The orchestrator additionally builds
   the SDK trust stack (`container.NewTrustStack`), which supplies image
   digest resolution and the Tier 1 attesting runtime. Without a TPM the
-  orchestrator runs unmeasured and `Attest` returns a typed error.
+  orchestrator runs unmeasured and `Attest` returns a typed error. A host
+  with a TPM but neither `docker` nor `podman` on `PATH` (the SDK's
+  `ContainerRuntimeNotAvailableError`) also starts unmeasured, with a
+  warning, as on a host without a TPM, so the compute API stays served.
+  Every other trust-stack failure stops the orchestrator from starting.
 - `container.NewSDKContainerAttestor` builds the SDK's runtime attestor over
   the platform's host TPM. `container.NewFleetContainerAttestor` wraps it with
   the fleet policy: device registry lookup, the profile's golden PCRs, and

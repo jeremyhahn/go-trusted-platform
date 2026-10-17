@@ -16,6 +16,8 @@ package container
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
@@ -55,6 +57,79 @@ func TestContainerFactory_BuildsOrchestrator(t *testing.T) {
 	}
 	if err := orch.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
+	}
+}
+
+// TestComputeOrchestrator_HostTPMWithoutRuntime pins the devcontainer case:
+// a host TPM is present but neither docker nor podman is on PATH. The
+// orchestrator must still start, unmeasured, so the daemon keeps serving the
+// compute API instead of dropping it altogether.
+func TestComputeOrchestrator_HostTPMWithoutRuntime(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	provider, err := NewHostTPMProvider(newMockQuoteTPM(t))
+	if err != nil {
+		t.Fatalf("NewHostTPMProvider: %v", err)
+	}
+	cfg := &compute.OrchestratorConfig{
+		Type:            compute.ComputeTypeContainer,
+		WorkDir:         t.TempDir(),
+		DefaultMemory:   256,
+		DefaultCPUs:     1,
+		DefaultDiskSize: "5G",
+		MaxInstances:    5,
+	}
+
+	orch, err := NewComputeOrchestrator(cfg, nil, WithComputeTPMProvider(provider))
+	if err != nil {
+		t.Fatalf("NewComputeOrchestrator: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := orch.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	if orch.engine == nil {
+		t.Fatal("expected the container engine to be built")
+	}
+	if orch.engine.measurementRequired() {
+		t.Fatal("a host with no container runtime must not claim measured launches")
+	}
+}
+
+// TestComputeOrchestrator_HostTPMWithRuntimeMeasures is the counterpart: with
+// a runtime binary on PATH the trust stack builds and launches are measured.
+func TestComputeOrchestrator_HostTPMWithRuntimeMeasures(t *testing.T) {
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "podman"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake podman: %v", err)
+	}
+	t.Setenv("PATH", bin)
+
+	provider, err := NewHostTPMProvider(newMockQuoteTPM(t))
+	if err != nil {
+		t.Fatalf("NewHostTPMProvider: %v", err)
+	}
+	cfg := &compute.OrchestratorConfig{
+		Type:            compute.ComputeTypeContainer,
+		WorkDir:         t.TempDir(),
+		DefaultMemory:   256,
+		DefaultCPUs:     1,
+		DefaultDiskSize: "5G",
+		MaxInstances:    5,
+	}
+
+	orch, err := NewComputeOrchestrator(cfg, nil, WithComputeTPMProvider(provider))
+	if err != nil {
+		t.Fatalf("NewComputeOrchestrator: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := orch.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	if !orch.engine.measurementRequired() {
+		t.Fatal("with a runtime and a host TPM, launches must be measured")
 	}
 }
 

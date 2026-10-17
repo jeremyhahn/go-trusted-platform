@@ -220,20 +220,30 @@ func (o *ComputeOrchestrator) buildEngine() error {
 		// platform cannot measure a launch, so attestation must not be
 		// enabled: a half-configured attestor would report success on
 		// containers it never measured.
+		//
+		// A host with no docker or podman binary gives the trust stack
+		// nothing to resolve or measure launches with, so the orchestrator
+		// starts unmeasured, as it does on a host without a TPM, rather than
+		// taking the compute API down with it. Any other trust-stack
+		// failure stays fatal.
 		stack, err := NewTrustStack(o.tpmProvider, o.logger.Slog())
-		if err != nil {
+		var noRuntime *orchestration.ContainerRuntimeNotAvailableError
+		switch {
+		case errors.As(err, &noRuntime):
+			o.logger.Warnf("Container attestation disabled: %v (container operations will fail)", err)
+		case err != nil:
 			return &compute.WrappedError{Msg: "failed to build container trust stack", Err: err}
-		}
+		default:
+			attestor, err = NewContainerAttestor(o.tpmProvider, WithAttestingRuntime(stack.Attesting))
+			if err != nil {
+				return &compute.WrappedError{Msg: "failed to create container attestor", Err: err}
+			}
 
-		attestor, err = NewContainerAttestor(o.tpmProvider, WithAttestingRuntime(stack.Attesting))
-		if err != nil {
-			return &compute.WrappedError{Msg: "failed to create container attestor", Err: err}
+			engineOpts = append(engineOpts,
+				WithAttestor(attestor),
+				WithImageDigestResolver(stack.Runtime),
+			)
 		}
-
-		engineOpts = append(engineOpts,
-			WithAttestor(attestor),
-			WithImageDigestResolver(stack.Runtime),
-		)
 	}
 
 	engine, err := NewOrchestrator(OrchestratorConfig{
