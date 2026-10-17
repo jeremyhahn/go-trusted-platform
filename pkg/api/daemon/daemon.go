@@ -663,6 +663,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			// even though the REST router has IAM available via the embedded
 			// transport.
 			iamGRPCService = NewIAMGRPCService(logger.Slog(), iamService.Client(), iamService.PEP())
+			iamGRPCService.SetSystemTenant(config.PlatformTenantID)
 			if grpcServer != nil {
 				platformv1.RegisterPlatformIAMServiceServer(grpcServer, iamGRPCService)
 			}
@@ -1935,6 +1936,7 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		IAMClient:             d.iamService.Client(),
 		PEPClient:             d.iamService.PEP(),
 		IAMTokens:             d.iamTokenService,
+		PlatformTenantID:      d.config.PlatformTenantID,
 		CAService:             d.caService,
 		VTPMService:           d.config.VTPMService,
 		DeviceService:         d.config.DeviceService,

@@ -417,6 +417,18 @@ and otherwise from the mount point's own ownership.
 | `PLATFORM_MCP_ENDPOINT` | `https://localhost:9445` | MCP protocol endpoint (TLS 1.3 only, #844) |
 | `PLATFORM_SOCKET_PATH` | `/run/platformd.sock` | Unix socket path for local IPC |
 | `PLATFORMCTL_PATH` | `platformctl` (on `PATH`) | CLI binary path |
+| `PLATFORM_CLIENT_CERT`, `PLATFORM_CLIENT_KEY` | `client-bundle.pem` | Harness admin credential, subject `O=system` (`helpers.HarnessTenantID`) |
+| `PLATFORM_TENANT_CLIENT_CERT`, `PLATFORM_TENANT_CLIENT_KEY` | `tenant-client-bundle.pem` | Harness credential bound to the non-system tenant `harness-tenant` (`helpers.ForeignTenantID`) |
+| `PLATFORM_CA_CERT` | `ca-bundle.crt` | CA both client credentials chain to |
+
+The two client bundles live in `/tmp/platformd-integration/tls/`. platformd
+writes both on first start (`pkg/daemon/commands/harness_admin_bundle_integration.go`,
+`integration` build only), from the same root admin request through the same
+issuer; the tenant bundle differs only in its subject `O`, and it is written
+first, so a run that has `client-bundle.pem` always has both. The mTLS
+transports bind a caller to the tenant its subject names, so a suite proves a
+cross-tenant refusal by dialing with `helpers.TenantTLSConfig()` instead of
+`helpers.TLSConfigOrInsecure()`.
 
 The endpoint variables are the ones the shared helpers in
 `test/integration/helpers/endpoints.go` read. Suites with a private namespace
