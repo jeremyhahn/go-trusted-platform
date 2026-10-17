@@ -612,31 +612,54 @@ func (r *cliImageConfigResponse) toImageConfig() *ImageConfig {
 }
 
 type cliStatusResponse struct {
-	Healthy            bool   `json:"healthy"`
-	Status             string `json:"status"`
-	Version            string `json:"version"`
-	UptimeSeconds      int64  `json:"uptime_seconds"`
-	ImageCount         int    `json:"image_count"`
-	TotalSize          int64  `json:"total_size"`
-	ActiveConnections  int    `json:"active_connections"`
-	AttestationEnabled bool   `json:"attestation_enabled"`
-	EncryptionEnabled  bool   `json:"encryption_enabled"`
-	StorageBackend     string `json:"storage_backend"`
-	StorageStatus      string `json:"storage_status"`
+	Status *struct {
+		Healthy bool   `json:"healthy"`
+		Version string `json:"version"`
+		Uptime  int64  `json:"uptime_seconds"`
+		Storage *struct {
+			Backend    string `json:"backend"`
+			Healthy    bool   `json:"healthy"`
+			UsedBytes  int64  `json:"used_bytes"`
+			ImageCount int    `json:"image_count"`
+		} `json:"storage"`
+		Attestation *struct {
+			Enabled bool `json:"enabled"`
+		} `json:"attestation"`
+		Encryption *struct {
+			Enabled bool `json:"enabled"`
+		} `json:"encryption"`
+	} `json:"status"`
 }
 
+// toStatusResult maps platformctl registry status's {"status": {...}}
+// document (docs/registry/cli.md §7) onto the shared result, deriving
+// Status the way the gRPC adapter does from the health verdict.
 func (r *cliStatusResponse) toStatusResult() *StatusResult {
-	return &StatusResult{
-		Healthy:            r.Healthy,
-		Status:             r.Status,
-		Version:            r.Version,
-		Uptime:             time.Duration(r.UptimeSeconds) * time.Second,
-		ImageCount:         r.ImageCount,
-		TotalSize:          r.TotalSize,
-		ActiveConnections:  r.ActiveConnections,
-		AttestationEnabled: r.AttestationEnabled,
-		EncryptionEnabled:  r.EncryptionEnabled,
-		StorageBackend:     r.StorageBackend,
-		StorageStatus:      r.StorageStatus,
+	result := &StatusResult{Status: "degraded"}
+	s := r.Status
+	if s == nil {
+		return result
 	}
+	result.Healthy = s.Healthy
+	if s.Healthy {
+		result.Status = "running"
+	}
+	result.Version = s.Version
+	result.Uptime = time.Duration(s.Uptime) * time.Second
+	if s.Storage != nil {
+		result.ImageCount = s.Storage.ImageCount
+		result.TotalSize = s.Storage.UsedBytes
+		result.StorageBackend = s.Storage.Backend
+		result.StorageStatus = "unhealthy"
+		if s.Storage.Healthy {
+			result.StorageStatus = "healthy"
+		}
+	}
+	if s.Attestation != nil {
+		result.AttestationEnabled = s.Attestation.Enabled
+	}
+	if s.Encryption != nil {
+		result.EncryptionEnabled = s.Encryption.Enabled
+	}
+	return result
 }
