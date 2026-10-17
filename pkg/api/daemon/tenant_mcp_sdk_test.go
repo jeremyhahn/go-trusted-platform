@@ -261,18 +261,18 @@ func TestSDKMCP_TenantMethods(t *testing.T) {
 			caller: parityTenantA,
 			method: platformv1.TenantService_CheckQuota_FullMethodName,
 			req: func(h *tenantParityHarness) proto.Message {
-				return &platformv1.CheckQuotaRequest{TenantId: h.id(parityTenantA), Resource: "vms", Amount: 1}
+				return &platformv1.CheckQuotaRequest{TenantId: h.id(parityTenantA), Resource: "vms", Amount: parityQuotaOverAsk}
 			},
 			resp: &platformv1.CheckQuotaResponse{},
 			check: func(t *testing.T, h *tenantParityHarness, resp proto.Message) {
 				r := resp.(*platformv1.CheckQuotaResponse)
 				require.Equal(t, h.id(parityTenantA), r.GetTenantId())
 				require.Equal(t, "vms", r.GetResource())
-				require.Equal(t, int64(1), r.GetAmount())
-				// The harness manager has no quota enforcer, so the answer is
-				// "not available" with its reason.
+				require.Equal(t, int64(parityQuotaOverAsk), r.GetAmount())
+				// No tenant can hold this many VMs, so the answer is "not
+				// available" with the exceeded quota as its reason.
 				require.False(t, r.GetAvailable())
-				require.Contains(t, r.GetMessage(), "quota enforcer not configured")
+				require.Contains(t, r.GetMessage(), "quota exceeded")
 			},
 		},
 		{

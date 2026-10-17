@@ -104,6 +104,13 @@ limits the request carries, so an absent section keeps its limits and
 Exceeding a quota is `ErrQuotaExceeded`; hitting a hard resource ceiling is
 `ErrResourceLimitReached`.
 
+**Without an enforcer the entity answers.** A manager built with no quota
+enforcer or usage tracker (the daemon's IAM-backed wiring) answers `CheckQuota`
+and `GetUsage` from the tenant entity's own limits and `Used*` counters. An
+unknown tenant is `ErrTenantNotFound` (`NotFound` on every transport), never an
+"available" or "not available" answer; only `ErrQuotaExceeded` becomes
+`available=false`.
+
 ## 4. Errors
 
 Typed structs, plus two sentinels:

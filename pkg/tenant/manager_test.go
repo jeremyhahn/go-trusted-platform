@@ -1905,18 +1905,36 @@ func TestGetUsage_NoUsageTracker(t *testing.T) {
 	manager, _ := newTestManager(t)
 	ctx := context.Background()
 
-	// GetUsage degrades gracefully when the optional quota subsystem is
-	// not wired: it returns an empty usage snapshot (no error) so that
-	// dashboards and admin tools can still render the page.
-	usage, err := manager.GetUsage(ctx, "test-tenant")
+	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{Name: "usage-entity-tenant"})
 	if err != nil {
-		t.Fatalf("expected no error when usage tracker not configured, got %v", err)
+		t.Fatalf("failed to create tenant: %v", err)
 	}
-	if usage == nil {
-		t.Fatal("expected non-nil usage snapshot")
+	cached, ok := manager.cache.Load(created.ID)
+	if !ok {
+		t.Fatalf("tenant %s not cached", created.ID)
 	}
-	if usage.TenantID != "test-tenant" {
-		t.Errorf("expected TenantID test-tenant, got %q", usage.TenantID)
+	entity := cached.(*TenantEntity)
+	entity.ComputeQuota.UsedVMs = 3
+	entity.StorageQuota.UsedSnapshots = 2
+
+	// Without a usage tracker the usage is the tenant entity's own counters.
+	usage, err := manager.GetUsage(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetUsage: %v", err)
+	}
+	if usage.TenantID != created.ID || usage.VMs != 3 || usage.Snapshots != 2 {
+		t.Errorf("usage = %+v, want tenant %s with 3 VMs and 2 snapshots", usage, created.ID)
+	}
+}
+
+func TestGetUsage_NoUsageTracker_UnknownTenant(t *testing.T) {
+	manager, _ := newTestManager(t)
+
+	_, err := manager.GetUsage(context.Background(), "no-such-tenant")
+
+	var notFound ErrTenantNotFound
+	if !errors.As(err, &notFound) {
+		t.Fatalf("GetUsage of an unknown tenant = %v, want ErrTenantNotFound", err)
 	}
 }
 
@@ -1978,14 +1996,51 @@ func TestCheckQuota_NoQuotaEnforcer(t *testing.T) {
 	manager, _ := newTestManager(t)
 	ctx := context.Background()
 
-	err := manager.CheckQuota(ctx, "test-tenant", quota.ResourceVMs, 1)
-	if err == nil {
-		t.Fatal("expected error when quota enforcer not configured")
+	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{Name: "quota-entity-tenant"})
+	if err != nil {
+		t.Fatalf("failed to create tenant: %v", err)
+	}
+	if err := manager.UpdateQuotas(ctx, created.ID, &TenantQuotas{
+		Compute: ComputeQuota{MaxVMs: 10},
+	}); err != nil {
+		t.Fatalf("UpdateQuotas: %v", err)
+	}
+	cached, ok := manager.cache.Load(created.ID)
+	if !ok {
+		t.Fatalf("tenant %s not cached", created.ID)
+	}
+	cached.(*TenantEntity).ComputeQuota.UsedVMs = 4
+
+	// Without a quota enforcer the check runs against the entity's limits.
+	if err := manager.CheckQuota(ctx, created.ID, quota.ResourceVMs, 6); err != nil {
+		t.Fatalf("CheckQuota within the limit: %v", err)
 	}
 
-	var invalidReq ErrInvalidRequest
-	if !errors.As(err, &invalidReq) {
-		t.Errorf("expected ErrInvalidRequest, got %T", err)
+	err = manager.CheckQuota(ctx, created.ID, quota.ResourceVMs, 7)
+	var exceeded ErrQuotaExceeded
+	if !errors.As(err, &exceeded) {
+		t.Fatalf("CheckQuota beyond the limit = %v, want ErrQuotaExceeded", err)
+	}
+	if exceeded.Available != 6 || exceeded.Requested != 7 {
+		t.Errorf("exceeded = %+v, want 6 available and 7 requested", exceeded)
+	}
+}
+
+func TestCheckQuota_NoQuotaEnforcer_Errors(t *testing.T) {
+	manager, _ := newTestManager(t)
+	ctx := context.Background()
+
+	var notFound ErrTenantNotFound
+	if err := manager.CheckQuota(ctx, "no-such-tenant", quota.ResourceVMs, 1); !errors.As(err, &notFound) {
+		t.Errorf("CheckQuota of an unknown tenant = %v, want ErrTenantNotFound", err)
+	}
+
+	var invalid ErrInvalidRequest
+	if err := manager.CheckQuota(ctx, "no-such-tenant", quota.ResourceType("bogus"), 1); !errors.As(err, &invalid) {
+		t.Errorf("CheckQuota of an unknown resource = %v, want ErrInvalidRequest", err)
+	}
+	if err := manager.CheckQuota(ctx, "no-such-tenant", quota.ResourceVMs, -1); !errors.As(err, &invalid) {
+		t.Errorf("CheckQuota of a negative amount = %v, want ErrInvalidRequest", err)
 	}
 }
 

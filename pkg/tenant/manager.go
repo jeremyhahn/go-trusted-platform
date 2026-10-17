@@ -761,25 +761,98 @@ func (m *Manager) UpdateQuotas(ctx context.Context, tenantID string, quotas *Ten
 }
 
 // GetUsage returns tenant resource usage. When the usage tracker is not
-// configured (e.g. on a daemon wired with IAM-only tenant management),
-// the manager returns a zero-valued TenantUsage rather than an error so
-// dashboards and admin tools can still render the page without the
-// optional quota subsystem online.
+// configured (a daemon wired with IAM-only tenant management), the usage is
+// the counters the tenant entity carries; an unknown tenant is
+// ErrTenantNotFound.
 func (m *Manager) GetUsage(ctx context.Context, tenantID string) (*quota.TenantUsage, error) {
-	if m.usageTracker == nil {
-		return &quota.TenantUsage{TenantID: tenantID, Timestamp: time.Now()}, nil
+	if m.usageTracker != nil {
+		return m.usageTracker.GetAllUsage(ctx, tenantID)
 	}
 
-	return m.usageTracker.GetAllUsage(ctx, tenantID)
+	entity, err := m.GetTenant(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	return entityUsage(entity), nil
 }
 
-// CheckQuota checks if a resource request can be fulfilled.
+// CheckQuota checks if a resource request can be fulfilled. Without a quota
+// enforcer it checks the request against the tenant entity's own limits and
+// usage: an unknown tenant is ErrTenantNotFound and a request beyond the
+// remaining capacity is ErrQuotaExceeded.
 func (m *Manager) CheckQuota(ctx context.Context, tenantID string, resource quota.ResourceType, amount int64) error {
-	if m.quotaEnforcer == nil {
-		return ErrInvalidRequest{Reason: "quota enforcer not configured"}
+	if m.quotaEnforcer != nil {
+		return m.quotaEnforcer.CheckQuota(ctx, tenantID, resource, amount)
 	}
 
-	return m.quotaEnforcer.CheckQuota(ctx, tenantID, resource, amount)
+	if !resource.IsValid() {
+		return ErrInvalidRequest{Reason: "invalid quota resource: " + string(resource)}
+	}
+	if amount < 0 {
+		return ErrInvalidRequest{Reason: "quota amount must not be negative"}
+	}
+
+	entity, err := m.GetTenant(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+
+	available := entityLimits(entity).GetLimit(resource) - entityUsage(entity).GetUsage(resource)
+	if amount > available {
+		return ErrQuotaExceeded{
+			TenantID:  tenantID,
+			Resource:  string(resource),
+			Requested: amount,
+			Available: available,
+		}
+	}
+
+	return nil
+}
+
+// entityUsage reports the usage counters the tenant entity carries beside
+// its limits (docs/tenant/engineering.md §3). The entity measures its volume
+// dimension in gigabytes and keeps no bandwidth counter.
+func entityUsage(entity *TenantEntity) *quota.TenantUsage {
+	return &quota.TenantUsage{
+		TenantID:   entity.ID,
+		VMs:        entity.ComputeQuota.UsedVMs,
+		Containers: entity.ComputeQuota.UsedContainers,
+		VCPUs:      entity.ComputeQuota.UsedVCPUs,
+		MemoryMB:   entity.ComputeQuota.UsedMemoryMB,
+		DiskGB:     entity.ComputeQuota.UsedDiskGB,
+		Bridges:    entity.NetworkQuota.UsedBridges,
+		Ports:      entity.NetworkQuota.UsedPorts,
+		Volumes:    entity.StorageQuota.UsedVolumesGB,
+		Snapshots:  entity.StorageQuota.UsedSnapshots,
+		Timestamp:  time.Now(),
+	}
+}
+
+// entityLimits reports the tenant entity's limits in the quota package's
+// shape, so a resource name resolves to its limit in one place.
+func entityLimits(entity *TenantEntity) *quota.TenantQuotas {
+	return &quota.TenantQuotas{
+		TenantID: entity.ID,
+		Compute: quota.ComputeQuota{
+			MaxVMs:        entity.ComputeQuota.MaxVMs,
+			MaxContainers: entity.ComputeQuota.MaxContainers,
+			MaxVCPUs:      entity.ComputeQuota.MaxVCPUs,
+			MaxMemoryMB:   entity.ComputeQuota.MaxMemoryMB,
+		},
+		Network: quota.NetworkQuota{
+			MaxBridges:       entity.NetworkQuota.MaxBridges,
+			MaxPorts:         entity.NetworkQuota.MaxPorts,
+			MaxBandwidthMbps: entity.NetworkQuota.MaxBandwidthMbps,
+		},
+		Storage: quota.StorageQuota{
+			MaxDiskGB:    entity.ComputeQuota.MaxDiskGB,
+			MaxVolumes:   entity.StorageQuota.MaxVolumesGB,
+			MaxSnapshots: entity.StorageQuota.MaxSnapshots,
+		},
+		UpdatedAt: entity.UpdatedAt,
+	}
 }
 
 // ReserveQuota reserves quota for a pending resource creation.
