@@ -200,9 +200,6 @@ retrying tightly.
 It does. `--force` re-initialises, and **every certificate the old CA issued
 becomes unverifiable**. This is not a retry flag.
 
-**Renew or verify is not available over REST.**
-Correct — neither has a REST route. Use the CLI, gRPC, QUIC or MCP.
-
 **`ca issue` and `acme register` disagree about SAN flags.**
 They do. `ca issue` takes `--sans-dns` / `--sans-ips` / `--sans-email` as
 comma-separated strings; `acme register` takes `--sans-dns` / `--sans-ip` /
