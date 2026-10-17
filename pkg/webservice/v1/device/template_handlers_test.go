@@ -437,6 +437,30 @@ func TestTemplateHandler_CreateProfileFromTemplate_MalformedBody(t *testing.T) {
 	assert.Empty(t, profileSvc.profiles)
 }
 
+// TestTemplateHandler_AssignProfileToDevice_StringProfileID verifies the
+// assign body accepts profile_id as a JSON string as well as a number
+// (api-conventions §3.4), the form the REST client sends; a string used to
+// fail the decode with 400 "cannot unmarshal".
+func TestTemplateHandler_AssignProfileToDevice_StringProfileID(t *testing.T) {
+	handler, profileSvc := newTestTemplateHandler()
+	profileSvc.profiles[100] = &entities.DeviceProfile{ID: 100, Name: "assign-me"}
+
+	rec := assignRequest(t, handler.AssignProfileToDevice, "100", map[string]interface{}{
+		"profile_id": "100",
+		"ek_serial":  "EK-STRING",
+	})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, "EK-STRING", profileSvc.profiles[100].EKSerial)
+
+	t.Run("NotAnID", func(t *testing.T) {
+		rec := assignRequest(t, handler.AssignProfileToDevice, "100", map[string]interface{}{
+			"profile_id": "not-a-number",
+			"ek_serial":  "EK-BAD",
+		})
+		assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	})
+}
+
 // TestTemplateHandler_AssignProfileToDevice_ByDeviceID pins the live REST
 // surface of assign-by-device (#463): the EK serial and prestaged
 // certificate derive on the server from the registered device, explicit
