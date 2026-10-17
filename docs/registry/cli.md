@@ -121,7 +121,9 @@ provenance matters, pass it — or pull through tooling that always does.
 
 The registry verifies the signature of every signed manifest on every pull,
 with or without `--verify` (§3), so a signed image that reaches the client has
-a signature that matched. `--verify` adds the other half: it refuses an image
+a signature that matched. Every pull also rehashes each layer and the config
+against the digests the manifest names, so blob bytes replaced in storage fail
+the pull with `ErrDigestMismatch`. `--verify` adds the other half: it refuses an image
 whose pulled manifest carries no `org.letstrust.registry.signature`
 annotation, failing with `ErrImageNotSigned` before any image byte is written.
 The check is made client-side because the pull request on the wire

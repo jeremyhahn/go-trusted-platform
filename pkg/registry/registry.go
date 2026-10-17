@@ -316,6 +316,9 @@ func (r *Registry) Push(ctx context.Context, ref string, image *Image, opts Push
 	if opts.SignImage && r.signer == nil {
 		return ErrSigningNotConfigured{Reference: ref}
 	}
+	if err := verifyImageBlobs(ref, image); err != nil {
+		return err
+	}
 
 	select {
 	case r.pushSemaphore <- struct{}{}:
@@ -380,20 +383,17 @@ func (r *Registry) Push(ctx context.Context, ref string, image *Image, opts Push
 
 	for i := range image.Layers {
 		l := &image.Layers[i]
-		if l.Digest == "" {
-			return ErrInvalidManifest{Reference: ref, Reason: "layer with empty digest"}
-		}
-		var blob []byte
+		blob := l.Content
+		var sameContent func([]byte) error
 		if opts.Encrypt {
 			env, err := encodeEncryptedLayer(&encLayers[i])
 			if err != nil {
 				return err
 			}
 			blob = env
-		} else {
-			blob = l.Content
+			sameContent = r.sealedCopyOf(ctx, l.Digest)
 		}
-		if err := r.storage.StoreBlob(ctx, l.Digest, blob); err != nil {
+		if err := r.storeBlob(ctx, l.Digest, blob, sameContent); err != nil {
 			return err
 		}
 	}
@@ -401,7 +401,7 @@ func (r *Registry) Push(ctx context.Context, ref string, image *Image, opts Push
 	// Persist the config blob if present so it survives independent of
 	// the manifest. The manifest references it by digest.
 	if len(image.Config) > 0 && image.Manifest.Config.Digest != "" {
-		if err := r.storage.StoreBlob(ctx, image.Manifest.Config.Digest, image.Config); err != nil {
+		if err := r.storeBlob(ctx, image.Manifest.Config.Digest, image.Config, nil); err != nil {
 			return err
 		}
 	}
@@ -481,6 +481,9 @@ func (r *Registry) Pull(ctx context.Context, ref string, opts PullOptions) (*Ima
 		if err != nil {
 			return nil, err
 		}
+		if err := verifyBlobDigest(manifest.Config.Digest, data); err != nil {
+			return nil, err
+		}
 		img.Config = data
 	}
 
@@ -497,6 +500,9 @@ func (r *Registry) Pull(ctx context.Context, ref string, opts PullOptions) (*Ima
 			return nil, err
 		}
 		if !encrypted {
+			if err := verifyBlobDigest(d.Digest, data); err != nil {
+				return nil, err
+			}
 			img.Layers = append(img.Layers, Layer{
 				Digest:    d.Digest,
 				MediaType: d.MediaType,
@@ -505,11 +511,7 @@ func (r *Registry) Pull(ctx context.Context, ref string, opts PullOptions) (*Ima
 			})
 			continue
 		}
-		encLayer, err := decodeEncryptedLayer(data)
-		if err != nil {
-			return nil, err
-		}
-		layer, err := r.encryptor.decryptLayer(ctx, encLayer)
+		layer, err := r.openSealedLayer(ctx, d.Digest, data)
 		if err != nil {
 			return nil, err
 		}

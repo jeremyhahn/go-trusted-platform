@@ -115,6 +115,14 @@ func (a *GRPCAdapter) pushImpl(ctx context.Context, metadata *grpcapi.RegistryPu
 		if errors.As(err, &ErrImageAlreadyExists{}) {
 			return nil, grpcapi.ErrArtifactAlreadyExists{Repository: metadata.Repository, Reference: metadata.Tag}
 		}
+		var mismatch ErrDigestMismatch
+		if errors.As(err, &mismatch) {
+			return nil, grpcapi.ErrInvalidArtifactDigest{Digest: mismatch.Expected}
+		}
+		var invalid ErrInvalidDigest
+		if errors.As(err, &invalid) {
+			return nil, grpcapi.ErrInvalidArtifactDigest{Digest: invalid.Digest}
+		}
 		return nil, err
 	}
 	return &grpcapi.RegistryPushResponse{
