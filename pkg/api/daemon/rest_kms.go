@@ -19,7 +19,6 @@ import (
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restkms "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
 
@@ -69,33 +68,4 @@ func (s *RESTServer) SetKMSHandlers(clients KMSRESTClients, guard *restapi.Scope
 			})).Methods(route.Method)
 	}
 	s.logger.Info("KMS REST routes registered")
-}
-
-// requireSystemScopeCaller admits a caller of the KMS REST routes only in the
-// system scope: one bound to no tenant, or to the system tenant. The routes
-// forward the request context to the embedded SDK, whose KMS and secrets
-// services pick their namespace from the go-quicbaas IAM tenant in that
-// context, and an absent one selects the system namespace. The SDK re-exports
-// no setter for that tenant (go-quicbaas pkg/iam/tenant_context.go:43 is not
-// under quicbaas/sdk/go, and the embedded transport's Request,
-// sdk/go/transport/embedded/transport.go:414, does not translate
-// sdk/go/transport.ContextWithTenant into it), so a tenant-bound caller would
-// read and write the system namespace. It is refused instead.
-func requireSystemScopeCaller(systemTenantID string, caller *platformtoken.AuthorizedContext) error {
-	if caller == nil || caller.TenantID == "" || tenant.IsSystemTenant(systemTenantID, caller.TenantID) {
-		return nil
-	}
-	return ErrKMSRESTTenantBound{TenantID: caller.TenantID}
-}
-
-// ErrKMSRESTTenantBound refuses a tenant-bound caller on the daemon KMS REST
-// routes, which can serve only the system scope (see requireSystemScopeCaller).
-type ErrKMSRESTTenantBound struct {
-	TenantID string
-}
-
-// Error implements the error interface.
-func (e ErrKMSRESTTenantBound) Error() string {
-	return "kms: tenant " + e.TenantID + " callers are refused on the KMS REST routes: " +
-		"the SDK cannot scope the request to the tenant, so it would run in the system namespace"
 }

@@ -40,6 +40,24 @@ func IsSystemTenant(systemTenantID, callerTenantID string) bool {
 	return systemTenantID != "" && callerTenantID == systemTenantID
 }
 
+// RequireSystemScope admits a caller of a surface that forwards its context to
+// the embedded SDK's KMS or secrets service only in the system scope: a caller
+// bound to no tenant, or to the system tenant. Those services pick their
+// namespace from the go-quicbaas IAM tenant in the context, and an absent one
+// selects the system namespace. The SDK re-exports no setter for that tenant
+// (go-quicbaas pkg/iam/tenant_context.go:43 is not under quicbaas/sdk/go, and
+// the embedded transport's Request, sdk/go/transport/embedded/transport.go:414,
+// does not translate sdk/go/transport.ContextWithTenant into it), so a
+// tenant-bound caller would read and write the system namespace. It is refused
+// with ErrSystemScopeOnly instead, the same error on every transport
+// (docs/kms/api.md §6).
+func RequireSystemScope(systemTenantID, callerTenantID string) error {
+	if callerTenantID == "" || IsSystemTenant(systemTenantID, callerTenantID) {
+		return nil
+	}
+	return ErrSystemScopeOnly{TenantID: callerTenantID}
+}
+
 // AuthorizeTenantAccess decides a request that names one tenant,
 // requestedID. The system tenant may act on any tenant; any other caller on
 // its own tenant only, and is refused with ErrTenantForbidden. A caller with

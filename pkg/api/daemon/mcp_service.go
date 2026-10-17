@@ -187,6 +187,9 @@ type MCPServiceProvider struct {
 	idevidService *IDevIDGRPCService
 	// appServices serves the cache_*, scheduler_* and messaging_* tools.
 	appServices mcp.AppServiceServers
+	// systemTenantID is the only tenant a caller of the secret_* tools may be
+	// bound to (tenant.RequireSystemScope).
+	systemTenantID string
 }
 
 // NewMCPServiceProvider creates a new MCPServiceProvider.
@@ -200,6 +203,7 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 	iam.SetSystemTenant(config.PlatformTenantID)
 
 	return &MCPServiceProvider{
+		systemTenantID:        config.PlatformTenantID,
 		caService:             config.CAService,
 		vtpmService:           config.VTPMService,
 		deviceService:         config.DeviceService,

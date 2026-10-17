@@ -17,16 +17,19 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restkms "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
 
@@ -112,7 +115,11 @@ func TestRESTServer_SetKMSHandlers_TenantBoundCallerNeverReachesTheSystemNamespa
 		t.Run("a tenant-bound token is refused on "+path, func(t *testing.T) {
 			w := serveTPMRoute(server, http.MethodGet, path, key.sign(t, "alice", "tenant-a", scopes))
 			assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
-			assert.Contains(t, w.Body.String(), ErrKMSRESTTenantBound{TenantID: "tenant-a"}.Error())
+			var body struct {
+				Error string `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+			assert.Equal(t, tenant.ErrSystemScopeOnly{TenantID: "tenant-a"}.Error(), body.Error)
 		})
 	}
 	assert.Zero(t, secrets.reads.Load(), "a tenant-bound read reached the SDK's system namespace")
@@ -148,7 +155,7 @@ func TestRequireSystemScopeCaller(t *testing.T) {
 				assert.NoError(t, err)
 				return
 			}
-			var bound ErrKMSRESTTenantBound
+			var bound tenant.ErrSystemScopeOnly
 			assert.ErrorAs(t, err, &bound)
 			assert.Equal(t, tt.tenantID, bound.TenantID)
 		})

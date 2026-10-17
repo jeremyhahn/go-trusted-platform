@@ -18,6 +18,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // TestAuthorizeNameLookup is the one rule every transport applies to a
@@ -72,6 +74,37 @@ func TestIsSystemTenant(t *testing.T) {
 		assert.False(t, IsSystemTenant("", ""))
 		assert.False(t, IsSystemTenant("", "tenant-a"))
 	})
+}
+
+// TestRequireSystemScope is the one rule every KMS/secrets transport applies
+// while the SDK cannot scope a request to a tenant (docs/kms/api.md §6).
+func TestRequireSystemScope(t *testing.T) {
+	t.Run("a caller bound to no tenant is admitted", func(t *testing.T) {
+		assert.NoError(t, RequireSystemScope("system", ""))
+	})
+
+	t.Run("the system tenant is admitted", func(t *testing.T) {
+		assert.NoError(t, RequireSystemScope("system", "system"))
+	})
+
+	t.Run("another tenant is refused", func(t *testing.T) {
+		err := RequireSystemScope("system", "tenant-a")
+		var refused ErrSystemScopeOnly
+		assert.True(t, errors.As(err, &refused))
+		assert.Equal(t, "tenant-a", refused.TenantID)
+	})
+
+	t.Run("an unset system tenant refuses every bound caller", func(t *testing.T) {
+		assert.Equal(t, ErrSystemScopeOnly{TenantID: "system"}, RequireSystemScope("", "system"))
+	})
+}
+
+func TestErrSystemScopeOnly_GRPCStatus(t *testing.T) {
+	err := ErrSystemScopeOnly{TenantID: "tenant-a"}
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Equal(t, err.Error(), status.Convert(err).Message())
+	assert.Contains(t, err.Error(), `"tenant-a"`)
+	assert.Contains(t, err.Error(), "system namespace")
 }
 
 // TestAuthorizeTenantAccess is the rule every transport applies to a request

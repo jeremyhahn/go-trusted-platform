@@ -160,6 +160,47 @@ func TestRequireTenant(t *testing.T) {
 	}
 }
 
+// TestRequireSystemScope proves the KMS/secrets surface admits only the
+// system tenant: a tenant admin, whose request the SDK would run in the
+// system namespace, is refused with the shared ErrSystemScopeOnly.
+func TestRequireSystemScope(t *testing.T) {
+	guard := newGuard(t)
+	tests := []struct {
+		name    string
+		system  string
+		session IAMSession
+		status  int
+	}{
+		{"system admin", "system", session("system", "admin"), http.StatusOK},
+		{"tenant admin is refused", "system", session("acme", "admin"), http.StatusForbidden},
+		{"no tenant on the session", "system", session("", "admin"), http.StatusForbidden},
+		{"no session", "system", nil, http.StatusUnauthorized},
+		{"unconfigured guard denies everyone", "", session("system", "admin"), http.StatusForbidden},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, reached := run(t, guard.RequireSystemScope(tt.system), tt.session)
+			assert.Equal(t, tt.status, status)
+			assert.Equal(t, tt.status == http.StatusOK, reached)
+		})
+	}
+}
+
+// TestRequireSystemScope_AnswersTheSharedError proves the refusal body is
+// tenant.ErrSystemScopeOnly, the wording every daemon transport uses.
+func TestRequireSystemScope_AnswersTheSharedError(t *testing.T) {
+	protected := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("a tenant-bound session reached the system-scope surface")
+	})
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req = req.WithContext(SetSessionInContext(req.Context(), session("acme", "admin")))
+	rec := httptest.NewRecorder()
+	newGuard(t).RequireSystemScope("system")(protected).ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Contains(t, rec.Body.String(), "the SDK cannot scope the request to the tenant")
+}
+
 // TestAuthMiddlewarePromotesGuard proves AuthMiddleware's RBAC surface is
 // the guard's implementation, not a second copy of it.
 func TestAuthMiddlewarePromotesGuard(t *testing.T) {

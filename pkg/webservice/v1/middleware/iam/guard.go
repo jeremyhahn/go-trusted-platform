@@ -141,6 +141,46 @@ func (g *SessionGuard) RequireTenant(tenantID string) func(http.Handler) http.Ha
 	}
 }
 
+// RequireSystemScope returns a middleware that admits only a session of the
+// system tenant, for a surface whose SDK service cannot be scoped to the
+// caller's tenant (tenant.RequireSystemScope, docs/kms/api.md §6). A
+// tenant-bound session is refused with tenant.ErrSystemScopeOnly, the error
+// every daemon transport answers the same caller with. A session that names
+// no tenant is refused too: an HTTP session is always an IAM user's, so an
+// empty tenant is a malformed session, not the tenant-less Unix operator the
+// shared check admits.
+func (g *SessionGuard) RequireSystemScope(systemTenantID string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if systemTenantID == "" {
+				g.logger.Error(ErrForbidden{Reason: "system scope guard is unconfigured"},
+					"iam/guard: RequireSystemScope mounted without a system tenant; denying")
+				g.responseWriter.Error403(w, r, ErrForbidden{
+					Reason: "system scope guard is unconfigured",
+				}, nil)
+				return
+			}
+			session, ok := g.session(w, r)
+			if !ok {
+				return
+			}
+			if session.TenantID() == "" {
+				g.responseWriter.Error403(w, r, ErrForbidden{
+					Reason: "session carries no tenant",
+				}, nil)
+				return
+			}
+			if err := tenant.RequireSystemScope(systemTenantID, session.TenantID()); err != nil {
+				g.logger.Debugf("iam/guard: tenant %q refused a system-scope surface",
+					session.TenantID())
+				g.responseWriter.Error403(w, r, err, nil)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // RequireOwnTenantOrSystem returns a middleware that admits a request naming
 // a tenant when EITHER the caller's own tenant is the one named, OR the
 // caller is the system tenant.

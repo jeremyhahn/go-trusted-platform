@@ -272,15 +272,29 @@ caller without it is refused 403. A daemon with no authorization configured
 refuses every route. The routes call the SDK clients the KMS gRPC services
 call, so a key made over any transport is the one REST sees.
 
-These routes serve the system scope only. A caller bound to a tenant other
-than the system tenant is refused 403 (`ErrKMSRESTTenantBound`) even when it
-holds the scope: the embedded SDK picks the key and secret namespace from the
-go-quicbaas IAM tenant in the request context, the SDK re-exports no setter
-for it, and an absent tenant selects the system namespace, so the request
-would otherwise read and write system keys and secrets. A caller bound to no
-tenant, or to the system tenant, is served. SDK gap: go-quicbaas
-`pkg/iam/tenant_context.go:43` (`ContextWithTenant`) is not under
-`quicbaas/sdk/go`, and the embedded transport's `Request`
+The secrets surface, and both REST mounts of the whole KMS router, serve the
+system scope only. A caller bound to a tenant other than the system tenant is
+refused even when it holds the role or scope: the embedded SDK picks the key
+and secret namespace from the go-quicbaas IAM tenant in the request context,
+the SDK re-exports no setter for it, and an absent tenant selects the system
+namespace, so the request would otherwise read and write system keys and
+secrets. A caller bound to no tenant (the Unix-socket operator), or to the
+system tenant, is served; on the webservice an HTTP session always belongs to
+an IAM user, so a session naming no tenant is refused too.
+
+One check decides it, `tenant.RequireSystemScope`, and every transport answers
+the same typed error, `tenant.ErrSystemScopeOnly`, before the SDK is called:
+
+| Transport | Where | Refusal |
+|-----------|-------|---------|
+| Webservice REST | `SessionGuard.RequireSystemScope` on the KMS router mount | 403 |
+| Daemon REST | `pkg/api/daemon/rest_kms.go` | 403 |
+| gRPC, Unix | `SecretsServerAdapter` | `PermissionDenied` |
+| QUIC | the secrets category handlers | `StatusPermissionDenied` |
+| MCP | the `secret_*` tools | `PermissionDenied` |
+
+SDK gap: go-quicbaas `pkg/iam/tenant_context.go:43` (`ContextWithTenant`) is
+not under `quicbaas/sdk/go`, and the embedded transport's `Request`
 (`sdk/go/transport/embedded/transport.go:414`) does not carry
 `sdk/go/transport.ContextWithTenant` into it.
 

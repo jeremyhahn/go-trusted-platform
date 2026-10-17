@@ -17,6 +17,9 @@ package tenant
 
 import (
 	"fmt"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // ErrTenantExists is returned when attempting to create a tenant that already exists.
@@ -196,6 +199,24 @@ type ErrTenantForbidden struct {
 
 func (e ErrTenantForbidden) Error() string {
 	return fmt.Sprintf("tenant request names tenant %q: caller may not act on another tenant", e.Requested)
+}
+
+// ErrSystemScopeOnly refuses a tenant-bound caller on a surface that can serve
+// only the system scope (RequireSystemScope): the KMS and secrets surfaces,
+// whose SDK cannot be scoped to the caller's tenant.
+type ErrSystemScopeOnly struct {
+	TenantID string
+}
+
+func (e ErrSystemScopeOnly) Error() string {
+	return fmt.Sprintf("tenant %q callers are refused: the SDK cannot scope the request to the tenant, "+
+		"so it would run in the system namespace", e.TenantID)
+}
+
+// GRPCStatus classifies the error as PermissionDenied, so gRPC, Unix, QUIC and
+// MCP answer the refusal as REST's 403.
+func (e ErrSystemScopeOnly) GRPCStatus() *status.Status {
+	return status.New(codes.PermissionDenied, e.Error())
 }
 
 // ErrTenantSystemOnly is returned when a caller other than the system tenant

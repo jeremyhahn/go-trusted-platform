@@ -344,9 +344,19 @@ func (p *MCPServiceProvider) KMSBackendStatus(ctx context.Context) (interface{},
 }
 
 // SecretStore stores a secret via the quicbaas secrets service.
-func (p *MCPServiceProvider) SecretStore(ctx context.Context, req *mcp.SecretStoreRequest) (interface{}, error) {
+// admitSecrets refuses a secret_* tool call the provider cannot serve: one
+// with no secrets service, or one from a tenant-bound caller
+// (requireSystemScopeContext), refused as gRPC, Unix, QUIC and REST refuse it.
+func (p *MCPServiceProvider) admitSecrets(ctx context.Context) error {
 	if p.secretsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "secrets"}
+		return ErrServiceNotAvailable{Service: "secrets"}
+	}
+	return requireSystemScopeContext(ctx, p.systemTenantID)
+}
+
+func (p *MCPServiceProvider) SecretStore(ctx context.Context, req *mcp.SecretStoreRequest) (interface{}, error) {
+	if err := p.admitSecrets(ctx); err != nil {
+		return nil, err
 	}
 	if req == nil || req.SecretID == "" {
 		return nil, ErrKMSInvalidParameter{Parameter: "secret_id", Reason: "secret ID is required"}
@@ -371,8 +381,8 @@ func (p *MCPServiceProvider) SecretStore(ctx context.Context, req *mcp.SecretSto
 
 // SecretGet retrieves a secret, optionally at a specific version.
 func (p *MCPServiceProvider) SecretGet(ctx context.Context, secretID string, version uint64) (interface{}, error) {
-	if p.secretsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "secrets"}
+	if err := p.admitSecrets(ctx); err != nil {
+		return nil, err
 	}
 	if secretID == "" {
 		return nil, ErrKMSInvalidParameter{Parameter: "secret_id", Reason: "secret ID is required"}
@@ -391,8 +401,8 @@ func (p *MCPServiceProvider) SecretGet(ctx context.Context, secretID string, ver
 
 // SecretList lists secrets without exposing secret data.
 func (p *MCPServiceProvider) SecretList(ctx context.Context, limit int) (interface{}, error) {
-	if p.secretsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "secrets"}
+	if err := p.admitSecrets(ctx); err != nil {
+		return nil, err
 	}
 
 	resp, err := p.secretsService.ListSecrets(ctx, &baasservice.ListSecretsRequest{Limit: limit})
@@ -405,8 +415,8 @@ func (p *MCPServiceProvider) SecretList(ctx context.Context, limit int) (interfa
 
 // SecretDelete deletes a secret.
 func (p *MCPServiceProvider) SecretDelete(ctx context.Context, secretID string) error {
-	if p.secretsService == nil {
-		return ErrServiceNotAvailable{Service: "secrets"}
+	if err := p.admitSecrets(ctx); err != nil {
+		return err
 	}
 	if secretID == "" {
 		return ErrKMSInvalidParameter{Parameter: "secret_id", Reason: "secret ID is required"}
@@ -423,8 +433,8 @@ func (p *MCPServiceProvider) SecretDelete(ctx context.Context, secretID string) 
 // SecretSetRotationPolicy sets the automatic rotation policy for a secret,
 // including the number of old versions to retain after rotation.
 func (p *MCPServiceProvider) SecretSetRotationPolicy(ctx context.Context, req *mcp.SecretSetRotationPolicyRequest) (interface{}, error) {
-	if p.secretsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "secrets"}
+	if err := p.admitSecrets(ctx); err != nil {
+		return nil, err
 	}
 	if req == nil || req.SecretID == "" {
 		return nil, ErrKMSInvalidParameter{Parameter: "secret_id", Reason: "secret ID is required"}
@@ -448,8 +458,8 @@ func (p *MCPServiceProvider) SecretSetRotationPolicy(ctx context.Context, req *m
 
 // SecretGetRotationPolicy retrieves the automatic rotation policy for a secret.
 func (p *MCPServiceProvider) SecretGetRotationPolicy(ctx context.Context, secretID string) (interface{}, error) {
-	if p.secretsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "secrets"}
+	if err := p.admitSecrets(ctx); err != nil {
+		return nil, err
 	}
 	if secretID == "" {
 		return nil, ErrKMSInvalidParameter{Parameter: "secret_id", Reason: "secret ID is required"}

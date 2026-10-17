@@ -25,6 +25,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
@@ -274,4 +276,52 @@ func TestHandleSecretsCategoryDispatch(t *testing.T) {
 		resp := handler.HandleRequest(ctx, req)
 		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
+}
+
+// quicSecretsRequests is one request per secrets sub-operation.
+func quicSecretsRequests(t *testing.T) map[string]*quicwire.Request {
+	t.Helper()
+	return map[string]*quicwire.Request{
+		"Store": kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubStore,
+			&SecretsStoreRequest{SecretID: "db/password", Data: []byte("hunter2")}),
+		"Get": kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubGet,
+			&SecretsGetRequest{SecretID: "db/password"}),
+		"List": kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubList, nil),
+		"Delete": kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubDelete,
+			&SecretsDeleteRequest{SecretID: "db/password"}),
+		"SetRotationPolicy": kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubSetRotationPolicy,
+			&SecretsSetRotationPolicyRequest{SecretID: "db/password", Policy: &SecretsRotationPolicyPayload{Enabled: true}}),
+		"GetRotationPolicy": kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubGetRotationPolicy,
+			&SecretsGetRotationPolicyRequest{SecretID: "db/password"}),
+	}
+}
+
+func newScopedQUICSecretsHandler() (*QUICServiceHandler, *countingSecretsClient) {
+	adapter, client := newScopedSecretsAdapter()
+	handler := newTestQUICServiceHandler(logging.DefaultLogger())
+	handler.SetSecretsService(adapter)
+	return handler, client
+}
+
+func quicTenantContext(tenantID string) context.Context {
+	return quic.ContextWithAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{TenantID: tenantID})
+}
+
+func TestHandleSecretsCategory_TenantBoundCallerNeverReachesTheSystemNamespace(t *testing.T) {
+	handler, client := newScopedQUICSecretsHandler()
+	for op, req := range quicSecretsRequests(t) {
+		resp := handler.handleSecretsCategory(quicTenantContext("tenant-a"), req)
+		assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status, op)
+	}
+	assert.Zero(t, client.calls.Load(), "a tenant-bound QUIC caller reached the SDK")
+}
+
+func TestHandleSecretsCategory_SystemCallerReachesTheSDK(t *testing.T) {
+	handler, client := newScopedQUICSecretsHandler()
+	requests := quicSecretsRequests(t)
+	for op, req := range requests {
+		resp := handler.handleSecretsCategory(quicTenantContext("platform"), req)
+		assert.Equal(t, quicwire.StatusOK, resp.Status, op)
+	}
+	assert.Equal(t, int32(len(requests)), client.calls.Load())
 }
