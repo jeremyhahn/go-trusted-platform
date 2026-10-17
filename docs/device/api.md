@@ -1457,12 +1457,13 @@ mTLS client certificate and no scope.
 | `provisioning:read` | `GET /provisioning/sessions`, `GET /provisioning/sessions/{sessionID}` | `ConfigDeliveryService/ListSessions`, `GetSession` |
 | `provisioning:write` | `POST /provisioning/sessions/{sessionID}/fulfill` | `ConfigDeliveryService/FulfillSession` |
 
-The template routes `GET /device/templates`, `GET /device/templates/name/{name}`
-and `GET /device/templates/{id}` take `device:read`, `PUT /device/templates/{id}`
-`device:write` and `DELETE /device/templates/{id}` `device:delete`. They are
-REST-only, with no gRPC catalog entry, and take the device resource's action
-so that a token which cannot create a template cannot rewrite or remove one
-either. The machine-facing routes (`/device/{profile,activate,heartbeat}`,
+The template routes `GET /device/templates` and `GET /device/templates/{id}`
+take `device:read` (gRPC `ListTemplates`, `GetTemplate`),
+`PUT /device/templates/{id}` `device:write` (`UpdateTemplate`) and
+`DELETE /device/templates/{id}` `device:delete` (`DeleteTemplate`).
+`GET /device/templates/name/{name}` takes `device:read` and is REST-only. They
+take the device resource's action so that a token which cannot create a
+template cannot rewrite or remove one either. The machine-facing routes (`/device/{profile,activate,heartbeat}`,
 `/device/boot*`, the EAB provisioning routes and the session poll) are on the
 ungated router and take no scope (§4.6, §5).
 
