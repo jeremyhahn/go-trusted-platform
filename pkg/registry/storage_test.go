@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -1114,86 +1115,54 @@ func TestListManifests_StorageError(t *testing.T) {
 	}
 }
 
-func TestListManifests_WithRepository(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-
-	ctx := context.Background()
-
-	// Store manifests in different repositories
+// TestListManifests_Filters pins the filters docs/registry/cli.md §2
+// documents: Repository is an exact repository name, Prefix alone is a
+// repository-name prefix, and Prefix with Repository is a tag prefix. Both
+// filters used to scan "<namespace>/<repository>" while manifests are keyed
+// "<namespace>/manifests/<reference>", so any filter matched nothing.
+func TestListManifests_Filters(t *testing.T) {
 	refs := []string{
-		"myrepo/image1:latest",
-		"myrepo/image2:v1",
-		"otherrepo/image:latest",
-	}
-	for _, ref := range refs {
-		manifest := &ImageManifest{SchemaVersion: 2}
-		_ = storage.StoreManifest(ctx, ref, manifest)
-	}
-
-	// List with repository filter
-	result, err := storage.ListManifests(ctx, ListOptions{Repository: "myrepo"})
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-	// Note: The actual filtering logic depends on how the mock client implements List
-	// This test exercises the Repository option path
-	if result == nil {
-		t.Fatal("expected non-nil result")
-	}
-}
-
-func TestListManifests_WithPrefix(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-
-	ctx := context.Background()
-
-	// Store manifests with different prefixes
-	refs := []string{
-		"app/image1:latest",
-		"app/image2:v1",
+		"apps/web:latest",
+		"apps/web:v1",
+		"apps/webapp:v1",
 		"other/image:latest",
 	}
-	for _, ref := range refs {
-		manifest := &ImageManifest{SchemaVersion: 2}
-		_ = storage.StoreManifest(ctx, ref, manifest)
+	tests := []struct {
+		name string
+		opts ListOptions
+		want []string
+	}{
+		{"no filter", ListOptions{}, refs},
+		{"repository", ListOptions{Repository: "apps/web"}, []string{"apps/web:latest", "apps/web:v1"}},
+		{"repository prefix", ListOptions{Prefix: "apps/"}, []string{"apps/web:latest", "apps/web:v1", "apps/webapp:v1"}},
+		{"tag prefix", ListOptions{Repository: "apps/web", Prefix: "v"}, []string{"apps/web:v1"}},
+		{"unknown repository", ListOptions{Repository: "apps"}, nil},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			storage, err := NewQuicBaaSStorage(newMockStorageClient())
+			if err != nil {
+				t.Fatalf("NewQuicBaaSStorage: %v", err)
+			}
+			ctx := context.Background()
+			for _, ref := range refs {
+				if err := storage.StoreManifest(ctx, ref, &ImageManifest{SchemaVersion: 2}); err != nil {
+					t.Fatalf("StoreManifest(%s): %v", ref, err)
+				}
+			}
 
-	// List with prefix filter
-	result, err := storage.ListManifests(ctx, ListOptions{Prefix: "app"})
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-	if result == nil {
-		t.Fatal("expected non-nil result")
-	}
-}
-
-func TestListManifests_WithRepositoryAndPrefix(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-
-	ctx := context.Background()
-
-	// Store manifests
-	refs := []string{
-		"myrepo/app/image1:latest",
-		"myrepo/app/image2:v1",
-		"myrepo/other/image:latest",
-	}
-	for _, ref := range refs {
-		manifest := &ImageManifest{SchemaVersion: 2}
-		_ = storage.StoreManifest(ctx, ref, manifest)
-	}
-
-	// List with both repository and prefix filter
-	result, err := storage.ListManifests(ctx, ListOptions{Repository: "myrepo", Prefix: "app"})
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-	if result == nil {
-		t.Fatal("expected non-nil result")
+			result, err := storage.ListManifests(ctx, tt.opts)
+			if err != nil {
+				t.Fatalf("ListManifests: %v", err)
+			}
+			var got []string
+			for _, m := range result.Manifests {
+				got = append(got, m.Reference)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("references = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

@@ -125,8 +125,12 @@ func (a *GRPCAdapter) pushImpl(ctx context.Context, metadata *grpcapi.RegistryPu
 		}
 		return nil, err
 	}
+	artifact, err := a.manifestToArtifact(metadata.Repository, metadata.Tag, img.Manifest)
+	if err != nil {
+		return nil, err
+	}
 	return &grpcapi.RegistryPushResponse{
-		Artifact:      a.manifestToArtifact(metadata.Repository, metadata.Tag, img.Manifest),
+		Artifact:      artifact,
 		BytesReceived: int64(len(payload)),
 		Timestamp:     a.clock().UTC(),
 	}, nil
@@ -163,8 +167,12 @@ func (a *GRPCAdapter) Pull(ctx context.Context, req *grpcapi.RegistryPullRequest
 	if err != nil {
 		return nil, err
 	}
+	artifact, err := a.manifestToArtifact(req.Repository, req.Reference, img.Manifest)
+	if err != nil {
+		return nil, err
+	}
 	return &grpcapi.RegistryPullResponse{
-		Artifact:  a.manifestToArtifact(req.Repository, req.Reference, img.Manifest),
+		Artifact:  artifact,
 		TotalSize: int64(len(data)),
 		Data:      data,
 	}, nil
@@ -208,7 +216,11 @@ func (a *GRPCAdapter) List(ctx context.Context, req *grpcapi.RegistryListRequest
 		if endsWithSha256Sentinel(repo) && isHex64(tag) {
 			continue
 		}
-		artifacts = append(artifacts, a.manifestToArtifact(repo, tag, m))
+		artifact, err := a.manifestToArtifact(repo, tag, m)
+		if err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, artifact)
 	}
 	return &grpcapi.RegistryListResponse{
 		Artifacts: artifacts,
@@ -230,7 +242,10 @@ func (a *GRPCAdapter) Inspect(ctx context.Context, req *grpcapi.RegistryInspectR
 	if err != nil {
 		return nil, a.mapPullError(req.Repository, req.Reference, err)
 	}
-	art := a.manifestToArtifact(req.Repository, req.Reference, img.Manifest)
+	art, err := a.manifestToArtifact(req.Repository, req.Reference, img.Manifest)
+	if err != nil {
+		return nil, err
+	}
 	detail := &grpcapi.RegistryArtifactDetail{
 		Artifact: art,
 		Tags:     []string{req.Reference},
@@ -316,9 +331,13 @@ func (a *GRPCAdapter) Status(ctx context.Context) (*grpcapi.RegistryStatusRespon
 // manifestToArtifact projects an ImageManifest into the artifact
 // shape the gRPC contract speaks. Sizes are summed from layers since
 // the manifest doesn't carry a top-level size today.
-func (a *GRPCAdapter) manifestToArtifact(repository, tag string, m *ImageManifest) *grpcapi.RegistryArtifact {
+func (a *GRPCAdapter) manifestToArtifact(repository, tag string, m *ImageManifest) (*grpcapi.RegistryArtifact, error) {
 	if m == nil {
-		return &grpcapi.RegistryArtifact{Repository: repository, Tag: tag}
+		return &grpcapi.RegistryArtifact{Repository: repository, Tag: tag}, nil
+	}
+	digest, err := artifactDigest(m)
+	if err != nil {
+		return nil, err
 	}
 	var size int64
 	layers := make([]*grpcapi.RegistryArtifactLayer, 0, len(m.Layers))
@@ -334,6 +353,7 @@ func (a *GRPCAdapter) manifestToArtifact(repository, tag string, m *ImageManifes
 	return &grpcapi.RegistryArtifact{
 		Repository: repository,
 		Tag:        tag,
+		Digest:     digest,
 		Type:       grpcapi.ArtifactTypeContainerImage,
 		State:      grpcapi.ArtifactStateAvailable,
 		Size:       size,
@@ -346,7 +366,17 @@ func (a *GRPCAdapter) manifestToArtifact(repository, tag string, m *ImageManifes
 		CreatedAt:   m.CreatedAt,
 		UpdatedAt:   m.UpdatedAt,
 		PushedAt:    m.CreatedAt,
+	}, nil
+}
+
+// artifactDigest is the OCI digest of m as the registry serves it: the
+// SHA-256 of the manifest bytes GET /v2/<name>/manifests/<tag> returns.
+func artifactDigest(m *ImageManifest) (string, error) {
+	body, err := encodeOCIManifest(m)
+	if err != nil {
+		return "", err
 	}
+	return sha256Digest(body), nil
 }
 
 // mapPullError converts public Registry errors into the artifact-

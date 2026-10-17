@@ -77,6 +77,62 @@ func TestGRPCAdapter_PushPullRoundTripsLayerContent(t *testing.T) {
 	}
 }
 
+// TestGRPCAdapter_ArtifactsCarryTheServedManifestDigest pins the artifact
+// digest every transport reports: push, pull, list and inspect all return the
+// digest GET /v2/<name>/manifests/<tag> serves for the stored manifest. The
+// artifact used to carry no digest at all.
+func TestGRPCAdapter_ArtifactsCarryTheServedManifestDigest(t *testing.T) {
+	r := newTestRegistry(t)
+	a := NewGRPCAdapter(r)
+	ctx := context.Background()
+
+	meta := &grpcapi.RegistryPushMetadata{Repository: "apps/web", Tag: "v1"}
+	pushed, err := a.PushStream(ctx, meta, bytes.NewReader(pushEnvelope(t, []byte("layer-one"))))
+	if err != nil {
+		t.Fatalf("PushStream: %v", err)
+	}
+	_, body, err := r.GetManifest(ctx, "apps/web", "v1")
+	if err != nil {
+		t.Fatalf("GetManifest: %v", err)
+	}
+	want := sha256Digest(body)
+
+	pulled, err := a.Pull(ctx, &grpcapi.RegistryPullRequest{Repository: "apps/web", Reference: "v1"})
+	if err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+	inspected, err := a.Inspect(ctx, &grpcapi.RegistryInspectRequest{Repository: "apps/web", Reference: "v1"})
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	listed, err := a.List(ctx, &grpcapi.RegistryListRequest{Repository: "apps/web"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(listed.Artifacts) != 1 {
+		t.Fatalf("List returned %d artifacts, want 1", len(listed.Artifacts))
+	}
+
+	for name, got := range map[string]string{
+		"push":    pushed.Artifact.Digest,
+		"pull":    pulled.Artifact.Digest,
+		"inspect": inspected.Detail.Artifact.Digest,
+		"list":    listed.Artifacts[0].Digest,
+	} {
+		if got != want {
+			t.Errorf("%s artifact digest = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// TestArtifactDigest_RefusesANilManifest asserts there is no digest to
+// report for a manifest that does not exist.
+func TestArtifactDigest_RefusesANilManifest(t *testing.T) {
+	if digest, err := artifactDigest(nil); err == nil {
+		t.Fatalf("artifactDigest(nil) = %q, want an error", digest)
+	}
+}
+
 // TestGRPCAdapter_PushRejectsAnEnvelopeWithoutAManifest asserts a payload
 // that decodes but carries no manifest is refused with ErrInvalidManifest.
 func TestGRPCAdapter_PushRejectsAnEnvelopeWithoutAManifest(t *testing.T) {

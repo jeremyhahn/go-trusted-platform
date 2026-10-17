@@ -15,6 +15,7 @@ package registry
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -105,8 +106,6 @@ Examples:
 // runList executes the list command. prefix narrows results client-side and
 // showEncrypted toggles whether encrypted images appear in the output.
 func runList(flags *cli.CommonFlags, repository, prefix string, limit int32, cursor, sortBy string, sortDesc, showEncrypted bool) error {
-	_ = prefix
-	_ = showEncrypted
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
 		return err
@@ -123,6 +122,7 @@ func runList(flags *cli.CommonFlags, repository, prefix string, limit int32, cur
 
 	// Convert response to our result type
 	result := convertListDomainResponse(resp)
+	filterListResult(result, repository, prefix, showEncrypted)
 
 	printer := base.Printer()
 
@@ -178,6 +178,8 @@ func convertListDomainResponse(resp *regsvc.ListArtifactsResult) *ListResult {
 			Reference:   buildReference(artifact.Repository, artifact.Tag),
 			Digest:      artifact.Digest,
 			Size:        artifact.Size,
+			Encrypted:   artifact.Annotations[regsvc.ManifestAnnotationEncrypted] == "true",
+			Signed:      artifact.Annotations[regsvc.ManifestAnnotationSignature] != "",
 			Annotations: artifact.Annotations,
 			LayerCount:  artifact.LayerCount,
 			CreatedAt:   artifact.CreatedAt,
@@ -192,6 +194,34 @@ func convertListDomainResponse(resp *regsvc.ListArtifactsResult) *ListResult {
 	}
 
 	return result
+}
+
+// filterListResult applies the client-side list filters to one page of
+// results. prefix narrows the repository name, or the tag when a repository
+// is named; showEncrypted false drops encrypted images. TotalCount drops by
+// the number of images filtered out of this page.
+func filterListResult(result *ListResult, repository, prefix string, showEncrypted bool) {
+	kept := result.Images[:0]
+	for _, img := range result.Images {
+		if img.Encrypted && !showEncrypted {
+			continue
+		}
+		if !strings.HasPrefix(listFilterSubject(img.Reference, repository), prefix) {
+			continue
+		}
+		kept = append(kept, img)
+	}
+	result.TotalCount -= len(result.Images) - len(kept)
+	result.Images = kept
+}
+
+// listFilterSubject is the part of reference a --prefix filter matches: the
+// tag when a repository is named, the whole reference otherwise.
+func listFilterSubject(reference, repository string) string {
+	if repository == "" {
+		return reference
+	}
+	return strings.TrimPrefix(reference, repository+":")
 }
 
 // buildReference builds a full image reference from repository and tag

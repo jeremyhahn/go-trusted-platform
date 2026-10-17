@@ -367,13 +367,12 @@ func (s *QuicBaaSStorage) ListManifests(ctx context.Context, opts ListOptions) (
 		return nil, ErrRegistryClosed{}
 	}
 
-	// Build prefix for listing
-	prefix := s.namespace
+	// Manifests are keyed by "<repository>:<tag>": Repository names one
+	// repository exactly, and Prefix narrows the repository name, or the
+	// tag when a repository is named.
+	prefix := s.manifestKey(opts.Prefix)
 	if opts.Repository != "" {
-		prefix = s.namespace + "/" + opts.Repository
-	}
-	if opts.Prefix != "" {
-		prefix = prefix + "/" + opts.Prefix
+		prefix = s.manifestKey(opts.Repository + ":" + opts.Prefix)
 	}
 
 	limit := opts.Limit
