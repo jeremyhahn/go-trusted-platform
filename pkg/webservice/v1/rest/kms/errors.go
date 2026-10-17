@@ -70,3 +70,14 @@ type ErrDataKeySizeNotCarried struct {
 func (e *ErrDataKeySizeNotCarried) Error() string {
 	return fmt.Sprintf("invalid kms request: key_size: a %d-bit data key is not supported over REST, which mints only 256-bit data keys", e.Bits)
 }
+
+// ErrSecretValueMalformed reports a stored secret value that is not the
+// standard base64 text the secrets backend keeps for a value the platform
+// stored, so the caller's bytes cannot be recovered from it.
+type ErrSecretValueMalformed struct {
+	Path string
+}
+
+func (e *ErrSecretValueMalformed) Error() string {
+	return fmt.Sprintf("secret %q: stored value is not base64", e.Path)
+}

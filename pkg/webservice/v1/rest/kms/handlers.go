@@ -15,10 +15,12 @@ package kms
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1233,19 +1235,57 @@ func (h *Handlers) ListSecrets(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureSecrets(w, r) {
 		return
 	}
-	prefix := r.URL.Query().Get("prefix")
-	ctx, cancel := h.ctx(r)
-	defer cancel()
-	resp, err := h.secrets.List(ctx, prefix)
+	query := r.URL.Query()
+	limit, err := parseListLimit(query.Get("limit"))
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
-	out := &ListSecretsResponse{Secrets: make([]SecretSummary, 0, len(resp.Paths))}
-	for _, path := range resp.Paths {
+	ctx, cancel := h.ctx(r)
+	defer cancel()
+	resp, err := h.secrets.List(ctx, query.Get("prefix"))
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	page, next := pageSecretPaths(resp.Paths, query.Get("cursor"), limit)
+	out := &ListSecretsResponse{Secrets: make([]SecretSummary, 0, len(page)), NextCursor: next}
+	for _, path := range page {
 		out.Secrets = append(out.Secrets, SecretSummary{Path: path})
 	}
 	h.success200(w, r, out)
+}
+
+// parseListLimit reads the ?limit= page size. An absent limit is 0, which
+// means every path; anything else must be a positive integer.
+func parseListLimit(raw string) (int, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit < 1 {
+		return 0, &ErrInvalidRequest{Field: "limit", Reason: "must be a positive integer"}
+	}
+	return limit, nil
+}
+
+// pageSecretPaths sorts the paths, keeps those after cursor, and returns
+// at most limit of them (all of them when limit is 0). next is the last
+// returned path when more follow, and empty on the final page.
+func pageSecretPaths(paths []string, cursor string, limit int) (page []string, next string) {
+	sorted := slices.Clone(paths)
+	slices.Sort(sorted)
+	if cursor != "" {
+		start, found := slices.BinarySearch(sorted, cursor)
+		if found {
+			start++
+		}
+		sorted = sorted[start:]
+	}
+	if limit == 0 || len(sorted) <= limit {
+		return sorted, ""
+	}
+	return sorted[:limit], sorted[limit-1]
 }
 
 // GetSecret handles GET /api/v1/kms/secrets/{name}.
@@ -1260,20 +1300,18 @@ func (h *Handlers) GetSecret(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
+	value, err := decodeStoredSecretValue(s.Path, s.Data["value"])
+	if err != nil {
+		h.respWriter.Error500(w, r, err)
+		return
+	}
 	out := &SecretResponse{
 		Path:      s.Path,
+		Value:     value,
 		Version:   s.Version,
 		Tags:      s.Metadata,
 		CreatedAt: s.CreatedAt,
 		UpdatedAt: s.CreatedAt,
-	}
-	if v, ok := s.Data["value"]; ok {
-		switch typed := v.(type) {
-		case string:
-			out.Value = []byte(typed)
-		case []byte:
-			out.Value = typed
-		}
 	}
 	if v, ok := s.Data["content_type"]; ok {
 		if str, ok := v.(string); ok {
@@ -1286,6 +1324,29 @@ func (h *Handlers) GetSecret(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	h.success200(w, r, out)
+}
+
+// decodeStoredSecretValue returns the bytes the caller stored under a
+// secret's "value" key. The go-quicbaas secrets backend JSON-encodes the
+// data map, so bytes stored by StoreSecret read back as standard base64
+// text; a backend that keeps the map in memory hands the bytes back as is.
+func decodeStoredSecretValue(path string, v interface{}) ([]byte, error) {
+	switch typed := v.(type) {
+	case nil:
+		return nil, nil
+	case string:
+		decoded, err := base64.StdEncoding.DecodeString(typed)
+		if err != nil {
+			return nil, &ErrSecretValueMalformed{Path: path}
+		}
+		return decoded, nil
+	case []byte:
+		return typed, nil
+	case SecretValue:
+		return []byte(typed), nil
+	default:
+		return nil, &ErrSecretValueMalformed{Path: path}
+	}
 }
 
 // DeleteSecret handles DELETE /api/v1/kms/secrets/{name}.
