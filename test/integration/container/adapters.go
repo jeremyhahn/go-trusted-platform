@@ -555,11 +555,6 @@ func (q *QUICAdapter) Setup(ctx context.Context) error {
 	)
 }
 
-// Attest has no QUIC mapping in the SDK.
-func (q *QUICAdapter) Attest(ctx context.Context, id string) (*AttestationReport, error) {
-	return nil, noSurface(q.Name(), opAttest)
-}
-
 // =============================================================================
 // MCP Adapter Implementation
 // =============================================================================
