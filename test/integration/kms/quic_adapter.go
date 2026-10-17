@@ -455,11 +455,6 @@ func (q *QUICAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) 
 		return nil, err
 	}
 
-	name := opts.Name
-	if name == "" {
-		name = opts.KeyID
-	}
-
 	req := &daemonpkg.KMSGenerateKeyRequest{
 		KeySpec: &daemonpkg.KMSKeySpecRequest{
 			Algorithm:          alg,
@@ -467,7 +462,7 @@ func (q *QUICAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) 
 			Exportable:         opts.Exportable,
 			DeletionProtection: opts.DeletionProtection,
 		},
-		Name:        name,
+		Name:        keyName(opts),
 		Description: opts.Description,
 		Owner:       opts.Owner,
 	}

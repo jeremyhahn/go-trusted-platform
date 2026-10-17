@@ -291,10 +291,11 @@ func (g *GRPCAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) 
 	req := &pb.GenerateKeyRequest{
 		KeySpec: &pb.KeySpec{
 			Algorithm:          algorithmStringToProto(opts.Algorithm),
+			Usage:              purposeToKeyUsages(opts.Purpose),
 			Exportable:         opts.Exportable,
 			DeletionProtection: opts.DeletionProtection,
 		},
-		Name:        opts.Name,
+		Name:        keyName(opts),
 		Description: opts.Description,
 		Owner:       opts.Owner,
 	}
