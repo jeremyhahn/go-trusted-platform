@@ -1504,6 +1504,16 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if deviceService != nil {
 			attestSvc = deviceService
 		}
+		// The operator routes (count, Enable/Disable, attest-cert record,
+		// /api/v1/device/profiles*, activate-json, templates) go first: they
+		// include /api/v1/devices/count, which the unconstrained
+		// /api/v1/devices/{id} below would otherwise answer.
+		daemon.concreteRestServer.SetDeviceOperatorHandlers(DeviceOperatorServices{
+			Devices:   config.DeviceService,
+			Profiles:  config.DeviceProfileService,
+			Templates: config.DeviceTemplateService,
+			Server:    attestSvc,
+		}, restGuard)
 		daemon.concreteRestServer.SetDeviceHandlers(config.DeviceService, config.DeviceProfileService, attestSvc)
 	}
 

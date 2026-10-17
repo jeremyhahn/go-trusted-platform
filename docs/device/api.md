@@ -1414,9 +1414,23 @@ device, profile, template and provisioning-session route in `RequireScope` on
 top of the admin role gate, with the scope the twin RPC takes in the catalog
 above (and QUIC and MCP take for the same operation). A token without it gets
 `403` before the handler runs. Under the legacy JWT handler, which carries no
-scopes, the role gate alone applies; the daemon REST device routes
-(`pkg/api/rest/device_handlers.go`) are outside its scope guard: they check
-only the mTLS client certificate and no scope.
+scopes, the role gate alone applies.
+
+**The daemon REST listener serves the same operator routes behind its scope
+guard (#949).** `RESTServer.SetDeviceOperatorHandlers`
+(`pkg/api/daemon/rest_device_operator.go`) mounts the webservice handlers above
+on the daemon listener, each in `restapi.ScopeGuard` with the scope in the table
+below: `GET /devices/count`, `POST /devices/{id}/attest-cert/record`,
+`POST /devices/{id}/disable` and `/enable`, every `/device/profiles` route
+(CRUD, `count`, `match`, the `mac` and `serial` lookups, `find-config`,
+`assign`, `unassign`), `POST /device/activate-json` and every `/device/templates`
+route. The bodies and the `{code, success, payload}` envelope are therefore the
+webservice's. The diskless boot routes (`/device/boot*`, §4.6) are
+machine-facing and are not mounted there; gRPC, QUIC, Unix and MCP serve them.
+The daemon's older device routes (`pkg/api/rest/device_handlers.go`: device
+CRUD, `serial/{serial}`, `{id}/activate`, `{id}/state`, `{id}/attest` and the
+plural `/devices/profiles` alias) are outside the guard: they check only the
+mTLS client certificate and no scope.
 
 | Scope | Webservice routes (under `/api/v1`) | gRPC twin |
 |---|---|---|

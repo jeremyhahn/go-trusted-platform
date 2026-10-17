@@ -23,6 +23,7 @@ import (
 
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
@@ -42,9 +43,12 @@ type (
 	routeTableProfiles       struct {
 		restapi.ProfileServiceInterface
 	}
-	routeTableTenants struct{ restapi.TenantManagerInterface }
-	routeTableKMS     struct{ restapi.KMSService }
-	routeTableOverlay struct {
+	routeTableDeviceService   struct{ device.DeviceService }
+	routeTableProfileService  struct{ device.DeviceProfileService }
+	routeTableTemplateService struct{ device.DeviceTemplateService }
+	routeTableTenants         struct{ restapi.TenantManagerInterface }
+	routeTableKMS             struct{ restapi.KMSService }
+	routeTableOverlay         struct {
 		restapi.OverlayServiceInterface
 	}
 	routeTableCA struct {
@@ -72,6 +76,12 @@ func daemonRouteTable(t *testing.T) (*RESTServer, []string) {
 	s.SetNTPHandlers(platformv1.UnimplementedNTPServiceServer{}, nil)
 	s.SetVPNHandlers(platformv1.UnimplementedVPNServiceServer{}, nil)
 	s.SetAppServiceHandlers(restapi.AppServiceServers{}, nil)
+	s.SetDeviceOperatorHandlers(DeviceOperatorServices{
+		Devices:   routeTableDeviceService{},
+		Profiles:  routeTableProfileService{},
+		Templates: routeTableTemplateService{},
+		Server:    platformv1.UnimplementedDeviceServiceServer{},
+	}, nil)
 	s.SetDeviceHandlers(routeTableDevices{}, routeTableProfiles{}, platformv1.UnimplementedDeviceServiceServer{})
 	s.SetTenantHandlers(routeTableTenants{}, nil, "")
 	s.SetKMSHandlers(routeTableKMS{})
@@ -105,10 +115,8 @@ var daemonDivergentClaims = map[string]string{
 
 	"/platform.v1.ComputeService/GetContainerLogs": "#452: lands on GET /api/v1/compute/containers/{id} with id=\"logs\"; neither server serves container logs (claim_operation_resolution_test.go)",
 
-	"/platform.v1.DeviceService/CountDevices":                 "#452: the daemon has no count route; the request lands on GET /api/v1/devices/{id} with id=\"count\"",
-	"/platform.v1.DeviceService/DisableDevice":                "#452: the daemon's device routes (pkg/api/rest) have no disable",
-	"/platform.v1.DeviceService/EnableDevice":                 "#452: the daemon's device routes (pkg/api/rest) have no enable",
-	"/platform.v1.DeviceService/RecordAttestationCertificate": "#452: the daemon's device routes (pkg/api/rest) have no attest-cert/record",
+	"/platform.v1.DeviceService/BootCertificate": deviceBootMachineFacing,
+	"/platform.v1.DeviceService/BootDelivery":    deviceBootMachineFacing,
 
 	"/platform.v1.IDevIDService/ActivateCredential":       idevidOnTPMPrefix,
 	"/platform.v1.IDevIDService/CreateIAKCSR":             idevidOnTPMPrefix,
@@ -154,9 +162,10 @@ var daemonDivergentClaims = map[string]string{
 }
 
 const (
-	idevidOnTPMPrefix      = "#452: the daemon serves IDevID and IAK under /api/v1/tpm/idevid and /api/v1/tpm/iak (rest_idevid.go, registerIDevIDRoutes); the claim is the webservice's /api/v1/idevid shape"
-	kmsKeyInBody           = "#452: the daemon takes the key in the body at POST /api/v1/kms/{encrypt,decrypt,sign,verify}; the claim is the webservice's /{name} path"
-	pxeGatewayOnWebservice = "#452: the per-MAC PXE gateway routes are the webservice's (rest/pxe/gateway.go); the daemon mounts none"
+	deviceBootMachineFacing = "#452: the diskless boot routes are machine-facing; they bind the TLS channel and verify the node's client certificate (webservice RegisterMachineFacingRoutes), and the daemon REST listener mounts no machine-facing device route. gRPC, QUIC, Unix and MCP serve both RPCs through DeviceGRPCService"
+	idevidOnTPMPrefix       = "#452: the daemon serves IDevID and IAK under /api/v1/tpm/idevid and /api/v1/tpm/iak (rest_idevid.go, registerIDevIDRoutes); the claim is the webservice's /api/v1/idevid shape"
+	kmsKeyInBody            = "#452: the daemon takes the key in the body at POST /api/v1/kms/{encrypt,decrypt,sign,verify}; the claim is the webservice's /{name} path"
+	pxeGatewayOnWebservice  = "#452: the per-MAC PXE gateway routes are the webservice's (rest/pxe/gateway.go); the daemon mounts none"
 )
 
 // landsOnClaimedShape routes the claim through the daemon's table. It returns
