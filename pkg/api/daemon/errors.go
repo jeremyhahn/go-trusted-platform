@@ -558,6 +558,18 @@ func (e ErrQUICMissingField) Error() string {
 	return fmt.Sprintf("QUIC request missing required field: %s", e.Field)
 }
 
+// ErrQUICKMSDisplayNameNotSupported refuses a QUIC KMS generate that carries a
+// display name before any key is generated: the QUIC handler generates through
+// the go-quicbaas GenerateKeyRequest, which has no display-name field
+// (go-quicbaas v0.12.0-alpha api/proto/kms.proto:569).
+type ErrQUICKMSDisplayNameNotSupported struct {
+	KeyID string
+}
+
+func (e ErrQUICKMSDisplayNameNotSupported) Error() string {
+	return fmt.Sprintf("key %s not generated: the QUIC KMS generate carries no display name; set it with a key metadata update", e.KeyID)
+}
+
 // ErrQUICOperationFailed is returned when a QUIC operation fails
 type ErrQUICOperationFailed struct {
 	Op    string

@@ -14,15 +14,11 @@
 package kms
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
-
-	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
-	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 
 	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
 
@@ -270,16 +266,6 @@ func runKeyGenerate(flags *cli.CommonFlags, keyID, algorithm, purpose string, ex
 		return &WrappedError{Msg: "failed to generate key", Err: err}
 	}
 
-	if name != "" {
-		client, err := openKMSClient(base)
-		if err != nil {
-			return err
-		}
-		if err := setKeyDisplayName(ctx, client, resp, keyID, name); err != nil {
-			return err
-		}
-	}
-
 	printer := base.Printer()
 
 	switch flags.OutputFormat {
@@ -309,25 +295,6 @@ func runKeyGenerate(flags *cli.CommonFlags, keyID, algorithm, purpose string, ex
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
 	}
-}
-
-// setKeyDisplayName records the --name display name on a freshly generated
-// key. The generate request's name is the key ID (docs/kms/api.md §2), so the
-// display name follows as a metadata update, and the result reports the name
-// the KMS recorded.
-func setKeyDisplayName(ctx context.Context, client quicbaassdk.KMSClient, resp *kmssvc.GenerateKeyResult, keyID, name string) error {
-	meta, err := client.UpdateKeyMetadata(ctx, &kms.UpdateKeyMetadataRequest{
-		KeyID: keyID,
-		Name:  name,
-	})
-	if err != nil {
-		return ErrUpdateKeyMetadataFailed{KeyID: keyID, Err: err}
-	}
-	if resp.Metadata == nil {
-		resp.Metadata = &kmssvc.KeyMetadata{}
-	}
-	resp.Metadata.Name = meta.Name
-	return nil
 }
 
 func runKeyGet(flags *cli.CommonFlags, keyID string, version uint64) error {

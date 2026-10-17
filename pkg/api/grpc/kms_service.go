@@ -163,6 +163,7 @@ func (s *KMSGRPCService) GenerateKey(
 	kmsReq := &KMSGenerateKeyRequest{
 		KeySpec:     protoKeySpecToKMS(req.GetKeySpec()),
 		Name:        req.GetName(),
+		DisplayName: req.GetDisplayName(),
 		Description: req.GetDescription(),
 		Tags:        req.GetTags(),
 		Owner:       req.GetOwner(),

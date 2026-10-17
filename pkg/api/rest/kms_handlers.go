@@ -135,6 +135,7 @@ type KMSKeySpecRequest struct {
 type KMSGenerateKeyRequest struct {
 	KeySpec     KMSKeySpecRequest `json:"key_spec"`
 	Name        string            `json:"name"`
+	DisplayName string            `json:"display_name,omitempty"`
 	Description string            `json:"description,omitempty"`
 	Tags        map[string]string `json:"tags,omitempty"`
 	Owner       string            `json:"owner,omitempty"`
@@ -553,6 +554,7 @@ func (h *KMSHandlers) handleGenerateKey(w http.ResponseWriter, r *http.Request) 
 	serviceReq := &KMSGenerateKeyServiceRequest{
 		KeySpec:     h.keySpecRequestToService(&req.KeySpec),
 		Name:        req.Name,
+		DisplayName: req.DisplayName,
 		Description: req.Description,
 		Tags:        req.Tags,
 		Owner:       req.Owner,

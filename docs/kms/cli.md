@@ -136,11 +136,14 @@ Generate a key.
 | `--owner` | | string | | no |
 
 `<key-id>` travels as the generate request's `name` and becomes the key's ID
-(`api.md` §2). `--description` travels on the generate request. `--name` is a
-display name, not the ID: the generate request has no display-name field, so
-the command records it with a `key metadata update` right after the generate
-and prints the name the KMS recorded. If that update fails the key exists
-without the name and the command exits with the update error.
+(`api.md` §2). `--name` is a display name, not the ID: it travels as the
+generate request's `display_name`, beside `--description`, and the command
+prints the name the KMS recorded. A caller bound to a tenant other than the
+platform system tenant is refused with FailedPrecondition before any key is
+generated when it passes `--name` or `--description` (`api.md` §2, SDK gap).
+Over REST, MCP and QUIC, `--name` is refused before any key is generated,
+because none of those generate routes carries a display name (`api.md` §2):
+generate the key, then set the name with `key metadata update`.
 
 Algorithms: `aes-128`, `aes-192`, `aes-256`, `chacha20-poly1305`, `rsa-2048`,
 `rsa-3072`, `rsa-4096`, `ecdsa-p256`, `ecdsa-p384`, `ecdsa-p521`, `ed25519`,

@@ -58,6 +58,14 @@ var ErrKMSKeyNameRequired = &KMSError{
 	Message: "key name is required",
 }
 
+// ErrKMSDisplayNameNotSupported refuses a kms_generate_key call that carries a
+// display_name before any key is generated: the tool's generate path has no
+// display-name field, so the name is set with kms_update_key_metadata.
+var ErrKMSDisplayNameNotSupported = &KMSError{
+	Code:    "KMS_DISPLAY_NAME_INVALID",
+	Message: "kms_generate_key carries no display_name; set it with kms_update_key_metadata",
+}
+
 // ErrKMSAlgorithmRequired indicates an algorithm is required.
 var ErrKMSAlgorithmRequired = &KMSError{
 	Code:    "KMS_ALGORITHM_REQUIRED",

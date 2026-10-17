@@ -38,6 +38,7 @@ func (c *Client) GenerateKeyDomain(ctx context.Context, params *GenerateKeyParam
 	req := &platformv1.GenerateKeyRequest{
 		KeySpec:     keySpec,
 		Name:        params.KeyID,
+		DisplayName: params.Name,
 		Description: params.Description,
 		Owner:       params.Owner,
 	}

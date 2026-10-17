@@ -224,7 +224,10 @@ func (a *KMSServerAdapter) GenerateKey(ctx context.Context, req *pb.GenerateKeyR
 		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
 	}
 
-	tenantScoped, err := tenantScopedKeyGeneration(ctx, a.systemTenantID, req.GetName(), req.GetDescription(), req.GetTags())
+	// The go-quicbaas GenerateKeyRequest carries no display name (go-quicbaas
+	// v0.12.0-alpha api/proto/kms.proto:569), so this surface records none.
+	const displayName = ""
+	tenantScoped, err := tenantScopedKeyGeneration(ctx, a.systemTenantID, req.GetName(), displayName, req.GetDescription(), req.GetTags())
 	if err != nil {
 		return nil, err
 	}
@@ -244,7 +247,7 @@ func (a *KMSServerAdapter) GenerateKey(ctx context.Context, req *pb.GenerateKeyR
 		return nil, status.Errorf(errclass.Code(err), "key generation failed: %v", err)
 	}
 
-	meta, err := recordGeneratedKeyMetadata(ctx, a.client, tenantScoped, resp, req.GetDescription(), req.GetTags())
+	meta, err := recordGeneratedKeyMetadata(ctx, a.client, tenantScoped, resp, displayName, req.GetDescription(), req.GetTags())
 	if err != nil {
 		return nil, err
 	}
@@ -261,8 +264,8 @@ func (a *KMSServerAdapter) GenerateKey(ctx context.Context, req *pb.GenerateKeyR
 }
 
 // tenantScopedKeyGeneration reports whether a generate request runs in a
-// non-system tenant's key scope, and refuses one that carries a description
-// or tags there. It runs before the key is generated, so a refused request
+// non-system tenant's key scope, and refuses one that carries a display name,
+// a description or tags there. It runs before the key is generated, so a refused request
 // leaves no key behind. The scope is the tenant the platform resolves for
 // the caller (callerTenant): an unbound caller or the system tenant is the
 // system scope.
@@ -275,12 +278,12 @@ func (a *KMSServerAdapter) GenerateKey(ctx context.Context, req *pb.GenerateKeyR
 // go-quicbaas iam.ContextWithTenant, is not re-exported under quicbaas/sdk/go
 // (sdk/go/transport.ContextWithTenant sets a different key). A tenant-scope
 // generate therefore makes no metadata call at all.
-func tenantScopedKeyGeneration(ctx context.Context, systemTenantID, name, description string, tags map[string]string) (bool, error) {
+func tenantScopedKeyGeneration(ctx context.Context, systemTenantID, name, displayName, description string, tags map[string]string) (bool, error) {
 	caller, bound := callerTenant(ctx)
 	if !bound || tenant.IsSystemTenant(systemTenantID, caller) {
 		return false, nil
 	}
-	if description != "" || len(tags) > 0 {
+	if displayName != "" || description != "" || len(tags) > 0 {
 		return true, ErrKMSTenantKeyMetadataUnsupported{TenantID: caller, KeyID: name}
 	}
 	return true, nil
@@ -289,13 +292,14 @@ func tenantScopedKeyGeneration(ctx context.Context, systemTenantID, name, descri
 // recordGeneratedKeyMetadata returns the metadata of the key just generated.
 // In a tenant scope it is the metadata the generate response itself carries
 // (see tenantScopedKeyGeneration for why no metadata call is made there).
-// Otherwise the request's description and tags are applied to the key and
-// the metadata the KMS recorded is returned: the SDK GenerateKeyRequest has
-// no description or tags, so they travel as a metadata update; with neither,
+// Otherwise the request's display name, description and tags are applied to
+// the key and the metadata the KMS recorded is returned: the SDK
+// GenerateKeyRequest has no field for them (its name is the key ID), so they
+// travel as a metadata update; with none of them,
 // the metadata is read back as it stands. The SDK has no field for a key
 // owner at all: the owner returned is the one the KMS recorded, never the
 // requested one.
-func recordGeneratedKeyMetadata(ctx context.Context, client quicbaas.KMSClient, tenantScoped bool, generated *kms.GenerateKeyResponse, description string, tags map[string]string) (*kms.KeyMetadataResponse, error) {
+func recordGeneratedKeyMetadata(ctx context.Context, client quicbaas.KMSClient, tenantScoped bool, generated *kms.GenerateKeyResponse, displayName, description string, tags map[string]string) (*kms.KeyMetadataResponse, error) {
 	if tenantScoped {
 		return &kms.KeyMetadataResponse{
 			KeyID:              generated.KeyID,
@@ -310,11 +314,12 @@ func recordGeneratedKeyMetadata(ctx context.Context, client quicbaas.KMSClient, 
 	keyID := generated.KeyID
 	var meta *kms.KeyMetadataResponse
 	var err error
-	if description == "" && len(tags) == 0 {
+	if displayName == "" && description == "" && len(tags) == 0 {
 		meta, err = client.GetKeyMetadata(ctx, keyID)
 	} else {
 		meta, err = client.UpdateKeyMetadata(ctx, &kms.UpdateKeyMetadataRequest{
 			KeyID:       keyID,
+			Name:        displayName,
 			Description: description,
 			Tags:        tags,
 		})

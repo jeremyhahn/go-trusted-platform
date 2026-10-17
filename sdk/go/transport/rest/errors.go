@@ -227,6 +227,19 @@ func (e ErrKeyUsageNotSupported) Error() string {
 	return fmt.Sprintf("key usage %s is not supported by the KMS REST routes", e.Usage)
 }
 
+// ErrKeyDisplayNameNotSupported indicates a KMS GenerateKey request carries a
+// display name, which the REST route's flat body has no field for. It is
+// refused before sending so no key is generated without it; set the name with
+// a key metadata update instead.
+type ErrKeyDisplayNameNotSupported struct {
+	KeyID string
+}
+
+// Error implements the error interface.
+func (e ErrKeyDisplayNameNotSupported) Error() string {
+	return fmt.Sprintf("key %s not generated: the KMS REST generate route carries no display name; set it with a key metadata update", e.KeyID)
+}
+
 // ErrWrappingAlgorithmNotSupported indicates a KMS GenerateWrappedDataKey
 // request names a wrapping algorithm. The REST route takes none and wraps with
 // the KEK's own algorithm, so sending the request would ignore the choice.
