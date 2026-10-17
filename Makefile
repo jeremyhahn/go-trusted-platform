@@ -2283,6 +2283,13 @@ integration-test-sdn-full: build-devcontainer
 		$(DEVCONTAINER_IMAGE) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 15m ./test/integration/sdn/...
 
+.PHONY: integration-test-sdn-topology
+## integration-test-sdn-topology: Run the multi-node SDN topology suite on a host with docker-compose
+## The suite starts its nodes with docker-compose, which the devcontainer has neither the binary nor
+## a Docker daemon for, so it carries the topology build tag and stays out of every runner target.
+integration-test-sdn-topology:
+	go test -v -tags '$(strip $(TEST_BUILD_TAGS)) topology' -count=1 -timeout 30m ./test/integration/sdn/topology/
+
 .PHONY: integration-test-lb
 ## integration-test-lb: Run the gateway load balancer datapath test in the devcontainer
 ## Real OVS, kernel conntrack and network namespaces: TCP handshakes through a
