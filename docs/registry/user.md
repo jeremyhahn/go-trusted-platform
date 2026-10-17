@@ -91,7 +91,8 @@ platformctl registry pull registry.example.com/apps/api:1.4.2 \
     --decrypt --verify --output ./api.tar
 ```
 
-`--verify` checks the manifest signature. It is off by default; turn it on.
+The registry checks the signature of every signed manifest on every pull, and
+refuses a manifest that no longer matches it.
 
 Standard container tooling also works, because the registry serves the OCI
 distribution API:

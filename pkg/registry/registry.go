@@ -173,6 +173,19 @@ type Registry struct {
 	// (Push with Encrypt=true is then refused).
 	encryptor *ImageEncryptor
 
+	// signer signs manifests when Push(opts.SignImage) is requested and
+	// verifies signed manifests on Pull. Set via WithSigner; nil refuses
+	// signed pushes and pulls of signed images.
+	signer *ManifestSigner
+
+	// version is the daemon build the registry runs in, reported by Status.
+	// Set via WithVersion.
+	version string
+
+	// startedAt is when NewRegistry built the registry; Status reports
+	// uptime from it.
+	startedAt time.Time
+
 	// initialized tracks whether the registry is ready
 	initialized atomic.Bool
 
@@ -217,6 +230,21 @@ func WithEncryptor(e *ImageEncryptor) RegistryOption {
 	}
 }
 
+// WithSigner sets the manifest signer used for signed pushes and for
+// verifying signed manifests on pull.
+func WithSigner(s *ManifestSigner) RegistryOption {
+	return func(r *Registry) {
+		r.signer = s
+	}
+}
+
+// WithVersion sets the build version Status reports.
+func WithVersion(v string) RegistryOption {
+	return func(r *Registry) {
+		r.version = v
+	}
+}
+
 // NewRegistry creates a new TrustedRegistry with the given configuration
 func NewRegistry(config RegistryConfig, logger *slog.Logger, opts ...RegistryOption) (*Registry, error) {
 	if logger == nil {
@@ -237,6 +265,7 @@ func NewRegistry(config RegistryConfig, logger *slog.Logger, opts ...RegistryOpt
 	for _, opt := range opts {
 		opt(r)
 	}
+	r.startedAt = r.now()
 
 	r.initialized.Store(true)
 
@@ -284,7 +313,7 @@ func (r *Registry) Push(ctx context.Context, ref string, image *Image, opts Push
 	if opts.Encrypt && r.encryptor == nil {
 		return ErrEncryptionNotConfigured{Reference: ref}
 	}
-	if opts.SignImage {
+	if opts.SignImage && r.signer == nil {
 		return ErrSigningNotConfigured{Reference: ref}
 	}
 
@@ -336,6 +365,19 @@ func (r *Registry) Push(ctx context.Context, ref string, image *Image, opts Push
 		image.Manifest.Annotations[manifestAnnotationKeyID] = encImage.KeyID
 	}
 
+	// Sign before any blob is stored, so a push the signer refuses leaves
+	// nothing behind. The signature covers the reference and the encryption
+	// annotations above; the timestamps set below are outside it.
+	// Signature annotations a client sent are dropped: only this registry's
+	// signer writes them.
+	image.Manifest.Reference = ref
+	clearSignature(image.Manifest)
+	if opts.SignImage {
+		if err := r.signer.Sign(ctx, image.Manifest, opts.SigningKeyID); err != nil {
+			return err
+		}
+	}
+
 	for i := range image.Layers {
 		l := &image.Layers[i]
 		if l.Digest == "" {
@@ -369,7 +411,6 @@ func (r *Registry) Push(ctx context.Context, ref string, image *Image, opts Push
 		image.Manifest.CreatedAt = now
 	}
 	image.Manifest.UpdatedAt = now
-	image.Manifest.Reference = ref
 
 	return r.storage.StoreManifest(ctx, ref, image.Manifest)
 }
@@ -429,6 +470,9 @@ func (r *Registry) Pull(ctx context.Context, ref string, opts PullOptions) (*Ima
 	if manifest == nil {
 		return nil, ErrImageNotFound{Reference: ref}
 	}
+	if err := r.verifyManifest(ctx, ref, manifest, opts.VerifySignature); err != nil {
+		return nil, err
+	}
 
 	img := &Image{Manifest: manifest}
 
@@ -472,6 +516,23 @@ func (r *Registry) Pull(ctx context.Context, ref string, opts PullOptions) (*Ima
 		img.Layers = append(img.Layers, *layer)
 	}
 	return img, nil
+}
+
+// verifyManifest checks a signed manifest before any of it is served: a
+// signature that does not verify refuses the pull whether or not the caller
+// asked for verification. requireSignature additionally refuses an unsigned
+// manifest.
+func (r *Registry) verifyManifest(ctx context.Context, ref string, m *ImageManifest, requireSignature bool) error {
+	if !isSigned(m) {
+		if requireSignature {
+			return ErrImageNotSigned{Reference: ref}
+		}
+		return nil
+	}
+	if r.signer == nil {
+		return ErrSigningNotConfigured{Reference: ref}
+	}
+	return r.signer.Verify(ctx, m)
 }
 
 // Delete removes a container image from the registry. The manifest

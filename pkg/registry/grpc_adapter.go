@@ -16,6 +16,7 @@ package registry
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -222,12 +223,39 @@ func (a *GRPCAdapter) Inspect(ctx context.Context, req *grpcapi.RegistryInspectR
 		return nil, a.mapPullError(req.Repository, req.Reference, err)
 	}
 	art := a.manifestToArtifact(req.Repository, req.Reference, img.Manifest)
-	return &grpcapi.RegistryInspectResponse{
-		Detail: &grpcapi.RegistryArtifactDetail{
-			Artifact: art,
-			Tags:     []string{req.Reference},
-		},
-	}, nil
+	detail := &grpcapi.RegistryArtifactDetail{
+		Artifact: art,
+		Tags:     []string{req.Reference},
+	}
+	if req.IncludeSignatures {
+		sigs, err := manifestSignatures(img.Manifest)
+		if err != nil {
+			return nil, err
+		}
+		detail.Signatures = sigs
+	}
+	return &grpcapi.RegistryInspectResponse{Detail: detail}, nil
+}
+
+// manifestSignatures reports the signature a manifest carries; Pull has
+// already verified it. An unsigned manifest has none. The registry signs on
+// the pusher's behalf, so the signer is the signing key.
+func manifestSignatures(m *ImageManifest) ([]*grpcapi.RegistryArtifactSignature, error) {
+	if !isSigned(m) {
+		return nil, nil
+	}
+	keyID := m.Annotations[ManifestAnnotationSigningKeyID]
+	sig, err := base64.StdEncoding.DecodeString(m.Annotations[ManifestAnnotationSignature])
+	if err != nil {
+		return nil, ErrSignatureInvalid{Reference: m.Reference, KeyID: keyID, Reason: "signature is not base64"}
+	}
+	return []*grpcapi.RegistryArtifactSignature{{
+		KeyID:     keyID,
+		Algorithm: m.Annotations[ManifestAnnotationSignatureAlgorithm],
+		Signature: sig,
+		SignedAt:  m.UpdatedAt,
+		Signer:    keyID,
+	}}, nil
 }
 
 // Delete unbinds the reference from its manifest. Layer GC is a
@@ -256,7 +284,9 @@ func (a *GRPCAdapter) Status(ctx context.Context) (*grpcapi.RegistryStatusRespon
 	if err != nil {
 		return &grpcapi.RegistryStatusResponse{
 			Health:    grpcapi.RegistryHealthStatusUnhealthy,
+			Version:   a.registry.version,
 			Timestamp: a.clock().UTC(),
+			StartedAt: a.registry.startedAt.UTC(),
 			Components: []*grpcapi.RegistryComponentHealth{{
 				Name:    "storage",
 				Status:  grpcapi.RegistryHealthStatusUnhealthy,
@@ -269,8 +299,9 @@ func (a *GRPCAdapter) Status(ctx context.Context) (*grpcapi.RegistryStatusRespon
 		Storage: &grpcapi.RegistryStorageStats{
 			ArtifactCount: int64(len(manifests)),
 		},
+		Version:   a.registry.version,
 		Timestamp: a.clock().UTC(),
-		StartedAt: a.clock().UTC(),
+		StartedAt: a.registry.startedAt.UTC(),
 	}, nil
 }
 

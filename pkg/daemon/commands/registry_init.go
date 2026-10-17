@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"path/filepath"
 
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -46,15 +47,15 @@ func registryDistBackend(cfg *daemon.Config) restregistry.OCIDistBackend {
 // Cluster-replicated QuicBaaS-backed storage lands when the cluster
 // actually needs multi-node image sharing — the Registry interface is
 // stable so the backend swap is hidden from callers.
-func initRegistryServiceOnConfig(logger *logging.Logger, app *app.App, cfg *daemon.Config) {
-	if cfg == nil || app == nil {
+func initRegistryServiceOnConfig(logger *logging.Logger, platform *app.App, cfg *daemon.Config) {
+	if cfg == nil || platform == nil {
 		return
 	}
 	if cfg.RegistryService != nil {
 		// Already configured (e.g. by a test harness).
 		return
 	}
-	root := filepath.Join(app.PlatformDir, "registry")
+	root := filepath.Join(platform.PlatformDir, "registry")
 	client, err := registry.NewFileStorageClient(root)
 	if err != nil {
 		logger.Warnf("registry: file storage unavailable, surface will be dark: %v", err)
@@ -95,11 +96,23 @@ func initRegistryServiceOnConfig(logger *logging.Logger, app *app.App, cfg *daem
 		return
 	}
 
+	// Manifest signing keys are software ECDSA P-256 keys in a PKCS#8
+	// key store under <PlatformDir>/registry/signing-keys, apart from
+	// the image-encryption keys.
+	signingRoot := filepath.Join(root, "signing-keys")
+	signer, err := newRegistrySigner(signingRoot)
+	if err != nil {
+		logger.Warnf("registry: manifest signer unavailable: %v", err)
+		return
+	}
+
 	r, err := registry.NewRegistry(
 		cfgReg,
 		slog.Default(),
 		registry.WithStorage(storage),
 		registry.WithEncryptor(encryptor),
+		registry.WithSigner(signer),
+		registry.WithVersion(app.GetVersion().Version),
 	)
 	if err != nil {
 		logger.Warnf("registry: failed to construct: %v", err)
@@ -108,4 +121,21 @@ func initRegistryServiceOnConfig(logger *logging.Logger, app *app.App, cfg *daem
 	cfg.RegistryService = registry.NewGRPCAdapter(r)
 	registryBackends[cfg] = r
 	logger.Info("registry service wired", "root", root, "kms_root", kmsRoot)
+}
+
+// newRegistrySigner builds the registry's manifest signer on a PKCS#8 key
+// store rooted at dir.
+func newRegistrySigner(dir string) (*registry.ManifestSigner, error) {
+	storage, err := xkmssdk.NewFileStorageBackend(dir)
+	if err != nil {
+		return nil, err
+	}
+	keys, err := xkmssdk.NewPKCS8Backend(&xkmssdk.PKCS8BackendConfig{
+		KeyStorage:         storage,
+		AllowPlaintextKeys: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return registry.NewManifestSigner(keys)
 }
