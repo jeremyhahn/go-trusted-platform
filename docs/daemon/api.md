@@ -402,13 +402,14 @@ routes also take a `Bearer` token, but only over that mTLS connection. So
 installed with `WithRequireAuth(tokenValidator != nil)`, so the misconfigured
 state served the whole daemon API anonymously.
 
-**The daemon REST VPN, NTP and application service routes check the RPC's
-scope (#584, #704).** mTLS at the handshake is not authorization: each
-`/api/v1/vpn/*`, `/api/v1/ntp/*`, `/api/v1/cache/*`, `/api/v1/scheduler/*` and
-`/api/v1/messaging/*` route on the daemon listener runs through
-`restapi.ScopeGuard` (`pkg/api/rest/route_scope.go`) and requires the scope the
-gRPC catalog gives its RPC (`vpn:read|write|admin`, `ntp:read` for status and
-sources, `ntp:write` for step, and `cache`, `scheduler` and `messaging` as in
+**The daemon REST VPN, NTP, DNS and application service routes check the RPC's
+scope (#584, #704, #949).** mTLS at the handshake is not authorization: each
+`/api/v1/vpn/*`, `/api/v1/ntp/*`, `/api/v1/dns/*`, `/api/v1/cache/*`,
+`/api/v1/scheduler/*` and `/api/v1/messaging/*` route on the daemon listener
+runs through `restapi.ScopeGuard` (`pkg/api/rest/route_scope.go`) and requires
+the scope the gRPC catalog gives its RPC (`vpn:read|write|admin`, `ntp:read`
+for status and sources, `ntp:write` for step, `dns:read|write|delete` per
+[docs/dns/api.md](../dns/api.md) §4, and `cache`, `scheduler` and `messaging` as in
 [docs/sdk/api.md](../sdk/api.md) §3.5). The guard takes the credentials QUIC takes, in the same order:
 
 - a `Bearer` platform token (with its `DPoP` proof), validated by the shared

@@ -1,7 +1,8 @@
 # DNS REST API Reference
 
-> **Status: REFERENCE** · Last verified: 2026-10-15
-> The `/api/v1/dns` routes as served by `pkg/webservice/v1/rest/dns/`. The
+> **Status: REFERENCE** · Last verified: 2026-10-17
+> The `/api/v1/dns` routes as served by `pkg/webservice/v1/rest/dns/`, on the
+> web services listener and on the daemon REST listener alike. The
 > cross-transport matrix and authorization are [api.md](api.md).
 
 | Property | Value |
@@ -9,7 +10,7 @@
 | Base Path | `/api/v1/dns` |
 | Port | 8443 |
 | Content-Type | `application/json` |
-| Authorization | authenticated caller holding the `admin` role, on every route |
+| Authorization | web services listener: the `admin` role, on every route; daemon listener: the route's `dns:read`, `dns:write` or `dns:delete` scope ([api.md](api.md) §4) |
 
 Every response is the platform envelope; the bodies below are its `payload`:
 

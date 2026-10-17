@@ -21,7 +21,10 @@ REST hold the same `*dns.Service`. With no `dns:` section there is no backend,
 and every transport answers the not-configured error (§5).
 
 gRPC: `DNSService`, 13 RPCs (`pkg/api/grpc/proto/platform_dns.proto`).
-REST: base path `/api/v1/dns` (`pkg/webservice/v1/rest/dns/router.go`).
+REST: base path `/api/v1/dns` (`pkg/webservice/v1/rest/dns/router.go`), served
+on both the daemon REST listener (`RESTServer.SetDNSService`,
+`pkg/api/daemon/rest_dns.go`) and the web services listener, with the same
+handlers and wire format.
 QUIC: top-level opcodes `0x20`–`0x2C` — no category indirection. `0x2B` and
 `0x2D` are retired (#317) — see §2.
 MCP: **two parallel tool families** — see §3.
@@ -176,6 +179,14 @@ catalog totals are in
 record CRUD and DNSSEC signing. Reads are gated with the writes: a zone's
 contents are the platform's internal name map, and enumerating it is
 reconnaissance even when nothing is changed.
+
+That is the web services listener. On the **daemon REST listener** each
+route instead requires its `DNSService` RPC's gRPC scope (`dns:read`,
+`dns:write`, `dns:delete`), checked by `restapi.ScopeGuard` against a platform
+token or the verified client certificate
+([`docs/daemon/api.md`](../daemon/api.md)): no credential is 401, a missing
+scope 403. With no DNS backend every daemon route answers 503
+`SERVICE_NOT_CONFIGURED` (§5).
 
 This changes the REST position only. The gRPC, Unix, MCP and embedded
 positions described above are unchanged. See

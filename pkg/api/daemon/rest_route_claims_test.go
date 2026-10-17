@@ -76,6 +76,7 @@ func daemonRouteTable(t *testing.T) (*RESTServer, []string) {
 	s.SetTenantHandlers(routeTableTenants{}, nil, "")
 	s.SetKMSHandlers(routeTableKMS{})
 	s.SetComputeHandlers(platformv1.UnimplementedComputeServiceServer{}, nil)
+	s.SetDNSService(NewMockDNSService(), nil)
 	s.SetOverlayHandlers(routeTableOverlay{})
 	s.SetCAHandlers(routeTableCA{}, nil)
 	s.SetTPMHandlers(platformv1.UnimplementedTPMServiceServer{}, nil)
