@@ -219,7 +219,9 @@ var quicWireOwners = []struct {
 	{0x6A, 0x6A, "attestation"}, // OpAttestContainerWorkload, moved off PXE's 0xED (#949)
 	{0x6B, 0x6E, "tpm2"},
 	{0x6F, 0x6F, "container"},
-	{0x70, 0x77, "attestation"},
+	{0x70, 0x73, "attestation"},
+	{0x74, 0x74, "reserved"}, // retired AttestChallenge (#949), unclassified
+	{0x75, 0x77, "attestation"},
 	{0x78, 0x7B, "tpm2"},
 	{0x7C, 0x7F, "attestation"},
 	{0x80, 0x88, "ca"},
@@ -419,7 +421,6 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpAttestVerify":              {value: quicwire.OpAttestVerify, mode: wireDirect, family: "attestation"},
 	"OpAttestCollectHost":         {value: quicwire.OpAttestCollectHost, mode: wireDirect, family: "attestation"},
 	"OpAttestGetAK":               {value: quicwire.OpAttestGetAK, mode: wireDirect, family: "attestation"},
-	"OpAttestChallenge":           {value: quicwire.OpAttestChallenge, mode: wireDirect, family: "attestation"},
 	"OpAttestPollVerdicts":        {value: quicwire.OpAttestPollVerdicts, mode: wireDirect, family: "attestation"},
 	"OpAttestContainerWorkload":   {value: quicwire.OpAttestContainerWorkload, mode: wireDirect, family: "attestation"},
 	"OpAttestGetManifest":         {value: quicwire.OpAttestGetManifest, mode: wireDirect, family: "attestation"},
@@ -604,14 +605,6 @@ var iamTokenNotImplementedOpcodes = map[byte]bool{
 	quicwire.OpIAMTokenRevoke: true,
 }
 
-// attestationUnservedOpcodes are attestation-family opcodes that no transport
-// serves (docs/13 G7). The attestation family answers them with its typed
-// not-served refusal even on a bare handler, rather than the
-// attestation-unavailable error the rest of the family returns there.
-var attestationUnservedOpcodes = map[byte]ErrQUICAttestationNoService{
-	quicwire.OpAttestChallenge: {Op: "Challenge"},
-}
-
 // deviceIdentityKeyDeleteRefusals are the tpm2-family key-delete opcodes. They
 // refuse whatever the TPM state (#304), as the gRPC IDevIDService does, so a
 // bare handler answers the refusal instead of the tpm2-unavailable error.
@@ -656,14 +649,6 @@ func assertDispatchFamily(t *testing.T, h *QUICServiceHandler, opcode byte, payl
 		if resp.Status != quicwire.StatusFailedPrecondition || string(resp.Payload) != refused.Error() {
 			t.Fatalf("opcode 0x%02X: expected key-delete refusal %q, got status 0x%02X payload %q",
 				opcode, refused.Error(), resp.Status, resp.Payload)
-		}
-		return
-	}
-
-	if unserved, ok := attestationUnservedOpcodes[opcode]; ok {
-		if resp.Status != quicwire.StatusNotImplemented || string(resp.Payload) != unserved.Error() {
-			t.Fatalf("opcode 0x%02X: expected %q, got status 0x%02X payload %q",
-				opcode, unserved.Error(), resp.Status, resp.Payload)
 		}
 		return
 	}

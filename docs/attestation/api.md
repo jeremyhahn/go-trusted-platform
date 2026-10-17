@@ -33,8 +33,11 @@ collection opcodes call the same gRPC servicer through
 `pkg/api/daemon/quic_attestation_adapter.go`, so each answers with its gRPC
 twin's result and error class; `0x77` has no report store behind any transport
 and answers `StatusNotImplemented`. `0x73` calls the TPM gRPC servicer's
-`GetAK`, and `0x74` answers `StatusNotImplemented` because no transport serves
-challenge / response.
+`GetAK`. `0x74` is unassigned: no transport serves challenge / response, so
+QUIC carries no opcode for it. The authorization catalog does not classify the
+byte either, so the daemon refuses it before dispatch with `StatusPermissionDenied`
+("QUIC operation not classified for authorization: opcode 0x74"), the answer
+every reserved byte gets.
 MCP: the `attestation_*` tools. The five manifest tools call the gRPC
 `AttestationService` methods (`pkg/api/daemon/mcp_attestation_manifests.go`), so
 each answers with its gRPC twin's result and error class. The five quote and
@@ -68,7 +71,7 @@ refused (§5).
 | Device reports (fleet) | `GET /api/v1/attestation/reports` | `ListDeviceReports` | `MISSING — #386` | `attestation_device_reports` | ✅ |
 | Refresh a device report (enqueue) | `POST /api/v1/attestation/reports/{device_id}/refresh` | `RefreshDeviceReport` | `MISSING — #386` | `attestation_device_refresh` | ✅ |
 | Device verdict feed (`attestation:read`, tenant-filtered — §5.5, [engineering §9](engineering.md#device-verdict-events)) | `GET /api/v1/attestation/verdicts?cursor=&wait_ms=` (long-poll) | `StreamDeviceVerdicts` (server stream), `PollDeviceVerdicts` | `OpAttestPollVerdicts` (`0x75`, long-poll) | `attestation_device_verdicts_poll` (long-poll) | ✅ (long-poll) |
-| Challenge / response | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` — `OpAttestChallenge` (`0x74`) answers `StatusNotImplemented` (`ErrQUICAttestationNoService`); the never-implemented `OpAttestResponse` value `0x75` now carries `OpAttestPollVerdicts` | `MISSING — docs/13 G7` | — |
+| Challenge / response | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` — `0x74` is unassigned; the never-implemented `OpAttestResponse` value `0x75` now carries `OpAttestPollVerdicts` | `MISSING — docs/13 G7` | — |
 | Get AK | `MISSING` — served by the TPM surface, [`docs/tpm/`](../tpm/) | `TPMService.GetAK` ([`docs/tpm/`](../tpm/)) | `OpAttestGetAK` (`0x73`) — calls the TPM gRPC servicer's `GetAK`, so it answers its gRPC twin's result and error class | — | — |
 
 **Reading the gaps.** The rows are lopsided in a consistent direction: manifests

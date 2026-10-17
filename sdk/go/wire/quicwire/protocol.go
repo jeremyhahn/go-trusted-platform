@@ -216,11 +216,14 @@ const (
 	// 0x6F reserved
 
 	// Attestation Operations (0x70-0x7F)
-	OpAttestQuote        byte = 0x70
-	OpAttestVerify       byte = 0x71
-	OpAttestCollectHost  byte = 0x72 // repurposed from the never-implemented OpAttestGetEK
-	OpAttestGetAK        byte = 0x73
-	OpAttestChallenge    byte = 0x74
+	OpAttestQuote       byte = 0x70
+	OpAttestVerify      byte = 0x71
+	OpAttestCollectHost byte = 0x72 // repurposed from the never-implemented OpAttestGetEK
+	OpAttestGetAK       byte = 0x73
+	// 0x74 unassigned: challenge / response is served by no transport
+	// (docs/13 G7), so QUIC carries no opcode for it. The daemon's
+	// authorization catalog leaves the byte unclassified and refuses it
+	// before dispatch, like every reserved byte.
 	OpAttestPollVerdicts byte = 0x75 // repurposed from the never-implemented OpAttestResponse
 	OpAttestGetReport    byte = 0x76
 	OpAttestGetPCRs      byte = 0x77
@@ -890,7 +893,6 @@ var opcodeNames = map[byte]string{
 	OpAttestVerify:       "AttestVerify",
 	OpAttestCollectHost:  "AttestCollectHost",
 	OpAttestGetAK:        "AttestGetAK",
-	OpAttestChallenge:    "AttestChallenge",
 	OpAttestPollVerdicts: "AttestPollVerdicts",
 	OpAttestGetReport:    "AttestGetReport",
 	OpAttestGetPCRs:      "AttestGetPCRs",

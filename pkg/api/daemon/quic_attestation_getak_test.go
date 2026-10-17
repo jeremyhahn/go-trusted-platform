@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
@@ -81,15 +82,30 @@ func TestQUICAttestGetAKRefusals(t *testing.T) {
 	}
 }
 
-// TestQUICAttestChallengeNotServed: challenge / response is served by no
-// transport (docs/13 G7), so 0x74 answers the typed not-served refusal even
-// with every attestation servicer wired.
-func TestQUICAttestChallengeNotServed(t *testing.T) {
+// TestQUICAttestRetiredChallengeByteIsUnknown: challenge / response is served
+// by no transport (docs/13 G7), so QUIC carries no opcode for it. The retired
+// byte 0x74 is unclassified, so the daemon refuses it before dispatch with the
+// reserved-byte answer, not a stub refusal, even with every attestation
+// servicer wired.
+func TestQUICAttestRetiredChallengeByteIsUnknown(t *testing.T) {
 	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	h.SetTPMGRPCService(newTPMGRPCServiceWith(newIAKTPM(t, true)))
+	attestation := quic.NewAttestationHandler(logging.DefaultLogger(), nil)
+	h.SetAttestationHandler(attestation)
 
-	resp := h.handleAttestationOperation(context.Background(), &quicwire.Request{Opcode: quicwire.OpAttestChallenge})
+	const retiredChallenge byte = 0x74
+	req := &quicwire.Request{Opcode: retiredChallenge, Payload: []byte{}}
 
-	assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
-	assert.Equal(t, ErrQUICAttestationNoService{Op: "Challenge"}.Error(), string(resp.Payload))
+	// The authorization catalog does not classify 0x74, so the wire refuses
+	// it before any dispatcher sees it.
+	resp := h.HandleRequest(context.Background(), req)
+	assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
+	assert.Equal(t, quic.ErrOperationNotClassified{Opcode: retiredChallenge}.Error(), string(resp.Payload))
+
+	// Behind the guard the attestation dispatcher has no case for the byte
+	// either: it falls to the attestation handler's unknown-operation answer.
+	resp = h.handleAttestationOperation(context.Background(), req)
+	unknown := attestation.HandleRequest(context.Background(), req)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, string(unknown.Payload), string(resp.Payload))
 }

@@ -42,8 +42,10 @@ import (
 //       OpAttestGetAK       (0x73) -> TPMService.GetAK
 //       OpAttestPollVerdicts (0x75) -> PollDeviceVerdicts
 //
-//     OpAttestChallenge (0x74) answers StatusNotImplemented: challenge /
-//     response is served by no transport (docs/13 G7).
+//     0x74 is unassigned: challenge / response is served by no transport
+//     (docs/13 G7). The authorization catalog does not classify the byte,
+//     so HandleRequest refuses it with StatusPermissionDenied
+//     (quic.ErrOperationNotClassified) before it reaches this dispatcher.
 //
 //     PollDeviceVerdicts is how a QUIC client follows device verdicts: QUIC
 //     requests are unary, so the gRPC server stream StreamDeviceVerdicts is
@@ -83,10 +85,6 @@ func (h *QUICServiceHandler) handleAttestationOperation(ctx context.Context, req
 		return h.handleAttestationCollectHost(ctx, req)
 	case quicwire.OpAttestGetAK:
 		return h.handleAttestationGetAK(ctx, req)
-	case quicwire.OpAttestChallenge:
-		// Challenge / response is unserved on every transport
-		// (docs/attestation/api.md §2, docs/13 G7).
-		return h.errorResponse(quicwire.StatusNotImplemented, ErrQUICAttestationNoService{Op: "Challenge"})
 	case quicwire.OpAttestPollVerdicts:
 		return h.handleAttestationPollVerdicts(ctx, req)
 	default:

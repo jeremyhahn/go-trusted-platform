@@ -430,7 +430,6 @@ var opcodePermissions = map[byte]OpcodePermission{
 	quicwire.OpAttestVerify:         attestationRead,
 	quicwire.OpAttestCollectHost:    attestationWrite,
 	quicwire.OpAttestGetAK:          attestationRead,
-	quicwire.OpAttestChallenge:      attestationWrite,
 	quicwire.OpAttestPollVerdicts:   attestationRead,
 	quicwire.OpAttestGetReport:      attestationRead,
 	quicwire.OpAttestGetPCRs:        attestationRead,
