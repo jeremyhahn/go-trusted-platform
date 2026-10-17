@@ -15,6 +15,9 @@ package iso
 
 import (
 	"bytes"
+	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -35,7 +38,10 @@ func TestExtractCommand_FlagsExist(t *testing.T) {
 	cmd.SetErr(new(bytes.Buffer))
 
 	// Verify all flags exist
-	flags := []string{"iso", "output-dir", "force", "config", "work-dir", "debug", "verbose"}
+	flags := []string{"iso", "output-dir", "force", "work-dir", "debug"}
+	for _, removed := range []string{"config", "verbose"} {
+		assert.Nil(t, cmd.Flags().Lookup(removed), "flag '%s' should not be defined", removed)
+	}
 
 	for _, flagName := range flags {
 		flag := cmd.Flags().Lookup(flagName)
@@ -63,48 +69,96 @@ func TestExtractCommand_DefaultValues(t *testing.T) {
 	debugFlag := cmd.Flags().Lookup("debug")
 	assert.Equal(t, "false", debugFlag.DefValue)
 
-	verboseFlag := cmd.Flags().Lookup("verbose")
-	assert.Equal(t, "false", verboseFlag.DefValue)
-
 	// output-dir should be empty by default (uses work-dir/iso)
 	outputDirFlag := cmd.Flags().Lookup("output-dir")
 	assert.Equal(t, "", outputDirFlag.DefValue)
 }
 
-func TestRunExtract_ReturnsError(t *testing.T) {
+func TestRunExtract_MissingISO(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "absent.iso")
 	flags := &extractFlags{
-		iso:       "/tmp/test.iso",
-		outputDir: "/tmp/extracted",
-		force:     false,
+		iso:       missing,
+		outputDir: t.TempDir(),
 		workDir:   "work",
 	}
 
-	err := runExtract(getTestFlags(), flags)
-	require.Error(t, err, "expected error from runExtract (daemon connection required)")
+	out := new(bytes.Buffer)
+	err := runExtract(context.Background(), getTestFlags(), flags, out)
 
-	// Verify it's the expected error type
-	_, ok := err.(ErrDaemonConnectionRequired)
-	assert.True(t, ok, "expected ErrDaemonConnectionRequired, got %T", err)
+	var notFound ErrISONotFound
+	require.ErrorAs(t, err, &notFound)
+	assert.Equal(t, missing, notFound.Path)
+	assert.Empty(t, out.String(), "a failed extract prints no result")
+}
+
+func TestRunExtract_RefusesNonEmptyOutputWithoutForce(t *testing.T) {
+	isoPath := filepath.Join(t.TempDir(), "test.iso")
+	require.NoError(t, os.WriteFile(isoPath, []byte("iso"), 0o600))
+	outputDir := t.TempDir()
+	keep := filepath.Join(outputDir, "keep")
+	require.NoError(t, os.WriteFile(keep, []byte("existing"), 0o600))
+
+	err := runExtract(context.Background(), getTestFlags(), &extractFlags{iso: isoPath, outputDir: outputDir}, new(bytes.Buffer))
+
+	var exists ErrDirectoryAlreadyExists
+	require.ErrorAs(t, err, &exists)
+	assert.Equal(t, outputDir, exists.Path)
+	assert.FileExists(t, keep, "the existing tree is left alone")
+}
+
+func TestRunExtract_DefaultOutputDirIsUnderWorkDir(t *testing.T) {
+	isoPath := filepath.Join(t.TempDir(), "test.iso")
+	require.NoError(t, os.WriteFile(isoPath, []byte("iso"), 0o600))
+	workDir := t.TempDir()
+	defaultDir := filepath.Join(workDir, "iso")
+	require.NoError(t, os.MkdirAll(defaultDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(defaultDir, "keep"), []byte("x"), 0o600))
+
+	err := runExtract(context.Background(), getTestFlags(), &extractFlags{iso: isoPath, workDir: workDir}, new(bytes.Buffer))
+
+	var exists ErrDirectoryAlreadyExists
+	require.ErrorAs(t, err, &exists)
+	assert.Equal(t, defaultDir, exists.Path)
+}
+
+func TestDirectoryHasEntries(t *testing.T) {
+	empty := t.TempDir()
+	assert.False(t, directoryHasEntries(empty))
+	assert.False(t, directoryHasEntries(filepath.Join(empty, "absent")))
+
+	require.NoError(t, os.WriteFile(filepath.Join(empty, "f"), nil, 0o600))
+	assert.True(t, directoryHasEntries(empty))
+}
+
+func TestCountFiles(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "boot", "grub"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "a"), nil, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "boot", "b"), nil, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "boot", "grub", "c"), nil, 0o600))
+
+	count, err := countFiles(root)
+	require.NoError(t, err)
+	assert.Equal(t, 3, count, "directories are not counted")
+
+	_, err = countFiles(filepath.Join(root, "absent"))
+	assert.Error(t, err)
 }
 
 func TestExtractFlags_StructFields(t *testing.T) {
 	flags := &extractFlags{
-		iso:        "/path/to/alpine.iso",
-		outputDir:  "/path/to/output",
-		force:      true,
-		configFile: "/etc/config.yaml",
-		workDir:    "/tmp/work",
-		debug:      true,
-		verbose:    true,
+		iso:       "/path/to/alpine.iso",
+		outputDir: "/path/to/output",
+		force:     true,
+		workDir:   "/tmp/work",
+		debug:     true,
 	}
 
 	assert.Equal(t, "/path/to/alpine.iso", flags.iso)
 	assert.Equal(t, "/path/to/output", flags.outputDir)
 	assert.True(t, flags.force)
-	assert.Equal(t, "/etc/config.yaml", flags.configFile)
 	assert.Equal(t, "/tmp/work", flags.workDir)
 	assert.True(t, flags.debug)
-	assert.True(t, flags.verbose)
 }
 
 func TestExtractCommand_HasRunE(t *testing.T) {

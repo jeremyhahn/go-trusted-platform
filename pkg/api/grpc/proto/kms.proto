@@ -207,6 +207,8 @@ message GenerateKeyRequest {
   string description = 3;
   map<string, string> tags = 4;
   string owner = 5;
+  // display_name is the key's human-readable name; name stays the key ID.
+  string display_name = 6;
 }
 
 message GenerateKeyResponse {

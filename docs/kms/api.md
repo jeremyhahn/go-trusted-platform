@@ -59,6 +59,7 @@ platform `KeyManagementService`; gRPC serves them through
 `GenerateKey` on every transport: the request's `name` is the key ID.
 `key_spec.exportable` and `key_spec.deletion_protection` are set at generation;
 a delete of a deletion-protected key is refused with FailedPrecondition.
+`display_name` (the key's human-readable name; `name` stays the ID),
 `description` and `tags` are recorded as key metadata right after the generate,
 and the reply's `metadata` is what the KMS recorded, read back, never an echo
 of the request. `owner` cannot be set: the SDK `GenerateKeyRequest` and
@@ -71,8 +72,8 @@ That holds in the system scope: a caller of the platform system tenant, or an
 unbound caller. A caller of any other tenant generates in that tenant's key
 scope, where the reply's `metadata` is only what the generate response carries
 (key ID, algorithm, version, `exportable`, `deletion_protection`) and no
-metadata call is made. A tenant-scope request carrying `description` or `tags`
-is refused with `FailedPrecondition` on every transport before any key is
+metadata call is made. A tenant-scope request carrying `display_name`,
+`description` or `tags` is refused with `FailedPrecondition` on every transport before any key is
 generated. SDK gap (go-quicbaas `v0.12.0-alpha`): `GenerateKey` stores a
 tenant key as `tenant/<tenant>/<name>` (`pkg/service/kms.go:446`), but
 `GetKeyMetadata` (`:1266`) and `UpdateKeyMetadata` (`:1302`) look the name up
@@ -89,6 +90,17 @@ names (`ENCRYPT`, `DECRYPT`, `SIGN`, `VERIFY`, `WRAP`, `UNWRAP`). It answers
 fields and decodes the reply into `key` and `metadata`. It refuses an algorithm
 or usage outside those lists as InvalidArgument before sending, because the
 route would answer 400.
+
+`display_name` reaches the KMS over gRPC, the Unix socket and the embedded
+transport, which serve the platform `KeyManagementService`. The other
+transports refuse it before any key is generated instead of dropping it: the
+REST route reads no display name, so the SDK REST client refuses it before
+sending (`ErrKeyDisplayNameNotSupported`); the MCP `kms_generate_key` tool
+refuses it with InvalidArgument (`KMS_DISPLAY_NAME_INVALID`); and the QUIC handler refuses it
+with InvalidArgument (`ErrQUICKMSDisplayNameNotSupported`), because it
+generates through the go-quicbaas `GenerateKeyRequest`, which has no
+display-name field (go-quicbaas `v0.12.0-alpha` `api/proto/kms.proto:569`).
+Set the name there with a key metadata update.
 
 ---
 

@@ -62,6 +62,9 @@ func TestGenerateKeyDomain_NameIsTheKeyID(t *testing.T) {
 	if recorder.got.GetName() != "tenant-a-kek" {
 		t.Fatalf("request name = %q, want the key ID %q", recorder.got.GetName(), "tenant-a-kek")
 	}
+	if recorder.got.GetDisplayName() != "Tenant A KEK" {
+		t.Fatalf("request display_name = %q, want %q", recorder.got.GetDisplayName(), "Tenant A KEK")
+	}
 	if result.Key.KeyID != "tenant-a-kek" {
 		t.Fatalf("key ID = %q, want %q", result.Key.KeyID, "tenant-a-kek")
 	}

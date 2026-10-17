@@ -144,6 +144,13 @@ func TestKMSKeyGeneration_UnsendableEnumsRejectedBeforeTheWire(t *testing.T) {
 			wantErr: new(ErrKeyUsageNotSupported),
 		},
 		{
+			name:       "GenerateKeyDisplayNameTheRouteDoesNotCarry",
+			grpcMethod: platformv1.KeyManagementService_GenerateKey_FullMethodName,
+			req:        &platformv1.GenerateKeyRequest{Name: "k", DisplayName: "Tenant KEK"},
+			resp:       &platformv1.GenerateKeyResponse{},
+			wantErr:    new(ErrKeyDisplayNameNotSupported),
+		},
+		{
 			name:       "GenerateDataKeyAlgorithmOutsideTheEnum",
 			grpcMethod: platformv1.KeyManagementService_GenerateDataKey_FullMethodName,
 			req:        &platformv1.GenerateDataKeyRequest{KeyId: "kek", Algorithm: outOfEnum},

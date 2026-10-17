@@ -158,7 +158,8 @@ func (e ErrKMSGeneratedKeyMetadata) GRPCStatus() *status.Status {
 
 // ErrKMSTenantKeyMetadataUnsupported is returned, before any key is
 // generated, when a generate request in a non-system tenant's key scope
-// carries a description or tags. The SDK cannot record them there; see
+// carries a display name, a description or tags. The SDK cannot record them
+// there; see
 // tenantScopedKeyGeneration for the gap.
 type ErrKMSTenantKeyMetadataUnsupported struct {
 	TenantID string
@@ -167,7 +168,7 @@ type ErrKMSTenantKeyMetadataUnsupported struct {
 
 func (e ErrKMSTenantKeyMetadataUnsupported) Error() string {
 	return "KMS key " + e.KeyID + " not generated: tenant " + e.TenantID +
-		" cannot set a description or tags on a generated key, because the go-quicbaas SDK looks key metadata up outside the tenant scope"
+		" cannot set a display name, description or tags on a generated key, because the go-quicbaas SDK looks key metadata up outside the tenant scope"
 }
 
 // GRPCStatus classifies the error as FailedPrecondition on every transport.
@@ -268,7 +269,7 @@ func (b *PlatformKMSBackend) GenerateKey(
 		return nil, err
 	}
 
-	tenantScoped, err := tenantScopedKeyGeneration(ctx, b.systemTenantID, req.Name, req.Description, req.Tags)
+	tenantScoped, err := tenantScopedKeyGeneration(ctx, b.systemTenantID, req.Name, req.DisplayName, req.Description, req.Tags)
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +285,7 @@ func (b *PlatformKMSBackend) GenerateKey(
 		return nil, err
 	}
 
-	meta, err := recordGeneratedKeyMetadata(ctx, client, tenantScoped, resp, req.Description, req.Tags)
+	meta, err := recordGeneratedKeyMetadata(ctx, client, tenantScoped, resp, req.DisplayName, req.Description, req.Tags)
 	if err != nil {
 		return nil, err
 	}

@@ -15,6 +15,10 @@ package iso
 
 import (
 	"bytes"
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,6 +38,14 @@ func getTestFlags() *cli.CommonFlags {
 	}
 }
 
+// getJSONTestFlags returns the common flags with -o json, so a verb's printed
+// result can be decoded by the test.
+func getJSONTestFlags() *cli.CommonFlags {
+	flags := getTestFlags()
+	flags.OutputFormat = cli.OutputFormatJSON
+	return flags
+}
+
 func TestBuildCommand_Creation(t *testing.T) {
 	cmd := newBuildCommand(getTestFlags)
 	require.NotNil(t, cmd, "newBuildCommand returned nil")
@@ -48,11 +60,16 @@ func TestBuildCommand_FlagsExist(t *testing.T) {
 	cmd.SetErr(new(bytes.Buffer))
 
 	// Verify required flags exist
-	flags := []string{"iso-dir", "output", "label", "checksum", "config", "work-dir", "debug", "verbose"}
+	flags := []string{"iso-dir", "output", "label", "checksum", "debug"}
 
 	for _, flagName := range flags {
 		flag := cmd.Flags().Lookup(flagName)
 		assert.NotNil(t, flag, "expected flag '%s' to be defined", flagName)
+	}
+
+	// The verb runs locally; it takes no ISO build config or work directory.
+	for _, removed := range []string{"config", "work-dir", "verbose"} {
+		assert.Nil(t, cmd.Flags().Lookup(removed), "flag '%s' should not be defined", removed)
 	}
 }
 
@@ -77,30 +94,51 @@ func TestBuildCommand_DefaultValues(t *testing.T) {
 	checksumFlag := cmd.Flags().Lookup("checksum")
 	assert.Equal(t, "true", checksumFlag.DefValue)
 
-	workDirFlag := cmd.Flags().Lookup("work-dir")
-	assert.Equal(t, "work", workDirFlag.DefValue)
-
 	debugFlag := cmd.Flags().Lookup("debug")
 	assert.Equal(t, "false", debugFlag.DefValue)
-
-	verboseFlag := cmd.Flags().Lookup("verbose")
-	assert.Equal(t, "false", verboseFlag.DefValue)
 }
 
-func TestRunBuild_ReturnsError(t *testing.T) {
+func TestRunBuild_MissingSourceDir(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "absent")
 	flags := &buildFlags{
-		sourceDir:   "/tmp/test-iso",
-		output:      "/tmp/output.iso",
+		sourceDir:   missing,
+		output:      filepath.Join(t.TempDir(), "output.iso"),
 		volumeID:    "TEST",
 		generateSum: true,
 	}
 
-	err := runBuild(getTestFlags(), flags)
-	require.Error(t, err, "expected error from runBuild (daemon connection required)")
+	out := new(bytes.Buffer)
+	err := runBuild(context.Background(), getTestFlags(), flags, out)
+	require.Error(t, err)
 
-	// Verify it's the expected error type
-	_, ok := err.(ErrDaemonConnectionRequired)
-	assert.True(t, ok, "expected ErrDaemonConnectionRequired, got %T", err)
+	var notFound ErrDirectoryNotFound
+	require.ErrorAs(t, err, &notFound)
+	assert.Equal(t, missing, notFound.Path)
+	assert.Empty(t, out.String(), "a failed build prints no result")
+}
+
+func TestRunBuild_SourceIsAFile(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(file, []byte("x"), 0o600))
+
+	err := runBuild(context.Background(), getTestFlags(), &buildFlags{sourceDir: file, output: file + ".iso"}, new(bytes.Buffer))
+
+	var notFound ErrDirectoryNotFound
+	require.ErrorAs(t, err, &notFound)
+}
+
+func TestRunBuild_LabelTooLong(t *testing.T) {
+	flags := &buildFlags{
+		sourceDir: t.TempDir(),
+		output:    filepath.Join(t.TempDir(), "output.iso"),
+		volumeID:  strings.Repeat("L", maxVolumeLabelLength+1),
+	}
+
+	err := runBuild(context.Background(), getTestFlags(), flags, new(bytes.Buffer))
+
+	var tooLong ErrVolumeLabelTooLong
+	require.ErrorAs(t, err, &tooLong)
+	assert.Equal(t, maxVolumeLabelLength, tooLong.MaxLength)
 }
 
 func TestBuildFlags_StructFields(t *testing.T) {
@@ -109,20 +147,14 @@ func TestBuildFlags_StructFields(t *testing.T) {
 		output:      "/tmp/output.iso",
 		volumeID:    "MY_VOLUME",
 		generateSum: true,
-		configFile:  "/etc/config.yaml",
-		workDir:     "/tmp/work",
 		debug:       true,
-		verbose:     true,
 	}
 
 	assert.Equal(t, "/tmp/iso-dir", flags.sourceDir)
 	assert.Equal(t, "/tmp/output.iso", flags.output)
 	assert.Equal(t, "MY_VOLUME", flags.volumeID)
 	assert.True(t, flags.generateSum)
-	assert.Equal(t, "/etc/config.yaml", flags.configFile)
-	assert.Equal(t, "/tmp/work", flags.workDir)
 	assert.True(t, flags.debug)
-	assert.True(t, flags.verbose)
 }
 
 func TestBuildCommand_HasRunE(t *testing.T) {

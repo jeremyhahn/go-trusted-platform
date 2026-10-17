@@ -164,6 +164,13 @@ platformctl registry status --attestation --encryption
 has its gate on — it prints the effective `require_attestation`, the golden PCR
 set, the AIK allowlist and the quote freshness bound.
 
+With `-o json` (or `yaml`) the output is one object under a `status` key:
+`healthy`, `version`, `endpoint`, `uptime_seconds`, and the nested `storage`
+(`backend`, `healthy`, `used_bytes`, `total_bytes`, `image_count`,
+`layer_count`, `blob_count`), `attestation` (`enabled`, `required`,
+`policy_healthy`, ...), `encryption` (`enabled`, ...) and, with `--metrics`,
+`metrics` objects. A section the server does not report is `null`.
+
 ---
 
 ## 8. Exit codes and output

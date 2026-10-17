@@ -14,9 +14,15 @@
 package iso
 
 import (
+	"context"
+	"io"
+	"net/url"
+	"path"
+
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	pkgiso "github.com/jeremyhahn/go-trusted-platform/pkg/iso"
 )
 
 // downloadFlags holds flags for the download command
@@ -28,10 +34,18 @@ type downloadFlags struct {
 	force        bool
 	verify       bool
 	resumeEnable bool
-	configFile   string
 	workDir      string
 	debug        bool
-	verbose      bool
+}
+
+// downloadResult is what `iso download` prints (docs/installer/cli.md §4).
+type downloadResult struct {
+	Success   bool   `json:"success" yaml:"success"`
+	ISOPath   string `json:"iso_path" yaml:"iso_path"`
+	SHA256    string `json:"sha256" yaml:"sha256"`
+	SizeBytes int64  `json:"size_bytes" yaml:"size_bytes"`
+	Verified  bool   `json:"verified" yaml:"verified"`
+	Message   string `json:"message" yaml:"message"`
 }
 
 // newDownloadCommand creates the download subcommand for downloading Alpine ISO
@@ -61,7 +75,7 @@ Examples:
   # Force re-download
   platformctl iso download --force`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDownload(getFlags(), flags)
+			return runDownload(cmd.Context(), getFlags(), flags, cmd.OutOrStdout())
 		},
 	}
 
@@ -75,17 +89,55 @@ Examples:
 	cmd.Flags().BoolVar(&flags.resumeEnable, "resume", true, "Enable resuming partial downloads")
 
 	// Common flags
-	cmd.Flags().StringVar(&flags.configFile, "config", "", "Path to ISO build configuration file")
-	cmd.Flags().StringVar(&flags.workDir, "work-dir", "work", "Working directory for ISO operations")
+	cmd.Flags().StringVar(&flags.workDir, "work-dir", "work", "Directory the ISO is downloaded into")
 	cmd.Flags().BoolVar(&flags.debug, "debug", false, "Enable debug output")
-	cmd.Flags().BoolVar(&flags.verbose, "verbose", false, "Enable verbose output")
 
 	return cmd
 }
 
 // runDownload executes the download command
-func runDownload(commonFlags *cli.CommonFlags, flags *downloadFlags) error {
-	// ISO download requires App initialization which needs daemon connection
-	// Dual-mode will be added later to support local-only operations
-	return ErrDaemonConnectionRequired{Command: "iso download"}
+func runDownload(ctx context.Context, commonFlags *cli.CommonFlags, flags *downloadFlags, out io.Writer) error {
+	isoConfig := pkgiso.DefaultISOConfig()
+	isoConfig.Version = flags.version
+	isoConfig.MirrorURL = flags.mirror
+	isoConfig.Architecture = flags.arch
+	isoConfig.WorkDir = flags.workDir
+	isoConfig.VerifyChecksum = flags.verify
+	isoConfig.ResumeDownload = flags.resumeEnable
+	isoConfig.Debug = flags.debug
+
+	if flags.url != "" {
+		parsed, err := url.Parse(flags.url)
+		if err != nil || parsed.Scheme == "" || path.Base(parsed.Path) == "/" || path.Base(parsed.Path) == "." {
+			return ErrConfigValidationFailed{Reason: "--url must be an absolute URL naming an ISO file: " + flags.url}
+		}
+		isoConfig.URL = flags.url
+		isoConfig.ISO = path.Base(parsed.Path)
+	}
+
+	if err := isoConfig.Validate(); err != nil {
+		return ErrConfigValidationFailed{Reason: err.Error()}
+	}
+
+	if flags.force {
+		removeExistingISOFiles(isoConfig)
+	}
+
+	if err := pkgiso.DownloadISO(ctx, isoConfig); err != nil {
+		return &WrappedError{Msg: "failed to download ISO", Err: err}
+	}
+
+	sum, size, err := fileDigest(isoConfig.ISOPath())
+	if err != nil {
+		return err
+	}
+
+	return printResult(out, commonFlags, downloadResult{
+		Success:   true,
+		ISOPath:   isoConfig.ISOPath(),
+		SHA256:    sum,
+		SizeBytes: size,
+		Verified:  flags.verify,
+		Message:   "ISO ready, source " + isoConfig.URL,
+	})
 }
