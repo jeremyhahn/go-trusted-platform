@@ -339,13 +339,23 @@ listed below.
 
 `make integration-test` runs the runner's `ALL_TARGETS` list in order:
 every key except `cold-start` and `barrier-gate` (each needs the shared
-`platformd` not running), `bmc` (needs the vBMC config), `diskimage`,
+`platformd` not running), `diskimage`,
 `netboot`, `nat64` and `ipsec` (each needs inputs built on the host first),
 `pxe` (platformd has no PXE backend), `bootstrap` (the shared platformd
 publishes no DANE records) and `secureboot` (needs prebuilt FIPS-kernel
 artifacts), all three in the table below, and the keys that
 only run part of a suite already in the list (`lb`, `ipxe-dhcp`, `ipxe-tftp`,
 `ipxe-http`, `testenv-enrollment`).
+
+`bmc` and `compute` each need a `platformd` the shared one is not: `bmc` one
+that trusts the vBMC's certificate (`trust.bmc` with the vBMC CA file), and
+`compute` one with the `local-qemu` provider, so the VM RPCs reach a VM
+orchestrator. The runner's `TARGET_OWN_DAEMON` map names the function that
+starts each. A single-target run starts that daemon instead of the shared
+one; `make integration-test` stops the shared daemon before the suite,
+reprovisions the swtpm, starts the suite's own daemon, and after the suite
+brings the shared daemon back the same way. The vBMC starts once and runs
+until cleanup.
 
 The keys in the runner's `TARGET_NO_DAEMON` map skip the shared `platformd`:
 their suites start their own daemon or cluster, or test something that needs

@@ -167,11 +167,11 @@ declare -A TARGET_NO_DAEMON=(
     [sdk]=1
 )
 
-# The suites `all` runs, in order, on the one shared platformd: the
-# daemon-free suites first, then every daemon-backed one. Left out, each for
-# a reason the suite itself sets: cold-start and barrier-gate need the shared
-# daemon NOT running; bmc needs platformd started against the vBMC config;
-# diskimage, netboot, nat64 and ipsec need inputs only their make targets
+# The suites `all` runs, in order: the daemon-free suites first, then every
+# daemon-backed one, on the shared platformd except bmc and compute, which get
+# their own for their suite (TARGET_OWN_DAEMON). Left out, each for a reason
+# the suite itself sets: cold-start and barrier-gate need the shared daemon
+# NOT running; diskimage, netboot, nat64 and ipsec need inputs only their make targets
 # build on the host; lb, testenv-enrollment and ipxe-* are slices of
 # packages already listed (sdn, root, ipxe). pxe stays runnable by name but
 # is out of the default set: platformd builds its PXE service with no
@@ -185,7 +185,7 @@ declare -A TARGET_NO_DAEMON=(
 # FIPS_MODULE_SIGNING_KEY).
 ALL_TARGETS=(
     helpers datastore quicbaas sdk cluster cmd ipxe installer e2e
-    root acme attestation authenticode ca ceremony cli compute
+    root acme attestation authenticode bmc ca ceremony cli compute
     container daemon device dns fido2 iam iso kms luks network
     ntp objectstorage piv provision proxy quic registry restroutes sdn
     secrets tenant tpm vpn vtpm
@@ -318,23 +318,14 @@ cleanup() {
     echo ""
     echo "=== Cleaning up integration test environment ==="
 
-    # Stop platformd
-    if [ -n "$PLATFORMD_PID" ] && kill -0 "$PLATFORMD_PID" 2>/dev/null; then
-        echo "Stopping platformd (PID: $PLATFORMD_PID)..."
-        kill "$PLATFORMD_PID" 2>/dev/null || true
-        wait "$PLATFORMD_PID" 2>/dev/null || true
-    fi
+    # Stop platformd and the chronyd it rendered the config for
+    stop_platformd
 
     # Stop vBMC
     if [ -n "$VBMC_PID" ] && kill -0 "$VBMC_PID" 2>/dev/null; then
         echo "Stopping vBMC (PID: $VBMC_PID)..."
         kill "$VBMC_PID" 2>/dev/null || true
         wait "$VBMC_PID" 2>/dev/null || true
-    fi
-
-    # Stop chronyd
-    if [ -f "${CHRONYD_PID_FILE}" ]; then
-        kill "$(cat "${CHRONYD_PID_FILE}")" 2>/dev/null || true
     fi
 
     # Stop swtpm
@@ -636,10 +627,6 @@ COMPUTEEOF
 #   UDP 6230 — vBMC IPMI RMCP+ (power/boot/sensors/sysinfo)
 #   TCP 8645 — vBMC plain HTTP CA cert endpoint (bootstrap trust)
 start_vbmc() {
-    if [ "$RUN_TARGET" != "bmc" ]; then
-        return 0
-    fi
-
     echo "=== Building and starting vBMC ==="
 
     # Build the vBMC binary from source.
@@ -761,6 +748,25 @@ start_chronyd() {
     echo "WARNING: chronyd never answered on ${CHRONYD_SOCK}"
 }
 
+# stop_chronyd stops the chronyd start_chronyd started. chronyd daemonizes, so
+# it is no child to wait on; the loop waits for its pid to go instead, so the
+# next start_chronyd does not meet the old one on the command socket.
+stop_chronyd() {
+    if [ ! -f "${CHRONYD_PID_FILE}" ]; then
+        return 0
+    fi
+    local pid
+    pid="$(cat "${CHRONYD_PID_FILE}")"
+    kill "${pid}" 2>/dev/null || true
+    for _ in $(seq 1 10); do
+        if ! kill -0 "${pid}" 2>/dev/null; then
+            return 0
+        fi
+        sleep 1
+    done
+    echo "WARNING: chronyd (PID: ${pid}) still running after 10s"
+}
+
 start_platformd() {
     local config_file="${1:-${PLATFORM_BUILD_DIR}/test/integration/config.yaml}"
     echo "=== Starting platformd (config: ${config_file}) ==="
@@ -843,6 +849,56 @@ start_platformd() {
     echo "platformd logs:"
     tail -50 "${PLATFORMD_STARTUP_LOG}" 2>/dev/null || true
     return 1
+}
+
+# stop_platformd stops the running platformd, waiting for it to exit so the
+# next start_platformd can bind the same ports and socket, and then the
+# chronyd started on the config that daemon rendered.
+stop_platformd() {
+    if [ -n "$PLATFORMD_PID" ] && kill -0 "$PLATFORMD_PID" 2>/dev/null; then
+        echo "Stopping platformd (PID: $PLATFORMD_PID)..."
+        kill "$PLATFORMD_PID" 2>/dev/null || true
+        wait "$PLATFORMD_PID" 2>/dev/null || true
+    fi
+    PLATFORMD_PID=""
+    stop_chronyd
+}
+
+# start_bmc_platformd starts platformd for the bmc suite: the vBMC first, which
+# writes /tmp/vbmc-ca.pem and the config that trusts it, then platformd on that
+# config. The vBMC is started once and stays up until cleanup.
+start_bmc_platformd() {
+    if [ -z "$VBMC_PID" ]; then
+        start_vbmc
+    fi
+    start_platformd "${VBMC_PLATFORMD_CONFIG}"
+}
+
+# start_compute_platformd starts platformd for the compute suite, with the
+# local QEMU provider, so the VM tools and RPCs reach a VM orchestrator.
+start_compute_platformd() {
+    prepare_compute_config
+    start_platformd "${COMPUTE_PLATFORMD_CONFIG}"
+}
+
+# TARGET_OWN_DAEMON maps each target whose suite needs a platformd other than
+# the shared one to the function that starts it. A single-target run calls it
+# in place of start_platformd; `all` swaps the shared daemon for it around
+# that one suite (run_with_own_daemon). proxy is not here: it runs on the
+# shared daemon, and `all` prepares its gatewayd supervision up front.
+declare -A TARGET_OWN_DAEMON=(
+    [bmc]=start_bmc_platformd
+    [compute]=start_compute_platformd
+)
+
+# restart_platformd replaces the running platformd with the one the given
+# start function brings up. The swtpm is reprovisioned first: start_platformd
+# wipes the platform directory, so the new daemon meets the fresh TPM a
+# single-target run gives it rather than one an earlier daemon provisioned.
+restart_platformd() {
+    stop_platformd
+    start_swtpm
+    "$1" || abort_no_daemon
 }
 
 # abort_no_daemon ends the run when platformd did not come up.
@@ -1016,16 +1072,9 @@ elif [ "$RUN_TARGET" = "barrier-gate" ]; then
     export PLATFORM_BARRIER_GATE_DIR="/tmp/platformd-barrier-gate"
     export PLATFORM_BARRIER_GATE_BIN="/tmp/platformd"
     export PLATFORM_BARRIER_GATE_CONFIG="${PLATFORM_BUILD_DIR}/test/integration/barrier_gate/config.yaml"
-elif [ "$RUN_TARGET" = "bmc" ]; then
-    # BMC target: start vBMC first (generates /tmp/vbmc-ca.pem and the
-    # modified config that trusts it), then start platformd with that config.
-    start_vbmc || echo "WARNING: vBMC setup failed, BMC tests may fail"
-    start_platformd "${VBMC_PLATFORMD_CONFIG}" || abort_no_daemon
-elif [ "$RUN_TARGET" = "compute" ]; then
-    # Compute target: platformd with the local QEMU provider, so the VM
-    # tools and RPCs reach a VM orchestrator.
-    prepare_compute_config
-    start_platformd "${COMPUTE_PLATFORMD_CONFIG}" || abort_no_daemon
+elif [ -n "${TARGET_OWN_DAEMON[$RUN_TARGET]:-}" ]; then
+    # bmc and compute: the platformd their suite needs, not the shared one.
+    "${TARGET_OWN_DAEMON[$RUN_TARGET]}" || abort_no_daemon
 elif [ "$RUN_TARGET" = "proxy" ]; then
     # The proxy suite talks to the shared platformd and also runs gatewayd
     # itself, supervised, to kill its children under load.
@@ -1139,10 +1188,25 @@ run_test() {
     fi
 }
 
+# run_with_own_daemon runs one `all` suite on the platformd TARGET_OWN_DAEMON
+# names for it, the daemon its single-target run gets, then brings the shared
+# daemon back for the suites after it.
+run_with_own_daemon() {
+    local target="$1"
+    restart_platformd "${TARGET_OWN_DAEMON[$target]}"
+    run_test "$target"
+    restart_platformd start_platformd
+}
+
 if [ "$RUN_TARGET" = "all" ]; then
-    # Every suite in ALL_TARGETS, on the one shared platformd.
+    # Every suite in ALL_TARGETS on the shared platformd, except those in
+    # TARGET_OWN_DAEMON, which each get their own for the length of the suite.
     for target in "${ALL_TARGETS[@]}"; do
-        run_test "$target"
+        if [ -n "${TARGET_OWN_DAEMON[$target]:-}" ]; then
+            run_with_own_daemon "$target"
+        else
+            run_test "$target"
+        fi
     done
 else
     run_test "$RUN_TARGET"
