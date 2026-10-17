@@ -57,8 +57,10 @@ type Layer struct {
 	// Size is the size of the layer in bytes.
 	Size int64 `json:"size"`
 
-	// Content is the layer content (compressed tar).
-	Content []byte `json:"-"`
+	// Content is the layer content (compressed tar). It is part of the
+	// JSON push and pull envelope the gRPC and REST transports carry, so a
+	// pushed layer's bytes reach storage and come back on pull.
+	Content []byte `json:"content,omitempty"`
 }
 
 // Image represents a container image with its layers.

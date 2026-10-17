@@ -888,23 +888,25 @@ func (m *MCPAdapter) Attest(ctx context.Context, id string) (*AttestationReport,
 // Unix Socket Adapter Implementation
 // =============================================================================
 
-// UnixAdapter implements ContainerCommands using Unix socket.
+// UnixAdapter implements ContainerCommands over the daemon's Unix socket.
+// platformd serves gRPC on that socket, not HTTP, so this is the gRPC
+// adapter dialled over the socket instead of TCP.
 type UnixAdapter struct {
+	GRPCAdapter
 	socketPath string
-	httpClient *http.Client
 }
 
-// NewUnixAdapter creates a new Unix socket adapter for integration testing.
+// NewUnixAdapter creates a new Unix socket adapter.
 func NewUnixAdapter() *UnixAdapter {
 	return &UnixAdapter{}
 }
 
-// Name returns the protocol adapter identifier.
+// Name returns the adapter name.
 func (u *UnixAdapter) Name() string {
 	return "Unix"
 }
 
-// Setup initializes the Unix socket connection.
+// Setup dials the daemon's gRPC server over the Unix socket.
 func (u *UnixAdapter) Setup(ctx context.Context) error {
 	socketPath := os.Getenv(EnvPlatformdSocket)
 	if socketPath == "" {
@@ -912,237 +914,21 @@ func (u *UnixAdapter) Setup(ctx context.Context) error {
 	}
 	u.socketPath = socketPath
 
-	// Create HTTP client that uses Unix socket
-	u.httpClient = &http.Client{
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return net.Dial("unix", u.socketPath)
-			},
-		},
-		Timeout: DefaultCommandTimeout,
+	conn, err := grpc.DialContext(ctx, "unix://"+socketPath,
+		helpers.GRPCUnixCredentials(),
+		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", strings.TrimPrefix(addr, "unix://"))
+		}),
+		grpc.WithBlock(),
+	)
+	if err != nil {
+		return ErrAdapterConnectionFailed{Adapter: "Unix", URL: socketPath, Err: err}
 	}
 
-	// Verify socket exists
-	if _, err := os.Stat(u.socketPath); os.IsNotExist(err) {
-		return ErrAdapterConnectionFailed{Adapter: "Unix", URL: u.socketPath, Err: err}
-	}
-
+	u.conn = conn
+	u.client = computesvc.NewClientFromGRPC(pb.NewComputeServiceClient(conn))
 	return nil
-}
-
-// Teardown closes the Unix socket connection.
-func (u *UnixAdapter) Teardown() error {
-	if u.httpClient != nil {
-		u.httpClient.CloseIdleConnections()
-	}
-	return nil
-}
-
-// doRequest performs an HTTP request over Unix socket.
-func (u *UnixAdapter) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, int, error) {
-	var reqBody io.Reader
-	if body != nil {
-		jsonBytes, err := json.Marshal(body)
-		if err != nil {
-			return nil, 0, fmt.Errorf("failed to marshal request: %w", err)
-		}
-		reqBody = bytes.NewReader(jsonBytes)
-	}
-
-	// Use http://localhost as dummy host - the transport uses Unix socket
-	req, err := http.NewRequestWithContext(ctx, method, "http://localhost"+path, reqBody)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := u.httpClient.Do(req)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	return respBody, resp.StatusCode, nil
-}
-
-// handleResponse processes the response.
-func (u *UnixAdapter) handleResponse(respBody []byte, statusCode int, target interface{}) error {
-	if statusCode >= 400 {
-		var errResp struct {
-			Error   string `json:"error"`
-			Message string `json:"message"`
-		}
-		if err := json.Unmarshal(respBody, &errResp); err == nil {
-			msg := errResp.Error
-			if msg == "" {
-				msg = errResp.Message
-			}
-			if strings.Contains(strings.ToLower(msg), "not found") {
-				return ErrContainerNotFound{ID: ""}
-			}
-			return fmt.Errorf("API error (%d): %s", statusCode, msg)
-		}
-		return fmt.Errorf("API error (%d): %s", statusCode, string(respBody))
-	}
-
-	if target != nil && len(respBody) > 0 {
-		if err := json.Unmarshal(respBody, target); err != nil {
-			return ErrInvalidResponse{Operation: "response", Err: err}
-		}
-	}
-
-	return nil
-}
-
-// Create creates a new container via Unix socket.
-func (u *UnixAdapter) Create(ctx context.Context, opts CreateOptions) (*Container, error) {
-	body, statusCode, err := u.doRequest(ctx, http.MethodPost, "/api/v1/containers", opts)
-	if err != nil {
-		return nil, err
-	}
-
-	var result restContainerResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toContainer(), nil
-}
-
-// Start starts a container via Unix socket.
-func (u *UnixAdapter) Start(ctx context.Context, id string) error {
-	body, statusCode, err := u.doRequest(ctx, http.MethodPost, fmt.Sprintf("/api/v1/containers/%s/start", id), nil)
-	if err != nil {
-		return err
-	}
-
-	return u.handleResponse(body, statusCode, nil)
-}
-
-// Stop stops a container via Unix socket.
-func (u *UnixAdapter) Stop(ctx context.Context, id string, timeout time.Duration) error {
-	req := map[string]interface{}{"timeout": int(timeout.Seconds())}
-	body, statusCode, err := u.doRequest(ctx, http.MethodPost, fmt.Sprintf("/api/v1/containers/%s/stop", id), req)
-	if err != nil {
-		return err
-	}
-
-	return u.handleResponse(body, statusCode, nil)
-}
-
-// Remove removes a container via Unix socket.
-func (u *UnixAdapter) Remove(ctx context.Context, id string, force bool) error {
-	path := fmt.Sprintf("/api/v1/containers/%s", id)
-	if force {
-		path += "?force=true"
-	}
-	body, statusCode, err := u.doRequest(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return err
-	}
-
-	return u.handleResponse(body, statusCode, nil)
-}
-
-// Get retrieves a container via Unix socket.
-func (u *UnixAdapter) Get(ctx context.Context, id string) (*Container, error) {
-	body, statusCode, err := u.doRequest(ctx, http.MethodGet, fmt.Sprintf("/api/v1/containers/%s", id), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrContainerNotFound{ID: id}
-	}
-
-	var result restContainerResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toContainer(), nil
-}
-
-// List lists containers via Unix socket.
-func (u *UnixAdapter) List(ctx context.Context, opts ListOptions) ([]*Container, error) {
-	path := "/api/v1/containers"
-	params := make([]string, 0)
-
-	if opts.All {
-		params = append(params, "all=true")
-	}
-	if opts.Limit > 0 {
-		params = append(params, fmt.Sprintf("limit=%d", opts.Limit))
-	}
-
-	if len(params) > 0 {
-		path += "?" + strings.Join(params, "&")
-	}
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result restContainerListResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	containers := make([]*Container, len(result.Containers))
-	for i, c := range result.Containers {
-		containers[i] = c.toContainer()
-	}
-
-	return containers, nil
-}
-
-// Logs retrieves container logs via Unix socket.
-func (u *UnixAdapter) Logs(ctx context.Context, id string, opts LogOptions) ([]string, error) {
-	path := fmt.Sprintf("/api/v1/containers/%s/logs", id)
-	params := make([]string, 0)
-
-	if opts.Tail > 0 {
-		params = append(params, fmt.Sprintf("tail=%d", opts.Tail))
-	}
-
-	if len(params) > 0 {
-		path += "?" + strings.Join(params, "&")
-	}
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result restLogsResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.Lines, nil
-}
-
-// Attest performs attestation via Unix socket.
-func (u *UnixAdapter) Attest(ctx context.Context, id string) (*AttestationReport, error) {
-	body, statusCode, err := u.doRequest(ctx, http.MethodPost, fmt.Sprintf("/api/v1/containers/%s/attest", id), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result restAttestationResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toAttestationReport(), nil
 }
 
 // =============================================================================

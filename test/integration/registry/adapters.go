@@ -28,6 +28,8 @@ import (
 	"strings"
 	"time"
 
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"google.golang.org/grpc"
 )
@@ -621,6 +623,7 @@ func (r *RESTAdapter) DecryptImage(ctx context.Context, ref string) (*DecryptIma
 type GRPCAdapter struct {
 	endpoint string
 	conn     *grpc.ClientConn
+	client   *regsvc.Client
 }
 
 // NewGRPCAdapter creates a new gRPC adapter for integration testing.
@@ -650,6 +653,7 @@ func (g *GRPCAdapter) Setup(ctx context.Context) error {
 	}
 
 	g.conn = conn
+	g.client = regsvc.NewClientFromGRPC(pb.NewRegistryServiceClient(conn))
 	return nil
 }
 
@@ -659,66 +663,6 @@ func (g *GRPCAdapter) Teardown() error {
 		return g.conn.Close()
 	}
 	return nil
-}
-
-// Push pushes an image to the registry via gRPC.
-func (g *GRPCAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*PushResult, error) {
-	return nil, fmt.Errorf("gRPC Push not yet implemented")
-}
-
-// Pull pulls an image from the registry via gRPC.
-func (g *GRPCAdapter) Pull(ctx context.Context, ref string, opts PullOptions) (*PullResult, error) {
-	return nil, fmt.Errorf("gRPC Pull not yet implemented")
-}
-
-// List lists images in the registry via gRPC.
-func (g *GRPCAdapter) List(ctx context.Context, opts ListOptions) (*ListResult, error) {
-	return nil, fmt.Errorf("gRPC List not yet implemented")
-}
-
-// Delete deletes an image from the registry via gRPC.
-func (g *GRPCAdapter) Delete(ctx context.Context, ref string, opts DeleteOptions) (*DeleteResult, error) {
-	return nil, fmt.Errorf("gRPC Delete not yet implemented")
-}
-
-// Inspect inspects an image in the registry via gRPC.
-func (g *GRPCAdapter) Inspect(ctx context.Context, ref string) (*InspectResult, error) {
-	return nil, fmt.Errorf("gRPC Inspect not yet implemented")
-}
-
-// Status retrieves the registry status via gRPC.
-func (g *GRPCAdapter) Status(ctx context.Context) (*StatusResult, error) {
-	return nil, fmt.Errorf("gRPC Status not yet implemented")
-}
-
-// Tag adds a tag to an existing image via gRPC.
-func (g *GRPCAdapter) Tag(ctx context.Context, sourceRef, targetRef string) (*TagResult, error) {
-	return nil, fmt.Errorf("gRPC Tag not yet implemented")
-}
-
-// VerifyClient verifies a client's attestation via gRPC.
-func (g *GRPCAdapter) VerifyClient(ctx context.Context, opts VerifyClientOptions) (*VerifyClientResult, error) {
-	return nil, fmt.Errorf("gRPC VerifyClient not yet implemented")
-}
-
-// GetSession retrieves a client session via gRPC.
-func (g *GRPCAdapter) GetSession(ctx context.Context, clientID string) (*SessionResult, error) {
-	return nil, fmt.Errorf("gRPC GetSession not yet implemented")
-}
-
-// InvalidateSession invalidates a client session via gRPC.
-func (g *GRPCAdapter) InvalidateSession(ctx context.Context, clientID string) error {
-	return fmt.Errorf("gRPC InvalidateSession not yet implemented")
-}
-
-// EncryptImage encrypts an image via gRPC.
-func (g *GRPCAdapter) EncryptImage(ctx context.Context, ref string, keyID string) (*EncryptImageResult, error) {
-	return nil, fmt.Errorf("gRPC EncryptImage not yet implemented")
-}
-
-// DecryptImage decrypts an image via gRPC.
-func (g *GRPCAdapter) DecryptImage(ctx context.Context, ref string) (*DecryptImageResult, error) {
-	return nil, fmt.Errorf("gRPC DecryptImage not yet implemented")
 }
 
 // =============================================================================
