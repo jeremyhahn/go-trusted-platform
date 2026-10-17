@@ -21,6 +21,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 )
 
 // TrustedRegistry is a container registry requiring host attestation.
@@ -282,6 +284,9 @@ func (r *Registry) Push(ctx context.Context, ref string, image *Image, opts Push
 	if opts.Encrypt && r.encryptor == nil {
 		return ErrEncryptionNotConfigured{Reference: ref}
 	}
+	if opts.SignImage {
+		return ErrSigningNotConfigured{Reference: ref}
+	}
 
 	select {
 	case r.pushSemaphore <- struct{}{}:
@@ -370,10 +375,11 @@ func (r *Registry) Push(ctx context.Context, ref string, image *Image, opts Push
 }
 
 // Annotation keys recorded on encrypted manifests. Kept namespaced so
-// they round-trip through generic OCI tooling without collision.
+// they round-trip through generic OCI tooling without collision; the SDK
+// owns them because a push response hands them to the client.
 const (
-	manifestAnnotationEncrypted = "org.letstrust.registry.encrypted"
-	manifestAnnotationKeyID     = "org.letstrust.registry.key-id"
+	manifestAnnotationEncrypted = regsvc.ManifestAnnotationEncrypted
+	manifestAnnotationKeyID     = regsvc.ManifestAnnotationKeyID
 )
 
 // Pull retrieves a container image from the registry. The manifest is

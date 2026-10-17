@@ -82,6 +82,15 @@ platformctl registry push registry.example.com/apps/api:1.4.2 \
 Without `--overwrite`, pushing over an existing tag fails with
 `ErrImageExists` / HTTP 409.
 
+Each push flag reaches the registry as a push-metadata annotation
+(`sdk/go/services/registry`): `encrypt`, `key-id`, `sign`, `signing-key-id` and
+`overwrite`; the REST push carries the same options as the
+`X-Trusted-Platform-Encrypt`, `-Key-Id`, `-Sign`, `-Signing-Key-Id` and
+`-Overwrite` headers. The `Encrypted` and `Key ID` the command prints are read
+from the manifest the registry stored, not echoed from the flags. A registry
+with no manifest signer refuses `--sign` with `ErrSigningNotConfigured` rather
+than store the image unsigned; the daemon's registry has none today.
+
 ---
 
 ## 4. `platformctl registry pull <image-reference>`

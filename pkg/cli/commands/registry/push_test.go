@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 )
 
 func TestNewPushCommand(t *testing.T) {
@@ -339,5 +340,39 @@ func TestPushResult_ZeroValues(t *testing.T) {
 
 	if result.Timestamp != 0 {
 		t.Errorf("expected zero Timestamp, got %d", result.Timestamp)
+	}
+}
+
+// TestPushMetadataOf_CarriesEveryFlag covers the --encrypt --key-id --sign
+// --signing-key-id --overwrite push: each flag reaches the registry as its
+// annotation, the way --overwrite always has.
+func TestPushMetadataOf_CarriesEveryFlag(t *testing.T) {
+	metadata := pushMetadataOf("apps/api", "1.4.2", 2048, true, "apps-api-dek", true, "apps-api-signer", true)
+
+	want := map[string]string{
+		regsvc.AnnotationEncrypt:      "true",
+		regsvc.AnnotationKeyID:        "apps-api-dek",
+		regsvc.AnnotationSign:         "true",
+		regsvc.AnnotationSigningKeyID: "apps-api-signer",
+		regsvc.AnnotationOverwrite:    "true",
+	}
+	got := metadata.GetAnnotations()
+	for key, value := range want {
+		if got[key] != value {
+			t.Errorf("annotation %q = %q, want %q", key, got[key], value)
+		}
+	}
+	if metadata.GetRepository() != "apps/api" || metadata.GetTag() != "1.4.2" || metadata.GetTotalSize() != 2048 {
+		t.Errorf("metadata fields = %q %q %d", metadata.GetRepository(), metadata.GetTag(), metadata.GetTotalSize())
+	}
+}
+
+// TestPushMetadataOf_NoFlagsNoAnnotations guards a plain push: without the
+// flags the registry must see no encrypt, sign or overwrite request.
+func TestPushMetadataOf_NoFlagsNoAnnotations(t *testing.T) {
+	metadata := pushMetadataOf("apps/api", "1.4.2", 0, false, "ignored-key", false, "ignored-signer", false)
+
+	if got := metadata.GetAnnotations(); len(got) != 0 {
+		t.Errorf("annotations = %v, want none", got)
 	}
 }

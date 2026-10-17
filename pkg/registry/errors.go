@@ -471,15 +471,25 @@ func (e ErrStorageNotConfigured) Error() string {
 }
 
 // ErrEncryptionNotConfigured is returned when a caller requests
-// per-image encryption but the encryption pipeline has not been
-// wired into the Registry. Encryption + signing land in a follow-up
-// after the unencrypted-pipeline ships.
+// per-image encryption but no ImageEncryptor was installed with
+// WithEncryptor.
 type ErrEncryptionNotConfigured struct {
 	Reference string
 }
 
 func (e ErrEncryptionNotConfigured) Error() string {
 	return fmt.Sprintf("registry: encryption not configured (ref=%s)", e.Reference)
+}
+
+// ErrSigningNotConfigured is returned when a caller asks for a signed
+// manifest and the Registry has no manifest signer. The push is refused
+// rather than stored unsigned, so --sign never yields an unsigned image.
+type ErrSigningNotConfigured struct {
+	Reference string
+}
+
+func (e ErrSigningNotConfigured) Error() string {
+	return fmt.Sprintf("registry: manifest signing not configured (ref=%s)", e.Reference)
 }
 
 // MessageError is a typed error carrying a fully formatted message with no

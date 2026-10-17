@@ -123,12 +123,17 @@ func (a *GRPCAdapter) pushImpl(ctx context.Context, metadata *grpcapi.RegistryPu
 	}, nil
 }
 
-// pushOptionsOf turns push-metadata annotations into PushOptions; the
-// overwrite annotation sets AllowOverwrite.
+// pushOptionsOf turns push-metadata annotations into PushOptions: the
+// overwrite, encrypt and sign annotations set AllowOverwrite, Encrypt and
+// SignImage, and the key-id annotations name their keys.
 func pushOptionsOf(annotations map[string]string) PushOptions {
 	return PushOptions{
 		Annotations:    annotations,
 		AllowOverwrite: annotations[regsvc.AnnotationOverwrite] == "true",
+		Encrypt:        annotations[regsvc.AnnotationEncrypt] == "true",
+		KeyID:          annotations[regsvc.AnnotationKeyID],
+		SignImage:      annotations[regsvc.AnnotationSign] == "true",
+		SigningKeyID:   annotations[regsvc.AnnotationSigningKeyID],
 	}
 }
 
