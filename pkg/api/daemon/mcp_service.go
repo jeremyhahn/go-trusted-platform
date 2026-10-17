@@ -1646,6 +1646,19 @@ func (p *MCPServiceProvider) IAMCreateUser(ctx context.Context, req *mcp.IAMCrea
 	})
 }
 
+// IAMUpdateUser updates an IAM user, as gRPC UpdateUser.
+func (p *MCPServiceProvider) IAMUpdateUser(ctx context.Context, req *mcp.IAMUpdateUserRequest) (interface{}, error) {
+	return p.iam.UpdateUser(ctx, &platformv1.UpdateIAMUserRequest{
+		TenantId:   req.TenantID,
+		UserId:     req.UserID,
+		Email:      req.Email,
+		Name:       req.Name,
+		Roles:      req.Roles,
+		Groups:     req.Groups,
+		Attributes: req.Attributes,
+	})
+}
+
 // IAMDeleteUser deletes an IAM user, as gRPC DeleteUser.
 func (p *MCPServiceProvider) IAMDeleteUser(ctx context.Context, tenantID string, userID string) (interface{}, error) {
 	return p.iam.DeleteUser(ctx, &platformv1.DeleteIAMUserRequest{TenantId: tenantID, UserId: userID})
@@ -1672,6 +1685,17 @@ func (p *MCPServiceProvider) IAMCreateRole(ctx context.Context, req *mcp.IAMCrea
 	return p.iam.CreateRole(ctx, &platformv1.CreateIAMRoleRequest{
 		TenantId:    req.TenantID,
 		Id:          req.ID,
+		Name:        req.Name,
+		Description: req.Description,
+		Permissions: req.Permissions,
+	})
+}
+
+// IAMUpdateRole updates an IAM role, as gRPC UpdateRole.
+func (p *MCPServiceProvider) IAMUpdateRole(ctx context.Context, req *mcp.IAMUpdateRoleRequest) (interface{}, error) {
+	return p.iam.UpdateRole(ctx, &platformv1.UpdateIAMRoleRequest{
+		TenantId:    req.TenantID,
+		RoleId:      req.RoleID,
 		Name:        req.Name,
 		Description: req.Description,
 		Permissions: req.Permissions,
@@ -1734,6 +1758,16 @@ func (p *MCPServiceProvider) IAMCreateGroup(ctx context.Context, req *mcp.IAMCre
 	return p.iam.CreateGroup(ctx, &platformv1.CreateIAMGroupRequest{
 		TenantId:    req.TenantID,
 		Id:          req.ID,
+		Name:        req.Name,
+		Description: req.Description,
+	})
+}
+
+// IAMUpdateGroup updates an IAM group, as gRPC UpdateGroup.
+func (p *MCPServiceProvider) IAMUpdateGroup(ctx context.Context, req *mcp.IAMUpdateGroupRequest) (interface{}, error) {
+	return p.iam.UpdateGroup(ctx, &platformv1.UpdateIAMGroupRequest{
+		TenantId:    req.TenantID,
+		GroupId:     req.GroupID,
 		Name:        req.Name,
 		Description: req.Description,
 	})

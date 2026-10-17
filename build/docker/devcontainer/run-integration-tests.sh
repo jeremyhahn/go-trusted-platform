@@ -742,7 +742,11 @@ start_chronyd() {
         return 0
     fi
     echo "=== Starting chronyd (config: ${CHRONYD_CONF}, clock control off) ==="
-    mkdir -p "$(dirname "${CHRONYD_SOCK}")"
+    # chronyd drops to _chrony and opens its command socket only when the
+    # socket's directory is owned by that user and closed to others; a
+    # root-owned 0755 directory leaves it running with "Disabled command
+    # socket", so every chronyc poll platformd makes fails (#949).
+    install -d -m 0750 -o _chrony -g _chrony "$(dirname "${CHRONYD_SOCK}")"
     if ! chronyd -x -f "${CHRONYD_CONF}"; then
         echo "WARNING: chronyd failed to start; the ntp suite has no chronyd"
         return 0

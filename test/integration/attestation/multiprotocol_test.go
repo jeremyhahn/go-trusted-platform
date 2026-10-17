@@ -160,7 +160,23 @@ func testVMVerifyRefused(t *testing.T, ctx context.Context, adapter AttestationC
 // serves it from the same gRPC servicer (docs/attestation/api.md §2).
 func expectVMAttestationRefused(t *testing.T, adapter AttestationCommands, op string, err error) {
 	t.Helper()
-	want := attestsvc.ErrTPMSessionNotConfigured{Op: "CollectVMAttestation"}.Error()
+	expectTPMSessionRefusal(t, adapter, op, "CollectVMAttestation", err)
+}
+
+// expectTPMSessionRefusal asserts op answered the service's
+// ErrTPMSessionNotConfigured for serviceOp. platformctl carries neither the
+// VM-attestation nor the manifest verbs (docs/attestation/cli.md §6), so over
+// the CLI the call must name that absence instead.
+func expectTPMSessionRefusal(t *testing.T, adapter AttestationCommands, op, serviceOp string, err error) {
+	t.Helper()
+	if adapter.Name() == "CLI" {
+		var noSurface surface.ErrNoSurface
+		if !errors.As(err, &noSurface) {
+			t.Errorf("%s over CLI: got %v, want surface.ErrNoSurface (docs/attestation/cli.md §6)", op, err)
+		}
+		return
+	}
+	want := attestsvc.ErrTPMSessionNotConfigured{Op: serviceOp}.Error()
 	if err == nil {
 		t.Fatalf("%s over %s succeeded, want refusal %q", op, adapter.Name(), want)
 	}
@@ -188,6 +204,11 @@ func expectNoVerifySurface(t *testing.T, adapter AttestationCommands, err error)
 // Manifest Tests
 // =============================================================================
 
+// testManifest drives the manifest surface. The daemon owns no TPM session
+// that can sign a manifest, so BuildManifest refuses on every transport and
+// no manifest is ever stored to verify or fetch back
+// (docs/attestation/engineering.md §3a); the reads are exercised on ids the
+// daemon has never stored.
 func testManifest(t *testing.T, ctx context.Context, adapter AttestationCommands) {
 	testID := uuid.New().String()[:8]
 
@@ -205,28 +226,9 @@ func testManifest(t *testing.T, ctx context.Context, adapter AttestationCommands
 		}
 
 		result, err := adapter.BuildManifest(ctx, opts)
-		if err != nil {
-			t.Fatalf("BuildManifest failed: %v", err)
-		}
-
-		if result == nil {
-			t.Fatal("BuildManifest returned nil result")
-		}
-
-		if result.ManifestID == "" {
-			t.Error("ManifestID is empty")
-		}
-
-		if result.HostID != hostID {
-			t.Errorf("HostID mismatch: got %s, want %s", result.HostID, hostID)
-		}
-
-		if len(result.MerkleRoot) == 0 {
-			t.Error("MerkleRoot is empty")
-		}
-
-		if result.VMCount != 1 {
-			t.Errorf("VMCount mismatch: got %d, want 1", result.VMCount)
+		expectTPMSessionRefusal(t, adapter, "BuildManifest", "BuildManifest", err)
+		if result != nil {
+			t.Errorf("BuildManifest over %s returned a manifest alongside its refusal", adapter.Name())
 		}
 	})
 
@@ -246,92 +248,28 @@ func testManifest(t *testing.T, ctx context.Context, adapter AttestationCommands
 		}
 
 		result, err := adapter.BuildManifest(ctx, opts)
-		if err != nil {
-			t.Fatalf("BuildManifest failed: %v", err)
-		}
-
-		if result.ContainerCount != 1 {
-			t.Errorf("ContainerCount mismatch: got %d, want 1", result.ContainerCount)
+		expectTPMSessionRefusal(t, adapter, "BuildManifest", "BuildManifest", err)
+		if result != nil {
+			t.Errorf("BuildManifest over %s returned a manifest alongside its refusal", adapter.Name())
 		}
 	})
 
-	t.Run("VerifyManifest", func(t *testing.T) {
-		// Build a manifest; every transport's build signs it.
-		hostID := GenerateTestHostID(testID + "-verify")
-		hostAttest := CreateTestHostAttestation(hostID)
-
-		buildOpts := BuildManifestOptions{
-			HostID:          hostID,
-			HostAttestation: hostAttest,
-			HashAlgorithm:   DefaultHashAlgorithm(),
-		}
-
-		buildResult, err := adapter.BuildManifest(ctx, buildOpts)
-		if err != nil {
-			t.Fatalf("BuildManifest failed: %v", err)
-		}
-
-		// Verify the manifest
+	t.Run("VerifyManifest_NotFound", func(t *testing.T) {
 		verifyOpts := VerifyManifestOptions{
-			ManifestID:     buildResult.ManifestID,
-			ExpectedHostID: hostID,
+			ManifestID:     "non-existent-manifest-" + testID,
+			ExpectedHostID: GenerateTestHostID(testID + "-verify"),
 		}
 
 		verifyResult, err := adapter.VerifyManifest(ctx, verifyOpts)
-		if err != nil {
-			t.Fatalf("VerifyManifest failed: %v", err)
+		if adapter.Name() == "CLI" {
+			var noSurface surface.ErrNoSurface
+			if !errors.As(err, &noSurface) {
+				t.Errorf("VerifyManifest over CLI: got %v, want surface.ErrNoSurface (docs/attestation/cli.md §6)", err)
+			}
+			return
 		}
-
-		if !verifyResult.Valid {
-			t.Errorf("Manifest should be valid, errors: %v", verifyResult.Errors)
-		}
-
-		if !verifyResult.SignatureValid {
-			t.Error("Signature should be valid")
-		}
-
-		if !verifyResult.MerkleRootValid {
-			t.Error("MerkleRoot should be valid")
-		}
-
-		if !verifyResult.HostIDMatch {
-			t.Error("HostID should match")
-		}
-	})
-
-	t.Run("GetManifest", func(t *testing.T) {
-		// Build a manifest
-		hostID := GenerateTestHostID(testID + "-get")
-		hostAttest := CreateTestHostAttestation(hostID)
-
-		buildOpts := BuildManifestOptions{
-			HostID:          hostID,
-			HostAttestation: hostAttest,
-			HashAlgorithm:   DefaultHashAlgorithm(),
-			Version:         "1.0.0",
-		}
-
-		buildResult, err := adapter.BuildManifest(ctx, buildOpts)
-		if err != nil {
-			t.Fatalf("BuildManifest failed: %v", err)
-		}
-
-		// Get it back
-		getOpts := GetManifestOptions{
-			ManifestID: buildResult.ManifestID,
-		}
-
-		getResult, err := adapter.GetManifest(ctx, getOpts)
-		if err != nil {
-			t.Fatalf("GetManifest failed: %v", err)
-		}
-
-		if getResult.ManifestID != buildResult.ManifestID {
-			t.Errorf("ManifestID mismatch: got %s, want %s", getResult.ManifestID, buildResult.ManifestID)
-		}
-
-		if getResult.HostID != hostID {
-			t.Errorf("HostID mismatch: got %s, want %s", getResult.HostID, hostID)
+		if err == nil && verifyResult != nil && verifyResult.Valid {
+			t.Errorf("VerifyManifest over %s reported a never-stored manifest valid", adapter.Name())
 		}
 	})
 

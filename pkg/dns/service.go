@@ -54,7 +54,20 @@ var (
 	ErrDNSNotRunning                = errors.New("DNS server is not running")
 	ErrMissingTenantContext         = errors.New("missing tenant context")
 	ErrUnauthorizedZoneAccess       = errors.New("unauthorized: caller tenant does not own this zone")
+)
 
+// ErrDNSServerNotConfigured is returned when an operation names the internal
+// or public server and the configuration does not define it.
+type ErrDNSServerNotConfigured struct {
+	Server string
+}
+
+// Error implements the error interface.
+func (e ErrDNSServerNotConfigured) Error() string {
+	return "dns: " + e.Server + " server is not configured"
+}
+
+var (
 	// caddyInstance holds the running Caddy/CoreDNS instance for shutdown
 	caddyInstance *caddy.Instance
 )
@@ -313,19 +326,35 @@ func (s *Service) Zone(ctx context.Context, zoneName string) (*entities.Zone, er
 	return zone, nil
 }
 
+// InternalDomain returns the internal zone name, or "" when no internal
+// server is configured.
 func (s *Service) InternalDomain() string {
+	if s.params.Config.InternalServer == nil {
+		return ""
+	}
 	return s.params.Config.InternalServer.Zone.Name
 }
 
+// PublicDomain returns the public zone name, or "" when no public server is
+// configured.
 func (s *Service) PublicDomain() string {
+	if s.params.Config.PublicServer == nil {
+		return ""
+	}
 	return s.params.Config.PublicServer.Zone.Name
 }
 
 func (s *Service) InternalZone(ctx context.Context) (*entities.Zone, error) {
+	if s.params.Config.InternalServer == nil {
+		return nil, ErrDNSServerNotConfigured{Server: "internal"}
+	}
 	return s.Zone(ctx, s.params.Config.InternalServer.Zone.Name)
 }
 
 func (s *Service) PublicZone(ctx context.Context) (*entities.Zone, error) {
+	if s.params.Config.PublicServer == nil {
+		return nil, ErrDNSServerNotConfigured{Server: "public"}
+	}
 	return s.Zone(ctx, s.params.Config.PublicServer.Zone.Name)
 }
 

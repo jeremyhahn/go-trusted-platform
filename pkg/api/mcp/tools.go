@@ -1621,10 +1621,14 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeIAMGetUser(ctx, args)
 	case "iam_list_users":
 		return r.executeIAMListUsers(ctx, args)
+	case "iam_update_user":
+		return r.executeIAMUpdateUser(ctx, args)
 
 	// IAM Role Operations
 	case "iam_create_role":
 		return r.executeIAMCreateRole(ctx, args)
+	case "iam_update_role":
+		return r.executeIAMUpdateRole(ctx, args)
 	case "iam_delete_role":
 		return r.executeIAMDeleteRole(ctx, args)
 	case "iam_get_role":
@@ -1645,6 +1649,8 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 	// IAM Group Operations
 	case "iam_create_group":
 		return r.executeIAMCreateGroup(ctx, args)
+	case "iam_update_group":
+		return r.executeIAMUpdateGroup(ctx, args)
 	case "iam_delete_group":
 		return r.executeIAMDeleteGroup(ctx, args)
 	case "iam_get_group":

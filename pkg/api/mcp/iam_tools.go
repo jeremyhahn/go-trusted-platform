@@ -186,6 +186,47 @@ func (r *ToolRegistry) registerIAMUserTools() {
 	})
 
 	r.addTool(mcpwire.ToolDefinition{
+		Name:        "iam_update_user",
+		Description: "Update an IAM user's email, display name, roles, groups or attributes",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID",
+				},
+				"user_id": map[string]interface{}{
+					"type":        "string",
+					"description": "User ID to update",
+				},
+				"email": map[string]interface{}{
+					"type":        "string",
+					"description": "New email address",
+				},
+				"name": map[string]interface{}{
+					"type":        "string",
+					"description": "New display name",
+				},
+				"roles": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Replacement role names",
+				},
+				"groups": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Replacement group IDs",
+				},
+				"attributes": map[string]interface{}{
+					"type":        "object",
+					"description": "Replacement user attributes",
+				},
+			},
+			"required": []string{"tenant_id", "user_id"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_delete_user",
 		Description: "Delete an IAM user from a tenant",
 		InputSchema: map[string]interface{}{
@@ -283,6 +324,38 @@ func (r *ToolRegistry) registerIAMRoleTools() {
 				},
 			},
 			"required": []string{"tenant_id", "id"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "iam_update_role",
+		Description: "Update an IAM role's name, description or permissions",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID",
+				},
+				"role_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Role ID to update",
+				},
+				"name": map[string]interface{}{
+					"type":        "string",
+					"description": "New role name",
+				},
+				"description": map[string]interface{}{
+					"type":        "string",
+					"description": "New role description",
+				},
+				"permissions": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Replacement permissions (resource:action)",
+				},
+			},
+			"required": []string{"tenant_id", "role_id"},
 		},
 	})
 
@@ -413,6 +486,33 @@ func (r *ToolRegistry) registerIAMGroupTools() {
 				},
 			},
 			"required": []string{"tenant_id", "id"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "iam_update_group",
+		Description: "Update an IAM group's name or description",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tenant_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Tenant ID",
+				},
+				"group_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Group ID to update",
+				},
+				"name": map[string]interface{}{
+					"type":        "string",
+					"description": "New group name",
+				},
+				"description": map[string]interface{}{
+					"type":        "string",
+					"description": "New group description",
+				},
+			},
+			"required": []string{"tenant_id", "group_id"},
 		},
 	})
 

@@ -50,9 +50,10 @@ func TestDNSMultiProtocol(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
+	cli := NewCLIAdapter()
+
 	// Get all protocol adapters that implement DNSCommands
 	adapters := []DNSCommands{
-		NewCLIAdapter(),
 		NewRESTAdapter(),
 		NewGRPCAdapter(),
 		NewQUICAdapter(),
@@ -60,7 +61,22 @@ func TestDNSMultiProtocol(t *testing.T) {
 		NewUnixAdapter(),
 	}
 
-	gate := helpers.NewAdapterGate(t, "dns", helpers.AdapterNames(adapters)...)
+	gate := helpers.NewAdapterGate(t, "dns", append([]string{cli.Name()}, helpers.AdapterNames(adapters)...)...)
+
+	// The CLI has no DNS verbs (docs/dns/cli.md): the leg asserts that the
+	// gap is still the declared one and reports it as MISSING.
+	t.Run(cli.Name(), func(t *testing.T) {
+		gate.RequireSetup(t, cli.Name(), cli.Setup(ctx))
+		defer func() {
+			if err := cli.Teardown(); err != nil {
+				t.Logf("Warning: teardown error for %s: %v", cli.Name(), err)
+			}
+		}()
+
+		require.NoError(t, cli.ProbeDNSGroup(ctx))
+		t.Logf("MISSING: CLI DNS: %s", cliNoSurfaceReason)
+	})
+
 	for _, adapter := range adapters {
 		adapter := adapter // Capture for closure
 		t.Run(adapter.Name(), func(t *testing.T) {

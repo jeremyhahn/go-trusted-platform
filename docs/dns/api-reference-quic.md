@@ -29,7 +29,7 @@ encoded payload; each response is one status byte and one encoded payload.
 | `0x27` | `OpDNSGetZone` | `zone` | `zone` (`id`, `name`, `ttl`, `description`, `internal`, `record_count`), `timestamp` |
 | `0x28` | `OpDNSListZones` | `ListZonesRequest`, or empty | `ListZonesResponse` |
 | `0x29` | `OpDNSResolve` | `ResolveRequest` | `Records`, `Authoritative` |
-| `0x2A` | `OpDNSGetConfig` | empty | `config` (`internal_domain`, `public_domain`, `dnssec_enabled`, `allow_registration`), `timestamp` |
+| `0x2A` | `OpDNSGetConfig` | empty | `config` (`internal_domain`, `public_domain`, `dnssec_enabled`, `allow_registration`), `timestamp`; a domain is empty when its server is not configured |
 | `0x2C` | `OpDNSGetMetrics` | empty | `metrics` (`zone_count`, `total_records`, `queries_total`, `cache_hits`, `cache_misses`, `dnssec_validated`, `forwarded_queries`), `timestamp` |
 
 `0x2B` and `0x2D` are retired and refused ([api.md](api.md) §2). There is no

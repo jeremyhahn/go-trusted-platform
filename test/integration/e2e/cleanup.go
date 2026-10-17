@@ -27,6 +27,8 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/swtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 )
 
@@ -78,54 +80,33 @@ func Cleanup(t *testing.T, infra *TestInfrastructure) {
 }
 
 // cleanupVM stops and cleans up a VM and its TPM
-func cleanupVM(t *testing.T, logger *logging.Logger, name string, vm interface{}, tpm interface{}) {
+func cleanupVM(t *testing.T, logger *logging.Logger, name string, vm *qemu.VM, tpm *swtpm.SWTPM) {
 	t.Helper()
 
-	if vm == nil {
-		return
-	}
+	// Setup can fail between starting the TPM and building the VM, so each
+	// is checked on its own: a nil VM must not leave its TPM running.
+	if vm != nil {
+		logger.Info("Cleaning up VM", "name", name)
 
-	logger.Info("Cleaning up VM", "name", name)
-
-	// Stop VM
-	type VMStopper interface {
-		Stop() error
-		IsRunning() bool
-	}
-
-	if v, ok := vm.(VMStopper); ok {
-		if v.IsRunning() {
-			if err := v.Stop(); err != nil {
+		if vm.IsRunning() {
+			if err := vm.Stop(); err != nil {
 				logger.Warn("Failed to stop VM", "name", name, "error", err)
 			} else {
 				logger.Info("VM stopped", "name", name)
 			}
 		}
-	}
 
-	// Stop signals the VM; Wait reaps it once the process has exited
-	type VMWaiter interface {
-		Wait() error
-	}
-
-	if w, ok := vm.(VMWaiter); ok {
-		if err := testenv.WaitFor(context.Background(), vmExitTimeout, "VM "+name+" process exit", w.Wait); err != nil {
+		// Stop signals the VM; Wait reaps it once the process has exited
+		if err := testenv.WaitFor(context.Background(), vmExitTimeout, "VM "+name+" process exit", vm.Wait); err != nil {
 			logger.Debug("VM exit", "name", name, "error", err)
 		}
 	}
 
-	// Stop TPM
 	if tpm != nil {
-		type TPMStopper interface {
-			Stop() error
-		}
-
-		if tp, ok := tpm.(TPMStopper); ok {
-			if err := tp.Stop(); err != nil {
-				logger.Warn("Failed to stop TPM", "name", name, "error", err)
-			} else {
-				logger.Info("TPM stopped", "name", name)
-			}
+		if err := tpm.Stop(); err != nil {
+			logger.Warn("Failed to stop TPM", "name", name, "error", err)
+		} else {
+			logger.Info("TPM stopped", "name", name)
 		}
 	}
 }

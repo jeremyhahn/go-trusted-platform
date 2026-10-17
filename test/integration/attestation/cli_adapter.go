@@ -18,20 +18,15 @@ package attestation
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
 )
 
 // CLIAdapterError represents an error from the CLI adapter
@@ -152,52 +147,13 @@ func (a *CLIAdapter) reportingCommand(ctx context.Context, operation, deviceID s
 // VM Attestation Operations
 // =============================================================================
 
-// runProto runs platformctl with JSON output and decodes the document into
-// out. The attestation verbs print the wire message with proto field names,
-// so the CLI result maps onto the adapter types exactly as gRPC does.
-func (a *CLIAdapter) runProto(ctx context.Context, out proto.Message, args ...string) error {
-	output, err := a.runJSON(ctx, args...)
-	if err != nil {
-		return err
-	}
-	if err := protojson.Unmarshal(output, out); err != nil {
-		return &CLIAdapterError{Operation: strings.Join(args, " "), Message: "failed to parse response: " + err.Error(), Output: string(output)}
-	}
-	return nil
-}
+// platformctl carries no VM-attestation verb and no manifest verb: those are
+// reachable over REST, gRPC, QUIC, MCP and the SDK only
+// (docs/attestation/cli.md §6). Each adapter method below names that absence.
 
-// collectVMAttestation runs `platformctl attestation vm collect <vm-id>`.
-func (a *CLIAdapter) collectVMAttestation(ctx context.Context, vmID string, nonce []byte, pcrIndices []int, hashAlgorithm string) (*platformv1.CollectVMAttestationResponse, error) {
-	args := []string{"attestation", "vm", "collect", vmID, "--nonce", hex.EncodeToString(nonce)}
-	if len(pcrIndices) > 0 {
-		pcrList := make([]string, len(pcrIndices))
-		for i, idx := range pcrIndices {
-			pcrList[i] = strconv.Itoa(idx)
-		}
-		args = append(args, "--pcrs", strings.Join(pcrList, ","))
-	}
-	if hashAlgorithm != "" {
-		args = append(args, "--hash-algorithm", hashAlgorithm)
-	}
-
-	attest := &platformv1.VMAttestation{}
-	if err := a.runProto(ctx, attest, args...); err != nil {
-		return nil, err
-	}
-	return &platformv1.CollectVMAttestationResponse{Attestation: attest}, nil
-}
-
-// GenerateVMQuote collects a VM quote via `platformctl attestation vm collect`.
+// GenerateVMQuote has no platformctl verb (docs/attestation/cli.md §6).
 func (a *CLIAdapter) GenerateVMQuote(ctx context.Context, opts GenerateVMQuoteOptions) (*GenerateVMQuoteResult, error) {
-	resp, err := a.collectVMAttestation(ctx, opts.VMID, opts.Nonce, opts.PCRIndices, opts.HashAlgorithm)
-	if err != nil {
-		return nil, err
-	}
-	result, err := vmQuoteResult(resp)
-	if err != nil {
-		return nil, &CLIAdapterError{Operation: "GenerateVMQuote", Message: err.Error()}
-	}
-	return result, nil
+	return nil, surface.ErrNoSurface{Transport: "CLI", Operation: "GenerateVMQuote"}
 }
 
 // GetVMIdentity has no platformctl verb: no transport serves it.
@@ -205,126 +161,38 @@ func (a *CLIAdapter) GetVMIdentity(ctx context.Context, opts GetVMIdentityOption
 	return nil, surface.ErrNoSurface{Transport: "CLI", Operation: "GetVMIdentity"}
 }
 
-// GetVMAttestation collects a full VM attestation via
-// `platformctl attestation vm collect`.
+// GetVMAttestation has no platformctl verb (docs/attestation/cli.md §6).
 func (a *CLIAdapter) GetVMAttestation(ctx context.Context, opts GetVMAttestationOptions) (*GetVMAttestationResult, error) {
-	resp, err := a.collectVMAttestation(ctx, opts.VMID, opts.Nonce, opts.PCRIndices, opts.HashAlgorithm)
-	if err != nil {
-		return nil, err
-	}
-	result, err := vmAttestationResult(resp)
-	if err != nil {
-		return nil, &CLIAdapterError{Operation: "GetVMAttestation", Message: err.Error()}
-	}
-	return result, nil
+	return nil, surface.ErrNoSurface{Transport: "CLI", Operation: "GetVMAttestation"}
 }
 
-// VerifyVMAttestation verifies a quote via `platformctl attestation quote
-// verify -f`, sending the request gRPC sends.
+// VerifyVMAttestation has no platformctl verb (docs/attestation/cli.md §6).
 func (a *CLIAdapter) VerifyVMAttestation(ctx context.Context, opts VerifyVMAttestationOptions) (*VerifyVMAttestationResult, error) {
-	raw, err := protojson.Marshal(verifyAttestationQuoteRequest(opts))
-	if err != nil {
-		return nil, &CLIAdapterError{Operation: "VerifyVMAttestation", Message: "failed to encode request: " + err.Error()}
-	}
-	requestPath := filepath.Join(a.configDir, "verify-quote-request.json")
-	if err := os.WriteFile(requestPath, raw, 0o600); err != nil {
-		return nil, &CLIAdapterError{Operation: "VerifyVMAttestation", Message: "failed to write request: " + err.Error()}
-	}
-
-	resp := &platformv1.VerifyAttestationQuoteResponse{}
-	runErr := a.runProto(ctx, resp, "attestation", "quote", "verify", "-f", requestPath)
-	if err := os.Remove(requestPath); err != nil && runErr == nil {
-		return nil, &CLIAdapterError{Operation: "VerifyVMAttestation", Message: "failed to remove request: " + err.Error()}
-	}
-	if runErr != nil {
-		return nil, runErr
-	}
-	return verifyVMAttestationResult(opts, resp), nil
+	return nil, surface.ErrNoSurface{Transport: "CLI", Operation: "VerifyVMAttestation"}
 }
 
 // =============================================================================
 // Manifest Operations
 // =============================================================================
 
-// BuildManifest builds and stores a signed host manifest via
-// `platformctl attestation manifests build`, with the options gRPC sends.
+// BuildManifest has no platformctl verb (docs/attestation/cli.md §6).
 func (a *CLIAdapter) BuildManifest(ctx context.Context, opts BuildManifestOptions) (*BuildManifestResult, error) {
-	args := []string{"attestation", "manifests", "build", "--host-id", opts.HostID}
-	if opts.HashAlgorithm != "" {
-		args = append(args, "--hash-algorithm", opts.HashAlgorithm)
-	}
-	if opts.Version != "" {
-		args = append(args, "--version", opts.Version)
-	}
-	if len(opts.VMAttestations) > 0 {
-		args = append(args, "--include-vms")
-	}
-	if len(opts.ContainerAttestations) > 0 {
-		args = append(args, "--include-containers")
-	}
-
-	manifest := &platformv1.HostManifest{}
-	if err := a.runProto(ctx, manifest, args...); err != nil {
-		return nil, err
-	}
-	result, err := buildManifestResult(&platformv1.BuildManifestResponse{Manifest: manifest})
-	if err != nil {
-		return nil, &CLIAdapterError{Operation: "BuildManifest", Message: err.Error()}
-	}
-	return result, nil
+	return nil, surface.ErrNoSurface{Transport: "CLI", Operation: "BuildManifest"}
 }
 
-// SignManifest has no platformctl verb: no transport serves it, and
-// `manifests build` signs unless --sign=false.
+// SignManifest has no platformctl verb: no transport serves it.
 func (a *CLIAdapter) SignManifest(ctx context.Context, opts SignManifestOptions) (*SignManifestResult, error) {
 	return nil, surface.ErrNoSurface{Transport: "CLI", Operation: "SignManifest"}
 }
 
-// getManifest runs `platformctl attestation manifests get <id>`.
-func (a *CLIAdapter) getManifest(ctx context.Context, manifestID string) (*platformv1.GetManifestResponse, error) {
-	manifest := &platformv1.HostManifest{}
-	if err := a.runProto(ctx, manifest, "attestation", "manifests", "get", manifestID); err != nil {
-		return nil, err
-	}
-	return &platformv1.GetManifestResponse{Manifest: manifest}, nil
-}
-
-// VerifyManifest verifies a stored manifest via
-// `platformctl attestation manifests verify <id>`. The stored manifest is
-// fetched first, as gRPC does, so the host id can be compared.
+// VerifyManifest has no platformctl verb (docs/attestation/cli.md §6).
 func (a *CLIAdapter) VerifyManifest(ctx context.Context, opts VerifyManifestOptions) (*VerifyManifestResult, error) {
-	getResp, err := a.getManifest(ctx, opts.ManifestID)
-	if err != nil {
-		return nil, err
-	}
-	manifest, err := storedManifest(getResp)
-	if err != nil {
-		return nil, &CLIAdapterError{Operation: "VerifyManifest", Message: err.Error()}
-	}
-
-	verification := &platformv1.ManifestVerificationResult{}
-	if err := a.runProto(ctx, verification, "attestation", "manifests", "verify", opts.ManifestID); err != nil {
-		return nil, err
-	}
-	result, err := verifyManifestResult(opts, manifest, &platformv1.VerifyManifestResponse{Result: verification})
-	if err != nil {
-		return nil, &CLIAdapterError{Operation: "VerifyManifest", Message: err.Error()}
-	}
-	return result, nil
+	return nil, surface.ErrNoSurface{Transport: "CLI", Operation: "VerifyManifest"}
 }
 
-// GetManifest retrieves a manifest by id via
-// `platformctl attestation manifests get <id>`.
+// GetManifest has no platformctl verb (docs/attestation/cli.md §6).
 func (a *CLIAdapter) GetManifest(ctx context.Context, opts GetManifestOptions) (*GetManifestResult, error) {
-	resp, err := a.getManifest(ctx, opts.ManifestID)
-	if err != nil {
-		return nil, err
-	}
-	result, err := getManifestResult(resp)
-	if err != nil {
-		return nil, &CLIAdapterError{Operation: "GetManifest", Message: err.Error()}
-	}
-	return result, nil
+	return nil, surface.ErrNoSurface{Transport: "CLI", Operation: "GetManifest"}
 }
 
 // =============================================================================

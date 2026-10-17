@@ -145,6 +145,9 @@ type mockServiceProvider struct {
 	// IAM
 	iamCreateUserFunc      func(ctx context.Context, req *IAMCreateUserRequest) (interface{}, error)
 	iamDeleteUserFunc      func(ctx context.Context, tenantID, userID string) (interface{}, error)
+	iamUpdateUserFunc      func(ctx context.Context, req *IAMUpdateUserRequest) (interface{}, error)
+	iamUpdateRoleFunc      func(ctx context.Context, req *IAMUpdateRoleRequest) (interface{}, error)
+	iamUpdateGroupFunc     func(ctx context.Context, req *IAMUpdateGroupRequest) (interface{}, error)
 	iamGetUserFunc         func(ctx context.Context, tenantID, userID string) (interface{}, error)
 	iamListUsersFunc       func(ctx context.Context, req *IAMListUsersRequest) (interface{}, error)
 	iamCreateRoleFunc      func(ctx context.Context, req *IAMCreateRoleRequest) (interface{}, error)
@@ -1476,6 +1479,27 @@ func (m *mockServiceProvider) IAMListUsers(ctx context.Context, req *IAMListUser
 		return m.iamListUsersFunc(ctx, req)
 	}
 	return nil, nil
+}
+
+func (m *mockServiceProvider) IAMUpdateUser(ctx context.Context, req *IAMUpdateUserRequest) (interface{}, error) {
+	if m.iamUpdateUserFunc != nil {
+		return m.iamUpdateUserFunc(ctx, req)
+	}
+	return mockIAMSuccess(), nil
+}
+
+func (m *mockServiceProvider) IAMUpdateRole(ctx context.Context, req *IAMUpdateRoleRequest) (interface{}, error) {
+	if m.iamUpdateRoleFunc != nil {
+		return m.iamUpdateRoleFunc(ctx, req)
+	}
+	return mockIAMSuccess(), nil
+}
+
+func (m *mockServiceProvider) IAMUpdateGroup(ctx context.Context, req *IAMUpdateGroupRequest) (interface{}, error) {
+	if m.iamUpdateGroupFunc != nil {
+		return m.iamUpdateGroupFunc(ctx, req)
+	}
+	return mockIAMSuccess(), nil
 }
 
 func (m *mockServiceProvider) IAMCreateRole(ctx context.Context, req *IAMCreateRoleRequest) (interface{}, error) {
