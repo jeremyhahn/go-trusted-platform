@@ -15,6 +15,8 @@ package daemon
 
 import (
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"math"
 
 	"google.golang.org/grpc/codes"
@@ -562,6 +564,44 @@ func (e ErrQUICOperationFailed) Error() string {
 
 func (e ErrQUICOperationFailed) Unwrap() error {
 	return e.Cause
+}
+
+// ErrQUICAttestationRefused carries a refusal from the shared attestation
+// gRPC servicer to the daemon-native QUIC attestation handler. QUICStatus
+// gives it the status the daemon's quote opcodes (0x70-0x72) give the same
+// gRPC class, so one refusal reads the same on every attestation opcode.
+type ErrQUICAttestationRefused struct {
+	Op    string
+	Cause error
+}
+
+func (e ErrQUICAttestationRefused) Error() string {
+	return fmt.Sprintf("attestation %s refused: %v", e.Op, e.Cause)
+}
+
+func (e ErrQUICAttestationRefused) Unwrap() error {
+	return e.Cause
+}
+
+// QUICStatus is the QUIC status for the refusal's gRPC class.
+func (e ErrQUICAttestationRefused) QUICStatus() byte {
+	return grpcCodeToQUICStatus(e.Cause)
+}
+
+// ErrQUICAttestationNoService refuses a daemon-native QUIC attestation
+// operation that no transport serves (device workload attestation, reports,
+// policies: docs/attestation/api.md §2, docs/13 G7).
+type ErrQUICAttestationNoService struct {
+	Op string
+}
+
+func (e ErrQUICAttestationNoService) Error() string {
+	return fmt.Sprintf("attestation %s is not served by any transport (docs/13 G7)", e.Op)
+}
+
+// QUICStatus is StatusNotImplemented: the opcode is in range, nothing serves it.
+func (e ErrQUICAttestationNoService) QUICStatus() byte {
+	return quicwire.StatusNotImplemented
 }
 
 // ErrQUICServerNotConfigured is returned when QUIC server is not configured
