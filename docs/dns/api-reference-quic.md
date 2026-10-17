@@ -26,7 +26,7 @@ encoded payload; each response is one status byte and one encoded payload.
 | `0x24` | `OpDNSListRecords` | `ListRecordsRequest` (`Limit`, `Offset` page it as on gRPC) | `Records`, `Total`, `Limit`, `Offset` |
 | `0x25` | `OpDNSAddZone` | `CreateZoneRequest` | `CreateZoneResponse` |
 | `0x26` | `OpDNSDeleteZone` | `DeleteZoneRequest` | `DeleteZoneResponse` |
-| `0x27` | `OpDNSGetZone` | `zone` | `zone` (`id`, `name`, `ttl`, `description`, `internal`, `record_count`), `timestamp` |
+| `0x27` | `OpDNSGetZone` | `zone` | `zone` (`id`, `name`, `ttl`, `description`, `internal`, `record_count`, `soa`), `timestamp`; `soa` (`name`, `mname`, `rname`, `serial`, `refresh`, `retry`, `expire`, `minimum_ttl`, `ttl`) is absent when the zone has none |
 | `0x28` | `OpDNSListZones` | `ListZonesRequest`, or empty | `ListZonesResponse` |
 | `0x29` | `OpDNSResolve` | `ResolveRequest` | `Records`, `Authoritative` |
 | `0x2A` | `OpDNSGetConfig` | empty | `config` (`internal_domain`, `public_domain`, `dnssec_enabled`, `allow_registration`), `timestamp`; a domain is empty when its server is not configured |
