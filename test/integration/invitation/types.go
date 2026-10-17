@@ -148,7 +148,9 @@ type RevokeResult struct {
 
 // AcceptInvitationOptions contains options for accepting an invitation
 type AcceptInvitationOptions struct {
-	Token    string `json:"token"`
+	Token string `json:"token"`
+	// UserID is the registered user accepting the invitation
+	UserID   uint64 `json:"user_id"`
 	Name     string `json:"name,omitempty"`
 	Password string `json:"password,omitempty"`
 }

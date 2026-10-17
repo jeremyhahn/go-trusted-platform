@@ -390,6 +390,7 @@ func testInvitationAccept(t *testing.T, ctx context.Context, cmd InvitationComma
 		// Accept it
 		acceptOpts := AcceptInvitationOptions{
 			Token:    createResult.Invitation.Token,
+			UserID:   DefaultOwnerUserID(),
 			Name:     GenerateTestName(prefix + "-accept"),
 			Password: GenerateTestPassword(),
 		}
@@ -403,6 +404,7 @@ func testInvitationAccept(t *testing.T, ctx context.Context, cmd InvitationComma
 	t.Run("AcceptNonexistentTokenFails", func(t *testing.T) {
 		opts := AcceptInvitationOptions{
 			Token:    "nonexistent-token-" + uuid.New().String(),
+			UserID:   DefaultOwnerUserID(),
 			Name:     GenerateTestName(prefix + "-nonexistent"),
 			Password: GenerateTestPassword(),
 		}
@@ -441,6 +443,7 @@ func testInvitationErrors(t *testing.T, ctx context.Context, cmd InvitationComma
 		// Try to accept revoked invitation
 		acceptOpts := AcceptInvitationOptions{
 			Token:    createResult.Invitation.Token,
+			UserID:   DefaultOwnerUserID(),
 			Name:     GenerateTestName(prefix + "-revoked"),
 			Password: GenerateTestPassword(),
 		}
@@ -460,6 +463,7 @@ func testInvitationErrors(t *testing.T, ctx context.Context, cmd InvitationComma
 		// Accept it once
 		acceptOpts := AcceptInvitationOptions{
 			Token:    createResult.Invitation.Token,
+			UserID:   DefaultOwnerUserID(),
 			Name:     GenerateTestName(prefix + "-accepted"),
 			Password: GenerateTestPassword(),
 		}
@@ -496,6 +500,7 @@ func testInvitationErrors(t *testing.T, ctx context.Context, cmd InvitationComma
 
 		acceptOpts := AcceptInvitationOptions{
 			Token:    createResult.Invitation.Token,
+			UserID:   DefaultOwnerUserID(),
 			Name:     GenerateTestName(prefix + "-expired"),
 			Password: GenerateTestPassword(),
 		}
@@ -816,6 +821,7 @@ func TestInvitationMultiProtocol_ErrorHandling(t *testing.T) {
 			t.Run("AcceptInvitation_InvalidToken", func(t *testing.T) {
 				opts := AcceptInvitationOptions{
 					Token:    "invalid-token-format",
+					UserID:   DefaultOwnerUserID(),
 					Name:     "Test User",
 					Password: GenerateTestPassword(),
 				}
