@@ -172,6 +172,17 @@ func (m *mockIAMClient) Update(ctx context.Context, tenantID string, req *iam.Up
 	if req.DisplayName != "" {
 		tenant.DisplayName = req.DisplayName
 	}
+	if req.Metadata != nil {
+		if tenant.Metadata == nil {
+			tenant.Metadata = make(map[string]string)
+		}
+		for k, v := range req.Metadata {
+			tenant.Metadata[k] = v
+		}
+	}
+	if req.Status != nil {
+		tenant.Status = *req.Status
+	}
 	tenant.UpdatedAt = time.Now()
 
 	return tenant, nil

@@ -384,8 +384,11 @@ func (m *Manager) CreateTenant(ctx context.Context, req *CreateTenantRequest) (*
 		return nil, err
 	}
 
-	// Store in cache
-	m.cache.Store(tenantID, entity)
+	// Persist the display name and platform record; a failure rolls the
+	// IAM tenant and DEK back like any other step.
+	if err := m.store(ctx, "CreateTenant", entity); err != nil {
+		return nil, err
+	}
 
 	// Clear rollback actions since we succeeded
 	rollbackActions = nil
@@ -417,11 +420,9 @@ func (m *Manager) GetTenant(ctx context.Context, id string) (*TenantEntity, erro
 		return nil, ErrTenantNotFound{ID: id}
 	}
 
-	entity := FromIAM(iamTenant)
-
-	// Enrich with DEK path
-	if m.config.EnableDEKIsolation {
-		entity.DEKPath = BuildDEKPath(id)
+	entity, err := m.entityFromIAM("GetTenant", iamTenant)
+	if err != nil {
+		return nil, err
 	}
 
 	// Cache and return; an entity cached meanwhile (a concurrent create or
@@ -458,11 +459,9 @@ func (m *Manager) GetTenantByName(ctx context.Context, name string) (*TenantEnti
 		return nil, ErrTenantNotFound{Name: name}
 	}
 
-	entity := FromIAM(iamTenant)
-
-	// Enrich with DEK path
-	if m.config.EnableDEKIsolation {
-		entity.DEKPath = BuildDEKPath(entity.ID)
+	entity, err := m.entityFromIAM("GetTenantByName", iamTenant)
+	if err != nil {
+		return nil, err
 	}
 
 	// Cache and return; an entity cached meanwhile (a concurrent create or
@@ -489,15 +488,13 @@ func (m *Manager) ListTenants(ctx context.Context, limit, offset int) ([]*Tenant
 
 	entities := make([]*TenantEntity, 0, len(tenants))
 	for _, t := range tenants {
-		entity := FromIAM(&t)
-
-		// Enrich with DEK path
-		if m.config.EnableDEKIsolation {
-			entity.DEKPath = BuildDEKPath(entity.ID)
+		entity, err := m.entityFromIAM("ListTenants", &t)
+		if err != nil {
+			return nil, 0, err
 		}
 
-		// A cached entity carries the state, quotas and labels IAM does not
-		// store; listing must not reset them to their IAM defaults.
+		// A cached entity is the one this daemon last stored, and it wins
+		// over the IAM copy a concurrent write may not have reached yet.
 		cached, _ := m.cache.LoadOrStore(entity.ID, entity)
 		entities = append(entities, cached.(*TenantEntity).Clone())
 	}
@@ -538,13 +535,9 @@ func (m *Manager) UpdateTenant(ctx context.Context, id string, req *UpdateTenant
 
 	entity.UpdatedAt = time.Now()
 
-	// Update in IAM
-	if err := m.updateInIAM(ctx, entity); err != nil {
-		return nil, ErrStorageFailed{Operation: "UpdateTenant", Err: err}
+	if err := m.store(ctx, "UpdateTenant", entity); err != nil {
+		return nil, err
 	}
-
-	// Update cache
-	m.cache.Store(id, entity)
 
 	m.logger.Info("tenant updated successfully",
 		slog.String("tenant_id", id),
@@ -578,7 +571,9 @@ func (m *Manager) DeleteTenant(ctx context.Context, id string) error {
 	if err := entity.SetState(StateDeleting); err != nil {
 		return err
 	}
-	m.cache.Store(id, entity)
+	if err := m.store(ctx, "DeleteTenant", entity); err != nil {
+		return err
+	}
 
 	// Step 2: Delete DEK
 	if m.config.EnableDEKIsolation && entity.DEKPath != "" {
@@ -664,9 +659,10 @@ func (m *Manager) SuspendTenant(ctx context.Context, id string) error {
 		return err
 	}
 
-	// Update cache
 	entity.UpdatedAt = time.Now()
-	m.cache.Store(id, entity)
+	if err := m.store(ctx, "SuspendTenant", entity); err != nil {
+		return err
+	}
 
 	m.logger.Info("tenant suspended successfully",
 		slog.String("tenant_id", id),
@@ -703,9 +699,10 @@ func (m *Manager) ResumeTenant(ctx context.Context, id string) error {
 		return err
 	}
 
-	// Update cache
 	entity.UpdatedAt = time.Now()
-	m.cache.Store(id, entity)
+	if err := m.store(ctx, "ResumeTenant", entity); err != nil {
+		return err
+	}
 
 	m.logger.Info("tenant resumed successfully",
 		slog.String("tenant_id", id),
@@ -750,8 +747,9 @@ func (m *Manager) UpdateQuotas(ctx context.Context, tenantID string, quotas *Ten
 	entity.StorageQuota.SetLimits(quotas.Storage)
 	entity.UpdatedAt = time.Now()
 
-	// Update cache
-	m.cache.Store(tenantID, entity)
+	if err := m.store(ctx, "UpdateQuotas", entity); err != nil {
+		return err
+	}
 
 	m.logger.Info("tenant quotas updated successfully",
 		slog.String("tenant_id", tenantID),
@@ -1299,12 +1297,44 @@ func (m *Manager) listFromIAM(ctx context.Context, limit, offset int) ([]iam.Ten
 }
 
 func (m *Manager) updateInIAM(ctx context.Context, entity *TenantEntity) error {
-	req := &iam.UpdateTenantRequest{
-		DisplayName: entity.DisplayName,
+	metadata, err := entity.platformMetadata()
+	if err != nil {
+		return err
 	}
 
-	_, err := m.iamTenantClient.Update(ctx, entity.ID, req)
+	req := &iam.UpdateTenantRequest{
+		DisplayName: entity.DisplayName,
+		Metadata:    metadata,
+		Status:      entity.iamStatus(),
+	}
+
+	_, err = m.iamTenantClient.Update(ctx, entity.ID, req)
 	return err
+}
+
+// store persists the entity's platform record in IAM, then caches it, so the
+// cache never holds a tenant state IAM has not accepted and a restarted
+// daemon reads back what it last served (docs/tenant/engineering.md §6).
+func (m *Manager) store(ctx context.Context, operation string, entity *TenantEntity) error {
+	if err := m.updateInIAM(ctx, entity); err != nil {
+		return ErrStorageFailed{Operation: operation, Err: err}
+	}
+	m.cache.Store(entity.ID, entity)
+	return nil
+}
+
+// entityFromIAM builds the entity an IAM tenant persists: the identity fields
+// FromIAM maps, the platform record the tenant manager stored in its metadata,
+// and the DEK path.
+func (m *Manager) entityFromIAM(operation string, t *iam.Tenant) (*TenantEntity, error) {
+	entity := FromIAM(t)
+	if err := entity.restorePlatformRecord(t); err != nil {
+		return nil, ErrStorageFailed{Operation: operation, Err: err}
+	}
+	if m.config.EnableDEKIsolation {
+		entity.DEKPath = BuildDEKPath(entity.ID)
+	}
+	return entity, nil
 }
 
 func (m *Manager) deleteFromIAM(ctx context.Context, id string) error {

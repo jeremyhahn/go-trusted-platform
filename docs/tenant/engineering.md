@@ -153,7 +153,31 @@ unusual; compare it with `errors.Is` like any other sentinel.
 ## 6. Persistence
 
 Tenant entities are stored through the stack; `ErrStorageFailed` wraps
-persistence failures. Per-tenant keyspaces (`keyspace.go`) are how a tenant's
+persistence failures. The IAM tenant record (reached through the SDK
+`TenantClient`) is the store of record:
+
+- **Identity** — ID, name, display name and timestamps are IAM tenant fields.
+- **Platform record** — lifecycle state, the compute/network/storage quotas
+  (limits and usage counters), labels and annotations have no IAM field. The
+  manager stores them as one JSON value under the IAM tenant metadata key
+  `platform.tenant` (`PlatformRecordKey`), replaced whole on every write.
+- **IAM status** mirrors the state where IAM has one: `active` and
+  `suspended`. `created` and `deleting` leave the IAM status unchanged.
+
+Every write (create, update, quota update, suspend, resume, the `deleting`
+step of delete) saves to IAM **before** it updates the in-memory cache, so the
+cache never holds a state IAM refused, and a failed save returns
+`ErrStorageFailed` with the cache unchanged. A failed save during create rolls
+the IAM tenant and DEK back. Reads that miss the cache (`GetTenant`,
+`GetTenantByName`, `ListTenants`) rebuild the entity from the record, so a
+restarted daemon serves the state, quotas and labels it last stored. A record
+that does not parse, or names an unknown state, is `ErrStorageFailed`. A
+tenant created outside the manager has no record: it reads as `created`
+(`suspended` when IAM says so) with zero quotas and no labels.
+
+The DEK path is not stored; it is derived from the tenant ID.
+
+Per-tenant keyspaces (`keyspace.go`) are how a tenant's
 data is separated in the store — the isolation is in the key path, not in a
 filter applied at read time.
 
