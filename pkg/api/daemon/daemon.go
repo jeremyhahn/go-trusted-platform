@@ -1241,6 +1241,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			logger.Debug("Compute gRPC service set for QUIC handler")
 		}
 		quicHandler.SetAttestationGRPCService(attestationService)
+		quicHandler.SetAttestationService(newAttestationQUICAdapter(attestationService))
 
 		// Set up overlay and gateway QUIC handlers for proper request routing.
 		// Even without concrete service implementations, having these handlers

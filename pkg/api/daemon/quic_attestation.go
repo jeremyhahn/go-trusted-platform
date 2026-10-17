@@ -55,8 +55,12 @@ import (
 //  2. The daemon-native manifest surface (build/verify manifest, host/VM/
 //     container/device workload attestation, reports, policies) on opcodes
 //     0x76/0x77/0x7C-0x7F and the extended codes. These have no SDK QUIC
-//     client and remain flat-struct operations served by the local
+//     client and remain flat-struct operations decoded by the local
 //     AttestationHandler, exercised by the CLI and the integration harness.
+//     daemon.go hands that handler an attestationQUICAdapter over the same
+//     *AttestationServiceServer, so each opcode answers what gRPC, REST,
+//     Unix and MCP answer, refusals included; 0x77 has no report store
+//     behind any transport and answers StatusNotImplemented.
 
 // attestQuoteOpcodes is the set of opcodes served by the pb quote surface;
 // everything else routes to the daemon-native manifest handler.

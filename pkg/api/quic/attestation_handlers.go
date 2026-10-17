@@ -62,12 +62,25 @@ var (
 	// ErrAttestationInvalidNonce is returned when a nonce is invalid.
 	ErrAttestationInvalidNonce = errors.New("invalid nonce")
 
+	// ErrAttestationNonceRequired is returned when a host collection carries
+	// no nonce: a quote without one proves no freshness (RFC 9334 §10).
+	ErrAttestationNonceRequired = errors.New("nonce is required")
+
 	// ErrAttestationInvalidHashAlgorithm is returned when a hash algorithm is invalid.
 	ErrAttestationInvalidHashAlgorithm = errors.New("invalid hash algorithm")
 
 	// ErrAttestationInvalidPCRIndex is returned when a PCR index is invalid.
 	ErrAttestationInvalidPCRIndex = errors.New("invalid PCR index (valid: 0-23)")
 )
+
+// AttestationStatusCarrier is an error from an AttestationServiceInterface
+// that names the QUIC status it must be answered with. The daemon's service
+// adapter returns one for every refusal, so QUIC carries the class the other
+// transports carry instead of one guessed from the message.
+type AttestationStatusCarrier interface {
+	error
+	QUICStatus() byte
+}
 
 // AttestationServiceInterface defines the interface for attestation operations.
 type AttestationServiceInterface interface {
@@ -1108,8 +1121,12 @@ func (h *AttestationHandler) parseCollectOptions(req *CollectHostAttestationRequ
 		IncludeEventLog: req.IncludeEventLog,
 	}
 
-	// Validate nonce if provided
-	if len(req.Nonce) > 0 && len(req.Nonce) < 16 {
+	// The nonce is required, as on the gRPC twin (InvalidArgument): an empty
+	// one gives the quote no freshness (RFC 9334 §10).
+	if len(req.Nonce) == 0 {
+		return nil, ErrAttestationNonceRequired
+	}
+	if len(req.Nonce) < 16 {
 		return nil, ErrAttestationInvalidNonce
 	}
 
@@ -1650,6 +1667,11 @@ func (h *AttestationHandler) errorResponse(status byte, err error) *quicwire.Res
 
 // attestationErrorResponse maps attestation errors to appropriate status codes
 func (h *AttestationHandler) attestationErrorResponse(err error) *quicwire.Response {
+	var carrier AttestationStatusCarrier
+	if errors.As(err, &carrier) {
+		return h.errorResponse(carrier.QUICStatus(), err)
+	}
+
 	var status byte
 
 	switch {

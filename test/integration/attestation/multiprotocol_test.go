@@ -24,7 +24,6 @@ import (
 
 	"github.com/google/uuid"
 
-	apidaemon "github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	attestsvc "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/service"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
@@ -157,15 +156,11 @@ func testVMVerifyRefused(t *testing.T, ctx context.Context, adapter AttestationC
 // expectVMAttestationRefused asserts that a VM evidence call was refused with
 // the reason the transport is documented to carry. Every transport that
 // reaches the attestation service carries ErrTPMSessionNotConfigured for
-// CollectVMAttestation. QUIC's OpAttestVMWorkload (0x7F) is served by the
-// daemon-native manifest handler, which the daemon does not wire, so it
-// answers ErrQUICServiceUnavailable (docs/attestation/api.md §2).
+// CollectVMAttestation, QUIC's OpAttestVMWorkload (0x7F) included: the daemon
+// serves it from the same gRPC servicer (docs/attestation/api.md §2).
 func expectVMAttestationRefused(t *testing.T, adapter AttestationCommands, op string, err error) {
 	t.Helper()
 	want := attestsvc.ErrTPMSessionNotConfigured{Op: "CollectVMAttestation"}.Error()
-	if adapter.Name() == "QUIC" {
-		want = apidaemon.ErrQUICServiceUnavailable{Service: "attestation"}.Error()
-	}
 	if err == nil {
 		t.Fatalf("%s over %s succeeded, want refusal %q", op, adapter.Name(), want)
 	}
@@ -175,7 +170,7 @@ func expectVMAttestationRefused(t *testing.T, adapter AttestationCommands, op st
 }
 
 // expectNoVerifySurface reports whether adapter serves no quote verification
-// (QUIC: the attestation handlers are not constructed in production, #386).
+// (QUIC: no attestation opcode verifies VM evidence, docs/attestation/api.md §2).
 // There it asserts the call answered surface.ErrNoSurface.
 func expectNoVerifySurface(t *testing.T, adapter AttestationCommands, err error) bool {
 	t.Helper()
