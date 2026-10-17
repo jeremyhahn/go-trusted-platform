@@ -100,8 +100,10 @@ embedded only.
 | Add group member | `POST /api/v1/iam/groups/{id}/members/{user}` | ✅ | `0xBF` | `iam_add_group_member`, `iam:write` | missing upstream, [SPEC](../SPEC.md#interfaces) |
 | Remove group member | `DELETE /api/v1/iam/groups/{id}/members/{user}` | ✅ | `0xF6` | `iam_remove_group_member`, `iam:write` | missing upstream, [SPEC](../SPEC.md#interfaces) |
 
-**Group membership is present on every transport except the CLI**, where both
-verbs are unimplemented stubs — see [cli.md](cli.md) §4.
+**Group membership is present on every transport except the CLI and the
+embedded transport.** On the CLI both verbs are unimplemented stubs — see
+[cli.md](cli.md) §4; on the embedded transport go-quicbaas registers no handler
+for them — see [SPEC](../SPEC.md#interfaces).
 
 ## 5. Roles, policies and applications
 

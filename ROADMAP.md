@@ -68,6 +68,9 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **remote-deploy** — remote agent deploy over QUIC, replacing SSH — [#54](../../issues/54) — open
 - **pi-node-roles** — control-plane, compute and gateway templates for raspberrypi — [Raspberry Pi templates](configs/platform/templates/dedicated/raspberrypi/README.md) — open
 - **ha-raft-template** — the three-node control plane — [configs/platform/templates/README.md](configs/platform/templates/README.md) — open
+- **sev-snp** — SEV-SNP guest attestation reports appraised as RFC 9334 Evidence, the report and AMD chain verified by go-xkms through the go-quicbaas SDK; not started — [SPEC Features](docs/SPEC.md#features) — blocked: waits for the HPE DL380 Gen10 Plus v2 to arrive
+- **sev-snp** — SEV-SNP guests on the compute QEMU/KVM provider, with the guest's vTPM bound to its SNP report; not started — [SPEC Features](docs/SPEC.md#features) — blocked: waits for the HPE DL380 Gen10 Plus v2 to arrive
+- **sev-snp** — the DL380 as the CI runner for the SEV-SNP suites; not started — [SPEC Features](docs/SPEC.md#features) — blocked: waits for the HPE DL380 Gen10 Plus v2 to arrive
 
 ## Future
 - **dht** — trusted DHT for the public peer-to-peer hosting platform; design only — [docs/dht/](docs/dht/) — open
