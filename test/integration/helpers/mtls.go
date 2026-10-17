@@ -147,22 +147,40 @@ func TenantTLSConfig() *tls.Config {
 // able to offer a deliberately wrong protocol: a helper that makes the bug
 // unconstructible must not also make the test for the bug unwritable.
 func QUICTLSConfig(overrideALPN ...string) *tls.Config {
-	tlsConfig := TLSConfigOrInsecure()
+	return withQUICALPN(TLSConfigOrInsecure(), overrideALPN)
+}
+
+// TenantQUICTLSConfig is QUICTLSConfig for the ForeignTenantID credential.
+func TenantQUICTLSConfig() *tls.Config {
+	return withQUICALPN(TenantTLSConfig(), nil)
+}
+
+// withQUICALPN offers quicwire.ALPNProtocol on tlsConfig, or overrideALPN
+// when one is given.
+func withQUICALPN(tlsConfig *tls.Config, overrideALPN []string) *tls.Config {
 	tlsConfig.NextProtos = []string{quicwire.ALPNProtocol}
 	if len(overrideALPN) > 0 {
 		tlsConfig.NextProtos = overrideALPN
 	}
-	tlsConfig.MinVersion = tls.VersionTLS13
 	return tlsConfig
 }
 
 // NewHTTPClient creates an HTTP client configured with mTLS certificates.
 // mTLS is mandatory for integration tests.
 func NewHTTPClient(timeout time.Duration) *http.Client {
+	return newHTTPClient(timeout, TLSConfigOrInsecure())
+}
+
+// NewTenantHTTPClient is NewHTTPClient for the ForeignTenantID credential.
+func NewTenantHTTPClient(timeout time.Duration) *http.Client {
+	return newHTTPClient(timeout, TenantTLSConfig())
+}
+
+func newHTTPClient(timeout time.Duration, tlsConfig *tls.Config) *http.Client {
 	return &http.Client{
 		Timeout: timeout,
 		Transport: &http.Transport{
-			TLSClientConfig: TLSConfigOrInsecure(),
+			TLSClientConfig: tlsConfig,
 		},
 	}
 }
