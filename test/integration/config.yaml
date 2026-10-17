@@ -235,6 +235,32 @@ dns:
             ttl: 300
 
 # =============================================================================
+# TIME SYNCHRONIZATION
+# =============================================================================
+# Enables the NTP service the ntp suite drives on every transport. Without
+# an ntp: section platformd never touches chrony and every NTP call answers
+# "not configured" (docs/ntp/user.md).
+#
+# platformd renders /etc/chrony/chrony.conf from this section. The
+# devcontainer has no OpenRC, so run-integration-tests.sh starts chronyd on
+# the rendered file itself, with -x: chronyd never adjusts the system clock,
+# which the container shares with the CI host.
+#
+# The one upstream is the loopback, where nothing serves NTP (a consume-only
+# node renders port 0), so no source ever becomes reachable: a step is always
+# the documented refusal, never a clock change. No startup gate: there is
+# nothing to wait for.
+ntp:
+  enabled: true
+  mode: consume
+  consume:
+    upstream:
+      - address: 127.0.0.1
+        iburst: true
+    startup-gate:
+      block-until-synced: false
+
+# =============================================================================
 # SDN CONFIGURATION
 # =============================================================================
 # Enables the overlay controller so TestOverlayMultiProtocol and
