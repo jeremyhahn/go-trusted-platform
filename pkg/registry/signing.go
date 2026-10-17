@@ -26,6 +26,8 @@ import (
 	"regexp"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+
+	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 )
 
 const (
@@ -37,7 +39,7 @@ const (
 	SignatureAlgorithm = "ECDSA-P256-SHA256"
 
 	// ManifestAnnotationSignature carries the base64 manifest signature.
-	ManifestAnnotationSignature = "org.letstrust.registry.signature"
+	ManifestAnnotationSignature = regsvc.ManifestAnnotationSignature
 	// ManifestAnnotationSigningKeyID names the key that signed the manifest.
 	ManifestAnnotationSigningKeyID = "org.letstrust.registry.signing-key-id"
 	// ManifestAnnotationSignatureAlgorithm names the signature scheme.
@@ -68,6 +70,23 @@ func NewManifestSigner(keys SigningKeyStore) (*ManifestSigner, error) {
 		return nil, ErrSigningKeyStoreRequired{}
 	}
 	return &ManifestSigner{keys: keys}, nil
+}
+
+// NewFileManifestSigner builds a manifest signer on a PKCS#8 key store
+// whose keys are files under dir.
+func NewFileManifestSigner(dir string) (*ManifestSigner, error) {
+	storage, err := xkmssdk.NewFileStorageBackend(dir)
+	if err != nil {
+		return nil, ErrSigningKeyStoreUnavailable{Dir: dir, Cause: err}
+	}
+	keys, err := xkmssdk.NewPKCS8Backend(&xkmssdk.PKCS8BackendConfig{
+		KeyStorage:         storage,
+		AllowPlaintextKeys: true,
+	})
+	if err != nil {
+		return nil, ErrSigningKeyStoreUnavailable{Dir: dir, Cause: err}
+	}
+	return NewManifestSigner(keys)
 }
 
 // Sign signs m with keyID (DefaultSigningKeyID when empty) and records the
@@ -207,7 +226,7 @@ func manifestDigest(m *ImageManifest) ([]byte, error) {
 
 // isSigned reports whether m carries a manifest signature.
 func isSigned(m *ImageManifest) bool {
-	return m.Annotations[ManifestAnnotationSignature] != ""
+	return regsvc.IsSigned(m.Annotations)
 }
 
 // clearSignature removes every signature annotation from m.

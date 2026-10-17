@@ -99,3 +99,26 @@ func TestWithSigning_EmptyKeyIDLeavesKeyToRegistry(t *testing.T) {
 		t.Fatalf("annotation %q set for an empty key ID: %v", AnnotationSigningKeyID, metadata.GetAnnotations())
 	}
 }
+
+// A pulled artifact whose annotations carry the registry's signature is
+// signed.
+func TestIsSigned_SignatureAnnotation(t *testing.T) {
+	annotations := map[string]string{ManifestAnnotationSignature: "MEUCIQ=="}
+
+	if !IsSigned(annotations) {
+		t.Fatalf("IsSigned(%v) = false, want true", annotations)
+	}
+}
+
+// No annotations, or an empty signature annotation, is not signed.
+func TestIsSigned_NoSignature(t *testing.T) {
+	for _, annotations := range []map[string]string{
+		nil,
+		{ManifestAnnotationKeyID: "k1"},
+		{ManifestAnnotationSignature: ""},
+	} {
+		if IsSigned(annotations) {
+			t.Fatalf("IsSigned(%v) = true, want false", annotations)
+		}
+	}
+}

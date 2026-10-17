@@ -56,6 +56,16 @@ func (e ErrPullFailed) Unwrap() error {
 	return e.Err
 }
 
+// ErrImageNotSigned is returned when pull --verify meets an image whose
+// manifest carries no signature.
+type ErrImageNotSigned struct {
+	Reference string
+}
+
+func (e ErrImageNotSigned) Error() string {
+	return fmt.Sprintf("image %s is not signed; --verify refuses it", e.Reference)
+}
+
 // ErrDeleteFailed is returned when an image delete operation fails
 type ErrDeleteFailed struct {
 	Reference string

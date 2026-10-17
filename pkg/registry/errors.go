@@ -500,6 +500,21 @@ func (e ErrSigningKeyStoreRequired) Error() string {
 	return "registry: manifest signer requires a signing key store"
 }
 
+// ErrSigningKeyStoreUnavailable is returned by NewFileManifestSigner when
+// the key store under Dir cannot be opened.
+type ErrSigningKeyStoreUnavailable struct {
+	Dir   string
+	Cause error
+}
+
+func (e ErrSigningKeyStoreUnavailable) Error() string {
+	return fmt.Sprintf("registry: signing key store at %s unavailable: %v", e.Dir, e.Cause)
+}
+
+func (e ErrSigningKeyStoreUnavailable) Unwrap() error {
+	return e.Cause
+}
+
 // ErrInvalidSigningKeyID is returned when a signing key ID is not a plain
 // name. Key IDs name files in the key store, so path separators and other
 // punctuation are refused.

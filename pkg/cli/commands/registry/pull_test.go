@@ -14,9 +14,14 @@
 package registry
 
 import (
+	"bytes"
+	"errors"
+	"io"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 )
 
 func TestNewPullCommand(t *testing.T) {
@@ -351,5 +356,101 @@ func TestNewPullCommand_FlagTypes(t *testing.T) {
 	}
 	if outputFlag.Value.Type() != "string" {
 		t.Errorf("expected output flag to be string, got %s", outputFlag.Value.Type())
+	}
+}
+
+// fakePullStream replays responses, then io.EOF, or err once they run out
+// when err is set.
+type fakePullStream struct {
+	responses []*platformv1.PullResponse
+	err       error
+}
+
+func (s *fakePullStream) Recv() (*platformv1.PullResponse, error) {
+	if len(s.responses) == 0 {
+		if s.err != nil {
+			return nil, s.err
+		}
+		return nil, io.EOF
+	}
+	resp := s.responses[0]
+	s.responses = s.responses[1:]
+	return resp, nil
+}
+
+// pullResponses builds a pull stream: metadata for an artifact carrying
+// annotations, then one chunk.
+func pullResponses(annotations map[string]string, chunk string) []*platformv1.PullResponse {
+	return []*platformv1.PullResponse{
+		{Data: &platformv1.PullResponse_Metadata{Metadata: &platformv1.PullMetadata{
+			Artifact: &platformv1.Artifact{
+				Digest:       "sha256:abc",
+				Os:           "linux",
+				Architecture: "amd64",
+				Annotations:  annotations,
+			},
+		}}},
+		{Data: &platformv1.PullResponse_Chunk{Chunk: []byte(chunk)}},
+	}
+}
+
+// --verify passes a signed image through and reports it verified.
+func TestReceivePull_VerifySignedImage(t *testing.T) {
+	stream := &fakePullStream{responses: pullResponses(
+		map[string]string{regsvc.ManifestAnnotationSignature: "MEUCIQ=="}, "image-bytes")}
+	var out bytes.Buffer
+	result := &PullResult{Reference: "apps/web:v1"}
+
+	if err := receivePull(stream, &out, result, true); err != nil {
+		t.Fatalf("receivePull: %v", err)
+	}
+	if out.String() != "image-bytes" {
+		t.Fatalf("wrote %q, want %q", out.String(), "image-bytes")
+	}
+	if !result.Verified || result.Size != int64(len("image-bytes")) || result.Digest != "sha256:abc" || result.Platform != "linux/amd64" {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+// --verify refuses an unsigned image before writing any of it.
+func TestReceivePull_VerifyRefusesUnsignedImage(t *testing.T) {
+	stream := &fakePullStream{responses: pullResponses(nil, "image-bytes")}
+	var out bytes.Buffer
+
+	err := receivePull(stream, &out, &PullResult{Reference: "apps/web:v1"}, true)
+
+	var notSigned ErrImageNotSigned
+	if !errors.As(err, &notSigned) || notSigned.Reference != "apps/web:v1" {
+		t.Fatalf("receivePull error = %v, want ErrImageNotSigned for apps/web:v1", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("wrote %d bytes of an unsigned image", out.Len())
+	}
+}
+
+// Without --verify an unsigned image is pulled and not reported verified.
+func TestReceivePull_UnsignedImageWithoutVerify(t *testing.T) {
+	stream := &fakePullStream{responses: pullResponses(nil, "image-bytes")}
+	var out bytes.Buffer
+	result := &PullResult{Reference: "apps/web:v1"}
+
+	if err := receivePull(stream, &out, result, false); err != nil {
+		t.Fatalf("receivePull: %v", err)
+	}
+	if result.Verified || out.String() != "image-bytes" {
+		t.Fatalf("result = %+v, wrote %q", result, out.String())
+	}
+}
+
+// A stream error is a pull failure that wraps it.
+func TestReceivePull_StreamError(t *testing.T) {
+	streamErr := errors.New("connection reset")
+	stream := &fakePullStream{err: streamErr}
+
+	err := receivePull(stream, io.Discard, &PullResult{Reference: "apps/web:v1"}, false)
+
+	var pullErr ErrPullFailed
+	if !errors.As(err, &pullErr) || !errors.Is(err, streamErr) {
+		t.Fatalf("receivePull error = %v, want ErrPullFailed wrapping %v", err, streamErr)
 	}
 }
