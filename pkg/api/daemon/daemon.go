@@ -1240,6 +1240,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			logger.Debug("Compute gRPC service set for QUIC handler")
 		}
 		quicHandler.SetAttestationGRPCService(attestationService)
+		quicHandler.SetTPMGRPCService(tpmService)
 		quicHandler.SetAttestationService(newAttestationQUICAdapter(attestationService))
 
 		// Set up overlay and gateway QUIC handlers for proper request routing.
@@ -3075,6 +3076,9 @@ func (d *Daemon) SetTPMGRPCService(svc *TPMGRPCService) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.tpmService = svc
+	if d.quicHandler != nil {
+		d.quicHandler.SetTPMGRPCService(svc)
+	}
 }
 
 // EABGRPCService returns the EAB gRPC service backing /api/v1/eab.
