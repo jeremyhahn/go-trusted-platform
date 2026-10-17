@@ -67,6 +67,19 @@ of the request. `owner` cannot be set: the SDK `GenerateKeyRequest` and
 carries the owner the KMS recorded. A key whose metadata cannot be recorded
 fails the request with the metadata error's class; the key itself exists.
 
+That holds in the system scope: a caller of the platform system tenant, or an
+unbound caller. A caller of any other tenant generates in that tenant's key
+scope, where the reply's `metadata` is only what the generate response carries
+(key ID, algorithm, version, `exportable`, `deletion_protection`) and no
+metadata call is made. A tenant-scope request carrying `description` or `tags`
+is refused with `FailedPrecondition` on every transport before any key is
+generated. SDK gap (go-quicbaas `v0.12.0-alpha`): `GenerateKey` stores a
+tenant key as `tenant/<tenant>/<name>` (`pkg/service/kms.go:446`), but
+`GetKeyMetadata` (`:1266`) and `UpdateKeyMetadata` (`:1302`) look the name up
+unscoped, so they miss the key or reach a same-named system key; and the
+tenant setter they read, `iam.ContextWithTenant`, is not re-exported under
+`quicbaas/sdk/go` (`sdk/go/transport.ContextWithTenant` sets a different key).
+
 `POST /api/v1/kms/keys` reads a flat body: `name`, `algorithm` as a name
 (`AES-256-GCM`, `CHACHA20-POLY1305`, `RSA-2048`, `RSA-4096`, `ECDSA-P256`,
 `ECDSA-P384`, `ED25519`; underscores are accepted for dashes) and `usage` as

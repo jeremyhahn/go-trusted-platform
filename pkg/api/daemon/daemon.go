@@ -618,6 +618,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if kmsErr != nil {
 			logger.Warn("KMS service creation failed", "error", kmsErr)
 		} else {
+			kmsService.SetSystemTenant(config.PlatformTenantID)
 			// Register KMS gRPC services with TCP gRPC server if enabled
 			if grpcServer != nil {
 				if grpcRegErr := kmsService.RegisterGRPCServices(grpcServer); grpcRegErr != nil {
