@@ -263,6 +263,12 @@ func WithLaunchRefusal(err error) OrchestratorOption {
 	}
 }
 
+// LaunchRefusal returns the error every launch is refused with, or nil when
+// launches are allowed: see WithLaunchRefusal.
+func (o *Orchestrator) LaunchRefusal() error {
+	return o.launchRefusal
+}
+
 // WithLifecyclePolicyEvaluator sets the policy evaluator.
 func WithLifecyclePolicyEvaluator(evaluator LifecyclePolicyEvaluator) OrchestratorOption {
 	return func(o *Orchestrator) {
