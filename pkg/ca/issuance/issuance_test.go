@@ -28,6 +28,7 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance/issuancetest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 )
 
 func TestStoreType_NamesEveryStore(t *testing.T) {
@@ -298,22 +299,30 @@ func TestSignCSR_ReportsACAFailure(t *testing.T) {
 // issues ordinary certificates, and a caller with no platform token at all
 // (mTLS, a legacy validator) are refused.
 func TestAuthorizeSignCSR(t *testing.T) {
+	// certificate is the context a transport builds for a tokenless mTLS
+	// peer: its principal holds scopes, but no platform token stands behind
+	// them.
+	certificate := peercred.ContextWithCertificatePrincipal(context.Background())
 	cases := []struct {
 		name    string
+		ctx     context.Context
 		authCtx *platformtoken.AuthorizedContext
 		allowed bool
 	}{
-		{"no platform token", nil, false},
-		{"ca:write", &platformtoken.AuthorizedContext{Scopes: []string{"ca:write"}}, false},
-		{"every other ca scope", &platformtoken.AuthorizedContext{Scopes: []string{"ca:read", "ca:write", "ca:delete", "kms:write"}}, false},
-		{"*:write", &platformtoken.AuthorizedContext{Scopes: []string{"*:write"}}, false},
-		{"ca:sign-csr", &platformtoken.AuthorizedContext{Scopes: []string{"ca:sign-csr"}}, true},
-		{"ca:*", &platformtoken.AuthorizedContext{Scopes: []string{"ca:*"}}, true},
-		{"*:*", &platformtoken.AuthorizedContext{Scopes: []string{"*:*"}}, true},
+		{"no platform token", context.Background(), nil, false},
+		{"ca:write", context.Background(), &platformtoken.AuthorizedContext{Scopes: []string{"ca:write"}}, false},
+		{"every other ca scope", context.Background(), &platformtoken.AuthorizedContext{Scopes: []string{"ca:read", "ca:write", "ca:delete", "kms:write"}}, false},
+		{"*:write", context.Background(), &platformtoken.AuthorizedContext{Scopes: []string{"*:write"}}, false},
+		{"ca:sign-csr", context.Background(), &platformtoken.AuthorizedContext{Scopes: []string{"ca:sign-csr"}}, true},
+		{"ca:*", context.Background(), &platformtoken.AuthorizedContext{Scopes: []string{"ca:*"}}, true},
+		{"*:*", context.Background(), &platformtoken.AuthorizedContext{Scopes: []string{"*:*"}}, true},
+		{"client certificate alone, *:*", certificate, &platformtoken.AuthorizedContext{Scopes: []string{"*:*"}}, false},
+		{"client certificate alone, ca:sign-csr", certificate, &platformtoken.AuthorizedContext{Scopes: []string{"ca:sign-csr"}}, false},
+		{"client certificate alone, no principal", certificate, nil, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := AuthorizeSignCSR(tc.authCtx)
+			err := AuthorizeSignCSR(tc.ctx, tc.authCtx)
 			if tc.allowed {
 				if err != nil {
 					t.Fatalf("refused: %v", err)
@@ -332,8 +341,13 @@ func TestAuthorizeSignCSR(t *testing.T) {
 }
 
 func TestSignCSRScopeError_NamesTheScope(t *testing.T) {
-	err := AuthorizeSignCSR(nil)
+	err := AuthorizeSignCSR(context.Background(), nil)
 	if want := "signing a CSR requires a platform token granting ca:sign-csr: the caller presented no platform token"; err.Error() != want {
+		t.Errorf("Error() = %q, want %q", err, want)
+	}
+	certificate := peercred.ContextWithCertificatePrincipal(context.Background())
+	err = AuthorizeSignCSR(certificate, &platformtoken.AuthorizedContext{Scopes: []string{"*:*"}})
+	if want := "signing a CSR requires a platform token granting ca:sign-csr: the caller presented a client certificate alone"; err.Error() != want {
 		t.Errorf("Error() = %q, want %q", err, want)
 	}
 }

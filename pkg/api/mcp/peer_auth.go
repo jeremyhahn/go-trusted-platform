@@ -20,6 +20,7 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 )
 
 // PeerAuthenticator authenticates a caller by the client certificate chain
@@ -42,11 +43,28 @@ func WithPeerAuthenticator(a PeerAuthenticator) AuthorizationCheckerOption {
 	}
 }
 
+// tokenOnlyTools are the tools a client certificate alone never authorizes,
+// whatever scopes its principal holds: each requires a platform token, as on
+// every other transport. ca_sign_csr certifies a KMS key for code signing
+// (docs/ca/api.md, "Sign CSR needs ca:sign-csr").
+var tokenOnlyTools = map[string]struct{}{
+	"ca_sign_csr": {},
+}
+
 // authorizePeer authenticates a tokenless request by its connection's
 // verified client certificate, then enforces the tool's scope against the
 // principal the certificate authenticates. Only VerifiedChains is read:
 // PeerCertificates is whatever the client sent.
-func (c *AuthorizationChecker) authorizePeer(ctx context.Context, permission string) (context.Context, *AuthorizationError) {
+func (c *AuthorizationChecker) authorizePeer(ctx context.Context, toolName, permission string) (context.Context, *AuthorizationError) {
+	// A token-only tool is refused before the certificate is even read: the
+	// operator's certificate carries scopes a token would grant, so its
+	// scope check alone would let it through.
+	if _, tokenOnly := tokenOnlyTools[toolName]; tokenOnly {
+		return ctx, &AuthorizationError{
+			Type:    AuthErrorPermissionDenied,
+			Message: "Permission denied: tool '" + toolName + "' requires a platform token; a client certificate alone does not authorize it",
+		}
+	}
 	state, _, _ := channelbind.ConnectionTLS(ctx)
 	if state == nil || len(state.VerifiedChains) == 0 || len(state.VerifiedChains[0]) == 0 {
 		return ctx, &AuthorizationError{
@@ -67,5 +85,8 @@ func (c *AuthorizationChecker) authorizePeer(ctx context.Context, permission str
 			Message: "Permission denied: insufficient privileges",
 		}
 	}
+	// The mark travels with the context into the services a tool calls, so
+	// a token-only check there refuses this principal too.
+	ctx = peercred.ContextWithCertificatePrincipal(ctx)
 	return ContextWithAuthorizedContext(ctx, authCtx), nil
 }

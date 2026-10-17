@@ -770,7 +770,7 @@ func (c *AuthorizationChecker) AuthorizeTool(ctx context.Context, toolName strin
 	// request, as on REST, gRPC and QUIC. A presented token never takes this
 	// path: it is validated by the token backend below.
 	if token == "" && c.peerAuthenticator != nil {
-		return c.authorizePeer(ctx, permission)
+		return c.authorizePeer(ctx, toolName, permission)
 	}
 
 	// With no authorization backend there is nothing that can grant the
