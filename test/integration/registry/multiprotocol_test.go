@@ -31,6 +31,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,8 +82,11 @@ func TestRegistryMultiProtocol(t *testing.T) {
 // runRegistryProtocolTests runs the complete registry test suite against a single
 // protocol adapter.
 func runRegistryProtocolTests(t *testing.T, ctx context.Context, cmd RegistryCommands) {
-	// Generate unique test prefix for this protocol run
-	prefix := fmt.Sprintf("%s-%d", cmd.Name(), time.Now().Unix())
+	// Generate unique test prefix for this protocol run. It names
+	// repositories, and the OCI distribution spec's repository grammar
+	// (which the CLI and pkg/registry validateImageRef both enforce) is
+	// lowercase only: "CLI-..." or "gRPC-..." is refused as "invalid format".
+	prefix := strings.ToLower(fmt.Sprintf("%s-%d", cmd.Name(), time.Now().Unix()))
 
 	t.Run("ImageLifecycle", func(t *testing.T) {
 		runImagePushTests(t, ctx, cmd, prefix)

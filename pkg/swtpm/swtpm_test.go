@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,10 +39,34 @@ type fakeTools struct {
 	setupErr  error
 	setupArgs []string
 	setupRuns int
+
+	// daemonArgs records the arguments of every daemon Start ran.
+	daemonArgs [][]string
 }
 
 func (f *fakeTools) tools() tools {
-	return tools{lookPath: f.lookPath, runSetup: f.runSetup}
+	return tools{lookPath: f.lookPath, runSetup: f.runSetup, daemon: f.daemon}
+}
+
+// daemon stands in for the swtpm daemon with a process that runs until
+// Stop signals it.
+func (f *fakeTools) daemon(ctx context.Context, args []string) *exec.Cmd {
+	f.daemonArgs = append(f.daemonArgs, args)
+	return exec.CommandContext(ctx, "sleep", "300")
+}
+
+// daemonSocket is the socket path the daemon run of index i was given.
+func (f *fakeTools) daemonSocket(t *testing.T, i int) string {
+	t.Helper()
+	require.Greater(t, len(f.daemonArgs), i)
+	args := f.daemonArgs[i]
+	for j, arg := range args {
+		if arg == "--ctrl" || arg == "--server" {
+			return strings.TrimPrefix(args[j+1], "type=unixio,path=")
+		}
+	}
+	t.Fatalf("daemon run %d has no socket argument: %v", i, args)
+	return ""
 }
 
 func (f *fakeTools) lookPath(file string) (string, error) {

@@ -16,7 +16,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
-	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // MCPAdapterError represents an error from the MCP adapter
@@ -699,7 +698,18 @@ func decodeDomainEntity(data []byte, entity any, fixup func(map[string]interface
 
 // FindConfigForDevice finds the config for a device via MCP.
 func (a *MCPAdapter) FindConfigForDevice(ctx context.Context, opts FindConfigForDeviceOptions) (*FindConfigForDeviceResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "FindConfigForDevice"}
+	args := map[string]interface{}{}
+	if opts.EKSerial != "" {
+		args["ek_serial"] = opts.EKSerial
+	}
+	if opts.MACAddress != "" {
+		args["mac_address"] = opts.MACAddress
+	}
+	profile, err := a.callProfileTool(ctx, "FindConfigForDevice", "profile_find_config", args)
+	if err != nil {
+		return nil, err
+	}
+	return &FindConfigForDeviceResult{Profile: profile}, nil
 }
 
 // AssignProfileToDevice assigns a profile to a device via MCP.

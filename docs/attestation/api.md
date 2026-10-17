@@ -93,7 +93,15 @@ The REST rows above are the whole surface: every route is registered under
 `/vm/{id}`, `/container/{id}`) or by the events, reports and clock routers.
 `pkg/webservice/v1/testdata/routes.golden` is the authority. The older router
 that registered `/manifest` (singular), `/manifest/build`, `/verify` and
-`GET /quote` no longer exists, and the daemon answers those paths `404`.
+`GET /quote` no longer exists, and both listeners answer those paths `404`.
+
+The daemon's own REST listener mounts the same routers over the same servicer
+(`pkg/api/daemon/rest_attestation.go`, #949), so a platformd with no
+`webservices:` section serves every route above except `GET /verdicts`. Before
+#949 the daemon registered none of them and answered every attestation REST
+call `404`. The verdict feed is filtered by the webservice session's tenant;
+on the daemon, platform-token callers poll it over gRPC, QUIC and MCP. The
+daemon gates the routes by scope, not by role (§5.1).
 
 The REST adapter in `test/integration/attestation/rest_adapter.go` calls only
 these routes. The suite verbs no route serves — VM identity, a separate
@@ -192,6 +200,19 @@ Every route the attestation REST routers register — the manifest verbs, the
 quote verbs, `POST /attestation/host`, `/vm/{id}`, `/container/{id}`, the
 `/events` timeline and `/callers` — is mounted behind the platform's admin-role
 gate, the same seam #165 put in front of the credential-bearing routers.
+
+On the daemon listener, where callers present platform tokens rather than
+webservice sessions, each route asks the scope of the gRPC method it calls
+(`pkg/api/grpc/method_permissions.go`): `attestation:read` for the manifest
+list, get and verify, `/quote/verify`, `/clock`, `/callers`, `/reports`,
+`/reports/{device_id}` and `/events`; `attestation:delete` for
+`DELETE /manifests/{id}`; `attestation:write` for `/manifests/build`, `/vm/{id}`,
+`/container/{id}` and `/reports/{device_id}/refresh`. `POST /quote` and
+`POST /host` ask `attestation:write`, as their QUIC opcodes do, because they
+make the node's TPM sign the caller's nonce. As on the webservice, `/quote`,
+`/host` and `/clock` also admit a machine caller through the caller-admission
+policy. A route the scope table does not name is refused `403`
+(`ErrAttestationRouteUnclassified`).
 
 **Why it is gated now.** Until #387 every quote-producing operation answered
 `ErrTPMSessionNotConfigured`, so the open routes were inert. #387 hands the

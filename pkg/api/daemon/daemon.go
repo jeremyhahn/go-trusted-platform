@@ -1535,6 +1535,13 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		daemon.concreteRestServer.SetCAHandlers(config.CAService, restGuard)
 	}
 
+	// Wire the attestation REST routers on the daemon listener, over the
+	// servicer gRPC, Unix, QUIC and MCP call, so /api/v1/attestation/* is
+	// served whether or not a webservices section exists (#949).
+	if daemon.concreteRestServer != nil {
+		daemon.concreteRestServer.SetAttestationHandlers(attestationService, config.AttestationREST, config.AttestationEvents, restGuard)
+	}
+
 	// Wire the physical TPM REST handlers. Quote and verify run on the same
 	// TPM service gRPC and the Unix socket serve, so one quote verifies the
 	// same way on every transport (#482).

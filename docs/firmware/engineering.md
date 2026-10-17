@@ -731,6 +731,7 @@ PEM bundle → `0600`, its parent directory `0700`. Built UKI → `0755`.
 | Unit | `pkg/uefi/*_test.go` | **yes** | GUID round-trip, ESL encode/parse, NVRAM parse/serialise, enrollment ordering, efivars enroll payload bytes, status parsing |
 | Unit | `pkg/secureboot/*_test.go` | **yes** | Key generation, key paths, re-sign mode, KMS signer (fake KMS and CA clients), module-key generate/load/malformed |
 | Unit | `pkg/authenticode/authenticode_test.go` | **yes** | Sign/verify round-trip, certificate extraction, constructor validation |
+| Unit | `pkg/authenticode/verify_profile_test.go` | **yes** | Verify refuses each out-of-profile field the signature does not cover: signer identifier, content type and content-type attribute, digest algorithms, WIN_CERTIFICATE revision, type and dwLength; the signer is the certificate the SignerInfo names |
 | Unit | `pkg/modulesign/*_test.go` | **yes** | CMS envelope, trailer, compression codecs, guards, error paths |
 | Unit | `pkg/uefi/firmware/*_test.go` | **no** — excluded | Raw variable read/write/delete/list and the `TRUSTED_PLATFORM` marker against a temp-dir efivarfs root with a fake `chattr`; never `/sys` or the host `chattr` |
 | Unit | `pkg/uki/*_test.go` | **no** — excluded | PE patching, section ordering, parser, helpers |

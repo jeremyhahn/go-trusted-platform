@@ -471,15 +471,93 @@ func (e ErrStorageNotConfigured) Error() string {
 }
 
 // ErrEncryptionNotConfigured is returned when a caller requests
-// per-image encryption but the encryption pipeline has not been
-// wired into the Registry. Encryption + signing land in a follow-up
-// after the unencrypted-pipeline ships.
+// per-image encryption but no ImageEncryptor was installed with
+// WithEncryptor.
 type ErrEncryptionNotConfigured struct {
 	Reference string
 }
 
 func (e ErrEncryptionNotConfigured) Error() string {
 	return fmt.Sprintf("registry: encryption not configured (ref=%s)", e.Reference)
+}
+
+// ErrSigningNotConfigured is returned when a caller asks for a signed
+// manifest and the Registry has no manifest signer. The push is refused
+// rather than stored unsigned, so --sign never yields an unsigned image.
+type ErrSigningNotConfigured struct {
+	Reference string
+}
+
+func (e ErrSigningNotConfigured) Error() string {
+	return fmt.Sprintf("registry: manifest signing not configured (ref=%s)", e.Reference)
+}
+
+// ErrSigningKeyStoreRequired is returned by NewManifestSigner when it is
+// given no key store to hold the signing keys.
+type ErrSigningKeyStoreRequired struct{}
+
+func (e ErrSigningKeyStoreRequired) Error() string {
+	return "registry: manifest signer requires a signing key store"
+}
+
+// ErrInvalidSigningKeyID is returned when a signing key ID is not a plain
+// name. Key IDs name files in the key store, so path separators and other
+// punctuation are refused.
+type ErrInvalidSigningKeyID struct {
+	KeyID string
+}
+
+func (e ErrInvalidSigningKeyID) Error() string {
+	return fmt.Sprintf("registry: invalid signing key id %q: use letters, digits, '.', '_' or '-'", e.KeyID)
+}
+
+// ErrSigningKeyUnavailable is returned when the manifest signer can neither
+// load nor create the signing key a push or pull names.
+type ErrSigningKeyUnavailable struct {
+	KeyID string
+	Cause error
+}
+
+func (e ErrSigningKeyUnavailable) Error() string {
+	return fmt.Sprintf("registry: signing key %q unavailable: %v", e.KeyID, e.Cause)
+}
+
+func (e ErrSigningKeyUnavailable) Unwrap() error { return e.Cause }
+
+// ErrManifestSigningFailed is returned when the signing key could not sign
+// the manifest. The push is refused rather than stored unsigned.
+type ErrManifestSigningFailed struct {
+	Reference string
+	KeyID     string
+	Cause     error
+}
+
+func (e ErrManifestSigningFailed) Error() string {
+	return fmt.Sprintf("registry: signing manifest %s with key %q failed: %v", e.Reference, e.KeyID, e.Cause)
+}
+
+func (e ErrManifestSigningFailed) Unwrap() error { return e.Cause }
+
+// ErrImageNotSigned is returned when a pull asks for signature verification
+// and the stored manifest carries no signature.
+type ErrImageNotSigned struct {
+	Reference string
+}
+
+func (e ErrImageNotSigned) Error() string {
+	return fmt.Sprintf("registry: image %s is not signed", e.Reference)
+}
+
+// ErrSignatureInvalid is returned when a stored manifest's signature does not
+// verify against the signing key it names. The pull is refused.
+type ErrSignatureInvalid struct {
+	Reference string
+	KeyID     string
+	Reason    string
+}
+
+func (e ErrSignatureInvalid) Error() string {
+	return fmt.Sprintf("registry: signature on %s (key %q) is invalid: %s", e.Reference, e.KeyID, e.Reason)
 }
 
 // MessageError is a typed error carrying a fully formatted message with no

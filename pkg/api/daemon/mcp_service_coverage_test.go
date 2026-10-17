@@ -544,9 +544,16 @@ func TestMCPServiceProvider_DeviceGet_NotFound(t *testing.T) {
 		DeviceService: mockSvc,
 	})
 
+	// A missing device is NotFound over MCP, as it is over gRPC.
 	_, err := provider.DeviceGet(ctx, "999")
-	if err == nil {
-		t.Error("expected error for non-existent device")
+	if got := status.Code(err); got != codes.NotFound {
+		t.Fatalf("DeviceGet(999) code = %v (%v), want NotFound", got, err)
+	}
+	if err := provider.DeviceDelete(ctx, "999"); status.Code(err) != codes.NotFound {
+		t.Fatalf("DeviceDelete(999) = %v, want NotFound", err)
+	}
+	if err := provider.DeviceUpdate(ctx, "999", nil); status.Code(err) != codes.NotFound {
+		t.Fatalf("DeviceUpdate(999) = %v, want NotFound", err)
 	}
 }
 

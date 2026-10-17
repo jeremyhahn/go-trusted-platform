@@ -66,6 +66,11 @@ type lifecycleFixture struct {
 	// this value.
 	config map[string]any
 
+	// dbKeyID is the KMS key ID the seeded secure-boot db.key-uri names.
+	// The suite never provisions it, so a wired DB signer reaches the KMS
+	// and is refused with the typed ErrSignFailed carrying this ID.
+	dbKeyID string
+
 	// eabKeyID / eabHMAC are the EAB credential identifiers a booting
 	// device presents. eabHMAC is the base64url (unpadded) encoding of
 	// the raw HMAC key exactly as returned by EABService.CreateCredential
@@ -115,17 +120,19 @@ func seedLifecycleFixture(t *testing.T, ctx context.Context) *lifecycleFixture {
 	eabClient := eabsdk.NewClientFromGRPC(platformv1.NewEABServiceClient(conn))
 
 	ekCertPEM, ekCertB64DER := newSelfSignedEKCert(t)
+	dbKeyID := "secure-boot/" + uniqueID("provision-mp-db")
 	fixture := &lifecycleFixture{
 		ekSerial:     uniqueID("provision-mp-fixture-ek"),
 		macAddress:   uniqueMAC(),
 		ekCertPEM:    ekCertPEM,
 		ekCertB64DER: ekCertB64DER,
+		dbKeyID:      dbKeyID,
 		// The seeded config carries a recognizable platform section plus a
 		// secure-boot section provisioned for resign-mode "remote", so the
-		// SignDigest scenario is blocked only by the two authentication /
-		// availability gates asserted there (never by a missing secure-boot
-		// section). Values are strings/bools only so the JSON round-trip
-		// shape is stable for deep-equality assertions.
+		// SignDigest scenario is never refused for a missing secure-boot
+		// section: every authentication gate passes and the request reaches
+		// the DB signer. Values are strings/bools only so the JSON
+		// round-trip shape is stable for deep-equality assertions.
 		config: map[string]any{
 			"platform": map[string]any{
 				"hostname": uniqueID("provision-mp-node"),
@@ -134,7 +141,7 @@ func seedLifecycleFixture(t *testing.T, ctx context.Context) *lifecycleFixture {
 				"enabled":     true,
 				"resign-mode": "remote",
 				"db": map[string]any{
-					"key-uri": "kms://secure-boot/" + uniqueID("provision-mp-db"),
+					"key-uri": "kms://" + dbKeyID,
 					"cn":      uniqueID("provision-mp-db-cn"),
 				},
 			},

@@ -101,8 +101,6 @@ through `services/ca`.
 - **It does not implement the TPM challenge handlers.** `endorse-01`,
   `enroll-01` and `device-attest-01` are the stack's.
 - **It does not hold CA private keys.**
-- **It does not offer renew or verify over REST.** That is a gap
-  ([api.md](api.md) §2), not a decision.
 - **It has no unrevoke.**
 
 ## A stale instruction file

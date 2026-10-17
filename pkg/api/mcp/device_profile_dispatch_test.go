@@ -150,9 +150,15 @@ func (s *deviceProfileStubProvider) DeviceProfileFindBySerial(ctx context.Contex
 	return s.DeviceProfileMatch(ctx, "", serial, "")
 }
 
-// DeviceProfileFindConfig records the EK serial and resolves by MAC address.
+// DeviceProfileFindConfig records the EK serial, returns the profile prestaged
+// with that EK serial or MAC address, and otherwise resolves by MAC match rule.
 func (s *deviceProfileStubProvider) DeviceProfileFindConfig(ctx context.Context, ekSerial, macAddr string) (*entities.DeviceProfile, error) {
 	s.lastFindConfigEK = ekSerial
+	for _, profile := range s.profiles {
+		if (ekSerial != "" && profile.EKSerial == ekSerial) || (macAddr != "" && profile.MACAddress == macAddr) {
+			return profile, nil
+		}
+	}
 	return s.DeviceProfileMatch(ctx, macAddr, "", "")
 }
 
@@ -596,6 +602,39 @@ func TestDeviceProfileFindByMACAndSerial_Errors(t *testing.T) {
 				t.Fatalf("err = %v (code %d), want the NotFound code", err, toolErrorCode(err))
 			}
 		})
+	}
+}
+
+// TestDeviceProfileFindConfig_PrestagedIdentity proves a profile prestaged
+// with an EK serial or a MAC address is found by that identity alone.
+func TestDeviceProfileFindConfig_PrestagedIdentity(t *testing.T) {
+	registry, stub := newDeviceProfileRegistry()
+	stub.profiles[9] = &entities.DeviceProfile{ID: 9, Name: "by-ek", EKSerial: "EK-0009"}
+	stub.profiles[10] = &entities.DeviceProfile{ID: 10, Name: "by-mac", MACAddress: "52:54:00:aa:bb:10"}
+
+	for name, args := range map[string]map[string]interface{}{
+		"9":  {"ek_serial": "EK-0009"},
+		"10": {"mac_address": "52:54:00:aa:bb:10"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, err := registry.ExecuteTool(context.Background(), "profile_find_config", args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := result.(map[string]interface{})["id"]; got != name {
+				t.Errorf("id = %v, want %s", got, name)
+			}
+		})
+	}
+}
+
+// TestDeviceProfileFindConfig_UnknownEKSerial proves an EK serial no profile
+// is prestaged with is a NotFound, not a match.
+func TestDeviceProfileFindConfig_UnknownEKSerial(t *testing.T) {
+	registry, _ := newDeviceProfileRegistry()
+	_, err := registry.ExecuteTool(context.Background(), "profile_find_config", map[string]interface{}{"ek_serial": "EK-NONE"})
+	if toolErrorCode(err) != mcpwire.CodeForClass(codes.NotFound) {
+		t.Fatalf("err = %v (code %d), want the NotFound code", err, toolErrorCode(err))
 	}
 }
 

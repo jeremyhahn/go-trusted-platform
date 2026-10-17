@@ -45,6 +45,9 @@ refused before it reaches the service.
 
 ### device_get
 
+Get a device by ID. A missing device is `NotFound`, as on gRPC; so is the
+lookup `device_update` and `device_delete` make first.
+
 ```json
 {
   "name": "device_get",

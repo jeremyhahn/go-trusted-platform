@@ -933,6 +933,7 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.DeviceSubTemplateDelete:      deviceDelete,
 		quicwire.DeviceSubProfileFromTemplate: deviceWrite,
 		quicwire.DeviceSubFindMatchingProfile: deviceRead,
+		quicwire.DeviceSubFindConfigForDevice: deviceRead,
 
 		// The PXEService methods without a direct opcode, scoped as on gRPC.
 		quicwire.PXESubGetDeviceByMAC:    pxeRead,

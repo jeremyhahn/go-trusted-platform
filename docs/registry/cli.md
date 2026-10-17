@@ -70,7 +70,7 @@ Push an image to the registry. Reads the image from `--input` or stdin.
 | `--encrypt` | `-e` | bool | `false` | Encrypt image layers before storage |
 | `--key-id` | `-k` | string | `""` | Encryption key ID — **required with `--encrypt`** |
 | `--sign` | `-s` | bool | `false` | Sign the image manifest |
-| `--signing-key-id` | | string | `""` | Key used for manifest signing; defaults to the tenant signer |
+| `--signing-key-id` | | string | `""` | Key used for manifest signing; defaults to `registry-default-signer`. A key ID the registry does not hold yet is created on first use |
 | `--overwrite` | | bool | `false` | Replace an existing tag with the same name |
 | `--input` | `-i` | string | `""` | Input file path; reads stdin when unset |
 
@@ -81,6 +81,22 @@ platformctl registry push registry.example.com/apps/api:1.4.2 \
 
 Without `--overwrite`, pushing over an existing tag fails with
 `ErrImageExists` / HTTP 409.
+
+Each push flag reaches the registry as a push-metadata annotation
+(`sdk/go/services/registry`): `encrypt`, `key-id`, `sign`, `signing-key-id` and
+`overwrite`; the REST push carries the same options as the
+`X-Trusted-Platform-Encrypt`, `-Key-Id`, `-Sign`, `-Signing-Key-Id` and
+`-Overwrite` headers. The `Encrypted` and `Key ID` the command prints are read
+from the manifest the registry stored, not echoed from the flags. A registry
+with no manifest signer refuses `--sign` with `ErrSigningNotConfigured` rather
+than store the image unsigned. The daemon's registry signs with ECDSA P-256
+keys held in a PKCS#8 key store under `<PlatformDir>/registry/signing-keys`;
+the signature, key ID and algorithm (`ECDSA-P256-SHA256`) are stored as the
+`org.letstrust.registry.signature`, `.signing-key-id` and
+`.signature-algorithm` manifest annotations. Signature annotations a client
+sends are dropped. The signature covers the reference, schema, media type,
+config, layers and every other annotation. Every pull of a signed manifest
+verifies it and fails with `ErrSignatureInvalid` if it does not match.
 
 ---
 

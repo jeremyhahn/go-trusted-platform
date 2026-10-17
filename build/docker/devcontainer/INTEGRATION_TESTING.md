@@ -55,7 +55,8 @@ make integration-test-<key>        # one suite; <key> is a TARGET_PACKAGES key i
 The runner starts OVS, swtpm and a shared `platformd`, then runs
 `go test` with the tags `make` hands it (`integration` plus
 `make -s print-build-tags`). The keys in its `TARGET_NO_DAEMON` map skip the
-shared `platformd`; `TARGET_RUN` narrows a slice with `-run`, and `TARGET_ENV`
+shared `platformd`; the keys in `TARGET_OWN_DAEMON` (`bmc`, `compute`) run on
+a `platformd` started on their own config; `TARGET_RUN` narrows a slice with `-run`, and `TARGET_ENV`
 sets the environment a suite needs (`ipxe` and `ipxe-dhcp` get
 `IPXE_DHCP_ENABLED=1`, so their DHCP tests run against a real server instead
 of failing). `docs/test/integration.md` lists the targets, what
@@ -640,6 +641,7 @@ When adding new integration tests:
 1. Place in appropriate directory (`sdn/`, `vtpm/`, etc.)
 2. Add a `TARGET_PACKAGES` key in `run-integration-tests.sh` (and a
    `TARGET_NO_DAEMON` entry if the suite must not share `platformd`, a
+   `TARGET_OWN_DAEMON` entry if it needs `platformd` on its own config, a
    `TARGET_ENV` entry if it reads a variable the runner must set)
 3. Add an `integration-test-<key>` target that calls `run-integration-suite`
 4. Add the key to the runner's `ALL_TARGETS` unless the suite cannot run in

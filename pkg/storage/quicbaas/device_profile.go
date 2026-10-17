@@ -215,7 +215,7 @@ func (d *DeviceProfileDAO) FindMatchingProfile(ctx context.Context, macAddr, ser
 				continue
 			}
 
-			if profile.MatchRules != nil && profile.MatchRules.Matches(macAddr, serial, model) {
+			if profile.MatchRules != nil && normalizedMatchRules(profile.MatchRules).Matches(macAddr, serial, model) {
 				return &profile, nil
 			}
 		}
@@ -227,6 +227,18 @@ func (d *DeviceProfileDAO) FindMatchingProfile(ctx context.Context, macAddr, ser
 	}
 
 	return nil, ErrNotFoundByIndex{EntityType: entityTypeDeviceProfile, IndexField: "MatchRules", Value: "no match"}
+}
+
+// normalizedMatchRules returns a copy of rules with its prefixes in the case
+// FindMatchingProfile compares them in: the MAC prefix lowercase, the serial
+// prefixes uppercase. A stored prefix then matches whatever case it was
+// written in, as it does in FindByMACPrefix and FindBySerialPrefix.
+func normalizedMatchRules(rules *entities.ProfileMatchRules) *entities.ProfileMatchRules {
+	normalized := *rules
+	normalized.MACPrefix = strings.ToLower(rules.MACPrefix)
+	normalized.SerialPrefix = strings.ToUpper(rules.SerialPrefix)
+	normalized.SerialPattern = strings.ToUpper(rules.SerialPattern)
+	return &normalized
 }
 
 // FindByEKSerial finds a profile by exact TPM EK certificate serial number.

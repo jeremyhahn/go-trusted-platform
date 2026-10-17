@@ -148,3 +148,104 @@ func TestGRPCAdapter_PushOverwriteReplacesTheTag(t *testing.T) {
 		t.Fatalf("pulled layers = %+v, want the overwriting layer %q", pulled.Layers, "two")
 	}
 }
+
+// TestPushOptionsOf_MapsEveryPushAnnotation pins the annotation contract the
+// CLI's push flags travel on (docs/registry/cli.md §3).
+func TestPushOptionsOf_MapsEveryPushAnnotation(t *testing.T) {
+	opts := pushOptionsOf(map[string]string{
+		regsvc.AnnotationOverwrite:    "true",
+		regsvc.AnnotationEncrypt:      "true",
+		regsvc.AnnotationKeyID:        "apps-web-dek",
+		regsvc.AnnotationSign:         "true",
+		regsvc.AnnotationSigningKeyID: "apps-web-signer",
+	})
+
+	if !opts.AllowOverwrite || !opts.Encrypt || !opts.SignImage {
+		t.Fatalf("flags = overwrite %v encrypt %v sign %v, want all true", opts.AllowOverwrite, opts.Encrypt, opts.SignImage)
+	}
+	if opts.KeyID != "apps-web-dek" || opts.SigningKeyID != "apps-web-signer" {
+		t.Fatalf("key IDs = %q %q, want %q %q", opts.KeyID, opts.SigningKeyID, "apps-web-dek", "apps-web-signer")
+	}
+}
+
+// TestPushOptionsOf_OnlyTrueTurnsAnOptionOn guards against a non-"true"
+// value (or none) requesting encryption, signing or an overwrite.
+func TestPushOptionsOf_OnlyTrueTurnsAnOptionOn(t *testing.T) {
+	for name, annotations := range map[string]map[string]string{
+		"absent": nil,
+		"false": {
+			regsvc.AnnotationOverwrite: "false",
+			regsvc.AnnotationEncrypt:   "false",
+			regsvc.AnnotationSign:      "yes",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			opts := pushOptionsOf(annotations)
+			if opts.AllowOverwrite || opts.Encrypt || opts.SignImage {
+				t.Fatalf("flags = overwrite %v encrypt %v sign %v, want all false", opts.AllowOverwrite, opts.Encrypt, opts.SignImage)
+			}
+		})
+	}
+}
+
+// TestGRPCAdapter_PushEncryptAnnotationEncryptsUnderTheKey covers
+// `registry push --encrypt --key-id`: the adapter used to drop both, so the
+// image was stored in the clear. The response artifact reports the
+// encryption and key the CLI prints.
+func TestGRPCAdapter_PushEncryptAnnotationEncryptsUnderTheKey(t *testing.T) {
+	storage, err := NewQuicBaaSStorage(newMockStorageClient())
+	if err != nil {
+		t.Fatalf("NewQuicBaaSStorage: %v", err)
+	}
+	kms, err := NewLocalKMSClient(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalKMSClient: %v", err)
+	}
+	enc, err := NewImageEncryptor(kms)
+	if err != nil {
+		t.Fatalf("NewImageEncryptor: %v", err)
+	}
+	reg, err := NewRegistry(validTestConfig(), testLogger(), WithStorage(storage), WithEncryptor(enc))
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = reg.Close() })
+
+	a := NewGRPCAdapter(reg)
+	meta := &grpcapi.RegistryPushMetadata{
+		Repository: "apps/web",
+		Tag:        "v1",
+		Annotations: map[string]string{
+			regsvc.AnnotationEncrypt: "true",
+			regsvc.AnnotationKeyID:   "apps-web-dek",
+		},
+	}
+	resp, err := a.PushStream(context.Background(), meta, bytes.NewReader(pushEnvelope(t, []byte("secret"))))
+	if err != nil {
+		t.Fatalf("encrypted PushStream: %v", err)
+	}
+	if got := resp.Artifact.Annotations[regsvc.ManifestAnnotationEncrypted]; got != "true" {
+		t.Fatalf("artifact annotation %q = %q, want %q", regsvc.ManifestAnnotationEncrypted, got, "true")
+	}
+	if got := resp.Artifact.Annotations[regsvc.ManifestAnnotationKeyID]; got == "" {
+		t.Fatalf("artifact annotation %q is empty, want the encryption key", regsvc.ManifestAnnotationKeyID)
+	}
+}
+
+// TestGRPCAdapter_PushSignAnnotationIsRefusedWithoutASigner covers
+// `registry push --sign`: the adapter used to drop the annotation and store
+// the image unsigned. A registry with no manifest signer refuses instead.
+func TestGRPCAdapter_PushSignAnnotationIsRefusedWithoutASigner(t *testing.T) {
+	a := NewGRPCAdapter(newTestRegistry(t))
+	meta := &grpcapi.RegistryPushMetadata{
+		Repository:  "apps/web",
+		Tag:         "v1",
+		Annotations: map[string]string{regsvc.AnnotationSign: "true"},
+	}
+
+	_, err := a.PushStream(context.Background(), meta, bytes.NewReader(pushEnvelope(t, []byte("one"))))
+	var notConfigured ErrSigningNotConfigured
+	if !errors.As(err, &notConfigured) {
+		t.Fatalf("signed PushStream error = %v, want ErrSigningNotConfigured", err)
+	}
+}

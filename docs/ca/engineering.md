@@ -134,9 +134,10 @@ The 13 gRPC RPCs are `GetCAInfo`, `InitCA`, `InstallCACertificates`,
 `ListCertificates`, `RevokeCertificate`, `RenewCertificate`,
 `VerifyCertificate`, `GetCRL`, `GetCABundle`.
 
-**REST carries eight of them.** `RenewCertificate` and `VerifyCertificate` have
-no REST route, and neither do `InitCA`, `InstallCACertificates` or
-`UninstallCACertificates` — see [api.md](api.md). Revocation over REST is
+**REST carries ten of them.** `InitCA`, `InstallCACertificates` and
+`UninstallCACertificates` have no REST route — see [api.md](api.md).
+`RenewCertificate` is `POST /api/v1/ca/certificates/{serial}/renew` and
+`VerifyCertificate` is `POST /api/v1/ca/certificates/verify`. Revocation over REST is
 `DELETE /api/v1/ca/certificates/{serial}`, not a `POST .../revoke`.
 
 ## 6. Known defect

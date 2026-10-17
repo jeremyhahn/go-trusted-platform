@@ -134,6 +134,12 @@ func (g *GRPCAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*
 	}
 	metadata := regsvc.NewPushMetadata(repository, tag, int64(len(payload)))
 	metadata.Annotations = maps.Clone(opts.Annotations)
+	if opts.Encrypt {
+		metadata = regsvc.WithEncryption(metadata, opts.KeyID)
+	}
+	if opts.SignImage {
+		metadata = regsvc.WithSigning(metadata, opts.SigningKeyID)
+	}
 	if opts.AllowOverwrite {
 		metadata = regsvc.WithOverwrite(metadata)
 	}
@@ -148,10 +154,15 @@ func (g *GRPCAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*
 		return nil, err
 	}
 
+	// What the registry stored, from the manifest annotations it returns; a
+	// --sign push it cannot sign is refused, so a stored one was signed.
+	stored := resp.GetArtifact().GetAnnotations()
 	result := &PushResult{
 		Reference: ref,
 		Digest:    resp.GetArtifact().GetDigest(),
 		Size:      resp.GetBytesReceived(),
+		Encrypted: stored[regsvc.ManifestAnnotationEncrypted] == "true",
+		Signed:    opts.SignImage,
 	}
 	if resp.GetTimestamp() != nil {
 		result.PushedAt = resp.GetTimestamp().AsTime()

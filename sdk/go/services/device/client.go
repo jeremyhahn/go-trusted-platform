@@ -258,6 +258,32 @@ func (c *Client) FindMatchingProfile(ctx context.Context, macAddress, serial, mo
 	return resp.Profile, nil
 }
 
+// FindConfigForDevice returns the profile stored for a device's EK serial
+// or MAC address. The server answers InvalidArgument when both are empty and
+// NotFound when no profile carries either.
+func (c *Client) FindConfigForDevice(ctx context.Context, ekSerial, macAddress string) (*platformv1.DeviceProfile, error) {
+	resp, err := c.grpc.FindConfigForDevice(ctx, &platformv1.FindConfigForDeviceRequest{
+		EkSerial:   ekSerial,
+		MacAddress: macAddress,
+	})
+	if err != nil {
+		return nil, &ErrFindConfigForDeviceFailed{Cause: err}
+	}
+	return resp.Profile, nil
+}
+
+// AttestDevice verifies attestation evidence for a registered device.
+func (c *Client) AttestDevice(ctx context.Context, id uint64, evidence []byte) (*platformv1.AttestDeviceResponse, error) {
+	resp, err := c.grpc.AttestDevice(ctx, &platformv1.AttestDeviceRequest{
+		DeviceId: strconv.FormatUint(id, 10),
+		Evidence: evidence,
+	})
+	if err != nil {
+		return nil, &ErrAttestDeviceFailed{ID: id, Cause: err}
+	}
+	return resp, nil
+}
+
 // CountProfiles returns the total number of device profiles.
 func (c *Client) CountProfiles(ctx context.Context) (int32, error) {
 	resp, err := c.grpc.CountProfiles(ctx, &platformv1.CountProfilesRequest{})

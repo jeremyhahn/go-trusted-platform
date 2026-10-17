@@ -82,8 +82,8 @@ Rows below give the unscoped path; the tenant-scoped equivalent always exists.
 | Get user | `GET /api/v1/iam/users/{id}` | ✅ | `0xAB` | `iam_get_user`, `iam:read` | ✅ |
 | Update user | `PUT /api/v1/iam/users/{id}` | ✅ | `0xAD` | `iam_update_user`, `iam:write` | ✅ |
 | Delete user | `DELETE /api/v1/iam/users/{id}` | ✅ | `0xAA` | `iam_delete_user`, `iam:delete` | ✅ |
-| Assign role to user | `POST /api/v1/iam/users/{id}/roles/{role}` | ✅ | `0xB9` | `iam_assign_role`, `iam:write` | ✅ |
-| Revoke role from user | `DELETE /api/v1/iam/users/{id}/roles/{role}` | ✅ | `0xBA` | `iam_revoke_role`, `iam:write` | ✅ |
+| Assign role to user | `POST /api/v1/iam/users/{id}/roles/{role}` | ✅ | `0xB9` | `iam_assign_role`, `iam:write` | missing upstream, [SPEC](../SPEC.md#interfaces) |
+| Revoke role from user | `DELETE /api/v1/iam/users/{id}/roles/{role}` | ✅ | `0xBA` | `iam_revoke_role`, `iam:write` | missing upstream, [SPEC](../SPEC.md#interfaces) |
 
 `iam_update_user` changes what gRPC `UpdateUser` changes: email, display name,
 roles, groups and attributes.
@@ -104,8 +104,8 @@ address when it has no local part (`UsernameFromEmail` in
 | Get group | `GET /api/v1/iam/groups/{id}` | ✅ | `0xBD` | `iam_get_group`, `iam:read` | ✅ |
 | Update group | `PUT /api/v1/iam/groups/{id}` | ✅ | `MISSING` | `iam_update_group`, `iam:write` | ✅ |
 | Delete group | `DELETE /api/v1/iam/groups/{id}` | ✅ | `0xBC` | `iam_delete_group`, `iam:delete` | ✅ |
-| Add group member | `POST /api/v1/iam/groups/{id}/members/{user}` | ✅ | `0xBF` | `iam_add_group_member`, `iam:write` | ✅ |
-| Remove group member | `DELETE /api/v1/iam/groups/{id}/members/{user}` | ✅ | `0xF6` | `iam_remove_group_member`, `iam:write` | ✅ |
+| Add group member | `POST /api/v1/iam/groups/{id}/members/{user}` | ✅ | `0xBF` | `iam_add_group_member`, `iam:write` | missing upstream, [SPEC](../SPEC.md#interfaces) |
+| Remove group member | `DELETE /api/v1/iam/groups/{id}/members/{user}` | ✅ | `0xF6` | `iam_remove_group_member`, `iam:write` | missing upstream, [SPEC](../SPEC.md#interfaces) |
 
 **Group membership is present on every transport except the CLI**, where both
 verbs are unimplemented stubs — see [cli.md](cli.md) §4.
