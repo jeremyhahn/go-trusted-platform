@@ -20,8 +20,12 @@
 package integration_test
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -138,12 +142,9 @@ func createMockProvisioningServer(t *testing.T, env *testEnvironment) *mockProvi
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err, "Failed to create listener")
 
-	// Configure TLS
-	tlsCert := tls.Certificate{
-		Certificate: [][]byte{env.caCert.Raw},
-		PrivateKey:  env.caKey,
-		Leaf:        env.caCert,
-	}
+	// Configure TLS with a server leaf the client can verify against the CA
+	// for the address it dials.
+	tlsCert := issueProvisioningServerCertificate(t, env)
 
 	server := &http.Server{
 		Handler: mux,
@@ -173,4 +174,34 @@ func createMockProvisioningServer(t *testing.T, env *testEnvironment) *mockProvi
 	})
 
 	return mockServer
+}
+
+// issueProvisioningServerCertificate issues the provisioning server's TLS leaf
+// from the test CA, naming the loopback address the server listens on.
+func issueProvisioningServerCertificate(t *testing.T, env *testEnvironment) tls.Certificate {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err, "generate provisioning server key")
+
+	template := &x509.Certificate{
+		SerialNumber: env.nextSerial(),
+		Subject:      pkix.Name{CommonName: "provisioning.test"},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(certificateValidTime),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1)},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, env.caCert, key.Public(), env.caKey)
+	require.NoError(t, err, "issue provisioning server certificate")
+
+	leaf, err := x509.ParseCertificate(der)
+	require.NoError(t, err, "parse provisioning server certificate")
+
+	return tls.Certificate{
+		Certificate: [][]byte{der},
+		PrivateKey:  key,
+		Leaf:        leaf,
+	}
 }

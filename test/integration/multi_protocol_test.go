@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -1020,9 +1021,12 @@ func testCARevokeCertificate(t *testing.T, ctx context.Context, adapter Protocol
 	require.NoError(t, err, "Issue prerequisite certificate")
 	require.NotNil(t, issueResult)
 	require.NotNil(t, issueResult.Certificate)
+	require.NotEmpty(t, issueResult.Certificate.Serial, "issued certificate must carry its serial")
 
+	// docs/ca/api.md: every transport revokes a certificate by its serial.
 	result, err := cmd.RevokeCertificate(ctx, ca.RevokeCertificateOptions{
 		CommonName: cn,
+		Serial:     issueResult.Certificate.Serial,
 		Reason:     ca.RevocationReasonSuperseded,
 	})
 	if missing := surfaceMissing(adapter, "CA", "RevokeCertificate", err); missing != nil {
@@ -1086,49 +1090,71 @@ func testDNSService(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 	})
 }
 
-func testDNSResolveA(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
+// setupMatrixDNSZone creates a zone of its own for one DNS leg and returns the
+// zone name with a deferable cleanup. The platform resolver answers from the
+// zones it serves (docs/dns/), so every leg resolves records it created rather
+// than names such as "localhost" no zone carries.
+func setupMatrixDNSZone(t *testing.T, ctx context.Context, cmd dns.DNSCommands, adapter ProtocolAdapter) (string, func()) {
+	t.Helper()
+	zoneName := fmt.Sprintf("matrix-%d.test.", time.Now().UnixNano())
+	_, err := cmd.CreateZone(ctx, dns.CreateZoneOptions{Name: zoneName, TTL: 3600})
+	if missing := surfaceMissing(adapter, "DNS", "CreateZone", err); missing != nil {
+		t.Fatal(missing)
+	}
+	require.NoError(t, err, "DNS CreateZone prerequisite should succeed")
+	return zoneName, func() {
+		if _, err := cmd.DeleteZone(ctx, zoneName); err != nil {
+			t.Errorf("DNS DeleteZone %s cleanup failed: %v", zoneName, err)
+		}
+	}
+}
+
+// testDNSResolveRecord adds one record of recordType to a fresh zone and
+// resolves it back over the adapter's transport.
+func testDNSResolveRecord(t *testing.T, ctx context.Context, adapter ProtocolAdapter, recordType, value string) {
 	cmd := createDNSAdapter(adapter.Name())
 	require.NotNil(t, cmd, "DNS adapter should not be nil for protocol %s", protocolName(adapter))
 
 	helpers.RequireAdapterSetup(t, "DNS", protocolName(adapter), cmd.Setup(ctx))
 	defer cmd.Teardown()
 
-	result, err := cmd.Resolve(ctx, "localhost", "A")
+	zoneName, cleanup := setupMatrixDNSZone(t, ctx, cmd, adapter)
+	defer cleanup()
+
+	name := "resolve." + zoneName
+	_, err := cmd.AddRecord(ctx, dns.AddRecordOptions{
+		ZoneName:   zoneName,
+		Name:       name,
+		RecordType: recordType,
+		Value:      value,
+		TTL:        300,
+	})
+	if missing := surfaceMissing(adapter, "DNS", "AddRecord", err); missing != nil {
+		t.Fatal(missing)
+	}
+	require.NoError(t, err, "DNS AddRecord %s prerequisite should succeed", recordType)
+
+	result, err := cmd.Resolve(ctx, name, recordType)
 	if missing := surfaceMissing(adapter, "DNS", "Resolve", err); missing != nil {
 		t.Fatal(missing)
 	}
-	require.NoError(t, err, "DNS Resolve A should succeed")
-	require.NotNil(t, result, "Resolve A result should not be nil")
+	require.NoError(t, err, "DNS Resolve %s should succeed", recordType)
+	require.NotNil(t, result, "Resolve %s result should not be nil", recordType)
+	assert.Equal(t, recordType, result.RecordType, "resolved record type")
+	// A TXT value may come back in its quoted presentation form.
+	assert.Contains(t, strings.Join(result.Values, " "), value, "resolved %s values", recordType)
+}
+
+func testDNSResolveA(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
+	testDNSResolveRecord(t, ctx, adapter, "A", "10.20.30.40")
 }
 
 func testDNSResolveAAAA(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	cmd := createDNSAdapter(adapter.Name())
-	require.NotNil(t, cmd, "DNS adapter should not be nil for protocol %s", protocolName(adapter))
-
-	helpers.RequireAdapterSetup(t, "DNS", protocolName(adapter), cmd.Setup(ctx))
-	defer cmd.Teardown()
-
-	result, err := cmd.Resolve(ctx, "localhost", "AAAA")
-	if missing := surfaceMissing(adapter, "DNS", "Resolve", err); missing != nil {
-		t.Fatal(missing)
-	}
-	require.NoError(t, err, "DNS Resolve AAAA should succeed")
-	require.NotNil(t, result, "Resolve AAAA result should not be nil")
+	testDNSResolveRecord(t, ctx, adapter, "AAAA", "2001:db8::40")
 }
 
 func testDNSResolveTXT(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	cmd := createDNSAdapter(adapter.Name())
-	require.NotNil(t, cmd, "DNS adapter should not be nil for protocol %s", protocolName(adapter))
-
-	helpers.RequireAdapterSetup(t, "DNS", protocolName(adapter), cmd.Setup(ctx))
-	defer cmd.Teardown()
-
-	result, err := cmd.Resolve(ctx, "localhost", "TXT")
-	if missing := surfaceMissing(adapter, "DNS", "Resolve", err); missing != nil {
-		t.Fatal(missing)
-	}
-	require.NoError(t, err, "DNS Resolve TXT should succeed")
-	require.NotNil(t, result, "Resolve TXT result should not be nil")
+	testDNSResolveRecord(t, ctx, adapter, "TXT", "matrix-txt-value")
 }
 
 func testDNSCreateRecord(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
@@ -1138,8 +1164,12 @@ func testDNSCreateRecord(t *testing.T, ctx context.Context, adapter ProtocolAdap
 	helpers.RequireAdapterSetup(t, "DNS", protocolName(adapter), cmd.Setup(ctx))
 	defer cmd.Teardown()
 
-	recordName := fmt.Sprintf("matrix-test-%d.example.com", time.Now().UnixNano())
+	zoneName, cleanup := setupMatrixDNSZone(t, ctx, cmd, adapter)
+	defer cleanup()
+
+	recordName := "create." + zoneName
 	result, err := cmd.AddRecord(ctx, dns.AddRecordOptions{
+		ZoneName:   zoneName,
 		Name:       recordName,
 		RecordType: "A",
 		Value:      "10.0.0.1",
@@ -1150,9 +1180,6 @@ func testDNSCreateRecord(t *testing.T, ctx context.Context, adapter ProtocolAdap
 	}
 	require.NoError(t, err, "DNS AddRecord should succeed")
 	require.NotNil(t, result, "AddRecord result should not be nil")
-
-	// Cleanup
-	_, _ = cmd.DeleteRecord(ctx, recordName, "A")
 }
 
 func testDNSDeleteRecord(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
@@ -1162,8 +1189,12 @@ func testDNSDeleteRecord(t *testing.T, ctx context.Context, adapter ProtocolAdap
 	helpers.RequireAdapterSetup(t, "DNS", protocolName(adapter), cmd.Setup(ctx))
 	defer cmd.Teardown()
 
-	recordName := fmt.Sprintf("matrix-del-%d.example.com", time.Now().UnixNano())
+	zoneName, cleanup := setupMatrixDNSZone(t, ctx, cmd, adapter)
+	defer cleanup()
+
+	recordName := "delete." + zoneName
 	_, err := cmd.AddRecord(ctx, dns.AddRecordOptions{
+		ZoneName:   zoneName,
 		Name:       recordName,
 		RecordType: "A",
 		Value:      "10.0.0.2",
@@ -1180,6 +1211,9 @@ func testDNSDeleteRecord(t *testing.T, ctx context.Context, adapter ProtocolAdap
 	}
 	require.NoError(t, err, "DNS DeleteRecord should succeed")
 	require.NotNil(t, result, "DeleteRecord result should not be nil")
+
+	_, err = cmd.Resolve(ctx, recordName, "A")
+	require.Error(t, err, "a deleted record no longer resolves")
 }
 
 // =============================================================================
