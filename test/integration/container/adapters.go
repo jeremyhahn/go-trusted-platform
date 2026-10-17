@@ -16,21 +16,22 @@
 package container
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
+	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/mcp"
+	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/quic"
+	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/rest"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"google.golang.org/grpc"
 )
@@ -157,10 +158,11 @@ var (
 // REST Adapter Implementation
 // =============================================================================
 
-// RESTAdapter implements ContainerCommands using HTTP/REST calls.
+// RESTAdapter implements ContainerCommands through the SDK REST transport,
+// which maps each ComputeService RPC onto the /api/v1/compute/containers
+// routes pkg/api/rest/compute_handlers.go serves.
 type RESTAdapter struct {
-	baseURL    string
-	httpClient *http.Client
+	GRPCAdapter
 }
 
 // NewRESTAdapter creates a new REST adapter for integration testing.
@@ -173,262 +175,35 @@ func (r *RESTAdapter) Name() string {
 	return "REST"
 }
 
-// Setup initializes the REST client.
+// Setup connects the SDK over REST (HTTPS with the suite's mTLS identity).
 func (r *RESTAdapter) Setup(ctx context.Context) error {
 	endpoint := os.Getenv(EnvPlatformAPIEndpoint)
 	if endpoint == "" {
 		endpoint = DefaultPlatformAPIEndpoint
 	}
-	r.baseURL = "http://" + endpoint
-
-	r.httpClient = &http.Client{
-		Timeout: DefaultCommandTimeout,
-	}
-
-	// Verify connectivity
-	_, statusCode, err := r.doRequest(ctx, http.MethodGet, "/api/v1/health", nil)
-	if err != nil {
-		return ErrAdapterConnectionFailed{Adapter: "REST", URL: r.baseURL, Err: err}
-	}
-	if statusCode != http.StatusOK {
-		return ErrAdapterConnectionFailed{Adapter: "REST", URL: r.baseURL, Err: fmt.Errorf("unexpected status: %d", statusCode)}
-	}
-
-	return nil
+	return r.connectSDK(ctx, r.Name(), endpoint,
+		platform.WithOnlyProtocol(platform.ProtocolREST),
+		platform.WithRESTAddr(endpoint),
+	)
 }
 
-// Teardown cleans up REST client resources.
-func (r *RESTAdapter) Teardown() error {
-	if r.httpClient != nil {
-		r.httpClient.CloseIdleConnections()
-	}
-	return nil
-}
-
-// doRequest performs an HTTP request.
-func (r *RESTAdapter) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, int, error) {
-	var reqBody io.Reader
-	if body != nil {
-		jsonBytes, err := json.Marshal(body)
-		if err != nil {
-			return nil, 0, fmt.Errorf("failed to marshal request: %w", err)
-		}
-		reqBody = bytes.NewReader(jsonBytes)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, r.baseURL+path, reqBody)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := r.httpClient.Do(req)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	return respBody, resp.StatusCode, nil
-}
-
-// handleResponse processes the response and checks for errors.
-func (r *RESTAdapter) handleResponse(respBody []byte, statusCode int, target interface{}) error {
-	if statusCode >= 400 {
-		var errResp struct {
-			Error   string `json:"error"`
-			Message string `json:"message"`
-		}
-		if err := json.Unmarshal(respBody, &errResp); err == nil {
-			msg := errResp.Error
-			if msg == "" {
-				msg = errResp.Message
-			}
-			if strings.Contains(strings.ToLower(msg), "not found") {
-				return ErrContainerNotFound{ID: ""}
-			}
-			return fmt.Errorf("API error (%d): %s", statusCode, msg)
-		}
-		return fmt.Errorf("API error (%d): %s", statusCode, string(respBody))
-	}
-
-	if target != nil && len(respBody) > 0 {
-		if err := json.Unmarshal(respBody, target); err != nil {
-			return ErrInvalidResponse{Operation: "response", Err: err}
-		}
-	}
-
-	return nil
-}
-
-// Create creates a new container via REST.
-func (r *RESTAdapter) Create(ctx context.Context, opts CreateOptions) (*Container, error) {
-	body, statusCode, err := r.doRequest(ctx, http.MethodPost, "/api/v1/containers", opts)
-	if err != nil {
-		return nil, err
-	}
-
-	var result restContainerResponse
-	if err := r.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toContainer(), nil
-}
-
-// Start starts a container via REST.
-func (r *RESTAdapter) Start(ctx context.Context, id string) error {
-	body, statusCode, err := r.doRequest(ctx, http.MethodPost, fmt.Sprintf("/api/v1/containers/%s/start", id), nil)
-	if err != nil {
-		return err
-	}
-
-	return r.handleResponse(body, statusCode, nil)
-}
-
-// Stop stops a container via REST.
-func (r *RESTAdapter) Stop(ctx context.Context, id string, timeout time.Duration) error {
-	req := map[string]interface{}{"timeout": int(timeout.Seconds())}
-	body, statusCode, err := r.doRequest(ctx, http.MethodPost, fmt.Sprintf("/api/v1/containers/%s/stop", id), req)
-	if err != nil {
-		return err
-	}
-
-	return r.handleResponse(body, statusCode, nil)
-}
-
-// Remove removes a container via REST.
-func (r *RESTAdapter) Remove(ctx context.Context, id string, force bool) error {
-	path := fmt.Sprintf("/api/v1/containers/%s", id)
-	if force {
-		path += "?force=true"
-	}
-	body, statusCode, err := r.doRequest(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return err
-	}
-
-	return r.handleResponse(body, statusCode, nil)
-}
-
-// Get retrieves a container via REST.
-func (r *RESTAdapter) Get(ctx context.Context, id string) (*Container, error) {
-	body, statusCode, err := r.doRequest(ctx, http.MethodGet, fmt.Sprintf("/api/v1/containers/%s", id), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrContainerNotFound{ID: id}
-	}
-
-	var result restContainerResponse
-	if err := r.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toContainer(), nil
-}
-
-// List lists containers via REST.
-func (r *RESTAdapter) List(ctx context.Context, opts ListOptions) ([]*Container, error) {
-	path := "/api/v1/containers"
-	params := make([]string, 0)
-
-	if opts.All {
-		params = append(params, "all=true")
-	}
-	if opts.Limit > 0 {
-		params = append(params, fmt.Sprintf("limit=%d", opts.Limit))
-	}
-	if opts.StateFilter != "" {
-		params = append(params, fmt.Sprintf("state=%s", opts.StateFilter))
-	}
-	if opts.NameFilter != "" {
-		params = append(params, fmt.Sprintf("name=%s", opts.NameFilter))
-	}
-
-	if len(params) > 0 {
-		path += "?" + strings.Join(params, "&")
-	}
-
-	body, statusCode, err := r.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result restContainerListResponse
-	if err := r.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	containers := make([]*Container, len(result.Containers))
-	for i, c := range result.Containers {
-		containers[i] = c.toContainer()
-	}
-
-	return containers, nil
-}
-
-// Logs retrieves container logs via REST.
+// Logs has no REST route.
 func (r *RESTAdapter) Logs(ctx context.Context, id string, opts LogOptions) ([]string, error) {
-	path := fmt.Sprintf("/api/v1/containers/%s/logs", id)
-	params := make([]string, 0)
-
-	if opts.Tail > 0 {
-		params = append(params, fmt.Sprintf("tail=%d", opts.Tail))
-	}
-	if opts.Timestamps {
-		params = append(params, "timestamps=true")
-	}
-
-	if len(params) > 0 {
-		path += "?" + strings.Join(params, "&")
-	}
-
-	body, statusCode, err := r.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result restLogsResponse
-	if err := r.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.Lines, nil
-}
-
-// Attest performs attestation via REST.
-func (r *RESTAdapter) Attest(ctx context.Context, id string) (*AttestationReport, error) {
-	body, statusCode, err := r.doRequest(ctx, http.MethodPost, fmt.Sprintf("/api/v1/containers/%s/attest", id), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result restAttestationResponse
-	if err := r.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toAttestationReport(), nil
+	return nil, noSurface(r.Name(), opLogs)
 }
 
 // =============================================================================
 // gRPC Adapter Implementation
 // =============================================================================
 
-// GRPCAdapter implements ContainerCommands using the compute SDK client over gRPC.
+// GRPCAdapter implements ContainerCommands using the compute SDK client over
+// gRPC. The REST, QUIC, MCP and Unix adapters embed it: they share its
+// operations and differ only in how Setup reaches platformd.
 type GRPCAdapter struct {
-	endpoint string
-	conn     *grpc.ClientConn
-	client   *computesvc.Client
+	endpoint  string
+	transport string
+	closer    io.Closer
+	client    *computesvc.Client
 }
 
 // NewGRPCAdapter creates a new gRPC adapter for integration testing.
@@ -457,15 +232,31 @@ func (g *GRPCAdapter) Setup(ctx context.Context) error {
 		return ErrAdapterConnectionFailed{Adapter: "gRPC", URL: endpoint, Err: err}
 	}
 
-	g.conn = conn
+	g.transport = g.Name()
+	g.closer = conn
 	g.client = computesvc.NewClientFromGRPC(pb.NewComputeServiceClient(conn))
 	return nil
 }
 
-// Teardown closes the gRPC connection.
+// connectSDK connects the platform SDK over one transport and binds the
+// compute client to it.
+func (g *GRPCAdapter) connectSDK(ctx context.Context, transport, endpoint string, opts ...platform.Option) error {
+	opts = append(opts, platform.WithTLSConfig(helpers.TLSConfigOrInsecure()))
+	client, err := platform.Connect(ctx, platform.NewOptions(opts...))
+	if err != nil {
+		return ErrAdapterConnectionFailed{Adapter: transport, URL: endpoint, Err: err}
+	}
+	g.endpoint = endpoint
+	g.transport = transport
+	g.closer = client
+	g.client = computesvc.NewClientFromGRPC(client.Compute())
+	return nil
+}
+
+// Teardown closes the connection to platformd.
 func (g *GRPCAdapter) Teardown() error {
-	if g.conn != nil {
-		return g.conn.Close()
+	if g.closer != nil {
+		return g.closer.Close()
 	}
 	return nil
 }
@@ -474,7 +265,7 @@ func (g *GRPCAdapter) Teardown() error {
 func (g *GRPCAdapter) Create(ctx context.Context, opts CreateOptions) (*Container, error) {
 	created, err := g.client.CreateContainerDomain(ctx, createContainerParamsFromOptions(opts))
 	if err != nil {
-		return nil, ErrCommandFailed{Command: "gRPC CreateContainer", Err: err}
+		return nil, ErrCommandFailed{Command: g.transport + " CreateContainer", Err: err}
 	}
 	if created == nil {
 		return nil, ErrInvalidResponse{Operation: "CreateContainer", Err: fmt.Errorf("empty container in response")}
@@ -487,10 +278,10 @@ func (g *GRPCAdapter) Create(ctx context.Context, opts CreateOptions) (*Containe
 func (g *GRPCAdapter) Start(ctx context.Context, id string) error {
 	status, err := g.client.StartContainerDomain(ctx, id)
 	if err != nil {
-		return ErrCommandFailed{Command: "gRPC StartContainer", Err: err}
+		return ErrCommandFailed{Command: g.transport + " StartContainer", Err: err}
 	}
 	if status != nil && !status.Success {
-		return ErrCommandFailed{Command: "gRPC StartContainer", Output: status.Message, Err: fmt.Errorf("server reported failure")}
+		return ErrCommandFailed{Command: g.transport + " StartContainer", Output: status.Message, Err: fmt.Errorf("server reported failure")}
 	}
 	return nil
 }
@@ -502,10 +293,10 @@ func (g *GRPCAdapter) Stop(ctx context.Context, id string, timeout time.Duration
 		TimeoutSeconds: uint32(timeout / time.Second),
 	})
 	if err != nil {
-		return ErrCommandFailed{Command: "gRPC StopContainer", Err: err}
+		return ErrCommandFailed{Command: g.transport + " StopContainer", Err: err}
 	}
 	if status != nil && !status.Success {
-		return ErrCommandFailed{Command: "gRPC StopContainer", Output: status.Message, Err: fmt.Errorf("server reported failure")}
+		return ErrCommandFailed{Command: g.transport + " StopContainer", Output: status.Message, Err: fmt.Errorf("server reported failure")}
 	}
 	return nil
 }
@@ -517,10 +308,10 @@ func (g *GRPCAdapter) Remove(ctx context.Context, id string, force bool) error {
 		Force: force,
 	})
 	if err != nil {
-		return ErrCommandFailed{Command: "gRPC DeleteContainer", Err: err}
+		return ErrCommandFailed{Command: g.transport + " DeleteContainer", Err: err}
 	}
 	if status != nil && !status.Success {
-		return ErrCommandFailed{Command: "gRPC DeleteContainer", Output: status.Message, Err: fmt.Errorf("server reported failure")}
+		return ErrCommandFailed{Command: g.transport + " DeleteContainer", Output: status.Message, Err: fmt.Errorf("server reported failure")}
 	}
 	return nil
 }
@@ -529,7 +320,7 @@ func (g *GRPCAdapter) Remove(ctx context.Context, id string, force bool) error {
 func (g *GRPCAdapter) Get(ctx context.Context, id string) (*Container, error) {
 	found, err := g.client.GetContainerDomain(ctx, id)
 	if err != nil {
-		return nil, ErrCommandFailed{Command: "gRPC GetContainer", Err: err}
+		return nil, ErrCommandFailed{Command: g.transport + " GetContainer", Err: err}
 	}
 	if found == nil {
 		return nil, ErrContainerNotFound{ID: id}
@@ -555,7 +346,7 @@ func (g *GRPCAdapter) List(ctx context.Context, opts ListOptions) ([]*Container,
 
 	result, err := g.client.ListContainersDomain(ctx, params)
 	if err != nil {
-		return nil, ErrCommandFailed{Command: "gRPC ListContainers", Err: err}
+		return nil, ErrCommandFailed{Command: g.transport + " ListContainers", Err: err}
 	}
 	if result == nil {
 		return []*Container{}, nil
@@ -584,7 +375,7 @@ func (g *GRPCAdapter) Logs(ctx context.Context, id string, opts LogOptions) ([]s
 
 	entries, err := g.client.GetContainerLogsBatch(ctx, params)
 	if err != nil {
-		return nil, ErrCommandFailed{Command: "gRPC GetContainerLogs", Err: err}
+		return nil, ErrCommandFailed{Command: g.transport + " GetContainerLogs", Err: err}
 	}
 
 	lines := make([]string, 0, len(entries))
@@ -596,13 +387,12 @@ func (g *GRPCAdapter) Logs(ctx context.Context, id string, opts LogOptions) ([]s
 	return lines, nil
 }
 
-// Attest performs quote-based container attestation via the SDK client over
-// gRPC. It returns the same quote/signature report shape as the REST
-// POST /api/v1/containers/{id}/attest route.
+// Attest performs quote-based container attestation via the SDK client
+// (AttestContainer, served on REST as POST /api/v1/compute/containers/{id}/attest).
 func (g *GRPCAdapter) Attest(ctx context.Context, id string) (*AttestationReport, error) {
 	report, err := g.client.AttestContainerDomain(ctx, &computesvc.AttestContainerParams{ID: id})
 	if err != nil {
-		return nil, ErrCommandFailed{Command: "gRPC AttestContainer", Err: err}
+		return nil, ErrCommandFailed{Command: g.transport + " AttestContainer", Err: err}
 	}
 	if report == nil {
 		return nil, ErrInvalidResponse{Operation: "AttestContainer", Err: fmt.Errorf("empty attestation report in response")}
@@ -736,9 +526,11 @@ func attestationReportFromDomain(report *computesvc.ContainerAttestation) *Attes
 // QUIC Adapter Implementation
 // =============================================================================
 
-// QUICAdapter implements ContainerCommands using QUIC protocol.
+// QUICAdapter implements ContainerCommands through the SDK QUIC transport,
+// which carries the ComputeService container RPCs as the quicwire container
+// opcodes pkg/api/daemon/quic_container.go serves.
 type QUICAdapter struct {
-	endpoint string
+	GRPCAdapter
 }
 
 // NewQUICAdapter creates a new QUIC adapter for integration testing.
@@ -751,70 +543,31 @@ func (q *QUICAdapter) Name() string {
 	return "QUIC"
 }
 
-// Setup initializes the QUIC connection.
+// Setup connects the SDK over QUIC.
 func (q *QUICAdapter) Setup(ctx context.Context) error {
 	endpoint := os.Getenv(EnvPlatformdQUICEndpoint)
 	if endpoint == "" {
 		endpoint = DefaultPlatformdQUICEndpoint
 	}
-	q.endpoint = endpoint
-
-	// TODO: Implement QUIC connection verification
-	return nil
+	return q.connectSDK(ctx, q.Name(), endpoint,
+		platform.WithOnlyProtocol(platform.ProtocolQUIC),
+		platform.WithQUICAddr(endpoint),
+	)
 }
 
-// Teardown closes the QUIC connection.
-func (q *QUICAdapter) Teardown() error {
-	return nil
-}
-
-// Create creates a new container via QUIC.
-func (q *QUICAdapter) Create(ctx context.Context, opts CreateOptions) (*Container, error) {
-	return nil, fmt.Errorf("QUIC Create not yet implemented")
-}
-
-// Start starts a container via QUIC.
-func (q *QUICAdapter) Start(ctx context.Context, id string) error {
-	return fmt.Errorf("QUIC Start not yet implemented")
-}
-
-// Stop stops a container via QUIC.
-func (q *QUICAdapter) Stop(ctx context.Context, id string, timeout time.Duration) error {
-	return fmt.Errorf("QUIC Stop not yet implemented")
-}
-
-// Remove removes a container via QUIC.
-func (q *QUICAdapter) Remove(ctx context.Context, id string, force bool) error {
-	return fmt.Errorf("QUIC Remove not yet implemented")
-}
-
-// Get retrieves a container via QUIC.
-func (q *QUICAdapter) Get(ctx context.Context, id string) (*Container, error) {
-	return nil, fmt.Errorf("QUIC Get not yet implemented")
-}
-
-// List lists containers via QUIC.
-func (q *QUICAdapter) List(ctx context.Context, opts ListOptions) ([]*Container, error) {
-	return nil, fmt.Errorf("QUIC List not yet implemented")
-}
-
-// Logs retrieves container logs via QUIC.
-func (q *QUICAdapter) Logs(ctx context.Context, id string, opts LogOptions) ([]string, error) {
-	return nil, fmt.Errorf("QUIC Logs not yet implemented")
-}
-
-// Attest performs attestation via QUIC.
+// Attest has no QUIC mapping in the SDK.
 func (q *QUICAdapter) Attest(ctx context.Context, id string) (*AttestationReport, error) {
-	return nil, fmt.Errorf("QUIC Attest not yet implemented")
+	return nil, noSurface(q.Name(), opAttest)
 }
 
 // =============================================================================
 // MCP Adapter Implementation
 // =============================================================================
 
-// MCPAdapter implements ContainerCommands using Model Context Protocol.
+// MCPAdapter implements ContainerCommands through the SDK MCP transport,
+// which calls the container_* tools pkg/api/mcp/container_tools.go registers.
 type MCPAdapter struct {
-	endpoint string
+	GRPCAdapter
 }
 
 // NewMCPAdapter creates a new MCP adapter for integration testing.
@@ -827,61 +580,21 @@ func (m *MCPAdapter) Name() string {
 	return "MCP"
 }
 
-// Setup initializes the MCP connection.
+// Setup connects the SDK over MCP.
 func (m *MCPAdapter) Setup(ctx context.Context) error {
 	endpoint := os.Getenv(EnvPlatformdMCPEndpoint)
 	if endpoint == "" {
 		endpoint = DefaultPlatformdMCPEndpoint
 	}
-	m.endpoint = endpoint
-
-	// TODO: Implement MCP connection verification
-	return nil
+	return m.connectSDK(ctx, m.Name(), endpoint,
+		platform.WithOnlyProtocol(platform.ProtocolMCP),
+		platform.WithMCPAddr(endpoint),
+	)
 }
 
-// Teardown closes the MCP connection.
-func (m *MCPAdapter) Teardown() error {
-	return nil
-}
-
-// Create creates a new container via MCP.
-func (m *MCPAdapter) Create(ctx context.Context, opts CreateOptions) (*Container, error) {
-	return nil, fmt.Errorf("MCP Create not yet implemented")
-}
-
-// Start starts a container via MCP.
-func (m *MCPAdapter) Start(ctx context.Context, id string) error {
-	return fmt.Errorf("MCP Start not yet implemented")
-}
-
-// Stop stops a container via MCP.
-func (m *MCPAdapter) Stop(ctx context.Context, id string, timeout time.Duration) error {
-	return fmt.Errorf("MCP Stop not yet implemented")
-}
-
-// Remove removes a container via MCP.
-func (m *MCPAdapter) Remove(ctx context.Context, id string, force bool) error {
-	return fmt.Errorf("MCP Remove not yet implemented")
-}
-
-// Get retrieves a container via MCP.
-func (m *MCPAdapter) Get(ctx context.Context, id string) (*Container, error) {
-	return nil, fmt.Errorf("MCP Get not yet implemented")
-}
-
-// List lists containers via MCP.
-func (m *MCPAdapter) List(ctx context.Context, opts ListOptions) ([]*Container, error) {
-	return nil, fmt.Errorf("MCP List not yet implemented")
-}
-
-// Logs retrieves container logs via MCP.
-func (m *MCPAdapter) Logs(ctx context.Context, id string, opts LogOptions) ([]string, error) {
-	return nil, fmt.Errorf("MCP Logs not yet implemented")
-}
-
-// Attest performs attestation via MCP.
+// Attest has no MCP mapping in the SDK.
 func (m *MCPAdapter) Attest(ctx context.Context, id string) (*AttestationReport, error) {
-	return nil, fmt.Errorf("MCP Attest not yet implemented")
+	return nil, noSurface(m.Name(), opAttest)
 }
 
 // =============================================================================
@@ -926,7 +639,8 @@ func (u *UnixAdapter) Setup(ctx context.Context) error {
 		return ErrAdapterConnectionFailed{Adapter: "Unix", URL: socketPath, Err: err}
 	}
 
-	u.conn = conn
+	u.transport = u.Name()
+	u.closer = conn
 	u.client = computesvc.NewClientFromGRPC(pb.NewComputeServiceClient(conn))
 	return nil
 }
@@ -1040,118 +754,6 @@ func (r *cliAttestationResponse) toAttestationReport() *AttestationReport {
 		if t, err := time.Parse(time.RFC3339, r.Timestamp); err == nil {
 			report.Timestamp = t
 		}
-	}
-
-	if len(r.PCRValues) > 0 {
-		report.PCRValues = make(map[int][]byte)
-		for k, v := range r.PCRValues {
-			report.PCRValues[k], _ = base64.StdEncoding.DecodeString(v)
-		}
-	}
-
-	if len(r.Log) > 0 {
-		report.Log = make([]MeasurementLogEntry, len(r.Log))
-		for i, e := range r.Log {
-			report.Log[i] = MeasurementLogEntry{
-				PCRIndex:  e.PCRIndex,
-				EventType: e.EventType,
-			}
-			if e.Digest != "" {
-				report.Log[i].Digest, _ = base64.StdEncoding.DecodeString(e.Digest)
-			}
-			if e.Data != "" {
-				report.Log[i].Data, _ = base64.StdEncoding.DecodeString(e.Data)
-			}
-			if e.Timestamp != "" {
-				if t, err := time.Parse(time.RFC3339, e.Timestamp); err == nil {
-					report.Log[i].Timestamp = t
-				}
-			}
-		}
-	}
-
-	return report
-}
-
-// restContainerResponse represents REST API JSON output for a container.
-type restContainerResponse struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Image       string            `json:"image"`
-	ImageID     string            `json:"image_id,omitempty"`
-	State       string            `json:"state"`
-	PID         int               `json:"pid,omitempty"`
-	ExitCode    int               `json:"exit_code,omitempty"`
-	CreatedAt   time.Time         `json:"created_at"`
-	StartedAt   time.Time         `json:"started_at,omitempty"`
-	StoppedAt   time.Time         `json:"stopped_at,omitempty"`
-	Labels      map[string]string `json:"labels,omitempty"`
-	Environment map[string]string `json:"environment,omitempty"`
-}
-
-func (r *restContainerResponse) toContainer() *Container {
-	return &Container{
-		ID:          r.ID,
-		Name:        r.Name,
-		Image:       r.Image,
-		ImageID:     r.ImageID,
-		State:       ContainerState(r.State),
-		PID:         r.PID,
-		ExitCode:    r.ExitCode,
-		CreatedAt:   r.CreatedAt,
-		StartedAt:   r.StartedAt,
-		StoppedAt:   r.StoppedAt,
-		Labels:      r.Labels,
-		Environment: r.Environment,
-	}
-}
-
-// restContainerListResponse represents REST API JSON output for container list.
-type restContainerListResponse struct {
-	Containers []restContainerResponse `json:"containers"`
-	Count      int                     `json:"count"`
-}
-
-// restLogsResponse represents REST API JSON output for container logs.
-type restLogsResponse struct {
-	ContainerID string   `json:"container_id"`
-	Lines       []string `json:"lines"`
-	Logs        string   `json:"logs,omitempty"`
-}
-
-// restAttestationResponse represents REST API JSON output for attestation.
-type restAttestationResponse struct {
-	ContainerID   string             `json:"container_id"`
-	ContainerName string             `json:"container_name"`
-	ImageDigest   string             `json:"image_digest"`
-	ConfigDigest  string             `json:"config_digest"`
-	Quote         string             `json:"quote"`
-	Signature     string             `json:"signature"`
-	PCRValues     map[int]string     `json:"pcr_values,omitempty"`
-	Timestamp     time.Time          `json:"timestamp"`
-	Verified      bool               `json:"verified"`
-	Nonce         string             `json:"nonce,omitempty"`
-	Log           []measurementEntry `json:"log,omitempty"`
-}
-
-func (r *restAttestationResponse) toAttestationReport() *AttestationReport {
-	report := &AttestationReport{
-		ContainerID:   r.ContainerID,
-		ContainerName: r.ContainerName,
-		ImageDigest:   r.ImageDigest,
-		ConfigDigest:  r.ConfigDigest,
-		Verified:      r.Verified,
-		Timestamp:     r.Timestamp,
-	}
-
-	if r.Quote != "" {
-		report.Quote, _ = base64.StdEncoding.DecodeString(r.Quote)
-	}
-	if r.Signature != "" {
-		report.Signature, _ = base64.StdEncoding.DecodeString(r.Signature)
-	}
-	if r.Nonce != "" {
-		report.Nonce, _ = base64.StdEncoding.DecodeString(r.Nonce)
 	}
 
 	if len(r.PCRValues) > 0 {
