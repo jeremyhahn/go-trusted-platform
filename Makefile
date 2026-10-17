@@ -338,7 +338,11 @@ BUILD_TAGS_ARG          := $(if $(strip $(BUILD_TAGS)),-tags '$(strip $(BUILD_TA
 # Integration tests always need codec tags for QUIC protocol support.
 # The go-codec library uses build tags to compile real codecs vs stubs.
 INTEGRATION_CODEC_TAGS  := codec_msgpack codec_json codec_cbor
-TEST_BUILD_TAGS         := integration $(INTEGRATION_CODEC_TAGS) $(strip $(BUILD_TAGS))
+# Integration builds carry the vector service (the WITH_VECTOR=1 tags) so the
+# quicbaas and sdk suites' Vector assertions run against a real vector store;
+# pkg/storage/quicbaas.TestConfig enables it in exactly such a build.
+INTEGRATION_VECTOR_TAGS := vector qrdb_vector
+TEST_BUILD_TAGS         := integration $(INTEGRATION_CODEC_TAGS) $(INTEGRATION_VECTOR_TAGS) $(strip $(BUILD_TAGS))
 TEST_BUILD_TAGS_ARG     := -tags '$(strip $(TEST_BUILD_TAGS))'
 
 # Web embed directory

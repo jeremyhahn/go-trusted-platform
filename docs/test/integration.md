@@ -300,11 +300,14 @@ test/integration/
 
 ### Build Tags
 
-The targets build with `TEST_BUILD_TAGS` (Makefile:340): `integration`,
-`INTEGRATION_CODEC_TAGS` (`codec_msgpack codec_json codec_cbor`) and the full
-`BUILD_TAGS` list.
+The targets build with `TEST_BUILD_TAGS` (Makefile:344): `integration`,
+`INTEGRATION_CODEC_TAGS` (`codec_msgpack codec_json codec_cbor`),
+`INTEGRATION_VECTOR_TAGS` (`vector qrdb_vector`, the `WITH_VECTOR=1` tags) and
+the full `BUILD_TAGS` list.
 `integration` marks a file as needing the devcontainer; the codecs carry the
-QUIC wire protocol and the REST/MCP bodies.
+QUIC wire protocol and the REST/MCP bodies; the vector tags let the embedded
+`quicbaas.TestConfig` serve the Vector service that the quicbaas and sdk suites
+assert against.
 
 Never type the tag list by hand. Outside `make`, derive it:
 

@@ -50,6 +50,18 @@ func (e ErrInvalidConfig) Error() string {
 	return fmt.Sprintf("invalid configuration: %s: %s", e.Field, e.Reason)
 }
 
+// ErrVectorUnavailable is returned by every Vector call when the embedded
+// server serves no vector service, instead of the transport's bare
+// "unimplemented". Reason says whether the build lacks the service or the
+// configuration leaves it disabled.
+type ErrVectorUnavailable struct {
+	Reason string
+}
+
+func (e ErrVectorUnavailable) Error() string {
+	return fmt.Sprintf("vector service unavailable: %s", e.Reason)
+}
+
 // ErrInvalidTransport is returned when an invalid transport string is provided.
 type ErrInvalidTransport struct {
 	Value string
