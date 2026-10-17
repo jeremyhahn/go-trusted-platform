@@ -204,19 +204,14 @@ func (a *KMSServerAdapter) GenerateKey(ctx context.Context, req *pb.GenerateKeyR
 		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
 	}
 
-	// Extract algorithm and usage from KeySpec
-	var algorithm kms.KeyAlgorithm
-	var usage []kms.KeyUsage
-
-	if req.GetKeySpec() != nil {
-		algorithm = pbAlgorithmToSDK(req.GetKeySpec().GetAlgorithm())
-		usage = pbUsagesToSDK(req.GetKeySpec().GetUsage())
-	}
-
+	// The generate request's name is the key ID (docs/kms/api.md §2).
+	spec := req.GetKeySpec()
 	sdkReq := &kms.GenerateKeyRequest{
-		Name:      req.GetName(),
-		Algorithm: algorithm,
-		Usage:     usage,
+		Name:               req.GetName(),
+		Algorithm:          pbAlgorithmToSDK(spec.GetAlgorithm()),
+		Usage:              pbUsagesToSDK(spec.GetUsage()),
+		Exportable:         spec.GetExportable(),
+		DeletionProtection: spec.GetDeletionProtection(),
 	}
 
 	resp, err := a.client.GenerateKey(ctx, sdkReq)
@@ -224,12 +219,47 @@ func (a *KMSServerAdapter) GenerateKey(ctx context.Context, req *pb.GenerateKeyR
 		return nil, status.Errorf(errclass.Code(err), "key generation failed: %v", err)
 	}
 
+	meta, err := recordGeneratedKeyMetadata(ctx, a.client, resp.KeyID, req.GetDescription(), req.GetTags())
+	if err != nil {
+		return nil, err
+	}
+
 	return &pb.GenerateKeyResponse{
 		Key: &pb.KeyHandle{
-			KeyId:   resp.KeyID,
-			Version: uint64(resp.Version),
+			KeyId:     resp.KeyID,
+			Version:   uint64(resp.Version),
+			Algorithm: sdkAlgorithmToPb(resp.Algorithm),
 		},
+		Metadata:  sdkKeyMetadataToPb(meta),
+		Timestamp: time.Now().Unix(),
 	}, nil
+}
+
+// recordGeneratedKeyMetadata applies a generate request's description and
+// tags to the key just generated and returns the metadata the KMS recorded.
+// The SDK GenerateKeyRequest has no description or tags, so they travel as a
+// metadata update; with neither, the metadata is read back as it stands. The
+// SDK has no field for a key owner at all: the owner returned is the one the
+// KMS recorded, never the requested one.
+func recordGeneratedKeyMetadata(ctx context.Context, client quicbaas.KMSClient, keyID, description string, tags map[string]string) (*kms.KeyMetadataResponse, error) {
+	var meta *kms.KeyMetadataResponse
+	var err error
+	if description == "" && len(tags) == 0 {
+		meta, err = client.GetKeyMetadata(ctx, keyID)
+	} else {
+		meta, err = client.UpdateKeyMetadata(ctx, &kms.UpdateKeyMetadataRequest{
+			KeyID:       keyID,
+			Description: description,
+			Tags:        tags,
+		})
+	}
+	if err != nil {
+		return nil, ErrKMSGeneratedKeyMetadata{KeyID: keyID, Err: err}
+	}
+	if meta == nil {
+		return nil, ErrKMSGeneratedKeyMetadata{KeyID: keyID, Err: ErrKMSNilMetadata{}}
+	}
+	return meta, nil
 }
 
 // GetKey implements pb.KeyManagementServer.GetKey.
