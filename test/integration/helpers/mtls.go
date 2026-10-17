@@ -35,6 +35,12 @@ const (
 	EnvClientCert = "PLATFORM_CLIENT_CERT"
 	EnvClientKey  = "PLATFORM_CLIENT_KEY"
 	EnvCACert     = "PLATFORM_CA_CERT"
+
+	// EnvTenantClientCert and EnvTenantClientKey name the harness
+	// credential bound to ForeignTenantID (tenant-client-bundle.pem). It
+	// chains to the same CA as the admin credential.
+	EnvTenantClientCert = "PLATFORM_TENANT_CLIENT_CERT"
+	EnvTenantClientKey  = "PLATFORM_TENANT_CLIENT_KEY"
 )
 
 // HarnessTenantID is the tenant of the harness admin credential
@@ -45,11 +51,30 @@ const (
 // tenant-bound service is refused, so tests name this one.
 const HarnessTenantID = "system"
 
-// LoadMTLSConfig loads mTLS client certificates from environment variables.
-// Returns nil if the mTLS environment variables are not set.
+// ForeignTenantID is the tenant of the second harness credential
+// (PLATFORM_TENANT_CLIENT_CERT). platformd issues it with the same admin
+// request, its subject O replaced by this tenant, so a test can prove what
+// a caller outside the system tenant is refused.
+const ForeignTenantID = "harness-tenant"
+
+// LoadMTLSConfig loads the harness admin mTLS client certificate from
+// environment variables. Returns nil if the variables are not set.
 func LoadMTLSConfig() *tls.Config {
-	certFile := os.Getenv(EnvClientCert)
-	keyFile := os.Getenv(EnvClientKey)
+	return loadMTLSConfig(EnvClientCert, EnvClientKey)
+}
+
+// LoadTenantMTLSConfig loads the ForeignTenantID mTLS client certificate
+// from environment variables. Returns nil if the variables are not set.
+func LoadTenantMTLSConfig() *tls.Config {
+	return loadMTLSConfig(EnvTenantClientCert, EnvTenantClientKey)
+}
+
+// loadMTLSConfig builds a client TLS config from the certificate and key
+// files named by certEnv and keyEnv, trusting the CA named by EnvCACert.
+// Returns nil if any variable is unset or any file fails to load.
+func loadMTLSConfig(certEnv, keyEnv string) *tls.Config {
+	certFile := os.Getenv(certEnv)
+	keyFile := os.Getenv(keyEnv)
 	caFile := os.Getenv(EnvCACert)
 
 	if certFile == "" || keyFile == "" || caFile == "" {
@@ -77,6 +102,16 @@ func LoadMTLSConfig() *tls.Config {
 	}
 }
 
+// requireTLS13 returns tlsConfig pinned to TLS 1.3. mTLS is mandatory for
+// integration tests, so a nil config (variables unset) panics naming them.
+func requireTLS13(tlsConfig *tls.Config, certEnv, keyEnv string) *tls.Config {
+	if tlsConfig == nil {
+		panic("mtls: mTLS environment variables not configured; set " + certEnv + ", " + keyEnv + ", and " + EnvCACert)
+	}
+	tlsConfig.MinVersion = tls.VersionTLS13
+	return tlsConfig
+}
+
 // MTLSEnabled returns true if mTLS environment variables are configured.
 func MTLSEnabled() bool {
 	return LoadMTLSConfig() != nil
@@ -86,12 +121,13 @@ func MTLSEnabled() bool {
 // mTLS is mandatory for integration tests; this function panics if the
 // required environment variables are not configured.
 func TLSConfigOrInsecure() *tls.Config {
-	tlsConfig := LoadMTLSConfig()
-	if tlsConfig == nil {
-		panic("mtls: mTLS environment variables not configured; set PLATFORM_CLIENT_CERT, PLATFORM_CLIENT_KEY, and PLATFORM_CA_CERT")
-	}
-	tlsConfig.MinVersion = tls.VersionTLS13
-	return tlsConfig
+	return requireTLS13(LoadMTLSConfig(), EnvClientCert, EnvClientKey)
+}
+
+// TenantTLSConfig returns the ForeignTenantID mTLS config pinned to TLS 1.3;
+// it panics if the tenant credential variables are not configured.
+func TenantTLSConfig() *tls.Config {
+	return requireTLS13(LoadTenantMTLSConfig(), EnvTenantClientCert, EnvTenantClientKey)
 }
 
 // QUICTLSConfig returns a TLS config for QUIC connections with mTLS
@@ -135,12 +171,7 @@ func NewHTTPClient(timeout time.Duration) *http.Client {
 // mTLS. mTLS is mandatory for integration tests; this function panics if the
 // required environment variables are not configured.
 func GRPCTransportCredentials() grpc.DialOption {
-	tlsConfig := LoadMTLSConfig()
-	if tlsConfig == nil {
-		panic("mtls: mTLS environment variables not configured; set PLATFORM_CLIENT_CERT, PLATFORM_CLIENT_KEY, and PLATFORM_CA_CERT")
-	}
-	tlsConfig.MinVersion = tls.VersionTLS13
-	return grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))
+	return grpc.WithTransportCredentials(credentials.NewTLS(TLSConfigOrInsecure()))
 }
 
 // GRPCUnixCredentials returns the gRPC transport credentials for platformd's

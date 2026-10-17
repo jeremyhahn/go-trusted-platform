@@ -856,6 +856,11 @@ setup_env_vars() {
     export PLATFORM_CLIENT_CERT="/tmp/platformd-integration/tls/client-bundle.pem"
     export PLATFORM_CLIENT_KEY="/tmp/platformd-integration/tls/client-bundle.pem"
     export PLATFORM_CA_CERT="/tmp/platformd-integration/tls/ca-bundle.crt"
+    # The same issuer's bundle for the fixed non-system tenant
+    # harness-tenant, written before client-bundle.pem: the suites that
+    # assert what a tenant outside the system tenant is refused use it.
+    export PLATFORM_TENANT_CLIENT_CERT="/tmp/platformd-integration/tls/tenant-client-bundle.pem"
+    export PLATFORM_TENANT_CLIENT_KEY="/tmp/platformd-integration/tls/tenant-client-bundle.pem"
 
     # REST endpoint (mTLS requires HTTPS)
     export PLATFORM_API_ENDPOINT="https://localhost:${PLATFORMD_REST_PORT}"
@@ -908,6 +913,8 @@ setup_env_vars() {
     echo "  PLATFORM_CLIENT_CERT=$PLATFORM_CLIENT_CERT (bundle)"
     echo "  PLATFORM_CLIENT_KEY=$PLATFORM_CLIENT_KEY (bundle)"
     echo "  PLATFORM_CA_CERT=$PLATFORM_CA_CERT"
+    echo "  PLATFORM_TENANT_CLIENT_CERT=$PLATFORM_TENANT_CLIENT_CERT (bundle)"
+    echo "  PLATFORM_TENANT_CLIENT_KEY=$PLATFORM_TENANT_CLIENT_KEY (bundle)"
     echo "  PLATFORM_REST_ENDPOINT=$PLATFORM_REST_ENDPOINT"
     echo "  PLATFORM_GRPC_ENDPOINT=$PLATFORM_GRPC_ENDPOINT"
     echo "  PLATFORM_QUIC_ENDPOINT=$PLATFORM_QUIC_ENDPOINT"
