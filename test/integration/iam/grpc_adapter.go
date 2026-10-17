@@ -91,7 +91,7 @@ func NewTenantGRPCAdapter() *GRPCAdapter {
 
 // Setup prepares the adapter for testing
 func (a *GRPCAdapter) Setup(ctx context.Context) error {
-	conn, err := grpc.DialContext(ctx, a.endpoint,
+	conn, err := grpc.NewClient(a.endpoint,
 		grpc.WithTransportCredentials(credentials.NewTLS(a.tlsConfig)),
 	)
 	if err != nil {

@@ -1367,24 +1367,6 @@ func (r *RESTAdapter) SecretsStatus(ctx context.Context, name string, enabled bo
 // Type Conversion Helpers
 // =============================================================================
 
-// unixToTime converts a Unix timestamp (seconds) to time.Time.
-func unixToTime(unix int64) time.Time {
-	if unix == 0 {
-		return time.Time{}
-	}
-	return time.Unix(unix, 0)
-}
-
-// unixToTimePtr converts a Unix timestamp (seconds) to *time.Time.
-// Returns nil if the timestamp is zero.
-func unixToTimePtr(unix int64) *time.Time {
-	if unix == 0 {
-		return nil
-	}
-	t := time.Unix(unix, 0)
-	return &t
-}
-
 // algorithmStringToKeyAttributes converts an algorithm string to KeyAttributes.
 func (r *RESTAdapter) algorithmStringToKeyAttributes(algorithm string) *xkmssdk.KeyAttributes {
 	attrs := &xkmssdk.KeyAttributes{}
