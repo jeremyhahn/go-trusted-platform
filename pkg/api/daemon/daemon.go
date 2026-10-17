@@ -2087,6 +2087,12 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 			return nil, err
 		}
 		mcpConfig.TLSConfig = tlsConfig
+
+		peers, err := newMCPPeerAuthenticator(d.config, d.logger)
+		if err != nil {
+			return nil, err
+		}
+		mcpConfig.PeerAuthenticator = peers
 	}
 
 	// Try to set up MCP auth. Prefer the shared broker platform-token

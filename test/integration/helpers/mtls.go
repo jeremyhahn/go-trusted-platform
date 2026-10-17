@@ -37,6 +37,14 @@ const (
 	EnvCACert     = "PLATFORM_CA_CERT"
 )
 
+// HarnessTenantID is the tenant of the harness admin credential
+// (PLATFORM_CLIENT_CERT): platformd issues it with the root admin request
+// (pkg/app/backends.AdminCertificateRequest), whose subject O is the system
+// tenant (app.SystemTenantID), and the mTLS transports bind the caller to
+// the tenant its subject O names. A request that names any other tenant on a
+// tenant-bound service is refused, so tests name this one.
+const HarnessTenantID = "system"
+
 // LoadMTLSConfig loads mTLS client certificates from environment variables.
 // Returns nil if the mTLS environment variables are not set.
 func LoadMTLSConfig() *tls.Config {

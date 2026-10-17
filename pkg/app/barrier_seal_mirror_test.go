@@ -18,6 +18,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/barrier"
 	quicbaas "github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -53,6 +54,36 @@ func TestMirrorBarrierSealStrategy_NonShamirLeavesDefault(t *testing.T) {
 			assert.Empty(t, app.QuicBaaSConfig.BarrierSealStrategy)
 			assert.Zero(t, app.QuicBaaSConfig.BarrierShamirThreshold)
 			assert.Zero(t, app.QuicBaaSConfig.BarrierShamirShares)
+		})
+	}
+}
+
+// A concrete tpm.device reaches the embedded quicbaas config, so its TPM
+// probe opens the platform's TPM rather than /dev/tpmrm0.
+func TestMirrorTPMDevice_ConcreteDevice(t *testing.T) {
+	app := &App{QuicBaaSConfig: &quicbaas.Config{}}
+	app.TPMConfig.Device = "/tmp/swtpm/swtpm.sock"
+	app.mirrorTPMDevice()
+	assert.Equal(t, "/tmp/swtpm/swtpm.sock", app.QuicBaaSConfig.TPMDevice)
+}
+
+// The simulator, an empty device and the unresolved "auto" sentinel name no
+// device the embedded server could open, so nothing is mirrored.
+func TestMirrorTPMDevice_NothingToMirror(t *testing.T) {
+	cases := map[string]func(a *App){
+		"simulator": func(a *App) {
+			a.TPMConfig.UseSimulator = true
+			a.TPMConfig.Device = "/dev/tpmrm0"
+		},
+		"empty device": func(a *App) {},
+		"auto":         func(a *App) { a.TPMConfig.Device = vtpm.TPMDeviceAuto },
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			app := &App{QuicBaaSConfig: &quicbaas.Config{}}
+			setup(app)
+			app.mirrorTPMDevice()
+			assert.Empty(t, app.QuicBaaSConfig.TPMDevice)
 		})
 	}
 }

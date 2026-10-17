@@ -67,6 +67,12 @@ type Config struct {
 	// AuthManager for validating tokens (optional)
 	AuthManager AuthManager
 
+	// PeerAuthenticator authenticates a tokenless request by the verified
+	// client certificate of its TLS connection (mTLS), as REST, gRPC and
+	// QUIC do (optional). A presented bearer token is still validated by the
+	// token backend.
+	PeerAuthenticator PeerAuthenticator
+
 	// OAuthMetadata is the OAuth 2.1 Protected Resource Metadata configuration.
 	// Required for OAuth 2.1 compliance per RFC 9728.
 	OAuthMetadata *OAuthMetadataConfig
@@ -128,7 +134,8 @@ func NewServer(svc ServiceProvider, config *Config, log *logging.Logger) *Server
 	}
 
 	// Initialize authorization checker
-	s.authChecker = NewAuthorizationChecker(config.AuthorizationService, config.AuthManager)
+	s.authChecker = NewAuthorizationChecker(config.AuthorizationService, config.AuthManager,
+		WithPeerAuthenticator(config.PeerAuthenticator))
 
 	// Initialize OAuth 2.1 metadata handler
 	s.oauthMetadata = NewOAuthMetadataHandler(config.OAuthMetadata)
@@ -145,7 +152,12 @@ func NewServer(svc ServiceProvider, config *Config, log *logging.Logger) *Server
 
 // SetAuthorizationService sets the authorization service for the server.
 func (s *Server) SetAuthorizationService(authService AuthorizationService, authManager AuthManager) {
-	s.authChecker = NewAuthorizationChecker(authService, authManager)
+	// Keep the certificate authenticator the server was built with.
+	var peers PeerAuthenticator
+	if s.authChecker != nil {
+		peers = s.authChecker.peerAuthenticator
+	}
+	s.authChecker = NewAuthorizationChecker(authService, authManager, WithPeerAuthenticator(peers))
 	s.tools.SetAuthorizationChecker(s.authChecker)
 }
 

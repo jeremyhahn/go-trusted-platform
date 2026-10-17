@@ -26,17 +26,25 @@ type AuthorizationChecker struct {
 	authService AuthorizationService
 	authManager AuthManager
 
+	// peerAuthenticator turns the verified client certificate of a
+	// tokenless request into its principal; nil disables that path.
+	peerAuthenticator PeerAuthenticator
+
 	// toolPermissions maps tool names to required permissions
 	toolPermissions map[string]string
 }
 
 // NewAuthorizationChecker creates a new authorization checker.
-func NewAuthorizationChecker(authService AuthorizationService, authManager AuthManager) *AuthorizationChecker {
-	return &AuthorizationChecker{
+func NewAuthorizationChecker(authService AuthorizationService, authManager AuthManager, opts ...AuthorizationCheckerOption) *AuthorizationChecker {
+	c := &AuthorizationChecker{
 		authService:     authService,
 		authManager:     authManager,
 		toolPermissions: toolPermissionCatalog(),
 	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 // toolPermissionCatalog returns the permission each MCP tool requires, keyed
@@ -756,6 +764,13 @@ func (c *AuthorizationChecker) AuthorizeTool(ctx context.Context, toolName strin
 	// If no permission required, allow
 	if permission == "" {
 		return ctx, nil
+	}
+
+	// Under mTLS the verified client certificate authenticates a tokenless
+	// request, as on REST, gRPC and QUIC. A presented token never takes this
+	// path: it is validated by the token backend below.
+	if token == "" && c.peerAuthenticator != nil {
+		return c.authorizePeer(ctx, permission)
 	}
 
 	// With no authorization backend there is nothing that can grant the
