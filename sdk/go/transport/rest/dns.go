@@ -40,10 +40,14 @@ func init() {
 	templatedRouteTable[platformv1.DNSService_AddRecord_FullMethodName] =
 		itemRoute("/api/v1/dns/zones/{zone}/records", http.MethodPost, "{zone}", "zone_name")
 	templatedRouteTable[platformv1.DNSService_ListRecords_FullMethodName] = templatedRoute{
-		path:        "/api/v1/dns/zones/{zone}/records",
-		method:      http.MethodGet,
-		pathParams:  []pathParam{{placeholder: "{zone}", field: "zone_name"}},
-		queryParams: []queryParam{{name: "type", field: "type", encode: dnsRecordTypeField}},
+		path:       "/api/v1/dns/zones/{zone}/records",
+		method:     http.MethodGet,
+		pathParams: []pathParam{{placeholder: "{zone}", field: "zone_name"}},
+		queryParams: []queryParam{
+			{name: "type", field: "type", encode: dnsRecordTypeField},
+			{name: "limit", field: "limit"},
+			{name: "offset", field: "offset"},
+		},
 	}
 	templatedRouteTable[platformv1.DNSService_DeleteRecord_FullMethodName] = templatedRoute{
 		path:   "/api/v1/dns/zones/{zone}/records/{type}/{name}",
@@ -261,6 +265,9 @@ func decodeDNSDeleteRecord(raw []byte) (*platformv1.DeleteRecordResponse, error)
 type dnsRecordsAnswer struct {
 	Records       []json.RawMessage `json:"records"`
 	Authoritative bool              `json:"authoritative"`
+	Total         uint64            `json:"total"`
+	Limit         uint32            `json:"limit"`
+	Offset        uint32            `json:"offset"`
 }
 
 // readDNSRecordsAnswer reads a list or resolve answer and its records.
@@ -275,11 +282,16 @@ func readDNSRecordsAnswer(raw []byte) (dnsRecordsAnswer, []*platformv1.Record, e
 
 // decodeDNSListRecords reads the zone's records.
 func decodeDNSListRecords(raw []byte) (*platformv1.ListRecordsResponse, error) {
-	_, records, err := readDNSRecordsAnswer(raw)
+	answer, records, err := readDNSRecordsAnswer(raw)
 	if err != nil {
 		return nil, err
 	}
-	return &platformv1.ListRecordsResponse{Records: records}, nil
+	return &platformv1.ListRecordsResponse{
+		Records: records,
+		Total:   answer.Total,
+		Limit:   answer.Limit,
+		Offset:  answer.Offset,
+	}, nil
 }
 
 // decodeDNSResolve reads the resolved records and whether a managed zone

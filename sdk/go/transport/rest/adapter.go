@@ -541,6 +541,11 @@ func encodeQueryField(rm protoreflect.Message, fieldPath string) ([]string, erro
 		}
 		return []string{strconv.FormatInt(int64(n), 10)}, nil
 	default:
+		// A proto3 optional scalar that is set is sent even at zero: its
+		// presence is what the server reads (offset=0 still asks for a page).
+		if fd.HasOptionalKeyword() && current.Has(fd) {
+			return []string{fmt.Sprint(v.Interface())}, nil
+		}
 		// Use the RAW value: url.Values.Encode() applies query escaping,
 		// so pre-escaped path encoding would double-escape.
 		raw, _, ok := encodePathField(v, fd)

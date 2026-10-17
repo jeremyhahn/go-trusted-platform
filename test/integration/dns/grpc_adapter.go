@@ -19,11 +19,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
 // =============================================================================
@@ -372,6 +374,16 @@ func (g *GRPCAdapter) ListRecords(ctx context.Context, zoneName string, opts Lis
 	if opts.RecordType != "" {
 		req.Type = recordTypeStringToProto(opts.RecordType)
 	}
+	if opts.Cursor != "" {
+		offset, err := strconv.ParseUint(opts.Cursor, 10, 32)
+		if err != nil {
+			return nil, ErrGRPCCallFailed{Method: "ListRecords: parse cursor " + opts.Cursor, Err: err}
+		}
+		req.Offset = proto.Uint32(uint32(offset))
+	}
+	if opts.Limit > 0 {
+		req.Limit = proto.Uint32(uint32(opts.Limit))
+	}
 
 	resp, err := g.dns.ListRecords(ctx, req)
 	if err != nil {
@@ -390,10 +402,18 @@ func (g *GRPCAdapter) ListRecords(ctx context.Context, zoneName string, opts Lis
 		})
 	}
 
-	return &ListRecordsResult{
+	// The server owns paging: total counts the whole filtered list, so
+	// more remains while this page ends before it.
+	result := &ListRecordsResult{
 		Records:    records,
-		TotalCount: int32(len(records)),
-	}, nil
+		TotalCount: int32(resp.GetTotal()),
+	}
+	next := uint64(req.GetOffset()) + uint64(len(records))
+	if next < resp.GetTotal() {
+		result.HasMore = true
+		result.NextCursor = strconv.FormatUint(next, 10)
+	}
+	return result, nil
 }
 
 // =============================================================================

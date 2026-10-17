@@ -30,8 +30,8 @@ import (
 )
 
 const (
-	defaultLimit  int32 = 50
-	maxLimit      int32 = 1000
+	defaultLimit  int32 = dns.DefaultPageLimit
+	maxLimit      int32 = dns.MaxPageLimit
 	defaultOffset int32 = 0
 
 	requestTimeout = 30 * time.Second

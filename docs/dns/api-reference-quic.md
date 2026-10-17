@@ -23,7 +23,7 @@ encoded payload; each response is one status byte and one encoded payload.
 | `0x21` | `OpDNSDeleteRecord` | `DeleteRecordRequest` | `DeleteRecordResponse` |
 | `0x22` | `OpDNSUpdateRecord` | `zone`, `name`, `record_type`, `value`, `ttl`, `priority` | `success`, `zone`, `name`, `timestamp` |
 | `0x23` | `OpDNSGetRecord` | `zone`, `name`, `record_type` | `record`, `zone`, `timestamp` |
-| `0x24` | `OpDNSListRecords` | `ListRecordsRequest` | `Records` |
+| `0x24` | `OpDNSListRecords` | `ListRecordsRequest` (`Limit`, `Offset` page it as on gRPC) | `Records`, `Total`, `Limit`, `Offset` |
 | `0x25` | `OpDNSAddZone` | `CreateZoneRequest` | `CreateZoneResponse` |
 | `0x26` | `OpDNSDeleteZone` | `DeleteZoneRequest` | `DeleteZoneResponse` |
 | `0x27` | `OpDNSGetZone` | `zone` | `zone` (`id`, `name`, `ttl`, `description`, `internal`, `record_count`), `timestamp` |

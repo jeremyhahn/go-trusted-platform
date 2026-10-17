@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
@@ -601,6 +602,88 @@ func TestDNSServiceServer_ListRecords_MultipleRecordsSameType(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Len(t, resp.Records, 3)
+}
+
+// pagedRecordsServer serves a zone of five A records and one MX record.
+func pagedRecordsServer() *DNSServiceServer {
+	mock := newMockDNSService()
+	mock.zones["example.com."] = &entities.Zone{
+		ID:   1,
+		Name: "example.com.",
+		RecordSet: entities.RecordSet{
+			ARecords: []*entities.ARecord{
+				{Name: "a1", Value: "192.168.1.1", TTL: 3600},
+				{Name: "a2", Value: "192.168.1.2", TTL: 3600},
+				{Name: "a3", Value: "192.168.1.3", TTL: 3600},
+				{Name: "a4", Value: "192.168.1.4", TTL: 3600},
+				{Name: "a5", Value: "192.168.1.5", TTL: 3600},
+			},
+			MXRecords: []*entities.MXRecord{
+				{Name: "@", Value: "mail.example.com.", Priority: 10, TTL: 3600},
+			},
+		},
+	}
+	return NewDNSServiceServer(mock, testLogger())
+}
+
+func TestDNSServiceServer_ListRecords_PagesWhenAsked(t *testing.T) {
+	server := pagedRecordsServer()
+
+	resp, err := server.ListRecords(context.Background(), &platformv1.ListRecordsRequest{
+		ZoneName: "example.com.",
+		Type:     platformv1.RecordType_RECORD_TYPE_A,
+		Limit:    proto.Uint32(2),
+		Offset:   proto.Uint32(2),
+	})
+
+	require.NoError(t, err)
+	require.Len(t, resp.GetRecords(), 2)
+	assert.Equal(t, "a3", resp.GetRecords()[0].GetA().GetName())
+	assert.Equal(t, "a4", resp.GetRecords()[1].GetA().GetName())
+	assert.Equal(t, uint64(5), resp.GetTotal(), "total counts the filtered type, not the page")
+	assert.Equal(t, uint32(2), resp.GetLimit())
+	assert.Equal(t, uint32(2), resp.GetOffset())
+}
+
+func TestDNSServiceServer_ListRecords_UnpagedReturnsTheWholeList(t *testing.T) {
+	server := pagedRecordsServer()
+
+	resp, err := server.ListRecords(context.Background(), &platformv1.ListRecordsRequest{ZoneName: "example.com."})
+
+	require.NoError(t, err)
+	assert.Len(t, resp.GetRecords(), 6)
+	assert.Equal(t, uint64(6), resp.GetTotal())
+	assert.Equal(t, uint32(dns.DefaultPageLimit), resp.GetLimit())
+	assert.Equal(t, uint32(0), resp.GetOffset())
+}
+
+func TestDNSServiceServer_ListRecords_OffsetAloneUsesTheDefaultLimit(t *testing.T) {
+	server := pagedRecordsServer()
+
+	resp, err := server.ListRecords(context.Background(), &platformv1.ListRecordsRequest{
+		ZoneName: "example.com.",
+		Offset:   proto.Uint32(0),
+	})
+
+	require.NoError(t, err)
+	assert.Len(t, resp.GetRecords(), 6)
+	assert.Equal(t, uint32(dns.DefaultPageLimit), resp.GetLimit())
+}
+
+func TestDNSServiceServer_ListRecords_OffsetPastTheEndIsAnEmptyPage(t *testing.T) {
+	server := pagedRecordsServer()
+
+	resp, err := server.ListRecords(context.Background(), &platformv1.ListRecordsRequest{
+		ZoneName: "example.com.",
+		Type:     platformv1.RecordType_RECORD_TYPE_A,
+		Limit:    proto.Uint32(dns.MaxPageLimit + 1),
+		Offset:   proto.Uint32(9),
+	})
+
+	require.NoError(t, err)
+	assert.Empty(t, resp.GetRecords())
+	assert.Equal(t, uint64(5), resp.GetTotal())
+	assert.Equal(t, uint32(dns.MaxPageLimit), resp.GetLimit(), "a limit above the cap is clamped")
 }
 
 // getRecordName coverage tests for nil inner records

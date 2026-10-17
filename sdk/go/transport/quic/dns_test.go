@@ -107,7 +107,12 @@ func TestDNSListRecordsReplyDecoder(t *testing.T) {
 	// The daemon-side mirror encoding is byte-identical to encoding the pb
 	// response directly (verified empirically), so encode the pb form as the
 	// wire fixture.
-	payload, err := quicwire.EncodePayload(&platformv1.ListRecordsResponse{Records: records})
+	payload, err := quicwire.EncodePayload(&platformv1.ListRecordsResponse{
+		Records: records,
+		Total:   uint64(len(records)) + 40,
+		Limit:   uint32(len(records)),
+		Offset:  20,
+	})
 	if err != nil {
 		t.Fatalf("encode fixture: %v", err)
 	}
@@ -123,6 +128,9 @@ func TestDNSListRecordsReplyDecoder(t *testing.T) {
 		if !proto.Equal(reply.GetRecords()[i], want) {
 			t.Fatalf("record %d mismatch:\n got %v\nwant %v", i, reply.GetRecords()[i], want)
 		}
+	}
+	if reply.GetTotal() != uint64(len(records))+40 || reply.GetLimit() != uint32(len(records)) || reply.GetOffset() != 20 {
+		t.Fatalf("page: got total=%d limit=%d offset=%d", reply.GetTotal(), reply.GetLimit(), reply.GetOffset())
 	}
 }
 

@@ -375,9 +375,14 @@ func (s *DNSServiceServer) ListRecords(ctx context.Context, req *platformv1.List
 	}
 
 	records := s.extractRecords(&zone.RecordSet, req.GetType())
+	paged := req.Limit != nil || req.Offset != nil
+	page := dns.NewPage(len(records), int(req.GetLimit()), int(req.GetOffset()), paged)
 
 	return &platformv1.ListRecordsResponse{
-		Records: records,
+		Records: records[page.Start:page.End],
+		Total:   uint64(len(records)),
+		Limit:   uint32(page.Limit),
+		Offset:  uint32(page.Offset),
 	}, nil
 }
 

@@ -147,6 +147,9 @@ func (w *dnsRecordWire) toProto() *platformv1.Record {
 // dnsListRecordsWire mirrors platformv1.ListRecordsResponse.
 type dnsListRecordsWire struct {
 	Records []*dnsRecordWire `codec:"Records"`
+	Total   uint64           `codec:"Total"`
+	Limit   uint32           `codec:"Limit"`
+	Offset  uint32           `codec:"Offset"`
 }
 
 // dnsResolveWire mirrors platformv1.ResolveResponse.
@@ -179,6 +182,9 @@ func decodeDNSListRecordsReply(payload []byte, reply interface{}) error {
 	for _, w := range wire.Records {
 		out.Records = append(out.Records, w.toProto())
 	}
+	out.Total = wire.Total
+	out.Limit = wire.Limit
+	out.Offset = wire.Offset
 	return nil
 }
 
