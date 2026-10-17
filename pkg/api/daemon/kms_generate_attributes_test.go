@@ -323,3 +323,163 @@ func TestPlatformKMSBackendGenerateKeyAttributes(t *testing.T) {
 		}
 	})
 }
+
+// testSystemTenant is the platform system tenant set on the KMS surfaces in
+// TestGenerateKeyTenantScope.
+const testSystemTenant = "platform"
+
+// countMetadataCalls wraps the client's metadata read and update so a test
+// can assert whether GenerateKey made either call.
+func countMetadataCalls(client *platformMockKMSClient, calls *int) *platformMockKMSClient {
+	get, update := client.getKeyMetadataFn, client.updateKeyMetadataFn
+	client.getKeyMetadataFn = func(ctx context.Context, keyID string) (*kms.KeyMetadataResponse, error) {
+		*calls++
+		return get(ctx, keyID)
+	}
+	client.updateKeyMetadataFn = func(ctx context.Context, req *kms.UpdateKeyMetadataRequest) (*kms.KeyMetadataResponse, error) {
+		*calls++
+		return update(ctx, req)
+	}
+	return client
+}
+
+// generatedKey is what a KMS surface returned for a generate request.
+type generatedKey struct {
+	keyID       string
+	exportable  bool
+	description string
+	tags        map[string]string
+}
+
+// generateKeySurfaces drives GenerateKey on both KMS surfaces, each with the
+// platform system tenant set.
+var generateKeySurfaces = map[string]func(ctx context.Context, client *platformMockKMSClient, description string, tags map[string]string) (generatedKey, error){
+	"KMSServerAdapter": func(ctx context.Context, client *platformMockKMSClient, description string, tags map[string]string) (generatedKey, error) {
+		adapter := NewKMSServerAdapter(client, slog.Default())
+		adapter.SetSystemTenant(testSystemTenant)
+		resp, err := adapter.GenerateKey(ctx, &pb.GenerateKeyRequest{
+			Name:        "scoped-key",
+			KeySpec:     &pb.KeySpec{Algorithm: pb.KeyAlgorithm_KEY_ALG_AES_256_GCM, Exportable: true},
+			Description: description,
+			Tags:        tags,
+		})
+		if err != nil {
+			return generatedKey{}, err
+		}
+		meta := resp.GetMetadata()
+		return generatedKey{meta.GetKeyId(), meta.GetExportable(), meta.GetDescription(), meta.GetTags()}, nil
+	},
+	"PlatformKMSBackend": func(ctx context.Context, client *platformMockKMSClient, description string, tags map[string]string) (generatedKey, error) {
+		backend := newTestPlatformKMSBackend(client, &platformMockCryptoClient{})
+		backend.SetSystemTenant(testSystemTenant)
+		resp, err := backend.GenerateKey(ctx, &grpcapi.KMSGenerateKeyRequest{
+			Name: "scoped-key",
+			KeySpec: &grpcapi.KMSKeySpec{
+				Algorithm:  int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256),
+				Exportable: true,
+			},
+			Description: description,
+			Tags:        tags,
+		})
+		if err != nil {
+			return generatedKey{}, err
+		}
+		meta := resp.Metadata
+		return generatedKey{meta.KeyID, meta.Exportable, meta.Description, meta.Tags}, nil
+	},
+}
+
+// TestGenerateKeyTenantScope proves the metadata follow-up of GenerateKey is
+// made only in the system scope: go-quicbaas looks key metadata up outside
+// the tenant scope a tenant's key is stored in (tenantScopedKeyGeneration).
+func TestGenerateKeyTenantScope(t *testing.T) {
+	t.Parallel()
+	for surface, generate := range generateKeySurfaces {
+		t.Run(surface, func(t *testing.T) {
+			t.Parallel()
+
+			t.Run("system tenant records description and tags", func(t *testing.T) {
+				t.Parallel()
+				var updates, calls int
+				client := countMetadataCalls(newRecordingKMSClient(&updates), &calls)
+
+				got, err := generate(tokenCallerContext(testSystemTenant), client, "platform key", map[string]string{"team": "crypto"})
+				if err != nil {
+					t.Fatalf("GenerateKey: %v", err)
+				}
+				if got.description != "platform key" || got.tags["team"] != "crypto" {
+					t.Errorf("description=%q tags=%v, want both recorded", got.description, got.tags)
+				}
+				if updates != 1 || calls != 1 {
+					t.Errorf("metadata updates=%d calls=%d, want 1 each", updates, calls)
+				}
+			})
+
+			t.Run("tenant scope makes no metadata call", func(t *testing.T) {
+				t.Parallel()
+				var updates, calls int
+				client := countMetadataCalls(newRecordingKMSClient(&updates), &calls)
+
+				got, err := generate(tokenCallerContext("tenant-b"), client, "", nil)
+				if err != nil {
+					t.Fatalf("GenerateKey: %v", err)
+				}
+				if calls != 0 {
+					t.Errorf("metadata calls = %d, want none in a tenant scope", calls)
+				}
+				if got.keyID != "scoped-key" || !got.exportable {
+					t.Errorf("metadata = %+v, want the generate response's key ID and exportable", got)
+				}
+			})
+
+			t.Run("tenant scope refuses a description or tags before generating", func(t *testing.T) {
+				t.Parallel()
+				requests := map[string]struct {
+					description string
+					tags        map[string]string
+				}{
+					"description": {description: "tenant B key"},
+					"tags":        {tags: map[string]string{"team": "crypto"}},
+				}
+				for name, req := range requests {
+					t.Run(name, func(t *testing.T) {
+						t.Parallel()
+						var updates, calls, generated int
+						client := countMetadataCalls(newRecordingKMSClient(&updates), &calls)
+						generateKey := client.generateKeyFn
+						client.generateKeyFn = func(ctx context.Context, r *kms.GenerateKeyRequest) (*kms.GenerateKeyResponse, error) {
+							generated++
+							return generateKey(ctx, r)
+						}
+
+						_, err := generate(tokenCallerContext("tenant-b"), client, req.description, req.tags)
+						var unsupported ErrKMSTenantKeyMetadataUnsupported
+						if !errors.As(err, &unsupported) || status.Code(err) != codes.FailedPrecondition {
+							t.Fatalf("err = %v (code %v), want ErrKMSTenantKeyMetadataUnsupported, FailedPrecondition", err, status.Code(err))
+						}
+						if unsupported.TenantID != "tenant-b" || unsupported.KeyID != "scoped-key" {
+							t.Errorf("error names tenant %q key %q, want tenant-b scoped-key", unsupported.TenantID, unsupported.KeyID)
+						}
+						if generated != 0 || calls != 0 {
+							t.Errorf("generate calls=%d metadata calls=%d, want none", generated, calls)
+						}
+					})
+				}
+			})
+
+			t.Run("system tenant metadata error is surfaced", func(t *testing.T) {
+				t.Parallel()
+				var updates int
+				client := newRecordingKMSClient(&updates)
+				client.updateKeyMetadataFn = func(context.Context, *kms.UpdateKeyMetadataRequest) (*kms.KeyMetadataResponse, error) {
+					return nil, sdkerrors.NewNotFound("kms.UpdateKeyMetadata", "gone")
+				}
+
+				_, err := generate(tokenCallerContext(testSystemTenant), client, "platform key", nil)
+				if !errors.As(err, new(ErrKMSGeneratedKeyMetadata)) || status.Code(err) != codes.NotFound {
+					t.Fatalf("err = %v (code %v), want ErrKMSGeneratedKeyMetadata, NotFound", err, status.Code(err))
+				}
+			})
+		})
+	}
+}

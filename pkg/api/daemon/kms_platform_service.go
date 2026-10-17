@@ -156,6 +156,25 @@ func (e ErrKMSGeneratedKeyMetadata) GRPCStatus() *status.Status {
 	return status.New(errclass.Code(e.Err), e.Error())
 }
 
+// ErrKMSTenantKeyMetadataUnsupported is returned, before any key is
+// generated, when a generate request in a non-system tenant's key scope
+// carries a description or tags. The SDK cannot record them there; see
+// tenantScopedKeyGeneration for the gap.
+type ErrKMSTenantKeyMetadataUnsupported struct {
+	TenantID string
+	KeyID    string
+}
+
+func (e ErrKMSTenantKeyMetadataUnsupported) Error() string {
+	return "KMS key " + e.KeyID + " not generated: tenant " + e.TenantID +
+		" cannot set a description or tags on a generated key, because the go-quicbaas SDK looks key metadata up outside the tenant scope"
+}
+
+// GRPCStatus classifies the error as FailedPrecondition on every transport.
+func (e ErrKMSTenantKeyMetadataUnsupported) GRPCStatus() *status.Status {
+	return status.New(codes.FailedPrecondition, e.Error())
+}
+
 // =============================================================================
 // Platform KMS Backend
 // =============================================================================
@@ -166,9 +185,16 @@ func (e ErrKMSGeneratedKeyMetadata) GRPCStatus() *status.Status {
 // single backing implementation for the platform.v1 KMS surface across the
 // gRPC-TCP, gRPC-UDS, REST, and embedded transports.
 type PlatformKMSBackend struct {
-	kmsClient    quicbaas.KMSClient
-	cryptoClient quicbaas.CryptoClient
-	logger       *slog.Logger
+	kmsClient      quicbaas.KMSClient
+	cryptoClient   quicbaas.CryptoClient
+	logger         *slog.Logger
+	systemTenantID string
+}
+
+// SetSystemTenant sets the platform's system tenant, which decides whether a
+// generate request runs in the system or a tenant key scope.
+func (b *PlatformKMSBackend) SetSystemTenant(tenantID string) {
+	b.systemTenantID = tenantID
 }
 
 // NewPlatformKMSBackend creates a platform KMS backend wrapping the SDK
@@ -192,7 +218,9 @@ func (s *KMSService) PlatformKMSBackend() (*PlatformKMSBackend, error) {
 	if err := s.initializeServers(); err != nil {
 		return nil, err
 	}
-	return NewPlatformKMSBackend(s.kmsAdapter.client, s.cryptoServer.client, s.logger), nil
+	backend := NewPlatformKMSBackend(s.kmsAdapter.client, s.cryptoServer.client, s.logger)
+	backend.SetSystemTenant(s.systemTenantID)
+	return backend, nil
 }
 
 // kmsOrErr returns the SDK KMS client or a typed unavailable error.
@@ -240,6 +268,11 @@ func (b *PlatformKMSBackend) GenerateKey(
 		return nil, err
 	}
 
+	tenantScoped, err := tenantScopedKeyGeneration(ctx, b.systemTenantID, req.Name, req.Description, req.Tags)
+	if err != nil {
+		return nil, err
+	}
+
 	resp, err := client.GenerateKey(ctx, &kms.GenerateKeyRequest{
 		Name:               req.Name,
 		Algorithm:          algorithm,
@@ -251,7 +284,7 @@ func (b *PlatformKMSBackend) GenerateKey(
 		return nil, err
 	}
 
-	meta, err := recordGeneratedKeyMetadata(ctx, client, resp.KeyID, req.Description, req.Tags)
+	meta, err := recordGeneratedKeyMetadata(ctx, client, tenantScoped, resp, req.Description, req.Tags)
 	if err != nil {
 		return nil, err
 	}
