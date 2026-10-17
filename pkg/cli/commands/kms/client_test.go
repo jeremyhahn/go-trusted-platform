@@ -34,6 +34,7 @@ var errCLIKMSMock = errors.New("cli kms mock: method not stubbed")
 // for the verbs exercised by the CLI lifecycle commands.
 type fakeKMSClient struct {
 	revokeKeyFn              func(ctx context.Context, keyID string) error
+	updateKeyStatusFn        func(ctx context.Context, req *kms.UpdateKeyStatusRequest) (*kms.UpdateKeyStatusResponse, error)
 	getKeyMetadataFn         func(ctx context.Context, keyID string) (*kms.KeyMetadataResponse, error)
 	updateKeyMetadataFn      func(ctx context.Context, req *kms.UpdateKeyMetadataRequest) (*kms.KeyMetadataResponse, error)
 	setKeyPolicyFn           func(ctx context.Context, req *kms.SetKeyPolicyRequest) error
@@ -88,6 +89,9 @@ func (f *fakeKMSClient) ListKeyVersions(ctx context.Context, keyID string) (*kms
 }
 
 func (f *fakeKMSClient) UpdateKeyStatus(ctx context.Context, req *kms.UpdateKeyStatusRequest) (*kms.UpdateKeyStatusResponse, error) {
+	if f.updateKeyStatusFn != nil {
+		return f.updateKeyStatusFn(ctx, req)
+	}
 	return nil, errCLIKMSMock
 }
 
