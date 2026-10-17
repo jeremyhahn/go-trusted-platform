@@ -39,6 +39,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/process"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 )
@@ -666,7 +667,11 @@ func (s bridgeState) addFlow(line string) (string, error) {
 				return "", &bridgeDumpError{Line: line, Cause: err}
 			}
 			if owner := cookie & ovs.OwnerCookieMask; owner != 0 {
-				s.generations[cookie] = true
+				// A bare owner cookie (the base pipeline's) carries no
+				// generation, so a relaunch reinstalls it unchanged.
+				if cookie != owner {
+					s.generations[cookie] = true
+				}
 				field = fmt.Sprintf("owner=0x%x", owner)
 			}
 		}
@@ -765,6 +770,27 @@ func TestParseBridgeComparesProgrammingNotGenerations(t *testing.T) {
 	}
 	if len(first.rules) != 3 {
 		t.Errorf("rules = %v, want two flows and one group", first.rules)
+	}
+}
+
+// The base pipeline's flows carry the bare owner cookie CookiePipeline, no
+// generation: a relaunch reinstalls them under the same cookie. Counting that
+// cookie as a generation the killed child stamped would make the datapath
+// probe wait forever for it to change (#955).
+func TestParseBridgeTracksNoGenerationForABareOwnerCookie(t *testing.T) {
+	state, err := parseBridge("OFPST_FLOW reply (OF1.3) (xid=0x2):\n"+
+		fmt.Sprintf(" cookie=0x%x, duration=2.0s, table=0, n_packets=0, n_bytes=0, priority=1 actions=resubmit(,10)\n", gateway.CookiePipeline)+
+		" cookie=0xf1be000300000007, duration=2.0s, table=10, n_packets=0, n_bytes=0, priority=100,tcp,nw_dst=10.100.0.20,tp_dst=80 actions=group:1\n",
+		"")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if want := map[uint64]bool{0xf1be000300000007: true}; !maps.Equal(state.generations, want) {
+		t.Errorf("generations = %v, want %v: the pipeline's bare owner cookie carries none", state.generations, want)
+	}
+	want := fmt.Sprintf("owner=0x%x", gateway.CookiePipeline)
+	if !slices.ContainsFunc(state.rules, func(rule string) bool { return strings.HasPrefix(rule, want) }) {
+		t.Errorf("rules = %v, want the pipeline flow under %s", state.rules, want)
 	}
 }
 

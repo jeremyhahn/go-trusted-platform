@@ -1370,7 +1370,10 @@ counters dropped and each gateway cookie cut to its owner id. It then
 - a child with a new PID answers its probe within the relaunch bound: the
   proxy serves, the BGP port accepts, and the datapath child has reprogrammed
   the bridge, its flows and groups equal to the recorded ones and none under a
-  generation the killed child stamped;
+  generation the killed child stamped. The base pipeline's flows carry the bare
+  `CookiePipeline` owner cookie, no generation, so the probe compares them as
+  rules only; counting that cookie as a generation made the probe wait out the
+  bound for a change a relaunch never makes (#955);
 - every other child keeps its PID;
 - after `ovs-appctl revalidator/wait` the bridge still holds the recorded flows
   and groups, and a kill of `proxy` or `routing` leaves even the generations
