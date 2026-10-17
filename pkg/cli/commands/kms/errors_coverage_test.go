@@ -30,7 +30,6 @@ func TestAllKMSErrorTypes(t *testing.T) {
 		{"ErrInvalidKeyUsage", ErrInvalidKeyUsage{Usage: "bad"}, "bad"},
 
 		// dek.go
-		{"ErrDEKNotImplemented", ErrDEKNotImplemented{}, "not yet implemented"},
 
 		// key_algorithms.go
 
@@ -82,10 +81,9 @@ func TestAllKMSErrorTypes(t *testing.T) {
 		{"ErrListKeyVersionsFailed", ErrListKeyVersionsFailed{KeyID: "k11", Err: errors.New("fail")}, "k11"},
 
 		// secrets.go
-		{"ErrSecretsNotImplemented", ErrSecretsNotImplemented{}, "not yet implemented"},
-		{"ErrSecretNameRequired", ErrSecretNameRequired{}, "name"},
 		{"ErrSecretValueRequired", ErrSecretValueRequired{}, "value"},
-		{"ErrSecretsClientNotInitialized", ErrSecretsClientNotInitialized{}, "client"},
+		{"ErrSecretStatusFlagRequired", ErrSecretStatusFlagRequired{}, "--enable"},
+		{"ErrInvalidSecretVersion", ErrInvalidSecretVersion{Value: "x"}, "positive integer"},
 
 		// status.go
 		{"ErrKMSClientNotInitialized", ErrKMSClientNotInitialized{}, "client"},

@@ -466,6 +466,13 @@ and the tenant-record routes only the system tenant
 browser session's tenant, which a daemon caller does not have. A daemon without
 a QuicBaaS IAM service mounts no IAM route.
 
+The daemon REST KMS routes (`/api/v1/kms/*`, #949) run behind the same guard
+with the `kms` scope of the `quicbaas.kms.v1` RPC each mirrors.
+`RESTServer.SetKMSHandlers` mounts the webservice's handlers
+(`pkg/webservice/v1/rest/kms`) over the SDK clients the KMS gRPC services call,
+so the routes and bodies are the ones the SDK REST client sends
+([`docs/kms/api.md`](../kms/api.md) §6).
+
 **QUIC authorizes every request before dispatch (#767).** Before #767 the QUIC
 dispatcher authenticated a token when a middleware was installed and then
 dispatched with no authorization at all: any valid token reached every

@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // CLI response wrapper types that match protobuf JSON output structure.
@@ -281,7 +282,9 @@ func (e *CLIAdapterError) Error() string {
 
 // CLIAdapter implements VTPMCommands using the platformctl CLI.
 type CLIAdapter struct {
-	cliPath string
+	cliPath    string
+	configDir  string
+	configPath string
 }
 
 // NewCLIAdapter creates a new CLI adapter.
@@ -300,12 +303,30 @@ func (a *CLIAdapter) Setup(ctx context.Context) error {
 			Message:   "CLI not found",
 		}
 	}
+
+	// platformctl reaches the harness daemon only through a config context:
+	// without --config every command failed before it dialled.
+	dir, path, err := helpers.WriteTempLocalCLIConfig(GetSocketPath(), GetGRPCEndpoint())
+	if err != nil {
+		return &CLIAdapterError{
+			Operation: "Setup",
+			Message:   "failed to write platformctl config: " + err.Error(),
+		}
+	}
+	a.configDir = dir
+	a.configPath = path
 	return nil
 }
 
 // Teardown cleans up after testing.
 func (a *CLIAdapter) Teardown(ctx context.Context) error {
-	return nil
+	if a.configDir == "" {
+		return nil
+	}
+	err := os.RemoveAll(a.configDir)
+	a.configDir = ""
+	a.configPath = ""
+	return err
 }
 
 // Name returns the adapter name.
@@ -315,7 +336,8 @@ func (a *CLIAdapter) Name() string {
 
 // runCommand executes a CLI command and returns the output.
 func (a *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, a.cliPath, args...)
+	full := append([]string{"--config", a.configPath}, args...)
+	cmd := exec.CommandContext(ctx, a.cliPath, full...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, &CLIAdapterError{

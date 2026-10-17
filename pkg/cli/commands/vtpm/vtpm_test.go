@@ -202,7 +202,7 @@ func TestRunClone(t *testing.T) {
 			templateID: "base-vtpm",
 			hostname:   "vm001.example.com",
 			labels:     nil,
-			expectErr:  ErrDaemonConnectionRequired{},
+			expectErr:  ErrDaemonConnectionRequired{Err: cli.ErrNoContextSet{}},
 		},
 	}
 
@@ -243,17 +243,17 @@ func TestRunList(t *testing.T) {
 		{
 			name:      "no filter",
 			mode:      "",
-			expectErr: ErrDaemonConnectionRequired{},
+			expectErr: ErrDaemonConnectionRequired{Err: cli.ErrNoContextSet{}},
 		},
 		{
 			name:      "template mode",
 			mode:      "template",
-			expectErr: ErrDaemonConnectionRequired{},
+			expectErr: ErrDaemonConnectionRequired{Err: cli.ErrNoContextSet{}},
 		},
 		{
 			name:      "pre-assigned mode",
 			mode:      "pre-assigned",
-			expectErr: ErrDaemonConnectionRequired{},
+			expectErr: ErrDaemonConnectionRequired{Err: cli.ErrNoContextSet{}},
 		},
 		{
 			name:      "invalid mode",
@@ -330,7 +330,7 @@ func TestRunInfo(t *testing.T) {
 		{
 			name:      "valid bundle ID",
 			bundleID:  "bundle-123",
-			expectErr: ErrDaemonConnectionRequired{},
+			expectErr: ErrDaemonConnectionRequired{Err: cli.ErrNoContextSet{}},
 		},
 	}
 
@@ -382,13 +382,13 @@ func TestRunDelete(t *testing.T) {
 			name:      "valid bundle ID without force",
 			bundleID:  "bundle-123",
 			force:     false,
-			expectErr: ErrDaemonConnectionRequired{},
+			expectErr: ErrDaemonConnectionRequired{Err: cli.ErrNoContextSet{}},
 		},
 		{
 			name:      "valid bundle ID with force",
 			bundleID:  "bundle-123",
 			force:     true,
-			expectErr: ErrDaemonConnectionRequired{},
+			expectErr: ErrDaemonConnectionRequired{Err: cli.ErrNoContextSet{}},
 		},
 	}
 
@@ -443,14 +443,14 @@ func TestRunExport(t *testing.T) {
 			bundleID:  "bundle-123",
 			output:    "",
 			overwrite: false,
-			expectErr: ErrDaemonConnectionRequired{},
+			expectErr: ErrDaemonConnectionRequired{Err: cli.ErrNoContextSet{}},
 		},
 		{
 			name:      "valid bundle ID custom output",
 			bundleID:  "bundle-123",
 			output:    "my-bundle.vtpm.tar.gz",
 			overwrite: false,
-			expectErr: ErrDaemonConnectionRequired{},
+			expectErr: ErrDaemonConnectionRequired{Err: cli.ErrNoContextSet{}},
 		},
 	}
 
@@ -641,7 +641,9 @@ func TestRunTemplateList(t *testing.T) {
 
 	err := runTemplateList(flags)
 	require.Error(t, err)
-	assert.Equal(t, ErrDaemonConnectionRequired{}, err)
+	assert.IsType(t, ErrDaemonConnectionRequired{}, err)
+	// The connection failure travels with the error instead of being dropped.
+	assert.ErrorIs(t, err, cli.ErrNoContextSet{})
 }
 
 // TestNewTemplateDeleteCommand tests the template delete command structure
@@ -683,13 +685,13 @@ func TestRunTemplateDelete(t *testing.T) {
 			name:       "valid template ID without force",
 			templateID: "base-vtpm",
 			force:      false,
-			expectErr:  ErrDaemonConnectionRequired{},
+			expectErr:  ErrDaemonConnectionRequired{Err: cli.ErrNoContextSet{}},
 		},
 		{
 			name:       "valid template ID with force",
 			templateID: "base-vtpm",
 			force:      true,
-			expectErr:  ErrDaemonConnectionRequired{},
+			expectErr:  ErrDaemonConnectionRequired{Err: cli.ErrNoContextSet{}},
 		},
 	}
 
@@ -1099,6 +1101,13 @@ func TestErrorTypes(t *testing.T) {
 		assert.Equal(t, "daemon connection required: this command requires a running platformd daemon", err.Error())
 		var target ErrDaemonConnectionRequired
 		assert.ErrorAs(t, err, &target)
+	})
+
+	t.Run("ErrDaemonConnectionRequired carries its cause", func(t *testing.T) {
+		cause := cli.ErrNoContextSet{}
+		err := ErrDaemonConnectionRequired{Err: cause}
+		assert.Equal(t, "daemon connection required: this command requires a running platformd daemon: "+cause.Error(), err.Error())
+		assert.ErrorIs(t, err, cause)
 	})
 
 	t.Run("ErrBundleNotFound", func(t *testing.T) {

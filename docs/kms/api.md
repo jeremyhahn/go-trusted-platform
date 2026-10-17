@@ -175,11 +175,10 @@ embedded daemon answers the other five with an unknown-method error; its
 service also refuses a `deleted` status. The REST routes in the table reach the
 same SDK client and fail the same way on an embedded daemon.
 
-**The CLI cannot reach them either** — the entire `platformctl kms secrets`
-and `kms dek` subtrees are stubs that return typed
-`ErrSecretsNotImplemented` / `ErrDEKNotImplemented` errors. See
-[engineering.md](engineering.md) §2 and [cli.md](cli.md) §7–§8. (`kms crypto
-datakey`, which mints a wrapped DEK, does work.)
+`platformctl kms secrets` calls the same SDK secrets client
+(`Security().Secrets()`), so it reaches every row above and meets the same
+embedded seam ([cli.md](cli.md) §7.2). `kms dek` calls the SDK DEK client
+([cli.md](cli.md) §7.1).
 
 **Generating a data key and creating a DEK are different operations.**
 `/data-keys` mints a key under the KEK named by `key_id` (`wrapping_key_id` on
@@ -263,8 +262,15 @@ Until #165 the whole surface answered callers with no token at all. The gate
 is `v1Router.gated(common.ROLE_ADMIN)` in `pkg/webservice/v1/router.go`;
 [`docs/auth/architecture.md`](../auth/architecture.md) §6c has the mechanism
 and [`docs/api/rest-routers.md`](../api/rest-routers.md) the router-level
-picture. The REST gate is role-based; the gRPC and MCP positions are the scope
-catalogs above.
+picture. That is the webservice listener.
+
+The daemon REST listener (8443) mounts the same handlers
+(`pkg/api/daemon/rest_kms.go`) behind its scope guard instead: each route
+requires the scope of the `quicbaas.kms.v1` RPC it mirrors
+(`pkg/webservice/v1/rest/kms/router.go` `Routes`), checked as on gRPC, and a
+caller without it is refused 403. A daemon with no authorization configured
+refuses every route. The routes call the SDK clients the KMS gRPC services
+call, so a key made over any transport is the one REST sees.
 
 ---
 
@@ -312,7 +318,6 @@ operations and large ciphertexts.
 |---|---|
 | Key lifecycle (generate, import, get, metadata, list, update, enable, disable, delete, schedule/cancel deletion, rotate, policy) | The backend's class; `InvalidArgument` for a missing key ID or spec, an unsupported value, filter or cursor |
 | Crypto (encrypt, decrypt, sign, verify, MAC, data key, re-encrypt) | The backend's class; `InvalidArgument` for a missing input or a ciphertext the key did not seal |
-| Batch (REST) | `InvalidArgument` for an empty or oversize batch; 207 Multi-Status when some items fail (`pkg/api/rest/kms_handlers.go` `writeKMSError`) |
 | Secrets (`secret_*`, secret routes, `SecretsManagement`) | `InvalidArgument` for a missing ID; gRPC and QUIC still answer store and list failures `Internal` and read failures `NotFound`, whatever the cause |
 | DEK (`DEKManagement`, DEK routes) | gRPC: `InvalidArgument` for a missing path; create, list, rotate and delete failures `Internal`, get and status failures `NotFound`, whatever the cause; the REST 400/404 rules are in §4 |
 | Rotation policy | Update failures `Internal`, get failures `NotFound`, whatever the cause |

@@ -616,7 +616,6 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Create KMS service if QuicBaaS backend is available
 	var kmsService *KMSService
 	var kmsPlatformGRPC *grpccreds.KMSGRPCService
-	var kmsPlatformBackend *PlatformKMSBackend
 	if config.App != nil && config.App.KMS() != nil {
 		var kmsErr error
 		kmsService, kmsErr = NewKMSService(config.App, logger.Slog())
@@ -643,7 +642,6 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			if backendErr != nil {
 				logger.Warn("Platform KMS backend initialization failed", "error", backendErr)
 			} else {
-				kmsPlatformBackend = platformKMSBackend
 				kmsPlatformGRPC = grpccreds.NewKMSGRPCService(logger, platformKMSBackend)
 				if grpcServer != nil {
 					platformv1.RegisterKeyManagementServiceServer(grpcServer, kmsPlatformGRPC)
@@ -1544,13 +1542,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		daemon.concreteRestServer.SetTPMHandlers(tpmService, restGuard)
 	}
 
-	// Wire KMS REST handlers when the platform KMS backend is available.
-	// Without this, /api/v1/kms/* would not be served and the REST adapter
-	// for `platformctl --protocol rest kms ...` would 404. The facade shares
-	// the same QuicBaaS SDK clients as the gRPC and embedded transports so
-	// all transports return identical results.
-	if daemon.concreteRestServer != nil && kmsPlatformBackend != nil {
-		daemon.concreteRestServer.SetKMSHandlers(NewPlatformKMSRESTFacade(kmsPlatformBackend))
+	// Mount the KMS REST routes over the SDK clients the KMS gRPC services
+	// call, so every transport answers from the same keys, DEKs and secrets.
+	if daemon.concreteRestServer != nil && kmsService != nil {
+		if clients, clientsErr := kmsService.RESTClients(); clientsErr != nil {
+			logger.Warn("KMS REST routes not registered", "error", clientsErr)
+		} else {
+			daemon.concreteRestServer.SetKMSHandlers(clients, daemon.restGuard)
+		}
 	}
 
 	// Wire the IAM REST routes over the same SDK IAM client and PEP the IAM

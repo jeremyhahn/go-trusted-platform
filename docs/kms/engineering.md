@@ -19,7 +19,8 @@ What is local is service and transport code:
 | Location | Role |
 |---|---|
 | `pkg/api/daemon/kms_service.go`, `kms_service_extended.go` | The service the transports call |
-| `pkg/api/daemon/kms_platform_service.go`, `kms_platform_rest.go` | Platform-scoped KMS service and its REST wiring |
+| `pkg/api/daemon/kms_platform_service.go` | Platform-scoped KMS service |
+| `pkg/api/daemon/rest_kms.go` | The KMS routes on the daemon REST listener, behind its scope guard |
 | `pkg/api/daemon/quic_kms.go`, `quic_kms_extended.go` | QUIC handlers |
 | `pkg/api/daemon/mcp_service_kms_lifecycle.go` | MCP key-lifecycle tools |
 | `pkg/webservice/v1/rest/kms/` | REST routes |
@@ -58,41 +59,33 @@ go-xkms or in the quicbaas SDK (docs/00 L8).
 ## 2. A large part of the CLI is deliberately unimplemented
 
 This is the most important thing to know about this feature, and it is stated
-in the code rather than hidden: **eight non-test files in
-`pkg/cli/commands/kms/` carry "not yet implemented"**, backed by eight distinct
+in the code rather than hidden: **six non-test files in
+`pkg/cli/commands/kms/` carry "not yet implemented"**, backed by six distinct
 typed errors:
 
 ```go
-ErrSecretsNotImplemented        ErrKeyExportNotImplemented
-ErrKeyImportNotImplemented      ErrKeyVersionsNotImplemented
-ErrKeyStatusNotImplemented      ErrKeyUnwrapNotImplemented
-ErrDEKNotImplemented            ErrBackendTestNotImplemented
+ErrKeyImportNotImplemented      ErrKeyExportNotImplemented
+ErrKeyStatusNotImplemented      ErrKeyVersionsNotImplemented
+ErrBackendTestNotImplemented    ErrKeyUnwrapNotImplemented
 ```
 
 Affected areas, by file:
 
 | File | Unimplemented surface |
 |---|---|
-| `secrets.go` | The **entire** `kms secrets` subtree — store, get, list, delete, rotate, version, versions, rollback, status, policy get/set, prefix list, watch |
-| `dek.go` | Data-encryption-key operations |
 | `key_export.go`, `key_import.go` | Key export and import |
 | `key_versions.go` | Key version listing |
 | `key_status.go` | Key status |
 | `key_unwrap.go` | Key unwrap |
 | `key_test_backend.go` | Backend test |
 
-`ErrSecretsNotImplemented.Error()` reads *"secrets management is not yet
-implemented in the platform KMS service"*, and the command's long help offers a
-workaround: use `kms crypto encrypt` / `decrypt` to manage encrypted secrets
-yourself.
-
 **These are commands that exist, parse flags, and then refuse.** They are typed
 errors, not panics or silent no-ops, which is the right shape — but a caller
 must not read "the verb exists" as "the capability exists".
 
-**The REST surface does not have this gap.** `/api/v1/kms/secrets/...` routes
-are registered and functional ([api.md](api.md) §4). The CLI is behind the API,
-not the other way round.
+`kms secrets` and `kms dek` call the SDK secrets and DEK clients
+([cli.md](cli.md) §7); `kms secrets watch` was removed because the SDK secrets
+client has no watch verb.
 
 ## 3. Exported surface
 
