@@ -446,7 +446,16 @@ func TestRunContextAddLocal(t *testing.T) {
 	err := runContextAdd(getConfig, "test-local", "local", "",
 		"/run/test.sock", "", "", "", "", "")
 	if err != nil {
-		t.Errorf("runContextAdd failed: %v", err)
+		t.Fatalf("runContextAdd failed: %v", err)
+	}
+
+	// The context lands in the file the config was loaded from.
+	saved, err := cli.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if _, err := saved.GetContext("test-local"); err != nil {
+		t.Errorf("added context not saved to %s: %v", configPath, err)
 	}
 }
 
@@ -560,7 +569,15 @@ func TestRunContextUse(t *testing.T) {
 
 	err := runContextUse(getConfig, "context2")
 	if err != nil {
-		t.Errorf("runContextUse failed: %v", err)
+		t.Fatalf("runContextUse failed: %v", err)
+	}
+
+	saved, err := cli.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if saved.CurrentContext != "context2" {
+		t.Errorf("current context in %s = %q, want context2", configPath, saved.CurrentContext)
 	}
 }
 
@@ -631,7 +648,15 @@ func TestRunContextDelete(t *testing.T) {
 
 	err := runContextDelete(getConfig, "context2")
 	if err != nil {
-		t.Errorf("runContextDelete failed: %v", err)
+		t.Fatalf("runContextDelete failed: %v", err)
+	}
+
+	saved, err := cli.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if _, err := saved.GetContext("context2"); err == nil {
+		t.Errorf("deleted context still in %s", configPath)
 	}
 }
 

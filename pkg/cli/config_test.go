@@ -120,6 +120,7 @@ func TestLoadConfig_EmptyPath(t *testing.T) {
 	// When path is empty, should use default path
 	// This test verifies that LoadConfig("") works correctly regardless of
 	// whether the default config file exists or not
+	t.Setenv("HOME", t.TempDir())
 	config, err := LoadConfig("")
 
 	require.NoError(t, err)
@@ -177,14 +178,48 @@ func TestConfig_Save_CreatesDirectory(t *testing.T) {
 }
 
 func TestConfig_Save_EmptyPath(t *testing.T) {
+	// A config that was never loaded saves to the default path.
+	t.Setenv("HOME", t.TempDir())
 	config := DefaultConfig()
 
-	// Save to default path - this might fail in test environment
-	// but should not panic
-	err := config.Save("")
+	require.NoError(t, config.Save(""))
 
-	// Don't assert success or failure, just that it doesn't panic
-	_ = err
+	loaded, err := LoadConfig(DefaultConfigPath())
+	require.NoError(t, err)
+	assert.Equal(t, config.CurrentContext, loaded.CurrentContext)
+}
+
+func TestConfig_Save_EmptyPathWritesLoadedFile(t *testing.T) {
+	// A config loaded from an explicit file (--config / PLATFORMCTL_CONFIG)
+	// saves back to that file, never to the default path.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configPath := filepath.Join(t.TempDir(), "platformctl.yaml")
+
+	config, err := LoadConfig(configPath)
+	require.NoError(t, err)
+	config.AddContext(&Context{Name: "added", Type: ContextTypeEmbedded})
+	require.NoError(t, config.Save(""))
+
+	loaded, err := LoadConfig(configPath)
+	require.NoError(t, err)
+	_, err = loaded.GetContext("added")
+	require.NoError(t, err, "the added context must land in the loaded file")
+	assert.NoFileExists(t, DefaultConfigPath())
+}
+
+func TestConfig_Save_EmptyPathWriteFailure(t *testing.T) {
+	// When the loaded file's directory has since become a file, Save
+	// reports the directory it could not create.
+	parent := filepath.Join(t.TempDir(), "not-a-dir")
+	config, err := LoadConfig(filepath.Join(parent, "config.yaml"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(parent, []byte("x"), 0600))
+
+	err = config.Save("")
+	var dirErr ErrConfigDirCreateFailed
+	require.ErrorAs(t, err, &dirErr)
+	assert.Equal(t, parent, dirErr.Path)
 }
 
 func TestConfig_GetCurrentContext_Success(t *testing.T) {
