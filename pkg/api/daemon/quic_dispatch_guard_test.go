@@ -76,7 +76,7 @@ import (
 //     sub-opcodes in payload[0] under quicwire.OpVMExtendedCategory (0x69).
 //   - Overlay/gateway ops travel under their category opcodes 0x2E/0x2F.
 //   - OpAttestCreatePolicy/OpAttestListPolicies (0xAA/0xAB) and
-//     OpAttestContainerWorkload/DeviceWorkload/ListReports (0xED-0xEF)
+//     OpAttestDeviceWorkload/ListReports (0xEE-0xEF)
 //     have NO single-byte wire route: IAM users and PXE own those bytes
 //     (SDK adapter + integration-test clients send the IAM/PXE ops).
 
@@ -216,7 +216,7 @@ var quicWireOwners = []struct {
 	{0x60, 0x60, "objectstorage"},
 	{0x61, 0x68, "reserved"}, // retired top-level VM bytes (#704), unclassified
 	{0x69, 0x69, "vm"},
-	{0x6A, 0x6A, "reserved"}, // retired VMGetState (#704), unclassified
+	{0x6A, 0x6A, "attestation"}, // OpAttestContainerWorkload, moved off PXE's 0xED (#949)
 	{0x6B, 0x6E, "tpm2"},
 	{0x6F, 0x6F, "container"},
 	{0x70, 0x77, "attestation"},
@@ -421,6 +421,7 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpAttestGetAK":               {value: quicwire.OpAttestGetAK, mode: wireDirect, family: "attestation"},
 	"OpAttestChallenge":           {value: quicwire.OpAttestChallenge, mode: wireDirect, family: "attestation"},
 	"OpAttestPollVerdicts":        {value: quicwire.OpAttestPollVerdicts, mode: wireDirect, family: "attestation"},
+	"OpAttestContainerWorkload":   {value: quicwire.OpAttestContainerWorkload, mode: wireDirect, family: "attestation"},
 	"OpAttestGetManifest":         {value: quicwire.OpAttestGetManifest, mode: wireDirect, family: "attestation"},
 	"OpAttestGetReport":           {value: quicwire.OpAttestGetReport, mode: wireDirect, family: "attestation"},
 	"OpAttestGetPCRs":             {value: quicwire.OpAttestGetPCRs, mode: wireDirect, family: "attestation"},
@@ -552,7 +553,6 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpTenantGetDEKStatus":        {value: quicwire.OpTenantGetDEKStatus, mode: wireDirect, family: "tenant"},
 	"OpContainerAttest":           {value: quicwire.OpContainerAttest, mode: categorySub, family: "container", category: quicwire.OpVMExtendedCategory},
 	"OpPXEListDevices":            {value: quicwire.OpPXEListDevices, mode: wireDirect, family: "pxe"},
-	"OpAttestContainerWorkload":   {value: quicwire.OpAttestContainerWorkload, mode: shadowedByte, family: "pxe"},
 	"OpPXEGetDevice":              {value: quicwire.OpPXEGetDevice, mode: wireDirect, family: "pxe"},
 	"OpAttestDeviceWorkload":      {value: quicwire.OpAttestDeviceWorkload, mode: shadowedByte, family: "pxe"},
 	"OpPXERegisterDevice":         {value: quicwire.OpPXERegisterDevice, mode: wireDirect, family: "pxe"},

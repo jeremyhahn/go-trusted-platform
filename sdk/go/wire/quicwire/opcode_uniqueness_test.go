@@ -80,13 +80,12 @@ var knownCollisions = map[string]string{
 	// Refs #386. Attestation constants allocated flat into occupied top-level
 	// space. docs/daemon/api.md already records the first two as "Two dead
 	// opcode names" whose presence in OpcodeNames makes logs mislabel them.
-	"OpAttestGetManifest":       "OpAttestGetReport",
-	"OpAttestGetReportByID":     "OpAttestGetPCRs",
-	"OpAttestContainerWorkload": "OpPXEGetDevice",
-	"OpAttestDeviceWorkload":    "OpPXERegisterDevice",
-	"OpAttestListReports":       "OpPXEUpdateState",
-	"OpAttestCreatePolicy":      "OpIAMUserDelete",
-	"OpAttestListPolicies":      "OpIAMUserGet",
+	"OpAttestGetManifest":    "OpAttestGetReport",
+	"OpAttestGetReportByID":  "OpAttestGetPCRs",
+	"OpAttestDeviceWorkload": "OpPXERegisterDevice",
+	"OpAttestListReports":    "OpPXEUpdateState",
+	"OpAttestCreatePolicy":   "OpIAMUserDelete",
+	"OpAttestListPolicies":   "OpIAMUserGet",
 }
 
 type opcodeConst struct {

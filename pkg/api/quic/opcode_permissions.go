@@ -438,6 +438,9 @@ var opcodePermissions = map[byte]OpcodePermission{
 	quicwire.OpAttestVerifyManifest: attestationRead,
 	quicwire.OpAttestHost:           attestationWrite,
 	quicwire.OpAttestVMWorkload:     attestationWrite,
+	// Container workload attestation collects fresh evidence, as VM
+	// workload attestation does.
+	quicwire.OpAttestContainerWorkload: attestationWrite,
 
 	// Certificates and the CA (gRPC CAService). Certificates are the go-qrdb
 	// certs family; the CA's own metadata, bundle and CRL are ca:read.
