@@ -147,11 +147,11 @@ func TestCountFiles(t *testing.T) {
 
 func TestExtractFlags_StructFields(t *testing.T) {
 	flags := &extractFlags{
-		iso:        "/path/to/alpine.iso",
-		outputDir:  "/path/to/output",
-		force:      true,
-		workDir:    "/tmp/work",
-		debug:      true,
+		iso:       "/path/to/alpine.iso",
+		outputDir: "/path/to/output",
+		force:     true,
+		workDir:   "/tmp/work",
+		debug:     true,
 	}
 
 	assert.Equal(t, "/path/to/alpine.iso", flags.iso)
