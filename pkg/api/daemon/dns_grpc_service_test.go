@@ -751,6 +751,97 @@ func TestDNSServiceServer_AddRecord_TLSAUndefinedUsage(t *testing.T) {
 	}
 }
 
+func TestDNSServiceServer_AddRecord_RefusesInvalidRecords(t *testing.T) {
+	tests := []struct {
+		name    string
+		record  *platformv1.Record
+		message string
+	}{
+		{
+			name: "A not an IPv4 address",
+			record: &platformv1.Record{
+				Type:   platformv1.RecordType_RECORD_TYPE_A,
+				Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "bad", Value: "not-an-ip"}},
+			},
+			message: "IPv4",
+		},
+		{
+			name: "AAAA given an IPv4 address",
+			record: &platformv1.Record{
+				Type:   platformv1.RecordType_RECORD_TYPE_AAAA,
+				Record: &platformv1.Record_Aaaa{Aaaa: &platformv1.AAAARecord{Name: "bad", Value: "192.168.1.1"}},
+			},
+			message: "IPv6",
+		},
+		{
+			name: "empty name",
+			record: &platformv1.Record{
+				Type:   platformv1.RecordType_RECORD_TYPE_A,
+				Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "", Value: "192.168.1.100"}},
+			},
+			message: "name is required",
+		},
+		{
+			name:    "no body of its type",
+			record:  &platformv1.Record{Type: platformv1.RecordType_RECORD_TYPE_CNAME},
+			message: "name is required",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newMockDNSService()
+			mock.zones["example.com."] = &entities.Zone{ID: 1, Name: "example.com."}
+			server := NewDNSServiceServer(mock, testLogger())
+
+			_, err := server.AddRecord(context.Background(), &platformv1.AddRecordRequest{
+				ZoneName: "example.com.",
+				Record:   tc.record,
+			})
+
+			require.Error(t, err)
+			st, ok := status.FromError(err)
+			require.True(t, ok)
+			assert.Equal(t, codes.InvalidArgument, st.Code())
+			assert.Contains(t, st.Message(), tc.message)
+			recordSet := mock.zones["example.com."].RecordSet
+			assert.Empty(t, recordSet.ARecords)
+			assert.Empty(t, recordSet.AAAARecords)
+			assert.Empty(t, recordSet.CNAMERecords)
+		})
+	}
+}
+
+func TestDNSServiceServer_AddRecord_AcceptsValidAddresses(t *testing.T) {
+	mock := newMockDNSService()
+	mock.zones["example.com."] = &entities.Zone{ID: 1, Name: "example.com."}
+	server := NewDNSServiceServer(mock, testLogger())
+
+	records := []*platformv1.Record{
+		{
+			Type:   platformv1.RecordType_RECORD_TYPE_A,
+			Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "www", Value: "192.0.2.1"}},
+		},
+		{
+			Type:   platformv1.RecordType_RECORD_TYPE_AAAA,
+			Record: &platformv1.Record_Aaaa{Aaaa: &platformv1.AAAARecord{Name: "@", Value: "2001:db8::1"}},
+		},
+	}
+	for _, record := range records {
+		_, err := server.AddRecord(context.Background(), &platformv1.AddRecordRequest{
+			ZoneName: "example.com.",
+			Record:   record,
+		})
+		require.NoError(t, err, "%s", record.GetType())
+	}
+
+	recordSet := mock.zones["example.com."].RecordSet
+	require.Len(t, recordSet.ARecords, 1)
+	assert.Equal(t, "192.0.2.1", recordSet.ARecords[0].Value)
+	require.Len(t, recordSet.AAAARecords, 1)
+	assert.Equal(t, "2001:db8::1", recordSet.AAAARecords[0].Value)
+}
+
 func TestDNSServiceServer_AddRecord_MissingZone(t *testing.T) {
 	mock := newMockDNSService()
 	server := NewDNSServiceServer(mock, testLogger())

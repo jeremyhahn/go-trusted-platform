@@ -333,6 +333,18 @@ func (h *DNSHandlers) AddRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	recordType := strings.ToUpper(req.Type)
+	fields, ok := addRecordFields[recordType]
+	if !ok {
+		h.respWriter.Error400(w, r, ErrInvalidRecordType{Type: req.Type})
+		return
+	}
+	name, value := fields(&req)
+	if err := dns.ValidateRecord(recordType, name, value); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+
 	ctx, cancel := h.createContext()
 	defer cancel()
 
@@ -343,7 +355,6 @@ func (h *DNSHandlers) AddRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add record based on type
-	recordType := strings.ToUpper(req.Type)
 	switch recordType {
 	case "A":
 		if req.A != nil {
@@ -441,6 +452,66 @@ func (h *DNSHandlers) AddRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.respWriter.Success200(w, r, h.zoneToResponse(zone))
+}
+
+// addRecordFields returns the owner name and value of the record an
+// AddRecordRequest carries for each record type, both empty when the request
+// has no body of that type. Only the A and AAAA values are checked.
+var addRecordFields = map[string]func(*AddRecordRequest) (string, string){
+	"A": func(req *AddRecordRequest) (string, string) {
+		if req.A == nil {
+			return "", ""
+		}
+		return req.A.Name, req.A.Value
+	},
+	"AAAA": func(req *AddRecordRequest) (string, string) {
+		if req.AAAA == nil {
+			return "", ""
+		}
+		return req.AAAA.Name, req.AAAA.Value
+	},
+	"CNAME": func(req *AddRecordRequest) (string, string) {
+		if req.CNAME == nil {
+			return "", ""
+		}
+		return req.CNAME.Name, req.CNAME.Value
+	},
+	"MX": func(req *AddRecordRequest) (string, string) {
+		if req.MX == nil {
+			return "", ""
+		}
+		return req.MX.Name, req.MX.Value
+	},
+	"NS": func(req *AddRecordRequest) (string, string) {
+		if req.NS == nil {
+			return "", ""
+		}
+		return req.NS.Name, req.NS.Value
+	},
+	"TXT": func(req *AddRecordRequest) (string, string) {
+		if req.TXT == nil {
+			return "", ""
+		}
+		return req.TXT.Name, req.TXT.Value
+	},
+	"SRV": func(req *AddRecordRequest) (string, string) {
+		if req.SRV == nil {
+			return "", ""
+		}
+		return req.SRV.Name, req.SRV.Target
+	},
+	"CAA": func(req *AddRecordRequest) (string, string) {
+		if req.CAA == nil {
+			return "", ""
+		}
+		return req.CAA.Name, req.CAA.Value
+	},
+	"TLSA": func(req *AddRecordRequest) (string, string) {
+		if req.TLSA == nil {
+			return "", ""
+		}
+		return req.TLSA.Name, ""
+	},
 }
 
 // DeleteRecord handles DELETE /api/v1/dns/zones/{zone}/records/{type}/{name}

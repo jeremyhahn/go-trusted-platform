@@ -13,7 +13,12 @@
 
 package dns
 
-import "fmt"
+import (
+	"fmt"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
 
 // TLSAUsageMax is the highest certificate usage RFC 6698 §2.1.1 defines:
 // 0 PKIX-TA, 1 PKIX-EE, 2 DANE-TA, 3 DANE-EE.
@@ -27,6 +32,12 @@ type ErrInvalidTLSAUsage struct {
 
 func (e ErrInvalidTLSAUsage) Error() string {
 	return fmt.Sprintf("dns: TLSA certificate usage %d is not 0-%d (RFC 6698 §2.1.1)", e.Usage, TLSAUsageMax)
+}
+
+// GRPCStatus classes the refusal as InvalidArgument, so every transport,
+// MCP's error classifier included, reports it the same way.
+func (e ErrInvalidTLSAUsage) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // ValidateTLSAUsage refuses a certificate usage outside 0-3, the values

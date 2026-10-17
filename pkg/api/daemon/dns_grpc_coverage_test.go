@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,6 +24,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -417,10 +419,15 @@ func TestDNSServiceServer_UpdateRecord_NilRecordData(t *testing.T) {
 		},
 	}
 
-	resp, err := server.UpdateRecord(context.Background(), req)
+	// A new record with no body names no owner: the update is refused and
+	// the old record stays.
+	_, err := server.UpdateRecord(context.Background(), req)
 
-	require.NoError(t, err)
-	assert.True(t, resp.Status.Success)
+	require.Error(t, err)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	assert.Contains(t, err.Error(), "name is required")
+	require.Len(t, mock.zones["example.com."].RecordSet.ARecords, 1)
+	assert.Equal(t, "192.168.1.1", mock.zones["example.com."].RecordSet.ARecords[0].Value)
 }
 
 // ListRecords Coverage Tests
@@ -710,8 +717,12 @@ func TestDNSServiceServer_AddRecordToZone_NilInnerRecords(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// A nil body names no owner, so it is refused, never stored as
+			// a silent no-op.
 			err := server.addRecordToZone(zone, tt.record)
-			require.NoError(t, err)
+			var required dns.ErrRecordNameRequired
+			require.True(t, errors.As(err, &required), "err = %v", err)
+			assert.Equal(t, strings.TrimPrefix(tt.record.GetType().String(), "RECORD_TYPE_"), required.Type)
 		})
 	}
 }

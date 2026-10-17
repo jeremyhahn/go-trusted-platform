@@ -472,6 +472,35 @@ func TestCoverage_Service_AddRecord_UnsupportedType(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported record type")
 }
 
+func TestService_AddRecord_RefusesInvalidRecordsBeforeStoring(t *testing.T) {
+	svc, mockDAO := createServiceWithMockDAO(t, "tenant-1")
+	ctx := context.Background()
+
+	zoneName := "example.com."
+	zone := &entities.Zone{
+		ID:       util.NewID([]byte(zoneName)),
+		Name:     zoneName,
+		TenantID: "tenant-1",
+		TTL:      3600,
+	}
+	mockDAO.AddZone(zone)
+
+	var invalid ErrInvalidRecordAddress
+	err := svc.AddRecord(ctx, "www.example.com", "A", "not-an-ip", 3600)
+	require.True(t, errors.As(err, &invalid), "err = %v", err)
+	err = svc.AddRecord(ctx, "www.example.com", "AAAA", "192.168.1.1", 3600)
+	require.True(t, errors.As(err, &invalid), "err = %v", err)
+
+	var required ErrRecordNameRequired
+	err = svc.AddRecord(ctx, "", "A", "192.168.1.1", 3600)
+	require.True(t, errors.As(err, &required), "err = %v", err)
+
+	stored, err := svc.Zone(ctx, zoneName)
+	require.NoError(t, err)
+	assert.Empty(t, stored.RecordSet.ARecords)
+	assert.Empty(t, stored.RecordSet.AAAARecords)
+}
+
 func TestCoverage_Service_DeleteRecord_AllTypes(t *testing.T) {
 	svc, mockDAO := createServiceWithMockDAO(t, "tenant-1")
 	ctx := context.Background()

@@ -1150,6 +1150,10 @@ func (s *Service) DeleteZone(ctx context.Context, zoneName string) error {
 
 // AddRecord adds a DNS record to the appropriate zone.
 func (s *Service) AddRecord(ctx context.Context, name string, recordType string, value string, ttl int) error {
+	if err := ValidateRecord(recordType, name, value); err != nil {
+		return err
+	}
+
 	// Extract zone name from the record name
 	zoneName := extractZoneName(name)
 

@@ -117,7 +117,11 @@ A failed `tools/call` or `resources/read` is classified in
 `pkg/api/mcp/error_class.go` (`toolErrorCode`):
 
 - An error with a gRPC status anywhere in its chain (`GRPCStatus()`) uses that
-  status's class. Every tool error type implements it.
+  status's class. Every tool error type implements it, and so do the domain
+  errors a tool passes through unwrapped: the DNS record refusals
+  (`dns.ErrRecordNameRequired`, `dns.ErrInvalidRecordAddress`,
+  `dns.ErrInvalidTLSAUsage`, see `docs/dns/api.md` §Record validation) are
+  `InvalidArgument`, so `-32602`.
 - The `Code`-carrying tool error types (`DeviceError`, `KMSError`, ...) take
   their class from their `Code`: `*_NOT_FOUND`, `*_REQUIRED` / `*INVALID*` /
   `*_DECODE*`, `*_SERVICE_UNAVAILABLE` / `*_NOT_CONFIGURED`, `*_NOT_RUNNING` /

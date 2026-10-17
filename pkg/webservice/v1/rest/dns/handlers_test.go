@@ -1027,6 +1027,53 @@ func TestAddRecord_TLSARecord_UndefinedUsage(t *testing.T) {
 	assert.Empty(t, service.zones["example.com."].RecordSet.TLSARecords)
 }
 
+func TestAddRecord_RefusesAnAddressOfTheWrongFamily(t *testing.T) {
+	tests := []struct {
+		name string
+		body AddRecordRequest
+	}{
+		{"A not an IP", AddRecordRequest{Type: "A", A: &ARequest{Name: "bad", Value: "not-an-ip", TTL: 300}}},
+		{"A given IPv6", AddRecordRequest{Type: "A", A: &ARequest{Name: "bad", Value: "2001:db8::1", TTL: 300}}},
+		{"AAAA given IPv4", AddRecordRequest{Type: "AAAA", AAAA: &AAAARequest{Name: "bad", Value: "192.168.1.1", TTL: 300}}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			service := newMockDNSService()
+			service.zones["example.com."] = createTestZone("example.com.")
+			handlers, writer := newTestHandlers(service)
+			zone := service.zones["example.com."]
+			addresses := len(zone.RecordSet.ARecords) + len(zone.RecordSet.AAAARecords)
+
+			req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones/example.com./records", tc.body, map[string]string{"zone": "example.com."})
+			handlers.AddRecord(httptest.NewRecorder(), req)
+
+			assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+			var invalid dns.ErrInvalidRecordAddress
+			require.True(t, errors.As(writer.lastError, &invalid), "err = %v", writer.lastError)
+			assert.Equal(t, tc.body.Type, invalid.Type)
+			assert.Equal(t, addresses, len(zone.RecordSet.ARecords)+len(zone.RecordSet.AAAARecords), "a refused record must not be stored")
+		})
+	}
+}
+
+func TestAddRecord_RefusesAnEmptyName(t *testing.T) {
+	service := newMockDNSService()
+	service.zones["example.com."] = createTestZone("example.com.")
+	handlers, writer := newTestHandlers(service)
+	zone := service.zones["example.com."]
+	addresses := len(zone.RecordSet.ARecords)
+
+	body := AddRecordRequest{Type: "A", A: &ARequest{Name: "", Value: "192.168.1.100", TTL: 300}}
+	req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones/example.com./records", body, map[string]string{"zone": "example.com."})
+	handlers.AddRecord(httptest.NewRecorder(), req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+	var required dns.ErrRecordNameRequired
+	require.True(t, errors.As(writer.lastError, &required), "err = %v", writer.lastError)
+	assert.Equal(t, addresses, len(zone.RecordSet.ARecords), "a refused record must not be stored")
+}
+
 func TestAddRecord_MissingZoneName(t *testing.T) {
 	service := newMockDNSService()
 	handlers, writer := newTestHandlers(service)
@@ -2200,8 +2247,12 @@ func TestAddRecord_NilRecordData(t *testing.T) {
 
 			handlers.AddRecord(rec, req)
 
-			// Should succeed but not add any records since record data is nil
-			assert.Equal(t, http.StatusOK, writer.lastStatus)
+			// A request without the body of its type names no owner, so it
+			// is refused rather than answered 200 with nothing stored.
+			assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+			var required dns.ErrRecordNameRequired
+			require.True(t, errors.As(writer.lastError, &required), "err = %v", writer.lastError)
+			assert.Equal(t, tc.recordType, required.Type)
 		})
 	}
 }

@@ -28,6 +28,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
@@ -104,6 +105,9 @@ func TestToolErrorCode_Classified(t *testing.T) {
 		{"wrapped sdk not found", fmt.Errorf("kms_get_key: %w", sdkerrors.NewNotFound("kms", "no key")), mcpwire.NotFound},
 		{"sdk invalid input", sdkerrors.NewInvalidInput("kms", "bad ciphertext"), mcpwire.InvalidParams},
 		{"sdk precondition", sdkerrors.NewPreconditionFailed("kms", "key disabled"), mcpwire.FailedPrecondition},
+		{"dns record name required", fmt.Errorf("dns_add_record: %w", dns.ErrRecordNameRequired{Type: "A"}), mcpwire.InvalidParams},
+		{"dns record address", dns.ErrInvalidRecordAddress{Type: "AAAA", Value: "192.0.2.1"}, mcpwire.InvalidParams},
+		{"dns tlsa usage", dns.ErrInvalidTLSAUsage{Usage: 5}, mcpwire.InvalidParams},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -91,9 +91,27 @@ with no records and `authoritative: true`. A `type` resolution does not serve
 is a 400 (gRPC `InvalidArgument`). See
 [resolution.md](resolution.md#api-resolve).
 
-Adding a TLSA record whose `usage` is outside 0-3, the certificate usages
-RFC 6698 §2.1.1 defines, is refused before it is stored on every transport:
-REST answers 400 and gRPC `InvalidArgument` (`dns.ErrInvalidTLSAUsage`).
+### Record validation
+
+Adding or updating a record runs one check, `dns.ValidateRecord` plus the
+TLSA usage check, before anything is stored. A refused record leaves the zone
+as it was; `UpdateRecord` checks the new record before it removes the old one.
+
+| Refusal | Typed error |
+|---|---|
+| No owner name. The API has no "omitted means apex": send `@` (records.md §Owner names). A request without the body of its type (no `a` on an A record) has no name, so it is refused the same way. | `dns.ErrRecordNameRequired` |
+| An A value that is not an IPv4 address (RFC 1035 §3.4.1), an AAAA value that is not an IPv6 address (RFC 3596 §2.2). An IPv4-mapped IPv6 address is not an A value, and a zoned address (`fe80::1%eth0`) is refused for both. | `dns.ErrInvalidRecordAddress` |
+| A TLSA `usage` outside 0-3, the certificate usages RFC 6698 §2.1.1 defines. | `dns.ErrInvalidTLSAUsage` |
+
+Each error carries the `InvalidArgument` class, so every transport answers
+alike:
+
+| Transport | Status |
+|---|---|
+| REST | 400 |
+| gRPC, Unix | `InvalidArgument` |
+| QUIC | `StatusInvalidArgument` (AddRecord delegates to the gRPC servicer) |
+| MCP (both families) | `-32602` |
 
 ---
 

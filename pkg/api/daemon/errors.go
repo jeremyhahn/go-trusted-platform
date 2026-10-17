@@ -271,6 +271,12 @@ func (e ErrDNSInvalidParameter) Error() string {
 	return fmt.Sprintf("invalid DNS parameter %s: %s", e.Parameter, e.Reason)
 }
 
+// GRPCStatus classes a missing or malformed DNS argument as InvalidArgument,
+// the class the DNS record checks answer with on every transport.
+func (e ErrDNSInvalidParameter) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // ErrDaemonUnhealthy is returned by the aggregate gRPC health checker when
 // the platform health registry reports the node unhealthy. It carries the
 // component count only -- component names are deliberately withheld, since
