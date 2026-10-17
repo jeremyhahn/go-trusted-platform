@@ -21,6 +21,7 @@ import (
 	"time"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,14 +40,16 @@ func TestKVService_Put(t *testing.T) {
 	t.Run("ValidPut", func(t *testing.T) {
 		entityType := generateTestKey("kv/put/valid")
 		data := []byte(`{"test": "data"}`)
+		id := nextEntityID()
 
 		resp, err := kv.Put(ctx, &quicbaassdk.PutRequest{
 			EntityType: entityType,
+			ID:         id,
 			Data:       data,
 		})
 		require.NoError(t, err)
-		assert.NotNil(t, resp)
-		assert.NotZero(t, resp.ID)
+		require.NotNil(t, resp)
+		assert.Equal(t, id, resp.ID)
 	})
 
 	t.Run("PutWithEmptyValue", func(t *testing.T) {
@@ -103,6 +106,7 @@ func TestKVService_Put(t *testing.T) {
 		// First put
 		resp1, err := kv.Put(ctx, &quicbaassdk.PutRequest{
 			EntityType: entityType,
+			ID:         nextEntityID(),
 			Data:       data1,
 		})
 		require.NoError(t, err)
@@ -110,6 +114,7 @@ func TestKVService_Put(t *testing.T) {
 		// Second put (new entity, not overwrite)
 		resp2, err := kv.Put(ctx, &quicbaassdk.PutRequest{
 			EntityType: entityType,
+			ID:         nextEntityID(),
 			Data:       data2,
 		})
 		require.NoError(t, err)
@@ -173,9 +178,7 @@ func TestKVService_Get(t *testing.T) {
 			EntityType: entityType,
 			ID:         999999, // Non-existing ID
 		})
-		require.NoError(t, err)
-		assert.False(t, resp.Found)
-		assert.Nil(t, resp.Data)
+		assert.True(t, helpers.KVEntityAbsent(resp, err), "Get of a missing entity must report it absent, got %+v, %v", resp, err)
 	})
 }
 
@@ -214,7 +217,7 @@ func TestKVService_Delete(t *testing.T) {
 				EntityType: entityType,
 				ID:         putResp.ID,
 			})
-			return err == nil && !getResp.Found
+			return helpers.KVEntityAbsent(getResp, err)
 		}, 5*time.Second, 100*time.Millisecond)
 	})
 
@@ -255,7 +258,7 @@ func TestKVService_Delete(t *testing.T) {
 				EntityType: entityType,
 				ID:         putResp.ID,
 			})
-			return err == nil && !getResp.Found
+			return helpers.KVEntityAbsent(getResp, err)
 		}, 5*time.Second, 100*time.Millisecond)
 
 		// Recreate with new value (will get a new ID)
@@ -296,6 +299,7 @@ func TestKVService_List(t *testing.T) {
 			data := []byte(`{"index": ` + string(rune('0'+i)) + `}`)
 			_, err := kv.Put(ctx, &quicbaassdk.PutRequest{
 				EntityType: entityType,
+				ID:         nextEntityID(),
 				Data:       data,
 			})
 			require.NoError(t, err)
@@ -318,6 +322,7 @@ func TestKVService_List(t *testing.T) {
 		for i := 0; i < 20; i++ {
 			_, err := kv.Put(ctx, &quicbaassdk.PutRequest{
 				EntityType: entityType,
+				ID:         nextEntityID(),
 				Data:       []byte(`{}`),
 			})
 			require.NoError(t, err)
@@ -396,7 +401,7 @@ func TestKVService_CRUD(t *testing.T) {
 			EntityType: entityType,
 			ID:         entityID,
 		})
-		return err == nil && !getResp.Found
+		return helpers.KVEntityAbsent(getResp, err)
 	}, 5*time.Second, 100*time.Millisecond, "Entity should be deleted")
 }
 

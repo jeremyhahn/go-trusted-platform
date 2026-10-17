@@ -99,8 +99,13 @@ registration's mirror failed with `iam.role: not_found`.
   absent, never touches a custom role, and writes nothing on a tenant that
   already has them. A failure is `tenant.ErrDefaultRolesFailed` and rolls the
   IAM tenant back: a tenant that cannot hold users is not created.
-  The IAM `CreateTenant` rpc (gRPC, Unix, QUIC, MCP) does the same reconcile after
-  creating the tenant and deletes the tenant again when it fails.
+  The IAM `CreateTenant` operation does the same on every transport, REST
+  included, through one helper (`restiam.CreateTenantWithDefaultRoles`): it
+  reconciles after creating the tenant and deletes the tenant again when that
+  fails. Creating a tenant that already exists also reconciles it, then
+  answers `AlreadyExists`, so a tenant made by a path that never provisioned
+  its roles gets them from a repeated create; a failed reconcile never deletes
+  an existing tenant.
 - **The owner's mirror is part of registration.** When `RegisterNewUser`
   cannot mirror the new tenant owner, it deletes the platform user and the
   tenant it just created and returns `service.ErrIAMMirrorFailed`. The

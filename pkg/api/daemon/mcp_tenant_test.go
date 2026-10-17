@@ -59,6 +59,10 @@ const (
 	parityGhostTenant  = "no-such-tenant"
 )
 
+// parityQuotaOverAsk is a VM count beyond any tenant's quota, so a check of it
+// is answered "not available" whatever limits the harness tenant carries.
+const parityQuotaOverAsk = 1 << 40
+
 var parityTenantNames = map[string]string{
 	paritySystemTenant: "tenant-system",
 	parityTenantA:      "tenant-a",
@@ -594,7 +598,7 @@ func tenantParityOps() []tenantParityOp {
 			},
 		},
 		{
-			tool: "tenant_get_usage", caller: parityTenantA, subject: parityTenantA, missing: codes.OK,
+			tool: "tenant_get_usage", caller: parityTenantA, subject: parityTenantA, missing: codes.NotFound,
 			args: tenantIDArgs, keys: []string{"tenant_id", "usage.vms", "usage.memory_mb"},
 			grpc: func(ctx context.Context, s *TenantGRPCServer, subject string) (map[string]string, error) {
 				resp, err := s.GetUsage(ctx, &platformv1.GetUsageRequest{TenantId: subject})
@@ -609,7 +613,7 @@ func tenantParityOps() []tenantParityOp {
 			},
 		},
 		{
-			tool: "tenant_check_quota", caller: parityTenantA, subject: parityTenantA, missing: codes.OK,
+			tool: "tenant_check_quota", caller: parityTenantA, subject: parityTenantA, missing: codes.NotFound,
 			args: withTenantID(map[string]interface{}{"resource_type": "vms", "amount": 1}),
 			keys: []string{"tenant_id", "resource_type", "amount", "available", "message"},
 			grpc: func(ctx context.Context, s *TenantGRPCServer, subject string) (map[string]string, error) {

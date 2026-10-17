@@ -282,3 +282,44 @@ func TestIAMGRPCService_CreateTenantProvisionsDefaultRoles(t *testing.T) {
 		}
 	})
 }
+
+// TestIAMGRPCService_CreateTenantSeedsExistingTenant is the #949 regression: a
+// tenant that exists without its default roles - created by a path that never
+// provisioned them - is given them by a repeated create, which still answers
+// AlreadyExists. A failed provision of an existing tenant never deletes it.
+func TestIAMGRPCService_CreateTenantSeedsExistingTenant(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("roles seeded, AlreadyExists answered", func(t *testing.T) {
+		mem := newMemIAM()
+		if _, err := mem.Tenant().Create(ctx, &sdkiam.CreateTenantRequest{ID: "acme", Name: "Acme"}); err != nil {
+			t.Fatalf("seed roleless tenant: %v", err)
+		}
+		svc := NewIAMGRPCService(slog.Default(), mem, nil)
+		_, err := svc.CreateTenant(ctx, &platformv1.CreateIAMTenantRequest{Id: "acme", Name: "Acme"})
+		if status.Code(err) != codes.AlreadyExists {
+			t.Fatalf("CreateTenant code = %v, want AlreadyExists (err %v)", status.Code(err), err)
+		}
+		for _, name := range memBuiltInRoles {
+			if _, err := mem.Role().Get(ctx, "acme", name); err != nil {
+				t.Errorf("role %q in the existing tenant: %v", name, err)
+			}
+		}
+	})
+
+	t.Run("reconcile failure keeps the existing tenant", func(t *testing.T) {
+		mem := newMemIAM()
+		if _, err := mem.Tenant().Create(ctx, &sdkiam.CreateTenantRequest{ID: "acme", Name: "Acme"}); err != nil {
+			t.Fatalf("seed roleless tenant: %v", err)
+		}
+		mem.reconcileErr = sdkerrors.NewUnavailable("iam.role.reconcile", "down")
+		svc := NewIAMGRPCService(slog.Default(), mem, nil)
+		_, err := svc.CreateTenant(ctx, &platformv1.CreateIAMTenantRequest{Id: "acme", Name: "Acme"})
+		if status.Code(err) != codes.Unavailable {
+			t.Fatalf("CreateTenant code = %v, want Unavailable (err %v)", status.Code(err), err)
+		}
+		if _, err := mem.Tenant().Get(ctx, "acme"); err != nil {
+			t.Fatalf("the existing tenant was deleted by a failed reconcile: %v", err)
+		}
+	})
+}

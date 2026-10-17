@@ -22,6 +22,7 @@ import (
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -247,7 +248,7 @@ func testSDKKVOperations(t *testing.T, sdk quicbaassdk.Client) {
 			EntityType: entityType,
 			ID:         entityID,
 		})
-		return err == nil && !getResp.Found
+		return helpers.KVEntityAbsent(getResp, err)
 	}, 5*time.Second, 100*time.Millisecond, "Entity should be deleted")
 }
 

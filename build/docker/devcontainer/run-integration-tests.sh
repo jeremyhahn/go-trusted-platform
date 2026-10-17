@@ -183,12 +183,17 @@ declare -A TARGET_NO_DAEMON=(
 # FIPS-kernel test needs a prebuilt kernel, modules and signing key that only
 # the caller supplies (FIPS_KERNEL_IMAGE, FIPS_MODULES_TAR,
 # FIPS_MODULE_SIGNING_KEY).
+# tpm runs last: its Clear case issues TPM2_Clear on the shared daemon's
+# swtpm (docs/tpm/security.md), which flushes the owner-hierarchy SRKs that
+# seal the daemon's platform-policy key passwords. After it the daemon can
+# no longer sign a TLS handshake, so every gRPC, QUIC and MCP dial a later
+# suite makes ends in "tls: internal error" (vtpm, #949).
 ALL_TARGETS=(
     helpers datastore quicbaas sdk cluster cmd ipxe installer e2e
     root acme attestation authenticode ca ceremony cli compute
     container daemon device dns fido2 iam iso kms luks network
     ntp objectstorage piv provision proxy quic registry restroutes sdn
-    secrets tenant tpm vpn vtpm
+    secrets tenant vpn vtpm tpm
 )
 
 RUN_TARGET="all"
@@ -308,6 +313,12 @@ restore_workspace_ownership() {
 CHRONYD_CONF="/etc/chrony/chrony.conf"
 CHRONYD_SOCK="/run/chrony/chronyd.sock"
 CHRONYD_PID_FILE="/run/chrony/chronyd.pid"
+# The reference chronyd (start_ntp_reference) that serves the config's
+# loopback upstream. Its own directory keeps its pid file apart from the
+# daemon's chronyd.
+NTP_REFERENCE_DIR="/run/chrony-reference"
+NTP_REFERENCE_CONF="${NTP_REFERENCE_DIR}/chrony.conf"
+NTP_REFERENCE_PID_FILE="${NTP_REFERENCE_DIR}/chronyd.pid"
 
 cleanup() {
     if [ "$CLEANUP_DONE" = true ]; then
@@ -335,6 +346,9 @@ cleanup() {
     # Stop chronyd
     if [ -f "${CHRONYD_PID_FILE}" ]; then
         kill "$(cat "${CHRONYD_PID_FILE}")" 2>/dev/null || true
+    fi
+    if [ -f "${NTP_REFERENCE_PID_FILE}" ]; then
+        kill "$(cat "${NTP_REFERENCE_PID_FILE}")" 2>/dev/null || true
     fi
 
     # Stop swtpm
@@ -736,11 +750,18 @@ TRUSTEOF
 # host's kernel clock, and no suite may move it. A config without an ntp:
 # section renders nothing, and chronyd is not started. The paths are set
 # beside cleanup(), which stops chronyd.
+#
+# The daemon's chronyd consumes 127.0.0.1, which start_ntp_reference serves,
+# and the runner waits for it to synchronise: an unsynchronised clock is the
+# documented degraded `ntp` health component (docs/health/api.md), and a
+# degraded component makes the aggregate health answer of every transport
+# not-healthy, so every suite that asserts a healthy platform would fail.
 start_chronyd() {
     if [ ! -f "${CHRONYD_CONF}" ]; then
         echo "WARNING: platformd rendered no ${CHRONYD_CONF}; the ntp suite has no chronyd"
         return 0
     fi
+    start_ntp_reference
     echo "=== Starting chronyd (config: ${CHRONYD_CONF}, clock control off) ==="
     # chronyd drops to _chrony and opens its command socket only when the
     # socket's directory is owned by that user and closed to others; a
@@ -754,11 +775,41 @@ start_chronyd() {
     for _ in $(seq 1 10); do
         if chronyc -n -h "${CHRONYD_SOCK}" tracking >/dev/null 2>&1; then
             echo "chronyd ready"
+            # waitsync <tries> <max-correction> <max-skew> <interval>: 30
+            # one-second polls; 0 leaves the correction and skew unbounded.
+            if chronyc -n -h "${CHRONYD_SOCK}" waitsync 30 0 0 1 >/dev/null 2>&1; then
+                echo "chronyd synchronised to the reference"
+            else
+                echo "WARNING: chronyd did not synchronise to the reference within 30s; the ntp health component stays degraded"
+            fi
             return 0
         fi
         sleep 1
     done
     echo "WARNING: chronyd never answered on ${CHRONYD_SOCK}"
+}
+
+# start_ntp_reference runs a second chronyd as the harness's time source: it
+# serves its own clock on 127.0.0.1:123 as a local stratum-8 reference, which
+# the daemon's consume-mode chronyd (rendered with `port 0`, so the two never
+# share a port) synchronises to. Like the daemon's chronyd it runs with -x and
+# never moves the clock the container shares with the CI host, and it has no
+# command socket (`cmdport 0`, `bindcmdaddress /`), so every chronyc call the
+# daemon makes still reaches the daemon's chronyd.
+start_ntp_reference() {
+    echo "=== Starting the reference chronyd on 127.0.0.1:123 ==="
+    install -d -m 0750 -o _chrony -g _chrony "${NTP_REFERENCE_DIR}"
+    cat > "${NTP_REFERENCE_CONF}" << NTPREFEOF
+bindaddress 127.0.0.1
+allow 127.0.0.1
+local stratum 8
+cmdport 0
+bindcmdaddress /
+pidfile ${NTP_REFERENCE_PID_FILE}
+NTPREFEOF
+    if ! chronyd -x -f "${NTP_REFERENCE_CONF}"; then
+        echo "WARNING: the reference chronyd failed to start; the daemon's chronyd has no source"
+    fi
 }
 
 start_platformd() {

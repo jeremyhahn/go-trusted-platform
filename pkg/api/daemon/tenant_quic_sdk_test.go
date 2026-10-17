@@ -54,15 +54,15 @@ func TestSDKQUIC_TenantCheckQuota(t *testing.T) {
 
 	resp := &platformv1.CheckQuotaResponse{}
 	err := conn.Invoke(context.Background(), platformv1.TenantService_CheckQuota_FullMethodName,
-		&platformv1.CheckQuotaRequest{TenantId: h.id(parityTenantA), Resource: "vms", Amount: 1}, resp)
+		&platformv1.CheckQuotaRequest{TenantId: h.id(parityTenantA), Resource: "vms", Amount: parityQuotaOverAsk}, resp)
 	require.NoError(t, err)
 	require.Equal(t, h.id(parityTenantA), resp.GetTenantId())
 	require.Equal(t, "vms", resp.GetResource())
-	require.Equal(t, int64(1), resp.GetAmount())
-	// The harness manager has no quota enforcer, so the server answers
-	// "not available" with its reason; that answer must cross the wire whole.
+	require.Equal(t, int64(parityQuotaOverAsk), resp.GetAmount())
+	// No tenant can hold this many VMs, so the server answers "not available"
+	// with its reason; that answer must cross the wire whole.
 	require.False(t, resp.GetAvailable())
-	require.Contains(t, resp.GetMessage(), "quota enforcer not configured")
+	require.Contains(t, resp.GetMessage(), "quota exceeded")
 
 	err = conn.Invoke(context.Background(), platformv1.TenantService_CheckQuota_FullMethodName,
 		&platformv1.CheckQuotaRequest{TenantId: h.id(parityTenantA), Resource: "vms", Amount: 0},

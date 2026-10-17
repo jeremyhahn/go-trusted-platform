@@ -328,6 +328,9 @@ type memTenants struct {
 func (tc memTenants) Create(_ context.Context, req *sdkiam.CreateTenantRequest) (*sdkiam.Tenant, error) {
 	tc.m.mu.Lock()
 	defer tc.m.mu.Unlock()
+	if _, exists := tc.m.tenants[memKey("", req.ID)]; exists {
+		return nil, sdkerrors.NewAlreadyExists("iam.tenant.create", req.ID+" already exists")
+	}
 	tenant := &sdkiam.Tenant{
 		ID: req.ID, Name: req.Name, Settings: req.Settings,
 		CreatedAt: memIAMCreated, UpdatedAt: memIAMCreated,

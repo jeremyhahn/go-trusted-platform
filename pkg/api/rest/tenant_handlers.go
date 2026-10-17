@@ -1040,6 +1040,15 @@ func (h *TenantHandlers) handleCheckQuota(w http.ResponseWriter, r *http.Request
 
 	err := h.manager.CheckQuota(ctx, tenantID, resourceType, req.Amount)
 
+	// Only an exceeded quota is an answer; an unknown tenant or a failed
+	// check is an error the caller must see as one.
+	var exceeded tenant.ErrQuotaExceeded
+	var enforcerExceeded quota.ErrQuotaExceeded
+	if err != nil && !errors.As(err, &exceeded) && !errors.As(err, &enforcerExceeded) {
+		h.writeTenantError(w, "check_quota", err)
+		return
+	}
+
 	resp := CheckQuotaResponse{
 		TenantID:  tenantID,
 		Resource:  req.Resource,
