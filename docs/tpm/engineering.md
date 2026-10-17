@@ -37,11 +37,13 @@ serves:
 (wired at `pkg/webservice/v1/router.go`, `tpmRoutes`). platformd's own REST
 listener serves `restapi.TPMHandlers` (`pkg/api/rest/tpm_handlers.go`), mounted
 by `RESTServer.SetTPMHandlers` with the daemon's `TPMGRPCService` as its
-`TPMQuoteService` and the shared platform-token validator as its
-`TokenAuthorizer`. Each route in `TPMHandlers.routes` names its scope, and
-`requireScope` checks it before the handler runs. Quote and verify delegate to
+`TPMQuoteService` and the listener's shared `ScopeGuard` (built by
+`newRESTScopeGuard`, `pkg/api/daemon/transport_auth.go`). Each route in
+`TPMHandlers.routes` names its scope, and `ScopeGuard.Require` checks it before
+the handler runs: a bearer platform token must grant the scope, otherwise a
+verified operator client certificate is accepted. Quote and verify delegate to
 the `TPMQuoteService`; the handler set has no verifier of its own. Without a
-quote service `SetTPMHandlers` mounts nothing; without a validator every route
+quote service `SetTPMHandlers` mounts nothing; without a guard every route
 answers `403`.
 
 ## 2. The SDK edge

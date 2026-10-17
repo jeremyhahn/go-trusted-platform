@@ -1513,14 +1513,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// the same CA instance as the gRPC, QUIC, MCP and Unix-socket adapters
 	// so all transports return identical results.
 	if daemon.concreteRestServer != nil && config.CAService != nil {
-		daemon.concreteRestServer.SetCAHandlers(config.CAService, platformTokenValidatorShared)
+		daemon.concreteRestServer.SetCAHandlers(config.CAService, restGuard)
 	}
 
 	// Wire the physical TPM REST handlers. Quote and verify run on the same
 	// TPM service gRPC and the Unix socket serve, so one quote verifies the
 	// same way on every transport (#482).
 	if daemon.concreteRestServer != nil {
-		daemon.concreteRestServer.SetTPMHandlers(tpmService, platformTokenValidatorShared)
+		daemon.concreteRestServer.SetTPMHandlers(tpmService, restGuard)
 	}
 
 	// Wire KMS REST handlers when the platform KMS backend is available.

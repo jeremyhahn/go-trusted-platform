@@ -90,8 +90,23 @@ type CallerHandlerFunc func(w http.ResponseWriter, r *http.Request, caller *plat
 // RequireCaller is Require for a handler that needs the authenticated
 // caller: next runs only for a caller holding scope, and receives it.
 func (g *ScopeGuard) RequireCaller(scope string, next CallerHandlerFunc) http.HandlerFunc {
+	return g.require(scope, false, next)
+}
+
+// RequireToken is Require for a route that a platform bearer token alone may
+// reach: a verified client certificate is refused with 401, so the route
+// never rides on mTLS authentication (ca:sign-csr, docs/ca/api.md).
+func (g *ScopeGuard) RequireToken(scope string, next http.HandlerFunc) http.HandlerFunc {
+	return g.require(scope, true, func(w http.ResponseWriter, r *http.Request, _ *platformtoken.AuthorizedContext) {
+		next(w, r)
+	})
+}
+
+// require serves next only to a caller holding scope; tokenOnly refuses a
+// caller without a bearer token.
+func (g *ScopeGuard) require(scope string, tokenOnly bool, next CallerHandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		caller, statusCode, err := g.authorize(r, scope)
+		caller, statusCode, err := g.authorize(r, scope, tokenOnly)
 		if err != nil {
 			writeGuardError(w, g.loggerOrDefault(), statusCode, err)
 			return
@@ -101,14 +116,21 @@ func (g *ScopeGuard) RequireCaller(scope string, next CallerHandlerFunc) http.Ha
 }
 
 // authorize authenticates r and checks scope, returning the caller, or the
-// HTTP status to answer with when it fails.
-func (g *ScopeGuard) authorize(r *http.Request, scope string) (*platformtoken.AuthorizedContext, int, error) {
+// HTTP status to answer with when it fails. tokenOnly accepts only a bearer
+// platform token.
+func (g *ScopeGuard) authorize(r *http.Request, scope string, tokenOnly bool) (*platformtoken.AuthorizedContext, int, error) {
 	if g == nil {
 		return nil, http.StatusForbidden, ErrRouteForbidden{Scope: scope, Reason: "no authorization is configured for this route"}
+	}
+	if tokenOnly && !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+		return nil, http.StatusUnauthorized, ErrRouteUnauthenticated{Reason: "this route requires a platform bearer token granting " + scope}
 	}
 	authCtx, err := g.authenticate(r)
 	if err != nil {
 		return nil, http.StatusUnauthorized, err
+	}
+	if authCtx == nil {
+		return nil, http.StatusUnauthorized, ErrRouteUnauthenticated{Reason: "the credential authorized no caller"}
 	}
 	if err := authCtx.RequireScope(scope); err != nil {
 		return nil, http.StatusForbidden, ErrRouteForbidden{Scope: scope, Reason: err.Error()}

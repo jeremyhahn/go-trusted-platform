@@ -209,11 +209,16 @@ func tpmScopedAuthorizer() *scopedAuthorizer {
 	}}
 }
 
+// tpmGuard checks bearer tokens through tpmScopedAuthorizer.
+func tpmGuard() *ScopeGuard {
+	return NewScopeGuard(tpmScopedAuthorizer(), nil, nil)
+}
+
 // tpmRouter mounts TPM handlers that serve tpm and authorize through
-// tokens. Either may be nil.
-func tpmRouter(tpm platformv1.TPMServiceServer, tokens TokenAuthorizer) *mux.Router {
+// guard. Either may be nil.
+func tpmRouter(tpm platformv1.TPMServiceServer, guard *ScopeGuard) *mux.Router {
 	router := mux.NewRouter()
-	NewTPMHandlers(nil).WithTPMService(tpm).WithTokenAuthorizer(tokens).RegisterRoutes(router)
+	NewTPMHandlers(nil).WithTPMService(tpm).WithScopeGuard(guard).RegisterRoutes(router)
 	return router
 }
 
@@ -512,7 +517,7 @@ func TestTPMRoutesServeTheSDKContract(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.route, func(t *testing.T) {
 			tpm := &fakeTPMService{resp: tc.resp}
-			router := tpmRouter(tpm, tpmScopedAuthorizer())
+			router := tpmRouter(tpm, tpmGuard())
 
 			rec := serveTPM(router, newTPMRequest(tc.method, tc.target, tc.body), tpmAdminToken)
 
@@ -538,7 +543,7 @@ func TestTPMRoutesRefuseMalformedRequests(t *testing.T) {
 	for _, tc := range tpmRouteCases() {
 		t.Run(tc.route+" unknown body field", func(t *testing.T) {
 			tpm := &fakeTPMService{}
-			router := tpmRouter(tpm, tpmScopedAuthorizer())
+			router := tpmRouter(tpm, tpmGuard())
 
 			rec := serveTPM(router, newTPMRequest(tc.method, tc.target, `{"notAField":1}`), tpmAdminToken)
 
@@ -549,7 +554,7 @@ func TestTPMRoutesRefuseMalformedRequests(t *testing.T) {
 
 		t.Run(tc.route+" unknown query parameter", func(t *testing.T) {
 			tpm := &fakeTPMService{}
-			router := tpmRouter(tpm, tpmScopedAuthorizer())
+			router := tpmRouter(tpm, tpmGuard())
 			separator := "?"
 			if strings.Contains(tc.target, "?") {
 				separator = "&"
@@ -570,7 +575,7 @@ func TestTPMRoutesRefuseMalformedRequests(t *testing.T) {
 
 	t.Run("a body that is not a JSON object", func(t *testing.T) {
 		tpm := &fakeTPMService{}
-		router := tpmRouter(tpm, tpmScopedAuthorizer())
+		router := tpmRouter(tpm, tpmGuard())
 
 		rec := serveTPM(router, newTPMRequest(http.MethodPost, "/api/v1/tpm/quote/verify", "[]"), tpmReaderToken)
 
@@ -580,7 +585,7 @@ func TestTPMRoutesRefuseMalformedRequests(t *testing.T) {
 
 	t.Run("a path handle that is not a uint32", func(t *testing.T) {
 		tpm := &fakeTPMService{}
-		router := tpmRouter(tpm, tpmScopedAuthorizer())
+		router := tpmRouter(tpm, tpmGuard())
 
 		rec := serveTPM(router, newTPMRequest(http.MethodDelete, "/api/v1/tpm/ak/persistent", ""), tpmAdminToken)
 
@@ -598,7 +603,7 @@ func TestTPMLegacyRoutesAreGone(t *testing.T) {
 		{http.MethodPost, "/api/v1/tpm/csr/idevid"},
 		{http.MethodPost, "/api/v1/tpm/iak"},
 	}
-	router := tpmRouter(&fakeTPMService{}, tpmScopedAuthorizer())
+	router := tpmRouter(&fakeTPMService{}, tpmGuard())
 	for _, route := range legacy {
 		t.Run(route.method+" "+route.path, func(t *testing.T) {
 			rec := serveTPM(router, newTPMRequest(route.method, route.path, ""), tpmAdminToken)
@@ -611,7 +616,7 @@ func TestTPMLegacyRoutesAreGone(t *testing.T) {
 func TestTPMRequireScope(t *testing.T) {
 	t.Run("a token granting the route's scope reaches the handler", func(t *testing.T) {
 		tpm := &fakeTPMService{}
-		router := tpmRouter(tpm, tpmScopedAuthorizer())
+		router := tpmRouter(tpm, tpmGuard())
 
 		rec := serveTPM(router, newTPMRequest(http.MethodPost, "/api/v1/tpm/quote", ""), tpmReaderToken)
 
@@ -619,19 +624,33 @@ func TestTPMRequireScope(t *testing.T) {
 		assert.NotNil(t, tpm.req, "the TPM service must be called")
 	})
 
-	t.Run("the authorizer is asked for the route's scope at the request URL", func(t *testing.T) {
+	t.Run("the token is validated at the request URL and the guard checks the scope", func(t *testing.T) {
 		tokens := tpmScopedAuthorizer()
-		router := tpmRouter(&fakeTPMService{}, tokens)
+		router := tpmRouter(&fakeTPMService{}, NewScopeGuard(tokens, nil, nil))
 
-		serveTPM(router, newTPMRequest(http.MethodPost, "/api/v1/tpm/seal", ""), tpmWriterToken)
+		rec := serveTPM(router, newTPMRequest(http.MethodPost, "/api/v1/tpm/seal", ""), tpmWriterToken)
 
-		assert.Equal(t, tpmScopeWrite, tokens.asked)
+		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.Empty(t, tokens.asked, "the guard checks the route scope itself")
 		assert.True(t, strings.HasSuffix(tokens.askedHTU, "/api/v1/tpm/seal"), tokens.askedHTU)
+	})
+
+	t.Run("the verified operator client certificate reaches every route", func(t *testing.T) {
+		guard := NewScopeGuard(nil, grantingPeers{scopes: []string{"*:*"}}, nil)
+		for _, route := range NewTPMHandlers(nil).routes() {
+			tpm := &fakeTPMService{}
+			target := strings.NewReplacer("{handle}", ekHandleDec, "{index}", nvramDec).Replace(route.path)
+
+			rec := serveTPM(tpmRouter(tpm, guard), certificateRequest(route.method, target, "operator"), "")
+
+			assert.NotEqual(t, http.StatusUnauthorized, rec.Code, "%s %s: %s", route.method, route.path, rec.Body.String())
+			assert.NotEqual(t, http.StatusForbidden, rec.Code, "%s %s: %s", route.method, route.path, rec.Body.String())
+		}
 	})
 
 	refusals := []struct {
 		name       string
-		tokens     TokenAuthorizer
+		guard      *ScopeGuard
 		method     string
 		path       string
 		header     string
@@ -639,34 +658,25 @@ func TestTPMRequireScope(t *testing.T) {
 		wantErr    error
 	}{
 		{
-			name:       "no bearer token",
-			tokens:     tpmScopedAuthorizer(),
+			name:       "no bearer token or client certificate",
+			guard:      tpmGuard(),
 			method:     http.MethodPost,
 			path:       "/api/v1/tpm/quote",
 			wantStatus: http.StatusUnauthorized,
-			wantErr:    ErrTPMTokenRequired{Scope: tpmScopeRead},
-		},
-		{
-			name:       "a blank bearer token",
-			tokens:     tpmScopedAuthorizer(),
-			method:     http.MethodPost,
-			path:       "/api/v1/tpm/quote",
-			header:     "Bearer   ",
-			wantStatus: http.StatusUnauthorized,
-			wantErr:    ErrTPMTokenRequired{Scope: tpmScopeRead},
+			wantErr:    ErrRouteUnauthenticated{Reason: "no bearer token or verified client certificate"},
 		},
 		{
 			name:       "a token the authorizer rejects",
-			tokens:     tpmScopedAuthorizer(),
+			guard:      tpmGuard(),
 			method:     http.MethodPost,
 			path:       "/api/v1/tpm/quote",
 			header:     "Bearer stolen",
-			wantStatus: http.StatusForbidden,
-			wantErr:    ErrTPMForbidden{Scope: tpmScopeRead, Reason: "token invalid"},
+			wantStatus: http.StatusUnauthorized,
+			wantErr:    ErrRouteUnauthenticated{Reason: "token invalid"},
 		},
 		{
 			name:       "a read token on a write route",
-			tokens:     tpmScopedAuthorizer(),
+			guard:      tpmGuard(),
 			method:     http.MethodPost,
 			path:       "/api/v1/tpm/seal",
 			header:     "Bearer " + tpmReaderToken,
@@ -674,34 +684,34 @@ func TestTPMRequireScope(t *testing.T) {
 		},
 		{
 			name:       "a write token on a delete route",
-			tokens:     tpmScopedAuthorizer(),
+			guard:      tpmGuard(),
 			method:     http.MethodDelete,
 			path:       "/api/v1/tpm/ek",
 			header:     "Bearer " + tpmWriterToken,
 			wantStatus: http.StatusForbidden,
 		},
 		{
-			name:       "no authorizer configured",
+			name:       "no guard configured",
 			method:     http.MethodPost,
 			path:       "/api/v1/tpm/quote",
 			header:     "Bearer " + tpmReaderToken,
 			wantStatus: http.StatusForbidden,
-			wantErr:    ErrTPMForbidden{Scope: tpmScopeRead, Reason: "no platform-token validator is configured"},
+			wantErr:    ErrRouteForbidden{Scope: tpmScopeRead, Reason: "no authorization is configured for this route"},
 		},
 		{
 			name:       "an authorizer that authorizes no context",
-			tokens:     nilContextAuthorizer{},
+			guard:      NewScopeGuard(nilContextAuthorizer{}, nil, nil),
 			method:     http.MethodPost,
 			path:       "/api/v1/tpm/quote",
 			header:     "Bearer " + tpmReaderToken,
-			wantStatus: http.StatusForbidden,
-			wantErr:    ErrTPMForbidden{Scope: tpmScopeRead, Reason: "the token authorized no context"},
+			wantStatus: http.StatusUnauthorized,
+			wantErr:    ErrRouteUnauthenticated{Reason: "the credential authorized no caller"},
 		},
 	}
 	for _, tc := range refusals {
 		t.Run("refuses "+tc.name, func(t *testing.T) {
 			tpm := &fakeTPMService{}
-			router := tpmRouter(tpm, tc.tokens)
+			router := tpmRouter(tpm, tc.guard)
 			req := newTPMRequest(tc.method, tc.path, "")
 			if tc.header != "" {
 				req.Header.Set("Authorization", tc.header)
@@ -736,7 +746,7 @@ func TestTPMRouteScopes(t *testing.T) {
 func TestTPMRPC(t *testing.T) {
 	t.Run("hands the service the request's TLS connection", func(t *testing.T) {
 		tpm := &fakeTPMService{}
-		router := tpmRouter(tpm, tpmScopedAuthorizer())
+		router := tpmRouter(tpm, tpmGuard())
 		req := newTPMRequest(http.MethodPost, "/api/v1/tpm/quote", "")
 		req.TLS = testutil.ServerConnectionState(t)
 
@@ -751,7 +761,7 @@ func TestTPMRPC(t *testing.T) {
 
 	t.Run("an empty body is the zero request", func(t *testing.T) {
 		tpm := &fakeTPMService{}
-		router := tpmRouter(tpm, tpmScopedAuthorizer())
+		router := tpmRouter(tpm, tpmGuard())
 
 		rec := serveTPM(router, newTPMRequest(http.MethodPost, "/api/v1/tpm/quote", ""), tpmReaderToken)
 
@@ -760,7 +770,7 @@ func TestTPMRPC(t *testing.T) {
 	})
 
 	t.Run("no TPM service is 503", func(t *testing.T) {
-		router := tpmRouter(nil, tpmScopedAuthorizer())
+		router := tpmRouter(nil, tpmGuard())
 
 		rec := serveTPM(router, newTPMRequest(http.MethodPost, "/api/v1/tpm/quote", ""), tpmReaderToken)
 
@@ -770,7 +780,7 @@ func TestTPMRPC(t *testing.T) {
 
 	t.Run("a body that cannot be read is 400", func(t *testing.T) {
 		tpm := &fakeTPMService{}
-		router := tpmRouter(tpm, tpmScopedAuthorizer())
+		router := tpmRouter(tpm, tpmGuard())
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/quote", iotest.ErrReader(errors.New("connection reset")))
 
 		rec := serveTPM(router, req, tpmReaderToken)
@@ -783,7 +793,7 @@ func TestTPMRPC(t *testing.T) {
 	t.Run("a response that cannot be encoded is 500", func(t *testing.T) {
 		// protojson refuses a string field that is not valid UTF-8.
 		tpm := &fakeTPMService{resp: &platformv1.QuoteResponse{SignatureAlgorithm: "\xff"}}
-		router := tpmRouter(tpm, tpmScopedAuthorizer())
+		router := tpmRouter(tpm, tpmGuard())
 
 		rec := serveTPM(router, newTPMRequest(http.MethodPost, "/api/v1/tpm/quote", ""), tpmReaderToken)
 
@@ -793,7 +803,7 @@ func TestTPMRPC(t *testing.T) {
 
 	t.Run("a quote that fails verification is 200 with the reason", func(t *testing.T) {
 		tpm := &fakeTPMService{resp: &platformv1.VerifyQuoteResponse{Message: "signature_verification_failed"}}
-		router := tpmRouter(tpm, tpmScopedAuthorizer())
+		router := tpmRouter(tpm, tpmGuard())
 
 		rec := serveTPM(router, newTPMRequest(http.MethodPost, "/api/v1/tpm/quote/verify", ""), tpmReaderToken)
 
@@ -816,7 +826,7 @@ func TestTPMRPC(t *testing.T) {
 	}
 	for _, tc := range statuses {
 		t.Run("maps "+tc.err.Error(), func(t *testing.T) {
-			router := tpmRouter(&fakeTPMService{err: tc.err}, tpmScopedAuthorizer())
+			router := tpmRouter(&fakeTPMService{err: tc.err}, tpmGuard())
 
 			rec := serveTPM(router, newTPMRequest(http.MethodPost, "/api/v1/tpm/quote", ""), tpmReaderToken)
 
@@ -843,7 +853,7 @@ func TestTPMDeleteAKStatuses(t *testing.T) {
 	for _, target := range []string{"/api/v1/tpm/ak", "/api/v1/tpm/ak/0x81010002"} {
 		for _, tc := range cases {
 			t.Run(target+" "+tc.name, func(t *testing.T) {
-				router := tpmRouter(&fakeTPMService{err: tc.err}, tpmScopedAuthorizer())
+				router := tpmRouter(&fakeTPMService{err: tc.err}, tpmGuard())
 
 				rec := serveTPM(router, newTPMRequest(http.MethodDelete, target, ""), tpmAdminToken)
 
@@ -854,7 +864,7 @@ func TestTPMDeleteAKStatuses(t *testing.T) {
 	}
 
 	t.Run("other routes keep FailedPrecondition at 400", func(t *testing.T) {
-		router := tpmRouter(&fakeTPMService{err: refused}, tpmScopedAuthorizer())
+		router := tpmRouter(&fakeTPMService{err: refused}, tpmGuard())
 
 		rec := serveTPM(router, newTPMRequest(http.MethodDelete, "/api/v1/tpm/srk", ""), tpmAdminToken)
 
@@ -867,13 +877,4 @@ func TestTPMHandlerErrors(t *testing.T) {
 		assert.Equal(t, "TPM service not available", ErrTPMServiceNotAvailable{}.Error())
 	})
 
-	t.Run("ErrTPMTokenRequired", func(t *testing.T) {
-		err := ErrTPMTokenRequired{Scope: tpmScopeRead}
-		assert.Equal(t, "this TPM operation requires a platform bearer token granting tpm:read", err.Error())
-	})
-
-	t.Run("ErrTPMForbidden", func(t *testing.T) {
-		err := ErrTPMForbidden{Scope: tpmScopeWrite, Reason: "token invalid"}
-		assert.Equal(t, "this TPM operation requires tpm:write: token invalid", err.Error())
-	})
 }
