@@ -115,6 +115,16 @@ func (e ErrImageNotFound) Error() string {
 	return fmt.Sprintf("image not found: %s", e.Reference)
 }
 
+// ErrImageNotSigned is returned when a verifying pull meets an image whose
+// manifest carries no signature.
+type ErrImageNotSigned struct {
+	Reference string
+}
+
+func (e ErrImageNotSigned) Error() string {
+	return fmt.Sprintf("image %s is not signed", e.Reference)
+}
+
 // ErrInvalidResponse is returned when the response cannot be parsed.
 type ErrInvalidResponse struct {
 	Operation string

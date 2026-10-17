@@ -338,13 +338,23 @@ func runImagePullTests(t *testing.T, ctx context.Context, cmd RegistryCommands, 
 	})
 
 	t.Run("PullImageWithVerification", func(t *testing.T) {
-		pullOpts := PullOptions{
-			VerifySignature: true,
-		}
+		signedRef := GenerateUniqueImageRef(prefix+"-pull-signed", "v1")
+		seedImage(t, testCtx, cmd, signedRef, PushOptions{
+			Layers:    layers,
+			Config:    config,
+			SignImage: true,
+		})
+		defer cleanupImage(t, testCtx, cmd, signedRef)
 
-		result, err := cmd.Pull(testCtx, ref, pullOpts)
-		require.NoError(t, err, "Pull with verification should succeed")
+		result, err := cmd.Pull(testCtx, signedRef, PullOptions{VerifySignature: true})
+		require.NoError(t, err, "Pull with verification should succeed for a signed image")
 		require.NotNil(t, result, "Pull result should not be nil")
+		assert.Equal(t, len(layers), len(result.Layers), "Layer count should match")
+	})
+
+	t.Run("PullUnsignedImageWithVerificationFails", func(t *testing.T) {
+		_, err := cmd.Pull(testCtx, ref, PullOptions{VerifySignature: true})
+		require.Error(t, err, "Pull with verification should refuse an unsigned image")
 	})
 
 	t.Run("PullNonexistentImageFails", func(t *testing.T) {

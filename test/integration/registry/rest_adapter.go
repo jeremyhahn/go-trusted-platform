@@ -43,10 +43,13 @@ const (
 	restImageContentType = "application/x-trusted-platform-image"
 
 	// Push metadata travels in these headers (PushImage).
-	headerRepository = "X-Trusted-Platform-Repository"
-	headerTag        = "X-Trusted-Platform-Tag"
-	headerEncrypt    = "X-Trusted-Platform-Encrypt"
-	headerOverwrite  = "X-Trusted-Platform-Overwrite"
+	headerRepository   = "X-Trusted-Platform-Repository"
+	headerTag          = "X-Trusted-Platform-Tag"
+	headerEncrypt      = "X-Trusted-Platform-Encrypt"
+	headerKeyID        = "X-Trusted-Platform-Key-Id"
+	headerSign         = "X-Trusted-Platform-Sign"
+	headerSigningKeyID = "X-Trusted-Platform-Signing-Key-Id"
+	headerOverwrite    = "X-Trusted-Platform-Overwrite"
 )
 
 // ErrRESTStatus is returned when platformd answers a REST call with an
@@ -181,6 +184,15 @@ func (r *RESTAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*
 	if opts.Encrypt {
 		req.Header.Set(headerEncrypt, "true")
 	}
+	if opts.KeyID != "" {
+		req.Header.Set(headerKeyID, opts.KeyID)
+	}
+	if opts.SignImage {
+		req.Header.Set(headerSign, "true")
+	}
+	if opts.SigningKeyID != "" {
+		req.Header.Set(headerSigningKeyID, opts.SigningKeyID)
+	}
 	if opts.AllowOverwrite {
 		req.Header.Set(headerOverwrite, "true")
 	}
@@ -222,16 +234,7 @@ func (r *RESTAdapter) Pull(ctx context.Context, ref string, opts PullOptions) (*
 	if err := json.Unmarshal(body, &img); err != nil {
 		return nil, ErrInvalidResponse{Operation: opPull, Err: err}
 	}
-	result := &PullResult{
-		Reference: ref,
-		Manifest:  fromRegistryManifest(ref, img.Manifest),
-		Config:    img.Config,
-		PulledAt:  time.Now().UTC(),
-	}
-	for _, l := range img.Layers {
-		result.Layers = append(result.Layers, LayerData{MediaType: l.MediaType, Content: l.Content})
-	}
-	return result, nil
+	return pullResultOf(ref, &img, opts.VerifySignature)
 }
 
 // List calls ListImages. The REST surface pages by offset, so the cursor
