@@ -443,10 +443,11 @@ Profile-level configuration knobs worth knowing:
   - `FindMatchingProfile` lowercases the MAC and uppercases the serial before
     calling `ProfileMatchRules.Matches`.
   - `FindByEKSerial` and `FindByExactMAC` use `strings.EqualFold`.
-  - **`ProfileMatchRules.Matches` itself does no normalisation** — it is a plain
-    prefix/equality comparison. Callers that invoke it directly (not through the
-    DAO) get case-sensitive behaviour. That asymmetry is real; do not rely on
-    `Matches` being case-insensitive.
+  - `ProfileMatchRules.Matches` compares `MACPrefix`, `SerialPrefix` and the
+    legacy `SerialPattern` case-insensitively (`strings.EqualFold` on the
+    prefix), so a mixed-case rule such as `AA:BB:e5` matches the lowercased MAC
+    `FindMatchingProfile` hands it, agreeing with `FindByMACPrefix` and
+    `FindBySerialPrefix`. `Model` and `ModelPattern` stay case-sensitive.
 - `ProfileMatchRules.Matches` is **OR across fields**: any single non-empty
   rule that matches returns true. `Model` and the legacy `ModelPattern` are
   exact equality; `MACPrefix`, `SerialPrefix` and legacy `SerialPattern` are

@@ -272,7 +272,9 @@ func (p *ProfileMatchRules) IsEmpty() bool {
 }
 
 // Matches checks if the given device properties match these rules
-// Returns true if at least one non-empty rule matches
+// Returns true if at least one non-empty rule matches. MAC and serial
+// prefixes compare case-insensitively, as the DAO's prefix lookups do; models
+// compare exactly.
 func (p *ProfileMatchRules) Matches(macAddr, serial, model string) bool {
 	if p.IsEmpty() {
 		return false
@@ -282,13 +284,13 @@ func (p *ProfileMatchRules) Matches(macAddr, serial, model string) bool {
 
 	// Check new-style rules
 	if p.MACPrefix != "" {
-		if len(macAddr) >= len(p.MACPrefix) && macAddr[:len(p.MACPrefix)] == p.MACPrefix {
+		if hasPrefixFold(macAddr, p.MACPrefix) {
 			matched = true
 		}
 	}
 
 	if p.SerialPrefix != "" {
-		if len(serial) >= len(p.SerialPrefix) && serial[:len(p.SerialPrefix)] == p.SerialPrefix {
+		if hasPrefixFold(serial, p.SerialPrefix) {
 			matched = true
 		}
 	}
@@ -307,12 +309,17 @@ func (p *ProfileMatchRules) Matches(macAddr, serial, model string) bool {
 	}
 
 	if p.SerialPattern != "" {
-		if len(serial) >= len(p.SerialPattern) && serial[:len(p.SerialPattern)] == p.SerialPattern {
+		if hasPrefixFold(serial, p.SerialPattern) {
 			matched = true
 		}
 	}
 
 	return matched
+}
+
+// hasPrefixFold reports whether s begins with prefix, ignoring case.
+func hasPrefixFold(s, prefix string) bool {
+	return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
 }
 
 // Default network transition names used when the enrollment, post-enrollment,
