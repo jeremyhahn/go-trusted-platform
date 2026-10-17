@@ -424,10 +424,11 @@ func (m *Manager) GetTenant(ctx context.Context, id string) (*TenantEntity, erro
 		entity.DEKPath = BuildDEKPath(id)
 	}
 
-	// Cache and return
-	m.cache.Store(id, entity)
+	// Cache and return; an entity cached meanwhile (a concurrent create or
+	// state change) wins over the IAM copy.
+	cached, _ := m.cache.LoadOrStore(id, entity)
 
-	return entity.Clone(), nil
+	return cached.(*TenantEntity).Clone(), nil
 }
 
 // GetTenantByName retrieves a tenant by name.
@@ -464,10 +465,11 @@ func (m *Manager) GetTenantByName(ctx context.Context, name string) (*TenantEnti
 		entity.DEKPath = BuildDEKPath(entity.ID)
 	}
 
-	// Cache and return
-	m.cache.Store(entity.ID, entity)
+	// Cache and return; an entity cached meanwhile (a concurrent create or
+	// state change) wins over the IAM copy.
+	cached, _ := m.cache.LoadOrStore(entity.ID, entity)
 
-	return entity.Clone(), nil
+	return cached.(*TenantEntity).Clone(), nil
 }
 
 // ListTenants lists all tenants with pagination.
@@ -494,9 +496,10 @@ func (m *Manager) ListTenants(ctx context.Context, limit, offset int) ([]*Tenant
 			entity.DEKPath = BuildDEKPath(entity.ID)
 		}
 
-		// Update cache
-		m.cache.Store(entity.ID, entity)
-		entities = append(entities, entity.Clone())
+		// A cached entity carries the state, quotas and labels IAM does not
+		// store; listing must not reset them to their IAM defaults.
+		cached, _ := m.cache.LoadOrStore(entity.ID, entity)
+		entities = append(entities, cached.(*TenantEntity).Clone())
 	}
 
 	return entities, total, nil

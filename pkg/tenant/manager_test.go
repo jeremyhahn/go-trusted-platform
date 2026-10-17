@@ -1228,6 +1228,50 @@ func TestListTenants_WithTenants(t *testing.T) {
 	}
 }
 
+// TestListTenants_KeepsCachedState guards the state and labels IAM does not
+// store: listing used to replace every cached tenant with its IAM copy,
+// resetting a suspended tenant to created and dropping its labels.
+func TestListTenants_KeepsCachedState(t *testing.T) {
+	manager, _ := newTestManager(t)
+	ctx := context.Background()
+
+	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{
+		Name:   "listed-tenant",
+		Labels: map[string]string{"team": "platform"},
+	})
+	if err != nil {
+		t.Fatalf("failed to create tenant: %v", err)
+	}
+	if err := manager.SuspendTenant(ctx, created.ID); err != nil {
+		t.Fatalf("failed to suspend tenant: %v", err)
+	}
+
+	tenants, _, err := manager.ListTenants(ctx, 10, 0)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(tenants) != 1 {
+		t.Fatalf("expected 1 tenant, got %d", len(tenants))
+	}
+	if tenants[0].State != StateSuspended {
+		t.Errorf("listed state = %s, want %s", tenants[0].State, StateSuspended)
+	}
+	if tenants[0].Labels["team"] != "platform" {
+		t.Errorf("listed labels = %v, want team=platform", tenants[0].Labels)
+	}
+
+	got, err := manager.GetTenant(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("failed to get tenant: %v", err)
+	}
+	if got.State != StateSuspended {
+		t.Errorf("state after list = %s, want %s", got.State, StateSuspended)
+	}
+	if err := manager.ResumeTenant(ctx, created.ID); err != nil {
+		t.Errorf("resume after list: %v", err)
+	}
+}
+
 func TestListTenants_DefaultLimit(t *testing.T) {
 	manager, _ := newTestManager(t)
 	ctx := context.Background()
