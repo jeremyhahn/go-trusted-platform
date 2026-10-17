@@ -312,6 +312,10 @@ file is managed with `context`, §4.6.)
 | `config set <section> <key=value>...` | 2 or more | `-p, --persist` (bool, `false`): write the change to the daemon's config file |
 | `config reload` | none | none |
 
+`config get -o json` (and `-o yaml`) prints a bare array of sections, one
+`{"section": "<name>", "values": {"<key>": "<value>", ...}}` object each; the
+table form prints a `Section: <name>` block per section.
+
 `config set` without `--persist` changes only the running daemon and warns
 `Changes not persisted`. A pair without `=` fails with
 `invalid key=value pair: <arg>`; the daemon must be reachable before the pairs

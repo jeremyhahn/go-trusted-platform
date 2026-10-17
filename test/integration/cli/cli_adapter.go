@@ -349,19 +349,19 @@ func (c *CLIAdapter) ConfigGet(ctx context.Context, section string) (*ConfigGetR
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "config get", Err: err}
 	}
 
-	var resp struct {
-		Sections []struct {
-			Section string            `json:"section"`
-			Values  map[string]string `json:"values"`
-		} `json:"sections"`
+	// `config get -o json` prints a bare array of sections
+	// (docs/daemon/cli.md §4.5).
+	var sections []struct {
+		Section string            `json:"section"`
+		Values  map[string]string `json:"values"`
 	}
 
-	if err := json.Unmarshal(output, &resp); err != nil {
+	if err := json.Unmarshal(output, &sections); err != nil {
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "config get", Err: err}
 	}
 
 	result := &ConfigGetResult{}
-	for _, sec := range resp.Sections {
+	for _, sec := range sections {
 		result.Sections = append(result.Sections, ConfigSection{
 			Section: sec.Section,
 			Values:  sec.Values,
