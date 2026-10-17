@@ -273,8 +273,10 @@ type TPMOperations struct {
 
 // NewTPMOperations creates a new TPM operations wrapper configured for the
 // specified EK algorithm. The algorithm determines the TCG NV index used
-// for EK certificate storage (RSA: 0x01C00002, ECC: 0x01C0000A).
-func NewTPMOperations(socketPath string, algorithm EKAlgorithm, logger *logging.Logger) (*TPMOperations, error) {
+// for EK certificate storage (RSA: 0x01C00002, ECC: 0x01C0000A). deviceCN
+// is the common name of the IAK that Provision creates; it is the bundle
+// hostname.
+func NewTPMOperations(socketPath string, algorithm EKAlgorithm, deviceCN string, logger *logging.Logger) (*TPMOperations, error) {
 	if logger == nil {
 		logger = logging.DefaultLogger()
 	}
@@ -285,6 +287,34 @@ func NewTPMOperations(socketPath string, algorithm EKAlgorithm, logger *logging.
 		return nil, ErrTPMConnectionFailed{SocketPath: socketPath, Cause: err}
 	}
 
+	params := &xkmssdk.TPMParams{
+		Config:    tpmOperationsConfig(socketPath, algorithm, deviceCN),
+		Logger:    nil, // Will use go-xkms's default logger
+		Transport: t,
+	}
+
+	tpm, err := xkmssdk.NewTPM2(params)
+	if err != nil && err != xkmssdk.ErrTPMNotInitialized {
+		// Close the transport if it implements io.Closer
+		if closer, ok := t.(io.Closer); ok {
+			closer.Close()
+		}
+		return nil, ErrTPMConnectionFailed{SocketPath: socketPath, Cause: err}
+	}
+
+	return &TPMOperations{
+		tpm:        tpm,
+		socketPath: socketPath,
+		algorithm:  algorithm,
+		logger:     logger,
+	}, nil
+}
+
+// tpmOperationsConfig builds the configuration of a bundle vTPM: an EK of
+// the requested algorithm, the TCG shared SRK and an IAK named deviceCN.
+// go-xkms refuses to create an IAK without a common name (or a device model
+// and serial number), so Provision fails on a configuration without one.
+func tpmOperationsConfig(socketPath string, algorithm EKAlgorithm, deviceCN string) *xkmssdk.TPMConfig {
 	// Configure EK based on algorithm with TCG-specified NV indices
 	var ekConfig *xkmssdk.EKConfig
 	switch algorithm {
@@ -315,7 +345,7 @@ func NewTPMOperations(socketPath string, algorithm EKAlgorithm, logger *logging.
 	// during ProvisionOwner/CreateIAK. PlatformPolicy stays false — bundle
 	// vTPM state later runs inside a guest whose PCR values differ from this
 	// host, so host-PCR-bound policies would render the guest state unusable.
-	tpmConfig := &xkmssdk.TPMConfig{
+	return &xkmssdk.TPMConfig{
 		Device:          socketPath,
 		Hash:            "SHA-256",
 		PlatformPCR:     16,
@@ -329,6 +359,7 @@ func NewTPMOperations(socketPath string, algorithm EKAlgorithm, logger *logging.
 			},
 		},
 		IAK: &xkmssdk.IAKConfig{
+			CN:                 deviceCN,
 			Handle:             0x81020001, // Default IAK handle
 			Hash:               "SHA-256",
 			KeyAlgorithm:       "RSA",
@@ -338,28 +369,6 @@ func NewTPMOperations(socketPath string, algorithm EKAlgorithm, logger *logging.
 			},
 		},
 	}
-
-	params := &xkmssdk.TPMParams{
-		Config:    tpmConfig,
-		Logger:    nil, // Will use go-xkms's default logger
-		Transport: t,
-	}
-
-	tpm, err := xkmssdk.NewTPM2(params)
-	if err != nil && err != xkmssdk.ErrTPMNotInitialized {
-		// Close the transport if it implements io.Closer
-		if closer, ok := t.(io.Closer); ok {
-			closer.Close()
-		}
-		return nil, ErrTPMConnectionFailed{SocketPath: socketPath, Cause: err}
-	}
-
-	return &TPMOperations{
-		tpm:        tpm,
-		socketPath: socketPath,
-		algorithm:  algorithm,
-		logger:     logger,
-	}, nil
 }
 
 // Close closes the TPM connection.
@@ -395,6 +404,11 @@ func (ops *TPMOperations) Provision(soPIN string) error {
 // GetEKPublicKey returns the EK public key using go-xkms.
 // The TPM must be provisioned first.
 func (ops *TPMOperations) GetEKPublicKey() (crypto.PublicKey, error) {
+	// EK() answers only from the cached EK attributes, which Provision does
+	// not fill; EKAttributes reads the persistent EK and caches them.
+	if _, err := ops.tpm.EKAttributes(); err != nil {
+		return nil, ErrEKCertInjectionFailed{Cause: err}
+	}
 	pubKey, err := ops.tpm.EK()
 	if err != nil {
 		return nil, ErrEKCertInjectionFailed{Cause: err}

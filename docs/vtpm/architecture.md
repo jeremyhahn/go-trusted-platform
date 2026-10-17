@@ -252,6 +252,12 @@ The service integrates with the platform CA to issue EK certificates.
        │                   │                   │
 ```
 
+"Create EK Key" is the go-xkms TPM provisioning flow on the bundle's fresh
+swtpm: it creates and persists the EK, the shared SRK (`0x81000001`) and an
+IAK (`0x81020001`). The IAK's common name is the bundle hostname; go-xkms
+refuses to create an IAK without one. The EK public key sent to the CA is
+read back from the persistent EK handle.
+
 ### NV Index Locations
 
 | Algorithm | NV Index | TCG Specification |
