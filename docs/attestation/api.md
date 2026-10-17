@@ -203,6 +203,14 @@ measured 2026-09-05, the handler had required the field and every collection
 on the fleet answered `400 quote config is required` while the service would
 have defaulted it.
 
+QUIC `0x7E` (`pkg/api/quic`) decodes the QUIC `CollectHostAttestationRequest`
+under the same contract. `nonce` is **required**: an empty one is refused
+`StatusInvalidArgument` (`ErrAttestationNonceRequired`), as gRPC refuses it
+`InvalidArgument` (`nonce is required`), before the TPM is reached — a quote
+over no nonce proves no freshness (RFC 9334 §10). A nonce shorter than 16 bytes
+is refused the same way (`ErrAttestationInvalidNonce`). An absent
+`hash_algorithm` is SHA-256 and absent `pcr_indices` the default selection.
+
 ### 5.1a Every node quote is bound to the connection it arrives on (#482)
 
 The node, not the caller, binds the quote. On every transport that serves a
@@ -513,7 +521,7 @@ verdicts follow` ([cli.md](cli.md) §3.5) is thin over this call.
 | `0x04` | `StatusInternalError` | 500 | `ErrQuoteGenerationFailed`, `ErrSerializationFailed` |
 | `0x05` | `StatusTimeout` | 504 | `ErrContextCanceled`, `ErrRetryExhausted` |
 | `0x07` | `StatusPermissionDenied` | 403 | `ErrAttestationFailed`, `ErrPCRMismatch`, `ErrQuoteVerificationFailed`, `ErrQuoteExpired`, `ErrNonceMismatch`, `ErrMerkleRootMismatch`, `ErrHostNotAttested` |
-| `0x09` | `StatusInvalidArgument` | 400 | `ErrInvalidWorkloadType`, `ErrInvalidHashAlgorithm` |
+| `0x09` | `StatusInvalidArgument` | 400 | `ErrInvalidWorkloadType`, `ErrInvalidHashAlgorithm`, `ErrAttestationNonceRequired` and `ErrAttestationInvalidNonce` (QUIC `0x7E`, §5.1) |
 | `0x0A` | `StatusUnavailable` | 503 | Attestation service not wired into the daemon |
 | `0x0B` | `StatusNotImplemented` | 501 | An opcode in range with no handler |
 

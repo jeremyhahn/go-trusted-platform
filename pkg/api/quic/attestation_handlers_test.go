@@ -64,6 +64,7 @@ type mockAttestationService struct {
 	vmAttestation        *manifest.VMAttestation
 	containerAttestation *manifest.ContainerAttestation
 	deviceResult         *AttestationDeviceResult
+	lastCollectOpts      *AttestationCollectOptions
 }
 
 func newMockAttestationService() *mockAttestationService {
@@ -150,6 +151,7 @@ func (m *mockAttestationService) VerifyManifest(ctx context.Context, mf *manifes
 }
 
 func (m *mockAttestationService) CollectHostAttestation(ctx context.Context, opts *AttestationCollectOptions) (*manifest.HostAttestation, error) {
+	m.lastCollectOpts = opts
 	if m.collectHostErr != nil {
 		return nil, m.collectHostErr
 	}
@@ -913,22 +915,33 @@ func TestHandleCollectHostAttestation(t *testing.T) {
 		assert.NotEmpty(t, collectResp.Attestation.PCRs)
 	})
 
-	t.Run("uses default parameters", func(t *testing.T) {
-		handler, _ := createTestAttestationHandler()
+	t.Run("refuses an empty nonce as the gRPC twin does", func(t *testing.T) {
+		handler, service := createTestAttestationHandler()
+		service.collectHostErr = errors.New("the TPM must not be reached")
 
-		collectReq := &CollectHostAttestationRequest{}
-
-		payload, err := quicwire.EncodePayload(collectReq)
+		payload, err := quicwire.EncodePayload(&CollectHostAttestationRequest{})
 		require.NoError(t, err)
 
-		req := &quicwire.Request{
-			Opcode:  quicwire.OpAttestHost,
-			Payload: payload,
-		}
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpAttestHost, Payload: payload})
 
-		resp := handler.HandleRequest(ctx, req)
+		// gRPC CollectHostAttestation answers InvalidArgument "nonce is
+		// required"; an empty nonce gives no freshness (RFC 9334 §10).
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+		assert.Contains(t, string(resp.Payload), ErrAttestationNonceRequired.Error())
+	})
 
-		assert.Equal(t, quicwire.StatusOK, resp.Status)
+	t.Run("uses default parameters with a nonce", func(t *testing.T) {
+		handler, service := createTestAttestationHandler()
+
+		payload, err := quicwire.EncodePayload(&CollectHostAttestationRequest{Nonce: []byte("test-nonce-12345678")})
+		require.NoError(t, err)
+
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpAttestHost, Payload: payload})
+
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		require.NotNil(t, service.lastCollectOpts)
+		assert.Equal(t, manifest.HashAlgorithmSHA256, service.lastCollectOpts.HashAlgorithm)
+		assert.Equal(t, handler.getDefaultPCRIndices(), service.lastCollectOpts.PCRIndices)
 	})
 
 	t.Run("returns error for invalid nonce", func(t *testing.T) {
@@ -955,6 +968,7 @@ func TestHandleCollectHostAttestation(t *testing.T) {
 		handler, _ := createTestAttestationHandler()
 
 		collectReq := &CollectHostAttestationRequest{
+			Nonce:         []byte("test-nonce-12345678"),
 			HashAlgorithm: "md5", // Invalid algorithm
 		}
 
@@ -976,6 +990,7 @@ func TestHandleCollectHostAttestation(t *testing.T) {
 		handler, _ := createTestAttestationHandler()
 
 		collectReq := &CollectHostAttestationRequest{
+			Nonce:      []byte("test-nonce-12345678"),
 			PCRIndices: []int{-1}, // Invalid negative index
 		}
 
@@ -1013,7 +1028,7 @@ func TestHandleCollectHostAttestation(t *testing.T) {
 		handler, service := createTestAttestationHandler()
 		service.collectHostErr = errors.New("TPM not available")
 
-		collectReq := &CollectHostAttestationRequest{}
+		collectReq := &CollectHostAttestationRequest{Nonce: []byte("test-nonce-12345678")}
 		payload, err := quicwire.EncodePayload(collectReq)
 		require.NoError(t, err)
 

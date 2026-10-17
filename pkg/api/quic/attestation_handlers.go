@@ -62,6 +62,10 @@ var (
 	// ErrAttestationInvalidNonce is returned when a nonce is invalid.
 	ErrAttestationInvalidNonce = errors.New("invalid nonce")
 
+	// ErrAttestationNonceRequired is returned when a host collection carries
+	// no nonce: a quote without one proves no freshness (RFC 9334 §10).
+	ErrAttestationNonceRequired = errors.New("nonce is required")
+
 	// ErrAttestationInvalidHashAlgorithm is returned when a hash algorithm is invalid.
 	ErrAttestationInvalidHashAlgorithm = errors.New("invalid hash algorithm")
 
@@ -1117,8 +1121,12 @@ func (h *AttestationHandler) parseCollectOptions(req *CollectHostAttestationRequ
 		IncludeEventLog: req.IncludeEventLog,
 	}
 
-	// Validate nonce if provided
-	if len(req.Nonce) > 0 && len(req.Nonce) < 16 {
+	// The nonce is required, as on the gRPC twin (InvalidArgument): an empty
+	// one gives the quote no freshness (RFC 9334 §10).
+	if len(req.Nonce) == 0 {
+		return nil, ErrAttestationNonceRequired
+	}
+	if len(req.Nonce) < 16 {
 		return nil, ErrAttestationInvalidNonce
 	}
 
