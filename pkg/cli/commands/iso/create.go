@@ -19,7 +19,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -360,20 +359,9 @@ func applyOverrides(flags *createFlags) error {
 func buildISOBuildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 	config := pkgiso.DefaultISOBuildConfig()
 
-	// Resolve platformd binary path from the same directory as the running binary.
-	// platformd and platformctl are separate binaries built from separate cmd/ directories.
-	selfPath, err := os.Executable()
+	platformdPath, err := siblingPlatformdBinary()
 	if err != nil {
-		return nil, &WrappedError{Msg: "failed to get executable path", Err: err}
-	}
-	selfPath, err = filepath.EvalSymlinks(selfPath)
-	if err != nil {
-		return nil, &WrappedError{Msg: "failed to resolve executable path", Err: err}
-	}
-	binDir := filepath.Dir(selfPath)
-	platformdPath := filepath.Join(binDir, "platformd")
-	if _, err := os.Stat(platformdPath); err != nil {
-		return nil, &MessageError{Msg: fmt.Sprintf("platformd binary not found at %s (build with 'make build')", platformdPath)}
+		return nil, err
 	}
 	config.PlatformdBinary = platformdPath
 
@@ -636,11 +624,7 @@ func buildFinalISO(ctx context.Context, logger *logging.Logger, config *pkgiso.I
 
 // getCreateLogger creates a logger with appropriate log level
 func getCreateLogger(flags *createFlags) *logging.Logger {
-	level := slog.LevelInfo
-	if flags.debug {
-		level = slog.LevelDebug
-	}
-	return logging.NewLogger(level, nil)
+	return newVerbLogger(flags.debug)
 }
 
 // mergeConfigs merges two configurations, with override taking precedence

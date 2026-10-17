@@ -195,6 +195,23 @@ func (e ErrCommandTimeout) Error() string {
 	return fmt.Sprintf("command %s timed out after %s", e.Command, e.Timeout)
 }
 
+// ErrVerbFailed reports a platformctl verb that exited non-zero or printed no
+// result, with the stderr it wrote.
+type ErrVerbFailed struct {
+	Stderr string
+	Err    error
+}
+
+func (e ErrVerbFailed) Error() string {
+	if e.Err == nil {
+		return e.Stderr
+	}
+	return e.Err.Error() + ": " + e.Stderr
+}
+
+// Unwrap returns the process error.
+func (e ErrVerbFailed) Unwrap() error { return e.Err }
+
 // =============================================================================
 // Test Helper Functions
 // =============================================================================

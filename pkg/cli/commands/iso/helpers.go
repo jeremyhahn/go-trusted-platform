@@ -15,9 +15,15 @@ package iso
 
 import (
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
+	"path/filepath"
 
 	"github.com/fatih/color"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
 // Output formatting functions for consistent CLI experience
@@ -51,6 +57,35 @@ func printError(message string) {
 	color.New(color.FgRed).Printf("✗ %s\n", message)
 }
 
+// printResult writes a verb's result in the global --output format. The
+// table format falls back to YAML for a struct (pkg/cli/output.go).
+func printResult(out io.Writer, flags *cli.CommonFlags, result any) error {
+	return cli.NewPrinterWithWriter(flags.OutputFormat, flags.NoColor, out).Print(result)
+}
+
+// newVerbLogger returns the stderr logger the pkg/iso steps report through,
+// so stdout carries only the verb's result.
+func newVerbLogger(debug bool) *logging.Logger {
+	level := slog.LevelInfo
+	if debug {
+		level = slog.LevelDebug
+	}
+	return logging.NewLogger(level, nil)
+}
+
+// fileDigest returns a file's SHA-256 and size.
+func fileDigest(path string) (string, int64, error) {
+	sum, err := calculateFileSHA256(path)
+	if err != nil {
+		return "", 0, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", 0, &WrappedError{Msg: "failed to stat file", Err: err}
+	}
+	return sum, info.Size(), nil
+}
+
 // removeFileIfExists removes a file if it exists, ignoring not-exist errors
 func removeFileIfExists(path string) error {
 	err := os.Remove(path)
@@ -70,4 +105,23 @@ func fileExists(path string) bool {
 func dirExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
+}
+
+// siblingPlatformdBinary returns the platformd binary installed beside the
+// running platformctl. platformd and platformctl are separate binaries built
+// from separate cmd/ directories and shipped together.
+func siblingPlatformdBinary() (string, error) {
+	selfPath, err := os.Executable()
+	if err != nil {
+		return "", &WrappedError{Msg: "failed to get executable path", Err: err}
+	}
+	selfPath, err = filepath.EvalSymlinks(selfPath)
+	if err != nil {
+		return "", &WrappedError{Msg: "failed to resolve executable path", Err: err}
+	}
+	platformdPath := filepath.Join(filepath.Dir(selfPath), "platformd")
+	if _, err := os.Stat(platformdPath); err != nil {
+		return "", &MessageError{Msg: fmt.Sprintf("platformd binary not found at %s (build with 'make build')", platformdPath)}
+	}
+	return platformdPath, nil
 }
