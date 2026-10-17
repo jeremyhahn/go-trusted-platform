@@ -22,6 +22,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -82,11 +83,6 @@ type jsonRPCError struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
-// JSON-RPC 2.0 standard error codes.
-const (
-	jsonRPCInternalError = -32603
-)
-
 // =============================================================================
 // MCP Protocol Types
 // =============================================================================
@@ -126,18 +122,6 @@ type mcpServerInfo struct {
 type mcpCallToolRequest struct {
 	Name      string                 `json:"name"`
 	Arguments map[string]interface{} `json:"arguments,omitempty"`
-}
-
-// mcpCallToolResult is the MCP tools/call response payload.
-type mcpCallToolResult struct {
-	Content []mcpContentItem `json:"content"`
-	IsError bool             `json:"isError,omitempty"`
-}
-
-// mcpContentItem represents a content item in a tool result.
-type mcpContentItem struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
 }
 
 // =============================================================================
@@ -270,34 +254,16 @@ func (m *MCPAdapter) callTool(ctx context.Context, toolName string, args map[str
 		Arguments: args,
 	}
 
-	var toolResult mcpCallToolResult
-	if err := m.sendRequest(ctx, "tools/call", toolReq, &toolResult); err != nil {
-		return err
+	// The daemon's MCP server answers tools/call with the tool's result as
+	// the JSON-RPC result itself, not wrapped in content items, and a failed
+	// tool as a JSON-RPC error (pkg/api/mcp/server.go handleToolsCall).
+	err := m.sendRequest(ctx, "tools/call", toolReq, result)
+	var callErr ErrMCPToolCallFailed
+	if errors.As(err, &callErr) {
+		callErr.Tool = toolName
+		return callErr
 	}
-
-	if toolResult.IsError {
-		var errMsg string
-		for _, item := range toolResult.Content {
-			if item.Type == "text" {
-				errMsg = item.Text
-				break
-			}
-		}
-		return ErrMCPToolCallFailed{Tool: toolName, Code: jsonRPCInternalError, Message: errMsg}
-	}
-
-	if result != nil && len(toolResult.Content) > 0 {
-		for _, item := range toolResult.Content {
-			if item.Type == "text" && item.Text != "" {
-				if err := json.Unmarshal([]byte(item.Text), result); err != nil {
-					return ErrMCPResponseParseFailed{Operation: toolName, Err: err}
-				}
-				break
-			}
-		}
-	}
-
-	return nil
+	return err
 }
 
 // =============================================================================

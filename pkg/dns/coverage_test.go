@@ -400,24 +400,73 @@ func TestCoverage_ExtractHostnameFromCN(t *testing.T) {
 	}
 }
 
-func TestCoverage_ExtractZoneName(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{"fully qualified", "www.example.com", "example.com"},
-		{"deep subdomain", "a.b.c.example.com", "example.com"},
-		{"single label", "example", "example"},
-		{"two labels", "example.com", "example.com"},
-	}
+func TestService_RecordZone_LongestSuffixWins(t *testing.T) {
+	svc, mockDAO := createServiceWithMockDAO(t, "tenant-1")
+	ctx := context.Background()
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := extractZoneName(tt.input)
-			assert.Equal(t, tt.expected, result)
+	for _, zoneName := range []string{"example.test.", "app.example.test."} {
+		mockDAO.AddZone(&entities.Zone{
+			ID:       util.NewID([]byte(zoneName)),
+			Name:     zoneName,
+			TenantID: "tenant-1",
+			TTL:      3600,
 		})
 	}
+
+	tests := []struct {
+		name     string
+		record   string
+		expected string
+	}{
+		{"record in the deeper zone", "api.app.example.test.", "app.example.test."},
+		{"deeper zone without the trailing dot", "api.app.example.test", "app.example.test."},
+		{"zone apex", "app.example.test.", "app.example.test."},
+		{"record in the shallower zone", "www.example.test.", "example.test."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			zone, err := svc.recordZone(ctx, tt.record)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, zone.Name)
+		})
+	}
+}
+
+func TestService_RecordZone_NoEnclosingZone(t *testing.T) {
+	svc, mockDAO := createServiceWithMockDAO(t, "tenant-1")
+	ctx := context.Background()
+	mockDAO.AddZone(&entities.Zone{
+		ID:       util.NewID([]byte("example.test.")),
+		Name:     "example.test.",
+		TenantID: "tenant-1",
+	})
+
+	_, err := svc.recordZone(ctx, "api.other.test.")
+	assert.ErrorIs(t, err, ErrZoneNotFound)
+	assert.Contains(t, err.Error(), "failed to get zone for record api.other.test.")
+}
+
+func TestService_AddRecord_LandsInLongestSuffixZone(t *testing.T) {
+	svc, mockDAO := createServiceWithMockDAO(t, "tenant-1")
+	ctx := context.Background()
+	for _, zoneName := range []string{"example.test.", "app.example.test."} {
+		mockDAO.AddZone(&entities.Zone{
+			ID:       util.NewID([]byte(zoneName)),
+			Name:     zoneName,
+			TenantID: "tenant-1",
+			TTL:      3600,
+		})
+	}
+
+	require.NoError(t, svc.AddRecord(ctx, "api.app.example.test.", "A", "192.0.2.10", 300))
+
+	rec, err := svc.GetRecord(ctx, "api.app.example.test.", "A")
+	require.NoError(t, err)
+	assert.Equal(t, "192.0.2.10", rec.(*entities.ARecord).Value)
+
+	shallow, err := svc.Zone(ctx, "example.test.")
+	require.NoError(t, err)
+	assert.Empty(t, shallow.RecordSet.ARecords, "the record must not land in the shorter zone")
 }
 
 func TestCoverage_Service_AddRecord_AllTypes(t *testing.T) {
