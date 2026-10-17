@@ -19,6 +19,7 @@ package iam
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -65,24 +66,33 @@ func (e ErrGRPCCallFailed) Unwrap() error {
 
 // GRPCAdapter implements IAMCommands using gRPC API
 type GRPCAdapter struct {
-	endpoint string
-	conn     *grpc.ClientConn
-	client   pb.PlatformIAMServiceClient
+	endpoint  string
+	tlsConfig *tls.Config
+	conn      *grpc.ClientConn
+	client    pb.PlatformIAMServiceClient
 }
 
 // NewGRPCAdapter creates a new gRPC adapter
 func NewGRPCAdapter() *GRPCAdapter {
 	return &GRPCAdapter{
-		endpoint: GetGRPCEndpoint(),
+		endpoint:  GetGRPCEndpoint(),
+		tlsConfig: helpers.TLSConfigOrInsecure(),
+	}
+}
+
+// NewTenantGRPCAdapter is NewGRPCAdapter acting as the caller bound to
+// helpers.ForeignTenantID.
+func NewTenantGRPCAdapter() *GRPCAdapter {
+	return &GRPCAdapter{
+		endpoint:  GetGRPCEndpoint(),
+		tlsConfig: helpers.TenantTLSConfig(),
 	}
 }
 
 // Setup prepares the adapter for testing
 func (a *GRPCAdapter) Setup(ctx context.Context) error {
-	tlsConfig := helpers.TLSConfigOrInsecure()
-
 	conn, err := grpc.DialContext(ctx, a.endpoint,
-		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
+		grpc.WithTransportCredentials(credentials.NewTLS(a.tlsConfig)),
 	)
 	if err != nil {
 		return ErrGRPCConnectionFailed{

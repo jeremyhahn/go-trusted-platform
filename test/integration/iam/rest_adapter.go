@@ -18,6 +18,7 @@ package iam
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
@@ -47,11 +48,21 @@ type RESTAdapter struct {
 
 // NewRESTAdapter creates a new REST adapter
 func NewRESTAdapter() *RESTAdapter {
+	return newRESTAdapter(helpers.TLSConfigOrInsecure())
+}
+
+// NewTenantRESTAdapter is NewRESTAdapter acting as the caller bound to
+// helpers.ForeignTenantID.
+func NewTenantRESTAdapter() *RESTAdapter {
+	return newRESTAdapter(helpers.TenantTLSConfig())
+}
+
+func newRESTAdapter(tlsConfig *tls.Config) *RESTAdapter {
 	return &RESTAdapter{
 		endpoint: GetRESTEndpoint(),
 		client: &http.Client{
 			Transport: &http.Transport{
-				TLSClientConfig: helpers.TLSConfigOrInsecure(),
+				TLSClientConfig: tlsConfig,
 			},
 		},
 	}

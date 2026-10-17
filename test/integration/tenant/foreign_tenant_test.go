@@ -44,7 +44,7 @@ func TestForeignTenant_IAM(t *testing.T) {
 	defer unix.Teardown(ctx)
 	operatorIAM := platformv1.NewPlatformIAMServiceClient(unix.conn)
 
-	ensureIAMTenant(t, ctx, operatorIAM, helpers.ForeignTenantID)
+	helpers.EnsureIAMTenant(t, ctx, operatorIAM, helpers.ForeignTenantID)
 
 	t.Run("Unix", func(t *testing.T) {
 		for _, tenantID := range []string{helpers.HarnessTenantID, helpers.ForeignTenantID} {
@@ -56,26 +56,6 @@ func TestForeignTenant_IAM(t *testing.T) {
 	t.Run("REST", func(t *testing.T) { testForeignTenantREST(t, ctx) })
 	t.Run("MCP", func(t *testing.T) { testForeignTenantMCP(t, ctx) })
 	t.Run("QUIC", func(t *testing.T) { testForeignTenantQUIC(t, ctx) })
-}
-
-// ensureIAMTenant creates the IAM tenant tenantID as the Unix operator. A
-// tenant left by an earlier run is reused; it is deleted again only when this
-// run created it.
-func ensureIAMTenant(t *testing.T, ctx context.Context, client platformv1.PlatformIAMServiceClient, tenantID string) {
-	t.Helper()
-
-	_, err := client.CreateTenant(ctx, &platformv1.CreateIAMTenantRequest{Id: tenantID, Name: tenantID})
-	if status.Code(err) == codes.AlreadyExists {
-		return
-	}
-	require.NoError(t, err, "the unbound operator creates IAM tenant %q", tenantID)
-
-	t.Cleanup(func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		_, err := client.DeleteTenant(cleanupCtx, &platformv1.DeleteIAMTenantRequest{TenantId: tenantID})
-		require.NoError(t, err, "delete IAM tenant %q", tenantID)
-	})
 }
 
 // listIAMUsersRequest lists the first page of users in tenantID, the request
