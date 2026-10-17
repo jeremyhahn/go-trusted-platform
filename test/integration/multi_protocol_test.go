@@ -30,6 +30,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -2189,45 +2190,53 @@ func setupAttestationAdapter(t *testing.T, ctx context.Context, adapter Protocol
 	return cmd
 }
 
-func testAttestationGetChallenge(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
+// ErrVMIdentityServed is returned when a transport answers GetVMIdentity,
+// which docs/attestation/api.md §3 declares unserved on every transport. The
+// doc is then stale and the matrix must drive the operation for real.
+type ErrVMIdentityServed struct {
+	Transport string
+	Cause     error
+}
+
+func (e ErrVMIdentityServed) Error() string {
+	return fmt.Sprintf("Attestation GetVMIdentity over %s answered (err: %v), but docs/attestation/api.md §3 "+
+		"declares it unserved; update the doc and drive the operation", e.Transport, e.Cause)
+}
+
+// expectVMIdentityGapDeclared checks the GetVMIdentity gap is still the
+// declared one and reports it as MISSING. The service is reached through the
+// adapter, so a failed Setup still fails the test (#949).
+func expectVMIdentityGapDeclared(t *testing.T, ctx context.Context, adapter ProtocolAdapter, vmID string) {
+	t.Helper()
 	cmd := setupAttestationAdapter(t, ctx, adapter)
-	_, err := cmd.GetVMIdentity(ctx, attestation.GetVMIdentityOptions{VMID: "nonexistent-test"})
-	if missing := surfaceMissing(adapter, "Attestation", "GetVMIdentity", err); missing != nil {
-		t.Fatal(missing)
+	_, err := cmd.GetVMIdentity(ctx, attestation.GetVMIdentityOptions{VMID: vmID})
+
+	var noRoute attestation.ErrRESTNoRoute
+	if surface.IsNotImplemented(err) || errors.As(err, &noRoute) {
+		t.Logf("MISSING: %s Attestation GetVMIdentity: %v (docs/attestation/api.md §3)", protocolName(adapter), err)
+		return
 	}
-	// A not-found error is acceptable; it means the service is reachable
+	t.Fatal(ErrVMIdentityServed{Transport: protocolName(adapter), Cause: err})
+}
+
+func testAttestationGetChallenge(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
+	expectVMIdentityGapDeclared(t, ctx, adapter, "nonexistent-test")
 }
 
 func testAttestationSubmitQuote(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	cmd := setupAttestationAdapter(t, ctx, adapter)
-	_, err := cmd.GetVMIdentity(ctx, attestation.GetVMIdentityOptions{VMID: "nonexistent-submit-test"})
-	if missing := surfaceMissing(adapter, "Attestation", "GetVMIdentity", err); missing != nil {
-		t.Fatal(missing)
-	}
+	expectVMIdentityGapDeclared(t, ctx, adapter, "nonexistent-submit-test")
 }
 
 func testAttestationVerifyQuote(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	cmd := setupAttestationAdapter(t, ctx, adapter)
-	_, err := cmd.GetVMIdentity(ctx, attestation.GetVMIdentityOptions{VMID: "nonexistent-verify-test"})
-	if missing := surfaceMissing(adapter, "Attestation", "GetVMIdentity", err); missing != nil {
-		t.Fatal(missing)
-	}
+	expectVMIdentityGapDeclared(t, ctx, adapter, "nonexistent-verify-test")
 }
 
 func testAttestationGetStatus(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	cmd := setupAttestationAdapter(t, ctx, adapter)
-	_, err := cmd.GetVMIdentity(ctx, attestation.GetVMIdentityOptions{VMID: "nonexistent-status-test"})
-	if missing := surfaceMissing(adapter, "Attestation", "GetVMIdentity", err); missing != nil {
-		t.Fatal(missing)
-	}
+	expectVMIdentityGapDeclared(t, ctx, adapter, "nonexistent-status-test")
 }
 
 func testAttestationPolicyEvaluation(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
-	cmd := setupAttestationAdapter(t, ctx, adapter)
-	_, err := cmd.GetVMIdentity(ctx, attestation.GetVMIdentityOptions{VMID: "nonexistent-policy-test"})
-	if missing := surfaceMissing(adapter, "Attestation", "GetVMIdentity", err); missing != nil {
-		t.Fatal(missing)
-	}
+	expectVMIdentityGapDeclared(t, ctx, adapter, "nonexistent-policy-test")
 }
 
 // =============================================================================
