@@ -149,6 +149,26 @@ func UnixCredentialsFromContext(ctx context.Context) (UnixCredentials, bool) {
 	return creds, ok
 }
 
+// certificatePrincipalKey marks a context whose principal was authenticated
+// by a verified client certificate alone, with no platform token.
+type certificatePrincipalKey struct{}
+
+// ContextWithCertificatePrincipal records that the request's principal was
+// authenticated by its verified client certificate alone. A transport that
+// admits a tokenless mTLS peer (MCP, QUIC) attaches it beside the principal's
+// AuthorizedContext, so an operation reserved for platform tokens can tell
+// the two apart: the certificate principal's scopes look like a token's.
+func ContextWithCertificatePrincipal(ctx context.Context) context.Context {
+	return context.WithValue(ctx, certificatePrincipalKey{}, true)
+}
+
+// IsCertificatePrincipal reports whether ctx carries a principal
+// authenticated by a client certificate alone.
+func IsCertificatePrincipal(ctx context.Context) bool {
+	marked, ok := ctx.Value(certificatePrincipalKey{}).(bool)
+	return ok && marked
+}
+
 // MustUnixCredentialsFromContext extracts Unix credentials from a context
 // and panics if they are not found. Use this only when credentials are
 // guaranteed to be present (e.g., after the interceptor has run).

@@ -17,6 +17,7 @@ package quic
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -61,6 +62,19 @@ func scopedCtx(scopes ...string) context.Context {
 	return ContextWithAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{Subject: "u", Scopes: scopes})
 }
 
+// certPrincipalCtx is the context the middleware hands a handler for a
+// tokenless mTLS peer: the operator's principal, holding every scope.
+func certPrincipalCtx(t *testing.T) context.Context {
+	t.Helper()
+	stub := &peerAuthenticatorStub{authCtx: &platformtoken.AuthorizedContext{Subject: "operator", Scopes: []string{"*:*"}}}
+	mw := NewAuthMiddleware(WithQUICPeerAuthenticator(stub), WithQUICRequireAuth(true))
+	ctx, resp := mw.AuthenticateRequest(peerContext(&tls.ConnectionState{
+		VerifiedChains: [][]*x509.Certificate{{{Raw: []byte("leaf")}}},
+	}), &quicwire.Request{Opcode: quicwire.OpPIVCategory})
+	require.Nil(t, resp, "the operator certificate was not authenticated")
+	return ctx
+}
+
 // The handler itself refuses a caller whose token does not grant
 // ca:sign-csr, or who was authenticated without a platform token, so a
 // dispatcher on the legacy path cannot let one through.
@@ -75,6 +89,10 @@ func TestCAHandler_SignCSR_NeedsCASignCSR(t *testing.T) {
 		{"no platform token", context.Background(), quicwire.StatusPermissionDenied},
 		{"ca:write", scopedCtx("ca:write"), quicwire.StatusPermissionDenied},
 		{"ca:sign-csr", scopedCtx("ca:sign-csr"), quicwire.StatusOK},
+		{"*:* token", scopedCtx("*:*"), quicwire.StatusOK},
+		// The operator certificate carries *:*, but a certificate alone
+		// never certifies a code-signing key (docs/ca/api.md).
+		{"client certificate alone", certPrincipalCtx(t), quicwire.StatusPermissionDenied},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

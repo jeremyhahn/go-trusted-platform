@@ -19,6 +19,7 @@ import (
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
@@ -80,5 +81,8 @@ func (m *AuthMiddleware) authenticatePeer(ctx context.Context) (context.Context,
 			Payload: []byte(ErrPeerAuthenticationFailed{Cause: err}.Error()),
 		}
 	}
+	// The principal holds operator scopes but no platform token; the mark
+	// keeps it out of token-only operations such as SignCSR.
+	ctx = peercred.ContextWithCertificatePrincipal(ctx)
 	return ContextWithAuthorizedContext(ctx, authCtx), nil
 }
