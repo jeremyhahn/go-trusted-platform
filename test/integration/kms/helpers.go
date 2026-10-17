@@ -281,6 +281,17 @@ func GenerateUniqueKeyName(prefix string) string {
 	return fmt.Sprintf("%s-%s-%09d", prefix, now.Format("20060102150405"), now.Nanosecond())
 }
 
+// keyName is the name a GenerateKey request carries. Every transport
+// requires a key name; a test that sets only the suite's KeyID uses it
+// as the name, so an empty KeyID still reaches the server's
+// required-name check.
+func keyName(opts KeyGenerateOptions) string {
+	if opts.Name != "" {
+		return opts.Name
+	}
+	return opts.KeyID
+}
+
 // GenerateTestPlaintext generates deterministic test data of the specified size.
 // The data is derived from a hash of the size, making it reproducible across
 // test runs for the same size parameter.
