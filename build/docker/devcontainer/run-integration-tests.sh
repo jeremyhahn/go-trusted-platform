@@ -129,9 +129,11 @@ declare -A TARGET_ENV=(
 # diskimage suite boots an aarch64 guest under TCG emulation, where a first
 # boot through firstboot provisioning takes tens of minutes. The root package
 # and testenv-enrollment carry the enrollment test's own 30-minute context;
-# e2e carries a 45-minute one.
+# e2e carries a 45-minute one. iso builds real ISOs and boots one under QEMU;
+# its VM test carries a 120-minute context.
 declare -A TARGET_TIMEOUTS=(
     [diskimage]="90m"
+    [iso]="130m"
     [netboot]="40m"
     [nat64]="15m"
     [ipsec]="40m"
