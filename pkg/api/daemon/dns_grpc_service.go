@@ -308,7 +308,9 @@ func (s *DNSServiceServer) DeleteRecord(ctx context.Context, req *platformv1.Del
 	}
 
 	// Delete record based on type
-	s.deleteRecordFromZone(zone, req.GetType(), req.GetName())
+	if !s.deleteRecordFromZone(zone, req.GetType(), req.GetName()) {
+		return nil, ErrDNSRecordNotFound{Name: req.GetName(), RecordType: resolveRecordType(req.GetType())}.GRPCStatus().Err()
+	}
 
 	if err := s.service.Save(ctx, zone); err != nil {
 		s.logger.Error("failed to save zone after delete record", slog.String("zone", req.GetZoneName()), slog.String("error", err.Error()))
@@ -855,27 +857,30 @@ func validateProtoRecord(record *platformv1.Record) error {
 	return nil
 }
 
-func (s *DNSServiceServer) deleteRecordFromZone(zone *entities.Zone, recordType platformv1.RecordType, name string) {
+// deleteRecordFromZone removes the named record of recordType from zone and
+// reports whether the zone held one.
+func (s *DNSServiceServer) deleteRecordFromZone(zone *entities.Zone, recordType platformv1.RecordType, name string) bool {
 	switch recordType {
 	case platformv1.RecordType_RECORD_TYPE_A:
-		zone.RemoveARecord(name)
+		return zone.RemoveARecord(name)
 	case platformv1.RecordType_RECORD_TYPE_AAAA:
-		zone.RemoveAAAARecord(name)
+		return zone.RemoveAAAARecord(name)
 	case platformv1.RecordType_RECORD_TYPE_CNAME:
-		zone.RemoveCNAMERecord(name)
+		return zone.RemoveCNAMERecord(name)
 	case platformv1.RecordType_RECORD_TYPE_MX:
-		zone.RemoveMXRecord(name)
+		return zone.RemoveMXRecord(name)
 	case platformv1.RecordType_RECORD_TYPE_NS:
-		zone.RemoveNSRecord(name)
+		return zone.RemoveNSRecord(name)
 	case platformv1.RecordType_RECORD_TYPE_TXT:
-		zone.RemoveTXTRecord(name)
+		return zone.RemoveTXTRecord(name)
 	case platformv1.RecordType_RECORD_TYPE_SRV:
-		zone.RemoveSRVRecord(name)
+		return zone.RemoveSRVRecord(name)
 	case platformv1.RecordType_RECORD_TYPE_CAA:
-		zone.RemoveCAARecord(name)
+		return zone.RemoveCAARecord(name)
 	case platformv1.RecordType_RECORD_TYPE_TLSA:
-		zone.RemoveTLSARecord(name)
+		return zone.RemoveTLSARecord(name)
 	}
+	return false
 }
 
 func (s *DNSServiceServer) getRecordName(record *platformv1.Record) string {

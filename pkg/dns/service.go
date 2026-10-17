@@ -1219,21 +1219,25 @@ func (s *Service) DeleteRecord(ctx context.Context, name string, recordType stri
 	}
 
 	// Delete the record based on type
+	var removed bool
 	switch recordType {
 	case "A":
-		zone.RemoveARecord(name)
+		removed = zone.RemoveARecord(name)
 	case "AAAA":
-		zone.RemoveAAAARecord(name)
+		removed = zone.RemoveAAAARecord(name)
 	case "CNAME":
-		zone.RemoveCNAMERecord(name)
+		removed = zone.RemoveCNAMERecord(name)
 	case "TXT":
-		zone.RemoveTXTRecord(name)
+		removed = zone.RemoveTXTRecord(name)
 	case "MX":
-		zone.RemoveMXRecord(name)
+		removed = zone.RemoveMXRecord(name)
 	case "NS":
-		zone.RemoveNSRecord(name)
+		removed = zone.RemoveNSRecord(name)
 	default:
 		return &MessageError{Msg: fmt.Sprintf("unsupported record type: %s", recordType)}
+	}
+	if !removed {
+		return ErrRecordNotFound{Name: name, Type: recordType}
 	}
 
 	return s.Save(ctx, zone)
@@ -1288,7 +1292,7 @@ func (s *Service) GetRecord(ctx context.Context, name string, recordType string)
 		return nil, &MessageError{Msg: fmt.Sprintf("unsupported record type: %s", recordType)}
 	}
 
-	return nil, &MessageError{Msg: fmt.Sprintf("record not found: %s %s", name, recordType)}
+	return nil, ErrRecordNotFound{Name: name, Type: recordType}
 }
 
 // ListRecords lists all records in a zone.

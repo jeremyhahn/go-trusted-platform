@@ -71,8 +71,9 @@ Two shapes stand out:
 `DELETE /api/v1/dns/zones/{zone}/records/{type}/{name}` keys a record by type
 and name in the path, so a record with the same name in two types is deleted
 independently — that is the intended granularity. `GET` on the same path
-returns that one record (404 when the zone holds no record of that type and
-name); `GET /api/v1/dns/zones/{zone}/records` lists the zone, optionally
+returns that one record. Both answer 404 (gRPC `NOT_FOUND`, and the matching
+not-found on QUIC, Unix and MCP) when the zone holds no record of that type and
+name; `GET /api/v1/dns/zones/{zone}/records` lists the zone, optionally
 filtered by `?type=`. The two are distinct routes with distinct answers.
 
 The SDK REST client (`sdk/go/transport/rest/dns.go`) calls these routes with

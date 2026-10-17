@@ -152,7 +152,8 @@ while `offset` plus the page length is below it.
 or 404 when the zone holds no record of that type and name.
 
 `DELETE /api/v1/dns/zones/{zone}/records/{type}/{name}` removes it and returns
-the updated zone.
+the updated zone, or 404 when the zone holds no record of that type and name;
+the zone is then left as it was.
 
 ## Resolution
 
