@@ -247,21 +247,7 @@ func (a *CLIAdapter) ListUsers(ctx context.Context, opts ListUsersOptions) (*Lis
 		"--output", "json",
 	}
 
-	if opts.Limit > 0 {
-		args = append(args, "--limit", fmt.Sprintf("%d", opts.Limit))
-	}
-	if opts.Offset > 0 {
-		args = append(args, "--offset", fmt.Sprintf("%d", opts.Offset))
-	}
-	if opts.Email != "" {
-		args = append(args, "--email", opts.Email)
-	}
-	if opts.Role != "" {
-		args = append(args, "--role", opts.Role)
-	}
-	if opts.Group != "" {
-		args = append(args, "--group", opts.Group)
-	}
+	args = append(args, pageFlags(opts.Limit, opts.Offset)...)
 
 	output, err := a.runCommand(ctx, args...)
 	if err != nil {
@@ -456,12 +442,7 @@ func (a *CLIAdapter) ListGroups(ctx context.Context, opts ListGroupsOptions) (*L
 		"--output", "json",
 	}
 
-	if opts.Limit > 0 {
-		args = append(args, "--limit", fmt.Sprintf("%d", opts.Limit))
-	}
-	if opts.Offset > 0 {
-		args = append(args, "--offset", fmt.Sprintf("%d", opts.Offset))
-	}
+	args = append(args, pageFlags(opts.Limit, opts.Offset)...)
 
 	output, err := a.runCommand(ctx, args...)
 	if err != nil {
@@ -662,12 +643,7 @@ func (a *CLIAdapter) ListRoles(ctx context.Context, opts ListRolesOptions) (*Lis
 		"--output", "json",
 	}
 
-	if opts.Limit > 0 {
-		args = append(args, "--limit", fmt.Sprintf("%d", opts.Limit))
-	}
-	if opts.Offset > 0 {
-		args = append(args, "--offset", fmt.Sprintf("%d", opts.Offset))
-	}
+	args = append(args, pageFlags(opts.Limit, opts.Offset)...)
 
 	output, err := a.runCommand(ctx, args...)
 	if err != nil {
@@ -749,6 +725,16 @@ func formatAttributesForCLI(attrs map[string]string) string {
 		pairs = append(pairs, fmt.Sprintf("%s=%s", k, v))
 	}
 	return strings.Join(pairs, ",")
+}
+
+// pageFlags turns the suite's limit/offset into the CLI's --page/--page-size
+// paging, the same mapping the gRPC and Unix adapters use.
+func pageFlags(limit, offset int32) []string {
+	if limit <= 0 {
+		return nil
+	}
+	page := offset/limit + 1
+	return []string{"--page-size", fmt.Sprintf("%d", limit), "--page", fmt.Sprintf("%d", page)}
 }
 
 // Verify CLIAdapter implements IAMCommands
