@@ -158,6 +158,8 @@ Get TPM device information and capabilities.
 ```json
 {
   "info": "...",
+  "version": "2.0",
+  "pcr_banks": ["sha1", "sha256"],
   "manufacturer": "IFX",
   "model": "SLB9670",
   "firmware_version": "7.85",
@@ -171,8 +173,9 @@ Get TPM device information and capabilities.
 ```
 
 `info` is the TPM's text summary. The fixed-property keys are absent when that
-read fails; `is_simulator` comes from the TPM configuration. Values shown are
-examples.
+read fails; `is_simulator` comes from the TPM configuration. `pcr_banks` names
+the banks the TPM allocates and is empty when the PCR read fails. Values shown
+are examples.
 
 ### platform_tpm_provision
 

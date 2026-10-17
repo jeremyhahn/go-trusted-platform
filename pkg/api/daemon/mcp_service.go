@@ -2885,7 +2885,9 @@ func (p *MCPServiceProvider) TPMInfo(ctx context.Context) (interface{}, error) {
 	}
 
 	result := map[string]interface{}{
-		"info": info,
+		"info":      info,
+		"version":   tpmattrs.Version,
+		"pcr_banks": tpmattrs.ActivePCRBanks(p.tpm2Service),
 	}
 	for key, value := range tpmsrk.InfoProperties(p.tpm2Service) {
 		result[key] = value

@@ -134,10 +134,21 @@ func ResolveName(ctx context.Context, zones ZoneReader, name, recordType string)
 }
 
 // enclosingZone returns the managed zone with the longest suffix of name, or
-// nil when no zone holds it. Each suffix is tried lower-cased, then as
-// written. A zone the caller may not read ends the walk: the name belongs to
-// that zone, not to a shorter one the caller happens to own.
+// nil when no zone holds it or the caller may not read the zone that does.
 func enclosingZone(ctx context.Context, zones ZoneReader, name string) *entities.Zone {
+	zone, err := lookupEnclosingZone(ctx, zones, name)
+	if err != nil {
+		return nil
+	}
+	return zone
+}
+
+// lookupEnclosingZone returns the managed zone with the longest suffix of
+// name. Each suffix is tried lower-cased, then as written. A zone the caller
+// may not read ends the walk with ErrUnauthorizedZoneAccess: the name belongs
+// to that zone, not to a shorter one the caller happens to own. With no zone
+// holding the name the error is ErrZoneNotFound.
+func lookupEnclosingZone(ctx context.Context, zones ZoneReader, name string) (*entities.Zone, error) {
 	labels := dns.SplitDomainName(name)
 	for i := range labels {
 		suffix := dns.Fqdn(strings.Join(labels[i:], "."))
@@ -148,14 +159,14 @@ func enclosingZone(ctx context.Context, zones ZoneReader, name string) *entities
 		for _, candidate := range candidates {
 			zone, err := zones.Zone(ctx, candidate)
 			if err == nil {
-				return zone
+				return zone, nil
 			}
 			if errors.Is(err, ErrUnauthorizedZoneAccess) {
-				return nil
+				return nil, err
 			}
 		}
 	}
-	return nil
+	return nil, ErrZoneNotFound
 }
 
 // resolvedOwnerIs reports whether a stored owner names qname. Besides the

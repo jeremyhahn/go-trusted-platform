@@ -17,10 +17,9 @@ package kms
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"net"
 	"os"
-	"strings"
 	"time"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
@@ -64,22 +63,18 @@ func (s *UnixAdapter) Setup(ctx context.Context) error {
 		s.socketPath = DefaultPlatformdSocket
 	}
 
-	// Create dial context with timeout to fail fast when socket unavailable
+	conn, err := grpc.NewClient("unix://"+s.socketPath, helpers.GRPCUnixCredentials())
+	if err != nil {
+		return ErrUnixConnectionFailed{Path: s.socketPath, Err: err}
+	}
+
+	// Bound the readiness wait to fail fast when the socket is unavailable
 	dialCtx, cancel := context.WithTimeout(ctx, unixDialTimeout)
 	defer cancel()
-
-	// Create gRPC connection using Unix socket dialer
-	conn, err := grpc.DialContext(dialCtx, "unix://"+s.socketPath,
-		helpers.GRPCUnixCredentials(),
-		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-			// Strip the unix:// prefix if present
-			socketAddr := strings.TrimPrefix(addr, "unix://")
-			var d net.Dialer
-			return d.DialContext(ctx, "unix", socketAddr)
-		}),
-		grpc.WithBlock(),
-	)
-	if err != nil {
+	if err := helpers.WaitGRPCReady(dialCtx, conn); err != nil {
+		if closeErr := conn.Close(); closeErr != nil {
+			return ErrUnixConnectionFailed{Path: s.socketPath, Err: errors.Join(err, closeErr)}
+		}
 		return ErrUnixConnectionFailed{Path: s.socketPath, Err: err}
 	}
 

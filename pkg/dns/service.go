@@ -1183,12 +1183,9 @@ func (s *Service) AddRecord(ctx context.Context, name string, recordType string,
 		return err
 	}
 
-	// Extract zone name from the record name
-	zoneName := extractZoneName(name)
-
-	zone, err := s.Zone(ctx, zoneName)
+	zone, err := s.recordZone(ctx, name)
 	if err != nil {
-		return &WrappedError{Msg: fmt.Sprintf("failed to get zone for record %s", name), Err: err}
+		return err
 	}
 
 	ttl32 := uint32(ttl)
@@ -1216,29 +1213,31 @@ func (s *Service) AddRecord(ctx context.Context, name string, recordType string,
 
 // DeleteRecord deletes a DNS record from the appropriate zone.
 func (s *Service) DeleteRecord(ctx context.Context, name string, recordType string) error {
-	zoneName := extractZoneName(name)
-
-	zone, err := s.Zone(ctx, zoneName)
+	zone, err := s.recordZone(ctx, name)
 	if err != nil {
-		return &WrappedError{Msg: fmt.Sprintf("failed to get zone for record %s", name), Err: err}
+		return err
 	}
 
 	// Delete the record based on type
+	var removed bool
 	switch recordType {
 	case "A":
-		zone.RemoveARecord(name)
+		removed = zone.RemoveARecord(name)
 	case "AAAA":
-		zone.RemoveAAAARecord(name)
+		removed = zone.RemoveAAAARecord(name)
 	case "CNAME":
-		zone.RemoveCNAMERecord(name)
+		removed = zone.RemoveCNAMERecord(name)
 	case "TXT":
-		zone.RemoveTXTRecord(name)
+		removed = zone.RemoveTXTRecord(name)
 	case "MX":
-		zone.RemoveMXRecord(name)
+		removed = zone.RemoveMXRecord(name)
 	case "NS":
-		zone.RemoveNSRecord(name)
+		removed = zone.RemoveNSRecord(name)
 	default:
 		return &MessageError{Msg: fmt.Sprintf("unsupported record type: %s", recordType)}
+	}
+	if !removed {
+		return ErrRecordNotFound{Name: name, Type: recordType}
 	}
 
 	return s.Save(ctx, zone)
@@ -1246,11 +1245,9 @@ func (s *Service) DeleteRecord(ctx context.Context, name string, recordType stri
 
 // GetRecord retrieves a DNS record by name and type.
 func (s *Service) GetRecord(ctx context.Context, name string, recordType string) (interface{}, error) {
-	zoneName := extractZoneName(name)
-
-	zone, err := s.Zone(ctx, zoneName)
+	zone, err := s.recordZone(ctx, name)
 	if err != nil {
-		return nil, &WrappedError{Msg: fmt.Sprintf("failed to get zone for record %s", name), Err: err}
+		return nil, err
 	}
 
 	// Get the record based on type
@@ -1295,7 +1292,7 @@ func (s *Service) GetRecord(ctx context.Context, name string, recordType string)
 		return nil, &MessageError{Msg: fmt.Sprintf("unsupported record type: %s", recordType)}
 	}
 
-	return nil, &MessageError{Msg: fmt.Sprintf("record not found: %s %s", name, recordType)}
+	return nil, ErrRecordNotFound{Name: name, Type: recordType}
 }
 
 // ListRecords lists all records in a zone.
@@ -1350,13 +1347,14 @@ func (s *Service) Resolve(ctx context.Context, name string, recordType string) (
 	return results, nil
 }
 
-// extractZoneName extracts the zone name from a fully qualified domain name.
-// For example, "www.example.com" returns "example.com".
-func extractZoneName(name string) string {
-	parts := strings.Split(name, ".")
-	if len(parts) >= 2 {
-		// Return the last two parts as the zone name
-		return strings.Join(parts[len(parts)-2:], ".")
+// recordZone returns the zone that holds the record name: the managed zone
+// with the longest suffix of name, so "api.app.example.test." lands in
+// "app.example.test." when that zone exists, not in "example.test." or
+// "test.".
+func (s *Service) recordZone(ctx context.Context, name string) (*entities.Zone, error) {
+	zone, err := lookupEnclosingZone(ctx, s, name)
+	if err != nil {
+		return nil, &WrappedError{Msg: fmt.Sprintf("failed to get zone for record %s", name), Err: err}
 	}
-	return name
+	return zone, nil
 }

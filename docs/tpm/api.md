@@ -136,6 +136,16 @@ fields. Parse the structured fields. If the underlying `FixedProperties` read
 fails the call still succeeds with the text fallback and empty structured
 fields — check for an empty `Manufacturer` before trusting them.
 
+**`Info` reports the TPM version and the allocated PCR banks on every
+transport.** The version is `TPM_VERSION_2_0` on gRPC/Unix and REST and the
+string `"2.0"` (`tpmattrs.Version`) on QUIC (`version`), MCP (`version`) and
+`platformctl tpm info -o json`. The PCR banks come from one reader,
+`tpmattrs.ActivePCRBanks`, which reads PCR 0 of every bank the TPM allocates:
+`PcrBanks` (`PCR_BANK_SHA1`, `PCR_BANK_SHA256`, ...) on gRPC/Unix and REST, and
+lower-case hash names (`sha1`, `sha256`, ...) in `pcr_banks` on QUIC, MCP and
+the CLI. Like the `FixedProperties` fields this read fails soft: a TPM that
+refuses it returns an empty bank list and the call still succeeds.
+
 **`Info` also publishes the configured SRK handles**, so a client probes the real
 handle instead of assuming the default. Every transport carries the same two
 keys, as `0x%08X` strings, built by `tpmsrk.InfoProperties`: `platform_srk_handle`

@@ -144,95 +144,106 @@ func (z *Zone) AddTXTRecord(record *TXTRecord) {
 	z.RecordSet.TXTRecords = append(z.RecordSet.TXTRecords, record)
 }
 
-// Remove methods by record name
-func (z *Zone) RemoveARecord(name string) {
+// Remove methods by record name. Each removes the first record of its type
+// with that name and reports whether the zone held one.
+func (z *Zone) RemoveARecord(name string) bool {
 	for i, record := range z.RecordSet.ARecords {
 		if record.Name == name {
 			z.RecordSet.ARecords = append(z.RecordSet.ARecords[:i], z.RecordSet.ARecords[i+1:]...)
-			break
+			return true
 		}
 	}
+	return false
 }
 
-func (z *Zone) RemoveAAAARecord(name string) {
+func (z *Zone) RemoveAAAARecord(name string) bool {
 	for i, record := range z.RecordSet.AAAARecords {
 		if record.Name == name {
 			z.RecordSet.AAAARecords = append(z.RecordSet.AAAARecords[:i], z.RecordSet.AAAARecords[i+1:]...)
-			break
+			return true
 		}
 	}
+	return false
 }
 
-func (z *Zone) RemoveCNAMERecord(name string) {
+func (z *Zone) RemoveCNAMERecord(name string) bool {
 	for i, record := range z.RecordSet.CNAMERecords {
 		if record.Name == name {
 			z.RecordSet.CNAMERecords = append(z.RecordSet.CNAMERecords[:i], z.RecordSet.CNAMERecords[i+1:]...)
-			break
+			return true
 		}
 	}
+	return false
 }
 
-func (z *Zone) RemoveDNSKEYRecord(name string) {
+func (z *Zone) RemoveDNSKEYRecord(name string) bool {
 	for i, record := range z.RecordSet.DNSKEYRecords {
 		if record.Name == name {
 			z.RecordSet.DNSKEYRecords = append(z.RecordSet.DNSKEYRecords[:i], z.RecordSet.DNSKEYRecords[i+1:]...)
-			break
+			return true
 		}
 	}
+	return false
 }
 
-func (z *Zone) RemoveDSRecord(name string) {
+func (z *Zone) RemoveDSRecord(name string) bool {
 	for i, record := range z.RecordSet.DSRecords {
 		if record.Name == name {
 			z.RecordSet.DSRecords = append(z.RecordSet.DSRecords[:i], z.RecordSet.DSRecords[i+1:]...)
-			break
+			return true
 		}
 	}
+	return false
 }
 
-func (z *Zone) RemoveMXRecord(name string) {
+func (z *Zone) RemoveMXRecord(name string) bool {
 	for i, record := range z.RecordSet.MXRecords {
 		if record.Name == name {
 			z.RecordSet.MXRecords = append(z.RecordSet.MXRecords[:i], z.RecordSet.MXRecords[i+1:]...)
-			break
+			return true
 		}
 	}
+	return false
 }
 
-func (z *Zone) RemoveNSRecord(name string) {
+func (z *Zone) RemoveNSRecord(name string) bool {
 	for i, record := range z.RecordSet.NSRecords {
 		if record.Name == name {
 			z.RecordSet.NSRecords = append(z.RecordSet.NSRecords[:i], z.RecordSet.NSRecords[i+1:]...)
-			break
+			return true
 		}
 	}
+	return false
 }
 
-func (z *Zone) RemoveRRSIGRecord(name string) {
+func (z *Zone) RemoveRRSIGRecord(name string) bool {
 	for i, record := range z.RecordSet.RRSIGRecords {
 		if record.SignerName == name {
 			z.RecordSet.RRSIGRecords = append(z.RecordSet.RRSIGRecords[:i], z.RecordSet.RRSIGRecords[i+1:]...)
-			break
+			return true
 		}
 	}
+	return false
 }
 
-func (z *Zone) RemoveSRVRecord(name string) {
+func (z *Zone) RemoveSRVRecord(name string) bool {
 	for i, record := range z.RecordSet.SRVRecords {
 		if record.Name == name {
 			z.RecordSet.SRVRecords = append(z.RecordSet.SRVRecords[:i], z.RecordSet.SRVRecords[i+1:]...)
-			break
+			return true
 		}
 	}
+	return false
 }
 
-func (z *Zone) RemoveTXTRecord(name string) {
+func (z *Zone) RemoveTXTRecord(name string) bool {
 	for i, record := range z.RecordSet.TXTRecords {
 		if record.Name == name {
 			z.RecordSet.TXTRecords = append(z.RecordSet.TXTRecords[:i], z.RecordSet.TXTRecords[i+1:]...)
-			break
+			return true
 		}
 	}
+	return false
 }
 
 // CAARecord methods
@@ -247,14 +258,15 @@ func (z *Zone) AddCAARecord(record *CAARecord) {
 	z.RecordSet.CAARecords = append(z.RecordSet.CAARecords, record)
 }
 
-// RemoveCAARecord removes a CAA record from the zone by name.
-func (z *Zone) RemoveCAARecord(name string) {
+// RemoveCAARecord removes a CAA record from the zone by name and reports whether the zone held one.
+func (z *Zone) RemoveCAARecord(name string) bool {
 	for i, record := range z.RecordSet.CAARecords {
 		if record.Name == name {
 			z.RecordSet.CAARecords = append(z.RecordSet.CAARecords[:i], z.RecordSet.CAARecords[i+1:]...)
-			break
+			return true
 		}
 	}
+	return false
 }
 
 // TLSARecord methods
@@ -269,14 +281,15 @@ func (z *Zone) AddTLSARecord(record *TLSARecord) {
 	z.RecordSet.TLSARecords = append(z.RecordSet.TLSARecords, record)
 }
 
-// RemoveTLSARecord removes a TLSA record from the zone by name.
-func (z *Zone) RemoveTLSARecord(name string) {
+// RemoveTLSARecord removes a TLSA record from the zone by name and reports whether the zone held one.
+func (z *Zone) RemoveTLSARecord(name string) bool {
 	for i, record := range z.RecordSet.TLSARecords {
 		if record.Name == name {
 			z.RecordSet.TLSARecords = append(z.RecordSet.TLSARecords[:i], z.RecordSet.TLSARecords[i+1:]...)
-			break
+			return true
 		}
 	}
+	return false
 }
 
 // NSECRecord methods
@@ -291,14 +304,15 @@ func (z *Zone) AddNSECRecord(record *NSECRecord) {
 	z.RecordSet.NSECRecords = append(z.RecordSet.NSECRecords, record)
 }
 
-// RemoveNSECRecord removes an NSEC record from the zone by name.
-func (z *Zone) RemoveNSECRecord(name string) {
+// RemoveNSECRecord removes an NSEC record from the zone by name and reports whether the zone held one.
+func (z *Zone) RemoveNSECRecord(name string) bool {
 	for i, record := range z.RecordSet.NSECRecords {
 		if record.Name == name {
 			z.RecordSet.NSECRecords = append(z.RecordSet.NSECRecords[:i], z.RecordSet.NSECRecords[i+1:]...)
-			break
+			return true
 		}
 	}
+	return false
 }
 
 // NSEC3Record methods
@@ -313,14 +327,15 @@ func (z *Zone) AddNSEC3Record(record *NSEC3Record) {
 	z.RecordSet.NSEC3Records = append(z.RecordSet.NSEC3Records, record)
 }
 
-// RemoveNSEC3Record removes an NSEC3 record from the zone by name.
-func (z *Zone) RemoveNSEC3Record(name string) {
+// RemoveNSEC3Record removes an NSEC3 record from the zone by name and reports whether the zone held one.
+func (z *Zone) RemoveNSEC3Record(name string) bool {
 	for i, record := range z.RecordSet.NSEC3Records {
 		if record.Name == name {
 			z.RecordSet.NSEC3Records = append(z.RecordSet.NSEC3Records[:i], z.RecordSet.NSEC3Records[i+1:]...)
-			break
+			return true
 		}
 	}
+	return false
 }
 
 // NSEC3PARAMRecord methods
@@ -335,12 +350,13 @@ func (z *Zone) AddNSEC3PARAMRecord(record *NSEC3PARAMRecord) {
 	z.RecordSet.NSEC3PARAMRecords = append(z.RecordSet.NSEC3PARAMRecords, record)
 }
 
-// RemoveNSEC3PARAMRecord removes an NSEC3PARAM record from the zone by name.
-func (z *Zone) RemoveNSEC3PARAMRecord(name string) {
+// RemoveNSEC3PARAMRecord removes an NSEC3PARAM record from the zone by name and reports whether the zone held one.
+func (z *Zone) RemoveNSEC3PARAMRecord(name string) bool {
 	for i, record := range z.RecordSet.NSEC3PARAMRecords {
 		if record.Name == name {
 			z.RecordSet.NSEC3PARAMRecords = append(z.RecordSet.NSEC3PARAMRecords[:i], z.RecordSet.NSEC3PARAMRecords[i+1:]...)
-			break
+			return true
 		}
 	}
+	return false
 }

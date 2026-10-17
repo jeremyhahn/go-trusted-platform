@@ -19,6 +19,7 @@ package tpmattrs
 
 import (
 	"fmt"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -158,4 +159,37 @@ func keyRef(attrs *xkmssdk.KeyAttributes, err error) *KeyRef {
 		Handle:    uint32(attrs.TPMAttributes.Handle),
 		Algorithm: attrs.KeyAlgorithm.String(),
 	}
+}
+
+// Version is the TPM specification family Info reports on the
+// transports that carry it as text (QUIC, MCP, the CLI's JSON). The
+// daemon drives TPM 2.0 only; gRPC carries it as TPM_VERSION_2_0.
+const Version = "2.0"
+
+// PCRReader is the part of the TPM a PCR-bank read needs.
+type PCRReader interface {
+	ReadPCRs(pcrList []uint) ([]xkmssdk.PCRBank, error)
+}
+
+// ActivePCRBanks names the PCR banks the TPM has allocated, as lower-case
+// hash names ("sha1", "sha256", ...), in the order the TPM reports them.
+// It reads PCR 0 of each bank, which every allocated bank holds. Like
+// ReadPlatform it never fails: a TPM that refuses the read reports no
+// banks, so Info still describes the rest of the TPM.
+func ActivePCRBanks(tpm PCRReader) []string {
+	banks, err := tpm.ReadPCRs([]uint{0})
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(banks))
+	seen := make(map[string]bool, len(banks))
+	for _, bank := range banks {
+		name := strings.ToLower(bank.Algorithm)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	return names
 }

@@ -433,6 +433,7 @@ func (q *QUICAdapter) Info(ctx context.Context) (*InfoResult, error) {
 		IsSimulator:  tpmResp.IsSimulator,
 		FIPSMode:     tpmResp.FIPSMode,
 		MaxNVRAMSize: tpmResp.MaxNVRAMSize,
+		PCRBanks:     tpmResp.PCRBanks,
 	}
 
 	if tpmResp.Manufacturer != "" {

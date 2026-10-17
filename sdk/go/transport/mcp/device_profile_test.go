@@ -123,6 +123,37 @@ func TestDeviceProfileMCP_FindMatchingProfile(t *testing.T) {
 	}
 }
 
+func TestDeviceProfileMCP_FindConfigForDevice(t *testing.T) {
+	var calls []toolCall
+	a := provisioningTestServer(t, map[string]interface{}{"profile_find_config": toolProfile}, &calls)
+
+	resp := &platformv1.FindConfigForDeviceResponse{}
+	err := a.Connection().Invoke(context.Background(), platformv1.DeviceService_FindConfigForDevice_FullMethodName,
+		&platformv1.FindConfigForDeviceRequest{EkSerial: "EK-0042"}, resp)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	args := calls[0].Arguments
+	if calls[0].Name != "profile_find_config" || args["ek_serial"] != "EK-0042" {
+		t.Errorf("call = %+v", calls[0])
+	}
+	if _, sent := args["mac_address"]; sent {
+		t.Error("an empty identity field must not be sent")
+	}
+	if resp.GetProfile().GetMatchRules().GetSerialPrefix() != "SN100" {
+		t.Errorf("profile = %v", resp.GetProfile())
+	}
+}
+
+func TestDeviceProfileMCP_FindConfigForDeviceRejectsWrongMessageTypes(t *testing.T) {
+	if _, err := buildProfileFindConfigArgs(&platformv1.FindMatchingProfileRequest{}); err == nil {
+		t.Error("buildProfileFindConfigArgs accepted a FindMatchingProfileRequest")
+	}
+	if err := decodeProfileFindConfigResult(toolProfile, &platformv1.FindMatchingProfileResponse{}); err == nil {
+		t.Error("decodeProfileFindConfigResult accepted a FindMatchingProfileResponse")
+	}
+}
+
 func TestDeviceProfileMCP_FindProfileByMACAddress(t *testing.T) {
 	var calls []toolCall
 	a := provisioningTestServer(t, map[string]interface{}{"profile_find_by_mac": toolProfile}, &calls)

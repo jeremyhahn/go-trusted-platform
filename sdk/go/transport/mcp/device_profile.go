@@ -21,7 +21,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/provision"
 )
 
-// The profile read, delete and match tools (pkg/api/mcp/device_profile_tools.go)
+// The profile read, delete, match and find-config tools (pkg/api/mcp/device_profile_tools.go)
 // take decimal-string ids and answer with the profile in its domain JSON
 // shape, so each method carries its own argument builder and reply decoder.
 func init() {
@@ -32,6 +32,7 @@ func init() {
 		platformv1.DeviceService_FindMatchingProfile_FullMethodName:     "profile_find_matching",
 		platformv1.DeviceService_FindProfileByMACAddress_FullMethodName: "profile_find_by_mac",
 		platformv1.DeviceService_FindProfileBySerial_FullMethodName:     "profile_find_by_serial",
+		platformv1.DeviceService_FindConfigForDevice_FullMethodName:     "profile_find_config",
 	} {
 		grpcMethodToMCPToolMap[method] = tool
 	}
@@ -47,6 +48,8 @@ func init() {
 	mcpArgBuilders[platformv1.DeviceService_FindProfileBySerial_FullMethodName] = buildProfileFindBySerialArgs
 	mcpReplyDecoders[platformv1.DeviceService_FindProfileByMACAddress_FullMethodName] = decodeProfileFindByMACResult
 	mcpReplyDecoders[platformv1.DeviceService_FindProfileBySerial_FullMethodName] = decodeProfileFindBySerialResult
+	mcpArgBuilders[platformv1.DeviceService_FindConfigForDevice_FullMethodName] = buildProfileFindConfigArgs
+	mcpReplyDecoders[platformv1.DeviceService_FindConfigForDevice_FullMethodName] = decodeProfileFindConfigResult
 }
 
 // buildProfileGetArgs sends the profile id as a decimal string, so a uint64
@@ -124,6 +127,22 @@ func buildProfileFindBySerialArgs(args interface{}) (map[string]interface{}, err
 	return map[string]interface{}{"serial": req.GetSerial()}, nil
 }
 
+// buildProfileFindConfigArgs sends the device identity the daemon resolves a
+// configuration profile for; an empty field is left out.
+func buildProfileFindConfigArgs(args interface{}) (map[string]interface{}, error) {
+	req, ok := args.(*platformv1.FindConfigForDeviceRequest)
+	if !ok {
+		return nil, ErrUnexpectedArgsType{Method: platformv1.DeviceService_FindConfigForDevice_FullMethodName}
+	}
+	out := map[string]interface{}{}
+	for key, value := range map[string]string{"ek_serial": req.GetEkSerial(), "mac_address": req.GetMacAddress()} {
+		if value != "" {
+			out[key] = value
+		}
+	}
+	return out, nil
+}
+
 // profileIDArgs is the argument map of the single-profile tools.
 func profileIDArgs(id uint64) map[string]interface{} {
 	return map[string]interface{}{"id": strconv.FormatUint(id, 10)}
@@ -176,6 +195,19 @@ func decodeProfileFindBySerialResult(result interface{}, reply interface{}) erro
 	out, ok := reply.(*platformv1.FindProfileBySerialResponse)
 	if !ok {
 		return ErrUnexpectedReplyType{Method: platformv1.DeviceService_FindProfileBySerial_FullMethodName}
+	}
+	profile, err := decodeProfileResult(result)
+	if err != nil {
+		return err
+	}
+	out.Profile = profile
+	return nil
+}
+
+func decodeProfileFindConfigResult(result interface{}, reply interface{}) error {
+	out, ok := reply.(*platformv1.FindConfigForDeviceResponse)
+	if !ok {
+		return ErrUnexpectedReplyType{Method: platformv1.DeviceService_FindConfigForDevice_FullMethodName}
 	}
 	profile, err := decodeProfileResult(result)
 	if err != nil {

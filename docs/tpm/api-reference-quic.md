@@ -187,6 +187,7 @@ type TPM2InfoResponse struct {
     IsSimulator  bool              `codec:"is_simulator"`
     FIPSMode     bool              `codec:"fips_mode"`
     MaxNVRAMSize uint32            `codec:"max_nvram_size"`
+    PCRBanks     []string          `codec:"pcr_banks"` // "sha1", "sha256", ...; empty when the PCR read fails
     Properties   map[string]string `codec:"properties"`
     Timestamp    int64             `codec:"timestamp"`
 }

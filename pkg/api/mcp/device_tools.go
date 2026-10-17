@@ -380,13 +380,13 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "profile_find_config",
-		Description: "Find the profile a booting device receives, by EK serial first and MAC address second",
+		Description: "Resolve the configuration profile a booting machine receives from its EK serial or MAC address",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"ek_serial": map[string]interface{}{
 					"type":        "string",
-					"description": "Device EK certificate serial",
+					"description": "TPM endorsement key certificate serial",
 				},
 				"mac_address": map[string]interface{}{
 					"type":        "string",

@@ -146,11 +146,22 @@ func TestDNSDeleteRecord_Delegated(t *testing.T) {
 		mock := NewMockDNSService()
 		handler := createDNSUnitTestHandler(mock)
 		req := createDNSUnitTestRequest(t, quicwire.OpDNSDeleteRecord, &platformv1.DeleteRecordRequest{
-			ZoneName: "example.com.", Type: platformv1.RecordType_RECORD_TYPE_A, Name: "www",
+			ZoneName: "example.com.", Type: platformv1.RecordType_RECORD_TYPE_A, Name: "test",
 		})
 		resp := handler.HandleRequest(ctx, req)
 		require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
 		assert.GreaterOrEqual(t, mock.CallCount("Save"), 1)
+	})
+
+	t.Run("record the zone does not hold", func(t *testing.T) {
+		mock := NewMockDNSService()
+		handler := createDNSUnitTestHandler(mock)
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSDeleteRecord, &platformv1.DeleteRecordRequest{
+			ZoneName: "example.com.", Type: platformv1.RecordType_RECORD_TYPE_A, Name: "www",
+		})
+		resp := handler.HandleRequest(ctx, req)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status, string(resp.Payload))
+		assert.Zero(t, mock.CallCount("Save"), "a delete that removes nothing does not rewrite the zone")
 	})
 
 	t.Run("missing zone name", func(t *testing.T) {

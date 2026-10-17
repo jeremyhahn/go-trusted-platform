@@ -2050,6 +2050,21 @@ func (e ErrVMListUnsupportedSortField) GRPCStatus() *status.Status {
 	return status.New(codes.InvalidArgument, e.Error())
 }
 
+// ErrDNSZoneListUnsupportedSortField is returned when ListZones is asked to
+// sort by a field it does not order zones by.
+type ErrDNSZoneListUnsupportedSortField struct {
+	Field string
+}
+
+func (e ErrDNSZoneListUnsupportedSortField) Error() string {
+	return "list DNS zones: unsupported sort field: " + e.Field
+}
+
+// GRPCStatus classifies an unsupported sort field as InvalidArgument.
+func (e ErrDNSZoneListUnsupportedSortField) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // ErrProfileConfigInvalid is returned when a device profile create or
 // update request carries config bytes that are not valid JSON, so the
 // full platform config cannot be decoded onto the profile entity.

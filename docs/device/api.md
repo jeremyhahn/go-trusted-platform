@@ -1330,7 +1330,7 @@ and every tool in them is dispatched and scope-checked.
 | Family | Registered by | Executor | In the authorization map |
 |---|---|---|---|
 | `device_register`, `device_get`, `device_find_by_serial`, `device_list`, `device_delete`, `device_update`, `device_attest`, `device_record_attest_cert`, `device_provision`, `device_disable`, `device_enable` | `registerDeviceTools` (`tools.go:557`) | `ExecuteTool` (`tools.go:1325`) | **yes** — `device:write` / `device:read` / `device:delete` |
-| `profile_create`, `profile_get_by_id`, `profile_list_all`, `profile_update_by_id`, `profile_delete_by_id`, `profile_find_matching`, `profile_find_by_mac`, `profile_find_by_serial`, `profile_assign_to_device`, `profile_unassign_from_device` | `registerDeviceToolsV2` (`device_tools.go:99`) | `deviceProfileToolDispatch` | **yes** — all ten mapped to `device:*` |
+| `profile_create`, `profile_get_by_id`, `profile_list_all`, `profile_update_by_id`, `profile_delete_by_id`, `profile_find_matching`, `profile_find_by_mac`, `profile_find_by_serial`, `profile_find_config`, `profile_assign_to_device`, `profile_unassign_from_device` | `registerDeviceToolsV2` (`device_tools.go:99`) | `deviceProfileToolDispatch` | **yes** — all eleven mapped to `device:*` |
 | `device_template_create`, `device_template_get`, `device_template_list`, `device_template_update`, `device_template_delete`, `profile_create_from_template` (§4) | `registerDeviceTemplateTools` (`device_template_tools.go:157`) | `deviceProfileToolDispatch` | **yes** — create, update and create-from-template `device:write`; get and list `device:read`; delete `device:delete` |
 
 The template tools are not the `vtpm_*_template_*` tools, which create
