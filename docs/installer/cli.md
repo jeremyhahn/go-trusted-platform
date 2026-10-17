@@ -453,12 +453,16 @@ output are in §4.
 ## 4. Step and profile verbs
 
 Each verb prints one result object in the selected `--output` format and exits
-non-zero on failure (§7).
+non-zero on failure (§7). Stdout carries only that object: progress lines and
+the output of the tools a verb runs (`7z`, `bsdtar`, `xorriso`, the build
+container) go to stderr.
 
-**`--output` is shadowed on two verbs.** `iso build --output` (the ISO path)
-and `iso profile generate --output` / `-o` (the config file) replace the global
-`--output` / `-o`, so those two verbs always print in the default format —
-`table`, which renders a result object as YAML. Parse their output as YAML.
+**`--output` is shadowed on three verbs.** `iso create --output` and
+`iso build --output` (the ISO path) and `iso profile generate --output` / `-o`
+(the config file) replace the global `--output` / `-o`, so those verbs always
+print in the default format — `table`, which renders a result object as YAML.
+Parse their output as YAML. `iso create` prints `success`, `output_iso`,
+`sha256`, `size_bytes` and `message`.
 
 **`iso download`** — `--url` (`""`; must name an ISO file and overrides
 `--version`/`--mirror`/`--arch`), `--version` (`3.22.2`), `--mirror`

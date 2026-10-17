@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -34,6 +35,7 @@ import (
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/rest"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 )
 
 // =============================================================================
@@ -224,10 +226,7 @@ func (g *GRPCAdapter) Setup(ctx context.Context) error {
 	}
 	g.endpoint = endpoint
 
-	conn, err := grpc.DialContext(ctx, endpoint,
-		helpers.GRPCTransportCredentials(),
-		grpc.WithBlock(),
-	)
+	conn, err := dialReady(ctx, endpoint, helpers.GRPCTransportCredentials())
 	if err != nil {
 		return ErrAdapterConnectionFailed{Adapter: "gRPC", URL: endpoint, Err: err}
 	}
@@ -555,11 +554,6 @@ func (q *QUICAdapter) Setup(ctx context.Context) error {
 	)
 }
 
-// Attest has no QUIC mapping in the SDK.
-func (q *QUICAdapter) Attest(ctx context.Context, id string) (*AttestationReport, error) {
-	return nil, noSurface(q.Name(), opAttest)
-}
-
 // =============================================================================
 // MCP Adapter Implementation
 // =============================================================================
@@ -627,13 +621,12 @@ func (u *UnixAdapter) Setup(ctx context.Context) error {
 	}
 	u.socketPath = socketPath
 
-	conn, err := grpc.DialContext(ctx, "unix://"+socketPath,
+	conn, err := dialReady(ctx, "unix://"+socketPath,
 		helpers.GRPCUnixCredentials(),
 		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
 			var d net.Dialer
 			return d.DialContext(ctx, "unix", strings.TrimPrefix(addr, "unix://"))
 		}),
-		grpc.WithBlock(),
 	)
 	if err != nil {
 		return ErrAdapterConnectionFailed{Adapter: "Unix", URL: socketPath, Err: err}
@@ -643,6 +636,33 @@ func (u *UnixAdapter) Setup(ctx context.Context) error {
 	u.closer = conn
 	u.client = computesvc.NewClientFromGRPC(pb.NewComputeServiceClient(conn))
 	return nil
+}
+
+// dialReady creates a gRPC client and waits until its connection is ready or
+// ctx ends. grpc.NewClient connects lazily, so this restores the blocking
+// dial the adapters rely on: Setup fails when the daemon is not reachable.
+func dialReady(ctx context.Context, target string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
+	conn, err := grpc.NewClient(target, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	conn.Connect()
+	for {
+		state := conn.GetState()
+		if state == connectivity.Ready {
+			return conn, nil
+		}
+		if state == connectivity.Idle {
+			conn.Connect()
+		}
+		if !conn.WaitForStateChange(ctx, state) {
+			if closeErr := conn.Close(); closeErr != nil {
+				return nil, errors.Join(ctx.Err(), closeErr)
+			}
+			return nil, ctx.Err()
+		}
+	}
 }
 
 // =============================================================================

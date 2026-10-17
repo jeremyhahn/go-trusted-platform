@@ -99,7 +99,10 @@ func TestComputeOrchestrator_HostTPMWithoutRuntime(t *testing.T) {
 	ctx := context.Background()
 	_, createErr := orch.engine.Create(ctx, &OrchestratorContainerSpec{Name: "refused", Image: "alpine:latest"})
 	startErr := orch.engine.Start(ctx, "refused")
-	for op, err := range map[string]error{"Create": createErr, "Start": startErr} {
+	// The compute API's Start is refused too, even for an instance it has
+	// never seen: the caller learns why nothing runs, not "not found".
+	computeStartErr := orch.Start(ctx, "never-created")
+	for op, err := range map[string]error{"Create": createErr, "Start": startErr, "compute Start": computeStartErr} {
 		var refusal *MeasuredRuntimeUnavailableError
 		if !errors.As(err, &refusal) {
 			t.Fatalf("%s on a TPM host without a runtime: got %v, want MeasuredRuntimeUnavailableError", op, err)
@@ -137,6 +140,9 @@ func TestComputeOrchestrator_NoHostTPMLaunchesUnmeasured(t *testing.T) {
 	}
 	if orch.engine.measurementRequired() {
 		t.Fatal("a host without a TPM cannot measure launches")
+	}
+	if err := orch.Start(context.Background(), "never-created"); !errors.Is(err, compute.ErrInstanceNotFound) {
+		t.Fatalf("Start of an unknown instance without a refusal: got %v, want ErrInstanceNotFound", err)
 	}
 }
 

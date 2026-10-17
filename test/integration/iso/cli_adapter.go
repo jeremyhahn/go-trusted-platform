@@ -128,7 +128,7 @@ func (c *CLIAdapter) runVerb(ctx context.Context, timeout time.Duration, method 
 // Create performs all-in-one ISO creation via CLI.
 func (c *CLIAdapter) Create(ctx context.Context, opts CreateOptions) (*CreateResult, error) {
 	startTime := time.Now()
-	args := []string{"iso", "create", "-o", "json"}
+	args := []string{"iso", "create"}
 
 	// Alpine flags
 	if opts.AlpineVersion != "" {
@@ -194,29 +194,18 @@ func (c *CLIAdapter) Create(ctx context.Context, opts CreateOptions) (*CreateRes
 		args = append(args, "--verbose")
 	}
 
-	// ISO creation can take a long time
-	output, err := c.runCommandWithTimeout(ctx, 30*time.Minute, args...)
-	elapsed := time.Since(startTime)
-	if err != nil {
-		return nil, ErrCallFailed{Protocol: "CLI", Method: "iso create", Err: err}
-	}
-
+	// ISO creation can take a long time. Its local --output shadows the
+	// global format flag, so the result object prints as YAML
+	// (docs/installer/cli.md §4).
 	var resp struct {
-		Success   bool   `json:"success"`
-		OutputISO string `json:"output_iso"`
-		SHA256    string `json:"sha256"`
-		SizeBytes int64  `json:"size_bytes"`
-		Message   string `json:"message"`
+		Success   bool   `yaml:"success"`
+		OutputISO string `yaml:"output_iso"`
+		SHA256    string `yaml:"sha256"`
+		SizeBytes int64  `yaml:"size_bytes"`
+		Message   string `yaml:"message"`
 	}
-
-	// Try to parse JSON response
-	if err := json.Unmarshal(output, &resp); err != nil {
-		// If not JSON, check if operation succeeded by looking for output file
-		return &CreateResult{
-			Success:     true,
-			Message:     string(output),
-			ElapsedTime: elapsed,
-		}, nil
+	if err := c.runVerb(ctx, 30*time.Minute, "iso create", yaml.Unmarshal, &resp, args...); err != nil {
+		return nil, err
 	}
 
 	return &CreateResult{
@@ -225,7 +214,7 @@ func (c *CLIAdapter) Create(ctx context.Context, opts CreateOptions) (*CreateRes
 		SHA256:      resp.SHA256,
 		SizeBytes:   resp.SizeBytes,
 		Message:     resp.Message,
-		ElapsedTime: elapsed,
+		ElapsedTime: time.Since(startTime),
 	}, nil
 }
 

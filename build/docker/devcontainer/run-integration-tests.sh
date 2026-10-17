@@ -129,9 +129,11 @@ declare -A TARGET_ENV=(
 # diskimage suite boots an aarch64 guest under TCG emulation, where a first
 # boot through firstboot provisioning takes tens of minutes. The root package
 # and testenv-enrollment carry the enrollment test's own 30-minute context;
-# e2e carries a 45-minute one.
+# e2e carries a 45-minute one. iso builds real ISOs and boots one under QEMU;
+# its VM test carries a 120-minute context.
 declare -A TARGET_TIMEOUTS=(
     [diskimage]="90m"
+    [iso]="130m"
     [netboot]="40m"
     [nat64]="15m"
     [ipsec]="40m"
@@ -313,14 +315,20 @@ restore_workspace_ownership() {
 # chronyd paths (start_chronyd): the Debian chrony package's defaults, which
 # pkg/ntp DefaultPaths also renders and drives.
 CHRONYD_CONF="/etc/chrony/chrony.conf"
-CHRONYD_SOCK="/run/chrony/chronyd.sock"
-CHRONYD_PID_FILE="/run/chrony/chronyd.pid"
+CHRONYD_RUN_DIR="/run/chrony"
+CHRONYD_SOCK="${CHRONYD_RUN_DIR}/chronyd.sock"
+CHRONYD_PID_FILE="${CHRONYD_RUN_DIR}/chronyd.pid"
 # The reference chronyd (start_ntp_reference) that serves the config's
-# loopback upstream. Its own directory keeps its pid file apart from the
-# daemon's chronyd.
-NTP_REFERENCE_DIR="/run/chrony-reference"
-NTP_REFERENCE_CONF="${NTP_REFERENCE_DIR}/chrony.conf"
-NTP_REFERENCE_PID_FILE="${NTP_REFERENCE_DIR}/chronyd.pid"
+# loopback upstream. Its files sit beside the daemon chronyd's under their
+# own names. A config under /run/chrony-reference/ failed with "Could not
+# open ... Permission denied" although root wrote it and the container is
+# privileged: only a mandatory access control profile refuses root there,
+# and the chrony package's AppArmor profile for /usr/sbin/chronyd (loaded on
+# the CI host, so it confines chronyd in this container too) allows reads
+# of /etc/chrony/ and writes to /run/chrony/ only. That left the daemon's
+# chronyd with no source and the ntp component degraded (#949).
+NTP_REFERENCE_CONF="/etc/chrony/reference.conf"
+NTP_REFERENCE_PID_FILE="${CHRONYD_RUN_DIR}/reference.pid"
 
 cleanup() {
     if [ "$CLEANUP_DONE" = true ]; then
@@ -747,13 +755,14 @@ start_chronyd() {
         echo "WARNING: platformd rendered no ${CHRONYD_CONF}; the ntp suite has no chronyd"
         return 0
     fi
-    start_ntp_reference
-    echo "=== Starting chronyd (config: ${CHRONYD_CONF}, clock control off) ==="
     # chronyd drops to _chrony and opens its command socket only when the
     # socket's directory is owned by that user and closed to others; a
     # root-owned 0755 directory leaves it running with "Disabled command
     # socket", so every chronyc poll platformd makes fails (#949).
-    install -d -m 0750 -o _chrony -g _chrony "$(dirname "${CHRONYD_SOCK}")"
+    # The reference chronyd keeps its pid file in the same directory.
+    install -d -m 0750 -o _chrony -g _chrony "${CHRONYD_RUN_DIR}"
+    start_ntp_reference
+    echo "=== Starting chronyd (config: ${CHRONYD_CONF}, clock control off) ==="
     if ! chronyd -x -f "${CHRONYD_CONF}"; then
         echo "WARNING: chronyd failed to start; the ntp suite has no chronyd"
         return 0
@@ -784,7 +793,6 @@ start_chronyd() {
 # daemon makes still reaches the daemon's chronyd.
 start_ntp_reference() {
     echo "=== Starting the reference chronyd on 127.0.0.1:123 ==="
-    install -d -m 0750 -o _chrony -g _chrony "${NTP_REFERENCE_DIR}"
     cat > "${NTP_REFERENCE_CONF}" << NTPREFEOF
 bindaddress 127.0.0.1
 allow 127.0.0.1
@@ -793,8 +801,12 @@ cmdport 0
 bindcmdaddress /
 pidfile ${NTP_REFERENCE_PID_FILE}
 NTPREFEOF
+    # Without the reference the daemon's chronyd never synchronises, the ntp
+    # component stays degraded and every transport's aggregate health is
+    # not-healthy, so the suites would fail far from this cause.
     if ! chronyd -x -f "${NTP_REFERENCE_CONF}"; then
-        echo "WARNING: the reference chronyd failed to start; the daemon's chronyd has no source"
+        echo "FATAL: the reference chronyd failed to start on ${NTP_REFERENCE_CONF}; the daemon's chronyd has no source"
+        exit 1
     fi
 }
 

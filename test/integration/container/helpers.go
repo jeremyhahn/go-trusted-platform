@@ -276,13 +276,11 @@ func CreateImplementedAdapters() []ContainerCommands {
 
 // SetupAdapter sets up an adapter and returns a cleanup function.
 // Returns an error if setup fails.
-func SetupAdapter(ctx context.Context, adapter ContainerCommands) (cleanup func(), err error) {
+func SetupAdapter(ctx context.Context, adapter ContainerCommands) (cleanup func() error, err error) {
 	if err := adapter.Setup(ctx); err != nil {
 		return nil, err
 	}
-	return func() {
-		adapter.Teardown()
-	}, nil
+	return adapter.Teardown, nil
 }
 
 // =============================================================================
@@ -336,7 +334,11 @@ func RunContainerCreateBenchmark(b *testing.B, cmd ContainerCommands, prefix str
 	if err := cmd.Setup(ctx); err != nil {
 		b.Fatalf("Setup failed: %v", err)
 	}
-	defer cmd.Teardown()
+	defer func() {
+		if err := cmd.Teardown(); err != nil {
+			b.Errorf("Teardown failed: %v", err)
+		}
+	}()
 
 	b.ResetTimer()
 
@@ -352,8 +354,9 @@ func RunContainerCreateBenchmark(b *testing.B, cmd ContainerCommands, prefix str
 			b.Fatalf("Create failed: %v", err)
 		}
 
-		// Cleanup
-		cmd.Remove(ctx, container.ID, true)
+		if err := cmd.Remove(ctx, container.ID, true); err != nil {
+			b.Fatalf("Remove failed: %v", err)
+		}
 	}
 }
 
@@ -364,7 +367,11 @@ func RunContainerLifecycleBenchmark(b *testing.B, cmd ContainerCommands, prefix 
 	if err := cmd.Setup(ctx); err != nil {
 		b.Fatalf("Setup failed: %v", err)
 	}
-	defer cmd.Teardown()
+	defer func() {
+		if err := cmd.Teardown(); err != nil {
+			b.Errorf("Teardown failed: %v", err)
+		}
+	}()
 
 	b.ResetTimer()
 

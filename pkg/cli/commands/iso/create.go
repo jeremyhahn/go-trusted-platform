@@ -72,6 +72,17 @@ type createFlags struct {
 	bootstrapSPKIPin  string
 }
 
+// createResult is the result `iso create` prints. Its local --output (the
+// ISO path) shadows the global format flag, so it prints in the default
+// format: table, which renders a struct as YAML.
+type createResult struct {
+	Success   bool   `json:"success" yaml:"success"`
+	OutputISO string `json:"output_iso" yaml:"output_iso"`
+	SHA256    string `json:"sha256" yaml:"sha256"`
+	SizeBytes int64  `json:"size_bytes" yaml:"size_bytes"`
+	Message   string `json:"message" yaml:"message"`
+}
+
 // newCreateCommand creates the create subcommand for all-in-one ISO creation
 func newCreateCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	flags := &createFlags{}
@@ -111,7 +122,7 @@ Examples:
   # Create ISO with overrides merged onto a template config
   platformctl iso create --platform-config base.yaml --overrides node-specific.yaml`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCreate(getFlags(), flags)
+			return runCreate(getFlags(), flags, cmd.OutOrStdout())
 		},
 	}
 
@@ -178,7 +189,7 @@ Examples:
 }
 
 // runCreate executes the all-in-one ISO creation command
-func runCreate(commonFlags *cli.CommonFlags, flags *createFlags) error {
+func runCreate(commonFlags *cli.CommonFlags, flags *createFlags, out io.Writer) error {
 	ctx := context.Background()
 
 	// Setup logger
@@ -299,24 +310,26 @@ func runCreate(commonFlags *cli.CommonFlags, flags *createFlags) error {
 		return ErrBuildFailed{Reason: err.Error()}
 	}
 
-	// Calculate and display SHA256
-	printInfo("Calculating SHA256 checksum...")
-	checksum, err := calculateFileSHA256(outputISO)
-	if err != nil {
-		printWarn(fmt.Sprintf("Failed to calculate checksum: %v", err))
-	} else {
-		printInfo(fmt.Sprintf("SHA256: %s", checksum))
-	}
-
 	printHeader("ISO Creation Complete")
 	printSuccess(fmt.Sprintf("Output ISO: %s", outputISO))
 
-	// Get file size
-	if info, err := os.Stat(outputISO); err == nil {
-		printInfo(fmt.Sprintf("Size: %d MB", info.Size()/(1024*1024)))
-	}
+	return printCreateResult(out, commonFlags, outputISO, buildConfig.AlpineVersion)
+}
 
-	return nil
+// printCreateResult prints the created ISO's path, SHA-256 and size as the
+// verb's result object.
+func printCreateResult(out io.Writer, commonFlags *cli.CommonFlags, outputISO, alpineVersion string) error {
+	sum, size, err := fileDigest(outputISO)
+	if err != nil {
+		return err
+	}
+	return printResult(out, commonFlags, createResult{
+		Success:   true,
+		OutputISO: outputISO,
+		SHA256:    sum,
+		SizeBytes: size,
+		Message:   "ISO created from Alpine " + alpineVersion,
+	})
 }
 
 // applyOverrides merges the overrides file onto the platform config template

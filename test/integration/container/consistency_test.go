@@ -32,17 +32,6 @@ import (
 )
 
 // =============================================================================
-// Consistency Test Types
-// =============================================================================
-
-// adapterResult holds the result of an adapter operation for comparison.
-type adapterResult struct {
-	name string
-	err  error
-	data interface{}
-}
-
-// =============================================================================
 // Consistency Tests
 // =============================================================================
 
@@ -120,7 +109,7 @@ func testCreateConsistency(t *testing.T, ctx context.Context, adapters []Contain
 
 		container, err := adapter.Create(ctx, opts)
 		require.NoError(t, err, "%s: Create should succeed", adapter.Name())
-		defer CleanupContainer(t, ctx, adapter, container.ID)
+		t.Cleanup(func() { CleanupContainer(t, ctx, adapter, container.ID) })
 
 		// Verify basic properties
 		assert.NotEmpty(t, container.ID, "%s: Container ID should not be empty", adapter.Name())

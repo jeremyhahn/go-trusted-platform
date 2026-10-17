@@ -445,14 +445,12 @@ func testListContainersWithFilters(t *testing.T) {
 	defer cancel()
 
 	// Create and start some containers
-	var runningIDs []string
 	for i := 0; i < 2; i++ {
 		spec := CreateTestContainerSpec(fmt.Sprintf("test-filter-running-%d", i), "alpine:latest")
 		c, err := orchestrator.Create(ctx, spec)
 		require.NoError(t, err)
 		err = orchestrator.Start(ctx, c.ID)
 		require.NoError(t, err)
-		runningIDs = append(runningIDs, c.ID)
 	}
 
 	// Create stopped containers
@@ -489,7 +487,7 @@ func testContainerLogs(t *testing.T) {
 	logs, err := orchestrator.Logs(ctx, c.ID, container.LogOptions{Stdout: true, Stderr: true})
 	require.NoError(t, err)
 	require.NotNil(t, logs)
-	defer logs.Close()
+	require.NoError(t, logs.Close())
 }
 
 func testFullLifecycle(t *testing.T) {
@@ -942,7 +940,8 @@ func testAttestationTPMError(t *testing.T) {
 	defer fixtures.Reset()
 
 	// Configure TPM to fail
-	fixtures.TPM.SetFailure(errors.New("TPM error"))
+	tpmErr := errors.New("TPM error")
+	fixtures.TPM.SetFailure(tpmErr)
 
 	orchestrator, err := fixtures.CreateOrchestratorWithAttestation()
 	require.NoError(t, err)
@@ -953,10 +952,18 @@ func testAttestationTPMError(t *testing.T) {
 
 	spec := CreateTestContainerSpec("tpm-error", "alpine:latest")
 
-	// Create should still succeed (TPM errors are logged but not fatal)
+	// A container is measured or it does not run
+	// (docs/compute/container-orchestrator.md, Attestation Flow): a failed
+	// measurement refuses the create and removes the created container.
 	c, err := orchestrator.Create(ctx, spec)
-	require.NoError(t, err)
-	require.NotNil(t, c)
+	require.Error(t, err)
+	assert.Nil(t, c)
+
+	var unmeasured *container.UnmeasuredLaunchError
+	require.ErrorAs(t, err, &unmeasured)
+	assert.ErrorIs(t, err, tpmErr)
+	assert.GreaterOrEqual(t, fixtures.Podman.GetRemoveCalls(), int32(1),
+		"the unmeasured container must be removed")
 }
 
 func testFullAttestationWorkflow(t *testing.T) {

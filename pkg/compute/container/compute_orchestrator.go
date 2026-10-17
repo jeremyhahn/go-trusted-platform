@@ -450,6 +450,14 @@ func (o *ComputeOrchestrator) refreshInstance(ctx context.Context, managed *mana
 
 // Start starts a stopped container instance.
 func (o *ComputeOrchestrator) Start(ctx context.Context, instanceID string) error {
+	// A host that refuses launches refuses every start, whether or not the
+	// instance is known, so the caller learns why nothing can run.
+	if !o.closed.Load() {
+		if refusal := o.engine.LaunchRefusal(); refusal != nil {
+			return mapEngineError("start", refusal)
+		}
+	}
+
 	managed, err := o.loadManaged(instanceID)
 	if err != nil {
 		return err

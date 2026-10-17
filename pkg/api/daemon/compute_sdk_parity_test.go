@@ -21,6 +21,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,6 +38,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
@@ -437,6 +440,32 @@ func TestVMCreateSDKParity_StartFailureLeavesNoVM(t *testing.T) {
 			assert.Equal(t, codes.NotFound, status.Code(err), "err = %v", err)
 			_, getErr := orch.Get(context.Background(), "vm-nostart-instance")
 			assert.Error(t, getErr, "the VM that failed to start must be deleted")
+		})
+	}
+}
+
+// errCreateReached is what the orchestrator answers when a create that
+// every transport must refuse reaches it anyway.
+var errCreateReached = errors.New("create reached the orchestrator")
+
+func TestContainerCreateSDKParity_EmptyNameRefused(t *testing.T) {
+	for _, transport := range vmSDKTransports {
+		t.Run(transport.name, func(t *testing.T) {
+			provider, svc, orch := newComputeParityPair()
+			var creates atomic.Int32
+			orch.createFunc = func(context.Context, *entities.DeviceProfile) (*compute.Instance, error) {
+				creates.Add(1)
+				return nil, errCreateReached
+			}
+			client := transport.dial(t, provider, svc)
+
+			ctr, err := client.CreateContainer(context.Background(), &platformv1.ContainerConfig{Image: "alpine:3"}, false)
+
+			assert.Nil(t, ctr)
+			assert.True(t, typedAs[*sdkcompute.ErrCreateContainerFailed](err), "err = %T, want *ErrCreateContainerFailed", err)
+			assert.Equal(t, codes.InvalidArgument, status.Code(err), "err = %v", err)
+			assert.Contains(t, err.Error(), container.ErrContainerNameRequired.Error())
+			assert.Zero(t, creates.Load(), "a create with no name must not reach the orchestrator")
 		})
 	}
 }

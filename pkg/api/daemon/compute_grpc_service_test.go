@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
@@ -865,7 +866,7 @@ func TestComputeGRPCService_CreateContainer(t *testing.T) {
 		svc := createTestComputeService(t)
 
 		resp, err := svc.CreateContainer(ctx, &platformv1.CreateContainerRequest{
-			Config: &platformv1.ContainerConfig{Image: ""},
+			Config: &platformv1.ContainerConfig{Name: "no-image", Image: ""},
 		})
 
 		assert.Nil(t, resp)
@@ -873,6 +874,27 @@ func TestComputeGRPCService_CreateContainer(t *testing.T) {
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		assert.Equal(t, codes.InvalidArgument, st.Code())
+		assert.Equal(t, "container image is required", st.Message())
+	})
+
+	t.Run("returns error for empty name", func(t *testing.T) {
+		orchestrator := newGRPCMockOrchestrator()
+		orchestrator.createFunc = func(ctx context.Context, profile *entities.DeviceProfile) (*compute.Instance, error) {
+			t.Fatal("an unnamed container must not reach the orchestrator")
+			return nil, nil
+		}
+		svc := NewComputeGRPCService(logging.DefaultLogger(), orchestrator)
+
+		resp, err := svc.CreateContainer(ctx, &platformv1.CreateContainerRequest{
+			Config: &platformv1.ContainerConfig{Image: "nginx:latest"},
+		})
+
+		assert.Nil(t, resp)
+		require.Error(t, err)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.InvalidArgument, st.Code())
+		assert.Equal(t, container.ErrContainerNameRequired.Error(), st.Message())
 	})
 
 	t.Run("creates container successfully", func(t *testing.T) {
@@ -900,7 +922,7 @@ func TestComputeGRPCService_CreateContainer(t *testing.T) {
 		svc := NewComputeGRPCService(logger, orchestrator)
 
 		resp, err := svc.CreateContainer(ctx, &platformv1.CreateContainerRequest{
-			Config: &platformv1.ContainerConfig{Image: "nginx:latest"},
+			Config: &platformv1.ContainerConfig{Name: "create-fails", Image: "nginx:latest"},
 		})
 
 		assert.Nil(t, resp)

@@ -897,6 +897,10 @@ func (s *ComputeGRPCService) CreateContainer(ctx context.Context, req *platformv
 		return nil, status.Error(codes.InvalidArgument, "container configuration is required")
 	}
 
+	if config.GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, container.ErrContainerNameRequired.Error())
+	}
+
 	if config.GetImage() == "" {
 		return nil, status.Error(codes.InvalidArgument, "container image is required")
 	}
