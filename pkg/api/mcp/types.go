@@ -127,6 +127,33 @@ type IAMCreateRoleRequest struct {
 	Permissions []string `json:"permissions,omitempty"`
 }
 
+// IAMUpdateUserRequest represents a user update request for MCP; it carries
+// the fields gRPC UpdateUser changes.
+type IAMUpdateUserRequest struct {
+	TenantID   string            `json:"tenant_id"`
+	UserID     string            `json:"user_id"`
+	Email      string            `json:"email,omitempty"`
+	Name       string            `json:"name,omitempty"`
+	Attributes map[string]string `json:"attributes,omitempty"`
+}
+
+// IAMUpdateRoleRequest represents a role update request for MCP.
+type IAMUpdateRoleRequest struct {
+	TenantID    string   `json:"tenant_id"`
+	RoleID      string   `json:"role_id"`
+	Name        string   `json:"name,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Permissions []string `json:"permissions,omitempty"`
+}
+
+// IAMUpdateGroupRequest represents a group update request for MCP.
+type IAMUpdateGroupRequest struct {
+	TenantID    string `json:"tenant_id"`
+	GroupID     string `json:"group_id"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
 // IAMAuthenticateRequest represents an authentication request for MCP.
 type IAMAuthenticateRequest struct {
 	TenantID    string `json:"tenant_id"`
@@ -683,9 +710,11 @@ type ServiceProvider interface {
 	IAMDeleteUser(ctx context.Context, tenantID string, userID string) (interface{}, error)
 	IAMGetUser(ctx context.Context, tenantID string, userID string) (interface{}, error)
 	IAMListUsers(ctx context.Context, req *IAMListUsersRequest) (interface{}, error)
+	IAMUpdateUser(ctx context.Context, req *IAMUpdateUserRequest) (interface{}, error)
 
 	// IAM Role operations
 	IAMCreateRole(ctx context.Context, req *IAMCreateRoleRequest) (interface{}, error)
+	IAMUpdateRole(ctx context.Context, req *IAMUpdateRoleRequest) (interface{}, error)
 	IAMDeleteRole(ctx context.Context, tenantID string, roleID string) (interface{}, error)
 	IAMGetRole(ctx context.Context, tenantID string, roleID string) (interface{}, error)
 	IAMListRoles(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error)
@@ -700,6 +729,7 @@ type ServiceProvider interface {
 
 	// IAM Group operations
 	IAMCreateGroup(ctx context.Context, req *IAMCreateGroupRequest) (interface{}, error)
+	IAMUpdateGroup(ctx context.Context, req *IAMUpdateGroupRequest) (interface{}, error)
 	IAMDeleteGroup(ctx context.Context, tenantID string, groupID string) (interface{}, error)
 	IAMGetGroup(ctx context.Context, tenantID string, groupID string) (interface{}, error)
 	IAMListGroups(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error)

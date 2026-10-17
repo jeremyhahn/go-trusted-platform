@@ -22,6 +22,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/stretchr/testify/assert"
@@ -435,6 +436,12 @@ func TestIAMGRPCService_WrapError(t *testing.T) {
 		"SDK unavailable":    {sdkerrors.NewUnavailable("op", "down"), codes.Unavailable},
 		"SDK internal":       {sdkerrors.NewInternal("op", "boom"), codes.Internal},
 		"plain error":        {errLivenessUnreachable{}, codes.Internal},
+		// The embedded SDK returns the database error unconverted: an
+		// existing tenant must answer AlreadyExists so callers can treat a
+		// repeated create as idempotent.
+		"embedded conflict":  {quicbaassdk.NewDatabaseError(quicbaassdk.ErrConflict, "iam.CreateTenant", "tenant already exists"), codes.AlreadyExists},
+		"embedded not found": {quicbaassdk.NewDatabaseError(quicbaassdk.ErrNotFound, "iam.GetTenant", "gone"), codes.NotFound},
+		"embedded internal":  {quicbaassdk.NewDatabaseError(quicbaassdk.ErrInternal, "iam.ListUsers", "boom"), codes.Internal},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

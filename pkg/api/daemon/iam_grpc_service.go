@@ -96,7 +96,7 @@ import (
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
-	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
@@ -2005,40 +2005,17 @@ func (s *IAMGRPCService) getPagination(req *platformv1.PaginationRequest) (limit
 	return limit, offset
 }
 
-// sdkErrorCodes classifies a QuicBaaS SDK error by its category, so a
-// missing user answers NotFound and a bad request InvalidArgument rather
-// than Internal. Categories absent here (unknown, internal, configuration)
-// answer Internal.
-var sdkErrorCodes = map[sdkerrors.ErrorCode]codes.Code{
-	sdkerrors.CodeInvalidInput:       codes.InvalidArgument,
-	sdkerrors.CodeNotFound:           codes.NotFound,
-	sdkerrors.CodeAlreadyExists:      codes.AlreadyExists,
-	sdkerrors.CodeUnauthorized:       codes.Unauthenticated,
-	sdkerrors.CodeForbidden:          codes.PermissionDenied,
-	sdkerrors.CodeConflict:           codes.Aborted,
-	sdkerrors.CodePreconditionFailed: codes.FailedPrecondition,
-	sdkerrors.CodeRateLimited:        codes.ResourceExhausted,
-	sdkerrors.CodeUnavailable:        codes.Unavailable,
-	sdkerrors.CodeTimeout:            codes.DeadlineExceeded,
-	sdkerrors.CodeCanceled:           codes.Canceled,
-	sdkerrors.CodeUnimplemented:      codes.Unimplemented,
-	sdkerrors.CodeResourceExhausted:  codes.ResourceExhausted,
-	sdkerrors.CodeSealed:             codes.Unavailable,
-	sdkerrors.CodeNotInitialized:     codes.FailedPrecondition,
-}
-
 // wrapError converts errors to gRPC status errors with appropriate codes.
 //
-// A gRPC status keeps its code and message; a QuicBaaS SDK error takes the
-// code of its category (sdkErrorCodes); anything else is Internal.
+// A gRPC status keeps its code and message; any other error takes the class
+// errclass.Code gives it. That covers both a QuicBaaS SDK error and the
+// database error the embedded SDK returns unconverted (an existing tenant is
+// AlreadyExists, not Internal); anything unclassified is Internal.
 func (s *IAMGRPCService) wrapError(err error) error {
 	if st, ok := status.FromError(err); ok {
 		return status.Error(st.Code(), st.Message())
 	}
-	if code, ok := sdkErrorCodes[sdkerrors.Code(err)]; ok {
-		return status.Error(code, err.Error())
-	}
-	return status.Error(codes.Internal, err.Error())
+	return status.Error(errclass.Code(err), err.Error())
 }
 
 // =============================================================================

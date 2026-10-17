@@ -1364,7 +1364,7 @@ func testIAMCreateRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	roleID := fmt.Sprintf("matrix-role-%d", time.Now().UnixNano())
 	result, err := cmd.CreateRole(ctx, iam.CreateRoleOptions{
 		TenantID: helpers.HarnessTenantID, ID: roleID, Name: "Matrix Test Role",
-		Description: "Role created by matrix integration test", Permissions: []string{"read", "write"},
+		Description: "Role created by matrix integration test", Permissions: []string{"users:read", "users:update"},
 	})
 	if missing := surfaceMissing(adapter, "IAM", "CreateRole", err); missing != nil {
 		t.Fatal(missing)
@@ -1393,7 +1393,7 @@ func testIAMAssignRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 
 	roleID := fmt.Sprintf("matrix-assign-role-%d", time.Now().UnixNano())
 	roleResult, err := cmd.CreateRole(ctx, iam.CreateRoleOptions{
-		TenantID: helpers.HarnessTenantID, ID: roleID, Name: "Matrix Assign Role", Permissions: []string{"read"},
+		TenantID: helpers.HarnessTenantID, ID: roleID, Name: "Matrix Assign Role", Permissions: []string{"users:read"},
 	})
 	if missing := surfaceMissing(adapter, "IAM", "CreateRole", err); missing != nil {
 		t.Fatal(missing)
