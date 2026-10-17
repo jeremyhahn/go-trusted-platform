@@ -45,7 +45,7 @@ all containers including stopped ones.
 
 Filters can be specified using key=value pairs:
   - state: Filter by container state (running, stopped, created, etc.)
-  - name: Filter by container name (supports wildcards)
+  - name: Filter by container name prefix
   - label: Filter by label (key=value)
   - image: Filter by image name
 
@@ -61,6 +61,9 @@ Examples:
 
   # Filter by label
   platformctl container list --filter label=app=myapp
+
+  # Filter by name prefix
+  platformctl container list --all --filter name=web-
 
   # List with JSON output
   platformctl container list --output json`,
@@ -106,16 +109,17 @@ func runList(flags *cli.CommonFlags, opts *listOptions) error {
 
 	// Parse and apply filters
 	if len(opts.filter) > 0 {
-		labels, states, err := parseFilters(opts.filter)
+		selected, err := parseFilters(opts.filter)
 		if err != nil {
 			return err
 		}
-		if len(labels) > 0 {
-			params.Labels = labels
+		if len(selected.labels) > 0 {
+			params.Labels = selected.labels
 		}
-		if len(states) > 0 {
-			params.States = states
+		if len(selected.states) > 0 {
+			params.States = selected.states
 		}
+		params.NameFilter = selected.namePrefix
 	}
 
 	ctx := base.Context()
@@ -138,16 +142,22 @@ func runList(flags *cli.CommonFlags, opts *listOptions) error {
 	}
 }
 
-// parseFilters parses filter strings into labels and states
-func parseFilters(filters []string) (map[string]string, []computesvc.ContainerState, error) {
-	var states []computesvc.ContainerState
+// containerFilters is what the --filter flags select.
+type containerFilters struct {
+	labels     map[string]string
+	states     []computesvc.ContainerState
+	namePrefix string
+}
 
-	labels := make(map[string]string)
+// parseFilters parses filter strings into label matches, states and a
+// name prefix.
+func parseFilters(filters []string) (containerFilters, error) {
+	selected := containerFilters{labels: make(map[string]string)}
 
 	for _, f := range filters {
 		parts := strings.SplitN(f, "=", 2)
 		if len(parts) != 2 {
-			return nil, nil, ErrInvalidFilter{Filter: f}
+			return containerFilters{}, ErrInvalidFilter{Filter: f}
 		}
 
 		key := strings.TrimSpace(parts[0])
@@ -157,25 +167,26 @@ func parseFilters(filters []string) (map[string]string, []computesvc.ContainerSt
 		case "state":
 			state, ok := parseContainerState(value)
 			if !ok {
-				return nil, nil, ErrInvalidFilter{Filter: f}
+				return containerFilters{}, ErrInvalidFilter{Filter: f}
 			}
-			states = append(states, state)
+			selected.states = append(selected.states, state)
 		case "label":
 			labelParts := strings.SplitN(value, "=", 2)
 			if len(labelParts) == 2 {
-				labels[labelParts[0]] = labelParts[1]
+				selected.labels[labelParts[0]] = labelParts[1]
 			} else {
-				labels[value] = ""
+				selected.labels[value] = ""
 			}
-		case "name", "image":
-			// These could be used for additional filtering
-			labels[key] = value
+		case "name":
+			selected.namePrefix = value
+		case "image":
+			selected.labels[key] = value
 		default:
-			return nil, nil, ErrInvalidFilter{Filter: f}
+			return containerFilters{}, ErrInvalidFilter{Filter: f}
 		}
 	}
 
-	return labels, states, nil
+	return selected, nil
 }
 
 // printContainerList prints the container list in table format

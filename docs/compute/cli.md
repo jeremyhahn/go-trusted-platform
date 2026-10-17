@@ -192,6 +192,9 @@ platformctl compute migrate web-01 --destination worker-02.example.com:9443 --li
 | `--workdir` | `-w` | string | | Working directory |
 | `--tpm-access` | | bool | `false` | **Mount the host TPM device into the container** |
 | `--start` | | bool | `false` | Start immediately after creation |
+| `--user` | `-u` | string | | User inside the container (name or `uid[:gid]`) |
+| `--restart` | | string | | Restart policy: `no`, `on-failure`, `always`, `unless-stopped`; any other value is refused |
+| `--attest` | | bool | `false` | TPM-attest the container after creation |
 
 **`--privileged` and `--tpm-access` are the two to think about.** `--privileged`
 removes container isolation. `--tpm-access` gives the workload the *host's* TPM
@@ -207,7 +210,10 @@ platformctl container create --name api --image registry.example.com/apps/api:1.
 ### `container list`
 
 `--all` / `-a` shows all containers; the default shows only running.
-`--filter` / `-f` is repeatable.
+`--filter` / `-f` is repeatable and takes `key=value`: `state=<state>`,
+`label=<key>=<value>`, `image=<image>` (a label match) and `name=<prefix>`,
+which selects containers whose name starts with the prefix. Any other key is
+refused.
 
 ### `container logs`
 

@@ -311,16 +311,17 @@ func executeList(exec *ContainerCommandExecutor, all bool, pageSize int32, filte
 	}
 
 	if len(filters) > 0 {
-		selector, states, err := parseFilters(filters)
+		selected, err := parseFilters(filters)
 		if err != nil {
 			return err
 		}
-		if len(selector) > 0 {
-			req.Selector = &platformv1.LabelSelector{MatchLabels: selector}
+		if len(selected.labels) > 0 {
+			req.Selector = &platformv1.LabelSelector{MatchLabels: selected.labels}
 		}
-		if len(states) > 0 {
-			protoStates := make([]platformv1.ContainerState, len(states))
-			for i, s := range states {
+		req.NameFilter = selected.namePrefix
+		if len(selected.states) > 0 {
+			protoStates := make([]platformv1.ContainerState, len(selected.states))
+			for i, s := range selected.states {
 				protoStates[i] = computesvc.ContainerStateToProto(s)
 			}
 			req.States = protoStates
