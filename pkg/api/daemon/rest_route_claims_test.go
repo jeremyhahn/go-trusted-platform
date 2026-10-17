@@ -23,6 +23,7 @@ import (
 
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
@@ -50,6 +51,7 @@ type (
 	routeTableCA struct {
 		quicbaasca.CACertificateAuthority
 	}
+	routeTableDNS   struct{ dns.DNSService }
 	routeTableVTPM  struct{ vtpm.VTPMService }
 	routeTableProxy struct{ restapi.ProxyServiceBackend }
 )
@@ -76,7 +78,7 @@ func daemonRouteTable(t *testing.T) (*RESTServer, []string) {
 	s.SetTenantHandlers(routeTableTenants{}, nil, "")
 	s.SetKMSHandlers(routeTableKMS{})
 	s.SetComputeHandlers(platformv1.UnimplementedComputeServiceServer{}, nil)
-	s.SetDNSService(NewMockDNSService(), nil)
+	s.SetDNSService(routeTableDNS{}, nil)
 	s.SetOverlayHandlers(routeTableOverlay{})
 	s.SetCAHandlers(routeTableCA{}, nil)
 	s.SetTPMHandlers(platformv1.UnimplementedTPMServiceServer{}, nil)
