@@ -152,6 +152,8 @@ func (s *KMSService) RESTClients() (KMSRESTClients, error) {
 		Crypto:  s.cryptoServer.client,
 		DEK:     s.dekServer.client,
 		Secrets: s.secretsServer.client,
+
+		SystemTenantID: s.systemTenantID,
 	}, nil
 }
 

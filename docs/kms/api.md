@@ -272,6 +272,18 @@ caller without it is refused 403. A daemon with no authorization configured
 refuses every route. The routes call the SDK clients the KMS gRPC services
 call, so a key made over any transport is the one REST sees.
 
+These routes serve the system scope only. A caller bound to a tenant other
+than the system tenant is refused 403 (`ErrKMSRESTTenantBound`) even when it
+holds the scope: the embedded SDK picks the key and secret namespace from the
+go-quicbaas IAM tenant in the request context, the SDK re-exports no setter
+for it, and an absent tenant selects the system namespace, so the request
+would otherwise read and write system keys and secrets. A caller bound to no
+tenant, or to the system tenant, is served. SDK gap: go-quicbaas
+`pkg/iam/tenant_context.go:43` (`ContextWithTenant`) is not under
+`quicbaas/sdk/go`, and the embedded transport's `Request`
+(`sdk/go/transport/embedded/transport.go:414`) does not carry
+`sdk/go/transport.ContextWithTenant` into it.
+
 ---
 
 ## 7. Status and error mapping
