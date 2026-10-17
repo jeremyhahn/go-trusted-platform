@@ -54,11 +54,11 @@ refused (§5).
 | Verify quote | `POST /api/v1/attestation/quote/verify` | `VerifyAttestationQuote` | `OpAttestVerify` (`0x71`) | `attestation_verify_quote` | ✅ |
 | Collect host attestation (TLS only — §5.1a) | `POST /api/v1/attestation/host` | `CollectHostAttestation` (refused over Unix) | `OpAttestHost` (`0x7E`), `OpAttestCollectHost` (`0x72`) | `attestation_collect_host` (HTTPS only) | refused — no TLS (§5.1a) |
 | Collect VM attestation | `POST /api/v1/attestation/vm/{id}` | `CollectVMAttestation` | `OpAttestVMWorkload` (`0x7F`) — without a TPM session it carries `ErrTPMSessionNotConfigured` as the other transports do (gRPC `Internal`, QUIC `StatusInternalError`) | `attestation_collect_vm` | ✅ |
-| Collect container attestation | `POST /api/v1/attestation/container/{id}` | `CollectContainerAttestation` | `OpAttestContainerWorkload` (`0xED`) | `attestation_collect_container` | ✅ |
-| Attest a workload | `MISSING — docs/13 G7` | (covered by the two Collect RPCs) | `OpAttestDeviceWorkload` (`0xEE`) | `MISSING — docs/13 G7` | — |
+| Collect container attestation | `POST /api/v1/attestation/container/{id}` | `CollectContainerAttestation` | `MISSING` — `OpAttestContainerWorkload` (`0xED`) is shadowed: the daemon dispatches that byte to the PXE family (`pkg/api/daemon/quic_dispatch_guard_test.go`), so it never reaches attestation | `attestation_collect_container` | ✅ |
+| Attest a workload | `MISSING — docs/13 G7` | (covered by the two Collect RPCs) | `MISSING` — `OpAttestDeviceWorkload` (`0xEE`) is shadowed by the PXE family | `MISSING — docs/13 G7` | — |
 | Verify a workload | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
-| Attestation reports (create / get / list) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestGetReportByID` (`0x77`), `OpAttestListReports` (`0xEF`) | `MISSING — docs/13 G7` | — |
-| Attestation policies (create / get / list / delete / evaluate) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestCreatePolicy` (`0xAA`), `OpAttestListPolicies` (`0xAB`) | `MISSING — docs/13 G7` | — |
+| Attestation reports (create / get / list) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING` — `OpAttestGetReportByID` (`0x77`) answers `StatusNotImplemented` (no report store on any transport); `OpAttestListReports` (`0xEF`) is shadowed by the PXE family | `MISSING — docs/13 G7` | — |
+| Attestation policies (create / get / list / delete / evaluate) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING` — `OpAttestCreatePolicy` (`0xAA`) and `OpAttestListPolicies` (`0xAB`) are shadowed by the IAM family | `MISSING — docs/13 G7` | — |
 | Attestation events | `GET /api/v1/attestation/events` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 | Caller-admission policy (effective) | `GET /api/v1/attestation/callers` | `DescribeCallerPolicy` | `MISSING — #386` | `attestation_caller_policy` | ✅ |
 | Node clock state (collector-facing) | `GET /api/v1/attestation/clock` | REST-only by design — see §5.2a | REST-only by design | REST-only by design | — |
@@ -70,8 +70,10 @@ refused (§5).
 | Get AK | `MISSING` — served by the TPM surface, [`docs/tpm/`](../tpm/) | — | `OpAttestGetAK` (`0x73`) | — | — |
 
 **Reading the gaps.** The rows are lopsided in a consistent direction: manifests
-and quotes are complete on gRPC and REST, while **reports and policies exist only
-on QUIC** (their MCP tools are registered but refused). That is not a documentation artefact — it is the actual
+and quotes are complete on gRPC and REST, while **reports and policies exist on
+no transport**: QUIC defines opcodes for them, but `0x77` answers
+`StatusNotImplemented` and the others are shadowed by the IAM and PXE families
+(their MCP tools are registered but refused). That is not a documentation artefact — it is the actual
 shape, and it means an operator using REST cannot manage attestation policy at
 all. This is the single largest attestation surface hole and belongs in the gap
 register as G7.
@@ -376,8 +378,9 @@ The four report capabilities above read the reporting cache or enqueue work
 with the collector; none reaches a device. They are admin-gated on REST, and
 their MCP tools are permission-mapped (`attestation:read`; the refresh is
 `attestation:write` because it spends a node's TPM time). QUIC does not carry
-them: the attestation QUIC handlers are never constructed in production
-(#386), so the column is recorded as a gap rather than a handler.
+them: the daemon serves the attestation QUIC handler (§1), but it has no
+device-report opcode (#386), so the column is recorded as a gap rather than a
+handler.
 
 Every transport returns the same shape — `reporting.View`: `device_id`,
 `serial`, `model`, `verified`, `ak_certificate_verified`, `signature_valid`,
@@ -523,7 +526,7 @@ verdicts follow` ([cli.md](cli.md) §3.5) is thin over this call.
 | `0x07` | `StatusPermissionDenied` | 403 | `ErrAttestationFailed`, `ErrPCRMismatch`, `ErrQuoteVerificationFailed`, `ErrQuoteExpired`, `ErrNonceMismatch`, `ErrMerkleRootMismatch`, `ErrHostNotAttested` |
 | `0x09` | `StatusInvalidArgument` | 400 | `ErrInvalidWorkloadType`, `ErrInvalidHashAlgorithm`, `ErrAttestationNonceRequired` and `ErrAttestationInvalidNonce` (QUIC `0x7E`, §5.1) |
 | `0x0A` | `StatusUnavailable` | 503 | Attestation service not wired into the daemon |
-| `0x0B` | `StatusNotImplemented` | 501 | An opcode in range with no handler |
+| `0x0B` | `StatusNotImplemented` | 501 | An opcode in range with no handler; `0x77` (`ErrQUICAttestationNoService`: no report store behind any transport) |
 
 Every row mapping to 403 is a **fail-closed** path. There is no attestation
 error that yields a partially trusted result.
