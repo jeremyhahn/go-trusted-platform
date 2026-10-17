@@ -597,9 +597,15 @@ func (h *DNSHandlers) ListRecords(w http.ResponseWriter, r *http.Request) {
 	typeFilter := strings.ToUpper(r.URL.Query().Get("type"))
 
 	records := h.extractRecords(&zone.RecordSet, typeFilter)
+	limit, offset := h.getPaginationParams(r)
 	start, end := h.pageBounds(r, len(records))
 
 	h.respWriter.Success200(w, r, ListRecordsResponse{
+		PaginatedResponse: PaginatedResponse{
+			Total:  int64(len(records)),
+			Limit:  limit,
+			Offset: offset,
+		},
 		Records: records[start:end],
 	})
 }

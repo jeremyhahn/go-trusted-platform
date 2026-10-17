@@ -316,6 +316,7 @@ func (r RecordResponse) Name() string {
 
 // ListRecordsResponse is the response for listing records
 type ListRecordsResponse struct {
+	PaginatedResponse
 	Records []RecordResponse `json:"records"`
 }
 

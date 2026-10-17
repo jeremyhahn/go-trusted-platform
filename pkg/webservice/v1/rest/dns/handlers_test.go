@@ -1509,7 +1509,31 @@ func TestListRecords_PageAppliedWhenSent(t *testing.T) {
 		payload, ok := writer.lastPayload.(ListRecordsResponse)
 		require.True(t, ok, query)
 		assert.Len(t, payload.Records, want, query)
+		assert.EqualValues(t, 3, payload.Total, "%s: total counts every matching record, not the page", query)
 	}
+}
+
+func TestListRecords_TotalCountsOnlyTheFilteredType(t *testing.T) {
+	service := newMockDNSService()
+	zone := createTestZone("example.com.")
+	zone.AddARecord(&entities.ARecord{Name: "a", Value: "192.168.1.1", TTL: 3600})
+	zone.AddAAAARecord(&entities.AAAARecord{Name: "a", Value: "2001:db8::1", TTL: 3600})
+	zone.AddAAAARecord(&entities.AAAARecord{Name: "b", Value: "2001:db8::2", TTL: 3600})
+	service.zones["example.com."] = zone
+	handlers, writer := newTestHandlers(service)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/dns/zones/example.com./records?type=AAAA&limit=1&offset=1", nil)
+	req = mux.SetURLVars(req, map[string]string{"zone": "example.com."})
+	handlers.ListRecords(httptest.NewRecorder(), req)
+
+	require.Equal(t, http.StatusOK, writer.lastStatus)
+	payload, ok := writer.lastPayload.(ListRecordsResponse)
+	require.True(t, ok)
+	assert.EqualValues(t, 2, payload.Total)
+	assert.EqualValues(t, 1, payload.Limit)
+	assert.EqualValues(t, 1, payload.Offset)
+	require.Len(t, payload.Records, 1)
+	assert.Equal(t, "AAAA", payload.Records[0].Type)
 }
 
 func TestListRecords_AllRecordTypes(t *testing.T) {

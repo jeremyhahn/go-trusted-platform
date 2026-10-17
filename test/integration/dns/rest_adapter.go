@@ -360,6 +360,7 @@ func (t restTypedRecord) record() (string, restRecord, bool) {
 }
 
 type restRecordList struct {
+	Total   int64             `json:"total"`
 	Records []restTypedRecord `json:"records"`
 }
 
@@ -657,10 +658,11 @@ func (r *RESTAdapter) ListRecords(ctx context.Context, zoneName string, opts Lis
 			Priority:   rec.Priority,
 		})
 	}
-	result.TotalCount = int32(len(result.Records))
-	if opts.Limit > 0 && len(resp.Records) == int(opts.Limit) {
+	result.TotalCount = int32(resp.Total)
+	next := offset + len(resp.Records)
+	if int64(next) < resp.Total {
 		result.HasMore = true
-		result.NextCursor = strconv.Itoa(offset + len(resp.Records))
+		result.NextCursor = strconv.Itoa(next)
 	}
 	return result, nil
 }

@@ -141,9 +141,12 @@ is a 400 and nothing is stored. The response is the updated zone.
 
 ### ListRecords, GetRecord, DeleteRecord
 
-`GET /api/v1/dns/zones/{zone}/records` returns `{"records": [ ... ]}`, each
-entry in the AddRecord shape; `?type=A` filters, and `limit` and `offset`
-page the result the same way as ListZones.
+`GET /api/v1/dns/zones/{zone}/records` returns
+`{"total": 3, "limit": 50, "offset": 0, "records": [ ... ]}`, each entry in
+the AddRecord shape; `?type=A` filters, and `limit` and `offset` page the
+result the same way as ListZones. `total` always counts every record that
+matches the filter, whatever page was asked for, so a caller has more to read
+while `offset` plus the page length is below it.
 
 `GET /api/v1/dns/zones/{zone}/records/{type}/{name}` returns that one record,
 or 404 when the zone holds no record of that type and name.
