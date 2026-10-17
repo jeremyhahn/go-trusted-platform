@@ -55,6 +55,7 @@ type SWTPM struct {
 	mu           sync.RWMutex
 	pid          int
 	tempStateDir string      // Temp directory for state files when using Docker volumes
+	socketPath   string      // Socket the running swtpm listens on; empty when stopped
 	logFile      string      // Path to swtpm log file for error reporting
 	exited       atomic.Bool // Set to true when process exits
 	exitErr      error       // Error from process exit
@@ -71,12 +72,21 @@ type tools struct {
 	// runSetup runs swtpm_setup with args, writing its output to stdout
 	// and stderr.
 	runSetup func(ctx context.Context, args []string, stdout, stderr io.Writer) error
+
+	// daemon builds the swtpm daemon command for args; Start runs it.
+	daemon func(ctx context.Context, args []string) *exec.Cmd
 }
 
 // hostTools finds and runs the swtpm binaries on PATH.
 var hostTools = tools{
 	lookPath: exec.LookPath,
 	runSetup: runSWTPMSetup,
+	daemon:   swtpmDaemon,
+}
+
+// swtpmDaemon builds the swtpm daemon command.
+func swtpmDaemon(ctx context.Context, args []string) *exec.Cmd {
+	return exec.CommandContext(ctx, "swtpm", args...)
 }
 
 // runSWTPMSetup runs the swtpm_setup binary.
@@ -272,7 +282,6 @@ func (s *SWTPM) Start(ctx context.Context) error {
 		s.tempStateDir = tmpDir
 		stateDir = tmpDir
 		socketPath = filepath.Join(tmpDir, "swtpm.sock")
-		s.config.SocketPath = socketPath
 		s.logger.Debugf("Using temp directory: %s (socket: %s)", tmpDir, socketPath)
 
 		// Copy state files from configured StateDir to temp directory
@@ -334,7 +343,7 @@ func (s *SWTPM) Start(ctx context.Context) error {
 	args = append(args, "--log", fmt.Sprintf("file=%s", logFile))
 	s.logFile = logFile
 
-	cmd := exec.CommandContext(ctx, "swtpm", args...)
+	cmd := s.tools.daemon(ctx, args)
 
 	// Set process group to allow clean shutdown
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -354,6 +363,7 @@ func (s *SWTPM) Start(ctx context.Context) error {
 
 	s.cmd = cmd
 	s.pid = cmd.Process.Pid
+	s.socketPath = socketPath
 
 	s.watchExit(cmd)
 
@@ -466,6 +476,7 @@ func (s *SWTPM) Stop() error {
 
 	s.cmd = nil
 	s.pid = 0
+	s.socketPath = ""
 
 	s.logger.Info("swtpm daemon stopped successfully")
 	return nil
@@ -491,7 +502,8 @@ func (s *SWTPM) IsRunning() bool {
 // 3. When we close our test connection, swtpm might not be ready for a new client
 // Instead, we just wait for the socket file to exist and verify the process is running.
 func (s *SWTPM) WaitForSocket(timeout time.Duration) error {
-	s.logger.Debugf("Waiting for swtpm socket to be ready: %s", s.config.SocketPath)
+	socketPath := s.SocketPath()
+	s.logger.Debugf("Waiting for swtpm socket to be ready: %s", socketPath)
 
 	// Use a ticker for polling with channel-based synchronization
 	ticker := time.NewTicker(50 * time.Millisecond)
@@ -520,7 +532,7 @@ func (s *SWTPM) WaitForSocket(timeout time.Duration) error {
 
 		case <-ticker.C:
 			// Check if socket file exists
-			fi, err := os.Stat(s.config.SocketPath)
+			fi, err := os.Stat(socketPath)
 			if err != nil {
 				// Socket doesn't exist yet, check if process died early
 				if !s.IsRunning() {
@@ -543,7 +555,7 @@ func (s *SWTPM) WaitForSocket(timeout time.Duration) error {
 
 			// Verify it's actually a socket
 			if fi.Mode()&os.ModeSocket == 0 {
-				return &SentinelCauseError{Sentinel: ErrSocketNotReady, Cause: &MessageError{Msg: fmt.Sprintf("%s is not a socket", s.config.SocketPath)}}
+				return &SentinelCauseError{Sentinel: ErrSocketNotReady, Cause: &MessageError{Msg: fmt.Sprintf("%s is not a socket", socketPath)}}
 			}
 
 			// Verify swtpm process is still running
@@ -565,7 +577,7 @@ func (s *SWTPM) SendStartup() error {
 	s.logger.Debug("Sending TPM2_Startup command to swtpm")
 
 	// Open connection to swtpm socket
-	t, err := linuxudstpm.Open(s.config.SocketPath)
+	t, err := linuxudstpm.Open(s.SocketPath())
 	if err != nil {
 		return &SentinelCauseError{Sentinel: ErrStartupFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to open swtpm socket: %v", err)}}
 	}
@@ -637,8 +649,16 @@ func StopExisting(stateDir string) error {
 	return nil
 }
 
-// SocketPath returns the path to the swtpm socket
+// SocketPath returns the socket the running swtpm listens on. When the
+// configured path cannot host the socket, Start moves it into a temp
+// directory, so the path changes across a Stop and Start; while stopped it
+// is the configured path.
 func (s *SWTPM) SocketPath() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.socketPath != "" {
+		return s.socketPath
+	}
 	return s.config.SocketPath
 }
 

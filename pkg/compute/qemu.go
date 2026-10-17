@@ -519,6 +519,11 @@ func (o *QEMUOrchestrator) Start(ctx context.Context, instanceID string) error {
 			return &WrappedError{Msg: "swtpm socket not ready", Err: err}
 		}
 
+		// swtpm moves a socket path too long for a Unix socket into a temp
+		// directory that is new on every start, so the VM attaches to the
+		// socket this start opened, not the one recorded at Create.
+		qemuInst.vm.GetConfig().TPMSocket = qemuInst.swtpm.SocketPath()
+
 		o.logger.Infof("swtpm started for instance %s (PID: %d)", instanceID, qemuInst.swtpm.PID())
 	}
 

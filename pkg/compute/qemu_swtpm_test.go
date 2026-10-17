@@ -52,6 +52,12 @@ type fakeEmulator struct {
 	initErr  error
 	initRuns atomic.Int32
 	running  atomic.Bool
+
+	// movedSockets, when set, are the sockets successive starts listen on
+	// in place of the configured one, as swtpm does with a socket path too
+	// long for a Unix socket.
+	movedSockets []string
+	starts       atomic.Int32
 }
 
 func (f *fakeEmulator) stateFile() string {
@@ -75,6 +81,7 @@ func (f *fakeEmulator) Start(ctx context.Context) error {
 	if !f.running.CompareAndSwap(false, true) {
 		return swtpm.ErrAlreadyRunning
 	}
+	f.starts.Add(1)
 	return nil
 }
 
@@ -99,7 +106,12 @@ func (f *fakeEmulator) PID() int {
 	return 0
 }
 
-func (f *fakeEmulator) SocketPath() string { return f.config.SocketPath }
+func (f *fakeEmulator) SocketPath() string {
+	if f.running.Load() && len(f.movedSockets) > 0 {
+		return f.movedSockets[f.starts.Load()-1]
+	}
+	return f.config.SocketPath
+}
 
 func (f *fakeEmulator) StateDir() string { return f.config.StateDir }
 
@@ -246,6 +258,29 @@ func TestQEMUOrchestrator_SWTPM_Create(t *testing.T) {
 	require.NoError(t, orch.Delete(ctx, instance.ID))
 	assert.NoDirExists(t, instance.Config.WorkDir)
 	assert.Empty(t, orch.instances)
+}
+
+// A reboot is Stop then Start on the same swtpm, which can listen on a new
+// socket each time; the VM must attach to the socket of the current start.
+func TestQEMUOrchestrator_SWTPM_StartAttachesVMToLiveSocket(t *testing.T) {
+	host := &fakeHost{}
+	orch := newSWTPMTestOrchestrator(t, host)
+	// No QEMU binary: the VM fails to start once its TPM socket is chosen.
+	orch.config.QEMUBinary = filepath.Join(t.TempDir(), "missing-qemu")
+	ctx := context.Background()
+	instance, err := orch.Create(ctx, &entities.DeviceProfile{ID: 1, Name: "test-vm-reboot"})
+	require.NoError(t, err)
+	emulator := host.opened()[0]
+	emulator.movedSockets = []string{"/tmp/swtpm-first/swtpm.sock", "/tmp/swtpm-second/swtpm.sock"}
+	vmConfig := orch.instances[instance.ID].vm.GetConfig()
+
+	for _, want := range emulator.movedSockets {
+		require.Error(t, orch.Start(ctx, instance.ID))
+		assert.Equal(t, want, vmConfig.TPMSocket)
+		assert.False(t, emulator.IsRunning(), "a failed VM start stops its swtpm")
+		// The failed start left the instance in error; stopped lets it start again.
+		orch.lifecycle.states[instance.ID] = StateStopped
+	}
 }
 
 func TestQEMUOrchestrator_SWTPM_DeleteStopsRunningSWTPM(t *testing.T) {
