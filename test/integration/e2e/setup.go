@@ -235,6 +235,10 @@ func (i *TestInfrastructure) SetupServerVM(ctx context.Context, t *testing.T) er
 	}
 
 	i.ServerTPM = serverTPM
+
+	// swtpm serves from a temp directory when the state directory is outside
+	// /tmp (the e2e work dir is relative), so the socket is wherever it says.
+	tpmSocketPath = serverTPM.SocketPath()
 	i.Logger.Info("Server TPM started", "socket", tpmSocketPath)
 
 	// Wait for TPM socket
@@ -306,6 +310,10 @@ func (i *TestInfrastructure) SetupClientVM(ctx context.Context, t *testing.T) er
 	}
 
 	i.ClientTPM = clientTPM
+
+	// swtpm serves from a temp directory when the state directory is outside
+	// /tmp (the e2e work dir is relative), so the socket is wherever it says.
+	tpmSocketPath = clientTPM.SocketPath()
 	i.Logger.Info("Client TPM started", "socket", tpmSocketPath)
 
 	// Wait for TPM socket
