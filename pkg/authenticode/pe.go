@@ -402,6 +402,13 @@ func (s *Signer) computeAttributesDigest(spcContent []byte, signingTime time.Tim
 // winCertificateHeaderSize is sizeof(WIN_CERTIFICATE) without bCertificate.
 const winCertificateHeaderSize = 8
 
+// WIN_CERTIFICATE wRevision and wCertificateType of an Authenticode
+// signature (PE Format, "The Attribute Certificate Table").
+const (
+	winCertRevision2          uint16 = 0x0200 // WIN_CERT_REVISION_2_0
+	winCertTypePKCSSignedData uint16 = 0x0002 // WIN_CERT_TYPE_PKCS_SIGNED_DATA
+)
+
 // embedSignature embeds the PKCS#7 signature into the PE file
 func (s *Signer) embedSignature(pe *peFile, signature []byte) ([]byte, error) {
 	// WIN_CERTIFICATE structure
@@ -423,8 +430,8 @@ func (s *Signer) embedSignature(pe *peFile, signature []byte) ([]byte, error) {
 
 	winCert := make([]byte, certLen)
 	binary.LittleEndian.PutUint32(winCert[0:4], dwLength)
-	binary.LittleEndian.PutUint16(winCert[4:6], 0x0200) // WIN_CERT_REVISION_2_0
-	binary.LittleEndian.PutUint16(winCert[6:8], 0x0002) // WIN_CERT_TYPE_PKCS_SIGNED_DATA
+	binary.LittleEndian.PutUint16(winCert[4:6], winCertRevision2)
+	binary.LittleEndian.PutUint16(winCert[6:8], winCertTypePKCSSignedData)
 	copy(winCert[8:], signature)
 
 	// Create new PE with signature
@@ -520,8 +527,17 @@ func (s *Signer) extractSignature(pe *peFile) ([]byte, error) {
 	// WORD wRevision;      // 2 bytes
 	// WORD wCertificateType; // 2 bytes
 	// BYTE bCertificate[];  // variable; the table entry is padded to 8 bytes
-	if len(winCert) < 8 {
+	if len(winCert) < winCertificateHeaderSize {
 		return nil, &MessageError{Msg: "invalid WIN_CERTIFICATE structure"}
+	}
+	dwLength := binary.LittleEndian.Uint32(winCert[0:4])
+	revision := binary.LittleEndian.Uint16(winCert[4:6])
+	certificateType := binary.LittleEndian.Uint16(winCert[6:8])
+	if revision != winCertRevision2 || certificateType != winCertTypePKCSSignedData {
+		return nil, &WrappedError{
+			Msg: fmt.Sprintf("revision 0x%04x, type 0x%04x", revision, certificateType),
+			Err: ErrCertificateHeader,
+		}
 	}
 
 	// Get the data after the 8-byte header. The PKCS#7 size is taken from
@@ -560,6 +576,15 @@ func (s *Signer) extractSignature(pe *peFile) ([]byte, error) {
 		return nil, &MessageError{Msg: "PKCS#7 length exceeds available data"}
 	}
 
+	// dwLength frames the PKCS#7: it covers at least the header and the
+	// DER, and at most the table entry (an older image counts the padding).
+	if uint64(dwLength) < uint64(winCertificateHeaderSize+pkcs7Len) || uint64(dwLength) > uint64(len(winCert)) {
+		return nil, &WrappedError{
+			Msg: fmt.Sprintf("dwLength %d does not frame a %d-byte PKCS#7 in a %d-byte entry", dwLength, pkcs7Len, len(winCert)),
+			Err: ErrCertificateHeader,
+		}
+	}
+
 	return pkcs7Data[:pkcs7Len], nil
 }
 
@@ -589,6 +614,10 @@ func (s *Signer) verifyPKCS7Signature(pe *peFile, signature []byte) error {
 	if len(sd.SignerInfos) == 0 {
 		return &MessageError{Msg: "no signer info in PKCS#7"}
 	}
+	signerInfo := sd.SignerInfos[0]
+	if err := checkSignedDataProfile(&sd, &signerInfo); err != nil {
+		return err
+	}
 
 	// Compute expected Authenticode digest
 	expectedDigest, err := s.computeAuthenticodeDigest(pe)
@@ -613,7 +642,6 @@ func (s *Signer) verifyPKCS7Signature(pe *peFile, signature []byte) error {
 	}
 
 	// Verify the cryptographic signature
-	signerInfo := sd.SignerInfos[0]
 	if err := s.verifyCryptographicSignature(cert, &signerInfo, sd.ContentInfo.Content.Bytes); err != nil {
 		return &WrappedError{Msg: "cryptographic signature verification failed", Err: err}
 	}
@@ -740,12 +768,44 @@ func (s *Signer) extractDigestFromContent(content []byte) ([]byte, error) {
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to parse SPC content", Err: err}
 	}
+	// The image digest is compared with the SHA-256 computeAuthenticodeDigest
+	// produces; a digest of any other algorithm cannot be that one.
+	if alg := spc.MessageDigest.DigestAlgorithm.Algorithm; !alg.Equal(oidSHA256) {
+		return nil, &WrappedError{Msg: "image digest algorithm " + alg.String(), Err: ErrDigestAlgorithm}
+	}
 
 	return spc.MessageDigest.Digest, nil
 }
 
 // extractCertificateFromPKCS7 extracts the signing certificate from PKCS#7
+//
+// The signing certificate is the one the SignerInfo's issuerAndSerialNumber
+// names (RFC 2315 §9.2), not whichever certificate comes first: Verify
+// checks the signature under it and ExtractCertificate reports it, so a
+// caller binding the signer to an expected certificate binds the key that
+// actually signed.
 func (s *Signer) extractCertificateFromPKCS7(signature []byte) (*x509.Certificate, error) {
+	certs, err := s.extractCertificatesFromPKCS7(signature)
+	if err != nil {
+		return nil, err
+	}
+	var ci contentInfo
+	if _, err := asn1.Unmarshal(signature, &ci); err != nil {
+		return nil, &WrappedError{Msg: "failed to parse ContentInfo", Err: err}
+	}
+	var sd signedData
+	if _, err := asn1.Unmarshal(ci.Content.Bytes, &sd); err != nil {
+		return nil, &WrappedError{Msg: "failed to parse SignedData", Err: err}
+	}
+	if len(sd.SignerInfos) == 0 {
+		return nil, &MessageError{Msg: "no signer info in PKCS#7"}
+	}
+	return signerCertificate(certs, &sd.SignerInfos[0].IssuerAndSerialNumber)
+}
+
+// extractCertificatesFromPKCS7 returns every certificate the SignedData
+// carries, in order; it never returns an empty list without an error.
+func (s *Signer) extractCertificatesFromPKCS7(signature []byte) ([]*x509.Certificate, error) {
 	// Parse ContentInfo
 	var ci contentInfo
 	_, err := asn1.Unmarshal(signature, &ci)
@@ -814,7 +874,71 @@ parseCerts:
 		return nil, &MessageError{Msg: "no certificates in PKCS#7"}
 	}
 
-	return certs[0], nil
+	return certs, nil
+}
+
+// signerCertificate returns the certificate whose issuer and serial number
+// are the SignerInfo's issuerAndSerialNumber (RFC 2315 §9.2).
+func signerCertificate(certs []*x509.Certificate, sid *issuerAndSerial) (*x509.Certificate, error) {
+	if sid.SerialNumber == nil {
+		return nil, &WrappedError{Msg: "SignerInfo carries no serial number", Err: ErrSignerIdentifier}
+	}
+	for _, cert := range certs {
+		if cert.SerialNumber.Cmp(sid.SerialNumber) == 0 && bytes.Equal(cert.RawIssuer, sid.IssuerName.FullBytes) {
+			return cert, nil
+		}
+	}
+	return nil, &WrappedError{Msg: "serial " + sid.SerialNumber.Text(16), Err: ErrSignerIdentifier}
+}
+
+// checkSignedDataProfile refuses a SignedData outside the Authenticode
+// profile this verifier implements: the content is SpcIndirectDataContent,
+// the signed content-type attribute says so too (RFC 5652 §11.1), and every
+// digest is SHA-256, the one the verifier computes (RFC 2315 §9.1, §9.2).
+// The checks run before any digest comparison, so a tampered field is
+// reported as itself.
+func checkSignedDataProfile(sd *signedData, si *signerInfo) error {
+	if !sd.ContentInfo.ContentType.Equal(oidSPCIndirectDataContent) {
+		return &WrappedError{Msg: "content type " + sd.ContentInfo.ContentType.String(), Err: ErrContentType}
+	}
+	attrType, err := signedContentType(si.AuthenticatedAttributes)
+	if err != nil {
+		return err
+	}
+	if !attrType.Equal(sd.ContentInfo.ContentType) {
+		return &WrappedError{Msg: "content-type attribute " + attrType.String(), Err: ErrContentType}
+	}
+
+	if !si.DigestAlgorithm.Algorithm.Equal(oidSHA256) {
+		return &WrappedError{Msg: "signer digest algorithm " + si.DigestAlgorithm.Algorithm.String(), Err: ErrDigestAlgorithm}
+	}
+	for _, alg := range sd.DigestAlgorithmIdentifiers {
+		if alg.Algorithm.Equal(si.DigestAlgorithm.Algorithm) {
+			return nil
+		}
+	}
+	return &WrappedError{Msg: "SignedData digestAlgorithms do not list the signer's", Err: ErrDigestAlgorithm}
+}
+
+// signedContentType returns the value of the content-type signed
+// attribute, which RFC 5652 §11.1 requires whenever signed attributes are
+// present: a SET holding exactly one OBJECT IDENTIFIER.
+func signedContentType(attrs []attribute) (asn1.ObjectIdentifier, error) {
+	for _, attr := range attrs {
+		if !attr.Type.Equal(oidAttributeContentType) {
+			continue
+		}
+		var values []asn1.ObjectIdentifier
+		rest, err := asn1.UnmarshalWithParams(attr.Values.FullBytes, &values, "set")
+		if err != nil {
+			return nil, &WrappedError{Msg: "content-type attribute is not a SET of OBJECT IDENTIFIER", Err: ErrContentType}
+		}
+		if len(rest) > 0 || len(values) != 1 {
+			return nil, &WrappedError{Msg: fmt.Sprintf("content-type attribute holds %d values", len(values)), Err: ErrContentType}
+		}
+		return values[0], nil
+	}
+	return nil, &WrappedError{Msg: "content-type attribute missing", Err: ErrContentType}
 }
 
 // extractSigningTime extracts the signing time from PKCS#7 signature
