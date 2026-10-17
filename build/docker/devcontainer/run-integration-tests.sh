@@ -188,9 +188,14 @@ declare -A TARGET_NO_DAEMON=(
 # seal the daemon's platform-policy key passwords. After it the daemon can
 # no longer sign a TLS handshake, so every gRPC, QUIC and MCP dial a later
 # suite makes ends in "tls: internal error" (vtpm, #949).
+# compute is not in the list: it drives VMs, and the shared daemon serves the
+# container orchestrator the container suite needs (one orchestrator serves
+# both), so it answers every VM spec "not supported" (#949). `all` ends with
+# it, after tpm, on a fresh swtpm and a platformd started on the local QEMU
+# provider, as the compute target does.
 ALL_TARGETS=(
     helpers datastore quicbaas sdk cluster cmd ipxe installer e2e
-    root acme attestation authenticode ca ceremony cli compute
+    root acme attestation authenticode ca ceremony cli
     container daemon device dns fido2 iam iso kms luks network
     ntp objectstorage piv provision proxy quic registry restroutes sdn
     secrets tenant vpn vtpm tpm
@@ -320,6 +325,24 @@ NTP_REFERENCE_DIR="/run/chrony-reference"
 NTP_REFERENCE_CONF="${NTP_REFERENCE_DIR}/chrony.conf"
 NTP_REFERENCE_PID_FILE="${NTP_REFERENCE_DIR}/chronyd.pid"
 
+# stop_platformd stops platformd and the chronyd pair start_platformd starts
+# with it (the daemon's chronyd and its loopback reference).
+stop_platformd() {
+    if [ -n "$PLATFORMD_PID" ] && kill -0 "$PLATFORMD_PID" 2>/dev/null; then
+        echo "Stopping platformd (PID: $PLATFORMD_PID)..."
+        kill "$PLATFORMD_PID" 2>/dev/null || true
+        wait "$PLATFORMD_PID" 2>/dev/null || true
+    fi
+    PLATFORMD_PID=""
+
+    if [ -f "${CHRONYD_PID_FILE}" ]; then
+        kill "$(cat "${CHRONYD_PID_FILE}")" 2>/dev/null || true
+    fi
+    if [ -f "${NTP_REFERENCE_PID_FILE}" ]; then
+        kill "$(cat "${NTP_REFERENCE_PID_FILE}")" 2>/dev/null || true
+    fi
+}
+
 cleanup() {
     if [ "$CLEANUP_DONE" = true ]; then
         return
@@ -329,26 +352,14 @@ cleanup() {
     echo ""
     echo "=== Cleaning up integration test environment ==="
 
-    # Stop platformd
-    if [ -n "$PLATFORMD_PID" ] && kill -0 "$PLATFORMD_PID" 2>/dev/null; then
-        echo "Stopping platformd (PID: $PLATFORMD_PID)..."
-        kill "$PLATFORMD_PID" 2>/dev/null || true
-        wait "$PLATFORMD_PID" 2>/dev/null || true
-    fi
+    # Stop platformd and its chronyd
+    stop_platformd
 
     # Stop vBMC
     if [ -n "$VBMC_PID" ] && kill -0 "$VBMC_PID" 2>/dev/null; then
         echo "Stopping vBMC (PID: $VBMC_PID)..."
         kill "$VBMC_PID" 2>/dev/null || true
         wait "$VBMC_PID" 2>/dev/null || true
-    fi
-
-    # Stop chronyd
-    if [ -f "${CHRONYD_PID_FILE}" ]; then
-        kill "$(cat "${CHRONYD_PID_FILE}")" 2>/dev/null || true
-    fi
-    if [ -f "${NTP_REFERENCE_PID_FILE}" ]; then
-        kill "$(cat "${NTP_REFERENCE_PID_FILE}")" 2>/dev/null || true
     fi
 
     # Stop swtpm
@@ -1195,6 +1206,17 @@ if [ "$RUN_TARGET" = "all" ]; then
     for target in "${ALL_TARGETS[@]}"; do
         run_test "$target"
     done
+
+    # compute last, on its own daemon: a fresh swtpm (tpm cleared the shared
+    # one) and platformd on the local QEMU provider.
+    echo "=== compute: restarting platformd on the local QEMU provider ==="
+    stop_platformd
+    if start_swtpm && prepare_compute_config && start_platformd "${COMPUTE_PLATFORMD_CONFIG}"; then
+        run_test compute
+    else
+        echo "--- FAIL: compute (platformd did not start on the local QEMU provider) ---"
+        RESULT=1
+    fi
 else
     run_test "$RUN_TARGET"
 fi
