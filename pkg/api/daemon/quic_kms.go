@@ -109,6 +109,7 @@ type KMSKeySpecRequest struct {
 type KMSGenerateKeyRequest struct {
 	KeySpec     *KMSKeySpecRequest `codec:"key_spec"`
 	Name        string             `codec:"name"`
+	DisplayName string             `codec:"display_name"`
 	Description string             `codec:"description"`
 	Tags        map[string]string  `codec:"tags"`
 	Owner       string             `codec:"owner"`
@@ -1001,6 +1002,10 @@ func (h *QUICServiceHandler) handleKMSGenerateKey(ctx context.Context, req *quic
 
 	if genReq.KeySpec == nil {
 		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "key_spec"})
+	}
+
+	if genReq.DisplayName != "" {
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICKMSDisplayNameNotSupported{KeyID: genReq.Name})
 	}
 
 	keySpec, err := platformKeySpecToPb(genReq.KeySpec)

@@ -451,8 +451,13 @@ var deviceQUICDispatch = map[byte]deviceQUICHandler{
 	quicwire.DeviceSubDisable:             (*QUICServiceHandler).handleDeviceDisable,
 	quicwire.DeviceSubEnable:              (*QUICServiceHandler).handleDeviceEnable,
 	quicwire.DeviceSubTemplateCreate:      (*QUICServiceHandler).handleDeviceTemplateCreate,
+	quicwire.DeviceSubTemplateGet:         (*QUICServiceHandler).handleDeviceTemplateGet,
+	quicwire.DeviceSubTemplateList:        (*QUICServiceHandler).handleDeviceTemplateList,
+	quicwire.DeviceSubTemplateUpdate:      (*QUICServiceHandler).handleDeviceTemplateUpdate,
+	quicwire.DeviceSubTemplateDelete:      (*QUICServiceHandler).handleDeviceTemplateDelete,
 	quicwire.DeviceSubProfileFromTemplate: (*QUICServiceHandler).handleDeviceProfileFromTemplate,
 	quicwire.DeviceSubFindMatchingProfile: (*QUICServiceHandler).handleDeviceFindMatchingProfile,
+	quicwire.DeviceSubFindConfigForDevice: (*QUICServiceHandler).handleDeviceFindConfigForDevice,
 }
 
 // handleDeviceRecordAttestCert records a device's attestation certificate
@@ -543,18 +548,56 @@ func (h *QUICServiceHandler) handleDeviceBootDelivery(ctx context.Context, paylo
 // handleDeviceTemplateCreate serves DeviceSubTemplateCreate by delegating
 // to the shared DeviceGRPCService.CreateTemplate.
 func (h *QUICServiceHandler) handleDeviceTemplateCreate(ctx context.Context, payload []byte) *quicwire.Response {
+	return serveDeviceTemplateQUIC(h, ctx, payload, "DeviceTemplateCreate", h.deviceGRPC.CreateTemplate)
+}
+
+// handleDeviceTemplateGet serves DeviceSubTemplateGet by delegating to the
+// shared DeviceGRPCService.GetTemplate.
+func (h *QUICServiceHandler) handleDeviceTemplateGet(ctx context.Context, payload []byte) *quicwire.Response {
+	return serveDeviceTemplateQUIC(h, ctx, payload, "DeviceTemplateGet", h.deviceGRPC.GetTemplate)
+}
+
+// handleDeviceTemplateList serves DeviceSubTemplateList by delegating to the
+// shared DeviceGRPCService.ListTemplates.
+func (h *QUICServiceHandler) handleDeviceTemplateList(ctx context.Context, payload []byte) *quicwire.Response {
+	return serveDeviceTemplateQUIC(h, ctx, payload, "DeviceTemplateList", h.deviceGRPC.ListTemplates)
+}
+
+// handleDeviceTemplateUpdate serves DeviceSubTemplateUpdate by delegating to
+// the shared DeviceGRPCService.UpdateTemplate.
+func (h *QUICServiceHandler) handleDeviceTemplateUpdate(ctx context.Context, payload []byte) *quicwire.Response {
+	return serveDeviceTemplateQUIC(h, ctx, payload, "DeviceTemplateUpdate", h.deviceGRPC.UpdateTemplate)
+}
+
+// handleDeviceTemplateDelete serves DeviceSubTemplateDelete by delegating to
+// the shared DeviceGRPCService.DeleteTemplate.
+func (h *QUICServiceHandler) handleDeviceTemplateDelete(ctx context.Context, payload []byte) *quicwire.Response {
+	return serveDeviceTemplateQUIC(h, ctx, payload, "DeviceTemplateDelete", h.deviceGRPC.DeleteTemplate)
+}
+
+// serveDeviceTemplateQUIC decodes a device-template request, answers
+// StatusUnavailable when no template service is configured, and hands the
+// request to its DeviceGRPCService method so QUIC and gRPC share one
+// implementation.
+func serveDeviceTemplateQUIC[Req any, Resp any](
+	h *QUICServiceHandler,
+	ctx context.Context,
+	payload []byte,
+	op string,
+	call func(context.Context, *Req) (Resp, error),
+) *quicwire.Response {
 	if h.templateService == nil {
 		return h.errorResponse(quicwire.StatusUnavailable, ErrServiceNotAvailable{Service: "device template"})
 	}
 
-	var createReq platformv1.DeviceTemplateCreateRequest
-	if err := quicwire.DecodePayload(payload, &createReq); err != nil {
+	var req Req
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
 		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
-	resp, err := h.deviceGRPC.CreateTemplate(ctx, &createReq)
+	resp, err := call(ctx, &req)
 	if err != nil {
-		return h.deviceGRPCErrorToQUIC("DeviceTemplateCreate", err)
+		return h.deviceGRPCErrorToQUIC(op, err)
 	}
 	return h.encodeDeviceQUICResponse(resp)
 }
@@ -597,6 +640,27 @@ func (h *QUICServiceHandler) handleDeviceFindMatchingProfile(ctx context.Context
 	resp, err := h.deviceGRPC.FindMatchingProfile(ctx, &matchReq)
 	if err != nil {
 		return h.deviceGRPCErrorToQUIC("DeviceFindMatchingProfile", err)
+	}
+	return h.encodeDeviceQUICResponse(resp)
+}
+
+// handleDeviceFindConfigForDevice serves DeviceSubFindConfigForDevice by
+// delegating to the shared DeviceGRPCService.FindConfigForDevice, so a
+// missing identity answers InvalidArgument and an unknown one NotFound, as
+// on gRPC.
+func (h *QUICServiceHandler) handleDeviceFindConfigForDevice(ctx context.Context, payload []byte) *quicwire.Response {
+	if h.profileService == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDeviceProfileServiceNotAvailable{})
+	}
+
+	var configReq platformv1.FindConfigForDeviceRequest
+	if err := quicwire.DecodePayload(payload, &configReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	resp, err := h.deviceGRPC.FindConfigForDevice(ctx, &configReq)
+	if err != nil {
+		return h.deviceGRPCErrorToQUIC("DeviceFindConfigForDevice", err)
 	}
 	return h.encodeDeviceQUICResponse(resp)
 }

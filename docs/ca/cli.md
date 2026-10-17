@@ -227,7 +227,6 @@ platformctl acme rotate-key
 | Capability | Reach it with |
 |---|---|
 | Get the bootstrap bundle / root / intermediate directly | REST `/api/v1/ca/bootstrap`, `/ca/root`, `/ca/intermediate` |
-| Renew or verify over REST | Not available — gRPC, QUIC, MCP or the CLI |
 
 ---
 

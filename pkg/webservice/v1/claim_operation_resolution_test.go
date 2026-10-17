@@ -32,15 +32,11 @@ import (
 // It is a ratchet: TestSDKRouteClaims_SiblingExemptionsAreStillReal fails when
 // an entry stops resolving to a sibling, so a fix forces its entry out and the
 // list can only shrink.
-var claimsResolvingToASiblingRoute = map[string]string{
-	// #452. GET /api/v1/compute/containers/logs lands on the container item
-	// route with id="logs": the server serves no container-logs route at all
-	// ({id}/metrics, {id}/exec, {id}/start, {id}/stop and nothing else), and
-	// the claim has no id segment, so it could not address a container even if
-	// one existed. Whether to implement the route or delete the claim is a
-	// capability decision, recorded there.
-	"/platform.v1.ComputeService/GetContainerLogs": "#452",
-}
+//
+// It is empty: its last entry, GetContainerLogs, went when the SDK dropped the
+// claim, the container log stream having no REST route by design
+// (docs/compute/api.md §5).
+var claimsResolvingToASiblingRoute = map[string]string{}
 
 // TestSDKRouteClaims_ResolveToTheirOwnOperation is the fourth ratchet (#415).
 func TestSDKRouteClaims_ResolveToTheirOwnOperation(t *testing.T) {

@@ -32,6 +32,7 @@ The IAM subsystem provides comprehensive identity and access management includin
   - Role management with assignment capabilities
   - Tenant administration
   - Policy creation and validation
+  - Permission checks
   - Application (OAuth client) management
 
 Examples:
@@ -57,6 +58,7 @@ Examples:
 	cmd.AddCommand(NewRoleCommand(getFlags))
 	cmd.AddCommand(NewTenantCommand(getFlags))
 	cmd.AddCommand(NewPolicyCommand(getFlags))
+	cmd.AddCommand(NewPermissionCommand(getFlags))
 	cmd.AddCommand(NewAppCommand(getFlags))
 
 	return cmd

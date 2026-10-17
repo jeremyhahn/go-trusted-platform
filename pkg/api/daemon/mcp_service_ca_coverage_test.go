@@ -131,6 +131,7 @@ type mockCAForMCPCoverage struct {
 	validity         int
 	privateKey       *ecdsa.PrivateKey
 	certStore        xkmssdk.CertStore
+	keyStore         *renewKeyStore
 	issuedCerts      []*x509.Certificate
 	revokedCerts     []*x509.Certificate
 	generateCRLErr   error
@@ -158,8 +159,11 @@ func newMockCAForMCPCoverage() *mockCAForMCPCoverage {
 		validity:      365,
 		privateKey:    privateKey,
 		certStore:     newMockCertStoreForMCPCoverage(),
+		keyStore:      &renewKeyStore{hasKey: true},
 	}
 }
+
+func (m *mockCAForMCPCoverage) KeyStore() xkmssdk.ServiceBackend { return m.keyStore }
 
 func generateTestCertificateForMCPCoverage(cn string, isCA bool, parent *x509.Certificate, key *ecdsa.PrivateKey) *x509.Certificate {
 	template := &x509.Certificate{

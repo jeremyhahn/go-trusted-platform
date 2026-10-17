@@ -54,6 +54,8 @@ import (
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
+	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
@@ -252,7 +254,10 @@ type Daemon struct {
 	zoneSvc     gateway.ZoneService
 
 	// Concrete server references for accessor methods (set only for real servers)
-	concreteRestServer    *RESTServer
+	concreteRestServer *RESTServer
+	// restGuard is the REST listener's scope guard, kept for routes mounted
+	// after New (SetGatewayControlPlane).
+	restGuard             *restapi.ScopeGuard
 	concreteMcpServer     *mcp.Server
 	concreteGrpcUDSServer *grpc.Server // Store concrete gRPC UDS server for service registration
 
@@ -611,13 +616,13 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Create KMS service if QuicBaaS backend is available
 	var kmsService *KMSService
 	var kmsPlatformGRPC *grpccreds.KMSGRPCService
-	var kmsPlatformBackend *PlatformKMSBackend
 	if config.App != nil && config.App.KMS() != nil {
 		var kmsErr error
 		kmsService, kmsErr = NewKMSService(config.App, logger.Slog())
 		if kmsErr != nil {
 			logger.Warn("KMS service creation failed", "error", kmsErr)
 		} else {
+			kmsService.SetSystemTenant(config.PlatformTenantID)
 			// Register KMS gRPC services with TCP gRPC server if enabled
 			if grpcServer != nil {
 				if grpcRegErr := kmsService.RegisterGRPCServices(grpcServer); grpcRegErr != nil {
@@ -637,7 +642,6 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			if backendErr != nil {
 				logger.Warn("Platform KMS backend initialization failed", "error", backendErr)
 			} else {
-				kmsPlatformBackend = platformKMSBackend
 				kmsPlatformGRPC = grpccreds.NewKMSGRPCService(logger, platformKMSBackend)
 				if grpcServer != nil {
 					platformv1.RegisterKeyManagementServiceServer(grpcServer, kmsPlatformGRPC)
@@ -663,6 +667,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			// even though the REST router has IAM available via the embedded
 			// transport.
 			iamGRPCService = NewIAMGRPCService(logger.Slog(), iamService.Client(), iamService.PEP())
+			iamGRPCService.SetSystemTenant(config.PlatformTenantID)
 			if grpcServer != nil {
 				platformv1.RegisterPlatformIAMServiceServer(grpcServer, iamGRPCService)
 			}
@@ -1240,6 +1245,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			logger.Debug("Compute gRPC service set for QUIC handler")
 		}
 		quicHandler.SetAttestationGRPCService(attestationService)
+		quicHandler.SetTPMGRPCService(tpmService)
+		quicHandler.SetAttestationService(newAttestationQUICAdapter(attestationService))
 
 		// Set up overlay and gateway QUIC handlers for proper request routing.
 		// Even without concrete service implementations, having these handlers
@@ -1465,9 +1472,10 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Info("vTPM service wired into REST server")
 	}
 
-	// Wire the time-synchronization, VPN control-plane and compute REST
+	// Wire the time-synchronization, VPN control-plane, compute and DNS REST
 	// handlers onto the daemon's own REST listener. Without them
-	// /api/v1/ntp/*, /api/v1/vpn/* and /api/v1/compute/* would 404 there.
+	// /api/v1/ntp/*, /api/v1/vpn/*, /api/v1/compute/* and /api/v1/dns/*
+	// would 404 there.
 	// Each route requires the scope its RPC requires on gRPC, checked by one
 	// guard: a platform token, else the verified client certificate. The
 	// compute routes run the same ComputeGRPCService gRPC and QUIC serve.
@@ -1480,6 +1488,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			logger.Error(constructErr, "component", "rest_server")
 			return nil, constructErr
 		}
+		daemon.restGuard = restGuard
 		if ntpGRPCService != nil {
 			daemon.concreteRestServer.SetNTPHandlers(ntpGRPCService, restGuard)
 		}
@@ -1488,6 +1497,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if computeService != nil {
 			daemon.concreteRestServer.SetComputeHandlers(computeService, restGuard)
 		}
+		daemon.concreteRestServer.SetDNSService(fullDNSService(config.DNSService), restGuard)
 	}
 
 	// Wire device + profile REST handlers if the services are available.
@@ -1503,6 +1513,16 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if deviceService != nil {
 			attestSvc = deviceService
 		}
+		// The operator routes (count, Enable/Disable, attest-cert record,
+		// /api/v1/device/profiles*, activate-json, templates) go first: they
+		// include /api/v1/devices/count, which the unconstrained
+		// /api/v1/devices/{id} below would otherwise answer.
+		daemon.concreteRestServer.SetDeviceOperatorHandlers(DeviceOperatorServices{
+			Devices:   config.DeviceService,
+			Profiles:  config.DeviceProfileService,
+			Templates: config.DeviceTemplateService,
+			Server:    attestSvc,
+		}, restGuard)
 		daemon.concreteRestServer.SetDeviceHandlers(config.DeviceService, config.DeviceProfileService, attestSvc)
 	}
 
@@ -1512,23 +1532,48 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// the same CA instance as the gRPC, QUIC, MCP and Unix-socket adapters
 	// so all transports return identical results.
 	if daemon.concreteRestServer != nil && config.CAService != nil {
-		daemon.concreteRestServer.SetCAHandlers(config.CAService, platformTokenValidatorShared)
+		daemon.concreteRestServer.SetCAHandlers(config.CAService, restGuard)
+	}
+
+	// Wire the attestation REST routers on the daemon listener, over the
+	// servicer gRPC, Unix, QUIC and MCP call, so /api/v1/attestation/* is
+	// served whether or not a webservices section exists (#949).
+	if daemon.concreteRestServer != nil {
+		daemon.concreteRestServer.SetAttestationHandlers(attestationService, config.AttestationREST, config.AttestationEvents, restGuard)
 	}
 
 	// Wire the physical TPM REST handlers. Quote and verify run on the same
 	// TPM service gRPC and the Unix socket serve, so one quote verifies the
 	// same way on every transport (#482).
 	if daemon.concreteRestServer != nil {
-		daemon.concreteRestServer.SetTPMHandlers(tpmService, platformTokenValidatorShared)
+		daemon.concreteRestServer.SetTPMHandlers(tpmService, restGuard)
 	}
 
-	// Wire KMS REST handlers when the platform KMS backend is available.
-	// Without this, /api/v1/kms/* would not be served and the REST adapter
-	// for `platformctl --protocol rest kms ...` would 404. The facade shares
-	// the same QuicBaaS SDK clients as the gRPC and embedded transports so
-	// all transports return identical results.
-	if daemon.concreteRestServer != nil && kmsPlatformBackend != nil {
-		daemon.concreteRestServer.SetKMSHandlers(NewPlatformKMSRESTFacade(kmsPlatformBackend))
+	// Mount the KMS REST routes over the SDK clients the KMS gRPC services
+	// call, so every transport answers from the same keys, DEKs and secrets.
+	if daemon.concreteRestServer != nil && kmsService != nil {
+		if clients, clientsErr := kmsService.RESTClients(); clientsErr != nil {
+			logger.Warn("KMS REST routes not registered", "error", clientsErr)
+		} else {
+			daemon.concreteRestServer.SetKMSHandlers(clients, daemon.restGuard)
+		}
+	}
+
+	// Wire the IAM REST routes over the same SDK IAM client and PEP the IAM
+	// gRPC, QUIC, MCP and Unix services use. Without this,
+	// /api/v1/iam/tenants/{tenant}/... would 404 on the daemon listener while
+	// every other transport serves IAM. A daemon built without IAM has no
+	// client and mounts nothing.
+	if daemon.concreteRestServer != nil {
+		if iamClient := daemon.iamService.Client(); iamClient != nil {
+			var pepClient restiam.PEPClient
+			if pep := daemon.iamService.PEP(); pep != nil {
+				pepClient = restiam.NewQuicBaaSPEPAdapter(pep)
+			}
+			if err := daemon.concreteRestServer.SetIAMHandlers(restiam.NewQuicBaaSIAMAdapter(iamClient), pepClient, restGuard, config.PlatformTenantID); err != nil {
+				logger.Error(err, "component", "rest_iam")
+			}
+		}
 	}
 
 	// Wire platform tenant manager into REST handlers + gRPC server when
@@ -1935,6 +1980,7 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		IAMClient:             d.iamService.Client(),
 		PEPClient:             d.iamService.PEP(),
 		IAMTokens:             d.iamTokenService,
+		PlatformTenantID:      d.config.PlatformTenantID,
 		CAService:             d.caService,
 		VTPMService:           d.config.VTPMService,
 		DeviceService:         d.config.DeviceService,
@@ -2087,6 +2133,12 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 			return nil, err
 		}
 		mcpConfig.TLSConfig = tlsConfig
+
+		peers, err := newMCPPeerAuthenticator(d.config, d.logger)
+		if err != nil {
+			return nil, err
+		}
+		mcpConfig.PeerAuthenticator = peers
 	}
 
 	// Try to set up MCP auth. Prefer the shared broker platform-token
@@ -3068,6 +3120,9 @@ func (d *Daemon) SetTPMGRPCService(svc *TPMGRPCService) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.tpmService = svc
+	if d.quicHandler != nil {
+		d.quicHandler.SetTPMGRPCService(svc)
+	}
 }
 
 // EABGRPCService returns the EAB gRPC service backing /api/v1/eab.
@@ -3122,6 +3177,21 @@ func (d *Daemon) VPNGRPCServiceServer() *VPNGRPCService {
 // daemon runs without a platform store.
 func (d *Daemon) VPNControlPlane() *vpn.Service {
 	return d.vpnControlPlane
+}
+
+// SetGatewayControlPlane mounts the gateway control-plane liaison
+// (docs/gateway/api.md §8) on the daemon REST listener, backed by store and
+// cfgSource, with the control-plane VPN service recording the gateways'
+// leases. It must be called before Start.
+func (d *Daemon) SetGatewayControlPlane(store restgateway.GatewayStateStore, cfgSource restgateway.DesiredConfigSource) {
+	if d.concreteRestServer == nil {
+		return
+	}
+	var leases restgateway.VPNLeaseSink
+	if d.vpnControlPlane != nil {
+		leases = d.vpnControlPlane
+	}
+	d.concreteRestServer.SetGatewayControlPlane(store, cfgSource, leases, d.restGuard)
 }
 
 // TenantGRPCServer returns the Tenant gRPC server backing /api/v1/tenants.

@@ -131,7 +131,7 @@ initialize.
 | `initialized_at` | Yes |
 | `state` | Yes, after the barrier initialize |
 | `spki_pin` | Yes, from the upstream ceremony initialize |
-| `admin_cert_pem`, `admin_key_pem` | The one-shot admin bundle, minted from the platform CA before the ceremony runs. The certificate is `CN=admin` with the URI SAN `spiffe://<quicbaas.spiffe-trust-domain>/tenant/system/user/admin` that admin-claim requires ([auth architecture](../auth/architecture.md)); without a trust domain `/init` fails rather than mint it |
+| `admin_cert_pem`, `admin_key_pem` | The one-shot admin bundle, minted from the platform CA before the ceremony runs. The certificate is `CN=admin, O=system` (the mTLS transports read the caller's tenant from the subject O, so the admin acts as the system tenant) with the URI SAN `spiffe://<quicbaas.spiffe-trust-domain>/tenant/system/user/admin` that admin-claim requires ([auth architecture](../auth/architecture.md)); without a trust domain `/init` fails rather than mint it |
 
 **The `/init` response is the only time the admin key is available.** Capture
 it, along with `spki_pin`, before doing anything else. The daemon keeps no copy

@@ -281,6 +281,34 @@ func GenerateUniqueKeyName(prefix string) string {
 	return fmt.Sprintf("%s-%s-%09d", prefix, now.Format("20060102150405"), now.Nanosecond())
 }
 
+// keyName is the name a GenerateKey request carries. The request's one
+// name field is the key ID on every transport (docs/kms/api.md §2), so it
+// is the test's KeyID, never its display Name; an empty KeyID still
+// reaches the server's required-name check.
+func keyName(opts KeyGenerateOptions) string {
+	return opts.KeyID
+}
+
+// applyKeyDisplay sets the test's display Name and Description as key
+// metadata after generation, because the generate request carries only
+// the key ID, and records them on result. A test that sets neither makes
+// no call.
+func applyKeyDisplay(ctx context.Context, cmd KMSCommands, opts KeyGenerateOptions, result *KeyGenerateResult) error {
+	if opts.Name == "" && opts.Description == "" {
+		return nil
+	}
+	updated, err := cmd.KeyMetadataUpdate(ctx, result.KeyID, KeyMetadataUpdateOptions{
+		Name:        opts.Name,
+		Description: opts.Description,
+	})
+	if err != nil {
+		return err
+	}
+	result.Name = updated.Name
+	result.Description = opts.Description
+	return nil
+}
+
 // GenerateTestPlaintext generates deterministic test data of the specified size.
 // The data is derived from a hash of the size, making it reproducible across
 // test runs for the same size parameter.

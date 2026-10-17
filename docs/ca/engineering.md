@@ -134,9 +134,10 @@ The 13 gRPC RPCs are `GetCAInfo`, `InitCA`, `InstallCACertificates`,
 `ListCertificates`, `RevokeCertificate`, `RenewCertificate`,
 `VerifyCertificate`, `GetCRL`, `GetCABundle`.
 
-**REST carries eight of them.** `RenewCertificate` and `VerifyCertificate` have
-no REST route, and neither do `InitCA`, `InstallCACertificates` or
-`UninstallCACertificates` — see [api.md](api.md). Revocation over REST is
+**REST carries ten of them.** `InitCA`, `InstallCACertificates` and
+`UninstallCACertificates` have no REST route — see [api.md](api.md).
+`RenewCertificate` is `POST /api/v1/ca/certificates/{serial}/renew` and
+`VerifyCertificate` is `POST /api/v1/ca/certificates/verify`. Revocation over REST is
 `DELETE /api/v1/ca/certificates/{serial}`, not a `POST .../revoke`.
 
 ## 6. Known defect
@@ -146,6 +147,19 @@ proto `IssueCertificateRequest` **has no explicit field** for something the REST
 handler needs. Until that is resolved, the REST issuance path and the gRPC
 message are not fully aligned. Verify against the code before assuming a field
 exists.
+
+**Platform CA key scope (#949).** The platform CA keystore
+(`pkg/ca/quicbaas/keystore_adapter.go`) calls the SDK KMS with the caller's
+context unchanged. An unbound context and the system tenant resolve to the
+same bare KMS key ID, because upstream treats the empty tenant as the system
+tenant (go-qrdb sdk `IsSystemTenant`). Pinning the CA to the system scope
+therefore changes nothing; `pkg/storage/quicbaas/ca_keystore_scope_test.go`
+proves it on the in-process SDK. The CI `kms.GetPublicKey: not_found` on
+CLI/Unix vTPM EK issuance is an SDK gap. In go-quicbaas v0.12.0-alpha,
+`pkg/service/kms.go:835` (`GetPublicKey`) passes the unscoped key ID, while
+`GetKey` scopes it with `tenantScopedKeyID`. Also, `pkg/kms` `KMSService.GetKey`
+answers from its metadata cache, so a key the backend no longer resolves still
+passes the `GetKey` leg.
 
 ## 7. Invariants
 

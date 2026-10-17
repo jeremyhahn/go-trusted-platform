@@ -555,6 +555,7 @@ var categorySubOpcodeMap = map[string]byte{
 	"/platform.v1.ComputeService/DeleteContainer": quicwire.OpContainerRemove,
 	"/platform.v1.ComputeService/GetContainer":    quicwire.OpContainerGet,
 	"/platform.v1.ComputeService/ListContainers":  quicwire.OpContainerList,
+	"/platform.v1.ComputeService/AttestContainer": quicwire.OpContainerAttest,
 
 	// Compute Service VM verbs — OpVMExtendedCategory (0x69) sub-opcodes.
 	// Server dispatcher: pkg/api/daemon/quic_vm_pb.go::handleVMPB
@@ -633,13 +634,19 @@ var categorySubOpcodeMap = map[string]byte{
 	"/platform.v1.DeviceService/DisableDevice": quicwire.DeviceSubDisable,
 	"/platform.v1.DeviceService/EnableDevice":  quicwire.DeviceSubEnable,
 
-	// Device templates: handleDeviceTemplateCreate and
-	// handleDeviceProfileFromTemplate.
+	// Device templates: handleDeviceTemplate{Create,Get,List,Update,Delete}
+	// and handleDeviceProfileFromTemplate.
 	"/platform.v1.DeviceService/CreateTemplate":            quicwire.DeviceSubTemplateCreate,
+	"/platform.v1.DeviceService/GetTemplate":               quicwire.DeviceSubTemplateGet,
+	"/platform.v1.DeviceService/ListTemplates":             quicwire.DeviceSubTemplateList,
+	"/platform.v1.DeviceService/UpdateTemplate":            quicwire.DeviceSubTemplateUpdate,
+	"/platform.v1.DeviceService/DeleteTemplate":            quicwire.DeviceSubTemplateDelete,
 	"/platform.v1.DeviceService/CreateProfileFromTemplate": quicwire.DeviceSubProfileFromTemplate,
 
-	// Profile matching: handleDeviceFindMatchingProfile.
+	// Profile matching and config lookup: handleDeviceFindMatchingProfile,
+	// handleDeviceFindConfigForDevice.
 	"/platform.v1.DeviceService/FindMatchingProfile": quicwire.DeviceSubFindMatchingProfile,
+	"/platform.v1.DeviceService/FindConfigForDevice": quicwire.DeviceSubFindConfigForDevice,
 
 	// Proxy Service — multiplexed under OpGatewayCategory (0x2F),
 	// sub-range 0x20-0x2D (the single-byte opcode space is fully
@@ -839,8 +846,13 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.DeviceService/DisableDevice":                quicwire.OpProvisioningCategory,
 	"/platform.v1.DeviceService/EnableDevice":                 quicwire.OpProvisioningCategory,
 	"/platform.v1.DeviceService/CreateTemplate":               quicwire.OpProvisioningCategory,
+	"/platform.v1.DeviceService/GetTemplate":                  quicwire.OpProvisioningCategory,
+	"/platform.v1.DeviceService/ListTemplates":                quicwire.OpProvisioningCategory,
+	"/platform.v1.DeviceService/UpdateTemplate":               quicwire.OpProvisioningCategory,
+	"/platform.v1.DeviceService/DeleteTemplate":               quicwire.OpProvisioningCategory,
 	"/platform.v1.DeviceService/CreateProfileFromTemplate":    quicwire.OpProvisioningCategory,
 	"/platform.v1.DeviceService/FindMatchingProfile":          quicwire.OpProvisioningCategory,
+	"/platform.v1.DeviceService/FindConfigForDevice":          quicwire.OpProvisioningCategory,
 
 	// SDN Service — proto: pkg/api/grpc/proto/sdn.proto
 	"/platform.v1.SDNService/CreateBridge": quicwire.OpSDNCreateBridge,
@@ -989,6 +1001,7 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.ComputeService/StopContainer":       quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/ListContainers":      quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/GetContainer":        quicwire.OpVMExtendedCategory,
+	"/platform.v1.ComputeService/AttestContainer":     quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/GetContainerLogs":    quicwire.OpContainerLogs,
 	"/platform.v1.ComputeService/CreateVM":            quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/GetVM":               quicwire.OpVMExtendedCategory,

@@ -466,71 +466,58 @@ func testServiceCommands(t *testing.T, ctx context.Context, cmd CLICommands) {
 		require.Error(t, err, "Service status should fail for invalid service type")
 	})
 
-	t.Run("ServiceStartStopRestart", func(t *testing.T) {
-		// Use a service that's safe to start/stop in testing
-		// This test is more about verifying the command works, not the actual service behavior
-		serviceType := "webservice"
+	// Every service platformd lists is built once by `platformd serve` and
+	// owned for the life of the process, so start, stop and restart are each
+	// refused and change nothing (docs/daemon/cli.md §4.4, docs/daemon/api.md
+	// "Service start, stop and restart are refused (#317)"). --force does not
+	// override the refusal.
+	t.Run("ServiceLifecycleRefused", func(t *testing.T) {
+		const serviceType = "webservice"
 
-		// Get current status
-		statusResult, err := cmd.ServiceStatus(testCtx, serviceType)
-		if err != nil {
-			t.Fatalf("Setup: ServiceStatus(%s) failed; platformd must serve the REST webservice: %v", serviceType, err)
+		before, err := cmd.ServiceStatus(testCtx, serviceType)
+		require.NoError(t, err, "platformd must serve the REST webservice")
+
+		verbs := []struct {
+			name string
+			call func() error
+		}{
+			{name: "start", call: func() error {
+				_, err := cmd.ServiceStart(testCtx, serviceType)
+				return err
+			}},
+			{name: "stop", call: func() error {
+				_, err := cmd.ServiceStop(testCtx, serviceType, ServiceStopOptions{Timeout: 30})
+				return err
+			}},
+			{name: "stop --force", call: func() error {
+				_, err := cmd.ServiceStop(testCtx, serviceType, ServiceStopOptions{Force: true, Timeout: 10})
+				return err
+			}},
+			{name: "restart", call: func() error {
+				_, err := cmd.ServiceRestart(testCtx, serviceType, 30)
+				return err
+			}},
 		}
 
-		originalStatus := ""
-		if statusResult.Service != nil {
-			originalStatus = statusResult.Service.Status
+		for _, verb := range verbs {
+			t.Run(verb.name, func(t *testing.T) {
+				err := verb.call()
+				require.Error(t, err, "service %s %s must be refused", verb.name, serviceType)
+				assert.Contains(t, err.Error(), serviceNotControllableText)
+
+				after, err := cmd.ServiceStatus(testCtx, serviceType)
+				require.NoError(t, err)
+				assert.Equal(t, before.Service.Status, after.Service.Status,
+					"a refused %s must leave the status unchanged", verb.name)
+			})
 		}
-
-		// Test stop (with force and timeout)
-		stopResult, err := cmd.ServiceStop(testCtx, serviceType, ServiceStopOptions{
-			Force:   false,
-			Timeout: 30,
-		})
-		if err != nil {
-			t.Logf("Service stop test: %v", err)
-		} else {
-			require.NotNil(t, stopResult, "Stop result should not be nil")
-		}
-
-		// Test start
-		startResult, err := cmd.ServiceStart(testCtx, serviceType)
-		if err != nil {
-			t.Logf("Service start test: %v", err)
-		} else {
-			require.NotNil(t, startResult, "Start result should not be nil")
-		}
-
-		// Test restart with timeout
-		restartResult, err := cmd.ServiceRestart(testCtx, serviceType, 30)
-		if err != nil {
-			t.Logf("Service restart test: %v", err)
-		} else {
-			require.NotNil(t, restartResult, "Restart result should not be nil")
-		}
-
-		// Attempt to restore original state if it was running
-		if originalStatus == "RUNNING" {
-			_, _ = cmd.ServiceStart(testCtx, serviceType)
-		}
-	})
-
-	t.Run("ServiceStopWithOptions", func(t *testing.T) {
-		serviceType := "webservice"
-
-		// Test stop with force flag
-		_, err := cmd.ServiceStop(testCtx, serviceType, ServiceStopOptions{
-			Force:   true,
-			Timeout: 10,
-		})
-		if err != nil {
-			t.Logf("Service stop with force test: %v", err)
-		}
-
-		// Ensure service is started again for other tests
-		_, _ = cmd.ServiceStart(testCtx, serviceType)
 	})
 }
+
+// serviceNotControllableText is the text of ErrServiceNotControllable
+// (pkg/api/daemon/errors.go), the refusal of every service start, stop and
+// restart (#317).
+const serviceNotControllableText = "cannot be started or stopped at runtime"
 
 // =============================================================================
 // Completion Command Tests
@@ -630,11 +617,9 @@ func TestCLIEdgeCases(t *testing.T) {
 		// Wait for context to expire
 		<-shortCtx.Done()
 
-		// Requests with expired context should fail
+		// A request under an expired context never starts platformctl: the
+		// call fails with the context's own error.
 		_, err := adapter.Version(shortCtx, VersionOptions{})
-		// The error could be context deadline exceeded or context canceled
-		if err != nil {
-			t.Logf("Expected timeout behavior: %v", err)
-		}
+		require.ErrorIs(t, err, context.DeadlineExceeded)
 	})
 }

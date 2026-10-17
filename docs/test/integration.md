@@ -300,11 +300,14 @@ test/integration/
 
 ### Build Tags
 
-The targets build with `TEST_BUILD_TAGS` (Makefile:340): `integration`,
-`INTEGRATION_CODEC_TAGS` (`codec_msgpack codec_json codec_cbor`) and the full
-`BUILD_TAGS` list.
+The targets build with `TEST_BUILD_TAGS` (Makefile:344): `integration`,
+`INTEGRATION_CODEC_TAGS` (`codec_msgpack codec_json codec_cbor`),
+`INTEGRATION_VECTOR_TAGS` (`vector qrdb_vector`, the `WITH_VECTOR=1` tags) and
+the full `BUILD_TAGS` list.
 `integration` marks a file as needing the devcontainer; the codecs carry the
-QUIC wire protocol and the REST/MCP bodies.
+QUIC wire protocol and the REST/MCP bodies; the vector tags let the embedded
+`quicbaas.TestConfig` serve the Vector service that the quicbaas and sdk suites
+assert against.
 
 Never type the tag list by hand. Outside `make`, derive it:
 
@@ -336,13 +339,28 @@ listed below.
 
 `make integration-test` runs the runner's `ALL_TARGETS` list in order:
 every key except `cold-start` and `barrier-gate` (each needs the shared
-`platformd` not running), `bmc` (needs the vBMC config), `diskimage`,
+`platformd` not running), `diskimage`,
 `netboot`, `nat64` and `ipsec` (each needs inputs built on the host first),
 `pxe` (platformd has no PXE backend), `bootstrap` (the shared platformd
 publishes no DANE records) and `secureboot` (needs prebuilt FIPS-kernel
 artifacts), all three in the table below, and the keys that
 only run part of a suite already in the list (`lb`, `ipxe-dhcp`, `ipxe-tftp`,
-`ipxe-http`, `testenv-enrollment`).
+`ipxe-http`, `testenv-enrollment`). `tpm` is the last suite on the shared
+daemon: its Clear case issues `TPM2_Clear` on the shared daemon's swtpm,
+which flushes the SRKs sealing the daemon's platform-policy key passwords, so
+no gRPC, QUIC or MCP handshake succeeds after it. `bmc` and `compute` are
+unaffected wherever they sit in the list, because each runs on its own daemon
+and a fresh swtpm (below).
+
+`bmc` and `compute` each need a `platformd` the shared one is not: `bmc` one
+that trusts the vBMC's certificate (`trust.bmc` with the vBMC CA file), and
+`compute` one with the `local-qemu` provider, so the VM RPCs reach a VM
+orchestrator. The runner's `TARGET_OWN_DAEMON` map names the function that
+starts each. A single-target run starts that daemon instead of the shared
+one; `make integration-test` stops the shared daemon before the suite,
+reprovisions the swtpm, starts the suite's own daemon, and after the suite
+brings the shared daemon back the same way. The vBMC starts once and runs
+until cleanup.
 
 The keys in the runner's `TARGET_NO_DAEMON` map skip the shared `platformd`:
 their suites start their own daemon or cluster, or test something that needs
@@ -359,6 +377,7 @@ Kept out of the runner, or out of its default set:
 | `bootstrap` | `TestDANERecords_Published`, `TestDANEBootstrap_EndToEnd` and `TestTrustResolver_DANE` need DANE-TA records at `_8443._tcp.localhost.` (`test/integration/bootstrap/bootstrap_test.go:212`, `helpers_test.go:49-52`), and the shared platformd publishes none. TLSA publication runs only when a `webservices:` certificate is issued (`pkg/app/app.go:4077`) with `dns.dane.enabled` and `auto-generate` set (`app.go:4271-4276`); `test/integration/config.yaml` has no `webservices:` section (`:5`, so `InitWebServer` returns at `app.go:3601`) and DANE off. Even with one, `resolveDANEZone` finds no zone for `localhost.` (`app.go:4355`), and the internal DNS listens on 9053 (`config.yaml:212`), not the tests' default 8053. Its five REST bootstrap-endpoint tests run with it | `make integration-test-bootstrap` |
 | `secureboot` | `TestFIPSKernelModuleSignatureEnforcement` fails without a prebuilt FIPS kernel, its modules tarball and the module-signing key it was built with (`test/integration/secureboot/fipskernel_test.go:210-212`, `helpers.go:61-71`), which only the caller supplies through `FIPS_KERNEL_IMAGE`, `FIPS_MODULES_TAR` and `FIPS_MODULE_SIGNING_KEY`; the runner sets none of them. `docs/firmware/secure-boot.md:513-514` already keeps the target out of the `all` sweep | `make integration-test-secureboot` with the three variables set |
 | `secureboot/hardware` | Real TPM and efivarfs on the node; disabled unless `TP_HW_TPM`/`TP_HW_EFIVARS` is `1` | `make integration-test-secureboot-hw` on the node |
+| `sdn/topology` | The multi-node topology tests start their nodes with docker-compose (`test/integration/sdn/topology/docker-compose.tmpl`), and the devcontainer has neither docker-compose nor a Docker daemon. The `topology` build tag keeps them out of the `sdn` key's `./test/integration/sdn/...`; run anywhere else, they fail with `ErrDockerComposeMissing` | `make integration-test-sdn-topology` on a host with docker-compose |
 | `compute-aws` | A Floci emulator compose file, not a suite; the tests are in `pkg/compute/aws` | `make integration-test-compute-aws` on the host |
 | `diskimage/userspace` | An arm64 userspace container | `make integration-test-diskimage-userspace` |
 | `web` | Playwright (TypeScript), not Go | `npx playwright test --config ../test/integration/web/playwright.config.ts` from `web/` |
@@ -417,10 +436,22 @@ and otherwise from the mount point's own ownership.
 | `PLATFORM_MCP_ENDPOINT` | `https://localhost:9445` | MCP protocol endpoint (TLS 1.3 only, #844) |
 | `PLATFORM_SOCKET_PATH` | `/run/platformd.sock` | Unix socket path for local IPC |
 | `PLATFORMCTL_PATH` | `platformctl` (on `PATH`) | CLI binary path |
+| `PLATFORM_CLIENT_CERT`, `PLATFORM_CLIENT_KEY` | `client-bundle.pem` | Harness admin credential, subject `O=system` (`helpers.HarnessTenantID`) |
+| `PLATFORM_TENANT_CLIENT_CERT`, `PLATFORM_TENANT_CLIENT_KEY` | `tenant-client-bundle.pem` | Harness credential bound to the non-system tenant `harness-tenant` (`helpers.ForeignTenantID`) |
+| `PLATFORM_CA_CERT` | `ca-bundle.crt` | CA both client credentials chain to |
+
+The two client bundles live in `/tmp/platformd-integration/tls/`. platformd
+writes both on first start (`pkg/daemon/commands/harness_admin_bundle_integration.go`,
+`integration` build only), from the same root admin request through the same
+issuer; the tenant bundle differs only in its subject `O`, and it is written
+first, so a run that has `client-bundle.pem` always has both. The mTLS
+transports bind a caller to the tenant its subject names, so a suite proves a
+cross-tenant refusal by dialing with `helpers.TenantTLSConfig()` instead of
+`helpers.TLSConfigOrInsecure()`.
 
 The endpoint variables are the ones the shared helpers in
 `test/integration/helpers/endpoints.go` read. Suites with a private namespace
-(`VTPM_*`, `TENANT_*`, `IAM_*`, `ATTESTATION_*`, `AUTH_*`, `INVITATION_*`) read
+(`VTPM_*`, `TENANT_*`, `IAM_*`, `ATTESTATION_*`, `AUTH_*`) read
 their own name first and otherwise use the shared helper. The defaults are
 there only for running a suite by hand against a platformd on its standard
 ports.
@@ -738,6 +769,30 @@ it. Nothing in `test/integration` skips (#260). The runner starts OVS and swtpm 
 run such a failure means that bring-up failed, and the runner has already
 printed a warning saying so. For
 `integration-test-vtpm` a swtpm that does not start ends the run.
+
+That swtpm is the daemon's TPM: `test/integration/config.yaml` and
+`test/integration/barrier_gate/config.yaml` set `tpm.device` to
+`/tmp/swtpm/swtpm.sock`, the socket `start_swtpm` serves, with only the SHA-256
+PCR bank active. The integration container is privileged and sees the host's
+`/dev/tpmrm0`, so a config naming that device runs `platformd` on the CI host's
+own TPM; on a host whose TPM has no active SHA-256 bank the daemon stops at
+`PCR 23 is not present in bank 0x000b`. `TestIntegrationConfig_TPMIsHarnessSwtpm`
+in `pkg/app` holds both configs to the runner's socket. It also holds the
+embedded quicbaas server's `seal.tpm2.device` to that socket. platformd copies
+`tpm.device` into that setting, so the server's hardware probe never opens the
+host's `/dev/tpmrm0` ([daemon configuration](../daemon/configuration.md)).
+
+The harness swtpm is provisioned like shipped hardware: it has an endorsement
+key and an EK certificate before `platformd` first opens it. `start_swtpm`
+calls `provision_swtpm_state` (`build/docker/devcontainer/swtpm-provision.sh`),
+which runs `swtpm_setup --createek --create-ek-cert`: the RSA 2048 EK is
+persisted at `0x81010001`, the `tpm.ek.handle` both configs name, and its
+certificate, issued by a `swtpm_localca` CA created under `/tmp/swtpm/localca`,
+is written to NV index `0x01C00002`. `platformd` therefore opens a TPM it
+recognises as initialized and does not take its recovery path, which no
+shipped TPM needs. If `swtpm_setup` or `swtpm_localca` is missing, or
+provisioning fails, the runner stops with a `FATAL` message instead of starting
+the daemons on a TPM without an EK.
 
 A bring-up failure ends the run for the same reason. When `platformd` does not
 start, `build/docker/devcontainer/run-integration-tests.sh` aborts before any

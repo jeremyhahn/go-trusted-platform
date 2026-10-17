@@ -257,7 +257,17 @@ what it is.
    not trust verification.** `Verify` extracts the certificate embedded in the
    PKCS#7 blob and checks the signature under it. It builds no chain and consults
    no trust anchor. The binding to a trust anchor is `uefi.VerifySignedUKI`, or
-   the firmware itself. See §9.
+   the firmware itself. See §9. The embedded certificate is the one the
+   SignerInfo's issuerAndSerialNumber names (RFC 2315 §9.2), never simply the
+   first in the blob, and `ExtractCertificate` reports that same certificate.
+   Before any digest is compared, `Verify` refuses a signature outside the
+   profile it implements, each with a typed error: a WIN_CERTIFICATE that is
+   not revision 2.0 PKCS#7 SignedData or whose dwLength does not frame the
+   PKCS#7 (`ErrCertificateHeader`); a content type or signed content-type
+   attribute other than SpcIndirectDataContent (`ErrContentType`); a signer,
+   SignedData or image digest algorithm other than SHA-256
+   (`ErrDigestAlgorithm`); a signer identifier no embedded certificate
+   carries (`ErrSignerIdentifier`).
 
 ## 7. Failure posture
 

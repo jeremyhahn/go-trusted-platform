@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -38,10 +39,35 @@ import (
 // exercise the real SDK client and gRPC transport without a daemon.
 type inProcProfileServer struct {
 	platformv1.UnimplementedDeviceServiceServer
-	mu        sync.Mutex
-	profiles  map[uint64]*platformv1.DeviceProfile
-	lastMatch *platformv1.FindMatchingProfileRequest
-	fail      error
+	mu         sync.Mutex
+	profiles   map[uint64]*platformv1.DeviceProfile
+	lastMatch  *platformv1.FindMatchingProfileRequest
+	lastConfig *platformv1.FindConfigForDeviceRequest
+	lastAttest *platformv1.AttestDeviceRequest
+	fail       error
+}
+
+// AttestDevice answers a negative verdict for device 42, the one registered
+// device, and NotFound for any other.
+func (s *inProcProfileServer) AttestDevice(_ context.Context, r *platformv1.AttestDeviceRequest) (*platformv1.AttestDeviceResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastAttest = r
+	if s.fail != nil {
+		return nil, s.fail
+	}
+	if r.GetDeviceId() != "42" {
+		return nil, status.Error(codes.NotFound, "device not found")
+	}
+	return &platformv1.AttestDeviceResponse{
+		DeviceId:          42,
+		Serial:            "SN100-XYZ",
+		NonceValid:        true,
+		AttestationStatus: "failed",
+		Message:           "RSA signature verification failed",
+		AttestedAt:        timestamppb.Now(),
+		PcrBaselineSource: "tofu",
+	}, nil
 }
 
 func (s *inProcProfileServer) GetProfile(_ context.Context, r *platformv1.GetProfileRequest) (*platformv1.GetProfileResponse, error) {
@@ -100,6 +126,24 @@ func (s *inProcProfileServer) FindMatchingProfile(_ context.Context, r *platform
 	return nil, status.Error(codes.NotFound, "no matching profile")
 }
 
+func (s *inProcProfileServer) FindConfigForDevice(_ context.Context, r *platformv1.FindConfigForDeviceRequest) (*platformv1.FindConfigForDeviceResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastConfig = r
+	if s.fail != nil {
+		return nil, s.fail
+	}
+	for _, p := range s.profiles {
+		if r.GetEkSerial() != "" && p.GetEkSerial() == r.GetEkSerial() {
+			return &platformv1.FindConfigForDeviceResponse{Profile: p}, nil
+		}
+		if r.GetMacAddress() != "" && p.GetMacAddress() == r.GetMacAddress() {
+			return &platformv1.FindConfigForDeviceResponse{Profile: p}, nil
+		}
+	}
+	return nil, status.Error(codes.NotFound, "no config for device")
+}
+
 // startProfileServer starts an in-process profile server holding profile 42
 // and returns it with CLI flags for each output format pointing at it.
 func startProfileServer(t *testing.T) (*inProcProfileServer, func(cli.OutputFormat) *cli.CommonFlags) {
@@ -108,7 +152,7 @@ func startProfileServer(t *testing.T) (*inProcProfileServer, func(cli.OutputForm
 	lis, err := net.Listen("unix", sock)
 	require.NoError(t, err)
 	srv := &inProcProfileServer{profiles: map[uint64]*platformv1.DeviceProfile{
-		42: {Id: 42, Name: "rack-a", MatchRules: &platformv1.ProfileMatchRules{SerialPrefix: "SN100"}},
+		42: {Id: 42, Name: "rack-a", EkSerial: "EK-42", MatchRules: &platformv1.ProfileMatchRules{SerialPrefix: "SN100"}},
 	}}
 	gs := grpc.NewServer()
 	platformv1.RegisterDeviceServiceServer(gs, srv)
@@ -192,6 +236,51 @@ func TestRunProfileMatch_CriteriaRequired(t *testing.T) {
 	assert.Equal(t, ErrProfileMatchCriteriaRequired{}, err, "refused before connecting")
 }
 
+func TestRunProfileFindConfig(t *testing.T) {
+	srv, flags := startProfileServer(t)
+
+	for _, format := range []cli.OutputFormat{cli.OutputFormatTable, cli.OutputFormatJSON} {
+		require.NoError(t, runProfileFindConfig(flags(format), profileFindConfigOptions{EKSerial: "EK-42"}))
+	}
+
+	srv.mu.Lock()
+	assert.Equal(t, "EK-42", srv.lastConfig.GetEkSerial(), "the EK serial reaches the control plane")
+	assert.Empty(t, srv.lastConfig.GetMacAddress(), "an unset identity is not sent")
+	srv.mu.Unlock()
+}
+
+func TestRunProfileFindConfig_Errors(t *testing.T) {
+	srv, flags := startProfileServer(t)
+	f := flags(cli.OutputFormatJSON)
+
+	t.Run("IdentityRequired", func(t *testing.T) {
+		err := runProfileFindConfig(&cli.CommonFlags{}, profileFindConfigOptions{})
+		assert.Equal(t, ErrProfileConfigIdentityRequired{}, err, "refused before connecting")
+	})
+
+	t.Run("NotFound", func(t *testing.T) {
+		err := runProfileFindConfig(f, profileFindConfigOptions{MACAddress: "52:54:00:00:00:99"})
+		assert.Equal(t, ErrNoConfigForDevice{MACAddress: "52:54:00:00:00:99"}, err)
+		assert.ErrorIs(t, err, common.ErrNotFound)
+	})
+
+	t.Run("ServerFailure", func(t *testing.T) {
+		srv.mu.Lock()
+		srv.fail = status.Error(codes.Internal, "backend down")
+		srv.mu.Unlock()
+		err := runProfileFindConfig(f, profileFindConfigOptions{EKSerial: "EK-42"})
+		var findErr ErrProfileFindConfigFailed
+		require.True(t, errors.As(err, &findErr), "err = %v", err)
+		assert.Contains(t, err.Error(), "backend down", "the server's reason is shown")
+		assert.NotErrorIs(t, err, common.ErrNotFound)
+	})
+
+	findConfig := newProfileFindConfigCommand(nil)
+	for _, flag := range []string{"ek-serial", "mac"} {
+		assert.NotNil(t, findConfig.Flags().Lookup(flag), "find-config missing --%s", flag)
+	}
+}
+
 func TestProfileDeleteCommand_InvalidID(t *testing.T) {
 	cmd := newProfileDeleteCommand(func() *cli.CommonFlags { return &cli.CommonFlags{} })
 	cmd.SetArgs([]string{"abc"})
@@ -204,7 +293,7 @@ func TestNewProfileLookupCommands(t *testing.T) {
 	for _, cmd := range NewProfileLookupCommands(nil) {
 		names = append(names, cmd.Name())
 	}
-	assert.Equal(t, []string{"get", "list", "delete", "match"}, names)
+	assert.Equal(t, []string{"get", "list", "delete", "match", "find-config"}, names)
 
 	match := newProfileMatchCommand(nil)
 	for _, flag := range []string{"mac", "serial", "model"} {

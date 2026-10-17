@@ -1,6 +1,6 @@
 # IAM — CLI
 
-> **Status: NORMATIVE** · Scope: `platformctl iam` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `platformctl iam` · Last verified: 2026-10-17
 > Conflicts with this document are defects. Fix them here first.
 > Read out of `pkg/cli/commands/iam/` on 2026-08-18.
 
@@ -13,7 +13,8 @@ platformctl iam
     user     Manage users
     group    Manage groups
     role     Manage roles
-    policy   Manage authorization policies
+    policy      Manage authorization policies
+    permission  Check IAM permissions
     app      Manage OAuth applications
 ```
 
@@ -51,7 +52,7 @@ at the CLI.
 |---|---|---|
 | `create` | — | `--tenant` (required), `--email` (required), `--name`, `--roles`, `--groups`, `--attributes` |
 | `get` | `<tenant-id> <user-id>` | — |
-| `list` | — | `--tenant` (required) |
+| `list` | — | `--tenant` (required), `--page`/`-p` (default 1), `--page-size`/`-s` (default 50) |
 | `update` | — | `--tenant` (required), `--user-id` (required), `--email`, `--name`, `--roles`, `--groups`, `--attributes` |
 | `delete` | `<tenant-id> <user-id>` | — |
 | `assign-role` | `<tenant-id> <user-id> <role>` | — |
@@ -80,25 +81,23 @@ platformctl iam user revoke-role tenant-a u-0f21 admin
 |---|---|---|
 | `create` | `<group-id>` | `--tenant`/`-t` (required), `--name`/`-n`, `--description`/`-d` |
 | `get` | `<tenant-id> <group-id>` | — |
-| `list` | — | `--tenant`/`-t` (required) |
+| `list` | — | `--tenant`/`-t` (required), `--page`/`-p` (default 1), `--page-size`/`-s` (default 50) |
 | `update` | `<group-id>` | `--tenant`/`-t` (required), `--name`/`-n`, `--description`/`-d` |
 | `delete` | `<tenant-id> <group-id>` | — |
-| `add-member` | `<tenant-id> <group-id> <user-id>` | **NOT IMPLEMENTED** |
-| `remove-member` | `<tenant-id> <group-id> <user-id>` | **NOT IMPLEMENTED** |
+| `add-member` | `<tenant-id> <group-id> <user-id>` | — |
+| `remove-member` | `<tenant-id> <group-id> <user-id>` | — |
 
-**Group membership cannot be changed from the CLI.** Both verbs are marked
-"(not yet implemented)" in `pkg/cli/commands/iam/group*.go`. Use REST or MCP:
+`add-member` and `remove-member` call the IAM `AddGroupMember` and
+`RemoveGroupMember` RPCs and return the daemon's error unchanged. With
+`--output json` they print `{"success": true, "message": "..."}`.
 
 ```bash
-curl -s -X POST   https://platform.example.com/api/v1/iam/tenants/tenant-a/groups/g-01/members/u-0f21
-curl -s -X DELETE https://platform.example.com/api/v1/iam/tenants/tenant-a/groups/g-01/members/u-0f21
+platformctl iam group add-member    tenant-a g-01 u-0f21
+platformctl iam group remove-member tenant-a g-01 u-0f21
 ```
 
-The MCP tools `iam_add_group_member` and `iam_remove_group_member` also work.
-
-As a partial workaround, `iam user create --groups ...` and
-`iam user update --groups ...` set a user's group list — remembering that
-`update` **replaces** it.
+`iam user update --groups ...` also sets a user's group list, but it
+**replaces** the list.
 
 ---
 
@@ -108,7 +107,7 @@ As a partial workaround, `iam user create --groups ...` and
 |---|---|---|
 | `create` | `<role-id>` | `--tenant` (required) |
 | `get` | `<tenant-id> <role-id>` | — |
-| `list` | — | `--tenant` (required) |
+| `list` | — | `--tenant` (required), `--page`/`-p` (default 1), `--page-size`/`-s` (default 50) |
 | `update` | `<role-id>` | `--tenant` (required) |
 | `delete` | `<tenant-id> <role-id>` | — |
 
@@ -139,7 +138,29 @@ platformctl iam policy create   --tenant tenant-a ...
 
 ---
 
-## 6. `platformctl iam app`
+## 6. `platformctl iam permission`
+
+| Verb | Positional | Flags |
+|---|---|---|
+| `check` | — | `--tenant` (required), `--subject` (required), `--action` (required), `--resource` (required), `--roles`, `--groups`, `--context`, `--attributes` |
+
+`check` calls the IAM `CheckPermission` RPC. It asks whether the subject may
+perform the action on the resource. `--roles` and `--groups` are
+comma-separated IDs. `--context` and `--attributes` are comma-separated
+`key=value` pairs. `--output json` prints `allowed`, `matched_policy`,
+`matched_rule`, `reason` and `evaluation_time_ns`. `allowed` is always present.
+
+```bash
+platformctl iam permission check --tenant tenant-a --subject u-0f21 \
+    --roles operator --action read --resource users -o json
+```
+
+The daemon answers through its policy enforcement point (`pepClient.Check`
+in `pkg/api/daemon/iam_grpc_service.go`).
+
+---
+
+## 7. `platformctl iam app`
 
 OAuth applications.
 
@@ -168,14 +189,12 @@ platformctl iam app rotate-secret tenant-a c-9a3f
 
 ---
 
-## 7. What the CLI does not cover
+## 8. What the CLI does not cover
 
 | Capability | Reach it with |
 |---|---|
-| Group membership add / remove | REST, gRPC, QUIC, MCP |
 | Authenticate | gRPC, QUIC, MCP |
 | Create / verify / revoke a token | gRPC, QUIC (`0xF9`–`0xFB`), MCP |
-| Check a permission | gRPC, QUIC, MCP |
 | Tenant CRUD (IAM scoping) | REST `/api/v1/iam/tenants`, gRPC, MCP |
 
 Platform tenancy — the VLAN/bridge/keyspace/DEK kind — is a different feature
@@ -183,7 +202,7 @@ with its own CLI: `platformctl tenant` ([`docs/tenant/`](../tenant/)).
 
 ---
 
-## 8. Parity gap
+## 9. Parity gap
 
 `conventions/feature-docs.md` §4 requires every verb here to have a
 `CommandDefinition` in the integration parity suite. **No `CommandDefinition`

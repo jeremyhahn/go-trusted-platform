@@ -295,7 +295,7 @@ platformctl authenticode sign \
     --key /path/to/DB.key \
     --cert /path/to/DB.crt \
     --input bootx64.efi \
-    --output bootx64-signed.efi
+    --out bootx64-signed.efi
 
 # Verify a signature (--cert is optional)
 platformctl authenticode verify \

@@ -542,6 +542,21 @@ func TestErrDNSRecordNotFound(t *testing.T) {
 	}
 }
 
+func TestErrDNSRecordNotFound_GRPCStatus(t *testing.T) {
+	t.Parallel()
+	err := ErrDNSRecordNotFound{Name: "www", RecordType: "A"}
+	st := err.GRPCStatus()
+	if st.Code() != codes.NotFound {
+		t.Errorf("GRPCStatus().Code() = %v, want %v", st.Code(), codes.NotFound)
+	}
+	if st.Message() != err.Error() {
+		t.Errorf("GRPCStatus().Message() = %q, want %q", st.Message(), err.Error())
+	}
+	if got := status.Code(st.Err()); got != codes.NotFound {
+		t.Errorf("status.Code(GRPCStatus().Err()) = %v, want %v", got, codes.NotFound)
+	}
+}
+
 func TestErrDNSOperationFailed(t *testing.T) {
 	t.Parallel()
 	cause := errors.New("zone file corrupt")

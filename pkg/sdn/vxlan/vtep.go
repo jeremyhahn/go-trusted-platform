@@ -187,7 +187,9 @@ func (m *VTEPManager) ensurePort(ctx context.Context) error {
 	return nil
 }
 
-// Stop removes the VXLAN port. Flows that output to it go with it.
+// Stop removes the VXLAN port. Flows that output to it go with it. A port
+// that is already gone (a successor sharing the bridge, or an operator,
+// removed it) leaves nothing to remove, so the stop succeeds.
 func (m *VTEPManager) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -198,7 +200,8 @@ func (m *VTEPManager) Stop(ctx context.Context) error {
 	m.started.Store(false)
 	m.ofPort.Store(0)
 
-	if err := m.ovsClient.DeleteVXLANPort(ctx, m.bridgeName, m.portName); err != nil {
+	err := m.ovsClient.DeleteVXLANPort(ctx, m.bridgeName, m.portName)
+	if err != nil && !errors.Is(err, ovs.ErrVXLANPortNotFound) {
 		return &ErrOVSOperationFailed{Operation: "delete VXLAN port", Target: m.portName, Cause: err}
 	}
 

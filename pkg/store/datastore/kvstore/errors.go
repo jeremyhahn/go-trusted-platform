@@ -15,6 +15,8 @@ package kvstore
 
 import (
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 )
 
 // ErrNotFound is returned when an entity is not found in the database.
@@ -27,6 +29,12 @@ func (e ErrNotFound) Error() string {
 	return fmt.Sprintf("entity not found: type=%s, id=%d", e.EntityType, e.ID)
 }
 
+// Is reports the error as datastore.ErrRecordNotFound, the miss every
+// datastore Get returns, so a caller classifies it without knowing the store.
+func (e ErrNotFound) Is(target error) bool {
+	return target == datastore.ErrRecordNotFound
+}
+
 // ErrNotFoundByIndex is returned when an entity is not found by index lookup.
 type ErrNotFoundByIndex struct {
 	EntityType string
@@ -36,6 +44,11 @@ type ErrNotFoundByIndex struct {
 
 func (e ErrNotFoundByIndex) Error() string {
 	return fmt.Sprintf("entity not found by index: type=%s, %s=%s", e.EntityType, e.IndexField, e.Value)
+}
+
+// Is reports the error as datastore.ErrRecordNotFound, as ErrNotFound does.
+func (e ErrNotFoundByIndex) Is(target error) bool {
+	return target == datastore.ErrRecordNotFound
 }
 
 // ErrSerializationFailed is returned when entity serialization fails.

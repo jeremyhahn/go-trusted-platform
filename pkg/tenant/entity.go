@@ -14,12 +14,29 @@
 package tenant
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 )
+
+// PlatformRecordKey is the IAM tenant metadata key that holds the platform's
+// own part of a tenant - lifecycle state, quotas, labels and annotations - for
+// which the IAM tenant has no field (docs/tenant/engineering.md §6).
+const PlatformRecordKey = "platform.tenant"
+
+// platformRecord is the platform-owned part of a tenant, stored as one JSON
+// value under PlatformRecordKey so an update always replaces it whole.
+type platformRecord struct {
+	State        State             `json:"state"`
+	ComputeQuota ComputeQuota      `json:"compute_quota"`
+	NetworkQuota NetworkQuota      `json:"network_quota"`
+	StorageQuota StorageQuota      `json:"storage_quota"`
+	Labels       map[string]string `json:"labels,omitempty"`
+	Annotations  map[string]string `json:"annotations,omitempty"`
+}
 
 // TenantEntity represents a tenant with platform-specific extensions.
 // It extends the QuicBaaS IAM Tenant with DEK management and resource
@@ -90,6 +107,71 @@ func (e *TenantEntity) ToIAM() *iam.Tenant {
 		CreatedAt:   e.CreatedAt,
 		UpdatedAt:   e.UpdatedAt,
 	}
+}
+
+// platformMetadata encodes the entity's platform record as the IAM tenant
+// metadata that persists it.
+func (e *TenantEntity) platformMetadata() (map[string]string, error) {
+	data, err := json.Marshal(platformRecord{
+		State:        e.State,
+		ComputeQuota: e.ComputeQuota,
+		NetworkQuota: e.NetworkQuota,
+		StorageQuota: e.StorageQuota,
+		Labels:       e.Labels,
+		Annotations:  e.Annotations,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{PlatformRecordKey: string(data)}, nil
+}
+
+// restorePlatformRecord applies the platform record an IAM tenant carries. A
+// tenant without one was created outside the tenant manager: it keeps the
+// defaults FromIAM gave it, suspended when IAM says so.
+func (e *TenantEntity) restorePlatformRecord(t *iam.Tenant) error {
+	data, ok := t.Metadata[PlatformRecordKey]
+	if !ok {
+		if t.Status == iam.TenantStatusSuspended {
+			e.State = StateSuspended
+		}
+		return nil
+	}
+
+	var record platformRecord
+	if err := json.Unmarshal([]byte(data), &record); err != nil {
+		return err
+	}
+	if !record.State.IsValid() {
+		return ErrInvalidState{Current: record.State}
+	}
+
+	e.State = record.State
+	e.ComputeQuota = record.ComputeQuota
+	e.NetworkQuota = record.NetworkQuota
+	e.StorageQuota = record.StorageQuota
+	if record.Labels != nil {
+		e.Labels = record.Labels
+	}
+	if record.Annotations != nil {
+		e.Annotations = record.Annotations
+	}
+	return nil
+}
+
+// iamStatus is the IAM tenant status that mirrors the lifecycle state. IAM has
+// no created or deleting status, so those states leave it unchanged (nil).
+func (e *TenantEntity) iamStatus() *iam.TenantStatus {
+	var status iam.TenantStatus
+	switch e.State {
+	case StateActive:
+		status = iam.TenantStatusActive
+	case StateSuspended:
+		status = iam.TenantStatusSuspended
+	default:
+		return nil
+	}
+	return &status
 }
 
 // Clone creates a deep copy of the TenantEntity.

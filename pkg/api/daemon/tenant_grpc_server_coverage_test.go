@@ -1054,17 +1054,34 @@ func TestTenantGRPCServer_CheckQuota_ExecutesWithMissingEnforcer(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Check quota - exercises the code path even if enforcer not configured
+	// Without a quota enforcer the check runs against the tenant's own limits.
 	resp, err := server.CheckQuota(ctx, &platformv1.CheckQuotaRequest{
 		TenantId: createResp.Tenant.Id,
 		Resource: "vms",
 		Amount:   5,
 	})
-
-	// Should succeed with response (not error) even if quota check fails internally
 	require.NoError(t, err)
-	assert.NotNil(t, resp)
-	// Response may indicate unavailable because enforcer not configured
+	assert.True(t, resp.GetAvailable(), "5 of 10 VMs must be available: %s", resp.GetMessage())
+
+	// An exceeded quota is an answer, not an error.
+	resp, err = server.CheckQuota(ctx, &platformv1.CheckQuotaRequest{
+		TenantId: createResp.Tenant.Id,
+		Resource: "vms",
+		Amount:   11,
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.GetAvailable(), "11 of 10 VMs must not be available")
+}
+
+func TestTenantGRPCServer_CheckQuota_UnknownTenantIsNotFound(t *testing.T) {
+	server := createTestTenantGRPCServer(t)
+
+	_, err := server.CheckQuota(context.Background(), &platformv1.CheckQuotaRequest{
+		TenantId: "no-such-tenant",
+		Resource: "vms",
+		Amount:   1,
+	})
+	assert.Equal(t, codes.NotFound, status.Code(err), "an unknown tenant is NotFound, got %v", err)
 }
 
 func TestTenantGRPCServer_CheckQuota_InvalidArgument_EmptyTenantID(t *testing.T) {

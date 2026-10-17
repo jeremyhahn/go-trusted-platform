@@ -501,6 +501,18 @@ func initVTPMServiceOnConfig(logger *logging.Logger, a *app.App, cfg *daemon.Con
 		"ek_ca_wired", vtpmCA != nil)
 }
 
+// wireDaemonDNSService hands the platform DNS service to the daemon's gRPC,
+// QUIC, MCP and Unix transports. App.ServiceRegistry() is what creates
+// App.DNSService, so this must follow that call: read before it, the field is
+// still nil and every daemon DNS handler answers "DNS service not available".
+func wireDaemonDNSService(logger *logging.Logger, a *app.App, cfg *daemon.Config) {
+	if a == nil || cfg == nil || a.DNSService == nil {
+		return
+	}
+	cfg.DNSService = a.DNSService
+	logger.Info("DNS service configured for daemon")
+}
+
 // applyDaemonTLSIdentity provisions the daemon's mTLS material via the
 // quicbaas SDK CertificateService and binds it to the supplied
 // daemon.Config so that gRPC TCP, QUIC, REST and MCP HTTP listeners present a
@@ -850,11 +862,6 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		logger.Info("Compute orchestrator initialized successfully")
 	}
 
-	if App != nil && App.DNSService != nil {
-		daemonConfig.DNSService = App.DNSService
-		logger.Info("DNS service configured for daemon")
-	}
-
 	// Surface platform services into the daemon config so each gRPC
 	// service registers handlers on both the TCP and Unix-socket gRPC
 	// servers. Without these wirings, `platformctl --transport unix …`
@@ -881,6 +888,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			daemonConfig.CAService = App.CA
 			logger.Info("CA service wired for daemon gRPC")
 		}
+		wireDaemonDNSService(logger, App, daemonConfig)
 	}
 
 	// A BMC configured for ACME needs a client before cert management runs.
@@ -1015,23 +1023,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		return ErrServeStartup{Phase: "SDK backends", Cause: err}
 	}
 
-	// The gateway telemetry store backs the snapshot RPCs on every
-	// transport, so the control plane answers `GetGatewaySnapshot` from the
-	// same reports POST /gateway/telemetry writes (#594).
-	if gwControl != nil && gwControl.Store != nil {
-		if svc := platformDaemon.GatewayGRPCService(); svc != nil {
-			svc.SetGatewaySnapshotStore(gwControl.Store)
-		}
-		// VPN session status reads the vpn section of the same reports.
-		// The enrolment set and the posture policies reach the gateways as
-		// the vpn section of their desired configuration.
-		if vpnControl := platformDaemon.VPNControlPlane(); vpnControl != nil {
-			vpnControl.SetGatewaySnapshotStore(gwControl.Store)
-			if gwControl.DesiredCfg != nil {
-				gwControl.DesiredCfg.SetVPNSource(vpnControl)
-			}
-		}
-	}
+	gwControl.attachTo(platformDaemon)
 
 	// Plug snapshot store into the daemon Service so reload captures
 	// a pre-reload snapshot automatically and rollback is reachable
@@ -1630,11 +1622,6 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 	config.PlatformTenantManager = platformTenantManager(logger, App)
 	config.PlatformTenantID = platformTenantID(App)
 
-	if App != nil && App.DNSService != nil {
-		config.DNSService = App.DNSService
-		logger.Info("DNS service configured for daemon")
-	}
-
 	// Surface device + profile services into the daemon config so the BMC,
 	// Device, and PXE gRPC services can resolve profile-backed configuration.
 	// runWithWebservices wires these the same way; without them the daemon-only
@@ -1657,6 +1644,7 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 			config.DeviceTemplateService = templateSvc
 			logger.Info("device template service wired for daemon gRPC")
 		}
+		wireDaemonDNSService(logger, App, config)
 	}
 
 	// A BMC configured for ACME needs a client before cert management runs.
@@ -1718,6 +1706,11 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 		cmd.PrintErrln(fmt.Sprintf("Failed to wire the SDK backends: %v", err))
 		return ErrServeStartup{Phase: "SDK backends", Cause: err}
 	}
+
+	// The gateway liaison is served on the daemon REST listener on this path
+	// too: without it /api/v1/gateway/telemetry, /state and /desired-config
+	// answer 404 and VPN session status has no telemetry store.
+	initGatewayControlPlane(logger, App).attachTo(d)
 
 	if App != nil && App.TPM != nil {
 		logger.Info("TPM available for IDevID/IAK operations")

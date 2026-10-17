@@ -159,6 +159,14 @@ func isEKBindingRejected(err error) bool {
 	)
 }
 
+// isEABProfileMismatch reports whether err corresponds to a valid EAB
+// credential presented by a device that does not resolve to the credential's
+// profile (typed configdelivery ErrEABProfileMismatch; REST 403, gRPC
+// PermissionDenied, QUIC StatusPermissionDenied).
+func isEABProfileMismatch(err error) bool {
+	return containsAny(err, "eab credential is not bound to this device's profile")
+}
+
 // isSignerUnavailable reports whether err corresponds to the control plane
 // having no Secure Boot DB key signer wired (typed configdelivery
 // ErrSignerUnavailable; REST 503, gRPC Unavailable).
@@ -167,6 +175,13 @@ func isSignerUnavailable(err error) bool {
 		"remote signing is unavailable",
 		"no db key signer",
 	)
+}
+
+// isSignFailed reports the typed ErrSignFailed: every authentication gate
+// passed and the control-plane DB signer was asked to sign, but the KMS
+// refused (docs/firmware/api.md, Errors: "KMS refused the signature").
+func isSignFailed(err error) bool {
+	return containsAny(err, "configdelivery: digest signing failed")
 }
 
 // uniqueMAC generates a unique locally-administered MAC address for

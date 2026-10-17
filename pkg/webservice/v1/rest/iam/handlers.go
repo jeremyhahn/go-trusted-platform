@@ -363,11 +363,7 @@ func (h *IAMHandlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 	// only supplies an email. The IAM SDK rejects empty usernames.
 	username := req.Username
 	if username == "" {
-		if at := strings.IndexByte(req.Email, '@'); at > 0 {
-			username = req.Email[:at]
-		} else {
-			username = req.Email
-		}
+		username = UsernameFromEmail(req.Email)
 	}
 	sdkReq := &iamsdk.CreateUserRequest{
 		Username:    username,

@@ -16,13 +16,16 @@ package daemon
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -257,6 +260,57 @@ func TestDNSServiceServer_UpdateRecord_SaveError(t *testing.T) {
 	assert.Equal(t, codes.Internal, st.Code())
 }
 
+// An update replaces a record the zone holds. A record of another name, or of
+// another type under the same name, is not there to replace: NotFound, and the
+// zone keeps what it had.
+func TestDNSServiceServer_UpdateRecord_RecordNotFound(t *testing.T) {
+	tests := []struct {
+		name      string
+		oldRecord *platformv1.Record
+	}{
+		{"unknown name", &platformv1.Record{
+			Type:   platformv1.RecordType_RECORD_TYPE_A,
+			Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "ftp"}},
+		}},
+		{"name held only in another type", &platformv1.Record{
+			Type:   platformv1.RecordType_RECORD_TYPE_AAAA,
+			Record: &platformv1.Record_Aaaa{Aaaa: &platformv1.AAAARecord{Name: "www"}},
+		}},
+		{"unspecified type", &platformv1.Record{
+			Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "www"}},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := newMockDNSService()
+			mock.zones["example.com."] = &entities.Zone{
+				ID:   1,
+				Name: "example.com.",
+				RecordSet: entities.RecordSet{
+					ARecords: []*entities.ARecord{{Name: "www", Value: "192.168.1.1", TTL: 3600}},
+				},
+			}
+			server := NewDNSServiceServer(mock, testLogger())
+
+			_, err := server.UpdateRecord(context.Background(), &platformv1.UpdateRecordRequest{
+				ZoneName:  "example.com.",
+				OldRecord: tt.oldRecord,
+				NewRecord: &platformv1.Record{
+					Type:   platformv1.RecordType_RECORD_TYPE_A,
+					Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "ftp", Value: "192.168.1.2"}},
+				},
+			})
+
+			require.Error(t, err)
+			assert.Equal(t, codes.NotFound, status.Code(err))
+			records := mock.zones["example.com."].RecordSet.ARecords
+			require.Len(t, records, 1, "a refused update must leave the zone as it was")
+			assert.Equal(t, "www", records[0].Name)
+			assert.Equal(t, "192.168.1.1", records[0].Value)
+		})
+	}
+}
+
 func TestDNSServiceServer_UpdateRecord_AllRecordTypes(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -417,10 +471,15 @@ func TestDNSServiceServer_UpdateRecord_NilRecordData(t *testing.T) {
 		},
 	}
 
-	resp, err := server.UpdateRecord(context.Background(), req)
+	// A new record with no body names no owner: the update is refused and
+	// the old record stays.
+	_, err := server.UpdateRecord(context.Background(), req)
 
-	require.NoError(t, err)
-	assert.True(t, resp.Status.Success)
+	require.Error(t, err)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	assert.Contains(t, err.Error(), "name is required")
+	require.Len(t, mock.zones["example.com."].RecordSet.ARecords, 1)
+	assert.Equal(t, "192.168.1.1", mock.zones["example.com."].RecordSet.ARecords[0].Value)
 }
 
 // ListRecords Coverage Tests
@@ -543,6 +602,88 @@ func TestDNSServiceServer_ListRecords_MultipleRecordsSameType(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Len(t, resp.Records, 3)
+}
+
+// pagedRecordsServer serves a zone of five A records and one MX record.
+func pagedRecordsServer() *DNSServiceServer {
+	mock := newMockDNSService()
+	mock.zones["example.com."] = &entities.Zone{
+		ID:   1,
+		Name: "example.com.",
+		RecordSet: entities.RecordSet{
+			ARecords: []*entities.ARecord{
+				{Name: "a1", Value: "192.168.1.1", TTL: 3600},
+				{Name: "a2", Value: "192.168.1.2", TTL: 3600},
+				{Name: "a3", Value: "192.168.1.3", TTL: 3600},
+				{Name: "a4", Value: "192.168.1.4", TTL: 3600},
+				{Name: "a5", Value: "192.168.1.5", TTL: 3600},
+			},
+			MXRecords: []*entities.MXRecord{
+				{Name: "@", Value: "mail.example.com.", Priority: 10, TTL: 3600},
+			},
+		},
+	}
+	return NewDNSServiceServer(mock, testLogger())
+}
+
+func TestDNSServiceServer_ListRecords_PagesWhenAsked(t *testing.T) {
+	server := pagedRecordsServer()
+
+	resp, err := server.ListRecords(context.Background(), &platformv1.ListRecordsRequest{
+		ZoneName: "example.com.",
+		Type:     platformv1.RecordType_RECORD_TYPE_A,
+		Limit:    proto.Uint32(2),
+		Offset:   proto.Uint32(2),
+	})
+
+	require.NoError(t, err)
+	require.Len(t, resp.GetRecords(), 2)
+	assert.Equal(t, "a3", resp.GetRecords()[0].GetA().GetName())
+	assert.Equal(t, "a4", resp.GetRecords()[1].GetA().GetName())
+	assert.Equal(t, uint64(5), resp.GetTotal(), "total counts the filtered type, not the page")
+	assert.Equal(t, uint32(2), resp.GetLimit())
+	assert.Equal(t, uint32(2), resp.GetOffset())
+}
+
+func TestDNSServiceServer_ListRecords_UnpagedReturnsTheWholeList(t *testing.T) {
+	server := pagedRecordsServer()
+
+	resp, err := server.ListRecords(context.Background(), &platformv1.ListRecordsRequest{ZoneName: "example.com."})
+
+	require.NoError(t, err)
+	assert.Len(t, resp.GetRecords(), 6)
+	assert.Equal(t, uint64(6), resp.GetTotal())
+	assert.Equal(t, uint32(dns.DefaultPageLimit), resp.GetLimit())
+	assert.Equal(t, uint32(0), resp.GetOffset())
+}
+
+func TestDNSServiceServer_ListRecords_OffsetAloneUsesTheDefaultLimit(t *testing.T) {
+	server := pagedRecordsServer()
+
+	resp, err := server.ListRecords(context.Background(), &platformv1.ListRecordsRequest{
+		ZoneName: "example.com.",
+		Offset:   proto.Uint32(0),
+	})
+
+	require.NoError(t, err)
+	assert.Len(t, resp.GetRecords(), 6)
+	assert.Equal(t, uint32(dns.DefaultPageLimit), resp.GetLimit())
+}
+
+func TestDNSServiceServer_ListRecords_OffsetPastTheEndIsAnEmptyPage(t *testing.T) {
+	server := pagedRecordsServer()
+
+	resp, err := server.ListRecords(context.Background(), &platformv1.ListRecordsRequest{
+		ZoneName: "example.com.",
+		Type:     platformv1.RecordType_RECORD_TYPE_A,
+		Limit:    proto.Uint32(dns.MaxPageLimit + 1),
+		Offset:   proto.Uint32(9),
+	})
+
+	require.NoError(t, err)
+	assert.Empty(t, resp.GetRecords())
+	assert.Equal(t, uint64(5), resp.GetTotal())
+	assert.Equal(t, uint32(dns.MaxPageLimit), resp.GetLimit(), "a limit above the cap is clamped")
 }
 
 // getRecordName coverage tests for nil inner records
@@ -710,8 +851,12 @@ func TestDNSServiceServer_AddRecordToZone_NilInnerRecords(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// A nil body names no owner, so it is refused, never stored as
+			// a silent no-op.
 			err := server.addRecordToZone(zone, tt.record)
-			require.NoError(t, err)
+			var required dns.ErrRecordNameRequired
+			require.True(t, errors.As(err, &required), "err = %v", err)
+			assert.Equal(t, strings.TrimPrefix(tt.record.GetType().String(), "RECORD_TYPE_"), required.Type)
 		})
 	}
 }

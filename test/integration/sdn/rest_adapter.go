@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/healthprobe"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"io"
 	"net/http"
@@ -119,10 +120,17 @@ func (r *RESTAdapter) Name() string {
 	return "REST"
 }
 
+// livenessPath is the probe the SDN REST adapters check connectivity with.
+// GET /health is the aggregate verdict over every platformd component and
+// answers 503 when any one of them (NTP, say) is not healthy; GET
+// /health/live answers 200 whenever the process answers
+// (docs/health/api.md §2), which is what "the REST API is reachable" means.
+const livenessPath = healthprobe.LivenessPath
+
 // Setup verifies connectivity to the REST API.
 func (r *RESTAdapter) Setup(ctx context.Context) error {
 	// Perform health check
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.baseURL+"/health", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.baseURL+livenessPath, nil)
 	if err != nil {
 		return ErrRESTConnectionFailed{Endpoint: r.baseURL, Err: err}
 	}
@@ -137,7 +145,7 @@ func (r *RESTAdapter) Setup(ctx context.Context) error {
 		body, _ := io.ReadAll(resp.Body)
 		return ErrRESTRequestFailed{
 			Method:     http.MethodGet,
-			URL:        r.baseURL + "/health",
+			URL:        r.baseURL + livenessPath,
 			StatusCode: resp.StatusCode,
 			Body:       string(body),
 		}

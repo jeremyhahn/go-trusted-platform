@@ -45,6 +45,9 @@ refused before it reaches the service.
 
 ### device_get
 
+Get a device by ID. A missing device is `NotFound`, as on gRPC; so is the
+lookup `device_update` and `device_delete` make first.
+
 ```json
 {
   "name": "device_get",
@@ -545,6 +548,28 @@ is the domain role string ([api.md §4.2](api.md#42-role-vocabulary)) and
 
 Returns the stored template with the server-assigned `id` as a decimal
 string and `config` as text.
+
+### device_template_get, device_template_list, device_template_update, device_template_delete
+
+Read, page, replace and delete stored device templates
+(`DeviceService.GetTemplate`, `ListTemplates`, `UpdateTemplate`,
+`DeleteTemplate`). `id` is a decimal string or a number; an unknown id is an
+error. `device_template_update` takes `id` and the `device_template_create`
+arguments, with `name` required, and replaces the stored template.
+`device_template_list` takes `page` and `page_size` (defaults 1 and 50).
+Get and list require `device:read`, update `device:write`, delete
+`device:delete`.
+
+```json
+{"name": "device_template_get", "arguments": {"id": "9000"}}
+{"name": "device_template_list", "arguments": {"page": 1, "page_size": 50}}
+{"name": "device_template_update", "arguments": {"id": "9000", "name": "edge", "role": "load-balancer", "config": "hostname: edge-02\n"}}
+{"name": "device_template_delete", "arguments": {"id": "9000"}}
+```
+
+Get and update return the template as `device_template_create` does; list
+returns `{"templates": [...], "total": N, "page": P, "page_size": S}`;
+delete returns `{"success": true, "id": "9000"}`.
 
 ### profile_create_from_template
 

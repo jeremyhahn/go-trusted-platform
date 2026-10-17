@@ -26,17 +26,25 @@ type AuthorizationChecker struct {
 	authService AuthorizationService
 	authManager AuthManager
 
+	// peerAuthenticator turns the verified client certificate of a
+	// tokenless request into its principal; nil disables that path.
+	peerAuthenticator PeerAuthenticator
+
 	// toolPermissions maps tool names to required permissions
 	toolPermissions map[string]string
 }
 
 // NewAuthorizationChecker creates a new authorization checker.
-func NewAuthorizationChecker(authService AuthorizationService, authManager AuthManager) *AuthorizationChecker {
-	return &AuthorizationChecker{
+func NewAuthorizationChecker(authService AuthorizationService, authManager AuthManager, opts ...AuthorizationCheckerOption) *AuthorizationChecker {
+	c := &AuthorizationChecker{
 		authService:     authService,
 		authManager:     authManager,
 		toolPermissions: toolPermissionCatalog(),
 	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 // toolPermissionCatalog returns the permission each MCP tool requires, keyed
@@ -205,11 +213,16 @@ func toolPermissionCatalog() map[string]string {
 	permissions["profile_find_matching"] = "device:read"
 	permissions["profile_find_by_mac"] = "device:read"
 	permissions["profile_find_by_serial"] = "device:read"
+	permissions["profile_find_config"] = "device:read"
 	permissions["profile_update_by_id"] = "device:write"
 	permissions["profile_delete_by_id"] = "device:delete"
 	permissions["profile_assign_to_device"] = "device:write"
 	permissions["profile_unassign_from_device"] = "device:write"
 	permissions["device_template_create"] = "device:write"
+	permissions["device_template_get"] = "device:read"
+	permissions["device_template_list"] = "device:read"
+	permissions["device_template_update"] = "device:write"
+	permissions["device_template_delete"] = "device:delete"
 	permissions["profile_create_from_template"] = "device:write"
 
 	// SDN tools
@@ -634,8 +647,9 @@ func toolPermissionCatalog() map[string]string {
 	// scope of CreateToken and RevokeToken, which refuse on every transport
 	// with the same OIDC error.
 	for _, tool := range []string{
-		"iam_create_user", "iam_create_role", "iam_assign_role", "iam_revoke_role",
-		"iam_create_group", "iam_add_group_member", "iam_remove_group_member",
+		"iam_create_user", "iam_update_user", "iam_create_role", "iam_update_role",
+		"iam_assign_role", "iam_revoke_role",
+		"iam_create_group", "iam_update_group", "iam_add_group_member", "iam_remove_group_member",
 		"iam_create_tenant", "iam_create_token", "iam_revoke_token",
 	} {
 		permissions[tool] = "iam:write"
@@ -756,6 +770,13 @@ func (c *AuthorizationChecker) AuthorizeTool(ctx context.Context, toolName strin
 	// If no permission required, allow
 	if permission == "" {
 		return ctx, nil
+	}
+
+	// Under mTLS the verified client certificate authenticates a tokenless
+	// request, as on REST, gRPC and QUIC. A presented token never takes this
+	// path: it is validated by the token backend below.
+	if token == "" && c.peerAuthenticator != nil {
+		return c.authorizePeer(ctx, toolName, permission)
 	}
 
 	// With no authorization backend there is nothing that can grant the

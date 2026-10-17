@@ -15,16 +15,6 @@ package iso
 
 import "fmt"
 
-// ErrDaemonConnectionRequired is returned when a command requires daemon connection
-// but dual-mode is not yet implemented.
-type ErrDaemonConnectionRequired struct {
-	Command string
-}
-
-func (e ErrDaemonConnectionRequired) Error() string {
-	return fmt.Sprintf("daemon connection required for '%s' command - dual-mode will be added later", e.Command)
-}
-
 // ErrInvalidArchitecture is returned when an invalid architecture is specified.
 type ErrInvalidArchitecture struct {
 	Architecture string

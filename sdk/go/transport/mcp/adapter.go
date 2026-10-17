@@ -325,6 +325,7 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.PlatformIAMService/DeleteUser": "iam_delete_user",
 	"/platform.v1.PlatformIAMService/GetUser":    "iam_get_user",
 	"/platform.v1.PlatformIAMService/ListUsers":  "iam_list_users",
+	"/platform.v1.PlatformIAMService/UpdateUser": "iam_update_user",
 
 	// IAM Role Operations
 	"/platform.v1.PlatformIAMService/CreateRole": "iam_create_role",
@@ -333,6 +334,7 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.PlatformIAMService/ListRoles":  "iam_list_roles",
 	"/platform.v1.PlatformIAMService/AssignRole": "iam_assign_role",
 	"/platform.v1.PlatformIAMService/RevokeRole": "iam_revoke_role",
+	"/platform.v1.PlatformIAMService/UpdateRole": "iam_update_role",
 
 	// IAM Group Operations
 	"/platform.v1.PlatformIAMService/CreateGroup":       "iam_create_group",
@@ -341,6 +343,7 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.PlatformIAMService/ListGroups":        "iam_list_groups",
 	"/platform.v1.PlatformIAMService/AddGroupMember":    "iam_add_group_member",
 	"/platform.v1.PlatformIAMService/RemoveGroupMember": "iam_remove_group_member",
+	"/platform.v1.PlatformIAMService/UpdateGroup":       "iam_update_group",
 
 	// IAM Tenant Operations
 	"/platform.v1.PlatformIAMService/CreateTenant": "iam_create_tenant",

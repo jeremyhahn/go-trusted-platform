@@ -149,3 +149,70 @@ type SignCSRScopeError struct {
 func (e *SignCSRScopeError) Error() string {
 	return "signing a CSR requires a platform token granting " + SignCSRScope + ": " + e.Reason
 }
+
+// renewalRefused marks the renewals the CA refuses in its present state,
+// which transports report as a failed precondition rather than a server
+// failure.
+type renewalRefused interface {
+	error
+	renewalRefused()
+}
+
+// IsRenewalRefused reports whether err is a renewal the CA refuses in its
+// present state.
+func IsRenewalRefused(err error) bool {
+	var target renewalRefused
+	return errors.As(err, &target)
+}
+
+// RenewCAOwnCertificateError is a renewal of the CA's own root or
+// intermediate certificate, whose key is the CA signing key.
+type RenewCAOwnCertificateError struct {
+	CommonName string
+}
+
+func (e *RenewCAOwnCertificateError) Error() string {
+	return "cannot renew certificate " + e.CommonName +
+		": it is the CA's own certificate, and renewing it would replace the CA signing key"
+}
+
+func (e *RenewCAOwnCertificateError) renewalRefused() {}
+
+// RenewStoreUnavailableError is a renewal on a CA built without the keystore
+// or certificate store the renewal changes.
+type RenewStoreUnavailableError struct {
+	CommonName string
+	Store      string
+}
+
+func (e *RenewStoreUnavailableError) Error() string {
+	return "cannot renew certificate " + e.CommonName + ": the CA has no " + e.Store
+}
+
+func (e *RenewStoreUnavailableError) renewalRefused() {}
+
+// RenewKeyRotationError is the CA keystore failing to look up or rotate the
+// key of the certificate being renewed. The old certificate is left in place.
+type RenewKeyRotationError struct {
+	CommonName string
+	Err        error
+}
+
+func (e *RenewKeyRotationError) Error() string {
+	return "cannot renew certificate " + e.CommonName + ": rotating its key failed: " + e.Err.Error()
+}
+
+func (e *RenewKeyRotationError) Unwrap() error { return e.Err }
+
+// RenewSupersedeError is the CA failing to revoke the certificate being
+// renewed or to remove it from the certificate store.
+type RenewSupersedeError struct {
+	CommonName string
+	Err        error
+}
+
+func (e *RenewSupersedeError) Error() string {
+	return "cannot renew certificate " + e.CommonName + ": superseding the old certificate failed: " + e.Err.Error()
+}
+
+func (e *RenewSupersedeError) Unwrap() error { return e.Err }

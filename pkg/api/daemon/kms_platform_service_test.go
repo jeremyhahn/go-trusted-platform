@@ -17,21 +17,16 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
-	"github.com/gorilla/mux"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkcrypto "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
-	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
-	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -46,16 +41,18 @@ var errPlatformKMSTest = errors.New("platform kms test error")
 
 // platformMockKMSClient implements kms.Client with overridable functions.
 type platformMockKMSClient struct {
-	generateKeyFn     func(ctx context.Context, req *kms.GenerateKeyRequest) (*kms.GenerateKeyResponse, error)
-	importKeyFn       func(ctx context.Context, req *kms.ImportKeyRequest) (*kms.ImportKeyResponse, error)
-	getKeyMetadataFn  func(ctx context.Context, keyID string) (*kms.KeyMetadataResponse, error)
-	listKeysFn        func(ctx context.Context) (*kms.ListKeysResponse, error)
-	deleteKeyFn       func(ctx context.Context, keyID string) error
-	rotateKeyFn       func(ctx context.Context, keyID string) (*kms.RotateKeyResponse, error)
-	updateKeyStatusFn func(ctx context.Context, req *kms.UpdateKeyStatusRequest) (*kms.UpdateKeyStatusResponse, error)
-	exportKeyFn       func(ctx context.Context, req *kms.ExportKeyRequest) (*kms.ExportKeyResponse, error)
-	listKeyVersionsFn func(ctx context.Context, keyID string) (*kms.ListKeyVersionsResponse, error)
-	backendStatusFn   func(ctx context.Context) (*kms.BackendStatusResponse, error)
+	generateKeyFn    func(ctx context.Context, req *kms.GenerateKeyRequest) (*kms.GenerateKeyResponse, error)
+	importKeyFn      func(ctx context.Context, req *kms.ImportKeyRequest) (*kms.ImportKeyResponse, error)
+	getKeyMetadataFn func(ctx context.Context, keyID string) (*kms.KeyMetadataResponse, error)
+	// updateKeyMetadataFn answers UpdateKeyMetadata; unset, the call fails.
+	updateKeyMetadataFn func(ctx context.Context, req *kms.UpdateKeyMetadataRequest) (*kms.KeyMetadataResponse, error)
+	listKeysFn          func(ctx context.Context) (*kms.ListKeysResponse, error)
+	deleteKeyFn         func(ctx context.Context, keyID string) error
+	rotateKeyFn         func(ctx context.Context, keyID string) (*kms.RotateKeyResponse, error)
+	updateKeyStatusFn   func(ctx context.Context, req *kms.UpdateKeyStatusRequest) (*kms.UpdateKeyStatusResponse, error)
+	exportKeyFn         func(ctx context.Context, req *kms.ExportKeyRequest) (*kms.ExportKeyResponse, error)
+	listKeyVersionsFn   func(ctx context.Context, keyID string) (*kms.ListKeyVersionsResponse, error)
+	backendStatusFn     func(ctx context.Context) (*kms.BackendStatusResponse, error)
 }
 
 func (m *platformMockKMSClient) GenerateKey(ctx context.Context, req *kms.GenerateKeyRequest) (*kms.GenerateKeyResponse, error) {
@@ -134,6 +131,9 @@ func (m *platformMockKMSClient) GetKeyMetadata(ctx context.Context, keyID string
 }
 
 func (m *platformMockKMSClient) UpdateKeyMetadata(ctx context.Context, req *kms.UpdateKeyMetadataRequest) (*kms.KeyMetadataResponse, error) {
+	if m.updateKeyMetadataFn != nil {
+		return m.updateKeyMetadataFn(ctx, req)
+	}
 	return nil, errPlatformKMSTest
 }
 
@@ -306,6 +306,17 @@ func TestPlatformKMSBackendGenerateKey(t *testing.T) {
 					Exportable: req.Exportable,
 				}, nil
 			},
+			updateKeyMetadataFn: func(ctx context.Context, req *kms.UpdateKeyMetadataRequest) (*kms.KeyMetadataResponse, error) {
+				return &kms.KeyMetadataResponse{
+					KeyID:       req.KeyID,
+					Description: req.Description,
+					Algorithm:   kms.AlgorithmRSA2048,
+					Version:     1,
+					Exportable:  true,
+					Tags:        req.Tags,
+					Owner:       "kms-recorded-owner",
+				}, nil
+			},
 		}, &platformMockCryptoClient{})
 
 		resp, err := backend.GenerateKey(ctx, &grpcapi.KMSGenerateKeyRequest{
@@ -340,7 +351,10 @@ func TestPlatformKMSBackendGenerateKey(t *testing.T) {
 		if resp.Key.Algorithm != int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_2048) {
 			t.Errorf("unexpected algorithm: %d", resp.Key.Algorithm)
 		}
-		if resp.Metadata.Owner != "tester" || resp.Metadata.Tags["env"] != "test" {
+		// The owner is the one the KMS recorded: the SDK cannot carry the
+		// requested one.
+		if resp.Metadata.Owner != "kms-recorded-owner" || resp.Metadata.Tags["env"] != "test" ||
+			resp.Metadata.Description != "test description" || !resp.Metadata.Exportable {
 			t.Errorf("unexpected metadata: %+v", resp.Metadata)
 		}
 	})
@@ -1698,36 +1712,4 @@ func TestPlatformKMSBackendErrorClassesOverGRPC(t *testing.T) {
 			t.Errorf("ListKeys(no client) = %v, want Unavailable: %v", got, err)
 		}
 	})
-}
-
-// TestPlatformKMSBackendErrorClassesOverREST asks the live REST facade the
-// same questions: each answer carries the HTTP status for the gRPC class.
-func TestPlatformKMSBackendErrorClassesOverREST(t *testing.T) {
-	t.Parallel()
-	backend := newTestPlatformKMSBackend(&platformMockKMSClient{
-		getKeyMetadataFn: func(ctx context.Context, keyID string) (*kms.KeyMetadataResponse, error) {
-			return nil, sdkerrors.NewNotFound("GetKeyMetadata", "no key "+keyID)
-		},
-	}, &platformMockCryptoClient{})
-	router := mux.NewRouter()
-	restapi.NewKMSHandlers(NewPlatformKMSRESTFacade(backend), boostSlogLogger()).RegisterRoutes(router)
-
-	tests := []struct {
-		name string
-		path string
-		want int
-	}{
-		{"missing key is 404", "/api/v1/kms/keys/missing", http.StatusNotFound},
-		{"bad cursor is 400", "/api/v1/kms/keys?cursor=not-a-number", http.StatusBadRequest},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tt.path, nil))
-			if w.Code != tt.want {
-				t.Errorf("GET %s = %d, want %d: %s", tt.path, w.Code, tt.want, w.Body.String())
-			}
-		})
-	}
 }

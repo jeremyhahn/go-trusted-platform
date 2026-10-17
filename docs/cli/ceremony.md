@@ -41,6 +41,11 @@ the platform uninitialized and retryable. The admin key is not stored anywhere:
 the Init reply is its only copy, and the only admin credential the platform
 issues ([`docs/bootstrap/cli.md`](../bootstrap/cli.md) §1a).
 
+`state` (Init and Status alike) is go-qrdb's ceremony state translated to the
+platform vocabulary: `awaiting_init` → `uninitialized`, `enrolling` →
+`in_progress`, `operational` → `complete`. `unknown` means the SDK answered a
+state the platform does not recognise; a successful Init never reports it.
+
 ### `ceremony status`
 
 Print the current ceremony state.

@@ -60,6 +60,8 @@ type profileFlags struct {
 	tlsServerName string
 	// clearTLSServerName blanks the stored tlsServerName on update (#462).
 	clearTLSServerName bool
+	// match is the rule set FindMatchingProfile selects the profile by.
+	match matchRuleFlags
 }
 
 // registerProfileFlags binds the shared profile field flags onto cmd.
@@ -73,6 +75,7 @@ func registerProfileFlags(cmd *cobra.Command, pf *profileFlags) {
 	cmd.Flags().StringVar(&pf.ekCert, "ek-cert", "", "prestaged TPM EK certificate: path to a PEM file or an inline PEM string")
 	cmd.Flags().StringVar(&pf.configFile, "config-file", "", "path to the device platform config (YAML or JSON)")
 	cmd.Flags().StringVar(&pf.tlsServerName, "tls-server-name", "", "certificate name the attestation collector verifies nodes of this profile against (e.g. compute.example.internal); empty means the device's own FQDN")
+	registerMatchRuleFlags(cmd, &pf.match)
 }
 
 // newProfileCommand creates the profile subcommand group for device
@@ -238,6 +241,7 @@ func runProfileCreate(flags *cli.CommonFlags, pf *profileFlags) error {
 		EkCert:        ekCertPEM,
 		Config:        configJSON,
 		TlsServerName: pf.tlsServerName,
+		MatchRules:    applyMatchRuleFlags(nil, &pf.match),
 	}
 
 	created, err := deviceClient.CreateProfile(base.Context(), profile)
@@ -332,6 +336,7 @@ func applyProfileUpdateFlags(profile *platformv1.DeviceProfile, pf *profileFlags
 	if pf.clearTLSServerName {
 		profile.TlsServerName = ""
 	}
+	profile.MatchRules = applyMatchRuleFlags(profile.MatchRules, &pf.match)
 	return nil
 }
 
@@ -441,6 +446,9 @@ func buildProfileOutput(profile *platformv1.DeviceProfile) map[string]interface{
 	if profile.GetTlsServerName() != "" {
 		output["tls_server_name"] = profile.GetTlsServerName()
 	}
+	if rules := buildMatchRulesOutput(profile.GetMatchRules()); rules != nil {
+		output["match_rules"] = rules
+	}
 	if baseline := profileBaselineOutput(profile.GetPcrBaseline()); baseline != nil {
 		output["pcr_baseline"] = baseline
 	}
@@ -520,6 +528,9 @@ func printProfileResult(printer *cli.Printer, profile *platformv1.DeviceProfile)
 	}
 	if profile.GetTlsServerName() != "" {
 		printer.PrintKeyValue("TLS Server Name", profile.GetTlsServerName())
+	}
+	if rules := matchRulesSummary(profile.GetMatchRules()); rules != "" {
+		printer.PrintKeyValue("Match Rules", rules)
 	}
 	if profile.GetPcrBaseline() != nil {
 		printer.PrintKeyValue("PCR Baseline", profileBaselineSummary(profile.GetPcrBaseline()))

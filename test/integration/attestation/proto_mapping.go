@@ -83,18 +83,20 @@ func vmAttestationResult(resp *platformv1.CollectVMAttestationResponse) (*GetVMA
 	}
 
 	return &GetVMAttestationResult{
-		AttestationID: attest.GetVmId(),
-		VMID:          attest.GetVmId(),
-		HostID:        attest.GetHostId(),
-		QuoteData:     attest.GetQuoteData(),
-		Signature:     attest.GetSignature(),
-		PCRs:          pcrValuesFromProto(attest.GetPcrs()),
-		PCRDigest:     attest.GetPcrDigest(),
-		WorkloadPCR:   attest.GetWorkloadPcr(),
-		AIKPublicKey:  attest.GetAikPublicKey(),
-		EKCertPEM:     string(attest.GetEkCertificate()),
-		Timestamp:     timeFromProto(attest.GetTimestamp()),
-		Metadata:      attest.GetMetadata(),
+		AttestationID:      attest.GetVmId(),
+		VMID:               attest.GetVmId(),
+		HostID:             attest.GetHostId(),
+		QuoteData:          attest.GetQuoteData(),
+		Signature:          attest.GetSignature(),
+		SignatureAlgorithm: attest.GetSignatureAlgorithm(),
+		Nonce:              attest.GetNonce(),
+		PCRs:               pcrValuesFromProto(attest.GetPcrs()),
+		PCRDigest:          attest.GetPcrDigest(),
+		WorkloadPCR:        attest.GetWorkloadPcr(),
+		AIKPublicKey:       attest.GetAikPublicKey(),
+		EKCertPEM:          string(attest.GetEkCertificate()),
+		Timestamp:          timeFromProto(attest.GetTimestamp()),
+		Metadata:           attest.GetMetadata(),
 	}, nil
 }
 
@@ -109,9 +111,21 @@ func verifyAttestationQuoteRequest(opts VerifyVMAttestationOptions) *platformv1.
 		}
 	}
 
+	var quote *platformv1.AttestationQuote
+	if opts.Quote != nil {
+		quote = &platformv1.AttestationQuote{
+			QuoteData:          opts.Quote.QuoteData,
+			Signature:          opts.Quote.Signature,
+			SignatureAlgorithm: opts.Quote.SignatureAlgorithm,
+			Nonce:              opts.Quote.Nonce,
+		}
+	}
+
 	return &platformv1.VerifyAttestationQuoteRequest{
-		ExpectedNonce: opts.ExpectedNonce,
-		ExpectedPcrs:  expectedPCRs,
+		Quote:          quote,
+		AkPublicKeyPem: opts.AkPublicKeyPem,
+		ExpectedNonce:  opts.ExpectedNonce,
+		ExpectedPcrs:   expectedPCRs,
 	}
 }
 

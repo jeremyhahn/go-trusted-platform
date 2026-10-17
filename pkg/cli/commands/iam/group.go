@@ -14,6 +14,7 @@
 package iam
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -22,13 +23,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 )
-
-// ErrGroupMembershipNotImplemented is returned when group membership operations are not yet implemented
-type ErrGroupMembershipNotImplemented struct{}
-
-func (e ErrGroupMembershipNotImplemented) Error() string {
-	return "group membership operations are not yet implemented in the platform IAM service"
-}
 
 // NewGroupCommand creates the group management command group
 func NewGroupCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
@@ -43,8 +37,8 @@ Supported operations:
   - list: List all groups in a tenant
   - update: Update group properties
   - delete: Delete a group
-  - add-member: Add a user to a group (not yet implemented)
-  - remove-member: Remove a user from a group (not yet implemented)`,
+  - add-member: Add a user to a group
+  - remove-member: Remove a user from a group`,
 	}
 
 	cmd.AddCommand(newGroupCreateCommand(getFlags))
@@ -179,14 +173,16 @@ func newGroupDeleteCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 func newGroupAddMemberCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add-member <tenant-id> <group-id> <user-id>",
-		Short: "Add a user to a group (not yet implemented)",
-		Long: `Add a user as a member of an existing group.
+		Short: "Add a user to a group",
+		Long: `Add an existing user as a member of an existing group.
 
-NOTE: This command is not yet implemented in the platform IAM service.`,
+Examples:
+  # Add a user to the developers group
+  platformctl iam group add-member my-tenant developers user-123`,
 		Args: cobra.ExactArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_ = getFlags()
-			return ErrGroupMembershipNotImplemented{}
+			flags := getFlags()
+			return runGroupMembership(flags, addGroupMember, args[0], args[1], args[2])
 		},
 	}
 
@@ -197,14 +193,16 @@ NOTE: This command is not yet implemented in the platform IAM service.`,
 func newGroupRemoveMemberCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "remove-member <tenant-id> <group-id> <user-id>",
-		Short: "Remove a user from a group (not yet implemented)",
+		Short: "Remove a user from a group",
 		Long: `Remove a user from an existing group's membership.
 
-NOTE: This command is not yet implemented in the platform IAM service.`,
+Examples:
+  # Remove a user from the developers group
+  platformctl iam group remove-member my-tenant developers user-123`,
 		Args: cobra.ExactArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_ = getFlags()
-			return ErrGroupMembershipNotImplemented{}
+			flags := getFlags()
+			return runGroupMembership(flags, removeGroupMember, args[0], args[1], args[2])
 		},
 	}
 
@@ -418,6 +416,66 @@ func runGroupDelete(flags *cli.CommonFlags, tenantID, groupID string) error {
 		} else {
 			printer.PrintError(fmt.Sprintf("Failed to delete group: %s", groupID))
 		}
+		return nil
+
+	default:
+		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
+	}
+}
+
+// groupMembershipChange is one group membership verb: the SDK call it makes
+// and the words its output uses.
+type groupMembershipChange struct {
+	apply   func(c *iamsvc.Client, ctx context.Context, tenantID, groupID, userID string) error
+	failure string
+	success string
+}
+
+var (
+	addGroupMember = groupMembershipChange{
+		apply:   (*iamsvc.Client).AddGroupMember,
+		failure: "failed to add user to group",
+		success: "User %s added to group %s",
+	}
+	removeGroupMember = groupMembershipChange{
+		apply:   (*iamsvc.Client).RemoveGroupMember,
+		failure: "failed to remove user from group",
+		success: "User %s removed from group %s",
+	}
+)
+
+// runGroupMembership adds a user to, or removes one from, a group.
+func runGroupMembership(flags *cli.CommonFlags, change groupMembershipChange, tenantID, groupID, userID string) error {
+	if tenantID == "" {
+		return ErrMissingTenantID{}
+	}
+	if groupID == "" {
+		return ErrMissingGroupID{}
+	}
+	if userID == "" {
+		return ErrMissingUserID{}
+	}
+
+	base, err := cli.NewBaseCommand(flags)
+	if err != nil {
+		return err
+	}
+	defer base.Close()
+
+	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
+	if err := change.apply(sdkClient, base.Context(), tenantID, groupID, userID); err != nil {
+		return &WrappedError{Msg: change.failure, Err: err}
+	}
+
+	message := fmt.Sprintf(change.success, userID, groupID)
+	printer := base.Printer()
+
+	switch flags.OutputFormat {
+	case cli.OutputFormatJSON, cli.OutputFormatYAML:
+		return printer.Print(&iamsvc.OperationStatus{Success: true, Message: message})
+
+	case cli.OutputFormatTable:
+		printer.PrintSuccess(message)
 		return nil
 
 	default:

@@ -29,11 +29,22 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
-// iamTenantOnlyClient serves only the tenant sub-client; the IAM category
-// never reaches any other part of the IAM client.
+// iamTenantOnlyClient serves only the tenant sub-client and the role
+// reconcile CreateTenant runs; the IAM category never reaches any other part
+// of the IAM client.
 type iamTenantOnlyClient struct {
 	quicbaassdk.IAMClient
-	tenants quicbaassdk.IAMTenantClient
+	tenants *mockIAMClientForTenant
+}
+
+// reconcileOnlyRoles is a role sub-client that serves only Reconcile.
+type reconcileOnlyRoles struct {
+	quicbaassdk.IAMRoleClient
+	reconciler *mockIAMClientForTenant
+}
+
+func (r reconcileOnlyRoles) Reconcile(ctx context.Context, tenantID string) (*sdkiam.ReconcileRolesResponse, error) {
+	return r.reconciler.Reconcile(ctx, tenantID)
 }
 
 // mockIAMClientForTenant is an in-memory quicbaassdk.IAMTenantClient.
@@ -122,6 +133,10 @@ func (m *mockIAMClientForTenant) Delete(ctx context.Context, tenantID string) er
 
 func (c iamTenantOnlyClient) Tenant() quicbaassdk.IAMTenantClient {
 	return c.tenants
+}
+
+func (c iamTenantOnlyClient) Role() quicbaassdk.IAMRoleClient {
+	return reconcileOnlyRoles{reconciler: c.tenants}
 }
 
 // newIAMCategoryHandler builds a QUIC handler whose IAM delegate is backed by

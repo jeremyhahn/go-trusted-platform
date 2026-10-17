@@ -21,6 +21,8 @@
 package kms
 
 import (
+	"net/http"
+
 	"github.com/gorilla/mux"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -34,6 +36,29 @@ import (
 )
 
 const basePath = "/kms"
+
+// BasePath is the path every KMS route is mounted under, relative to the
+// /api/v1 router.
+const BasePath = basePath
+
+// The go-quicbaas gRPC services the handlers' SDK clients call. A route's
+// RPC names the method whose scope guards the route on the daemon REST
+// listener (pkg/api/grpc/method_permissions.go).
+const (
+	keyManagementRPC = "/quicbaas.kms.v1.KeyManagement/"
+	cryptoRPC        = "/quicbaas.kms.v1.Crypto/"
+	dekRPC           = "/quicbaas.kms.v1.DEKManagement/"
+	secretsRPC       = "/quicbaas.kms.v1.SecretsManagement/"
+)
+
+// Route is one KMS REST endpoint: its method and path under BasePath, the
+// gRPC method it answers for, and the handler that serves it.
+type Route struct {
+	Method  string
+	Path    string
+	RPC     string
+	Handler http.HandlerFunc
+}
 
 // KMSRouter wires REST endpoints onto the QuicBaaS SDK clients.
 type KMSRouter struct {
@@ -108,56 +133,67 @@ func NewKMSRouter(
 //	PUT    /api/v1/kms/secrets/{name}/policy         - SetRotationPolicy
 func (r *KMSRouter) RegisterRoutes(parent *mux.Router) {
 	sr := parent.PathPrefix(basePath).Subrouter()
+	for _, route := range r.Routes() {
+		sr.HandleFunc(route.Path, route.Handler).Methods(route.Method)
+	}
+}
 
-	// Keys
-	sr.HandleFunc("/keys/import", r.handlers.ImportKey).Methods("POST")
-	sr.HandleFunc("/keys", r.handlers.GenerateKey).Methods("POST")
-	sr.HandleFunc("/keys", r.handlers.ListKeys).Methods("GET")
-	sr.HandleFunc("/keys/{name}", r.handlers.GetKey).Methods("GET")
-	sr.HandleFunc("/keys/{name}", r.handlers.DeleteKey).Methods("DELETE")
-	sr.HandleFunc("/keys/{name}/rotate", r.handlers.RotateKey).Methods("POST")
-	sr.HandleFunc("/keys/{name}/revoke", r.handlers.RevokeKey).Methods("POST")
-	sr.HandleFunc("/keys/{name}/status", r.handlers.UpdateKeyStatus).Methods("PUT")
-	sr.HandleFunc("/keys/{name}/versions", r.handlers.ListKeyVersions).Methods("GET")
-	sr.HandleFunc("/keys/{name}/metadata", r.handlers.GetKeyMetadata).Methods("GET")
-	sr.HandleFunc("/keys/{name}/metadata", r.handlers.UpdateKeyMetadata).Methods("PUT")
-	sr.HandleFunc("/keys/{name}/policy", r.handlers.GetKeyPolicy).Methods("GET")
-	sr.HandleFunc("/keys/{name}/policy", r.handlers.SetKeyPolicy).Methods("PUT")
-	sr.HandleFunc("/algorithms", r.handlers.ListAlgorithms).Methods("GET")
-	sr.HandleFunc("/backend/status", r.handlers.BackendStatus).Methods("GET")
+// Routes returns the KMS REST routes of docs/kms/api.md, in registration
+// order: a literal segment is registered before the {name} or {path:.+}
+// pattern it would otherwise be swallowed by.
+//
+// Data keys are minted and returned, never stored; stored DEKs are /deks.
+func (r *KMSRouter) Routes() []Route {
+	h := r.handlers
+	return []Route{
+		// Keys
+		{http.MethodPost, "/keys/import", keyManagementRPC + "ImportKey", h.ImportKey},
+		{http.MethodPost, "/keys", keyManagementRPC + "GenerateKey", h.GenerateKey},
+		{http.MethodGet, "/keys", keyManagementRPC + "ListKeys", h.ListKeys},
+		{http.MethodGet, "/keys/{name}", keyManagementRPC + "GetKey", h.GetKey},
+		{http.MethodDelete, "/keys/{name}", keyManagementRPC + "DeleteKey", h.DeleteKey},
+		{http.MethodPost, "/keys/{name}/rotate", keyManagementRPC + "RotateKey", h.RotateKey},
+		{http.MethodPost, "/keys/{name}/revoke", keyManagementRPC + "RevokeKey", h.RevokeKey},
+		{http.MethodPut, "/keys/{name}/status", keyManagementRPC + "UpdateKeyStatus", h.UpdateKeyStatus},
+		{http.MethodGet, "/keys/{name}/versions", keyManagementRPC + "ListKeyVersions", h.ListKeyVersions},
+		{http.MethodGet, "/keys/{name}/metadata", keyManagementRPC + "GetKeyMetadata", h.GetKeyMetadata},
+		{http.MethodPut, "/keys/{name}/metadata", keyManagementRPC + "UpdateKeyMetadata", h.UpdateKeyMetadata},
+		{http.MethodGet, "/keys/{name}/policy", keyManagementRPC + "GetKeyPolicy", h.GetKeyPolicy},
+		{http.MethodPut, "/keys/{name}/policy", keyManagementRPC + "SetKeyPolicy", h.SetKeyPolicy},
+		{http.MethodGet, "/algorithms", keyManagementRPC + "GetSupportedAlgorithms", h.ListAlgorithms},
+		{http.MethodGet, "/backend/status", keyManagementRPC + "BackendStatus", h.BackendStatus},
 
-	// Crypto
-	sr.HandleFunc("/encrypt/{name}", r.handlers.Encrypt).Methods("POST")
-	sr.HandleFunc("/decrypt/{name}", r.handlers.Decrypt).Methods("POST")
-	sr.HandleFunc("/sign/{name}", r.handlers.Sign).Methods("POST")
-	sr.HandleFunc("/verify/{name}", r.handlers.Verify).Methods("POST")
-	sr.HandleFunc("/hmac/{name}/verify", r.handlers.VerifyHMAC).Methods("POST")
-	sr.HandleFunc("/hmac/{name}", r.handlers.HMAC).Methods("POST")
-	sr.HandleFunc("/hash", r.handlers.Hash).Methods("POST")
-	sr.HandleFunc("/random", r.handlers.GenerateRandom).Methods("POST")
+		// Crypto
+		{http.MethodPost, "/encrypt/{name}", cryptoRPC + "Encrypt", h.Encrypt},
+		{http.MethodPost, "/decrypt/{name}", cryptoRPC + "Decrypt", h.Decrypt},
+		{http.MethodPost, "/sign/{name}", cryptoRPC + "Sign", h.Sign},
+		{http.MethodPost, "/verify/{name}", cryptoRPC + "Verify", h.Verify},
+		{http.MethodPost, "/hmac/{name}/verify", cryptoRPC + "VerifyHMAC", h.VerifyHMAC},
+		{http.MethodPost, "/hmac/{name}", cryptoRPC + "GenerateHMAC", h.HMAC},
+		{http.MethodPost, "/hash", cryptoRPC + "Hash", h.Hash},
+		{http.MethodPost, "/random", cryptoRPC + "GenerateRandom", h.GenerateRandom},
+		{http.MethodPost, "/data-keys", cryptoRPC + "GenerateDataKey", h.GenerateDataKey},
+		{http.MethodPost, "/data-keys/wrapped", cryptoRPC + "GenerateWrappedDataKey", h.GenerateWrappedDataKey},
 
-	// Data keys: minted and returned, never stored (stored DEKs are /deks)
-	sr.HandleFunc("/data-keys", r.handlers.GenerateDataKey).Methods("POST")
-	sr.HandleFunc("/data-keys/wrapped", r.handlers.GenerateWrappedDataKey).Methods("POST")
+		// DEKs
+		{http.MethodPost, "/deks", dekRPC + "CreateDEK", h.CreateDEK},
+		{http.MethodGet, "/deks", dekRPC + "ListDEKs", h.ListDEKs},
+		{http.MethodGet, "/deks/{path:.+}/status", dekRPC + "GetDEKStatus", h.GetDEKStatus},
+		{http.MethodPost, "/deks/{path:.+}/rotate", dekRPC + "RotateDEK", h.RotateDEK},
+		{http.MethodGet, "/deks/{path:.+}", dekRPC + "GetDEK", h.GetDEK},
+		{http.MethodDelete, "/deks/{path:.+}", dekRPC + "DeleteDEK", h.DeleteDEK},
 
-	// DEKs
-	sr.HandleFunc("/deks", r.handlers.CreateDEK).Methods("POST")
-	sr.HandleFunc("/deks", r.handlers.ListDEKs).Methods("GET")
-	sr.HandleFunc("/deks/{path:.+}/status", r.handlers.GetDEKStatus).Methods("GET")
-	sr.HandleFunc("/deks/{path:.+}/rotate", r.handlers.RotateDEK).Methods("POST")
-	sr.HandleFunc("/deks/{path:.+}", r.handlers.GetDEK).Methods("GET")
-	sr.HandleFunc("/deks/{path:.+}", r.handlers.DeleteDEK).Methods("DELETE")
-
-	// Secrets
-	sr.HandleFunc("/secrets", r.handlers.StoreSecret).Methods("POST")
-	sr.HandleFunc("/secrets", r.handlers.ListSecrets).Methods("GET")
-	sr.HandleFunc("/secrets/{name}/versions/{version}", r.handlers.GetSecretVersion).Methods("GET")
-	sr.HandleFunc("/secrets/{name}/versions", r.handlers.ListSecretVersions).Methods("GET")
-	sr.HandleFunc("/secrets/{name}/rotate", r.handlers.RotateSecret).Methods("POST")
-	sr.HandleFunc("/secrets/{name}/rollback", r.handlers.RollbackSecret).Methods("POST")
-	sr.HandleFunc("/secrets/{name}/status", r.handlers.UpdateSecretStatus).Methods("PUT")
-	sr.HandleFunc("/secrets/{name}/policy", r.handlers.SetRotationPolicy).Methods("PUT")
-	sr.HandleFunc("/secrets/{name}/policy", r.handlers.GetRotationPolicy).Methods("GET")
-	sr.HandleFunc("/secrets/{name}", r.handlers.GetSecret).Methods("GET")
-	sr.HandleFunc("/secrets/{name}", r.handlers.DeleteSecret).Methods("DELETE")
+		// Secrets
+		{http.MethodPost, "/secrets", secretsRPC + "StoreSecret", h.StoreSecret},
+		{http.MethodGet, "/secrets", secretsRPC + "ListSecrets", h.ListSecrets},
+		{http.MethodGet, "/secrets/{name}/versions/{version}", secretsRPC + "GetSecretVersion", h.GetSecretVersion},
+		{http.MethodGet, "/secrets/{name}/versions", secretsRPC + "ListSecretVersions", h.ListSecretVersions},
+		{http.MethodPost, "/secrets/{name}/rotate", secretsRPC + "RotateSecret", h.RotateSecret},
+		{http.MethodPost, "/secrets/{name}/rollback", secretsRPC + "RollbackSecret", h.RollbackSecret},
+		{http.MethodPut, "/secrets/{name}/status", secretsRPC + "UpdateSecretStatus", h.UpdateSecretStatus},
+		{http.MethodPut, "/secrets/{name}/policy", secretsRPC + "SetRotationPolicy", h.SetRotationPolicy},
+		{http.MethodGet, "/secrets/{name}/policy", secretsRPC + "GetRotationPolicy", h.GetRotationPolicy},
+		{http.MethodGet, "/secrets/{name}", secretsRPC + "GetSecret", h.GetSecret},
+		{http.MethodDelete, "/secrets/{name}", secretsRPC + "DeleteSecret", h.DeleteSecret},
+	}
 }

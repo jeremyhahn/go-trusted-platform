@@ -26,6 +26,7 @@ import (
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 )
 
 // Handlers is the REST surface bound to a RegistryService.
@@ -154,8 +155,11 @@ func (h *Handlers) GetImage(w http.ResponseWriter, r *http.Request) {
 //
 //	X-Trusted-Platform-Repository: repo name
 //	X-Trusted-Platform-Tag:        tag (optional; default "latest")
-//	X-Trusted-Platform-Encrypt:    "true" to encrypt-on-push
-//	X-Trusted-Platform-Overwrite:  "true" to allow overwrite
+//	X-Trusted-Platform-Encrypt:         "true" to encrypt-on-push
+//	X-Trusted-Platform-Key-Id:          key the layers are encrypted under
+//	X-Trusted-Platform-Sign:            "true" to sign the manifest
+//	X-Trusted-Platform-Signing-Key-Id:  key the manifest is signed with
+//	X-Trusted-Platform-Overwrite:       "true" to allow overwrite
 //
 // The body is application/x-trusted-platform-image (JSON envelope).
 func (h *Handlers) PushImage(w http.ResponseWriter, r *http.Request) {
@@ -186,13 +190,7 @@ func (h *Handlers) PushImage(w http.ResponseWriter, r *http.Request) {
 	if tag == "" {
 		tag = "latest"
 	}
-	annotations := map[string]string{}
-	if r.Header.Get("X-Trusted-Platform-Encrypt") == "true" {
-		annotations["encrypt"] = "true"
-	}
-	if r.Header.Get("X-Trusted-Platform-Overwrite") == "true" {
-		annotations["overwrite"] = "true"
-	}
+	annotations := pushAnnotationsOf(r.Header)
 	resp, err := h.service.PushStream(
 		r.Context(),
 		&grpcapi.RegistryPushMetadata{
@@ -212,6 +210,28 @@ func (h *Handlers) PushImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.respWriter.Success200(w, r, resp)
+}
+
+// pushHeaderAnnotations maps each REST push header to the push-metadata
+// annotation the gRPC push carries for the same option.
+var pushHeaderAnnotations = map[string]string{
+	"X-Trusted-Platform-Encrypt":        regsvc.AnnotationEncrypt,
+	"X-Trusted-Platform-Key-Id":         regsvc.AnnotationKeyID,
+	"X-Trusted-Platform-Sign":           regsvc.AnnotationSign,
+	"X-Trusted-Platform-Signing-Key-Id": regsvc.AnnotationSigningKeyID,
+	"X-Trusted-Platform-Overwrite":      regsvc.AnnotationOverwrite,
+}
+
+// pushAnnotationsOf turns the push headers into push-metadata annotations.
+// An absent or empty header sets nothing.
+func pushAnnotationsOf(header http.Header) map[string]string {
+	annotations := make(map[string]string, len(pushHeaderAnnotations))
+	for name, annotation := range pushHeaderAnnotations {
+		if value := header.Get(name); value != "" {
+			annotations[annotation] = value
+		}
+	}
+	return annotations
 }
 
 // PullPayload is the WebUI / platformctl-facing shape of a pull

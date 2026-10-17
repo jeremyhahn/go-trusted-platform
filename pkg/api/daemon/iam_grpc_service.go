@@ -96,7 +96,8 @@ import (
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
-	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
+	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"google.golang.org/grpc/codes"
@@ -137,6 +138,10 @@ type IAMGRPCService struct {
 	// tokens answers the token rpcs; nil refuses verification with
 	// ErrIAMTokenVerifierNotConfigured.
 	tokens *IAMTokenService
+	// systemTenantID is the platform's operating tenant, the only tenant
+	// admitted to the cross-tenant rpcs (CreateTenant, ListTenants); empty
+	// admits no tenant-bound caller to them.
+	systemTenantID string
 }
 
 // NewIAMGRPCService creates a new IAM gRPC service instance.
@@ -195,7 +200,10 @@ func (s *IAMGRPCService) CreateUser(ctx context.Context, req *platformv1.CreateI
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
+	// The request carries no username; the SDK refuses an empty one, so it
+	// is derived from the email exactly as the REST handler derives it.
 	sdkReq := &sdkiam.CreateUserRequest{
+		Username:    restiam.UsernameFromEmail(req.GetEmail()),
 		Email:       req.GetEmail(),
 		DisplayName: req.GetName(),
 		Roles:       req.GetRoles(),
@@ -1072,6 +1080,12 @@ func (s *IAMGRPCService) SetTokenService(tokens *IAMTokenService) {
 	s.tokens = tokens
 }
 
+// SetSystemTenant sets the platform's operating (system) tenant, the one
+// tenant allowed to create and list IAM tenants.
+func (s *IAMGRPCService) SetSystemTenant(tenantID string) {
+	s.systemTenantID = tenantID
+}
+
 // CreateToken refuses token issuance with codes.Unimplemented: the SDK IAM
 // client cannot issue tokens; platform tokens come from the broker's OIDC flows.
 func (s *IAMGRPCService) CreateToken(ctx context.Context, req *platformv1.CreateIAMTokenRequest) (*platformv1.CreateIAMTokenResponse, error) {
@@ -1142,6 +1156,9 @@ func (s *IAMGRPCService) CreateTenant(ctx context.Context, req *platformv1.Creat
 	if req.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "id"}.Error())
 	}
+	if err := authorizeSystemCaller(ctx, s.systemTenantID, "CreateTenant"); err != nil {
+		return nil, err
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
@@ -1160,7 +1177,11 @@ func (s *IAMGRPCService) CreateTenant(ctx context.Context, req *platformv1.Creat
 		Settings: settings,
 	}
 
-	resp, err := s.iamClient.Tenant().Create(ctx, sdkReq)
+	// Every IAM tenant carries its default roles (docs/iam/architecture.md):
+	// a tenant without them cannot hold a user. A failure rolls a new tenant
+	// back, as tenant.Manager.CreateTenant does; an existing tenant is given
+	// the roles it lacks and still answers AlreadyExists.
+	resp, err := restiam.CreateTenantWithDefaultRoles(ctx, s.iamClient, sdkReq)
 	if err != nil {
 		s.logger.Error("failed to create tenant", "error", err, "tenant_id", req.GetId())
 		return nil, s.wrapError(err)
@@ -1211,6 +1232,9 @@ func (s *IAMGRPCService) GetTenant(ctx context.Context, req *platformv1.GetIAMTe
 func (s *IAMGRPCService) ListTenants(ctx context.Context, req *platformv1.ListIAMTenantsRequest) (*platformv1.ListIAMTenantsResponse, error) {
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
+	}
+	if err := authorizeSystemCaller(ctx, s.systemTenantID, "ListTenants"); err != nil {
+		return nil, err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
@@ -1974,40 +1998,17 @@ func (s *IAMGRPCService) getPagination(req *platformv1.PaginationRequest) (limit
 	return limit, offset
 }
 
-// sdkErrorCodes classifies a QuicBaaS SDK error by its category, so a
-// missing user answers NotFound and a bad request InvalidArgument rather
-// than Internal. Categories absent here (unknown, internal, configuration)
-// answer Internal.
-var sdkErrorCodes = map[sdkerrors.ErrorCode]codes.Code{
-	sdkerrors.CodeInvalidInput:       codes.InvalidArgument,
-	sdkerrors.CodeNotFound:           codes.NotFound,
-	sdkerrors.CodeAlreadyExists:      codes.AlreadyExists,
-	sdkerrors.CodeUnauthorized:       codes.Unauthenticated,
-	sdkerrors.CodeForbidden:          codes.PermissionDenied,
-	sdkerrors.CodeConflict:           codes.Aborted,
-	sdkerrors.CodePreconditionFailed: codes.FailedPrecondition,
-	sdkerrors.CodeRateLimited:        codes.ResourceExhausted,
-	sdkerrors.CodeUnavailable:        codes.Unavailable,
-	sdkerrors.CodeTimeout:            codes.DeadlineExceeded,
-	sdkerrors.CodeCanceled:           codes.Canceled,
-	sdkerrors.CodeUnimplemented:      codes.Unimplemented,
-	sdkerrors.CodeResourceExhausted:  codes.ResourceExhausted,
-	sdkerrors.CodeSealed:             codes.Unavailable,
-	sdkerrors.CodeNotInitialized:     codes.FailedPrecondition,
-}
-
 // wrapError converts errors to gRPC status errors with appropriate codes.
 //
-// A gRPC status keeps its code and message; a QuicBaaS SDK error takes the
-// code of its category (sdkErrorCodes); anything else is Internal.
+// A gRPC status keeps its code and message; any other error takes the class
+// errclass.Code gives it. That covers both a QuicBaaS SDK error and the
+// database error the embedded SDK returns unconverted (an existing tenant is
+// AlreadyExists, not Internal); anything unclassified is Internal.
 func (s *IAMGRPCService) wrapError(err error) error {
 	if st, ok := status.FromError(err); ok {
 		return status.Error(st.Code(), st.Message())
 	}
-	if code, ok := sdkErrorCodes[sdkerrors.Code(err)]; ok {
-		return status.Error(code, err.Error())
-	}
-	return status.Error(codes.Internal, err.Error())
+	return status.Error(errclass.Code(err), err.Error())
 }
 
 // =============================================================================

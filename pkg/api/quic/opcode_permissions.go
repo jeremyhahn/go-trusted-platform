@@ -430,7 +430,6 @@ var opcodePermissions = map[byte]OpcodePermission{
 	quicwire.OpAttestVerify:         attestationRead,
 	quicwire.OpAttestCollectHost:    attestationWrite,
 	quicwire.OpAttestGetAK:          attestationRead,
-	quicwire.OpAttestChallenge:      attestationWrite,
 	quicwire.OpAttestPollVerdicts:   attestationRead,
 	quicwire.OpAttestGetReport:      attestationRead,
 	quicwire.OpAttestGetPCRs:        attestationRead,
@@ -438,6 +437,9 @@ var opcodePermissions = map[byte]OpcodePermission{
 	quicwire.OpAttestVerifyManifest: attestationRead,
 	quicwire.OpAttestHost:           attestationWrite,
 	quicwire.OpAttestVMWorkload:     attestationWrite,
+	// Container workload attestation collects fresh evidence, as VM
+	// workload attestation does.
+	quicwire.OpAttestContainerWorkload: attestationWrite,
 
 	// Certificates and the CA (gRPC CAService). Certificates are the go-qrdb
 	// certs family; the CA's own metadata, bundle and CRL are ca:read.
@@ -925,8 +927,13 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.DeviceSubDisable:             deviceWrite,
 		quicwire.DeviceSubEnable:              deviceWrite,
 		quicwire.DeviceSubTemplateCreate:      deviceWrite,
+		quicwire.DeviceSubTemplateGet:         deviceRead,
+		quicwire.DeviceSubTemplateList:        deviceRead,
+		quicwire.DeviceSubTemplateUpdate:      deviceWrite,
+		quicwire.DeviceSubTemplateDelete:      deviceDelete,
 		quicwire.DeviceSubProfileFromTemplate: deviceWrite,
 		quicwire.DeviceSubFindMatchingProfile: deviceRead,
+		quicwire.DeviceSubFindConfigForDevice: deviceRead,
 
 		// The PXEService methods without a direct opcode, scoped as on gRPC.
 		quicwire.PXESubGetDeviceByMAC:    pxeRead,

@@ -1,152 +1,61 @@
-// Copyright (c) 2025 Jeremy Hahn
-// Copyright (c) 2025 Automate The Things, LLC
-//
-// This file is part of go-trusted-platform.
-//
-// go-trusted-platform is dual-licensed:
-//
-// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
-//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
-//
-// 2. Commercial License
-//    Contact licensing@automatethethings.com for commercial licensing options.
-
-// Package kms provides integration test adapters for KMS services.
-// This file implements the KMSCommands interface using the QUIC protocol.
-
 //go:build integration
 
+// Package kms provides integration tests for KMS operations across all protocols.
 package kms
 
 import (
 	"context"
 	"crypto/tls"
-	"encoding/binary"
 	"fmt"
-	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/jeremyhahn/go-codec"
-	"github.com/jeremyhahn/go-codec/pkg/factory"
-	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	quicgo "github.com/quic-go/quic-go"
+
+	daemonpkg "github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // =============================================================================
-// Environment Variables and Constants
+// QUIC Adapter Constants
 // =============================================================================
 
 const (
-	// EnvPlatformQUICEndpoint is the environment variable for the QUIC endpoint.
+	// EnvPlatformQUICEndpoint names the environment variable holding the QUIC endpoint.
 	EnvPlatformQUICEndpoint = "PLATFORM_QUIC_ENDPOINT"
 
-	// DefaultQUICEndpoint is the default QUIC endpoint address.
+	// DefaultQUICEndpoint is the default QUIC endpoint.
 	DefaultQUICEndpoint = "localhost:9444"
 
 	// DefaultQUICTimeout is the default timeout for QUIC operations.
 	DefaultQUICTimeout = 30 * time.Second
 
-	// DefaultQUICMaxIdleTimeout is the default max idle timeout for connections.
+	// DefaultQUICMaxIdleTimeout is the default max idle timeout for QUIC connections.
 	DefaultQUICMaxIdleTimeout = 60 * time.Second
 
-	// QUICProtocolVersion is the QUIC wire protocol version.
-	QUICProtocolVersion byte = 0x01
+	// quicTransport names this transport in declared surface gaps.
+	quicTransport = "QUIC"
 
-	// MaxQUICPayloadSize is the maximum payload size (16MB).
-	MaxQUICPayloadSize uint32 = 16 * 1024 * 1024
+	// quicNoDEKOpcode explains why DEK operations leave the QUIC matrix:
+	// quicwire assigns no DEK opcode (SPEC rows 42-46, MISSING).
+	quicNoDEKOpcode = "quicwire assigns no DEK management opcode (SPEC rows 42-46, MISSING)"
 
-	// MaxQUICTokenSize is the maximum token size (8KB).
-	MaxQUICTokenSize uint16 = 8 * 1024
-)
-
-// QUIC Status codes.
-const (
-	QUICStatusOK                byte = 0x00
-	QUICStatusInvalidRequest    byte = 0x01
-	QUICStatusNotFound          byte = 0x02
-	QUICStatusUnauthorized      byte = 0x03
-	QUICStatusInternalError     byte = 0x04
-	QUICStatusTimeout           byte = 0x05
-	QUICStatusAlreadyExists     byte = 0x06
-	QUICStatusPermissionDenied  byte = 0x07
-	QUICStatusResourceExhausted byte = 0x08
-	QUICStatusInvalidArgument   byte = 0x09
-	QUICStatusUnavailable       byte = 0x0A
-)
-
-// QUIC Operation codes for KMS operations.
-const (
-	// KMS Key Operations (0xD0-0xD7).
-	OpQUICKMSGenerateKey byte = 0xD0
-	OpQUICKMSImportKey   byte = 0xD1
-	OpQUICKMSGetKey      byte = 0xD2
-	OpQUICKMSListKeys    byte = 0xD3
-	OpQUICKMSRotateKey   byte = 0xD4
-	OpQUICKMSDeleteKey   byte = 0xD5
-	OpQUICKMSEncrypt     byte = 0xD6
-	OpQUICKMSDecrypt     byte = 0xD7
-
-	// KMS DEK Operations (0xD8-0xDF).
-	OpQUICKMSDEKCreate     byte = 0xD8
-	OpQUICKMSDEKGet        byte = 0xD9
-	OpQUICKMSDEKList       byte = 0xDA
-	OpQUICKMSDEKRotate     byte = 0xDB
-	OpQUICKMSDEKDelete     byte = 0xDC
-	OpQUICKMSDEKStatus     byte = 0xDD
-	OpQUICKMSDEKSetDefault byte = 0xDE
-	OpQUICKMSDEKSetSafety  byte = 0xDF
-
-	// Secrets Operations (0xE0-0xE6).
-	OpQUICSecretsStore        byte = 0xE0
-	OpQUICSecretsGet          byte = 0xE1
-	OpQUICSecretsList         byte = 0xE2
-	OpQUICSecretsDelete       byte = 0xE3
-	OpQUICSecretsListVersions byte = 0xE4
-	OpQUICSecretsRollback     byte = 0xE5
-	OpQUICSecretsRotate       byte = 0xE6
-
-	// Extended KMS Operations (0xE7-0xEC).
-	OpQUICKMSDEKClearSafety byte = 0xE7
-	OpQUICKMSBackendStatus  byte = 0xE8
-	OpQUICKMSBackendTest    byte = 0xE9
-	OpQUICKMSKeyVersions    byte = 0xEA
-	OpQUICKMSKeyStatus      byte = 0xEB
-	OpQUICKMSKeyRevoke      byte = 0xEC
-
-	// KMS Metadata Operations (0xED-0xEF).
-	OpQUICKMSKeyMetadata       byte = 0xED
-	OpQUICKMSKeyMetadataUpdate byte = 0xEE
-	OpQUICKMSKeyAlgorithms     byte = 0xEF
-
-	// KMS Policy Operations (0x70-0x71 - reusing available range).
-	OpQUICKMSKeyPolicy    byte = 0x70
-	OpQUICKMSKeyPolicySet byte = 0x71
-
-	// Crypto Operations (0xF0-0xF7).
-	OpQUICCryptoEncrypt byte = 0xF0
-	OpQUICCryptoDecrypt byte = 0xF1
-	OpQUICCryptoRewrap  byte = 0xF2
-	OpQUICCryptoSign    byte = 0xF3
-	OpQUICCryptoVerify  byte = 0xF4
-	OpQUICCryptoHash    byte = 0xF5
-	OpQUICCryptoRandom  byte = 0xF6
-	OpQUICCryptoDataKey byte = 0xF7
-
-	// HMAC Operations (0xF8-0xF9).
-	OpQUICCryptoHMAC       byte = 0xF8
-	OpQUICCryptoVerifyHMAC byte = 0xF9
-
-	// Secrets Status Operations (0xFA).
-	OpQUICSecretsStatus byte = 0xFA
+	// quicNoSecretVersionSub explains why secret version operations leave the
+	// QUIC matrix: the 0xCE secrets category carries store, get, list, delete
+	// and rotation policy only (SPEC rows 42-46, MISSING).
+	quicNoSecretVersionSub = "the secrets category assigns no version, rotate, rollback or status sub-opcode (SPEC rows 42-46, MISSING)"
 )
 
 // =============================================================================
-// Error Types
+// QUIC Adapter Errors
 // =============================================================================
 
-// ErrQUICConnectionFailed indicates a QUIC connection failure.
+// ErrQUICConnectionFailed indicates the QUIC connection could not be established.
 type ErrQUICConnectionFailed struct {
 	Endpoint string
 	Err      error
@@ -160,7 +69,7 @@ func (e ErrQUICConnectionFailed) Unwrap() error {
 	return e.Err
 }
 
-// ErrQUICRequestFailed indicates a QUIC request failure.
+// ErrQUICRequestFailed indicates the server answered with a non-OK status.
 type ErrQUICRequestFailed struct {
 	Operation string
 	Status    byte
@@ -171,7 +80,7 @@ func (e ErrQUICRequestFailed) Error() string {
 	return fmt.Sprintf("QUIC request %s failed (status 0x%02X): %s", e.Operation, e.Status, e.Message)
 }
 
-// ErrQUICEncodeFailed indicates payload encoding failure.
+// ErrQUICEncodeFailed indicates a request payload could not be encoded.
 type ErrQUICEncodeFailed struct {
 	Operation string
 	Err       error
@@ -185,7 +94,7 @@ func (e ErrQUICEncodeFailed) Unwrap() error {
 	return e.Err
 }
 
-// ErrQUICDecodeFailed indicates payload decoding failure.
+// ErrQUICDecodeFailed indicates a response payload could not be decoded.
 type ErrQUICDecodeFailed struct {
 	Operation string
 	Err       error
@@ -199,7 +108,7 @@ func (e ErrQUICDecodeFailed) Unwrap() error {
 	return e.Err
 }
 
-// ErrQUICStreamFailed indicates a stream operation failure.
+// ErrQUICStreamFailed indicates a stream operation failed.
 type ErrQUICStreamFailed struct {
 	Operation string
 	Err       error
@@ -213,687 +122,171 @@ func (e ErrQUICStreamFailed) Unwrap() error {
 	return e.Err
 }
 
-// ErrQUICClientClosed indicates the client is closed.
+// ErrQUICClientClosed indicates the adapter was used after Teardown.
 type ErrQUICClientClosed struct{}
 
 func (e ErrQUICClientClosed) Error() string {
 	return "QUIC client is closed"
 }
 
-// =============================================================================
-// Wire Protocol Types
-// =============================================================================
-
-// quicRequest represents a QUIC protocol request.
-// Wire format: [opcode:1][tokenLen:2][token:N][payloadLen:4][payload:M].
-type quicRequest struct {
-	Opcode  byte
-	Token   string
-	Payload []byte
+// ErrQUICUnsupportedValue indicates a test option has no QUIC wire encoding.
+type ErrQUICUnsupportedValue struct {
+	Kind  string
+	Value string
 }
 
-// quicResponse represents a QUIC protocol response.
-// Wire format: [status:1][payloadLen:4][payload:N].
-type quicResponse struct {
-	Status  byte
-	Payload []byte
+func (e ErrQUICUnsupportedValue) Error() string {
+	return fmt.Sprintf("QUIC KMS wire has no %s %q", e.Kind, e.Value)
 }
 
 // =============================================================================
-// Request/Response Payload Types (MessagePack encoded)
+// Wire value mapping
 // =============================================================================
 
-// keyGenerateRequest is the wire format for key generation.
-type keyGenerateRequest struct {
-	KeyID              string `codec:"key_id"`
-	Algorithm          string `codec:"algorithm"`
-	Purpose            string `codec:"purpose"`
-	Exportable         bool   `codec:"exportable"`
-	DeletionProtection bool   `codec:"deletion_protection"`
-	Name               string `codec:"name"`
-	Description        string `codec:"description"`
-	Owner              string `codec:"owner"`
-}
-
-// keyGenerateResponse is the wire format for key generation response.
-type keyGenerateResponse struct {
-	KeyID              string `codec:"key_id"`
-	Version            uint64 `codec:"version"`
-	Algorithm          string `codec:"algorithm"`
-	Status             string `codec:"status"`
-	CreatedAt          int64  `codec:"created_at"`
-	Name               string `codec:"name"`
-	Description        string `codec:"description"`
-	Exportable         bool   `codec:"exportable"`
-	DeletionProtection bool   `codec:"deletion_protection"`
-}
-
-// keyGetRequest is the wire format for key retrieval.
-type keyGetRequest struct {
-	KeyID   string `codec:"key_id"`
-	Version uint64 `codec:"version"`
-}
-
-// keyGetResponse is the wire format for key retrieval response.
-type keyGetResponse struct {
-	KeyID              string   `codec:"key_id"`
-	Version            uint64   `codec:"version"`
-	Algorithm          string   `codec:"algorithm"`
-	Status             string   `codec:"status"`
-	CreatedAt          int64    `codec:"created_at"`
-	UpdatedAt          int64    `codec:"updated_at"`
-	LastUsedAt         int64    `codec:"last_used_at"`
-	Name               string   `codec:"name"`
-	Description        string   `codec:"description"`
-	Owner              string   `codec:"owner"`
-	Exportable         bool     `codec:"exportable"`
-	DeletionProtection bool     `codec:"deletion_protection"`
-	Usage              []string `codec:"usage"`
-}
-
-// keyListRequest is the wire format for key listing.
-type keyListRequest struct {
-	Limit  int32  `codec:"limit"`
-	Cursor string `codec:"cursor"`
-}
-
-// keyListResponse is the wire format for key listing response.
-type keyListResponse struct {
-	Keys       []keySummary `codec:"keys"`
-	TotalCount int32        `codec:"total_count"`
-	HasMore    bool         `codec:"has_more"`
-	NextCursor string       `codec:"next_cursor"`
-}
-
-// keySummary is the wire format for key summary.
-type keySummary struct {
-	KeyID     string `codec:"key_id"`
-	Version   uint64 `codec:"version"`
-	Algorithm string `codec:"algorithm"`
-	Status    string `codec:"status"`
-	CreatedAt int64  `codec:"created_at"`
-}
-
-// keyDeleteRequest is the wire format for key deletion.
-type keyDeleteRequest struct {
-	KeyID             string `codec:"key_id"`
-	PendingWindowDays int32  `codec:"pending_window_days"`
-	Force             bool   `codec:"force"`
-}
-
-// keyDeleteResponse is the wire format for key deletion response.
-type keyDeleteResponse struct {
-	KeyID        string `codec:"key_id"`
-	Status       string `codec:"status"`
-	DeletionDate int64  `codec:"deletion_date"`
-}
-
-// keyRotateRequest is the wire format for key rotation.
-type keyRotateRequest struct {
-	KeyID            string `codec:"key_id"`
-	RetainOldVersion bool   `codec:"retain_old_version"`
-}
-
-// keyRotateResponse is the wire format for key rotation response.
-type keyRotateResponse struct {
-	KeyID      string `codec:"key_id"`
-	OldVersion uint64 `codec:"old_version"`
-	NewVersion uint64 `codec:"new_version"`
-	RotatedAt  int64  `codec:"rotated_at"`
-}
-
-// keyVersionsRequest is the wire format for key versions listing.
-type keyVersionsRequest struct {
-	KeyID  string `codec:"key_id"`
-	Limit  int32  `codec:"limit"`
-	Cursor string `codec:"cursor"`
-}
-
-// keyVersionsResponse is the wire format for key versions response.
-type keyVersionsResponse struct {
-	KeyID      string           `codec:"key_id"`
-	Versions   []keyVersionInfo `codec:"versions"`
-	HasMore    bool             `codec:"has_more"`
-	NextCursor string           `codec:"next_cursor"`
-}
-
-// keyVersionInfo is the wire format for key version info.
-type keyVersionInfo struct {
-	Version    uint64 `codec:"version"`
-	Algorithm  string `codec:"algorithm"`
-	Status     string `codec:"status"`
-	CreatedAt  int64  `codec:"created_at"`
-	DisabledAt int64  `codec:"disabled_at"`
-}
-
-// keyStatusRequest is the wire format for key status update.
-type keyStatusRequest struct {
-	KeyID   string `codec:"key_id"`
-	Version uint64 `codec:"version"`
-	Enabled bool   `codec:"enabled"`
-}
-
-// keyStatusResponse is the wire format for key status response.
-type keyStatusResponse struct {
-	KeyID     string `codec:"key_id"`
-	Version   uint64 `codec:"version"`
-	Status    string `codec:"status"`
-	UpdatedAt int64  `codec:"updated_at"`
-}
-
-// keyRevokeRequest is the wire format for key revocation.
-type keyRevokeRequest struct {
-	KeyID  string `codec:"key_id"`
-	Reason string `codec:"reason"`
-}
-
-// keyRevokeResponse is the wire format for key revocation response.
-type keyRevokeResponse struct {
-	KeyID     string `codec:"key_id"`
-	Status    string `codec:"status"`
-	RevokedAt int64  `codec:"revoked_at"`
-}
-
-// keyMetadataRequest is the wire format for key metadata retrieval.
-type keyMetadataRequest struct {
-	KeyID string `codec:"key_id"`
-}
-
-// keyMetadataResponse is the wire format for key metadata response.
-type keyMetadataResponse struct {
-	KeyID              string            `codec:"key_id"`
-	Name               string            `codec:"name"`
-	Description        string            `codec:"description"`
-	Algorithm          string            `codec:"algorithm"`
-	Status             string            `codec:"status"`
-	Version            uint64            `codec:"version"`
-	Exportable         bool              `codec:"exportable"`
-	DeletionProtection bool              `codec:"deletion_protection"`
-	Usage              []string          `codec:"usage"`
-	Owner              string            `codec:"owner"`
-	CreatedAt          int64             `codec:"created_at"`
-	UpdatedAt          int64             `codec:"updated_at"`
-	LastUsedAt         int64             `codec:"last_used_at"`
-	Tags               map[string]string `codec:"tags"`
-	RotationPolicy     *rotationPolicy   `codec:"rotation_policy"`
-}
-
-// rotationPolicy is the wire format for rotation policy.
-type rotationPolicy struct {
-	Enabled         bool  `codec:"enabled"`
-	IntervalSeconds int64 `codec:"interval_seconds"`
-	NextRotation    int64 `codec:"next_rotation"`
-	RetainVersions  int32 `codec:"retain_versions"`
-}
-
-// keyMetadataUpdateRequest is the wire format for key metadata update.
-type keyMetadataUpdateRequest struct {
-	KeyID       string            `codec:"key_id"`
-	Name        string            `codec:"name"`
-	Description string            `codec:"description"`
-	Tags        map[string]string `codec:"tags"`
-	RemoveTags  []string          `codec:"remove_tags"`
-}
-
-// keyMetadataUpdateResponse is the wire format for key metadata update response.
-type keyMetadataUpdateResponse struct {
-	KeyID     string            `codec:"key_id"`
-	Name      string            `codec:"name"`
-	UpdatedAt int64             `codec:"updated_at"`
-	Tags      map[string]string `codec:"tags"`
-}
-
-// keyPolicyRequest is the wire format for key policy retrieval.
-type keyPolicyRequest struct {
-	KeyID string `codec:"key_id"`
-}
-
-// keyPolicyResponse is the wire format for key policy response.
-type keyPolicyResponse struct {
-	KeyID             string   `codec:"key_id"`
-	Version           int32    `codec:"version"`
-	AllowedOperations []string `codec:"allowed_operations"`
-	AllowedPrincipals []string `codec:"allowed_principals"`
-	DeniedPrincipals  []string `codec:"denied_principals"`
-	ExpiresAt         int64    `codec:"expires_at"`
-	RotationRequired  bool     `codec:"rotation_required"`
-	MaxUsageCount     uint64   `codec:"max_usage_count"`
-	RequireMFA        bool     `codec:"require_mfa"`
-	UpdatedAt         int64    `codec:"updated_at"`
-}
-
-// keyPolicySetRequest is the wire format for key policy set.
-type keyPolicySetRequest struct {
-	KeyID            string   `codec:"key_id"`
-	Operations       []string `codec:"operations"`
-	AllowPrincipals  []string `codec:"allow_principals"`
-	DenyPrincipals   []string `codec:"deny_principals"`
-	ExpiresIn        string   `codec:"expires_in"`
-	RotationRequired bool     `codec:"rotation_required"`
-	MaxUsageCount    uint64   `codec:"max_usage_count"`
-	RequireMFA       bool     `codec:"require_mfa"`
-}
-
-// keyPolicySetResponse is the wire format for key policy set response.
-type keyPolicySetResponse struct {
-	KeyID         string `codec:"key_id"`
-	PolicyVersion int32  `codec:"policy_version"`
-	UpdatedAt     int64  `codec:"updated_at"`
-}
-
-// keyAlgorithmsResponse is the wire format for key algorithms response.
-type keyAlgorithmsResponse struct {
-	Algorithms []string `codec:"algorithms"`
-}
-
-// cryptoEncryptRequest is the wire format for encryption.
-type cryptoEncryptRequest struct {
-	KeyID     string `codec:"key_id"`
-	Plaintext []byte `codec:"plaintext"`
-	Context   []byte `codec:"context"`
-	Nonce     []byte `codec:"nonce"`
-}
-
-// cryptoEncryptResponse is the wire format for encryption response.
-type cryptoEncryptResponse struct {
-	KeyID      string `codec:"key_id"`
-	KeyVersion uint64 `codec:"key_version"`
-	Ciphertext []byte `codec:"ciphertext"`
-	Nonce      []byte `codec:"nonce"`
-	Timestamp  int64  `codec:"timestamp"`
-}
-
-// cryptoDecryptRequest is the wire format for decryption.
-type cryptoDecryptRequest struct {
-	KeyID      string `codec:"key_id"`
-	Ciphertext []byte `codec:"ciphertext"`
-	Context    []byte `codec:"context"`
-	Nonce      []byte `codec:"nonce"`
-	KeyVersion uint64 `codec:"key_version"`
-}
-
-// cryptoDecryptResponse is the wire format for decryption response.
-type cryptoDecryptResponse struct {
-	KeyID      string `codec:"key_id"`
-	KeyVersion uint64 `codec:"key_version"`
-	Plaintext  []byte `codec:"plaintext"`
-	Timestamp  int64  `codec:"timestamp"`
-}
-
-// cryptoSignRequest is the wire format for signing.
-type cryptoSignRequest struct {
-	KeyID         string `codec:"key_id"`
-	Message       []byte `codec:"message"`
-	HashAlgorithm string `codec:"hash_algorithm"`
-}
-
-// cryptoSignResponse is the wire format for signing response.
-type cryptoSignResponse struct {
-	KeyID         string `codec:"key_id"`
-	KeyVersion    uint64 `codec:"key_version"`
-	Signature     []byte `codec:"signature"`
-	HashAlgorithm string `codec:"hash_algorithm"`
-	Timestamp     int64  `codec:"timestamp"`
-}
-
-// cryptoVerifyRequest is the wire format for verification.
-type cryptoVerifyRequest struct {
-	KeyID         string `codec:"key_id"`
-	Message       []byte `codec:"message"`
-	Signature     []byte `codec:"signature"`
-	HashAlgorithm string `codec:"hash_algorithm"`
-	KeyVersion    uint64 `codec:"key_version"`
-}
-
-// cryptoVerifyResponse is the wire format for verification response.
-type cryptoVerifyResponse struct {
-	KeyID      string `codec:"key_id"`
-	KeyVersion uint64 `codec:"key_version"`
-	Valid      bool   `codec:"valid"`
-	Timestamp  int64  `codec:"timestamp"`
-}
-
-// cryptoHashRequest is the wire format for hashing.
-type cryptoHashRequest struct {
-	Data      []byte `codec:"data"`
-	Algorithm string `codec:"algorithm"`
-}
-
-// cryptoHashResponse is the wire format for hash response.
-type cryptoHashResponse struct {
-	Algorithm string `codec:"algorithm"`
-	Hash      []byte `codec:"hash"`
-	Timestamp int64  `codec:"timestamp"`
-}
-
-// cryptoHMACRequest is the wire format for HMAC generation.
-type cryptoHMACRequest struct {
-	KeyID         string `codec:"key_id"`
-	Message       []byte `codec:"message"`
-	HashAlgorithm string `codec:"hash_algorithm"`
-}
-
-// cryptoHMACResponse is the wire format for HMAC response.
-type cryptoHMACResponse struct {
-	KeyID         string `codec:"key_id"`
-	KeyVersion    uint64 `codec:"key_version"`
-	HMAC          []byte `codec:"hmac"`
-	HashAlgorithm string `codec:"hash_algorithm"`
-	Timestamp     int64  `codec:"timestamp"`
-}
-
-// cryptoVerifyHMACRequest is the wire format for HMAC verification.
-type cryptoVerifyHMACRequest struct {
-	KeyID         string `codec:"key_id"`
-	Message       []byte `codec:"message"`
-	HMAC          []byte `codec:"hmac"`
-	HashAlgorithm string `codec:"hash_algorithm"`
-	KeyVersion    uint64 `codec:"key_version"`
-}
-
-// cryptoVerifyHMACResponse is the wire format for HMAC verification response.
-type cryptoVerifyHMACResponse struct {
-	KeyID      string `codec:"key_id"`
-	KeyVersion uint64 `codec:"key_version"`
-	Valid      bool   `codec:"valid"`
-	Timestamp  int64  `codec:"timestamp"`
-}
-
-// cryptoRandomRequest is the wire format for random bytes.
-type cryptoRandomRequest struct {
-	NumBytes int32 `codec:"num_bytes"`
-}
-
-// cryptoRandomResponse is the wire format for random bytes response.
-type cryptoRandomResponse struct {
-	RandomBytes []byte `codec:"random_bytes"`
-	Timestamp   int64  `codec:"timestamp"`
-}
-
-// dekCreateRequest is the wire format for DEK creation.
-type dekCreateRequest struct {
-	Path           string `codec:"path"`
-	Algorithm      string `codec:"algorithm"`
-	Description    string `codec:"description"`
-	MaxOperations  uint64 `codec:"max_operations"`
-	MaxBytes       uint64 `codec:"max_bytes"`
-	WarningPercent int32  `codec:"warning_percent"`
-}
-
-// dekCreateResponse is the wire format for DEK creation response.
-type dekCreateResponse struct {
-	Path        string `codec:"path"`
-	Algorithm   string `codec:"algorithm"`
-	Version     uint64 `codec:"version"`
-	CreatedAt   int64  `codec:"created_at"`
-	Description string `codec:"description"`
-}
-
-// dekGetRequest is the wire format for DEK retrieval.
-type dekGetRequest struct {
-	Path string `codec:"path"`
-}
-
-// dekGetResponse is the wire format for DEK retrieval response.
-type dekGetResponse struct {
-	Path           string `codec:"path"`
-	Algorithm      string `codec:"algorithm"`
-	Version        uint64 `codec:"version"`
-	Status         string `codec:"status"`
-	IsDefault      bool   `codec:"is_default"`
-	CreatedAt      int64  `codec:"created_at"`
-	RotatedAt      int64  `codec:"rotated_at"`
-	Description    string `codec:"description"`
-	BackendType    string `codec:"backend_type"`
-	UsageCount     uint64 `codec:"usage_count"`
-	BytesUsed      uint64 `codec:"bytes_used"`
-	MaxUsageCount  uint64 `codec:"max_usage_count"`
-	MaxBytesUsed   uint64 `codec:"max_bytes_used"`
-	WarningPercent int32  `codec:"warning_percent"`
-}
-
-// dekListRequest is the wire format for DEK listing.
-type dekListRequest struct {
-	Prefix    string `codec:"prefix"`
-	Recursive bool   `codec:"recursive"`
-	Limit     int32  `codec:"limit"`
-	Cursor    string `codec:"cursor"`
-}
-
-// dekListResponse is the wire format for DEK listing response.
-type dekListResponse struct {
-	DEKs       []dekSummary `codec:"deks"`
-	HasMore    bool         `codec:"has_more"`
-	NextCursor string       `codec:"next_cursor"`
-}
-
-// dekSummary is the wire format for DEK summary.
-type dekSummary struct {
-	Path      string `codec:"path"`
-	Algorithm string `codec:"algorithm"`
-	Version   uint64 `codec:"version"`
-	Status    string `codec:"status"`
-	IsDefault bool   `codec:"is_default"`
-	CreatedAt int64  `codec:"created_at"`
-}
-
-// dekDeleteRequest is the wire format for DEK deletion.
-type dekDeleteRequest struct {
-	Path      string `codec:"path"`
-	Force     bool   `codec:"force"`
-	MigrateTo string `codec:"migrate_to"`
-}
-
-// dekDeleteResponse is the wire format for DEK deletion response.
-type dekDeleteResponse struct {
-	Path    string `codec:"path"`
-	Deleted bool   `codec:"deleted"`
-}
-
-// dekRotateRequest is the wire format for DEK rotation.
-type dekRotateRequest struct {
-	Path       string `codec:"path"`
-	Background bool   `codec:"background"`
-}
-
-// dekRotateResponse is the wire format for DEK rotation response.
-type dekRotateResponse struct {
-	Path       string `codec:"path"`
-	OldVersion uint64 `codec:"old_version"`
-	NewVersion uint64 `codec:"new_version"`
-}
-
-// dekStatusRequest is the wire format for DEK status.
-type dekStatusRequest struct {
-	Path string `codec:"path"`
-}
-
-// dekStatusResponse is the wire format for DEK status response.
-type dekStatusResponse struct {
-	Path                   string `codec:"path"`
-	Algorithm              string `codec:"algorithm"`
-	Version                uint64 `codec:"version"`
-	Status                 string `codec:"status"`
-	IsDefault              bool   `codec:"is_default"`
-	CreatedAt              int64  `codec:"created_at"`
-	RotatedAt              int64  `codec:"rotated_at"`
-	Description            string `codec:"description"`
-	BackendType            string `codec:"backend_type"`
-	UsageCount             uint64 `codec:"usage_count"`
-	BytesUsed              uint64 `codec:"bytes_used"`
-	MaxUsageCount          uint64 `codec:"max_usage_count"`
-	MaxBytesUsed           uint64 `codec:"max_bytes_used"`
-	WarningPercent         int32  `codec:"warning_percent"`
-	ReencryptionInProgress bool   `codec:"reencryption_in_progress"`
-	ProcessedKeys          int64  `codec:"processed_keys"`
-	TotalKeys              int64  `codec:"total_keys"`
-	FailedKeys             int64  `codec:"failed_keys"`
-	ReencryptionStartedAt  int64  `codec:"reencryption_started_at"`
-	EstimatedCompletion    int64  `codec:"estimated_completion"`
-}
-
-// secretsStoreRequest is the wire format for secret storage.
-type secretsStoreRequest struct {
-	Name        string `codec:"name"`
-	Data        []byte `codec:"data"`
-	Description string `codec:"description"`
-	TenantID    string `codec:"tenant_id"`
-	KeyID       string `codec:"key_id"`
-	Algorithm   string `codec:"algorithm"`
-}
-
-// secretsStoreResponse is the wire format for secret storage response.
-type secretsStoreResponse struct {
-	SecretID  string `codec:"secret_id"`
-	Version   uint64 `codec:"version"`
-	Timestamp int64  `codec:"timestamp"`
-}
-
-// secretsGetRequest is the wire format for secret retrieval.
-type secretsGetRequest struct {
-	Name string `codec:"name"`
-}
-
-// secretsGetResponse is the wire format for secret retrieval response.
-type secretsGetResponse struct {
-	SecretID      string            `codec:"secret_id"`
-	Version       uint64            `codec:"version"`
-	Data          []byte            `codec:"data"`
-	Metadata      map[string]string `codec:"metadata"`
-	Algorithm     string            `codec:"algorithm"`
-	KeyIdentifier string            `codec:"key_identifier"`
-	CreatedAt     int64             `codec:"created_at"`
-	Timestamp     int64             `codec:"timestamp"`
-}
-
-// secretsListRequest is the wire format for secrets listing.
-type secretsListRequest struct {
-	Limit  int32  `codec:"limit"`
-	Cursor string `codec:"cursor"`
-}
-
-// secretsListResponse is the wire format for secrets listing response.
-type secretsListResponse struct {
-	Secrets    []secretSummary `codec:"secrets"`
-	TotalCount int32           `codec:"total_count"`
-	HasMore    bool            `codec:"has_more"`
-	NextCursor string          `codec:"next_cursor"`
-}
-
-// secretSummary is the wire format for secret summary.
-type secretSummary struct {
-	Name           string `codec:"name"`
-	CurrentVersion uint64 `codec:"current_version"`
-	Description    string `codec:"description"`
-	Owner          string `codec:"owner"`
-	CreatedAt      int64  `codec:"created_at"`
-	UpdatedAt      int64  `codec:"updated_at"`
-}
-
-// secretsDeleteRequest is the wire format for secret deletion.
-type secretsDeleteRequest struct {
-	Name      string `codec:"name"`
-	Permanent bool   `codec:"permanent"`
-}
-
-// secretsDeleteResponse is the wire format for secret deletion response.
-type secretsDeleteResponse struct {
-	SecretID  string `codec:"secret_id"`
-	Deleted   bool   `codec:"deleted"`
-	Timestamp int64  `codec:"timestamp"`
-}
-
-// secretsRotateRequest is the wire format for secret rotation.
-type secretsRotateRequest struct {
-	Name      string `codec:"name"`
-	NewData   []byte `codec:"new_data"`
-	TenantID  string `codec:"tenant_id"`
-	KeyID     string `codec:"key_id"`
-	Algorithm string `codec:"algorithm"`
-}
-
-// secretsRotateResponse is the wire format for secret rotation response.
-type secretsRotateResponse struct {
-	SecretID   string `codec:"secret_id"`
-	OldVersion uint64 `codec:"old_version"`
-	NewVersion uint64 `codec:"new_version"`
-	Timestamp  int64  `codec:"timestamp"`
-}
-
-// secretsVersionsRequest is the wire format for secrets versions listing.
-type secretsVersionsRequest struct {
-	Name   string `codec:"name"`
-	Limit  int32  `codec:"limit"`
-	Cursor string `codec:"cursor"`
-}
-
-// secretsVersionsResponse is the wire format for secrets versions response.
-type secretsVersionsResponse struct {
-	SecretID   string              `codec:"secret_id"`
-	Versions   []secretVersionInfo `codec:"versions"`
-	HasMore    bool                `codec:"has_more"`
-	NextCursor string              `codec:"next_cursor"`
-}
-
-// secretVersionInfo is the wire format for secret version info.
-type secretVersionInfo struct {
-	Version   uint64 `codec:"version"`
-	CreatedAt int64  `codec:"created_at"`
-	CreatedBy string `codec:"created_by"`
-	ExpiresAt int64  `codec:"expires_at"`
-}
-
-// secretsVersionRequest is the wire format for specific secret version.
-type secretsVersionRequest struct {
-	Name    string `codec:"name"`
-	Version uint64 `codec:"version"`
-}
-
-// secretsVersionResponse is the wire format for specific secret version response.
-type secretsVersionResponse struct {
-	SecretID  string            `codec:"secret_id"`
-	Version   uint64            `codec:"version"`
-	Data      []byte            `codec:"data"`
-	Metadata  map[string]string `codec:"metadata"`
-	CreatedAt int64             `codec:"created_at"`
-	CreatedBy string            `codec:"created_by"`
-	ExpiresAt int64             `codec:"expires_at"`
-	Timestamp int64             `codec:"timestamp"`
-}
-
-// secretsRollbackRequest is the wire format for secret rollback.
-type secretsRollbackRequest struct {
-	Name          string `codec:"name"`
-	TargetVersion uint64 `codec:"target_version"`
-}
-
-// secretsRollbackResponse is the wire format for secret rollback response.
-type secretsRollbackResponse struct {
-	SecretID   string `codec:"secret_id"`
-	NewVersion uint64 `codec:"new_version"`
-	Timestamp  int64  `codec:"timestamp"`
-}
-
-// secretsStatusRequest is the wire format for secret status update.
-type secretsStatusRequest struct {
-	Name    string `codec:"name"`
-	Enabled bool   `codec:"enabled"`
-}
-
-// secretsStatusResponse is the wire format for secret status response.
-type secretsStatusResponse struct {
-	SecretID  string `codec:"secret_id"`
-	Status    string `codec:"status"`
-	Timestamp int64  `codec:"timestamp"`
+// quicAlgorithms maps the suite's algorithm names to the platform KMS wire enum.
+var quicAlgorithms = map[string]platformv1.KMSKeyAlgorithm{
+	"":                  platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256,
+	"AES-256":           platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256,
+	"AES-256-GCM":       platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256,
+	"ChaCha20-Poly1305": platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_CHACHA20_POLY1305,
+	"RSA-2048":          platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_2048,
+	"RSA-4096":          platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_4096,
+	"ECDSA-P256":        platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256,
+	"ECDSA-P384":        platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P384,
+	"Ed25519":           platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ED25519,
+}
+
+// quicAlgorithmNames maps the wire enum back to the suite's algorithm names.
+var quicAlgorithmNames = map[platformv1.KMSKeyAlgorithm]string{
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256:           "AES-256-GCM",
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_CHACHA20_POLY1305: "ChaCha20-Poly1305",
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_2048:          "RSA-2048",
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_4096:          "RSA-4096",
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256:        "ECDSA-P256",
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P384:        "ECDSA-P384",
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ED25519:           "Ed25519",
+}
+
+// quicHashes maps the suite's hash names to the platform KMS wire enum.
+var quicHashes = map[string]platformv1.HashAlgorithm{
+	"":        platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256,
+	"SHA-256": platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256,
+	"SHA256":  platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256,
+	"SHA-384": platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384,
+	"SHA384":  platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384,
+	"SHA-512": platformv1.HashAlgorithm_HASH_ALGORITHM_SHA512,
+	"SHA512":  platformv1.HashAlgorithm_HASH_ALGORITHM_SHA512,
+}
+
+// quicHashNames maps the wire enum back to the suite's hash names.
+var quicHashNames = map[platformv1.HashAlgorithm]string{
+	platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256: "SHA-256",
+	platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384: "SHA-384",
+	platformv1.HashAlgorithm_HASH_ALGORITHM_SHA512: "SHA-512",
+}
+
+var (
+	quicEncryptUsages = []int32{
+		int32(platformv1.KeyUsage_KEY_USAGE_ENCRYPT),
+		int32(platformv1.KeyUsage_KEY_USAGE_DECRYPT),
+	}
+	quicSignUsages = []int32{
+		int32(platformv1.KeyUsage_KEY_USAGE_SIGN),
+		int32(platformv1.KeyUsage_KEY_USAGE_VERIFY),
+	}
+	quicWrapUsages = []int32{int32(platformv1.KeyUsage_KEY_USAGE_WRAP)}
+)
+
+// quicPurposes maps the suite's key purposes to wire key usages.
+var quicPurposes = map[string][]int32{
+	"encrypt":         quicEncryptUsages,
+	"encrypt_decrypt": quicEncryptUsages,
+	"sign":            quicSignUsages,
+	"sign_verify":     quicSignUsages,
+	"wrap":            quicWrapUsages,
+}
+
+// quicSigningAlgorithms are the algorithms whose default purpose is signing.
+var quicSigningAlgorithms = map[platformv1.KMSKeyAlgorithm]bool{
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256: true,
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P384: true,
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ED25519:    true,
+}
+
+func quicAlgorithm(name string) (int32, error) {
+	alg, ok := quicAlgorithms[name]
+	if !ok {
+		return 0, ErrQUICUnsupportedValue{Kind: "key algorithm", Value: name}
+	}
+	return int32(alg), nil
+}
+
+func quicAlgorithmName(alg int32) string {
+	if name, ok := quicAlgorithmNames[platformv1.KMSKeyAlgorithm(alg)]; ok {
+		return name
+	}
+	return platformv1.KMSKeyAlgorithm(alg).String()
+}
+
+func quicHash(name string) (int32, error) {
+	alg, ok := quicHashes[strings.ToUpper(name)]
+	if !ok {
+		return 0, ErrQUICUnsupportedValue{Kind: "hash algorithm", Value: name}
+	}
+	return int32(alg), nil
+}
+
+func quicHashName(alg int32) string {
+	if name, ok := quicHashNames[platformv1.HashAlgorithm(alg)]; ok {
+		return name
+	}
+	return platformv1.HashAlgorithm(alg).String()
+}
+
+// quicUsages resolves a purpose to wire usages; an empty purpose follows the
+// algorithm (signing algorithms sign, everything else encrypts).
+func quicUsages(purpose string, alg int32) ([]int32, error) {
+	if purpose == "" {
+		if quicSigningAlgorithms[platformv1.KMSKeyAlgorithm(alg)] {
+			return quicSignUsages, nil
+		}
+		return quicEncryptUsages, nil
+	}
+	usages, ok := quicPurposes[strings.ToLower(purpose)]
+	if !ok {
+		return nil, ErrQUICUnsupportedValue{Kind: "key purpose", Value: purpose}
+	}
+	return usages, nil
+}
+
+func quicUsageNames(usages []int32) []string {
+	names := make([]string, 0, len(usages))
+	for _, u := range usages {
+		names = append(names, strings.ToLower(strings.TrimPrefix(platformv1.KeyUsage(u).String(), "KEY_USAGE_")))
+	}
+	return names
+}
+
+// quicStatusName renders a wire key status as its enum name (KEY_STATUS_ENABLED, ...).
+func quicStatusName(status int32) string {
+	return platformv1.KeyStatus(status).String()
+}
+
+// quicTime converts wire Unix seconds; zero stays the zero time.
+func quicTime(sec int64) time.Time {
+	if sec == 0 {
+		return time.Time{}
+	}
+	return time.Unix(sec, 0)
 }
 
 // =============================================================================
-// QUIC Adapter Implementation
+// QUIC Adapter
 // =============================================================================
 
-// QUICAdapter implements KMSCommands using the QUIC protocol.
-// It provides high-performance, low-latency communication with the platform
-// using a binary protocol over QUIC streams with MessagePack encoding.
+// QUICAdapter implements KMSCommands over the platform QUIC wire
+// (sdk/go/wire/quicwire): key ops 0xC0-0xCB, crypto ops 0xD0-0xDA, extended
+// KMS through category 0xCD and secrets through category 0xCE.
 type QUICAdapter struct {
 	endpoint       string
 	conn           *quicgo.Conn
@@ -905,9 +298,7 @@ type QUICAdapter struct {
 	closed bool
 }
 
-// NewQUICAdapter creates a new QUIC adapter for integration testing.
-// It reads the endpoint from the PLATFORM_QUIC_ENDPOINT environment variable,
-// defaulting to localhost:9444.
+// NewQUICAdapter creates a QUIC adapter for the endpoint in PLATFORM_QUIC_ENDPOINT.
 func NewQUICAdapter() *QUICAdapter {
 	endpoint := os.Getenv(EnvPlatformQUICEndpoint)
 	if endpoint == "" {
@@ -922,26 +313,12 @@ func NewQUICAdapter() *QUICAdapter {
 	}
 }
 
-// NewQUICAdapterWithConfig creates a QUIC adapter with explicit configuration.
-func NewQUICAdapterWithConfig(endpoint string, tlsConfig *tls.Config, timeout time.Duration) *QUICAdapter {
-	if tlsConfig == nil {
-		tlsConfig = helpers.QUICTLSConfig()
-	}
-
-	return &QUICAdapter{
-		endpoint:       endpoint,
-		tlsConfig:      tlsConfig,
-		timeout:        timeout,
-		maxIdleTimeout: DefaultQUICMaxIdleTimeout,
-	}
-}
-
-// Name returns the protocol adapter identifier.
+// Name returns the protocol name.
 func (q *QUICAdapter) Name() string {
-	return "QUIC"
+	return quicTransport
 }
 
-// Setup establishes the QUIC connection to the platform endpoint.
+// Setup dials the QUIC endpoint.
 func (q *QUICAdapter) Setup(ctx context.Context) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -950,7 +327,6 @@ func (q *QUICAdapter) Setup(ctx context.Context) error {
 		return ErrQUICClientClosed{}
 	}
 
-	// Create connection context with timeout
 	connCtx, cancel := context.WithTimeout(ctx, q.timeout)
 	defer cancel()
 
@@ -986,12 +362,9 @@ func (q *QUICAdapter) Teardown() error {
 	return nil
 }
 
-// =============================================================================
-// Wire Protocol Methods
-// =============================================================================
-
-// sendRequest sends a QUIC request and returns the response.
-func (q *QUICAdapter) sendRequest(ctx context.Context, opcode byte, payload interface{}) (*quicResponse, error) {
+// roundTrip writes one request frame on a fresh stream and returns the OK
+// response payload.
+func (q *QUICAdapter) roundTrip(ctx context.Context, operation string, opcode byte, payload []byte) ([]byte, error) {
 	q.mu.RLock()
 	if q.closed {
 		q.mu.RUnlock()
@@ -1000,559 +373,325 @@ func (q *QUICAdapter) sendRequest(ctx context.Context, opcode byte, payload inte
 	conn := q.conn
 	q.mu.RUnlock()
 
-	// Encode payload
-	var payloadBytes []byte
-	if payload != nil {
-		var err error
-		payloadBytes, err = encodePayload(payload)
-		if err != nil {
-			return nil, ErrQUICEncodeFailed{Operation: opcodeToString(opcode), Err: err}
-		}
-	}
-
-	// Open stream
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		return nil, ErrQUICStreamFailed{Operation: "OpenStream", Err: err}
 	}
 	defer stream.Close()
 
-	// Write request
-	req := &quicRequest{
-		Opcode:  opcode,
-		Payload: payloadBytes,
-	}
-
-	if err := writeRequest(stream, req); err != nil {
+	if err := quicwire.WriteRequest(stream, &quicwire.Request{Opcode: opcode, Payload: payload}); err != nil {
 		return nil, ErrQUICStreamFailed{Operation: "WriteRequest", Err: err}
 	}
 
-	// Read response
-	resp, err := readResponse(stream)
+	resp, err := quicwire.ReadResponse(stream)
 	if err != nil {
 		return nil, ErrQUICStreamFailed{Operation: "ReadResponse", Err: err}
 	}
 
-	// Check status
-	if resp.Status != QUICStatusOK {
-		errMsg := string(resp.Payload)
-		if errMsg == "" {
-			errMsg = "unknown error"
-		}
-		return nil, ErrQUICRequestFailed{
-			Operation: opcodeToString(opcode),
-			Status:    resp.Status,
-			Message:   errMsg,
-		}
+	if resp.Status != quicwire.StatusOK {
+		return nil, ErrQUICRequestFailed{Operation: operation, Status: byte(resp.Status), Message: string(resp.Payload)}
 	}
 
-	return resp, nil
+	return resp.Payload, nil
 }
 
-// writeRequest writes a request to the stream.
-func writeRequest(w io.Writer, req *quicRequest) error {
-	payloadLen := uint32(len(req.Payload))
-	if payloadLen > MaxQUICPayloadSize {
-		return fmt.Errorf("payload size %d exceeds maximum %d", payloadLen, MaxQUICPayloadSize)
+// call encodes req, sends it under opcode, and decodes the response into out.
+func (q *QUICAdapter) call(ctx context.Context, operation string, opcode byte, req, out any) error {
+	body, err := quicwire.EncodePayload(req)
+	if err != nil {
+		return ErrQUICEncodeFailed{Operation: operation, Err: err}
 	}
+	return q.exchange(ctx, operation, opcode, body, out)
+}
 
-	tokenLen := uint16(len(req.Token))
-	if tokenLen > MaxQUICTokenSize {
-		return fmt.Errorf("token size %d exceeds maximum %d", tokenLen, MaxQUICTokenSize)
+// callSub sends a category request: the sub-opcode in payload[0], then the
+// encoded body.
+func (q *QUICAdapter) callSub(ctx context.Context, operation string, category, sub byte, req, out any) error {
+	body, err := quicwire.EncodePayload(req)
+	if err != nil {
+		return ErrQUICEncodeFailed{Operation: operation, Err: err}
 	}
+	payload := make([]byte, 1+len(body))
+	payload[0] = sub
+	copy(payload[1:], body)
+	return q.exchange(ctx, operation, category, payload, out)
+}
 
-	// Write opcode
-	if _, err := w.Write([]byte{req.Opcode}); err != nil {
-		return fmt.Errorf("failed to write opcode: %w", err)
+func (q *QUICAdapter) exchange(ctx context.Context, operation string, opcode byte, payload []byte, out any) error {
+	respPayload, err := q.roundTrip(ctx, operation, opcode, payload)
+	if err != nil {
+		return err
 	}
-
-	// Write token length
-	tokenLenBuf := make([]byte, 2)
-	binary.BigEndian.PutUint16(tokenLenBuf, tokenLen)
-	if _, err := w.Write(tokenLenBuf); err != nil {
-		return fmt.Errorf("failed to write token length: %w", err)
+	if err := quicwire.DecodePayload(respPayload, out); err != nil {
+		return ErrQUICDecodeFailed{Operation: operation, Err: err}
 	}
-
-	// Write token
-	if tokenLen > 0 {
-		if _, err := w.Write([]byte(req.Token)); err != nil {
-			return fmt.Errorf("failed to write token: %w", err)
-		}
-	}
-
-	// Write payload length
-	lenBuf := make([]byte, 4)
-	binary.BigEndian.PutUint32(lenBuf, payloadLen)
-	if _, err := w.Write(lenBuf); err != nil {
-		return fmt.Errorf("failed to write payload length: %w", err)
-	}
-
-	// Write payload
-	if payloadLen > 0 {
-		if _, err := w.Write(req.Payload); err != nil {
-			return fmt.Errorf("failed to write payload: %w", err)
-		}
-	}
-
 	return nil
 }
 
-// readResponse reads a response from the stream.
-func readResponse(r io.Reader) (*quicResponse, error) {
-	// Read status
-	statusBuf := make([]byte, 1)
-	if _, err := io.ReadFull(r, statusBuf); err != nil {
-		return nil, fmt.Errorf("failed to read status: %w", err)
-	}
-
-	// Read payload length
-	lenBuf := make([]byte, 4)
-	if _, err := io.ReadFull(r, lenBuf); err != nil {
-		return nil, fmt.Errorf("failed to read payload length: %w", err)
-	}
-	payloadLen := binary.BigEndian.Uint32(lenBuf)
-
-	if payloadLen > MaxQUICPayloadSize {
-		return nil, fmt.Errorf("payload size %d exceeds maximum %d", payloadLen, MaxQUICPayloadSize)
-	}
-
-	// Read payload
-	var payload []byte
-	if payloadLen > 0 {
-		payload = make([]byte, payloadLen)
-		if _, err := io.ReadFull(r, payload); err != nil {
-			return nil, fmt.Errorf("failed to read payload: %w", err)
-		}
-	}
-
-	return &quicResponse{
-		Status:  statusBuf[0],
-		Payload: payload,
-	}, nil
+func (q *QUICAdapter) extended(ctx context.Context, operation string, sub byte, req, out any) error {
+	return q.callSub(ctx, operation, quicwire.OpKMSExtendedCategory, sub, req, out)
 }
 
-// defaultCodecType is the codec type used for payload encoding/decoding
-var defaultCodecType = codec.MsgPack
-
-// getCodec creates a codec of the default type using the factory
-func getCodec() (codec.Codec[any], error) {
-	return factory.New[any](defaultCodecType)
+func (q *QUICAdapter) secrets(ctx context.Context, operation string, sub byte, req, out any) error {
+	return q.callSub(ctx, operation, quicwire.OpSecretsCategory, sub, req, out)
 }
 
-// encodePayload encodes an entity using the configured codec.
-func encodePayload(entity interface{}) ([]byte, error) {
-	if entity == nil {
-		return nil, nil
-	}
-
-	c, err := getCodec()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create codec: %w", err)
-	}
-
-	data, err := c.Marshal(entity)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode payload: %w", err)
-	}
-
-	return data, nil
-}
-
-// decodePayload decodes bytes into an entity using the configured codec.
-func decodePayload(data []byte, entity interface{}) error {
-	if len(data) == 0 {
-		return nil
-	}
-
-	if entity == nil {
-		return fmt.Errorf("entity cannot be nil")
-	}
-
-	c, err := getCodec()
-	if err != nil {
-		return fmt.Errorf("failed to create codec: %w", err)
-	}
-
-	if err := c.Unmarshal(data, &entity); err != nil {
-		return fmt.Errorf("failed to decode payload: %w", err)
-	}
-
-	return nil
-}
-
-// opcodeToString returns a human-readable name for an opcode.
-func opcodeToString(opcode byte) string {
-	switch opcode {
-	case OpQUICKMSGenerateKey:
-		return "KMSGenerateKey"
-	case OpQUICKMSGetKey:
-		return "KMSGetKey"
-	case OpQUICKMSListKeys:
-		return "KMSListKeys"
-	case OpQUICKMSDeleteKey:
-		return "KMSDeleteKey"
-	case OpQUICKMSRotateKey:
-		return "KMSRotateKey"
-	case OpQUICKMSKeyVersions:
-		return "KMSKeyVersions"
-	case OpQUICKMSKeyStatus:
-		return "KMSKeyStatus"
-	case OpQUICKMSKeyRevoke:
-		return "KMSKeyRevoke"
-	case OpQUICKMSKeyMetadata:
-		return "KMSKeyMetadata"
-	case OpQUICKMSKeyMetadataUpdate:
-		return "KMSKeyMetadataUpdate"
-	case OpQUICKMSKeyPolicy:
-		return "KMSKeyPolicy"
-	case OpQUICKMSKeyPolicySet:
-		return "KMSKeyPolicySet"
-	case OpQUICKMSKeyAlgorithms:
-		return "KMSKeyAlgorithms"
-	case OpQUICCryptoEncrypt:
-		return "CryptoEncrypt"
-	case OpQUICCryptoDecrypt:
-		return "CryptoDecrypt"
-	case OpQUICCryptoSign:
-		return "CryptoSign"
-	case OpQUICCryptoVerify:
-		return "CryptoVerify"
-	case OpQUICCryptoHash:
-		return "CryptoHash"
-	case OpQUICCryptoHMAC:
-		return "CryptoHMAC"
-	case OpQUICCryptoVerifyHMAC:
-		return "CryptoVerifyHMAC"
-	case OpQUICCryptoRandom:
-		return "CryptoRandom"
-	case OpQUICKMSDEKCreate:
-		return "DEKCreate"
-	case OpQUICKMSDEKGet:
-		return "DEKGet"
-	case OpQUICKMSDEKList:
-		return "DEKList"
-	case OpQUICKMSDEKDelete:
-		return "DEKDelete"
-	case OpQUICKMSDEKRotate:
-		return "DEKRotate"
-	case OpQUICKMSDEKStatus:
-		return "DEKStatus"
-	case OpQUICSecretsStore:
-		return "SecretsStore"
-	case OpQUICSecretsGet:
-		return "SecretsGet"
-	case OpQUICSecretsList:
-		return "SecretsList"
-	case OpQUICSecretsDelete:
-		return "SecretsDelete"
-	case OpQUICSecretsRotate:
-		return "SecretsRotate"
-	case OpQUICSecretsListVersions:
-		return "SecretsVersions"
-	case OpQUICSecretsRollback:
-		return "SecretsRollback"
-	case OpQUICSecretsStatus:
-		return "SecretsStatus"
-	default:
-		return fmt.Sprintf("Unknown(0x%02X)", opcode)
-	}
+func quicNoSurface(operation, reason string) error {
+	return surface.ErrNoSurface{Transport: quicTransport, Operation: operation, Reason: reason}
 }
 
 // =============================================================================
-// KMSCommands Interface Implementation - Key Management
+// Key Management Commands
 // =============================================================================
 
-// KeyGenerate creates a new key via QUIC protocol.
+// KeyGenerate generates a new key (0xC0).
 func (q *QUICAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) (*KeyGenerateResult, error) {
-	req := &keyGenerateRequest{
-		KeyID:              opts.KeyID,
-		Algorithm:          opts.Algorithm,
-		Purpose:            opts.Purpose,
-		Exportable:         opts.Exportable,
-		DeletionProtection: opts.DeletionProtection,
-		Name:               opts.Name,
-		Description:        opts.Description,
-		Owner:              opts.Owner,
+	alg, err := quicAlgorithm(opts.Algorithm)
+	if err != nil {
+		return nil, err
 	}
-
-	resp, err := q.sendRequest(ctx, OpQUICKMSGenerateKey, req)
+	usages, err := quicUsages(opts.Purpose, alg)
 	if err != nil {
 		return nil, err
 	}
 
-	var result keyGenerateResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "KeyGenerate", Err: err}
+	req := &daemonpkg.KMSGenerateKeyRequest{
+		KeySpec: &daemonpkg.KMSKeySpecRequest{
+			Algorithm:          alg,
+			Usage:              usages,
+			Exportable:         opts.Exportable,
+			DeletionProtection: opts.DeletionProtection,
+		},
+		Name:        keyName(opts),
+		Description: opts.Description,
+		Owner:       opts.Owner,
 	}
 
-	return &KeyGenerateResult{
-		KeyID:              result.KeyID,
-		Version:            result.Version,
-		Algorithm:          result.Algorithm,
-		Status:             result.Status,
-		CreatedAt:          time.Unix(result.CreatedAt, 0),
-		Name:               result.Name,
-		Description:        result.Description,
-		Exportable:         result.Exportable,
-		DeletionProtection: result.DeletionProtection,
-	}, nil
+	var resp daemonpkg.KMSGenerateKeyResponse
+	if err := q.call(ctx, "KeyGenerate", quicwire.OpKMSGenerateKey, req, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Key == nil {
+		return nil, ErrQUICDecodeFailed{Operation: "KeyGenerate", Err: ErrQUICUnsupportedValue{Kind: "response", Value: "missing key handle"}}
+	}
+
+	result := &KeyGenerateResult{
+		KeyID:     resp.Key.KeyId,
+		Version:   resp.Key.Version,
+		Algorithm: quicAlgorithmName(resp.Key.Algorithm),
+		Status:    quicStatusName(resp.Key.Status),
+		CreatedAt: quicTime(resp.Key.CreatedAt),
+	}
+	if resp.Metadata != nil {
+		result.Name = resp.Metadata.Name
+		result.Description = resp.Metadata.Description
+		result.Exportable = resp.Metadata.Exportable
+		result.DeletionProtection = resp.Metadata.DeletionProtection
+	}
+	if err := applyKeyDisplay(ctx, q, opts, result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
-// KeyGet retrieves a key via QUIC protocol.
+// KeyGet retrieves a key and its metadata (0xC2).
 func (q *QUICAdapter) KeyGet(ctx context.Context, keyID string, version uint64) (*KeyGetResult, error) {
-	req := &keyGetRequest{
-		KeyID:   keyID,
-		Version: version,
-	}
+	req := &daemonpkg.KMSGetKeyRequest{KeyId: keyID, Version: version}
 
-	resp, err := q.sendRequest(ctx, OpQUICKMSGetKey, req)
-	if err != nil {
+	var resp daemonpkg.KMSGetKeyResponse
+	if err := q.call(ctx, "KeyGet", quicwire.OpKMSGetKey, req, &resp); err != nil {
 		return nil, err
 	}
 
-	var result keyGetResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "KeyGet", Err: err}
+	result := &KeyGetResult{KeyID: keyID}
+	if resp.Key != nil {
+		result.KeyID = resp.Key.KeyId
+		result.Version = resp.Key.Version
+		result.Algorithm = quicAlgorithmName(resp.Key.Algorithm)
+		result.Status = quicStatusName(resp.Key.Status)
+		result.CreatedAt = quicTime(resp.Key.CreatedAt)
 	}
-
-	return &KeyGetResult{
-		KeyID:              result.KeyID,
-		Version:            result.Version,
-		Algorithm:          result.Algorithm,
-		Status:             result.Status,
-		CreatedAt:          time.Unix(result.CreatedAt, 0),
-		UpdatedAt:          time.Unix(result.UpdatedAt, 0),
-		LastUsedAt:         time.Unix(result.LastUsedAt, 0),
-		Name:               result.Name,
-		Description:        result.Description,
-		Owner:              result.Owner,
-		Exportable:         result.Exportable,
-		DeletionProtection: result.DeletionProtection,
-		Usage:              result.Usage,
-	}, nil
+	if md := resp.Metadata; md != nil {
+		result.UpdatedAt = quicTime(md.UpdatedAt)
+		result.LastUsedAt = quicTime(md.LastUsedAt)
+		result.Name = md.Name
+		result.Description = md.Description
+		result.Owner = md.Owner
+		result.Exportable = md.Exportable
+		result.DeletionProtection = md.DeletionProtection
+		result.Usage = quicUsageNames(md.Usage)
+	}
+	return result, nil
 }
 
-// KeyList lists keys via QUIC protocol.
+// KeyList lists keys (0xC3).
 func (q *QUICAdapter) KeyList(ctx context.Context, opts KeyListOptions) (*KeyListResult, error) {
-	req := &keyListRequest{
-		Limit:  opts.Limit,
-		Cursor: opts.Cursor,
-	}
+	req := &daemonpkg.KMSListKeysRequest{Limit: opts.Limit, Cursor: opts.Cursor}
 
-	resp, err := q.sendRequest(ctx, OpQUICKMSListKeys, req)
-	if err != nil {
+	var resp daemonpkg.KMSListKeysResponse
+	if err := q.call(ctx, "KeyList", quicwire.OpKMSListKeys, req, &resp); err != nil {
 		return nil, err
 	}
 
-	var result keyListResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "KeyList", Err: err}
-	}
-
-	keys := make([]KeySummary, len(result.Keys))
-	for i, k := range result.Keys {
-		keys[i] = KeySummary{
-			KeyID:     k.KeyID,
-			Version:   k.Version,
-			Algorithm: k.Algorithm,
-			Status:    k.Status,
-			CreatedAt: time.Unix(k.CreatedAt, 0),
+	keys := make([]KeySummary, 0, len(resp.Keys))
+	for _, k := range resp.Keys {
+		if k == nil {
+			continue
 		}
+		keys = append(keys, KeySummary{
+			KeyID:     k.KeyId,
+			Version:   k.Version,
+			Algorithm: quicAlgorithmName(k.Algorithm),
+			Status:    quicStatusName(k.Status),
+			CreatedAt: quicTime(k.CreatedAt),
+		})
 	}
 
 	return &KeyListResult{
 		Keys:       keys,
-		TotalCount: result.TotalCount,
-		HasMore:    result.HasMore,
-		NextCursor: result.NextCursor,
+		TotalCount: resp.TotalCount,
+		HasMore:    resp.HasMore,
+		NextCursor: resp.NextCursor,
 	}, nil
 }
 
-// KeyDelete deletes a key via QUIC protocol.
+// KeyDelete schedules or forces key deletion (0xC4).
 func (q *QUICAdapter) KeyDelete(ctx context.Context, keyID string, opts KeyDeleteOptions) (*KeyDeleteResult, error) {
-	req := &keyDeleteRequest{
-		KeyID:             keyID,
+	req := &daemonpkg.KMSDeleteKeyRequest{
+		KeyId:             keyID,
 		PendingWindowDays: opts.PendingWindowDays,
 		Force:             opts.Force,
 	}
 
-	resp, err := q.sendRequest(ctx, OpQUICKMSDeleteKey, req)
-	if err != nil {
+	var resp daemonpkg.KMSDeleteKeyResponse
+	if err := q.call(ctx, "KeyDelete", quicwire.OpKMSDeleteKey, req, &resp); err != nil {
 		return nil, err
-	}
-
-	var result keyDeleteResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "KeyDelete", Err: err}
 	}
 
 	return &KeyDeleteResult{
-		KeyID:        result.KeyID,
-		Status:       result.Status,
-		DeletionDate: time.Unix(result.DeletionDate, 0),
+		KeyID:        resp.KeyId,
+		Status:       quicStatusName(resp.KeyStatus),
+		DeletionDate: quicTime(resp.DeletionDate),
 	}, nil
 }
 
-// KeyRotate rotates a key via QUIC protocol.
+// KeyRotate rotates a key to a new version (0xC5).
 func (q *QUICAdapter) KeyRotate(ctx context.Context, keyID string, retainOldVersion bool) (*KeyRotateResult, error) {
-	req := &keyRotateRequest{
-		KeyID:            keyID,
-		RetainOldVersion: retainOldVersion,
-	}
+	req := &daemonpkg.KMSRotateKeyRequest{KeyId: keyID, RetainOldVersion: retainOldVersion}
 
-	resp, err := q.sendRequest(ctx, OpQUICKMSRotateKey, req)
-	if err != nil {
+	var resp daemonpkg.KMSRotateKeyResponse
+	if err := q.call(ctx, "KeyRotate", quicwire.OpKMSRotateKey, req, &resp); err != nil {
 		return nil, err
-	}
-
-	var result keyRotateResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "KeyRotate", Err: err}
 	}
 
 	return &KeyRotateResult{
-		KeyID:      result.KeyID,
-		OldVersion: result.OldVersion,
-		NewVersion: result.NewVersion,
-		RotatedAt:  time.Unix(result.RotatedAt, 0),
+		KeyID:      resp.KeyId,
+		OldVersion: resp.OldVersion,
+		NewVersion: resp.NewVersion,
+		RotatedAt:  quicTime(resp.Timestamp),
 	}, nil
 }
 
-// KeyVersions lists key versions via QUIC protocol.
+// KeyVersions lists a key's versions (0xC8).
 func (q *QUICAdapter) KeyVersions(ctx context.Context, keyID string, opts KeyVersionsOptions) (*KeyVersionsResult, error) {
-	req := &keyVersionsRequest{
-		KeyID:  keyID,
-		Limit:  opts.Limit,
-		Cursor: opts.Cursor,
-	}
+	req := &daemonpkg.KMSGetKeyVersionsRequest{KeyId: keyID, Limit: opts.Limit, Cursor: opts.Cursor}
 
-	resp, err := q.sendRequest(ctx, OpQUICKMSKeyVersions, req)
-	if err != nil {
+	var resp daemonpkg.KMSGetKeyVersionsResponse
+	if err := q.call(ctx, "KeyVersions", quicwire.OpKMSGetKeyVersions, req, &resp); err != nil {
 		return nil, err
 	}
 
-	var result keyVersionsResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "KeyVersions", Err: err}
-	}
-
-	versions := make([]KeyVersionInfo, len(result.Versions))
-	for i, v := range result.Versions {
-		versions[i] = KeyVersionInfo{
-			Version:    v.Version,
-			Algorithm:  v.Algorithm,
-			Status:     v.Status,
-			CreatedAt:  time.Unix(v.CreatedAt, 0),
-			DisabledAt: time.Unix(v.DisabledAt, 0),
+	versions := make([]KeyVersionInfo, 0, len(resp.Versions))
+	for _, v := range resp.Versions {
+		if v == nil {
+			continue
 		}
+		versions = append(versions, KeyVersionInfo{
+			Version:    v.Version,
+			Algorithm:  quicAlgorithmName(v.Algorithm),
+			Status:     quicStatusName(v.Status),
+			CreatedAt:  quicTime(v.CreatedAt),
+			DisabledAt: quicTime(v.DisabledAt),
+		})
 	}
 
 	return &KeyVersionsResult{
-		KeyID:      result.KeyID,
+		KeyID:      resp.KeyId,
 		Versions:   versions,
-		HasMore:    result.HasMore,
-		NextCursor: result.NextCursor,
+		HasMore:    resp.HasMore,
+		NextCursor: resp.NextCursor,
 	}, nil
 }
 
-// KeyStatus updates key status via QUIC protocol.
+// KeyStatus enables or disables a key version (0xC6).
 func (q *QUICAdapter) KeyStatus(ctx context.Context, keyID string, version uint64, enabled bool) (*KeyStatusResult, error) {
-	req := &keyStatusRequest{
-		KeyID:   keyID,
-		Version: version,
-		Enabled: enabled,
+	status := platformv1.KeyStatus_KEY_STATUS_DISABLED
+	if enabled {
+		status = platformv1.KeyStatus_KEY_STATUS_ENABLED
 	}
+	req := &daemonpkg.KMSUpdateKeyStatusRequest{KeyId: keyID, Version: version, Status: int32(status)}
 
-	resp, err := q.sendRequest(ctx, OpQUICKMSKeyStatus, req)
-	if err != nil {
+	var resp daemonpkg.KMSUpdateKeyStatusResponse
+	if err := q.call(ctx, "KeyStatus", quicwire.OpKMSUpdateKeyStatus, req, &resp); err != nil {
 		return nil, err
-	}
-
-	var result keyStatusResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "KeyStatus", Err: err}
 	}
 
 	return &KeyStatusResult{
-		KeyID:     result.KeyID,
-		Version:   result.Version,
-		Status:    result.Status,
-		UpdatedAt: time.Unix(result.UpdatedAt, 0),
+		KeyID:     resp.KeyId,
+		Version:   resp.Version,
+		Status:    quicStatusName(resp.KeyStatus),
+		UpdatedAt: quicTime(resp.Timestamp),
 	}, nil
 }
 
-// KeyRevoke revokes a key via QUIC protocol.
+// KeyRevoke revokes a key (0xCD/0x01).
 func (q *QUICAdapter) KeyRevoke(ctx context.Context, keyID string, reason string) (*KeyRevokeResult, error) {
-	req := &keyRevokeRequest{
-		KeyID:  keyID,
-		Reason: reason,
-	}
+	req := &daemonpkg.KMSRevokeKeyRequest{KeyID: keyID, Reason: reason}
 
-	resp, err := q.sendRequest(ctx, OpQUICKMSKeyRevoke, req)
-	if err != nil {
+	var resp daemonpkg.KMSRevokeKeyResponse
+	if err := q.extended(ctx, "KeyRevoke", quicwire.KMSSubRevokeKey, req, &resp); err != nil {
 		return nil, err
-	}
-
-	var result keyRevokeResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "KeyRevoke", Err: err}
 	}
 
 	return &KeyRevokeResult{
-		KeyID:     result.KeyID,
-		Status:    result.Status,
-		RevokedAt: time.Unix(result.RevokedAt, 0),
+		KeyID:     resp.KeyID,
+		Status:    resp.Status,
+		RevokedAt: quicTime(resp.Timestamp),
 	}, nil
 }
 
-// KeyMetadata retrieves key metadata via QUIC protocol.
+// KeyMetadata retrieves key metadata (0xCD/0x02).
 func (q *QUICAdapter) KeyMetadata(ctx context.Context, keyID string) (*KeyMetadataResult, error) {
-	req := &keyMetadataRequest{
-		KeyID: keyID,
-	}
+	req := &daemonpkg.KMSGetKeyMetadataRequest{KeyID: keyID}
 
-	resp, err := q.sendRequest(ctx, OpQUICKMSKeyMetadata, req)
-	if err != nil {
+	var resp daemonpkg.KMSGetKeyMetadataResponse
+	if err := q.extended(ctx, "KeyMetadata", quicwire.KMSSubGetKeyMetadata, req, &resp); err != nil {
 		return nil, err
 	}
 
-	var result keyMetadataResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "KeyMetadata", Err: err}
+	result := &KeyMetadataResult{KeyID: keyID}
+	if md := resp.Metadata; md != nil {
+		result.KeyID = md.KeyId
+		result.Name = md.Name
+		result.Description = md.Description
+		result.Algorithm = quicAlgorithmName(md.Algorithm)
+		result.Status = quicStatusName(md.Status)
+		result.Version = md.Version
+		result.Exportable = md.Exportable
+		result.DeletionProtection = md.DeletionProtection
+		result.Usage = quicUsageNames(md.Usage)
+		result.Owner = md.Owner
+		result.CreatedAt = quicTime(md.CreatedAt)
+		result.UpdatedAt = quicTime(md.UpdatedAt)
+		result.LastUsedAt = quicTime(md.LastUsedAt)
+		result.Tags = md.Tags
 	}
-
-	var rotPolicy *RotationPolicy
-	if result.RotationPolicy != nil {
-		rotPolicy = &RotationPolicy{
-			Enabled:         result.RotationPolicy.Enabled,
-			IntervalSeconds: result.RotationPolicy.IntervalSeconds,
-			NextRotation:    time.Unix(result.RotationPolicy.NextRotation, 0),
-			RetainVersions:  result.RotationPolicy.RetainVersions,
-		}
-	}
-
-	return &KeyMetadataResult{
-		KeyID:              result.KeyID,
-		Name:               result.Name,
-		Description:        result.Description,
-		Algorithm:          result.Algorithm,
-		Status:             result.Status,
-		Version:            result.Version,
-		Exportable:         result.Exportable,
-		DeletionProtection: result.DeletionProtection,
-		Usage:              result.Usage,
-		Owner:              result.Owner,
-		CreatedAt:          time.Unix(result.CreatedAt, 0),
-		UpdatedAt:          time.Unix(result.UpdatedAt, 0),
-		LastUsedAt:         time.Unix(result.LastUsedAt, 0),
-		Tags:               result.Tags,
-		RotationPolicy:     rotPolicy,
-	}, nil
+	return result, nil
 }
 
-// KeyMetadataUpdate updates key metadata via QUIC protocol.
+// KeyMetadataUpdate updates key metadata (0xCD/0x03).
 func (q *QUICAdapter) KeyMetadataUpdate(ctx context.Context, keyID string, opts KeyMetadataUpdateOptions) (*KeyMetadataUpdateResult, error) {
-	req := &keyMetadataUpdateRequest{
+	req := &daemonpkg.KMSUpdateKeyMetadataRequest{
 		KeyID:       keyID,
 		Name:        opts.Name,
 		Description: opts.Description,
@@ -1560,778 +699,399 @@ func (q *QUICAdapter) KeyMetadataUpdate(ctx context.Context, keyID string, opts 
 		RemoveTags:  opts.RemoveTags,
 	}
 
-	resp, err := q.sendRequest(ctx, OpQUICKMSKeyMetadataUpdate, req)
-	if err != nil {
+	var resp daemonpkg.KMSUpdateKeyMetadataResponse
+	if err := q.extended(ctx, "KeyMetadataUpdate", quicwire.KMSSubUpdateKeyMetadata, req, &resp); err != nil {
 		return nil, err
 	}
 
-	var result keyMetadataUpdateResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "KeyMetadataUpdate", Err: err}
+	result := &KeyMetadataUpdateResult{KeyID: keyID, UpdatedAt: quicTime(resp.Timestamp)}
+	if md := resp.Metadata; md != nil {
+		result.KeyID = md.KeyId
+		result.Name = md.Name
+		result.Tags = md.Tags
+		if md.UpdatedAt != 0 {
+			result.UpdatedAt = quicTime(md.UpdatedAt)
+		}
 	}
-
-	return &KeyMetadataUpdateResult{
-		KeyID:     result.KeyID,
-		Name:      result.Name,
-		UpdatedAt: time.Unix(result.UpdatedAt, 0),
-		Tags:      result.Tags,
-	}, nil
+	return result, nil
 }
 
-// KeyPolicy retrieves key policy via QUIC protocol.
+// KeyPolicy retrieves a key's access policy (0xCD/0x05).
 func (q *QUICAdapter) KeyPolicy(ctx context.Context, keyID string) (*KeyPolicyResult, error) {
-	req := &keyPolicyRequest{
-		KeyID: keyID,
-	}
+	req := &daemonpkg.KMSGetKeyPolicyRequest{KeyID: keyID}
 
-	resp, err := q.sendRequest(ctx, OpQUICKMSKeyPolicy, req)
-	if err != nil {
+	var resp daemonpkg.KMSGetKeyPolicyResponse
+	if err := q.extended(ctx, "KeyPolicy", quicwire.KMSSubGetKeyPolicy, req, &resp); err != nil {
 		return nil, err
 	}
 
-	var result keyPolicyResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "KeyPolicy", Err: err}
+	result := &KeyPolicyResult{KeyID: keyID}
+	if p := resp.Policy; p != nil {
+		result.KeyID = p.KeyID
+		result.Version = int32(p.Version)
+		result.AllowedOperations = p.AllowedOperations
+		result.AllowedPrincipals = p.AllowedPrincipals
+		result.DeniedPrincipals = p.DeniedPrincipals
+		result.ExpiresAt = quicTime(p.ExpiresAt)
+		result.RotationRequired = p.RotationRequired
+		result.MaxUsageCount = p.MaxUsageCount
+		result.RequireMFA = p.RequireMFA
+		result.UpdatedAt = quicTime(p.UpdatedAt)
 	}
-
-	return &KeyPolicyResult{
-		KeyID:             result.KeyID,
-		Version:           result.Version,
-		AllowedOperations: result.AllowedOperations,
-		AllowedPrincipals: result.AllowedPrincipals,
-		DeniedPrincipals:  result.DeniedPrincipals,
-		ExpiresAt:         time.Unix(result.ExpiresAt, 0),
-		RotationRequired:  result.RotationRequired,
-		MaxUsageCount:     result.MaxUsageCount,
-		RequireMFA:        result.RequireMFA,
-		UpdatedAt:         time.Unix(result.UpdatedAt, 0),
-	}, nil
+	return result, nil
 }
 
-// KeyPolicySet sets key policy via QUIC protocol.
+// KeyPolicySet replaces a key's access policy (0xCD/0x04).
 func (q *QUICAdapter) KeyPolicySet(ctx context.Context, keyID string, opts KeyPolicySetOptions) (*KeyPolicySetResult, error) {
-	req := &keyPolicySetRequest{
-		KeyID:            keyID,
-		Operations:       opts.Operations,
-		AllowPrincipals:  opts.AllowPrincipals,
-		DenyPrincipals:   opts.DenyPrincipals,
-		ExpiresIn:        opts.ExpiresIn,
-		RotationRequired: opts.RotationRequired,
-		MaxUsageCount:    opts.MaxUsageCount,
-		RequireMFA:       opts.RequireMFA,
+	var expiresAt int64
+	if opts.ExpiresIn != "" {
+		ttl, err := time.ParseDuration(opts.ExpiresIn)
+		if err != nil {
+			return nil, ErrQUICUnsupportedValue{Kind: "policy expiry", Value: opts.ExpiresIn}
+		}
+		expiresAt = time.Now().Add(ttl).Unix()
 	}
 
-	resp, err := q.sendRequest(ctx, OpQUICKMSKeyPolicySet, req)
-	if err != nil {
+	req := &daemonpkg.KMSSetKeyPolicyRequest{
+		KeyID: keyID,
+		Policy: &daemonpkg.KMSKeyPolicyPayload{
+			KeyID:             keyID,
+			AllowedOperations: opts.Operations,
+			AllowedPrincipals: opts.AllowPrincipals,
+			DeniedPrincipals:  opts.DenyPrincipals,
+			ExpiresAt:         expiresAt,
+			RotationRequired:  opts.RotationRequired,
+			MaxUsageCount:     opts.MaxUsageCount,
+			RequireMFA:        opts.RequireMFA,
+		},
+	}
+
+	var resp daemonpkg.KMSSetKeyPolicyResponse
+	if err := q.extended(ctx, "KeyPolicySet", quicwire.KMSSubSetKeyPolicy, req, &resp); err != nil {
 		return nil, err
-	}
-
-	var result keyPolicySetResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "KeyPolicySet", Err: err}
 	}
 
 	return &KeyPolicySetResult{
-		KeyID:         result.KeyID,
-		PolicyVersion: result.PolicyVersion,
-		UpdatedAt:     time.Unix(result.UpdatedAt, 0),
+		KeyID:         resp.KeyID,
+		PolicyVersion: int32(resp.PolicyVersion),
+		UpdatedAt:     quicTime(resp.Timestamp),
 	}, nil
 }
 
-// KeyAlgorithms returns supported key algorithms via QUIC protocol.
+// KeyAlgorithms lists the backend's supported algorithms (0xCD/0x06).
 func (q *QUICAdapter) KeyAlgorithms(ctx context.Context) (*KeyAlgorithmsResult, error) {
-	resp, err := q.sendRequest(ctx, OpQUICKMSKeyAlgorithms, nil)
-	if err != nil {
+	var resp daemonpkg.KMSGetSupportedAlgorithmsResponse
+	if err := q.extended(ctx, "KeyAlgorithms", quicwire.KMSSubGetSupportedAlgorithms, struct{}{}, &resp); err != nil {
 		return nil, err
 	}
-
-	var result keyAlgorithmsResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "KeyAlgorithms", Err: err}
-	}
-
-	return &KeyAlgorithmsResult{
-		Algorithms: result.Algorithms,
-	}, nil
+	return &KeyAlgorithmsResult{Algorithms: resp.Algorithms}, nil
 }
 
 // =============================================================================
-// KMSCommands Interface Implementation - Crypto Operations
+// Crypto Commands
 // =============================================================================
 
-// CryptoEncrypt encrypts data via QUIC protocol.
+// CryptoEncrypt encrypts plaintext (0xD0).
 func (q *QUICAdapter) CryptoEncrypt(ctx context.Context, opts CryptoEncryptOptions) (*CryptoEncryptResult, error) {
-	req := &cryptoEncryptRequest{
-		KeyID:     opts.KeyID,
+	req := &daemonpkg.KMSEncryptRequest{
+		KeyId:     opts.KeyID,
 		Plaintext: opts.Plaintext,
 		Context:   opts.Context,
 		Nonce:     opts.Nonce,
 	}
 
-	resp, err := q.sendRequest(ctx, OpQUICCryptoEncrypt, req)
-	if err != nil {
+	var resp daemonpkg.KMSEncryptResponse
+	if err := q.call(ctx, "CryptoEncrypt", quicwire.OpKMSEncrypt, req, &resp); err != nil {
 		return nil, err
 	}
 
-	var result cryptoEncryptResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "CryptoEncrypt", Err: err}
-	}
-
 	return &CryptoEncryptResult{
-		KeyID:      result.KeyID,
-		KeyVersion: result.KeyVersion,
-		Ciphertext: result.Ciphertext,
-		Nonce:      result.Nonce,
-		Timestamp:  time.Unix(result.Timestamp, 0),
+		KeyID:      resp.KeyId,
+		KeyVersion: resp.KeyVersion,
+		Ciphertext: resp.Ciphertext,
+		Nonce:      resp.Nonce,
+		Timestamp:  quicTime(resp.Timestamp),
 	}, nil
 }
 
-// CryptoDecrypt decrypts data via QUIC protocol.
+// CryptoDecrypt decrypts ciphertext (0xD1).
 func (q *QUICAdapter) CryptoDecrypt(ctx context.Context, opts CryptoDecryptOptions) (*CryptoDecryptResult, error) {
-	req := &cryptoDecryptRequest{
-		KeyID:      opts.KeyID,
+	req := &daemonpkg.KMSDecryptRequest{
+		KeyId:      opts.KeyID,
 		Ciphertext: opts.Ciphertext,
 		Context:    opts.Context,
 		Nonce:      opts.Nonce,
 		KeyVersion: opts.KeyVersion,
 	}
 
-	resp, err := q.sendRequest(ctx, OpQUICCryptoDecrypt, req)
-	if err != nil {
+	var resp daemonpkg.KMSDecryptResponse
+	if err := q.call(ctx, "CryptoDecrypt", quicwire.OpKMSDecrypt, req, &resp); err != nil {
 		return nil, err
-	}
-
-	var result cryptoDecryptResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "CryptoDecrypt", Err: err}
 	}
 
 	return &CryptoDecryptResult{
-		KeyID:      result.KeyID,
-		KeyVersion: result.KeyVersion,
-		Plaintext:  result.Plaintext,
-		Timestamp:  time.Unix(result.Timestamp, 0),
+		KeyID:      resp.KeyId,
+		KeyVersion: resp.KeyVersion,
+		Plaintext:  resp.Plaintext,
+		Timestamp:  quicTime(resp.Timestamp),
 	}, nil
 }
 
-// CryptoSign signs data via QUIC protocol.
+// CryptoSign signs a message (0xD2).
 func (q *QUICAdapter) CryptoSign(ctx context.Context, opts CryptoSignOptions) (*CryptoSignResult, error) {
-	req := &cryptoSignRequest{
-		KeyID:         opts.KeyID,
-		Message:       opts.Message,
-		HashAlgorithm: opts.HashAlgorithm,
-	}
-
-	resp, err := q.sendRequest(ctx, OpQUICCryptoSign, req)
+	hash, err := quicHash(opts.HashAlgorithm)
 	if err != nil {
 		return nil, err
 	}
+	req := &daemonpkg.KMSSignRequest{KeyId: opts.KeyID, Message: opts.Message, HashAlgorithm: hash}
 
-	var result cryptoSignResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "CryptoSign", Err: err}
+	var resp daemonpkg.KMSSignResponse
+	if err := q.call(ctx, "CryptoSign", quicwire.OpKMSSign, req, &resp); err != nil {
+		return nil, err
 	}
 
 	return &CryptoSignResult{
-		KeyID:         result.KeyID,
-		KeyVersion:    result.KeyVersion,
-		Signature:     result.Signature,
-		HashAlgorithm: result.HashAlgorithm,
-		Timestamp:     time.Unix(result.Timestamp, 0),
+		KeyID:         resp.KeyId,
+		KeyVersion:    resp.KeyVersion,
+		Signature:     resp.Signature,
+		HashAlgorithm: quicHashName(resp.HashAlgorithm),
+		Timestamp:     quicTime(resp.Timestamp),
 	}, nil
 }
 
-// CryptoVerify verifies a signature via QUIC protocol.
+// CryptoVerify verifies a signature (0xD3).
 func (q *QUICAdapter) CryptoVerify(ctx context.Context, opts CryptoVerifyOptions) (*CryptoVerifyResult, error) {
-	req := &cryptoVerifyRequest{
-		KeyID:         opts.KeyID,
-		Message:       opts.Message,
-		Signature:     opts.Signature,
-		HashAlgorithm: opts.HashAlgorithm,
-		KeyVersion:    opts.KeyVersion,
-	}
-
-	resp, err := q.sendRequest(ctx, OpQUICCryptoVerify, req)
+	hash, err := quicHash(opts.HashAlgorithm)
 	if err != nil {
 		return nil, err
 	}
+	req := &daemonpkg.KMSVerifyRequest{
+		KeyId:         opts.KeyID,
+		Message:       opts.Message,
+		Signature:     opts.Signature,
+		HashAlgorithm: hash,
+		KeyVersion:    opts.KeyVersion,
+	}
 
-	var result cryptoVerifyResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "CryptoVerify", Err: err}
+	var resp daemonpkg.KMSVerifyResponse
+	if err := q.call(ctx, "CryptoVerify", quicwire.OpKMSVerify, req, &resp); err != nil {
+		return nil, err
 	}
 
 	return &CryptoVerifyResult{
-		KeyID:      result.KeyID,
-		KeyVersion: result.KeyVersion,
-		Valid:      result.Valid,
-		Timestamp:  time.Unix(result.Timestamp, 0),
+		KeyID:      resp.KeyId,
+		KeyVersion: resp.KeyVersion,
+		Valid:      resp.Valid,
+		Timestamp:  quicTime(resp.Timestamp),
 	}, nil
 }
 
-// CryptoHash computes a hash via QUIC protocol.
+// CryptoHash hashes data (0xD5).
 func (q *QUICAdapter) CryptoHash(ctx context.Context, data []byte, algorithm string) (*CryptoHashResult, error) {
-	req := &cryptoHashRequest{
-		Data:      data,
-		Algorithm: algorithm,
-	}
-
-	resp, err := q.sendRequest(ctx, OpQUICCryptoHash, req)
+	hash, err := quicHash(algorithm)
 	if err != nil {
 		return nil, err
 	}
+	req := &daemonpkg.KMSHashRequest{Data: data, Algorithm: hash}
 
-	var result cryptoHashResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "CryptoHash", Err: err}
+	var resp daemonpkg.KMSHashResponse
+	if err := q.call(ctx, "CryptoHash", quicwire.OpKMSHash, req, &resp); err != nil {
+		return nil, err
 	}
 
 	return &CryptoHashResult{
-		Algorithm: result.Algorithm,
-		Hash:      result.Hash,
-		Timestamp: time.Unix(result.Timestamp, 0),
+		Algorithm: quicHashName(resp.Algorithm),
+		Hash:      resp.Hash,
+		Timestamp: quicTime(resp.Timestamp),
 	}, nil
 }
 
-// CryptoHMAC generates an HMAC via QUIC protocol.
+// CryptoHMAC computes an HMAC (0xD6).
 func (q *QUICAdapter) CryptoHMAC(ctx context.Context, opts CryptoHMACOptions) (*CryptoHMACResult, error) {
-	req := &cryptoHMACRequest{
-		KeyID:         opts.KeyID,
-		Message:       opts.Message,
-		HashAlgorithm: opts.HashAlgorithm,
-	}
-
-	resp, err := q.sendRequest(ctx, OpQUICCryptoHMAC, req)
+	hash, err := quicHash(opts.HashAlgorithm)
 	if err != nil {
 		return nil, err
 	}
+	req := &daemonpkg.KMSHMACRequest{KeyId: opts.KeyID, Message: opts.Message, HashAlgorithm: hash}
 
-	var result cryptoHMACResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "CryptoHMAC", Err: err}
+	var resp daemonpkg.KMSHMACResponse
+	if err := q.call(ctx, "CryptoHMAC", quicwire.OpKMSHMAC, req, &resp); err != nil {
+		return nil, err
 	}
 
 	return &CryptoHMACResult{
-		KeyID:         result.KeyID,
-		KeyVersion:    result.KeyVersion,
-		HMAC:          result.HMAC,
-		HashAlgorithm: result.HashAlgorithm,
-		Timestamp:     time.Unix(result.Timestamp, 0),
+		KeyID:         resp.KeyId,
+		KeyVersion:    resp.KeyVersion,
+		HMAC:          resp.Hmac,
+		HashAlgorithm: quicHashName(resp.HashAlgorithm),
+		Timestamp:     quicTime(resp.Timestamp),
 	}, nil
 }
 
-// CryptoVerifyHMAC verifies an HMAC via QUIC protocol.
+// CryptoVerifyHMAC verifies an HMAC (0xD7).
 func (q *QUICAdapter) CryptoVerifyHMAC(ctx context.Context, opts CryptoVerifyHMACOptions) (*CryptoVerifyHMACResult, error) {
-	req := &cryptoVerifyHMACRequest{
-		KeyID:         opts.KeyID,
+	hash, err := quicHash(opts.HashAlgorithm)
+	if err != nil {
+		return nil, err
+	}
+	req := &daemonpkg.KMSVerifyHMACRequest{
+		KeyId:         opts.KeyID,
 		Message:       opts.Message,
-		HMAC:          opts.HMAC,
-		HashAlgorithm: opts.HashAlgorithm,
+		Hmac:          opts.HMAC,
+		HashAlgorithm: hash,
 		KeyVersion:    opts.KeyVersion,
 	}
 
-	resp, err := q.sendRequest(ctx, OpQUICCryptoVerifyHMAC, req)
-	if err != nil {
+	var resp daemonpkg.KMSVerifyHMACResponse
+	if err := q.call(ctx, "CryptoVerifyHMAC", quicwire.OpKMSVerifyHMAC, req, &resp); err != nil {
 		return nil, err
-	}
-
-	var result cryptoVerifyHMACResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "CryptoVerifyHMAC", Err: err}
 	}
 
 	return &CryptoVerifyHMACResult{
-		KeyID:      result.KeyID,
-		KeyVersion: result.KeyVersion,
-		Valid:      result.Valid,
-		Timestamp:  time.Unix(result.Timestamp, 0),
+		KeyID:      resp.KeyId,
+		KeyVersion: resp.KeyVersion,
+		Valid:      resp.Valid,
+		Timestamp:  quicTime(resp.Timestamp),
 	}, nil
 }
 
-// CryptoRandom generates random bytes via QUIC protocol.
+// CryptoRandom generates random bytes (0xD4).
 func (q *QUICAdapter) CryptoRandom(ctx context.Context, numBytes int) (*CryptoRandomResult, error) {
-	req := &cryptoRandomRequest{
-		NumBytes: int32(numBytes),
-	}
+	req := &daemonpkg.KMSGenerateRandomRequest{NumBytes: int32(numBytes)}
 
-	resp, err := q.sendRequest(ctx, OpQUICCryptoRandom, req)
-	if err != nil {
+	var resp daemonpkg.KMSGenerateRandomResponse
+	if err := q.call(ctx, "CryptoRandom", quicwire.OpKMSGenerateRandom, req, &resp); err != nil {
 		return nil, err
 	}
 
-	var result cryptoRandomResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "CryptoRandom", Err: err}
-	}
-
-	return &CryptoRandomResult{
-		RandomBytes: result.RandomBytes,
-		Timestamp:   time.Unix(result.Timestamp, 0),
-	}, nil
+	return &CryptoRandomResult{RandomBytes: resp.RandomBytes, Timestamp: quicTime(resp.Timestamp)}, nil
 }
 
 // =============================================================================
-// KMSCommands Interface Implementation - DEK Operations
+// DEK Commands — no QUIC surface
 // =============================================================================
 
-// DEKCreate creates a DEK via QUIC protocol.
-func (q *QUICAdapter) DEKCreate(ctx context.Context, opts DEKCreateOptions) (*DEKCreateResult, error) {
-	req := &dekCreateRequest{
-		Path:           opts.Path,
-		Algorithm:      opts.Algorithm,
-		Description:    opts.Description,
-		MaxOperations:  opts.MaxOperations,
-		MaxBytes:       opts.MaxBytes,
-		WarningPercent: opts.WarningPercent,
-	}
-
-	resp, err := q.sendRequest(ctx, OpQUICKMSDEKCreate, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var result dekCreateResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "DEKCreate", Err: err}
-	}
-
-	return &DEKCreateResult{
-		Path:        result.Path,
-		Algorithm:   result.Algorithm,
-		Version:     result.Version,
-		CreatedAt:   time.Unix(result.CreatedAt, 0),
-		Description: result.Description,
-	}, nil
+// DEKCreate has no QUIC surface.
+func (q *QUICAdapter) DEKCreate(_ context.Context, _ DEKCreateOptions) (*DEKCreateResult, error) {
+	return nil, quicNoSurface("DEKCreate", quicNoDEKOpcode)
 }
 
-// DEKGet retrieves a DEK via QUIC protocol.
-func (q *QUICAdapter) DEKGet(ctx context.Context, path string) (*DEKGetResult, error) {
-	req := &dekGetRequest{
-		Path: path,
-	}
-
-	resp, err := q.sendRequest(ctx, OpQUICKMSDEKGet, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var result dekGetResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "DEKGet", Err: err}
-	}
-
-	return &DEKGetResult{
-		Path:           result.Path,
-		Algorithm:      result.Algorithm,
-		Version:        result.Version,
-		Status:         result.Status,
-		IsDefault:      result.IsDefault,
-		CreatedAt:      time.Unix(result.CreatedAt, 0),
-		RotatedAt:      time.Unix(result.RotatedAt, 0),
-		Description:    result.Description,
-		BackendType:    result.BackendType,
-		UsageCount:     result.UsageCount,
-		BytesUsed:      result.BytesUsed,
-		MaxUsageCount:  result.MaxUsageCount,
-		MaxBytesUsed:   result.MaxBytesUsed,
-		WarningPercent: result.WarningPercent,
-	}, nil
+// DEKGet has no QUIC surface.
+func (q *QUICAdapter) DEKGet(_ context.Context, _ string) (*DEKGetResult, error) {
+	return nil, quicNoSurface("DEKGet", quicNoDEKOpcode)
 }
 
-// DEKList lists DEKs via QUIC protocol.
-func (q *QUICAdapter) DEKList(ctx context.Context, opts DEKListOptions) (*DEKListResult, error) {
-	req := &dekListRequest{
-		Prefix:    opts.Prefix,
-		Recursive: opts.Recursive,
-		Limit:     opts.Limit,
-		Cursor:    opts.Cursor,
-	}
-
-	resp, err := q.sendRequest(ctx, OpQUICKMSDEKList, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var result dekListResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "DEKList", Err: err}
-	}
-
-	deks := make([]DEKSummary, len(result.DEKs))
-	for i, d := range result.DEKs {
-		deks[i] = DEKSummary{
-			Path:      d.Path,
-			Algorithm: d.Algorithm,
-			Version:   d.Version,
-			Status:    d.Status,
-			IsDefault: d.IsDefault,
-			CreatedAt: time.Unix(d.CreatedAt, 0),
-		}
-	}
-
-	return &DEKListResult{
-		DEKs:       deks,
-		HasMore:    result.HasMore,
-		NextCursor: result.NextCursor,
-	}, nil
+// DEKList has no QUIC surface.
+func (q *QUICAdapter) DEKList(_ context.Context, _ DEKListOptions) (*DEKListResult, error) {
+	return nil, quicNoSurface("DEKList", quicNoDEKOpcode)
 }
 
-// DEKDelete deletes a DEK via QUIC protocol.
-func (q *QUICAdapter) DEKDelete(ctx context.Context, path string, opts DEKDeleteOptions) (*DEKDeleteResult, error) {
-	req := &dekDeleteRequest{
-		Path:      path,
-		Force:     opts.Force,
-		MigrateTo: opts.MigrateTo,
-	}
-
-	resp, err := q.sendRequest(ctx, OpQUICKMSDEKDelete, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var result dekDeleteResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "DEKDelete", Err: err}
-	}
-
-	return &DEKDeleteResult{
-		Path:    result.Path,
-		Deleted: result.Deleted,
-	}, nil
+// DEKDelete has no QUIC surface.
+func (q *QUICAdapter) DEKDelete(_ context.Context, _ string, _ DEKDeleteOptions) (*DEKDeleteResult, error) {
+	return nil, quicNoSurface("DEKDelete", quicNoDEKOpcode)
 }
 
-// DEKRotate rotates a DEK via QUIC protocol.
-func (q *QUICAdapter) DEKRotate(ctx context.Context, path string, background bool) (*DEKRotateResult, error) {
-	req := &dekRotateRequest{
-		Path:       path,
-		Background: background,
-	}
-
-	resp, err := q.sendRequest(ctx, OpQUICKMSDEKRotate, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var result dekRotateResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "DEKRotate", Err: err}
-	}
-
-	return &DEKRotateResult{
-		Path:       result.Path,
-		OldVersion: result.OldVersion,
-		NewVersion: result.NewVersion,
-	}, nil
+// DEKRotate has no QUIC surface.
+func (q *QUICAdapter) DEKRotate(_ context.Context, _ string, _ bool) (*DEKRotateResult, error) {
+	return nil, quicNoSurface("DEKRotate", quicNoDEKOpcode)
 }
 
-// DEKStatus retrieves DEK status via QUIC protocol.
-func (q *QUICAdapter) DEKStatus(ctx context.Context, path string) (*DEKStatusResult, error) {
-	req := &dekStatusRequest{
-		Path: path,
-	}
-
-	resp, err := q.sendRequest(ctx, OpQUICKMSDEKStatus, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var result dekStatusResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "DEKStatus", Err: err}
-	}
-
-	return &DEKStatusResult{
-		Path:                   result.Path,
-		Algorithm:              result.Algorithm,
-		Version:                result.Version,
-		Status:                 result.Status,
-		IsDefault:              result.IsDefault,
-		CreatedAt:              time.Unix(result.CreatedAt, 0),
-		RotatedAt:              time.Unix(result.RotatedAt, 0),
-		Description:            result.Description,
-		BackendType:            result.BackendType,
-		UsageCount:             result.UsageCount,
-		BytesUsed:              result.BytesUsed,
-		MaxUsageCount:          result.MaxUsageCount,
-		MaxBytesUsed:           result.MaxBytesUsed,
-		WarningPercent:         result.WarningPercent,
-		ReencryptionInProgress: result.ReencryptionInProgress,
-		ProcessedKeys:          result.ProcessedKeys,
-		TotalKeys:              result.TotalKeys,
-		FailedKeys:             result.FailedKeys,
-		ReencryptionStartedAt:  time.Unix(result.ReencryptionStartedAt, 0),
-		EstimatedCompletion:    time.Unix(result.EstimatedCompletion, 0),
-	}, nil
+// DEKStatus has no QUIC surface.
+func (q *QUICAdapter) DEKStatus(_ context.Context, _ string) (*DEKStatusResult, error) {
+	return nil, quicNoSurface("DEKStatus", quicNoDEKOpcode)
 }
 
 // =============================================================================
-// KMSCommands Interface Implementation - Secrets Operations
+// Secrets Commands
 // =============================================================================
 
-// SecretsStore stores a secret via QUIC protocol.
+// SecretsStore stores a secret (0xCE/0x01).
 func (q *QUICAdapter) SecretsStore(ctx context.Context, opts SecretsStoreOptions) (*SecretsStoreResult, error) {
-	req := &secretsStoreRequest{
-		Name:        opts.Name,
-		Data:        opts.Data,
-		Description: opts.Description,
-		TenantID:    opts.TenantID,
-		KeyID:       opts.KeyID,
-		Algorithm:   opts.Algorithm,
+	var metadata map[string]string
+	if opts.Description != "" {
+		metadata = map[string]string{"description": opts.Description}
 	}
+	req := &daemonpkg.SecretsStoreRequest{SecretID: opts.Name, Data: opts.Data, Metadata: metadata}
 
-	resp, err := q.sendRequest(ctx, OpQUICSecretsStore, req)
-	if err != nil {
+	var resp daemonpkg.SecretsStoreResponse
+	if err := q.secrets(ctx, "SecretsStore", quicwire.SecretsSubStore, req, &resp); err != nil {
 		return nil, err
 	}
 
-	var result secretsStoreResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "SecretsStore", Err: err}
-	}
-
-	return &SecretsStoreResult{
-		SecretID:  result.SecretID,
-		Version:   result.Version,
-		Timestamp: time.Unix(result.Timestamp, 0),
-	}, nil
+	return &SecretsStoreResult{SecretID: resp.SecretID, Version: resp.Version, Timestamp: quicTime(resp.Timestamp)}, nil
 }
 
-// SecretsGet retrieves a secret via QUIC protocol.
+// SecretsGet retrieves the current version of a secret (0xCE/0x02).
 func (q *QUICAdapter) SecretsGet(ctx context.Context, name string) (*SecretsGetResult, error) {
-	req := &secretsGetRequest{
-		Name: name,
-	}
+	req := &daemonpkg.SecretsGetRequest{SecretID: name}
 
-	resp, err := q.sendRequest(ctx, OpQUICSecretsGet, req)
-	if err != nil {
+	var resp daemonpkg.SecretsGetResponse
+	if err := q.secrets(ctx, "SecretsGet", quicwire.SecretsSubGet, req, &resp); err != nil {
 		return nil, err
-	}
-
-	var result secretsGetResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "SecretsGet", Err: err}
 	}
 
 	return &SecretsGetResult{
-		SecretID:      result.SecretID,
-		Version:       result.Version,
-		Data:          result.Data,
-		Metadata:      result.Metadata,
-		Algorithm:     result.Algorithm,
-		KeyIdentifier: result.KeyIdentifier,
-		CreatedAt:     time.Unix(result.CreatedAt, 0),
-		Timestamp:     time.Unix(result.Timestamp, 0),
+		SecretID:  resp.SecretID,
+		Version:   resp.Version,
+		Data:      resp.Data,
+		Metadata:  resp.Metadata,
+		Timestamp: quicTime(resp.Timestamp),
 	}, nil
 }
 
-// SecretsList lists secrets via QUIC protocol.
+// SecretsList lists secret identifiers (0xCE/0x03).
 func (q *QUICAdapter) SecretsList(ctx context.Context, opts SecretsListOptions) (*SecretsListResult, error) {
-	req := &secretsListRequest{
-		Limit:  opts.Limit,
-		Cursor: opts.Cursor,
-	}
+	req := &daemonpkg.SecretsListRequest{Limit: opts.Limit, Cursor: opts.Cursor}
 
-	resp, err := q.sendRequest(ctx, OpQUICSecretsList, req)
-	if err != nil {
+	var resp daemonpkg.SecretsListResponse
+	if err := q.secrets(ctx, "SecretsList", quicwire.SecretsSubList, req, &resp); err != nil {
 		return nil, err
 	}
 
-	var result secretsListResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "SecretsList", Err: err}
+	secrets := make([]SecretSummary, 0, len(resp.SecretIDs))
+	for _, id := range resp.SecretIDs {
+		secrets = append(secrets, SecretSummary{Name: id})
 	}
 
-	secrets := make([]SecretSummary, len(result.Secrets))
-	for i, s := range result.Secrets {
-		secrets[i] = SecretSummary{
-			Name:           s.Name,
-			CurrentVersion: s.CurrentVersion,
-			Description:    s.Description,
-			Owner:          s.Owner,
-			CreatedAt:      time.Unix(s.CreatedAt, 0),
-			UpdatedAt:      time.Unix(s.UpdatedAt, 0),
-		}
-	}
-
-	return &SecretsListResult{
-		Secrets:    secrets,
-		TotalCount: result.TotalCount,
-		HasMore:    result.HasMore,
-		NextCursor: result.NextCursor,
-	}, nil
+	return &SecretsListResult{Secrets: secrets, TotalCount: int32(len(secrets))}, nil
 }
 
-// SecretsDelete deletes a secret via QUIC protocol.
-func (q *QUICAdapter) SecretsDelete(ctx context.Context, name string, permanent bool) (*SecretsDeleteResult, error) {
-	req := &secretsDeleteRequest{
-		Name:      name,
-		Permanent: permanent,
-	}
+// SecretsDelete deletes a secret (0xCE/0x04). The wire delete is permanent.
+func (q *QUICAdapter) SecretsDelete(ctx context.Context, name string, _ bool) (*SecretsDeleteResult, error) {
+	req := &daemonpkg.SecretsDeleteRequest{SecretID: name}
 
-	resp, err := q.sendRequest(ctx, OpQUICSecretsDelete, req)
-	if err != nil {
+	var resp daemonpkg.SecretsDeleteResponse
+	if err := q.secrets(ctx, "SecretsDelete", quicwire.SecretsSubDelete, req, &resp); err != nil {
 		return nil, err
 	}
 
-	var result secretsDeleteResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "SecretsDelete", Err: err}
-	}
-
-	return &SecretsDeleteResult{
-		SecretID:  result.SecretID,
-		Deleted:   result.Deleted,
-		Timestamp: time.Unix(result.Timestamp, 0),
-	}, nil
+	return &SecretsDeleteResult{SecretID: resp.SecretID, Deleted: resp.Deleted, Timestamp: quicTime(resp.Timestamp)}, nil
 }
 
-// SecretsRotate rotates a secret via QUIC protocol.
-func (q *QUICAdapter) SecretsRotate(ctx context.Context, opts SecretsRotateOptions) (*SecretsRotateResult, error) {
-	req := &secretsRotateRequest{
-		Name:      opts.Name,
-		NewData:   opts.NewData,
-		TenantID:  opts.TenantID,
-		KeyID:     opts.KeyID,
-		Algorithm: opts.Algorithm,
-	}
-
-	resp, err := q.sendRequest(ctx, OpQUICSecretsRotate, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var result secretsRotateResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "SecretsRotate", Err: err}
-	}
-
-	return &SecretsRotateResult{
-		SecretID:   result.SecretID,
-		OldVersion: result.OldVersion,
-		NewVersion: result.NewVersion,
-		Timestamp:  time.Unix(result.Timestamp, 0),
-	}, nil
+// SecretsRotate has no QUIC surface.
+func (q *QUICAdapter) SecretsRotate(_ context.Context, _ SecretsRotateOptions) (*SecretsRotateResult, error) {
+	return nil, quicNoSurface("SecretsRotate", quicNoSecretVersionSub)
 }
 
-// SecretsVersions lists secret versions via QUIC protocol.
-func (q *QUICAdapter) SecretsVersions(ctx context.Context, name string, opts SecretsVersionsOptions) (*SecretsVersionsResult, error) {
-	req := &secretsVersionsRequest{
-		Name:   name,
-		Limit:  opts.Limit,
-		Cursor: opts.Cursor,
-	}
-
-	resp, err := q.sendRequest(ctx, OpQUICSecretsListVersions, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var result secretsVersionsResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "SecretsVersions", Err: err}
-	}
-
-	versions := make([]SecretVersionInfo, len(result.Versions))
-	for i, v := range result.Versions {
-		versions[i] = SecretVersionInfo{
-			Version:   v.Version,
-			CreatedAt: time.Unix(v.CreatedAt, 0),
-			CreatedBy: v.CreatedBy,
-			ExpiresAt: time.Unix(v.ExpiresAt, 0),
-		}
-	}
-
-	return &SecretsVersionsResult{
-		SecretID:   result.SecretID,
-		Versions:   versions,
-		HasMore:    result.HasMore,
-		NextCursor: result.NextCursor,
-	}, nil
+// SecretsVersions has no QUIC surface.
+func (q *QUICAdapter) SecretsVersions(_ context.Context, _ string, _ SecretsVersionsOptions) (*SecretsVersionsResult, error) {
+	return nil, quicNoSurface("SecretsVersions", quicNoSecretVersionSub)
 }
 
-// SecretsVersion retrieves a specific secret version via QUIC protocol.
-func (q *QUICAdapter) SecretsVersion(ctx context.Context, name string, version uint64) (*SecretsVersionResult, error) {
-	req := &secretsVersionRequest{
-		Name:    name,
-		Version: version,
-	}
-
-	// Use SecretsGet with version parameter - in practice this might need a separate opcode
-	// For now we use the same get endpoint and rely on the request containing version
-	resp, err := q.sendRequest(ctx, OpQUICSecretsGet, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var result secretsVersionResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "SecretsVersion", Err: err}
-	}
-
-	return &SecretsVersionResult{
-		SecretID:  result.SecretID,
-		Version:   result.Version,
-		Data:      result.Data,
-		Metadata:  result.Metadata,
-		CreatedAt: time.Unix(result.CreatedAt, 0),
-		CreatedBy: result.CreatedBy,
-		ExpiresAt: time.Unix(result.ExpiresAt, 0),
-		Timestamp: time.Unix(result.Timestamp, 0),
-	}, nil
+// SecretsVersion has no QUIC surface.
+func (q *QUICAdapter) SecretsVersion(_ context.Context, _ string, _ uint64) (*SecretsVersionResult, error) {
+	return nil, quicNoSurface("SecretsVersion", quicNoSecretVersionSub)
 }
 
-// SecretsRollback rolls back a secret to a previous version via QUIC protocol.
-func (q *QUICAdapter) SecretsRollback(ctx context.Context, name string, targetVersion uint64) (*SecretsRollbackResult, error) {
-	req := &secretsRollbackRequest{
-		Name:          name,
-		TargetVersion: targetVersion,
-	}
-
-	resp, err := q.sendRequest(ctx, OpQUICSecretsRollback, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var result secretsRollbackResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "SecretsRollback", Err: err}
-	}
-
-	return &SecretsRollbackResult{
-		SecretID:   result.SecretID,
-		NewVersion: result.NewVersion,
-		Timestamp:  time.Unix(result.Timestamp, 0),
-	}, nil
+// SecretsRollback has no QUIC surface.
+func (q *QUICAdapter) SecretsRollback(_ context.Context, _ string, _ uint64) (*SecretsRollbackResult, error) {
+	return nil, quicNoSurface("SecretsRollback", quicNoSecretVersionSub)
 }
 
-// SecretsStatus updates secret status via QUIC protocol.
-func (q *QUICAdapter) SecretsStatus(ctx context.Context, name string, enabled bool) (*SecretsStatusResult, error) {
-	req := &secretsStatusRequest{
-		Name:    name,
-		Enabled: enabled,
-	}
-
-	resp, err := q.sendRequest(ctx, OpQUICSecretsStatus, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var result secretsStatusResponse
-	if err := decodePayload(resp.Payload, &result); err != nil {
-		return nil, ErrQUICDecodeFailed{Operation: "SecretsStatus", Err: err}
-	}
-
-	return &SecretsStatusResult{
-		SecretID:  result.SecretID,
-		Status:    result.Status,
-		Timestamp: time.Unix(result.Timestamp, 0),
-	}, nil
+// SecretsStatus has no QUIC surface.
+func (q *QUICAdapter) SecretsStatus(_ context.Context, _ string, _ bool) (*SecretsStatusResult, error) {
+	return nil, quicNoSurface("SecretsStatus", quicNoSecretVersionSub)
 }
 
-// =============================================================================
-// Compile-time Interface Verification
-// =============================================================================
-
-// Ensure QUICAdapter implements KMSCommands interface.
+// Compile-time check that QUICAdapter implements KMSCommands.
 var _ KMSCommands = (*QUICAdapter)(nil)

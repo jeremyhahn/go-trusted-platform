@@ -1014,6 +1014,32 @@ func TestService_PublicDomain(t *testing.T) {
 	assert.Equal(t, "example.com.", domain)
 }
 
+// TestService_DomainsWithoutServers verifies an unconfigured internal or
+// public server reports an empty domain instead of dereferencing nil (#949:
+// the QUIC GetConfig handler panicked on an internal-only daemon).
+func TestService_DomainsWithoutServers(t *testing.T) {
+	svc := &Service{params: &Params{Config: &Config{}}}
+
+	assert.Empty(t, svc.InternalDomain())
+	assert.Empty(t, svc.PublicDomain())
+}
+
+// TestService_ZonesWithoutServers verifies the zone getters return the typed
+// not-configured error for an undefined server.
+func TestService_ZonesWithoutServers(t *testing.T) {
+	svc := &Service{params: &Params{Config: &Config{}}}
+
+	_, err := svc.InternalZone(context.Background())
+	var notConfigured ErrDNSServerNotConfigured
+	require.ErrorAs(t, err, &notConfigured)
+	assert.Equal(t, "internal", notConfigured.Server)
+
+	_, err = svc.PublicZone(context.Background())
+	require.ErrorAs(t, err, &notConfigured)
+	assert.Equal(t, "public", notConfigured.Server)
+	assert.Equal(t, "dns: public server is not configured", err.Error())
+}
+
 // TestService_InternalZone verifies internal zone retrieval.
 func TestService_InternalZone(t *testing.T) {
 	mockDAO := mocks.NewMockZoneDAO()

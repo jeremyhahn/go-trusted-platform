@@ -116,6 +116,7 @@ type mockCAForDaemon struct {
 	revokedCerts  []*x509.Certificate
 	generateCRL   bool
 	privateKey    *ecdsa.PrivateKey
+	keyStore      *renewKeyStore
 }
 
 func newMockCAForDaemon() *mockCAForDaemon {
@@ -135,8 +136,11 @@ func newMockCAForDaemon() *mockCAForDaemon {
 		revokedCerts:  make([]*x509.Certificate, 0),
 		generateCRL:   true,
 		privateKey:    privateKey,
+		keyStore:      &renewKeyStore{hasKey: true},
 	}
 }
+
+func (m *mockCAForDaemon) KeyStore() xkmssdk.ServiceBackend { return m.keyStore }
 
 func (m *mockCAForDaemon) Public() crypto.PublicKey { return &m.privateKey.PublicKey }
 func (m *mockCAForDaemon) Sign(r io.Reader, digest []byte, _ crypto.SignerOpts) ([]byte, error) {

@@ -21,6 +21,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 )
 
@@ -88,8 +89,6 @@ Overwrite:
 // runPush executes the push command. signingKeyID overrides the default
 // tenant signer when sign=true; overwrite=true replaces an existing tag.
 func runPush(flags *cli.CommonFlags, ref string, encrypt bool, keyID string, sign bool, signingKeyID string, overwrite bool, inputFile string) error {
-	_ = signingKeyID
-	_ = overwrite
 	if err := validateImageRef(ref); err != nil {
 		return err
 	}
@@ -136,7 +135,7 @@ func runPush(flags *cli.CommonFlags, ref string, encrypt bool, keyID string, sig
 	}
 
 	// Send metadata first using SDK helpers
-	metadata := regsvc.NewPushMetadata(repository, tag, fileSize)
+	metadata := pushMetadataOf(repository, tag, fileSize, encrypt, keyID, sign, signingKeyID, overwrite)
 	metadataReq := regsvc.NewPushMetadataRequest(metadata)
 	if err := stream.Send(metadataReq); err != nil {
 		return ErrPushFailed{Reference: ref, Err: err}
@@ -176,13 +175,19 @@ func runPush(flags *cli.CommonFlags, ref string, encrypt bool, keyID string, sig
 	}
 
 	// Build result from response
+	// Encrypted and Key ID come from the manifest the registry stored, so
+	// the result reports what the registry did, not what was asked.
+	stored := resp.GetArtifact().GetAnnotations()
 	result := &PushResult{
 		Reference: ref,
 		Digest:    resp.GetArtifact().GetDigest(),
 		Size:      resp.GetBytesReceived(),
-		Encrypted: encrypt,
-		KeyID:     keyID,
-		Signed:    sign,
+		Encrypted: stored[regsvc.ManifestAnnotationEncrypted] == "true",
+		KeyID:     stored[regsvc.ManifestAnnotationKeyID],
+		// The registry refuses a --sign push it cannot sign
+		// (ErrSigningNotConfigured), so a push that got here was signed
+		// exactly when it asked to be.
+		Signed: sign,
 	}
 
 	if resp.GetTimestamp() != nil {
@@ -212,4 +217,20 @@ func runPush(flags *cli.CommonFlags, ref string, encrypt bool, keyID string, sig
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
 	}
+}
+
+// pushMetadataOf builds the push metadata, carrying each push flag to the
+// registry as the annotation docs/registry/cli.md §3 names for it.
+func pushMetadataOf(repository, tag string, size int64, encrypt bool, keyID string, sign bool, signingKeyID string, overwrite bool) *platformv1.PushMetadata {
+	metadata := regsvc.NewPushMetadata(repository, tag, size)
+	if encrypt {
+		metadata = regsvc.WithEncryption(metadata, keyID)
+	}
+	if sign {
+		metadata = regsvc.WithSigning(metadata, signingKeyID)
+	}
+	if overwrite {
+		metadata = regsvc.WithOverwrite(metadata)
+	}
+	return metadata
 }

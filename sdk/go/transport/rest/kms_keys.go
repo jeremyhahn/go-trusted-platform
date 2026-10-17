@@ -73,6 +73,9 @@ func init() {
 // encodeKMSGenerateKey flattens the key spec onto the route's top-level
 // fields, with the algorithm and usages as names.
 func encodeKMSGenerateKey(req *platformv1.GenerateKeyRequest) (map[string]interface{}, error) {
+	if req.GetDisplayName() != "" {
+		return nil, ErrKeyDisplayNameNotSupported{KeyID: req.GetName()}
+	}
 	body := map[string]interface{}{"name": req.GetName()}
 	spec := req.GetKeySpec()
 	if alg := spec.GetAlgorithm(); alg != platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED {

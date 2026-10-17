@@ -36,7 +36,7 @@ func TestNewSecretsVersionsCommand(t *testing.T) {
 		t.Errorf("expected Use to be 'versions <name>', got %q", cmd.Use)
 	}
 
-	if cmd.Short != "List all versions of a secret (not yet implemented)" {
+	if cmd.Short != "List the versions of a secret" {
 		t.Errorf("unexpected Short description: %q", cmd.Short)
 	}
 }
@@ -91,9 +91,9 @@ func TestSecretsVersionsCommand_Flags(t *testing.T) {
 		t.Errorf("limit flag default: got %q, want %q", limitFlag.DefValue, "100")
 	}
 
-	cursorFlag := cmd.Flags().Lookup("cursor")
-	if cursorFlag == nil {
-		t.Error("--cursor flag not found")
+	// The SDK returns every version at once, so there is no cursor.
+	if cmd.Flags().Lookup("cursor") != nil {
+		t.Error("--cursor flag should not exist")
 	}
 }
 

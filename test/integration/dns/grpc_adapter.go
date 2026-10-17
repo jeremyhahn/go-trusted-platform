@@ -19,11 +19,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
 // =============================================================================
@@ -114,6 +116,9 @@ func (g *GRPCAdapter) CreateZone(ctx context.Context, opts CreateZoneOptions) (*
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "CreateZone", Err: err}
 	}
+	if resp.GetZone() == nil {
+		return nil, ErrZoneMissingFromReply{Method: "CreateZone"}
+	}
 
 	return &CreateZoneResult{
 		Name:      resp.Zone.Name,
@@ -133,6 +138,9 @@ func (g *GRPCAdapter) GetZone(ctx context.Context, zoneName string) (*GetZoneRes
 	resp, err := g.dns.GetZone(ctx, req)
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "GetZone", Err: err}
+	}
+	if resp.GetZone() == nil {
+		return nil, ErrZoneMissingFromReply{Method: "GetZone"}
 	}
 
 	result := &GetZoneResult{
@@ -172,6 +180,9 @@ func (g *GRPCAdapter) UpdateZone(ctx context.Context, zoneName string, opts Upda
 	resp, err := g.dns.UpdateZone(ctx, req)
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "UpdateZone", Err: err}
+	}
+	if resp.GetZone() == nil {
+		return nil, ErrZoneMissingFromReply{Method: "UpdateZone"}
 	}
 
 	return &UpdateZoneResult{
@@ -372,6 +383,16 @@ func (g *GRPCAdapter) ListRecords(ctx context.Context, zoneName string, opts Lis
 	if opts.RecordType != "" {
 		req.Type = recordTypeStringToProto(opts.RecordType)
 	}
+	if opts.Cursor != "" {
+		offset, err := strconv.ParseUint(opts.Cursor, 10, 32)
+		if err != nil {
+			return nil, ErrGRPCCallFailed{Method: "ListRecords: parse cursor " + opts.Cursor, Err: err}
+		}
+		req.Offset = proto.Uint32(uint32(offset))
+	}
+	if opts.Limit > 0 {
+		req.Limit = proto.Uint32(uint32(opts.Limit))
+	}
 
 	resp, err := g.dns.ListRecords(ctx, req)
 	if err != nil {
@@ -390,10 +411,18 @@ func (g *GRPCAdapter) ListRecords(ctx context.Context, zoneName string, opts Lis
 		})
 	}
 
-	return &ListRecordsResult{
+	// The server owns paging: total counts the whole filtered list, so
+	// more remains while this page ends before it.
+	result := &ListRecordsResult{
 		Records:    records,
-		TotalCount: int32(len(records)),
-	}, nil
+		TotalCount: int32(resp.GetTotal()),
+	}
+	next := uint64(req.GetOffset()) + uint64(len(records))
+	if next < resp.GetTotal() {
+		result.HasMore = true
+		result.NextCursor = strconv.FormatUint(next, 10)
+	}
+	return result, nil
 }
 
 // =============================================================================
@@ -729,6 +758,16 @@ type ErrRecordNotFound struct {
 
 func (e ErrRecordNotFound) Error() string {
 	return fmt.Sprintf("record not found: %s (type %s)", e.Name, e.Type)
+}
+
+// ErrZoneMissingFromReply is returned when a zone RPC succeeds but its reply
+// carries no zone, so the suite fails on the reply instead of panicking.
+type ErrZoneMissingFromReply struct {
+	Method string
+}
+
+func (e ErrZoneMissingFromReply) Error() string {
+	return fmt.Sprintf("%s reply carries no zone", e.Method)
 }
 
 // Ensure GRPCAdapter implements DNSCommands interface.

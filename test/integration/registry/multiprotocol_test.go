@@ -31,6 +31,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,6 +39,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // =============================================================================
@@ -80,8 +82,11 @@ func TestRegistryMultiProtocol(t *testing.T) {
 // runRegistryProtocolTests runs the complete registry test suite against a single
 // protocol adapter.
 func runRegistryProtocolTests(t *testing.T, ctx context.Context, cmd RegistryCommands) {
-	// Generate unique test prefix for this protocol run
-	prefix := fmt.Sprintf("%s-%d", cmd.Name(), time.Now().Unix())
+	// Generate unique test prefix for this protocol run. It names
+	// repositories, and the OCI distribution spec's repository grammar
+	// (which the CLI and pkg/registry validateImageRef both enforce) is
+	// lowercase only: "CLI-..." or "gRPC-..." is refused as "invalid format".
+	prefix := strings.ToLower(fmt.Sprintf("%s-%d", cmd.Name(), time.Now().Unix()))
 
 	t.Run("ImageLifecycle", func(t *testing.T) {
 		runImagePushTests(t, ctx, cmd, prefix)
@@ -121,6 +126,10 @@ func runRegistryProtocolTests(t *testing.T, ctx context.Context, cmd RegistryCom
 func runImagePushTests(t *testing.T, ctx context.Context, cmd RegistryCommands, prefix string) {
 	testCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
+
+	if declaredMissing(t, testCtx, cmd, opPush) {
+		return
+	}
 
 	t.Run("PushBasicImage", func(t *testing.T) {
 		ref := GenerateUniqueImageRef(prefix+"-push-basic", "v1")
@@ -288,6 +297,9 @@ func runImagePushTests(t *testing.T, ctx context.Context, cmd RegistryCommands, 
 func runImagePullTests(t *testing.T, ctx context.Context, cmd RegistryCommands, prefix string) {
 	testCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
+	if declaredMissing(t, testCtx, cmd, opPull) {
+		return
+	}
 
 	// First, push an image for pull tests
 	ref := GenerateUniqueImageRef(prefix+"-pull-test", "v1")
@@ -296,8 +308,7 @@ func runImagePullTests(t *testing.T, ctx context.Context, cmd RegistryCommands, 
 		Layers: layers,
 		Config: config,
 	}
-	_, err := cmd.Push(testCtx, ref, pushOpts)
-	require.NoError(t, err, "Setup: Push should succeed")
+	seedImage(t, testCtx, cmd, ref, pushOpts)
 	defer cleanupImage(t, testCtx, cmd, ref)
 
 	t.Run("PullExistingImage", func(t *testing.T) {
@@ -352,6 +363,9 @@ func runImagePullTests(t *testing.T, ctx context.Context, cmd RegistryCommands, 
 func runImageListTests(t *testing.T, ctx context.Context, cmd RegistryCommands, prefix string) {
 	testCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
+	if declaredMissing(t, testCtx, cmd, opList) {
+		return
+	}
 
 	// Push multiple images for list tests
 	imageRefs := make([]string, 3)
@@ -362,8 +376,7 @@ func runImageListTests(t *testing.T, ctx context.Context, cmd RegistryCommands, 
 			Layers: layers,
 			Config: config,
 		}
-		_, err := cmd.Push(testCtx, ref, opts)
-		require.NoError(t, err, "Setup: Push should succeed for image %d", i)
+		seedImage(t, testCtx, cmd, ref, opts)
 		imageRefs[i] = ref
 	}
 
@@ -427,6 +440,9 @@ func runImageListTests(t *testing.T, ctx context.Context, cmd RegistryCommands, 
 func runImageDeleteTests(t *testing.T, ctx context.Context, cmd RegistryCommands, prefix string) {
 	testCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
+	if declaredMissing(t, testCtx, cmd, opDelete) {
+		return
+	}
 
 	t.Run("DeleteExistingImage", func(t *testing.T) {
 		// Push an image first
@@ -436,8 +452,7 @@ func runImageDeleteTests(t *testing.T, ctx context.Context, cmd RegistryCommands
 			Layers: layers,
 			Config: config,
 		}
-		_, err := cmd.Push(testCtx, ref, pushOpts)
-		require.NoError(t, err, "Setup: Push should succeed")
+		seedImage(t, testCtx, cmd, ref, pushOpts)
 
 		// Delete the image
 		deleteOpts := DeleteOptions{
@@ -471,6 +486,9 @@ func runImageDeleteTests(t *testing.T, ctx context.Context, cmd RegistryCommands
 func runImageInspectTests(t *testing.T, ctx context.Context, cmd RegistryCommands, prefix string) {
 	testCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
+	if declaredMissing(t, testCtx, cmd, opInspect) {
+		return
+	}
 
 	// Push an image for inspect tests
 	ref := GenerateUniqueImageRef(prefix+"-inspect-test", "v1")
@@ -482,8 +500,7 @@ func runImageInspectTests(t *testing.T, ctx context.Context, cmd RegistryCommand
 			"test.annotation": "value",
 		},
 	}
-	_, err := cmd.Push(testCtx, ref, pushOpts)
-	require.NoError(t, err, "Setup: Push should succeed")
+	seedImage(t, testCtx, cmd, ref, pushOpts)
 	defer cleanupImage(t, testCtx, cmd, ref)
 
 	t.Run("InspectExistingImage", func(t *testing.T) {
@@ -520,6 +537,9 @@ func runImageInspectTests(t *testing.T, ctx context.Context, cmd RegistryCommand
 func runRegistryStatusTests(t *testing.T, ctx context.Context, cmd RegistryCommands, prefix string) {
 	testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	if declaredMissing(t, testCtx, cmd, opStatus) {
+		return
+	}
 
 	t.Run("GetRegistryStatus", func(t *testing.T) {
 		result, err := cmd.Status(testCtx)
@@ -540,6 +560,9 @@ func runRegistryStatusTests(t *testing.T, ctx context.Context, cmd RegistryComma
 func runClientVerificationTests(t *testing.T, ctx context.Context, cmd RegistryCommands, prefix string) {
 	testCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
+	if declaredMissing(t, testCtx, cmd, opVerifyClient) {
+		return
+	}
 
 	t.Run("VerifyValidClient", func(t *testing.T) {
 		clientID := fmt.Sprintf("%s-client-valid", prefix)
@@ -555,7 +578,9 @@ func runClientVerificationTests(t *testing.T, ctx context.Context, cmd RegistryC
 		assert.NotEmpty(t, result.Permissions, "Permissions should be set")
 
 		// Cleanup session
-		_ = cmd.InvalidateSession(testCtx, clientID)
+		if err := cmd.InvalidateSession(testCtx, clientID); err != nil {
+			t.Logf("Warning: failed to invalidate session %s: %v", clientID, err)
+		}
 	})
 
 	t.Run("VerifyClientWithInvalidQuote", func(t *testing.T) {
@@ -580,6 +605,12 @@ func runClientVerificationTests(t *testing.T, ctx context.Context, cmd RegistryC
 func runSessionManagementTests(t *testing.T, ctx context.Context, cmd RegistryCommands, prefix string) {
 	testCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
+	verifyMissing := declaredMissing(t, testCtx, cmd, opVerifyClient)
+	getMissing := declaredMissing(t, testCtx, cmd, opGetSession)
+	invalidateMissing := declaredMissing(t, testCtx, cmd, opInvalidateSession)
+	if verifyMissing || getMissing || invalidateMissing {
+		return
+	}
 
 	// Create a session first
 	clientID := fmt.Sprintf("%s-session-test", prefix)
@@ -632,6 +663,11 @@ func runSessionManagementTests(t *testing.T, ctx context.Context, cmd RegistryCo
 func runImageEncryptionTests(t *testing.T, ctx context.Context, cmd RegistryCommands, prefix string) {
 	testCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
+	encryptMissing := declaredMissing(t, testCtx, cmd, opEncryptImage)
+	decryptMissing := declaredMissing(t, testCtx, cmd, opDecryptImage)
+	if encryptMissing || decryptMissing {
+		return
+	}
 
 	// Push an unencrypted image first
 	ref := GenerateUniqueImageRef(prefix+"-encrypt-test", "v1")
@@ -640,8 +676,7 @@ func runImageEncryptionTests(t *testing.T, ctx context.Context, cmd RegistryComm
 		Layers: layers,
 		Config: config,
 	}
-	_, err := cmd.Push(testCtx, ref, pushOpts)
-	require.NoError(t, err, "Setup: Push should succeed")
+	seedImage(t, testCtx, cmd, ref, pushOpts)
 	defer cleanupImage(t, testCtx, cmd, ref)
 
 	t.Run("EncryptExistingImage", func(t *testing.T) {
@@ -699,26 +734,41 @@ func runImageNotFoundTests(t *testing.T, ctx context.Context, cmd RegistryComman
 	nonexistentRef := GenerateUniqueImageRef(prefix+"-notfound", "v1")
 
 	t.Run("PullNotFound", func(t *testing.T) {
+		if declaredMissing(t, testCtx, cmd, opPull) {
+			return
+		}
 		_, err := cmd.Pull(testCtx, nonexistentRef, PullOptions{})
 		require.Error(t, err, "Pull should fail for nonexistent image")
 	})
 
 	t.Run("InspectNotFound", func(t *testing.T) {
+		if declaredMissing(t, testCtx, cmd, opInspect) {
+			return
+		}
 		_, err := cmd.Inspect(testCtx, nonexistentRef)
 		require.Error(t, err, "Inspect should fail for nonexistent image")
 	})
 
 	t.Run("DeleteNotFound", func(t *testing.T) {
+		if declaredMissing(t, testCtx, cmd, opDelete) {
+			return
+		}
 		_, err := cmd.Delete(testCtx, nonexistentRef, DeleteOptions{Force: true})
 		require.Error(t, err, "Delete should fail for nonexistent image")
 	})
 
 	t.Run("EncryptNotFound", func(t *testing.T) {
+		if declaredMissing(t, testCtx, cmd, opEncryptImage) {
+			return
+		}
 		_, err := cmd.EncryptImage(testCtx, nonexistentRef, "test-key")
 		require.Error(t, err, "EncryptImage should fail for nonexistent image")
 	})
 
 	t.Run("DecryptNotFound", func(t *testing.T) {
+		if declaredMissing(t, testCtx, cmd, opDecryptImage) {
+			return
+		}
 		_, err := cmd.DecryptImage(testCtx, nonexistentRef)
 		require.Error(t, err, "DecryptImage should fail for nonexistent image")
 	})
@@ -729,6 +779,9 @@ func runInvalidArgumentTests(t *testing.T, ctx context.Context, cmd RegistryComm
 	defer cancel()
 
 	t.Run("PushEmptyReference", func(t *testing.T) {
+		if declaredMissing(t, testCtx, cmd, opPush) {
+			return
+		}
 		layers, config := GenerateTestImage(1, 512)
 		opts := PushOptions{
 			Layers: layers,
@@ -740,6 +793,9 @@ func runInvalidArgumentTests(t *testing.T, ctx context.Context, cmd RegistryComm
 	})
 
 	t.Run("PushNoLayers", func(t *testing.T) {
+		if declaredMissing(t, testCtx, cmd, opPush) {
+			return
+		}
 		ref := GenerateUniqueImageRef(prefix+"-no-layers", "v1")
 		opts := PushOptions{
 			Config: GenerateTestConfig(),
@@ -750,21 +806,33 @@ func runInvalidArgumentTests(t *testing.T, ctx context.Context, cmd RegistryComm
 	})
 
 	t.Run("PullEmptyReference", func(t *testing.T) {
+		if declaredMissing(t, testCtx, cmd, opPull) {
+			return
+		}
 		_, err := cmd.Pull(testCtx, "", PullOptions{})
 		require.Error(t, err, "Pull should fail with empty reference")
 	})
 
 	t.Run("InspectEmptyReference", func(t *testing.T) {
+		if declaredMissing(t, testCtx, cmd, opInspect) {
+			return
+		}
 		_, err := cmd.Inspect(testCtx, "")
 		require.Error(t, err, "Inspect should fail with empty reference")
 	})
 
 	t.Run("DeleteEmptyReference", func(t *testing.T) {
+		if declaredMissing(t, testCtx, cmd, opDelete) {
+			return
+		}
 		_, err := cmd.Delete(testCtx, "", DeleteOptions{})
 		require.Error(t, err, "Delete should fail with empty reference")
 	})
 
 	t.Run("EncryptEmptyKeyID", func(t *testing.T) {
+		if declaredMissing(t, testCtx, cmd, opEncryptImage) {
+			return
+		}
 		ref := GenerateUniqueImageRef(prefix+"-encrypt-nokey", "v1")
 
 		_, err := cmd.EncryptImage(testCtx, ref, "")
@@ -772,11 +840,17 @@ func runInvalidArgumentTests(t *testing.T, ctx context.Context, cmd RegistryComm
 	})
 
 	t.Run("GetSessionEmptyClientID", func(t *testing.T) {
+		if declaredMissing(t, testCtx, cmd, opGetSession) {
+			return
+		}
 		_, err := cmd.GetSession(testCtx, "")
 		require.Error(t, err, "GetSession should fail with empty client ID")
 	})
 
 	t.Run("InvalidateSessionEmptyClientID", func(t *testing.T) {
+		if declaredMissing(t, testCtx, cmd, opInvalidateSession) {
+			return
+		}
 		err := cmd.InvalidateSession(testCtx, "")
 		require.Error(t, err, "InvalidateSession should fail with empty client ID")
 	})
@@ -791,6 +865,9 @@ func runFullImageLifecycleTests(t *testing.T, ctx context.Context, cmd RegistryC
 	defer cancel()
 
 	t.Run("CompleteLifecycle", func(t *testing.T) {
+		if declaredMissing(t, testCtx, cmd, opInspect) {
+			return
+		}
 		imageName := prefix + "-full-lifecycle"
 		tag := "latest"
 		ref := GenerateUniqueImageRef(imageName, tag)
@@ -807,9 +884,7 @@ func runFullImageLifecycleTests(t *testing.T, ctx context.Context, cmd RegistryC
 			},
 		}
 
-		pushResult, err := cmd.Push(testCtx, ref, pushOpts)
-		require.NoError(t, err, "Push should succeed")
-		require.NotNil(t, pushResult, "Push result should not be nil")
+		pushResult := seedImage(t, testCtx, cmd, ref, pushOpts)
 		assert.NotEmpty(t, pushResult.Digest, "Push digest should not be empty")
 		t.Logf("Pushed image: %s (digest: %s)", ref, pushResult.Digest)
 
@@ -838,39 +913,45 @@ func runFullImageLifecycleTests(t *testing.T, ctx context.Context, cmd RegistryC
 
 		// Phase 4: Pull image and verify content
 		t.Log("=== Phase 4: Pull Image ===")
-		pullResult, err := cmd.Pull(testCtx, ref, PullOptions{})
-		require.NoError(t, err, "Pull should succeed")
-		require.NotNil(t, pullResult, "Pull result should not be nil")
-		assert.Equal(t, len(layers), len(pullResult.Layers), "Layer count should match")
+		if !declaredMissing(t, testCtx, cmd, opPull) {
+			pullResult, err := cmd.Pull(testCtx, ref, PullOptions{})
+			require.NoError(t, err, "Pull should succeed")
+			require.NotNil(t, pullResult, "Pull result should not be nil")
+			assert.Equal(t, len(layers), len(pullResult.Layers), "Layer count should match")
 
-		// Verify layer content matches
-		for i, originalLayer := range layers {
-			assert.True(t, bytes.Equal(originalLayer.Content, pullResult.Layers[i].Content),
-				"Layer %d content should match", i)
+			// Verify layer content matches
+			for i, originalLayer := range layers {
+				assert.True(t, bytes.Equal(originalLayer.Content, pullResult.Layers[i].Content),
+					"Layer %d content should match", i)
+			}
+			t.Logf("Pulled and verified %d layers", len(pullResult.Layers))
 		}
-		t.Logf("Pulled and verified %d layers", len(pullResult.Layers))
 
 		// Phase 5: Encrypt the image
 		t.Log("=== Phase 5: Encrypt Image ===")
-		encryptionKeyID := "lifecycle-encryption-key"
-		encryptResult, err := cmd.EncryptImage(testCtx, ref, encryptionKeyID)
-		require.NoError(t, err, "EncryptImage should succeed")
-		require.NotNil(t, encryptResult, "Encrypt result should not be nil")
-		assert.Equal(t, 2, encryptResult.LayersEncrypted, "All layers should be encrypted")
-		t.Logf("Encrypted %d layers with key: %s", encryptResult.LayersEncrypted, encryptionKeyID)
+		if !declaredMissing(t, testCtx, cmd, opEncryptImage) {
+			encryptionKeyID := "lifecycle-encryption-key"
+			encryptResult, err := cmd.EncryptImage(testCtx, ref, encryptionKeyID)
+			require.NoError(t, err, "EncryptImage should succeed")
+			require.NotNil(t, encryptResult, "Encrypt result should not be nil")
+			assert.Equal(t, 2, encryptResult.LayersEncrypted, "All layers should be encrypted")
+			t.Logf("Encrypted %d layers with key: %s", encryptResult.LayersEncrypted, encryptionKeyID)
 
-		// Verify image is now encrypted
-		inspectResult, err = cmd.Inspect(testCtx, ref)
-		require.NoError(t, err, "Inspect should succeed after encryption")
-		assert.True(t, inspectResult.Encrypted, "Image should be encrypted")
+			// Verify image is now encrypted
+			inspectResult, err = cmd.Inspect(testCtx, ref)
+			require.NoError(t, err, "Inspect should succeed after encryption")
+			assert.True(t, inspectResult.Encrypted, "Image should be encrypted")
+		}
 
 		// Phase 6: Decrypt the image
 		t.Log("=== Phase 6: Decrypt Image ===")
-		decryptResult, err := cmd.DecryptImage(testCtx, ref)
-		require.NoError(t, err, "DecryptImage should succeed")
-		require.NotNil(t, decryptResult, "Decrypt result should not be nil")
-		assert.NotEmpty(t, decryptResult.Layers, "Decrypted layers should be returned")
-		t.Logf("Decrypted image, got %d layers", len(decryptResult.Layers))
+		if !declaredMissing(t, testCtx, cmd, opDecryptImage) {
+			decryptResult, err := cmd.DecryptImage(testCtx, ref)
+			require.NoError(t, err, "DecryptImage should succeed")
+			require.NotNil(t, decryptResult, "Decrypt result should not be nil")
+			assert.NotEmpty(t, decryptResult.Layers, "Decrypted layers should be returned")
+			t.Logf("Decrypted image, got %d layers", len(decryptResult.Layers))
+		}
 
 		// Phase 7: Check registry status
 		t.Log("=== Phase 7: Check Registry Status ===")
@@ -916,4 +997,102 @@ func cleanupImage(t *testing.T, ctx context.Context, cmd RegistryCommands, ref s
 		// Only log, don't fail - this is cleanup
 		t.Logf("Warning: failed to cleanup image %s: %v", ref, err)
 	}
+}
+
+// probeRef is the reference a no-surface probe passes; no transport sends it.
+const probeRef = "registry-probe/no-surface:v1"
+
+// surfaceProbes call one operation on an adapter with placeholder arguments,
+// so declaredMissing can check what the adapter returns for it.
+var surfaceProbes = map[string]func(context.Context, RegistryCommands) error{
+	opPush: func(ctx context.Context, cmd RegistryCommands) error {
+		_, err := cmd.Push(ctx, probeRef, PushOptions{})
+		return err
+	},
+	opPull: func(ctx context.Context, cmd RegistryCommands) error {
+		_, err := cmd.Pull(ctx, probeRef, PullOptions{})
+		return err
+	},
+	opList: func(ctx context.Context, cmd RegistryCommands) error {
+		_, err := cmd.List(ctx, ListOptions{})
+		return err
+	},
+	opDelete: func(ctx context.Context, cmd RegistryCommands) error {
+		_, err := cmd.Delete(ctx, probeRef, DeleteOptions{})
+		return err
+	},
+	opInspect: func(ctx context.Context, cmd RegistryCommands) error {
+		_, err := cmd.Inspect(ctx, probeRef)
+		return err
+	},
+	opStatus: func(ctx context.Context, cmd RegistryCommands) error {
+		_, err := cmd.Status(ctx)
+		return err
+	},
+	opTag: func(ctx context.Context, cmd RegistryCommands) error {
+		_, err := cmd.Tag(ctx, probeRef, probeRef)
+		return err
+	},
+	opVerifyClient: func(ctx context.Context, cmd RegistryCommands) error {
+		_, err := cmd.VerifyClient(ctx, VerifyClientOptions{ClientID: "registry-probe"})
+		return err
+	},
+	opGetSession: func(ctx context.Context, cmd RegistryCommands) error {
+		_, err := cmd.GetSession(ctx, "registry-probe")
+		return err
+	},
+	opInvalidateSession: func(ctx context.Context, cmd RegistryCommands) error {
+		return cmd.InvalidateSession(ctx, "registry-probe")
+	},
+	opEncryptImage: func(ctx context.Context, cmd RegistryCommands) error {
+		_, err := cmd.EncryptImage(ctx, probeRef, "registry-probe-key")
+		return err
+	},
+	opDecryptImage: func(ctx context.Context, cmd RegistryCommands) error {
+		_, err := cmd.DecryptImage(ctx, probeRef)
+		return err
+	},
+}
+
+// declaredMissing reports whether cmd's transport has no server surface for
+// op (see missingSurface). When it has none, the operation is called and the
+// adapter must return surface.ErrNoSurface naming it, so the absence is
+// asserted on every run instead of skipped. The caller returns on true.
+func declaredMissing(t *testing.T, ctx context.Context, cmd RegistryCommands, op string) bool {
+	t.Helper()
+
+	reason, missing := missingSurface(cmd.Name(), op)
+	if !missing {
+		return false
+	}
+	var noSurface surface.ErrNoSurface
+	require.ErrorAs(t, surfaceProbes[op](ctx, cmd), &noSurface,
+		"%s %s has no server surface (%s): the adapter must say so", cmd.Name(), op, reason)
+	assert.Equal(t, cmd.Name(), noSurface.Transport, "declared transport")
+	assert.Equal(t, op, noSurface.Operation, "declared operation")
+	t.Logf("MISSING: %s %s: %s", cmd.Name(), op, reason)
+	return true
+}
+
+// seedImage pushes ref for a test that needs the image to exist. A transport
+// with no push surface (MCP, docs/registry/api.md §4) seeds through gRPC,
+// which serves Push, so its own read and delete calls still run.
+func seedImage(t *testing.T, ctx context.Context, cmd RegistryCommands, ref string, opts PushOptions) *PushResult {
+	t.Helper()
+
+	pusher := cmd
+	if _, missing := missingSurface(cmd.Name(), opPush); missing {
+		seeder := NewGRPCAdapter()
+		require.NoError(t, seeder.Setup(ctx), "Setup: gRPC seeder for %s", cmd.Name())
+		defer func() {
+			if err := seeder.Teardown(); err != nil {
+				t.Logf("Warning: gRPC seeder teardown: %v", err)
+			}
+		}()
+		pusher = seeder
+	}
+	result, err := pusher.Push(ctx, ref, opts)
+	require.NoError(t, err, "Setup: Push should succeed")
+	require.NotNil(t, result, "Setup: Push result should not be nil")
+	return result
 }

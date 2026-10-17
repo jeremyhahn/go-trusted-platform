@@ -28,8 +28,11 @@ import (
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	// Register the sdk/go transports the SDK adapters select by protocol.
+	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/grpc"
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/mcp"
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/quic"
+	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/rest"
+	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/unix"
 )
 
 // The proto enum names are the suite's state names, upper-cased and prefixed.

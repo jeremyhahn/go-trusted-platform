@@ -519,14 +519,12 @@ func testVerifyErrors(t *testing.T, ctx context.Context, cmd AuthenticodeCommand
 		require.NoError(t, err, "Sign should succeed")
 		require.True(t, signResult.Success, "Sign should be successful")
 
-		// Corrupt the signed file
+		// Corrupt the signature value itself. A byte picked by position (the
+		// file's middle) can land in the embedded certificate's subject,
+		// which no Authenticode signature covers, and then verifies.
 		data, err := os.ReadFile(outputPath)
 		require.NoError(t, err, "Failed to read signed file")
-		if len(data) > 100 {
-			// Flip some bytes in the middle (likely in the signature area)
-			data[len(data)/2] ^= 0xFF
-			data[len(data)/2+1] ^= 0xFF
-		}
+		data[signatureValueOffset(t, data)] ^= 0xFF
 		err = os.WriteFile(outputPath, data, 0644)
 		require.NoError(t, err, "Failed to write corrupted file")
 
@@ -736,4 +734,26 @@ func createTestPEFile(t *testing.T, testDir, name string) string {
 	require.NoError(t, err, "Failed to write test PE file")
 
 	return filePath
+}
+
+// signatureValueOffset returns the offset of the last byte of a signed PE32+
+// file's WIN_CERTIFICATE content. With no unauthenticated attributes that is
+// the last byte of the SignerInfo's signature value, so flipping it must
+// fail verification.
+func signatureValueOffset(t *testing.T, pe []byte) int {
+	t.Helper()
+
+	// The security directory is data directory 4 of the PE32+ optional
+	// header; its VirtualAddress is a file offset (PE/COFF spec §4.7).
+	optionalHeader := int(binary.LittleEndian.Uint32(pe[0x3C:])) + 4 + 20
+	securityDir := optionalHeader + 112 + 4*8
+	require.Less(t, securityDir+8, len(pe), "PE file too short for a security directory")
+	certTable := int(binary.LittleEndian.Uint32(pe[securityDir:]))
+	require.NotZero(t, certTable, "signed PE file has no certificate table")
+
+	// WIN_CERTIFICATE.dwLength counts its 8-byte header and the PKCS#7 blob.
+	certLength := int(binary.LittleEndian.Uint32(pe[certTable:]))
+	end := certTable + certLength
+	require.LessOrEqual(t, end, len(pe), "certificate table runs past the end of the file")
+	return end - 1
 }

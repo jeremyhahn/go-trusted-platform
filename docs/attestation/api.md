@@ -27,8 +27,17 @@ REST: `pkg/webservice/v1/rest/attestation/` (`server_router.go`,
 `events_router.go`, `reports_router.go`, `clock_router.go`, `verdicts_router.go`
 — see §3).
 QUIC: `pkg/api/quic/attestation_handlers.go` plus the base range in
-`sdk/go/wire/quicwire/protocol.go`, routed by the daemon for opcodes `0x70`–`0x77`
-(`pkg/api/daemon/quic_service.go:522`).
+`sdk/go/wire/quicwire/protocol.go`, routed by the daemon for opcodes `0x6A`, `0x70`–`0x77`
+and `0x7C`–`0x7F` (`pkg/api/daemon/quic_attestation.go`). The manifest and
+collection opcodes call the same gRPC servicer through
+`pkg/api/daemon/quic_attestation_adapter.go`, so each answers with its gRPC
+twin's result and error class; `0x77` has no report store behind any transport
+and answers `StatusNotImplemented`. `0x73` calls the TPM gRPC servicer's
+`GetAK`. `0x74` is unassigned: no transport serves challenge / response, so
+QUIC carries no opcode for it. The authorization catalog does not classify the
+byte either, so the daemon refuses it before dispatch with `StatusPermissionDenied`
+("QUIC operation not classified for authorization: opcode 0x74"), the answer
+every reserved byte gets.
 MCP: the `attestation_*` tools. The five manifest tools call the gRPC
 `AttestationService` methods (`pkg/api/daemon/mcp_attestation_manifests.go`), so
 each answers with its gRPC twin's result and error class. The five quote and
@@ -43,18 +52,18 @@ refused (§5).
 |---|---|---|---|---|---|
 | List manifests | `GET /api/v1/attestation/manifests` | `ListManifests` | `MISSING — docs/13 G7` | `attestation_list_manifests` | ✅ |
 | Get manifest | `GET /api/v1/attestation/manifests/{id}` | `GetManifest` | `OpAttestGetManifest` (`0x76`) | `attestation_get_manifest` | ✅ |
-| Build manifest | `POST /api/v1/attestation/manifests/build` | `BuildManifest` | `OpAttestBuildManifest` (`0x7C`) | `attestation_create_manifest` | ✅ |
+| Build manifest | `POST /api/v1/attestation/manifests/build` | `BuildManifest` | `OpAttestBuildManifest` (`0x7C`) | `attestation_create_manifest` | refused — every transport answers `ErrTPMSessionNotConfigured` ([engineering](engineering.md) §3a) |
 | Verify manifest | `POST /api/v1/attestation/manifests/verify` | `VerifyManifest` | `OpAttestVerifyManifest` (`0x7D`) | `attestation_verify_manifest` | ✅ |
 | Delete manifest | `DELETE /api/v1/attestation/manifests/{id}` | `DeleteManifest` | `MISSING — docs/13 G7` | `attestation_delete_manifest` | ✅ |
 | Get quote (TLS only — §5.1a) | `POST /api/v1/attestation/quote` | `GetAttestationQuote` (refused over Unix) | `OpAttestQuote` (`0x70`) | `attestation_get_quote` (HTTPS only) | refused — no TLS (§5.1a) |
 | Verify quote | `POST /api/v1/attestation/quote/verify` | `VerifyAttestationQuote` | `OpAttestVerify` (`0x71`) | `attestation_verify_quote` | ✅ |
 | Collect host attestation (TLS only — §5.1a) | `POST /api/v1/attestation/host` | `CollectHostAttestation` (refused over Unix) | `OpAttestHost` (`0x7E`), `OpAttestCollectHost` (`0x72`) | `attestation_collect_host` (HTTPS only) | refused — no TLS (§5.1a) |
-| Collect VM attestation | `POST /api/v1/attestation/vm/{id}` | `CollectVMAttestation` | `OpAttestVMWorkload` (`0x7F`) | `attestation_collect_vm` | ✅ |
-| Collect container attestation | `POST /api/v1/attestation/container/{id}` | `CollectContainerAttestation` | `OpAttestContainerWorkload` (`0xED`) | `attestation_collect_container` | ✅ |
-| Attest a workload | `MISSING — docs/13 G7` | (covered by the two Collect RPCs) | `OpAttestDeviceWorkload` (`0xEE`) | `MISSING — docs/13 G7` | — |
+| Collect VM attestation | `POST /api/v1/attestation/vm/{id}` | `CollectVMAttestation` | `OpAttestVMWorkload` (`0x7F`) — without a TPM session it carries `ErrTPMSessionNotConfigured` as the other transports do (gRPC `Internal`, QUIC `StatusInternalError`) | `attestation_collect_vm` | ✅ |
+| Collect container attestation | `POST /api/v1/attestation/container/{id}` | `CollectContainerAttestation` | `OpAttestContainerWorkload` (`0x6A`) — moved off `0xED`, which PXE owns (#949); calls `CollectContainerAttestation` and answers its gRPC twin's result and error class | `attestation_collect_container` | ✅ |
+| Attest a workload | `MISSING — docs/13 G7` | (covered by the two Collect RPCs) | `MISSING` — `OpAttestDeviceWorkload` (`0xEE`) is shadowed by the PXE family | `MISSING — docs/13 G7` | — |
 | Verify a workload | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
-| Attestation reports (create / get / list) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestGetReportByID` (`0x77`), `OpAttestListReports` (`0xEF`) | `MISSING — docs/13 G7` | — |
-| Attestation policies (create / get / list / delete / evaluate) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestCreatePolicy` (`0xAA`), `OpAttestListPolicies` (`0xAB`) | `MISSING — docs/13 G7` | — |
+| Attestation reports (create / get / list) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING` — `OpAttestGetReportByID` (`0x77`) answers `StatusNotImplemented` (no report store on any transport); `OpAttestListReports` (`0xEF`) is shadowed by the PXE family | `MISSING — docs/13 G7` | — |
+| Attestation policies (create / get / list / delete / evaluate) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING` — `OpAttestCreatePolicy` (`0xAA`) and `OpAttestListPolicies` (`0xAB`) are shadowed by the IAM family | `MISSING — docs/13 G7` | — |
 | Attestation events | `GET /api/v1/attestation/events` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 | Caller-admission policy (effective) | `GET /api/v1/attestation/callers` | `DescribeCallerPolicy` | `MISSING — #386` | `attestation_caller_policy` | ✅ |
 | Node clock state (collector-facing) | `GET /api/v1/attestation/clock` | REST-only by design — see §5.2a | REST-only by design | REST-only by design | — |
@@ -62,12 +71,14 @@ refused (§5).
 | Device reports (fleet) | `GET /api/v1/attestation/reports` | `ListDeviceReports` | `MISSING — #386` | `attestation_device_reports` | ✅ |
 | Refresh a device report (enqueue) | `POST /api/v1/attestation/reports/{device_id}/refresh` | `RefreshDeviceReport` | `MISSING — #386` | `attestation_device_refresh` | ✅ |
 | Device verdict feed (`attestation:read`, tenant-filtered — §5.5, [engineering §9](engineering.md#device-verdict-events)) | `GET /api/v1/attestation/verdicts?cursor=&wait_ms=` (long-poll) | `StreamDeviceVerdicts` (server stream), `PollDeviceVerdicts` | `OpAttestPollVerdicts` (`0x75`, long-poll) | `attestation_device_verdicts_poll` (long-poll) | ✅ (long-poll) |
-| Challenge / response | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestChallenge` (`0x74`); the never-implemented `OpAttestResponse` value `0x75` now carries `OpAttestPollVerdicts` | `MISSING — docs/13 G7` | — |
-| Get AK | `MISSING` — served by the TPM surface, [`docs/tpm/`](../tpm/) | — | `OpAttestGetAK` (`0x73`) | — | — |
+| Challenge / response | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` — `0x74` is unassigned; the never-implemented `OpAttestResponse` value `0x75` now carries `OpAttestPollVerdicts` | `MISSING — docs/13 G7` | — |
+| Get AK | `MISSING` — served by the TPM surface, [`docs/tpm/`](../tpm/) | `TPMService.GetAK` ([`docs/tpm/`](../tpm/)) | `OpAttestGetAK` (`0x73`) — calls the TPM gRPC servicer's `GetAK`, so it answers its gRPC twin's result and error class | — | — |
 
 **Reading the gaps.** The rows are lopsided in a consistent direction: manifests
-and quotes are complete on gRPC and REST, while **reports and policies exist only
-on QUIC** (their MCP tools are registered but refused). That is not a documentation artefact — it is the actual
+and quotes are complete on gRPC and REST, while **reports and policies exist on
+no transport**: QUIC defines opcodes for them, but `0x77` answers
+`StatusNotImplemented` and the others are shadowed by the IAM and PXE families
+(their MCP tools are registered but refused). That is not a documentation artefact — it is the actual
 shape, and it means an operator using REST cannot manage attestation policy at
 all. This is the single largest attestation surface hole and belongs in the gap
 register as G7.
@@ -82,14 +93,24 @@ The REST rows above are the whole surface: every route is registered under
 `/vm/{id}`, `/container/{id}`) or by the events, reports and clock routers.
 `pkg/webservice/v1/testdata/routes.golden` is the authority. The older router
 that registered `/manifest` (singular), `/manifest/build`, `/verify` and
-`GET /quote` no longer exists, and the daemon answers those paths `404`.
+`GET /quote` no longer exists, and both listeners answer those paths `404`.
+
+The daemon's own REST listener mounts the same routers over the same servicer
+(`pkg/api/daemon/rest_attestation.go`, #949), so a platformd with no
+`webservices:` section serves every route above except `GET /verdicts`. Before
+#949 the daemon registered none of them and answered every attestation REST
+call `404`. The verdict feed is filtered by the webservice session's tenant;
+on the daemon, platform-token callers poll it over gRPC, QUIC and MCP. The
+daemon gates the routes by scope, not by role (§5.1).
 
 The REST adapter in `test/integration/attestation/rest_adapter.go` calls only
 these routes. The suite verbs no route serves — VM identity, a separate
 manifest-signing step, push, and the workload chain — return `ErrRESTNoRoute`
 instead of calling a path the daemon never registered (#546).
-`BuildManifest` signs as it builds, and `VerifyManifest` fetches the stored
-manifest and posts it to `/manifests/verify`, which takes the manifest itself.
+`BuildManifest` posts to `/manifests/build`, which the daemon answers with
+`ErrTPMSessionNotConfigured` ([engineering](engineering.md) §3a).
+`VerifyManifest` fetches the stored manifest and posts it to
+`/manifests/verify`, which takes the manifest itself.
 
 `VerifyManifest` does not check a manifest signature. A request that carries a
 public key is refused `FailedPrecondition`
@@ -131,8 +152,8 @@ Platform tokens carry an `scp` claim in the qrdb-canonical
 manifest verification) and `attestation:write` for every opcode that collects
 fresh evidence: `OpAttestQuote` (`0x70`) and `OpAttestCollectHost` (`0x72`),
 which make the node's TPM sign the caller's nonce and return the PCR values the
-quote covers, plus challenge/response, manifest build, host attestation and VM
-workload attestation. A quote is the TPM-DoS and measured-state disclosure
+quote covers, plus challenge/response, manifest build, host attestation, VM
+workload attestation and container workload attestation (`0x6A`). A quote is the TPM-DoS and measured-state disclosure
 surface §5.1 describes, so an `attestation:read` token is refused it with
 `StatusPermissionDenied`.
 
@@ -180,6 +201,19 @@ quote verbs, `POST /attestation/host`, `/vm/{id}`, `/container/{id}`, the
 `/events` timeline and `/callers` — is mounted behind the platform's admin-role
 gate, the same seam #165 put in front of the credential-bearing routers.
 
+On the daemon listener, where callers present platform tokens rather than
+webservice sessions, each route asks the scope of the gRPC method it calls
+(`pkg/api/grpc/method_permissions.go`): `attestation:read` for the manifest
+list, get and verify, `/quote/verify`, `/clock`, `/callers`, `/reports`,
+`/reports/{device_id}` and `/events`; `attestation:delete` for
+`DELETE /manifests/{id}`; `attestation:write` for `/manifests/build`, `/vm/{id}`,
+`/container/{id}` and `/reports/{device_id}/refresh`. `POST /quote` and
+`POST /host` ask `attestation:write`, as their QUIC opcodes do, because they
+make the node's TPM sign the caller's nonce. As on the webservice, `/quote`,
+`/host` and `/clock` also admit a machine caller through the caller-admission
+policy. A route the scope table does not name is refused `403`
+(`ErrAttestationRouteUnclassified`).
+
 **Why it is gated now.** Until #387 every quote-producing operation answered
 `ErrTPMSessionNotConfigured`, so the open routes were inert. #387 hands the
 attestation service the node's TPM: `POST /attestation/host` makes the TPM
@@ -198,6 +232,14 @@ collector always sends a `config` object, empty when it has no selection —
 measured 2026-09-05, the handler had required the field and every collection
 on the fleet answered `400 quote config is required` while the service would
 have defaulted it.
+
+QUIC `0x7E` (`pkg/api/quic`) decodes the QUIC `CollectHostAttestationRequest`
+under the same contract. `nonce` is **required**: an empty one is refused
+`StatusInvalidArgument` (`ErrAttestationNonceRequired`), as gRPC refuses it
+`InvalidArgument` (`nonce is required`), before the TPM is reached — a quote
+over no nonce proves no freshness (RFC 9334 §10). A nonce shorter than 16 bytes
+is refused the same way (`ErrAttestationInvalidNonce`). An absent
+`hash_algorithm` is SHA-256 and absent `pcr_indices` the default selection.
 
 ### 5.1a Every node quote is bound to the connection it arrives on (#482)
 
@@ -364,8 +406,9 @@ The four report capabilities above read the reporting cache or enqueue work
 with the collector; none reaches a device. They are admin-gated on REST, and
 their MCP tools are permission-mapped (`attestation:read`; the refresh is
 `attestation:write` because it spends a node's TPM time). QUIC does not carry
-them: the attestation QUIC handlers are never constructed in production
-(#386), so the column is recorded as a gap rather than a handler.
+them: the daemon serves the attestation QUIC handler (§1), but it has no
+device-report opcode (#386), so the column is recorded as a gap rather than a
+handler.
 
 Every transport returns the same shape — `reporting.View`: `device_id`,
 `serial`, `model`, `verified`, `ak_certificate_verified`, `signature_valid`,
@@ -418,7 +461,7 @@ evidence until then.
 ### 5.4 Workload verdicts on the collect routes (#483)
 
 `POST /api/v1/attestation/vm/{id}` and `.../container/{id}` — and their QUIC
-opcodes `0x7F` / `0xED` — return `verified` alongside two fields that say how
+opcodes `0x7F` / `0x6A` — return `verified` alongside two fields that say how
 that answer was reached:
 
 | Field | Meaning |
@@ -509,9 +552,9 @@ verdicts follow` ([cli.md](cli.md) §3.5) is thin over this call.
 | `0x04` | `StatusInternalError` | 500 | `ErrQuoteGenerationFailed`, `ErrSerializationFailed` |
 | `0x05` | `StatusTimeout` | 504 | `ErrContextCanceled`, `ErrRetryExhausted` |
 | `0x07` | `StatusPermissionDenied` | 403 | `ErrAttestationFailed`, `ErrPCRMismatch`, `ErrQuoteVerificationFailed`, `ErrQuoteExpired`, `ErrNonceMismatch`, `ErrMerkleRootMismatch`, `ErrHostNotAttested` |
-| `0x09` | `StatusInvalidArgument` | 400 | `ErrInvalidWorkloadType`, `ErrInvalidHashAlgorithm` |
+| `0x09` | `StatusInvalidArgument` | 400 | `ErrInvalidWorkloadType`, `ErrInvalidHashAlgorithm`, `ErrAttestationNonceRequired` and `ErrAttestationInvalidNonce` (QUIC `0x7E`, §5.1) |
 | `0x0A` | `StatusUnavailable` | 503 | Attestation service not wired into the daemon |
-| `0x0B` | `StatusNotImplemented` | 501 | An opcode in range with no handler |
+| `0x0B` | `StatusNotImplemented` | 501 | An opcode in range with no handler; `0x77` (`ErrQUICAttestationNoService`: no report store behind any transport) |
 
 Every row mapping to 403 is a **fail-closed** path. There is no attestation
 error that yields a partially trusted result.

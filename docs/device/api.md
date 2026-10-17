@@ -338,7 +338,7 @@ different statuses.
 | Find profile by MAC | `GET /api/v1/device/profiles/mac/{mac}` | `FindProfileByMACAddress` | `MISSING — docs/13 G7` | `profile_find_by_mac` — no match `NotFound` | ✅ |
 | Find profile by serial | `GET /api/v1/device/profiles/serial/{serial}` | `FindProfileBySerial` | `MISSING — docs/13 G7` | `profile_find_by_serial` — no match `NotFound` | ✅ |
 | Find matching profile | `POST /api/v1/device/profiles/match` | `FindMatchingProfile` — no match `NotFound` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubFindMatchingProfile` (`0x29`) — see §3.7 | `profile_find_matching` — no match `NotFound` | ✅ |
-| Find config for a device (EK serial / MAC) | `GET /api/v1/device/profiles/find-config` | `FindConfigForDevice` — no identity `InvalidArgument`, unknown identity `NotFound` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+| Find config for a device (EK serial / MAC) | `GET /api/v1/device/profiles/find-config` | `FindConfigForDevice` — no identity `InvalidArgument`, unknown identity `NotFound` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubFindConfigForDevice` (`0x2E`) — same codes | `profile_find_config` — same codes | ✅ |
 | Assign profile to a device identity (explicit `ek_serial`/`mac_address`, or `device_id` of a registered device — the server derives the EK serial from its stored EK certificate, #463) | `POST /api/v1/device/profiles/{id}/assign` | `AssignProfileToDevice` | `OpProvisioningCategory` (`0xCF`) sub `0x20` — see §3.7 | `profile_assign_to_device` | ✅ |
 | Unassign profile | `POST /api/v1/device/profiles/{id}/unassign` | `UnassignProfileFromDevice` | `MISSING — docs/13 G7` | `profile_unassign_from_device` | ✅ |
 | Get profile over mTLS (device self-service) | `GET /api/v1/device/profile` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
@@ -668,10 +668,10 @@ accepted gap rather than an untested one.
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
 | Create template | `POST /api/v1/device/templates` (the plural `POST` is the seeder's, §4.1) → `201` envelope, `payload.id` string | `CreateTemplate` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubTemplateCreate` (`0x27`) | `device_template_create` | ✅ |
-| Get template | `GET /api/v1/device/templates/{id}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Update template | `PUT /api/v1/device/templates/{id}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Delete template | `DELETE /api/v1/device/templates/{id}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| List templates | `GET /api/v1/device/templates` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Get template | `GET /api/v1/device/templates/{id}` | `GetTemplate` — unknown id `NotFound` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubTemplateGet` (`0x2A`) | `device_template_get` | ✅ |
+| Update template | `PUT /api/v1/device/templates/{id}` | `UpdateTemplate` — replaces the stored template; a zero id `InvalidArgument`, unknown id `NotFound` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubTemplateUpdate` (`0x2C`) | `device_template_update` | ✅ |
+| Delete template | `DELETE /api/v1/device/templates/{id}` → `204` | `DeleteTemplate` — unknown id `NotFound` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubTemplateDelete` (`0x2D`) | `device_template_delete` | ✅ |
+| List templates | `GET /api/v1/device/templates?page=&page_size=` | `ListTemplates` — paged by `pagination` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubTemplateList` (`0x2B`) | `device_template_list` | ✅ |
 | Find template by name | `GET /api/v1/device/templates/name/{name}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Create profile from template | `POST /api/v1/device/templates/{id}/create-profile`; the seeder's own `POST /api/v1/devices/templates/{id}/create-profile` → `201` envelope, `payload.id` string (§4.3) | `CreateProfileFromTemplate` — unset override fields (an unspecified role included) keep the template's value; unknown template `NotFound`, a daemon without a template or profile service `Unavailable` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubProfileFromTemplate` (`0x28`) | `profile_create_from_template` | ✅ |
 
@@ -690,19 +690,24 @@ template or the profile service answers `Unavailable` on every transport (REST
 |---|---|---|---|---|---|---|
 | CreateTemplate | yes | yes | yes | yes | yes | `device.Client.CreateTemplate` |
 | CreateProfileFromTemplate | yes | yes | yes | yes | yes | `device.Client.CreateProfileFromTemplate` |
+| GetTemplate | yes | yes | yes | yes | yes | `device.Client.GetTemplate` |
+| ListTemplates | yes | yes | yes | yes | yes | `device.Client.ListTemplates` |
+| UpdateTemplate | yes | yes | yes | yes | yes | `device.Client.UpdateTemplate` |
+| DeleteTemplate | yes | yes | yes | yes | yes | `device.Client.DeleteTemplate` |
 
 The messages carry the `DeviceTemplate…` prefix (`DeviceTemplate`,
 `DeviceTemplateCreateRequest`, `DeviceTemplateCreateResponse`) that the
 removal note in `device.proto` required, so they cannot collide with
 `vtpm.proto`'s `CreateTemplateRequest`. A vTPM template
 (`VTPMService.CreateTemplate`, the `vtpm_*` tools) is a different object.
-Get, update, delete, list and find-by-name remain REST-only; those rows are
-untracked gaps.
+Get, list, update and delete are served on every transport (#949) through the
+same template service; update replaces the stored template, so a field left
+unset is cleared. Find-by-name remains REST-only, an untracked gap.
 
 **Wire shapes.**
 
-- **QUIC**: `payload[0]` is the sub-opcode; the rest is
-  `DeviceTemplateCreateRequest` or `CreateProfileFromTemplateRequest` in the
+- **QUIC**: `payload[0]` is the sub-opcode; the rest is the operation's
+  `DeviceTemplate…Request` or `CreateProfileFromTemplateRequest` in the
   build's payload codec (`quicwire.EncodePayload`); the reply is the matching
   response message. Sub-opcodes `0x23` and `0x24` share
   the §3.7 sub-range and dispatcher.
@@ -711,11 +716,18 @@ untracked gaps.
   `match_rules`; `profile_create_from_template` takes `template_id` (required)
   and `overrides`, using the `profile_create` argument names. Both return the
   domain JSON with `id` as a string; a template's `config` comes back as text.
+  `device_template_get` and `device_template_delete` take `id` (a string or a
+  number); `device_template_update` takes `id` plus the create arguments, with
+  `name` required; `device_template_list` takes `page` and `page_size`
+  (defaults 1 and 50) and returns `{templates, total, page, page_size}`.
 - **REST**: `config` is bytes, so it is **base64** in both directions. The
   `create-profile` body is `{"overrides": ProfileRequest}` with the template id
   in the path only. A body that does not decode is a **`400`**
   (`ErrInvalidRequestBody`) and nothing is stored; an empty body means "no
-  overrides".
+  overrides". `GET /device/templates` pages by the `page` and `page_size`
+  query parameters and returns `{"templates": [...], "pagination": {page,
+  page_size, total, total_pages, has_more}}`; the SDK sends a zero page or size
+  as absent so the server's defaults apply.
 
 **Fields the REST and MCP SDK paths refuse.** The Go SDK translates the pb
 messages into the domain JSON those two transports take. Three pb fields have
@@ -1319,9 +1331,9 @@ and every tool in them is dispatched and scope-checked.
 |---|---|---|---|
 | `device_register`, `device_get`, `device_find_by_serial`, `device_list`, `device_delete`, `device_update`, `device_attest`, `device_record_attest_cert`, `device_provision`, `device_disable`, `device_enable` | `registerDeviceTools` (`tools.go:557`) | `ExecuteTool` (`tools.go:1325`) | **yes** — `device:write` / `device:read` / `device:delete` |
 | `profile_create`, `profile_get_by_id`, `profile_list_all`, `profile_update_by_id`, `profile_delete_by_id`, `profile_find_matching`, `profile_find_by_mac`, `profile_find_by_serial`, `profile_assign_to_device`, `profile_unassign_from_device` | `registerDeviceToolsV2` (`device_tools.go:99`) | `deviceProfileToolDispatch` | **yes** — all ten mapped to `device:*` |
-| `device_template_create`, `profile_create_from_template` (§4) | `registerDeviceTemplateTools` (`device_template_tools.go:157`) | `deviceProfileToolDispatch` | **yes** — both `device:write` |
+| `device_template_create`, `device_template_get`, `device_template_list`, `device_template_update`, `device_template_delete`, `profile_create_from_template` (§4) | `registerDeviceTemplateTools` (`device_template_tools.go:157`) | `deviceProfileToolDispatch` | **yes** — create, update and create-from-template `device:write`; get and list `device:read`; delete `device:delete` |
 
-The two template tools are not the `vtpm_*_template_*` tools, which create
+The template tools are not the `vtpm_*_template_*` tools, which create
 vTPM templates. A template tool called on a daemon without the template or
 profile service answers a typed JSON-RPC error, as every MCP device tool does.
 
@@ -1363,8 +1375,9 @@ device opcode (`0x30`–`0x3D`, less the retired `0x3C`) and `categoryPermission
 sub-opcodes under `OpProvisioningCategory` (`0xCF`, keyed by `payload[0]`):
 `0x20`/`0x21` assign and unassign, `0x22` record attestation certificate,
 `0x25`/`0x26` disable and enable, `0x27` create template, `0x28` create profile
-from template — all `device:write` — and `0x29` find matching profile,
-`device:read`. The diskless boot sub-opcodes `0x23`/`0x24`
+from template, `0x2C` update template — all `device:write` — `0x29` find
+matching profile, `0x2A` get template and `0x2B` list templates, `device:read`,
+and `0x2D` delete template, `device:delete`. The diskless boot sub-opcodes `0x23`/`0x24`
 are pre-auth (§4.6). Both catalogs are in `pkg/api/quic/opcode_permissions.go`;
 an operation absent from them is refused, so a new sub-opcode without an entry
 fails closed. `pkg/api/daemon/quic_device_authz_test.go` sends every device
@@ -1382,9 +1395,9 @@ opcode tables are in [`api-reference-quic.md`](api-reference-quic.md).
 
 | Action | RPCs |
 |---|---|
-| `device:read` | `GetDevice`, `ListDevices`, `CountDevices`, `FindDeviceBySerial`, `GetProfile`, `ListProfiles`, `CountProfiles`, `FindMatchingProfile`, `FindProfileByMACAddress`, `FindProfileBySerial`, `FindConfigForDevice` |
-| `device:write` | `CreateDevice`, `UpdateDevice`, `ActivateDevice`, `AssignProfileToDevice`, `UnassignProfileFromDevice`, `CreateProfile`, `CreateProfileFromTemplate`, `CreateTemplate`, `UpdateProfile`, `AttestDevice`, `RecordAttestationCertificate`, `DisableDevice`, `EnableDevice` |
-| `device:delete` | `DeleteDevice`, `DeleteProfile` |
+| `device:read` | `GetDevice`, `ListDevices`, `CountDevices`, `FindDeviceBySerial`, `GetProfile`, `ListProfiles`, `CountProfiles`, `FindMatchingProfile`, `FindProfileByMACAddress`, `FindProfileBySerial`, `FindConfigForDevice`, `GetTemplate`, `ListTemplates` |
+| `device:write` | `CreateDevice`, `UpdateDevice`, `ActivateDevice`, `AssignProfileToDevice`, `UnassignProfileFromDevice`, `CreateProfile`, `CreateProfileFromTemplate`, `CreateTemplate`, `UpdateTemplate`, `UpdateProfile`, `AttestDevice`, `RecordAttestationCertificate`, `DisableDevice`, `EnableDevice` |
+| `device:delete` | `DeleteDevice`, `DeleteProfile`, `DeleteTemplate` |
 
 The catalog is default-deny, so every `DeviceService` RPC is in it:
 `TestGRPCMethodCatalog_CoversEveryRegisteredMethod` fails on any registered RPC
@@ -1414,9 +1427,23 @@ device, profile, template and provisioning-session route in `RequireScope` on
 top of the admin role gate, with the scope the twin RPC takes in the catalog
 above (and QUIC and MCP take for the same operation). A token without it gets
 `403` before the handler runs. Under the legacy JWT handler, which carries no
-scopes, the role gate alone applies; the daemon REST device routes
-(`pkg/api/rest/device_handlers.go`) are outside its scope guard: they check
-only the mTLS client certificate and no scope.
+scopes, the role gate alone applies.
+
+**The daemon REST listener serves the same operator routes behind its scope
+guard (#949).** `RESTServer.SetDeviceOperatorHandlers`
+(`pkg/api/daemon/rest_device_operator.go`) mounts the webservice handlers above
+on the daemon listener, each in `restapi.ScopeGuard` with the scope in the table
+below: `GET /devices/count`, `POST /devices/{id}/attest-cert/record`,
+`POST /devices/{id}/disable` and `/enable`, every `/device/profiles` route
+(CRUD, `count`, `match`, the `mac` and `serial` lookups, `find-config`,
+`assign`, `unassign`), `POST /device/activate-json` and every `/device/templates`
+route. The bodies and the `{code, success, payload}` envelope are therefore the
+webservice's. The diskless boot routes (`/device/boot*`, §4.6) are
+machine-facing and are not mounted there; gRPC, QUIC, Unix and MCP serve them.
+The daemon's older device routes (`pkg/api/rest/device_handlers.go`: device
+CRUD, `serial/{serial}`, `{id}/activate`, `{id}/state`, `{id}/attest` and the
+plural `/devices/profiles` alias) are outside the guard: they check only the
+mTLS client certificate and no scope.
 
 | Scope | Webservice routes (under `/api/v1`) | gRPC twin |
 |---|---|---|
@@ -1430,12 +1457,13 @@ only the mTLS client certificate and no scope.
 | `provisioning:read` | `GET /provisioning/sessions`, `GET /provisioning/sessions/{sessionID}` | `ConfigDeliveryService/ListSessions`, `GetSession` |
 | `provisioning:write` | `POST /provisioning/sessions/{sessionID}/fulfill` | `ConfigDeliveryService/FulfillSession` |
 
-The template routes `GET /device/templates`, `GET /device/templates/name/{name}`
-and `GET /device/templates/{id}` take `device:read`, `PUT /device/templates/{id}`
-`device:write` and `DELETE /device/templates/{id}` `device:delete`. They are
-REST-only, with no gRPC catalog entry, and take the device resource's action
-so that a token which cannot create a template cannot rewrite or remove one
-either. The machine-facing routes (`/device/{profile,activate,heartbeat}`,
+The template routes `GET /device/templates` and `GET /device/templates/{id}`
+take `device:read` (gRPC `ListTemplates`, `GetTemplate`),
+`PUT /device/templates/{id}` `device:write` (`UpdateTemplate`) and
+`DELETE /device/templates/{id}` `device:delete` (`DeleteTemplate`).
+`GET /device/templates/name/{name}` takes `device:read` and is REST-only. They
+take the device resource's action so that a token which cannot create a
+template cannot rewrite or remove one either. The machine-facing routes (`/device/{profile,activate,heartbeat}`,
 `/device/boot*`, the EAB provisioning routes and the session poll) are on the
 ungated router and take no scope (§4.6, §5).
 

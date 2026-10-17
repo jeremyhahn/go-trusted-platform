@@ -108,9 +108,49 @@ func TestNewSignCommand(t *testing.T) {
 	require.NotNil(t, inputFlag)
 	assert.Equal(t, "", inputFlag.DefValue)
 
-	outputFlag := cmd.Flag("output")
-	require.NotNil(t, outputFlag)
-	assert.Equal(t, "", outputFlag.DefValue)
+	outFlag := cmd.Flag("out")
+	require.NotNil(t, outFlag)
+	assert.Equal(t, "", outFlag.DefValue)
+
+	// A local --output would shadow the persistent --output/-o format flag.
+	assert.Nil(t, cmd.LocalNonPersistentFlags().Lookup("output"))
+}
+
+// TestSignCommandAcceptsGlobalOutputFormat runs `sign -o json --out <path>`
+// under a parent carrying the root's persistent --output/-o format flag: the
+// shorthand must parse and the signed file must land at --out.
+func TestSignCommandAcceptsGlobalOutputFormat(t *testing.T) {
+	dir := t.TempDir()
+	keyPath, certPath, _ := writeTestKeyAndCert(t, dir)
+	input := filepath.Join(dir, "unsigned.efi")
+	require.NoError(t, os.WriteFile(input, authenticodetest.MinimalPE(authenticodetest.MachineAMD64), 0o644))
+	output := filepath.Join(dir, "signed.efi")
+
+	var format string
+	root := &cobra.Command{Use: "platformctl"}
+	root.PersistentFlags().StringVarP(&format, "output", "o", "table", "output format")
+	root.AddCommand(newSignCommand(func() *cli.CommonFlags {
+		return &cli.CommonFlags{OutputFormat: cli.OutputFormat(format), NoColor: true}
+	}))
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"sign", "-o", "json", "--key", keyPath, "--cert", certPath, "--input", input, "--out", output})
+
+	require.NoError(t, root.Execute())
+	assert.Equal(t, "json", format)
+	_, err := os.Stat(output)
+	require.NoError(t, err)
+}
+
+// TestSignCommandRejectsMissingOut keeps --out required.
+func TestSignCommandRejectsMissingOut(t *testing.T) {
+	cmd := newSignCommand(newTestFlags())
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--key", "k.pem", "--cert", "c.pem", "--input", "in.efi"})
+
+	require.ErrorContains(t, cmd.Execute(), `required flag(s) "out" not set`)
 }
 
 // TestNewVerifyCommand tests the verify subcommand structure and flags
@@ -728,7 +768,7 @@ func TestSignCommandRunEExecution(t *testing.T) {
 	_ = cmd.Flags().Set("key", "/nonexistent/key.pem")
 	_ = cmd.Flags().Set("cert", "/some/cert.pem")
 	_ = cmd.Flags().Set("input", "/some/input")
-	_ = cmd.Flags().Set("output", "/some/output")
+	_ = cmd.Flags().Set("out", "/some/output")
 
 	// Execute RunE directly
 	err := cmd.RunE(cmd, []string{})
@@ -796,7 +836,7 @@ func TestSignCommandRunEWithValidKeyAndCert(t *testing.T) {
 	_ = cmd.Flags().Set("key", keyPath)
 	_ = cmd.Flags().Set("cert", certPath)
 	_ = cmd.Flags().Set("input", "/nonexistent/input.efi")
-	_ = cmd.Flags().Set("output", "/tmp/output.efi")
+	_ = cmd.Flags().Set("out", "/tmp/output.efi")
 
 	// Execute RunE directly
 	err := cmd.RunE(cmd, []string{})

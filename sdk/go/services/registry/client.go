@@ -105,6 +105,71 @@ func (c *Client) Delete(ctx context.Context, repository, reference, digest strin
 	return resp, nil
 }
 
+// AnnotationOverwrite is the push-metadata annotation that asks the
+// registry to replace an artifact already stored under the same tag. Its
+// value is "true"; any other value, or its absence, refuses the overwrite.
+const AnnotationOverwrite = "overwrite"
+
+// WithOverwrite marks metadata so the push replaces an existing tag.
+func WithOverwrite(metadata *platformv1.PushMetadata) *platformv1.PushMetadata {
+	if metadata.Annotations == nil {
+		metadata.Annotations = make(map[string]string, 1)
+	}
+	metadata.Annotations[AnnotationOverwrite] = "true"
+	return metadata
+}
+
+// Push-metadata annotations for the rest of the push options. A boolean
+// option is on only when its value is "true"; the key IDs travel next to
+// them.
+const (
+	// AnnotationEncrypt asks the registry to encrypt every layer.
+	AnnotationEncrypt = "encrypt"
+	// AnnotationKeyID names the key the layers are encrypted under.
+	AnnotationKeyID = "key-id"
+	// AnnotationSign asks the registry to sign the manifest.
+	AnnotationSign = "sign"
+	// AnnotationSigningKeyID names the key the manifest is signed with.
+	AnnotationSigningKeyID = "signing-key-id"
+)
+
+// Manifest annotations the registry sets on what it stored. A push
+// response carries them in its artifact, so a client reports what the
+// registry did rather than what it asked for.
+const (
+	// ManifestAnnotationEncrypted is "true" on a manifest whose layers
+	// are encrypted.
+	ManifestAnnotationEncrypted = "org.letstrust.registry.encrypted"
+	// ManifestAnnotationKeyID names the key the layers are encrypted under.
+	ManifestAnnotationKeyID = "org.letstrust.registry.key-id"
+)
+
+// WithEncryption marks metadata so the registry encrypts every layer under
+// keyID.
+func WithEncryption(metadata *platformv1.PushMetadata, keyID string) *platformv1.PushMetadata {
+	if metadata.Annotations == nil {
+		metadata.Annotations = make(map[string]string, 2)
+	}
+	metadata.Annotations[AnnotationEncrypt] = "true"
+	if keyID != "" {
+		metadata.Annotations[AnnotationKeyID] = keyID
+	}
+	return metadata
+}
+
+// WithSigning marks metadata so the registry signs the manifest. An empty
+// signingKeyID leaves the choice of key to the registry.
+func WithSigning(metadata *platformv1.PushMetadata, signingKeyID string) *platformv1.PushMetadata {
+	if metadata.Annotations == nil {
+		metadata.Annotations = make(map[string]string, 2)
+	}
+	metadata.Annotations[AnnotationSign] = "true"
+	if signingKeyID != "" {
+		metadata.Annotations[AnnotationSigningKeyID] = signingKeyID
+	}
+	return metadata
+}
+
 // NewPushMetadata creates a PushMetadata proto for streaming push operations.
 func NewPushMetadata(repository, tag string, totalSize int64) *platformv1.PushMetadata {
 	return &platformv1.PushMetadata{

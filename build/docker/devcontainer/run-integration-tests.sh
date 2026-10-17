@@ -34,6 +34,9 @@
 
 set -uo pipefail
 
+# shellcheck source=build/docker/devcontainer/swtpm-provision.sh
+source "$(dirname "${BASH_SOURCE[0]}")/swtpm-provision.sh"
+
 # Known target keywords mapped to their Go test package paths. A single-word
 # first argument matching a key here selects that target; anything else is
 # treated as the legacy BUILD_TAGS argument.
@@ -81,7 +84,6 @@ declare -A TARGET_PACKAGES=(
     [dns]="./test/integration/dns/..."
     [e2e]="./test/integration/e2e/..."
     [helpers]="./test/integration/helpers/..."
-    [invitation]="./test/integration/invitation/..."
     [ipxe]="./test/integration/ipxe/..."
     [ipxe-dhcp]="./test/integration/ipxe/..."
     [ipxe-tftp]="./test/integration/ipxe/..."
@@ -95,7 +97,6 @@ declare -A TARGET_PACKAGES=(
     [registry]="./test/integration/registry/..."
     [sdk]="./test/integration/sdk/..."
     [secrets]="./test/integration/secrets/..."
-    [user-registration]="./test/integration/user_registration/..."
     [vtpm]="./test/integration/vtpm/..."
 )
 
@@ -166,11 +167,11 @@ declare -A TARGET_NO_DAEMON=(
     [sdk]=1
 )
 
-# The suites `all` runs, in order, on the one shared platformd: the
-# daemon-free suites first, then every daemon-backed one. Left out, each for
-# a reason the suite itself sets: cold-start and barrier-gate need the shared
-# daemon NOT running; bmc needs platformd started against the vBMC config;
-# diskimage, netboot, nat64 and ipsec need inputs only their make targets
+# The suites `all` runs, in order: the daemon-free suites first, then every
+# daemon-backed one, on the shared platformd except bmc and compute, which get
+# their own for their suite (TARGET_OWN_DAEMON). Left out, each for a reason
+# the suite itself sets: cold-start and barrier-gate need the shared daemon
+# NOT running; diskimage, netboot, nat64 and ipsec need inputs only their make targets
 # build on the host; lb, testenv-enrollment and ipxe-* are slices of
 # packages already listed (sdn, root, ipxe). pxe stays runnable by name but
 # is out of the default set: platformd builds its PXE service with no
@@ -182,12 +183,19 @@ declare -A TARGET_NO_DAEMON=(
 # FIPS-kernel test needs a prebuilt kernel, modules and signing key that only
 # the caller supplies (FIPS_KERNEL_IMAGE, FIPS_MODULES_TAR,
 # FIPS_MODULE_SIGNING_KEY).
+# tpm runs last: its Clear case issues TPM2_Clear on the shared daemon's
+# swtpm (docs/tpm/security.md), which flushes the owner-hierarchy SRKs that
+# seal the daemon's platform-policy key passwords. After it the daemon can
+# no longer sign a TLS handshake, so every gRPC, QUIC and MCP dial a later
+# suite makes ends in "tls: internal error" (vtpm, #949). bmc and compute
+# are unaffected wherever they sit: each gets a fresh swtpm with its own
+# daemon, and the shared one is brought back on another fresh swtpm after.
 ALL_TARGETS=(
     helpers datastore quicbaas sdk cluster cmd ipxe installer e2e
-    root acme attestation authenticode ca ceremony cli compute
-    container daemon device dns fido2 iam invitation iso kms luks network
+    root acme attestation authenticode bmc ca ceremony cli compute
+    container daemon device dns fido2 iam iso kms luks network
     ntp objectstorage piv provision proxy quic registry restroutes sdn
-    secrets tenant tpm user-registration vpn vtpm
+    secrets tenant vpn vtpm tpm
 )
 
 RUN_TARGET="all"
@@ -302,6 +310,18 @@ restore_workspace_ownership() {
         || echo "WARNING: could not restore ownership under ${dir}"
 }
 
+# chronyd paths (start_chronyd): the Debian chrony package's defaults, which
+# pkg/ntp DefaultPaths also renders and drives.
+CHRONYD_CONF="/etc/chrony/chrony.conf"
+CHRONYD_SOCK="/run/chrony/chronyd.sock"
+CHRONYD_PID_FILE="/run/chrony/chronyd.pid"
+# The reference chronyd (start_ntp_reference) that serves the config's
+# loopback upstream. Its own directory keeps its pid file apart from the
+# daemon's chronyd.
+NTP_REFERENCE_DIR="/run/chrony-reference"
+NTP_REFERENCE_CONF="${NTP_REFERENCE_DIR}/chrony.conf"
+NTP_REFERENCE_PID_FILE="${NTP_REFERENCE_DIR}/chronyd.pid"
+
 cleanup() {
     if [ "$CLEANUP_DONE" = true ]; then
         return
@@ -311,12 +331,8 @@ cleanup() {
     echo ""
     echo "=== Cleaning up integration test environment ==="
 
-    # Stop platformd
-    if [ -n "$PLATFORMD_PID" ] && kill -0 "$PLATFORMD_PID" 2>/dev/null; then
-        echo "Stopping platformd (PID: $PLATFORMD_PID)..."
-        kill "$PLATFORMD_PID" 2>/dev/null || true
-        wait "$PLATFORMD_PID" 2>/dev/null || true
-    fi
+    # Stop platformd and the chronyd pair started with it
+    stop_platformd
 
     # Stop vBMC
     if [ -n "$VBMC_PID" ] && kill -0 "$VBMC_PID" 2>/dev/null; then
@@ -443,9 +459,12 @@ start_swtpm() {
     rm -rf /tmp/swtpm
     mkdir -p /tmp/swtpm
 
-    # Initialize TPM state
-    if command -v swtpm_setup > /dev/null 2>&1; then
-        swtpm_setup --tpm2 --tpmstate /tmp/swtpm --overwrite --pcr-banks sha256
+    # Provision it like shipped hardware, with an EK and an EK certificate.
+    # A TPM without an EK sends platformd down its recovery path, which no
+    # real node takes, so the run stops here rather than test that.
+    if ! provision_swtpm_state /tmp/swtpm; then
+        echo "FATAL: the harness swtpm has no EK and EK certificate; platformd cannot run on it"
+        exit 1
     fi
 
     # Start swtpm daemon
@@ -579,8 +598,7 @@ prepare_gatewayd_supervision() {
     mkdir -p "${root}/init"
     # A process forked while the list is moved lands back in the root, so
     # the move repeats until enabling the controllers stops failing.
-    local attempt
-    for attempt in 1 2 3 4 5; do
+    for _ in 1 2 3 4 5; do
         local pid
         while read -r pid; do
             echo "${pid}" > "${root}/init/cgroup.procs" 2>/dev/null || true
@@ -622,10 +640,6 @@ COMPUTEEOF
 #   UDP 6230 — vBMC IPMI RMCP+ (power/boot/sensors/sysinfo)
 #   TCP 8645 — vBMC plain HTTP CA cert endpoint (bootstrap trust)
 start_vbmc() {
-    if [ "$RUN_TARGET" != "bmc" ]; then
-        return 0
-    fi
-
     echo "=== Building and starting vBMC ==="
 
     # Build the vBMC binary from source.
@@ -715,6 +729,96 @@ TRUSTEOF
     echo "=== vBMC started ==="
 }
 
+# chronyd backs the ntp suite. platformd renders /etc/chrony/chrony.conf from
+# the config's ntp: section and enables chronyd through OpenRC, which this
+# Debian container does not have, so the runner starts chronyd on the rendered
+# file. -x keeps chronyd off the system clock: the container shares the CI
+# host's kernel clock, and no suite may move it. A config without an ntp:
+# section renders nothing, and chronyd is not started. The paths are set
+# beside cleanup(), which stops chronyd.
+#
+# The daemon's chronyd consumes 127.0.0.1, which start_ntp_reference serves,
+# and the runner waits for it to synchronise: an unsynchronised clock is the
+# documented degraded `ntp` health component (docs/health/api.md), and a
+# degraded component makes the aggregate health answer of every transport
+# not-healthy, so every suite that asserts a healthy platform would fail.
+start_chronyd() {
+    if [ ! -f "${CHRONYD_CONF}" ]; then
+        echo "WARNING: platformd rendered no ${CHRONYD_CONF}; the ntp suite has no chronyd"
+        return 0
+    fi
+    start_ntp_reference
+    echo "=== Starting chronyd (config: ${CHRONYD_CONF}, clock control off) ==="
+    # chronyd drops to _chrony and opens its command socket only when the
+    # socket's directory is owned by that user and closed to others; a
+    # root-owned 0755 directory leaves it running with "Disabled command
+    # socket", so every chronyc poll platformd makes fails (#949).
+    install -d -m 0750 -o _chrony -g _chrony "$(dirname "${CHRONYD_SOCK}")"
+    if ! chronyd -x -f "${CHRONYD_CONF}"; then
+        echo "WARNING: chronyd failed to start; the ntp suite has no chronyd"
+        return 0
+    fi
+    for _ in $(seq 1 10); do
+        if chronyc -n -h "${CHRONYD_SOCK}" tracking >/dev/null 2>&1; then
+            echo "chronyd ready"
+            # waitsync <tries> <max-correction> <max-skew> <interval>: 30
+            # one-second polls; 0 leaves the correction and skew unbounded.
+            if chronyc -n -h "${CHRONYD_SOCK}" waitsync 30 0 0 1 >/dev/null 2>&1; then
+                echo "chronyd synchronised to the reference"
+            else
+                echo "WARNING: chronyd did not synchronise to the reference within 30s; the ntp health component stays degraded"
+            fi
+            return 0
+        fi
+        sleep 1
+    done
+    echo "WARNING: chronyd never answered on ${CHRONYD_SOCK}"
+}
+
+# start_ntp_reference runs a second chronyd as the harness's time source: it
+# serves its own clock on 127.0.0.1:123 as a local stratum-8 reference, which
+# the daemon's consume-mode chronyd (rendered with `port 0`, so the two never
+# share a port) synchronises to. Like the daemon's chronyd it runs with -x and
+# never moves the clock the container shares with the CI host, and it has no
+# command socket (`cmdport 0`, `bindcmdaddress /`), so every chronyc call the
+# daemon makes still reaches the daemon's chronyd.
+start_ntp_reference() {
+    echo "=== Starting the reference chronyd on 127.0.0.1:123 ==="
+    install -d -m 0750 -o _chrony -g _chrony "${NTP_REFERENCE_DIR}"
+    cat > "${NTP_REFERENCE_CONF}" << NTPREFEOF
+bindaddress 127.0.0.1
+allow 127.0.0.1
+local stratum 8
+cmdport 0
+bindcmdaddress /
+pidfile ${NTP_REFERENCE_PID_FILE}
+NTPREFEOF
+    if ! chronyd -x -f "${NTP_REFERENCE_CONF}"; then
+        echo "WARNING: the reference chronyd failed to start; the daemon's chronyd has no source"
+    fi
+}
+
+# stop_chronyd stops the chronyd whose pid file it is given. chronyd
+# daemonizes, so it is no child to wait on; the loop waits for its pid to go
+# instead, so the next start_chronyd does not meet the old one on the command
+# socket, nor the next start_ntp_reference the old one on 127.0.0.1:123.
+stop_chronyd() {
+    local pid_file="$1"
+    if [ ! -f "${pid_file}" ]; then
+        return 0
+    fi
+    local pid
+    pid="$(cat "${pid_file}")"
+    kill "${pid}" 2>/dev/null || true
+    for _ in $(seq 1 10); do
+        if ! kill -0 "${pid}" 2>/dev/null; then
+            return 0
+        fi
+        sleep 1
+    done
+    echo "WARNING: chronyd (PID: ${pid}) still running after 10s"
+}
+
 start_platformd() {
     local config_file="${1:-${PLATFORM_BUILD_DIR}/test/integration/config.yaml}"
     echo "=== Starting platformd (config: ${config_file}) ==="
@@ -785,6 +889,8 @@ start_platformd() {
                 sleep 1
             done
 
+            start_chronyd
+
             echo "=== platformd ready ==="
             return 0
         fi
@@ -795,6 +901,58 @@ start_platformd() {
     echo "platformd logs:"
     tail -50 "${PLATFORMD_STARTUP_LOG}" 2>/dev/null || true
     return 1
+}
+
+# stop_platformd stops the running platformd, waiting for it to exit so the
+# next start_platformd can bind the same ports and socket, and then the
+# chronyd pair started with it (the daemon's chronyd and its loopback
+# reference).
+stop_platformd() {
+    if [ -n "$PLATFORMD_PID" ] && kill -0 "$PLATFORMD_PID" 2>/dev/null; then
+        echo "Stopping platformd (PID: $PLATFORMD_PID)..."
+        kill "$PLATFORMD_PID" 2>/dev/null || true
+        wait "$PLATFORMD_PID" 2>/dev/null || true
+    fi
+    PLATFORMD_PID=""
+    stop_chronyd "${CHRONYD_PID_FILE}"
+    stop_chronyd "${NTP_REFERENCE_PID_FILE}"
+}
+
+# start_bmc_platformd starts platformd for the bmc suite: the vBMC first, which
+# writes /tmp/vbmc-ca.pem and the config that trusts it, then platformd on that
+# config. The vBMC is started once and stays up until cleanup.
+start_bmc_platformd() {
+    if [ -z "$VBMC_PID" ]; then
+        start_vbmc
+    fi
+    start_platformd "${VBMC_PLATFORMD_CONFIG}"
+}
+
+# start_compute_platformd starts platformd for the compute suite, with the
+# local QEMU provider, so the VM tools and RPCs reach a VM orchestrator.
+start_compute_platformd() {
+    prepare_compute_config
+    start_platformd "${COMPUTE_PLATFORMD_CONFIG}"
+}
+
+# TARGET_OWN_DAEMON maps each target whose suite needs a platformd other than
+# the shared one to the function that starts it. A single-target run calls it
+# in place of start_platformd; `all` swaps the shared daemon for it around
+# that one suite (run_with_own_daemon). proxy is not here: it runs on the
+# shared daemon, and `all` prepares its gatewayd supervision up front.
+declare -A TARGET_OWN_DAEMON=(
+    [bmc]=start_bmc_platformd
+    [compute]=start_compute_platformd
+)
+
+# restart_platformd replaces the running platformd with the one the given
+# start function brings up. The swtpm is reprovisioned first: start_platformd
+# wipes the platform directory, so the new daemon meets the fresh TPM a
+# single-target run gives it rather than one an earlier daemon provisioned.
+restart_platformd() {
+    stop_platformd
+    start_swtpm
+    "$1" || abort_no_daemon
 }
 
 # abort_no_daemon ends the run when platformd did not come up.
@@ -851,6 +1009,11 @@ setup_env_vars() {
     export PLATFORM_CLIENT_CERT="/tmp/platformd-integration/tls/client-bundle.pem"
     export PLATFORM_CLIENT_KEY="/tmp/platformd-integration/tls/client-bundle.pem"
     export PLATFORM_CA_CERT="/tmp/platformd-integration/tls/ca-bundle.crt"
+    # The same issuer's bundle for the fixed non-system tenant
+    # harness-tenant, written before client-bundle.pem: the suites that
+    # assert what a tenant outside the system tenant is refused use it.
+    export PLATFORM_TENANT_CLIENT_CERT="/tmp/platformd-integration/tls/tenant-client-bundle.pem"
+    export PLATFORM_TENANT_CLIENT_KEY="/tmp/platformd-integration/tls/tenant-client-bundle.pem"
 
     # REST endpoint (mTLS requires HTTPS)
     export PLATFORM_API_ENDPOINT="https://localhost:${PLATFORMD_REST_PORT}"
@@ -903,6 +1066,8 @@ setup_env_vars() {
     echo "  PLATFORM_CLIENT_CERT=$PLATFORM_CLIENT_CERT (bundle)"
     echo "  PLATFORM_CLIENT_KEY=$PLATFORM_CLIENT_KEY (bundle)"
     echo "  PLATFORM_CA_CERT=$PLATFORM_CA_CERT"
+    echo "  PLATFORM_TENANT_CLIENT_CERT=$PLATFORM_TENANT_CLIENT_CERT (bundle)"
+    echo "  PLATFORM_TENANT_CLIENT_KEY=$PLATFORM_TENANT_CLIENT_KEY (bundle)"
     echo "  PLATFORM_REST_ENDPOINT=$PLATFORM_REST_ENDPOINT"
     echo "  PLATFORM_GRPC_ENDPOINT=$PLATFORM_GRPC_ENDPOINT"
     echo "  PLATFORM_QUIC_ENDPOINT=$PLATFORM_QUIC_ENDPOINT"
@@ -961,16 +1126,9 @@ elif [ "$RUN_TARGET" = "barrier-gate" ]; then
     export PLATFORM_BARRIER_GATE_DIR="/tmp/platformd-barrier-gate"
     export PLATFORM_BARRIER_GATE_BIN="/tmp/platformd"
     export PLATFORM_BARRIER_GATE_CONFIG="${PLATFORM_BUILD_DIR}/test/integration/barrier_gate/config.yaml"
-elif [ "$RUN_TARGET" = "bmc" ]; then
-    # BMC target: start vBMC first (generates /tmp/vbmc-ca.pem and the
-    # modified config that trusts it), then start platformd with that config.
-    start_vbmc || echo "WARNING: vBMC setup failed, BMC tests may fail"
-    start_platformd "${VBMC_PLATFORMD_CONFIG}" || abort_no_daemon
-elif [ "$RUN_TARGET" = "compute" ]; then
-    # Compute target: platformd with the local QEMU provider, so the VM
-    # tools and RPCs reach a VM orchestrator.
-    prepare_compute_config
-    start_platformd "${COMPUTE_PLATFORMD_CONFIG}" || abort_no_daemon
+elif [ -n "${TARGET_OWN_DAEMON[$RUN_TARGET]:-}" ]; then
+    # bmc and compute: the platformd their suite needs, not the shared one.
+    "${TARGET_OWN_DAEMON[$RUN_TARGET]}" || abort_no_daemon
 elif [ "$RUN_TARGET" = "proxy" ]; then
     # The proxy suite talks to the shared platformd and also runs gatewayd
     # itself, supervised, to kill its children under load.
@@ -1084,10 +1242,25 @@ run_test() {
     fi
 }
 
+# run_with_own_daemon runs one `all` suite on the platformd TARGET_OWN_DAEMON
+# names for it, the daemon its single-target run gets, then brings the shared
+# daemon back for the suites after it.
+run_with_own_daemon() {
+    local target="$1"
+    restart_platformd "${TARGET_OWN_DAEMON[$target]}"
+    run_test "$target"
+    restart_platformd start_platformd
+}
+
 if [ "$RUN_TARGET" = "all" ]; then
-    # Every suite in ALL_TARGETS, on the one shared platformd.
+    # Every suite in ALL_TARGETS on the shared platformd, except those in
+    # TARGET_OWN_DAEMON, which each get their own for the length of the suite.
     for target in "${ALL_TARGETS[@]}"; do
-        run_test "$target"
+        if [ -n "${TARGET_OWN_DAEMON[$target]:-}" ]; then
+            run_with_own_daemon "$target"
+        else
+            run_test "$target"
+        fi
     done
 else
     run_test "$RUN_TARGET"

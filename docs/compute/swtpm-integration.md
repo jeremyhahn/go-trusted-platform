@@ -68,7 +68,7 @@ Default swtpm configuration (anonymous swtpm; a vTPM bundle uses its own paths):
 #### Startup
 - Starts swtpm daemon before QEMU
 - Waits for socket to be ready (5s timeout)
-- Passes socket path to QEMU via `-chardev` and `-tpmdev`
+- Passes the socket swtpm opened to QEMU via `-chardev` and `-tpmdev`
 
 #### Shutdown
 - Automatically stops swtpm when VM exits
@@ -143,9 +143,10 @@ Creates and initializes an swtpm instance:
 2. Update state to StateStarting
 3. **Start swtpm daemon**
 4. **Wait for socket (5s timeout)**
-5. Start QEMU VM
-6. Update state to StateRunning
-7. Launch wait goroutine
+5. Point the QEMU config at the socket swtpm opened (`SocketPath()`)
+6. Start QEMU VM
+7. Update state to StateRunning
+8. Launch wait goroutine
 
 ### Wait Goroutine
 
@@ -171,6 +172,7 @@ with in-memory fakes through the orchestrator's `emulatorFor` and
 `createDisk` seams, so the tests need none of the binaries and never skip:
 
 - `TestQEMUOrchestrator_SWTPM_Create`: TPM state, socket metadata, disk, Delete
+- `TestQEMUOrchestrator_SWTPM_StartAttachesVMToLiveSocket`: each start hands QEMU the socket swtpm opened
 - `TestQEMUOrchestrator_SWTPM_DeleteStopsRunningSWTPM`: Delete stops swtpm
 - `TestQEMUOrchestrator_SWTPM_CreateHelper`: state reuse without re-initializing
 - `TestQEMUOrchestrator_SWTPM_CreateHelperErrors`: open, setup and directory failures
@@ -259,8 +261,12 @@ case:
 `swtpm_setup` also runs in its own `swtpm-init-*` temp directory, and its
 output is copied into the state directory.
 
-The relocated socket path is not handed to QEMU. `Create` stores the original
-path in the QEMU config and in `Metadata["tpm_socket"]`.
+Each `Start` makes a new temp directory, so the socket moves on every start,
+including the start a reboot runs after its stop. The configured path never
+changes: `SocketPath()` reports the socket the running swtpm listens on, and
+the configured path once it is stopped. The orchestrator's `Start` hands QEMU
+`SocketPath()` after the socket is ready. `Metadata["tpm_socket"]` keeps the
+configured path.
 
 ## Security Considerations
 

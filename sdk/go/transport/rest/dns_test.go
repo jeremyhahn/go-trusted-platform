@@ -22,6 +22,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -117,6 +118,16 @@ func TestDNS_SDKOverREST_IdentifiersTravelInThePath(t *testing.T) {
 			method: http.MethodGet, path: "/api/v1/dns/zones/example.com./records", bodyEmpty: true,
 		},
 		{
+			name:    "ListRecords paged from the start",
+			payload: dnsRecordsPayload,
+			call: func(c platformv1.DNSServiceClient) error {
+				_, err := c.ListRecords(context.Background(), &platformv1.ListRecordsRequest{
+					ZoneName: "example.com.", Limit: proto.Uint32(25), Offset: proto.Uint32(0)})
+				return err
+			},
+			method: http.MethodGet, path: "/api/v1/dns/zones/example.com./records", query: "limit=25&offset=0", bodyEmpty: true,
+		},
+		{
 			name:    "Resolve",
 			payload: dnsRecordsPayload,
 			call: func(c platformv1.DNSServiceClient) error {
@@ -140,6 +151,19 @@ func TestDNS_SDKOverREST_IdentifiersTravelInThePath(t *testing.T) {
 				t.Errorf("body = %v, want no fields: every identifier travels in the URL", sent.body)
 			}
 		})
+	}
+}
+
+func TestDNS_SDKOverREST_ListRecordsReadsThePage(t *testing.T) {
+	client, _ := dnsOverREST(t, `{"total":9,"limit":2,"offset":4,"records":[]}`)
+
+	resp, err := client.ListRecords(context.Background(), &platformv1.ListRecordsRequest{
+		ZoneName: "example.com.", Limit: proto.Uint32(2), Offset: proto.Uint32(4)})
+	if err != nil {
+		t.Fatalf("ListRecords over REST: %v", err)
+	}
+	if resp.GetTotal() != 9 || resp.GetLimit() != 2 || resp.GetOffset() != 4 {
+		t.Errorf("page = total %d limit %d offset %d, want 9 2 4", resp.GetTotal(), resp.GetLimit(), resp.GetOffset())
 	}
 }
 

@@ -18,6 +18,9 @@ import (
 	"errors"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
@@ -218,6 +221,9 @@ func TestMCPServiceProvider_DNSAddRecord_ValidationErrors(t *testing.T) {
 			err := provider.DNSAddRecord(ctx, tt.recordName, tt.recordType, tt.value, tt.ttl)
 			if tt.wantErr && err == nil {
 				t.Error("expected error")
+			}
+			if tt.wantErr && status.Code(err) != codes.InvalidArgument {
+				t.Errorf("status.Code(%v) = %v, want InvalidArgument", err, status.Code(err))
 			}
 			if !tt.wantErr && err != nil {
 				t.Errorf("unexpected error: %v", err)
@@ -538,9 +544,16 @@ func TestMCPServiceProvider_DeviceGet_NotFound(t *testing.T) {
 		DeviceService: mockSvc,
 	})
 
+	// A missing device is NotFound over MCP, as it is over gRPC.
 	_, err := provider.DeviceGet(ctx, "999")
-	if err == nil {
-		t.Error("expected error for non-existent device")
+	if got := status.Code(err); got != codes.NotFound {
+		t.Fatalf("DeviceGet(999) code = %v (%v), want NotFound", got, err)
+	}
+	if err := provider.DeviceDelete(ctx, "999"); status.Code(err) != codes.NotFound {
+		t.Fatalf("DeviceDelete(999) = %v, want NotFound", err)
+	}
+	if err := provider.DeviceUpdate(ctx, "999", nil); status.Code(err) != codes.NotFound {
+		t.Fatalf("DeviceUpdate(999) = %v, want NotFound", err)
 	}
 }
 

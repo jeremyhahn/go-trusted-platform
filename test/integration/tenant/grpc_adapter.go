@@ -19,6 +19,7 @@ package tenant
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"time"
 
@@ -26,7 +27,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -68,21 +68,30 @@ func (e ErrGRPCCallFailed) Unwrap() error {
 
 // GRPCAdapter implements TenantCommands using native gRPC API
 type GRPCAdapter struct {
-	endpoint string
-	conn     *grpc.ClientConn
-	client   platformv1.TenantServiceClient
+	endpoint  string
+	tlsConfig *tls.Config
+	conn      *grpc.ClientConn
+	client    platformv1.TenantServiceClient
 }
 
-// NewGRPCAdapter creates a new gRPC adapter
+// NewGRPCAdapter creates a new gRPC adapter that dials with the harness
+// admin credential (system tenant).
 func NewGRPCAdapter() *GRPCAdapter {
+	return NewGRPCAdapterWithTLS(helpers.TLSConfigOrInsecure())
+}
+
+// NewGRPCAdapterWithTLS creates a gRPC adapter that dials with tlsConfig,
+// so a test can call as the tenant another client credential is bound to.
+func NewGRPCAdapterWithTLS(tlsConfig *tls.Config) *GRPCAdapter {
 	return &GRPCAdapter{
-		endpoint: GetGRPCEndpoint(),
+		endpoint:  GetGRPCEndpoint(),
+		tlsConfig: tlsConfig,
 	}
 }
 
 // Setup prepares the adapter for testing
 func (a *GRPCAdapter) Setup(ctx context.Context) error {
-	tlsConfig := helpers.TLSConfigOrInsecure()
+	tlsConfig := a.tlsConfig
 
 	// Create a short timeout context for the dial attempt (5 seconds)
 	dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -138,7 +147,7 @@ func (a *GRPCAdapter) CreateTenant(ctx context.Context, opts CreateTenantOptions
 	}
 
 	return &CreateTenantResult{
-		Tenant: a.pbToTenantData(resp.GetTenant()),
+		Tenant: pbToTenantData(resp.GetTenant()),
 	}, nil
 }
 
@@ -154,7 +163,7 @@ func (a *GRPCAdapter) GetTenant(ctx context.Context, opts GetTenantOptions) (*Ge
 	}
 
 	return &GetTenantResult{
-		Tenant: a.pbToTenantData(resp.GetTenant()),
+		Tenant: pbToTenantData(resp.GetTenant()),
 	}, nil
 }
 
@@ -170,7 +179,7 @@ func (a *GRPCAdapter) GetTenantByName(ctx context.Context, opts GetTenantByNameO
 	}
 
 	return &GetTenantByNameResult{
-		Tenant: a.pbToTenantData(resp.GetTenant()),
+		Tenant: pbToTenantData(resp.GetTenant()),
 	}, nil
 }
 
@@ -192,7 +201,7 @@ func (a *GRPCAdapter) UpdateTenant(ctx context.Context, opts UpdateTenantOptions
 	}
 
 	return &UpdateTenantResult{
-		Tenant: a.pbToTenantData(resp.GetTenant()),
+		Tenant: pbToTenantData(resp.GetTenant()),
 	}, nil
 }
 
@@ -227,7 +236,7 @@ func (a *GRPCAdapter) ListTenants(ctx context.Context, opts ListTenantsOptions) 
 
 	tenants := make([]*TenantData, 0, len(resp.GetTenants()))
 	for _, t := range resp.GetTenants() {
-		tenants = append(tenants, a.pbToTenantData(t))
+		tenants = append(tenants, pbToTenantData(t))
 	}
 
 	return &ListTenantsResult{
@@ -291,9 +300,9 @@ func (a *GRPCAdapter) GetQuotas(ctx context.Context, opts GetQuotasOptions) (*Ge
 
 	return &GetQuotasResult{
 		TenantID: resp.GetTenantId(),
-		Compute:  a.pbToComputeQuotaData(resp.GetCompute()),
-		Network:  a.pbToNetworkQuotaData(resp.GetNetwork()),
-		Storage:  a.pbToStorageQuotaData(resp.GetStorage()),
+		Compute:  pbToComputeQuotaData(resp.GetCompute()),
+		Network:  pbToNetworkQuotaData(resp.GetNetwork()),
+		Storage:  pbToStorageQuotaData(resp.GetStorage()),
 	}, nil
 }
 
@@ -340,9 +349,9 @@ func (a *GRPCAdapter) UpdateQuotas(ctx context.Context, opts UpdateQuotasOptions
 
 	return &UpdateQuotasResult{
 		TenantID: quotasResp.GetTenantId(),
-		Compute:  a.pbToComputeQuotaData(quotasResp.GetCompute()),
-		Network:  a.pbToNetworkQuotaData(quotasResp.GetNetwork()),
-		Storage:  a.pbToStorageQuotaData(quotasResp.GetStorage()),
+		Compute:  pbToComputeQuotaData(quotasResp.GetCompute()),
+		Network:  pbToNetworkQuotaData(quotasResp.GetNetwork()),
+		Storage:  pbToStorageQuotaData(quotasResp.GetStorage()),
 	}, nil
 }
 
@@ -412,102 +421,6 @@ func (a *GRPCAdapter) SyncTenants(ctx context.Context) (*SyncTenantsResult, erro
 		Success: resp.GetStatus().GetSuccess(),
 		Message: resp.GetStatus().GetMessage(),
 	}, nil
-}
-
-// =============================================================================
-// Helper Methods - Protobuf to Data Conversion
-// =============================================================================
-
-// pbToTenantData converts protobuf Tenant to TenantData
-func (a *GRPCAdapter) pbToTenantData(pb *platformv1.Tenant) *TenantData {
-	if pb == nil {
-		return nil
-	}
-
-	data := &TenantData{
-		ID:          pb.GetId(),
-		Name:        pb.GetName(),
-		DisplayName: pb.GetDisplayName(),
-		State:       a.pbToTenantState(pb.GetState()),
-		Labels:      pb.GetLabels(),
-		Annotations: pb.GetAnnotations(),
-	}
-
-	if pb.GetComputeQuota() != nil {
-		data.ComputeQuota = a.pbToComputeQuotaData(pb.GetComputeQuota())
-	}
-
-	if pb.GetNetworkQuota() != nil {
-		data.NetworkQuota = a.pbToNetworkQuotaData(pb.GetNetworkQuota())
-	}
-
-	if pb.GetStorageQuota() != nil {
-		data.StorageQuota = a.pbToStorageQuotaData(pb.GetStorageQuota())
-	}
-
-	if pb.GetCreatedAt() != nil {
-		data.CreatedAt = pb.GetCreatedAt().AsTime()
-	}
-
-	if pb.GetUpdatedAt() != nil {
-		data.UpdatedAt = pb.GetUpdatedAt().AsTime()
-	}
-
-	return data
-}
-
-// pbToTenantState converts protobuf TenantState to tenant.State
-func (a *GRPCAdapter) pbToTenantState(state platformv1.TenantState) tenant.State {
-	switch state {
-	case platformv1.TenantState_TENANT_STATE_PENDING:
-		return tenant.StateCreated
-	case platformv1.TenantState_TENANT_STATE_ACTIVE:
-		return tenant.StateActive
-	case platformv1.TenantState_TENANT_STATE_SUSPENDED:
-		return tenant.StateSuspended
-	case platformv1.TenantState_TENANT_STATE_DELETING:
-		return tenant.StateDeleting
-	case platformv1.TenantState_TENANT_STATE_DELETED:
-		return tenant.StateDeleted
-	default:
-		return tenant.StateCreated
-	}
-}
-
-// pbToComputeQuotaData converts protobuf ComputeQuota to ComputeQuotaData
-func (a *GRPCAdapter) pbToComputeQuotaData(pb *platformv1.ComputeQuota) *ComputeQuotaData {
-	if pb == nil {
-		return nil
-	}
-	return &ComputeQuotaData{
-		MaxVMs:        pb.GetMaxVms(),
-		MaxContainers: pb.GetMaxContainers(),
-		MaxVCPUs:      pb.GetMaxVcpus(),
-		MaxMemoryMB:   pb.GetMaxMemoryMb(),
-	}
-}
-
-// pbToNetworkQuotaData converts protobuf NetworkQuota to NetworkQuotaData
-func (a *GRPCAdapter) pbToNetworkQuotaData(pb *platformv1.NetworkQuota) *NetworkQuotaData {
-	if pb == nil {
-		return nil
-	}
-	return &NetworkQuotaData{
-		MaxBridges:       pb.GetMaxBridges(),
-		MaxPorts:         pb.GetMaxPorts(),
-		MaxBandwidthMbps: pb.GetMaxBandwidthMbps(),
-	}
-}
-
-// pbToStorageQuotaData converts protobuf StorageQuota to StorageQuotaData
-func (a *GRPCAdapter) pbToStorageQuotaData(pb *platformv1.StorageQuota) *StorageQuotaData {
-	if pb == nil {
-		return nil
-	}
-	return &StorageQuotaData{
-		MaxVolumesGB: pb.GetMaxVolumesGb(),
-		MaxSnapshots: pb.GetMaxSnapshots(),
-	}
 }
 
 // =============================================================================

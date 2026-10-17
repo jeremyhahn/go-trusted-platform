@@ -36,6 +36,7 @@ import (
 
 	"github.com/jeremyhahn/go-codec"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmsbackend "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/backend"
 	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
@@ -117,6 +118,24 @@ type mockCA struct {
 	revokedCerts  []*x509.Certificate
 	generateCRL   bool
 	privateKey    *ecdsa.PrivateKey
+	keyStore      *renewKeyStore
+}
+
+// renewKeyStore is the CA keystore a renewal sees: it holds the leaf key and
+// records the rotations. Every other Backend method panics through the nil
+// embedded interface, because a renewal must not call it.
+type renewKeyStore struct {
+	xkmsbackend.Backend
+	rotated []string
+}
+
+func (k *renewKeyStore) Signer(_ context.Context, _ *xkmssdk.KeyAttributes) (crypto.Signer, error) {
+	return nil, nil
+}
+
+func (k *renewKeyStore) RotateKey(_ context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
+	k.rotated = append(k.rotated, attrs.CN)
+	return nil, nil
 }
 
 func newMockCA() *mockCA {
@@ -136,8 +155,11 @@ func newMockCA() *mockCA {
 		revokedCerts:  make([]*x509.Certificate, 0),
 		generateCRL:   true,
 		privateKey:    privateKey,
+		keyStore:      &renewKeyStore{},
 	}
 }
+
+func (m *mockCA) KeyStore() xkmsbackend.Backend { return m.keyStore }
 
 func (m *mockCA) Public() crypto.PublicKey { return &m.privateKey.PublicKey }
 func (m *mockCA) Sign(r io.Reader, digest []byte, _ crypto.SignerOpts) ([]byte, error) {
@@ -940,6 +962,7 @@ func TestCAHandler_HandleRenew_Success(t *testing.T) {
 	resp := handler.HandleRequest(context.Background(), req)
 
 	require.Equal(t, quicwire.StatusOK, resp.Status)
+	assert.Equal(t, []string{"test.example.com"}, ca.keyStore.rotated, "renewal must rotate the leaf key")
 
 	var renewResp CARenewResponse
 	err = quicwire.DecodePayload(resp.Payload, &renewResp)
@@ -3272,4 +3295,23 @@ type mockCAGenerateCRLFails struct {
 
 func (m *mockCAGenerateCRLFails) GenerateCRL(_ context.Context) ([]byte, error) {
 	return nil, errors.New("CRL generation failed")
+}
+
+func TestCAHandler_HandleRenew_RefusesTheCAOwnCertificate(t *testing.T) {
+	logger := logging.DefaultLogger()
+	ca := newMockCA()
+	ca.certStore.StoreCertificate(ca.intermCert)
+	handler := NewCAHandler(logger, ca, nil)
+
+	payload, err := quicwire.EncodePayload(&CARenewRequest{
+		Serial:     ca.intermCert.SerialNumber.String(),
+		ExtendDays: 365,
+	})
+	require.NoError(t, err)
+
+	resp := handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpCARenew, Payload: payload})
+
+	assert.Equal(t, quicwire.StatusFailedPrecondition, resp.Status)
+	assert.Empty(t, ca.keyStore.rotated, "renewal must not rotate the CA signing key")
+	assert.Empty(t, ca.revokedCerts, "renewal must not revoke the CA certificate")
 }

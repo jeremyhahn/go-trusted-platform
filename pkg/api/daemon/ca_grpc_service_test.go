@@ -937,6 +937,7 @@ func TestCAGRPCService_RenewCertificate_Success(t *testing.T) {
 
 	mockCA := &configurableMockCA{
 		certStore:  mockStore,
+		keyStore:   &renewKeyStore{hasKey: true},
 		issuedCert: newCert,
 	}
 
@@ -981,6 +982,7 @@ func TestCAGRPCService_RenewCertificate_WithNewSANs(t *testing.T) {
 
 	mockCA := &configurableMockCA{
 		certStore:  mockStore,
+		keyStore:   &renewKeyStore{hasKey: true},
 		issuedCert: newCert,
 	}
 
@@ -1021,6 +1023,7 @@ func TestCAGRPCService_RenewCertificate_Error(t *testing.T) {
 
 	mockCA := &configurableMockCA{
 		certStore:    mockStore,
+		keyStore:     &renewKeyStore{hasKey: true},
 		issueCertErr: errors.New("failed to renew"),
 	}
 
@@ -2604,6 +2607,7 @@ type configurableMockCA struct {
 	bundle                 []byte
 	parsedBundle           []*x509.Certificate
 	certStore              xkmssdk.CertStore
+	keyStore               xkmssdk.ServiceBackend
 	caBundleCalled         bool
 	caBundleFilteredCalled bool
 }
@@ -2664,6 +2668,15 @@ func (m *configurableMockCA) RevokeCert(_ context.Context, _ *x509.Certificate, 
 	return m.revokeErr
 }
 func (m *configurableMockCA) CertStore() xkmssdk.CertStore { return m.certStore }
+
+// KeyStore returns m.keyStore; a nil field is returned as a nil interface,
+// the way a CA without a keystore reports it.
+func (m *configurableMockCA) KeyStore() xkmssdk.ServiceBackend {
+	if m.keyStore == nil {
+		return nil
+	}
+	return m.keyStore
+}
 func (m *configurableMockCA) GenerateCRL(_ context.Context) ([]byte, error) {
 	return nil, errors.New("CRL generation not supported")
 }

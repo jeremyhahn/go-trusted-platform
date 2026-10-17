@@ -428,7 +428,7 @@ func (h *CAHandler) SignCSR(ctx context.Context, payload []byte) *quicwire.Respo
 	if granted, ok := AuthorizedContextFromContext(ctx); ok {
 		authCtx = granted
 	}
-	if err := issuance.AuthorizeSignCSR(authCtx); err != nil {
+	if err := issuance.AuthorizeSignCSR(ctx, authCtx); err != nil {
 		return h.errorResponse(quicwire.StatusPermissionDenied, err)
 	}
 	if h.ca == nil {
@@ -683,13 +683,14 @@ func (h *CAHandler) handleRenew(ctx context.Context, req *quicwire.Request) *qui
 		KeyType:      xkmssdk.KeyTypeTLS,
 	}
 
-	// Supersede the existing certificate before issuing the renewal.
-	// DeleteKeys must be true: it removes the old cert-store entry and the
-	// leaf's CN-namespaced key — without it IssueCertificate fails with
-	// ErrCertificateAlreadyExists. Mirrors the gRPC and REST renew handlers.
-	if revokeErr := h.ca.RevokeCert(ctx, existingCert, quicbaasca.RevokeOptions{DeleteKeys: true}); revokeErr != nil {
-		h.logger.Error(revokeErr, "failed to supersede old certificate during renewal")
-		return h.errorResponse(quicwire.StatusInternalError, ErrCARenewFailed{Cause: revokeErr})
+	// Rotate the leaf key and supersede the existing certificate before
+	// issuing the renewal; the same step the gRPC, REST and MCP renew take.
+	if err := issuance.SupersedeForRenewal(ctx, h.ca, existingCert, caReq.KeyAttributes); err != nil {
+		h.logger.Error(err, "failed to supersede old certificate during renewal")
+		if issuance.IsRenewalRefused(err) {
+			return h.errorResponse(quicwire.StatusFailedPrecondition, ErrCARenewFailed{Cause: err})
+		}
+		return h.errorResponse(quicwire.StatusInternalError, ErrCARenewFailed{Cause: err})
 	}
 
 	issuedRenew, err := h.ca.IssueCertificate(ctx, caReq)
