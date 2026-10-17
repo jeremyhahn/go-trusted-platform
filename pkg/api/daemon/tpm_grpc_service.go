@@ -117,6 +117,9 @@ func (s *TPMGRPCService) Info(
 	if cfg := tpm.Config(); cfg != nil {
 		resp.IsSimulator = cfg.UseSimulator
 	}
+	for _, bank := range tpmattrs.ActivePCRBanks(tpm) {
+		resp.PcrBanks = append(resp.PcrBanks, hashAlgToProtoPCRBank(bank))
+	}
 
 	// Populate structured fields from the typed xkms.FixedProperties
 	// view of TPM2_CAP_TPM_PROPERTIES. This is the production wire
