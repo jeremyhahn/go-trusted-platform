@@ -46,7 +46,8 @@ The evidence is the package tree: **there is no `pkg/kms` in this repository**
 | **Key generation, storage, crypto operations, backends** | go-xkms via `go-quicbaas/sdk/go` | **not this repo** |
 | **Hardware backends (TPM 2.0, PKCS#11, AWS/GCP/Azure KMS, Vault)** | go-xkms | **not this repo** |
 | KMS service and lifecycle | `pkg/api/daemon/kms_service.go`, `kms_service_extended.go` | this repo |
-| Platform-scoped KMS service | `pkg/api/daemon/kms_platform_service.go`, `kms_platform_rest.go` | this repo |
+| Platform-scoped KMS service | `pkg/api/daemon/kms_platform_service.go` |
+| KMS routes on the daemon REST listener | `pkg/api/daemon/rest_kms.go` | this repo | this repo |
 | gRPC `KeyManagementService` | `pkg/api/grpc/kms_service.go`, `kms_types.go` | this repo |
 | REST routes | `pkg/webservice/v1/rest/kms/` | this repo |
 | QUIC handlers | `pkg/api/daemon/quic_kms.go`, `quic_kms_extended.go` | this repo |

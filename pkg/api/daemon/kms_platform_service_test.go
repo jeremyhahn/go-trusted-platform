@@ -17,21 +17,16 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
-	"github.com/gorilla/mux"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkcrypto "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
-	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
-	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -1717,36 +1712,4 @@ func TestPlatformKMSBackendErrorClassesOverGRPC(t *testing.T) {
 			t.Errorf("ListKeys(no client) = %v, want Unavailable: %v", got, err)
 		}
 	})
-}
-
-// TestPlatformKMSBackendErrorClassesOverREST asks the live REST facade the
-// same questions: each answer carries the HTTP status for the gRPC class.
-func TestPlatformKMSBackendErrorClassesOverREST(t *testing.T) {
-	t.Parallel()
-	backend := newTestPlatformKMSBackend(&platformMockKMSClient{
-		getKeyMetadataFn: func(ctx context.Context, keyID string) (*kms.KeyMetadataResponse, error) {
-			return nil, sdkerrors.NewNotFound("GetKeyMetadata", "no key "+keyID)
-		},
-	}, &platformMockCryptoClient{})
-	router := mux.NewRouter()
-	restapi.NewKMSHandlers(NewPlatformKMSRESTFacade(backend), boostSlogLogger()).RegisterRoutes(router)
-
-	tests := []struct {
-		name string
-		path string
-		want int
-	}{
-		{"missing key is 404", "/api/v1/kms/keys/missing", http.StatusNotFound},
-		{"bad cursor is 400", "/api/v1/kms/keys?cursor=not-a-number", http.StatusBadRequest},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tt.path, nil))
-			if w.Code != tt.want {
-				t.Errorf("GET %s = %d, want %d: %s", tt.path, w.Code, tt.want, w.Body.String())
-			}
-		})
-	}
 }

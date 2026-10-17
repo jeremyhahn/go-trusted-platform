@@ -19,7 +19,8 @@ What is local is service and transport code:
 | Location | Role |
 |---|---|
 | `pkg/api/daemon/kms_service.go`, `kms_service_extended.go` | The service the transports call |
-| `pkg/api/daemon/kms_platform_service.go`, `kms_platform_rest.go` | Platform-scoped KMS service and its REST wiring |
+| `pkg/api/daemon/kms_platform_service.go` | Platform-scoped KMS service |
+| `pkg/api/daemon/rest_kms.go` | The KMS routes on the daemon REST listener, behind its scope guard |
 | `pkg/api/daemon/quic_kms.go`, `quic_kms_extended.go` | QUIC handlers |
 | `pkg/api/daemon/mcp_service_kms_lifecycle.go` | MCP key-lifecycle tools |
 | `pkg/webservice/v1/rest/kms/` | REST routes |
