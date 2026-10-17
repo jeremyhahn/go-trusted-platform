@@ -6,10 +6,13 @@
 #   in ci.yml runs on (DS-2273); that job takes no checkout and no `uses:`.
 # - `batch` is the self-hosted label of the batch runners batch.yml runs on
 #   (#860); nothing else uses it.
+# - `bigdisk` is the label of the Dell/omega runners with the large disks; the
+#   Devcontainer image job in ci.yml runs on it (DS-2467).
 self-hosted-runner:
   labels:
     - ci-gate
     - batch
+    - bigdisk
 
 # The ignore is deliberate and scoped to one file and one message:
 paths:
