@@ -803,7 +803,11 @@ func (p *MCPServiceProvider) DeviceGet(ctx context.Context, deviceID string) (in
 	if err != nil {
 		return nil, err
 	}
-	return p.deviceService.Get(ctx, id)
+	dev, err := p.deviceService.Get(ctx, id)
+	if err != nil {
+		return nil, deviceStatusError(err)
+	}
+	return dev, nil
 }
 
 // DeviceList lists devices with optional filter.
@@ -841,7 +845,7 @@ func (p *MCPServiceProvider) DeviceDelete(ctx context.Context, deviceID string) 
 	}
 	dev, err := p.deviceService.Get(ctx, id)
 	if err != nil {
-		return err
+		return deviceStatusError(err)
 	}
 	return p.deviceService.Delete(ctx, dev)
 }
@@ -858,7 +862,7 @@ func (p *MCPServiceProvider) DeviceUpdate(ctx context.Context, deviceID string, 
 	}
 	dev, err := p.deviceService.Get(ctx, id)
 	if err != nil {
-		return err
+		return deviceStatusError(err)
 	}
 	if model, ok := updates["model"].(string); ok {
 		dev.Model = model
