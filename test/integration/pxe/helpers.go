@@ -60,7 +60,8 @@ const (
 	DefaultPlatformdSocket = "/run/platformd.sock"
 
 	// DefaultPlatformAPIEndpoint is the default platformd REST endpoint.
-	DefaultPlatformAPIEndpoint = "127.0.0.1:8443"
+	// It carries its scheme, as PLATFORM_API_ENDPOINT does: REST is TLS only.
+	DefaultPlatformAPIEndpoint = "https://127.0.0.1:8443"
 
 	// DefaultPlatformGRPCEndpoint is the default platformd gRPC endpoint.
 	DefaultPlatformGRPCEndpoint = "127.0.0.1:10443"
