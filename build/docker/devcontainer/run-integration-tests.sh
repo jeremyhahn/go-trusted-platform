@@ -84,7 +84,6 @@ declare -A TARGET_PACKAGES=(
     [dns]="./test/integration/dns/..."
     [e2e]="./test/integration/e2e/..."
     [helpers]="./test/integration/helpers/..."
-    [invitation]="./test/integration/invitation/..."
     [ipxe]="./test/integration/ipxe/..."
     [ipxe-dhcp]="./test/integration/ipxe/..."
     [ipxe-tftp]="./test/integration/ipxe/..."
@@ -98,7 +97,6 @@ declare -A TARGET_PACKAGES=(
     [registry]="./test/integration/registry/..."
     [sdk]="./test/integration/sdk/..."
     [secrets]="./test/integration/secrets/..."
-    [user-registration]="./test/integration/user_registration/..."
     [vtpm]="./test/integration/vtpm/..."
 )
 
@@ -188,9 +186,9 @@ declare -A TARGET_NO_DAEMON=(
 ALL_TARGETS=(
     helpers datastore quicbaas sdk cluster cmd ipxe installer e2e
     root acme attestation authenticode ca ceremony cli compute
-    container daemon device dns fido2 iam invitation iso kms luks network
+    container daemon device dns fido2 iam iso kms luks network
     ntp objectstorage piv provision proxy quic registry restroutes sdn
-    secrets tenant tpm user-registration vpn vtpm
+    secrets tenant tpm vpn vtpm
 )
 
 RUN_TARGET="all"

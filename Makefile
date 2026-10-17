@@ -1903,11 +1903,6 @@ integration-test-compute: build-devcontainer
 integration-test-container: build-devcontainer
 	$(call run-integration-suite,container)
 
-## integration-test-invitation: Run the invitation suite (test/integration/invitation) in devcontainer
-.PHONY: integration-test-invitation
-integration-test-invitation: build-devcontainer
-	$(call run-integration-suite,invitation)
-
 ## integration-test-iso: Run the ISO suite (test/integration/iso) in devcontainer
 .PHONY: integration-test-iso
 integration-test-iso: build-devcontainer
@@ -1927,11 +1922,6 @@ integration-test-registry: build-devcontainer
 .PHONY: integration-test-sdk
 integration-test-sdk: build-devcontainer
 	$(call run-integration-suite,sdk)
-
-## integration-test-user-registration: Run the user registration suite (test/integration/user_registration) in devcontainer
-.PHONY: integration-test-user-registration
-integration-test-user-registration: build-devcontainer
-	$(call run-integration-suite,user-registration)
 
 ## bench-ntp: Run time-synchronization benchmarks
 .PHONY: bench-ntp
