@@ -118,7 +118,7 @@ func daemonRouteTable(t *testing.T) (*RESTServer, []string) {
 var daemonDivergentClaims = map[string]string{
 	"/platform.v1.CAService/RevokeCertificate": "#452: the daemon revokes at POST /api/v1/ca/certificates/{serial}/revoke; the claim is the webservice's DELETE shape",
 
-	"/platform.v1.AttestationService/PollDeviceVerdicts": "#949: the verdict feed is filtered by the webservice session's tenant, so only the webservice serves it over REST; platform-token callers poll it over gRPC, QUIC and MCP (rest_attestation.go)",
+	"/platform.v1.AttestationService/PollDeviceVerdicts": "#452 (#949): the verdict feed is filtered by the webservice session's tenant, so only the webservice serves it over REST; platform-token callers poll it over gRPC, QUIC and MCP (rest_attestation.go)",
 
 	"/platform.v1.DeviceService/BootCertificate": deviceBootMachineFacing,
 	"/platform.v1.DeviceService/BootDelivery":    deviceBootMachineFacing,

@@ -123,6 +123,7 @@ func newCAParityFixture(t *testing.T) *caParityFixture {
 		trustedRoot: root,
 		issuedCert:  leaf,
 		certStore:   &mockCertStore{certs: map[string]*x509.Certificate{serial: leaf}},
+		keyStore:    &renewKeyStore{hasKey: true},
 	}}
 	return &caParityFixture{
 		ca:     ca,

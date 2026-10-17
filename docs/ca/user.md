@@ -124,9 +124,20 @@ platformctl ca renew 0A1B2C3D --days 90
 ```
 
 `--force` renews even when the certificate is not near expiry. That is the flag
-to use after a suspected key exposure — renew first, then revoke the old one.
+to use after a suspected key exposure.
 
-**Renewal has no REST route.** Use the CLI, gRPC, QUIC or MCP.
+Renewal certifies a fresh key. When the CA holds the certificate's key, it
+rotates that key to a new version first. The CA then revokes the old certificate
+and removes it from the store, and only then issues the renewal. If the key
+rotation, the revocation or the removal fails, the renewal fails and names the
+failed step. A rotation or lookup failure leaves the old certificate in place.
+
+The CA refuses to renew its own root or intermediate certificate, and it
+refuses when it has no keystore or certificate store. Those refusals come back
+as a failed precondition, not a server error.
+
+Renewal is served by every transport, REST included:
+`POST /api/v1/ca/certificates/{serial}/renew` (see [api.md](api.md)).
 
 ---
 
