@@ -147,6 +147,19 @@ handler needs. Until that is resolved, the REST issuance path and the gRPC
 message are not fully aligned. Verify against the code before assuming a field
 exists.
 
+**Platform CA key scope (#949).** The platform CA keystore
+(`pkg/ca/quicbaas/keystore_adapter.go`) calls the SDK KMS with the caller's
+context unchanged. An unbound context and the system tenant resolve to the
+same bare KMS key ID, because upstream treats the empty tenant as the system
+tenant (go-qrdb sdk `IsSystemTenant`). Pinning the CA to the system scope
+therefore changes nothing; `pkg/storage/quicbaas/ca_keystore_scope_test.go`
+proves it on the in-process SDK. The CI `kms.GetPublicKey: not_found` on
+CLI/Unix vTPM EK issuance is an SDK gap. In go-quicbaas v0.12.0-alpha,
+`pkg/service/kms.go:835` (`GetPublicKey`) passes the unscoped key ID, while
+`GetKey` scopes it with `tenantScopedKeyID`. Also, `pkg/kms` `KMSService.GetKey`
+answers from its metadata cache, so a key the backend no longer resolves still
+passes the `GetKey` leg.
+
 ## 7. Invariants
 
 1. **The CA's keys live in the stack's KMS, not here.** The adapters exist so

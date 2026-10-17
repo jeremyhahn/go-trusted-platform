@@ -1118,7 +1118,9 @@ func (s *rmcpSession) sendRecv(packet []byte) ([]byte, error) {
 		return nil, ErrUDPRecv{Cause: err}
 	}
 
-	s.logger.Debug("bmc: recv", "bytes", n, "hex", fmt.Sprintf("%x", buf[:n]))
+	// Length only: this datagram can be RAKP message 2, whose HMAC is keyed
+	// by the user's password and recovers it offline.
+	s.logger.Debug("bmc: recv", "bytes", n)
 
 	return buf[:n], nil
 }

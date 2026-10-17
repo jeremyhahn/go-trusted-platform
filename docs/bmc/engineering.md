@@ -328,6 +328,10 @@ Precedence on the CLI: **flag > environment > built-in default.**
     holds no private key for it. The BMC regenerates its own.
 18. **`RotationEngine` is store-ahead.** The store is written *before* the BMC,
     so the store is always the best available guess at real BMC state.
+19. **No RMCP+ datagram a BMC sends reaches the log.** `sendRecv` logs the
+    received length only, at every level: the exchange it carries includes
+    RAKP message 2, whose HMAC is keyed by the BMC user's password and
+    recovers it offline (`TestSendRecv_ResponseBytesNeverReachTheLog`).
 
 ## 5. Fail-closed paths
 

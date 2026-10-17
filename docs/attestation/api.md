@@ -49,7 +49,7 @@ refused (§5).
 | Get quote (TLS only — §5.1a) | `POST /api/v1/attestation/quote` | `GetAttestationQuote` (refused over Unix) | `OpAttestQuote` (`0x70`) | `attestation_get_quote` (HTTPS only) | refused — no TLS (§5.1a) |
 | Verify quote | `POST /api/v1/attestation/quote/verify` | `VerifyAttestationQuote` | `OpAttestVerify` (`0x71`) | `attestation_verify_quote` | ✅ |
 | Collect host attestation (TLS only — §5.1a) | `POST /api/v1/attestation/host` | `CollectHostAttestation` (refused over Unix) | `OpAttestHost` (`0x7E`), `OpAttestCollectHost` (`0x72`) | `attestation_collect_host` (HTTPS only) | refused — no TLS (§5.1a) |
-| Collect VM attestation | `POST /api/v1/attestation/vm/{id}` | `CollectVMAttestation` | `OpAttestVMWorkload` (`0x7F`) | `attestation_collect_vm` | ✅ |
+| Collect VM attestation | `POST /api/v1/attestation/vm/{id}` | `CollectVMAttestation` | `MISSING` — `OpAttestVMWorkload` (`0x7F`) routes to the daemon-native manifest handler, which the daemon does not wire, so it answers `StatusUnavailable` (`QUIC service unavailable: attestation`) | `attestation_collect_vm` | ✅ |
 | Collect container attestation | `POST /api/v1/attestation/container/{id}` | `CollectContainerAttestation` | `OpAttestContainerWorkload` (`0xED`) | `attestation_collect_container` | ✅ |
 | Attest a workload | `MISSING — docs/13 G7` | (covered by the two Collect RPCs) | `OpAttestDeviceWorkload` (`0xEE`) | `MISSING — docs/13 G7` | — |
 | Verify a workload | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
