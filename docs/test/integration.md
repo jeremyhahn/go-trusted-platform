@@ -790,7 +790,12 @@ persisted at `0x81010001`, the `tpm.ek.handle` both configs name, and its
 certificate, issued by a `swtpm_localca` CA created under `/tmp/swtpm/localca`,
 is written to NV index `0x01C00002`. `platformd` therefore opens a TPM it
 recognises as initialized and does not take its recovery path, which no
-shipped TPM needs. If `swtpm_setup` or `swtpm_localca` is missing, or
+shipped TPM needs. Both configs name that index as `tpm.ek.cert-handle`, so
+`platformctl tpm ek certificate` reads the certificate from NVRAM as it would
+on shipped hardware. Without it the TPM looks only in the platform certificate
+store, which nothing fills on a TPM the daemon adopts, and every transport
+answers NotFound. `TestIntegrationConfig_EKCertificateFromHarnessNV` in
+`pkg/app` holds both configs to the index. If `swtpm_setup` or `swtpm_localca` is missing, or
 provisioning fails, the runner stops with a `FATAL` message instead of starting
 the daemons on a TPM without an EK.
 
