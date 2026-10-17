@@ -264,12 +264,42 @@ func (c *CLIAdapter) runCommandStdout(ctx context.Context, args ...string) ([]by
 // Key Management Commands
 // =============================================================================
 
+// cliKeyAlgorithms maps the suite's algorithm names, which are the REST names
+// (docs/kms/api.md §2), to the names `kms key generate --algorithm` accepts
+// (docs/kms/cli.md §5). The other adapters translate the same way.
+var cliKeyAlgorithms = map[string]string{
+	"AES-128-GCM":       "aes-128",
+	"AES-192-GCM":       "aes-192",
+	"AES-256-GCM":       "aes-256",
+	"ChaCha20-Poly1305": "chacha20-poly1305",
+	"RSA-2048":          "rsa-2048",
+	"RSA-3072":          "rsa-3072",
+	"RSA-4096":          "rsa-4096",
+	"ECDSA-P256":        "ecdsa-p256",
+	"ECDSA-P384":        "ecdsa-p384",
+	"ECDSA-P521":        "ecdsa-p521",
+	"Ed25519":           "ed25519",
+	"HMAC-SHA256":       "hmac-sha256",
+	"HMAC-SHA384":       "hmac-sha384",
+	"HMAC-SHA512":       "hmac-sha512",
+}
+
+// cliKeyAlgorithm returns the CLI name for a suite algorithm name. A name the
+// table does not hold is passed through, so the test sees the CLI's own
+// refusal.
+func cliKeyAlgorithm(alg string) string {
+	if name, ok := cliKeyAlgorithms[alg]; ok {
+		return name
+	}
+	return alg
+}
+
 // KeyGenerate generates a new cryptographic key via CLI.
 func (c *CLIAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) (*KeyGenerateResult, error) {
 	args := []string{"kms", "key", "generate", opts.KeyID}
 
 	if opts.Algorithm != "" {
-		args = append(args, "--algorithm", opts.Algorithm)
+		args = append(args, "--algorithm", cliKeyAlgorithm(opts.Algorithm))
 	}
 
 	if opts.Purpose != "" {
