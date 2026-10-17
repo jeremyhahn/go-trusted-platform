@@ -572,6 +572,17 @@ func (c *CLIAdapter) ContextDelete(ctx context.Context, name string) (*ContextDe
 // Service Operations
 // =============================================================================
 
+// cliServiceJSON is one service as `platformctl service list|status -o json`
+// prints it: the SDK's daemon.ServiceInfo.
+type cliServiceJSON struct {
+	Name          string `json:"name"`
+	Type          string `json:"type"`
+	Status        string `json:"status"`
+	Health        string `json:"health"`
+	UptimeSeconds int64  `json:"uptime_seconds"`
+	Version       string `json:"version"`
+}
+
 // ServiceList lists all services via CLI.
 func (c *CLIAdapter) ServiceList(ctx context.Context) (*ServiceListResult, error) {
 	output, err := c.runCommand(ctx, "service", "list", "-o", "json")
@@ -579,23 +590,15 @@ func (c *CLIAdapter) ServiceList(ctx context.Context) (*ServiceListResult, error
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "service list", Err: err}
 	}
 
-	var resp struct {
-		Services []struct {
-			Name          string `json:"name"`
-			Type          string `json:"type"`
-			Status        string `json:"status"`
-			Health        string `json:"health"`
-			UptimeSeconds int64  `json:"uptime_seconds"`
-			Version       string `json:"version"`
-		} `json:"services"`
-	}
-
-	if err := json.Unmarshal(output, &resp); err != nil {
+	// `service list -o json` prints the services as a bare array
+	// (docs/daemon/cli.md §4.4).
+	var services []cliServiceJSON
+	if err := json.Unmarshal(output, &services); err != nil {
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "service list", Err: err}
 	}
 
 	result := &ServiceListResult{}
-	for _, svc := range resp.Services {
+	for _, svc := range services {
 		result.Services = append(result.Services, ServiceInfo{
 			Name:          svc.Name,
 			Type:          svc.Type,
@@ -616,34 +619,21 @@ func (c *CLIAdapter) ServiceStatus(ctx context.Context, serviceType string) (*Se
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "service status", Err: err}
 	}
 
-	var resp struct {
-		Service *struct {
-			Name          string `json:"name"`
-			Type          string `json:"type"`
-			Status        string `json:"status"`
-			Health        string `json:"health"`
-			UptimeSeconds int64  `json:"uptime_seconds"`
-			Version       string `json:"version"`
-		} `json:"service"`
-	}
-
-	if err := json.Unmarshal(output, &resp); err != nil {
+	// `service status -o json` prints the one service as a bare object
+	// (docs/daemon/cli.md §4.4).
+	var svc cliServiceJSON
+	if err := json.Unmarshal(output, &svc); err != nil {
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "service status", Err: err}
 	}
 
-	result := &ServiceStatusResult{}
-	if resp.Service != nil {
-		result.Service = &ServiceInfo{
-			Name:          resp.Service.Name,
-			Type:          resp.Service.Type,
-			Status:        resp.Service.Status,
-			Health:        resp.Service.Health,
-			UptimeSeconds: resp.Service.UptimeSeconds,
-			Version:       resp.Service.Version,
-		}
-	}
-
-	return result, nil
+	return &ServiceStatusResult{Service: &ServiceInfo{
+		Name:          svc.Name,
+		Type:          svc.Type,
+		Status:        svc.Status,
+		Health:        svc.Health,
+		UptimeSeconds: svc.UptimeSeconds,
+		Version:       svc.Version,
+	}}, nil
 }
 
 // ServiceStart starts a service via CLI.

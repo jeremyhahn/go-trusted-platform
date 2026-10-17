@@ -281,6 +281,12 @@ Start, stop and inspect the daemon's services.
 `<service-type>` is one of `tpm`, `sdn`, `compute`, `dns`, `acme`,
 `webservice` (alias `web`), `attestation`.
 
+With `-o json` (or `yaml`), `service list` prints a bare array of services and
+`service status` prints one bare service object, each with the fields `name`,
+`type`, `status` (`RUNNING`, `STOPPED`, `STARTING`, `STOPPING`, `ERROR`,
+`UNKNOWN`), `health` (`HEALTHY`, `DEGRADED`, `UNHEALTHY`, `UNKNOWN`),
+`uptime_seconds` and `version`.
+
 `start`, `stop` and `restart` are refused for every one of them (#317): the
 process owns each service, so the daemon answers `service <name> cannot be
 started or stopped at runtime: <reason>`, changes nothing, and the command
