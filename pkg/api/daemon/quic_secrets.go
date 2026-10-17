@@ -19,6 +19,8 @@ import (
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Secrets category (opcode 0xCE) handlers.
@@ -171,6 +173,17 @@ func (h *QUICServiceHandler) handleSecretsCategory(ctx context.Context, req *qui
 	return fn(h, ctx, payload)
 }
 
+// secretsErrorResponse answers a failed secrets call. A refusal the secrets
+// adapter classifies PermissionDenied (tenant.ErrSystemScopeOnly) answers
+// StatusPermissionDenied, as gRPC, Unix, REST and MCP do; any other failure
+// answers the operation's own status.
+func (h *QUICServiceHandler) secretsErrorResponse(failureStatus byte, op string, err error) *quicwire.Response {
+	if status.Code(err) == codes.PermissionDenied {
+		failureStatus = quicwire.StatusPermissionDenied
+	}
+	return h.errorResponse(failureStatus, ErrQUICOperationFailed{Op: op, Cause: err})
+}
+
 // SetSecretsService sets the secrets service after construction.
 func (h *QUICServiceHandler) SetSecretsService(svc SecretsServiceInterface) {
 	h.secretsService = svc
@@ -199,7 +212,7 @@ func (h *QUICServiceHandler) handleSecretsStore(ctx context.Context, payload []b
 	})
 	if err != nil {
 		h.logger.Error(err, "failed to store secret", "secret_id", storeReq.SecretID)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "SecretsStore", Cause: err})
+		return h.secretsErrorResponse(quicwire.StatusInternalError, "SecretsStore", err)
 	}
 
 	return h.encodeKMSExtendedResponse(&SecretsStoreResponse{
@@ -224,7 +237,7 @@ func (h *QUICServiceHandler) handleSecretsGet(ctx context.Context, payload []byt
 	})
 	if err != nil {
 		h.logger.Error(err, "failed to get secret", "secret_id", getReq.SecretID)
-		return h.errorResponse(quicwire.StatusNotFound, ErrQUICOperationFailed{Op: "SecretsGet", Cause: err})
+		return h.secretsErrorResponse(quicwire.StatusNotFound, "SecretsGet", err)
 	}
 
 	return h.encodeKMSExtendedResponse(&SecretsGetResponse{
@@ -258,7 +271,7 @@ func (h *QUICServiceHandler) handleSecretsList(ctx context.Context, payload []by
 	})
 	if err != nil {
 		h.logger.Error(err, "failed to list secrets")
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "SecretsList", Cause: err})
+		return h.secretsErrorResponse(quicwire.StatusInternalError, "SecretsList", err)
 	}
 
 	secretIDs := make([]string, 0, len(pbResp.Secrets))
@@ -284,7 +297,7 @@ func (h *QUICServiceHandler) handleSecretsDelete(ctx context.Context, payload []
 	pbResp, err := h.secretsService.DeleteSecret(ctx, &pb.DeleteSecretRequest{SecretId: deleteReq.SecretID})
 	if err != nil {
 		h.logger.Error(err, "failed to delete secret", "secret_id", deleteReq.SecretID)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "SecretsDelete", Cause: err})
+		return h.secretsErrorResponse(quicwire.StatusInternalError, "SecretsDelete", err)
 	}
 
 	return h.encodeKMSExtendedResponse(&SecretsDeleteResponse{
@@ -312,7 +325,7 @@ func (h *QUICServiceHandler) handleSecretsSetRotationPolicy(ctx context.Context,
 	})
 	if err != nil {
 		h.logger.Error(err, "failed to set rotation policy", "secret_id", setReq.SecretID)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "SecretsSetRotationPolicy", Cause: err})
+		return h.secretsErrorResponse(quicwire.StatusInternalError, "SecretsSetRotationPolicy", err)
 	}
 
 	return h.encodeKMSExtendedResponse(&SecretsSetRotationPolicyResponse{
@@ -334,7 +347,7 @@ func (h *QUICServiceHandler) handleSecretsGetRotationPolicy(ctx context.Context,
 	pbResp, err := h.secretsService.GetRotationPolicy(ctx, &pb.GetRotationPolicyRequest{SecretId: getReq.SecretID})
 	if err != nil {
 		h.logger.Error(err, "failed to get rotation policy", "secret_id", getReq.SecretID)
-		return h.errorResponse(quicwire.StatusNotFound, ErrQUICOperationFailed{Op: "SecretsGetRotationPolicy", Cause: err})
+		return h.secretsErrorResponse(quicwire.StatusNotFound, "SecretsGetRotationPolicy", err)
 	}
 
 	return h.encodeKMSExtendedResponse(&SecretsGetRotationPolicyResponse{

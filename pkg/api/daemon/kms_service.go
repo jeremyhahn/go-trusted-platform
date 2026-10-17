@@ -66,6 +66,9 @@ func (s *KMSService) SetSystemTenant(tenantID string) {
 	if s.kmsAdapter != nil {
 		s.kmsAdapter.SetSystemTenant(tenantID)
 	}
+	if s.secretsServer != nil {
+		s.secretsServer.SetSystemTenant(tenantID)
+	}
 }
 
 // NewKMSService creates a new KMS service that wraps QuicBaaS's KMS functionality.
@@ -110,6 +113,7 @@ func (s *KMSService) initializeServers() error {
 	s.kmsAdapter = NewKMSServerAdapter(sdkClient.Security().KMS(), s.logger)
 	s.kmsAdapter.SetSystemTenant(s.systemTenantID)
 	s.secretsServer = NewSecretsServerAdapter(sdkClient.Security().Secrets(), s.logger)
+	s.secretsServer.SetSystemTenant(s.systemTenantID)
 	s.cryptoServer = NewCryptoServerAdapter(sdkClient.Security().Crypto(), s.logger)
 	s.dekServer = NewDEKServerAdapter(sdkClient.Security().DEK(), s.logger)
 
@@ -152,6 +156,8 @@ func (s *KMSService) RESTClients() (KMSRESTClients, error) {
 		Crypto:  s.cryptoServer.client,
 		DEK:     s.dekServer.client,
 		Secrets: s.secretsServer.client,
+
+		SystemTenantID: s.systemTenantID,
 	}, nil
 }
 
@@ -591,6 +597,25 @@ type SecretsServerAdapter struct {
 	pb.UnimplementedSecretsManagementServer
 	client quicbaas.SecretsClient
 	logger *slog.Logger
+	// systemTenantID is the only tenant a caller may be bound to
+	// (tenant.RequireSystemScope).
+	systemTenantID string
+}
+
+// SetSystemTenant records the platform's system tenant, the only tenant a
+// caller of the secrets service may be bound to.
+func (a *SecretsServerAdapter) SetSystemTenant(tenantID string) {
+	a.systemTenantID = tenantID
+}
+
+// admit refuses a request the secrets service cannot serve: one with no SDK
+// client, or one from a tenant-bound caller (requireSystemScopeContext), which
+// gRPC, Unix and QUIC all reach through this adapter.
+func (a *SecretsServerAdapter) admit(ctx context.Context) error {
+	if a.client == nil {
+		return status.Error(codes.Unavailable, "Secrets service unavailable")
+	}
+	return requireSystemScopeContext(ctx, a.systemTenantID)
 }
 
 // NewSecretsServerAdapter creates a new secrets server adapter wrapping the SDK client.
@@ -603,8 +628,8 @@ func NewSecretsServerAdapter(client quicbaas.SecretsClient, logger *slog.Logger)
 
 // StoreSecret implements pb.SecretsManagementServer.StoreSecret.
 func (a *SecretsServerAdapter) StoreSecret(ctx context.Context, req *pb.StoreSecretRequest) (*pb.StoreSecretResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "Secrets service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetSecretId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "secret_id is required")
@@ -636,8 +661,8 @@ func (a *SecretsServerAdapter) StoreSecret(ctx context.Context, req *pb.StoreSec
 
 // GetSecret implements pb.SecretsManagementServer.GetSecret.
 func (a *SecretsServerAdapter) GetSecret(ctx context.Context, req *pb.GetSecretRequest) (*pb.GetSecretResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "Secrets service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetSecretId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "secret_id is required")
@@ -669,8 +694,8 @@ func (a *SecretsServerAdapter) GetSecret(ctx context.Context, req *pb.GetSecretR
 
 // ListSecrets implements pb.SecretsManagementServer.ListSecrets.
 func (a *SecretsServerAdapter) ListSecrets(ctx context.Context, req *pb.ListSecretsRequest) (*pb.ListSecretsResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "Secrets service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 
 	// ListSecretsRequest doesn't have a prefix field, use empty string
@@ -693,8 +718,8 @@ func (a *SecretsServerAdapter) ListSecrets(ctx context.Context, req *pb.ListSecr
 
 // DeleteSecret implements pb.SecretsManagementServer.DeleteSecret.
 func (a *SecretsServerAdapter) DeleteSecret(ctx context.Context, req *pb.DeleteSecretRequest) (*pb.DeleteSecretResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "Secrets service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetSecretId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "secret_id is required")

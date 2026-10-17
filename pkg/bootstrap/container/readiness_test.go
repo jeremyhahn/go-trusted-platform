@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,14 +33,73 @@ import (
 // freePort returns a TCP port with nothing on it, and a UDP port likewise.
 func freeTCPPort(t *testing.T) int {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	_ = ln.Close()
-	return port
+	return freePort(t, &handedOutPorts, "tcp", func() (io.Closer, int, error) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return nil, 0, err
+		}
+		return ln, ln.Addr().(*net.TCPAddr).Port, nil
+	})
 }
+
+// handedOutPorts records every port freeTCPPort and freeUDPPort have
+// returned in this test binary, keyed "network/port".
+var handedOutPorts sync.Map
+
+// freePort binds a free port on 127.0.0.1 with listen and returns one not
+// already in handedOut, recording it there. The kernel can hand a just-closed
+// port straight out again, so two calls for one config could otherwise
+// name the same port, which ServerConfig.Validate refuses for HTTPPort and
+// DeviceScriptPort. A repeat stays bound until a new port is found, so
+// the kernel cannot offer it again meanwhile.
+func freePort(t *testing.T, handedOut *sync.Map, network string, listen func() (io.Closer, int, error)) int {
+	t.Helper()
+	var held []io.Closer
+	defer func() {
+		for _, c := range held {
+			_ = c.Close()
+		}
+	}()
+	for {
+		c, port, err := listen()
+		if err != nil {
+			t.Fatalf("listen %s: %v", network, err)
+		}
+		held = append(held, c)
+		key := network + "/" + strconv.Itoa(port)
+		if _, repeated := handedOut.LoadOrStore(key, struct{}{}); !repeated {
+			return port
+		}
+	}
+}
+
+// TestFreePort_SkipsAPortTheKernelOffersAgain scripts a kernel that hands
+// a just-returned port out again: the second call must return the next
+// new port and release every port it held while looking for it.
+func TestFreePort_SkipsAPortTheKernelOffersAgain(t *testing.T) {
+	offers := []int{41001, 41001, 41002}
+	var closed int
+	listen := func() (io.Closer, int, error) {
+		port := offers[0]
+		offers = offers[1:]
+		return closerFunc(func() error { closed++; return nil }), port, nil
+	}
+
+	var handedOut sync.Map
+	first := freePort(t, &handedOut, "tcp", listen)
+	second := freePort(t, &handedOut, "tcp", listen)
+
+	if first != 41001 || second != 41002 {
+		t.Fatalf("freePort returned %d then %d, want 41001 then 41002", first, second)
+	}
+	if closed != 3 {
+		t.Fatalf("freePort closed %d of the 3 ports it bound", closed)
+	}
+}
+
+type closerFunc func() error
+
+func (f closerFunc) Close() error { return f() }
 
 // readinessManifest writes the minimum on-disk state NewServer needs.
 func readinessManifest(t *testing.T) (manifestPath, dataDir string) {
@@ -237,13 +297,13 @@ func TestIPXEServerReady_StaysOpenWhenAListenerCannotBind(t *testing.T) {
 
 func freeUDPPort(t *testing.T) int {
 	t.Helper()
-	c, err := net.ListenPacket("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen udp: %v", err)
-	}
-	port := c.LocalAddr().(*net.UDPAddr).Port
-	_ = c.Close()
-	return port
+	return freePort(t, &handedOutPorts, "udp", func() (io.Closer, int, error) {
+		c, err := net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			return nil, 0, err
+		}
+		return c, c.LocalAddr().(*net.UDPAddr).Port, nil
+	})
 }
 
 // fixtureFirmwareDir returns a directory holding placeholder iPXE firmware

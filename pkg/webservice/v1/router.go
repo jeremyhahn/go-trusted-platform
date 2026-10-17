@@ -1052,6 +1052,15 @@ func (v1Router *Router) kmsRoutes() {
 		v1Router.logger.Debug("KMS SDK clients are nil - KMS routes not registered")
 		return
 	}
+	// The SDK picks the KMS and secrets namespace from a tenant it gives the
+	// platform no way to set, so every request here runs in the system
+	// namespace; a tenant admin must not reach it (docs/kms/api.md §6).
+	_, guard, err := v1Router.authorization()
+	if err != nil {
+		v1Router.logger.Error(err,
+			"KMS routes not registered: the system-scope guard could not be built")
+		return
+	}
 	kmsRouter := kms.NewKMSRouter(
 		v1Router.logger,
 		keyMgmt,
@@ -1060,8 +1069,12 @@ func (v1Router *Router) kmsRoutes() {
 		secrets,
 		v1Router.responseWriter)
 	// Keys, DEKs, secrets, and the crypto operations that use them —
-	// encrypt, decrypt, sign. The whole surface is credential-bearing.
-	kmsRouter.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+	// encrypt, decrypt, sign. The whole surface is credential-bearing. The
+	// guard goes on a child of the shared admin group: Use on the group
+	// itself would also gate every other admin router mounted on it.
+	scoped := v1Router.gated(common.ROLE_ADMIN).NewRoute().Subrouter()
+	scoped.Use(guard.RequireSystemScope(v1Router.restHandlerRegistry.TenantID()))
+	kmsRouter.RegisterRoutes(scoped)
 }
 
 func (v1Router *Router) sdnRoutes() {

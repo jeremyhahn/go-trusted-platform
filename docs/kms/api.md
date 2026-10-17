@@ -22,7 +22,7 @@ A gRPC cell written `Service.Method` names one of those.
 REST: base path `/api/v1/kms` (`pkg/webservice/v1/rest/kms/router.go`).
 QUIC: key management `0xC0`–`0xCF`, crypto `0xD0`–`0xDA`, DEK `0xF0`–`0xF5`,
 plus a **KMS extended category opcode `0xCD`**.
-MCP: 20 `kms_*` tools and 6 `secret_*` tools.
+MCP: 21 `kms_*` tools and 6 `secret_*` tools.
 
 ---
 
@@ -37,7 +37,7 @@ MCP: 20 `kms_*` tools and 6 `secret_*` tools.
 | Delete key | `DELETE /api/v1/kms/keys/{name}` | `DeleteKey` | as above | `kms_delete_key` (`kms:delete`) | ✅ |
 | Rotate key | `POST /api/v1/kms/keys/{name}/rotate` | `RotateKey` | as above | `kms_rotate_key` (`kms:write`) | ✅ |
 | Revoke key | `POST /api/v1/kms/keys/{name}/revoke` | `KeyManagement.RevokeKey` | as above | `kms_revoke_key` (`kms:write`) | — |
-| Update key status | `PUT /api/v1/kms/keys/{name}/status` | `UpdateKeyStatus` | as above | `MISSING — docs/13 G7` | ✅ |
+| Update key status | `PUT /api/v1/kms/keys/{name}/status` | `UpdateKeyStatus` | as above | `kms_update_key_status` (`kms:write`) | ✅ |
 | List key versions | `GET /api/v1/kms/keys/{name}/versions` | `GetKeyVersions` | as above | `MISSING — docs/13 G7` | ✅ |
 | Export key | `MISSING — docs/13 G7` | `ExportKey` | as above | `kms_export_public_key` (`kms:read`) | ✅ |
 | Get key metadata | `GET /api/v1/kms/keys/{name}/metadata` | `KeyManagement.GetKeyMetadata` | as above | `kms_get_key_metadata` (`kms:read`) | — |
@@ -271,6 +271,32 @@ requires the scope of the `quicbaas.kms.v1` RPC it mirrors
 caller without it is refused 403. A daemon with no authorization configured
 refuses every route. The routes call the SDK clients the KMS gRPC services
 call, so a key made over any transport is the one REST sees.
+
+The secrets surface, and both REST mounts of the whole KMS router, serve the
+system scope only. A caller bound to a tenant other than the system tenant is
+refused even when it holds the role or scope: the embedded SDK picks the key
+and secret namespace from the go-quicbaas IAM tenant in the request context,
+the SDK re-exports no setter for it, and an absent tenant selects the system
+namespace, so the request would otherwise read and write system keys and
+secrets. A caller bound to no tenant (the Unix-socket operator), or to the
+system tenant, is served; on the webservice an HTTP session always belongs to
+an IAM user, so a session naming no tenant is refused too.
+
+One check decides it, `tenant.RequireSystemScope`, and every transport answers
+the same typed error, `tenant.ErrSystemScopeOnly`, before the SDK is called:
+
+| Transport | Where | Refusal |
+|-----------|-------|---------|
+| Webservice REST | `SessionGuard.RequireSystemScope` on the KMS router mount | 403 |
+| Daemon REST | `pkg/api/daemon/rest_kms.go` | 403 |
+| gRPC, Unix | `SecretsServerAdapter` | `PermissionDenied` |
+| QUIC | the secrets category handlers | `StatusPermissionDenied` |
+| MCP | the `secret_*` tools | `PermissionDenied` |
+
+SDK gap: go-quicbaas `pkg/iam/tenant_context.go:43` (`ContextWithTenant`) is
+not under `quicbaas/sdk/go`, and the embedded transport's `Request`
+(`sdk/go/transport/embedded/transport.go:414`) does not carry
+`sdk/go/transport.ContextWithTenant` into it.
 
 ---
 

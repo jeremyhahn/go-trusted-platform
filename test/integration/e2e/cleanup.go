@@ -21,7 +21,6 @@ package e2e_test
 
 import (
 	"context"
-	"os"
 	"os/exec"
 	"testing"
 	"time"
@@ -189,25 +188,6 @@ func cleanupTAP(t *testing.T, logger *logging.Logger, tapName string) {
 		return
 	}
 	logger.Info("TAP device removed", "name", tapName)
-}
-
-// cleanupWorkDir removes the work directory and all its contents
-func cleanupWorkDir(t *testing.T, logger *logging.Logger, workDir string) {
-	t.Helper()
-
-	if workDir == "" {
-		return
-	}
-
-	logger.Info("Cleaning up work directory", "path", workDir)
-
-	if err := os.RemoveAll(workDir); err != nil {
-		logger.Warn("Failed to remove work directory",
-			"path", workDir,
-			"error", err)
-	} else {
-		logger.Info("Work directory removed", "path", workDir)
-	}
 }
 
 // CleanupOnFailure performs cleanup when a test fails

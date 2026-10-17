@@ -410,9 +410,6 @@ const (
 	// mcpNoKeyVersionsTool explains why KeyVersions leaves the MCP matrix.
 	mcpNoKeyVersionsTool = "the MCP tool registry has no key version listing tool (MISSING)"
 
-	// mcpNoKeyStatusTool explains why KeyStatus leaves the MCP matrix.
-	mcpNoKeyStatusTool = "the MCP tool registry has no key enable or disable tool (MISSING)"
-
 	// mcpNoDigestTool explains why hash and HMAC operations leave the MCP matrix.
 	mcpNoDigestTool = "the MCP tool registry has no hash, HMAC or HMAC verify tool (MISSING)"
 
@@ -695,9 +692,25 @@ func (m *MCPAdapter) KeyVersions(_ context.Context, _ string, _ KeyVersionsOptio
 	return nil, mcpNoSurface("KeyVersions", mcpNoKeyVersionsTool)
 }
 
-// KeyStatus has no MCP surface.
-func (m *MCPAdapter) KeyStatus(_ context.Context, _ string, _ uint64, _ bool) (*KeyStatusResult, error) {
-	return nil, mcpNoSurface("KeyStatus", mcpNoKeyStatusTool)
+// KeyStatus calls kms_update_key_status.
+func (m *MCPAdapter) KeyStatus(ctx context.Context, keyID string, version uint64, enabled bool) (*KeyStatusResult, error) {
+	status := baasservice.KeyStatusDisabled
+	if enabled {
+		status = baasservice.KeyStatusEnabled
+	}
+	args := map[string]interface{}{"key_id": keyID, "status": string(status), "version": version}
+
+	var resp baasservice.UpdateKeyStatusResponse
+	if err := m.callTool(ctx, "kms_update_key_status", args, &resp); err != nil {
+		return nil, err
+	}
+
+	return &KeyStatusResult{
+		KeyID:     resp.KeyID,
+		Version:   resp.Version,
+		Status:    mcpStatusName(resp.Status),
+		UpdatedAt: resp.Timestamp,
+	}, nil
 }
 
 // KeyRevoke calls kms_revoke_key.

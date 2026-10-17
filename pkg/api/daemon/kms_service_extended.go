@@ -205,8 +205,8 @@ func (a *KMSServerAdapter) BackendStatus(ctx context.Context, req *pb.BackendSta
 // SetRotationPolicy implements pb.SecretsManagementServer.SetRotationPolicy
 // by delegating to the SDK secrets client.
 func (a *SecretsServerAdapter) SetRotationPolicy(ctx context.Context, req *pb.SetRotationPolicyRequest) (*pb.SetRotationPolicyResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "Secrets service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetSecretId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "secret_id is required")
@@ -232,8 +232,8 @@ func (a *SecretsServerAdapter) SetRotationPolicy(ctx context.Context, req *pb.Se
 // GetRotationPolicy implements pb.SecretsManagementServer.GetRotationPolicy
 // by delegating to the SDK secrets client.
 func (a *SecretsServerAdapter) GetRotationPolicy(ctx context.Context, req *pb.GetRotationPolicyRequest) (*pb.GetRotationPolicyResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "Secrets service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetSecretId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "secret_id is required")
