@@ -34,6 +34,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -735,7 +736,7 @@ func TestQUICIAM(t *testing.T) {
 
 	t.Run("IAM ListUsers returns user list", func(t *testing.T) {
 		req := &platformv1.ListIAMUsersRequest{
-			TenantId:   "default",
+			TenantId:   helpers.HarnessTenantID,
 			Pagination: &platformv1.PaginationRequest{PageSize: 10},
 		}
 		var resp platformv1.ListIAMUsersResponse
@@ -755,7 +756,7 @@ func TestQUICIAM(t *testing.T) {
 
 	t.Run("IAM ListRoles returns role list", func(t *testing.T) {
 		req := &platformv1.ListIAMRolesRequest{
-			TenantId:   "default",
+			TenantId:   helpers.HarnessTenantID,
 			Pagination: &platformv1.PaginationRequest{PageSize: 10},
 		}
 		var resp platformv1.ListIAMRolesResponse
@@ -775,7 +776,7 @@ func TestQUICIAM(t *testing.T) {
 
 	t.Run("IAM ListGroups returns group list", func(t *testing.T) {
 		req := &platformv1.ListIAMGroupsRequest{
-			TenantId:   "default",
+			TenantId:   helpers.HarnessTenantID,
 			Pagination: &platformv1.PaginationRequest{PageSize: 10},
 		}
 		var resp platformv1.ListIAMGroupsResponse
@@ -815,7 +816,7 @@ func TestQUICIAM(t *testing.T) {
 
 	t.Run("IAM GetUser with missing user_id returns error", func(t *testing.T) {
 		req := &platformv1.GetIAMUserRequest{
-			TenantId: "default",
+			TenantId: helpers.HarnessTenantID,
 			UserId:   "",
 		}
 		resp, err := client.SendExpectStatus(ctx, quicwire.OpIAMUserGet, req, quicwire.StatusInvalidArgument)
@@ -834,7 +835,7 @@ func TestQUICIAM(t *testing.T) {
 
 	t.Run("IAM CheckPermission validates access", func(t *testing.T) {
 		req := &platformv1.CheckIAMPermissionRequest{
-			TenantId:  "default",
+			TenantId:  helpers.HarnessTenantID,
 			SubjectId: "test-subject",
 			Resource:  "test-resource",
 			Action:    "read",
