@@ -6,6 +6,7 @@ import (
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -45,4 +46,21 @@ func authorizeIAMTenant(ctx context.Context, requested string) error {
 		return nil
 	}
 	return status.Error(codes.PermissionDenied, ErrIAMTenantForbidden{Requested: requested}.Error())
+}
+
+// authorizeSystemCaller refuses a cross-tenant request — creating or listing
+// tenants — from any tenant-bound caller but the system tenant
+// (tenant.AuthorizeCrossTenant), with codes.PermissionDenied. It is the rule
+// the REST trees enforce with RequireSystemTenant; a caller with no
+// tenant-bound identity is admitted, as callerTenant documents, and an unset
+// systemTenantID admits no tenant-bound caller.
+func authorizeSystemCaller(ctx context.Context, systemTenantID, method string) error {
+	caller, bound := callerTenant(ctx)
+	if !bound {
+		return nil
+	}
+	if err := tenant.AuthorizeCrossTenant(tenant.IsSystemTenant(systemTenantID, caller), method); err != nil {
+		return status.Error(codes.PermissionDenied, err.Error())
+	}
+	return nil
 }

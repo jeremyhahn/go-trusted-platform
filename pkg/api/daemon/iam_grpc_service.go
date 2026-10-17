@@ -137,6 +137,10 @@ type IAMGRPCService struct {
 	// tokens answers the token rpcs; nil refuses verification with
 	// ErrIAMTokenVerifierNotConfigured.
 	tokens *IAMTokenService
+	// systemTenantID is the platform's operating tenant, the only tenant
+	// admitted to the cross-tenant rpcs (CreateTenant, ListTenants); empty
+	// admits no tenant-bound caller to them.
+	systemTenantID string
 }
 
 // NewIAMGRPCService creates a new IAM gRPC service instance.
@@ -1072,6 +1076,12 @@ func (s *IAMGRPCService) SetTokenService(tokens *IAMTokenService) {
 	s.tokens = tokens
 }
 
+// SetSystemTenant sets the platform's operating (system) tenant, the one
+// tenant allowed to create and list IAM tenants.
+func (s *IAMGRPCService) SetSystemTenant(tenantID string) {
+	s.systemTenantID = tenantID
+}
+
 // CreateToken refuses token issuance with codes.Unimplemented: the SDK IAM
 // client cannot issue tokens; platform tokens come from the broker's OIDC flows.
 func (s *IAMGRPCService) CreateToken(ctx context.Context, req *platformv1.CreateIAMTokenRequest) (*platformv1.CreateIAMTokenResponse, error) {
@@ -1142,6 +1152,9 @@ func (s *IAMGRPCService) CreateTenant(ctx context.Context, req *platformv1.Creat
 	if req.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "id"}.Error())
 	}
+	if err := authorizeSystemCaller(ctx, s.systemTenantID, "CreateTenant"); err != nil {
+		return nil, err
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
@@ -1211,6 +1224,9 @@ func (s *IAMGRPCService) GetTenant(ctx context.Context, req *platformv1.GetIAMTe
 func (s *IAMGRPCService) ListTenants(ctx context.Context, req *platformv1.ListIAMTenantsRequest) (*platformv1.ListIAMTenantsResponse, error) {
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
+	}
+	if err := authorizeSystemCaller(ctx, s.systemTenantID, "ListTenants"); err != nil {
+		return nil, err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)

@@ -90,6 +90,7 @@ type MCPServiceProviderConfig struct {
 	IAMClient             quicbaassdk.IAMClient
 	PEPClient             quicbaassdk.IAMPEPClient
 	IAMTokens             *IAMTokenService // iam_*_token tools; nil refuses verification
+	PlatformTenantID      string           // the system tenant, the only one admitted to create and list IAM tenants
 	KMSService            baasservice.KMSService
 	CryptoService         baasservice.CryptoService
 	SecretsService        baasservice.SecretsService
@@ -193,6 +194,9 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		logger = slog.Default()
 	}
 
+	iam := NewIAMGRPCService(logger, config.IAMClient, config.PEPClient)
+	iam.SetSystemTenant(config.PlatformTenantID)
+
 	return &MCPServiceProvider{
 		caService:             config.CAService,
 		vtpmService:           config.VTPMService,
@@ -207,7 +211,7 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		dnsService:            config.DNSService,
 		sdnService:            config.SDNService,
 		healthService:         config.HealthService,
-		iam:                   NewIAMGRPCService(logger, config.IAMClient, config.PEPClient),
+		iam:                   iam,
 		iamTokens:             config.IAMTokens,
 		kmsService:            config.KMSService,
 		cryptoService:         config.CryptoService,
