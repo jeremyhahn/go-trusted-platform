@@ -426,7 +426,7 @@ handle, which deletes nothing, as gRPC `DeleteEK`/`DeleteSRK` do.
 `platform_tpm_iak_delete` refuses with `FailedPrecondition`, as `iak_delete`
 and gRPC `DeleteAK` do (#704).
 
-**The KMS and secret MCP tools are classified (#304).** Each of the 20 `kms_*`
+**The KMS and secret MCP tools are classified (#304).** Each of the 21 `kms_*`
 and 6 `secret_*` tools carries the scope of the gRPC method it mirrors
 (`pkg/api/grpc/method_permissions.go`), so it answers a caller holding that
 scope and refuses everyone else with `PermissionDenied` before the handler
@@ -435,7 +435,7 @@ runs:
 | Scope | MCP tools |
 |---|---|
 | `kms:read` | `kms_get_key`, `kms_list_keys`, `kms_export_public_key`, `kms_get_key_metadata`, `kms_get_key_policy`, `kms_supported_algorithms`, `kms_backend_status`, `kms_decrypt`, `kms_verify`, `kms_random` |
-| `kms:write` | `kms_generate_key`, `kms_rotate_key`, `kms_revoke_key`, `kms_update_key_metadata`, `kms_set_key_policy`, `kms_encrypt`, `kms_sign`, `kms_generate_data_key`, `kms_generate_wrapped_data_key` |
+| `kms:write` | `kms_generate_key`, `kms_rotate_key`, `kms_revoke_key`, `kms_update_key_metadata`, `kms_update_key_status`, `kms_set_key_policy`, `kms_encrypt`, `kms_sign`, `kms_generate_data_key`, `kms_generate_wrapped_data_key` |
 | `kms:delete` | `kms_delete_key` |
 | `secrets:read` | `secret_get`, `secret_get_rotation_policy` |
 | `secrets:write` | `secret_store`, `secret_set_rotation_policy` |

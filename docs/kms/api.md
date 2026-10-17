@@ -22,7 +22,7 @@ A gRPC cell written `Service.Method` names one of those.
 REST: base path `/api/v1/kms` (`pkg/webservice/v1/rest/kms/router.go`).
 QUIC: key management `0xC0`–`0xCF`, crypto `0xD0`–`0xDA`, DEK `0xF0`–`0xF5`,
 plus a **KMS extended category opcode `0xCD`**.
-MCP: 20 `kms_*` tools and 6 `secret_*` tools.
+MCP: 21 `kms_*` tools and 6 `secret_*` tools.
 
 ---
 
@@ -37,7 +37,7 @@ MCP: 20 `kms_*` tools and 6 `secret_*` tools.
 | Delete key | `DELETE /api/v1/kms/keys/{name}` | `DeleteKey` | as above | `kms_delete_key` (`kms:delete`) | ✅ |
 | Rotate key | `POST /api/v1/kms/keys/{name}/rotate` | `RotateKey` | as above | `kms_rotate_key` (`kms:write`) | ✅ |
 | Revoke key | `POST /api/v1/kms/keys/{name}/revoke` | `KeyManagement.RevokeKey` | as above | `kms_revoke_key` (`kms:write`) | — |
-| Update key status | `PUT /api/v1/kms/keys/{name}/status` | `UpdateKeyStatus` | as above | `MISSING — docs/13 G7` | ✅ |
+| Update key status | `PUT /api/v1/kms/keys/{name}/status` | `UpdateKeyStatus` | as above | `kms_update_key_status` (`kms:write`) | ✅ |
 | List key versions | `GET /api/v1/kms/keys/{name}/versions` | `GetKeyVersions` | as above | `MISSING — docs/13 G7` | ✅ |
 | Export key | `MISSING — docs/13 G7` | `ExportKey` | as above | `kms_export_public_key` (`kms:read`) | ✅ |
 | Get key metadata | `GET /api/v1/kms/keys/{name}/metadata` | `KeyManagement.GetKeyMetadata` | as above | `kms_get_key_metadata` (`kms:read`) | — |

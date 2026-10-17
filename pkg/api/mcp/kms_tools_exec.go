@@ -47,6 +47,7 @@ var kmsToolDispatch = map[string]kmsToolHandler{
 	"kms_revoke_key":           (*ToolRegistry).executeKMSRevokeKey,
 	"kms_get_key_metadata":     (*ToolRegistry).executeKMSGetKeyMetadata,
 	"kms_update_key_metadata":  (*ToolRegistry).executeKMSUpdateKeyMetadata,
+	"kms_update_key_status":    (*ToolRegistry).executeKMSUpdateKeyStatus,
 	"kms_get_key_policy":       (*ToolRegistry).executeKMSGetKeyPolicy,
 	"kms_set_key_policy":       (*ToolRegistry).executeKMSSetKeyPolicy,
 	"kms_supported_algorithms": (*ToolRegistry).executeKMSSupportedAlgorithms,
@@ -346,6 +347,42 @@ func (r *ToolRegistry) executeKMSUpdateKeyMetadata(ctx context.Context, args map
 	}
 
 	result, err := r.service.KMSUpdateKeyMetadata(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+// kmsSettableKeyStatuses are the statuses kms_update_key_status accepts.
+var kmsSettableKeyStatuses = map[string]bool{
+	"enabled":  true,
+	"disabled": true,
+}
+
+func (r *ToolRegistry) executeKMSUpdateKeyStatus(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	keyID := getString(args, "key_id")
+	if keyID == "" {
+		return nil, ErrKMSKeyIDRequired
+	}
+
+	status := getString(args, "status")
+	if !kmsSettableKeyStatuses[status] {
+		return nil, ErrKMSKeyStatusInvalid
+	}
+
+	version := getInt64(args, "version")
+	if version < 0 {
+		return nil, ErrKMSKeyVersionInvalid
+	}
+
+	req := &KMSUpdateKeyStatusRequest{
+		KeyID:   keyID,
+		Version: uint64(version),
+		Status:  status,
+		Reason:  getString(args, "reason"),
+	}
+
+	result, err := r.service.KMSUpdateKeyStatus(ctx, req)
 	if err != nil {
 		return nil, err
 	}

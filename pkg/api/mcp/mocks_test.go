@@ -176,6 +176,7 @@ type mockServiceProvider struct {
 	kmsRevokeKeyFunc              func(ctx context.Context, keyID, reason string) (interface{}, error)
 	kmsGetKeyMetadataFunc         func(ctx context.Context, keyID string) (interface{}, error)
 	kmsUpdateKeyMetadataFunc      func(ctx context.Context, req *KMSUpdateKeyMetadataRequest) (interface{}, error)
+	kmsUpdateKeyStatusFunc        func(ctx context.Context, req *KMSUpdateKeyStatusRequest) (interface{}, error)
 	kmsSetKeyPolicyFunc           func(ctx context.Context, req *KMSSetKeyPolicyRequest) (interface{}, error)
 	kmsGetKeyPolicyFunc           func(ctx context.Context, keyID string) (interface{}, error)
 	kmsGetSupportedAlgorithmsFunc func(ctx context.Context) ([]string, error)
@@ -1788,6 +1789,13 @@ func (m *mockServiceProvider) KMSUpdateKeyMetadata(ctx context.Context, req *KMS
 		return m.kmsUpdateKeyMetadataFunc(ctx, req)
 	}
 	return map[string]interface{}{"key_id": req.KeyID, "name": req.Name}, nil
+}
+
+func (m *mockServiceProvider) KMSUpdateKeyStatus(ctx context.Context, req *KMSUpdateKeyStatusRequest) (interface{}, error) {
+	if m.kmsUpdateKeyStatusFunc != nil {
+		return m.kmsUpdateKeyStatusFunc(ctx, req)
+	}
+	return map[string]interface{}{"key_id": req.KeyID, "status": req.Status}, nil
 }
 
 func (m *mockServiceProvider) KMSSetKeyPolicy(ctx context.Context, req *KMSSetKeyPolicyRequest) (interface{}, error) {

@@ -555,6 +555,7 @@ func toolPermissionCatalog() map[string]string {
 	permissions["kms_rotate_key"] = "kms:write"
 	permissions["kms_revoke_key"] = "kms:write"
 	permissions["kms_update_key_metadata"] = "kms:write"
+	permissions["kms_update_key_status"] = "kms:write"
 	permissions["kms_set_key_policy"] = "kms:write"
 	permissions["kms_get_key"] = "kms:read"
 	permissions["kms_list_keys"] = "kms:read"

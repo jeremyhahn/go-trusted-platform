@@ -215,6 +215,42 @@ func (p *MCPServiceProvider) KMSUpdateKeyMetadata(ctx context.Context, req *mcp.
 	return resp.Metadata, nil
 }
 
+// mcpSettableKeyStatuses maps the statuses kms_update_key_status accepts to
+// the SDK key status.
+var mcpSettableKeyStatuses = map[string]baasservice.KeyStatus{
+	"enabled":  baasservice.KeyStatusEnabled,
+	"disabled": baasservice.KeyStatusDisabled,
+}
+
+// KMSUpdateKeyStatus enables or disables a key, or one version of it, through
+// the SDK KMS service: the same UpdateKeyStatus the REST, gRPC, QUIC and Unix
+// transports reach.
+func (p *MCPServiceProvider) KMSUpdateKeyStatus(ctx context.Context, req *mcp.KMSUpdateKeyStatusRequest) (interface{}, error) {
+	if p.kmsService == nil {
+		return nil, ErrServiceNotAvailable{Service: "kms"}
+	}
+	if req == nil || req.KeyID == "" {
+		return nil, ErrKMSInvalidParameter{Parameter: "key_id", Reason: "key ID is required"}
+	}
+	status, ok := mcpSettableKeyStatuses[req.Status]
+	if !ok {
+		return nil, ErrKMSInvalidParameter{Parameter: "status", Reason: "status must be enabled or disabled"}
+	}
+
+	resp, err := p.kmsService.UpdateKeyStatus(ctx, &baasservice.UpdateKeyStatusRequest{
+		KeyID:   req.KeyID,
+		Version: req.Version,
+		Status:  status,
+		Reason:  req.Reason,
+	})
+	if err != nil {
+		return nil, ErrKMSOperationFailed{Operation: "UpdateKeyStatus", Cause: err}
+	}
+
+	p.logger.Info("KMS key status updated", "key_id", req.KeyID, "version", req.Version, "status", req.Status)
+	return resp, nil
+}
+
 // KMSSetKeyPolicy sets the access control policy for a key.
 func (p *MCPServiceProvider) KMSSetKeyPolicy(ctx context.Context, req *mcp.KMSSetKeyPolicyRequest) (interface{}, error) {
 	if p.kmsService == nil {

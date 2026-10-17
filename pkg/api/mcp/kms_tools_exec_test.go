@@ -317,6 +317,53 @@ func TestExecuteKMSLifecycleTools(t *testing.T) {
 		assert.ErrorIs(t, err, ErrKMSKeyIDRequired)
 	})
 
+	t.Run("UpdateKeyStatus", func(t *testing.T) {
+		var captured *KMSUpdateKeyStatusRequest
+		svc := newMockServiceProvider()
+		svc.kmsUpdateKeyStatusFunc = func(_ context.Context, req *KMSUpdateKeyStatusRequest) (interface{}, error) {
+			captured = req
+			return map[string]interface{}{"key_id": req.KeyID, "status": req.Status}, nil
+		}
+		registry := newKMSToolTestRegistry(svc)
+
+		_, err := executeKMSToolViaDispatch(t, registry, "kms_update_key_status", map[string]interface{}{
+			"key_id":  "key-1",
+			"status":  "disabled",
+			"version": float64(2),
+			"reason":  "maintenance",
+		})
+		require.NoError(t, err)
+		require.NotNil(t, captured)
+		assert.Equal(t, "key-1", captured.KeyID)
+		assert.Equal(t, "disabled", captured.Status)
+		assert.Equal(t, uint64(2), captured.Version)
+		assert.Equal(t, "maintenance", captured.Reason)
+	})
+
+	t.Run("UpdateKeyStatusRejectsBadInput", func(t *testing.T) {
+		called := false
+		svc := newMockServiceProvider()
+		svc.kmsUpdateKeyStatusFunc = func(_ context.Context, _ *KMSUpdateKeyStatusRequest) (interface{}, error) {
+			called = true
+			return nil, nil
+		}
+		registry := newKMSToolTestRegistry(svc)
+
+		_, err := executeKMSToolViaDispatch(t, registry, "kms_update_key_status", map[string]interface{}{"status": "enabled"})
+		assert.ErrorIs(t, err, ErrKMSKeyIDRequired)
+
+		_, err = executeKMSToolViaDispatch(t, registry, "kms_update_key_status", map[string]interface{}{
+			"key_id": "key-1", "status": "destroyed",
+		})
+		assert.ErrorIs(t, err, ErrKMSKeyStatusInvalid)
+
+		_, err = executeKMSToolViaDispatch(t, registry, "kms_update_key_status", map[string]interface{}{
+			"key_id": "key-1", "status": "enabled", "version": float64(-1),
+		})
+		assert.ErrorIs(t, err, ErrKMSKeyVersionInvalid)
+		assert.False(t, called, "invalid input must not reach the KMS service")
+	})
+
 	t.Run("SetKeyPolicySuccess", func(t *testing.T) {
 		svc := newMockServiceProvider()
 		var captured *KMSSetKeyPolicyRequest
@@ -655,6 +702,7 @@ func TestKMSLifecycleAndSecretToolsRegistered(t *testing.T) {
 		"kms_revoke_key",
 		"kms_get_key_metadata",
 		"kms_update_key_metadata",
+		"kms_update_key_status",
 		"kms_get_key_policy",
 		"kms_set_key_policy",
 		"kms_supported_algorithms",

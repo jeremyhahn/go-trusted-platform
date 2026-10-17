@@ -58,6 +58,13 @@ func kmsSecretToolCases() []kmsSecretToolCase {
 					return map[string]interface{}{"key_id": "key-1"}, nil
 				}
 			}},
+		{"kms_update_key_status", "kms:write", map[string]interface{}{"key_id": "key-1", "status": "disabled"},
+			func(s *mockServiceProvider, ran *bool) {
+				s.kmsUpdateKeyStatusFunc = func(context.Context, *KMSUpdateKeyStatusRequest) (interface{}, error) {
+					*ran = true
+					return map[string]interface{}{"key_id": "key-1"}, nil
+				}
+			}},
 		{"kms_set_key_policy", "kms:write", keyID,
 			func(s *mockServiceProvider, ran *bool) {
 				s.kmsSetKeyPolicyFunc = func(context.Context, *KMSSetKeyPolicyRequest) (interface{}, error) {
