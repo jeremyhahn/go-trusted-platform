@@ -431,7 +431,10 @@ func (a *RESTAdapter) FindBySerial(ctx context.Context, opts FindBySerialOptions
 func (a *RESTAdapter) CreateProfile(ctx context.Context, opts CreateProfileOptions) (*CreateProfileResult, error) {
 	path := "/api/v1/devices/profiles"
 
-	body, err := a.doRequest(ctx, http.MethodPost, path, opts)
+	// The REST ProfileRequest carries the prefixes inside match_rules, as
+	// the MCP profile tools do (docs/device/api-reference-rest.md).
+	reqBody := profileToolArgs(opts.Name, opts.Model, opts.Role, opts.MACPrefix, opts.SerialPrefix, opts.MatchRules)
+	body, err := a.doRequest(ctx, http.MethodPost, path, reqBody)
 	if err != nil {
 		return nil, err
 	}
@@ -463,7 +466,8 @@ func (a *RESTAdapter) GetProfile(ctx context.Context, opts GetProfileOptions) (*
 func (a *RESTAdapter) UpdateProfile(ctx context.Context, opts UpdateProfileOptions) (*UpdateProfileResult, error) {
 	path := fmt.Sprintf("/api/v1/devices/profiles/%s", opts.ProfileID)
 
-	body, err := a.doRequest(ctx, http.MethodPut, path, opts)
+	reqBody := profileToolArgs(opts.Name, opts.Model, opts.Role, opts.MACPrefix, opts.SerialPrefix, opts.MatchRules)
+	body, err := a.doRequest(ctx, http.MethodPut, path, reqBody)
 	if err != nil {
 		return nil, err
 	}
