@@ -220,6 +220,37 @@ coexist, and the weaker one must never be invisible:
 - TOFU baselining is recorded as a **security event**: it is the moment trust was
   conferred without evidence.
 
+### Root-of-trust tier: hardware-rooted or software-rooted DICE identity
+
+A DICE device's identity is rooted in one of two ways, and the two are not
+equally strong (RFC 9334 §8.4, Strength of Function; §12.1, protections that
+range from process isolation to hardware against physical attack):
+
+- **hardware-rooted**: the DICE root secret is held in a secure element;
+- **software-rooted**: the device has no secure element (an AVR without one, for
+  example), so the root secret is held by the firmware alone and an attacker
+  who can read the device can forge its Evidence.
+
+As with baselines, the weaker tier must never be invisible:
+
+- The tier is a field on the report **and** the device, not an inference. It is
+  never derived from the device class, the profile or the certificate chain.
+- The console renders it beside every verdict. A software-rooted pass must not
+  look identical to a hardware-rooted pass.
+- Appraisal policy may require a minimum tier per device profile. The platform
+  applies it as the Relying Party (RFC 9334 §4.1, §7.1), in its Appraisal Policy
+  for Attestation Results (§4.2, §8.4), as a constraint on a claim of the result
+  (§8.5). A software-rooted device never satisfies a hardware-only requirement,
+  whatever its verdict, measurements or baseline.
+
+The tier comes from go-xkms. Its verifier appraises the DICE Evidence under its
+Appraisal Policy for Evidence (RFC 9334 §4.2, §8.5) and reports the root type on
+the DICE chain and on `attestation.Result`; the platform reads that root type
+through the go-quicbaas SDK re-export of go-xkms and computes none of its own.
+The SDK does not publish it yet ([SPEC.md](../SPEC.md), the DICE root type
+bullet under Interfaces). No document in `docs/reference/` defines the two tier
+names; they are the platform's labels for the go-xkms root type.
+
 ### Failure: deny service, then quarantine — and what must NOT trigger it
 
 A failed node is denied at every gated surface and moved to a restricted SDN
