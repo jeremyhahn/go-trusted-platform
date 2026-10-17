@@ -1023,27 +1023,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		return ErrServeStartup{Phase: "SDK backends", Cause: err}
 	}
 
-	// The gateway telemetry store backs the snapshot RPCs on every
-	// transport, so the control plane answers `GetGatewaySnapshot` from the
-	// same reports POST /gateway/telemetry writes (#594).
-	if gwControl != nil && gwControl.Store != nil {
-		if svc := platformDaemon.GatewayGRPCService(); svc != nil {
-			svc.SetGatewaySnapshotStore(gwControl.Store)
-		}
-		// VPN session status reads the vpn section of the same reports.
-		// The enrolment set and the posture policies reach the gateways as
-		// the vpn section of their desired configuration.
-		if vpnControl := platformDaemon.VPNControlPlane(); vpnControl != nil {
-			vpnControl.SetGatewaySnapshotStore(gwControl.Store)
-			if gwControl.DesiredCfg != nil {
-				gwControl.DesiredCfg.SetVPNSource(vpnControl)
-			}
-		}
-		// The control plane's own REST listener carries the liaison: a
-		// gateway's control-plane base-url names it, and a control plane
-		// may publish no webservice at all (docs/gateway/api.md §8).
-		platformDaemon.SetGatewayControlPlane(gwControl.Store, gwControl.DesiredCfg)
-	}
+	gwControl.attachTo(platformDaemon)
 
 	// Plug snapshot store into the daemon Service so reload captures
 	// a pre-reload snapshot automatically and rollback is reachable
@@ -1726,6 +1706,11 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 		cmd.PrintErrln(fmt.Sprintf("Failed to wire the SDK backends: %v", err))
 		return ErrServeStartup{Phase: "SDK backends", Cause: err}
 	}
+
+	// The gateway liaison is served on the daemon REST listener on this path
+	// too: without it /api/v1/gateway/telemetry, /state and /desired-config
+	// answer 404 and VPN session status has no telemetry store.
+	initGatewayControlPlane(logger, App).attachTo(d)
 
 	if App != nil && App.TPM != nil {
 		logger.Info("TPM available for IDevID/IAK operations")

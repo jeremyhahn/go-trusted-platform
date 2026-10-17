@@ -39,9 +39,6 @@ const (
 	// EnvUnixSecretsPath is the environment variable for the secrets Unix socket path.
 	EnvUnixSecretsPath = "SECRETS_SOCKET_PATH"
 
-	// DefaultUnixSecretsPath is the default path to the secrets Unix socket.
-	DefaultUnixSecretsPath = "/run/platformd.sock"
-
 	// unixDialTimeoutSeconds is the timeout for establishing Unix socket connection.
 	unixDialTimeoutSeconds = 10 * time.Second
 )
@@ -71,13 +68,20 @@ func (s *UnixAdapter) Name() string {
 
 // Setup initializes the gRPC connection over Unix socket.
 func (s *UnixAdapter) Setup(ctx context.Context) error {
+	// The runner exports the daemon's socket as PLATFORM_SOCKET_PATH;
+	// SECRETS_SOCKET_PATH only overrides it for a hand run.
 	s.socketPath = os.Getenv(EnvUnixSecretsPath)
 	if s.socketPath == "" {
-		s.socketPath = DefaultUnixSecretsPath
+		s.socketPath = helpers.GetSocketPath()
 	}
 
+	// WithBlock retries until its context ends, so bound the dial: on the
+	// suite's 10-minute context a missing socket outlived go test's timeout.
+	dialCtx, cancel := context.WithTimeout(ctx, unixDialTimeoutSeconds)
+	defer cancel()
+
 	// Create gRPC connection using Unix socket dialer
-	conn, err := grpc.DialContext(ctx, "unix://"+s.socketPath,
+	conn, err := grpc.DialContext(dialCtx, "unix://"+s.socketPath,
 		helpers.GRPCUnixCredentials(),
 		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
 			// Strip the unix:// prefix if present

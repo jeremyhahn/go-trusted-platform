@@ -345,7 +345,12 @@ every key except `cold-start` and `barrier-gate` (each needs the shared
 publishes no DANE records) and `secureboot` (needs prebuilt FIPS-kernel
 artifacts), all three in the table below, and the keys that
 only run part of a suite already in the list (`lb`, `ipxe-dhcp`, `ipxe-tftp`,
-`ipxe-http`, `testenv-enrollment`).
+`ipxe-http`, `testenv-enrollment`). `tpm` is the last suite on the shared
+daemon: its Clear case issues `TPM2_Clear` on the shared daemon's swtpm,
+which flushes the SRKs sealing the daemon's platform-policy key passwords, so
+no gRPC, QUIC or MCP handshake succeeds after it. `bmc` and `compute` are
+unaffected wherever they sit in the list, because each runs on its own daemon
+and a fresh swtpm (below).
 
 `bmc` and `compute` each need a `platformd` the shared one is not: `bmc` one
 that trusts the vBMC's certificate (`trust.bmc` with the vBMC CA file), and

@@ -16,6 +16,9 @@ package commands
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -23,8 +26,67 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 )
+
+// restOnlyDaemon builds, without starting, a daemon serving REST only on an
+// ephemeral loopback port: the listener set the daemon-only serve path gives
+// a control plane with no webservice.
+func restOnlyDaemon(t *testing.T) *daemon.Daemon {
+	t.Helper()
+	cfg := daemon.DefaultConfig()
+	cfg.Logger = logging.NewFromSlog(quietLogger())
+	cfg.SocketPath = filepath.Join(t.TempDir(), "platformd.sock")
+	cfg.GRPCSocketPath = cfg.SocketPath
+	cfg.SocketGroup = ""
+	cfg.SkipIAMValidation = true
+	cfg.EnableREST = true
+	cfg.RESTListenAddr = "127.0.0.1:0"
+	cfg.EnableGRPCTCP = false
+	cfg.EnableQUIC = false
+	cfg.EnableMCP = false
+	d, err := daemon.New(cfg)
+	require.NoError(t, err)
+	require.NotNil(t, d.RESTServer())
+	return d
+}
+
+func postTelemetry(d *daemon.Daemon) int {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/gateway/telemetry", strings.NewReader(`{"gateway_id":"gw-01"}`))
+	req.Header.Set("Content-Type", "application/json")
+	d.RESTServer().Router().ServeHTTP(rec, req)
+	return rec.Code
+}
+
+// TestGatewayControlPlane_AttachMountsTheLiaison is the #949 sdn telemetry
+// 404: the integration daemon has no webservice, so it serves through
+// runDaemonOnly, which never wired the control plane, and every POST
+// /api/v1/gateway/telemetry answered 404. Attached, the route exists and
+// refuses the unauthenticated caller instead.
+func TestGatewayControlPlane_AttachMountsTheLiaison(t *testing.T) {
+	gw := initGatewayControlPlane(logging.NewFromSlog(quietLogger()), &app.App{PlatformDir: t.TempDir()})
+	require.NotNil(t, gw)
+	d := restOnlyDaemon(t)
+	require.Equal(t, http.StatusNotFound, postTelemetry(d), "nothing is mounted before the attach")
+
+	gw.attachTo(d)
+	assert.NotEqual(t, http.StatusNotFound, postTelemetry(d))
+}
+
+func TestGatewayControlPlane_NoStoreMountsNothing(t *testing.T) {
+	assert.Nil(t, initGatewayControlPlane(logging.NewFromSlog(quietLogger()), nil))
+	d := restOnlyDaemon(t)
+
+	var gw *gatewayControlPlane
+	gw.attachTo(d)
+	(&gatewayControlPlane{}).attachTo(d)
+	(&gatewayControlPlane{}).attachTo(nil)
+	assert.Equal(t, http.StatusNotFound, postTelemetry(d))
+}
 
 // sourceFor builds a desired-config source over a private viper tree, so
 // the test never touches the daemon's global instance.

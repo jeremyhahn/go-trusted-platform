@@ -141,6 +141,20 @@ func (s *KMSService) RegisterGRPCServices(server *grpc.Server) error {
 	return nil
 }
 
+// RESTClients returns the SDK clients the KMS gRPC adapters call, for the
+// daemon's KMS REST routes. The adapters are initialized if needed.
+func (s *KMSService) RESTClients() (KMSRESTClients, error) {
+	if err := s.initializeServers(); err != nil {
+		return KMSRESTClients{}, err
+	}
+	return KMSRESTClients{
+		KMS:     s.kmsAdapter.client,
+		Crypto:  s.cryptoServer.client,
+		DEK:     s.dekServer.client,
+		Secrets: s.secretsServer.client,
+	}, nil
+}
+
 // Start starts the KMS service.
 func (s *KMSService) Start(ctx context.Context) error {
 	if s.running.Load() {

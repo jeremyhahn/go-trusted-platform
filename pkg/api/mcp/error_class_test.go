@@ -29,6 +29,7 @@ import (
 
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
+	storagequicbaas "github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
@@ -90,6 +91,7 @@ func TestToolErrorCode_Classified(t *testing.T) {
 		{"grpc status", status.Error(codes.AlreadyExists, "device exists"), mcpwire.AlreadyExists},
 		{"permission denied status", status.Error(codes.PermissionDenied, "denied"), mcpwire.PermissionDenied},
 		{"record not found sentinel", fmt.Errorf("get: %w", datastore.ErrRecordNotFound), mcpwire.NotFound},
+		{"storage miss under device_get", fmt.Errorf("failed to get device: %w", storagequicbaas.ErrNotFound{EntityType: "Device", ID: 999999999}), mcpwire.NotFound},
 		{"profile service not configured", ErrDeviceProfileNotConfigured, mcpwire.ServiceUnavailable},
 		{"profile identity required", ErrDeviceProfileIdentityRequired, mcpwire.InvalidParams},
 		{"bmc not configured", ErrBMCNotConfigured, mcpwire.ServiceUnavailable},

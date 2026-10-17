@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	fido2sdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/fido2"
@@ -108,15 +109,15 @@ func (r *RESTAdapter) ListDevices(ctx context.Context, req *fido2sdk.ListDevices
 	return resp, nil
 }
 
-// WaitDevice calls GET /api/v1/fido2/devices/wait?timeout_seconds=N, the
-// route docs/cli/fido2.md documents.
+// WaitDevice calls GET /api/v1/fido2/devices/wait?timeout_seconds=N; the
+// daemon answers with the bare device that appeared.
 func (r *RESTAdapter) WaitDevice(ctx context.Context, req *fido2sdk.WaitDeviceRequest) (*fido2sdk.WaitDeviceResponse, error) {
-	path := "/api/v1/fido2/devices/wait"
-	if req != nil && req.TimeoutSeconds > 0 {
-		path = fmt.Sprintf("%s?timeout_seconds=%d", path, req.TimeoutSeconds)
+	if req == nil {
+		req = &fido2sdk.WaitDeviceRequest{}
 	}
+	path := "/api/v1/fido2/devices/wait?timeout_seconds=" + strconv.Itoa(int(req.TimeoutSeconds))
 	resp := &fido2sdk.WaitDeviceResponse{}
-	if err := r.doJSON(ctx, http.MethodGet, path, nil, resp); err != nil {
+	if err := r.doJSON(ctx, http.MethodGet, path, nil, &resp.Device); err != nil {
 		return nil, ErrCallFailed{Protocol: "REST", Method: "GET " + path, Err: err}
 	}
 	return resp, nil

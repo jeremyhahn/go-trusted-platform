@@ -485,20 +485,6 @@ func (s *RESTServer) SetIAMHandlers(iamClient restiam.IAMClient, pepClient resti
 	return nil
 }
 
-// SetKMSHandlers wires the KMS REST handlers onto the daemon's REST router so
-// /api/v1/kms/* endpoints are served. The service delegates to the same
-// QuicBaaS SDK KMS and Crypto clients used by the gRPC, QUIC, MCP, and
-// embedded transports, so keys created via REST are visible everywhere else
-// and vice-versa. Mirrors SetDeviceHandlers / SetTenantHandlers.
-func (s *RESTServer) SetKMSHandlers(service restapi.KMSService) {
-	if service == nil {
-		return
-	}
-	handlers := restapi.NewKMSHandlers(service, s.logger)
-	handlers.RegisterRoutes(s.router)
-	s.logger.Info("KMS REST routes registered")
-}
-
 // SetComputeHandlers wires the compute (VM and container) REST handlers onto
 // the daemon's REST router. Every /api/v1/compute/* route runs the same
 // ComputeService RPC gRPC serves, over protobuf JSON, behind the scope that

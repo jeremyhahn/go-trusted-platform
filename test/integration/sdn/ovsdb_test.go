@@ -215,10 +215,18 @@ func TestOVSDBReconnection(t *testing.T) {
 		t.Logf("%v", err)
 	}
 
-	// Reconnect
-	err = ovs.Connect(ctx)
-	if err != nil {
-		t.Fatalf("cannot reconnect to OVSDB at %s after a successful connect: %v", ovsdbAddress, err)
+	// Reconnect. Disconnect clears Connected() at once, but libovsdb releases
+	// the old RPC client later, in its disconnect handler; until then Connect
+	// returns nil (ErrAlreadyConnected) and leaves the client disconnected.
+	// So retry Connect until the client reports connected.
+	var reconnectErr error
+	reconnected := func() bool {
+		reconnectErr = ovs.Connect(ctx)
+		return reconnectErr == nil && ovs.Connected()
+	}
+	if err := testenv.WaitUntil(ctx, 5*time.Second, "OVSDB client reconnect", reconnected); err != nil {
+		t.Fatalf("cannot reconnect to OVSDB at %s after a successful connect: %v (last Connect error: %v)",
+			ovsdbAddress, err, reconnectErr)
 	}
 	assert.True(t, ovs.Connected(), "Client should be reconnected")
 }

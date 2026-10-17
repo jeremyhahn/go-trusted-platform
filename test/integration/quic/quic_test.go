@@ -854,21 +854,21 @@ func TestQUICIAM(t *testing.T) {
 		assert.NotNil(t, resp.GetTimestamp(), "Timestamp should be set")
 	})
 
-	t.Run("IAM VerifyToken is not implemented", func(t *testing.T) {
-		// Token verification is handled via OIDC flows in go-quicbaas; the
-		// daemon returns StatusNotImplemented for gRPC delegate parity.
-		resp, err := client.SendExpectStatus(ctx, quicwire.OpIAMTokenVerify, nil, quicwire.StatusNotImplemented)
-		if err != nil {
-			var unexpectedStatus ErrUnexpectedStatus
-			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Fatal(ErrServiceUnavailable{Service: "IAM"})
-				}
-			}
-		}
-		if resp != nil {
-			assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
-		}
+	// docs/iam/api.md: verify token is served on QUIC through
+	// IAMTokenService.Verify; a blank token is ErrIAMMissingParameter
+	// (InvalidArgument) and a rejected token answers valid=false with a reason.
+	t.Run("IAM VerifyToken refuses a blank token", func(t *testing.T) {
+		_, err := client.SendExpectStatus(ctx, quicwire.OpIAMTokenVerify, &platformv1.VerifyIAMTokenRequest{}, quicwire.StatusInvalidArgument)
+		require.NoError(t, err)
+	})
+
+	t.Run("IAM VerifyToken answers a malformed token as not valid", func(t *testing.T) {
+		req := &platformv1.VerifyIAMTokenRequest{Token: "not-a-token"}
+		var resp platformv1.VerifyIAMTokenResponse
+		require.NoError(t, client.Send(ctx, quicwire.OpIAMTokenVerify, req, &resp))
+		assert.False(t, resp.GetValid(), "a malformed token must not verify")
+		assert.NotEmpty(t, resp.GetReason(), "a rejected token names its reason")
+		assert.Empty(t, resp.GetUserId(), "a rejected token names no user")
 	})
 }
 

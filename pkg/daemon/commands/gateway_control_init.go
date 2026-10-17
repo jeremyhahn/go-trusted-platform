@@ -19,6 +19,7 @@ import (
 
 	"github.com/spf13/viper"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
@@ -52,6 +53,30 @@ func initGatewayControlPlane(logger *logging.Logger, a *app.App) *gatewayControl
 		Store:      store,
 		DesiredCfg: &viperDesiredConfigSource{v: viper.GetViper()},
 	}
+}
+
+// attachTo wires the control plane onto d before it starts. Both serve
+// paths call it: a control plane may publish no webservice at all
+// (docs/gateway/api.md §8), and the daemon-only path is the one such a node
+// takes. The telemetry store backs the snapshot RPCs on every transport, so
+// `GetGatewaySnapshot` answers from the same reports POST
+// /api/v1/gateway/telemetry writes (#594); VPN session status reads the vpn
+// section of those reports, and the enrolment set and posture policies reach
+// the gateways as the vpn section of their desired configuration.
+func (gw *gatewayControlPlane) attachTo(d *daemon.Daemon) {
+	if gw == nil || gw.Store == nil || d == nil {
+		return
+	}
+	if svc := d.GatewayGRPCService(); svc != nil {
+		svc.SetGatewaySnapshotStore(gw.Store)
+	}
+	if vpnControl := d.VPNControlPlane(); vpnControl != nil {
+		vpnControl.SetGatewaySnapshotStore(gw.Store)
+		if gw.DesiredCfg != nil {
+			gw.DesiredCfg.SetVPNSource(vpnControl)
+		}
+	}
+	d.SetGatewayControlPlane(gw.Store, gw.DesiredCfg)
 }
 
 // viperDesiredConfigSource resolves the control plane's intended

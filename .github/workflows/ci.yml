@@ -209,7 +209,7 @@ jobs:
   # now runs on every PR.
   image:
     name: Devcontainer image [build, test, security, deps-check, trivy image]
-    runs-on: ubuntu-latest
+    runs-on: bigdisk
     timeout-minutes: 120
     env:
       IT_IMAGE: go-trusted-platform-ci-it:${{ github.run_id }}-${{ github.run_attempt }}-image

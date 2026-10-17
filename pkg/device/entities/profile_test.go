@@ -1340,6 +1340,51 @@ func TestProfileMatchRules_Matches(t *testing.T) {
 			model:   "Server-X1000",
 			want:    true,
 		},
+		{
+			// The DAO lowercases the MAC before matching; a mixed-case rule
+			// must still match it.
+			name: "matches MAC prefix ignoring case",
+			rules: &ProfileMatchRules{
+				MACPrefix: "AA:BB:e5",
+			},
+			macAddr: "aa:bb:e5:dd:ee:ff",
+			want:    true,
+		},
+		{
+			// The DAO uppercases the serial before matching.
+			name: "matches serial prefix ignoring case",
+			rules: &ProfileMatchRules{
+				SerialPrefix: "SN-e583e2c8",
+			},
+			serial: "SN-E583E2C8-12345",
+			want:   true,
+		},
+		{
+			name: "matches legacy SerialPattern ignoring case",
+			rules: &ProfileMatchRules{
+				SerialPattern: "sn-",
+			},
+			serial: "SN-123",
+			want:   true,
+		},
+		{
+			name: "does not match a different prefix of another case",
+			rules: &ProfileMatchRules{
+				MACPrefix:    "AA:BB:E6",
+				SerialPrefix: "sn-f",
+			},
+			macAddr: "aa:bb:e5:dd:ee:ff",
+			serial:  "SN-E583E2C8-12345",
+			want:    false,
+		},
+		{
+			name: "model still compares exactly",
+			rules: &ProfileMatchRules{
+				Model: "server-x1000",
+			},
+			model: "Server-X1000",
+			want:  false,
+		},
 	}
 
 	for _, tt := range tests {
