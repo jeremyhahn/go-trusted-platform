@@ -37,6 +37,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmattrs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmcertify"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmclear"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmpcr"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
@@ -2909,7 +2910,7 @@ func (p *MCPServiceProvider) TPMClear(ctx context.Context, ownerPassword string)
 		lockoutAuth = []byte(ownerPassword)
 	}
 
-	if err := p.tpm2Service.Clear(lockoutAuth); err != nil {
+	if err := tpmclear.Clear(p.tpm2Service, lockoutAuth); err != nil {
 		return nil, mapTPMError(err)
 	}
 

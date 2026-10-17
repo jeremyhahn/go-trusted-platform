@@ -152,18 +152,36 @@ type GetVMAttestationOptions struct {
 
 // GetVMAttestationResult contains full VM attestation
 type GetVMAttestationResult struct {
-	AttestationID string            `json:"attestation_id"`
-	VMID          string            `json:"vm_id"`
-	HostID        string            `json:"host_id"`
-	QuoteData     []byte            `json:"quote_data"`
-	Signature     []byte            `json:"signature"`
-	PCRs          []PCRValueResult  `json:"pcrs"`
-	PCRDigest     []byte            `json:"pcr_digest"`
-	WorkloadPCR   []byte            `json:"workload_pcr,omitempty"`
-	AIKPublicKey  []byte            `json:"aik_public_key"`
-	EKCertPEM     string            `json:"ek_cert_pem"`
-	Timestamp     time.Time         `json:"timestamp"`
-	Metadata      map[string]string `json:"metadata,omitempty"`
+	AttestationID      string            `json:"attestation_id"`
+	VMID               string            `json:"vm_id"`
+	HostID             string            `json:"host_id"`
+	QuoteData          []byte            `json:"quote_data"`
+	Signature          []byte            `json:"signature"`
+	SignatureAlgorithm string            `json:"signature_algorithm"`
+	Nonce              []byte            `json:"nonce,omitempty"`
+	PCRs               []PCRValueResult  `json:"pcrs"`
+	PCRDigest          []byte            `json:"pcr_digest"`
+	WorkloadPCR        []byte            `json:"workload_pcr,omitempty"`
+	AIKPublicKey       []byte            `json:"aik_public_key"`
+	EKCertPEM          string            `json:"ek_cert_pem"`
+	Timestamp          time.Time         `json:"timestamp"`
+	Metadata           map[string]string `json:"metadata,omitempty"`
+}
+
+// VerifyOptions is the VerifyVMAttestation request for this attestation:
+// its quote under its AIK, checked against expectedNonce.
+func (r *GetVMAttestationResult) VerifyOptions(expectedNonce []byte) VerifyVMAttestationOptions {
+	return VerifyVMAttestationOptions{
+		AttestationID: r.AttestationID,
+		Quote: &VMQuote{
+			QuoteData:          r.QuoteData,
+			Signature:          r.Signature,
+			SignatureAlgorithm: r.SignatureAlgorithm,
+			Nonce:              r.Nonce,
+		},
+		AkPublicKeyPem: r.AIKPublicKey,
+		ExpectedNonce:  expectedNonce,
+	}
 }
 
 // PCRValueResult represents a PCR value
@@ -175,10 +193,24 @@ type PCRValueResult struct {
 
 // VerifyVMAttestationOptions contains options for verifying VM attestation
 type VerifyVMAttestationOptions struct {
-	AttestationID  string   `json:"attestation_id"`
+	AttestationID string `json:"attestation_id"`
+	// Quote is the quote to verify, as GetVMAttestation returned it. The
+	// daemon refuses a verify request without one.
+	Quote *VMQuote `json:"quote,omitempty"`
+	// AkPublicKeyPem is the AK public key the signature is checked under.
+	AkPublicKeyPem []byte   `json:"ak_public_key_pem,omitempty"`
 	ExpectedNonce  []byte   `json:"expected_nonce"`
 	ExpectedPCRs   [][]byte `json:"expected_pcrs,omitempty"`
 	TrustedEKCerts []string `json:"trusted_ek_certs,omitempty"`
+}
+
+// VMQuote is the signed part of a VM attestation: the TPMS_ATTEST, the AK
+// signature over it and the scheme it was signed under.
+type VMQuote struct {
+	QuoteData          []byte `json:"quote_data"`
+	Signature          []byte `json:"signature"`
+	SignatureAlgorithm string `json:"signature_algorithm"`
+	Nonce              []byte `json:"nonce,omitempty"`
 }
 
 // VerifyVMAttestationResult contains verification result

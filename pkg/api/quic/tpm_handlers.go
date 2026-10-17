@@ -28,6 +28,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmattrs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmcertify"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmclear"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmpcr"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
@@ -468,7 +469,7 @@ func (h *TPM2Handler) handleClear(ctx context.Context, payload []byte) *quicwire
 		lockoutAuth = []byte(req.OwnerPassword)
 	}
 
-	if err := h.tpm.Clear(lockoutAuth); err != nil {
+	if err := tpmclear.Clear(h.tpm, lockoutAuth); err != nil {
 		return h.tpmErrorResponse(err)
 	}
 

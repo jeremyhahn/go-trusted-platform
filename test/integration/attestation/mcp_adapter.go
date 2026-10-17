@@ -26,9 +26,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // MCPAdapterError represents an error from the MCP adapter
@@ -197,286 +202,208 @@ func (a *MCPAdapter) callTool(ctx context.Context, toolName string, args interfa
 // VM Attestation Operations
 // =============================================================================
 
-// GenerateVMQuote generates a TPM quote for a VM
+// protoArgs turns a platform.v1 request into tool arguments: the daemon's
+// gRPC-bound tools decode their arguments as proto JSON with proto names.
+func protoArgs(req proto.Message) (map[string]any, error) {
+	raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	args := map[string]any{}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, err
+	}
+	return args, nil
+}
+
+// callProtoTool calls a tool and decodes its proto JSON result into out.
+func (a *MCPAdapter) callProtoTool(ctx context.Context, operation, toolName string, args map[string]any, out proto.Message) error {
+	result, err := a.callTool(ctx, toolName, args)
+	if err != nil {
+		return err
+	}
+	if err := protojson.Unmarshal(result, out); err != nil {
+		return &MCPAdapterError{Operation: operation, Message: "failed to parse response: " + err.Error()}
+	}
+	return nil
+}
+
+// collectVMAttestation calls attestation_collect_vm with the request gRPC sends.
+func (a *MCPAdapter) collectVMAttestation(ctx context.Context, operation, vmID string, nonce []byte, pcrIndices []int, hashAlgorithm string) (*platformv1.CollectVMAttestationResponse, error) {
+	args, err := protoArgs(collectVMAttestationRequest(vmID, nonce, pcrIndices, hashAlgorithm))
+	if err != nil {
+		return nil, &MCPAdapterError{Operation: operation, Message: "failed to encode request: " + err.Error()}
+	}
+	var resp platformv1.CollectVMAttestationResponse
+	if err := a.callProtoTool(ctx, operation, "attestation_collect_vm", args, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// GenerateVMQuote collects a VM quote via attestation_collect_vm.
 func (a *MCPAdapter) GenerateVMQuote(ctx context.Context, opts GenerateVMQuoteOptions) (*GenerateVMQuoteResult, error) {
-	result, err := a.callTool(ctx, "attestation_vm_generate_quote", opts)
+	resp, err := a.collectVMAttestation(ctx, "GenerateVMQuote", opts.VMID, opts.Nonce, opts.PCRIndices, opts.HashAlgorithm)
 	if err != nil {
 		return nil, err
 	}
-
-	var resp GenerateVMQuoteResult
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "GenerateVMQuote",
-			Message:   "failed to parse response: " + err.Error(),
-		}
+	result, err := vmQuoteResult(resp)
+	if err != nil {
+		return nil, &MCPAdapterError{Operation: "GenerateVMQuote", Message: err.Error()}
 	}
-
-	return &resp, nil
+	return result, nil
 }
 
-// GetVMIdentity retrieves VM identity from vTPM EK certificate
+// GetVMIdentity has no MCP tool: no transport serves it.
 func (a *MCPAdapter) GetVMIdentity(ctx context.Context, opts GetVMIdentityOptions) (*GetVMIdentityResult, error) {
-	result, err := a.callTool(ctx, "attestation_vm_get_identity", opts)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp GetVMIdentityResult
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "GetVMIdentity",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &resp, nil
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "GetVMIdentity"}
 }
 
-// GetVMAttestation generates a full VM attestation
+// GetVMAttestation collects a full VM attestation via attestation_collect_vm.
 func (a *MCPAdapter) GetVMAttestation(ctx context.Context, opts GetVMAttestationOptions) (*GetVMAttestationResult, error) {
-	result, err := a.callTool(ctx, "attestation_vm_get_attestation", opts)
+	resp, err := a.collectVMAttestation(ctx, "GetVMAttestation", opts.VMID, opts.Nonce, opts.PCRIndices, opts.HashAlgorithm)
 	if err != nil {
 		return nil, err
 	}
-
-	var resp GetVMAttestationResult
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "GetVMAttestation",
-			Message:   "failed to parse response: " + err.Error(),
-		}
+	result, err := vmAttestationResult(resp)
+	if err != nil {
+		return nil, &MCPAdapterError{Operation: "GetVMAttestation", Message: err.Error()}
 	}
-
-	return &resp, nil
+	return result, nil
 }
 
-// VerifyVMAttestation verifies a VM attestation
+// VerifyVMAttestation verifies a quote via attestation_verify_quote with the
+// request gRPC sends.
 func (a *MCPAdapter) VerifyVMAttestation(ctx context.Context, opts VerifyVMAttestationOptions) (*VerifyVMAttestationResult, error) {
-	result, err := a.callTool(ctx, "attestation_vm_verify", opts)
+	args, err := protoArgs(verifyAttestationQuoteRequest(opts))
 	if err != nil {
+		return nil, &MCPAdapterError{Operation: "VerifyVMAttestation", Message: "failed to encode request: " + err.Error()}
+	}
+	var resp platformv1.VerifyAttestationQuoteResponse
+	if err := a.callProtoTool(ctx, "VerifyVMAttestation", "attestation_verify_quote", args, &resp); err != nil {
 		return nil, err
 	}
-
-	var resp VerifyVMAttestationResult
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "VerifyVMAttestation",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &resp, nil
+	return verifyVMAttestationResult(opts, &resp), nil
 }
 
 // =============================================================================
 // Manifest Operations
 // =============================================================================
 
-// BuildManifest builds a host manifest with attestations
+// BuildManifest builds and stores a signed host manifest via
+// attestation_create_manifest.
 func (a *MCPAdapter) BuildManifest(ctx context.Context, opts BuildManifestOptions) (*BuildManifestResult, error) {
-	result, err := a.callTool(ctx, "attestation_manifest_build", opts)
-	if err != nil {
+	args := map[string]any{
+		"host_id":            opts.HostID,
+		"hash_algorithm":     opts.HashAlgorithm,
+		"include_vms":        len(opts.VMAttestations) > 0,
+		"include_containers": len(opts.ContainerAttestations) > 0,
+		"sign":               true,
+	}
+	var resp platformv1.BuildManifestResponse
+	if err := a.callProtoTool(ctx, "BuildManifest", "attestation_create_manifest", args, &resp); err != nil {
 		return nil, err
 	}
-
-	var resp BuildManifestResult
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "BuildManifest",
-			Message:   "failed to parse response: " + err.Error(),
-		}
+	result, err := buildManifestResult(&resp)
+	if err != nil {
+		return nil, &MCPAdapterError{Operation: "BuildManifest", Message: err.Error()}
 	}
-
-	return &resp, nil
+	return result, nil
 }
 
-// SignManifest signs a manifest with the host TPM
+// SignManifest has no MCP tool: no transport serves it, and
+// attestation_create_manifest signs unless sign is false.
 func (a *MCPAdapter) SignManifest(ctx context.Context, opts SignManifestOptions) (*SignManifestResult, error) {
-	result, err := a.callTool(ctx, "attestation_manifest_sign", opts)
-	if err != nil {
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "SignManifest"}
+}
+
+// getManifest calls attestation_get_manifest.
+func (a *MCPAdapter) getManifest(ctx context.Context, operation, manifestID string) (*platformv1.GetManifestResponse, error) {
+	var resp platformv1.GetManifestResponse
+	if err := a.callProtoTool(ctx, operation, "attestation_get_manifest", map[string]any{"id": manifestID}, &resp); err != nil {
 		return nil, err
 	}
-
-	var resp SignManifestResult
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "SignManifest",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
 	return &resp, nil
 }
 
-// VerifyManifest verifies a signed manifest
+// VerifyManifest verifies a stored manifest via attestation_verify_manifest.
+// The stored manifest is fetched first, as gRPC does, so the host id can be
+// compared.
 func (a *MCPAdapter) VerifyManifest(ctx context.Context, opts VerifyManifestOptions) (*VerifyManifestResult, error) {
-	result, err := a.callTool(ctx, "attestation_manifest_verify", opts)
+	getResp, err := a.getManifest(ctx, "VerifyManifest", opts.ManifestID)
 	if err != nil {
 		return nil, err
 	}
-
-	var resp VerifyManifestResult
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "VerifyManifest",
-			Message:   "failed to parse response: " + err.Error(),
-		}
+	manifest, err := storedManifest(getResp)
+	if err != nil {
+		return nil, &MCPAdapterError{Operation: "VerifyManifest", Message: err.Error()}
 	}
 
-	return &resp, nil
+	var resp platformv1.VerifyManifestResponse
+	if err := a.callProtoTool(ctx, "VerifyManifest", "attestation_verify_manifest", map[string]any{"id": opts.ManifestID}, &resp); err != nil {
+		return nil, err
+	}
+	result, err := verifyManifestResult(opts, manifest, &resp)
+	if err != nil {
+		return nil, &MCPAdapterError{Operation: "VerifyManifest", Message: err.Error()}
+	}
+	return result, nil
 }
 
-// GetManifest retrieves a manifest by ID
+// GetManifest retrieves a manifest by id via attestation_get_manifest.
 func (a *MCPAdapter) GetManifest(ctx context.Context, opts GetManifestOptions) (*GetManifestResult, error) {
-	result, err := a.callTool(ctx, "attestation_manifest_get", opts)
+	resp, err := a.getManifest(ctx, "GetManifest", opts.ManifestID)
 	if err != nil {
 		return nil, err
 	}
-
-	var resp GetManifestResult
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "GetManifest",
-			Message:   "failed to parse response: " + err.Error(),
-		}
+	result, err := getManifestResult(resp)
+	if err != nil {
+		return nil, &MCPAdapterError{Operation: "GetManifest", Message: err.Error()}
 	}
-
-	return &resp, nil
+	return result, nil
 }
 
 // =============================================================================
 // Push Operations
 // =============================================================================
 
-// PushAttestation pushes an attestation to a target
+// PushAttestation has no MCP tool: no transport serves it.
 func (a *MCPAdapter) PushAttestation(ctx context.Context, opts PushAttestationOptions) (*PushAttestationResult, error) {
-	result, err := a.callTool(ctx, "attestation_push", opts)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp PushAttestationResult
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "PushAttestation",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &resp, nil
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "PushAttestation"}
 }
 
-// PushAttestationBatch pushes to multiple targets concurrently
+// PushAttestationBatch has no MCP tool: no transport serves it.
 func (a *MCPAdapter) PushAttestationBatch(ctx context.Context, opts PushAttestationBatchOptions) (*PushAttestationBatchResult, error) {
-	result, err := a.callTool(ctx, "attestation_push_batch", opts)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp PushAttestationBatchResult
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "PushAttestationBatch",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &resp, nil
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "PushAttestationBatch"}
 }
 
-// GetPushStatus retrieves the status of a push operation
+// GetPushStatus has no MCP tool: no transport serves it.
 func (a *MCPAdapter) GetPushStatus(ctx context.Context, opts GetPushStatusOptions) (*GetPushStatusResult, error) {
-	result, err := a.callTool(ctx, "attestation_push_status", opts)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp GetPushStatusResult
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "GetPushStatus",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &resp, nil
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "GetPushStatus"}
 }
 
 // =============================================================================
 // Workload Chain Operations
 // =============================================================================
 
-// ExtendWorkloadChain extends the workload PCR with a measurement
+// ExtendWorkloadChain has no MCP tool: no transport serves it.
 func (a *MCPAdapter) ExtendWorkloadChain(ctx context.Context, opts ExtendWorkloadChainOptions) (*ExtendWorkloadChainResult, error) {
-	result, err := a.callTool(ctx, "attestation_workload_extend", opts)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp ExtendWorkloadChainResult
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "ExtendWorkloadChain",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &resp, nil
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "ExtendWorkloadChain"}
 }
 
-// GetWorkloadChainHistory retrieves the chain history
+// GetWorkloadChainHistory has no MCP tool: no transport serves it.
 func (a *MCPAdapter) GetWorkloadChainHistory(ctx context.Context, opts GetWorkloadChainHistoryOptions) (*GetWorkloadChainHistoryResult, error) {
-	result, err := a.callTool(ctx, "attestation_workload_history", opts)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp GetWorkloadChainHistoryResult
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "GetWorkloadChainHistory",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &resp, nil
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "GetWorkloadChainHistory"}
 }
 
-// VerifyWorkloadChain verifies the chain against expected PCR
+// VerifyWorkloadChain has no MCP tool: no transport serves it.
 func (a *MCPAdapter) VerifyWorkloadChain(ctx context.Context, opts VerifyWorkloadChainOptions) (*VerifyWorkloadChainResult, error) {
-	result, err := a.callTool(ctx, "attestation_workload_verify", opts)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp VerifyWorkloadChainResult
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "VerifyWorkloadChain",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &resp, nil
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "VerifyWorkloadChain"}
 }
 
-// GetWorkloadChainStats retrieves chain statistics
+// GetWorkloadChainStats has no MCP tool: no transport serves it.
 func (a *MCPAdapter) GetWorkloadChainStats(ctx context.Context, opts GetWorkloadChainStatsOptions) (*GetWorkloadChainStatsResult, error) {
-	result, err := a.callTool(ctx, "attestation_workload_stats", opts)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp GetWorkloadChainStatsResult
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, &MCPAdapterError{
-			Operation: "GetWorkloadChainStats",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &resp, nil
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "GetWorkloadChainStats"}
 }
 
 // classifyMCPReportingError maps a reporting tool's failure onto the suite's

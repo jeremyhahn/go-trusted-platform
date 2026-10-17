@@ -26,6 +26,7 @@ serves:
 | `pkg/api/quic/tpm_handlers.go` | `TPM2Handler`, TPM2 sentinel errors |
 | `sdk/go/wire/quicwire/tpm_opcodes.go` | the `SubOpTPM2*` constants |
 | `pkg/api/tpmnv/nv.go` | `Read`, `Write`, `Define`, `Undefine`, `BuildAttributes` |
+| `pkg/api/tpmclear/clear.go` | `Clear` — the one TPM2_Clear every transport calls; resets the in-memory hierarchy auth |
 | `pkg/webservice/v1/rest/tpm/` | `TPMRouter`, `Handlers` |
 | `pkg/api/mcp/tpm_tools.go`, `tpm_tools_exec.go` | the 31 `platform_tpm_*` tools |
 | `pkg/cli/commands/tpm/` | the `platformctl tpm` tree |
@@ -150,6 +151,13 @@ downgrade is invisible in every downstream artefact.
      is not dictionary-attack protected, so the check costs no lockout.
    - The endorsement auth is presented as its bit says and is never changed;
      the lockout auth is never touched.
+   - **A served `Clear` resets both in memory.** `TPM2_Clear` (Part 3 §24.6)
+     empties the owner, endorsement and lockout auth, so every transport's
+     `Clear` goes through `tpmclear.Clear` (`pkg/api/tpmclear`), which empties
+     `SSRK.HierarchyAuth` and `EK.HierarchyAuth` once the TPM accepts the
+     clear. A refused clear leaves both as they were. Without it the next
+     `CreateSRK`, `CreateEK` or `Provision` fails with `TPM_RC_BAD_AUTH` until
+     the daemon restarts.
 6. **SRK policy drift is detected, not ignored.** `InitTPM` compares the stored
    `srkAttrs.TPMAttributes.Public.AuthPolicy.Buffer` against the live
    `PlatformPolicyDigest`; a mismatch triggers re-provisioning, because
@@ -489,6 +497,18 @@ unseal fail.
 `NewCLIAdapter`, `NewRESTAdapter`, `NewGRPCAdapter`, `NewQUICAdapter`,
 `NewMCPAdapter`, `NewUnixAdapter`. `TestTPMMultiProtocol` runs one suite against
 all six. Run it with `make integration-test-tpm`.
+
+The six adapters share the daemon's one TPM, so the suite runs in two phases.
+`ReadOnly` runs first for every adapter against the TPM the daemon provisioned:
+`Info`, `EKInfo` at `0x81010001`, `EKCertificate`, `SRKInfo` at the SSRK handle
+`0x81000001`, seal/unseal and the event log. `Lifecycle` then runs per adapter:
+`Clear` with the empty lockout auth, `EKCreate` and `SRKCreate`, `Clear` again
+before each further SRK create (the daemon creates its configured SSRK at the
+one handle), and `Clear` then `Provision`. On the cleared TPM a `Provision`
+presenting an owner password is refused with `TPM_RC_BAD_AUTH`, and one with the
+empty auth succeeds. The suite never sends a wrong lockout auth: one refusal
+puts the lockout hierarchy into lockout and every later `Clear` fails with
+`TPM_RC_LOCKOUT`.
 
 `conventions/feature-docs.md` §4 asks for a `CommandDefinition` per verb. **No
 `CommandDefinition` type exists in this repository** (grepped 2026-08-18); the
