@@ -19,7 +19,10 @@ import (
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	"google.golang.org/grpc/codes"
 	"gopkg.in/yaml.v3"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 )
 
 // parsePolicyRulesFromYAML extracts the rules slice from the canonical
@@ -222,11 +225,40 @@ func (a *QuicBaaSIAMAdapter) CreateTenant(ctx context.Context, req *CreateTenant
 	if req.Settings != nil {
 		sdkReq.Settings = encodeTenantSettings(req.Settings)
 	}
-	t, err := a.client.Tenant().Create(ctx, sdkReq)
+	t, err := CreateTenantWithDefaultRoles(ctx, a.client, sdkReq)
 	if err != nil {
 		return nil, err
 	}
 	return decodeTenant(t), nil
+}
+
+// CreateTenantWithDefaultRoles creates an IAM tenant and provisions its
+// default roles (docs/iam/architecture.md): a tenant without them cannot hold
+// a user. A new tenant whose roles cannot be provisioned is deleted again.
+//
+// Provisioning is idempotent, so a tenant that already exists - created
+// before its roles were, or by a path that never provisioned them - is given
+// every default role it lacks, and the create still answers with the SDK's
+// already-exists error.
+func CreateTenantWithDefaultRoles(ctx context.Context, client iamsdk.Client, req *iamsdk.CreateTenantRequest) (*iamsdk.Tenant, error) {
+	tenant, err := client.Tenant().Create(ctx, req)
+	if errclass.Code(err) == codes.AlreadyExists {
+		if _, reconcileErr := client.Role().Reconcile(ctx, req.ID); reconcileErr != nil {
+			return nil, reconcileErr
+		}
+		return nil, err
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := client.Role().Reconcile(ctx, req.ID); err != nil {
+		if delErr := client.Tenant().Delete(ctx, req.ID); delErr != nil {
+			return nil, ErrTenantRollbackFailed{TenantID: req.ID, Cause: err, Rollback: delErr}
+		}
+		return nil, err
+	}
+	return tenant, nil
 }
 
 func (a *QuicBaaSIAMAdapter) GetTenant(ctx context.Context, tenantID string) (*TenantResponse, error) {
