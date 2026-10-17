@@ -108,7 +108,7 @@ func (r *OverlayRESTAdapter) Name() string {
 
 // Setup verifies connectivity to the REST API.
 func (r *OverlayRESTAdapter) Setup(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.baseURL+"/health", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.baseURL+livenessPath, nil)
 	if err != nil {
 		return ErrOverlayRESTConnectionFailed{Endpoint: r.baseURL, Err: err}
 	}
@@ -123,7 +123,7 @@ func (r *OverlayRESTAdapter) Setup(ctx context.Context) error {
 		body, _ := io.ReadAll(resp.Body)
 		return ErrOverlayRESTRequestFailed{
 			Method:     http.MethodGet,
-			URL:        r.baseURL + "/health",
+			URL:        r.baseURL + livenessPath,
 			StatusCode: resp.StatusCode,
 			Body:       string(body),
 		}

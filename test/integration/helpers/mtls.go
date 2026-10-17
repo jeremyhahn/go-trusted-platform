@@ -214,6 +214,15 @@ func MCPBaseURL(endpoint string) string {
 	return "https://" + endpoint
 }
 
+// RESTBaseURL turns a REST endpoint into the base URL request paths are
+// appended to. The runner exports PLATFORM_REST_ENDPOINT with its scheme
+// (https://localhost:8443), so an explicit scheme is kept and only a bare
+// host:port gets https://, the mTLS listener's scheme. A trailing slash is
+// dropped so "/api/v1/..." paths join without a doubled separator.
+func RESTBaseURL(endpoint string) string {
+	return strings.TrimSuffix(MCPBaseURL(endpoint), "/")
+}
+
 // MCPEndpointURL returns the full MCP JSON-RPC URL for endpoint; see
 // MCPBaseURL for the scheme rules. Pair it with NewHTTPClient.
 func MCPEndpointURL(endpoint string) string {

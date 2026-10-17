@@ -93,15 +93,7 @@ func NewRESTAdapter() *RESTAdapter {
 	if endpoint == "" {
 		endpoint = DefaultPlatformAPIEndpoint
 	}
-	return &RESTAdapter{baseURL: restBaseURL(endpoint) + restDNSPrefix}
-}
-
-// restBaseURL keeps an explicit scheme and gives a bare host:port https://.
-func restBaseURL(endpoint string) string {
-	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
-		return strings.TrimSuffix(endpoint, "/")
-	}
-	return "https://" + endpoint
+	return &RESTAdapter{baseURL: helpers.RESTBaseURL(endpoint) + restDNSPrefix}
 }
 
 // Name returns the adapter name.

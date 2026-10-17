@@ -30,10 +30,12 @@ const (
 	// OpAttestVM performs VM attestation
 	OpAttestVMWorkload byte = 0x7F
 
-	// Using extended attestation codes (0xED-0xEF)
-	// OpAttestContainerWorkload performs container attestation
-	OpAttestContainerWorkload byte = 0xED
+	// OpAttestContainerWorkload performs container attestation. It moved off
+	// 0xED, which the daemon dispatches to PXE (OpPXEGetDevice), onto the
+	// unassigned 0x6A (#949).
+	OpAttestContainerWorkload byte = 0x6A
 
+	// Using extended attestation codes (0xEE-0xEF)
 	// OpAttestDeviceWorkload performs device attestation
 	OpAttestDeviceWorkload byte = 0xEE
 

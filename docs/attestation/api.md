@@ -27,12 +27,17 @@ REST: `pkg/webservice/v1/rest/attestation/` (`server_router.go`,
 `events_router.go`, `reports_router.go`, `clock_router.go`, `verdicts_router.go`
 — see §3).
 QUIC: `pkg/api/quic/attestation_handlers.go` plus the base range in
-`sdk/go/wire/quicwire/protocol.go`, routed by the daemon for opcodes `0x70`–`0x77`
+`sdk/go/wire/quicwire/protocol.go`, routed by the daemon for opcodes `0x6A`, `0x70`–`0x77`
 and `0x7C`–`0x7F` (`pkg/api/daemon/quic_attestation.go`). The manifest and
 collection opcodes call the same gRPC servicer through
 `pkg/api/daemon/quic_attestation_adapter.go`, so each answers with its gRPC
 twin's result and error class; `0x77` has no report store behind any transport
-and answers `StatusNotImplemented`.
+and answers `StatusNotImplemented`. `0x73` calls the TPM gRPC servicer's
+`GetAK`. `0x74` is unassigned: no transport serves challenge / response, so
+QUIC carries no opcode for it. The authorization catalog does not classify the
+byte either, so the daemon refuses it before dispatch with `StatusPermissionDenied`
+("QUIC operation not classified for authorization: opcode 0x74"), the answer
+every reserved byte gets.
 MCP: the `attestation_*` tools. The five manifest tools call the gRPC
 `AttestationService` methods (`pkg/api/daemon/mcp_attestation_manifests.go`), so
 each answers with its gRPC twin's result and error class. The five quote and
@@ -54,7 +59,7 @@ refused (§5).
 | Verify quote | `POST /api/v1/attestation/quote/verify` | `VerifyAttestationQuote` | `OpAttestVerify` (`0x71`) | `attestation_verify_quote` | ✅ |
 | Collect host attestation (TLS only — §5.1a) | `POST /api/v1/attestation/host` | `CollectHostAttestation` (refused over Unix) | `OpAttestHost` (`0x7E`), `OpAttestCollectHost` (`0x72`) | `attestation_collect_host` (HTTPS only) | refused — no TLS (§5.1a) |
 | Collect VM attestation | `POST /api/v1/attestation/vm/{id}` | `CollectVMAttestation` | `OpAttestVMWorkload` (`0x7F`) — without a TPM session it carries `ErrTPMSessionNotConfigured` as the other transports do (gRPC `Internal`, QUIC `StatusInternalError`) | `attestation_collect_vm` | ✅ |
-| Collect container attestation | `POST /api/v1/attestation/container/{id}` | `CollectContainerAttestation` | `MISSING` — `OpAttestContainerWorkload` (`0xED`) is shadowed: the daemon dispatches that byte to the PXE family (`pkg/api/daemon/quic_dispatch_guard_test.go`), so it never reaches attestation | `attestation_collect_container` | ✅ |
+| Collect container attestation | `POST /api/v1/attestation/container/{id}` | `CollectContainerAttestation` | `OpAttestContainerWorkload` (`0x6A`) — moved off `0xED`, which PXE owns (#949); calls `CollectContainerAttestation` and answers its gRPC twin's result and error class | `attestation_collect_container` | ✅ |
 | Attest a workload | `MISSING — docs/13 G7` | (covered by the two Collect RPCs) | `MISSING` — `OpAttestDeviceWorkload` (`0xEE`) is shadowed by the PXE family | `MISSING — docs/13 G7` | — |
 | Verify a workload | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 | Attestation reports (create / get / list) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING` — `OpAttestGetReportByID` (`0x77`) answers `StatusNotImplemented` (no report store on any transport); `OpAttestListReports` (`0xEF`) is shadowed by the PXE family | `MISSING — docs/13 G7` | — |
@@ -66,8 +71,8 @@ refused (§5).
 | Device reports (fleet) | `GET /api/v1/attestation/reports` | `ListDeviceReports` | `MISSING — #386` | `attestation_device_reports` | ✅ |
 | Refresh a device report (enqueue) | `POST /api/v1/attestation/reports/{device_id}/refresh` | `RefreshDeviceReport` | `MISSING — #386` | `attestation_device_refresh` | ✅ |
 | Device verdict feed (`attestation:read`, tenant-filtered — §5.5, [engineering §9](engineering.md#device-verdict-events)) | `GET /api/v1/attestation/verdicts?cursor=&wait_ms=` (long-poll) | `StreamDeviceVerdicts` (server stream), `PollDeviceVerdicts` | `OpAttestPollVerdicts` (`0x75`, long-poll) | `attestation_device_verdicts_poll` (long-poll) | ✅ (long-poll) |
-| Challenge / response | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestChallenge` (`0x74`); the never-implemented `OpAttestResponse` value `0x75` now carries `OpAttestPollVerdicts` | `MISSING — docs/13 G7` | — |
-| Get AK | `MISSING` — served by the TPM surface, [`docs/tpm/`](../tpm/) | — | `OpAttestGetAK` (`0x73`) | — | — |
+| Challenge / response | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` — `0x74` is unassigned; the never-implemented `OpAttestResponse` value `0x75` now carries `OpAttestPollVerdicts` | `MISSING — docs/13 G7` | — |
+| Get AK | `MISSING` — served by the TPM surface, [`docs/tpm/`](../tpm/) | `TPMService.GetAK` ([`docs/tpm/`](../tpm/)) | `OpAttestGetAK` (`0x73`) — calls the TPM gRPC servicer's `GetAK`, so it answers its gRPC twin's result and error class | — | — |
 
 **Reading the gaps.** The rows are lopsided in a consistent direction: manifests
 and quotes are complete on gRPC and REST, while **reports and policies exist on
@@ -137,8 +142,8 @@ Platform tokens carry an `scp` claim in the qrdb-canonical
 manifest verification) and `attestation:write` for every opcode that collects
 fresh evidence: `OpAttestQuote` (`0x70`) and `OpAttestCollectHost` (`0x72`),
 which make the node's TPM sign the caller's nonce and return the PCR values the
-quote covers, plus challenge/response, manifest build, host attestation and VM
-workload attestation. A quote is the TPM-DoS and measured-state disclosure
+quote covers, plus challenge/response, manifest build, host attestation, VM
+workload attestation and container workload attestation (`0x6A`). A quote is the TPM-DoS and measured-state disclosure
 surface §5.1 describes, so an `attestation:read` token is refused it with
 `StatusPermissionDenied`.
 
@@ -433,7 +438,7 @@ evidence until then.
 ### 5.4 Workload verdicts on the collect routes (#483)
 
 `POST /api/v1/attestation/vm/{id}` and `.../container/{id}` — and their QUIC
-opcodes `0x7F` / `0xED` — return `verified` alongside two fields that say how
+opcodes `0x7F` / `0x6A` — return `verified` alongside two fields that say how
 that answer was reached:
 
 | Field | Meaning |

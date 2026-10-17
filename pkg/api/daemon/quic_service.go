@@ -74,9 +74,11 @@ type QUICServiceHandler struct {
 	// dnsGRPC is the shared *DNSServiceServer the SDK-mapped DNS QUIC handlers
 	// delegate to so the QUIC transport has identical semantics to gRPC.
 	// It is (re)built by the DNS service setters (rebuildDNSGRPC).
-	dnsGRPC        *DNSServiceServer
-	computeGRPC    *ComputeGRPCService
-	attestGRPC     *AttestationServiceServer
+	dnsGRPC     *DNSServiceServer
+	computeGRPC *ComputeGRPCService
+	attestGRPC  *AttestationServiceServer
+	// tpmGRPC serves OpAttestGetAK, whose gRPC twin is TPMService.GetAK.
+	tpmGRPC        *TPMGRPCService
 	healthRegistry health.Registry
 	sdnService     *SDNService
 	iamService     QUICIAMService
@@ -432,6 +434,12 @@ func (h *QUICServiceHandler) SetAttestationGRPCService(svc *AttestationServiceSe
 	h.attestGRPC = svc
 }
 
+// SetTPMGRPCService sets the TPM gRPC servicer behind OpAttestGetAK, so it
+// answers as its gRPC twin does.
+func (h *QUICServiceHandler) SetTPMGRPCService(svc *TPMGRPCService) {
+	h.tpmGRPC = svc
+}
+
 // SetSDNService sets the SDN service after construction
 func (h *QUICServiceHandler) SetSDNService(svc *SDNService) {
 	h.sdnService = svc
@@ -635,10 +643,15 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 	// sub-opcodes AND the container sub-opcodes (create/start/stop/remove/
 	// get/list/logs/attest, whose direct opcodes are shadowed by the PXE
 	// ranges) in payload[0]; handleVMServiceOperation routes each to its
-	// handler. 0x60 is the object storage category above; the rest of
-	// 0x61-0x6A is unassigned.
+	// handler. 0x60 is the object storage category above; 0x61-0x68 is
+	// unassigned.
 	case req.Opcode == quicwire.OpVMExtendedCategory:
 		return h.handleVMServiceOperation(ctx, req)
+
+	// Container workload attestation (0x6A). It moved here off 0xED, which
+	// PXE owns (#949).
+	case req.Opcode == quicwire.OpAttestContainerWorkload:
+		return h.handleAttestationOperation(ctx, req)
 
 	// IAK Extended Operations (0x6B-0x6E)
 	case req.Opcode >= quicwire.OpIAKInstallCert && req.Opcode <= quicwire.OpActivateCredential:

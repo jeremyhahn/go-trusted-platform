@@ -39,7 +39,13 @@ import (
 //       OpAttestQuote       (0x70) -> GetAttestationQuote
 //       OpAttestVerify      (0x71) -> VerifyAttestationQuote
 //       OpAttestCollectHost (0x72) -> CollectHostAttestation
+//       OpAttestGetAK       (0x73) -> TPMService.GetAK
 //       OpAttestPollVerdicts (0x75) -> PollDeviceVerdicts
+//
+//     0x74 is unassigned: challenge / response is served by no transport
+//     (docs/13 G7). The authorization catalog does not classify the byte,
+//     so HandleRequest refuses it with StatusPermissionDenied
+//     (quic.ErrOperationNotClassified) before it reaches this dispatcher.
 //
 //     PollDeviceVerdicts is how a QUIC client follows device verdicts: QUIC
 //     requests are unary, so the gRPC server stream StreamDeviceVerdicts is
@@ -77,6 +83,8 @@ func (h *QUICServiceHandler) handleAttestationOperation(ctx context.Context, req
 		return h.handleAttestationVerifyQuote(ctx, req)
 	case quicwire.OpAttestCollectHost:
 		return h.handleAttestationCollectHost(ctx, req)
+	case quicwire.OpAttestGetAK:
+		return h.handleAttestationGetAK(ctx, req)
 	case quicwire.OpAttestPollVerdicts:
 		return h.handleAttestationPollVerdicts(ctx, req)
 	default:
@@ -121,6 +129,25 @@ func (h *QUICServiceHandler) handleAttestationVerifyQuote(ctx context.Context, r
 	resp, err := h.attestGRPC.VerifyAttestationQuote(ctx, &verifyReq)
 	if err != nil {
 		return h.grpcStatusToQUICResponse("AttestVerifyQuote", err)
+	}
+	return h.encodeQUICOK(resp)
+}
+
+// handleAttestationGetAK serves OpAttestGetAK through the TPM gRPC servicer's
+// GetAK, so QUIC answers the attestation key, and every refusal, as gRPC does.
+func (h *QUICServiceHandler) handleAttestationGetAK(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	if h.tpmGRPC == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "attestation"})
+	}
+
+	var akReq platformv1.GetAKRequest
+	if err := quicwire.DecodePayload(req.Payload, &akReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	resp, err := h.tpmGRPC.GetAK(ctx, &akReq)
+	if err != nil {
+		return h.grpcStatusToQUICResponse("AttestGetAK", err)
 	}
 	return h.encodeQUICOK(resp)
 }

@@ -1039,6 +1039,10 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 				gwControl.DesiredCfg.SetVPNSource(vpnControl)
 			}
 		}
+		// The control plane's own REST listener carries the liaison: a
+		// gateway's control-plane base-url names it, and a control plane
+		// may publish no webservice at all (docs/gateway/api.md §8).
+		platformDaemon.SetGatewayControlPlane(gwControl.Store, gwControl.DesiredCfg)
 	}
 
 	// Plug snapshot store into the daemon Service so reload captures

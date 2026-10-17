@@ -54,6 +54,7 @@ import (
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
 	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
@@ -253,7 +254,10 @@ type Daemon struct {
 	zoneSvc     gateway.ZoneService
 
 	// Concrete server references for accessor methods (set only for real servers)
-	concreteRestServer    *RESTServer
+	concreteRestServer *RESTServer
+	// restGuard is the REST listener's scope guard, kept for routes mounted
+	// after New (SetGatewayControlPlane).
+	restGuard             *restapi.ScopeGuard
 	concreteMcpServer     *mcp.Server
 	concreteGrpcUDSServer *grpc.Server // Store concrete gRPC UDS server for service registration
 
@@ -1243,6 +1247,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			logger.Debug("Compute gRPC service set for QUIC handler")
 		}
 		quicHandler.SetAttestationGRPCService(attestationService)
+		quicHandler.SetTPMGRPCService(tpmService)
 		quicHandler.SetAttestationService(newAttestationQUICAdapter(attestationService))
 
 		// Set up overlay and gateway QUIC handlers for proper request routing.
@@ -1485,6 +1490,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			logger.Error(constructErr, "component", "rest_server")
 			return nil, constructErr
 		}
+		daemon.restGuard = restGuard
 		if ntpGRPCService != nil {
 			daemon.concreteRestServer.SetNTPHandlers(ntpGRPCService, restGuard)
 		}
@@ -3108,6 +3114,9 @@ func (d *Daemon) SetTPMGRPCService(svc *TPMGRPCService) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.tpmService = svc
+	if d.quicHandler != nil {
+		d.quicHandler.SetTPMGRPCService(svc)
+	}
 }
 
 // EABGRPCService returns the EAB gRPC service backing /api/v1/eab.
@@ -3162,6 +3171,21 @@ func (d *Daemon) VPNGRPCServiceServer() *VPNGRPCService {
 // daemon runs without a platform store.
 func (d *Daemon) VPNControlPlane() *vpn.Service {
 	return d.vpnControlPlane
+}
+
+// SetGatewayControlPlane mounts the gateway control-plane liaison
+// (docs/gateway/api.md §8) on the daemon REST listener, backed by store and
+// cfgSource, with the control-plane VPN service recording the gateways'
+// leases. It must be called before Start.
+func (d *Daemon) SetGatewayControlPlane(store restgateway.GatewayStateStore, cfgSource restgateway.DesiredConfigSource) {
+	if d.concreteRestServer == nil {
+		return
+	}
+	var leases restgateway.VPNLeaseSink
+	if d.vpnControlPlane != nil {
+		leases = d.vpnControlPlane
+	}
+	d.concreteRestServer.SetGatewayControlPlane(store, cfgSource, leases, d.restGuard)
 }
 
 // TenantGRPCServer returns the Tenant gRPC server backing /api/v1/tenants.

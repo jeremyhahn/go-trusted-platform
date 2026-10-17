@@ -40,6 +40,15 @@ type collectingManifestService struct {
 	hostNonce []byte
 	hostCalls int
 	vmErr     error
+	// containerErr, when set, refuses container collection.
+	containerErr error
+}
+
+func (s *collectingManifestService) CollectContainerAttestation(_ context.Context, containerID string) (*manifest.ContainerAttestation, error) {
+	if s.containerErr != nil {
+		return nil, s.containerErr
+	}
+	return &manifest.ContainerAttestation{ContainerID: containerID, ImageID: "image-1", Digest: []byte("digest")}, nil
 }
 
 func (s *collectingManifestService) CollectHostAttestation(_ context.Context, _ *QuoteConfig, nonce []byte) (*manifest.HostAttestation, error) {
@@ -208,6 +217,41 @@ func TestQUICAttestation_AttestVM_NoTPMSession(t *testing.T) {
 		&apiquic.AttestVMRequest{VMID: "vm-1", Nonce: adapterNonce})
 	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	assert.Contains(t, string(resp.Payload), svc.vmErr.Error())
+}
+
+// attestContainerOverQUIC sends one OpAttestContainerWorkload (0x6A) request
+// through the daemon's top-level dispatch, so the test also proves the byte
+// reaches attestation rather than PXE, which owns 0xED (#949).
+func attestContainerOverQUIC(t *testing.T, h *QUICServiceHandler, containerID string) *quicwire.Response {
+	t.Helper()
+	payload, err := quicwire.EncodePayload(&apiquic.AttestContainerRequest{ContainerID: containerID, Nonce: adapterNonce})
+	require.NoError(t, err)
+	return h.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpAttestContainerWorkload, Payload: payload})
+}
+
+// TestQUICAttestation_AttestContainer: 0x6A answers the container attestation
+// the gRPC CollectContainerAttestation returns.
+func TestQUICAttestation_AttestContainer(t *testing.T) {
+	resp := attestContainerOverQUIC(t, quicAttestationHandler(newCollectingManifestService()), "ctr-1")
+
+	require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
+	var got apiquic.AttestContainerResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &got))
+	require.NotNil(t, got.Attestation)
+	assert.Equal(t, "ctr-1", got.Attestation.ContainerID)
+	assert.Equal(t, "image-1", got.Attestation.ImageID)
+}
+
+// TestQUICAttestation_AttestContainer_Refused: a refused collection reaches
+// the client as gRPC carries it, Internal with the message intact.
+func TestQUICAttestation_AttestContainer_Refused(t *testing.T) {
+	svc := newCollectingManifestService()
+	svc.containerErr = errNoTPMSession{op: "CollectContainerAttestation"}
+
+	resp := attestContainerOverQUIC(t, quicAttestationHandler(svc), "ctr-1")
+
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
+	assert.Contains(t, string(resp.Payload), svc.containerErr.Error())
 }
 
 // TestQUICAttestation_GetReport_NotImplemented: no transport has a report
