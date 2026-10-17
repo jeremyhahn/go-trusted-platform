@@ -126,7 +126,7 @@ var caWireServers = []caWireServer{
 		router := mux.NewRouter()
 		restapi.NewCAHandlers(restapi.NewCAAuthorityAdapter(ca), nil, nil).
 			WithKMS(kms).
-			WithTokenAuthorizer(tokens).
+			WithScopeGuard(restapi.NewScopeGuard(tokens, nil, nil)).
 			RegisterRoutes(router)
 		return router
 	}},

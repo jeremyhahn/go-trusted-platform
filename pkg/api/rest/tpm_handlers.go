@@ -17,7 +17,6 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/gorilla/mux"
 	"google.golang.org/protobuf/proto"
@@ -37,27 +36,6 @@ func (e ErrTPMServiceNotAvailable) Error() string {
 	return "TPM service not available"
 }
 
-// ErrTPMTokenRequired is returned when a TPM request carries no platform
-// bearer token.
-type ErrTPMTokenRequired struct {
-	Scope string
-}
-
-func (e ErrTPMTokenRequired) Error() string {
-	return "this TPM operation requires a platform bearer token granting " + e.Scope
-}
-
-// ErrTPMForbidden is returned when a TPM request's token does not grant the
-// scope its route requires.
-type ErrTPMForbidden struct {
-	Scope  string
-	Reason string
-}
-
-func (e ErrTPMForbidden) Error() string {
-	return "this TPM operation requires " + e.Scope + ": " + e.Reason
-}
-
 // =============================================================================
 // TPM Routes
 // =============================================================================
@@ -73,12 +51,13 @@ const (
 // TPMHandlers serves the physical TPM over REST. Every route decodes the
 // protobuf JSON request the SDK sends, runs the matching TPMService RPC on
 // the daemon's TPM service and answers with its protobuf JSON response, so a
-// REST call is the one gRPC, QUIC, MCP and Unix serve. Every route requires a
-// platform bearer token granting its scope.
+// REST call is the one gRPC, QUIC, MCP and Unix serve. Every route requires
+// its scope, checked by the daemon's ScopeGuard: a platform bearer token, else
+// the verified operator client certificate.
 type TPMHandlers struct {
 	protoResponder
-	tpm    platformv1.TPMServiceServer
-	tokens TokenAuthorizer
+	tpm   platformv1.TPMServiceServer
+	guard *ScopeGuard
 }
 
 // tpmRoute is one TPM REST route and the scope it requires.
@@ -106,10 +85,10 @@ func (h *TPMHandlers) WithTPMService(tpm platformv1.TPMServiceServer) *TPMHandle
 	return h
 }
 
-// WithTokenAuthorizer sets the platform-token authorizer that gates every
-// route. Without one, every route refuses every request.
-func (h *TPMHandlers) WithTokenAuthorizer(tokens TokenAuthorizer) *TPMHandlers {
-	h.tokens = tokens
+// WithScopeGuard sets the guard that checks every route's scope. Without
+// one, every route refuses every request with 403.
+func (h *TPMHandlers) WithScopeGuard(guard *ScopeGuard) *TPMHandlers {
+	h.guard = guard
 	return h
 }
 
@@ -117,7 +96,7 @@ func (h *TPMHandlers) WithTokenAuthorizer(tokens TokenAuthorizer) *TPMHandlers {
 // each behind the scope it requires.
 func (h *TPMHandlers) RegisterRoutes(router *mux.Router) {
 	for _, route := range h.routes() {
-		router.Handle(route.path, h.requireScope(route.scope, route.handler)).Methods(route.method)
+		router.HandleFunc(route.path, h.guard.Require(route.scope, route.handler)).Methods(route.method)
 	}
 	h.logger.Info("TPM REST routes registered")
 }
@@ -187,41 +166,6 @@ func (h *TPMHandlers) routes() []tpmRoute {
 		{http.MethodPost, "/api/v1/tpm/seal", tpmScopeWrite, tpmRPC(h, platformv1.TPMServiceServer.Seal)},
 		{http.MethodPost, "/api/v1/tpm/unseal", tpmScopeRead, tpmRPC(h, platformv1.TPMServiceServer.Unseal)},
 	}
-}
-
-// requireScope serves next only to a request whose platform bearer token
-// grants scope. It refuses everything when no authorizer is configured.
-func (h *TPMHandlers) requireScope(scope string, next http.HandlerFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if code, err := h.authorize(r, scope); err != nil {
-			h.writeError(w, code, err)
-			return
-		}
-		next(w, r)
-	})
-}
-
-// authorize requires a platform bearer token granting scope. It returns the
-// HTTP status to refuse the request with.
-func (h *TPMHandlers) authorize(r *http.Request, scope string) (int, error) {
-	if h.tokens == nil {
-		return http.StatusForbidden, ErrTPMForbidden{Scope: scope, Reason: "no platform-token validator is configured"}
-	}
-	token, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if !found || strings.TrimSpace(token) == "" {
-		return http.StatusUnauthorized, ErrTPMTokenRequired{Scope: scope}
-	}
-	authCtx, err := h.tokens.AuthorizeToken(r.Context(), token, scope, r.Header.Get("DPoP"), r.Method, requestURL(r))
-	if err != nil {
-		return http.StatusForbidden, ErrTPMForbidden{Scope: scope, Reason: err.Error()}
-	}
-	if authCtx == nil {
-		return http.StatusForbidden, ErrTPMForbidden{Scope: scope, Reason: "the token authorized no context"}
-	}
-	if err := authCtx.RequireScope(scope); err != nil {
-		return http.StatusForbidden, ErrTPMForbidden{Scope: scope, Reason: err.Error()}
-	}
-	return http.StatusOK, nil
 }
 
 // =============================================================================
