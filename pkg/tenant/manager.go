@@ -1302,10 +1302,13 @@ func (m *Manager) updateInIAM(ctx context.Context, entity *TenantEntity) error {
 		return err
 	}
 
+	// The display name travels in the platform record, never as IAM's
+	// DisplayName: the pinned go-quicbaas embedded handleIAMTenantUpdate
+	// (sdk/go/transport/embedded/handlers_iam.go:204-208) writes that field
+	// into the tenant's canonical name, so sending it renames the tenant.
 	req := &iam.UpdateTenantRequest{
-		DisplayName: entity.DisplayName,
-		Metadata:    metadata,
-		Status:      entity.iamStatus(),
+		Metadata: metadata,
+		Status:   entity.iamStatus(),
 	}
 
 	_, err = m.iamTenantClient.Update(ctx, entity.ID, req)

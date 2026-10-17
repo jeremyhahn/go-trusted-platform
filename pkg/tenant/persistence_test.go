@@ -115,6 +115,44 @@ func TestManager_RestartKeepsStateQuotasAndLabels(t *testing.T) {
 	}
 }
 
+// TestManager_DisplayNameNeverRenamesTheTenant proves a display name is kept
+// in the platform record, not sent as IAM's DisplayName: the pinned embedded
+// IAM writes that field into the canonical name, which would rename "acme" to
+// "Acme Corporation" and lose the tenant to every by-name lookup after a
+// restart.
+func TestManager_DisplayNameNeverRenamesTheTenant(t *testing.T) {
+	manager, iamClient := newTestManager(t)
+	ctx := context.Background()
+
+	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{
+		Name:        "acme",
+		DisplayName: "Acme Corporation",
+	})
+	if err != nil {
+		t.Fatalf("CreateTenant: %v", err)
+	}
+	newDisplayName := "Acme Holdings"
+	if _, err := manager.UpdateTenant(ctx, created.ID, &UpdateTenantRequest{DisplayName: &newDisplayName}); err != nil {
+		t.Fatalf("UpdateTenant: %v", err)
+	}
+
+	if name := iamClient.tenants[created.ID].Name; name != "acme" {
+		t.Fatalf("IAM tenant name = %q, want %q", name, "acme")
+	}
+
+	restarted := restartedManager(t, iamClient)
+	got, err := restarted.GetTenantByName(ctx, "acme")
+	if err != nil {
+		t.Fatalf("GetTenantByName(acme) after restart: %v", err)
+	}
+	if got.Name != "acme" {
+		t.Errorf("name = %q, want %q", got.Name, "acme")
+	}
+	if got.DisplayName != newDisplayName {
+		t.Errorf("display name = %q, want %q", got.DisplayName, newDisplayName)
+	}
+}
+
 func TestManager_ResumeIsPersisted(t *testing.T) {
 	manager, iamClient := newTestManager(t)
 	ctx := context.Background()
