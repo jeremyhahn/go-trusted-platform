@@ -83,4 +83,23 @@ const (
 	// Request/response: platform.v1 FindMatchingProfileRequest/
 	// FindMatchingProfileResponse.
 	DeviceSubFindMatchingProfile byte = 0x29
+
+	// DeviceSubTemplateGet reads a device template: DeviceService.GetTemplate.
+	// Request/response: platform.v1 DeviceTemplateGetRequest/Response.
+	DeviceSubTemplateGet byte = 0x2A
+
+	// DeviceSubTemplateList pages the device templates:
+	// DeviceService.ListTemplates. Request/response: platform.v1
+	// DeviceTemplateListRequest/Response.
+	DeviceSubTemplateList byte = 0x2B
+
+	// DeviceSubTemplateUpdate replaces a device template:
+	// DeviceService.UpdateTemplate. Request/response: platform.v1
+	// DeviceTemplateUpdateRequest/Response.
+	DeviceSubTemplateUpdate byte = 0x2C
+
+	// DeviceSubTemplateDelete removes a device template:
+	// DeviceService.DeleteTemplate. Request/response: platform.v1
+	// DeviceTemplateDeleteRequest/Response.
+	DeviceSubTemplateDelete byte = 0x2D
 )

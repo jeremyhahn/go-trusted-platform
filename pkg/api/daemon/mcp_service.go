@@ -65,7 +65,7 @@ type MCPServiceProviderConfig struct {
 	VTPMService          vtpm.VTPMService
 	DeviceService        device.DeviceService
 	DeviceProfileService device.DeviceProfileService
-	// DeviceTemplateService backs device_template_create and
+	// DeviceTemplateService backs the device_template_* tools and
 	// profile_create_from_template; nil answers that no template service
 	// is configured.
 	DeviceTemplateService device.DeviceTemplateService

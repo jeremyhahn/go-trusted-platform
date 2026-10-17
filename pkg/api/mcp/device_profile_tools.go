@@ -273,6 +273,10 @@ var deviceProfileToolDispatch = map[string]deviceProfileToolHandler{
 	"profile_assign_to_device":     (*ToolRegistry).executeDeviceProfileAssign,
 	"profile_unassign_from_device": (*ToolRegistry).executeDeviceProfileUnassign,
 	"device_template_create":       (*ToolRegistry).executeDeviceTemplateCreate,
+	"device_template_get":          (*ToolRegistry).executeDeviceTemplateGet,
+	"device_template_list":         (*ToolRegistry).executeDeviceTemplateList,
+	"device_template_update":       (*ToolRegistry).executeDeviceTemplateUpdate,
+	"device_template_delete":       (*ToolRegistry).executeDeviceTemplateDelete,
 	"profile_create_from_template": (*ToolRegistry).executeDeviceProfileFromTemplate,
 }
 
