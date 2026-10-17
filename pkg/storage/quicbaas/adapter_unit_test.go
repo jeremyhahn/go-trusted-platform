@@ -281,6 +281,41 @@ func TestGenericDAO_Page_FirstPage_Mock(t *testing.T) {
 	assert.Equal(t, 3, result.PageSize)
 }
 
+// TestGenericDAO_Page_ZeroPage_Mock pins the query that panicked the
+// daemon's MCP DeviceList (page 0, size 100 sliced at [-100:]).
+func TestGenericDAO_Page_ZeroPage_Mock(t *testing.T) {
+	dao, mock := setupMockDAO(t)
+	defer mock.Stop(context.Background())
+
+	ctx := context.Background()
+	for i := 1; i <= 4; i++ {
+		require.NoError(t, dao.Save(ctx, &TestRole{ID: uint64(i), Name: "role"}))
+	}
+
+	result, err := dao.Page(ctx, datastore.PageQuery{PageSize: 100})
+	require.NoError(t, err)
+	assert.Len(t, result.Entities, 4)
+	assert.Equal(t, datastore.FirstPage, result.Page)
+	assert.False(t, result.HasMore)
+}
+
+// TestGenericDAO_Page_NegativeQuery_Mock covers a negative page and a
+// zero page size: the first page at the default size, never a panic.
+func TestGenericDAO_Page_NegativeQuery_Mock(t *testing.T) {
+	dao, mock := setupMockDAO(t)
+	defer mock.Stop(context.Background())
+
+	ctx := context.Background()
+	for i := 1; i <= 2; i++ {
+		require.NoError(t, dao.Save(ctx, &TestRole{ID: uint64(i), Name: "role"}))
+	}
+
+	result, err := dao.Page(ctx, datastore.PageQuery{Page: -5, PageSize: 0})
+	require.NoError(t, err)
+	assert.Len(t, result.Entities, 2)
+	assert.Equal(t, datastore.DefaultPageSize, result.PageSize)
+}
+
 func TestGenericDAO_Page_LastPage_Mock(t *testing.T) {
 	dao, mock := setupMockDAO(t)
 	defer mock.Stop(context.Background())
