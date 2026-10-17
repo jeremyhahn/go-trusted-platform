@@ -103,6 +103,23 @@ func TestDNSAddRecord_Delegated(t *testing.T) {
 		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
+	t.Run("invalid record refused as invalid argument", func(t *testing.T) {
+		records := map[string]*platformv1.Record{
+			"A not IPv4":      {Type: platformv1.RecordType_RECORD_TYPE_A, Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "www", Value: "not-an-ip"}}},
+			"AAAA given IPv4": {Type: platformv1.RecordType_RECORD_TYPE_AAAA, Record: &platformv1.Record_Aaaa{Aaaa: &platformv1.AAAARecord{Name: "www", Value: "192.168.1.1"}}},
+			"empty name":      {Type: platformv1.RecordType_RECORD_TYPE_A, Record: &platformv1.Record_A{A: &platformv1.ARecord{Value: "192.168.1.1"}}},
+			"TLSA usage 5":    {Type: platformv1.RecordType_RECORD_TYPE_TLSA, Record: &platformv1.Record_Tlsa{Tlsa: &platformv1.TLSARecord{Name: "_443._tcp.www", Usage: 5, Selector: 1, MatchingType: 1, Data: "abc123"}}},
+		}
+		for name, record := range records {
+			mock := NewMockDNSService()
+			handler := createDNSUnitTestHandler(mock)
+			req := createDNSUnitTestRequest(t, quicwire.OpDNSAddRecord, &platformv1.AddRecordRequest{ZoneName: "example.com.", Record: record})
+			resp := handler.HandleRequest(ctx, req)
+			assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status, "%s: %s", name, resp.Payload)
+			assert.Nil(t, mock.SavedZone, "%s: a refused record must not be saved", name)
+		}
+	})
+
 	t.Run("missing record", func(t *testing.T) {
 		handler := createDNSUnitTestHandler(NewMockDNSService())
 		req := createDNSUnitTestRequest(t, quicwire.OpDNSAddRecord, &platformv1.AddRecordRequest{ZoneName: "example.com."})

@@ -42,7 +42,14 @@ type memIAM struct {
 	roles   map[string]*sdkiam.Role
 	groups  map[string]*sdkiam.Group
 	tenants map[string]*sdkiam.Tenant
+
+	// reconcileErr, when set, is what Role().Reconcile returns.
+	reconcileErr error
 }
+
+// memBuiltInRoles are the default roles Role().Reconcile seeds, as the SDK's
+// role reconcile does.
+var memBuiltInRoles = []string{"so", "admin", "operator", "user", "auditor", "custodian"}
 
 func newMemIAM() *memIAM {
 	return &memIAM{
@@ -183,6 +190,27 @@ func (r memRoles) Create(_ context.Context, tenantID string, req *sdkiam.CreateR
 	r.m.roles[memKey(tenantID, role.ID)] = role
 	copied := *role
 	return &copied, nil
+}
+
+// Reconcile seeds the built-in roles the tenant lacks, as the SDK does.
+func (r memRoles) Reconcile(_ context.Context, tenantID string) (*sdkiam.ReconcileRolesResponse, error) {
+	r.m.mu.Lock()
+	defer r.m.mu.Unlock()
+	if r.m.reconcileErr != nil {
+		return nil, r.m.reconcileErr
+	}
+	resp := &sdkiam.ReconcileRolesResponse{TenantID: tenantID}
+	for _, name := range memBuiltInRoles {
+		if _, ok := r.m.roles[memKey(tenantID, name)]; ok {
+			continue
+		}
+		r.m.roles[memKey(tenantID, name)] = &sdkiam.Role{
+			ID: name, TenantID: tenantID, Name: name, CreatedAt: memIAMCreated, UpdatedAt: memIAMCreated,
+		}
+		resp.Roles = append(resp.Roles, sdkiam.RoleReconcileResult{RoleID: name, Name: name, Created: true})
+		resp.Changed = true
+	}
+	return resp, nil
 }
 
 func (r memRoles) Get(_ context.Context, tenantID, roleID string) (*sdkiam.Role, error) {

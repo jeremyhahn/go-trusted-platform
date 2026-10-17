@@ -118,6 +118,29 @@ func NewIAMRouter(
 
 // RegisterRoutes registers all IAM REST routes on the provided router
 func (r *IAMRouter) RegisterRoutes(router *mux.Router) {
+	iamRouter := r.registerScopedRoutes(router)
+
+	// Flat (tenant-implicit) routes — convenience aliases that the
+	// WebUI hits without carrying the tenant in the URL. The
+	// handlers' `getTenantID` falls back to the session's tenant
+	// when the URL doesn't contain {tenant}, so the same handler
+	// body backs both forms; a tenant_id query naming another
+	// tenant is refused by the own-tenant guard, and a request
+	// body naming one by the handler (decodeTenantBody).
+	r.registerFlatRoutes(iamRouter)
+}
+
+// RegisterTenantRoutes registers the tenant-record routes and the routes
+// that carry the tenant in the path (/tenants/{tenant}/...), without the
+// flat aliases. The daemon REST listener mounts this set: the flat aliases
+// fall back to a webservice session's tenant, which the daemon does not hold.
+func (r *IAMRouter) RegisterTenantRoutes(router *mux.Router) {
+	r.registerScopedRoutes(router)
+}
+
+// registerScopedRoutes mounts the guarded IAM subrouter with the tenant-record
+// and tenant-scoped route groups, and returns it for further routes.
+func (r *IAMRouter) registerScopedRoutes(router *mux.Router) *mux.Router {
 	// Create subrouter for IAM endpoints. Authentication and the admin
 	// role gate the entire subtree — reading the tenant's users, roles,
 	// policies or OAuth applications is administrative disclosure, so the
@@ -132,15 +155,7 @@ func (r *IAMRouter) RegisterRoutes(router *mux.Router) {
 	r.registerRoleRoutes(iamRouter)
 	r.registerPolicyRoutes(iamRouter)
 	r.registerAppRoutes(iamRouter)
-
-	// Flat (tenant-implicit) routes — convenience aliases that the
-	// WebUI hits without carrying the tenant in the URL. The
-	// handlers' `getTenantID` falls back to the session's tenant
-	// when the URL doesn't contain {tenant}, so the same handler
-	// body backs both forms; a tenant_id query naming another
-	// tenant is refused by the own-tenant guard, and a request
-	// body naming one by the handler (decodeTenantBody).
-	r.registerFlatRoutes(iamRouter)
+	return iamRouter
 }
 
 // registerFlatRoutes registers tenant-implicit aliases for the IAM

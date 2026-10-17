@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/gorilla/mux"
@@ -57,6 +58,24 @@ func TestDNSRouter_RegisterRoutes(t *testing.T) {
 
 	// Should have multiple routes registered
 	assert.Greater(t, routeCount, 0)
+}
+
+// TestDNSRouter_RoutesNameTheirRPC checks the route table both listeners
+// mount: every route has a handler and names the DNSService RPC whose scope
+// the daemon listener requires, and no method and path is mounted twice.
+func TestDNSRouter_RoutesNameTheirRPC(t *testing.T) {
+	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
+	routes := NewDNSRouter(logger, newMockDNSService(), &mockHttpWriter{}).Routes()
+
+	require.Len(t, routes, 13)
+	seen := make(map[string]bool, len(routes))
+	for _, route := range routes {
+		key := route.Method + " " + route.Path
+		assert.False(t, seen[key], "mounted twice: %s", key)
+		seen[key] = true
+		assert.NotNil(t, route.Handler, key)
+		assert.True(t, strings.HasPrefix(route.RPC, "/platform.v1.DNSService/"), "%s names %q", key, route.RPC)
+	}
 }
 
 func TestDNSRouter_ZoneRoutes(t *testing.T) {

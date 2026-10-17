@@ -117,7 +117,11 @@ A failed `tools/call` or `resources/read` is classified in
 `pkg/api/mcp/error_class.go` (`toolErrorCode`):
 
 - An error with a gRPC status anywhere in its chain (`GRPCStatus()`) uses that
-  status's class. Every tool error type implements it.
+  status's class. Every tool error type implements it, and so do the domain
+  errors a tool passes through unwrapped: the DNS record refusals
+  (`dns.ErrRecordNameRequired`, `dns.ErrInvalidRecordAddress`,
+  `dns.ErrInvalidTLSAUsage`, see `docs/dns/api.md` §Record validation) are
+  `InvalidArgument`, so `-32602`.
 - The `Code`-carrying tool error types (`DeviceError`, `KMSError`, ...) take
   their class from their `Code`: `*_NOT_FOUND`, `*_REQUIRED` / `*INVALID*` /
   `*_DECODE*`, `*_SERVICE_UNAVAILABLE` / `*_NOT_CONFIGURED`, `*_NOT_RUNNING` /
@@ -408,13 +412,14 @@ routes also take a `Bearer` token, but only over that mTLS connection. So
 installed with `WithRequireAuth(tokenValidator != nil)`, so the misconfigured
 state served the whole daemon API anonymously.
 
-**The daemon REST VPN, NTP and application service routes check the RPC's
-scope (#584, #704).** mTLS at the handshake is not authorization: each
-`/api/v1/vpn/*`, `/api/v1/ntp/*`, `/api/v1/cache/*`, `/api/v1/scheduler/*` and
-`/api/v1/messaging/*` route on the daemon listener runs through
-`restapi.ScopeGuard` (`pkg/api/rest/route_scope.go`) and requires the scope the
-gRPC catalog gives its RPC (`vpn:read|write|admin`, `ntp:read` for status and
-sources, `ntp:write` for step, and `cache`, `scheduler` and `messaging` as in
+**The daemon REST VPN, NTP, DNS and application service routes check the RPC's
+scope (#584, #704, #949).** mTLS at the handshake is not authorization: each
+`/api/v1/vpn/*`, `/api/v1/ntp/*`, `/api/v1/dns/*`, `/api/v1/cache/*`,
+`/api/v1/scheduler/*` and `/api/v1/messaging/*` route on the daemon listener
+runs through `restapi.ScopeGuard` (`pkg/api/rest/route_scope.go`) and requires
+the scope the gRPC catalog gives its RPC (`vpn:read|write|admin`, `ntp:read`
+for status and sources, `ntp:write` for step, `dns:read|write|delete` per
+[docs/dns/api.md](../dns/api.md) §4, and `cache`, `scheduler` and `messaging` as in
 [docs/sdk/api.md](../sdk/api.md) §3.5). The guard takes the credentials QUIC takes, in the same order:
 
 - a `Bearer` platform token (with its `DPoP` proof), validated by the shared
@@ -447,6 +452,19 @@ webservice's handlers (`pkg/webservice/v1/device`), so the request bodies and th
 ([`docs/device/api.md`](../device/api.md) §7). The diskless boot routes
 (`/api/v1/device/boot*`) are machine-facing and stay off this listener; gRPC,
 QUIC, Unix and MCP serve them.
+
+The daemon REST IAM routes (`/api/v1/iam/tenants` and
+`/api/v1/iam/tenants/{tenant}/...`, #949) run behind the same guard with the
+`iam` scopes: `iam:read` for reads and the read-only checks
+(`permissions/check`, `policies/validate`, `policies/test`), `iam:write` for
+everything else (`IAMRouteGuards`, `pkg/api/rest/iam_guard.go`). They serve
+the SDK IAM client and PEP the gRPC, QUIC, MCP and Unix IAM services use
+(`SetIAMHandlers`). The tenant routes then serve only the caller's own tenant,
+and the tenant-record routes only the system tenant
+([`docs/iam/api.md`](../iam/api.md) §8). The webservice's flat aliases
+(`/api/v1/iam/users`, ...) are not mounted on the daemon: they fall back to a
+browser session's tenant, which a daemon caller does not have. A daemon without
+a QuicBaaS IAM service mounts no IAM route.
 
 **QUIC authorizes every request before dispatch (#767).** Before #767 the QUIC
 dispatcher authenticated a token when a middleware was installed and then

@@ -54,6 +54,7 @@ import (
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
@@ -1468,9 +1469,10 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Info("vTPM service wired into REST server")
 	}
 
-	// Wire the time-synchronization, VPN control-plane and compute REST
+	// Wire the time-synchronization, VPN control-plane, compute and DNS REST
 	// handlers onto the daemon's own REST listener. Without them
-	// /api/v1/ntp/*, /api/v1/vpn/* and /api/v1/compute/* would 404 there.
+	// /api/v1/ntp/*, /api/v1/vpn/*, /api/v1/compute/* and /api/v1/dns/*
+	// would 404 there.
 	// Each route requires the scope its RPC requires on gRPC, checked by one
 	// guard: a platform token, else the verified client certificate. The
 	// compute routes run the same ComputeGRPCService gRPC and QUIC serve.
@@ -1491,6 +1493,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if computeService != nil {
 			daemon.concreteRestServer.SetComputeHandlers(computeService, restGuard)
 		}
+		daemon.concreteRestServer.SetDNSService(fullDNSService(config.DNSService), restGuard)
 	}
 
 	// Wire device + profile REST handlers if the services are available.
@@ -1542,6 +1545,23 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// all transports return identical results.
 	if daemon.concreteRestServer != nil && kmsPlatformBackend != nil {
 		daemon.concreteRestServer.SetKMSHandlers(NewPlatformKMSRESTFacade(kmsPlatformBackend))
+	}
+
+	// Wire the IAM REST routes over the same SDK IAM client and PEP the IAM
+	// gRPC, QUIC, MCP and Unix services use. Without this,
+	// /api/v1/iam/tenants/{tenant}/... would 404 on the daemon listener while
+	// every other transport serves IAM. A daemon built without IAM has no
+	// client and mounts nothing.
+	if daemon.concreteRestServer != nil {
+		if iamClient := daemon.iamService.Client(); iamClient != nil {
+			var pepClient restiam.PEPClient
+			if pep := daemon.iamService.PEP(); pep != nil {
+				pepClient = restiam.NewQuicBaaSPEPAdapter(pep)
+			}
+			if err := daemon.concreteRestServer.SetIAMHandlers(restiam.NewQuicBaaSIAMAdapter(iamClient), pepClient, restGuard, config.PlatformTenantID); err != nil {
+				logger.Error(err, "component", "rest_iam")
+			}
+		}
 	}
 
 	// Wire platform tenant manager into REST handlers + gRPC server when

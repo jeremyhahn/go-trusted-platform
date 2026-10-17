@@ -1242,6 +1242,11 @@ Configuration is validated at startup. Common validation errors:
 | SRV | Port 0-65535 | `SRV port out of range` |
 | Label | Max 63 chars | `label exceeds maximum length (63)` |
 
+A record added through the API is checked by `dns.ValidateRecord` instead: an
+empty name, an A value that is not IPv4 and an AAAA value that is not IPv6 are
+refused as `InvalidArgument` on every transport. See
+[api.md](api.md#record-validation).
+
 ### DNSSEC Validation
 
 | Field | Validation | Error |

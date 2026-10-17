@@ -21,7 +21,10 @@ REST hold the same `*dns.Service`. With no `dns:` section there is no backend,
 and every transport answers the not-configured error (§5).
 
 gRPC: `DNSService`, 13 RPCs (`pkg/api/grpc/proto/platform_dns.proto`).
-REST: base path `/api/v1/dns` (`pkg/webservice/v1/rest/dns/router.go`).
+REST: base path `/api/v1/dns` (`pkg/webservice/v1/rest/dns/router.go`), served
+on both the daemon REST listener (`RESTServer.SetDNSService`,
+`pkg/api/daemon/rest_dns.go`) and the web services listener, with the same
+handlers and wire format.
 QUIC: top-level opcodes `0x20`–`0x2C` — no category indirection. `0x2B` and
 `0x2D` are retired (#317) — see §2.
 MCP: **two parallel tool families** — see §3.
@@ -87,6 +90,31 @@ and `authoritative: false`; a name inside one with no such records is a 200
 with no records and `authoritative: true`. A `type` resolution does not serve
 is a 400 (gRPC `InvalidArgument`). See
 [resolution.md](resolution.md#api-resolve).
+
+### Record validation
+
+Adding or updating a record runs one check, `dns.ValidateRecord` plus the
+TLSA usage check, before anything is stored. A refused record leaves the zone
+as it was; `UpdateRecord` checks the new record before it removes the old one.
+`UpdateRecord` replaces a record the zone holds and never creates one: an old
+record of a name and type the zone does not hold is `ErrDNSRecordNotFound`,
+`NotFound` on gRPC, Unix and MCP and `StatusNotFound` on QUIC.
+
+| Refusal | Typed error |
+|---|---|
+| No owner name. The API has no "omitted means apex": send `@` (records.md §Owner names). A request without the body of its type (no `a` on an A record) has no name, so it is refused the same way. | `dns.ErrRecordNameRequired` |
+| An A value that is not an IPv4 address (RFC 1035 §3.4.1), an AAAA value that is not an IPv6 address (RFC 3596 §2.2). An IPv4-mapped IPv6 address is not an A value, and a zoned address (`fe80::1%eth0`) is refused for both. | `dns.ErrInvalidRecordAddress` |
+| A TLSA `usage` outside 0-3, the certificate usages RFC 6698 §2.1.1 defines. | `dns.ErrInvalidTLSAUsage` |
+
+Each error carries the `InvalidArgument` class, so every transport answers
+alike:
+
+| Transport | Status |
+|---|---|
+| REST | 400 |
+| gRPC, Unix | `InvalidArgument` |
+| QUIC | `StatusInvalidArgument` (AddRecord and UpdateRecord delegate to the gRPC servicer) |
+| MCP (both families) | `-32602` |
 
 ---
 
@@ -176,6 +204,14 @@ catalog totals are in
 record CRUD and DNSSEC signing. Reads are gated with the writes: a zone's
 contents are the platform's internal name map, and enumerating it is
 reconnaissance even when nothing is changed.
+
+That is the web services listener. On the **daemon REST listener** each
+route instead requires its `DNSService` RPC's gRPC scope (`dns:read`,
+`dns:write`, `dns:delete`), checked by `restapi.ScopeGuard` against a platform
+token or the verified client certificate
+([`docs/daemon/api.md`](../daemon/api.md)): no credential is 401, a missing
+scope 403. With no DNS backend every daemon route answers 503
+`SERVICE_NOT_CONFIGURED` (§5).
 
 This changes the REST position only. The gRPC, Unix, MCP and embedded
 positions described above are unchanged. See

@@ -555,6 +555,7 @@ var categorySubOpcodeMap = map[string]byte{
 	"/platform.v1.ComputeService/DeleteContainer": quicwire.OpContainerRemove,
 	"/platform.v1.ComputeService/GetContainer":    quicwire.OpContainerGet,
 	"/platform.v1.ComputeService/ListContainers":  quicwire.OpContainerList,
+	"/platform.v1.ComputeService/AttestContainer": quicwire.OpContainerAttest,
 
 	// Compute Service VM verbs — OpVMExtendedCategory (0x69) sub-opcodes.
 	// Server dispatcher: pkg/api/daemon/quic_vm_pb.go::handleVMPB
@@ -997,6 +998,7 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.ComputeService/StopContainer":       quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/ListContainers":      quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/GetContainer":        quicwire.OpVMExtendedCategory,
+	"/platform.v1.ComputeService/AttestContainer":     quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/GetContainerLogs":    quicwire.OpContainerLogs,
 	"/platform.v1.ComputeService/CreateVM":            quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/GetVM":               quicwire.OpVMExtendedCategory,

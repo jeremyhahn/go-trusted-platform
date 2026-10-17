@@ -740,6 +740,7 @@ func TestRecordResponse_Name_NoRecordData(t *testing.T) {
 
 func TestListRecordsResponse_JSON(t *testing.T) {
 	resp := ListRecordsResponse{
+		PaginatedResponse: PaginatedResponse{Total: 7, Limit: 2, Offset: 4},
 		Records: []RecordResponse{
 			{Type: "A", A: &AResponse{Name: "www", Value: "192.168.1.1", TTL: 3600}},
 			{Type: "AAAA", AAAA: &AAAAResponse{Name: "www", Value: "2001:db8::1", TTL: 3600}},
@@ -754,6 +755,8 @@ func TestListRecordsResponse_JSON(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Len(t, decoded.Records, 2)
+	assert.Equal(t, resp.PaginatedResponse, decoded.PaginatedResponse)
+	assert.Contains(t, string(data), `"total":7`)
 }
 
 func TestDNSSECStatusResponse_JSON(t *testing.T) {
