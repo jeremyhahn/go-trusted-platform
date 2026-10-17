@@ -44,6 +44,8 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmattrs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmcertify"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmclear"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmek"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmpcr"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
@@ -260,7 +262,7 @@ func (s *TPMGRPCService) Clear(
 		lockoutAuth = []byte(req.GetOwnerPassword())
 	}
 
-	if err := tpm.Clear(lockoutAuth); err != nil {
+	if err := tpmclear.Clear(tpm, lockoutAuth); err != nil {
 		s.logger.Slog().Error("TPM Clear failed", slog.String("error", err.Error()))
 		return nil, s.mapError(err)
 	}
@@ -290,14 +292,8 @@ func (s *TPMGRPCService) CreateEK(
 
 	s.logger.Debug("TPM CreateEK request received")
 
-	// Get EK attributes from config or use defaults
-	ekAttrs, err := tpm.EKAttributes()
+	ekAttrs, err := tpmek.Create(tpm)
 	if err != nil {
-		s.logger.Slog().Error("Failed to get EK attributes", slog.String("error", err.Error()))
-		return nil, s.mapError(err)
-	}
-
-	if err := tpm.CreateEK(ekAttrs); err != nil {
 		s.logger.Slog().Error("TPM CreateEK failed", slog.String("error", err.Error()))
 		return nil, s.mapError(err)
 	}

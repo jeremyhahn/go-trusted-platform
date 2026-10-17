@@ -518,7 +518,7 @@ func (a *UnixAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCer
 }
 
 // =============================================================================
-// Template CRUD Operations (not yet available via Unix/gRPC)
+// Template CRUD Operations
 // =============================================================================
 
 // CreateTemplate creates a new device template via Unix socket.
@@ -535,22 +535,60 @@ func (a *UnixAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOpt
 
 // GetTemplate retrieves a template by ID via Unix socket.
 func (a *UnixAdapter) GetTemplate(ctx context.Context, opts GetTemplateOptions) (*GetTemplateResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "GetTemplate"}
+	id, err := strconv.ParseUint(opts.TemplateID, 10, 64)
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "GetTemplate", Err: fmt.Errorf("invalid template ID: %w", err)}
+	}
+	resp, err := a.client.GetTemplate(ctx, &pb.DeviceTemplateGetRequest{Id: id})
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "GetTemplate", Err: err}
+	}
+	if resp.GetTemplate() == nil {
+		return nil, ErrUnixRPCFailed{Method: "GetTemplate", Err: fmt.Errorf("daemon returned no template")}
+	}
+	return &GetTemplateResult{Template: protoToTemplate(resp.GetTemplate())}, nil
 }
 
 // UpdateTemplate updates an existing template via Unix socket.
 func (a *UnixAdapter) UpdateTemplate(ctx context.Context, opts UpdateTemplateOptions) (*UpdateTemplateResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "UpdateTemplate"}
+	id, err := strconv.ParseUint(opts.TemplateID, 10, 64)
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "UpdateTemplate", Err: fmt.Errorf("invalid template ID: %w", err)}
+	}
+	resp, err := a.client.UpdateTemplate(ctx, templateUpdateRequest(id, opts))
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "UpdateTemplate", Err: err}
+	}
+	if resp.GetTemplate() == nil {
+		return nil, ErrUnixRPCFailed{Method: "UpdateTemplate", Err: fmt.Errorf("daemon returned no template")}
+	}
+	return &UpdateTemplateResult{Template: protoToTemplate(resp.GetTemplate())}, nil
 }
 
 // DeleteTemplate removes a template via Unix socket.
 func (a *UnixAdapter) DeleteTemplate(ctx context.Context, opts DeleteTemplateOptions) (*DeleteTemplateResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "DeleteTemplate"}
+	id, err := strconv.ParseUint(opts.TemplateID, 10, 64)
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "DeleteTemplate", Err: fmt.Errorf("invalid template ID: %w", err)}
+	}
+	resp, err := a.client.DeleteTemplate(ctx, &pb.DeviceTemplateDeleteRequest{Id: id})
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "DeleteTemplate", Err: err}
+	}
+	return &DeleteTemplateResult{Success: resp.GetStatus().GetSuccess()}, nil
 }
 
-// ListTemplates lists all templates via Unix socket.
+// ListTemplates pages templates via Unix socket.
 func (a *UnixAdapter) ListTemplates(ctx context.Context, opts ListTemplatesOptions) (*ListTemplatesResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "ListTemplates"}
+	req, err := templateListRequest("Unix", opts)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := a.client.ListTemplates(ctx, req)
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "ListTemplates", Err: err}
+	}
+	return templateListResult(resp), nil
 }
 
 // CreateProfileFromTemplate creates a profile from a template via Unix socket.

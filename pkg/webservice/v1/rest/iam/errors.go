@@ -217,3 +217,22 @@ type ErrPEPClientMissing struct{}
 func (e ErrPEPClientMissing) Error() string {
 	return "rest/iam: no policy enforcement point is wired to check permissions"
 }
+
+// ErrTenantRollbackFailed is returned when a new IAM tenant could not be given
+// its default roles and could not be deleted again either: the tenant exists
+// without the roles a user needs. It unwraps to the provisioning failure, so
+// the caller classifies the error by what went wrong first.
+type ErrTenantRollbackFailed struct {
+	TenantID string
+	Cause    error
+	Rollback error
+}
+
+func (e ErrTenantRollbackFailed) Error() string {
+	return fmt.Sprintf("rest/iam: tenant %q has no default roles (%v) and its rollback failed: %v",
+		e.TenantID, e.Cause, e.Rollback)
+}
+
+func (e ErrTenantRollbackFailed) Unwrap() error {
+	return e.Cause
+}

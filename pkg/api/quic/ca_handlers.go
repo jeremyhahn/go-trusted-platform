@@ -428,7 +428,7 @@ func (h *CAHandler) SignCSR(ctx context.Context, payload []byte) *quicwire.Respo
 	if granted, ok := AuthorizedContextFromContext(ctx); ok {
 		authCtx = granted
 	}
-	if err := issuance.AuthorizeSignCSR(authCtx); err != nil {
+	if err := issuance.AuthorizeSignCSR(ctx, authCtx); err != nil {
 		return h.errorResponse(quicwire.StatusPermissionDenied, err)
 	}
 	if h.ca == nil {

@@ -1,4 +1,4 @@
-//go:build integration
+//go:build integration && topology
 
 // Copyright (c) 2025 Jeremy Hahn
 // Copyright (c) 2025 Automate The Things, LLC
@@ -33,8 +33,10 @@ import (
 // docker-compose is not in PATH. These tests start the multi-node topology
 // with docker-compose, which the devcontainer does not install
 // (build/docker/devcontainer/Dockerfile) and cannot run without a Docker
-// daemon inside it; they run only on a host with docker-compose, and fail
-// anywhere else rather than report a pass they never earned.
+// daemon inside it. The topology build tag keeps them out of the runner's
+// ./test/integration/sdn/... sweep; `make integration-test-sdn-topology`
+// runs them on a host with docker-compose, and they fail anywhere else
+// rather than report a pass they never earned.
 func requireDockerCompose(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("docker-compose"); err != nil {

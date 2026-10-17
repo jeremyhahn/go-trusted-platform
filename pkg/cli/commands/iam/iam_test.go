@@ -71,6 +71,7 @@ func TestNewCommand_HasAllSubcommands(t *testing.T) {
 		"role",
 		"tenant",
 		"policy",
+		"permission",
 		"app",
 	}
 
@@ -104,8 +105,8 @@ func TestNewCommand_SubcommandCount(t *testing.T) {
 	cmd := NewCommand(getFlags)
 	subcommands := cmd.Commands()
 
-	// We expect exactly 6 subcommands: user, group, role, tenant, policy, app
-	expectedCount := 6
+	// We expect exactly 7 subcommands: user, group, role, tenant, policy, permission, app
+	expectedCount := 7
 	if len(subcommands) != expectedCount {
 		t.Errorf("expected exactly %d subcommands, got %d", expectedCount, len(subcommands))
 		for _, subcmd := range subcommands {
@@ -144,6 +145,10 @@ func TestNewCommand_SubcommandDetails(t *testing.T) {
 		{
 			name:          "policy",
 			expectedShort: "Manage authorization policies",
+		},
+		{
+			name:          "permission",
+			expectedShort: "Check IAM permissions",
 		},
 		{
 			name:          "app",
@@ -190,8 +195,8 @@ func TestNewCommand_NilGetFlagsHandling(t *testing.T) {
 	}
 
 	// Verify subcommands are still attached
-	if len(cmd.Commands()) != 6 {
-		t.Errorf("expected 6 subcommands, got %d", len(cmd.Commands()))
+	if len(cmd.Commands()) != 7 {
+		t.Errorf("expected 7 subcommands, got %d", len(cmd.Commands()))
 	}
 }
 

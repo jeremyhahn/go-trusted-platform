@@ -353,14 +353,10 @@ func setupTestEnvironmentWithTPM(t *testing.T, ctx context.Context) *testEnviron
 }
 
 func setupDatastore(t *testing.T, env *testEnvironment) {
-	config := &quicbaas.Config{
-		StorageBackend: "memory",
-		DataDir:        t.TempDir(),
-		WALDir:         filepath.Join(t.TempDir(), "wal"),
-		NodeID:         1,
-		CacheSize:      64 * 1024 * 1024,
-		LogLevel:       "warn",
-	}
+	// MemoryTestConfig carries the SPIFFE trust domain the embedded server's
+	// first boot needs to seed IAM.
+	config := quicbaas.MemoryTestConfig(t)
+	config.Transport = quicbaas.TransportEmbedded
 	factory, err := quicbaas.NewFactory(config, env.logger, nil)
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -546,8 +542,12 @@ func (m *mockPolicyEngine) GetPortInfo(portID string) (*policy.PortInfo, error) 
 	}, nil
 }
 
+// ApplyPolicy models policy.Engine.ApplyPolicy: applying a port's policy sets
+// its VLAN and leaves the port Authorized.
 func (m *mockPolicyEngine) ApplyPolicy(portID string, pol *policy.PortPolicy) error {
 	m.policies[portID] = pol
+	m.portVLANs[portID] = pol.VLAN
+	m.portStates[portID] = policy.PortStateAuthorized
 	return nil
 }
 

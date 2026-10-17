@@ -61,6 +61,7 @@ func (f *PlatformKMSRESTFacade) GenerateKey(
 	resp, err := backend.GenerateKey(ctx, &grpcapi.KMSGenerateKeyRequest{
 		KeySpec:     restKeySpecToGRPC(req.KeySpec),
 		Name:        req.Name,
+		DisplayName: req.DisplayName,
 		Description: req.Description,
 		Tags:        req.Tags,
 		Owner:       req.Owner,

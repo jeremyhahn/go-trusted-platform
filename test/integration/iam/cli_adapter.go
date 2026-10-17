@@ -19,8 +19,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // CLIAdapterError represents an error from the CLI adapter
@@ -36,7 +39,9 @@ func (e *CLIAdapterError) Error() string {
 
 // CLIAdapter implements IAMCommands using the platformctl CLI
 type CLIAdapter struct {
-	cliPath string
+	cliPath    string
+	configDir  string
+	configPath string
 }
 
 // NewCLIAdapter creates a new CLI adapter
@@ -55,12 +60,28 @@ func (a *CLIAdapter) Setup(ctx context.Context) error {
 			Message:   "CLI not found",
 		}
 	}
+
+	dir, path, err := helpers.WriteTempLocalCLIConfig(helpers.GetSocketPath(), helpers.GetGRPCEndpoint())
+	if err != nil {
+		return &CLIAdapterError{
+			Operation: "Setup",
+			Message:   "failed to write platformctl config: " + err.Error(),
+		}
+	}
+	a.configDir = dir
+	a.configPath = path
 	return nil
 }
 
 // Teardown cleans up after testing
 func (a *CLIAdapter) Teardown(ctx context.Context) error {
-	return nil
+	if a.configDir == "" {
+		return nil
+	}
+	err := os.RemoveAll(a.configDir)
+	a.configDir = ""
+	a.configPath = ""
+	return err
 }
 
 // Name returns the adapter name
@@ -70,7 +91,11 @@ func (a *CLIAdapter) Name() string {
 
 // runCommand executes a CLI command and returns the output
 func (a *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, a.cliPath, args...)
+	// The harness config's current_context names the daemon, so --config alone
+	// selects it; a global --context would collide with the --context
+	// attribute flag of "iam check-permission".
+	full := append([]string{"--config", a.configPath}, args...)
+	cmd := exec.CommandContext(ctx, a.cliPath, full...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, &CLIAdapterError{
@@ -222,21 +247,7 @@ func (a *CLIAdapter) ListUsers(ctx context.Context, opts ListUsersOptions) (*Lis
 		"--output", "json",
 	}
 
-	if opts.Limit > 0 {
-		args = append(args, "--limit", fmt.Sprintf("%d", opts.Limit))
-	}
-	if opts.Offset > 0 {
-		args = append(args, "--offset", fmt.Sprintf("%d", opts.Offset))
-	}
-	if opts.Email != "" {
-		args = append(args, "--email", opts.Email)
-	}
-	if opts.Role != "" {
-		args = append(args, "--role", opts.Role)
-	}
-	if opts.Group != "" {
-		args = append(args, "--group", opts.Group)
-	}
+	args = append(args, pageFlags(opts.Limit, opts.Offset)...)
 
 	output, err := a.runCommand(ctx, args...)
 	if err != nil {
@@ -431,12 +442,7 @@ func (a *CLIAdapter) ListGroups(ctx context.Context, opts ListGroupsOptions) (*L
 		"--output", "json",
 	}
 
-	if opts.Limit > 0 {
-		args = append(args, "--limit", fmt.Sprintf("%d", opts.Limit))
-	}
-	if opts.Offset > 0 {
-		args = append(args, "--offset", fmt.Sprintf("%d", opts.Offset))
-	}
+	args = append(args, pageFlags(opts.Limit, opts.Offset)...)
 
 	output, err := a.runCommand(ctx, args...)
 	if err != nil {
@@ -637,12 +643,7 @@ func (a *CLIAdapter) ListRoles(ctx context.Context, opts ListRolesOptions) (*Lis
 		"--output", "json",
 	}
 
-	if opts.Limit > 0 {
-		args = append(args, "--limit", fmt.Sprintf("%d", opts.Limit))
-	}
-	if opts.Offset > 0 {
-		args = append(args, "--offset", fmt.Sprintf("%d", opts.Offset))
-	}
+	args = append(args, pageFlags(opts.Limit, opts.Offset)...)
 
 	output, err := a.runCommand(ctx, args...)
 	if err != nil {
@@ -724,6 +725,16 @@ func formatAttributesForCLI(attrs map[string]string) string {
 		pairs = append(pairs, fmt.Sprintf("%s=%s", k, v))
 	}
 	return strings.Join(pairs, ",")
+}
+
+// pageFlags turns the suite's limit/offset into the CLI's --page/--page-size
+// paging, the same mapping the gRPC and Unix adapters use.
+func pageFlags(limit, offset int32) []string {
+	if limit <= 0 {
+		return nil
+	}
+	page := offset/limit + 1
+	return []string{"--page-size", fmt.Sprintf("%d", limit), "--page", fmt.Sprintf("%d", page)}
 }
 
 // Verify CLIAdapter implements IAMCommands

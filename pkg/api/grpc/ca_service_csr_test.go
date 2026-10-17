@@ -70,6 +70,10 @@ func TestSignCSR_OnlyThePlatformAdmin(t *testing.T) {
 		{"ca:sign-csr", withScopes("ca:sign-csr"), codes.OK},
 		{"ca:*", withScopes("ca:*"), codes.OK},
 		{"Unix socket, root", peercred.ContextWithUnixCredentials(context.Background(), peercred.UnixCredentials{UID: 0}), codes.OK},
+		{"*:* token", withScopes("*:*"), codes.OK},
+		// An MCP or QUIC mTLS peer forwarded here holds the operator's *:*
+		// with no platform token behind it.
+		{"client certificate alone, *:*", peercred.ContextWithCertificatePrincipal(withScopes("*:*")), codes.PermissionDenied},
 	}
 	key := issuancetest.RSAKey(t)
 	csr := string(issuancetest.CSR(t, key, "rpi/fleet"))

@@ -86,6 +86,9 @@ func (r *ToolRegistry) executeKMSGenerateKey(ctx context.Context, args map[strin
 	if name == "" {
 		return nil, ErrKMSKeyNameRequired
 	}
+	if getString(args, "display_name") != "" {
+		return nil, ErrKMSDisplayNameNotSupported
+	}
 
 	// The SDK MCP transport adapter JSON-encodes the platform.v1 proto
 	// GenerateKeyRequest, which nests algorithm, usage, key_size,

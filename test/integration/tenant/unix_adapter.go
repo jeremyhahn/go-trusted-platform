@@ -24,7 +24,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"google.golang.org/grpc"
@@ -163,7 +162,7 @@ func (a *UnixAdapter) CreateTenant(ctx context.Context, opts CreateTenantOptions
 	}
 
 	return &CreateTenantResult{
-		Tenant: a.pbToTenantData(resp.GetTenant()),
+		Tenant: pbToTenantData(resp.GetTenant()),
 	}, nil
 }
 
@@ -179,7 +178,7 @@ func (a *UnixAdapter) GetTenant(ctx context.Context, opts GetTenantOptions) (*Ge
 	}
 
 	return &GetTenantResult{
-		Tenant: a.pbToTenantData(resp.GetTenant()),
+		Tenant: pbToTenantData(resp.GetTenant()),
 	}, nil
 }
 
@@ -195,7 +194,7 @@ func (a *UnixAdapter) GetTenantByName(ctx context.Context, opts GetTenantByNameO
 	}
 
 	return &GetTenantByNameResult{
-		Tenant: a.pbToTenantData(resp.GetTenant()),
+		Tenant: pbToTenantData(resp.GetTenant()),
 	}, nil
 }
 
@@ -217,7 +216,7 @@ func (a *UnixAdapter) UpdateTenant(ctx context.Context, opts UpdateTenantOptions
 	}
 
 	return &UpdateTenantResult{
-		Tenant: a.pbToTenantData(resp.GetTenant()),
+		Tenant: pbToTenantData(resp.GetTenant()),
 	}, nil
 }
 
@@ -252,7 +251,7 @@ func (a *UnixAdapter) ListTenants(ctx context.Context, opts ListTenantsOptions) 
 
 	tenants := make([]*TenantData, 0, len(resp.GetTenants()))
 	for _, t := range resp.GetTenants() {
-		tenants = append(tenants, a.pbToTenantData(t))
+		tenants = append(tenants, pbToTenantData(t))
 	}
 
 	return &ListTenantsResult{
@@ -316,9 +315,9 @@ func (a *UnixAdapter) GetQuotas(ctx context.Context, opts GetQuotasOptions) (*Ge
 
 	return &GetQuotasResult{
 		TenantID: resp.GetTenantId(),
-		Compute:  a.pbToComputeQuotaData(resp.GetCompute()),
-		Network:  a.pbToNetworkQuotaData(resp.GetNetwork()),
-		Storage:  a.pbToStorageQuotaData(resp.GetStorage()),
+		Compute:  pbToComputeQuotaData(resp.GetCompute()),
+		Network:  pbToNetworkQuotaData(resp.GetNetwork()),
+		Storage:  pbToStorageQuotaData(resp.GetStorage()),
 	}, nil
 }
 
@@ -365,9 +364,9 @@ func (a *UnixAdapter) UpdateQuotas(ctx context.Context, opts UpdateQuotasOptions
 
 	return &UpdateQuotasResult{
 		TenantID: quotasResp.GetTenantId(),
-		Compute:  a.pbToComputeQuotaData(quotasResp.GetCompute()),
-		Network:  a.pbToNetworkQuotaData(quotasResp.GetNetwork()),
-		Storage:  a.pbToStorageQuotaData(quotasResp.GetStorage()),
+		Compute:  pbToComputeQuotaData(quotasResp.GetCompute()),
+		Network:  pbToNetworkQuotaData(quotasResp.GetNetwork()),
+		Storage:  pbToStorageQuotaData(quotasResp.GetStorage()),
 	}, nil
 }
 
@@ -437,102 +436,6 @@ func (a *UnixAdapter) SyncTenants(ctx context.Context) (*SyncTenantsResult, erro
 		Success: resp.GetStatus().GetSuccess(),
 		Message: resp.GetStatus().GetMessage(),
 	}, nil
-}
-
-// =============================================================================
-// Helper Methods - Protobuf to Data Conversion
-// =============================================================================
-
-// pbToTenantData converts protobuf Tenant to TenantData.
-func (a *UnixAdapter) pbToTenantData(pb *platformv1.Tenant) *TenantData {
-	if pb == nil {
-		return nil
-	}
-
-	data := &TenantData{
-		ID:          pb.GetId(),
-		Name:        pb.GetName(),
-		DisplayName: pb.GetDisplayName(),
-		State:       a.pbToTenantState(pb.GetState()),
-		Labels:      pb.GetLabels(),
-		Annotations: pb.GetAnnotations(),
-	}
-
-	if pb.GetComputeQuota() != nil {
-		data.ComputeQuota = a.pbToComputeQuotaData(pb.GetComputeQuota())
-	}
-
-	if pb.GetNetworkQuota() != nil {
-		data.NetworkQuota = a.pbToNetworkQuotaData(pb.GetNetworkQuota())
-	}
-
-	if pb.GetStorageQuota() != nil {
-		data.StorageQuota = a.pbToStorageQuotaData(pb.GetStorageQuota())
-	}
-
-	if pb.GetCreatedAt() != nil {
-		data.CreatedAt = pb.GetCreatedAt().AsTime()
-	}
-
-	if pb.GetUpdatedAt() != nil {
-		data.UpdatedAt = pb.GetUpdatedAt().AsTime()
-	}
-
-	return data
-}
-
-// pbToTenantState converts protobuf TenantState to tenant.State.
-func (a *UnixAdapter) pbToTenantState(state platformv1.TenantState) tenant.State {
-	switch state {
-	case platformv1.TenantState_TENANT_STATE_PENDING:
-		return tenant.StateCreated
-	case platformv1.TenantState_TENANT_STATE_ACTIVE:
-		return tenant.StateActive
-	case platformv1.TenantState_TENANT_STATE_SUSPENDED:
-		return tenant.StateSuspended
-	case platformv1.TenantState_TENANT_STATE_DELETING:
-		return tenant.StateDeleting
-	case platformv1.TenantState_TENANT_STATE_DELETED:
-		return tenant.StateDeleted
-	default:
-		return tenant.StateCreated
-	}
-}
-
-// pbToComputeQuotaData converts protobuf ComputeQuota to ComputeQuotaData.
-func (a *UnixAdapter) pbToComputeQuotaData(pb *platformv1.ComputeQuota) *ComputeQuotaData {
-	if pb == nil {
-		return nil
-	}
-	return &ComputeQuotaData{
-		MaxVMs:        pb.GetMaxVms(),
-		MaxContainers: pb.GetMaxContainers(),
-		MaxVCPUs:      pb.GetMaxVcpus(),
-		MaxMemoryMB:   pb.GetMaxMemoryMb(),
-	}
-}
-
-// pbToNetworkQuotaData converts protobuf NetworkQuota to NetworkQuotaData.
-func (a *UnixAdapter) pbToNetworkQuotaData(pb *platformv1.NetworkQuota) *NetworkQuotaData {
-	if pb == nil {
-		return nil
-	}
-	return &NetworkQuotaData{
-		MaxBridges:       pb.GetMaxBridges(),
-		MaxPorts:         pb.GetMaxPorts(),
-		MaxBandwidthMbps: pb.GetMaxBandwidthMbps(),
-	}
-}
-
-// pbToStorageQuotaData converts protobuf StorageQuota to StorageQuotaData.
-func (a *UnixAdapter) pbToStorageQuotaData(pb *platformv1.StorageQuota) *StorageQuotaData {
-	if pb == nil {
-		return nil
-	}
-	return &StorageQuotaData{
-		MaxVolumesGB: pb.GetMaxVolumesGb(),
-		MaxSnapshots: pb.GetMaxSnapshots(),
-	}
 }
 
 // =============================================================================

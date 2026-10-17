@@ -384,8 +384,11 @@ func (m *Manager) CreateTenant(ctx context.Context, req *CreateTenantRequest) (*
 		return nil, err
 	}
 
-	// Store in cache
-	m.cache.Store(tenantID, entity)
+	// Persist the display name and platform record; a failure rolls the
+	// IAM tenant and DEK back like any other step.
+	if err := m.store(ctx, "CreateTenant", entity); err != nil {
+		return nil, err
+	}
 
 	// Clear rollback actions since we succeeded
 	rollbackActions = nil
@@ -417,17 +420,16 @@ func (m *Manager) GetTenant(ctx context.Context, id string) (*TenantEntity, erro
 		return nil, ErrTenantNotFound{ID: id}
 	}
 
-	entity := FromIAM(iamTenant)
-
-	// Enrich with DEK path
-	if m.config.EnableDEKIsolation {
-		entity.DEKPath = BuildDEKPath(id)
+	entity, err := m.entityFromIAM("GetTenant", iamTenant)
+	if err != nil {
+		return nil, err
 	}
 
-	// Cache and return
-	m.cache.Store(id, entity)
+	// Cache and return; an entity cached meanwhile (a concurrent create or
+	// state change) wins over the IAM copy.
+	cached, _ := m.cache.LoadOrStore(id, entity)
 
-	return entity.Clone(), nil
+	return cached.(*TenantEntity).Clone(), nil
 }
 
 // GetTenantByName retrieves a tenant by name.
@@ -457,17 +459,16 @@ func (m *Manager) GetTenantByName(ctx context.Context, name string) (*TenantEnti
 		return nil, ErrTenantNotFound{Name: name}
 	}
 
-	entity := FromIAM(iamTenant)
-
-	// Enrich with DEK path
-	if m.config.EnableDEKIsolation {
-		entity.DEKPath = BuildDEKPath(entity.ID)
+	entity, err := m.entityFromIAM("GetTenantByName", iamTenant)
+	if err != nil {
+		return nil, err
 	}
 
-	// Cache and return
-	m.cache.Store(entity.ID, entity)
+	// Cache and return; an entity cached meanwhile (a concurrent create or
+	// state change) wins over the IAM copy.
+	cached, _ := m.cache.LoadOrStore(entity.ID, entity)
 
-	return entity.Clone(), nil
+	return cached.(*TenantEntity).Clone(), nil
 }
 
 // ListTenants lists all tenants with pagination.
@@ -487,16 +488,15 @@ func (m *Manager) ListTenants(ctx context.Context, limit, offset int) ([]*Tenant
 
 	entities := make([]*TenantEntity, 0, len(tenants))
 	for _, t := range tenants {
-		entity := FromIAM(&t)
-
-		// Enrich with DEK path
-		if m.config.EnableDEKIsolation {
-			entity.DEKPath = BuildDEKPath(entity.ID)
+		entity, err := m.entityFromIAM("ListTenants", &t)
+		if err != nil {
+			return nil, 0, err
 		}
 
-		// Update cache
-		m.cache.Store(entity.ID, entity)
-		entities = append(entities, entity.Clone())
+		// A cached entity is the one this daemon last stored, and it wins
+		// over the IAM copy a concurrent write may not have reached yet.
+		cached, _ := m.cache.LoadOrStore(entity.ID, entity)
+		entities = append(entities, cached.(*TenantEntity).Clone())
 	}
 
 	return entities, total, nil
@@ -535,13 +535,9 @@ func (m *Manager) UpdateTenant(ctx context.Context, id string, req *UpdateTenant
 
 	entity.UpdatedAt = time.Now()
 
-	// Update in IAM
-	if err := m.updateInIAM(ctx, entity); err != nil {
-		return nil, ErrStorageFailed{Operation: "UpdateTenant", Err: err}
+	if err := m.store(ctx, "UpdateTenant", entity); err != nil {
+		return nil, err
 	}
-
-	// Update cache
-	m.cache.Store(id, entity)
 
 	m.logger.Info("tenant updated successfully",
 		slog.String("tenant_id", id),
@@ -575,7 +571,9 @@ func (m *Manager) DeleteTenant(ctx context.Context, id string) error {
 	if err := entity.SetState(StateDeleting); err != nil {
 		return err
 	}
-	m.cache.Store(id, entity)
+	if err := m.store(ctx, "DeleteTenant", entity); err != nil {
+		return err
+	}
 
 	// Step 2: Delete DEK
 	if m.config.EnableDEKIsolation && entity.DEKPath != "" {
@@ -661,9 +659,10 @@ func (m *Manager) SuspendTenant(ctx context.Context, id string) error {
 		return err
 	}
 
-	// Update cache
 	entity.UpdatedAt = time.Now()
-	m.cache.Store(id, entity)
+	if err := m.store(ctx, "SuspendTenant", entity); err != nil {
+		return err
+	}
 
 	m.logger.Info("tenant suspended successfully",
 		slog.String("tenant_id", id),
@@ -700,9 +699,10 @@ func (m *Manager) ResumeTenant(ctx context.Context, id string) error {
 		return err
 	}
 
-	// Update cache
 	entity.UpdatedAt = time.Now()
-	m.cache.Store(id, entity)
+	if err := m.store(ctx, "ResumeTenant", entity); err != nil {
+		return err
+	}
 
 	m.logger.Info("tenant resumed successfully",
 		slog.String("tenant_id", id),
@@ -747,8 +747,9 @@ func (m *Manager) UpdateQuotas(ctx context.Context, tenantID string, quotas *Ten
 	entity.StorageQuota.SetLimits(quotas.Storage)
 	entity.UpdatedAt = time.Now()
 
-	// Update cache
-	m.cache.Store(tenantID, entity)
+	if err := m.store(ctx, "UpdateQuotas", entity); err != nil {
+		return err
+	}
 
 	m.logger.Info("tenant quotas updated successfully",
 		slog.String("tenant_id", tenantID),
@@ -758,25 +759,98 @@ func (m *Manager) UpdateQuotas(ctx context.Context, tenantID string, quotas *Ten
 }
 
 // GetUsage returns tenant resource usage. When the usage tracker is not
-// configured (e.g. on a daemon wired with IAM-only tenant management),
-// the manager returns a zero-valued TenantUsage rather than an error so
-// dashboards and admin tools can still render the page without the
-// optional quota subsystem online.
+// configured (a daemon wired with IAM-only tenant management), the usage is
+// the counters the tenant entity carries; an unknown tenant is
+// ErrTenantNotFound.
 func (m *Manager) GetUsage(ctx context.Context, tenantID string) (*quota.TenantUsage, error) {
-	if m.usageTracker == nil {
-		return &quota.TenantUsage{TenantID: tenantID, Timestamp: time.Now()}, nil
+	if m.usageTracker != nil {
+		return m.usageTracker.GetAllUsage(ctx, tenantID)
 	}
 
-	return m.usageTracker.GetAllUsage(ctx, tenantID)
+	entity, err := m.GetTenant(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	return entityUsage(entity), nil
 }
 
-// CheckQuota checks if a resource request can be fulfilled.
+// CheckQuota checks if a resource request can be fulfilled. Without a quota
+// enforcer it checks the request against the tenant entity's own limits and
+// usage: an unknown tenant is ErrTenantNotFound and a request beyond the
+// remaining capacity is ErrQuotaExceeded.
 func (m *Manager) CheckQuota(ctx context.Context, tenantID string, resource quota.ResourceType, amount int64) error {
-	if m.quotaEnforcer == nil {
-		return ErrInvalidRequest{Reason: "quota enforcer not configured"}
+	if m.quotaEnforcer != nil {
+		return m.quotaEnforcer.CheckQuota(ctx, tenantID, resource, amount)
 	}
 
-	return m.quotaEnforcer.CheckQuota(ctx, tenantID, resource, amount)
+	if !resource.IsValid() {
+		return ErrInvalidRequest{Reason: "invalid quota resource: " + string(resource)}
+	}
+	if amount < 0 {
+		return ErrInvalidRequest{Reason: "quota amount must not be negative"}
+	}
+
+	entity, err := m.GetTenant(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+
+	available := entityLimits(entity).GetLimit(resource) - entityUsage(entity).GetUsage(resource)
+	if amount > available {
+		return ErrQuotaExceeded{
+			TenantID:  tenantID,
+			Resource:  string(resource),
+			Requested: amount,
+			Available: available,
+		}
+	}
+
+	return nil
+}
+
+// entityUsage reports the usage counters the tenant entity carries beside
+// its limits (docs/tenant/engineering.md §3). The entity measures its volume
+// dimension in gigabytes and keeps no bandwidth counter.
+func entityUsage(entity *TenantEntity) *quota.TenantUsage {
+	return &quota.TenantUsage{
+		TenantID:   entity.ID,
+		VMs:        entity.ComputeQuota.UsedVMs,
+		Containers: entity.ComputeQuota.UsedContainers,
+		VCPUs:      entity.ComputeQuota.UsedVCPUs,
+		MemoryMB:   entity.ComputeQuota.UsedMemoryMB,
+		DiskGB:     entity.ComputeQuota.UsedDiskGB,
+		Bridges:    entity.NetworkQuota.UsedBridges,
+		Ports:      entity.NetworkQuota.UsedPorts,
+		Volumes:    entity.StorageQuota.UsedVolumesGB,
+		Snapshots:  entity.StorageQuota.UsedSnapshots,
+		Timestamp:  time.Now(),
+	}
+}
+
+// entityLimits reports the tenant entity's limits in the quota package's
+// shape, so a resource name resolves to its limit in one place.
+func entityLimits(entity *TenantEntity) *quota.TenantQuotas {
+	return &quota.TenantQuotas{
+		TenantID: entity.ID,
+		Compute: quota.ComputeQuota{
+			MaxVMs:        entity.ComputeQuota.MaxVMs,
+			MaxContainers: entity.ComputeQuota.MaxContainers,
+			MaxVCPUs:      entity.ComputeQuota.MaxVCPUs,
+			MaxMemoryMB:   entity.ComputeQuota.MaxMemoryMB,
+		},
+		Network: quota.NetworkQuota{
+			MaxBridges:       entity.NetworkQuota.MaxBridges,
+			MaxPorts:         entity.NetworkQuota.MaxPorts,
+			MaxBandwidthMbps: entity.NetworkQuota.MaxBandwidthMbps,
+		},
+		Storage: quota.StorageQuota{
+			MaxDiskGB:    entity.ComputeQuota.MaxDiskGB,
+			MaxVolumes:   entity.StorageQuota.MaxVolumesGB,
+			MaxSnapshots: entity.StorageQuota.MaxSnapshots,
+		},
+		UpdatedAt: entity.UpdatedAt,
+	}
 }
 
 // ReserveQuota reserves quota for a pending resource creation.
@@ -1223,12 +1297,44 @@ func (m *Manager) listFromIAM(ctx context.Context, limit, offset int) ([]iam.Ten
 }
 
 func (m *Manager) updateInIAM(ctx context.Context, entity *TenantEntity) error {
-	req := &iam.UpdateTenantRequest{
-		DisplayName: entity.DisplayName,
+	metadata, err := entity.platformMetadata()
+	if err != nil {
+		return err
 	}
 
-	_, err := m.iamTenantClient.Update(ctx, entity.ID, req)
+	req := &iam.UpdateTenantRequest{
+		DisplayName: entity.DisplayName,
+		Metadata:    metadata,
+		Status:      entity.iamStatus(),
+	}
+
+	_, err = m.iamTenantClient.Update(ctx, entity.ID, req)
 	return err
+}
+
+// store persists the entity's platform record in IAM, then caches it, so the
+// cache never holds a tenant state IAM has not accepted and a restarted
+// daemon reads back what it last served (docs/tenant/engineering.md §6).
+func (m *Manager) store(ctx context.Context, operation string, entity *TenantEntity) error {
+	if err := m.updateInIAM(ctx, entity); err != nil {
+		return ErrStorageFailed{Operation: operation, Err: err}
+	}
+	m.cache.Store(entity.ID, entity)
+	return nil
+}
+
+// entityFromIAM builds the entity an IAM tenant persists: the identity fields
+// FromIAM maps, the platform record the tenant manager stored in its metadata,
+// and the DEK path.
+func (m *Manager) entityFromIAM(operation string, t *iam.Tenant) (*TenantEntity, error) {
+	entity := FromIAM(t)
+	if err := entity.restorePlatformRecord(t); err != nil {
+		return nil, ErrStorageFailed{Operation: operation, Err: err}
+	}
+	if m.config.EnableDEKIsolation {
+		entity.DEKPath = BuildDEKPath(entity.ID)
+	}
+	return entity, nil
 }
 
 func (m *Manager) deleteFromIAM(ctx context.Context, id string) error {

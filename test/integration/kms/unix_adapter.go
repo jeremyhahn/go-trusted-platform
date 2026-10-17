@@ -114,12 +114,12 @@ func (s *UnixAdapter) Teardown() error {
 // KeyGenerate creates a new cryptographic key.
 func (s *UnixAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) (*KeyGenerateResult, error) {
 	req := &pb.GenerateKeyRequest{
-		Name:        opts.Name,
+		Name:        keyName(opts),
 		Description: opts.Description,
 		Owner:       opts.Owner,
 		KeySpec: &pb.KeySpec{
 			Algorithm:          s.stringToKeyAlgorithm(opts.Algorithm),
-			Usage:              s.purposeToKeyUsages(opts.Purpose),
+			Usage:              purposeToKeyUsages(opts.Purpose),
 			Exportable:         opts.Exportable,
 			DeletionProtection: opts.DeletionProtection,
 		},
@@ -143,6 +143,9 @@ func (s *UnixAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) 
 	if resp.GetMetadata() != nil {
 		result.Name = resp.GetMetadata().GetName()
 		result.Description = resp.GetMetadata().GetDescription()
+	}
+	if err := applyKeyDisplay(ctx, s, opts, result); err != nil {
+		return nil, err
 	}
 
 	return result, nil
@@ -1253,13 +1256,15 @@ func (s *UnixAdapter) secretStatusToString(status pb.SecretStatus) string {
 }
 
 // purposeToKeyUsages converts a purpose string to proto KeyUsage slice.
-func (s *UnixAdapter) purposeToKeyUsages(purpose string) []pb.KeyUsage {
+// purposeToKeyUsages maps the suite's key purpose onto the proto key usages
+// the gRPC and Unix GenerateKey requests carry.
+func purposeToKeyUsages(purpose string) []pb.KeyUsage {
 	switch purpose {
 	case "encrypt", "encryption":
 		return []pb.KeyUsage{pb.KeyUsage_KEY_USAGE_ENCRYPT, pb.KeyUsage_KEY_USAGE_DECRYPT}
 	case "sign", "signing":
 		return []pb.KeyUsage{pb.KeyUsage_KEY_USAGE_SIGN, pb.KeyUsage_KEY_USAGE_VERIFY}
-	case "hmac":
+	case "hmac", "mac":
 		return []pb.KeyUsage{pb.KeyUsage_KEY_USAGE_GENERATE_MAC, pb.KeyUsage_KEY_USAGE_VERIFY_MAC}
 	case "wrap", "wrapping":
 		return []pb.KeyUsage{pb.KeyUsage_KEY_USAGE_WRAP_KEY}

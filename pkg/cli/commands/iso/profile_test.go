@@ -15,11 +15,15 @@ package iso
 
 import (
 	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
-	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 )
 
 func TestProfileCommand_Creation(t *testing.T) {
@@ -65,214 +69,202 @@ func TestProfileCommand_HasSubcommands(t *testing.T) {
 }
 
 func TestProfileListCommand_Creation(t *testing.T) {
-	pFlags := &profileFlags{noColor: true}
-	cmd := newProfileListCommand(getTestFlags, pFlags)
+	cmd := newProfileListCommand(getTestFlags)
 	require.NotNil(t, cmd, "newProfileListCommand returned nil")
 	assert.Equal(t, "list", cmd.Use)
 	assert.Equal(t, "List available installation profiles", cmd.Short)
-
-	// Verify alias
-	require.Greater(t, len(cmd.Aliases), 0, "expected aliases")
-	assert.Equal(t, "ls", cmd.Aliases[0])
+	assert.Contains(t, cmd.Aliases, "ls")
+	assert.Contains(t, cmd.Long, "production")
+	assert.Contains(t, cmd.Long, "fips")
 }
 
 func TestProfileShowCommand_Creation(t *testing.T) {
-	pFlags := &profileFlags{noColor: true}
-	cmd := newProfileShowCommand(getTestFlags, pFlags)
+	cmd := newProfileShowCommand(getTestFlags)
 	require.NotNil(t, cmd, "newProfileShowCommand returned nil")
 	assert.Equal(t, "show <profile-name>", cmd.Use)
 	assert.Equal(t, "Show installation profile configuration", cmd.Short)
 }
 
 func TestProfileValidateCommand_Creation(t *testing.T) {
-	pFlags := &profileFlags{noColor: true}
-	cmd := newProfileValidateCommand(getTestFlags, pFlags)
+	cmd := newProfileValidateCommand(getTestFlags)
 	require.NotNil(t, cmd, "newProfileValidateCommand returned nil")
 	assert.Equal(t, "validate <config-file>", cmd.Use)
 	assert.Contains(t, cmd.Short, "Validate")
 }
 
-func TestProfileGenerateCommand_Creation(t *testing.T) {
-	pFlags := &profileFlags{noColor: true}
-	cmd := newProfileGenerateCommand(getTestFlags, pFlags)
+func TestProfileGenerateCommand_Flags(t *testing.T) {
+	cmd := newProfileGenerateCommand(getTestFlags)
 	require.NotNil(t, cmd, "newProfileGenerateCommand returned nil")
 	assert.Equal(t, "generate", cmd.Use)
-	assert.Contains(t, cmd.Short, "Generate")
-}
 
-func TestProfileGenerateCommand_FlagsExist(t *testing.T) {
-	pFlags := &profileFlags{noColor: true}
-	cmd := newProfileGenerateCommand(getTestFlags, pFlags)
-	cmd.SetOut(new(bytes.Buffer))
-	cmd.SetErr(new(bytes.Buffer))
-
-	// Verify flags exist
-	expectedFlags := []string{"profile", "output", "device", "interactive"}
-
-	for _, flagName := range expectedFlags {
-		flag := cmd.Flags().Lookup(flagName)
-		assert.NotNil(t, flag, "expected flag '%s' to be defined", flagName)
+	for _, name := range []string{"profile", "output", "device"} {
+		flag := cmd.Flags().Lookup(name)
+		require.NotNil(t, flag, "expected flag '%s' to be defined", name)
+		assert.Equal(t, "", flag.DefValue, "flag %s", name)
 	}
+	assert.Equal(t, "p", cmd.Flags().Lookup("profile").Shorthand)
+	assert.Equal(t, "o", cmd.Flags().Lookup("output").Shorthand)
+
+	// The "(future)" interactive mode was a no-op and is gone.
+	assert.Nil(t, cmd.Flags().Lookup("interactive"))
 }
 
-func TestProfileGenerateCommand_RequiresProfile(t *testing.T) {
-	pFlags := &profileFlags{noColor: true}
-	cmd := newProfileGenerateCommand(getTestFlags, pFlags)
+func TestRunProfileList_ReportsEveryProfilePosture(t *testing.T) {
+	out := new(bytes.Buffer)
+	require.NoError(t, runProfileList(getJSONTestFlags(), out))
 
-	found := false
-	cmd.Flags().VisitAll(func(flag *pflag.Flag) {
-		if flag.Name == "profile" {
-			found = true
-		}
-	})
+	var result profileListResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &result), out.String())
+	assert.True(t, result.Success)
 
-	assert.True(t, found, "expected 'profile' flag to be defined")
-}
-
-func TestProfileGenerateCommand_DefaultValues(t *testing.T) {
-	pFlags := &profileFlags{noColor: true}
-	cmd := newProfileGenerateCommand(getTestFlags, pFlags)
-
-	profileFlag := cmd.Flags().Lookup("profile")
-	// Profile default is empty (required flag)
-	assert.Equal(t, "", profileFlag.DefValue)
-
-	interactiveFlag := cmd.Flags().Lookup("interactive")
-	assert.Equal(t, "false", interactiveFlag.DefValue)
-
-	outputFlag := cmd.Flags().Lookup("output")
-	assert.Equal(t, "", outputFlag.DefValue)
-
-	deviceFlag := cmd.Flags().Lookup("device")
-	assert.Equal(t, "", deviceFlag.DefValue)
-}
-
-func TestRunProfileList_ReturnsError(t *testing.T) {
-	pFlags := &profileFlags{noColor: true}
-
-	err := runProfileList(getTestFlags(), pFlags)
-	require.Error(t, err, "expected error from runProfileList (daemon connection required)")
-
-	// Verify it's the expected error type
-	_, ok := err.(ErrDaemonConnectionRequired)
-	assert.True(t, ok, "expected ErrDaemonConnectionRequired, got %T", err)
-}
-
-func TestRunProfileShow_ReturnsError(t *testing.T) {
-	pFlags := &profileFlags{noColor: true}
-
-	err := runProfileShow(getTestFlags(), pFlags, "dev")
-	require.Error(t, err, "expected error from runProfileShow (daemon connection required)")
-
-	// Verify it's the expected error type
-	_, ok := err.(ErrDaemonConnectionRequired)
-	assert.True(t, ok, "expected ErrDaemonConnectionRequired, got %T", err)
-}
-
-func TestRunProfileValidate_ReturnsError(t *testing.T) {
-	pFlags := &profileFlags{noColor: true}
-
-	err := runProfileValidate(getTestFlags(), pFlags, "/tmp/config.yaml")
-	require.Error(t, err, "expected error from runProfileValidate (daemon connection required)")
-
-	// Verify it's the expected error type
-	_, ok := err.(ErrDaemonConnectionRequired)
-	assert.True(t, ok, "expected ErrDaemonConnectionRequired, got %T", err)
-}
-
-func TestRunProfileGenerate_ReturnsError(t *testing.T) {
-	pFlags := &profileFlags{noColor: true}
-	gFlags := &generateProfileFlags{
-		profileName:    "dev",
-		outputFile:     "/tmp/output.yaml",
-		overrideDevice: "/dev/sda",
+	byName := map[string]profileSummary{}
+	for _, summary := range result.Profiles {
+		byName[summary.Name] = summary
+	}
+	require.Len(t, byName, 4)
+	for _, name := range []string{"dev", "production", "fips", "production-hs"} {
+		require.Contains(t, byName, name)
+		assert.NotEmpty(t, byName[name].Description, "profile %s", name)
 	}
 
-	err := runProfileGenerate(getTestFlags(), pFlags, gFlags)
-	require.Error(t, err, "expected error from runProfileGenerate (daemon connection required)")
-
-	// Verify it's the expected error type
-	_, ok := err.(ErrDaemonConnectionRequired)
-	assert.True(t, ok, "expected ErrDaemonConnectionRequired, got %T", err)
+	assert.False(t, byName["dev"].FIPS)
+	assert.Equal(t, "none", byName["dev"].Lockdown)
+	assert.True(t, byName["production"].TPMUnseal)
+	assert.True(t, byName["production"].LUKS)
+	assert.Equal(t, "integrity", byName["production"].Lockdown)
+	assert.True(t, byName["fips"].FIPS)
+	assert.True(t, byName["production-hs"].FIPS)
+	assert.Equal(t, "confidentiality", byName["production-hs"].Lockdown)
 }
 
-func TestProfileFlags_StructFields(t *testing.T) {
-	flags := &profileFlags{noColor: true}
-	assert.True(t, flags.noColor)
+func TestRunProfileShow_RendersInstallConfig(t *testing.T) {
+	out := new(bytes.Buffer)
+	require.NoError(t, runProfileShow(getJSONTestFlags(), "production", out))
 
-	flags.noColor = false
-	assert.False(t, flags.noColor)
+	var result profileShowResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &result), out.String())
+	assert.True(t, result.Success)
+	assert.Equal(t, "production", result.Profile.Name)
+	assert.True(t, result.Profile.LUKS)
+
+	// The rendered YAML is an install configuration the installer accepts.
+	path := filepath.Join(t.TempDir(), "production.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(result.YAML), 0o600))
+	require.NoError(t, runProfileValidate(getJSONTestFlags(), path, new(bytes.Buffer)))
 }
 
-func TestGenerateProfileFlags_StructFields(t *testing.T) {
+func TestRunProfileShow_UnknownProfile(t *testing.T) {
+	err := runProfileShow(getJSONTestFlags(), "nonexistent", new(bytes.Buffer))
+	require.Error(t, err)
+
+	var notFound ErrProfileNotFound
+	require.ErrorAs(t, err, &notFound)
+	assert.Equal(t, "nonexistent", notFound.ProfileName)
+}
+
+func TestRunProfileGenerate_WritesConfigWithDeviceOverride(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "prod.yaml")
 	flags := &generateProfileFlags{
 		profileName:    "production",
-		outputFile:     "/etc/installer.yaml",
+		outputFile:     path,
 		overrideDevice: "/dev/nvme0n1",
-		interactive:    true,
 	}
 
-	assert.Equal(t, "production", flags.profileName)
-	assert.Equal(t, "/etc/installer.yaml", flags.outputFile)
-	assert.Equal(t, "/dev/nvme0n1", flags.overrideDevice)
-	assert.True(t, flags.interactive)
+	out := new(bytes.Buffer)
+	require.NoError(t, runProfileGenerate(getJSONTestFlags(), flags, out))
+
+	var result profileGenerateResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &result), out.String())
+	assert.True(t, result.Success)
+	assert.Equal(t, path, result.OutputFile)
+	assert.Contains(t, result.YAML, "/dev/nvme0n1")
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+	written, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, result.YAML, string(written))
+
+	validateOut := new(bytes.Buffer)
+	require.NoError(t, runProfileValidate(getJSONTestFlags(), path, validateOut))
+	var validation profileValidateResult
+	require.NoError(t, json.Unmarshal(validateOut.Bytes(), &validation), validateOut.String())
+	assert.True(t, validation.Valid)
+	assert.Empty(t, validation.Errors)
 }
 
-func TestProfileCommand_LongDescription(t *testing.T) {
-	cmd := newProfileCommand(getTestFlags)
-	assert.Contains(t, cmd.Long, "Profiles")
-	assert.Contains(t, cmd.Long, "configuration")
+func TestRunProfileGenerate_StdoutOnly(t *testing.T) {
+	flags := &generateProfileFlags{profileName: "dev"}
+
+	out := new(bytes.Buffer)
+	require.NoError(t, runProfileGenerate(getJSONTestFlags(), flags, out))
+
+	var result profileGenerateResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &result), out.String())
+	assert.Empty(t, result.OutputFile)
+	assert.NotEmpty(t, result.YAML)
 }
 
-func TestProfileListCommand_HasRunE(t *testing.T) {
-	pFlags := &profileFlags{noColor: true}
-	cmd := newProfileListCommand(getTestFlags, pFlags)
-	assert.NotNil(t, cmd.RunE)
+func TestRunProfileGenerate_UnknownProfile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "out.yaml")
+	flags := &generateProfileFlags{profileName: "nonexistent", outputFile: path}
+
+	err := runProfileGenerate(getJSONTestFlags(), flags, new(bytes.Buffer))
+	require.Error(t, err)
+
+	var notFound ErrProfileNotFound
+	require.ErrorAs(t, err, &notFound)
+	assert.NoFileExists(t, path)
 }
 
-func TestProfileShowCommand_HasRunE(t *testing.T) {
-	pFlags := &profileFlags{noColor: true}
-	cmd := newProfileShowCommand(getTestFlags, pFlags)
-	assert.NotNil(t, cmd.RunE)
+func TestRunProfileGenerate_UnwritableOutput(t *testing.T) {
+	flags := &generateProfileFlags{
+		profileName: "dev",
+		outputFile:  filepath.Join(t.TempDir(), "missing-dir", "out.yaml"),
+	}
+
+	err := runProfileGenerate(getJSONTestFlags(), flags, new(bytes.Buffer))
+	require.Error(t, err)
+
+	var wrapped *WrappedError
+	require.ErrorAs(t, err, &wrapped)
 }
 
-func TestProfileValidateCommand_HasRunE(t *testing.T) {
-	pFlags := &profileFlags{noColor: true}
-	cmd := newProfileValidateCommand(getTestFlags, pFlags)
-	assert.NotNil(t, cmd.RunE)
+func TestRunProfileValidate_InvalidConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("disk: [not, a, mapping\n"), 0o600))
+
+	out := new(bytes.Buffer)
+	err := runProfileValidate(getJSONTestFlags(), path, out)
+	require.Error(t, err)
+
+	var failed ErrConfigValidationFailed
+	require.ErrorAs(t, err, &failed)
+
+	var result profileValidateResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &result), out.String())
+	assert.True(t, result.Success)
+	assert.False(t, result.Valid)
+	require.Len(t, result.Errors, 1)
+	assert.Equal(t, failed.Reason, result.Errors[0])
 }
 
-func TestProfileGenerateCommand_HasRunE(t *testing.T) {
-	pFlags := &profileFlags{noColor: true}
-	cmd := newProfileGenerateCommand(getTestFlags, pFlags)
-	assert.NotNil(t, cmd.RunE)
+func TestRunProfileValidate_MissingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing.yaml")
+
+	out := new(bytes.Buffer)
+	err := runProfileValidate(getJSONTestFlags(), path, out)
+	require.Error(t, err)
+
+	var parseErr ErrConfigParseError
+	require.ErrorAs(t, err, &parseErr)
+	assert.Equal(t, path, parseErr.Path)
+	assert.Empty(t, out.String(), "nothing is printed for a file that cannot be read")
 }
 
-func TestProfileListCommand_LongDescription(t *testing.T) {
-	pFlags := &profileFlags{noColor: true}
-	cmd := newProfileListCommand(getTestFlags, pFlags)
-	assert.Contains(t, cmd.Long, "dev")
-	assert.Contains(t, cmd.Long, "production")
-	assert.Contains(t, cmd.Long, "fips")
-}
-
-func TestProfileShowCommand_LongDescription(t *testing.T) {
-	pFlags := &profileFlags{noColor: true}
-	cmd := newProfileShowCommand(getTestFlags, pFlags)
-	assert.Contains(t, cmd.Long, "YAML")
-	assert.Contains(t, cmd.Long, "configuration")
-}
-
-func TestProfileValidateCommand_LongDescription(t *testing.T) {
-	pFlags := &profileFlags{noColor: true}
-	cmd := newProfileValidateCommand(getTestFlags, pFlags)
-	assert.Contains(t, cmd.Long, "validator")
-	assert.Contains(t, cmd.Long, "Required fields")
-}
-
-func TestProfileGenerateCommand_LongDescription(t *testing.T) {
-	pFlags := &profileFlags{noColor: true}
-	cmd := newProfileGenerateCommand(getTestFlags, pFlags)
-	assert.Contains(t, cmd.Long, "Examples:")
-	assert.Contains(t, cmd.Long, "platformctl iso profile generate")
+func TestSummarizeProfile_EmptyConfig(t *testing.T) {
+	summary := summarizeProfile("bare", "no sections", &installer.Config{})
+	assert.Equal(t, profileSummary{Name: "bare", Description: "no sections", Lockdown: "none"}, summary)
 }

@@ -54,7 +54,7 @@ type TPMCommands interface {
 	Unseal(ctx context.Context, opts UnsealOptions) (*UnsealResult, error)
 
 	// Event Log Commands (platformctl tpm eventlog)
-	EventLog(ctx context.Context, path string) (*EventLogResult, error)
+	EventLog(ctx context.Context) (*EventLogResult, error)
 }
 
 // =============================================================================

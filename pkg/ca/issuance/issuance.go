@@ -29,6 +29,8 @@ import (
 	baasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 )
 
 // csrPEMType is the PEM block type of a PKCS#10 request.
@@ -108,7 +110,16 @@ const SignCSRScope = "ca:sign-csr"
 // token (mTLS, a legacy token validator) has no scopes, so it passes nil
 // and is refused: no transport certifies a code-signing key on
 // authentication alone.
-func AuthorizeSignCSR(authCtx *platformtoken.AuthorizedContext) error {
+//
+// A tokenless mTLS peer on MCP or QUIC does carry an AuthorizedContext, the
+// operator's, with scopes a token would grant. Its transport marks ctx with
+// peercred.ContextWithCertificatePrincipal, and that principal is refused
+// here whatever its scopes, so the rule holds wherever the context came from
+// (docs/ca/api.md, "Sign CSR needs ca:sign-csr").
+func AuthorizeSignCSR(ctx context.Context, authCtx *platformtoken.AuthorizedContext) error {
+	if peercred.IsCertificatePrincipal(ctx) {
+		return &SignCSRScopeError{Reason: "the caller presented a client certificate alone"}
+	}
 	if authCtx == nil {
 		return &SignCSRScopeError{Reason: "the caller presented no platform token"}
 	}

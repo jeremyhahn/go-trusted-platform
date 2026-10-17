@@ -282,7 +282,7 @@ func (u *UnixAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealRe
 // =============================================================================
 
 // EventLog reads the TPM event log via the SDK client over Unix socket.
-func (u *UnixAdapter) EventLog(ctx context.Context, path string) (*EventLogResult, error) {
+func (u *UnixAdapter) EventLog(ctx context.Context) (*EventLogResult, error) {
 	resp, err := u.client.GetEventLogDomain(ctx, "json")
 	if err != nil {
 		return nil, ErrUnixTPMRPCFailed{Method: "GetEventLog", Err: err}

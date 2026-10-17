@@ -408,8 +408,7 @@ strategy tried and failed, and bare `ErrUnlockFailed` when none was eligible;
 returns `[]error{Sentinel, Cause}`, so `errors.Is(err, ErrUnlockFailed)` matches
 either way.
 
-`pkg/cli/commands/iso` errors are typed per failure: `ErrDaemonConnectionRequired`,
-`ErrInvalidArchitecture`, `ErrInvalidPlatformType`, `ErrISONotFound`,
+`pkg/cli/commands/iso` errors are typed per failure: `ErrInvalidArchitecture`, `ErrInvalidPlatformType`, `ErrISONotFound`,
 `ErrDirectoryNotFound`, `ErrDirectoryAlreadyExists`, `ErrDownloadFailed`,
 `ErrExtractionFailed`, `ErrCustomizationFailed`, `ErrBuildFailed`,
 `ErrConfigValidationFailed`, `ErrProfileNotFound`, `ErrConfigParseError`,

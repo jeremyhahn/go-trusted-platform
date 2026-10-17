@@ -28,7 +28,7 @@ The response carries proto field names; gRPC status codes pass through.
 | `dns_zone_delete` | `DeleteZone` | `dns:delete` | `name` |
 | `dns_record_create` | `AddRecord` | `dns:write` | `zone_name`, `record` |
 | `dns_record_get` | `ListRecords`, filtered | `dns:read` | `zone_name`, `type`, `name` |
-| `dns_record_list` | `ListRecords` | `dns:read` | `zone_name` |
+| `dns_record_list` | `ListRecords` (optional `type`, `limit`, `offset`; the result carries `total`, `limit`, `offset`) | `dns:read` | `zone_name` |
 | `dns_record_update` | `UpdateRecord` | `dns:write` | `zone_name`, `old_record`, `new_record` |
 | `dns_record_delete` | `DeleteRecord` | `dns:delete` | `zone_name`, `name` |
 | `dns_lookup` | `Resolve` | `dns:read` | `fqdn` |

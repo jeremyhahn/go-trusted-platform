@@ -446,10 +446,17 @@ func TestQUICComputeExtendedCategory_ContainerSubOpcodes(t *testing.T) {
 		return handler, orchestrator
 	}
 
-	t.Run("routes container attest sub-opcode to container handler", func(t *testing.T) {
-		handler, orchestrator := newHandlerWithContainers(t)
+	newHandlerWithAttester := func() (*QUICServiceHandler, *attestingMockOrchestrator) {
+		orchestrator := &attestingMockOrchestrator{grpcMockOrchestrator: newGRPCMockOrchestrator()}
+		handler := newTestQUICServiceHandler(logging.DefaultLogger())
+		handler.SetComputeGRPCService(NewComputeGRPCService(logging.DefaultLogger(), orchestrator))
+		return handler, orchestrator
+	}
 
-		inner, err := quicwire.EncodePayload(&quic.ContainerAttestRequest{ID: "container-1"})
+	t.Run("converges container attest sub-opcode to the compute service", func(t *testing.T) {
+		handler, orchestrator := newHandlerWithAttester()
+
+		inner, err := quicwire.EncodePayload(&platformv1.AttestContainerRequest{Id: "container-1"})
 		require.NoError(t, err)
 
 		resp := handler.HandleRequest(ctx, &quicwire.Request{
@@ -461,10 +468,23 @@ func TestQUICComputeExtendedCategory_ContainerSubOpcodes(t *testing.T) {
 		assert.Equal(t, quicwire.StatusOK, resp.Status)
 		assert.Equal(t, 1, orchestrator.attestCalls)
 
-		var attestResp quic.ContainerAttestResponse
+		var attestResp platformv1.AttestContainerResponse
 		require.NoError(t, quicwire.DecodePayload(resp.Payload, &attestResp))
-		assert.Equal(t, "container-1", attestResp.ContainerID)
-		assert.True(t, attestResp.Verified)
+		assert.Equal(t, "container-1", attestResp.GetContainerId())
+		assert.True(t, attestResp.GetStatus().GetSuccess())
+	})
+
+	t.Run("rejects an undecodable container attest payload", func(t *testing.T) {
+		handler, orchestrator := newHandlerWithAttester()
+
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpVMExtendedCategory,
+			Payload: []byte{quicwire.OpContainerAttest, 0xFF, 0xFF},
+		})
+
+		require.NotNil(t, resp)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
+		assert.Equal(t, 0, orchestrator.attestCalls)
 	})
 
 	t.Run("routes container logs sub-opcode to container handler", func(t *testing.T) {

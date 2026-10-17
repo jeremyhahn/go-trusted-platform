@@ -37,6 +37,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmattrs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmcertify"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmclear"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmek"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmpcr"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
@@ -64,7 +66,7 @@ type MCPServiceProviderConfig struct {
 	VTPMService          vtpm.VTPMService
 	DeviceService        device.DeviceService
 	DeviceProfileService device.DeviceProfileService
-	// DeviceTemplateService backs device_template_create and
+	// DeviceTemplateService backs the device_template_* tools and
 	// profile_create_from_template; nil answers that no template service
 	// is configured.
 	DeviceTemplateService device.DeviceTemplateService
@@ -90,6 +92,7 @@ type MCPServiceProviderConfig struct {
 	IAMClient             quicbaassdk.IAMClient
 	PEPClient             quicbaassdk.IAMPEPClient
 	IAMTokens             *IAMTokenService // iam_*_token tools; nil refuses verification
+	PlatformTenantID      string           // the system tenant, the only one admitted to create and list IAM tenants
 	KMSService            baasservice.KMSService
 	CryptoService         baasservice.CryptoService
 	SecretsService        baasservice.SecretsService
@@ -193,6 +196,9 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		logger = slog.Default()
 	}
 
+	iam := NewIAMGRPCService(logger, config.IAMClient, config.PEPClient)
+	iam.SetSystemTenant(config.PlatformTenantID)
+
 	return &MCPServiceProvider{
 		caService:             config.CAService,
 		vtpmService:           config.VTPMService,
@@ -207,7 +213,7 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		dnsService:            config.DNSService,
 		sdnService:            config.SDNService,
 		healthService:         config.HealthService,
-		iam:                   NewIAMGRPCService(logger, config.IAMClient, config.PEPClient),
+		iam:                   iam,
 		iamTokens:             config.IAMTokens,
 		kmsService:            config.KMSService,
 		cryptoService:         config.CryptoService,
@@ -807,6 +813,7 @@ func (p *MCPServiceProvider) DeviceList(ctx context.Context, filter map[string]s
 	}
 
 	query := datastore.PageQuery{
+		Page:      datastore.FirstPage,
 		PageSize:  100,
 		SortOrder: datastore.SortAscending,
 	}
@@ -1640,6 +1647,19 @@ func (p *MCPServiceProvider) IAMCreateUser(ctx context.Context, req *mcp.IAMCrea
 	})
 }
 
+// IAMUpdateUser updates an IAM user, as gRPC UpdateUser.
+func (p *MCPServiceProvider) IAMUpdateUser(ctx context.Context, req *mcp.IAMUpdateUserRequest) (interface{}, error) {
+	return p.iam.UpdateUser(ctx, &platformv1.UpdateIAMUserRequest{
+		TenantId:   req.TenantID,
+		UserId:     req.UserID,
+		Email:      req.Email,
+		Name:       req.Name,
+		Roles:      req.Roles,
+		Groups:     req.Groups,
+		Attributes: req.Attributes,
+	})
+}
+
 // IAMDeleteUser deletes an IAM user, as gRPC DeleteUser.
 func (p *MCPServiceProvider) IAMDeleteUser(ctx context.Context, tenantID string, userID string) (interface{}, error) {
 	return p.iam.DeleteUser(ctx, &platformv1.DeleteIAMUserRequest{TenantId: tenantID, UserId: userID})
@@ -1666,6 +1686,17 @@ func (p *MCPServiceProvider) IAMCreateRole(ctx context.Context, req *mcp.IAMCrea
 	return p.iam.CreateRole(ctx, &platformv1.CreateIAMRoleRequest{
 		TenantId:    req.TenantID,
 		Id:          req.ID,
+		Name:        req.Name,
+		Description: req.Description,
+		Permissions: req.Permissions,
+	})
+}
+
+// IAMUpdateRole updates an IAM role, as gRPC UpdateRole.
+func (p *MCPServiceProvider) IAMUpdateRole(ctx context.Context, req *mcp.IAMUpdateRoleRequest) (interface{}, error) {
+	return p.iam.UpdateRole(ctx, &platformv1.UpdateIAMRoleRequest{
+		TenantId:    req.TenantID,
+		RoleId:      req.RoleID,
 		Name:        req.Name,
 		Description: req.Description,
 		Permissions: req.Permissions,
@@ -1728,6 +1759,16 @@ func (p *MCPServiceProvider) IAMCreateGroup(ctx context.Context, req *mcp.IAMCre
 	return p.iam.CreateGroup(ctx, &platformv1.CreateIAMGroupRequest{
 		TenantId:    req.TenantID,
 		Id:          req.ID,
+		Name:        req.Name,
+		Description: req.Description,
+	})
+}
+
+// IAMUpdateGroup updates an IAM group, as gRPC UpdateGroup.
+func (p *MCPServiceProvider) IAMUpdateGroup(ctx context.Context, req *mcp.IAMUpdateGroupRequest) (interface{}, error) {
+	return p.iam.UpdateGroup(ctx, &platformv1.UpdateIAMGroupRequest{
+		TenantId:    req.TenantID,
+		GroupId:     req.GroupID,
 		Name:        req.Name,
 		Description: req.Description,
 	})
@@ -2905,7 +2946,7 @@ func (p *MCPServiceProvider) TPMClear(ctx context.Context, ownerPassword string)
 		lockoutAuth = []byte(ownerPassword)
 	}
 
-	if err := p.tpm2Service.Clear(lockoutAuth); err != nil {
+	if err := tpmclear.Clear(p.tpm2Service, lockoutAuth); err != nil {
 		return nil, mapTPMError(err)
 	}
 
@@ -2975,12 +3016,8 @@ func (p *MCPServiceProvider) TPMCreateEK(ctx context.Context) (interface{}, erro
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	ekAttrs, err := p.tpm2Service.EKAttributes()
+	ekAttrs, err := tpmek.Create(p.tpm2Service)
 	if err != nil {
-		return nil, mapTPMError(err)
-	}
-
-	if err := p.tpm2Service.CreateEK(ekAttrs); err != nil {
 		return nil, mapTPMError(err)
 	}
 

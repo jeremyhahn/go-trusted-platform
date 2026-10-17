@@ -317,7 +317,12 @@ knowing before searching for `sdn_zone_*` tools, which do not exist.
 A second REST router under the same `/api/v1/gateway` prefix
 (`pkg/webservice/v1/rest/gateway/control_plane.go`) carries the gateway ⇄
 control-plane conversation. These routes are served by the **control plane**,
-consumed by gateways:
+consumed by gateways. platformd mounts them on its own REST listener (the
+port a gateway's `control-plane.base-url` names, `pkg/api/daemon/rest_gateway_control.go`)
+and on every webservice it publishes, with the same handlers; a control plane
+that publishes no webservice still serves them. On the platformd listener the
+operator routes require scope `sdn:read` (the scope `GetGatewaySnapshot`
+requires) to read and `sdn:delete` to forget a gateway:
 
 | Method | Path | Purpose | Authorization |
 |---|---|---|---|

@@ -18,9 +18,11 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -31,6 +33,10 @@ import (
 // CLIAdapter implements CLICommands using platformctl CLI commands.
 type CLIAdapter struct {
 	binaryPath string
+	// configDir holds the platformctl config whose local context points at
+	// PLATFORM_UNIX_SOCKET; every command reads it through PLATFORMCTL_CONFIG.
+	configDir  string
+	configPath string
 }
 
 // NewCLIAdapter creates a new CLI protocol adapter instance.
@@ -58,6 +64,10 @@ func (c *CLIAdapter) Setup(ctx context.Context) error {
 
 	c.binaryPath = binaryPath
 
+	if err := c.writeConfig(); err != nil {
+		return ErrConnectionFailed{Protocol: "CLI", Endpoint: GetServiceEndpoints().PlatformUnix, Err: err}
+	}
+
 	// Verify connectivity by running a simple command
 	_, err = c.runCommand(ctx, "version", "--client", "-o", "json")
 	if err != nil {
@@ -69,12 +79,45 @@ func (c *CLIAdapter) Setup(ctx context.Context) error {
 
 // Teardown performs any cleanup needed by the CLI adapter.
 func (c *CLIAdapter) Teardown() error {
+	if c.configDir == "" {
+		return nil
+	}
+	err := os.RemoveAll(c.configDir)
+	c.configDir = ""
+	c.configPath = ""
+	return err
+}
+
+// writeConfig writes a platformctl config whose current context is a local
+// context on the daemon socket the runner exports as PLATFORM_UNIX_SOCKET.
+// Without it platformctl falls back to /run/platformd.sock.
+func (c *CLIAdapter) writeConfig() error {
+	dir, err := os.MkdirTemp("", "platformctl-cli-*")
+	if err != nil {
+		return err
+	}
+	configPath := filepath.Join(dir, "config.yaml")
+	content := fmt.Sprintf(`current_context: integration-test
+contexts:
+  - name: integration-test
+    type: local
+    local:
+      socket_path: %s
+`, GetServiceEndpoints().PlatformUnix)
+	if err := os.WriteFile(configPath, []byte(content), 0600); err != nil {
+		return errors.Join(err, os.RemoveAll(dir))
+	}
+	c.configDir = dir
+	c.configPath = configPath
 	return nil
 }
 
 // runCommand executes a platformctl command and returns the output.
 func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, c.binaryPath, args...)
+	if c.configPath != "" {
+		cmd.Env = append(os.Environ(), "PLATFORMCTL_CONFIG="+c.configPath)
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return output, fmt.Errorf("command failed: %s: %w", string(output), err)
@@ -306,19 +349,19 @@ func (c *CLIAdapter) ConfigGet(ctx context.Context, section string) (*ConfigGetR
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "config get", Err: err}
 	}
 
-	var resp struct {
-		Sections []struct {
-			Section string            `json:"section"`
-			Values  map[string]string `json:"values"`
-		} `json:"sections"`
+	// `config get -o json` prints a bare array of sections
+	// (docs/daemon/cli.md §4.5).
+	var sections []struct {
+		Section string            `json:"section"`
+		Values  map[string]string `json:"values"`
 	}
 
-	if err := json.Unmarshal(output, &resp); err != nil {
+	if err := json.Unmarshal(output, &sections); err != nil {
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "config get", Err: err}
 	}
 
 	result := &ConfigGetResult{}
-	for _, sec := range resp.Sections {
+	for _, sec := range sections {
 		result.Sections = append(result.Sections, ConfigSection{
 			Section: sec.Section,
 			Values:  sec.Values,
@@ -529,6 +572,17 @@ func (c *CLIAdapter) ContextDelete(ctx context.Context, name string) (*ContextDe
 // Service Operations
 // =============================================================================
 
+// cliServiceJSON is one service as `platformctl service list|status -o json`
+// prints it: the SDK's daemon.ServiceInfo.
+type cliServiceJSON struct {
+	Name          string `json:"name"`
+	Type          string `json:"type"`
+	Status        string `json:"status"`
+	Health        string `json:"health"`
+	UptimeSeconds int64  `json:"uptime_seconds"`
+	Version       string `json:"version"`
+}
+
 // ServiceList lists all services via CLI.
 func (c *CLIAdapter) ServiceList(ctx context.Context) (*ServiceListResult, error) {
 	output, err := c.runCommand(ctx, "service", "list", "-o", "json")
@@ -536,23 +590,15 @@ func (c *CLIAdapter) ServiceList(ctx context.Context) (*ServiceListResult, error
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "service list", Err: err}
 	}
 
-	var resp struct {
-		Services []struct {
-			Name          string `json:"name"`
-			Type          string `json:"type"`
-			Status        string `json:"status"`
-			Health        string `json:"health"`
-			UptimeSeconds int64  `json:"uptime_seconds"`
-			Version       string `json:"version"`
-		} `json:"services"`
-	}
-
-	if err := json.Unmarshal(output, &resp); err != nil {
+	// `service list -o json` prints the services as a bare array
+	// (docs/daemon/cli.md §4.4).
+	var services []cliServiceJSON
+	if err := json.Unmarshal(output, &services); err != nil {
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "service list", Err: err}
 	}
 
 	result := &ServiceListResult{}
-	for _, svc := range resp.Services {
+	for _, svc := range services {
 		result.Services = append(result.Services, ServiceInfo{
 			Name:          svc.Name,
 			Type:          svc.Type,
@@ -573,34 +619,21 @@ func (c *CLIAdapter) ServiceStatus(ctx context.Context, serviceType string) (*Se
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "service status", Err: err}
 	}
 
-	var resp struct {
-		Service *struct {
-			Name          string `json:"name"`
-			Type          string `json:"type"`
-			Status        string `json:"status"`
-			Health        string `json:"health"`
-			UptimeSeconds int64  `json:"uptime_seconds"`
-			Version       string `json:"version"`
-		} `json:"service"`
-	}
-
-	if err := json.Unmarshal(output, &resp); err != nil {
+	// `service status -o json` prints the one service as a bare object
+	// (docs/daemon/cli.md §4.4).
+	var svc cliServiceJSON
+	if err := json.Unmarshal(output, &svc); err != nil {
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "service status", Err: err}
 	}
 
-	result := &ServiceStatusResult{}
-	if resp.Service != nil {
-		result.Service = &ServiceInfo{
-			Name:          resp.Service.Name,
-			Type:          resp.Service.Type,
-			Status:        resp.Service.Status,
-			Health:        resp.Service.Health,
-			UptimeSeconds: resp.Service.UptimeSeconds,
-			Version:       resp.Service.Version,
-		}
-	}
-
-	return result, nil
+	return &ServiceStatusResult{Service: &ServiceInfo{
+		Name:          svc.Name,
+		Type:          svc.Type,
+		Status:        svc.Status,
+		Health:        svc.Health,
+		UptimeSeconds: svc.UptimeSeconds,
+		Version:       svc.Version,
+	}}, nil
 }
 
 // ServiceStart starts a service via CLI.

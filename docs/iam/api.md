@@ -80,13 +80,20 @@ Rows below give the unscoped path; the tenant-scoped equivalent always exists.
 | Create user | `POST /api/v1/iam/users` | ✅ | `0xA9` | `iam_create_user`, `iam:write` | ✅ |
 | List users | `GET /api/v1/iam/users` | ✅ | `0xAC` | `iam_list_users`, `iam:read` | ✅ |
 | Get user | `GET /api/v1/iam/users/{id}` | ✅ | `0xAB` | `iam_get_user`, `iam:read` | ✅ |
-| Update user | `PUT /api/v1/iam/users/{id}` | ✅ | `0xAD` | `MISSING — docs/13 G7` | ✅ |
+| Update user | `PUT /api/v1/iam/users/{id}` | ✅ | `0xAD` | `iam_update_user`, `iam:write` | ✅ |
 | Delete user | `DELETE /api/v1/iam/users/{id}` | ✅ | `0xAA` | `iam_delete_user`, `iam:delete` | ✅ |
 | Assign role to user | `POST /api/v1/iam/users/{id}/roles/{role}` | ✅ | `0xB9` | `iam_assign_role`, `iam:write` | missing upstream, [SPEC](../SPEC.md#interfaces) |
 | Revoke role from user | `DELETE /api/v1/iam/users/{id}/roles/{role}` | ✅ | `0xBA` | `iam_revoke_role`, `iam:write` | missing upstream, [SPEC](../SPEC.md#interfaces) |
 
-`iam_update_user` does not exist — user updates are REST, gRPC, QUIC and
-embedded only.
+`iam_update_user` changes what gRPC `UpdateUser` changes: email, display name,
+roles, groups and attributes.
+
+Create user takes an email and no required username. The IAM SDK refuses an
+empty username, so every transport (REST, gRPC, Unix, QUIC, MCP) derives it
+from the email's local part (`alice@acme.test` → `alice`), or uses the whole
+address when it has no local part (`UsernameFromEmail` in
+`pkg/webservice/v1/rest/iam/mirror.go`). REST also accepts an explicit
+`username`.
 
 ## 4. Groups
 
@@ -95,7 +102,7 @@ embedded only.
 | Create group | `POST /api/v1/iam/groups` | ✅ | `0xBB` | `iam_create_group`, `iam:write` | ✅ |
 | List groups | `GET /api/v1/iam/groups` | ✅ | `0xBE` | `iam_list_groups`, `iam:read` | ✅ |
 | Get group | `GET /api/v1/iam/groups/{id}` | ✅ | `0xBD` | `iam_get_group`, `iam:read` | ✅ |
-| Update group | `PUT /api/v1/iam/groups/{id}` | ✅ | `MISSING` | `MISSING — docs/13 G7` | ✅ |
+| Update group | `PUT /api/v1/iam/groups/{id}` | ✅ | `MISSING` | `iam_update_group`, `iam:write` | ✅ |
 | Delete group | `DELETE /api/v1/iam/groups/{id}` | ✅ | `0xBC` | `iam_delete_group`, `iam:delete` | ✅ |
 | Add group member | `POST /api/v1/iam/groups/{id}/members/{user}` | ✅ | `0xBF` | `iam_add_group_member`, `iam:write` | missing upstream, [SPEC](../SPEC.md#interfaces) |
 | Remove group member | `DELETE /api/v1/iam/groups/{id}/members/{user}` | ✅ | `0xF6` | `iam_remove_group_member`, `iam:write` | missing upstream, [SPEC](../SPEC.md#interfaces) |
@@ -108,7 +115,7 @@ verbs are unimplemented stubs — see [cli.md](cli.md) §4.
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
 | Role CRUD | `/api/v1/iam/roles`, `/roles/{id}` | ✅ | `0xB5` create, `0xB6` delete, `0xB7` get, `0xB8` list | `iam_create_role` `iam:write`, `iam_get_role` `iam:read`, `iam_list_roles` `iam:read`, `iam_delete_role` `iam:delete` | ✅ |
-| Update role | `PUT /api/v1/iam/roles/{id}` | ✅ | `MISSING` | `MISSING — docs/13 G7` | ✅ |
+| Update role | `PUT /api/v1/iam/roles/{id}` | ✅ | `MISSING` | `iam_update_role`, `iam:write` | ✅ |
 | Policy CRUD | `/api/v1/iam/policies`, `/policies/{id}` | ✅ | `MISSING` | `MISSING — docs/13 G7` | ✅ |
 | **Validate policy** | `POST /api/v1/iam/policies/validate` | ✅ | `MISSING` | `MISSING — docs/13 G7` | ✅ |
 | **Test policy** | `POST /api/v1/iam/policies/test` | ✅ | `MISSING` | `MISSING — docs/13 G7` | ✅ |
@@ -270,6 +277,25 @@ gated or absent. Details and rationale:
 [architecture.md §Authorization Flow](architecture.md#authorization-flow) and
 [`docs/auth/architecture.md` §6c](../auth/architecture.md).
 
+**The daemon listener serves the tenant-scoped IAM routes (#949).**
+`SetIAMHandlers` (`pkg/api/daemon/rest_service.go`) mounts
+`/api/v1/iam/tenants` and `/api/v1/iam/tenants/{tenant}/...` on the daemon's
+REST listener, over the SDK IAM client and PEP the other transports use. There
+the guards are `IAMRouteGuards` (`pkg/api/rest/iam_guard.go`) over the daemon's
+scope guard: a bearer token or mTLS peer, `iam:read` for reads and the
+read-only checks, `iam:write` for the rest, `401` without a caller and `403`
+without the scope or for another tenant. The flat aliases of §2 are not
+mounted there, since they fall back to a browser session's tenant; a flat
+claim is recorded as divergent under #452 in the daemon's route-claims test.
+
+| Daemon REST route | Scope | Caller |
+|---|---|---|
+| `GET /api/v1/iam/tenants`, `GET /api/v1/iam/tenants/{tenant}` | `iam:read` | system tenant |
+| `POST`, `PUT`, `DELETE /api/v1/iam/tenants[/{tenant}]` | `iam:write` | system tenant |
+| `GET /api/v1/iam/tenants/{tenant}/{users,groups,roles,policies,apps}[/...]` | `iam:read` | `{tenant}` |
+| `POST /api/v1/iam/tenants/{tenant}/{permissions/check,policies/validate,policies/test}` | `iam:read` | `{tenant}` |
+| every other `/api/v1/iam/tenants/{tenant}/...` write | `iam:write` | `{tenant}` |
+
 That gate is REST-only; the gRPC, QUIC and MCP pictures follow.
 
 **The tenant binding is on every transport (#401).** A tenant-bound caller is
@@ -302,8 +328,13 @@ On gRPC, QUIC and MCP the check is `authorizeIAMTenant`
 (`pkg/api/daemon/iam_tenant_authz.go`); MCP reaches it because its IAM tools
 answer through the same `IAMGRPCService` methods. It covers every user, role,
 group, policy and application RPC, `CheckPermission`, and `GetTenant`,
-`UpdateTenant` and `DeleteTenant`. It does not cover `CreateTenant`,
-`ListTenants` or the token RPCs. The platform `TenantService` lifecycle RPCs have their own binding,
+`UpdateTenant` and `DeleteTenant`. `CreateTenant` and `ListTenants` act
+across tenants, so they admit the system tenant only, the rule REST applies
+with `RequireSystemTenant`: `authorizeSystemCaller` (same file) refuses any
+other tenant-bound caller with `PermissionDenied` (`ErrTenantSystemOnly`), and
+the unbound Unix operator is admitted. The daemon hands the service its
+system tenant with `SetSystemTenant`; without one, no tenant-bound caller is
+admitted. The token RPCs carry no tenant check. The platform `TenantService` lifecycle RPCs have their own binding,
 `authorizeTenant` (`pkg/api/daemon/tenant_grpc_authz.go`,
 [`docs/tenant/api.md`](../tenant/api.md) §7). A daemon run with `SkipIAMValidation`
 has no caller identity and serves the named tenant.
@@ -337,7 +368,7 @@ it answers through (`pkg/api/grpc/method_permissions.go`;
 
 | Scope | Tools |
 |---|---|
-| `iam:write` | `iam_create_user`, `iam_create_role`, `iam_assign_role`, `iam_revoke_role`, `iam_create_group`, `iam_add_group_member`, `iam_remove_group_member`, `iam_create_tenant` |
+| `iam:write` | `iam_create_user`, `iam_update_user`, `iam_create_role`, `iam_update_role`, `iam_assign_role`, `iam_revoke_role`, `iam_create_group`, `iam_update_group`, `iam_add_group_member`, `iam_remove_group_member`, `iam_create_tenant` |
 | `iam:delete` | `iam_delete_user`, `iam_delete_role`, `iam_delete_group`, `iam_delete_tenant` |
 | `iam:read` | `iam_get_user`, `iam_list_users`, `iam_get_role`, `iam_list_roles`, `iam_get_group`, `iam_list_groups`, `iam_get_tenant`, `iam_list_tenants`, `iam_check_permission`, `iam_verify_token` |
 

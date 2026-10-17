@@ -84,12 +84,11 @@ platformctl iam group list --tenant tenant-a
 platformctl iam group get  tenant-a tenant-ops
 ```
 
-**Group membership cannot be changed from the CLI.** `add-member` and
-`remove-member` exist as commands and are unimplemented. Use REST:
+Add and remove members one at a time:
 
 ```bash
-curl -s -X POST   https://platform.example.com/api/v1/iam/tenants/tenant-a/groups/tenant-ops/members/u-0f21
-curl -s -X DELETE https://platform.example.com/api/v1/iam/tenants/tenant-a/groups/tenant-ops/members/u-0f21
+platformctl iam group add-member    tenant-a tenant-ops u-0f21
+platformctl iam group remove-member tenant-a tenant-ops u-0f21
 ```
 
 or set the whole list at user creation with `--groups`, remembering that
@@ -166,9 +165,6 @@ daemon retries the failures and leaves everyone else alone.
 
 **A user's roles disappeared after an update.**
 `update --roles` replaces the list. Use `assign-role` to add.
-
-**`iam group add-member` says "not yet implemented".**
-It is. Use the REST route or the MCP tool.
 
 **A user registered but does not appear in `iam user list`.**
 The WebAuthn mirror. The mirror and the REST IAM router must be given the same

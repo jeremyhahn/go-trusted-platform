@@ -570,6 +570,13 @@ func (s *TenantGRPCServer) CheckQuota(
 	}
 
 	if err != nil {
+		// Only an exceeded quota is an answer; an unknown tenant or a
+		// failed check is an error the caller must see as one.
+		var exceeded tenant.ErrQuotaExceeded
+		var enforcerExceeded quota.ErrQuotaExceeded
+		if !errors.As(err, &exceeded) && !errors.As(err, &enforcerExceeded) {
+			return nil, s.toGRPCError(err)
+		}
 		response.Available = false
 		response.Message = err.Error()
 	} else {

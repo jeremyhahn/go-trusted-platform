@@ -313,7 +313,7 @@ func (s *CAGRPCService) SignCSR(ctx context.Context, req *platformv1.SignCSRRequ
 // authentication alone. Every gRPC CA service calls it.
 func AuthorizeSignCSR(ctx context.Context) error {
 	if authCtx, ok := AuthorizedContextFromContext(ctx); ok {
-		if err := issuance.AuthorizeSignCSR(authCtx); err != nil {
+		if err := issuance.AuthorizeSignCSR(ctx, authCtx); err != nil {
 			return status.Error(codes.PermissionDenied, err.Error())
 		}
 		return nil
@@ -324,7 +324,7 @@ func AuthorizeSignCSR(ctx context.Context) error {
 		}
 		return nil
 	}
-	return status.Error(codes.PermissionDenied, issuance.AuthorizeSignCSR(nil).Error())
+	return status.Error(codes.PermissionDenied, issuance.AuthorizeSignCSR(ctx, nil).Error())
 }
 
 // GetCertificate retrieves a certificate by serial number or common name.

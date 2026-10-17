@@ -18,6 +18,7 @@ package iam
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
@@ -47,11 +48,21 @@ type RESTAdapter struct {
 
 // NewRESTAdapter creates a new REST adapter
 func NewRESTAdapter() *RESTAdapter {
+	return newRESTAdapter(helpers.TLSConfigOrInsecure())
+}
+
+// NewTenantRESTAdapter is NewRESTAdapter acting as the caller bound to
+// helpers.ForeignTenantID.
+func NewTenantRESTAdapter() *RESTAdapter {
+	return newRESTAdapter(helpers.TenantTLSConfig())
+}
+
+func newRESTAdapter(tlsConfig *tls.Config) *RESTAdapter {
 	return &RESTAdapter{
 		endpoint: GetRESTEndpoint(),
 		client: &http.Client{
 			Transport: &http.Transport{
-				TLSClientConfig: helpers.TLSConfigOrInsecure(),
+				TLSClientConfig: tlsConfig,
 			},
 		},
 	}
@@ -143,7 +154,18 @@ func (a *RESTAdapter) doRequest(ctx context.Context, method, path string, body i
 		}
 	}
 
-	return respBody, nil
+	// Every v1 IAM handler writes its reply inside the response envelope;
+	// the callers decode the entity it carries.
+	payload, err := helpers.RESTPayload(respBody)
+	if err != nil {
+		return nil, &RESTAdapterError{
+			Operation:  method + " " + path,
+			StatusCode: resp.StatusCode,
+			Message:    err.Error(),
+			Body:       string(respBody),
+		}
+	}
+	return payload, nil
 }
 
 // userResponse represents the REST API user response structure

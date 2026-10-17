@@ -44,14 +44,15 @@ Examples:
     --key /path/to/key.pem \
     --cert /path/to/cert.pem \
     --input unsigned.efi \
-    --output signed.efi
+    --out signed.efi
 
-  # Sign a Windows executable
+  # Sign a Windows executable and print the result as JSON
   platformctl authenticode sign \
     --key signing-key.pem \
     --cert signing-cert.pem \
     --input app.exe \
-    --output app-signed.exe`,
+    --out app-signed.exe \
+    -o json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := getFlags()
 			return runSign(cmd.Context(), flags, keyPath, certPath, input, output)
@@ -61,12 +62,14 @@ Examples:
 	cmd.Flags().StringVar(&keyPath, "key", "", "path to signing private key (PEM)")
 	cmd.Flags().StringVar(&certPath, "cert", "", "path to signing certificate (PEM)")
 	cmd.Flags().StringVar(&input, "input", "", "path to input PE/COFF file")
-	cmd.Flags().StringVar(&output, "output", "", "path to output signed file")
+	// --out, not --output: a local --output would shadow the persistent
+	// --output/-o format flag and make `-o json` an unknown flag here.
+	cmd.Flags().StringVar(&output, "out", "", "path to output signed file")
 
 	cli.MarkFlagsRequired(cmd, "key")
 	cli.MarkFlagsRequired(cmd, "cert")
 	cli.MarkFlagsRequired(cmd, "input")
-	cli.MarkFlagsRequired(cmd, "output")
+	cli.MarkFlagsRequired(cmd, "out")
 
 	return cmd
 }

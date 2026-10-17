@@ -76,11 +76,19 @@ func TestDNSRecordWireToProto_Nil(t *testing.T) {
 
 func TestDNSListRecordsResponseFromProto(t *testing.T) {
 	arms := daemonRecordArms()
-	wire := dnsListRecordsResponseFromProto(&platformv1.ListRecordsResponse{Records: arms})
+	wire := dnsListRecordsResponseFromProto(&platformv1.ListRecordsResponse{
+		Records: arms,
+		Total:   uint64(len(arms)) + 7,
+		Limit:   uint32(len(arms)),
+		Offset:  7,
+	})
 	require.Len(t, wire.Records, len(arms))
 	for i, want := range arms {
 		assert.True(t, proto.Equal(wire.Records[i].toProto(), want))
 	}
+	assert.Equal(t, uint64(len(arms))+7, wire.Total, "total crosses QUIC so the caller pages by it")
+	assert.Equal(t, uint32(len(arms)), wire.Limit)
+	assert.Equal(t, uint32(7), wire.Offset)
 
 	// Nil / empty input yields an empty (non-panicking) wire.
 	empty := dnsListRecordsResponseFromProto(&platformv1.ListRecordsResponse{})

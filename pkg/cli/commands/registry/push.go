@@ -89,7 +89,6 @@ Overwrite:
 // tenant signer when sign=true; overwrite=true replaces an existing tag.
 func runPush(flags *cli.CommonFlags, ref string, encrypt bool, keyID string, sign bool, signingKeyID string, overwrite bool, inputFile string) error {
 	_ = signingKeyID
-	_ = overwrite
 	if err := validateImageRef(ref); err != nil {
 		return err
 	}
@@ -137,6 +136,9 @@ func runPush(flags *cli.CommonFlags, ref string, encrypt bool, keyID string, sig
 
 	// Send metadata first using SDK helpers
 	metadata := regsvc.NewPushMetadata(repository, tag, fileSize)
+	if overwrite {
+		metadata = regsvc.WithOverwrite(metadata)
+	}
 	metadataReq := regsvc.NewPushMetadataRequest(metadata)
 	if err := stream.Send(metadataReq); err != nil {
 		return ErrPushFailed{Reference: ref, Err: err}

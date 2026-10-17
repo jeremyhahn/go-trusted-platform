@@ -43,6 +43,10 @@ const (
 	DeviceService_BootCertificate_FullMethodName              = "/platform.v1.DeviceService/BootCertificate"
 	DeviceService_BootDelivery_FullMethodName                 = "/platform.v1.DeviceService/BootDelivery"
 	DeviceService_CreateTemplate_FullMethodName               = "/platform.v1.DeviceService/CreateTemplate"
+	DeviceService_GetTemplate_FullMethodName                  = "/platform.v1.DeviceService/GetTemplate"
+	DeviceService_ListTemplates_FullMethodName                = "/platform.v1.DeviceService/ListTemplates"
+	DeviceService_UpdateTemplate_FullMethodName               = "/platform.v1.DeviceService/UpdateTemplate"
+	DeviceService_DeleteTemplate_FullMethodName               = "/platform.v1.DeviceService/DeleteTemplate"
 	DeviceService_CreateProfileFromTemplate_FullMethodName    = "/platform.v1.DeviceService/CreateProfileFromTemplate"
 	DeviceService_FindConfigForDevice_FullMethodName          = "/platform.v1.DeviceService/FindConfigForDevice"
 	DeviceService_AssignProfileToDevice_FullMethodName        = "/platform.v1.DeviceService/AssignProfileToDevice"
@@ -130,12 +134,16 @@ type DeviceServiceClient interface {
 	BootDelivery(ctx context.Context, in *BootDeliveryRequest, opts ...grpc.CallOption) (*BootDeliveryResponse, error)
 	// Template operations. CreateTemplate stores a device template — the
 	// blueprint CreateProfileFromTemplate turns into a profile. It is not a
-	// vTPM template (VTPMService.CreateTemplate). The remaining template
-	// reads and writes (get, update, delete, list) stay on the REST surface
-	// (pkg/webservice/v1/device/template_handlers.go). Device-template
-	// messages carry a `DeviceTemplate…` prefix so their names cannot
-	// collide with vtpm.proto's template messages.
+	// vTPM template (VTPMService.CreateTemplate). Device-template messages
+	// carry a `DeviceTemplate…` prefix so their names cannot collide with
+	// vtpm.proto's template messages.
 	CreateTemplate(ctx context.Context, in *DeviceTemplateCreateRequest, opts ...grpc.CallOption) (*DeviceTemplateCreateResponse, error)
+	GetTemplate(ctx context.Context, in *DeviceTemplateGetRequest, opts ...grpc.CallOption) (*DeviceTemplateGetResponse, error)
+	ListTemplates(ctx context.Context, in *DeviceTemplateListRequest, opts ...grpc.CallOption) (*DeviceTemplateListResponse, error)
+	// UpdateTemplate replaces the stored template whose id the request
+	// carries; it fails NOT_FOUND when no template has that id.
+	UpdateTemplate(ctx context.Context, in *DeviceTemplateUpdateRequest, opts ...grpc.CallOption) (*DeviceTemplateUpdateResponse, error)
+	DeleteTemplate(ctx context.Context, in *DeviceTemplateDeleteRequest, opts ...grpc.CallOption) (*DeviceTemplateDeleteResponse, error)
 	CreateProfileFromTemplate(ctx context.Context, in *CreateProfileFromTemplateRequest, opts ...grpc.CallOption) (*CreateProfileResponse, error)
 	// Profile lookup by device identity
 	FindConfigForDevice(ctx context.Context, in *FindConfigForDeviceRequest, opts ...grpc.CallOption) (*FindConfigForDeviceResponse, error)
@@ -392,6 +400,46 @@ func (c *deviceServiceClient) CreateTemplate(ctx context.Context, in *DeviceTemp
 	return out, nil
 }
 
+func (c *deviceServiceClient) GetTemplate(ctx context.Context, in *DeviceTemplateGetRequest, opts ...grpc.CallOption) (*DeviceTemplateGetResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeviceTemplateGetResponse)
+	err := c.cc.Invoke(ctx, DeviceService_GetTemplate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *deviceServiceClient) ListTemplates(ctx context.Context, in *DeviceTemplateListRequest, opts ...grpc.CallOption) (*DeviceTemplateListResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeviceTemplateListResponse)
+	err := c.cc.Invoke(ctx, DeviceService_ListTemplates_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *deviceServiceClient) UpdateTemplate(ctx context.Context, in *DeviceTemplateUpdateRequest, opts ...grpc.CallOption) (*DeviceTemplateUpdateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeviceTemplateUpdateResponse)
+	err := c.cc.Invoke(ctx, DeviceService_UpdateTemplate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *deviceServiceClient) DeleteTemplate(ctx context.Context, in *DeviceTemplateDeleteRequest, opts ...grpc.CallOption) (*DeviceTemplateDeleteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeviceTemplateDeleteResponse)
+	err := c.cc.Invoke(ctx, DeviceService_DeleteTemplate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *deviceServiceClient) CreateProfileFromTemplate(ctx context.Context, in *CreateProfileFromTemplateRequest, opts ...grpc.CallOption) (*CreateProfileResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateProfileResponse)
@@ -513,12 +561,16 @@ type DeviceServiceServer interface {
 	BootDelivery(context.Context, *BootDeliveryRequest) (*BootDeliveryResponse, error)
 	// Template operations. CreateTemplate stores a device template — the
 	// blueprint CreateProfileFromTemplate turns into a profile. It is not a
-	// vTPM template (VTPMService.CreateTemplate). The remaining template
-	// reads and writes (get, update, delete, list) stay on the REST surface
-	// (pkg/webservice/v1/device/template_handlers.go). Device-template
-	// messages carry a `DeviceTemplate…` prefix so their names cannot
-	// collide with vtpm.proto's template messages.
+	// vTPM template (VTPMService.CreateTemplate). Device-template messages
+	// carry a `DeviceTemplate…` prefix so their names cannot collide with
+	// vtpm.proto's template messages.
 	CreateTemplate(context.Context, *DeviceTemplateCreateRequest) (*DeviceTemplateCreateResponse, error)
+	GetTemplate(context.Context, *DeviceTemplateGetRequest) (*DeviceTemplateGetResponse, error)
+	ListTemplates(context.Context, *DeviceTemplateListRequest) (*DeviceTemplateListResponse, error)
+	// UpdateTemplate replaces the stored template whose id the request
+	// carries; it fails NOT_FOUND when no template has that id.
+	UpdateTemplate(context.Context, *DeviceTemplateUpdateRequest) (*DeviceTemplateUpdateResponse, error)
+	DeleteTemplate(context.Context, *DeviceTemplateDeleteRequest) (*DeviceTemplateDeleteResponse, error)
 	CreateProfileFromTemplate(context.Context, *CreateProfileFromTemplateRequest) (*CreateProfileResponse, error)
 	// Profile lookup by device identity
 	FindConfigForDevice(context.Context, *FindConfigForDeviceRequest) (*FindConfigForDeviceResponse, error)
@@ -606,6 +658,18 @@ func (UnimplementedDeviceServiceServer) BootDelivery(context.Context, *BootDeliv
 }
 func (UnimplementedDeviceServiceServer) CreateTemplate(context.Context, *DeviceTemplateCreateRequest) (*DeviceTemplateCreateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateTemplate not implemented")
+}
+func (UnimplementedDeviceServiceServer) GetTemplate(context.Context, *DeviceTemplateGetRequest) (*DeviceTemplateGetResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetTemplate not implemented")
+}
+func (UnimplementedDeviceServiceServer) ListTemplates(context.Context, *DeviceTemplateListRequest) (*DeviceTemplateListResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListTemplates not implemented")
+}
+func (UnimplementedDeviceServiceServer) UpdateTemplate(context.Context, *DeviceTemplateUpdateRequest) (*DeviceTemplateUpdateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateTemplate not implemented")
+}
+func (UnimplementedDeviceServiceServer) DeleteTemplate(context.Context, *DeviceTemplateDeleteRequest) (*DeviceTemplateDeleteResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteTemplate not implemented")
 }
 func (UnimplementedDeviceServiceServer) CreateProfileFromTemplate(context.Context, *CreateProfileFromTemplateRequest) (*CreateProfileResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateProfileFromTemplate not implemented")
@@ -1072,6 +1136,78 @@ func _DeviceService_CreateTemplate_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DeviceService_GetTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeviceTemplateGetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeviceServiceServer).GetTemplate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeviceService_GetTemplate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeviceServiceServer).GetTemplate(ctx, req.(*DeviceTemplateGetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DeviceService_ListTemplates_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeviceTemplateListRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeviceServiceServer).ListTemplates(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeviceService_ListTemplates_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeviceServiceServer).ListTemplates(ctx, req.(*DeviceTemplateListRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DeviceService_UpdateTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeviceTemplateUpdateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeviceServiceServer).UpdateTemplate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeviceService_UpdateTemplate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeviceServiceServer).UpdateTemplate(ctx, req.(*DeviceTemplateUpdateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DeviceService_DeleteTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeviceTemplateDeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeviceServiceServer).DeleteTemplate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeviceService_DeleteTemplate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeviceServiceServer).DeleteTemplate(ctx, req.(*DeviceTemplateDeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _DeviceService_CreateProfileFromTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateProfileFromTemplateRequest)
 	if err := dec(in); err != nil {
@@ -1246,6 +1382,22 @@ var DeviceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateTemplate",
 			Handler:    _DeviceService_CreateTemplate_Handler,
+		},
+		{
+			MethodName: "GetTemplate",
+			Handler:    _DeviceService_GetTemplate_Handler,
+		},
+		{
+			MethodName: "ListTemplates",
+			Handler:    _DeviceService_ListTemplates_Handler,
+		},
+		{
+			MethodName: "UpdateTemplate",
+			Handler:    _DeviceService_UpdateTemplate_Handler,
+		},
+		{
+			MethodName: "DeleteTemplate",
+			Handler:    _DeviceService_DeleteTemplate_Handler,
 		},
 		{
 			MethodName: "CreateProfileFromTemplate",

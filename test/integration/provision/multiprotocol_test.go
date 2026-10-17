@@ -27,9 +27,9 @@
 // and PRESTAGED with a synthetic hardware EK certificate) through the
 // platform's own gRPC surfaces, then asserts the EK-bound matched-profile
 // delivery contract (delivered with content equality; mismatched presented
-// certificates rejected by the typed EK-binding gate), the pending ->
-// fulfill -> poll -> delivered transition with config-content equality,
-// and the EK-bound SignDigest contract (signed, or the typed
+// certificates rejected by the typed EK-binding gate), the refusal of the
+// profile-bound credential for an identity that resolves to no profile
+// (no pending session is opened), and the EK-bound SignDigest contract (signed, or the typed
 // signer-unavailable when no CP DB key signer is wired) on every
 // transport.
 //
@@ -383,9 +383,9 @@ func runPreEnrollmentScenario(t *testing.T, ctx context.Context, cmd ProvisionCo
 		if sessionID == "" {
 			// EAB is enforced, so the deliberately unknown credential is
 			// rejected before a session can be created — that rejection IS
-			// the authentication contract exercised here. The end-to-end
-			// pending-session lifecycle with real (seeded) EAB credentials
-			// is covered by TestProvisionDeliveredConfigLifecycle.
+			// the authentication contract exercised here. A seeded,
+			// profile-bound credential cannot open one either: that
+			// refusal is asserted by TestProvisionDeliveredConfigLifecycle.
 			t.Log("EAB enforced: pending-session lifecycle exercised via error-path coverage only")
 			return
 		}
@@ -551,7 +551,9 @@ func TestProvisionDeliveredConfigLifecycle(t *testing.T) {
 
 	fixture := seedLifecycleFixture(t, ctx)
 
-	// SDK transports: full pre-enrollment + session lifecycle.
+	// SDK transports only: the CLI has no daemon-transport fetch verb, and a
+	// pending session for it to fulfill cannot be staged while the EAB
+	// service is wired (UnknownDeviceRefused).
 	adapters := []*SDKAdapter{
 		NewRESTAdapter(),
 		NewGRPCAdapter(),
@@ -573,31 +575,12 @@ func TestProvisionDeliveredConfigLifecycle(t *testing.T) {
 			runDeliveredConfigScenario(t, ctx, adapter, fixture)
 		})
 	}
-
-	// CLI: the CLI's daemon-transport surface intentionally starts at
-	// session fulfillment (pre-enrollment fetch verbs are raw-HTTP
-	// install-time flows), so the pending session is staged via the
-	// seeding path and the operator-side fulfill -> poll -> delivered
-	// half of the lifecycle runs through the CLI.
-	t.Run("CLI", func(t *testing.T) {
-		adapter := NewCLIAdapter()
-		if err := adapter.Setup(ctx); err != nil {
-			t.Fatalf("CLI setup failed: %v", err)
-		}
-		t.Cleanup(func() {
-			if err := adapter.Teardown(); err != nil {
-				t.Logf("Warning: CLI teardown error: %v", err)
-			}
-		})
-		sessionID := fixture.createPendingSession(t, ctx)
-		runFulfillToDelivered(t, ctx, adapter, fixture, sessionID)
-	})
 }
 
 // runDeliveredConfigScenario drives the delivered-config coverage on a
-// single SDK transport: the matched-profile FetchConfig contract, the full
-// pending -> fulfill -> poll -> delivered lifecycle with a REAL profile, and
-// the SignDigest authentication gates. Every subtest consumes its own
+// single SDK transport: the matched-profile FetchConfig contract, the
+// refusal of the profile-bound credential for an unknown device, and the
+// SignDigest authentication gates. Every subtest consumes its own
 // single-use nonce.
 func runDeliveredConfigScenario(t *testing.T, ctx context.Context, cmd ProvisionCommands, fixture *lifecycleFixture) {
 	t.Helper()
@@ -659,28 +642,34 @@ func runDeliveredConfigScenario(t *testing.T, ctx context.Context, cmd Provision
 		}
 	})
 
-	t.Run("PendingFulfillPollDelivered", func(t *testing.T) {
-		// Valid EAB + an UNKNOWN device identity creates a pending
-		// session; fulfilling it with the REAL seeded profile then
-		// delivers that profile's config on poll.
+	t.Run("UnknownDeviceRefused", func(t *testing.T) {
+		// A credential names the profile it was issued for, so a device
+		// presenting it under an identity that resolves to no profile is
+		// not that device: it is refused with the typed
+		// ErrEABProfileMismatch and never opens a pending session
+		// (docs/provisioning/config-delivery.md, EAB Credential Binding).
 		callCtx, cancel := context.WithTimeout(ctx, callTimeout)
 		defer cancel()
 
+		ekSerial := uniqueID("provision-mp-unbound")
 		nonce := fetchNonce(t, ctx, cmd)
-		resp, err := cmd.FetchConfig(callCtx,
-			fixture.fetchRequest(uniqueID("provision-mp-delivered"), "", nonce))
-		if err != nil {
-			t.Fatalf("FetchConfig for unknown device with valid EAB failed (want pending): %v", err)
+		resp, err := cmd.FetchConfig(callCtx, fixture.fetchRequest(ekSerial, "", nonce))
+		if err == nil {
+			t.Fatalf("a profile-bound credential must be refused for an unknown device, got: %+v", resp)
 		}
-		pending := resp.GetPending()
-		if pending == nil {
-			t.Fatalf("unknown device must yield a pending session, got: %+v", resp)
-		}
-		if pending.GetSessionId() == "" {
-			t.Fatal("pending response has empty session_id")
+		if !isEABProfileMismatch(err) {
+			t.Fatalf("expected typed EAB profile-binding rejection, got: %v", err)
 		}
 
-		runFulfillToDelivered(t, ctx, cmd, fixture, pending.GetSessionId())
+		sessions, err := cmd.ListSessions(callCtx)
+		if err != nil {
+			t.Fatalf("ListSessions failed: %v", err)
+		}
+		for _, session := range sessions {
+			if session.GetEkSerial() == ekSerial {
+				t.Fatalf("refused fetch opened pending session %s", session.GetId())
+			}
+		}
 	})
 
 	t.Run("SignDigest", func(t *testing.T) {
@@ -756,71 +745,4 @@ func runDeliveredConfigScenario(t *testing.T, ctx context.Context, cmd Provision
 			t.Fatalf("expected signer-unavailable or typed EK-binding rejection, got: %v", err)
 		}
 	})
-}
-
-// runFulfillToDelivered drives a freshly created pending session through the
-// operator-side half of the delivered-config lifecycle on the given
-// transport: poll-pending, fulfill with the REAL seeded profile, session
-// state verification, poll-delivered with config-content equality, and the
-// double-fulfill rejection.
-func runFulfillToDelivered(t *testing.T, ctx context.Context, cmd SessionCommands, fixture *lifecycleFixture, sessionID string) {
-	t.Helper()
-
-	callCtx, cancel := context.WithTimeout(ctx, 2*callTimeout)
-	defer cancel()
-
-	// Unfulfilled session polls as pending.
-	poll, err := cmd.PollSession(callCtx, sessionID)
-	if err != nil {
-		t.Fatalf("PollSession(%s) before fulfillment failed: %v", sessionID, err)
-	}
-	if poll.GetDelivered() != nil {
-		t.Fatal("unfulfilled session must poll as pending, got delivered config")
-	}
-	if status := poll.GetPendingStatus(); status != "pending" {
-		t.Fatalf("pending_status = %q, want %q", status, "pending")
-	}
-
-	// Fulfill with the REAL seeded profile.
-	fulfillResp, err := cmd.FulfillSession(callCtx, sessionID, fixture.profileID)
-	if err != nil {
-		t.Fatalf("FulfillSession(%s, %d) failed: %v", sessionID, fixture.profileID, err)
-	}
-	if fulfillResp.GetStatus() != "fulfilled" {
-		t.Fatalf("fulfill status = %q, want %q", fulfillResp.GetStatus(), "fulfilled")
-	}
-
-	session, err := cmd.GetSession(callCtx, sessionID)
-	if err != nil {
-		t.Fatalf("GetSession(%s) after fulfill failed: %v", sessionID, err)
-	}
-	if !session.GetFulfilled() {
-		t.Fatal("session must be fulfilled after FulfillSession")
-	}
-	if session.GetProfileId() != fixture.profileID {
-		t.Fatalf("session profile_id = %d, want %d", session.GetProfileId(), fixture.profileID)
-	}
-
-	// The fulfilled session delivers the seeded profile's config.
-	poll, err = cmd.PollSession(callCtx, sessionID)
-	if err != nil {
-		t.Fatalf("PollSession(%s) after fulfill failed: %v", sessionID, err)
-	}
-	delivered := poll.GetDelivered()
-	if delivered == nil {
-		t.Fatalf("fulfilled session must deliver a config, got: %+v", poll)
-	}
-	if delivered.GetStatus() != "ok" {
-		t.Fatalf("delivered status = %q, want %q", delivered.GetStatus(), "ok")
-	}
-	if err := assertConfigJSONEqual(delivered.GetConfigJson(), fixture.config); err != nil {
-		t.Fatal(err)
-	}
-
-	// Double-fulfill must still be rejected after delivery.
-	if _, err := cmd.FulfillSession(callCtx, sessionID, fixture.profileID); err == nil {
-		t.Fatal("fulfilling an already-fulfilled session must fail")
-	} else if !isAlreadyFulfilled(err) {
-		t.Fatalf("expected already-fulfilled error, got: %v", err)
-	}
 }

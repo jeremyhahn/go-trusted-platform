@@ -16,14 +16,16 @@
 package iso
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
-	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // =============================================================================
@@ -89,6 +91,34 @@ func (c *CLIAdapter) runCommandWithTimeout(ctx context.Context, timeout time.Dur
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return c.runCommand(timeoutCtx, args...)
+}
+
+// runVerb runs an iso verb and decodes its result from stdout. stderr carries
+// the pkg/iso progress log, so it is kept out of the result and reported only
+// when the verb fails. A verb that prints its result before failing (profile
+// validate on an invalid config) still has it decoded into result.
+func (c *CLIAdapter) runVerb(ctx context.Context, timeout time.Duration, method string, decode func([]byte, any) error, result any, args ...string) error {
+	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(timeoutCtx, c.binaryPath, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+
+	if stdout.Len() > 0 {
+		if err := decode(stdout.Bytes(), result); err != nil {
+			return ErrCallFailed{Protocol: "CLI", Method: method, Err: err}
+		}
+	}
+	if runErr != nil {
+		return ErrCallFailed{Protocol: "CLI", Method: method, Err: ErrVerbFailed{Stderr: stderr.String(), Err: runErr}}
+	}
+	if stdout.Len() == 0 {
+		return ErrCallFailed{Protocol: "CLI", Method: method, Err: ErrVerbFailed{Stderr: "verb printed no result: " + stderr.String()}}
+	}
+	return nil
 }
 
 // =============================================================================
@@ -224,11 +254,6 @@ func (c *CLIAdapter) Download(ctx context.Context, opts DownloadOptions) (*Downl
 	}
 	args = append(args, fmt.Sprintf("--verify=%t", opts.Verify))
 	args = append(args, fmt.Sprintf("--resume=%t", opts.ResumeEnable))
-
-	// Common flags
-	if opts.ConfigFile != "" {
-		args = append(args, "--config", opts.ConfigFile)
-	}
 	if opts.WorkDir != "" {
 		args = append(args, "--work-dir", opts.WorkDir)
 	}
@@ -236,36 +261,11 @@ func (c *CLIAdapter) Download(ctx context.Context, opts DownloadOptions) (*Downl
 		args = append(args, "--debug")
 	}
 
-	// Download can take a while
-	output, err := c.runCommandWithTimeout(ctx, 15*time.Minute, args...)
-	if err != nil {
-		return nil, ErrCallFailed{Protocol: "CLI", Method: "iso download", Err: err}
+	result := &DownloadResult{}
+	if err := c.runVerb(ctx, 15*time.Minute, "iso download", json.Unmarshal, result, args...); err != nil {
+		return nil, err
 	}
-
-	var resp struct {
-		Success   bool   `json:"success"`
-		ISOPath   string `json:"iso_path"`
-		SHA256    string `json:"sha256"`
-		SizeBytes int64  `json:"size_bytes"`
-		Verified  bool   `json:"verified"`
-		Message   string `json:"message"`
-	}
-
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return &DownloadResult{
-			Success: true,
-			Message: string(output),
-		}, nil
-	}
-
-	return &DownloadResult{
-		Success:   resp.Success,
-		ISOPath:   resp.ISOPath,
-		SHA256:    resp.SHA256,
-		SizeBytes: resp.SizeBytes,
-		Verified:  resp.Verified,
-		Message:   resp.Message,
-	}, nil
+	return result, nil
 }
 
 // =============================================================================
@@ -285,11 +285,6 @@ func (c *CLIAdapter) Extract(ctx context.Context, opts ExtractOptions) (*Extract
 	if opts.Force {
 		args = append(args, "--force")
 	}
-
-	// Common flags
-	if opts.ConfigFile != "" {
-		args = append(args, "--config", opts.ConfigFile)
-	}
 	if opts.WorkDir != "" {
 		args = append(args, "--work-dir", opts.WorkDir)
 	}
@@ -297,31 +292,11 @@ func (c *CLIAdapter) Extract(ctx context.Context, opts ExtractOptions) (*Extract
 		args = append(args, "--debug")
 	}
 
-	output, err := c.runCommandWithTimeout(ctx, 10*time.Minute, args...)
-	if err != nil {
-		return nil, ErrCallFailed{Protocol: "CLI", Method: "iso extract", Err: err}
+	result := &ExtractResult{}
+	if err := c.runVerb(ctx, 10*time.Minute, "iso extract", json.Unmarshal, result, args...); err != nil {
+		return nil, err
 	}
-
-	var resp struct {
-		Success   bool   `json:"success"`
-		OutputDir string `json:"output_dir"`
-		FileCount int    `json:"file_count"`
-		Message   string `json:"message"`
-	}
-
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return &ExtractResult{
-			Success: true,
-			Message: string(output),
-		}, nil
-	}
-
-	return &ExtractResult{
-		Success:   resp.Success,
-		OutputDir: resp.OutputDir,
-		FileCount: resp.FileCount,
-		Message:   resp.Message,
-	}, nil
+	return result, nil
 }
 
 // =============================================================================
@@ -344,14 +319,9 @@ func (c *CLIAdapter) Customize(ctx context.Context, opts CustomizeOptions) (*Cus
 	if opts.PlatformdPath != "" {
 		args = append(args, "--platformd-binary", opts.PlatformdPath)
 	}
-	if opts.Autoinstall {
-		args = append(args, "--autoinstall")
+	if opts.PlatformConfig != "" {
+		args = append(args, "--platform-config", opts.PlatformConfig)
 	}
-	if opts.ModifyInitramfs {
-		args = append(args, "--modify-initramfs")
-	}
-
-	// Common flags
 	if opts.ConfigFile != "" {
 		args = append(args, "--config", opts.ConfigFile)
 	}
@@ -362,36 +332,21 @@ func (c *CLIAdapter) Customize(ctx context.Context, opts CustomizeOptions) (*Cus
 		args = append(args, "--debug")
 	}
 
-	output, err := c.runCommandWithTimeout(ctx, 10*time.Minute, args...)
-	if err != nil {
-		return nil, ErrCallFailed{Protocol: "CLI", Method: "iso customize", Err: err}
+	result := &CustomizeResult{}
+	if err := c.runVerb(ctx, 10*time.Minute, "iso customize", json.Unmarshal, result, args...); err != nil {
+		return nil, err
 	}
-
-	var resp struct {
-		Success bool   `json:"success"`
-		Message string `json:"message"`
-	}
-
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return &CustomizeResult{
-			Success: true,
-			Message: string(output),
-		}, nil
-	}
-
-	return &CustomizeResult{
-		Success: resp.Success,
-		Message: resp.Message,
-	}, nil
+	return result, nil
 }
 
 // =============================================================================
 // Build Operations
 // =============================================================================
 
-// Build builds final ISO via CLI.
+// Build builds final ISO via CLI. The verb's --output names the ISO and
+// shadows the global -o, so it prints its result as YAML.
 func (c *CLIAdapter) Build(ctx context.Context, opts BuildOptions) (*BuildResult, error) {
-	args := []string{"iso", "build", "-o", "json"}
+	args := []string{"iso", "build"}
 
 	if opts.SourceDir != "" {
 		args = append(args, "--iso-dir", opts.SourceDir)
@@ -403,45 +358,15 @@ func (c *CLIAdapter) Build(ctx context.Context, opts BuildOptions) (*BuildResult
 		args = append(args, "--label", opts.VolumeID)
 	}
 	args = append(args, fmt.Sprintf("--checksum=%t", opts.GenerateSum))
-
-	// Common flags
-	if opts.ConfigFile != "" {
-		args = append(args, "--config", opts.ConfigFile)
-	}
-	if opts.WorkDir != "" {
-		args = append(args, "--work-dir", opts.WorkDir)
-	}
 	if opts.Debug {
 		args = append(args, "--debug")
 	}
 
-	output, err := c.runCommandWithTimeout(ctx, 15*time.Minute, args...)
-	if err != nil {
-		return nil, ErrCallFailed{Protocol: "CLI", Method: "iso build", Err: err}
+	result := &BuildResult{}
+	if err := c.runVerb(ctx, 15*time.Minute, "iso build", yaml.Unmarshal, result, args...); err != nil {
+		return nil, err
 	}
-
-	var resp struct {
-		Success   bool   `json:"success"`
-		OutputISO string `json:"output_iso"`
-		SHA256    string `json:"sha256"`
-		SizeBytes int64  `json:"size_bytes"`
-		Message   string `json:"message"`
-	}
-
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return &BuildResult{
-			Success: true,
-			Message: string(output),
-		}, nil
-	}
-
-	return &BuildResult{
-		Success:   resp.Success,
-		OutputISO: resp.OutputISO,
-		SHA256:    resp.SHA256,
-		SizeBytes: resp.SizeBytes,
-		Message:   resp.Message,
-	}, nil
+	return result, nil
 }
 
 // =============================================================================
@@ -450,152 +375,40 @@ func (c *CLIAdapter) Build(ctx context.Context, opts BuildOptions) (*BuildResult
 
 // ProfileList lists available installation profiles via CLI.
 func (c *CLIAdapter) ProfileList(ctx context.Context) (*ProfileListResult, error) {
-	output, err := c.runCommand(ctx, "iso", "profile", "list", "-o", "json")
-	if err != nil {
-		return nil, ErrCallFailed{Protocol: "CLI", Method: "iso profile list", Err: err}
+	result := &ProfileListResult{}
+	if err := c.runVerb(ctx, time.Minute, "iso profile list", json.Unmarshal, result,
+		"iso", "profile", "list", "-o", "json"); err != nil {
+		return nil, err
 	}
-
-	var resp struct {
-		Success  bool `json:"success"`
-		Profiles []struct {
-			Name        string `json:"name"`
-			Description string `json:"description"`
-			SecureBoot  bool   `json:"secure_boot"`
-			TPMUnseal   bool   `json:"tpm_unseal"`
-			LUKS        bool   `json:"luks"`
-			FIPS        bool   `json:"fips"`
-			Lockdown    string `json:"lockdown"`
-		} `json:"profiles"`
-		Message string `json:"message"`
-	}
-
-	if err := json.Unmarshal(output, &resp); err != nil {
-		// Parse text output if not JSON
-		return &ProfileListResult{
-			Success: true,
-			Message: string(output),
-		}, nil
-	}
-
-	profiles := make([]ProfileInfo, 0, len(resp.Profiles))
-	for _, p := range resp.Profiles {
-		profiles = append(profiles, ProfileInfo{
-			Name:        p.Name,
-			Description: p.Description,
-			SecureBoot:  p.SecureBoot,
-			TPMUnseal:   p.TPMUnseal,
-			LUKS:        p.LUKS,
-			FIPS:        p.FIPS,
-			Lockdown:    p.Lockdown,
-		})
-	}
-
-	return &ProfileListResult{
-		Success:  resp.Success,
-		Profiles: profiles,
-		Message:  resp.Message,
-	}, nil
+	return result, nil
 }
 
 // ProfileShow shows a specific profile via CLI.
 func (c *CLIAdapter) ProfileShow(ctx context.Context, name string) (*ProfileShowResult, error) {
-	output, err := c.runCommand(ctx, "iso", "profile", "show", name, "-o", "json")
-	if err != nil {
-		return nil, ErrCallFailed{Protocol: "CLI", Method: "iso profile show", Err: err}
+	result := &ProfileShowResult{}
+	if err := c.runVerb(ctx, time.Minute, "iso profile show", json.Unmarshal, result,
+		"iso", "profile", "show", name, "-o", "json"); err != nil {
+		return nil, err
 	}
-
-	var resp struct {
-		Success bool `json:"success"`
-		Profile struct {
-			Name        string `json:"name"`
-			Description string `json:"description"`
-			SecureBoot  bool   `json:"secure_boot"`
-			TPMUnseal   bool   `json:"tpm_unseal"`
-			LUKS        bool   `json:"luks"`
-			FIPS        bool   `json:"fips"`
-			Lockdown    string `json:"lockdown"`
-		} `json:"profile"`
-		YAML    string `json:"yaml"`
-		Message string `json:"message"`
-	}
-
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return &ProfileShowResult{
-			Success: true,
-			YAML:    string(output),
-		}, nil
-	}
-
-	return &ProfileShowResult{
-		Success: resp.Success,
-		Profile: &ProfileInfo{
-			Name:        resp.Profile.Name,
-			Description: resp.Profile.Description,
-			SecureBoot:  resp.Profile.SecureBoot,
-			TPMUnseal:   resp.Profile.TPMUnseal,
-			LUKS:        resp.Profile.LUKS,
-			FIPS:        resp.Profile.FIPS,
-			Lockdown:    resp.Profile.Lockdown,
-		},
-		YAML:    resp.YAML,
-		Message: resp.Message,
-	}, nil
+	return result, nil
 }
 
-// ProfileValidate validates a configuration file via CLI.
+// ProfileValidate validates a configuration file via CLI. An invalid config
+// exits non-zero after printing valid=false and its errors; that result is
+// returned together with the error.
 func (c *CLIAdapter) ProfileValidate(ctx context.Context, path string) (*ProfileValidateResult, error) {
-	output, err := c.runCommand(ctx, "iso", "profile", "validate", path, "-o", "json")
-	if err != nil {
-		// Validation errors should still return a result, not an error
-		var resp struct {
-			Success  bool     `json:"success"`
-			Valid    bool     `json:"valid"`
-			Errors   []string `json:"errors"`
-			Warnings []string `json:"warnings"`
-			Message  string   `json:"message"`
-		}
-		if jsonErr := json.Unmarshal(output, &resp); jsonErr == nil {
-			return &ProfileValidateResult{
-				Success:  resp.Success,
-				Valid:    resp.Valid,
-				Errors:   resp.Errors,
-				Warnings: resp.Warnings,
-				Message:  resp.Message,
-			}, nil
-		}
-		return nil, ErrCallFailed{Protocol: "CLI", Method: "iso profile validate", Err: err}
+	result := &ProfileValidateResult{}
+	if err := c.runVerb(ctx, time.Minute, "iso profile validate", json.Unmarshal, result,
+		"iso", "profile", "validate", path, "-o", "json"); err != nil {
+		return result, err
 	}
-
-	var resp struct {
-		Success  bool     `json:"success"`
-		Valid    bool     `json:"valid"`
-		Errors   []string `json:"errors"`
-		Warnings []string `json:"warnings"`
-		Message  string   `json:"message"`
-	}
-
-	if err := json.Unmarshal(output, &resp); err != nil {
-		// If output contains "valid" assume success
-		valid := strings.Contains(strings.ToLower(string(output)), "valid")
-		return &ProfileValidateResult{
-			Success: true,
-			Valid:   valid,
-			Message: string(output),
-		}, nil
-	}
-
-	return &ProfileValidateResult{
-		Success:  resp.Success,
-		Valid:    resp.Valid,
-		Errors:   resp.Errors,
-		Warnings: resp.Warnings,
-		Message:  resp.Message,
-	}, nil
+	return result, nil
 }
 
-// ProfileGenerate generates a configuration file via CLI.
+// ProfileGenerate generates a configuration file via CLI. The verb's --output
+// names the config file and shadows the global -o, so it prints YAML.
 func (c *CLIAdapter) ProfileGenerate(ctx context.Context, opts ProfileGenerateOptions) (*ProfileGenerateResult, error) {
-	args := []string{"iso", "profile", "generate", "-o", "json"}
+	args := []string{"iso", "profile", "generate"}
 
 	if opts.ProfileName != "" {
 		args = append(args, "--profile", opts.ProfileName)
@@ -606,35 +419,12 @@ func (c *CLIAdapter) ProfileGenerate(ctx context.Context, opts ProfileGenerateOp
 	if opts.OverrideDevice != "" {
 		args = append(args, "--device", opts.OverrideDevice)
 	}
-	if opts.Interactive {
-		args = append(args, "--interactive")
-	}
 
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, ErrCallFailed{Protocol: "CLI", Method: "iso profile generate", Err: err}
+	result := &ProfileGenerateResult{}
+	if err := c.runVerb(ctx, time.Minute, "iso profile generate", yaml.Unmarshal, result, args...); err != nil {
+		return nil, err
 	}
-
-	var resp struct {
-		Success    bool   `json:"success"`
-		OutputFile string `json:"output_file"`
-		YAML       string `json:"yaml"`
-		Message    string `json:"message"`
-	}
-
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return &ProfileGenerateResult{
-			Success: true,
-			YAML:    string(output),
-		}, nil
-	}
-
-	return &ProfileGenerateResult{
-		Success:    resp.Success,
-		OutputFile: resp.OutputFile,
-		YAML:       resp.YAML,
-		Message:    resp.Message,
-	}, nil
+	return result, nil
 }
 
 // =============================================================================

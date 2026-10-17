@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 )
 
 // ErrNotFound is returned when an entity is not found in the database.
@@ -27,6 +29,12 @@ type ErrNotFound struct {
 
 func (e ErrNotFound) Error() string {
 	return fmt.Sprintf("entity not found: type=%s, id=%d", e.EntityType, e.ID)
+}
+
+// Is reports the error as datastore.ErrRecordNotFound, the miss every
+// datastore Get returns, so a caller classifies it without knowing the store.
+func (e ErrNotFound) Is(target error) bool {
+	return target == datastore.ErrRecordNotFound
 }
 
 // ErrNotFoundByIndex is returned when an entity is not found by index lookup.
@@ -40,6 +48,11 @@ func (e ErrNotFoundByIndex) Error() string {
 	return fmt.Sprintf("entity not found by index: type=%s, %s=%s", e.EntityType, e.IndexField, e.Value)
 }
 
+// Is reports the error as datastore.ErrRecordNotFound, as ErrNotFound does.
+func (e ErrNotFoundByIndex) Is(target error) bool {
+	return target == datastore.ErrRecordNotFound
+}
+
 // ErrInvalidConfig is returned when configuration validation fails.
 type ErrInvalidConfig struct {
 	Field  string
@@ -48,6 +61,18 @@ type ErrInvalidConfig struct {
 
 func (e ErrInvalidConfig) Error() string {
 	return fmt.Sprintf("invalid configuration: %s: %s", e.Field, e.Reason)
+}
+
+// ErrVectorUnavailable is returned by every Vector call when the embedded
+// server serves no vector service, instead of the transport's bare
+// "unimplemented". Reason says whether the build lacks the service or the
+// configuration leaves it disabled.
+type ErrVectorUnavailable struct {
+	Reason string
+}
+
+func (e ErrVectorUnavailable) Error() string {
+	return fmt.Sprintf("vector service unavailable: %s", e.Reason)
 }
 
 // ErrInvalidTransport is returned when an invalid transport string is provided.

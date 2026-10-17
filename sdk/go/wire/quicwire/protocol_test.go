@@ -799,7 +799,6 @@ func TestOpcodeToString(t *testing.T) {
 		{OpAttestVerify, "AttestVerify"},
 		{OpAttestCollectHost, "AttestCollectHost"},
 		{OpAttestGetAK, "AttestGetAK"},
-		{OpAttestChallenge, "AttestChallenge"},
 		{OpAttestPollVerdicts, "AttestPollVerdicts"},
 		{OpAttestGetReport, "AttestGetReport"},
 		{OpAttestGetPCRs, "AttestGetPCRs"},
@@ -839,9 +838,10 @@ func TestOpcodeToString(t *testing.T) {
 }
 
 // TestOpcodeToString_RetiredBytes pins the DNS and device bytes retired
-// unimplemented in #317: none of them names an operation any more.
+// unimplemented in #317, and the attestation challenge byte 0x74 retired in
+// #949: none of them names an operation any more.
 func TestOpcodeToString_RetiredBytes(t *testing.T) {
-	for _, opcode := range []byte{0x2B, 0x2D, 0x3C, 0x3E} {
+	for _, opcode := range []byte{0x2B, 0x2D, 0x3C, 0x3E, 0x74} {
 		want := fmt.Sprintf("Unknown(0x%02X)", opcode)
 		if got := OpcodeToString(opcode); got != want {
 			t.Errorf("OpcodeToString(0x%02X) = %q, want %q", opcode, got, want)

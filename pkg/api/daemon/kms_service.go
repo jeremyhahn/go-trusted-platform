@@ -30,6 +30,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	dbfactory "github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 )
 
 // maxBatchSize is the maximum number of items allowed in a batch operation.
@@ -46,14 +47,25 @@ const maxBatchSize = 100
 // CryptoClient) instead of direct internal package imports, providing a clean
 // abstraction layer and transport-agnostic access to KMS functionality.
 type KMSService struct {
-	app           *app.App
-	logger        *slog.Logger
-	kmsAdapter    *KMSServerAdapter
-	secretsServer *SecretsServerAdapter
-	cryptoServer  *CryptoServerAdapter
-	dekServer     *DEKServerAdapter
-	running       atomic.Bool
-	initialized   atomic.Bool
+	app            *app.App
+	logger         *slog.Logger
+	kmsAdapter     *KMSServerAdapter
+	secretsServer  *SecretsServerAdapter
+	cryptoServer   *CryptoServerAdapter
+	dekServer      *DEKServerAdapter
+	systemTenantID string
+	running        atomic.Bool
+	initialized    atomic.Bool
+}
+
+// SetSystemTenant sets the platform's system tenant on the KMS adapters, so
+// a generate request from any other tenant runs in that tenant's key scope.
+// Call it before the service is registered on any transport.
+func (s *KMSService) SetSystemTenant(tenantID string) {
+	s.systemTenantID = tenantID
+	if s.kmsAdapter != nil {
+		s.kmsAdapter.SetSystemTenant(tenantID)
+	}
 }
 
 // NewKMSService creates a new KMS service that wraps QuicBaaS's KMS functionality.
@@ -96,6 +108,7 @@ func (s *KMSService) initializeServers() error {
 
 	// Create SDK-based server adapters for gRPC service registration
 	s.kmsAdapter = NewKMSServerAdapter(sdkClient.Security().KMS(), s.logger)
+	s.kmsAdapter.SetSystemTenant(s.systemTenantID)
 	s.secretsServer = NewSecretsServerAdapter(sdkClient.Security().Secrets(), s.logger)
 	s.cryptoServer = NewCryptoServerAdapter(sdkClient.Security().Crypto(), s.logger)
 	s.dekServer = NewDEKServerAdapter(sdkClient.Security().DEK(), s.logger)
@@ -186,8 +199,15 @@ func (s *KMSService) DEKServer() *DEKServerAdapter {
 // This adapter translates gRPC protobuf requests to SDK client calls.
 type KMSServerAdapter struct {
 	pb.UnimplementedKeyManagementServer
-	client quicbaas.KMSClient
-	logger *slog.Logger
+	client         quicbaas.KMSClient
+	logger         *slog.Logger
+	systemTenantID string
+}
+
+// SetSystemTenant sets the platform's system tenant, which decides whether a
+// generate request runs in the system or a tenant key scope.
+func (a *KMSServerAdapter) SetSystemTenant(tenantID string) {
+	a.systemTenantID = tenantID
 }
 
 // NewKMSServerAdapter creates a new KMS server adapter wrapping the SDK client.
@@ -204,19 +224,22 @@ func (a *KMSServerAdapter) GenerateKey(ctx context.Context, req *pb.GenerateKeyR
 		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
 	}
 
-	// Extract algorithm and usage from KeySpec
-	var algorithm kms.KeyAlgorithm
-	var usage []kms.KeyUsage
-
-	if req.GetKeySpec() != nil {
-		algorithm = pbAlgorithmToSDK(req.GetKeySpec().GetAlgorithm())
-		usage = pbUsagesToSDK(req.GetKeySpec().GetUsage())
+	// The go-quicbaas GenerateKeyRequest carries no display name (go-quicbaas
+	// v0.12.0-alpha api/proto/kms.proto:569), so this surface records none.
+	const displayName = ""
+	tenantScoped, err := tenantScopedKeyGeneration(ctx, a.systemTenantID, req.GetName(), displayName, req.GetDescription(), req.GetTags())
+	if err != nil {
+		return nil, err
 	}
 
+	// The generate request's name is the key ID (docs/kms/api.md §2).
+	spec := req.GetKeySpec()
 	sdkReq := &kms.GenerateKeyRequest{
-		Name:      req.GetName(),
-		Algorithm: algorithm,
-		Usage:     usage,
+		Name:               req.GetName(),
+		Algorithm:          pbAlgorithmToSDK(spec.GetAlgorithm()),
+		Usage:              pbUsagesToSDK(spec.GetUsage()),
+		Exportable:         spec.GetExportable(),
+		DeletionProtection: spec.GetDeletionProtection(),
 	}
 
 	resp, err := a.client.GenerateKey(ctx, sdkReq)
@@ -224,12 +247,90 @@ func (a *KMSServerAdapter) GenerateKey(ctx context.Context, req *pb.GenerateKeyR
 		return nil, status.Errorf(errclass.Code(err), "key generation failed: %v", err)
 	}
 
+	meta, err := recordGeneratedKeyMetadata(ctx, a.client, tenantScoped, resp, displayName, req.GetDescription(), req.GetTags())
+	if err != nil {
+		return nil, err
+	}
+
 	return &pb.GenerateKeyResponse{
 		Key: &pb.KeyHandle{
-			KeyId:   resp.KeyID,
-			Version: uint64(resp.Version),
+			KeyId:     resp.KeyID,
+			Version:   uint64(resp.Version),
+			Algorithm: sdkAlgorithmToPb(resp.Algorithm),
 		},
+		Metadata:  sdkKeyMetadataToPb(meta),
+		Timestamp: time.Now().Unix(),
 	}, nil
+}
+
+// tenantScopedKeyGeneration reports whether a generate request runs in a
+// non-system tenant's key scope, and refuses one that carries a display name,
+// a description or tags there. It runs before the key is generated, so a refused request
+// leaves no key behind. The scope is the tenant the platform resolves for
+// the caller (callerTenant): an unbound caller or the system tenant is the
+// system scope.
+//
+// SDK gap (go-quicbaas v0.12.0-alpha): GenerateKey stores a tenant's key as
+// tenant/<tenant>/<name> (pkg/service/kms.go:446), but GetKeyMetadata
+// (pkg/service/kms.go:1266) and UpdateKeyMetadata (pkg/service/kms.go:1302)
+// look the name up unscoped, so in a tenant scope they miss the key or reach
+// a same-named system key. The tenant setter those lookups would need,
+// go-quicbaas iam.ContextWithTenant, is not re-exported under quicbaas/sdk/go
+// (sdk/go/transport.ContextWithTenant sets a different key). A tenant-scope
+// generate therefore makes no metadata call at all.
+func tenantScopedKeyGeneration(ctx context.Context, systemTenantID, name, displayName, description string, tags map[string]string) (bool, error) {
+	caller, bound := callerTenant(ctx)
+	if !bound || tenant.IsSystemTenant(systemTenantID, caller) {
+		return false, nil
+	}
+	if displayName != "" || description != "" || len(tags) > 0 {
+		return true, ErrKMSTenantKeyMetadataUnsupported{TenantID: caller, KeyID: name}
+	}
+	return true, nil
+}
+
+// recordGeneratedKeyMetadata returns the metadata of the key just generated.
+// In a tenant scope it is the metadata the generate response itself carries
+// (see tenantScopedKeyGeneration for why no metadata call is made there).
+// Otherwise the request's display name, description and tags are applied to
+// the key and the metadata the KMS recorded is returned: the SDK
+// GenerateKeyRequest has no field for them (its name is the key ID), so they
+// travel as a metadata update; with none of them,
+// the metadata is read back as it stands. The SDK has no field for a key
+// owner at all: the owner returned is the one the KMS recorded, never the
+// requested one.
+func recordGeneratedKeyMetadata(ctx context.Context, client quicbaas.KMSClient, tenantScoped bool, generated *kms.GenerateKeyResponse, displayName, description string, tags map[string]string) (*kms.KeyMetadataResponse, error) {
+	if tenantScoped {
+		return &kms.KeyMetadataResponse{
+			KeyID:              generated.KeyID,
+			Name:               generated.KeyID,
+			Algorithm:          generated.Algorithm,
+			Version:            generated.Version,
+			Exportable:         generated.Exportable,
+			DeletionProtection: generated.DeletionProtection,
+		}, nil
+	}
+
+	keyID := generated.KeyID
+	var meta *kms.KeyMetadataResponse
+	var err error
+	if displayName == "" && description == "" && len(tags) == 0 {
+		meta, err = client.GetKeyMetadata(ctx, keyID)
+	} else {
+		meta, err = client.UpdateKeyMetadata(ctx, &kms.UpdateKeyMetadataRequest{
+			KeyID:       keyID,
+			Name:        displayName,
+			Description: description,
+			Tags:        tags,
+		})
+	}
+	if err != nil {
+		return nil, ErrKMSGeneratedKeyMetadata{KeyID: keyID, Err: err}
+	}
+	if meta == nil {
+		return nil, ErrKMSGeneratedKeyMetadata{KeyID: keyID, Err: ErrKMSNilMetadata{}}
+	}
+	return meta, nil
 }
 
 // GetKey implements pb.KeyManagementServer.GetKey.

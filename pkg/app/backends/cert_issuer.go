@@ -28,6 +28,7 @@ import (
 	certclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/certificate"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 )
 
@@ -82,10 +83,15 @@ func PlatformCertIssuer(ca quicbaasca.CACertificateAuthority, client quicbaassdk
 // AdminCertificateRequest is the request for the platform's root admin
 // client certificate. The /init admin bundle and the integration harness
 // bundle share it so both paths mint the same identity.
+//
+// The Organization is the system tenant: every mTLS transport binds a
+// verified client certificate to the tenant its subject O names
+// (pkg/auth/mtls.go), and the root admin acts as the system tenant, the
+// only tenant that may act across tenants.
 func AdminCertificateRequest() *certclient.IssueCertificateRequest {
 	return &certclient.IssueCertificateRequest{
 		CommonName:   common.AdminUsername,
-		Organization: "Trusted Platform",
+		Organization: app.SystemTenantID,
 		Usage:        "client",
 		KeyAlgorithm: "ecdsa",
 		ValidityDays: 365,

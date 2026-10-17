@@ -318,6 +318,11 @@ func (s *DNSServiceServer) UpdateRecord(ctx context.Context, req *platformv1.Upd
 	if req.GetOldRecord() == nil || req.GetNewRecord() == nil {
 		return nil, status.Error(codes.InvalidArgument, "old and new records are required")
 	}
+	// The new record is checked before the old one is removed, so a refused
+	// update leaves the zone as it was.
+	if err := validateProtoRecord(req.GetNewRecord()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 
 	zone, err := s.service.Zone(ctx, req.GetZoneName())
 	if err != nil {
@@ -325,8 +330,14 @@ func (s *DNSServiceServer) UpdateRecord(ctx context.Context, req *platformv1.Upd
 		return nil, status.Error(codes.NotFound, err.Error())
 	}
 
-	// Delete old record
-	s.deleteRecordFromZone(zone, req.GetOldRecord().GetType(), s.getRecordName(req.GetOldRecord()))
+	// An update replaces a record the zone holds; it never creates one.
+	oldType := req.GetOldRecord().GetType()
+	oldName := s.getRecordName(req.GetOldRecord())
+	if !s.zoneHasRecord(zone, oldType, oldName) {
+		return nil, ErrDNSRecordNotFound{Name: oldName, RecordType: resolveRecordType(oldType)}.GRPCStatus().Err()
+	}
+
+	s.deleteRecordFromZone(zone, oldType, oldName)
 
 	// Add new record
 	if err := s.addRecordToZone(zone, req.GetNewRecord()); err != nil {
@@ -364,9 +375,14 @@ func (s *DNSServiceServer) ListRecords(ctx context.Context, req *platformv1.List
 	}
 
 	records := s.extractRecords(&zone.RecordSet, req.GetType())
+	paged := req.Limit != nil || req.Offset != nil
+	page := dns.NewPage(len(records), int(req.GetLimit()), int(req.GetOffset()), paged)
 
 	return &platformv1.ListRecordsResponse{
-		Records: records,
+		Records: records[page.Start:page.End],
+		Total:   uint64(len(records)),
+		Limit:   uint32(page.Limit),
+		Offset:  uint32(page.Offset),
 	}, nil
 }
 
@@ -680,6 +696,9 @@ func (s *DNSServiceServer) recordSetToProto(rs *entities.RecordSet) *platformv1.
 }
 
 func (s *DNSServiceServer) addRecordToZone(zone *entities.Zone, record *platformv1.Record) error {
+	if err := validateProtoRecord(record); err != nil {
+		return err
+	}
 	switch record.GetType() {
 	case platformv1.RecordType_RECORD_TYPE_A:
 		if a := record.GetA(); a != nil {
@@ -768,6 +787,56 @@ func (s *DNSServiceServer) addRecordToZone(zone *entities.Zone, record *platform
 	return nil
 }
 
+// protoRecordOwner is the typed body of a Record: every one carries its owner
+// name. A nil body answers an empty name, so a record sent without the body of
+// its type is refused as nameless.
+type protoRecordOwner interface {
+	GetName() string
+}
+
+// protoRecordValue is a typed body whose value is a string, the form an A or
+// AAAA address takes.
+type protoRecordValue interface {
+	GetValue() string
+}
+
+// protoRecordBodies returns the typed body of each record type AddRecord
+// stores.
+var protoRecordBodies = map[platformv1.RecordType]func(*platformv1.Record) protoRecordOwner{
+	platformv1.RecordType_RECORD_TYPE_A:     func(r *platformv1.Record) protoRecordOwner { return r.GetA() },
+	platformv1.RecordType_RECORD_TYPE_AAAA:  func(r *platformv1.Record) protoRecordOwner { return r.GetAaaa() },
+	platformv1.RecordType_RECORD_TYPE_CNAME: func(r *platformv1.Record) protoRecordOwner { return r.GetCname() },
+	platformv1.RecordType_RECORD_TYPE_MX:    func(r *platformv1.Record) protoRecordOwner { return r.GetMx() },
+	platformv1.RecordType_RECORD_TYPE_NS:    func(r *platformv1.Record) protoRecordOwner { return r.GetNs() },
+	platformv1.RecordType_RECORD_TYPE_TXT:   func(r *platformv1.Record) protoRecordOwner { return r.GetTxt() },
+	platformv1.RecordType_RECORD_TYPE_SRV:   func(r *platformv1.Record) protoRecordOwner { return r.GetSrv() },
+	platformv1.RecordType_RECORD_TYPE_CAA:   func(r *platformv1.Record) protoRecordOwner { return r.GetCaa() },
+	platformv1.RecordType_RECORD_TYPE_TLSA:  func(r *platformv1.Record) protoRecordOwner { return r.GetTlsa() },
+}
+
+// validateProtoRecord applies dns.ValidateRecord to a Record's owner name and
+// value, and dns.ValidateTLSAUsage to a TLSA record's usage. A type with no
+// body here is left to addRecordToZone, which refuses it as unsupported.
+func validateProtoRecord(record *platformv1.Record) error {
+	body, ok := protoRecordBodies[record.GetType()]
+	if !ok {
+		return nil
+	}
+	owner := body(record)
+	value := ""
+	if valued, ok := owner.(protoRecordValue); ok {
+		value = valued.GetValue()
+	}
+	recordType := strings.TrimPrefix(record.GetType().String(), "RECORD_TYPE_")
+	if err := dns.ValidateRecord(recordType, owner.GetName(), value); err != nil {
+		return err
+	}
+	if tlsa := record.GetTlsa(); tlsa != nil {
+		return dns.ValidateTLSAUsage(tlsa.GetUsage())
+	}
+	return nil
+}
+
 func (s *DNSServiceServer) deleteRecordFromZone(zone *entities.Zone, recordType platformv1.RecordType, name string) {
 	switch recordType {
 	case platformv1.RecordType_RECORD_TYPE_A:
@@ -831,6 +900,20 @@ func (s *DNSServiceServer) getRecordName(record *platformv1.Record) string {
 		}
 	}
 	return ""
+}
+
+// zoneHasRecord reports whether the zone holds a record of the given type
+// owned by name. An unspecified type matches no record.
+func (s *DNSServiceServer) zoneHasRecord(zone *entities.Zone, recordType platformv1.RecordType, name string) bool {
+	if recordType == platformv1.RecordType_RECORD_TYPE_UNSPECIFIED {
+		return false
+	}
+	for _, record := range s.extractRecords(&zone.RecordSet, recordType) {
+		if s.getRecordName(record) == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *DNSServiceServer) extractRecords(rs *entities.RecordSet, recordType platformv1.RecordType) []*platformv1.Record {

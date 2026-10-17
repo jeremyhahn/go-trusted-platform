@@ -84,12 +84,15 @@ is API-only today. [cli.md](cli.md) §5 lists which transport carries what.
 
 ## Working with manifests over the API
 
-A host manifest is the record of what a host measured. The normal cycle:
+A host manifest is the record of what a host measured. The daemon stores the
+manifests the enrollment hook imports; it cannot build one itself yet.
+`POST /api/v1/attestation/manifests/build` answers `ErrTPMSessionNotConfigured`
+on every transport ([engineering](engineering.md) §3a). The cycle over a stored
+manifest:
 
-1. **Build** it: `POST /api/v1/attestation/manifests/build`
-2. **Verify** it: `POST /api/v1/attestation/manifests/verify`
-3. **List** what is stored: `GET /api/v1/attestation/manifests`
-4. **Fetch** one: `GET /api/v1/attestation/manifests/{id}`
+1. **List** what is stored: `GET /api/v1/attestation/manifests`
+2. **Fetch** one: `GET /api/v1/attestation/manifests/{id}`
+3. **Verify** it: `POST /api/v1/attestation/manifests/verify`
 
 Manifests can be pushed to remote verifiers on a schedule rather than pulled.
 That is `attestation.manifest.push-enabled`, with `push-interval` and

@@ -219,6 +219,7 @@ func (d *GenericDAO[E]) Count(ctx context.Context) (int, error) {
 // Note: QuicBaaS's List has a quirk where small pageSize values may not properly
 // paginate, so we fetch more items at once and do pagination in memory.
 func (d *GenericDAO[E]) Page(ctx context.Context, pageQuery datastore.PageQuery) (datastore.PageResult[E], error) {
+	pageQuery = pageQuery.Normalized()
 	result := datastore.PageResult[E]{
 		Entities: make([]E, 0, pageQuery.PageSize),
 		Page:     pageQuery.Page,

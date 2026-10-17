@@ -107,6 +107,7 @@ type KMSKeyVersionInfo struct {
 type KMSGenerateKeyServiceRequest struct {
 	KeySpec     *KMSKeySpec
 	Name        string
+	DisplayName string
 	Description string
 	Tags        map[string]string
 	Owner       string

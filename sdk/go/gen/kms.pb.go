@@ -745,12 +745,14 @@ func (x *KMSKeyVersionInfo) GetDisabledAt() int64 {
 
 // GenerateKey request/response
 type GenerateKeyRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	KeySpec       *KMSKeySpec            `protobuf:"bytes,1,opt,name=key_spec,json=keySpec,proto3" json:"key_spec,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Description   string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
-	Tags          map[string]string      `protobuf:"bytes,4,rep,name=tags,proto3" json:"tags,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Owner         string                 `protobuf:"bytes,5,opt,name=owner,proto3" json:"owner,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	KeySpec     *KMSKeySpec            `protobuf:"bytes,1,opt,name=key_spec,json=keySpec,proto3" json:"key_spec,omitempty"`
+	Name        string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Description string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	Tags        map[string]string      `protobuf:"bytes,4,rep,name=tags,proto3" json:"tags,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Owner       string                 `protobuf:"bytes,5,opt,name=owner,proto3" json:"owner,omitempty"`
+	// display_name is the key's human-readable name; name stays the key ID.
+	DisplayName   string `protobuf:"bytes,6,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -816,6 +818,13 @@ func (x *GenerateKeyRequest) GetTags() map[string]string {
 func (x *GenerateKeyRequest) GetOwner() string {
 	if x != nil {
 		return x.Owner
+	}
+	return ""
+}
+
+func (x *GenerateKeyRequest) GetDisplayName() string {
+	if x != nil {
+		return x.DisplayName
 	}
 	return ""
 }
@@ -4384,13 +4393,14 @@ const file_kms_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x04 \x01(\x03R\tcreatedAt\x12\x1f\n" +
 	"\vdisabled_at\x18\x05 \x01(\x03R\n" +
-	"disabledAt\"\x8c\x02\n" +
+	"disabledAt\"\xaf\x02\n" +
 	"\x12GenerateKeyRequest\x122\n" +
 	"\bkey_spec\x18\x01 \x01(\v2\x17.platform.v1.KMSKeySpecR\akeySpec\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12=\n" +
 	"\x04tags\x18\x04 \x03(\v2).platform.v1.GenerateKeyRequest.TagsEntryR\x04tags\x12\x14\n" +
-	"\x05owner\x18\x05 \x01(\tR\x05owner\x1a7\n" +
+	"\x05owner\x18\x05 \x01(\tR\x05owner\x12!\n" +
+	"\fdisplay_name\x18\x06 \x01(\tR\vdisplayName\x1a7\n" +
 	"\tTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc6\x01\n" +

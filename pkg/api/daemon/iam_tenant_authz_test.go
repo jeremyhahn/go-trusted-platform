@@ -7,6 +7,7 @@ import (
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
@@ -200,4 +201,125 @@ func TestIAMGRPCService_TenantBinding(t *testing.T) {
 			})
 		}
 	}
+}
+
+// TestIAMGRPCService_CrossTenantRPCsAreSystemOnly pins the REST
+// RequireSystemTenant rule on the shared IAM service every transport calls:
+// only the system tenant creates or lists IAM tenants, and a refused create
+// leaves no tenant behind.
+func TestIAMGRPCService_CrossTenantRPCsAreSystemOnly(t *testing.T) {
+	cases := []struct {
+		name         string
+		systemTenant string
+		ctx          context.Context
+		wantCode     codes.Code
+	}{
+		{name: "system tenant", systemTenant: "system", ctx: tokenCallerContext("system"), wantCode: codes.OK},
+		{name: "unbound local caller", systemTenant: "system", ctx: context.Background(), wantCode: codes.OK},
+		{name: "other tenant", systemTenant: "system", ctx: tokenCallerContext("tenant-a"), wantCode: codes.PermissionDenied},
+		{name: "unset system tenant", systemTenant: "", ctx: tokenCallerContext("system"), wantCode: codes.PermissionDenied},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := NewIAMGRPCService(slog.Default(), newMemIAM(), nil)
+			svc.SetSystemTenant(tc.systemTenant)
+
+			_, err := svc.CreateTenant(tc.ctx, &platformv1.CreateIAMTenantRequest{Id: "acme", Name: "Acme"})
+			if status.Code(err) != tc.wantCode {
+				t.Fatalf("CreateTenant code = %v, want %v (err %v)", status.Code(err), tc.wantCode, err)
+			}
+			_, err = svc.ListTenants(tc.ctx, &platformv1.ListIAMTenantsRequest{})
+			if status.Code(err) != tc.wantCode {
+				t.Fatalf("ListTenants code = %v, want %v (err %v)", status.Code(err), tc.wantCode, err)
+			}
+
+			listed, err := svc.ListTenants(context.Background(), &platformv1.ListIAMTenantsRequest{})
+			if err != nil {
+				t.Fatalf("ListTenants as the local caller: %v", err)
+			}
+			wantTenants := 0
+			if tc.wantCode == codes.OK {
+				wantTenants = 1
+			}
+			if len(listed.GetTenants()) != wantTenants {
+				t.Fatalf("tenants after CreateTenant = %d, want %d", len(listed.GetTenants()), wantTenants)
+			}
+		})
+	}
+}
+
+// TestIAMGRPCService_CreateTenantProvisionsDefaultRoles proves an IAM tenant
+// created over the IAM rpc carries its default roles, so it can hold a user
+// with the admin role (docs/iam/architecture.md), and that a failed role
+// reconcile rolls the tenant back.
+func TestIAMGRPCService_CreateTenantProvisionsDefaultRoles(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("roles seeded", func(t *testing.T) {
+		mem := newMemIAM()
+		svc := NewIAMGRPCService(slog.Default(), mem, nil)
+		if _, err := svc.CreateTenant(ctx, &platformv1.CreateIAMTenantRequest{Id: "acme", Name: "Acme"}); err != nil {
+			t.Fatalf("CreateTenant: %v", err)
+		}
+		for _, name := range memBuiltInRoles {
+			if _, err := mem.Role().Get(ctx, "acme", name); err != nil {
+				t.Errorf("role %q in the new tenant: %v", name, err)
+			}
+		}
+	})
+
+	t.Run("reconcile failure rolls the tenant back", func(t *testing.T) {
+		mem := newMemIAM()
+		mem.reconcileErr = sdkerrors.NewUnavailable("iam.role.reconcile", "down")
+		svc := NewIAMGRPCService(slog.Default(), mem, nil)
+		_, err := svc.CreateTenant(ctx, &platformv1.CreateIAMTenantRequest{Id: "acme", Name: "Acme"})
+		if status.Code(err) != codes.Unavailable {
+			t.Fatalf("CreateTenant code = %v, want Unavailable (err %v)", status.Code(err), err)
+		}
+		if _, err := mem.Tenant().Get(ctx, "acme"); err == nil {
+			t.Fatal("the tenant survived a failed role reconcile")
+		}
+	})
+}
+
+// TestIAMGRPCService_CreateTenantSeedsExistingTenant is the #949 regression: a
+// tenant that exists without its default roles - created by a path that never
+// provisioned them - is given them by a repeated create, which still answers
+// AlreadyExists. A failed provision of an existing tenant never deletes it.
+func TestIAMGRPCService_CreateTenantSeedsExistingTenant(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("roles seeded, AlreadyExists answered", func(t *testing.T) {
+		mem := newMemIAM()
+		if _, err := mem.Tenant().Create(ctx, &sdkiam.CreateTenantRequest{ID: "acme", Name: "Acme"}); err != nil {
+			t.Fatalf("seed roleless tenant: %v", err)
+		}
+		svc := NewIAMGRPCService(slog.Default(), mem, nil)
+		_, err := svc.CreateTenant(ctx, &platformv1.CreateIAMTenantRequest{Id: "acme", Name: "Acme"})
+		if status.Code(err) != codes.AlreadyExists {
+			t.Fatalf("CreateTenant code = %v, want AlreadyExists (err %v)", status.Code(err), err)
+		}
+		for _, name := range memBuiltInRoles {
+			if _, err := mem.Role().Get(ctx, "acme", name); err != nil {
+				t.Errorf("role %q in the existing tenant: %v", name, err)
+			}
+		}
+	})
+
+	t.Run("reconcile failure keeps the existing tenant", func(t *testing.T) {
+		mem := newMemIAM()
+		if _, err := mem.Tenant().Create(ctx, &sdkiam.CreateTenantRequest{ID: "acme", Name: "Acme"}); err != nil {
+			t.Fatalf("seed roleless tenant: %v", err)
+		}
+		mem.reconcileErr = sdkerrors.NewUnavailable("iam.role.reconcile", "down")
+		svc := NewIAMGRPCService(slog.Default(), mem, nil)
+		_, err := svc.CreateTenant(ctx, &platformv1.CreateIAMTenantRequest{Id: "acme", Name: "Acme"})
+		if status.Code(err) != codes.Unavailable {
+			t.Fatalf("CreateTenant code = %v, want Unavailable (err %v)", status.Code(err), err)
+		}
+		if _, err := mem.Tenant().Get(ctx, "acme"); err != nil {
+			t.Fatalf("the existing tenant was deleted by a failed reconcile: %v", err)
+		}
+	})
 }

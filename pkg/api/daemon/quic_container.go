@@ -43,15 +43,15 @@ import (
 // payload[0] under the compute extended category opcode (quicwire.OpVMExtendedCategory,
 // 0x69); see handleVMServiceOperation. The unary operations decode the pb
 // message and delegate to the shared *ComputeGRPCService (the same business
-// path the gRPC transport uses). Create/Start/Stop/Remove/Get/List plus the
-// operational Exec and Metrics verbs are all unary and converge here.
+// path the gRPC transport uses). Create/Start/Stop/Remove/Get/List, the
+// operational Exec and Metrics verbs and Attest are all unary and converge
+// here.
 //
 // AttachContainer and GetContainerLogs are server-streaming RPCs that the QUIC
 // adapter does not carry (the QUIC request/response transport has no NewStream
 // primitive for a fanned console/log stream); both remain daemon-native and
 // are forwarded to the flat ContainerHandler exercised by the local CLI and the
-// integration harness only. OpContainerAttest (TPM attestation) has no SDK QUIC
-// client and is likewise daemon-native.
+// integration harness only.
 
 // handleContainerOperation routes the direct container opcodes reachable at
 // the top-level dispatcher (Get, List, Logs). The unary operations converge
@@ -70,8 +70,8 @@ func (h *QUICServiceHandler) handleContainerOperation(ctx context.Context, req *
 // handleContainerPB decodes the pb request for a converged unary container
 // opcode and delegates to the shared *ComputeGRPCService, returning
 // handled=true. For daemon-native opcodes (GetContainerLogs streaming,
-// AttachContainer streaming, OpContainerAttest) it returns (nil, false) so the
-// caller forwards the request to the flat ContainerHandler. payload carries the
+// AttachContainer streaming) it returns (nil, false) so the caller forwards
+// the request to the flat ContainerHandler. payload carries the
 // marshalled pb request body (already stripped of any category sub-opcode
 // prefix).
 func (h *QUICServiceHandler) handleContainerPB(ctx context.Context, opcode byte, payload []byte) (*quicwire.Response, bool) {
@@ -190,10 +190,24 @@ func (h *QUICServiceHandler) handleContainerPB(ctx context.Context, opcode byte,
 		}
 		return h.encodeQUICOK(resp), true
 
+	case quicwire.OpContainerAttest:
+		if h.computeGRPC == nil {
+			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"}), true
+		}
+		var attestReq platformv1.AttestContainerRequest
+		if err := quicwire.DecodePayload(payload, &attestReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
+		}
+		resp, err := h.computeGRPC.AttestContainer(ctx, &attestReq)
+		if err != nil {
+			return h.grpcStatusToQUICResponse("ContainerAttest", err), true
+		}
+		return h.encodeQUICOK(resp), true
+
 	default:
 		// GetContainerLogs and AttachContainer (server-streaming, not carried
-		// over the unary QUIC transport) and OpContainerAttest are
-		// daemon-native; the caller forwards them to the flat ContainerHandler.
+		// over the unary QUIC transport) are daemon-native; the caller
+		// forwards them to the flat ContainerHandler.
 		return nil, false
 	}
 }
@@ -222,11 +236,17 @@ func (h *QUICServiceHandler) encodeQUICOK(v interface{}) *quicwire.Response {
 // Unimplemented (which the compute service returns for unsupported
 // orchestrator features) onto StatusNotImplemented.
 func (h *QUICServiceHandler) grpcStatusToQUICResponse(op string, err error) *quicwire.Response {
-	quicStatus := quicwire.StatusInternalError
+	return h.errorResponse(grpcCodeToQUICStatus(err), ErrQUICOperationFailed{Op: op, Cause: err})
+}
+
+// grpcCodeToQUICStatus is the QUIC status for the gRPC class of err;
+// a class with no mapping is StatusInternalError.
+func grpcCodeToQUICStatus(err error) byte {
 	if mapped, ok := deviceGRPCCodeToQUICStatus[status.Code(err)]; ok {
-		quicStatus = mapped
-	} else if status.Code(err) == codes.Unimplemented {
-		quicStatus = quicwire.StatusNotImplemented
+		return mapped
 	}
-	return h.errorResponse(quicStatus, ErrQUICOperationFailed{Op: op, Cause: err})
+	if status.Code(err) == codes.Unimplemented {
+		return quicwire.StatusNotImplemented
+	}
+	return quicwire.StatusInternalError
 }

@@ -56,6 +56,13 @@ const (
 	// come, once the controller has already accounted for the solicitation.
 	ovlNDNoAnswerWait = 2 * time.Second
 
+	// ovlNDHoldDownWait outlasts the controller's first fallback hold-down
+	// (30s) by a poll and a punt refresh, and ovlNDDoubledHoldDownWait the
+	// doubled one that follows a second fallback inside the quiet period
+	// (docs/sdn/overlay/architecture.md, ND suppression).
+	ovlNDHoldDownWait        = 45 * time.Second
+	ovlNDDoubledHoldDownWait = 80 * time.Second
+
 	// ovlNDBurst solicitations far exceed the punt meter's 64 kb burst.
 	ovlNDBurst = 2000
 
@@ -193,14 +200,16 @@ func TestOverlayND_SuppressesKnownTargets(t *testing.T) {
 		assert.Equal(t, before.Answered, after.Answered)
 	})
 
-	t.Run("CrashedControllerPuntsExpire", func(t *testing.T) {
-		// A dropped connection is what a crash looks like to OVS: nothing
-		// removes the punts, and nothing refreshes them.
+	t.Run("DroppedConnectionFallsBack", func(t *testing.T) {
+		// A dropped connection is what a crash looks like to OVS. The
+		// controller redials, cannot know what the switch kept, and falls
+		// back: the punts go and every solicitation floods for the hold-down.
+		fallbacks := handler.GetStatus().NDSuppression.Fallbacks
 		require.NoError(t, ofClient.Disconnect())
 
-		waitFor(ctx, t, "the punt's hard timeout", 100*time.Millisecond, 20*time.Second, func() bool {
+		waitFor(ctx, t, "the redial to fall back", 100*time.Millisecond, 20*time.Second, func() bool {
 			punts, _ := ovlNDPunts(ctx, t, ovsClient)
-			return punts == 0
+			return punts == 0 && handler.GetStatus().NDSuppression.Fallbacks > fallbacks
 		})
 		floods := ovlNDFloodPackets(ctx, t, ovsClient)
 		sendNDFrame(t, conn, neighborSolicitation(solicitorMAC, ovlNDSolicitorIP, ovlNDTargetIP))
@@ -208,11 +217,12 @@ func TestOverlayND_SuppressesKnownTargets(t *testing.T) {
 			return ovlNDFloodPackets(ctx, t, ovsClient) > floods
 		})
 		_, answered := readProxyAdvert(t, conn, ovlNDTargetIP, ovlNDNoAnswerWait)
-		assert.False(t, answered, "nothing answers with the controller gone")
+		assert.False(t, answered, "nothing answers during the hold-down")
 
-		// The controller that comes back restores suppression on its own.
+		// The reconnected controller restores suppression on its own once
+		// the hold-down ends.
 		require.NoError(t, ofClient.Connect(ctx))
-		waitFor(ctx, t, "the refresh to restore the punt", 100*time.Millisecond, 15*time.Second, func() bool {
+		waitFor(ctx, t, "the punt to return after the hold-down", 100*time.Millisecond, ovlNDHoldDownWait, func() bool {
 			punts, _ := ovlNDPunts(ctx, t, ovsClient)
 			return punts == 1
 		})
@@ -246,7 +256,8 @@ func TestOverlayND_SuppressesKnownTargets(t *testing.T) {
 			return ovlNDFloodPackets(ctx, t, ovsClient) > floods
 		})
 
-		waitFor(ctx, t, "suppression to resume after the hold-down", 500*time.Millisecond, 60*time.Second, func() bool {
+		// The second fallback inside the quiet period holds down twice as long.
+		waitFor(ctx, t, "suppression to resume after the hold-down", 500*time.Millisecond, ovlNDDoubledHoldDownWait, func() bool {
 			punts, _ := ovlNDPunts(ctx, t, ovsClient)
 			return punts == 1 && handler.GetStatus().NDSuppression.Suppressing
 		})

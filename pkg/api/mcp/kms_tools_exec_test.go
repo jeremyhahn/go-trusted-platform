@@ -99,6 +99,24 @@ func TestExecuteKMSGenerateKey(t *testing.T) {
 		assert.ErrorIs(t, err, ErrKMSKeyNameRequired)
 	})
 
+	t.Run("DisplayNameRefusedBeforeGenerate", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		generated := false
+		svc.kmsCreateKeyFunc = func(ctx context.Context, req *KMSCreateKeyRequest) (interface{}, error) {
+			generated = true
+			return map[string]interface{}{"key_id": "key-1"}, nil
+		}
+		registry := newKMSToolTestRegistry(svc)
+		_, err := executeKMSToolViaDispatch(t, registry, "kms_generate_key", map[string]interface{}{
+			"name":         "test-key",
+			"display_name": "Test Key",
+			"algorithm":    "AES-256-GCM",
+			"usage":        []interface{}{"encrypt"},
+		})
+		assert.ErrorIs(t, err, ErrKMSDisplayNameNotSupported)
+		assert.False(t, generated, "a refused display_name must leave no key behind")
+	})
+
 	t.Run("MissingAlgorithm", func(t *testing.T) {
 		registry := newKMSToolTestRegistry(newMockServiceProvider())
 		_, err := executeKMSToolViaDispatch(t, registry, "kms_generate_key", map[string]interface{}{

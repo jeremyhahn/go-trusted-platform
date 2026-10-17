@@ -39,7 +39,13 @@ import (
 //       OpAttestQuote       (0x70) -> GetAttestationQuote
 //       OpAttestVerify      (0x71) -> VerifyAttestationQuote
 //       OpAttestCollectHost (0x72) -> CollectHostAttestation
+//       OpAttestGetAK       (0x73) -> TPMService.GetAK
 //       OpAttestPollVerdicts (0x75) -> PollDeviceVerdicts
+//
+//     0x74 is unassigned: challenge / response is served by no transport
+//     (docs/13 G7). The authorization catalog does not classify the byte,
+//     so HandleRequest refuses it with StatusPermissionDenied
+//     (quic.ErrOperationNotClassified) before it reaches this dispatcher.
 //
 //     PollDeviceVerdicts is how a QUIC client follows device verdicts: QUIC
 //     requests are unary, so the gRPC server stream StreamDeviceVerdicts is
@@ -55,8 +61,12 @@ import (
 //  2. The daemon-native manifest surface (build/verify manifest, host/VM/
 //     container/device workload attestation, reports, policies) on opcodes
 //     0x76/0x77/0x7C-0x7F and the extended codes. These have no SDK QUIC
-//     client and remain flat-struct operations served by the local
+//     client and remain flat-struct operations decoded by the local
 //     AttestationHandler, exercised by the CLI and the integration harness.
+//     daemon.go hands that handler an attestationQUICAdapter over the same
+//     *AttestationServiceServer, so each opcode answers what gRPC, REST,
+//     Unix and MCP answer, refusals included; 0x77 has no report store
+//     behind any transport and answers StatusNotImplemented.
 
 // attestQuoteOpcodes is the set of opcodes served by the pb quote surface;
 // everything else routes to the daemon-native manifest handler.
@@ -73,6 +83,8 @@ func (h *QUICServiceHandler) handleAttestationOperation(ctx context.Context, req
 		return h.handleAttestationVerifyQuote(ctx, req)
 	case quicwire.OpAttestCollectHost:
 		return h.handleAttestationCollectHost(ctx, req)
+	case quicwire.OpAttestGetAK:
+		return h.handleAttestationGetAK(ctx, req)
 	case quicwire.OpAttestPollVerdicts:
 		return h.handleAttestationPollVerdicts(ctx, req)
 	default:
@@ -117,6 +129,25 @@ func (h *QUICServiceHandler) handleAttestationVerifyQuote(ctx context.Context, r
 	resp, err := h.attestGRPC.VerifyAttestationQuote(ctx, &verifyReq)
 	if err != nil {
 		return h.grpcStatusToQUICResponse("AttestVerifyQuote", err)
+	}
+	return h.encodeQUICOK(resp)
+}
+
+// handleAttestationGetAK serves OpAttestGetAK through the TPM gRPC servicer's
+// GetAK, so QUIC answers the attestation key, and every refusal, as gRPC does.
+func (h *QUICServiceHandler) handleAttestationGetAK(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	if h.tpmGRPC == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "attestation"})
+	}
+
+	var akReq platformv1.GetAKRequest
+	if err := quicwire.DecodePayload(req.Payload, &akReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	resp, err := h.tpmGRPC.GetAK(ctx, &akReq)
+	if err != nil {
+		return h.grpcStatusToQUICResponse("AttestGetAK", err)
 	}
 	return h.encodeQUICOK(resp)
 }

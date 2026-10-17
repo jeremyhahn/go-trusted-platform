@@ -793,7 +793,7 @@ func (m *MCPAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealRes
 // =============================================================================
 
 // EventLog reads the TPM event log via MCP.
-func (m *MCPAdapter) EventLog(ctx context.Context, path string) (*EventLogResult, error) {
+func (m *MCPAdapter) EventLog(ctx context.Context) (*EventLogResult, error) {
 	result, err := m.callTool(ctx, MCPToolTPMEventLog, nil)
 	if err != nil {
 		return nil, err

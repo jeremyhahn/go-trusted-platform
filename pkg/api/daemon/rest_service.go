@@ -36,9 +36,12 @@ import (
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -445,6 +448,43 @@ func (s *RESTServer) SetTenantHandlers(manager restapi.TenantManagerInterface, g
 	s.logger.Info("Tenant REST routes registered")
 }
 
+// SetIAMHandlers wires the IAM REST handlers onto the daemon's REST router so
+// /api/v1/iam/tenants and /api/v1/iam/tenants/{tenant}/{users,groups,roles,
+// policies,apps}/... are served. The handlers are the webservice's
+// (restiam.IAMRouter) over the same SDK IAM client and PEP that back the IAM
+// gRPC, QUIC, MCP and Unix-socket services, so an IAM write on one transport
+// is read back on every other.
+//
+// The daemon mounts the tenant-scoped routes only: the webservice's flat
+// aliases (/api/v1/iam/users, ...) fall back to a browser session's tenant,
+// which the daemon does not hold. Every route runs behind guard: the caller
+// needs iam:read (GET, and the read-only POSTs) or iam:write, the
+// /api/v1/iam/tenants routes are the system tenant's (systemTenantID), and a
+// route naming a tenant serves only the caller's own (docs/iam/api.md §8). A
+// nil guard answers 403. A nil iamClient leaves the routes unmounted, the
+// signal of a daemon built without IAM.
+func (s *RESTServer) SetIAMHandlers(iamClient restiam.IAMClient, pepClient restiam.PEPClient, guard *restapi.ScopeGuard, systemTenantID string) error {
+	if iamClient == nil {
+		return nil
+	}
+	guards := restapi.NewIAMRouteGuards(guard, systemTenantID, restiam.RequestedTenant)
+	logger := logging.NewFromSlog(s.logger)
+	iamRouter, err := restiam.NewIAMRouter(logger, iamClient, pepClient,
+		response.NewResponseWriter(logger, nil),
+		restiam.Authorization{
+			Authenticate:        guards.Authenticate,
+			RequireAdmin:        guards.RequireAdmin,
+			RequireSystemTenant: guards.RequireSystemTenant,
+			RequireOwnTenant:    guards.RequireOwnTenant,
+		})
+	if err != nil {
+		return err
+	}
+	iamRouter.RegisterTenantRoutes(s.router.PathPrefix(restBasePath).Subrouter())
+	s.logger.Info("IAM REST routes registered")
+	return nil
+}
+
 // SetKMSHandlers wires the KMS REST handlers onto the daemon's REST router so
 // /api/v1/kms/* endpoints are served. The service delegates to the same
 // QuicBaaS SDK KMS and Crypto clients used by the gRPC, QUIC, MCP, and
@@ -491,9 +531,10 @@ func (s *RESTServer) SetOverlayHandlers(svc restapi.OverlayServiceInterface) {
 // All transports therefore share state — certificates issued via gRPC are
 // visible via REST and vice-versa.
 //
-// tokens authorizes POST /api/v1/ca/sign-csr, which needs a platform token
-// granting ca:sign-csr; when it is nil, sign-csr refuses every request.
-func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, tokens *platformTokenValidator) {
+// guard authorizes POST /api/v1/ca/sign-csr, which needs a platform token
+// granting ca:sign-csr (a client certificate alone is refused); when it is
+// nil, sign-csr refuses every request.
+func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, guard *restapi.ScopeGuard) {
 	if ca == nil {
 		return
 	}
@@ -509,11 +550,7 @@ func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, tokens 
 			caObjStorage = s.config.App.Storage
 		}
 	}
-	handlers := restapi.NewCAHandlers(adapter, s.logger, caObjStorage).WithKMS(caKMS)
-	// A nil *platformTokenValidator must not become a non-nil interface.
-	if tokens != nil {
-		handlers.WithTokenAuthorizer(tokens)
-	}
+	handlers := restapi.NewCAHandlers(adapter, s.logger, caObjStorage).WithKMS(caKMS).WithScopeGuard(guard)
 	handlers.RegisterRoutes(s.router)
 	s.logger.Info("CA REST routes registered")
 
@@ -528,19 +565,14 @@ func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, tokens 
 // SetTPMHandlers mounts the physical TPM routes (/api/v1/tpm/...). Every
 // route runs on tpm, the daemon's TPM service, with the protobuf JSON request
 // and response the SDK speaks, so a REST call is the one gRPC, QUIC, MCP and
-// Unix serve. Every route requires a platform bearer token granting tpm:read,
-// tpm:write or tpm:delete; with no validator every route refuses. A nil TPM
-// service mounts nothing.
-func (s *RESTServer) SetTPMHandlers(tpm platformv1.TPMServiceServer, tokens *platformTokenValidator) {
+// Unix serve. Every route requires tpm:read, tpm:write or tpm:delete, checked
+// by guard (a platform token, else the verified client certificate); with no
+// guard every route refuses. A nil TPM service mounts nothing.
+func (s *RESTServer) SetTPMHandlers(tpm platformv1.TPMServiceServer, guard *restapi.ScopeGuard) {
 	if tpm == nil {
 		return
 	}
-	handlers := restapi.NewTPMHandlers(s.logger).WithTPMService(tpm)
-	// A nil *platformTokenValidator must not become a non-nil interface.
-	if tokens != nil {
-		handlers.WithTokenAuthorizer(tokens)
-	}
-	handlers.RegisterRoutes(s.router)
+	restapi.NewTPMHandlers(s.logger).WithTPMService(tpm).WithScopeGuard(guard).RegisterRoutes(s.router)
 }
 
 // applyMiddleware wraps the router with middleware handlers

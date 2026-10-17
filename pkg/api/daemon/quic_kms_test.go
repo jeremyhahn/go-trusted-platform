@@ -669,6 +669,31 @@ func TestHandleKMSGenerateKey(t *testing.T) {
 		assert.Contains(t, string(resp.Payload), "key_spec")
 	})
 
+	t.Run("display name refused before generating", func(t *testing.T) {
+		refusing := newMockKMSService()
+		refusingHandler := newTestQUICServiceHandler(logger, WithQUICKMSService(refusing))
+		genReq := KMSGenerateKeyRequest{
+			Name:        "named-key",
+			DisplayName: "Named Key",
+			KeySpec: &KMSKeySpecRequest{
+				Algorithm: int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256),
+			},
+		}
+
+		payload, err := quicwire.EncodePayload(genReq)
+		require.NoError(t, err)
+
+		resp := refusingHandler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpKMSGenerateKey,
+			Payload: payload,
+		})
+
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+		assert.Contains(t, string(resp.Payload), ErrQUICKMSDisplayNameNotSupported{KeyID: "named-key"}.Error())
+		assert.Empty(t, refusing.lastOperation, "a refused display name must reach no KMS call")
+		assert.Empty(t, refusing.keys)
+	})
+
 	t.Run("unsupported algorithm", func(t *testing.T) {
 		genReq := KMSGenerateKeyRequest{
 			Name: "test-key",

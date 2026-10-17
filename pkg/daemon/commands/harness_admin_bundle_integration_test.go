@@ -32,14 +32,17 @@ import (
 	"time"
 
 	certclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/certificate"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 )
 
 // fakeIssuer is an appbackends.CertIssuer that mints client certificates
-// signed by a test root, failing for the usage named in failOnRole.
+// signed by a test root, with the requested tenant as the subject O, failing
+// for the tenant named in failOnTenant.
 type fakeIssuer struct {
-	root       *testRoot
-	calls      int
-	failOnRole string
+	root         *testRoot
+	calls        int
+	failOnTenant string
 }
 
 // newFakeIssuer returns an issuer over root.
@@ -50,8 +53,8 @@ func newFakeIssuer(root *testRoot) *fakeIssuer {
 // IssueCertificate mints a client cert + PEM key signed by the root.
 func (f *fakeIssuer) IssueCertificate(_ context.Context, req *certclient.IssueCertificateRequest) (*certclient.IssueCertificateResponse, error) {
 	f.calls++
-	if f.failOnRole != "" && req.Usage == f.failOnRole {
-		return nil, errFake{op: "issue " + req.Usage}
+	if f.failOnTenant != "" && req.Organization == f.failOnTenant {
+		return nil, errFake{op: "issue for " + req.Organization}
 	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -60,7 +63,7 @@ func (f *fakeIssuer) IssueCertificate(_ context.Context, req *certclient.IssueCe
 	now := time.Now()
 	cert, err := f.root.sign(&x509.Certificate{
 		SerialNumber: big.NewInt(int64(f.calls + 1000)),
-		Subject:      pkix.Name{CommonName: req.CommonName},
+		Subject:      pkix.Name{CommonName: req.CommonName, Organization: []string{req.Organization}},
 		NotBefore:    now.Add(-time.Minute),
 		NotAfter:     now.Add(365 * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
@@ -108,25 +111,36 @@ func TestWriteHarnessAdminBundle_WritesVerifiableAdminCredential(t *testing.T) {
 		t.Fatalf("writeHarnessAdminBundle: %v", err)
 	}
 
-	path := filepath.Join(dir, harnessAdminBundleName)
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat bundle: %v", err)
+	bundles := map[string]string{
+		harnessAdminBundleName:  app.SystemTenantID,
+		harnessTenantBundleName: harnessTenantID,
 	}
-	if mode := info.Mode().Perm(); mode != 0600 {
-		t.Errorf("bundle mode = %o, want 0600", mode)
-	}
-	cert, err := tls.LoadX509KeyPair(path, path)
-	if err != nil {
-		t.Fatalf("bundle is not a cert + key pair: %v", err)
-	}
-	if cn := cert.Leaf.Subject.CommonName; cn != "admin" {
-		t.Errorf("bundle CN = %q, want admin", cn)
-	}
-	pool := x509.NewCertPool()
-	pool.AddCert(issuer.root.cert)
-	if err := verifyChain(cert.Leaf, pool); err != nil {
-		t.Errorf("bundle does not chain to the platform CA: %v", err)
+	for name, wantTenant := range bundles {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(dir, name)
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("stat bundle: %v", err)
+			}
+			if mode := info.Mode().Perm(); mode != 0600 {
+				t.Errorf("bundle mode = %o, want 0600", mode)
+			}
+			cert, err := tls.LoadX509KeyPair(path, path)
+			if err != nil {
+				t.Fatalf("bundle is not a cert + key pair: %v", err)
+			}
+			if cn := cert.Leaf.Subject.CommonName; cn != "admin" {
+				t.Errorf("bundle CN = %q, want admin", cn)
+			}
+			if org := cert.Leaf.Subject.Organization; len(org) != 1 || org[0] != wantTenant {
+				t.Errorf("bundle O = %v, want [%s]", org, wantTenant)
+			}
+			pool := x509.NewCertPool()
+			pool.AddCert(issuer.root.cert)
+			if err := verifyChain(cert.Leaf, pool); err != nil {
+				t.Errorf("bundle does not chain to the platform CA: %v", err)
+			}
+		})
 	}
 }
 
@@ -139,17 +153,31 @@ func TestWriteHarnessAdminBundle_NilIssuer(t *testing.T) {
 }
 
 func TestWriteHarnessAdminBundle_IssuerFailure(t *testing.T) {
-	dir := t.TempDir()
-	issuer := newFakeIssuer(newTestRoot(t))
-	issuer.failOnRole = "client"
-
-	err := writeHarnessAdminBundle(context.Background(), newTestLogger(), issuer, dir)
-	var typed ErrProvisionIssue
-	if !errors.As(err, &typed) || typed.Role != "admin" {
-		t.Fatalf("expected ErrProvisionIssue{Role: admin}, got %T (%v)", err, err)
+	cases := []struct {
+		name         string
+		failOnTenant string
+		wantRole     string
+	}{
+		{name: "tenant bundle", failOnTenant: harnessTenantID, wantRole: "tenant admin"},
+		{name: "admin bundle", failOnTenant: app.SystemTenantID, wantRole: "admin"},
 	}
-	if _, statErr := os.Stat(filepath.Join(dir, harnessAdminBundleName)); !os.IsNotExist(statErr) {
-		t.Errorf("a failed issuance must leave no bundle, stat err = %v", statErr)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			issuer := newFakeIssuer(newTestRoot(t))
+			issuer.failOnTenant = tc.failOnTenant
+
+			err := writeHarnessAdminBundle(context.Background(), newTestLogger(), issuer, dir)
+			var typed ErrProvisionIssue
+			if !errors.As(err, &typed) || typed.Role != tc.wantRole {
+				t.Fatalf("expected ErrProvisionIssue{Role: %s}, got %T (%v)", tc.wantRole, err, err)
+			}
+			// The harness waits on client-bundle.pem: it must not appear
+			// when either issuance fails.
+			if _, statErr := os.Stat(filepath.Join(dir, harnessAdminBundleName)); !os.IsNotExist(statErr) {
+				t.Errorf("a failed issuance must leave no admin bundle, stat err = %v", statErr)
+			}
+		})
 	}
 }
 

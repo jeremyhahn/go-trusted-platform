@@ -189,7 +189,7 @@ func (r *RESTAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealRe
 }
 
 // EventLog reads the TPM event log via the SDK client over REST.
-func (r *RESTAdapter) EventLog(ctx context.Context, path string) (*EventLogResult, error) {
+func (r *RESTAdapter) EventLog(ctx context.Context) (*EventLogResult, error) {
 	resp, err := r.client.GetEventLogDomain(ctx, "json")
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "REST", Method: "GetEventLog", Err: err}

@@ -34,6 +34,9 @@
 
 set -uo pipefail
 
+# shellcheck source=build/docker/devcontainer/swtpm-provision.sh
+source "$(dirname "${BASH_SOURCE[0]}")/swtpm-provision.sh"
+
 # Known target keywords mapped to their Go test package paths. A single-word
 # first argument matching a key here selects that target; anything else is
 # treated as the legacy BUILD_TAGS argument.
@@ -81,7 +84,6 @@ declare -A TARGET_PACKAGES=(
     [dns]="./test/integration/dns/..."
     [e2e]="./test/integration/e2e/..."
     [helpers]="./test/integration/helpers/..."
-    [invitation]="./test/integration/invitation/..."
     [ipxe]="./test/integration/ipxe/..."
     [ipxe-dhcp]="./test/integration/ipxe/..."
     [ipxe-tftp]="./test/integration/ipxe/..."
@@ -95,7 +97,6 @@ declare -A TARGET_PACKAGES=(
     [registry]="./test/integration/registry/..."
     [sdk]="./test/integration/sdk/..."
     [secrets]="./test/integration/secrets/..."
-    [user-registration]="./test/integration/user_registration/..."
     [vtpm]="./test/integration/vtpm/..."
 )
 
@@ -182,12 +183,17 @@ declare -A TARGET_NO_DAEMON=(
 # FIPS-kernel test needs a prebuilt kernel, modules and signing key that only
 # the caller supplies (FIPS_KERNEL_IMAGE, FIPS_MODULES_TAR,
 # FIPS_MODULE_SIGNING_KEY).
+# tpm runs last: its Clear case issues TPM2_Clear on the shared daemon's
+# swtpm (docs/tpm/security.md), which flushes the owner-hierarchy SRKs that
+# seal the daemon's platform-policy key passwords. After it the daemon can
+# no longer sign a TLS handshake, so every gRPC, QUIC and MCP dial a later
+# suite makes ends in "tls: internal error" (vtpm, #949).
 ALL_TARGETS=(
     helpers datastore quicbaas sdk cluster cmd ipxe installer e2e
     root acme attestation authenticode ca ceremony cli compute
-    container daemon device dns fido2 iam invitation iso kms luks network
+    container daemon device dns fido2 iam iso kms luks network
     ntp objectstorage piv provision proxy quic registry restroutes sdn
-    secrets tenant tpm user-registration vpn vtpm
+    secrets tenant vpn vtpm tpm
 )
 
 RUN_TARGET="all"
@@ -302,6 +308,18 @@ restore_workspace_ownership() {
         || echo "WARNING: could not restore ownership under ${dir}"
 }
 
+# chronyd paths (start_chronyd): the Debian chrony package's defaults, which
+# pkg/ntp DefaultPaths also renders and drives.
+CHRONYD_CONF="/etc/chrony/chrony.conf"
+CHRONYD_SOCK="/run/chrony/chronyd.sock"
+CHRONYD_PID_FILE="/run/chrony/chronyd.pid"
+# The reference chronyd (start_ntp_reference) that serves the config's
+# loopback upstream. Its own directory keeps its pid file apart from the
+# daemon's chronyd.
+NTP_REFERENCE_DIR="/run/chrony-reference"
+NTP_REFERENCE_CONF="${NTP_REFERENCE_DIR}/chrony.conf"
+NTP_REFERENCE_PID_FILE="${NTP_REFERENCE_DIR}/chronyd.pid"
+
 cleanup() {
     if [ "$CLEANUP_DONE" = true ]; then
         return
@@ -323,6 +341,14 @@ cleanup() {
         echo "Stopping vBMC (PID: $VBMC_PID)..."
         kill "$VBMC_PID" 2>/dev/null || true
         wait "$VBMC_PID" 2>/dev/null || true
+    fi
+
+    # Stop chronyd
+    if [ -f "${CHRONYD_PID_FILE}" ]; then
+        kill "$(cat "${CHRONYD_PID_FILE}")" 2>/dev/null || true
+    fi
+    if [ -f "${NTP_REFERENCE_PID_FILE}" ]; then
+        kill "$(cat "${NTP_REFERENCE_PID_FILE}")" 2>/dev/null || true
     fi
 
     # Stop swtpm
@@ -443,9 +469,12 @@ start_swtpm() {
     rm -rf /tmp/swtpm
     mkdir -p /tmp/swtpm
 
-    # Initialize TPM state
-    if command -v swtpm_setup > /dev/null 2>&1; then
-        swtpm_setup --tpm2 --tpmstate /tmp/swtpm --overwrite --pcr-banks sha256
+    # Provision it like shipped hardware, with an EK and an EK certificate.
+    # A TPM without an EK sends platformd down its recovery path, which no
+    # real node takes, so the run stops here rather than test that.
+    if ! provision_swtpm_state /tmp/swtpm; then
+        echo "FATAL: the harness swtpm has no EK and EK certificate; platformd cannot run on it"
+        exit 1
     fi
 
     # Start swtpm daemon
@@ -579,8 +608,7 @@ prepare_gatewayd_supervision() {
     mkdir -p "${root}/init"
     # A process forked while the list is moved lands back in the root, so
     # the move repeats until enabling the controllers stops failing.
-    local attempt
-    for attempt in 1 2 3 4 5; do
+    for _ in 1 2 3 4 5; do
         local pid
         while read -r pid; do
             echo "${pid}" > "${root}/init/cgroup.procs" 2>/dev/null || true
@@ -715,6 +743,75 @@ TRUSTEOF
     echo "=== vBMC started ==="
 }
 
+# chronyd backs the ntp suite. platformd renders /etc/chrony/chrony.conf from
+# the config's ntp: section and enables chronyd through OpenRC, which this
+# Debian container does not have, so the runner starts chronyd on the rendered
+# file. -x keeps chronyd off the system clock: the container shares the CI
+# host's kernel clock, and no suite may move it. A config without an ntp:
+# section renders nothing, and chronyd is not started. The paths are set
+# beside cleanup(), which stops chronyd.
+#
+# The daemon's chronyd consumes 127.0.0.1, which start_ntp_reference serves,
+# and the runner waits for it to synchronise: an unsynchronised clock is the
+# documented degraded `ntp` health component (docs/health/api.md), and a
+# degraded component makes the aggregate health answer of every transport
+# not-healthy, so every suite that asserts a healthy platform would fail.
+start_chronyd() {
+    if [ ! -f "${CHRONYD_CONF}" ]; then
+        echo "WARNING: platformd rendered no ${CHRONYD_CONF}; the ntp suite has no chronyd"
+        return 0
+    fi
+    start_ntp_reference
+    echo "=== Starting chronyd (config: ${CHRONYD_CONF}, clock control off) ==="
+    # chronyd drops to _chrony and opens its command socket only when the
+    # socket's directory is owned by that user and closed to others; a
+    # root-owned 0755 directory leaves it running with "Disabled command
+    # socket", so every chronyc poll platformd makes fails (#949).
+    install -d -m 0750 -o _chrony -g _chrony "$(dirname "${CHRONYD_SOCK}")"
+    if ! chronyd -x -f "${CHRONYD_CONF}"; then
+        echo "WARNING: chronyd failed to start; the ntp suite has no chronyd"
+        return 0
+    fi
+    for _ in $(seq 1 10); do
+        if chronyc -n -h "${CHRONYD_SOCK}" tracking >/dev/null 2>&1; then
+            echo "chronyd ready"
+            # waitsync <tries> <max-correction> <max-skew> <interval>: 30
+            # one-second polls; 0 leaves the correction and skew unbounded.
+            if chronyc -n -h "${CHRONYD_SOCK}" waitsync 30 0 0 1 >/dev/null 2>&1; then
+                echo "chronyd synchronised to the reference"
+            else
+                echo "WARNING: chronyd did not synchronise to the reference within 30s; the ntp health component stays degraded"
+            fi
+            return 0
+        fi
+        sleep 1
+    done
+    echo "WARNING: chronyd never answered on ${CHRONYD_SOCK}"
+}
+
+# start_ntp_reference runs a second chronyd as the harness's time source: it
+# serves its own clock on 127.0.0.1:123 as a local stratum-8 reference, which
+# the daemon's consume-mode chronyd (rendered with `port 0`, so the two never
+# share a port) synchronises to. Like the daemon's chronyd it runs with -x and
+# never moves the clock the container shares with the CI host, and it has no
+# command socket (`cmdport 0`, `bindcmdaddress /`), so every chronyc call the
+# daemon makes still reaches the daemon's chronyd.
+start_ntp_reference() {
+    echo "=== Starting the reference chronyd on 127.0.0.1:123 ==="
+    install -d -m 0750 -o _chrony -g _chrony "${NTP_REFERENCE_DIR}"
+    cat > "${NTP_REFERENCE_CONF}" << NTPREFEOF
+bindaddress 127.0.0.1
+allow 127.0.0.1
+local stratum 8
+cmdport 0
+bindcmdaddress /
+pidfile ${NTP_REFERENCE_PID_FILE}
+NTPREFEOF
+    if ! chronyd -x -f "${NTP_REFERENCE_CONF}"; then
+        echo "WARNING: the reference chronyd failed to start; the daemon's chronyd has no source"
+    fi
+}
+
 start_platformd() {
     local config_file="${1:-${PLATFORM_BUILD_DIR}/test/integration/config.yaml}"
     echo "=== Starting platformd (config: ${config_file}) ==="
@@ -785,6 +882,8 @@ start_platformd() {
                 sleep 1
             done
 
+            start_chronyd
+
             echo "=== platformd ready ==="
             return 0
         fi
@@ -851,6 +950,11 @@ setup_env_vars() {
     export PLATFORM_CLIENT_CERT="/tmp/platformd-integration/tls/client-bundle.pem"
     export PLATFORM_CLIENT_KEY="/tmp/platformd-integration/tls/client-bundle.pem"
     export PLATFORM_CA_CERT="/tmp/platformd-integration/tls/ca-bundle.crt"
+    # The same issuer's bundle for the fixed non-system tenant
+    # harness-tenant, written before client-bundle.pem: the suites that
+    # assert what a tenant outside the system tenant is refused use it.
+    export PLATFORM_TENANT_CLIENT_CERT="/tmp/platformd-integration/tls/tenant-client-bundle.pem"
+    export PLATFORM_TENANT_CLIENT_KEY="/tmp/platformd-integration/tls/tenant-client-bundle.pem"
 
     # REST endpoint (mTLS requires HTTPS)
     export PLATFORM_API_ENDPOINT="https://localhost:${PLATFORMD_REST_PORT}"
@@ -903,6 +1007,8 @@ setup_env_vars() {
     echo "  PLATFORM_CLIENT_CERT=$PLATFORM_CLIENT_CERT (bundle)"
     echo "  PLATFORM_CLIENT_KEY=$PLATFORM_CLIENT_KEY (bundle)"
     echo "  PLATFORM_CA_CERT=$PLATFORM_CA_CERT"
+    echo "  PLATFORM_TENANT_CLIENT_CERT=$PLATFORM_TENANT_CLIENT_CERT (bundle)"
+    echo "  PLATFORM_TENANT_CLIENT_KEY=$PLATFORM_TENANT_CLIENT_KEY (bundle)"
     echo "  PLATFORM_REST_ENDPOINT=$PLATFORM_REST_ENDPOINT"
     echo "  PLATFORM_GRPC_ENDPOINT=$PLATFORM_GRPC_ENDPOINT"
     echo "  PLATFORM_QUIC_ENDPOINT=$PLATFORM_QUIC_ENDPOINT"
