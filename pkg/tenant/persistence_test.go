@@ -153,6 +153,54 @@ func TestManager_DisplayNameNeverRenamesTheTenant(t *testing.T) {
 	}
 }
 
+// TestManager_ListTenantsServesTheIAMRecordOverAStaleCache proves the IAM
+// record is authoritative for a list: a tenant changed behind this manager's
+// cache, here by a second manager on the same IAM, lists in its new state and
+// the cache is reconciled to it.
+func TestManager_ListTenantsServesTheIAMRecordOverAStaleCache(t *testing.T) {
+	manager, iamClient := newTestManager(t)
+	ctx := context.Background()
+
+	created, err := manager.CreateTenant(ctx, &CreateTenantRequest{
+		Name:        "stale",
+		DisplayName: "Stale Tenant",
+	})
+	if err != nil {
+		t.Fatalf("CreateTenant: %v", err)
+	}
+
+	peer := restartedManager(t, iamClient)
+	if err := peer.SuspendTenant(ctx, created.ID); err != nil {
+		t.Fatalf("peer SuspendTenant: %v", err)
+	}
+	newDisplayName := "Renamed Display"
+	if _, err := peer.UpdateTenant(ctx, created.ID, &UpdateTenantRequest{DisplayName: &newDisplayName}); err != nil {
+		t.Fatalf("peer UpdateTenant: %v", err)
+	}
+
+	tenants, _, err := manager.ListTenants(ctx, 10, 0)
+	if err != nil {
+		t.Fatalf("ListTenants: %v", err)
+	}
+	if len(tenants) != 1 {
+		t.Fatalf("ListTenants returned %d tenants, want 1", len(tenants))
+	}
+	if tenants[0].State != StateSuspended {
+		t.Errorf("listed state = %s, want %s", tenants[0].State, StateSuspended)
+	}
+	if tenants[0].DisplayName != newDisplayName {
+		t.Errorf("listed display name = %q, want %q", tenants[0].DisplayName, newDisplayName)
+	}
+
+	cached, err := manager.GetTenant(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetTenant after list: %v", err)
+	}
+	if cached.State != StateSuspended {
+		t.Errorf("cached state after list = %s, want %s", cached.State, StateSuspended)
+	}
+}
+
 func TestManager_ResumeIsPersisted(t *testing.T) {
 	manager, iamClient := newTestManager(t)
 	ctx := context.Background()

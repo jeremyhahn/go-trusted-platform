@@ -182,7 +182,10 @@ cache never holds a state IAM refused, and a failed save returns
 `ErrStorageFailed` with the cache unchanged. A failed save during create rolls
 the IAM tenant and DEK back. Reads that miss the cache (`GetTenant`,
 `GetTenantByName`, `ListTenants`) rebuild the entity from the record, so a
-restarted daemon serves the state, quotas and labels it last stored. A record
+restarted daemon serves the state, quotas and labels it last stored.
+`ListTenants` always reads IAM and replaces each listed tenant's cache entry
+with the entity it rebuilt: the record is authoritative, so a tenant another
+daemon changed lists in its new state and later cached reads see it too. A record
 that does not parse, or names an unknown state, is `ErrStorageFailed`. A
 tenant created outside the manager has no record: it reads as `created`
 (`suspended` when IAM says so) with zero quotas and no labels.

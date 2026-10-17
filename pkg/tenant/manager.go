@@ -493,10 +493,11 @@ func (m *Manager) ListTenants(ctx context.Context, limit, offset int) ([]*Tenant
 			return nil, 0, err
 		}
 
-		// A cached entity is the one this daemon last stored, and it wins
-		// over the IAM copy a concurrent write may not have reached yet.
-		cached, _ := m.cache.LoadOrStore(entity.ID, entity)
-		entities = append(entities, cached.(*TenantEntity).Clone())
+		// The IAM record is authoritative: every write saves to IAM before
+		// it touches the cache, so a cached entity can only be older than
+		// the record, never newer. Reconcile the cache from the record.
+		m.cache.Store(entity.ID, entity)
+		entities = append(entities, entity.Clone())
 	}
 
 	return entities, total, nil
