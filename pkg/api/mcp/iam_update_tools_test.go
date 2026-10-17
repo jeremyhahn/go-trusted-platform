@@ -28,11 +28,13 @@ func TestIAMUpdateTools(t *testing.T) {
 		"iam_update_user": {
 			args: map[string]interface{}{
 				"tenant_id": "tenant-1", "user_id": "user-1", "email": "a@acme.test",
-				"name": "Alice", "attributes": map[string]interface{}{"dept": "eng"},
+				"name": "Alice", "roles": []interface{}{"viewer"}, "groups": []interface{}{"ops"},
+				"attributes": map[string]interface{}{"dept": "eng"},
 			},
 			want: &IAMUpdateUserRequest{
 				TenantID: "tenant-1", UserID: "user-1", Email: "a@acme.test",
-				Name: "Alice", Attributes: map[string]string{"dept": "eng"},
+				Name: "Alice", Roles: []string{"viewer"}, Groups: []string{"ops"},
+				Attributes: map[string]string{"dept": "eng"},
 			},
 			mount: func(svc *mockServiceProvider, got *interface{}, err error) {
 				svc.iamUpdateUserFunc = func(_ context.Context, req *IAMUpdateUserRequest) (interface{}, error) {

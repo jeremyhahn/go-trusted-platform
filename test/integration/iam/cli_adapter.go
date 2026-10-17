@@ -19,8 +19,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // CLIAdapterError represents an error from the CLI adapter
@@ -36,7 +39,9 @@ func (e *CLIAdapterError) Error() string {
 
 // CLIAdapter implements IAMCommands using the platformctl CLI
 type CLIAdapter struct {
-	cliPath string
+	cliPath    string
+	configDir  string
+	configPath string
 }
 
 // NewCLIAdapter creates a new CLI adapter
@@ -55,12 +60,28 @@ func (a *CLIAdapter) Setup(ctx context.Context) error {
 			Message:   "CLI not found",
 		}
 	}
+
+	dir, path, err := helpers.WriteTempLocalCLIConfig(helpers.GetSocketPath(), helpers.GetGRPCEndpoint())
+	if err != nil {
+		return &CLIAdapterError{
+			Operation: "Setup",
+			Message:   "failed to write platformctl config: " + err.Error(),
+		}
+	}
+	a.configDir = dir
+	a.configPath = path
 	return nil
 }
 
 // Teardown cleans up after testing
 func (a *CLIAdapter) Teardown(ctx context.Context) error {
-	return nil
+	if a.configDir == "" {
+		return nil
+	}
+	err := os.RemoveAll(a.configDir)
+	a.configDir = ""
+	a.configPath = ""
+	return err
 }
 
 // Name returns the adapter name
@@ -70,7 +91,11 @@ func (a *CLIAdapter) Name() string {
 
 // runCommand executes a CLI command and returns the output
 func (a *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, a.cliPath, args...)
+	// The harness config's current_context names the daemon, so --config alone
+	// selects it; a global --context would collide with the --context
+	// attribute flag of "iam check-permission".
+	full := append([]string{"--config", a.configPath}, args...)
+	cmd := exec.CommandContext(ctx, a.cliPath, full...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, &CLIAdapterError{

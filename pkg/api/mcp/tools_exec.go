@@ -933,6 +933,8 @@ func (r *ToolRegistry) executeIAMUpdateUser(ctx context.Context, args map[string
 		UserID:     getString(args, "user_id"),
 		Email:      getString(args, "email"),
 		Name:       getString(args, "name"),
+		Roles:      getStringSlice(args, "roles"),
+		Groups:     getStringSlice(args, "groups"),
 		Attributes: getStringMap(args, "attributes"),
 	}
 

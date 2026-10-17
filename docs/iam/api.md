@@ -85,8 +85,8 @@ Rows below give the unscoped path; the tenant-scoped equivalent always exists.
 | Assign role to user | `POST /api/v1/iam/users/{id}/roles/{role}` | ✅ | `0xB9` | `iam_assign_role`, `iam:write` | ✅ |
 | Revoke role from user | `DELETE /api/v1/iam/users/{id}/roles/{role}` | ✅ | `0xBA` | `iam_revoke_role`, `iam:write` | ✅ |
 
-`iam_update_user` changes what gRPC `UpdateUser` changes: email, display name
-and attributes.
+`iam_update_user` changes what gRPC `UpdateUser` changes: email, display name,
+roles, groups and attributes.
 
 Create user takes an email and no required username. The IAM SDK refuses an
 empty username, so every transport (REST, gRPC, Unix, QUIC, MCP) derives it

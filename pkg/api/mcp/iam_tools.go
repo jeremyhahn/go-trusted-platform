@@ -187,7 +187,7 @@ func (r *ToolRegistry) registerIAMUserTools() {
 
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_update_user",
-		Description: "Update an IAM user's email, display name or attributes",
+		Description: "Update an IAM user's email, display name, roles, groups or attributes",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -206,6 +206,16 @@ func (r *ToolRegistry) registerIAMUserTools() {
 				"name": map[string]interface{}{
 					"type":        "string",
 					"description": "New display name",
+				},
+				"roles": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Replacement role names",
+				},
+				"groups": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Replacement group IDs",
 				},
 				"attributes": map[string]interface{}{
 					"type":        "object",

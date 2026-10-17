@@ -134,6 +134,8 @@ type IAMUpdateUserRequest struct {
 	UserID     string            `json:"user_id"`
 	Email      string            `json:"email,omitempty"`
 	Name       string            `json:"name,omitempty"`
+	Roles      []string          `json:"roles,omitempty"`
+	Groups     []string          `json:"groups,omitempty"`
 	Attributes map[string]string `json:"attributes,omitempty"`
 }
 

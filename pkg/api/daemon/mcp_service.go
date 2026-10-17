@@ -1653,6 +1653,8 @@ func (p *MCPServiceProvider) IAMUpdateUser(ctx context.Context, req *mcp.IAMUpda
 		UserId:     req.UserID,
 		Email:      req.Email,
 		Name:       req.Name,
+		Roles:      req.Roles,
+		Groups:     req.Groups,
 		Attributes: req.Attributes,
 	})
 }
