@@ -200,7 +200,7 @@ func kmsSecretToolCases() []kmsSecretToolCase {
 			}},
 		{"secret_list", "secrets:list", map[string]interface{}{},
 			func(s *mockServiceProvider, ran *bool) {
-				s.secretListFunc = func(context.Context, int) (interface{}, error) {
+				s.secretListFunc = func(context.Context, int, string) (interface{}, error) {
 					*ran = true
 					return map[string]interface{}{"secrets": []interface{}{}}, nil
 				}

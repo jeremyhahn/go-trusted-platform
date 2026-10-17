@@ -37,6 +37,7 @@ import (
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	restkms "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
@@ -256,7 +257,7 @@ type paritySecretsClient struct {
 }
 
 func (c *paritySecretsClient) Store(ctx context.Context, req *secrets.StoreSecretRequest) (*secrets.StoreSecretResponse, error) {
-	data, _ := req.Data["_raw"].([]byte)
+	data, _ := req.Data[restkms.SecretValueKey].([]byte)
 	version := c.store.putSecret(req.Path, data)
 	return &secrets.StoreSecretResponse{Version: int(version)}, nil
 }
@@ -266,7 +267,7 @@ func (c *paritySecretsClient) Get(ctx context.Context, path string, opts ...secr
 	if err != nil {
 		return nil, err
 	}
-	return &secrets.Secret{Path: path, Data: map[string]interface{}{"_raw": data}, Version: int(version)}, nil
+	return &secrets.Secret{Path: path, Data: map[string]interface{}{restkms.SecretValueKey: data}, Version: int(version)}, nil
 }
 
 func (c *paritySecretsClient) GetRotationPolicy(ctx context.Context, secretID string) (*secrets.RotationPolicy, error) {

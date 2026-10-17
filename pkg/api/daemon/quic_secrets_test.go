@@ -18,6 +18,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -274,4 +275,54 @@ func TestHandleSecretsCategoryDispatch(t *testing.T) {
 		resp := handler.HandleRequest(ctx, req)
 		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
+}
+
+func TestQUICSecretsList_PagesThroughTheAdapter(t *testing.T) {
+	ctx := context.Background()
+	adapter := NewSecretsServerAdapter(newJSONSecretsClient(), slog.Default())
+	storeSecrets(t, adapter, "c", "a", "b")
+	handler := newTestQUICServiceHandler(logging.DefaultLogger())
+	handler.SetSecretsService(adapter)
+
+	req := kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubList, &SecretsListRequest{Limit: 2})
+	resp := handler.HandleRequest(ctx, req)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	var first SecretsListResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &first))
+	assert.Equal(t, []string{"a", "b"}, first.SecretIDs)
+	assert.Equal(t, "b", first.NextCursor)
+
+	req = kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubList, &SecretsListRequest{Limit: 2, Cursor: first.NextCursor})
+	resp = handler.HandleRequest(ctx, req)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	var last SecretsListResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &last))
+	assert.Equal(t, []string{"c"}, last.SecretIDs)
+	assert.Empty(t, last.NextCursor)
+}
+
+func TestQUICSecretsList_NegativeLimitIsInvalidRequest(t *testing.T) {
+	handler := newTestQUICServiceHandler(logging.DefaultLogger())
+	handler.SetSecretsService(NewSecretsServerAdapter(newJSONSecretsClient(), slog.Default()))
+
+	req := kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubList, &SecretsListRequest{Limit: -1})
+	resp := handler.HandleRequest(context.Background(), req)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
+}
+
+func TestQUICSecretsGet_ReturnsStoredBytes(t *testing.T) {
+	ctx := context.Background()
+	handler := newTestQUICServiceHandler(logging.DefaultLogger())
+	handler.SetSecretsService(NewSecretsServerAdapter(newJSONSecretsClient(), slog.Default()))
+	stored := []byte{0x00, 0xff, 'q'}
+
+	req := kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubStore, &SecretsStoreRequest{SecretID: "q/s", Data: stored})
+	require.Equal(t, quicwire.StatusOK, handler.HandleRequest(ctx, req).Status)
+
+	req = kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubGet, &SecretsGetRequest{SecretID: "q/s"})
+	resp := handler.HandleRequest(ctx, req)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	var out SecretsGetResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+	assert.Equal(t, stored, out.Data)
 }

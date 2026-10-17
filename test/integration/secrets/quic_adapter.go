@@ -345,7 +345,7 @@ func (q *QUICAdapter) List(ctx context.Context, opts ListOptions) (*ListResult, 
 		secrets = append(secrets, SecretSummary{SecretID: id, Name: id})
 	}
 
-	return &ListResult{Secrets: secrets, TotalCount: int32(len(secrets))}, nil
+	return &ListResult{Secrets: secrets, HasMore: resp.NextCursor != "", NextCursor: resp.NextCursor, TotalCount: int32(len(secrets))}, nil
 }
 
 // Delete deletes a secret (0xCE/0x04). The request has no permanent flag.

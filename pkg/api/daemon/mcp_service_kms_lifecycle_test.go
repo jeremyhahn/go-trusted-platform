@@ -30,6 +30,14 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 )
 
+func mcpSecretIDs(resp *service.ListSecretsResponse) []string {
+	ids := make([]string, 0, len(resp.Secrets))
+	for _, s := range resp.Secrets {
+		ids = append(ids, s.SecretID)
+	}
+	return ids
+}
+
 // lifecycleKMSServiceMock embeds the full baasservice KMS mock and adds
 // hookable overrides for the lifecycle verbs under test.
 type lifecycleKMSServiceMock struct {
@@ -495,17 +503,40 @@ func TestMCPServiceProviderSecretCRUD(t *testing.T) {
 		assert.ErrorAs(t, err, &notFoundErr)
 	})
 
-	t.Run("ListSuccess", func(t *testing.T) {
+	t.Run("ListPagesByLimitAndCursor", func(t *testing.T) {
 		mock := &lifecycleSecretsServiceMock{
 			listSecretsFunc: func(ctx context.Context, req *service.ListSecretsRequest) (*service.ListSecretsResponse, error) {
-				assert.Equal(t, 25, req.Limit)
-				return &service.ListSecretsResponse{}, nil
+				// The whole list, in the service's own (unsorted) order.
+				assert.Zero(t, req.Limit)
+				return &service.ListSecretsResponse{Secrets: []*service.Secret{
+					{SecretID: "c"}, {SecretID: "a"}, {SecretID: "b"},
+				}, TotalCount: 3}, nil
 			},
 		}
 		provider := newLifecycleProvider(nil, mock)
 
-		_, err := provider.SecretList(ctx, 25)
+		got, err := provider.SecretList(ctx, 2, "")
 		require.NoError(t, err)
+		first := got.(*service.ListSecretsResponse)
+		assert.Equal(t, []string{"a", "b"}, mcpSecretIDs(first))
+		assert.Equal(t, "b", first.NextCursor)
+		assert.True(t, first.HasMore)
+		assert.Equal(t, 3, first.TotalCount)
+
+		got, err = provider.SecretList(ctx, 2, first.NextCursor)
+		require.NoError(t, err)
+		last := got.(*service.ListSecretsResponse)
+		assert.Equal(t, []string{"c"}, mcpSecretIDs(last))
+		assert.Empty(t, last.NextCursor)
+		assert.False(t, last.HasMore)
+	})
+
+	t.Run("ListNegativeLimitIsInvalid", func(t *testing.T) {
+		provider := newLifecycleProvider(nil, &lifecycleSecretsServiceMock{})
+
+		_, err := provider.SecretList(ctx, -1, "")
+		var invalid mcp.ErrInvalidArgument
+		assert.ErrorAs(t, err, &invalid)
 	})
 
 	t.Run("DeleteSuccess", func(t *testing.T) {

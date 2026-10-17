@@ -23,6 +23,7 @@ import (
 	baasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	restkms "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -354,17 +355,46 @@ func (p *MCPServiceProvider) SecretGet(ctx context.Context, secretID string, ver
 }
 
 // SecretList lists secrets without exposing secret data.
-func (p *MCPServiceProvider) SecretList(ctx context.Context, limit int) (interface{}, error) {
+func (p *MCPServiceProvider) SecretList(ctx context.Context, limit int, cursor string) (interface{}, error) {
 	if p.secretsService == nil {
 		return nil, ErrServiceNotAvailable{Service: "secrets"}
 	}
 
-	resp, err := p.secretsService.ListSecrets(ctx, &baasservice.ListSecretsRequest{Limit: limit})
+	if limit < 0 {
+		return nil, mcp.ErrInvalidArgument{Msg: "limit must not be negative"}
+	}
+
+	// The service answers only an unsorted first page and ignores the
+	// cursor, so the whole list is read and paged here the way the other
+	// transports page it (docs/kms/api.md §4).
+	resp, err := p.secretsService.ListSecrets(ctx, &baasservice.ListSecretsRequest{})
 	if err != nil {
 		return nil, ErrSecretsOperationFailed{Operation: "ListSecrets", Cause: err}
 	}
 
-	return resp, nil
+	byID := make(map[string]*baasservice.Secret, len(resp.Secrets))
+	ids := make([]string, 0, len(resp.Secrets))
+	for _, secret := range resp.Secrets {
+		if secret == nil {
+			continue
+		}
+		byID[secret.SecretID] = secret
+		ids = append(ids, secret.SecretID)
+	}
+
+	pageIDs, next := restkms.PageSecretPaths(ids, cursor, limit)
+	page := make([]*baasservice.Secret, 0, len(pageIDs))
+	for _, id := range pageIDs {
+		page = append(page, byID[id])
+	}
+
+	return &baasservice.ListSecretsResponse{
+		Secrets:    page,
+		NextCursor: next,
+		HasMore:    next != "",
+		TotalCount: len(ids),
+		Timestamp:  resp.Timestamp,
+	}, nil
 }
 
 // SecretDelete deletes a secret.

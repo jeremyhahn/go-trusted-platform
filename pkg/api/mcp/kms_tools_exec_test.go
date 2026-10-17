@@ -548,7 +548,7 @@ func TestExecuteSecretTools(t *testing.T) {
 
 	t.Run("ListSuccess", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.secretListFunc = func(ctx context.Context, limit int) (interface{}, error) {
+		svc.secretListFunc = func(ctx context.Context, limit int, cursor string) (interface{}, error) {
 			assert.Equal(t, 50, limit)
 			return map[string]interface{}{"secrets": []interface{}{}}, nil
 		}
@@ -560,13 +560,39 @@ func TestExecuteSecretTools(t *testing.T) {
 
 	t.Run("ListError", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.secretListFunc = func(ctx context.Context, limit int) (interface{}, error) {
+		svc.secretListFunc = func(ctx context.Context, limit int, cursor string) (interface{}, error) {
 			return nil, errors.New("backend down")
 		}
 		registry := newKMSToolTestRegistry(svc)
 
 		_, err := executeKMSToolViaDispatch(t, registry, "secret_list", map[string]interface{}{})
 		assert.Error(t, err)
+	})
+
+	t.Run("ListForwardsLimitAndCursor", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		svc.secretListFunc = func(ctx context.Context, limit int, cursor string) (interface{}, error) {
+			assert.Equal(t, 2, limit)
+			assert.Equal(t, "db/b", cursor)
+			return map[string]interface{}{"secrets": []interface{}{}}, nil
+		}
+		registry := newKMSToolTestRegistry(svc)
+
+		_, err := executeKMSToolViaDispatch(t, registry, "secret_list", map[string]interface{}{"limit": 2, "cursor": "db/b"})
+		require.NoError(t, err)
+	})
+
+	t.Run("ListNegativeLimitIsInvalidArgument", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		svc.secretListFunc = func(ctx context.Context, limit int, cursor string) (interface{}, error) {
+			t.Fatal("a negative limit must not reach the service")
+			return nil, nil
+		}
+		registry := newKMSToolTestRegistry(svc)
+
+		_, err := executeKMSToolViaDispatch(t, registry, "secret_list", map[string]interface{}{"limit": -1})
+		var invalid ErrInvalidArgument
+		assert.ErrorAs(t, err, &invalid)
 	})
 
 	t.Run("DeleteSuccess", func(t *testing.T) {

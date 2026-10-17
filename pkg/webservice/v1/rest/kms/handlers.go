@@ -1211,7 +1211,7 @@ func (h *Handlers) StoreSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := h.ctx(r)
 	defer cancel()
-	data := map[string]interface{}{"value": req.Value}
+	data := map[string]interface{}{SecretValueKey: req.Value}
 	if req.ContentType != "" {
 		data["content_type"] = req.ContentType
 	}
@@ -1248,7 +1248,7 @@ func (h *Handlers) ListSecrets(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	page, next := pageSecretPaths(resp.Paths, query.Get("cursor"), limit)
+	page, next := PageSecretPaths(resp.Paths, query.Get("cursor"), limit)
 	out := &ListSecretsResponse{Secrets: make([]SecretSummary, 0, len(page)), NextCursor: next}
 	for _, path := range page {
 		out.Secrets = append(out.Secrets, SecretSummary{Path: path})
@@ -1269,10 +1269,10 @@ func parseListLimit(raw string) (int, error) {
 	return limit, nil
 }
 
-// pageSecretPaths sorts the paths, keeps those after cursor, and returns
+// PageSecretPaths sorts the paths, keeps those after cursor, and returns
 // at most limit of them (all of them when limit is 0). next is the last
 // returned path when more follow, and empty on the final page.
-func pageSecretPaths(paths []string, cursor string, limit int) (page []string, next string) {
+func PageSecretPaths(paths []string, cursor string, limit int) (page []string, next string) {
 	sorted := slices.Clone(paths)
 	slices.Sort(sorted)
 	if cursor != "" {
@@ -1300,7 +1300,7 @@ func (h *Handlers) GetSecret(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	value, err := decodeStoredSecretValue(s.Path, s.Data["value"])
+	value, err := DecodeStoredSecretValue(s.Path, s.Data[SecretValueKey])
 	if err != nil {
 		h.respWriter.Error500(w, r, err)
 		return
@@ -1326,11 +1326,11 @@ func (h *Handlers) GetSecret(w http.ResponseWriter, r *http.Request) {
 	h.success200(w, r, out)
 }
 
-// decodeStoredSecretValue returns the bytes the caller stored under a
+// DecodeStoredSecretValue returns the bytes the caller stored under a
 // secret's "value" key. The go-quicbaas secrets backend JSON-encodes the
 // data map, so bytes stored by StoreSecret read back as standard base64
 // text; a backend that keeps the map in memory hands the bytes back as is.
-func decodeStoredSecretValue(path string, v interface{}) ([]byte, error) {
+func DecodeStoredSecretValue(path string, v interface{}) ([]byte, error) {
 	switch typed := v.(type) {
 	case nil:
 		return nil, nil

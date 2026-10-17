@@ -769,7 +769,9 @@ type ServiceProvider interface {
 	// Secrets operations
 	SecretStore(ctx context.Context, req *SecretStoreRequest) (interface{}, error)
 	SecretGet(ctx context.Context, secretID string, version uint64) (interface{}, error)
-	SecretList(ctx context.Context, limit int) (interface{}, error)
+	// SecretList answers one page of secrets sorted by ID: at most limit of
+	// them after cursor, the same paging as the other transports.
+	SecretList(ctx context.Context, limit int, cursor string) (interface{}, error)
 	SecretDelete(ctx context.Context, secretID string) error
 	SecretSetRotationPolicy(ctx context.Context, req *SecretSetRotationPolicyRequest) (interface{}, error)
 	SecretGetRotationPolicy(ctx context.Context, secretID string) (interface{}, error)

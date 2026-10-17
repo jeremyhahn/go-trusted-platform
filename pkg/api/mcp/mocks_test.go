@@ -184,7 +184,7 @@ type mockServiceProvider struct {
 	// Secrets
 	secretStoreFunc             func(ctx context.Context, req *SecretStoreRequest) (interface{}, error)
 	secretGetFunc               func(ctx context.Context, secretID string, version uint64) (interface{}, error)
-	secretListFunc              func(ctx context.Context, limit int) (interface{}, error)
+	secretListFunc              func(ctx context.Context, limit int, cursor string) (interface{}, error)
 	secretDeleteFunc            func(ctx context.Context, secretID string) error
 	secretSetRotationPolicyFunc func(ctx context.Context, req *SecretSetRotationPolicyRequest) (interface{}, error)
 	secretGetRotationPolicyFunc func(ctx context.Context, secretID string) (interface{}, error)
@@ -1833,9 +1833,9 @@ func (m *mockServiceProvider) SecretGet(ctx context.Context, secretID string, ve
 	return map[string]interface{}{"secret_id": secretID, "version": version}, nil
 }
 
-func (m *mockServiceProvider) SecretList(ctx context.Context, limit int) (interface{}, error) {
+func (m *mockServiceProvider) SecretList(ctx context.Context, limit int, cursor string) (interface{}, error) {
 	if m.secretListFunc != nil {
-		return m.secretListFunc(ctx, limit)
+		return m.secretListFunc(ctx, limit, cursor)
 	}
 	return map[string]interface{}{"secrets": []interface{}{}}, nil
 }

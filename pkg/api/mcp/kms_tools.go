@@ -680,6 +680,10 @@ func (r *ToolRegistry) registerSecretsTools() {
 					"description": "Maximum number of secrets to return",
 					"default":     50,
 				},
+				"cursor": map[string]interface{}{
+					"type":        "string",
+					"description": "next_cursor from the previous page; omit for the first page",
+				},
 			},
 		},
 	})
