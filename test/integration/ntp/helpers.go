@@ -67,14 +67,15 @@ func envOr(key, fallback string) string {
 // notConfiguredMarkers are the substrings every transport surfaces when the
 // devcontainer's platformd has no `ntp:` section. The suite fails on that
 // with ErrNTPNotConfigured, naming the missing section; any other failure is
-// reported as itself.
+// reported as itself. A bare Unavailable or 503 is not one of them: chronyd
+// not answering its control socket (ntp.ErrControlUnavailable) carries the
+// same class (docs/ntp/api.md §5), and naming it "no ntp: section" sent the
+// diagnosis to a config that has one.
 var notConfiguredMarkers = []string{
 	"ntp service is not configured",
 	"time synchronization is not enabled",
 	"service not available: ntp",
 	"quic service unavailable: ntp",
-	"unavailable",
-	"503",
 }
 
 // IsNotConfigured reports whether err is the "no ntp: section" surface.
