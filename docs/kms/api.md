@@ -180,6 +180,26 @@ same SDK client and fail the same way on an embedded daemon.
 embedded seam ([cli.md](cli.md) §7.2). `kms dek` calls the SDK DEK client
 ([cli.md](cli.md) §7.1).
 
+**A secret reads back as the bytes the caller stored.** The go-quicbaas secrets
+backend JSON-encodes a secret's data map, so the bytes stored under `value`
+are kept as standard base64 text. REST `GET /kms/secrets/{name}` decodes that
+text and returns the caller's bytes in `value`. The value is base64 on the
+REST wire in both directions, and a plain-string `value` on store reads back as
+the same string. A stored `value` that is not base64 was not written by the
+platform; REST answers 500 (`ErrSecretValueMalformed`) instead of returning it
+as the caller's bytes. The CLI follows the same convention ([cli.md](cli.md)
+§7.2). The gRPC / Unix / QUIC adapter (`pkg/api/daemon/kms_service.go`) keeps
+its bytes under `_raw` and reads them back as `[]byte`. After the backend's JSON
+round trip the type assertion fails and the adapter returns empty data. That is
+an open #949 defect on that adapter.
+
+**REST `GET /kms/secrets` pages by path.** `limit` is the page size; it must be
+a positive integer (400 otherwise), and when it is absent every path comes back.
+Paths come back sorted. When more follow, the response carries `next_cursor`,
+the last path on the page; pass it back as `cursor` to read the next page.
+`prefix` narrows the list before paging. gRPC `ListSecrets` returns every path
+in one response.
+
 **Generating a data key and creating a DEK are different operations.**
 `/data-keys` mints a key under the KEK named by `key_id` (`wrapping_key_id` on
 `/data-keys/wrapped`) and returns it without storing anything: the plaintext and

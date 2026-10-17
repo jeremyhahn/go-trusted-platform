@@ -552,6 +552,9 @@ type SecretSummary struct {
 // ListSecretsResponse is the response from listing secrets.
 type ListSecretsResponse struct {
 	Secrets []SecretSummary `json:"secrets"`
+	// NextCursor is set when more paths follow this page; pass it back
+	// as ?cursor= to read the next one.
+	NextCursor string `json:"next_cursor,omitempty"`
 }
 
 // SecretVersionResponse describes a specific secret version.
