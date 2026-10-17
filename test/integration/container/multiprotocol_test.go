@@ -30,13 +30,16 @@ package container
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	computecontainer "github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // =============================================================================
@@ -82,6 +85,18 @@ func runContainerProtocolTests(t *testing.T, ctx context.Context, cmd ContainerC
 	// Generate unique test prefix for this protocol run
 	prefix := fmt.Sprintf("%s-%d", cmd.Name(), time.Now().Unix())
 
+	t.Run("ErrorHandling", func(t *testing.T) {
+		runContainerNotFoundTests(t, ctx, cmd, prefix)
+		runContainerInvalidArgsTests(t, ctx, cmd, prefix)
+	})
+
+	if launchRefused() {
+		t.Run("LaunchRefused", func(t *testing.T) {
+			runContainerLaunchRefusedTests(t, ctx, cmd, prefix)
+		})
+		return
+	}
+
 	t.Run("Lifecycle", func(t *testing.T) {
 		runContainerCreateTests(t, ctx, cmd, prefix)
 		runContainerGetTests(t, ctx, cmd, prefix)
@@ -103,14 +118,113 @@ func runContainerProtocolTests(t *testing.T, ctx context.Context, cmd ContainerC
 		runContainerAttestTests(t, ctx, cmd, prefix)
 	})
 
-	t.Run("ErrorHandling", func(t *testing.T) {
-		runContainerNotFoundTests(t, ctx, cmd, prefix)
-		runContainerInvalidArgsTests(t, ctx, cmd, prefix)
-	})
-
 	t.Run("FullLifecycle", func(t *testing.T) {
 		runContainerFullLifecycleTests(t, ctx, cmd, prefix)
 	})
+}
+
+// launchRefused reports whether platformd refuses every container launch.
+// The devcontainer's platformd runs on a TPM (swtpm), and a host with a TPM
+// never starts a workload unmeasured: with neither docker nor podman on PATH
+// every Create and Start is refused with MeasuredRuntimeUnavailableError
+// (docs/compute/container-orchestrator.md).
+func launchRefused() bool {
+	for _, runtime := range computecontainer.MeasuredRuntimes {
+		if _, err := exec.LookPath(runtime); err == nil {
+			return false
+		}
+	}
+	return true
+}
+
+// requireLaunchRefused asserts err is the measured-launch refusal. The typed
+// error reaches every transport as its message, which names the runtimes.
+func requireLaunchRefused(t *testing.T, err error, msgAndArgs ...any) {
+	t.Helper()
+
+	require.Error(t, err, msgAndArgs...)
+	assert.Contains(t, err.Error(), "container launch refused", msgAndArgs...)
+	for _, runtime := range computecontainer.MeasuredRuntimes {
+		assert.Contains(t, err.Error(), runtime, msgAndArgs...)
+	}
+}
+
+// runContainerLaunchRefusedTests asserts that a host which cannot measure a
+// launch refuses every create and start, and keeps nothing it refused.
+func runContainerLaunchRefusedTests(t *testing.T, ctx context.Context, cmd ContainerCommands, prefix string) {
+	testCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	specs := map[string]CreateOptions{
+		"Basic": {
+			Name:   prefix + "-refused-basic",
+			Image:  "docker.io/library/alpine:latest",
+			Labels: map[string]string{"test": "true"},
+		},
+		"Environment": {
+			Name:        prefix + "-refused-env",
+			Image:       "docker.io/library/alpine:latest",
+			Environment: map[string]string{"APP_ENV": "test"},
+		},
+		"Command": {
+			Name:    prefix + "-refused-cmd",
+			Image:   "docker.io/library/alpine:latest",
+			Command: []string{"sleep", "3600"},
+		},
+	}
+
+	for name, opts := range specs {
+		t.Run("Create"+name, func(t *testing.T) {
+			container, err := cmd.Create(testCtx, opts)
+			requireLaunchRefused(t, err, "%s create %s", cmd.Name(), opts.Name)
+			assert.Nil(t, container, "a refused create returns no container")
+		})
+	}
+
+	t.Run("Start", func(t *testing.T) {
+		err := cmd.Start(testCtx, prefix+"-refused-start")
+		requireLaunchRefused(t, err, "%s start", cmd.Name())
+	})
+
+	t.Run("NothingKept", func(t *testing.T) {
+		containers, err := cmd.List(testCtx, ListOptions{All: true})
+		require.NoError(t, err, "List should succeed while launches are refused")
+		for _, container := range containers {
+			assert.NotContains(t, container.Name, prefix+"-refused-",
+				"a refused create must leave no container behind")
+		}
+	})
+}
+
+// surfaceProbes calls each operation a transport may lack a surface for.
+var surfaceProbes = map[string]func(context.Context, ContainerCommands) error{
+	opLogs: func(ctx context.Context, cmd ContainerCommands) error {
+		_, err := cmd.Logs(ctx, "nonexistent-container-id-12345", LogOptions{Stdout: true})
+		return err
+	},
+	opAttest: func(ctx context.Context, cmd ContainerCommands) error {
+		_, err := cmd.Attest(ctx, "nonexistent-container-id-12345")
+		return err
+	},
+}
+
+// declaredMissing reports whether cmd's transport has no surface for op. When
+// it has none, the adapter must return the declared ErrNoSurface, which is
+// asserted and logged as a MISSING row.
+func declaredMissing(t *testing.T, ctx context.Context, cmd ContainerCommands, op string) bool {
+	t.Helper()
+
+	reason, missing := missingSurface(cmd.Name(), op)
+	if !missing {
+		return false
+	}
+	var noSurface surface.ErrNoSurface
+	require.ErrorAs(t, surfaceProbes[op](ctx, cmd), &noSurface,
+		"%s %s has no server surface (%s): the adapter must say so", cmd.Name(), op, reason)
+	assert.Equal(t, cmd.Name(), noSurface.Transport, "declared transport")
+	assert.Equal(t, op, noSurface.Operation, "declared operation")
+	t.Logf("MISSING: %s %s: %s", cmd.Name(), op, reason)
+	return true
 }
 
 // =============================================================================
@@ -504,6 +618,10 @@ func runContainerLogsTests(t *testing.T, ctx context.Context, cmd ContainerComma
 	testCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
+	if declaredMissing(t, testCtx, cmd, opLogs) {
+		return
+	}
+
 	// Create a container that produces output
 	containerName := prefix + "-logs-test"
 	opts := CreateOptions{
@@ -550,6 +668,10 @@ func runContainerLogsTests(t *testing.T, ctx context.Context, cmd ContainerComma
 func runContainerAttestTests(t *testing.T, ctx context.Context, cmd ContainerCommands, prefix string) {
 	testCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
+
+	if declaredMissing(t, testCtx, cmd, opAttest) {
+		return
+	}
 
 	// Create and start a container
 	containerName := prefix + "-attest-test"

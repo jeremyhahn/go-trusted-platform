@@ -23,6 +23,7 @@ import (
 	"time"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 )
 
 // GRPCAdapter wraps a *Registry to satisfy grpcapi.RegistryService.
@@ -109,9 +110,7 @@ func (a *GRPCAdapter) pushImpl(ctx context.Context, metadata *grpcapi.RegistryPu
 	if img.Manifest == nil {
 		return nil, ErrInvalidManifest{Reference: ref, Reason: "envelope missing manifest"}
 	}
-	if err := a.registry.Push(ctx, ref, &img, PushOptions{
-		Annotations: metadata.Annotations,
-	}); err != nil {
+	if err := a.registry.Push(ctx, ref, &img, pushOptionsOf(metadata.Annotations)); err != nil {
 		if errors.As(err, &ErrImageAlreadyExists{}) {
 			return nil, grpcapi.ErrArtifactAlreadyExists{Repository: metadata.Repository, Reference: metadata.Tag}
 		}
@@ -122,6 +121,15 @@ func (a *GRPCAdapter) pushImpl(ctx context.Context, metadata *grpcapi.RegistryPu
 		BytesReceived: int64(len(payload)),
 		Timestamp:     a.clock().UTC(),
 	}, nil
+}
+
+// pushOptionsOf turns push-metadata annotations into PushOptions; the
+// overwrite annotation sets AllowOverwrite.
+func pushOptionsOf(annotations map[string]string) PushOptions {
+	return PushOptions{
+		Annotations:    annotations,
+		AllowOverwrite: annotations[regsvc.AnnotationOverwrite] == "true",
+	}
 }
 
 // Pull returns the JSON envelope of an Image in the response body.

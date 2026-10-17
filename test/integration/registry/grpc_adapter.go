@@ -23,18 +23,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"strings"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/registry"
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
-	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
-
-// grpcNoSurfaceReason records why the registry gRPC service (and the Unix
-// socket, which serves the same service) has no call for an operation.
-const grpcNoSurfaceReason = "RegistryService defines Push, Pull, List, Inspect, Delete and Status only (docs/registry/api.md §2)"
 
 // splitImageRef splits "name[:tag]" into repository and tag. A colon before
 // the last slash belongs to a registry host port, not to the tag.
@@ -137,7 +133,10 @@ func (g *GRPCAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*
 		return nil, err
 	}
 	metadata := regsvc.NewPushMetadata(repository, tag, int64(len(payload)))
-	metadata.Annotations = opts.Annotations
+	metadata.Annotations = maps.Clone(opts.Annotations)
+	if opts.AllowOverwrite {
+		metadata = regsvc.WithOverwrite(metadata)
+	}
 	if err := stream.Send(regsvc.NewPushMetadataRequest(metadata)); err != nil {
 		return nil, err
 	}
@@ -279,30 +278,30 @@ func (g *GRPCAdapter) Status(ctx context.Context) (*StatusResult, error) {
 
 // Tag has no RegistryService call.
 func (g *GRPCAdapter) Tag(ctx context.Context, sourceRef, targetRef string) (*TagResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "Tag", Reason: grpcNoSurfaceReason}
+	return nil, noSurface(g.Name(), opTag)
 }
 
 // VerifyClient has no RegistryService call.
 func (g *GRPCAdapter) VerifyClient(ctx context.Context, opts VerifyClientOptions) (*VerifyClientResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "VerifyClient", Reason: grpcNoSurfaceReason}
+	return nil, noSurface(g.Name(), opVerifyClient)
 }
 
 // GetSession has no RegistryService call.
 func (g *GRPCAdapter) GetSession(ctx context.Context, clientID string) (*SessionResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "GetSession", Reason: grpcNoSurfaceReason}
+	return nil, noSurface(g.Name(), opGetSession)
 }
 
 // InvalidateSession has no RegistryService call.
 func (g *GRPCAdapter) InvalidateSession(ctx context.Context, clientID string) error {
-	return surface.ErrNoSurface{Transport: "gRPC", Operation: "InvalidateSession", Reason: grpcNoSurfaceReason}
+	return noSurface(g.Name(), opInvalidateSession)
 }
 
 // EncryptImage has no RegistryService call.
 func (g *GRPCAdapter) EncryptImage(ctx context.Context, ref string, keyID string) (*EncryptImageResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "EncryptImage", Reason: grpcNoSurfaceReason}
+	return nil, noSurface(g.Name(), opEncryptImage)
 }
 
 // DecryptImage has no RegistryService call.
 func (g *GRPCAdapter) DecryptImage(ctx context.Context, ref string) (*DecryptImageResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "DecryptImage", Reason: grpcNoSurfaceReason}
+	return nil, noSurface(g.Name(), opDecryptImage)
 }

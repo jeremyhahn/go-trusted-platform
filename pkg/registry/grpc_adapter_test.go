@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 )
 
 // pushEnvelope marshals the JSON push envelope the gRPC and REST transports
@@ -86,5 +87,64 @@ func TestGRPCAdapter_PushRejectsAnEnvelopeWithoutAManifest(t *testing.T) {
 	var invalid ErrInvalidManifest
 	if !errors.As(err, &invalid) {
 		t.Fatalf("PushStream error = %v, want ErrInvalidManifest", err)
+	}
+}
+
+// TestGRPCAdapter_PushRefusesAnExistingTagWithoutOverwrite pins the default:
+// a second push to the same tag is refused when the overwrite annotation is
+// absent or not "true".
+func TestGRPCAdapter_PushRefusesAnExistingTagWithoutOverwrite(t *testing.T) {
+	for name, annotations := range map[string]map[string]string{
+		"absent": nil,
+		"false":  {regsvc.AnnotationOverwrite: "false"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := NewGRPCAdapter(newTestRegistry(t))
+			ctx := context.Background()
+			first := &grpcapi.RegistryPushMetadata{Repository: "apps/web", Tag: "v1"}
+			if _, err := a.PushStream(ctx, first, bytes.NewReader(pushEnvelope(t, []byte("one")))); err != nil {
+				t.Fatalf("first PushStream: %v", err)
+			}
+
+			second := &grpcapi.RegistryPushMetadata{Repository: "apps/web", Tag: "v1", Annotations: annotations}
+			_, err := a.PushStream(ctx, second, bytes.NewReader(pushEnvelope(t, []byte("two"))))
+			var exists grpcapi.ErrArtifactAlreadyExists
+			if !errors.As(err, &exists) {
+				t.Fatalf("second PushStream error = %v, want ErrArtifactAlreadyExists", err)
+			}
+		})
+	}
+}
+
+// TestGRPCAdapter_PushOverwriteReplacesTheTag pins the overwrite annotation:
+// the adapter used to drop it, so `registry push --overwrite` and the REST
+// X-Trusted-Platform-Overwrite header were refused like a plain push.
+func TestGRPCAdapter_PushOverwriteReplacesTheTag(t *testing.T) {
+	a := NewGRPCAdapter(newTestRegistry(t))
+	ctx := context.Background()
+	first := &grpcapi.RegistryPushMetadata{Repository: "apps/web", Tag: "v1"}
+	if _, err := a.PushStream(ctx, first, bytes.NewReader(pushEnvelope(t, []byte("one")))); err != nil {
+		t.Fatalf("first PushStream: %v", err)
+	}
+
+	second := &grpcapi.RegistryPushMetadata{
+		Repository:  "apps/web",
+		Tag:         "v1",
+		Annotations: map[string]string{regsvc.AnnotationOverwrite: "true"},
+	}
+	if _, err := a.PushStream(ctx, second, bytes.NewReader(pushEnvelope(t, []byte("two")))); err != nil {
+		t.Fatalf("overwrite PushStream: %v", err)
+	}
+
+	resp, err := a.Pull(ctx, &grpcapi.RegistryPullRequest{Repository: "apps/web", Reference: "v1"})
+	if err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+	var pulled Image
+	if err := json.Unmarshal(resp.Data, &pulled); err != nil {
+		t.Fatalf("decode pull envelope: %v", err)
+	}
+	if len(pulled.Layers) != 1 || !bytes.Equal(pulled.Layers[0].Content, []byte("two")) {
+		t.Fatalf("pulled layers = %+v, want the overwriting layer %q", pulled.Layers, "two")
 	}
 }
