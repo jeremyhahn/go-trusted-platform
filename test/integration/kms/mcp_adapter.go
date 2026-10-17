@@ -579,7 +579,7 @@ func (m *MCPAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) (
 		return nil, err
 	}
 
-	return &KeyGenerateResult{
+	result := &KeyGenerateResult{
 		KeyID:              handle.KeyID,
 		Version:            handle.Version,
 		Algorithm:          string(handle.Algorithm),
@@ -589,7 +589,11 @@ func (m *MCPAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) (
 		Description:        metadata.Description,
 		Exportable:         metadata.Exportable,
 		DeletionProtection: metadata.DeletionProtection,
-	}, nil
+	}
+	if err := applyKeyDisplay(ctx, m, opts, result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // KeyGet calls kms_get_key, then kms_get_key_metadata for the descriptive fields.

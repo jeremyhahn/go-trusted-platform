@@ -488,6 +488,9 @@ func (q *QUICAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) 
 		result.Exportable = resp.Metadata.Exportable
 		result.DeletionProtection = resp.Metadata.DeletionProtection
 	}
+	if err := applyKeyDisplay(ctx, q, opts, result); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 

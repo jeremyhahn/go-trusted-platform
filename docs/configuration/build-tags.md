@@ -50,6 +50,17 @@ than qrdb's feature-disabled stub: `WITH_TIMESERIES` adds
 | `WITH_VECTOR` | 0 | Vector database service (`vector` + `qrdb_vector`) |
 | `WITH_RAG` | 0 | RAG service (`rag` + `qrdb_vector`; requires `WITH_VECTOR=1`, or make stops with an error) |
 
+A build with the vector tags also needs `quicbaas.vector.enabled: true` before
+the embedded server serves the Vector service. Validate refuses that setting in
+a build without the tags. Without the service, every call on the platform's SDK
+client `Vector()` fails at once with `ErrVectorUnavailable`, whose reason names
+the missing build or the disabled setting.
+
+Integration builds (`TEST_BUILD_TAGS`, used by `make integration-test` and every
+`make integration-test-<suite>`) always carry `vector qrdb_vector`, and
+`quicbaas.TestConfig` enables the service in such a build. That way the
+quicbaas and sdk suites' Vector assertions run against a real vector store.
+
 ## qrdb Optional Feature Tags
 
 qrdb's optional engines and protocol frontends, OFF by default for the

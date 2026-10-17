@@ -305,7 +305,7 @@ func (g *GRPCAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) 
 		return nil, ErrGRPCCallFailed{Method: "GenerateKey", Err: err}
 	}
 
-	return &KeyGenerateResult{
+	result := &KeyGenerateResult{
 		KeyID:              resp.Key.KeyId,
 		Version:            resp.Key.Version,
 		Algorithm:          algorithmProtoToString(resp.Key.Algorithm),
@@ -315,7 +315,11 @@ func (g *GRPCAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) 
 		Description:        resp.Metadata.Description,
 		Exportable:         resp.Metadata.Exportable,
 		DeletionProtection: resp.Metadata.DeletionProtection,
-	}, nil
+	}
+	if err := applyKeyDisplay(ctx, g, opts, result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // KeyGet retrieves a key by ID and optional version via gRPC.
