@@ -457,6 +457,7 @@ var deviceQUICDispatch = map[byte]deviceQUICHandler{
 	quicwire.DeviceSubTemplateDelete:      (*QUICServiceHandler).handleDeviceTemplateDelete,
 	quicwire.DeviceSubProfileFromTemplate: (*QUICServiceHandler).handleDeviceProfileFromTemplate,
 	quicwire.DeviceSubFindMatchingProfile: (*QUICServiceHandler).handleDeviceFindMatchingProfile,
+	quicwire.DeviceSubFindConfigForDevice: (*QUICServiceHandler).handleDeviceFindConfigForDevice,
 }
 
 // handleDeviceRecordAttestCert records a device's attestation certificate
@@ -639,6 +640,27 @@ func (h *QUICServiceHandler) handleDeviceFindMatchingProfile(ctx context.Context
 	resp, err := h.deviceGRPC.FindMatchingProfile(ctx, &matchReq)
 	if err != nil {
 		return h.deviceGRPCErrorToQUIC("DeviceFindMatchingProfile", err)
+	}
+	return h.encodeDeviceQUICResponse(resp)
+}
+
+// handleDeviceFindConfigForDevice serves DeviceSubFindConfigForDevice by
+// delegating to the shared DeviceGRPCService.FindConfigForDevice, so a
+// missing identity answers InvalidArgument and an unknown one NotFound, as
+// on gRPC.
+func (h *QUICServiceHandler) handleDeviceFindConfigForDevice(ctx context.Context, payload []byte) *quicwire.Response {
+	if h.profileService == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDeviceProfileServiceNotAvailable{})
+	}
+
+	var configReq platformv1.FindConfigForDeviceRequest
+	if err := quicwire.DecodePayload(payload, &configReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	resp, err := h.deviceGRPC.FindConfigForDevice(ctx, &configReq)
+	if err != nil {
+		return h.deviceGRPCErrorToQUIC("DeviceFindConfigForDevice", err)
 	}
 	return h.encodeDeviceQUICResponse(resp)
 }

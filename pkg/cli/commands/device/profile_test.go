@@ -254,7 +254,7 @@ func TestNewProfileCommand(t *testing.T) {
 	for _, sub := range cmd.Commands() {
 		subs[sub.Name()] = true
 	}
-	for _, verb := range []string{"get", "list", "delete", "match", "create", "update", "assign", "unassign"} {
+	for _, verb := range []string{"get", "list", "delete", "match", "find-config", "create", "update", "assign", "unassign"} {
 		if !subs[verb] {
 			t.Fatalf("profile command must expose %s, got %v", verb, subs)
 		}

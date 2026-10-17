@@ -235,6 +235,35 @@ func (e *ErrFindMatchingProfileFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrFindConfigForDeviceFailed is returned when the config lookup by EK
+// serial or MAC address fails.
+type ErrFindConfigForDeviceFailed struct {
+	Cause error
+}
+
+func (e *ErrFindConfigForDeviceFailed) Error() string {
+	return fmt.Sprintf("failed to find config for device: %v", e.Cause)
+}
+
+func (e *ErrFindConfigForDeviceFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrAttestDeviceFailed is returned when verifying a device's attestation
+// evidence fails.
+type ErrAttestDeviceFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e *ErrAttestDeviceFailed) Error() string {
+	return fmt.Sprintf("failed to attest device %d: %v", e.ID, e.Cause)
+}
+
+func (e *ErrAttestDeviceFailed) Unwrap() error {
+	return e.Cause
+}
+
 // ErrCountProfilesFailed is returned when counting profiles fails.
 type ErrCountProfilesFailed struct {
 	Cause error

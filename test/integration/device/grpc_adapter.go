@@ -26,7 +26,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
-	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -640,7 +639,14 @@ func (a *GRPCAdapter) CreateProfileFromTemplate(ctx context.Context, opts Create
 
 // FindConfigForDevice finds the config for a device via gRPC.
 func (a *GRPCAdapter) FindConfigForDevice(ctx context.Context, opts FindConfigForDeviceOptions) (*FindConfigForDeviceResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "FindConfigForDevice"}
+	resp, err := a.client.FindConfigForDevice(ctx, &pb.FindConfigForDeviceRequest{
+		EkSerial:   opts.EKSerial,
+		MacAddress: opts.MACAddress,
+	})
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "FindConfigForDevice", Err: err}
+	}
+	return &FindConfigForDeviceResult{Profile: protoToProfile(resp.GetProfile())}, nil
 }
 
 // AssignProfileToDevice assigns a profile to a device via gRPC.

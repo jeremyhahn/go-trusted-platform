@@ -28,7 +28,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
-	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 	"google.golang.org/grpc"
 )
 
@@ -630,7 +629,14 @@ func (a *UnixAdapter) CreateProfileFromTemplate(ctx context.Context, opts Create
 
 // FindConfigForDevice finds the config for a device via Unix socket.
 func (a *UnixAdapter) FindConfigForDevice(ctx context.Context, opts FindConfigForDeviceOptions) (*FindConfigForDeviceResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "FindConfigForDevice"}
+	resp, err := a.client.FindConfigForDevice(ctx, &pb.FindConfigForDeviceRequest{
+		EkSerial:   opts.EKSerial,
+		MacAddress: opts.MACAddress,
+	})
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "FindConfigForDevice", Err: err}
+	}
+	return &FindConfigForDeviceResult{Profile: unixProtoToProfile(resp.GetProfile())}, nil
 }
 
 // AssignProfileToDevice assigns a profile to a device via Unix socket.

@@ -151,6 +151,27 @@ text warns that the operation is irreversible; the command does not ask.
 platformctl device delete 4398046511105
 ```
 
+### 2.5a `device attest <id> --evidence-file <path>`
+
+Verifies TPM quote evidence the caller supplies against a registered device
+(`AttestDevice`, [api.md](api.md)). It does not ask the device for a fresh
+quote. `--evidence-file` is the JSON `DeviceQuoteEvidence` document
+(`quote`, `signature`, `nonce`, `pcrs`, base64 values) every transport carries.
+
+```bash
+platformctl device attest 123 --evidence-file quote.json --output json
+```
+
+**A failed verification is not an error**: the command exits 0 and prints
+`verified: false` with each check (`signature_valid`, `nonce_valid`,
+`pcrs_valid`, `ak_certificate_verified`), `attestation_status` and `message`.
+Checked before connecting: a non-numeric or zero id, `device attest:
+--evidence-file is required`, an unreadable file (`device attest: failed to
+read evidence file <path>: <reason>`) and an empty one (`device attest:
+evidence file <path> is empty`). An unknown device fails with the `NOT_FOUND`
+error of §2; evidence that cannot be evaluated fails with `device attest:
+failed to attest device <id>: <reason>`.
+
 ### 2.6 `device attest-cert record <id> [--reissue] [--clear-on-refusal]`
 
 Records — or re-records — the device's attestation (IAK/AK) certificate on
@@ -386,6 +407,23 @@ as gRPC `NOT_FOUND`, and the CLI's typed errors (`ErrProfileNotFound`,
 `device profile: failed to delete profile <id>: <reason>` or
 `device profile: failed to match a profile: <reason>`.
 
+### 3.0b `device profile find-config`
+
+```bash
+platformctl device profile find-config --ek-serial EK-0001
+platformctl device profile find-config --mac 52:54:00:aa:bb:02 --output json
+```
+
+`find-config` returns the provisioning profile for a device's identity: the
+profile whose `ek_serial` equals `--ek-serial`, else the one whose MAC address
+equals `--mac` (`FindConfigForDevice`, [api.md](api.md) §3.7). It renders the
+profile as §3.6. **At least one of `--ek-serial` or `--mac` is required**,
+checked before connecting: `device profile: at least one of --ek-serial or
+--mac is required`. No profile for the identity fails with `device profile: no
+profile for ek serial "…", mac "…"` (`ErrNoConfigForDevice`, which satisfies
+`errors.Is(err, common.ErrNotFound)`); any other failure is `device profile:
+failed to find config: <reason>`.
+
 ### 3.1 Shared field flags (`create` and `update`)
 
 | Flag | Type | Default | Meaning |
@@ -528,10 +566,11 @@ wire. Parse it as a string.
 | `list` | — | `--page` (int, `1`), `--page-size` (int, `20`) |
 | `delete` | `<id>` | — |
 | `match` | — | `--mac`, `--serial`, `--model` (at least one required) |
+| `find-config` | — | `--ek-serial`, `--mac` (at least one required) |
 
 These are the `device profile` commands themselves, not copies: the group is
 built from `device.NewProfileLookupCommands`. Arguments, output, errors and
-transports are exactly as §3.0 and §3.0a describe. Creating, updating,
+transports are exactly as §3.0, §3.0a and §3.0b describe. Creating, updating,
 assigning and unassigning stay under `device profile` only.
 
 ```bash
@@ -555,7 +594,7 @@ its columns are not a stable interface.
 ## 6. Defects and gaps in this surface
 
 **No CLI verb covers**: the separate by-MAC / by-serial profile lookups
-(`match` covers both), device activation, or `find-config`. Reach those
+(`match` covers both) or device activation. Reach those
 through the transports in [api.md](api.md). The match-rule flags (§3.1) set
 the MAC prefix, serial prefix and model rules only; the pattern, manufacturer
 and TPM-vendor rules are rendered but have no flag.

@@ -586,12 +586,38 @@ func (a *QUICAdapter) FindProfileBySerial(ctx context.Context, opts FindProfileB
 	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "FindProfileBySerial", Reason: "docs/device/api.md §3 records QUIC as MISSING for profile lookup by serial"}
 }
 
+// =============================================================================
+// Profile matching and config lookup
+//
+// DeviceSubFindMatchingProfile and DeviceSubFindConfigForDevice delegate to
+// the gRPC DeviceService handlers (docs/device/api.md §3.7).
+// =============================================================================
+
 func (a *QUICAdapter) FindMatchingProfile(ctx context.Context, opts FindMatchingProfileOptions) (*FindMatchingProfileResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "FindMatchingProfile", Reason: "docs/device/api.md §3 records QUIC as MISSING for profile matching"}
+	req := &pb.FindMatchingProfileRequest{
+		MacAddress: opts.MACAddress,
+		Serial:     opts.Serial,
+		Model:      opts.Model,
+	}
+	var resp pb.FindMatchingProfileResponse
+	if err := a.callCategory(ctx, "FindMatchingProfile",
+		quicwire.OpProvisioningCategory, quicwire.DeviceSubFindMatchingProfile, req, &resp); err != nil {
+		return nil, err
+	}
+	return &FindMatchingProfileResult{Profile: protoToProfile(resp.GetProfile())}, nil
 }
 
 func (a *QUICAdapter) FindConfigForDevice(ctx context.Context, opts FindConfigForDeviceOptions) (*FindConfigForDeviceResult, error) {
-	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "FindConfigForDevice", Reason: "docs/device/api.md §3 records QUIC as MISSING for config lookup"}
+	req := &pb.FindConfigForDeviceRequest{
+		EkSerial:   opts.EKSerial,
+		MacAddress: opts.MACAddress,
+	}
+	var resp pb.FindConfigForDeviceResponse
+	if err := a.callCategory(ctx, "FindConfigForDevice",
+		quicwire.OpProvisioningCategory, quicwire.DeviceSubFindConfigForDevice, req, &resp); err != nil {
+		return nil, err
+	}
+	return &FindConfigForDeviceResult{Profile: protoToProfile(resp.GetProfile())}, nil
 }
 
 // =============================================================================

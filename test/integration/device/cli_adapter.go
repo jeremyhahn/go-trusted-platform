@@ -605,10 +605,46 @@ func (a *CLIAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCert
 //
 // The error is returned rather than faked so the gap stays visible.
 func (a *CLIAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions) (*AttestDeviceResult, error) {
-	return nil, ErrAttestationTransportUnavailable{
-		Transport: "CLI",
-		Reason:    "platformctl has no `device attest` command",
+	file, err := os.CreateTemp(a.configDir, "attest-evidence-*.json")
+	if err != nil {
+		return nil, err
 	}
+	path := file.Name()
+	defer func() { _ = os.Remove(path) }()
+	_, writeErr := file.Write(opts.Evidence)
+	closeErr := file.Close()
+	if writeErr != nil || closeErr != nil {
+		return nil, errors.Join(writeErr, closeErr)
+	}
+
+	var record cliAttestRecord
+	if err := a.runJSON(ctx, "AttestDevice", &record, "device", "attest", opts.DeviceID, "--evidence-file", path); err != nil {
+		return nil, err
+	}
+	return &AttestDeviceResult{
+		DeviceID:              strconv.FormatUint(record.DeviceID, 10),
+		Serial:                record.Serial,
+		Verified:              record.Verified,
+		SignatureValid:        record.SignatureValid,
+		NonceValid:            record.NonceValid,
+		PCRsValid:             record.PCRsValid,
+		AKCertificateVerified: record.AKCertificateVerified,
+		AttestationStatus:     record.AttestationStatus,
+		Message:               record.Message,
+	}, nil
+}
+
+// cliAttestRecord is the JSON `device attest` prints (docs/device/cli.md).
+type cliAttestRecord struct {
+	DeviceID              uint64 `json:"device_id"`
+	Serial                string `json:"serial"`
+	Verified              bool   `json:"verified"`
+	SignatureValid        bool   `json:"signature_valid"`
+	NonceValid            bool   `json:"nonce_valid"`
+	PCRsValid             bool   `json:"pcrs_valid"`
+	AKCertificateVerified bool   `json:"ak_certificate_verified"`
+	AttestationStatus     string `json:"attestation_status"`
+	Message               string `json:"message"`
 }
 
 // ============================================================================
@@ -746,7 +782,14 @@ func (a *CLIAdapter) CreateProfileFromTemplate(ctx context.Context, opts CreateP
 
 // FindConfigForDevice reports that platformctl has no find-config verb.
 func (a *CLIAdapter) FindConfigForDevice(ctx context.Context, opts FindConfigForDeviceOptions) (*FindConfigForDeviceResult, error) {
-	return nil, ErrCLINoVerb{Operation: "FindConfigForDevice", Reason: "there is no `device profile find-config` command"}
+	args := []string{"device", "profile", "find-config"}
+	args = appendFlag(args, "--ek-serial", opts.EKSerial)
+	args = appendFlag(args, "--mac", opts.MACAddress)
+	profile, err := a.runProfile(ctx, "FindConfigForDevice", args...)
+	if err != nil {
+		return nil, err
+	}
+	return &FindConfigForDeviceResult{Profile: profile}, nil
 }
 
 // AssignProfileToDevice binds a profile to a device identity via

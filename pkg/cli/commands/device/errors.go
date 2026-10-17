@@ -324,6 +324,90 @@ func (e ErrProfileMatchFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrAttestEvidenceRequired is returned when device attest is run without
+// --evidence-file.
+type ErrAttestEvidenceRequired struct{}
+
+func (e ErrAttestEvidenceRequired) Error() string {
+	return "device attest: --evidence-file is required"
+}
+
+// ErrAttestEvidenceReadFailed is returned when the evidence file cannot be
+// read.
+type ErrAttestEvidenceReadFailed struct {
+	Path  string
+	Cause error
+}
+
+func (e ErrAttestEvidenceReadFailed) Error() string {
+	return fmt.Sprintf("device attest: failed to read evidence file %s: %v", e.Path, e.Cause)
+}
+
+func (e ErrAttestEvidenceReadFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrAttestEvidenceEmpty is returned when the evidence file has no content.
+type ErrAttestEvidenceEmpty struct {
+	Path string
+}
+
+func (e ErrAttestEvidenceEmpty) Error() string {
+	return fmt.Sprintf("device attest: evidence file %s is empty", e.Path)
+}
+
+// ErrAttestFailed is returned when the evidence could not be evaluated. A
+// negative verdict is not an error.
+type ErrAttestFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e ErrAttestFailed) Error() string {
+	return fmt.Sprintf("device attest: failed to attest device %d: %v", e.ID, e.Cause)
+}
+
+func (e ErrAttestFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrProfileConfigIdentityRequired is returned when find-config is given no
+// device identity to look up.
+type ErrProfileConfigIdentityRequired struct{}
+
+func (e ErrProfileConfigIdentityRequired) Error() string {
+	return "device profile: at least one of --ek-serial or --mac is required"
+}
+
+// ErrNoConfigForDevice is returned when no profile is stored for the device
+// identity. It matches the SDK's common.ErrNotFound under errors.Is.
+type ErrNoConfigForDevice struct {
+	EKSerial   string
+	MACAddress string
+}
+
+func (e ErrNoConfigForDevice) Error() string {
+	return fmt.Sprintf("device profile: no profile for ek serial %q, mac %q", e.EKSerial, e.MACAddress)
+}
+
+func (e ErrNoConfigForDevice) Is(target error) bool {
+	return target == common.ErrNotFound
+}
+
+// ErrProfileFindConfigFailed is returned when the config lookup fails for a
+// reason other than no profile being stored for the identity.
+type ErrProfileFindConfigFailed struct {
+	Cause error
+}
+
+func (e ErrProfileFindConfigFailed) Error() string {
+	return fmt.Sprintf("device profile: failed to find config: %v", e.Cause)
+}
+
+func (e ErrProfileFindConfigFailed) Unwrap() error {
+	return e.Cause
+}
+
 // ErrProfileUpdateFailed is returned when updating a profile fails
 type ErrProfileUpdateFailed struct {
 	ID    uint64

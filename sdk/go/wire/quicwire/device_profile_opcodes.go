@@ -102,4 +102,9 @@ const (
 	// DeviceService.DeleteTemplate. Request/response: platform.v1
 	// DeviceTemplateDeleteRequest/Response.
 	DeviceSubTemplateDelete byte = 0x2D
+
+	// DeviceSubFindConfigForDevice finds the profile stored for a device's
+	// EK serial or MAC address: DeviceService.FindConfigForDevice.
+	// Request/response: platform.v1 FindConfigForDeviceRequest/Response.
+	DeviceSubFindConfigForDevice byte = 0x2E
 )
