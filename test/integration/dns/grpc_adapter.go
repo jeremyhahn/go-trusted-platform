@@ -376,53 +376,65 @@ func (g *GRPCAdapter) DeleteRecord(ctx context.Context, name string, recordType 
 
 // ListRecords lists DNS records in a zone via gRPC.
 func (g *GRPCAdapter) ListRecords(ctx context.Context, zoneName string, opts ListRecordsOptions) (*ListRecordsResult, error) {
-	req := &pb.ListRecordsRequest{
-		ZoneName: zoneName,
-	}
-
-	if opts.RecordType != "" {
-		req.Type = recordTypeStringToProto(opts.RecordType)
-	}
-	if opts.Cursor != "" {
-		offset, err := strconv.ParseUint(opts.Cursor, 10, 32)
-		if err != nil {
-			return nil, ErrGRPCCallFailed{Method: "ListRecords: parse cursor " + opts.Cursor, Err: err}
-		}
-		req.Offset = proto.Uint32(uint32(offset))
-	}
-	if opts.Limit > 0 {
-		req.Limit = proto.Uint32(uint32(opts.Limit))
+	req, err := listRecordsRequest(zoneName, opts)
+	if err != nil {
+		return nil, err
 	}
 
 	resp, err := g.dns.ListRecords(ctx, req)
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "ListRecords", Err: err}
 	}
+	return listRecordsResult(req, resp.GetRecords(), resp.GetTotal()), nil
+}
 
-	records := make([]RecordSummary, 0, len(resp.Records))
-	for _, r := range resp.Records {
+// listRecordsRequest builds the ListRecordsRequest the pb transports (gRPC,
+// Unix, QUIC, MCP) send: the type filter and the page opts asks for. The
+// cursor is the offset of the next record, as ListRecordsResult reports it.
+func listRecordsRequest(zoneName string, opts ListRecordsOptions) (*pb.ListRecordsRequest, error) {
+	req := &pb.ListRecordsRequest{ZoneName: zoneName}
+	if opts.RecordType != "" {
+		req.Type = recordTypeStringToProto(opts.RecordType)
+	}
+	if opts.Cursor != "" {
+		offset, err := strconv.ParseUint(opts.Cursor, 10, 32)
+		if err != nil {
+			return nil, ErrInvalidListCursor{Cursor: opts.Cursor, Err: err}
+		}
+		req.Offset = proto.Uint32(uint32(offset))
+	}
+	if opts.Limit > 0 {
+		req.Limit = proto.Uint32(uint32(opts.Limit))
+	}
+	return req, nil
+}
+
+// listRecordsResult converts one ListRecords page. The server owns paging:
+// total counts the whole filtered list, so more remains while this page ends
+// before it.
+func listRecordsResult(req *pb.ListRecordsRequest, page []*pb.Record, total uint64) *ListRecordsResult {
+	records := make([]RecordSummary, 0, len(page))
+	for _, r := range page {
 		name, value, ttl, priority, _, _ := extractRecordInfo(r)
 		records = append(records, RecordSummary{
 			Name:       name,
-			RecordType: recordTypeProtoToString(r.Type),
+			RecordType: recordTypeProtoToString(r.GetType()),
 			Value:      value,
 			TTL:        ttl,
 			Priority:   priority,
 		})
 	}
 
-	// The server owns paging: total counts the whole filtered list, so
-	// more remains while this page ends before it.
 	result := &ListRecordsResult{
 		Records:    records,
-		TotalCount: int32(resp.GetTotal()),
+		TotalCount: int32(total),
 	}
 	next := uint64(req.GetOffset()) + uint64(len(records))
-	if next < resp.GetTotal() {
+	if next < total {
 		result.HasMore = true
 		result.NextCursor = strconv.FormatUint(next, 10)
 	}
-	return result, nil
+	return result
 }
 
 // =============================================================================
@@ -769,6 +781,19 @@ type ErrZoneMissingFromReply struct {
 func (e ErrZoneMissingFromReply) Error() string {
 	return fmt.Sprintf("%s reply carries no zone", e.Method)
 }
+
+// ErrInvalidListCursor is returned when a list cursor is not the record
+// offset a previous page reported.
+type ErrInvalidListCursor struct {
+	Cursor string
+	Err    error
+}
+
+func (e ErrInvalidListCursor) Error() string {
+	return fmt.Sprintf("list cursor %q is not a record offset: %v", e.Cursor, e.Err)
+}
+
+func (e ErrInvalidListCursor) Unwrap() error { return e.Err }
 
 // Ensure GRPCAdapter implements DNSCommands interface.
 var _ DNSCommands = (*GRPCAdapter)(nil)

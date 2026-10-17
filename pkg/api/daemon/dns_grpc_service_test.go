@@ -556,6 +556,69 @@ func TestDNSServiceServer_ListZones_Error(t *testing.T) {
 	assert.Equal(t, codes.Internal, st.Code())
 }
 
+// TestDNSServiceServer_ListZones_Pagination is the #949 regression: the
+// integration suite's ListZones{Limit: 2} came back with every zone on gRPC,
+// Unix, QUIC and MCP, which all reach this server. Pages are 1-based and
+// ordered by zone name, so walking them visits every zone exactly once.
+func TestDNSServiceServer_ListZones_Pagination(t *testing.T) {
+	mock := newMockDNSService()
+	for id, name := range []string{"c.example.", "a.example.", "e.example.", "b.example.", "d.example."} {
+		mock.zones[name] = &entities.Zone{ID: uint64(id + 1), Name: name}
+	}
+	server := NewDNSServiceServer(mock, testLogger())
+
+	var walked []string
+	for page := uint32(1); page <= 3; page++ {
+		resp, err := server.ListZones(context.Background(), &platformv1.ListZonesRequest{
+			Pagination: &platformv1.PaginationRequest{Page: page, PageSize: 2},
+		})
+		require.NoError(t, err)
+		require.LessOrEqual(t, len(resp.GetZones()), 2, "page %d ignored page_size", page)
+		for _, zone := range resp.GetZones() {
+			walked = append(walked, zone.GetName())
+		}
+		assert.Equal(t, page, resp.GetPagination().GetPage())
+		assert.Equal(t, uint32(3), resp.GetPagination().GetTotalPages())
+		assert.Equal(t, uint64(5), resp.GetPagination().GetTotalItems())
+	}
+	assert.Equal(t, []string{"a.example.", "b.example.", "c.example.", "d.example.", "e.example."}, walked)
+}
+
+// TestDNSServiceServer_ListZones_UnpagedReturnsEveryZone keeps the
+// no-pagination contract: the whole list, reported as one page.
+func TestDNSServiceServer_ListZones_UnpagedReturnsEveryZone(t *testing.T) {
+	mock := newMockDNSService()
+	mock.zones["a.example."] = &entities.Zone{ID: 1, Name: "a.example."}
+	mock.zones["b.example."] = &entities.Zone{ID: 2, Name: "b.example."}
+	mock.zones["c.example."] = &entities.Zone{ID: 3, Name: "c.example."}
+	server := NewDNSServiceServer(mock, testLogger())
+
+	resp, err := server.ListZones(context.Background(), &platformv1.ListZonesRequest{})
+
+	require.NoError(t, err)
+	assert.Len(t, resp.GetZones(), 3)
+	assert.Equal(t, uint32(1), resp.GetPagination().GetTotalPages())
+	assert.Equal(t, uint64(3), resp.GetPagination().GetTotalItems())
+}
+
+// TestDNSServiceServer_ListZones_UnsupportedSortField rejects a sort_by the
+// zone list has no order for instead of returning it unsorted.
+func TestDNSServiceServer_ListZones_UnsupportedSortField(t *testing.T) {
+	mock := newMockDNSService()
+	mock.zones["a.example."] = &entities.Zone{ID: 1, Name: "a.example."}
+	server := NewDNSServiceServer(mock, testLogger())
+
+	_, err := server.ListZones(context.Background(), &platformv1.ListZonesRequest{
+		Pagination: &platformv1.PaginationRequest{PageSize: 2, SortBy: "ttl"},
+	})
+
+	require.Error(t, err)
+	var typed ErrDNSZoneListUnsupportedSortField
+	require.ErrorAs(t, err, &typed)
+	assert.Equal(t, "ttl", typed.Field)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+}
+
 // Record Tests
 
 func TestDNSServiceServer_AddRecord_Success(t *testing.T) {

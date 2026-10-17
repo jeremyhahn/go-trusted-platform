@@ -253,6 +253,7 @@ func (w *quicRecordWire) toPB() *pb.Record {
 
 type quicListRecordsWire struct {
 	Records []*quicRecordWire `codec:"Records"`
+	Total   uint64            `codec:"Total"`
 }
 
 type quicResolveWire struct {
@@ -704,9 +705,9 @@ func (q *QUICAdapter) DeleteRecord(ctx context.Context, name string, recordType 
 
 // ListRecords lists DNS records (0x24, pb request, mirror response).
 func (q *QUICAdapter) ListRecords(ctx context.Context, zoneName string, opts ListRecordsOptions) (*ListRecordsResult, error) {
-	req := &pb.ListRecordsRequest{ZoneName: zoneName}
-	if opts.RecordType != "" {
-		req.Type = recordTypeStringToProto(opts.RecordType)
+	req, err := listRecordsRequest(zoneName, opts)
+	if err != nil {
+		return nil, err
 	}
 	resp, err := q.sendRequest(ctx, OpDNSListRecords, req)
 	if err != nil {
@@ -716,19 +717,11 @@ func (q *QUICAdapter) ListRecords(ctx context.Context, zoneName string, opts Lis
 	if err := decodePayload(resp.Payload, &wire); err != nil {
 		return nil, ErrQUICDecodeFailed{Operation: "ListRecords", Err: err}
 	}
-	records := make([]RecordSummary, 0, len(wire.Records))
+	records := make([]*pb.Record, 0, len(wire.Records))
 	for _, w := range wire.Records {
-		rec := w.toPB()
-		name, value, ttl, priority, _, _ := extractRecordInfo(rec)
-		records = append(records, RecordSummary{
-			Name:       name,
-			RecordType: recordTypeProtoToString(rec.GetType()),
-			Value:      value,
-			TTL:        ttl,
-			Priority:   priority,
-		})
+		records = append(records, w.toPB())
 	}
-	return &ListRecordsResult{Records: records, TotalCount: int32(len(records))}, nil
+	return listRecordsResult(req, records, wire.Total), nil
 }
 
 // =============================================================================

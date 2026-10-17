@@ -227,9 +227,27 @@ func (s *DNSServiceServer) ListZones(ctx context.Context, req *platformv1.ListZo
 		protoZones = append(protoZones, s.zoneToProto(zone))
 	}
 
+	if !sortPage(protoZones, req.GetPagination(), dnsZoneListOrders) {
+		return nil, ErrDNSZoneListUnsupportedSortField{Field: req.GetPagination().GetSortBy()}
+	}
+	page, pagination := paginatePage(protoZones, req.GetPagination())
+
 	return &platformv1.ListZonesResponse{
-		Zones: protoZones,
+		Zones:      page,
+		Pagination: pagination,
 	}, nil
+}
+
+// dnsZoneListOrders are the orders ListZones sorts by before it pages. Zone
+// names are unique, so name alone orders the list totally and a page means
+// the same thing on every call.
+var dnsZoneListOrders = pageOrder[*platformv1.Zone]{
+	"":     dnsZoneByName,
+	"name": dnsZoneByName,
+}
+
+func dnsZoneByName(a, b *platformv1.Zone) bool {
+	return a.GetName() < b.GetName()
 }
 
 // AddRecord adds a record to a zone.

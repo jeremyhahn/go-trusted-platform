@@ -382,35 +382,16 @@ func (s *UnixAdapter) DeleteRecord(ctx context.Context, name string, recordType 
 
 // ListRecords lists DNS records in a zone via Unix socket.
 func (s *UnixAdapter) ListRecords(ctx context.Context, zoneName string, opts ListRecordsOptions) (*ListRecordsResult, error) {
-	req := &pb.ListRecordsRequest{
-		ZoneName: zoneName,
-	}
-
-	if opts.RecordType != "" {
-		req.Type = recordTypeStringToProto(opts.RecordType)
+	req, err := listRecordsRequest(zoneName, opts)
+	if err != nil {
+		return nil, err
 	}
 
 	resp, err := s.dns.ListRecords(ctx, req)
 	if err != nil {
 		return nil, ErrUnixRPCFailed{Method: "ListRecords", Err: err}
 	}
-
-	records := make([]RecordSummary, 0, len(resp.Records))
-	for _, r := range resp.Records {
-		name, value, ttl, priority, _, _ := extractRecordInfo(r)
-		records = append(records, RecordSummary{
-			Name:       name,
-			RecordType: recordTypeProtoToString(r.Type),
-			Value:      value,
-			TTL:        ttl,
-			Priority:   priority,
-		})
-	}
-
-	return &ListRecordsResult{
-		Records:    records,
-		TotalCount: int32(len(records)),
-	}, nil
+	return listRecordsResult(req, resp.GetRecords(), resp.GetTotal()), nil
 }
 
 // =============================================================================
