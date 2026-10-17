@@ -63,6 +63,10 @@ var ErrDeviceProfileIdentityRequired = errors.New("device_profile: device_id, ek
 // carried no MAC address, serial or model to match on.
 var ErrDeviceProfileMatchCriteriaRequired = errors.New("device_profile: mac_address, serial or model is required")
 
+// ErrDeviceProfileConfigIdentityRequired indicates a config lookup request
+// carried neither an EK serial nor a MAC address.
+var ErrDeviceProfileConfigIdentityRequired = errors.New("device_profile: ek_serial or mac_address is required")
+
 // ErrDeviceProfileInvalidArgs indicates the tool arguments did not decode
 // into the device profile request shape.
 type ErrDeviceProfileInvalidArgs struct {
@@ -136,6 +140,11 @@ type DeviceProfileProvider interface {
 	// DeviceProfileFindBySerial returns the profile whose serial prefix rule
 	// fits the device's serial number.
 	DeviceProfileFindBySerial(ctx context.Context, serial string) (*entities.DeviceProfile, error)
+
+	// DeviceProfileFindConfig resolves the configuration profile a booting
+	// machine receives from its EK serial or MAC address, as gRPC
+	// FindConfigForDevice does.
+	DeviceProfileFindConfig(ctx context.Context, ekSerial, macAddr string) (*entities.DeviceProfile, error)
 
 	// DeviceProfileAssign binds a profile to a device identity — a
 	// registered device (deviceID != 0, whose stored EK certificate supplies
@@ -270,6 +279,7 @@ var deviceProfileToolDispatch = map[string]deviceProfileToolHandler{
 	"profile_find_matching":        (*ToolRegistry).executeDeviceProfileMatch,
 	"profile_find_by_mac":          (*ToolRegistry).executeDeviceProfileFindByMAC,
 	"profile_find_by_serial":       (*ToolRegistry).executeDeviceProfileFindBySerial,
+	"profile_find_config":          (*ToolRegistry).executeDeviceProfileFindConfig,
 	"profile_assign_to_device":     (*ToolRegistry).executeDeviceProfileAssign,
 	"profile_unassign_from_device": (*ToolRegistry).executeDeviceProfileUnassign,
 	"device_template_create":       (*ToolRegistry).executeDeviceTemplateCreate,
@@ -417,6 +427,26 @@ func (r *ToolRegistry) executeDeviceProfileFindBySerial(ctx context.Context, arg
 		return nil, ErrDeviceProfileNotConfigured
 	}
 	return lookupDeviceProfile(ctx, args, "serial", p.DeviceProfileFindBySerial)
+}
+
+// executeDeviceProfileFindConfig returns the configuration profile for a
+// booting machine identified by its EK serial or MAC address; at least one is
+// required.
+func (r *ToolRegistry) executeDeviceProfileFindConfig(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	p := r.deviceProfileProvider()
+	if p == nil {
+		return nil, ErrDeviceProfileNotConfigured
+	}
+	ekSerial := getString(args, "ek_serial")
+	macAddr := getString(args, "mac_address")
+	if ekSerial == "" && macAddr == "" {
+		return nil, ErrDeviceProfileConfigIdentityRequired
+	}
+	profile, err := p.DeviceProfileFindConfig(ctx, ekSerial, macAddr)
+	if err != nil {
+		return nil, err
+	}
+	return deviceProfileToolResult(profile)
 }
 
 // lookupDeviceProfile runs a single-attribute profile lookup: the attribute

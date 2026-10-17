@@ -105,3 +105,32 @@ func TestMCPDeviceProfileFindByMACAndSerial_NoProfileService(t *testing.T) {
 	_, err = provider.DeviceProfileFindBySerial(context.Background(), "SN300")
 	require.ErrorAs(t, err, &unavailable)
 }
+
+// profile_find_config resolves a booting machine's config through the same
+// finder as gRPC FindConfigForDevice: a MAC with no assignment falls back to
+// the MAC-prefix rule, and no config is NotFound.
+func TestMCPDeviceProfileFindConfig(t *testing.T) {
+	registry, svcs := newMCPDeviceTemplateRegistry(t)
+	ctx := context.Background()
+	byMAC := &entities.DeviceProfile{
+		ID:         8401,
+		Name:       "rack-config",
+		MatchRules: &entities.ProfileMatchRules{MACPrefix: "52:54:00"},
+	}
+	require.NoError(t, svcs.profiles.Save(ctx, byMAC))
+
+	result, err := registry.ExecuteTool(ctx, "profile_find_config", map[string]interface{}{"mac_address": "52:54:00:aa:bb:cc"})
+	require.NoError(t, err)
+	assert.Equal(t, byMAC.ID, toolResultID(t, result))
+
+	_, err = registry.ExecuteTool(ctx, "profile_find_config", map[string]interface{}{"ek_serial": "EK-NONE"})
+	assert.Equal(t, codes.NotFound, status.Code(err), "err = %v", err)
+}
+
+func TestMCPDeviceProfileFindConfig_NoProfileService(t *testing.T) {
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
+	var unavailable ErrServiceNotAvailable
+
+	_, err := provider.DeviceProfileFindConfig(context.Background(), "EK-0042", "")
+	require.ErrorAs(t, err, &unavailable)
+}

@@ -82,6 +82,25 @@ func (p *MCPServiceProvider) DeviceProfileFindByMAC(ctx context.Context, macAddr
 	return profile, nil
 }
 
+// DeviceProfileFindConfig resolves a booting machine's configuration profile
+// from its EK serial or MAC address through the same finder gRPC
+// FindConfigForDevice uses; a profile service that cannot resolve configs is
+// ErrDeviceConfigFinderUnavailable, as on gRPC.
+func (p *MCPServiceProvider) DeviceProfileFindConfig(ctx context.Context, ekSerial, macAddr string) (*deviceentities.DeviceProfile, error) {
+	if p.deviceProfileService == nil {
+		return nil, ErrServiceNotAvailable{Service: "device_profile"}
+	}
+	finder, ok := p.deviceProfileService.(device.ConfigForDeviceFinder)
+	if !ok {
+		return nil, ErrDeviceConfigFinderUnavailable{}
+	}
+	profile, err := finder.FindConfigForDevice(ctx, ekSerial, macAddr)
+	if err != nil {
+		return nil, deviceStatusError(err)
+	}
+	return profile, nil
+}
+
 // DeviceProfileFindBySerial returns the profile whose serial prefix rule fits
 // the device serial number. No match is NotFound, as on gRPC.
 func (p *MCPServiceProvider) DeviceProfileFindBySerial(ctx context.Context, serial string) (*deviceentities.DeviceProfile, error) {

@@ -83,6 +83,7 @@ var sentinelClasses = []struct {
 
 	{ErrDeviceProfileIdentityRequired, codes.InvalidArgument},
 	{ErrDeviceProfileMatchCriteriaRequired, codes.InvalidArgument},
+	{ErrDeviceProfileConfigIdentityRequired, codes.InvalidArgument},
 	{ErrEABCredentialIDRequired, codes.InvalidArgument},
 	{ErrEABKeyIDRequired, codes.InvalidArgument},
 	{ErrEABHMACKeyRequired, codes.InvalidArgument},

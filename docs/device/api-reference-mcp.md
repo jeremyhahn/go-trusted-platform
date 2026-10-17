@@ -473,6 +473,29 @@ profile in its domain JSON shape.
 }
 ```
 
+### profile_find_config
+
+Resolve the configuration profile a booting machine receives from its EK
+serial or MAC address: an exact EK serial assignment, then an exact MAC
+assignment, then the MAC-prefix rules. The SDK's `FindConfigForDevice` uses it
+on this transport. Neither identity is `InvalidArgument`, and no config is
+`NotFound`, as on gRPC. Requires `device:read`. The result is the profile in
+its domain JSON shape.
+
+```json
+{
+  "name": "profile_find_config",
+  "description": "Resolve the configuration profile a booting machine receives from its EK serial or MAC address",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "ek_serial": {"type": "string", "description": "TPM endorsement key certificate serial"},
+      "mac_address": {"type": "string", "description": "Device MAC address"}
+    }
+  }
+}
+```
+
 ### profile_assign_to_device
 
 Binds a profile to a specific device identity — a registered device

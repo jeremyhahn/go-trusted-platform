@@ -338,7 +338,7 @@ different statuses.
 | Find profile by MAC | `GET /api/v1/device/profiles/mac/{mac}` | `FindProfileByMACAddress` | `MISSING — docs/13 G7` | `profile_find_by_mac` — no match `NotFound` | ✅ |
 | Find profile by serial | `GET /api/v1/device/profiles/serial/{serial}` | `FindProfileBySerial` | `MISSING — docs/13 G7` | `profile_find_by_serial` — no match `NotFound` | ✅ |
 | Find matching profile | `POST /api/v1/device/profiles/match` | `FindMatchingProfile` — no match `NotFound` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubFindMatchingProfile` (`0x29`) — see §3.7 | `profile_find_matching` — no match `NotFound` | ✅ |
-| Find config for a device (EK serial / MAC) | `GET /api/v1/device/profiles/find-config` | `FindConfigForDevice` — no identity `InvalidArgument`, unknown identity `NotFound` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+| Find config for a device (EK serial / MAC) | `GET /api/v1/device/profiles/find-config` | `FindConfigForDevice` — no identity `InvalidArgument`, unknown identity `NotFound` | `MISSING — docs/13 G7` | `profile_find_config` — no identity `InvalidArgument`, unknown identity `NotFound` | ✅ |
 | Assign profile to a device identity (explicit `ek_serial`/`mac_address`, or `device_id` of a registered device — the server derives the EK serial from its stored EK certificate, #463) | `POST /api/v1/device/profiles/{id}/assign` | `AssignProfileToDevice` | `OpProvisioningCategory` (`0xCF`) sub `0x20` — see §3.7 | `profile_assign_to_device` | ✅ |
 | Unassign profile | `POST /api/v1/device/profiles/{id}/unassign` | `UnassignProfileFromDevice` | `MISSING — docs/13 G7` | `profile_unassign_from_device` | ✅ |
 | Get profile over mTLS (device self-service) | `GET /api/v1/device/profile` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
@@ -1330,7 +1330,7 @@ and every tool in them is dispatched and scope-checked.
 | Family | Registered by | Executor | In the authorization map |
 |---|---|---|---|
 | `device_register`, `device_get`, `device_find_by_serial`, `device_list`, `device_delete`, `device_update`, `device_attest`, `device_record_attest_cert`, `device_provision`, `device_disable`, `device_enable` | `registerDeviceTools` (`tools.go:557`) | `ExecuteTool` (`tools.go:1325`) | **yes** — `device:write` / `device:read` / `device:delete` |
-| `profile_create`, `profile_get_by_id`, `profile_list_all`, `profile_update_by_id`, `profile_delete_by_id`, `profile_find_matching`, `profile_find_by_mac`, `profile_find_by_serial`, `profile_assign_to_device`, `profile_unassign_from_device` | `registerDeviceToolsV2` (`device_tools.go:99`) | `deviceProfileToolDispatch` | **yes** — all ten mapped to `device:*` |
+| `profile_create`, `profile_get_by_id`, `profile_list_all`, `profile_update_by_id`, `profile_delete_by_id`, `profile_find_matching`, `profile_find_by_mac`, `profile_find_by_serial`, `profile_find_config`, `profile_assign_to_device`, `profile_unassign_from_device` | `registerDeviceToolsV2` (`device_tools.go:99`) | `deviceProfileToolDispatch` | **yes** — all eleven mapped to `device:*` |
 | `device_template_create`, `device_template_get`, `device_template_list`, `device_template_update`, `device_template_delete`, `profile_create_from_template` (§4) | `registerDeviceTemplateTools` (`device_template_tools.go:157`) | `deviceProfileToolDispatch` | **yes** — create, update and create-from-template `device:write`; get and list `device:read`; delete `device:delete` |
 
 The template tools are not the `vtpm_*_template_*` tools, which create

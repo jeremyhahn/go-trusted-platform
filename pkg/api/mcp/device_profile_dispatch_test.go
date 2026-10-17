@@ -44,6 +44,7 @@ var deviceProfileToolNames = []string{
 	"profile_find_matching",
 	"profile_find_by_mac",
 	"profile_find_by_serial",
+	"profile_find_config",
 	"profile_assign_to_device",
 	"profile_unassign_from_device",
 }
@@ -80,6 +81,7 @@ type deviceProfileStubProvider struct {
 	nextID             uint64
 	lastAssignDeviceID uint64
 	lastUpdateOpts     []device.ProfileUpdateOption
+	lastFindConfigEK   string
 }
 
 func newDeviceProfileStubProvider() *deviceProfileStubProvider {
@@ -146,6 +148,12 @@ func (s *deviceProfileStubProvider) DeviceProfileFindByMAC(ctx context.Context, 
 
 func (s *deviceProfileStubProvider) DeviceProfileFindBySerial(ctx context.Context, serial string) (*entities.DeviceProfile, error) {
 	return s.DeviceProfileMatch(ctx, "", serial, "")
+}
+
+// DeviceProfileFindConfig records the EK serial and resolves by MAC address.
+func (s *deviceProfileStubProvider) DeviceProfileFindConfig(ctx context.Context, ekSerial, macAddr string) (*entities.DeviceProfile, error) {
+	s.lastFindConfigEK = ekSerial
+	return s.DeviceProfileMatch(ctx, macAddr, "", "")
 }
 
 func (s *deviceProfileStubProvider) DeviceProfileAssign(ctx context.Context, profileID, deviceID uint64, ekSerial, macAddress, ekCertPEM string) (*entities.DeviceProfile, error) {
@@ -476,6 +484,51 @@ func TestDeviceProfileMatch_Errors(t *testing.T) {
 
 	t.Run("no match is not found", func(t *testing.T) {
 		_, err := registry.ExecuteTool(context.Background(), "profile_find_matching", map[string]interface{}{"model": "R999"})
+		if toolErrorCode(err) != mcpwire.CodeForClass(codes.NotFound) {
+			t.Fatalf("err = %v (code %d), want the NotFound code", err, toolErrorCode(err))
+		}
+	})
+}
+
+func TestDeviceProfileFindConfig(t *testing.T) {
+	registry, stub := newDeviceProfileRegistry()
+	stub.profiles[42] = &entities.DeviceProfile{
+		ID:         42,
+		Name:       "rack-a",
+		MatchRules: &entities.ProfileMatchRules{MACPrefix: "52:54:00"},
+	}
+
+	result, err := registry.ExecuteTool(context.Background(), "profile_find_config", map[string]interface{}{
+		"ek_serial":   "EK-0042",
+		"mac_address": "52:54:00:12:34:56",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	obj := result.(map[string]interface{})
+	if obj["id"] != "42" || obj["name"] != "rack-a" {
+		t.Fatalf("find config result = %v", obj)
+	}
+	if stub.lastFindConfigEK != "EK-0042" {
+		t.Errorf("ek_serial forwarded = %q, want EK-0042", stub.lastFindConfigEK)
+	}
+}
+
+func TestDeviceProfileFindConfig_Errors(t *testing.T) {
+	registry, _ := newDeviceProfileRegistry()
+
+	t.Run("no identity", func(t *testing.T) {
+		_, err := registry.ExecuteTool(context.Background(), "profile_find_config", map[string]interface{}{})
+		if !errors.Is(err, ErrDeviceProfileConfigIdentityRequired) {
+			t.Fatalf("err = %v, want ErrDeviceProfileConfigIdentityRequired", err)
+		}
+		if toolErrorCode(err) != mcpwire.CodeForClass(codes.InvalidArgument) {
+			t.Errorf("code = %d, want the InvalidArgument code", toolErrorCode(err))
+		}
+	})
+
+	t.Run("no config is not found", func(t *testing.T) {
+		_, err := registry.ExecuteTool(context.Background(), "profile_find_config", map[string]interface{}{"mac_address": "aa:bb:cc:00:00:01"})
 		if toolErrorCode(err) != mcpwire.CodeForClass(codes.NotFound) {
 			t.Fatalf("err = %v (code %d), want the NotFound code", err, toolErrorCode(err))
 		}

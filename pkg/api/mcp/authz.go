@@ -213,6 +213,7 @@ func toolPermissionCatalog() map[string]string {
 	permissions["profile_find_matching"] = "device:read"
 	permissions["profile_find_by_mac"] = "device:read"
 	permissions["profile_find_by_serial"] = "device:read"
+	permissions["profile_find_config"] = "device:read"
 	permissions["profile_update_by_id"] = "device:write"
 	permissions["profile_delete_by_id"] = "device:delete"
 	permissions["profile_assign_to_device"] = "device:write"
