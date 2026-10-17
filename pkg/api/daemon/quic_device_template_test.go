@@ -89,6 +89,83 @@ func TestQUICDeviceTemplateCreate_Errors(t *testing.T) {
 	assert.Zero(t, count, "a rejected template must not be stored")
 }
 
+func TestQUICDeviceTemplateGetListUpdateDelete(t *testing.T) {
+	handler, svcs := newQUICDeviceTemplateHandler(t)
+	ctx := context.Background()
+	stored := storeTestTemplate(t, svcs, "edge")
+
+	var got platformv1.DeviceTemplateGetResponse
+	decodeQUICResponse(t, handler.HandleRequest(ctx, encodeQUICCategoryRequest(t,
+		quicwire.OpProvisioningCategory, quicwire.DeviceSubTemplateGet,
+		&platformv1.DeviceTemplateGetRequest{Id: stored.ID})), &got)
+	assert.Equal(t, "edge", got.GetTemplate().GetName())
+
+	var listed platformv1.DeviceTemplateListResponse
+	decodeQUICResponse(t, handler.HandleRequest(ctx, encodeQUICCategoryRequest(t,
+		quicwire.OpProvisioningCategory, quicwire.DeviceSubTemplateList,
+		&platformv1.DeviceTemplateListRequest{})), &listed)
+	require.Len(t, listed.GetTemplates(), 1)
+	assert.Equal(t, stored.ID, listed.GetTemplates()[0].GetId())
+
+	var updated platformv1.DeviceTemplateUpdateResponse
+	decodeQUICResponse(t, handler.HandleRequest(ctx, encodeQUICCategoryRequest(t,
+		quicwire.OpProvisioningCategory, quicwire.DeviceSubTemplateUpdate,
+		&platformv1.DeviceTemplateUpdateRequest{Template: &platformv1.DeviceTemplate{
+			Id:   stored.ID,
+			Name: "edge-v2",
+		}})), &updated)
+	reread, err := svcs.templates.Get(ctx, stored.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "edge-v2", reread.Name)
+
+	var deleted platformv1.DeviceTemplateDeleteResponse
+	decodeQUICResponse(t, handler.HandleRequest(ctx, encodeQUICCategoryRequest(t,
+		quicwire.OpProvisioningCategory, quicwire.DeviceSubTemplateDelete,
+		&platformv1.DeviceTemplateDeleteRequest{Id: stored.ID})), &deleted)
+	assert.True(t, deleted.GetStatus().GetSuccess())
+	_, err = svcs.templates.Get(ctx, stored.ID)
+	require.Error(t, err, "the deleted template is still stored")
+}
+
+func TestQUICDeviceTemplateGetListUpdateDelete_Errors(t *testing.T) {
+	handler, _ := newQUICDeviceTemplateHandler(t)
+	bare := newTestQUICServiceHandler(logging.DefaultLogger(), WithQUICDeviceService(newMockDeviceService()))
+	ctx := context.Background()
+	const absent = uint64(4242)
+
+	tests := []struct {
+		name    string
+		handler *QUICServiceHandler
+		subOp   byte
+		msg     interface{}
+		want    byte
+	}{
+		{"GetWithoutID", handler, quicwire.DeviceSubTemplateGet, &platformv1.DeviceTemplateGetRequest{}, quicwire.StatusInvalidArgument},
+		{"GetUnknownID", handler, quicwire.DeviceSubTemplateGet, &platformv1.DeviceTemplateGetRequest{Id: absent}, quicwire.StatusNotFound},
+		{"UpdateWithoutID", handler, quicwire.DeviceSubTemplateUpdate,
+			&platformv1.DeviceTemplateUpdateRequest{Template: &platformv1.DeviceTemplate{Name: "edge"}}, quicwire.StatusInvalidArgument},
+		{"UpdateUnknownID", handler, quicwire.DeviceSubTemplateUpdate,
+			&platformv1.DeviceTemplateUpdateRequest{Template: &platformv1.DeviceTemplate{Id: absent, Name: "edge"}}, quicwire.StatusNotFound},
+		{"DeleteWithoutID", handler, quicwire.DeviceSubTemplateDelete, &platformv1.DeviceTemplateDeleteRequest{}, quicwire.StatusInvalidArgument},
+		{"DeleteUnknownID", handler, quicwire.DeviceSubTemplateDelete, &platformv1.DeviceTemplateDeleteRequest{Id: absent}, quicwire.StatusNotFound},
+		{"ListServiceUnavailable", bare, quicwire.DeviceSubTemplateList, &platformv1.DeviceTemplateListRequest{}, quicwire.StatusUnavailable},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := encodeQUICCategoryRequest(t, quicwire.OpProvisioningCategory, tt.subOp, tt.msg)
+			assert.Equal(t, tt.want, tt.handler.HandleRequest(ctx, req).Status)
+		})
+	}
+
+	t.Run("MalformedPayload", func(t *testing.T) {
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpProvisioningCategory,
+			Payload: []byte{quicwire.DeviceSubTemplateUpdate, 0xff, 0xfe, 0xfd},
+		})
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
+	})
+}
+
 func TestQUICDeviceProfileFromTemplate(t *testing.T) {
 	handler, svcs := newQUICDeviceTemplateHandler(t)
 	ctx := context.Background()

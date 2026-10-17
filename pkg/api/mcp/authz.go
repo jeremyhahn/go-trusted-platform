@@ -218,6 +218,10 @@ func toolPermissionCatalog() map[string]string {
 	permissions["profile_assign_to_device"] = "device:write"
 	permissions["profile_unassign_from_device"] = "device:write"
 	permissions["device_template_create"] = "device:write"
+	permissions["device_template_get"] = "device:read"
+	permissions["device_template_list"] = "device:read"
+	permissions["device_template_update"] = "device:write"
+	permissions["device_template_delete"] = "device:delete"
 	permissions["profile_create_from_template"] = "device:write"
 
 	// SDN tools

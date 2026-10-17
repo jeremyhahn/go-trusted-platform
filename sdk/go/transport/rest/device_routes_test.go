@@ -160,6 +160,26 @@ var deviceServerRoutes = map[protoreflect.Name]deviceServerRoute{
 		req:      &platformv1.DeviceTemplateCreateRequest{Template: &platformv1.DeviceTemplate{Name: "edge"}},
 		wire:     "POST /api/v1/device/templates",
 	},
+	"GetTemplate": {
+		template: "GET /api/v1/device/templates/{id:[0-9]+}",
+		req:      &platformv1.DeviceTemplateGetRequest{Id: 5},
+		wire:     "GET /api/v1/device/templates/5",
+	},
+	"ListTemplates": {
+		template: "GET /api/v1/device/templates",
+		req:      &platformv1.DeviceTemplateListRequest{},
+		wire:     "GET /api/v1/device/templates",
+	},
+	"UpdateTemplate": {
+		template: "PUT /api/v1/device/templates/{id:[0-9]+}",
+		req:      &platformv1.DeviceTemplateUpdateRequest{Template: &platformv1.DeviceTemplate{Id: 5, Name: "edge"}},
+		wire:     "PUT /api/v1/device/templates/5",
+	},
+	"DeleteTemplate": {
+		template: "DELETE /api/v1/device/templates/{id:[0-9]+}",
+		req:      &platformv1.DeviceTemplateDeleteRequest{Id: 5},
+		wire:     "DELETE /api/v1/device/templates/5",
+	},
 	"CreateProfileFromTemplate": {
 		template: "POST /api/v1/device/templates/{id:[0-9]+}/create-profile",
 		req:      &platformv1.CreateProfileFromTemplateRequest{TemplateId: 5},

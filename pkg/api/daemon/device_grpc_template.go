@@ -74,6 +74,124 @@ func (s *DeviceGRPCService) CreateTemplate(
 	}, nil
 }
 
+// GetTemplate returns the device template with the requested id.
+func (s *DeviceGRPCService) GetTemplate(
+	ctx context.Context,
+	req *platformv1.DeviceTemplateGetRequest,
+) (*platformv1.DeviceTemplateGetResponse, error) {
+	if s.templateService == nil {
+		return nil, errTemplateServiceUnavailable
+	}
+	if req.GetId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "template id is required")
+	}
+
+	template, err := s.templateService.Get(ctx, req.GetId())
+	if err != nil {
+		return nil, s.toGRPCError(err)
+	}
+
+	return &platformv1.DeviceTemplateGetResponse{Template: s.templateToPb(template)}, nil
+}
+
+// ListTemplates returns one page of device templates.
+func (s *DeviceGRPCService) ListTemplates(
+	ctx context.Context,
+	req *platformv1.DeviceTemplateListRequest,
+) (*platformv1.DeviceTemplateListResponse, error) {
+	if s.templateService == nil {
+		return nil, errTemplateServiceUnavailable
+	}
+
+	result, err := s.templateService.Page(ctx, s.paginationToQuery(req.GetPagination()))
+	if err != nil {
+		s.logger.Error("failed to list device templates", "error", err)
+		return nil, s.toGRPCError(err)
+	}
+
+	templates := make([]*platformv1.DeviceTemplate, 0, len(result.Entities))
+	for _, t := range result.Entities {
+		templates = append(templates, s.templateToPb(t))
+	}
+
+	return &platformv1.DeviceTemplateListResponse{
+		Templates: templates,
+		Pagination: &platformv1.PaginationResponse{
+			Page:       uint32(result.Page),
+			PageSize:   uint32(result.PageSize),
+			TotalPages: uint32(s.calculateTotalPages(result.Total, result.PageSize)),
+			TotalItems: uint64(result.Total),
+		},
+	}, nil
+}
+
+// UpdateTemplate replaces the stored device template the request's id
+// names. The creation time is the stored one; the update time is the
+// server's.
+func (s *DeviceGRPCService) UpdateTemplate(
+	ctx context.Context,
+	req *platformv1.DeviceTemplateUpdateRequest,
+) (*platformv1.DeviceTemplateUpdateResponse, error) {
+	if s.templateService == nil {
+		return nil, errTemplateServiceUnavailable
+	}
+	if req.GetTemplate() == nil {
+		return nil, status.Error(codes.InvalidArgument, "template is required")
+	}
+	if req.GetTemplate().GetId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "template id is required")
+	}
+
+	template := s.pbToTemplate(req.GetTemplate())
+	if err := s.templateService.Update(ctx, template); err != nil {
+		s.logger.Error("failed to update device template", "id", template.ID, "error", err)
+		return nil, s.toGRPCError(err)
+	}
+
+	s.logger.Info("device template updated", "id", template.ID)
+
+	return &platformv1.DeviceTemplateUpdateResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "device template updated successfully",
+		},
+		Template: s.templateToPb(template),
+	}, nil
+}
+
+// DeleteTemplate removes the device template with the requested id.
+// Profiles already created from it are unaffected.
+func (s *DeviceGRPCService) DeleteTemplate(
+	ctx context.Context,
+	req *platformv1.DeviceTemplateDeleteRequest,
+) (*platformv1.DeviceTemplateDeleteResponse, error) {
+	if s.templateService == nil {
+		return nil, errTemplateServiceUnavailable
+	}
+	if req.GetId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "template id is required")
+	}
+
+	template, err := s.templateService.Get(ctx, req.GetId())
+	if err != nil {
+		return nil, s.toGRPCError(err)
+	}
+
+	if err := s.templateService.Delete(ctx, template); err != nil {
+		s.logger.Error("failed to delete device template", "id", req.GetId(), "error", err)
+		return nil, s.toGRPCError(err)
+	}
+
+	s.logger.Info("device template deleted", "id", req.GetId())
+
+	return &platformv1.DeviceTemplateDeleteResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "device template deleted successfully",
+		},
+	}, nil
+}
+
 // CreateProfileFromTemplate creates and stores a profile copied from a
 // template, with the request's overrides applied. It shares
 // device.CreateProfileFromTemplate with the REST route, so a zero profile

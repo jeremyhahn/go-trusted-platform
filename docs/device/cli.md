@@ -1,12 +1,13 @@
 # Device Identity, Profiles and Inventory — CLI
 
-> **Status: NORMATIVE** · Scope: `platformctl device`, `platformctl profile` · Last verified: 2026-10-13
+> **Status: NORMATIVE** · Scope: `platformctl device`, `platformctl profile` · Last verified: 2026-10-17
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
 > Every verb and every flag below was read out of `pkg/cli/commands/device/`
 > and `pkg/cli/commands/profile/` on 2026-08-18; the profile read, delete and
-> match verbs were re-read on 2026-10-13 (#460).
+> match verbs were re-read on 2026-10-13 (#460); `device update`, `device
+template` and the match-rule flags were added on 2026-10-17 (#949).
 
 ---
 
@@ -15,6 +16,7 @@
 ```
 platformctl device            Device management operations
 platformctl device profile    Device profile management
+platformctl device template   Device template management (§2.8)
 platformctl device attest-cert  The attestation certificate on a device record (§2.6)
 platformctl profile           Device profile get/list/delete/match (§4)
 ```
@@ -60,10 +62,12 @@ in-process and is the only way to use them with no daemon listening.
 | `get` | `<id>` | Get a device by id |
 | `find-serial` | `<serial>` | Find a device by serial number |
 | `register` | — | Create a device record (`CreateDevice`) |
+| `update` | `<id>` | Change a device's model and key material, §2.7a |
 | `delete` | `<id>` | Delete a device by id |
 | `disable` | `<id>` | Block the device's switch port and record it suspended, §2.7 |
 | `enable` | `<id>` | Re-admit a disabled device to quarantine pending re-attestation, §2.7 |
 | `profile` | — | Sub-group, §3 |
+| `template` | — | Sub-group, §2.8 |
 
 ### 2.1 `device list`
 
@@ -266,12 +270,69 @@ no SDN policy engine, for a device with no switch port, and for a transition
 the lifecycle does not allow — the refusals are tabled in [user.md](user.md)
 and [api.md §4.7](api.md#47-operator-disable-and-enable-250).
 
+### 2.7a `device update <id>`
+
+```bash
+platformctl device update 123 --model r650
+platformctl device update 123 --ek-cert /var/lib/platform/ek.pem --hash-algo 11
+```
+
+| Flag | Type | Meaning |
+|---|---|---|
+| `--model` | string | Device model |
+| `--ek-cert` | string | TPM EK certificate: a PEM file path or inline PEM (read as §3.1 `--ek-cert`) |
+| `--attest-pub` | string | Attestation public key |
+| `--attest-cert` | string | PEM attestation (IAK/AK) certificate |
+| `--signing-pub` | string | Signing public key |
+| `--hash-algo` | uint32 | TPM hash algorithm id (`11` = SHA-256); `0` is a value, applied when the flag is given |
+
+The command reads the device (`GetDevice`), changes only the fields whose
+flags are given and stores it (`UpdateDevice`); every other field keeps its
+value. The serial is the device's identity and has no flag; a lifecycle state
+changes only through `disable`/`enable` (§2.7). It prints the stored device in
+the `device get` shape. A non-numeric id, no change flag at all, or an
+unparseable `--ek-cert` fails before connecting.
+
+### 2.8 `platformctl device template`
+
+A template is a profile blueprint: a role, a platform config and a match-rule
+set. Six verbs ride the SDK device client over every transport:
+
+```bash
+platformctl device template create --name rack-server --role server \
+  --config-file server.yaml --match-serial-prefix SN-R650-
+platformctl device template get 456 --output json
+platformctl device template list                      # --page 1 --page-size 20
+platformctl device template update 456 --description "R650 rack servers" --role edge
+platformctl device template delete 456
+platformctl device template create-profile 456 --name r650-01 --ek-serial 0A1B2C
+```
+
+- `create` and `update` take `--name` (**required on `create`**:
+  `device template: --name is required`), `--description`, `--role`,
+  `--config-file` and the match-rule flags, all read as in §3.1.
+- `update` reads the template, changes only the flagged fields and stores it;
+  `UpdateTemplate` replaces the whole template, so the read keeps the rest.
+  Profiles already built from the template are not changed, nor by `delete`.
+- `create-profile <template-id>` builds a profile from the template. The
+  profile starts from the template's role, config and match rules; `--name`,
+  `--model`, `--role`, `--zone`, `--ek-serial`, `--mac`, `--ek-cert` and the
+  match-rule flags override or bind it. It prints the profile as §3.6.
+- `--output json` renders a template as `{id, name, description, role,
+  config_bytes, match_rules}` with `id` a decimal string and empty fields
+  omitted; `list` is `{page, page_size, total, total_pages, templates: [...]}`
+  and the table prints `ID`, `NAME`, `ROLE`, `DESCRIPTION`, `MATCH RULES`.
+- An unknown id fails with `device template: template <id> not found`, which
+  satisfies `errors.Is(err, common.ErrNotFound)`; a non-numeric id fails
+  before connecting.
+
 ---
 
 ## 3. `platformctl device profile`
 
 Eight verbs: `get`, `list`, `delete`, `match`, `create`, `update`, `assign`,
-`unassign`. All ride the SDK device client over whichever transport the active
+`unassign`; a profile is also built from a template with `device template
+create-profile` (§2.8). All ride the SDK device client over whichever transport the active
 context selects — `unix`, `grpc`, `rest`, `quic`, `mcp` or `embedded` — so the
 read verbs confirm a write over the transport that made it.
 
@@ -339,6 +400,14 @@ as gRPC `NOT_FOUND`, and the CLI's typed errors (`ErrProfileNotFound`,
 | `--config-file` | string | | Device platform config, YAML or JSON; converted to JSON on the wire |
 | `--tls-server-name` | string | | Certificate name the attestation collector verifies nodes of this profile against when it dials them for a quote (e.g. `compute.example.internal`); empty means the device's own FQDN (`docs/attestation/user.md`) |
 | `--clear-tls-server-name` | bool | `false` | **`update` only.** Clears the stored TLS server name, so the collector verifies nodes against their own FQDN again (§3.3). Mutually exclusive with `--tls-server-name` |
+| `--match-mac-prefix` | string | | Match rule: MAC address prefix (e.g. `52:54:00`) |
+| `--match-serial-prefix` | string | | Match rule: serial number prefix |
+| `--match-model` | string | | Match rule: exact device model |
+
+**The match-rule flags set only the rules given.** On `update` every other
+stored rule keeps its value; `match` (§3.0a) and boot-time profile lookup read
+them. The rendered profile carries them as `match_rules` (`Match Rules` in the
+table).
 
 **`--ek-cert` decides path-versus-inline by looking for `-----BEGIN`.** A value
 containing that marker is used verbatim; anything else is treated as a file
@@ -485,12 +554,11 @@ its columns are not a stable interface.
 
 ## 6. Defects and gaps in this surface
 
-**No CLI verb covers**: device update (a lifecycle state is changed only by
-`disable`/`enable`, §2.7), the separate by-MAC / by-serial profile lookups
-(`match` covers both), template CRUD (including template
-create and create-profile-from-template, which every transport and the Go SDK
-`device.Client` serve — [api.md](api.md) §4), device activation, or
-`find-config`. Reach those through the transports in [api.md](api.md).
+**No CLI verb covers**: the separate by-MAC / by-serial profile lookups
+(`match` covers both), device activation, or `find-config`. Reach those
+through the transports in [api.md](api.md). The match-rule flags (§3.1) set
+the MAC prefix, serial prefix and model rules only; the pattern, manufacturer
+and TPM-vendor rules are rendered but have no flag.
 
 **Parity gap.** `conventions/feature-docs.md` §4 requires every verb here to
 have a matching `CommandDefinition` in the integration parity suite. **This

@@ -277,6 +277,65 @@ func (c *Client) CreateTemplate(ctx context.Context, template *platformv1.Device
 	return resp.Template, nil
 }
 
+// GetTemplate returns the device template with the given ID.
+func (c *Client) GetTemplate(ctx context.Context, id uint64) (*platformv1.DeviceTemplate, error) {
+	resp, err := c.grpc.GetTemplate(ctx, &platformv1.DeviceTemplateGetRequest{Id: id})
+	if err != nil {
+		return nil, &ErrGetTemplateFailed{ID: id, Cause: err}
+	}
+	return resp.Template, nil
+}
+
+// ListTemplates returns one page of device templates. A nil opts lists the
+// first page at the server's default page size.
+func (c *Client) ListTemplates(ctx context.Context, opts *common.Pagination) ([]*platformv1.DeviceTemplate, *common.PageResult, error) {
+	req := &platformv1.DeviceTemplateListRequest{}
+	if opts != nil {
+		req.Pagination = &platformv1.PaginationRequest{
+			Page:      opts.Page,
+			PageSize:  opts.PageSize,
+			SortBy:    opts.SortBy,
+			Ascending: opts.Asc,
+		}
+	}
+	resp, err := c.grpc.ListTemplates(ctx, req)
+	if err != nil {
+		return nil, nil, &ErrListTemplatesFailed{Cause: err}
+	}
+	var pageResult *common.PageResult
+	if resp.Pagination != nil {
+		pageResult = &common.PageResult{
+			Page:       resp.Pagination.Page,
+			PageSize:   resp.Pagination.PageSize,
+			TotalPages: resp.Pagination.TotalPages,
+			TotalItems: resp.Pagination.TotalItems,
+		}
+	}
+	return resp.Templates, pageResult, nil
+}
+
+// UpdateTemplate replaces the stored device template whose ID the template
+// carries: every field is replaced, so a caller changing one field sends
+// the template GetTemplate returned with that field edited. The server
+// keeps the creation time.
+func (c *Client) UpdateTemplate(ctx context.Context, template *platformv1.DeviceTemplate) (*platformv1.DeviceTemplate, error) {
+	resp, err := c.grpc.UpdateTemplate(ctx, &platformv1.DeviceTemplateUpdateRequest{Template: template})
+	if err != nil {
+		return nil, &ErrUpdateTemplateFailed{ID: template.GetId(), Cause: err}
+	}
+	return resp.Template, nil
+}
+
+// DeleteTemplate deletes the device template with the given ID. Profiles
+// already built from the template are not affected.
+func (c *Client) DeleteTemplate(ctx context.Context, id uint64) error {
+	_, err := c.grpc.DeleteTemplate(ctx, &platformv1.DeviceTemplateDeleteRequest{Id: id})
+	if err != nil {
+		return &ErrDeleteTemplateFailed{ID: id, Cause: err}
+	}
+	return nil
+}
+
 // CreateProfileFromTemplate derives a device profile from a template,
 // applying the set fields of overrides on top of the template's values.
 func (c *Client) CreateProfileFromTemplate(ctx context.Context, templateID uint64, overrides *platformv1.DeviceProfile) (*platformv1.DeviceProfile, error) {

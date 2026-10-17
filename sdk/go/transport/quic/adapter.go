@@ -633,9 +633,13 @@ var categorySubOpcodeMap = map[string]byte{
 	"/platform.v1.DeviceService/DisableDevice": quicwire.DeviceSubDisable,
 	"/platform.v1.DeviceService/EnableDevice":  quicwire.DeviceSubEnable,
 
-	// Device templates: handleDeviceTemplateCreate and
-	// handleDeviceProfileFromTemplate.
+	// Device templates: handleDeviceTemplate{Create,Get,List,Update,Delete}
+	// and handleDeviceProfileFromTemplate.
 	"/platform.v1.DeviceService/CreateTemplate":            quicwire.DeviceSubTemplateCreate,
+	"/platform.v1.DeviceService/GetTemplate":               quicwire.DeviceSubTemplateGet,
+	"/platform.v1.DeviceService/ListTemplates":             quicwire.DeviceSubTemplateList,
+	"/platform.v1.DeviceService/UpdateTemplate":            quicwire.DeviceSubTemplateUpdate,
+	"/platform.v1.DeviceService/DeleteTemplate":            quicwire.DeviceSubTemplateDelete,
 	"/platform.v1.DeviceService/CreateProfileFromTemplate": quicwire.DeviceSubProfileFromTemplate,
 
 	// Profile matching: handleDeviceFindMatchingProfile.
@@ -839,6 +843,10 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.DeviceService/DisableDevice":                quicwire.OpProvisioningCategory,
 	"/platform.v1.DeviceService/EnableDevice":                 quicwire.OpProvisioningCategory,
 	"/platform.v1.DeviceService/CreateTemplate":               quicwire.OpProvisioningCategory,
+	"/platform.v1.DeviceService/GetTemplate":                  quicwire.OpProvisioningCategory,
+	"/platform.v1.DeviceService/ListTemplates":                quicwire.OpProvisioningCategory,
+	"/platform.v1.DeviceService/UpdateTemplate":               quicwire.OpProvisioningCategory,
+	"/platform.v1.DeviceService/DeleteTemplate":               quicwire.OpProvisioningCategory,
 	"/platform.v1.DeviceService/CreateProfileFromTemplate":    quicwire.OpProvisioningCategory,
 	"/platform.v1.DeviceService/FindMatchingProfile":          quicwire.OpProvisioningCategory,
 

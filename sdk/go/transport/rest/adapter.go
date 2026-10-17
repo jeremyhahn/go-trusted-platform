@@ -1052,6 +1052,20 @@ var templatedRouteTable = map[string]templatedRoute{
 	// id unconstrained; evidence travels in the body.
 	"/platform.v1.DeviceService/AttestDevice": itemRoute("/api/v1/devices/{id}/attest", http.MethodPost, "{id}", "device_id"),
 
+	// GET, PUT and DELETE /api/v1/device/templates/{id:[0-9]+}.
+	"/platform.v1.DeviceService/GetTemplate":    itemRoute("/api/v1/device/templates/{id:[0-9]+}", http.MethodGet, "{id:[0-9]+}", "id"),
+	"/platform.v1.DeviceService/UpdateTemplate": itemRoute("/api/v1/device/templates/{id:[0-9]+}", http.MethodPut, "{id:[0-9]+}", "template.id"),
+	"/platform.v1.DeviceService/DeleteTemplate": itemRoute("/api/v1/device/templates/{id:[0-9]+}", http.MethodDelete, "{id:[0-9]+}", "id"),
+	// The template list pages by query parameter; a zero page or size is
+	// omitted, so the server's defaults apply.
+	"/platform.v1.DeviceService/ListTemplates": {
+		path:   "/api/v1/device/templates",
+		method: http.MethodGet,
+		queryParams: []queryParam{
+			{name: "page", field: "pagination.page"},
+			{name: "page_size", field: "pagination.page_size"},
+		},
+	},
 	// POST /api/v1/device/templates/{id:[0-9]+}/create-profile. The body
 	// keeps {"overrides": {...}}.
 	"/platform.v1.DeviceService/CreateProfileFromTemplate": itemRoute("/api/v1/device/templates/{id:[0-9]+}/create-profile", http.MethodPost, "{id:[0-9]+}", "template_id"),
