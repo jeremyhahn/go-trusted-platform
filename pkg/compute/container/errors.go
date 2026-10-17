@@ -192,6 +192,10 @@ var (
 
 	// ErrInvalidContainerID is returned when a container ID is invalid.
 	ErrInvalidContainerID = errors.New("invalid container ID")
+
+	// ErrContainerNameRequired is returned when a create request carries no
+	// container name. Every transport answers it the same way.
+	ErrContainerNameRequired = errors.New("container name is required")
 )
 
 // ContainerError wraps an error with container-specific context.

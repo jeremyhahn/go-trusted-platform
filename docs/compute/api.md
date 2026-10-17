@@ -374,6 +374,15 @@ treat the pair as internal — they are the two-phase contract.
 
 Containers are the most evenly covered capability set in this feature.
 
+A create with no container name is refused on every transport before it
+reaches the orchestrator: InvalidArgument with the message
+`container name is required` (`container.ErrContainerNameRequired`). REST
+renders it as 400; the Go SDK returns its typed `ErrCreateContainerFailed`
+around that status. `ComputeService.CreateContainer` makes the check for
+gRPC, Unix, REST, QUIC and embedded; the MCP `container_create` tool makes it
+with the same message. `TestContainerCreateSDKParity_EmptyNameRefused`
+(`pkg/api/daemon/compute_sdk_parity_test.go`) holds it over all six.
+
 ---
 
 ## 5. Attestation of workloads

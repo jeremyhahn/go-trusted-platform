@@ -77,7 +77,7 @@ var ErrContainerServiceUnavailable = &ContainerError{
 // ErrContainerNameRequired indicates a container name is required.
 var ErrContainerNameRequired = &ContainerError{
 	Code:    "CONTAINER_NAME_REQUIRED",
-	Message: "container name is required",
+	Message: container.ErrContainerNameRequired.Error(),
 }
 
 // ErrContainerImageRequired indicates a container image is required.

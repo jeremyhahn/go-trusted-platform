@@ -2504,7 +2504,7 @@ func (m *MCPServiceProvider) ContainerCreate(ctx context.Context, name string, i
 	}
 
 	if name == "" {
-		return nil, ErrContainerInvalidParameter{Parameter: "name", Reason: "container name is required"}
+		return nil, ErrContainerInvalidParameter{Parameter: "name", Reason: computecontainer.ErrContainerNameRequired.Error()}
 	}
 	if image == "" {
 		return nil, ErrContainerInvalidParameter{Parameter: "image", Reason: "container image is required"}

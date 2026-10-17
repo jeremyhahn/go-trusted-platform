@@ -374,7 +374,7 @@ func TestBoost_ComputeGRPCService_CreateContainer_EmptyImage(t *testing.T) {
 	svc, _ := boostComputeService()
 
 	_, err := svc.CreateContainer(context.Background(), &platformv1.CreateContainerRequest{
-		Config: &platformv1.ContainerConfig{Image: ""},
+		Config: &platformv1.ContainerConfig{Name: "no-image", Image: ""},
 	})
 	if err == nil {
 		t.Fatal("expected error for empty image")
@@ -388,7 +388,7 @@ func TestBoost_ComputeGRPCService_CreateContainer_Error(t *testing.T) {
 	}
 
 	_, err := svc.CreateContainer(context.Background(), &platformv1.CreateContainerRequest{
-		Config: &platformv1.ContainerConfig{Image: "alpine:latest"},
+		Config: &platformv1.ContainerConfig{Name: "create-fails", Image: "alpine:latest"},
 	})
 	if err == nil {
 		t.Fatal("expected error")
