@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -171,20 +172,68 @@ func TestAwaitPostInstallHealth_NonControlPlane_LeafFromAnotherCAFails(t *testin
 
 func TestAwaitPostInstallHealth_NonControlPlane_NotServingFailsAtTheDeadline(t *testing.T) {
 	cp := newTestCPPKI(t)
-	o := newNodeHealthTestOrchestrator(t, cp, issueTestNodeLeaf(t, cp, "gw.example.test"), newFakeHealthTicker(0))
+	// The deadline passes the moment the orchestrator first waits for a
+	// tick, which it does only after a round of probes has failed: the
+	// refused dial is always on record when the wait ends, however slowly
+	// a loaded -race run reaches it.
+	ctx := newTestDeadlineContext(t)
+	ticker := &deadlineOnWaitTicker{fakeHealthTicker: newFakeHealthTicker(0), deadline: ctx}
+	o := newNodeHealthTestOrchestrator(t, cp, issueTestNodeLeaf(t, cp, "gw.example.test"), ticker)
 	writeRoleTemplate(t, o, RoleGateway, gatewayTemplate)
 	port := closedTCPPort(t)
 	o.healthChk.(*httpHealthChecker).httpsPorts = []int{port}
-	o.config.Platform.HealthTimeout = 50 * time.Millisecond
 	node := &DiscoveredNode{NodeConfig: NodeConfig{Hostname: "gw1", Role: RoleGateway}}
 
-	err := o.awaitPostInstallHealth(t.Context(), node, []string{"127.0.0.1"}, "")
+	err := o.awaitPostInstallHealth(ctx, node, []string{"127.0.0.1"}, "")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("a node that never serves must fail at the health deadline, got %v", err)
 	}
 	if !strings.Contains(err.Error(), "connection refused") {
 		t.Errorf("the refused dial must be reported, got %v", err)
 	}
+}
+
+// testDeadlineContext is a parent context whose deadline the test passes
+// by calling expire, so a wait bounded by it ends at a point the test
+// chooses instead of after a wall-clock interval.
+type testDeadlineContext struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+}
+
+func newTestDeadlineContext(t *testing.T) *testDeadlineContext {
+	return &testDeadlineContext{Context: t.Context(), done: make(chan struct{})}
+}
+
+func (c *testDeadlineContext) expire() {
+	c.once.Do(func() { close(c.done) })
+}
+
+func (c *testDeadlineContext) Done() <-chan struct{} {
+	return c.done
+}
+
+func (c *testDeadlineContext) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+// deadlineOnWaitTicker expires its deadline when the orchestrator builds
+// a poll ticker, that is, when a first attempt has failed and the
+// orchestrator is about to wait for the next.
+type deadlineOnWaitTicker struct {
+	*fakeHealthTicker
+	deadline *testDeadlineContext
+}
+
+func (d *deadlineOnWaitTicker) New(interval time.Duration) (<-chan time.Time, func()) {
+	d.deadline.expire()
+	return d.fakeHealthTicker.New(interval)
 }
 
 func TestAwaitPostInstallHealth_NonControlPlane_UnknownTLSNameIsTerminal(t *testing.T) {
