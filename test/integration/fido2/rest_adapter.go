@@ -108,11 +108,16 @@ func (r *RESTAdapter) ListDevices(ctx context.Context, req *fido2sdk.ListDevices
 	return resp, nil
 }
 
-// WaitDevice calls POST /api/v1/fido2/devices/wait.
+// WaitDevice calls GET /api/v1/fido2/devices/wait?timeout_seconds=N, the
+// route docs/cli/fido2.md documents.
 func (r *RESTAdapter) WaitDevice(ctx context.Context, req *fido2sdk.WaitDeviceRequest) (*fido2sdk.WaitDeviceResponse, error) {
+	path := "/api/v1/fido2/devices/wait"
+	if req != nil && req.TimeoutSeconds > 0 {
+		path = fmt.Sprintf("%s?timeout_seconds=%d", path, req.TimeoutSeconds)
+	}
 	resp := &fido2sdk.WaitDeviceResponse{}
-	if err := r.doJSON(ctx, http.MethodPost, "/api/v1/fido2/devices/wait", req, resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: "POST /api/v1/fido2/devices/wait", Err: err}
+	if err := r.doJSON(ctx, http.MethodGet, path, nil, resp); err != nil {
+		return nil, ErrCallFailed{Protocol: "REST", Method: "GET " + path, Err: err}
 	}
 	return resp, nil
 }
