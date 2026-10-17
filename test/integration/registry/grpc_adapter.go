@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"strings"
 	"time"
 
@@ -132,7 +133,10 @@ func (g *GRPCAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*
 		return nil, err
 	}
 	metadata := regsvc.NewPushMetadata(repository, tag, int64(len(payload)))
-	metadata.Annotations = opts.Annotations
+	metadata.Annotations = maps.Clone(opts.Annotations)
+	if opts.AllowOverwrite {
+		metadata = regsvc.WithOverwrite(metadata)
+	}
 	if err := stream.Send(regsvc.NewPushMetadataRequest(metadata)); err != nil {
 		return nil, err
 	}

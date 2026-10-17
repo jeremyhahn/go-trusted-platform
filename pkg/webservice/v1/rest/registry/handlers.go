@@ -26,6 +26,7 @@ import (
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 )
 
 // Handlers is the REST surface bound to a RegistryService.
@@ -191,7 +192,7 @@ func (h *Handlers) PushImage(w http.ResponseWriter, r *http.Request) {
 		annotations["encrypt"] = "true"
 	}
 	if r.Header.Get("X-Trusted-Platform-Overwrite") == "true" {
-		annotations["overwrite"] = "true"
+		annotations[regsvc.AnnotationOverwrite] = "true"
 	}
 	resp, err := h.service.PushStream(
 		r.Context(),

@@ -394,12 +394,12 @@ func (u *UnixAdapter) DecryptImage(ctx context.Context, ref string) (*DecryptIma
 // CLI Response Types
 
 type cliPushResponse struct {
-	Reference string    `json:"reference"`
-	Digest    string    `json:"digest"`
-	Size      int64     `json:"size"`
-	Encrypted bool      `json:"encrypted"`
-	Signed    bool      `json:"signed"`
-	PushedAt  time.Time `json:"pushed_at"`
+	Reference string `json:"reference"`
+	Digest    string `json:"digest"`
+	Size      int64  `json:"size"`
+	Encrypted bool   `json:"encrypted"`
+	Signed    bool   `json:"signed"`
+	Timestamp int64  `json:"timestamp"`
 }
 
 func (r *cliPushResponse) toPushResult() *PushResult {
@@ -409,7 +409,7 @@ func (r *cliPushResponse) toPushResult() *PushResult {
 		Size:      r.Size,
 		Encrypted: r.Encrypted,
 		Signed:    r.Signed,
-		PushedAt:  r.PushedAt,
+		PushedAt:  time.Unix(r.Timestamp, 0).UTC(),
 	}
 }
 

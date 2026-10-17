@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -142,7 +143,23 @@ func (c *CLIAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*P
 		return nil, ErrInvalidArgument{Argument: "reference", Reason: "reference cannot be empty"}
 	}
 
-	args := []string{"registry", "push", ref}
+	// platformctl streams the push envelope from --input; the annotations
+	// travel in its manifest because the command has no annotation flag.
+	payload, err := pushEnvelope(opts)
+	if err != nil {
+		return nil, err
+	}
+	dir, err := os.MkdirTemp("", "registry-push-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	input := filepath.Join(dir, "image.json")
+	if err := os.WriteFile(input, payload, 0o600); err != nil {
+		return nil, err
+	}
+
+	args := []string{"registry", "push", ref, "--input", input}
 
 	if opts.Encrypt {
 		args = append(args, "--encrypt")
@@ -152,7 +169,7 @@ func (c *CLIAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*P
 	}
 
 	if opts.AllowOverwrite {
-		args = append(args, "--allow-overwrite")
+		args = append(args, "--overwrite")
 	}
 
 	if opts.SignImage {
@@ -160,10 +177,6 @@ func (c *CLIAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*P
 		if opts.SigningKeyID != "" {
 			args = append(args, "--signing-key-id", opts.SigningKeyID)
 		}
-	}
-
-	for k, v := range opts.Annotations {
-		args = append(args, "--annotation", k+"="+v)
 	}
 
 	output, err := c.runCommand(ctx, args...)
