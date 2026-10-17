@@ -20,11 +20,15 @@ package tenant
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -49,7 +53,10 @@ func (e ErrRESTRequestFailed) Error() string {
 // REST Protocol Adapter
 // =============================================================================
 
-// RESTAdapter implements TenantCommands using REST API
+// RESTAdapter implements TenantCommands using REST API. The v1 tenant
+// handlers speak the platformv1 messages as protojson inside the response
+// envelope, so the adapter sends and decodes the same messages the gRPC
+// adapter does.
 type RESTAdapter struct {
 	endpoint string
 	client   *http.Client
@@ -99,510 +106,424 @@ func (a *RESTAdapter) Name() string {
 	return "REST"
 }
 
-// doRequest performs an HTTP request and returns the response body
-func (a *RESTAdapter) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, error) {
+// tenantPath builds a /api/v1/tenants route with each segment escaped.
+func tenantPath(segments ...string) string {
+	path := "/api/v1/tenants"
+	for _, segment := range segments {
+		path += "/" + url.PathEscape(segment)
+	}
+	return path
+}
+
+// call sends req (nil for no body) as protojson, unwraps the response
+// envelope and decodes its payload into resp.
+func (a *RESTAdapter) call(ctx context.Context, method, path string, req, resp proto.Message) error {
+	operation := method + " " + path
+
 	var reqBody io.Reader
-	if body != nil {
-		data, err := json.Marshal(body)
+	if req != nil {
+		data, err := protojson.Marshal(req)
 		if err != nil {
-			return nil, ErrRESTRequestFailed{
-				Operation: method + " " + path,
-				Message:   "failed to marshal request: " + err.Error(),
-			}
+			return ErrRESTRequestFailed{Operation: operation, Message: "failed to marshal request: " + err.Error()}
 		}
 		reqBody = bytes.NewReader(data)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, a.endpoint+path, reqBody)
+	httpReq, err := http.NewRequestWithContext(ctx, method, a.endpoint+path, reqBody)
 	if err != nil {
-		return nil, ErrRESTRequestFailed{
-			Operation: method + " " + path,
-			Message:   "failed to create request: " + err.Error(),
-		}
+		return ErrRESTRequestFailed{Operation: operation, Message: "failed to create request: " + err.Error()}
 	}
-
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if req != nil {
+		httpReq.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
 
-	resp, err := a.client.Do(req)
+	httpResp, err := a.client.Do(httpReq)
 	if err != nil {
-		return nil, ErrRESTRequestFailed{
-			Operation: method + " " + path,
-			Message:   "request failed: " + err.Error(),
-		}
+		return ErrRESTRequestFailed{Operation: operation, Message: "request failed: " + err.Error()}
 	}
-	defer resp.Body.Close()
+	defer httpResp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(httpResp.Body)
 	if err != nil {
-		return nil, ErrRESTRequestFailed{
-			Operation:  method + " " + path,
-			StatusCode: resp.StatusCode,
+		return ErrRESTRequestFailed{
+			Operation:  operation,
+			StatusCode: httpResp.StatusCode,
 			Message:    "failed to read response: " + err.Error(),
 		}
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, ErrRESTRequestFailed{
-			Operation:  method + " " + path,
-			StatusCode: resp.StatusCode,
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		return ErrRESTRequestFailed{
+			Operation:  operation,
+			StatusCode: httpResp.StatusCode,
 			Message:    "request failed",
 			Body:       string(respBody),
 		}
 	}
 
-	return respBody, nil
+	payload, err := helpers.RESTPayload(respBody)
+	if err != nil {
+		return ErrRESTRequestFailed{
+			Operation:  operation,
+			StatusCode: httpResp.StatusCode,
+			Message:    err.Error(),
+			Body:       string(respBody),
+		}
+	}
+	if len(payload) == 0 {
+		return ErrRESTRequestFailed{
+			Operation:  operation,
+			StatusCode: httpResp.StatusCode,
+			Message:    "response envelope carries no payload",
+			Body:       string(respBody),
+		}
+	}
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(payload, resp); err != nil {
+		return ErrRESTRequestFailed{
+			Operation:  operation,
+			StatusCode: httpResp.StatusCode,
+			Message:    "failed to parse response: " + err.Error(),
+			Body:       string(respBody),
+		}
+	}
+	return nil
 }
 
 // =============================================================================
 // Tenant CRUD Operations
 // =============================================================================
 
-// CreateTenant creates a new tenant
+// CreateTenant creates a new tenant via REST
 func (a *RESTAdapter) CreateTenant(ctx context.Context, opts CreateTenantOptions) (*CreateTenantResult, error) {
-	body, err := a.doRequest(ctx, http.MethodPost, "/api/v1/tenants", opts)
-	if err != nil {
+	req := &platformv1.CreateTenantRequest{
+		Name:        opts.Name,
+		DisplayName: opts.DisplayName,
+		Labels:      opts.Labels,
+		Annotations: opts.Annotations,
+	}
+
+	resp := &platformv1.CreateTenantResponse{}
+	if err := a.call(ctx, http.MethodPost, tenantPath(), req, resp); err != nil {
 		return nil, err
 	}
 
-	var tenant TenantData
-	if err := json.Unmarshal(body, &tenant); err != nil {
-		return nil, ErrRESTRequestFailed{
-			Operation: "CreateTenant",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
-	}
-
-	return &CreateTenantResult{Tenant: &tenant}, nil
+	return &CreateTenantResult{Tenant: pbToTenantData(resp.GetTenant())}, nil
 }
 
-// GetTenant retrieves a tenant by ID
+// GetTenant retrieves a tenant by ID via REST
 func (a *RESTAdapter) GetTenant(ctx context.Context, opts GetTenantOptions) (*GetTenantResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s", opts.TenantID)
-
-	body, err := a.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
+	resp := &platformv1.GetTenantResponse{}
+	if err := a.call(ctx, http.MethodGet, tenantPath(opts.TenantID), nil, resp); err != nil {
 		return nil, err
 	}
 
-	var tenant TenantData
-	if err := json.Unmarshal(body, &tenant); err != nil {
-		return nil, ErrRESTRequestFailed{
-			Operation: "GetTenant",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
-	}
-
-	return &GetTenantResult{Tenant: &tenant}, nil
+	return &GetTenantResult{Tenant: pbToTenantData(resp.GetTenant())}, nil
 }
 
-// GetTenantByName retrieves a tenant by name
+// GetTenantByName retrieves a tenant by name via REST
 func (a *RESTAdapter) GetTenantByName(ctx context.Context, opts GetTenantByNameOptions) (*GetTenantByNameResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/name/%s", opts.Name)
-
-	body, err := a.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
+	resp := &platformv1.GetTenantByNameResponse{}
+	if err := a.call(ctx, http.MethodGet, tenantPath("by-name", opts.Name), nil, resp); err != nil {
 		return nil, err
 	}
 
-	var tenant TenantData
-	if err := json.Unmarshal(body, &tenant); err != nil {
-		return nil, ErrRESTRequestFailed{
-			Operation: "GetTenantByName",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
-	}
-
-	return &GetTenantByNameResult{Tenant: &tenant}, nil
+	return &GetTenantByNameResult{Tenant: pbToTenantData(resp.GetTenant())}, nil
 }
 
-// UpdateTenant updates an existing tenant
+// UpdateTenant updates a tenant via REST
 func (a *RESTAdapter) UpdateTenant(ctx context.Context, opts UpdateTenantOptions) (*UpdateTenantResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s", opts.TenantID)
-
-	updateReq := map[string]interface{}{}
+	req := &platformv1.UpdateTenantRequest{
+		Labels:      opts.Labels,
+		Annotations: opts.Annotations,
+	}
 	if opts.DisplayName != nil {
-		updateReq["display_name"] = *opts.DisplayName
-	}
-	if opts.Labels != nil {
-		updateReq["labels"] = opts.Labels
-	}
-	if opts.Annotations != nil {
-		updateReq["annotations"] = opts.Annotations
+		req.DisplayName = *opts.DisplayName
 	}
 
-	body, err := a.doRequest(ctx, http.MethodPut, path, updateReq)
-	if err != nil {
+	resp := &platformv1.UpdateTenantResponse{}
+	if err := a.call(ctx, http.MethodPut, tenantPath(opts.TenantID), req, resp); err != nil {
 		return nil, err
 	}
 
-	var tenant TenantData
-	if err := json.Unmarshal(body, &tenant); err != nil {
-		return nil, ErrRESTRequestFailed{
-			Operation: "UpdateTenant",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
-	}
-
-	return &UpdateTenantResult{Tenant: &tenant}, nil
+	return &UpdateTenantResult{Tenant: pbToTenantData(resp.GetTenant())}, nil
 }
 
-// DeleteTenant removes a tenant
+// DeleteTenant deletes a tenant via REST
 func (a *RESTAdapter) DeleteTenant(ctx context.Context, opts DeleteTenantOptions) (*DeleteTenantResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s", opts.TenantID)
-
-	body, err := a.doRequest(ctx, http.MethodDelete, path, nil)
-	if err != nil {
+	resp := &platformv1.DeleteTenantResponse{}
+	if err := a.call(ctx, http.MethodDelete, tenantPath(opts.TenantID), nil, resp); err != nil {
 		return nil, err
 	}
 
-	var result DeleteTenantResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		// Delete may return simple success
-		return &DeleteTenantResult{Success: true, Message: "tenant deleted successfully"}, nil
-	}
-
-	return &result, nil
+	return &DeleteTenantResult{
+		Success: resp.GetStatus().GetSuccess(),
+		Message: resp.GetStatus().GetMessage(),
+	}, nil
 }
 
-// ListTenants lists all tenants with optional pagination
+// ListTenants lists tenants via REST
 func (a *RESTAdapter) ListTenants(ctx context.Context, opts ListTenantsOptions) (*ListTenantsResult, error) {
-	path := "/api/v1/tenants"
-
-	params := ""
+	query := url.Values{}
 	if opts.Limit > 0 {
-		params += fmt.Sprintf("&limit=%d", opts.Limit)
+		query.Set("limit", fmt.Sprint(opts.Limit))
 	}
 	if opts.Offset > 0 {
-		params += fmt.Sprintf("&offset=%d", opts.Offset)
+		query.Set("offset", fmt.Sprint(opts.Offset))
 	}
-	if params != "" {
-		path += "?" + params[1:]
+	path := tenantPath()
+	if len(query) > 0 {
+		path += "?" + query.Encode()
 	}
 
-	body, err := a.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
+	resp := &platformv1.ListTenantsResponse{}
+	if err := a.call(ctx, http.MethodGet, path, nil, resp); err != nil {
 		return nil, err
 	}
 
-	var result ListTenantsResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		var tenants []*TenantData
-		if err := json.Unmarshal(body, &tenants); err != nil {
-			return nil, ErrRESTRequestFailed{
-				Operation: "ListTenants",
-				Message:   "failed to parse response: " + err.Error(),
-				Body:      string(body),
-			}
-		}
-		result.Tenants = tenants
-		result.Total = len(tenants)
+	tenants := make([]*TenantData, 0, len(resp.GetTenants()))
+	for _, t := range resp.GetTenants() {
+		tenants = append(tenants, pbToTenantData(t))
 	}
 
-	return &result, nil
+	return &ListTenantsResult{
+		Tenants: tenants,
+		Total:   int(resp.GetTotal()),
+	}, nil
 }
 
 // =============================================================================
-// Tenant Lifecycle Operations
+// Tenant State Operations
 // =============================================================================
 
-// SuspendTenant suspends a tenant
+// SuspendTenant suspends a tenant via REST
 func (a *RESTAdapter) SuspendTenant(ctx context.Context, opts SuspendTenantOptions) (*SuspendTenantResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/suspend", opts.TenantID)
-
-	body, err := a.doRequest(ctx, http.MethodPost, path, nil)
-	if err != nil {
+	resp := &platformv1.SuspendTenantResponse{}
+	if err := a.call(ctx, http.MethodPost, tenantPath(opts.TenantID, "suspend"), &platformv1.SuspendTenantRequest{}, resp); err != nil {
 		return nil, err
 	}
 
-	var result SuspendTenantResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return &SuspendTenantResult{Success: true, Message: "tenant suspended successfully"}, nil
-	}
-
-	return &result, nil
+	return &SuspendTenantResult{
+		Success: resp.GetStatus().GetSuccess(),
+		Message: resp.GetStatus().GetMessage(),
+	}, nil
 }
 
-// ResumeTenant resumes a suspended tenant
+// ResumeTenant resumes a suspended tenant via REST
 func (a *RESTAdapter) ResumeTenant(ctx context.Context, opts ResumeTenantOptions) (*ResumeTenantResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/resume", opts.TenantID)
-
-	body, err := a.doRequest(ctx, http.MethodPost, path, nil)
-	if err != nil {
+	resp := &platformv1.ResumeTenantResponse{}
+	if err := a.call(ctx, http.MethodPost, tenantPath(opts.TenantID, "resume"), nil, resp); err != nil {
 		return nil, err
 	}
 
-	var result ResumeTenantResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return &ResumeTenantResult{Success: true, Message: "tenant resumed successfully"}, nil
-	}
-
-	return &result, nil
+	return &ResumeTenantResult{
+		Success: resp.GetStatus().GetSuccess(),
+		Message: resp.GetStatus().GetMessage(),
+	}, nil
 }
 
 // =============================================================================
 // Quota Operations
 // =============================================================================
 
-// GetQuotas retrieves tenant quotas
+// GetQuotas retrieves quotas for a tenant via REST
 func (a *RESTAdapter) GetQuotas(ctx context.Context, opts GetQuotasOptions) (*GetQuotasResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/quotas", opts.TenantID)
-
-	body, err := a.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
+	resp := &platformv1.GetQuotasResponse{}
+	if err := a.call(ctx, http.MethodGet, tenantPath(opts.TenantID, "quotas"), nil, resp); err != nil {
 		return nil, err
 	}
 
-	var result GetQuotasResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, ErrRESTRequestFailed{
-			Operation: "GetQuotas",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
-	}
-
-	return &result, nil
+	return &GetQuotasResult{
+		TenantID: resp.GetTenantId(),
+		Compute:  pbToComputeQuotaData(resp.GetCompute()),
+		Network:  pbToNetworkQuotaData(resp.GetNetwork()),
+		Storage:  pbToStorageQuotaData(resp.GetStorage()),
+	}, nil
 }
 
-// UpdateQuotas updates tenant quotas
+// UpdateQuotas updates quotas for a tenant via REST
 func (a *RESTAdapter) UpdateQuotas(ctx context.Context, opts UpdateQuotasOptions) (*UpdateQuotasResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/quotas", opts.TenantID)
+	req := &platformv1.UpdateQuotasRequest{}
+	if opts.Compute != nil {
+		req.Compute = &platformv1.ComputeQuota{
+			MaxVms:        opts.Compute.MaxVMs,
+			MaxContainers: opts.Compute.MaxContainers,
+			MaxVcpus:      opts.Compute.MaxVCPUs,
+			MaxMemoryMb:   opts.Compute.MaxMemoryMB,
+		}
+	}
+	if opts.Network != nil {
+		req.Network = &platformv1.NetworkQuota{
+			MaxBridges:       opts.Network.MaxBridges,
+			MaxPorts:         opts.Network.MaxPorts,
+			MaxBandwidthMbps: opts.Network.MaxBandwidthMbps,
+		}
+	}
+	if opts.Storage != nil {
+		req.Storage = &platformv1.StorageQuota{
+			MaxVolumesGb: opts.Storage.MaxVolumesGB,
+			MaxSnapshots: opts.Storage.MaxSnapshots,
+		}
+	}
 
-	body, err := a.doRequest(ctx, http.MethodPut, path, opts)
+	if err := a.call(ctx, http.MethodPut, tenantPath(opts.TenantID, "quotas"), req, &platformv1.UpdateQuotasResponse{}); err != nil {
+		return nil, err
+	}
+
+	// Read the quotas back, as the gRPC adapter does.
+	quotas, err := a.GetQuotas(ctx, GetQuotasOptions{TenantID: opts.TenantID})
 	if err != nil {
 		return nil, err
 	}
 
-	var result UpdateQuotasResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, ErrRESTRequestFailed{
-			Operation: "UpdateQuotas",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
-	}
-
-	return &result, nil
+	return &UpdateQuotasResult{
+		TenantID: quotas.TenantID,
+		Compute:  quotas.Compute,
+		Network:  quotas.Network,
+		Storage:  quotas.Storage,
+	}, nil
 }
 
-// GetUsage retrieves tenant resource usage
+// GetUsage retrieves resource usage for a tenant via REST
 func (a *RESTAdapter) GetUsage(ctx context.Context, opts GetUsageOptions) (*GetUsageResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/usage", opts.TenantID)
-
-	body, err := a.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
+	resp := &platformv1.GetUsageResponse{}
+	if err := a.call(ctx, http.MethodGet, tenantPath(opts.TenantID, "usage"), nil, resp); err != nil {
 		return nil, err
 	}
 
-	var result GetUsageResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, ErrRESTRequestFailed{
-			Operation: "GetUsage",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
-	}
-
-	return &result, nil
+	usage := resp.GetUsage()
+	return &GetUsageResult{
+		TenantID:      usage.GetTenantId(),
+		VMs:           usage.GetVms(),
+		Containers:    usage.GetContainers(),
+		VCPUs:         usage.GetVcpus(),
+		MemoryMB:      usage.GetMemoryMb(),
+		DiskGB:        usage.GetDiskGb(),
+		Bridges:       usage.GetBridges(),
+		Ports:         usage.GetPorts(),
+		BandwidthMbps: usage.GetBandwidthMbps(),
+		Volumes:       usage.GetVolumes(),
+		Snapshots:     usage.GetSnapshots(),
+	}, nil
 }
 
-// CheckQuota checks if a resource request can be fulfilled
+// CheckQuota checks if a resource allocation would exceed quota via REST
 func (a *RESTAdapter) CheckQuota(ctx context.Context, opts CheckQuotaOptions) (*CheckQuotaResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/check-quota", opts.TenantID)
-
-	reqBody := map[string]interface{}{
-		"resource": opts.Resource,
-		"amount":   opts.Amount,
+	req := &platformv1.CheckQuotaRequest{
+		Resource: opts.Resource,
+		Amount:   opts.Amount,
 	}
 
-	body, err := a.doRequest(ctx, http.MethodPost, path, reqBody)
-	if err != nil {
-		return &CheckQuotaResult{
-			TenantID: opts.TenantID,
-			Resource: opts.Resource,
-			Amount:   opts.Amount,
-			Allowed:  false,
-			Message:  err.Error(),
-		}, nil
-	}
-
-	var result CheckQuotaResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, ErrRESTRequestFailed{
-			Operation: "CheckQuota",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
-	}
-
-	return &result, nil
-}
-
-// =============================================================================
-// Network Operations
-// =============================================================================
-
-// SyncTenants synchronizes tenant manager state
-func (a *RESTAdapter) SyncTenants(ctx context.Context) (*SyncTenantsResult, error) {
-	body, err := a.doRequest(ctx, http.MethodPost, "/api/v1/tenants/sync", nil)
-	if err != nil {
+	resp := &platformv1.CheckQuotaResponse{}
+	if err := a.call(ctx, http.MethodPost, tenantPath(opts.TenantID, "quota-check"), req, resp); err != nil {
 		return nil, err
 	}
 
-	var result SyncTenantsResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return &SyncTenantsResult{Success: true, Message: "tenant manager synchronized successfully"}, nil
+	return &CheckQuotaResult{
+		TenantID: resp.GetTenantId(),
+		Resource: resp.GetResource(),
+		Amount:   resp.GetAmount(),
+		Allowed:  resp.GetAvailable(),
+		Message:  resp.GetMessage(),
+	}, nil
+}
+
+// =============================================================================
+// Sync Operations
+// =============================================================================
+
+// SyncTenants synchronizes tenants from config via REST
+func (a *RESTAdapter) SyncTenants(ctx context.Context) (*SyncTenantsResult, error) {
+	resp := &platformv1.SyncTenantsResponse{}
+	if err := a.call(ctx, http.MethodPost, tenantPath("sync"), nil, resp); err != nil {
+		return nil, err
 	}
 
-	return &result, nil
+	return &SyncTenantsResult{
+		Success: resp.GetStatus().GetSuccess(),
+		Message: resp.GetStatus().GetMessage(),
+	}, nil
 }
 
 // =============================================================================
 // Per-Tenant Barrier Operations
 // =============================================================================
 
-// InitTenantBarrier explicitly initializes a per-tenant barrier via REST.
+// InitTenantBarrier initializes a tenant barrier via REST
 func (a *RESTAdapter) InitTenantBarrier(ctx context.Context, opts InitTenantBarrierOptions) (*InitTenantBarrierResult, error) {
 	if opts.TenantID == "" {
 		return nil, ErrRESTRequestFailed{Operation: "InitTenantBarrier", Message: "tenant_id is required"}
 	}
 
-	path := fmt.Sprintf("/api/v1/tenants/%s/barrier/init", opts.TenantID)
-	reqBody := map[string]interface{}{}
-	if opts.Threshold > 0 {
-		reqBody["threshold"] = opts.Threshold
-	}
-	if opts.Shares > 0 {
-		reqBody["shares"] = opts.Shares
+	req := &platformv1.InitTenantBarrierRequest{
+		Threshold: opts.Threshold,
+		Shares:    opts.Shares,
 	}
 
-	body, err := a.doRequest(ctx, http.MethodPost, path, reqBody)
-	if err != nil {
+	resp := &platformv1.InitTenantBarrierResponse{}
+	if err := a.call(ctx, http.MethodPost, tenantPath(opts.TenantID, "barrier", "init"), req, resp); err != nil {
 		return nil, err
 	}
 
-	var resp struct {
-		TenantID string `json:"tenant_id,omitempty"`
-		Success  bool   `json:"success"`
-		Message  string `json:"message,omitempty"`
-	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return &InitTenantBarrierResult{Success: true, Message: "tenant barrier initialized"}, nil
-	}
-
 	return &InitTenantBarrierResult{
-		Success: resp.Success,
-		Message: resp.Message,
+		Success: resp.GetStatus().GetSuccess(),
+		Message: resp.GetStatus().GetMessage(),
 	}, nil
 }
 
-// UnsealTenantBarrier unseals a per-tenant barrier via REST.
+// UnsealTenantBarrier unseals a tenant barrier via REST
 func (a *RESTAdapter) UnsealTenantBarrier(ctx context.Context, opts UnsealTenantBarrierOptions) (*UnsealTenantBarrierResult, error) {
 	if opts.TenantID == "" {
 		return nil, ErrRESTRequestFailed{Operation: "UnsealTenantBarrier", Message: "tenant_id is required"}
 	}
 
-	path := fmt.Sprintf("/api/v1/tenants/%s/barrier/unseal", opts.TenantID)
-	reqBody := map[string]interface{}{
-		"key": opts.Key,
-	}
+	req := &platformv1.UnsealTenantBarrierRequest{Key: opts.Key}
 
-	body, err := a.doRequest(ctx, http.MethodPost, path, reqBody)
-	if err != nil {
+	resp := &platformv1.UnsealTenantBarrierResponse{}
+	if err := a.call(ctx, http.MethodPost, tenantPath(opts.TenantID, "barrier", "unseal"), req, resp); err != nil {
 		return nil, err
 	}
 
-	var resp struct {
-		TenantID string `json:"tenant_id,omitempty"`
-		Success  bool   `json:"success"`
-		Message  string `json:"message,omitempty"`
-	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return &UnsealTenantBarrierResult{Success: true, Message: "tenant barrier unsealed"}, nil
-	}
-
 	return &UnsealTenantBarrierResult{
-		Success: resp.Success,
-		Message: resp.Message,
+		Success: resp.GetStatus().GetSuccess(),
+		Message: resp.GetStatus().GetMessage(),
 	}, nil
 }
 
-// SealTenantBarrier seals a per-tenant barrier via REST.
+// SealTenantBarrier seals a tenant barrier via REST
 func (a *RESTAdapter) SealTenantBarrier(ctx context.Context, opts SealTenantBarrierOptions) (*SealTenantBarrierResult, error) {
 	if opts.TenantID == "" {
 		return nil, ErrRESTRequestFailed{Operation: "SealTenantBarrier", Message: "tenant_id is required"}
 	}
 
-	path := fmt.Sprintf("/api/v1/tenants/%s/barrier/seal", opts.TenantID)
-
-	body, err := a.doRequest(ctx, http.MethodPost, path, nil)
-	if err != nil {
+	resp := &platformv1.SealTenantBarrierResponse{}
+	if err := a.call(ctx, http.MethodPost, tenantPath(opts.TenantID, "barrier", "seal"), nil, resp); err != nil {
 		return nil, err
 	}
 
-	var resp struct {
-		TenantID string `json:"tenant_id,omitempty"`
-		Success  bool   `json:"success"`
-		Message  string `json:"message,omitempty"`
-	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return &SealTenantBarrierResult{Success: true, Message: "tenant barrier sealed"}, nil
-	}
-
 	return &SealTenantBarrierResult{
-		Success: resp.Success,
-		Message: resp.Message,
+		Success: resp.GetStatus().GetSuccess(),
+		Message: resp.GetStatus().GetMessage(),
 	}, nil
 }
 
-// TenantBarrierStatus reports the current sealed/initialized state of a
-// per-tenant barrier via REST.
+// TenantBarrierStatus returns the status of a tenant barrier via REST
 func (a *RESTAdapter) TenantBarrierStatus(ctx context.Context, opts TenantBarrierStatusOptions) (*TenantBarrierStatusResult, error) {
 	if opts.TenantID == "" {
 		return nil, ErrRESTRequestFailed{Operation: "TenantBarrierStatus", Message: "tenant_id is required"}
 	}
 
-	path := fmt.Sprintf("/api/v1/tenants/%s/barrier/status", opts.TenantID)
-
-	body, err := a.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
+	resp := &platformv1.GetTenantBarrierStatusResponse{}
+	if err := a.call(ctx, http.MethodGet, tenantPath(opts.TenantID, "barrier"), nil, resp); err != nil {
 		return nil, err
 	}
 
-	var resp struct {
-		TenantID       string `json:"tenant_id"`
-		Sealed         bool   `json:"sealed"`
-		Initialized    bool   `json:"initialized"`
-		Strategy       string `json:"strategy"`
-		HardwareBacked bool   `json:"hardware_backed"`
-	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, ErrRESTRequestFailed{
-			Operation: "TenantBarrierStatus",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
-	}
-
+	st := resp.GetBarrierStatus()
 	return &TenantBarrierStatusResult{
-		TenantID:       resp.TenantID,
-		Sealed:         resp.Sealed,
-		Initialized:    resp.Initialized,
-		Strategy:       resp.Strategy,
-		HardwareBacked: resp.HardwareBacked,
+		TenantID:       st.GetTenantId(),
+		Sealed:         st.GetSealed(),
+		Initialized:    st.GetInitialized(),
+		Strategy:       st.GetStrategy(),
+		HardwareBacked: st.GetHardwareBacked(),
 	}, nil
 }
-
-// =============================================================================
-// Compile-time Interface Verification
-// =============================================================================
-
-// Verify RESTAdapter implements TenantCommands
-var _ TenantCommands = (*RESTAdapter)(nil)
