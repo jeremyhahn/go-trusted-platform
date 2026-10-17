@@ -74,13 +74,11 @@ type QUICServiceHandler struct {
 	// dnsGRPC is the shared *DNSServiceServer the SDK-mapped DNS QUIC handlers
 	// delegate to so the QUIC transport has identical semantics to gRPC.
 	// It is (re)built by the DNS service setters (rebuildDNSGRPC).
-	dnsGRPC        *DNSServiceServer
-	computeGRPC    *ComputeGRPCService
-	attestGRPC     *AttestationServiceServer
-	// tpmGRPC serves the attestation opcodes whose gRPC twin is a
-	// TPMService RPC: OpAttestGetAK (GetAK) and OpAttestChallenge
-	// (MakeCredential).
-	tpmGRPC *TPMGRPCService
+	dnsGRPC     *DNSServiceServer
+	computeGRPC *ComputeGRPCService
+	attestGRPC  *AttestationServiceServer
+	// tpmGRPC serves OpAttestGetAK, whose gRPC twin is TPMService.GetAK.
+	tpmGRPC        *TPMGRPCService
 	healthRegistry health.Registry
 	sdnService     *SDNService
 	iamService     QUICIAMService
@@ -436,8 +434,8 @@ func (h *QUICServiceHandler) SetAttestationGRPCService(svc *AttestationServiceSe
 	h.attestGRPC = svc
 }
 
-// SetTPMGRPCService sets the TPM gRPC servicer behind OpAttestGetAK and
-// OpAttestChallenge, so both answer as their gRPC twins do.
+// SetTPMGRPCService sets the TPM gRPC servicer behind OpAttestGetAK, so it
+// answers as its gRPC twin does.
 func (h *QUICServiceHandler) SetTPMGRPCService(svc *TPMGRPCService) {
 	h.tpmGRPC = svc
 }
