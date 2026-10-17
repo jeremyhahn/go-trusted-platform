@@ -21,12 +21,8 @@ package e2e_test
 
 import (
 	"context"
-	"crypto/x509"
-	"encoding/pem"
-	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 	"testing"
 	"time"
 
@@ -256,9 +252,8 @@ func testServerProvisioning(ctx context.Context, t *testing.T, infra *TestInfras
 	// 3. Verify server is accessible on provisioning network
 
 	// NOTHING BELOW VERIFIES ANY OF THE ABOVE (#372). This is an unconditional
-	// budget, not a wait for a condition: the helper that would poll for one,
-	// searchSerialLog, already exists in this file, but the boot-completion
-	// marker is a property of the server ISO and is not known here. Inventing a
+	// budget, not a wait for a condition: polling the serial log for one
+	// needs a boot-completion marker, and that marker is a property of the server ISO and is not known here. Inventing a
 	// pattern would be worse than waiting -- a poll that never matches burns the
 	// whole budget and then claims a verification it did not perform.
 	require.NoError(t, testenv.Elapse(ctx, serverBootBudget))
@@ -493,90 +488,4 @@ func testVerification(ctx context.Context, t *testing.T, infra *TestInfrastructu
 	// - ACL rules are properly enforced
 
 	infra.Logger.Info("Phase 5 complete: All verifications passed")
-}
-
-// Helper function to parse and verify certificate attributes
-func verifyCertificateAttributes(t *testing.T, certPath string) (*x509.Certificate, error) {
-	t.Helper()
-
-	// Read certificate file
-	certPEM, err := os.ReadFile(certPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read certificate: %w", err)
-	}
-
-	// Parse PEM
-	block, _ := pem.Decode(certPEM)
-	if block == nil {
-		return nil, fmt.Errorf("failed to decode PEM")
-	}
-
-	// Parse certificate
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse certificate: %w", err)
-	}
-
-	return cert, nil
-}
-
-// Helper function to check if a string contains a substring
-func containsCertExtension(cert *x509.Certificate, oid string) bool {
-	for _, ext := range cert.Extensions {
-		if ext.Id.String() == oid {
-			return true
-		}
-	}
-	return false
-}
-
-// Helper function to read serial console log
-func readSerialLog(logPath string) (string, error) {
-	data, err := os.ReadFile(logPath)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
-
-// Helper function to search for pattern in serial log
-func searchSerialLog(logPath, pattern string) (bool, error) {
-	content, err := readSerialLog(logPath)
-	if err != nil {
-		return false, err
-	}
-	return strings.Contains(content, pattern), nil
-}
-
-// Helper function to verify network connectivity (for use with real VMs)
-func verifyNetworkConnectivity(ctx context.Context, vmWorkDir, targetIP string, port int) error {
-	// This would use a helper script injected into the VM to test connectivity
-	// For example, using QEMU guest agent or a custom test script
-
-	// Placeholder implementation
-	return fmt.Errorf("not implemented - requires VM guest agent integration")
-}
-
-// Helper function to extract TPM attestation data from certificate
-func extractTPMAttestationData(cert *x509.Certificate) (map[string]interface{}, error) {
-	data := make(map[string]interface{})
-
-	for _, ext := range cert.Extensions {
-		switch ext.Id.String() {
-		case OIDTPMManufacturer:
-			data["manufacturer"] = string(ext.Value)
-		case OIDTPMModel:
-			data["model"] = string(ext.Value)
-		case OIDTPMVersion:
-			data["version"] = string(ext.Value)
-		case OIDTPMAttestationData:
-			data["attestation"] = ext.Value
-		}
-	}
-
-	if len(data) == 0 {
-		return nil, fmt.Errorf("no TPM attestation data found in certificate")
-	}
-
-	return data, nil
 }
