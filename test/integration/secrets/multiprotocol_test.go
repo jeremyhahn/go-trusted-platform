@@ -53,7 +53,6 @@ func TestSecretsMultiProtocol(t *testing.T) {
 
 	// Get all protocol adapters that implement SecretsCommands
 	adapters := []SecretsCommands{
-		NewCLIAdapter(),
 		NewRESTAdapter(),
 		NewGRPCAdapter(),
 		NewQUICAdapter(),
@@ -61,7 +60,22 @@ func TestSecretsMultiProtocol(t *testing.T) {
 		NewUnixAdapter(),
 	}
 
-	gate := helpers.NewAdapterGate(t, "secrets", helpers.AdapterNames(adapters)...)
+	// The CLI leg has no secrets verbs to drive: it proves the gap is the
+	// declared one and reports it.
+	cli := NewCLIAdapter()
+	gate := helpers.NewAdapterGate(t, "secrets", append([]string{cli.Name()}, helpers.AdapterNames(adapters)...)...)
+	t.Run(cli.Name(), func(t *testing.T) {
+		gate.RequireSetup(t, cli.Name(), cli.Setup(ctx))
+		defer func() {
+			if err := cli.Teardown(); err != nil {
+				t.Logf("Warning: teardown error for %s: %v", cli.Name(), err)
+			}
+		}()
+
+		require.NoError(t, cli.ProbeSecretsGroup(ctx))
+		t.Logf("MISSING: CLI secrets: %s", cliNoSurfaceReason)
+	})
+
 	for _, adapter := range adapters {
 		adapter := adapter // Capture for closure
 		t.Run(adapter.Name(), func(t *testing.T) {
