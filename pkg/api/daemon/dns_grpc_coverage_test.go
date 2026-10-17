@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,6 +24,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -257,6 +259,57 @@ func TestDNSServiceServer_UpdateRecord_SaveError(t *testing.T) {
 	assert.Equal(t, codes.Internal, st.Code())
 }
 
+// An update replaces a record the zone holds. A record of another name, or of
+// another type under the same name, is not there to replace: NotFound, and the
+// zone keeps what it had.
+func TestDNSServiceServer_UpdateRecord_RecordNotFound(t *testing.T) {
+	tests := []struct {
+		name      string
+		oldRecord *platformv1.Record
+	}{
+		{"unknown name", &platformv1.Record{
+			Type:   platformv1.RecordType_RECORD_TYPE_A,
+			Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "ftp"}},
+		}},
+		{"name held only in another type", &platformv1.Record{
+			Type:   platformv1.RecordType_RECORD_TYPE_AAAA,
+			Record: &platformv1.Record_Aaaa{Aaaa: &platformv1.AAAARecord{Name: "www"}},
+		}},
+		{"unspecified type", &platformv1.Record{
+			Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "www"}},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := newMockDNSService()
+			mock.zones["example.com."] = &entities.Zone{
+				ID:   1,
+				Name: "example.com.",
+				RecordSet: entities.RecordSet{
+					ARecords: []*entities.ARecord{{Name: "www", Value: "192.168.1.1", TTL: 3600}},
+				},
+			}
+			server := NewDNSServiceServer(mock, testLogger())
+
+			_, err := server.UpdateRecord(context.Background(), &platformv1.UpdateRecordRequest{
+				ZoneName:  "example.com.",
+				OldRecord: tt.oldRecord,
+				NewRecord: &platformv1.Record{
+					Type:   platformv1.RecordType_RECORD_TYPE_A,
+					Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "ftp", Value: "192.168.1.2"}},
+				},
+			})
+
+			require.Error(t, err)
+			assert.Equal(t, codes.NotFound, status.Code(err))
+			records := mock.zones["example.com."].RecordSet.ARecords
+			require.Len(t, records, 1, "a refused update must leave the zone as it was")
+			assert.Equal(t, "www", records[0].Name)
+			assert.Equal(t, "192.168.1.1", records[0].Value)
+		})
+	}
+}
+
 func TestDNSServiceServer_UpdateRecord_AllRecordTypes(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -417,10 +470,15 @@ func TestDNSServiceServer_UpdateRecord_NilRecordData(t *testing.T) {
 		},
 	}
 
-	resp, err := server.UpdateRecord(context.Background(), req)
+	// A new record with no body names no owner: the update is refused and
+	// the old record stays.
+	_, err := server.UpdateRecord(context.Background(), req)
 
-	require.NoError(t, err)
-	assert.True(t, resp.Status.Success)
+	require.Error(t, err)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	assert.Contains(t, err.Error(), "name is required")
+	require.Len(t, mock.zones["example.com."].RecordSet.ARecords, 1)
+	assert.Equal(t, "192.168.1.1", mock.zones["example.com."].RecordSet.ARecords[0].Value)
 }
 
 // ListRecords Coverage Tests
@@ -710,8 +768,12 @@ func TestDNSServiceServer_AddRecordToZone_NilInnerRecords(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// A nil body names no owner, so it is refused, never stored as
+			// a silent no-op.
 			err := server.addRecordToZone(zone, tt.record)
-			require.NoError(t, err)
+			var required dns.ErrRecordNameRequired
+			require.True(t, errors.As(err, &required), "err = %v", err)
+			assert.Equal(t, strings.TrimPrefix(tt.record.GetType().String(), "RECORD_TYPE_"), required.Type)
 		})
 	}
 }

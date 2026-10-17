@@ -1468,9 +1468,10 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Info("vTPM service wired into REST server")
 	}
 
-	// Wire the time-synchronization, VPN control-plane and compute REST
+	// Wire the time-synchronization, VPN control-plane, compute and DNS REST
 	// handlers onto the daemon's own REST listener. Without them
-	// /api/v1/ntp/*, /api/v1/vpn/* and /api/v1/compute/* would 404 there.
+	// /api/v1/ntp/*, /api/v1/vpn/*, /api/v1/compute/* and /api/v1/dns/*
+	// would 404 there.
 	// Each route requires the scope its RPC requires on gRPC, checked by one
 	// guard: a platform token, else the verified client certificate. The
 	// compute routes run the same ComputeGRPCService gRPC and QUIC serve.
@@ -1491,6 +1492,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if computeService != nil {
 			daemon.concreteRestServer.SetComputeHandlers(computeService, restGuard)
 		}
+		daemon.concreteRestServer.SetDNSService(fullDNSService(config.DNSService), restGuard)
 	}
 
 	// Wire device + profile REST handlers if the services are available.

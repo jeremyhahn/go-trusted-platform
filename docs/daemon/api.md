@@ -117,7 +117,11 @@ A failed `tools/call` or `resources/read` is classified in
 `pkg/api/mcp/error_class.go` (`toolErrorCode`):
 
 - An error with a gRPC status anywhere in its chain (`GRPCStatus()`) uses that
-  status's class. Every tool error type implements it.
+  status's class. Every tool error type implements it, and so do the domain
+  errors a tool passes through unwrapped: the DNS record refusals
+  (`dns.ErrRecordNameRequired`, `dns.ErrInvalidRecordAddress`,
+  `dns.ErrInvalidTLSAUsage`, see `docs/dns/api.md` §Record validation) are
+  `InvalidArgument`, so `-32602`.
 - The `Code`-carrying tool error types (`DeviceError`, `KMSError`, ...) take
   their class from their `Code`: `*_NOT_FOUND`, `*_REQUIRED` / `*INVALID*` /
   `*_DECODE*`, `*_SERVICE_UNAVAILABLE` / `*_NOT_CONFIGURED`, `*_NOT_RUNNING` /
@@ -408,13 +412,14 @@ routes also take a `Bearer` token, but only over that mTLS connection. So
 installed with `WithRequireAuth(tokenValidator != nil)`, so the misconfigured
 state served the whole daemon API anonymously.
 
-**The daemon REST VPN, NTP and application service routes check the RPC's
-scope (#584, #704).** mTLS at the handshake is not authorization: each
-`/api/v1/vpn/*`, `/api/v1/ntp/*`, `/api/v1/cache/*`, `/api/v1/scheduler/*` and
-`/api/v1/messaging/*` route on the daemon listener runs through
-`restapi.ScopeGuard` (`pkg/api/rest/route_scope.go`) and requires the scope the
-gRPC catalog gives its RPC (`vpn:read|write|admin`, `ntp:read` for status and
-sources, `ntp:write` for step, and `cache`, `scheduler` and `messaging` as in
+**The daemon REST VPN, NTP, DNS and application service routes check the RPC's
+scope (#584, #704, #949).** mTLS at the handshake is not authorization: each
+`/api/v1/vpn/*`, `/api/v1/ntp/*`, `/api/v1/dns/*`, `/api/v1/cache/*`,
+`/api/v1/scheduler/*` and `/api/v1/messaging/*` route on the daemon listener
+runs through `restapi.ScopeGuard` (`pkg/api/rest/route_scope.go`) and requires
+the scope the gRPC catalog gives its RPC (`vpn:read|write|admin`, `ntp:read`
+for status and sources, `ntp:write` for step, `dns:read|write|delete` per
+[docs/dns/api.md](../dns/api.md) §4, and `cache`, `scheduler` and `messaging` as in
 [docs/sdk/api.md](../sdk/api.md) §3.5). The guard takes the credentials QUIC takes, in the same order:
 
 - a `Bearer` platform token (with its `DPoP` proof), validated by the shared

@@ -231,25 +231,67 @@ func TestWithQUICDNSService(t *testing.T) {
 func TestDNSUpdateRecord_DaemonNative(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("success", func(t *testing.T) {
+	// zoneWithWWW answers every zone lookup with a fresh zone holding one A
+	// record, www -> 192.0.2.1.
+	zoneWithWWW := func() *MockDNSService {
 		mock := NewMockDNSService()
+		mock.ZoneFunc = func(ctx context.Context, zoneName string) (*entities.Zone, error) {
+			return &entities.Zone{Name: zoneName, RecordSet: entities.RecordSet{
+				ARecords: []*entities.ARecord{{Name: "www", Value: "192.0.2.1", TTL: 300}},
+			}}, nil
+		}
+		return mock
+	}
+	update := func(mock *MockDNSService, payload *DNSUpdateRecordRequest) *quicwire.Response {
 		handler := createDNSUnitTestHandler(mock)
-		req := createDNSUnitTestRequest(t, quicwire.OpDNSUpdateRecord, &DNSUpdateRecordRequest{
-			Zone: "example.com.", Name: "www", RecordType: "A", Value: "1.2.3.4", TTL: 300,
+		return handler.HandleRequest(ctx, createDNSUnitTestRequest(t, quicwire.OpDNSUpdateRecord, payload))
+	}
+
+	t.Run("success replaces the record", func(t *testing.T) {
+		mock := zoneWithWWW()
+		resp := update(mock, &DNSUpdateRecordRequest{
+			Zone: "example.com.", Name: "www", RecordType: "a", Value: "192.0.2.9", TTL: 600,
 		})
-		resp := handler.HandleRequest(ctx, req)
 		require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
 
 		var result DNSUpdateRecordResponse
 		require.NoError(t, quicwire.DecodePayload(resp.Payload, &result))
 		assert.True(t, result.Success)
-		assert.Equal(t, 1, mock.CallCount("AddRecord"))
+		require.NotNil(t, mock.SavedZone)
+		require.Len(t, mock.SavedZone.RecordSet.ARecords, 1)
+		assert.Equal(t, "192.0.2.9", mock.SavedZone.RecordSet.ARecords[0].Value)
+		assert.Equal(t, uint32(600), mock.SavedZone.RecordSet.ARecords[0].TTL)
+	})
+
+	t.Run("a bad value leaves the old record", func(t *testing.T) {
+		mock := zoneWithWWW()
+		resp := update(mock, &DNSUpdateRecordRequest{
+			Zone: "example.com.", Name: "www", RecordType: "A", Value: "2001:db8::1",
+		})
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status, string(resp.Payload))
+		assert.Zero(t, mock.CallCount("Save"), "a refused update must not store the zone")
+	})
+
+	t.Run("a missing record is NotFound", func(t *testing.T) {
+		mock := zoneWithWWW()
+		resp := update(mock, &DNSUpdateRecordRequest{
+			Zone: "example.com.", Name: "ftp", RecordType: "A", Value: "192.0.2.3",
+		})
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status, string(resp.Payload))
+		assert.Zero(t, mock.CallCount("Save"), "an update never creates a record")
+	})
+
+	t.Run("a type the flat wire cannot carry is refused", func(t *testing.T) {
+		mock := zoneWithWWW()
+		resp := update(mock, &DNSUpdateRecordRequest{
+			Zone: "example.com.", Name: "_sip._tcp", RecordType: "SRV", Value: "sip.example.com.",
+		})
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status, string(resp.Payload))
+		assert.Zero(t, mock.CallCount("Zone"))
 	})
 
 	t.Run("missing zone", func(t *testing.T) {
-		handler := createDNSUnitTestHandler(NewMockDNSService())
-		req := createDNSUnitTestRequest(t, quicwire.OpDNSUpdateRecord, &DNSUpdateRecordRequest{Name: "www", RecordType: "A", Value: "1.2.3.4"})
-		resp := handler.HandleRequest(ctx, req)
+		resp := update(NewMockDNSService(), &DNSUpdateRecordRequest{Name: "www", RecordType: "A", Value: "1.2.3.4"})
 		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
