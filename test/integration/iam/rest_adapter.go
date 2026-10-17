@@ -154,7 +154,18 @@ func (a *RESTAdapter) doRequest(ctx context.Context, method, path string, body i
 		}
 	}
 
-	return respBody, nil
+	// Every v1 IAM handler writes its reply inside the response envelope;
+	// the callers decode the entity it carries.
+	payload, err := helpers.RESTPayload(respBody)
+	if err != nil {
+		return nil, &RESTAdapterError{
+			Operation:  method + " " + path,
+			StatusCode: resp.StatusCode,
+			Message:    err.Error(),
+			Body:       string(respBody),
+		}
+	}
+	return payload, nil
 }
 
 // userResponse represents the REST API user response structure

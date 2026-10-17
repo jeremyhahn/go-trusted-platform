@@ -585,7 +585,7 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		createOpts := CreateRoleOptions{
 			TenantID:    tenantID,
 			ID:          GenerateTestRoleID(testID + "-update"),
-			Name:        "Test Role Original",
+			Name:        "Test Role Original " + testID,
 			Description: "Original description",
 			Permissions: []string{"users:read"},
 		}
@@ -599,7 +599,7 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		updateOpts := UpdateRoleOptions{
 			TenantID:    tenantID,
 			RoleID:      createResult.Role.ID,
-			Name:        "Test Role Updated",
+			Name:        "Test Role Updated " + testID,
 			Description: "Updated description",
 			Permissions: []string{"users:read", "users:update", "users:delete"},
 		}
@@ -628,7 +628,7 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		createOpts := CreateRoleOptions{
 			TenantID:    tenantID,
 			ID:          GenerateTestRoleID(testID + "-delete"),
-			Name:        "Test Role Delete",
+			Name:        "Test Role Delete " + testID,
 			Description: "Test role for deletion",
 			Permissions: []string{"users:read"},
 		}
@@ -713,7 +713,7 @@ func testPermissionCheck(t *testing.T, ctx context.Context, adapter IAMCommands)
 		roleOpts := CreateRoleOptions{
 			TenantID:    tenantID,
 			ID:          roleID,
-			Name:        "Test Role Permission Allow",
+			Name:        "Test Role Permission Allow " + testID,
 			Description: "Test role for permission check",
 			Permissions: []string{"users:read", "users:update"},
 		}
@@ -803,7 +803,7 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		roleOpts := CreateRoleOptions{
 			TenantID:    tenantID,
 			ID:          roleID,
-			Name:        "Test Role Assign",
+			Name:        "Test Role Assign " + testID,
 			Description: "Test role for assignment",
 			Permissions: []string{"users:read"},
 		}
@@ -870,7 +870,7 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		roleOpts := CreateRoleOptions{
 			TenantID:    tenantID,
 			ID:          roleID,
-			Name:        "Test Role Revoke",
+			Name:        "Test Role Revoke " + testID,
 			Description: "Test role for revocation",
 			Permissions: []string{"users:read"},
 		}
@@ -934,7 +934,7 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		role1Opts := CreateRoleOptions{
 			TenantID:    tenantID,
 			ID:          role1ID,
-			Name:        "Test Role Multi 1",
+			Name:        "Test Role Multi 1 " + testID,
 			Description: "Test role 1 for multiple role assignment",
 			Permissions: []string{"users:read"},
 		}
@@ -948,7 +948,7 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 		role2Opts := CreateRoleOptions{
 			TenantID:    tenantID,
 			ID:          role2ID,
-			Name:        "Test Role Multi 2",
+			Name:        "Test Role Multi 2 " + testID,
 			Description: "Test role 2 for multiple role assignment",
 			Permissions: []string{"users:update"},
 		}
@@ -1122,7 +1122,7 @@ func TestIAMMultiProtocol_ErrorHandling(t *testing.T) {
 				opts := CreateRoleOptions{
 					TenantID:    DefaultTenantID(),
 					ID:          roleID,
-					Name:        "Test Role Dup 1",
+					Name:        "Test Role Dup 1 " + testID,
 					Description: "First role",
 					Permissions: []string{"users:read"},
 				}
@@ -1133,7 +1133,7 @@ func TestIAMMultiProtocol_ErrorHandling(t *testing.T) {
 				}
 
 				// Try to create second role with same ID
-				opts.Name = "Test Role Dup 2"
+				opts.Name = "Test Role Dup 2 " + testID
 				_, err = adapter.CreateRole(ctx, opts)
 				if err == nil {
 					t.Error("CreateRole should fail for duplicate ID")
