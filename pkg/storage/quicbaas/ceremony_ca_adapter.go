@@ -174,12 +174,19 @@ func (a *CeremonyCAAdapter) IssueCertificate(ctx context.Context, req *quicbaas.
 // translateSignCSROptions converts the qrdb ceremony SignCSROptions value
 // into the go-xkms SignOptions counterpart. Returns nil when the input is
 // nil so the CA falls back to its profile defaults.
+//
+// The ceremony's Profile names an officer role ("security-officer",
+// "administrator", ...), not a profile in the platform CA's registry, which
+// holds only the CA's own built-ins (server, client, ...). Forwarding the name
+// makes the CA refuse every ceremony CSR as an unknown profile. The role is
+// fully described by the key usage, extended key usage and validity the
+// ceremony sends with it, so those are what the CA receives: with no profile
+// named, it issues a leaf carrying exactly that usage.
 func translateSignCSROptions(opts *quicbaas.QRDBCeremonySignCSROptions) *xkmsca.SignOptions {
 	if opts == nil {
 		return nil
 	}
 	return &xkmsca.SignOptions{
-		Profile:      opts.Profile,
 		ValidityDays: opts.ValidityDays,
 		KeyUsage:     opts.KeyUsage,
 		ExtKeyUsage:  opts.ExtKeyUsage,

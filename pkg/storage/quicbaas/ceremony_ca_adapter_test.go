@@ -138,10 +138,21 @@ func TestTranslateSignCSROptions_CopiesAllFields(t *testing.T) {
 	}
 	out := translateSignCSROptions(in)
 	require.NotNil(t, out)
-	assert.Equal(t, in.Profile, out.Profile)
 	assert.Equal(t, in.ValidityDays, out.ValidityDays)
 	assert.Equal(t, in.KeyUsage, out.KeyUsage)
 	assert.Equal(t, in.ExtKeyUsage, out.ExtKeyUsage)
+}
+
+// TestTranslateSignCSROptions_DropsRoleProfile verifies the ceremony's officer
+// role name never reaches the CA as a profile: the platform CA's registry has
+// no "security-officer" or "administrator" profile and refuses the CSR when
+// one is named (#949, ceremony SignCSR answered 500).
+func TestTranslateSignCSROptions_DropsRoleProfile(t *testing.T) {
+	for _, role := range []string{"security-officer", "administrator", "operator", "user", "auditor", "custodian"} {
+		out := translateSignCSROptions(&quicbaas.QRDBCeremonySignCSROptions{Profile: role})
+		require.NotNil(t, out, role)
+		assert.Empty(t, out.Profile, role)
+	}
 }
 
 // TestTranslateIssueCertRequest_NilIsNil verifies the helper short-circuits
