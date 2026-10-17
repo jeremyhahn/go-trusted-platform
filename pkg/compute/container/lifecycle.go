@@ -253,6 +253,16 @@ func WithImageDigestResolver(resolver ImageDigestResolver) OrchestratorOption {
 	}
 }
 
+// WithLaunchRefusal makes Create and Start refuse every launch with err. It
+// is set on a host whose TPM requires measured launches but which has no
+// runtime to measure them with: such a host never starts a workload
+// unmeasured.
+func WithLaunchRefusal(err error) OrchestratorOption {
+	return func(o *Orchestrator) {
+		o.launchRefusal = err
+	}
+}
+
 // WithLifecyclePolicyEvaluator sets the policy evaluator.
 func WithLifecyclePolicyEvaluator(evaluator LifecyclePolicyEvaluator) OrchestratorOption {
 	return func(o *Orchestrator) {
@@ -294,6 +304,10 @@ type Orchestrator struct {
 	network      LifecycleNetworkManager
 	service      *ServiceManager
 	imageManager *ImageManager
+
+	// launchRefusal, when set, is returned by every Create and Start: see
+	// WithLaunchRefusal.
+	launchRefusal error
 
 	// containers maps container IDs to Container instances.
 	containers sync.Map
@@ -345,6 +359,10 @@ func NewOrchestrator(config OrchestratorConfig, opts ...OrchestratorOption) (*Or
 func (o *Orchestrator) Create(ctx context.Context, spec *OrchestratorContainerSpec) (*Container, error) {
 	if o.closed.Load() {
 		return nil, ErrOrchestratorClosed
+	}
+
+	if o.launchRefusal != nil {
+		return nil, o.launchRefusal
 	}
 
 	if spec == nil {
@@ -543,6 +561,10 @@ func (o *Orchestrator) rollbackUnmeasured(ctx context.Context, containerID, name
 func (o *Orchestrator) Start(ctx context.Context, id string) error {
 	if o.closed.Load() {
 		return ErrOrchestratorClosed
+	}
+
+	if o.launchRefusal != nil {
+		return o.launchRefusal
 	}
 
 	if id == "" {

@@ -74,9 +74,12 @@ Key wiring facts:
   the SDK trust stack (`container.NewTrustStack`), which supplies image
   digest resolution and the Tier 1 attesting runtime. Without a TPM the
   orchestrator runs unmeasured and `Attest` returns a typed error. A host
-  with a TPM but neither `docker` nor `podman` on `PATH` (the SDK's
-  `ContainerRuntimeNotAvailableError`) also starts unmeasured, with a
-  warning, as on a host without a TPM, so the compute API stays served.
+  with a TPM never starts a workload unmeasured (default deny,
+  `plans/trusted-service-plane.md` §3 item 5). When it has neither `docker`
+  nor `podman` on `PATH` (the SDK's `ContainerRuntimeNotAvailableError`), the
+  orchestrator still starts, so the compute API stays served, but every
+  container create and start is refused with
+  `MeasuredRuntimeUnavailableError`, which names the missing runtimes.
   Every other trust-stack failure stops the orchestrator from starting.
 - `container.NewSDKContainerAttestor` builds the SDK's runtime attestor over
   the platform's host TPM. `container.NewFleetContainerAttestor` wraps it with

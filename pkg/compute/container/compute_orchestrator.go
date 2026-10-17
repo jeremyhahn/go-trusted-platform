@@ -222,15 +222,17 @@ func (o *ComputeOrchestrator) buildEngine() error {
 		// containers it never measured.
 		//
 		// A host with no docker or podman binary gives the trust stack
-		// nothing to resolve or measure launches with, so the orchestrator
-		// starts unmeasured, as it does on a host without a TPM, rather than
-		// taking the compute API down with it. Any other trust-stack
-		// failure stays fatal.
+		// nothing to measure launches with. The orchestrator still starts,
+		// so the compute API stays served, but it refuses every launch: a
+		// host with a TPM never starts a workload unmeasured. Any other
+		// trust-stack failure stays fatal.
 		stack, err := NewTrustStack(o.tpmProvider, o.logger.Slog())
 		var noRuntime *orchestration.ContainerRuntimeNotAvailableError
 		switch {
 		case errors.As(err, &noRuntime):
-			o.logger.Warnf("Container attestation disabled: %v (container operations will fail)", err)
+			refusal := &MeasuredRuntimeUnavailableError{Runtimes: MeasuredRuntimes, Cause: err}
+			o.logger.Warnf("Container launches refused: %v", refusal)
+			engineOpts = append(engineOpts, WithLaunchRefusal(refusal))
 		case err != nil:
 			return &compute.WrappedError{Msg: "failed to build container trust stack", Err: err}
 		default:
