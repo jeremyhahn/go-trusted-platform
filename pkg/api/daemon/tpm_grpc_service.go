@@ -44,6 +44,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmattrs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmcertify"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmclear"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmpcr"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
@@ -260,7 +261,7 @@ func (s *TPMGRPCService) Clear(
 		lockoutAuth = []byte(req.GetOwnerPassword())
 	}
 
-	if err := tpm.Clear(lockoutAuth); err != nil {
+	if err := tpmclear.Clear(tpm, lockoutAuth); err != nil {
 		s.logger.Slog().Error("TPM Clear failed", slog.String("error", err.Error()))
 		return nil, s.mapError(err)
 	}
