@@ -420,7 +420,7 @@ and otherwise from the mount point's own ownership.
 
 The endpoint variables are the ones the shared helpers in
 `test/integration/helpers/endpoints.go` read. Suites with a private namespace
-(`VTPM_*`, `TENANT_*`, `IAM_*`, `ATTESTATION_*`, `AUTH_*`, `INVITATION_*`) read
+(`VTPM_*`, `TENANT_*`, `IAM_*`, `ATTESTATION_*`, `AUTH_*`) read
 their own name first and otherwise use the shared helper. The defaults are
 there only for running a suite by hand against a platformd on its standard
 ports.
