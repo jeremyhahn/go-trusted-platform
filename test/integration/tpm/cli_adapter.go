@@ -605,14 +605,8 @@ func (c *CLIAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealRes
 // =============================================================================
 
 // EventLog reads the TPM event log via CLI.
-func (c *CLIAdapter) EventLog(ctx context.Context, path string) (*EventLogResult, error) {
-	args := []string{"tpm", "eventlog", "-o", "json"}
-
-	if path != "" {
-		args = append(args, "--path", path)
-	}
-
-	output, err := c.runCommand(ctx, args...)
+func (c *CLIAdapter) EventLog(ctx context.Context) (*EventLogResult, error) {
+	output, err := c.runCommand(ctx, "tpm", "eventlog", "-o", "json")
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "tpm eventlog", Err: err}
 	}

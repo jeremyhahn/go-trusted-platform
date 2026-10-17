@@ -696,7 +696,7 @@ func (q *QUICAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealRe
 // =============================================================================
 
 // EventLog reads the TPM event log via QUIC.
-func (q *QUICAdapter) EventLog(ctx context.Context, path string) (*EventLogResult, error) {
+func (q *QUICAdapter) EventLog(ctx context.Context) (*EventLogResult, error) {
 	resp, err := q.sendCategoryRequest(ctx, quicwire.SubOpTPM2EventLog, nil)
 	if err != nil {
 		return nil, err

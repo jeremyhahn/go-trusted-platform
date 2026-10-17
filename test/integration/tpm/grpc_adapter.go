@@ -233,7 +233,7 @@ func (g *GRPCAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealRe
 // =============================================================================
 
 // EventLog reads the TPM event log via the SDK client over gRPC.
-func (g *GRPCAdapter) EventLog(ctx context.Context, path string) (*EventLogResult, error) {
+func (g *GRPCAdapter) EventLog(ctx context.Context) (*EventLogResult, error) {
 	resp, err := g.client.GetEventLogDomain(ctx, "json")
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "gRPC", Method: "GetEventLog", Err: err}
