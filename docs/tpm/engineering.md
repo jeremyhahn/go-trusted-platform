@@ -498,6 +498,18 @@ unseal fail.
 `NewMCPAdapter`, `NewUnixAdapter`. `TestTPMMultiProtocol` runs one suite against
 all six. Run it with `make integration-test-tpm`.
 
+The six adapters share the daemon's one TPM, so the suite runs in two phases.
+`ReadOnly` runs first for every adapter against the TPM the daemon provisioned:
+`Info`, `EKInfo` at `0x81010001`, `EKCertificate`, `SRKInfo` at the SSRK handle
+`0x81000001`, seal/unseal and the event log. `Lifecycle` then runs per adapter:
+`Clear` with the empty lockout auth, `EKCreate` and `SRKCreate`, `Clear` again
+before each further SRK create (the daemon creates its configured SSRK at the
+one handle), and `Clear` then `Provision`. On the cleared TPM a `Provision`
+presenting an owner password is refused with `TPM_RC_BAD_AUTH`, and one with the
+empty auth succeeds. The suite never sends a wrong lockout auth: one refusal
+puts the lockout hierarchy into lockout and every later `Clear` fails with
+`TPM_RC_LOCKOUT`.
+
 `conventions/feature-docs.md` §4 asks for a `CommandDefinition` per verb. **No
 `CommandDefinition` type exists in this repository** (grepped 2026-08-18); the
 TPM feature satisfies the *intent* through `TPMCommands`, and the naming
