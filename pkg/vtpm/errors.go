@@ -223,6 +223,20 @@ func (e ErrNVRAMWriteFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrNVBufferMaxUnavailable indicates the TPM did not report a usable
+// TPM_PT_NV_BUFFER_MAX, so no NV transfer size can be chosen.
+type ErrNVBufferMaxUnavailable struct {
+	Cause error
+}
+
+func (e ErrNVBufferMaxUnavailable) Error() string {
+	return fmt.Sprintf("vtpm: TPM_PT_NV_BUFFER_MAX unavailable: %v", e.Cause)
+}
+
+func (e ErrNVBufferMaxUnavailable) Unwrap() error {
+	return e.Cause
+}
+
 // =============================================================================
 // Archive Errors
 // =============================================================================

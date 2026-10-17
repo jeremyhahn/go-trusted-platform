@@ -430,8 +430,13 @@ func (ops *TPMOperations) InjectEKCertificate(cert *x509.Certificate) error {
 		"algorithm", string(ops.algorithm),
 		"nvIndex", fmt.Sprintf("0x%08X", ops.algorithm.NVIndex()))
 
-	// Use go-xkms's ProvisionEKCert to inject the certificate
-	if err := ops.tpm.ProvisionEKCert(nil, cert.Raw); err != nil {
+	// The write goes over the transport the provisioning flow already holds
+	// (swtpm serves one client at a time) and is split at the TPM's
+	// TPM_PT_NV_BUFFER_MAX. go-xkms ProvisionEKCert issues the whole
+	// certificate as one TPM2_NV_Write, which swtpm rejects with TPM_RC_SIZE
+	// once the certificate exceeds its 1024-byte buffer.
+	injector := NewEKCertInjector(ops.socketPath, ops.logger)
+	if err := injector.writeCertificate(ops.tpm.Transport(), cert, ops.algorithm); err != nil {
 		return ErrEKCertInjectionFailed{Cause: &WrappedError{Msg: "failed to inject EK certificate", Err: err}}
 	}
 
