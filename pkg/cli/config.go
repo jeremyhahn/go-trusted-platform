@@ -24,6 +24,11 @@ import (
 type Config struct {
 	CurrentContext string     `yaml:"current_context" json:"current_context"`
 	Contexts       []*Context `yaml:"contexts" json:"contexts"`
+
+	// loadedFrom is the file LoadConfig read (or would have read, when it
+	// did not exist yet). Save("") writes back to it, so a config chosen
+	// with --config or PLATFORMCTL_CONFIG is the file context changes land in.
+	loadedFrom string
 }
 
 // SystemConfigPath is the system-wide config file path, used as the fallback
@@ -49,8 +54,11 @@ func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Return default config if file doesn't exist
-			return DefaultConfig(), nil
+			// Return default config if file doesn't exist; saving it
+			// creates the file at this path.
+			config := DefaultConfig()
+			config.loadedFrom = path
+			return config, nil
 		}
 		return nil, ErrConfigReadFailed{Path: path, Err: err}
 	}
@@ -71,11 +79,16 @@ func LoadConfig(path string) (*Config, error) {
 		}
 	}
 
+	config.loadedFrom = path
 	return &config, nil
 }
 
-// Save saves the configuration to the specified path
+// Save saves the configuration to the specified path. An empty path means
+// the file the configuration was loaded from, else DefaultConfigPath.
 func (c *Config) Save(path string) error {
+	if path == "" {
+		path = c.loadedFrom
+	}
 	if path == "" {
 		path = DefaultConfigPath()
 	}
