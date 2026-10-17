@@ -208,6 +208,7 @@ var protoParamParsers = map[protoreflect.Kind]protoParamParser{
 	protoreflect.StringKind: parseStringParam,
 	protoreflect.EnumKind:   parseEnumParam,
 	protoreflect.Uint32Kind: parseUint32Param,
+	protoreflect.Uint64Kind: parseUint64Param,
 }
 
 func parseBoolParam(_ protoreflect.FieldDescriptor, raw string) (protoreflect.Value, bool) {
@@ -240,6 +241,14 @@ func parseUint32Param(_ protoreflect.FieldDescriptor, raw string) (protoreflect.
 		return protoreflect.Value{}, false
 	}
 	return protoreflect.ValueOfUint32(uint32(n)), true
+}
+
+func parseUint64Param(_ protoreflect.FieldDescriptor, raw string) (protoreflect.Value, bool) {
+	n, err := strconv.ParseUint(raw, 0, 64)
+	if err != nil {
+		return protoreflect.Value{}, false
+	}
+	return protoreflect.ValueOfUint64(n), true
 }
 
 // =============================================================================

@@ -49,6 +49,10 @@ func TestDecodeProtoParams(t *testing.T) {
 		{"a string", url.Values{"format": {"json"}}, &platformv1.GetEventLogRequest{}, &platformv1.GetEventLogRequest{Format: "json"}},
 		{"no parameters", url.Values{}, &platformv1.GetEKRequest{}, &platformv1.GetEKRequest{}},
 		{
+			"a uint64 wider than 32 bits", url.Values{"invitation_id": {"18446744073709551615"}},
+			&platformv1.GetInvitationRequest{}, &platformv1.GetInvitationRequest{InvitationId: 18446744073709551615},
+		},
+		{
 			"a nested message's fields by dotted name", url.Values{"pagination.page": {"2"}, "pagination.page_size": {"25"}},
 			&platformv1.ListVMsRequest{}, &platformv1.ListVMsRequest{Pagination: &platformv1.PaginationRequest{Page: 2, PageSize: 25}},
 		},
@@ -129,6 +133,14 @@ func TestDecodeProtoParams(t *testing.T) {
 		{
 			name: "a handle wider than 32 bits", params: url.Values{"handle": {"0x100000000"}}, msg: &platformv1.GetSRKRequest{},
 			want: ErrInvalidQueryParameter{Name: "handle", Value: "0x100000000", Reason: "not a valid uint32"},
+		},
+		{
+			name: "a negative uint64", params: url.Values{"invitation_id": {"-1"}}, msg: &platformv1.GetInvitationRequest{},
+			want: ErrInvalidQueryParameter{Name: "invitation_id", Value: "-1", Reason: "not a valid uint64"},
+		},
+		{
+			name: "a uint64 past 64 bits", params: url.Values{"invitation_id": {"18446744073709551616"}}, msg: &platformv1.GetInvitationRequest{},
+			want: ErrInvalidQueryParameter{Name: "invitation_id", Value: "18446744073709551616", Reason: "not a valid uint64"},
 		},
 		{
 			name: "an unknown enum name", params: url.Values{"algorithm": {"KEY_ALGORITHM_ROT13"}}, msg: &platformv1.GetEKRequest{},
