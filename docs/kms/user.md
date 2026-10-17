@@ -27,16 +27,15 @@ error:
 
 - **the whole `kms secrets` subtree** — store, get, list, delete, rotate,
   version, versions, rollback, status, policy, prefix, watch
-- **the whole `kms dek` subtree** — create, get, list, delete, rotate, status,
-  set-default, set-safety, clear-safety
 - **`kms key import`, `export`, `unwrap`, `versions`, `status enable|disable`,
   `backend-test`**
 
 And **`kms key get` crashes** on every invocation; use `kms key metadata get`
 or `kms key list -o json` instead. [cli.md](cli.md) §8–§9 has the exact list.
 
-**The REST API is ahead of the CLI**: secrets and DEK management are fully
-routed under `/api/v1/kms/secrets` and `/api/v1/kms/deks`. Use REST for those.
+**The REST API is ahead of the CLI**: secrets management is fully routed
+under `/api/v1/kms/secrets`. Use REST for that. The `kms dek` subtree works
+through the SDK DEK client ([cli.md](cli.md) §7.1).
 For envelope encryption from the CLI, `kms crypto datakey` works.
 
 ### 2. Which backend are you on?

@@ -176,10 +176,9 @@ service also refuses a `deleted` status. The REST routes in the table reach the
 same SDK client and fail the same way on an embedded daemon.
 
 **The CLI cannot reach them either** — the entire `platformctl kms secrets`
-and `kms dek` subtrees are stubs that return typed
-`ErrSecretsNotImplemented` / `ErrDEKNotImplemented` errors. See
-[engineering.md](engineering.md) §2 and [cli.md](cli.md) §7–§8. (`kms crypto
-datakey`, which mints a wrapped DEK, does work.)
+subtree is a stub that returns the typed `ErrSecretsNotImplemented` error. See
+[engineering.md](engineering.md) §2 and [cli.md](cli.md) §7–§8. `kms dek`
+calls the SDK DEK client ([cli.md](cli.md) §7.1).
 
 **Generating a data key and creating a DEK are different operations.**
 `/data-keys` mints a key under the KEK named by `key_id` (`wrapping_key_id` on

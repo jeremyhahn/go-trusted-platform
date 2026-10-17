@@ -515,24 +515,50 @@ platformctl kms crypto batch encrypt --key-id tenant-a-kek --input items.json -o
 
 ---
 
-## 7. `kms dek` and `kms secrets` — not implemented
+## 7. `kms dek` and `kms secrets`
 
-Every leaf under both groups exits 1 with `ErrDEKNotImplemented` or
-`ErrSecretsNotImplemented` after parsing. Arguments are enforced (exit 1 on the
-wrong count). The `dek` help points at `kms crypto datakey`, which works; the
-`secrets` help points at `kms crypto encrypt|decrypt`.
+### 7.1 `kms dek`
+
+Every `dek` verb calls the go-quicbaas SDK DEK client
+(`Security().DEK()`), so it works on every transport the CLI dials. An SDK
+error exits 1 with `ErrDEKOperationFailed` naming the verb and path; a success
+that carries no DEK exits 1 with `ErrDEKEmptyResponse`. Output follows the
+global `-o` format; timestamps are Unix seconds, and an unset one is `0` or,
+where marked omitempty, left out.
+
+| Verb | Arguments | Flags (type, default) | JSON output |
+|---|---|---|---|
+| `dek create` | `<path>` | `--algorithm` (`AES-256-GCM`), `--description`, `--max-operations` (uint64, `0`), `--max-bytes` (uint64, `0`), `--warning-percent` (int, `0`); `0` takes the server default | `{"dek":{…}}` |
+| `dek get` | `<path>` | none | `{"dek":{…}}` |
+| `dek list` | — | `--prefix`, `--recursive` (bool), `--limit` (int, `100`) | `{"deks":[…],"total_count","has_more"}` |
+| `dek delete` | `<path>` | `--force` (bool), `--migrate-to` | `{"path","deleted"}` |
+| `dek rotate` | `<path>` | `--background` (bool) | `{"path","old_version","new_version"}` |
+| `dek status` | `<path>` | none | the DEK fields flattened, plus `reencryption_in_progress` and, when set, `processed_keys`, `total_keys`, `failed_keys`, `percent_complete`, `reencryption_started_at`, `reencryption_error` |
+| `dek set-default` | `<path>` | none | `{"path","previous_default"}` |
+| `dek set-safety` | `<path>` | `--max-operations` (uint64, `0`), `--max-bytes` (uint64, `0`), `--warning-percent` (int, `80`) | `{"path","max_operations","max_bytes","warning_percent","cleared":false}` |
+| `dek clear-safety` | `<path>` | none | `{"path","cleared":true,…}` |
+
+A DEK object carries `path`, `algorithm`, `version`, `status`, `is_default`,
+`created_at`, `rotated_at` (omitempty), `description` (omitempty),
+`backend_type` (omitempty), `usage_count`, `bytes_used`, `max_usage_count`,
+`max_bytes_used` and `warning_percent`. `has_more` is true when `total_count`
+exceeds the DEKs returned; the SDK has no list cursor, so there is no
+`--cursor`.
+
+```bash
+platformctl kms dek create /tenant/app/default --max-operations 1000000 -o json
+platformctl kms dek rotate /tenant/app/default --background -o json
+platformctl kms dek list --prefix /tenant/app --recursive -o json
+```
+
+### 7.2 `kms secrets` — not implemented
+
+Every `secrets` leaf exits 1 with `ErrSecretsNotImplemented` after parsing.
+Arguments are enforced (exit 1 on the wrong count). The help points at
+`kms crypto encrypt|decrypt`.
 
 | Verb | Arguments | Flags declared (type, default) |
 |---|---|---|
-| `dek create` | `<path>` | none |
-| `dek get` | `<path>` | none |
-| `dek list` | — | `--prefix`, `--recursive` (bool), `--limit` (int32, `100`), `--cursor` |
-| `dek delete` | `<path>` | `--force` (bool) |
-| `dek rotate` | `<path>` | none |
-| `dek status` | `<path>` | none |
-| `dek set-default` | `<path> <version>` | none |
-| `dek set-safety` | `<path>` | `--max-operations` (uint64, `0`), `--max-bytes` (uint64, `0`), `--warn-percent` (int32, `80`) |
-| `dek clear-safety` | `<path>` | `--force` (bool) |
 | `secrets store` | `<name>` | `--value`, `--description` |
 | `secrets get` | `<name>` | `--version` (int64, `0`) |
 | `secrets list` | — | `--prefix`, `--limit` (int32, `100`), `--cursor` |
@@ -547,12 +573,12 @@ wrong count). The `dek` help points at `kms crypto datakey`, which works; the
 | `secrets prefix list` | `<prefix>` | none |
 | `secrets watch` | `<name>` | none |
 
-The help shows `[path]` and `[name]`, but each argument is required.
+The help shows `[name]`, but each argument is required.
 
-**REST has both surfaces.** Secrets (`/api/v1/kms/secrets`, with versions,
-rotate, rollback, status and rotation policy) and DEKs (`/api/v1/kms/deks`) are
-routed in `pkg/webservice/v1/rest/kms/router.go`; see [api.md](api.md). Until
-the CLI catches up, use REST:
+**REST has the secrets surface.** Secrets (`/api/v1/kms/secrets`, with
+versions, rotate, rollback, status and rotation policy) are routed in
+`pkg/webservice/v1/rest/kms/router.go`; see [api.md](api.md). Until the CLI
+catches up, use REST:
 
 ```bash
 curl -s -X POST https://platform.example.com/api/v1/kms/secrets \
@@ -571,12 +597,11 @@ A verb is not implemented when its `RunE` returns one of the package's
 grep -rn --include='*.go' --exclude='*_test.go' 'NotImplemented{}' pkg/cli/commands/kms/
 ```
 
-On 2026-10-11 that names exactly these leaves:
+On 2026-10-17 that names exactly these leaves:
 
 | Error | Verbs |
 |---|---|
-| `ErrSecretsNotImplemented` | every `kms secrets` leaf (§7) |
-| `ErrDEKNotImplemented` | every `kms dek` leaf (§7) |
+| `ErrSecretsNotImplemented` | every `kms secrets` leaf (§7.2) |
 | `ErrKeyImportNotImplemented` | `kms key import` |
 | `ErrKeyExportNotImplemented` | `kms key export` |
 | `ErrKeyUnwrapNotImplemented` | `kms key unwrap` |
@@ -585,8 +610,8 @@ On 2026-10-11 that names exactly these leaves:
 | `ErrBackendTestNotImplemented` | `kms key backend-test` |
 
 Counting the string `(not yet implemented)` instead overcounts: it also appears
-in the `Short` text of the groups (`dek`, `secrets`, `key status`, `secrets
-policy`, `secrets prefix`) and in test files.
+in the `Short` text of the groups (`secrets`, `key status`, `secrets policy`,
+`secrets prefix`) and in test files.
 
 ---
 

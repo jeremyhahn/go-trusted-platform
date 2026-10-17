@@ -59,15 +59,15 @@ go-xkms or in the quicbaas SDK (docs/00 L8).
 ## 2. A large part of the CLI is deliberately unimplemented
 
 This is the most important thing to know about this feature, and it is stated
-in the code rather than hidden: **eight non-test files in
-`pkg/cli/commands/kms/` carry "not yet implemented"**, backed by eight distinct
+in the code rather than hidden: **seven non-test files in
+`pkg/cli/commands/kms/` carry "not yet implemented"**, backed by seven distinct
 typed errors:
 
 ```go
 ErrSecretsNotImplemented        ErrKeyExportNotImplemented
 ErrKeyImportNotImplemented      ErrKeyVersionsNotImplemented
 ErrKeyStatusNotImplemented      ErrKeyUnwrapNotImplemented
-ErrDEKNotImplemented            ErrBackendTestNotImplemented
+ErrBackendTestNotImplemented
 ```
 
 Affected areas, by file:
@@ -75,7 +75,6 @@ Affected areas, by file:
 | File | Unimplemented surface |
 |---|---|
 | `secrets.go` | The **entire** `kms secrets` subtree — store, get, list, delete, rotate, version, versions, rollback, status, policy get/set, prefix list, watch |
-| `dek.go` | Data-encryption-key operations |
 | `key_export.go`, `key_import.go` | Key export and import |
 | `key_versions.go` | Key version listing |
 | `key_status.go` | Key status |

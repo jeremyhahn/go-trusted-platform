@@ -57,6 +57,31 @@ func openKMSClient(base *cli.BaseCommand) (quicbaassdk.KMSClient, error) {
 	return activeKMSClientFactory(base)
 }
 
+// dekClientFactory opens the SDK DEK client for a `kms dek` verb.
+type dekClientFactory func(base *cli.BaseCommand) (quicbaassdk.DEKClient, error)
+
+var activeDEKClientFactory dekClientFactory = defaultDEKClientFactory
+
+// SetDEKClientFactory replaces the DEK client factory and returns a function
+// that restores the previous one.
+func SetDEKClientFactory(f dekClientFactory) func() {
+	prev := activeDEKClientFactory
+	activeDEKClientFactory = f
+	return func() { activeDEKClientFactory = prev }
+}
+
+func defaultDEKClientFactory(base *cli.BaseCommand) (quicbaassdk.DEKClient, error) {
+	q, err := base.Client().QuicBaaS()
+	if err != nil {
+		return nil, err
+	}
+	return q.Security().DEK(), nil
+}
+
+func openDEKClient(base *cli.BaseCommand) (quicbaassdk.DEKClient, error) {
+	return activeDEKClientFactory(base)
+}
+
 // parseSDKKeyUsage converts a CLI usage string to the SDK KeyUsage.
 func parseSDKKeyUsage(usage string) (kms.KeyUsage, error) {
 	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(usage), "-", "_"))

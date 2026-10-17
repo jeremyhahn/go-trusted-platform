@@ -30,7 +30,6 @@ func TestAllKMSErrorTypes(t *testing.T) {
 		{"ErrInvalidKeyUsage", ErrInvalidKeyUsage{Usage: "bad"}, "bad"},
 
 		// dek.go
-		{"ErrDEKNotImplemented", ErrDEKNotImplemented{}, "not yet implemented"},
 
 		// key_algorithms.go
 
