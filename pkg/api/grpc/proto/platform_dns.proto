@@ -360,13 +360,24 @@ message UpdateRecordResponse {
   Zone zone = 2;
 }
 
+// ListRecordsRequest pages as REST's ?limit and ?offset do: with neither set
+// the whole list comes back; with either set, limit (default 50 when 0, at
+// most 1000) records from offset.
 message ListRecordsRequest {
   string zone_name = 1;
   RecordType type = 2;
+  optional uint32 limit = 3;
+  optional uint32 offset = 4;
 }
 
+// ListRecordsResponse carries one page. total counts every record matching
+// the type filter, whatever page was asked for; limit and offset are the
+// page the request resolved to.
 message ListRecordsResponse {
   repeated Record records = 1;
+  uint64 total = 2;
+  uint32 limit = 3;
+  uint32 offset = 4;
 }
 
 // DNSSEC request/response
