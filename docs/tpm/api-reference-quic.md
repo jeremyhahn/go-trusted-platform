@@ -254,13 +254,17 @@ type TPM2KeyResponse struct {
 {}
 ```
 
-The EK is created from the configured EK attributes.
+The EK is created from the configured EK attributes and persisted at the
+configured EK handle. An occupied EK handle is refused with
+`StatusAlreadyExists` (0x06); EK attributes that carry no creation template
+are refused with `StatusInvalidRequest` (0x01, gRPC `FailedPrecondition`).
 
 **Response Payload:**
 ```go
-type TPM2StatusResponse struct {
-    Success   bool   `codec:"success"`
-    Message   string `codec:"message"`
+type TPM2KeyResponse struct {
+    Handle    uint32 `codec:"handle"`
+    PublicKey []byte `codec:"public_key"`
+    Algorithm string `codec:"algorithm"`
     Timestamp int64  `codec:"timestamp"`
 }
 ```

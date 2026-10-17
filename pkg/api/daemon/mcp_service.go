@@ -38,6 +38,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmattrs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmcertify"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmclear"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmek"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmpcr"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
@@ -3015,12 +3016,8 @@ func (p *MCPServiceProvider) TPMCreateEK(ctx context.Context) (interface{}, erro
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	ekAttrs, err := p.tpm2Service.EKAttributes()
+	ekAttrs, err := tpmek.Create(p.tpm2Service)
 	if err != nil {
-		return nil, mapTPMError(err)
-	}
-
-	if err := p.tpm2Service.CreateEK(ekAttrs); err != nil {
 		return nil, mapTPMError(err)
 	}
 
