@@ -59,40 +59,33 @@ go-xkms or in the quicbaas SDK (docs/00 L8).
 ## 2. A large part of the CLI is deliberately unimplemented
 
 This is the most important thing to know about this feature, and it is stated
-in the code rather than hidden: **seven non-test files in
-`pkg/cli/commands/kms/` carry "not yet implemented"**, backed by seven distinct
+in the code rather than hidden: **six non-test files in
+`pkg/cli/commands/kms/` carry "not yet implemented"**, backed by six distinct
 typed errors:
 
 ```go
-ErrSecretsNotImplemented        ErrKeyExportNotImplemented
-ErrKeyImportNotImplemented      ErrKeyVersionsNotImplemented
-ErrKeyStatusNotImplemented      ErrKeyUnwrapNotImplemented
-ErrBackendTestNotImplemented
+ErrKeyImportNotImplemented      ErrKeyExportNotImplemented
+ErrKeyStatusNotImplemented      ErrKeyVersionsNotImplemented
+ErrBackendTestNotImplemented    ErrKeyUnwrapNotImplemented
 ```
 
 Affected areas, by file:
 
 | File | Unimplemented surface |
 |---|---|
-| `secrets.go` | The **entire** `kms secrets` subtree — store, get, list, delete, rotate, version, versions, rollback, status, policy get/set, prefix list, watch |
 | `key_export.go`, `key_import.go` | Key export and import |
 | `key_versions.go` | Key version listing |
 | `key_status.go` | Key status |
 | `key_unwrap.go` | Key unwrap |
 | `key_test_backend.go` | Backend test |
 
-`ErrSecretsNotImplemented.Error()` reads *"secrets management is not yet
-implemented in the platform KMS service"*, and the command's long help offers a
-workaround: use `kms crypto encrypt` / `decrypt` to manage encrypted secrets
-yourself.
-
 **These are commands that exist, parse flags, and then refuse.** They are typed
 errors, not panics or silent no-ops, which is the right shape — but a caller
 must not read "the verb exists" as "the capability exists".
 
-**The REST surface does not have this gap.** `/api/v1/kms/secrets/...` routes
-are registered and functional ([api.md](api.md) §4). The CLI is behind the API,
-not the other way round.
+`kms secrets` and `kms dek` call the SDK secrets and DEK clients
+([cli.md](cli.md) §7); `kms secrets watch` was removed because the SDK secrets
+client has no watch verb.
 
 ## 3. Exported surface
 

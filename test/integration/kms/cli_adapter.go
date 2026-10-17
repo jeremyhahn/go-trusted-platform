@@ -105,6 +105,18 @@ func (e ErrCLIBinaryNotFound) Error() string {
 	return fmt.Sprintf("platformctl binary not found at path: %s", e.Path)
 }
 
+// ErrCLIUnsupportedOption is returned when a test option has no platformctl
+// flag. The `kms secrets` verbs call the SDK secrets client, which takes no
+// tenant, key, algorithm or cursor.
+type ErrCLIUnsupportedOption struct {
+	Operation string
+	Option    string
+}
+
+func (e ErrCLIUnsupportedOption) Error() string {
+	return fmt.Sprintf("%s: platformctl has no flag for %s", e.Operation, e.Option)
+}
+
 // =============================================================================
 // CLI Adapter Implementation
 // =============================================================================
@@ -1007,26 +1019,18 @@ func (c *CLIAdapter) DEKStatus(ctx context.Context, path string) (*DEKStatusResu
 
 // SecretsStore stores a secret via CLI.
 func (c *CLIAdapter) SecretsStore(ctx context.Context, opts SecretsStoreOptions) (*SecretsStoreResult, error) {
+	if err := secretsUnsupportedOptions("SecretsStore", opts.TenantID, opts.KeyID, opts.Algorithm); err != nil {
+		return nil, err
+	}
+
 	args := []string{"kms", "secrets", "store", opts.Name}
 
 	// Encode data as base64 for CLI input
 	data := base64.StdEncoding.EncodeToString(opts.Data)
-	args = append(args, "--data", data, "--base64")
+	args = append(args, "--value", data, "--base64")
 
 	if opts.Description != "" {
 		args = append(args, "--description", opts.Description)
-	}
-
-	if opts.TenantID != "" {
-		args = append(args, "--tenant-id", opts.TenantID)
-	}
-
-	if opts.KeyID != "" {
-		args = append(args, "--key-id", opts.KeyID)
-	}
-
-	if opts.Algorithm != "" {
-		args = append(args, "--algorithm", opts.Algorithm)
 	}
 
 	output, err := c.runCommand(ctx, args...)
@@ -1059,16 +1063,30 @@ func (c *CLIAdapter) SecretsGet(ctx context.Context, name string) (*SecretsGetRe
 	return result.toResult()
 }
 
+// secretsUnsupportedOptions rejects the store/rotate options platformctl
+// has no flag for.
+func secretsUnsupportedOptions(operation, tenantID, keyID, algorithm string) error {
+	switch {
+	case tenantID != "":
+		return ErrCLIUnsupportedOption{Operation: operation, Option: "tenant ID"}
+	case keyID != "":
+		return ErrCLIUnsupportedOption{Operation: operation, Option: "key ID"}
+	case algorithm != "":
+		return ErrCLIUnsupportedOption{Operation: operation, Option: "algorithm"}
+	}
+	return nil
+}
+
 // SecretsList lists secrets via CLI.
 func (c *CLIAdapter) SecretsList(ctx context.Context, opts SecretsListOptions) (*SecretsListResult, error) {
+	if opts.Cursor != "" {
+		return nil, ErrCLIUnsupportedOption{Operation: "SecretsList", Option: "cursor"}
+	}
+
 	args := []string{"kms", "secrets", "list"}
 
 	if opts.Limit > 0 {
 		args = append(args, "--limit", strconv.FormatInt(int64(opts.Limit), 10))
-	}
-
-	if opts.Cursor != "" {
-		args = append(args, "--cursor", opts.Cursor)
 	}
 
 	output, err := c.runCommand(ctx, args...)
@@ -1084,13 +1102,10 @@ func (c *CLIAdapter) SecretsList(ctx context.Context, opts SecretsListOptions) (
 	return result.toResult(), nil
 }
 
-// SecretsDelete deletes a secret via CLI.
-func (c *CLIAdapter) SecretsDelete(ctx context.Context, name string, permanent bool) (*SecretsDeleteResult, error) {
+// SecretsDelete deletes a secret via CLI. The SDK delete is permanent, so
+// the CLI has no --permanent flag.
+func (c *CLIAdapter) SecretsDelete(ctx context.Context, name string, _ bool) (*SecretsDeleteResult, error) {
 	args := []string{"kms", "secrets", "delete", name}
-
-	if permanent {
-		args = append(args, "--permanent")
-	}
 
 	output, err := c.runCommand(ctx, args...)
 	if err != nil {
@@ -1107,23 +1122,15 @@ func (c *CLIAdapter) SecretsDelete(ctx context.Context, name string, permanent b
 
 // SecretsRotate rotates a secret via CLI.
 func (c *CLIAdapter) SecretsRotate(ctx context.Context, opts SecretsRotateOptions) (*SecretsRotateResult, error) {
+	if err := secretsUnsupportedOptions("SecretsRotate", opts.TenantID, opts.KeyID, opts.Algorithm); err != nil {
+		return nil, err
+	}
+
 	args := []string{"kms", "secrets", "rotate", opts.Name}
 
 	// Encode new data as base64 for CLI input
 	data := base64.StdEncoding.EncodeToString(opts.NewData)
-	args = append(args, "--data", data, "--base64")
-
-	if opts.TenantID != "" {
-		args = append(args, "--tenant-id", opts.TenantID)
-	}
-
-	if opts.KeyID != "" {
-		args = append(args, "--key-id", opts.KeyID)
-	}
-
-	if opts.Algorithm != "" {
-		args = append(args, "--algorithm", opts.Algorithm)
-	}
+	args = append(args, "--value", data, "--base64")
 
 	output, err := c.runCommand(ctx, args...)
 	if err != nil {
@@ -1140,14 +1147,14 @@ func (c *CLIAdapter) SecretsRotate(ctx context.Context, opts SecretsRotateOption
 
 // SecretsVersions lists secret versions via CLI.
 func (c *CLIAdapter) SecretsVersions(ctx context.Context, name string, opts SecretsVersionsOptions) (*SecretsVersionsResult, error) {
+	if opts.Cursor != "" {
+		return nil, ErrCLIUnsupportedOption{Operation: "SecretsVersions", Option: "cursor"}
+	}
+
 	args := []string{"kms", "secrets", "versions", name}
 
 	if opts.Limit > 0 {
 		args = append(args, "--limit", strconv.FormatInt(int64(opts.Limit), 10))
-	}
-
-	if opts.Cursor != "" {
-		args = append(args, "--cursor", opts.Cursor)
 	}
 
 	output, err := c.runCommand(ctx, args...)

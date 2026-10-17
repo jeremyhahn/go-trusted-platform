@@ -175,10 +175,10 @@ embedded daemon answers the other five with an unknown-method error; its
 service also refuses a `deleted` status. The REST routes in the table reach the
 same SDK client and fail the same way on an embedded daemon.
 
-**The CLI cannot reach them either** — the entire `platformctl kms secrets`
-subtree is a stub that returns the typed `ErrSecretsNotImplemented` error. See
-[engineering.md](engineering.md) §2 and [cli.md](cli.md) §7–§8. `kms dek`
-calls the SDK DEK client ([cli.md](cli.md) §7.1).
+`platformctl kms secrets` calls the same SDK secrets client
+(`Security().Secrets()`), so it reaches every row above and meets the same
+embedded seam ([cli.md](cli.md) §7.2). `kms dek` calls the SDK DEK client
+([cli.md](cli.md) §7.1).
 
 **Generating a data key and creating a DEK are different operations.**
 `/data-keys` mints a key under the KEK named by `key_id` (`wrapping_key_id` on

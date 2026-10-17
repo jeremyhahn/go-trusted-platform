@@ -82,6 +82,31 @@ func openDEKClient(base *cli.BaseCommand) (quicbaassdk.DEKClient, error) {
 	return activeDEKClientFactory(base)
 }
 
+// secretsClientFactory opens the SDK secrets client for a `kms secrets` verb.
+type secretsClientFactory func(base *cli.BaseCommand) (quicbaassdk.SecretsClient, error)
+
+var activeSecretsClientFactory secretsClientFactory = defaultSecretsClientFactory
+
+// SetSecretsClientFactory replaces the secrets client factory and returns a
+// function that restores the previous one.
+func SetSecretsClientFactory(f secretsClientFactory) func() {
+	prev := activeSecretsClientFactory
+	activeSecretsClientFactory = f
+	return func() { activeSecretsClientFactory = prev }
+}
+
+func defaultSecretsClientFactory(base *cli.BaseCommand) (quicbaassdk.SecretsClient, error) {
+	q, err := base.Client().QuicBaaS()
+	if err != nil {
+		return nil, err
+	}
+	return q.Security().Secrets(), nil
+}
+
+func openSecretsClient(base *cli.BaseCommand) (quicbaassdk.SecretsClient, error) {
+	return activeSecretsClientFactory(base)
+}
+
 // parseSDKKeyUsage converts a CLI usage string to the SDK KeyUsage.
 func parseSDKKeyUsage(usage string) (kms.KeyUsage, error) {
 	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(usage), "-", "_"))

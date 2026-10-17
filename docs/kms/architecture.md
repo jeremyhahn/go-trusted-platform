@@ -37,7 +37,7 @@ The evidence is the package tree: **there is no `pkg/kms` in this repository**
 | **Handling key bytes in this layer** | This repository sits above Layer 3, so it uses the stack's owned key abstractions rather than coding protected memory itself. Key bytes never enter this layer. `ExportKey`'s CLI counterpart being unimplemented is the conservative side to be wrong on. |
 | **Re-encrypting data on key rotation** | Rotation would become an outage proportional to data volume, so it would not happen. `Rewrap` re-encrypts to the latest key version and leaves plaintext alone. |
 | **Treating AEAD invocation limits as advisory** | AES-GCM nonce reuse is a break, not a degradation. Limits are tracked per key with a dedicated CLI subtree, and exceeding one surfaces as `StatusResourceExhausted` rather than being silently ignored. |
-| **Shipping the CLI's secrets subtree half-working** | The stubs return typed errors and have tests that assert the refusal. A half-working secrets store would be worse than an absent one, because callers would trust it. |
+| **Shipping a CLI verb the SDK cannot serve** | `kms secrets watch` was removed rather than stubbed: the SDK secrets client has no watch verb. |
 
 ## Component boundaries
 
@@ -90,8 +90,6 @@ That is why rotation is a routine operation rather than a migration.
 - **It does not re-encrypt data on rotation.**
 - **It does not expose AEAD safety limits over any API** — currently a gap
   ([api.md](api.md) §5), not a decision.
-- **It does not ship a working `kms secrets` CLI.** The API has it; the CLI is a
-  typed stub, deliberately.
 
 ## Overview
 
@@ -195,13 +193,6 @@ The CLI provides user-facing commands through `platformctl`:
 | `key_safety.go` | Safety limits |
 | `key_test_backend.go` | Backend testing |
 | `dek_safety.go` | DEK safety limits |
-| `secrets_version.go` | Get version |
-| `secrets_versions.go` | List versions |
-| `secrets_rollback.go` | Rollback |
-| `secrets_status.go` | Status management |
-| `secrets_policy.go` | Rotation policy |
-| `secrets_prefix.go` | Prefix operations |
-| `secrets_watch.go` | Watch for changes |
 
 ### REST API Layer (`pkg/webservice/v1/rest/kms/`)
 

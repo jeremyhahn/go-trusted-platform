@@ -25,17 +25,14 @@ which is why a missing capability is almost never fixable here.
 These verbs exist in `--help`, parse their flags and then refuse with a typed
 error:
 
-- **the whole `kms secrets` subtree** — store, get, list, delete, rotate,
-  version, versions, rollback, status, policy, prefix, watch
 - **`kms key import`, `export`, `unwrap`, `versions`, `status enable|disable`,
   `backend-test`**
 
 And **`kms key get` crashes** on every invocation; use `kms key metadata get`
 or `kms key list -o json` instead. [cli.md](cli.md) §8–§9 has the exact list.
 
-**The REST API is ahead of the CLI**: secrets management is fully routed
-under `/api/v1/kms/secrets`. Use REST for that. The `kms dek` subtree works
-through the SDK DEK client ([cli.md](cli.md) §7.1).
+The `kms secrets` and `kms dek` subtrees work through the SDK secrets and DEK
+clients ([cli.md](cli.md) §7).
 For envelope encryption from the CLI, `kms crypto datakey` works.
 
 ### 2. Which backend are you on?
@@ -105,24 +102,19 @@ the key.
 
 ---
 
-## Secrets — use REST
-
-The CLI subtree is a stub. The API is not:
+## Secrets
 
 ```bash
-curl -s -X POST https://platform.example.com/api/v1/kms/secrets \
-     -d '{"name":"api-token","value":"..."}'
-
-curl -s        https://platform.example.com/api/v1/kms/secrets
-curl -s        https://platform.example.com/api/v1/kms/secrets/api-token
-curl -s -X POST https://platform.example.com/api/v1/kms/secrets/api-token/rotate
-curl -s -X PUT  https://platform.example.com/api/v1/kms/secrets/api-token/policy -d '{...}'
-curl -s -X DELETE https://platform.example.com/api/v1/kms/secrets/api-token
+platformctl kms secrets store api-token --value s3cr3t -o json
+platformctl kms secrets list -o json
+platformctl kms secrets get api-token -o json
+platformctl kms secrets rotate api-token --value n3w -o json
+platformctl kms secrets policy set api-token --interval 720h -o json
+platformctl kms secrets delete api-token
 ```
 
-Versions, rollback and rotation policy are all there. Note that secrets have
-**no gRPC service** — they are REST, QUIC and partially MCP — so the SDK's typed
-gRPC path and embedded mode cannot reach them.
+The same operations are routed under `/api/v1/kms/secrets` ([api.md](api.md)
+§4). There is no `secrets watch`; the SDK has no watch verb.
 
 ---
 
@@ -144,8 +136,7 @@ DEKs are what per-tenant and per-image encryption are built on — see
 ## Troubleshooting
 
 **A verb says "not yet implemented".**
-It is one of the stubs. Check [cli.md](cli.md) §8 for the list and whether REST
-has it.
+It is one of the `kms key` stubs. Check [cli.md](cli.md) §8 for the list.
 
 **A `kms key` verb dies with `panic: unable to redefine 'v' shorthand`.**
 A known defect in `key get`, `key export`, `key policy set` and `key status
@@ -163,8 +154,9 @@ It should not — rotation rewraps rather than re-encrypting. If it does, check
 whether the key was *revoked* rather than rotated; those are different
 operations.
 
-**Secrets work over REST and not from the CLI.**
-Expected. The CLI subtree is a stub.
+**`secrets version`, `versions`, `rotate`, `rollback` or `status` fails on an embedded daemon.**
+Expected. The embedded SDK does not serve those five secrets methods
+([api.md](api.md) §4).
 
 **Something is missing from the whole KMS surface.**
 It is almost certainly missing upstream, in the stack's key management, not
