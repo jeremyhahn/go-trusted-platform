@@ -144,6 +144,9 @@ func (s *UnixAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) 
 		result.Name = resp.GetMetadata().GetName()
 		result.Description = resp.GetMetadata().GetDescription()
 	}
+	if err := applyKeyDisplay(ctx, s, opts, result); err != nil {
+		return nil, err
+	}
 
 	return result, nil
 }
