@@ -139,8 +139,8 @@ Generate a key.
 (`api.md` §2). `--name` is a display name, not the ID: it travels as the
 generate request's `display_name`, beside `--description`, and the command
 prints the name the KMS recorded. A caller bound to a tenant other than the
-platform system tenant is refused with FailedPrecondition before any key is
-generated when it passes `--name` or `--description` (`api.md` §2, SDK gap).
+platform system tenant is refused with PermissionDenied before any key is
+generated, whatever flags it passes (`api.md` §6, SDK gap).
 Over REST, MCP and QUIC, `--name` is refused before any key is generated,
 because none of those generate routes carries a display name (`api.md` §2):
 generate the key, then set the name with `key metadata update`.

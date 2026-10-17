@@ -13,8 +13,8 @@ import (
 
 // ListDEKs returns the DEKs under an optional path prefix.
 func (a *DEKServerAdapter) ListDEKs(ctx context.Context, req *pb.ListDEKsRequest) (*pb.ListDEKsResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "DEK service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 
 	resp, err := a.client.ListDEKs(ctx, &dekclient.ListDEKsRequest{
@@ -39,8 +39,8 @@ func (a *DEKServerAdapter) ListDEKs(ctx context.Context, req *pb.ListDEKsRequest
 
 // GetDEKStatus returns a DEK's metadata, AEAD usage and re-encryption progress.
 func (a *DEKServerAdapter) GetDEKStatus(ctx context.Context, req *pb.GetDEKStatusRequest) (*pb.GetDEKStatusResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "DEK service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetPath() == "" {
 		return nil, status.Error(codes.InvalidArgument, "path is required")

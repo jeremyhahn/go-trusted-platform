@@ -38,8 +38,8 @@ import (
 // the SDK KMS client. Revoked keys are reported as disabled, mirroring the
 // quicbaas server-side semantics.
 func (a *KMSServerAdapter) RevokeKey(ctx context.Context, req *pb.RevokeKeyRequest) (*pb.RevokeKeyResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetKeyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key_id is required")
@@ -59,8 +59,8 @@ func (a *KMSServerAdapter) RevokeKey(ctx context.Context, req *pb.RevokeKeyReque
 // GetKeyMetadata implements pb.KeyManagementServer.GetKeyMetadata by
 // delegating to the SDK KMS client.
 func (a *KMSServerAdapter) GetKeyMetadata(ctx context.Context, req *pb.GetKeyMetadataRequest) (*pb.GetKeyMetadataResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetKeyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key_id is required")
@@ -80,8 +80,8 @@ func (a *KMSServerAdapter) GetKeyMetadata(ctx context.Context, req *pb.GetKeyMet
 // UpdateKeyMetadata implements pb.KeyManagementServer.UpdateKeyMetadata by
 // delegating to the SDK KMS client.
 func (a *KMSServerAdapter) UpdateKeyMetadata(ctx context.Context, req *pb.UpdateKeyMetadataRequest) (*pb.UpdateKeyMetadataResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetKeyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key_id is required")
@@ -107,8 +107,8 @@ func (a *KMSServerAdapter) UpdateKeyMetadata(ctx context.Context, req *pb.Update
 // SetKeyPolicy implements pb.KeyManagementServer.SetKeyPolicy by delegating
 // to the SDK KMS client.
 func (a *KMSServerAdapter) SetKeyPolicy(ctx context.Context, req *pb.SetKeyPolicyRequest) (*pb.SetKeyPolicyResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetKeyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key_id is required")
@@ -137,8 +137,8 @@ func (a *KMSServerAdapter) SetKeyPolicy(ctx context.Context, req *pb.SetKeyPolic
 // GetKeyPolicy implements pb.KeyManagementServer.GetKeyPolicy by delegating
 // to the SDK KMS client.
 func (a *KMSServerAdapter) GetKeyPolicy(ctx context.Context, req *pb.GetKeyPolicyRequest) (*pb.GetKeyPolicyResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 	if req.GetKeyId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key_id is required")
@@ -158,8 +158,8 @@ func (a *KMSServerAdapter) GetKeyPolicy(ctx context.Context, req *pb.GetKeyPolic
 // GetSupportedAlgorithms implements pb.KeyManagementServer.GetSupportedAlgorithms
 // by delegating to the SDK KMS client.
 func (a *KMSServerAdapter) GetSupportedAlgorithms(ctx context.Context, req *pb.GetSupportedAlgorithmsRequest) (*pb.GetSupportedAlgorithmsResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 
 	resp, err := a.client.GetSupportedAlgorithms(ctx)
@@ -175,8 +175,8 @@ func (a *KMSServerAdapter) GetSupportedAlgorithms(ctx context.Context, req *pb.G
 // BackendStatus implements pb.KeyManagementServer.BackendStatus by
 // delegating to the SDK KMS client.
 func (a *KMSServerAdapter) BackendStatus(ctx context.Context, req *pb.BackendStatusRequest) (*pb.BackendStatusResponse, error) {
-	if a.client == nil {
-		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	if err := a.admit(ctx); err != nil {
+		return nil, err
 	}
 
 	resp, err := a.client.BackendStatus(ctx)

@@ -2392,7 +2392,12 @@ func (a *kmsQUICAdapter) BatchDecrypt(ctx context.Context, req *pb.DecryptBatchR
 
 // GenerateRandom generates cryptographically secure random bytes using crypto/rand.
 // This operation does not require the SDK backend and is implemented directly.
-func (a *kmsQUICAdapter) GenerateRandom(_ context.Context, req *pb.GenerateRandomRequest) (*pb.GenerateRandomResponse, error) {
+func (a *kmsQUICAdapter) GenerateRandom(ctx context.Context, req *pb.GenerateRandomRequest) (*pb.GenerateRandomResponse, error) {
+	// Served locally, but refused to a tenant-bound caller as the SDK-backed
+	// GenerateRandom on gRPC and MCP refuses it, so every transport agrees.
+	if err := requireSystemScopeContext(ctx, a.kms.systemTenantID); err != nil {
+		return nil, err
+	}
 	numBytes := req.GetNumBytes()
 	if numBytes <= 0 {
 		return nil, ErrKMSInvalidParameter{Parameter: "num_bytes", Reason: "number of bytes must be positive"}

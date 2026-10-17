@@ -68,18 +68,15 @@ of the request. `owner` cannot be set: the SDK `GenerateKeyRequest` and
 carries the owner the KMS recorded. A key whose metadata cannot be recorded
 fails the request with the metadata error's class; the key itself exists.
 
-That holds in the system scope: a caller of the platform system tenant, or an
-unbound caller. A caller of any other tenant generates in that tenant's key
-scope, where the reply's `metadata` is only what the generate response carries
-(key ID, algorithm, version, `exportable`, `deletion_protection`) and no
-metadata call is made. A tenant-scope request carrying `display_name`,
-`description` or `tags` is refused with `FailedPrecondition` on every transport before any key is
-generated. SDK gap (go-quicbaas `v0.12.0-alpha`): `GenerateKey` stores a
-tenant key as `tenant/<tenant>/<name>` (`pkg/service/kms.go:446`), but
-`GetKeyMetadata` (`:1266`) and `UpdateKeyMetadata` (`:1302`) look the name up
-unscoped, so they miss the key or reach a same-named system key; and the
-tenant setter they read, `iam.ContextWithTenant`, is not re-exported under
-`quicbaas/sdk/go` (`sdk/go/transport.ContextWithTenant` sets a different key).
+Only a system-scope caller generates: a caller of the platform system tenant,
+or an unbound caller. A caller bound to any other tenant is refused with
+`PermissionDenied` (`tenant.ErrSystemScopeOnly`) on every transport before any
+key is generated, with or without `display_name`, `description` or `tags`
+(§6). SDK gap: the embedded SDK picks the key namespace from the go-quicbaas
+IAM tenant (go-quicbaas `pkg/iam/tenant_context.go:43`), which is not
+re-exported under `quicbaas/sdk/go` and which the embedded transport's
+`Request` (`sdk/go/transport/embedded/transport.go:414`) does not carry, so a
+tenant caller's key would otherwise land in the system namespace.
 
 `POST /api/v1/kms/keys` reads a flat body: `name`, `algorithm` as a name
 (`AES-256-GCM`, `CHACHA20-POLY1305`, `RSA-2048`, `RSA-4096`, `ECDSA-P256`,
@@ -272,10 +269,10 @@ caller without it is refused 403. A daemon with no authorization configured
 refuses every route. The routes call the SDK clients the KMS gRPC services
 call, so a key made over any transport is the one REST sees.
 
-The secrets surface, and both REST mounts of the whole KMS router, serve the
-system scope only. A caller bound to a tenant other than the system tenant is
-refused even when it holds the role or scope: the embedded SDK picks the key
-and secret namespace from the go-quicbaas IAM tenant in the request context,
+The whole KMS surface — keys, crypto operations, DEKs and secrets — serves the
+system scope only, on every transport. A caller bound to a tenant other than
+the system tenant is refused even when it holds the role or scope: the embedded
+SDK picks the key and secret namespace from the go-quicbaas IAM tenant in the request context,
 the SDK re-exports no setter for it, and an absent tenant selects the system
 namespace, so the request would otherwise read and write system keys and
 secrets. A caller bound to no tenant (the Unix-socket operator), or to the
@@ -289,9 +286,12 @@ the same typed error, `tenant.ErrSystemScopeOnly`, before the SDK is called:
 |-----------|-------|---------|
 | Webservice REST | `SessionGuard.RequireSystemScope` on the KMS router mount | 403 |
 | Daemon REST | `pkg/api/daemon/rest_kms.go` | 403 |
-| gRPC, Unix | `SecretsServerAdapter` | `PermissionDenied` |
-| QUIC | the secrets category handlers | `StatusPermissionDenied` |
-| MCP | the `secret_*` tools | `PermissionDenied` |
+| gRPC, Unix | `quicbaas.kms.v1`: the `KMSServerAdapter`, `CryptoServerAdapter`, `DEKServerAdapter` and `SecretsServerAdapter` methods; `KeyManagementService`: every `PlatformKMSBackend` method | `PermissionDenied` |
+| QUIC | the KMS and crypto handlers (through the gRPC adapters; `GenerateRandom`, served locally, checks too) and the secrets category handlers | `StatusPermissionDenied` |
+| MCP | the `kms_*` and `secret_*` tools | `PermissionDenied` |
+
+DEKs have no QUIC or MCP surface; they are reached on gRPC, the Unix socket
+and REST only.
 
 SDK gap: go-quicbaas `pkg/iam/tenant_context.go:43` (`ContextWithTenant`) is
 not under `quicbaas/sdk/go`, and the embedded transport's `Request`

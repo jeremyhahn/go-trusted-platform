@@ -1891,8 +1891,8 @@ func (p *MCPServiceProvider) IAMVerifyToken(ctx context.Context, token string) (
 
 // KMSCreateKey creates a new cryptographic key in the KMS.
 func (p *MCPServiceProvider) KMSCreateKey(ctx context.Context, req *mcp.KMSCreateKeyRequest) (interface{}, error) {
-	if p.kmsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitKMS(ctx); err != nil {
+		return nil, err
 	}
 
 	// Validate required parameters
@@ -1950,8 +1950,8 @@ func (p *MCPServiceProvider) KMSCreateKey(ctx context.Context, req *mcp.KMSCreat
 
 // KMSDeleteKey deletes a key from the KMS.
 func (p *MCPServiceProvider) KMSDeleteKey(ctx context.Context, keyID string) error {
-	if p.kmsService == nil {
-		return ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitKMS(ctx); err != nil {
+		return err
 	}
 
 	if keyID == "" {
@@ -1972,8 +1972,8 @@ func (p *MCPServiceProvider) KMSDeleteKey(ctx context.Context, keyID string) err
 // KMSGetKey retrieves key metadata from the KMS. A version of 0 retrieves
 // the latest key version.
 func (p *MCPServiceProvider) KMSGetKey(ctx context.Context, keyID string, version uint64) (interface{}, error) {
-	if p.kmsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitKMS(ctx); err != nil {
+		return nil, err
 	}
 
 	if keyID == "" {
@@ -1993,8 +1993,8 @@ func (p *MCPServiceProvider) KMSGetKey(ctx context.Context, keyID string, versio
 
 // KMSListKeys lists all keys in the KMS.
 func (p *MCPServiceProvider) KMSListKeys(ctx context.Context, limit int, offset int) (interface{}, error) {
-	if p.kmsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitKMS(ctx); err != nil {
+		return nil, err
 	}
 
 	pageSize := limit
@@ -2019,8 +2019,8 @@ func (p *MCPServiceProvider) KMSListKeys(ctx context.Context, limit int, offset 
 
 // KMSRotateKey rotates a key in the KMS.
 func (p *MCPServiceProvider) KMSRotateKey(ctx context.Context, keyID string) (interface{}, error) {
-	if p.kmsService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitKMS(ctx); err != nil {
+		return nil, err
 	}
 
 	if keyID == "" {
@@ -2044,8 +2044,8 @@ func (p *MCPServiceProvider) KMSRotateKey(ctx context.Context, keyID string) (in
 
 // KMSEncrypt encrypts data using a KMS key.
 func (p *MCPServiceProvider) KMSEncrypt(ctx context.Context, req *mcp.KMSEncryptRequest) (interface{}, error) {
-	if p.cryptoService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitCrypto(ctx); err != nil {
+		return nil, err
 	}
 
 	if req.KeyID == "" {
@@ -2076,8 +2076,8 @@ func (p *MCPServiceProvider) KMSEncrypt(ctx context.Context, req *mcp.KMSEncrypt
 
 // KMSDecrypt decrypts data using a KMS key.
 func (p *MCPServiceProvider) KMSDecrypt(ctx context.Context, req *mcp.KMSDecryptRequest) (interface{}, error) {
-	if p.cryptoService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitCrypto(ctx); err != nil {
+		return nil, err
 	}
 
 	if req.KeyID == "" {
@@ -2107,8 +2107,8 @@ func (p *MCPServiceProvider) KMSDecrypt(ctx context.Context, req *mcp.KMSDecrypt
 
 // KMSSign signs data using a KMS key.
 func (p *MCPServiceProvider) KMSSign(ctx context.Context, req *mcp.KMSSignRequest) (interface{}, error) {
-	if p.cryptoService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitCrypto(ctx); err != nil {
+		return nil, err
 	}
 
 	if req.KeyID == "" {
@@ -2140,8 +2140,8 @@ func (p *MCPServiceProvider) KMSSign(ctx context.Context, req *mcp.KMSSignReques
 
 // KMSVerify verifies a signature using a KMS key.
 func (p *MCPServiceProvider) KMSVerify(ctx context.Context, req *mcp.KMSVerifyRequest) (interface{}, error) {
-	if p.cryptoService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitCrypto(ctx); err != nil {
+		return nil, err
 	}
 
 	if req.KeyID == "" {
@@ -2176,8 +2176,8 @@ func (p *MCPServiceProvider) KMSVerify(ctx context.Context, req *mcp.KMSVerifyRe
 
 // KMSGenerateRandom generates cryptographically secure random bytes.
 func (p *MCPServiceProvider) KMSGenerateRandom(ctx context.Context, numBytes int) ([]byte, error) {
-	if p.cryptoService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitCrypto(ctx); err != nil {
+		return nil, err
 	}
 
 	if numBytes <= 0 {
@@ -2199,8 +2199,8 @@ func (p *MCPServiceProvider) KMSGenerateRandom(ctx context.Context, numBytes int
 // (for storage). The plaintext should be used for local encryption and then discarded;
 // only the wrapped version should be persisted.
 func (p *MCPServiceProvider) KMSGenerateDataKey(ctx context.Context, req *mcp.KMSGenerateDataKeyRequest) (interface{}, error) {
-	if p.cryptoService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitCrypto(ctx); err != nil {
+		return nil, err
 	}
 
 	// Validate required parameters
@@ -2258,8 +2258,8 @@ func (p *MCPServiceProvider) KMSGenerateDataKey(ctx context.Context, req *mcp.KM
 // distributing encrypted keys to systems that will decrypt them later,
 // or key escrow scenarios.
 func (p *MCPServiceProvider) KMSGenerateWrappedDataKey(ctx context.Context, req *mcp.KMSGenerateWrappedDataKeyRequest) (interface{}, error) {
-	if p.cryptoService == nil {
-		return nil, ErrServiceNotAvailable{Service: "kms"}
+	if err := p.admitCrypto(ctx); err != nil {
+		return nil, err
 	}
 
 	// Validate required parameters
