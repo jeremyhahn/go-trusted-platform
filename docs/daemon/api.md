@@ -387,8 +387,8 @@ Per-service scopes are listed in each feature folder. A new RPC must carry the
 permission its twins on the other transports require: the `DeviceService`
 operator writes `DisableDevice`, `EnableDevice` and `CreateTemplate` (#873)
 take `device:write`, as QUIC sub-opcodes `0x25`–`0x27`, MCP `device_disable`,
-`device_enable` and `device_template_create`, and the webservice REST routes do
-([`docs/device/api.md`](../device/api.md) §7).
+`device_enable` and `device_template_create`, and the webservice and daemon REST
+routes do ([`docs/device/api.md`](../device/api.md) §7).
 
 **gRPC TCP, QUIC and REST fail closed without an authentication backend
 (#550, #312).** With `SkipIAMValidation` off, a daemon configuration under
@@ -434,6 +434,19 @@ The daemon REST tenant routes (`/api/v1/tenants/*`, #304) run behind the same
 guard with the `tenant` scopes. They then apply the `TenantService` tenant
 binding to the authenticated caller
 ([`docs/tenant/api.md`](../tenant/api.md) §7).
+
+The daemon REST device operator routes (#949) run behind the same guard with
+the `device:read|write|delete` scope of each route's gRPC twin:
+`GET /api/v1/devices/count`, `POST /api/v1/devices/{id}/disable`, `/enable`
+and `/attest-cert/record`, the profile routes under `/api/v1/device/profiles`
+(CRUD, `count`, `match`, `mac/{mac}`, `serial/{serial}`, `find-config`,
+`{id}/assign`, `{id}/unassign`), `POST /api/v1/device/activate-json` and
+`/api/v1/device/templates*`. `RESTServer.SetDeviceOperatorHandlers` mounts the
+webservice's handlers (`pkg/webservice/v1/device`), so the request bodies and the
+`{code, success, payload}` envelope are the webservice's
+([`docs/device/api.md`](../device/api.md) §7). The diskless boot routes
+(`/api/v1/device/boot*`) are machine-facing and stay off this listener; gRPC,
+QUIC, Unix and MCP serve them.
 
 **QUIC authorizes every request before dispatch (#767).** Before #767 the QUIC
 dispatcher authenticated a token when a middleware was installed and then

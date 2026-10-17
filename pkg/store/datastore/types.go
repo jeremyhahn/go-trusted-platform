@@ -83,10 +83,30 @@ type PageQuery struct {
 // Defaults: Page=1, PageSize=25, SortOrder=SortAscending
 func NewPageQuery() PageQuery {
 	return PageQuery{
-		Page:      1,
-		PageSize:  25,
+		Page:      FirstPage,
+		PageSize:  DefaultPageSize,
 		SortOrder: SortAscending,
 	}
+}
+
+// FirstPage is the number of the first page; pages are 1-based.
+const FirstPage = 1
+
+// DefaultPageSize is the page size used when a query names none.
+const DefaultPageSize = 25
+
+// Normalized returns the query with its paging inputs made valid: a page
+// below FirstPage reads the first page, and a page size below one uses
+// DefaultPageSize. Every DAO pages through it, so a caller that leaves
+// Page or PageSize at its zero value never yields a negative offset.
+func (q PageQuery) Normalized() PageQuery {
+	if q.Page < FirstPage {
+		q.Page = FirstPage
+	}
+	if q.PageSize < 1 {
+		q.PageSize = DefaultPageSize
+	}
+	return q
 }
 
 // PageResult represents a paginated result set.

@@ -812,6 +812,7 @@ func (p *MCPServiceProvider) DeviceList(ctx context.Context, filter map[string]s
 	}
 
 	query := datastore.PageQuery{
+		Page:      datastore.FirstPage,
 		PageSize:  100,
 		SortOrder: datastore.SortAscending,
 	}

@@ -688,6 +688,14 @@ func protoToProfile(p *pb.DeviceProfile) *entities.DeviceProfile {
 		Model:    p.GetModel(),
 		Role:     grpcapi.ProtoRoleToEntity(p.GetRole()),
 		EventLog: p.GetEventLog(),
+
+		// The device binding AssignProfileToDevice records.
+		EKSerial:   p.GetEkSerial(),
+		MACAddress: p.GetMacAddress(),
+		Assigned:   p.GetAssigned(),
+	}
+	if p.GetAssignedAt() != nil {
+		profile.AssignedAt = p.GetAssignedAt().AsTime()
 	}
 
 	if p.GetMatchRules() != nil {
