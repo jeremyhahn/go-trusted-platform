@@ -18,11 +18,14 @@ package attestation
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	apidaemon "github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
+	attestsvc "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/service"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
@@ -73,6 +76,11 @@ func TestAttestationMultiProtocol(t *testing.T) {
 func testVMAttestation(t *testing.T, ctx context.Context, adapter AttestationCommands) {
 	testID := uuid.New().String()[:8]
 
+	// VM attestation is a declared MISSING capability: the daemon holds no
+	// TPM session for a guest's vTPM, so CollectVMAttestation produces no
+	// evidence and every transport must say why instead of answering an
+	// empty quote (docs/attestation/engineering.md, the TPM-session table).
+
 	t.Run("GenerateVMQuote", func(t *testing.T) {
 		vmID := GenerateTestVMID(testID)
 		nonce := GenerateTestNonce()
@@ -92,149 +100,78 @@ func testVMAttestation(t *testing.T, ctx context.Context, adapter AttestationCom
 			}
 			return
 		}
-		if err != nil {
-			t.Fatalf("GenerateVMQuote failed: %v", err)
-		}
-
-		if result == nil {
-			t.Fatal("GenerateVMQuote returned nil result")
-		}
-
-		if len(result.QuoteData) == 0 {
-			t.Error("QuoteData is empty")
-		}
-
-		if len(result.Signature) == 0 {
-			t.Error("Signature is empty")
-		}
-
-		if len(result.PCRDigest) == 0 {
-			t.Error("PCRDigest is empty")
-		}
-
-		if len(result.AIKPublicKey) == 0 {
-			t.Error("AIKPublicKey is empty")
+		expectVMAttestationRefused(t, adapter, "GenerateVMQuote", err)
+		if result != nil {
+			t.Errorf("GenerateVMQuote returned a result alongside its refusal: %+v", result)
 		}
 	})
 
 	t.Run("GetVMAttestation", func(t *testing.T) {
 		vmID := GenerateTestVMID(testID + "-attest")
-		nonce := GenerateTestNonce()
-
-		opts := GetVMAttestationOptions{
-			VMID:          vmID,
-			Nonce:         nonce,
-			PCRIndices:    DefaultPCRIndices(),
-			HashAlgorithm: DefaultHashAlgorithm(),
-		}
-
-		result, err := adapter.GetVMAttestation(ctx, opts)
-		if err != nil {
-			t.Fatalf("GetVMAttestation failed: %v", err)
-		}
-
-		if result == nil {
-			t.Fatal("GetVMAttestation returned nil result")
-		}
-
-		if result.AttestationID == "" {
-			t.Error("AttestationID is empty")
-		}
-
-		if result.VMID != vmID {
-			t.Errorf("VMID mismatch: got %s, want %s", result.VMID, vmID)
-		}
-
-		if result.HostID == "" {
-			t.Error("HostID is empty")
-		}
-
-		if len(result.QuoteData) == 0 {
-			t.Error("QuoteData is empty")
-		}
-
-		if len(result.PCRs) == 0 {
-			t.Error("PCRs list is empty")
+		result, err := adapter.GetVMAttestation(ctx, vmAttestationOptions(vmID, GenerateTestNonce()))
+		expectVMAttestationRefused(t, adapter, "GetVMAttestation", err)
+		if result != nil {
+			t.Errorf("GetVMAttestation returned a result alongside its refusal: %+v", result)
 		}
 	})
 
 	t.Run("VerifyVMAttestation", func(t *testing.T) {
-		vmID := GenerateTestVMID(testID + "-verify")
-		nonce := GenerateTestNonce()
-
-		// First generate an attestation
-		attestOpts := GetVMAttestationOptions{
-			VMID:          vmID,
-			Nonce:         nonce,
-			PCRIndices:    DefaultPCRIndices(),
-			HashAlgorithm: DefaultHashAlgorithm(),
-		}
-
-		attestResult, err := adapter.GetVMAttestation(ctx, attestOpts)
-		if err != nil {
-			t.Fatalf("GetVMAttestation failed: %v", err)
-		}
-
-		// Now verify its quote under its AIK
-		verifyResult, err := adapter.VerifyVMAttestation(ctx, attestResult.VerifyOptions(nonce))
-		if expectNoVerifySurface(t, adapter, err) {
-			return
-		}
-		if err != nil {
-			t.Fatalf("VerifyVMAttestation failed: %v", err)
-		}
-
-		if verifyResult == nil {
-			t.Fatal("VerifyVMAttestation returned nil result")
-		}
-
-		if !verifyResult.Valid {
-			t.Errorf("Attestation should be valid, errors: %v", verifyResult.Errors)
-		}
-
-		if !verifyResult.NonceMatch {
-			t.Error("Nonce should match")
-		}
-
-		if !verifyResult.SignatureValid {
-			t.Error("Signature should be valid")
-		}
+		testVMVerifyRefused(t, ctx, adapter, GenerateTestVMID(testID+"-verify"))
 	})
 
 	t.Run("VerifyVMAttestation_InvalidNonce", func(t *testing.T) {
-		vmID := GenerateTestVMID(testID + "-invalid")
-		nonce := GenerateTestNonce()
-
-		attestOpts := GetVMAttestationOptions{
-			VMID:          vmID,
-			Nonce:         nonce,
-			PCRIndices:    DefaultPCRIndices(),
-			HashAlgorithm: DefaultHashAlgorithm(),
-		}
-
-		attestResult, err := adapter.GetVMAttestation(ctx, attestOpts)
-		if err != nil {
-			t.Fatalf("GetVMAttestation failed: %v", err)
-		}
-
-		// Verify with wrong nonce
-		wrongNonce := GenerateTestNonce()
-		verifyResult, err := adapter.VerifyVMAttestation(ctx, attestResult.VerifyOptions(wrongNonce))
-		if expectNoVerifySurface(t, adapter, err) {
-			return
-		}
-		if err != nil {
-			t.Fatalf("VerifyVMAttestation failed: %v", err)
-		}
-
-		if verifyResult.Valid {
-			t.Error("Attestation should be invalid with wrong nonce")
-		}
-
-		if verifyResult.NonceMatch {
-			t.Error("Nonce should not match")
-		}
+		testVMVerifyRefused(t, ctx, adapter, GenerateTestVMID(testID+"-invalid"))
 	})
+}
+
+// vmAttestationOptions is the GetVMAttestation request every VM subtest sends.
+func vmAttestationOptions(vmID string, nonce []byte) GetVMAttestationOptions {
+	return GetVMAttestationOptions{
+		VMID:          vmID,
+		Nonce:         nonce,
+		PCRIndices:    DefaultPCRIndices(),
+		HashAlgorithm: DefaultHashAlgorithm(),
+	}
+}
+
+// testVMVerifyRefused covers the verify subtests while VM attestation is
+// MISSING: the evidence a verify would judge cannot be collected, so the
+// collect step must be refused with its reason. Over QUIC the verify call
+// itself has no surface, which is checked on its own.
+func testVMVerifyRefused(t *testing.T, ctx context.Context, adapter AttestationCommands, vmID string) {
+	t.Helper()
+	nonce := GenerateTestNonce()
+
+	attestResult, err := adapter.GetVMAttestation(ctx, vmAttestationOptions(vmID, nonce))
+	expectVMAttestationRefused(t, adapter, "GetVMAttestation", err)
+	if attestResult != nil {
+		t.Errorf("GetVMAttestation returned a result alongside its refusal: %+v", attestResult)
+	}
+
+	if adapter.Name() == "QUIC" {
+		_, err := adapter.VerifyVMAttestation(ctx, VerifyVMAttestationOptions{ExpectedNonce: nonce})
+		expectNoVerifySurface(t, adapter, err)
+	}
+}
+
+// expectVMAttestationRefused asserts that a VM evidence call was refused with
+// the reason the transport is documented to carry. Every transport that
+// reaches the attestation service carries ErrTPMSessionNotConfigured for
+// CollectVMAttestation. QUIC's OpAttestVMWorkload (0x7F) is served by the
+// daemon-native manifest handler, which the daemon does not wire, so it
+// answers ErrQUICServiceUnavailable (docs/attestation/api.md §2).
+func expectVMAttestationRefused(t *testing.T, adapter AttestationCommands, op string, err error) {
+	t.Helper()
+	want := attestsvc.ErrTPMSessionNotConfigured{Op: "CollectVMAttestation"}.Error()
+	if adapter.Name() == "QUIC" {
+		want = apidaemon.ErrQUICServiceUnavailable{Service: "attestation"}.Error()
+	}
+	if err == nil {
+		t.Fatalf("%s over %s succeeded, want refusal %q", op, adapter.Name(), want)
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("%s over %s: got %q, want it to carry %q", op, adapter.Name(), err.Error(), want)
+	}
 }
 
 // expectNoVerifySurface reports whether adapter serves no quote verification
