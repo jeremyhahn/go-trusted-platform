@@ -448,6 +448,19 @@ webservice's handlers (`pkg/webservice/v1/device`), so the request bodies and th
 (`/api/v1/device/boot*`) are machine-facing and stay off this listener; gRPC,
 QUIC, Unix and MCP serve them.
 
+The daemon REST IAM routes (`/api/v1/iam/tenants` and
+`/api/v1/iam/tenants/{tenant}/...`, #949) run behind the same guard with the
+`iam` scopes: `iam:read` for reads and the read-only checks
+(`permissions/check`, `policies/validate`, `policies/test`), `iam:write` for
+everything else (`IAMRouteGuards`, `pkg/api/rest/iam_guard.go`). They serve
+the SDK IAM client and PEP the gRPC, QUIC, MCP and Unix IAM services use
+(`SetIAMHandlers`). The tenant routes then serve only the caller's own tenant,
+and the tenant-record routes only the system tenant
+([`docs/iam/api.md`](../iam/api.md) §8). The webservice's flat aliases
+(`/api/v1/iam/users`, ...) are not mounted on the daemon: they fall back to a
+browser session's tenant, which a daemon caller does not have. A daemon without
+a QuicBaaS IAM service mounts no IAM route.
+
 **QUIC authorizes every request before dispatch (#767).** Before #767 the QUIC
 dispatcher authenticated a token when a middleware was installed and then
 dispatched with no authorization at all: any valid token reached every

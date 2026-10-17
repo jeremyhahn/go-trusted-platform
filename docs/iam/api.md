@@ -277,6 +277,25 @@ gated or absent. Details and rationale:
 [architecture.md §Authorization Flow](architecture.md#authorization-flow) and
 [`docs/auth/architecture.md` §6c](../auth/architecture.md).
 
+**The daemon listener serves the tenant-scoped IAM routes (#949).**
+`SetIAMHandlers` (`pkg/api/daemon/rest_service.go`) mounts
+`/api/v1/iam/tenants` and `/api/v1/iam/tenants/{tenant}/...` on the daemon's
+REST listener, over the SDK IAM client and PEP the other transports use. There
+the guards are `IAMRouteGuards` (`pkg/api/rest/iam_guard.go`) over the daemon's
+scope guard: a bearer token or mTLS peer, `iam:read` for reads and the
+read-only checks, `iam:write` for the rest, `401` without a caller and `403`
+without the scope or for another tenant. The flat aliases of §2 are not
+mounted there, since they fall back to a browser session's tenant; a flat
+claim is recorded as divergent under #452 in the daemon's route-claims test.
+
+| Daemon REST route | Scope | Caller |
+|---|---|---|
+| `GET /api/v1/iam/tenants`, `GET /api/v1/iam/tenants/{tenant}` | `iam:read` | system tenant |
+| `POST`, `PUT`, `DELETE /api/v1/iam/tenants[/{tenant}]` | `iam:write` | system tenant |
+| `GET /api/v1/iam/tenants/{tenant}/{users,groups,roles,policies,apps}[/...]` | `iam:read` | `{tenant}` |
+| `POST /api/v1/iam/tenants/{tenant}/{permissions/check,policies/validate,policies/test}` | `iam:read` | `{tenant}` |
+| every other `/api/v1/iam/tenants/{tenant}/...` write | `iam:write` | `{tenant}` |
+
 That gate is REST-only; the gRPC, QUIC and MCP pictures follow.
 
 **The tenant binding is on every transport (#401).** A tenant-bound caller is

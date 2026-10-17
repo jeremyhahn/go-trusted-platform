@@ -1183,6 +1183,17 @@ func (s *IAMGRPCService) CreateTenant(ctx context.Context, req *platformv1.Creat
 		return nil, s.wrapError(err)
 	}
 
+	// Every IAM tenant carries its default roles (docs/iam/architecture.md):
+	// a tenant without them cannot hold a user. A failure rolls the tenant
+	// back, as tenant.Manager.CreateTenant does.
+	if _, err := s.iamClient.Role().Reconcile(ctx, req.GetId()); err != nil {
+		s.logger.Error("failed to provision default IAM roles", "error", err, "tenant_id", req.GetId())
+		if delErr := s.iamClient.Tenant().Delete(ctx, req.GetId()); delErr != nil {
+			s.logger.Error("failed to roll back IAM tenant", "error", delErr, "tenant_id", req.GetId())
+		}
+		return nil, s.wrapError(err)
+	}
+
 	return &platformv1.IAMTenantResponse{
 		Tenant:    sdkTenantToPlatformTenant(resp),
 		Timestamp: timestamppb.Now(),

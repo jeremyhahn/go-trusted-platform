@@ -7,6 +7,7 @@ import (
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
@@ -246,4 +247,38 @@ func TestIAMGRPCService_CrossTenantRPCsAreSystemOnly(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestIAMGRPCService_CreateTenantProvisionsDefaultRoles proves an IAM tenant
+// created over the IAM rpc carries its default roles, so it can hold a user
+// with the admin role (docs/iam/architecture.md), and that a failed role
+// reconcile rolls the tenant back.
+func TestIAMGRPCService_CreateTenantProvisionsDefaultRoles(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("roles seeded", func(t *testing.T) {
+		mem := newMemIAM()
+		svc := NewIAMGRPCService(slog.Default(), mem, nil)
+		if _, err := svc.CreateTenant(ctx, &platformv1.CreateIAMTenantRequest{Id: "acme", Name: "Acme"}); err != nil {
+			t.Fatalf("CreateTenant: %v", err)
+		}
+		for _, name := range memBuiltInRoles {
+			if _, err := mem.Role().Get(ctx, "acme", name); err != nil {
+				t.Errorf("role %q in the new tenant: %v", name, err)
+			}
+		}
+	})
+
+	t.Run("reconcile failure rolls the tenant back", func(t *testing.T) {
+		mem := newMemIAM()
+		mem.reconcileErr = sdkerrors.NewUnavailable("iam.role.reconcile", "down")
+		svc := NewIAMGRPCService(slog.Default(), mem, nil)
+		_, err := svc.CreateTenant(ctx, &platformv1.CreateIAMTenantRequest{Id: "acme", Name: "Acme"})
+		if status.Code(err) != codes.Unavailable {
+			t.Fatalf("CreateTenant code = %v, want Unavailable (err %v)", status.Code(err), err)
+		}
+		if _, err := mem.Tenant().Get(ctx, "acme"); err == nil {
+			t.Fatal("the tenant survived a failed role reconcile")
+		}
+	})
 }

@@ -84,6 +84,7 @@ func daemonRouteTable(t *testing.T) (*RESTServer, []string) {
 	}, nil)
 	s.SetDeviceHandlers(routeTableDevices{}, routeTableProfiles{}, platformv1.UnimplementedDeviceServiceServer{})
 	s.SetTenantHandlers(routeTableTenants{}, nil, "")
+	require.NoError(t, s.SetIAMHandlers(&fakeIAMClient{}, nil, nil, ""))
 	s.SetKMSHandlers(routeTableKMS{})
 	s.SetComputeHandlers(platformv1.UnimplementedComputeServiceServer{}, nil)
 	s.SetOverlayHandlers(routeTableOverlay{})
@@ -143,6 +144,14 @@ var daemonDivergentClaims = map[string]string{
 	"/platform.v1.KeyManagementService/GenerateDataKey":        "#452: the daemon's KMS routes have no data-keys",
 	"/platform.v1.KeyManagementService/GenerateWrappedDataKey": "#452: the daemon's KMS routes have no data-keys/wrapped",
 
+	"/platform.v1.PlatformIAMService/CheckPermission": iamFlatOnWebservice,
+	"/platform.v1.PlatformIAMService/CreateGroup":     iamFlatOnWebservice,
+	"/platform.v1.PlatformIAMService/CreateRole":      iamFlatOnWebservice,
+	"/platform.v1.PlatformIAMService/CreateUser":      iamFlatOnWebservice,
+	"/platform.v1.PlatformIAMService/ListGroups":      iamFlatOnWebservice,
+	"/platform.v1.PlatformIAMService/ListRoles":       iamFlatOnWebservice,
+	"/platform.v1.PlatformIAMService/ListUsers":       iamFlatOnWebservice,
+
 	"/platform.v1.ProvisioningGateway/GetBootConfig":         "#452: no server serves it; platformd holds no per-MAC boot configuration (route_coverage_test.go unroutedClaims)",
 	"/platform.v1.ProvisioningGateway/NotifyInstallComplete": pxeGatewayOnWebservice,
 	"/platform.v1.ProvisioningGateway/RegisterPXEDevice":     pxeGatewayOnWebservice,
@@ -163,6 +172,7 @@ var daemonDivergentClaims = map[string]string{
 
 const (
 	deviceBootMachineFacing = "#452: the diskless boot routes are machine-facing; they bind the TLS channel and verify the node's client certificate (webservice RegisterMachineFacingRoutes), and the daemon REST listener mounts no machine-facing device route. gRPC, QUIC, Unix and MCP serve both RPCs through DeviceGRPCService"
+	iamFlatOnWebservice     = "#452: the claim is the webservice's flat /api/v1/iam/{users,groups,roles,permissions} alias, which falls back to a browser session's tenant; the daemon holds none and serves the tenant-scoped /api/v1/iam/tenants/{tenant}/... routes only (SetIAMHandlers, docs/iam/api.md §8)"
 	idevidOnTPMPrefix       = "#452: the daemon serves IDevID and IAK under /api/v1/tpm/idevid and /api/v1/tpm/iak (rest_idevid.go, registerIDevIDRoutes); the claim is the webservice's /api/v1/idevid shape"
 	kmsKeyInBody            = "#452: the daemon takes the key in the body at POST /api/v1/kms/{encrypt,decrypt,sign,verify}; the claim is the webservice's /{name} path"
 	pxeGatewayOnWebservice  = "#452: the per-MAC PXE gateway routes are the webservice's (rest/pxe/gateway.go); the daemon mounts none"
