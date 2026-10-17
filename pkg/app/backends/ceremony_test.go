@@ -264,6 +264,9 @@ func TestMapCeremonyState(t *testing.T) {
 		want daemon.CeremonyStateValue
 	}{
 		{"", daemon.CeremonyStateUnknown},
+		{"awaiting_init", daemon.CeremonyStateUninitialized},
+		{"enrolling", daemon.CeremonyStateInProgress},
+		{"operational", daemon.CeremonyStateComplete},
 		{"uninitialized", daemon.CeremonyStateUninitialized},
 		{"in_progress", daemon.CeremonyStateInProgress},
 		{"in-progress", daemon.CeremonyStateInProgress},

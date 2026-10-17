@@ -1244,7 +1244,7 @@ func setupIAMAdapter(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 
 func testIAMAuthenticate(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupIAMAdapter(t, ctx, adapter)
-	result, err := cmd.ListUsers(ctx, iam.ListUsersOptions{TenantID: "default", Limit: 1})
+	result, err := cmd.ListUsers(ctx, iam.ListUsersOptions{TenantID: helpers.HarnessTenantID, Limit: 1})
 	if missing := surfaceMissing(adapter, "IAM", "ListUsers", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -1256,7 +1256,7 @@ func testIAMCreateUser(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	cmd := setupIAMAdapter(t, ctx, adapter)
 	email := fmt.Sprintf("matrix-test-%d@example.com", time.Now().UnixNano())
 	result, err := cmd.CreateUser(ctx, iam.CreateUserOptions{
-		TenantID: "default", Email: email, Name: "Matrix Test User",
+		TenantID: helpers.HarnessTenantID, Email: email, Name: "Matrix Test User",
 	})
 	if missing := surfaceMissing(adapter, "IAM", "CreateUser", err); missing != nil {
 		t.Fatal(missing)
@@ -1267,7 +1267,7 @@ func testIAMCreateUser(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	assert.NotEmpty(t, result.User.ID, "User ID should not be empty")
 	assert.Equal(t, email, result.User.Email)
 	if result.User.ID != "" {
-		_, _ = cmd.DeleteUser(ctx, iam.DeleteUserOptions{TenantID: "default", UserID: result.User.ID})
+		_, _ = cmd.DeleteUser(ctx, iam.DeleteUserOptions{TenantID: helpers.HarnessTenantID, UserID: result.User.ID})
 	}
 }
 
@@ -1275,7 +1275,7 @@ func testIAMGetUser(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 	cmd := setupIAMAdapter(t, ctx, adapter)
 	email := fmt.Sprintf("matrix-get-%d@example.com", time.Now().UnixNano())
 	createResult, err := cmd.CreateUser(ctx, iam.CreateUserOptions{
-		TenantID: "default", Email: email, Name: "Matrix Get User",
+		TenantID: helpers.HarnessTenantID, Email: email, Name: "Matrix Get User",
 	})
 	if missing := surfaceMissing(adapter, "IAM", "CreateUser", err); missing != nil {
 		t.Fatal(missing)
@@ -1284,10 +1284,10 @@ func testIAMGetUser(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 	require.NotNil(t, createResult)
 	require.NotNil(t, createResult.User)
 	t.Cleanup(func() {
-		_, _ = cmd.DeleteUser(ctx, iam.DeleteUserOptions{TenantID: "default", UserID: createResult.User.ID})
+		_, _ = cmd.DeleteUser(ctx, iam.DeleteUserOptions{TenantID: helpers.HarnessTenantID, UserID: createResult.User.ID})
 	})
 
-	result, err := cmd.GetUser(ctx, iam.GetUserOptions{TenantID: "default", UserID: createResult.User.ID})
+	result, err := cmd.GetUser(ctx, iam.GetUserOptions{TenantID: helpers.HarnessTenantID, UserID: createResult.User.ID})
 	if missing := surfaceMissing(adapter, "IAM", "GetUser", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -1299,7 +1299,7 @@ func testIAMGetUser(t *testing.T, ctx context.Context, adapter ProtocolAdapter) 
 
 func testIAMListUsers(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupIAMAdapter(t, ctx, adapter)
-	result, err := cmd.ListUsers(ctx, iam.ListUsersOptions{TenantID: "default", Limit: 10})
+	result, err := cmd.ListUsers(ctx, iam.ListUsersOptions{TenantID: helpers.HarnessTenantID, Limit: 10})
 	if missing := surfaceMissing(adapter, "IAM", "ListUsers", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -1312,7 +1312,7 @@ func testIAMUpdateUser(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	cmd := setupIAMAdapter(t, ctx, adapter)
 	email := fmt.Sprintf("matrix-update-%d@example.com", time.Now().UnixNano())
 	createResult, err := cmd.CreateUser(ctx, iam.CreateUserOptions{
-		TenantID: "default", Email: email, Name: "Matrix Update User",
+		TenantID: helpers.HarnessTenantID, Email: email, Name: "Matrix Update User",
 	})
 	if missing := surfaceMissing(adapter, "IAM", "CreateUser", err); missing != nil {
 		t.Fatal(missing)
@@ -1321,12 +1321,12 @@ func testIAMUpdateUser(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	require.NotNil(t, createResult)
 	require.NotNil(t, createResult.User)
 	t.Cleanup(func() {
-		_, _ = cmd.DeleteUser(ctx, iam.DeleteUserOptions{TenantID: "default", UserID: createResult.User.ID})
+		_, _ = cmd.DeleteUser(ctx, iam.DeleteUserOptions{TenantID: helpers.HarnessTenantID, UserID: createResult.User.ID})
 	})
 
 	updatedName := "Matrix Updated User"
 	result, err := cmd.UpdateUser(ctx, iam.UpdateUserOptions{
-		TenantID: "default", UserID: createResult.User.ID, Name: updatedName,
+		TenantID: helpers.HarnessTenantID, UserID: createResult.User.ID, Name: updatedName,
 	})
 	if missing := surfaceMissing(adapter, "IAM", "UpdateUser", err); missing != nil {
 		t.Fatal(missing)
@@ -1341,7 +1341,7 @@ func testIAMDeleteUser(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	cmd := setupIAMAdapter(t, ctx, adapter)
 	email := fmt.Sprintf("matrix-delete-%d@example.com", time.Now().UnixNano())
 	createResult, err := cmd.CreateUser(ctx, iam.CreateUserOptions{
-		TenantID: "default", Email: email, Name: "Matrix Delete User",
+		TenantID: helpers.HarnessTenantID, Email: email, Name: "Matrix Delete User",
 	})
 	if missing := surfaceMissing(adapter, "IAM", "CreateUser", err); missing != nil {
 		t.Fatal(missing)
@@ -1350,7 +1350,7 @@ func testIAMDeleteUser(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	require.NotNil(t, createResult)
 	require.NotNil(t, createResult.User)
 
-	result, err := cmd.DeleteUser(ctx, iam.DeleteUserOptions{TenantID: "default", UserID: createResult.User.ID})
+	result, err := cmd.DeleteUser(ctx, iam.DeleteUserOptions{TenantID: helpers.HarnessTenantID, UserID: createResult.User.ID})
 	if missing := surfaceMissing(adapter, "IAM", "DeleteUser", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -1363,7 +1363,7 @@ func testIAMCreateRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	cmd := setupIAMAdapter(t, ctx, adapter)
 	roleID := fmt.Sprintf("matrix-role-%d", time.Now().UnixNano())
 	result, err := cmd.CreateRole(ctx, iam.CreateRoleOptions{
-		TenantID: "default", ID: roleID, Name: "Matrix Test Role",
+		TenantID: helpers.HarnessTenantID, ID: roleID, Name: "Matrix Test Role",
 		Description: "Role created by matrix integration test", Permissions: []string{"read", "write"},
 	})
 	if missing := surfaceMissing(adapter, "IAM", "CreateRole", err); missing != nil {
@@ -1373,14 +1373,14 @@ func testIAMCreateRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	require.NotNil(t, result)
 	require.NotNil(t, result.Role)
 	assert.NotEmpty(t, result.Role.ID)
-	_, _ = cmd.DeleteRole(ctx, iam.DeleteRoleOptions{TenantID: "default", RoleID: result.Role.ID})
+	_, _ = cmd.DeleteRole(ctx, iam.DeleteRoleOptions{TenantID: helpers.HarnessTenantID, RoleID: result.Role.ID})
 }
 
 func testIAMAssignRole(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupIAMAdapter(t, ctx, adapter)
 
 	email := fmt.Sprintf("matrix-assign-%d@example.com", time.Now().UnixNano())
-	userResult, err := cmd.CreateUser(ctx, iam.CreateUserOptions{TenantID: "default", Email: email, Name: "Matrix Assign User"})
+	userResult, err := cmd.CreateUser(ctx, iam.CreateUserOptions{TenantID: helpers.HarnessTenantID, Email: email, Name: "Matrix Assign User"})
 	if missing := surfaceMissing(adapter, "IAM", "CreateUser", err); missing != nil {
 		t.Fatal(missing)
 	}
@@ -1388,12 +1388,12 @@ func testIAMAssignRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	require.NotNil(t, userResult)
 	require.NotNil(t, userResult.User)
 	t.Cleanup(func() {
-		_, _ = cmd.DeleteUser(ctx, iam.DeleteUserOptions{TenantID: "default", UserID: userResult.User.ID})
+		_, _ = cmd.DeleteUser(ctx, iam.DeleteUserOptions{TenantID: helpers.HarnessTenantID, UserID: userResult.User.ID})
 	})
 
 	roleID := fmt.Sprintf("matrix-assign-role-%d", time.Now().UnixNano())
 	roleResult, err := cmd.CreateRole(ctx, iam.CreateRoleOptions{
-		TenantID: "default", ID: roleID, Name: "Matrix Assign Role", Permissions: []string{"read"},
+		TenantID: helpers.HarnessTenantID, ID: roleID, Name: "Matrix Assign Role", Permissions: []string{"read"},
 	})
 	if missing := surfaceMissing(adapter, "IAM", "CreateRole", err); missing != nil {
 		t.Fatal(missing)
@@ -1402,11 +1402,11 @@ func testIAMAssignRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	require.NotNil(t, roleResult)
 	require.NotNil(t, roleResult.Role)
 	t.Cleanup(func() {
-		_, _ = cmd.DeleteRole(ctx, iam.DeleteRoleOptions{TenantID: "default", RoleID: roleResult.Role.ID})
+		_, _ = cmd.DeleteRole(ctx, iam.DeleteRoleOptions{TenantID: helpers.HarnessTenantID, RoleID: roleResult.Role.ID})
 	})
 
 	result, err := cmd.AssignRole(ctx, iam.AssignRoleOptions{
-		TenantID: "default", UserID: userResult.User.ID, RoleID: roleResult.Role.ID,
+		TenantID: helpers.HarnessTenantID, UserID: userResult.User.ID, RoleID: roleResult.Role.ID,
 	})
 	if missing := surfaceMissing(adapter, "IAM", "AssignRole", err); missing != nil {
 		t.Fatal(missing)
@@ -1419,7 +1419,7 @@ func testIAMAssignRole(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 func testIAMCheckPermission(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := setupIAMAdapter(t, ctx, adapter)
 	result, err := cmd.CheckPermission(ctx, iam.CheckPermissionOptions{
-		TenantID: "default", SubjectID: "test-user", Action: "read", Resource: "certificates",
+		TenantID: helpers.HarnessTenantID, SubjectID: "test-user", Action: "read", Resource: "certificates",
 	})
 	if missing := surfaceMissing(adapter, "IAM", "CheckPermission", err); missing != nil {
 		t.Fatal(missing)

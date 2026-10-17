@@ -492,6 +492,13 @@ func testMACForgetNotFound(t *testing.T, ctx context.Context, adapter OverlayCom
 // Gateway Tests
 // =============================================================================
 
+// platformd holds no gateway runtime and no BGP speaker: the gateway runs in
+// gatewayd, and SetGateway / SetBGPSpeaker have no production caller (#65).
+// Every gateway and BGP verb therefore answers the typed "not configured"
+// refusal on every transport (docs/bgp/api.md §2, docs/gateway/engineering.md
+// "BGP operator verbs in platformd"). These subtests pin that contract: a
+// verb that succeeded, or failed any other way, is a regression.
+
 func testGatewayOperations(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	t.Run("GetStatus", func(t *testing.T) {
 		testGatewayStatus(t, ctx, adapter)
@@ -508,68 +515,18 @@ func testGatewayOperations(t *testing.T, ctx context.Context, adapter OverlayCom
 
 func testGatewayStatus(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	result, err := adapter.GatewayStatus(ctx)
-	if err != nil {
-		requireGatewayHostedHere(t, err)
-		t.Fatalf("GatewayStatus failed: %v", err)
-	}
-
-	if result.NodeID == "" {
-		t.Error("Expected non-empty NodeID")
-	}
-
-	if result.Tier == "" {
-		t.Error("Expected non-empty Tier")
-	}
-
-	if result.Reputation < 0 || result.Reputation > 1 {
-		t.Errorf("Expected Reputation between 0 and 1, got %f", result.Reputation)
-	}
+	requireNotConfiguredOnPlatformd(t, "GatewayStatus", result, err)
 }
 
 func testGatewaySetMode(t *testing.T, ctx context.Context, adapter OverlayCommands) {
-	// Get current status to restore later
-	status, err := adapter.GatewayStatus(ctx)
-	if err != nil {
-		requireGatewayHostedHere(t, err)
-		t.Fatalf("GatewayStatus failed: %v", err)
-	}
-
-	originalModes := status.Modes
-
-	// Set a new mode
-	newModes := []string{"overlay"}
-	result, err := adapter.GatewaySetMode(ctx, GatewayModeOptions{Modes: newModes})
-	if err != nil {
-		requireGatewayHostedHere(t, err)
-		t.Fatalf("GatewaySetMode failed: %v", err)
-	}
-
-	if !result.Success {
-		t.Error("Expected Success to be true")
-	}
-
-	// Verify modes changed
-	status, err = adapter.GatewayStatus(ctx)
-	if err != nil {
-		t.Fatalf("GatewayStatus failed: %v", err)
-	}
-
-	if !containsMode(status.Modes, "overlay") {
-		t.Error("Expected modes to contain 'overlay'")
-	}
-
-	// Restore original modes
-	_, restoreErr := adapter.GatewaySetMode(ctx, GatewayModeOptions{Modes: originalModes})
-	if restoreErr != nil {
-		t.Logf("Warning: failed to restore original modes: %v", restoreErr)
-	}
+	result, err := adapter.GatewaySetMode(ctx, GatewayModeOptions{Modes: []string{"overlay"}})
+	requireNotConfiguredOnPlatformd(t, "GatewaySetMode", result, err)
 }
 
 func testGatewaySetModeInvalid(t *testing.T, ctx context.Context, adapter OverlayCommands) {
-	// Try to set invalid modes
-	_, err := adapter.GatewaySetMode(ctx, GatewayModeOptions{Modes: []string{"invalid-mode-xyz"}})
+	result, err := adapter.GatewaySetMode(ctx, GatewayModeOptions{Modes: []string{"invalid-mode-xyz"}})
 	if err == nil {
-		t.Log("Warning: GatewaySetMode with invalid mode did not return error")
+		t.Fatalf("GatewaySetMode with an undefined mode succeeded: %+v", result)
 	}
 }
 
@@ -601,135 +558,47 @@ func testBGPOperations(t *testing.T, ctx context.Context, adapter OverlayCommand
 
 func testBGPStatus(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	result, err := adapter.BGPStatus(ctx)
-	if err != nil {
-		requireGatewayHostedHere(t, err)
-		t.Fatalf("BGPStatus failed: %v", err)
-	}
-
-	// ASN should be non-zero if BGP is enabled
-	if result.Enabled && result.ASN == 0 {
-		t.Error("Expected non-zero ASN when BGP is enabled")
-	}
-
-	if result.RouterID == "" && result.Enabled {
-		t.Error("Expected non-empty RouterID when BGP is enabled")
-	}
+	requireNotConfiguredOnPlatformd(t, "BGPStatus", result, err)
 }
 
 func testBGPPeers(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	result, err := adapter.BGPPeers(ctx)
-	if err != nil {
-		requireGatewayHostedHere(t, err)
-		t.Fatalf("BGPPeers failed: %v", err)
-	}
-
-	if result.TotalCount < 0 {
-		t.Errorf("Expected non-negative TotalCount, got %d", result.TotalCount)
-	}
-
-	// Verify peer structure if any exist
-	for _, peer := range result.Peers {
-		if peer.Address == "" {
-			t.Error("Expected non-empty Address in peer")
-		}
-		if peer.RemoteASN == 0 {
-			t.Error("Expected non-zero RemoteASN in peer")
-		}
-	}
+	requireNotConfiguredOnPlatformd(t, "BGPPeers", result, err)
 }
 
 func testBGPPrefixes(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	result, err := adapter.BGPPrefixes(ctx)
-	if err != nil {
-		requireGatewayHostedHere(t, err)
-		t.Fatalf("BGPPrefixes failed: %v", err)
-	}
-
-	if result.TotalCount < 0 {
-		t.Errorf("Expected non-negative TotalCount, got %d", result.TotalCount)
-	}
-
-	// Verify prefix structure if any exist
-	for _, prefix := range result.Prefixes {
-		if prefix.Prefix == "" {
-			t.Error("Expected non-empty Prefix")
-		}
-	}
+	requireNotConfiguredOnPlatformd(t, "BGPPrefixes", result, err)
 }
 
 func testBGPAnnounceWithdraw(t *testing.T, ctx context.Context, adapter OverlayCommands) {
-	// Check if BGP is enabled first
-	status, err := adapter.BGPStatus(ctx)
-	if err != nil {
-		requireGatewayHostedHere(t, err)
-		t.Fatalf("BGPStatus failed: %v", err)
-	}
+	// A well-formed request passes validation and reaches the missing
+	// speaker. TEST-NET-1 (RFC 5737) never conflicts with real routing.
+	testPrefix := "192.0.2.0/24"
 
-	requireBGPEnabled(t, status)
-
-	// Use a test prefix that won't conflict with real routing
-	testPrefix := "192.0.2.0/24" // TEST-NET-1 (RFC 5737)
-	testNextHop := "10.0.0.1"
-
-	// Announce prefix
-	announceResult, err := adapter.BGPAnnounce(ctx, BGPAnnounceOptions{
+	announced, err := adapter.BGPAnnounce(ctx, BGPAnnounceOptions{
 		Prefix:  testPrefix,
-		NextHop: testNextHop,
+		NextHop: "10.0.0.1",
 	})
-	if err != nil {
-		requireGatewayHostedHere(t, err)
-		t.Fatalf("BGPAnnounce failed: %v", err)
-	}
+	requireNotConfiguredOnPlatformd(t, "BGPAnnounce", announced, err)
 
-	if !announceResult.Success {
-		t.Error("Expected Success to be true for announce")
-	}
-
-	// Verify prefix is announced
-	prefixes, err := adapter.BGPPrefixes(ctx)
-	if err != nil {
-		t.Fatalf("BGPPrefixes failed: %v", err)
-	}
-
-	found := false
-	for _, p := range prefixes.Prefixes {
-		if p.Prefix == testPrefix {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Log("Warning: announced prefix not found in prefix list")
-	}
-
-	// Withdraw prefix
-	withdrawResult, err := adapter.BGPWithdraw(ctx, testPrefix)
-	if err != nil {
-		t.Fatalf("BGPWithdraw failed: %v", err)
-	}
-
-	if !withdrawResult.Success {
-		t.Error("Expected Success to be true for withdraw")
-	}
+	withdrawn, err := adapter.BGPWithdraw(ctx, testPrefix)
+	requireNotConfiguredOnPlatformd(t, "BGPWithdraw", withdrawn, err)
 }
 
 func testBGPAnnounceInvalidPrefix(t *testing.T, ctx context.Context, adapter OverlayCommands) {
-	// Check if BGP is enabled first
-	status, err := adapter.BGPStatus(ctx)
-	if err != nil {
-		requireGatewayHostedHere(t, err)
-		t.Fatalf("BGPStatus failed: %v", err)
-	}
-
-	requireBGPEnabled(t, status)
-
-	// Try to announce an invalid prefix
-	_, err = adapter.BGPAnnounce(ctx, BGPAnnounceOptions{
+	// The write verbs validate their arguments before they look for a
+	// speaker (docs/bgp/api.md §2), so a malformed prefix is refused as
+	// invalid, never as "not configured".
+	result, err := adapter.BGPAnnounce(ctx, BGPAnnounceOptions{
 		Prefix:  "invalid-prefix",
 		NextHop: "10.0.0.1",
 	})
 	if err == nil {
-		t.Error("Expected error for invalid prefix")
+		t.Fatalf("BGPAnnounce with an invalid prefix succeeded: %+v", result)
+	}
+	if isNotConfiguredOnPlatformd(err) {
+		t.Fatalf("BGPAnnounce with an invalid prefix was refused as not configured, want an invalid-prefix refusal: %v", err)
 	}
 }
 
@@ -1203,42 +1072,36 @@ func TestOverlayStressOperations(t *testing.T) {
 // Helper Functions
 // =============================================================================
 
-// gatewayRemedy says what a gateway or BGP subtest needs from platformd.
-const gatewayRemedy = "platformd's GatewayService needs a gateway runtime and BGP speaker; " +
-	"the gateway runs in gatewayd and no production caller hands either to platformd (#65)"
-
-// requireGatewayHostedHere fails a gateway or BGP subtest with a
-// PrerequisiteError when, and only when, platformd refused it because this
-// node hosts no gateway runtime or BGP speaker. platformd's GatewayService
-// has no production caller that sets either (the gateway runs in gatewayd),
-// so these verbs answer "not configured" on every node: that is #65, an open
-// product gap, and the failure names it.
-//
-// It replaces a catch-all that skipped on any error containing "not
-// implemented", "not available", "unknown flag", a 404, a cancelled context
-// and more. That helper is how an adapter passing a flag the CLI does not
-// have (`--dns`) reported as skipped instead of failing (#730). Every other
-// error fails the subtest at its call site.
-func requireGatewayHostedHere(t *testing.T, err error) {
-	t.Helper()
-	msg := err.Error()
-	for _, refusal := range []string{
-		"gateway not configured on this node",     // gRPC, Unix, CLI
-		"BGP speaker not configured on this node", // gRPC, Unix, CLI
-		"gateway feature not configured",          // QUIC, REST
-	} {
-		if strings.Contains(msg, refusal) {
-			t.Fatal(&PrerequisiteError{Prerequisite: "a gateway runtime and BGP speaker in platformd", Remedy: gatewayRemedy, Err: err})
-		}
-	}
+// platformdNotConfiguredRefusals are the messages each transport carries for
+// a gateway or BGP verb on platformd, which hosts neither (#65).
+var platformdNotConfiguredRefusals = []string{
+	"gateway not configured on this node",     // gRPC, Unix, CLI, MCP
+	"BGP speaker not configured on this node", // gRPC, Unix, CLI, MCP
+	"gateway feature not configured",          // QUIC, REST
 }
 
-// requireBGPEnabled fails a BGP subtest that announces prefixes when the
-// speaker platformd reports is not enabled.
-func requireBGPEnabled(t *testing.T, status *BGPStatusResult) {
+// isNotConfiguredOnPlatformd reports whether err is the typed refusal of a
+// gateway or BGP verb on a node without a gateway runtime or BGP speaker.
+func isNotConfiguredOnPlatformd(err error) bool {
+	msg := err.Error()
+	for _, refusal := range platformdNotConfiguredRefusals {
+		if strings.Contains(msg, refusal) {
+			return true
+		}
+	}
+	return false
+}
+
+// requireNotConfiguredOnPlatformd fails unless the gateway or BGP verb op was
+// refused as not configured, the documented answer of platformd
+// (docs/bgp/api.md §2).
+func requireNotConfiguredOnPlatformd(t *testing.T, op string, result any, err error) {
 	t.Helper()
-	if !status.Enabled {
-		t.Fatal(&PrerequisiteError{Prerequisite: "an enabled BGP speaker", Remedy: gatewayRemedy})
+	if err == nil {
+		t.Fatalf("%s succeeded on platformd, which hosts no gateway runtime or BGP speaker (#65): %+v", op, result)
+	}
+	if !isNotConfiguredOnPlatformd(err) {
+		t.Fatalf("%s: want the not-configured refusal, got: %v", op, err)
 	}
 }
 
@@ -1274,14 +1137,4 @@ func nextTestPoolCIDR() netip.Prefix {
 func generateUniquePoolName() string {
 	now := time.Now()
 	return fmt.Sprintf("test-pool-%s-%09d", now.Format("20060102150405"), now.Nanosecond())
-}
-
-// containsMode checks if modes slice contains a specific mode.
-func containsMode(modes []string, mode string) bool {
-	for _, m := range modes {
-		if m == mode {
-			return true
-		}
-	}
-	return false
 }

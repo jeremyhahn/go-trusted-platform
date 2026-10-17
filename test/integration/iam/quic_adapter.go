@@ -96,6 +96,19 @@ func NewQUICAdapter() *QUICAdapter {
 	}
 }
 
+// NewTenantQUICAdapter is NewQUICAdapter acting as the caller bound to
+// helpers.ForeignTenantID: the tenant credential alone identifies it, so it
+// carries no admin token.
+func NewTenantQUICAdapter() *QUICAdapter {
+	return &QUICAdapter{
+		endpoint:  GetQUICEndpoint(),
+		tlsConfig: helpers.TenantQUICTLSConfig(),
+		quicConfig: &quicgo.Config{
+			EnableDatagrams: true,
+		},
+	}
+}
+
 // Setup prepares the adapter for testing.
 func (a *QUICAdapter) Setup(ctx context.Context) error {
 	conn, err := quicgo.DialAddr(ctx, a.endpoint, a.tlsConfig, a.quicConfig)

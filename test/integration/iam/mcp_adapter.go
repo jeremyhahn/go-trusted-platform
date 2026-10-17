@@ -83,6 +83,15 @@ func NewMCPAdapter() *MCPAdapter {
 	}
 }
 
+// NewTenantMCPAdapter is NewMCPAdapter acting as the caller bound to
+// helpers.ForeignTenantID.
+func NewTenantMCPAdapter() *MCPAdapter {
+	return &MCPAdapter{
+		endpoint: GetMCPEndpoint(),
+		client:   helpers.NewTenantHTTPClient(30 * time.Second),
+	}
+}
+
 // Setup prepares the adapter for testing
 func (a *MCPAdapter) Setup(ctx context.Context) error {
 	// Verify endpoint is reachable with initialize request

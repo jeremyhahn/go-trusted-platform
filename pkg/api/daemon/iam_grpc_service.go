@@ -97,6 +97,7 @@ import (
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"google.golang.org/grpc/codes"
@@ -137,6 +138,10 @@ type IAMGRPCService struct {
 	// tokens answers the token rpcs; nil refuses verification with
 	// ErrIAMTokenVerifierNotConfigured.
 	tokens *IAMTokenService
+	// systemTenantID is the platform's operating tenant, the only tenant
+	// admitted to the cross-tenant rpcs (CreateTenant, ListTenants); empty
+	// admits no tenant-bound caller to them.
+	systemTenantID string
 }
 
 // NewIAMGRPCService creates a new IAM gRPC service instance.
@@ -195,7 +200,10 @@ func (s *IAMGRPCService) CreateUser(ctx context.Context, req *platformv1.CreateI
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
 
+	// The request carries no username; the SDK refuses an empty one, so it
+	// is derived from the email exactly as the REST handler derives it.
 	sdkReq := &sdkiam.CreateUserRequest{
+		Username:    restiam.UsernameFromEmail(req.GetEmail()),
 		Email:       req.GetEmail(),
 		DisplayName: req.GetName(),
 		Roles:       req.GetRoles(),
@@ -1072,6 +1080,12 @@ func (s *IAMGRPCService) SetTokenService(tokens *IAMTokenService) {
 	s.tokens = tokens
 }
 
+// SetSystemTenant sets the platform's operating (system) tenant, the one
+// tenant allowed to create and list IAM tenants.
+func (s *IAMGRPCService) SetSystemTenant(tenantID string) {
+	s.systemTenantID = tenantID
+}
+
 // CreateToken refuses token issuance with codes.Unimplemented: the SDK IAM
 // client cannot issue tokens; platform tokens come from the broker's OIDC flows.
 func (s *IAMGRPCService) CreateToken(ctx context.Context, req *platformv1.CreateIAMTokenRequest) (*platformv1.CreateIAMTokenResponse, error) {
@@ -1142,6 +1156,9 @@ func (s *IAMGRPCService) CreateTenant(ctx context.Context, req *platformv1.Creat
 	if req.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrIAMMissingParameter{Parameter: "id"}.Error())
 	}
+	if err := authorizeSystemCaller(ctx, s.systemTenantID, "CreateTenant"); err != nil {
+		return nil, err
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)
 	defer cancel()
@@ -1163,6 +1180,17 @@ func (s *IAMGRPCService) CreateTenant(ctx context.Context, req *platformv1.Creat
 	resp, err := s.iamClient.Tenant().Create(ctx, sdkReq)
 	if err != nil {
 		s.logger.Error("failed to create tenant", "error", err, "tenant_id", req.GetId())
+		return nil, s.wrapError(err)
+	}
+
+	// Every IAM tenant carries its default roles (docs/iam/architecture.md):
+	// a tenant without them cannot hold a user. A failure rolls the tenant
+	// back, as tenant.Manager.CreateTenant does.
+	if _, err := s.iamClient.Role().Reconcile(ctx, req.GetId()); err != nil {
+		s.logger.Error("failed to provision default IAM roles", "error", err, "tenant_id", req.GetId())
+		if delErr := s.iamClient.Tenant().Delete(ctx, req.GetId()); delErr != nil {
+			s.logger.Error("failed to roll back IAM tenant", "error", delErr, "tenant_id", req.GetId())
+		}
 		return nil, s.wrapError(err)
 	}
 
@@ -1211,6 +1239,9 @@ func (s *IAMGRPCService) GetTenant(ctx context.Context, req *platformv1.GetIAMTe
 func (s *IAMGRPCService) ListTenants(ctx context.Context, req *platformv1.ListIAMTenantsRequest) (*platformv1.ListIAMTenantsResponse, error) {
 	if s.iamClient == nil {
 		return nil, ErrIAMServiceNotAvailable{}
+	}
+	if err := authorizeSystemCaller(ctx, s.systemTenantID, "ListTenants"); err != nil {
+		return nil, err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, iamRequestTimeout)

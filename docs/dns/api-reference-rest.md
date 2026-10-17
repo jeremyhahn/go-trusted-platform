@@ -1,7 +1,8 @@
 # DNS REST API Reference
 
-> **Status: REFERENCE** · Last verified: 2026-10-15
-> The `/api/v1/dns` routes as served by `pkg/webservice/v1/rest/dns/`. The
+> **Status: REFERENCE** · Last verified: 2026-10-17
+> The `/api/v1/dns` routes as served by `pkg/webservice/v1/rest/dns/`, on the
+> web services listener and on the daemon REST listener alike. The
 > cross-transport matrix and authorization are [api.md](api.md).
 
 | Property | Value |
@@ -9,7 +10,7 @@
 | Base Path | `/api/v1/dns` |
 | Port | 8443 |
 | Content-Type | `application/json` |
-| Authorization | authenticated caller holding the `admin` role, on every route |
+| Authorization | web services listener: the `admin` role, on every route; daemon listener: the route's `dns:read`, `dns:write` or `dns:delete` scope ([api.md](api.md) §4) |
 
 Every response is the platform envelope; the bodies below are its `payload`:
 
@@ -91,8 +92,9 @@ GET /api/v1/dns/zones?internal=true
 }
 ```
 
-`limit` (default 50, at most 1000) and `offset` are echoed back but not
-applied: every matching zone is returned.
+`limit` (default 50, at most 1000) and `offset` select the page when the
+request sends either one; a request that sends neither gets every matching
+zone. `total` always counts every matching zone.
 
 ### GetZone, UpdateZone, DeleteZone
 
@@ -134,12 +136,17 @@ The body names the type and carries the record under that type's key:
 ```
 
 Accepted types: `A`, `AAAA`, `CNAME`, `MX`, `NS`, `TXT`, `SRV`, `CAA`, `TLSA`.
-The response is the updated zone.
+A TLSA `usage` outside 0-3, the certificate usages RFC 6698 §2.1.1 defines,
+is a 400 and nothing is stored. The response is the updated zone.
 
 ### ListRecords, GetRecord, DeleteRecord
 
-`GET /api/v1/dns/zones/{zone}/records` returns `{"records": [ ... ]}`, each
-entry in the AddRecord shape; `?type=A` filters.
+`GET /api/v1/dns/zones/{zone}/records` returns
+`{"total": 3, "limit": 50, "offset": 0, "records": [ ... ]}`, each entry in
+the AddRecord shape; `?type=A` filters, and `limit` and `offset` page the
+result the same way as ListZones. `total` always counts every record that
+matches the filter, whatever page was asked for, so a caller has more to read
+while `offset` plus the page length is below it.
 
 `GET /api/v1/dns/zones/{zone}/records/{type}/{name}` returns that one record,
 or 404 when the zone holds no record of that type and name.
@@ -194,7 +201,7 @@ status and `error` set to the message.
 
 | Status | Cause |
 |--------|-------|
-| 400 | Malformed body, missing zone name, record type, record name, `fqdn` or `ip`, or an unsupported record type |
+| 400 | Malformed body, missing zone name, record type, record name, `fqdn` or `ip`, an unsupported record type, or a TLSA usage outside 0-3 |
 | 401 | Not authenticated |
 | 403 | Caller lacks the `admin` role |
 | 404 | Unknown zone or record |

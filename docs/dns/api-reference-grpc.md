@@ -57,11 +57,18 @@ of type `RECORD_TYPE_TLSA`.
 | `AddRecord` | `zone_name`, `record` | `status`, `zone` |
 | `DeleteRecord` | `zone_name`, `type`, `name` | `status`, `zone` |
 | `UpdateRecord` | `zone_name`, `old_record`, `new_record` | `status`, `zone` |
-| `ListRecords` | `zone_name`, `type` | `records` |
+| `ListRecords` | `zone_name`, `type`, optional `limit`, `offset` | `records`, `total`, `limit`, `offset` |
 | `SignZone` | `zone_name` | `status`, `zone` |
 | `GetDNSSECStatus` | `zone_name` | `status` (`enabled`, `zone_signed`, `keys`, `ds_records`, `algorithm`, `key_size`) |
 | `Resolve` | `fqdn`, `type` | `records`, `authoritative` |
 | `Register` | `fqdn`, `ip` | `status`, `zone` |
+
+`ListRecords` pages as REST's `?limit` and `?offset` do (`dns.NewPage`): with
+neither field set the whole list comes back; with either set, `limit` records
+(50 when 0, at most 1000) from `offset`. `total` counts every record matching
+`type`, whatever page was asked for, so a caller has more to read while
+`offset` plus the page length is below it. Unix, QUIC and MCP carry the same
+fields.
 
 ## Records
 

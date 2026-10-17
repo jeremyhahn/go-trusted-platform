@@ -218,6 +218,10 @@ func toolPermissionCatalog() map[string]string {
 	permissions["profile_assign_to_device"] = "device:write"
 	permissions["profile_unassign_from_device"] = "device:write"
 	permissions["device_template_create"] = "device:write"
+	permissions["device_template_get"] = "device:read"
+	permissions["device_template_list"] = "device:read"
+	permissions["device_template_update"] = "device:write"
+	permissions["device_template_delete"] = "device:delete"
 	permissions["profile_create_from_template"] = "device:write"
 
 	// SDN tools
@@ -770,7 +774,7 @@ func (c *AuthorizationChecker) AuthorizeTool(ctx context.Context, toolName strin
 	// request, as on REST, gRPC and QUIC. A presented token never takes this
 	// path: it is validated by the token backend below.
 	if token == "" && c.peerAuthenticator != nil {
-		return c.authorizePeer(ctx, permission)
+		return c.authorizePeer(ctx, toolName, permission)
 	}
 
 	// With no authorization backend there is nothing that can grant the

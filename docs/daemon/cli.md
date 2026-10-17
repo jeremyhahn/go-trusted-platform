@@ -167,8 +167,9 @@ contexts:
 `local` also accepts `grpc_addr`, `quicbaas_addr` and `quicbaas_transport`;
 `remote` also accepts `protocol`, `quicbaas_addr` and `quicbaas_transport`.
 
-**The `context` verbs always write `~/.platformctl/config.yaml`,** whatever
-`--config` says — see §4.6.
+**The `context` verbs write the file the configuration was read from:**
+`--config` / `PLATFORMCTL_CONFIG` when given, else `~/.platformctl/config.yaml`.
+When that file does not exist yet, the first write creates it — see §4.6.
 
 ---
 
@@ -280,6 +281,12 @@ Start, stop and inspect the daemon's services.
 `<service-type>` is one of `tpm`, `sdn`, `compute`, `dns`, `acme`,
 `webservice` (alias `web`), `attestation`.
 
+With `-o json` (or `yaml`), `service list` prints a bare array of services and
+`service status` prints one bare service object, each with the fields `name`,
+`type`, `status` (`RUNNING`, `STOPPED`, `STARTING`, `STOPPING`, `ERROR`,
+`UNKNOWN`), `health` (`HEALTHY`, `DEGRADED`, `UNHEALTHY`, `UNKNOWN`),
+`uptime_seconds` and `version`.
+
 `start`, `stop` and `restart` are refused for every one of them (#317): the
 process owns each service, so the daemon answers `service <name> cannot be
 started or stopped at runtime: <reason>`, changes nothing, and the command
@@ -348,9 +355,10 @@ Errors: `--server is required for remote contexts`;
 `invalid context type "<t>" (must be 'local', 'remote', or 'embedded')`; an
 unknown `--protocol`.
 
-**Known defects.** The writing verbs (`add`, `use`, `delete`) always save to
-`~/.platformctl/config.yaml` and ignore `--config`. `list` and `current` always
-print a table and ignore `-o`.
+The writing verbs (`add`, `use`, `delete`) save to the config file they read
+(§2.4), so `--config` selects the file they change.
+
+**Known defect.** `list` and `current` always print a table and ignore `-o`.
 
 - **Exit:** 0; 1 on any error above.
 

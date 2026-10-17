@@ -138,28 +138,29 @@ func (a *RESTAdapter) doRequest(ctx context.Context, method, path string, body i
 	return unwrapPayload(method+" "+path, respBody)
 }
 
-// restEnvelope is the response envelope every device, profile, template
-// and attestation route answers inside (pkg/webservice/v1/response). The
-// resource the caller asked for is its payload.
-type restEnvelope struct {
-	Payload json.RawMessage `json:"payload"`
-}
-
-// unwrapPayload returns the payload of the daemon's response envelope. An
-// empty body carries no envelope and yields no payload.
+// unwrapPayload returns the resource a device route answered with: the
+// payload of the webservice envelope (pkg/webservice/v1/response), or the
+// daemon's bare object. An empty body yields no payload.
 func unwrapPayload(operation string, body []byte) ([]byte, error) {
 	if len(bytes.TrimSpace(body)) == 0 {
 		return nil, nil
 	}
-	var envelope restEnvelope
-	if err := json.Unmarshal(body, &envelope); err != nil {
+	// Two listeners serve the device routes (docs/device/api.md §2.2): the
+	// webservice wraps every answer in {code, success, payload}, while the
+	// daemon REST listener the integration platformd runs answers with the
+	// bare object. Only an object carrying a payload key is unwrapped.
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
 		return nil, &RESTAdapterError{
 			Operation: operation,
-			Message:   "failed to parse response envelope: " + err.Error(),
+			Message:   "failed to parse response: " + err.Error(),
 			Body:      string(body),
 		}
 	}
-	return envelope.Payload, nil
+	if payload, ok := fields["payload"]; ok {
+		return payload, nil
+	}
+	return body, nil
 }
 
 // decodePayload decodes an unwrapped payload into out.

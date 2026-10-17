@@ -211,6 +211,22 @@ func TestUnixCredentialsFromContext_NotFound(t *testing.T) {
 	}
 }
 
+func TestIsCertificatePrincipal_Marked(t *testing.T) {
+	ctx := ContextWithCertificatePrincipal(context.Background())
+	if !IsCertificatePrincipal(ctx) {
+		t.Error("a marked context does not report a certificate principal")
+	}
+}
+
+func TestIsCertificatePrincipal_Unmarked(t *testing.T) {
+	// Unix peer credentials are a different credential: they do not mark
+	// the principal as certificate-authenticated.
+	ctx := ContextWithUnixCredentials(context.Background(), UnixCredentials{UID: 0})
+	if IsCertificatePrincipal(ctx) {
+		t.Error("an unmarked context reports a certificate principal")
+	}
+}
+
 func TestMustUnixCredentialsFromContext_Success(t *testing.T) {
 	creds := UnixCredentials{PID: 1234, UID: 1000, GID: 100}
 	ctx := ContextWithUnixCredentials(context.Background(), creds)

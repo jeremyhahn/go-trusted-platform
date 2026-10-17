@@ -181,25 +181,33 @@ func (app *App) prepareOwnerHierarchy(soPIN xkmssdk.Password) (bool, error) {
 }
 
 // verifyOwnerAuth authorizes the owner hierarchy with the SO PIN in a
-// TPM2_CreatePrimary (TPM 2.0 Part 3 §24.1) and flushes the transient key.
-// Only the lockout hierarchy is subject to dictionary-attack protection, so
-// a wrong PIN costs no lockout.
+// TPM2_PolicySecret (TPM 2.0 Part 3 §23.4) against a policy session it
+// starts and flushes. The TPM checks the authHandle's authValue before the
+// command runs, and the command creates no object, so the probe needs no key
+// algorithm: an RSA-only or ECC-only TPM answers it alike. Only the lockout
+// hierarchy is subject to dictionary-attack protection, so a wrong PIN costs
+// no lockout.
 func verifyOwnerAuth(tpm transport.TPM, soPIN xkmssdk.Password) error {
-	rsp, err := libtpm2.CreatePrimary{
-		PrimaryHandle: libtpm2.AuthHandle{
+	session, closeSession, err := libtpm2.PolicySession(tpm, libtpm2.TPMAlgSHA256, 16)
+	if err != nil {
+		return &OwnerAuthProbeError{Cause: err}
+	}
+	_, err = libtpm2.PolicySecret{
+		AuthHandle: libtpm2.AuthHandle{
 			Handle: libtpm2.TPMRHOwner,
 			Auth:   libtpm2.PasswordAuth(soPIN.Bytes()),
 		},
-		InPublic: libtpm2.New2B(libtpm2.ECCSRKTemplate),
+		PolicySession: session.Handle(),
 	}.Execute(tpm)
+	closeErr := closeSession()
 	if err != nil {
 		if errors.Is(err, libtpm2.TPMRCBadAuth) || errors.Is(err, libtpm2.TPMRCAuthFail) {
 			return &OwnerAuthRejectedError{Cause: err}
 		}
 		return &OwnerAuthProbeError{Cause: err}
 	}
-	if _, err := (libtpm2.FlushContext{FlushHandle: rsp.ObjectHandle}).Execute(tpm); err != nil {
-		return &OwnerAuthProbeError{Cause: err}
+	if closeErr != nil {
+		return &OwnerAuthProbeError{Cause: closeErr}
 	}
 	return nil
 }

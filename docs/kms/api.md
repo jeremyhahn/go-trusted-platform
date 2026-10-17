@@ -56,6 +56,30 @@ Key **revocation, metadata, policy and the algorithm list** have no RPC on the
 platform `KeyManagementService`; gRPC serves them through
 `quicbaas.kms.v1.KeyManagement`.
 
+`GenerateKey` on every transport: the request's `name` is the key ID.
+`key_spec.exportable` and `key_spec.deletion_protection` are set at generation;
+a delete of a deletion-protected key is refused with FailedPrecondition.
+`description` and `tags` are recorded as key metadata right after the generate,
+and the reply's `metadata` is what the KMS recorded, read back, never an echo
+of the request. `owner` cannot be set: the SDK `GenerateKeyRequest` and
+`UpdateKeyMetadataRequest` have no owner field (go-quicbaas
+`sdk/go@v0.12.0-alpha` `client/kms/client.go:100` and `:431`), so the reply
+carries the owner the KMS recorded. A key whose metadata cannot be recorded
+fails the request with the metadata error's class; the key itself exists.
+
+That holds in the system scope: a caller of the platform system tenant, or an
+unbound caller. A caller of any other tenant generates in that tenant's key
+scope, where the reply's `metadata` is only what the generate response carries
+(key ID, algorithm, version, `exportable`, `deletion_protection`) and no
+metadata call is made. A tenant-scope request carrying `description` or `tags`
+is refused with `FailedPrecondition` on every transport before any key is
+generated. SDK gap (go-quicbaas `v0.12.0-alpha`): `GenerateKey` stores a
+tenant key as `tenant/<tenant>/<name>` (`pkg/service/kms.go:446`), but
+`GetKeyMetadata` (`:1266`) and `UpdateKeyMetadata` (`:1302`) look the name up
+unscoped, so they miss the key or reach a same-named system key; and the
+tenant setter they read, `iam.ContextWithTenant`, is not re-exported under
+`quicbaas/sdk/go` (`sdk/go/transport.ContextWithTenant` sets a different key).
+
 `POST /api/v1/kms/keys` reads a flat body: `name`, `algorithm` as a name
 (`AES-256-GCM`, `CHACHA20-POLY1305`, `RSA-2048`, `RSA-4096`, `ECDSA-P256`,
 `ECDSA-P384`, `ED25519`; underscores are accepted for dashes) and `usage` as

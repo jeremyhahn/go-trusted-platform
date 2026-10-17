@@ -12,7 +12,9 @@
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
 // Package dns provides integration test adapters for DNS services.
-// This file implements the DNSCommands interface using HTTP/REST.
+// This file implements the DNSCommands interface over the daemon REST
+// listener, whose DNS routes live under /api/v1/dns
+// (pkg/webservice/v1/rest/dns/router.go).
 
 //go:build integration
 
@@ -22,101 +24,96 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
-// =============================================================================
-// Error Types
-// =============================================================================
+// restDNSPrefix is where the daemon REST listener mounts the DNS routes.
+const restDNSPrefix = "/api/v1/dns"
 
-// ErrRESTConnectionFailed indicates the REST API connection failed.
+// restRequestTimeout bounds one REST round trip.
+const restRequestTimeout = 30 * time.Second
+
+// ErrRESTConnectionFailed is returned when the REST endpoint cannot be reached.
 type ErrRESTConnectionFailed struct {
 	URL string
 	Err error
 }
 
 func (e ErrRESTConnectionFailed) Error() string {
-	return fmt.Sprintf("REST API connection failed to %s: %v", e.URL, e.Err)
+	return fmt.Sprintf("REST connection to %s failed: %v", e.URL, e.Err)
 }
 
-func (e ErrRESTConnectionFailed) Unwrap() error {
-	return e.Err
-}
+func (e ErrRESTConnectionFailed) Unwrap() error { return e.Err }
 
-// ErrRESTRequestFailed indicates the HTTP request failed.
+// ErrRESTRequestFailed is returned when a request cannot be built or a
+// response cannot be read or decoded.
 type ErrRESTRequestFailed struct {
+	Op  string
 	Err error
 }
 
 func (e ErrRESTRequestFailed) Error() string {
-	return fmt.Sprintf("HTTP request failed: %v", e.Err)
+	return fmt.Sprintf("REST %s failed: %v", e.Op, e.Err)
 }
 
-func (e ErrRESTRequestFailed) Unwrap() error {
-	return e.Err
-}
+func (e ErrRESTRequestFailed) Unwrap() error { return e.Err }
 
-// ErrRESTAPIError indicates an error response from the REST API.
+// ErrRESTAPIError is returned when the server answers with a 4xx or 5xx status.
 type ErrRESTAPIError struct {
 	StatusCode int
 	Message    string
 }
 
 func (e ErrRESTAPIError) Error() string {
-	return fmt.Sprintf("REST API error (status %d): %s", e.StatusCode, e.Message)
+	return fmt.Sprintf("REST API error (%d): %s", e.StatusCode, e.Message)
 }
 
-// =============================================================================
-// REST Adapter Implementation
-// =============================================================================
-
-// RESTAdapter implements DNSCommands using HTTP/REST calls to platformd.
+// RESTAdapter implements DNSCommands against the daemon REST listener,
+// authenticating with the runner's mTLS client certificate.
 type RESTAdapter struct {
 	baseURL    string
 	httpClient *http.Client
 }
 
-// NewRESTAdapter creates a new REST adapter for integration testing.
+// NewRESTAdapter returns an adapter for PLATFORM_API_ENDPOINT. The runner
+// exports the endpoint with its scheme; a bare host:port gets https://,
+// because platformd serves REST over TLS only.
 func NewRESTAdapter() *RESTAdapter {
 	endpoint := os.Getenv(EnvPlatformAPIEndpoint)
 	if endpoint == "" {
 		endpoint = DefaultPlatformAPIEndpoint
 	}
+	return &RESTAdapter{baseURL: restBaseURL(endpoint) + restDNSPrefix}
+}
 
-	return &RESTAdapter{
-		baseURL: "http://" + endpoint,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+// restBaseURL keeps an explicit scheme and gives a bare host:port https://.
+func restBaseURL(endpoint string) string {
+	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
+		return strings.TrimSuffix(endpoint, "/")
 	}
+	return "https://" + endpoint
 }
 
-// Name returns the protocol adapter identifier.
-func (r *RESTAdapter) Name() string {
-	return "REST"
-}
+// Name returns the adapter name.
+func (r *RESTAdapter) Name() string { return "REST" }
 
-// Setup initializes the REST client.
+// Setup builds the mTLS client from the runner's client certificate and key.
 func (r *RESTAdapter) Setup(ctx context.Context) error {
-	// Verify connectivity by checking health endpoint
-	_, statusCode, err := r.doRequest(ctx, http.MethodGet, "/api/v1/dns/health", nil)
-	if err != nil {
-		return ErrRESTConnectionFailed{URL: r.baseURL, Err: err}
-	}
-	if statusCode != http.StatusOK {
-		return ErrRESTAPIError{StatusCode: statusCode, Message: "health check failed"}
-	}
-
+	r.httpClient = helpers.NewHTTPClient(restRequestTimeout)
 	return nil
 }
 
-// Teardown cleans up REST client resources.
+// Teardown releases idle connections.
 func (r *RESTAdapter) Teardown() error {
 	if r.httpClient != nil {
 		r.httpClient.CloseIdleConnections()
@@ -124,685 +121,604 @@ func (r *RESTAdapter) Teardown() error {
 	return nil
 }
 
-// =============================================================================
-// HTTP Request Helpers
-// =============================================================================
+// restEnvelope is the daemon's response envelope (sdk/go/wire/restwire).
+type restEnvelope struct {
+	Code    int             `json:"code"`
+	Error   string          `json:"error"`
+	Success bool            `json:"success"`
+	Payload json.RawMessage `json:"payload"`
+}
 
-// doRequest performs an HTTP request with JSON serialization.
-func (r *RESTAdapter) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, int, error) {
-	var reqBody io.Reader
+// do sends one request and decodes the envelope payload into out.
+func (r *RESTAdapter) do(ctx context.Context, method, path string, query url.Values, body, out any) error {
+	reqURL := r.baseURL + path
+	if len(query) > 0 {
+		reqURL += "?" + query.Encode()
+	}
+
+	var reader io.Reader
 	if body != nil {
-		jsonBytes, err := json.Marshal(body)
+		encoded, err := json.Marshal(body)
 		if err != nil {
-			return nil, 0, ErrRESTRequestFailed{Err: fmt.Errorf("failed to marshal request: %w", err)}
+			return ErrRESTRequestFailed{Op: "encode " + method + " " + path, Err: err}
 		}
-		reqBody = bytes.NewReader(jsonBytes)
+		reader = bytes.NewReader(encoded)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, r.baseURL+path, reqBody)
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, reader)
 	if err != nil {
-		return nil, 0, ErrRESTRequestFailed{Err: fmt.Errorf("failed to create request: %w", err)}
+		return ErrRESTRequestFailed{Op: "build " + method + " " + path, Err: err}
 	}
-
-	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 
 	resp, err := r.httpClient.Do(req)
 	if err != nil {
-		return nil, 0, ErrRESTConnectionFailed{URL: r.baseURL, Err: err}
+		return ErrRESTConnectionFailed{URL: reqURL, Err: err}
 	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, ErrRESTRequestFailed{Err: fmt.Errorf("failed to read response: %w", err)}
+	raw, readErr := io.ReadAll(resp.Body)
+	closeErr := resp.Body.Close()
+	if readErr != nil {
+		return ErrRESTRequestFailed{Op: "read " + method + " " + path, Err: readErr}
 	}
-
-	return respBody, resp.StatusCode, nil
-}
-
-// handleResponse processes the HTTP response and unmarshals into the target.
-func (r *RESTAdapter) handleResponse(respBody []byte, statusCode int, target interface{}) error {
-	if statusCode >= 400 {
-		return r.parseErrorResponse(respBody, statusCode)
+	if closeErr != nil {
+		return ErrRESTRequestFailed{Op: "close " + method + " " + path, Err: closeErr}
 	}
 
-	if target != nil && len(respBody) > 0 {
-		if err := json.Unmarshal(respBody, target); err != nil {
-			return ErrRESTRequestFailed{Err: fmt.Errorf("failed to unmarshal response: %w", err)}
+	var env restEnvelope
+	decodeErr := json.Unmarshal(raw, &env)
+	if resp.StatusCode >= http.StatusBadRequest {
+		message := strings.TrimSpace(string(raw))
+		if decodeErr == nil && env.Error != "" {
+			message = env.Error
 		}
+		return ErrRESTAPIError{StatusCode: resp.StatusCode, Message: message}
 	}
-
+	if decodeErr != nil {
+		return ErrRESTRequestFailed{Op: "decode " + method + " " + path, Err: decodeErr}
+	}
+	if out == nil {
+		return nil
+	}
+	if err := json.Unmarshal(env.Payload, out); err != nil {
+		return ErrRESTRequestFailed{Op: "decode payload of " + method + " " + path, Err: err}
+	}
 	return nil
 }
 
-// parseErrorResponse extracts error information from error responses.
-func (r *RESTAdapter) parseErrorResponse(respBody []byte, statusCode int) error {
-	var errResp struct {
-		Error   string `json:"error"`
-		Message string `json:"message"`
-	}
-
-	if err := json.Unmarshal(respBody, &errResp); err != nil {
-		return ErrRESTAPIError{StatusCode: statusCode, Message: string(respBody)}
-	}
-
-	msg := errResp.Error
-	if msg == "" {
-		msg = errResp.Message
-	}
-
-	return ErrRESTAPIError{StatusCode: statusCode, Message: msg}
+func zonePath(zoneName string) string {
+	return "/zones/" + url.PathEscape(zoneName)
 }
 
-// =============================================================================
-// Zone Management Commands
-// =============================================================================
+func recordPath(zoneName, recordType, name string) string {
+	return zonePath(zoneName) + "/records/" + url.PathEscape(recordType) + "/" + url.PathEscape(name)
+}
 
-// CreateZone creates a new DNS zone via REST API.
-func (r *RESTAdapter) CreateZone(ctx context.Context, opts CreateZoneOptions) (*CreateZoneResult, error) {
-	reqBody := map[string]interface{}{
-		"name": opts.Name,
-		"ttl":  opts.TTL,
-	}
-
-	if opts.Description != "" {
-		reqBody["description"] = opts.Description
-	}
-	if opts.Internal {
-		reqBody["internal"] = true
-	}
-	if opts.SOA != nil {
-		reqBody["soa"] = map[string]interface{}{
-			"mname":       opts.SOA.MName,
-			"rname":       opts.SOA.RName,
-			"serial":      opts.SOA.Serial,
-			"refresh":     opts.SOA.Refresh,
-			"retry":       opts.SOA.Retry,
-			"expire":      opts.SOA.Expire,
-			"minimum_ttl": opts.SOA.MinimumTTL,
+// pageQuery adds limit and offset; the cursor is the offset the previous
+// page returned.
+func pageQuery(query url.Values, limit int32, cursor string) (int, error) {
+	offset := 0
+	if cursor != "" {
+		parsed, err := strconv.Atoi(cursor)
+		if err != nil {
+			return 0, ErrRESTRequestFailed{Op: "parse cursor " + cursor, Err: err}
 		}
+		offset = parsed
+		query.Set("offset", cursor)
 	}
+	if limit > 0 {
+		query.Set("limit", strconv.Itoa(int(limit)))
+	}
+	return offset, nil
+}
 
-	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, "/api/v1/dns/zones", reqBody)
+// parseRESTTime parses the server's RFC 3339 timestamps; an absent one is
+// the zero time.
+func parseRESTTime(value string) (time.Time, error) {
+	if value == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
 	if err != nil {
-		return nil, err
+		return time.Time{}, ErrRESTRequestFailed{Op: "parse time " + value, Err: err}
 	}
-
-	var resp restCreateZoneResponse
-	if err := r.handleResponse(respBody, statusCode, &resp); err != nil {
-		return nil, err
-	}
-
-	return resp.toResult(), nil
+	return parsed, nil
 }
 
-// GetZone retrieves zone information via REST API.
-func (r *RESTAdapter) GetZone(ctx context.Context, zoneName string) (*GetZoneResult, error) {
-	path := "/api/v1/dns/zones/" + url.PathEscape(zoneName)
+// Wire types (pkg/webservice/v1/rest/dns/types.go).
 
-	respBody, statusCode, err := r.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp restGetZoneResponse
-	if err := r.handleResponse(respBody, statusCode, &resp); err != nil {
-		return nil, err
-	}
-
-	return resp.toResult(), nil
-}
-
-// UpdateZone updates a zone via REST API.
-func (r *RESTAdapter) UpdateZone(ctx context.Context, zoneName string, opts UpdateZoneOptions) (*UpdateZoneResult, error) {
-	path := "/api/v1/dns/zones/" + url.PathEscape(zoneName)
-
-	reqBody := map[string]interface{}{}
-	if opts.TTL > 0 {
-		reqBody["ttl"] = opts.TTL
-	}
-	if opts.Description != "" {
-		reqBody["description"] = opts.Description
-	}
-
-	respBody, statusCode, err := r.doRequest(ctx, http.MethodPut, path, reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp restUpdateZoneResponse
-	if err := r.handleResponse(respBody, statusCode, &resp); err != nil {
-		return nil, err
-	}
-
-	return resp.toResult(), nil
-}
-
-// DeleteZone deletes a zone via REST API.
-func (r *RESTAdapter) DeleteZone(ctx context.Context, zoneName string) (*DeleteZoneResult, error) {
-	path := "/api/v1/dns/zones/" + url.PathEscape(zoneName)
-
-	respBody, statusCode, err := r.doRequest(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp restDeleteZoneResponse
-	if err := r.handleResponse(respBody, statusCode, &resp); err != nil {
-		return nil, err
-	}
-
-	return resp.toResult(), nil
-}
-
-// ListZones lists zones via REST API.
-func (r *RESTAdapter) ListZones(ctx context.Context, opts ListZonesOptions) (*ListZonesResult, error) {
-	params := url.Values{}
-	if opts.Limit > 0 {
-		params.Set("limit", strconv.FormatInt(int64(opts.Limit), 10))
-	}
-	if opts.Cursor != "" {
-		params.Set("cursor", opts.Cursor)
-	}
-	if opts.Internal != nil {
-		params.Set("internal", strconv.FormatBool(*opts.Internal))
-	}
-
-	path := "/api/v1/dns/zones"
-	if len(params) > 0 {
-		path += "?" + params.Encode()
-	}
-
-	respBody, statusCode, err := r.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp restListZonesResponse
-	if err := r.handleResponse(respBody, statusCode, &resp); err != nil {
-		return nil, err
-	}
-
-	return resp.toResult(), nil
-}
-
-// =============================================================================
-// Record Management Commands
-// =============================================================================
-
-// AddRecord adds a DNS record via REST API.
-func (r *RESTAdapter) AddRecord(ctx context.Context, opts AddRecordOptions) (*AddRecordResult, error) {
-	path := "/api/v1/dns/zones/" + url.PathEscape(opts.ZoneName) + "/records"
-
-	reqBody := map[string]interface{}{
-		"name":        opts.Name,
-		"record_type": opts.RecordType,
-		"value":       opts.Value,
-	}
-
-	if opts.TTL > 0 {
-		reqBody["ttl"] = opts.TTL
-	}
-	if opts.Priority > 0 {
-		reqBody["priority"] = opts.Priority
-	}
-	if opts.Weight > 0 {
-		reqBody["weight"] = opts.Weight
-	}
-	if opts.Port > 0 {
-		reqBody["port"] = opts.Port
-	}
-
-	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, path, reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp restAddRecordResponse
-	if err := r.handleResponse(respBody, statusCode, &resp); err != nil {
-		return nil, err
-	}
-
-	return resp.toResult(), nil
-}
-
-// GetRecord retrieves a record via REST API.
-func (r *RESTAdapter) GetRecord(ctx context.Context, name string, recordType string) (*GetRecordResult, error) {
-	path := "/api/v1/dns/records/" + url.PathEscape(name) + "/" + url.PathEscape(recordType)
-
-	respBody, statusCode, err := r.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp restGetRecordResponse
-	if err := r.handleResponse(respBody, statusCode, &resp); err != nil {
-		return nil, err
-	}
-
-	return resp.toResult(), nil
-}
-
-// UpdateRecord updates a record via REST API.
-func (r *RESTAdapter) UpdateRecord(ctx context.Context, opts UpdateRecordOptions) (*UpdateRecordResult, error) {
-	path := "/api/v1/dns/zones/" + url.PathEscape(opts.ZoneName) + "/records/" +
-		url.PathEscape(opts.Name) + "/" + url.PathEscape(opts.RecordType)
-
-	reqBody := map[string]interface{}{}
-	if opts.Value != "" {
-		reqBody["value"] = opts.Value
-	}
-	if opts.TTL > 0 {
-		reqBody["ttl"] = opts.TTL
-	}
-	if opts.Priority > 0 {
-		reqBody["priority"] = opts.Priority
-	}
-
-	respBody, statusCode, err := r.doRequest(ctx, http.MethodPut, path, reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp restUpdateRecordResponse
-	if err := r.handleResponse(respBody, statusCode, &resp); err != nil {
-		return nil, err
-	}
-
-	return resp.toResult(), nil
-}
-
-// DeleteRecord deletes a record via REST API.
-func (r *RESTAdapter) DeleteRecord(ctx context.Context, name string, recordType string) (*DeleteRecordResult, error) {
-	path := "/api/v1/dns/records/" + url.PathEscape(name) + "/" + url.PathEscape(recordType)
-
-	respBody, statusCode, err := r.doRequest(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp restDeleteRecordResponse
-	if err := r.handleResponse(respBody, statusCode, &resp); err != nil {
-		return nil, err
-	}
-
-	return resp.toResult(), nil
-}
-
-// ListRecords lists records in a zone via REST API.
-func (r *RESTAdapter) ListRecords(ctx context.Context, zoneName string, opts ListRecordsOptions) (*ListRecordsResult, error) {
-	params := url.Values{}
-	if opts.RecordType != "" {
-		params.Set("type", opts.RecordType)
-	}
-	if opts.Limit > 0 {
-		params.Set("limit", strconv.FormatInt(int64(opts.Limit), 10))
-	}
-	if opts.Cursor != "" {
-		params.Set("cursor", opts.Cursor)
-	}
-
-	path := "/api/v1/dns/zones/" + url.PathEscape(zoneName) + "/records"
-	if len(params) > 0 {
-		path += "?" + params.Encode()
-	}
-
-	respBody, statusCode, err := r.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp restListRecordsResponse
-	if err := r.handleResponse(respBody, statusCode, &resp); err != nil {
-		return nil, err
-	}
-
-	return resp.toResult(), nil
-}
-
-// =============================================================================
-// Resolution Commands
-// =============================================================================
-
-// Resolve performs DNS resolution via REST API.
-func (r *RESTAdapter) Resolve(ctx context.Context, name string, recordType string) (*ResolveResult, error) {
-	path := "/api/v1/dns/resolve/" + url.PathEscape(name) + "/" + url.PathEscape(recordType)
-
-	respBody, statusCode, err := r.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp restResolveResponse
-	if err := r.handleResponse(respBody, statusCode, &resp); err != nil {
-		return nil, err
-	}
-
-	return resp.toResult(), nil
-}
-
-// =============================================================================
-// TLSA/DANE Commands
-// =============================================================================
-
-// AddTLSARecord adds a TLSA record via REST API.
-func (r *RESTAdapter) AddTLSARecord(ctx context.Context, opts AddTLSARecordOptions) (*AddTLSARecordResult, error) {
-	path := "/api/v1/dns/zones/" + url.PathEscape(opts.ZoneName) + "/tlsa"
-
-	reqBody := map[string]interface{}{
-		"name":          opts.Name,
-		"usage":         opts.Usage,
-		"selector":      opts.Selector,
-		"matching_type": opts.MatchingType,
-		"data":          opts.Data,
-	}
-
-	if opts.TTL > 0 {
-		reqBody["ttl"] = opts.TTL
-	}
-
-	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, path, reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp restAddTLSARecordResponse
-	if err := r.handleResponse(respBody, statusCode, &resp); err != nil {
-		return nil, err
-	}
-
-	return resp.toResult(), nil
-}
-
-// =============================================================================
-// REST Response Types and Conversion
-// =============================================================================
-
-type restCreateZoneResponse struct {
-	Name      string `json:"name"`
-	ID        string `json:"id"`
-	TTL       uint32 `json:"ttl"`
-	Internal  bool   `json:"internal"`
-	CreatedAt int64  `json:"created_at"`
-}
-
-func (r *restCreateZoneResponse) toResult() *CreateZoneResult {
-	return &CreateZoneResult{
-		Name:      r.Name,
-		ID:        r.ID,
-		TTL:       r.TTL,
-		Internal:  r.Internal,
-		CreatedAt: time.Unix(r.CreatedAt, 0),
-	}
-}
-
-type restGetZoneResponse struct {
-	Name        string         `json:"name"`
-	ID          string         `json:"id"`
-	TTL         uint32         `json:"ttl"`
-	Description string         `json:"description"`
-	Internal    bool           `json:"internal"`
-	SOA         *restSOARecord `json:"soa"`
-	RecordCount int            `json:"record_count"`
-	CreatedAt   int64          `json:"created_at"`
-	UpdatedAt   int64          `json:"updated_at"`
-}
-
-type restSOARecord struct {
+type restSOA struct {
 	Name       string `json:"name"`
 	MName      string `json:"mname"`
 	RName      string `json:"rname"`
-	Serial     uint32 `json:"serial"`
-	Refresh    uint32 `json:"refresh"`
-	Retry      uint32 `json:"retry"`
-	Expire     uint32 `json:"expire"`
-	MinimumTTL uint32 `json:"minimum_ttl"`
-	TTL        uint32 `json:"ttl"`
+	Serial     uint32 `json:"serial,omitempty"`
+	Refresh    uint32 `json:"refresh,omitempty"`
+	Retry      uint32 `json:"retry,omitempty"`
+	Expire     uint32 `json:"expire,omitempty"`
+	MinimumTTL uint32 `json:"minimum_ttl,omitempty"`
+	TTL        uint32 `json:"ttl,omitempty"`
 }
 
-func (r *restGetZoneResponse) toResult() *GetZoneResult {
-	result := &GetZoneResult{
-		Name:        r.Name,
-		ID:          r.ID,
-		TTL:         r.TTL,
-		Description: r.Description,
-		Internal:    r.Internal,
-		RecordCount: r.RecordCount,
-		CreatedAt:   time.Unix(r.CreatedAt, 0),
-		UpdatedAt:   time.Unix(r.UpdatedAt, 0),
-	}
+type restCreateZoneRequest struct {
+	Name        string   `json:"name"`
+	TTL         uint32   `json:"ttl,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Internal    bool     `json:"internal"`
+	SOA         *restSOA `json:"soa,omitempty"`
+}
 
-	if r.SOA != nil {
-		result.SOA = &SOARecordInfo{
-			Name:       r.SOA.Name,
-			MName:      r.SOA.MName,
-			RName:      r.SOA.RName,
-			Serial:     r.SOA.Serial,
-			Refresh:    r.SOA.Refresh,
-			Retry:      r.SOA.Retry,
-			Expire:     r.SOA.Expire,
-			MinimumTTL: r.SOA.MinimumTTL,
-			TTL:        r.SOA.TTL,
+type restUpdateZoneRequest struct {
+	TTL         uint32 `json:"ttl,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+type restRecordSet struct {
+	SOA    *restSOA          `json:"soa"`
+	A      []json.RawMessage `json:"a"`
+	AAAA   []json.RawMessage `json:"aaaa"`
+	CNAME  []json.RawMessage `json:"cname"`
+	MX     []json.RawMessage `json:"mx"`
+	NS     []json.RawMessage `json:"ns"`
+	TXT    []json.RawMessage `json:"txt"`
+	SRV    []json.RawMessage `json:"srv"`
+	CAA    []json.RawMessage `json:"caa"`
+	TLSA   []json.RawMessage `json:"tlsa"`
+	DNSKEY []json.RawMessage `json:"dnskey"`
+	DS     []json.RawMessage `json:"ds"`
+}
+
+// count returns the number of records in the set, the SOA included.
+func (rs *restRecordSet) count() int {
+	if rs == nil {
+		return 0
+	}
+	count := len(rs.A) + len(rs.AAAA) + len(rs.CNAME) + len(rs.MX) + len(rs.NS) +
+		len(rs.TXT) + len(rs.SRV) + len(rs.CAA) + len(rs.TLSA) + len(rs.DNSKEY) + len(rs.DS)
+	if rs.SOA != nil {
+		count++
+	}
+	return count
+}
+
+type restZone struct {
+	ID          uint64         `json:"id"`
+	Name        string         `json:"name"`
+	TTL         uint32         `json:"ttl"`
+	Description string         `json:"description"`
+	Internal    bool           `json:"internal"`
+	CreatedAt   string         `json:"created_at"`
+	UpdatedAt   string         `json:"updated_at"`
+	Records     *restRecordSet `json:"records"`
+}
+
+type restListZones struct {
+	Total int64      `json:"total"`
+	Zones []restZone `json:"zones"`
+}
+
+type restSuccess struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+// restRecord is the union of the per-type record shapes; each type sends
+// only its own fields.
+type restRecord struct {
+	Name         string `json:"name"`
+	Value        string `json:"value,omitempty"`
+	Target       string `json:"target,omitempty"`
+	Port         uint16 `json:"port,omitempty"`
+	Priority     uint16 `json:"priority,omitempty"`
+	Weight       uint16 `json:"weight,omitempty"`
+	Usage        uint8  `json:"usage,omitempty"`
+	Selector     uint8  `json:"selector,omitempty"`
+	MatchingType uint8  `json:"matching_type,omitempty"`
+	Data         string `json:"data,omitempty"`
+	TTL          uint32 `json:"ttl,omitempty"`
+}
+
+// value returns the record's data as the suite names it: the SRV target,
+// the TLSA data, or the value of every other type.
+func (rec restRecord) value(recordType string) string {
+	switch recordType {
+	case "SRV":
+		return rec.Target
+	case "TLSA":
+		return rec.Data
+	}
+	return rec.Value
+}
+
+// restTypedRecord is the server's RecordResponse: a type and one filled field.
+type restTypedRecord struct {
+	Type  string      `json:"type"`
+	A     *restRecord `json:"a"`
+	AAAA  *restRecord `json:"aaaa"`
+	CNAME *restRecord `json:"cname"`
+	MX    *restRecord `json:"mx"`
+	NS    *restRecord `json:"ns"`
+	TXT   *restRecord `json:"txt"`
+	SRV   *restRecord `json:"srv"`
+	CAA   *restRecord `json:"caa"`
+	TLSA  *restRecord `json:"tlsa"`
+}
+
+// record returns the filled field for the record's type.
+func (t restTypedRecord) record() (string, restRecord, bool) {
+	recordType := strings.ToUpper(t.Type)
+	byType := map[string]*restRecord{
+		"A": t.A, "AAAA": t.AAAA, "CNAME": t.CNAME, "MX": t.MX, "NS": t.NS,
+		"TXT": t.TXT, "SRV": t.SRV, "CAA": t.CAA, "TLSA": t.TLSA,
+	}
+	rec := byType[recordType]
+	if rec == nil {
+		return recordType, restRecord{}, false
+	}
+	return recordType, *rec, true
+}
+
+type restRecordList struct {
+	Total   int64             `json:"total"`
+	Records []restTypedRecord `json:"records"`
+}
+
+// Zone operations
+
+// CreateZone creates a new DNS zone.
+func (r *RESTAdapter) CreateZone(ctx context.Context, opts CreateZoneOptions) (*CreateZoneResult, error) {
+	body := restCreateZoneRequest{
+		Name:        opts.Name,
+		TTL:         opts.TTL,
+		Description: opts.Description,
+		Internal:    opts.Internal,
+	}
+	if opts.SOA != nil {
+		body.SOA = &restSOA{
+			Name:       opts.Name,
+			MName:      opts.SOA.MName,
+			RName:      opts.SOA.RName,
+			Serial:     opts.SOA.Serial,
+			Refresh:    opts.SOA.Refresh,
+			Retry:      opts.SOA.Retry,
+			Expire:     opts.SOA.Expire,
+			MinimumTTL: opts.SOA.MinimumTTL,
+			TTL:        opts.TTL,
 		}
 	}
 
-	return result
-}
-
-type restUpdateZoneResponse struct {
-	Name      string `json:"name"`
-	TTL       uint32 `json:"ttl"`
-	UpdatedAt int64  `json:"updated_at"`
-}
-
-func (r *restUpdateZoneResponse) toResult() *UpdateZoneResult {
-	return &UpdateZoneResult{
-		Name:      r.Name,
-		TTL:       r.TTL,
-		UpdatedAt: time.Unix(r.UpdatedAt, 0),
+	var zone restZone
+	if err := r.do(ctx, http.MethodPost, "/zones", nil, body, &zone); err != nil {
+		return nil, err
 	}
-}
-
-type restDeleteZoneResponse struct {
-	Name    string `json:"name"`
-	Deleted bool   `json:"deleted"`
-}
-
-func (r *restDeleteZoneResponse) toResult() *DeleteZoneResult {
-	return &DeleteZoneResult{
-		Name:    r.Name,
-		Deleted: r.Deleted,
+	createdAt, err := parseRESTTime(zone.CreatedAt)
+	if err != nil {
+		return nil, err
 	}
+	return &CreateZoneResult{
+		Name:      zone.Name,
+		ID:        strconv.FormatUint(zone.ID, 10),
+		TTL:       zone.TTL,
+		Internal:  zone.Internal,
+		CreatedAt: createdAt,
+	}, nil
 }
 
-type restListZonesResponse struct {
-	Zones      []restZoneSummary `json:"zones"`
-	TotalCount int32             `json:"total_count"`
-	HasMore    bool              `json:"has_more"`
-	NextCursor string            `json:"next_cursor"`
+// GetZone retrieves a DNS zone by name.
+func (r *RESTAdapter) GetZone(ctx context.Context, zoneName string) (*GetZoneResult, error) {
+	var zone restZone
+	if err := r.do(ctx, http.MethodGet, zonePath(zoneName), nil, nil, &zone); err != nil {
+		return nil, err
+	}
+	createdAt, err := parseRESTTime(zone.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	updatedAt, err := parseRESTTime(zone.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &GetZoneResult{
+		Name:        zone.Name,
+		ID:          strconv.FormatUint(zone.ID, 10),
+		TTL:         zone.TTL,
+		Description: zone.Description,
+		Internal:    zone.Internal,
+		RecordCount: zone.Records.count(),
+		CreatedAt:   createdAt,
+		UpdatedAt:   updatedAt,
+	}
+	if zone.Records != nil && zone.Records.SOA != nil {
+		soa := zone.Records.SOA
+		result.SOA = &SOARecordInfo{
+			Name:       soa.Name,
+			MName:      soa.MName,
+			RName:      soa.RName,
+			Serial:     soa.Serial,
+			Refresh:    soa.Refresh,
+			Retry:      soa.Retry,
+			Expire:     soa.Expire,
+			MinimumTTL: soa.MinimumTTL,
+			TTL:        soa.TTL,
+		}
+	}
+	return result, nil
 }
 
-type restZoneSummary struct {
-	Name        string `json:"name"`
-	ID          string `json:"id"`
-	TTL         uint32 `json:"ttl"`
-	Internal    bool   `json:"internal"`
-	RecordCount int    `json:"record_count"`
-	CreatedAt   int64  `json:"created_at"`
+// UpdateZone updates a zone's TTL and description.
+func (r *RESTAdapter) UpdateZone(ctx context.Context, zoneName string, opts UpdateZoneOptions) (*UpdateZoneResult, error) {
+	body := restUpdateZoneRequest{TTL: opts.TTL, Description: opts.Description}
+	var zone restZone
+	if err := r.do(ctx, http.MethodPut, zonePath(zoneName), nil, body, &zone); err != nil {
+		return nil, err
+	}
+	updatedAt, err := parseRESTTime(zone.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &UpdateZoneResult{Name: zone.Name, TTL: zone.TTL, UpdatedAt: updatedAt}, nil
 }
 
-func (r *restListZonesResponse) toResult() *ListZonesResult {
+// DeleteZone deletes a DNS zone.
+func (r *RESTAdapter) DeleteZone(ctx context.Context, zoneName string) (*DeleteZoneResult, error) {
+	var resp restSuccess
+	if err := r.do(ctx, http.MethodDelete, zonePath(zoneName), nil, nil, &resp); err != nil {
+		return nil, err
+	}
+	return &DeleteZoneResult{Name: zoneName, Deleted: resp.Success}, nil
+}
+
+// ListZones lists DNS zones, a page at a time when a limit is given.
+func (r *RESTAdapter) ListZones(ctx context.Context, opts ListZonesOptions) (*ListZonesResult, error) {
+	query := url.Values{}
+	if opts.Internal != nil {
+		if *opts.Internal {
+			query.Set("internal", "true")
+		} else {
+			query.Set("public", "true")
+		}
+	}
+	offset, err := pageQuery(query, opts.Limit, opts.Cursor)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp restListZones
+	if err := r.do(ctx, http.MethodGet, "/zones", query, nil, &resp); err != nil {
+		return nil, err
+	}
+
 	result := &ListZonesResult{
-		TotalCount: r.TotalCount,
-		HasMore:    r.HasMore,
-		NextCursor: r.NextCursor,
+		Zones:      make([]ZoneSummary, 0, len(resp.Zones)),
+		TotalCount: int32(resp.Total),
 	}
-
-	for _, z := range r.Zones {
+	for _, zone := range resp.Zones {
+		createdAt, err := parseRESTTime(zone.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
 		result.Zones = append(result.Zones, ZoneSummary{
-			Name:        z.Name,
-			ID:          z.ID,
-			TTL:         z.TTL,
-			Internal:    z.Internal,
-			RecordCount: z.RecordCount,
-			CreatedAt:   time.Unix(z.CreatedAt, 0),
+			Name:        zone.Name,
+			ID:          strconv.FormatUint(zone.ID, 10),
+			TTL:         zone.TTL,
+			Internal:    zone.Internal,
+			RecordCount: zone.Records.count(),
+			CreatedAt:   createdAt,
 		})
 	}
-
-	return result
+	next := offset + len(resp.Zones)
+	if int64(next) < resp.Total {
+		result.HasMore = true
+		result.NextCursor = strconv.Itoa(next)
+	}
+	return result, nil
 }
 
-type restAddRecordResponse struct {
-	Name       string `json:"name"`
-	RecordType string `json:"record_type"`
-	Value      string `json:"value"`
-	TTL        uint32 `json:"ttl"`
-	CreatedAt  int64  `json:"created_at"`
+// Record operations
+
+// addRecord posts one record of recordType to the zone.
+func (r *RESTAdapter) addRecord(ctx context.Context, zoneName, recordType string, rec restRecord) error {
+	body := map[string]any{
+		"type":                      recordType,
+		strings.ToLower(recordType): rec,
+	}
+	return r.do(ctx, http.MethodPost, zonePath(zoneName)+"/records", nil, body, nil)
 }
 
-func (r *restAddRecordResponse) toResult() *AddRecordResult {
+// getRecord reads one record; a 404 is ErrRecordNotFound, as on gRPC.
+func (r *RESTAdapter) getRecord(ctx context.Context, zoneName, name, recordType string) (restRecord, error) {
+	var typed restTypedRecord
+	err := r.do(ctx, http.MethodGet, recordPath(zoneName, recordType, name), nil, nil, &typed)
+	var apiErr ErrRESTAPIError
+	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+		return restRecord{}, ErrRecordNotFound{Name: name, Type: recordType}
+	}
+	if err != nil {
+		return restRecord{}, err
+	}
+	_, rec, ok := typed.record()
+	if !ok {
+		return restRecord{}, ErrRecordNotFound{Name: name, Type: recordType}
+	}
+	return rec, nil
+}
+
+// AddRecord adds a DNS record to a zone.
+func (r *RESTAdapter) AddRecord(ctx context.Context, opts AddRecordOptions) (*AddRecordResult, error) {
+	recordType := strings.ToUpper(opts.RecordType)
+	if err := r.addRecord(ctx, opts.ZoneName, recordType, recordFromOptions(recordType, opts.Name, opts.Value, opts.TTL, opts.Priority, opts.Weight, opts.Port)); err != nil {
+		return nil, err
+	}
 	return &AddRecordResult{
-		Name:       r.Name,
-		RecordType: r.RecordType,
-		Value:      r.Value,
-		TTL:        r.TTL,
-		CreatedAt:  time.Unix(r.CreatedAt, 0),
+		Name:       opts.Name,
+		RecordType: opts.RecordType,
+		Value:      opts.Value,
+		TTL:        opts.TTL,
+		CreatedAt:  time.Now(),
+	}, nil
+}
+
+// recordFromOptions builds the wire record; SRV carries its value as the target.
+func recordFromOptions(recordType, name, value string, ttl uint32, priority, weight, port uint16) restRecord {
+	rec := restRecord{Name: name, TTL: ttl, Priority: priority, Weight: weight, Port: port}
+	if recordType == "SRV" {
+		rec.Target = value
+	} else {
+		rec.Value = value
 	}
+	return rec
 }
 
-type restGetRecordResponse struct {
-	Name       string `json:"name"`
-	RecordType string `json:"record_type"`
-	Value      string `json:"value"`
-	TTL        uint32 `json:"ttl"`
-	Priority   uint16 `json:"priority"`
-	Weight     uint16 `json:"weight"`
-	Port       uint16 `json:"port"`
-	CreatedAt  int64  `json:"created_at"`
-	UpdatedAt  int64  `json:"updated_at"`
-}
-
-func (r *restGetRecordResponse) toResult() *GetRecordResult {
+// GetRecord retrieves a DNS record by name and type from the zone the name
+// belongs to.
+func (r *RESTAdapter) GetRecord(ctx context.Context, name string, recordType string) (*GetRecordResult, error) {
+	recordType = strings.ToUpper(recordType)
+	rec, err := r.getRecord(ctx, extractZoneName(name), name, recordType)
+	if err != nil {
+		return nil, err
+	}
 	return &GetRecordResult{
-		Name:       r.Name,
-		RecordType: r.RecordType,
-		Value:      r.Value,
-		TTL:        r.TTL,
-		Priority:   r.Priority,
-		Weight:     r.Weight,
-		Port:       r.Port,
-		CreatedAt:  time.Unix(r.CreatedAt, 0),
-		UpdatedAt:  time.Unix(r.UpdatedAt, 0),
+		Name:       rec.Name,
+		RecordType: recordType,
+		Value:      rec.value(recordType),
+		TTL:        rec.TTL,
+		Priority:   rec.Priority,
+		Weight:     rec.Weight,
+		Port:       rec.Port,
+	}, nil
+}
+
+// UpdateRecord replaces a record the way the gRPC server does: the record
+// must exist, it is deleted, and the new one is added.
+func (r *RESTAdapter) UpdateRecord(ctx context.Context, opts UpdateRecordOptions) (*UpdateRecordResult, error) {
+	recordType := strings.ToUpper(opts.RecordType)
+	if _, err := r.getRecord(ctx, opts.ZoneName, opts.Name, recordType); err != nil {
+		return nil, err
 	}
-}
-
-type restUpdateRecordResponse struct {
-	Name       string `json:"name"`
-	RecordType string `json:"record_type"`
-	Value      string `json:"value"`
-	TTL        uint32 `json:"ttl"`
-	UpdatedAt  int64  `json:"updated_at"`
-}
-
-func (r *restUpdateRecordResponse) toResult() *UpdateRecordResult {
+	if err := r.do(ctx, http.MethodDelete, recordPath(opts.ZoneName, recordType, opts.Name), nil, nil, nil); err != nil {
+		return nil, err
+	}
+	if err := r.addRecord(ctx, opts.ZoneName, recordType, recordFromOptions(recordType, opts.Name, opts.Value, opts.TTL, opts.Priority, opts.Weight, opts.Port)); err != nil {
+		return nil, err
+	}
 	return &UpdateRecordResult{
-		Name:       r.Name,
-		RecordType: r.RecordType,
-		Value:      r.Value,
-		TTL:        r.TTL,
-		UpdatedAt:  time.Unix(r.UpdatedAt, 0),
+		Name:       opts.Name,
+		RecordType: opts.RecordType,
+		Value:      opts.Value,
+		TTL:        opts.TTL,
+		UpdatedAt:  time.Now(),
+	}, nil
+}
+
+// DeleteRecord deletes a DNS record. The REST delete answers 200 for a
+// record that is not there, so the record is looked up first and a missing
+// one is ErrRecordNotFound, as on gRPC.
+func (r *RESTAdapter) DeleteRecord(ctx context.Context, name string, recordType string) (*DeleteRecordResult, error) {
+	recordType = strings.ToUpper(recordType)
+	zoneName := extractZoneName(name)
+	if _, err := r.getRecord(ctx, zoneName, name, recordType); err != nil {
+		return nil, err
 	}
-}
-
-type restDeleteRecordResponse struct {
-	Name       string `json:"name"`
-	RecordType string `json:"record_type"`
-	Deleted    bool   `json:"deleted"`
-}
-
-func (r *restDeleteRecordResponse) toResult() *DeleteRecordResult {
-	return &DeleteRecordResult{
-		Name:       r.Name,
-		RecordType: r.RecordType,
-		Deleted:    r.Deleted,
+	if err := r.do(ctx, http.MethodDelete, recordPath(zoneName, recordType, name), nil, nil, nil); err != nil {
+		return nil, err
 	}
+	return &DeleteRecordResult{Name: name, RecordType: recordType, Deleted: true}, nil
 }
 
-type restListRecordsResponse struct {
-	Records    []restRecordSummary `json:"records"`
-	TotalCount int32               `json:"total_count"`
-	HasMore    bool                `json:"has_more"`
-	NextCursor string              `json:"next_cursor"`
-}
-
-type restRecordSummary struct {
-	Name       string `json:"name"`
-	RecordType string `json:"record_type"`
-	Value      string `json:"value"`
-	TTL        uint32 `json:"ttl"`
-	Priority   uint16 `json:"priority"`
-}
-
-func (r *restListRecordsResponse) toResult() *ListRecordsResult {
-	result := &ListRecordsResult{
-		TotalCount: r.TotalCount,
-		HasMore:    r.HasMore,
-		NextCursor: r.NextCursor,
+// ListRecords lists the records in a zone. The REST list carries no total,
+// so TotalCount is the page size and a full page reports HasMore.
+func (r *RESTAdapter) ListRecords(ctx context.Context, zoneName string, opts ListRecordsOptions) (*ListRecordsResult, error) {
+	query := url.Values{}
+	if opts.RecordType != "" {
+		query.Set("type", strings.ToUpper(opts.RecordType))
+	}
+	offset, err := pageQuery(query, opts.Limit, opts.Cursor)
+	if err != nil {
+		return nil, err
 	}
 
-	for _, rec := range r.Records {
+	var resp restRecordList
+	if err := r.do(ctx, http.MethodGet, zonePath(zoneName)+"/records", query, nil, &resp); err != nil {
+		return nil, err
+	}
+
+	result := &ListRecordsResult{Records: make([]RecordSummary, 0, len(resp.Records))}
+	for _, typed := range resp.Records {
+		recordType, rec, ok := typed.record()
+		if !ok {
+			continue
+		}
 		result.Records = append(result.Records, RecordSummary{
 			Name:       rec.Name,
-			RecordType: rec.RecordType,
-			Value:      rec.Value,
+			RecordType: recordType,
+			Value:      rec.value(recordType),
 			TTL:        rec.TTL,
 			Priority:   rec.Priority,
 		})
 	}
-
-	return result
-}
-
-type restResolveResponse struct {
-	Name       string   `json:"name"`
-	RecordType string   `json:"record_type"`
-	Values     []string `json:"values"`
-	TTL        uint32   `json:"ttl"`
-	Timestamp  int64    `json:"timestamp"`
-}
-
-func (r *restResolveResponse) toResult() *ResolveResult {
-	return &ResolveResult{
-		Name:       r.Name,
-		RecordType: r.RecordType,
-		Values:     r.Values,
-		TTL:        r.TTL,
-		Timestamp:  time.Unix(r.Timestamp, 0),
+	result.TotalCount = int32(resp.Total)
+	next := offset + len(resp.Records)
+	if int64(next) < resp.Total {
+		result.HasMore = true
+		result.NextCursor = strconv.Itoa(next)
 	}
+	return result, nil
 }
 
-type restAddTLSARecordResponse struct {
-	Name         string `json:"name"`
-	Usage        uint8  `json:"usage"`
-	Selector     uint8  `json:"selector"`
-	MatchingType uint8  `json:"matching_type"`
-	Data         string `json:"data"`
-	TTL          uint32 `json:"ttl"`
-	CreatedAt    int64  `json:"created_at"`
+// Resolve resolves a name to its record values. An empty answer is
+// ErrRecordNotFound, as on gRPC.
+func (r *RESTAdapter) Resolve(ctx context.Context, name string, recordType string) (*ResolveResult, error) {
+	recordType = strings.ToUpper(recordType)
+	query := url.Values{}
+	query.Set("fqdn", name)
+	query.Set("type", recordType)
+
+	var resp restRecordList
+	if err := r.do(ctx, http.MethodGet, "/resolve", query, nil, &resp); err != nil {
+		return nil, err
+	}
+
+	result := &ResolveResult{Name: name, RecordType: recordType, Timestamp: time.Now()}
+	for _, typed := range resp.Records {
+		answerType, rec, ok := typed.record()
+		if !ok {
+			continue
+		}
+		if len(result.Values) == 0 {
+			result.TTL = rec.TTL
+		}
+		result.Values = append(result.Values, rec.value(answerType))
+	}
+	if len(result.Values) == 0 {
+		return nil, ErrRecordNotFound{Name: name, Type: recordType}
+	}
+	return result, nil
 }
 
-func (r *restAddTLSARecordResponse) toResult() *AddTLSARecordResult {
+// TLSA operations
+
+// AddTLSARecord adds a TLSA record for DANE.
+func (r *RESTAdapter) AddTLSARecord(ctx context.Context, opts AddTLSARecordOptions) (*AddTLSARecordResult, error) {
+	rec := restRecord{
+		Name:         opts.Name,
+		Usage:        opts.Usage,
+		Selector:     opts.Selector,
+		MatchingType: opts.MatchingType,
+		Data:         opts.Data,
+		TTL:          opts.TTL,
+	}
+	if err := r.addRecord(ctx, opts.ZoneName, "TLSA", rec); err != nil {
+		return nil, err
+	}
 	return &AddTLSARecordResult{
-		Name:         r.Name,
-		Usage:        r.Usage,
-		Selector:     r.Selector,
-		MatchingType: r.MatchingType,
-		Data:         r.Data,
-		TTL:          r.TTL,
-		CreatedAt:    time.Unix(r.CreatedAt, 0),
-	}
+		Name:         opts.Name,
+		Usage:        opts.Usage,
+		Selector:     opts.Selector,
+		MatchingType: opts.MatchingType,
+		Data:         opts.Data,
+		TTL:          opts.TTL,
+		CreatedAt:    time.Now(),
+	}, nil
 }
-
-// Ensure RESTAdapter implements DNSCommands interface.
-var _ DNSCommands = (*RESTAdapter)(nil)

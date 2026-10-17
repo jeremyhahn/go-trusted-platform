@@ -289,6 +289,9 @@ type dnsAddRecordRequestWire struct {
 // codec without hitting the oneof panic.
 type dnsListRecordsResponseWire struct {
 	Records []*dnsRecordWire `codec:"Records"`
+	Total   uint64           `codec:"Total"`
+	Limit   uint32           `codec:"Limit"`
+	Offset  uint32           `codec:"Offset"`
 }
 
 // dnsResolveResponseWire mirrors platformv1.ResolveResponse.
@@ -300,7 +303,11 @@ type dnsResolveResponseWire struct {
 // dnsListRecordsResponseFromProto flattens a pb ListRecordsResponse onto the
 // mirror.
 func dnsListRecordsResponseFromProto(pb *platformv1.ListRecordsResponse) *dnsListRecordsResponseWire {
-	out := &dnsListRecordsResponseWire{}
+	out := &dnsListRecordsResponseWire{
+		Total:  pb.GetTotal(),
+		Limit:  pb.GetLimit(),
+		Offset: pb.GetOffset(),
+	}
 	for _, r := range pb.GetRecords() {
 		out.Records = append(out.Records, recordToWire(r))
 	}

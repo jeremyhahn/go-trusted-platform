@@ -120,12 +120,14 @@ func (s *TemplateService) Update(ctx context.Context, template *entities.DeviceT
 		return ErrInvalidTemplateID{}
 	}
 
-	// Verify template exists before updating
-	_, err := s.templateDAO.Get(ctx, template.ID)
+	// Verify template exists before updating; an update replaces the
+	// template but never its creation time.
+	stored, err := s.templateDAO.Get(ctx, template.ID)
 	if err != nil {
 		return &WrappedError{Msg: "failed to get template for update", Err: err}
 	}
 
+	template.CreatedAt = stored.CreatedAt
 	template.UpdatedAt = time.Now()
 
 	if err := s.templateDAO.Save(ctx, template); err != nil {

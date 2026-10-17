@@ -541,6 +541,11 @@ func encodeQueryField(rm protoreflect.Message, fieldPath string) ([]string, erro
 		}
 		return []string{strconv.FormatInt(int64(n), 10)}, nil
 	default:
+		// A proto3 optional scalar that is set is sent even at zero: its
+		// presence is what the server reads (offset=0 still asks for a page).
+		if fd.HasOptionalKeyword() && current.Has(fd) {
+			return []string{fmt.Sprint(v.Interface())}, nil
+		}
 		// Use the RAW value: url.Values.Encode() applies query escaping,
 		// so pre-escaped path encoding would double-escape.
 		raw, _, ok := encodePathField(v, fd)
@@ -1052,6 +1057,20 @@ var templatedRouteTable = map[string]templatedRoute{
 	// id unconstrained; evidence travels in the body.
 	"/platform.v1.DeviceService/AttestDevice": itemRoute("/api/v1/devices/{id}/attest", http.MethodPost, "{id}", "device_id"),
 
+	// GET, PUT and DELETE /api/v1/device/templates/{id:[0-9]+}.
+	"/platform.v1.DeviceService/GetTemplate":    itemRoute("/api/v1/device/templates/{id:[0-9]+}", http.MethodGet, "{id:[0-9]+}", "id"),
+	"/platform.v1.DeviceService/UpdateTemplate": itemRoute("/api/v1/device/templates/{id:[0-9]+}", http.MethodPut, "{id:[0-9]+}", "template.id"),
+	"/platform.v1.DeviceService/DeleteTemplate": itemRoute("/api/v1/device/templates/{id:[0-9]+}", http.MethodDelete, "{id:[0-9]+}", "id"),
+	// The template list pages by query parameter; a zero page or size is
+	// omitted, so the server's defaults apply.
+	"/platform.v1.DeviceService/ListTemplates": {
+		path:   "/api/v1/device/templates",
+		method: http.MethodGet,
+		queryParams: []queryParam{
+			{name: "page", field: "pagination.page"},
+			{name: "page_size", field: "pagination.page_size"},
+		},
+	},
 	// POST /api/v1/device/templates/{id:[0-9]+}/create-profile. The body
 	// keeps {"overrides": {...}}.
 	"/platform.v1.DeviceService/CreateProfileFromTemplate": itemRoute("/api/v1/device/templates/{id:[0-9]+}/create-profile", http.MethodPost, "{id:[0-9]+}", "template_id"),
@@ -1482,9 +1501,10 @@ var grpcMethodToRESTMap = map[string]struct {
 	// Switch Service routes are templated: see switches.go.
 
 	// Compute Service
-	"/platform.v1.ComputeService/CreateContainer":  {"/api/v1/compute/containers", http.MethodPost},
-	"/platform.v1.ComputeService/ListContainers":   {"/api/v1/compute/containers", http.MethodGet},
-	"/platform.v1.ComputeService/GetContainerLogs": {"/api/v1/compute/containers/logs", http.MethodGet},
+	// GetContainerLogs, like the other compute streams, has no REST route by
+	// design (docs/compute/api.md §5): NewStream answers it Unimplemented.
+	"/platform.v1.ComputeService/CreateContainer": {"/api/v1/compute/containers", http.MethodPost},
+	"/platform.v1.ComputeService/ListContainers":  {"/api/v1/compute/containers", http.MethodGet},
 	// ListVMs sends its whole request (states, selector, pagination) as the
 	// JSON body, which both REST servers decode on this GET.
 	"/platform.v1.ComputeService/ListVMs": {"/api/v1/compute/vms", http.MethodGet},

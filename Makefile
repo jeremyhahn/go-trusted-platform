@@ -338,7 +338,11 @@ BUILD_TAGS_ARG          := $(if $(strip $(BUILD_TAGS)),-tags '$(strip $(BUILD_TA
 # Integration tests always need codec tags for QUIC protocol support.
 # The go-codec library uses build tags to compile real codecs vs stubs.
 INTEGRATION_CODEC_TAGS  := codec_msgpack codec_json codec_cbor
-TEST_BUILD_TAGS         := integration $(INTEGRATION_CODEC_TAGS) $(strip $(BUILD_TAGS))
+# Integration builds carry the vector service (the WITH_VECTOR=1 tags) so the
+# quicbaas and sdk suites' Vector assertions run against a real vector store;
+# pkg/storage/quicbaas.TestConfig enables it in exactly such a build.
+INTEGRATION_VECTOR_TAGS := vector qrdb_vector
+TEST_BUILD_TAGS         := integration $(INTEGRATION_CODEC_TAGS) $(INTEGRATION_VECTOR_TAGS) $(strip $(BUILD_TAGS))
 TEST_BUILD_TAGS_ARG     := -tags '$(strip $(TEST_BUILD_TAGS))'
 
 # Web embed directory
@@ -1903,11 +1907,6 @@ integration-test-compute: build-devcontainer
 integration-test-container: build-devcontainer
 	$(call run-integration-suite,container)
 
-## integration-test-invitation: Run the invitation suite (test/integration/invitation) in devcontainer
-.PHONY: integration-test-invitation
-integration-test-invitation: build-devcontainer
-	$(call run-integration-suite,invitation)
-
 ## integration-test-iso: Run the ISO suite (test/integration/iso) in devcontainer
 .PHONY: integration-test-iso
 integration-test-iso: build-devcontainer
@@ -1927,11 +1926,6 @@ integration-test-registry: build-devcontainer
 .PHONY: integration-test-sdk
 integration-test-sdk: build-devcontainer
 	$(call run-integration-suite,sdk)
-
-## integration-test-user-registration: Run the user registration suite (test/integration/user_registration) in devcontainer
-.PHONY: integration-test-user-registration
-integration-test-user-registration: build-devcontainer
-	$(call run-integration-suite,user-registration)
 
 ## bench-ntp: Run time-synchronization benchmarks
 .PHONY: bench-ntp
@@ -2292,6 +2286,13 @@ integration-test-sdn-full: build-devcontainer
 		-w /workspace \
 		$(DEVCONTAINER_IMAGE) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 15m ./test/integration/sdn/...
+
+.PHONY: integration-test-sdn-topology
+## integration-test-sdn-topology: Run the multi-node SDN topology suite on a host with docker-compose
+## The suite starts its nodes with docker-compose, which the devcontainer has neither the binary nor
+## a Docker daemon for, so it carries the topology build tag and stays out of every runner target.
+integration-test-sdn-topology:
+	go test -v -tags '$(strip $(TEST_BUILD_TAGS)) topology' -count=1 -timeout 30m ./test/integration/sdn/topology/
 
 .PHONY: integration-test-lb
 ## integration-test-lb: Run the gateway load balancer datapath test in the devcontainer

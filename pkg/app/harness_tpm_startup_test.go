@@ -255,12 +255,135 @@ func TestReadTPMHierarchyAuthState_TransportFault(t *testing.T) {
 // TestVerifyOwnerAuth_TransportFault: a probe that fails for a reason other
 // than the auth is an OwnerAuthProbeError, not a rejected SO PIN.
 func TestVerifyOwnerAuth_TransportFault(t *testing.T) {
-	counting := newCountingTPM(newHarnessSwtpmState(t))
-	counting.failCC = tpm2.TPMCCCreatePrimary
+	// One simulator is open at a time, so each fault runs in its own subtest
+	// and closes its simulator before the next opens.
+	faults := map[string]tpm2.TPMCC{
+		"StartAuthSession": tpm2.TPMCCStartAuthSession,
+		"PolicySecret":     tpm2.TPMCCPolicySecret,
+	}
+	for name, cc := range faults {
+		t.Run(name, func(t *testing.T) {
+			counting := newCountingTPM(newHarnessSwtpmState(t))
+			counting.failCC = cc
 
-	err := ownerAuthorizes(t, counting, harnessSOPIN)
-	var probeErr *OwnerAuthProbeError
-	require.ErrorAs(t, err, &probeErr)
+			err := ownerAuthorizes(t, counting, harnessSOPIN)
+			var probeErr *OwnerAuthProbeError
+			require.ErrorAs(t, err, &probeErr)
+			var rejected *OwnerAuthRejectedError
+			require.False(t, errors.As(err, &rejected))
+		})
+	}
+}
+
+// singleAlgorithmTPM is a TPM that implements one asymmetric algorithm: it
+// refuses, as a real TPM unmarshalling an unimplemented TPMI_ALG_PUBLIC does
+// (TPM 2.0 Part 2 §12.2.2, TPM_RC_TYPE), every object creation whose public
+// area names the other.
+type singleAlgorithmTPM struct {
+	tpm     transport.TPM
+	refused tpm2.TPMAlgID
+}
+
+// TPM 2.0 Part 2 §6.6.3: a format-one response code naming parameter 2, the
+// inPublic of TPM2_CreatePrimary, TPM2_Create and TPM2_CreateLoaded.
+const (
+	rcParameterBit   = 0x040
+	rcParameterTwo   = 2 << 8
+	tpmSTNoSessions  = 0x8001
+	tpmSTSessions    = 0x8002
+	commandHeaderLen = 10
+)
+
+func (s *singleAlgorithmTPM) Send(cmd []byte) ([]byte, error) {
+	if s.publicType(cmd) == s.refused {
+		rsp := make([]byte, commandHeaderLen)
+		binary.BigEndian.PutUint16(rsp[0:2], tpmSTNoSessions)
+		binary.BigEndian.PutUint32(rsp[2:6], commandHeaderLen)
+		binary.BigEndian.PutUint32(rsp[6:10], uint32(tpm2.TPMRCType)|rcParameterBit|rcParameterTwo)
+		return rsp, nil
+	}
+	return s.tpm.Send(cmd)
+}
+
+// publicType returns the algorithm of an object-creating command's inPublic,
+// or TPMAlgNull for any other command. Each of the three takes one handle,
+// then the authorization area, then inSensitive and inPublic.
+func (s *singleAlgorithmTPM) publicType(cmd []byte) tpm2.TPMAlgID {
+	cc := tpm2.TPMCC(binary.BigEndian.Uint32(cmd[6:10]))
+	if cc != tpm2.TPMCCCreatePrimary && cc != tpm2.TPMCCCreate && cc != tpm2.TPMCCCreateLoaded {
+		return tpm2.TPMAlgNull
+	}
+	off := commandHeaderLen + 4
+	if binary.BigEndian.Uint16(cmd[0:2]) == tpmSTSessions {
+		off += 4 + int(binary.BigEndian.Uint32(cmd[off:off+4]))
+	}
+	off += 2 + int(binary.BigEndian.Uint16(cmd[off:off+2]))
+	return tpm2.TPMAlgID(binary.BigEndian.Uint16(cmd[off+2 : off+4]))
+}
+
+// ownedSingleAlgorithmTPM is a simulator whose owner auth is the SO PIN,
+// fronted as a TPM without the refused algorithm.
+func ownedSingleAlgorithmTPM(t *testing.T, refused tpm2.TPMAlgID) transport.TPM {
+	t.Helper()
+	sim := newHarnessSwtpmState(t)
+	_, err := tpm2.HierarchyChangeAuth{
+		AuthHandle: tpm2.TPMRHOwner,
+		NewAuth:    tpm2.TPM2BAuth{Buffer: []byte(harnessSOPIN)},
+	}.Execute(sim)
+	require.NoError(t, err)
+	return &singleAlgorithmTPM{tpm: sim, refused: refused}
+}
+
+// Codex 5468 P2: the probe must not need a key algorithm the TPM lacks. The
+// filter is checked first so the test cannot pass against a TPM that still
+// implements the refused algorithm.
+func TestVerifyOwnerAuth_SingleAlgorithmTPM(t *testing.T) {
+	cases := []struct {
+		name      string
+		refused   tpm2.TPMAlgID
+		refusedT  tpm2.TPMTPublic
+		supported tpm2.TPMTPublic
+	}{
+		{"RSA only", tpm2.TPMAlgECC, tpm2.ECCSRKTemplate, tpm2.RSASRKTemplate},
+		{"ECC only", tpm2.TPMAlgRSA, tpm2.RSASRKTemplate, tpm2.ECCSRKTemplate},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tpm := ownedSingleAlgorithmTPM(t, tc.refused)
+			owner := tpm2.AuthHandle{Handle: tpm2.TPMRHOwner, Auth: tpm2.PasswordAuth([]byte(harnessSOPIN))}
+
+			_, err := tpm2.CreatePrimary{PrimaryHandle: owner, InPublic: tpm2.New2B(tc.refusedT)}.Execute(tpm)
+			require.ErrorIs(t, err, tpm2.TPMRCType, "the TPM must lack the refused algorithm")
+			rsp, err := tpm2.CreatePrimary{PrimaryHandle: owner, InPublic: tpm2.New2B(tc.supported)}.Execute(tpm)
+			require.NoError(t, err, "the TPM must implement the other algorithm")
+			_, err = tpm2.FlushContext{FlushHandle: rsp.ObjectHandle}.Execute(tpm)
+			require.NoError(t, err)
+
+			require.NoError(t, ownerAuthorizes(t, tpm, harnessSOPIN), "the right SO PIN is accepted")
+
+			err = ownerAuthorizes(t, tpm, "654321")
+			var rejected *OwnerAuthRejectedError
+			require.ErrorAs(t, err, &rejected, "a wrong SO PIN is rejected, not a probe failure")
+			require.NoError(t, ownerAuthorizes(t, tpm, harnessSOPIN), "a wrong PIN costs no lockout")
+		})
+	}
+}
+
+// Codex 5468 P2: an RSA-configured node on a TPM without ECC provisions on
+// its first start and must start again with the same SO PIN, and still
+// refuse a wrong one.
+func TestTPMOwnership_RestartOnTPMWithoutECC(t *testing.T) {
+	tpm := &singleAlgorithmTPM{tpm: newHarnessSwtpmState(t), refused: tpm2.TPMAlgECC}
+	dir := t.TempDir()
+	_, err := harnessStart(t, tpm, dir, harnessSOPIN)
+	require.NoError(t, err, "first start takes ownership")
+
+	a, err := harnessStart(t, tpm, dir, harnessSOPIN)
+	require.NoError(t, err, "the restart's owner-auth probe must not need ECC")
+	require.NotNil(t, a.PlatformKS)
+
+	a, err = harnessStart(t, tpm, dir, "654321")
 	var rejected *OwnerAuthRejectedError
-	require.False(t, errors.As(err, &rejected))
+	require.ErrorAs(t, err, &rejected)
+	require.Nil(t, a.PlatformKS)
 }

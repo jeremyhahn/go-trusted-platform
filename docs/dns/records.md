@@ -77,7 +77,7 @@ once resolved against the zone:
 | Form | Example in zone `example.com.` | Owner |
 |---|---|---|
 | Relative | `www` | `www.example.com.` |
-| Apex marker | `@` (or omitted) | `example.com.` |
+| Apex marker | `@` (or omitted, in the config file only) | `example.com.` |
 | Fully qualified | `www.example.com.` | `www.example.com.` |
 
 Matching is case-insensitive and exact: a record named `www` answers
@@ -85,6 +85,10 @@ Matching is case-insensitive and exact: a record named `www` answers
 supported — a `*` owner is matched literally. A record intended for the zone
 apex must use `@` or the zone's own name; an apex NS record stored under some
 other fully qualified name is not an apex NS record and does not answer one.
+
+A record added through the API must name its owner: an empty `name` is
+refused with `dns.ErrRecordNameRequired` on every transport, so an API caller
+sends `@` for the apex. See [api.md](api.md#record-validation).
 
 The SOA is the exception: it is owned by the zone apex whatever its `name`
 field says. See [resolution.md](resolution.md#name-matching).

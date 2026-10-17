@@ -25,6 +25,7 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
 )
 
 // errCLIKMSMock is the sentinel error returned by unstubbed fake methods.
@@ -312,6 +313,63 @@ func TestExecuteKeyMetadataGet(t *testing.T) {
 		var getErr ErrGetKeyMetadataFailed
 		require.ErrorAs(t, err, &getErr)
 		assert.Equal(t, "missing", getErr.KeyID)
+	})
+}
+
+func TestSetKeyDisplayName(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("SetsNameOnGeneratedKey", func(t *testing.T) {
+		var captured *kms.UpdateKeyMetadataRequest
+		client := &fakeKMSClient{
+			updateKeyMetadataFn: func(ctx context.Context, req *kms.UpdateKeyMetadataRequest) (*kms.KeyMetadataResponse, error) {
+				captured = req
+				return &kms.KeyMetadataResponse{KeyID: req.KeyID, Name: req.Name}, nil
+			},
+		}
+		resp := &kmssvc.GenerateKeyResult{
+			Metadata: &kmssvc.KeyMetadata{Description: "kept", Exportable: true},
+		}
+
+		err := setKeyDisplayName(ctx, client, resp, "tenant-a-kek", "Tenant A KEK")
+		require.NoError(t, err)
+		require.NotNil(t, captured)
+		assert.Equal(t, "tenant-a-kek", captured.KeyID)
+		assert.Equal(t, "Tenant A KEK", captured.Name)
+		assert.Empty(t, captured.Description)
+		assert.Equal(t, "Tenant A KEK", resp.Metadata.Name)
+		assert.Equal(t, "kept", resp.Metadata.Description)
+		assert.True(t, resp.Metadata.Exportable)
+	})
+
+	t.Run("CreatesMetadataWhenGenerateReturnedNone", func(t *testing.T) {
+		client := &fakeKMSClient{
+			updateKeyMetadataFn: func(ctx context.Context, req *kms.UpdateKeyMetadataRequest) (*kms.KeyMetadataResponse, error) {
+				return &kms.KeyMetadataResponse{KeyID: req.KeyID, Name: req.Name}, nil
+			},
+		}
+		resp := &kmssvc.GenerateKeyResult{}
+
+		require.NoError(t, setKeyDisplayName(ctx, client, resp, "k", "display"))
+		require.NotNil(t, resp.Metadata)
+		assert.Equal(t, "display", resp.Metadata.Name)
+	})
+
+	t.Run("UpdateFailureIsTyped", func(t *testing.T) {
+		updateErr := errors.New("metadata store unavailable")
+		client := &fakeKMSClient{
+			updateKeyMetadataFn: func(ctx context.Context, req *kms.UpdateKeyMetadataRequest) (*kms.KeyMetadataResponse, error) {
+				return nil, updateErr
+			},
+		}
+		resp := &kmssvc.GenerateKeyResult{Metadata: &kmssvc.KeyMetadata{}}
+
+		err := setKeyDisplayName(ctx, client, resp, "k", "display")
+		var typed ErrUpdateKeyMetadataFailed
+		require.ErrorAs(t, err, &typed)
+		assert.Equal(t, "k", typed.KeyID)
+		assert.ErrorIs(t, err, updateErr)
+		assert.Empty(t, resp.Metadata.Name)
 	})
 }
 

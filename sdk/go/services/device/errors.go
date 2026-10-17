@@ -261,6 +261,61 @@ func (e *ErrCreateTemplateFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrGetTemplateFailed is returned when retrieving a device template fails.
+type ErrGetTemplateFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e *ErrGetTemplateFailed) Error() string {
+	return fmt.Sprintf("failed to get device template %d: %v", e.ID, e.Cause)
+}
+
+func (e *ErrGetTemplateFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrListTemplatesFailed is returned when listing device templates fails.
+type ErrListTemplatesFailed struct {
+	Cause error
+}
+
+func (e *ErrListTemplatesFailed) Error() string {
+	return fmt.Sprintf("failed to list device templates: %v", e.Cause)
+}
+
+func (e *ErrListTemplatesFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrUpdateTemplateFailed is returned when replacing a device template fails.
+type ErrUpdateTemplateFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e *ErrUpdateTemplateFailed) Error() string {
+	return fmt.Sprintf("failed to update device template %d: %v", e.ID, e.Cause)
+}
+
+func (e *ErrUpdateTemplateFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrDeleteTemplateFailed is returned when deleting a device template fails.
+type ErrDeleteTemplateFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e *ErrDeleteTemplateFailed) Error() string {
+	return fmt.Sprintf("failed to delete device template %d: %v", e.ID, e.Cause)
+}
+
+func (e *ErrDeleteTemplateFailed) Unwrap() error {
+	return e.Cause
+}
+
 // ErrCreateProfileFromTemplateFailed is returned when deriving a profile
 // from a device template fails.
 type ErrCreateProfileFromTemplateFailed struct {

@@ -23,7 +23,7 @@ encoded payload; each response is one status byte and one encoded payload.
 | `0x21` | `OpDNSDeleteRecord` | `DeleteRecordRequest` | `DeleteRecordResponse` |
 | `0x22` | `OpDNSUpdateRecord` | `zone`, `name`, `record_type`, `value`, `ttl`, `priority` | `success`, `zone`, `name`, `timestamp` |
 | `0x23` | `OpDNSGetRecord` | `zone`, `name`, `record_type` | `record`, `zone`, `timestamp` |
-| `0x24` | `OpDNSListRecords` | `ListRecordsRequest` | `Records` |
+| `0x24` | `OpDNSListRecords` | `ListRecordsRequest` (`Limit`, `Offset` page it as on gRPC) | `Records`, `Total`, `Limit`, `Offset` |
 | `0x25` | `OpDNSAddZone` | `CreateZoneRequest` | `CreateZoneResponse` |
 | `0x26` | `OpDNSDeleteZone` | `DeleteZoneRequest` | `DeleteZoneResponse` |
 | `0x27` | `OpDNSGetZone` | `zone` | `zone` (`id`, `name`, `ttl`, `description`, `internal`, `record_count`), `timestamp` |
@@ -50,8 +50,11 @@ QUIC opcode for update zone, sign zone, DNSSEC status or register.
   ```
 
 - **Daemon-native opcodes** (`0x22`, `0x23`, `0x27`, `0x2A`, `0x2C`) carry the
-  flat snake_case fields in the table. `0x22` deletes the record and adds it
-  again with `value`; `ttl` defaults to 3600.
+  flat snake_case fields in the table. `0x22` builds the old and new record
+  from `name` and `record_type` (one of A, AAAA, CNAME, MX, NS, TXT; MX takes
+  `priority`) and calls the servicer's `UpdateRecord`, so the new `value` is
+  checked first and a record the zone does not hold is `NotFound`; `ttl`
+  defaults to 3600.
 
 ## Status bytes
 

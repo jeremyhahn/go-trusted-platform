@@ -147,10 +147,13 @@ downgrade is invisible in every downstream artefact.
      `TPM2_HierarchyChangeAuth` (Part 3 §24.8) sets the owner auth to the SO
      PIN, which sets `ownerAuthSet`.
    - **Every later start (owner bit set)** — the SO PIN is presented. It is
-     checked first with an owner-authorized `TPM2_CreatePrimary` (Part 3
-     §24.1); a wrong SO PIN fails with `OwnerAuthRejectedError`, naming the
-     owner hierarchy, before the Platform KeyStore opens. The owner hierarchy
-     is not dictionary-attack protected, so the check costs no lockout.
+     checked first with an owner-authorized `TPM2_PolicySecret` (Part 3
+     §23.4) on a policy session the check starts and flushes; a wrong SO PIN
+     fails with `OwnerAuthRejectedError`, naming the owner hierarchy, before
+     the Platform KeyStore opens. Any other failure is `OwnerAuthProbeError`.
+     The command creates no object, so the check needs no key algorithm and
+     an RSA-only or ECC-only TPM passes it alike. The owner hierarchy is not
+     dictionary-attack protected, so the check costs no lockout.
    - The endorsement auth is presented as its bit says and is never changed;
      the lockout auth is never touched.
    - **A served `Clear` resets both in memory.** `TPM2_Clear` (Part 3 §24.6)

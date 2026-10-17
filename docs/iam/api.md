@@ -88,6 +88,13 @@ Rows below give the unscoped path; the tenant-scoped equivalent always exists.
 `iam_update_user` does not exist — user updates are REST, gRPC, QUIC and
 embedded only.
 
+Create user takes an email and no required username. The IAM SDK refuses an
+empty username, so every transport (REST, gRPC, Unix, QUIC, MCP) derives it
+from the email's local part (`alice@acme.test` → `alice`), or uses the whole
+address when it has no local part (`UsernameFromEmail` in
+`pkg/webservice/v1/rest/iam/mirror.go`). REST also accepts an explicit
+`username`.
+
 ## 4. Groups
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
@@ -270,6 +277,25 @@ gated or absent. Details and rationale:
 [architecture.md §Authorization Flow](architecture.md#authorization-flow) and
 [`docs/auth/architecture.md` §6c](../auth/architecture.md).
 
+**The daemon listener serves the tenant-scoped IAM routes (#949).**
+`SetIAMHandlers` (`pkg/api/daemon/rest_service.go`) mounts
+`/api/v1/iam/tenants` and `/api/v1/iam/tenants/{tenant}/...` on the daemon's
+REST listener, over the SDK IAM client and PEP the other transports use. There
+the guards are `IAMRouteGuards` (`pkg/api/rest/iam_guard.go`) over the daemon's
+scope guard: a bearer token or mTLS peer, `iam:read` for reads and the
+read-only checks, `iam:write` for the rest, `401` without a caller and `403`
+without the scope or for another tenant. The flat aliases of §2 are not
+mounted there, since they fall back to a browser session's tenant; a flat
+claim is recorded as divergent under #452 in the daemon's route-claims test.
+
+| Daemon REST route | Scope | Caller |
+|---|---|---|
+| `GET /api/v1/iam/tenants`, `GET /api/v1/iam/tenants/{tenant}` | `iam:read` | system tenant |
+| `POST`, `PUT`, `DELETE /api/v1/iam/tenants[/{tenant}]` | `iam:write` | system tenant |
+| `GET /api/v1/iam/tenants/{tenant}/{users,groups,roles,policies,apps}[/...]` | `iam:read` | `{tenant}` |
+| `POST /api/v1/iam/tenants/{tenant}/{permissions/check,policies/validate,policies/test}` | `iam:read` | `{tenant}` |
+| every other `/api/v1/iam/tenants/{tenant}/...` write | `iam:write` | `{tenant}` |
+
 That gate is REST-only; the gRPC, QUIC and MCP pictures follow.
 
 **The tenant binding is on every transport (#401).** A tenant-bound caller is
@@ -302,8 +328,13 @@ On gRPC, QUIC and MCP the check is `authorizeIAMTenant`
 (`pkg/api/daemon/iam_tenant_authz.go`); MCP reaches it because its IAM tools
 answer through the same `IAMGRPCService` methods. It covers every user, role,
 group, policy and application RPC, `CheckPermission`, and `GetTenant`,
-`UpdateTenant` and `DeleteTenant`. It does not cover `CreateTenant`,
-`ListTenants` or the token RPCs. The platform `TenantService` lifecycle RPCs have their own binding,
+`UpdateTenant` and `DeleteTenant`. `CreateTenant` and `ListTenants` act
+across tenants, so they admit the system tenant only, the rule REST applies
+with `RequireSystemTenant`: `authorizeSystemCaller` (same file) refuses any
+other tenant-bound caller with `PermissionDenied` (`ErrTenantSystemOnly`), and
+the unbound Unix operator is admitted. The daemon hands the service its
+system tenant with `SetSystemTenant`; without one, no tenant-bound caller is
+admitted. The token RPCs carry no tenant check. The platform `TenantService` lifecycle RPCs have their own binding,
 `authorizeTenant` (`pkg/api/daemon/tenant_grpc_authz.go`,
 [`docs/tenant/api.md`](../tenant/api.md) §7). A daemon run with `SkipIAMValidation`
 has no caller identity and serves the named tenant.

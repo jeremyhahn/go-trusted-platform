@@ -26,6 +26,7 @@ import (
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkcrypto "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -121,6 +122,59 @@ func (e ErrKMSMissingKeySpec) GRPCStatus() *status.Status {
 	return status.New(codes.InvalidArgument, e.Error())
 }
 
+// ErrKMSNilMetadata is returned when the KMS answers a metadata call with
+// no metadata.
+type ErrKMSNilMetadata struct{}
+
+func (e ErrKMSNilMetadata) Error() string {
+	return "KMS returned no key metadata"
+}
+
+// GRPCStatus classifies the error as Internal.
+func (e ErrKMSNilMetadata) GRPCStatus() *status.Status {
+	return status.New(codes.Internal, e.Error())
+}
+
+// ErrKMSGeneratedKeyMetadata is returned when a key was generated but the
+// description and tags of the request could not be recorded on it, or its
+// metadata could not be read back.
+type ErrKMSGeneratedKeyMetadata struct {
+	KeyID string
+	Err   error
+}
+
+func (e ErrKMSGeneratedKeyMetadata) Error() string {
+	return "KMS key " + e.KeyID + " was generated but its metadata could not be recorded: " + e.Err.Error()
+}
+
+func (e ErrKMSGeneratedKeyMetadata) Unwrap() error {
+	return e.Err
+}
+
+// GRPCStatus classifies the error by its cause.
+func (e ErrKMSGeneratedKeyMetadata) GRPCStatus() *status.Status {
+	return status.New(errclass.Code(e.Err), e.Error())
+}
+
+// ErrKMSTenantKeyMetadataUnsupported is returned, before any key is
+// generated, when a generate request in a non-system tenant's key scope
+// carries a description or tags. The SDK cannot record them there; see
+// tenantScopedKeyGeneration for the gap.
+type ErrKMSTenantKeyMetadataUnsupported struct {
+	TenantID string
+	KeyID    string
+}
+
+func (e ErrKMSTenantKeyMetadataUnsupported) Error() string {
+	return "KMS key " + e.KeyID + " not generated: tenant " + e.TenantID +
+		" cannot set a description or tags on a generated key, because the go-quicbaas SDK looks key metadata up outside the tenant scope"
+}
+
+// GRPCStatus classifies the error as FailedPrecondition on every transport.
+func (e ErrKMSTenantKeyMetadataUnsupported) GRPCStatus() *status.Status {
+	return status.New(codes.FailedPrecondition, e.Error())
+}
+
 // =============================================================================
 // Platform KMS Backend
 // =============================================================================
@@ -131,9 +185,16 @@ func (e ErrKMSMissingKeySpec) GRPCStatus() *status.Status {
 // single backing implementation for the platform.v1 KMS surface across the
 // gRPC-TCP, gRPC-UDS, REST, and embedded transports.
 type PlatformKMSBackend struct {
-	kmsClient    quicbaas.KMSClient
-	cryptoClient quicbaas.CryptoClient
-	logger       *slog.Logger
+	kmsClient      quicbaas.KMSClient
+	cryptoClient   quicbaas.CryptoClient
+	logger         *slog.Logger
+	systemTenantID string
+}
+
+// SetSystemTenant sets the platform's system tenant, which decides whether a
+// generate request runs in the system or a tenant key scope.
+func (b *PlatformKMSBackend) SetSystemTenant(tenantID string) {
+	b.systemTenantID = tenantID
 }
 
 // NewPlatformKMSBackend creates a platform KMS backend wrapping the SDK
@@ -157,7 +218,9 @@ func (s *KMSService) PlatformKMSBackend() (*PlatformKMSBackend, error) {
 	if err := s.initializeServers(); err != nil {
 		return nil, err
 	}
-	return NewPlatformKMSBackend(s.kmsAdapter.client, s.cryptoServer.client, s.logger), nil
+	backend := NewPlatformKMSBackend(s.kmsAdapter.client, s.cryptoServer.client, s.logger)
+	backend.SetSystemTenant(s.systemTenantID)
+	return backend, nil
 }
 
 // kmsOrErr returns the SDK KMS client or a typed unavailable error.
@@ -205,6 +268,11 @@ func (b *PlatformKMSBackend) GenerateKey(
 		return nil, err
 	}
 
+	tenantScoped, err := tenantScopedKeyGeneration(ctx, b.systemTenantID, req.Name, req.Description, req.Tags)
+	if err != nil {
+		return nil, err
+	}
+
 	resp, err := client.GenerateKey(ctx, &kms.GenerateKeyRequest{
 		Name:               req.Name,
 		Algorithm:          algorithm,
@@ -216,32 +284,16 @@ func (b *PlatformKMSBackend) GenerateKey(
 		return nil, err
 	}
 
-	now := unixNow()
-	algorithmPb := sdkAlgorithmToPlatformKMS(resp.Algorithm)
+	meta, err := recordGeneratedKeyMetadata(ctx, client, tenantScoped, resp, req.Description, req.Tags)
+	if err != nil {
+		return nil, err
+	}
+
+	handle, metadata := sdkKeyMetadataToPlatformKMS(meta)
 	return &grpcapi.KMSGenerateKeyResponse{
-		Key: &grpcapi.KMSKeyHandle{
-			KeyID:     resp.KeyID,
-			Version:   uint64(resp.Version),
-			Algorithm: algorithmPb,
-			Status:    int32(platformv1.KeyStatus_KEY_STATUS_ENABLED),
-			CreatedAt: now,
-		},
-		Metadata: &grpcapi.KMSKeyMetadata{
-			KeyID:              resp.KeyID,
-			Name:               req.Name,
-			Description:        req.Description,
-			Algorithm:          algorithmPb,
-			Status:             int32(platformv1.KeyStatus_KEY_STATUS_ENABLED),
-			Usage:              req.KeySpec.Usage,
-			Version:            uint64(resp.Version),
-			Exportable:         resp.Exportable,
-			DeletionProtection: resp.DeletionProtection,
-			CreatedAt:          now,
-			UpdatedAt:          now,
-			Tags:               req.Tags,
-			Owner:              req.Owner,
-		},
-		Timestamp: now,
+		Key:       handle,
+		Metadata:  metadata,
+		Timestamp: unixNow(),
 	}, nil
 }
 
@@ -327,34 +379,43 @@ func (b *PlatformKMSBackend) GetKey(
 		return nil, err
 	}
 
-	algorithmPb := sdkAlgorithmToPlatformKMS(meta.Algorithm)
-	statusPb := sdkStatusToPlatformKMS(meta.Status)
+	handle, metadata := sdkKeyMetadataToPlatformKMS(meta)
 	return &grpcapi.KMSGetKeyResponse{
-		Key: &grpcapi.KMSKeyHandle{
-			KeyID:     meta.KeyID,
-			Version:   uint64(meta.Version),
-			Algorithm: algorithmPb,
-			Status:    statusPb,
-			CreatedAt: unixOrZero(meta.CreatedAt),
-		},
-		Metadata: &grpcapi.KMSKeyMetadata{
-			KeyID:              meta.KeyID,
-			Name:               meta.Name,
-			Description:        meta.Description,
-			Algorithm:          algorithmPb,
-			Status:             statusPb,
-			Usage:              sdkUsagesToPlatformKMS(meta.Usage),
-			Version:            uint64(meta.Version),
-			Exportable:         meta.Exportable,
-			DeletionProtection: meta.DeletionProtection,
-			CreatedAt:          unixOrZero(meta.CreatedAt),
-			UpdatedAt:          unixOrZero(meta.UpdatedAt),
-			LastUsedAt:         unixOrZero(meta.LastUsedAt),
-			Tags:               meta.Tags,
-			Owner:              meta.Owner,
-		},
+		Key:       handle,
+		Metadata:  metadata,
 		Timestamp: unixNow(),
 	}, nil
+}
+
+// sdkKeyMetadataToPlatformKMS converts the metadata the KMS recorded for a key
+// into the platform key handle and key metadata.
+func sdkKeyMetadataToPlatformKMS(meta *kms.KeyMetadataResponse) (*grpcapi.KMSKeyHandle, *grpcapi.KMSKeyMetadata) {
+	algorithmPb := sdkAlgorithmToPlatformKMS(meta.Algorithm)
+	statusPb := sdkStatusToPlatformKMS(meta.Status)
+	handle := &grpcapi.KMSKeyHandle{
+		KeyID:     meta.KeyID,
+		Version:   uint64(meta.Version),
+		Algorithm: algorithmPb,
+		Status:    statusPb,
+		CreatedAt: unixOrZero(meta.CreatedAt),
+	}
+	metadata := &grpcapi.KMSKeyMetadata{
+		KeyID:              meta.KeyID,
+		Name:               meta.Name,
+		Description:        meta.Description,
+		Algorithm:          algorithmPb,
+		Status:             statusPb,
+		Usage:              sdkUsagesToPlatformKMS(meta.Usage),
+		Version:            uint64(meta.Version),
+		Exportable:         meta.Exportable,
+		DeletionProtection: meta.DeletionProtection,
+		CreatedAt:          unixOrZero(meta.CreatedAt),
+		UpdatedAt:          unixOrZero(meta.UpdatedAt),
+		LastUsedAt:         unixOrZero(meta.LastUsedAt),
+		Tags:               meta.Tags,
+		Owner:              meta.Owner,
+	}
+	return handle, metadata
 }
 
 // ListKeys lists keys via the SDK KMS client with offset-cursor pagination

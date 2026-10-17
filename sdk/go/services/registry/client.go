@@ -106,6 +106,20 @@ func (c *Client) Delete(ctx context.Context, repository, reference, digest strin
 }
 
 // NewPushMetadata creates a PushMetadata proto for streaming push operations.
+// AnnotationOverwrite is the push-metadata annotation that asks the
+// registry to replace an artifact already stored under the same tag. Its
+// value is "true"; any other value, or its absence, refuses the overwrite.
+const AnnotationOverwrite = "overwrite"
+
+// WithOverwrite marks metadata so the push replaces an existing tag.
+func WithOverwrite(metadata *platformv1.PushMetadata) *platformv1.PushMetadata {
+	if metadata.Annotations == nil {
+		metadata.Annotations = make(map[string]string, 1)
+	}
+	metadata.Annotations[AnnotationOverwrite] = "true"
+	return metadata
+}
+
 func NewPushMetadata(repository, tag string, totalSize int64) *platformv1.PushMetadata {
 	return &platformv1.PushMetadata{
 		Repository: repository,

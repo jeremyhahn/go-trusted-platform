@@ -17,8 +17,6 @@ package iam
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -32,32 +30,39 @@ import (
 // (service.DefaultTenantOwnerRole).
 const tenantOwnerRole = "admin"
 
-// TestIAMTenantDefaultRoles_OwnerMirrorSucceeds is the #641 regression: a
-// tenant created through the platform tenant API carries its default IAM
-// roles, so the user the registration mirror creates there - an owner holding
-// the admin role - is accepted and appears in the tenant's IAM user list, on
-// every protocol.
+// TestIAMTenantDefaultRoles_OwnerMirrorSucceeds is the #641 regression: an
+// IAM tenant carries its default IAM roles, so the user the registration
+// mirror creates there - an owner holding the admin role - is accepted and
+// appears in the tenant's IAM user list, on every protocol.
+//
+// REST, gRPC, QUIC and MCP act as the caller bound to helpers.ForeignTenantID
+// by the harness tenant credential: the server refuses a tenant-bound caller,
+// the system tenant included, on another tenant's IAM data (go-qrdb #683), so
+// a tenant-bound caller can only show this in its own tenant. The CLI and the
+// Unix socket are the unbound operator. The Unix operator creates the IAM
+// tenant first, through the CreateTenant rpc that provisions the default roles.
 //
 // The integration platformd runs without webservices, so WebAuthn
 // registration itself cannot run here; this exercises the IAM operation the
-// mirror performs, on a tenant created the way registration creates one.
+// mirror performs.
 func TestIAMTenantDefaultRoles_OwnerMirrorSucceeds(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	rest := NewRESTAdapter()
-	helpers.RequireAdapterSetup(t, "iam", "REST", rest.Setup(ctx))
+	operator := NewUnixAdapter()
+	helpers.RequireAdapterSetup(t, "iam", "Unix", operator.Setup(ctx))
 	defer func() {
-		_ = rest.Teardown(ctx)
+		_ = operator.Teardown(ctx)
 	}()
-	tenantID := createPlatformTenant(t, ctx, rest)
+	tenantID := helpers.ForeignTenantID
+	helpers.EnsureIAMTenant(t, ctx, operator.client, tenantID)
 
 	adapters := map[string]func() IAMCommands{
 		"CLI":  func() IAMCommands { return NewCLIAdapter() },
-		"REST": func() IAMCommands { return NewRESTAdapter() },
-		"gRPC": func() IAMCommands { return NewGRPCAdapter() },
-		"QUIC": func() IAMCommands { return NewQUICAdapter() },
-		"MCP":  func() IAMCommands { return NewMCPAdapter() },
+		"REST": func() IAMCommands { return NewTenantRESTAdapter() },
+		"gRPC": func() IAMCommands { return NewTenantGRPCAdapter() },
+		"QUIC": func() IAMCommands { return NewTenantQUICAdapter() },
+		"MCP":  func() IAMCommands { return NewTenantMCPAdapter() },
 		"Unix": func() IAMCommands { return NewUnixAdapter() },
 	}
 	for name, newAdapter := range adapters {
@@ -84,7 +89,7 @@ func testOwnerMirrorSucceeds(t *testing.T, ctx context.Context, adapter IAMComma
 		Roles:    []string{tenantOwnerRole},
 	})
 	if err != nil {
-		t.Fatalf("CreateUser with role %q in a new platform tenant failed (default roles missing?): %v", tenantOwnerRole, err)
+		t.Fatalf("CreateUser with role %q in tenant %q failed (default roles missing?): %v", tenantOwnerRole, tenantID, err)
 	}
 
 	listed, err := adapter.ListUsers(ctx, ListUsersOptions{TenantID: tenantID, Limit: 100})
@@ -100,33 +105,4 @@ func testOwnerMirrorSucceeds(t *testing.T, ctx context.Context, adapter IAMComma
 		}
 	}
 	t.Fatalf("user %s is missing from the IAM users of tenant %s (%d listed)", email, tenantID, len(listed.Users))
-}
-
-// createPlatformTenant creates a tenant through the platform tenant API -
-// the tenant.Manager path that provisions the default IAM roles - and deletes
-// it when the test ends.
-func createPlatformTenant(t *testing.T, ctx context.Context, adapter *RESTAdapter) string {
-	t.Helper()
-
-	request := map[string]string{"name": "iam-roles-" + uuid.New().String()[:8]}
-	body, err := adapter.doRequest(ctx, http.MethodPost, "/api/v1/tenants", request)
-	if err != nil {
-		t.Fatalf("creating a platform tenant failed: %v", err)
-	}
-
-	var tenant struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(body, &tenant); err != nil || tenant.ID == "" {
-		t.Fatalf("unexpected create tenant response %q: %v", body, err)
-	}
-
-	t.Cleanup(func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if _, err := adapter.doRequest(cleanupCtx, http.MethodDelete, "/api/v1/tenants/"+tenant.ID, nil); err != nil {
-			t.Logf("deleting tenant %s failed: %v", tenant.ID, err)
-		}
-	})
-	return tenant.ID
 }

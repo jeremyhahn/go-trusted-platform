@@ -45,8 +45,11 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **device-enrollment** — AVR enrollment, device registry and gateway relay — [#696](../../issues/696) — open
 - **sdk** — the full composed go-quicbaas surface re-exported — [#704](../../issues/704) — open
 - **vpn** — the attested remote-access VPN: multi-protocol surface, CLI and client agent — [#584](../../issues/584) — open
+- **installer** — a booting node authenticates to the control-plane API with its IDevID over mTLS, the install-completion webhook included — [#238](../../issues/238) — open
 
 ## Next
+- **bootstrap** — every NBD package behind one build tag, omitted from a client binary that does not use NBD — [#883](../../issues/883) — open
+- **installer** — the initrd brings up the WireGuard overlay and attaches the NBD root inside it — [#883](../../issues/883) — open
 - **attestation** — the SDK peer verifier replaces the VM verifier and the DevID validator — [#666](../../issues/666) — open
 - **auth** — users held in go-quicbaas IAM, no user store of the platform's own — [#644](../../issues/644) — open
 - **bootstrap** — the FIPS Noise bootstrap listener — [#518](../../issues/518) — open
@@ -57,6 +60,8 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **policy-engines** — Rego policies held in the datastore and served through the go-quicbaas SDK, with the embedded set as the floor; ruled option A: go-qrdb ABAC answers every access question, OPA every evidence question including image admission and workload compliance — [docs/security/](docs/security/) — open
 - **policy-engines** — OPA behind one build tag, so a binary that evaluates no evidence omits it (as the NBD build tag) — [docs/security/](docs/security/) — open
 - **tenant** — tenant VRFs and the platform-services VRF — [#721](../../issues/721) — blocked: waits on #709
+- **bootstrap** — the seed model with control-plane, gateway and compute templates, the EK policy and EK retrieval through the BMC or the device — [#883](../../issues/883) — open
+- **device-enrollment** — enrollment from pre-defined device configurations through enroll-01 and endorse-01, continuously attested — [#883](../../issues/883) — open
 
 ## Later
 - **volume** — go-blockstore volumes on go-qrdb's volume pools, with the trust and workload wiring — [#90](../../issues/90) — open

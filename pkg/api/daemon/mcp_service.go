@@ -65,7 +65,7 @@ type MCPServiceProviderConfig struct {
 	VTPMService          vtpm.VTPMService
 	DeviceService        device.DeviceService
 	DeviceProfileService device.DeviceProfileService
-	// DeviceTemplateService backs device_template_create and
+	// DeviceTemplateService backs the device_template_* tools and
 	// profile_create_from_template; nil answers that no template service
 	// is configured.
 	DeviceTemplateService device.DeviceTemplateService
@@ -91,6 +91,7 @@ type MCPServiceProviderConfig struct {
 	IAMClient             quicbaassdk.IAMClient
 	PEPClient             quicbaassdk.IAMPEPClient
 	IAMTokens             *IAMTokenService // iam_*_token tools; nil refuses verification
+	PlatformTenantID      string           // the system tenant, the only one admitted to create and list IAM tenants
 	KMSService            baasservice.KMSService
 	CryptoService         baasservice.CryptoService
 	SecretsService        baasservice.SecretsService
@@ -194,6 +195,9 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		logger = slog.Default()
 	}
 
+	iam := NewIAMGRPCService(logger, config.IAMClient, config.PEPClient)
+	iam.SetSystemTenant(config.PlatformTenantID)
+
 	return &MCPServiceProvider{
 		caService:             config.CAService,
 		vtpmService:           config.VTPMService,
@@ -208,7 +212,7 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		dnsService:            config.DNSService,
 		sdnService:            config.SDNService,
 		healthService:         config.HealthService,
-		iam:                   NewIAMGRPCService(logger, config.IAMClient, config.PEPClient),
+		iam:                   iam,
 		iamTokens:             config.IAMTokens,
 		kmsService:            config.KMSService,
 		cryptoService:         config.CryptoService,
@@ -808,6 +812,7 @@ func (p *MCPServiceProvider) DeviceList(ctx context.Context, filter map[string]s
 	}
 
 	query := datastore.PageQuery{
+		Page:      datastore.FirstPage,
 		PageSize:  100,
 		SortOrder: datastore.SortAscending,
 	}

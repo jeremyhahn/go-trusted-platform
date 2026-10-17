@@ -300,6 +300,31 @@ func TestGenericDAO_Page(t *testing.T) {
 	})
 }
 
+// TestGenericDAO_PageZeroQuery pins the paging inputs that panicked the
+// daemon's MCP DeviceList (page 0, size 100 sliced at [-100:]): a page
+// below one reads the first page and a size below one uses the default.
+func TestGenericDAO_PageZeroQuery(t *testing.T) {
+	storage := newMemoryStorage()
+	require.NoError(t, storage.Start(context.Background()))
+	dao := NewGenericDAO[*entities.Role](
+		storage, "Role", func() *entities.Role { return &entities.Role{} }, logging.DefaultLogger(),
+	)
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		require.NoError(t, dao.Save(ctx, &entities.Role{ID: uint64(i + 1), Name: "role"}))
+	}
+
+	result, err := dao.Page(ctx, datastore.PageQuery{PageSize: 100})
+	require.NoError(t, err)
+	assert.Len(t, result.Entities, 3)
+	assert.Equal(t, datastore.FirstPage, result.Page)
+
+	result, err = dao.Page(ctx, datastore.PageQuery{Page: -2, PageSize: 0})
+	require.NoError(t, err)
+	assert.Len(t, result.Entities, 3)
+	assert.Equal(t, datastore.DefaultPageSize, result.PageSize)
+}
+
 func TestGenericDAO_ForEachPage(t *testing.T) {
 	t.Run("iterates all pages", func(t *testing.T) {
 		storage := newMemoryStorage()

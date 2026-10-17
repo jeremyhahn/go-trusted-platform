@@ -46,16 +46,18 @@ var errPlatformKMSTest = errors.New("platform kms test error")
 
 // platformMockKMSClient implements kms.Client with overridable functions.
 type platformMockKMSClient struct {
-	generateKeyFn     func(ctx context.Context, req *kms.GenerateKeyRequest) (*kms.GenerateKeyResponse, error)
-	importKeyFn       func(ctx context.Context, req *kms.ImportKeyRequest) (*kms.ImportKeyResponse, error)
-	getKeyMetadataFn  func(ctx context.Context, keyID string) (*kms.KeyMetadataResponse, error)
-	listKeysFn        func(ctx context.Context) (*kms.ListKeysResponse, error)
-	deleteKeyFn       func(ctx context.Context, keyID string) error
-	rotateKeyFn       func(ctx context.Context, keyID string) (*kms.RotateKeyResponse, error)
-	updateKeyStatusFn func(ctx context.Context, req *kms.UpdateKeyStatusRequest) (*kms.UpdateKeyStatusResponse, error)
-	exportKeyFn       func(ctx context.Context, req *kms.ExportKeyRequest) (*kms.ExportKeyResponse, error)
-	listKeyVersionsFn func(ctx context.Context, keyID string) (*kms.ListKeyVersionsResponse, error)
-	backendStatusFn   func(ctx context.Context) (*kms.BackendStatusResponse, error)
+	generateKeyFn    func(ctx context.Context, req *kms.GenerateKeyRequest) (*kms.GenerateKeyResponse, error)
+	importKeyFn      func(ctx context.Context, req *kms.ImportKeyRequest) (*kms.ImportKeyResponse, error)
+	getKeyMetadataFn func(ctx context.Context, keyID string) (*kms.KeyMetadataResponse, error)
+	// updateKeyMetadataFn answers UpdateKeyMetadata; unset, the call fails.
+	updateKeyMetadataFn func(ctx context.Context, req *kms.UpdateKeyMetadataRequest) (*kms.KeyMetadataResponse, error)
+	listKeysFn          func(ctx context.Context) (*kms.ListKeysResponse, error)
+	deleteKeyFn         func(ctx context.Context, keyID string) error
+	rotateKeyFn         func(ctx context.Context, keyID string) (*kms.RotateKeyResponse, error)
+	updateKeyStatusFn   func(ctx context.Context, req *kms.UpdateKeyStatusRequest) (*kms.UpdateKeyStatusResponse, error)
+	exportKeyFn         func(ctx context.Context, req *kms.ExportKeyRequest) (*kms.ExportKeyResponse, error)
+	listKeyVersionsFn   func(ctx context.Context, keyID string) (*kms.ListKeyVersionsResponse, error)
+	backendStatusFn     func(ctx context.Context) (*kms.BackendStatusResponse, error)
 }
 
 func (m *platformMockKMSClient) GenerateKey(ctx context.Context, req *kms.GenerateKeyRequest) (*kms.GenerateKeyResponse, error) {
@@ -134,6 +136,9 @@ func (m *platformMockKMSClient) GetKeyMetadata(ctx context.Context, keyID string
 }
 
 func (m *platformMockKMSClient) UpdateKeyMetadata(ctx context.Context, req *kms.UpdateKeyMetadataRequest) (*kms.KeyMetadataResponse, error) {
+	if m.updateKeyMetadataFn != nil {
+		return m.updateKeyMetadataFn(ctx, req)
+	}
 	return nil, errPlatformKMSTest
 }
 
@@ -306,6 +311,17 @@ func TestPlatformKMSBackendGenerateKey(t *testing.T) {
 					Exportable: req.Exportable,
 				}, nil
 			},
+			updateKeyMetadataFn: func(ctx context.Context, req *kms.UpdateKeyMetadataRequest) (*kms.KeyMetadataResponse, error) {
+				return &kms.KeyMetadataResponse{
+					KeyID:       req.KeyID,
+					Description: req.Description,
+					Algorithm:   kms.AlgorithmRSA2048,
+					Version:     1,
+					Exportable:  true,
+					Tags:        req.Tags,
+					Owner:       "kms-recorded-owner",
+				}, nil
+			},
 		}, &platformMockCryptoClient{})
 
 		resp, err := backend.GenerateKey(ctx, &grpcapi.KMSGenerateKeyRequest{
@@ -340,7 +356,10 @@ func TestPlatformKMSBackendGenerateKey(t *testing.T) {
 		if resp.Key.Algorithm != int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_2048) {
 			t.Errorf("unexpected algorithm: %d", resp.Key.Algorithm)
 		}
-		if resp.Metadata.Owner != "tester" || resp.Metadata.Tags["env"] != "test" {
+		// The owner is the one the KMS recorded: the SDK cannot carry the
+		// requested one.
+		if resp.Metadata.Owner != "kms-recorded-owner" || resp.Metadata.Tags["env"] != "test" ||
+			resp.Metadata.Description != "test description" || !resp.Metadata.Exportable {
 			t.Errorf("unexpected metadata: %+v", resp.Metadata)
 		}
 	})

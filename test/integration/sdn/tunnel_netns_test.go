@@ -383,14 +383,20 @@ func TestTunnel_NetNS_WireGuardRelaunchAdopts(t *testing.T) {
 		rotated, err := wgtypes.GeneratePrivateKey()
 		require.NoError(t, err)
 		keys.material["wg/host"] = rotated[:]
+
+		// The peer learns the new key first, as the control plane delivers
+		// it. The recreated device sends its first handshake initiation the
+		// moment it comes up (persistent keepalive); a peer that still knew
+		// only the old key would drop it, and WireGuard retries only after
+		// REKEY_TIMEOUT (5s), longer than the dial waits.
+		peerConfigure(t, peerNS, "pwg1", peerKey, rotated.PublicKey())
 		ensure()
 		recreated, err := hh.LinkByName("hwg1")
 		require.NoError(t, err)
 		assert.NotEqual(t, first.Attrs().Index, recreated.Attrs().Index, "a device with another key is not adopted")
 		assert.Equal(t, rotated.PublicKey(), hostDevice(t, hostNS, "hwg1").PublicKey)
 
-		// The peer learns the new key: traffic flows over the new device.
-		peerConfigure(t, peerNS, "pwg1", peerKey, rotated.PublicKey())
+		// Traffic flows over the new device.
 		require.NoError(t, dialWithin(hostNS, t, net.JoinHostPort(tunPeerInner, strconv.Itoa(tunEchoPort))))
 	})
 }

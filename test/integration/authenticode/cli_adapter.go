@@ -16,6 +16,7 @@
 package authenticode
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -72,12 +73,16 @@ func (c *CLIAdapter) Teardown() error {
 	return nil
 }
 
-// runCommand executes a platformctl command and returns the output.
+// runCommand executes a platformctl command and returns its stdout. The
+// authenticode verbs log to stderr (pkg/logging's default writer), so only
+// stdout carries the `-o json` result; stderr is kept for the error message.
 func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, c.binaryPath, args...)
-	output, err := cmd.CombinedOutput()
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	output, err := cmd.Output()
 	if err != nil {
-		return output, fmt.Errorf("command failed: %s: %w", string(output), err)
+		return output, fmt.Errorf("command failed: %s%s: %w", string(output), stderr.String(), err)
 	}
 	return output, nil
 }
@@ -100,7 +105,7 @@ func (c *CLIAdapter) Sign(ctx context.Context, opts SignOptions) (*SignResult, e
 		args = append(args, "--input", opts.Input)
 	}
 	if opts.Output != "" {
-		args = append(args, "--output", opts.Output)
+		args = append(args, "--out", opts.Output)
 	}
 
 	output, err := c.runCommand(ctx, args...)

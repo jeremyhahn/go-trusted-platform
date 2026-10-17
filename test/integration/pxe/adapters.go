@@ -53,20 +53,6 @@ func (e ErrRequestFailed) Unwrap() error {
 	return e.Err
 }
 
-// ErrAPIError indicates an error response from the service API.
-type ErrAPIError struct {
-	Protocol   string
-	StatusCode int
-	Message    string
-}
-
-func (e ErrAPIError) Error() string {
-	if e.StatusCode > 0 {
-		return fmt.Sprintf("%s API error (status %d): %s", e.Protocol, e.StatusCode, e.Message)
-	}
-	return fmt.Sprintf("%s API error: %s", e.Protocol, e.Message)
-}
-
 // ErrDeviceNotFound indicates a device was not found.
 type ErrDeviceNotFound struct {
 	DeviceID   string

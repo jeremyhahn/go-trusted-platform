@@ -216,15 +216,11 @@ func (a *MCPAdapter) CreateTenant(ctx context.Context, opts CreateTenantOptions)
 		return nil, err
 	}
 
-	var tenant TenantData
-	if err := json.Unmarshal(result, &tenant); err != nil {
-		return nil, ErrMCPRequestFailed{
-			Operation: "CreateTenant",
-			Message:   "failed to parse response: " + err.Error(),
-		}
+	tenant, err := decodeTenantWrite("CreateTenant", result)
+	if err != nil {
+		return nil, err
 	}
-
-	return &CreateTenantResult{Tenant: &tenant}, nil
+	return &CreateTenantResult{Tenant: tenant}, nil
 }
 
 // GetTenant retrieves a tenant by ID
@@ -270,15 +266,11 @@ func (a *MCPAdapter) UpdateTenant(ctx context.Context, opts UpdateTenantOptions)
 		return nil, err
 	}
 
-	var tenant TenantData
-	if err := json.Unmarshal(result, &tenant); err != nil {
-		return nil, ErrMCPRequestFailed{
-			Operation: "UpdateTenant",
-			Message:   "failed to parse response: " + err.Error(),
-		}
+	tenant, err := decodeTenantWrite("UpdateTenant", result)
+	if err != nil {
+		return nil, err
 	}
-
-	return &UpdateTenantResult{Tenant: &tenant}, nil
+	return &UpdateTenantResult{Tenant: tenant}, nil
 }
 
 // DeleteTenant removes a tenant
@@ -362,7 +354,7 @@ func (a *MCPAdapter) GetQuotas(ctx context.Context, opts GetQuotasOptions) (*Get
 
 // UpdateQuotas updates tenant quotas
 func (a *MCPAdapter) UpdateQuotas(ctx context.Context, opts UpdateQuotasOptions) (*UpdateQuotasResult, error) {
-	result, err := a.callTool(ctx, "tenant_update_quotas", opts)
+	result, err := a.callTool(ctx, "tenant_update_quotas", quotaUpdateArgs(opts))
 	if err != nil {
 		return nil, err
 	}
@@ -385,20 +377,16 @@ func (a *MCPAdapter) GetUsage(ctx context.Context, opts GetUsageOptions) (*GetUs
 		return nil, err
 	}
 
-	var usageResult GetUsageResult
-	if err := json.Unmarshal(result, &usageResult); err != nil {
-		return nil, ErrMCPRequestFailed{
-			Operation: "GetUsage",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &usageResult, nil
+	return decodeUsage(result)
 }
 
 // CheckQuota checks if a resource request can be fulfilled
 func (a *MCPAdapter) CheckQuota(ctx context.Context, opts CheckQuotaOptions) (*CheckQuotaResult, error) {
-	result, err := a.callTool(ctx, "tenant_check_quota", opts)
+	result, err := a.callTool(ctx, "tenant_check_quota", map[string]interface{}{
+		"tenant_id":     opts.TenantID,
+		"resource_type": opts.Resource,
+		"amount":        opts.Amount,
+	})
 	if err != nil {
 		return &CheckQuotaResult{
 			TenantID: opts.TenantID,
@@ -409,15 +397,7 @@ func (a *MCPAdapter) CheckQuota(ctx context.Context, opts CheckQuotaOptions) (*C
 		}, nil
 	}
 
-	var checkResult CheckQuotaResult
-	if err := json.Unmarshal(result, &checkResult); err != nil {
-		return nil, ErrMCPRequestFailed{
-			Operation: "CheckQuota",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &checkResult, nil
+	return decodeCheckQuota(result)
 }
 
 // =============================================================================
@@ -521,6 +501,106 @@ func (a *MCPAdapter) TenantBarrierStatus(ctx context.Context, opts TenantBarrier
 	}
 
 	return &statusResult, nil
+}
+
+// =============================================================================
+// Tool argument and result shapes
+// =============================================================================
+
+// tenantWriteResult is the tenant_create / tenant_update reply: the call's
+// status beside the tenant it wrote (pkg/api/mcp statusResult). tenant_get
+// and tenant_get_by_name return the tenant itself.
+type tenantWriteResult struct {
+	Success bool        `json:"success"`
+	Message string      `json:"message"`
+	Tenant  *TenantData `json:"tenant"`
+}
+
+// decodeTenantWrite reads the tenant out of a tenant_create / tenant_update
+// reply. A reply without one is an error, so a caller never goes on with an
+// empty tenant ID.
+func decodeTenantWrite(operation string, result json.RawMessage) (*TenantData, error) {
+	var reply tenantWriteResult
+	if err := json.Unmarshal(result, &reply); err != nil {
+		return nil, ErrMCPRequestFailed{
+			Operation: operation,
+			Message:   "failed to parse response: " + err.Error(),
+		}
+	}
+	if reply.Tenant == nil || reply.Tenant.ID == "" {
+		return nil, ErrMCPRequestFailed{
+			Operation: operation,
+			Message:   "response carries no tenant: " + reply.Message,
+		}
+	}
+	return reply.Tenant, nil
+}
+
+// decodeUsage reads a tenant_get_usage reply, which nests the counters
+// under "usage" beside the tenant ID.
+func decodeUsage(result json.RawMessage) (*GetUsageResult, error) {
+	var reply struct {
+		TenantID string         `json:"tenant_id"`
+		Usage    GetUsageResult `json:"usage"`
+	}
+	if err := json.Unmarshal(result, &reply); err != nil {
+		return nil, ErrMCPRequestFailed{
+			Operation: "GetUsage",
+			Message:   "failed to parse response: " + err.Error(),
+		}
+	}
+	usage := reply.Usage
+	usage.TenantID = reply.TenantID
+	return &usage, nil
+}
+
+// decodeCheckQuota reads a tenant_check_quota reply, which names the
+// resource resource_type and the verdict available.
+func decodeCheckQuota(result json.RawMessage) (*CheckQuotaResult, error) {
+	var reply struct {
+		TenantID  string `json:"tenant_id"`
+		Resource  string `json:"resource_type"`
+		Amount    int64  `json:"amount"`
+		Available bool   `json:"available"`
+		Message   string `json:"message"`
+	}
+	if err := json.Unmarshal(result, &reply); err != nil {
+		return nil, ErrMCPRequestFailed{
+			Operation: "CheckQuota",
+			Message:   "failed to parse response: " + err.Error(),
+		}
+	}
+	return &CheckQuotaResult{
+		TenantID: reply.TenantID,
+		Resource: reply.Resource,
+		Amount:   reply.Amount,
+		Allowed:  reply.Available,
+		Message:  reply.Message,
+	}, nil
+}
+
+// quotaUpdateArgs flattens the quota update into the tenant_update_quotas
+// arguments, which name each limit at the top level; a limit left at 0
+// keeps the tenant's current value. The tool has no disk limit, so
+// MaxDiskGB is not sent.
+func quotaUpdateArgs(opts UpdateQuotasOptions) map[string]interface{} {
+	args := map[string]interface{}{"tenant_id": opts.TenantID}
+	if c := opts.Compute; c != nil {
+		args["max_vms"] = c.MaxVMs
+		args["max_containers"] = c.MaxContainers
+		args["max_vcpus"] = c.MaxVCPUs
+		args["max_memory_mb"] = c.MaxMemoryMB
+	}
+	if n := opts.Network; n != nil {
+		args["max_bridges"] = n.MaxBridges
+		args["max_ports"] = n.MaxPorts
+		args["max_bandwidth_mbps"] = n.MaxBandwidthMbps
+	}
+	if s := opts.Storage; s != nil {
+		args["max_volumes_gb"] = s.MaxVolumesGB
+		args["max_snapshots"] = s.MaxSnapshots
+	}
+	return args
 }
 
 // =============================================================================

@@ -162,6 +162,12 @@ type Config struct {
 	// and passes it through to the embedded server's IAM config.
 	SelfServiceRegistration *SelfServiceRegistrationConfig `yaml:"self-service-registration,omitempty" json:"self_service_registration,omitempty" mapstructure:"self-service-registration"`
 
+	// Vector turns the embedded server's vector database on
+	// (vector.enabled). Absent or disabled (the DEFAULT), the SDK's Vector
+	// client fails every call with ErrVectorUnavailable. Enabling it needs
+	// a WITH_VECTOR=1 build; Validate refuses it in any other.
+	Vector *VectorServiceConfig `yaml:"vector,omitempty" json:"vector,omitempty" mapstructure:"vector"`
+
 	// WebAuthnRPID, WebAuthnRPDisplayName and WebAuthnRPOrigins configure
 	// the embedded server's IAM WebAuthn relying party (iam.webauthn.*).
 	// They are populated programmatically from the platform's primary
@@ -517,6 +523,10 @@ func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
 		cfg.IAM.SelfServiceRegistration.Enabled = c.SelfServiceRegistration.Enabled
 	}
 
+	// Vector database: the embedded server registers the vector service
+	// only when vector.enabled is set (and the build carries it).
+	cfg.Vector.Enabled = c.Vector.Active()
+
 	// Admin enrollment and login factors: passed through verbatim to the
 	// embedded server's auth.* section, which is where first-boot reads
 	// them (pkg/server/iam_init.go for the CSR / PIV paths,
@@ -782,6 +792,10 @@ func (c *Config) validateEmbeddedConfig() error {
 
 	if c.CacheSize < 0 {
 		return ErrInvalidConfig{Field: "CacheSize", Reason: "cache size cannot be negative"}
+	}
+
+	if err := c.validateVector(); err != nil {
+		return err
 	}
 
 	if c.IsClustered() {

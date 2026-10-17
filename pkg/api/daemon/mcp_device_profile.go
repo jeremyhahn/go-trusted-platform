@@ -192,6 +192,59 @@ func (p *MCPServiceProvider) DeviceTemplateCreate(ctx context.Context, template 
 	return template, nil
 }
 
+// DeviceTemplateGet returns the stored device template with the given ID.
+func (p *MCPServiceProvider) DeviceTemplateGet(ctx context.Context, id uint64) (*deviceentities.DeviceTemplate, error) {
+	if p.deviceTemplateService == nil {
+		return nil, ErrServiceNotAvailable{Service: "device_template"}
+	}
+	template, err := p.deviceTemplateService.Get(ctx, id)
+	if err != nil {
+		return nil, deviceStatusError(err)
+	}
+	return template, nil
+}
+
+// DeviceTemplateList returns one page of device templates and the total
+// number of stored templates.
+func (p *MCPServiceProvider) DeviceTemplateList(ctx context.Context, page, pageSize int) ([]*deviceentities.DeviceTemplate, int, error) {
+	if p.deviceTemplateService == nil {
+		return nil, 0, ErrServiceNotAvailable{Service: "device_template"}
+	}
+	result, err := p.deviceTemplateService.Page(ctx, datastore.PageQuery{
+		Page:      page,
+		PageSize:  pageSize,
+		SortOrder: datastore.SortAscending,
+	})
+	if err != nil {
+		return nil, 0, deviceStatusError(err)
+	}
+	return result.Entities, result.Total, nil
+}
+
+// DeviceTemplateUpdate replaces the stored device template whose ID the
+// template carries.
+func (p *MCPServiceProvider) DeviceTemplateUpdate(ctx context.Context, template *deviceentities.DeviceTemplate) (*deviceentities.DeviceTemplate, error) {
+	if p.deviceTemplateService == nil {
+		return nil, ErrServiceNotAvailable{Service: "device_template"}
+	}
+	if err := p.deviceTemplateService.Update(ctx, template); err != nil {
+		return nil, deviceStatusError(err)
+	}
+	return template, nil
+}
+
+// DeviceTemplateDelete removes the stored device template with the given ID.
+func (p *MCPServiceProvider) DeviceTemplateDelete(ctx context.Context, id uint64) error {
+	if p.deviceTemplateService == nil {
+		return ErrServiceNotAvailable{Service: "device_template"}
+	}
+	template, err := p.deviceTemplateService.Get(ctx, id)
+	if err != nil {
+		return deviceStatusError(err)
+	}
+	return deviceStatusError(p.deviceTemplateService.Delete(ctx, template))
+}
+
 // DeviceProfileFromTemplate builds a profile from a stored template plus
 // the overrides and saves it, assigning a profile ID when absent.
 func (p *MCPServiceProvider) DeviceProfileFromTemplate(ctx context.Context, templateID uint64, overrides *deviceentities.DeviceProfile) (*deviceentities.DeviceProfile, error) {
