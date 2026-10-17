@@ -548,7 +548,6 @@ func TestKVService_Transaction(t *testing.T) {
 
 	sdk := requireSDK(t, tf.Factory)
 	txn := sdk.Transaction()
-	kv := sdk.KV()
 
 	ctx, cancel := testContext()
 	defer cancel()
@@ -559,41 +558,40 @@ func TestKVService_Transaction(t *testing.T) {
 		value1 := []byte(`{"version": 1}`)
 		value2 := []byte(`{"version": 2}`)
 
-		// Create initial value
-		putResp, err := kv.Put(ctx, &quicbaassdk.PutRequest{
-			EntityType: entityType,
-			Data:       value1,
-		})
-		require.NoError(t, err)
-
-		// Get current version
-		getResp, err := kv.Get(ctx, &quicbaassdk.GetRequest{
-			EntityType: entityType,
-			ID:         putResp.ID,
-		})
-		require.NoError(t, err)
-
-		// Transactional update with compare
-		resp, err := txn.Execute(ctx, &quicbaassdk.TxnRequest{
+		// Create the key only if it does not exist: version 0 means absent.
+		createResp, err := txn.Execute(ctx, &quicbaassdk.TxnRequest{
 			Compare: []quicbaassdk.Compare{
-				{
-					Key:      key,
-					Target:   quicbaassdk.CompareVersion,
-					Result:   quicbaassdk.CompareEqual,
-					Revision: getResp.Version,
-				},
+				{Key: key, Target: quicbaassdk.CompareVersion, Result: quicbaassdk.CompareEqual, Revision: 0},
 			},
 			Success: []quicbaassdk.TxnOp{
-				{
-					Type:       quicbaassdk.TxnOpPut,
-					EntityType: entityType,
-					Key:        key,
-					Value:      value2,
-				},
+				{Type: quicbaassdk.TxnOpPut, EntityType: entityType, Key: key, Value: value1},
 			},
 		})
 		require.NoError(t, err)
-		assert.NotNil(t, resp)
-		assert.True(t, resp.Succeeded)
+		assert.True(t, createResp.Succeeded)
+
+		// Swap only while the stored value is still value1.
+		swapResp, err := txn.Execute(ctx, &quicbaassdk.TxnRequest{
+			Compare: []quicbaassdk.Compare{
+				{Key: key, Target: quicbaassdk.CompareValue, Result: quicbaassdk.CompareEqual, Value: value1},
+			},
+			Success: []quicbaassdk.TxnOp{
+				{Type: quicbaassdk.TxnOpPut, EntityType: entityType, Key: key, Value: value2},
+			},
+		})
+		require.NoError(t, err)
+		assert.True(t, swapResp.Succeeded)
+
+		// A second create-if-absent loses: the key exists now.
+		recreateResp, err := txn.Execute(ctx, &quicbaassdk.TxnRequest{
+			Compare: []quicbaassdk.Compare{
+				{Key: key, Target: quicbaassdk.CompareVersion, Result: quicbaassdk.CompareEqual, Revision: 0},
+			},
+			Success: []quicbaassdk.TxnOp{
+				{Type: quicbaassdk.TxnOpPut, EntityType: entityType, Key: key, Value: value1},
+			},
+		})
+		require.NoError(t, err)
+		assert.False(t, recreateResp.Succeeded)
 	})
 }
