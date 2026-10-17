@@ -345,7 +345,10 @@ every key except `cold-start` and `barrier-gate` (each needs the shared
 publishes no DANE records) and `secureboot` (needs prebuilt FIPS-kernel
 artifacts), all three in the table below, and the keys that
 only run part of a suite already in the list (`lb`, `ipxe-dhcp`, `ipxe-tftp`,
-`ipxe-http`, `testenv-enrollment`).
+`ipxe-http`, `testenv-enrollment`). `tpm` runs last: its Clear case issues
+`TPM2_Clear` on the shared daemon's swtpm, which flushes the SRKs sealing the
+daemon's platform-policy key passwords, so no gRPC, QUIC or MCP handshake
+succeeds after it.
 
 The keys in the runner's `TARGET_NO_DAEMON` map skip the shared `platformd`:
 their suites start their own daemon or cluster, or test something that needs
