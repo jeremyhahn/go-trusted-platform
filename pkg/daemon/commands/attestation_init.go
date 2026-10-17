@@ -158,6 +158,10 @@ func wireAttestationOnConfig(ctx context.Context, logger *logging.Logger, a *app
 	} else if w.ReportingRest != nil && w.ReportingRest.Policy != nil {
 		cfg.AttestationReporting = &daemon.ReportingHandles{Policy: w.ReportingRest.Policy}
 	}
+	// The daemon's own REST listener serves the same attestation surface
+	// as the webservice, with the same caller policy (#949).
+	cfg.AttestationREST = w.ReportingRest
+	cfg.AttestationEvents = attestationEventReader(svcs)
 
 	// The platform fleet container attestor (#704) answers AttestContainer
 	// for this host against its profile's golden PCRs, and quarantines and

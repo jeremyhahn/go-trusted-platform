@@ -92,6 +92,7 @@ func daemonRouteTable(t *testing.T) (*RESTServer, []string) {
 	s.SetDNSService(routeTableDNS{}, nil)
 	s.SetOverlayHandlers(routeTableOverlay{})
 	s.SetCAHandlers(routeTableCA{}, nil)
+	s.SetAttestationHandlers(NewAttestationServiceServer(nil, log.Slog()), nil, nil, nil)
 	s.SetTPMHandlers(platformv1.UnimplementedTPMServiceServer{}, nil)
 	s.SetVTPMService(routeTableVTPM{})
 	s.SetSDNService(nil)
@@ -116,6 +117,8 @@ func daemonRouteTable(t *testing.T) (*RESTServer, []string) {
 // TestDaemonDivergentClaims_StillDiverge makes the map shrink-only.
 var daemonDivergentClaims = map[string]string{
 	"/platform.v1.CAService/RevokeCertificate": "#452: the daemon revokes at POST /api/v1/ca/certificates/{serial}/revoke; the claim is the webservice's DELETE shape",
+
+	"/platform.v1.AttestationService/PollDeviceVerdicts": "#949: the verdict feed is filtered by the webservice session's tenant, so only the webservice serves it over REST; platform-token callers poll it over gRPC, QUIC and MCP (rest_attestation.go)",
 
 	"/platform.v1.DeviceService/BootCertificate": deviceBootMachineFacing,
 	"/platform.v1.DeviceService/BootDelivery":    deviceBootMachineFacing,

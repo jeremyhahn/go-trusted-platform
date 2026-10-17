@@ -30,6 +30,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	restattestation "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/attestation"
 )
 
 // Config holds daemon configuration
@@ -168,6 +169,16 @@ type Config struct {
 	// refresh trigger and caller policy for the gRPC/Unix and MCP
 	// transports (#226). Nil on a node without the reporting service.
 	AttestationReporting *ReportingHandles
+
+	// AttestationREST is the reporting surface (caller policy, clock, report
+	// cache) the daemon's REST listener serves under /api/v1/attestation:
+	// the value the webservice registry gets, so both listeners enforce one
+	// caller policy. Nil leaves the quote routes operator-only.
+	AttestationREST *restattestation.Reporting
+
+	// AttestationEvents backs GET /api/v1/attestation/events on the daemon's
+	// REST listener. Nil leaves the route answering unavailable.
+	AttestationEvents restattestation.EventReader
 
 	// RegistryService is the artifact registry service implementation.
 	// When set, the daemon will register the Registry gRPC service.
