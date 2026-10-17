@@ -107,7 +107,7 @@ Pull an image. Writes to `--output` or stdout.
 | Flag | Short | Type | Default | Meaning |
 |---|---|---|---|---|
 | `--decrypt` | `-d` | bool | `false` | Decrypt encrypted image layers |
-| `--verify` | | bool | `false` | Verify the image signature |
+| `--verify` | | bool | `false` | Refuse an image whose manifest carries no signature |
 | `--platform` | `-p` | string | `""` | Target platform, e.g. `linux/amd64` |
 | `--output` | `-o` | string | `""` | Output file path; writes stdout when unset |
 
@@ -118,6 +118,15 @@ platformctl registry pull registry.example.com/apps/api:1.4.2 \
 
 `--verify` is opt-in, not the default. In an environment where image
 provenance matters, pass it — or pull through tooling that always does.
+
+The registry verifies the signature of every signed manifest on every pull,
+with or without `--verify` (§3), so a signed image that reaches the client has
+a signature that matched. `--verify` adds the other half: it refuses an image
+whose pulled manifest carries no `org.letstrust.registry.signature`
+annotation, failing with `ErrImageNotSigned` before any image byte is written.
+The check is made client-side because the pull request on the wire
+(`PullRequest` in `pkg/api/grpc/proto/registry.proto`) has no field to ask the
+server for it.
 
 ---
 

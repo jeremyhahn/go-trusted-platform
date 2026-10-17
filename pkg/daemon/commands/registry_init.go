@@ -17,7 +17,6 @@ import (
 	"log/slog"
 	"path/filepath"
 
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -100,7 +99,7 @@ func initRegistryServiceOnConfig(logger *logging.Logger, platform *app.App, cfg 
 	// key store under <PlatformDir>/registry/signing-keys, apart from
 	// the image-encryption keys.
 	signingRoot := filepath.Join(root, "signing-keys")
-	signer, err := newRegistrySigner(signingRoot)
+	signer, err := registry.NewFileManifestSigner(signingRoot)
 	if err != nil {
 		logger.Warnf("registry: manifest signer unavailable: %v", err)
 		return
@@ -121,21 +120,4 @@ func initRegistryServiceOnConfig(logger *logging.Logger, platform *app.App, cfg 
 	cfg.RegistryService = registry.NewGRPCAdapter(r)
 	registryBackends[cfg] = r
 	logger.Info("registry service wired", "root", root, "kms_root", kmsRoot)
-}
-
-// newRegistrySigner builds the registry's manifest signer on a PKCS#8 key
-// store rooted at dir.
-func newRegistrySigner(dir string) (*registry.ManifestSigner, error) {
-	storage, err := xkmssdk.NewFileStorageBackend(dir)
-	if err != nil {
-		return nil, err
-	}
-	keys, err := xkmssdk.NewPKCS8Backend(&xkmssdk.PKCS8BackendConfig{
-		KeyStorage:         storage,
-		AllowPlaintextKeys: true,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return registry.NewManifestSigner(keys)
 }

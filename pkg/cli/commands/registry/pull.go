@@ -14,6 +14,7 @@
 package registry
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	regsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/registry"
 )
 
@@ -118,49 +120,14 @@ func runPull(flags *cli.CommonFlags, ref string, decrypt, verify bool, platform,
 		writer = os.Stdout
 	}
 
-	// Track metadata and size
 	result := &PullResult{
 		Reference: ref,
 		Decrypted: decrypt,
-		Verified:  verify,
 		Platform:  platform,
 	}
-	var totalReceived int64
-
-	// Receive the stream
-	for {
-		resp, recvErr := stream.Recv()
-		if recvErr == io.EOF {
-			break
-		}
-		if recvErr != nil {
-			return ErrPullFailed{Reference: ref, Err: recvErr}
-		}
-
-		// Handle metadata
-		if metadata := resp.GetMetadata(); metadata != nil {
-			if metadata.GetArtifact() != nil {
-				result.Digest = metadata.GetArtifact().GetDigest()
-				if metadata.GetArtifact().GetOs() != "" || metadata.GetArtifact().GetArchitecture() != "" {
-					result.Platform = fmt.Sprintf("%s/%s",
-						metadata.GetArtifact().GetOs(),
-						metadata.GetArtifact().GetArchitecture())
-				}
-			}
-			continue
-		}
-
-		// Handle data chunk
-		if chunk := resp.GetChunk(); len(chunk) > 0 {
-			n, writeErr := writer.Write(chunk)
-			if writeErr != nil {
-				return ErrPullFailed{Reference: ref, Err: writeErr}
-			}
-			totalReceived += int64(n)
-		}
+	if err := receivePull(stream, writer, result, verify); err != nil {
+		return err
 	}
-
-	result.Size = totalReceived
 
 	printer := base.Printer()
 
@@ -191,4 +158,53 @@ func runPull(flags *cli.CommonFlags, ref string, decrypt, verify bool, platform,
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
 	}
+}
+
+// pullStream is the receiving side of a registry pull stream.
+type pullStream interface {
+	Recv() (*platformv1.PullResponse, error)
+}
+
+// receivePull copies the pulled image from stream to writer and records its
+// digest, platform and size in result. With verify set it refuses an image
+// whose manifest carries no signature before writing any of it; the registry
+// has already checked the signature of every signed manifest it serves.
+func receivePull(stream pullStream, writer io.Writer, result *PullResult, verify bool) error {
+	signed := false
+	for {
+		resp, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return ErrPullFailed{Reference: result.Reference, Err: err}
+		}
+
+		if metadata := resp.GetMetadata(); metadata != nil {
+			if artifact := metadata.GetArtifact(); artifact != nil {
+				signed = regsvc.IsSigned(artifact.GetAnnotations())
+				result.Digest = artifact.GetDigest()
+				if artifact.GetOs() != "" || artifact.GetArchitecture() != "" {
+					result.Platform = fmt.Sprintf("%s/%s", artifact.GetOs(), artifact.GetArchitecture())
+				}
+			}
+			continue
+		}
+
+		if verify && !signed {
+			return ErrImageNotSigned{Reference: result.Reference}
+		}
+		if chunk := resp.GetChunk(); len(chunk) > 0 {
+			n, writeErr := writer.Write(chunk)
+			if writeErr != nil {
+				return ErrPullFailed{Reference: result.Reference, Err: writeErr}
+			}
+			result.Size += int64(n)
+		}
+	}
+	if verify && !signed {
+		return ErrImageNotSigned{Reference: result.Reference}
+	}
+	result.Verified = verify
+	return nil
 }

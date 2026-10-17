@@ -142,7 +142,17 @@ const (
 	ManifestAnnotationEncrypted = "org.letstrust.registry.encrypted"
 	// ManifestAnnotationKeyID names the key the layers are encrypted under.
 	ManifestAnnotationKeyID = "org.letstrust.registry.key-id"
+	// ManifestAnnotationSignature carries the signature of a signed
+	// manifest. The registry verifies it on every pull, so a pulled artifact
+	// that carries it has a signature that verified.
+	ManifestAnnotationSignature = "org.letstrust.registry.signature"
 )
+
+// IsSigned reports whether a pulled artifact's manifest annotations carry a
+// signature.
+func IsSigned(annotations map[string]string) bool {
+	return annotations[ManifestAnnotationSignature] != ""
+}
 
 // WithEncryption marks metadata so the registry encrypts every layer under
 // keyID.

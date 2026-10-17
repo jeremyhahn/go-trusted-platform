@@ -198,11 +198,28 @@ func (g *GRPCAdapter) Pull(ctx context.Context, ref string, opts PullOptions) (*
 	if err := json.Unmarshal(data.Bytes(), &img); err != nil {
 		return nil, ErrInvalidResponse{Operation: "Pull", Err: err}
 	}
+	return pullResultOf(ref, &img, opts.VerifySignature)
+}
+
+// pullResultOf builds a pull result from the image envelope a transport
+// returned. The registry verifies the signature of every signed manifest it
+// serves, so a manifest that carries one is signed and valid; with verify,
+// an image without one is refused, as `platformctl registry pull --verify`
+// refuses it.
+func pullResultOf(ref string, img *registry.Image, verify bool) (*PullResult, error) {
 	result := &PullResult{
 		Reference: ref,
 		Manifest:  fromRegistryManifest(ref, img.Manifest),
 		Config:    img.Config,
 		PulledAt:  time.Now().UTC(),
+	}
+	if img.Manifest != nil && regsvc.IsSigned(img.Manifest.Annotations) {
+		result.Signed = true
+		result.SignatureValid = true
+		result.Manifest.Signed = true
+	}
+	if verify && !result.Signed {
+		return nil, ErrImageNotSigned{Reference: ref}
 	}
 	for _, l := range img.Layers {
 		result.Layers = append(result.Layers, LayerData{MediaType: l.MediaType, Content: l.Content})
