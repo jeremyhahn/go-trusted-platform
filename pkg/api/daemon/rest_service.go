@@ -36,9 +36,12 @@ import (
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -443,6 +446,43 @@ func (s *RESTServer) SetTenantHandlers(manager restapi.TenantManagerInterface, g
 	)
 	handlers.RegisterRoutes(s.router)
 	s.logger.Info("Tenant REST routes registered")
+}
+
+// SetIAMHandlers wires the IAM REST handlers onto the daemon's REST router so
+// /api/v1/iam/tenants and /api/v1/iam/tenants/{tenant}/{users,groups,roles,
+// policies,apps}/... are served. The handlers are the webservice's
+// (restiam.IAMRouter) over the same SDK IAM client and PEP that back the IAM
+// gRPC, QUIC, MCP and Unix-socket services, so an IAM write on one transport
+// is read back on every other.
+//
+// The daemon mounts the tenant-scoped routes only: the webservice's flat
+// aliases (/api/v1/iam/users, ...) fall back to a browser session's tenant,
+// which the daemon does not hold. Every route runs behind guard: the caller
+// needs iam:read (GET, and the read-only POSTs) or iam:write, the
+// /api/v1/iam/tenants routes are the system tenant's (systemTenantID), and a
+// route naming a tenant serves only the caller's own (docs/iam/api.md §8). A
+// nil guard answers 403. A nil iamClient leaves the routes unmounted, the
+// signal of a daemon built without IAM.
+func (s *RESTServer) SetIAMHandlers(iamClient restiam.IAMClient, pepClient restiam.PEPClient, guard *restapi.ScopeGuard, systemTenantID string) error {
+	if iamClient == nil {
+		return nil
+	}
+	guards := restapi.NewIAMRouteGuards(guard, systemTenantID, restiam.RequestedTenant)
+	logger := logging.NewFromSlog(s.logger)
+	iamRouter, err := restiam.NewIAMRouter(logger, iamClient, pepClient,
+		response.NewResponseWriter(logger, nil),
+		restiam.Authorization{
+			Authenticate:        guards.Authenticate,
+			RequireAdmin:        guards.RequireAdmin,
+			RequireSystemTenant: guards.RequireSystemTenant,
+			RequireOwnTenant:    guards.RequireOwnTenant,
+		})
+	if err != nil {
+		return err
+	}
+	iamRouter.RegisterTenantRoutes(s.router.PathPrefix(restBasePath).Subrouter())
+	s.logger.Info("IAM REST routes registered")
+	return nil
 }
 
 // SetKMSHandlers wires the KMS REST handlers onto the daemon's REST router so
