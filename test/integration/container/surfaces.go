@@ -25,10 +25,8 @@ const (
 
 // Why a transport has no surface for an operation.
 const (
-	reasonRESTLogs = "platformd serves no REST container logs route: the SDK maps GetContainerLogs to " +
-		"GET /api/v1/compute/containers/logs, which pkg/api/rest/compute_handlers.go does not register"
-	reasonQUICAttest = "the SDK QUIC transport maps no AttestContainer RPC (sdk/go/transport/quic/adapter.go); " +
-		"the daemon's OpContainerAttest is reached only by the flat container handler"
+	reasonRESTLogs = "the container log stream has no REST route by design (docs/compute/api.md §5); " +
+		"the SDK REST transport answers GetContainerLogs Unimplemented"
 	reasonMCPAttest = "the SDK MCP transport maps no AttestContainer RPC (sdk/go/transport/mcp/adapter.go); " +
 		"the server's container_attest tool is not reached"
 )
@@ -37,7 +35,6 @@ const (
 // and why. It is the one table both the adapters and the tests read.
 var missingSurfaces = map[string]map[string]string{
 	"REST": {opLogs: reasonRESTLogs},
-	"QUIC": {opAttest: reasonQUICAttest},
 	"MCP":  {opAttest: reasonMCPAttest},
 }
 

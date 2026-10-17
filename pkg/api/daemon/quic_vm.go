@@ -27,11 +27,10 @@ import (
 // top-level dispatcher) are handled first; VM sub-opcodes go to handleVMPB.
 // A sub-opcode neither answers is refused as unknown.
 //
-// The six unary container sub-opcodes converge to the platform.v1
-// ComputeService pb wire contract and delegate to the shared
+// The unary container sub-opcodes, attest included, converge to the
+// platform.v1 ComputeService pb wire contract and delegate to the shared
 // *ComputeGRPCService (see handleContainerPB); GetContainerLogs (streaming)
-// and OpContainerAttest have no converged pb path and are forwarded to the
-// flat ContainerHandler.
+// has no converged pb path and is forwarded to the flat ContainerHandler.
 func (h *QUICServiceHandler) handleVMServiceOperation(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if len(req.Payload) == 0 {
 		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICMissingField{Field: "sub_opcode"})
