@@ -158,6 +158,98 @@ func testVMAttestation(t *testing.T, ctx context.Context, adapter AttestationCom
 		}
 	})
 
+	t.Run("VerifyVMAttestation", func(t *testing.T) {
+		vmID := GenerateTestVMID(testID + "-verify")
+		nonce := GenerateTestNonce()
+
+		// First generate an attestation
+		attestOpts := GetVMAttestationOptions{
+			VMID:          vmID,
+			Nonce:         nonce,
+			PCRIndices:    DefaultPCRIndices(),
+			HashAlgorithm: DefaultHashAlgorithm(),
+		}
+
+		attestResult, err := adapter.GetVMAttestation(ctx, attestOpts)
+		if err != nil {
+			t.Fatalf("GetVMAttestation failed: %v", err)
+		}
+
+		// Now verify its quote under its AIK
+		verifyResult, err := adapter.VerifyVMAttestation(ctx, attestResult.VerifyOptions(nonce))
+		if expectNoVerifySurface(t, adapter, err) {
+			return
+		}
+		if err != nil {
+			t.Fatalf("VerifyVMAttestation failed: %v", err)
+		}
+
+		if verifyResult == nil {
+			t.Fatal("VerifyVMAttestation returned nil result")
+		}
+
+		if !verifyResult.Valid {
+			t.Errorf("Attestation should be valid, errors: %v", verifyResult.Errors)
+		}
+
+		if !verifyResult.NonceMatch {
+			t.Error("Nonce should match")
+		}
+
+		if !verifyResult.SignatureValid {
+			t.Error("Signature should be valid")
+		}
+	})
+
+	t.Run("VerifyVMAttestation_InvalidNonce", func(t *testing.T) {
+		vmID := GenerateTestVMID(testID + "-invalid")
+		nonce := GenerateTestNonce()
+
+		attestOpts := GetVMAttestationOptions{
+			VMID:          vmID,
+			Nonce:         nonce,
+			PCRIndices:    DefaultPCRIndices(),
+			HashAlgorithm: DefaultHashAlgorithm(),
+		}
+
+		attestResult, err := adapter.GetVMAttestation(ctx, attestOpts)
+		if err != nil {
+			t.Fatalf("GetVMAttestation failed: %v", err)
+		}
+
+		// Verify with wrong nonce
+		wrongNonce := GenerateTestNonce()
+		verifyResult, err := adapter.VerifyVMAttestation(ctx, attestResult.VerifyOptions(wrongNonce))
+		if expectNoVerifySurface(t, adapter, err) {
+			return
+		}
+		if err != nil {
+			t.Fatalf("VerifyVMAttestation failed: %v", err)
+		}
+
+		if verifyResult.Valid {
+			t.Error("Attestation should be invalid with wrong nonce")
+		}
+
+		if verifyResult.NonceMatch {
+			t.Error("Nonce should not match")
+		}
+	})
+}
+
+// expectNoVerifySurface reports whether adapter serves no quote verification
+// (QUIC: the attestation handlers are not constructed in production, #386).
+// There it asserts the call answered surface.ErrNoSurface.
+func expectNoVerifySurface(t *testing.T, adapter AttestationCommands, err error) bool {
+	t.Helper()
+	if adapter.Name() != "QUIC" {
+		return false
+	}
+	var noSurface surface.ErrNoSurface
+	if !errors.As(err, &noSurface) {
+		t.Errorf("VerifyVMAttestation over QUIC: got %v, want surface.ErrNoSurface", err)
+	}
+	return true
 }
 
 // =============================================================================
@@ -450,6 +542,18 @@ func TestAttestationMultiProtocol_ErrorHandling(t *testing.T) {
 				_, err := adapter.GetManifest(ctx, opts)
 				if err == nil {
 					t.Error("GetManifest should return error for non-existent manifest")
+				}
+			})
+
+			t.Run("VerifyVMAttestation_InvalidID", func(t *testing.T) {
+				opts := VerifyVMAttestationOptions{
+					AttestationID: "invalid-attestation-12345",
+					ExpectedNonce: GenerateTestNonce(),
+				}
+
+				_, err := adapter.VerifyVMAttestation(ctx, opts)
+				if err == nil {
+					t.Error("VerifyVMAttestation should return error for invalid attestation ID")
 				}
 			})
 		})
