@@ -33,6 +33,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	sdkquicbaas "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/quicbaas"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -237,7 +238,7 @@ func TestPlatformSDKClient_KVOperations(t *testing.T) {
 		// Verify deleted
 		require.Eventually(t, func() bool {
 			getResp, err := kv.Get(ctx, &quicbaassdk.GetRequest{EntityType: entityType, ID: entityID})
-			return err == nil && !getResp.Found
+			return helpers.KVEntityAbsent(getResp, err)
 		}, 5*time.Second, 100*time.Millisecond)
 	})
 }
