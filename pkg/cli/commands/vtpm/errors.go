@@ -15,11 +15,23 @@ package vtpm
 
 import "fmt"
 
-// ErrDaemonConnectionRequired is returned when daemon connection is required
-type ErrDaemonConnectionRequired struct{}
+// ErrDaemonConnectionRequired is returned when daemon connection is required.
+// Err is the connection failure that left the command without a daemon; it is
+// part of the message so the operator sees why the connection failed.
+type ErrDaemonConnectionRequired struct {
+	Err error
+}
 
 func (e ErrDaemonConnectionRequired) Error() string {
-	return "daemon connection required: this command requires a running platformd daemon"
+	msg := "daemon connection required: this command requires a running platformd daemon"
+	if e.Err != nil {
+		return msg + ": " + e.Err.Error()
+	}
+	return msg
+}
+
+func (e ErrDaemonConnectionRequired) Unwrap() error {
+	return e.Err
 }
 
 // ErrVTPMNotAvailable is returned when the vTPM service is not available
