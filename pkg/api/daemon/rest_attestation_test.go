@@ -1,3 +1,5 @@
+//go:build codec_msgpack
+
 package daemon
 
 import (
