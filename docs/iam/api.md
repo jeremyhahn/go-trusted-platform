@@ -88,6 +88,13 @@ Rows below give the unscoped path; the tenant-scoped equivalent always exists.
 `iam_update_user` does not exist — user updates are REST, gRPC, QUIC and
 embedded only.
 
+Create user takes an email and no required username. The IAM SDK refuses an
+empty username, so every transport (REST, gRPC, Unix, QUIC, MCP) derives it
+from the email's local part (`alice@acme.test` → `alice`), or uses the whole
+address when it has no local part (`UsernameFromEmail` in
+`pkg/webservice/v1/rest/iam/mirror.go`). REST also accepts an explicit
+`username`.
+
 ## 4. Groups
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |

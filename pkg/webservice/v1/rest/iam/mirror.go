@@ -52,7 +52,7 @@ func (m *QuicBaaSUserMirror) MirrorUser(ctx context.Context, tenantID, email, di
 	}
 	username := displayName
 	if username == "" {
-		username = localPart(email)
+		username = UsernameFromEmail(email)
 	}
 	req := &iamsdk.CreateUserRequest{
 		Username:    username,
@@ -103,7 +103,11 @@ func (m *QuicBaaSUserMirror) MirroredEmails(ctx context.Context, tenantID string
 	}
 }
 
-func localPart(email string) string {
+// UsernameFromEmail is the username a user created with only an email gets:
+// the email's local part, or the whole address when it has none. The IAM SDK
+// refuses an empty username, so every create path that takes an email and no
+// username (REST, gRPC, Unix, QUIC and MCP alike) derives it here.
+func UsernameFromEmail(email string) string {
 	if i := strings.IndexByte(email, '@'); i > 0 {
 		return email[:i]
 	}
