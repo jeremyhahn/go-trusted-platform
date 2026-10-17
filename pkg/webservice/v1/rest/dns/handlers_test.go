@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -740,6 +741,49 @@ func TestListZones_Pagination(t *testing.T) {
 	assert.Equal(t, int32(5), payload.Offset)
 }
 
+// TestListZones_PageAppliedWhenSent: limit and offset select the page, and
+// total still counts every matching zone.
+func TestListZones_PageAppliedWhenSent(t *testing.T) {
+	service := newMockDNSService()
+	for _, name := range []string{"a.example.", "b.example.", "c.example."} {
+		service.zones[name] = createTestZone(name)
+	}
+	handlers, writer := newTestHandlers(service)
+
+	pages := map[string]int{
+		"/api/v1/dns/zones?limit=2":          2,
+		"/api/v1/dns/zones?limit=2&offset=2": 1,
+		"/api/v1/dns/zones?offset=5":         0,
+	}
+	for target, want := range pages {
+		handlers.ListZones(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, target, nil))
+
+		require.Equal(t, http.StatusOK, writer.lastStatus, target)
+		payload, ok := writer.lastPayload.(ListZonesResponse)
+		require.True(t, ok, target)
+		assert.Len(t, payload.Zones, want, target)
+		assert.Equal(t, int64(3), payload.Total, target)
+	}
+}
+
+// TestListZones_EveryZoneWithoutPage: a request that sends neither limit nor
+// offset gets every zone, even past the default limit of 50.
+func TestListZones_EveryZoneWithoutPage(t *testing.T) {
+	service := newMockDNSService()
+	for i := range 60 {
+		name := fmt.Sprintf("z%d.example.", i)
+		service.zones[name] = createTestZone(name)
+	}
+	handlers, writer := newTestHandlers(service)
+
+	handlers.ListZones(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/dns/zones", nil))
+
+	require.Equal(t, http.StatusOK, writer.lastStatus)
+	payload, ok := writer.lastPayload.(ListZonesResponse)
+	require.True(t, ok)
+	assert.Len(t, payload.Zones, 60)
+}
+
 // Test AddRecord
 
 func TestAddRecord_ARecord_Success(t *testing.T) {
@@ -950,6 +994,37 @@ func TestAddRecord_TLSARecord_Success(t *testing.T) {
 	handlers.AddRecord(rec, req)
 
 	assert.Equal(t, http.StatusOK, writer.lastStatus)
+}
+
+// TestAddRecord_TLSARecord_UndefinedUsage: a certificate usage outside the
+// 0-3 RFC 6698 §2.1.1 defines is a 400, and the record is not stored.
+func TestAddRecord_TLSARecord_UndefinedUsage(t *testing.T) {
+	service := newMockDNSService()
+	service.zones["example.com."] = createTestZone("example.com.")
+	handlers, writer := newTestHandlers(service)
+
+	body := AddRecordRequest{
+		Type: "TLSA",
+		TLSA: &TLSARequest{
+			Name:         "_443._tcp.www",
+			Usage:        5,
+			Selector:     1,
+			MatchingType: 1,
+			Data:         "abc123",
+			TTL:          3600,
+		},
+	}
+
+	req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones/example.com./records", body, map[string]string{"zone": "example.com."})
+	rec := httptest.NewRecorder()
+
+	handlers.AddRecord(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+	var invalid dns.ErrInvalidTLSAUsage
+	require.True(t, errors.As(writer.lastError, &invalid), "err = %v", writer.lastError)
+	assert.Equal(t, uint32(5), invalid.Usage)
+	assert.Empty(t, service.zones["example.com."].RecordSet.TLSARecords)
 }
 
 func TestAddRecord_MissingZoneName(t *testing.T) {
@@ -1358,6 +1433,36 @@ func TestListRecords_FilterByType(t *testing.T) {
 	require.True(t, ok)
 	assert.Len(t, payload.Records, 1)
 	assert.Equal(t, "A", payload.Records[0].Type)
+}
+
+// TestListRecords_PageAppliedWhenSent: limit and offset select the page of
+// the zone's records; without them every record is returned.
+func TestListRecords_PageAppliedWhenSent(t *testing.T) {
+	service := newMockDNSService()
+	zone := createTestZone("example.com.")
+	zone.AddARecord(&entities.ARecord{Name: "a", Value: "192.168.1.1", TTL: 3600})
+	zone.AddARecord(&entities.ARecord{Name: "b", Value: "192.168.1.2", TTL: 3600})
+	zone.AddARecord(&entities.ARecord{Name: "c", Value: "192.168.1.3", TTL: 3600})
+	service.zones["example.com."] = zone
+	handlers, writer := newTestHandlers(service)
+
+	pages := map[string]int{
+		"?type=A":                   3,
+		"?type=A&limit=2":           2,
+		"?type=A&limit=2&offset=2":  1,
+		"?type=A&limit=2&offset=10": 0,
+	}
+	for query, want := range pages {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/dns/zones/example.com./records"+query, nil)
+		req = mux.SetURLVars(req, map[string]string{"zone": "example.com."})
+
+		handlers.ListRecords(httptest.NewRecorder(), req)
+
+		require.Equal(t, http.StatusOK, writer.lastStatus, query)
+		payload, ok := writer.lastPayload.(ListRecordsResponse)
+		require.True(t, ok, query)
+		assert.Len(t, payload.Records, want, query)
+	}
 }
 
 func TestListRecords_AllRecordTypes(t *testing.T) {

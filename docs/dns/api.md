@@ -91,6 +91,10 @@ with no records and `authoritative: true`. A `type` resolution does not serve
 is a 400 (gRPC `InvalidArgument`). See
 [resolution.md](resolution.md#api-resolve).
 
+Adding a TLSA record whose `usage` is outside 0-3, the certificate usages
+RFC 6698 §2.1.1 defines, is refused before it is stored on every transport:
+REST answers 400 and gRPC `InvalidArgument` (`dns.ErrInvalidTLSAUsage`).
+
 ---
 
 ## 3. The MCP surface is duplicated

@@ -714,6 +714,43 @@ func TestDNSServiceServer_AddRecord_UnsupportedType(t *testing.T) {
 	assert.Equal(t, codes.InvalidArgument, st.Code())
 }
 
+// TestDNSServiceServer_AddRecord_TLSAUndefinedUsage: a certificate usage
+// outside the 0-3 RFC 6698 §2.1.1 defines is InvalidArgument, checked at the
+// wire's uint32 width (261 would narrow to 5), and the record is not stored.
+func TestDNSServiceServer_AddRecord_TLSAUndefinedUsage(t *testing.T) {
+	for _, usage := range []uint32{5, 261} {
+		mock := newMockDNSService()
+		mock.zones["example.com."] = &entities.Zone{
+			ID:   1,
+			Name: "example.com.",
+		}
+		server := NewDNSServiceServer(mock, testLogger())
+
+		req := &platformv1.AddRecordRequest{
+			ZoneName: "example.com.",
+			Record: &platformv1.Record{
+				Type: platformv1.RecordType_RECORD_TYPE_TLSA,
+				Record: &platformv1.Record_Tlsa{Tlsa: &platformv1.TLSARecord{
+					Name:         "_443._tcp.www",
+					Usage:        usage,
+					Selector:     1,
+					MatchingType: 1,
+					Data:         "abc123",
+				}},
+			},
+		}
+
+		_, err := server.AddRecord(context.Background(), req)
+
+		require.Error(t, err, "usage %d", usage)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.InvalidArgument, st.Code(), "usage %d", usage)
+		assert.Contains(t, st.Message(), "RFC 6698")
+		assert.Empty(t, mock.zones["example.com."].RecordSet.TLSARecords, "usage %d", usage)
+	}
+}
+
 func TestDNSServiceServer_AddRecord_MissingZone(t *testing.T) {
 	mock := newMockDNSService()
 	server := NewDNSServiceServer(mock, testLogger())

@@ -753,6 +753,9 @@ func (s *DNSServiceServer) addRecordToZone(zone *entities.Zone, record *platform
 		}
 	case platformv1.RecordType_RECORD_TYPE_TLSA:
 		if tlsa := record.GetTlsa(); tlsa != nil {
+			if err := dns.ValidateTLSAUsage(tlsa.GetUsage()); err != nil {
+				return err
+			}
 			zone.AddTLSARecord(&entities.TLSARecord{
 				Name:         tlsa.GetName(),
 				Usage:        uint8(tlsa.GetUsage()),

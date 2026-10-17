@@ -100,6 +100,20 @@ func (h *DNSHandlers) getPaginationParams(r *http.Request) (int32, int32) {
 	return limit, offset
 }
 
+// pageBounds returns the [start, end) bounds of the page of n items a list
+// route answers. A request that sends neither limit nor offset gets every
+// item, so a caller that does not page never loses the tail of a list.
+func (h *DNSHandlers) pageBounds(r *http.Request, n int) (int, int) {
+	query := r.URL.Query()
+	if !query.Has("limit") && !query.Has("offset") {
+		return 0, n
+	}
+	limit, offset := h.getPaginationParams(r)
+	start := min(int(offset), n)
+	end := min(start+int(limit), n)
+	return start, end
+}
+
 func (h *DNSHandlers) createContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), requestTimeout)
 }
@@ -286,6 +300,7 @@ func (h *DNSHandlers) ListZones(w http.ResponseWriter, r *http.Request) {
 	}
 
 	limit, offset := h.getPaginationParams(r)
+	start, end := h.pageBounds(r, len(responseZones))
 
 	h.respWriter.Success200(w, r, ListZonesResponse{
 		PaginatedResponse: PaginatedResponse{
@@ -293,7 +308,7 @@ func (h *DNSHandlers) ListZones(w http.ResponseWriter, r *http.Request) {
 			Limit:  limit,
 			Offset: offset,
 		},
-		Zones: responseZones,
+		Zones: responseZones[start:end],
 	})
 }
 
@@ -402,6 +417,10 @@ func (h *DNSHandlers) AddRecord(w http.ResponseWriter, r *http.Request) {
 		}
 	case "TLSA":
 		if req.TLSA != nil {
+			if err := dns.ValidateTLSAUsage(uint32(req.TLSA.Usage)); err != nil {
+				h.respWriter.Error400(w, r, err)
+				return
+			}
 			zone.AddTLSARecord(&entities.TLSARecord{
 				Name:         req.TLSA.Name,
 				Usage:        req.TLSA.Usage,
@@ -507,9 +526,10 @@ func (h *DNSHandlers) ListRecords(w http.ResponseWriter, r *http.Request) {
 	typeFilter := strings.ToUpper(r.URL.Query().Get("type"))
 
 	records := h.extractRecords(&zone.RecordSet, typeFilter)
+	start, end := h.pageBounds(r, len(records))
 
 	h.respWriter.Success200(w, r, ListRecordsResponse{
-		Records: records,
+		Records: records[start:end],
 	})
 }
 
