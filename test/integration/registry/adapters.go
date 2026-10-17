@@ -748,23 +748,25 @@ func (m *MCPAdapter) DecryptImage(ctx context.Context, ref string) (*DecryptImag
 // Unix Socket Adapter Implementation
 // =============================================================================
 
-// UnixAdapter implements RegistryCommands using Unix socket.
+// UnixAdapter implements RegistryCommands over the daemon's Unix socket.
+// platformd serves gRPC on that socket, not HTTP, so this is the gRPC
+// adapter dialled over the socket instead of TCP (docs/registry/api.md §2).
 type UnixAdapter struct {
+	GRPCAdapter
 	socketPath string
-	httpClient *http.Client
 }
 
-// NewUnixAdapter creates a new Unix socket adapter for integration testing.
+// NewUnixAdapter creates a new Unix socket adapter.
 func NewUnixAdapter() *UnixAdapter {
 	return &UnixAdapter{}
 }
 
-// Name returns the protocol adapter identifier.
+// Name returns the adapter name.
 func (u *UnixAdapter) Name() string {
 	return "Unix"
 }
 
-// Setup initializes the Unix socket connection.
+// Setup dials the daemon's gRPC server over the Unix socket.
 func (u *UnixAdapter) Setup(ctx context.Context) error {
 	socketPath := os.Getenv(EnvPlatformdSocket)
 	if socketPath == "" {
@@ -772,240 +774,21 @@ func (u *UnixAdapter) Setup(ctx context.Context) error {
 	}
 	u.socketPath = socketPath
 
-	// Create HTTP client that uses Unix socket
-	u.httpClient = &http.Client{
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return net.Dial("unix", u.socketPath)
-			},
-		},
-		Timeout: DefaultCommandTimeout,
+	conn, err := grpc.DialContext(ctx, "unix://"+socketPath,
+		helpers.GRPCUnixCredentials(),
+		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", strings.TrimPrefix(addr, "unix://"))
+		}),
+		grpc.WithBlock(),
+	)
+	if err != nil {
+		return ErrAdapterConnectionFailed{Adapter: "Unix", URL: socketPath, Err: err}
 	}
 
-	// Verify socket exists
-	if _, err := os.Stat(u.socketPath); os.IsNotExist(err) {
-		return ErrAdapterConnectionFailed{Adapter: "Unix", URL: u.socketPath, Err: err}
-	}
-
+	u.conn = conn
+	u.client = regsvc.NewClientFromGRPC(pb.NewRegistryServiceClient(conn))
 	return nil
-}
-
-// Teardown closes the Unix socket connection.
-func (u *UnixAdapter) Teardown() error {
-	if u.httpClient != nil {
-		u.httpClient.CloseIdleConnections()
-	}
-	return nil
-}
-
-// doRequest performs an HTTP request over Unix socket.
-func (u *UnixAdapter) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, int, error) {
-	var reqBody io.Reader
-	if body != nil {
-		jsonBytes, err := json.Marshal(body)
-		if err != nil {
-			return nil, 0, fmt.Errorf("failed to marshal request: %w", err)
-		}
-		reqBody = bytes.NewReader(jsonBytes)
-	}
-
-	// Use http://localhost as dummy host - the transport uses Unix socket
-	req, err := http.NewRequestWithContext(ctx, method, "http://localhost"+path, reqBody)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := u.httpClient.Do(req)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	return respBody, resp.StatusCode, nil
-}
-
-// handleResponse processes the response.
-func (u *UnixAdapter) handleResponse(respBody []byte, statusCode int, target interface{}) error {
-	if statusCode >= 400 {
-		var errResp struct {
-			Error   string `json:"error"`
-			Message string `json:"message"`
-		}
-		if err := json.Unmarshal(respBody, &errResp); err == nil {
-			msg := errResp.Error
-			if msg == "" {
-				msg = errResp.Message
-			}
-			if strings.Contains(strings.ToLower(msg), "not found") {
-				return ErrImageNotFound{Reference: ""}
-			}
-			return fmt.Errorf("API error (%d): %s", statusCode, msg)
-		}
-		return fmt.Errorf("API error (%d): %s", statusCode, string(respBody))
-	}
-
-	if target != nil && len(respBody) > 0 {
-		if err := json.Unmarshal(respBody, target); err != nil {
-			return ErrInvalidResponse{Operation: "response", Err: err}
-		}
-	}
-
-	return nil
-}
-
-// Push pushes an image to the registry via Unix socket.
-func (u *UnixAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*PushResult, error) {
-	reqBody := restPushRequest{
-		Reference:      ref,
-		Encrypt:        opts.Encrypt,
-		KeyID:          opts.KeyID,
-		AllowOverwrite: opts.AllowOverwrite,
-		Sign:           opts.SignImage,
-		SigningKeyID:   opts.SigningKeyID,
-		Annotations:    opts.Annotations,
-	}
-
-	if len(opts.Layers) > 0 {
-		reqBody.Layers = make([]restLayerData, len(opts.Layers))
-		for i, layer := range opts.Layers {
-			reqBody.Layers[i] = restLayerData{
-				MediaType:   layer.MediaType,
-				Content:     base64.StdEncoding.EncodeToString(layer.Content),
-				Annotations: layer.Annotations,
-			}
-		}
-	}
-
-	if len(opts.Config) > 0 {
-		reqBody.Config = base64.StdEncoding.EncodeToString(opts.Config)
-	}
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodPost, "/api/v1/registry/images", reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	var result restPushResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toPushResult(), nil
-}
-
-// Pull pulls an image from the registry via Unix socket.
-func (u *UnixAdapter) Pull(ctx context.Context, ref string, opts PullOptions) (*PullResult, error) {
-	path := fmt.Sprintf("/api/v1/registry/images/%s", ref)
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrImageNotFound{Reference: ref}
-	}
-
-	var result restPullResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toPullResult(), nil
-}
-
-// List lists images in the registry via Unix socket.
-func (u *UnixAdapter) List(ctx context.Context, opts ListOptions) (*ListResult, error) {
-	path := "/api/v1/registry/images"
-	params := make([]string, 0)
-
-	if opts.Limit > 0 {
-		params = append(params, fmt.Sprintf("limit=%d", opts.Limit))
-	}
-
-	if len(params) > 0 {
-		path += "?" + strings.Join(params, "&")
-	}
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result restListResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toListResult(), nil
-}
-
-// Delete deletes an image from the registry via Unix socket.
-func (u *UnixAdapter) Delete(ctx context.Context, ref string, opts DeleteOptions) (*DeleteResult, error) {
-	path := fmt.Sprintf("/api/v1/registry/images/%s", ref)
-	if opts.Force {
-		path += "?force=true"
-	}
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrImageNotFound{Reference: ref}
-	}
-
-	var result restDeleteResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toDeleteResult(), nil
-}
-
-// Inspect inspects an image in the registry via Unix socket.
-func (u *UnixAdapter) Inspect(ctx context.Context, ref string) (*InspectResult, error) {
-	path := fmt.Sprintf("/api/v1/registry/images/%s/inspect", ref)
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrImageNotFound{Reference: ref}
-	}
-
-	var result restInspectResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toInspectResult(), nil
-}
-
-// Status retrieves the registry status via Unix socket.
-func (u *UnixAdapter) Status(ctx context.Context) (*StatusResult, error) {
-	body, statusCode, err := u.doRequest(ctx, http.MethodGet, "/api/v1/registry/status", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result restStatusResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toStatusResult(), nil
 }
 
 // Tag has no RegistryService call on the socket.
