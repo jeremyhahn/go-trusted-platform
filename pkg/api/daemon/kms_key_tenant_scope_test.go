@@ -102,23 +102,12 @@ func assertEveryEntryPointRefused(t *testing.T, label string, calls map[string]f
 	for name, call := range calls {
 		var err error
 		require.NotPanics(t, func() { err = call(ctx) }, "%s %s: a tenant-bound caller reached the SDK", label, name)
-		if isGeneratedUnimplementedStub(err, name) {
-			continue
-		}
 		assert.Equal(t, codes.PermissionDenied, status.Code(err), "%s %s: %v", label, name, err)
 		var refused tenant.ErrSystemScopeOnly
 		if assert.True(t, errors.As(err, &refused), "%s %s: %v", label, name, err) {
 			assert.Equal(t, "tenant-a", refused.TenantID, "%s %s", label, name)
 		}
 	}
-}
-
-// isGeneratedUnimplementedStub reports the answer of a method promoted from
-// an embedded pb.Unimplemented*Server: it serves nothing and reaches no SDK
-// (the tripwire would have panicked), so there is no namespace to refuse.
-func isGeneratedUnimplementedStub(err error, method string) bool {
-	answer, ok := status.FromError(err)
-	return ok && answer.Code() == codes.Unimplemented && answer.Message() == "method "+method+" not implemented"
 }
 
 func newTripwireKMSAdapters() (*KMSServerAdapter, *CryptoServerAdapter, *DEKServerAdapter) {
@@ -186,9 +175,6 @@ func TestKMSCryptoDEKAdapters_NoClientIsUnavailable(t *testing.T) {
 	for adapterName, adapter := range adapters {
 		for name, call := range contextEntryPoints(adapter, "") {
 			err := call(grpcTenantContext("tenant-a"))
-			if isGeneratedUnimplementedStub(err, name) {
-				continue
-			}
 			assert.Equal(t, codes.Unavailable, status.Code(err), "%s %s", adapterName, name)
 		}
 	}

@@ -2383,11 +2383,11 @@ func (a *kmsQUICAdapter) Rewrap(ctx context.Context, req *pb.RewrapRequest) (*pb
 }
 
 func (a *kmsQUICAdapter) BatchEncrypt(ctx context.Context, req *pb.EncryptBatchRequest) (*pb.EncryptBatchResponse, error) {
-	return a.crypto.BatchEncrypt(ctx, req)
+	return a.crypto.EncryptBatch(ctx, req)
 }
 
 func (a *kmsQUICAdapter) BatchDecrypt(ctx context.Context, req *pb.DecryptBatchRequest) (*pb.DecryptBatchResponse, error) {
-	return a.crypto.BatchDecrypt(ctx, req)
+	return a.crypto.DecryptBatch(ctx, req)
 }
 
 // GenerateRandom generates cryptographically secure random bytes using crypto/rand.

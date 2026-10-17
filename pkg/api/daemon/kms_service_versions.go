@@ -9,6 +9,8 @@ import (
 	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 )
 
 // ListDEKs returns the DEKs under an optional path prefix.
@@ -58,16 +60,140 @@ func (a *DEKServerAdapter) GetDEKStatus(ctx context.Context, req *pb.GetDEKStatu
 	if resp.DEK != nil {
 		out.UsagePercent = dekUsagePercent(resp.DEK)
 	}
-	if progress := resp.ReencryptionProgress; progress != nil {
-		out.ReencryptionProgress = &pb.ReencryptionProgress{
-			InProgress:    progress.InProgress,
-			TotalKeys:     int32(progress.TotalKeys),
-			ProcessedKeys: int32(progress.ProcessedKeys),
-			FailedKeys:    int32(progress.FailedKeys),
-			StartedAt:     unixOrZero(progress.StartedAt),
-		}
-	}
+	out.ReencryptionProgress = dekReencryptionProgressToPb(resp.ReencryptionProgress)
 	return out, nil
+}
+
+// dekReencryptionProgressToPb converts SDK re-encryption progress to its
+// proto form; nil stays nil.
+func dekReencryptionProgressToPb(progress *dekclient.ReencryptionProgress) *pb.ReencryptionProgress {
+	if progress == nil {
+		return nil
+	}
+	return &pb.ReencryptionProgress{
+		InProgress:    progress.InProgress,
+		TotalKeys:     int32(progress.TotalKeys),
+		ProcessedKeys: int32(progress.ProcessedKeys),
+		FailedKeys:    int32(progress.FailedKeys),
+		StartedAt:     unixOrZero(progress.StartedAt),
+	}
+}
+
+// SetDefaultDEK makes the DEK at path the default through the SDK.
+func (a *DEKServerAdapter) SetDefaultDEK(ctx context.Context, req *pb.SetDefaultDEKRequest) (*pb.SetDefaultDEKResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
+	}
+	if req.GetPath() == "" {
+		return nil, status.Error(codes.InvalidArgument, "path is required")
+	}
+
+	resp, err := a.client.SetDefaultDEK(ctx, req.GetPath())
+	if err != nil {
+		return nil, status.Errorf(errclass.Code(err), "set default DEK failed: %v", err)
+	}
+
+	return &pb.SetDefaultDEKResponse{
+		Path:            resp.Path,
+		PreviousDefault: resp.PreviousDefault,
+		Timestamp:       time.Now().Unix(),
+	}, nil
+}
+
+// SetDEKSafety sets the AEAD safety limits of the DEK at path through the SDK.
+func (a *DEKServerAdapter) SetDEKSafety(ctx context.Context, req *pb.SetDEKSafetyRequest) (*pb.SetDEKSafetyResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
+	}
+	if req.GetPath() == "" {
+		return nil, status.Error(codes.InvalidArgument, "path is required")
+	}
+
+	if err := a.client.SetDEKSafety(ctx, &dekclient.SetDEKSafetyRequest{
+		Path:           req.GetPath(),
+		MaxOperations:  req.GetMaxOperations(),
+		MaxBytes:       req.GetMaxBytes(),
+		WarningPercent: int(req.GetWarningPercent()),
+	}); err != nil {
+		return nil, status.Errorf(errclass.Code(err), "set DEK safety failed: %v", err)
+	}
+
+	return &pb.SetDEKSafetyResponse{Path: req.GetPath(), Timestamp: time.Now().Unix()}, nil
+}
+
+// ClearDEKSafety removes the custom AEAD safety limits of the DEK at path
+// through the SDK.
+func (a *DEKServerAdapter) ClearDEKSafety(ctx context.Context, req *pb.ClearDEKSafetyRequest) (*pb.ClearDEKSafetyResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
+	}
+	if req.GetPath() == "" {
+		return nil, status.Error(codes.InvalidArgument, "path is required")
+	}
+
+	if err := a.client.ClearDEKSafety(ctx, req.GetPath()); err != nil {
+		return nil, status.Errorf(errclass.Code(err), "clear DEK safety failed: %v", err)
+	}
+
+	return &pb.ClearDEKSafetyResponse{Path: req.GetPath(), Timestamp: time.Now().Unix()}, nil
+}
+
+// StartReencryption starts re-encrypting the data under the DEK at path
+// through the SDK.
+func (a *DEKServerAdapter) StartReencryption(ctx context.Context, req *pb.StartReencryptionRequest) (*pb.StartReencryptionResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
+	}
+	if req.GetPath() == "" {
+		return nil, status.Error(codes.InvalidArgument, "path is required")
+	}
+
+	resp, err := a.client.StartReencryption(ctx, &dekclient.StartReencryptionRequest{
+		Path:        req.GetPath(),
+		FromVersion: int(req.GetFromVersion()),
+		ToVersion:   int(req.GetToVersion()),
+		BatchSize:   int(req.GetBatchSize()),
+		Force:       req.GetForce(),
+	})
+	if err != nil {
+		return nil, status.Errorf(errclass.Code(err), "start re-encryption failed: %v", err)
+	}
+
+	return &pb.StartReencryptionResponse{
+		OperationId:    resp.OperationID,
+		Started:        resp.Started,
+		Path:           resp.Path,
+		EstimatedItems: int32(resp.EstimatedItems),
+		Timestamp:      time.Now().Unix(),
+	}, nil
+}
+
+// GetReencryptionProgress reports a re-encryption operation's progress
+// through the SDK.
+func (a *DEKServerAdapter) GetReencryptionProgress(ctx context.Context, req *pb.GetReencryptionProgressRequest) (*pb.GetReencryptionProgressResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
+	}
+	if req.GetPath() == "" {
+		return nil, status.Error(codes.InvalidArgument, "path is required")
+	}
+
+	resp, err := a.client.GetReencryptionProgress(ctx, &dekclient.GetReencryptionProgressRequest{
+		Path:        req.GetPath(),
+		OperationID: req.GetOperationId(),
+	})
+	if err != nil {
+		return nil, status.Errorf(errclass.Code(err), "re-encryption progress query failed: %v", err)
+	}
+
+	return &pb.GetReencryptionProgressResponse{
+		OperationId: resp.OperationID,
+		Path:        resp.Path,
+		Status:      resp.Status,
+		Progress:    dekReencryptionProgressToPb(resp.Progress),
+		Error:       resp.Error,
+		Timestamp:   time.Now().Unix(),
+	}, nil
 }
 
 // dekInfoToPb converts SDK DEK metadata to its proto form; nil stays nil.

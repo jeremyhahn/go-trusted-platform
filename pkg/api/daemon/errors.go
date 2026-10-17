@@ -1549,6 +1549,24 @@ func (e ErrKMSOperationNotImplemented) Error() string {
 	return fmt.Sprintf("KMS operation not implemented: %s", e.Operation)
 }
 
+// ErrKMSSDKGap is returned by a KMS, crypto or DEK RPC the go-quicbaas SDK
+// client has no call for, so the platform cannot serve it. It is a declared
+// gap (docs/kms/api.md §2), not a stub: Upstream names the SDK interface that
+// lacks the call.
+type ErrKMSSDKGap struct {
+	Method   string
+	Upstream string
+}
+
+func (e ErrKMSSDKGap) Error() string {
+	return fmt.Sprintf("KMS %s is a declared SDK gap: %s has no %s call", e.Method, e.Upstream, e.Method)
+}
+
+// GRPCStatus classifies the gap as Unimplemented.
+func (e ErrKMSSDKGap) GRPCStatus() *status.Status {
+	return status.New(codes.Unimplemented, e.Error())
+}
+
 // =============================================================================
 // TPM2/IDevID Service Errors
 // =============================================================================

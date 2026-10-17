@@ -800,9 +800,9 @@ func (a *CryptoServerAdapter) Decrypt(ctx context.Context, req *pb.CryptoDecrypt
 	}, nil
 }
 
-// BatchEncrypt implements pb.CryptoServer.BatchEncrypt.
+// EncryptBatch implements pb.CryptoServer.EncryptBatch.
 // It encrypts multiple items in a single request for improved throughput.
-func (a *CryptoServerAdapter) BatchEncrypt(ctx context.Context, req *pb.EncryptBatchRequest) (*pb.EncryptBatchResponse, error) {
+func (a *CryptoServerAdapter) EncryptBatch(ctx context.Context, req *pb.EncryptBatchRequest) (*pb.EncryptBatchResponse, error) {
 	if err := a.admit(ctx); err != nil {
 		return nil, err
 	}
@@ -852,9 +852,9 @@ func (a *CryptoServerAdapter) BatchEncrypt(ctx context.Context, req *pb.EncryptB
 	}, nil
 }
 
-// BatchDecrypt implements pb.CryptoServer.BatchDecrypt.
+// DecryptBatch implements pb.CryptoServer.DecryptBatch.
 // It decrypts multiple items in a single request for improved throughput.
-func (a *CryptoServerAdapter) BatchDecrypt(ctx context.Context, req *pb.DecryptBatchRequest) (*pb.DecryptBatchResponse, error) {
+func (a *CryptoServerAdapter) DecryptBatch(ctx context.Context, req *pb.DecryptBatchRequest) (*pb.DecryptBatchResponse, error) {
 	if err := a.admit(ctx); err != nil {
 		return nil, err
 	}
