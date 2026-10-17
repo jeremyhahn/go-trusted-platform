@@ -469,150 +469,34 @@ func (r *RESTAdapter) Status(ctx context.Context) (*StatusResult, error) {
 	return result.toStatusResult(), nil
 }
 
-// Tag adds a tag to an existing image via REST.
+// Tag has no REST route.
 func (r *RESTAdapter) Tag(ctx context.Context, sourceRef, targetRef string) (*TagResult, error) {
-	reqBody := struct {
-		SourceReference string `json:"source_reference"`
-		TargetReference string `json:"target_reference"`
-	}{
-		SourceReference: sourceRef,
-		TargetReference: targetRef,
-	}
-
-	body, statusCode, err := r.doRequest(ctx, http.MethodPost, "/api/v1/registry/images/tag", reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrImageNotFound{Reference: sourceRef}
-	}
-
-	var result restTagResponse
-	if err := r.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toTagResult(), nil
+	return nil, noSurface(r.Name(), opTag)
 }
 
-// VerifyClient verifies a client's attestation via REST.
+// VerifyClient has no REST route.
 func (r *RESTAdapter) VerifyClient(ctx context.Context, opts VerifyClientOptions) (*VerifyClientResult, error) {
-	reqBody := restVerifyClientRequest{
-		ClientID:  opts.ClientID,
-		AIK:       base64.StdEncoding.EncodeToString(opts.AIK),
-		Quote:     base64.StdEncoding.EncodeToString(opts.Quote),
-		Signature: base64.StdEncoding.EncodeToString(opts.Signature),
-		Nonce:     base64.StdEncoding.EncodeToString(opts.Nonce),
-		PCRs:      make(map[int]string),
-		EventLog:  base64.StdEncoding.EncodeToString(opts.EventLog),
-		Timestamp: opts.Timestamp,
-	}
-
-	for idx, val := range opts.PCRs {
-		reqBody.PCRs[idx] = base64.StdEncoding.EncodeToString(val)
-	}
-
-	body, statusCode, err := r.doRequest(ctx, http.MethodPost, "/api/v1/registry/attestation/verify", reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	var result restVerifyClientResponse
-	if err := r.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toVerifyClientResult(), nil
+	return nil, noSurface(r.Name(), opVerifyClient)
 }
 
-// GetSession retrieves a client session via REST.
+// GetSession has no REST route.
 func (r *RESTAdapter) GetSession(ctx context.Context, clientID string) (*SessionResult, error) {
-	path := fmt.Sprintf("/api/v1/registry/attestation/sessions/%s", clientID)
-
-	body, statusCode, err := r.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrSessionNotFound{ClientID: clientID}
-	}
-
-	var result restSessionResponse
-	if err := r.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toSessionResult(), nil
+	return nil, noSurface(r.Name(), opGetSession)
 }
 
-// InvalidateSession invalidates a client session via REST.
+// InvalidateSession has no REST route.
 func (r *RESTAdapter) InvalidateSession(ctx context.Context, clientID string) error {
-	path := fmt.Sprintf("/api/v1/registry/attestation/sessions/%s", clientID)
-
-	body, statusCode, err := r.doRequest(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return ErrSessionNotFound{ClientID: clientID}
-	}
-
-	return r.handleResponse(body, statusCode, nil)
+	return noSurface(r.Name(), opInvalidateSession)
 }
 
-// EncryptImage encrypts an image via REST.
+// EncryptImage has no REST route.
 func (r *RESTAdapter) EncryptImage(ctx context.Context, ref string, keyID string) (*EncryptImageResult, error) {
-	reqBody := struct {
-		Reference string `json:"reference"`
-		KeyID     string `json:"key_id"`
-	}{
-		Reference: ref,
-		KeyID:     keyID,
-	}
-
-	body, statusCode, err := r.doRequest(ctx, http.MethodPost, "/api/v1/registry/encryption/encrypt", reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrImageNotFound{Reference: ref}
-	}
-
-	var result restEncryptImageResponse
-	if err := r.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toEncryptImageResult(), nil
+	return nil, noSurface(r.Name(), opEncryptImage)
 }
 
-// DecryptImage decrypts an image via REST.
+// DecryptImage has no REST route.
 func (r *RESTAdapter) DecryptImage(ctx context.Context, ref string) (*DecryptImageResult, error) {
-	reqBody := struct {
-		Reference string `json:"reference"`
-	}{
-		Reference: ref,
-	}
-
-	body, statusCode, err := r.doRequest(ctx, http.MethodPost, "/api/v1/registry/encryption/decrypt", reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrImageNotFound{Reference: ref}
-	}
-
-	var result restDecryptImageResponse
-	if err := r.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toDecryptImageResult(), nil
+	return nil, noSurface(r.Name(), opDecryptImage)
 }
 
 // =============================================================================
@@ -669,7 +553,9 @@ func (g *GRPCAdapter) Teardown() error {
 // QUIC Adapter Implementation
 // =============================================================================
 
-// QUICAdapter implements RegistryCommands using QUIC protocol.
+// QUICAdapter implements RegistryCommands for QUIC. QUIC carries no registry
+// opcode (docs/registry/api.md §2), so every operation returns the suite's
+// surface.ErrNoSurface.
 type QUICAdapter struct {
 	endpoint string
 }
@@ -692,7 +578,8 @@ func (q *QUICAdapter) Setup(ctx context.Context) error {
 	}
 	q.endpoint = endpoint
 
-	// TODO: Implement QUIC connection verification
+	// QUIC carries no registry opcode, so there is no registry call to open
+	// a connection for: every operation reports the missing surface.
 	return nil
 }
 
@@ -703,62 +590,62 @@ func (q *QUICAdapter) Teardown() error {
 
 // Push pushes an image to the registry via QUIC.
 func (q *QUICAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*PushResult, error) {
-	return nil, fmt.Errorf("QUIC Push not yet implemented")
+	return nil, noSurface("QUIC", opPush)
 }
 
 // Pull pulls an image from the registry via QUIC.
 func (q *QUICAdapter) Pull(ctx context.Context, ref string, opts PullOptions) (*PullResult, error) {
-	return nil, fmt.Errorf("QUIC Pull not yet implemented")
+	return nil, noSurface("QUIC", opPull)
 }
 
 // List lists images in the registry via QUIC.
 func (q *QUICAdapter) List(ctx context.Context, opts ListOptions) (*ListResult, error) {
-	return nil, fmt.Errorf("QUIC List not yet implemented")
+	return nil, noSurface("QUIC", opList)
 }
 
 // Delete deletes an image from the registry via QUIC.
 func (q *QUICAdapter) Delete(ctx context.Context, ref string, opts DeleteOptions) (*DeleteResult, error) {
-	return nil, fmt.Errorf("QUIC Delete not yet implemented")
+	return nil, noSurface("QUIC", opDelete)
 }
 
 // Inspect inspects an image in the registry via QUIC.
 func (q *QUICAdapter) Inspect(ctx context.Context, ref string) (*InspectResult, error) {
-	return nil, fmt.Errorf("QUIC Inspect not yet implemented")
+	return nil, noSurface("QUIC", opInspect)
 }
 
 // Status retrieves the registry status via QUIC.
 func (q *QUICAdapter) Status(ctx context.Context) (*StatusResult, error) {
-	return nil, fmt.Errorf("QUIC Status not yet implemented")
+	return nil, noSurface("QUIC", opStatus)
 }
 
 // Tag adds a tag to an existing image via QUIC.
 func (q *QUICAdapter) Tag(ctx context.Context, sourceRef, targetRef string) (*TagResult, error) {
-	return nil, fmt.Errorf("QUIC Tag not yet implemented")
+	return nil, noSurface("QUIC", opTag)
 }
 
 // VerifyClient verifies a client's attestation via QUIC.
 func (q *QUICAdapter) VerifyClient(ctx context.Context, opts VerifyClientOptions) (*VerifyClientResult, error) {
-	return nil, fmt.Errorf("QUIC VerifyClient not yet implemented")
+	return nil, noSurface("QUIC", opVerifyClient)
 }
 
 // GetSession retrieves a client session via QUIC.
 func (q *QUICAdapter) GetSession(ctx context.Context, clientID string) (*SessionResult, error) {
-	return nil, fmt.Errorf("QUIC GetSession not yet implemented")
+	return nil, noSurface("QUIC", opGetSession)
 }
 
 // InvalidateSession invalidates a client session via QUIC.
 func (q *QUICAdapter) InvalidateSession(ctx context.Context, clientID string) error {
-	return fmt.Errorf("QUIC InvalidateSession not yet implemented")
+	return noSurface("QUIC", opInvalidateSession)
 }
 
 // EncryptImage encrypts an image via QUIC.
 func (q *QUICAdapter) EncryptImage(ctx context.Context, ref string, keyID string) (*EncryptImageResult, error) {
-	return nil, fmt.Errorf("QUIC EncryptImage not yet implemented")
+	return nil, noSurface("QUIC", opEncryptImage)
 }
 
 // DecryptImage decrypts an image via QUIC.
 func (q *QUICAdapter) DecryptImage(ctx context.Context, ref string) (*DecryptImageResult, error) {
-	return nil, fmt.Errorf("QUIC DecryptImage not yet implemented")
+	return nil, noSurface("QUIC", opDecryptImage)
 }
 
 // =============================================================================
@@ -799,12 +686,12 @@ func (m *MCPAdapter) Teardown() error {
 
 // Push pushes an image to the registry via MCP.
 func (m *MCPAdapter) Push(ctx context.Context, ref string, opts PushOptions) (*PushResult, error) {
-	return nil, fmt.Errorf("MCP Push not yet implemented")
+	return nil, noSurface("MCP", opPush)
 }
 
 // Pull pulls an image from the registry via MCP.
 func (m *MCPAdapter) Pull(ctx context.Context, ref string, opts PullOptions) (*PullResult, error) {
-	return nil, fmt.Errorf("MCP Pull not yet implemented")
+	return nil, noSurface("MCP", opPull)
 }
 
 // List lists images in the registry via MCP.
@@ -829,32 +716,32 @@ func (m *MCPAdapter) Status(ctx context.Context) (*StatusResult, error) {
 
 // Tag adds a tag to an existing image via MCP.
 func (m *MCPAdapter) Tag(ctx context.Context, sourceRef, targetRef string) (*TagResult, error) {
-	return nil, fmt.Errorf("MCP Tag not yet implemented")
+	return nil, noSurface("MCP", opTag)
 }
 
 // VerifyClient verifies a client's attestation via MCP.
 func (m *MCPAdapter) VerifyClient(ctx context.Context, opts VerifyClientOptions) (*VerifyClientResult, error) {
-	return nil, fmt.Errorf("MCP VerifyClient not yet implemented")
+	return nil, noSurface("MCP", opVerifyClient)
 }
 
 // GetSession retrieves a client session via MCP.
 func (m *MCPAdapter) GetSession(ctx context.Context, clientID string) (*SessionResult, error) {
-	return nil, fmt.Errorf("MCP GetSession not yet implemented")
+	return nil, noSurface("MCP", opGetSession)
 }
 
 // InvalidateSession invalidates a client session via MCP.
 func (m *MCPAdapter) InvalidateSession(ctx context.Context, clientID string) error {
-	return fmt.Errorf("MCP InvalidateSession not yet implemented")
+	return noSurface("MCP", opInvalidateSession)
 }
 
 // EncryptImage encrypts an image via MCP.
 func (m *MCPAdapter) EncryptImage(ctx context.Context, ref string, keyID string) (*EncryptImageResult, error) {
-	return nil, fmt.Errorf("MCP EncryptImage not yet implemented")
+	return nil, noSurface("MCP", opEncryptImage)
 }
 
 // DecryptImage decrypts an image via MCP.
 func (m *MCPAdapter) DecryptImage(ctx context.Context, ref string) (*DecryptImageResult, error) {
-	return nil, fmt.Errorf("MCP DecryptImage not yet implemented")
+	return nil, noSurface("MCP", opDecryptImage)
 }
 
 // =============================================================================
@@ -1121,150 +1008,34 @@ func (u *UnixAdapter) Status(ctx context.Context) (*StatusResult, error) {
 	return result.toStatusResult(), nil
 }
 
-// Tag adds a tag to an existing image via Unix socket.
+// Tag has no RegistryService call on the socket.
 func (u *UnixAdapter) Tag(ctx context.Context, sourceRef, targetRef string) (*TagResult, error) {
-	reqBody := struct {
-		SourceReference string `json:"source_reference"`
-		TargetReference string `json:"target_reference"`
-	}{
-		SourceReference: sourceRef,
-		TargetReference: targetRef,
-	}
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodPost, "/api/v1/registry/images/tag", reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrImageNotFound{Reference: sourceRef}
-	}
-
-	var result restTagResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toTagResult(), nil
+	return nil, noSurface(u.Name(), opTag)
 }
 
-// VerifyClient verifies a client's attestation via Unix socket.
+// VerifyClient has no RegistryService call on the socket.
 func (u *UnixAdapter) VerifyClient(ctx context.Context, opts VerifyClientOptions) (*VerifyClientResult, error) {
-	reqBody := restVerifyClientRequest{
-		ClientID:  opts.ClientID,
-		AIK:       base64.StdEncoding.EncodeToString(opts.AIK),
-		Quote:     base64.StdEncoding.EncodeToString(opts.Quote),
-		Signature: base64.StdEncoding.EncodeToString(opts.Signature),
-		Nonce:     base64.StdEncoding.EncodeToString(opts.Nonce),
-		PCRs:      make(map[int]string),
-		EventLog:  base64.StdEncoding.EncodeToString(opts.EventLog),
-		Timestamp: opts.Timestamp,
-	}
-
-	for idx, val := range opts.PCRs {
-		reqBody.PCRs[idx] = base64.StdEncoding.EncodeToString(val)
-	}
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodPost, "/api/v1/registry/attestation/verify", reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	var result restVerifyClientResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toVerifyClientResult(), nil
+	return nil, noSurface(u.Name(), opVerifyClient)
 }
 
-// GetSession retrieves a client session via Unix socket.
+// GetSession has no RegistryService call on the socket.
 func (u *UnixAdapter) GetSession(ctx context.Context, clientID string) (*SessionResult, error) {
-	path := fmt.Sprintf("/api/v1/registry/attestation/sessions/%s", clientID)
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrSessionNotFound{ClientID: clientID}
-	}
-
-	var result restSessionResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toSessionResult(), nil
+	return nil, noSurface(u.Name(), opGetSession)
 }
 
-// InvalidateSession invalidates a client session via Unix socket.
+// InvalidateSession has no RegistryService call on the socket.
 func (u *UnixAdapter) InvalidateSession(ctx context.Context, clientID string) error {
-	path := fmt.Sprintf("/api/v1/registry/attestation/sessions/%s", clientID)
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return ErrSessionNotFound{ClientID: clientID}
-	}
-
-	return u.handleResponse(body, statusCode, nil)
+	return noSurface(u.Name(), opInvalidateSession)
 }
 
-// EncryptImage encrypts an image via Unix socket.
+// EncryptImage has no RegistryService call on the socket.
 func (u *UnixAdapter) EncryptImage(ctx context.Context, ref string, keyID string) (*EncryptImageResult, error) {
-	reqBody := struct {
-		Reference string `json:"reference"`
-		KeyID     string `json:"key_id"`
-	}{
-		Reference: ref,
-		KeyID:     keyID,
-	}
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodPost, "/api/v1/registry/encryption/encrypt", reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrImageNotFound{Reference: ref}
-	}
-
-	var result restEncryptImageResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toEncryptImageResult(), nil
+	return nil, noSurface(u.Name(), opEncryptImage)
 }
 
-// DecryptImage decrypts an image via Unix socket.
+// DecryptImage has no RegistryService call on the socket.
 func (u *UnixAdapter) DecryptImage(ctx context.Context, ref string) (*DecryptImageResult, error) {
-	reqBody := struct {
-		Reference string `json:"reference"`
-	}{
-		Reference: ref,
-	}
-
-	body, statusCode, err := u.doRequest(ctx, http.MethodPost, "/api/v1/registry/encryption/decrypt", reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	if statusCode == http.StatusNotFound {
-		return nil, ErrImageNotFound{Reference: ref}
-	}
-
-	var result restDecryptImageResponse
-	if err := u.handleResponse(body, statusCode, &result); err != nil {
-		return nil, err
-	}
-
-	return result.toDecryptImageResult(), nil
+	return nil, noSurface(u.Name(), opDecryptImage)
 }
 
 // =============================================================================
@@ -1521,108 +1292,6 @@ func (r *cliStatusResponse) toStatusResult() *StatusResult {
 	}
 }
 
-type cliTagResponse struct {
-	SourceReference string    `json:"source_reference"`
-	TargetReference string    `json:"target_reference"`
-	Digest          string    `json:"digest"`
-	TaggedAt        time.Time `json:"tagged_at"`
-}
-
-func (r *cliTagResponse) toTagResult() *TagResult {
-	return &TagResult{
-		SourceReference: r.SourceReference,
-		TargetReference: r.TargetReference,
-		Digest:          r.Digest,
-		TaggedAt:        r.TaggedAt,
-	}
-}
-
-type cliVerifyClientResponse struct {
-	Verified    bool      `json:"verified"`
-	ClientID    string    `json:"client_id"`
-	SessionID   string    `json:"session_id,omitempty"`
-	ValidUntil  time.Time `json:"valid_until,omitempty"`
-	Permissions []string  `json:"permissions,omitempty"`
-	Reason      string    `json:"reason,omitempty"`
-}
-
-func (r *cliVerifyClientResponse) toVerifyClientResult() *VerifyClientResult {
-	return &VerifyClientResult{
-		Verified:    r.Verified,
-		ClientID:    r.ClientID,
-		SessionID:   r.SessionID,
-		ValidUntil:  r.ValidUntil,
-		Permissions: r.Permissions,
-		Reason:      r.Reason,
-	}
-}
-
-type cliSessionResponse struct {
-	ClientID    string         `json:"client_id"`
-	SessionID   string         `json:"session_id"`
-	AIK         string         `json:"aik"`
-	PCRs        map[int]string `json:"pcrs,omitempty"`
-	ValidUntil  time.Time      `json:"valid_until"`
-	Permissions []string       `json:"permissions"`
-	CreatedAt   time.Time      `json:"created_at"`
-}
-
-func (r *cliSessionResponse) toSessionResult() *SessionResult {
-	pcrs := make(map[int][]byte)
-	for idx, val := range r.PCRs {
-		pcrs[idx], _ = base64.StdEncoding.DecodeString(val)
-	}
-
-	return &SessionResult{
-		ClientID:    r.ClientID,
-		SessionID:   r.SessionID,
-		AIK:         r.AIK,
-		PCRs:        pcrs,
-		ValidUntil:  r.ValidUntil,
-		Permissions: r.Permissions,
-		CreatedAt:   r.CreatedAt,
-	}
-}
-
-type cliEncryptImageResponse struct {
-	Reference       string    `json:"reference"`
-	KeyID           string    `json:"key_id"`
-	EncryptedAt     time.Time `json:"encrypted_at"`
-	LayersEncrypted int       `json:"layers_encrypted"`
-}
-
-func (r *cliEncryptImageResponse) toEncryptImageResult() *EncryptImageResult {
-	return &EncryptImageResult{
-		Reference:       r.Reference,
-		KeyID:           r.KeyID,
-		EncryptedAt:     r.EncryptedAt,
-		LayersEncrypted: r.LayersEncrypted,
-	}
-}
-
-type cliDecryptImageResponse struct {
-	Reference   string              `json:"reference"`
-	KeyID       string              `json:"key_id"`
-	DecryptedAt time.Time           `json:"decrypted_at"`
-	Manifest    cliManifestResponse `json:"manifest"`
-	Layers      []cliLayerResponse  `json:"layers"`
-}
-
-func (r *cliDecryptImageResponse) toDecryptImageResult() *DecryptImageResult {
-	layers := make([]LayerData, len(r.Layers))
-	for i, layer := range r.Layers {
-		layers[i] = layer.toLayerData()
-	}
-
-	return &DecryptImageResult{
-		Reference:   r.Reference,
-		KeyID:       r.KeyID,
-		DecryptedAt: r.DecryptedAt,
-		Manifest:    r.Manifest.toImageManifest(),
-		Layers:      layers,
-	}
-}
-
 // REST Request/Response Types
 
 type restPushRequest struct {
@@ -1649,18 +1318,3 @@ type restListResponse = cliListResponse
 type restDeleteResponse = cliDeleteResponse
 type restInspectResponse = cliInspectResponse
 type restStatusResponse = cliStatusResponse
-type restTagResponse = cliTagResponse
-type restVerifyClientResponse = cliVerifyClientResponse
-type restSessionResponse = cliSessionResponse
-type restEncryptImageResponse = cliEncryptImageResponse
-type restDecryptImageResponse = cliDecryptImageResponse
-type restVerifyClientRequest struct {
-	ClientID  string         `json:"client_id"`
-	AIK       string         `json:"aik"`
-	Quote     string         `json:"quote"`
-	Signature string         `json:"signature"`
-	Nonce     string         `json:"nonce"`
-	PCRs      map[int]string `json:"pcrs,omitempty"`
-	EventLog  string         `json:"event_log,omitempty"`
-	Timestamp time.Time      `json:"timestamp"`
-}

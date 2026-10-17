@@ -18,7 +18,6 @@ package registry
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -335,174 +334,34 @@ func (c *CLIAdapter) Status(ctx context.Context) (*StatusResult, error) {
 	return result.toStatusResult(), nil
 }
 
-// =============================================================================
-// Attestation Commands
-// =============================================================================
-
-// VerifyClient verifies a client's attestation via CLI.
-// Command: platformctl registry verify-client <client-id> [flags]
-func (c *CLIAdapter) VerifyClient(ctx context.Context, opts VerifyClientOptions) (*VerifyClientResult, error) {
-	if opts.ClientID == "" {
-		return nil, ErrInvalidArgument{Argument: "client_id", Reason: "client ID cannot be empty"}
-	}
-
-	args := []string{"registry", "verify-client", opts.ClientID}
-
-	if len(opts.AIK) > 0 {
-		args = append(args, "--aik", base64.StdEncoding.EncodeToString(opts.AIK))
-	}
-
-	if len(opts.Quote) > 0 {
-		args = append(args, "--quote", base64.StdEncoding.EncodeToString(opts.Quote))
-	}
-
-	if len(opts.Signature) > 0 {
-		args = append(args, "--signature", base64.StdEncoding.EncodeToString(opts.Signature))
-	}
-
-	if len(opts.Nonce) > 0 {
-		args = append(args, "--nonce", base64.StdEncoding.EncodeToString(opts.Nonce))
-	}
-
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result cliVerifyClientResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrInvalidResponse{Operation: "VerifyClient", Err: err}
-	}
-
-	return result.toVerifyClientResult(), nil
-}
-
-// GetSession retrieves a client session via CLI.
-// Command: platformctl registry session get <client-id>
-func (c *CLIAdapter) GetSession(ctx context.Context, clientID string) (*SessionResult, error) {
-	if clientID == "" {
-		return nil, ErrInvalidArgument{Argument: "client_id", Reason: "client ID cannot be empty"}
-	}
-
-	output, err := c.runCommand(ctx, "registry", "session", "get", clientID)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			return nil, ErrSessionNotFound{ClientID: clientID}
-		}
-		return nil, err
-	}
-
-	var result cliSessionResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrInvalidResponse{Operation: "GetSession", Err: err}
-	}
-
-	return result.toSessionResult(), nil
-}
-
-// InvalidateSession invalidates a client session via CLI.
-// Command: platformctl registry session invalidate <client-id>
-func (c *CLIAdapter) InvalidateSession(ctx context.Context, clientID string) error {
-	if clientID == "" {
-		return ErrInvalidArgument{Argument: "client_id", Reason: "client ID cannot be empty"}
-	}
-
-	_, err := c.runCommand(ctx, "registry", "session", "invalidate", clientID)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			return ErrSessionNotFound{ClientID: clientID}
-		}
-		return err
-	}
-	return nil
-}
-
-// =============================================================================
-// Encryption Commands
-// =============================================================================
-
-// EncryptImage encrypts an image via CLI.
-// Command: platformctl registry encrypt <reference> --key-id <key-id>
-func (c *CLIAdapter) EncryptImage(ctx context.Context, ref string, keyID string) (*EncryptImageResult, error) {
-	if ref == "" {
-		return nil, ErrInvalidArgument{Argument: "reference", Reason: "reference cannot be empty"}
-	}
-	if keyID == "" {
-		return nil, ErrInvalidArgument{Argument: "key_id", Reason: "key ID cannot be empty"}
-	}
-
-	args := []string{"registry", "encrypt", ref, "--key-id", keyID}
-
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			return nil, ErrImageNotFound{Reference: ref}
-		}
-		return nil, err
-	}
-
-	var result cliEncryptImageResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrInvalidResponse{Operation: "EncryptImage", Err: err}
-	}
-
-	return result.toEncryptImageResult(), nil
-}
-
-// DecryptImage decrypts an image via CLI.
-// Command: platformctl registry decrypt <reference>
-func (c *CLIAdapter) DecryptImage(ctx context.Context, ref string) (*DecryptImageResult, error) {
-	if ref == "" {
-		return nil, ErrInvalidArgument{Argument: "reference", Reason: "reference cannot be empty"}
-	}
-
-	output, err := c.runCommand(ctx, "registry", "decrypt", ref)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			return nil, ErrImageNotFound{Reference: ref}
-		}
-		return nil, err
-	}
-
-	var result cliDecryptImageResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrInvalidResponse{Operation: "DecryptImage", Err: err}
-	}
-
-	return result.toDecryptImageResult(), nil
-}
-
-// =============================================================================
-// Tag Command (Not yet implemented in CLI)
-// =============================================================================
-
-// Tag adds a tag to an existing image.
-// Command: platformctl registry tag <source-reference> <target-reference>
-// Note: This command is not yet implemented in the CLI.
+// Tag has no platformctl registry command.
 func (c *CLIAdapter) Tag(ctx context.Context, sourceRef, targetRef string) (*TagResult, error) {
-	if sourceRef == "" {
-		return nil, ErrInvalidArgument{Argument: "source_reference", Reason: "source reference cannot be empty"}
-	}
-	if targetRef == "" {
-		return nil, ErrInvalidArgument{Argument: "target_reference", Reason: "target reference cannot be empty"}
-	}
+	return nil, noSurface(c.Name(), opTag)
+}
 
-	args := []string{"registry", "tag", sourceRef, targetRef}
+// VerifyClient has no platformctl registry command.
+func (c *CLIAdapter) VerifyClient(ctx context.Context, opts VerifyClientOptions) (*VerifyClientResult, error) {
+	return nil, noSurface(c.Name(), opVerifyClient)
+}
 
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			return nil, ErrImageNotFound{Reference: sourceRef}
-		}
-		return nil, err
-	}
+// GetSession has no platformctl registry command.
+func (c *CLIAdapter) GetSession(ctx context.Context, clientID string) (*SessionResult, error) {
+	return nil, noSurface(c.Name(), opGetSession)
+}
 
-	var result cliTagResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrInvalidResponse{Operation: "Tag", Err: err}
-	}
+// InvalidateSession has no platformctl registry command.
+func (c *CLIAdapter) InvalidateSession(ctx context.Context, clientID string) error {
+	return noSurface(c.Name(), opInvalidateSession)
+}
 
-	return result.toTagResult(), nil
+// EncryptImage has no platformctl registry command.
+func (c *CLIAdapter) EncryptImage(ctx context.Context, ref string, keyID string) (*EncryptImageResult, error) {
+	return nil, noSurface(c.Name(), opEncryptImage)
+}
+
+// DecryptImage has no platformctl registry command.
+func (c *CLIAdapter) DecryptImage(ctx context.Context, ref string) (*DecryptImageResult, error) {
+	return nil, noSurface(c.Name(), opDecryptImage)
 }
 
 // Compile-time interface check
