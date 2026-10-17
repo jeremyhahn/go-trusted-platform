@@ -445,14 +445,12 @@ func testListContainersWithFilters(t *testing.T) {
 	defer cancel()
 
 	// Create and start some containers
-	var runningIDs []string
 	for i := 0; i < 2; i++ {
 		spec := CreateTestContainerSpec(fmt.Sprintf("test-filter-running-%d", i), "alpine:latest")
 		c, err := orchestrator.Create(ctx, spec)
 		require.NoError(t, err)
 		err = orchestrator.Start(ctx, c.ID)
 		require.NoError(t, err)
-		runningIDs = append(runningIDs, c.ID)
 	}
 
 	// Create stopped containers
@@ -489,7 +487,7 @@ func testContainerLogs(t *testing.T) {
 	logs, err := orchestrator.Logs(ctx, c.ID, container.LogOptions{Stdout: true, Stderr: true})
 	require.NoError(t, err)
 	require.NotNil(t, logs)
-	defer logs.Close()
+	require.NoError(t, logs.Close())
 }
 
 func testFullLifecycle(t *testing.T) {

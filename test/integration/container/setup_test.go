@@ -307,7 +307,6 @@ type MockPodmanBackend struct {
 	connected   bool
 	shouldFail  bool
 	failError   error
-	idCounter   int64
 	createCalls int32
 	startCalls  int32
 	stopCalls   int32
