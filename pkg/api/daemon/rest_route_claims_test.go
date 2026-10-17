@@ -117,8 +117,6 @@ func daemonRouteTable(t *testing.T) (*RESTServer, []string) {
 var daemonDivergentClaims = map[string]string{
 	"/platform.v1.CAService/RevokeCertificate": "#452: the daemon revokes at POST /api/v1/ca/certificates/{serial}/revoke; the claim is the webservice's DELETE shape",
 
-	"/platform.v1.ComputeService/GetContainerLogs": "#452: lands on GET /api/v1/compute/containers/{id} with id=\"logs\"; neither server serves container logs (claim_operation_resolution_test.go)",
-
 	"/platform.v1.DeviceService/BootCertificate": deviceBootMachineFacing,
 	"/platform.v1.DeviceService/BootDelivery":    deviceBootMachineFacing,
 
