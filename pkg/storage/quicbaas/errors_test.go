@@ -19,7 +19,19 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 )
+
+// A miss from this store is the datastore's record-not-found miss, wrapped or
+// not, so the transports classify it NotFound; other errors are not.
+func TestErrNotFound_IsRecordNotFound(t *testing.T) {
+	wrapped := ErrOperationFailed{Operation: "get", Cause: ErrNotFound{EntityType: "Device", ID: 7}}
+	assert.ErrorIs(t, wrapped, datastore.ErrRecordNotFound)
+	assert.ErrorIs(t, ErrNotFoundByIndex{EntityType: "Device", IndexField: "Serial", Value: "x"}, datastore.ErrRecordNotFound)
+	assert.NotErrorIs(t, ErrInvalidConfig{Field: "f", Reason: "r"}, datastore.ErrRecordNotFound)
+	assert.False(t, ErrNotFound{}.Is(errors.New("datastore: record not found")))
+}
 
 func TestErrNotFound_Error(t *testing.T) {
 	err := ErrNotFound{EntityType: "User", ID: 12345}
