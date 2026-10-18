@@ -348,6 +348,7 @@ Flags shared by `install`, `firstboot`, `boot` and `all`:
 | `--u2f-device` | string | `""` | Host hidraw device for U2F passthrough |
 | `--qemu-binary` | string | `""` | Custom QEMU binary |
 | `--network` | string | `""` | `user`, `bridge`, `none`; empty auto-detects |
+| `--timeout` | duration | `0` (none) | Bound on each VM run (e.g. `45m`); see below |
 
 `--work-dir` holds the artefacts (disk, NVRAM, TPM state, logs) and may be as
 deep as you like. The VM's runtime unix sockets (QMP, console) do **not** live
@@ -370,6 +371,13 @@ platformctl iso test all
 **`iso test install` succeeds when the VM exits after a reboot.** The autoinstall
 script reboots, QEMU exits non-zero, and the harness treats that as success if
 the disk exists and exceeds 100 MB.
+
+**A VM test waits until the guest powers off.** Interactively you end it with
+Ctrl+C. A headless run (CI) passes `--timeout`: when it expires the verb kills
+QEMU, stops the software TPM and fails with `ErrVMTimeout`, naming the
+timeout. A run cut off this way never counts as an install, whatever the disk
+size. A guest with no autoinstaller (a stock Alpine ISO) sits at its login
+prompt and never powers off, so it always ends at the timeout.
 
 **`iso test firstboot` and `iso test boot` are the same code path**
 (`runTestBootCommon`). The distinction is the state of the disk you point them

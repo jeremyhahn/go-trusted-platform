@@ -163,7 +163,7 @@ func runTestPXE(commonFlags *cli.CommonFlags, cmd *cobra.Command, args []string)
 	}
 
 	logger := createTestLogger(pxeDebug)
-	ctx, cancel := createTestContext()
+	ctx, cancel := createTestContext(0)
 	defer cancel()
 
 	printTestHeader("PXE Boot Test")

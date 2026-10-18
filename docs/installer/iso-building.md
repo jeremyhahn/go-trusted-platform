@@ -230,6 +230,7 @@ platformctl iso test all --iso trusted-alpine-1.0.0-x86_64.iso
 | `--fido2` | false | Enable FIDO2/CanoKey device emulation |
 | `--fido2-mode` | canokey | FIDO2 mode: canokey, u2f-emulated, or u2f-passthru |
 | `--network` | auto | Network mode: user, bridge, or none |
+| `--timeout` | 0 (none) | Stop QEMU and the software TPM and fail when the guest has not powered off within this duration (per VM run); headless runs set it |
 
 
 ### UEFI / OVMF
