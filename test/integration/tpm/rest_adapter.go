@@ -144,7 +144,7 @@ func (r *RESTAdapter) EKDelete(ctx context.Context, handle uint32, password stri
 // SRKCreate creates an SRK via the SDK client over REST.
 func (r *RESTAdapter) SRKCreate(ctx context.Context, opts SRKCreateOptions) (*SRKCreateResult, error) {
 	resp, err := r.client.CreateSRKDomain(ctx, keyAlgorithmFromString(opts.Algorithm),
-		opts.Persistent, opts.Handle, opts.Password)
+		opts.Persistent, opts.Parent, opts.ParentPassword)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "REST", Method: "CreateSRK", Err: err}
 	}
