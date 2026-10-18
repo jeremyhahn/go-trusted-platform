@@ -55,6 +55,10 @@ func (s *RESTServer) SetKMSHandlers(clients KMSRESTClients, guard *restapi.Scope
 	respWriter := response.NewResponseWriter(logger, nil)
 	router := restkms.NewKMSRouter(logger, clients.KMS, clients.Crypto, clients.DEK, clients.Secrets, respWriter)
 	sub := s.router.PathPrefix(kmsRESTPrefix).Subrouter()
+	// Match on the encoded path so a secret or DEK path with slashes, sent as
+	// %2F, stays one {name}/{path} segment; the handlers unescape it
+	// (restkms.KMSRouter.RegisterRoutes).
+	sub.UseEncodedPath()
 	for _, route := range router.Routes() {
 		scope := grpcapi.ScopeForMethod(route.RPC)
 		handler := route.Handler

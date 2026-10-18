@@ -1159,6 +1159,7 @@ func testSecretsRotate(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 	require.NoError(t, err, "Setup: SecretsStore should succeed")
 	originalVersion := storeResult.Version
 
+	rotated := false
 	t.Run("RotateSecret", func(t *testing.T) {
 		newData := []byte("new-rotated-secret-data")
 		rotateOpts := SecretsRotateOptions{
@@ -1167,11 +1168,18 @@ func testSecretsRotate(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 		}
 
 		result, err := cmd.SecretsRotate(testCtx, rotateOpts)
+		if kmsSecretsRefused(t, cmd, "SecretsRotate", err) {
+			return
+		}
 		require.NoError(t, err, "SecretsRotate should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, originalVersion, result.OldVersion, "OldVersion should match original")
 		assert.Greater(t, result.NewVersion, result.OldVersion, "NewVersion should be greater")
+		rotated = true
 	})
+	if !rotated {
+		return
+	}
 
 	t.Run("VerifyRotatedSecret", func(t *testing.T) {
 		result, err := cmd.SecretsGet(testCtx, secretName)
@@ -1186,6 +1194,19 @@ func testSecretsVersions(t *testing.T, ctx context.Context, cmd KMSCommands, pre
 
 	// Store a secret and rotate it
 	secretName := prefix + "-secret-versions"
+
+	versionsMissing := kmsSecretsDeclaredMissing(t, cmd, "SecretsVersions", func() error {
+		_, err := cmd.SecretsVersions(testCtx, secretName, SecretsVersionsOptions{Limit: 10})
+		return err
+	})
+	versionMissing := kmsSecretsDeclaredMissing(t, cmd, "SecretsVersion", func() error {
+		_, err := cmd.SecretsVersion(testCtx, secretName, 1)
+		return err
+	})
+	if versionsMissing && versionMissing {
+		return
+	}
+
 	storeOpts := SecretsStoreOptions{
 		Name: secretName,
 		Data: []byte("version-1-data"),
@@ -1200,11 +1221,17 @@ func testSecretsVersions(t *testing.T, ctx context.Context, cmd KMSCommands, pre
 			NewData: []byte(fmt.Sprintf("version-%d-data", i)),
 		}
 		_, err := cmd.SecretsRotate(testCtx, rotateOpts)
+		if kmsSecretsRefused(t, cmd, "SecretsRotate", err) {
+			return
+		}
 		require.NoError(t, err, "Setup: SecretsRotate should succeed")
 	}
 
 	t.Run("ListSecretVersions", func(t *testing.T) {
 		result, err := cmd.SecretsVersions(testCtx, secretName, SecretsVersionsOptions{Limit: 10})
+		if kmsSecretsRefused(t, cmd, "SecretsVersions", err) {
+			return
+		}
 		require.NoError(t, err, "SecretsVersions should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.GreaterOrEqual(t, len(result.Versions), 3, "Should have at least 3 versions")
@@ -1212,6 +1239,9 @@ func testSecretsVersions(t *testing.T, ctx context.Context, cmd KMSCommands, pre
 
 	t.Run("GetSpecificSecretVersion", func(t *testing.T) {
 		result, err := cmd.SecretsVersion(testCtx, secretName, 1)
+		if kmsSecretsRefused(t, cmd, "SecretsVersion", err) {
+			return
+		}
 		require.NoError(t, err, "SecretsVersion should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, uint64(1), result.Version, "Version should be 1")
@@ -1225,6 +1255,13 @@ func testSecretsRollback(t *testing.T, ctx context.Context, cmd KMSCommands, pre
 
 	// Store a secret and rotate it
 	secretName := prefix + "-secret-rollback"
+	if kmsSecretsDeclaredMissing(t, cmd, "SecretsRollback", func() error {
+		_, err := cmd.SecretsRollback(testCtx, secretName, 1)
+		return err
+	}) {
+		return
+	}
+
 	originalData := []byte("original-rollback-data")
 	storeOpts := SecretsStoreOptions{
 		Name: secretName,
@@ -1239,14 +1276,25 @@ func testSecretsRollback(t *testing.T, ctx context.Context, cmd KMSCommands, pre
 		NewData: []byte("rotated-data"),
 	}
 	_, err = cmd.SecretsRotate(testCtx, rotateOpts)
+	if kmsSecretsRefused(t, cmd, "SecretsRotate", err) {
+		return
+	}
 	require.NoError(t, err, "Setup: SecretsRotate should succeed")
 
+	rolledBack := false
 	t.Run("RollbackToVersion1", func(t *testing.T) {
 		result, err := cmd.SecretsRollback(testCtx, secretName, 1)
+		if kmsSecretsRefused(t, cmd, "SecretsRollback", err) {
+			return
+		}
 		require.NoError(t, err, "SecretsRollback should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Greater(t, result.NewVersion, uint64(2), "NewVersion should be > 2 (creates new version)")
+		rolledBack = true
 	})
+	if !rolledBack {
+		return
+	}
 
 	t.Run("VerifyRollbackData", func(t *testing.T) {
 		result, err := cmd.SecretsGet(testCtx, secretName)
@@ -1300,8 +1348,12 @@ func testSecretsStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 	_, err := cmd.SecretsStore(testCtx, storeOpts)
 	require.NoError(t, err, "Setup: SecretsStore should succeed")
 
+	// docs/kms/cli.md §secrets reports the status as ENABLED or DISABLED.
 	t.Run("DisableSecret", func(t *testing.T) {
 		result, err := cmd.SecretsStatus(testCtx, secretName, false)
+		if kmsSecretsRefused(t, cmd, "SecretsStatus", err) {
+			return
+		}
 		require.NoError(t, err, "SecretsStatus (disable) should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Contains(t, result.Status, "DISABLED", "Status should indicate disabled")
@@ -1310,6 +1362,9 @@ func testSecretsStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 
 	t.Run("EnableSecret", func(t *testing.T) {
 		result, err := cmd.SecretsStatus(testCtx, secretName, true)
+		if kmsSecretsRefused(t, cmd, "SecretsStatus", err) {
+			return
+		}
 		require.NoError(t, err, "SecretsStatus (enable) should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Contains(t, result.Status, "ENABLED", "Status should indicate enabled")
@@ -1317,6 +1372,9 @@ func testSecretsStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 
 	t.Run("StatusNonexistentSecretFails", func(t *testing.T) {
 		_, err := cmd.SecretsStatus(testCtx, prefix+"-nonexistent-status", true)
+		if kmsSecretsRefused(t, cmd, "SecretsStatus", err) {
+			return
+		}
 		require.Error(t, err, "SecretsStatus should fail for nonexistent secret")
 	})
 }

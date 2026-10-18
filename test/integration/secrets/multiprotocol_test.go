@@ -38,6 +38,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // =============================================================================
@@ -127,6 +128,79 @@ func testSecretsProtocol(t *testing.T, ctx context.Context, cmd SecretsCommands)
 		testLargeSecrets(t, ctx, cmd, prefix)
 		testSecretMetadata(t, ctx, cmd, prefix)
 	})
+}
+
+// secretsMissingReason is where the transports without a secrets operation
+// are recorded.
+const secretsMissingReason = "docs/kms/api.md §4 records it MISSING (docs/13 G7)"
+
+// secretsMissing lists, per operation, the transports docs/kms/api.md §4
+// gives no surface for. Their adapters answer surface.ErrNoSurface, and gRPC
+// and Unix answer codes.Unimplemented.
+var secretsMissing = map[string][]string{
+	"Rotate":   {"QUIC", "MCP"},
+	"Versions": {"gRPC", "Unix", "QUIC", "MCP"},
+	"Version":  {"gRPC", "Unix"},
+	"Rollback": {"gRPC", "Unix", "QUIC", "MCP"},
+	"Status":   {"QUIC", "MCP"},
+	"Prefix":   {"QUIC", "MCP"},
+}
+
+// secretsGapMethods maps each operation to the quicbaas.Secrets method that
+// go-quicbaas #1540 leaves unrouted on an embedded daemon. Every transport
+// that serves the operation reaches that method and fails the same way.
+var secretsGapMethods = map[string]string{
+	"Rotate":    "Rotate",
+	"Versions":  "ListVersions",
+	"Version":   "GetVersion",
+	"Rollback":  "Rollback",
+	"Status":    "UpdateStatus",
+	"PolicySet": "SetRotationPolicy",
+	"Policy":    "GetRotationPolicy",
+}
+
+// secretsMissingOn reports whether transport has no surface for op.
+func secretsMissingOn(transport, op string) bool {
+	for _, missing := range secretsMissing[op] {
+		if missing == transport {
+			return true
+		}
+	}
+	return false
+}
+
+// secretsRefused reports whether err is the declared outcome of op on cmd's
+// transport: the typed refusal where the transport has no surface, or the
+// go-quicbaas #1540 gap where it serves op. It asserts that outcome. A false
+// return means the caller asserts the success path.
+func secretsRefused(t *testing.T, cmd SecretsCommands, op string, err error) bool {
+	t.Helper()
+
+	if secretsMissingOn(cmd.Name(), op) {
+		assert.Truef(t, surface.IsNotImplemented(err),
+			"%s %s has no surface (%s): got %v, want a typed refusal", cmd.Name(), op, secretsMissingReason, err)
+		t.Logf("MISSING: %s %s: %s", cmd.Name(), op, secretsMissingReason)
+		return true
+	}
+
+	method, gapped := secretsGapMethods[op]
+	if !gapped {
+		return false
+	}
+	// Declared gap: go-quicbaas #1540 — flips to the success path on the pin bump that carries the fix.
+	return helpers.GapEmbeddedSecrets.UnservedOverWire(t, method, err)
+}
+
+// secretsDeclaredMissing asserts the typed refusal of op where cmd's
+// transport has no surface for it, calling op only there, and reports
+// whether it did.
+func secretsDeclaredMissing(t *testing.T, cmd SecretsCommands, op string, call func() error) bool {
+	t.Helper()
+
+	if !secretsMissingOn(cmd.Name(), op) {
+		return false
+	}
+	return secretsRefused(t, cmd, op, call())
 }
 
 // =============================================================================
@@ -337,15 +411,23 @@ func testRotate(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 	originalVersion := storeResult.Version
 	defer CleanupSecret(cmd, testCtx, secretName)
 
+	rotated := false
 	t.Run("RotateSecret", func(t *testing.T) {
 		newData := []byte("new-rotated-secret-data")
 
 		result, err := cmd.Rotate(testCtx, secretName, newData)
+		if secretsRefused(t, cmd, "Rotate", err) {
+			return
+		}
 		require.NoError(t, err, "Rotate should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, originalVersion, result.OldVersion, "OldVersion should match original")
 		assert.Greater(t, result.NewVersion, result.OldVersion, "NewVersion should be greater")
+		rotated = true
 	})
+	if !rotated {
+		return
+	}
 
 	t.Run("VerifyRotatedSecret", func(t *testing.T) {
 		result, err := cmd.Get(testCtx, secretName)
@@ -373,14 +455,27 @@ func testVersions(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix
 	require.NoError(t, err, "Setup: Store should succeed")
 	defer CleanupSecret(cmd, testCtx, secretName)
 
+	if secretsDeclaredMissing(t, cmd, "Versions", func() error {
+		_, err := cmd.Versions(testCtx, secretName)
+		return err
+	}) {
+		return
+	}
+
 	// Rotate a few times
 	for i := 2; i <= 3; i++ {
 		_, err := cmd.Rotate(testCtx, secretName, []byte(fmt.Sprintf("version-%d-data", i)))
+		if secretsRefused(t, cmd, "Rotate", err) {
+			return
+		}
 		require.NoError(t, err, "Setup: Rotate should succeed")
 	}
 
 	t.Run("ListSecretVersions", func(t *testing.T) {
 		result, err := cmd.Versions(testCtx, secretName)
+		if secretsRefused(t, cmd, "Versions", err) {
+			return
+		}
 		require.NoError(t, err, "Versions should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.GreaterOrEqual(t, len(result.Versions), 3, "Should have at least 3 versions")
@@ -401,12 +496,25 @@ func testVersion(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix 
 	require.NoError(t, err, "Setup: Store should succeed")
 	defer CleanupSecret(cmd, testCtx, secretName)
 
+	if secretsDeclaredMissing(t, cmd, "Version", func() error {
+		_, err := cmd.Version(testCtx, secretName, 1)
+		return err
+	}) {
+		return
+	}
+
 	// Rotate once
 	_, err = cmd.Rotate(testCtx, secretName, []byte("version-2-data"))
+	if secretsRefused(t, cmd, "Rotate", err) {
+		return
+	}
 	require.NoError(t, err, "Setup: Rotate should succeed")
 
 	t.Run("GetSpecificVersion", func(t *testing.T) {
 		result, err := cmd.Version(testCtx, secretName, 1)
+		if secretsRefused(t, cmd, "Version", err) {
+			return
+		}
 		require.NoError(t, err, "Version should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, uint64(1), result.Version, "Version should be 1")
@@ -415,6 +523,9 @@ func testVersion(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix 
 
 	t.Run("GetLatestVersion", func(t *testing.T) {
 		result, err := cmd.Version(testCtx, secretName, 2)
+		if secretsRefused(t, cmd, "Version", err) {
+			return
+		}
 		require.NoError(t, err, "Version should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, uint64(2), result.Version, "Version should be 2")
@@ -437,16 +548,34 @@ func testRollback(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix
 	require.NoError(t, err, "Setup: Store should succeed")
 	defer CleanupSecret(cmd, testCtx, secretName)
 
+	if secretsDeclaredMissing(t, cmd, "Rollback", func() error {
+		_, err := cmd.Rollback(testCtx, secretName, 1)
+		return err
+	}) {
+		return
+	}
+
 	// Rotate to create version 2
 	_, err = cmd.Rotate(testCtx, secretName, []byte("rotated-data"))
+	if secretsRefused(t, cmd, "Rotate", err) {
+		return
+	}
 	require.NoError(t, err, "Setup: Rotate should succeed")
 
+	rolledBack := false
 	t.Run("RollbackToVersion1", func(t *testing.T) {
 		result, err := cmd.Rollback(testCtx, secretName, 1)
+		if secretsRefused(t, cmd, "Rollback", err) {
+			return
+		}
 		require.NoError(t, err, "Rollback should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Greater(t, result.NewVersion, uint64(2), "NewVersion should be > 2 (creates new version)")
+		rolledBack = true
 	})
+	if !rolledBack {
+		return
+	}
 
 	t.Run("VerifyRollbackData", func(t *testing.T) {
 		result, err := cmd.Get(testCtx, secretName)
@@ -473,18 +602,25 @@ func testStatus(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 	require.NoError(t, err, "Setup: Store should succeed")
 	defer CleanupSecret(cmd, testCtx, secretName)
 
+	// docs/kms/cli.md reports a secret's status as ENABLED or DISABLED.
 	t.Run("DisableSecret", func(t *testing.T) {
 		result, err := cmd.Status(testCtx, secretName, false)
+		if secretsRefused(t, cmd, "Status", err) {
+			return
+		}
 		require.NoError(t, err, "Status (disable) should succeed")
 		require.NotNil(t, result, "Result should not be nil")
-		assert.Contains(t, result.Status, "DISABLED", "Status should indicate disabled")
+		assert.Equal(t, "DISABLED", result.Status, "Status should indicate disabled")
 	})
 
 	t.Run("EnableSecret", func(t *testing.T) {
 		result, err := cmd.Status(testCtx, secretName, true)
+		if secretsRefused(t, cmd, "Status", err) {
+			return
+		}
 		require.NoError(t, err, "Status (enable) should succeed")
 		require.NotNil(t, result, "Result should not be nil")
-		assert.Contains(t, result.Status, "ENABLED", "Status should indicate enabled")
+		assert.Equal(t, "ENABLED", result.Status, "Status should indicate enabled")
 	})
 }
 
@@ -502,6 +638,7 @@ func testPolicy(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 	require.NoError(t, err, "Setup: Store should succeed")
 	defer CleanupSecret(cmd, testCtx, secretName)
 
+	policySet := false
 	t.Run("SetRotationPolicy", func(t *testing.T) {
 		policyOpts := PolicySetOptions{
 			Enabled:         true,
@@ -510,18 +647,28 @@ func testPolicy(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 		}
 
 		result, err := cmd.PolicySet(testCtx, secretName, policyOpts)
+		if secretsRefused(t, cmd, "PolicySet", err) {
+			return
+		}
 		require.NoError(t, err, "PolicySet should succeed")
 		require.NotNil(t, result, "Result should not be nil")
+		policySet = true
 	})
 
 	t.Run("GetRotationPolicy", func(t *testing.T) {
 		result, err := cmd.Policy(testCtx, secretName)
+		if secretsRefused(t, cmd, "Policy", err) {
+			return
+		}
 		require.NoError(t, err, "Policy should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.True(t, result.Enabled, "Policy should be enabled")
 		assert.Equal(t, int64(86400), result.IntervalSeconds, "Interval should match")
 		assert.Equal(t, int32(10), result.RetainVersions, "RetainVersions should match")
 	})
+	if !policySet {
+		return
+	}
 
 	t.Run("DisableRotationPolicy", func(t *testing.T) {
 		policyOpts := PolicySetOptions{
@@ -549,6 +696,13 @@ func testPrefix(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 
 	// Store multiple secrets with a common prefix
 	secretPrefix := prefix + "-prefix-test"
+	if secretsDeclaredMissing(t, cmd, "Prefix", func() error {
+		_, err := cmd.Prefix(testCtx, secretPrefix, false)
+		return err
+	}) {
+		return
+	}
+
 	var secretNames []string
 	for i := 0; i < 3; i++ {
 		secretName := fmt.Sprintf("%s/item-%d", secretPrefix, i)

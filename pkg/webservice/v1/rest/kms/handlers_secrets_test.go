@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -107,6 +108,48 @@ func TestSecrets_GetReturnsTheStoredBytes(t *testing.T) {
 	decodeEnvelope(t, w, &got)
 	if !bytes.Equal(got.Value, stored) {
 		t.Fatalf("value = %q, want %q", got.Value, stored)
+	}
+}
+
+// A secret path with slashes travels escaped (%2F) in the {name} segment and
+// reaches the SDK as the path the caller stored. Before the subrouter matched
+// on the encoded path, the decoded slash split the segment and the route 404'd.
+func TestSecrets_GetEscapedSlashPathReachesTheSecret(t *testing.T) {
+	router := secretsServer(newJSONSecretStore())
+	stored := []byte("nested-secret")
+
+	body, err := json.Marshal(StoreSecretRequest{Path: "db/primary/password", Value: stored})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if w := serve(t, router, http.MethodPost, "/kms/secrets", string(body)); w.Code != http.StatusCreated {
+		t.Fatalf("store status = %d, want 201 (body: %s)", w.Code, w.Body.String())
+	}
+
+	w := serve(t, router, http.MethodGet, "/kms/secrets/"+url.PathEscape("db/primary/password"), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("get status = %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+	var got SecretResponse
+	decodeEnvelope(t, w, &got)
+	if got.Path != "db/primary/password" || !bytes.Equal(got.Value, stored) {
+		t.Fatalf("got path %q value %q, want db/primary/password %q", got.Path, got.Value, stored)
+	}
+}
+
+// pathVar unescapes the route variable, and passes a malformed escape on as
+// sent rather than guessing at another name.
+func TestPathVar(t *testing.T) {
+	cases := map[string]string{
+		"db%2Fprimary%2Fpassword": "db/primary/password",
+		"app-db":                  "app-db",
+		"db%zz":                   "db%zz",
+	}
+	for raw, want := range cases {
+		r := mux.SetURLVars(httptest.NewRequest(http.MethodGet, "/", nil), map[string]string{"name": raw})
+		if got := pathVar(r, "name"); got != want {
+			t.Errorf("pathVar(%q) = %q, want %q", raw, got, want)
+		}
 	}
 }
 

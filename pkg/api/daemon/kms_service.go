@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	dbfactory "github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
@@ -700,6 +702,122 @@ func (a *SecretsServerAdapter) ListSecrets(ctx context.Context, req *pb.ListSecr
 		NextCursor: next,
 		HasMore:    next != "",
 		TotalCount: int32(len(resp.Paths)),
+	}, nil
+}
+
+// RotateSecret writes new data as the next version of an existing secret.
+func (a *SecretsServerAdapter) RotateSecret(ctx context.Context, req *pb.RotateSecretRequest) (*pb.RotateSecretResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
+	}
+	if req.GetSecretId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "secret_id is required")
+	}
+
+	resp, err := a.client.Rotate(ctx, &secretsclient.RotateSecretRequest{
+		SecretID: req.GetSecretId(),
+		NewData:  req.GetNewData(),
+		Metadata: req.GetMetadata(),
+	})
+	if err != nil {
+		return nil, status.Errorf(errclass.Code(err), "rotate secret failed: %v", err)
+	}
+
+	return &pb.RotateSecretResponse{
+		SecretId:   req.GetSecretId(),
+		OldVersion: uint64(resp.OldVersion),
+		NewVersion: uint64(resp.NewVersion),
+		Timestamp:  time.Now().Unix(),
+	}, nil
+}
+
+// UpdateSecretStatus enables or disables a secret.
+func (a *SecretsServerAdapter) UpdateSecretStatus(ctx context.Context, req *pb.UpdateSecretStatusRequest) (*pb.UpdateSecretStatusResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
+	}
+	if req.GetSecretId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "secret_id is required")
+	}
+	sdkStatus, ok := pbSecretStatusToSDK[req.GetStatus()]
+	if !ok {
+		return nil, status.Error(codes.InvalidArgument, (&restkms.ErrInvalidRequest{Field: "status", Reason: "must be enabled or disabled"}).Error())
+	}
+
+	if err := a.client.UpdateStatus(ctx, &secretsclient.UpdateSecretStatusRequest{
+		SecretID: req.GetSecretId(),
+		Status:   sdkStatus,
+	}); err != nil {
+		return nil, status.Errorf(errclass.Code(err), "update secret status failed: %v", err)
+	}
+
+	return &pb.UpdateSecretStatusResponse{
+		SecretId:  req.GetSecretId(),
+		Status:    req.GetStatus(),
+		Timestamp: time.Now().Unix(),
+	}, nil
+}
+
+// pbSecretStatusToSDK maps the settable wire statuses to the SDK's; the
+// unspecified status is absent, so it is refused.
+var pbSecretStatusToSDK = map[pb.SecretStatus]secretsclient.SecretStatus{
+	pb.SecretStatus_SECRET_STATUS_ENABLED:  secretsclient.SecretStatusEnabled,
+	pb.SecretStatus_SECRET_STATUS_DISABLED: secretsclient.SecretStatusDisabled,
+}
+
+// GetSecretsByPrefix answers the secrets whose path starts with the prefix,
+// paged the same way as ListSecrets, with each secret's value and metadata
+// when include_data is set.
+func (a *SecretsServerAdapter) GetSecretsByPrefix(ctx context.Context, req *pb.GetSecretsByPrefixRequest) (*pb.GetSecretsByPrefixResponse, error) {
+	if err := a.admit(ctx); err != nil {
+		return nil, err
+	}
+	if req.GetLimit() < 0 {
+		return nil, status.Error(codes.InvalidArgument, (&restkms.ErrInvalidRequest{Field: "limit", Reason: "must not be negative"}).Error())
+	}
+
+	resp, err := a.client.List(ctx, req.GetPrefix())
+	if err != nil {
+		return nil, status.Errorf(errclass.Code(err), "list secrets failed: %v", err)
+	}
+
+	// The prefix is applied here as well, so the answer never depends on how
+	// the backend interprets it.
+	matched := make([]string, 0, len(resp.Paths))
+	for _, path := range resp.Paths {
+		if strings.HasPrefix(path, req.GetPrefix()) {
+			matched = append(matched, path)
+		}
+	}
+
+	page, next := restkms.PageSecretPaths(matched, req.GetCursor(), int(req.GetLimit()))
+	secrets := make(map[string]*pb.SecretData, len(page))
+	for _, path := range page {
+		if !req.GetIncludeData() {
+			secrets[path] = &pb.SecretData{}
+			continue
+		}
+		secret, err := a.client.Get(ctx, path)
+		if err != nil {
+			return nil, status.Errorf(errclass.Code(err), "get secret %q failed: %v", path, err)
+		}
+		value, err := restkms.DecodeStoredSecretValue(path, secret.Data[restkms.SecretValueKey])
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "get secret %q failed: %v", path, err)
+		}
+		secrets[path] = &pb.SecretData{
+			Data:     map[string][]byte{restkms.SecretValueKey: value},
+			Metadata: secret.Metadata,
+			Version:  int64(secret.Version),
+		}
+	}
+
+	return &pb.GetSecretsByPrefixResponse{
+		Secrets:    secrets,
+		NextCursor: next,
+		HasMore:    next != "",
+		TotalCount: int32(len(matched)),
+		Timestamp:  time.Now().Unix(),
 	}, nil
 }
 

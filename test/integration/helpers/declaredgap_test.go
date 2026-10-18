@@ -74,6 +74,30 @@ func TestCheckUnservedRefusesAnythingElse(t *testing.T) {
 	}
 }
 
+func TestCheckUnservedOverWireAcceptsTheGapsMessage(t *testing.T) {
+	// The form a gRPC client sees once the daemon has sent the error.
+	wire := embedded.NewUnknownMethodError("quicbaas.Secrets", "Rotate").Error()
+	err := fmt.Errorf("gRPC call RotateSecret failed: rpc error: code = Unimplemented desc = rotate secret failed: %s", wire)
+
+	if got := GapEmbeddedSecrets.CheckUnservedOverWire("Rotate", err); got != nil {
+		t.Fatalf("the gap's unknown-method text must hold the gap, got %v", got)
+	}
+}
+
+func TestCheckUnservedOverWireRefusesAnythingElse(t *testing.T) {
+	cases := map[string]error{
+		"success":      nil,
+		"other method": errors.New(embedded.NewUnknownMethodError("quicbaas.Secrets", "Rollback").Error()),
+		"other error":  errors.New("secret not found"),
+	}
+	for name, err := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := GapEmbeddedSecrets.CheckUnservedOverWire("Rotate", err)
+			requireClosedError(t, got, "go-quicbaas #1540", "quicbaas.Secrets/Rotate")
+		})
+	}
+}
+
 func TestCheckMistypedAcceptsTheGapsInvalidRequestTypeError(t *testing.T) {
 	err := embedded.NewInvalidRequestTypeError("quicbaas.Transaction", "Execute",
 		"*service.TransactionRequest", "*transaction.TxnRequest")

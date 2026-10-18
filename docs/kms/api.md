@@ -22,7 +22,11 @@ A gRPC cell written `Service.Method` names one of those.
 REST: base path `/api/v1/kms` (`pkg/webservice/v1/rest/kms/router.go`).
 QUIC: key management `0xC0`–`0xCF`, crypto `0xD0`–`0xDA`, DEK `0xF0`–`0xF5`,
 plus a **KMS extended category opcode `0xCD`**.
-MCP: 21 `kms_*` tools and 6 `secret_*` tools.
+MCP: 21 `kms_*` tools and 6 `secret_*` tools. A `tools/call` result is the
+tool's result object itself, in its JSON field names (`handleToolsCall`,
+`pkg/api/mcp/server.go`), not an MCP `content[]` envelope; the
+`test/integration/kms` and `test/integration/secrets` MCP adapters read that
+object, and a `content[].text` envelope only when a server sends one.
 
 ---
 
@@ -170,11 +174,12 @@ makes key rotation cheap, and it is unreachable from REST and MCP.
 | List secrets | `GET /api/v1/kms/secrets` | `SecretsManagement.ListSecrets` | sub `0x03` | `secret_list` (`secrets:list`) | — |
 | Get secret | `GET /api/v1/kms/secrets/{name}` | `SecretsManagement.GetSecret` | sub `0x02` | `secret_get` (`secrets:read`) | — |
 | Delete secret | `DELETE /api/v1/kms/secrets/{name}` | `SecretsManagement.DeleteSecret` | sub `0x04` | `secret_delete` (`secrets:delete`) | — |
+| Get secrets by prefix | `GET /api/v1/kms/secrets?prefix=` | `SecretsManagement.GetSecretsByPrefix` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 | Get secret version | `GET /api/v1/kms/secrets/{name}/versions/{version}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 | List secret versions | `GET /api/v1/kms/secrets/{name}/versions` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
-| Rotate secret | `POST /api/v1/kms/secrets/{name}/rotate` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
+| Rotate secret | `POST /api/v1/kms/secrets/{name}/rotate` | `SecretsManagement.RotateSecret` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 | Rollback secret | `POST /api/v1/kms/secrets/{name}/rollback` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
-| Update secret status | `PUT /api/v1/kms/secrets/{name}/status` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
+| Update secret status | `PUT /api/v1/kms/secrets/{name}/status` | `SecretsManagement.UpdateSecretStatus` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 | Get rotation policy | `GET /api/v1/kms/secrets/{name}/policy` | `SecretsManagement.GetRotationPolicy` | sub `0x06` | `secret_get_rotation_policy` (`secrets:read`) | — |
 | Set rotation policy | `PUT /api/v1/kms/secrets/{name}/policy` | `SecretsManagement.SetRotationPolicy` | sub `0x05` | `secret_set_rotation_policy` (`secrets:write`) | — |
 
@@ -189,14 +194,31 @@ and re-encryption RPCs are gRPC and Unix only; each requires `path`.
 QUIC data-key opcodes `0xD9` and `0xDA` reach the KMS through this adapter.
 Before #949 the daemon never wired it, and they answered Unavailable.
 
-**Secret versions, rotate, rollback and status are not served on gRPC or MCP.**
-Seam: go-quicbaas embedded Secrets `GetVersion`, `ListVersions`, `Rotate`,
-`Rollback` and `UpdateStatus`. The pinned SDK's embedded dispatcher
+**Secret versions and rollback are not served on gRPC; versions, rotate,
+rollback and status are not served on QUIC or MCP.** gRPC and Unix serve
+`RotateSecret`, `UpdateSecretStatus` and `GetSecretsByPrefix` through the same
+SDK secrets client as REST. `GetSecretsByPrefix` lists under the prefix, keeps
+only the paths that start with it, pages like `ListSecrets`, and adds each
+secret's `value`, metadata and version when `include_data` is set.
+
+Seam: go-quicbaas #1540, embedded Secrets `GetVersion`, `ListVersions`,
+`Rotate`, `Rollback`, `UpdateStatus`, `SetRotationPolicy` and
+`GetRotationPolicy`. The pinned SDK's embedded dispatcher
 (`sdk/go/transport/embedded/transport.go` `unaryHandlers`) registers only
 `Store`, `Get`, `List`, `Delete` and `Ensure` for `quicbaas.Secrets`, so an
-embedded daemon answers the other five with an unknown-method error; its
-service also refuses a `deleted` status. The REST routes in the table reach the
-same SDK client and fail the same way on an embedded daemon.
+embedded daemon answers the others with `embedded: unknown method:
+quicbaas.Secrets/<method>`; its service also refuses a `deleted` status. Every
+transport that reaches those methods fails the same way on an embedded daemon.
+`test/integration/secrets` and the `SecretsManagement` subtests of
+`test/integration/kms` assert that error as the declared gap on each
+transport that serves the operation, and the typed refusal (`ErrNoSurface` or
+`Unimplemented`) on each `MISSING` cell; the pin bump that carries the fix
+flips the gap checks to the success path.
+
+**Secret names with slashes.** A REST client sends a name such as
+`db/primary/password` path-escaped (`db%2Fprimary%2Fpassword`) in the
+`{name}` segment. The KMS routes match on the encoded path and unescape the
+segment, so the name reads back whole.
 
 `platformctl kms secrets` calls the same SDK secrets client
 (`Security().Secrets()`), so it reaches every row above and meets the same

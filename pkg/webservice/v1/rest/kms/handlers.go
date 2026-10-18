@@ -20,6 +20,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -73,8 +74,22 @@ func (h *Handlers) ctx(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), requestTimeout)
 }
 
-func (h *Handlers) name(r *http.Request) string { return mux.Vars(r)["name"] }
-func (h *Handlers) path(r *http.Request) string { return mux.Vars(r)["path"] }
+func (h *Handlers) name(r *http.Request) string { return pathVar(r, "name") }
+func (h *Handlers) path(r *http.Request) string { return pathVar(r, "path") }
+
+// pathVar returns the route variable key unescaped. The KMS subrouter matches
+// on the encoded path (KMSRouter.RegisterRoutes), so a secret named
+// "db/password" arrives as "db%2Fpassword". A variable that is not valid
+// percent-encoding is returned as sent; the lookup it feeds then reports the
+// name as not found.
+func pathVar(r *http.Request, key string) string {
+	raw := mux.Vars(r)[key]
+	decoded, err := url.PathUnescape(raw)
+	if err != nil {
+		return raw
+	}
+	return decoded
+}
 
 // decodeJSON reads the request body into v. Empty body is OK.
 func (h *Handlers) decodeJSON(r *http.Request, v interface{}) error {
