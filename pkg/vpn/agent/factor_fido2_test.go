@@ -33,13 +33,15 @@ import (
 // carries the options' challenge, as a CTAP2 authenticator's would.
 type fakeAuthenticator struct {
 	options   fido2RequestOptions
+	origin    string
 	answer    []byte
 	assertErr error
 	closeErr  error
 	closed    bool
 }
 
-func (a *fakeAuthenticator) AssertWithOptions(_ context.Context, optionsJSON []byte) ([]byte, error) {
+func (a *fakeAuthenticator) AssertWithOptionsAndOrigin(_ context.Context, optionsJSON []byte, origin string) ([]byte, error) {
+	a.origin = origin
 	if err := json.Unmarshal(optionsJSON, &a.options); err != nil {
 		return nil, err
 	}
@@ -53,7 +55,7 @@ func (a *fakeAuthenticator) AssertWithOptions(_ context.Context, optionsJSON []b
 	clientData, err := json.Marshal(map[string]string{
 		"type":      "webauthn.get",
 		"challenge": a.options.Challenge,
-		"origin":    "https://" + a.options.RPID,
+		"origin":    origin,
 	})
 	if err != nil {
 		return nil, err
@@ -139,6 +141,7 @@ func TestFIDO2Signer_AssertsOverTheSessionNonce(t *testing.T) {
 	assert.Equal(t, nonce, verifiedChallenge(t, gwvpn.PersonFactorToWire(factor), "auth.example.com"),
 		"the assertion is bound to the gateway's nonce")
 	assert.Equal(t, "auth.example.com", authenticator.options.RPID)
+	assert.Equal(t, "https://auth.example.com", authenticator.origin, "the RP's same-origin default")
 	assert.Equal(t, []fido2CredentialDesc{{Type: "public-key", ID: "Y3JlZC0x"}}, authenticator.options.AllowCredentials)
 	assert.Equal(t, "discouraged", authenticator.options.UserVerification, "a touch, not a PIN")
 	assert.True(t, authenticator.closed)

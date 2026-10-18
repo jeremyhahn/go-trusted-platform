@@ -36,7 +36,7 @@ type FIDO2SignerOptions struct {
 
 // fido2Assertor is the SDK's FIDO2 handler as the signer uses it.
 type fido2Assertor interface {
-	AssertWithOptions(ctx context.Context, optionsJSON []byte) ([]byte, error)
+	AssertWithOptionsAndOrigin(ctx context.Context, optionsJSON []byte, origin string) ([]byte, error)
 	Close() error
 }
 
@@ -123,7 +123,9 @@ func (s *FIDO2Signer) Sign(ctx context.Context, kind gwvpn.PersonFactorKind, non
 			err = errors.Join(err, &ErrAuthenticator{Factor: kind, Cause: closeErr})
 		}
 	}()
-	assertion, err := authenticator.AssertWithOptions(ctx, optionsJSON)
+	// The WebAuthn same-origin default for the relying party: the agent is not
+	// a browser, so it asserts as the RP's own origin.
+	assertion, err := authenticator.AssertWithOptionsAndOrigin(ctx, optionsJSON, "https://"+s.rpID)
 	if err != nil {
 		return nil, &ErrAuthenticator{Factor: kind, Cause: err}
 	}
