@@ -499,7 +499,10 @@ The Makefile automatically handles:
   platformd does and checks the `dns:` keys strictly. The file has no `pxe:`
   section: platformd has no reader for one, because PXE is a gateway-role
   service. Its `PXEGRPCService` therefore has no backend, so the `pxe` suite is
-  kept out of `ALL_TARGETS` (see the kept-out table above).
+  kept out of `ALL_TARGETS` (see the kept-out table above). The root package's
+  `TestMultiProtocolMatrix/*/pxe` subtests drive the same service on the shared
+  platformd and fail the same way: every transport, REST included, answers
+  `SERVICE_NOT_CONFIGURED`.
 - Script: `build/docker/devcontainer/run-integration-tests.sh`
 - Test cleanup: `/tmp/platformd-integration` directory removed before each run to avoid key/cert mismatches
 
