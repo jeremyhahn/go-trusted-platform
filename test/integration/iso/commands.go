@@ -269,6 +269,8 @@ type TestInstallOptions struct {
 	QEMUBinary  string
 	NetworkMode string
 	Debug       bool
+	// Timeout is passed as --timeout; zero waits until the guest powers off.
+	Timeout time.Duration
 }
 
 // TestBootOptions contains options for boot tests.
@@ -286,6 +288,8 @@ type TestBootOptions struct {
 	QEMUBinary  string
 	NetworkMode string
 	Debug       bool
+	// Timeout is passed as --timeout; zero waits until the guest powers off.
+	Timeout time.Duration
 }
 
 // TestAllOptions contains options for running all tests.

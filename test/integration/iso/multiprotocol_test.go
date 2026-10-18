@@ -216,6 +216,7 @@ func installOptions(isoPath, workDir string) TestInstallOptions {
 		WorkDir:    workDir,
 		SecureBoot: false,
 		Debug:      true,
+		Timeout:    vmInstallTimeout,
 	}
 }
 
@@ -643,35 +644,38 @@ func TestISOVMTests(t *testing.T) {
 	workDir := CreateTestWorkDir(t, "iso-vm-test-")
 	defer CleanupTestWorkDir(t, workDir)
 
-	t.Run("TestInstall", func(t *testing.T) {
+	installed := t.Run("TestInstall", func(t *testing.T) {
 		testVMInstall(t, ctx, adapter, workDir)
 	})
 
 	t.Run("TestBoot", func(t *testing.T) {
+		if !installed {
+			// A cut-off install can leave a partly written disk behind;
+			// booting it would only report the install failure again.
+			t.Fatalf("missing prerequisite: TestInstall did not produce an installed disk")
+		}
 		testVMBoot(t, ctx, adapter, workDir)
 	})
 }
 
+// testVMInstall installs the built ISO headless. The install is bounded by
+// vmInstallTimeout: a guest that never powers off fails the test with the
+// command output instead of holding the package until go test panics.
 func testVMInstall(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) {
-	testCtx, cancel := context.WithTimeout(ctx, 60*time.Minute)
-	defer cancel()
+	isoPath := ensureBuiltISO(t, ctx, cmd, workDir)
 
-	isoPath := ensureBuiltISO(t, testCtx, cmd, workDir)
-
-	result, err := cmd.TestInstall(testCtx, installOptions(isoPath, workDir))
+	opts := installOptions(isoPath, workDir)
+	result, err := cmd.TestInstall(ctx, opts)
 	if err != nil {
-		t.Logf("TestInstall failed (may require interactive session): %v", err)
-		return
+		t.Fatalf("iso test install --timeout %s: %v", opts.Timeout, err)
 	}
 	require.NotNil(t, result, "Result should not be nil")
-	t.Logf("TestInstall completed in %v with exit code %d", result.ElapsedTime, result.ExitCode)
+	require.True(t, FileExists(opts.Disk), "the install should leave the disk at %s", opts.Disk)
+	t.Logf("TestInstall completed in %v", result.ElapsedTime)
 }
 
 func testVMBoot(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) {
 	diskPath := ensureInstalledDisk(t, ctx, cmd, workDir)
-
-	testCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
-	defer cancel()
 
 	opts := TestBootOptions{
 		Disk:       diskPath,
@@ -680,15 +684,15 @@ func testVMBoot(t *testing.T, ctx context.Context, cmd ISOCommands, workDir stri
 		WorkDir:    workDir,
 		SecureBoot: false,
 		Debug:      true,
+		Timeout:    vmBootTimeout,
 	}
 
-	result, err := cmd.TestBoot(testCtx, opts)
+	result, err := cmd.TestBoot(ctx, opts)
 	if err != nil {
-		t.Logf("TestBoot failed (may require interactive session): %v", err)
-		return
+		t.Fatalf("iso test boot --timeout %s: %v", opts.Timeout, err)
 	}
 	require.NotNil(t, result, "Result should not be nil")
-	t.Logf("TestBoot completed in %v with exit code %d", result.ElapsedTime, result.ExitCode)
+	t.Logf("TestBoot completed in %v", result.ElapsedTime)
 }
 
 // =============================================================================

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 )
 
 // Environment variable names for service endpoints
@@ -42,6 +43,22 @@ const (
 	DefaultDiskSize      = "10G"
 	DefaultMemoryMB      = 4096
 	DefaultCPUs          = 2
+)
+
+// VM run bounds. The package runs under a 130m go test timeout
+// (run-integration-tests.sh TARGET_TIMEOUTS[iso]); an install plus a boot,
+// each with its stop grace, fit inside it with room for the other tests.
+const (
+	// vmInstallTimeout is the --timeout of iso test install.
+	vmInstallTimeout = 45 * time.Minute
+	// vmBootTimeout is the --timeout of iso test boot.
+	vmBootTimeout = 20 * time.Minute
+	// vmStopGrace is how long platformctl gets past --timeout to stop QEMU
+	// and the software TPM and report ErrVMTimeout before it is killed.
+	vmStopGrace = 2 * time.Minute
+	// commandWaitDelay is how long a killed command's output pipe is
+	// drained before CombinedOutput returns regardless.
+	commandWaitDelay = 10 * time.Second
 )
 
 // ServiceEndpoints contains default endpoints for all protocols.
