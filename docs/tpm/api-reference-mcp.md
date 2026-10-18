@@ -17,15 +17,17 @@ caller.
 |---|---|
 | `info`, `capabilities`, `platform`, `ek`, `ek_cert`, `srk`, `iak`, `pcrs`, `eventlog`, `random`, `nv_list`, `nv_read`, `make_credential`, `quote`, `verify_quote`, `certify` | `tpm:read` |
 | `provision`, `ek_create`, `ek_import_cert`, `srk_create`, `iak_create`, `nv_write`, `activate_credential`, `seal`, `unseal`, `pcr_extend` | `tpm:write` |
-| `clear`, `nv_delete` | `tpm:delete` |
-| `ek_delete`, `srk_delete`, `iak_delete` | **refused** — they flush a persistent handle, which deletes nothing; gRPC `Delete*` does the same |
+| `clear`, `nv_delete`, `ek_delete`, `srk_delete`, `iak_delete` | `tpm:delete` |
 
 Names are `platform_tpm_<tool>`. `unseal` is the one tool stricter than its
 gRPC twin: an unseal tool never takes a read scope on MCP. `nv_list` takes the
 scope of gRPC `Info`, and `pcr_extend`, which has no gRPC twin, takes the scope
 of QUIC's `SubOpTPM2ExtendPCR`. `capabilities` and `platform` have no gRPC
 method of their own: each answers a subset of gRPC `Info`, and their QUIC twins
-(`0x99` · `0x17`, `0x99` · `0x1E`) are `tpm:read`.
+(`0x99` · `0x17`, `0x99` · `0x1E`) are `tpm:read`. `ek_delete`, `srk_delete`
+and `iak_delete` flush a persistent handle, which deletes nothing, exactly as
+gRPC `DeleteEK` and `DeleteSRK` do; `iak_delete` has no gRPC twin and takes the
+scope of QUIC's `SubOpTPM2DeleteIAK` (`0x99` · `0x0E`).
 
 ## Available Tools
 
@@ -44,7 +46,7 @@ method of their own: each answers a subset of gRPC `Info`, and their QUIC twins
 |------|-------------|
 | `platform_tpm_ek` | Get Endorsement Key public key and handle |
 | `platform_tpm_ek_create` | Create Endorsement Key |
-| `platform_tpm_ek_delete` | Flush EK handle from TPM (refused, see Authorization) |
+| `platform_tpm_ek_delete` | Flush EK handle from TPM |
 | `platform_tpm_ek_cert` | Get EK certificate |
 | `platform_tpm_ek_import_cert` | Import EK certificate |
 
@@ -54,7 +56,7 @@ method of their own: each answers a subset of gRPC `Info`, and their QUIC twins
 |------|-------------|
 | `platform_tpm_srk` | Get Storage Root Key |
 | `platform_tpm_srk_create` | Create Storage Root Key |
-| `platform_tpm_srk_delete` | Flush SRK handle (refused, see Authorization) |
+| `platform_tpm_srk_delete` | Flush SRK handle |
 
 ### Initial Attestation Key Tools
 
@@ -62,7 +64,7 @@ method of their own: each answers a subset of gRPC `Info`, and their QUIC twins
 |------|-------------|
 | `platform_tpm_iak` | Get Initial Attestation Key |
 | `platform_tpm_iak_create` | Create Initial Attestation Key |
-| `platform_tpm_iak_delete` | Flush IAK handle (refused, see Authorization) |
+| `platform_tpm_iak_delete` | Flush IAK handle |
 | `platform_tpm_idevid` | Get Initial Device ID |
 
 ### Attestation Tools

@@ -136,6 +136,14 @@ type Supervisor struct {
 	mu        sync.Mutex
 	processes map[string]*supervised
 	stopped   bool
+
+	// applying is held, as a one-slot semaphore, across every send of a
+	// desired document to a child: Apply's and the relaunch's re-send
+	// (#557). Serialising the two sends, and reading the document only once
+	// the slot is held, is what keeps a re-send from overwriting a newer
+	// document with an older one. It is a channel rather than a mutex so a
+	// caller waiting for it still honours its context.
+	applying chan struct{}
 }
 
 // supervised is one child process the supervisor owns.
@@ -176,6 +184,16 @@ type supervised struct {
 	// orphan holding CAP_NET_ADMIN, which is the failure this package
 	// exists to prevent.
 	launching bool
+	// desired is the last desired document Apply sent to this process. A
+	// child that crashed took what it had applied with it, and the new one
+	// sweeps its predecessor's flows on Start, so a relaunched child is
+	// given this document again before the restart counts (#557). It is
+	// kept across a stop: it is still the parent's last desired document.
+	desired *gwstate.DesiredConfig
+	// restoring is set from the claim of a relaunch until the relaunched
+	// child has been given desired. While it is set the process's services
+	// are reported down, never up with their configuration missing.
+	restoring bool
 }
 
 // New builds a supervisor. Nothing is launched until StartService.
@@ -183,6 +201,7 @@ func New(cfg Config) *Supervisor {
 	return &Supervisor{
 		cfg:       cfg.withDefaults(),
 		processes: make(map[string]*supervised),
+		applying:  make(chan struct{}, 1),
 	}
 }
 
@@ -218,13 +237,27 @@ func (s *Supervisor) StartService(ctx context.Context, service string) error {
 	claimed := proc.child == nil && !proc.launching
 	if claimed {
 		proc.launching = true
+		// A process started again after a stop, or while its restart is
+		// backing off, still has its predecessor's desired document; the
+		// parent's version check will not send it again (#557).
+		proc.restoring = proc.desired != nil
 	}
 	s.mu.Unlock()
 
 	if claimed {
 		err := s.launch(ctx, proc)
+		launched := err == nil
+		if launched {
+			err = s.serveLaunched(ctx, proc)
+		}
 		s.mu.Lock()
 		proc.launching = false
+		proc.restoring = false
+		if launched && err != nil {
+			// serveLaunched stopped the child; its services are down for
+			// that reason, for every caller still waiting on them.
+			proc.failure = err
+		}
 		s.mu.Unlock()
 		if err != nil {
 			s.releaseFailedStart(ctx, proc, service)
@@ -253,6 +286,7 @@ func (s *Supervisor) releaseFailedStart(ctx context.Context, proc *supervised, s
 	s.mu.Lock()
 	delete(proc.wanted, service)
 	remaining := len(proc.wanted)
+	failure := proc.failure
 	s.mu.Unlock()
 	if remaining > 0 {
 		return
@@ -266,6 +300,16 @@ func (s *Supervisor) releaseFailedStart(ctx context.Context, proc *supervised, s
 			slog.String("service", service),
 			slog.Any("error", err))
 	}
+	// The teardown clears the failure, as it must for a stop someone asked
+	// for. This one nobody asked for: the process is down for the reason the
+	// start recorded (a re-send of the desired document that failed, #557),
+	// and health has to say so rather than that it was never started. A
+	// start that claimed the process meanwhile owns its state.
+	s.mu.Lock()
+	if proc.child == nil && !proc.launching && proc.failure == nil {
+		proc.failure = failure
+	}
+	s.mu.Unlock()
 }
 
 // abandonLaunch stops a child that was started for a process no longer
@@ -468,12 +512,14 @@ func (s *Supervisor) awaitService(ctx context.Context, proc *supervised, service
 	var detail string
 	for {
 		s.mu.Lock()
-		client, failure := proc.client, proc.failure
+		client, failure, restoring := proc.client, proc.failure, proc.restoring
 		s.mu.Unlock()
 		if failure != nil {
 			return &ErrProcessDown{Process: proc.def.Name, Service: service, Cause: failure}
 		}
-		if client != nil {
+		// A child still being given its predecessor's document is not up
+		// yet, whatever its services say.
+		if client != nil && !restoring {
 			status, err := client.Status(ctx)
 			if err != nil {
 				lastErr = err
@@ -571,6 +617,7 @@ func (s *Supervisor) restartLoop(ctx context.Context, proc *supervised, failure 
 		stillWanted := !s.stopped && !proc.stopping && len(proc.wanted) > 0 && proc.child == nil && !proc.launching
 		if stillWanted {
 			proc.launching = true
+			proc.restoring = proc.desired != nil
 		}
 		s.mu.Unlock()
 		if !stillWanted {
@@ -578,24 +625,11 @@ func (s *Supervisor) restartLoop(ctx context.Context, proc *supervised, failure 
 		}
 		err := s.launch(ctx, proc)
 		if err == nil {
-			// The replacement has to prove it serves before it counts as a
-			// restart: ipc.Dial is lazy (grpc.NewClient connects on the first
-			// call), so a child that starts and never answers would otherwise
-			// be accepted as live and its services reported down with no
-			// further attempt.
-			if ready := s.awaitProcess(ctx, proc); ready != nil {
-				// This one is published, so it has a child and a watch
-				// goroutine of its own; both have to go before the next
-				// attempt. A launch that FAILED published nothing and cleaned
-				// up after itself, which is why this is not in that path:
-				// proc.cancel would still be the crashed child's, and that
-				// context is the one this loop is running under.
-				s.stopUnservingChild(ctx, proc)
-				err = ready
-			}
+			err = s.serveLaunched(ctx, proc)
 		}
 		s.mu.Lock()
 		proc.launching = false
+		proc.restoring = false
 		s.mu.Unlock()
 		if err == nil {
 			return
@@ -682,6 +716,86 @@ func (s *Supervisor) awaitProcess(ctx context.Context, proc *supervised) error {
 		case <-s.cfg.Clock.After(readyPollInterval):
 		}
 	}
+}
+
+// restoreDesired gives a relaunched child the last desired document its
+// process was sent (#557). The new child starts with nothing applied — its
+// applied version is empty, so its own version check cannot skip the
+// document — while the parent still holds that document's version and would
+// skip it, which is why the re-send belongs here and not in the parent. A
+// process that was never sent a document gets nothing.
+//
+// The document is read only once the apply slot is held: an Apply that
+// arrives during the relaunch either ran first, and is the document read
+// here, or waits for this send and overwrites it. A newer document is never
+// overwritten by an older one.
+// serveLaunched has a child just launched in place of an earlier one — a
+// relaunch after a crash, or a start after a stop — prove it serves before it
+// counts: ipc.Dial is lazy (grpc.NewClient connects on the first call), so a
+// child that starts and never answers would otherwise be accepted as live.
+// Serving includes holding the desired config its predecessor held, so the
+// child is given it once it answers (#557). A child that fails either is
+// stopped, and the reason returned.
+func (s *Supervisor) serveLaunched(ctx context.Context, proc *supervised) error {
+	ready := s.awaitProcess(ctx, proc)
+	if ready == nil {
+		ready = s.restoreDesired(ctx, proc)
+	}
+	if ready != nil {
+		// This one is published, so it has a child and a watch goroutine of
+		// its own; both have to go. A launch that FAILED published nothing
+		// and cleaned up after itself, which is why this is not in that
+		// path: proc.cancel would still be the crashed child's, and that
+		// context is the one a restart loop is running under.
+		s.stopUnservingChild(ctx, proc)
+	}
+	return ready
+}
+
+func (s *Supervisor) restoreDesired(ctx context.Context, proc *supervised) error {
+	if err := s.acquireApply(ctx); err != nil {
+		return err
+	}
+	defer s.releaseApply()
+
+	s.mu.Lock()
+	desired, client, failure := proc.desired, proc.client, proc.failure
+	s.mu.Unlock()
+	if desired == nil {
+		return nil
+	}
+	if client == nil {
+		// The child answered and then died; its watch goroutine took the
+		// client with it.
+		return &ErrDesiredRestoreFailed{
+			Process: proc.def.Name, Version: desired.EffectiveVersion(),
+			Cause: &ErrProcessDown{Process: proc.def.Name, Cause: failure},
+		}
+	}
+	applyCtx, cancel := context.WithTimeout(ctx, s.cfg.ReadyTimeout)
+	defer cancel()
+	if _, err := client.ApplyDesired(applyCtx, desired); err != nil {
+		return &ErrDesiredRestoreFailed{Process: proc.def.Name, Version: desired.EffectiveVersion(), Cause: err}
+	}
+	s.cfg.Logger.Info("gatewayd supervisor: desired config re-applied to relaunched process",
+		slog.String("process", proc.def.Name),
+		slog.String("version", desired.EffectiveVersion()))
+	return nil
+}
+
+// acquireApply takes the apply slot, or gives up when ctx ends.
+func (s *Supervisor) acquireApply(ctx context.Context) error {
+	select {
+	case s.applying <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// releaseApply returns the apply slot.
+func (s *Supervisor) releaseApply() {
+	<-s.applying
 }
 
 // stopUnservingChild ends a child that was launched but never answered, so the
@@ -935,11 +1049,15 @@ func (s *Supervisor) serviceClient(service string) (Definition, *ipc.Client, err
 	proc, ok := s.processes[def.Name]
 	var client *ipc.Client
 	var failure error
+	restoring := false
 	if ok {
-		client, failure = proc.client, proc.failure
+		client, failure, restoring = proc.client, proc.failure, proc.restoring
 	}
 	s.mu.Unlock()
 
+	if ok && client != nil && restoring {
+		return def, nil, &ErrProcessDown{Process: def.Name, Service: service, Cause: &ErrDesiredNotRestored{Process: def.Name}}
+	}
 	if !ok || client == nil {
 		if failure == nil {
 			// No client and no recorded failure means nothing ever started
@@ -970,7 +1088,7 @@ func (s *Supervisor) ServiceSnapshot(ctx context.Context, service string) (*gwst
 // statusTimeout bounds a status question to a child.
 const statusTimeout = 2 * time.Second
 
-// datapathClient returns the live client of the kernel-class process, which
+// datapathProcess returns the kernel-class process and its live client, which
 // owns every service that reconciles a desired document.
 //
 // The class table has exactly one kernel-class process today, but the table
@@ -978,18 +1096,29 @@ const statusTimeout = 2 * time.Second
 // here, silently, and the desired configuration would land in whichever
 // process the map iteration reached first. So the ambiguity is a refusal,
 // not a pick.
-func (s *Supervisor) datapathClient() (*ipc.Client, error) {
+func (s *Supervisor) datapathProcess() (*supervised, *ipc.Client, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var client *ipc.Client
+	datapath, err := s.kernelProcessLocked(true)
+	if err != nil {
+		return nil, nil, err
+	}
+	return datapath, datapath.client, nil
+}
+
+// kernelProcessLocked returns the one kernel-class process the supervisor
+// knows, only among those with a child serving when serving is set. The
+// caller holds s.mu.
+func (s *Supervisor) kernelProcessLocked(serving bool) (*supervised, error) {
+	var datapath *supervised
 	var names []string
 	for _, proc := range s.processes {
-		if proc.def.Class != ClassKernel || proc.client == nil {
+		if proc.def.Class != ClassKernel || (serving && proc.client == nil) {
 			continue
 		}
 		names = append(names, proc.def.Name)
-		client = proc.client
+		datapath = proc
 	}
 	switch {
 	case len(names) == 0:
@@ -998,22 +1127,63 @@ func (s *Supervisor) datapathClient() (*ipc.Client, error) {
 		sort.Strings(names)
 		return nil, &ErrAmbiguousDatapath{Processes: names}
 	}
-	return client, nil
+	return datapath, nil
+}
+
+// recordDesired keeps a document that arrived while the datapath process has
+// no child serving — in its restart backoff, mid-relaunch, or stopped — as the
+// process's desired document, so the child that comes back is given it rather
+// than the older one its predecessor held (#557). The document is not applied
+// yet, and the caller is told so: reporting success would have the parent
+// believe the version is applied while nothing holds it.
+func (s *Supervisor) recordDesired(desired *gwstate.DesiredConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return &ErrNoDatapathProcess{}
+	}
+	proc, err := s.kernelProcessLocked(false)
+	if err != nil {
+		return err
+	}
+	proc.desired = desired
+	// A launch already under way reads the document only once it holds the
+	// apply slot this caller holds now, so it re-sends this one; until then
+	// its services are not reported up.
+	if proc.launching {
+		proc.restoring = true
+	}
+	return &ErrDesiredPending{Process: proc.def.Name, Version: desired.EffectiveVersion()}
 }
 
 // Apply implements gateway.ServiceSupervisor: the desired document goes to
 // the kernel-class process, which owns every service that reconciles it.
+// The process keeps the document, so a child relaunched after a crash is
+// given it again (restoreDesired); the send holds the apply slot so that
+// re-send can never land after it with an older document.
 func (s *Supervisor) Apply(ctx context.Context, desired *gwstate.DesiredConfig) (gwstate.DesiredConfigState, error) {
-	client, err := s.datapathClient()
+	if err := s.acquireApply(ctx); err != nil {
+		return gwstate.DesiredConfigState{}, err
+	}
+	defer s.releaseApply()
+
+	proc, client, err := s.datapathProcess()
+	var noDatapath *ErrNoDatapathProcess
+	if errors.As(err, &noDatapath) {
+		return gwstate.DesiredConfigState{}, s.recordDesired(desired)
+	}
 	if err != nil {
 		return gwstate.DesiredConfigState{}, err
 	}
+	s.mu.Lock()
+	proc.desired = desired
+	s.mu.Unlock()
 	return client.ApplyDesired(ctx, desired)
 }
 
 // Snapshot returns the datapath child's telemetry snapshot.
 func (s *Supervisor) Snapshot(ctx context.Context) (*gwstate.Snapshot, error) {
-	client, err := s.datapathClient()
+	_, client, err := s.datapathProcess()
 	if err != nil {
 		return nil, err
 	}

@@ -69,8 +69,8 @@ func TestIdentityKeyDeleteParity(t *testing.T) {
 			for _, key := range []string{"IDevID", "IAK"} {
 				assert.Equal(t, codes.FailedPrecondition, deleteKey(t, key), "%s %s key delete", name, key)
 			}
-			assert.Zero(t, tpm.idevidCertDeletes, "%s must not delete the IDevID certificate", name)
-			assert.Zero(t, tpm.iakCertDeletes, "%s must not delete the IAK certificate", name)
+			assert.Zero(t, tpm.idevidCertDeletes.Load(), "%s must not delete the IDevID certificate", name)
+			assert.Zero(t, tpm.iakCertDeletes.Load(), "%s must not delete the IAK certificate", name)
 		})
 	}
 

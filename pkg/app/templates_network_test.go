@@ -15,6 +15,7 @@ package app
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -209,5 +210,47 @@ func TestShippedTemplates_JoinWithoutRaftAddressRefused(t *testing.T) {
 		a.QuicBaaSConfig.RaftAddress = "127.0.0.1:63000"
 		var target quicbaas.ErrRaftAdvertiseAddress
 		require.ErrorAs(t, a.QuicBaaSConfig.Validate(), &target, path)
+	}
+}
+
+// clusterExampleRoot holds the multi-node cluster example configurations.
+var clusterExampleRoot = filepath.Join(configRoot, "platform", "cluster")
+
+// TestShippedClusterExamples_QuicBaaSValidates runs the quicbaas section of
+// every cluster example through the validation platformd runs before it
+// opens the store, so an example can never again name a storage backend or
+// a member form the code refuses.
+func TestShippedClusterExamples_QuicBaaSValidates(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join(clusterExampleRoot, "*.example.com.yaml"))
+	require.NoError(t, err)
+	require.Len(t, paths, 8, "the cluster example set changed; review this test")
+	for _, path := range paths {
+		a := loadTemplate(t, path)
+		require.NotNil(t, a.QuicBaaSConfig, "%s: quicbaas section", path)
+		require.NoError(t, a.QuicBaaSConfig.Validate(), path)
+	}
+}
+
+// TestShippedClusterExamples_ServersFormOneCluster checks the three server
+// examples describe one cluster: each is clustered, all carry the same
+// member list, deployment ID and Raft CA, and each lists itself at its own
+// raft-address (Validate refuses anything else).
+func TestShippedClusterExamples_ServersFormOneCluster(t *testing.T) {
+	var first *quicbaas.Config
+	for id := uint64(1); id <= 3; id++ {
+		path := filepath.Join(clusterExampleRoot, fmt.Sprintf("server%d.example.com.yaml", id))
+		c := loadTemplate(t, path).QuicBaaSConfig
+		require.NotNil(t, c, "%s: quicbaas section", path)
+		require.NoError(t, c.Validate(), path)
+		require.True(t, c.IsClustered(), path)
+		assert.Equal(t, id, c.NodeID, path)
+		assert.Len(t, c.JoinAddresses, 3, path)
+		if first == nil {
+			first = c
+			continue
+		}
+		assert.Equal(t, first.JoinAddresses, c.JoinAddresses, path)
+		assert.Equal(t, first.DeploymentID, c.DeploymentID, path)
+		assert.Equal(t, first.RaftTLSCAFile, c.RaftTLSCAFile, path)
 	}
 }

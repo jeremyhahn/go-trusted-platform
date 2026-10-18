@@ -667,13 +667,13 @@ func TestCoverageFinal2QUICHandlerPXERouting(t *testing.T) {
 	ctx := context.Background()
 
 	// PXE primary (0xEC-0xEF)
-	resp := h.HandleRequest(ctx, &quicwire.Request{Opcode: OpPXEListDevices, Payload: []byte{}})
+	resp := h.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpPXEListDevices, Payload: []byte{}})
 	if resp == nil {
 		t.Fatal("response should not be nil")
 	}
 
 	// PXE extended (0xFC-0xFF)
-	resp = h.HandleRequest(ctx, &quicwire.Request{Opcode: OpPXEAuthorize, Payload: []byte{}})
+	resp = h.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpPXEAuthorize, Payload: []byte{}})
 	if resp == nil {
 		t.Fatal("response should not be nil")
 	}

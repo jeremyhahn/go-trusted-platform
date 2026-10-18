@@ -26,6 +26,7 @@ import (
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	dbfactory "github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 )
@@ -219,7 +220,7 @@ func (a *KMSServerAdapter) GenerateKey(ctx context.Context, req *pb.GenerateKeyR
 
 	resp, err := a.client.GenerateKey(ctx, sdkReq)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "key generation failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "key generation failed: %v", err)
 	}
 
 	return &pb.GenerateKeyResponse{
@@ -241,7 +242,7 @@ func (a *KMSServerAdapter) GetKey(ctx context.Context, req *pb.GetKeyRequest) (*
 
 	keyInfo, err := a.client.GetKey(ctx, req.GetKeyId())
 	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "key not found: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "get key failed: %v", err)
 	}
 
 	return &pb.GetKeyResponse{
@@ -267,7 +268,7 @@ func (a *KMSServerAdapter) ListKeys(ctx context.Context, req *pb.ListKeysRequest
 
 	resp, err := a.client.ListKeys(ctx)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "list keys failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "list keys failed: %v", err)
 	}
 
 	keys := make([]*pb.KeyHandle, 0, len(resp.Keys))
@@ -295,7 +296,7 @@ func (a *KMSServerAdapter) RotateKey(ctx context.Context, req *pb.RotateKeyReque
 
 	resp, err := a.client.RotateKey(ctx, req.GetKeyId())
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "key rotation failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "key rotation failed: %v", err)
 	}
 
 	return &pb.RotateKeyResponse{
@@ -315,7 +316,7 @@ func (a *KMSServerAdapter) DeleteKey(ctx context.Context, req *pb.DeleteKeyReque
 
 	err := a.client.DeleteKey(ctx, req.GetKeyId())
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "key deletion failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "key deletion failed: %v", err)
 	}
 
 	return &pb.DeleteKeyResponse{
@@ -351,7 +352,7 @@ func (a *KMSServerAdapter) ImportKey(ctx context.Context, req *pb.ImportKeyReque
 
 	resp, err := a.client.ImportKey(ctx, sdkReq)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "key import failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "key import failed: %v", err)
 	}
 
 	return &pb.ImportKeyResponse{
@@ -384,7 +385,7 @@ func (a *KMSServerAdapter) UpdateKeyStatus(ctx context.Context, req *pb.UpdateKe
 		Status:  pbKeyStatusToSDK(req.GetStatus()),
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "key status update failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "key status update failed: %v", err)
 	}
 
 	return &pb.UpdateKeyStatusResponse{
@@ -417,7 +418,7 @@ func (a *KMSServerAdapter) ExportKey(ctx context.Context, req *pb.ExportKeyReque
 		Version:           int(req.GetVersion()),
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "key export failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "key export failed: %v", err)
 	}
 
 	return &pb.ExportKeyResponse{
@@ -443,7 +444,7 @@ func (a *KMSServerAdapter) ListKeyVersions(ctx context.Context, req *pb.ListKeyV
 
 	resp, err := a.client.ListKeyVersions(ctx, req.GetKeyId())
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "list key versions failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "list key versions failed: %v", err)
 	}
 
 	versions := make([]*pb.KeyVersionInfo, 0, len(resp.Versions))
@@ -628,7 +629,7 @@ func (a *CryptoServerAdapter) Encrypt(ctx context.Context, req *pb.CryptoEncrypt
 
 	resp, err := a.client.Encrypt(ctx, sdkReq)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "encryption failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "encryption failed: %v", err)
 	}
 
 	return &pb.CryptoEncryptResponse{
@@ -657,7 +658,7 @@ func (a *CryptoServerAdapter) Decrypt(ctx context.Context, req *pb.CryptoDecrypt
 
 	resp, err := a.client.Decrypt(ctx, sdkReq)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "decryption failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "decryption failed: %v", err)
 	}
 
 	return &pb.CryptoDecryptResponse{
@@ -791,7 +792,7 @@ func (a *CryptoServerAdapter) Rewrap(ctx context.Context, req *pb.RewrapRequest)
 
 	decryptResp, err := a.client.Decrypt(ctx, decryptReq)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "rewrap decryption failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "rewrap decryption failed: %v", err)
 	}
 
 	// Step 2: Re-encrypt with the latest key version
@@ -804,7 +805,7 @@ func (a *CryptoServerAdapter) Rewrap(ctx context.Context, req *pb.RewrapRequest)
 
 	encryptResp, err := a.client.Encrypt(ctx, encryptReq)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "rewrap encryption failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "rewrap encryption failed: %v", err)
 	}
 
 	return &pb.RewrapResponse{
@@ -837,7 +838,7 @@ func (a *CryptoServerAdapter) Sign(ctx context.Context, req *pb.SignRequest) (*p
 
 	resp, err := a.client.Sign(ctx, sdkReq)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "signing failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "signing failed: %v", err)
 	}
 
 	return &pb.SignResponse{
@@ -870,7 +871,7 @@ func (a *CryptoServerAdapter) Verify(ctx context.Context, req *pb.VerifyRequest)
 
 	resp, err := a.client.Verify(ctx, sdkReq)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "verification failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "verification failed: %v", err)
 	}
 
 	return &pb.VerifyResponse{
@@ -905,7 +906,7 @@ func (a *CryptoServerAdapter) Hash(ctx context.Context, req *pb.HashRequest) (*p
 		HashAlg: pbHashAlgorithmToSDK(req.GetAlgorithm()),
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "hashing failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "hashing failed: %v", err)
 	}
 
 	return &pb.HashResponse{
@@ -946,7 +947,7 @@ func (a *CryptoServerAdapter) GenerateHMAC(ctx context.Context, req *pb.HMACRequ
 		HashAlg: pbHashAlgorithmToSDK(req.GetHashAlgorithm()),
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "HMAC generation failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "HMAC generation failed: %v", err)
 	}
 
 	return &pb.HMACResponse{
@@ -994,7 +995,7 @@ func (a *CryptoServerAdapter) VerifyHMAC(ctx context.Context, req *pb.VerifyHMAC
 		KeyVersion: int(req.GetKeyVersion()),
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "HMAC verification failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "HMAC verification failed: %v", err)
 	}
 
 	return &pb.VerifyHMACResponse{

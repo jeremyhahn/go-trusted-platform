@@ -266,8 +266,8 @@ const (
 	// The first byte of the payload is the sub-opcode routed to the TPM2 handler.
 	OpTPM2Category byte = 0x99
 
-	// JWT/Auth Operations (0x90-0x97)
-	OpJWTCreate  byte = 0x90
+	// JWT/Auth Operations (0x91-0x97). 0x90, the never-implemented
+	// JWTCreate, is OpClusterCategory (cluster_opcodes.go).
 	OpJWTVerify  byte = 0x91
 	OpJWTRefresh byte = 0x92
 	OpJWTRevoke  byte = 0x93
@@ -930,9 +930,9 @@ var opcodeNames = map[byte]string{
 	OpDaemonListProtocols:  "DaemonListProtocols",
 
 	// TPM2 Category
-	OpTPM2Category: "TPM2Category",
+	OpTPM2Category:    "TPM2Category",
+	OpClusterCategory: "ClusterCategory",
 	// JWT/Auth
-	OpJWTCreate:  "JWTCreate",
 	OpJWTVerify:  "JWTVerify",
 	OpJWTRefresh: "JWTRefresh",
 	OpJWTRevoke:  "JWTRevoke",

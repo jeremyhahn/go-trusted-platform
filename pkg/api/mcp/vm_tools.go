@@ -80,41 +80,6 @@ func (r *ToolRegistry) registerVMTools() {
 	})
 
 	r.addTool(mcpwire.ToolDefinition{
-		Name:        "vm_update",
-		Description: "Update virtual machine configuration",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "string",
-					"description": "VM ID or name",
-				},
-				"name": map[string]interface{}{
-					"type":        "string",
-					"description": "New VM name",
-				},
-				"memory": map[string]interface{}{
-					"type":        "integer",
-					"description": "Memory in MB",
-				},
-				"cpus": map[string]interface{}{
-					"type":        "integer",
-					"description": "Number of CPU cores",
-				},
-				"environment": map[string]interface{}{
-					"type":        "object",
-					"description": "Environment variables to set or update",
-				},
-				"labels": map[string]interface{}{
-					"type":        "object",
-					"description": "Labels to set or update",
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_delete",
 		Description: "Delete a virtual machine",
 		InputSchema: map[string]interface{}{
@@ -162,36 +127,6 @@ func (r *ToolRegistry) registerVMTools() {
 	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_reboot",
 		Description: "Reboot a virtual machine",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "string",
-					"description": "VM ID or name",
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "vm_suspend",
-		Description: "Suspend a running virtual machine",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "string",
-					"description": "VM ID or name",
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "vm_resume",
-		Description: "Resume a suspended virtual machine",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{

@@ -95,9 +95,17 @@ nodes:
   # overrides give it its own addresses, .20/.21/.22 in the platform VRF
   # and in each zone VLAN: the template carries one Pi's (.20), and
   # bootstrap refuses two nodes resolving to the same address. vlans is a
-  # list, so an override carries all three entries. serial is the low 32 bits of
-  # /proc/cpuinfo Serial (up to eight hex digits); set it to serve the Pi's
-  # per-device boot directory.
+  # list, so an override carries all three entries. A fourth Pi takes the next
+  # host number, .23, in the platform VRF and in each zone VLAN, and its own
+  # serial below.
+  #
+  # serial is the low 32 bits of /proc/cpuinfo Serial (up to eight hex
+  # digits); set it to serve the Pi's per-device boot directory. It is not the
+  # IDevID serial: every Pi keeps the template's tpm.idevid.serial
+  # (rpi4-compute-01), and platformd on a diskless node replaces it at every
+  # boot with the name it derives from the Pi's TPM EK, so each Pi's IDevID
+  # certificate names that Pi. Bootstrap refuses two nodes on one IDevID
+  # model and serial only for nodes that keep it (not diskless).
   - hostname: rpi4-01
     role: worker
     macs: ["dc:a6:32:50:76:60"]

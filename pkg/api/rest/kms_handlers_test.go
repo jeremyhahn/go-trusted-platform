@@ -27,8 +27,12 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -2677,7 +2681,10 @@ func TestWriteKMSError(t *testing.T) {
 		err            error
 		expectedStatus int
 	}{
-		{"not implemented", ErrKMSOperationFailed{Reason: "not implemented"}, http.StatusNotImplemented},
+		{"message never decides the class", ErrKMSOperationFailed{Reason: "not implemented"}, http.StatusInternalServerError},
+		{"batch items empty", ErrKMSBatchItemsEmpty{}, http.StatusBadRequest},
+		{"batch items too many", ErrKMSBatchItemsTooMany{Count: 2, Max: 1}, http.StatusBadRequest},
+		{"batch partly failed", ErrKMSBatchOperationFailed{Operation: "encrypt"}, http.StatusMultiStatus},
 		{"operation failed", ErrKMSOperationFailed{Reason: "other"}, http.StatusInternalServerError},
 		{"key not found", ErrKMSKeyNotFound{KeyID: "key"}, http.StatusNotFound},
 		{"key already exists", ErrKMSKeyAlreadyExists{KeyID: "key"}, http.StatusConflict},
@@ -2701,6 +2708,50 @@ func TestWriteKMSError(t *testing.T) {
 			assert.Equal(t, tt.expectedStatus, w.Code)
 		})
 	}
+}
+
+// TestWriteKMSError_Classes covers the errors the live KMS backend returns:
+// REST answers each with the HTTP status for its class, as gRPC does (#304).
+func TestWriteKMSError_Classes(t *testing.T) {
+	h := NewKMSHandlers(nil, slog.Default())
+
+	tests := []struct {
+		name           string
+		err            error
+		expectedStatus int
+	}{
+		{"sdk not found", sdkerrors.NewNotFound("GetKey", "no key"), http.StatusNotFound},
+		{"database not found", quicbaas.NewDatabaseError(quicbaas.ErrNotFound, "GetKey", "no key"), http.StatusNotFound},
+		{"sdk invalid input", sdkerrors.NewInvalidInput("GetKey", "bad id"), http.StatusBadRequest},
+		{"sdk already exists", sdkerrors.NewAlreadyExists("ImportKey", "dup"), http.StatusConflict},
+		{"sdk precondition", sdkerrors.NewPreconditionFailed("DeleteKey", "in use"), http.StatusPreconditionFailed},
+		{"sdk forbidden", sdkerrors.NewForbidden("ExportKey", "no"), http.StatusForbidden},
+		{"sdk unimplemented", sdkerrors.NewUnimplemented("Rewrap", "later"), http.StatusNotImplemented},
+		{"sdk unavailable", sdkerrors.NewUnavailable("GetKey", "down"), http.StatusServiceUnavailable},
+		{"typed status error", status.Error(codes.InvalidArgument, "bad cursor"), http.StatusBadRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			h.writeKMSError(w, "test", tt.err)
+			assert.Equal(t, tt.expectedStatus, w.Code)
+		})
+	}
+}
+
+// TestKMSHandlers_GetKey_SDKNotFound asks REST for a key the SDK does not
+// have: the answer is 404, not 500.
+func TestKMSHandlers_GetKey_SDKNotFound(t *testing.T) {
+	svc := newMockKMSService()
+	svc.getKeyErr = sdkerrors.NewNotFound("GetKey", "no key missing")
+	_, router := setupKMSTestHandler(svc)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/kms/keys/missing", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
 // =============================================================================

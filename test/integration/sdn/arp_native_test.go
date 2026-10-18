@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/arp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -95,8 +96,7 @@ func TestNativeARP_LookupAfterPing(t *testing.T) {
 	// Ping the gateway to ensure ARP entry exists
 	pingHost(t, gateway)
 
-	// Give ARP cache a moment to update
-	time.Sleep(500 * time.Millisecond)
+	waitForARPEntry(t, gateway)
 
 	// Lookup MAC address using our pure Go ARP client
 	table := arp.NewTable()
@@ -173,8 +173,8 @@ func TestNativeARP_MultipleEntries(t *testing.T) {
 	dnsServer := "8.8.8.8"
 	pingHost(t, dnsServer)
 
-	// Give ARP cache time to update
-	time.Sleep(500 * time.Millisecond)
+	// Only the on-link gateway gets an ARP entry; the DNS server is routed
+	waitForARPEntry(t, gateway)
 
 	table := arp.NewTable()
 	entries, err := table.Entries()
@@ -219,7 +219,7 @@ func TestNativeARP_LookupIP(t *testing.T) {
 	}
 
 	pingHost(t, gateway)
-	time.Sleep(500 * time.Millisecond)
+	waitForARPEntry(t, gateway)
 
 	table := arp.NewTable()
 
@@ -303,7 +303,7 @@ func TestNativeARP_GetMACForIP(t *testing.T) {
 	}
 
 	pingHost(t, gateway)
-	time.Sleep(500 * time.Millisecond)
+	waitForARPEntry(t, gateway)
 
 	// Use convenience function
 	macStr := arp.GetMACForIP(gateway)
@@ -371,5 +371,22 @@ func pingHost(t *testing.T, host string) {
 		t.Logf("stderr: %s", stderr.String())
 	} else {
 		t.Logf("Successfully pinged %s", host)
+	}
+}
+
+// arpEntryTimeout bounds the wait for a pinged host to appear in the ARP cache.
+const arpEntryTimeout = 5 * time.Second
+
+// waitForARPEntry waits until the kernel ARP cache resolves ip. A timeout is
+// only logged: the caller's own lookup asserts on the entry.
+func waitForARPEntry(t *testing.T, ip string) {
+	t.Helper()
+
+	resolved := func() bool {
+		_, err := arp.NewTable().LookupMAC(ip)
+		return err == nil
+	}
+	if err := testenv.WaitUntil(t.Context(), arpEntryTimeout, "ARP entry for "+ip, resolved); err != nil {
+		t.Logf("%v", err)
 	}
 }

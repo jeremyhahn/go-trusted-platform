@@ -262,6 +262,29 @@ func TestAuthMiddleware_GuardRequest_PreAuthOnlyTheBootSubOpcodes(t *testing.T) 
 	}
 }
 
+// The invitee's GetByToken and Accept carry their own credential (the
+// invitation token) as on gRPC; the operator's invitation calls and the IAM
+// tenant records sharing the category stay authenticated.
+func TestAuthMiddleware_GuardRequest_PreAuthOnlyTheInviteeSubOpcodes(t *testing.T) {
+	m := NewAuthMiddleware(WithQUICTokenValidator(&mockQUICTokenValidator{valid: false}))
+
+	for _, sub := range []byte{quicwire.InvitationSubGetByToken, quicwire.InvitationSubAccept} {
+		req := &quicwire.Request{Opcode: quicwire.OpIAMCategory, Payload: []byte{sub}}
+		_, resp := m.GuardRequest(context.Background(), req)
+		if resp != nil {
+			t.Errorf("sub-opcode %#x should need no credentials, got %+v", sub, resp)
+		}
+	}
+
+	for _, sub := range []byte{quicwire.InvitationSubCreate, quicwire.InvitationSubGet, quicwire.IAMSubTenantGet} {
+		req := &quicwire.Request{Opcode: quicwire.OpIAMCategory, Payload: []byte{sub}}
+		_, resp := m.GuardRequest(context.Background(), req)
+		if resp == nil {
+			t.Errorf("sub-opcode %#x must still be authenticated", sub)
+		}
+	}
+}
+
 func TestAuthMiddleware_AuthenticateRequest_NoValidator_RequireAuth(t *testing.T) {
 	m := NewAuthMiddleware(
 		WithQUICRequireAuth(true),
@@ -523,7 +546,7 @@ func TestAuthMiddleware_GuardRequest_UnclassifiedIsDenied(t *testing.T) {
 func TestAuthMiddleware_GuardRequest_AuthenticatesBeforeClassifying(t *testing.T) {
 	m := NewAuthMiddleware(WithQUICTokenValidator(&mockQUICTokenValidator{valid: true}))
 
-	_, resp := m.GuardRequest(context.Background(), &quicwire.Request{Opcode: 0x90})
+	_, resp := m.GuardRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpJWTVerify})
 
 	if resp == nil || resp.Status != quicwire.StatusUnauthorized {
 		t.Fatalf("an anonymous caller must be refused as Unauthorized, got %+v", resp)

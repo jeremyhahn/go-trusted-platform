@@ -332,7 +332,7 @@ func TestSelectQUICAuth_MTLS_AuthenticatesByCertificate(t *testing.T) {
 	_, resp := mw.GuardRequest(verified, &quicwire.Request{Opcode: quicwire.OpKMSDeleteKey})
 	assert.Nil(t, resp)
 	// ...but an unclassified operation is still refused...
-	_, resp = mw.GuardRequest(verified, &quicwire.Request{Opcode: 0x90})
+	_, resp = mw.GuardRequest(verified, &quicwire.Request{Opcode: quicwire.OpJWTVerify})
 	require.NotNil(t, resp)
 	assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
 	// ...and a connection with no verified certificate is not authenticated.
@@ -433,7 +433,7 @@ func TestSelectQUICAuth_SkipIAMValidation_IsTheOnlyOptOut(t *testing.T) {
 
 	_, resp := mw.GuardRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpKMSDeleteKey})
 	assert.Nil(t, resp, "the opt-out skips authentication")
-	_, resp = mw.GuardRequest(context.Background(), &quicwire.Request{Opcode: 0x90})
+	_, resp = mw.GuardRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpJWTVerify})
 	require.NotNil(t, resp, "the opt-out never serves an unclassified operation")
 	assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
 }

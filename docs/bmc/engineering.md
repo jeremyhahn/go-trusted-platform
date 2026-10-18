@@ -343,7 +343,7 @@ Precedence on the CLI: **flag > environment > built-in default.**
 | `--bmc-host` given together with `--server-url`/`--profile-id` | `ErrBMCFlagConflict`. Neither mode is guessed |
 | Neither `--bmc-host` nor daemon flags | `ErrBMCNoMode` |
 | `bmc cert restore` without `--factory` | Rejected. The flag exists solely to make accidental invocation impossible |
-| `Provision` / `ProvisionStatus` with no baremetal orchestrator wired | gRPC `FailedPrecondition` — the daemon passes `nil` for the baremetal service today |
+| `Provision` / `ProvisionStatus` with no baremetal orchestrator wired | gRPC `Unavailable` with reason `SERVICE_NOT_CONFIGURED`, REST `503` — the daemon passes `nil` for the baremetal service today |
 | Rotation apply or verify fails | Rollback is attempted; the outcome is encoded in the error type (§6) |
 | IPMI password (or KG key) shorter than 14 bytes, **under FIPS activation** | `ErrFIPSKeyTooShort` at session open. See below |
 
@@ -618,6 +618,7 @@ signal, `VendorUnknown` otherwise.
 | Unit | `pkg/bmc/*_test.go`, `pkg/bmc/smc/*_test.go`, `pkg/bmc/credentials/*_test.go`, `pkg/quirks/quirks_test.go` | Config validation, factory dispatch, vendor classification, quirk resolution, cert-backend selection and fallback, virtual-media dispatch, rotation state machine, credential marshalling, SDR/FRU parsing, RMCP+ framing |
 | Unit (CLI) | `pkg/cli/commands/bmc/*_test.go` | Flag validation, mode conflict, standalone config construction, enroll option tri-state |
 | Unit (API) | `pkg/webservice/v1/bmc/*_test.go`, `pkg/api/mcp/bmc_dispatch_test.go`, `pkg/api/daemon/quic_dispatch_guard_test.go` | Handler status codes, MCP tool dispatch, QUIC opcode routing |
+| Unit (SDK parity) | `pkg/api/daemon/bmc_{quic,mcp,embedded}_sdk_test.go` (drivers in `bmc_sdk_parity_test.go`) | Every `BMCService` method through the SDK's QUIC, MCP and embedded adapters against the daemon's handlers; the gRPC scope and not-found refusals |
 | Integration | `test/integration/bmc/` | Real containerized vBMC responders |
 
 Make targets: `make test-bmc` (runs `./pkg/bmc/...`,

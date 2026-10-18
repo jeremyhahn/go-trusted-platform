@@ -58,7 +58,12 @@ type SWTPM struct {
 	exited       atomic.Bool // Set to true when process exits
 	exitErr      error       // Error from process exit
 	exitMu       sync.RWMutex
+	exitCh       chan struct{} // Closed when the process exits
 }
+
+// stopGracePeriod is how long Stop waits after SIGTERM before it kills
+// swtpm. A variable so tests can shorten it.
+var stopGracePeriod = 5 * time.Second
 
 // NewSWTPM creates a new software TPM instance
 func NewSWTPM(config *Config, logger *logging.Logger) (*SWTPM, error) {
@@ -320,20 +325,27 @@ func (s *SWTPM) Start(ctx context.Context) error {
 	s.cmd = cmd
 	s.pid = cmd.Process.Pid
 
-	// Start a goroutine to wait for process exit and record the status.
-	// This allows us to detect process death immediately via the exited flag
-	// rather than polling with signal 0 (which doesn't work well for zombies).
+	s.watchExit(cmd)
+
+	s.logger.Infof("swtpm daemon started with PID %d", s.pid)
+
+	return nil
+}
+
+// watchExit waits for cmd in a goroutine and records its exit status. The
+// exited flag and exitCh report process death at once, without polling with
+// signal 0 (which doesn't work well for zombies).
+func (s *SWTPM) watchExit(cmd *exec.Cmd) {
+	exitCh := make(chan struct{})
+	s.exitCh = exitCh
 	go func() {
 		err := cmd.Wait()
 		s.exitMu.Lock()
 		s.exitErr = err
 		s.exitMu.Unlock()
 		s.exited.Store(true)
+		close(exitCh)
 	}()
-
-	s.logger.Infof("swtpm daemon started with PID %d", s.pid)
-
-	return nil
 }
 
 // Stop stops the swtpm daemon
@@ -365,37 +377,24 @@ func (s *SWTPM) Stop() error {
 			}
 		}
 
-		// Wait for process to exit with timeout using channel-based synchronization
-		timeout := time.NewTimer(5 * time.Second)
+		// Wait for process to exit, killing it once the grace period ends
+		timeout := time.NewTimer(stopGracePeriod)
 		defer timeout.Stop()
 
-		ticker := time.NewTicker(50 * time.Millisecond)
-		defer ticker.Stop()
-
-	waitLoop:
-		for {
-			select {
-			case <-timeout.C:
-				s.logger.Warn("swtpm did not exit in time, forcing kill")
-				if err := s.cmd.Process.Kill(); err != nil {
-					return &WrappedError{Msg: "failed to force kill swtpm", Err: err}
-				}
-				// Wait for goroutine to record exit
-				for !s.exited.Load() {
-					time.Sleep(10 * time.Millisecond)
-				}
-				break waitLoop
-			case <-ticker.C:
-				if s.exited.Load() {
-					s.exitMu.RLock()
-					exitErr := s.exitErr
-					s.exitMu.RUnlock()
-					if exitErr != nil {
-						s.logger.Debugf("swtpm exited with error: %v", exitErr)
-					}
-					break waitLoop
-				}
+		select {
+		case <-s.exitCh:
+			s.exitMu.RLock()
+			exitErr := s.exitErr
+			s.exitMu.RUnlock()
+			if exitErr != nil {
+				s.logger.Debugf("swtpm exited with error: %v", exitErr)
 			}
+		case <-timeout.C:
+			s.logger.Warn("swtpm did not exit in time, forcing kill")
+			if err := s.cmd.Process.Kill(); err != nil {
+				return &WrappedError{Msg: "failed to force kill swtpm", Err: err}
+			}
+			<-s.exitCh
 		}
 	}
 

@@ -100,7 +100,7 @@ func newEnrollTestHandler(enroller BMCEnrollerServicer, lookup ProfileLookup) (R
 // Tests
 // =============================================================================
 
-func TestEnrollBMC_NoEnrollerReturns500(t *testing.T) {
+func TestEnrollBMC_NoEnrollerReturns503(t *testing.T) {
 	rw := &mockResponseWriter{}
 	h, err := NewHandler(HandlerParams{
 		Logger:         newTestLogger(),
@@ -117,8 +117,11 @@ func TestEnrollBMC_NoEnrollerReturns500(t *testing.T) {
 	router := newTestRouter("POST", "/bmc/{profileID}/enroll", h.EnrollBMC)
 	router.ServeHTTP(rec, req)
 
-	if rw.lastStatus != http.StatusInternalServerError {
-		t.Errorf("expected 500, got %d", rw.lastStatus)
+	if rw.lastStatus != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rw.lastStatus)
+	}
+	if _, ok := rw.lastErr.(ErrBMCEnrollerNotAvailable); !ok {
+		t.Errorf("err = %T, want ErrBMCEnrollerNotAvailable", rw.lastErr)
 	}
 }
 

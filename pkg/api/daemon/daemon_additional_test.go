@@ -356,24 +356,28 @@ func TestDaemon_StartStop_RaceCondition(t *testing.T) {
 			t.Fatalf("Start() error: %v", err)
 		}
 
-		// Attempt concurrent operations
+		// Attempt concurrent operations. Both readers wait on one start
+		// signal so their loops overlap under the race detector.
+		start := make(chan struct{})
 		done := make(chan bool, 2)
 
 		go func() {
-			for i := 0; i < 10; i++ {
+			<-start
+			for i := 0; i < 100; i++ {
 				_ = d.IsRunning()
-				time.Sleep(1 * time.Millisecond)
 			}
 			done <- true
 		}()
 
 		go func() {
-			for i := 0; i < 10; i++ {
+			<-start
+			for i := 0; i < 100; i++ {
 				_ = d.SocketPath()
-				time.Sleep(1 * time.Millisecond)
 			}
 			done <- true
 		}()
+
+		close(start)
 
 		// Wait for concurrent operations
 		<-done

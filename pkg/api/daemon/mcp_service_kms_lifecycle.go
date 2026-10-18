@@ -21,6 +21,7 @@ import (
 	"time"
 
 	baasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -59,7 +60,8 @@ func (e ErrSecretNotFound) GRPCStatus() *status.Status {
 	return status.New(codes.NotFound, e.Error())
 }
 
-// ErrKMSKeyPolicyNotFound is returned when a key's policy cannot be read.
+// ErrKMSKeyPolicyNotFound is returned when the backend reports a key's
+// policy missing.
 type ErrKMSKeyPolicyNotFound struct {
 	KeyID string
 }
@@ -88,6 +90,16 @@ func (e ErrSecretRotationPolicyNotFound) Error() string {
 // adapter returns for the same lookup.
 func (e ErrSecretRotationPolicyNotFound) GRPCStatus() *status.Status {
 	return status.New(codes.NotFound, e.Error())
+}
+
+// kmsLookupError answers a failed key lookup the way the gRPC KMS adapter
+// does: notFound when the backend's error is of class NotFound, otherwise
+// the operation failure, which keeps the backend's class through its Cause.
+func kmsLookupError(operation string, notFound, err error) error {
+	if errclass.Code(err) == codes.NotFound {
+		return notFound
+	}
+	return ErrKMSOperationFailed{Operation: operation, Cause: err}
 }
 
 // KMSRevokeKey revokes a key, marking it unusable.
@@ -167,7 +179,7 @@ func (p *MCPServiceProvider) KMSGetKeyMetadata(ctx context.Context, keyID string
 
 	resp, err := p.kmsService.GetKeyMetadata(ctx, &baasservice.GetKeyMetadataRequest{KeyID: keyID})
 	if err != nil {
-		return nil, ErrKMSKeyNotFound{KeyID: keyID}
+		return nil, kmsLookupError("GetKeyMetadata", ErrKMSKeyNotFound{KeyID: keyID}, err)
 	}
 
 	return resp.Metadata, nil
@@ -261,7 +273,7 @@ func (p *MCPServiceProvider) KMSGetKeyPolicy(ctx context.Context, keyID string) 
 
 	resp, err := p.kmsService.GetKeyPolicy(ctx, &baasservice.GetKeyPolicyRequest{KeyID: keyID})
 	if err != nil {
-		return nil, ErrKMSKeyPolicyNotFound{KeyID: keyID}
+		return nil, kmsLookupError("GetKeyPolicy", ErrKMSKeyPolicyNotFound{KeyID: keyID}, err)
 	}
 
 	return resp.Policy, nil

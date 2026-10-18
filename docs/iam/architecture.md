@@ -117,11 +117,10 @@ registration's mirror failed with `iam.role: not_found`.
 
 1. **Caller → IAM.** On gRPC, all 34 methods are scoped. A platform token is
    checked against its `scp` claim. A token without scope claims is checked
-   by the IAM PEP ([`docs/daemon/api.md`](../daemon/api.md) §5). **Closed on
-   MCP**: only `iam_verify_token` is in the authorization map (`iam:read`);
-   the default-deny `AuthorizeTool` refuses every other `iam_*` tool,
-   `iam_create_token` and `iam_assign_role` included, for every caller
-   ([api.md](api.md) §8).
+   by the IAM PEP ([`docs/daemon/api.md`](../daemon/api.md) §5). **On MCP** each
+   `iam_*` tool needs the scope of its gRPC twin; `iam_authenticate` is open,
+   as on QUIC, and it, `iam_create_token` and `iam_revoke_token` refuse every
+   caller ([api.md](api.md) §8).
 2. **Platform → stack IAM.** The platform adapts and forwards; it does not
    decide.
 3. **The mirror.** Two stores, one synchronisation point.

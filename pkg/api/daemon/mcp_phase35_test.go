@@ -276,8 +276,8 @@ func TestPhase35Provider_NotConfigured(t *testing.T) {
 	if _, err := p.LUKSRemoveKey(ctx, nil); !errors.Is(err, ErrLUKSNotConfigured) {
 		t.Errorf("LUKSRemoveKey: want ErrLUKSNotConfigured, got %v", err)
 	}
-	if _, err := p.LUKSTestUnlock(ctx, nil); !errors.Is(err, ErrLUKSTestUnlockUnverified) {
-		t.Errorf("LUKSTestUnlock: want ErrLUKSTestUnlockUnverified, got %v", err)
+	if _, err := p.LUKSTestUnlock(ctx, nil); !errors.Is(err, ErrLUKSNotConfigured) {
+		t.Errorf("LUKSTestUnlock: want ErrLUKSNotConfigured, got %v", err)
 	}
 	if _, err := p.LUKSChangePassphrase(ctx, nil); !errors.Is(err, ErrLUKSNotConfigured) {
 		t.Errorf("LUKSChangePassphrase: want ErrLUKSNotConfigured, got %v", err)

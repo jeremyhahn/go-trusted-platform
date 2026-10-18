@@ -47,10 +47,10 @@ refused (§5).
 | Collect host attestation (TLS only — §5.1a) | `POST /api/v1/attestation/host` | `CollectHostAttestation` (refused over Unix) | `OpAttestHost` (`0x7E`), `OpAttestCollectHost` (`0x72`) | `MISSING — docs/13 G7` | refused — no TLS (§5.1a) |
 | Collect VM attestation | `POST /api/v1/attestation/vm/{id}` | `CollectVMAttestation` | `OpAttestVMWorkload` (`0x7F`) | `MISSING — docs/13 G7` | ✅ |
 | Collect container attestation | `POST /api/v1/attestation/container/{id}` | `CollectContainerAttestation` | `OpAttestContainerWorkload` (`0xED`) | `MISSING — docs/13 G7` | ✅ |
-| Attest a workload | `MISSING — docs/13 G7` | (covered by the two Collect RPCs) | `OpAttestDeviceWorkload` (`0xEE`) | `attestation_attest_workload` (refused) | — |
-| Verify a workload | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `attestation_verify_workload` (refused) | — |
-| Attestation reports (create / get / list) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestGetReportByID` (`0x77`), `OpAttestListReports` (`0xEF`) | `attestation_create_report`, `attestation_get_report`, `attestation_list_reports` (refused) | — |
-| Attestation policies (create / get / list / delete / evaluate) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestCreatePolicy` (`0xAA`), `OpAttestListPolicies` (`0xAB`) | `attestation_create_policy`, `attestation_get_policy`, `attestation_list_policies`, `attestation_delete_policy`, `attestation_evaluate_policy` (refused) | — |
+| Attest a workload | `MISSING — docs/13 G7` | (covered by the two Collect RPCs) | `OpAttestDeviceWorkload` (`0xEE`) | `MISSING — docs/13 G7` | — |
+| Verify a workload | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
+| Attestation reports (create / get / list) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestGetReportByID` (`0x77`), `OpAttestListReports` (`0xEF`) | `MISSING — docs/13 G7` | — |
+| Attestation policies (create / get / list / delete / evaluate) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestCreatePolicy` (`0xAA`), `OpAttestListPolicies` (`0xAB`) | `MISSING — docs/13 G7` | — |
 | Attestation events | `GET /api/v1/attestation/events` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 | Caller-admission policy (effective) | `GET /api/v1/attestation/callers` | `DescribeCallerPolicy` | `MISSING — #386` | `attestation_caller_policy` | ✅ |
 | Node clock state (collector-facing) | `GET /api/v1/attestation/clock` | REST-only by design — see §5.2a | REST-only by design | REST-only by design | — |
@@ -157,9 +157,8 @@ gRPC twin:
 | `attestation:write` | `attestation_device_refresh`, `attestation_create_manifest` |
 | `attestation:delete` | `attestation_delete_manifest` |
 
-Ten tools stay unclassified, so every caller is refused with
-`AuthErrorToolNotClassified`. None has a backend: no gRPC method, and no REST
-route the daemon mounts. They are `attestation_attest_workload` and
+#304 deleted ten tools that no backend served: no gRPC method, and no REST
+route the daemon mounts. They were `attestation_attest_workload` and
 `attestation_verify_workload` (the real workload paths are `container_attest`
 and `vm_attest`), the three report tools (`attestation_create_report`,
 `attestation_get_report`, `attestation_list_reports`) and the five policy tools

@@ -476,9 +476,8 @@ func TestFetchProfileAndActivate_ActivationFails(t *testing.T) {
 
 func TestClient_ContextCancellation(t *testing.T) {
 	server, caPool := startTLSTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Simulate slow response
-		time.Sleep(2 * time.Second)
-		w.WriteHeader(http.StatusOK)
+		// A server that never answers: only the client giving up ends this request.
+		<-r.Context().Done()
 	}))
 
 	cert, key := generateTestCertificate(t, "test-device")

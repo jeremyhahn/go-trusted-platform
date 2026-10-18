@@ -17,14 +17,23 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/gorilla/mux"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkcrypto "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -1619,4 +1628,106 @@ func TestFilterKeyInfos(t *testing.T) {
 			t.Fatalf("expected ErrKMSUnsupportedFilter, got %T: %v", err, err)
 		}
 	})
+}
+
+// TestPlatformKMSBackendErrorClasses covers each typed backend error: it
+// carries its own class, so every transport answers it the same way (#304).
+func TestPlatformKMSBackendErrorClasses(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		err  error
+		want codes.Code
+	}{
+		{"client unavailable", ErrKMSClientUnavailable{Client: "kms"}, codes.Unavailable},
+		{"unsupported value", ErrKMSUnsupportedValue{Kind: "algorithm", Value: 9999}, codes.InvalidArgument},
+		{"invalid cursor", ErrKMSInvalidCursor{Cursor: "x"}, codes.InvalidArgument},
+		{"unsupported filter", ErrKMSUnsupportedFilter{Key: "status"}, codes.InvalidArgument},
+		{"missing request", ErrKMSMissingRequest{Operation: "ListKeys"}, codes.InvalidArgument},
+		{"missing key spec", ErrKMSMissingKeySpec{Operation: "GenerateKey"}, codes.InvalidArgument},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := status.Code(tt.err); got != tt.want {
+				t.Errorf("status.Code(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPlatformKMSBackendErrorClassesOverGRPC asks the platform.v1 gRPC
+// service questions the backend refuses, and checks each answer's class.
+func TestPlatformKMSBackendErrorClassesOverGRPC(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	rpc := grpcapi.NewKMSGRPCService(logging.DefaultLogger(),
+		newTestPlatformKMSBackend(&platformMockKMSClient{}, &platformMockCryptoClient{}))
+	unwired := grpcapi.NewKMSGRPCService(logging.DefaultLogger(), newTestPlatformKMSBackend(nil, nil))
+
+	t.Run("bad cursor is InvalidArgument", func(t *testing.T) {
+		t.Parallel()
+		_, err := rpc.ListKeys(ctx, &platformv1.ListKeysRequest{Cursor: "not-a-number"})
+		if got := status.Code(err); got != codes.InvalidArgument {
+			t.Errorf("ListKeys(bad cursor) = %v, want InvalidArgument: %v", got, err)
+		}
+	})
+
+	t.Run("unsupported filter is InvalidArgument", func(t *testing.T) {
+		t.Parallel()
+		_, err := rpc.ListKeys(ctx, &platformv1.ListKeysRequest{Filter: map[string]string{"status": "enabled"}})
+		if got := status.Code(err); got != codes.InvalidArgument {
+			t.Errorf("ListKeys(bad filter) = %v, want InvalidArgument: %v", got, err)
+		}
+	})
+
+	t.Run("unsupported algorithm is InvalidArgument", func(t *testing.T) {
+		t.Parallel()
+		_, err := rpc.GenerateKey(ctx, &platformv1.GenerateKeyRequest{
+			KeySpec: &platformv1.KMSKeySpec{Algorithm: platformv1.KMSKeyAlgorithm(9999)},
+		})
+		if got := status.Code(err); got != codes.InvalidArgument {
+			t.Errorf("GenerateKey(bad algorithm) = %v, want InvalidArgument: %v", got, err)
+		}
+	})
+
+	t.Run("missing SDK client is Unavailable", func(t *testing.T) {
+		t.Parallel()
+		_, err := unwired.ListKeys(ctx, &platformv1.ListKeysRequest{})
+		if got := status.Code(err); got != codes.Unavailable {
+			t.Errorf("ListKeys(no client) = %v, want Unavailable: %v", got, err)
+		}
+	})
+}
+
+// TestPlatformKMSBackendErrorClassesOverREST asks the live REST facade the
+// same questions: each answer carries the HTTP status for the gRPC class.
+func TestPlatformKMSBackendErrorClassesOverREST(t *testing.T) {
+	t.Parallel()
+	backend := newTestPlatformKMSBackend(&platformMockKMSClient{
+		getKeyMetadataFn: func(ctx context.Context, keyID string) (*kms.KeyMetadataResponse, error) {
+			return nil, sdkerrors.NewNotFound("GetKeyMetadata", "no key "+keyID)
+		},
+	}, &platformMockCryptoClient{})
+	router := mux.NewRouter()
+	restapi.NewKMSHandlers(NewPlatformKMSRESTFacade(backend), boostSlogLogger()).RegisterRoutes(router)
+
+	tests := []struct {
+		name string
+		path string
+		want int
+	}{
+		{"missing key is 404", "/api/v1/kms/keys/missing", http.StatusNotFound},
+		{"bad cursor is 400", "/api/v1/kms/keys?cursor=not-a-number", http.StatusBadRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tt.path, nil))
+			if w.Code != tt.want {
+				t.Errorf("GET %s = %d, want %d: %s", tt.path, w.Code, tt.want, w.Body.String())
+			}
+		})
+	}
 }

@@ -16,6 +16,7 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"runtime"
 	"sync"
@@ -36,6 +37,9 @@ type Collector struct {
 	stopChan         chan struct{}
 	stoppedChan      chan struct{}
 	collectionActive bool
+	// tick, when set before Start, replaces the CollectInterval ticker so a
+	// test drives each collection instead of waiting out real intervals.
+	tick <-chan time.Time
 }
 
 // NewCollector creates a new metrics collector
@@ -96,9 +100,18 @@ func (c *Collector) Start(ctx context.Context) error {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Start HTTP server in goroutine
+	// Bind synchronously so the endpoint is reachable as soon as Start
+	// returns, and a bind failure (address in use) is Start's error rather
+	// than a message printed from a goroutine.
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		c.running.Store(false)
+		return &WrappedError{Msg: "failed to bind metrics server on " + addr, Err: err}
+	}
+
+	// Serve in a goroutine
 	go func() {
-		if err := c.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := c.server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			// Log error but don't crash
 			fmt.Printf("metrics server error: %v\n", err)
 		}
@@ -122,13 +135,22 @@ func (c *Collector) Stop(ctx context.Context) error {
 		return &MessageError{Msg: "metrics collector not running"}
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	// Signal collection loop to stop (if it's running)
-	if c.collectionActive {
+	c.mu.Lock()
+	loopActive := c.collectionActive
+	if loopActive {
 		close(c.stopChan)
 	}
+	c.mu.Unlock()
+
+	// A collection already in flight holds the read lock, so wait for the
+	// loop before taking the write lock again.
+	if loopActive {
+		<-c.stoppedChan
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	// Shutdown HTTP server
 	if c.server != nil {
@@ -138,11 +160,6 @@ func (c *Collector) Stop(ctx context.Context) error {
 		if err := c.server.Shutdown(shutdownCtx); err != nil {
 			return &WrappedError{Msg: "failed to shutdown metrics server", Err: err}
 		}
-	}
-
-	// Wait for collection loop to stop (if it was started)
-	if c.collectionActive {
-		<-c.stoppedChan
 	}
 
 	c.running.Store(false)
@@ -163,14 +180,18 @@ func (c *Collector) Metrics() *Metrics {
 func (c *Collector) collectLoop() {
 	defer close(c.stoppedChan)
 
-	ticker := time.NewTicker(c.config.CollectInterval)
-	defer ticker.Stop()
+	tick := c.tick
+	if tick == nil {
+		ticker := time.NewTicker(c.config.CollectInterval)
+		defer ticker.Stop()
+		tick = ticker.C
+	}
 
 	for {
 		select {
 		case <-c.stopChan:
 			return
-		case <-ticker.C:
+		case <-tick:
 			c.collectMetrics()
 		}
 	}

@@ -58,6 +58,13 @@ func (b *missingDeviceLUKSBackend) RemoveKey(ctx context.Context, req *LUKSRemov
 	return b.fakeLUKSBackend.RemoveKey(ctx, req)
 }
 
+func (b *missingDeviceLUKSBackend) TestUnlock(ctx context.Context, req *LUKSTestUnlockRequest) (bool, error) {
+	if req.Device == luksMissingDevice {
+		return false, errFakeLUKSNoDevice
+	}
+	return b.fakeLUKSBackend.TestUnlock(ctx, req)
+}
+
 // luksTwins builds the MCP provider and the gRPC service over one
 // LUKSService, the way the daemon wires them.
 func luksTwins(backend LUKSBackend, isRoot bool) (*MCPServiceProvider, *LUKSGRPCService) {
@@ -110,6 +117,18 @@ func luksRemoveKeyCall(device string) luksParityCall {
 	}
 }
 
+func luksTestUnlockCall(device string) luksParityCall {
+	return luksParityCall{
+		name: "test_unlock",
+		mcp: func(ctx context.Context, p *MCPServiceProvider) (interface{}, error) {
+			return p.LUKSTestUnlock(ctx, map[string]interface{}{"device": device, "slot": float64(1)})
+		},
+		grpc: func(ctx context.Context, g *LUKSGRPCService) (interface{}, error) {
+			return g.TestUnlock(ctx, &platformv1.LUKSTestUnlockRequest{Device: device, Slot: 1})
+		},
+	}
+}
+
 // TestMCPLUKS_ErrorClassMatchesGRPC drives one operation per scope group
 // (read, write, delete) through both transports and requires the same
 // class: an MCP caller must read what a gRPC caller reads.
@@ -131,6 +150,9 @@ func TestMCPLUKS_ErrorClassMatchesGRPC(t *testing.T) {
 		{"delete invalid input", &missingDeviceLUKSBackend{}, true, luksRemoveKeyCall(""), codes.InvalidArgument},
 		{"delete not found", &missingDeviceLUKSBackend{}, true, luksRemoveKeyCall(luksMissingDevice), codes.Internal},
 		{"delete not root", &missingDeviceLUKSBackend{}, false, luksRemoveKeyCall("/dev/x"), codes.PermissionDenied},
+		{"test-unlock invalid input", &missingDeviceLUKSBackend{}, true, luksTestUnlockCall(""), codes.InvalidArgument},
+		{"test-unlock not found", &missingDeviceLUKSBackend{}, true, luksTestUnlockCall(luksMissingDevice), codes.Internal},
+		{"test-unlock not configured", nil, true, luksTestUnlockCall("/dev/x"), codes.Unavailable},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -287,26 +309,29 @@ func TestMCPLUKS_WriteAnswersMatchGRPC(t *testing.T) {
 	}
 }
 
-// TestMCPLUKSTestUnlock_RefusesWithoutBackend is the regression for the
-// faked success: on a wired backend the tool answered {"unlocked": true}
-// for any existing keyslot without trying a key. It now refuses with a
-// typed error and never reaches the backend.
-func TestMCPLUKSTestUnlock_RefusesWithoutBackend(t *testing.T) {
+// TestMCPLUKSTestUnlock_AnswersAsGRPC is the regression for the refusing
+// stub: the MCP tool reaches the service the gRPC TestUnlock uses and gives
+// the same answer. Test-unlock does not check root, so the twins run as a
+// non-root daemon.
+func TestMCPLUKSTestUnlock_AnswersAsGRPC(t *testing.T) {
+	ctx := context.Background()
 	backend := &recordingLUKSBackend{inner: &fakeLUKSBackend{}}
-	provider, _ := luksTwins(backend, true)
+	provider, grpcSvc := luksTwins(backend, false)
 
-	result, err := provider.LUKSTestUnlock(context.Background(), map[string]interface{}{"device": "/dev/x", "slot": float64(1)})
-	if !errors.Is(err, ErrLUKSTestUnlockUnverified) {
-		t.Fatalf("err = %v, want ErrLUKSTestUnlockUnverified (result %v)", err, result)
+	result, err := provider.LUKSTestUnlock(ctx, map[string]interface{}{"device": "/dev/x", "slot": float64(1)})
+	if err != nil {
+		t.Fatalf("MCP test_unlock: %v", err)
 	}
-	if result != nil {
-		t.Errorf("result = %v, want none", result)
+	grpcResult, err := grpcSvc.TestUnlock(ctx, &platformv1.LUKSTestUnlockRequest{Device: "/dev/x", Slot: 1})
+	if err != nil {
+		t.Fatalf("gRPC test_unlock: %v", err)
 	}
-	if got := status.Code(err); got != codes.Unimplemented {
-		t.Errorf("code = %s, want Unimplemented", got)
+	got := result.(map[string]bool)["unlocked"]
+	if got != grpcResult.GetUnlocked() || !got {
+		t.Errorf("test_unlock: MCP %v, gRPC %v, want both true", got, grpcResult.GetUnlocked())
 	}
-	if backend.unlockHit != 0 {
-		t.Errorf("backend TestUnlock called %d times, want 0", backend.unlockHit)
+	if backend.unlockHit != 2 {
+		t.Errorf("backend TestUnlock called %d times, want 2 (once per transport)", backend.unlockHit)
 	}
 }
 

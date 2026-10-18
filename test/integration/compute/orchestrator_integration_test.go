@@ -29,6 +29,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -552,8 +553,8 @@ func TestQEMUOrchestratorE2ELifecycle(t *testing.T) {
 	require.Greater(t, runningInstance.PID, 0)
 	t.Logf("VM running with PID: %d", runningInstance.PID)
 
-	// Allow VM to stabilize
-	time.Sleep(2 * time.Second)
+	// Allow VM to stabilize; nothing observable marks the end, so this is elapsed time
+	require.NoError(t, testenv.Elapse(ctx, 2*time.Second))
 
 	t.Log("=== Phase 3: Attach Network ===")
 	err = orchestrator.AttachNetwork(ctx, instance.ID, portName)
@@ -707,8 +708,8 @@ func TestQEMUOrchestratorWithTPM(t *testing.T) {
 	_, err = os.Stat(tpmSocket)
 	assert.NoError(t, err, "TPM socket should exist after VM start")
 
-	// Allow swtpm to initialize
-	time.Sleep(2 * time.Second)
+	// Allow swtpm to initialize; Start already waited for its socket, so this is elapsed time
+	require.NoError(t, testenv.Elapse(ctx, 2*time.Second))
 
 	// Stop the VM
 	err = orchestrator.Stop(ctx, instance.ID)

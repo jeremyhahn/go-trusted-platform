@@ -454,9 +454,8 @@ func TestClient_Revoke(t *testing.T) {
 func TestClient_ContextCancellation(t *testing.T) {
 	t.Run("respects context cancellation on create", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Simulate slow server
-			time.Sleep(100 * time.Millisecond)
-			w.WriteHeader(http.StatusOK)
+			// Slow server: answer only once the client gives up
+			<-r.Context().Done()
 		}))
 		defer server.Close()
 

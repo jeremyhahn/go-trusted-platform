@@ -163,11 +163,7 @@ REST, gRPC (TCP and Unix), QUIC and MCP. **No production code calls
 
 - mutating operations return `ErrLUKSRootRequired` (the nil root checker reports
   non-root), before the backend is ever consulted;
-- `status`, `list-slots`, `info` and `test-unlock` return `ErrLUKSNotConfigured`;
-- over MCP, `platform_luks_test_unlock` is unclassified and is refused before it
-  runs. The provider also refuses it with `ErrLUKSTestUnlockUnverified`
-  (`Unimplemented`) without calling the backend, because the backend tries no key
-  (§3).
+- `status`, `list-slots`, `info` and `test-unlock` return `ErrLUKSNotConfigured`.
 
 On the client side, every `platformctl luks` verb reaches the server through
 `platform.Client.LUKS()`, so after its local checks it returns the server's
@@ -184,8 +180,8 @@ server-side transport adapters (exercised against a stub backend).
 |---|---|
 | `pkg/api/daemon/luks_service_test.go` | validation order, root gate, not-configured paths |
 | `pkg/api/daemon/luks_grpc_service_test.go` | gRPC adapter and error mapping |
-| `pkg/api/daemon/mcp_luks_parity_test.go` | the MCP provider and the gRPC service over one service and an in-memory backend: same answers, and the same code for invalid input, a backend error, non-root and not configured; MCP test-unlock refused without reaching the backend |
-| `pkg/api/mcp/luks_authz_test.go` | each LUKS tool's scope, `tools/call` running the handler only for a caller holding it, test-unlock unclassified |
+| `pkg/api/daemon/mcp_luks_parity_test.go` | the MCP provider and the gRPC service over one service and an in-memory backend: same answers, and the same code for invalid input, a backend error, non-root and not configured, test-unlock included |
+| `pkg/api/mcp/luks_authz_test.go` | each LUKS tool's scope, `tools/call` running the handler only for a caller holding it, test-unlock included |
 | `pkg/app/backends/luks_test.go`, `luks_fido2_handler_test.go`, `luks_tpm_handler_test.go`, `luks_fips_test.go` | backend, handlers, FIPS policy |
 | `pkg/app/backends/luks_token_test.go` | slot detection, token write and rollback (`ErrMetadataTooLarge`, failed rollback), `AddRecoveryKey` slot; file-backed images, no loop device |
 | `pkg/app/backends/luks_integration_test.go` | enroll and test against a loopback LUKS2 volume |
@@ -207,6 +203,12 @@ reply, and that the device-required, not-configured and root-required refusals
 reach the caller as the typed SDK error with the same gRPC code and bare
 message QUIC and MCP return. It also checks that a malformed body never echoes
 the passphrase.
+
+`pkg/api/daemon/luks_embedded_sdk_test.go` drives all ten operations through
+the SDK embedded transport over the registry the daemon's embedded host builds.
+Each reply and each backend request must match a direct gRPC call on the same
+servicer, and so must the device-required and not-configured refusals. A host
+with no LUKS service answers `Unimplemented`.
 
 ---
 

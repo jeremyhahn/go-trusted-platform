@@ -70,7 +70,7 @@ func (s *BMCGRPCService) SetRestorer(restorer BMCRestorer, profileSvc device.Dev
 // the device profile identified by req.ProfileId.
 func (s *BMCGRPCService) RestoreFactoryCert(ctx context.Context, req *platformv1.BMCRestoreRequest) (*platformv1.BMCRestoreResponse, error) {
 	if s.restorer == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrBMCRestorerNotConfigured{}.Error())
+		return nil, bmcNotConfigured(ErrBMCRestorerNotConfigured{})
 	}
 	if req.GetProfileId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, ErrInvalidProfileID{}.Error())

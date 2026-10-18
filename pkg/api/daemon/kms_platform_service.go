@@ -20,6 +20,9 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkcrypto "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
@@ -41,6 +44,11 @@ func (e ErrKMSClientUnavailable) Error() string {
 	return "KMS " + e.Client + " client unavailable"
 }
 
+// GRPCStatus classifies the error as Unavailable.
+func (e ErrKMSClientUnavailable) GRPCStatus() *status.Status {
+	return status.New(codes.Unavailable, e.Error())
+}
+
 // ErrKMSUnsupportedValue is returned when a platform.v1 enum value has no
 // QuicBaaS SDK equivalent.
 type ErrKMSUnsupportedValue struct {
@@ -52,6 +60,11 @@ func (e ErrKMSUnsupportedValue) Error() string {
 	return "unsupported " + e.Kind + ": " + strconv.Itoa(int(e.Value))
 }
 
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrKMSUnsupportedValue) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // ErrKMSInvalidCursor is returned when a pagination cursor cannot be parsed.
 type ErrKMSInvalidCursor struct {
 	Cursor string
@@ -59,6 +72,11 @@ type ErrKMSInvalidCursor struct {
 
 func (e ErrKMSInvalidCursor) Error() string {
 	return "invalid pagination cursor: " + e.Cursor
+}
+
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrKMSInvalidCursor) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // ErrKMSUnsupportedFilter is returned when a list filter key is not supported.
@@ -70,6 +88,11 @@ func (e ErrKMSUnsupportedFilter) Error() string {
 	return "unsupported list filter: " + e.Key
 }
 
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrKMSUnsupportedFilter) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // ErrKMSMissingRequest is returned when a required request is nil.
 type ErrKMSMissingRequest struct {
 	Operation string
@@ -79,6 +102,11 @@ func (e ErrKMSMissingRequest) Error() string {
 	return "KMS " + e.Operation + " request is required"
 }
 
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrKMSMissingRequest) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // ErrKMSMissingKeySpec is returned when a required key specification is nil.
 type ErrKMSMissingKeySpec struct {
 	Operation string
@@ -86,6 +114,11 @@ type ErrKMSMissingKeySpec struct {
 
 func (e ErrKMSMissingKeySpec) Error() string {
 	return "KMS " + e.Operation + " key specification is required"
+}
+
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrKMSMissingKeySpec) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // =============================================================================

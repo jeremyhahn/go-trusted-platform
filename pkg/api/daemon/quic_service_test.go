@@ -120,7 +120,7 @@ func TestQUICServiceHandler_HandleRequest_AuthorizesBeforeDispatch(t *testing.T)
 	}{
 		{"no token", &quicwire.Request{Opcode: quicwire.OpKMSDeleteKey}, quicwire.StatusUnauthorized},
 		{"missing scope", &quicwire.Request{Opcode: quicwire.OpKMSDeleteKey, Token: "tok"}, quicwire.StatusPermissionDenied},
-		{"unclassified opcode", &quicwire.Request{Opcode: 0x90, Token: "tok"}, quicwire.StatusPermissionDenied},
+		{"unclassified opcode", &quicwire.Request{Opcode: quicwire.OpJWTVerify, Token: "tok"}, quicwire.StatusPermissionDenied},
 		{"unclassified sub-opcode", &quicwire.Request{Opcode: quicwire.OpSecretsCategory, Token: "tok", Payload: []byte{0x7F}}, quicwire.StatusPermissionDenied},
 		{"category without sub-opcode", &quicwire.Request{Opcode: quicwire.OpSecretsCategory, Token: "tok"}, quicwire.StatusInvalidRequest},
 	}

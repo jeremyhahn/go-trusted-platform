@@ -74,6 +74,11 @@ func TestLookupOperationPermission_CategorySubOpcodes(t *testing.T) {
 		{"iam tenant create", quicwire.OpIAMCategory, quicwire.IAMSubTenantCreate, OpcodePermission{Resource: "iam", Action: "write"}},
 		{"iam tenant list", quicwire.OpIAMCategory, quicwire.IAMSubTenantList, OpcodePermission{Resource: "iam", Action: "read"}},
 		{"iam tenant delete", quicwire.OpIAMCategory, quicwire.IAMSubTenantDelete, OpcodePermission{Resource: "iam", Action: "delete"}},
+		{"invitation create", quicwire.OpIAMCategory, quicwire.InvitationSubCreate, OpcodePermission{Resource: "invitation", Action: "write"}},
+		{"invitation get", quicwire.OpIAMCategory, quicwire.InvitationSubGet, OpcodePermission{Resource: "invitation", Action: "read"}},
+		{"invitation list", quicwire.OpIAMCategory, quicwire.InvitationSubList, OpcodePermission{Resource: "invitation", Action: "read"}},
+		{"invitation revoke", quicwire.OpIAMCategory, quicwire.InvitationSubRevoke, OpcodePermission{Resource: "invitation", Action: "write"}},
+		{"invitation delete", quicwire.OpIAMCategory, quicwire.InvitationSubDelete, OpcodePermission{Resource: "invitation", Action: "delete"}},
 		{"ipam release", quicwire.OpIPAMCategory, quicwire.OpGatewayReleaseIP, OpcodePermission{Resource: "sdn", Action: "write"}},
 		{"container remove", quicwire.OpVMExtendedCategory, quicwire.OpContainerRemove, OpcodePermission{Resource: "container", Action: "delete"}},
 		{"vm snapshot delete", quicwire.OpVMExtendedCategory, quicwire.OpVMSnapshotDelete, OpcodePermission{Resource: "vm", Action: "delete"}},
@@ -82,7 +87,23 @@ func TestLookupOperationPermission_CategorySubOpcodes(t *testing.T) {
 		{"device disable", quicwire.OpProvisioningCategory, quicwire.DeviceSubDisable, OpcodePermission{Resource: "device", Action: "write"}},
 		{"device enable", quicwire.OpProvisioningCategory, quicwire.DeviceSubEnable, OpcodePermission{Resource: "device", Action: "write"}},
 		{"device profile match", quicwire.OpProvisioningCategory, quicwire.DeviceSubFindMatchingProfile, OpcodePermission{Resource: "device", Action: "read"}},
+		{"pxe get device by mac", quicwire.OpProvisioningCategory, quicwire.PXESubGetDeviceByMAC, OpcodePermission{Resource: "pxe", Action: "read"}},
+		{"pxe set device enrolled", quicwire.OpProvisioningCategory, quicwire.PXESubSetDeviceEnrolled, OpcodePermission{Resource: "pxe", Action: "write"}},
+		{"pxe get events", quicwire.OpProvisioningCategory, quicwire.PXESubGetEvents, OpcodePermission{Resource: "pxe", Action: "read"}},
+		{"pxe get status", quicwire.OpProvisioningCategory, quicwire.PXESubGetStatus, OpcodePermission{Resource: "pxe", Action: "read"}},
+		{"pxe start service", quicwire.OpProvisioningCategory, quicwire.PXESubStartService, OpcodePermission{Resource: "pxe", Action: "write"}},
+		{"pxe stop service", quicwire.OpProvisioningCategory, quicwire.PXESubStopService, OpcodePermission{Resource: "pxe", Action: "write"}},
+		{"pxe webhook complete", quicwire.OpProvisioningCategory, quicwire.PXESubWebhookComplete, OpcodePermission{Resource: "pxe", Action: "write"}},
 		{"bmc enroll", quicwire.OpBMCCategory, quicwire.BMCSubEnroll, OpcodePermission{Resource: "bmc", Action: "admin"}},
+		{"bmc power status", quicwire.OpBMCCategory, quicwire.BMCSubPowerStatus, OpcodePermission{Resource: "bmc", Action: "read"}},
+		{"bmc power on", quicwire.OpBMCCategory, quicwire.BMCSubPowerOn, OpcodePermission{Resource: "bmc", Action: "write"}},
+		{"bmc power cycle", quicwire.OpBMCCategory, quicwire.BMCSubPowerCycle, OpcodePermission{Resource: "bmc", Action: "power"}},
+		{"bmc mount iso", quicwire.OpBMCCategory, quicwire.BMCSubMountISO, OpcodePermission{Resource: "bmc", Action: "media"}},
+		{"cluster bootstrap", quicwire.OpClusterCategory, quicwire.ClusterSubBootstrap, OpcodePermission{Resource: "cluster", Action: "write"}},
+		{"cluster join", quicwire.OpClusterCategory, quicwire.ClusterSubJoin, OpcodePermission{Resource: "cluster", Action: "write"}},
+		{"cluster leave", quicwire.OpClusterCategory, quicwire.ClusterSubLeave, OpcodePermission{Resource: "cluster", Action: "write"}},
+		{"cluster status", quicwire.OpClusterCategory, quicwire.ClusterSubGetStatus, OpcodePermission{Resource: "cluster", Action: "read"}},
+		{"cluster list nodes", quicwire.OpClusterCategory, quicwire.ClusterSubListNodes, OpcodePermission{Resource: "cluster", Action: "read"}},
 		{"tenant barrier unseal", quicwire.OpTenantBarrierCategory, quicwire.TenantBarrierSubUnseal, OpcodePermission{Resource: "tenant", Action: "write"}},
 		{"tenant barrier status", quicwire.OpTenantBarrierCategory, quicwire.TenantBarrierSubStatus, OpcodePermission{Resource: "tenant", Action: "read"}},
 		{"tpm2 clear", quicwire.OpTPM2Category, quicwire.SubOpTPM2Clear, OpcodePermission{Resource: "tpm", Action: "delete"}},
@@ -121,40 +142,50 @@ func TestLookupOperationPermission_PreAuth(t *testing.T) {
 }
 
 func TestLookupOperationPermission_PreAuthSubOpcodes(t *testing.T) {
-	openSubs := []byte{
-		quicwire.DeviceSubBootCertificate,
-		quicwire.DeviceSubBootDelivery,
+	type op struct{ category, sub byte }
+	openOps := []op{
+		{quicwire.OpProvisioningCategory, quicwire.DeviceSubBootCertificate},
+		{quicwire.OpProvisioningCategory, quicwire.DeviceSubBootDelivery},
 		// Device-side config delivery is open as on gRPC and MCP (#304).
-		quicwire.ProvisioningSubGetNonce,
-		quicwire.ProvisioningSubFetchConfig,
-		quicwire.ProvisioningSubSignDigest,
-		quicwire.ProvisioningSubPollSession,
+		{quicwire.OpProvisioningCategory, quicwire.ProvisioningSubGetNonce},
+		{quicwire.OpProvisioningCategory, quicwire.ProvisioningSubFetchConfig},
+		{quicwire.OpProvisioningCategory, quicwire.ProvisioningSubSignDigest},
+		{quicwire.OpProvisioningCategory, quicwire.ProvisioningSubPollSession},
+		// The invitee half of the invitation flow is open as on gRPC and MCP (#704).
+		{quicwire.OpIAMCategory, quicwire.InvitationSubGetByToken},
+		{quicwire.OpIAMCategory, quicwire.InvitationSubAccept},
 	}
-	for _, sub := range openSubs {
-		perm, preAuth, err := LookupOperationPermission(quicwire.OpProvisioningCategory, []byte{sub, 0xAA})
+	for _, o := range openOps {
+		perm, preAuth, err := LookupOperationPermission(o.category, []byte{o.sub, 0xAA})
 		if err != nil {
-			t.Fatalf("sub-opcode 0x%02X: unexpected error %v", sub, err)
+			t.Fatalf("0x%02X/0x%02X: unexpected error %v", o.category, o.sub, err)
 		}
 		if !preAuth {
-			t.Fatalf("sub-opcode 0x%02X: expected pre-auth", sub)
+			t.Fatalf("0x%02X/0x%02X: expected pre-auth", o.category, o.sub)
 		}
 		if perm != (OpcodePermission{}) {
-			t.Fatalf("sub-opcode 0x%02X: pre-auth entry carries a permission %+v", sub, perm)
+			t.Fatalf("0x%02X/0x%02X: pre-auth entry carries a permission %+v", o.category, o.sub, perm)
 		}
 	}
 
 	// Sibling sub-opcodes of the same category still need their permission,
-	// including the operator half of config delivery.
-	scoped := []byte{
-		quicwire.DeviceSubRecordAttestCert,
-		quicwire.ProvisioningSubFulfillSession,
-		quicwire.ProvisioningSubListSessions,
-		quicwire.ProvisioningSubGetSession,
+	// including the operator half of config delivery and of invitations.
+	scoped := []op{
+		{quicwire.OpProvisioningCategory, quicwire.DeviceSubRecordAttestCert},
+		{quicwire.OpProvisioningCategory, quicwire.ProvisioningSubFulfillSession},
+		{quicwire.OpProvisioningCategory, quicwire.ProvisioningSubListSessions},
+		{quicwire.OpProvisioningCategory, quicwire.ProvisioningSubGetSession},
+		{quicwire.OpIAMCategory, quicwire.InvitationSubCreate},
+		{quicwire.OpIAMCategory, quicwire.InvitationSubGet},
+		{quicwire.OpIAMCategory, quicwire.InvitationSubList},
+		{quicwire.OpIAMCategory, quicwire.InvitationSubRevoke},
+		{quicwire.OpIAMCategory, quicwire.InvitationSubDelete},
+		{quicwire.OpIAMCategory, quicwire.IAMSubTenantGet},
 	}
-	for _, sub := range scoped {
-		_, preAuth, err := LookupOperationPermission(quicwire.OpProvisioningCategory, []byte{sub})
+	for _, o := range scoped {
+		_, preAuth, err := LookupOperationPermission(o.category, []byte{o.sub})
 		if err != nil || preAuth {
-			t.Fatalf("sub-opcode 0x%02X: preAuth=%v err=%v, want a classified, authenticated operation", sub, preAuth, err)
+			t.Fatalf("0x%02X/0x%02X: preAuth=%v err=%v, want a classified, authenticated operation", o.category, o.sub, preAuth, err)
 		}
 	}
 }
@@ -165,7 +196,7 @@ func TestLookupOperationPermission_UnclassifiedIsDenied(t *testing.T) {
 		opcode  byte
 		payload []byte
 	}{
-		{"reserved jwt byte", quicwire.OpJWTCreate, nil},
+		{"reserved jwt byte", quicwire.OpJWTVerify, nil},
 		{"reserved dek byte", quicwire.OpDEKCreate, nil},
 		{"retired tenant byte", 0xE7, nil},
 		{"unknown iam category sub", quicwire.OpIAMCategory, []byte{0x7F}},
@@ -225,7 +256,7 @@ func TestLookupOperationPermission_VMDirectOpcodesStayDirect(t *testing.T) {
 func TestOperationCatalog_EntriesAreWellFormed(t *testing.T) {
 	actions := map[string]bool{
 		actionRead: true, actionWrite: true, actionDelete: true, actionAdmin: true, actionSignCSR: true,
-		actionGenerate: true, actionRevoke: true, actionList: true,
+		actionGenerate: true, actionRevoke: true, actionList: true, actionPower: true, actionMedia: true,
 	}
 	check := func(where string, perm OpcodePermission) {
 		if perm.Resource == "" || !actions[perm.Action] {

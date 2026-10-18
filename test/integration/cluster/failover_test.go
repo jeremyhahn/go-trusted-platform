@@ -91,16 +91,11 @@ func TestLeaderFailover(t *testing.T) {
 		mockOp.incrementTerm()
 	}
 
-	// Wait for new leader status to propagate through the leader check loop
-	time.Sleep(2 * time.Second)
-
-	// Verify a new leader is elected from the running followers
-	var newLeader *testNode
-	for _, follower := range runningFollowers {
-		if follower.coordinator.IsLeader() {
-			newLeader = follower
-			break
-		}
+	// Wait for new leader status to propagate through the leader check loop,
+	// then verify a new leader is elected from the running followers
+	newLeader, err := waitForNewLeader(ctx, defaultLeaderTimeout, runningFollowers)
+	if err != nil {
+		t.Logf("%v", err)
 	}
 
 	require.NotNil(t, newLeader, "A new leader should be elected")
@@ -170,7 +165,7 @@ func TestFollowerFailure(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for cluster to adjust
-	time.Sleep(2 * time.Second)
+	waitForNodeCount(ctx, t, leader, len(followers))
 
 	// Cluster should still function
 	assert.True(t, leader.coordinator.IsRunning(), "Leader should still be running")
@@ -210,11 +205,11 @@ func TestFollowerFailure_DataIntegrity(t *testing.T) {
 	err = leader.storage.Put(ctx, "IntegrityTest", preFailureKey, preFailureData, defaultShardID)
 	require.NoError(t, err)
 
-	// Wait for replication
-	time.Sleep(1 * time.Second)
-
 	followers := tc.getFollowers()
 	require.NotEmpty(t, followers)
+
+	// Wait for replication
+	waitForReplication(ctx, t, followers, "IntegrityTest", map[uint64][]byte{preFailureKey: preFailureData})
 
 	// Stop one follower
 	failedFollower := followers[0]
@@ -229,7 +224,10 @@ func TestFollowerFailure_DataIntegrity(t *testing.T) {
 
 	// Remaining follower should have both pieces of data
 	remainingFollower := followers[1]
-	time.Sleep(2 * time.Second)
+	waitForReplication(ctx, t, []*testNode{remainingFollower}, "IntegrityTest", map[uint64][]byte{
+		preFailureKey:    preFailureData,
+		duringFailureKey: duringFailureData,
+	})
 
 	data, found, err := remainingFollower.storage.Get(ctx, "IntegrityTest", preFailureKey, defaultShardID)
 	assert.NoError(t, err)
@@ -271,7 +269,7 @@ func TestNodeRestart(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Log("Node stopped, waiting before restart...")
-	time.Sleep(2 * time.Second)
+	waitForNodeCount(ctx, t, leader, len(followers))
 
 	// Restart the coordinator
 	err = restartNode.coordinator.Start(ctx)
@@ -285,7 +283,7 @@ func TestNodeRestart(t *testing.T) {
 	t.Log("Node restarted and rejoined")
 
 	// Wait for stabilization
-	time.Sleep(2 * time.Second)
+	waitForNodeCount(ctx, t, leader, len(followers)+1)
 
 	// Verify node is running
 	assert.True(t, restartNode.coordinator.IsRunning(),
@@ -326,11 +324,11 @@ func TestNodeRestart_DataRecovery(t *testing.T) {
 	err = leader.storage.Put(ctx, "RecoveryTest", testKey, testData, defaultShardID)
 	require.NoError(t, err)
 
-	// Wait for replication
-	time.Sleep(2 * time.Second)
-
 	followers := tc.getFollowers()
 	require.NotEmpty(t, followers)
+
+	// Wait for replication
+	waitForReplication(ctx, t, followers, "RecoveryTest", map[uint64][]byte{testKey: testData})
 
 	restartNode := followers[0]
 
@@ -378,7 +376,7 @@ func TestNetworkPartition(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for detection
-	time.Sleep(2 * time.Second)
+	waitForNodeCount(ctx, t, leader, len(followers))
 
 	// Majority partition (leader + 1 follower) should continue
 	assert.True(t, leader.coordinator.IsRunning(), "Leader should still be running")
@@ -441,13 +439,13 @@ func TestPartitionRecovery(t *testing.T) {
 
 	// Write data before partition
 	prePartitionKey := hashString("pre-partition-data")
-	err = leader.storage.Put(ctx, "PartitionRecoveryTest", prePartitionKey, []byte(`{"phase": "pre"}`), defaultShardID)
+	prePartitionData := []byte(`{"phase": "pre"}`)
+	err = leader.storage.Put(ctx, "PartitionRecoveryTest", prePartitionKey, prePartitionData, defaultShardID)
 	require.NoError(t, err)
-
-	time.Sleep(1 * time.Second)
 
 	followers := tc.getFollowers()
 	require.NotEmpty(t, followers)
+	waitForReplication(ctx, t, followers, "PartitionRecoveryTest", map[uint64][]byte{prePartitionKey: prePartitionData})
 
 	partitionedNode := followers[0]
 	t.Logf("Partitioning node %d", partitionedNode.id)
@@ -458,10 +456,11 @@ func TestPartitionRecovery(t *testing.T) {
 
 	// Write during partition
 	duringPartitionKey := hashString("during-partition-data")
-	err = leader.storage.Put(ctx, "PartitionRecoveryTest", duringPartitionKey, []byte(`{"phase": "during"}`), defaultShardID)
+	duringPartitionData := []byte(`{"phase": "during"}`)
+	err = leader.storage.Put(ctx, "PartitionRecoveryTest", duringPartitionKey, duringPartitionData, defaultShardID)
 	require.NoError(t, err)
 
-	time.Sleep(2 * time.Second)
+	waitForReplication(ctx, t, tc.getRunningFollowers(), "PartitionRecoveryTest", map[uint64][]byte{duringPartitionKey: duringPartitionData})
 
 	// Heal partition - restart node
 	t.Log("Healing partition...")
@@ -473,7 +472,7 @@ func TestPartitionRecovery(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for recovery
-	time.Sleep(3 * time.Second)
+	waitForNodeCount(ctx, t, leader, len(followers)+1)
 
 	// Verify node has caught up with data written during partition
 	data, found, err := partitionedNode.storage.Get(ctx, "PartitionRecoveryTest", duringPartitionKey, defaultShardID)
@@ -533,30 +532,9 @@ func TestFailoverTime(t *testing.T) {
 	}
 
 	// Wait for new leader to be detected
-	failoverCtx, failoverCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer failoverCancel()
-
-	var newLeader *testNode
-	for {
-		select {
-		case <-failoverCtx.Done():
-			t.Fatal("Leader election did not complete within 10 seconds")
-		default:
-			// Check running followers for new leader
-			for _, follower := range runningFollowers {
-				if follower.coordinator.IsLeader() {
-					newLeader = follower
-					break
-				}
-			}
-			if newLeader != nil {
-				break
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-		if newLeader != nil {
-			break
-		}
+	newLeader, err := waitForNewLeader(ctx, 10*time.Second, runningFollowers)
+	if err != nil {
+		t.Fatalf("Leader election did not complete within 10 seconds: %v", err)
 	}
 
 	electionDuration := time.Since(startTime)
@@ -629,7 +607,7 @@ func TestFailover_MultipleFollowerLoss(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	time.Sleep(2 * time.Second)
+	waitForNodeCount(ctx, t, leader, len(followers)-1)
 
 	// Cluster should still function
 	assert.True(t, leader.coordinator.IsRunning())

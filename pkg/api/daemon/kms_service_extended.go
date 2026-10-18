@@ -23,6 +23,7 @@ import (
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 )
 
 // This file extends KMSServerAdapter and SecretsServerAdapter with the
@@ -45,7 +46,7 @@ func (a *KMSServerAdapter) RevokeKey(ctx context.Context, req *pb.RevokeKeyReque
 	}
 
 	if err := a.client.RevokeKey(ctx, req.GetKeyId(), req.GetReason()); err != nil {
-		return nil, status.Errorf(codes.Internal, "key revocation failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "key revocation failed: %v", err)
 	}
 
 	return &pb.RevokeKeyResponse{
@@ -67,7 +68,7 @@ func (a *KMSServerAdapter) GetKeyMetadata(ctx context.Context, req *pb.GetKeyMet
 
 	meta, err := a.client.GetKeyMetadata(ctx, req.GetKeyId())
 	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "key metadata not found: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "get key metadata failed: %v", err)
 	}
 
 	return &pb.GetKeyMetadataResponse{
@@ -94,7 +95,7 @@ func (a *KMSServerAdapter) UpdateKeyMetadata(ctx context.Context, req *pb.Update
 		RemoveTags:  req.GetRemoveTags(),
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "key metadata update failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "key metadata update failed: %v", err)
 	}
 
 	return &pb.UpdateKeyMetadataResponse{
@@ -123,7 +124,7 @@ func (a *KMSServerAdapter) SetKeyPolicy(ctx context.Context, req *pb.SetKeyPolic
 		KeyID:  req.GetKeyId(),
 		Policy: policy,
 	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "key policy update failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "key policy update failed: %v", err)
 	}
 
 	return &pb.SetKeyPolicyResponse{
@@ -145,7 +146,7 @@ func (a *KMSServerAdapter) GetKeyPolicy(ctx context.Context, req *pb.GetKeyPolic
 
 	policy, err := a.client.GetKeyPolicy(ctx, req.GetKeyId())
 	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "key policy not found: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "get key policy failed: %v", err)
 	}
 
 	return &pb.GetKeyPolicyResponse{
@@ -163,7 +164,7 @@ func (a *KMSServerAdapter) GetSupportedAlgorithms(ctx context.Context, req *pb.G
 
 	resp, err := a.client.GetSupportedAlgorithms(ctx)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "supported algorithms query failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "supported algorithms query failed: %v", err)
 	}
 
 	return &pb.GetSupportedAlgorithmsResponse{
@@ -180,7 +181,7 @@ func (a *KMSServerAdapter) BackendStatus(ctx context.Context, req *pb.BackendSta
 
 	resp, err := a.client.BackendStatus(ctx)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "backend status query failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "backend status query failed: %v", err)
 	}
 
 	pcrRegisters := make([]int32, 0, len(resp.PCRRegisters))

@@ -287,8 +287,8 @@ func TestRESTServerStart_AlreadyRunning(t *testing.T) {
 		t.Fatalf("Start() failed: %v", err)
 	}
 
-	time.Sleep(50 * time.Millisecond)
-
+	// Start binds synchronously and marks the server running before it
+	// returns, so a second Start is refused at once.
 	// Try to start again - should return error
 	err = server.Start()
 	if err == nil {

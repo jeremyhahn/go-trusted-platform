@@ -21,6 +21,8 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"slices"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -39,7 +41,9 @@ const certifyParityHandle = 0x81000001
 // each handle asked for, so a refusal can prove the TPM was never reached.
 type certifyingTPM struct {
 	*signingTPM
-	certified []uint32
+	// certified holds the handles the TPM was asked to certify. Each
+	// transport handler's goroutine appends to it while the test reads it.
+	certified atomic.Pointer[[]uint32]
 }
 
 func newCertifyingTPM(t testing.TB) *certifyingTPM {
@@ -49,7 +53,7 @@ func newCertifyingTPM(t testing.TB) *certifyingTPM {
 // CertifyKey answers as a TPM would: the attested key is certified under
 // the IAK with the caller's nonce.
 func (s *certifyingTPM) CertifyKey(keyAttrs *xkmssdk.KeyAttributes, nonce []byte, _ xkmssdk.TPMKeyBackend) (*xkmssdk.CertifyResult, error) {
-	s.certified = append(s.certified, uint32(keyAttrs.TPMAttributes.Handle))
+	s.recordCertified(uint32(keyAttrs.TPMAttributes.Handle))
 	iak, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(s.t, err)
 	attested, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -62,6 +66,31 @@ func (s *certifyingTPM) CertifyKey(keyAttrs *xkmssdk.KeyAttributes, nonce []byte
 		AttestedKeyPublic:  &attested.PublicKey,
 		Nonce:              nonce,
 	}, nil
+}
+
+// recordCertified appends handle to the certified handles. The slice is
+// copied on write, so a reader never sees a slice a later append changes.
+func (s *certifyingTPM) recordCertified(handle uint32) {
+	for {
+		old := s.certified.Load()
+		var next []uint32
+		if old != nil {
+			next = slices.Clone(*old)
+		}
+		next = append(next, handle)
+		if s.certified.CompareAndSwap(old, &next) {
+			return
+		}
+	}
+}
+
+// certifiedHandles returns the handles the TPM was asked to certify, or nil
+// before the first request.
+func (s *certifyingTPM) certifiedHandles() []uint32 {
+	if certified := s.certified.Load(); certified != nil {
+		return *certified
+	}
+	return nil
 }
 
 // Config has no IDevID configured, so every key is certified as an
@@ -109,7 +138,7 @@ func TestTPMCertifyParity_EveryTransportRefusesABadHandle(t *testing.T) {
 			assert.Equal(t, codes.InvalidArgument, status.Code(err), err)
 		})
 	}
-	assert.Empty(t, f.tpm.certified, "the TPM must not be asked to certify")
+	assert.Empty(t, f.tpm.certifiedHandles(), "the TPM must not be asked to certify")
 }
 
 func TestTPMCertifyParity_DaemonRESTNeedsTPMRead(t *testing.T) {
@@ -118,7 +147,7 @@ func TestTPMCertifyParity_DaemonRESTNeedsTPMRead(t *testing.T) {
 	_, err := f.client(t, f.daemonRESTConn("tpm:write")).Certify(context.Background(), certifyParityHandle, "", nil)
 
 	assert.Equal(t, codes.PermissionDenied, status.Code(err), err)
-	assert.Empty(t, f.tpm.certified, "the TPM must not be asked to certify")
+	assert.Empty(t, f.tpm.certifiedHandles(), "the TPM must not be asked to certify")
 }
 
 func TestTPMGRPCService_Certify(t *testing.T) {
@@ -130,7 +159,7 @@ func TestTPMGRPCService_Certify(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, []byte("n"), resp.GetNonce())
-	assert.Equal(t, []uint32{certifyParityHandle}, tpm.certified)
+	assert.Equal(t, []uint32{certifyParityHandle}, tpm.certifiedHandles())
 }
 
 func TestTPMGRPCService_CertifyErrors(t *testing.T) {
@@ -145,6 +174,6 @@ func TestTPMGRPCService_CertifyErrors(t *testing.T) {
 		svc.SetTPM2Service(tpm)
 		_, err := svc.Certify(context.Background(), &platformv1.CertifyRequest{KeyHandle: certifyParityHandle, Nonce: make([]byte, 65)})
 		assert.Equal(t, codes.InvalidArgument, status.Code(err), err)
-		assert.Empty(t, tpm.certified)
+		assert.Empty(t, tpm.certifiedHandles())
 	})
 }

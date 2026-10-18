@@ -18,12 +18,12 @@
 package testenv
 
 import (
+	"context"
 	"crypto/x509"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
-	"time"
 
 	"github.com/vishvananda/netlink"
 )
@@ -627,8 +627,14 @@ func cleanupOVSResources(cfg *NetworkConfig) {
 	delBrCmd := exec.Command(ovsctl, "--if-exists", "del-br", bridge)
 	delBrCmd.Run() // Ignore errors
 
-	// Wait a moment for ovs-vswitchd to clean up the kernel interface
-	time.Sleep(200 * time.Millisecond)
+	// Wait for ovs-vswitchd to remove the bridge's kernel interface
+	gone := func() bool {
+		_, err := net.InterfaceByName(bridge)
+		return err != nil
+	}
+	if err := WaitUntil(context.Background(), ovsInterfaceTimeout, "OVS bridge "+bridge+" kernel interface removed", gone); err != nil {
+		fmt.Printf("[OVS] %v\n", err)
+	}
 }
 
 // CheckRootPrivileges checks if the current process has root privileges

@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
@@ -70,6 +71,8 @@ var sentinelClasses = []struct {
 
 	{ErrDeviceProfileNotConfigured, codes.Unavailable},
 	{ErrBMCNotConfigured, codes.Unavailable},
+	{ErrPXENotConfigured, codes.Unavailable},
+	{ErrSwitchNotConfigured, codes.Unavailable},
 	{ErrClusterNotConfigured, codes.Unavailable},
 	{ErrEABNotConfigured, codes.Unavailable},
 	{ErrInvitationNotConfigured, codes.Unavailable},
@@ -80,20 +83,11 @@ var sentinelClasses = []struct {
 
 	{ErrDeviceProfileIdentityRequired, codes.InvalidArgument},
 	{ErrDeviceProfileMatchCriteriaRequired, codes.InvalidArgument},
-	{ErrClusterSeedAddressRequired, codes.InvalidArgument},
 	{ErrEABCredentialIDRequired, codes.InvalidArgument},
 	{ErrEABKeyIDRequired, codes.InvalidArgument},
 	{ErrEABHMACKeyRequired, codes.InvalidArgument},
 	{ErrEABProfileIDRequired, codes.InvalidArgument},
 	{ErrEABTenantIDRequired, codes.InvalidArgument},
-	{ErrInvitationIDRequired, codes.InvalidArgument},
-	{ErrInvitationTokenRequired, codes.InvalidArgument},
-	{ErrInvitationTenantIDRequired, codes.InvalidArgument},
-	{ErrInvitationEmailRequired, codes.InvalidArgument},
-	{ErrInvitationRoleRequired, codes.InvalidArgument},
-	{ErrInvitationInvitedByIDRequired, codes.InvalidArgument},
-	{ErrInvitationUserIDRequired, codes.InvalidArgument},
-	{ErrInvitationRevokerIDRequired, codes.InvalidArgument},
 	{ErrProvisionSessionIDRequired, codes.InvalidArgument},
 	{ErrProvisionDigestRequired, codes.InvalidArgument},
 	{ErrProxyIDRequired, codes.InvalidArgument},
@@ -106,7 +100,8 @@ var sentinelClasses = []struct {
 // toolErrorCode is the JSON-RPC code the server answers a failed tool call
 // or resource read with. An error that carries a gRPC status (GRPCStatus,
 // anywhere in its chain) is classified by it, a known sentinel by its
-// class, and anything else is InternalError.
+// class, and anything else by the classifier every transport shares
+// (errclass: SDK and database errors by their class, the rest Internal).
 func toolErrorCode(err error) int {
 	if class := status.Code(err); class != codes.Unknown {
 		return mcpwire.CodeForClass(class)
@@ -116,7 +111,7 @@ func toolErrorCode(err error) int {
 			return mcpwire.CodeForClass(sentinel.class)
 		}
 	}
-	return mcpwire.InternalError
+	return mcpwire.CodeForClass(errclass.Code(err))
 }
 
 // ErrInvalidArgument reports a tool argument the caller got wrong: absent

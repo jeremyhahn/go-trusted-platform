@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -103,8 +105,15 @@ func assertSameResponseClass(t *testing.T, grpcErr error, want codes.Code, resp 
 
 // fakeSwitchManager is an in-memory switch with one access port, eth1, on
 // VLAN 10. Ports it does not have answer ErrPortNotFound as pkg/switch does.
+//
+// mu guards ports and calls: a transport serves each call on its own
+// goroutine while the test reads the record.
 type fakeSwitchManager struct {
+	mu    sync.Mutex
 	ports map[string]*switchwire.PortStatus
+	// calls records every port operation the manager was asked for, in
+	// order, so two managers can be compared call for call.
+	calls []string
 }
 
 func newFakeSwitchManager() *fakeSwitchManager {
@@ -113,7 +122,10 @@ func newFakeSwitchManager() *fakeSwitchManager {
 	}}
 }
 
-func (m *fakeSwitchManager) port(name string) (*switchwire.PortStatus, error) {
+// record appends call to the call log and returns the named port. The
+// caller holds m.mu.
+func (m *fakeSwitchManager) record(call, name string) (*switchwire.PortStatus, error) {
+	m.calls = append(m.calls, call)
 	p, ok := m.ports[name]
 	if !ok {
 		return nil, switchmgmt.ErrPortNotFound{Port: name}
@@ -121,8 +133,22 @@ func (m *fakeSwitchManager) port(name string) (*switchwire.PortStatus, error) {
 	return p, nil
 }
 
+// snapshot returns a copy of the call log and of every port's state, taken
+// under the lock.
+func (m *fakeSwitchManager) snapshot() ([]string, map[string]switchwire.PortStatus) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ports := make(map[string]switchwire.PortStatus, len(m.ports))
+	for name, port := range m.ports {
+		ports[name] = *port
+	}
+	return slices.Clone(m.calls), ports
+}
+
 func (m *fakeSwitchManager) SetPortVLAN(_ context.Context, port string, vlanID uint16) error {
-	p, err := m.port(port)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, err := m.record(fmt.Sprintf("SetPortVLAN %s %d", port, vlanID), port)
 	if err != nil {
 		return err
 	}
@@ -131,15 +157,19 @@ func (m *fakeSwitchManager) SetPortVLAN(_ context.Context, port string, vlanID u
 }
 
 func (m *fakeSwitchManager) GetPortVLAN(_ context.Context, port string) (uint16, error) {
-	p, err := m.port(port)
-	if err != nil {
-		return 0, err
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.ports[port]
+	if !ok {
+		return 0, switchmgmt.ErrPortNotFound{Port: port}
 	}
 	return p.AccessVLAN, nil
 }
 
 func (m *fakeSwitchManager) GetPortStatus(_ context.Context, port string) (*switchwire.PortStatus, error) {
-	p, err := m.port(port)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, err := m.record("GetPortStatus "+port, port)
 	if err != nil {
 		return nil, err
 	}
@@ -148,6 +178,9 @@ func (m *fakeSwitchManager) GetPortStatus(_ context.Context, port string) (*swit
 }
 
 func (m *fakeSwitchManager) ListPorts(_ context.Context) ([]*switchwire.PortStatus, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, "ListPorts")
 	ports := make([]*switchwire.PortStatus, 0, len(m.ports))
 	for _, p := range m.ports {
 		snapshot := *p
@@ -157,7 +190,9 @@ func (m *fakeSwitchManager) ListPorts(_ context.Context) ([]*switchwire.PortStat
 }
 
 func (m *fakeSwitchManager) EnablePort(_ context.Context, port string) error {
-	p, err := m.port(port)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, err := m.record("EnablePort "+port, port)
 	if err != nil {
 		return err
 	}
@@ -166,7 +201,9 @@ func (m *fakeSwitchManager) EnablePort(_ context.Context, port string) error {
 }
 
 func (m *fakeSwitchManager) DisablePort(_ context.Context, port string) error {
-	p, err := m.port(port)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, err := m.record("DisablePort "+port, port)
 	if err != nil {
 		return err
 	}
@@ -178,8 +215,9 @@ func (m *fakeSwitchManager) Close() error { return nil }
 
 // fakeSwitchService knows one switch, core-1, and answers ErrManagerNotFound
 // for any other name, as switchmgmt.Service does. managerCalls counts the
-// lookups every switch tool makes before it touches a port.
+// lookups every switch tool makes before it touches a port; mu guards it.
 type fakeSwitchService struct {
+	mu           sync.Mutex
 	managers     map[string]*fakeSwitchManager
 	managerCalls int
 }
@@ -188,7 +226,16 @@ func newFakeSwitchService() *fakeSwitchService {
 	return &fakeSwitchService{managers: map[string]*fakeSwitchManager{"core-1": newFakeSwitchManager()}}
 }
 
+// lookups returns the number of Manager calls, read under the lock.
+func (s *fakeSwitchService) lookups() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.managerCalls
+}
+
 func (s *fakeSwitchService) Manager(name string) (switchmgmt.Manager, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.managerCalls++
 	m, ok := s.managers[name]
 	if !ok {
@@ -196,15 +243,6 @@ func (s *fakeSwitchService) Manager(name string) (switchmgmt.Manager, error) {
 	}
 	return m, nil
 }
-
-// switchMCPProvider adds the switch service the daemon's MCP provider does
-// not carry, so the switch tools reach a switch.
-type switchMCPProvider struct {
-	*MCPServiceProvider
-	switches *fakeSwitchService
-}
-
-func (p switchMCPProvider) SwitchService() mcp.SwitchManagerProvider { return p.switches }
 
 // countingRegistryService counts the calls the registry tools make into a
 // registry service.
@@ -299,9 +337,11 @@ type infraToolHarness struct {
 
 func newSwitchToolHarness(*testing.T) infraToolHarness {
 	switches := newFakeSwitchService()
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
+	provider.SetSwitchServer(NewSwitchGRPCService(logging.DefaultLogger(), switches))
 	return infraToolHarness{
-		provider: switchMCPProvider{MCPServiceProvider: NewMCPServiceProvider(&MCPServiceProviderConfig{}), switches: switches},
-		calls:    func() int { return switches.managerCalls },
+		provider: provider,
+		calls:    switches.lookups,
 	}
 }
 
@@ -348,9 +388,9 @@ func TestInfraToolsAnswerOnlyUnderTheirScope(t *testing.T) {
 		{"platform_cluster_status", "cluster:read", "switch:read", nil, newClusterToolHarness},
 		{"platform_cluster_list_nodes", "cluster:read", "switch:read", nil, newClusterToolHarness},
 		{"platform_cluster_bootstrap", "cluster:write", "cluster:read",
-			map[string]interface{}{"cluster_name": "alpha"}, newClusterToolHarness},
+			map[string]interface{}{"cluster_name": "alpha", "node_name": "node-1"}, newClusterToolHarness},
 		{"platform_cluster_join", "cluster:write", "cluster:read",
-			map[string]interface{}{"seed_addresses": []string{"10.0.0.2:7001"}}, newClusterToolHarness},
+			map[string]interface{}{"node_name": "node-2", "seed_addresses": []string{"10.0.0.2:7001"}}, newClusterToolHarness},
 		{"platform_cluster_leave", "cluster:write", "cluster:read", nil, newClusterToolHarness},
 
 		{"platform_registry_status", "registry:read", "cluster:read", nil, newRegistryToolHarness},
@@ -373,14 +413,15 @@ func TestInfraToolsAnswerOnlyUnderTheirScope(t *testing.T) {
 	}
 }
 
-// TestInfraToolsUnwiredAnswerUnavailable pins the class each tool group
-// answers with while its service is not wired into the daemon — as the
-// daemon runs today for all three — to Unavailable, the class every other
-// MCP tool, REST (503) and QUIC give for an unwired service.
+// TestInfraToolsUnwiredAnswerUnavailable pins the class the cluster and
+// registry tools answer with while their service is not wired into the
+// daemon to Unavailable, the class every other MCP tool, REST (503) and QUIC
+// give for an unwired service. The switch tools answer Unimplemented instead,
+// as a host without SwitchService does on every transport
+// (TestSwitchMCPUnwiredAnswersUnimplemented).
 func TestInfraToolsUnwiredAnswerUnavailable(t *testing.T) {
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
 	for tool, scope := range map[string]string{
-		"switch_list_ports":        "switch:read",
 		"platform_cluster_status":  "cluster:read",
 		"platform_registry_status": "registry:read",
 	} {
@@ -391,58 +432,6 @@ func TestInfraToolsUnwiredAnswerUnavailable(t *testing.T) {
 	}
 }
 
-// TestSwitchToolsMatchGRPC drives the switch tools and the gRPC
-// SwitchService against the same switch and compares their answers.
-func TestSwitchToolsMatchGRPC(t *testing.T) {
-	ctx := context.Background()
-	switches := newFakeSwitchService()
-	grpcSvc := NewSwitchGRPCService(logging.DefaultLogger(), switches)
-	provider := switchMCPProvider{MCPServiceProvider: NewMCPServiceProvider(&MCPServiceProviderConfig{}), switches: switches}
-
-	t.Run("success", func(t *testing.T) {
-		list, err := grpcSvc.ListPorts(ctx, &platformv1.ListSwitchPortsRequest{SwitchName: "core-1"})
-		require.NoError(t, err)
-		require.Len(t, list.GetPorts(), 1)
-
-		result := mcpToolResult(t, callMCPTool(t, provider, "switch:read", "switch_list_ports",
-			map[string]interface{}{"switch_name": "core-1"}))
-		ports, ok := result["ports"].([]interface{})
-		require.True(t, ok)
-		require.Len(t, ports, len(list.GetPorts()))
-		mcpPort, ok := ports[0].(map[string]interface{})
-		require.True(t, ok)
-		assert.Equal(t, list.GetPorts()[0].GetPort(), mcpPort["port"])
-		assert.EqualValues(t, list.GetPorts()[0].GetAccessVlan(), mcpPort["access_vlan"])
-		assert.Equal(t, list.GetPorts()[0].GetEnabled(), mcpPort["enabled"])
-
-		_, err = grpcSvc.SetPortVLAN(ctx, &platformv1.SetSwitchPortVLANRequest{SwitchName: "core-1", PortName: "eth1", VlanId: 30})
-		require.NoError(t, err)
-		result = mcpToolResult(t, callMCPTool(t, provider, "switch:read", "switch_port_status",
-			map[string]interface{}{"switch_name": "core-1", "port_name": "eth1"}))
-		assert.EqualValues(t, 30, result["access_vlan"])
-	})
-
-	t.Run("not found switch", func(t *testing.T) {
-		_, err := grpcSvc.ListPorts(ctx, &platformv1.ListSwitchPortsRequest{SwitchName: "core-9"})
-		resp := callMCPTool(t, provider, "switch:read", "switch_list_ports", map[string]interface{}{"switch_name": "core-9"})
-		assertSameResponseClass(t, err, codes.NotFound, resp)
-	})
-
-	t.Run("not found port", func(t *testing.T) {
-		_, err := grpcSvc.GetPortStatus(ctx, &platformv1.GetSwitchPortStatusRequest{SwitchName: "core-1", PortName: "eth9"})
-		resp := callMCPTool(t, provider, "switch:read", "switch_port_status",
-			map[string]interface{}{"switch_name": "core-1", "port_name": "eth9"})
-		assertSameResponseClass(t, err, codes.NotFound, resp)
-	})
-
-	t.Run("invalid VLAN", func(t *testing.T) {
-		_, err := grpcSvc.SetPortVLAN(ctx, &platformv1.SetSwitchPortVLANRequest{SwitchName: "core-1", PortName: "eth1", VlanId: 4095})
-		resp := callMCPTool(t, provider, "switch:write", "switch_set_vlan",
-			map[string]interface{}{"switch_name": "core-1", "port_name": "eth1", "vlan_id": 4095})
-		assertSameResponseClass(t, err, codes.InvalidArgument, resp)
-	})
-}
-
 // TestClusterToolsMatchGRPC drives the cluster tools and the gRPC
 // ClusterService against the same cluster servicer and compares their
 // answers.
@@ -451,28 +440,6 @@ func TestClusterToolsMatchGRPC(t *testing.T) {
 	fake := &fakeClusterServicer{statusInfo: runningStatus(), nodes: stockNodes(), nodeID: 1, leader: true}
 	grpcSvc := grpcapi.NewClusterGRPCService(logging.DefaultLogger(), newTestClusterBackend(fake))
 	provider := newProviderWithCluster(fake)
-
-	t.Run("success", func(t *testing.T) {
-		st, err := grpcSvc.GetStatus(ctx, &platformv1.GetClusterStatusRequest{})
-		require.NoError(t, err)
-		result := mcpToolResult(t, callMCPTool(t, provider, "cluster:read", "platform_cluster_status", nil))
-		cluster, ok := result["cluster"].(map[string]interface{})
-		require.True(t, ok)
-		assert.EqualValues(t, st.GetCluster().GetTotalNodes(), cluster["node_count"])
-		assert.Equal(t, st.GetCluster().GetLeaderId(), fmt.Sprint(cluster["leader_id"]))
-
-		list, err := grpcSvc.ListNodes(ctx, &platformv1.ListClusterNodesRequest{})
-		require.NoError(t, err)
-		result = mcpToolResult(t, callMCPTool(t, provider, "cluster:read", "platform_cluster_list_nodes", nil))
-		nodes, ok := result["nodes"].([]interface{})
-		require.True(t, ok)
-		require.Len(t, nodes, len(list.GetNodes()))
-		for i, node := range nodes {
-			mcpNode, ok := node.(map[string]interface{})
-			require.True(t, ok)
-			assert.Equal(t, list.GetNodes()[i].GetId(), fmt.Sprint(mcpNode["id"]))
-		}
-	})
 
 	t.Run("not found", func(t *testing.T) {
 		fake.leaveErr = grpcapi.ErrNodeNotInCluster{}
@@ -485,7 +452,7 @@ func TestClusterToolsMatchGRPC(t *testing.T) {
 
 	t.Run("invalid input", func(t *testing.T) {
 		_, err := grpcSvc.Join(ctx, &platformv1.JoinClusterRequest{NodeName: "node-2"})
-		resp := callMCPTool(t, provider, "cluster:write", "platform_cluster_join", nil)
+		resp := callMCPTool(t, provider, "cluster:write", "platform_cluster_join", map[string]interface{}{"node_name": "node-2"})
 		assertSameResponseClass(t, err, codes.InvalidArgument, resp)
 	})
 
@@ -495,6 +462,15 @@ func TestClusterToolsMatchGRPC(t *testing.T) {
 
 		_, err := grpcSvc.ListNodes(ctx, &platformv1.ListClusterNodesRequest{})
 		resp := callMCPTool(t, provider, "cluster:read", "platform_cluster_list_nodes", nil)
+		assertSameResponseClass(t, err, codes.FailedPrecondition, resp)
+	})
+
+	t.Run("leader cannot leave", func(t *testing.T) {
+		fake.leaveErr = grpcapi.ErrCannotLeaveAsLeader{}
+		t.Cleanup(func() { fake.leaveErr = nil })
+
+		_, err := grpcSvc.Leave(ctx, &platformv1.LeaveClusterRequest{})
+		resp := callMCPTool(t, provider, "cluster:write", "platform_cluster_leave", nil)
 		assertSameResponseClass(t, err, codes.FailedPrecondition, resp)
 	})
 }
@@ -556,9 +532,7 @@ func TestDaemonInfraErrorsCarryGRPCClass(t *testing.T) {
 	ctx := context.Background()
 	unwired := NewMCPServiceProvider(&MCPServiceProviderConfig{})
 
-	_, err := unwired.ClusterStatus(ctx, false)
-	assert.Equal(t, codes.Unavailable, status.Code(err))
-	_, err = unwired.RegistryStatus(ctx)
+	_, err := unwired.RegistryStatus(ctx)
 	assert.Equal(t, codes.Unavailable, status.Code(err))
 
 	registry := newProviderWithRegistry(newSeededRegistry(t))
@@ -569,13 +543,7 @@ func TestDaemonInfraErrorsCarryGRPCClass(t *testing.T) {
 	_, err = registry.RegistryInspect(ctx, "platform/missing", "v1", "", false, false)
 	assert.Equal(t, codes.NotFound, status.Code(err))
 
-	cluster := newProviderWithCluster(&fakeClusterServicer{leaveErr: grpcapi.ErrCannotLeaveAsLeader{}})
-	_, err = cluster.ClusterLeave(ctx)
-	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
-	assert.ErrorIs(t, err, grpcapi.ErrCannotLeaveAsLeader{}, "the servicer's error must stay reachable")
-
-	// A failure gRPC has no class for is Internal on both.
-	unclassified := errors.New("raft: disk full")
-	assert.Equal(t, codes.Internal, status.Code(ErrClusterServicerFailed{Cause: unclassified}))
+	// A failure gRPC has no class for is Internal.
+	unclassified := errors.New("registry: disk full")
 	assert.Equal(t, codes.Internal, status.Code(ErrRegistryServiceFailed{Cause: unclassified}))
 }

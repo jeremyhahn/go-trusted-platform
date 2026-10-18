@@ -191,6 +191,8 @@ var computeToolCases = []computeToolCase{
 	{"vm_reboot", "vm", "write", map[string]interface{}{"id": "vm-1"}, "VMReboot"},
 	{"vm_snapshot_create", "vm", "write", map[string]interface{}{"vm_id": "vm-1", "name": "snap-1"}, "VMSnapshotCreate"},
 	{"vm_snapshot_list", "vm", "read", map[string]interface{}{"vm_id": "vm-1"}, "VMSnapshotList"},
+	// vm_snapshot_get has no gRPC twin; it reads one entry of ListSnapshots.
+	{"vm_snapshot_get", "vm", "read", map[string]interface{}{"vm_id": "vm-1", "snapshot_id": "snap-1"}, "VMSnapshotGet"},
 	{"vm_snapshot_restore", "vm", "write", map[string]interface{}{"vm_id": "vm-1", "snapshot_id": "snap-1"}, "VMSnapshotRestore"},
 	{"vm_snapshot_delete", "vm", "delete", map[string]interface{}{"vm_id": "vm-1", "snapshot_id": "snap-1"}, "VMSnapshotDelete"},
 	{"vm_attest", "vm", "read", map[string]interface{}{"vm_id": "vm-1", "nonce": "bm9uY2U="}, "VMAttest"},
@@ -281,20 +283,5 @@ func TestComputeToolsRefuseWithoutTheirScope(t *testing.T) {
 			require.NotNil(t, resp.Error, "%s must be refused without %s:%s", tc.tool, tc.resource, tc.action)
 			assert.Empty(t, provider.calls, "a refused call must not reach the provider")
 		})
-	}
-}
-
-// TestComputeLifecycleToolsStayRefused: vm_update, vm_suspend, vm_resume and
-// vm_snapshot_get have no gRPC twin, so each is refused as unclassified even
-// by a backend that grants everything.
-func TestComputeLifecycleToolsStayRefused(t *testing.T) {
-	checker := NewAuthorizationChecker(allowAllAuthService{}, nil)
-
-	for _, tool := range []string{
-		"vm_update", "vm_suspend", "vm_resume", "vm_snapshot_get",
-	} {
-		_, err := checker.AuthorizeTool(context.Background(), tool, "any-token")
-		require.NotNil(t, err, "%s must stay refused", tool)
-		assert.Equal(t, AuthErrorToolNotClassified, err.Type, "%s", tool)
 	}
 }

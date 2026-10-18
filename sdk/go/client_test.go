@@ -438,6 +438,15 @@ func TestPlatformClient_ServiceClients(t *testing.T) {
 	if c.LUKS() != nil {
 		t.Error("LUKS() should return nil with nil services")
 	}
+	if c.Invitation() != nil {
+		t.Error("Invitation() should return nil with nil services")
+	}
+	if c.EAB() != nil {
+		t.Error("EAB() should return nil with nil services")
+	}
+	if c.Switch() != nil {
+		t.Error("Switch() should return nil with nil services")
+	}
 	if c.ConfigDelivery() != nil {
 		t.Error("ConfigDelivery() should return nil with nil services")
 	}
@@ -520,6 +529,98 @@ func TestPlatformClient_LUKSReturnsTheConfiguredServiceClient(t *testing.T) {
 
 	if got := c.LUKS(); got != platformv1.LUKSServiceClient(want) {
 		t.Errorf("LUKS() = %v, want the client held by ServiceClients", got)
+	}
+}
+
+// recordingConn records the full method name of the last unary call.
+type recordingConn struct {
+	grpc.ClientConnInterface
+	method string
+}
+
+func (r *recordingConn) Invoke(_ context.Context, method string, _, _ any, _ ...grpc.CallOption) error {
+	r.method = method
+	return nil
+}
+
+func TestPlatformClient_InvitationCallsTheInvitationService(t *testing.T) {
+	conn := &recordingConn{}
+	c := newClientFromAdapter(&connAdapter{conn: conn}, ProtocolGRPC, nil)
+
+	if _, err := c.Invitation().GetInvitation(context.Background(), &platformv1.GetInvitationRequest{InvitationId: 1}); err != nil {
+		t.Fatalf("GetInvitation: %v", err)
+	}
+	if conn.method != platformv1.InvitationService_GetInvitation_FullMethodName {
+		t.Errorf("Invitation() called %q, want %q", conn.method, platformv1.InvitationService_GetInvitation_FullMethodName)
+	}
+
+	if c := newClientFromAdapter(&connAdapter{}, ProtocolGRPC, nil); c.Invitation() != nil {
+		t.Error("Invitation() must be nil without a connection")
+	}
+}
+
+func TestPlatformClient_EABCallsTheEABService(t *testing.T) {
+	conn := &recordingConn{}
+	c := newClientFromAdapter(&connAdapter{conn: conn}, ProtocolGRPC, nil)
+
+	if _, err := c.EAB().ListCredentials(context.Background(), &platformv1.ListEABCredentialsRequest{}); err != nil {
+		t.Fatalf("ListCredentials: %v", err)
+	}
+	if conn.method != platformv1.EABService_ListCredentials_FullMethodName {
+		t.Errorf("EAB() called %q, want %q", conn.method, platformv1.EABService_ListCredentials_FullMethodName)
+	}
+
+	if c := newClientFromAdapter(&connAdapter{}, ProtocolGRPC, nil); c.EAB() != nil {
+		t.Error("EAB() must be nil without a connection")
+	}
+}
+
+// methodRecordingConn records the method of every call and answers err.
+type methodRecordingConn struct {
+	grpc.ClientConnInterface
+	methods []string
+	err     error
+}
+
+func (c *methodRecordingConn) Invoke(_ context.Context, method string, _, _ interface{}, _ ...grpc.CallOption) error {
+	c.methods = append(c.methods, method)
+	return c.err
+}
+
+// Switch() is built on the adapter connection, so its calls reach the
+// transport under the SwitchService method names; without a connection it
+// is nil.
+func TestPlatformClient_SwitchIsBuiltOnTheConnection(t *testing.T) {
+	conn := &methodRecordingConn{}
+	c := newClientFromAdapter(&connAdapter{conn: conn}, ProtocolMCP, nil)
+	if c.Switch() == nil {
+		t.Fatal("Switch() must be built on the adapter connection")
+	}
+
+	if _, err := c.Switch().ListPorts(context.Background(), &platformv1.ListSwitchPortsRequest{SwitchName: "tor-1"}); err != nil {
+		t.Fatalf("ListPorts: %v", err)
+	}
+	if _, err := c.Switch().DisablePort(context.Background(), &platformv1.DisableSwitchPortRequest{SwitchName: "tor-1", PortName: "Eth1/3"}); err != nil {
+		t.Fatalf("DisablePort: %v", err)
+	}
+	want := []string{platformv1.SwitchService_ListPorts_FullMethodName, platformv1.SwitchService_DisablePort_FullMethodName}
+	if len(conn.methods) != len(want) || conn.methods[0] != want[0] || conn.methods[1] != want[1] {
+		t.Errorf("calls reached the transport as %v, want %v", conn.methods, want)
+	}
+
+	if c := newClientFromAdapter(&connAdapter{}, ProtocolMCP, nil); c.Switch() != nil {
+		t.Error("Switch() must be nil without a connection")
+	}
+}
+
+// A transport failure reaches the Switch() caller unchanged.
+func TestPlatformClient_SwitchReturnsTheTransportError(t *testing.T) {
+	transportErr := errors.New("transport down")
+	c := newClientFromAdapter(&connAdapter{conn: &methodRecordingConn{err: transportErr}}, ProtocolEmbedded, nil)
+
+	_, err := c.Switch().EnablePort(context.Background(), &platformv1.EnableSwitchPortRequest{SwitchName: "tor-1", PortName: "Eth1/3"})
+	if !errors.Is(err, transportErr) {
+		t.Fatalf("EnablePort error = %v, want the transport error", err)
 	}
 }
 

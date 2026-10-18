@@ -15,11 +15,13 @@ package metrics
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -78,11 +80,8 @@ func TestCollector_StartStop(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, collector.IsRunning())
 
-	// Wait a bit for metrics collection
-	time.Sleep(200 * time.Millisecond)
-
-	// Verify daemon start time was set
-	// (We can't easily verify the actual value without accessing the metric)
+	// Start records the daemon start time before it returns.
+	assert.Equal(t, float64(collector.startTime.Unix()), testutil.ToFloat64(collector.metrics.DaemonStartTime))
 
 	// Stop collector
 	err = collector.Stop(ctx)
@@ -144,9 +143,7 @@ func TestCollector_MetricsEndpoint(t *testing.T) {
 		}
 	}()
 
-	// Wait for server to start
-	time.Sleep(150 * time.Millisecond)
-
+	// Start binds the listener before it returns.
 	// Test metrics endpoint
 	resp, err := http.Get("http://" + collector.Address() + config.Path)
 	require.NoError(t, err)
@@ -177,9 +174,7 @@ func TestCollector_HealthEndpoint(t *testing.T) {
 		}
 	}()
 
-	// Wait for server to start
-	time.Sleep(150 * time.Millisecond)
-
+	// Start binds the listener before it returns.
 	// Test health endpoint
 	resp, err := http.Get("http://" + collector.Address() + "/health")
 	require.NoError(t, err)
@@ -247,22 +242,40 @@ func TestCollector_RuntimeMetricsCollection(t *testing.T) {
 
 	collector, err := NewCollector(config)
 	require.NoError(t, err)
+	tick := make(chan time.Time)
+	collector.tick = tick
 
 	ctx := context.Background()
 
 	err = collector.Start(ctx)
 	require.NoError(t, err)
-	defer func() {
-		if err := collector.Stop(ctx); err != nil {
-			t.Logf("cleanup: %v", err)
-		}
-	}()
+	assert.Zero(t, testutil.ToFloat64(collector.metrics.GoroutineCount), "nothing collected before the first tick")
 
-	// Wait for at least one collection cycle
-	time.Sleep(1200 * time.Millisecond)
+	// The tick channel is unbuffered: the send returns once the loop has
+	// taken it, and Stop waits for the loop, so the collection is complete.
+	// Stopping with that collection in flight once deadlocked Stop.
+	tick <- time.Now()
+	require.NoError(t, collector.Stop(ctx))
 
-	// Metrics should have been collected
-	// (We can't easily verify values without scraping the registry)
+	assert.Positive(t, testutil.ToFloat64(collector.metrics.GoroutineCount))
+}
+
+func TestCollector_StartFailsWhenAddressInUse(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer occupied.Close()
+
+	config := DefaultConfig()
+	config.Host = "127.0.0.1"
+	config.Port = occupied.Addr().(*net.TCPAddr).Port
+
+	collector, err := NewCollector(config)
+	require.NoError(t, err)
+
+	err = collector.Start(context.Background())
+	var wrapped *WrappedError
+	require.ErrorAs(t, err, &wrapped)
+	assert.False(t, collector.IsRunning(), "a collector that could not bind is not running")
 }
 
 func TestCollector_DisabledRuntimeMetrics(t *testing.T) {
@@ -285,7 +298,12 @@ func TestCollector_DisabledRuntimeMetrics(t *testing.T) {
 	}()
 
 	// Collection loop should not be started when both are disabled
-	time.Sleep(100 * time.Millisecond)
+	assert.False(t, collector.collectionActive)
+	select {
+	case <-collector.stoppedChan:
+	default:
+		t.Fatal("with no collection loop, Start must close stoppedChan itself")
+	}
 }
 
 func TestCollector_CollectMetrics(t *testing.T) {

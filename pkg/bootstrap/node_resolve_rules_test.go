@@ -95,6 +95,34 @@ func TestMergedAddresses_Malformed(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestMergedIDevID(t *testing.T) {
+	merged := "tpm:\n  idevid:\n    model: Raspberry Pi 4 Model B\n    serial: rpi4-compute-01\n    handle: 0x81020000\n"
+	idevid, err := mergedIDevID(merged)
+	require.NoError(t, err)
+	assert.Equal(t, nodeIDevID{Model: "Raspberry Pi 4 Model B", Serial: "rpi4-compute-01"}, idevid)
+
+	none, err := mergedIDevID("os:\n  hostname: n1\n")
+	require.NoError(t, err)
+	assert.Equal(t, nodeIDevID{}, none, "a config without tpm.idevid names no device")
+}
+
+func TestMergedIDevID_Malformed(t *testing.T) {
+	_, err := mergedIDevID("tpm:\n  idevid: not-a-map\n")
+	assert.Error(t, err)
+}
+
+func TestKeepsConfigSerial(t *testing.T) {
+	for model, want := range map[string]bool{
+		BootModelDiskless:    false,
+		BootModelDisklessNBD: true,
+		BootModelSD:          true,
+	} {
+		n := &NodeConfig{Platform: PlatformRaspberryPi, BootModel: model}
+		assert.Equal(t, want, keepsConfigSerial(n), model)
+	}
+	assert.True(t, keepsConfigSerial(&NodeConfig{}), "a generic server keeps its config's serial")
+}
+
 func TestParseNodeAddress(t *testing.T) {
 	addr, ok := parseNodeAddress("10.4.1.20/24")
 	require.True(t, ok)

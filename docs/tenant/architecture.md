@@ -701,8 +701,8 @@ themselves an owner — the same reasoning that made the invitation handlers rea
 their tenant from the verified session rather than from request-supplied JSON.
 
 For the same reason it is **not** on the `InvitationServicer` interface. Every
-holder of that interface serves tenant-scoped callers — the gRPC service and MCP
-tool provider in `pkg/api/daemon`, the WebAuthn handler, `TenantUserService` —
+holder of that interface serves tenant-scoped callers — the gRPC service in
+`pkg/api/daemon`, which QUIC and MCP call too, the WebAuthn handler, `TenantUserService` —
 so putting owner-minting there would hand the capability to all of them at once.
 A request field and an interface method are the same widening in two shapes.
 Ownership is conferred only by a call site holding the concrete

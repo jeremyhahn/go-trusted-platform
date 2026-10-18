@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
@@ -31,20 +32,21 @@ import (
 )
 
 // identityRecordingTPM is the in-memory IDevID test TPM that also counts the
-// certificate deletions it is asked for.
+// certificate deletions it is asked for. A transport handler's goroutine
+// counts a deletion while the test reads the count.
 type identityRecordingTPM struct {
 	*idevIDTestTPM
-	idevidCertDeletes int
-	iakCertDeletes    int
+	idevidCertDeletes atomic.Int32
+	iakCertDeletes    atomic.Int32
 }
 
 func (r *identityRecordingTPM) DeleteIDevIDCertificate() error {
-	r.idevidCertDeletes++
+	r.idevidCertDeletes.Add(1)
 	return r.idevIDTestTPM.DeleteIDevIDCertificate()
 }
 
 func (r *identityRecordingTPM) DeleteIAKCertificate() error {
-	r.iakCertDeletes++
+	r.iakCertDeletes.Add(1)
 	return r.idevIDTestTPM.DeleteIAKCertificate()
 }
 
@@ -350,8 +352,8 @@ func TestMCPIDevIDDelete_RefusesAndKeepsCertificate(t *testing.T) {
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, "IAK", refusal.Key)
 
-	assert.Zero(t, tpm.idevidCertDeletes, "the refusal must not touch the IDevID certificate")
-	assert.Zero(t, tpm.iakCertDeletes, "the refusal must not touch the IAK certificate")
+	assert.Zero(t, tpm.idevidCertDeletes.Load(), "the refusal must not touch the IDevID certificate")
+	assert.Zero(t, tpm.iakCertDeletes.Load(), "the refusal must not touch the IAK certificate")
 }
 
 func TestMCPIDevID_ServiceNotConfigured(t *testing.T) {

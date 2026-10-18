@@ -34,6 +34,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/swtpm"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 )
 
 // TestInfrastructure holds all infrastructure components for the test
@@ -437,14 +438,11 @@ func createTestLogger(t *testing.T) *logging.Logger {
 func waitForSocket(t *testing.T, socketPath string, timeout time.Duration) error {
 	t.Helper()
 
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(socketPath); err == nil {
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
+	exists := func() bool {
+		_, err := os.Stat(socketPath)
+		return err == nil
 	}
-	return fmt.Errorf("socket not created: %s", socketPath)
+	return testenv.WaitUntil(t.Context(), timeout, "socket "+socketPath+" created", exists)
 }
 
 func checkKVMAvailable() bool {

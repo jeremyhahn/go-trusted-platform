@@ -328,10 +328,6 @@ see [engineering.md](engineering.md) §6.
   dispatch registry and three backends — and **nothing in the platform imports
   it**. `pkg/bmc/CLAUDE.md` calls it "preserved scaffolding, no real
   implementation until RoT-capable hardware available".
-- **It does not expose a BMC surface on the embedded transport.**
-  `ServiceRegistry` in `sdk/go/transport/embedded/adapter.go` has no `BMC`
-  field, so `--transport embedded` cannot reach any BMC capability. Recorded as
-  a Tier-1 gap in [api.md](api.md), not chosen.
 
 ## 7. Vendor quirks — how a board gets supported
 
@@ -485,7 +481,7 @@ code as of 2026-08-18.
 | `enrollment:`, `certificate:`, `key:`, `backend:`, `allow_cgi_fallback` shown as **device-profile** fields | `configuration.md` | `entities.BMCConfig` has exactly five fields: `address`, `port`, `username`, `password`, `protocol`. Those other keys belong to `bmc.Config`, which is populated from the top-level `bmc:` block of the platformd YAML — not from a device profile |
 | `acme.request.authz_type` / `challenge_type` | `configuration.md` | The validated field is `Certificate.ACME.Challenge`; `validateCertBlock` requires it to equal `dns-01` |
 | REST endpoint table lists 13 routes, omitting cert and user routes | `operations.md` | The daemon registers 20 route entries covering 17 distinct paths, including `GET/PUT /bmc/{profileID}/cert` and five `/users` routes |
-| "All five transports expose the enrollment operation" | `operations.md` | Four do: REST, gRPC, Unix (gRPC over UDS), QUIC, MCP — that is five *listed*, but **embedded is a sixth transport and has no BMC route at all** (`ServiceRegistry` has no `BMC` field). Enrollment is a Tier-1 capability missing one required transport |
+| "All five transports expose the enrollment operation" | `operations.md` | Five were listed — REST, gRPC, Unix (gRPC over UDS), QUIC, MCP — but there are six: embedded carries enrollment too, through `ServiceRegistry.BMC` ([api.md](api.md) §2) |
 | "automatic 90-day password rotation" as a shipped capability | `README.md` | `DefaultRotationInterval` is defined and `RotationEngine.RotateOnce` works, but no scheduler job registers rotation. Only *certificate* renewal is scheduled (`RegisterCertRenewal`) |
 | `--output-format json` | `operations.md` | The global output flag is `--output` / `-o`; `platformctl` uses `cli.CommonFlags.OutputFormat` behind it |
 | `platformctl bmc cert restore --profile-id 7 --factory` documented under "Factory Certificate Restore" only | `operations.md` | Correct, and worth keeping: `--factory` is a required explicit flag with no default, present solely to make accidental invocation impossible |

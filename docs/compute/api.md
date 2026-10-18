@@ -96,15 +96,15 @@ streams (§5).
 | Start VM | `POST /api/v1/compute/vms/{id}/start` | `StartVM` | `OpVMStart` (`0x62`) | `vm_start` | ✅ |
 | Stop VM | `POST /api/v1/compute/vms/{id}/stop` | `StopVM` | `OpVMStop` (`0x63`) | `vm_stop` | ✅ |
 | Reboot VM | `POST /api/v1/compute/vms/{id}/reboot` | `RebootVM` | `OpVMRestart` (`0xB6`) | `vm_reboot` | ✅ |
-| Suspend VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpVMSuspend` (`0xB7`) | `vm_suspend` (refused, §7) | — |
-| Resume VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpVMResume` (`0xB8`) | `vm_resume` (refused, §7) | — |
-| Update VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `vm_update` (refused, §7) | — |
+| Suspend VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpVMSuspend` (`0xB7`) | `MISSING — docs/13 G7` | — |
+| Resume VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpVMResume` (`0xB8`) | `MISSING — docs/13 G7` | — |
+| Update VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 | Get VM state | `MISSING — docs/13 G7` | (via `GetVM`) | `OpVMGetState` (`0x6A`) | `MISSING — docs/13 G7` | — |
 | Activate VM | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpVMActivate` (`0x68`) | `MISSING — docs/13 G7` | — |
 
-**Suspend and resume have no REST and no gRPC route.** They exist on QUIC and
-MCP only. That is a plain asymmetry in the most-used capability set — an
-operator on REST can stop a VM but not suspend it.
+**Suspend and resume have no REST, gRPC or MCP route.** They exist on QUIC
+only. That is a plain asymmetry in the most-used capability set — an operator
+on REST can stop a VM but not suspend it.
 
 ---
 
@@ -120,7 +120,7 @@ QUIC serves these as **sub-opcodes under `OpVMExtendedCategory` (`0x69`)** — s
 | Resize disk | `PATCH /api/v1/compute/vms/{id}/disks/{diskId}` | `ResizeDisk` | `OpVMResizeDisk` (`0xCF`) | `vm_disk_resize` | ✅ |
 | Create snapshot | `POST /api/v1/compute/vms/{id}/snapshots` | `CreateSnapshot` | `MISSING — docs/13 G7` | `vm_snapshot_create` | ✅ |
 | List snapshots | `GET /api/v1/compute/vms/{id}/snapshots` | `ListSnapshots` | `MISSING — docs/13 G7` | `vm_snapshot_list` | ✅ |
-| Get snapshot | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `vm_snapshot_get` (refused, §7) | — |
+| Get snapshot | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `vm_snapshot_get` | — |
 | Delete snapshot | `DELETE /api/v1/compute/vms/{id}/snapshots/{snapshotId}` | `DeleteSnapshot` | `MISSING — docs/13 G7` | `vm_snapshot_delete` | ✅ |
 | Restore snapshot | `POST /api/v1/compute/vms/{id}/snapshots/{snapshotId}/restore` | `RestoreSnapshot` | `MISSING — docs/13 G7` | `vm_snapshot_restore` | ✅ |
 | Migrate VM | `POST /api/v1/compute/vms/{id}/migrate` | `MigrateVM` | `OpVMMigrate` (`0xD0`) | `vm_migrate` | ✅ |
@@ -251,7 +251,7 @@ backend:
 | `container:read` | `container_get`, `container_list`, `container_logs`, `container_metrics`, `container_attest` |
 | `container:write` | `container_create`, `container_start`, `container_stop`, `container_exec` |
 | `container:delete` | `container_remove` |
-| `vm:read` | `vm_list`, `vm_get`, `vm_snapshot_list`, `vm_attest`, `vm_attest_verify`, `vm_metrics`, `vm_logs` |
+| `vm:read` | `vm_list`, `vm_get`, `vm_snapshot_list`, `vm_snapshot_get`, `vm_attest`, `vm_attest_verify`, `vm_metrics`, `vm_logs` |
 | `vm:write` | `vm_create`, `vm_start`, `vm_stop`, `vm_reboot`, `vm_snapshot_create`, `vm_snapshot_restore`, `vm_disk_attach`, `vm_disk_detach`, `vm_disk_resize`, `vm_migrate` |
 | `vm:delete` | `vm_delete`, `vm_snapshot_delete` |
 
@@ -274,11 +274,10 @@ Unimplemented for a missing container capability. `CreateVM`, `StartVM`,
 disk RPCs do, so an unknown VM is NotFound there too; any other failure
 stays Internal.
 
-**Four tools stay refused**, marked *(refused, §7)* in the tables above.
-`AuthorizeTool` answers `AuthErrorToolNotClassified` for every caller.
-`vm_update`, `vm_suspend` and `vm_resume` have no gRPC twin to take a scope
-from and no executor behind them; `vm_snapshot_get` has no gRPC or REST twin
-whose scope it could take. Giving them routes is docs/13 G7 work.
+`vm_snapshot_get` has no gRPC or REST twin. It reads one entry of what
+`ListSnapshots` returns, so it takes `ListSnapshots`' `vm:read`. #304 deleted
+`vm_update`, `vm_suspend` and `vm_resume`: they had no twin and no executor
+behind them. Giving those capabilities routes is docs/13 G7 work.
 
 No transport scopes a VM or container to a tenant. `compute.Instance` has no
 tenant field, and neither `ComputeService` nor the MCP tools filter by tenant.

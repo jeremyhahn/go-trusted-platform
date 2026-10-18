@@ -14,9 +14,11 @@
 //go:build integration
 
 // Package quic provides integration tests for the QUIC protocol handlers.
-// These tests require a running QUIC server and are executed via:
+// These tests require the platformd QUIC server that the devcontainer runner
+// (build/docker/devcontainer/run-integration-tests.sh) starts, and are
+// executed via:
 //
-//	make integration-test-quic
+//	make integration-test
 //
 // The tests verify end-to-end functionality of all QUIC service handlers
 // including CA, vTPM, DNS, SDN, KMS, IAM, and Device operations.
@@ -47,13 +49,6 @@ type TestConfig struct {
 	Token    string
 }
 
-// skipIfNotIntegration skips the test if INTEGRATION_TEST env var is not set.
-func skipIfNotIntegration(t *testing.T) {
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
-
 // getTestConfig returns the test configuration from environment variables.
 func getTestConfig() *TestConfig {
 	addr := os.Getenv("QUIC_SERVER_ADDR")
@@ -70,6 +65,7 @@ func getTestConfig() *TestConfig {
 // newTestClient creates a new test client with the standard configuration.
 // If the server is not available, it skips the test instead of failing.
 func newTestClient(t *testing.T, cfg *TestConfig) (*TestClient, func()) {
+	t.Helper()
 	logger := logging.DefaultLogger()
 
 	opts := []TestClientOption{
@@ -88,7 +84,7 @@ func newTestClient(t *testing.T, cfg *TestConfig) (*TestClient, func()) {
 
 	err := client.Connect(ctx)
 	if err != nil {
-		t.Skipf("QUIC server not available at %s: %v (start platformd with --enable-quic to run these tests)", cfg.QUICAddr, err)
+		t.Fatal(ErrQUICServerRequired{Address: cfg.QUICAddr, Cause: err})
 	}
 
 	cleanup := func() {
@@ -103,7 +99,6 @@ func newTestClient(t *testing.T, cfg *TestConfig) (*TestClient, func()) {
 // =============================================================================
 
 func TestQUICHealth(t *testing.T) {
-	skipIfNotIntegration(t)
 	cfg := getTestConfig()
 	client, cleanup := newTestClient(t, cfg)
 	defer cleanup()
@@ -143,7 +138,6 @@ func TestQUICHealth(t *testing.T) {
 // =============================================================================
 
 func TestQUICCA(t *testing.T) {
-	skipIfNotIntegration(t)
 	cfg := getTestConfig()
 	client, cleanup := newTestClient(t, cfg)
 	defer cleanup()
@@ -157,13 +151,13 @@ func TestQUICCA(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("CA service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "CA"})
 				}
 			}
 			t.Fatalf("CA Info request failed: %v", err)
 		}
 		if resp.Status == quicwire.StatusUnavailable {
-			t.Skip("CA service not available")
+			t.Fatal(ErrServiceUnavailable{Service: "CA"})
 		}
 		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
@@ -179,7 +173,7 @@ func TestQUICCA(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("CA service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "CA"})
 				}
 			}
 		}
@@ -194,13 +188,13 @@ func TestQUICCA(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("CA service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "CA"})
 				}
 			}
 			t.Fatalf("CA List request failed: %v", err)
 		}
 		if resp.Status == quicwire.StatusUnavailable {
-			t.Skip("CA service not available")
+			t.Fatal(ErrServiceUnavailable{Service: "CA"})
 		}
 		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
@@ -211,13 +205,13 @@ func TestQUICCA(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("CA service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "CA"})
 				}
 			}
 			t.Fatalf("CA Bundle request failed: %v", err)
 		}
 		if resp.Status == quicwire.StatusUnavailable {
-			t.Skip("CA service not available")
+			t.Fatal(ErrServiceUnavailable{Service: "CA"})
 		}
 		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
@@ -228,7 +222,6 @@ func TestQUICCA(t *testing.T) {
 // =============================================================================
 
 func TestQUICVTPM(t *testing.T) {
-	skipIfNotIntegration(t)
 	cfg := getTestConfig()
 	client, cleanup := newTestClient(t, cfg)
 	defer cleanup()
@@ -243,7 +236,7 @@ func TestQUICVTPM(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("vTPM service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "vTPM"})
 				}
 			}
 			t.Fatalf("vTPM List request failed: %v", err)
@@ -261,7 +254,7 @@ func TestQUICVTPM(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("vTPM service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "vTPM"})
 				}
 			}
 		}
@@ -283,7 +276,7 @@ func TestQUICVTPM(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("vTPM service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "vTPM"})
 				}
 			}
 		}
@@ -301,7 +294,7 @@ func TestQUICVTPM(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("vTPM service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "vTPM"})
 				}
 			}
 		}
@@ -316,13 +309,13 @@ func TestQUICVTPM(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("vTPM service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "vTPM"})
 				}
 			}
 			t.Fatalf("vTPM ListTemplates request failed: %v", err)
 		}
 		if resp.Status == quicwire.StatusUnavailable {
-			t.Skip("vTPM service not available")
+			t.Fatal(ErrServiceUnavailable{Service: "vTPM"})
 		}
 		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
@@ -333,7 +326,6 @@ func TestQUICVTPM(t *testing.T) {
 // =============================================================================
 
 func TestQUICDNS(t *testing.T) {
-	skipIfNotIntegration(t)
 	cfg := getTestConfig()
 	client, cleanup := newTestClient(t, cfg)
 	defer cleanup()
@@ -458,7 +450,6 @@ func TestQUICDNS(t *testing.T) {
 // =============================================================================
 
 func TestQUICSDN(t *testing.T) {
-	skipIfNotIntegration(t)
 	cfg := getTestConfig()
 	client, cleanup := newTestClient(t, cfg)
 	defer cleanup()
@@ -476,7 +467,7 @@ func TestQUICSDN(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("SDN service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "SDN"})
 				}
 			}
 			t.Fatalf("SDN ListBridges request failed: %v", err)
@@ -497,13 +488,13 @@ func TestQUICSDN(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("SDN service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "SDN"})
 				}
 			}
 			t.Fatalf("SDN ListPolicies request failed: %v", err)
 		}
 		if resp.Status == quicwire.StatusUnavailable {
-			t.Skip("SDN service not available")
+			t.Fatal(ErrServiceUnavailable{Service: "SDN"})
 		}
 		t.Log("SDN ListPolicies completed successfully")
 		assert.Equal(t, quicwire.StatusOK, resp.Status)
@@ -522,7 +513,7 @@ func TestQUICSDN(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("SDN service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "SDN"})
 				}
 			}
 		}
@@ -545,7 +536,7 @@ func TestQUICSDN(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("SDN service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "SDN"})
 				}
 			}
 		}
@@ -568,7 +559,7 @@ func TestQUICSDN(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("SDN service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "SDN"})
 				}
 			}
 		}
@@ -588,13 +579,13 @@ func TestQUICSDN(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("SDN service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "SDN"})
 				}
 			}
 			t.Fatalf("SDN GetMetrics request failed: %v", err)
 		}
 		if resp.Status == quicwire.StatusUnavailable {
-			t.Skip("SDN service not available")
+			t.Fatal(ErrServiceUnavailable{Service: "SDN"})
 		}
 		t.Log("SDN GetMetrics completed successfully")
 		assert.Equal(t, quicwire.StatusOK, resp.Status)
@@ -606,7 +597,6 @@ func TestQUICSDN(t *testing.T) {
 // =============================================================================
 
 func TestQUICKMS(t *testing.T) {
-	skipIfNotIntegration(t)
 	cfg := getTestConfig()
 	client, cleanup := newTestClient(t, cfg)
 	defer cleanup()
@@ -621,7 +611,7 @@ func TestQUICKMS(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("KMS service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "KMS"})
 				}
 			}
 			t.Fatalf("KMS ListKeys request failed: %v", err)
@@ -637,7 +627,7 @@ func TestQUICKMS(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("KMS service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "KMS"})
 				}
 			}
 			t.Fatalf("KMS BackendStatus request failed: %v", err)
@@ -655,7 +645,7 @@ func TestQUICKMS(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("KMS service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "KMS"})
 				}
 			}
 		}
@@ -674,7 +664,7 @@ func TestQUICKMS(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("KMS service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "KMS"})
 				}
 			}
 		}
@@ -693,7 +683,7 @@ func TestQUICKMS(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("KMS service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "KMS"})
 				}
 			}
 		}
@@ -718,7 +708,7 @@ func TestQUICKMS(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("KMS service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "KMS"})
 				}
 			}
 			t.Fatalf("KMS GenerateRandom request failed: %v", err)
@@ -732,7 +722,6 @@ func TestQUICKMS(t *testing.T) {
 // =============================================================================
 
 func TestQUICIAM(t *testing.T) {
-	skipIfNotIntegration(t)
 	cfg := getTestConfig()
 	client, cleanup := newTestClient(t, cfg)
 	defer cleanup()
@@ -755,7 +744,7 @@ func TestQUICIAM(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("IAM service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "IAM"})
 				}
 			}
 			t.Fatalf("IAM ListUsers request failed: %v", err)
@@ -775,7 +764,7 @@ func TestQUICIAM(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("IAM service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "IAM"})
 				}
 			}
 			t.Fatalf("IAM ListRoles request failed: %v", err)
@@ -795,7 +784,7 @@ func TestQUICIAM(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("IAM service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "IAM"})
 				}
 			}
 		}
@@ -814,7 +803,7 @@ func TestQUICIAM(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("IAM service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "IAM"})
 				}
 			}
 		}
@@ -836,7 +825,7 @@ func TestQUICIAM(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("IAM service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "IAM"})
 				}
 			}
 			t.Fatalf("IAM CheckPermission request failed: %v", err)
@@ -852,7 +841,7 @@ func TestQUICIAM(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("IAM service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "IAM"})
 				}
 			}
 		}
@@ -867,7 +856,6 @@ func TestQUICIAM(t *testing.T) {
 // =============================================================================
 
 func TestQUICDevice(t *testing.T) {
-	skipIfNotIntegration(t)
 	cfg := getTestConfig()
 	client, cleanup := newTestClient(t, cfg)
 	defer cleanup()
@@ -886,7 +874,7 @@ func TestQUICDevice(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("Device service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "Device"})
 				}
 			}
 			t.Fatalf("Device List request failed: %v", err)
@@ -901,7 +889,7 @@ func TestQUICDevice(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("Device profile service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "Device profile"})
 				}
 			}
 			t.Fatalf("Device ListProfiles request failed: %v", err)
@@ -924,7 +912,7 @@ func TestQUICDevice(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("Device service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "Device"})
 				}
 			}
 		}
@@ -940,7 +928,7 @@ func TestQUICDevice(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("Device service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "Device"})
 				}
 			}
 		}
@@ -956,7 +944,7 @@ func TestQUICDevice(t *testing.T) {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
 				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
-					t.Skip("Device profile service not available")
+					t.Fatal(ErrServiceUnavailable{Service: "Device profile"})
 				}
 			}
 		}
@@ -971,7 +959,6 @@ func TestQUICDevice(t *testing.T) {
 // =============================================================================
 
 func TestQUICErrorHandling(t *testing.T) {
-	skipIfNotIntegration(t)
 	cfg := getTestConfig()
 	client, cleanup := newTestClient(t, cfg)
 	defer cleanup()
@@ -1008,7 +995,6 @@ func TestQUICErrorHandling(t *testing.T) {
 // =============================================================================
 
 func TestQUICConnection(t *testing.T) {
-	skipIfNotIntegration(t)
 	cfg := getTestConfig()
 
 	// Check if server is available at the start
@@ -1016,7 +1002,7 @@ func TestQUICConnection(t *testing.T) {
 	checkCtx, checkCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := checkClient.Connect(checkCtx); err != nil {
 		checkCancel()
-		t.Skipf("QUIC server not available at %s: %v (start platformd with --enable-quic to run these tests)", cfg.QUICAddr, err)
+		t.Fatal(ErrQUICServerRequired{Address: cfg.QUICAddr, Cause: err})
 	}
 	checkClient.Close()
 	checkCancel()

@@ -497,11 +497,23 @@ func (p *MCPServiceProvider) LUKSRemoveKey(ctx context.Context, args map[string]
 	return map[string]interface{}{"removed": true}, nil
 }
 
-// LUKSTestUnlock implements mcp.Phase35Provider by refusing: the request
-// carries no key and the backend only checks that the keyslot exists, so
-// any "unlocked" answer would be unverified. It never reaches the backend.
-func (p *MCPServiceProvider) LUKSTestUnlock(_ context.Context, _ map[string]interface{}) (interface{}, error) {
-	return nil, ErrLUKSOperation{Cause: ErrLUKSTestUnlockUnverified}
+// LUKSTestUnlock implements mcp.Phase35Provider. Like gRPC, REST and QUIC
+// it asks the service, which reports whether the keyslot exists; no key
+// material is tried.
+func (p *MCPServiceProvider) LUKSTestUnlock(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	svc, err := p.luksService()
+	if err != nil {
+		return nil, err
+	}
+	req := &LUKSTestUnlockRequest{
+		Device: mapGetString(args, "device"),
+		Slot:   mapGetInt32(args, "slot"),
+	}
+	ok, err := svc.TestUnlock(ctx, req)
+	if err != nil {
+		return nil, ErrLUKSOperation{Cause: err}
+	}
+	return map[string]bool{"unlocked": ok}, nil
 }
 
 // LUKSChangePassphrase implements mcp.Phase35Provider.

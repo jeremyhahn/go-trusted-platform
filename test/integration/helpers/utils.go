@@ -88,26 +88,6 @@ func Retry(ctx context.Context, cfg RetryConfig, operation func() error) error {
 	return fmt.Errorf("operation failed after %d attempts: %w", cfg.MaxAttempts, lastErr)
 }
 
-// WaitFor waits for a condition to become true
-func WaitFor(ctx context.Context, timeout time.Duration, condition func() bool) error {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			if condition() {
-				return nil
-			}
-		}
-	}
-}
-
 // WaitForReady waits for a service to be ready
 func WaitForReady(ctx context.Context, check func() error) error {
 	cfg := DefaultRetryConfig()

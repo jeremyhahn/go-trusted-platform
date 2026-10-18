@@ -625,8 +625,9 @@ func TestClientPushHTTP(t *testing.T) {
 
 	t.Run("context cancellation", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			time.Sleep(100 * time.Millisecond)
-			w.WriteHeader(http.StatusOK)
+			// A server that never answers: only the client giving up
+			// ends this request.
+			<-r.Context().Done()
 		}))
 		defer server.Close()
 

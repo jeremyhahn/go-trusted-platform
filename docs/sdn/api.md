@@ -326,24 +326,27 @@ REST base path `/api/v1/switches`
 
 QUIC reaches the switch service through the **switch category opcode `0xCC`**,
 whose five sub-opcodes are declared in `sdk/go/wire/quicwire/switch_opcodes.go` and
-dispatched by `pkg/api/daemon/quic_switch.go::handleSwitchCategory`.
+routed by `pkg/api/daemon/quic_switch.go::switchQUICHandlers` to the
+`SwitchService` servicer gRPC serves.
 
 | Capability | REST | gRPC / Unix | QUIC (under `0xCC`) | MCP | Embedded |
 |---|---|---|---|---|---|
-| List switch ports | `GET /api/v1/switches/{switch}/ports` | `ListPorts` | `SwitchSubListPorts` (`0x01`) | `switch_list_ports` | `MISSING` — no `Switch` field in `ServiceRegistry` |
-| Get port status | `GET /api/v1/switches/{switch}/ports/{port}` | `GetPortStatus` | `SwitchSubGetPortStatus` (`0x02`) | `switch_port_status` | `MISSING` |
-| Set port VLAN | `POST /api/v1/switches/{switch}/ports/{port}/vlan` | `SetPortVLAN` | `SwitchSubSetPortVLAN` (`0x03`) | `switch_set_vlan` | `MISSING` |
-| Enable port | `POST /api/v1/switches/{switch}/ports/{port}/enable` | `EnablePort` | `SwitchSubEnablePort` (`0x04`) | `switch_enable_port` | `MISSING` |
-| Disable port | `POST /api/v1/switches/{switch}/ports/{port}/disable` | `DisablePort` | `SwitchSubDisablePort` (`0x05`) | `switch_disable_port` | `MISSING` |
+| List switch ports | `GET /api/v1/switches/{switch}/ports` | `ListPorts` | `SwitchSubListPorts` (`0x01`) | `switch_list_ports` | `ServiceRegistry.Switch` |
+| Get port status | `GET /api/v1/switches/{switch}/ports/{port}` | `GetPortStatus` | `SwitchSubGetPortStatus` (`0x02`) | `switch_port_status` | `ServiceRegistry.Switch` |
+| Set port VLAN | `POST /api/v1/switches/{switch}/ports/{port}/vlan` | `SetPortVLAN` | `SwitchSubSetPortVLAN` (`0x03`) | `switch_set_vlan` | `ServiceRegistry.Switch` |
+| Enable port | `POST /api/v1/switches/{switch}/ports/{port}/enable` | `EnablePort` | `SwitchSubEnablePort` (`0x04`) | `switch_enable_port` | `ServiceRegistry.Switch` |
+| Disable port | `POST /api/v1/switches/{switch}/ports/{port}/disable` | `DisablePort` | `SwitchSubDisablePort` (`0x05`) | `switch_disable_port` | `ServiceRegistry.Switch` |
 
 Sub-opcode names use the `SwitchSub*` prefix rather than `Op*`, because they are
 not top-level opcodes. Do not send them at top level — `0x01` at top level is
 `OpLiveness`.
 
-`ServiceRegistry` (`sdk/go/transport/embedded/adapter.go:32`) has 25 fields and
-**`Switch` is not one of them**, so the embedded transport cannot reach physical
-switch management. That is a genuine embedded-mode hole, distinct from the REST
-and QUIC gaps above.
+The MCP tools and the embedded transport's `ServiceRegistry.Switch`
+(`sdk/go/transport/embedded/adapter.go`, `registerSwitchHandlers` in
+`dispatch.go`) both call the daemon's `SwitchGRPCService`, the servicer gRPC
+serves (#704). The SDK reaches every column through `Client.Switch()`; the
+per-transport mapping files are listed in [`docs/sdk/api.md`](../sdk/api.md)
+§1, and the switch surface itself in [`docs/switch/api.md`](../switch/api.md).
 
 ---
 
@@ -359,10 +362,11 @@ daemon routes them to a dedicated handler
 | `0x2E` | Overlay handler |
 | `0x2F` | Gateway handler; sub-opcodes `0x20`–`0x2D` are further routed to the **proxy** handler |
 | `0x3F` | IPAM handler |
+| `0x90` | Cluster; sub-opcodes `0x01`–`0x05`, one per `ClusterService` RPC |
 | `0x99` | Physical TPM2 handler |
 | `0x9A`–`0x9D` | Ceremony, PIV, LUKS, FIDO2 |
 | `0x9E` | Per-tenant barrier |
-| `0x9F` | BMC enrollment |
+| `0x9F` | BMC; sub-opcodes `0x01`–`0x17`, one per `BMCService` RPC |
 
 **This is why opcode values collide.** `OpOverlayStatus`, `OpGatewayStatus` and
 `OpLiveness` are all `0x01`, but the first two are *sub*-opcodes inside their

@@ -30,7 +30,7 @@ const pxeDeadline = 10 * time.Second
 //
 // emitEvent dispatches each handler on its own goroutine (state.go), so an
 // assertion made straight after Transition races the dispatch. Every one of
-// these tests bridged that with time.Sleep(100ms) (#262).
+// these tests bridged that with a 100ms sleep (#262).
 type eventSignal struct {
 	mu    sync.Mutex
 	count int

@@ -243,7 +243,14 @@ giving it its own addresses, `.20`/`.21`/`.22` in the platform VRF
 override repeats all three entries. The Pis hold no VLAN 405 address once
 installed: the compute role addresses only its zones (see
 [Host addressing](../architecture/reference-network.md#host-addressing)), so `eth0` stays
-`manual`. The orchestrator
+`manual`. A fourth Pi takes the next host number, `.23`, in the platform VRF
+and in each zone VLAN. The Pis need no `tpm.idevid.serial` of their own: all
+three keep the template's `rpi4-compute-01`, and platformd on a diskless node
+replaces it at every boot with the name it derives from the Pi's TPM EK
+(`ek-<32 hex>`, see [docs/tpm/architecture.md](../tpm/architecture.md)), so
+each Pi's IDevID certificate names that Pi. The nodes' `serial:` field is a
+different value, the Pi bootloader's `/proc/cpuinfo` serial that selects its
+boot directory. The orchestrator
 fetches the control plane's CA bundle from `192.0.2.1:8443`, so run
 `platformctl bootstrap` on tgw-01 or a host on VLAN 405. Values marked
 `PLACEHOLDER` (SSH access, DNS, APK mirror, domains, Pi serials) must be
@@ -400,6 +407,16 @@ Two nodes' merged configs give the same address, usually because both take it
 from one role template. Give each node its own in `nodes[].overrides` (for a
 list such as `network.vlans`, repeat every entry). Checked before discovery,
 so nothing has been touched.
+
+**"IDevID serial … is on node … and on node …".**
+Two nodes' merged configs give the same `tpm.idevid.serial` under the same
+`tpm.idevid.model`, usually the role template's, so their IDevID certificates
+would name one device. Give each node its own serial in `nodes[].overrides`,
+for example its `/proc/cpuinfo` or DMI serial. Two nodes of different models
+may share a serial. A `boot_model: diskless` node is not checked: platformd
+names it after its TPM's EK and replaces the config's serial with that name.
+A `diskless-nbd`, SD or disk node keeps its config's serial. Checked before
+discovery, so nothing has been touched.
 
 **"boots diskless but its config sets install-target: image".**
 A diskless node's installer runs on the node, so it needs `install-target:

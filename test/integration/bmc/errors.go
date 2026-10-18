@@ -137,60 +137,36 @@ func (e ErrGRPCCallFailed) Error() string {
 func (e ErrGRPCCallFailed) Unwrap() error { return e.Err }
 
 // =============================================================================
-// QUIC Adapter Errors
+// SDK Adapter Errors (QUIC, MCP)
 // =============================================================================
 
-// ErrQUICConnectionFailed indicates a QUIC connection failure.
-type ErrQUICConnectionFailed struct {
+// ErrSDKConnectionFailed indicates the platform SDK could not connect over the
+// selected transport.
+type ErrSDKConnectionFailed struct {
+	Protocol string
 	Endpoint string
 	Err      error
 }
 
-func (e ErrQUICConnectionFailed) Error() string {
-	return fmt.Sprintf("bmc: QUIC connection failed to %s: %v", e.Endpoint, e.Err)
+func (e ErrSDKConnectionFailed) Error() string {
+	return fmt.Sprintf("bmc: %s connection failed to %s: %v", e.Protocol, e.Endpoint, e.Err)
 }
 
-func (e ErrQUICConnectionFailed) Unwrap() error { return e.Err }
+func (e ErrSDKConnectionFailed) Unwrap() error { return e.Err }
 
-// ErrQUICCallFailed indicates a QUIC sub-operation failure.
-type ErrQUICCallFailed struct {
-	Method string
-	Err    error
-}
-
-func (e ErrQUICCallFailed) Error() string {
-	return fmt.Sprintf("bmc: QUIC call %s failed: %v", e.Method, e.Err)
-}
-
-func (e ErrQUICCallFailed) Unwrap() error { return e.Err }
-
-// =============================================================================
-// MCP Adapter Errors
-// =============================================================================
-
-// ErrMCPConnectionFailed indicates the MCP connection failed.
-type ErrMCPConnectionFailed struct {
-	Endpoint string
+// ErrSDKCallFailed indicates a BMCService method failed over the selected
+// SDK transport.
+type ErrSDKCallFailed struct {
+	Protocol string
+	Method   string
 	Err      error
 }
 
-func (e ErrMCPConnectionFailed) Error() string {
-	return fmt.Sprintf("bmc: MCP connection failed to %s: %v", e.Endpoint, e.Err)
+func (e ErrSDKCallFailed) Error() string {
+	return fmt.Sprintf("bmc: %s call %s failed: %v", e.Protocol, e.Method, e.Err)
 }
 
-func (e ErrMCPConnectionFailed) Unwrap() error { return e.Err }
-
-// ErrMCPCallFailed indicates an MCP tool call failure.
-type ErrMCPCallFailed struct {
-	Tool string
-	Err  error
-}
-
-func (e ErrMCPCallFailed) Error() string {
-	return fmt.Sprintf("bmc: MCP tool %s failed: %v", e.Tool, e.Err)
-}
-
-func (e ErrMCPCallFailed) Unwrap() error { return e.Err }
+func (e ErrSDKCallFailed) Unwrap() error { return e.Err }
 
 // =============================================================================
 // Unix Socket Adapter Errors

@@ -131,6 +131,11 @@ func toolPermissionCatalog() map[string]string {
 	permissions["platform_tpm_activate_credential"] = "tpm:write"
 	permissions["platform_tpm_clear"] = "tpm:delete"
 	permissions["platform_tpm_nv_delete"] = "tpm:delete"
+	permissions["platform_tpm_ek_delete"] = "tpm:delete"
+	permissions["platform_tpm_srk_delete"] = "tpm:delete"
+	// IAK delete has no gRPC twin; it carries the scope of QUIC's
+	// SubOpTPM2DeleteIAK (pkg/api/quic/opcode_permissions.go).
+	permissions["platform_tpm_iak_delete"] = "tpm:delete"
 	permissions["platform_tpm_seal"] = "tpm:write"
 	// Unseal hands back the secret itself, so it needs tpm:write here. gRPC
 	// Unseal is tpm:read; a read token is the wrong grant for releasing
@@ -266,8 +271,8 @@ func toolPermissionCatalog() map[string]string {
 	// VM and container tools carry the scopes of their gRPC ComputeService
 	// twins (pkg/api/grpc/method_permissions.go, #304). vm_disk_detach is
 	// vm:write as DetachDisk is: the disk is unplugged, not destroyed.
-	// vm_update, vm_suspend, vm_resume and vm_snapshot_get have no gRPC
-	// twin to take a scope from, so they stay unclassified and refused.
+	// vm_snapshot_get has no gRPC twin; it reads one entry of what
+	// ListSnapshots returns, so it carries ListSnapshots' vm:read.
 	permissions["vm_create"] = "vm:write"
 	permissions["vm_list"] = "vm:read"
 	permissions["vm_get"] = "vm:read"
@@ -277,6 +282,7 @@ func toolPermissionCatalog() map[string]string {
 	permissions["vm_reboot"] = "vm:write"
 	permissions["vm_snapshot_create"] = "vm:write"
 	permissions["vm_snapshot_list"] = "vm:read"
+	permissions["vm_snapshot_get"] = "vm:read"
 	permissions["vm_snapshot_restore"] = "vm:write"
 	permissions["vm_snapshot_delete"] = "vm:delete"
 	permissions["vm_attest"] = "vm:read"
@@ -513,6 +519,14 @@ func toolPermissionCatalog() map[string]string {
 		permissions[name] = tool.scope
 	}
 
+	// PXE tools (#704) require the scope of their gRPC PXEService method:
+	// pxe:read observes, pxe:write moves a device through the workflow or
+	// starts and stops the service (WebhookComplete included), pxe:delete
+	// removes a device. Each scope lives on its pxeTools entry.
+	for name, tool := range pxeTools {
+		permissions[name] = tool.scope
+	}
+
 	// KMS tools (#304) require the scope of the matching gRPC method on
 	// platform.v1.KeyManagementService and quicbaas.kms.v1.{KeyManagement,
 	// Crypto} (pkg/api/grpc/method_permissions.go). Decrypt answers
@@ -568,9 +582,9 @@ func toolPermissionCatalog() map[string]string {
 	permissions["platform_eab_delete_credential"] = "eab:delete"
 
 	// LUKS tools take the scopes of their gRPC LUKSService twins
-	// (pkg/api/grpc/method_permissions.go). platform_luks_test_unlock stays
-	// unclassified: it tries no key material, so its answer proves nothing.
+	// (pkg/api/grpc/method_permissions.go).
 	permissions["platform_luks_status"] = "luks:read"
+	permissions["platform_luks_test_unlock"] = "luks:read"
 	permissions["platform_luks_list_slots"] = "luks:read"
 	permissions["platform_luks_info"] = "luks:read"
 
@@ -583,12 +597,12 @@ func toolPermissionCatalog() map[string]string {
 	permissions["platform_luks_remove_key"] = "luks:delete"
 
 	// Switch, cluster and registry tools (#304) require the scope of their
-	// gRPC twin in SwitchService, ClusterService and RegistryService.
-	permissions["switch_list_ports"] = "switch:read"
-	permissions["switch_port_status"] = "switch:read"
-	permissions["switch_enable_port"] = "switch:write"
-	permissions["switch_disable_port"] = "switch:write"
-	permissions["switch_set_vlan"] = "switch:write"
+	// gRPC twin in SwitchService, ClusterService and RegistryService. Each
+	// switch tool's scope lives on its switchTools entry (#704): port reads
+	// need switch:read, VLAN and admin-state changes need switch:write.
+	for name, tool := range switchTools {
+		permissions[name] = tool.scope
+	}
 
 	permissions["platform_cluster_status"] = "cluster:read"
 	permissions["platform_cluster_list_nodes"] = "cluster:read"
@@ -609,13 +623,13 @@ func toolPermissionCatalog() map[string]string {
 
 	// Each IAM tool carries the scope of its gRPC twin on
 	// PlatformIAMService (pkg/api/grpc/method_permissions.go), whose method
-	// it answers through. iam_create_token, iam_revoke_token and
-	// iam_authenticate stay unclassified: they refuse on every transport,
-	// so no scope may unlock them.
+	// it answers through. iam_create_token and iam_revoke_token carry the
+	// scope of CreateToken and RevokeToken, which refuse on every transport
+	// with the same OIDC error.
 	for _, tool := range []string{
 		"iam_create_user", "iam_create_role", "iam_assign_role", "iam_revoke_role",
 		"iam_create_group", "iam_add_group_member", "iam_remove_group_member",
-		"iam_create_tenant",
+		"iam_create_tenant", "iam_create_token", "iam_revoke_token",
 	} {
 		permissions[tool] = "iam:write"
 	}
@@ -631,6 +645,11 @@ func toolPermissionCatalog() map[string]string {
 	} {
 		permissions[tool] = "iam:read"
 	}
+	// iam_authenticate is the credential exchange that mints a token, so it
+	// cannot itself require one: QUIC lists OpIAMAuthenticate in
+	// preAuthOpcodes (pkg/api/quic/opcode_permissions.go). It refuses with
+	// the OIDC error, as QUIC does.
+	permissions["iam_authenticate"] = ""
 
 	// Tenant tools (#304) require the scope of their TenantService method
 	// (pkg/api/grpc/method_permissions.go). The scope is necessary, not
@@ -663,9 +682,11 @@ func toolPermissionCatalog() map[string]string {
 
 	// Daemon read tools (#304) require the scope of their gRPC
 	// PlatformDaemon twin (pkg/api/grpc/method_permissions.go); both read the
-	// same daemon.Service. platform_daemon_list_protocols has no gRPC twin,
-	// so it stays unclassified and refused.
+	// same daemon.Service. platform_daemon_list_protocols has no gRPC twin;
+	// it carries the scope of QUIC's OpDaemonListProtocols
+	// (pkg/api/quic/opcode_permissions.go).
 	permissions["platform_daemon_status"] = "platform:read"
+	permissions["platform_daemon_list_protocols"] = "platform:read"
 	permissions["platform_daemon_version"] = "platform:read"
 	permissions["platform_daemon_list_services"] = "platform:read"
 	permissions["platform_daemon_get_service"] = "platform:read"

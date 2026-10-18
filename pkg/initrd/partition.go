@@ -16,6 +16,7 @@ package initrd
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -86,23 +87,63 @@ func (dp *DiskPreparer) PartitionDisk(ctx context.Context) error {
 		return &WrappedError{Msg: "failed to create root partition", Err: err}
 	}
 
-	// Wait for kernel to re-read partition table
-	dp.logger.Info("[DISK] Waiting for kernel to recognize new partitions")
-	time.Sleep(2 * time.Second)
-
 	// Inform kernel of partition changes
 	if err := dp.runCommand(ctx, "partprobe", dp.scheme.Device); err != nil {
 		dp.logger.Warn("partprobe failed (may not be critical)", "error", err)
 	}
 
-	// Additional wait for udev
-	time.Sleep(2 * time.Second)
+	// Wait for the kernel and udev to create the partition device nodes
+	dp.logger.Info("[DISK] Waiting for kernel to recognize new partitions")
+	if err := waitForDeviceNodes(ctx, partitionNodeTimeout, dp.scheme.EFIPartition, dp.scheme.RootPartition); err != nil {
+		return err
+	}
 
 	dp.logger.Info("[DISK] Partition table created successfully",
 		"efi_partition", dp.scheme.EFIPartition,
 		"root_partition", dp.scheme.RootPartition)
 
 	return nil
+}
+
+// partitionNodeTimeout bounds the wait for new partition device nodes, and
+// partitionNodePollInterval is how often their paths are checked.
+const (
+	partitionNodeTimeout      = 10 * time.Second
+	partitionNodePollInterval = 100 * time.Millisecond
+)
+
+// waitForDeviceNodes returns once every path exists, failing when ctx ends
+// or timeout passes first.
+func waitForDeviceNodes(ctx context.Context, timeout time.Duration, paths ...string) error {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	poll := time.NewTicker(partitionNodePollInterval)
+	defer poll.Stop()
+
+	for {
+		missing := firstMissingPath(paths)
+		if missing == "" {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return &WrappedError{Msg: "canceled waiting for partition " + missing, Err: ctx.Err()}
+		case <-deadline.C:
+			return &MessageError{Msg: "partition " + missing + " did not appear within " + timeout.String()}
+		case <-poll.C:
+		}
+	}
+}
+
+// firstMissingPath returns the first path that cannot be stat'ed, or "" when
+// every path exists.
+func firstMissingPath(paths []string) string {
+	for _, path := range paths {
+		if _, err := os.Stat(path); err != nil {
+			return path
+		}
+	}
+	return ""
 }
 
 // FormatEFIPartition formats the EFI System Partition as FAT32

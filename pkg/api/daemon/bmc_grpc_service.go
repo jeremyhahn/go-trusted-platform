@@ -49,6 +49,13 @@ func (ErrBaremetalServiceNotConfigured) Error() string {
 	return "baremetal provisioning service not configured"
 }
 
+// bmcNotConfigured answers a call whose backend this node does not have:
+// codes.Unavailable with the SERVICE_NOT_CONFIGURED reason, as every
+// unconfigured platform service answers, never FailedPrecondition.
+func bmcNotConfigured(err error) error {
+	return serviceNotConfigured("bmc", err.Error())
+}
+
 // ErrInvalidProfileID indicates a profile ID of 0 was supplied.
 type ErrInvalidProfileID struct{}
 
@@ -304,7 +311,7 @@ func (s *BMCGRPCService) SetBaremetalService(b BaremetalServicer) {
 // receives a meaningful BMCPowerResponse.
 func (s *BMCGRPCService) powerOp(ctx context.Context, profileID uint64, action string) (*platformv1.BMCPowerResponse, error) {
 	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrBMCServiceNotConfigured{}.Error())
+		return nil, bmcNotConfigured(ErrBMCServiceNotConfigured{})
 	}
 	if profileID == 0 {
 		return nil, status.Error(codes.InvalidArgument, ErrInvalidProfileID{}.Error())
@@ -364,7 +371,7 @@ func (s *BMCGRPCService) PowerCycle(ctx context.Context, req *platformv1.BMCPowe
 // PowerStatus returns the current power state of the system.
 func (s *BMCGRPCService) PowerStatus(ctx context.Context, req *platformv1.BMCPowerStatusRequest) (*platformv1.BMCPowerStatusResponse, error) {
 	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrBMCServiceNotConfigured{}.Error())
+		return nil, bmcNotConfigured(ErrBMCServiceNotConfigured{})
 	}
 	if req.GetProfileId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, ErrInvalidProfileID{}.Error())
@@ -385,7 +392,7 @@ func (s *BMCGRPCService) PowerStatus(ctx context.Context, req *platformv1.BMCPow
 // SetBootDevice sets the next boot device for the system.
 func (s *BMCGRPCService) SetBootDevice(ctx context.Context, req *platformv1.BMCSetBootDeviceRequest) (*platformv1.BMCSetBootDeviceResponse, error) {
 	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrBMCServiceNotConfigured{}.Error())
+		return nil, bmcNotConfigured(ErrBMCServiceNotConfigured{})
 	}
 	if req.GetProfileId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, ErrInvalidProfileID{}.Error())
@@ -405,7 +412,7 @@ func (s *BMCGRPCService) SetBootDevice(ctx context.Context, req *platformv1.BMCS
 // GetBootDevice returns the current boot device override.
 func (s *BMCGRPCService) GetBootDevice(ctx context.Context, req *platformv1.BMCGetBootDeviceRequest) (*platformv1.BMCGetBootDeviceResponse, error) {
 	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrBMCServiceNotConfigured{}.Error())
+		return nil, bmcNotConfigured(ErrBMCServiceNotConfigured{})
 	}
 	if req.GetProfileId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, ErrInvalidProfileID{}.Error())
@@ -426,7 +433,7 @@ func (s *BMCGRPCService) GetBootDevice(ctx context.Context, req *platformv1.BMCG
 // MountISO mounts an ISO image via virtual media.
 func (s *BMCGRPCService) MountISO(ctx context.Context, req *platformv1.BMCMountISORequest) (*platformv1.BMCMountISOResponse, error) {
 	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrBMCServiceNotConfigured{}.Error())
+		return nil, bmcNotConfigured(ErrBMCServiceNotConfigured{})
 	}
 	if req.GetProfileId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, ErrInvalidProfileID{}.Error())
@@ -443,7 +450,7 @@ func (s *BMCGRPCService) MountISO(ctx context.Context, req *platformv1.BMCMountI
 // UnmountISO unmounts the currently mounted ISO virtual media.
 func (s *BMCGRPCService) UnmountISO(ctx context.Context, req *platformv1.BMCUnmountISORequest) (*platformv1.BMCUnmountISOResponse, error) {
 	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrBMCServiceNotConfigured{}.Error())
+		return nil, bmcNotConfigured(ErrBMCServiceNotConfigured{})
 	}
 	if req.GetProfileId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, ErrInvalidProfileID{}.Error())
@@ -457,7 +464,7 @@ func (s *BMCGRPCService) UnmountISO(ctx context.Context, req *platformv1.BMCUnmo
 // VirtualMediaStatus returns the current virtual media state.
 func (s *BMCGRPCService) VirtualMediaStatus(ctx context.Context, req *platformv1.BMCVirtualMediaStatusRequest) (*platformv1.BMCVirtualMediaStatusResponse, error) {
 	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrBMCServiceNotConfigured{}.Error())
+		return nil, bmcNotConfigured(ErrBMCServiceNotConfigured{})
 	}
 	if req.GetProfileId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, ErrInvalidProfileID{}.Error())
@@ -483,7 +490,7 @@ func (s *BMCGRPCService) VirtualMediaStatus(ctx context.Context, req *platformv1
 // GetSensors returns sensor readings from the BMC.
 func (s *BMCGRPCService) GetSensors(ctx context.Context, req *platformv1.BMCGetSensorsRequest) (*platformv1.BMCGetSensorsResponse, error) {
 	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrBMCServiceNotConfigured{}.Error())
+		return nil, bmcNotConfigured(ErrBMCServiceNotConfigured{})
 	}
 	if req.GetProfileId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, ErrInvalidProfileID{}.Error())
@@ -507,7 +514,7 @@ func (s *BMCGRPCService) GetSensors(ctx context.Context, req *platformv1.BMCGetS
 // GetSystemInfo returns system identification information.
 func (s *BMCGRPCService) GetSystemInfo(ctx context.Context, req *platformv1.BMCGetSystemInfoRequest) (*platformv1.BMCGetSystemInfoResponse, error) {
 	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrBMCServiceNotConfigured{}.Error())
+		return nil, bmcNotConfigured(ErrBMCServiceNotConfigured{})
 	}
 	if req.GetProfileId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, ErrInvalidProfileID{}.Error())
@@ -536,7 +543,7 @@ func (s *BMCGRPCService) GetSystemInfo(ctx context.Context, req *platformv1.BMCG
 // Provision initiates an orchestrated bare metal provisioning workflow.
 func (s *BMCGRPCService) Provision(ctx context.Context, req *platformv1.BMCProvisionRequest) (*platformv1.BMCProvisionResponse, error) {
 	if s.baremetal == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrBaremetalServiceNotConfigured{}.Error())
+		return nil, bmcNotConfigured(ErrBaremetalServiceNotConfigured{})
 	}
 	if req.GetProfileId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, ErrInvalidProfileID{}.Error())
@@ -558,7 +565,7 @@ func (s *BMCGRPCService) Provision(ctx context.Context, req *platformv1.BMCProvi
 // the given profile.
 func (s *BMCGRPCService) ProvisionStatus(ctx context.Context, req *platformv1.BMCProvisionStatusRequest) (*platformv1.BMCProvisionStatusResponse, error) {
 	if s.baremetal == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrBaremetalServiceNotConfigured{}.Error())
+		return nil, bmcNotConfigured(ErrBaremetalServiceNotConfigured{})
 	}
 	if req.GetProfileId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, ErrInvalidProfileID{}.Error())
@@ -582,7 +589,7 @@ func (s *BMCGRPCService) ProvisionStatus(ctx context.Context, req *platformv1.BM
 // GetWebCertificate returns the BMC's HTTPS certificate metadata.
 func (s *BMCGRPCService) GetWebCertificate(ctx context.Context, req *platformv1.BMCGetWebCertificateRequest) (*platformv1.BMCGetWebCertificateResponse, error) {
 	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrBMCServiceNotConfigured{}.Error())
+		return nil, bmcNotConfigured(ErrBMCServiceNotConfigured{})
 	}
 	if req.GetProfileId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, ErrInvalidProfileID{}.Error())
@@ -598,7 +605,7 @@ func (s *BMCGRPCService) GetWebCertificate(ctx context.Context, req *platformv1.
 // HTTPS server.
 func (s *BMCGRPCService) ReplaceWebCertificate(ctx context.Context, req *platformv1.BMCReplaceWebCertificateRequest) (*platformv1.BMCReplaceWebCertificateResponse, error) {
 	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrBMCServiceNotConfigured{}.Error())
+		return nil, bmcNotConfigured(ErrBMCServiceNotConfigured{})
 	}
 	if req.GetProfileId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, ErrInvalidProfileID{}.Error())
@@ -624,7 +631,7 @@ func (s *BMCGRPCService) ReplaceWebCertificate(ctx context.Context, req *platfor
 // ListUsers returns all populated BMC user slots.
 func (s *BMCGRPCService) ListUsers(ctx context.Context, req *platformv1.BMCListUsersRequest) (*platformv1.BMCListUsersResponse, error) {
 	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrBMCServiceNotConfigured{}.Error())
+		return nil, bmcNotConfigured(ErrBMCServiceNotConfigured{})
 	}
 	if req.GetProfileId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, ErrInvalidProfileID{}.Error())
@@ -643,7 +650,7 @@ func (s *BMCGRPCService) ListUsers(ctx context.Context, req *platformv1.BMCListU
 // CreateUser creates a new BMC user account in the requested slot.
 func (s *BMCGRPCService) CreateUser(ctx context.Context, req *platformv1.BMCCreateUserRequest) (*platformv1.BMCCreateUserResponse, error) {
 	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrBMCServiceNotConfigured{}.Error())
+		return nil, bmcNotConfigured(ErrBMCServiceNotConfigured{})
 	}
 	if req.GetProfileId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, ErrInvalidProfileID{}.Error())
@@ -665,7 +672,7 @@ func (s *BMCGRPCService) CreateUser(ctx context.Context, req *platformv1.BMCCrea
 // DeleteUser removes a BMC user slot.
 func (s *BMCGRPCService) DeleteUser(ctx context.Context, req *platformv1.BMCDeleteUserRequest) (*platformv1.BMCDeleteUserResponse, error) {
 	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrBMCServiceNotConfigured{}.Error())
+		return nil, bmcNotConfigured(ErrBMCServiceNotConfigured{})
 	}
 	if req.GetProfileId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, ErrInvalidProfileID{}.Error())
@@ -683,7 +690,7 @@ func (s *BMCGRPCService) DeleteUser(ctx context.Context, req *platformv1.BMCDele
 // SetUserPassword updates the password for the BMC user in the given slot.
 func (s *BMCGRPCService) SetUserPassword(ctx context.Context, req *platformv1.BMCSetUserPasswordRequest) (*platformv1.BMCSetUserPasswordResponse, error) {
 	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrBMCServiceNotConfigured{}.Error())
+		return nil, bmcNotConfigured(ErrBMCServiceNotConfigured{})
 	}
 	if req.GetProfileId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, ErrInvalidProfileID{}.Error())
@@ -701,7 +708,7 @@ func (s *BMCGRPCService) SetUserPassword(ctx context.Context, req *platformv1.BM
 // SetUserPrivilege updates the channel privilege for the BMC user.
 func (s *BMCGRPCService) SetUserPrivilege(ctx context.Context, req *platformv1.BMCSetUserPrivilegeRequest) (*platformv1.BMCSetUserPrivilegeResponse, error) {
 	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrBMCServiceNotConfigured{}.Error())
+		return nil, bmcNotConfigured(ErrBMCServiceNotConfigured{})
 	}
 	if req.GetProfileId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, ErrInvalidProfileID{}.Error())
@@ -842,6 +849,10 @@ func certInfoToProto(info *bmc.CertificateInfo) *platformv1.BMCGetWebCertificate
 func (s *BMCGRPCService) toGRPCError(operation string, err error) error {
 	if err == nil {
 		return nil
+	}
+	var notConfigured ErrBMCServiceNotConfigured
+	if errors.As(err, &notConfigured) {
+		return bmcNotConfigured(notConfigured)
 	}
 	var profileNotFound bmc.ErrProfileNotFound
 	if errors.As(err, &profileNotFound) {

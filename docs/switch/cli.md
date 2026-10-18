@@ -36,9 +36,10 @@ verb builds a `switchsdk.Client` over an `*http.Client`
 | `--no-color` | Honoured on table output. |
 | `--config`, `--verbose` | Parsed at the root; no local effect. |
 
-There is **no embedded mode** for this group — and none is possible, since
-`ServiceRegistry` has no `Switch` field ([api.md](api.md) §2). Every verb needs
-a reachable `platformd` REST endpoint.
+There is **no embedded mode** for this group: its client
+(`sdk/go/services/switch`) speaks REST only. The embedded transport does carry
+`SwitchService` for the SDK's `Client.Switch()` ([api.md](api.md) §2). Every
+verb needs a reachable `platformd` REST endpoint.
 
 ### 1.2 TLS behaviour
 

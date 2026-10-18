@@ -196,8 +196,8 @@ scope of their gRPC twin (#304) and reach the same `daemon.Service` gRPC
 serves: `platform_daemon_status`, `_version`, `_list_services` and
 `_get_service` need `platform:read`, and `_start_service`, `_stop_service` and
 `_restart_service` need `platform:write`. `platform_daemon_list_protocols` has
-no gRPC twin, so it is unclassified and every caller is refused with
-`AuthErrorToolNotClassified`. The `platform_health`, `platform_liveness` and
+no gRPC twin; it needs `platform:read`, the scope of QUIC
+`OpDaemonListProtocols`. The `platform_health`, `platform_liveness` and
 `platform_readiness` tools are explicitly open.
 
 **Service start, stop and restart do what they say or refuse (#317).** The

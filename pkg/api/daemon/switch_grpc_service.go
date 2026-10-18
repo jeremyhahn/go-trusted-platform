@@ -52,13 +52,20 @@ func (s *SwitchGRPCService) SetSwitchService(svc device.SwitchServiceProvider) {
 	s.switchService = svc
 }
 
+// switchNotConfigured answers a call on a node with no switch backend:
+// codes.Unavailable with the SERVICE_NOT_CONFIGURED reason, the answer REST
+// (503) and QUIC (StatusUnavailable) already give.
+func switchNotConfigured() error {
+	return serviceNotConfigured("switch", "switch service is not configured on this node")
+}
+
 // ListPorts returns the status of all physical ports on the named switch.
 func (s *SwitchGRPCService) ListPorts(
 	ctx context.Context,
 	req *platformv1.ListSwitchPortsRequest,
 ) (*platformv1.ListSwitchPortsResponse, error) {
 	if s.switchService == nil {
-		return nil, status.Error(codes.FailedPrecondition, "switch service not initialized")
+		return nil, switchNotConfigured()
 	}
 
 	switchName := req.GetSwitchName()
@@ -93,7 +100,7 @@ func (s *SwitchGRPCService) GetPortStatus(
 	req *platformv1.GetSwitchPortStatusRequest,
 ) (*platformv1.GetSwitchPortStatusResponse, error) {
 	if s.switchService == nil {
-		return nil, status.Error(codes.FailedPrecondition, "switch service not initialized")
+		return nil, switchNotConfigured()
 	}
 
 	switchName := req.GetSwitchName()
@@ -129,7 +136,7 @@ func (s *SwitchGRPCService) SetPortVLAN(
 	req *platformv1.SetSwitchPortVLANRequest,
 ) (*platformv1.SetSwitchPortVLANResponse, error) {
 	if s.switchService == nil {
-		return nil, status.Error(codes.FailedPrecondition, "switch service not initialized")
+		return nil, switchNotConfigured()
 	}
 
 	switchName := req.GetSwitchName()
@@ -172,7 +179,7 @@ func (s *SwitchGRPCService) EnablePort(
 	req *platformv1.EnableSwitchPortRequest,
 ) (*platformv1.EnableSwitchPortResponse, error) {
 	if s.switchService == nil {
-		return nil, status.Error(codes.FailedPrecondition, "switch service not initialized")
+		return nil, switchNotConfigured()
 	}
 
 	switchName := req.GetSwitchName()
@@ -210,7 +217,7 @@ func (s *SwitchGRPCService) DisablePort(
 	req *platformv1.DisableSwitchPortRequest,
 ) (*platformv1.DisableSwitchPortResponse, error) {
 	if s.switchService == nil {
-		return nil, status.Error(codes.FailedPrecondition, "switch service not initialized")
+		return nil, switchNotConfigured()
 	}
 
 	switchName := req.GetSwitchName()

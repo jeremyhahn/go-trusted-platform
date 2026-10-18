@@ -44,8 +44,9 @@ under `platformctl sdn gateway`. `pkg/cli/commands/root.go` registers `sdn`,
 | `--no-color` | | `false` | `NO_COLOR` |
 
 Every verb below needs a reachable daemon. `--transport embedded` runs the
-services in-process — except for `platformctl switch`, which has no embedded
-route ([api.md](api.md) §7).
+services in-process — except for `platformctl switch`, whose client
+(`sdk/go/services/switch`) speaks REST only; the embedded route exists for the
+SDK's `Client.Switch()` ([api.md](api.md) §7).
 
 ---
 

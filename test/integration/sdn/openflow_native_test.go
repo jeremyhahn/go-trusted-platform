@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/openflow"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -100,26 +101,15 @@ func (tb *testBridge) cleanup() {
 	}
 }
 
-// waitForOpenFlowSocket waits for the OpenFlow management socket to become available
-// with exponential backoff. OVS takes some time after bridge creation to set up the socket.
+// waitForOpenFlowSocket polls until the OpenFlow management socket accepts a
+// connection. OVS takes some time after bridge creation to set up the socket.
 func (tb *testBridge) waitForOpenFlowSocket() bool {
-	deadline := time.Now().Add(ofSocketWaitTimeout)
-	retryDelay := 100 * time.Millisecond
-	maxDelay := 1 * time.Second
-
-	for time.Now().Before(deadline) {
-		// Socket file exists, try to connect
-		if tb.checkOpenFlowAvailable() {
-			return true
-		}
-
-		time.Sleep(retryDelay)
-		if retryDelay < maxDelay {
-			retryDelay *= 2
-		}
+	condition := "OpenFlow socket for bridge " + tb.name
+	if err := testenv.WaitUntil(tb.t.Context(), ofSocketWaitTimeout, condition, tb.checkOpenFlowAvailable); err != nil {
+		tb.t.Logf("%v", err)
+		return false
 	}
-
-	return false
+	return true
 }
 
 // checkOpenFlowAvailable checks if we can actually connect to the OpenFlow socket

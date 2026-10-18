@@ -28,7 +28,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -104,7 +103,6 @@ type QUICServiceHandler struct {
 	containerHandler   *quic.ContainerHandler
 	attestationHandler *quic.AttestationHandler
 	vmHandler          *quic.VMHandler
-	pxeService         pxe.Service
 	tenantManager      TenantManagerInterface
 	// tenantGRPC is the shared *TenantGRPCServer the converged tenant QUIC
 	// handlers delegate to (pb wire), wired via SetTenantGRPCServer.
@@ -115,8 +113,11 @@ type QUICServiceHandler struct {
 
 	// proxyHandler serves the reverse-proxy configuration sub-opcodes
 	// (0x20-0x2D) multiplexed under the gateway category opcode (0x2F).
-	proxyHandler  *quic.ProxyHandler
-	switchService switchServiceProvider
+	proxyHandler *quic.ProxyHandler
+	// switchServer is the SwitchService servicer the switch category
+	// opcode (quicwire.OpSwitchCategory, 0xCC) delegates to, wired via
+	// SetSwitchServer.
+	switchServer platformv1.SwitchServiceServer
 	// ntpService serves the time-synchronization category opcode
 	// (quicwire.OpNTPCategory, 0x50) with sub-opcode dispatch in payload[0].
 	// It is the same NTPGRPCService instance the other transports use.
@@ -136,10 +137,22 @@ type QUICServiceHandler struct {
 	pivQUIC      *pivQUICHandlers
 	luksQUIC     *luksQUICHandlers
 	fido2QUIC    *fido2QUICHandlers
-	// bmcEnrollQUIC is wired via SetBMCEnroller for the OpBMCCategory handler.
-	bmcEnrollQUIC *bmcEnrollQUICHandlers
-	// bmcRestoreQUIC is wired via SetBMCRestorer for the BMCSubRestore handler.
-	bmcRestoreQUIC *bmcRestoreQUICHandlers
+	// bmcServer is the BMCService servicer the OpBMCCategory handlers
+	// delegate to, wired via SetBMCServer.
+	bmcServer platformv1.BMCServiceServer
+
+	// invitationServer is the InvitationService servicer the invitation
+	// sub-opcodes under OpIAMCategory delegate to, wired via
+	// SetInvitationServer.
+	invitationServer platformv1.InvitationServiceServer
+
+	// clusterServer is the ClusterService servicer the OpClusterCategory
+	// handlers delegate to, wired via SetClusterServer.
+	clusterServer platformv1.ClusterServiceServer
+
+	// pxeServer is the PXEService servicer the PXE opcodes delegate to,
+	// wired via SetPXEServer.
+	pxeServer platformv1.PXEServiceServer
 }
 
 // QUICServiceHandlerOption is a functional option for configuring QUICServiceHandler
@@ -601,8 +614,13 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 		return h.handleNTPCategory(ctx, req)
 
 	// IAM Category Opcode (0x51) - multiplexes the IAM tenant-record
-	// sub-operations, kept apart from the platform tenancy opcodes.
+	// sub-operations, kept apart from the platform tenancy opcodes, and the
+	// invitation sub-opcodes (0x10-0x16, see quic_invitation.go), which are
+	// routed first.
 	case req.Opcode == quicwire.OpIAMCategory:
+		if resp, handled := h.handleInvitationCategorySub(ctx, req); handled {
+			return resp
+		}
 		return h.handleIAMCategory(ctx, req)
 
 	// VPN Category Opcode (0x52) - peer enrolment, session status and
@@ -611,7 +629,8 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 		return h.handleVPNCategory(ctx, req)
 
 	// Application Service Category Opcodes (0x53-0x55) - cache, scheduler
-	// and messaging through the composed go-quicbaas SDK.
+	// and messaging through the composed go-quicbaas SDK - and the switch
+	// category (0xCC), each served by its gRPC servicer.
 	case appQUICCategories[req.Opcode].handlers != nil:
 		return h.handleAppServiceCategory(ctx, req)
 
@@ -699,10 +718,6 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 	case req.Opcode >= quicwire.OpIAMRoleCreate && req.Opcode <= quicwire.OpIAMRoleRevoke:
 		return h.handleIAMOperation(ctx, req)
 
-	// Switch Management Category Opcode (0xCC)
-	case req.Opcode == quicwire.OpSwitchCategory:
-		return h.handleSwitchCategory(ctx, req)
-
 	// KMS Extended Category Opcode (0xCD) - multiplexes revoke, metadata,
 	// policy, and supported-algorithms sub-operations.
 	case req.Opcode == quicwire.OpKMSExtendedCategory:
@@ -715,16 +730,19 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 
 	// Provisioning Category Opcode (0xCF) - multiplexes config delivery
 	// get-nonce, fetch-config, sign-digest and session sub-operations plus
-	// the EAB credential sub-opcodes (0x10-0x1A, see quic_eab.go) and the
-	// device profile assignment sub-opcodes (0x20-0x21, see
-	// quic_device_handlers.go). EAB and device profile sub-opcodes are
-	// routed first; everything else falls through to the config delivery
-	// dispatcher.
+	// the EAB credential sub-opcodes (0x10-0x1A, see quic_eab.go), the
+	// device profile sub-opcodes (0x20-0x2F, see quic_device_handlers.go)
+	// and the PXE sub-opcodes (0x30-0x3F, see quic_pxe.go). EAB, device
+	// profile and PXE sub-opcodes are routed first; everything else falls
+	// through to the config delivery dispatcher.
 	case req.Opcode == quicwire.OpProvisioningCategory:
 		if resp, handled := h.handleEABCategorySub(ctx, req); handled {
 			return resp
 		}
 		if resp, handled := h.handleDeviceProfileCategorySub(ctx, req); handled {
+			return resp
+		}
+		if resp, handled := h.handlePXECategorySub(ctx, req); handled {
 			return resp
 		}
 		return h.handleProvisioningCategory(ctx, req)
@@ -748,6 +766,10 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 	case req.Opcode == quicwire.OpBMCCategory:
 		return h.handleBMCCategory(ctx, req)
 
+	// Cluster category opcode (0x90) - multiplexes ClusterService methods.
+	case req.Opcode == quicwire.OpClusterCategory:
+		return h.handleClusterCategory(ctx, req)
+
 	// KMS Key Management Operations (0xC0-0xCB) - Includes BatchEncrypt and BatchDecrypt
 	case req.Opcode >= quicwire.OpKMSGenerateKey && req.Opcode <= quicwire.OpKMSBatchDecrypt:
 		return h.handleKMSOperation(ctx, req)
@@ -761,7 +783,7 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 		return h.handleTenantOperation(ctx, req)
 
 	// PXE Operations (0xEC-0xEF) - ListDevices, GetDevice, RegisterDevice, UpdateState
-	case req.Opcode >= OpPXEListDevices && req.Opcode <= OpPXEUpdateState:
+	case req.Opcode >= quicwire.OpPXEListDevices && req.Opcode <= quicwire.OpPXEUpdateState:
 		return h.handlePXEOperation(ctx, req)
 
 	// IAM Extended Operations (0xF7-0xFB) - CheckPermission through TokenVerify
@@ -769,7 +791,7 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 		return h.handleIAMOperation(ctx, req)
 
 	// PXE Extended Operations (0xFC-0xFF) - Authorize, Quarantine, Retry, RemoveDevice
-	case req.Opcode >= OpPXEAuthorize && req.Opcode <= OpPXERemoveDevice:
+	case req.Opcode >= quicwire.OpPXEAuthorize && req.Opcode <= quicwire.OpPXERemoveDevice:
 		return h.handlePXEOperation(ctx, req)
 
 	default:

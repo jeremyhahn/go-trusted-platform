@@ -63,6 +63,19 @@ type ServiceRegistry struct {
 	PIV      platformv1.PIVServiceServer
 	FIDO2    platformv1.FIDO2ServiceServer
 
+	// BMC backs the out-of-band management verbs (power, boot, virtual
+	// media, provisioning, web certificate, users, enrollment).
+	BMC platformv1.BMCServiceServer
+
+	// NTP backs the time-synchronization verbs (status, sources, step);
+	// LUKS backs the disk-encryption keyslot verbs.
+	NTP  platformv1.NTPServiceServer
+	LUKS platformv1.LUKSServiceServer
+
+	// Switch backs the managed-switch port verbs (list, status, VLAN,
+	// enable, disable).
+	Switch platformv1.SwitchServiceServer
+
 	// Cache, Scheduler and Messaging back the application services the
 	// composed go-quicbaas SDK serves (docs/sdk/api.md §3.5).
 	Cache     platformv1.CacheServiceServer

@@ -24,9 +24,10 @@ import (
 // luksToolScopes is the scope of every classified LUKS tool, the same as its
 // gRPC LUKSService twin in pkg/api/grpc/method_permissions.go.
 var luksToolScopes = map[string]string{
-	"platform_luks_status":     "luks:read",
-	"platform_luks_list_slots": "luks:read",
-	"platform_luks_info":       "luks:read",
+	"platform_luks_status":      "luks:read",
+	"platform_luks_list_slots":  "luks:read",
+	"platform_luks_info":        "luks:read",
+	"platform_luks_test_unlock": "luks:read",
 
 	"platform_luks_enroll_passphrase": "luks:write",
 	"platform_luks_enroll_fido2":      "luks:write",
@@ -37,14 +38,12 @@ var luksToolScopes = map[string]string{
 	"platform_luks_remove_key": "luks:delete",
 }
 
-// luksTestUnlockTool tries no key material, so it stays unclassified.
-const luksTestUnlockTool = "platform_luks_test_unlock"
-
 // luksStubCall is the phase35StubProvider method each LUKS tool reaches.
 var luksStubCall = map[string]string{
 	"platform_luks_status":            "luks_status",
 	"platform_luks_list_slots":        "luks_list_slots",
 	"platform_luks_info":              "luks_info",
+	"platform_luks_test_unlock":       "luks_test_unlock",
 	"platform_luks_enroll_passphrase": "luks_enroll_passphrase",
 	"platform_luks_enroll_fido2":      "luks_enroll_fido2",
 	"platform_luks_enroll_tpm":        "luks_enroll_tpm",
@@ -69,18 +68,15 @@ func TestLUKSToolPermissions(t *testing.T) {
 			t.Errorf("permission for %s = %q, want %q", tool, got, want)
 		}
 	}
-	if scope, ok := checker.toolPermissions[luksTestUnlockTool]; ok {
-		t.Errorf("%s is classified as %q; it tries no key and must stay unclassified", luksTestUnlockTool, scope)
-	}
 }
 
 // TestLUKSToolsAreRegisteredAndScoped fails when a LUKS tool is registered
-// that is neither scoped nor the unclassified test-unlock.
+// that is not scoped.
 func TestLUKSToolsAreRegisteredAndScoped(t *testing.T) {
 	registry := NewToolRegistry(nil, nil)
 	registered := 0
 	for _, tool := range registry.ListTools() {
-		if !strings.HasPrefix(tool.Name, "platform_luks_") || tool.Name == luksTestUnlockTool {
+		if !strings.HasPrefix(tool.Name, "platform_luks_") {
 			continue
 		}
 		if _, ok := luksToolScopes[tool.Name]; !ok {
@@ -113,14 +109,6 @@ func TestLUKSAuthorizeToolEnforcesScope(t *testing.T) {
 				t.Errorf("%s with only %s: err = %+v, want permission denied", tool, held, authErr)
 			}
 		}
-	}
-}
-
-func TestLUKSTestUnlockIsRefusedUnclassified(t *testing.T) {
-	checker := NewAuthorizationChecker(scopeChecker("luks:read"), &mockAuthManager{})
-	_, authErr := checker.AuthorizeTool(context.Background(), luksTestUnlockTool, "tok")
-	if authErr == nil || authErr.Type != AuthErrorToolNotClassified {
-		t.Errorf("err = %+v, want tool not classified", authErr)
 	}
 }
 
@@ -174,16 +162,5 @@ func TestLUKSToolsCall_ScopeGatesHandler(t *testing.T) {
 				t.Errorf("without %s: handler %q ran, want none", scope, stub.lastCall)
 			}
 		})
-	}
-}
-
-func TestLUKSToolsCall_TestUnlockNeverRuns(t *testing.T) {
-	server, stub := luksServer("luks:read")
-	resp := luksToolCall(server, luksTestUnlockTool)
-	if resp.Error == nil {
-		t.Fatal("test-unlock answered; want refusal")
-	}
-	if stub.lastCall != "" {
-		t.Errorf("handler %q ran, want none", stub.lastCall)
 	}
 }

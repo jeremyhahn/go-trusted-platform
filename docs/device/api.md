@@ -314,7 +314,8 @@ from the request alone, so an omitted one is cleared.
 **Authorization is per listener, not per body.** Behind the platform-token
 middleware the webservice route requires `device:write`, as `CreateDevice` does
 on gRPC, QUIC and MCP, and answers a `device:read` token `403` before the body
-is read; the daemon REST listener is mTLS-only (§7).
+is read; the daemon REST device routes check only the mTLS client certificate
+(§7).
 
 `pkg/webservice/v1/router/device_listener_contract_test.go` pins the
 contract: it posts the bodies above to both listeners and asserts equal
@@ -1413,8 +1414,9 @@ device, profile, template and provisioning-session route in `RequireScope` on
 top of the admin role gate, with the scope the twin RPC takes in the catalog
 above (and QUIC and MCP take for the same operation). A token without it gets
 `403` before the handler runs. Under the legacy JWT handler, which carries no
-scopes, the role gate alone applies; the daemon REST server (`pkg/api/rest`) is
-mTLS-only and has no scope check.
+scopes, the role gate alone applies; the daemon REST device routes
+(`pkg/api/rest/device_handlers.go`) are outside its scope guard: they check
+only the mTLS client certificate and no scope.
 
 | Scope | Webservice routes (under `/api/v1`) | gRPC twin |
 |---|---|---|

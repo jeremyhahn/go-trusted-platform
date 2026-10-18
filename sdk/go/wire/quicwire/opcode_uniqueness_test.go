@@ -50,6 +50,7 @@ var opcodeNamespaces = map[string]string{
 	"protocol.go":              nsTopLevel,
 	"kms_opcodes.go":           nsTopLevel, // "KMS extended and Secrets category opcodes" — category markers are top-level
 	"ntp_opcodes.go":           nsTopLevel, // "NTP (time synchronization) category opcode"
+	"cluster_opcodes.go":       nsTopLevel, // "Cluster category opcode"
 	"iam_opcodes.go":           nsTopLevel, // "IAM category opcode"
 	"vpn_opcodes.go":           nsTopLevel, // "VPN category opcode"
 	"appservice_opcodes.go":    nsTopLevel, // "Application service category opcodes"

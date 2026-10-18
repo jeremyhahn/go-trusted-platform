@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -25,6 +26,8 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 )
 
 // =============================================================================
@@ -1906,55 +1909,18 @@ func (h *KMSHandlers) writeError(w http.ResponseWriter, status int, err error) {
 	})
 }
 
-// writeKMSError maps KMS errors to appropriate HTTP status codes.
+// writeKMSError answers a failed KMS operation with the HTTP status for its
+// error's class, as the shared classifier names it; an error that names no
+// class is 500.
 func (h *KMSHandlers) writeKMSError(w http.ResponseWriter, operation string, err error) {
-	var status int
-
-	// Map error types to HTTP status codes
-	switch e := err.(type) {
-	case ErrKMSOperationFailed:
-		if e.Reason == "not implemented" {
-			status = http.StatusNotImplemented
-		} else {
-			status = http.StatusInternalServerError
-		}
-	case ErrKMSKeyNotFound:
-		status = http.StatusNotFound
-	case ErrKMSKeyAlreadyExists:
-		status = http.StatusConflict
-	case ErrKMSInvalidKeySpec:
-		status = http.StatusBadRequest
-	case ErrKMSKeyNotExportable:
-		status = http.StatusForbidden
-	case ErrKMSKeyDisabled:
-		status = http.StatusForbidden
-	case ErrKMSKeyPendingDeletion:
-		status = http.StatusForbidden
-	case ErrKMSEncryptionFailed:
-		status = http.StatusInternalServerError
-	case ErrKMSDecryptionFailed:
-		status = http.StatusInternalServerError
-	case ErrKMSSigningFailed:
-		status = http.StatusInternalServerError
-	case ErrKMSVerificationFailed:
-		status = http.StatusInternalServerError
-	case ErrKMSInvalidAlgorithm:
-		status = http.StatusBadRequest
-	case ErrKMSServiceUnavailable:
-		status = http.StatusServiceUnavailable
-	case ErrKMSBatchOperationFailed:
-		status = http.StatusMultiStatus
-	case ErrKMSRewrapFailed:
-		status = http.StatusInternalServerError
-	case ErrKMSBatchItemsEmpty:
-		status = http.StatusBadRequest
-	case ErrKMSBatchItemsTooMany:
-		status = http.StatusBadRequest
-	default:
-		status = http.StatusInternalServerError
+	// A batch with some failed items is a partial success, not an error class.
+	httpStatus := errclass.HTTPStatus(err)
+	var batchErr ErrKMSBatchOperationFailed
+	if errors.As(err, &batchErr) {
+		httpStatus = http.StatusMultiStatus
 	}
 
-	h.writeError(w, status, ErrKMSHandlerOperationFailed{
+	h.writeError(w, httpStatus, ErrKMSHandlerOperationFailed{
 		Operation: operation,
 		Cause:     err,
 	})

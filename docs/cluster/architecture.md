@@ -55,7 +55,7 @@ the bottom and out of this repository:
 
 ```
        ┌────────────────────────────────────────────────────────────┐
-       │  transports: gRPC · Unix · REST · MCP   (no QUIC, no CLI)  │
+       │  transports: gRPC · Unix · REST · QUIC · MCP   (no CLI)    │
        └───────────────────────────┬────────────────────────────────┘
                                    │
        ┌───────────────────────────▼────────────────────────────────┐
@@ -131,9 +131,10 @@ The gRPC service the daemon registers, on the TCP listener and the Unix
 socket, is the full `ClusterGRPCService` in `pkg/api/grpc/cluster_service.go`.
 Its `grpc.ClusterService` dependency is the daemon adapter
 `clusterGRPCBackend` (`pkg/api/daemon/cluster_grpc_backend.go`), which
-answers from the same `ClusterServicer` the MCP `platform_cluster_*` tools use.
-The REST handlers call that registered service. `Daemon.SetClusterService`
-sets the servicer for all of them — and nothing calls it.
+answers from the daemon's `ClusterServicer`. The REST handlers, the QUIC `0x90`
+sub-opcodes and the MCP `platform_cluster_*` tools all call that registered
+service. `Daemon.SetClusterService` sets the servicer for all of them — and
+nothing calls it.
 
 **So today: the interfaces, the coordinator implementation, the state machine,
 the node registry, the transports and the CLI package all exist, and no shipped
@@ -176,7 +177,8 @@ describes the adapter that replaced it.
 | Daemon service (build tag `cluster`) | `pkg/api/daemon/cluster_service.go` | this repo |
 | Registration and the adapter over `ClusterServicer` | `pkg/api/daemon/cluster_grpc_backend.go` | this repo |
 | REST adapter over the registered service | `pkg/api/daemon/cluster_rest.go` | this repo |
-| MCP tools and the tag-agnostic bridge | `pkg/api/mcp/cluster_tools.go`, `pkg/api/daemon/mcp_cluster.go`, `mcp_cluster_adapter.go` | this repo |
+| QUIC category handler over the registered service | `pkg/api/daemon/quic_cluster.go`, `sdk/go/wire/quicwire/cluster_opcodes.go` | this repo |
+| MCP tools over the registered service, and the tag-agnostic servicer types | `pkg/api/mcp/cluster_tools.go`, `pkg/api/daemon/mcp_cluster.go`, `mcp_cluster_adapter.go` | this repo |
 | Registered gRPC service | `pkg/api/grpc/cluster_service.go`, `cluster_types.go` | this repo |
 | CLI package (**not registered on any root command**) | `pkg/cli/commands/cluster/` | this repo |
 | SDK client | `sdk/go/services/cluster/` | this repo |
@@ -284,12 +286,13 @@ Within this repo's half:
    `membershipManager.Join` rejects only the empty string. **There is no
    allow-list, no identity check and no attestation gate on a join address in
    this layer.**
-3. **Cluster lifecycle is scoped on gRPC and MCP.** Both catalogs
+3. **Cluster lifecycle is scoped on gRPC, QUIC and MCP.** All three catalogs
    are default-deny. The gRPC scope catalog
    (`pkg/api/grpc/method_permissions.go`) gives `GetStatus` and `ListNodes`
    `cluster:read`, and `Bootstrap`, `Join` and `Leave` `cluster:write`, so a
-   read-only token cannot change membership. The `platform_cluster_*` MCP
-   tools carry the same pairs (`pkg/api/mcp/authz.go`, #304).
+   read-only token cannot change membership. The QUIC `0x90` sub-opcodes
+   (`pkg/api/quic/opcode_permissions.go`) and the `platform_cluster_*` MCP
+   tools (`pkg/api/mcp/authz.go`, #304) carry the same pairs.
    Recorded in [api.md](api.md) §7.
 4. **`ClusterStatus` and the node list are operational disclosure**: node ids,
    addresses, leader identity, term, quorum state. Not secret, but not
@@ -320,7 +323,6 @@ Within this repo's half:
   `RemoveNode` and `TransferLeadership` RPCs. **None of them exists** — the
   proto declares five RPCs, and that is the whole service.
 - **It does not transfer leadership.** No `TransferLeadership` anywhere.
-- **It does not expose anything on QUIC.** There is no cluster opcode.
 - **It does not ship a CLI.** `pkg/cli/commands/cluster` is complete and
   registered on no root command ([cli.md](cli.md)).
 - **It does not enforce a node's right to join.** See §6.

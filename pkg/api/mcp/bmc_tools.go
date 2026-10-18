@@ -19,8 +19,6 @@ import (
 	"maps"
 	"slices"
 
-	"google.golang.org/protobuf/proto"
-
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
@@ -48,16 +46,6 @@ type BMCProvider interface {
 	BMCServiceServer() platformv1.BMCServiceServer
 }
 
-// bmcToolCall runs one BMC tool against the gRPC BMCService servicer.
-type bmcToolCall func(server platformv1.BMCServiceServer, ctx context.Context, args map[string]interface{}) (interface{}, error)
-
-// bmcToolBinding is how a BMC tool reaches the servicer: the schema it
-// advertises and the call that serves it.
-type bmcToolBinding struct {
-	schema func() map[string]interface{}
-	call   bmcToolCall
-}
-
 // bmcTool is one BMC tool and the permission it requires.
 type bmcTool struct {
 	// method is the gRPC method the tool serves.
@@ -67,7 +55,7 @@ type bmcTool struct {
 	// BMC scopes split on effect.
 	scope       string
 	description string
-	binding     bmcToolBinding
+	binding     grpcToolBinding[platformv1.BMCServiceServer]
 }
 
 // bmcTools are the BMC tools bound to the gRPC BMCService.
@@ -76,168 +64,140 @@ var bmcTools = map[string]bmcTool{
 		method:      platformv1.BMCService_PowerOn_FullMethodName,
 		scope:       "bmc:write",
 		description: "Power on the BMC-managed system",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.PowerOn, "profile_id"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.PowerOn, "profile_id"),
 	},
 	"platform_bmc_power_off": {
 		method:      platformv1.BMCService_PowerOff_FullMethodName,
 		scope:       "bmc:power",
 		description: "Power off the BMC-managed system",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.PowerOff, "profile_id"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.PowerOff, "profile_id"),
 	},
 	"platform_bmc_power_reset": {
 		method:      platformv1.BMCService_PowerReset_FullMethodName,
 		scope:       "bmc:power",
 		description: "Hard reset the BMC-managed system",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.PowerReset, "profile_id"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.PowerReset, "profile_id"),
 	},
 	"platform_bmc_power_cycle": {
 		method:      platformv1.BMCService_PowerCycle_FullMethodName,
 		scope:       "bmc:power",
 		description: "Power cycle the BMC-managed system",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.PowerCycle, "profile_id"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.PowerCycle, "profile_id"),
 	},
 	"platform_bmc_power_status": {
 		method:      platformv1.BMCService_PowerStatus_FullMethodName,
 		scope:       "bmc:read",
 		description: "Query the current power state of the BMC-managed system",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.PowerStatus, "profile_id"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.PowerStatus, "profile_id"),
 	},
 	"platform_bmc_set_boot_device": {
 		method:      platformv1.BMCService_SetBootDevice_FullMethodName,
 		scope:       "bmc:write",
 		description: "Set the next boot device override (BMC_BOOT_DEVICE_PXE, _DISK, _CDROM, _VIRTUAL_MEDIA or _NONE); persistent keeps it across reboots",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.SetBootDevice, "profile_id", "device"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.SetBootDevice, "profile_id", "device"),
 	},
 	"platform_bmc_get_boot_device": {
 		method:      platformv1.BMCService_GetBootDevice_FullMethodName,
 		scope:       "bmc:read",
 		description: "Return the current boot device override",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.GetBootDevice, "profile_id"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.GetBootDevice, "profile_id"),
 	},
 	"platform_bmc_mount_iso": {
 		method:      platformv1.BMCService_MountISO_FullMethodName,
 		scope:       "bmc:media",
 		description: "Mount an ISO image via virtual media (HTTP/HTTPS URL)",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.MountISO, "profile_id", "iso_url"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.MountISO, "profile_id", "iso_url"),
 	},
 	"platform_bmc_unmount_iso": {
 		method:      platformv1.BMCService_UnmountISO_FullMethodName,
 		scope:       "bmc:media",
 		description: "Eject the currently mounted virtual media",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.UnmountISO, "profile_id"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.UnmountISO, "profile_id"),
 	},
 	"platform_bmc_virtual_media_status": {
 		method:      platformv1.BMCService_VirtualMediaStatus_FullMethodName,
 		scope:       "bmc:read",
 		description: "Report whether virtual media is mounted and what is loaded",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.VirtualMediaStatus, "profile_id"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.VirtualMediaStatus, "profile_id"),
 	},
 	"platform_bmc_get_sensors": {
 		method:      platformv1.BMCService_GetSensors_FullMethodName,
 		scope:       "bmc:read",
 		description: "Read all BMC sensor values (temperatures, fans, voltages, etc.)",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.GetSensors, "profile_id"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.GetSensors, "profile_id"),
 	},
 	"platform_bmc_get_system_info": {
 		method:      platformv1.BMCService_GetSystemInfo_FullMethodName,
 		scope:       "bmc:read",
 		description: "Return manufacturer, product, serial, firmware/BIOS versions and power state",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.GetSystemInfo, "profile_id"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.GetSystemInfo, "profile_id"),
 	},
 	"platform_bmc_provision": {
 		method:      platformv1.BMCService_Provision_FullMethodName,
 		scope:       "bmc:admin",
 		description: "Start the orchestrated provisioning workflow, which composes virtual media, boot device and power control to boot the system from iso_url",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.Provision, "profile_id", "iso_url"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.Provision, "profile_id", "iso_url"),
 	},
 	"platform_bmc_provision_status": {
 		method:      platformv1.BMCService_ProvisionStatus_FullMethodName,
 		scope:       "bmc:read",
 		description: "Report the provisioning workflow status of the BMC-managed system",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.ProvisionStatus, "profile_id"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.ProvisionStatus, "profile_id"),
 	},
 	"platform_bmc_get_web_certificate": {
 		method:      platformv1.BMCService_GetWebCertificate_FullMethodName,
 		scope:       "bmc:read",
 		description: "Inspect the BMC's HTTPS certificate (subject, issuer, expiry, fingerprint)",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.GetWebCertificate, "profile_id"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.GetWebCertificate, "profile_id"),
 	},
 	"platform_bmc_replace_web_certificate": {
 		method:      platformv1.BMCService_ReplaceWebCertificate_FullMethodName,
 		scope:       "bmc:admin",
 		description: "Install a PEM certificate (cert_pem) and private key (key_pem), both base64, as the BMC's HTTPS certificate",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.ReplaceWebCertificate, "profile_id", "cert_pem", "key_pem"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.ReplaceWebCertificate, "profile_id", "cert_pem", "key_pem"),
 	},
 	"platform_bmc_enroll": {
 		method:      platformv1.BMCService_EnrollBMC_FullMethodName,
 		scope:       "bmc:admin",
 		description: "Run the BMC enrollment ceremony: establish trust, capture factory certificate, optionally replace the certificate, register DNS, and publish DANE TLSA records; an absent flag uses the profile default",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.EnrollBMC, "profile_id"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.EnrollBMC, "profile_id"),
 	},
 	"platform_bmc_cert_restore": {
 		method:      platformv1.BMCService_RestoreFactoryCert_FullMethodName,
 		scope:       "bmc:admin",
 		description: "Run the BMC factory-certificate restore ceremony: instruct the BMC to regenerate its default self-signed certificate, delete the stored SPKI pin, unpublish DANE TLSA records, and clear the device enrollment state",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.RestoreFactoryCert, "profile_id"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.RestoreFactoryCert, "profile_id"),
 	},
 	"platform_bmc_list_users": {
 		method:      platformv1.BMCService_ListUsers_FullMethodName,
 		scope:       "bmc:read",
 		description: "List populated BMC user slots (slot, username, enabled, privilege, channel)",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.ListUsers, "profile_id"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.ListUsers, "profile_id"),
 	},
 	"platform_bmc_create_user": {
 		method:      platformv1.BMCService_CreateUser_FullMethodName,
 		scope:       "bmc:admin",
 		description: "Create a BMC user account in the given slot with an initial password",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.CreateUser, "profile_id", "user", "password"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.CreateUser, "profile_id", "user", "password"),
 	},
 	"platform_bmc_delete_user": {
 		method:      platformv1.BMCService_DeleteUser_FullMethodName,
 		scope:       "bmc:admin",
 		description: "Delete the BMC user account in a slot",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.DeleteUser, "profile_id", "slot"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.DeleteUser, "profile_id", "slot"),
 	},
 	"platform_bmc_set_user_password": {
 		method:      platformv1.BMCService_SetUserPassword_FullMethodName,
 		scope:       "bmc:admin",
 		description: "Set the password of the BMC user account in a slot",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.SetUserPassword, "profile_id", "slot", "password"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.SetUserPassword, "profile_id", "slot", "password"),
 	},
 	"platform_bmc_set_user_privilege": {
 		method:      platformv1.BMCService_SetUserPrivilege_FullMethodName,
 		scope:       "bmc:admin",
 		description: "Set the privilege level of the BMC user account in a slot on an IPMI channel",
-		binding:     bmcToolMethod(platformv1.BMCServiceServer.SetUserPrivilege, "profile_id", "slot", "privilege"),
+		binding:     grpcToolMethod(platformv1.BMCServiceServer.SetUserPrivilege, "profile_id", "slot", "privilege"),
 	},
-}
-
-// bmcToolMethod binds a BMC tool to one BMCService method: the arguments
-// decode into its request and its response is the tool result.
-func bmcToolMethod[Req any, PReq interface {
-	*Req
-	proto.Message
-}, Resp proto.Message](
-	call func(platformv1.BMCServiceServer, context.Context, PReq) (Resp, error),
-	required ...string,
-) bmcToolBinding {
-	descriptor := PReq(new(Req)).ProtoReflect().Descriptor()
-	return bmcToolBinding{
-		schema: func() map[string]interface{} {
-			return appToolSchema(descriptor, required...)
-		},
-		call: func(server platformv1.BMCServiceServer, ctx context.Context, args map[string]interface{}) (interface{}, error) {
-			request := PReq(new(Req))
-			if err := decodeAppToolArgs(args, request); err != nil {
-				return nil, err
-			}
-			response, err := call(server, ctx, request)
-			if err != nil {
-				return nil, err
-			}
-			return encodeAppToolResult(response)
-		},
-	}
 }
 
 // registerBMCTools registers the platform_bmc_* tools.

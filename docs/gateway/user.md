@@ -370,6 +370,10 @@ process:
 ```
 
 The values shown are the defaults; `cgroup-root` defaults to `/sys/fs/cgroup`.
+gatewayd enables the `memory` and `cpu` controllers in each `cgroup-parent`
+directory it creates; the `cgroup-root` itself must already offer them to its
+children (`cgroup.subtree_control`), which systemd does on a host and a
+container needs delegated.
 The account must exist, and **the configuration file and every file it names
 must be readable by it**: the child reads them after it drops privileges, and
 it exits with an error rather than start without them. For the proxy that

@@ -38,7 +38,7 @@ import (
 //
 // Wire ownership (single-byte opcode space, authoritative):
 //
-//	0x00-0x02 health            0x90-0x97 reserved (JWT/auth, unwired)
+//	0x00-0x02 health            0x90 cluster; 0x91-0x97 reserved (JWT/auth)
 //	0x03-0x1F vtpm              0x98      daemon
 //	0x20-0x2D dns               0x99      TPM2 category
 //	0x2E      overlay category  0x9A-0x9D ceremony/piv/luks/fido2
@@ -127,7 +127,8 @@ var quicDispatchFamilies = map[string]dispatchFamilySpec{
 	"luks":           {status: quicwire.StatusUnavailable, body: "service not available: luks"},
 	"fido2":          {status: quicwire.StatusUnavailable, body: "service not available: fido2"},
 	"tenant":         {status: quicwire.StatusUnavailable, body: "QUIC service unavailable: tenant"},
-	"bmc":            {payload: []byte{quicwire.BMCSubEnroll}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: bmc-enroll"},
+	"bmc":            {payload: []byte{quicwire.BMCSubEnroll}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: bmc"},
+	"cluster":        {payload: []byte{quicwire.ClusterSubGetStatus}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: cluster"},
 	"iam":            {status: quicwire.StatusUnavailable, body: "QUIC service unavailable: iam"},
 	"kms":            {status: quicwire.StatusUnavailable, body: "QUIC service unavailable: kms"},
 	"switch":         {status: quicwire.StatusUnavailable, body: "QUIC service unavailable: switch"},
@@ -159,6 +160,7 @@ var quicCategoryProbeSubs = map[byte]byte{
 	quicwire.OpFIDO2Category:         quicwire.FIDO2SubListDevices,
 	quicwire.OpTenantBarrierCategory: quicwire.TenantBarrierSubStatus,
 	quicwire.OpBMCCategory:           quicwire.BMCSubEnroll,
+	quicwire.OpClusterCategory:       quicwire.ClusterSubGetStatus,
 	quicwire.OpSwitchCategory:        quicwire.SwitchSubListPorts,
 	quicwire.OpKMSExtendedCategory:   quicwire.KMSSubGetKeyMetadata,
 	quicwire.OpSecretsCategory:       quicwire.SecretsSubGet,
@@ -216,7 +218,8 @@ var quicWireOwners = []struct {
 	{0x7C, 0x7F, "attestation"},
 	{0x80, 0x88, "ca"},
 	{0x89, 0x8F, "daemon"},
-	{0x90, 0x97, "reserved"},
+	{0x90, 0x90, "cluster"},
+	{0x91, 0x97, "reserved"},
 	{0x98, 0x98, "daemon"},
 	{0x99, 0x99, "tpm2category"},
 	{0x9A, 0x9A, "ceremony"},
@@ -445,7 +448,7 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpDaemonStartService":        {value: quicwire.OpDaemonStartService, mode: wireDirect, family: "daemon"},
 	"OpDaemonStopService":         {value: quicwire.OpDaemonStopService, mode: wireDirect, family: "daemon"},
 	"OpDaemonRestartService":      {value: quicwire.OpDaemonRestartService, mode: wireDirect, family: "daemon"},
-	"OpJWTCreate":                 {value: quicwire.OpJWTCreate, mode: reservedByte, family: "reserved"},
+	"OpClusterCategory":           {value: quicwire.OpClusterCategory, mode: wireDirect, family: "cluster"},
 	"OpJWTVerify":                 {value: quicwire.OpJWTVerify, mode: reservedByte, family: "reserved"},
 	"OpJWTRefresh":                {value: quicwire.OpJWTRefresh, mode: reservedByte, family: "reserved"},
 	"OpJWTRevoke":                 {value: quicwire.OpJWTRevoke, mode: reservedByte, family: "reserved"},

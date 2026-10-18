@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // DefaultCgroupRoot is the cgroup v2 mount point on Alpine and every other
@@ -58,8 +59,9 @@ func (m *CgroupManager) leafPath(process string) string {
 	return filepath.Join(m.root(), m.Parent, filepath.Base(process))
 }
 
-// Prepare creates the leaf for a process, writes memory.max and cpu.max from
-// the definition, and returns the open leaf directory. The caller passes its
+// Prepare creates the leaf for a process, delegates the memory and cpu
+// controllers down to it, writes memory.max and cpu.max from the definition,
+// and returns the open leaf directory. The caller passes its
 // descriptor to the launcher and closes the directory once the child is
 // running; returning the *os.File rather than a bare descriptor keeps the
 // file from being finalized — and the descriptor from being closed — while
@@ -73,10 +75,11 @@ func (m *CgroupManager) Prepare(def Definition) (*os.File, error) {
 		return nil, nil
 	}
 	path := m.leafPath(def.Name)
-	// cgroupfs owns the mode of a real leaf; 0750 is what the directory gets
-	// on any other filesystem, which is only the test fixtures.
 	if err := os.MkdirAll(path, 0o750); err != nil {
 		return nil, &ErrCgroup{Path: path, Op: "create", Cause: err}
+	}
+	if err := m.delegate(def); err != nil {
+		return nil, err
 	}
 	if def.MemoryMax > 0 {
 		if err := m.write(path, "memory.max", strconv.FormatInt(def.MemoryMax, 10)); err != nil {
@@ -95,6 +98,39 @@ func (m *CgroupManager) Prepare(def Definition) (*os.File, error) {
 		return nil, &ErrCgroup{Path: path, Op: "open", Cause: err}
 	}
 	return leaf, nil
+}
+
+// delegate enables the controllers a definition's limits need in the
+// cgroup.subtree_control of every directory of Parent, top down. A cgroup v2
+// leaf only carries memory.max or cpu.max once its parent enables that
+// controller for its children, and a fresh directory enables none, so
+// without this the first limit write fails. Root's own subtree_control is
+// the host's (systemd's, or the container runtime's) and is left alone.
+// Enabling a controller that is already enabled is a no-op in the kernel,
+// so a restart rewrites the same value harmlessly.
+func (m *CgroupManager) delegate(def Definition) error {
+	var controllers []string
+	if def.MemoryMax > 0 {
+		controllers = append(controllers, "+memory")
+	}
+	if def.CPUMax != "" {
+		controllers = append(controllers, "+cpu")
+	}
+	if len(controllers) == 0 {
+		return nil
+	}
+	value := strings.Join(controllers, " ")
+	dir := m.root()
+	for _, component := range strings.Split(filepath.Clean(m.Parent), string(filepath.Separator)) {
+		if component == "" {
+			continue
+		}
+		dir = filepath.Join(dir, component)
+		if err := m.write(dir, "cgroup.subtree_control", value); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // write sets one cgroup attribute.

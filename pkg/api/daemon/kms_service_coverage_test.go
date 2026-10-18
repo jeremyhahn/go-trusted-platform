@@ -38,6 +38,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -49,6 +50,8 @@ import (
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 )
 
 // =============================================================================
@@ -1476,6 +1479,75 @@ func TestKMSServerAdapter_GetKey_NilClient(t *testing.T) {
 	}
 	if !isUnavailableStatus(err) {
 		t.Errorf("expected gRPC Unavailable status, got %T: %v", err, err)
+	}
+}
+
+// classedKMSClient answers every key lookup with one error.
+type classedKMSClient struct {
+	mockSDKKMSClient
+	err error
+}
+
+func (c *classedKMSClient) GetKey(ctx context.Context, keyID string) (*kms.KeyInfo, error) {
+	return nil, c.err
+}
+
+func (c *classedKMSClient) GetKeyMetadata(ctx context.Context, keyID string) (*kms.KeyMetadataResponse, error) {
+	return nil, c.err
+}
+
+func (c *classedKMSClient) GetKeyPolicy(ctx context.Context, keyID string) (*kms.KeyPolicy, error) {
+	return nil, c.err
+}
+
+// TestKMSServerAdapter_ErrorClasses: the adapter behind the QUIC KMS
+// handlers answers each SDK error with its class (#304), and an error that
+// names no class with Internal, never a guessed NotFound.
+func TestKMSServerAdapter_ErrorClasses(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want codes.Code
+	}{
+		{"not found", sdkerrors.NewNotFound("kms", "no key"), codes.NotFound},
+		{"database not found", quicbaas.NewDatabaseError(quicbaas.ErrNotFound, "kms", "no key"), codes.NotFound},
+		{"invalid input", sdkerrors.NewInvalidInput("kms", "bad key id"), codes.InvalidArgument},
+		{"already exists", sdkerrors.NewAlreadyExists("kms", "dup"), codes.AlreadyExists},
+		{"precondition", sdkerrors.NewPreconditionFailed("kms", "disabled"), codes.FailedPrecondition},
+		{"forbidden", sdkerrors.NewForbidden("kms", "no"), codes.PermissionDenied},
+		{"unimplemented", sdkerrors.NewUnimplemented("kms", "later"), codes.Unimplemented},
+		{"unavailable", sdkerrors.NewUnavailable("kms", "down"), codes.Unavailable},
+		{"no class", errors.New("key not found"), codes.Internal},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			keys := NewKMSServerAdapter(&classedKMSClient{err: tt.err}, slog.Default())
+			crypto := NewCryptoServerAdapter(&platformMockCryptoClient{
+				encryptFn: func(ctx context.Context, req *quicbaas.EncryptRequest) (*quicbaas.EncryptResponse, error) {
+					return nil, tt.err
+				},
+			}, slog.Default())
+
+			_, err := keys.GetKey(ctx, &pb.GetKeyRequest{KeyId: "k"})
+			if got := status.Code(err); got != tt.want {
+				t.Errorf("GetKey: %v, want %v (%v)", got, tt.want, err)
+			}
+			_, err = keys.GetKeyMetadata(ctx, &pb.GetKeyMetadataRequest{KeyId: "k"})
+			if got := status.Code(err); got != tt.want {
+				t.Errorf("GetKeyMetadata: %v, want %v (%v)", got, tt.want, err)
+			}
+			_, err = keys.GetKeyPolicy(ctx, &pb.GetKeyPolicyRequest{KeyId: "k"})
+			if got := status.Code(err); got != tt.want {
+				t.Errorf("GetKeyPolicy: %v, want %v (%v)", got, tt.want, err)
+			}
+			_, err = crypto.Encrypt(ctx, &pb.CryptoEncryptRequest{KeyId: "k", Plaintext: []byte("p")})
+			if got := status.Code(err); got != tt.want {
+				t.Errorf("Encrypt: %v, want %v (%v)", got, tt.want, err)
+			}
+		})
 	}
 }
 

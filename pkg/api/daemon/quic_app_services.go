@@ -25,12 +25,13 @@ import (
 // Wire contract
 // =============================================================================
 //
-// The SDK QUIC transport adapter routes every CacheService, SchedulerService
-// and MessagingService method to its category opcode (0x53, 0x54, 0x55) with
-// the sub-opcode in payload[0] and the MessagePack-encoded platform.v1 request
-// in payload[1:]. The handlers run the same gRPC service instances the other
-// transports use, so a node without the SDK answers StatusUnavailable naming
-// the service on QUIC as it does everywhere else.
+// The SDK QUIC transport adapter routes every CacheService, SchedulerService,
+// MessagingService and SwitchService method to its category opcode (0x53,
+// 0x54, 0x55, 0xCC) with the sub-opcode in payload[0] and the
+// MessagePack-encoded platform.v1 request in payload[1:]. The handlers run the
+// same gRPC service instances the other transports use, so a node without the
+// service answers StatusUnavailable naming it on QUIC as it does everywhere
+// else.
 
 // appQUICHandler is one application service sub-operation handler
 // (map-based dispatch for O(1) routing).
@@ -91,7 +92,8 @@ var messagingQUICHandlers = map[byte]appQUICHandler{
 	quicwire.MessagingSubGetChannelStats: appQUICCall("MessagingGetChannelStats", quicMessagingServer, platformv1.MessagingServiceServer.GetChannelStats),
 }
 
-// appQUICCategories routes the application service category opcodes.
+// appQUICCategories routes the category opcodes whose sub-opcodes all call
+// one gRPC servicer: the application services and the switch service.
 var appQUICCategories = map[byte]appQUICCategory{
 	quicwire.OpCacheCategory: {
 		service:  appservices.ServiceCache,
@@ -107,6 +109,11 @@ var appQUICCategories = map[byte]appQUICCategory{
 		service:  appservices.ServiceMessaging,
 		wired:    func(h *QUICServiceHandler) bool { return h.messagingService != nil },
 		handlers: messagingQUICHandlers,
+	},
+	quicwire.OpSwitchCategory: {
+		service:  "switch",
+		wired:    func(h *QUICServiceHandler) bool { return h.switchServer != nil },
+		handlers: switchQUICHandlers,
 	},
 }
 

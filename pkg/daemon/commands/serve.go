@@ -1985,13 +1985,13 @@ func verifyChain(leaf *x509.Certificate, roots *x509.CertPool) error {
 // this gate exists to avoid causing.
 //
 // What actually distinguishes the two shapes is reachability by peers:
-//   - join-addresses set  -> this node joins peers; multi-instance.
+//   - join-addresses set  -> a clustered member; every member lists the
+//     whole cluster there, itself included (quicbaas.Config.IsClustered).
 //   - raft-address that is ROUTABLE (not loopback/unspecified) -> this
-//     node advertises itself to peers, which is how the cluster
-//     bootstrap member is configured (it has an EMPTY join-addresses
-//     list, per configs/platform/cluster/README.md §Raft Bootstrap, so
-//     join-addresses alone would miss exactly the node an operator
-//     claims from).
+//     node advertises itself to peers. Validate refuses a clustered config
+//     without one, so this adds nothing for a valid cluster member; it
+//     keeps the refusal on a node that advertises a routable Raft address
+//     but has not been given its member list.
 //   - loopback/empty raft-address and no join-addresses -> single node.
 func isMultiInstanceDeployment(cfg *platformquicbaas.Config) bool {
 	if cfg == nil {

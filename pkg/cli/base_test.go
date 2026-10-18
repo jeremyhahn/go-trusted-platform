@@ -18,7 +18,6 @@ import (
 	"net"
 	"path/filepath"
 	"testing"
-	"time"
 
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	"github.com/stretchr/testify/assert"
@@ -41,9 +40,8 @@ func startTestGRPCServer(t *testing.T, socketPath string) (*grpc.Server, func())
 		}
 	}()
 
-	// Give the server time to start
-	time.Sleep(10 * time.Millisecond)
-
+	// The listener is already bound: a dial queues in its backlog until
+	// Serve accepts it, so no start-up wait is needed.
 	cleanup := func() {
 		server.GracefulStop()
 		listener.Close()

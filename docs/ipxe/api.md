@@ -252,19 +252,12 @@ who arrived here can find them:
 
 | Capability group | REST base | gRPC | QUIC | MCP |
 |---|---|---|---|---|
-| Device lifecycle — register, list, get, get-by-MAC, remove, update state, set enrolled | `/api/v1/pxe/devices` | `PXEService` | `0xEC`–`0xEF`, `0xFC`–`0xFF` | `pxe_*` |
-| **Authorize / quarantine / retry** | `/api/v1/pxe/devices/{id}/…` | `PXEService` | as above | `pxe_authorize_device`, `pxe_quarantine_device`, `pxe_retry_device` |
-| Events | `GET /api/v1/pxe/devices/{id}/events` | `GetEvents` | as above | `pxe_get_device_events` |
-| Service status / start / stop | `/api/v1/pxe/status`, `/start`, `/stop` | `GetStatus`, `StartService`, `StopService` | as above | `pxe_service_status`, `pxe_start_service`, `pxe_stop_service` |
-| Install-complete webhook | `POST /api/v1/pxe/webhook/complete` | `WebhookComplete` | as above | `pxe_webhook_complete` |
+| Device lifecycle — register, list, get, get-by-MAC, remove, update state, set enrolled | `/api/v1/pxe/devices` | `PXEService` | `0xEC`–`0xEF`, remove `0xFF`; get-by-MAC and set-enrolled `0xCF` subs `0x30`, `0x31` | `pxe_*` |
+| **Authorize / quarantine / retry** | `/api/v1/pxe/devices/{id}/…` | `PXEService` | `0xFC`, `0xFD`, `0xFE` | `pxe_authorize_device`, `pxe_quarantine_device`, `pxe_retry_device` |
+| Events | `GET /api/v1/pxe/devices/{id}/events` | `GetEvents` | `0xCF` sub `0x32` | `pxe_get_device_events` |
+| Service status / start / stop | `/api/v1/pxe/status`, `/start`, `/stop` | `GetStatus`, `StartService`, `StopService` | `0xCF` subs `0x33`, `0x34`, `0x35` | `pxe_service_status`, `pxe_start_service`, `pxe_stop_service` |
+| Install-complete webhook | `POST /api/v1/pxe/webhook/complete` | `WebhookComplete` | `0xCF` sub `0x36` | `pxe_webhook_complete` |
 | Gateway-side provisioning — register, state, install complete | `/api/v1/provisioning/devices/{mac}/…` ([provisioning api.md](../provisioning/api.md) §4) | `ProvisioningGateway` (4 RPCs) | — | — |
-
-**The install-complete webhook route exists only when the operator sets
-`pxe.ServiceConfig.WebhookEnabled`** (default `false`). Disabled, the path is
-not registered and answers 404 like any unknown path. Enabled, it is
-**unauthenticated**: the caller is a booting node that presents no credential,
-and the device is identified by the MAC in the request body. What a booting
-node should present is #238; `WebhookSecret` is reserved for it and unused.
 
 **The install-complete webhook route exists only when the operator sets
 `pxe.ServiceConfig.WebhookEnabled`** (default `false`). Disabled, the path is
@@ -300,11 +293,13 @@ paths. It now claims the normative item routes. The device id travels only in
 the path (the templated rows in `sdk/go/transport/rest/adapter.go`), and a
 request without one is refused with `InvalidArgument` before it is sent.
 
-**Correction to carry upstream.** `docs/provisioning/api.md` §1 records the PXE
-QUIC opcodes as `0xFC`–`0xFF`. `sdk/go/wire/quicwire/protocol.go` also defines
-`OpPXEListDevices` `0xEC`, `OpPXEGetDevice` `0xED`, `OpPXERegisterDevice` `0xEE`
-and `OpPXEUpdateState` `0xEF` — eight, not four. Raised against
-`docs/provisioning/`, which owns that table.
+**QUIC carries all fifteen (#704).** Eight methods have a direct opcode in
+`sdk/go/wire/quicwire/protocol.go` (`0xEC`–`0xEF`, `0xFC`–`0xFF`); the other
+seven ride the provisioning category `0xCF` as subs `0x30`–`0x36`
+(`sdk/go/wire/quicwire/pxe_opcodes.go`). The daemon dispatches every one through
+a map to the gRPC servicer (`pkg/api/daemon/quic_pxe.go`), and the SDK QUIC
+adapter maps all fifteen (`sdk/go/transport/quic/aab_pxe.go`). The per-method
+opcode is in [`docs/provisioning/api.md`](../provisioning/api.md) §2.
 
 ---
 
@@ -326,8 +321,12 @@ RPC is in the gRPC scope catalog (`pkg/api/grpc/method_permissions.go`):
 | `pxe:write` | `Authorize`, `Quarantine`, `RegisterDevice`, `Retry`, `SetDeviceEnrolled`, `StartService`, `StopService`, `UpdateState`, `WebhookComplete` |
 | `pxe:delete` | `RemoveDevice` |
 
-Authorizing or quarantining a PXE device therefore needs `pxe:write`. No `pxe_*`
-MCP tool is registered.
+Authorizing or quarantining a PXE device therefore needs `pxe:write`.
+
+**QUIC and MCP take the same scopes (#704).** Each QUIC opcode and `0xCF` sub
+carries the scope of its RPC (`pkg/api/quic/opcode_permissions.go`), and each of
+the fifteen `pxe_*` MCP tools is classified with it (`pkg/api/mcp/pxe_tools.go`);
+a caller without the scope is refused before the service is reached.
 
 **REST takes the same scopes (#452).** Behind the platform-token middleware each
 operator route takes, on top of the admin role gate, the scope its RPC takes on

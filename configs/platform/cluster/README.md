@@ -57,23 +57,24 @@ Deploy nodes in this order to ensure proper cluster formation:
 
 ### Phase 1: Bootstrap Server Cluster
 
-1. **Deploy server1** (bootstrap node)
+1. **Deploy server1**
    ```bash
    platformd --config /etc/trusted-platform/server1.example.com.yaml
    ```
-   Server1 starts as a single-node Raft cluster (leader).
+   Server1 waits for a quorum of the members it lists.
 
-2. **Deploy server2** (join cluster)
+2. **Deploy server2**
    ```bash
    platformd --config /etc/trusted-platform/server2.example.com.yaml
    ```
-   Server2 joins server1's cluster as a follower.
+   With two of three members up, the cluster has quorum and elects a leader.
 
-3. **Deploy server3** (join cluster)
+3. **Deploy server3**
    ```bash
    platformd --config /etc/trusted-platform/server3.example.com.yaml
    ```
-   Server3 joins as a follower. Cluster now has quorum (3 nodes).
+   Server3 catches up as the third member. The servers may start in any
+   order (see [Raft Bootstrap Procedure](#raft-bootstrap-procedure)).
 
 ### Phase 2: Deploy Gateways
 
@@ -106,20 +107,25 @@ Both gateways share the anycast VIP (10.0.0.1). Configure your network to route 
 
 ### Initial Cluster Formation
 
-Server1 is the bootstrap node:
-- `join-addresses: []` (empty - creates new cluster)
-- Becomes initial leader
+The three servers bootstrap the cluster together from one static member list.
+Each server's `quicbaas:` section carries:
 
-Server2 and Server3 join the existing cluster:
-- `join-addresses: ["10.0.1.1:63000"]` (points to server1)
-- Automatically discover and join the Raft cluster
+- the same `join-addresses`, every member as `id=host:port`, itself included:
+  `["1=10.0.1.1:63000", "2=10.0.1.2:63000", "3=10.0.1.3:63000"]`;
+- the same `deployment-id` and `raft-tls-ca-file`;
+- its own `node-id`, `raft-address`, `raft-tls-cert-file` and `raft-tls-key-file`.
+
+Start them in any order; a leader is elected once a quorum is up. The storage
+backend stays `pebble`: Raft is engaged by `join-addresses`, and
+`storage-backend: raft` is refused. Raft between peers is always mutual TLS,
+so provision the certificate, key and CA files before the first start (see
+[docs/cluster/user.md](../../../docs/cluster/user.md#configuring-a-cluster)).
 
 ### Adding New Nodes
 
-To add a node to an existing cluster:
-1. Configure the new node with `join-addresses` pointing to any existing cluster member
-2. Start the new node
-3. The new node automatically joins and receives replicated state
+Adding a member to a running cluster is not supported from platform config
+yet: platformd always bootstraps from the static list and never sets
+go-quicbaas's join mode.
 
 ### Recovering from Failures
 
@@ -245,9 +251,9 @@ gatewayd connections
 |------|-------------|
 | `gateway1.example.com.yaml` | Gateway node 1 (load balancer) |
 | `gateway2.example.com.yaml` | Gateway node 2 (load balancer) |
-| `server1.example.com.yaml` | Server node 1 (Raft bootstrap) |
-| `server2.example.com.yaml` | Server node 2 (Raft follower) |
-| `server3.example.com.yaml` | Server node 3 (Raft follower) |
+| `server1.example.com.yaml` | Server node 1 (Raft member 1) |
+| `server2.example.com.yaml` | Server node 2 (Raft member 2) |
+| `server3.example.com.yaml` | Server node 3 (Raft member 3) |
 | `client1.example.com.yaml` | Client node 1 (application) |
 | `client2.example.com.yaml` | Client node 2 (application) |
 | `client3.example.com.yaml` | Client node 3 (application) |

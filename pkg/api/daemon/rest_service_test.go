@@ -96,9 +96,8 @@ func TestRESTServerStartStop(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, server.IsRunning())
 
-		// Give it time to start
-		time.Sleep(100 * time.Millisecond)
-
+		// Start binds the listener synchronously, so the server can be
+		// stopped as soon as Start returns.
 		// Stop server
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

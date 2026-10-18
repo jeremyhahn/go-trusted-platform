@@ -1008,10 +1008,7 @@ func TestSDNStressOperations(t *testing.T) {
 		}
 	}
 
-	// Wait for things to settle
-	time.Sleep(time.Second)
-
-	// Cleanup
+	// Cleanup: every create has returned above, so nothing is still in flight
 	for _, bridgeID := range bridgeIDs {
 		if bridgeID != "" {
 			adapter.BridgeDelete(ctx, bridgeID, BridgeDeleteOptions{Force: true})

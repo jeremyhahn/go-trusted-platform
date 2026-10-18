@@ -154,13 +154,11 @@ func createMockProvisioningServer(t *testing.T, env *testEnvironment) *mockProvi
 		},
 	}
 
-	// Start server in background
+	// Start server in background. The listener is already bound, so
+	// clients that connect before ServeTLS runs wait in its accept queue.
 	go func() {
 		server.ServeTLS(listener, "", "")
 	}()
-
-	// Wait briefly for server to start
-	time.Sleep(100 * time.Millisecond)
 
 	mockServer := &mockProvisioningServer{
 		server:   server,

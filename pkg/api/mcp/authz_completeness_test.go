@@ -27,64 +27,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
-// knownUnclassified names every registered MCP tool that has no entry in
-// AuthorizationChecker.toolPermissions.
-//
-// These tools are NOT safe. Until #300 they were served unauthorized by a
-// default-allow in AuthorizeTool; that default is now deny, so each of these
-// is refused with AuthErrorToolNotClassified rather than executed. The list
-// exists so the gap is visible in the tree to anyone reading, instead of
-// being discoverable only by running the registry diff.
-//
-// THIS LIST MAY ONLY SHRINK. The test below fails if:
-//
-//   - a registered tool appears in neither the permission map nor this list —
-//     so a newly registered tool cannot silently join the unauthorized set;
-//   - a name here also has a permission entry — a stale line to delete once
-//     the tool is classified;
-//   - a name here is not registered at all — a stale line for a tool that no
-//     longer exists.
-//
-// Each #304 tranche removed the tools it classified, giving each the scope of
-// its gRPC twin. What remains is refused: tools no tranche has classified yet,
-// tools with no gRPC or REST twin to take a scope from, tools no executor
-// dispatches (see knownUndispatched), and tools that refuse on every
-// transport, so no scope may unlock them (iam_create_token, iam_revoke_token,
-// iam_authenticate).
-var knownUnclassified = []string{
-	"attestation_attest_workload",
-	"attestation_create_policy",
-	"attestation_create_report",
-	"attestation_delete_policy",
-	"attestation_evaluate_policy",
-	"attestation_get_policy",
-	"attestation_get_report",
-	"attestation_list_policies",
-	"attestation_list_reports",
-	"attestation_verify_workload",
-	// dns_reverse_lookup has no backend: the tool answers with no executor
-	// and no gRPC or REST twin to take a scope from.
-	"dns_reverse_lookup",
-	"iam_authenticate",
-	"iam_create_token",
-	"iam_revoke_token",
-	// platform_daemon_list_protocols has no gRPC twin, and its REST route is
-	// gated on the admin role, which carries no scope.
-	"platform_daemon_list_protocols",
-	"platform_luks_test_unlock",
-	"platform_tpm_ek_delete",
-	"platform_tpm_iak_delete",
-	"platform_tpm_srk_delete",
-	// vm_resume has no gRPC twin to take a scope from, nor an executor.
-	"vm_resume",
-	// vm_snapshot_get has no gRPC or REST twin to take a scope from.
-	"vm_snapshot_get",
-	// vm_suspend has no gRPC twin to take a scope from, nor an executor.
-	"vm_suspend",
-	// vm_update has no gRPC twin to take a scope from, nor an executor.
-	"vm_update",
-}
-
 // TestEveryRegisteredToolIsClassified walks the tool registry the server
 // actually builds, rather than scanning source for tool definitions. A source
 // scan encodes an assumption about how tools get registered; ListTools()
@@ -95,67 +37,19 @@ func TestEveryRegisteredToolIsClassified(t *testing.T) {
 	registry := NewToolRegistry(nil, log)
 	checker := NewAuthorizationChecker(nil, nil)
 
-	unclassified := make(map[string]bool, len(knownUnclassified))
-	for _, name := range knownUnclassified {
-		unclassified[name] = true
-	}
-
-	registered := make(map[string]bool)
-	var undeclared []string
+	var unclassified []string
 	for _, tool := range registry.ListTools() {
-		registered[tool.Name] = true
-		_, hasPermission := checker.toolPermissions[tool.Name]
-		if !hasPermission && !unclassified[tool.Name] {
-			undeclared = append(undeclared, tool.Name)
+		if _, ok := checker.toolPermissions[tool.Name]; !ok {
+			unclassified = append(unclassified, tool.Name)
 		}
 	}
 
-	sort.Strings(undeclared)
-	assert.Empty(t, undeclared,
-		"these tools are registered with no permission entry and are not in "+
-			"knownUnclassified. Give each a resource:action entry in "+
-			"toolPermissionCatalog, or an explicit \"\" if it genuinely needs none. "+
-			"Do not add them to knownUnclassified — that list may only shrink.")
-}
-
-// TestKnownUnclassifiedHasNoStaleEntries is the ratchet. Once a tool is given
-// a permission, its line here must go, so the list cannot quietly stop
-// shrinking while #304 reports progress.
-func TestKnownUnclassifiedHasNoStaleEntries(t *testing.T) {
-	log := logging.NewLogger(slog.LevelError, io.Discard)
-	registry := NewToolRegistry(nil, log)
-	checker := NewAuthorizationChecker(nil, nil)
-
-	registered := make(map[string]bool)
-	for _, tool := range registry.ListTools() {
-		registered[tool.Name] = true
-	}
-
-	listed := make(map[string]bool, len(knownUnclassified))
-	var nowClassified, noLongerRegistered, listedTwice []string
-	for _, name := range knownUnclassified {
-		if listed[name] {
-			listedTwice = append(listedTwice, name)
-		}
-		listed[name] = true
-		if _, ok := checker.toolPermissions[name]; ok {
-			nowClassified = append(nowClassified, name)
-		}
-		if !registered[name] {
-			noLongerRegistered = append(noLongerRegistered, name)
-		}
-	}
-
-	sort.Strings(nowClassified)
-	sort.Strings(noLongerRegistered)
-	assert.Empty(t, nowClassified,
-		"these tools now have a permission entry — delete their lines from "+
-			"knownUnclassified")
-	assert.Empty(t, noLongerRegistered,
-		"these tools are no longer registered — delete their lines from "+
-			"knownUnclassified")
-	assert.Empty(t, listedTwice,
-		"these tools appear more than once in knownUnclassified — keep one line each")
+	sort.Strings(unclassified)
+	assert.Empty(t, unclassified,
+		"these tools are registered with no permission entry, so AuthorizeTool "+
+			"refuses them. Give each the resource:action scope of its gRPC, QUIC or "+
+			"REST twin in toolPermissionCatalog, or an explicit \"\" if it genuinely "+
+			"needs none.")
 }
 
 // TestInvitationToolsAreClassified pins the #300 fix specifically: the seven
@@ -210,19 +104,6 @@ func TestUnclassifiedToolIsDenied(t *testing.T) {
 			"that is in the platform's configuration")
 }
 
-// TestUnclassifiedRegisteredToolIsDenied uses a real registered tool that is
-// still on knownUnclassified, so the assertion tracks the actual gap rather
-// than an invented name.
-func TestUnclassifiedRegisteredToolIsDenied(t *testing.T) {
-	require.NotEmpty(t, knownUnclassified, "nothing left to assert once #304 completes; delete this test then")
-	checker := NewAuthorizationChecker(allowAllAuthService{}, nil)
-
-	_, err := checker.AuthorizeTool(context.Background(), knownUnclassified[0], "any-token")
-
-	require.NotNil(t, err, "%s is registered with no permission mapping and must be refused", knownUnclassified[0])
-	assert.Equal(t, AuthErrorToolNotClassified, err.Type)
-}
-
 // TestClassifiedToolWithEmptyPermissionIsAllowed guards the other direction:
 // an explicit "" means "no permission required" and must still be served, or
 // the two invitee invitation tools break.
@@ -236,7 +117,7 @@ func TestClassifiedToolWithEmptyPermissionIsAllowed(t *testing.T) {
 
 // TestBMCToolsAreClassified pins #304's first tranche. Every BMC tool is
 // asserted by name and scope, so a later edit that loosens one — or drops a
-// tool back into knownUnclassified — fails here rather than silently widening
+// tool's entry from the map — fails here rather than silently widening
 // what a single grant confers.
 //
 // Read/write is drawn on EFFECT, not on the REST shape: docs/bmc/api.md:64
@@ -278,6 +159,38 @@ func TestBMCToolsAreClassified(t *testing.T) {
 	}
 }
 
+// TestPXEToolsAreClassified pins every PXE tool to the scope of its gRPC
+// PXEService method by name (#704), so a later edit that loosens one fails
+// here rather than silently widening what a single grant confers.
+func TestPXEToolsAreClassified(t *testing.T) {
+	checker := NewAuthorizationChecker(nil, nil)
+
+	for tool, want := range map[string]string{
+		// Observation only.
+		"pxe_list_devices":      "pxe:read",
+		"pxe_get_device":        "pxe:read",
+		"pxe_get_device_by_mac": "pxe:read",
+		"pxe_get_device_events": "pxe:read",
+		"pxe_service_status":    "pxe:read",
+		// Moves a device through the workflow, or starts and stops the service.
+		"pxe_register_device":     "pxe:write",
+		"pxe_update_state":        "pxe:write",
+		"pxe_set_device_enrolled": "pxe:write",
+		"pxe_authorize_device":    "pxe:write",
+		"pxe_quarantine_device":   "pxe:write",
+		"pxe_retry_device":        "pxe:write",
+		"pxe_start_service":       "pxe:write",
+		"pxe_stop_service":        "pxe:write",
+		"pxe_webhook_complete":    "pxe:write",
+		// Removes a device.
+		"pxe_remove_device": "pxe:delete",
+	} {
+		got, ok := checker.toolPermissions[tool]
+		require.True(t, ok, "%s must have an explicit permission entry", tool)
+		assert.Equal(t, want, got, "%s", tool)
+	}
+}
+
 // TestTPMQuoteToolsAreClassified: the quote and certify tools carry the scope
 // of their gRPC TPMService twin, so an MCP caller reaches the same service
 // (#482, #317).
@@ -311,9 +224,8 @@ func TestTPMNVToolsAreClassified(t *testing.T) {
 	}
 }
 
-// TestIAMToolClassification pins every IAM tool to the scope of its gRPC twin,
-// while iam_create_token, iam_revoke_token and iam_authenticate stay
-// unclassified (denied) because they refuse on every transport.
+// TestIAMToolClassification pins every IAM tool to the scope of its gRPC twin;
+// iam_authenticate is open, as its QUIC twin is pre-auth.
 func TestIAMToolClassification(t *testing.T) {
 	checker := NewAuthorizationChecker(nil, nil)
 
@@ -342,17 +254,15 @@ func TestIAMToolClassification(t *testing.T) {
 		"iam_list_tenants":        "iam:read",
 		"iam_delete_tenant":       "iam:delete",
 		"iam_verify_token":        "iam:read",
+		"iam_create_token":        "iam:write",
+		"iam_revoke_token":        "iam:write",
+		// The credential exchange is open, as QUIC's preAuthOpcodes records.
+		"iam_authenticate": "",
 	}
 	for tool, scope := range want {
 		got, ok := checker.toolPermissions[tool]
 		require.True(t, ok, "%s must have an explicit permission entry", tool)
 		assert.Equal(t, scope, got, "%s", tool)
-	}
-
-	// These refuse on every transport, so no scope may unlock them.
-	for _, tool := range []string{"iam_create_token", "iam_revoke_token", "iam_authenticate"} {
-		_, ok := checker.toolPermissions[tool]
-		assert.False(t, ok, "%s must stay unclassified", tool)
 	}
 }
 
@@ -375,6 +285,75 @@ func TestIAMToolsAuthorizeByScope(t *testing.T) {
 		assert.Equal(t, AuthErrorPermissionDenied, err.Type, "%s", tool)
 		assert.Equal(t, action, readOnly.lastAction, "%s", tool)
 	}
+}
+
+// TestLastClassifiedToolsAuthorizeByScope pins the tools #304 classified last
+// to the scope their twin carries on the other transports: a caller holding
+// that scope is admitted, and a caller holding every other action on the same
+// resource is refused.
+func TestLastClassifiedToolsAuthorizeByScope(t *testing.T) {
+	cases := []struct {
+		tool     string
+		resource string
+		action   string
+	}{
+		// gRPC TPMService DeleteEK and DeleteSRK; REST tpmScopeDelete.
+		{"platform_tpm_ek_delete", "tpm", "delete"},
+		{"platform_tpm_srk_delete", "tpm", "delete"},
+		// QUIC SubOpTPM2DeleteIAK.
+		{"platform_tpm_iak_delete", "tpm", "delete"},
+		// gRPC LUKSService TestUnlock.
+		{"platform_luks_test_unlock", "luks", "read"},
+		// gRPC PlatformIAMService CreateToken and RevokeToken.
+		{"iam_create_token", "iam", "write"},
+		{"iam_revoke_token", "iam", "write"},
+		// QUIC OpDaemonListProtocols.
+		{"platform_daemon_list_protocols", "platform", "read"},
+		// gRPC ComputeService ListSnapshots.
+		{"vm_snapshot_get", "vm", "read"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.tool+"/admitted", func(t *testing.T) {
+			exact := &mockAuthorizationService{
+				checkFunc: func(_ context.Context, _, resource, action string) (bool, error) {
+					return resource == tc.resource && action == tc.action, nil
+				},
+			}
+			checker := NewAuthorizationChecker(exact, nil)
+
+			assert.Nil(t, checker.CheckToolAuthorization(context.Background(), tc.tool, "token"))
+		})
+
+		t.Run(tc.tool+"/denied", func(t *testing.T) {
+			otherActions := &mockAuthorizationService{
+				checkFunc: func(_ context.Context, _, resource, action string) (bool, error) {
+					return resource == tc.resource && action != tc.action, nil
+				},
+			}
+			checker := NewAuthorizationChecker(otherActions, nil)
+
+			err := checker.CheckToolAuthorization(context.Background(), tc.tool, "token")
+			require.NotNil(t, err, "%s needs %s:%s", tc.tool, tc.resource, tc.action)
+			assert.Equal(t, AuthErrorPermissionDenied, err.Type)
+			assert.Equal(t, tc.action, otherActions.lastAction)
+		})
+	}
+}
+
+// TestIAMAuthenticateIsOpen: iam_authenticate is the credential exchange that
+// mints a token, so it is admitted without one even by a backend that grants
+// nothing, as QUIC's preAuthOpcodes admits OpIAMAuthenticate.
+func TestIAMAuthenticateIsOpen(t *testing.T) {
+	denyAll := &mockAuthorizationService{
+		checkFunc: func(context.Context, string, string, string) (bool, error) {
+			return false, nil
+		},
+	}
+	checker := NewAuthorizationChecker(denyAll, nil)
+
+	_, err := checker.AuthorizeTool(context.Background(), "iam_authenticate", "")
+
+	assert.Nil(t, err, "the credential exchange cannot require the token it issues")
 }
 
 // TestOverlayToolsAreClassified pins each overlay tool to the scope its gRPC

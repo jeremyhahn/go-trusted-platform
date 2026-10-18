@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
@@ -639,7 +640,7 @@ func TestKMSGetKey_NotFound(t *testing.T) {
 	ctx := context.Background()
 	mockKMS := &mockKMSServiceForMCPTests{
 		getKeyFunc: func(ctx context.Context, req *service.GetKeyRequest) (*service.GetKeyResponse, error) {
-			return nil, errors.New("key not found")
+			return nil, sdkerrors.NewNotFound("kms", "no key "+req.KeyID)
 		},
 	}
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{

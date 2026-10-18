@@ -1,6 +1,6 @@
 # Go SDK — API
 
-> **Status: NORMATIVE** · Scope: what `sdk/go` carries, per service and per transport · Last verified: 2026-10-13
+> **Status: NORMATIVE** · Scope: what `sdk/go` carries, per service and per transport · Last verified: 2026-10-15
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING`, never omitted.
@@ -18,8 +18,8 @@ when their adapter maps it:
 | Transport | Where the mapping lives |
 |---|---|
 | REST | `transport/rest/adapter.go` (`grpcMethodToRESTMap`, `templatedRouteTable`), plus `ldevid.go`, `provisioning.go`, `attestation_reports.go`, `app_services.go`, `iam.go` (single IAM resources onto the reply's resource field) |
-| QUIC | `transport/quic/adapter.go` (`grpcMethodToOpcodeMap`, `categorySubOpcodeMap`), plus `aaa_ldevid.go`, `aab_ntp.go`, `aac_app_services.go`, `ceremony.go`, `device.go`, `dns.go`, `fido2.go`, `gateway_nat64.go`, `luks.go`, `piv.go`, `provisioning.go`, `tpm_quote.go` |
-| MCP | `transport/mcp/adapter.go` (`grpcMethodToMCPToolMap`), plus `app_services.go`, `attestation_reports.go`, `bmc.go`, `eab.go`, `ldevid.go`, `phase35.go`, `provisioning.go`, `tpm_quote.go` |
+| QUIC | `transport/quic/adapter.go` (`grpcMethodToOpcodeMap`, `categorySubOpcodeMap`), plus `aaa_ldevid.go`, `aab_bmc.go`, `aab_cluster.go`, `aab_invitation.go`, `aab_ntp.go`, `aab_pxe.go`, `aac_app_services.go`, `ceremony.go`, `device.go`, `dns.go`, `fido2.go`, `gateway_nat64.go`, `luks.go`, `piv.go`, `provisioning.go`, `tpm_quote.go` |
+| MCP | `transport/mcp/adapter.go` (`grpcMethodToMCPToolMap`), plus `app_services.go`, `attestation_reports.go`, `bmc.go`, `cluster.go`, `eab.go`, `invitation.go`, `ldevid.go`, `phase35.go`, `provisioning.go`, `pxe.go`, `switch.go`, `tpm_quote.go` |
 | Embedded | `transport/embedded/adapter.go` (`ServiceRegistry`), `dispatch.go` (`register<Service>Handlers`) |
 
 The server side of each transport, with ports, opcodes and authorization, is
@@ -39,33 +39,33 @@ folder's own `api.md`. Streaming RPCs are ✅ only on gRPC / Unix.
 | `VTPMService` | `VTPM()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `SDNService` | `SDN()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `ComputeService` | `Compute()` | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `BMCService` | `BMC()` | ✅ | ✅ | `MISSING — docs/13 G7` | ✅ | `MISSING — docs/13 G7` |
+| `BMCService` | `BMC()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `IDevIDService` | `IDevID()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `AttestationService` | `Attestation()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `TenantService` | `Tenant()` | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `PXEService` | `PXE()` | ✅ | ✅ | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+| `PXEService` | `PXE()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `DNSService` | `DNS()` | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `NTPService` | `NTP()` | ✅ | ✅ | ✅ | ✅ | `MISSING — docs/13 G7` |
+| `NTPService` | `NTP()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `GatewayService` | `Gateway()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `ProxyService` | `Proxy()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `OverlayService` | `Overlay()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `RegistryService` | `Registry()` | `MISSING — docs/13 G7` | ✅ | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
-| `ClusterService` | `Cluster()` | ✅ | ✅ | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+| `ClusterService` | `Cluster()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `ConfigDeliveryService` | `ConfigDelivery()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `PlatformIAMService` | `IAM()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `KeyManagementService` | `KMS()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `BarrierService` | `Barrier()` | `MISSING — docs/13 G7` | ✅ | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| `EABService` | `MISSING — docs/13 G7` | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `InvitationService` | `MISSING — docs/13 G7` | ✅ | ✅ | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+| `EABService` | `EAB()` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `InvitationService` | `Invitation()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `CacheService` (§3.5) | `Cache()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `SchedulerService` (§3.5) | `Scheduler()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `MessagingService` (§3.5) | `Messaging()` | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `SwitchService` | `MISSING — docs/13 G7` | ✅ | ✅ | ✅ | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| `SwitchService` | `Switch()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `ProvisioningGateway` | `MISSING — docs/13 G7` | ✅ | ✅ | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | `CeremonyService` | `Ceremony()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `FIDO2Service` | `FIDO2()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `PIVService` | `PIV()` | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `LUKSService` | `LUKS()` | ✅ | ✅ | ✅ | ✅ | `MISSING — docs/13 G7` |
+| `LUKSService` | `LUKS()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 A service with no `Client` accessor is reached through its `sdk/go/services/*`
 wrapper (see [engineering.md §2](engineering.md#service-wrapper-constructors)).

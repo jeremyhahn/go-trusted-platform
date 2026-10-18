@@ -14,13 +14,10 @@ import (
 	"crypto/x509/pkix"
 	"errors"
 	"math/big"
-	"net"
 	"testing"
 	"time"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	dnsentities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -110,17 +107,6 @@ func TestCoverageFinalUncoveredErrors(t *testing.T) {
 		{"ErrTenantDEKDeprovision", ErrTenantDEKDeprovision{TenantID: "t2", Cause: sentinel}, "failed to deprovision DEK for tenant t2"},
 
 		// PXE errors
-		{"ErrPXEDeviceNotFound_by_id", ErrPXEDeviceNotFound{DeviceID: "d1"}, "PXE device not found: d1"},
-		{"ErrPXEDeviceNotFound_by_mac", ErrPXEDeviceNotFound{MACAddress: "aa:bb:cc:dd:ee:ff"}, "PXE device not found with MAC: aa:bb:cc:dd:ee:ff"},
-		{"ErrPXERegistrationFailed", ErrPXERegistrationFailed{MACAddress: "00:11:22:33:44:55", Cause: sentinel}, "PXE device registration failed"},
-		{"ErrPXEInvalidState", ErrPXEInvalidState{State: "bad"}, "invalid PXE provisioning state: bad"},
-		{"ErrPXEStateTransitionFailed", ErrPXEStateTransitionFailed{DeviceID: "d1", FromState: "new", ToState: "enrolled", Cause: sentinel}, "PXE state transition failed"},
-		{"ErrPXEEnrollmentFailed", ErrPXEEnrollmentFailed{DeviceID: "d1", Cause: sentinel}, "PXE device enrollment failed"},
-		{"ErrPXEAuthorizationFailed", ErrPXEAuthorizationFailed{DeviceID: "d1", Cause: sentinel}, "PXE device authorization failed"},
-		{"ErrPXEQuarantineFailed", ErrPXEQuarantineFailed{DeviceID: "d1", Cause: sentinel}, "PXE device quarantine failed"},
-		{"ErrPXERetryFailed", ErrPXERetryFailed{DeviceID: "d1", Cause: sentinel}, "PXE device retry failed"},
-		{"ErrPXEServiceStartFailed", ErrPXEServiceStartFailed{Cause: sentinel}, "PXE service failed to start"},
-		{"ErrPXEServiceStopFailed", ErrPXEServiceStopFailed{Cause: sentinel}, "PXE service failed to stop"},
 	}
 
 	for _, tc := range tests {
@@ -155,14 +141,6 @@ func TestCoverageFinalUnwrapMethods(t *testing.T) {
 		{"ErrAttestationFailed", ErrAttestationFailed{Reason: "x", Err: sentinel}, sentinel},
 		{"ErrTenantDEKProvision", ErrTenantDEKProvision{TenantID: "t", Cause: sentinel}, sentinel},
 		{"ErrTenantDEKDeprovision", ErrTenantDEKDeprovision{TenantID: "t", Cause: sentinel}, sentinel},
-		{"ErrPXERegistrationFailed", ErrPXERegistrationFailed{MACAddress: "m", Cause: sentinel}, sentinel},
-		{"ErrPXEStateTransitionFailed", ErrPXEStateTransitionFailed{DeviceID: "d", FromState: "a", ToState: "b", Cause: sentinel}, sentinel},
-		{"ErrPXEEnrollmentFailed", ErrPXEEnrollmentFailed{DeviceID: "d", Cause: sentinel}, sentinel},
-		{"ErrPXEAuthorizationFailed", ErrPXEAuthorizationFailed{DeviceID: "d", Cause: sentinel}, sentinel},
-		{"ErrPXEQuarantineFailed", ErrPXEQuarantineFailed{DeviceID: "d", Cause: sentinel}, sentinel},
-		{"ErrPXERetryFailed", ErrPXERetryFailed{DeviceID: "d", Cause: sentinel}, sentinel},
-		{"ErrPXEServiceStartFailed", ErrPXEServiceStartFailed{Cause: sentinel}, sentinel},
-		{"ErrPXEServiceStopFailed", ErrPXEServiceStopFailed{Cause: sentinel}, sentinel},
 	}
 
 	for _, tc := range unwrapCases {
@@ -800,84 +778,6 @@ func TestCoverageFinalEncodePublicKeyPEM(t *testing.T) {
 	if result != "" {
 		t.Errorf("expected empty string, got %q", result)
 	}
-}
-
-// =============================================================================
-// PXE Conversion Helpers
-// =============================================================================
-
-func TestCoverageFinalConvertDeviceInfoToPXEDevice(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil", func(t *testing.T) {
-		t.Parallel()
-		if convertDeviceInfoToPXEDevice(nil) != nil {
-			t.Error("expected nil for nil input")
-		}
-	})
-
-	t.Run("without_profile", func(t *testing.T) {
-		t.Parallel()
-		mac, _ := net.ParseMAC("aa:bb:cc:dd:ee:ff")
-		now := time.Now()
-		info := &pxe.DeviceInfo{
-			ID:                "dev-1",
-			MACAddress:        mac,
-			PortID:            "port-1",
-			State:             "discovered",
-			StateReason:       "new device",
-			CertificateSerial: "serial-123",
-			CurrentVLAN:       100,
-			TargetVLAN:        200,
-			CreatedAt:         now,
-			UpdatedAt:         now,
-			StateChangedAt:    now,
-			RetryCount:        3,
-		}
-		result := convertDeviceInfoToPXEDevice(info)
-		if result == nil {
-			t.Fatal("expected non-nil result")
-		}
-		if result.ID != "dev-1" {
-			t.Errorf("ID = %q", result.ID)
-		}
-		if result.MACAddress != "aa:bb:cc:dd:ee:ff" {
-			t.Errorf("MACAddress = %q", result.MACAddress)
-		}
-		if result.CurrentVLAN != 100 {
-			t.Errorf("CurrentVLAN = %d", result.CurrentVLAN)
-		}
-		if result.RetryCount != 3 {
-			t.Errorf("RetryCount = %d", result.RetryCount)
-		}
-		if result.ProfileID != "" {
-			t.Errorf("ProfileID should be empty, got %q", result.ProfileID)
-		}
-	})
-
-	t.Run("with_profile", func(t *testing.T) {
-		t.Parallel()
-		mac, _ := net.ParseMAC("11:22:33:44:55:66")
-		info := &pxe.DeviceInfo{
-			ID:             "dev-2",
-			MACAddress:     mac,
-			State:          "enrolled",
-			CreatedAt:      time.Now(),
-			UpdatedAt:      time.Now(),
-			StateChangedAt: time.Now(),
-			Profile: &entities.DeviceProfile{
-				ID:   42,
-				Name: "default-profile",
-			},
-		}
-		result := convertDeviceInfoToPXEDevice(info)
-		if result.ProfileID != "42" {
-			t.Errorf("ProfileID = %q, want 42", result.ProfileID)
-		}
-		if result.ProfileName != "default-profile" {
-			t.Errorf("ProfileName = %q", result.ProfileName)
-		}
-	})
 }
 
 // =============================================================================

@@ -24,7 +24,10 @@ or *root required* today ([engineering.md](engineering.md) §6).
 - **QUIC:** category opcode `0x9C` (`OpLUKSCategory`), sub-opcodes `0x01`–`0x0A`
   (`sdk/go/wire/quicwire/phase35_opcodes.go`), dispatched by `pkg/api/daemon/phase35_quic.go`.
 - **MCP:** 10 `platform_luks_*` tools (`pkg/api/mcp/phase35_tools.go`).
-- **Embedded:** no LUKS entry in the SDK service registry.
+- **Embedded:** `ServiceRegistry.LUKS` (`sdk/go/transport/embedded/adapter.go`),
+  dispatched by `registerLUKSHandlers` (`sdk/go/transport/embedded/dispatch.go`)
+  under the gRPC method names; the daemon's embedded host fills it with the
+  servicer gRPC registers (`pkg/api/daemon/embedded_host.go`).
 
 ---
 
@@ -32,16 +35,16 @@ or *root required* today ([engineering.md](engineering.md) §6).
 
 | Capability | REST | gRPC / Unix | QUIC `0x9C` | MCP | Embedded |
 |---|---|---|---|---|---|
-| Volume status | `GET /api/v1/luks/status?device=` | `Status` | `0x01` | `platform_luks_status` | `MISSING — docs/13 G7` |
-| List keyslots | `GET /api/v1/luks/slots?device=` | `ListSlots` | `0x02` | `platform_luks_list_slots` | `MISSING — docs/13 G7` |
-| Header info | `GET /api/v1/luks/info?device=` | `Info` | `0x03` | `platform_luks_info` | `MISSING — docs/13 G7` |
-| Enroll passphrase | `POST /api/v1/luks/enroll/passphrase` | `EnrollPassphrase` | `0x04` | `platform_luks_enroll_passphrase` | `MISSING — docs/13 G7` |
-| Enroll FIDO2 | `POST /api/v1/luks/enroll/fido2` | `EnrollFIDO2` | `0x05` | `platform_luks_enroll_fido2` | `MISSING — docs/13 G7` |
-| Enroll TPM | `POST /api/v1/luks/enroll/tpm` | `EnrollTPM` | `0x06` | `platform_luks_enroll_tpm` | `MISSING — docs/13 G7` |
-| Enroll recovery key | `POST /api/v1/luks/enroll/recovery` | `EnrollRecovery` | `0x07` | `platform_luks_enroll_recovery` | `MISSING — docs/13 G7` |
-| Remove keyslot | `POST /api/v1/luks/keys/remove` | `RemoveKey` | `0x08` | `platform_luks_remove_key` | `MISSING — docs/13 G7` |
-| Test keyslot | `POST /api/v1/luks/keys/test-unlock` | `TestUnlock` | `0x09` | `platform_luks_test_unlock` (refused, §5) | `MISSING — docs/13 G7` |
-| Change passphrase | `POST /api/v1/luks/passphrase/change` | `ChangePassphrase` | `0x0A` | `platform_luks_change_passphrase` | `MISSING — docs/13 G7` |
+| Volume status | `GET /api/v1/luks/status?device=` | `Status` | `0x01` | `platform_luks_status` | `Status` |
+| List keyslots | `GET /api/v1/luks/slots?device=` | `ListSlots` | `0x02` | `platform_luks_list_slots` | `ListSlots` |
+| Header info | `GET /api/v1/luks/info?device=` | `Info` | `0x03` | `platform_luks_info` | `Info` |
+| Enroll passphrase | `POST /api/v1/luks/enroll/passphrase` | `EnrollPassphrase` | `0x04` | `platform_luks_enroll_passphrase` | `EnrollPassphrase` |
+| Enroll FIDO2 | `POST /api/v1/luks/enroll/fido2` | `EnrollFIDO2` | `0x05` | `platform_luks_enroll_fido2` | `EnrollFIDO2` |
+| Enroll TPM | `POST /api/v1/luks/enroll/tpm` | `EnrollTPM` | `0x06` | `platform_luks_enroll_tpm` | `EnrollTPM` |
+| Enroll recovery key | `POST /api/v1/luks/enroll/recovery` | `EnrollRecovery` | `0x07` | `platform_luks_enroll_recovery` | `EnrollRecovery` |
+| Remove keyslot | `POST /api/v1/luks/keys/remove` | `RemoveKey` | `0x08` | `platform_luks_remove_key` | `RemoveKey` |
+| Test keyslot | `POST /api/v1/luks/keys/test-unlock` | `TestUnlock` | `0x09` | `platform_luks_test_unlock` | `TestUnlock` |
+| Change passphrase | `POST /api/v1/luks/passphrase/change` | `ChangePassphrase` | `0x0A` | `platform_luks_change_passphrase` | `ChangePassphrase` |
 
 ### SDK client paths
 
@@ -53,6 +56,9 @@ or *root required* today ([engineering.md](engineering.md) §6).
   (`sdk/go/transport/rest/luks.go`); the seven POSTs are in
   `sdk/go/transport/rest/adapter.go`. The server registrations
   (`pkg/api/daemon/luks_rest.go`) are authoritative.
+- The embedded transport dispatches all ten by their gRPC method name, so
+  `platformctl --transport embedded luks …` reaches the same servicer in
+  process.
 
 ---
 
@@ -99,7 +105,6 @@ decodes as `0`.
 | `ErrLUKS{Device,Passphrase,NewPassphrase,CredentialID,Slot}Required` | 400 | `InvalidArgument` | `StatusInvalidArgument` |
 | any other error | 500 | `Internal` | `StatusInternalError` |
 | `ErrLUKSMalformedBody` (REST body that is not valid JSON) | 400 | — | — |
-| `ErrLUKSTestUnlockUnverified` (MCP test-unlock only) | — | `Unimplemented` | — |
 
 REST errors are `{"error":"<message>"}`. A malformed REST body answers the fixed
 message `luks: malformed request body`, never the JSON decoder's error, which
@@ -122,23 +127,22 @@ message. The SDK REST transport takes that message from the `error` key.
 
 | Transport | Requirement |
 |---|---|
-| REST | mTLS client certificate (the daemon REST server authenticates by mTLS only). No per-route scope. |
+| REST | mTLS client certificate, which the daemon REST handshake requires. The LUKS routes are outside the scope guard: they take no `Bearer` token and check no scope. |
 | gRPC TCP | a platform token carrying the method's `luks:*` scope (`pkg/api/grpc/method_permissions.go`). |
 | QUIC | a platform token carrying the sub-opcode's `luks:*` scope (`pkg/api/quic/opcode_permissions.go`). |
-| MCP | a platform token carrying the tool's `luks:*` scope (`toolPermissionCatalog`, `pkg/api/mcp/authz.go`). `platform_luks_test_unlock` is **refused**: it is unclassified, so `AuthorizeTool` denies it, and the provider itself refuses with `ErrLUKSTestUnlockUnverified`. |
+| MCP | a platform token carrying the tool's `luks:*` scope (`toolPermissionCatalog`, `pkg/api/mcp/authz.go`). |
 | Unix | gRPC over the local socket; see [`docs/daemon/api.md`](../daemon/api.md). |
 
 | Operation | gRPC, QUIC and MCP scope |
 |---|---|
-| Status, ListSlots, Info | `luks:read` |
-| TestUnlock | `luks:read` on gRPC and QUIC; unclassified on MCP |
+| Status, ListSlots, Info, TestUnlock | `luks:read` |
 | EnrollPassphrase, EnrollFIDO2, EnrollTPM, EnrollRecovery, ChangePassphrase | `luks:write` |
 | RemoveKey | `luks:delete` |
 
-Test-unlock is refused over MCP because it proves nothing: the request carries
-no key, and the backend only checks that the keyslot exists
-(`pkg/app/backends/luks.go`), so `unlocked: true` would claim a key works
-without trying one. gRPC, REST and QUIC still answer it that way.
+Test-unlock proves less than its name says, on every transport: the request
+carries no key, and the backend only checks that the keyslot exists
+(`pkg/app/backends/luks.go`), so `unlocked: true` means the slot is there, not
+that a key opens it.
 
 LUKS has no tenancy. A request names only a device path, and neither
 `LUKSService` nor its transports read a tenant.

@@ -225,12 +225,11 @@ required scope: the `PlatformDaemon` observers need `platform:read`,
 `platform:write`, and `Shutdown` and `DumpEntityType` need `platform:admin`.
 Only `grpc.health.v1.Health/Check` answers without a token.
 
-On MCP 446 of 469 tools are classified. `platform_daemon_status`, `_version`,
+On MCP every tool is classified. `platform_daemon_status`, `_version`,
 `_list_services` and `_get_service` need `platform:read`, and the service
-start, stop and restart tools need `platform:write`, as on gRPC. The rest —
-including `platform_daemon_list_protocols` — are refused with
-`AuthErrorToolNotClassified` however broad the token is. If an MCP call fails
-that way, use gRPC or REST for it. The full picture is in [api.md](api.md) §5.
+start, stop and restart tools need `platform:write`, as on gRPC.
+`platform_daemon_list_protocols` needs `platform:read`, as on QUIC. The full
+picture is in [api.md](api.md) §5.
 
 ---
 

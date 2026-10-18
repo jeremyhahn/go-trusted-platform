@@ -281,9 +281,7 @@ func dnsRecordName(record *platformv1.Record) string {
 // =============================================================================
 
 // registerDNSExtendedTools registers the DNS tools bound to the gRPC
-// DNSService, and dns_reverse_lookup, which no backend serves: there is no
-// reverse lookup on any transport and no PTR record type, so it stays
-// unclassified and is refused.
+// DNSService.
 func (r *ToolRegistry) registerDNSExtendedTools() {
 	for _, name := range slices.Sorted(maps.Keys(dnsTools)) {
 		tool := dnsTools[name]
@@ -293,21 +291,6 @@ func (r *ToolRegistry) registerDNSExtendedTools() {
 			InputSchema: tool.binding.schema(),
 		})
 	}
-
-	r.addTool(mcpwire.ToolDefinition{
-		Name:        "dns_reverse_lookup",
-		Description: "Perform a reverse DNS lookup (PTR) for an IP address",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"ip": map[string]interface{}{
-					"type":        "string",
-					"description": "IP address to look up",
-				},
-			},
-			"required": []string{"ip"},
-		},
-	})
 }
 
 // dnsServiceServer is the gRPC DNSService servicer the DNS tools call, or

@@ -411,7 +411,7 @@ func (h *handler) Provision(w http.ResponseWriter, r *http.Request) {
 	h.logger.Debug("bmc: provision request received")
 
 	if h.baremetalService == nil {
-		h.responseWriter.Error500(w, r, ErrBaremetalServiceNotAvailable{})
+		h.responseWriter.Error503(w, r, ErrBaremetalServiceNotAvailable{})
 		return
 	}
 
@@ -452,7 +452,7 @@ func (h *handler) ProvisionStatus(w http.ResponseWriter, r *http.Request) {
 	h.logger.Debug("bmc: provision status request received")
 
 	if h.baremetalService == nil {
-		h.responseWriter.Error500(w, r, ErrBaremetalServiceNotAvailable{})
+		h.responseWriter.Error503(w, r, ErrBaremetalServiceNotAvailable{})
 		return
 	}
 

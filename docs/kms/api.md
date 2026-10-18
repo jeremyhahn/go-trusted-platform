@@ -1,6 +1,6 @@
 # Key Management — API
 
-> **Status: NORMATIVE** · Scope: KMS routes on every transport · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: KMS routes on every transport · Last verified: 2026-10-15
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING`, never omitted.
@@ -219,18 +219,34 @@ catalogs above.
 
 ## 7. Status and error mapping
 
-| QUIC byte | Name | REST | KMS cause |
-|---|---|---|---|
-| `0x00` | `StatusOK` | 200 | — |
-| `0x01` | `StatusInvalidRequest` | 400 | Malformed key name, ciphertext or algorithm |
-| `0x02` | `StatusNotFound` | 404 | Unknown key, DEK or secret |
-| `0x03` | `StatusUnauthorized` | 401 | Token invalid |
-| `0x04` | `StatusInternalError` | 500 | Backend failure |
-| `0x06` | `StatusAlreadyExists` | 409 | Key name in use |
-| `0x07` | `StatusPermissionDenied` | 403 | Missing `kms:*` scope, or key policy denied |
-| `0x08` | `StatusResourceExhausted` | 429 | **AEAD safety limit reached** |
-| `0x0A` | `StatusUnavailable` | 503 | KMS not wired into the daemon |
-| `0x0B` | `StatusNotImplemented` | 501 | The unimplemented CLI/service areas in [engineering.md](engineering.md) §2 |
+Every transport answers an error with its **class**, a gRPC status code named
+by one shared classifier, `pkg/api/errclass` (#304). It reads the error's type,
+never its message, and tries in order: a gRPC status anywhere in the chain
+(including typed errors with a `GRPCStatus` method), then the QuicBaaS SDK
+error code (`sdkerrors.Code`), then a database error's own `HTTPStatus`. An
+error that names no class is `Internal`. The gRPC adapters still log every
+error before answering it.
+
+| Class (gRPC / Unix) | REST | QUIC byte | MCP JSON-RPC | KMS cause |
+|---|---|---|---|---|
+| `OK` | 200 | `0x00` `StatusOK` | result | — |
+| `InvalidArgument` | 400 | `0x09` `StatusInvalidArgument` | `-32602` InvalidParams | Missing field, bad key spec or algorithm, ciphertext the key did not seal, empty or oversize batch |
+| `Unauthenticated` | 401 | `0x03` `StatusUnauthorized` | `-32001` AuthenticationRequired | Token invalid |
+| `PermissionDenied` | 403 | `0x07` `StatusPermissionDenied` | `-32003` PermissionDenied | Missing `kms:*` scope, key policy denied, key disabled, pending deletion or not exportable |
+| `NotFound` | 404 | `0x02` `StatusNotFound` | `-32005` NotFound | Unknown key, DEK or secret |
+| `AlreadyExists` | 409 | `0x06` `StatusAlreadyExists` | `-32006` AlreadyExists | Key name in use |
+| `Aborted` | 409 | `0x06` `StatusAlreadyExists` | `-32603` InternalError | SDK conflict |
+| `FailedPrecondition` | 412 | `0x0C` `StatusFailedPrecondition` | `-32007` FailedPrecondition | Barrier or service not initialized |
+| `ResourceExhausted` | 429 | `0x08` `StatusResourceExhausted` | `-32603` InternalError | **AEAD safety limit reached**, rate limited |
+| `Unimplemented` | 501 | `0x0B` `StatusNotImplemented` | `-32603` InternalError | The unimplemented CLI/service areas in [engineering.md](engineering.md) §2 |
+| `Unavailable` | 503 | `0x0A` `StatusUnavailable` | `-32004` ServiceUnavailable | KMS not wired into the daemon, barrier sealed, SDK connection lost |
+| `DeadlineExceeded` | 504 | `0x05` `StatusTimeout` | `-32603` InternalError | SDK timeout |
+| `Internal` | 500 | `0x04` `StatusInternalError` | `-32603` InternalError | Any error that names no class |
+
+QUIC answers `0x01` `StatusInvalidRequest` only for a payload it cannot decode;
+a decoded request with a missing field is `0x09`. MCP has no JSON-RPC code for
+`Aborted`, `ResourceExhausted`, `Unimplemented` or `DeadlineExceeded`, so
+those classes reach an MCP client as `InternalError`.
 
 **429 from a crypto operation is not backpressure.** It can mean the key has
 reached its AEAD invocation limit, at which point continuing would risk nonce
@@ -238,6 +254,17 @@ reuse. Rotate the key.
 
 QUIC payloads are capped at `MaxPayloadSize` (16 MiB) — relevant for batch
 operations and large ciphertexts.
+
+### Per call
+
+| Calls | Classes they answer |
+|---|---|
+| Key lifecycle (generate, import, get, metadata, list, update, enable, disable, delete, schedule/cancel deletion, rotate, policy) | The backend's class; `InvalidArgument` for a missing key ID or spec, an unsupported value, filter or cursor |
+| Crypto (encrypt, decrypt, sign, verify, MAC, data key, re-encrypt) | The backend's class; `InvalidArgument` for a missing input or a ciphertext the key did not seal |
+| Batch (REST) | `InvalidArgument` for an empty or oversize batch; 207 Multi-Status when some items fail (`pkg/api/rest/kms_handlers.go` `writeKMSError`) |
+| Secrets (`secret_*`, secret routes) | `InvalidArgument` for a missing ID; gRPC and QUIC still answer store and list failures `Internal` and read failures `NotFound`, whatever the cause |
+| DEK (`0xF0`–`0xF5`, DEK routes) | Create, rotate and delete failures `Internal`, get failures `NotFound`, whatever the cause; the REST 400/404 rules are in §4 |
+| Rotation policy | Update failures `Internal`, get failures `NotFound`, whatever the cause |
 
 ### MCP answers in the gRPC classes (#304)
 
@@ -250,11 +277,13 @@ it, per group, against one in-memory SDK fake.
 | Missing `key_id`, `secret_id`, plaintext, ciphertext, message, signature or data | `InvalidArgument` — the `quicbaas.kms.v1` adapters check before calling the SDK | `InvalidArgument` |
 | Unknown key (`kms_get_key`, `kms_get_key_metadata`, `kms_get_key_policy`) | `NotFound` | `NotFound` |
 | Unknown secret (`secret_get`, `secret_get_rotation_policy`) | `NotFound` | `NotFound` |
-| Encrypt, decrypt or data key under an unknown key | `Internal` | `Internal` |
+| Encrypt, decrypt or data key under an unknown key | `NotFound` | `NotFound` |
+| Decrypt a ciphertext the key did not seal | `InvalidArgument` | `InvalidArgument` |
 
-The read methods answer any SDK failure as `NotFound` on both transports. The
-data-key comparison is against `platform.v1` `GenerateDataKey`, since
-`quicbaas.kms.v1` has no data-key method.
+The key read methods keep the backend's class on both transports: an unknown
+key is `NotFound`, an unavailable backend `Unavailable`, an unclassed failure
+`Internal`. The data-key comparison is against `platform.v1`
+`GenerateDataKey`, since `quicbaas.kms.v1` has no data-key method.
 
 ---
 

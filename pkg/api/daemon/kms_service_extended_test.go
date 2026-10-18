@@ -285,7 +285,12 @@ func TestKMSServerAdapterGetKeyMetadata(t *testing.T) {
 	})
 
 	t.Run("NotFound", func(t *testing.T) {
-		adapter := NewKMSServerAdapter(&extKMSClientMock{}, slog.Default())
+		mock := &extKMSClientMock{
+			getKeyMetadataFn: func(ctx context.Context, keyID string) (*kms.KeyMetadataResponse, error) {
+				return nil, status.Error(codes.NotFound, "key not found")
+			},
+		}
+		adapter := NewKMSServerAdapter(mock, slog.Default())
 		_, err := adapter.GetKeyMetadata(ctx, &pb.GetKeyMetadataRequest{KeyId: "missing"})
 		requireGRPCCode(t, err, codes.NotFound)
 	})
@@ -442,7 +447,12 @@ func TestKMSServerAdapterGetKeyPolicy(t *testing.T) {
 	})
 
 	t.Run("NotFound", func(t *testing.T) {
-		adapter := NewKMSServerAdapter(&extKMSClientMock{}, slog.Default())
+		mock := &extKMSClientMock{
+			getKeyPolicyFn: func(ctx context.Context, keyID string) (*kms.KeyPolicy, error) {
+				return nil, status.Error(codes.NotFound, "key not found")
+			},
+		}
+		adapter := NewKMSServerAdapter(mock, slog.Default())
 		_, err := adapter.GetKeyPolicy(ctx, &pb.GetKeyPolicyRequest{KeyId: "missing"})
 		requireGRPCCode(t, err, codes.NotFound)
 	})

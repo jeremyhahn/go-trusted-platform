@@ -31,6 +31,7 @@ func TestCodeForClass_EveryClassHasItsOwnCode(t *testing.T) {
 		codes.Unavailable:        ServiceUnavailable,
 		codes.AlreadyExists:      AlreadyExists,
 		codes.FailedPrecondition: FailedPrecondition,
+		codes.Unimplemented:      MethodNotFound,
 	}
 	seen := make(map[int]codes.Code, len(want))
 	for class, code := range want {

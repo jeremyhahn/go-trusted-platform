@@ -27,7 +27,11 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 )
+
+// vmExitTimeout bounds the wait for a stopped VM's process to exit.
+const vmExitTimeout = 10 * time.Second
 
 // Cleanup handles cleanup of all test infrastructure
 func Cleanup(t *testing.T, infra *TestInfrastructure) {
@@ -99,6 +103,17 @@ func cleanupVM(t *testing.T, logger *logging.Logger, name string, vm interface{}
 		}
 	}
 
+	// Stop signals the VM; Wait reaps it once the process has exited
+	type VMWaiter interface {
+		Wait() error
+	}
+
+	if w, ok := vm.(VMWaiter); ok {
+		if err := testenv.WaitFor(context.Background(), vmExitTimeout, "VM "+name+" process exit", w.Wait); err != nil {
+			logger.Debug("VM exit", "name", name, "error", err)
+		}
+	}
+
 	// Stop TPM
 	if tpm != nil {
 		type TPMStopper interface {
@@ -113,9 +128,6 @@ func cleanupVM(t *testing.T, logger *logging.Logger, name string, vm interface{}
 			}
 		}
 	}
-
-	// Give processes time to terminate
-	time.Sleep(1 * time.Second)
 }
 
 // cleanupPortFromBridge removes a port from an OVS bridge

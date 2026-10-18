@@ -159,12 +159,15 @@ func TestDownloadISO_ChecksumMismatch(t *testing.T) {
 }
 
 func TestDownloadISO_ContextCancellation(t *testing.T) {
-	// Create slow server
+	// A server that never answers: the request arrives, then only the
+	// client giving up ends it.
+	arrived := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Sleep to simulate slow download
-		time.Sleep(2 * time.Second)
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("content"))
+		select {
+		case arrived <- struct{}{}:
+		default:
+		}
+		<-r.Context().Done()
 	}))
 	defer server.Close()
 
@@ -180,13 +183,17 @@ func TestDownloadISO_ContextCancellation(t *testing.T) {
 		ResumeDownload: false,
 	}
 
-	// Create context with quick timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	// Cancel once the download is in flight.
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	go func() {
+		<-arrived
+		cancel()
+	}()
 
 	err := DownloadISO(ctx, config)
 	assert.Error(t, err)
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
 func TestDownloadISO_WithProgressCallback(t *testing.T) {
@@ -369,34 +376,40 @@ func TestCopyWithContext_Cancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Start copy in goroutine
+	reader := &gatedReader{data: data, reading: make(chan struct{}, 1), release: make(chan struct{})}
 	errChan := make(chan error, 1)
 	go func() {
-		_, err := copyWithContext(ctx, out, &slowReader{data: data})
+		_, err := copyWithContext(ctx, out, reader)
 		errChan <- err
 	}()
 
-	// Cancel after a short delay
-	time.Sleep(10 * time.Millisecond)
+	// Cancel while the copy is inside a Read, then let that Read return:
+	// the copy must stop before the next one.
+	<-reader.reading
 	cancel()
+	close(reader.release)
 
 	// Wait for copy to finish
 	err = <-errChan
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
-// slowReader simulates a slow reader for testing
-type slowReader struct {
-	data []byte
-	pos  int
+// gatedReader announces each Read on reading and holds it until release is
+// closed, so a test can act while a copy is mid-read. It never reports EOF.
+type gatedReader struct {
+	data    []byte
+	pos     int
+	reading chan struct{}
+	release chan struct{}
 }
 
-func (r *slowReader) Read(p []byte) (int, error) {
-	if r.pos >= len(r.data) {
-		return 0, nil
+func (r *gatedReader) Read(p []byte) (int, error) {
+	select {
+	case r.reading <- struct{}{}:
+	default:
 	}
+	<-r.release
 
-	// Read slowly
-	time.Sleep(5 * time.Millisecond)
 	n := copy(p, r.data[r.pos:])
 	r.pos += n
 	return n, nil

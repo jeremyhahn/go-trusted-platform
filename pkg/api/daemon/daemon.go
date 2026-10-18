@@ -207,10 +207,11 @@ type Daemon struct {
 	mcpServer                    MCPServerInterface
 	mcpProvider                  *MCPServiceProvider
 	bmcGRPCService               *BMCGRPCService
+	switchGRPCService            *SwitchGRPCService
 	eabService                   EABServicer
 	eabGRPCService               *EABGRPCService
 	eabDelivery                  EABDeliveryServicer
-	clusterService               ClusterServicer
+	clusterGRPCService           platformv1.ClusterServiceServer
 	clusterBackend               *clusterGRPCBackend
 	invitationService            platformservice.InvitationServicer
 	invitationGRPCService        *InvitationGRPCService
@@ -1023,8 +1024,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 	logger.Info("Cache, Scheduler and Messaging gRPC services registered")
 
-	// Create Switch gRPC service - stub returning Unimplemented
-	// Full implementation wired when switch service is available
+	// Create the Switch gRPC service. It has no switch backend yet, so every
+	// method answers Unavailable (not configured); the QUIC opcodes, the MCP
+	// tools and the embedded transport call this same servicer.
 	switchGRPCService := NewSwitchGRPCService(logger, nil)
 	if grpcServer != nil {
 		platformv1.RegisterSwitchServiceServer(grpcServer, switchGRPCService)
@@ -1272,16 +1274,6 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		quicHandler.SetLUKSService(luksSvc)
 		quicHandler.SetFIDO2Service(fido2Svc)
 
-		// Wire the BMCEnroller and BMCRestorer into the QUIC handler so
-		// OpBMCCategory requests execute the real enrollment and restore
-		// ceremonies. Guarded on both App and DeviceProfileService being present.
-		if config.App != nil && config.DeviceProfileService != nil {
-			quicHandler.SetBMCEnroller(config.App, config.DeviceProfileService)
-			logger.Info("BMC QUIC enroller wired")
-			quicHandler.SetBMCRestorer(config.App, config.DeviceProfileService)
-			logger.Info("BMC QUIC restorer wired")
-		}
-
 		// Wire the shared IAM gRPC delegate into the QUIC handler so IAM QUIC
 		// operations dispatch through the pb service instead of returning
 		// Unavailable. Reuses the instance registered on the gRPC servers.
@@ -1289,6 +1281,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			quicHandler.SetIAMGRPCService(iamGRPCService)
 			logger.Info("IAM gRPC delegate wired into QUIC handler")
 		}
+
+		// Invitations ride the IAM category through the servicer the gRPC
+		// servers registered, so QUIC answers and refuses as gRPC does.
+		quicHandler.SetInvitationServer(invitationService)
+
+		// The cluster category dispatches to the same ClusterService
+		// servicer the gRPC servers carry, so QUIC answers as gRPC does.
+		quicHandler.SetClusterServer(clusterGRPCService)
 
 		// Prepare QUIC server configuration
 		quicConfig := config.QUICConfig
@@ -1361,6 +1361,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		grpcServer:                   grpcServerIntf,
 		grpcTLSCredsAttached:         grpcTLSCredsAttached,
 		grpcUDSServer:                grpcUDSServerIntf,
+		clusterGRPCService:           clusterGRPCService,
 		clusterBackend:               clusterBackend,
 		concreteGrpcUDSServer:        grpcUDSServer,
 		quicServer:                   quicServerIntf,
@@ -1398,6 +1399,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		ntpGRPCService:               ntpGRPCService,
 		vpnGRPCService:               vpnGRPCService,
 		vpnControlPlane:              vpnControlPlane,
+		switchGRPCService:            switchGRPCService,
 		appServices:                  appServices,
 		healthRegistry:               healthRegistry,
 		verdictFeed:                  verdictFeed,
@@ -1725,7 +1727,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	} else {
 		// Register BMC gRPC service with both TCP and UDS endpoints.
 		// The baremetal service is left nil here; Provision and
-		// ProvisionStatus return FailedPrecondition until a baremetal
+		// ProvisionStatus return Unavailable (not configured) until a baremetal
 		// orchestrator is wired via SetBaremetalService.
 		bmcGRPCService := NewBMCGRPCService(bmcSvc, nil, logger.Slog())
 
@@ -1779,9 +1781,25 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 
 		// Stash the BMC gRPC servicer so the MCP server (created below)
-		// serves the platform_bmc_* tools through it: MCP and gRPC then
-		// answer and refuse alike.
+		// and the embedded transport serve BMCService through it, and
+		// hand it to the QUIC handler: every transport then answers and
+		// refuses alike.
 		daemon.bmcGRPCService = bmcGRPCService
+		if daemon.quicHandler != nil {
+			daemon.quicHandler.SetBMCServer(bmcGRPCService)
+		}
+	}
+
+	// The PXE opcodes delegate to the same PXEService servicer gRPC serves.
+	if daemon.quicHandler != nil {
+		daemon.quicHandler.SetPXEServer(daemon.pxeGRPCService)
+	}
+
+	// The switch sub-opcodes delegate to the same SwitchService servicer gRPC
+	// serves. The nil check keeps a missing servicer a nil interface, so the
+	// category answers unavailable.
+	if daemon.quicHandler != nil && daemon.switchGRPCService != nil {
+		daemon.quicHandler.SetSwitchServer(daemon.switchGRPCService)
 	}
 
 	// Create MCP server if enabled and not overridden by option
@@ -1925,8 +1943,6 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		RegistryService:       d.config.RegistryService,
 		EABService:            d.eabService,
 		EABDelivery:           d.eabDelivery,
-		ClusterService:        d.clusterService,
-		InvitationService:     d.invitationService,
 		ZoneService:           d.zoneSvc,
 		IPAMService:           d.gatewayGRPCService.IPAMAllocator(),
 		GatewayPerf:           d.gatewayPerfService,
@@ -1981,12 +1997,33 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 	if d.bmcGRPCService != nil {
 		serviceProvider.SetBMCServer(d.bmcGRPCService)
 	}
+	// The pxe_* tools call the PXEService servicer gRPC serves, under the
+	// same nil check, so a missing PXE service refuses with
+	// ErrPXENotConfigured.
+	if d.pxeGRPCService != nil {
+		serviceProvider.SetPXEServer(d.pxeGRPCService)
+	}
 
-	// Mirror the invitation servicer into the gRPC service so MCP and gRPC
-	// share the same backing implementation. When d.invitationService is nil
-	// the gRPC service stays in stub mode (Unimplemented).
-	if d.invitationService != nil && d.invitationGRPCService != nil {
-		d.invitationGRPCService.SetService(d.invitationService)
+	// The switch_* tools call the SwitchService servicer gRPC serves. The nil
+	// check keeps a missing switch service a nil interface, so the tools
+	// answer Unimplemented as a host without the service does.
+	if d.switchGRPCService != nil {
+		serviceProvider.SetSwitchServer(d.switchGRPCService)
+	}
+
+	// The platform_cluster_* tools call the gRPC ClusterService servicer, so
+	// they answer Unavailable, as gRPC does, until SetClusterService wires a
+	// cluster service behind it.
+	serviceProvider.SetClusterServer(d.clusterGRPCService)
+
+	// The platform_invitation_* tools call the gRPC InvitationService
+	// servicer, as QUIC does. When d.invitationService is nil the servicer
+	// answers Unimplemented on every transport alike.
+	if d.invitationGRPCService != nil {
+		if d.invitationService != nil {
+			d.invitationGRPCService.SetService(d.invitationService)
+		}
+		serviceProvider.SetInvitationServer(d.invitationGRPCService)
 	}
 
 	// Store the provider for later service injection
@@ -3128,7 +3165,8 @@ func (d *Daemon) MCPServiceProvider() *MCPServiceProvider {
 
 // SetClusterService injects the platform cluster servicer behind every
 // cluster transport: the registered gRPC ClusterService (TCP and Unix
-// socket), the REST /cluster routes over it, and the MCP cluster tools.
+// socket), which the REST /cluster routes, the QUIC cluster category and the
+// MCP cluster tools all call.
 // A nil svc clears it.
 //
 // NOTHING CALLS THIS IN PRODUCTION, in any build. There is no tagged
@@ -3140,12 +3178,8 @@ func (d *Daemon) SetClusterService(svc ClusterServicer) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	d.clusterService = svc
 	if d.clusterBackend != nil {
 		d.clusterBackend.set(svc)
-	}
-	if d.mcpProvider != nil {
-		d.mcpProvider.SetClusterService(svc)
 	}
 }
 
@@ -3606,6 +3640,20 @@ func (d *Daemon) PIVService() *PIVGRPCService {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.pivService
+}
+
+// SwitchService returns the Switch gRPC service, or nil when not wired.
+func (d *Daemon) SwitchService() *SwitchGRPCService {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.switchGRPCService
+}
+
+// BMCService returns the BMC gRPC service, or nil when not wired.
+func (d *Daemon) BMCService() *BMCGRPCService {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.bmcGRPCService
 }
 
 // SetPIVBackend wires a backend into the PIV service.

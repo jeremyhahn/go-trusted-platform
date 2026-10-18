@@ -63,13 +63,11 @@ func GetServiceEndpoints() *ServiceEndpoints {
 
 // isBackendUnavailable reports whether err is a declared gap: a typed
 // not-implemented declaration or one of the daemon's LUKS sentinels (backend
-// not configured, root required, and MCP's test-unlock refusal). Any other
-// error fails the test (#487).
+// not configured, root required). Any other error fails the test (#487).
 func isBackendUnavailable(err error) bool {
 	return surface.IsNotImplemented(err) || surface.IsDeclaredRefusal(err,
 		daemonpkg.ErrLUKSNotConfigured,
 		daemonpkg.ErrLUKSRootRequired,
-		daemonpkg.ErrLUKSTestUnlockUnverified,
 		mcpapi.ErrPhase35NotConfigured,
 	)
 }

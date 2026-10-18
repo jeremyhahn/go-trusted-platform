@@ -18,6 +18,7 @@ import (
 	stdtls "crypto/tls"
 	"errors"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,15 +37,32 @@ import (
 
 // fakeBMCEnroller records calls and returns configured responses.
 type fakeBMCEnroller struct {
+	// mu guards enrollCalls; see fakeBMCService.mu.
+	mu sync.Mutex
+	enrollCalls
+
 	enrollResult *app.BMCEnrollResult
 	enrollErr    error
 	tlsProvider  bmc.TLSProvider
+}
+
+// enrollCalls is what fakeBMCEnroller records of the enrollment it serves.
+type enrollCalls struct {
 	lastDeviceID uint64
 	lastBMCCfg   *bmc.Config
 	lastOpts     *app.BMCEnrollOptions
 }
 
+// calls returns a copy of the recorded enrollment, taken under the lock.
+func (f *fakeBMCEnroller) calls() enrollCalls {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.enrollCalls
+}
+
 func (f *fakeBMCEnroller) EnrollBMC(ctx context.Context, deviceID uint64, bmcCfg *bmc.Config, opts *app.BMCEnrollOptions) (*app.BMCEnrollResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.lastDeviceID = deviceID
 	f.lastBMCCfg = bmcCfg
 	f.lastOpts = opts
@@ -101,9 +119,9 @@ func fakeDeviceProfileSvcForEnroll(id uint64, hasBMC bool) *mockProfileService {
 // BMCGRPCService.EnrollBMC tests
 // =============================================================================
 
-func TestBMCGRPCEnrollBMC_NoEnrollerReturnsFailedPrecondition(t *testing.T) {
+func TestBMCGRPCEnrollBMC_NoEnrollerReturnsUnavailable(t *testing.T) {
 	svc := NewBMCGRPCService(&fakeBMCService{}, nil, slog.Default())
-	// enroller is not wired — should return FailedPrecondition.
+	// enroller is not wired — the service is not configured on this node.
 	_, err := svc.EnrollBMC(context.Background(), &platformv1.BMCEnrollRequest{ProfileId: 1})
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -112,8 +130,8 @@ func TestBMCGRPCEnrollBMC_NoEnrollerReturnsFailedPrecondition(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected gRPC status error, got %T: %v", err, err)
 	}
-	if st.Code() != codes.FailedPrecondition {
-		t.Fatalf("expected FailedPrecondition, got %s", st.Code())
+	if st.Code() != codes.Unavailable {
+		t.Fatalf("expected Unavailable, got %s", st.Code())
 	}
 }
 
@@ -326,38 +344,6 @@ func TestEnrollResultToProto_FullResult(t *testing.T) {
 	}
 	if resp.FactoryCertMeta.Subject != src.FactoryCertMeta.Subject {
 		t.Errorf("Subject: got %q, want %q", resp.FactoryCertMeta.Subject, src.FactoryCertMeta.Subject)
-	}
-}
-
-// =============================================================================
-// QUIC BMC enrollment tests
-// =============================================================================
-
-func TestQUICBMCEnrollResult_NilInput(t *testing.T) {
-	resp := quicBMCEnrollResultToResponse(nil)
-	if resp == nil {
-		t.Fatal("expected non-nil response for nil input")
-	}
-	if resp.Timestamp == 0 {
-		t.Error("expected Timestamp to be set")
-	}
-}
-
-func TestQUICBMCEnrollResult_FullResult(t *testing.T) {
-	src := goodEnrollResult()
-	resp := quicBMCEnrollResultToResponse(src)
-
-	if resp.DeviceID != src.DeviceID {
-		t.Errorf("DeviceID: got %d, want %d", resp.DeviceID, src.DeviceID)
-	}
-	if resp.Endpoint != src.Endpoint {
-		t.Errorf("Endpoint: got %q, want %q", resp.Endpoint, src.Endpoint)
-	}
-	if resp.FactoryCertMeta.Subject != src.FactoryCertMeta.Subject {
-		t.Errorf("FactoryCertMeta.Subject: got %q", resp.FactoryCertMeta.Subject)
-	}
-	if len(resp.Steps) != len(src.Steps) {
-		t.Errorf("Steps len: got %d, want %d", len(resp.Steps), len(src.Steps))
 	}
 }
 

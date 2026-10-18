@@ -31,6 +31,9 @@ type fakeClock struct {
 	mu      sync.Mutex
 	now     time.Time
 	waiters []fakeWaiter
+	// changed receives a token each time a waiter registers, so a test
+	// waits for the loop to park instead of polling for it.
+	changed chan struct{}
 }
 
 type fakeWaiter struct {
@@ -38,7 +41,19 @@ type fakeWaiter struct {
 	ch chan time.Time
 }
 
-func newFakeClock(t time.Time) *fakeClock { return &fakeClock{now: t} }
+func newFakeClock(t time.Time) *fakeClock {
+	return &fakeClock{now: t, changed: make(chan struct{}, 1)}
+}
+
+// notifyChanged leaves one token on a change channel without blocking. A
+// token already pending covers this change too: waitFor re-checks its
+// condition after every token, so coalesced changes are never lost.
+func notifyChanged(changed chan<- struct{}) {
+	select {
+	case changed <- struct{}{}:
+	default:
+	}
+}
 
 func (c *fakeClock) Now() time.Time {
 	c.mu.Lock()
@@ -55,6 +70,7 @@ func (c *fakeClock) After(d time.Duration) <-chan time.Time {
 		return ch
 	}
 	c.waiters = append(c.waiters, fakeWaiter{at: c.now.Add(d), ch: ch})
+	notifyChanged(c.changed)
 	return ch
 }
 

@@ -241,6 +241,15 @@ func TestTGW01VLAN405Example_NodeConfigsResolve(t *testing.T) {
 	}
 	assert.Equal(t, "tgw-01", owners[tgw01Address])
 
+	// The Pis are diskless, so all three keep the template's IDevID serial
+	// and still resolve: platformd replaces it with each Pi's EK-derived name
+	// on every boot (keepsConfigSerial).
+	for _, r := range resolved[1:] {
+		idevid, err := mergedIDevID(r.Config)
+		require.NoError(t, err, r.Hostname)
+		assert.Equal(t, nodeIDevID{Model: "Raspberry Pi 4 Model B", Serial: "rpi4-compute-01"}, idevid, r.Hostname)
+	}
+
 	// The certificate name the orchestrator verifies the control plane by
 	// comes from the standalone template's public webservice, not from the
 	// address it dials, which is also the boot server's.
@@ -340,6 +349,86 @@ func TestTGW01VLAN405Example_DuplicateAddressRefused(t *testing.T) {
 	assert.Equal(t, phaseDiscovery, failed.Phase)
 	require.ErrorAs(t, err, &dup)
 	assert.Empty(t, result.Nodes, "refused before discovery")
+}
+
+// tgw01SDVariant writes the example with every Pi booting from its SD card
+// instead of diskless, and each of edits' keys replaced by its value, and
+// loads it with a netboot media build. An SD Pi keeps its config's IDevID
+// serial.
+func tgw01SDVariant(t *testing.T, edits map[string]string) (*BootstrapConfig, string) {
+	t.Helper()
+	const diskless, sd = "    boot_model: diskless\n", "    boot_model: sd\n"
+	path := writeTGW01Variant(t, diskless, sd)
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	variant := strings.ReplaceAll(string(raw), diskless, sd)
+	for old, repl := range edits {
+		require.Contains(t, variant, old)
+		variant = strings.Replace(variant, old, repl, 1)
+	}
+	require.NoError(t, os.WriteFile(path, []byte(variant), 0o600))
+
+	cfg, err := LoadBootstrapConfig(path)
+	require.NoError(t, err)
+	cfg.Deployer.NetbootMediaDir = netbootBuild(t, true, false, container.MediaSetRaspberryPi)
+	require.NoError(t, cfg.Validate())
+	return cfg, path
+}
+
+// TestTGW01VLAN405Example_DuplicateSerialRefused: Pis that keep their
+// config's IDevID serial all take the template's rpi4-compute-01, so their
+// certificates would name one device. They are refused when the configs
+// resolve, before a run touches anything, naming both nodes.
+func TestTGW01VLAN405Example_DuplicateSerialRefused(t *testing.T) {
+	cfg, path := tgw01SDVariant(t, nil)
+	o := tgw01Orchestrator(t, cfg, path)
+
+	_, err := o.ResolveNodeConfigs("rpi4-03")
+	var dup ErrDuplicateIDevIDSerial
+	require.ErrorAs(t, err, &dup, "the clash is refused even when only another node is asked for")
+	assert.Equal(t, ErrDuplicateIDevIDSerial{
+		Model:         "Raspberry Pi 4 Model B",
+		Serial:        "rpi4-compute-01",
+		Hostname:      "rpi4-02",
+		OtherHostname: "rpi4-01",
+	}, dup)
+
+	dry, err := o.DryRun(t.Context())
+	require.ErrorAs(t, err, &dup)
+	assert.Contains(t, dry.Errors, dup.Error())
+
+	result, err := o.Run(t.Context())
+	var failed ErrBootstrapFailed
+	require.ErrorAs(t, err, &failed)
+	assert.Equal(t, phaseDiscovery, failed.Phase)
+	require.ErrorAs(t, err, &dup)
+	assert.Empty(t, result.Nodes, "refused before discovery")
+}
+
+// TestTGW01VLAN405Example_SerialPerModel: a serial names a device within its
+// model, so Pis of two models may share one, and a Pi given its own serial
+// in its overrides is accepted beside them.
+func TestTGW01VLAN405Example_SerialPerModel(t *testing.T) {
+	const rpi02 = "    overrides:\n      network:\n        platform-vrf:\n          address: 10.4.144.21/32\n"
+	const rpi03 = "    overrides:\n      network:\n        platform-vrf:\n          address: 10.4.144.22/32\n"
+	cfg, path := tgw01SDVariant(t, map[string]string{
+		rpi02: "    overrides:\n      tpm:\n        idevid:\n          model: Raspberry Pi 400\n" + rpi02[len("    overrides:\n"):],
+		rpi03: "    overrides:\n      tpm:\n        idevid:\n          serial: rpi4-compute-03\n" + rpi03[len("    overrides:\n"):],
+	})
+
+	resolved, err := tgw01Orchestrator(t, cfg, path).ResolveNodeConfigs()
+	require.NoError(t, err)
+	got := map[string]nodeIDevID{}
+	for _, r := range resolved[1:] {
+		idevid, err := mergedIDevID(r.Config)
+		require.NoError(t, err, r.Hostname)
+		got[r.Hostname] = idevid
+	}
+	assert.Equal(t, map[string]nodeIDevID{
+		"rpi4-01": {Model: "Raspberry Pi 4 Model B", Serial: "rpi4-compute-01"},
+		"rpi4-02": {Model: "Raspberry Pi 400", Serial: "rpi4-compute-01"},
+		"rpi4-03": {Model: "Raspberry Pi 4 Model B", Serial: "rpi4-compute-03"},
+	}, got)
 }
 
 // TestTGW01VLAN405Example_DisklessImageRefused: a diskless Pi left on the

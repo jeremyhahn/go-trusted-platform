@@ -22,11 +22,14 @@ import (
 
 // daemonProvisionToolScopes pins each classified daemon and provisioning
 // tool (#304) to the scope of its gRPC twin in method_permissions.go.
+// list_protocols has no gRPC twin; it takes QUIC's OpDaemonListProtocols
+// scope from opcode_permissions.go.
 var daemonProvisionToolScopes = map[string]string{
-	"platform_daemon_status":        "platform:read",
-	"platform_daemon_version":       "platform:read",
-	"platform_daemon_list_services": "platform:read",
-	"platform_daemon_get_service":   "platform:read",
+	"platform_daemon_status":         "platform:read",
+	"platform_daemon_version":        "platform:read",
+	"platform_daemon_list_services":  "platform:read",
+	"platform_daemon_list_protocols": "platform:read",
+	"platform_daemon_get_service":    "platform:read",
 
 	"platform_daemon_start_service":   "platform:write",
 	"platform_daemon_stop_service":    "platform:write",
@@ -51,6 +54,7 @@ var daemonProvisionStubCall = map[string]string{
 	"platform_daemon_status":          "platform_daemon_status",
 	"platform_daemon_version":         "platform_daemon_version",
 	"platform_daemon_list_services":   "platform_daemon_list_services",
+	"platform_daemon_list_protocols":  "platform_daemon_list_protocols",
 	"platform_daemon_get_service":     "platform_daemon_get_service",
 	"platform_daemon_start_service":   "platform_daemon_start_service",
 	"platform_daemon_stop_service":    "platform_daemon_stop_service",
@@ -58,13 +62,6 @@ var daemonProvisionStubCall = map[string]string{
 	"provision_list_sessions":         "list_sessions",
 	"provision_get_session":           "get_session",
 	"provision_fulfill_session":       "fulfill_session",
-}
-
-// daemonProvisionUnclassified stay refused: list_protocols and dns reverse
-// lookup have no twin to take a scope from.
-var daemonProvisionUnclassified = []string{
-	"platform_daemon_list_protocols",
-	"dns_reverse_lookup",
 }
 
 // daemonProvisionServer returns a server whose caller holds only scope, and
@@ -135,11 +132,6 @@ func TestDaemonProvisionToolPermissions(t *testing.T) {
 			t.Errorf("permission for %s = %q (mapped %v), want open", tool, got, ok)
 		}
 	}
-	for _, tool := range daemonProvisionUnclassified {
-		if scope, ok := checker.toolPermissions[tool]; ok {
-			t.Errorf("%s is classified as %q; it must stay unclassified", tool, scope)
-		}
-	}
 }
 
 func TestDaemonProvisionAuthorizeToolEnforcesScope(t *testing.T) {
@@ -158,16 +150,6 @@ func TestDaemonProvisionAuthorizeToolEnforcesScope(t *testing.T) {
 			if authErr == nil || authErr.Type != AuthErrorPermissionDenied {
 				t.Errorf("%s with only %s: err = %+v, want permission denied", tool, held, authErr)
 			}
-		}
-	}
-}
-
-func TestDaemonProvisionUnclassifiedToolsAreRefused(t *testing.T) {
-	checker := NewAuthorizationChecker(scopeChecker("platform:write"), &mockAuthManager{})
-	for _, tool := range daemonProvisionUnclassified {
-		_, authErr := checker.AuthorizeTool(context.Background(), tool, "tok")
-		if authErr == nil || authErr.Type != AuthErrorToolNotClassified {
-			t.Errorf("%s: err = %+v, want tool not classified", tool, authErr)
 		}
 	}
 }
@@ -204,20 +186,6 @@ func TestProvisionOpenToolsCall_RunWithoutToken(t *testing.T) {
 			}
 			if stub.lastCall != call {
 				t.Errorf("handler %q ran, want %q", stub.lastCall, call)
-			}
-		})
-	}
-}
-
-func TestDaemonProvisionToolsCall_UnclassifiedNeverRun(t *testing.T) {
-	for _, tool := range daemonProvisionUnclassified {
-		t.Run(tool, func(t *testing.T) {
-			server, stub := daemonProvisionServer("platform:write")
-			if resp := daemonProvisionToolCall(server, tool, "tok"); resp.Error == nil {
-				t.Fatal("unclassified tool answered; want refusal")
-			}
-			if stub.lastCall != "" {
-				t.Errorf("handler %q ran, want none", stub.lastCall)
 			}
 		})
 	}

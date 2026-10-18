@@ -18,6 +18,7 @@ import (
 	"time"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
@@ -171,7 +172,7 @@ func (h *QUICServiceHandler) handleKMSRevokeKey(ctx context.Context, payload []b
 	})
 	if err != nil {
 		h.logger.Error(err, "failed to revoke key", "key_id", revokeReq.KeyID)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSRevokeKey", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSRevokeKey", Cause: err})
 	}
 
 	return h.encodeKMSExtendedResponse(&KMSRevokeKeyResponse{
@@ -193,7 +194,7 @@ func (h *QUICServiceHandler) handleKMSGetKeyMetadata(ctx context.Context, payloa
 	pbResp, err := h.kmsService.GetKeyMetadata(ctx, &pb.GetKeyMetadataRequest{KeyId: metaReq.KeyID})
 	if err != nil {
 		h.logger.Error(err, "failed to get key metadata", "key_id", metaReq.KeyID)
-		return h.errorResponse(quicwire.StatusNotFound, ErrQUICOperationFailed{Op: "KMSGetKeyMetadata", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSGetKeyMetadata", Cause: err})
 	}
 
 	return h.encodeKMSExtendedResponse(&KMSGetKeyMetadataResponse{
@@ -220,7 +221,7 @@ func (h *QUICServiceHandler) handleKMSUpdateKeyMetadata(ctx context.Context, pay
 	})
 	if err != nil {
 		h.logger.Error(err, "failed to update key metadata", "key_id", updateReq.KeyID)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSUpdateKeyMetadata", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSUpdateKeyMetadata", Cause: err})
 	}
 
 	return h.encodeKMSExtendedResponse(&KMSUpdateKeyMetadataResponse{
@@ -247,7 +248,7 @@ func (h *QUICServiceHandler) handleKMSSetKeyPolicy(ctx context.Context, payload 
 	})
 	if err != nil {
 		h.logger.Error(err, "failed to set key policy", "key_id", setReq.KeyID)
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSSetKeyPolicy", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSSetKeyPolicy", Cause: err})
 	}
 
 	return h.encodeKMSExtendedResponse(&KMSSetKeyPolicyResponse{
@@ -269,7 +270,7 @@ func (h *QUICServiceHandler) handleKMSGetKeyPolicy(ctx context.Context, payload 
 	pbResp, err := h.kmsService.GetKeyPolicy(ctx, &pb.GetKeyPolicyRequest{KeyId: getReq.KeyID})
 	if err != nil {
 		h.logger.Error(err, "failed to get key policy", "key_id", getReq.KeyID)
-		return h.errorResponse(quicwire.StatusNotFound, ErrQUICOperationFailed{Op: "KMSGetKeyPolicy", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSGetKeyPolicy", Cause: err})
 	}
 
 	return h.encodeKMSExtendedResponse(&KMSGetKeyPolicyResponse{
@@ -282,7 +283,7 @@ func (h *QUICServiceHandler) handleKMSGetSupportedAlgorithms(ctx context.Context
 	pbResp, err := h.kmsService.GetSupportedAlgorithms(ctx, &pb.GetSupportedAlgorithmsRequest{})
 	if err != nil {
 		h.logger.Error(err, "failed to get supported algorithms")
-		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSGetSupportedAlgorithms", Cause: err})
+		return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: "KMSGetSupportedAlgorithms", Cause: err})
 	}
 
 	return h.encodeKMSExtendedResponse(&KMSGetSupportedAlgorithmsResponse{
