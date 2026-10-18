@@ -94,6 +94,17 @@ Ports, flows, VLANs, and policies follow the same pattern. See
 `pkg/api/grpc/proto/sdn.proto` for the complete message set (enums:
 `BridgeType`, `PortType`, `BridgeStatus`, ...).
 
+`AddPort` creates the port's Open vSwitch interface with the type its
+`PortType` names, through `ovs.Client.AddPortOfType` as REST add-port does:
+`PORT_TYPE_INTERNAL` gets an `internal` interface and every other type a
+system interface (`PORT_TYPE_TAP` creates the TAP device first). `GetPort` and
+`SetPortState` answer the port's `status` from the interface's `admin_state`
+as Open vSwitch holds it: `up` is `PORT_STATUS_UP`, `down` is
+`PORT_STATUS_DOWN`, and an interface without one (ovs-vswitchd has not opened
+it) is `PORT_STATUS_UNSPECIFIED`. Until #949 `AddPort` created every
+non-TAP port with a system interface, `GetPort` answered `PORT_STATUS_UP`
+for every port and `SetPortState` echoed the state it was asked for.
+
 ## Usage Example (Go)
 
 ```go

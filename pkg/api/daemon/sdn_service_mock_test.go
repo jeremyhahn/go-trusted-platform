@@ -36,6 +36,10 @@ type ConfigurableMockOVSClient struct {
 	// Method call tracking
 	calls map[string][]ConfigurableMockCall
 
+	// adminStates holds the interface admin_state SetPortState last wrote,
+	// by port name, as ovs-vswitchd reports it back through GetInterface.
+	adminStates map[string]string
+
 	// Configurable return values and errors per method
 	connectFunc              func(ctx context.Context) error
 	disconnectFunc           func() error
@@ -100,7 +104,8 @@ type ConfigurableMockCall struct {
 // NewConfigurableMockOVSClient creates a new configurable mock OVS client with default implementations
 func NewConfigurableMockOVSClient() *ConfigurableMockOVSClient {
 	return &ConfigurableMockOVSClient{
-		calls: make(map[string][]ConfigurableMockCall),
+		calls:       make(map[string][]ConfigurableMockCall),
+		adminStates: make(map[string]string),
 	}
 }
 
@@ -256,7 +261,8 @@ func (m *ConfigurableMockOVSClient) AddPort(ctx context.Context, bridgeName, por
 	}, nil
 }
 
-func (m *ConfigurableMockOVSClient) AddPortOfType(ctx context.Context, bridgeName, portName, _ string) (*ovs.Port, error) {
+func (m *ConfigurableMockOVSClient) AddPortOfType(ctx context.Context, bridgeName, portName, ifType string) (*ovs.Port, error) {
+	m.recordCall("AddPortOfType", bridgeName, portName, ifType)
 	return m.AddPort(ctx, bridgeName, portName)
 }
 
@@ -317,6 +323,13 @@ func (m *ConfigurableMockOVSClient) SetPortState(ctx context.Context, portName s
 	if m.setPortStateFunc != nil {
 		return m.setPortStateFunc(ctx, portName, state)
 	}
+	adminState := "up"
+	if state == ovs.PortStateDown {
+		adminState = "down"
+	}
+	m.mu.Lock()
+	m.adminStates[portName] = adminState
+	m.mu.Unlock()
 	return nil
 }
 
@@ -343,10 +356,14 @@ func (m *ConfigurableMockOVSClient) GetInterface(ctx context.Context, name strin
 	if m.getInterfaceFunc != nil {
 		return m.getInterfaceFunc(ctx, name)
 	}
+	m.mu.RLock()
+	adminState := m.adminStates[name]
+	m.mu.RUnlock()
 	return &ovs.Interface{
-		UUID:   "mock-iface-uuid-" + name,
-		Name:   name,
-		OFPort: 1,
+		UUID:       "mock-iface-uuid-" + name,
+		Name:       name,
+		OFPort:     1,
+		AdminState: adminState,
 		Statistics: map[string]int64{
 			"rx_packets": 1000,
 			"tx_packets": 2000,

@@ -24,6 +24,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -466,6 +468,96 @@ func TestMCPServiceProvider_SDNSetPortState_ReturnsTheUpdatedPort(t *testing.T) 
 	}
 	if port.GetStatus() != platformv1.PortStatus_PORT_STATUS_DOWN {
 		t.Fatalf("port status = %v, want down", port.GetStatus())
+	}
+}
+
+// TestMCPServiceProvider_SDNGetPortState_ReportsTheInterfaceAdminState: the
+// port status is the admin_state Open vSwitch holds for the port's interface,
+// so a port set down reads back down.
+func TestMCPServiceProvider_SDNGetPortState_ReportsTheInterfaceAdminState(t *testing.T) {
+	cases := []struct {
+		adminState string
+		want       platformv1.PortStatus
+	}{
+		{"down", platformv1.PortStatus_PORT_STATUS_DOWN},
+		{"up", platformv1.PortStatus_PORT_STATUS_UP},
+		{"", platformv1.PortStatus_PORT_STATUS_UNSPECIFIED},
+	}
+	for _, tc := range cases {
+		t.Run("admin_state="+tc.adminState, func(t *testing.T) {
+			mockOVS := NewConfigurableMockOVSClient()
+			mockOVS.OnGetInterface(func(ctx context.Context, name string) (*ovs.Interface, error) {
+				return &ovs.Interface{Name: name, AdminState: tc.adminState}, nil
+			})
+			sdnService := createMCPTestSDNService(mockOVS)
+			sdnService.ports["port1"] = &portResource{id: "port-uuid-123", name: "port1", bridgeID: "br0"}
+			provider := NewMCPServiceProvider(&MCPServiceProviderConfig{SDNService: sdnService, Logger: slog.Default()})
+
+			result, err := provider.SDNGetPortState(context.Background(), "br0", "port1")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			port, ok := result.(*platformv1.Port)
+			if !ok {
+				t.Fatalf("result is %T, want *platformv1.Port", result)
+			}
+			if port.GetStatus() != tc.want {
+				t.Fatalf("port status = %v, want %v", port.GetStatus(), tc.want)
+			}
+		})
+	}
+}
+
+// TestMCPServiceProvider_SDNGetPortState_ReportsAnUnreadableInterface: a port
+// whose interface cannot be read has no state to report.
+func TestMCPServiceProvider_SDNGetPortState_ReportsAnUnreadableInterface(t *testing.T) {
+	mockOVS := NewConfigurableMockOVSClient()
+	mockOVS.OnGetInterface(func(ctx context.Context, name string) (*ovs.Interface, error) {
+		return nil, ovs.ErrInterfaceNotFound
+	})
+	sdnService := createMCPTestSDNService(mockOVS)
+	sdnService.ports["port1"] = &portResource{id: "port-uuid-123", name: "port1", bridgeID: "br0"}
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{SDNService: sdnService, Logger: slog.Default()})
+
+	result, err := provider.SDNGetPortState(context.Background(), "br0", "port1")
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("error = %v, want code Internal", err)
+	}
+	if result != nil {
+		t.Fatalf("result = %v, want nil", result)
+	}
+}
+
+// TestMCPServiceProvider_SDNAddPort_CreatesTheInterfaceOfThePortType: an
+// internal port gets an Open vSwitch "internal" interface and any other port
+// type a system interface, as REST add-port does.
+func TestMCPServiceProvider_SDNAddPort_CreatesTheInterfaceOfThePortType(t *testing.T) {
+	cases := []struct {
+		portType string
+		want     string
+	}{
+		{"internal", "internal"},
+		{"physical", ""},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		t.Run("port_type="+tc.portType, func(t *testing.T) {
+			mockOVS := NewConfigurableMockOVSClient()
+			sdnService := createMCPTestSDNService(mockOVS)
+			sdnService.bridges["br0"] = &bridgeResource{id: "br0-uuid", name: "br0"}
+			provider := NewMCPServiceProvider(&MCPServiceProviderConfig{SDNService: sdnService, Logger: slog.Default()})
+
+			if err := provider.SDNAddPort(context.Background(), "br0", "eth0", tc.portType); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			calls := mockOVS.GetCalls("AddPortOfType")
+			if len(calls) != 1 {
+				t.Fatalf("AddPortOfType calls = %d, want 1", len(calls))
+			}
+			if got := calls[0].Args[2]; got != tc.want {
+				t.Fatalf("interface type = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
